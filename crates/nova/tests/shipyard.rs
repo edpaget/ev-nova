@@ -685,7 +685,14 @@ fn a_pilot_buys_a_heavy_shuttle_trading_in_its_shuttle_and_flies_it_after_a_rest
     game.press(KeyCode::KeyI);
     assert!(game.shipyard().info_panel().is_some());
     let shown = texts(&game.frame());
-    for text in ["Heavy Shuttle", "Speed: 600", "Maximum of 3 jumps"] {
+    for text in [
+        "Heavy Shuttle",
+        "Speed:",
+        "600",
+        "Energy:",
+        "3 jumps",
+        "No standard weapons",
+    ] {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
     }
     game.press(KeyCode::Escape);

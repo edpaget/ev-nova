@@ -312,7 +312,7 @@ impl HireScreen {
         self.panel = Some(Panel::open(
             template,
             title,
-            &lines,
+            lines,
             &laid.metrics.0,
             self.style,
         ));
@@ -484,7 +484,7 @@ impl Screen for HireScreen {
 mod tests {
     use std::cell::RefCell;
 
-    use nova_sim::{HireRefusal, ShipFields, ShipSpecs};
+    use nova_sim::{HireRefusal, ShipFields, ShipSpecs, StockLine};
 
     use super::*;
     use crate::draw::{DrawCommand, fill_rect};
@@ -821,7 +821,8 @@ mod tests {
         assert!(screen.info_panel().is_some());
         let words: Vec<String> = texts(&screen).into_iter().map(|(t, _, _)| t).collect();
         assert!(words.contains(&"Ship 128".to_owned()), "{words:?}");
-        assert!(words.contains(&"Speed: 300".to_owned()), "{words:?}");
+        assert!(words.contains(&"Speed:".to_owned()), "{words:?}");
+        assert!(words.contains(&"300".to_owned()), "{words:?}");
         screen.input(&key(HIRE_KEY, false));
         assert_eq!(screen.take_order(), None, "the panel takes the keys");
         screen.input(&key(Key::Escape, false));
@@ -837,6 +838,61 @@ mod tests {
         assert!(!enabled(&bare, INFO_LABEL));
         bare.input(&key(INFO_KEY, false));
         assert!(bare.info_panel().is_none());
+    }
+
+    #[test]
+    fn the_hire_panel_draws_the_two_columns_and_the_stock_weapons() {
+        let mut armed = row(128, 970, 100, Ok(()));
+        armed.specs.weapons = vec![StockLine {
+            count: 2,
+            name: "Light Blaster".to_owned(),
+            ammo: None,
+        }];
+        let panel_texts = |row: HireRow| {
+            let mut screen = screen_of(
+                &art(),
+                HireList {
+                    rows: vec![row],
+                    ..list()
+                },
+            );
+            screen.input(&key(INFO_KEY, false));
+            let area = screen
+                .info_panel()
+                .expect("open")
+                .item_bounds(5)
+                .expect("item 5");
+            (texts(&screen), area.min)
+        };
+        let (drawn, at) = panel_texts(armed);
+        let white = Color::WHITE;
+        for expected in [
+            (
+                "Standard Weapons:",
+                Point::new(at.x, at.y + 108.0 - 10.0),
+                white,
+            ),
+            (
+                "2 Light Blasters",
+                Point::new(at.x + 8.0, at.y + 120.0 - 10.0),
+                white,
+            ),
+            (
+                "Speed:",
+                Point::new(at.x, at.y + 2.0),
+                Color::rgba(128, 128, 128, 255),
+            ),
+            ("300", Point::new(at.x + 45.0, at.y + 2.0), white),
+        ] {
+            let expected = (expected.0.to_owned(), expected.1, expected.2);
+            assert!(drawn.contains(&expected), "{expected:?}: {drawn:?}");
+        }
+        let (bare, _) = panel_texts(row(128, 970, 100, Ok(())));
+        assert!(
+            bare.iter()
+                .any(|(text, _, _)| text == "No standard weapons"),
+            "{bare:?}"
+        );
     }
 
     #[test]

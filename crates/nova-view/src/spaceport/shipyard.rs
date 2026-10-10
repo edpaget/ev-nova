@@ -58,10 +58,21 @@
 //!
 //! Info, clicked or with I, opens the "Shipyard Info" panel (`DLOG`/`DITL`
 //! 1005 over `PICT` 8506) over the shipyard: the ship's name in item 3,
-//! and in item 5 its speed, acceleration, turn rate, guns, turrets, free
-//! space, cargo space (#110), length, mass, crew and how many jumps its
-//! fuel holds (#229-240). Its Done, Return and Escape close the panel alone. Without
-//! that dialog, Info is greyed.
+//! and in item 5 what `_ShipDescDialogUpdate` draws (@0x4fb4a-0x50f17),
+//! each text placed by its baseline ([`spec_lines`]). Two columns of a
+//! label in grey (`_rgbMedGrey`, [`LABEL_COLOR`]) and a value in white,
+//! the labels at 0 and 130 right of item 5's left and the values at 45
+//! and 175, in rows from baseline 12 in steps of 12: on the left Speed,
+//! Accel and Turn (Accel and Turn as rating words, #245-250, or "N/A",
+//! #396), Shields, Armor, Guns and Turrets ("Maximum of N", or "None",
+//! #335); on the right Space, Cargo, Energy (its jumps), Length, Mass
+//! and Crew (drawn only above 0). From baseline 108, "Standard Weapons:"
+//! and the class's stock weapons, one a line at 8 right and 12 apart, or
+//! "No standard weapons" (#241-243), all in white. A text whose top is at
+//! or below item 5's bottom is not drawn, as the original clips to it.
+//! The values are worked out in the core ([`ShipSpecs`]). Its Done,
+//! Return and Escape close the panel alone. Without that dialog, Info is
+//! greyed.
 //!
 //! Done, Return and Escape close the shipyard. Without its dialog, the
 //! screen says why, and Return or Escape still closes it.
@@ -69,15 +80,12 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::hyperspace::max_jumps;
 use nova_sim::shipyard::SHIP_NAME_CHARS;
-use nova_sim::{ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
+use nova_sim::{Rating, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard, StockLine};
 
 use super::catalog::SpaceportCatalog;
 use super::credits::{self, AMOUNT_COLUMN, credits_text, tons_text};
-use super::grid::{
-    self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE, text,
-};
+use super::grid::{self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, text};
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
@@ -168,6 +176,56 @@ pub const MAXIMUM_OF: &str = "Maximum of";
 pub const JUMP: &str = "jump";
 /// `STR#` 2002 #240.
 pub const JUMPS: &str = "jumps";
+/// `STR#` 2002 #11, the info panel's shields label (`_shieldString`,
+/// `_LoadStrings` @0x71db5-0x71dd9).
+pub const SHIELDS_LABEL: &str = "Shields:";
+/// `STR#` 2002 #16, the info panel's armour label (`_armorString`,
+/// @0x71ddb-0x71e01).
+pub const ARMOR_LABEL: &str = "Armor:";
+/// `STR#` 2002 #7, the info panel's fuel label (`_fuelString` + 0x400,
+/// @0x71d8f-0x71db3).
+pub const ENERGY_LABEL: &str = "Energy:";
+/// `STR#` 2002 #335: a value of none.
+pub const NONE: &str = "None";
+/// `STR#` 2002 #396: an Accel or Turn of none.
+pub const NOT_APPLICABLE: &str = "N/A";
+/// `STR#` 2002 #245-250: the Accel and Turn ratings, Excellent first.
+pub const RATINGS: [&str; 6] = [
+    "Excellent",
+    "Very Good",
+    "Good",
+    "Average",
+    "Poor",
+    "Terrible",
+];
+/// `STR#` 2002 #244: the Length's unit.
+pub const METRES: &str = "m";
+/// `STR#` 2002 #241: the stock-weapons list's heading.
+pub const STANDARD_WEAPONS: &str = "Standard Weapons:";
+/// `STR#` 2002 #242: the heading of a class without stock weapons.
+pub const NO_STANDARD_WEAPONS: &str = "No standard weapons";
+/// `STR#` 2002 #243: a stock weapon's ammunition.
+pub const AMMO: &str = "ammo";
+/// The info panel's label columns, right of item 5's left: the left and
+/// the right (`_ShipDescDialogUpdate` `MoveTo` h +0 and +0x82).
+pub const PANEL_LABEL_COLUMNS: [f32; 2] = [0.0, 130.0];
+/// The info panel's value columns: the left and the right (h +0x2d and
+/// +0xaf).
+pub const PANEL_VALUE_COLUMNS: [f32; 2] = [45.0, 175.0];
+/// The info panel's rows' baselines below item 5's top (v +0xc to
+/// +0x54).
+pub const PANEL_ROWS: [f32; 7] = [12.0, 24.0, 36.0, 48.0, 60.0, 72.0, 84.0];
+/// The stock-weapons heading's baseline (v +0x6c, @0x505d6-0x505fd).
+pub const WEAPONS_ROW: f32 = 108.0;
+/// The first stock weapon's baseline (v +0x78, @0x5071f-0x50741).
+pub const FIRST_WEAPON_ROW: f32 = 120.0;
+/// Each later stock weapon's step down.
+pub const WEAPON_STEP: f32 = 12.0;
+/// The stock weapons' indent (h +8).
+pub const WEAPON_INDENT: f32 = 8.0;
+/// The info panel's labels' grey: `_rgbMedGrey`, 0x8000 in each channel
+/// (`_InitColors` @0x1bf10-0x1bf21).
+pub const LABEL_COLOR: Color = Color::rgba(128, 128, 128, 255);
 /// The mark in the cell of the class the player flies.
 pub const CURRENT_MARK: &str = "(current)";
 
@@ -216,36 +274,140 @@ pub fn price_lines(shipyard: &Shipyard, row: &ShipRow) -> Vec<(&'static str, Str
     ]
 }
 
-/// The info panel's lines for `row`'s ship.
+/// One text of the info panel's item 5: drawn at `dx` right of its left
+/// with its baseline `baseline` below its top, in `color`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PanelText {
+    /// How far right of item 5's left.
+    pub dx: f32,
+    /// Its baseline, below item 5's top.
+    pub baseline: f32,
+    /// The words.
+    pub text: String,
+    /// Its colour: [`LABEL_COLOR`] for a label, white otherwise.
+    pub color: Color,
+}
+
+/// The info panel's texts for `row`'s ship ([`spec_lines`]).
 #[must_use]
-pub fn stat_lines(row: &ShipRow) -> Vec<String> {
+pub fn stat_lines(row: &ShipRow) -> Vec<PanelText> {
     spec_lines(&row.specs)
 }
 
-/// The info panel's lines for a ship of `specs`: its speed,
-/// acceleration, turn rate, guns, turrets, free space, cargo space,
-/// length, mass, crew and how many jumps its fuel holds. Space, Cargo and
-/// Mass take "ton" at exactly 1 and "tons" otherwise.
+/// A rating's word.
+fn rating_text(rating: Rating) -> &'static str {
+    let [excellent, very_good, good, average, poor, terrible] = RATINGS;
+    match rating {
+        Rating::NotApplicable => NOT_APPLICABLE,
+        Rating::Terrible => terrible,
+        Rating::Poor => poor,
+        Rating::Average => average,
+        Rating::Good => good,
+        Rating::VeryGood => very_good,
+        Rating::Excellent => excellent,
+    }
+}
+
+/// A stock weapon's line: its count and name, "s" when the count is
+/// above 1, and " + N ammo" with its ammunition.
+fn stock_text(line: &StockLine) -> String {
+    let plural = if line.count > 1 { "s" } else { "" };
+    let ammo = line
+        .ammo
+        .map_or_else(String::new, |ammo| format!(" + {ammo} {AMMO}"));
+    format!("{} {}{plural}{ammo}", line.count, line.name)
+}
+
+/// A row's grey label and white value at `baseline`, in the left column
+/// (0) or the right (1).
+fn labelled(column: usize, baseline: f32, label: &str, value: String) -> [PanelText; 2] {
+    [
+        PanelText {
+            dx: PANEL_LABEL_COLUMNS[column],
+            baseline,
+            text: label.to_owned(),
+            color: LABEL_COLOR,
+        },
+        PanelText {
+            dx: PANEL_VALUE_COLUMNS[column],
+            baseline,
+            text: value,
+            color: TEXT_COLOR,
+        },
+    ]
+}
+
+/// The info panel's texts for a ship of `specs`, in the order
+/// `_ShipDescDialogUpdate` draws them (@0x4fb4a-0x50f17): Speed, Accel,
+/// Turn, Shields, Armor, Guns and Turrets in the left column; Space,
+/// Cargo and Energy in the right; the stock-weapons list; then Length,
+/// Mass and Crew in the right column. Each row is a grey label and a
+/// white value; the list is white.
 #[must_use]
-pub fn spec_lines(specs: &ShipSpecs) -> Vec<String> {
-    let fields = specs.fields;
+pub fn spec_lines(specs: &ShipSpecs) -> Vec<PanelText> {
+    const LEFT: usize = 0;
+    const RIGHT: usize = 1;
     let [speed, accel, turn, guns, turrets, space, length, mass, crew] = STAT_LABELS;
-    let mut lines = vec![
-        format!("{speed} {}", fields.speed),
-        format!("{accel} {}", fields.accel),
-        format!("{turn} {}", fields.maneuver),
-        format!("{guns} {}", specs.max_gun),
-        format!("{turrets} {}", specs.max_tur),
-        format!("{space} {}", tons_text(specs.space_shown())),
-        format!("{CARGO_LABEL} {}", tons_text(specs.cargo_shown())),
-        format!("{length} {}", specs.length),
-        format!("{mass} {}", tons_text(specs.mass_shown())),
-        format!("{crew} {}", specs.crew),
-    ];
-    let jumps = max_jumps(f32::from(fields.fuel));
-    let unit = if jumps == 1 { JUMP } else { JUMPS };
-    lines.push(format!("{MAXIMUM_OF} {jumps} {unit}"));
-    lines
+    let [r12, r24, r36, r48, r60, r72, r84] = PANEL_ROWS;
+    let or_none = |value: Option<String>| value.unwrap_or_else(|| NONE.to_owned());
+    let maximum = |value: Option<i64>| or_none(value.map(|n| format!("{MAXIMUM_OF} {n}")));
+    let comma = |value: Option<i64>| or_none(value.map(credits::comma_number));
+    let jumps = specs.jumps_shown().map(|jumps| {
+        let unit = if jumps == 1 { JUMP } else { JUMPS };
+        format!("{jumps} {unit}")
+    });
+    let mut texts: Vec<PanelText> = [
+        labelled(LEFT, r12, speed, specs.speed_shown().to_string()),
+        labelled(
+            LEFT,
+            r24,
+            accel,
+            rating_text(specs.accel_shown()).to_owned(),
+        ),
+        labelled(LEFT, r36, turn, rating_text(specs.turn_shown()).to_owned()),
+        labelled(LEFT, r48, SHIELDS_LABEL, comma(specs.shields_shown())),
+        labelled(LEFT, r60, ARMOR_LABEL, comma(specs.armor_shown())),
+        labelled(LEFT, r72, guns, maximum(specs.guns_shown())),
+        labelled(LEFT, r84, turrets, maximum(specs.turrets_shown())),
+        labelled(RIGHT, r12, space, tons_text(specs.space_shown())),
+        labelled(RIGHT, r24, CARGO_LABEL, tons_text(specs.cargo_shown())),
+        labelled(RIGHT, r36, ENERGY_LABEL, or_none(jumps)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let heading = if specs.weapons.is_empty() {
+        NO_STANDARD_WEAPONS
+    } else {
+        STANDARD_WEAPONS
+    };
+    texts.push(PanelText {
+        dx: PANEL_LABEL_COLUMNS[LEFT],
+        baseline: WEAPONS_ROW,
+        text: heading.to_owned(),
+        color: TEXT_COLOR,
+    });
+    let mut baseline = FIRST_WEAPON_ROW;
+    for line in &specs.weapons {
+        texts.push(PanelText {
+            dx: WEAPON_INDENT,
+            baseline,
+            text: stock_text(line),
+            color: TEXT_COLOR,
+        });
+        baseline += WEAPON_STEP;
+    }
+    texts.extend(labelled(
+        RIGHT,
+        r48,
+        length,
+        format!("{} {METRES}", specs.length),
+    ));
+    texts.extend(labelled(RIGHT, r60, mass, tons_text(specs.mass_shown())));
+    if let Some(shown) = specs.crew_shown() {
+        texts.extend(labelled(RIGHT, r72, crew, shown.to_string()));
+    }
+    texts
 }
 
 /// What the shipyard reads beyond the spaceport's port: each `shïp`'s
@@ -313,31 +475,22 @@ pub struct ShipOrder {
 pub(super) struct Panel {
     dialog: Dialog,
     title: String,
+    /// Item 5's texts ([`spec_lines`]).
+    texts: Vec<PanelText>,
 }
 
 impl Panel {
-    /// The panel laid out by `template`, titled `title` and showing
-    /// `lines`, its Done enabled and labelled in `style`, its text
-    /// measured by `metrics`.
+    /// The panel laid out by `template`, titled `title` and drawing
+    /// `texts` in item 5, its Done enabled and labelled in `style`, its
+    /// text measured by `metrics`.
     pub(super) fn open(
         template: &DialogTemplate,
         title: String,
-        lines: &[String],
+        texts: Vec<PanelText>,
         metrics: &Rc<dyn TextMetrics>,
         style: ButtonStyle,
     ) -> Self {
-        let roles = [
-            (PANEL_DONE_ITEM, Role::Button(DONE_LABEL.to_owned())),
-            (
-                PANEL_TEXT_ITEM,
-                Role::ScrollText {
-                    text: lines.join("\r"),
-                    font: TEXT_FONT,
-                    size: TEXT_SIZE,
-                    color: TEXT_COLOR,
-                },
-            ),
-        ];
+        let roles = [(PANEL_DONE_ITEM, Role::Button(DONE_LABEL.to_owned()))];
         let mut template = template.clone();
         if let Some(done) = template.items.get_mut(PANEL_DONE_ITEM - 1) {
             done.enabled = true;
@@ -346,7 +499,11 @@ impl Panel {
             .with_buttons(ButtonSkin::NOVA, style)
             .with_default(Some(PANEL_DONE_ITEM))
             .with_cancel(Some(PANEL_DONE_ITEM));
-        Self { dialog, title }
+        Self {
+            dialog,
+            title,
+            texts,
+        }
     }
 
     /// Its dialog.
@@ -376,6 +533,22 @@ impl Panel {
             list.text_in(Font::Charcoal, &self.title, origin, 12.0, None, TEXT_COLOR);
         }
         self.dialog.draw(list);
+        // The original clips to item 5 (`ClipRect` @0x4fb39); with no
+        // clip here, a text whose top is at or below its bottom is not
+        // drawn.
+        if let Some(area) = self.dialog.item_bounds(PANEL_TEXT_ITEM) {
+            for shown in &self.texts {
+                let top = grid::baseline_top(area.min.y + shown.baseline);
+                if top < area.max.y {
+                    text(
+                        list,
+                        &shown.text,
+                        Point::new(area.min.x + shown.dx, top),
+                        shown.color,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -689,7 +862,7 @@ impl ShipyardScreen {
         self.panel = Some(Panel::open(
             template,
             title,
-            &lines,
+            lines,
             &laid.metrics.0,
             self.style,
         ));
@@ -898,14 +1071,14 @@ impl Screen for ShipyardScreen {
 mod tests {
     use std::cell::RefCell;
 
-    use nova_sim::{Rulebook, ShipFacts, ShipFields, ShipSpecs};
+    use nova_sim::{RuleSource, Rulebook, ShipFacts, ShipFields, ShipSpecs, StockLine};
 
     use super::*;
     use crate::draw::DrawCommand;
     use crate::input::MouseButton;
     use crate::sound::UiSound;
     use crate::spaceport::catalog::{PortRecord, StellarId};
-    use crate::spaceport::grid::NO_PICTURE;
+    use crate::spaceport::grid::{NO_PICTURE, TEXT_SIZE};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -1226,6 +1399,36 @@ mod tests {
         );
         assert_eq!(NO_SHIPS, "There are no ships available for purchase here.");
         assert_eq!((MAXIMUM_OF, JUMP, JUMPS), ("Maximum of", "jump", "jumps"));
+        assert_eq!(
+            (SHIELDS_LABEL, ARMOR_LABEL, ENERGY_LABEL),
+            ("Shields:", "Armor:", "Energy:")
+        );
+        assert_eq!((NONE, NOT_APPLICABLE, METRES), ("None", "N/A", "m"));
+        assert_eq!(
+            RATINGS,
+            [
+                "Excellent",
+                "Very Good",
+                "Good",
+                "Average",
+                "Poor",
+                "Terrible"
+            ]
+        );
+        assert_eq!(
+            (STANDARD_WEAPONS, NO_STANDARD_WEAPONS, AMMO),
+            ("Standard Weapons:", "No standard weapons", "ammo")
+        );
+        assert_eq!(
+            (PANEL_LABEL_COLUMNS, PANEL_VALUE_COLUMNS),
+            ([0.0, 130.0], [45.0, 175.0])
+        );
+        assert_eq!(PANEL_ROWS, [12.0, 24.0, 36.0, 48.0, 60.0, 72.0, 84.0]);
+        assert_eq!(
+            (WEAPONS_ROW, FIRST_WEAPON_ROW, WEAPON_STEP, WEAPON_INDENT),
+            (108.0, 120.0, 12.0, 8.0)
+        );
+        assert_eq!(LABEL_COLOR, Color::rgba(128, 128, 128, 255));
     }
 
     // The picture.
@@ -2033,33 +2236,203 @@ mod tests {
 
     // The info panel.
 
+    /// The panel's grey, for its labels.
+    const LABEL_GREY: Color = Color::rgba(128, 128, 128, 255);
+
+    /// A text of item 5 at (`dx`, `baseline`) in `color`.
+    fn at(dx: f32, baseline: f32, text: &str, color: Color) -> PanelText {
+        PanelText {
+            dx,
+            baseline,
+            text: text.to_owned(),
+            color,
+        }
+    }
+
+    /// A grey label at (`dx`, `baseline`).
+    fn label(dx: f32, baseline: f32, text: &str) -> PanelText {
+        at(dx, baseline, text, LABEL_GREY)
+    }
+
+    /// A white value at (`dx`, `baseline`).
+    fn value(dx: f32, baseline: f32, text: &str) -> PanelText {
+        at(dx, baseline, text, Color::WHITE)
+    }
+
+    /// The texts of the rows above the weapons list, for [`SPECS`].
+    fn upper_rows() -> Vec<PanelText> {
+        vec![
+            label(0.0, 12.0, "Speed:"),
+            value(45.0, 12.0, "300"),
+            label(0.0, 24.0, "Accel:"),
+            value(45.0, 24.0, "Average"),
+            label(0.0, 36.0, "Turn:"),
+            value(45.0, 36.0, "Poor"),
+            label(0.0, 48.0, "Shields:"),
+            value(45.0, 48.0, "None"),
+            label(0.0, 60.0, "Armor:"),
+            value(45.0, 60.0, "None"),
+            label(0.0, 72.0, "Guns:"),
+            value(45.0, 72.0, "Maximum of 2"),
+            label(0.0, 84.0, "Turrets:"),
+            value(45.0, 84.0, "Maximum of 1"),
+            label(130.0, 12.0, "Space:"),
+            value(175.0, 12.0, "12 tons"),
+            label(130.0, 24.0, "Cargo:"),
+            value(175.0, 24.0, "15 tons"),
+            label(130.0, 36.0, "Energy:"),
+            value(175.0, 36.0, "3 jumps"),
+        ]
+    }
+
+    /// The texts of the rows below the weapons list, for [`SPECS`].
+    fn lower_rows() -> Vec<PanelText> {
+        vec![
+            label(130.0, 48.0, "Length:"),
+            value(175.0, 48.0, "26 m"),
+            label(130.0, 60.0, "Mass:"),
+            value(175.0, 60.0, "25 tons"),
+            label(130.0, 72.0, "Crew:"),
+            value(175.0, 72.0, "4"),
+        ]
+    }
+
     #[test]
-    fn the_stat_lines_are_the_records_with_the_jumps_its_fuel_holds() {
-        assert_eq!(
-            stat_lines(&row(129, "Heavy", 1)),
-            [
-                "Speed: 300",
-                "Accel: 350",
-                "Turn: 20",
-                "Guns: 2",
-                "Turrets: 1",
-                "Space: 12 tons",
-                "Cargo: 15 tons",
-                "Length: 26",
-                "Mass: 25 tons",
-                "Crew: 4",
-                "Maximum of 3 jumps",
-            ]
-        );
-        let fuel = |fuel| {
-            let mut row = row(129, "Heavy", 1);
-            row.specs.fields.fuel = fuel;
-            stat_lines(&row).pop().expect("a line")
+    fn the_panel_draws_the_originals_two_columns_for_a_class_without_stock_weapons() {
+        let mut expected = upper_rows();
+        expected.push(value(0.0, 108.0, "No standard weapons"));
+        expected.extend(lower_rows());
+        assert_eq!(expected.len(), 27);
+        assert_eq!(spec_lines(&SPECS), expected);
+        assert_eq!(stat_lines(&row(129, "Heavy", 1)), expected);
+    }
+
+    /// A stock line of `count` of `name`, with `ammo`.
+    fn stock(count: i64, name: &str, ammo: Option<i64>) -> StockLine {
+        StockLine {
+            count,
+            name: name.to_owned(),
+            ammo,
+        }
+    }
+
+    #[test]
+    fn the_panel_lists_stock_weapons_from_row_108() {
+        let specs = ShipSpecs {
+            weapons: vec![
+                stock(2, "Light Blaster", None),
+                stock(1, "Missile Launcher", Some(10)),
+                stock(4, "Viper", None),
+                stock(1, "Lone", None),
+                stock(2, "", None),
+            ],
+            ..SPECS
         };
-        assert_eq!(fuel(100), "Maximum of 1 jump");
-        assert_eq!(fuel(199), "Maximum of 1 jump");
-        assert_eq!(fuel(99), "Maximum of 0 jumps");
-        assert_eq!(fuel(-100), "Maximum of 0 jumps");
+        let mut expected = upper_rows();
+        expected.extend([
+            value(0.0, 108.0, "Standard Weapons:"),
+            value(8.0, 120.0, "2 Light Blasters"),
+            value(8.0, 132.0, "1 Missile Launcher + 10 ammo"),
+            value(8.0, 144.0, "4 Vipers"),
+            value(8.0, 156.0, "1 Lone"),
+            value(8.0, 168.0, "2 s"),
+        ]);
+        expected.extend(lower_rows());
+        assert_eq!(spec_lines(&specs), expected);
+    }
+
+    #[test]
+    fn each_panel_value_follows_its_condition() {
+        let shown = |specs: ShipSpecs, label: &str| {
+            let lines = spec_lines(&specs);
+            let at = lines
+                .iter()
+                .position(|text| text.text == label)
+                .unwrap_or_else(|| panic!("{label}: {lines:?}"));
+            lines[at + 1].text.clone()
+        };
+        let fielded = |fields: ShipFields| ShipSpecs { fields, ..SPECS };
+        let shields = |shield| {
+            shown(
+                fielded(ShipFields {
+                    shield,
+                    ..SPECS.fields
+                }),
+                "Shields:",
+            )
+        };
+        assert_eq!(shields(30), "30");
+        assert_eq!(shields(-4), "20");
+        assert_eq!(shields(1500), "1,500");
+        let armour = fielded(ShipFields {
+            armor: 45,
+            ..SPECS.fields
+        });
+        assert_eq!(shown(armour, "Armor:"), "45");
+        let armed = ShipSpecs {
+            max_gun: 0,
+            max_tur: -1,
+            ..SPECS
+        };
+        assert_eq!(shown(armed.clone(), "Guns:"), "None");
+        assert_eq!(shown(armed, "Turrets:"), "None");
+        let energy = |fuel| {
+            shown(
+                fielded(ShipFields {
+                    fuel,
+                    ..SPECS.fields
+                }),
+                "Energy:",
+            )
+        };
+        assert_eq!(energy(0), "None");
+        assert_eq!(energy(100), "1 jump");
+        assert_eq!(energy(199), "1 jump");
+        assert_eq!(energy(99), "0 jumps");
+        assert_eq!(energy(-150), "-1 jumps");
+        let handling = |accel, maneuver| {
+            let specs = fielded(ShipFields {
+                accel,
+                maneuver,
+                ..SPECS.fields
+            });
+            (shown(specs.clone(), "Accel:"), shown(specs, "Turn:"))
+        };
+        assert_eq!(handling(0, 51), ("N/A".to_owned(), "Excellent".to_owned()));
+        assert_eq!(handling(731, 0), ("Excellent".to_owned(), "N/A".to_owned()));
+        let ratings = [
+            (1, "Terrible"),
+            (11, "Poor"),
+            (21, "Average"),
+            (31, "Good"),
+            (41, "Very Good"),
+        ];
+        for (maneuver, word) in ratings {
+            assert_eq!(handling(0, maneuver).1, word, "{maneuver}");
+        }
+        let speed = |rounding| {
+            shown(
+                ShipSpecs {
+                    fields: ShipFields {
+                        speed: 190,
+                        ..SPECS.fields
+                    },
+                    rounding,
+                    ..SPECS
+                },
+                "Speed:",
+            )
+        };
+        assert_eq!(speed(RuleSource::Engine), "189");
+        assert_eq!(speed(RuleSource::Bible), "190");
+        let crewless = spec_lines(&ShipSpecs { crew: 0, ..SPECS });
+        assert!(!crewless.iter().any(|text| text.text == "Crew:"));
+        assert!(
+            !crewless
+                .iter()
+                .any(|text| (text.dx, text.baseline) == (175.0, 72.0))
+        );
+        assert_eq!(crewless.len(), 25);
     }
 
     #[test]
@@ -2075,19 +2448,22 @@ mod tests {
                 ..SPECS
             })
         };
-        let has = |lines: &[String], line: &str| {
-            assert!(lines.contains(&line.to_owned()), "{line}: {lines:?}");
+        let has = |lines: &[PanelText], dx: f32, baseline: f32, text: &str| {
+            assert!(
+                lines.contains(&value(dx, baseline, text)),
+                "{text} at ({dx}, {baseline}): {lines:?}"
+            );
         };
         let one = lines(1, 1, 1);
-        has(&one, "Space: 1 ton");
-        has(&one, "Cargo: 1 ton");
-        has(&one, "Mass: 1 ton");
+        has(&one, 175.0, 12.0, "1 ton");
+        has(&one, 175.0, 24.0, "1 ton");
+        has(&one, 175.0, 60.0, "1 ton");
         let none = lines(0, 0, 0);
-        has(&none, "Space: 0 tons");
-        has(&none, "Cargo: 0 tons");
-        has(&none, "Mass: 0 tons");
-        has(&lines(0, -15, 0), "Cargo: 15 tons");
-        has(&lines(-3, 0, 0), "Space: -3 tons");
+        has(&none, 175.0, 12.0, "0 tons");
+        has(&none, 175.0, 24.0, "0 tons");
+        has(&none, 175.0, 60.0, "0 tons");
+        has(&lines(0, -15, 0), 175.0, 24.0, "15 tons");
+        has(&lines(-3, 0, 0), 175.0, 12.0, "-3 tons");
     }
 
     /// The panel's item `number`.
@@ -2100,6 +2476,40 @@ mod tests {
     }
 
     #[test]
+    fn a_panel_text_wholly_below_item_5_is_not_drawn() {
+        let mut shipyard = shipyard();
+        shipyard.rows[1].specs.weapons = (0..10)
+            .map(|n| stock(1, &format!("Gun {n}"), None))
+            .collect();
+        let mut screen = screen_of(shipyard);
+        press(&mut screen, Key::Right);
+        press(&mut screen, INFO_KEY);
+        let area = panel_item(&screen, PANEL_TEXT_ITEM);
+        assert_eq!(area.height(), 214.0);
+        let drawn = texts(&drawn(&screen));
+        let top = |line: &str| {
+            drawn
+                .iter()
+                .find(|(text, _, _)| text == line)
+                .map(|(_, at, _)| at.y - area.min.y)
+        };
+        for n in 0..9 {
+            assert_eq!(
+                top(&format!("1 Gun {n}")),
+                Some(110.0 + 12.0 * n as f32),
+                "{n}"
+            );
+        }
+        assert_eq!(top("1 Gun 8"), Some(206.0));
+        assert_eq!(top("1 Gun 9"), None, "its top is 218");
+        assert_eq!(
+            top("Crew:"),
+            Some(62.0),
+            "the rows after the list still draw"
+        );
+    }
+
+    #[test]
     fn info_and_i_open_the_panel_with_the_ships_name_and_stats() {
         let mut screen = screen();
         press(&mut screen, Key::Right);
@@ -2109,10 +2519,25 @@ mod tests {
             panel.bounds().min,
             Point::new((1024.0 - 250.0) / 2.0, ((768.0 - 285.0) / 2.0_f32).floor())
         );
-        let text = panel.scroll_text().expect("the stats");
-        assert_eq!(text.lines()[0], "Speed: 300");
-        assert_eq!(text.lines().len(), 11);
         let commands = drawn(&screen);
+        let area = panel_item(&screen, PANEL_TEXT_ITEM);
+        let placed: Vec<(String, Point, Color)> = spec_lines(&SPECS)
+            .into_iter()
+            .map(|text| {
+                (
+                    text.text,
+                    Point::new(area.min.x + text.dx, area.min.y + text.baseline - 10.0),
+                    text.color,
+                )
+            })
+            .collect();
+        assert_eq!(placed.len(), 27);
+        let all = texts(&commands);
+        let start = all
+            .iter()
+            .position(|text| *text == placed[0])
+            .expect("the panel's texts");
+        assert_eq!(all[start..start + placed.len()], placed[..]);
         let background = commands
             .iter()
             .position(|c| {
@@ -2131,6 +2556,11 @@ mod tests {
             .position(|c| matches!(c, DrawCommand::Text { text, .. } if text == BUY_SHIP_LABEL))
             .expect("the shipyard under it");
         assert!(done_buy < background && background < title);
+        let first_text = commands
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Text { text, origin, .. } if *text == placed[0].0 && *origin == placed[0].1))
+            .expect("drawn");
+        assert!(title < first_text, "the texts after the title");
         let DrawCommand::Text {
             origin, font, size, ..
         } = &commands[title]
