@@ -600,6 +600,7 @@ mod tests {
                 space: 0,
                 rounding: RuleSource::Engine,
                 weapons: Vec::new(),
+                long_name: String::new(),
             },
             hire: if id == 129 {
                 Err(HireRefusal::CannotAfford)

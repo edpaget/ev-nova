@@ -420,6 +420,11 @@ pub struct ShipSpecs {
     /// The panel's stock-weapons list, worked out when the list is built
     /// ([`stock_lines`]).
     pub weapons: Vec<StockLine>,
+    /// Its `Long Name`, whole: `_LoadObjectData` copies it into
+    /// `_shipyardLongNames` by `strcpy`, with no trim at ';'
+    /// (@0x7b096-0x7b0ac), and `_ShipDescDialogUpdate` titles the
+    /// picture variant of the panel with it (@0x4fa33-0x4fa69).
+    pub long_name: String,
 }
 
 /// `value` when above 0, otherwise none: the panel's "None" (#335).
@@ -447,6 +452,7 @@ impl ShipSpecs {
             space: space(ship, arsenal, outfits, rules),
             rounding: rules.source_for(RuleKey::ShipInfoRounding),
             weapons: stock_lines(ship, arsenal, outfits),
+            long_name: ship.long_name.clone(),
         }
     }
 
@@ -2145,6 +2151,7 @@ mod tests {
                         space: 30,
                         rounding: RuleSource::Engine,
                         weapons: Vec::new(),
+                        long_name: "The Ship 129".to_owned(),
                     },
                     facts: ShipFacts { buyable: true },
                 }],
@@ -4228,6 +4235,16 @@ mod tests {
     }
 
     #[test]
+    fn the_specs_carry_the_classs_long_name_whole() {
+        let class = ShipRecord {
+            long_name: "Heavy Shuttle; a note".to_owned(),
+            ..cheap(129)
+        };
+        let specs = ShipSpecs::of(&class, &Arsenal::default(), &[], &Rulebook::default());
+        assert_eq!(specs.long_name, "Heavy Shuttle; a note");
+    }
+
+    #[test]
     fn a_class_without_stock_shows_its_free_mass_as_it_is() {
         assert_eq!(
             space(
@@ -4285,6 +4302,7 @@ mod tests {
             space,
             rounding: RuleSource::Engine,
             weapons: Vec::new(),
+            long_name: String::new(),
         }
     }
 

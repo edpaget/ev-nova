@@ -369,6 +369,7 @@ mod tests {
                     space: 30,
                     rounding: RuleSource::Engine,
                     weapons: Vec::new(),
+                    long_name: "The Ship 129".to_owned(),
                 },
                 hire: Ok(()),
             }

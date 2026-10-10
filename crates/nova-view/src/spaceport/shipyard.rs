@@ -1216,6 +1216,7 @@ mod tests {
         space: 12,
         rounding: nova_sim::RuleSource::Engine,
         weapons: Vec::new(),
+        long_name: String::new(),
     };
 
     fn row(id: i16, short_name: &str, price: i64) -> ShipRow {

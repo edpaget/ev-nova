@@ -616,6 +616,7 @@ mod tests {
                 space: 0,
                 rounding: nova_sim::RuleSource::Engine,
                 weapons: Vec::new(),
+                long_name: String::new(),
             },
             hire,
         }
