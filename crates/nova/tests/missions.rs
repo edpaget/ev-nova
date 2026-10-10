@@ -25,6 +25,16 @@
 //! it: its `RefuseText` shows, and its `OnRefuse` set bit 7, which the
 //! saved pilot carries. Nothing more is offered.
 //!
+//! A full pilot at the bar: with all 16 slots taken by errands, accepting
+//! the bar job is refused, and the second is offered in its place;
+//! accepting that is refused too, and nothing more is offered. Leaving
+//! the bar and coming back offers the bar job again.
+//!
+//! An offer that cannot be refused: with the bar job unrefusable
+//! (`Flags` 0x0004) and its offer text empty, opening the bar accepts it
+//! with no offer dialog, and its `BriefText` shows. After the gap, the
+//! second is offered.
+//!
 //! Mission info: with the run and the errand accepted, I in the spaceport
 //! lists both, the run's `QuickBrief` showing its deadline. Abort does
 //! nothing on the errand; on the run it frees its slot, which the saved
@@ -57,6 +67,7 @@ use nova_render::{Batch, Frame};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
+use nova_sim::mission::SLOTS;
 use nova_sim::{Chance, MissionId, Pilot, PilotKeeper, PilotStore, Session};
 use nova_view::Key;
 use nova_view::flight::SharedChance;
@@ -269,9 +280,26 @@ fn status_bar() -> Vec<u8> {
     bytes
 }
 
+/// The bar job, mission 130, as the module docs describe it, with its
+/// offer text.
+fn bar_job() -> (Vec<u8>, &'static str) {
+    (bar_mission(202, -1, b"I'm in\0", b"\0"), "<PN>, join us.")
+}
+
+/// `mission` that cannot be refused: `Flags` 0x0004.
+fn unrefusable(mut mission: Vec<u8>) -> Vec<u8> {
+    put_i16s(&mut mission, 0x50, &[0x0004]);
+    mission
+}
+
 /// The game data (see the module docs) and the pictures the screens
 /// draw.
 fn game_data() -> Rc<GameData> {
+    game_data_with(bar_job())
+}
+
+/// [`game_data`] with this bar job, mission 130, and its offer text.
+fn game_data_with((bar_job, bar_job_offer): (Vec<u8>, &str)) -> Rc<GameData> {
     let mut fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Boarder"), &ship())
@@ -294,19 +322,14 @@ fn game_data() -> Rc<GameData> {
             &unabortable(mission(-1, -1, -1)),
         )
         .resource(Desc::TYPE, 204, None, &desc("Back to <DST> by <DL>."))
-        .resource(
-            Mission::TYPE,
-            130,
-            Some(b"Bar job"),
-            &bar_mission(202, -1, b"I'm in\0", b"\0"),
-        )
+        .resource(Mission::TYPE, 130, Some(b"Bar job"), &bar_job)
         .resource(
             Mission::TYPE,
             131,
             Some(b"Second"),
             &bar_mission(-1, 203, b"\0", b"b7\0"),
         )
-        .resource(Desc::TYPE, 4002, None, &desc("<PN>, join us."))
+        .resource(Desc::TYPE, 4002, None, &desc(bar_job_offer))
         .resource(Desc::TYPE, 4003, None, &desc("One more job."))
         .resource(Desc::TYPE, 202, None, &desc("Welcome aboard."))
         .resource(Desc::TYPE, 203, None, &desc("Suit yourself."))
@@ -513,10 +536,14 @@ impl Game {
     /// The app with `pilot` saved in `store` and opened from the main
     /// menu, in flight.
     fn with_pilot(store: &MemoryPilots, pilot: &Pilot) -> Self {
+        Self::with_data(store, pilot, game_data())
+    }
+
+    /// [`Game::with_pilot`] over `data`.
+    fn with_data(store: &MemoryPilots, pilot: &Pilot, data: Rc<GameData>) -> Self {
         PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
             .save(pilot)
             .expect("saved");
-        let data = game_data();
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Nothing));
         let screen: AppScreen = start_screen(Rc::clone(&data))
@@ -660,6 +687,18 @@ impl Game {
         None
     }
 
+    /// Sends redraws until a mission text shows, at most two seconds',
+    /// and gives it; `None` when none shows.
+    fn await_text(&mut self) -> Option<String> {
+        for _ in 0..120 {
+            self.frame();
+            if let Some(text) = self.shown_text() {
+                return Some(text);
+            }
+        }
+        None
+    }
+
     /// Accepts both of the mission computer's offers, closing the run's
     /// `BriefText`.
     fn accept_both(&mut self) {
@@ -710,8 +749,37 @@ fn ada() -> Pilot {
     Pilot::new(game_data().as_ref(), "Ada").expect("a pilot")
 }
 
+/// `pilot` with every mission slot taken by the errand, mission 129, as
+/// its save lists them.
+fn busy(pilot: &Pilot) -> Pilot {
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(pilot)).expect("a save");
+    save["missions"] = (0..SLOTS)
+        .map(|slot| {
+            serde_json::json!({
+                "slot": slot,
+                "mission": 129,
+                "destination": null,
+                "return": null,
+                "cargo_type": null,
+                "cargo_tons": 0,
+                "pay": 1000,
+                "days_left": null,
+                "deadline": null,
+                "reached": false,
+                "goals_met": false,
+                "failed": null,
+            })
+        })
+        .collect();
+    nova_sim::save::decode(&save.to_string()).expect("a pilot")
+}
+
 /// Mission BBS's item.
 const MISSION_BBS: usize = 11;
+
+/// The Bar's item.
+const BAR: usize = 10;
 
 #[test]
 fn the_mission_computer_lists_offers_accepts_them_and_their_texts_show() {
@@ -792,7 +860,7 @@ fn the_bar_offers_its_missions_one_after_another_and_a_refusal_runs_on_refuse() 
     let mut game = Game::with_pilot(&store, &ada());
     game.frame();
     game.land();
-    game.click_port(10);
+    game.click_port(BAR);
     assert!(game.spaceport().open_bar().is_some(), "in the bar");
 
     // A quarter second on, the bar job is offered.
@@ -828,6 +896,61 @@ fn the_bar_offers_its_missions_one_after_another_and_a_refusal_runs_on_refuse() 
     // Nothing more is offered.
     assert_eq!(game.await_offer(), None);
     assert!(game.spaceport().open_bar().is_some(), "still in the bar");
+}
+
+#[test]
+fn an_offer_refused_for_want_of_a_slot_comes_again_once_the_bar_is_left() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_pilot(&store, &busy(&ada()));
+    game.frame();
+    game.land();
+    game.click_port(BAR);
+    let full: Vec<_> = (0..SLOTS)
+        .map(|slot| (u8::try_from(slot).expect("a slot"), MissionId(129)))
+        .collect();
+
+    // Every slot is taken: accepting the bar job is refused, and the
+    // second is offered in its place.
+    assert_eq!(game.await_offer(), Some(MissionId(130)));
+    game.tap(Key::Enter);
+    assert!(game.offer().is_none());
+    assert_eq!(game.active(), full, "refused");
+    assert_eq!(game.await_offer(), Some(MissionId(131)), "not the bar job");
+    game.tap(Key::Enter);
+    assert_eq!(game.active(), full, "refused");
+
+    // Nothing more is offered in this visit.
+    assert_eq!(game.await_offer(), None);
+
+    // Leaving the bar and coming back offers the bar job again.
+    game.tap(Key::Escape);
+    assert!(game.spaceport().open_bar().is_none(), "left the bar");
+    game.frame();
+    game.click_port(BAR);
+    assert!(game.spaceport().open_bar().is_some(), "back in the bar");
+    assert_eq!(game.await_offer(), Some(MissionId(130)));
+}
+
+#[test]
+fn an_offer_that_cannot_be_refused_with_no_text_is_accepted_without_a_dialog() {
+    let store = MemoryPilots::new();
+    let (job, _) = bar_job();
+    let data = game_data_with((unrefusable(job), ""));
+    let mut game = Game::with_data(&store, &ada(), data);
+    game.frame();
+    game.land();
+    game.click_port(BAR);
+
+    // A quarter second on, the bar job is accepted with no offer dialog,
+    // and its BriefText shows.
+    assert_eq!(game.await_text().as_deref(), Some("Welcome aboard."));
+    assert!(game.offer().is_none(), "no offer dialog");
+    assert_eq!(game.active(), [(0, MissionId(130))]);
+    game.tap(Key::Enter);
+    assert_eq!(game.shown_text(), None);
+
+    // After the gap, the second is offered.
+    assert_eq!(game.await_offer(), Some(MissionId(131)));
 }
 
 #[test]
