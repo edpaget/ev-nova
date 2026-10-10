@@ -8,10 +8,14 @@
 //! selected ship's picture ([`ship_picture`]); its description, the
 //! pilot's, `dësc` 14000 plus its ID less 128 (the Bible: "Ship pilot
 //! descriptions, shown in the hire-escort dialog"); and the Info panel
-//! ("Shipyard Info", `DLOG` 1005, [`spec_lines`]). Its info box shows
-//! "Hiring Price:" and the fee (`STR#` 2002 #228), the daily pay ("Pay:
-//! 100 credits per day", which the original's dialog does not show) and
-//! "You Have:" and the cash (#217).
+//! ("Shipyard Info", `DLOG` 1005, [`spec_lines`]). Its info box draws two
+//! rows in white, as `_ShipyardDialogUpdate`'s hire mode does
+//! (@0x595a0-0x596f6): "Hiring Price:" (`STR#` 2002 #228) and the fee at
+//! baseline 12, and "You Have:" (#217) and the cash at baseline 36, each
+//! label at the box's left and each amount at its left + 70, drawn by
+//! `_DrawCommaNumber` with " cr" after it ([`credits_text`]). The original
+//! shows an escort's daily pay only once it is hired, in the escort dialog,
+//! which the port's comm dialog stands in for.
 //!
 //! Hire Escort (item 7, `STR#` 150 #13), clicked or with H, asks for the
 //! selected ship, and is greyed when it cannot be hired. H acts on a
@@ -26,9 +30,10 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::hire::{HIRE_ESCORT, HIRING_PRICE, YOU_HAVE};
+use nova_sim::hire::{HIRE_ESCORT, HIRING_PRICE};
 use nova_sim::{HireList, HireRow, ShipId};
 
+use super::credits::{self, AMOUNT_COLUMN, credits_text};
 use super::grid::{
     self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE,
     name_lines, text,
@@ -48,7 +53,6 @@ use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::comm::{grouped, pay_text};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
 
 /// Hire Escort's item: the shipyard's Buy Ship.
@@ -68,14 +72,19 @@ pub fn pilot_desc_id(ship: ShipId) -> i16 {
     FIRST_PILOT_DESC.saturating_add(ship.0.saturating_sub(FIRST_SHIP))
 }
 
-/// The info box's lines for `row`, with `cash` in hand: the fee, the
-/// daily pay and the cash.
+/// The info box's rows' baselines below its top: Hiring Price and You
+/// Have (`_ShipyardDialogUpdate` @0x595ac, @0x59683).
+pub const HIRE_ROWS: [f32; 2] = [12.0, 36.0];
+
+/// The info box's rows for `row`, with `cash` in hand, as
+/// `_ShipyardDialogUpdate`'s hire mode draws them (@0x595a0-0x596f6): each
+/// row's baseline, its label and its amount, the fee and then the cash.
+/// There is no Pay line.
 #[must_use]
-pub fn hire_lines(row: &HireRow, cash: i64) -> [String; 3] {
+pub fn hire_lines(row: &HireRow, cash: i64) -> [(f32, &'static str, String); 2] {
     [
-        format!("{HIRING_PRICE} {}", grouped(row.fee)),
-        pay_text(row.wage),
-        format!("{YOU_HAVE} {}", grouped(cash)),
+        (HIRE_ROWS[0], HIRING_PRICE, credits_text(row.fee)),
+        (HIRE_ROWS[1], credits::YOU_HAVE, credits_text(cash)),
     ]
 }
 
@@ -369,10 +378,15 @@ impl HireScreen {
         let Some(info) = laid.dialog.item_bounds(INFO_BOX_ITEM) else {
             return;
         };
-        let line_height = laid.metrics.0.line_height(TEXT_FONT, TEXT_SIZE);
-        for (n, line) in hire_lines(row, self.list.cash).iter().enumerate() {
-            let origin = Point::new(info.min.x + INSET, info.min.y + line_height * n as f32);
-            text(list, line, origin, TEXT_COLOR);
+        for (baseline, label, amount) in hire_lines(row, self.list.cash) {
+            let top = grid::baseline_top(info.min.y + baseline);
+            text(list, label, Point::new(info.min.x, top), TEXT_COLOR);
+            text(
+                list,
+                &amount,
+                Point::new(info.min.x + AMOUNT_COLUMN, top),
+                TEXT_COLOR,
+            );
         }
     }
 }
@@ -715,37 +729,93 @@ mod tests {
         assert_eq!(pilot_desc_id(ShipId(128)), 14_000);
         assert_eq!(pilot_desc_id(ShipId(129)), 14_001);
         assert_eq!(pilot_desc_id(ShipId(895)), 14_767);
+        assert_eq!(HIRE_ROWS, [12.0, 36.0]);
+    }
+
+    /// The texts drawn in the info box, with their origins and colours.
+    fn info_box_texts(screen: &HireScreen) -> Vec<(String, Point, Color)> {
+        let info = item(screen, INFO_BOX_ITEM);
+        texts(screen)
+            .into_iter()
+            .filter(|(_, at, _)| info.contains(*at))
+            .collect()
+    }
+
+    /// The four texts the info box should draw, `fee` and `cash` as
+    /// given, relative to `info`'s top left.
+    fn expected_box(info: Bounds, fee: &str, cash: &str) -> Vec<(String, Point, Color)> {
+        let at = |x: f32, y: f32| Point::new(info.min.x + x, info.min.y + y);
+        vec![
+            ("Hiring Price:".to_owned(), at(0.0, 2.0), TEXT_COLOR),
+            (fee.to_owned(), at(70.0, 2.0), TEXT_COLOR),
+            ("You Have:".to_owned(), at(0.0, 26.0), TEXT_COLOR),
+            (cash.to_owned(), at(70.0, 26.0), TEXT_COLOR),
+        ]
     }
 
     #[test]
-    fn the_info_box_shows_the_fee_the_daily_pay_and_the_cash() {
-        let screen = screen();
+    fn the_info_box_draws_the_fee_and_the_cash_at_the_originals_rows_and_columns() {
+        let mut screen = screen();
+        let info = item(&screen, INFO_BOX_ITEM);
         assert_eq!(
-            info_box(&screen),
+            info_box_texts(&screen),
+            expected_box(info, "970 cr", "25,000 cr")
+        );
+        assert!(
+            texts(&screen)
+                .iter()
+                .all(|(text, _, _)| !text.starts_with("Pay:") && !text.contains("per day")),
+            "no Pay line"
+        );
+        screen.input(&key(Key::Right, false));
+        assert_eq!(
+            screen.selected(),
+            Some(1),
+            "the row that cannot be afforded"
+        );
+        assert_eq!(
+            info_box_texts(&screen),
+            expected_box(info, "50,000 cr", "25,000 cr")
+        );
+    }
+
+    #[test]
+    fn the_amounts_draw_as_draw_comma_number_does() {
+        let line =
+            |baseline: f32, label: &'static str, amount: &str| (baseline, label, amount.to_owned());
+        assert_eq!(
+            hire_lines(&row(128, 1_234_567, 1, Ok(())), -1_500),
             [
-                "Hiring Price: 970",
-                "Pay: 100 credits per day",
-                "You Have: 25,000"
+                line(12.0, "Hiring Price:", "1.23M cr"),
+                line(36.0, "You Have:", "-1500 cr")
             ]
+        );
+        assert_eq!(
+            hire_lines(&row(128, 999, 1, Ok(())), 1_000),
+            [
+                line(12.0, "Hiring Price:", "999 cr"),
+                line(36.0, "You Have:", "1,000 cr")
+            ]
+        );
+        assert_eq!(
+            hire_lines(&row(128, 0, 0, Ok(())), 0),
+            [
+                line(12.0, "Hiring Price:", "0 cr"),
+                line(36.0, "You Have:", "0 cr")
+            ]
+        );
+        let screen = screen_of(
+            &art(),
+            HireList {
+                rows: vec![row(128, 2_500_000, 100, Ok(()))],
+                cash: -1_500,
+                room: true,
+            },
         );
         let info = item(&screen, INFO_BOX_ITEM);
-        let line = MonoMetrics.line_height(TEXT_FONT, TEXT_SIZE);
-        let origins: Vec<Point> = texts(&screen)
-            .into_iter()
-            .filter(|(_, at, _)| info.contains(*at))
-            .map(|(_, at, _)| at)
-            .collect();
         assert_eq!(
-            origins,
-            [0.0, 1.0, 2.0].map(|n| Point::new(info.min.x + INSET, info.min.y + line * n))
-        );
-        assert_eq!(
-            hire_lines(&row(128, 12_000, 1, Ok(())), 3),
-            [
-                "Hiring Price: 12,000".to_owned(),
-                "Pay: 1 credit per day".to_owned(),
-                "You Have: 3".to_owned()
-            ]
+            info_box_texts(&screen),
+            expected_box(info, "2.50M cr", "-1500 cr")
         );
     }
 

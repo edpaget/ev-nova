@@ -9,8 +9,8 @@
 //! in-memory store.
 //!
 //! Hire: the pilot lands, the Bar opens the bar, and H its hire screen,
-//! "Hiring Price: 1,000" and "Pay: 100 credits per day"; H hires the
-//! Hireling and the bar is back. Leaving and taking off costs the fee and,
+//! "Hiring Price:" "1,000 cr" and "You Have:" "25,000 cr", with no pay
+//! line; H hires the Hireling and the bar is back. Leaving and taking off costs the fee and,
 //! by `take_off_pay`'s engine reading, a day's wage, and the hired escort
 //! is drawn beside the player. Landed again the pilot is saved; reopened
 //! in a new app, the escort is still hired, and Option-Tab and Y show
@@ -20,9 +20,9 @@
 //! jumps to Beta; "Due to lack of pay, one of your escorts has defected."
 //! shows, no escort is drawn there, and the saved pilot has none. With
 //! `take_off_pay` set to the other reading in the settings file, a
-//! take-off costs nothing. The router's hire terms set the fee and pay
-//! the hire screen shows and a hire takes, and its control bits can make
-//! a ship's `Availability` refuse the hire. With six escorts, the bar's
+//! take-off costs nothing. The router's hire terms set the fee the hire
+//! screen shows and a hire takes, and the pay the escort is hired at, and
+//! its control bits can make a ship's `Availability` refuse the hire. With six escorts, the bar's
 //! Hire Escort asks for nothing.
 
 // Positions here are compared after the same arithmetic on both sides.
@@ -729,7 +729,8 @@ fn a_pilot_hires_an_escort_in_the_bar_and_it_follows_and_shows_its_pay_after_a_r
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport);
 
-    // The bar, and H its hire screen: the Hireling's fee and pay.
+    // The bar, and H its hire screen: the Hireling's fee and the cash,
+    // and no pay line.
     game.open_bar();
     let shown = texts(&game.frame());
     for text in ["Hire Escort", "Smoke and quiet talk.", "Leave"] {
@@ -739,13 +740,18 @@ fn a_pilot_hires_an_escort_in_the_bar_and_it_follows_and_shows_its_pay_after_a_r
     assert!(game.hiring());
     let shown = texts(&game.frame());
     for text in [
-        "Hiring Price: 1,000",
-        "Pay: 100 credits per day",
-        "You Have: 25,000",
+        "Hiring Price:",
+        "1,000 cr",
+        "You Have:",
+        "25,000 cr",
         "A steady hand.",
     ] {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
     }
+    assert!(
+        !shown.contains(&"Pay: 100 credits per day".to_owned()),
+        "{shown:?}"
+    );
 
     // H hires it: the bar is back, and the pilot saved with its escort.
     game.tap(Key::Char('h'));
@@ -914,11 +920,17 @@ fn the_routers_hire_terms_and_control_bits_decide_the_bar() {
     game.open_bar();
     game.tap(Key::Char('h'));
     let shown = texts(&game.frame());
-    for text in ["Hiring Price: 7", "Pay: 3 credits per day"] {
+    for text in ["Hiring Price:", "7 cr"] {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
     }
     game.tap(Key::Char('h'));
     assert_eq!(game.pilot().cash(), 25_000 - 7);
+    assert_eq!(game.pilot().escorts().len(), 2);
+    assert_eq!(
+        game.pilot().escorts().last().map(|escort| escort.wage),
+        Some(Some(3)),
+        "hired at the router's wage"
+    );
 
     let store = MemoryPilots::new();
     let mut game = Game::with_pilot(&store, &pilot, Showing::Spaceport, |screen| {

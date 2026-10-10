@@ -106,14 +106,12 @@
 //!
 //! # Not modelled
 //!
-//! The original's hire dialog shows only the fee and the cash; the daily
-//! pay shown beside them is the phase's. A freighter that defects would
-//! destroy its share of the fleet's cargo (`_DestroyPartialFleetCargo`
-//! @0x40240): its holds now count in the fleet's cargo space
-//! ([`fleet_holds`](crate::market::fleet_holds)), but the share destroyed
-//! waits for rdm task `hire-escorts-follow-up`; mission escorts, never paid,
-//! wait for missions; and the extra days the original passes for
-//! outfitting and buying a ship are not passed.
+//! A freighter that defects would destroy its share of the fleet's cargo
+//! (`_DestroyPartialFleetCargo` @0x40240): its holds now count in the
+//! fleet's cargo space ([`fleet_holds`](crate::market::fleet_holds)), but
+//! the share destroyed waits for rdm task `hire-escorts-follow-up`;
+//! mission escorts, never paid, wait for missions; and the extra days the
+//! original passes for outfitting and buying a ship are not passed.
 //!
 //! # Why the session keeps these ports
 //!
