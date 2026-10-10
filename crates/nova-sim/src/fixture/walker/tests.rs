@@ -676,6 +676,11 @@ fn each_fault_is_reported_with_its_mission() {
             Fault::Undeliverable,
             "mission 200 has no return stellar",
         ),
+        (
+            Step::PassDays(3),
+            Fault::NotActive,
+            "the step is not active",
+        ),
     ] {
         assert_eq!(
             report(at, fault),

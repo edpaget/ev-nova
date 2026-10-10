@@ -179,28 +179,28 @@ pub struct WalkFailure {
 impl fmt::Display for WalkFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "step {} ({}) failed: ", self.step, self.at)?;
-        let mission = match self.at {
-            Step::Take(mission) | Step::Deliver(mission) => mission.0,
-            Step::PassDays(_) => -1,
+        let subject = match self.at {
+            Step::Take(mission) | Step::Deliver(mission) => format!("mission {}", mission.0),
+            Step::PassDays(_) => "the step".to_owned(),
         };
         match &self.fault {
-            Fault::NotOffered => write!(f, "mission {mission} is offered nowhere")?,
-            Fault::Refused(error) => write!(f, "mission {mission} was refused: {error}")?,
-            Fault::NotActive => write!(f, "mission {mission} is not active")?,
+            Fault::NotOffered => write!(f, "{subject} is offered nowhere")?,
+            Fault::Refused(error) => write!(f, "{subject} was refused: {error}")?,
+            Fault::NotActive => write!(f, "{subject} is not active")?,
             Fault::NotCompleted(active) => {
-                write!(f, "mission {mission} was not completed: {active:?}")?;
+                write!(f, "{subject} was not completed: {active:?}")?;
             }
             Fault::WrongPay { expected, got } => {
-                write!(f, "mission {mission} paid {got}, not {expected}")?;
+                write!(f, "{subject} paid {got}, not {expected}")?;
             }
             Fault::BitsNotSet(bits) => {
-                write!(f, "mission {mission} left unset:")?;
+                write!(f, "{subject} left unset:")?;
                 for bit in bits {
                     write!(f, " b{}", bit.get())?;
                 }
             }
-            Fault::CannotLand(refusal) => write!(f, "mission {mission}: cannot land: {refusal}")?,
-            Fault::Undeliverable => write!(f, "mission {mission} has no return stellar")?,
+            Fault::CannotLand(refusal) => write!(f, "{subject}: cannot land: {refusal}")?,
+            Fault::Undeliverable => write!(f, "{subject} has no return stellar")?,
         }
         for looked in &self.looked {
             write!(
@@ -302,8 +302,10 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
             return Err((Fault::NotOffered, Vec::new()));
         };
         let venue = Venue::of(record.avail_loc);
-        if session.landed().is_some() && offered(session, mission, venue) {
-            return self.accept(session, mission);
+        if let Some(here) = session.landed()
+            && offered(session, mission, venue)
+        {
+            return self.accept(session, mission, here);
         }
         let mut looked = Vec::new();
         for (stellar, system) in candidates(&self.catalog.listed_stellars(), session.landed()) {
@@ -312,7 +314,7 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
             }
             self.settle(session);
             if offered(session, mission, venue) {
-                return self.accept(session, mission);
+                return self.accept(session, mission, stellar);
             }
             looked.push(Looked {
                 stellar,
@@ -323,9 +325,13 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
         Err((Fault::NotOffered, kept(looked)))
     }
 
-    /// Accepts `mission`, offered at the stellar docked at.
-    fn accept(&self, session: &mut Session, mission: MissionId) -> Result<Done, Failed> {
-        let stellar = session.landed().unwrap_or(StellarId(-1));
+    /// Accepts `mission`, offered at `stellar`, the stellar docked at.
+    fn accept(
+        &self,
+        session: &mut Session,
+        mission: MissionId,
+        stellar: StellarId,
+    ) -> Result<Done, Failed> {
         let slot = session
             .accept_mission(mission, &mut NeverFires)
             .map_err(|error| (Fault::Refused(error), Vec::new()))?;
