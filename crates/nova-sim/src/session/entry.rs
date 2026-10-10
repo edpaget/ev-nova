@@ -69,7 +69,8 @@ pub(super) enum Entry {
     Gate,
     /// `M` or `N`, landed or in flight.
     ScriptMove { landed: bool },
-    /// The developer tools' move, landed.
+    /// The developer tools' move, landed, or a walker's landing
+    /// ([`Session::land_at`]), landed or in flight.
     Relocate,
 }
 
@@ -383,11 +384,13 @@ fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
     Resets::of(&set, course, traffic)
 }
 
-/// The developer tools' move of a landed pilot: no original does it. It
-/// docks the ship as a landing does, the shops' rolls drawn afresh, and
-/// leaves the last system's traffic and scene behind; it keeps a held
-/// sound and the fighters out, and sounds nothing. The offers are emptied
-/// and their stellar forgotten, so the next landing rolls them.
+/// The developer tools' move of a landed pilot, and the walker's landing
+/// from anywhere ([`Session::land_at`], which then docks as a landing
+/// does): no original does either. It docks the ship as a landing does,
+/// the shops' rolls drawn afresh, and leaves the last system's traffic
+/// and scene behind; it keeps a held sound and the fighters out, and
+/// sounds nothing. The offers are emptied and their stellar forgotten, so
+/// the next landing rolls them.
 fn relocate() -> Resets {
     Resets::of(
         &[
