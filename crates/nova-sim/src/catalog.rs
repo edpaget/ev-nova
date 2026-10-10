@@ -600,6 +600,27 @@ pub struct MissionRecord {
     pub time_limit: i16,
     /// Its `DispWeight`: higher shows nearer the top.
     pub disp_weight: i16,
+    /// Its `OnAccept`, run as it is accepted.
+    pub on_accept: Script,
+    /// Its `OnRefuse`, run as its offer is refused.
+    pub on_refuse: Script,
+    /// Its `OnSuccess`, run as it is completed.
+    pub on_success: Script,
+    /// Its `OnFailure`, run as it fails.
+    pub on_failure: Script,
+    /// Its `OnAbort`, run as it is aborted.
+    pub on_abort: Script,
+    /// Its `CanAbort`, raw: the player may abort it unless it is 0.
+    pub can_abort: i16,
+    /// Its `CompGovt`: the government whose record its end changes, none
+    /// outside 128-383 (`_LoadCurrentMissionData` @0xa0c04-0xa0c6e).
+    pub comp_govt: Option<GovtId>,
+    /// Its `CompReward`: 0 with no `CompGovt`, as the original loads it.
+    pub comp_reward: i16,
+    /// Its `DatePostInc`: the days its success, or its auto-abort, passes.
+    pub date_post_inc: i16,
+    /// Its `ShipCount` and `ShipGoal`.
+    pub ships: MissionShip,
 }
 
 /// The game data a system's NPC traffic is spawned from: its `sÿst`'s

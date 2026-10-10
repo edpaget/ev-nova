@@ -7,14 +7,15 @@ use crate::ai::Goal;
 use crate::catalog::{
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterRecord,
     DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord,
-    LandingSite, ListedStellar, MissionId, MissionRecord, OutfitId, OutfitRecord, Penalties,
-    PersonId, PersonRecord, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, OutfitId, OutfitRecord,
+    Penalties, PersonId, PersonRecord, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, SystemId, SystemTraffic, TrafficCatalog, WeaponId,
+    WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
-use crate::control::{ControlBits, PilotFacts, Test, TestExpr};
+use crate::control::{ControlBits, PilotFacts, Script, Test, TestExpr};
 use crate::flight::ShipState;
 use crate::flight::{Controls, Turn};
 use crate::geometry::Vec2;
@@ -154,6 +155,16 @@ pub(crate) fn mission(id: i16) -> MissionRecord {
         pay_val: 0,
         time_limit: 0,
         disp_weight: 0,
+        on_accept: Script::default(),
+        on_refuse: Script::default(),
+        on_success: Script::default(),
+        on_failure: Script::default(),
+        on_abort: Script::default(),
+        can_abort: 1,
+        comp_govt: None,
+        comp_reward: 0,
+        date_post_inc: 0,
+        ships: MissionShip { count: 0, goal: -1 },
     }
 }
 

@@ -385,6 +385,9 @@ impl PilotCatalog for GameData {
         self.records::<Mission>()
             .filter_map(|(id, mission)| {
                 let record = mission.ok()?.record;
+                let comp_govt = record
+                    .comp_govt
+                    .filter(|govt| (128..=383).contains(&govt.0));
                 Some(MissionRecord {
                     id: MissionId(id),
                     avail_stel: record.avail_stel,
@@ -404,6 +407,23 @@ impl PilotCatalog for GameData {
                     pay_val: record.pay_val,
                     time_limit: record.time_limit,
                     disp_weight: record.disp_weight,
+                    on_accept: self.set_expr(record.on_accept.as_str()).into(),
+                    on_refuse: self.set_expr(record.on_refuse.as_str()).into(),
+                    on_success: self.set_expr(record.on_success.as_str()).into(),
+                    on_failure: self.set_expr(record.on_failure.as_str()).into(),
+                    on_abort: self.set_expr(record.on_abort.as_str()).into(),
+                    can_abort: record.can_abort,
+                    comp_govt,
+                    comp_reward: if comp_govt.is_some() {
+                        record.comp_reward
+                    } else {
+                        0
+                    },
+                    date_post_inc: record.date_post_inc,
+                    ships: MissionShip {
+                        count: record.ship_count,
+                        goal: record.ship_goal,
+                    },
                 })
             })
             .collect()
@@ -3013,12 +3033,32 @@ mod tests {
             &[10_005, 0, 0, -5, 40, 25, -2, -1, 1000, -10],
         );
         bytes[0x1C..0x20].copy_from_slice(&(-50_100_i32).to_be_bytes());
-        put_i16s(&mut bytes, 0x40, &[3]);
+        put_i16s(&mut bytes, 0x20, &[2]);
+        put_i16s(&mut bytes, 0x26, &[1]);
+        put_i16s(&mut bytes, 0x2E, &[383, 7]);
+        put_i16s(&mut bytes, 0x40, &[3, 0]);
         put_i16s(&mut bytes, 0x50, &[0x2008, 0x0001]);
         put_i16s(&mut bytes, 0x5A, &[1129]);
         bytes[0x5C..0x5C + avail_bits.len()].copy_from_slice(avail_bits);
+        for (offset, script) in [
+            (0x15B, b"b10\0"),
+            (0x25A, b"b11\0"),
+            (0x359, b"b12\0"),
+            (0x458, b"b13\0"),
+            (0x557, b"b14\0"),
+        ] {
+            bytes[offset..offset + script.len()].copy_from_slice(script);
+        }
         bytes[0x656..0x65E].copy_from_slice(&0x0000_0004_0000_0001_u64.to_be_bytes());
+        put_i16s(&mut bytes, 0x65E, &[4]);
         put_i16s(&mut bytes, 0x7A0, &[60]);
+        bytes
+    }
+
+    /// [`offered`] with `CompGovt` `govt`.
+    fn rewarding(govt: i16) -> Vec<u8> {
+        let mut bytes = offered(b"\0");
+        put_i16s(&mut bytes, 0x2E, &[govt]);
         bytes
     }
 
@@ -3060,6 +3100,16 @@ mod tests {
                 pay_val: -50_100,
                 time_limit: 3,
                 disp_weight: 60,
+                on_accept: Script::parse("b10"),
+                on_refuse: Script::parse("b11"),
+                on_success: Script::parse("b12"),
+                on_failure: Script::parse("b13"),
+                on_abort: Script::parse("b14"),
+                can_abort: 0,
+                comp_govt: Some(GovtId(383)),
+                comp_reward: 7,
+                date_post_inc: 4,
+                ships: MissionShip { count: 2, goal: 1 },
             }
         );
         assert!(
@@ -3074,6 +3124,27 @@ mod tests {
                 a.id
             );
         }
+    }
+
+    #[test]
+    fn a_comp_govt_outside_128_to_383_is_none_and_rewards_nothing() {
+        use nova_data::records::mission::Mission;
+        let data = store(&[
+            (Mission::TYPE, 128, rewarding(128)),
+            (Mission::TYPE, 129, rewarding(127)),
+            (Mission::TYPE, 130, rewarding(384)),
+            (Mission::TYPE, 131, rewarding(-1)),
+        ]);
+        let rewards: Vec<_> = data
+            .missions()
+            .iter()
+            .map(|mission| (mission.comp_govt, mission.comp_reward))
+            .collect();
+        assert_eq!(
+            rewards,
+            [(Some(GovtId(128)), 7), (None, 0), (None, 0), (None, 0)],
+            "an index of 0-255 (@0xa0c04-0xa0c6e)"
+        );
     }
 
     #[test]
