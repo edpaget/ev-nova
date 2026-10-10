@@ -1671,6 +1671,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn in_an_independent_system_avail_record_reads_a_record_of_0() {
+        use crate::catalog::GovtId;
+        let mut catalog = offering();
+        // System 130 is independent; the stellar docked at, 128, govt 129's.
+        catalog.star_map[0].govt = None;
+        catalog.sites[0].1[0].govt = Some(GovtId(129));
+        catalog.missions = vec![
+            MissionRecord {
+                avail_record: 1,
+                ..mission(140)
+            },
+            MissionRecord {
+                avail_record: -1,
+                ..mission(141)
+            },
+            MissionRecord {
+                avail_record: 0,
+                ..mission(142)
+            },
+        ];
+        let mut session = landed(&catalog, &mut NeverFires);
+        for record in [-50, 50] {
+            for govt in 128..=131 {
+                session.pilot.set_legal_record(GovtId(govt), record);
+            }
+            let refused = |id| {
+                session
+                    .offer_refusals(MissionId(id))
+                    .expect("docked")
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(refused(140), ["AvailRecord"], "1, every record {record}");
+            assert_eq!(refused(141), ["AvailRecord"], "-1, every record {record}");
+            assert_eq!(refused(142), [] as [&str; 0], "0, every record {record}");
+        }
+    }
+
     // The active missions' lifecycle.
 
     use std::cell::RefCell;
