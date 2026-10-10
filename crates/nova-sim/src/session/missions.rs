@@ -690,10 +690,7 @@ impl Session {
     /// The deadline check of the mission in `slot` (`_MissionObjectivesCheck`
     /// @0x9eba5-0x9ec61), drawing on `chance`: with none of its days left,
     /// not failed already, and the ship not docked, it fails at once
-    /// (`_QuickMissionFailure` @0x99d1b): its `OnFailure`, then marked
-    /// failed by its deadline; an abortable one ends, its slot freed, no
-    /// `OnAbort` run; and the offers' stellar is forgotten either way. An
-    /// unabortable one stays active and failed until its return.
+    /// ([`Session::quick_failure`]).
     fn mission_deadline(&mut self, slot: u8, chance: &mut dyn Chance) {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
@@ -704,12 +701,28 @@ impl Session {
         let record = self.lifecycle_record(active.mission);
         // The comm message, `STR#` 2002 #285 unless `Flags` has 0x0400
         // (@0x9ebd0-0x9ec53): rdm:phase/missions/phase-17-deadline-message-and-flight-info.
+        self.quick_failure(slot, &record, chance);
+    }
+
+    /// Fails the mission `record` in `slot` at once, drawing on `chance`,
+    /// as `_QuickMissionFailure` (@0x99d1b) does for a missed deadline, its
+    /// cargo jettisoned or a scan finding it: its `OnFailure`, then marked
+    /// failed ([`FailedBy::Quick`]); an abortable one ends, its slot freed,
+    /// no `OnAbort` run; and the offers' stellar is forgotten either way.
+    /// An unabortable one stays active and failed until its return. No
+    /// record changes.
+    pub(super) fn quick_failure(
+        &mut self,
+        slot: u8,
+        record: &MissionRecord,
+        chance: &mut dyn Chance,
+    ) {
         self.run_mission_script(slot, &record.on_failure, chance);
         if let Some(active) = self.slot_holding(slot, record.id) {
             active.failed = Some(FailedBy::Quick);
         }
         if record.can_abort != 0 {
-            self.end_mission(slot, &record, false, chance);
+            self.end_mission(slot, record, false, chance);
         }
         self.forget_offers();
     }

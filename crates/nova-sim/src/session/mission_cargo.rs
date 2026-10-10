@@ -1,17 +1,20 @@
 //! The session's side of mission cargo (see the
 //! [`mission`](crate::mission) module's "Cargo"): loading it as a
-//! mission is accepted, and picking it up and dropping it off as the
-//! player lands, the first of each slot's landing hooks
-//! ([`ARRIVAL`](super::missions::ARRIVAL)), or boards its ship.
+//! mission is accepted, picking it up and dropping it off as the player
+//! lands, the first of each slot's landing hooks
+//! ([`ARRIVAL`](super::missions::ARRIVAL)), or boards its ship, and the
+//! player's jettison ([`Session::jettison_cargo`]).
 
 use super::Session;
 use super::mission_screens::MissionTextKind;
 use super::missions::at;
 use crate::catalog::{MissionId, MissionRecord, StellarId};
-use crate::chance::NeverFires;
+use crate::chance::{Chance, NeverFires};
+use crate::market::Good;
+use crate::message::SimMessage;
 use crate::mission::cargo::{
-    PICKUP_BOARDING, PickupFacts, drops_off, loads_at_accept, picks_up_at_destination,
-    pickup_checks,
+    JettisonMessage, PICKUP_BOARDING, PickupFacts, drops_off, jettison, loads_at_accept,
+    picks_up_at_destination, pickup_checks,
 };
 
 impl Session {
@@ -102,6 +105,48 @@ impl Session {
         }
         self.show_mission_text(MissionTextKind::LoadCargo, mission, Some(slot));
         true
+    }
+
+    /// Jettisons the cargo, drawing on `chance`, as `_JettisonCargo`
+    /// (@0x3dffd) does (see [`jettison`]): every `jünk` goes; with `all`,
+    /// each abortable mission's cargo aboard goes and its mission fails at
+    /// once ([`Session::quick_failure`]), in slot order; then the
+    /// commodities go. In flight the player is told: "Mission failed.",
+    /// or else "Cargo jettisoned." or "Non-mission cargo jettisoned."
+    /// when anything went ([`SimMessage`]); landed, nothing. The cargo
+    /// boxes it leaves are rdm:phase/missions/phase-19-jettison-boxes.
+    pub fn jettison_cargo(&mut self, all: bool, chance: &mut dyn Chance) {
+        let decided = jettison(
+            &self.pilot.missions,
+            |id| self.lifecycle_record(id),
+            all,
+            self.pilot.goods_held(),
+        );
+        self.pilot
+            .cargo
+            .retain(|good, _| matches!(good, Good::Commodity(_)));
+        for &slot in &decided.slots {
+            let Some(mission) = self.pilot.missions.get(slot).map(|active| active.mission) else {
+                continue;
+            };
+            let record = self.lifecycle_record(mission);
+            if let Some(active) = self.slot_holding(slot, mission) {
+                active.aboard = false;
+            }
+            self.quick_failure(slot, &record, chance);
+        }
+        self.pilot.cargo.clear();
+        self.save_due = true;
+        if self.landed.is_some() {
+            return;
+        }
+        if let Some(message) = decided.message {
+            self.messages.push(match message {
+                JettisonMessage::MissionFailed => SimMessage::MissionFailed,
+                JettisonMessage::CargoJettisoned => SimMessage::CargoJettisoned,
+                JettisonMessage::NonMissionCargoJettisoned => SimMessage::NonMissionCargoJettisoned,
+            });
+        }
     }
 
     /// Whether the pickup's checks pass for the cargo of `mission` in
@@ -586,5 +631,156 @@ mod tests {
             session.take_mission_texts(),
             [text(MissionTextKind::DumpCargo, 140, "Dumped.")]
         );
+    }
+
+    // The jettison.
+
+    use crate::SimMessage;
+    use crate::catalog::JunkId;
+    use crate::control::Bit;
+
+    fn bit(n: u16) -> Bit {
+        Bit::new(n).expect("in range")
+    }
+
+    /// Missions 140 (4 tons of medical goods, its `OnFailure` setting bit
+    /// 40), 141 (6 tons, unabortable, its `OnFailure` setting bit 41) and
+    /// 142 (3 tons, hidden, its `OnFailure` setting bit 42), each loaded
+    /// at accept, to 129 and back to 128.
+    fn cargo_missions() -> FakePilotCatalog {
+        let failing = |id: i16, tons: i16, bit: u16| MissionRecord {
+            cargo_qty: tons,
+            on_failure: Script::parse(&format!("b{bit}")),
+            ..round_trip(id, 0, 1)
+        };
+        cargo_catalog(
+            vec![
+                failing(140, 4, 40),
+                MissionRecord {
+                    can_abort: 0,
+                    ..failing(141, 6, 41)
+                },
+                MissionRecord {
+                    flags: 0x0400,
+                    ..failing(142, 3, 42)
+                },
+            ],
+            vec![],
+        )
+    }
+
+    /// A session of `catalog` that accepted `missions` docked at 128,
+    /// holding 3 tons of food and 2 of a jünk, its texts taken.
+    fn loaded(catalog: &FakePilotCatalog, missions: &[i16]) -> Session {
+        let mut session = docked(catalog);
+        for &id in missions {
+            session
+                .accept_mission(MissionId(id), &mut NeverFires)
+                .expect("accepted");
+        }
+        session.pilot.cargo.insert(Good::Commodity(0), 3);
+        session.pilot.cargo.insert(Good::Junk(JunkId(146)), 2);
+        let _ = session.take_mission_texts();
+        session
+    }
+
+    /// Takes `session` off and settles, its messages taken.
+    fn in_flight(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.take_off(&mut NeverFires).expect("takes off");
+        let _ = session.settle_script(catalog, &mut NeverFires);
+        let _ = session.take_messages();
+    }
+
+    fn held_missions(session: &Session) -> Vec<(u8, i16)> {
+        session
+            .pilot()
+            .missions()
+            .iter()
+            .map(|(slot, active)| (slot, active.mission.0))
+            .collect()
+    }
+
+    #[test]
+    fn jettisoning_all_in_flight_fails_each_abortable_mission_whose_cargo_goes() {
+        let catalog = cargo_missions();
+        let mut session = loaded(&catalog, &[140, 141]);
+        in_flight(&mut session, &catalog);
+        let _ = session.take_save_due();
+        session.jettison_cargo(true, &mut NeverFires);
+        assert_eq!(session.pilot().goods_held(), 0, "the food and the jünk");
+        assert!(session.control_bit(bit(40)), "OnFailure ran");
+        assert!(!session.control_bit(bit(41)));
+        assert_eq!(held_missions(&session), [(1, 141)], "140 ended");
+        let kept = session.pilot().missions().get(1).expect("held");
+        assert!(kept.aboard, "the unabortable mission's cargo stays");
+        assert_eq!(kept.failed, None);
+        assert_eq!(session.pilot().total_cargo(), 6);
+        assert_eq!(session.take_messages(), [SimMessage::MissionFailed]);
+        assert_eq!(session.offers.rolled_at(), None, "the offers forgotten");
+        assert!(session.take_save_due());
+    }
+
+    #[test]
+    fn jettisoning_with_option_keeps_every_missions_cargo() {
+        let catalog = cargo_missions();
+        let mut session = loaded(&catalog, &[140, 141]);
+        in_flight(&mut session, &catalog);
+        session.jettison_cargo(false, &mut NeverFires);
+        assert_eq!(session.pilot().goods_held(), 0);
+        assert_eq!(session.pilot().total_cargo(), 10, "4 and 6 aboard");
+        assert_eq!(held_missions(&session), [(0, 140), (1, 141)]);
+        assert!(!session.control_bit(bit(40)));
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::NonMissionCargoJettisoned]
+        );
+    }
+
+    #[test]
+    fn a_hidden_missions_cargo_fails_it_silently_and_the_cargo_is_jettisoned() {
+        let catalog = cargo_missions();
+        let mut session = loaded(&catalog, &[142]);
+        in_flight(&mut session, &catalog);
+        session.jettison_cargo(true, &mut NeverFires);
+        assert!(session.control_bit(bit(42)));
+        assert_eq!(held_missions(&session), []);
+        assert_eq!(session.take_messages(), [SimMessage::CargoJettisoned]);
+    }
+
+    #[test]
+    fn jettisoning_landed_does_the_same_and_says_nothing() {
+        let catalog = cargo_missions();
+        let mut session = loaded(&catalog, &[140, 141]);
+        let _ = session.take_messages();
+        session.jettison_cargo(true, &mut NeverFires);
+        assert_eq!(session.pilot().goods_held(), 0);
+        assert!(session.control_bit(bit(40)));
+        assert_eq!(held_missions(&session), [(1, 141)]);
+        assert_eq!(session.take_messages(), []);
+    }
+
+    #[test]
+    fn jettisoning_nothing_says_nothing() {
+        let catalog = cargo_missions();
+        let mut session = docked(&catalog);
+        in_flight(&mut session, &catalog);
+        session.jettison_cargo(true, &mut NeverFires);
+        assert_eq!(session.take_messages(), []);
+        session.jettison_cargo(false, &mut NeverFires);
+        assert_eq!(session.take_messages(), []);
+    }
+
+    #[test]
+    fn an_unabortable_missions_cargo_alone_is_kept_with_nothing_said() {
+        let catalog = cargo_missions();
+        let mut session = docked(&catalog);
+        session
+            .accept_mission(MissionId(141), &mut NeverFires)
+            .expect("accepted");
+        in_flight(&mut session, &catalog);
+        session.jettison_cargo(true, &mut NeverFires);
+        assert_eq!(session.take_messages(), []);
+        let kept = session.pilot().missions().get(0).expect("held");
+        assert_eq!((kept.aboard, kept.failed), (true, None));
     }
 }

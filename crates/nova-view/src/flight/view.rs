@@ -514,12 +514,16 @@ pub fn arrival_message_with(lead: &str, system: &str, date: &str, stellars: bool
     text
 }
 
-/// The lead of the message line on the arrival `message` raises.
-fn arrival_lead(message: SimMessage) -> &'static str {
+/// The lead of the message line on the arrival `message` raises: none for
+/// a message of another kind.
+fn arrival_lead(message: SimMessage) -> Option<&'static str> {
     match message {
-        SimMessage::Arrived(_) => JUMPING_INTO,
-        SimMessage::ExitedHypergate(_) => EXITING_HYPERGATE,
-        SimMessage::PassedWormhole(_) => PASSING_WORMHOLE,
+        SimMessage::Arrived(_) => Some(JUMPING_INTO),
+        SimMessage::ExitedHypergate(_) => Some(EXITING_HYPERGATE),
+        SimMessage::PassedWormhole(_) => Some(PASSING_WORMHOLE),
+        SimMessage::MissionFailed
+        | SimMessage::CargoJettisoned
+        | SimMessage::NonMissionCargoJettisoned => None,
     }
 }
 
@@ -1510,7 +1514,7 @@ impl<
         };
         let mut said: Vec<String> = leads
             .into_iter()
-            .map(arrival_lead)
+            .filter_map(arrival_lead)
             .next_back()
             .map(|lead| {
                 let stellars = !scene.stellars().is_empty();

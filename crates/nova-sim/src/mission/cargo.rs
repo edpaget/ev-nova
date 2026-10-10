@@ -1,13 +1,15 @@
 //! Mission cargo: the room an accept and a pickup need for it ([`Room`],
-//! [`pickup_checks`]), and when it is loaded and unloaded
-//! ([`loads_at_accept`], [`picks_up_at_destination`], [`drops_off`]). See
-//! the [module docs](super)' "Cargo" for the original's rules.
+//! [`pickup_checks`]), when it is loaded and unloaded
+//! ([`loads_at_accept`], [`picks_up_at_destination`], [`drops_off`]), and
+//! what a jettison does with it ([`jettison`]). See the [module
+//! docs](super)' "Cargo" for the original's rules.
 
-use crate::catalog::MissionRecord;
+use crate::catalog::{MissionId, MissionRecord};
 use crate::rulebook::Rulebook;
 use crate::rules::{Check, Checks, Context};
 
-use super::active::ActiveMission;
+use super::active::{ActiveMission, ActiveMissions};
+use super::screens::HIDDEN;
 
 /// `ShipGoal`: none.
 const NO_GOAL: i16 = -1;
@@ -63,6 +65,85 @@ pub fn drops_off(
         && record.drop_off_mode == DROP_OFF_AT_RETURN
         && (active.goals_met || record.ships.goal == NO_GOAL);
     active.aboard && (at_destination || at_return)
+}
+
+/// What the player is told of a jettison, in flight (`STR#` 2002).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JettisonMessage {
+    /// #284, "Mission failed.": a mission whose cargo went failed, and
+    /// it lacks `Flags` 0x0400.
+    MissionFailed,
+    /// #289, "Cargo jettisoned.": everything went.
+    CargoJettisoned,
+    /// #290, "Non-mission cargo jettisoned.": the mission cargo stayed.
+    NonMissionCargoJettisoned,
+}
+
+/// What a jettison does ([`jettison`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Jettisoned {
+    /// The slots whose cargo goes, each mission failing at once, in slot
+    /// order.
+    pub slots: Vec<u8>,
+    /// The tons jettisoned: the goods held and the missions' cargo, at
+    /// least 1 once a mission's cargo goes.
+    pub total: i64,
+    /// What the player is told in flight, if anything.
+    pub message: Option<JettisonMessage>,
+}
+
+/// What jettisoning does (`_JettisonCargo` @0x3dffd), with `held` tons of
+/// goods held (commodities and `jünk`) and the missions in `missions`,
+/// `record_of` giving each one's record; `all` also jettisons the mission
+/// cargo, which Option keeps.
+///
+/// The total starts with the goods held (@0x3e01e, @0x3e034-0x3e055).
+/// With `all` (@0x3e07a-0x3e1bc), each slot in order whose cargo is
+/// aboard, typed, of tons not below none, and whose mission has a
+/// `CanAbort` other than 0, loses its cargo, which adds to the total; a
+/// mission that leaves the total at none makes it 1. An unabortable
+/// mission's cargo stays aboard. The player is told "Mission failed." when
+/// a mission that failed lacks `Flags` 0x0400 (@0x3e114-0x3e182);
+/// otherwise, with a total above none, "Cargo jettisoned." or, without
+/// `all`, "Non-mission cargo jettisoned." (@0x3e2fe-0x3e3b0).
+#[must_use]
+pub fn jettison(
+    missions: &ActiveMissions,
+    record_of: impl Fn(MissionId) -> MissionRecord,
+    all: bool,
+    held: i64,
+) -> Jettisoned {
+    let mut jettisoned = Jettisoned {
+        total: held,
+        ..Jettisoned::default()
+    };
+    let mut failed_shown = false;
+    for (slot, active) in missions.iter().filter(|_| all) {
+        let record = record_of(active.mission);
+        let goes = active.aboard
+            && active.cargo_type.is_some()
+            && active.cargo_tons >= 0
+            && record.can_abort != 0;
+        if !goes {
+            continue;
+        }
+        jettisoned.slots.push(slot);
+        jettisoned.total += active.cargo_tons;
+        failed_shown |= record.flags & HIDDEN == 0;
+        if jettisoned.total == 0 {
+            jettisoned.total = 1;
+        }
+    }
+    jettisoned.message = if failed_shown {
+        Some(JettisonMessage::MissionFailed)
+    } else if jettisoned.total <= 0 {
+        None
+    } else if all {
+        Some(JettisonMessage::CargoJettisoned)
+    } else {
+        Some(JettisonMessage::NonMissionCargoJettisoned)
+    };
+    jettisoned
 }
 
 /// What the pickup checks read: the room for the cargo, and the rule
@@ -300,6 +381,135 @@ mod tests {
         assert_eq!(
             pickup_checks().first_refusal(&facts, &mut crate::chance::NeverFires),
             Err(PickupRefusal::NoHolds)
+        );
+    }
+
+    /// Missions in slots 0, 2, 3 and 5: 140 with 4 tons aboard; 141
+    /// unabortable with 6; 142 with 7 not aboard; 143 hidden (`Flags`
+    /// 0x0400) with 3.
+    fn four_missions() -> (ActiveMissions, impl Fn(MissionId) -> MissionRecord) {
+        let mut missions = ActiveMissions::default();
+        missions.put(0, crate::testkit::carrying(140, 4));
+        missions.put(2, crate::testkit::carrying(141, 6));
+        missions.put(
+            3,
+            ActiveMission {
+                aboard: false,
+                ..crate::testkit::carrying(142, 7)
+            },
+        );
+        missions.put(5, crate::testkit::carrying(143, 3));
+        let record_of = |id: MissionId| MissionRecord {
+            can_abort: i16::from(id.0 != 141),
+            flags: if id.0 == 143 { HIDDEN } else { 0 },
+            ..mission(id.0)
+        };
+        (missions, record_of)
+    }
+
+    #[test]
+    fn jettisoning_all_takes_every_abortable_missions_cargo_aboard_and_fails_it() {
+        let (missions, record_of) = four_missions();
+        assert_eq!(
+            jettison(&missions, record_of, true, 10),
+            Jettisoned {
+                slots: vec![0, 5],
+                total: 17,
+                message: Some(JettisonMessage::MissionFailed),
+            },
+            "10 held, 4 and 3 aboard; the unabortable and the unloaded kept"
+        );
+    }
+
+    #[test]
+    fn with_option_only_the_goods_go() {
+        let (missions, record_of) = four_missions();
+        assert_eq!(
+            jettison(&missions, &record_of, false, 10),
+            Jettisoned {
+                slots: vec![],
+                total: 10,
+                message: Some(JettisonMessage::NonMissionCargoJettisoned),
+            }
+        );
+        assert_eq!(
+            jettison(&missions, record_of, false, 0),
+            Jettisoned::default(),
+            "nothing held: nothing said"
+        );
+    }
+
+    #[test]
+    fn the_goods_alone_are_cargo_jettisoned() {
+        let missions = ActiveMissions::default();
+        assert_eq!(
+            jettison(&missions, |id| mission(id.0), true, 8),
+            Jettisoned {
+                slots: vec![],
+                total: 8,
+                message: Some(JettisonMessage::CargoJettisoned),
+            },
+            "the commodities and jünk held"
+        );
+        assert_eq!(
+            jettison(&missions, |id| mission(id.0), true, 0),
+            Jettisoned::default()
+        );
+    }
+
+    #[test]
+    fn a_hidden_missions_cargo_fails_it_silently() {
+        let mut missions = ActiveMissions::default();
+        missions.put(1, crate::testkit::carrying(143, 3));
+        let hidden = |id: MissionId| MissionRecord {
+            flags: HIDDEN | 0x0001,
+            ..mission(id.0)
+        };
+        assert_eq!(
+            jettison(&missions, hidden, true, 0),
+            Jettisoned {
+                slots: vec![1],
+                total: 3,
+                message: Some(JettisonMessage::CargoJettisoned),
+            }
+        );
+    }
+
+    #[test]
+    fn a_mission_of_no_tons_makes_a_total_of_none_one() {
+        let mut missions = ActiveMissions::default();
+        missions.put(0, crate::testkit::carrying(140, 0));
+        missions.put(1, crate::testkit::carrying(141, 0));
+        let hidden = |id: MissionId| MissionRecord {
+            flags: HIDDEN,
+            ..mission(id.0)
+        };
+        assert_eq!(
+            jettison(&missions, hidden, true, 0),
+            Jettisoned {
+                slots: vec![0, 1],
+                total: 1,
+                message: Some(JettisonMessage::CargoJettisoned),
+            },
+            "each lifts none to 1, and 1 stays"
+        );
+        assert_eq!(jettison(&missions, hidden, true, 2).total, 2, "held");
+    }
+
+    #[test]
+    fn untyped_or_negative_cargo_stays_aboard() {
+        let mut missions = ActiveMissions::default();
+        missions.put(
+            0,
+            ActiveMission {
+                cargo_type: None,
+                ..crate::testkit::carrying(140, 4)
+            },
+        );
+        missions.put(1, crate::testkit::carrying(141, -1));
+        assert_eq!(
+            jettison(&missions, |id| mission(id.0), true, 0),
+            Jettisoned::default()
         );
     }
 

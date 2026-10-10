@@ -12,4 +12,12 @@ pub enum SimMessage {
     ExitedHypergate(SystemId),
     /// The ship passed through a wormhole into this system.
     PassedWormhole(SystemId),
+    /// A mission failed as its cargo was jettisoned (`_JettisonCargo`
+    /// @0x3e114-0x3e182).
+    MissionFailed,
+    /// Every ton of cargo was jettisoned (`_JettisonCargo` @0x3e354).
+    CargoJettisoned,
+    /// The cargo but the missions' was jettisoned (`_JettisonCargo`
+    /// @0x3e35e).
+    NonMissionCargoJettisoned,
 }
