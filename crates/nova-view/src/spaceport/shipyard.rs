@@ -24,7 +24,8 @@
 //! The selected ship's picture is [`ship_picture`]'s: `PICT` 5000 plus its
 //! ID less 128, or else that of the lowest-numbered ship sharing its
 //! `shän` base image, as the Bible says target pictures are shared, or
-//! "No Picture". Its description is `dësc` 13000 plus its ID less 128. The
+//! "No Picture" and "Available" centred on the picture item in white. Its
+//! description is `dësc` 13000 plus its ID less 128. The
 //! info box shows, for any class but the one flown, four rows at the
 //! original's baselines (`_ShipyardDialogUpdate` @0x592e4-0x596f6): "Ship
 //! Price:", "Trade-In:", "Final Price:" (the price less the trade-in, at
@@ -929,7 +930,7 @@ impl ShipyardScreen {
         };
         if let (Some((_, shown)), Some(area)) = (&laid.shown, laid.dialog.item_bounds(PICTURE_ITEM))
         {
-            shown.draw(list, area);
+            shown.draw(list, area, &*laid.metrics.0);
         }
         let Some(info) = laid.dialog.item_bounds(INFO_BOX_ITEM) else {
             return;
@@ -1074,7 +1075,7 @@ mod tests {
     use crate::sound::UiSound;
     use crate::spaceport::catalog::{PortRecord, StellarId};
     use crate::spaceport::credits::AMOUNT_COLUMN;
-    use crate::spaceport::grid::{NO_PICTURE, TEXT_SIZE};
+    use crate::spaceport::grid::TEXT_SIZE;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
@@ -1631,6 +1632,43 @@ mod tests {
         assert_eq!(colors(&screen), [TEXT_COLOR, GREY]);
     }
 
+    /// The texts drawn in the picture item.
+    fn in_picture(screen: &ShipyardScreen) -> Vec<(String, Point, Color)> {
+        let picture = item(screen, PICTURE_ITEM);
+        texts(&drawn(screen))
+            .into_iter()
+            .filter(|(_, at, _)| picture.contains(*at))
+            .collect()
+    }
+
+    /// The picture item's two missing-picture lines as drawn: centred
+    /// across it (`MonoMetrics` sets Geneva 10 at 5 a character), on
+    /// baselines 6 either side of the floor of its middle, in white.
+    fn no_picture_lines(picture: Bounds) -> Vec<(String, Point, Color)> {
+        let mid_x = f32::midpoint(picture.min.x, picture.max.x).floor();
+        let mid_y = f32::midpoint(picture.min.y, picture.max.y).floor();
+        vec![
+            (
+                "No Picture".to_owned(),
+                Point::new(mid_x - 25.0, grid::baseline_top(mid_y - 6.0)),
+                grid::TEXT_COLOR,
+            ),
+            (
+                "Available".to_owned(),
+                Point::new(mid_x - 22.5, grid::baseline_top(mid_y + 6.0)),
+                grid::TEXT_COLOR,
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_missing_picture_shows_no_picture_and_available_centred_in_white() {
+        let mut screen = screen_with(shipyard(), &art());
+        press(&mut screen, Key::Right);
+        let picture = item(&screen, PICTURE_ITEM);
+        assert_eq!(in_picture(&screen), no_picture_lines(picture));
+    }
+
     #[test]
     fn the_picture_and_description_are_read_as_the_selection_changes() {
         let art = art();
@@ -1644,12 +1682,7 @@ mod tests {
         }));
         assert!(words(&screen).contains(&"dësc 13000.".to_owned()));
         press(&mut screen, Key::Right);
-        let shown = texts(&drawn(&screen));
-        assert!(shown.contains(&(
-            NO_PICTURE.to_owned(),
-            Point::new(picture.min.x + INSET, picture.min.y + INSET),
-            GREY
-        )));
+        assert_eq!(in_picture(&screen), no_picture_lines(picture));
         press(&mut screen, Key::Right);
         assert!(
             drawn(&screen).contains(&DrawCommand::StretchedPicture {

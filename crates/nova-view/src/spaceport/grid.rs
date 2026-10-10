@@ -1,7 +1,7 @@
 //! The parts the Outfitter and the Shipyard share: the grid of cells in
 //! their dialog's grid item, with its selection, scrolling and arrows; a
-//! `ShortName`'s lines; and the selected item's picture or "No Picture",
-//! and its description, as read.
+//! `ShortName`'s lines; and the selected item's picture, or "No Picture"
+//! and "Available" centred on its item, and its description, as read.
 //!
 //! The grid shows [`COLUMNS`] cells across and [`GRID_ROWS`] down, each
 //! [`CELL_WIDTH`] x [`CELL_HEIGHT`] from the grid item's top left. One cell
@@ -38,8 +38,14 @@ pub const CELL_WIDTH: f32 = 83.0;
 /// A cell's height: four fit the stock grid's 271.
 pub const CELL_HEIGHT: f32 = 67.0;
 
-/// `STR#` 2002 #213.
+/// `STR#` 2002 #213: the first line drawn on a missing picture.
 pub const NO_PICTURE: &str = "No Picture";
+/// `STR#` 2002 #214: the second line drawn on a missing picture.
+pub const PICTURE_AVAILABLE: &str = "Available";
+/// How far [`NO_PICTURE`]'s baseline is above, and [`PICTURE_AVAILABLE`]'s
+/// below, the picture item's vertical middle (`_OutfitDialogUpdate`
+/// @0x57a2a-0x57a43, @0x57a75-0x57a8e).
+pub const NO_PICTURE_OFFSET: f32 = 6.0;
 
 /// The screens' text font.
 pub const TEXT_FONT: Font = Font::Geneva;
@@ -123,6 +129,26 @@ pub fn draw_cell_picture(list: &mut DrawList, cell: Bounds, picture: Option<i16>
 /// The top of a line of the screens' text whose baseline is `baseline`.
 pub(crate) fn baseline_top(baseline: f32) -> f32 {
     baseline - TEXT_SIZE
+}
+
+/// `words` in white, centred across `area` on `baseline`, as
+/// `_DrawCenteredText` (@0x263d) draws it: from the floor of the middle of
+/// `area`'s sides, less half the text's width.
+pub fn draw_centred_text(
+    list: &mut DrawList,
+    metrics: &dyn TextMetrics,
+    area: Bounds,
+    baseline: f32,
+    words: &str,
+) {
+    let middle = f32::midpoint(area.min.x, area.max.x).floor();
+    let x = middle - metrics.width(TEXT_FONT, TEXT_SIZE, words) / 2.0;
+    text(
+        list,
+        words,
+        Point::new(x, baseline_top(baseline)),
+        TEXT_COLOR,
+    );
 }
 
 /// `short_name`'s lines, each in its colour and centred across `cell`: a
@@ -349,14 +375,22 @@ impl Shown {
         }
     }
 
-    /// The picture stretched into `area`, or "No Picture" in it, then the
-    /// description.
-    pub fn draw(&self, list: &mut DrawList, area: Bounds) {
+    /// The picture stretched into `area`, or, with none, "No Picture" and
+    /// "Available" centred across it in white, [`NO_PICTURE_OFFSET`] above
+    /// and below the floor of its vertical middle (`_OutfitDialogUpdate`
+    /// @0x579e0-0x57aa3, `_ShipyardDialogUpdate` @0x59164-0x59227); then
+    /// the description.
+    pub fn draw(&self, list: &mut DrawList, area: Bounds, metrics: &dyn TextMetrics) {
         if let Some(id) = self.picture {
             list.stretched_picture(ImageKey::picture(id), area.min, area.width(), area.height());
         } else {
-            let origin = Point::new(area.min.x + INSET, area.min.y + INSET);
-            text(list, NO_PICTURE, origin, GREY);
+            let middle = f32::midpoint(area.min.y, area.max.y).floor();
+            for (words, baseline) in [
+                (NO_PICTURE, middle - NO_PICTURE_OFFSET),
+                (PICTURE_AVAILABLE, middle + NO_PICTURE_OFFSET),
+            ] {
+                draw_centred_text(list, metrics, area, baseline, words);
+            }
         }
         self.description.draw(list);
     }
@@ -514,6 +548,71 @@ mod tests {
                     TEXT_COLOR
                 ),
             ]
+        );
+    }
+
+    fn shown(picture: Option<i16>, area: Bounds) -> Shown {
+        let metrics: Rc<dyn TextMetrics> = Rc::new(MonoMetrics);
+        Shown::read_text("", picture, area, &metrics)
+    }
+
+    #[test]
+    fn a_missing_picture_draws_no_picture_and_available_centred_6_either_side_of_the_middle() {
+        let area = rect(100.0, 40.0, 200.0, 200.0);
+        let mut list = DrawList::new();
+        shown(None, area).draw(&mut list, area, &MonoMetrics);
+        assert_eq!(
+            texts(&list),
+            [
+                (
+                    "No Picture".to_owned(),
+                    Point::new(200.0 - 25.0, baseline_top(140.0 - 6.0)),
+                    TEXT_COLOR
+                ),
+                (
+                    "Available".to_owned(),
+                    Point::new(200.0 - 22.5, baseline_top(140.0 + 6.0)),
+                    TEXT_COLOR
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_middle_is_halved_to_a_whole_number_and_the_width_exactly() {
+        let area = rect(10.0, 20.0, 201.0, 101.0);
+        let mut list = DrawList::new();
+        shown(None, area).draw(&mut list, area, &MonoMetrics);
+        assert_eq!(
+            texts(&list),
+            [
+                (
+                    "No Picture".to_owned(),
+                    Point::new(110.0 - 25.0, baseline_top(70.0 - 6.0)),
+                    TEXT_COLOR
+                ),
+                (
+                    "Available".to_owned(),
+                    Point::new(110.0 - 22.5, baseline_top(70.0 + 6.0)),
+                    TEXT_COLOR
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_picture_draws_no_text() {
+        let area = rect(10.0, 20.0, 201.0, 101.0);
+        let mut list = DrawList::new();
+        shown(Some(6000), area).draw(&mut list, area, &MonoMetrics);
+        assert_eq!(
+            commands(&list),
+            [DrawCommand::StretchedPicture {
+                image: ImageKey::picture(6000),
+                top_left: area.min,
+                width: 201.0,
+                height: 101.0,
+            }]
         );
     }
 

@@ -25,7 +25,8 @@
 //! 2002 #206).
 //!
 //! The selected outfit's picture is `PICT` 6000 plus its ID less 128, or
-//! "No Picture" (#213) when the data has none, and its description is
+//! "No Picture" and "Available" (#213, #214) centred on the picture item in
+//! white when the data has none, and its description is
 //! `dësc` 3000 plus its ID less 128, both read through the
 //! [`OutfitterCatalog`] as the selection changes. The info box shows, in
 //! white at the original's baselines (`_OutfitDialogUpdate`
@@ -847,7 +848,7 @@ impl OutfitterScreen {
         let row = &self.outfitter.rows[index];
         if let (Some((_, shown)), Some(area)) = (&laid.shown, laid.dialog.item_bounds(PICTURE_ITEM))
         {
-            shown.draw(list, area);
+            shown.draw(list, area, &*laid.metrics.0);
         }
         let Some(info) = laid.dialog.item_bounds(INFO_ITEM) else {
             return;
@@ -1939,17 +1940,44 @@ mod tests {
             "the pictures once a list, each description once while it stays selected"
         );
         let picture = item(&screen, PICTURE_ITEM);
-        let no_picture = texts(&drawn(&screen))
+        assert_eq!(in_picture(&screen), no_picture_lines(picture));
+    }
+
+    /// The texts drawn in the picture item.
+    fn in_picture(screen: &OutfitterScreen) -> Vec<(String, Point, Color)> {
+        let picture = item(screen, PICTURE_ITEM);
+        texts(&drawn(screen))
             .into_iter()
-            .find(|(text, _, _)| text == NO_PICTURE)
-            .expect("drawn");
-        assert_eq!(
-            (no_picture.1, no_picture.2),
+            .filter(|(_, at, _)| picture.contains(*at))
+            .collect()
+    }
+
+    /// The picture item's two missing-picture lines as drawn: centred
+    /// across it (`MonoMetrics` sets Geneva 10 at 5 a character), on
+    /// baselines 6 either side of the floor of its middle, in white.
+    fn no_picture_lines(picture: Bounds) -> Vec<(String, Point, Color)> {
+        let mid_x = f32::midpoint(picture.min.x, picture.max.x).floor();
+        let mid_y = f32::midpoint(picture.min.y, picture.max.y).floor();
+        vec![
             (
-                Point::new(picture.min.x + INSET, picture.min.y + INSET),
-                GREY
-            )
-        );
+                "No Picture".to_owned(),
+                Point::new(mid_x - 25.0, grid::baseline_top(mid_y - 6.0)),
+                grid::TEXT_COLOR,
+            ),
+            (
+                "Available".to_owned(),
+                Point::new(mid_x - 22.5, grid::baseline_top(mid_y + 6.0)),
+                grid::TEXT_COLOR,
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_missing_picture_shows_no_picture_and_available_centred_in_white() {
+        let mut screen = screen_with(outfitter(), &art());
+        press(&mut screen, Key::Right);
+        let picture = item(&screen, PICTURE_ITEM);
+        assert_eq!(in_picture(&screen), no_picture_lines(picture));
     }
 
     #[test]

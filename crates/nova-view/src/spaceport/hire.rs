@@ -372,7 +372,7 @@ impl HireScreen {
         };
         if let (Some((_, shown)), Some(area)) = (&laid.shown, laid.dialog.item_bounds(PICTURE_ITEM))
         {
-            shown.draw(list, area);
+            shown.draw(list, area, &*laid.metrics.0);
         }
         let Some(info) = laid.dialog.item_bounds(INFO_BOX_ITEM) else {
             return;
@@ -712,6 +712,38 @@ mod tests {
             .filter(|(_, at, _)| info.contains(*at))
             .map(|(text, _, _)| text)
             .collect()
+    }
+
+    /// The picture item's two missing-picture lines as drawn: centred
+    /// across it (`MonoMetrics` sets Geneva 10 at 5 a character), on
+    /// baselines 6 either side of the floor of its middle, in white.
+    fn no_picture_lines(picture: Bounds) -> Vec<(String, Point, Color)> {
+        let mid_x = f32::midpoint(picture.min.x, picture.max.x).floor();
+        let mid_y = f32::midpoint(picture.min.y, picture.max.y).floor();
+        vec![
+            (
+                "No Picture".to_owned(),
+                Point::new(mid_x - 25.0, grid::baseline_top(mid_y - 6.0)),
+                grid::TEXT_COLOR,
+            ),
+            (
+                "Available".to_owned(),
+                Point::new(mid_x - 22.5, grid::baseline_top(mid_y + 6.0)),
+                grid::TEXT_COLOR,
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_missing_picture_shows_no_picture_and_available_centred_in_white() {
+        let mut screen = screen();
+        screen.input(&key(Key::Right, false));
+        let picture = item(&screen, PICTURE_ITEM);
+        let in_picture: Vec<_> = texts(&screen)
+            .into_iter()
+            .filter(|(_, at, _)| picture.contains(*at))
+            .collect();
+        assert_eq!(in_picture, no_picture_lines(picture));
     }
 
     #[test]
