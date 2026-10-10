@@ -678,6 +678,25 @@ mod tests {
     }
 
     #[test]
+    fn a_mission_whose_record_is_gone_loads_and_unloads_nothing_at_a_landing() {
+        let catalog = cargo_catalog(
+            vec![round_trip(140, -1, -1), round_trip(141, 0, -1)],
+            vec![],
+        );
+        let mut session = docked(&catalog);
+        for id in [140, 141] {
+            session
+                .accept_mission(MissionId(id), &mut NeverFires)
+                .expect("accepted");
+        }
+        session.missions.clear();
+        land_on(&mut session, &catalog, 128);
+        assert!(aboard(&session, 1), "no DropOffMode: kept at its return");
+        land_on(&mut session, &catalog, 129);
+        assert!(!aboard(&session, 0), "no PickupMode: nothing picked up");
+    }
+
+    #[test]
     fn a_mission_with_no_cargo_type_still_shows_its_dump_text() {
         let catalog = cargo_catalog(
             vec![MissionRecord {

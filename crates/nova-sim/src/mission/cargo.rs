@@ -437,7 +437,10 @@ mod tests {
 
     #[test]
     fn a_pickup_is_refused_without_the_holds_then_without_the_space() {
-        let rules = Rulebook::default();
+        let rules = Rulebook::default().with_override(
+            crate::rulebook::RuleKey::StartActiveMission,
+            crate::rulebook::RuleSource::Bible,
+        );
         let refusals = |tons, holds, space| {
             pickup_checks()
                 .all_refusals(&PickupFacts {
