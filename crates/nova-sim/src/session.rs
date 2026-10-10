@@ -329,6 +329,7 @@ pub use ship_change::ShipChangeRules;
 
 pub use edit::RelocateRefusal;
 pub use events::SessionEvent;
+pub use mission_screens::{ComputerRefusal, ComputerRow, MissionComputer};
 pub use missions::{AbortError, AcceptError, NotOffered};
 pub use persons::PersonQuote;
 pub use script_effects::{ScriptEffectRules, Settled};

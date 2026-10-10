@@ -254,7 +254,7 @@ impl Session {
     }
 
     /// The record of `mïsn` `id`, if the session has one.
-    fn mission_record(&self, id: MissionId) -> Option<&MissionRecord> {
+    pub(super) fn mission_record(&self, id: MissionId) -> Option<&MissionRecord> {
         self.missions.iter().find(|record| record.id == id)
     }
 
@@ -279,7 +279,7 @@ impl Session {
     }
 
     /// The first refusal of the accept checks, drawing on `chance`.
-    fn accept_refusal(&self, chance: &mut dyn Chance) -> Result<(), AcceptRefusal> {
+    pub(super) fn accept_refusal(&self, chance: &mut dyn Chance) -> Result<(), AcceptRefusal> {
         let facts = AcceptFacts {
             active: &self.pilot.missions,
             rules: &self.rules,
@@ -830,7 +830,7 @@ impl Session {
 
     /// `f` of the visit to `stellar`, one of the stellars shown: `None`
     /// when it is not shown.
-    fn at_visit<T>(&self, stellar: StellarId, f: impl FnOnce(&Visit) -> T) -> Option<T> {
+    pub(super) fn at_visit<T>(&self, stellar: StellarId, f: impl FnOnce(&Visit) -> T) -> Option<T> {
         let docked = *self.sites.iter().find(|site| site.id == stellar)?;
         let map = self.galaxy.map();
         let ship = self.ship_record(self.pilot.ship);
