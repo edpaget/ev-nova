@@ -12,8 +12,8 @@
 //! - [`gpu`]: the [`Gpu`] port and the [`Frame`]s handed to it. Each
 //!   [`TextRun`] names its `nova_view` [`Font`](nova_view::Font).
 //! - [`fonts`]: the font files text is drawn in ([`FontFaces`], with the
-//!   bundled [`FALLBACK_FONT`]) and which face draws each font
-//!   ([`face_for`]).
+//!   bundled [`FALLBACK_FONT`] and [`SERIF_FONT`]) and which face draws
+//!   each font ([`face_for`]).
 //! - [`batch`]: the [`Renderer`], which packs images into the atlas lazily
 //!   and turns a draw list into batches in draw order.
 //! - [`source`]: [`ImageSource`] for `nova_data`'s `GameData`, a thin
@@ -62,7 +62,7 @@ pub mod wgpu;
 
 pub use atlas::{Atlas, AtlasEntry, GUTTER, PAGE_SIZE, PackError, PageId, ShelfPacker, Uv};
 pub use batch::{RenderReport, Renderer};
-pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, face_for};
+pub use fonts::{FALLBACK_FONT, Face, FontFaces, Loaded, SERIF_FONT, face_for};
 pub use gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun};
 pub use images::{ImageError, ImageSource};
 pub use present::{AcquireOutcome, AcquireResult, SurfaceAction, acquire_outcome, surface_action};
