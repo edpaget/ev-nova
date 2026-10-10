@@ -109,6 +109,18 @@ impl Session {
         })
     }
 
+    /// The room a mission's cargo has, in tons, as `_TotalMissionCargoSpace`
+    /// (@0xcffb) reckons it: the ship's own holds, with its cargo outfits,
+    /// less the cargo held that the trader escorts' holds do not take; below
+    /// 0 when it holds more. Mission cargo, which rides in the ship alone,
+    /// is missions phase 5's.
+    fn mission_cargo_space(&self) -> i64 {
+        let own = i64::from(self.stats.capacity);
+        let escorts = i64::from(self.capacity()) - own;
+        let held: i64 = self.pilot.cargo.values().map(|&tons| i64::from(tons)).sum();
+        own - (held - escorts).max(0)
+    }
+
     /// `f` of the visit to `stellar`, one of the stellars shown: `None`
     /// when it is not shown.
     fn at_visit<T>(&self, stellar: StellarId, f: impl FnOnce(&Visit) -> T) -> Option<T> {
@@ -131,7 +143,7 @@ impl Session {
                 &self.outfits,
             ),
             fuel: self.pilot.reserves.fuel.now,
-            free_cargo: self.free_cargo(),
+            free_cargo: self.mission_cargo_space(),
             cash: self.pilot.cash,
         };
         let visit = Visit {
@@ -406,6 +418,60 @@ mod tests {
         assert_eq!(session.offer_refusals(MissionId(133)), None, "no such mïsn");
         let in_flight = Session::start(&catalog).expect("starts");
         assert_eq!(in_flight.offer_refusals(MissionId(130)), None);
+    }
+
+    #[test]
+    fn a_missions_cargo_space_is_the_ships_own_less_the_cargo_the_escorts_do_not_take() {
+        use crate::market::Good;
+        use crate::pilot::Escort;
+        let mut catalog = offering();
+        catalog.ship_records = vec![crate::catalog::ShipRecord {
+            inherent_ai: 1,
+            ..crate::testkit::ship(
+                129,
+                crate::handling::ShipFields {
+                    holds: 15,
+                    ..crate::testkit::FAST
+                },
+            )
+        }];
+        catalog.missions = vec![MissionRecord {
+            flags2: 0x0001,
+            cargo_qty: 6,
+            ..mission(140)
+        }];
+        let mut session = landed(&catalog, &mut NeverFires);
+        session.pilot.escorts = vec![Escort {
+            ship: crate::catalog::ShipId(129),
+            reserves: crate::reserves::Reserves::default(),
+            order: None,
+            carried: false,
+            wage: None,
+            person: None,
+        }];
+        let refused = |session: &Session| {
+            session
+                .offer_refusals(MissionId(140))
+                .expect("docked")
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>()
+        };
+        let none: [&str; 0] = [];
+        for (held, refusals) in [(0, &none[..]), (25, &none[..]), (30, &["cargo space"][..])] {
+            session.pilot.cargo.insert(Good::Commodity(0), held);
+            assert_eq!(
+                refused(&session),
+                refusals,
+                "{held} tons held: 20 own, 15 the escort's"
+            );
+        }
+        assert_eq!(session.mission_cargo_space(), 5);
+        session.pilot.escorts.clear();
+        session.pilot.cargo.insert(Good::Commodity(0), 14);
+        assert_eq!(session.mission_cargo_space(), 6, "no escort");
+        session.pilot.cargo.insert(Good::Commodity(0), 25);
+        assert_eq!(session.mission_cargo_space(), -5, "over the holds");
     }
 
     #[test]

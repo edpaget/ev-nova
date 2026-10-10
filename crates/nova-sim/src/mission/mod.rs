@@ -58,8 +58,10 @@
 //!     (@0x9b5d6-0x9b608);
 //! 11. `AvailRandom`: above 99 passes, else the visit's roll for the
 //!     mission no higher (@0x9b60b-0x9b63e; see "Draws");
-//! 12. cargo space: with `Flags2` 0x0001, free cargo of at least
-//!     `CargoQty`, raw (@0x9b641-0x9b687), so a range below 0 passes;
+//! 12. cargo space: with `Flags2` 0x0001, room for a mission's cargo
+//!     (`_TotalMissionCargoSpace` @0xcffb: the ship's own holds less the
+//!     cargo the trader escorts' holds do not take) of at least `CargoQty`,
+//!     raw (@0x9b641-0x9b687), so a range below 0 passes;
 //! 13. `AvailShipType` (@0x9b6ae-0x9b77f): 128-896 that ship; 1128-1896
 //!     not ship `AvailShipType` - 1000; 2128-2384 a ship whose combat or
 //!     attribute government is `gövt` `AvailShipType` - 2000; 3128-3384
@@ -253,7 +255,10 @@ pub struct Player {
     pub contributed: u64,
     /// Its fuel.
     pub fuel: f32,
-    /// Its free cargo space, in tons: below 0 when it holds more.
+    /// The room for a mission's cargo, in tons, as
+    /// `_TotalMissionCargoSpace` (@0xcffb) reckons it: the ship's own
+    /// holds less the cargo the escorts do not take; below 0 when it holds
+    /// more.
     pub free_cargo: i64,
     /// The pilot's credits.
     pub cash: i64,
