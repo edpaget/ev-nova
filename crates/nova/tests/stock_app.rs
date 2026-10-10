@@ -1,7 +1,7 @@
 //! App frames of the ship browser, the galaxy map and a system over the
 //! stock data, through the recording Gpu, a course plotted from flight,
-//! and HG-Kania entered for Tichel. Skips, passing, when `NOVA_DATA` is
-//! unset.
+//! and HG-Kania entered for Tichel, and a new pilot offered the tutorial
+//! over the spaceport. Skips, passing, when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -523,5 +523,84 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     assert_eq!(
         flight.message(),
         Some("Exiting hypergate in the Tichel system on June 24, 1177 NC.")
+    );
+}
+
+/// A new pilot saved docked at the first landable stellar of Kania and
+/// opened from the main menu lands in its spaceport, which offers the
+/// stock tutorial ("Head to Sol;Tutorial 001", `mïsn` 251, `AvailLoc` 3)
+/// over the spaceport as it opens.
+#[test]
+fn a_new_stock_pilot_is_offered_the_tutorial_over_the_spaceport() {
+    use nova_sim::fixture::MemoryPilots;
+    use nova_sim::{MissionId, Pilot, PilotCatalog, PilotKeeper, PilotStore, is_landable};
+    use nova_view::menu::MenuChoice;
+
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let interface = match nova_data::open_interface(&dir) {
+        Ok(interface) => interface,
+        Err(error) => {
+            eprintln!("skipping: {error}");
+            return;
+        }
+    };
+    let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+    let pilot = Pilot::new(data.as_ref(), "Stock").expect("the stock first chär starts");
+    let site = data
+        .landing_sites(pilot.system())
+        .into_iter()
+        .find(is_landable)
+        .expect("a landable stellar where the pilot starts");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["stellar"] = serde_json::json!(site.id.0);
+    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let store = MemoryPilots::new();
+    let keeper = PilotKeeper::new(Box::new(store) as Box<dyn PilotStore>);
+    keeper.save(&docked).expect("saved");
+    let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
+    let screen = start_screen(Rc::clone(&data))
+        .with_dialogs(Rc::new(interface), Rc::clone(&metrics) as _)
+        .with_pilots(Some(keeper), metrics);
+    let mut driver = Driver {
+        app: App::new(&Window, data, screen),
+        gpu: RecordingGpu::new(),
+        clock: Duration::ZERO,
+    };
+    let open = driver
+        .app
+        .screen()
+        .main_menu()
+        .expect("the main menu")
+        .button(MenuChoice::OpenPilot)
+        .rect
+        .center();
+    driver.click(open);
+    assert_eq!(driver.showing(), Showing::OpenPilot);
+    driver.press(Key::Enter);
+    assert_eq!(driver.showing(), Showing::Spaceport, "resumed docked");
+    driver.redraw();
+
+    let offer = driver
+        .app
+        .screen()
+        .spaceport_view()
+        .expect("the spaceport")
+        .offer_dialog()
+        .expect("the spaceport offers");
+    assert_eq!(
+        offer.prompt().mission,
+        MissionId(251),
+        "Head to Sol;Tutorial 001"
+    );
+    assert!(
+        offer
+            .prompt()
+            .text
+            .starts_with("As you wander around a spaceport for the first time"),
+        "{}",
+        offer.prompt().text
     );
 }
