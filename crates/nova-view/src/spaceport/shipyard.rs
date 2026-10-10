@@ -683,9 +683,10 @@ pub(super) struct Panel {
     title: String,
     /// Item 5's texts ([`spec_lines_for`]).
     texts: Vec<PanelText>,
-    /// While the ID test holds, item 8's weapons: whether any stock weapon
-    /// is listed, and the sentence ([`weapons_sentence`]).
-    weapons: Option<(bool, String)>,
+    /// While the ID test holds, item 8's weapons: the heading
+    /// ([`weapons_heading`]) and, when any stock weapon is listed, the
+    /// sentence ([`weapons_sentence`]).
+    weapons: Option<(&'static str, Option<String>)>,
 }
 
 impl Panel {
@@ -697,7 +698,7 @@ impl Panel {
         variant: InfoVariant,
         title: String,
         texts: Vec<PanelText>,
-        weapons: Option<(bool, String)>,
+        weapons: Option<(&'static str, Option<String>)>,
         metrics: &Rc<dyn TextMetrics>,
         style: ButtonStyle,
     ) -> Self {
@@ -786,10 +787,10 @@ impl Panel {
                 }
             }
         }
-        if let (Some((listed, sentence)), Some(area)) =
+        if let (Some((heading, sentence)), Some(area)) =
             (&self.weapons, self.dialog.item_bounds(PANEL_WEAPONS_ITEM))
         {
-            draw_weapons(list, metrics, area, *listed, sentence);
+            draw_weapons(list, metrics, area, heading, sentence.as_deref());
         }
         if let (Some(id), Some(area)) = (
             self.variant.graphic(),
@@ -802,9 +803,9 @@ impl Panel {
 
 /// Item 8's weapons, in `area`, as `_ShipDescDialogUpdate` draws them
 /// while the ID test holds: the heading in white at its left on baseline
-/// [`WEAPONS_HEADING_ROW`] (@0x5061c-0x5069b); then, when a weapon is
-/// `listed`, the box below [`WEAPONS_BOX_DROP`] (@0x5066d) holding
-/// `sentence`, set by `TETextBox` and inverted (@0x50c73-0x50ce0): white
+/// [`WEAPONS_HEADING_ROW`] (@0x5061c-0x5069b); then, with a `sentence`
+/// (a weapon is listed), the box below [`WEAPONS_BOX_DROP`] (@0x5066d)
+/// holding it, set by `TETextBox` and inverted (@0x50c73-0x50ce0): white
 /// on black, wrapped at word breaks to its width, a line drawn only when
 /// its top is inside the box, as `TETextBox` clips. With none listed
 /// there is no box (@0x50602).
@@ -812,19 +813,14 @@ fn draw_weapons(
     list: &mut DrawList,
     metrics: &dyn TextMetrics,
     area: Bounds,
-    listed: bool,
-    sentence: &str,
+    heading: &str,
+    sentence: Option<&str>,
 ) {
-    let heading = if listed {
-        STANDARD_WEAPONS
-    } else {
-        NO_STANDARD_WEAPONS
-    };
     let top = grid::baseline_top(area.min.y + WEAPONS_HEADING_ROW);
     text(list, heading, Point::new(area.min.x, top), TEXT_COLOR);
-    if !listed {
+    let Some(sentence) = sentence else {
         return;
-    }
+    };
     let boxed = Bounds {
         min: Point::new(area.min.x, area.min.y + WEAPONS_BOX_DROP),
         max: area.max,
@@ -864,9 +860,13 @@ pub(super) fn open_panel(
     } else {
         name.to_owned()
     };
-    let weapons = variant
-        .id_test()
-        .then(|| (!specs.weapons.is_empty(), weapons_sentence(&specs.weapons)));
+    let weapons = variant.id_test().then(|| {
+        let listed = !specs.weapons.is_empty();
+        (
+            weapons_heading(&specs.weapons),
+            listed.then(|| weapons_sentence(&specs.weapons)),
+        )
+    });
     Some(Panel::open(
         template,
         variant,
