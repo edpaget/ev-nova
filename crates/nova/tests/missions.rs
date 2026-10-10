@@ -3,10 +3,13 @@
 //! "Pad" at the centre, has a bar; mission 128, "Run to <DST>", offered
 //! at the Pad's mission computer, going to the Pad and back, with an
 //! offer text, a `BriefText` and a `CompText`; mission 129, "Errand",
-//! going nowhere, with no text) and a synthetic interface file holding
-//! the "Spaceport", the mission computer (`DLOG` 1006) and "Desc Dialog"
-//! (3003), driven only by window events, with pilots kept in the
-//! in-memory store.
+//! going nowhere, with no text; and at the bar, mission 130, "Bar job",
+//! labelled "I'm in", with an offer text and a `BriefText`, and mission
+//! 131, "Second", with an offer text, a `RefuseText` and an `OnRefuse`
+//! setting bit 7) and a synthetic interface file holding the "Spaceport",
+//! the mission computer (`DLOG` 1006), "Bar" (1013), the offer dialog
+//! (1016) and "Desc Dialog" (3003), driven only by window events, with
+//! pilots kept in the in-memory store.
 //!
 //! The mission computer: the pilot lands, and Mission BBS lists "Run to
 //! Pad" and "Errand", the first one's text filled. Accept shows its
@@ -14,6 +17,12 @@
 //! accepting that too closes the computer silently, nothing being left.
 //! Both are active and saved. Taking off and landing again completes the
 //! run, at its destination, and its `CompText` shows over the spaceport.
+//!
+//! The bar: a quarter second after the bar opens, the offer dialog shows
+//! the bar job's text, filled, and "I'm in". Return accepts it, and its
+//! `BriefText` shows. After the gap, the second is offered, and N refuses
+//! it: its `RefuseText` shows, and its `OnRefuse` set bit 7, which the
+//! saved pilot carries. Nothing more is offered.
 
 use std::cell::RefCell;
 use std::io;
@@ -47,8 +56,8 @@ use nova_view::Key;
 use nova_view::flight::SharedChance;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
-use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::missions::{ACCEPT_ITEM, MissionComputerScreen};
+use nova_view::spaceport::{OfferDialog, SpaceportView};
 use nova_view::text::fixture::MonoMetrics;
 
 /// A 1024 x 768 window at scale 1: window pixels are logical units.
@@ -198,6 +207,17 @@ fn mission(travel: i16, brief: i16, comp: i16) -> Vec<u8> {
     bytes
 }
 
+/// [`mission`] going nowhere, offered at the Pad's bar, with these raw
+/// labels, `RefuseText` and `OnRefuse`.
+fn bar_mission(brief: i16, refuse: i16, accept_label: &[u8], on_refuse: &[u8]) -> Vec<u8> {
+    let mut bytes = mission(-1, brief, -1);
+    put_i16s(&mut bytes, 0x04, &[1]);
+    put_i16s(&mut bytes, 0x58, &[refuse]);
+    bytes[0x25A..0x25A + on_refuse.len()].copy_from_slice(on_refuse);
+    bytes[0x75F..0x75F + accept_label.len()].copy_from_slice(accept_label);
+    bytes
+}
+
 /// A `dësc` of `text`.
 fn desc(text: &str) -> Vec<u8> {
     let mut bytes = text.as_bytes().to_vec();
@@ -246,6 +266,23 @@ fn game_data() -> Rc<GameData> {
             &mission(128, 200, 201),
         )
         .resource(Mission::TYPE, 129, Some(b"Errand"), &mission(-1, -1, -1))
+        .resource(
+            Mission::TYPE,
+            130,
+            Some(b"Bar job"),
+            &bar_mission(202, -1, b"I'm in\0", b"\0"),
+        )
+        .resource(
+            Mission::TYPE,
+            131,
+            Some(b"Second"),
+            &bar_mission(-1, 203, b"\0", b"b7\0"),
+        )
+        .resource(Desc::TYPE, 4002, None, &desc("<PN>, join us."))
+        .resource(Desc::TYPE, 4003, None, &desc("One more job."))
+        .resource(Desc::TYPE, 202, None, &desc("Welcome aboard."))
+        .resource(Desc::TYPE, 203, None, &desc("Suit yourself."))
+        .resource(Desc::TYPE, 10_000, None, &desc("Smoke and quiet talk."))
         .resource(Desc::TYPE, 4000, None, &desc("Take this to <DST>."))
         .resource(Desc::TYPE, 200, None, &desc("Off you go to <DST>."))
         .resource(Desc::TYPE, 201, None, &desc("Thanks from <DST>."))
@@ -256,7 +293,9 @@ fn game_data() -> Rc<GameData> {
             &status_bar(),
         )
         .resource(PICT, 700, Some(b"Status Bar"), &pict(194, 16, [66, 66, 66]));
-    for id in [8500, 8501, 8505, 8524, 8525, 8526, 10_004] {
+    for id in [
+        8500, 8501, 8503, 8505, 8521, 8522, 8523, 8524, 8525, 8526, 10_004,
+    ] {
         fork = fork.resource(PICT, id, None, &pict(6, 5, [40, 40, 40]));
     }
     for state in [7500, 7503, 7506] {
@@ -306,8 +345,8 @@ fn dialog(id: i16, (width, height): (i16, i16), items: &[Item]) -> [(ResType, i1
 }
 
 /// The interface file: stock "Spaceport" (`DLOG` 1000), the mission
-/// computer (1006) and "Desc Dialog" (3003), each with its items as stock
-/// has them.
+/// computer (1006), "Bar" (1013), the offer dialog (1016) and "Desc
+/// Dialog" (3003), each with its items as stock has them.
 fn interface() -> InterfaceData {
     let spaceport = dialog(
         1000,
@@ -359,7 +398,39 @@ fn interface() -> InterfaceData {
             ((363, 282, 23, 23), false),
         ],
     );
-    let fork = [spaceport, computer, text]
+    let bar = dialog(
+        1013,
+        (263, 185),
+        &[
+            ((156, 154, 99, 26), false),
+            ((156, 125, 99, 26), false),
+            ((6, 154, 146, 26), false),
+            ((54, 214, 121, 25), false),
+            ((6, 125, 146, 26), false),
+            ((105, 227, 121, 25), false),
+            ((16, 10, 230, 106), false),
+            ((61, 303, 32, 32), false),
+            ((103, 303, 32, 32), false),
+            ((146, 303, 32, 32), false),
+        ],
+    );
+    let offer = dialog(
+        1016,
+        (441, 317),
+        &[
+            ((225, 285, 99, 25), false),
+            ((117, 285, 99, 25), false),
+            ((12, 9, 415, 267), false),
+            ((150, 323, 32, 32), false),
+            ((197, 326, 32, 32), false),
+            ((173, 285, 99, 25), false),
+            ((172, 337, 32, 32), false),
+            ((272, 345, 23, 23), false),
+            ((340, 287, 23, 23), false),
+            ((373, 287, 23, 23), false),
+        ],
+    );
+    let fork = [spaceport, computer, bar, offer, text]
         .into_iter()
         .flatten()
         .fold(ForkBuilder::new(), |fork, (ty, id, bytes)| {
@@ -521,6 +592,25 @@ impl Game {
         self.click(at);
     }
 
+    /// The offer open over the bar, if any.
+    fn offer(&self) -> Option<&OfferDialog> {
+        self.spaceport()
+            .open_bar()
+            .and_then(nova_view::spaceport::BarScreen::offer_dialog)
+    }
+
+    /// Sends redraws until an offer opens over the bar, at most two
+    /// seconds', and gives its mission; `None` when none opens.
+    fn await_offer(&mut self) -> Option<MissionId> {
+        for _ in 0..120 {
+            self.frame();
+            if let Some(offer) = self.offer() {
+                return Some(offer.prompt().mission);
+            }
+        }
+        None
+    }
+
     /// The mission text shown, its lines joined by spaces.
     fn shown_text(&self) -> Option<String> {
         self.spaceport()
@@ -623,4 +713,48 @@ fn the_mission_computer_lists_offers_accepts_them_and_their_texts_show() {
         Showing::Spaceport,
         "Escape went to the text"
     );
+}
+
+#[test]
+fn the_bar_offers_its_missions_one_after_another_and_a_refusal_runs_on_refuse() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_pilot(&store, &ada());
+    game.frame();
+    game.land();
+    game.click_port(10);
+    assert!(game.spaceport().open_bar().is_some(), "in the bar");
+
+    // A quarter second on, the bar job is offered.
+    assert_eq!(game.await_offer(), Some(MissionId(130)));
+    let shown = texts(&game.frame());
+    for text in ["Ada, join us.", "I'm in", "No"] {
+        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    }
+    // Return accepts it, and its BriefText shows.
+    game.tap(Key::Enter);
+    assert!(game.offer().is_none());
+    assert_eq!(game.active(), [(0, MissionId(130))]);
+    assert_eq!(game.shown_text().as_deref(), Some("Welcome aboard."));
+    game.tap(Key::Enter);
+    assert_eq!(game.shown_text(), None);
+
+    // After the gap, the second; N refuses it, its RefuseText shows and
+    // its OnRefuse sets bit 7.
+    assert_eq!(game.await_offer(), Some(MissionId(131)));
+    let shown = texts(&game.frame());
+    for text in ["One more job.", "Yes", "No"] {
+        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    }
+    game.tap(Key::Char('n'));
+    assert!(game.offer().is_none());
+    assert_eq!(game.shown_text().as_deref(), Some("Suit yourself."));
+    assert_eq!(game.active(), [(0, MissionId(130))], "refused");
+    let bit = nova_sim::control::Bit::new(7).expect("in range");
+    assert!(game.session().control_bit(bit));
+    assert!(saved(&store).control_bit(bit), "saved");
+    game.tap(Key::Enter);
+
+    // Nothing more is offered.
+    assert_eq!(game.await_offer(), None);
+    assert!(game.spaceport().open_bar().is_some(), "still in the bar");
 }

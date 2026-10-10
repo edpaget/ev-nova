@@ -97,6 +97,16 @@
 //! spaceport, after each input and tick; those queued in flight, by an
 //! `S`, wait for the next spaceport.
 //!
+//! In the bar, missions are offered as the original's
+//! `_OfferMissionFromPort` offers them: the bar asks a quarter second
+//! after it opens, and the router answers with the session's next offer
+//! at the bar, shown in the offer dialog (`DLOG` 1016); its choice
+//! accepts or refuses the mission through the session, the texts it
+//! queued show, and the bar asks again after a gap drawn on the router's
+//! chance. The router enters the bar as a venue for its offers as it
+//! opens, and the spaceport whenever it shows, so an offer refused for
+//! want of a slot is offered again once the player has left the bar.
+//!
 //! Where fuel is sold, the spaceport's Recharge fills the tank through the
 //! session; the router tells the screen how it went (a refusal says why in
 //! the description box), hands the exchange, the outfitter and the
@@ -171,11 +181,12 @@ use std::time::Duration;
 
 use nova_data::GameData;
 use nova_sim::board::MAX_ESCORTS;
+use nova_sim::mission::screens::{BAR, SPACEPORT};
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
     HailView, HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
     NovaPersons, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule, Rulebook, Session,
-    Take, Taken, pilot_key,
+    Take, Taken, VenueOffer, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
@@ -187,7 +198,7 @@ use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::bar::BAR_DIALOG;
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::spaceport::missions::COMPUTER_DIALOG;
-use nova_view::spaceport::offer::OFFER_DIALOG;
+use nova_view::spaceport::offer::{OFFER_DIALOG, OfferChoice};
 use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
 use nova_view::spaceport::shipyard::{SHIP_INFO_DIALOG, SHIPYARD_DIALOG};
 use nova_view::spaceport::trade::TRADE_DIALOG;
@@ -1218,6 +1229,9 @@ impl AppScreen {
                 .map(|template| (template, Rc::clone(&dialogs.metrics))),
             None => Err(NO_INTERFACE.to_owned()),
         };
+        if let Some(flight) = &mut self.flight {
+            flight.enter_offer_venue(SPACEPORT);
+        }
         let mut spaceport =
             SpaceportView::new(self.data.as_ref(), stellar, template(SPACEPORT_DIALOG));
         if let Some(market) = self.flight.as_ref().and_then(FlightView::market) {
@@ -1600,8 +1614,51 @@ impl AppScreen {
         if spaceport.left() {
             self.close_spaceport();
             self.flight.as_mut().expect(ENTERED).take_off();
+            return ScreenAction::None;
         }
+        self.serve_offers();
         ScreenAction::None
+    }
+
+    /// The bar's mission offers (`_OfferMissionFromPort` @0xa369e): the
+    /// venue entered, the bar's ask answered with the session's next offer
+    /// there, and a choice made through the session, each answer showing
+    /// the texts it queued and rearming the bar with a gap drawn on the
+    /// router's chance; an accept changes the cash, so the shops are
+    /// handed back.
+    fn serve_offers(&mut self) {
+        let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
+            return;
+        };
+        if spaceport.take_bar_opened() {
+            flight.enter_offer_venue(BAR);
+        } else if spaceport.open_bar().is_none() {
+            flight.enter_offer_venue(SPACEPORT);
+        }
+        if spaceport.take_offer_request() {
+            match flight.next_offer(BAR) {
+                Some(VenueOffer::Prompt(prompt)) => spaceport.open_offer(prompt),
+                Some(VenueOffer::Accepted { .. }) => {
+                    spaceport.show_mission_texts(flight.take_mission_texts());
+                    spaceport.rearm_offers(flight.offer_gap());
+                    refresh_spaceport(spaceport, flight);
+                }
+                None => spaceport.rearm_offers(flight.offer_gap()),
+            }
+        }
+        if let Some((mission, choice)) = spaceport.take_offer_choice() {
+            match choice {
+                OfferChoice::Accept => {
+                    let _ = flight.accept_mission(mission);
+                }
+                OfferChoice::Refuse => {
+                    let _ = flight.refuse_mission(mission);
+                }
+            }
+            spaceport.show_mission_texts(flight.take_mission_texts());
+            spaceport.rearm_offers(flight.offer_gap());
+            refresh_spaceport(spaceport, flight);
+        }
     }
 
     /// Routes one input, as [`Screen::input`] describes.
@@ -1800,6 +1857,9 @@ impl Screen for AppScreen {
         match self.overlay_mut() {
             Some(overlay) => overlay.tick(dt),
             None => self.shown_mut().tick(dt),
+        }
+        if self.side == Side::Spaceport {
+            self.serve_offers();
         }
         self.settle_script();
         self.save_if_due();
