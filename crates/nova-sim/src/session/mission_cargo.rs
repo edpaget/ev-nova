@@ -8,7 +8,6 @@
 
 use super::Session;
 use super::mission_screens::MissionTextKind;
-use super::missions::at;
 use crate::catalog::{MissionId, MissionRecord, StellarId};
 use crate::chance::{Chance, NeverFires};
 use crate::market::Good;
@@ -50,8 +49,8 @@ impl Session {
             return;
         };
         let record = self.lifecycle_record(active.mission);
-        let at_destination = at(active.destination, stellar);
-        let at_return = at(active.return_to, stellar);
+        let at_destination = self.docked_at_stop(active.destination, stellar);
+        let at_return = self.docked_at_stop(active.return_to, stellar);
         if at_destination {
             let reached = !picks_up_at_destination(&record, active) || self.pick_up(slot);
             if let Some(active) = self.slot_holding(slot, record.id)
@@ -247,7 +246,7 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::control::Script;
     use crate::session::MissionText;
-    use crate::testkit::{FakePilotCatalog, catalog, land_now, mission};
+    use crate::testkit::{FakePilotCatalog, catalog, land_now, mission, with_variants};
 
     /// `STR#` 4001, the cargo names.
     #[derive(Debug)]
@@ -625,6 +624,36 @@ mod tests {
         assert_eq!(
             kinds(&mut session),
             [MissionTextKind::DumpCargo, MissionTextKind::Comp]
+        );
+        assert_eq!(session.pilot().missions().iter().count(), 0, "completed");
+    }
+
+    #[test]
+    fn pickup_mode_1_picks_up_at_another_stellar_of_its_destinations_place_and_name() {
+        let catalog = with_variants(cargo_catalog(
+            vec![round_trip(140, 1, -1)],
+            vec![texts(140, Some(LOAD), None)],
+        ));
+        let mut session = accepted(&catalog);
+        land_on(&mut session, &catalog, 151);
+        assert!(aboard(&session, 0), "151 is 129's variant");
+        assert!(reached(&session));
+        assert_eq!(kinds(&mut session), [MissionTextKind::LoadCargo]);
+    }
+
+    #[test]
+    fn drop_off_mode_1_drops_off_at_another_stellar_of_its_returns_place_and_name() {
+        let catalog = with_variants(cargo_catalog(
+            vec![round_trip(140, 0, 1)],
+            vec![texts(140, Some(LOAD), Some(DUMP))],
+        ));
+        let mut session = accepted(&catalog);
+        land_on(&mut session, &catalog, 129);
+        land_on(&mut session, &catalog, 150);
+        assert_eq!(
+            kinds(&mut session),
+            [MissionTextKind::DumpCargo, MissionTextKind::Comp],
+            "150 is 128's variant"
         );
         assert_eq!(session.pilot().missions().iter().count(), 0, "completed");
     }

@@ -2,7 +2,7 @@ use super::*;
 use crate::catalog::{LandingSite, MissionShip};
 use crate::control::Test;
 use crate::mission::AcceptRefusal;
-use crate::testkit::{FakePilotCatalog, catalog, land_now, mission, planet};
+use crate::testkit::{FakePilotCatalog, catalog, land_now, mission, planet, with_variants};
 
 const A: MissionId = MissionId(200);
 const B: MissionId = MissionId(201);
@@ -540,6 +540,25 @@ fn others_at_delivery(missions: Vec<MissionRecord>) -> Vec<(MissionId, Became)> 
         panic!("{walked:?}");
     };
     others.clone()
+}
+
+#[test]
+fn a_mission_gone_at_a_variant_of_its_return_reads_completed() {
+    let catalog = with_variants(galaxy(vec![
+        errand(200, 128, 129, ""),
+        errand(201, 128, 151, ""),
+    ]));
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog)
+        .walk(
+            &mut session,
+            &[Step::Take(A), Step::Take(B), Step::Deliver(A)],
+        )
+        .expect("walks");
+    let Some(Done::Delivered { others, .. }) = walked.done.last() else {
+        panic!("{walked:?}");
+    };
+    assert_eq!(others, &[(B, Became::Completed)], "129 is 151's variant");
 }
 
 #[test]

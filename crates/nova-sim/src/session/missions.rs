@@ -201,14 +201,26 @@ fn post_days(days: i16) -> u32 {
     u32::try_from(days).unwrap_or(0)
 }
 
-/// Whether `stop` is `stellar`: by ID, where the original also counts a
-/// stellar at the same place with the same name (`_StellarsAreIdentical`
-/// @0xab35; rdm:phase/missions/phase-11-stellars-identical-by-place-and-name).
-pub(super) fn at(stop: Option<Stop>, stellar: StellarId) -> bool {
-    stop.is_some_and(|stop| stop.stellar == stellar)
-}
-
 impl Session {
+    /// Whether the stellar `docked` at is a mission's `stop`, as
+    /// `_MissionLandCargoCheck` (@0x9edfd, @0x9f01d) and
+    /// `_MissionLandCheck` (@0xa1a37) ask `_StellarsAreIdentical`: by
+    /// [`RuleKey::MissionStellarIdentity`]'s engine reading, also a
+    /// stellar of another ID at the same place with the same name
+    /// ([`StellarMarks::identical`]). No stop is never docked at.
+    pub(super) fn docked_at_stop(&self, stop: Option<Stop>, docked: StellarId) -> bool {
+        let source = self.rules.source_for(RuleKey::MissionStellarIdentity);
+        stop.is_some_and(|stop| self.stellar_marks.identical(stop.stellar, docked, source))
+    }
+
+    /// Whether the ship is docked at a mission's `stop`, as
+    /// [`Session::docked_at_stop`] matches it: what tells a mission
+    /// gone at its return from one aborted.
+    pub(crate) fn docked_at_mission_stop(&self, stop: Stop) -> bool {
+        self.landed
+            .is_some_and(|docked| self.docked_at_stop(Some(stop), docked))
+    }
+
     /// Registers the offer roll ([`ROLL`]) and the re-offer
     /// ([`REOFFER`]) on every landing, each with a blank guard and no
     /// script.
@@ -650,7 +662,10 @@ impl Session {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
-        let Some(failed) = active.failed.filter(|_| at(active.return_to, stellar)) else {
+        let Some(failed) = active
+            .failed
+            .filter(|_| self.docked_at_stop(active.return_to, stellar))
+        else {
             return;
         };
         let record = self.lifecycle_record(active.mission);
@@ -676,16 +691,25 @@ impl Session {
     /// a re-offer due. Its destination is reached here when it is the
     /// return, or there is none.
     fn mission_success_at(&mut self, slot: u8, stellar: StellarId, chance: &mut dyn Chance) {
+        if !self.docked_at_stop(
+            self.pilot
+                .missions
+                .get(slot)
+                .and_then(|active| active.return_to),
+            stellar,
+        ) {
+            return;
+        }
         let Some(active) = self.pilot.missions.get_mut(slot) else {
             return;
         };
-        if !at(active.return_to, stellar) {
-            return;
-        }
-        if active
-            .destination
-            .is_none_or(|stop| at(active.return_to, stop.stellar))
-        {
+        // "The destination is the return" compares raw IDs
+        // (`_MissionLandCheck` @0xa1a4e-0xa1a55), not by place and name.
+        if active.destination.is_none_or(|stop| {
+            active
+                .return_to
+                .is_some_and(|ret| ret.stellar == stop.stellar)
+        }) {
             active.reached = true;
             self.save_due = true;
         }
@@ -1086,7 +1110,9 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::mission::{ROLLED, Stop};
     use crate::pilot::Pilot;
-    use crate::testkit::{Draws, FakePilotCatalog, catalog, jump, land_now, mission, planet};
+    use crate::testkit::{
+        Draws, FakePilotCatalog, catalog, jump, land_now, mission, planet, with_variants,
+    };
 
     /// [`catalog`] with stellar 150 in system 132, two jumps from 130, 131
     /// linked back to 130, and missions 130 (to a random inhabited
@@ -2417,6 +2443,103 @@ mod tests {
         land_on(&mut session, &catalog, 129);
         assert!(session.control_bit(bit(31)), "reached by the success hook");
         assert_eq!(held(&session), []);
+    }
+
+    /// Mission `id`, offered at 128, to `destination` (none for -1),
+    /// completed at `ret`.
+    fn travel(id: i16, destination: i16, ret: i16) -> MissionRecord {
+        MissionRecord {
+            avail_stel: 128,
+            travel_stel: destination,
+            return_stel: ret,
+            ..mission(id)
+        }
+    }
+
+    #[test]
+    fn a_mission_completes_at_another_stellar_of_its_returns_place_and_name() {
+        let catalog = with_variants(lifecycle(vec![travel(140, -1, 129)]));
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        land_on(&mut session, &catalog, 151);
+        assert_eq!(held(&session), [], "151 is 129's variant");
+    }
+
+    #[test]
+    fn its_destination_is_reached_at_another_stellar_of_its_place_and_name() {
+        let catalog = with_variants(lifecycle(vec![travel(140, 129, 128)]));
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        land_on(&mut session, &catalog, 151);
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(held(&session), [], "reached at 151, completed at 128");
+    }
+
+    #[test]
+    fn a_failed_mission_fails_at_another_stellar_of_its_returns_place_and_name() {
+        let catalog = with_variants(lifecycle(vec![MissionRecord {
+            on_failure: Script::parse("X200"),
+            ..travel(140, -1, 129)
+        }]));
+        let (mut session, marks) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        run(&mut session, "F140");
+        land_on(&mut session, &catalog, 151);
+        assert_eq!(marks.taken(), [200]);
+        assert_eq!(held(&session), []);
+    }
+
+    #[test]
+    fn a_stellar_of_another_name_or_place_does_not_complete_it() {
+        let catalog = with_variants(lifecycle(vec![travel(140, -1, 129)]));
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        land_on(&mut session, &catalog, 152);
+        assert_eq!(held(&session), [(0, 140)], "another name");
+        land_on(&mut session, &catalog, 153);
+        assert_eq!(held(&session), [(0, 140)], "another place");
+        land_on(&mut session, &catalog, 150);
+        assert_eq!(held(&session), [(0, 140)], "128's variant");
+    }
+
+    #[test]
+    fn by_the_bible_reading_the_variant_does_not_complete_it() {
+        let catalog = with_variants(lifecycle(vec![travel(140, -1, 129), travel(141, 129, 128)]));
+        let rules =
+            Rulebook::default().with_override(RuleKey::MissionStellarIdentity, RuleSource::Bible);
+        let (mut session, _) = watched(&catalog, rules);
+        accept(&mut session, 140);
+        accept(&mut session, 141);
+        land_on(&mut session, &catalog, 151);
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(held(&session), [(0, 140), (1, 141)]);
+    }
+
+    /// The accept compares the docked stellar by its raw ID (@0xa1fd8).
+    #[test]
+    fn an_accept_at_a_variant_of_its_destination_does_not_reach_it() {
+        let catalog = with_variants(lifecycle(vec![MissionRecord {
+            avail_stel: 151,
+            ..travel(140, 129, 128)
+        }]));
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        land_on(&mut session, &catalog, 151);
+        accept(&mut session, 140);
+        assert!(!session.pilot().missions().get(0).expect("held").reached);
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(held(&session), [(0, 140)]);
+    }
+
+    /// The success check counts the destination reached when it is the
+    /// return by raw ID (@0xa1a4e-0xa1a55), so a variant does not count.
+    #[test]
+    fn a_destination_identical_to_the_return_is_not_reached_by_the_success_check_alone() {
+        let catalog = with_variants(lifecycle(vec![travel(140, 129, 151)]));
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        assert!(session.unregister_story(slot_hook(0, ARRIVAL)));
+        land_on(&mut session, &catalog, 151);
+        assert_eq!(held(&session), [(0, 140)]);
     }
 
     #[test]

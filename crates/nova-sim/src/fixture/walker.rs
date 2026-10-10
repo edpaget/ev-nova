@@ -509,7 +509,9 @@ fn watched<T>(
     let before = holding(session);
     let done = act(session);
     let after = holding(session);
-    let changed = changes(&before, &after, own, session.landed());
+    let changed = changes(&before, &after, own, |stop| {
+        session.docked_at_mission_stop(stop)
+    });
     let paid = changed
         .iter()
         .filter(|&&(_, became)| became == Became::Completed)
@@ -535,15 +537,16 @@ fn holding(session: &Session) -> Vec<(u8, ActiveMission)> {
 
 /// What became of each mission but `own` between `before` and `after`,
 /// the missions held, by slot, either side of an action that left the
-/// ship docked at `here`, with its state before (after, for one
-/// started); those held before first, in slot order, then those
-/// started. A mission no longer held was completed when it had not
-/// failed and its return is `here`: an `A` there reads as a completion.
+/// ship docked where `returned` says a mission's return is reached,
+/// with its state before (after, for one started); those held before
+/// first, in slot order, then those started. A mission no longer held
+/// was completed when it had not failed and `returned` says its return
+/// is docked at: an `A` there reads as a completion.
 fn changes<'a>(
     before: &'a [(u8, ActiveMission)],
     after: &'a [(u8, ActiveMission)],
     own: MissionId,
-    here: Option<StellarId>,
+    returned: impl Fn(Stop) -> bool,
 ) -> Vec<(&'a ActiveMission, Became)> {
     let find = |held: &'a [(u8, ActiveMission)], slot: u8, mission: MissionId| {
         held.iter()
@@ -555,7 +558,7 @@ fn changes<'a>(
         if was.mission == own {
             continue;
         }
-        let returned = was.return_to.is_some_and(|stop| Some(stop.stellar) == here);
+        let returned = was.return_to.is_some_and(&returned);
         let became = match find(after, *slot, was.mission) {
             None if was.failed.is_some() => Became::Failed,
             None if returned => Became::Completed,

@@ -403,7 +403,7 @@ use crate::market::{
     self, Direction, EscortHolds, Good, Goods, Market, Markup, Order, TradeRefusal,
 };
 use crate::message::SimMessage;
-use crate::mission::Offers;
+use crate::mission::{Offers, StellarMarks};
 use crate::navigation::stellar_under;
 use crate::outfitter::{
     self, Hardpoints, OutfitFlags, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods,
@@ -731,6 +731,9 @@ pub struct Session {
     /// Every stellar's and system's name, read when the session starts:
     /// what the text tags read (see the `missions` module).
     place_names: PlaceNames,
+    /// Every stellar's place and name, read when the session starts: what
+    /// a mission's stop is matched by (see the `missions` module).
+    stellar_marks: StellarMarks,
     /// The offers of the visit under way and the stellar they were rolled
     /// at (see the `missions` module); never saved, as the original saves
     /// none of it.
@@ -919,6 +922,7 @@ impl Session {
                 .collect(),
             listed_stellars: catalog.listed_stellars(),
             place_names: catalog.place_names(),
+            stellar_marks: StellarMarks::new(catalog.stellar_marks()),
             offers: Offers::default(),
             reoffer_due: false,
             ending: BTreeSet::new(),

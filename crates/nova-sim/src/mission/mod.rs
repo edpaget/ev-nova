@@ -351,10 +351,17 @@
 //! `QuickBrief`, which shows a deadline through `<DL>`; its abort is
 //! [`abort_checks`]'. Each text shown is filled through the session.
 //!
-//! A mission's stellars are matched by ID. The original also counts a
-//! stellar at the same place with the same name as the same
-//! (`_StellarsAreIdentical` @0xab35):
-//! rdm:phase/missions/phase-11-stellars-identical-by-place-and-name.
+//! A landing reaches a mission's destination or return at the stellar
+//! of its ID and, by [`RuleKey::MissionStellarIdentity`](crate::RuleKey::MissionStellarIdentity)'s
+//! engine reading, at any other stellar with the same `xPos`/`yPos` and
+//! exactly the same name, in any system (`_StellarsAreIdentical`
+//! @0xab35-0xac90, [`StellarMarks::identical`]): a storyline's variant
+//! of a stellar stands in for it, as Tre'ar Zalom 448 does for 227 once
+//! b1502 swaps Tri'niphu 212 for 657. Only the cargo check
+//! (@0x9edfd, @0x9f01d) and the success and failure at the return
+//! (@0xa1a37) match so; the accept's "reached here" (@0xa1fd8) and the
+//! success check's "the destination is the return" (@0xa1a4e) compare
+//! raw IDs.
 
 pub mod active;
 pub mod cargo;

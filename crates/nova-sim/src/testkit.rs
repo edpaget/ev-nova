@@ -496,6 +496,39 @@ pub(crate) fn catalog() -> FakePilotCatalog {
     }
 }
 
+/// `catalog` with variants in system 130 marked as `_StellarsAreIdentical`
+/// reads them: 150 at 128's place with its name "Home" (30,-40), 151 at
+/// 129's with its name "Varia" (2000,0), and two that miss 129 by one:
+/// 152 at its place named "Other", 153 named "Varia" at 2001,0.
+pub(crate) fn with_variants(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
+    let sites = &mut catalog
+        .sites
+        .iter_mut()
+        .find(|(system, _)| *system == SystemId(130))
+        .expect("130 listed")
+        .1;
+    sites.extend([
+        planet(150, -2000.0, 0.0),
+        planet(151, 0.0, 2000.0),
+        planet(152, 0.0, -2000.0),
+        planet(153, -2000.0, -2000.0),
+    ]);
+    let mark = |id, place, name: &str| StellarMark {
+        id: StellarId(id),
+        place,
+        name: name.to_owned(),
+    };
+    catalog.marks = vec![
+        mark(128, (30, -40), "Home"),
+        mark(129, (2000, 0), "Varia"),
+        mark(150, (30, -40), "Home"),
+        mark(151, (2000, 0), "Varia"),
+        mark(152, (2000, 0), "Other"),
+        mark(153, (2001, 0), "Varia"),
+    ];
+    catalog
+}
+
 pub(crate) const START: StartDate = StartDate {
     day: 23,
     month: 6,
