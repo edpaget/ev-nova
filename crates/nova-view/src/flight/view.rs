@@ -280,6 +280,10 @@ use std::time::Duration;
 
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::{
+    AcceptError, ComputerRefusal, ControlBits, HireList, HireRefusal, HireTerms, Hired,
+    MissionComputer, MissionId, MissionText, NotOffered, PayNote, PersonRules, SessionEvent,
+};
+use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
     ClassRow, Clearance, CombatCatalog, CommCatalog, CommNote, Condition, Controls, DisableRule,
     EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal, Good, GovtId, Haggle,
@@ -291,9 +295,6 @@ use nova_sim::{
     StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal,
     TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level,
     lights_level,
-};
-use nova_sim::{
-    ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote, PersonRules, SessionEvent,
 };
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
@@ -2102,6 +2103,58 @@ impl<C> FlightView<C> {
         }
     }
 
+    /// The mission computer of the stellar landed on, as
+    /// [`Session::mission_computer`] gives it; a session that failed has
+    /// nothing available.
+    ///
+    /// # Errors
+    ///
+    /// The [`ComputerRefusal`] that applies.
+    pub fn mission_computer(&self) -> Result<MissionComputer, ComputerRefusal> {
+        match &self.session {
+            Ok(session) => session.mission_computer(),
+            Err(_) => Err(ComputerRefusal::NoneAvailable),
+        }
+    }
+
+    /// Accepts `mission` as [`Session::accept_mission`] does, on the
+    /// flight's chance: the slot it went into.
+    ///
+    /// # Errors
+    ///
+    /// The [`AcceptError`] that applies; a session that failed offers
+    /// nothing.
+    pub fn accept_mission(&mut self, mission: MissionId) -> Result<u8, AcceptError> {
+        match &mut self.session {
+            Ok(session) => session.accept_mission(mission, &mut self.chance),
+            Err(_) => Err(AcceptError::NotOffered),
+        }
+    }
+
+    /// Refuses `mission` as [`Session::refuse_mission`] does, on the
+    /// flight's chance.
+    ///
+    /// # Errors
+    ///
+    /// [`NotOffered`] when it is not offered; a session that failed offers
+    /// nothing.
+    pub fn refuse_mission(&mut self, mission: MissionId) -> Result<(), NotOffered> {
+        match &mut self.session {
+            Ok(session) => session.refuse_mission(mission, &mut self.chance),
+            Err(_) => Err(NotOffered),
+        }
+    }
+
+    /// The mission texts to show since they were last taken, as
+    /// [`Session::take_mission_texts`] gives them; none for a session that
+    /// failed.
+    pub fn take_mission_texts(&mut self) -> Vec<MissionText> {
+        self.session
+            .as_mut()
+            .map(Session::take_mission_texts)
+            .unwrap_or_default()
+    }
+
     /// The shipyard of the stellar landed on, as [`Session::shipyard`]
     /// gives it, the day's rolls drawn on the flight's chance; none for a
     /// session that failed.
@@ -2930,6 +2983,10 @@ mod tests {
         /// The stellars that can be destroyed and regenerated: none, by
         /// default.
         lives: Vec<nova_sim::StellarLife>,
+        /// The missions: none, by default.
+        missions: Vec<nova_sim::catalog::MissionRecord>,
+        /// What the mission screens show of each: none, by default.
+        mission_texts: Vec<nova_sim::catalog::MissionTexts>,
     }
 
     /// No strings unless a test sets them.
@@ -3015,6 +3072,8 @@ mod tests {
             reborn: false,
             gates: Vec::new(),
             lives: Vec::new(),
+            missions: Vec::new(),
+            mission_texts: Vec::new(),
         }
     }
 
@@ -3171,11 +3230,11 @@ mod tests {
         }
 
         fn missions(&self) -> Vec<nova_sim::catalog::MissionRecord> {
-            Vec::new()
+            self.missions.clone()
         }
 
         fn mission_texts(&self) -> Vec<nova_sim::catalog::MissionTexts> {
-            Vec::new()
+            self.mission_texts.clone()
         }
 
         fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
@@ -9387,6 +9446,109 @@ mod tests {
         });
         assert_eq!(broken.escorts_for_hire(), None);
         assert_eq!(broken.hire(ShipId(129)), Err(HireRefusal::NoBar));
+    }
+
+    // The mission screens.
+
+    use nova_sim::MissionTextKind;
+    use nova_sim::catalog::{MissionRecord, MissionShip, MissionTexts};
+    use nova_sim::control::{Script as SetScript, Test};
+
+    /// Mission `id`, offered at the mission computer of any stellar on
+    /// every visit, to anyone, going nowhere.
+    fn errand(id: i16) -> MissionRecord {
+        MissionRecord {
+            id: MissionId(id),
+            avail_stel: -1,
+            avail_loc: 0,
+            avail_record: 0,
+            avail_rating: 0,
+            avail_random: 100,
+            avail_ship_type: 0,
+            avail_bits: Test::default(),
+            require: 0,
+            flags: 0,
+            flags2: 0,
+            travel_stel: -1,
+            return_stel: -1,
+            cargo_type: -1,
+            cargo_qty: 0,
+            pay_val: 0,
+            time_limit: 0,
+            disp_weight: 0,
+            on_accept: SetScript::default(),
+            on_refuse: SetScript::default(),
+            on_success: SetScript::default(),
+            on_failure: SetScript::default(),
+            on_abort: SetScript::default(),
+            can_abort: 1,
+            comp_govt: None,
+            comp_reward: 0,
+            date_post_inc: 0,
+            ships: MissionShip { count: 0, goal: -1 },
+        }
+    }
+
+    #[test]
+    fn the_mission_screens_go_through_the_session() {
+        let mut errands = catalog();
+        errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        errands.missions = vec![errand(130), errand(131)];
+        errands.mission_texts = vec![
+            MissionTexts {
+                brief: Some("Go.".to_owned()),
+                ..MissionTexts::named(MissionId(130), "Run")
+            },
+            MissionTexts {
+                refuse: Some("Fine.".to_owned()),
+                ..MissionTexts::named(MissionId(131), "Walk")
+            },
+        ];
+        let mut view = FlightView::new(errands);
+        assert_eq!(
+            view.mission_computer(),
+            Err(ComputerRefusal::NoneAvailable),
+            "in flight"
+        );
+        assert_eq!(
+            view.accept_mission(MissionId(130)),
+            Err(AcceptError::NotOffered)
+        );
+        assert_eq!(view.refuse_mission(MissionId(131)), Err(NotOffered));
+        land_now(&mut view);
+        view.settle_script();
+        let computer = view.mission_computer().expect("opens");
+        let names: Vec<_> = computer.rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(names, ["Run", "Walk"]);
+        assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
+        assert_eq!(view.refuse_mission(MissionId(131)), Ok(()));
+        let texts: Vec<_> = view
+            .take_mission_texts()
+            .into_iter()
+            .map(|text| (text.kind, text.text))
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                (MissionTextKind::Brief, "Go.".to_owned()),
+                (MissionTextKind::Refuse, "Fine.".to_owned()),
+            ]
+        );
+        assert_eq!(view.take_mission_texts(), [], "taken");
+        let mut broken = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        assert_eq!(
+            broken.mission_computer(),
+            Err(ComputerRefusal::NoneAvailable)
+        );
+        assert_eq!(
+            broken.accept_mission(MissionId(130)),
+            Err(AcceptError::NotOffered)
+        );
+        assert_eq!(broken.refuse_mission(MissionId(130)), Err(NotOffered));
+        assert_eq!(broken.take_mission_texts(), []);
     }
 
     /// `pilot`, saved and read back with `escorts`, each a ship, whether

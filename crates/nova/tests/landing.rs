@@ -1,15 +1,16 @@
 //! Landing through the whole app: synthetic game data (a pilot flying over
 //! a planet with a trade center and a bar, its landscape and description,
-//! the spaceport and bar backgrounds and Nova's button pictures) and a
-//! synthetic interface file holding the stock "Spaceport" and "Bar"
-//! dialogs, laid out by the real glyphon metrics, drawn through the
-//! renderer into the recording Gpu and driven only by window events, with
-//! every key made by the platform's own translation of a physical key: L
-//! requests clearance, a second L lands and shows the spaceport, and
-//! Leave takes off back into flight. The Bar opens the bar's own dialog,
-//! with its Hire Escort button, and the Mission BBS its placeholder. With
-//! a recording audio port, landing and Leave play their sounds and the
-//! music follows the screen.
+//! the spaceport and bar backgrounds, the text frame and Nova's button
+//! pictures) and a synthetic interface file holding the stock "Spaceport",
+//! "Bar" and "Desc Dialog" dialogs, laid out by the real glyphon metrics,
+//! drawn through the renderer into the recording Gpu and driven only by
+//! window events, with every key made by the platform's own translation of
+//! a physical key: L requests clearance, a second L lands and shows the
+//! spaceport, and Leave takes off back into flight. The Bar opens the
+//! bar's own dialog, with its Hire Escort button, and the Mission BBS,
+//! with nothing offered, says so in "Desc Dialog". With a recording audio
+//! port, landing and Leave play their sounds and the music follows the
+//! screen.
 
 use std::io;
 use std::path::Path;
@@ -43,7 +44,6 @@ use nova_view::MouseButton;
 use nova_view::geometry::{Bounds, Point};
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::layout::{LANDSCAPE_ITEM, LEAVE_ITEM};
-use nova_view::spaceport::service::DONE_BUTTON;
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -196,6 +196,9 @@ fn game_data(y: i16) -> Rc<GameData> {
         (Desc::TYPE, 128, None, description()),
         (PICT, 8500, Some(b"Spaceport"), pict(6, 5, [40, 40, 40])),
         (PICT, 8503, Some(b"Bar"), pict(6, 5, [60, 30, 10])),
+        (PICT, 8524, None, pict(6, 5, [20, 20, 20])),
+        (PICT, 8525, None, pict(6, 5, [20, 20, 20])),
+        (PICT, 8526, None, pict(6, 5, [20, 20, 20])),
         (PICT, 10_004, None, pict(6, 3, [0, 90, 0])),
     ];
     for state in [7500, 7503, 7506] {
@@ -226,7 +229,9 @@ fn user_item((x, y, w, h): (i16, i16, i16, i16), enabled: bool) -> Vec<u8> {
 
 /// Stock "Spaceport": `DLOG` 1000, 618 x 517 and centred, and its fifteen
 /// user items; and stock "Bar": `DLOG` 1013, 263 x 185 and centred, and
-/// its ten user items, all disabled, 4, 6 and 8-10 parked outside it.
+/// its ten user items, all disabled, 4, 6 and 8-10 parked outside it;
+/// and stock "Desc Dialog": `DLOG` 3003, 441 x 313, with Done (1) and the
+/// text (3).
 fn interface() -> InterfaceData {
     let mut dlog = be(&[-201, 60, 316, 678, 2]);
     dlog.extend([1, 0, 0, 0, 0, 0, 0, 0]);
@@ -273,11 +278,26 @@ fn interface() -> InterfaceData {
     for bounds in bar_items {
         bar_ditl.extend(user_item(bounds, false));
     }
+    let mut desc_dlog = be(&[24, 18, 337, 459, 2]);
+    desc_dlog.extend([1, 0, 0, 0, 0, 0, 0, 0]);
+    desc_dlog.extend(be(&[3003]));
+    desc_dlog.extend([0, 0, 0xA8, 0x0A]);
+    let desc_items = [
+        ((173, 281, 99, 25), true),
+        ((221, 329, 68, 30), false),
+        ((11, 10, 417, 262), false),
+    ];
+    let mut desc_ditl = be(&[desc_items.len() as i16 - 1]);
+    for (bounds, enabled) in desc_items {
+        desc_ditl.extend(user_item(bounds, enabled));
+    }
     let bytes = [
         (Dlog::TYPE, 1000, dlog),
         (Ditl::TYPE, 1000, ditl),
         (Dlog::TYPE, 1013, bar_dlog),
         (Ditl::TYPE, 1013, bar_ditl),
+        (Dlog::TYPE, 3003, desc_dlog),
+        (Ditl::TYPE, 3003, desc_ditl),
     ]
     .iter()
     .fold(ForkBuilder::new(), |fork, (ty, id, data)| {
@@ -507,23 +527,27 @@ fn the_bar_opens_over_the_spaceport_with_its_hire_escort_button() {
 }
 
 #[test]
-fn a_service_opens_its_placeholder_and_done_returns() {
+fn mission_bbs_with_nothing_offered_says_so_and_done_returns() {
     let mut harness = Harness::flying(0);
     harness.land();
-    // The Mission BBS: the Trade Center opens the exchange instead
-    // (`trade.rs`), and the Bar the bar.
     let bbs = harness.item(11).center();
     harness.click(bbs);
     let frame = harness.frame();
     let texts = texts(&frame);
-    assert!(texts.iter().any(|t| t == "Mission BBS"), "{texts:?}");
-    assert!(texts.iter().any(|t| t == "Not available yet"), "{texts:?}");
-    assert!(!texts.iter().any(|t| t == "Leave"), "{texts:?}");
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == "There are no missions available here."),
+        "{texts:?}"
+    );
+    assert!(texts.iter().any(|t| t == "Done"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Leave"), "over the spaceport");
 
-    harness.click(DONE_BUTTON.center());
+    harness.press_physical(KeyCode::Enter);
     assert_eq!(harness.showing(), Showing::Spaceport);
     let frame = harness.frame();
-    assert!(self::texts(&frame).iter().any(|t| t == "Leave"));
+    let texts = self::texts(&frame);
+    assert!(!texts.iter().any(|t| t == "Done"), "{texts:?}");
 }
 
 /// Where the planet is in the take-off test: off the ship's start, but

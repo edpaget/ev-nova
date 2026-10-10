@@ -86,6 +86,17 @@
 //! exchange, the outfitter and the shipyard back with the cash as it now
 //! is, and saves the pilot after the input.
 //!
+//! The spaceport's Mission BBS opens the session's mission computer,
+//! laid out by the interface file's `DLOG` 1006, or shows why it cannot
+//! in "Desc Dialog" (every slot taken, or nothing available). Its Accept
+//! accepts the selected mission through the session, on the router's
+//! chance, and the computer is shown again as the session now has it,
+//! closing silently once nothing is available. The mission texts the
+//! session queues (a mission's `BriefText`, `CompText`, `FailText` and
+//! `RefuseText`) show one after another in "Desc Dialog" over the
+//! spaceport, after each input and tick; those queued in flight, by an
+//! `S`, wait for the next spaceport.
+//!
 //! Where fuel is sold, the spaceport's Recharge fills the tank through the
 //! session; the router tells the screen how it went (a refusal says why in
 //! the description box), hands the exchange, the outfitter and the
@@ -175,6 +186,7 @@ use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::bar::BAR_DIALOG;
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
+use nova_view::spaceport::missions::COMPUTER_DIALOG;
 use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
 use nova_view::spaceport::shipyard::{SHIP_INFO_DIALOG, SHIPYARD_DIALOG};
 use nova_view::spaceport::trade::TRADE_DIALOG;
@@ -1231,13 +1243,15 @@ impl AppScreen {
         }
         if let Some(pilot) = self.flight.as_ref().and_then(FlightView::pilot) {
             let art: Rc<dyn ShipyardCatalog> = Rc::clone(&self.data) as Rc<dyn ShipyardCatalog>;
-            spaceport = spaceport.with_bar(
-                template_of(BAR_DIALOG),
-                template_of(SHIPYARD_DIALOG),
-                template_of(SHIP_INFO_DIALOG),
-                art,
-                pilot.escort_count() < MAX_ESCORTS,
-            );
+            spaceport = spaceport
+                .with_bar(
+                    template_of(BAR_DIALOG),
+                    template_of(SHIPYARD_DIALOG),
+                    template_of(SHIP_INFO_DIALOG),
+                    art,
+                    pilot.escort_count() < MAX_ESCORTS,
+                )
+                .with_missions(template_of(COMPUTER_DIALOG), template_of(DESC_DIALOG));
         }
         self.spaceport = Some(spaceport);
         self.switch_to(Side::Spaceport);
@@ -1289,6 +1303,16 @@ impl AppScreen {
         let took_off = self.flight.as_mut().and_then(FlightView::settle_script);
         if took_off.is_some() {
             self.close_spaceport();
+        }
+        self.show_mission_texts();
+    }
+
+    /// Shows the mission texts the session queued over the spaceport, if
+    /// it is open. Those queued in flight (a `BriefText` an `S` accepted)
+    /// wait in the session and show at the next spaceport.
+    fn show_mission_texts(&mut self) {
+        if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
+            spaceport.show_mission_texts(flight.take_mission_texts());
         }
     }
 
@@ -1501,6 +1525,11 @@ impl AppScreen {
         let ship = spaceport.take_ship();
         let recharge = spaceport.take_recharge();
         let hire = spaceport.take_hire();
+        let accepted = spaceport.take_mission_accept();
+        if spaceport.take_mission_computer_request() {
+            let computer = self.flight.as_ref().expect(ENTERED).mission_computer();
+            spaceport.open_mission_computer(computer);
+        }
         if spaceport.take_hire_request()
             && let Some(list) = self.flight.as_mut().expect(ENTERED).escorts_for_hire()
         {
@@ -1516,7 +1545,13 @@ impl AppScreen {
         if let Some(ship) = spaceport.take_declined_ship() {
             self.flight.as_mut().expect(ENTERED).decline_ship(ship);
         }
-        if trade.is_some() || outfit.is_some() || ship.is_some() || recharge || hire.is_some() {
+        if trade.is_some()
+            || outfit.is_some()
+            || ship.is_some()
+            || recharge
+            || hire.is_some()
+            || accepted.is_some()
+        {
             let flight = self.flight.as_mut().expect(ENTERED);
             // A refused order changes nothing; the screen greys what it can.
             if let Some(order) = trade {
@@ -1536,6 +1571,14 @@ impl AppScreen {
                 if let Some(list) = flight.escorts_for_hire() {
                     spaceport.set_hire(&list);
                 }
+            }
+            // An accept shows its texts, then the computer again, as the
+            // original closes it and opens it again; one left with nothing
+            // available closes silently.
+            if let Some(mission) = accepted {
+                let _ = flight.accept_mission(mission);
+                spaceport.show_mission_texts(flight.take_mission_texts());
+                spaceport.set_mission_computer(flight.mission_computer());
             }
             // A refused refill says why in the spaceport.
             if recharge {
