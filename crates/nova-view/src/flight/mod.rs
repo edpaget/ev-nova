@@ -9,6 +9,8 @@
 //!   to, its look ([`EscortMenuLooks`]), and the message a command gives.
 //! - [`jump`]: the hyperspace jump's [`JumpEffect`], the stars streaking
 //!   and the screen fading to white and back.
+//! - [`missions`]: the [`FlightMissionDialogs`], the mission texts and
+//!   the mission info screen shown over flight.
 //! - [`hud`]: the HUD, the `ïntf` status bar with its radar, shield,
 //!   armour and fuel bars and the system's name.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
@@ -25,6 +27,7 @@ pub mod effects;
 pub mod escorts;
 pub mod hud;
 pub mod jump;
+pub mod missions;
 pub mod sprite;
 pub mod target;
 pub mod view;
@@ -36,5 +39,6 @@ pub use catalog::{
 };
 pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};
+pub use missions::FlightMissionDialogs;
 pub use sprite::rotation_frame;
 pub use view::{FlightView, SharedChance};
