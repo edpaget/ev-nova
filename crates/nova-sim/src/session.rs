@@ -315,6 +315,7 @@ mod fighters;
 mod hail;
 mod hire;
 mod hooks;
+mod mission_screens;
 mod missions;
 mod outfits;
 mod persons;
@@ -348,9 +349,9 @@ use crate::board::{
     Take, Taken, check_board,
 };
 use crate::catalog::{
-    CombatCatalog, DateAffixes, GateSite, GovtId, LandingSite, ListedStellar, MissionRecord,
-    OutfitId, OutfitRecord, PersonId, PilotCatalog, PlaceNames, ShipId, ShipRecord, StartError,
-    StellarId, StellarLife, SystemId, TrafficCatalog, WeaponId,
+    CombatCatalog, DateAffixes, GateSite, GovtId, LandingSite, ListedStellar, MissionId,
+    MissionRecord, MissionTexts, OutfitId, OutfitRecord, PersonId, PilotCatalog, PlaceNames,
+    ShipId, ShipRecord, StartError, StellarId, StellarLife, SystemId, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -708,6 +709,9 @@ pub struct Session {
     fallback_frame: Option<(u32, u32)>,
     /// Every `mïsn`, read when the session starts.
     missions: Vec<MissionRecord>,
+    /// What the screens show of each `mïsn`, read when the session
+    /// starts (see the `mission_screens` module).
+    mission_texts: BTreeMap<MissionId, MissionTexts>,
     /// Every stellar some system lists, read when the session starts:
     /// what a mission's stellars are chosen from, with the galaxy overlay.
     listed_stellars: Vec<ListedStellar>,
@@ -879,6 +883,11 @@ impl Session {
             rebuilt: Rebuilt::default(),
             fallback_frame: catalog.fallback_frame_size(),
             missions: catalog.missions(),
+            mission_texts: catalog
+                .mission_texts()
+                .into_iter()
+                .map(|texts| (texts.id, texts))
+                .collect(),
             listed_stellars: catalog.listed_stellars(),
             place_names: catalog.place_names(),
             offers: Offers::default(),

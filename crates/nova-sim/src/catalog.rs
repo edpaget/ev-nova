@@ -635,6 +635,55 @@ pub struct MissionRecord {
     pub ships: MissionShip,
 }
 
+/// What a mission's screens show of it, read from its `mïsn` and its
+/// `dësc`s (see the [`mission`](crate::mission) module's "Screens"): each
+/// text as written, its tags not yet filled, and `None` for an ID of -1
+/// or a `dësc` that cannot be read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MissionTexts {
+    /// The `mïsn`'s ID.
+    pub id: MissionId,
+    /// Its name as the game shows it: the resource name up to its last
+    /// ';', trailing spaces and ';'s dropped (`_TrimResourceName`
+    /// @0x717ac, from `_InitMissions` @0x980bb).
+    pub name: String,
+    /// Its offer text: `dësc` 4000 + the mission's index (ID - 128).
+    pub offer: Option<String>,
+    /// Its `BriefText`, shown as it is accepted.
+    pub brief: Option<String>,
+    /// Its `QuickBrief`, the mission info screen's text.
+    pub quick_brief: Option<String>,
+    /// Its `CompText`, shown as it is completed.
+    pub comp: Option<String>,
+    /// Its `FailText`, shown as it fails at its return.
+    pub fail: Option<String>,
+    /// Its `RefuseText`, shown as its offer is refused.
+    pub refuse: Option<String>,
+    /// Its `AcceptButton`, raw.
+    pub accept_button: String,
+    /// Its `RefuseButton`, raw.
+    pub refuse_button: String,
+}
+
+impl MissionTexts {
+    /// Mission `id` named `name`, with no text and blank labels.
+    #[must_use]
+    pub fn named(id: MissionId, name: &str) -> Self {
+        Self {
+            id,
+            name: name.to_owned(),
+            offer: None,
+            brief: None,
+            quick_brief: None,
+            comp: None,
+            fail: None,
+            refuse: None,
+            accept_button: String::new(),
+            refuse_button: String::new(),
+        }
+    }
+}
+
 /// The game data a system's NPC traffic is spawned from: its `sÿst`'s
 /// traffic, the `düde`s it names, the `flët`s and the `përs`.
 pub trait TrafficCatalog {
@@ -980,6 +1029,9 @@ pub trait PilotCatalog {
     fn fallback_frame_size(&self) -> Option<(u32, u32)>;
     /// Every `mïsn` that can be read, by ascending ID.
     fn missions(&self) -> Vec<MissionRecord>;
+    /// What the screens show of every `mïsn` that can be read, by
+    /// ascending ID.
+    fn mission_texts(&self) -> Vec<MissionTexts>;
     /// Every stellar some system that can be read lists, that can be read
     /// itself, by ascending ID, with every system listing it.
     fn listed_stellars(&self) -> Vec<ListedStellar>;
@@ -1055,6 +1107,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn missions(&self) -> Vec<MissionRecord> {
         (**self).missions()
+    }
+
+    fn mission_texts(&self) -> Vec<MissionTexts> {
+        (**self).mission_texts()
     }
 
     fn listed_stellars(&self) -> Vec<ListedStellar> {
@@ -1135,6 +1191,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn missions(&self) -> Vec<MissionRecord> {
         (**self).missions()
+    }
+
+    fn mission_texts(&self) -> Vec<MissionTexts> {
+        (**self).mission_texts()
     }
 
     fn listed_stellars(&self) -> Vec<ListedStellar> {
@@ -1346,6 +1406,11 @@ mod tests {
             vec![crate::testkit::mission(130)]
         }
 
+        /// Mission 130's texts: "Run", and nothing more.
+        fn mission_texts(&self) -> Vec<MissionTexts> {
+            vec![MissionTexts::named(MissionId(130), "Run")]
+        }
+
         /// Stellar 128, listed by system 130.
         fn listed_stellars(&self) -> Vec<ListedStellar> {
             vec![ListedStellar {
@@ -1392,6 +1457,7 @@ mod tests {
             format!("{:?}", catalog.stellar_lives()),
             format!("{:?}", catalog.fallback_frame_size()),
             format!("{:?}", catalog.missions()),
+            format!("{:?}", catalog.mission_texts()),
             format!("{:?}", catalog.listed_stellars()),
             format!("{:?}", catalog.place_names()),
         ]
@@ -1429,12 +1495,13 @@ mod tests {
         );
         assert_eq!(direct[19], "Some((7, 9))", "forwarded, not a default");
         assert!(direct[20].contains("MissionId(130)"), "{direct:?}");
+        assert!(direct[21].contains("\"Run\""), "{direct:?}");
         assert!(
-            direct[21].contains("systems: [SystemId(130)]"),
+            direct[22].contains("systems: [SystemId(130)]"),
             "{direct:?}"
         );
-        assert!(direct[22].contains("\"Earth\""), "{direct:?}");
-        assert!(direct[22].contains("\"Sol\""), "{direct:?}");
+        assert!(direct[23].contains("\"Earth\""), "{direct:?}");
+        assert!(direct[23].contains("\"Sol\""), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

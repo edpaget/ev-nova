@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use nova_data::records::character::Character;
+use nova_data::records::desc::Desc;
 use nova_data::records::disaster::Disaster;
 use nova_data::records::dude::Dude;
 use nova_data::records::fleet::Fleet;
@@ -30,10 +31,10 @@ use crate::catalog::{
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterId,
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
     GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord,
-    MissionShip, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon,
-    PilotCatalog, PlaceNames, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog,
-    WeaponId, WeaponRecord,
+    MissionShip, MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord,
+    PersonWeapon, PilotCatalog, PlaceNames, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic,
+    TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -402,6 +403,37 @@ impl PilotCatalog for GameData {
         }
     }
 
+    /// Each text from its `dësc`, none for -1 or one that cannot be read;
+    /// the offer's is `dësc` 4000 + the mission's index (@0xa3a85-0xa3aad).
+    fn mission_texts(&self) -> Vec<MissionTexts> {
+        let text = |id: Option<i16>| -> Option<String> {
+            let desc = self.get::<Desc>(id?)?.ok()?;
+            Some(desc.record.text.as_str().to_owned())
+        };
+        self.records::<Mission>()
+            .filter_map(|(id, mission)| {
+                let mission = mission.ok()?;
+                let record = mission.record;
+                let raw = |desc: Option<nova_data::DescId>| text(desc.map(|desc| desc.0));
+                Some(MissionTexts {
+                    id: MissionId(id),
+                    name: shown_resource_name(mission.name.unwrap_or_default()).to_owned(),
+                    offer: text(
+                        id.checked_sub(FIRST_MISSION)
+                            .and_then(|index| FIRST_OFFER_DESC.checked_add(index)),
+                    ),
+                    brief: raw(record.brief_text),
+                    quick_brief: raw(record.quick_brief),
+                    comp: raw(record.comp_text),
+                    fail: raw(record.fail_text),
+                    refuse: raw(record.refuse_text),
+                    accept_button: record.accept_button.as_str().to_owned(),
+                    refuse_button: record.refuse_button.as_str().to_owned(),
+                })
+            })
+            .collect()
+    }
+
     fn missions(&self) -> Vec<MissionRecord> {
         self.records::<Mission>()
             .filter_map(|(id, mission)| {
@@ -574,6 +606,11 @@ impl TrafficCatalog for GameData {
     }
 }
 
+/// The first mission offer text's `dësc`, mission index 0's.
+const FIRST_OFFER_DESC: i16 = 4000;
+/// The lowest `mïsn` ID: mission index 0.
+const FIRST_MISSION: i16 = 128;
+
 /// The highest ID a person's weapon, `HailPict` or `LinkMission`, or a
 /// system's Person slot, names none at (`_LoadObjectData` keeps only
 /// those above it).
@@ -583,16 +620,23 @@ const LAST_UNUSED: i16 = 127;
 /// bytes, a Pascal string's length byte among them).
 const PERSON_NAME_CHARS: usize = 29;
 
-/// A `përs` resource's name as the game shows it: up to its last ';',
-/// trailing spaces and ';'s dropped, and at most [`PERSON_NAME_CHARS`]
+/// A `përs` resource's name as the game shows it: cut as
+/// [`shown_resource_name`] cuts it, and at most [`PERSON_NAME_CHARS`]
 /// characters (`_LoadObjectData` @0x7c57d-0x7c5f3).
 fn person_name(name: &str) -> String {
-    let shown = name.rfind(';').map_or(name, |at| &name[..at]);
-    shown
-        .trim_end_matches([' ', ';'])
+    shown_resource_name(name)
         .chars()
         .take(PERSON_NAME_CHARS)
         .collect()
+}
+
+/// A resource name as the game shows a person's or a mission's: up to its
+/// last ';', trailing spaces and ';'s dropped (`_TrimResourceName`
+/// @0x717ac). A mission's is kept whole, as the original keeps 255
+/// characters.
+fn shown_resource_name(name: &str) -> &str {
+    let shown = name.rfind(';').map_or(name, |at| &name[..at]);
+    shown.trim_end_matches([' ', ';'])
 }
 
 /// Reads the records afresh on every call; a session asks once, when it
@@ -3183,6 +3227,113 @@ mod tests {
                 a.id
             );
         }
+    }
+
+    /// A `dësc` of `text`, with no picture.
+    fn desc(text: &str) -> Vec<u8> {
+        let mut bytes = text.as_bytes().to_vec();
+        bytes.push(0);
+        bytes.extend([0xFF; 2]);
+        bytes.extend([0; 34]);
+        bytes
+    }
+
+    /// A `mïsn` whose `BriefText`, `QuickBrief`, `CompText`, `FailText`
+    /// and `RefuseText` are `texts`, in that order, with these button
+    /// labels.
+    fn texted(texts: [i16; 5], accept: &[u8], refuse: &[u8]) -> Vec<u8> {
+        use nova_data::records::mission::Mission;
+        let mut bytes = vec![0; Mission::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x34, &texts[..2]);
+        put_i16s(&mut bytes, 0x38, &[-1, -1]);
+        put_i16s(&mut bytes, 0x3C, &texts[2..4]);
+        put_i16s(&mut bytes, 0x44, &[-1]);
+        put_i16s(&mut bytes, 0x58, &texts[4..]);
+        bytes[0x75F..0x75F + accept.len()].copy_from_slice(accept);
+        bytes[0x77F..0x77F + refuse.len()].copy_from_slice(refuse);
+        bytes
+    }
+
+    #[test]
+    fn each_readable_mïsns_texts_are_its_name_its_offer_and_its_dëscs() {
+        use nova_data::records::mission::Mission;
+        let data = store_named(&[
+            (
+                Mission::TYPE,
+                130,
+                Some("Delivery to <DST>; Vellos1 "),
+                texted([200, 201, 202, 203, 204], b"I'm in\0", b"No way\0"),
+            ),
+            (
+                Mission::TYPE,
+                131,
+                Some("Plain run  "),
+                texted([-1; 5], b"\0", b"\0"),
+            ),
+            (Mission::TYPE, 132, None, texted([205; 5], b" ok\0", b"\0")),
+            (
+                Mission::TYPE,
+                133,
+                Some("Short"),
+                short(texted([-1; 5], b"\0", b"\0")),
+            ),
+            (Desc::TYPE, 4002, None, desc("Offer <DST>.")),
+            (Desc::TYPE, 200, None, desc("Brief.")),
+            (Desc::TYPE, 201, None, desc("Quick <DL>.")),
+            (Desc::TYPE, 202, None, desc("Comp.")),
+            (Desc::TYPE, 203, None, desc("Fail.")),
+            (Desc::TYPE, 204, None, desc("Refuse.")),
+        ]);
+        let texts = data.mission_texts();
+        assert_eq!(
+            texts,
+            [
+                MissionTexts {
+                    id: MissionId(130),
+                    name: "Delivery to <DST>".to_owned(),
+                    offer: Some("Offer <DST>.".to_owned()),
+                    brief: Some("Brief.".to_owned()),
+                    quick_brief: Some("Quick <DL>.".to_owned()),
+                    comp: Some("Comp.".to_owned()),
+                    fail: Some("Fail.".to_owned()),
+                    refuse: Some("Refuse.".to_owned()),
+                    accept_button: "I'm in".to_owned(),
+                    refuse_button: "No way".to_owned(),
+                },
+                MissionTexts::named(MissionId(131), "Plain run"),
+                MissionTexts {
+                    accept_button: " ok".to_owned(),
+                    ..MissionTexts::named(MissionId(132), "")
+                },
+            ],
+            "-1 and a missing dësc are none; the undecodable mïsn is skipped"
+        );
+        assert_eq!(store(&[]).mission_texts(), []);
+    }
+
+    #[test]
+    fn a_borrowed_or_shared_game_data_forwards_the_mission_texts() {
+        use nova_data::records::mission::Mission;
+        let data = std::rc::Rc::new(store_named(&[(
+            Mission::TYPE,
+            128,
+            Some("Run"),
+            texted([-1; 5], b"\0", b"\0"),
+        )]));
+        let texts = vec![MissionTexts::named(MissionId(128), "Run")];
+        assert_eq!(PilotCatalog::mission_texts(&data), texts, "Rc");
+        assert_eq!(PilotCatalog::mission_texts(&&*data), texts, "&");
+    }
+
+    #[test]
+    fn a_resource_name_is_shown_up_to_its_last_semicolon_trailing_spaces_and_semicolons_dropped() {
+        assert_eq!(
+            shown_resource_name("Delivery to <DST>; Vellos1 "),
+            "Delivery to <DST>"
+        );
+        assert_eq!(shown_resource_name("No cut  "), "No cut");
+        assert_eq!(shown_resource_name("a;b;c"), "a;b");
+        assert_eq!(shown_resource_name("x;; ;"), "x");
     }
 
     #[test]

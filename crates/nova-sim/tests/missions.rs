@@ -185,6 +185,10 @@ impl PilotCatalog for Courier {
         }]
     }
 
+    fn mission_texts(&self) -> Vec<nova_sim::catalog::MissionTexts> {
+        Vec::new()
+    }
+
     fn listed_stellars(&self) -> Vec<ListedStellar> {
         [StellarId(128), StellarId(140)]
             .into_iter()

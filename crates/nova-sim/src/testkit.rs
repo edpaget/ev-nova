@@ -7,10 +7,10 @@ use crate::ai::Goal;
 use crate::catalog::{
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterRecord,
     DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord,
-    LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, OutfitId, OutfitRecord,
-    Penalties, PersonId, PersonRecord, PilotCatalog, PlaceNames, ShipId, ShipRecord, StarSystem,
-    StartDate, StartError, StellarId, StellarLife, SystemId, SystemTraffic, TrafficCatalog,
-    WeaponId, WeaponRecord,
+    LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, OutfitId,
+    OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog, PlaceNames, ShipId, ShipRecord,
+    StarSystem, StartDate, StartError, StellarId, StellarLife, SystemId, SystemTraffic,
+    TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -91,6 +91,8 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) fallback_frame: Option<(u32, u32)>,
     /// Every `mïsn`: none, by default.
     pub(crate) missions: Vec<MissionRecord>,
+    /// What the screens show of each `mïsn`: none, by default.
+    pub(crate) mission_texts: Vec<MissionTexts>,
     /// The stellars' and systems' names: none, by default.
     pub(crate) place_names: PlaceNames,
     /// How many times the names were read.
@@ -461,6 +463,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         life_reads: RefCell::default(),
         fallback_frame: Some((100, 100)),
         missions: Vec::new(),
+        mission_texts: Vec::new(),
         place_names: PlaceNames::default(),
         place_name_reads: RefCell::default(),
     }
@@ -583,6 +586,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn missions(&self) -> Vec<MissionRecord> {
         self.missions.clone()
+    }
+
+    fn mission_texts(&self) -> Vec<MissionTexts> {
+        self.mission_texts.clone()
     }
 
     /// Every stellar of [`FakePilotCatalog::sites`], with every system

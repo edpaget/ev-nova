@@ -192,6 +192,10 @@ impl PilotCatalog for Home {
         Vec::new()
     }
 
+    fn mission_texts(&self) -> Vec<nova_sim::catalog::MissionTexts> {
+        Vec::new()
+    }
+
     fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
         Vec::new()
     }
