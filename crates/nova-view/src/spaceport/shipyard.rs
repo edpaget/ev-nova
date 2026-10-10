@@ -53,6 +53,19 @@
 //! (#229-240). Its Done, Return and Escape close the panel alone. Without
 //! that dialog, Info is greyed.
 //!
+//! Given the offer dialog's template ([`ShipyardScreen::with_offers`]),
+//! the shipyard offers missions as `_DoShipyardDialog` and
+//! `_ShipyardFilter` do while buying ships (the bar's escort hire is its
+//! own screen, which offers none): it asks for an offer as it opens
+//! ([`ShipyardScreen::take_offer_request`], `_DoShipyardDialog`
+//! @0x5e8eb), and whoever holds the session answers with one, opening the
+//! [`OfferDialog`] over it ([`ShipyardScreen::open_offer`]), or rearms it
+//! ([`ShipyardScreen::rearm`]) with the gap drawn, after which it asks
+//! again (`_ShipyardFilter` @0x60de5-0x60e1f). The offer takes every
+//! input while it is open, and its choice is taken through the screen
+//! ([`ShipyardScreen::take_offer_choice`]). The wait runs down only while
+//! neither the info panel, the name prompt nor an offer is open.
+//!
 //! Done, Return and Escape close the shipyard. Without its dialog, the
 //! screen says why, and Return or Escape still closes it.
 
@@ -61,13 +74,14 @@ use std::time::Duration;
 
 use nova_sim::hyperspace::max_jumps;
 use nova_sim::shipyard::SHIP_NAME_CHARS;
-use nova_sim::{ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
+use nova_sim::{MissionId, OfferPrompt, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
 
 use super::catalog::SpaceportCatalog;
 use super::grid::{
     self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE, text,
 };
 use super::layout::DONE_LABEL;
+use super::offer::{OfferChoice, OfferDialog, VenueOffers};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -377,6 +391,8 @@ pub struct ShipyardScreen {
     order: Option<ShipOrder>,
     /// The ship declined at its name prompt, until it is taken.
     declined: Option<ShipId>,
+    /// The mission offers, once given.
+    offering: Option<VenueOffers>,
     closed: bool,
     sounds: Vec<Sound>,
 }
@@ -448,12 +464,62 @@ impl ShipyardScreen {
             naming: None,
             order: None,
             declined: None,
+            offering: None,
             closed: false,
             sounds: Vec::new(),
         };
         screen.read_pictures();
         screen.select(0);
         screen
+    }
+
+    /// The shipyard with mission offers, each shown in the offer dialog laid
+    /// out by `template` (or saying why there is none): it asks for the
+    /// first as it opens, and again once rearmed ([`ShipyardScreen::rearm`]), as
+    /// the original's does ([`SHIPYARD`](nova_sim::mission::screens::SHIPYARD)).
+    #[must_use]
+    pub fn with_offers(self, template: Result<DialogTemplate, String>) -> Self {
+        Self {
+            offering: Some(VenueOffers::asking(template)),
+            ..self
+        }
+    }
+
+    /// Whether the shipyard has asked for an offer since this was last
+    /// asked: whoever holds the session answers with
+    /// [`ShipyardScreen::open_offer`], or, with none, rearms it
+    /// ([`ShipyardScreen::rearm`]).
+    pub fn take_offer_request(&mut self) -> bool {
+        self.offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_request)
+    }
+
+    /// Opens the offer dialog over the shipyard on `prompt`.
+    pub fn open_offer(&mut self, prompt: OfferPrompt) {
+        let (Ok(laid), Some(offering)) = (&self.laid, &mut self.offering) else {
+            return;
+        };
+        offering.open(prompt, Rc::clone(&laid.metrics.0), self.style);
+    }
+
+    /// The offer dialog, while it is open.
+    #[must_use]
+    pub fn offer_dialog(&self) -> Option<&OfferDialog> {
+        self.offering.as_ref()?.dialog()
+    }
+
+    /// The offer answered since this was last taken, and the choice made,
+    /// once.
+    pub fn take_offer_choice(&mut self) -> Option<(MissionId, OfferChoice)> {
+        self.offering.as_mut()?.take_choice()
+    }
+
+    /// Asks for the next offer after `gap`.
+    pub fn rearm(&mut self, gap: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.rearm(gap);
+        }
     }
 
     /// The shipyard shown.
@@ -778,6 +844,11 @@ impl Screen for ShipyardScreen {
     /// Every input goes to the shipyard, or to its name prompt or info
     /// panel while that is open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(offering) = &mut self.offering
+            && offering.input(input, &mut self.sounds)
+        {
+            return ScreenAction::None;
+        }
         if self.laid.is_err() {
             if let Input::Key {
                 key: Key::Enter | Key::Escape,
@@ -828,8 +899,16 @@ impl Screen for ShipyardScreen {
         ScreenAction::None
     }
 
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
+    /// The wait for the next offer runs down while neither the info
+    /// panel, the name prompt nor an offer is open.
+    fn tick(&mut self, dt: Duration) {
+        if let Some(offering) = &mut self.offering
+            && self.panel.is_none()
+            && self.naming.is_none()
+        {
+            offering.tick(dt);
+        }
+    }
 
     fn draw(&self, list: &mut DrawList) {
         let laid = match &self.laid {
@@ -862,9 +941,19 @@ impl Screen for ShipyardScreen {
         if let Some(naming) = &self.naming {
             naming.prompt.draw(list);
         }
+        if let Some(offering) = &self.offering {
+            offering.draw(list);
+        }
     }
 
     fn cancel_pointer(&mut self) {
+        if self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::cancel_pointer)
+        {
+            return;
+        }
         if let Some(naming) = &mut self.naming {
             naming.prompt.cancel_pointer();
         } else if let Some(panel) = &mut self.panel {
@@ -2162,5 +2251,132 @@ mod tests {
             screen.input(&key(k, true, false));
             assert!(screen.closed(), "{k:?}");
         }
+    }
+
+    // The shipyard's mission offers.
+
+    use crate::spaceport::offer::OfferChoice;
+    use crate::spaceport::offer::fixture::{prompt, template as offer_template};
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    /// The shipyard, its offers given.
+    fn offering() -> ShipyardScreen {
+        screen().with_offers(Ok(offer_template()))
+    }
+
+    #[test]
+    fn the_shipyard_with_offers_asks_for_an_offer_as_it_opens() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request(), "before any tick");
+        assert!(!screen.take_offer_request(), "once");
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not again until rearmed");
+    }
+
+    #[test]
+    fn without_offers_the_shipyard_never_asks() {
+        let mut screen = screen();
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request());
+        screen.open_offer(prompt());
+        assert!(screen.offer_dialog().is_none());
+    }
+
+    #[test]
+    fn an_offer_opens_over_the_shipyard_and_takes_its_input() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let offer = screen.offer_dialog().expect("open");
+        assert_eq!(offer.prompt(), &prompt());
+        assert_eq!(offer.problem(), None, "laid out by the template given");
+        let mut expected = drawn(&self::screen());
+        let mut over = DrawList::new();
+        offer.draw(&mut over);
+        expected.extend(over.iter().cloned());
+        assert_eq!(drawn(&screen), expected, "drawn over the shipyard");
+        press(&mut screen, BUY_KEY);
+        assert_eq!(screen.take_request(), None, "B went to the offer");
+        assert_eq!(screen.take_offer_choice(), None);
+        press(&mut screen, Key::Enter);
+        assert!(screen.offer_dialog().is_none(), "answered, it closes");
+        assert!(!screen.closed(), "Return went to the offer");
+        assert_eq!(
+            screen.take_offer_choice(),
+            Some((MissionId(141), OfferChoice::Accept))
+        );
+        assert_eq!(screen.take_offer_choice(), None, "once");
+    }
+
+    #[test]
+    fn the_shipyards_offer_pointer_goes_through_it() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let at = screen
+            .offer_dialog()
+            .and_then(OfferDialog::dialog)
+            .and_then(|dialog| dialog.item_bounds(crate::spaceport::offer::REFUSE_ITEM))
+            .expect("refuse")
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.input(&button(false));
+        assert_eq!(screen.take_offer_choice(), None, "abandoned");
+        assert!(!screen.take_sounds().is_empty(), "its sounds go through");
+        screen.input(&button(true));
+        screen.input(&button(false));
+        assert_eq!(
+            screen.take_offer_choice(),
+            Some((MissionId(141), OfferChoice::Refuse))
+        );
+    }
+
+    #[test]
+    fn after_a_rearm_the_shipyard_asks_again_after_the_gap() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request());
+        screen.open_offer(prompt());
+        press(&mut screen, Key::Enter);
+        assert!(screen.take_offer_choice().is_some());
+        screen.rearm(ms(600));
+        screen.tick(ms(599));
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(1));
+        assert!(screen.take_offer_request());
+    }
+
+    #[test]
+    fn the_shipyard_does_not_count_down_while_its_info_panel_or_name_prompt_is_open() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request());
+        screen.rearm(ms(600));
+        press(&mut screen, INFO_KEY);
+        assert!(screen.info_panel().is_some());
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "paused under the info panel");
+        press(&mut screen, Key::Escape);
+        assert!(screen.info_panel().is_none());
+        screen.tick(ms(300));
+        screen.open_naming(&naming());
+        assert!(screen.naming().is_some());
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "paused under the name prompt");
+        naming_click(&mut screen, crate::ui::text_input::CANCEL_ITEM);
+        assert!(screen.naming().is_none());
+        screen.tick(ms(299));
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(1));
+        assert!(
+            screen.take_offer_request(),
+            "the wait goes on once it closes"
+        );
     }
 }

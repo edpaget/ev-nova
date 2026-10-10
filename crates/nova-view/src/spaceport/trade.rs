@@ -32,15 +32,27 @@
 //! whoever holds the session makes the trade and gives back the exchange
 //! as it now is ([`TradeScreen::set_market`]).
 //!
+//! Given the offer dialog's template ([`TradeScreen::with_offers`]), the
+//! trade center offers missions as `_DoTradeDialog` and `_TradeFilter`
+//! do: it asks for an offer as it opens ([`TradeScreen::take_offer_request`],
+//! `_DoTradeDialog` @0x5df7f), and whoever holds the session answers with
+//! one, opening the [`OfferDialog`] over it ([`TradeScreen::open_offer`]),
+//! or rearms it ([`TradeScreen::rearm`]) with the gap drawn, after which it
+//! asks again (`_TradeFilter` @0x4e550-0x4e581). The offer takes every
+//! input while it is open, and its choice is taken through the screen
+//! ([`TradeScreen::take_offer_choice`]). The wait runs down only while
+//! neither the quantity dialog nor an offer is open.
+//!
 //! Done, Return and Escape close it. Without the dialog, the screen says
 //! why, and Return or Escape still closes it.
 
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Direction, Lot, Market, Order, RuleSource};
+use nova_sim::{Direction, Lot, Market, MissionId, OfferPrompt, Order, RuleSource};
 
 use super::layout::DONE_LABEL;
+use super::offer::{OfferChoice, OfferDialog, VenueOffers};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -163,6 +175,8 @@ pub struct TradeScreen {
     max_lot: bool,
     /// The quantity dialog, while it is open.
     asking: Option<Asking>,
+    /// The mission offers, once given.
+    offering: Option<VenueOffers>,
     /// The order asked for, until it is taken.
     order: Option<Order>,
     closed: bool,
@@ -206,6 +220,7 @@ impl TradeScreen {
             top: 0,
             max_lot: false,
             asking: None,
+            offering: None,
             order: None,
             closed: false,
             style,
@@ -213,6 +228,55 @@ impl TradeScreen {
         };
         screen.regrey();
         screen
+    }
+
+    /// The trade center with mission offers, each shown in the offer dialog laid
+    /// out by `template` (or saying why there is none): it asks for the
+    /// first as it opens, and again once rearmed
+    /// ([`TradeScreen::rearm`]), as the original's does ([`TRADE_CENTER`](nova_sim::mission::screens::TRADE_CENTER)).
+    #[must_use]
+    pub fn with_offers(self, template: Result<DialogTemplate, String>) -> Self {
+        Self {
+            offering: Some(VenueOffers::asking(template)),
+            ..self
+        }
+    }
+
+    /// Whether the trade center has asked for an offer since this was last
+    /// asked: whoever holds the session answers with
+    /// [`TradeScreen::open_offer`], or, with none, rearms it
+    /// ([`TradeScreen::rearm`]).
+    pub fn take_offer_request(&mut self) -> bool {
+        self.offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_request)
+    }
+
+    /// Opens the offer dialog over the trade center on `prompt`.
+    pub fn open_offer(&mut self, prompt: OfferPrompt) {
+        let (Ok(laid), Some(offering)) = (&self.laid, &mut self.offering) else {
+            return;
+        };
+        offering.open(prompt, Rc::clone(&laid.metrics.0), self.style);
+    }
+
+    /// The offer dialog, while it is open.
+    #[must_use]
+    pub fn offer_dialog(&self) -> Option<&OfferDialog> {
+        self.offering.as_ref()?.dialog()
+    }
+
+    /// The offer answered since this was last taken, and the choice made,
+    /// once.
+    pub fn take_offer_choice(&mut self) -> Option<(MissionId, OfferChoice)> {
+        self.offering.as_mut()?.take_choice()
+    }
+
+    /// Asks for the next offer after `gap`.
+    pub fn rearm(&mut self, gap: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.rearm(gap);
+        }
     }
 
     /// The exchange shown.
@@ -439,6 +503,11 @@ impl Screen for TradeScreen {
     /// Every input goes to the exchange, or to the quantity dialog while
     /// it is open; it never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(offering) = &mut self.offering
+            && offering.input(input, &mut self.sounds)
+        {
+            return ScreenAction::None;
+        }
         if self.asking.is_some() {
             self.quantity_input(input);
             return ScreenAction::None;
@@ -491,8 +560,15 @@ impl Screen for TradeScreen {
         ScreenAction::None
     }
 
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
+    /// The wait for the next offer runs down while neither the quantity
+    /// dialog nor an offer is open.
+    fn tick(&mut self, dt: Duration) {
+        if let Some(offering) = &mut self.offering
+            && self.asking.is_none()
+        {
+            offering.tick(dt);
+        }
+    }
 
     fn draw(&self, list: &mut DrawList) {
         let laid = match &self.laid {
@@ -547,9 +623,19 @@ impl Screen for TradeScreen {
         if let Some(asking) = &self.asking {
             asking.dialog.draw(list);
         }
+        if let Some(offering) = &self.offering {
+            offering.draw(list);
+        }
     }
 
     fn cancel_pointer(&mut self) {
+        if self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::cancel_pointer)
+        {
+            return;
+        }
         if let Some(asking) = &mut self.asking {
             asking.dialog.cancel_pointer();
         } else if let Ok(laid) = &mut self.laid {
@@ -1667,5 +1753,129 @@ mod tests {
             screen.input(&key(k, true, false));
             assert!(screen.closed(), "{k:?}");
         }
+    }
+
+    // The trade center's mission offers.
+
+    use crate::spaceport::offer::OfferChoice;
+    use crate::spaceport::offer::fixture::{prompt, template as offer_template};
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    /// The trade center, its offers given.
+    fn offering() -> TradeScreen {
+        screen().with_offers(Ok(offer_template()))
+    }
+
+    #[test]
+    fn the_trade_center_with_offers_asks_for_an_offer_as_it_opens() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request(), "before any tick");
+        assert!(!screen.take_offer_request(), "once");
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not again until rearmed");
+    }
+
+    #[test]
+    fn without_offers_the_trade_center_never_asks() {
+        let mut screen = screen();
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request());
+        screen.open_offer(prompt());
+        assert!(screen.offer_dialog().is_none());
+    }
+
+    #[test]
+    fn an_offer_opens_over_the_trade_center_and_takes_its_input() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let offer = screen.offer_dialog().expect("open");
+        assert_eq!(offer.prompt(), &prompt());
+        assert_eq!(offer.problem(), None, "laid out by the template given");
+        let mut expected = drawn(&self::screen());
+        let mut over = DrawList::new();
+        offer.draw(&mut over);
+        expected.extend(over.iter().cloned());
+        assert_eq!(drawn(&screen), expected, "drawn over the trade center");
+        press(&mut screen, BUY_KEY);
+        assert_eq!(screen.take_order(), None, "B went to the offer");
+        assert_eq!(screen.take_offer_choice(), None);
+        press(&mut screen, Key::Enter);
+        assert!(screen.offer_dialog().is_none(), "answered, it closes");
+        assert!(!screen.closed(), "Return went to the offer");
+        assert_eq!(
+            screen.take_offer_choice(),
+            Some((MissionId(141), OfferChoice::Accept))
+        );
+        assert_eq!(screen.take_offer_choice(), None, "once");
+    }
+
+    #[test]
+    fn the_trade_centers_offer_pointer_goes_through_it() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let at = screen
+            .offer_dialog()
+            .and_then(OfferDialog::dialog)
+            .and_then(|dialog| dialog.item_bounds(crate::spaceport::offer::REFUSE_ITEM))
+            .expect("refuse")
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.input(&button(false));
+        assert_eq!(screen.take_offer_choice(), None, "abandoned");
+        assert!(!screen.take_sounds().is_empty(), "its sounds go through");
+        screen.input(&button(true));
+        screen.input(&button(false));
+        assert_eq!(
+            screen.take_offer_choice(),
+            Some((MissionId(141), OfferChoice::Refuse))
+        );
+    }
+
+    #[test]
+    fn after_a_rearm_the_trade_center_asks_again_after_the_gap() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request());
+        screen.open_offer(prompt());
+        press(&mut screen, Key::Enter);
+        assert!(screen.take_offer_choice().is_some());
+        screen.rearm(ms(600));
+        screen.tick(ms(599));
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(1));
+        assert!(screen.take_offer_request());
+    }
+
+    #[test]
+    fn the_trade_center_does_not_count_down_while_its_quantity_dialog_is_open() {
+        let mut screen = offering();
+        assert!(screen.take_offer_request());
+        screen.rearm(ms(600));
+        alt_click(&mut screen, BUY_ITEM);
+        assert!(screen.quantity().is_some());
+        screen.tick(ms(10_000));
+        assert!(
+            !screen.take_offer_request(),
+            "paused under the quantity dialog"
+        );
+        let cancel = quantity_item(&screen, 4);
+        click(&mut screen, cancel);
+        assert!(screen.quantity().is_none());
+        screen.tick(ms(599));
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(1));
+        assert!(
+            screen.take_offer_request(),
+            "the wait goes on once it closes"
+        );
     }
 }

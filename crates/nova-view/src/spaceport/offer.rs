@@ -22,11 +22,16 @@
 //! refused, the refuse label's refuses, unless both start with the same
 //! letter. Escape does nothing. The choice is taken once
 //! ([`OfferDialog::take_choice`]), and the dialog is then answered.
+//!
+//! A venue that offers missions (the bar, the spaceport, the trade
+//! center, the shipyard and the outfitter) holds its offers in a
+//! [`VenueOffers`]: when it next asks for an offer, the offer dialog open
+//! over it, and the choice made, until it is taken.
 
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::OfferPrompt;
+use nova_sim::{MissionId, OfferPrompt};
 
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -262,9 +267,172 @@ impl Screen for OfferDialog {
     }
 }
 
+/// A venue's mission offers: the offer dialog's template (or why there is
+/// none), the wait before it next asks, and the offer open over it.
+#[derive(Clone, Debug)]
+pub(crate) struct VenueOffers {
+    template: Result<DialogTemplate, String>,
+    /// How long until the venue asks for an offer: none while it waits to
+    /// be rearmed.
+    wait: Option<Duration>,
+    /// Whether the venue has asked since this was last taken.
+    requested: bool,
+    /// The offer dialog, while it is open.
+    dialog: Option<OfferDialog>,
+    /// The offer answered and its choice, until it is taken.
+    choice: Option<(MissionId, OfferChoice)>,
+}
+
+impl VenueOffers {
+    /// Offers that ask for the first after `first`, as the bar does
+    /// (`_DoBarDialog` @0x48f51-0x48f5f).
+    pub(crate) fn waiting(template: Result<DialogTemplate, String>, first: Duration) -> Self {
+        Self {
+            template,
+            wait: Some(first),
+            requested: false,
+            dialog: None,
+            choice: None,
+        }
+    }
+
+    /// Offers already asking for the first, as the spaceport and the shops
+    /// ask as they open (`_DoPortDialog` @0x5fc37, `_DoTradeDialog`
+    /// @0x5df7f, `_DoShipyardDialog` @0x5e8eb, `_DoOutfitDialog`
+    /// @0x5bd92).
+    pub(crate) fn asking(template: Result<DialogTemplate, String>) -> Self {
+        Self {
+            requested: true,
+            wait: None,
+            ..Self::waiting(template, Duration::ZERO)
+        }
+    }
+
+    /// Whether the venue has asked for an offer since this was last taken.
+    pub(crate) fn take_request(&mut self) -> bool {
+        std::mem::take(&mut self.requested)
+    }
+
+    /// Opens the offer dialog on `prompt`, its text measured by `metrics`
+    /// and its buttons drawn in `style`.
+    pub(crate) fn open(
+        &mut self,
+        prompt: OfferPrompt,
+        metrics: Rc<dyn TextMetrics>,
+        style: ButtonStyle,
+    ) {
+        let layout = self.template.clone().map(|template| (template, metrics));
+        self.dialog = Some(OfferDialog::new(layout, prompt, style));
+    }
+
+    /// The offer dialog, while it is open.
+    pub(crate) fn dialog(&self) -> Option<&OfferDialog> {
+        self.dialog.as_ref()
+    }
+
+    /// The offer answered since this was last taken, and the choice made,
+    /// once.
+    pub(crate) fn take_choice(&mut self) -> Option<(MissionId, OfferChoice)> {
+        self.choice.take()
+    }
+
+    /// Asks for the next offer after `gap`.
+    pub(crate) fn rearm(&mut self, gap: Duration) {
+        self.wait = Some(gap);
+    }
+
+    /// Gives `input` to the offer dialog, if it is open, adding its sounds
+    /// to `sounds`; answered, it closes. Whether it took the input.
+    pub(crate) fn input(&mut self, input: &Input, sounds: &mut Vec<Sound>) -> bool {
+        let Some(dialog) = &mut self.dialog else {
+            return false;
+        };
+        dialog.input(input);
+        sounds.extend(dialog.take_sounds());
+        if let Some(choice) = dialog.take_choice() {
+            self.choice = Some((dialog.prompt().mission, choice));
+            self.dialog = None;
+        }
+        true
+    }
+
+    /// The wait for the next offer runs down while no offer is open; once
+    /// it is out the venue asks.
+    pub(crate) fn tick(&mut self, dt: Duration) {
+        if self.dialog.is_some() {
+            return;
+        }
+        if let Some(wait) = &mut self.wait {
+            *wait = wait.saturating_sub(dt);
+            if wait.is_zero() {
+                self.wait = None;
+                self.requested = true;
+            }
+        }
+    }
+
+    /// Draws the offer dialog, if it is open.
+    pub(crate) fn draw(&self, list: &mut DrawList) {
+        if let Some(dialog) = &self.dialog {
+            dialog.draw(list);
+        }
+    }
+
+    /// Cancels the offer dialog's pointer, if it is open: whether it was.
+    pub(crate) fn cancel_pointer(&mut self) -> bool {
+        self.dialog
+            .as_mut()
+            .map(OfferDialog::cancel_pointer)
+            .is_some()
+    }
+}
+
+/// An offer dialog's template and prompt, for the venues' tests.
+#[cfg(test)]
+pub(crate) mod fixture {
+    use nova_sim::mission::OfferLabels;
+    use nova_sim::{MissionId, OfferPrompt};
+
+    use crate::geometry::{Bounds, Point};
+    use crate::ui::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
+
+    /// The offer dialog's shape, smaller: 300 x 200, fixed at (0, 0), with
+    /// accept (1), refuse (2), the text (3) and the one button (6).
+    pub(crate) fn template() -> DialogTemplate {
+        let rect = |x, y, w, h| Bounds::at(Point::new(x, y), w, h);
+        let mut items: Vec<ItemTemplate> = (0..6)
+            .map(|_| ItemTemplate {
+                bounds: rect(0.0, 300.0, 1.0, 1.0),
+                enabled: false,
+                kind: ItemSpec::User,
+            })
+            .collect();
+        items[0].bounds = rect(200.0, 170.0, 90.0, 25.0);
+        items[1].bounds = rect(100.0, 170.0, 90.0, 25.0);
+        items[2].bounds = rect(10.0, 10.0, 280.0, 150.0);
+        items[5].bounds = rect(150.0, 170.0, 90.0, 25.0);
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 300.0, 200.0),
+            placement: Placement::Fixed,
+            items,
+        }
+    }
+
+    /// Mission 141's offer, to Mars, "I'm in" or "No".
+    pub(crate) fn prompt() -> OfferPrompt {
+        OfferPrompt {
+            mission: MissionId(141),
+            text: "Ferry this to Mars.".to_owned(),
+            labels: OfferLabels {
+                accept: "I'm in".to_owned(),
+                refuse: Some("No".to_owned()),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use nova_sim::MissionId;
     use nova_sim::mission::OfferLabels;
 
     use super::*;
@@ -548,5 +716,128 @@ mod tests {
         click_item(&mut dialog, ACCEPT_ITEM);
         assert_eq!(dialog.take_sounds(), [DOWN, UP]);
         assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+    }
+
+    // A venue's offers.
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    fn opened(offers: &mut VenueOffers) {
+        offers.open(
+            prompt("I'm in", Some("No thanks")),
+            Rc::new(MonoMetrics),
+            ButtonStyle::STOCK,
+        );
+    }
+
+    #[test]
+    fn waiting_offers_ask_once_after_their_first_wait() {
+        let mut offers = VenueOffers::waiting(Ok(template()), ms(250));
+        assert!(!offers.take_request(), "not before any tick");
+        offers.tick(ms(249));
+        assert!(!offers.take_request());
+        offers.tick(ms(1));
+        assert!(offers.take_request());
+        assert!(!offers.take_request(), "once");
+        offers.tick(ms(10_000));
+        assert!(!offers.take_request(), "not again until rearmed");
+    }
+
+    #[test]
+    fn asking_offers_ask_before_any_tick_and_only_once() {
+        let mut offers = VenueOffers::asking(Ok(template()));
+        assert!(offers.take_request());
+        assert!(!offers.take_request());
+        offers.tick(ms(10_000));
+        assert!(!offers.take_request());
+    }
+
+    #[test]
+    fn the_wait_does_not_run_down_while_an_offer_is_open() {
+        let mut offers = VenueOffers::waiting(Ok(template()), ms(100));
+        opened(&mut offers);
+        assert!(offers.dialog().is_some());
+        offers.tick(ms(500));
+        assert!(!offers.take_request(), "paused under the offer");
+        offers.input(&key(Key::Enter), &mut Vec::new());
+        offers.tick(ms(99));
+        assert!(!offers.take_request());
+        offers.tick(ms(1));
+        assert!(offers.take_request());
+    }
+
+    #[test]
+    fn after_a_rearm_they_ask_again_after_the_gap() {
+        let mut offers = VenueOffers::asking(Ok(template()));
+        assert!(offers.take_request());
+        offers.rearm(ms(600));
+        offers.tick(ms(599));
+        assert!(!offers.take_request());
+        offers.tick(ms(1));
+        assert!(offers.take_request());
+    }
+
+    #[test]
+    fn an_open_offer_takes_the_input_and_its_choice_is_taken_once() {
+        let mut offers = VenueOffers::asking(Ok(template()));
+        let mut sounds = Vec::new();
+        assert!(
+            !offers.input(&key(Key::Enter), &mut sounds),
+            "nothing open takes nothing"
+        );
+        opened(&mut offers);
+        assert!(offers.input(&key(Key::Char('x')), &mut sounds));
+        assert!(offers.dialog().is_some(), "x chooses nothing");
+        assert!(offers.input(&key(Key::Char('n')), &mut sounds));
+        assert!(offers.dialog().is_none(), "answered, it closes");
+        assert_eq!(
+            offers.take_choice(),
+            Some((MissionId(141), OfferChoice::Refuse))
+        );
+        assert_eq!(offers.take_choice(), None, "once");
+        assert!(!offers.input(&key(Key::Enter), &mut sounds));
+    }
+
+    #[test]
+    fn an_open_offers_sounds_pointer_and_drawing_go_through_them() {
+        let mut offers = VenueOffers::asking(Ok(template()));
+        let mut list = DrawList::new();
+        offers.draw(&mut list);
+        assert!(list.iter().next().is_none(), "nothing open draws nothing");
+        assert!(!offers.cancel_pointer());
+        opened(&mut offers);
+        let mut list = DrawList::new();
+        offers.draw(&mut list);
+        let commands: Vec<DrawCommand> = list.iter().cloned().collect();
+        assert_eq!(commands, drawn(offers.dialog().expect("open")));
+        let at = offers
+            .dialog()
+            .and_then(OfferDialog::dialog)
+            .and_then(|laid| laid.item_bounds(ACCEPT_ITEM))
+            .expect("accept")
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        let mut sounds = Vec::new();
+        offers.input(&button(true), &mut sounds);
+        assert!(offers.cancel_pointer());
+        offers.input(&button(false), &mut sounds);
+        assert_eq!(offers.take_choice(), None, "abandoned");
+        assert_eq!(sounds, [DOWN]);
+    }
+
+    #[test]
+    fn without_a_template_the_offer_says_why() {
+        let mut offers = VenueOffers::asking(Err("no DLOG 1016".to_owned()));
+        opened(&mut offers);
+        assert_eq!(
+            offers.dialog().and_then(OfferDialog::problem),
+            Some("no DLOG 1016")
+        );
     }
 }

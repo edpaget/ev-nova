@@ -46,7 +46,7 @@ use nova_sim::{HireList, MissionId, OfferPrompt, ShipId};
 use super::catalog::StellarId;
 use super::hire::HireScreen;
 use super::layout::LEAVE_LABEL;
-use super::offer::{OfferChoice, OfferDialog};
+use super::offer::{OfferChoice, OfferDialog, VenueOffers};
 use super::shipyard::ShipyardCatalog;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -150,22 +150,6 @@ struct Laid {
     said: Option<&'static str>,
 }
 
-/// The bar's mission offers: the offer dialog's template (or why there is
-/// none), the wait before the next ask, and the offer open.
-#[derive(Clone, Debug)]
-struct Offering {
-    template: Result<DialogTemplate, String>,
-    /// How long until the bar asks for an offer: none while it waits to be
-    /// rearmed.
-    wait: Option<Duration>,
-    /// Whether the bar has asked since this was last taken.
-    requested: bool,
-    /// The offer dialog, while it is open.
-    dialog: Option<OfferDialog>,
-    /// The offer answered and its choice, until it is taken.
-    choice: Option<(MissionId, OfferChoice)>,
-}
-
 /// What the bar has asked whoever holds the session for.
 #[derive(Clone, Copy, Debug, Default)]
 struct Asks {
@@ -187,7 +171,7 @@ pub struct BarScreen {
     /// The hire screen, while it is open.
     hire: Option<HireScreen>,
     /// The mission offers, once given.
-    offering: Option<Offering>,
+    offering: Option<VenueOffers>,
     /// What the bar has asked for since each was last taken.
     asks: Asks,
     closed: bool,
@@ -266,13 +250,7 @@ impl BarScreen {
     #[must_use]
     pub fn with_offers(self, template: Result<DialogTemplate, String>) -> Self {
         Self {
-            offering: Some(Offering {
-                template,
-                wait: Some(FIRST_OFFER_DELAY),
-                requested: false,
-                dialog: None,
-                choice: None,
-            }),
+            offering: Some(VenueOffers::waiting(template, FIRST_OFFER_DELAY)),
             ..self
         }
     }
@@ -284,7 +262,7 @@ impl BarScreen {
     pub fn take_offer_request(&mut self) -> bool {
         self.offering
             .as_mut()
-            .is_some_and(|offering| std::mem::take(&mut offering.requested))
+            .is_some_and(VenueOffers::take_request)
     }
 
     /// Opens the offer dialog over the bar on `prompt`.
@@ -292,29 +270,25 @@ impl BarScreen {
         let (Ok(laid), Some(offering)) = (&self.laid, &mut self.offering) else {
             return;
         };
-        let layout = offering
-            .template
-            .clone()
-            .map(|template| (template, Rc::clone(&laid.metrics.0)));
-        offering.dialog = Some(OfferDialog::new(layout, prompt, self.style));
+        offering.open(prompt, Rc::clone(&laid.metrics.0), self.style);
     }
 
     /// The offer dialog, while it is open.
     #[must_use]
     pub fn offer_dialog(&self) -> Option<&OfferDialog> {
-        self.offering.as_ref()?.dialog.as_ref()
+        self.offering.as_ref()?.dialog()
     }
 
     /// The offer answered since this was last taken, and the choice made,
     /// once.
     pub fn take_offer_choice(&mut self) -> Option<(MissionId, OfferChoice)> {
-        self.offering.as_mut()?.choice.take()
+        self.offering.as_mut()?.take_choice()
     }
 
     /// Asks for the next offer after `gap`.
     pub fn rearm(&mut self, gap: Duration) {
         if let Some(offering) = &mut self.offering {
-            offering.wait = Some(gap);
+            offering.rearm(gap);
         }
     }
 
@@ -431,14 +405,8 @@ impl Screen for BarScreen {
     /// every input goes to the bar. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if let Some(offering) = &mut self.offering
-            && let Some(dialog) = &mut offering.dialog
+            && offering.input(input, &mut self.sounds)
         {
-            dialog.input(input);
-            self.sounds.extend(dialog.take_sounds());
-            if let Some(choice) = dialog.take_choice() {
-                offering.choice = Some((dialog.prompt().mission, choice));
-                offering.dialog = None;
-            }
             return ScreenAction::None;
         }
         if let Some(hire) = &mut self.hire {
@@ -491,18 +459,10 @@ impl Screen for BarScreen {
     /// The wait for the next offer runs down, while neither the hire
     /// screen nor an offer is open; once it is out the bar asks.
     fn tick(&mut self, dt: Duration) {
-        let Some(offering) = &mut self.offering else {
-            return;
-        };
-        if self.hire.is_some() || offering.dialog.is_some() {
-            return;
-        }
-        if let Some(wait) = &mut offering.wait {
-            *wait = wait.saturating_sub(dt);
-            if wait.is_zero() {
-                offering.wait = None;
-                offering.requested = true;
-            }
+        if let Some(offering) = &mut self.offering
+            && self.hire.is_none()
+        {
+            offering.tick(dt);
         }
     }
 
@@ -525,19 +485,20 @@ impl Screen for BarScreen {
         if let Some(hire) = &self.hire {
             hire.draw(list);
         }
-        if let Some(dialog) = self.offer_dialog() {
-            dialog.draw(list);
+        if let Some(offering) = &self.offering {
+            offering.draw(list);
         }
     }
 
     fn cancel_pointer(&mut self) {
-        if let Some(dialog) = self
+        if self
             .offering
             .as_mut()
-            .and_then(|offering| offering.dialog.as_mut())
+            .is_some_and(VenueOffers::cancel_pointer)
         {
-            dialog.cancel_pointer();
-        } else if let Some(hire) = &mut self.hire {
+            return;
+        }
+        if let Some(hire) = &mut self.hire {
             hire.cancel_pointer();
         } else if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
