@@ -110,7 +110,7 @@ const COMMODITIES: u16 = 6;
 const NO_TONS: i16 = -1;
 
 /// `today` plus `days` days.
-fn after(today: GameDate, days: i16) -> GameDate {
+pub(super) fn after(today: GameDate, days: i16) -> GameDate {
     (0..days).fold(today, |date, _| date.next_day())
 }
 

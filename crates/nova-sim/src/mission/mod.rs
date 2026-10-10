@@ -116,6 +116,7 @@
 //! for a random cargo and a `below(|q|)` for a ranged quantity. The
 //! engine keeps no other draw of the original's.
 
+pub mod active;
 pub mod offer;
 pub mod select;
 
@@ -126,6 +127,12 @@ use crate::rulebook::Rulebook;
 use crate::rules::{Check, Checks, Context};
 use crate::wares;
 
+pub use self::active::{
+    AbortFacts, AbortRefusal, AcceptFacts, AcceptRefusal, ActiveMission, ActiveMissions, Among,
+    FailedBy, PayEffect, SLOTS, abort_checks, abort_penalty, accept_charge, accept_checks,
+    auto_aborts_at_accept, failure_records, fined, goals_met_at_accept, pay_effect,
+    success_records,
+};
 pub use self::offer::{Offer, Offers, ROLLED, RollTable, Stop, resolve};
 pub use self::select::{Kind, Stellar, StellarCode, World, select_stellar, stellars_of};
 

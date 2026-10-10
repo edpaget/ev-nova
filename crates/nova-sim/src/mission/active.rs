@@ -1,0 +1,903 @@
+//! The missions accepted: the 16 slots they are held in
+//! ([`ActiveMissions`], [`ActiveMission`]), the checks an accept and an
+//! abort make ([`accept_checks`], [`abort_checks`]), and the pure rules a
+//! mission's end reads: its pay ([`pay_effect`]) and the legal records it
+//! changes ([`success_records`], [`failure_records`], [`abort_penalty`]).
+//! See the [module docs](super)' "Active missions" for the original's
+//! order, and the [`story`](crate::story) module's "Mission lifecycle" for
+//! the events that move a mission.
+
+use crate::catalog::{GovtId, MissionId, MissionRecord};
+use crate::date::GameDate;
+use crate::govt::Governments;
+use crate::legal::RECORD_LIMIT;
+use crate::rulebook::Rulebook;
+use crate::rules::{Check, Checks, Context};
+
+use super::offer::{Offer, Stop, after};
+
+/// How many missions can be active at once: the original's slots
+/// (`_currentMissions`, 0x184688).
+pub const SLOTS: usize = 16;
+
+/// `Flags`: ends at once, aborted, when nothing is left to do
+/// (`_DoMissionAccept` @0xa215a, `_MissionObjectivesCheck` @0x9ed7a).
+pub const AUTO_ABORT: u16 = 0x0001;
+/// `Flags`: an auto-abort takes a jump's fuel (`_AutoAbortMission`
+/// @0x99cc4).
+pub const AUTO_ABORT_FUEL: u16 = 0x0008;
+/// `Flags`: the player's abort costs 5 × `CompReward` with `CompGovt`
+/// (`_DoMissionInfoDialog` @0x9e58d).
+pub const ABORT_PENALTY: u16 = 0x0040;
+/// `Flags2`: an auto-abort pays `PayVal` (`_AutoAbortMission` @0x99cef).
+pub const AUTO_ABORT_PAYS: u16 = 0x0002;
+/// The fuel an auto-abort takes with [`AUTO_ABORT_FUEL`] (100.0
+/// @0xdd060).
+pub const AUTO_ABORT_FUEL_TAKEN: f32 = 100.0;
+
+/// `PayVal` below which the accept takes cash (`_DoMissionAccept`
+/// @0xa1da7-0xa1dee).
+const TAKES_CASH: i64 = -50_000;
+/// `ShipGoal`: none.
+const NO_GOAL: i16 = -1;
+
+/// How an active mission failed: what its return landing still runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailedBy {
+    /// Its deadline passed: `_QuickMissionFailure` (@0x99d1b) ran its
+    /// `OnFailure` already, and applied no legal record.
+    Deadline,
+    /// An `F` operator marked it (@0x1539f): nothing ran yet.
+    Operator,
+}
+
+/// A mission accepted into a slot, with its offer's values
+/// (`_LoadCurrentMissionData` @0xa0a38). The mission's own fields (its
+/// scripts, `CanAbort`, `CompGovt`, `CompReward`, `DatePostInc`, `Flags`)
+/// are read from its record when used.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActiveMission {
+    /// The mission.
+    pub mission: MissionId,
+    /// Where it goes: none for `TravelStel` -1.
+    pub destination: Option<Stop>,
+    /// Where it is completed: none when it has no return stellar.
+    pub return_to: Option<Stop>,
+    /// The commodity or `jünk` it carries, raw.
+    pub cargo_type: Option<i16>,
+    /// The tons it carries.
+    pub cargo_tons: i64,
+    /// Its pay, `PayVal` raw.
+    pub pay: i64,
+    /// The days left before its deadline: none without a `TimeLimit`. The
+    /// original's -32000 for "none" is never stored.
+    pub days_left: Option<u32>,
+    /// The last day it may be completed: the accept date plus its
+    /// `TimeLimit` (@0xa1cb4-0xa1d27).
+    pub deadline: Option<GameDate>,
+    /// Whether its destination has been reached (+1).
+    pub reached: bool,
+    /// Whether its ship goals are met (+2).
+    pub goals_met: bool,
+    /// Whether it failed, and how (+3).
+    pub failed: Option<FailedBy>,
+}
+
+impl ActiveMission {
+    /// `offer` of `record` accepted on `today`: its deadline counted from
+    /// today, not from the roll, its destination not yet reached, and its
+    /// goals met as [`goals_met_at_accept`] says.
+    #[must_use]
+    pub fn accepted(record: &MissionRecord, offer: &Offer, today: GameDate) -> Self {
+        let limit = (record.time_limit > 0).then_some(record.time_limit);
+        Self {
+            mission: offer.mission,
+            destination: offer.destination,
+            return_to: offer.return_to,
+            cargo_type: offer.cargo_type,
+            cargo_tons: offer.cargo_tons,
+            pay: offer.pay,
+            days_left: limit.and_then(|days| u32::try_from(days).ok()),
+            deadline: limit.map(|days| after(today, days)),
+            reached: false,
+            goals_met: goals_met_at_accept(record),
+            failed: None,
+        }
+    }
+}
+
+/// The 16 slots, each free or holding an active mission. A mission goes
+/// into the lowest free slot, and the slot names it: it is the record in
+/// its subscriptions' ids.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ActiveMissions {
+    slots: [Option<ActiveMission>; SLOTS],
+}
+
+impl ActiveMissions {
+    /// The lowest free slot, if any (`_DoMissionAccept`
+    /// @0xa1b32-0xa1b40).
+    #[must_use]
+    pub fn lowest_free(&self) -> Option<u8> {
+        self.slots
+            .iter()
+            .position(Option::is_none)
+            .and_then(|slot| u8::try_from(slot).ok())
+    }
+
+    /// Puts `mission` into the lowest free slot: which, or `None` when
+    /// every slot is taken, `mission` dropped.
+    pub fn fill(&mut self, mission: ActiveMission) -> Option<u8> {
+        let slot = self.lowest_free()?;
+        self.slots[usize::from(slot)] = Some(mission);
+        Some(slot)
+    }
+
+    /// Puts `mission` into `slot`, whatever it held, as a save restores
+    /// it: `false`, changing nothing, for a slot past the last.
+    pub fn put(&mut self, slot: u8, mission: ActiveMission) -> bool {
+        let Some(held) = self.slots.get_mut(usize::from(slot)) else {
+            return false;
+        };
+        *held = Some(mission);
+        true
+    }
+
+    /// The mission in `slot`, if any.
+    #[must_use]
+    pub fn get(&self, slot: u8) -> Option<&ActiveMission> {
+        self.slots.get(usize::from(slot))?.as_ref()
+    }
+
+    /// The mission in `slot`, if any, to change.
+    pub fn get_mut(&mut self, slot: u8) -> Option<&mut ActiveMission> {
+        self.slots.get_mut(usize::from(slot))?.as_mut()
+    }
+
+    /// Frees `slot`: the mission it held, if any.
+    pub fn free(&mut self, slot: u8) -> Option<ActiveMission> {
+        self.slots.get_mut(usize::from(slot))?.take()
+    }
+
+    /// Every mission held, in slot order, with its slot.
+    pub fn iter(&self) -> impl Iterator<Item = (u8, &ActiveMission)> {
+        (0..=u8::MAX)
+            .zip(&self.slots)
+            .filter_map(|(slot, held)| Some((slot, held.as_ref()?)))
+    }
+
+    /// The slots holding `mission`, in order.
+    #[must_use]
+    pub fn holding(&self, mission: MissionId) -> Vec<u8> {
+        self.iter()
+            .filter(|(_, active)| active.mission == mission)
+            .map(|(slot, _)| slot)
+            .collect()
+    }
+
+    /// Whether `slot` holds `mission`.
+    #[must_use]
+    pub fn holds(&self, slot: u8, mission: MissionId) -> bool {
+        self.get(slot)
+            .is_some_and(|active| active.mission == mission)
+    }
+
+    /// The missions held, in slot order, a mission held twice listed
+    /// twice.
+    #[must_use]
+    pub fn missions(&self) -> Vec<MissionId> {
+        self.iter().map(|(_, active)| active.mission).collect()
+    }
+}
+
+/// What the accept checks read: the slots, and the rule set.
+#[derive(Clone, Copy, Debug)]
+pub struct AcceptFacts<'a> {
+    /// The missions active.
+    pub active: &'a ActiveMissions,
+    /// The rule set.
+    pub rules: &'a Rulebook,
+}
+
+impl Context for AcceptFacts<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        self.rules
+    }
+}
+
+/// Why a mission is not accepted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AcceptRefusal {
+    /// All 16 slots are taken.
+    SlotsFull,
+}
+
+/// The checks an accept makes, in order (`_DoMissionAccept` @0xa1b11).
+/// Missions phase 5 adds the cargo holds, the cargo space and the berths
+/// (@0xa1b61-0xa1be5).
+#[must_use]
+pub fn accept_checks<'a>() -> Checks<AcceptFacts<'a>, AcceptRefusal> {
+    [Check::plain(
+        "slot free",
+        "_DoMissionAccept @0xa1b32-0xa1b40",
+        slot_free,
+    )]
+    .into()
+}
+
+fn slot_free(facts: &AcceptFacts) -> Result<(), AcceptRefusal> {
+    match facts.active.lowest_free() {
+        Some(_) => Ok(()),
+        None => Err(AcceptRefusal::SlotsFull),
+    }
+}
+
+/// What the abort checks read: the mission aborted, and the rule set.
+#[derive(Clone, Copy, Debug)]
+pub struct AbortFacts<'a> {
+    /// The mission.
+    pub mission: &'a MissionRecord,
+    /// The rule set.
+    pub rules: &'a Rulebook,
+}
+
+impl Context for AbortFacts<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        self.rules
+    }
+}
+
+/// Why the player cannot abort a mission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AbortRefusal {
+    /// Its `CanAbort` is 0.
+    CannotAbort,
+}
+
+/// The checks the player's abort makes, in order
+/// (`_DoMissionInfoDialog` @0x9e56d). `A` makes none.
+#[must_use]
+pub fn abort_checks<'a>() -> Checks<AbortFacts<'a>, AbortRefusal> {
+    [Check::plain(
+        "CanAbort",
+        "_DoMissionInfoDialog @0x9e583",
+        can_abort,
+    )]
+    .into()
+}
+
+fn can_abort(facts: &AbortFacts) -> Result<(), AbortRefusal> {
+    if facts.mission.can_abort == 0 {
+        Err(AbortRefusal::CannotAbort)
+    } else {
+        Ok(())
+    }
+}
+
+/// Whether `record`'s ship goals are met as it is accepted: with no
+/// ships (`ShipCount` 0 or below), or with no goal (`ShipGoal` -1)
+/// unless it auto-aborts (@0x9e82f-0x9e840, @0x9eb85).
+#[must_use]
+pub fn goals_met_at_accept(record: &MissionRecord) -> bool {
+    record.ships.count <= 0 || (record.ships.goal == NO_GOAL && record.flags & AUTO_ABORT == 0)
+}
+
+/// Whether accepting `record` into `active` aborts it at once
+/// (`_DoMissionAccept` @0xa2139-0xa217b): docked, with `Flags` 0x0001,
+/// its destination reached, and no return stellar nor ship.
+#[must_use]
+pub fn auto_aborts_at_accept(record: &MissionRecord, active: &ActiveMission, docked: bool) -> bool {
+    docked
+        && record.flags & AUTO_ABORT != 0
+        && active.reached
+        && active.return_to.is_none()
+        && record.ships.count == 0
+}
+
+/// The cash left after accepting a mission of `pay` with `cash`: a pay
+/// below -50000 takes `-50000 - pay`, leaving no less than none
+/// (`_DoMissionAccept` @0xa1da7-0xa1dee).
+#[must_use]
+pub fn accept_charge(pay: i64, cash: i64) -> i64 {
+    if pay < TAKES_CASH {
+        (cash + pay - TAKES_CASH).max(0)
+    } else {
+        cash
+    }
+}
+
+/// Whose negative records a cleaning pay sets to none, beside the
+/// government it names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Among {
+    /// That government's.
+    Govt,
+    /// Every government allied with it (`_GovtAllies`), itself included.
+    Allies,
+    /// Every government sharing a class with it (`_GovtSharedClass`),
+    /// itself included.
+    SharedClass,
+}
+
+impl Among {
+    /// Whether `govt` is among those of `of`, the governments as `govts`
+    /// say.
+    #[must_use]
+    pub fn takes(self, govt: GovtId, of: Option<GovtId>, govts: &Governments) -> bool {
+        match self {
+            Self::Govt => Some(govt) == of,
+            Self::Allies => govts.allies(Some(govt), of),
+            Self::SharedClass => govts.shared_class(Some(govt), of),
+        }
+    }
+}
+
+/// What a mission's pay does (`_ApplyMissionPay` @0x98326).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PayEffect {
+    /// Nothing.
+    Nothing,
+    /// The cash goes up by this much.
+    Cash(i64),
+    /// Every negative record with the governments `among` those of `of`
+    /// (none for an independent one, which keeps no record) goes to none.
+    Clean {
+        /// The government named: `gövt` index + 128.
+        of: Option<GovtId>,
+        /// Whose records, beside it.
+        among: Among,
+    },
+    /// The cash loses this percent of itself ([`fined`]).
+    Fine(u8),
+}
+
+/// The government a cleaning pay's index names: index + 128, none below
+/// 0.
+fn named(index: i64) -> Option<GovtId> {
+    let id = i16::try_from(index.checked_add(128)?).ok();
+    id.filter(|_| index >= 0).map(GovtId)
+}
+
+/// What a pay of `pay` does (`_ApplyMissionPay` @0x98326): above 0, cash;
+/// -19999 to -10000, the government of index `-pay - 10128`'s negative
+/// records cleaned; -29999 to -20000, its allies'; -39999 to -30000,
+/// those sharing a class with it; -40099 to -40001, a fine of
+/// `-pay - 40000` percent; anything else nothing (a pay below -50000 is
+/// taken at accept, [`accept_charge`]).
+#[must_use]
+pub fn pay_effect(pay: i64) -> PayEffect {
+    let clean = |base: i64, among| PayEffect::Clean {
+        of: named(-pay - base),
+        among,
+    };
+    match pay {
+        1.. => PayEffect::Cash(pay),
+        -19_999..=-10_000 => clean(10_128, Among::Govt),
+        -29_999..=-20_000 => clean(20_128, Among::Allies),
+        -39_999..=-30_000 => clean(30_128, Among::SharedClass),
+        -40_099..=-40_001 => {
+            u8::try_from(-pay - 40_000).map_or(PayEffect::Nothing, PayEffect::Fine)
+        }
+        _ => PayEffect::Nothing,
+    }
+}
+
+/// `cash` less `percent` percent of itself, worked in doubles and
+/// truncated as the original does: trunc(cash + cash × percent × -0.01)
+/// (@0x98471-0x98491; -0.01 @0xdd580).
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+pub fn fined(cash: i64, percent: u8) -> i64 {
+    let cash = cash as f64;
+    (cash + f64::from(percent) * -0.01 * cash).trunc() as i64
+}
+
+/// `record`, truncated and held within [`RECORD_LIMIT`].
+#[allow(clippy::cast_possible_truncation)]
+fn held(record: f64) -> i16 {
+    let limit = f64::from(RECORD_LIMIT);
+    record.trunc().clamp(-limit, limit) as i16
+}
+
+/// The records a mission's success sets, `legal` giving each one now
+/// (`_DoMissionSuccess` @0xa058e-0xa0672): with a `CompGovt`, its record
+/// plus `CompReward`; each other government an enemy of it, minus half,
+/// and each ally plus half, the record and the half summed and
+/// truncated. Each is held within [`RECORD_LIMIT`]; one unchanged is
+/// left out.
+#[must_use]
+pub fn success_records(
+    record: &MissionRecord,
+    govts: &Governments,
+    legal: impl Fn(GovtId) -> i16,
+) -> Vec<(GovtId, i16)> {
+    let Some(comp) = record.comp_govt else {
+        return Vec::new();
+    };
+    let reward = f64::from(record.comp_reward);
+    let own = std::iter::once((comp, reward));
+    let others = govts.ids().filter(|&id| id != comp).filter_map(|id| {
+        if govts.enemies(Some(id), Some(comp)) {
+            Some((id, -0.5 * reward))
+        } else if govts.allies(Some(id), Some(comp)) {
+            Some((id, 0.5 * reward))
+        } else {
+            None
+        }
+    });
+    changed(own.chain(others), legal)
+}
+
+/// The records a mission's failure sets, `legal` giving each one now
+/// (`_DoMissionFailure` @0xa02f9-0xa033a): with a `CompGovt`, its record
+/// less half the `CompReward`, toward none, held within
+/// [`RECORD_LIMIT`].
+#[must_use]
+pub fn failure_records(
+    record: &MissionRecord,
+    legal: impl Fn(GovtId) -> i16,
+) -> Vec<(GovtId, i16)> {
+    let changes = record
+        .comp_govt
+        .map(|comp| (comp, -f64::from(record.comp_reward / 2)));
+    changed(changes, legal)
+}
+
+/// The records the player's abort sets, `legal` giving each one now
+/// (`_DoMissionInfoDialog` @0x9e58d-0x9e5cf): with `Flags` 0x0040 and a
+/// `CompGovt`, its record less 5 × `CompReward`, held within
+/// [`RECORD_LIMIT`].
+#[must_use]
+pub fn abort_penalty(record: &MissionRecord, legal: impl Fn(GovtId) -> i16) -> Vec<(GovtId, i16)> {
+    let changes = record
+        .comp_govt
+        .filter(|_| record.flags & ABORT_PENALTY != 0)
+        .map(|comp| (comp, -5.0 * f64::from(record.comp_reward)));
+    changed(changes, legal)
+}
+
+/// Each government's record, `legal` giving it now, with its change
+/// added and held: those it changes.
+fn changed(
+    changes: impl IntoIterator<Item = (GovtId, f64)>,
+    legal: impl Fn(GovtId) -> i16,
+) -> Vec<(GovtId, i16)> {
+    changes
+        .into_iter()
+        .filter_map(|(govt, change)| {
+            let now = legal(govt);
+            let then = held(f64::from(now) + change);
+            (then != now).then_some((govt, then))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog::{GovtRecord, MissionShip, StellarId, SystemId};
+    use crate::chance::NeverFires;
+    use crate::rules::Verdict;
+    use crate::testkit::{govt, mission};
+
+    fn today() -> GameDate {
+        GameDate::new(1177, 6, 24).expect("a date")
+    }
+
+    fn stop(stellar: i16) -> Stop {
+        Stop {
+            stellar: StellarId(stellar),
+            system: Some(SystemId(130)),
+        }
+    }
+
+    /// An offer of mission `id` to 150 and back to 128, 7 tons of
+    /// commodity 2, paying 900.
+    fn offer(id: i16) -> Offer {
+        Offer {
+            mission: MissionId(id),
+            venue: super::super::Venue::Computer,
+            destination: Some(stop(150)),
+            return_to: Some(stop(128)),
+            cargo_type: Some(2),
+            cargo_tons: 7,
+            pay: 900,
+            deadline: None,
+        }
+    }
+
+    fn accepted(id: i16) -> ActiveMission {
+        ActiveMission::accepted(&mission(id), &offer(id), today())
+    }
+
+    #[test]
+    fn an_accepted_mission_holds_its_offers_values_and_a_deadline_from_today() {
+        let record = MissionRecord {
+            time_limit: 3,
+            ..mission(140)
+        };
+        let active = ActiveMission::accepted(&record, &offer(140), today());
+        assert_eq!(
+            active,
+            ActiveMission {
+                mission: MissionId(140),
+                destination: Some(stop(150)),
+                return_to: Some(stop(128)),
+                cargo_type: Some(2),
+                cargo_tons: 7,
+                pay: 900,
+                days_left: Some(3),
+                deadline: GameDate::new(1177, 6, 27),
+                reached: false,
+                goals_met: true,
+                failed: None,
+            }
+        );
+        for limit in [0, -1, i16::MIN] {
+            let record = MissionRecord {
+                time_limit: limit,
+                ..mission(140)
+            };
+            let active = ActiveMission::accepted(&record, &offer(140), today());
+            assert_eq!((active.days_left, active.deadline), (None, None), "{limit}");
+        }
+    }
+
+    #[test]
+    fn a_mission_goes_into_the_lowest_free_slot() {
+        let mut active = ActiveMissions::default();
+        assert_eq!(active.lowest_free(), Some(0));
+        for slot in 0..16 {
+            assert_eq!(active.fill(accepted(140 + slot)), Some(slot as u8));
+        }
+        assert_eq!(active.lowest_free(), None);
+        assert_eq!(active.fill(accepted(200)), None, "full");
+        assert_eq!(active.free(3).map(|m| m.mission), Some(MissionId(143)));
+        assert_eq!(active.free(3), None, "freed already");
+        assert_eq!(active.free(16), None, "no such slot");
+        assert_eq!(active.lowest_free(), Some(3));
+        assert_eq!(active.fill(accepted(200)), Some(3));
+        assert_eq!(active.get(3).map(|m| m.mission), Some(MissionId(200)));
+        assert_eq!(active.get(16), None);
+    }
+
+    #[test]
+    fn the_slots_list_in_order_and_find_a_mission_held() {
+        let mut active = ActiveMissions::default();
+        active.fill(accepted(140));
+        active.fill(accepted(141));
+        active.fill(accepted(140));
+        active.free(1);
+        assert!(active.put(15, accepted(141)));
+        assert!(!active.put(16, accepted(142)), "past the last");
+        assert_eq!(
+            active
+                .iter()
+                .map(|(slot, m)| (slot, m.mission.0))
+                .collect::<Vec<_>>(),
+            [(0, 140), (2, 140), (15, 141)]
+        );
+        assert_eq!(active.holding(MissionId(140)), [0, 2]);
+        assert_eq!(active.holding(MissionId(142)), Vec::<u8>::new());
+        assert_eq!(
+            active.missions(),
+            [MissionId(140), MissionId(140), MissionId(141)]
+        );
+        assert!(active.holds(15, MissionId(141)));
+        assert!(!active.holds(15, MissionId(140)));
+        assert!(!active.holds(1, MissionId(141)));
+        active.get_mut(2).expect("held").reached = true;
+        assert!(active.get(2).expect("held").reached);
+        assert!(active.get_mut(1).is_none());
+    }
+
+    #[test]
+    fn sixteen_missions_refuse_an_accept_as_slots_full() {
+        let rules = Rulebook::default();
+        let mut active = ActiveMissions::default();
+        for id in 0..16 {
+            let facts = AcceptFacts {
+                active: &active,
+                rules: &rules,
+            };
+            assert_eq!(
+                accept_checks().first_refusal(&facts, &mut NeverFires),
+                Ok(()),
+                "{id}"
+            );
+            active.fill(accepted(140 + id));
+        }
+        let facts = AcceptFacts {
+            active: &active,
+            rules: &rules,
+        };
+        let refusals: Vec<_> = accept_checks()
+            .all_refusals(&facts)
+            .into_iter()
+            .map(|(about, verdict)| (about.name(), verdict))
+            .collect();
+        assert_eq!(
+            refusals,
+            [("slot free", Verdict::Refuses(AcceptRefusal::SlotsFull))]
+        );
+    }
+
+    #[test]
+    fn can_abort_0_refuses_the_players_abort() {
+        let rules = Rulebook::default();
+        let refusals = |can_abort| {
+            let record = MissionRecord {
+                can_abort,
+                ..mission(140)
+            };
+            abort_checks()
+                .all_refusals(&AbortFacts {
+                    mission: &record,
+                    rules: &rules,
+                })
+                .into_iter()
+                .map(|(about, verdict)| (about.name(), verdict))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            refusals(0),
+            [("CanAbort", Verdict::Refuses(AbortRefusal::CannotAbort))]
+        );
+        assert_eq!(refusals(1), []);
+        assert_eq!(refusals(-1), [], "any but 0");
+    }
+
+    #[test]
+    fn goals_are_met_at_accept_with_no_ships_or_no_goal_unless_it_auto_aborts() {
+        let with = |count, goal, flags| MissionRecord {
+            ships: MissionShip { count, goal },
+            flags,
+            ..mission(140)
+        };
+        assert!(goals_met_at_accept(&with(0, 2, 0)), "no ships");
+        assert!(goals_met_at_accept(&with(-1, 2, AUTO_ABORT)), "below 0");
+        assert!(goals_met_at_accept(&with(2, -1, 0)), "no goal");
+        assert!(
+            !goals_met_at_accept(&with(2, -1, AUTO_ABORT)),
+            "auto-aborts"
+        );
+        assert!(!goals_met_at_accept(&with(1, 0, 0)), "a goal");
+    }
+
+    #[test]
+    fn an_accept_auto_aborts_only_when_every_condition_holds() {
+        let record = MissionRecord {
+            flags: AUTO_ABORT,
+            ..mission(140)
+        };
+        let done = ActiveMission {
+            reached: true,
+            return_to: None,
+            ..accepted(140)
+        };
+        assert!(auto_aborts_at_accept(&record, &done, true));
+        assert!(!auto_aborts_at_accept(&record, &done, false), "in flight");
+        let plain = MissionRecord {
+            flags: 0x0002,
+            ..record.clone()
+        };
+        assert!(!auto_aborts_at_accept(&plain, &done, true), "no 0x0001");
+        let unreached = ActiveMission {
+            reached: false,
+            ..done.clone()
+        };
+        assert!(
+            !auto_aborts_at_accept(&record, &unreached, true),
+            "not reached"
+        );
+        let returning = ActiveMission {
+            return_to: Some(stop(128)),
+            ..done.clone()
+        };
+        assert!(
+            !auto_aborts_at_accept(&record, &returning, true),
+            "a return"
+        );
+        for count in [1, -1] {
+            let shipped = MissionRecord {
+                ships: MissionShip { count, goal: -1 },
+                ..record.clone()
+            };
+            assert!(
+                !auto_aborts_at_accept(&shipped, &done, true),
+                "{count} ships"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pay_below_minus_50000_takes_cash_at_accept_down_to_none() {
+        assert_eq!(accept_charge(-50_100, 1000), 900);
+        assert_eq!(accept_charge(-50_100, 100), 0);
+        assert_eq!(accept_charge(-50_100, 50), 0, "floored at none");
+        assert_eq!(accept_charge(-50_100, -20), 0, "floored at none");
+        assert_eq!(accept_charge(-50_000, 1000), 1000, "not below");
+        assert_eq!(accept_charge(500, 1000), 1000);
+    }
+
+    #[test]
+    fn each_pay_range_has_its_effect_at_each_boundary() {
+        use Among::{Allies, Govt, SharedClass};
+        let clean = |of: Option<i16>, among| PayEffect::Clean {
+            of: of.map(GovtId),
+            among,
+        };
+        for (pay, effect) in [
+            (1, PayEffect::Cash(1)),
+            (0, PayEffect::Nothing),
+            (-9_999, PayEffect::Nothing),
+            (-10_000, clean(None, Govt)),
+            (-10_127, clean(None, Govt)),
+            (-10_128, clean(Some(128), Govt)),
+            (-19_999, clean(Some(9_999), Govt)),
+            (-20_000, clean(None, Allies)),
+            (-20_130, clean(Some(130), Allies)),
+            (-29_999, clean(Some(9_999), Allies)),
+            (-30_000, clean(None, SharedClass)),
+            (-30_129, clean(Some(129), SharedClass)),
+            (-39_999, clean(Some(9_999), SharedClass)),
+            (-40_000, PayEffect::Nothing),
+            (-40_001, PayEffect::Fine(1)),
+            (-40_099, PayEffect::Fine(99)),
+            (-40_100, PayEffect::Nothing),
+            (-50_100, PayEffect::Nothing),
+            (i64::MIN, PayEffect::Nothing),
+        ] {
+            assert_eq!(pay_effect(pay), effect, "{pay}");
+        }
+    }
+
+    #[test]
+    fn a_fine_takes_its_percent_truncating_the_sum() {
+        assert_eq!(fined(1000, 10), 900);
+        assert_eq!(fined(150, 1), 148, "150 - 1.5 = 148.5");
+        assert_eq!(fined(-150, 1), -148, "toward none");
+        assert_eq!(fined(0, 99), 0);
+        assert_eq!(fined(100, 99), 1);
+    }
+
+    /// The Federation (class 1, allied with 13, at war with 9); the
+    /// Civvies (class 13); the pirates (class 9); a neutral (class 4).
+    fn govts() -> Governments {
+        Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                allies: [13, -1, -1, -1],
+                enemies: [9, -1, -1, -1],
+                ..govt(128)
+            },
+            GovtRecord {
+                classes: [13, -1, -1, -1],
+                ..govt(129)
+            },
+            GovtRecord {
+                classes: [9, -1, -1, -1],
+                ..govt(130)
+            },
+            GovtRecord {
+                classes: [4, -1, -1, -1],
+                ..govt(131)
+            },
+        ])
+    }
+
+    fn rewarding(reward: i16, flags: u16) -> MissionRecord {
+        MissionRecord {
+            comp_govt: Some(GovtId(128)),
+            comp_reward: reward,
+            flags,
+            ..mission(140)
+        }
+    }
+
+    #[test]
+    fn among_takes_the_government_its_allies_or_its_class() {
+        let govts = govts();
+        let fed = Some(GovtId(128));
+        let takes = |among: Among, of, id| among.takes(GovtId(id), of, &govts);
+        assert!(takes(Among::Govt, fed, 128));
+        assert!(!takes(Among::Govt, fed, 129));
+        assert!(!takes(Among::Govt, None, 129), "independent keeps none");
+        assert!(takes(Among::Allies, fed, 128), "itself");
+        assert!(takes(Among::Allies, fed, 129));
+        assert!(!takes(Among::Allies, fed, 130));
+        assert!(!takes(Among::Allies, None, 129));
+        assert!(takes(Among::SharedClass, fed, 128));
+        assert!(!takes(Among::SharedClass, fed, 129));
+        assert!(!takes(Among::SharedClass, None, 129));
+    }
+
+    #[test]
+    fn a_success_rewards_the_government_and_half_to_its_allies_and_enemies() {
+        let govts = govts();
+        let records = |legal: [i16; 4]| {
+            success_records(&rewarding(5, 0), &govts, |govt| {
+                legal[usize::try_from(govt.0 - 128).expect("a govt")]
+            })
+        };
+        assert_eq!(
+            records([10, -3, 3, 7]),
+            [(GovtId(128), 15), (GovtId(129), 0), (GovtId(130), 0)],
+            "-3 + 2.5 truncates to 0, 3 - 2.5 to 0, and the neutral is left"
+        );
+        assert_eq!(
+            success_records(&rewarding(1, 0), &govts, |govt| if govt.0 == 130 {
+                3
+            } else {
+                0
+            }),
+            [(GovtId(128), 1), (GovtId(130), 2)],
+            "3 - 0.5 truncates to 2; 0 + 0.5 to 0, unchanged"
+        );
+        assert_eq!(
+            success_records(&rewarding(1, 0), &govts, |_| 32_000),
+            [(GovtId(130), 31_999)],
+            "held at the limit"
+        );
+        assert_eq!(
+            success_records(&rewarding(i16::MAX, 0), &govts, |_| -32_000),
+            [(GovtId(128), 767), (GovtId(129), -15_616)],
+            "no 16-bit wrap; the enemy held at the limit, unchanged"
+        );
+        let unrewarded = MissionRecord {
+            comp_govt: None,
+            ..rewarding(5, 0)
+        };
+        assert_eq!(success_records(&unrewarded, &govts, |_| 0), []);
+    }
+
+    #[test]
+    fn a_failure_takes_half_the_reward_toward_none() {
+        assert_eq!(
+            failure_records(&rewarding(5, 0), |_| 10),
+            [(GovtId(128), 8)]
+        );
+        assert_eq!(
+            failure_records(&rewarding(-5, 0), |_| 10),
+            [(GovtId(128), 12)]
+        );
+        assert_eq!(
+            failure_records(&rewarding(1, 0), |_| 10),
+            [],
+            "nothing taken"
+        );
+        assert_eq!(
+            failure_records(&rewarding(i16::MAX, 0), |_| -20_000),
+            [(GovtId(128), -32_000)],
+            "held at the limit"
+        );
+        let unrewarded = MissionRecord {
+            comp_govt: None,
+            ..rewarding(5, 0)
+        };
+        assert_eq!(failure_records(&unrewarded, |_| 10), []);
+    }
+
+    #[test]
+    fn an_abort_with_flag_0x0040_takes_five_times_the_reward() {
+        assert_eq!(
+            abort_penalty(&rewarding(5, ABORT_PENALTY), |_| 10),
+            [(GovtId(128), -15)]
+        );
+        assert_eq!(
+            abort_penalty(&rewarding(5, 0x0001), |_| 10),
+            [],
+            "no 0x0040"
+        );
+        assert_eq!(
+            abort_penalty(&rewarding(i16::MAX, ABORT_PENALTY), |_| 0),
+            [(GovtId(128), -32_000)],
+            "held at the limit"
+        );
+        let unrewarded = MissionRecord {
+            comp_govt: None,
+            ..rewarding(5, ABORT_PENALTY)
+        };
+        assert_eq!(abort_penalty(&unrewarded, |_| 10), []);
+    }
+}
