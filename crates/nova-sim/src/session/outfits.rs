@@ -88,9 +88,10 @@ fn add_one(pilot: &mut Pilot, outfit: OutfitId) {
 
 /// Whether `record` mounts the secondary `selected`: whether one of its
 /// mod slots is a weapon (`ModType` 1) whose `ModVal` names it, as the
-/// outfitter's sale checks once the outfit's count falls to 0
-/// (`_DoOutfitDialog` @0x5cf73-0x5cf8c). None selected is mounted by
-/// nothing.
+/// outfitter's sale checks by the engine once the outfit's count falls
+/// to 0 (`_DoOutfitDialog` @0x5cf73-0x5cf8c;
+/// [`RuleKey::SecondarySale`](crate::RuleKey::SecondarySale)). None
+/// selected is mounted by nothing.
 pub(super) fn launches(record: &OutfitRecord, selected: Option<WeaponId>) -> bool {
     selected.is_some_and(|weapon| {
         record
@@ -98,6 +99,20 @@ pub(super) fn launches(record: &OutfitRecord, selected: Option<WeaponId>) -> boo
             .iter()
             .any(|&(mod_type, mod_val)| mod_type == MOD_WEAPON && mod_val == weapon.0)
     })
+}
+
+/// Whether the ship carries the secondary `selected`: whether an outfit
+/// among `outfits` that `pilot` owns, at a count above 0, mounts it (see
+/// [`launches`]). This reads the outfits, not the armament, so it holds
+/// in the outfitter's sale before the refit. None selected is carried by
+/// nothing. The other readings of
+/// [`RuleKey::StaleSecondary`](crate::RuleKey::StaleSecondary) and
+/// [`RuleKey::SecondarySale`](crate::RuleKey::SecondarySale) let go of a
+/// selection not carried.
+pub(super) fn carries(pilot: &Pilot, outfits: &[OutfitRecord], selected: Option<WeaponId>) -> bool {
+    outfits
+        .iter()
+        .any(|record| pilot.owned(record.id) > 0 && launches(record, selected))
 }
 
 /// Takes one of `outfit` from `pilot`'s, if it owns any: whether it did.

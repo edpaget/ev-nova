@@ -80,6 +80,8 @@
 //! | [`TechLevel`](RuleKey::TechLevel) | `tech_level` | an outfit of `TechLevel` below 0 or exactly 32767, and a ship of one below 0, is never sold by tech (`_SetupPortAvailableItems` @0xbf88-0xbf9d, `_SetupPortAvailableShipTypes` @0xbc4f-0xbc52; [`wares::outfit_tech_allows`](crate::wares::outfit_tech_allows), [`wares::ship_tech_allows`](crate::wares::ship_tech_allows)); and `_CanBuyOutfitItem` tests an outfit's Buy apart: one of `TechLevel` -1 always passes, any other passes at or below the stellar's tech or by a slot, with no sign or 0x7fff test (@0x4e7ff-0x4e83d; [`wares::outfit_buy_tech_allows`](crate::wares::outfit_buy_tech_allows)) | any `TechLevel` at or below the stellar's, or equal to a slot, is sold, and can be bought, by that one test ([`wares::by_tech_level`](crate::wares::by_tech_level)) |
 //! | [`PurchaseCarry`](RuleKey::PurchaseCarry) | `purchase_carry` | a ship purchase keeps every persistent outfit (`Flags` 0x0004) whatever its `Max` and mass, sells none back, and adds the new class's default items on top (`_DoShipyardDialog` @0x5ee1b-0x5ee97; [`Session`](crate::Session)) | each is kept up to its `Max` and while the new ship's free mass holds it, by ascending ID, and the rest sold back at the outfitter's rate on the old ship's mass\*\*\*\*\* |
 //! | [`ShipInfoRounding`](RuleKey::ShipInfoRounding) | `ship_info_rounding` | the Shipyard Info panel reads `Speed` / 100 and `Accel` / 10000 back from the loader's single floats, so `Speed` 190 draws 189 and `Accel` 130 and 250 rate a step higher (`_LoadObjectData` @0x7a0b3-0x7a0ef, `_ShipDescDialogUpdate` @0x4fbf0-0x4fbfe, @0x4fc74-0x4fd05; [`ShipSpecs`](crate::ShipSpecs)) | `Speed` as recorded and `Accel` rated on whole numbers\* |
+//! | [`StaleSecondary`](RuleKey::StaleSecondary) | `stale_secondary` | a refit outside the shops (`G`, `D`, a script's change of ship, boarding) leaves the secondary selected as it is, one the ship no longer carries too: it is still named and fires nothing, as `_EvalSetExp` and `_SystemInfoToShipStats` never write it and `_DrawStatusWeap` draws it (@0x4c16c-0x4c1b9; [`Session`](crate::Session)) | a refit lets go of a secondary the ship no longer carries\* |
+//! | [`SecondarySale`](RuleKey::SecondarySale) | `secondary_sale` | the outfitter's sale lets go of the secondary selected when the sold outfit's own count falls to 0 and one of its `ModType` 1 slots names it, even with another outfit still mounting it (`_DoOutfitDialog` @0x5cf73-0x5cf8c, @0x5ce82; [`Session`](crate::Session)) | the sale lets it go when it leaves the ship not carrying it\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -87,7 +89,8 @@
 //! `remove_refund`, `refit_reserves`, `purchase_paint_order`,
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
 //! `ship_change_reserves`, `move_arrival`, `move_keep_flag`,
-//! `script_sound`, `ship_info_rounding` or `comm_quote`
+//! `script_sound`, `ship_info_rounding`, `stale_secondary`,
+//! `secondary_sale` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -954,6 +957,26 @@ rule_keys! {
     /// The Bible is silent here, so the other reading is the intended
     /// behaviour, not anything the Bible says.
     ShipInfoRounding => "ship_info_rounding",
+    /// What a refit does to the secondary selected when the ship no
+    /// longer carries it: no outfit the pilot owns, at a count above 0,
+    /// has a `ModType` 1 slot naming it. By the engine, nothing: it stays
+    /// named and fires nothing, as `_EvalSetExp` and
+    /// `_SystemInfoToShipStats` never write it (ship record +0x72) and
+    /// `_DrawStatusWeap` still draws it (@0x4c16c-0x4c1b9). Otherwise, it
+    /// is let go. The Bible is silent here, so the other reading is the
+    /// intended behaviour, not anything the Bible says (see
+    /// [`Session`](crate::Session)).
+    StaleSecondary => "stale_secondary",
+    /// When the outfitter's sale lets go of the secondary selected. By the
+    /// engine, when the sold outfit's own count falls to 0 and one of its
+    /// `ModType` 1 slots names it (`_DoOutfitDialog` @0x5cf73-0x5cf8c,
+    /// @0x5ce82), even while another outfit still mounts the weapon.
+    /// Otherwise, when the sale leaves the ship not carrying it. Under
+    /// both, the test is made after the sale and before `OnSell`. The
+    /// Bible is silent here, so the other reading is the intended
+    /// behaviour, not anything the Bible says (see
+    /// [`Session`](crate::Session)).
+    SecondarySale => "secondary_sale",
 }
 
 impl RuleKey {
@@ -1239,7 +1262,21 @@ mod tests {
             RuleKey::from_key("ship_info_rounding"),
             Some(RuleKey::ShipInfoRounding)
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::ShipInfoRounding));
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::SecondarySale));
+    }
+
+    #[test]
+    fn the_secondary_selection_rules_are_found_by_their_keys() {
+        assert_eq!(RuleKey::StaleSecondary.key(), "stale_secondary");
+        assert_eq!(
+            RuleKey::from_key("stale_secondary"),
+            Some(RuleKey::StaleSecondary)
+        );
+        assert_eq!(RuleKey::SecondarySale.key(), "secondary_sale");
+        assert_eq!(
+            RuleKey::from_key("secondary_sale"),
+            Some(RuleKey::SecondarySale)
+        );
     }
 
     #[test]
@@ -1313,7 +1350,9 @@ mod tests {
                 RuleKey::TradeDebt,
                 RuleKey::TechLevel,
                 RuleKey::PurchaseCarry,
-                RuleKey::ShipInfoRounding
+                RuleKey::ShipInfoRounding,
+                RuleKey::StaleSecondary,
+                RuleKey::SecondarySale
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");

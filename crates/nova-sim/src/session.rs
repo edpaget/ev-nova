@@ -280,10 +280,15 @@
 //! reload included; it is set by [`Session::select_secondary`] alone, and
 //! let go on a ship purchase (`_DoShipyardDialog` @0x5f01c), a capture as
 //! the player's ship (`_DoShipCapture` @0x4173e) and the outfitter's sale
-//! of the last outfit mounting it (`_DoOutfitDialog` @0x5ce82). Every
-//! other refit, `G`, `D`, a script's change of ship and boarding among
-//! them, leaves it as it is, one the ship no longer carries too: it is
-//! still named, and fires nothing. The target is let go once it starts breaking up, is
+//! of the last outfit mounting it (`_DoOutfitDialog` @0x5ce82), even
+//! while another outfit still mounts the weapon
+//! ([`RuleKey::SecondarySale`]). Every other refit, `G`, `D`, a script's
+//! change of ship and boarding among them, leaves it as it is, one the
+//! ship no longer carries too: it is still named, and fires nothing
+//! ([`RuleKey::StaleSecondary`]). The ship carries a weapon while an
+//! outfit the pilot owns mounts it; by the other readings of those keys,
+//! a refit and the sale let go of a selection the ship no longer
+//! carries, and keep it otherwise. The target is let go once it starts breaking up, is
 //! destroyed, lands or jumps out, when the system is populated afresh,
 //! and when the player lands; it is kept through a jump, and gone on
 //! arrival with the last system's traffic. Neither the target nor the
@@ -321,7 +326,7 @@ use std::rc::Rc;
 
 use self::entry::{Arrival, Entry, NextSites, Placement, ShipPlacement};
 use self::hooks::ShipHook;
-use self::outfits::launches;
+use self::outfits::{carries, launches};
 use self::ship_change::ClassChange;
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::bay::FighterNote;
@@ -542,7 +547,8 @@ pub struct Session {
     target: Option<NpcId>,
     /// The secondary weapon the player has selected, if any: none to
     /// start with, set by the select key alone, and let go as the module
-    /// docs say. It may name a weapon the ship no longer carries.
+    /// docs say. By the engine it may name a weapon the ship no longer
+    /// carries ([`RuleKey::StaleSecondary`]).
     secondary: Option<WeaponId>,
     /// The fight's strikes since the last traffic tick, for the NPCs to
     /// answer.
@@ -887,9 +893,11 @@ impl Session {
     /// reads [`RuleKey::ShipChangeReserves`] (see
     /// [`ReservePolicy::reading`]). Capture, a change of ship and a
     /// purchase refit through [`Session::become_class`], by the policy
-    /// they chose. A refit leaves the secondary selected as it is, one the
-    /// ship no longer carries too, as the original's
-    /// `_SystemInfoToShipStats` never writes it (see the module docs).
+    /// they chose. By the engine, a refit leaves the secondary selected as
+    /// it is, one the ship no longer carries too, as the original's
+    /// `_SystemInfoToShipStats` never writes it; by the other reading of
+    /// [`RuleKey::StaleSecondary`], it lets go of one the ship no longer
+    /// carries (see the module docs).
     fn refit(&mut self, gain: bool, reserves: ReservePolicy) {
         let hold = reserves == ReservePolicy::Hold;
         self.hull = self.arsenal.hull(self.pilot.ship);
@@ -904,6 +912,11 @@ impl Session {
             refit(gauge, max, gain, hold);
         }
         self.stats = stats;
+        if self.rules.source_for(RuleKey::StaleSecondary) == RuleSource::Bible
+            && !carries(&self.pilot, &self.outfits, self.secondary)
+        {
+            self.secondary = None;
+        }
     }
 
     /// Advances the session one tick under the player's `controls`, ramps
@@ -1158,9 +1171,10 @@ impl Session {
     /// The secondary weapon selected, if any: none when the session
     /// starts, set by [`select_secondary`](Self::select_secondary) alone,
     /// and let go on a ship purchase, a capture as the player's ship and
-    /// the sale of the last outfit mounting it (see the module docs). It
-    /// may name a weapon the ship no longer carries, which fires nothing,
-    /// as the original's `_DrawStatusWeap` still names it (@0x4c16c).
+    /// the sale of the last outfit mounting it (see the module docs). By
+    /// the engine it may name a weapon the ship no longer carries, which
+    /// fires nothing, as the original's `_DrawStatusWeap` still names it
+    /// (@0x4c16c; [`RuleKey::StaleSecondary`]).
     #[must_use]
     pub fn secondary(&self) -> Option<WeaponId> {
         self.secondary
@@ -2395,10 +2409,12 @@ impl Session {
     /// pass refused silently leaves an earlier pass's alert in place. The
     /// outfitter has the row of `also` even when it is not listed: the
     /// outfit a relisting selects (see
-    /// [`outfit_order`](Self::outfit_order)). A sale that leaves none of
-    /// an outfit mounting the secondary selected lets it go, before
-    /// `OnSell` runs (`_DoOutfitDialog` @0x5cf73-0x5cf8c, @0x5ce82, before
-    /// @0x5cff6).
+    /// [`outfit_order`](Self::outfit_order)). By the engine, a sale that
+    /// leaves none of an outfit mounting the secondary selected lets it
+    /// go, before `OnSell` runs (`_DoOutfitDialog` @0x5cf73-0x5cf8c,
+    /// @0x5ce82, before @0x5cff6); by the other reading of
+    /// [`RuleKey::SecondarySale`], a sale that leaves the ship not
+    /// carrying it does, at the same point.
     fn outfit_pass(
         &mut self,
         order: OutfitOrder,
@@ -2438,9 +2454,16 @@ impl Session {
                 }
             }
             Direction::Sell => {
-                // The last of an outfit mounting the secondary selected lets
-                // it go, before `OnSell` runs (see [`launches`]).
-                if self.pilot.owned(record.id) == 0 && launches(&record, self.secondary) {
+                // The sale lets go of the secondary selected, before
+                // `OnSell` runs, as `SecondarySale` reads (see [`launches`]
+                // and [`carries`]).
+                let let_go = match self.rules.source_for(RuleKey::SecondarySale) {
+                    RuleSource::Engine => {
+                        self.pilot.owned(record.id) == 0 && launches(&record, self.secondary)
+                    }
+                    RuleSource::Bible => !carries(&self.pilot, &self.outfits, self.secondary),
+                };
+                if let_go {
                     self.secondary = None;
                 }
                 self.run_script(&record.on_sell, chance);
@@ -12346,6 +12369,242 @@ mod tests {
         assert_eq!(session.ship(), NEW);
         assert_eq!(session.pilot().owned(OutfitId(312)), 0, "not carried");
         assert_eq!(session.secondary(), Some(ROCKET), "still named");
+    }
+
+    /// The rule set reading the secondary selection's `rule` by `source`,
+    /// every other rule by the engine.
+    fn secondary_rules(rule: RuleKey, source: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(rule, source)
+    }
+
+    /// [`with_secondaries`] over `catalog`, with outfit 315 mounting the
+    /// rockets too.
+    fn with_two_rocket_outfits(catalog: FakePilotCatalog) -> FakePilotCatalog {
+        let mut catalog = with_secondaries(catalog);
+        catalog.outfits.push(outfit(315, &[(MOD_WEAPON, 140)]));
+        catalog
+    }
+
+    #[test]
+    fn d_of_the_selected_weapons_last_launcher_by_each_reading() {
+        let armed = with_two_rocket_outfits(catalog());
+        for (source, last) in [
+            (RuleSource::Engine, Some(ROCKET)),
+            (RuleSource::Bible, None),
+        ] {
+            let rules = secondary_rules(RuleKey::StaleSecondary, source);
+            let run = |nth: usize, scripts: &[&str]| {
+                let mut session = Session::start(&armed).expect("starts").with_rules(rules);
+                assert_eq!(session.pilot().owned(OutfitId(312)), 1, "stock");
+                assert_eq!(session.pilot().owned(OutfitId(315)), 0);
+                selecting(&mut session, nth);
+                for script in scripts {
+                    scripted(&mut session, script);
+                }
+                session.secondary()
+            };
+            assert_eq!(run(1, &["D312"]), last, "{source:?}: the last launcher");
+            assert_eq!(
+                run(1, &["G312", "D312"]),
+                Some(ROCKET),
+                "{source:?}: one of two left"
+            );
+            assert_eq!(
+                run(1, &["G315", "D312"]),
+                Some(ROCKET),
+                "{source:?}: 315 still carries it"
+            );
+            assert_eq!(
+                run(1, &["D310"]),
+                Some(ROCKET),
+                "{source:?}: its ammunition mounts nothing"
+            );
+            assert_eq!(
+                run(2, &["D312"]),
+                Some(MISSILE),
+                "{source:?}: another secondary"
+            );
+            assert_eq!(run(0, &["G312"]), None, "{source:?}: G selects nothing");
+            assert_eq!(run(1, &["G312"]), Some(ROCKET), "{source:?}: G keeps it");
+        }
+    }
+
+    #[test]
+    fn a_change_of_ship_by_script_by_each_reading() {
+        let catalog = with_secondaries(shipbuying());
+        let mut persistent = with_secondaries(shipbuying());
+        for record in &mut persistent.outfits {
+            if record.id == OutfitId(312) {
+                record.flags = OutfitFlags::PERSISTENT;
+            }
+        }
+        for (source, stripped) in [
+            (RuleSource::Engine, Some(ROCKET)),
+            (RuleSource::Bible, None),
+        ] {
+            let rules = secondary_rules(RuleKey::StaleSecondary, source);
+            let run = |catalog: &FakePilotCatalog, nth: usize, script: &str| {
+                let mut session = outfitted(catalog).with_rules(rules);
+                selecting(&mut session, nth);
+                scripted(&mut session, script);
+                assert_eq!(session.ship(), NEW);
+                (session.pilot().owned(OutfitId(312)), session.secondary())
+            };
+            assert_eq!(
+                run(&catalog, 1, "C129"),
+                (1, Some(ROCKET)),
+                "{source:?}: C keeps every outfit"
+            );
+            assert_eq!(
+                run(&catalog, 1, "E129"),
+                (1, Some(ROCKET)),
+                "{source:?}: E keeps every outfit"
+            );
+            assert_eq!(
+                run(&catalog, 1, "H129"),
+                (0, stripped),
+                "{source:?}: H strips the launcher"
+            );
+            assert_eq!(
+                run(&catalog, 3, "H129").1,
+                Some(TORCH),
+                "{source:?}: ship 129 stocks the torch"
+            );
+            assert_eq!(
+                run(&persistent, 1, "H129"),
+                (1, Some(ROCKET)),
+                "{source:?}: a persistent launcher is kept"
+            );
+        }
+    }
+
+    #[test]
+    fn selling_one_of_two_outfits_mounting_the_selected_weapon_by_each_reading() {
+        let catalog = with_two_rocket_outfits(outfitting());
+        for (source, kept) in [
+            (RuleSource::Engine, None),
+            (RuleSource::Bible, Some(ROCKET)),
+        ] {
+            let mut session = selling_from(&catalog, &[(312, 1), (315, 1)], 1)
+                .with_rules(secondary_rules(RuleKey::SecondarySale, source));
+            assert_eq!(session.secondary(), Some(ROCKET));
+            session
+                .outfit(sell(OutfitId(312)), &mut NeverFires)
+                .expect("sold");
+            assert_eq!(session.secondary(), kept, "{source:?}");
+        }
+        let mut session = selling_from(&catalog, &[(312, 1), (315, 1)], 1)
+            .with_rules(secondary_rules(RuleKey::SecondarySale, RuleSource::Bible));
+        for outfit in [312, 315] {
+            session
+                .outfit(sell(OutfitId(outfit)), &mut NeverFires)
+                .expect("sold");
+        }
+        assert_eq!(session.secondary(), None, "neither left");
+    }
+
+    #[test]
+    fn selling_the_last_launcher_by_the_other_reading() {
+        let catalog = with_two_rocket_outfits(outfitting());
+        let rules = secondary_rules(RuleKey::SecondarySale, RuleSource::Bible);
+        let rockets = OutfitId(312);
+        let from = |catalog: &FakePilotCatalog, outfits: &[(i16, u16)]| {
+            selling_from(catalog, outfits, 1).with_rules(rules)
+        };
+        let mut session = from(&catalog, &[(312, 2), (313, 1)]);
+        session
+            .outfit(sell(rockets), &mut NeverFires)
+            .expect("sold");
+        assert_eq!(session.secondary(), Some(ROCKET), "one left");
+        session
+            .outfit(sell(rockets), &mut NeverFires)
+            .expect("sold");
+        assert_eq!(session.secondary(), None, "none left");
+        let mut other = from(&catalog, &[(312, 1), (313, 1)]);
+        other
+            .outfit(sell(OutfitId(313)), &mut NeverFires)
+            .expect("sold");
+        assert_eq!(other.secondary(), Some(ROCKET), "another secondary sold");
+        let mut ammo = from(&catalog, &[(310, 1), (312, 1)]);
+        ammo.outfit(sell(OutfitId(310)), &mut NeverFires)
+            .expect("sold");
+        assert_eq!(ammo.secondary(), Some(ROCKET), "its ammunition sold");
+        let mut counted = from(&catalog, &[(312, 2)]);
+        assert_eq!(
+            counted.outfit_counted(sell(rockets), 2, &mut NeverFires),
+            Ok(2)
+        );
+        assert_eq!(counted.secondary(), None, "a counted sale");
+        let mut on_sell = with_two_rocket_outfits(outfitting());
+        for record in &mut on_sell.outfits {
+            if record.id == rockets {
+                record.on_sell = crate::control::Script::parse("G312");
+            }
+        }
+        let mut regranted = from(&on_sell, &[(312, 1)]);
+        regranted
+            .outfit(sell(rockets), &mut NeverFires)
+            .expect("sold");
+        assert_eq!(regranted.pilot().owned(rockets), 1, "granted back");
+        assert_eq!(regranted.secondary(), None, "checked before OnSell");
+        let mut unowned = from(&catalog, &[(312, 1), (315, 0)]);
+        unowned
+            .outfit(sell(rockets), &mut NeverFires)
+            .expect("sold");
+        assert_eq!(
+            unowned.secondary(),
+            None,
+            "315 owned 0 times carries nothing"
+        );
+    }
+
+    #[test]
+    fn the_two_secondary_rules_are_read_apart() {
+        let outfitting = with_two_rocket_outfits(outfitting());
+        let armed = with_secondaries(catalog());
+        for (rule, sold, dropped) in [
+            (RuleKey::StaleSecondary, None, None),
+            (RuleKey::SecondarySale, Some(ROCKET), Some(ROCKET)),
+        ] {
+            let rules = secondary_rules(rule, RuleSource::Bible);
+            let mut session = selling_from(&outfitting, &[(312, 1), (315, 1)], 1).with_rules(rules);
+            session
+                .outfit(sell(OutfitId(312)), &mut NeverFires)
+                .expect("sold");
+            assert_eq!(session.secondary(), sold, "{rule:?}: the sale");
+            let mut session = Session::start(&armed).expect("starts").with_rules(rules);
+            selecting(&mut session, 1);
+            scripted(&mut session, "D312");
+            assert_eq!(session.secondary(), dropped, "{rule:?}: D of the last");
+        }
+    }
+
+    #[test]
+    fn a_ship_bought_or_captured_leaves_no_secondary_by_either_reading() {
+        let both = Rulebook::default()
+            .with_override(RuleKey::StaleSecondary, RuleSource::Bible)
+            .with_override(RuleKey::SecondarySale, RuleSource::Bible);
+        let catalog = with_secondaries(shipbuying());
+        let mut session = outfitted(&catalog).with_rules(both);
+        selecting(&mut session, 3);
+        assert_eq!(session.secondary(), Some(TORCH), "which ship 129 carries");
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.secondary(), None, "a ship bought");
+        let catalog = ammo_aboard(1, 20);
+        let mut session = ammo_session(&catalog);
+        session.rules = both;
+        selecting(&mut session, 1);
+        assert_eq!(session.secondary(), Some(ROCKET));
+        assert_eq!(
+            take(&mut session, Take::Capture, &[43, 1]).0,
+            Taken::Captured
+        );
+        session
+            .assign(Assignment::MyShip, &mut Draws::of(&[0]))
+            .expect("assigned");
+        assert_eq!(session.secondary(), None, "a ship captured");
     }
 
     // Guided weapons, turrets and point defence.
