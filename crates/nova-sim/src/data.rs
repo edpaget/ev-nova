@@ -1,6 +1,6 @@
 //! The pilot, traffic, combat and comm catalogs over the game data: a
 //! thin mapping from `GameData`'s `chär`, `shïp`, `shän`, `oütf`, `wëap`,
-//! `sÿst`, `spöb`, `jünk`, `öops`, `düde`, `flët` and `gövt` records, its
+//! `sÿst`, `spöb`, `jünk`, `öops`, `düde`, `flët`, `gövt` and `mïsn` records, its
 //! string lists and its stellar sprites; and a `shän`'s blink fields as a
 //! [`Blink`].
 
@@ -29,10 +29,10 @@ use crate::blink::Blink;
 use crate::catalog::{
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterId,
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
-    GovtRecord, HullRecord, JunkRecord, LandingSite, MissionShip, OutfitId, OutfitRecord,
-    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId,
-    StarSystem, StartDate, StartError, StellarId, StellarLife, StockWeapon, StringPatch, SystemId,
-    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    GovtRecord, HullRecord, JunkRecord, LandingSite, MissionId, MissionRecord, MissionShip,
+    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId,
+    ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife, StockWeapon,
+    StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -118,6 +118,7 @@ impl PilotCatalog for GameData {
                     inherent_ai: record.inherent_ai,
                     comm_name: record.comm_name.as_str().to_owned(),
                     inherent_govt: inherent_govt(record.inherent_govt),
+                    combat_govt: combat_govt(record.inherent_govt),
                     escort_type: record.escort_type,
                 })
             })
@@ -348,6 +349,34 @@ impl PilotCatalog for GameData {
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         let sheet = self.spin_sheet(stellar_spin_id(0)?).ok()?.sheet;
         Some((sheet.frame_width(), sheet.frame_height()))
+    }
+
+    fn missions(&self) -> Vec<MissionRecord> {
+        self.records::<Mission>()
+            .filter_map(|(id, mission)| {
+                let record = mission.ok()?.record;
+                Some(MissionRecord {
+                    id: MissionId(id),
+                    avail_stel: record.avail_stel,
+                    avail_loc: record.avail_loc,
+                    avail_record: record.avail_record,
+                    avail_rating: record.avail_rating,
+                    avail_random: record.avail_random,
+                    avail_ship_type: record.avail_ship_type,
+                    avail_bits: self.test_expr(record.avail_bits.as_str()).into(),
+                    require: record.require.bits(),
+                    flags: record.flags.bits(),
+                    flags2: record.flags2.bits(),
+                    travel_stel: record.travel_stel,
+                    return_stel: record.return_stel,
+                    cargo_type: record.cargo_type,
+                    cargo_qty: record.cargo_qty,
+                    pay_val: record.pay_val,
+                    time_limit: record.time_limit,
+                    disp_weight: record.disp_weight,
+                })
+            })
+            .collect()
     }
 }
 
@@ -598,6 +627,10 @@ impl CommCatalog for GameData {
 /// takes on that government's attributes only.
 const ATTRIBUTES_ONLY: i16 = 1000;
 
+/// What a `shïp`'s `InherentGovt` adds to a `gövt` ID to say it fights as
+/// that government only.
+const COMBAT_ONLY: i16 = 2000;
+
 /// A `shïp`'s `InherentGovt` as the government whose attributes it takes
 /// on: a `gövt` ID as it is, or less [`ATTRIBUTES_ONLY`] when it is in
 /// that range; none for -1, or a government it fights as only (+2000),
@@ -606,6 +639,17 @@ fn inherent_govt(raw: i16) -> Option<GovtId> {
     match raw {
         0..ATTRIBUTES_ONLY => Some(GovtId(raw)),
         ATTRIBUTES_ONLY..2000 => Some(GovtId(raw - ATTRIBUTES_ONLY)),
+        _ => None,
+    }
+}
+
+/// A `shïp`'s `InherentGovt` as the government it fights as: a `gövt` ID
+/// as it is, or less [`COMBAT_ONLY`] when it is in that range; none for -1,
+/// or a government whose attributes only it takes on (+1000).
+fn combat_govt(raw: i16) -> Option<GovtId> {
+    match raw {
+        0..ATTRIBUTES_ONLY => Some(GovtId(raw)),
+        COMBAT_ONLY..3000 => Some(GovtId(raw - COMBAT_ONLY)),
         _ => None,
     }
 }
@@ -1191,6 +1235,7 @@ mod tests {
             inherent_ai: 2,
             comm_name: "heavy shuttle".to_owned(),
             inherent_govt: Some(GovtId(129)),
+            combat_govt: None,
             escort_type: 2,
             on_capture: Script::parse("^b301"),
             on_purchase: Script::parse("b300"),
@@ -1253,6 +1298,32 @@ mod tests {
             let data = store(&[(Ship::TYPE, 128, inheriting(raw))]);
             assert_eq!(
                 data.ships()[0].inherent_govt,
+                govt.map(GovtId),
+                "InherentGovt {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shïps_combat_government_is_its_gövt_its_combat_only_one_or_none() {
+        let inheriting = |raw: i16| {
+            let mut bytes = for_sale();
+            put_i16s(&mut bytes, 0x48, &[raw]);
+            bytes
+        };
+        for (raw, govt) in [
+            (-1, None),
+            (128, Some(128)),
+            (999, Some(999)),
+            (1128, None),
+            (2130, Some(130)),
+            (2999, Some(999)),
+            (3000, None),
+            (0, Some(0)),
+        ] {
+            let data = store(&[(Ship::TYPE, 128, inheriting(raw))]);
+            assert_eq!(
+                data.ships()[0].combat_govt,
                 govt.map(GovtId),
                 "InherentGovt {raw}"
             );
@@ -2862,6 +2933,80 @@ mod tests {
         assert_eq!(persons[1].mission_ship, None, "no LinkMission");
         assert_eq!(persons[2].mission_ship, None, "its mission missing");
         assert_eq!(persons[3].mission_ship, None, "its mission unreadable");
+    }
+
+    /// A `mïsn` offered as `avail_bits` says, with every field this phase
+    /// reads set to a value of its own.
+    fn offered(avail_bits: &[u8]) -> Vec<u8> {
+        use nova_data::records::mission::Mission;
+        let mut bytes = vec![0; Mission::SIZE.expect("fixed")];
+        put_i16s(
+            &mut bytes,
+            0x00,
+            &[10_005, 0, 0, -5, 40, 25, -2, -1, 1000, -10],
+        );
+        bytes[0x1C..0x20].copy_from_slice(&(-50_100_i32).to_be_bytes());
+        put_i16s(&mut bytes, 0x40, &[3]);
+        put_i16s(&mut bytes, 0x50, &[0x2008, 0x0001]);
+        put_i16s(&mut bytes, 0x5A, &[1129]);
+        bytes[0x5C..0x5C + avail_bits.len()].copy_from_slice(avail_bits);
+        bytes[0x656..0x65E].copy_from_slice(&0x0000_0004_0000_0001_u64.to_be_bytes());
+        put_i16s(&mut bytes, 0x7A0, &[60]);
+        bytes
+    }
+
+    #[test]
+    fn each_readable_mïsn_is_a_mission_record_by_id() {
+        use nova_data::records::mission::Mission;
+        let data = store(&[
+            (Mission::TYPE, 140, offered(b"b7 | !b8\0")),
+            (Mission::TYPE, 129, offered(b"(b1\0")),
+            (Mission::TYPE, 131, short(offered(b"\0"))),
+        ]);
+        let missions = data.missions();
+        assert_eq!(
+            missions
+                .iter()
+                .map(|mission| mission.id)
+                .collect::<Vec<_>>(),
+            [MissionId(129), MissionId(140)],
+            "by ID, the undecodable one skipped"
+        );
+        assert_eq!(
+            missions[1],
+            MissionRecord {
+                id: MissionId(140),
+                avail_stel: 10_005,
+                avail_loc: 0,
+                avail_record: -5,
+                avail_rating: 40,
+                avail_random: 25,
+                avail_ship_type: 1129,
+                avail_bits: Test::parse("b7 | !b8"),
+                require: 0x0000_0004_0000_0001,
+                flags: 0x2008,
+                flags2: 0x0001,
+                travel_stel: -2,
+                return_stel: -1,
+                cargo_type: 1000,
+                cargo_qty: -10,
+                pay_val: -50_100,
+                time_limit: 3,
+                disp_weight: 60,
+            }
+        );
+        assert!(
+            !missions[0].avail_bits.holds(|_| true),
+            "an AvailBits that does not parse never holds"
+        );
+        assert_eq!(store(&[]).missions(), []);
+        for (a, b) in data.missions().iter().zip(&data.missions()) {
+            assert!(
+                shared(&a.avail_bits, &b.avail_bits),
+                "parsed once: {:?}",
+                a.id
+            );
+        }
     }
 
     #[test]

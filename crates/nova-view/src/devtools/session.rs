@@ -273,6 +273,10 @@ mod tests {
         fn fallback_frame_size(&self) -> Option<(u32, u32)> {
             Some((100, 100))
         }
+
+        fn missions(&self) -> Vec<nova_sim::catalog::MissionRecord> {
+            Vec::new()
+        }
     }
 
     impl CombatCatalog for Catalog {

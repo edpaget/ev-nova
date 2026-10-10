@@ -8,8 +8,8 @@
 use std::rc::Rc;
 
 pub use nova_data::{
-    BoomId, DudeId, FleetId, GovtId, JunkId, NebulaId, OutfitId, PersonId, ShipId, SoundId,
-    StellarId, SystemId, WeaponId,
+    BoomId, DudeId, FleetId, GovtId, JunkId, MissionId, NebulaId, OutfitId, PersonId, ShipId,
+    SoundId, StellarId, SystemId, WeaponId,
 };
 
 use crate::combat::weapon::Explosion;
@@ -300,6 +300,11 @@ pub struct ShipRecord {
     /// `InherentGovt`: a `gövt` ID, or one + 1000 ("attributes only");
     /// none for -1 or + 2000 ("combat only").
     pub inherent_govt: Option<GovtId>,
+    /// The government it fights as, from its `InherentGovt`: a `gövt` ID,
+    /// or one + 2000 ("combat only"); none for -1 or + 1000 ("attributes
+    /// only"). A mission's `AvailShipType` 2128-3384 reads it beside
+    /// [`inherent_govt`](Self::inherent_govt).
+    pub combat_govt: Option<GovtId>,
     /// Its `EscortType`, raw: the class it has as the player's escort
     /// (see [`EscortClass::of`](crate::escort::EscortClass::of)).
     pub escort_type: i16,
@@ -534,6 +539,48 @@ pub struct MissionShip {
     pub count: i16,
     /// Its `ShipGoal`.
     pub goal: i16,
+}
+
+/// A mission, raw from its `mïsn`: the fields its offer reads. The
+/// mission rules decide what the values mean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MissionRecord {
+    /// The `mïsn`'s ID.
+    pub id: MissionId,
+    /// Its `AvailStel`, raw: where it is offered.
+    pub avail_stel: i16,
+    /// Its `AvailLoc`, raw: the venue it is offered at.
+    pub avail_loc: i16,
+    /// Its `AvailRecord`, raw: the legal record it asks.
+    pub avail_record: i16,
+    /// Its `AvailRating`, raw: the combat rating it asks.
+    pub avail_rating: i16,
+    /// Its `AvailRandom`, raw: the percent chance a visit offers it.
+    pub avail_random: i16,
+    /// Its `AvailShipType`, raw: the ship it asks.
+    pub avail_ship_type: i16,
+    /// Its `AvailBits` control-bit test, parsed.
+    pub avail_bits: Test,
+    /// Its `Require` bits.
+    pub require: u64,
+    /// Its `Flags`.
+    pub flags: u16,
+    /// Its `Flags2`.
+    pub flags2: u16,
+    /// Its `TravelStel`, raw: the destination.
+    pub travel_stel: i16,
+    /// Its `ReturnStel`, raw: where it is completed.
+    pub return_stel: i16,
+    /// Its `CargoType`, raw.
+    pub cargo_type: i16,
+    /// Its `CargoQty`, raw: tons, or a range below -1.
+    pub cargo_qty: i16,
+    /// Its `PayVal`, raw.
+    pub pay_val: i32,
+    /// Its `TimeLimit`: the days it gives, none at 0 or below.
+    pub time_limit: i16,
+    /// Its `DispWeight`: higher shows nearer the top.
+    pub disp_weight: i16,
 }
 
 /// The game data a system's NPC traffic is spawned from: its `sÿst`'s
@@ -879,6 +926,8 @@ pub trait PilotCatalog {
     /// 1000), or `None` when it cannot be read: the frames the original's
     /// rebuild gives a sprite slot it left empty.
     fn fallback_frame_size(&self) -> Option<(u32, u32)>;
+    /// Every `mïsn` that can be read, by ascending ID.
+    fn missions(&self) -> Vec<MissionRecord>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -945,6 +994,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         (**self).fallback_frame_size()
+    }
+
+    fn missions(&self) -> Vec<MissionRecord> {
+        (**self).missions()
     }
 }
 
@@ -1013,6 +1066,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         (**self).fallback_frame_size()
+    }
+
+    fn missions(&self) -> Vec<MissionRecord> {
+        (**self).missions()
     }
 }
 
@@ -1210,6 +1267,11 @@ mod tests {
         fn fallback_frame_size(&self) -> Option<(u32, u32)> {
             Some((7, 9))
         }
+
+        /// Mission 130, offered at the mission computer.
+        fn missions(&self) -> Vec<MissionRecord> {
+            vec![crate::testkit::mission(130)]
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1237,6 +1299,7 @@ mod tests {
             format!("{:?}", catalog.stellar_flags()),
             format!("{:?}", catalog.stellar_lives()),
             format!("{:?}", catalog.fallback_frame_size()),
+            format!("{:?}", catalog.missions()),
         ]
     }
 
@@ -1271,6 +1334,7 @@ mod tests {
             "{direct:?}"
         );
         assert_eq!(direct[19], "Some((7, 9))", "forwarded, not a default");
+        assert!(direct[20].contains("MissionId(130)"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

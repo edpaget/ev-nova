@@ -106,6 +106,10 @@ impl PilotCatalog for Pilot {
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         Some((100, 100))
     }
+
+    fn missions(&self) -> Vec<nova_sim::catalog::MissionRecord> {
+        Vec::new()
+    }
 }
 
 /// Stellar 128 at the centre, where the ship starts, 200 x 200, with

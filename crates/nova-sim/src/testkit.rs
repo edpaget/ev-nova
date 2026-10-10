@@ -7,9 +7,9 @@ use crate::ai::Goal;
 use crate::catalog::{
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterRecord,
     DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord,
-    LandingSite, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog, ShipId,
-    ShipRecord, StarSystem, StartDate, StartError, StellarId, StellarLife, SystemId, SystemTraffic,
-    TrafficCatalog, WeaponId, WeaponRecord,
+    LandingSite, MissionId, MissionRecord, OutfitId, OutfitRecord, Penalties, PersonId,
+    PersonRecord, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate, StartError, StellarId,
+    StellarLife, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -88,6 +88,8 @@ pub(crate) struct FakePilotCatalog {
     /// Graphic type 0's sheet's frame size, or `None` when it does not
     /// read: 100 square, by default.
     pub(crate) fallback_frame: Option<(u32, u32)>,
+    /// Every `mïsn`: none, by default.
+    pub(crate) missions: Vec<MissionRecord>,
 }
 
 /// Stellar `id` of `Strength` 100 and `dead_time`, starting the game
@@ -128,6 +130,32 @@ pub(crate) const FAST: ShipFields = ShipFields {
     armor_rech: 0,
     flags2: 0,
 };
+
+/// Mission `id`, offered at the mission computer of any stellar on every
+/// visit, to anyone: going nowhere, carrying nothing, paying nothing and
+/// with no deadline.
+pub(crate) fn mission(id: i16) -> MissionRecord {
+    MissionRecord {
+        id: MissionId(id),
+        avail_stel: -1,
+        avail_loc: 0,
+        avail_record: 0,
+        avail_rating: 0,
+        avail_random: 100,
+        avail_ship_type: 0,
+        avail_bits: Test::default(),
+        require: 0,
+        flags: 0,
+        flags2: 0,
+        travel_stel: -1,
+        return_stel: -1,
+        cargo_type: -1,
+        cargo_qty: 0,
+        pay_val: 0,
+        time_limit: 0,
+        disp_weight: 0,
+    }
+}
 
 /// A landable planet at (`x`, `y`), 100 x 100 (radius 50).
 pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
@@ -210,6 +238,7 @@ pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         inherent_ai: 1,
         comm_name: format!("ship {id}"),
         inherent_govt: None,
+        combat_govt: None,
         escort_type: -1,
         on_capture: crate::control::Script::default(),
         on_purchase: crate::control::Script::default(),
@@ -416,6 +445,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         lives: Vec::new(),
         life_reads: RefCell::default(),
         fallback_frame: Some((100, 100)),
+        missions: Vec::new(),
     }
 }
 
@@ -532,6 +562,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         self.fallback_frame
+    }
+
+    fn missions(&self) -> Vec<MissionRecord> {
+        self.missions.clone()
     }
 }
 

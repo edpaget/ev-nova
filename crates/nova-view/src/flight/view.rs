@@ -3169,6 +3169,10 @@ mod tests {
         fn fallback_frame_size(&self) -> Option<(u32, u32)> {
             Some((100, 100))
         }
+
+        fn missions(&self) -> Vec<nova_sim::catalog::MissionRecord> {
+            Vec::new()
+        }
     }
 
     /// The weapons, ship types' combat fields and governments given.
@@ -6420,6 +6424,7 @@ mod tests {
                 inherent_ai: 1,
                 comm_name: String::new(),
                 inherent_govt: None,
+                combat_govt: None,
                 escort_type: -1,
                 on_capture: nova_sim::Script::default(),
                 on_purchase: nova_sim::Script::default(),
@@ -6793,6 +6798,7 @@ mod tests {
             inherent_ai: 1,
             comm_name: String::new(),
             inherent_govt: None,
+            combat_govt: None,
             escort_type: -1,
             on_capture: nova_sim::Script::default(),
             on_purchase: nova_sim::Script::default(),
