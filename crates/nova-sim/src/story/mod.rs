@@ -133,9 +133,11 @@
 //!    first (@0xa175f; see "Visibility and governments"). They are rolled
 //!    only at a stellar other than the one they were last rolled at
 //!    (@0x66d2b-0x66d3d). A jump's arrival forgets that stellar
-//!    (@0x6bfc9), as does any mission's abort, failure or success
-//!    (@0x99bca, @0x99db0, @0xa03ea, @0xa068c). A take-off does not, so
-//!    landing again on the same stellar keeps its offers.
+//!    (@0x6bfce) and draws the table again (@0x6c040-0x6c066), as any
+//!    mission's abort, failure or success forgets it (@0x99bcf, @0x99db5,
+//!    @0xa03ef, @0xa0691), and a load (@0x75ef5). A take-off does not, so
+//!    landing again on the same stellar keeps its offers. Built by
+//!    missions phase 1 (see [`mission`](crate::mission)).
 //! 2. The spaceport opens (`_PlayerLandOnStellar` @0x66f29,
 //!    `_DoPortDialog` @0x63381) and runs `_MissionLandCheck` (@0x5fbeb),
 //!    then redraws the system's stellars (@0x5fbf0), then offers the
@@ -147,7 +149,8 @@
 //!    return stellar, failure (`_DoMissionFailure` @0xa1a92) before
 //!    success (`_DoMissionSuccess` @0xa1ace); then the goals again
 //!    (@0xa1ada). After the last slot it refreshes the galaxy (@0xa1af2)
-//!    and, if any mission succeeded, rolls the offers again (@0xa1b04).
+//!    and, if any mission succeeded, re-offers (@0xa1b04): availability
+//!    and resolution again, the table kept.
 //! 4. The news is chosen as the bar opens (`_DoBarDialog` @0x48f15,
 //!    `_RandomizeNewsDialog` @0x48238): it has no trigger point of its
 //!    own.
@@ -169,7 +172,9 @@
 //! `_HandlePlayer`'s jump arrival, in order: the nebulae of every system
 //! the jump passes and arrives at (`_ExploreNebulaeFromSystem` @0x6bddb,
 //! @0x6be12); the galaxy refresh (@0x6bf3f); the offers' stellar
-//! forgotten (@0x6bfc9); the days (@0x6c144); the global and local price
+//! forgotten (@0x6bfce) and their table drawn again (@0x6c040-0x6c066,
+//! read only by an offer in space until the next landing, missions phase
+//! 6); the days (@0x6c144); the global and local price
 //! flux (@0x6c153, @0x6c158); the enter-system hook
 //! (`_MissionHandlePlayerEnteredNewSystem` @0x6c15d); the system explored
 //! (@0x6c1db); its ships set up (@0x6c1f9) and a bounty hunter
@@ -288,7 +293,7 @@
 //! | Event | Its one source | The original's |
 //! |---|---|---|
 //! | [`EnteredSystem`](StoryEvent::EnteredSystem) | `enter_system`'s `announce` step, for every [`Entrance`] | the enter-system hook |
-//! | [`Landed`](StoryEvent::Landed) | `Session::dock`, as [`Session::land`](crate::Session::land) docks | the spaceport opening |
+//! | [`Landed`](StoryEvent::Landed) | `Session::dock`, as [`Session::land`](crate::Session::land) docks; [`Session::fly`](crate::Session::fly), for a pilot resumed docked, after its `Explored` | the spaceport opening |
 //! | [`TookOff`](StoryEvent::TookOff) | [`Session::take_off`](crate::Session::take_off), after its day | `_PlayerLandOnStellar` after the spaceport |
 //! | [`DayPassed`](StoryEvent::DayPassed) | the daily step, as its last participant | `_IncrementGameTime` |
 //! | [`Explored`](StoryEvent::Explored) | exploring a system: a jump's arrival, for each system it passes and the one it arrives at; every other way in whose row explores; a take-off; a map granted, for each system it reaches; [`Session::fly`](crate::Session::fly), for its system. `X` raises none | `_ExploreNebulaeFromSystem` |
@@ -306,7 +311,11 @@
 //! explores. Each exploration raises `Explored`, the system explored
 //! already or not. Flying a pilot, a new one or a load, raises its
 //! system's `Explored`, as the original explores its nebulae there
-//! (`_DoNewPilot` @0x19118, `_OpenLastPilotFile` @0x765bc).
+//! (`_DoNewPilot` @0x19118, `_OpenLastPilotFile` @0x765bc), then, for a
+//! pilot resumed docked, its stellar's `Landed`: a load forgets the
+//! stellar the offers were rolled at (@0x75ef5) and opens the spaceport,
+//! whose land check runs (@0x5fbeb), so the offers are rolled afresh and
+//! the missions' landing hooks run, as the original's do.
 //!
 //! The events wait on the session, in the order raised, for its next
 //! [`Session::settle_script`](crate::Session::settle_script), which
@@ -345,9 +354,9 @@
 //! [`Session::register_story`](crate::Session::register_story) and
 //! unregisters through
 //! [`Session::unregister_story`](crate::Session::unregister_story), which
-//! clears the once-fired entry too. The stock consumers will register at
-//! [`Session::fly`](crate::Session::fly) from their catalog data; none
-//! does yet. A mission's subscriptions, and its ships', are registered
+//! clears the once-fired entry too. The stock consumers register at
+//! [`Session::fly`](crate::Session::fly) from their catalog data: so far
+//! the missions' offer roll (missions phase 1). A mission's subscriptions, and its ships', are registered
 //! when it becomes active, keyed by its slot. When it ends (success,
 //! failure, `A` or an auto-abort), they are unregistered and their
 //! once-fired entries cleared, so a mission accepted into the reused slot
@@ -371,7 +380,11 @@
 //! mission's ship goals before its cargo, failure and success
 //! (@0xa1a0c-0xa1ace), so [`Consumer::MissionShips`] comes first. Missions
 //! go by slot, as the original's land check (@0xa19f7), and a mission's
-//! landing hooks go cargo, failure, success. Plug-ins run after every
+//! landing hooks go cargo, failure, success. The offer roll is the
+//! missions' record -1, `{Missions, -1, 0}`, so it runs before every
+//! slot's hooks, as the original rolls before the spaceport opens
+//! (@0x66d62); it would still run after a `MissionShips` landing
+//! subscription, which mission-ships must keep after it. Plug-ins run after every
 //! stock consumer: an engine decision with no Rulebook key, since the
 //! original has no plug-ins. One difference stays: the original checks
 //! goals and then cargo, failure and success slot by slot, and here every
@@ -1446,7 +1459,7 @@
 //!   ships' goal checks, in `_MissionLandCheck`'s order: by slot, cargo
 //!   (missions phase 5), failure, success. A success pays, applies the
 //!   legal record, passes its `DatePostInc` days through the daily step,
-//!   runs `OnSuccess` and has the offers rolled again;
+//!   runs `OnSuccess` and has the missions re-offered, the table kept;
 //! - the daily step: the days left count down; a `DayPassed`
 //!   subscription fails a mission whose days left reached 0, running
 //!   `OnFailure`;
@@ -1463,7 +1476,9 @@
 //! restarts its ships' timers (mission-ships phase 1). Offers are rolled
 //! as the player lands, before the spaceport opens, and kept until a
 //! landing at another stellar, a jump or a mission's end (missions
-//! phase 1).
+//! phase 1, [`mission`](crate::mission)): `Session::forget_offers` is
+//! the hook a mission's end calls. A landed `M` or `N` empties them, the
+//! stellar kept. None of it is saved.
 //!
 //! # Text substitution
 //!

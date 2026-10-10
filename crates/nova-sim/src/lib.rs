@@ -178,8 +178,9 @@
 //!   fighting, boarding and capturing ships, hailing them
 //!   ([`HailView`], [`HailRefusal`], [`CommNote`]), flying and
 //!   commanding its escorts, launching and docking the fighters of its
-//!   bays and the NPC carriers' ([`Sortie`]), and hiring escorts in the
-//!   bar and paying their wages.
+//!   bays and the NPC carriers' ([`Sortie`]), hiring escorts in the
+//!   bar and paying their wages, and the mission offers rolled as it lands
+//!   ([`Session::mission_offers`]).
 //! - [`ship_change`]: changing the player's ship outside the shipyard,
 //!   as the `C`, `E` and `H` set operators do: which outfits carry over.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
