@@ -334,7 +334,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave";
+pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave";
 /// Where a message, such as why a landing was refused, goes: above the
 /// help line.
 pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
@@ -344,9 +344,9 @@ pub const MESSAGE_SHOWN_FOR: Duration = Duration::from_secs(4);
 /// second (0x1a4 @0x4464d).
 pub const HAIL_QUOTE_SHOWN_FOR: Duration = Duration::from_secs(14);
 
-/// The keys flight holds: the original's defaults, and Alt, which turns
-/// the weapon select key back.
-const FLIGHT_KEYS: [Key; 7] = [
+/// The keys flight holds: the original's defaults, Alt, which turns the
+/// weapon select key back, and Command, which the jettison key needs.
+const FLIGHT_KEYS: [Key; 8] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -354,6 +354,7 @@ const FLIGHT_KEYS: [Key; 7] = [
     FIRE_KEY,
     SECONDARY_KEY,
     Key::Alt,
+    Key::Command,
 ];
 
 /// The primary fire key: the original's default (`fireKey0`, `_loadKeys`
@@ -386,6 +387,11 @@ pub const BOARD_KEY: Key = Key::Char('b');
 /// The hail key: the original's default (`Keys.nib`'s `hailKey`), one
 /// hail a press.
 pub const HAIL_KEY: Key = Key::Char('y');
+/// The jettison key: the original's default (`dumpCargo`, `_keyPrefs`
+/// +0x1e, keycode 0x28, `_loadKeys` @0xce33d-0xce360), which jettisons
+/// only with Command held (`_HandlePlayer` @0x6fd54-0x6fdaf): everything,
+/// or with Option (Alt) also held, all but the mission cargo.
+pub const JETTISON_KEY: Key = Key::Char('k');
 /// The escorts' attack key: the original's default (`Keys.nib`'s
 /// `escortCmdKey0`, "Attack Target").
 pub const ESCORT_ATTACK_KEY: Key = Key::Char('f');
@@ -398,6 +404,28 @@ pub const ESCORT_RECALL_KEY: Key = Key::Char('c');
 /// What closes the escort menu besides its own key: Return
 /// (`ackComm`).
 pub const MENU_CLOSE_KEY: Key = Key::Enter;
+
+/// `STR#` 2002 #284: a mission failed as its cargo was jettisoned.
+pub const MISSION_FAILED: &str = "Mission failed.";
+/// `STR#` 2002 #289: everything was jettisoned.
+pub const CARGO_JETTISONED: &str = "Cargo jettisoned.";
+/// `STR#` 2002 #290: all but the mission cargo was jettisoned.
+pub const NON_MISSION_CARGO_JETTISONED: &str = "Non-mission cargo jettisoned.";
+
+/// What the message line says of `message`, a session's message other
+/// than an arrival's: none for an arrival's, which [`arrival_lead`] leads
+/// the arrival message with.
+fn sim_message_text(message: SimMessage) -> Option<String> {
+    let text = match message {
+        SimMessage::Arrived(_) | SimMessage::ExitedHypergate(_) | SimMessage::PassedWormhole(_) => {
+            return None;
+        }
+        SimMessage::MissionFailed => MISSION_FAILED,
+        SimMessage::CargoJettisoned => CARGO_JETTISONED,
+        SimMessage::NonMissionCargoJettisoned => NON_MISSION_CARGO_JETTISONED,
+    };
+    Some(text.to_owned())
+}
 
 /// `STR#` 2002 #53.
 pub const NO_RESPONSE: &str = "No response.";
@@ -934,6 +962,9 @@ pub struct FlightView<C> {
     pending_boarding: bool,
     /// The hail just answered, for the router.
     pending_hail: Option<HailView>,
+    /// The session's arrival messages taken before their arrival is
+    /// caught up with, which leads them.
+    pending_leads: Vec<SimMessage>,
     /// The options the comm dialog lists.
     hail_options: HailOptions,
     /// Who repels boarders, the capture odds and the capture roll.
@@ -1126,6 +1157,7 @@ impl<
             message: None,
             pending_boarding: false,
             pending_hail: None,
+            pending_leads: Vec::new(),
             hail_options: HailOptions::default(),
             boarding_rule: Rc::new(NovaBoarding::default()),
             chance: SharedChance::default(),
@@ -1507,13 +1539,15 @@ impl<
         let notes = session.take_fighter_notes();
         let pay = session.take_pay_notes();
         let date = session.date_text();
-        let leads: Vec<_> = session.take_messages();
+        let mut messages = std::mem::take(&mut self.pending_leads);
+        messages.extend(session.take_messages());
         self.message = None;
         let Some(scene) = &self.scene else {
             return;
         };
-        let mut said: Vec<String> = leads
-            .into_iter()
+        let mut said: Vec<String> = messages
+            .iter()
+            .copied()
             .filter_map(arrival_lead)
             .next_back()
             .map(|lead| {
@@ -1522,6 +1556,7 @@ impl<
             })
             .into_iter()
             .collect();
+        said.extend(messages.into_iter().filter_map(sim_message_text));
         said.extend(
             notes
                 .into_iter()
@@ -2010,6 +2045,35 @@ impl<C> FlightView<C> {
     /// Shows `text` from now, for [`MESSAGE_SHOWN_FOR`].
     fn show(&mut self, text: String) {
         self.say(text);
+    }
+
+    /// Shows the session's messages since they were last taken, each in
+    /// turn, in the original's words; an arrival's waits for its arrival
+    /// to be caught up with ([`FlightView::arrived`]).
+    fn say_messages(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        for message in session.take_messages() {
+            match sim_message_text(message) {
+                Some(text) => self.say(text),
+                None => self.pending_leads.push(message),
+            }
+        }
+    }
+
+    /// Presses the jettison key: with Command held, jettisons the cargo,
+    /// and with Option (Alt) too, all but the mission cargo (see
+    /// [`Session::jettison_cargo`]), saying what went.
+    fn jettison(&mut self) {
+        if !self.held.contains(&Key::Command) {
+            return;
+        }
+        let all = !self.held.contains(&Key::Alt);
+        if let Ok(session) = &mut self.session {
+            session.jettison_cargo(all, &mut self.chance);
+        }
+        self.say_messages();
     }
 
     /// The flight, or why it could not start.
@@ -2661,6 +2725,7 @@ impl<
                 self.jump();
                 return ScreenAction::None;
             }
+            Some(JETTISON_KEY) => self.jettison(),
             Some(HYPER_SELECT_KEY) => {
                 if let Ok(session) = &mut self.session {
                     session.select_next_system();
@@ -2787,6 +2852,7 @@ impl<
         for quote in quotes {
             self.say_for(quote.text, HAIL_QUOTE_SHOWN_FOR);
         }
+        self.say_messages();
         // The session may have populated its system afresh.
         self.read_npc_sheets();
         let rows = self.escort_rows();
@@ -3938,7 +4004,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave"
+            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -9640,6 +9706,118 @@ mod tests {
         view.enter_offer_venue(3);
         view.enter_offer_venue(1);
         assert_eq!(view.next_offer(1), refused, "offered again");
+    }
+
+    /// A flight from [`trading`]'s Earth, its ship of 10 tons, that
+    /// accepted mission 130, carrying 4 tons of food loaded at accept,
+    /// `Flags` `flags`, and bought the other 6 tons full of food when
+    /// `food`, then took off.
+    fn carrying(flags: u16, food: bool) -> View {
+        let mut errands = trading();
+        errands.missions = vec![MissionRecord {
+            cargo_type: 0,
+            cargo_qty: 4,
+            pickup_mode: 0,
+            flags,
+            ..errand(130)
+        }];
+        let mut view = FlightView::new(errands);
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
+        if food {
+            assert_eq!(view.trade(BUY_FOOD), Ok(6), "up to the free space");
+        }
+        view.take_off().expect("takes off");
+        view.settle_script();
+        view
+    }
+
+    /// Holds Command (and Alt with `option`), taps `k`, and lets go.
+    fn command_tap(view: &mut View, k: Key, option: bool) {
+        view.input(&key(Key::Command, true));
+        if option {
+            view.input(&key(Key::Alt, true));
+        }
+        tap(view, k);
+        if option {
+            view.input(&key(Key::Alt, false));
+        }
+        view.input(&key(Key::Command, false));
+    }
+
+    fn cargo_aboard(view: &View) -> i64 {
+        view.pilot().expect("flying").total_cargo()
+    }
+
+    #[test]
+    fn command_k_jettisons_the_cargo_failing_the_mission_and_says_so() {
+        let mut view = carrying(0, true);
+        assert_eq!(cargo_aboard(&view), 10);
+        command_tap(&mut view, JETTISON_KEY, false);
+        assert_eq!(cargo_aboard(&view), 0);
+        assert_eq!(view.pilot().expect("flying").missions().iter().count(), 0);
+        assert_eq!(view.message(), Some(MISSION_FAILED));
+        assert_eq!(JETTISON_KEY, Key::Char('k'));
+        assert_eq!(MISSION_FAILED, "Mission failed.");
+        assert!(HELP.contains("Cmd-K: jettison"), "{HELP}");
+    }
+
+    #[test]
+    fn command_option_k_keeps_the_mission_cargo() {
+        let mut view = carrying(0, true);
+        command_tap(&mut view, JETTISON_KEY, true);
+        assert_eq!(cargo_aboard(&view), 4, "the food bought went");
+        assert_eq!(view.message(), Some(NON_MISSION_CARGO_JETTISONED));
+        assert_eq!(
+            NON_MISSION_CARGO_JETTISONED,
+            "Non-mission cargo jettisoned."
+        );
+        let mut view = carrying(0, false);
+        command_tap(&mut view, JETTISON_KEY, true);
+        assert_eq!(cargo_aboard(&view), 4, "kept");
+        assert_eq!(view.message(), None, "nothing else held");
+    }
+
+    #[test]
+    fn a_hidden_missions_cargo_jettisoned_says_the_cargo_went() {
+        let mut view = carrying(0x0400, false);
+        command_tap(&mut view, JETTISON_KEY, false);
+        assert_eq!(cargo_aboard(&view), 0);
+        assert_eq!(view.message(), Some(CARGO_JETTISONED));
+        assert_eq!(CARGO_JETTISONED, "Cargo jettisoned.");
+    }
+
+    #[test]
+    fn k_alone_jettisons_nothing() {
+        let mut view = carrying(0, false);
+        tap(&mut view, JETTISON_KEY);
+        assert_eq!(cargo_aboard(&view), 4);
+        assert_eq!(view.message(), None);
+        view.input(&key(Key::Alt, true));
+        tap(&mut view, JETTISON_KEY);
+        view.input(&key(Key::Alt, false));
+        assert_eq!(cargo_aboard(&view), 4, "Option alone");
+        command_tap(&mut view, Key::Char('j'), false);
+        assert_eq!(cargo_aboard(&view), 4, "another key with Command");
+    }
+
+    #[test]
+    fn each_jettison_message_is_worded_and_the_arrivals_are_not_among_them() {
+        assert_eq!(
+            sim_message_text(SimMessage::MissionFailed).as_deref(),
+            Some(MISSION_FAILED)
+        );
+        assert_eq!(
+            sim_message_text(SimMessage::CargoJettisoned).as_deref(),
+            Some(CARGO_JETTISONED)
+        );
+        assert_eq!(
+            sim_message_text(SimMessage::NonMissionCargoJettisoned).as_deref(),
+            Some(NON_MISSION_CARGO_JETTISONED)
+        );
+        assert_eq!(sim_message_text(SimMessage::Arrived(SystemId(130))), None);
+        assert_eq!(arrival_lead(SimMessage::MissionFailed), None);
     }
 
     #[test]
