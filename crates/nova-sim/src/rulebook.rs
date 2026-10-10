@@ -70,6 +70,7 @@
 //! | [`CountedSale`](RuleKey::CountedSale) | `counted_sale` | each pass of a counted sale checks the order as a whole: a raised `Max` refuses while the target owned exceeds its raw `Max` x (owned now - the whole count) (@0x5c82d-0x5c85e), and a launcher while the rounds held exceed `MaxAmmo` x (owned now - the pass index - 1) (@0x5cb9c-0x5cbc7), signed, so an Alt sale is refused sooner than as many single clicks; only the engine readings of `raised_max` and `launcher_sale` read it (`_DoOutfitDialog`; [`Outfitter::check_at`](crate::Outfitter::check_at)) | each pass is checked as one sale, (owned now - 1)¶¶¶¶ |
 //! | [`RelistedSale`](RuleKey::RelistedSale) | `relisted_sale` | a sale that changes the listing (`_SetupPortAvailableItems` true, @0x5d00a) resets the selection to `oütf` 128 and the loop index to 0, or 512 with nothing listed, so the passes left check and sell `oütf` 128, listed or not, and can outrun the count (`_DoOutfitDialog` @0x5d017-0x5d150, @0x5d164-0x5d1b1; [`Session`](crate::Session)) | the ordered outfit and the pass index are kept††††† |
 //! | [`RelistedSelection`](RuleKey::RelistedSelection) | `relisted_selection` | an order that changes the listing (`_SetupPortAvailableItems` true after the buy loop @0x5c314 or a sale @0x5d00a) selects `oütf` 128 with no cell highlighted (`*0xded58` = 0, `*0xded5c` = -1, @0x5c32c-0x5c33b, @0x5d01c-0x5d02b). Buy and Sell then answer for it, listed or not (`_OutfitFilter` @0x5806f-0x580ca), and the picture, description and info box are blank. With nothing listed the outfitter closes (-0x63d @0x5c40c, @0x5d128, @0x5da33; [`Session`](crate::Session)) | the selected cell is kept and the outfitter stays open§§§§§ |
+//! | [`GridSelection`](RuleKey::GridSelection) | `grid_selection` | the outfitter's selection is the selected outfit (`*0xded58`), which can be none, and its description is read only when it changes: a press on an empty cell position in the grid selects nothing (`*0xded58` = `*0xded5c` = -1, @0x58632-0x58648), greying Buy and Sell and blanking the picture, info box and description (@0x588e4-0x588fe; `_OutfitDialogUpdate` @0x5789b-0x578a5), and an arrow that leaves the selected outfit as it was reads no description (@0x58442-0x5844f) while the picture and info box follow the highlighted cell (@0x57949-0x579d6) (nova-view's `OutfitterScreen`) | the selection is the highlighted cell: a press on an empty cell is ignored, and the description follows the cell¶¶¶¶¶ |
 //! | [`MassPrice`](RuleKey::MassPrice) | `mass_price` | an outfit flagged 0x0200 costs max(`Cost`, `Cost` × the flown class's `Mass`), so `Cost` on a class of `Mass` 0 or less, and a `Cost` of 0 or less costs 0, flag or not (`_AdjustedItemCost` @0x5869-0x5895; `_PlayerShipTradeInPrice` @0xb0e3-0xb106; [`unit_price`](crate::outfitter::unit_price)) | `Cost` × `Mass`, never below 0§§§§ |
 //! | [`ScaledMass`](RuleKey::ScaledMass) | `scaled_mass` | an outfit flagged 0x0400 of `Mass` above 0 weighs max(`Mass`, `Mass` × the class's `Mass` / 100, truncated), so its own `Mass` on a class of `Mass` below 100, in the outfitter, the free mass, the grants and the Shipyard Info Space (`_AdjustedItemMass` @0x2889-0x28c2; `_ShipFreeMass` @0xb4c1-0xb4ed; [`unit_mass`](crate::outfitter::unit_mass)) | `Mass` × the class's `Mass` / 100, truncated, for `Mass` above 0‡‡‡‡‡ |
 //! | [`TradeInOutfits`](RuleKey::TradeInOutfits) | `trade_in_outfits` | a ship's trade-in counts every outfit owned but a persistent one, an unsellable one included, at half its line (`_PlayerShipTradeInPrice` @0xb0d5-0xb0e1, @0xb109-0xb11f; [`Session`](crate::Session)) | an unsellable outfit is left out too†††† |
@@ -202,6 +203,11 @@
 //! §§§§§ The Bible says nothing of the outfitter's selection. The other
 //! reading is the port's earlier behaviour, the selected cell kept and
 //! the outfitter left open after any order, not anything the Bible says.
+//!
+//! ¶¶¶¶¶ The Bible says nothing of the outfitter's grid. The other
+//! reading is the port's earlier behaviour, a press on an empty cell
+//! ignored and the description read whenever the highlighted cell shows
+//! an outfit not already described, not anything the Bible says.
 //!
 //! \*\*\*\*\* The Bible says only that a persistent outfit "stays with
 //! you when you trade ships", as the engine has it. The other reading is
@@ -831,6 +837,28 @@ rule_keys! {
     /// port's earlier behaviour, not anything the Bible says (see
     /// [`Session::outfit_order`](crate::Session::outfit_order)).
     RelistedSelection => "relisted_selection",
+    /// What the outfitter's selection is, as its grid's presses and
+    /// arrow keys move it. By the engine, `_OutfitFilter` (@0x58039)
+    /// keeps the selected outfit (`*0xded58`) apart from the highlighted
+    /// cell (`*0xded5c`), and the outfit can be none (-1). A press on an
+    /// empty cell position within the grid's 4 × 5 cells
+    /// (@0x585ea-0x58607) sets both to -1 (@0x58632-0x58648): Buy and
+    /// Sell grey, the picture, the info box and the description blank
+    /// (@0x588e4-0x588fe; `_OutfitDialogUpdate` @0x5789b-0x578a5), and
+    /// the press reaches no dialog item (@0x58902-0x58920). After a
+    /// [`RelistedSelection`](RuleKey::RelistedSelection) reset, that lets
+    /// `oütf` 128 go. An arrow key that leaves the selected outfit as it
+    /// was skips `_LoadDescription` (@0x58442-0x5844f), while the
+    /// picture and the info box follow the highlighted cell
+    /// (@0x57949-0x579d6): an arrow onto 128's cell after a reset shows
+    /// its picture and info box over the blank description. By the other
+    /// reading, the selection is the highlighted cell: a press on an
+    /// empty cell is ignored, falling through to the dialog with the
+    /// selection or reset kept, and an arrow reads the description of an
+    /// outfit not already described. The Bible says nothing of the grid,
+    /// so the other reading is the port's earlier behaviour, not anything
+    /// the Bible says (see nova-view's `OutfitterScreen`).
+    GridSelection => "grid_selection",
     /// How an outfit flagged 0x0200 (price by ship mass) is priced. By
     /// the engine, `_AdjustedItemCost` (@0x5869-0x5895) gives 0 for a
     /// `Cost` of 0 or less (@0x5872-0x5878). Otherwise, with the flag, it
@@ -1183,6 +1211,15 @@ mod tests {
     }
 
     #[test]
+    fn the_grid_selection_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::GridSelection.key(), "grid_selection");
+        assert_eq!(
+            RuleKey::from_key("grid_selection"),
+            Some(RuleKey::GridSelection)
+        );
+    }
+
+    #[test]
     fn the_outfitters_rules_have_settings_keys_found_by_name() {
         assert_eq!(RuleKey::OutfitRefund.key(), "outfit_refund");
         assert_eq!(
@@ -1341,6 +1378,7 @@ mod tests {
                 RuleKey::CountedSale,
                 RuleKey::RelistedSale,
                 RuleKey::RelistedSelection,
+                RuleKey::GridSelection,
                 RuleKey::MassPrice,
                 RuleKey::ScaledMass,
                 RuleKey::TradeInOutfits,
