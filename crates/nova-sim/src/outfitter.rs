@@ -134,7 +134,7 @@
 //! is asked of the selected outfit, listed or not: `_CanBuyOutfitItem`
 //! reads no list, and after a relisting the selection is `oütf` 128
 //! whether or not it is listed (see
-//! [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)). A
+//! [`RuleKey::RelistedSelection`]). A
 //! buy is refused, checked in `_CanBuyOutfitItem`'s order
 //! (@0x4e7c4-0x4ebbc), when `_CanBuyOutfitItem`'s own tech test refuses
 //! it (@0x4e7ff-0x4e83d), the player owns its
@@ -241,7 +241,7 @@
 //! order that changes the listing, a buy or a sale, leaves the dialog at
 //! `oütf` 128 with no cell highlighted, or closes it when nothing is
 //! listed ([`Reselection`]), as
-//! [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)
+//! [`RuleKey::RelistedSelection`]
 //! says.
 //!
 //! **Ammunition cap** (`_HasMaxOfItem` @0x457e-0x45e4, before `Max`). An
@@ -430,7 +430,10 @@ pub enum OutfitRefusal {
     /// There is no outfitter: the ship is not landed, or the stellar has
     /// none.
     NoOutfitter,
-    /// The outfitter does not list the outfit.
+    /// The outfitter has no row for the outfit: it is neither listed nor
+    /// the relisting's [`Outfitter::unlisted`] row, which is checked like
+    /// a listed one (see
+    /// [`RuleKey::RelistedSelection`]).
     NotListed,
     /// The outfit is listed but cannot be bought here:
     /// `_CanBuyOutfitItem`'s own tech test refuses it, or its `Require` is
@@ -528,12 +531,12 @@ pub struct OutfitRun {
     /// The alert the first refused pass shows, if any.
     pub alert: Option<SaleAlert>,
     /// What the order leaves the outfitter's selection at (see
-    /// [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)).
+    /// [`RuleKey::RelistedSelection`]).
     pub after: Reselection,
 }
 
 /// What an order leaves the outfitter's selection at, as
-/// [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)
+/// [`RuleKey::RelistedSelection`]
 /// reads it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Reselection {
@@ -668,7 +671,7 @@ pub struct Outfitter {
     /// cell, and found only through [`row`](Self::row). It is the outfit
     /// a relisting selects, `oütf` 128 ([`FIRST_OUTFIT`]), which Buy and
     /// Sell answer for listed or not (see
-    /// [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)).
+    /// [`RuleKey::RelistedSelection`]).
     pub unlisted: Option<OutfitRow>,
     /// The player's credits.
     pub cash: i64,
@@ -719,14 +722,16 @@ impl Outfitter {
     /// The info box's "Item Mass:" line for `outfit`: none for an outfit
     /// of `Mass` 0 or less, which shows no Item Mass or Available line;
     /// otherwise its mass for one, unclamped, with "ton" at exactly 1 and
-    /// "tons" otherwise. None for an outfit not listed.
+    /// "tons" otherwise. None for an outfit with no row (neither listed
+    /// nor [`unlisted`](Self::unlisted)).
     #[must_use]
     pub fn item_mass_shown(&self, outfit: OutfitId) -> Option<ShownTons> {
         item_mass_shown().of(&self.asked_at(outfit, Pass::SINGLE)?)
     }
 
     /// `outfit`'s row as the outfitter's rules ask about it at `pass` of
-    /// an order, if it is listed. The button, the info box and the cap
+    /// an order, if it has one: listed, or the
+    /// [`unlisted`](Self::unlisted) row. The button, the info box and the cap
     /// are not inside the order loop, so they ask at [`Pass::SINGLE`].
     fn asked_at(&self, outfit: OutfitId, pass: Pass) -> Option<RowOutfit<'_>> {
         self.row(outfit).map(|row| RowOutfit {
@@ -736,8 +741,12 @@ impl Outfitter {
         })
     }
 
-    /// Whether `order`'s button is enabled, or why not: an outfit not
-    /// listed is [`OutfitRefusal::NotListed`]; a buy is refused by the
+    /// Whether `order`'s button is enabled, or why not: an outfit that
+    /// is neither listed nor the relisting's [`unlisted`](Self::unlisted)
+    /// row is [`OutfitRefusal::NotListed`], and the `unlisted` row is
+    /// checked like a listed one (see
+    /// [`RuleKey::RelistedSelection`]);
+    /// a buy is refused by the
     /// first of `_CanBuyOutfitItem`'s checks that refuses it, in the
     /// port's order (see the module docs); a sale by the Sell flag's
     /// checks (some owned, sellable, sold here) and then, as
@@ -771,7 +780,9 @@ impl Outfitter {
 
     /// Whether `order` goes through at `pass` of the order loop, or why
     /// not, whatever the [`RuleKey::SaleRefusal`](crate::RuleKey::SaleRefusal)
-    /// reading: a buy as [`can`](Self::can) says, whatever the pass; a
+    /// reading: an outfit with no row (neither listed nor
+    /// [`unlisted`](Self::unlisted)) is [`OutfitRefusal::NotListed`], and
+    /// the `unlisted` row is checked like a listed one; a buy as [`can`](Self::can) says, whatever the pass; a
     /// sale by the Sell flag's checks, then the sell loop's (the free
     /// mass, a raised `Max`, a launcher's ammunition), as each pass of
     /// `_DoOutfitDialog`'s sell loop checks it (@0x5c735-0x5ce6c), a
@@ -795,7 +806,8 @@ impl Outfitter {
     /// says: by the engine none, as `_OutfitDialogUpdate`'s only words are
     /// #213-#222 (@0x57a12-0x57e68); by the other reading the first of
     /// the sell loop's checks that refuses it, when the Sell flag is set.
-    /// `None` too when it is not listed.
+    /// `None` too for an outfit with no row (neither listed nor
+    /// [`unlisted`](Self::unlisted)).
     #[must_use]
     pub fn sale_words(&self, outfit: OutfitId) -> Option<OutfitRefusal> {
         self.asked_at(outfit, Pass::SINGLE)
@@ -810,7 +822,8 @@ impl Outfitter {
     /// (`_DoOutfitDialog` @0x5c735-0x5ce6c, @0x5c9ab-0x5c9dd, shown once
     /// an order by the flag -0x63e @0x5c6ca, in `DLOG` 3003 by
     /// `_ShowTextDialog` @0x5a8cf); by the other reading none. `None` for
-    /// a buy, an outfit not listed, a Sell-flag refusal, a sale that goes
+    /// a buy, an outfit with no row (neither listed nor
+    /// [`unlisted`](Self::unlisted)), a Sell-flag refusal, a sale that goes
     /// through, and a pass after the order's first refused one
     /// ([`Pass::alerted`]).
     #[must_use]
@@ -830,7 +843,7 @@ impl Outfitter {
     /// [`OutfitRefusal::NoSpace`] with some, when it lacks the mass;
     /// otherwise none (`_OutfitDialogUpdate` @0x57dba-0x57e6f, which never
     /// consults `_CanBuyOutfitItem`; see the module docs). `None` too when
-    /// it is not listed.
+    /// it has no row (neither listed nor [`unlisted`](Self::unlisted)).
     #[must_use]
     pub fn words(&self, outfit: OutfitId) -> Option<OutfitRefusal> {
         self.asked_at(outfit, Pass::SINGLE)
@@ -841,7 +854,8 @@ impl Outfitter {
     /// `outfit` (@0x4512), which the quantity dialog's buy maximum reads:
     /// its `Max`, as the ammunition cap, a raised `Max` and the gun and
     /// turret limits change it (see [`count_max`](Self::count_max));
-    /// `None` when it is not listed.
+    /// `None` when it has no row (neither listed nor
+    /// [`unlisted`](Self::unlisted)).
     #[must_use]
     pub fn cap(&self, outfit: OutfitId) -> Option<i16> {
         self.asked_at(outfit, Pass::SINGLE)
@@ -853,7 +867,8 @@ impl Outfitter {
     /// the engine, the full price for one bought since the visit opened
     /// (its count owned above the [visit's](OutfitVisit) count on entry),
     /// otherwise half; by the other reading, always half (see
-    /// [`refund`]). `None` when it is not listed.
+    /// [`refund`]). `None` when it has no row (neither listed nor
+    /// [`unlisted`](Self::unlisted)).
     #[must_use]
     pub fn refund(&self, outfit: OutfitId) -> Option<i64> {
         self.asked_at(outfit, Pass::SINGLE)
@@ -2249,7 +2264,7 @@ fn lc_names(record: &OutfitRecord) -> LcNames {
 /// @0x5d01c), listed or not, which the sell loop's passes left sell (see
 /// [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale)) and Buy and
 /// Sell answer for (see
-/// [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)).
+/// [`RuleKey::RelistedSelection`]).
 pub const FIRST_OUTFIT: OutfitId = OutfitId(128);
 
 /// The length of the port's outfit list (0x3b500c, 0x200 entries,
@@ -2317,7 +2332,7 @@ impl Shop<'_> {
     /// Buy and Sell answer for, asking no list (@0x5d164-0x5d199,
     /// `_OutfitFilter` @0x5806f-0x580ca; see
     /// [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale) and
-    /// [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)).
+    /// [`RuleKey::RelistedSelection`]).
     pub(crate) fn outfitter_with(
         &self,
         pilot: &Pilot,
