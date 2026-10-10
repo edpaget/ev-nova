@@ -1,0 +1,552 @@
+//! The offer dialog (`DLOG`/`DITL` 1016, `_OfferOneMission` @0xa21ac in
+//! the `EV Nova` executable): a mission offered outside the mission
+//! computer, such as at the bar, its text and its buttons.
+//!
+//! The stock dialog is 441 x 317, centred, over the frame of `PICT`s
+//! 8521-8523: the offer text in item 3, and below it the accept (item 1)
+//! and refuse (item 2) buttons, labelled as the session says
+//! ([`OfferPrompt`]); a mission that cannot be refused shows the one
+//! button of item 6 in their place, labelled to accept. The stock items
+//! are all disabled, so the dialog enables its buttons itself. Items 4, 5
+//! and 7 (the map, player info and mission info) lie outside it, and the
+//! arrows of items 9 and 10 are not drawn: Up and Down scroll the text.
+//!
+//! The original shrinks `DLOG` 1016 to its text's height, at least 48,
+//! moving the buttons up (@0xa2548-0xa2816), and widens the buttons to the
+//! wider label + 40, at least 100 (@0xa2a29-0xa2b46); this dialog keeps
+//! the template's height and widths. The picture variant (`DLOG` 1020) is
+//! rdm:phase/missions/phase-16-offer-pictures-and-movies.
+//!
+//! Keys (`_SingleMissionFilter` @0x98d9a): Return and Enter accept; the
+//! accept label's first letter accepts and, when the mission can be
+//! refused, the refuse label's refuses, unless both start with the same
+//! letter. Escape does nothing. The choice is taken once
+//! ([`OfferDialog::take_choice`]), and the dialog is then answered.
+
+use std::rc::Rc;
+use std::time::Duration;
+
+use nova_sim::OfferPrompt;
+
+use super::view::{PROBLEM_AT, PROBLEM_SIZE};
+use crate::color::Color;
+use crate::draw::DrawList;
+use crate::font::Font;
+use crate::image::ImageKey;
+use crate::input::{Input, Key};
+use crate::screen::{Screen, ScreenAction};
+use crate::sound::Sound;
+use crate::text::TextMetrics;
+use crate::ui::button::{ButtonSkin, ButtonStyle};
+use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
+use crate::ui::dialog::{Dialog, DialogEvent, DialogFrame, DialogTemplate, Role};
+
+/// The offer dialog's `DLOG` (and `DITL`) ID.
+pub const OFFER_DIALOG: i16 = 1016;
+
+/// The accept button's item.
+pub const ACCEPT_ITEM: usize = 1;
+/// The refuse button's item.
+pub const REFUSE_ITEM: usize = 2;
+/// The text's item.
+pub const TEXT_ITEM: usize = 3;
+/// The one button's item, for a mission that cannot be refused.
+pub const SINGLE_ITEM: usize = 6;
+
+/// The game's mission offer frame (`PICT`s 8521 to 8523, 441 wide), which
+/// the offer dialog is drawn over.
+pub const FRAME: DialogFrame = DialogFrame {
+    top: ImageKey::picture(8521),
+    middle: ImageKey::picture(8522),
+    bottom: ImageKey::picture(8523),
+    top_height: 9.0,
+    bottom_height: 40.0,
+};
+
+/// What the player chose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OfferChoice {
+    /// Accept the mission.
+    Accept,
+    /// Refuse it.
+    Refuse,
+}
+
+/// The offer dialog over the screen that offers it.
+#[derive(Clone, Debug)]
+pub struct OfferDialog {
+    /// The dialog, or why it cannot be shown.
+    laid: Result<Dialog, String>,
+    prompt: OfferPrompt,
+    /// The choice made, until it is taken.
+    choice: Option<OfferChoice>,
+    answered: bool,
+    sounds: Vec<Sound>,
+}
+
+impl OfferDialog {
+    /// `prompt`, laid out by `layout`: the offer dialog's template and the
+    /// metrics its text is measured by, or why there are none; its
+    /// buttons drawn in `style`.
+    #[must_use]
+    pub fn new(
+        layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
+        prompt: OfferPrompt,
+        style: ButtonStyle,
+    ) -> Self {
+        let laid = layout.map(|(mut template, metrics)| {
+            let single = prompt.labels.refuse.is_none();
+            let buttons: &[usize] = if single {
+                &[SINGLE_ITEM]
+            } else {
+                &[ACCEPT_ITEM, REFUSE_ITEM]
+            };
+            for &item in buttons {
+                if let Some(found) = template.items.get_mut(item - 1) {
+                    found.enabled = true;
+                }
+            }
+            let accept = Role::Button(prompt.labels.accept.clone());
+            let mut roles = vec![(
+                TEXT_ITEM,
+                Role::ScrollText {
+                    text: prompt.text.clone(),
+                    font: Font::Geneva,
+                    size: BODY_SIZE,
+                    color: BODY_COLOR,
+                },
+            )];
+            match &prompt.labels.refuse {
+                Some(refuse) => roles.extend([
+                    (ACCEPT_ITEM, accept),
+                    (REFUSE_ITEM, Role::Button(refuse.clone())),
+                    (SINGLE_ITEM, Role::Hidden),
+                ]),
+                None => roles.extend([
+                    (SINGLE_ITEM, accept),
+                    (ACCEPT_ITEM, Role::Hidden),
+                    (REFUSE_ITEM, Role::Hidden),
+                ]),
+            }
+            Dialog::new(&template, &roles, metrics)
+                .with_frame(FRAME)
+                .with_buttons(ButtonSkin::NOVA, style)
+                .with_default(None)
+                .with_cancel(None)
+        });
+        Self {
+            laid,
+            prompt,
+            choice: None,
+            answered: false,
+            sounds: Vec::new(),
+        }
+    }
+
+    /// The dialog, if it could be laid out.
+    #[must_use]
+    pub fn dialog(&self) -> Option<&Dialog> {
+        self.laid.as_ref().ok()
+    }
+
+    /// Why the offer cannot be shown, if it cannot.
+    #[must_use]
+    pub fn problem(&self) -> Option<&str> {
+        self.laid.as_ref().err().map(String::as_str)
+    }
+
+    /// The offer shown.
+    #[must_use]
+    pub fn prompt(&self) -> &OfferPrompt {
+        &self.prompt
+    }
+
+    /// Whether a choice has been made.
+    #[must_use]
+    pub fn answered(&self) -> bool {
+        self.answered
+    }
+
+    /// The choice made since this was last taken, once.
+    pub fn take_choice(&mut self) -> Option<OfferChoice> {
+        self.choice.take()
+    }
+
+    /// Chooses `choice`, once.
+    fn choose(&mut self, choice: OfferChoice) {
+        if !self.answered {
+            self.answered = true;
+            self.choice = Some(choice);
+        }
+    }
+
+    /// What key `key` chooses: Return accepts, and each label's first
+    /// letter, either case, chooses it, unless both start with the same
+    /// letter.
+    fn key_choice(&self, key: Key) -> Option<OfferChoice> {
+        let first = |label: &str| label.chars().next().map(|c| c.to_ascii_lowercase());
+        let accept = first(&self.prompt.labels.accept);
+        let refuse = self.prompt.labels.refuse.as_deref().and_then(first);
+        let letter = match key {
+            Key::Enter => return Some(OfferChoice::Accept),
+            Key::Char(c) if accept != refuse => Some(c.to_ascii_lowercase()),
+            _ => return None,
+        };
+        if letter == accept {
+            Some(OfferChoice::Accept)
+        } else if letter == refuse {
+            Some(OfferChoice::Refuse)
+        } else {
+            None
+        }
+    }
+}
+
+impl Screen for OfferDialog {
+    /// Return, Enter and the labels' letters choose; everything else goes
+    /// to the dialog. Once answered it takes nothing. It never quits.
+    fn input(&mut self, input: &Input) -> ScreenAction {
+        if self.answered {
+            return ScreenAction::None;
+        }
+        if let Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        } = *input
+            && let Some(choice) = self.key_choice(key)
+        {
+            self.choose(choice);
+            return ScreenAction::None;
+        }
+        let Ok(dialog) = &mut self.laid else {
+            return ScreenAction::None;
+        };
+        let event = dialog.input(input);
+        self.sounds.extend(dialog.take_sound().map(Sound::Ui));
+        match event {
+            Some(DialogEvent::Item(ACCEPT_ITEM | SINGLE_ITEM)) => self.choose(OfferChoice::Accept),
+            Some(DialogEvent::Item(REFUSE_ITEM)) => self.choose(OfferChoice::Refuse),
+            _ => {}
+        }
+        ScreenAction::None
+    }
+
+    /// Nothing moves on its own.
+    fn tick(&mut self, _dt: Duration) {}
+
+    fn draw(&self, list: &mut DrawList) {
+        match &self.laid {
+            Ok(dialog) => dialog.draw(list),
+            Err(reason) => {
+                list.text(
+                    format!("Cannot show the mission offer: {reason}. Press Return to accept it."),
+                    PROBLEM_AT,
+                    PROBLEM_SIZE,
+                    None,
+                    Color::ERROR,
+                );
+            }
+        }
+    }
+
+    fn cancel_pointer(&mut self) {
+        if let Ok(dialog) = &mut self.laid {
+            dialog.cancel_pointer();
+        }
+    }
+
+    /// The buttons' sounds, in order.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        std::mem::take(&mut self.sounds)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nova_sim::MissionId;
+    use nova_sim::mission::OfferLabels;
+
+    use super::*;
+    use crate::draw::DrawCommand;
+    use crate::geometry::{Bounds, Point};
+    use crate::input::MouseButton;
+    use crate::text::fixture::MonoMetrics;
+    use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
+        Bounds::at(Point::new(x, y), w, h)
+    }
+
+    /// Stock `DLOG` 1016, 441 x 317 and centred, with its ten disabled
+    /// user items as `DITL` 1016 has them, 4, 5 and 7 parked outside it.
+    fn template() -> DialogTemplate {
+        let items = [
+            (225.0, 285.0, 99.0, 25.0),
+            (117.0, 285.0, 99.0, 25.0),
+            (12.0, 9.0, 415.0, 267.0),
+            (150.0, 323.0, 32.0, 32.0),
+            (197.0, 326.0, 32.0, 32.0),
+            (173.0, 285.0, 99.0, 25.0),
+            (172.0, 337.0, 32.0, 32.0),
+            (272.0, 345.0, 23.0, 23.0),
+            (340.0, 287.0, 23.0, 23.0),
+            (373.0, 287.0, 23.0, 23.0),
+        ];
+        DialogTemplate {
+            bounds: rect(40.0, 40.0, 441.0, 317.0),
+            placement: Placement::Center,
+            items: items
+                .into_iter()
+                .map(|(x, y, w, h)| ItemTemplate {
+                    bounds: rect(x, y, w, h),
+                    enabled: false,
+                    kind: ItemSpec::User,
+                })
+                .collect(),
+        }
+    }
+
+    /// Where the dialog goes: (1024 - 441) / 2 and (768 - 317) / 2,
+    /// floored.
+    const ORIGIN: Point = Point::new(291.0, 225.0);
+
+    fn prompt(accept: &str, refuse: Option<&str>) -> OfferPrompt {
+        OfferPrompt {
+            mission: MissionId(141),
+            text: "Ferry this to Mars.".to_owned(),
+            labels: OfferLabels {
+                accept: accept.to_owned(),
+                refuse: refuse.map(str::to_owned),
+            },
+        }
+    }
+
+    fn dialog_of(prompt: OfferPrompt) -> OfferDialog {
+        OfferDialog::new(
+            Ok((template(), Rc::new(MonoMetrics))),
+            prompt,
+            ButtonStyle::STOCK,
+        )
+    }
+
+    fn offer() -> OfferDialog {
+        dialog_of(prompt("I'm in", Some("No thanks")))
+    }
+
+    fn drawn(dialog: &OfferDialog) -> Vec<DrawCommand> {
+        let mut list = DrawList::new();
+        dialog.draw(&mut list);
+        list.iter().cloned().collect()
+    }
+
+    fn texts(dialog: &OfferDialog) -> Vec<String> {
+        drawn(dialog)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn key(key: Key) -> Input {
+        Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        }
+    }
+
+    fn click_item(dialog: &mut OfferDialog, number: usize) {
+        let at = dialog
+            .dialog()
+            .expect("laid out")
+            .item_bounds(number)
+            .expect("an item")
+            .center();
+        for pressed in [true, false] {
+            dialog.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+    }
+
+    #[test]
+    fn the_named_values() {
+        assert_eq!(OFFER_DIALOG, 1016);
+        assert_eq!(
+            [ACCEPT_ITEM, REFUSE_ITEM, TEXT_ITEM, SINGLE_ITEM],
+            [1, 2, 3, 6]
+        );
+        assert_eq!(
+            [FRAME.top, FRAME.middle, FRAME.bottom],
+            [8521, 8522, 8523].map(ImageKey::picture)
+        );
+    }
+
+    #[test]
+    fn it_shows_the_text_and_both_labels_over_its_frame() {
+        let dialog = offer();
+        assert_eq!(dialog.problem(), None);
+        let laid = dialog.dialog().expect("laid out");
+        assert_eq!(laid.bounds().min, ORIGIN);
+        assert_eq!(
+            laid.text(TEXT_ITEM).map(|text| text.lines().join(" ")),
+            Some("Ferry this to Mars.".to_owned())
+        );
+        let commands = drawn(&dialog);
+        assert!(matches!(
+            commands[0],
+            DrawCommand::StretchedPicture { image, top_left, .. }
+                if image == FRAME.top && top_left == ORIGIN
+        ));
+        let shown = texts(&dialog);
+        for label in ["I'm in", "No thanks", "Ferry this to Mars."] {
+            assert!(shown.contains(&label.to_owned()), "{label}: {shown:?}");
+        }
+        assert!(laid.item_shown(ACCEPT_ITEM) && laid.item_shown(REFUSE_ITEM));
+        assert!(!laid.item_shown(SINGLE_ITEM));
+        assert!(!dialog.answered());
+    }
+
+    #[test]
+    fn an_offer_that_cannot_be_refused_shows_one_button() {
+        let mut dialog = dialog_of(prompt("Okay", None));
+        let laid = dialog.dialog().expect("laid out");
+        assert!(laid.item_shown(SINGLE_ITEM));
+        assert!(!laid.item_shown(ACCEPT_ITEM) && !laid.item_shown(REFUSE_ITEM));
+        assert_eq!(
+            texts(&dialog).iter().filter(|text| *text == "Okay").count(),
+            1
+        );
+        click_item(&mut dialog, SINGLE_ITEM);
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+    }
+
+    #[test]
+    fn the_buttons_choose_and_the_choice_is_taken_once() {
+        let mut dialog = offer();
+        assert_eq!(dialog.take_choice(), None);
+        click_item(&mut dialog, REFUSE_ITEM);
+        assert!(dialog.answered());
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Refuse));
+        assert_eq!(dialog.take_choice(), None, "once");
+        click_item(&mut dialog, ACCEPT_ITEM);
+        assert_eq!(dialog.take_choice(), None, "answered already");
+        let mut dialog = offer();
+        click_item(&mut dialog, ACCEPT_ITEM);
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+    }
+
+    #[test]
+    fn return_and_enter_accept_and_escape_does_nothing() {
+        let mut dialog = offer();
+        dialog.input(&key(Key::Escape));
+        assert!(!dialog.answered());
+        assert_eq!(dialog.take_choice(), None);
+        dialog.input(&Input::Key {
+            key: Key::Enter,
+            pressed: true,
+            repeat: true,
+        });
+        assert_eq!(dialog.take_choice(), None, "a repeat does nothing");
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+    }
+
+    #[test]
+    fn each_labels_first_letter_chooses_it() {
+        let mut dialog = offer();
+        dialog.input(&key(Key::Char('n')));
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Refuse));
+        let mut dialog = offer();
+        dialog.input(&key(Key::Char('I')));
+        assert_eq!(
+            dialog.take_choice(),
+            Some(OfferChoice::Accept),
+            "either case"
+        );
+        let mut dialog = offer();
+        dialog.input(&key(Key::Char('x')));
+        assert_eq!(dialog.take_choice(), None);
+        let mut cannot = dialog_of(prompt("Okay", None));
+        cannot.input(&key(Key::Char('n')));
+        assert_eq!(cannot.take_choice(), None, "no refuse label");
+        cannot.input(&key(Key::Char('o')));
+        assert_eq!(cannot.take_choice(), Some(OfferChoice::Accept));
+    }
+
+    #[test]
+    fn labels_starting_with_the_same_letter_take_no_letter() {
+        let mut dialog = dialog_of(prompt("Sure", Some("Scram")));
+        dialog.input(&key(Key::Char('s')));
+        assert_eq!(dialog.take_choice(), None);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+    }
+
+    #[test]
+    fn up_and_down_scroll_the_text() {
+        let mut dialog = dialog_of(OfferPrompt {
+            text: "line\r".repeat(40),
+            ..prompt("Yes", Some("No"))
+        });
+        dialog.input(&key(Key::Down));
+        assert_eq!(
+            dialog
+                .dialog()
+                .and_then(|laid| laid.text(TEXT_ITEM))
+                .map(crate::ui::ScrollText::first),
+            Some(1)
+        );
+        assert!(!dialog.answered());
+    }
+
+    #[test]
+    fn without_its_dialog_it_says_why_and_return_accepts() {
+        let mut dialog = OfferDialog::new(
+            Err("no DLOG 1016".to_owned()),
+            prompt("Yes", Some("No")),
+            ButtonStyle::STOCK,
+        );
+        assert_eq!(dialog.problem(), Some("no DLOG 1016"));
+        assert!(drawn(&dialog).iter().any(|command| matches!(
+            command,
+            DrawCommand::Text { text, color, .. } if text.contains("no DLOG 1016") && *color == Color::ERROR
+        )));
+        dialog.input(&key(Key::Escape));
+        assert_eq!(dialog.take_choice(), None);
+        dialog.input(&key(Key::Enter));
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+        assert_eq!(dialog.prompt().mission, MissionId(141));
+    }
+
+    const DOWN: Sound = Sound::Ui(crate::sound::UiSound::ButtonDown);
+    const UP: Sound = Sound::Ui(crate::sound::UiSound::ButtonUp);
+
+    #[test]
+    fn its_buttons_sound_and_a_click_abandoned_does_nothing() {
+        let mut dialog = offer();
+        let at = dialog
+            .dialog()
+            .and_then(|laid| laid.item_bounds(ACCEPT_ITEM))
+            .expect("accept")
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        dialog.input(&button(true));
+        dialog.cancel_pointer();
+        dialog.input(&button(false));
+        assert_eq!(dialog.take_choice(), None, "abandoned");
+        assert_eq!(dialog.take_sounds(), [DOWN]);
+        click_item(&mut dialog, ACCEPT_ITEM);
+        assert_eq!(dialog.take_sounds(), [DOWN, UP]);
+        assert_eq!(dialog.take_choice(), Some(OfferChoice::Accept));
+    }
+}
