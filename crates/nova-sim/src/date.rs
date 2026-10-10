@@ -13,6 +13,12 @@
 //! data names no months: the original took them from the system's long-date
 //! format, so they are the twelve English names here, with no weekday, no
 //! zero-padding, and the year a plain integer that keeps its sign.
+//!
+//! [`long_date_text`] is the original's long date (`_DateToLongString`
+//! @0x8ef8), which a mission's `<DL>` reads: the same, with the day's
+//! English ordinal, "June 23rd, 1177 NC". The arrival and landing
+//! messages, which the original also writes long, keep [`date_text`]
+//! for now (rdm:task/long-date-ordinals).
 
 use crate::catalog::{DateAffixes, StartDate};
 
@@ -114,6 +120,25 @@ pub fn date_text(date: GameDate, affixes: &DateAffixes) -> String {
     let month = MONTH_NAMES[usize::from(date.month - 1)];
     format!(
         "{}{month} {}, {}{}",
+        affixes.prefix, date.day, date.year, affixes.suffix
+    )
+}
+
+/// `date` as the original's long date (`_DateToLongString` @0x8ef8),
+/// wrapped in `affixes`: as [`date_text`], with the day's English ordinal
+/// (`STR#` 137 #25-28), for example "June 23rd, 1177 NC".
+#[must_use]
+pub fn long_date_text(date: GameDate, affixes: &DateAffixes) -> String {
+    let month = MONTH_NAMES[usize::from(date.month - 1)];
+    let ordinal = match (date.day % 10, date.day) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!(
+        "{}{month} {}{ordinal}, {}{}",
         affixes.prefix, date.day, date.year, affixes.suffix
     )
 }
@@ -292,6 +317,49 @@ mod tests {
         assert_eq!(
             date_text(day(-735, 12, 31), &affixes("", " NC")),
             "December 31, -735 NC"
+        );
+    }
+
+    // The long date.
+
+    #[test]
+    fn the_long_date_reads_june_23rd_1177_nc() {
+        assert_eq!(
+            long_date_text(date(23, 6, 1177), &affixes("", " NC")),
+            "June 23rd, 1177 NC"
+        );
+    }
+
+    #[test]
+    fn the_long_dates_day_takes_its_english_ordinal() {
+        let read = |n| long_date_text(day(1177, 7, n), &DateAffixes::default());
+        for (n, ordinal) in [
+            (1, "1st"),
+            (2, "2nd"),
+            (3, "3rd"),
+            (4, "4th"),
+            (10, "10th"),
+            (11, "11th"),
+            (12, "12th"),
+            (13, "13th"),
+            (14, "14th"),
+            (20, "20th"),
+            (21, "21st"),
+            (22, "22nd"),
+            (23, "23rd"),
+            (24, "24th"),
+            (30, "30th"),
+            (31, "31st"),
+        ] {
+            assert_eq!(read(n), format!("July {ordinal}, 1177"), "day {n}");
+        }
+    }
+
+    #[test]
+    fn the_long_dates_prefix_and_suffix_wrap_it_verbatim() {
+        assert_eq!(
+            long_date_text(day(-735, 12, 2), &affixes("Year ", " NC")),
+            "Year December 2nd, -735 NC"
         );
     }
 }
