@@ -88,7 +88,8 @@
 //! here, or when its final price, taken as none when it is negative, is
 //! more than the cash. The comparison is signed, so a pilot in debt can
 //! buy no ship, even one whose trade-in would cover the price and the
-//! debt (`_CalcShipCanBuy` @0x4f7d8-0x4f7eb).
+//! debt (`_CalcShipCanBuy` @0x4f7d8-0x4f7eb). The shipyard shows the
+//! final price clamped at none (`_ShipyardDialogUpdate` @0x594cf-0x594d8).
 //!
 //! # Buying a ship
 //!
@@ -420,10 +421,22 @@ impl Shipyard {
     }
 
     /// What buying `row`'s ship costs after the trade-in: negative when
-    /// the player is paid.
+    /// the player is paid. The purchase settles this, unclamped; the cash
+    /// check and the info box read
+    /// [`final_price_clamped`](Self::final_price_clamped).
     #[must_use]
     pub fn final_price(&self, row: &ShipRow) -> i64 {
         row.price.saturating_sub(self.trade_in)
+    }
+
+    /// The final price, none when the trade-in exceeds the price: what the
+    /// buy's cash check (`_CalcShipCanBuy` `cmovs` @0x4f7e2) and the info
+    /// box's "Final Price:" line (`_ShipyardDialogUpdate` @0x594cf-0x594d8)
+    /// read. The purchase itself settles the unclamped
+    /// [`final_price`](Self::final_price).
+    #[must_use]
+    pub fn final_price_clamped(&self, row: &ShipRow) -> i64 {
+        self.final_price(row).max(0)
     }
 }
 
@@ -511,7 +524,7 @@ fn for_sale(asked: &RowShip) -> Result<(), ShipRefusal> {
 /// nothing, whatever the trade-in (`_CalcShipCanBuy` @0x4f7d8-0x4f7eb).
 fn final_price_within_the_cash(asked: &RowShip) -> Result<(), ShipRefusal> {
     let shipyard = asked.shipyard;
-    if shipyard.final_price(asked.row).max(0) > shipyard.cash {
+    if shipyard.final_price_clamped(asked.row) > shipyard.cash {
         Err(ShipRefusal::CannotAfford)
     } else {
         Ok(())
@@ -2609,6 +2622,29 @@ mod tests {
             "the final price saturates"
         );
         assert_eq!(can(overflowing), Ok(()), "a saturated final price is none");
+    }
+
+    #[test]
+    fn the_final_price_clamped_is_at_least_0_and_the_final_price_is_not() {
+        let priced = |trade_in| {
+            let mut shipyard = Shipyard {
+                trade_in,
+                ..listing(true, 0)
+            };
+            shipyard.rows[0].price = 10_000;
+            shipyard
+        };
+        for (trade_in, unclamped, clamped) in
+            [(2500, 7500, 7500), (10_000, 0, 0), (40_000, -30_000, 0)]
+        {
+            let shipyard = priced(trade_in);
+            let row = &shipyard.rows[0];
+            assert_eq!(
+                (shipyard.final_price(row), shipyard.final_price_clamped(row)),
+                (unclamped, clamped),
+                "a trade-in of {trade_in}"
+            );
+        }
     }
 
     #[test]
