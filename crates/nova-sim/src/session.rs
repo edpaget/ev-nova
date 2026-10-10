@@ -2988,7 +2988,7 @@ impl Session {
         else {
             return 0;
         };
-        let unit = outfitter::unit_mass(&record, self.fields.mass);
+        let unit = outfitter::unit_mass(&record, self.fields.mass, &self.rules);
         let mut count = 0;
         while count < rounds
             && i64::from(self.pilot.owned(outfit)) < self.raised_max_of(&record)
@@ -2997,6 +2997,7 @@ impl Session {
                 &self.standard(),
                 &self.pilot.outfits,
                 &self.outfits,
+                &self.rules,
             ) >= unit
         {
             *self.pilot.outfits.entry(outfit).or_default() += 1;
@@ -13967,7 +13968,8 @@ mod tests {
     fn a_grant_weighs_each_outfit_by_its_raw_mass() {
         let mut catalog = granting();
         // 20 tons raw, but 8 by the ship's 40 tons with Flags 0x0400: two
-        // would fit the 30 tons free scaled, and only one raw.
+        // would fit the 30 tons free scaled (by the scaled mass's other
+        // reading, the bare product), and only one raw.
         let booster = catalog
             .outfits
             .iter_mut()
@@ -13975,7 +13977,8 @@ mod tests {
             .expect("the booster");
         booster.mass = 20;
         booster.flags = OutfitFlags::MASS_BY_MASS;
-        let mut session = alongside_ace(&catalog);
+        let other = Rulebook::default().with_override(RuleKey::ScaledMass, RuleSource::Bible);
+        let mut session = alongside_ace(&catalog).with_rules(other);
         let (boarded, _) = board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS);
         assert!(boarded.is_ok());
         assert_eq!(session.pilot().owned(OutfitId(200)), 1);
@@ -14069,8 +14072,11 @@ mod tests {
     fn held_to_the_max_boarding_and_g_weigh_an_outfit_as_the_outfitter_does() {
         // Of a `Mass` scaled by Flags 0x0400 on the ship's 40 tons, with
         // 30 tons free: 20 raw is 8, 75 is 30 and 80 is 32. Held to the
-        // `Max`, boarding (granting one) and `G` agree, by the scaled mass.
-        let rules = Rulebook::default().with_override(RuleKey::GrantMax, RuleSource::Bible);
+        // `Max`, boarding (granting one) and `G` agree, by the scaled mass
+        // (its other reading, the bare product).
+        let rules = Rulebook::default()
+            .with_override(RuleKey::GrantMax, RuleSource::Bible)
+            .with_override(RuleKey::ScaledMass, RuleSource::Bible);
         for (mass, fits) in [(20, true), (75, true), (80, false)] {
             let mut catalog = granting();
             catalog.persons[0].grant_count = 1;

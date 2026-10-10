@@ -429,13 +429,14 @@ fn above_none(value: i64) -> Option<i64> {
 
 impl ShipSpecs {
     /// The specs of class `ship`, its Space and stock-weapons list worked
-    /// out from its stock in `arsenal` and `outfits`, its Speed and Accel
-    /// read by `rounding`.
+    /// out from its stock in `arsenal` and `outfits`, its Space weighed
+    /// as `rules` reads [`RuleKey::ScaledMass`] and its Speed and Accel
+    /// as it reads [`RuleKey::ShipInfoRounding`].
     pub(crate) fn of(
         ship: &ShipRecord,
         arsenal: &Arsenal,
         outfits: &[OutfitRecord],
-        rounding: RuleSource,
+        rules: &Rulebook,
     ) -> Self {
         Self {
             fields: ship.fields,
@@ -443,8 +444,8 @@ impl ShipSpecs {
             max_tur: ship.max_tur,
             length: ship.length,
             crew: ship.crew,
-            space: space(ship, arsenal, outfits),
-            rounding,
+            space: space(ship, arsenal, outfits, rules),
+            rounding: rules.source_for(RuleKey::ShipInfoRounding),
             weapons: stock_lines(ship, arsenal, outfits),
         }
     }
@@ -905,11 +906,19 @@ pub(crate) fn stock_lines(
 /// `TechLevel` 0x7fff ([`wares::OUTFIT_TECH_NEVER`]): the weapon and
 /// ammunition searches pass over it for the next (`cmpw $0x7fff`
 /// @0x50143, @0x501d2), and such a default item is not taken off at all
-/// (@0x50286). The original's 16-bit sum into the class (@0x7ab0b) is
-/// not replicated.
-pub(crate) fn space(ship: &ShipRecord, arsenal: &Arsenal, outfits: &[OutfitRecord]) -> i64 {
+/// (@0x50286). Each outfit is weighed on the class's own `Mass` by
+/// [`unit_mass`], as `rules` reads [`RuleKey::ScaledMass`]
+/// (`_AdjustedItemMass` @0x50151, @0x501e0, @0x50294 for the walk, and
+/// the loader's @0x7aaf7, @0x7ac61, @0x7ad8d for the start). The
+/// original's 16-bit sum into the class (@0x7ab0b) is not replicated.
+pub(crate) fn space(
+    ship: &ShipRecord,
+    arsenal: &Arsenal,
+    outfits: &[OutfitRecord],
+    rules: &Rulebook,
+) -> i64 {
     let weighed = |record: &OutfitRecord, count: u16| {
-        unit_mass(record, ship.fields.mass).saturating_mul(i64::from(count))
+        unit_mass(record, ship.fields.mass, rules).saturating_mul(i64::from(count))
     };
     let record = |outfit: OutfitId| outfits.iter().find(|record| record.id == outfit);
     let standard = merged(
@@ -1022,12 +1031,7 @@ impl Yard<'_> {
                     name: ship.name.clone(),
                     short_name: ship.short_name.clone(),
                     price: price().of(&offer),
-                    specs: ShipSpecs::of(
-                        ship,
-                        self.arsenal,
-                        self.outfits,
-                        self.rules.source_for(RuleKey::ShipInfoRounding),
-                    ),
+                    specs: ShipSpecs::of(ship, self.arsenal, self.outfits, &self.rules),
                     facts: ShipFacts { buyable },
                 },
             ));
@@ -1539,6 +1543,7 @@ fn carry_persistent(sale: &Sale) -> Carry {
                     &standard,
                     &merged(&trial, &standard),
                     records,
+                    &sale.rules,
                 ) >= 0;
             if fits {
                 carried = trial;
@@ -3484,14 +3489,28 @@ mod tests {
         assert_eq!(pilot.outfits().collect::<Vec<_>>(), [(OutfitId(150), 1)]);
         assert_eq!(bought.sold_back, map(&[(140, 1)]));
         assert_eq!(bought.refund, 2000);
-        assert!(free_mass(small.fields, &map(&[(150, 1)]), &pilot.outfits, &records) >= 0);
+        assert!(
+            free_mass(
+                small.fields,
+                &map(&[(150, 1)]),
+                &pilot.outfits,
+                &records,
+                &Rulebook::default()
+            ) >= 0
+        );
         // With a 5-ton one instead, it fits exactly.
         let lighter = [records[0].clone(), persistent(140, 5, 1)];
         let mut pilot = owning(&[(140, 1)]);
         buy_by_the_port(&mut pilot, &small, &lighter);
         assert_eq!(pilot.owned(OutfitId(140)), 1);
         assert_eq!(
-            free_mass(small.fields, &map(&[(150, 1)]), &pilot.outfits, &lighter),
+            free_mass(
+                small.fields,
+                &map(&[(150, 1)]),
+                &pilot.outfits,
+                &lighter,
+                &Rulebook::default()
+            ),
             0
         );
     }
@@ -3613,6 +3632,32 @@ mod tests {
     }
 
     #[test]
+    fn a_persistent_outfit_scaled_by_mass_is_carried_by_its_weight_on_the_new_class() {
+        // 20 tons scaled by HEAVY's 25 is 5, which fits its 12 free; by
+        // the engine it weighs its own 20, which does not.
+        let records = [OutfitRecord {
+            flags: OutfitFlags::PERSISTENT | OutfitFlags::MASS_BY_MASS,
+            ..persistent(140, 20, 1)
+        }];
+        let carried = |source| {
+            let pilot = owning(&[(140, 1)]);
+            let bought = purchase(
+                &Sale {
+                    rules: port_carry().with_override(RuleKey::ScaledMass, source),
+                    ..sale(&pilot, &heavy(), "Kestrel", &[], &records)
+                },
+                QUOTE,
+            );
+            (
+                bought.outfits.get(&OutfitId(140)).copied(),
+                bought.report.sold_back,
+            )
+        };
+        assert_eq!(carried(RuleSource::Engine), (None, map(&[(140, 1)])));
+        assert_eq!(carried(RuleSource::Bible), (Some(1), BTreeMap::new()));
+    }
+
+    #[test]
     fn by_the_engine_every_persistent_outfit_carries_over_past_its_max_and_the_free_mass() {
         let records = [
             OutfitRecord {
@@ -3630,7 +3675,13 @@ mod tests {
         assert_eq!(bought.refund, 0);
         assert_eq!(pilot.cash(), 10_000 - 17_500 + 2500);
         assert_eq!(
-            free_mass(HEAVY, &BTreeMap::new(), &pilot.outfits, &records),
+            free_mass(
+                HEAVY,
+                &BTreeMap::new(),
+                &pilot.outfits,
+                &records,
+                &Rulebook::default()
+            ),
             12 - 25,
             "below none, as the original allows"
         );
@@ -4131,7 +4182,7 @@ mod tests {
             weighing(151, 1, &[(MOD_AMMO, 130)]),
             weighing(152, 2, &[]),
         ];
-        assert_eq!(space(&class, &arsenal, &outfits), 12);
+        assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), 12);
     }
 
     #[test]
@@ -4144,7 +4195,7 @@ mod tests {
             weighing(150, -4, &[(MOD_WEAPON, 140)]),
             weighing(151, 6, &[(MOD_WEAPON, 130)]),
         ];
-        assert_eq!(space(&class, &arsenal, &outfits), 4);
+        assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), 4);
     }
 
     #[test]
@@ -4156,7 +4207,7 @@ mod tests {
             weighing(150, 6, &[(MOD_WEAPON, 130)]),
             weighing(152, -4, &[]),
         ];
-        assert_eq!(space(&class, &arsenal, &outfits), 4);
+        assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), 4);
     }
 
     #[test]
@@ -4173,12 +4224,20 @@ mod tests {
             weighing(150, 1, &[(MOD_AMMO, 131)]),
             weighing(151, 2, &[(MOD_AMMO, 132)]),
         ];
-        assert_eq!(space(&class, &arsenal, &outfits), 5);
+        assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), 5);
     }
 
     #[test]
     fn a_class_without_stock_shows_its_free_mass_as_it_is() {
-        assert_eq!(space(&freeing(129, -7, &[]), &Arsenal::default(), &[]), -7);
+        assert_eq!(
+            space(
+                &freeing(129, -7, &[]),
+                &Arsenal::default(),
+                &[],
+                &Rulebook::default()
+            ),
+            -7
+        );
     }
 
     #[test]
@@ -4191,7 +4250,7 @@ mod tests {
         let class = freeing(129, 5, &[]);
         let arsenal = stocking(&[weapon(130)], 129, &[(130, 1, 0), (130, 3, 0)]);
         let outfits = [weighing(150, 2, &[(MOD_WEAPON, 130)])];
-        let shown = space(&class, &arsenal, &outfits);
+        let shown = space(&class, &arsenal, &outfits, &Rulebook::default());
         assert_eq!(shown, 5);
         assert_ne!(shown, floored_space(11, [8]), "summed");
         assert_ne!(shown, floored_space(11, [2]), "the first slot");
@@ -4208,7 +4267,7 @@ mod tests {
             weighing(151, 1, &[(MOD_AMMO, 130)]),
             weighing(152, 2, &[]),
         ];
-        assert_eq!(space(&class, &arsenal, &outfits), -7);
+        assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), -7);
     }
 
     /// The specs of a class of `space`, `holds` and `mass`.
@@ -4567,7 +4626,7 @@ mod tests {
             weighing(151, 2, &[(MOD_WEAPON, 130)]),
             never(weighing(152, -4, &[])),
         ];
-        assert_eq!(space(&class, &arsenal, &outfits), 0);
+        assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), 0);
         // A gun of 130 whose lowest holder, 150, of 5 tons, is never sold,
         // and the next, 151, of -3: the start is 20 + 5 = 25, less -3 is
         // 28; the old walk takes off 150's 5, leaving 20.
@@ -4576,24 +4635,56 @@ mod tests {
             never(weighing(150, 5, &[(MOD_WEAPON, 130)])),
             weighing(151, -3, &[(MOD_WEAPON, 130)]),
         ];
-        assert_eq!(space(&class, &arsenal, &outfits), 28);
+        assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), 28);
         // A holder naming 130 only in its second pair is ignored: the
         // start is 20 + 5 = 25 and nothing is taken off; the old walk
         // takes off 5, leaving 20.
         let outfits = [weighing(150, 5, &[(0, 0), (MOD_WEAPON, 130)])];
-        assert_eq!(space(&class, &arsenal, &outfits), 25);
+        assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), 25);
         // The same for ammunition, 2 rounds of 130's: the start is
         // 20 + 2 x 5 = 30. A second-pair holder is ignored, leaving 30
         // (the old walk 20); a first-pair one of tech 0x7fff is skipped
         // for the next, of -1 ton, giving 32 (the old walk 20).
         let arsenal = stocking(&[weapon(130)], 129, &[(130, 0, 2)]);
         let outfits = [weighing(150, 5, &[(0, 0), (MOD_AMMO, 130)])];
-        assert_eq!(space(&class, &arsenal, &outfits), 30);
+        assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), 30);
         let outfits = [
             never(weighing(150, 5, &[(MOD_AMMO, 130)])),
             weighing(151, -1, &[(MOD_AMMO, 130)]),
         ];
-        assert_eq!(space(&class, &arsenal, &outfits), 32);
+        assert_eq!(space(&class, &arsenal, &outfits, &Rulebook::default()), 32);
+    }
+
+    #[test]
+    fn the_space_weighs_a_stock_outfit_scaled_by_mass_at_least_at_its_own_mass() {
+        // A gun of 130 whose lowest holder, 150, of 5 tons, is never sold,
+        // and the next, 151, of 10 scaled by the class's 40 (4 by the bare
+        // product, 10 by the engine): the start is 20 + 5 = 25.
+        let class = freeing(129, 20, &[]);
+        let arsenal = stocking(&[], 129, &[(130, 1, 0)]);
+        let outfits = [
+            OutfitRecord {
+                tech_level: wares::OUTFIT_TECH_NEVER,
+                ..weighing(150, 5, &[(MOD_WEAPON, 130)])
+            },
+            OutfitRecord {
+                flags: OutfitFlags::MASS_BY_MASS,
+                ..weighing(151, 10, &[(MOD_WEAPON, 130)])
+            },
+        ];
+        for (source, shown) in [(RuleSource::Engine, 15), (RuleSource::Bible, 21)] {
+            let rules = Rulebook::default().with_override(RuleKey::ScaledMass, source);
+            assert_eq!(
+                space(&class, &arsenal, &outfits, &rules),
+                shown,
+                "{source:?}"
+            );
+            assert_eq!(
+                ShipSpecs::of(&class, &arsenal, &outfits, &rules).space,
+                shown,
+                "the specs, {source:?}"
+            );
+        }
     }
 
     #[test]

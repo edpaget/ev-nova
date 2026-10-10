@@ -484,6 +484,35 @@ fn port_kanes_outfitter_sells_what_its_tech_levels_allow() {
     assert_eq!((outfitter.cash, outfitter.free_mass), (25_000, 8));
 }
 
+/// Carbon Fiber (`oütf` 180, `Mass` 1, `Flags` 0x0400) on the Shuttle
+/// (`shïp` 128, `Mass` 15): Port Kane's outfitter weighs it at its own
+/// ton by the engine (`_AdjustedItemMass` @0x28ba-0x28bc), and at
+/// 15 × 1 / 100 = 0 by the other reading of `ScaledMass`.
+#[test]
+fn carbon_fiber_weighs_a_ton_on_the_shuttle_at_port_kane() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let weighed = |rules: nova_sim::Rulebook| {
+        at_port_kane(&data)
+            .with_rules(rules)
+            .outfitter(&mut Fires)
+            .expect("an outfitter")
+            .row(OutfitId(180))
+            .expect("Carbon Fiber")
+            .mass
+    };
+    assert_eq!(weighed(nova_sim::Rulebook::default()), 1);
+    assert_eq!(
+        weighed(
+            nova_sim::Rulebook::default()
+                .with_override(nova_sim::RuleKey::ScaledMass, nova_sim::RuleSource::Bible)
+        ),
+        0
+    );
+}
+
 /// Stock `oütf` 342, "Area Map - Vell-os", tech level 0 and hidden while
 /// its `Availability`, `b9999`, does not hold: Port Kane's outfitter does
 /// not list it to a new pilot, and lists it, for sale, once control bit
@@ -3018,7 +3047,11 @@ fn boarding_dr_ralph_grants_his_map_half_the_time() {
             outfit: outfit.id,
             item_class: outfit.item_class,
             mass: outfit.mass,
-            unit_mass: nova_sim::outfitter::unit_mass(outfit, fields.mass),
+            unit_mass: nova_sim::outfitter::unit_mass(
+                outfit,
+                fields.mass,
+                &nova_sim::Rulebook::default(),
+            ),
             owned: 0,
             max: outfit.max,
         })

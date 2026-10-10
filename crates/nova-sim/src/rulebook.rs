@@ -70,6 +70,7 @@
 //! | [`CountedSale`](RuleKey::CountedSale) | `counted_sale` | each pass of a counted sale checks the order as a whole: a raised `Max` refuses while the target owned exceeds its raw `Max` x (owned now - the whole count) (@0x5c82d-0x5c85e), and a launcher while the rounds held exceed `MaxAmmo` x (owned now - the pass index - 1) (@0x5cb9c-0x5cbc7), signed, so an Alt sale is refused sooner than as many single clicks; only the engine readings of `raised_max` and `launcher_sale` read it (`_DoOutfitDialog`; [`Outfitter::check_at`](crate::Outfitter::check_at)) | each pass is checked as one sale, (owned now - 1)¶¶¶¶ |
 //! | [`RelistedSale`](RuleKey::RelistedSale) | `relisted_sale` | a sale that changes the listing (`_SetupPortAvailableItems` true, @0x5d00a) resets the selection to `oütf` 128 and the loop index to 0, or 512 with nothing listed, so the passes left check and sell `oütf` 128, listed or not, and can outrun the count (`_DoOutfitDialog` @0x5d017-0x5d150, @0x5d164-0x5d1b1; [`Session`](crate::Session)) | the ordered outfit and the pass index are kept††††† |
 //! | [`MassPrice`](RuleKey::MassPrice) | `mass_price` | an outfit flagged 0x0200 costs max(`Cost`, `Cost` × the flown class's `Mass`), so `Cost` on a class of `Mass` 0 or less, and a `Cost` of 0 or less costs 0, flag or not (`_AdjustedItemCost` @0x5869-0x5895; `_PlayerShipTradeInPrice` @0xb0e3-0xb106; [`unit_price`](crate::outfitter::unit_price)) | `Cost` × `Mass`, never below 0§§§§ |
+//! | [`ScaledMass`](RuleKey::ScaledMass) | `scaled_mass` | an outfit flagged 0x0400 of `Mass` above 0 weighs max(`Mass`, `Mass` × the class's `Mass` / 100, truncated), so its own `Mass` on a class of `Mass` below 100, in the outfitter, the free mass, the grants and the Shipyard Info Space (`_AdjustedItemMass` @0x2889-0x28c2; `_ShipFreeMass` @0xb4c1-0xb4ed; [`unit_mass`](crate::outfitter::unit_mass)) | `Mass` × the class's `Mass` / 100, truncated, for `Mass` above 0‡‡‡‡‡ |
 //! | [`TradeInOutfits`](RuleKey::TradeInOutfits) | `trade_in_outfits` | a ship's trade-in counts every outfit owned but a persistent one, an unsellable one included, at half its line (`_PlayerShipTradeInPrice` @0xb0d5-0xb0e1, @0xb109-0xb11f; [`Session`](crate::Session)) | an unsellable outfit is left out too†††† |
 //! | [`TradeLot`](RuleKey::TradeLot) | `trade_lot` | a plain Buy at the exchange moves min(trunc(cash / price), 10, free) tons and a plain Sell min(held, 10); Option (Alt here) asks for a count (see [`TradeCount`](RuleKey::TradeCount)) (`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa; [`Session`](crate::Session)) | a plain trade moves 1 ton¶¶ |
 //! | [`TradeQuotient`](RuleKey::TradeQuotient) | `trade_quotient` | the most a buy can move is min(trunc(f32(cash) / f32(price)), free), in single floats, made 32000 from 32001 up, so above 2^24 cash it can buy a ton more than the cash covers and leave the cash below 0 (`_DoTradeDialog` @0x5e21d-0x5e234, @0x5e23a-0x5e24c; [`Market::row_max`](crate::Market::row_max)) | exact integer division\*\*\* |
@@ -172,6 +173,13 @@
 //! Its reading here is that product never below 0, the port's earlier
 //! price, so a negative `Cost` on a class of negative `Mass` is priced
 //! at the positive product.
+//!
+//! ‡‡‡‡‡ The Bible gives the mass as the ship class's `Mass` times the
+//! item's `Mass`, divided by 100, for positive-mass items ("Only works
+//! for positive-mass items"), and gives no floor. Its reading here is
+//! that product, the port's earlier mass, so a flagged outfit can weigh
+//! less than its own `Mass`, and 0 or a negative mass on a class of
+//! `Mass` 0 or less.
 //!
 //! ¶¶¶¶ The Bible says nothing of a counted sale. The other reading is
 //! the port's earlier behaviour, each pass of a counted sale checked as a
@@ -805,6 +813,18 @@ rule_keys! {
     /// Bible's "ship class Mass field is multiplied by this item's Cost
     /// field" reads (see [`outfitter`](crate::outfitter)).
     MassPrice => "mass_price",
+    /// How much an outfit flagged 0x0400 (mass by ship mass) weighs. By
+    /// the engine, `_AdjustedItemMass` (@0x2889-0x28c2) gives the outfit's
+    /// `Mass` when that is 0 or less (@0x2893-0x2895) or the flag is
+    /// clear. Otherwise it gives max(`Mass`, `Mass` × the class's `Mass` /
+    /// 100, truncated) (@0x28a0-0x28bc), so `Mass` on a class of `Mass`
+    /// below 100. `_ShipFreeMass` inlines the same (@0xb4c1-0xb4ed). By
+    /// the other reading, the mass is the bare product for a positive
+    /// `Mass`, as the Bible's "ship class Mass field is multiplied by this
+    /// item's Mass field and then divided by 100" reads, so a flagged
+    /// outfit can weigh less than its `Mass`, and 0 or less on a class of
+    /// `Mass` 0 or less (see [`outfitter`](crate::outfitter)).
+    ScaledMass => "scaled_mass",
     /// Which outfits a ship's trade-in counts. By the engine,
     /// `_PlayerShipTradeInPrice` skips only an outfit with a count of 0
     /// or less (@0xb0d5-0xb0d8) and a persistent one (the record byte
@@ -1073,6 +1093,12 @@ mod tests {
     }
 
     #[test]
+    fn the_scaled_mass_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::ScaledMass.key(), "scaled_mass");
+        assert_eq!(RuleKey::from_key("scaled_mass"), Some(RuleKey::ScaledMass));
+    }
+
+    #[test]
     fn the_sale_refusal_rule_is_found_by_its_key() {
         assert_eq!(RuleKey::SaleRefusal.key(), "sale_refusal");
         assert_eq!(
@@ -1243,6 +1269,7 @@ mod tests {
                 RuleKey::CountedSale,
                 RuleKey::RelistedSale,
                 RuleKey::MassPrice,
+                RuleKey::ScaledMass,
                 RuleKey::TradeInOutfits,
                 RuleKey::TradeLot,
                 RuleKey::TradeQuotient,

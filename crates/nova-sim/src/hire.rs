@@ -428,12 +428,7 @@ impl Bar<'_> {
                     short_name: ship.short_name.clone(),
                     fee,
                     wage: self.terms.wage(ship),
-                    specs: ShipSpecs::of(
-                        ship,
-                        self.arsenal,
-                        self.outfits,
-                        self.rules.source_for(RuleKey::ShipInfoRounding),
-                    ),
+                    specs: ShipSpecs::of(ship, self.arsenal, self.outfits, &self.rules),
                     hire,
                 },
             ));

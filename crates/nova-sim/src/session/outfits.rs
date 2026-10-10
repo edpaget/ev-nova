@@ -148,7 +148,7 @@ impl Session {
             outfit: record.id,
             item_class: record.item_class,
             mass: record.mass,
-            unit_mass: unit_mass(record, self.fields.mass),
+            unit_mass: unit_mass(record, self.fields.mass, &self.rules),
             owned: self.pilot.owned(record.id),
             max: clamp_i16(self.raised_max_of(record)),
         }
@@ -162,6 +162,7 @@ impl Session {
             &self.standard(),
             &self.pilot.outfits,
             &self.outfits,
+            &self.rules,
         )
     }
 
@@ -517,6 +518,28 @@ mod tests {
         run(&mut session, "G307 G307");
         assert_eq!(session.pilot().owned(HEAVY), 1);
         assert_eq!(session.free_mass(), 0);
+    }
+
+    #[test]
+    fn the_sessions_free_mass_and_grant_stock_weigh_a_scaled_outfit_as_its_rules_say() {
+        // HEAVY made 20 tons scaled by the ship's 40: 8 by the bare
+        // product, but never below its own 20 by the engine.
+        let mut catalog = mapped();
+        catalog.outfits[7].mass = 20;
+        catalog.outfits[7].flags = outfitter::OutfitFlags::MASS_BY_MASS;
+        let record = catalog.outfits[7].clone();
+        let weighed = |source| {
+            let rules = Rulebook::default().with_override(RuleKey::ScaledMass, source);
+            let mut session = session(&catalog).with_rules(rules);
+            let free = session.free_mass();
+            session.pilot.outfits.insert(HEAVY, 1);
+            (
+                free - session.free_mass(),
+                session.grant_stock(&record).unit_mass,
+            )
+        };
+        assert_eq!(weighed(RuleSource::Engine), (20, 20));
+        assert_eq!(weighed(RuleSource::Bible), (8, 8));
     }
 
     #[test]

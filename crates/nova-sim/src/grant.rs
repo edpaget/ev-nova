@@ -36,8 +36,10 @@
 //!    above the free mass, taken as none when below none, the count drops
 //!    by one. At none, nothing is granted and nothing said. By the engine
 //!    the mass is the raw `Mass`, not scaled by its `Flags` 0x0400, as
-//!    the original weighs it; otherwise it is the outfitter's scaled mass,
-//!    as `G` weighs it too ([`held_to_max`] holds both to steps 5 and 6).
+//!    the original weighs it; otherwise it is the outfitter's mass
+//!    ([`unit_mass`](crate::outfitter::unit_mass), as
+//!    [`RuleKey::ScaledMass`](crate::RuleKey::ScaledMass) reads it), as
+//!    `G` weighs it too ([`held_to_max`] holds both to steps 5 and 6).
 //!
 //! Each outfit granted goes through the grant path the outfitter's
 //! purchases take, once a unit (`_GrantOutfitItem` @0x44d4f, called from
@@ -108,8 +110,9 @@ pub struct GrantStock {
     /// Its `Mass`, raw: not scaled by its `Flags` 0x0400.
     pub mass: i16,
     /// Its mass for one as the outfitter weighs it on the player's ship
-    /// ([`unit_mass`](crate::outfitter::unit_mass)): scaled by its
-    /// `Flags` 0x0400.
+    /// ([`unit_mass`](crate::outfitter::unit_mass), as
+    /// [`RuleKey::ScaledMass`](crate::RuleKey::ScaledMass) reads it):
+    /// scaled by its `Flags` 0x0400.
     pub unit_mass: i64,
     /// How many the player owns.
     pub owned: u16,
@@ -181,7 +184,8 @@ pub fn fit_count(count: u16, mass: i64, free_mass: i64) -> u16 {
 /// the outfit's `Max` less the owned (none when it owns `Max` or more),
 /// then [fitted](fit_count) to the free mass by the outfit's
 /// [`unit_mass`](GrantStock::unit_mass), the mass the outfitter charges
-/// against the free mass for one, scaled by `Flags` 0x0400. The raw
+/// against the free mass for one, scaled by `Flags` 0x0400 as
+/// [`RuleKey::ScaledMass`](crate::RuleKey::ScaledMass) reads it. The raw
 /// `Mass` the original's boarding weighs (@0x931fc) is not used here, so
 /// an outfit held to its `Max` fits the free mass by the same measure
 /// whichever path grants it, and the measure its purchase is held to.

@@ -118,8 +118,10 @@
 //! An outfit's price is its `Cost`, or with [`OutfitFlags::PRICE_BY_MASS`]
 //! max(`Cost`, `Cost` × the ship's `Mass`), and 0 for a `Cost` of 0 or
 //! less, as [`RuleKey::MassPrice`] reads it (see [`unit_price`]). Its
-//! mass is its `Mass`, or the ship's `Mass` times it over 100, truncated,
-//! with [`OutfitFlags::MASS_BY_MASS`] when it is positive. The ship's free mass is its `FreeMass`, plus the
+//! mass is its `Mass`, or with [`OutfitFlags::MASS_BY_MASS`] and a
+//! positive `Mass`, max(`Mass`, the ship's `Mass` times it over 100,
+//! truncated), as [`RuleKey::ScaledMass`] reads it (see [`unit_mass`]).
+//! The ship's free mass is its `FreeMass`, plus the
 //! mass of its standard equipment, its default items and its stock weapons
 //! and their `AmmoLoad` (`FreeMass` is space on top of them: the loader
 //! adds their mass to it, `_LoadObjectData` @0x7aaf7, @0x7ac61, @0x7ad8d),
@@ -1706,31 +1708,32 @@ pub fn requirements_apply(require_govt: i16, govt: Option<GovtId>) -> bool {
 /// comes from here.
 #[must_use]
 pub fn unit_price(outfit: &OutfitRecord, ship_mass: i16, rules: &Rulebook) -> i64 {
-    outfit_price().of(&PricedOutfit {
+    outfit_price().of(&OutfitOnShip {
         record: outfit,
         ship_mass,
         rules,
     })
 }
 
-/// An outfit priced on a ship class: what `_AdjustedItemCost` reads.
-pub(crate) struct PricedOutfit<'a> {
+/// An outfit on a ship class: what `_AdjustedItemCost` and
+/// `_AdjustedItemMass` read.
+pub(crate) struct OutfitOnShip<'a> {
     /// The outfit.
     pub(crate) record: &'a OutfitRecord,
     /// The flown class's raw `Mass` (`shïp`+0x9ee).
     pub(crate) ship_mass: i16,
-    /// The rule set the price follows.
+    /// The rule set the price and the mass follow.
     pub(crate) rules: &'a Rulebook,
 }
 
-impl Context for PricedOutfit<'_> {
+impl Context for OutfitOnShip<'_> {
     fn rulebook(&self) -> &Rulebook {
         self.rules
     }
 }
 
 /// An outfit's price, for one, as [`RuleKey::MassPrice`] says.
-fn outfit_price<'a>() -> Value<PricedOutfit<'a>, i64> {
+fn outfit_price<'a>() -> Value<OutfitOnShip<'a>, i64> {
     Value::disputed(
         "outfit price",
         "`_AdjustedItemCost` @0x5869-0x5895; inlined in `_PlayerShipTradeInPrice` \
@@ -1744,7 +1747,7 @@ fn outfit_price<'a>() -> Value<PricedOutfit<'a>, i64> {
 /// The engine's price: 0 for a `Cost` of 0 or less (@0x5872-0x5878);
 /// otherwise the `Cost`, or with the flag max(`Cost`, `Cost` × `Mass`)
 /// (@0x5883-0x588f). The product is not wrapped to 32 bits.
-fn at_least_the_cost(priced: &PricedOutfit) -> i64 {
+fn at_least_the_cost(priced: &OutfitOnShip) -> i64 {
     let cost = i64::from(priced.record.cost);
     if !cost.is_positive() {
         return 0;
@@ -1757,7 +1760,7 @@ fn at_least_the_cost(priced: &PricedOutfit) -> i64 {
 
 /// The other reading's price: the `Cost`, times the `Mass` with the
 /// flag, never below 0.
-fn bare_product(priced: &PricedOutfit) -> i64 {
+fn bare_product(priced: &OutfitOnShip) -> i64 {
     let cost = i64::from(priced.record.cost);
     let price = if priced.record.flags & OutfitFlags::PRICE_BY_MASS == 0 {
         cost
@@ -1767,12 +1770,50 @@ fn bare_product(priced: &PricedOutfit) -> i64 {
     price.max(0)
 }
 
-/// `outfit`'s mass, for one, in tons, on a ship of `ship_mass`.
+/// `outfit`'s mass, for one, in tons, on a ship of `ship_mass`, as
+/// `rules` reads [`RuleKey::ScaledMass`]: its `Mass`, or with
+/// [`OutfitFlags::MASS_BY_MASS`] and a positive `Mass`, max(`Mass`,
+/// `ship_mass` × `Mass` / 100, truncated) by the engine and the bare
+/// product by the other reading. Every mass the port gives an outfit
+/// comes from here.
 #[must_use]
-pub fn unit_mass(outfit: &OutfitRecord, ship_mass: i16) -> i64 {
-    let mass = i64::from(outfit.mass);
-    if outfit.flags & OutfitFlags::MASS_BY_MASS != 0 && mass.is_positive() {
-        i64::from(ship_mass) * mass / 100
+pub fn unit_mass(outfit: &OutfitRecord, ship_mass: i16, rules: &Rulebook) -> i64 {
+    outfit_mass().of(&OutfitOnShip {
+        record: outfit,
+        ship_mass,
+        rules,
+    })
+}
+
+/// An outfit's mass, for one, as [`RuleKey::ScaledMass`] says.
+fn outfit_mass<'a>() -> Value<OutfitOnShip<'a>, i64> {
+    Value::disputed(
+        "outfit mass",
+        "`_AdjustedItemMass` @0x2889-0x28c2; inlined in `_ShipFreeMass` @0xb4c1-0xb4ed",
+        RuleKey::ScaledMass,
+        at_least_the_mass,
+        scaled_product,
+    )
+}
+
+/// The engine's mass: the `Mass` when it is 0 or less (@0x2893-0x2895)
+/// or without the flag (@0x2897-0x289b); otherwise max(`Mass`, `Mass` ×
+/// the class's `Mass` / 100, truncated) (@0x28a0-0x28bc). The product is
+/// not wrapped to 32 bits.
+fn at_least_the_mass(weighed: &OutfitOnShip) -> i64 {
+    let mass = i64::from(weighed.record.mass);
+    if !mass.is_positive() || weighed.record.flags & OutfitFlags::MASS_BY_MASS == 0 {
+        return mass;
+    }
+    mass.max(i64::from(weighed.ship_mass) * mass / 100)
+}
+
+/// The other reading's mass: the `Mass`, or with the flag and a positive
+/// `Mass` the class's `Mass` times it over 100, truncated, with no floor.
+fn scaled_product(weighed: &OutfitOnShip) -> i64 {
+    let mass = i64::from(weighed.record.mass);
+    if weighed.record.flags & OutfitFlags::MASS_BY_MASS != 0 && mass.is_positive() {
+        i64::from(weighed.ship_mass) * mass / 100
     } else {
         mass
     }
@@ -1972,27 +2013,35 @@ pub(crate) fn outfit_mods(
         .collect()
 }
 
-/// The total mass of `outfits` on a ship of `ship_mass`.
-fn mass_of(outfits: &BTreeMap<OutfitId, u16>, records: &[OutfitRecord], ship_mass: i16) -> i64 {
+/// The total mass of `outfits` on a ship of `ship_mass`, each weighed by
+/// [`unit_mass`] as `rules` says.
+fn mass_of(
+    outfits: &BTreeMap<OutfitId, u16>,
+    records: &[OutfitRecord],
+    ship_mass: i16,
+    rules: &Rulebook,
+) -> i64 {
     records
         .iter()
         .filter_map(|record| Some((record, *outfits.get(&record.id)?)))
-        .map(|(record, count)| unit_mass(record, ship_mass) * i64::from(count))
+        .map(|(record, count)| unit_mass(record, ship_mass, rules) * i64::from(count))
         .sum()
 }
 
 /// The free mass of a ship with `fields` and this `standard` equipment
 /// (its default items and stock weapons, whose mass `FreeMass` leaves
-/// out), carrying `owned`.
+/// out), carrying `owned`, each outfit weighed as `rules` says
+/// ([`RuleKey::ScaledMass`]; `_ShipFreeMass` @0xb4c1-0xb4ed).
 #[must_use]
 pub(crate) fn free_mass(
     fields: ShipFields,
     standard: &BTreeMap<OutfitId, u16>,
     owned: &BTreeMap<OutfitId, u16>,
     records: &[OutfitRecord],
+    rules: &Rulebook,
 ) -> i64 {
-    i64::from(fields.free_mass) + mass_of(standard, records, fields.mass)
-        - mass_of(owned, records, fields.mass)
+    i64::from(fields.free_mass) + mass_of(standard, records, fields.mass, rules)
+        - mass_of(owned, records, fields.mass, rules)
 }
 
 /// A ship class's room for guns and turrets: its `MaxGun` and `MaxTur`.
@@ -2250,7 +2299,13 @@ impl Shop<'_> {
             return None;
         }
         let contributed = wares::contributed(self.fields.contribute, &pilot.outfits, self.records);
-        let free = free_mass(self.fields, self.standard, &pilot.outfits, self.records);
+        let free = free_mass(
+            self.fields,
+            self.standard,
+            &pilot.outfits,
+            self.records,
+            &self.rules,
+        );
         let mut sorted: Vec<&OutfitRecord> = self.records.iter().collect();
         sorted.sort_by_key(|record| record.id);
         let armed = Armed::of(self.hardpoints, &pilot.outfits, self.records);
@@ -2295,7 +2350,7 @@ impl Shop<'_> {
                 continue;
             }
             let price = unit_price(record, self.fields.mass, &self.rules);
-            let mass = unit_mass(record, self.fields.mass);
+            let mass = unit_mass(record, self.fields.mass, &self.rules);
             // A listed row passed the sweep, so it is for sale exactly
             // when it is on offer today.
             let sold_here = !listed || today || sells_anywhere;
@@ -3694,6 +3749,100 @@ mod tests {
         assert!(cited.contains("@0xb0e3-0xb106"), "{cited}");
     }
 
+    /// An outfit of `mass`, scaled by the ship's mass or not.
+    fn of_mass(mass: i16, by_mass: bool) -> OutfitRecord {
+        OutfitRecord {
+            mass,
+            flags: if by_mass {
+                OutfitFlags::MASS_BY_MASS
+            } else {
+                0
+            },
+            ..outfit(128, &[])
+        }
+    }
+
+    #[test]
+    fn the_scaled_mass_is_at_least_the_outfits_own_mass_by_the_engine() {
+        let engine = Rulebook::default();
+        let scaled = of_mass(10, true);
+        assert_eq!(unit_mass(&scaled, 155, &engine), 15, "the product wins");
+        assert_eq!(unit_mass(&scaled, 100, &engine), 10);
+        assert_eq!(unit_mass(&scaled, 40, &engine), 10, "the mass below 100");
+        assert_eq!(unit_mass(&scaled, 0, &engine), 10, "the mass on mass 0");
+        assert_eq!(unit_mass(&scaled, -100, &engine), 10, "the mass below 0");
+        assert_eq!(
+            unit_mass(&of_mass(1, true), 15, &engine),
+            1,
+            "Carbon Fiber on the Shuttle"
+        );
+        assert_eq!(unit_mass(&of_mass(0, true), 155, &engine), 0);
+        assert_eq!(
+            unit_mass(&of_mass(-5, true), -200, &engine),
+            -5,
+            "no product"
+        );
+        assert_eq!(unit_mass(&of_mass(7, false), 40, &engine), 7);
+        assert_eq!(unit_mass(&of_mass(7, false), 155, &engine), 7);
+        assert_eq!(
+            unit_mass(&of_mass(i16::MAX, true), i16::MAX, &engine),
+            i64::from(i16::MAX) * i64::from(i16::MAX) / 100,
+            "no 32-bit wrap"
+        );
+    }
+
+    #[test]
+    fn the_scaled_mass_is_the_bare_product_by_the_other_reading() {
+        let other = Rulebook::default().with_override(RuleKey::ScaledMass, RuleSource::Bible);
+        let scaled = of_mass(10, true);
+        assert_eq!(unit_mass(&scaled, 155, &other), 15);
+        assert_eq!(unit_mass(&scaled, 40, &other), 4);
+        assert_eq!(unit_mass(&scaled, 0, &other), 0);
+        assert_eq!(unit_mass(&scaled, -100, &other), -10);
+        assert_eq!(unit_mass(&of_mass(-5, true), -200, &other), -5);
+        assert_eq!(unit_mass(&of_mass(7, false), 40, &other), 7);
+    }
+
+    #[test]
+    fn the_outfit_mass_rule_reads_scaled_mass_and_cites_adjusted_item_mass() {
+        assert_eq!(outfit_mass().about().reads(), Some(RuleKey::ScaledMass));
+        let cited = outfit_mass().about().reproduces();
+        assert!(cited.contains("@0x2889-0x28c2"), "{cited}");
+        assert!(cited.contains("@0xb4c1-0xb4ed"), "{cited}");
+    }
+
+    #[test]
+    fn the_outfitter_weighs_an_outfit_scaled_by_mass_at_least_at_its_own_mass() {
+        // 130 of 20 tons scaled by FAST's 40 is 8: 20 by the engine.
+        let records = [of_mass_id(130, 20)];
+        let site = port();
+        let owner = owning(&[(130, 1)]);
+        let at = |source| {
+            Shop {
+                rules: Rulebook::default().with_override(RuleKey::ScaledMass, source),
+                ..shop(&records, &site)
+            }
+            .outfitter(&owner, &mut DayRolls::default(), &mut NeverFires)
+            .expect("an outfitter")
+        };
+        let engine = at(RuleSource::Engine);
+        assert_eq!(row(&engine, 130).mass, 20);
+        assert_eq!(engine.free_mass, 10);
+        assert_eq!(engine.can(buy_of(130)), Err(OutfitRefusal::NoSpace));
+        let other = at(RuleSource::Bible);
+        assert_eq!(row(&other, 130).mass, 8);
+        assert_eq!(other.free_mass, 22);
+        assert_eq!(other.can(buy_of(130)), Ok(()));
+    }
+
+    /// Outfit `id` of `mass`, scaled by the ship's mass.
+    fn of_mass_id(id: i16, mass: i16) -> OutfitRecord {
+        OutfitRecord {
+            id: OutfitId(id),
+            ..of_mass(mass, true)
+        }
+    }
+
     #[test]
     fn the_mass_is_the_items_or_scaled_by_the_ship_when_positive() {
         let scaled = |mass| OutfitRecord {
@@ -3701,14 +3850,22 @@ mod tests {
             flags: OutfitFlags::MASS_BY_MASS,
             ..outfit(128, &[])
         };
-        assert_eq!(unit_mass(&scaled(10), 155), 15, "truncated");
-        assert_eq!(unit_mass(&scaled(-5), 155), -5, "positive masses only");
-        assert_eq!(unit_mass(&scaled(0), 155), 0);
+        assert_eq!(
+            unit_mass(&scaled(10), 155, &Rulebook::default()),
+            15,
+            "truncated"
+        );
+        assert_eq!(
+            unit_mass(&scaled(-5), 155, &Rulebook::default()),
+            -5,
+            "positive masses only"
+        );
+        assert_eq!(unit_mass(&scaled(0), 155, &Rulebook::default()), 0);
         let plain = OutfitRecord {
             mass: 7,
             ..outfit(128, &[])
         };
-        assert_eq!(unit_mass(&plain, 155), 7);
+        assert_eq!(unit_mass(&plain, 155, &Rulebook::default()), 7);
     }
 
     #[test]
@@ -3731,22 +3888,41 @@ mod tests {
         let map = |pairs: &[(i16, u16)]| -> BTreeMap<OutfitId, u16> {
             pairs.iter().map(|&(id, n)| (OutfitId(id), n)).collect()
         };
+        // 130 weighs 50 x 40 / 100 = 20, below its own 50: the other
+        // reading of the scaled mass.
+        let other = Rulebook::default().with_override(RuleKey::ScaledMass, RuleSource::Bible);
         let defaults = map(&[(128, 2)]);
-        assert_eq!(free_mass(FAST, &defaults, &defaults, &records), 30);
-        assert_eq!(free_mass(FAST, &defaults, &map(&[]), &records), 36);
+        assert_eq!(free_mass(FAST, &defaults, &defaults, &records, &other), 30);
+        assert_eq!(free_mass(FAST, &defaults, &map(&[]), &records, &other), 36);
         assert_eq!(
-            free_mass(FAST, &defaults, &map(&[(128, 2), (129, 1)]), &records),
+            free_mass(
+                FAST,
+                &defaults,
+                &map(&[(128, 2), (129, 1)]),
+                &records,
+                &other
+            ),
             35
         );
         assert_eq!(
-            free_mass(FAST, &NO_STANDARD, &map(&[(130, 1)]), &records),
+            free_mass(FAST, &NO_STANDARD, &map(&[(130, 1)]), &records, &other),
             10
         );
         assert_eq!(
-            free_mass(FAST, &NO_STANDARD, &map(&[(999, 4)]), &records),
+            free_mass(FAST, &NO_STANDARD, &map(&[(999, 4)]), &records, &other),
             30
         );
-        let outfitter = open(&records, &owning(&[(128, 3)]));
+        let site = port();
+        let outfitter = Shop {
+            rules: other,
+            ..shop(&records, &site)
+        }
+        .outfitter(
+            &owning(&[(128, 3)]),
+            &mut DayRolls::default(),
+            &mut NeverFires,
+        )
+        .expect("an outfitter");
         assert_eq!(outfitter.free_mass, 21);
         assert_eq!(outfitter.cash, 10_000);
         assert_eq!(
