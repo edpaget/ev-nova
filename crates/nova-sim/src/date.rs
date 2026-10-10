@@ -19,6 +19,10 @@
 //! English ordinal, "June 23rd, 1177 NC". The arrival and landing
 //! messages, which the original also writes long, keep [`date_text`]
 //! for now (rdm:task/long-date-ordinals).
+//!
+//! [`med_date_text`] is the original's medium date (`_DateToMedString`
+//! @0x8cb6), which the mission computer and the mission info screen
+//! show: the long date with the month's short name, "Jan. 1st, 1177 NC".
 
 use crate::catalog::{DateAffixes, StartDate};
 
@@ -130,17 +134,48 @@ pub fn date_text(date: GameDate, affixes: &DateAffixes) -> String {
 #[must_use]
 pub fn long_date_text(date: GameDate, affixes: &DateAffixes) -> String {
     let month = MONTH_NAMES[usize::from(date.month - 1)];
-    let ordinal = match (date.day % 10, date.day) {
+    format!(
+        "{}{month} {}{}, {}{}",
+        affixes.prefix,
+        date.day,
+        ordinal(date.day),
+        date.year,
+        affixes.suffix
+    )
+}
+
+/// The months' short names (`STR#` 137 #13-24), January first.
+const SHORT_MONTH_NAMES: [&str; 12] = [
+    "Jan.", "Feb.", "Mar.", "Apr.", "May", "June", "July", "Aug.", "Sept.", "Oct.", "Nov.", "Dec.",
+];
+
+/// `date` as the original's medium date (`_DateToMedString` @0x8cb6),
+/// which the mission screens show, wrapped in `affixes`: the short month,
+/// then the day with its English ordinal, for example "Jan. 1st, 1177
+/// NC".
+#[must_use]
+pub fn med_date_text(date: GameDate, affixes: &DateAffixes) -> String {
+    let month = SHORT_MONTH_NAMES[usize::from(date.month - 1)];
+    format!(
+        "{}{month} {}{}, {}{}",
+        affixes.prefix,
+        date.day,
+        ordinal(date.day),
+        date.year,
+        affixes.suffix
+    )
+}
+
+/// The English ordinal of day `day` (`STR#` 137 #25-28): "st", "nd",
+/// "rd" or "th".
+fn ordinal(day: u8) -> &'static str {
+    match (day % 10, day) {
         (_, 11..=13) => "th",
         (1, _) => "st",
         (2, _) => "nd",
         (3, _) => "rd",
         _ => "th",
-    };
-    format!(
-        "{}{month} {}{ordinal}, {}{}",
-        affixes.prefix, date.day, date.year, affixes.suffix
-    )
+    }
 }
 
 /// Whether `year` is a Gregorian leap year.
@@ -360,6 +395,55 @@ mod tests {
         assert_eq!(
             long_date_text(day(-735, 12, 2), &affixes("Year ", " NC")),
             "Year December 2nd, -735 NC"
+        );
+    }
+
+    // The medium date.
+
+    #[test]
+    fn the_medium_date_reads_june_23rd_1177_nc() {
+        assert_eq!(
+            med_date_text(date(23, 6, 1177), &affixes("", " NC")),
+            "June 23rd, 1177 NC"
+        );
+        assert_eq!(
+            med_date_text(date(1, 1, 1177), &affixes("", " NC")),
+            "Jan. 1st, 1177 NC"
+        );
+    }
+
+    #[test]
+    fn the_medium_dates_month_is_short_and_its_day_takes_its_ordinal() {
+        let months = [
+            "Jan.", "Feb.", "Mar.", "Apr.", "May", "June", "July", "Aug.", "Sept.", "Oct.", "Nov.",
+            "Dec.",
+        ];
+        for (month, short) in (1..=12).zip(months) {
+            assert_eq!(
+                med_date_text(day(1177, month, 11), &DateAffixes::default()),
+                format!("{short} 11th, 1177"),
+                "month {month}"
+            );
+        }
+        for (n, ordinal) in [
+            (2, "2nd"),
+            (12, "12th"),
+            (13, "13th"),
+            (22, "22nd"),
+            (31, "31st"),
+        ] {
+            assert_eq!(
+                med_date_text(day(1177, 7, n), &DateAffixes::default()),
+                format!("July {ordinal}, 1177")
+            );
+        }
+    }
+
+    #[test]
+    fn the_medium_dates_prefix_and_suffix_wrap_it_verbatim() {
+        assert_eq!(
+            med_date_text(day(-735, 12, 2), &affixes("Year ", " NC")),
+            "Year Dec. 2nd, -735 NC"
         );
     }
 }

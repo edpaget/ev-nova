@@ -2035,6 +2035,14 @@ impl Session {
         date::date_text(self.pilot.date, &self.date_affixes)
     }
 
+    /// Today's date as the mission screens show it, the original's medium
+    /// date with the first `chär`'s prefix and suffix
+    /// ([`date::med_date_text`]): for example "June 23rd, 1177 NC".
+    #[must_use]
+    pub fn med_date_text(&self) -> String {
+        date::med_date_text(self.pilot.date, &self.date_affixes)
+    }
+
     /// The fuel the ship gains each tick in flight.
     #[must_use]
     pub fn fuel_regen_per_tick(&self) -> f32 {

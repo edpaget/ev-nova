@@ -17,7 +17,27 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::DateAffixes;
     use crate::testkit::catalog;
+
+    #[test]
+    fn today_reads_as_the_medium_date_with_the_chärs_affixes() {
+        let mut catalog = catalog();
+        catalog.date_affixes = DateAffixes {
+            prefix: String::new(),
+            suffix: " NC".to_owned(),
+        };
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(
+            session.med_date_text(),
+            crate::date::med_date_text(session.date(), &catalog.date_affixes)
+        );
+        assert!(
+            session.med_date_text().ends_with(" NC"),
+            "{}",
+            session.med_date_text()
+        );
+    }
 
     #[test]
     fn the_session_reads_each_missions_texts_as_it_starts() {
