@@ -20,6 +20,14 @@
 //! - **NPC enemies** ([`Governments::npc_enemies`]): two ships that both
 //!   have a government, different ones, that are enemies. An independent
 //!   ship is never an NPC's enemy.
+//! - **Shared class** ([`Governments::shared_class`], the original's
+//!   `_GovtSharedClass` @0x6e48): the same government, an independent with
+//!   an independent included. Otherwise both must be governments, with
+//!   some slot n where `Class n` of one is set and the other's `Class n`
+//!   is the same: slot by slot, not any class against any, as the
+//!   original compares them (@0x6e9d-0x6eb4). Being derelict does not
+//!   count, and nor does a class below 0. A mission's `AvailStel` and its
+//!   random destinations read it.
 //! - A government the table does not hold has no classes and no flags.
 //! - `MaxOdds` ([`Governments::max_odds`]) is a fraction, `MaxOdds / 100`,
 //!   no less than [`MIN_ODDS`] (`_LoadObjectData` @0x7bbb3); an
@@ -189,6 +197,25 @@ impl Governments {
         self.xenophobic(a) || self.xenophobic(b)
     }
 
+    /// Whether `a` and `b` share a class (see the module docs).
+    #[must_use]
+    pub fn shared_class(&self, a: Option<GovtId>, b: Option<GovtId>) -> bool {
+        if a == b {
+            return true;
+        }
+        let classes = |govt| {
+            self.record(govt)
+                .map_or([UNUSED; 4], |record| record.classes)
+        };
+        let (Some(_), Some(_)) = (a, b) else {
+            return false;
+        };
+        classes(a)
+            .iter()
+            .zip(classes(b))
+            .any(|(&one, other)| one >= 0 && one == other)
+    }
+
     /// Whether ships of `a` and `b` are enemies to an NPC: both have a
     /// government, different ones, that are enemies.
     #[must_use]
@@ -300,6 +327,73 @@ mod tests {
                 ..govt(160)
             },
         ])
+    }
+
+    #[test]
+    fn a_government_shares_a_class_with_itself_and_so_does_an_independent() {
+        let govts = table();
+        for govt in [FED, WRECKS, UNKNOWN, None] {
+            assert!(govts.shared_class(govt, govt), "{govt:?}");
+        }
+    }
+
+    #[test]
+    fn two_governments_share_a_class_only_in_the_same_slot() {
+        let govts = Governments::new([
+            GovtRecord {
+                classes: [1, 7, -1, -1],
+                ..govt(128)
+            },
+            GovtRecord {
+                classes: [3, 7, -1, -1],
+                flags: DERELICT,
+                ..govt(129)
+            },
+            GovtRecord {
+                classes: [7, -1, -1, -1],
+                ..govt(130)
+            },
+            GovtRecord {
+                classes: [-1, -1, -1, -1],
+                ..govt(131)
+            },
+            GovtRecord {
+                classes: [2, -1, -1, 9],
+                ..govt(132)
+            },
+            GovtRecord {
+                classes: [4, -1, -1, 9],
+                ..govt(133)
+            },
+        ]);
+        let id = |id| Some(GovtId(id));
+        assert!(
+            govts.shared_class(id(128), id(129)),
+            "slot 2, derelict or not"
+        );
+        assert!(govts.shared_class(id(129), id(128)), "either way round");
+        assert!(govts.shared_class(id(132), id(133)), "the last slot");
+        assert!(
+            !govts.shared_class(id(128), id(130)),
+            "7 in slot 2 against 7 in slot 1 (_GovtSharedClass @0x6e9d-0x6eb4)"
+        );
+        assert!(!govts.shared_class(id(131), id(131 + 100)), "unused slots");
+        let negative = Governments::new([
+            GovtRecord {
+                classes: [-2, -1, -1, -1],
+                ..govt(140)
+            },
+            GovtRecord {
+                classes: [-2, -1, -1, -1],
+                ..govt(141)
+            },
+        ]);
+        assert!(
+            !negative.shared_class(id(140), id(141)),
+            "a class below 0 is skipped (@0x6ea1)"
+        );
+        assert!(!govts.shared_class(id(128), None), "an independent");
+        assert!(!govts.shared_class(None, id(128)));
     }
 
     #[test]
