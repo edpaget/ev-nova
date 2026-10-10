@@ -10450,12 +10450,44 @@ mod tests {
     }
 
     #[test]
-    fn a_kill_by_the_players_escort_or_fighter_raises_the_rating() {
+    fn a_kill_by_the_players_escort_raises_the_rating() {
         assert_eq!(
             rating_after_npc_kills(true),
             (2, 2),
             "10 / 5; NPC 0 is no escort"
         );
+    }
+
+    #[test]
+    fn a_kill_by_a_fighter_the_player_launched_raises_the_rating() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        let before: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        session.launch_fighters(&[crate::combat::Sortie {
+            carrier: ShipRef::Player,
+            bay: WeaponId(149),
+            ship: ShipId(130),
+            from: *session.player(),
+            heading: 0.0,
+            target: None,
+        }]);
+        let fighter = session
+            .npcs()
+            .iter()
+            .map(|npc| npc.id)
+            .find(|id| !before.contains(id))
+            .expect("launched");
+        let was = [(NpcId(0), Condition::Disabled, Some(GovtId(140)))];
+        session.credit_kills(
+            &[Strike {
+                ship: ShipRef::Npc(NpcId(0)),
+                by: ShipRef::Npc(fighter),
+                damage: 9.0,
+                downed: Some(Downed::BreakingUp),
+            }],
+            &was,
+        );
+        assert_eq!(session.pilot().combat_rating(), 2, "10 / 5");
     }
 
     #[test]
