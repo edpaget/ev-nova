@@ -101,6 +101,8 @@ pub struct Pilot {
     pub(crate) explored: BTreeSet<SystemId>,
     /// The legal record with each government that has one.
     pub(crate) legal: BTreeMap<GovtId, i16>,
+    /// The combat rating (see [`rating`](crate::rating)).
+    pub(crate) combat_rating: i64,
     /// The tons held of each good the ship carries; none of a good not
     /// listed.
     pub(crate) cargo: BTreeMap<Good, u32>,
@@ -227,6 +229,7 @@ impl Pilot {
             course: Vec::new(),
             explored: BTreeSet::from([system]),
             legal: character.legal.into_iter().flatten().collect(),
+            combat_rating: i64::from(character.kills),
             cargo: BTreeMap::new(),
             events: BTreeMap::new(),
             outfits,
@@ -385,6 +388,13 @@ impl Pilot {
         self.legal.iter().map(|(&govt, &record)| (govt, record))
     }
 
+    /// The combat rating: the `chär`'s `Kills` to start, raised by each
+    /// kill that counts (see [`rating`](crate::rating)).
+    #[must_use]
+    pub fn combat_rating(&self) -> i64 {
+        self.combat_rating
+    }
+
     /// The tons of `good` held.
     #[must_use]
     pub fn held(&self, good: Good) -> u32 {
@@ -533,6 +543,7 @@ mod tests {
                 start: START,
                 cash,
                 legal: legal.map(|slot| slot.map(|(govt, record)| (GovtId(govt), record))),
+                kills: 0,
                 on_start: crate::control::Script::default(),
             }),
             ..catalog()
@@ -622,6 +633,18 @@ mod tests {
         assert_eq!(cash(0), Ok(0));
         assert_eq!(cash(-1), Ok(0));
         assert_eq!(cash(i32::MIN), Ok(0));
+    }
+
+    #[test]
+    fn a_new_pilot_starts_with_the_chärs_kills_as_its_combat_rating() {
+        for kills in [100, -3] {
+            let mut catalog = holding(0, [None; 4]);
+            if let Ok(character) = &mut catalog.character {
+                character.kills = kills;
+            }
+            let pilot = Pilot::new(&catalog, "").expect("starts");
+            assert_eq!(pilot.combat_rating(), i64::from(kills));
+        }
     }
 
     #[test]

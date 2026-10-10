@@ -64,6 +64,7 @@ impl PilotCatalog for GameData {
             legal: std::array::from_fn(|slot| {
                 character.record.govt[slot].map(|govt| (govt, character.record.status[slot]))
             }),
+            kills: character.record.kills,
             on_start: self.set_expr(character.record.on_start.as_str()).into(),
         })
     }
@@ -882,6 +883,7 @@ mod tests {
                 start: StartDate::default(),
                 cash: 0,
                 legal: [None; 4],
+                kills: 0,
                 on_start: Script::default(),
             })
         );
@@ -970,6 +972,16 @@ mod tests {
                 Some((GovtId(140), 0)),
             ]
         );
+    }
+
+    #[test]
+    fn the_start_carries_the_chärs_kills_raw() {
+        for kills in [100, -3] {
+            let mut bytes = character(128, [130, -1, -1, -1]);
+            put_i16s(&mut bytes, 0x1E, &[kills]);
+            let data = store(&[(Character::TYPE, 128, bytes)]);
+            assert_eq!(data.first_character().map(|c| c.kills), Ok(kills));
+        }
     }
 
     #[test]

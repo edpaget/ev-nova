@@ -354,12 +354,13 @@ mod tests {
             message.starts_with("nova: the pilot Ada in memory: This pilot file can't be used: "),
             "{message}"
         );
-        store.put("Ada", r#"{"version": 19}"#);
+        let newer = crate::save::CURRENT + 1;
+        store.put("Ada", &format!(r#"{{"version": {newer}}}"#));
         assert_eq!(
             keeper.open("Ada"),
             Err(format!(
                 "nova: the pilot Ada in memory: {}",
-                crate::save::SaveError::Newer { version: 19 }
+                crate::save::SaveError::Newer { version: newer }
             ))
         );
     }

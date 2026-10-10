@@ -57,6 +57,9 @@
 //!   17 writer ever set, so the upgrade gives a destroyed one 0 days left:
 //!   due to regenerate on its next day, as a `Y` with a `DeadTime` of 0
 //!   leaves it.
+//! - Version 19: adds the combat rating. No older save kept one, so the
+//!   upgrade gives 0, the original's value for a pilot with no `chär`
+//!   (@0x76f70).
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -76,7 +79,7 @@
 //! gone for good (`gone_persons`) and those holding a grudge (`grudges`)
 //! are each a list of `përs` IDs. The control bits (`bits`) are the
 //! numbers of the bits set, ascending, and the `gender` is `male` or
-//! `female`. The `paint` is `null` when unpainted, or its red, green and
+//! `female`. The combat rating (`combat_rating`) is its number. The `paint` is `null` when unpainted, or its red, green and
 //! blue, each 0 to 31 (`{"r": 31, "g": 0, "b": 4}`). The once-only story
 //! subscriptions fired (`story_fired`) are each its consumer
 //! (`mission_ships`, `missions`, `crons`, `nebulae`, `plugins` or
@@ -107,7 +110,7 @@ use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 18;
+pub const CURRENT: u64 = 19;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -536,6 +539,7 @@ struct Saved {
     course: Vec<i16>,
     explored: Vec<i16>,
     legal: Vec<SavedRecord>,
+    combat_rating: i64,
     cargo: Vec<SavedCargo>,
     events: Vec<SavedEvent>,
     /// `None` for the ship's default items, not yet read.
@@ -583,6 +587,7 @@ pub fn encode(pilot: &Pilot) -> String {
                 record,
             })
             .collect(),
+        combat_rating: pilot.combat_rating,
         cargo: pilot
             .cargo
             .iter()
@@ -662,6 +667,7 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     story_fired,
     galaxy,
     countdowns,
+    combat_rating,
 ];
 
 /// Version 1 to 2: nothing explored, and no legal records.
@@ -779,6 +785,13 @@ fn countdowns(save: &mut Value) {
     }
 }
 
+/// Version 18 to 19: a combat rating of 0.
+fn combat_rating(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("combat_rating".to_owned(), Value::from(0));
+    }
+}
+
 /// Adds `field` to every entry of `save`'s `list`, as `value`.
 fn add_to_each(save: &mut Value, list: &str, field: &str, value: &Value) {
     let Some(entries) = save.get_mut(list).and_then(Value::as_array_mut) else {
@@ -846,6 +859,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
             .into_iter()
             .map(|saved| (GovtId(saved.govt), saved.record))
             .collect(),
+        combat_rating: saved.combat_rating,
         cargo: saved
             .cargo
             .into_iter()
@@ -965,6 +979,7 @@ mod tests {
             course: vec![SystemId(132), SystemId(133)],
             explored: BTreeSet::from([SystemId(130), SystemId(131), SystemId(200)]),
             legal: BTreeMap::from([(GovtId(128), -40), (GovtId(129), 300)]),
+            combat_rating: 12_345,
             cargo: BTreeMap::from([(Good::Commodity(2), 7), (Good::Junk(JunkId(146)), 2)]),
             events: BTreeMap::from([
                 (DisasterId(128), active(12, Some(StellarId(150)))),
@@ -1113,7 +1128,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 18);
+        assert_eq!(CURRENT, 19);
         assert_eq!(
             value["galaxy"],
             serde_json::json!({
@@ -1209,7 +1224,7 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert!(text.contains("\n  \"version\": 18"), "{text}");
+        assert!(text.contains("\n  \"version\": 19"), "{text}");
     }
 
     /// A version 1 save: before explored systems and legal records.
@@ -2236,6 +2251,74 @@ mod tests {
         }
     }
 
+    /// A version 18 save: before the combat rating.
+    const VERSION_18: &str = r#"{
+        "version": 18,
+        "name": "Veteran",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [132],
+        "explored": [131],
+        "legal": [],
+        "cargo": [],
+        "events": [],
+        "outfits": [{"outfit": 200, "count": 1}],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [7],
+        "gender": "female",
+        "paint": null,
+        "story_fired": [],
+        "galaxy": {
+            "systems": [],
+            "stellars": [{"stellar": 151, "govt": null, "destroyed": {"days_left": 2}}],
+            "nebulae": []
+        }
+    }"#;
+
+    #[test]
+    fn an_older_save_loads_with_a_combat_rating_of_0() {
+        let pilot = decode(VERSION_18).expect("loads");
+        assert_eq!(pilot.name(), "Veteran");
+        assert_eq!(pilot.combat_rating(), 0);
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], CURRENT);
+        assert_eq!(value["combat_rating"], 0);
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [
+            VERSION_17, VERSION_16, VERSION_15, VERSION_14, VERSION_13, VERSION_12, VERSION_11,
+            VERSION_10, VERSION_9, VERSION_8, VERSION_7, VERSION_6, VERSION_5, VERSION_4,
+            VERSION_3, VERSION_2, VERSION_1,
+        ] {
+            let pilot = decode(text).expect("loads");
+            assert_eq!(pilot.combat_rating(), 0, "{text}");
+        }
+    }
+
+    #[test]
+    fn any_combat_rating_survives_a_round_trip() {
+        for combat_rating in [i64::MIN, -3, 0, 10_000_009, i64::MAX] {
+            let pilot = Pilot {
+                combat_rating,
+                ..seasoned()
+            };
+            assert_eq!(decode(&encode(&pilot)), Ok(pilot), "{combat_rating}");
+        }
+        let value: serde_json::Value = serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        assert_eq!(value["combat_rating"], 12_345, "its number");
+    }
+
     #[test]
     fn any_overlay_survives_a_round_trip() {
         let mut overlay = GalaxyOverlay::default();
@@ -2479,12 +2562,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 18", "\"version\": 19");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 19 }));
+        let newer = encode(&seasoned()).replace("\"version\": 19", "\"version\": 20");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 20 }));
         assert_eq!(
-            SaveError::Newer { version: 19 }.to_string(),
+            SaveError::Newer { version: 20 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 19, and this version of Nova reads up to 18)."
+             (it is version 20, and this version of Nova reads up to 19)."
         );
     }
 

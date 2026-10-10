@@ -32,6 +32,8 @@ pub struct CharacterStart {
     /// The starting legal records, `Govt1-4` with `Status1-4`: each
     /// government and the record with it, or `None` for an unused slot.
     pub legal: [Option<(GovtId, i16)>; 4],
+    /// The starting combat rating, raw `Kills`.
+    pub kills: i16,
     /// Its `OnStart` set expression, parsed: run once on a new pilot,
     /// before its first save (see the session's `hooks`).
     pub on_start: Script,
