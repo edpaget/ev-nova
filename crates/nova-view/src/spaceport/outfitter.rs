@@ -2790,6 +2790,50 @@ mod tests {
     }
 
     #[test]
+    fn a_key_held_on_another_outfit_stops_when_a_reset_selects_128() {
+        let mut screen = screen();
+        click_cell(&mut screen, 3);
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(131, Direction::Sell)));
+        screen.reselect(Reselection::Reset(BLASTER));
+        screen.set_outfitter(outfitter());
+        for _ in 0..2 {
+            screen.input(&key(SELL_KEY, true, true));
+            assert_eq!(screen.take_order(), None, "the held key stops");
+        }
+        screen.input(&key(SELL_KEY, false, false));
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+    }
+
+    #[test]
+    fn a_key_held_on_128_goes_on_when_a_reset_selects_128_again() {
+        // The original has no held-key guard: `_OutfitFilter` asks Buy and
+        // Sell of `*0xded58` on every event, repeats included
+        // (@0x5806f-0x580ca, @0x5817a-0x581ab), so a held S keeps selling
+        // `oütf` 128 when a reset selects it again. The port stops a held
+        // key only when the outfit it answers for changes, and here it
+        // does not.
+        let mut screen = screen();
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+        screen.reselect(Reselection::Reset(BLASTER));
+        screen.set_outfitter(outfitter());
+        assert_eq!(screen.selected(), None);
+        screen.input(&key(SELL_KEY, true, true));
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+        // Pressed during the reset, it goes on once an arrow picks 128's
+        // cell: the outfit is the same.
+        let mut reset = reset(screen_of(outfitter()));
+        press(&mut reset, SELL_KEY);
+        assert_eq!(reset.take_order(), Some(order(128, Direction::Sell)));
+        press(&mut reset, Key::Right);
+        assert_eq!(reset.selected(), Some(0));
+        reset.input(&key(SELL_KEY, true, true));
+        assert_eq!(reset.take_order(), Some(order(128, Direction::Sell)));
+    }
+
+    #[test]
     fn a_new_outfitter_keeps_the_reset() {
         let mut screen = reset(screen());
         let mut broke = outfitter();
