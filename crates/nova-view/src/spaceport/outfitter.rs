@@ -27,9 +27,17 @@
 //! The selected outfit's picture is `PICT` 6000 plus its ID less 128, or
 //! "No Picture" (#213) when the data has none, and its description is
 //! `dësc` 3000 plus its ID less 128, both read through the
-//! [`OutfitterCatalog`] as the selection changes. The info box shows its price, its mass, how many the player
-//! has and the free mass (#215-218), and why it cannot be bought
-//! (#219-222), when the original has words for it. The buy words are
+//! [`OutfitterCatalog`] as the selection changes. The info box shows, in
+//! white at the original's baselines (`_OutfitDialogUpdate`
+//! @0x57b36-0x57e7b), "Item Price:" with its price and "You Have:" with
+//! the player's cash, each followed by " cr" (#215, #217, #34), then, for
+//! an outfit of `Mass` above 0, "Item Mass:" and "Available:" (#216,
+//! #218). Each label is at the box's left and each amount
+//! [`AMOUNT_COLUMN`](super::credits::AMOUNT_COLUMN) right of it, drawn as
+//! `_DrawCommaNumber` draws it ([`credits`](super::credits)). Below them,
+//! at a fixed row, is why it cannot be bought (#219-222), when the
+//! original has words for it. The count owned is only in the grid's
+//! corner, as in the original. The buy words are
 //! the outfit's own ([`Outfitter::words`]), not its buy refusal: the
 //! original works them out without asking whether the outfit can be
 //! bought, so an outfit not for sale, or a fighter refused for full bays,
@@ -90,6 +98,7 @@ use nova_sim::{
 };
 
 use super::catalog::SpaceportCatalog;
+use super::credits::{self, AMOUNT_COLUMN, comma_number, credits_text};
 use super::grid::{self, CellGrid, Shown, text};
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
@@ -169,22 +178,65 @@ pub const NEGATIVE_FREE_MASS: &str =
 pub const PRICE_LABEL: &str = "Item Price:";
 /// `STR#` 2002 #216.
 pub const MASS_LABEL: &str = "Item Mass:";
-/// `STR#` 2002 #217.
-pub const OWNED_LABEL: &str = "You Have:";
 /// `STR#` 2002 #218.
 pub const AVAILABLE_LABEL: &str = "Available:";
 /// `STR#` 2002 #1 (`_tonString`).
 pub const TON: &str = "ton";
 /// `STR#` 2002 #2 (`_tonsString`).
 pub const TONS: &str = "tons";
+/// The info box's rows' baselines below its top: Item Price, You Have,
+/// Item Mass and Available (`_OutfitDialogUpdate` @0x57b42, @0x57bef,
+/// @0x57c7e, @0x57d1e).
+pub const INFO_ROWS: [f32; 4] = [12.0, 24.0, 48.0, 60.0];
+/// The refusal's baseline below the info box's top, mass lines or not
+/// (@0x57da2-0x57db5).
+pub const REFUSAL_ROW: f32 = 93.0;
 
-/// `shown`'s number and the words for its unit; the core picks the unit.
-pub(crate) fn tons_text(shown: ShownTons) -> String {
-    let unit = match shown.unit {
+/// The words for `unit`; the core picks the unit.
+fn ton_word(unit: TonUnit) -> &'static str {
+    match unit {
         TonUnit::Ton => TON,
         TonUnit::Tons => TONS,
-    };
-    format!("{} {unit}", shown.tons)
+    }
+}
+
+/// `shown`'s number and the words for its unit, in plain digits, as the
+/// Shipyard Info panel's `NumToString` draws them.
+pub(crate) fn tons_text(shown: ShownTons) -> String {
+    format!("{} {}", shown.tons, ton_word(shown.unit))
+}
+
+/// `shown` as the outfitter's info box draws it: `_DrawCommaNumber`'s
+/// text, a space and the unit (@0x57cf6-0x57d19, @0x57d7a-0x57d9d).
+pub(crate) fn comma_tons_text(shown: ShownTons) -> String {
+    format!("{} {}", comma_number(shown.tons), ton_word(shown.unit))
+}
+
+/// The info box's amounts for `row`, in the order `_OutfitDialogUpdate`
+/// draws them, each as its baseline below the box's top, its label and
+/// its amount: "Item Price:" with its price (@0x57b42-0x57bea) and "You
+/// Have:" with the player's cash (@0x57bef-0x57c62), each in credits,
+/// then, for an outfit of `Mass` above 0 (@0x57c72-0x57c78), "Item
+/// Mass:" (@0x57c7e-0x57d19) and "Available:" (@0x57d1e-0x57d9d).
+#[must_use]
+pub fn amount_lines(outfitter: &Outfitter, row: &OutfitRow) -> Vec<(f32, &'static str, String)> {
+    let mut lines = vec![
+        (INFO_ROWS[0], PRICE_LABEL, credits_text(row.price)),
+        (
+            INFO_ROWS[1],
+            credits::YOU_HAVE,
+            credits_text(outfitter.cash),
+        ),
+    ];
+    if let Some(mass) = outfitter.item_mass_shown(row.id) {
+        lines.push((INFO_ROWS[2], MASS_LABEL, comma_tons_text(mass)));
+        lines.push((
+            INFO_ROWS[3],
+            AVAILABLE_LABEL,
+            comma_tons_text(outfitter.free_mass_shown()),
+        ));
+    }
+    lines
 }
 /// `STR#` 2002 #219.
 pub const MAX_OWNED: &str = "Can't have any more!";
@@ -738,18 +790,13 @@ impl OutfitterScreen {
         let Some(info) = laid.dialog.item_bounds(INFO_ITEM) else {
             return;
         };
+        for (baseline, label, amount) in amount_lines(&self.outfitter, row) {
+            let top = grid::baseline_top(info.min.y + baseline);
+            text(list, label, Point::new(info.min.x, top), TEXT_COLOR);
+            let at = Point::new(info.min.x + AMOUNT_COLUMN, top);
+            text(list, &amount, at, TEXT_COLOR);
+        }
         let line_height = laid.metrics.0.line_height(TEXT_FONT, TEXT_SIZE);
-        // An outfit of `Mass` 0 or less shows neither mass line.
-        let mass = self.outfitter.item_mass_shown(row.id);
-        let mut lines = vec![format!("{PRICE_LABEL} {}", row.price)];
-        lines.extend(mass.map(|mass| format!("{MASS_LABEL} {}", tons_text(mass))));
-        lines.push(format!("{OWNED_LABEL} {}", row.owned));
-        lines.extend(mass.map(|_| {
-            format!(
-                "{AVAILABLE_LABEL} {}",
-                tons_text(self.outfitter.free_mass_shown())
-            )
-        }));
         let sale = OutfitOrder {
             outfit: row.id,
             direction: Direction::Sell,
@@ -759,15 +806,14 @@ impl OutfitterScreen {
             self.outfitter.sale_words(row.id),
         ];
         let names = self.outfitter.lc_names(sale);
-        lines.extend(
-            refusals
-                .into_iter()
-                .flatten()
-                .filter_map(|refusal| refusal_text(refusal, row, &names)),
-        );
-        for (n, line) in lines.iter().enumerate() {
-            let origin = Point::new(info.min.x + INSET, info.min.y + line_height * n as f32);
-            text(list, line, origin, TEXT_COLOR);
+        let words = refusals
+            .into_iter()
+            .flatten()
+            .filter_map(|refusal| refusal_text(refusal, row, &names));
+        let top = grid::baseline_top(info.min.y + REFUSAL_ROW);
+        for (n, line) in words.enumerate() {
+            let origin = Point::new(info.min.x, top + line_height * n as f32);
+            text(list, &line, origin, TEXT_COLOR);
         }
     }
 
@@ -1201,21 +1247,10 @@ mod tests {
         assert_eq!((BUY_KEY, SELL_KEY), (Key::Char('b'), Key::Char('s')));
         assert_eq!((FIRST_PICTURE, FIRST_DESCRIPTION), (6000, 3000));
         assert_eq!(
-            [
-                PRICE_LABEL,
-                MASS_LABEL,
-                OWNED_LABEL,
-                AVAILABLE_LABEL,
-                NO_PICTURE
-            ],
-            [
-                "Item Price:",
-                "Item Mass:",
-                "You Have:",
-                "Available:",
-                "No Picture"
-            ]
+            [PRICE_LABEL, MASS_LABEL, AVAILABLE_LABEL, NO_PICTURE],
+            ["Item Price:", "Item Mass:", "Available:", "No Picture"]
         );
+        assert_eq!((INFO_ROWS, REFUSAL_ROW), ([12.0, 24.0, 48.0, 60.0], 93.0));
     }
 
     /// The words for `refusal` of a row with `owned` owned, no names
@@ -1509,8 +1544,7 @@ mod tests {
             let width = 5.0 * words.chars().count() as f32;
             Point::new(bounds.max.x - 3.0 - width, bounds.min.y + 12.0 - 10.0)
         };
-        let info = item(&screen, INFO_ITEM);
-        let line = |n: f32| Point::new(info.min.x + INSET, info.min.y + 12.0 * n);
+        let at = info_at(&screen);
         let description = item(&screen, DESCRIPTION_ITEM).min;
         let mut expected = vec![
             ("2".to_owned(), count(0, "2"), TEXT_COLOR),
@@ -1522,10 +1556,14 @@ mod tests {
             ("1".to_owned(), count(3, "1"), TEXT_COLOR),
             ("Map".to_owned(), name(3, "Map", 6.0), TEXT_COLOR),
             ("dësc 3000.".to_owned(), description, Color::WHITE),
-            ("Item Price: 1000".to_owned(), line(0.0), TEXT_COLOR),
-            ("Item Mass: 1 ton".to_owned(), line(1.0), TEXT_COLOR),
-            ("You Have: 2".to_owned(), line(2.0), TEXT_COLOR),
-            ("Available: 5 tons".to_owned(), line(3.0), TEXT_COLOR),
+            ("Item Price:".to_owned(), at(0.0, 2.0), TEXT_COLOR),
+            ("1,000 cr".to_owned(), at(70.0, 2.0), TEXT_COLOR),
+            ("You Have:".to_owned(), at(0.0, 14.0), TEXT_COLOR),
+            ("5,000 cr".to_owned(), at(70.0, 14.0), TEXT_COLOR),
+            ("Item Mass:".to_owned(), at(0.0, 38.0), TEXT_COLOR),
+            ("1 ton".to_owned(), at(70.0, 38.0), TEXT_COLOR),
+            ("Available:".to_owned(), at(0.0, 50.0), TEXT_COLOR),
+            ("5 tons".to_owned(), at(70.0, 50.0), TEXT_COLOR),
         ];
         let mut dialog = DrawList::new();
         screen.dialog().expect("laid out").draw(&mut dialog);
@@ -1973,18 +2011,16 @@ mod tests {
 
     #[test]
     fn the_available_line_is_the_clamped_free_mass_with_a_ton_at_exactly_1() {
-        for (free_mass, line) in [
-            (-3, "Available: 0 tons"),
-            (0, "Available: 0 tons"),
-            (1, "Available: 1 ton"),
-            (2, "Available: 2 tons"),
-        ] {
-            let shown = words(&screen_of(Outfitter {
+        for (free_mass, amount) in [(-3, "0 tons"), (0, "0 tons"), (1, "1 ton"), (2, "2 tons")] {
+            let shown = info_lines_of(Outfitter {
                 free_mass,
                 ..outfitter()
-            }));
-            assert!(shown.contains(&line.to_owned()), "{free_mass}: {shown:?}");
-            assert!(!shown.contains(&"Available: -3 tons".to_owned()));
+            });
+            assert!(
+                follows(&shown, AVAILABLE_LABEL, amount),
+                "{free_mass}: {shown:?}"
+            );
+            assert!(!shown.iter().any(|(text, _)| text == "-3 tons"));
         }
     }
 
@@ -1998,21 +2034,171 @@ mod tests {
             })
         };
         let one = lines(1);
-        assert!(one.contains(&"Item Mass: 1 ton".to_owned()), "{one:?}");
-        assert!(one.contains(&"Available: 5 tons".to_owned()), "{one:?}");
+        assert!(follows(&one, MASS_LABEL, "1 ton"), "{one:?}");
+        assert!(follows(&one, AVAILABLE_LABEL, "5 tons"), "{one:?}");
         let two = lines(2);
-        assert!(two.contains(&"Item Mass: 2 tons".to_owned()), "{two:?}");
+        assert!(follows(&two, MASS_LABEL, "2 tons"), "{two:?}");
         for mass in [0, -5] {
             let none = lines(mass);
             assert!(
                 !none
                     .iter()
-                    .any(|line| line.starts_with("Item Mass:") || line.starts_with("Available:")),
+                    .any(|(line, _)| line == "Item Mass:" || line == "Available:"),
                 "{mass}: {none:?}"
             );
-            assert!(none.contains(&"Item Price: 100".to_owned()), "{none:?}");
-            assert!(none.contains(&"You Have: 0".to_owned()), "{none:?}");
+            assert!(follows(&none, PRICE_LABEL, "100 cr"), "{none:?}");
+            assert!(follows(&none, "You Have:", "5,000 cr"), "{none:?}");
         }
+    }
+
+    /// `lines` as texts placed from the info box's top left.
+    fn placed(lines: &[(&str, f32, f32)]) -> Vec<(String, Point)> {
+        lines
+            .iter()
+            .map(|&(text, x, y)| (text.to_owned(), Point::new(x, y)))
+            .collect()
+    }
+
+    #[test]
+    fn the_info_box_draws_its_lines_at_the_originals_rows_and_columns() {
+        // Baselines 12, 24, 48 and 60 below the top, and 93 for the
+        // refusal; MonoMetrics sets Geneva 10 with its top 10 above.
+        let mut screen = screen();
+        let drawn = info_drawn(&screen);
+        assert!(drawn.iter().all(|(_, _, color)| *color == TEXT_COLOR));
+        assert_eq!(
+            info_placed(&screen),
+            placed(&[
+                ("Item Price:", 0.0, 2.0),
+                ("1,000 cr", 70.0, 2.0),
+                ("You Have:", 0.0, 14.0),
+                ("5,000 cr", 70.0, 14.0),
+                ("Item Mass:", 0.0, 38.0),
+                ("1 ton", 70.0, 38.0),
+                ("Available:", 0.0, 50.0),
+                ("5 tons", 70.0, 50.0),
+            ])
+        );
+        // The massless ammunition.
+        press(&mut screen, Key::Right);
+        assert_eq!(
+            info_placed(&screen),
+            placed(&[
+                ("Item Price:", 0.0, 2.0),
+                ("50 cr", 70.0, 2.0),
+                ("You Have:", 0.0, 14.0),
+                ("5,000 cr", 70.0, 14.0),
+            ])
+        );
+        // The gun too heavy to hold.
+        press(&mut screen, Key::Right);
+        assert_eq!(
+            info_placed(&screen),
+            placed(&[
+                ("Item Price:", 0.0, 2.0),
+                ("9,000 cr", 70.0, 2.0),
+                ("You Have:", 0.0, 14.0),
+                ("5,000 cr", 70.0, 14.0),
+                ("Item Mass:", 0.0, 38.0),
+                ("10 tons", 70.0, 38.0),
+                ("Available:", 0.0, 50.0),
+                ("5 tons", 70.0, 50.0),
+                (NO_SPACE_FOR_ANY, 0.0, 83.0),
+            ])
+        );
+        // A massless outfit's refusal stays on its row; the Bible's sale
+        // refusal is a line below it.
+        let overloaded = Outfitter {
+            rows: vec![OutfitRow {
+                max: 1,
+                ..row(128, "Expansion", 100, -5, 1)
+            }],
+            free_mass: 4,
+            rules: Rulebook::default()
+                .with_override(RuleKey::OutfitCount, RuleSource::Engine)
+                .with_override(RuleKey::SaleRefusal, RuleSource::Bible),
+            ..outfitter()
+        };
+        let screen = screen_of(overloaded);
+        let drawn = info_drawn(&screen);
+        assert!(drawn.iter().all(|(_, _, color)| *color == TEXT_COLOR));
+        assert_eq!(
+            info_placed(&screen),
+            placed(&[
+                ("Item Price:", 0.0, 2.0),
+                ("100 cr", 70.0, 2.0),
+                ("You Have:", 0.0, 14.0),
+                ("5,000 cr", 70.0, 14.0),
+                (MAX_OWNED, 0.0, 83.0),
+                (NEGATIVE_FREE_MASS, 0.0, 95.0),
+            ])
+        );
+    }
+
+    #[test]
+    fn you_have_is_the_cash_and_the_count_owned_is_only_in_the_grid() {
+        // Two light blasters owned, 5000 credits.
+        let mut screen = screen();
+        let shown = info_placed(&screen);
+        assert!(follows(&shown, "You Have:", "5,000 cr"), "{shown:?}");
+        assert!(
+            !shown
+                .iter()
+                .any(|(text, _)| text == "2" || text.starts_with("You Have: ")),
+            "{shown:?}"
+        );
+        assert!(words(&screen).contains(&"2".to_owned()), "in the grid");
+        for (cash, amount) in [(0, "0 cr"), (-250, "-250 cr")] {
+            let shown = info_lines_of(Outfitter {
+                cash,
+                ..outfitter()
+            });
+            assert!(follows(&shown, "You Have:", amount), "{cash}: {shown:?}");
+        }
+        let mut bought = outfitter();
+        bought.rows[0].owned = 3;
+        bought.cash = 10;
+        screen.set_outfitter(bought);
+        let shown = info_placed(&screen);
+        assert!(follows(&shown, "You Have:", "10 cr"), "{shown:?}");
+    }
+
+    #[test]
+    fn every_amount_draws_with_draw_comma_numbers_separators() {
+        let one = |price, mass, cash, free_mass| {
+            info_lines_of(Outfitter {
+                rows: vec![row(128, "Widget", price, mass, 0)],
+                cash,
+                free_mass,
+                ..outfitter()
+            })
+        };
+        let shown = one(12_345, 0, 5000, 5);
+        assert!(follows(&shown, PRICE_LABEL, "12,345 cr"), "{shown:?}");
+        let shown = one(999, 0, 5000, 5);
+        assert!(follows(&shown, PRICE_LABEL, "999 cr"), "{shown:?}");
+        let shown = one(100, 0, 1_234_567, 5);
+        assert!(follows(&shown, "You Have:", "1.23M cr"), "{shown:?}");
+        let shown = one(100, 1_000, 5000, 2_500);
+        assert!(follows(&shown, MASS_LABEL, "1,000 tons"), "{shown:?}");
+        assert!(follows(&shown, AVAILABLE_LABEL, "2,500 tons"), "{shown:?}");
+        let shown = one(100, 1, 5000, 1);
+        assert!(follows(&shown, AVAILABLE_LABEL, "1 ton"), "{shown:?}");
+    }
+
+    #[test]
+    fn comma_tons_text_separates_and_tons_text_does_not() {
+        for (tons, text) in [
+            (0, "0 tons"),
+            (1, "1 ton"),
+            (999, "999 tons"),
+            (1_000, "1,000 tons"),
+            (1_234_567, "1.23M tons"),
+        ] {
+            assert_eq!(comma_tons_text(ShownTons::of(tons)), text, "{tons}");
+        }
+        assert_eq!(tons_text(ShownTons::of(1_000)), "1000 tons");
+        assert_eq!(tons_text(ShownTons::of(1)), "1 ton");
     }
 
     #[test]
@@ -2022,8 +2208,8 @@ mod tests {
         press(&mut screen, Key::Right);
         let shown = words(&screen);
         assert!(shown.contains(&NO_SPACE_FOR_ANY.to_owned()), "{shown:?}");
-        assert!(shown.contains(&"Item Price: 9000".to_owned()));
-        assert!(shown.contains(&"Item Mass: 10 tons".to_owned()));
+        assert!(shown.contains(&"9,000 cr".to_owned()));
+        assert!(shown.contains(&"10 tons".to_owned()));
         press(&mut screen, Key::Right);
         let shown = words(&screen);
         assert!(
@@ -2053,8 +2239,10 @@ mod tests {
         assert_eq!(
             lines,
             [
-                "Item Price: 100",
-                "You Have: 1",
+                "Item Price:",
+                "100 cr",
+                "You Have:",
+                "5,000 cr",
                 MAX_OWNED,
                 NEGATIVE_FREE_MASS,
             ]
@@ -2066,31 +2254,66 @@ mod tests {
         row(128, "Widget", 100, 1, owned)
     }
 
-    /// The info box's lines for `widget`, in [`outfitter`]'s place.
-    fn info_lines(widget: OutfitRow) -> Vec<String> {
+    /// The info box's texts for `widget`, in [`outfitter`]'s place.
+    fn info_lines(widget: OutfitRow) -> Vec<(String, Point)> {
         info_lines_of(Outfitter {
             rows: vec![widget],
             ..outfitter()
         })
     }
 
-    /// The info box's lines for the first row of `outfitter`.
-    fn info_lines_of(outfitter: Outfitter) -> Vec<String> {
-        let screen = screen_of(outfitter);
-        let info = item(&screen, INFO_ITEM);
-        texts(&drawn(&screen))
+    /// The info box's texts for the first row of `outfitter`, each where
+    /// it starts from the box's top left.
+    fn info_lines_of(outfitter: Outfitter) -> Vec<(String, Point)> {
+        info_placed(&screen_of(outfitter))
+    }
+
+    /// The point `dx` across and `dy` down from the info box's top left.
+    fn info_at(screen: &OutfitterScreen) -> impl Fn(f32, f32) -> Point {
+        let info = item(screen, INFO_ITEM).min;
+        move |dx, dy| Point::new(info.x + dx, info.y + dy)
+    }
+
+    /// The info box's texts, each where it starts from the box's top left,
+    /// and its colour.
+    fn info_drawn(screen: &OutfitterScreen) -> Vec<(String, Point, Color)> {
+        let info = item(screen, INFO_ITEM);
+        texts(&drawn(screen))
             .into_iter()
             .filter(|(_, at, _)| info.contains(*at))
-            .map(|(text, _, _)| text)
+            .map(|(text, at, color)| {
+                let from = Point::new(at.x - info.min.x, at.y - info.min.y);
+                (text, from, color)
+            })
             .collect()
     }
 
-    /// The last of the info box's lines, when it says why buy is greyed.
-    fn said_why(lines: &[String]) -> Option<&str> {
+    /// The info box's texts, each where it starts from the box's top left.
+    fn info_placed(screen: &OutfitterScreen) -> Vec<(String, Point)> {
+        info_drawn(screen)
+            .into_iter()
+            .map(|(text, at, _)| (text, at))
+            .collect()
+    }
+
+    /// Whether `amount` is drawn next after `label`, on its row 70 right
+    /// of it.
+    fn follows(lines: &[(String, Point)], label: &str, amount: &str) -> bool {
+        lines.windows(2).any(|pair| {
+            let [(first, at), (second, then)] = pair else {
+                return false;
+            };
+            first == label && second == amount && *then == Point::new(at.x + 70.0, at.y)
+        })
+    }
+
+    /// The words on the info box's refusal row, when it says why buy is
+    /// greyed: its baseline 93 below the top, at the left.
+    fn said_why(lines: &[(String, Point)]) -> Option<&str> {
         lines
-            .last()
-            .map(String::as_str)
-            .filter(|line| !line.starts_with("Available:"))
+            .iter()
+            .find(|(_, at)| *at == Point::new(0.0, 83.0))
+            .map(|(text, _)| text.as_str())
     }
 
     #[test]
@@ -2120,7 +2343,7 @@ mod tests {
         assert_eq!(said_why(&one), Some(NO_SPACE), "{one:?}");
         for owned in [0, 2] {
             let fits = bays_full(1, owned);
-            assert!(fits.iter().any(|text| text.starts_with("Available:")));
+            assert!(fits.iter().any(|(text, _)| text == "Available:"));
             assert_eq!(said_why(&fits), None, "{owned}: {fits:?}");
         }
     }
@@ -2307,7 +2530,7 @@ mod tests {
         assert_eq!(screen.outfitter(), &bought);
         assert_eq!(screen.selected(), Some(1));
         assert_eq!(enabled(&screen), (false, true));
-        assert!(words(&screen).contains(&"You Have: 3".to_owned()));
+        assert!(follows(&info_placed(&screen), "You Have:", "10 cr"));
         // Sold out of a sell-only map: the next cell along is selected.
         click_cell(&mut screen, 3);
         let mut sold = outfitter();
@@ -2828,13 +3051,11 @@ mod tests {
         }
     }
 
-    /// The info box's lines.
+    /// The info box's texts.
     fn info_box(screen: &OutfitterScreen) -> Vec<String> {
-        let info = item(screen, INFO_ITEM);
-        texts(&drawn(screen))
+        info_placed(screen)
             .into_iter()
-            .filter(|(_, at, _)| info.contains(*at))
-            .map(|(text, _, _)| text)
+            .map(|(text, _)| text)
             .collect()
     }
 
@@ -2851,9 +3072,9 @@ mod tests {
         for (row, line) in refused_in_the_loop() {
             let engine = info_box(&screen_of(loop_refusing(row.clone(), RuleSource::Engine)));
             assert!(!engine.contains(&line.to_owned()), "{engine:?}");
-            // The price and the count owned: the rack is massless, so it
-            // shows no Item Mass or Available line.
-            assert_eq!(engine.len(), 2, "{engine:?}");
+            // The price and the cash: the rack is massless, so it shows
+            // no Item Mass or Available line.
+            assert_eq!(engine.len(), 4, "{engine:?}");
             let other = info_box(&screen_of(loop_refusing(row, RuleSource::Bible)));
             assert_eq!(other.last().map(String::as_str), Some(line), "{other:?}");
         }
@@ -3035,9 +3256,9 @@ mod tests {
         alert.draw(&mut list);
         let alert_drawn: Vec<DrawCommand> = list.iter().cloned().collect();
         assert!(drawn(&screen).ends_with(&alert_drawn), "drawn last");
-        let owned = format!("{OWNED_LABEL} 2");
-        let shown = info_box(&screen);
-        assert!(shown.contains(&owned), "{shown:?}");
+        assert_eq!(screen.outfitter().rows[0].owned, 2);
+        let shown = info_placed(&screen);
+        assert!(follows(&shown, "You Have:", "5,000 cr"), "{shown:?}");
     }
 
     #[test]

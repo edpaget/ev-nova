@@ -74,7 +74,7 @@ use nova_sim::shipyard::SHIP_NAME_CHARS;
 use nova_sim::{ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
 
 use super::catalog::SpaceportCatalog;
-use super::credits::{self, credits_text};
+use super::credits::{self, AMOUNT_COLUMN, credits_text};
 use super::grid::{
     self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE, text,
 };
@@ -154,9 +154,6 @@ pub const PRICE_LABEL: &str = "Ship Price:";
 pub const TRADE_IN_LABEL: &str = "Trade-In:";
 /// `STR#` 2002 #227.
 pub const FINAL_PRICE_LABEL: &str = "Final Price:";
-/// How far each amount starts right of the info box's left (`MoveTo`
-/// h + 0x46, `_ShipyardDialogUpdate` @0x5931c-0x59333).
-pub const AMOUNT_COLUMN: f32 = 70.0;
 /// The info box's rows' baselines below its top: Ship Price, Trade-In,
 /// Final Price and You Have (@0x592f0, @0x593ba, @0x594db, @0x5954b).
 pub const PRICE_ROWS: [f32; 4] = [12.0, 24.0, 48.0, 72.0];

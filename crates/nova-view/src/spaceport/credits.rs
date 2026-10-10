@@ -1,10 +1,15 @@
 //! Amounts of credits as the original's shop dialogs draw them:
-//! `_DrawCommaNumber` (@0x4895), a space (0xd97a0) and "cr".
+//! `_DrawCommaNumber` (@0x4895), a space (0xd97a0) and "cr", and the
+//! column the amounts start in.
 
 /// `STR#` 2002 #34, after each amount.
 pub const CR: &str = "cr";
 /// `STR#` 2002 #217, the cash's label.
 pub const YOU_HAVE: &str = "You Have:";
+/// How far each amount starts right of its info box's left: `MoveTo`
+/// h + 0x46 (`_ShipyardDialogUpdate` @0x5931c-0x59333,
+/// `_OutfitDialogUpdate` @0x57b6e-0x57b85).
+pub const AMOUNT_COLUMN: f32 = 70.0;
 
 /// `n` as `_DrawCommaNumber` (@0x4895) draws it: up to 999, negatives
 /// included, plain digits (@0x48aa-0x48c7); up to 999,999, thousands, a
@@ -73,6 +78,12 @@ mod tests {
         ] {
             assert_eq!(comma_number(n), drawn, "{n}");
         }
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn the_amount_column_is_70() {
+        assert_eq!(AMOUNT_COLUMN, 70.0);
     }
 
     #[test]

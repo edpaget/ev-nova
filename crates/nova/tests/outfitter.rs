@@ -610,6 +610,27 @@ impl Harness {
     }
 }
 
+/// What the Outfitter first shows the new pilot: the outfits listed, the
+/// booster's description and info box, and the buttons.
+const FIRST_LOOK: [&str; 16] = [
+    "Speed",
+    "Booster",
+    "Fuel Tank",
+    "Fuel Scoop",
+    "Bolted-on thrusters.",
+    "Item Price:",
+    "5,000 cr",
+    "Item Mass:",
+    "3 tons",
+    "You Have:",
+    "25,000 cr",
+    "Available:",
+    "8 tons",
+    "Buy",
+    "Sell",
+    "Done",
+];
+
 #[test]
 fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart() {
     let store = MemoryPilots::new();
@@ -636,20 +657,7 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
         .collect();
     assert_eq!(ids, [BOOSTER, TANK, OutfitId(130)], "no warp core");
     let shown = texts(&game.frame());
-    for text in [
-        "Speed",
-        "Booster",
-        "Fuel Tank",
-        "Fuel Scoop",
-        "Bolted-on thrusters.",
-        "Item Price: 5000",
-        "Item Mass: 3 tons",
-        "You Have: 0",
-        "Available: 8 tons",
-        "Buy",
-        "Sell",
-        "Done",
-    ] {
+    for text in FIRST_LOOK {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
     }
     assert!(!shown.contains(&"Warp Core".to_owned()));
@@ -665,8 +673,8 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     assert_eq!(store.writes(), writes + 1);
     assert_eq!(saved(&store, "Ada").owned(BOOSTER), 1);
     let shown = texts(&game.frame());
-    assert!(shown.contains(&"You Have: 1".to_owned()), "{shown:?}");
-    assert!(shown.contains(&"Available: 5 tons".to_owned()));
+    assert!(shown.contains(&"20,000 cr".to_owned()), "{shown:?}");
+    assert!(shown.contains(&"5 tons".to_owned()));
 
     // Holding B buys until it can have no more, then nothing changes.
     game.key(KeyCode::KeyB, true, false);
@@ -724,8 +732,8 @@ fn a_pilot_outfits_its_ship_flies_faster_and_keeps_its_outfits_after_a_restart()
     assert!((fuel.max - 400.0).abs() < 1e-3, "{fuel:?}");
     game.open_outfitter();
     let shown = texts(&game.frame());
-    assert!(shown.contains(&"You Have: 2".to_owned()), "{shown:?}");
-    assert!(shown.contains(&"Available: 1 ton".to_owned()), "{shown:?}");
+    assert!(shown.contains(&"13,000 cr".to_owned()), "{shown:?}");
+    assert!(shown.contains(&"1 ton".to_owned()), "{shown:?}");
 }
 
 /// The colour the Buy button's label is drawn in.
