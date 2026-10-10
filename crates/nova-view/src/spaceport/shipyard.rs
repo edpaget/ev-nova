@@ -3501,21 +3501,29 @@ mod tests {
 
     #[test]
     fn without_the_info_dialog_info_is_greyed() {
-        let mut screen = ShipyardScreen::new(
-            Ok(layout()),
-            InfoTemplates {
-                plain: Err("no DLOG 1005".to_owned()),
-                ..info_templates()
-            },
-            Ok(text_input_template()),
-            shipyard(),
-            art(),
-            ButtonStyle::STOCK,
-        );
-        assert!(!enabled(&screen, INFO_LABEL));
-        press(&mut screen, INFO_KEY);
-        click_item(&mut screen, INFO_ITEM);
-        assert!(screen.info_panel().is_none());
+        // Ship 129's `dësc` 13001 has a graphic whose picture dialog is
+        // there: greyed Info still opens nothing for it.
+        for (art, select) in [(art(), 0), (art_with(vec![(13_001, 5002)]), 1)] {
+            let mut screen = ShipyardScreen::new(
+                Ok(layout()),
+                InfoTemplates {
+                    plain: Err("no DLOG 1005".to_owned()),
+                    picture: Ok(picture_info_template()),
+                },
+                Ok(text_input_template()),
+                shipyard(),
+                art,
+                ButtonStyle::STOCK,
+            );
+            assert!(!enabled(&screen, INFO_LABEL));
+            for _ in 0..select {
+                press(&mut screen, Key::Right);
+            }
+            assert_eq!(screen.selected(), Some(select));
+            press(&mut screen, INFO_KEY);
+            click_item(&mut screen, INFO_ITEM);
+            assert!(screen.info_panel().is_none(), "{select}");
+        }
     }
 
     // Closing.

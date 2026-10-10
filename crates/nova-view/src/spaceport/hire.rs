@@ -975,19 +975,26 @@ mod tests {
         screen.input(&key(Key::Escape, false));
         assert!(screen.info_panel().is_none());
         assert!(!screen.closed());
-        let mut bare = HireScreen::new(
-            Ok((template(), Rc::new(MonoMetrics))),
-            InfoTemplates {
-                plain: Err("no DLOG 1005".to_owned()),
-                ..info_templates()
-            },
-            list(),
-            art(),
-            ButtonStyle::STOCK,
-        );
-        assert!(!enabled(&bare, INFO_LABEL));
-        bare.input(&key(INFO_KEY, false));
-        assert!(bare.info_panel().is_none());
+        // Ship 128's pilot `dësc` 14000 has a graphic whose picture
+        // dialog is there: greyed Info still opens nothing for it.
+        for art in [art(), art_with(vec![(14_000, 5000)])] {
+            let mut bare = HireScreen::new(
+                Ok((template(), Rc::new(MonoMetrics))),
+                InfoTemplates {
+                    plain: Err("no DLOG 1005".to_owned()),
+                    picture: Ok(picture_info_template()),
+                },
+                list(),
+                art,
+                ButtonStyle::STOCK,
+            );
+            assert!(!enabled(&bare, INFO_LABEL));
+            assert_eq!(bare.selected(), Some(0));
+            bare.input(&key(INFO_KEY, false));
+            let info = item(&bare, INFO_ITEM).center();
+            click(&mut bare, info);
+            assert!(bare.info_panel().is_none());
+        }
     }
 
     #[test]
