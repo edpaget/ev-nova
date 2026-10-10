@@ -84,6 +84,7 @@
 //! | [`MissionOrder`](RuleKey::MissionOrder) | `mission_order` | offers of `DispWeight` 0 or more keep index order, the rest after by descending weight (`_RandomizeMissionData` @0xa1842-0xa197d; see [`mission`](crate::mission)) | all by descending `DispWeight`, ties in index order |
 //! | [`PersonMissionStellar`](RuleKey::PersonMissionStellar) | `person_mission_stellar` | a person's mission is resolved at its spawn from the player's navigation target, or from no stellar with none, and an accept in flight reaches a destination that is the navigation target (`_RandomizeOneMission` @0xa151f-0xa1526, `_DoMissionAccept` @0xa1fc5-0xa1ff8; see [`mission`](crate::mission)) | it is resolved from the first stellar the player's system lists, and an accept in flight reaches no destination\* |
 //! | [`MissionStellarDraw`](RuleKey::MissionStellarDraw) | `mission_stellar_draw` | a random destination -2 is drawn as the original draws it: any inhabited, normal-landable non-station stellar of a visible system but the origin and the one excluded, at any distance, once its scan finds a distant inhabited stellar, station or not; the draw tests the distance of the scan's first hit, not of the stellar drawn (`_SelectMissionStellar` @0x9a26a, @0x9a2c7-0x9a330, the distance test @0x9a3ce-0x9a3db; see [`mission`](crate::mission))\*\*\*\*\* | only a candidate distant from the origin is drawn, as every other random code draws\* |
+//! | [`MissionStellarDistance`](RuleKey::MissionStellarDistance) | `mission_stellar_distance` | a random stellar is distant from an origin in a visible system when its system is not at the origin's place, neither system's own Con links reach a system at the other's place, and every system at its system's place lists it; with no origin, as availability asks, only by that last test; from an origin of no visible system nothing is distant (`_StellarsAreDistant` @0x9cb9-0x9ef6, the co-located chain walk @0x9e60-0x9ee4; see [`mission`](crate::mission)) | it is in another system that the visible map does not link with the origin's either way, and nothing is tested with no origin or an origin of no visible system\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -93,7 +94,7 @@
 //! `ship_change_reserves`, `move_arrival`, `move_keep_flag`,
 //! `script_sound`, `landing_distance`, `repeat_mission_failure`,
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
-//! `mission_stellar_draw` or `comm_quote`
+//! `mission_stellar_draw`, `mission_stellar_distance` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -940,6 +941,22 @@ rule_keys! {
     /// so the other reading is the intended behaviour, not anything the
     /// Bible says (see [`mission`](crate::mission)).
     MissionStellarDraw => "mission_stellar_draw",
+    /// Whether a mission's random stellar is distant from its origin
+    /// (`_StellarsAreDistant` @0x9cb9-0x9ef6). By the engine, as the
+    /// original tells it: with an origin in a visible system, a stellar is
+    /// distant when its system is not at the origin's place
+    /// (@0x9d35-0x9d9d), neither system's own Con links reach a system at
+    /// the other's place (@0x9da3-0x9e1c), and every system at its
+    /// system's place lists it (the co-located chain walk,
+    /// @0x9e60-0x9ee4); with no origin, as availability asks, only by
+    /// that last test (@0x9e20-0x9e5c); with an origin of no visible
+    /// system, never (@0x9d1d-0x9d24). By the other reading, the port's
+    /// earlier test: in another system that the visible map does not link
+    /// with the origin's either way, and no test with no origin or an
+    /// origin of no visible system. The Bible says nothing of it, so the
+    /// other reading is the intended behaviour, not anything the Bible
+    /// says (see [`mission`](crate::mission)).
+    MissionStellarDistance => "mission_stellar_distance",
 }
 
 impl RuleKey {
@@ -1107,7 +1124,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(5),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1120,7 +1137,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1133,7 +1150,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1149,7 +1166,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(2),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1165,9 +1182,29 @@ mod tests {
             RuleKey::from_key("mission_stellar_draw"),
             Some(RuleKey::MissionStellarDraw)
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::MissionStellarDraw));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::MissionStellarDraw)
+        );
         assert_eq!(
             Rulebook::default().source_for(RuleKey::MissionStellarDraw),
+            RuleSource::Engine
+        );
+    }
+
+    #[test]
+    fn the_mission_stellar_distance_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(
+            RuleKey::MissionStellarDistance.key(),
+            "mission_stellar_distance"
+        );
+        assert_eq!(
+            RuleKey::from_key("mission_stellar_distance"),
+            Some(RuleKey::MissionStellarDistance)
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::MissionStellarDistance));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::MissionStellarDistance),
             RuleSource::Engine
         );
     }
@@ -1349,7 +1386,8 @@ mod tests {
                 RuleKey::PayMillions,
                 RuleKey::MissionOrder,
                 RuleKey::PersonMissionStellar,
-                RuleKey::MissionStellarDraw
+                RuleKey::MissionStellarDraw,
+                RuleKey::MissionStellarDistance
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
