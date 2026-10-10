@@ -2161,6 +2161,28 @@ mod tests {
     }
 
     #[test]
+    fn an_unabortable_missions_missed_deadline_forgets_the_stellar_while_it_stays_held() {
+        let catalog = lifecycle(vec![MissionRecord {
+            can_abort: 0,
+            time_limit: 1,
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        let active = session.pilot().missions().get(0).expect("stays");
+        assert_eq!(active.failed, Some(FailedBy::Deadline));
+        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+        back_over_128(&mut session);
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        let mut chance = Draws::of(&[]);
+        let _ = session.settle_script(&catalog, &mut chance);
+        assert_eq!(held(&session), [(0, 140)], "not its return");
+        assert_eq!(chance.asked, table_then(&[]), "the whole table");
+    }
+
+    #[test]
     fn a_mission_failed_by_f_runs_on_failure_once_at_its_return_by_either_reading() {
         for reading in [RuleSource::Engine, RuleSource::Bible] {
             let catalog = lifecycle(vec![MissionRecord {
