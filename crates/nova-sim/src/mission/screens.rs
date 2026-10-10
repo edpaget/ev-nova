@@ -63,8 +63,20 @@ impl AcceptRefusal {
 /// `AvailLoc`: the bar.
 pub const BAR: i16 = 1;
 /// `AvailLoc`: the spaceport, where entering keeps the offers suppressed
-/// (`_OfferMissionFromPort` @0xa36b8).
+/// (`_OfferMissionFromPort` @0xa36b8). It offers once per landing, as
+/// `_DoPortDialog` opens (@0x5fc30-0x5fc37); its timer item's call
+/// (@0x6016f-0x60176) never runs.
 pub const SPACEPORT: i16 = 3;
+/// `AvailLoc`: the trade center, which offers as it opens and on its
+/// timer (`_DoTradeDialog` @0x5df78-0x5df7f, @0x5e5de-0x5e5e5).
+pub const TRADE_CENTER: i16 = 4;
+/// `AvailLoc`: the shipyard, which offers as it opens and on its timer
+/// while buying ships, not hiring escorts (`_DoShipyardDialog`
+/// @0x5e8e4-0x5e8eb, @0x5f3f5-0x5f3fc).
+pub const SHIPYARD: i16 = 5;
+/// `AvailLoc`: the outfitter, which offers as it opens and on its timer
+/// (`_DoOutfitDialog` @0x5bd8b-0x5bd92, @0x5c01e-0x5c025).
+pub const OUTFITTER: i16 = 6;
 
 /// `Flags`: the mission is not shown in the mission info screen, which
 /// does not open for it (`_SetupMissionInfoList` @0x9e04e-0x9e14e,

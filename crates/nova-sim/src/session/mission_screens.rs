@@ -7,9 +7,10 @@
 //! - the mission computer's view of the visit's offers
 //!   ([`Session::mission_computer`], `_DoMissionDialog` @0xa37cf), or why
 //!   it does not open;
-//! - a venue's next offer outside the computer
-//!   ([`Session::next_offer`], `_OfferMissionFromPort` @0xa369e), with
-//!   the offers suppressed after a refused accept until another venue is
+//! - a venue's next offer outside the computer, at the bar, spaceport,
+//!   trade center, shipyard or outfitter ([`Session::next_offer`],
+//!   `_OfferMissionFromPort` @0xa369e), which enters the venue, with the
+//!   offers suppressed after a refused accept until another venue is
 //!   entered ([`Session::enter_offer_venue`]);
 //! - the mission info screen's view of the active missions
 //!   ([`Session::mission_info`], `_DoMissionInfoDialog` @0x9e19b);
@@ -18,11 +19,8 @@
 //!   queued at the lifecycle's moments (see the `missions` module), and
 //!   an accept refused for want of room for its cargo.
 //!
-//! None of it is saved. The offers at the spaceport, trade center,
-//! shipyard and outfitter are
-//! rdm:phase/missions/phase-14-offers-at-other-venues; the next outside
-//! offer the original drops after an accept is
-//! rdm:phase/missions/phase-15-accept-drops-next-offer.
+//! None of it is saved. The next outside offer the original drops after
+//! an accept is rdm:phase/missions/phase-15-accept-drops-next-offer.
 
 use super::Session;
 use crate::catalog::{MissionId, MissionTexts};
@@ -266,14 +264,20 @@ impl Session {
     }
 
     /// The next offer at venue `loc` (an `AvailLoc` other than the mission
-    /// computer's: [`BAR`](crate::mission::screens::BAR) for the bar), drawing on `chance`, as
-    /// `_OfferMissionFromPort` (@0xa369e) offers one: the first outside
+    /// computer's: [`BAR`](crate::mission::screens::BAR),
+    /// [`SPACEPORT`], [`TRADE_CENTER`](crate::mission::screens::TRADE_CENTER),
+    /// [`SHIPYARD`](crate::mission::screens::SHIPYARD) or
+    /// [`OUTFITTER`](crate::mission::screens::OUTFITTER)), drawing on
+    /// `chance`, as `_OfferMissionFromPort` (@0xa369e) offers one. It
+    /// enters the venue first ([`Session::enter_offer_venue`]), as that
+    /// routine does (@0xa36a7-0xa36d7), then offers the first outside
     /// offer, in the order they show, whose `AvailLoc` is `loc`, that is
     /// not suppressed, and that is still available, checked as an accept
     /// leaves them, drawing nothing (`_IsMissionAvailable(i, 1)`,
     /// @0xa36da-0xa3742). One that cannot be refused, with no offer text,
     /// is accepted at once. `None` with nothing to offer, or in flight.
     pub fn next_offer(&mut self, loc: i16, chance: &mut dyn Chance) -> Option<VenueOffer> {
+        self.enter_offer_venue(loc);
         let offer = self
             .mission_offers(Venue::Outside)
             .iter()
@@ -368,7 +372,7 @@ mod tests {
     use crate::control::{Bit, Script, SetExpr, Test};
     use crate::geometry::Vec2;
     use crate::mission::AbortRefusal;
-    use crate::mission::screens::{BAR, NO_LABEL, OKAY_LABEL};
+    use crate::mission::screens::{BAR, NO_LABEL, OKAY_LABEL, OUTFITTER, SHIPYARD, TRADE_CENTER};
     use crate::mission::{AcceptError, ActiveMission, OfferLabels, SLOTS};
     use crate::session::AbortError;
     use crate::testkit::{FakePilotCatalog, catalog, land_now, mission};
@@ -973,7 +977,10 @@ mod tests {
         full.enter_offer_venue(BAR);
         assert_eq!(first(&mut full), MissionId(143), "the same visit");
         full.enter_offer_venue(SPACEPORT);
-        assert_eq!(first(&mut full), MissionId(143), "the spaceport keeps it");
+        assert!(
+            full.suppressed.contains(&MissionId(142)),
+            "the spaceport keeps it"
+        );
         full.enter_offer_venue(BAR);
         assert_eq!(
             first(&mut full),
@@ -990,6 +997,126 @@ mod tests {
         settle(&mut flown, &catalog);
         assert_eq!(first(&mut flown), MissionId(142), "never saved");
         assert_eq!(first(&mut session), MissionId(142));
+    }
+
+    /// Mission `id`, offered at venue `loc`, to Mars for 900.
+    fn at_venue(id: i16, loc: i16) -> MissionRecord {
+        MissionRecord {
+            avail_loc: loc,
+            ..to_mars(id)
+        }
+    }
+
+    /// Mission `id`, offered at venue `loc`, that cannot be refused and
+    /// has no offer text, so its offer is an accept at once.
+    fn unrefusable_at(id: i16, loc: i16) -> MissionRecord {
+        MissionRecord {
+            flags: UNREFUSABLE,
+            ..at_venue(id, loc)
+        }
+    }
+
+    const VENUES: [i16; 5] = [BAR, SPACEPORT, TRADE_CENTER, SHIPYARD, OUTFITTER];
+
+    #[test]
+    fn next_offer_at_the_spaceport_offers_an_availloc_3_mission() {
+        let catalog = screens(vec![at_venue(141, SPACEPORT)], Vec::new());
+        for loc in VENUES.into_iter().filter(|&loc| loc != SPACEPORT) {
+            let mut session = docked(&catalog);
+            assert_eq!(session.next_offer(loc, &mut NeverFires), None, "{loc}");
+        }
+        let mut session = docked(&catalog);
+        assert!(matches!(
+            session.next_offer(SPACEPORT, &mut NeverFires),
+            Some(VenueOffer::Prompt(prompt)) if prompt.mission == MissionId(141) && prompt.can_refuse()
+        ));
+    }
+
+    #[test]
+    fn next_offer_at_each_shop_offers_only_its_own_missions() {
+        let catalog = screens(
+            vec![
+                at_venue(141, TRADE_CENTER),
+                at_venue(142, SHIPYARD),
+                at_venue(143, OUTFITTER),
+            ],
+            Vec::new(),
+        );
+        let mut session = docked(&catalog);
+        for (loc, id) in [(TRADE_CENTER, 141), (SHIPYARD, 142), (OUTFITTER, 143)] {
+            assert_eq!(
+                prompted(session.next_offer(loc, &mut NeverFires)),
+                MissionId(id),
+                "{loc}"
+            );
+        }
+        assert_eq!(session.next_offer(BAR, &mut NeverFires), None);
+        assert_eq!(session.next_offer(SPACEPORT, &mut NeverFires), None);
+    }
+
+    #[test]
+    fn the_next_offer_enters_its_venue_forgetting_the_suppressed_offers() {
+        let catalog = screens(vec![unrefusable_at(141, BAR)], Vec::new());
+        let mut session = docked(&catalog);
+        fill_slots(&mut session);
+        assert!(matches!(
+            session.next_offer(BAR, &mut NeverFires),
+            Some(VenueOffer::Accepted {
+                accepted: Err(_),
+                ..
+            })
+        ));
+        assert_eq!(session.next_offer(BAR, &mut NeverFires), None, "suppressed");
+        assert_eq!(session.next_offer(OUTFITTER, &mut NeverFires), None);
+        assert!(
+            matches!(
+                session.next_offer(BAR, &mut NeverFires),
+                Some(VenueOffer::Accepted {
+                    mission: MissionId(141),
+                    ..
+                })
+            ),
+            "the outfitter entered forgot it"
+        );
+    }
+
+    #[test]
+    fn a_spaceport_offer_refused_stays_suppressed_until_another_venue_is_offered_at() {
+        let catalog = screens(vec![unrefusable_at(141, SPACEPORT)], Vec::new());
+        let mut session = docked(&catalog);
+        fill_slots(&mut session);
+        assert!(matches!(
+            session.next_offer(SPACEPORT, &mut NeverFires),
+            Some(VenueOffer::Accepted {
+                accepted: Err(_),
+                ..
+            })
+        ));
+        assert_eq!(session.next_offer(SPACEPORT, &mut NeverFires), None);
+        assert_eq!(session.next_offer(BAR, &mut NeverFires), None);
+        assert!(
+            matches!(
+                session.next_offer(SPACEPORT, &mut NeverFires),
+                Some(VenueOffer::Accepted {
+                    mission: MissionId(141),
+                    ..
+                })
+            ),
+            "the bar entered forgot it"
+        );
+    }
+
+    #[test]
+    fn the_bar_left_for_the_spaceport_keeps_its_suppressed_offers() {
+        let catalog = screens(vec![unrefusable_at(141, BAR)], Vec::new());
+        let mut session = docked(&catalog);
+        fill_slots(&mut session);
+        assert!(session.next_offer(BAR, &mut NeverFires).is_some());
+        assert_eq!(
+            session.next_offer(BAR, &mut NeverFires),
+            None,
+            "nothing offered at in between"
+        );
     }
 
     #[test]

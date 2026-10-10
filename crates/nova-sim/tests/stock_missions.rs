@@ -6,7 +6,7 @@
 //! name and offer text filled. Every `mïsn`'s texts fill every tag but the
 //! ranks'. A stock cargo mission loads its cargo as it is accepted, and
 //! landing at its destination unloads it, pays and runs its `OnSuccess`.
-//! Skips, passing, when `NOVA_DATA` is unset.
+//! The new pilot is offered the tutorial at the spaceport. Skips, passing, when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -16,11 +16,12 @@ use nova_data::records::mission::Mission;
 use nova_sim::catalog::MissionRecord;
 use nova_sim::catalog::PlaceNames;
 use nova_sim::control::SetOp;
-use nova_sim::mission::{Offer, Stop, Venue};
+use nova_sim::mission::screens::SPACEPORT;
+use nova_sim::mission::{Offer, Stop, Venue, VenueOffer};
 use nova_sim::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames};
 use nova_sim::{
-    Bit, CommCatalog, DateAffixes, GameDate, NeverFires, Pilot, PilotCatalog, RuleSource, Session,
-    StellarId, SystemId, is_landable,
+    Bit, CommCatalog, DateAffixes, GameDate, GovtId, MissionId, NeverFires, Pilot, PilotCatalog,
+    RuleSource, Session, StellarId, SystemId, is_landable,
 };
 
 /// A new stock pilot docked at the first landable stellar of its system,
@@ -65,6 +66,38 @@ fn a_new_stock_pilot_is_offered_missions_that_pass_every_field() {
             offer.mission
         );
     }
+}
+
+#[test]
+fn a_new_stock_pilot_is_offered_the_tutorial_at_the_spaceport() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = docked_new_pilot(&data);
+    let docked = session.landed().expect("docked");
+    let site = data
+        .landing_sites(session.system())
+        .into_iter()
+        .find(|site| site.id == docked)
+        .expect("the docked stellar");
+    assert_eq!(
+        site.govt,
+        Some(GovtId(128)),
+        "AvailStel 10000 names gövt 128"
+    );
+    let Some(VenueOffer::Prompt(prompt)) = session.next_offer(SPACEPORT, &mut NeverFires) else {
+        panic!("the spaceport offers");
+    };
+    assert_eq!(prompt.mission, MissionId(251), "Head to Sol;Tutorial 001");
+    assert!(prompt.can_refuse());
+    assert!(
+        prompt
+            .text
+            .starts_with("As you wander around a spaceport for the first time"),
+        "{}",
+        prompt.text
+    );
 }
 
 /// The stock names: the stellars' and systems', and `STR#` 4001's cargo.
