@@ -252,7 +252,9 @@ pub use self::active::{
     auto_aborts_at_accept, failure_records, fined, goals_met_at_accept, pay_effect,
     success_records,
 };
-pub use self::cargo::Room;
+pub use self::cargo::{
+    PickupFacts, PickupRefusal, Room, drops_off, picks_up_at_destination, pickup_checks,
+};
 pub use self::offer::{Offer, Offers, ROLLED, RollTable, Stop, resolve};
 pub use self::screens::{OfferLabels, display_order, offer_gap, offer_labels};
 pub use self::select::{Kind, Stellar, StellarCode, World, select_stellar, stellars_of};

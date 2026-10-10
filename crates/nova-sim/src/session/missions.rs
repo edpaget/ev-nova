@@ -87,9 +87,10 @@ pub const REOFFER: SubscriptionId = SubscriptionId {
     hook: 0,
 };
 
-/// A slot's landing hook that marks its destination reached: the cargo
-/// check's place in `_MissionLandCheck` (@0xa1a1b), which missions phase
-/// 5 fills.
+/// A slot's landing hook that picks its cargo up and drops it off and
+/// marks its destination reached: the cargo check's place in
+/// `_MissionLandCheck` (`_MissionLandCargoCheck` @0x9edc5, from
+/// @0xa1a1b; see the `mission_cargo` module).
 pub const ARRIVAL: u8 = 0;
 /// A slot's landing hook that fails a failed mission at its return
 /// (@0xa1a92).
@@ -197,7 +198,7 @@ fn post_days(days: i16) -> u32 {
 /// Whether `stop` is `stellar`: by ID, where the original also counts a
 /// stellar at the same place with the same name (`_StellarsAreIdentical`
 /// @0xab35; rdm:phase/missions/phase-11-stellars-identical-by-place-and-name).
-fn at(stop: Option<Stop>, stellar: StellarId) -> bool {
+pub(super) fn at(stop: Option<Stop>, stellar: StellarId) -> bool {
     stop.is_some_and(|stop| stop.stellar == stellar)
 }
 
@@ -305,7 +306,7 @@ impl Session {
     }
 
     /// The room the ship has for `tons` of a mission's cargo.
-    fn room_for(&self, tons: i64) -> Room {
+    pub(super) fn room_for(&self, tons: i64) -> Room {
         Room {
             tons,
             holds: i64::from(self.stats.capacity),
@@ -601,7 +602,7 @@ impl Session {
             return;
         };
         match (id.hook, *event) {
-            (ARRIVAL, StoryEvent::Landed { stellar }) => self.mission_arrival(slot, stellar),
+            (ARRIVAL, StoryEvent::Landed { stellar }) => self.cargo_at_landing(slot, stellar),
             (FAILURE, StoryEvent::Landed { stellar }) => {
                 self.mission_failure_at(slot, stellar, chance);
             }
@@ -613,20 +614,6 @@ impl Session {
                 self.mission_deadline(slot, chance);
             }
             _ => {}
-        }
-    }
-
-    /// Landing on `stellar` marks the destination of the mission in
-    /// `slot` reached (`_MissionLandCargoCheck` @0x9edfd-0x9ef20; with
-    /// `PickupMode` 1, missions phase 5 marks it only once the pickup
-    /// succeeds).
-    fn mission_arrival(&mut self, slot: u8, stellar: StellarId) {
-        if let Some(active) = self.pilot.missions.get_mut(slot)
-            && at(active.destination, stellar)
-            && !active.reached
-        {
-            active.reached = true;
-            self.save_due = true;
         }
     }
 

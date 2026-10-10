@@ -1,11 +1,18 @@
 //! The session's side of mission cargo (see the
 //! [`mission`](crate::mission) module's "Cargo"): loading it as a
-//! mission is accepted.
+//! mission is accepted, and picking it up and dropping it off as the
+//! player lands, the first of each slot's landing hooks
+//! ([`ARRIVAL`](super::missions::ARRIVAL)), or boards its ship.
 
 use super::Session;
 use super::mission_screens::MissionTextKind;
-use crate::catalog::MissionRecord;
-use crate::mission::cargo::loads_at_accept;
+use super::missions::at;
+use crate::catalog::{MissionId, MissionRecord, StellarId};
+use crate::chance::NeverFires;
+use crate::mission::cargo::{
+    PICKUP_BOARDING, PickupFacts, drops_off, loads_at_accept, picks_up_at_destination,
+    pickup_checks,
+};
 
 impl Session {
     /// Loads the cargo of `record`, just accepted into `slot`, as the
@@ -22,6 +29,105 @@ impl Session {
         };
         active.aboard = true;
         self.show_mission_text(MissionTextKind::LoadCargo, record.id, Some(slot));
+    }
+
+    /// The cargo check of the mission in `slot` as the player lands on
+    /// `stellar` (`_MissionLandCargoCheck` @0x9edc5), before its failure
+    /// and success. At its destination, `PickupMode` 1 with nothing
+    /// aboard picks the cargo up: room for it puts it aboard, reaches the
+    /// destination and shows its `LoadCargText`, filled for the slot; no
+    /// room shows why and leaves the destination unreached, so the next
+    /// landing there tries again. Any other landing at the destination
+    /// reaches it. Then the cargo is dropped off as [`drops_off`] says,
+    /// showing its `DumpCargoText`.
+    pub(super) fn cargo_at_landing(&mut self, slot: u8, stellar: StellarId) {
+        let Some(active) = self.pilot.missions.get(slot) else {
+            return;
+        };
+        let record = self.lifecycle_record(active.mission);
+        let at_destination = at(active.destination, stellar);
+        let at_return = at(active.return_to, stellar);
+        if at_destination {
+            let reached = !picks_up_at_destination(&record, active) || self.pick_up(slot);
+            if let Some(active) = self.slot_holding(slot, record.id)
+                && reached
+            {
+                active.reached = true;
+            }
+        }
+        let drops = self
+            .pilot
+            .missions
+            .get(slot)
+            .is_some_and(|active| drops_off(&record, active, at_destination, at_return));
+        if drops && let Some(active) = self.slot_holding(slot, record.id) {
+            active.aboard = false;
+            self.show_mission_text(MissionTextKind::DumpCargo, record.id, Some(slot));
+        }
+    }
+
+    /// Picks up the cargo of the mission in `slot`, a `PickupMode` 2
+    /// mission whose special ship the player has boarded
+    /// (`_HandlePlayerBoardAttempt` @0x652ee-0x653ed), through the
+    /// pickup's checks: whether it is aboard now. False for a free slot,
+    /// or a mission of another `PickupMode`. Mission-ships phase 2 calls
+    /// it from the boarding (rdm:phase/mission-ships/phase-2-ship-goals).
+    pub fn pick_up_boarded_cargo(&mut self, slot: u8) -> bool {
+        let Some(mission) = self.pilot.missions.get(slot).map(|active| active.mission) else {
+            return false;
+        };
+        if self.lifecycle_record(mission).pickup_mode != PICKUP_BOARDING {
+            return false;
+        }
+        let picked = self.pickup_passes(slot, mission);
+        if let Some(active) = self.slot_holding(slot, mission)
+            && picked
+        {
+            active.aboard = true;
+        }
+        picked
+    }
+
+    /// Picks up the cargo of the mission in `slot` at its destination:
+    /// whether it is aboard now, its `LoadCargText` shown.
+    fn pick_up(&mut self, slot: u8) -> bool {
+        let Some(mission) = self.pilot.missions.get(slot).map(|active| active.mission) else {
+            return false;
+        };
+        if !self.pickup_passes(slot, mission) {
+            return false;
+        }
+        if let Some(active) = self.slot_holding(slot, mission) {
+            active.aboard = true;
+        }
+        self.show_mission_text(MissionTextKind::LoadCargo, mission, Some(slot));
+        true
+    }
+
+    /// Whether the pickup's checks pass for the cargo of `mission` in
+    /// `slot` (`_DoMissionCargoPickup` @0x98292): the ship's holds, then
+    /// the free space, for its tons. A refusal is shown.
+    fn pickup_passes(&mut self, slot: u8, mission: MissionId) -> bool {
+        let tons = self
+            .pilot
+            .missions
+            .get(slot)
+            .map_or(0, |active| active.cargo_tons);
+        let facts = PickupFacts {
+            cargo: self.room_for(tons),
+            rules: &self.rules,
+        };
+        match pickup_checks().first_refusal(&facts, &mut NeverFires) {
+            Ok(()) => true,
+            Err(refusal) => {
+                self.show_text(
+                    MissionTextKind::NoRoom,
+                    mission,
+                    refusal.message().to_owned(),
+                );
+                false
+            }
+        }
     }
 }
 
@@ -92,11 +198,12 @@ mod tests {
         }
     }
 
-    /// Mission `id`'s texts: briefed "Brief.", with these load and dump
-    /// texts.
+    /// Mission `id`'s texts: briefed "Brief.", completed "Done.", with
+    /// these load and dump texts.
     fn texts(id: i16, load: Option<&str>, dump: Option<&str>) -> MissionTexts {
         MissionTexts {
             brief: Some("Brief.".to_owned()),
+            comp: Some("Done.".to_owned()),
             load_cargo: load.map(str::to_owned),
             dump_cargo: dump.map(str::to_owned),
             ..MissionTexts::named(MissionId(id), "Courier")
@@ -200,6 +307,284 @@ mod tests {
                 .take_mission_texts()
                 .iter()
                 .all(|shown| shown.kind != MissionTextKind::LoadCargo)
+        );
+    }
+
+    // At a landing.
+
+    use crate::catalog::MissionShip;
+    use crate::geometry::Vec2;
+    use crate::market::Good;
+    use crate::mission::cargo::{NO_HOLDS_TO_LOAD, NO_SPACE_TO_LOAD};
+
+    const DUMP: &str = "Unloaded <CQ> tons at <DST>.";
+
+    /// Takes `session` off if it is landed, puts it at rest over
+    /// `stellar` (one of 130's), lands there and settles.
+    fn land_on(session: &mut Session, catalog: &FakePilotCatalog, stellar: i16) {
+        if session.landed().is_some() {
+            session.take_off(&mut NeverFires).expect("takes off");
+            let _ = session.settle_script(catalog, &mut NeverFires);
+        }
+        let site = *session
+            .sites
+            .iter()
+            .find(|site| site.id == StellarId(stellar))
+            .expect("shown");
+        session.player.position = site.position;
+        session.player.velocity = Vec2::ZERO;
+        assert_eq!(land_now(session), Ok(StellarId(stellar)));
+        let _ = session.settle_script(catalog, &mut NeverFires);
+    }
+
+    /// [`courier`] completed back at 128.
+    fn round_trip(id: i16, pickup_mode: i16, drop_off_mode: i16) -> MissionRecord {
+        MissionRecord {
+            return_stel: 128,
+            ..courier(id, pickup_mode, drop_off_mode)
+        }
+    }
+
+    /// A session docked at 128 with `record` accepted into slot 0 and
+    /// the texts taken.
+    fn accepted(catalog: &FakePilotCatalog) -> Session {
+        let mut session = docked(catalog);
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        let _ = session.take_mission_texts();
+        session
+    }
+
+    fn reached(session: &Session) -> bool {
+        session.pilot().missions().get(0).expect("held").reached
+    }
+
+    fn kinds(session: &mut Session) -> Vec<MissionTextKind> {
+        session
+            .take_mission_texts()
+            .into_iter()
+            .map(|shown| shown.kind)
+            .collect()
+    }
+
+    #[test]
+    fn pickup_mode_1_loads_at_the_destination_reaching_it() {
+        let catalog = cargo_catalog(
+            vec![round_trip(140, 1, -1)],
+            vec![texts(140, Some(LOAD), Some(DUMP))],
+        );
+        let mut session = accepted(&catalog);
+        assert!(!aboard(&session, 0), "not at accept");
+        land_on(&mut session, &catalog, 129);
+        assert!(aboard(&session, 0));
+        assert!(reached(&session));
+        assert_eq!(
+            session.take_mission_texts(),
+            [text(
+                MissionTextKind::LoadCargo,
+                140,
+                "Loaded 5 tons of medical for Luna."
+            )]
+        );
+        land_on(&mut session, &catalog, 129);
+        assert_eq!(kinds(&mut session), [], "aboard: loaded once");
+    }
+
+    #[test]
+    fn a_pickup_without_the_holds_or_the_space_is_refused_and_tried_again_next_landing() {
+        let catalog = cargo_catalog(
+            vec![round_trip(140, 1, -1)],
+            vec![texts(140, Some(LOAD), None)],
+        );
+        let mut session = accepted(&catalog);
+        session.pilot.missions.get_mut(0).expect("held").cargo_tons = 21;
+        land_on(&mut session, &catalog, 129);
+        assert_eq!(
+            session.take_mission_texts(),
+            [text(MissionTextKind::NoRoom, 140, NO_HOLDS_TO_LOAD)],
+            "20 holds"
+        );
+        assert!(!aboard(&session, 0));
+        assert!(!reached(&session), "not reached");
+        session.pilot.missions.get_mut(0).expect("held").cargo_tons = 5;
+        session.pilot.cargo.insert(Good::Commodity(0), 16);
+        land_on(&mut session, &catalog, 129);
+        assert_eq!(
+            session.take_mission_texts(),
+            [text(MissionTextKind::NoRoom, 140, NO_SPACE_TO_LOAD)],
+            "4 free"
+        );
+        assert!(!aboard(&session, 0));
+        assert!(!reached(&session));
+        session.pilot.cargo.clear();
+        land_on(&mut session, &catalog, 129);
+        assert!(aboard(&session, 0), "room at last");
+        assert!(reached(&session));
+        assert_eq!(kinds(&mut session), [MissionTextKind::LoadCargo]);
+    }
+
+    #[test]
+    fn pickup_mode_1_with_drop_off_0_loads_and_unloads_on_one_landing() {
+        let catalog = cargo_catalog(
+            vec![round_trip(140, 1, 0)],
+            vec![texts(140, Some(LOAD), Some(DUMP))],
+        );
+        let mut session = accepted(&catalog);
+        land_on(&mut session, &catalog, 129);
+        assert_eq!(
+            kinds(&mut session),
+            [MissionTextKind::LoadCargo, MissionTextKind::DumpCargo]
+        );
+        assert!(!aboard(&session, 0));
+        assert!(reached(&session));
+    }
+
+    #[test]
+    fn pickup_mode_2_loads_on_boarding_its_ship_and_not_at_the_destination() {
+        let catalog = cargo_catalog(
+            vec![round_trip(140, 2, 1)],
+            vec![texts(140, Some(LOAD), Some(DUMP))],
+        );
+        let mut session = accepted(&catalog);
+        land_on(&mut session, &catalog, 129);
+        assert!(!aboard(&session, 0), "not at the destination");
+        assert!(reached(&session));
+        assert_eq!(kinds(&mut session), []);
+        assert!(session.pick_up_boarded_cargo(0));
+        assert!(aboard(&session, 0));
+        assert!(!session.pick_up_boarded_cargo(1), "a free slot");
+        let mut session = accepted(&catalog);
+        session.pilot.missions.get_mut(0).expect("held").cargo_tons = 21;
+        assert!(!session.pick_up_boarded_cargo(0));
+        assert!(!aboard(&session, 0));
+        assert_eq!(
+            session.take_mission_texts(),
+            [text(MissionTextKind::NoRoom, 140, NO_HOLDS_TO_LOAD)]
+        );
+        let catalog = cargo_catalog(vec![round_trip(140, 1, 1)], vec![]);
+        let mut session = accepted(&catalog);
+        assert!(!session.pick_up_boarded_cargo(0), "PickupMode 1");
+        assert!(!aboard(&session, 0));
+    }
+
+    #[test]
+    fn pickup_mode_minus_1_never_loads_so_never_unloads() {
+        let catalog = cargo_catalog(
+            vec![courier(140, -1, 0)],
+            vec![texts(140, Some(LOAD), Some(DUMP))],
+        );
+        let mut session = accepted(&catalog);
+        assert!(!aboard(&session, 0));
+        land_on(&mut session, &catalog, 129);
+        assert_eq!(kinds(&mut session), [MissionTextKind::Comp], "completed");
+    }
+
+    #[test]
+    fn drop_off_0_unloads_at_the_destination_alone() {
+        let catalog = cargo_catalog(
+            vec![round_trip(140, 0, 0)],
+            vec![texts(140, Some(LOAD), Some(DUMP))],
+        );
+        let mut session = accepted(&catalog);
+        land_on(&mut session, &catalog, 128);
+        assert!(aboard(&session, 0), "the return, not the destination");
+        assert_eq!(kinds(&mut session), []);
+        land_on(&mut session, &catalog, 129);
+        assert!(!aboard(&session, 0));
+        assert_eq!(
+            session.take_mission_texts(),
+            [text(
+                MissionTextKind::DumpCargo,
+                140,
+                "Unloaded 5 tons at Luna."
+            )]
+        );
+        assert_eq!(session.pilot().total_cargo(), 0);
+    }
+
+    #[test]
+    fn drop_off_1_unloads_at_the_return_before_the_comp_text() {
+        let catalog = cargo_catalog(
+            vec![round_trip(140, 0, 1)],
+            vec![texts(140, Some(LOAD), Some(DUMP))],
+        );
+        let mut session = accepted(&catalog);
+        land_on(&mut session, &catalog, 129);
+        assert!(aboard(&session, 0), "the destination, not the return");
+        assert_eq!(kinds(&mut session), []);
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(
+            kinds(&mut session),
+            [MissionTextKind::DumpCargo, MissionTextKind::Comp]
+        );
+        assert_eq!(session.pilot().missions().iter().count(), 0, "completed");
+    }
+
+    #[test]
+    fn drop_off_1_keeps_the_cargo_aboard_until_the_goals_are_met_unless_there_is_no_goal() {
+        let catalog = cargo_catalog(
+            vec![MissionRecord {
+                ships: MissionShip { count: 1, goal: 0 },
+                ..round_trip(140, 0, 1)
+            }],
+            vec![texts(140, Some(LOAD), Some(DUMP))],
+        );
+        let mut session = accepted(&catalog);
+        land_on(&mut session, &catalog, 129);
+        land_on(&mut session, &catalog, 128);
+        assert!(aboard(&session, 0), "a goal not met");
+        assert_eq!(kinds(&mut session), []);
+        let catalog = cargo_catalog(
+            vec![MissionRecord {
+                ships: MissionShip { count: 1, goal: -1 },
+                flags: 0x0001,
+                ..round_trip(140, 0, 1)
+            }],
+            vec![texts(140, Some(LOAD), Some(DUMP))],
+        );
+        let mut session = accepted(&catalog);
+        assert!(!session.pilot().missions().get(0).expect("held").goals_met);
+        land_on(&mut session, &catalog, 129);
+        land_on(&mut session, &catalog, 128);
+        assert!(!aboard(&session, 0), "no ShipGoal");
+        assert_eq!(kinds(&mut session), [MissionTextKind::DumpCargo]);
+        assert_eq!(session.pilot().missions().iter().count(), 1, "goals unmet");
+    }
+
+    #[test]
+    fn drop_off_minus_1_keeps_the_cargo_until_its_slot_is_freed() {
+        let catalog = cargo_catalog(
+            vec![courier(140, 0, -1)],
+            vec![texts(140, Some(LOAD), Some(DUMP))],
+        );
+        let mut session = accepted(&catalog);
+        assert_eq!(session.pilot().total_cargo(), 5);
+        land_on(&mut session, &catalog, 129);
+        assert_eq!(
+            kinds(&mut session),
+            [MissionTextKind::Comp],
+            "no DumpCargoText"
+        );
+        assert_eq!(session.pilot().total_cargo(), 0, "gone with its slot");
+    }
+
+    #[test]
+    fn a_mission_with_no_cargo_type_still_shows_its_dump_text() {
+        let catalog = cargo_catalog(
+            vec![MissionRecord {
+                cargo_type: -1,
+                cargo_qty: 0,
+                ..round_trip(140, 0, 0)
+            }],
+            vec![texts(140, None, Some("Dumped."))],
+        );
+        let mut session = accepted(&catalog);
+        land_on(&mut session, &catalog, 129);
+        assert_eq!(
+            session.take_mission_texts(),
+            [text(MissionTextKind::DumpCargo, 140, "Dumped.")]
         );
     }
 }
