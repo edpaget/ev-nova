@@ -73,6 +73,8 @@ pub(crate) fn player(x: f32, y: f32) -> PlayerSide {
             ..HullSpec::default()
         },
         handling: ShipStats::new(FAST, &[]).handling,
+        rating: 0,
+        yardstick: 0,
     }
 }
 

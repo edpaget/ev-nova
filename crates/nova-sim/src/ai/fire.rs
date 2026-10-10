@@ -413,6 +413,8 @@ mod tests {
             },
             hull: HullSpec::default(),
             handling: ShipStats::new(FAST, &[]).handling,
+            rating: 0,
+            yardstick: 0,
         }
     }
 

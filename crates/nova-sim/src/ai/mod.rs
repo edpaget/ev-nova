@@ -158,6 +158,11 @@ pub struct PlayerSide {
     pub hull: HullSpec,
     /// How it handles.
     pub handling: Handling,
+    /// The pilot's combat rating (see [`rating`](crate::rating)).
+    pub rating: i64,
+    /// The raw `Strength` of `shïp` 128, the yardstick the odds measure
+    /// the rating by ([`odds`](crate::ai::odds)).
+    pub yardstick: i16,
 }
 
 /// No governments at all.
@@ -701,6 +706,8 @@ mod tests {
             reserves: Reserves::full(1.0, 1.0, 1.0),
             hull: HullSpec::default(),
             handling: Handling::default(),
+            rating: 0,
+            yardstick: 0,
         };
         around.player = Some(player);
         assert!(around.live(P));

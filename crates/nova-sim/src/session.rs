@@ -1210,6 +1210,8 @@ impl Session {
             reserves: self.pilot.reserves,
             hull: self.hull,
             handling: self.stats.handling,
+            rating: self.pilot.combat_rating,
+            yardstick: self.arsenal.strength(ShipId(128)),
         }
     }
 
@@ -10395,6 +10397,22 @@ mod tests {
         catalog.govts[0].flags |= crate::govt::DERELICT;
         let seen = rating_while_shooting(&catalog);
         assert_eq!(seen.last(), Some(&(None, 0)), "{seen:?}");
+    }
+
+    #[test]
+    fn an_npc_sees_the_players_rating_and_the_strength_of_shïp_128() {
+        let mut catalog = rated(50);
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(128) {
+                hull.strength = 25;
+            }
+        }
+        let mut session = facing_an_npc(&catalog, 180);
+        session.pilot.combat_rating = 320_000;
+        let seen = session.player_side();
+        assert_eq!((seen.rating, seen.yardstick), (320_000, 25));
+        session.arsenal = crate::combat::armament::Arsenal::new(&[], Vec::new());
+        assert_eq!(session.player_side().yardstick, 0, "no shïp 128");
     }
 
     #[test]

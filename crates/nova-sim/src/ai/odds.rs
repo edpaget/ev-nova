@@ -21,9 +21,14 @@
 //!   other intact ship, not allied, of a government at war with its own
 //!   or attacking it, and the player when the ship threatens the player
 //!   (`_ExtendedIsThreatToShip` asks `_IsThreatToPlayer` of the ship).
-//!   The player's strength is multiplied by its kills over 6400 times
-//!   the strength of `shïp` 128, held between 1 and 2; with no kill count
-//!   kept yet, by 1.
+//!   The player's strength is multiplied by its [`rating_factor`]: its
+//!   combat rating over 6400 times the raw `Strength` of `shïp` 128 (its
+//!   `yardstick`, @0x84a7e), in whole numbers (`idivl` @0x84a91), held
+//!   between 1 (0xdd068) and 2 (0xdd074) (@0x84a93-0x84ac8). So the
+//!   factor is a step: 1 below twice 6400 yardsticks, and 2 from there.
+//!   With a yardstick of 0 the original would divide by zero; here, as
+//!   for one below 0, the factor is 1. Only the odds weigh the rating, not
+//!   [`friend_strength`].
 //! - **A hopeless chase** ([`hopeless_chase`]): the target is the player
 //!   or is fleeing; the chaser is over [`HEAVY`] tons; their relative
 //!   velocity (the target's less the chaser's) has a component over
@@ -71,6 +76,19 @@ pub fn shield_factor(reserves: &Reserves) -> f32 {
     share.clamp(WEAKEST, 1.0)
 }
 
+/// How many times its strength the player counts for in the odds: its
+/// combat `rating` over 6400 times the `yardstick`, in whole numbers,
+/// held between 1 and 2; 1 for a yardstick of 0 or less (see the module
+/// docs).
+#[must_use]
+pub fn rating_factor(rating: i64, yardstick: i16) -> f32 {
+    if yardstick <= 0 {
+        return 1.0;
+    }
+    let quotient = rating / (6400 * i64::from(yardstick));
+    quotient.clamp(1, 2) as f32
+}
+
 /// The strength of `ship` and its friends among `around` (see the
 /// module docs).
 #[must_use]
@@ -105,7 +123,9 @@ pub fn odds_against(npc: &Npc, around: &Surroundings) -> f32 {
     let me = ShipRef::Npc(npc.id);
     let mut friends = npc.hull.strength;
     let mut enemies = match around.player {
-        Some(player) if npc.threatens_player() => player.hull.strength,
+        Some(player) if npc.threatens_player() => {
+            player.hull.strength * rating_factor(player.rating, player.yardstick)
+        }
         _ => 0.0,
     };
     for other in around.npcs.iter().filter(|other| {
@@ -229,6 +249,8 @@ mod tests {
                 ..HullSpec::default()
             },
             handling: ShipStats::new(FAST, &[]).handling,
+            rating: 0,
+            yardstick: 0,
         }
     }
 
@@ -355,6 +377,63 @@ mod tests {
             ..Surroundings::new(&[], &lone)
         };
         assert_eq!(odds_against(&lone[0], &around), 0.0);
+    }
+
+    #[test]
+    fn the_rating_factor_steps_from_1_to_2_at_twice_6400_yardsticks() {
+        let s = 10;
+        let one = 6400 * i64::from(s);
+        assert_eq!(rating_factor(0, s), 1.0);
+        assert_eq!(rating_factor(1, s), 1.0);
+        assert_eq!(rating_factor(one, s), 1.0);
+        assert_eq!(rating_factor(2 * one - 1, s), 1.0, "the quotient is whole");
+        assert_eq!(rating_factor(2 * one, s), 2.0);
+        assert_eq!(rating_factor(10 * one, s), 2.0, "no more");
+        assert_eq!(rating_factor(-2 * one, s), 1.0, "no less");
+        assert_eq!(rating_factor(i64::MAX, s), 2.0);
+        assert_eq!(rating_factor(i64::MAX, 0), 1.0, "no yardstick");
+        assert_eq!(rating_factor(i64::MAX, -5), 1.0);
+        assert_eq!(rating_factor(2 * 6400, 1), 2.0);
+    }
+
+    #[test]
+    fn the_odds_against_a_ship_threatening_the_player_scale_with_its_rating() {
+        let govts = govts();
+        let mut hunting = ship(1, 140, 50.0);
+        hunting.goal = Goal::Attack(ShipRef::Player);
+        let npcs = [hunting];
+        let odds = |rating| {
+            let around = Surroundings {
+                govts: &govts,
+                player: Some(PlayerSide {
+                    rating,
+                    yardstick: 10,
+                    ..player(100.0)
+                }),
+                ..Surroundings::new(&[], &npcs)
+            };
+            odds_against(&npcs[0], &around)
+        };
+        assert_eq!(odds(0), 2.0);
+        assert_eq!(odds(127_999), 2.0);
+        assert_eq!(odds(128_000), 4.0);
+        let mut calm = npcs[0].clone();
+        calm.goal = Goal::default();
+        let around = Surroundings {
+            govts: &govts,
+            player: Some(PlayerSide {
+                rating: 128_000,
+                yardstick: 10,
+                ..player(100.0)
+            }),
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(odds_against(&calm, &around), 0.0, "not threatening");
+        assert_eq!(
+            friend_strength(ShipRef::Player, &around),
+            100.0,
+            "the rating weighs only in the odds"
+        );
     }
 
     /// A heavy chaser (100 tons) of top speed 6 at the centre, chasing the

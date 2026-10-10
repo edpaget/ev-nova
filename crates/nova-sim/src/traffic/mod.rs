@@ -1108,6 +1108,8 @@ mod tests {
             reserves: crate::reserves::Reserves::full(1.0, 1.0, 1.0),
             hull: HullSpec::default(),
             handling: ShipStats::new(FAST, &[]).handling,
+            rating: 0,
+            yardstick: 0,
         };
         let world = World {
             player: Some(player),
@@ -1306,6 +1308,8 @@ mod tests {
             reserves: crate::reserves::Reserves::full(10.0, 10.0, 10.0),
             hull: HullSpec::default(),
             handling: ShipStats::new(FAST, &[]).handling,
+            rating: 0,
+            yardstick: 0,
         }
     }
 
