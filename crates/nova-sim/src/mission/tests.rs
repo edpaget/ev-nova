@@ -240,6 +240,27 @@ fn all_refusals_lists_every_failing_field_with_its_descriptor() {
 }
 
 #[test]
+fn the_facts_hand_over_the_visits_rule_set() {
+    let rules = Rulebook::default().with_override(
+        crate::rulebook::RuleKey::DayRolls,
+        crate::rulebook::RuleSource::Bible,
+    );
+    let galaxy = Galaxy {
+        rules,
+        ..Galaxy::new()
+    };
+    let visit = galaxy.visit();
+    let mission = mission(130);
+    let facts = AvailFacts {
+        visit: &visit,
+        mission: &mission,
+        venue: Venue::Computer,
+        rolls: &ones(),
+    };
+    assert_eq!(facts.rulebook(), &rules);
+}
+
+#[test]
 fn an_avail_stel_of_minus_32000_or_below_is_never_offered() {
     assert!(plainly(|m| m.avail_stel = -32000).contains(&Refusal::Unoffered));
     assert!(plainly(|m| m.avail_stel = i16::MIN).contains(&Refusal::Unoffered));
@@ -509,6 +530,7 @@ fn record_of(record: i16, avail_record: i16) -> Vec<Refusal> {
 #[test]
 fn avail_record_0_passes_above_0_needs_that_high_and_below_that_low() {
     assert_eq!(record_of(-500, 0), []);
+    assert_eq!(record_of(5, 0), []);
     assert_eq!(record_of(10, 10), []);
     assert_eq!(record_of(9, 10), [Refusal::AvailRecord]);
     assert_eq!(record_of(-10, -10), []);

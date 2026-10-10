@@ -175,8 +175,6 @@ const NOWHERE: i16 = -1;
 const UNOFFERED: i16 = -32000;
 /// `AvailRecord`: the docked stellar dominated.
 const DOMINATED_HERE: i16 = -32000;
-/// The lowest `AvailRecord` that is a legal record, not domination.
-const NOT_DOMINATION: i16 = DOMINATED_HERE + 1;
 /// `AvailRandom` above which no roll is read.
 const ALWAYS: i16 = 99;
 /// `Flags`: needs a jump's fuel.
@@ -438,10 +436,10 @@ fn avail_record(facts: &AvailFacts) -> Result<(), Refusal> {
     let record = facts.visit.player.record;
     let takes = match wanted {
         0 => true,
+        1.. => record >= wanted,
         // -32000, -32001 and below: domination, which is not built.
         ..=DOMINATED_HERE => false,
-        NOT_DOMINATION..0 => record <= wanted,
-        1.. => record >= wanted,
+        _ => record <= wanted,
     };
     pass(takes, Refusal::AvailRecord)
 }
