@@ -2281,7 +2281,6 @@ impl Shop<'_> {
                     rolls.today(record.id, roll, chance)
                 };
             let on_sale = sweep.on_sale(record.disp_weight);
-            let for_sale = today && on_sale;
             let hidden = owned == 0 && hides(record.flags, required, available);
             let sells_anywhere = record.flags & OutfitFlags::SELL_ANYWHERE != 0;
             // The listing byte: the sweep (`_SetupPortAvailableItems`
@@ -2300,7 +2299,9 @@ impl Shop<'_> {
             }
             let price = unit_price(record, self.fields.mass, &self.rules);
             let mass = unit_mass(record, self.fields.mass);
-            let sold_here = !listed || for_sale || sells_anywhere;
+            // A listed row passed the sweep, so it is for sale exactly
+            // when it is on offer today.
+            let sold_here = !listed || today || sells_anywhere;
             let facts = OutfitFacts {
                 listed,
                 required,
