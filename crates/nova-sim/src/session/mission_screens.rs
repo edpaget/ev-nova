@@ -1106,8 +1106,12 @@ mod tests {
         );
     }
 
+    /// A bar offer refused for want of a slot stays suppressed while no
+    /// other venue is offered at, and offering at the spaceport in between
+    /// forgets it: so the router must not ask at the spaceport again as
+    /// the player comes back to it from the bar.
     #[test]
-    fn the_bar_left_for_the_spaceport_keeps_its_suppressed_offers() {
+    fn a_bar_offer_stays_suppressed_while_nothing_is_offered_at_in_between() {
         let catalog = screens(vec![unrefusable_at(141, BAR)], Vec::new());
         let mut session = docked(&catalog);
         fill_slots(&mut session);
@@ -1116,6 +1120,17 @@ mod tests {
             session.next_offer(BAR, &mut NeverFires),
             None,
             "nothing offered at in between"
+        );
+        assert_eq!(session.next_offer(SPACEPORT, &mut NeverFires), None);
+        assert!(
+            matches!(
+                session.next_offer(BAR, &mut NeverFires),
+                Some(VenueOffer::Accepted {
+                    mission: MissionId(141),
+                    ..
+                })
+            ),
+            "the spaceport offered at forgot it"
         );
     }
 
