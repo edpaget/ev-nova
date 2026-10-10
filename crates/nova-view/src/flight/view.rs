@@ -7476,6 +7476,7 @@ mod tests {
     #[test]
     fn space_fires_the_primaries_and_control_the_secondary_while_held() {
         let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+        tap(&mut view, SELECT_KEY);
         view.input(&key(FIRE_KEY, true));
         ticks(&mut view, 2);
         view.input(&held(FIRE_KEY));
@@ -7496,6 +7497,7 @@ mod tests {
     #[test]
     fn letting_go_of_the_keys_lets_go_of_the_fire_keys() {
         let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+        tap(&mut view, SELECT_KEY);
         view.input(&key(FIRE_KEY, true));
         view.input(&key(SECONDARY_KEY, true));
         ticks(&mut view, 1);
@@ -7511,6 +7513,8 @@ mod tests {
     #[test]
     fn w_selects_the_next_secondary_and_alt_w_the_one_before() {
         let mut view = fighting(armed(0, &[BLASTER, ROCKET, MISSILE, TORCH]), &[]);
+        assert_eq!(secondary_of(&view), None);
+        tap(&mut view, SELECT_KEY);
         assert_eq!(secondary_of(&view), Some(ROCKET));
         tap(&mut view, SELECT_KEY);
         assert_eq!(secondary_of(&view), Some(MISSILE));
@@ -7541,13 +7545,14 @@ mod tests {
         tap(&mut view, MAP);
         ticks(&mut view, 2);
         assert_eq!(target_of(&view), None);
-        assert_eq!(secondary_of(&view), Some(ROCKET));
+        assert_eq!(secondary_of(&view), None);
         assert_eq!(view.session().expect("flying").shots(), []);
     }
 
     #[test]
     fn the_combat_keys_do_nothing_while_a_jump_plays() {
         let mut view = fighting(armed(0, &[BLASTER, ROCKET, MISSILE]), &[]);
+        tap(&mut view, SELECT_KEY);
         plot(&mut view, 131);
         fly_out(&mut view);
         view.input(&key(JUMP, true));
@@ -8041,9 +8046,12 @@ mod tests {
 
     #[test]
     fn the_hud_shows_no_target_and_the_secondary_weapon() {
-        let view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+        let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
         let list = texts(&drawn(&view));
         assert!(list.contains(&NO_TARGET.to_owned()), "{list:?}");
+        assert!(list.contains(&NO_SECONDARY.to_owned()), "{list:?}");
+        tap(&mut view, SELECT_KEY);
+        let list = texts(&drawn(&view));
         assert!(list.contains(&"Rocket".to_owned()), "{list:?}");
         let unarmed = texts(&drawn(&fighting(armed(0, &[BLASTER]), &[])));
         assert!(unarmed.contains(&NO_SECONDARY.to_owned()), "{unarmed:?}");

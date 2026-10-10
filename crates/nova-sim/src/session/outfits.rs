@@ -67,7 +67,8 @@
 //!   from a map's level 2.
 
 use super::{Session, clamp_i16};
-use crate::catalog::{OutfitId, OutfitRecord, SystemId};
+use crate::catalog::{OutfitId, OutfitRecord, SystemId, WeaponId};
+use crate::combat::armament::MOD_WEAPON;
 use crate::exploration::map_reveals;
 use crate::grant::{GrantStock, held_to_max};
 use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records};
@@ -83,6 +84,20 @@ pub const OUTFIT_IDS: std::ops::RangeInclusive<i16> = 128..=639;
 fn add_one(pilot: &mut Pilot, outfit: OutfitId) {
     let owned = pilot.outfits.entry(outfit).or_default();
     *owned = owned.saturating_add(1);
+}
+
+/// Whether `record` mounts the secondary `selected`: whether one of its
+/// mod slots is a weapon (`ModType` 1) whose `ModVal` names it, as the
+/// outfitter's sale checks once the outfit's count falls to 0
+/// (`_DoOutfitDialog` @0x5cf73-0x5cf8c). None selected is mounted by
+/// nothing.
+pub(super) fn launches(record: &OutfitRecord, selected: Option<WeaponId>) -> bool {
+    selected.is_some_and(|weapon| {
+        record
+            .mods
+            .iter()
+            .any(|&(mod_type, mod_val)| mod_type == MOD_WEAPON && mod_val == weapon.0)
+    })
 }
 
 /// Takes one of `outfit` from `pilot`'s, if it owns any: whether it did.

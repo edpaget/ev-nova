@@ -275,9 +275,15 @@
 //! the nearest threat or the next in turn as the
 //! [`targeting`](crate::targeting) rules say, and
 //! fires its primary weapons and the secondary selected
-//! ([`Session::hold_fire`], [`Session::select_secondary`]): the first the
-//! ship carries to start with, kept through a refit while the ship still
-//! carries it. The target is let go once it starts breaking up, is
+//! ([`Session::hold_fire`], [`Session::select_secondary`]). No secondary
+//! is selected to start with, as `_ResetPlayer` (@0x1d4dd) leaves it, a
+//! reload included; it is set by [`Session::select_secondary`] alone, and
+//! let go on a ship purchase (`_DoShipyardDialog` @0x5f01c), a capture as
+//! the player's ship (`_DoShipCapture` @0x4173e) and the outfitter's sale
+//! of the last outfit mounting it (`_DoOutfitDialog` @0x5ce82). Every
+//! other refit, `G`, `D`, a script's change of ship and boarding among
+//! them, leaves it as it is, one the ship no longer carries too: it is
+//! still named, and fires nothing. The target is let go once it starts breaking up, is
 //! destroyed, lands or jumps out, when the system is populated afresh,
 //! and when the player lands; it is kept through a jump, and gone on
 //! arrival with the last system's traffic. Neither the target nor the
@@ -315,6 +321,7 @@ use std::rc::Rc;
 
 use self::entry::{Arrival, Entry, NextSites, Placement, ShipPlacement};
 use self::hooks::ShipHook;
+use self::outfits::launches;
 use self::ship_change::ClassChange;
 use crate::ai::{Behaviour, Goal, PlayerSide};
 use crate::bay::FighterNote;
@@ -533,7 +540,9 @@ pub struct Session {
     combat: Combat,
     /// The NPC the player targets, if any.
     target: Option<NpcId>,
-    /// The secondary weapon the player has selected, if any.
+    /// The secondary weapon the player has selected, if any: none to
+    /// start with, set by the select key alone, and let go as the module
+    /// docs say. It may name a weapon the ship no longer carries.
     secondary: Option<WeaponId>,
     /// The fight's strikes since the last traffic tick, for the NPCs to
     /// answer.
@@ -645,7 +654,9 @@ impl Session {
     /// `AmmoLoad` on top of its outfits, keeping the armament it flew
     /// with; one whose ship was never named, from a save before ships had
     /// names, names it after its class (empty when the class has no
-    /// record); and the reserves hold no more than the stats allow.
+    /// record); and the reserves hold no more than the stats allow. No
+    /// secondary is selected, as the original's `_ResetPlayer` leaves it
+    /// before `_LoadPilotData` (@0x76502, @0x7673e), which never sets one.
     ///
     /// A pilot last landed on a stellar of its system resumes docked there,
     /// silently, as the original resumes a pilot at its last planet.
@@ -867,17 +878,13 @@ impl Session {
     /// reads [`RuleKey::ShipChangeReserves`] (see
     /// [`ReservePolicy::reading`]). Capture, a change of ship and a
     /// purchase refit through [`Session::become_class`], by the policy
-    /// they chose.
+    /// they chose. A refit leaves the secondary selected as it is, one the
+    /// ship no longer carries too, as the original's
+    /// `_SystemInfoToShipStats` never writes it (see the module docs).
     fn refit(&mut self, gain: bool, reserves: ReservePolicy) {
         let hold = reserves == ReservePolicy::Hold;
         self.hull = self.arsenal.hull(self.pilot.ship);
         self.armament = self.arsenal.player(&self.pilot.outfits, &self.outfits);
-        let carried = self.secondary.filter(|&id| {
-            self.armament
-                .secondaries()
-                .any(|secondary| secondary.id == id)
-        });
-        self.secondary = carried.or_else(|| self.next_secondary(None, false));
         let stats = self.current_stats();
         let reserves = &mut self.pilot.reserves;
         for (gauge, max, hold) in [
@@ -1139,9 +1146,12 @@ impl Session {
         self.secondary = self.next_secondary(self.secondary, backwards);
     }
 
-    /// The secondary weapon selected, if any: the first the ship carries
-    /// when the session starts, and kept through a refit while the ship
-    /// still carries it.
+    /// The secondary weapon selected, if any: none when the session
+    /// starts, set by [`select_secondary`](Self::select_secondary) alone,
+    /// and let go on a ship purchase, a capture as the player's ship and
+    /// the sale of the last outfit mounting it (see the module docs). It
+    /// may name a weapon the ship no longer carries, which fires nothing,
+    /// as the original's `_DrawStatusWeap` still names it (@0x4c16c).
     #[must_use]
     pub fn secondary(&self) -> Option<WeaponId> {
         self.secondary
@@ -2293,7 +2303,10 @@ impl Session {
     /// pass refused silently leaves an earlier pass's alert in place. The
     /// outfitter has the row of `also` even when it is not listed: the
     /// outfit a relisting selects (see
-    /// [`outfit_order`](Self::outfit_order)).
+    /// [`outfit_order`](Self::outfit_order)). A sale that leaves none of
+    /// an outfit mounting the secondary selected lets it go, before
+    /// `OnSell` runs (`_DoOutfitDialog` @0x5cf73-0x5cf8c, @0x5ce82, before
+    /// @0x5cff6).
     fn outfit_pass(
         &mut self,
         order: OutfitOrder,
@@ -2332,7 +2345,14 @@ impl Session {
                     self.remove_after_purchase(record.id);
                 }
             }
-            Direction::Sell => self.run_script(&record.on_sell, chance),
+            Direction::Sell => {
+                // The last of an outfit mounting the secondary selected lets
+                // it go, before `OnSell` runs (see [`launches`]).
+                if self.pilot.owned(record.id) == 0 && launches(&record, self.secondary) {
+                    self.secondary = None;
+                }
+                self.run_script(&record.on_sell, chance);
+            }
         }
         self.refit(true, ReservePolicy::Hold);
         Ok(())
@@ -2454,7 +2474,8 @@ impl Session {
     /// [`HookRules::purchase_paint_order`] says (see the `hooks` module),
     /// and then the shield, armour and fuel are filled to the most of the
     /// class and outfits `OnPurchase` leaves (`_DoShipyardDialog`
-    /// @0x5f051-0x5f07b, after @0x5f00d).
+    /// @0x5f051-0x5f07b, after @0x5f00d). No secondary is selected after
+    /// `OnPurchase` (@0x5f01c), even one the new ship carries.
     /// When the ship is not landed at a shipyard, or the purchase is
     /// refused, nothing changes and the refusal says why. The rolls not
     /// drawn yet are drawn on
@@ -2505,6 +2526,10 @@ impl Session {
         });
         self.ship_redraws.insert(ship);
         self.ship_hook(record.id, ShipHook::Purchase, chance);
+        // No secondary is selected on the new ship (`_DoShipyardDialog`
+        // @0x5f01c), once its `OnPurchase` has run (@0x5f00d) and before
+        // the fill (@0x5f051).
+        self.secondary = None;
         if paint_last {
             // A new ship is unpainted (`_DoShipyardDialog` @0x5f022), once
             // its `OnPurchase` has run (@0x5f00d); the save is due already.
@@ -3126,7 +3151,9 @@ impl Session {
     /// runs first, both before the fuel draw and, as
     /// [`HookRules::capture_hook_order`] says, before or after the outfit
     /// swap (see the `hooks` module). The change of class is applied by
-    /// [`Session::become_class`], with the reserves held.
+    /// [`Session::become_class`], with the reserves held. "Use As My
+    /// Ship" leaves no secondary selected (`_DoShipCapture` @0x4173e);
+    /// "Use As Escort" leaves it as it is.
     pub fn assign(&mut self, choice: Assignment, chance: &mut dyn Chance) -> Option<Assigned> {
         let aboard = self.aboard.filter(|aboard| aboard.captured)?;
         self.aboard = None;
@@ -3188,6 +3215,9 @@ impl Session {
             }
             session.take_over_reserves(&record, share, chance);
         });
+        // No secondary is selected on the captured ship (`_DoShipCapture`
+        // @0x4173e).
+        self.secondary = None;
         self.player = npc.state;
         for other in self.traffic.npcs_mut() {
             if other.leader == Some(npc.id) {
@@ -9523,6 +9553,8 @@ mod tests {
             session.stock,
             BTreeMap::from([(GUN, 1), (LAUNCHER, 1), (ROCKETS, 20)])
         );
+        assert_eq!(session.secondary(), None);
+        session.select_secondary(false);
         assert_eq!(session.secondary(), Some(WeaponId(138)));
         assert_eq!(session.secondary_rounds(), Some(20));
         let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
@@ -11563,9 +11595,16 @@ mod tests {
     }
 
     #[test]
-    fn the_first_secondary_is_selected_at_start() {
-        let session = Session::start(&with_secondaries(catalog())).expect("starts");
+    fn no_secondary_is_selected_at_start_or_on_a_reload() {
+        let armed = with_secondaries(catalog());
+        let mut session = Session::start(&armed).expect("starts");
+        assert_eq!(session.secondary(), None, "as _ResetPlayer leaves it");
+        assert_eq!(session.secondary_rounds(), None);
+        session.select_secondary(false);
         assert_eq!(session.secondary(), Some(ROCKET));
+        let reloaded = Session::fly(&armed, session.pilot().clone()).expect("flies");
+        assert_eq!(reloaded.secondary(), None, "not saved");
+        assert_eq!(reloaded.secondary_rounds(), None);
         let unarmed = Session::start(&catalog()).expect("starts");
         assert_eq!(unarmed.secondary(), None);
         assert_eq!(unarmed.secondary_rounds(), None);
@@ -11582,11 +11621,11 @@ mod tests {
         assert_eq!(
             picked,
             [
+                Some(ROCKET),
                 Some(MISSILE),
                 Some(TORCH),
-                Some(ROCKET),
-                Some(TORCH),
-                Some(MISSILE)
+                Some(MISSILE),
+                Some(ROCKET)
             ]
         );
     }
@@ -11601,6 +11640,7 @@ mod tests {
             (false, false, vec![]),
         ] {
             let mut session = Session::start(&catalog).expect("starts");
+            session.select_secondary(false);
             session.hold_fire(primary, secondary);
             session.tick_combat(Rules::default(), &mut NeverFires);
             assert_eq!(
@@ -11611,17 +11651,27 @@ mod tests {
         }
         let mut session = Session::start(&catalog).expect("starts");
         session.select_secondary(false);
+        session.select_secondary(false);
         session.hold_fire(false, true);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(
             fired_by_the_player(&session.take_combat_events()),
             [MISSILE]
         );
+        let mut none = Session::start(&catalog).expect("starts");
+        none.hold_fire(false, true);
+        none.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(
+            fired_by_the_player(&none.take_combat_events()),
+            [],
+            "none selected"
+        );
     }
 
     #[test]
     fn the_secondarys_rounds_follow_its_ammunition() {
         let mut session = Session::start(&with_secondaries(catalog())).expect("starts");
+        session.select_secondary(false);
         assert_eq!(session.secondary_rounds(), Some(3));
         session.hold_fire(false, true);
         session.tick_combat(Rules::default(), &mut NeverFires);
@@ -11637,31 +11687,206 @@ mod tests {
         let catalog = with_secondaries(outfitting());
         let mut session = outfitted(&catalog);
         session.select_secondary(false);
+        session.select_secondary(false);
         assert_eq!(session.secondary(), Some(MISSILE));
         session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
         assert_eq!(session.secondary(), Some(MISSILE));
     }
 
+    /// Selects the `nth` secondary (from 1), stepping on from the one
+    /// selected.
+    fn selecting(session: &mut Session, nth: usize) {
+        for _ in 0..nth {
+            session.select_secondary(false);
+        }
+    }
+
+    /// Runs `script` on `session` as a hook would.
+    fn scripted(session: &mut Session, script: &str) {
+        session.run_script(&crate::control::Script::parse(script), &mut NeverFires);
+    }
+
     #[test]
-    fn a_ship_bought_keeps_the_secondary_it_carries_or_selects_its_first() {
+    fn a_ship_bought_leaves_no_secondary_selected() {
         let catalog = with_secondaries(shipbuying());
         let mut session = outfitted(&catalog);
+        selecting(&mut session, 3);
+        assert_eq!(session.secondary(), Some(TORCH), "which ship 129 carries");
         session
             .buy_ship(NEW, "Kestrel", &mut NeverFires)
             .expect("bought");
+        assert_eq!(session.secondary(), None, "_DoShipyardDialog @0x5f01c");
+        let mut session = outfitted(&catalog);
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.secondary(), None, "none before");
+        let mut granting = with_secondaries(shipbuying());
+        granting.ship_records[1].on_purchase = crate::control::Script::parse("G312");
+        let mut session = outfitted(&granting);
+        selecting(&mut session, 1);
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.pilot().owned(OutfitId(312)), 1, "granted");
+        assert_eq!(session.secondary(), None, "cleared after OnPurchase");
+    }
+
+    #[test]
+    fn use_as_my_ship_leaves_no_secondary_selected() {
+        let catalog = ammo_aboard(1, 20);
+        let assigned = |choice| {
+            let mut session = ammo_session(&catalog);
+            selecting(&mut session, 1);
+            assert_eq!(session.secondary(), Some(ROCKET));
+            assert_eq!(
+                take(&mut session, Take::Capture, &[43, 1]).0,
+                Taken::Captured
+            );
+            session
+                .assign(choice, &mut Draws::of(&[0]))
+                .expect("assigned");
+            session.secondary()
+        };
+        assert_eq!(
+            assigned(Assignment::MyShip),
+            None,
+            "_DoShipCapture @0x4173e"
+        );
+        assert_eq!(
+            assigned(Assignment::Escort),
+            Some(ROCKET),
+            "the old ship kept"
+        );
+    }
+
+    /// `catalog`'s session landed, owning `outfits` alone, refitted, and
+    /// with the `nth` secondary selected.
+    fn selling_from(catalog: &FakePilotCatalog, outfits: &[(i16, u16)], nth: usize) -> Session {
+        let mut session = outfitted(catalog);
+        session.pilot.outfits = outfits
+            .iter()
+            .map(|&(id, count)| (OutfitId(id), count))
+            .collect();
+        session.refit(false, ReservePolicy::Hold);
+        selecting(&mut session, nth);
+        session
+    }
+
+    #[test]
+    fn selling_the_last_launcher_of_the_selected_secondary_lets_it_go() {
+        let catalog = with_secondaries(outfitting());
+        let rockets = OutfitId(312);
+        let mut session = selling_from(&catalog, &[(312, 2), (313, 1)], 1);
+        assert_eq!(session.secondary(), Some(ROCKET));
+        session
+            .outfit(sell(rockets), &mut NeverFires)
+            .expect("sold");
+        assert_eq!(session.secondary(), Some(ROCKET), "one left");
+        session
+            .outfit(sell(rockets), &mut NeverFires)
+            .expect("sold");
+        assert_eq!(session.secondary(), None, "_DoOutfitDialog @0x5ce82");
+        let mut other = selling_from(&catalog, &[(312, 1), (313, 1)], 1);
+        other
+            .outfit(sell(OutfitId(313)), &mut NeverFires)
+            .expect("sold");
+        assert_eq!(other.secondary(), Some(ROCKET), "another secondary sold");
+        let mut ammo = selling_from(&catalog, &[(310, 1), (312, 1)], 1);
+        ammo.outfit(sell(OutfitId(310)), &mut NeverFires)
+            .expect("sold");
+        assert_eq!(ammo.pilot().owned(OutfitId(310)), 0);
+        assert_eq!(
+            ammo.secondary(),
+            Some(ROCKET),
+            "its ammunition mounts no weapon"
+        );
+        let mut counted = selling_from(&catalog, &[(312, 2)], 1);
+        assert_eq!(
+            counted.outfit_counted(sell(rockets), 2, &mut NeverFires),
+            Ok(2)
+        );
+        assert_eq!(counted.secondary(), None, "a counted sale");
+        let mut on_sell = with_secondaries(outfitting());
+        for record in &mut on_sell.outfits {
+            if record.id == rockets {
+                record.on_sell = crate::control::Script::parse("G312");
+            }
+        }
+        let mut regranted = selling_from(&on_sell, &[(312, 1)], 1);
+        regranted
+            .outfit(sell(rockets), &mut NeverFires)
+            .expect("sold");
+        assert_eq!(regranted.pilot().owned(rockets), 1, "granted back");
+        assert_eq!(regranted.secondary(), None, "cleared before OnSell");
+    }
+
+    #[test]
+    fn selling_one_of_two_outfits_mounting_the_selected_weapon_lets_it_go() {
+        let mut catalog = with_secondaries(outfitting());
+        catalog.outfits.push(outfit(315, &[(MOD_WEAPON, 140)]));
+        let mut session = selling_from(&catalog, &[(312, 1), (315, 1)], 1);
+        assert_eq!(session.secondary(), Some(ROCKET));
+        session
+            .outfit(sell(OutfitId(312)), &mut NeverFires)
+            .expect("sold");
         assert_eq!(
             session.secondary(),
-            Some(MISSILE),
-            "its first, in the order of the outfits holding them"
+            None,
+            "@0x5cf78 checks the sold outfit alone"
         );
-        let mut session = outfitted(&catalog);
-        session.select_secondary(false);
-        session.select_secondary(false);
-        assert_eq!(session.secondary(), Some(TORCH));
+    }
+
+    #[test]
+    fn buying_an_outfit_leaves_the_selection_alone() {
+        let catalog = with_secondaries(outfitting());
+        let mut session = selling_from(&catalog, &[], 0);
         session
-            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .outfit(buy(OutfitId(312)), &mut NeverFires)
             .expect("bought");
-        assert_eq!(session.secondary(), Some(TORCH), "still carried");
+        assert_eq!(session.pilot().owned(OutfitId(312)), 1);
+        assert_eq!(session.secondary(), None);
+    }
+
+    #[test]
+    fn g_and_d_leave_the_secondary_selection_alone() {
+        let armed = with_secondaries(catalog());
+        let mut session = Session::start(&armed).expect("starts");
+        scripted(&mut session, "G312");
+        assert_eq!(session.pilot().owned(OutfitId(312)), 2);
+        assert_eq!(session.secondary(), None, "G selects nothing");
+        let mut session = Session::start(&armed).expect("starts");
+        selecting(&mut session, 1);
+        scripted(&mut session, "D312");
+        assert_eq!(session.pilot().owned(OutfitId(312)), 0);
+        assert_eq!(session.secondary(), Some(ROCKET), "still named");
+        session.hold_fire(false, true);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(
+            fired_by_the_player(&session.take_combat_events()),
+            [],
+            "nothing mounted to fire"
+        );
+        let mut session = Session::start(&armed).expect("starts");
+        selecting(&mut session, 2);
+        scripted(&mut session, "D312");
+        assert_eq!(session.secondary(), Some(MISSILE), "still carried");
+    }
+
+    #[test]
+    fn a_change_of_ship_by_script_leaves_the_secondary_selected() {
+        let catalog = with_secondaries(shipbuying());
+        let mut session = outfitted(&catalog);
+        selecting(&mut session, 3);
+        scripted(&mut session, "C129");
+        assert_eq!(session.ship(), NEW);
+        assert_eq!(session.secondary(), Some(TORCH));
+        let mut session = outfitted(&catalog);
+        selecting(&mut session, 1);
+        scripted(&mut session, "H129");
+        assert_eq!(session.ship(), NEW);
+        assert_eq!(session.pilot().owned(OutfitId(312)), 0, "not carried");
+        assert_eq!(session.secondary(), Some(ROCKET), "still named");
     }
 
     // Guided weapons, turrets and point defence.
@@ -12713,6 +12938,7 @@ mod tests {
     fn the_ammo_is_taken_an_outfit_at_a_time_up_to_the_rounds_the_mass_and_the_max() {
         let session = ammo_session(&ammo_aboard(1, 20));
         let mut by_rounds = session.clone();
+        by_rounds.select_secondary(false);
         assert_eq!(by_rounds.secondary_rounds(), Some(0));
         assert_eq!(
             take(&mut by_rounds, Take::Ammo, &[]).0,

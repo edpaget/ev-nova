@@ -4,8 +4,9 @@
 //! blaster and a rocket launcher, with three rockets; one trader is placed
 //! 100 pixels above it by the app's source of chance. Tab targets the
 //! trader, whose name the target panel shows; Space fires the blaster,
-//! whose shots are drawn and heard; Control fires a rocket, and the
-//! secondary weapon's line counts it; and firing until the trader is
+//! whose shots are drawn and heard; no secondary weapon is selected until
+//! W selects the rocket, then Control fires one, and the secondary
+//! weapon's line counts it; and firing until the trader is
 //! destroyed draws its explosion, scatters debris on the effects' own
 //! source of chance, and lets go of the target.
 //!
@@ -57,7 +58,8 @@
 //! reopened they are back to formation by the engine's `escort_orders`,
 //! or kept by its other reading in the settings file.
 //!
-//! Carrying fighters: W selects the player's fighter bay and Control
+//! Carrying fighters: none is selected to start with or after taking off
+//! again, until W selects the player's fighter bay; Control then
 //! launches a fighter, which is drawn beside the player while the
 //! secondary line counts one fewer; F sends it at a pirate targeted,
 //! whose shield drops, or by `fighter_launch`'s other reading in the
@@ -670,6 +672,10 @@ fn space_fires_the_blaster_whose_shots_are_drawn_and_heard() {
 #[test]
 fn control_fires_a_rocket_and_the_secondary_line_counts_it() {
     let mut harness = Harness::flying();
+    let frame = harness.frame();
+    assert!(text_at(&frame, "No Secondary Weapon").is_some(), "none yet");
+    harness.key(Key::Char('w'), true);
+    harness.key(Key::Char('w'), false);
     let frame = harness.frame();
     let line = text_at(&frame, "Rocket - 3").expect("three rockets");
     assert_eq!(line.1, 300.0, "in the weapon area");
@@ -2936,6 +2942,13 @@ fn w_and_control_launch_a_fighter_that_attacks_the_pirate_targeted_on_f() {
     let mut game = carrying(&store, &[129], |screen| screen);
     let frame = game.frame();
     assert!(
+        text_at(&frame, "No Secondary Weapon").is_some(),
+        "{:?}",
+        run_texts(&frame)
+    );
+    game.tap(Key::Char('w'));
+    let frame = game.frame();
+    assert!(
         text_at(&frame, "Bay - 2").is_some(),
         "{:?}",
         run_texts(&frame)
@@ -3066,6 +3079,8 @@ fn a_fighter_out_is_saved_on_landing_and_flies_again_after_take_off() {
     assert_eq!(fighters.len(), 1, "beside the player again");
     let off = fighters[0].state.position - game.session().player().position;
     assert!(off.length() < 100.0, "{off:?}");
+    assert!(text_at(&game.frame(), "No Secondary Weapon").is_some());
+    game.tap(Key::Char('w'));
     assert!(text_at(&game.frame(), "Bay - 1").is_some());
     game.key(Key::Alt, true);
     game.tap(Key::Char('c'));
@@ -3107,5 +3122,6 @@ fn by_the_settings_fighter_recall_the_fighters_are_aboard_as_soon_as_the_pilot_l
     game.frame();
     game.frame();
     assert_eq!(game.fighters_out(), 0, "no fighter out");
+    game.tap(Key::Char('w'));
     assert!(text_at(&game.frame(), "Bay - 2").is_some());
 }

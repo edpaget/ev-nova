@@ -613,11 +613,13 @@ mod tests {
         pilot
     }
 
-    /// `pilot`'s session by `launch`, its first traffic tick done.
+    /// `pilot`'s session by `launch`, the bay selected, its first traffic
+    /// tick done.
     fn flying(catalog: &FakePilotCatalog, pilot: Pilot, launch: RuleSource) -> Session {
         let mut session = Session::fly(catalog, pilot)
             .expect("flies")
             .with_rules(Rulebook::default().with_override(RuleKey::FighterLaunch, launch));
+        session.select_secondary(false);
         session.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
         session
     }
@@ -816,6 +818,7 @@ mod tests {
             .with_rules(
                 Rulebook::default().with_override(RuleKey::EscortOrders, RuleSource::Bible),
             );
+        session.select_secondary(false);
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
         launch(&mut session);
         assert_eq!(session.pilot().escorts().len(), 2);
@@ -945,13 +948,14 @@ mod tests {
         Rulebook::default().with_override(RuleKey::EscortOrders, RuleSource::Bible)
     }
 
-    /// `escorts` flying with `vipers` aboard, the orders kept as they
-    /// enter.
+    /// `escorts` flying with `vipers` aboard, the bay selected, the
+    /// orders kept as they enter.
     fn fleet(catalog: &FakePilotCatalog, vipers: u16, escorts: Vec<Escort>) -> Session {
         let session = Session::fly(catalog, pilot(catalog, vipers, escorts))
             .expect("flies")
             .with_rules(kept_orders());
         let mut session = session;
+        session.select_secondary(false);
         session.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
         session
     }
