@@ -449,12 +449,6 @@ pub struct PanelText {
     pub color: Color,
 }
 
-/// The info panel's texts for `row`'s ship ([`spec_lines`]).
-#[must_use]
-pub fn stat_lines(row: &ShipRow) -> Vec<PanelText> {
-    spec_lines(&row.specs)
-}
-
 /// A rating's word.
 fn rating_text(rating: Rating) -> &'static str {
     let [excellent, very_good, good, average, poor, terrible] = RATINGS;
@@ -2724,7 +2718,11 @@ mod tests {
         expected.extend(lower_rows());
         assert_eq!(expected.len(), 27);
         assert_eq!(spec_lines(&SPECS), expected);
-        assert_eq!(stat_lines(&row(129, "Heavy", 1)), expected);
+        assert_eq!(
+            spec_lines_for(&row(129, "Heavy", 1).specs, InfoVariant::Plain),
+            expected,
+            "what a plain panel draws"
+        );
     }
 
     /// A stock line of `count` of `name`, with `ammo`.
