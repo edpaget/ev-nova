@@ -2255,29 +2255,42 @@ mod tests {
         assert_eq!(held(&session), [(0, 140)], "no such mïsn");
     }
 
-    #[test]
-    fn s_in_flight_resolves_from_the_systems_first_stellar() {
-        let catalog = lifecycle(vec![MissionRecord {
-            travel_stel: -1,
-            return_stel: -2,
+    /// A session of [`lifecycle`], with 133 (which lists no stellars)
+    /// shown too and mission 140 to its origin (`TravelStel` -4), started
+    /// in flight in `system`, after an `S140`.
+    fn started_in_flight_in(system: i16) -> Session {
+        let mut catalog = lifecycle(vec![MissionRecord {
+            travel_stel: -4,
             ..mission(140)
         }]);
-        let mut catalog = catalog;
-        catalog
-            .sites
-            .push((SystemId(132), vec![planet(150, 0.0, 0.0)]));
-        catalog.systems.push(SystemId(132));
+        catalog.systems.push(SystemId(133));
+        if let Ok(start) = &mut catalog.character {
+            start.systems[0] = Some(SystemId(system));
+        }
         let mut session = Session::start(&catalog).expect("starts");
         settle(&mut session, &catalog);
+        assert_eq!(session.system(), SystemId(system));
         run(&mut session, "S140");
-        let active = session.pilot().missions().get(0).expect("held").clone();
-        assert!(active.reached, "no destination");
-        assert_eq!(
-            active.return_to.map(|stop| stop.stellar),
-            Some(StellarId(150)),
-            "distant from 128"
-        );
+        session
+    }
+
+    fn destination(session: &Session) -> Option<StellarId> {
+        let active = session.pilot().missions().get(0).expect("held");
+        active.destination.map(|stop| stop.stellar)
+    }
+
+    #[test]
+    fn s_in_flight_resolves_from_the_systems_first_stellar() {
+        let session = started_in_flight_in(131);
+        assert_eq!(destination(&session), Some(StellarId(140)), "131's first");
         assert_eq!(session.offer_rolls().roll(MissionId(140)), Some(0));
+    }
+
+    #[test]
+    fn s_in_flight_in_a_system_with_no_stellars_resolves_from_128() {
+        let session = started_in_flight_in(133);
+        assert!(session.sites.is_empty(), "133 lists none");
+        assert_eq!(destination(&session), Some(StellarId(128)));
     }
 
     #[test]
