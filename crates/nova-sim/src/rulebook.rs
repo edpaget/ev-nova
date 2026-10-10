@@ -83,6 +83,7 @@
 //! | [`PayMillions`](RuleKey::PayMillions) | `pay_millions` | a mission text's `<PAY>` of a million or more reads in millions to two places, truncated, "1.23M" (`_StrcatCommaNumber` @0x8990-0x8aa3; see [`text_tags`](crate::text_tags)) | it reads in full with its commas, "1,234,567"\* |
 //! | [`MissionOrder`](RuleKey::MissionOrder) | `mission_order` | offers of `DispWeight` 0 or more keep index order, the rest after by descending weight (`_RandomizeMissionData` @0xa1842-0xa197d; see [`mission`](crate::mission)) | all by descending `DispWeight`, ties in index order |
 //! | [`PersonMissionStellar`](RuleKey::PersonMissionStellar) | `person_mission_stellar` | a person's mission is resolved at its spawn from the player's navigation target, or from no stellar with none, and an accept in flight reaches a destination that is the navigation target (`_RandomizeOneMission` @0xa151f-0xa1526, `_DoMissionAccept` @0xa1fc5-0xa1ff8; see [`mission`](crate::mission)) | it is resolved from the first stellar the player's system lists, and an accept in flight reaches no destination\* |
+//! | [`MissionStellarDraw`](RuleKey::MissionStellarDraw) | `mission_stellar_draw` | a random destination -2 is drawn as the original draws it: any inhabited, normal-landable non-station stellar of a visible system but the origin and the one excluded, at any distance, once its scan finds a distant inhabited stellar, station or not; the draw tests the distance of the scan's first hit, not of the stellar drawn (`_SelectMissionStellar` @0x9a26a, @0x9a2c7-0x9a330, the distance test @0x9a3ce-0x9a3db; see [`mission`](crate::mission))\*\*\*\*\* | only a candidate distant from the origin is drawn, as every other random code draws\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -91,8 +92,8 @@
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
 //! `ship_change_reserves`, `move_arrival`, `move_keep_flag`,
 //! `script_sound`, `landing_distance`, `repeat_mission_failure`,
-//! `start_active_mission`, `pay_millions`, `person_mission_stellar` or
-//! `comm_quote`
+//! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
+//! `mission_stellar_draw` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -182,6 +183,12 @@
 //! percent chance, nothing of when they are drawn. The other reading is
 //! the port's earlier behaviour, the rolls drawn afresh after each
 //! landing, not anything the Bible says.
+//!
+//! \*\*\*\*\* Where the original's scan finds a stellar but no stellar
+//! passes its draw (every stellar the scan passes is a station, and no
+//! other is drawable), the original redraws `Rand(2048)` forever; the
+//! engine's reading stops there and gives the origin, drawing nothing,
+//! as the other reading does.
 //!
 //! # Adding a rule
 //!
@@ -921,6 +928,18 @@ rule_keys! {
     /// the other reading is the intended behaviour, not anything the
     /// Bible says (see [`mission`](crate::mission)).
     PersonMissionStellar => "person_mission_stellar",
+    /// How a random mission destination -2 is drawn
+    /// (`_SelectMissionStellar` @0x9a26a). By the engine, as the original
+    /// draws it: its scan (@0x9a2c7-0x9a330) only gates the draw, and the
+    /// draw (@0x9a365-0x9a3e2) tests the distance of the scan's first hit
+    /// rather than the stellar drawn (@0x9a3ce-0x9a3db), so it takes any
+    /// inhabited, normal-landable non-station stellar of a visible system
+    /// at any distance; where the original would redraw forever, it gives
+    /// the origin. By the other reading, the port's earlier draw: only
+    /// candidates distant from the origin. The Bible says nothing of it,
+    /// so the other reading is the intended behaviour, not anything the
+    /// Bible says (see [`mission`](crate::mission)).
+    MissionStellarDraw => "mission_stellar_draw",
 }
 
 impl RuleKey {
@@ -1088,7 +1107,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1101,7 +1120,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1114,7 +1133,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(2),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1129,9 +1148,26 @@ mod tests {
             RuleKey::from_key("person_mission_stellar"),
             Some(RuleKey::PersonMissionStellar)
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::PersonMissionStellar));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::PersonMissionStellar)
+        );
         assert_eq!(
             Rulebook::default().source_for(RuleKey::PersonMissionStellar),
+            RuleSource::Engine
+        );
+    }
+
+    #[test]
+    fn the_mission_stellar_draw_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::MissionStellarDraw.key(), "mission_stellar_draw");
+        assert_eq!(
+            RuleKey::from_key("mission_stellar_draw"),
+            Some(RuleKey::MissionStellarDraw)
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::MissionStellarDraw));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::MissionStellarDraw),
             RuleSource::Engine
         );
     }
@@ -1312,7 +1348,8 @@ mod tests {
                 RuleKey::StartActiveMission,
                 RuleKey::PayMillions,
                 RuleKey::MissionOrder,
-                RuleKey::PersonMissionStellar
+                RuleKey::PersonMissionStellar,
+                RuleKey::MissionStellarDraw
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
