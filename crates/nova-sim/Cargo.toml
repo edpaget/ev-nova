@@ -20,9 +20,14 @@ thiserror.workspace = true
 # Synthetic resource forks for the GameData adapter tests.
 nova-data = { workspace = true, features = ["fixture"] }
 nova-rsrc = { workspace = true, features = ["fixture"] }
+# This crate's own `fixture` module, for its integration tests under
+# `tests/`, which build the library without `cfg(test)`: the storyline
+# walker the stock tests drive.
+nova-sim = { workspace = true, features = ["fixture"] }
 
 [features]
-# Exposes the in-memory pilot store to other crates' tests.
+# Exposes the test support in `fixture` (the in-memory pilot store and the
+# storyline walker) to other crates' tests and this crate's `tests/`.
 fixture = []
 
 [lints]

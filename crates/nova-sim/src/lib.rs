@@ -57,7 +57,8 @@
 //!   display frames of any length into whole simulation steps.
 //! - [`data`]: the catalog ports' adapters over `nova_data`'s `GameData`.
 //! - `fixture` (with the `fixture` feature, and in this crate's tests):
-//!   `MemoryPilots`, a pilot store in memory.
+//!   `MemoryPilots`, a pilot store in memory, and `StoryWalker`, which
+//!   walks a session through a mission chain from a script.
 //! - [`date`]: the in-game [`GameDate`], a Gregorian day that advances
 //!   a day for each day a jump takes, and [`date::date_text`], how it is
 //!   displayed.

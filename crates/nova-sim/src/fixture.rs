@@ -1,5 +1,14 @@
-//! Test doubles for other crates' tests (the `fixture` feature):
-//! [`MemoryPilots`], a [`PilotStore`] in memory.
+//! Test support for tests outside the crate's own unit tests (the
+//! `fixture` feature): [`MemoryPilots`], a [`PilotStore`] in memory; and
+//! the storyline walker, [`StoryWalker`], which drives a session through a
+//! mission chain from a script of [`Step`]s (see the `walker` module).
+
+mod walker;
+
+pub use walker::{
+    Done, Fault, Looked, Step, StoryWalker, WalkFailure, Walked, candidates, expected_bits,
+    expected_pay,
+};
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
