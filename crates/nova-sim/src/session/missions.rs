@@ -45,6 +45,7 @@
 //! `script_effects` module).
 
 use super::Session;
+use super::mission_screens::MissionTextKind;
 use crate::catalog::{GovtId, MissionId, MissionRecord, MissionShip, StellarId, SystemId};
 use crate::chance::Chance;
 use crate::control::{Script, Test};
@@ -327,8 +328,8 @@ impl Session {
     ) -> Result<(), NotOffered> {
         self.offer_of(mission).ok_or(NotOffered)?;
         let record = self.lifecycle_record(mission);
-        // `RefuseText`, with no mission (index -1, @0xa2ec9): missions
-        // phase 4, through `Session::plain_text`.
+        // `RefuseText`, filled with no mission (index -1, @0xa2ec9).
+        self.show_mission_text(MissionTextKind::Refuse, mission, None);
         self.run_script(&record.on_refuse, chance);
         self.offers.drop_offer(mission);
         Ok(())
@@ -382,11 +383,13 @@ impl Session {
         let slot = self.pilot.missions.fill(active)?;
         self.register_slot(slot);
         self.save_due = true;
-        // `BriefText` and `LoadCargText`, filled for the slot (@0xa1e56,
-        // @0xa1f80): missions phase 4, through `Session::mission_text`;
-        // the cargo loaded: missions phase 5.
+        // `LoadCargText`, filled for the slot (@0xa1f80), and the cargo
+        // loaded: missions phase 5.
         self.run_mission_script(slot, &record.on_accept, chance);
         self.pilot.cash = accept_charge(offer.pay, self.pilot.cash);
+        // `BriefText`, filled for the slot after `OnAccept` and the charge
+        // (@0xa1e0b-0xa1f13, @0xa1e56).
+        self.show_mission_text(MissionTextKind::Brief, record.id, Some(slot));
         let docked = self.landed;
         if let Some(active) = self.slot_holding(slot, record.id) {
             active.reached = active
@@ -594,10 +597,10 @@ impl Session {
         }
         let changes = failure_records(&record, |govt| self.pilot.legal_record(govt));
         self.set_records(&changes);
-        // `FailText`: missions phase 4, through `Session::mission_text`.
-        // The original fills it after the slot is freed (@0xa0398), so its
-        // mission tags read "[Error]".
         self.end_mission(slot, &record, false, chance);
+        // `FailText` (@0xa0358-0xa03cd), filled after the slot is freed
+        // (@0xa0398), so its mission tags read "[Error]".
+        self.show_mission_text(MissionTextKind::Fail, record.id, Some(slot));
         self.forget_offers();
     }
 
@@ -628,9 +631,9 @@ impl Session {
         }
         let mission = active.mission;
         let record = self.lifecycle_record(mission);
-        // `CompText`: missions phase 4, through `Session::mission_text`,
-        // here, before the slot is freed, as the original fills it
+        // `CompText` (@0xa0417-0xa048c), filled before the slot is freed
         // (@0xa0457).
+        self.show_mission_text(MissionTextKind::Comp, mission, Some(slot));
         let Some(done) = self.free_slot(slot) else {
             return;
         };
@@ -658,8 +661,8 @@ impl Session {
             return;
         }
         let record = self.lifecycle_record(active.mission);
-        // The comm message, `STR#` 2002 0x11d unless `Flags` has 0x0400:
-        // missions phase 4.
+        // The comm message, `STR#` 2002 #285 unless `Flags` has 0x0400
+        // (@0x9ebd0-0x9ec53): rdm:phase/missions/phase-17-deadline-message-and-flight-info.
         self.run_mission_script(slot, &record.on_failure, chance);
         if let Some(active) = self.slot_holding(slot, record.id) {
             active.failed = Some(FailedBy::Deadline);

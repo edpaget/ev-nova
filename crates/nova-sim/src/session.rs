@@ -329,7 +329,9 @@ pub use ship_change::ShipChangeRules;
 
 pub use edit::RelocateRefusal;
 pub use events::SessionEvent;
-pub use mission_screens::{ComputerRefusal, ComputerRow, MissionComputer};
+pub use mission_screens::{
+    ComputerRefusal, ComputerRow, MissionComputer, MissionText, MissionTextKind,
+};
 pub use missions::{AbortError, AcceptError, NotOffered};
 pub use persons::PersonQuote;
 pub use script_effects::{ScriptEffectRules, Settled};
@@ -734,6 +736,9 @@ pub struct Session {
     /// The mission slots whose `OnAbort` is running, so that none ends
     /// again inside itself (see the `missions` module); never saved.
     ending: BTreeSet<u8>,
+    /// The mission texts to show, until they are taken (see the
+    /// `mission_screens` module); never saved.
+    shown_texts: Vec<MissionText>,
 }
 
 impl Session {
@@ -894,6 +899,7 @@ impl Session {
             offers: Offers::default(),
             reoffer_due: false,
             ending: BTreeSet::new(),
+            shown_texts: Vec::new(),
             script_slot: None,
             pilot,
         };
