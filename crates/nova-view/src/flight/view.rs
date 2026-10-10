@@ -2788,13 +2788,13 @@ impl<
             Some(LAND_KEY) => self.land(),
             Some(BOARD_KEY) => {
                 self.board();
-                if self.pending_boarding || self.pending_offer.is_some() {
+                if self.pending_boarding {
                     return ScreenAction::None;
                 }
             }
             Some(HAIL_KEY) => {
                 self.hail();
-                if self.pending_hail.is_some() || self.pending_offer.is_some() {
+                if self.pending_hail.is_some() {
                     return ScreenAction::None;
                 }
             }

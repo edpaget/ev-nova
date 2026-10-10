@@ -10,8 +10,8 @@
 //! start, in the "Hulk" (a crew of 3), granting up to 2 outfits of class
 //! 7 every time; and `oütf` 128, "Spare Part", of `ItemClass` 7,
 //! massless) and a synthetic interface file holding the stock comm dialog
-//! (and no offer dialog), driven only by window events, with pilots kept
-//! in the in-memory store.
+//! and an offer dialog, driven only by window events, with pilots kept in
+//! the in-memory store.
 //!
 //! By the engine's default, hailing Merchant opens the offer of mission
 //! 128 over the paused flight in place of the comm dialog: Return accepts
@@ -366,6 +366,10 @@ fn game_data(knobs: Knobs) -> Rc<GameData> {
     for id in [8511, 5001, 5002] {
         fork = fork.resource(PICT, id, None, &pict(6, 5, [40, 40, 40]));
     }
+    // The offer dialog's frame.
+    for (id, height) in [(8521, 9), (8522, 4), (8523, 40)] {
+        fork = fork.resource(PICT, id, None, &pict(441, height, [30, 30, 60]));
+    }
     for state in [7500, 7503, 7506] {
         fork = fork
             .resource(PICT, state, None, &pict(13, 25, [200, 0, 0]))
@@ -389,7 +393,31 @@ fn user_item((l, t, w, h): (i16, i16, i16, i16), enabled: bool) -> Vec<u8> {
     bytes
 }
 
-/// The interface file: the stock comm dialog (`DLOG` 1007, 423 x 215).
+/// A `DITL` user item: its (left, top, width, height), and whether it is
+/// enabled.
+type Item = ((i16, i16, i16, i16), bool);
+
+/// A `DLOG` of `id`, `width` x `height`, and its `DITL` of `items`, each
+/// a user item.
+fn dialog(id: i16, (width, height): (i16, i16), items: &[Item]) -> (Vec<u8>, Vec<u8>) {
+    let mut dlog: Vec<u8> = [40_i16, 40, 40 + height, 40 + width, 1]
+        .iter()
+        .flat_map(|v| v.to_be_bytes())
+        .collect();
+    dlog.extend([1, 0, 0, 0, 0, 0, 0, 0]);
+    dlog.extend(id.to_be_bytes());
+    dlog.extend([0, 0, 0xA8, 0x0A]);
+    let mut list = (i16::try_from(items.len()).expect("few") - 1)
+        .to_be_bytes()
+        .to_vec();
+    for &(bounds, enabled) in items {
+        list.extend(user_item(bounds, enabled));
+    }
+    (dlog, list)
+}
+
+/// The interface file: the stock comm dialog (`DLOG` 1007, 423 x 215),
+/// and an offer dialog (`DLOG` 1016, 441 x 317) of the stock's ten items.
 fn interface() -> InterfaceData {
     let items = [
         ((21, 181, 166, 26), true),
@@ -405,22 +433,25 @@ fn interface() -> InterfaceData {
         ((216, 7, 200, 200), false),
         ((40, 73, 134, 46), false),
     ];
-    let mut dlog: Vec<u8> = [40_i16, 40, 40 + 215, 40 + 423, 1]
-        .iter()
-        .flat_map(|v| v.to_be_bytes())
-        .collect();
-    dlog.extend([1, 0, 0, 0, 0, 0, 0, 0]);
-    dlog.extend(1007_i16.to_be_bytes());
-    dlog.extend([0, 0, 0xA8, 0x0A]);
-    let mut list = (i16::try_from(items.len()).expect("few") - 1)
-        .to_be_bytes()
-        .to_vec();
-    for (bounds, enabled) in items {
-        list.extend(user_item(bounds, enabled));
-    }
+    let (dlog, list) = dialog(1007, (423, 215), &items);
+    let offer_items = [
+        ((330, 275, 100, 20), false),
+        ((220, 275, 100, 20), false),
+        ((15, 15, 410, 245), false),
+        ((450, 15, 100, 20), false),
+        ((450, 45, 100, 20), false),
+        ((330, 275, 100, 20), false),
+        ((450, 75, 100, 20), false),
+        ((10, 275, 100, 20), false),
+        ((425, 15, 10, 10), false),
+        ((425, 245, 10, 10), false),
+    ];
+    let (offer_dlog, offer_list) = dialog(1016, (441, 317), &offer_items);
     let fork = ForkBuilder::new()
         .resource(Dlog::TYPE, 1007, None, &dlog)
         .resource(Ditl::TYPE, 1007, None, &list)
+        .resource(Dlog::TYPE, 1016, None, &offer_dlog)
+        .resource(Ditl::TYPE, 1016, None, &offer_list)
         .build()
         .bytes;
     InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
@@ -667,13 +698,10 @@ fn by_the_engines_default_merchant_offers_its_mission_in_place_of_the_comm_dialo
     game.tap(Key::Char('y'));
     assert_eq!(game.showing(), Showing::Offer, "over the paused flight");
     assert_eq!(game.offered(), Some(128));
+    let dialog = game.app.screen().offer().expect("open");
+    assert_eq!(dialog.problem(), None, "laid out by the interface file");
     let shown = texts(&game.frame());
-    assert!(
-        shown
-            .iter()
-            .any(|text| text.starts_with("Cannot show the mission offer")),
-        "no offer dialog in the interface file: {shown:?}"
-    );
+    assert!(shown.iter().any(|text| text == "Yes"), "{shown:?}");
     game.tap(Key::Enter);
     assert_eq!(game.showing(), Showing::Flight, "flight resumes");
     assert_eq!(game.active(), [128]);
