@@ -563,9 +563,6 @@ pub struct OutfitFacts {
     /// [`GUN`](OutfitFlags::GUN), [`TURRET`](OutfitFlags::TURRET) and
     /// [`CANNOT_SELL`](OutfitFlags::CANNOT_SELL).
     pub flags: u16,
-    /// Whether it can be bought here at all: for sale here today by tech,
-    /// its `Require` met and its `Availability` holding (see the module
-    /// docs).
     /// Whether it is in the list, so Buy can be asked of it: false only
     /// for the row a relisting's sell loop asks for that is not listed
     /// (`_OutfitFilter` @0x5806f-0x5808a and `_DoOutfitDialog`
