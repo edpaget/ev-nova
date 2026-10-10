@@ -101,6 +101,23 @@
 //! listed, the outfitter closes as Done closes it, once any alert the
 //! order showed is closed (-0x63d, @0x5da33).
 //!
+//! The grid's presses and arrows follow
+//! [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection). By the
+//! engine, the selection is the selected outfit, as `_OutfitFilter` keeps
+//! it (`*0xded58`). A press on an empty cell position within the grid's
+//! cells selects nothing (@0x58632-0x58648): no cell is highlighted, Buy
+//! and Sell are greyed, the picture, the info box and the description are
+//! blank, and the press reaches no button; after a reset, that lets the
+//! reset's outfit go. An arrow then picks a cell as after a reset. An
+//! arrow that leaves the selected outfit as it was reads no description
+//! (@0x58442-0x5844f), while the picture and the info box follow the
+//! highlighted cell (@0x57949-0x579d6): an arrow onto `oütf` 128's cell
+//! after a reset shows them over a blank description. By the other
+//! reading, the port's earlier behaviour, a press on an empty cell is
+//! left to the dialog, keeping the selection or the reset, and an arrow
+//! reads the description of an outfit not already shown. Either way, a
+//! press on the highlighted cell changes nothing.
+//!
 //! Done, Return and Escape close it. Without the dialog, the screen says
 //! why, and Return or Escape still closes it.
 
@@ -405,6 +422,20 @@ struct Laid {
     shown: Option<(OutfitId, Shown)>,
 }
 
+/// Whether a grid cell is highlighted, and with none, the outfit Buy and
+/// Sell answer for (`*0xded5c` and `*0xded58`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Highlight {
+    /// The grid's selected cell is highlighted, and its outfit selected.
+    Cell,
+    /// No cell is highlighted. `Some` is the outfit an order that changed
+    /// the listing reset the selection to, listed or not
+    /// ([`OutfitterScreen::reselect`]); `None` is nothing selected, after
+    /// an empty cell clicked by the engine's reading of
+    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection).
+    None(Option<OutfitId>),
+}
+
 /// The Outfitter of the stellar landed on.
 #[derive(Clone, Debug)]
 pub struct OutfitterScreen {
@@ -432,10 +463,9 @@ pub struct OutfitterScreen {
     alert_template: Option<DialogTemplate>,
     style: ButtonStyle,
     closed: bool,
-    /// The outfit Buy and Sell answer for while no cell is highlighted,
-    /// after an order that changed the listing
-    /// ([`OutfitterScreen::reselect`]).
-    reselected: Option<OutfitId>,
+    /// Whether a cell is highlighted, and with none, the outfit Buy and
+    /// Sell answer for.
+    highlight: Highlight,
     /// Whether an order left nothing listed, so the outfitter closes
     /// once its alert is closed.
     leaving: bool,
@@ -500,7 +530,7 @@ impl OutfitterScreen {
             alert_template: alert.ok(),
             style,
             closed: false,
-            reselected: None,
+            highlight: Highlight::Cell,
             leaving: false,
             sounds: Vec::new(),
         };
@@ -516,24 +546,29 @@ impl OutfitterScreen {
     }
 
     /// The selected cell's index, if anything is listed and a cell is
-    /// highlighted: none after an order that reset the selection, until
-    /// a cell is chosen ([`OutfitterScreen::reselect`]).
+    /// highlighted: none after an order that reset the selection, or by
+    /// the engine after a click on an empty cell, until a cell is chosen
+    /// ([`OutfitterScreen::reselect`]).
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
         self.grid
             .selected(self.outfitter.rows.len())
-            .filter(|_| self.reselected.is_none())
+            .filter(|_| self.highlight == Highlight::Cell)
     }
 
-    /// The outfit Buy and Sell answer for: the highlighted cell's, or
-    /// with none highlighted after a reset, the outfit the reset selected,
-    /// listed or not (`*0xded58`, which `_OutfitFilter` reads,
-    /// @0x5806f-0x580ca).
+    /// The outfit Buy and Sell answer for (`*0xded58`, which
+    /// `_OutfitFilter` reads, @0x5806f-0x580ca): the highlighted cell's;
+    /// with none highlighted after a reset, the outfit the reset
+    /// selected, listed or not; and none after a click on an empty cell
+    /// by the engine's reading of
+    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection)
+    /// (@0x58632-0x58648).
     #[must_use]
     pub fn selected_outfit(&self) -> Option<OutfitId> {
-        self.selected()
-            .map(|index| self.outfitter.rows[index].id)
-            .or(self.reselected)
+        match self.highlight {
+            Highlight::Cell => self.selected().map(|index| self.outfitter.rows[index].id),
+            Highlight::None(outfit) => outfit,
+        }
     }
 
     /// The grid's first row shown.
@@ -575,7 +610,7 @@ impl OutfitterScreen {
         match after {
             Reselection::Kept => {}
             Reselection::Reset(outfit) => {
-                self.reselected = Some(outfit);
+                self.highlight = Highlight::None(Some(outfit));
                 self.grid = CellGrid::default();
                 self.selected_changed();
             }
@@ -629,10 +664,10 @@ impl OutfitterScreen {
 
     /// Shows `outfitter`, the outfitter after an order, keeping the same
     /// outfit selected when it is still listed, or the cell where it was.
-    /// After a reset, with no cell highlighted, it keeps the reset and
-    /// the grid's scroll.
+    /// With no cell highlighted, after a reset or an empty cell clicked,
+    /// it keeps that and the grid's scroll.
     pub fn set_outfitter(&mut self, outfitter: Outfitter) {
-        if self.reselected.is_some() {
+        if self.highlight != Highlight::Cell {
             self.outfitter = outfitter;
             self.read_pictures();
             self.selected_changed();
@@ -673,12 +708,26 @@ impl OutfitterScreen {
     /// Regreys and shows the selected outfit.
     fn selected_changed(&mut self) {
         self.regrey();
-        self.show();
+        self.show(true);
     }
 
-    /// Reads the selected outfit's picture and description, unless they
-    /// are shown already; with nothing selected, shows none.
-    fn show(&mut self) {
+    /// Whether the grid's presses and arrows follow `_OutfitFilter`, by
+    /// [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection): an empty cell clicked selects nothing,
+    /// and an arrow that leaves the selected outfit as it was reads no
+    /// description.
+    fn follows_outfit_filter(&self) -> bool {
+        self.outfitter
+            .rules
+            .source_for(nova_sim::RuleKey::GridSelection)
+            == nova_sim::RuleSource::Engine
+    }
+
+    /// Shows the highlighted cell's picture and description, unless they
+    /// are shown already; with no cell highlighted, shows none. The
+    /// description is read when `read` says so, and otherwise left blank,
+    /// as the original's emptied buffer (`_OutfitFilter` skipping
+    /// `_LoadDescription`, @0x58442-0x5844f).
+    fn show(&mut self, read: bool) {
         let selected = self.selected().map(|index| {
             let picture = self.pictures.get(index).copied().flatten();
             (self.outfitter.rows[index].id, picture)
@@ -703,7 +752,11 @@ impl OutfitterScreen {
             .dialog
             .item_bounds(DESCRIPTION_ITEM)
             .unwrap_or(Bounds::at(Point::new(0.0, 0.0), 0.0, 0.0));
-        let description = catalog.description(description).unwrap_or_default();
+        let description = if read {
+            catalog.description(description).unwrap_or_default()
+        } else {
+            String::new()
+        };
         laid.shown = Some((
             outfit,
             Shown::read_text(&description, picture, area, &laid.metrics.0),
@@ -773,13 +826,14 @@ impl OutfitterScreen {
     }
 
     /// Moves the selection for an arrow `key` going down, and says
-    /// whether it was an arrow. After a reset, an arrow ends it: Right and
-    /// Down pick the first cell shown, and Left and Up the last cell
-    /// shown, or the last listed when fewer are (`_OutfitFilter`
-    /// @0x583bd-0x58440); otherwise the grid moves the selection.
+    /// whether it was an arrow. With no cell highlighted, after a reset or
+    /// an empty cell clicked, an arrow highlights one: Right and Down pick
+    /// the first cell shown, and Left and Up the last cell shown, or the
+    /// last listed when fewer are (`_OutfitFilter` @0x583bd-0x58440);
+    /// otherwise the grid moves the selection.
     fn arrow(&mut self, key: Key) -> bool {
         let count = self.outfitter.rows.len();
-        if self.reselected.is_none() {
+        if self.highlight == Highlight::Cell {
             return self.grid.arrow(key, count);
         }
         let first = self.grid.top_row() * COLUMNS;
@@ -788,7 +842,7 @@ impl OutfitterScreen {
             Key::Left | Key::Up => first + COLUMNS * GRID_ROWS - 1,
             _ => return false,
         };
-        self.reselected = None;
+        self.highlight = Highlight::Cell;
         self.grid.select(index, count);
         true
     }
@@ -811,10 +865,42 @@ impl OutfitterScreen {
         }
     }
 
-    /// The cell index under `at` on the grid, if a listed outfit is there.
-    fn cell_at(&self, at: Point) -> Option<usize> {
+    /// The cell position under `at` on the grid, listed or not
+    /// ([`CellGrid::cell_under`]).
+    fn cell_under(&self, at: Point) -> Option<usize> {
         let grid = self.dialog()?.item_bounds(GRID_ITEM)?;
-        self.grid.cell_at(grid, at, self.outfitter.rows.len())
+        self.grid.cell_under(grid, at)
+    }
+
+    /// Follows `input` when it is a press on one of the grid's cell
+    /// positions, and says whether it took it.
+    fn press_grid(&mut self, input: &Input) -> bool {
+        let Input::PointerButton {
+            pressed: true, at, ..
+        } = *input
+        else {
+            return false;
+        };
+        self.cell_under(at)
+            .is_some_and(|index| self.press_cell(index))
+    }
+
+    /// Follows a press on the cell position `index` and says whether it
+    /// took the press. A listed cell is highlighted and selected. An
+    /// empty one, by the engine's reading of [`RuleKey::GridSelection`](nova_sim::RuleKey::GridSelection),
+    /// highlights and selects nothing (`_OutfitFilter` @0x58632-0x58648),
+    /// and by the other is left to the dialog.
+    fn press_cell(&mut self, index: usize) -> bool {
+        if index < self.outfitter.rows.len() {
+            self.highlight = Highlight::Cell;
+            self.select(index);
+        } else if self.follows_outfit_filter() {
+            self.highlight = Highlight::None(None);
+            self.selected_changed();
+        } else {
+            return false;
+        }
+        true
     }
 
     fn draw_grid(&self, laid: &Laid, list: &mut DrawList) {
@@ -917,6 +1003,7 @@ impl Screen for OutfitterScreen {
         }
         let pressed =
             |wanted: Key| matches!(*input, Input::Key { key, pressed: true, .. } if key == wanted);
+        let before = self.selected_outfit();
         let arrow = match *input {
             Input::Key {
                 key, pressed: true, ..
@@ -924,20 +1011,19 @@ impl Screen for OutfitterScreen {
             _ => false,
         };
         if arrow {
-            self.selected_changed();
+            if self.follows_outfit_filter() && self.selected_outfit() == before {
+                self.regrey();
+                self.show(false);
+            } else {
+                self.selected_changed();
+            }
         } else if pressed(BUY_KEY) {
             self.ask_by_key(BUY_KEY, input, Direction::Buy);
         } else if pressed(SELL_KEY) {
             self.ask_by_key(SELL_KEY, input, Direction::Sell);
-        } else if let Some(index) = match *input {
-            Input::PointerButton {
-                pressed: true, at, ..
-            } => self.cell_at(at),
-            _ => None,
-        } {
-            self.reselected = None;
-            self.select(index);
-        } else if let Ok(laid) = &mut self.laid {
+        } else if !self.press_grid(input)
+            && let Ok(laid) = &mut self.laid
+        {
             let event = laid.dialog.input(input);
             self.sounds.extend(laid.dialog.take_sound().map(Sound::Ui));
             if let Some(DialogEvent::Item(item)) = event {
@@ -1736,8 +1822,8 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_cell_selects_it_and_on_an_empty_one_nothing() {
-        let mut screen = screen();
+    fn a_click_on_a_cell_selects_it_and_by_the_other_reading_on_an_empty_one_nothing() {
+        let mut screen = screen_of(by_the_other_grid_reading(outfitter()));
         click_cell(&mut screen, 2);
         assert_eq!(screen.selected(), Some(2));
         click_cell(&mut screen, 4);
@@ -2765,7 +2851,8 @@ mod tests {
         assert!(contains(&drawn(&clicked), &highlight(&clicked, 2)));
         let mut empty = reset(screen());
         click_cell(&mut empty, 4);
-        assert_eq!(empty.selected(), None, "an empty cell, as the port has it");
+        assert_eq!(empty.selected(), None, "an empty cell");
+        assert_eq!(empty.selected_outfit(), None, "the blaster let go");
         let arrowed = |outfitter: Outfitter, scrolled: usize, k: Key| {
             let mut screen = reset(screen_of(outfitter));
             for _ in 0..scrolled {
@@ -2810,6 +2897,193 @@ mod tests {
         press(&mut ended, Key::Right);
         press(&mut ended, Key::Right);
         assert_eq!(ended.selected(), Some(1), "the arrows move as before");
+    }
+
+    // The grid's presses and arrows (`RuleKey::GridSelection`).
+
+    /// `outfitter` with the grid's selection read the other way, the
+    /// port's earlier behaviour.
+    fn by_the_other_grid_reading(outfitter: Outfitter) -> Outfitter {
+        Outfitter {
+            rules: outfitter
+                .rules
+                .with_override(RuleKey::GridSelection, RuleSource::Bible),
+            ..outfitter
+        }
+    }
+
+    /// Whether an outfit's picture is drawn in the picture item, and
+    /// which.
+    fn picture_drawn(screen: &OutfitterScreen) -> Option<ImageKey> {
+        let area = item(screen, PICTURE_ITEM);
+        drawn(screen).iter().find_map(|command| match command {
+            DrawCommand::StretchedPicture {
+                image, top_left, ..
+            } if *top_left == area.min => Some(*image),
+            _ => None,
+        })
+    }
+
+    /// Whether any description is drawn.
+    fn described(screen: &OutfitterScreen) -> bool {
+        words(screen).iter().any(|text| text.starts_with("dësc"))
+    }
+
+    /// Whether the info box draws any of its lines.
+    fn any_info(screen: &OutfitterScreen) -> bool {
+        let shown = words(screen);
+        [PRICE_LABEL, credits::YOU_HAVE, MASS_LABEL, AVAILABLE_LABEL]
+            .iter()
+            .any(|label| shown.contains(&(*label).to_owned()))
+    }
+
+    #[test]
+    fn by_the_engine_a_click_on_an_empty_cell_leaves_nothing_selected() {
+        let mut screen = screen();
+        click_cell(&mut screen, 1);
+        assert!(any_info(&screen) && described(&screen));
+        assert!(words(&screen).contains(&NO_PICTURE.to_owned()));
+        click_cell(&mut screen, 4);
+        assert_eq!(screen.take_sounds(), [], "the press reaches no button");
+        assert_eq!(screen.selected(), None);
+        assert_eq!(screen.selected_outfit(), None);
+        assert_eq!(enabled(&screen), (false, false));
+        assert!(!any_highlight(&screen));
+        assert!(!any_info(&screen), "{:?}", words(&screen));
+        assert!(!words(&screen).contains(&NO_PICTURE.to_owned()));
+        assert_eq!(picture_drawn(&screen), None);
+        assert!(!described(&screen));
+        press(&mut screen, BUY_KEY);
+        press(&mut screen, SELL_KEY);
+        click_item(&mut screen, BUY_ITEM);
+        click_item(&mut screen, SELL_ITEM);
+        press(&mut screen, COUNT_KEY);
+        press(&mut screen, BUY_KEY);
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), None);
+        assert!(screen.quantity().is_none());
+    }
+
+    #[test]
+    fn by_the_engine_a_click_on_an_empty_cell_after_a_reset_lets_the_outfit_go() {
+        let mut screen = reset(screen());
+        assert_eq!(enabled(&screen), (true, true));
+        click_cell(&mut screen, 4);
+        assert_eq!(screen.selected_outfit(), None);
+        assert_eq!(enabled(&screen), (false, false));
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), None);
+    }
+
+    #[test]
+    fn a_click_on_the_highlighted_cell_changes_nothing() {
+        for outfitter in [outfitter(), by_the_other_grid_reading(outfitter())] {
+            let art = art();
+            let mut screen = screen_with(outfitter, &art);
+            click_cell(&mut screen, 1);
+            let asked = art.asked.borrow().len();
+            let before = drawn(&screen);
+            click_cell(&mut screen, 1);
+            assert_eq!(art.asked.borrow().len(), asked, "no description read");
+            assert_eq!(drawn(&screen), before);
+            assert_eq!(screen.selected(), Some(1));
+        }
+    }
+
+    #[test]
+    fn after_an_empty_cell_an_arrow_picks_the_first_or_last_cell_shown() {
+        let arrowed = |outfitter: Outfitter, scrolled: usize, empty: usize, k: Key| {
+            let art = art();
+            let mut screen = screen_with(outfitter, &art);
+            for _ in 0..scrolled {
+                click_item(&mut screen, SCROLL_DOWN_ITEM);
+            }
+            click_cell(&mut screen, empty);
+            assert_eq!(screen.selected_outfit(), None, "{k:?}");
+            art.asked.borrow_mut().clear();
+            press(&mut screen, k);
+            assert!(described(&screen), "{k:?}");
+            let asked = art.asked.borrow().clone();
+            (screen.selected(), screen.top_row(), asked)
+        };
+        let at = |index: usize, top_row: usize| {
+            let description = 3072 + i16::try_from(index).expect("few");
+            (Some(index), top_row, vec![format!("dësc {description}")])
+        };
+        for k in [Key::Right, Key::Down] {
+            assert_eq!(arrowed(long(10), 0, 12, k), at(0, 0), "{k:?}");
+            assert_eq!(arrowed(long(22), 2, 14, k), at(8, 2), "{k:?} scrolled");
+        }
+        for k in [Key::Left, Key::Up] {
+            assert_eq!(arrowed(long(10), 0, 12, k), at(9, 0), "{k:?}");
+            assert_eq!(arrowed(long(22), 2, 14, k), at(21, 2), "{k:?} scrolled");
+        }
+    }
+
+    #[test]
+    fn by_the_engine_an_arrow_onto_the_reset_outfit_reads_no_description() {
+        let art = art();
+        let mut screen = reset(screen_with(outfitter(), &art));
+        art.asked.borrow_mut().clear();
+        press(&mut screen, Key::Right);
+        assert_eq!(screen.selected(), Some(0));
+        assert_eq!(screen.selected_outfit(), Some(BLASTER));
+        assert!(contains(&drawn(&screen), &highlight(&screen, 0)));
+        assert_eq!(picture_drawn(&screen), Some(ImageKey::picture(6000)));
+        assert!(any_info(&screen));
+        assert!(follows(&info_placed(&screen), PRICE_LABEL, "1,000 cr"));
+        assert_eq!(enabled(&screen), (true, true));
+        assert!(!described(&screen), "{:?}", words(&screen));
+        assert_eq!(*art.asked.borrow(), Vec::<String>::new());
+        press(&mut screen, Key::Right);
+        assert_eq!(*art.asked.borrow(), ["dësc 3001"]);
+        press(&mut screen, Key::Left);
+        assert_eq!(*art.asked.borrow(), ["dësc 3001", "dësc 3000"]);
+        assert!(words(&screen).contains(&"dësc 3000.".to_owned()));
+    }
+
+    #[test]
+    fn by_the_engine_a_click_on_the_reset_outfits_cell_reads_its_description() {
+        let mut screen = reset(screen());
+        click_cell(&mut screen, 0);
+        assert_eq!(screen.selected(), Some(0));
+        assert!(words(&screen).contains(&"dësc 3000.".to_owned()));
+    }
+
+    #[test]
+    fn by_the_other_reading_an_arrow_onto_the_reset_outfit_reads_its_description() {
+        let mut screen = reset(screen_of(by_the_other_grid_reading(outfitter())));
+        press(&mut screen, Key::Right);
+        assert_eq!(screen.selected(), Some(0));
+        assert!(words(&screen).contains(&"dësc 3000.".to_owned()));
+    }
+
+    #[test]
+    fn by_the_other_reading_a_click_on_an_empty_cell_keeps_a_reset() {
+        let mut screen = reset(screen_of(by_the_other_grid_reading(outfitter())));
+        click_cell(&mut screen, 4);
+        assert_eq!(screen.selected(), None);
+        assert_eq!(screen.selected_outfit(), Some(BLASTER));
+        assert_eq!(
+            enabled(&screen),
+            (
+                can(&screen, BLASTER, Direction::Buy),
+                can(&screen, BLASTER, Direction::Sell)
+            )
+        );
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+    }
+
+    #[test]
+    fn a_new_outfitter_keeps_nothing_selected() {
+        let mut screen = screen();
+        click_cell(&mut screen, 4);
+        screen.set_outfitter(outfitter());
+        assert_eq!(screen.selected(), None);
+        assert_eq!(screen.selected_outfit(), None);
+        assert_eq!(enabled(&screen), (false, false));
+        assert!(!any_highlight(&screen));
     }
 
     #[test]

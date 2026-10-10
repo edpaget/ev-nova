@@ -4793,6 +4793,42 @@ pub(super) mod tests {
         assert_eq!(drawn(&screen), drawn(spaceport(&screen)));
     }
 
+    /// [`landed_outfitter`], with Nova's rules as `rulebook` chooses.
+    fn landed_outfitter_by(store: &MemoryPilots, rulebook: &Rulebook) -> AppScreen {
+        let mut screen = AppScreen::new(outfitting_data())
+            .with_rulebook(rulebook)
+            .with_dialogs(Rc::new(OutfitDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        screen
+    }
+
+    #[test]
+    fn an_empty_outfitter_cell_clicked_follows_the_grid_selection_rule() {
+        let other = Rulebook::default().with_override(RuleKey::GridSelection, RuleSource::Bible);
+        for (rulebook, kept) in [(Rulebook::default(), false), (other, true)] {
+            let store = MemoryPilots::new();
+            let mut screen = landed_outfitter_by(&store, &rulebook);
+            click_port_item(&mut screen, 8);
+            let open = spaceport(&screen).open_outfitter().expect("outfitting");
+            let first = open.selected_outfit();
+            assert!(first.is_some(), "the first cell");
+            let empty = open
+                .cell_bounds(open.outfitter().rows.len())
+                .expect("a cell")
+                .center();
+            click_at(&mut screen, empty);
+            let open = spaceport(&screen).open_outfitter().expect("outfitting");
+            assert_eq!(
+                open.selected_outfit(),
+                first.filter(|_| kept),
+                "kept: {kept}"
+            );
+        }
+    }
+
     const LICENSE: OutfitId = OutfitId(130);
     const LICENSED: OutfitId = OutfitId(131);
 
