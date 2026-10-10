@@ -3096,6 +3096,12 @@ impl Session {
     /// while the free mass covers it and it is below its `Max` as
     /// `ModType` 27 raises it (read again for each, as `_HasMaxOfItem` is
     /// at @0x93d9f), and gives how many; the ship is refitted with them.
+    ///
+    /// Each round is admitted by the outfit's raw `Mass` (`movswl 0x2`
+    /// @0x93d6f, `cmpl`/`jl` @0x93d74-0x93d76), not scaled by Flags
+    /// 0x0400 (`_AdjustedItemMass` is not called), against the free mass
+    /// `_ShipFreeMass` gives again each round (@0x93d62), which does scale
+    /// the rounds already taken.
     fn take_ammo(&mut self, outfit: OutfitId, rounds: u32) -> u32 {
         let Some(record) = self
             .outfits
@@ -3105,7 +3111,7 @@ impl Session {
         else {
             return 0;
         };
-        let unit = outfitter::unit_mass(&record, self.fields.mass, &self.rules);
+        let unit = i64::from(record.mass);
         let mut count = 0;
         while count < rounds
             && i64::from(self.pilot.owned(outfit)) < self.raised_max_of(&record)
@@ -13698,6 +13704,57 @@ mod tests {
             }
         );
         assert_eq!(full.boarding().map(|view| view.ammo), Some(None));
+    }
+
+    #[test]
+    fn taking_ammo_admits_each_round_by_its_raw_mass() {
+        // Rounds of `Mass` 4 with Flags 0x0400 on a class of `Mass` 200:
+        // 8 tons scaled, 4 raw. `_DoPlunderDialog` tests the raw `Mass`
+        // (@0x93d6f-0x93d76) against the free mass, which charges each at
+        // 8: four from 30 tons free (at 30, 22, 14 and 6), not three.
+        // Either reading of the scaled mass takes the same.
+        let mut catalog = ammo_aboard(4, 20);
+        for record in &mut catalog.outfits {
+            if record.id == OutfitId(310) {
+                record.flags = OutfitFlags::MASS_BY_MASS;
+            }
+        }
+        catalog.ships = vec![(ShipId(128), Ok(ShipFields { mass: 200, ..FAST }))];
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(128) {
+                record.fields.mass = 200;
+            }
+        }
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = ammo_session(&catalog)
+                .with_rules(Rulebook::default().with_override(RuleKey::ScaledMass, source));
+            assert_eq!(session.free_mass(), 30, "{source:?}");
+            assert_eq!(
+                take(&mut session, Take::Ammo, &[]).0,
+                Taken::Ammo {
+                    outfit: OutfitId(310),
+                    count: 4
+                },
+                "{source:?}"
+            );
+            assert_eq!(session.free_mass(), -2, "charged 8 a round: {source:?}");
+        }
+        // Exactly on the raw `Mass`: rounds of 6 (12 scaled) at 30 and 18
+        // free, and the third at 6 free, as the raw test admits `>=`.
+        for record in &mut catalog.outfits {
+            if record.id == OutfitId(310) {
+                record.mass = 6;
+            }
+        }
+        let mut session = ammo_session(&catalog);
+        assert_eq!(
+            take(&mut session, Take::Ammo, &[]).0,
+            Taken::Ammo {
+                outfit: OutfitId(310),
+                count: 3
+            }
+        );
+        assert_eq!(session.free_mass(), -6);
     }
 
     #[test]
