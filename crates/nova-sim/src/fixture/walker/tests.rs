@@ -1,8 +1,8 @@
 use super::*;
-use crate::catalog::MissionShip;
+use crate::catalog::{LandingSite, MissionShip};
 use crate::control::Test;
 use crate::mission::AcceptRefusal;
-use crate::testkit::{FakePilotCatalog, catalog, land_now, mission};
+use crate::testkit::{FakePilotCatalog, catalog, land_now, mission, planet};
 
 const A: MissionId = MissionId(200);
 const B: MissionId = MissionId(201);
@@ -14,6 +14,20 @@ fn galaxy(missions: Vec<MissionRecord>) -> FakePilotCatalog {
         missions,
         ..catalog()
     }
+}
+
+/// The testkit galaxy with `missions`, and in system 131 a stellar, 135,
+/// that cannot be landed on, listed before 140.
+fn atlas(missions: Vec<MissionRecord>) -> FakePilotCatalog {
+    let mut catalog = galaxy(missions);
+    catalog.sites[1].1.insert(
+        0,
+        LandingSite {
+            flags: 0,
+            ..planet(135, -300.0, 0.0)
+        },
+    );
+    catalog
 }
 
 /// A new pilot of `catalog` landed on 128, its offers rolled with every
@@ -233,6 +247,50 @@ fn a_mission_whose_avail_stel_takes_no_stellar_reports_every_stellar() {
 }
 
 #[test]
+fn a_stellar_that_cannot_be_landed_on_is_skipped_and_reported_nowhere() {
+    let catalog = atlas(vec![MissionRecord {
+        avail_stel: 141,
+        ..mission(200)
+    }]);
+    let mut session = docked(&catalog);
+    let failure = StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::Take(A)])
+        .expect_err("offered nowhere");
+    let refused = |stellar, system| Looked {
+        stellar: StellarId(stellar),
+        system: SystemId(system),
+        refusals: vec![("AvailStel", Refusal::AvailStel)],
+    };
+    assert_eq!(
+        failure.looked,
+        [refused(129, 130), refused(140, 131), refused(128, 130)],
+        "135 left out: it cannot be landed on"
+    );
+    assert_eq!(failure.fault, Fault::NotOffered);
+}
+
+#[test]
+fn a_stellar_that_cannot_be_landed_on_before_the_one_offering_the_mission_is_passed_over() {
+    let catalog = atlas(vec![MissionRecord {
+        avail_stel: 140,
+        ..mission(200)
+    }]);
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::Take(A)])
+        .expect("walks");
+    assert_eq!(
+        walked.done,
+        [Done::Took {
+            mission: A,
+            stellar: StellarId(140),
+            slot: 0
+        }]
+    );
+    assert_eq!(session.landed(), Some(StellarId(140)));
+}
+
+#[test]
 fn a_mission_with_no_record_is_offered_nowhere() {
     let catalog = galaxy(Vec::new());
     let mut session = docked(&catalog);
@@ -411,6 +469,38 @@ fn a_mission_with_no_return_is_undeliverable() {
     assert_eq!(
         StoryWalker::new(&catalog).walk(&mut session, &[Step::Take(A), Step::Deliver(A)]),
         Err(failure(2, Step::Deliver(A), Fault::Undeliverable, &[]))
+    );
+}
+
+#[test]
+fn a_return_that_cannot_be_landed_on_is_reported() {
+    let catalog = atlas(vec![errand(200, 128, 135, "b10")]);
+    let mut session = docked(&catalog);
+    assert_eq!(
+        StoryWalker::new(&catalog).walk(&mut session, &[Step::Take(A), Step::Deliver(A)]),
+        Err(failure(
+            2,
+            Step::Deliver(A),
+            Fault::CannotLand(RelocateRefusal::NotLandable),
+            &[]
+        ))
+    );
+    assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
+    assert_eq!(held(&session), [A]);
+}
+
+#[test]
+fn a_return_in_no_system_is_reported() {
+    let catalog = galaxy(vec![errand(200, 128, 150, "")]);
+    let mut session = docked(&catalog);
+    assert_eq!(
+        StoryWalker::new(&catalog).walk(&mut session, &[Step::Take(A), Step::Deliver(A)]),
+        Err(failure(
+            2,
+            Step::Deliver(A),
+            Fault::CannotLand(RelocateRefusal::NoSystem),
+            &[]
+        ))
     );
 }
 
