@@ -28,7 +28,13 @@
 //! A full pilot at the bar: with all 16 slots taken by errands, accepting
 //! the bar job is refused, and the second is offered in its place;
 //! accepting that is refused too, and nothing more is offered. Leaving
-//! the bar and coming back offers the bar job again.
+//! the bar for the spaceport and coming back offers nothing, as nothing
+//! was offered at in between; taking off, landing again and opening the
+//! bar offers the bar job again, the spaceport offered at as it landed.
+//!
+//! The spaceport: with the bar job offered at the spaceport (`AvailLoc`
+//! 3), landing shows it in the offer dialog over the spaceport; Return
+//! accepts it, and its `BriefText` shows.
 //!
 //! An offer that cannot be refused: with the bar job unrefusable
 //! (`Flags` 0x0004) and its offer text empty, opening the bar accepts it
@@ -284,6 +290,12 @@ fn status_bar() -> Vec<u8> {
 /// offer text.
 fn bar_job() -> (Vec<u8>, &'static str) {
     (bar_mission(202, -1, b"I'm in\0", b"\0"), "<PN>, join us.")
+}
+
+/// `mission` offered at venue `loc` (its `AvailLoc`).
+fn at_venue(mut mission: Vec<u8>, loc: i16) -> Vec<u8> {
+    put_i16s(&mut mission, 0x04, &[loc]);
+    mission
 }
 
 /// `mission` that cannot be refused: `Flags` 0x0004.
@@ -900,7 +912,7 @@ fn the_bar_offers_its_missions_one_after_another_and_a_refusal_runs_on_refuse() 
 }
 
 #[test]
-fn an_offer_refused_for_want_of_a_slot_comes_again_once_the_bar_is_left() {
+fn an_offer_refused_for_want_of_a_slot_stays_suppressed_until_the_ship_lands_again() {
     let store = MemoryPilots::new();
     let mut game = Game::with_pilot(&store, &busy(&ada()));
     game.frame();
@@ -923,13 +935,50 @@ fn an_offer_refused_for_want_of_a_slot_comes_again_once_the_bar_is_left() {
     // Nothing more is offered in this visit.
     assert_eq!(game.await_offer(), None);
 
-    // Leaving the bar and coming back offers the bar job again.
+    // Leaving the bar and coming back offers nothing: nothing was offered
+    // at in between.
     game.tap(Key::Escape);
     assert!(game.spaceport().open_bar().is_none(), "left the bar");
     game.frame();
     game.click_port(BAR);
     assert!(game.spaceport().open_bar().is_some(), "back in the bar");
+    assert_eq!(game.await_offer(), None, "still suppressed");
+
+    // Taking off, landing again and opening the bar offers the bar job
+    // again.
+    game.tap(Key::Escape);
+    game.tap(Key::Escape);
+    assert_eq!(game.showing(), Showing::Flight);
+    game.land();
+    game.click_port(BAR);
     assert_eq!(game.await_offer(), Some(MissionId(130)));
+}
+
+#[test]
+fn landing_offers_the_spaceport_job() {
+    let store = MemoryPilots::new();
+    let (job, offer) = bar_job();
+    let data = game_data_with((at_venue(job, 3), offer));
+    let mut game = Game::with_data(&store, &ada(), data);
+    game.frame();
+    game.land();
+
+    // The job is offered over the spaceport as it lands.
+    let shown = game
+        .spaceport()
+        .offer_dialog()
+        .map(|offer| offer.prompt().mission);
+    assert_eq!(shown, Some(MissionId(130)));
+    let shown = texts(&game.frame());
+    for text in ["Ada, join us.", "I'm in", "No"] {
+        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    }
+
+    // Return accepts it, and its BriefText shows.
+    game.tap(Key::Enter);
+    assert!(game.spaceport().offer_dialog().is_none());
+    assert_eq!(game.active(), [(0, MissionId(130))]);
+    assert_eq!(game.shown_text().as_deref(), Some("Welcome aboard."));
 }
 
 #[test]

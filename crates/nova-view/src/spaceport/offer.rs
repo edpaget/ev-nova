@@ -25,7 +25,7 @@
 //!
 //! A venue that offers missions (the bar, the spaceport, the trade
 //! center, the shipyard and the outfitter) holds its offers in a
-//! [`VenueOffers`]: when it next asks for an offer, the offer dialog open
+//! `VenueOffers`: when it next asks for an offer, the offer dialog open
 //! over it, and the choice made, until it is taken.
 
 use std::rc::Rc;

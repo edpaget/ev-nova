@@ -103,15 +103,19 @@
 //! through the session, and the screen shows the missions left, closing
 //! once none is.
 //!
-//! In the bar, missions are offered as the original's
-//! `_OfferMissionFromPort` offers them: the bar asks a quarter second
-//! after it opens, and the router answers with the session's next offer
-//! at the bar, shown in the offer dialog (`DLOG` 1016); its choice
-//! accepts or refuses the mission through the session, the texts it
-//! queued show, and the bar asks again after a gap drawn on the router's
-//! chance. The router enters the bar as a venue for its offers as it
-//! opens, and the spaceport whenever it shows, so an offer refused for
-//! want of a slot is offered again once the player has left the bar.
+//! Missions are offered at five venues as the original's
+//! `_OfferMissionFromPort` offers them: the spaceport asks once, as it
+//! opens on landing, before anything can open over it; the trade center,
+//! outfitter and shipyard ask as they open; the bar a quarter second
+//! after it opens. The router answers each with the session's next offer
+//! at that venue, which enters it, shown in the offer dialog (`DLOG`
+//! 1016); its choice accepts or refuses the mission through the session,
+//! the texts it queued show, and the venue open asks again after a gap
+//! drawn on the router's chance (the spaceport never does). A venue is
+//! entered only as it is offered at, so an offer refused for want of a
+//! slot stays suppressed until another venue but the spaceport is: going
+//! back to the spaceport and into the bar again keeps it, opening a shop
+//! or landing again and opening the bar forgets it.
 //!
 //! Where fuel is sold, the spaceport's Recharge fills the tank through the
 //! session; the router tells the screen how it went (a refusal says why in
@@ -187,7 +191,6 @@ use std::time::Duration;
 
 use nova_data::GameData;
 use nova_sim::board::MAX_ESCORTS;
-use nova_sim::mission::screens::{BAR, SPACEPORT};
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
     HailView, HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
@@ -1293,9 +1296,6 @@ impl AppScreen {
                 .map(|template| (template, Rc::clone(&dialogs.metrics))),
             None => Err(NO_INTERFACE.to_owned()),
         };
-        if let Some(flight) = &mut self.flight {
-            flight.enter_offer_venue(SPACEPORT);
-        }
         let mut spaceport =
             SpaceportView::new(self.data.as_ref(), stellar, template(SPACEPORT_DIALOG));
         if let Some(market) = self.flight.as_ref().and_then(FlightView::market) {
@@ -1382,13 +1382,19 @@ impl AppScreen {
     /// Settles what the set expressions run in flight or in the spaceport
     /// queued ([`FlightView::settle_script`]): a `Q` that took off closes
     /// the spaceport, as leaving it does, and a move while landed leaves it
-    /// open as it is.
+    /// open as it is. The mission texts queued show, and then the venues'
+    /// offers are served: a landing rolls the visit's offers as it
+    /// settles, so the spaceport's offer is asked for here, after the
+    /// texts the landing queued, as `_DoPortDialog` offers after
+    /// `_MissionLandCheck` (@0x5fbeb-0x5fc37), and before any input can
+    /// open a service.
     fn settle_script(&mut self) {
         let took_off = self.flight.as_mut().and_then(FlightView::settle_script);
         if took_off.is_some() {
             self.close_spaceport();
         }
         self.show_mission_texts();
+        self.serve_offers();
     }
 
     /// Shows the mission texts the session queued over the spaceport, if
@@ -1698,23 +1704,18 @@ impl AppScreen {
         ScreenAction::None
     }
 
-    /// The bar's mission offers (`_OfferMissionFromPort` @0xa369e): the
-    /// venue entered, the bar's ask answered with the session's next offer
-    /// there, and a choice made through the session, each answer showing
-    /// the texts it queued and rearming the bar with a gap drawn on the
-    /// router's chance; an accept changes the cash, so the shops are
-    /// handed back.
+    /// The venues' mission offers (`_OfferMissionFromPort` @0xa369e): a
+    /// venue's ask answered with the session's next offer there, which
+    /// enters the venue, and a choice made through the session, each
+    /// answer showing the texts it queued and rearming the venue with a
+    /// gap drawn on the router's chance (the spaceport never asks again);
+    /// an accept changes the cash, so the shops are handed back.
     fn serve_offers(&mut self) {
         let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
             return;
         };
-        if spaceport.take_bar_opened() {
-            flight.enter_offer_venue(BAR);
-        } else if spaceport.open_bar().is_none() {
-            flight.enter_offer_venue(SPACEPORT);
-        }
-        if spaceport.take_offer_request() {
-            match flight.next_offer(BAR) {
+        if let Some(venue) = spaceport.take_offer_request() {
+            match flight.next_offer(venue) {
                 Some(VenueOffer::Prompt(prompt)) => spaceport.open_offer(prompt),
                 Some(VenueOffer::Accepted { .. }) => {
                     spaceport.show_mission_texts(flight.take_mission_texts());
@@ -1939,9 +1940,6 @@ impl Screen for AppScreen {
             Some(overlay) => overlay.tick(dt),
             None => self.shown_mut().tick(dt),
         }
-        if self.side == Side::Spaceport {
-            self.serve_offers();
-        }
         self.settle_script();
         self.save_if_due();
     }
@@ -2082,6 +2080,7 @@ pub(super) mod tests {
     use nova_data::graphics::fixture::RledBuilder;
     use nova_data::records::character::Character;
     use nova_data::records::desc::Desc;
+    use nova_data::records::mission::Mission;
     use nova_data::records::outfit::Outfit;
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
@@ -2092,7 +2091,7 @@ pub(super) mod tests {
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_data::{GameData, Record, SystemId};
     use nova_rsrc::fixture::ForkBuilder;
-    use nova_rsrc::{Fork, ForkReader};
+    use nova_rsrc::{Fork, ForkReader, ResType};
     use nova_sim::{RuleKey, RuleSource};
     use nova_view::galaxy::GalaxyMap;
     use nova_view::galaxy::map::ENTER_BUTTON;
@@ -2231,6 +2230,27 @@ pub(super) mod tests {
         on_start: &[u8],
         on_purchase: &[u8],
     ) -> Rc<GameData> {
+        game_data_holding(
+            (trading, outfitting, shipbuying),
+            buy_random,
+            on_start,
+            on_purchase,
+            Vec::new(),
+        )
+    }
+
+    /// A resource: its type, ID, name and bytes.
+    type Resource = (ResType, i16, &'static [u8], Vec<u8>);
+
+    /// [`game_data_with`], the trade center, outfitter and shipyard as
+    /// `shops` says, holding `extra` too.
+    fn game_data_holding(
+        (trading, outfitting, shipbuying): (bool, bool, bool),
+        buy_random: i16,
+        on_start: &[u8],
+        on_purchase: &[u8],
+        extra: Vec<Resource>,
+    ) -> Rc<GameData> {
         let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
         anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
         anim[0x04..0x06].copy_from_slice(&1_i16.to_be_bytes());
@@ -2299,6 +2319,9 @@ pub(super) mod tests {
         for slot in 1..4 {
             let at = 0x06 + 2 * slot;
             character[at..at + 2].copy_from_slice(&(-1_i16).to_be_bytes());
+        }
+        for (kind, id, name, bytes) in extra {
+            fork = fork.resource(kind, id, Some(name), &bytes);
         }
         let mut spin = vec![0; Spin::SIZE.expect("fixed")];
         spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
@@ -6585,5 +6608,216 @@ pub(super) mod tests {
         assert_eq!(pilot(&screen).cash(), 42);
         assert_eq!(store.writes(), 0);
         assert_eq!(store.keys(), Vec::<String>::new());
+    }
+
+    // Mission offers at every venue.
+
+    use nova_sim::MissionId;
+    use nova_sim::mission::screens::{OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENTER};
+    use nova_view::spaceport::{OutfitterScreen, ShipyardScreen};
+
+    /// A `dësc` of `text`.
+    fn desc_of(text: &str) -> Vec<u8> {
+        let mut bytes = text.as_bytes().to_vec();
+        bytes.push(0);
+        bytes.extend([0xFF; 2]);
+        bytes.extend([0; 34]);
+        bytes
+    }
+
+    /// A refusable `mïsn` offered at Alpha Prime's venue `loc` on every
+    /// visit, going nowhere, with no text but its offer's, paying -50,100
+    /// (below -50,000, so its accept takes 100 credits, and the cash shown
+    /// changes).
+    fn venue_mission(loc: i16) -> Vec<u8> {
+        let mut bytes = vec![0; Mission::SIZE.expect("fixed")];
+        let put = |bytes: &mut Vec<u8>, at: usize, values: &[i16]| {
+            for (i, value) in values.iter().enumerate() {
+                bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
+            }
+        };
+        put(&mut bytes, 0x00, &[128, 0, loc, 0, 0, 100, -1, -1, -1, -1]);
+        bytes[0x1C..0x20].copy_from_slice(&(-50_100_i32).to_be_bytes());
+        put(&mut bytes, 0x20, &[0, 0, -1, -1, 0, -1, 0, -1, 0]);
+        put(&mut bytes, 0x32, &[-1, -1, -1, -1, -1, -1, -1, 0, 1, -1]);
+        put(&mut bytes, 0x58, &[-1]);
+        bytes
+    }
+
+    /// [`shipbuying_data`] with missions `ids` at venue `loc`, each
+    /// refusable, paying -50,100 so an accept takes 100 credits, with
+    /// the offer text "Job `id`." (`dësc` `id` + 3872).
+    fn venue_data_of(loc: i16, ids: &[i16]) -> Rc<GameData> {
+        let extra = ids
+            .iter()
+            .flat_map(|&id| {
+                [
+                    (Mission::TYPE, id, &b"Venue job"[..], venue_mission(loc)),
+                    (
+                        Desc::TYPE,
+                        id + 3872,
+                        &b"Offer"[..],
+                        desc_of(&format!("Job {id}.")),
+                    ),
+                ]
+            })
+            .collect();
+        game_data_holding((true, true, true), 100, b"", b"", extra)
+    }
+
+    /// [`shipbuying_data`] with one mission, 130, at venue `loc`: see
+    /// [`venue_data_of`]. At the outfitter its pay below -50,000 makes
+    /// the accept change the cash the outfitter shows.
+    fn venue_data(loc: i16) -> Rc<GameData> {
+        venue_data_of(loc, &[130])
+    }
+
+    /// The offer dialog's shape, smaller: 300 x 200, fixed at (0, 0), with
+    /// accept (1), refuse (2), the text (3) and the one button (6).
+    fn offer_template() -> DialogTemplate {
+        let item = |x: f32, y: f32, w: f32, h: f32| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: false,
+            kind: ItemSpec::User,
+        };
+        let mut items: Vec<ItemTemplate> = (0..6).map(|_| item(0.0, 300.0, 1.0, 1.0)).collect();
+        items[0] = item(200.0, 170.0, 90.0, 25.0);
+        items[1] = item(100.0, 170.0, 90.0, 25.0);
+        items[2] = item(10.0, 10.0, 280.0, 150.0);
+        items[5] = item(150.0, 170.0, 90.0, 25.0);
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 300.0, 200.0),
+            placement: Placement::Fixed,
+            items,
+        }
+    }
+
+    /// [`ShipyardDialogs`], with the offer dialog too.
+    struct VenueDialogs;
+
+    impl DialogResources for VenueDialogs {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            if id == OFFER_DIALOG {
+                return Ok(offer_template());
+            }
+            ShipyardDialogs.dialog_template(id)
+        }
+    }
+
+    /// The router over `data` with every dialog, keeping pilots in
+    /// `store`, flying a new pilot named Ada, landed.
+    fn landed_at_venues(store: &MemoryPilots, data: Rc<GameData>) -> AppScreen {
+        let mut screen = AppScreen::new(data)
+            .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        screen
+    }
+
+    fn offered_mission(dialog: Option<&OfferDialog>) -> Option<MissionId> {
+        dialog.map(|dialog| dialog.prompt().mission)
+    }
+
+    fn active(screen: &AppScreen) -> Vec<MissionId> {
+        pilot(screen)
+            .missions()
+            .iter()
+            .map(|(_, active)| active.mission)
+            .collect()
+    }
+
+    #[test]
+    fn landing_offers_a_spaceport_mission_over_the_spaceport() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_at_venues(&store, venue_data(SPACEPORT));
+        let offer = spaceport(&screen)
+            .offer_dialog()
+            .expect("offered on landing");
+        assert_eq!(offer.prompt().mission, MissionId(130));
+        assert_eq!(offer.prompt().text, "Job 130.");
+        screen.input(&key(Key::Enter, true));
+        assert!(spaceport(&screen).offer_dialog().is_none());
+        assert_eq!(active(&screen), [MissionId(130)]);
+        assert_eq!(pilot(&screen).cash(), 900, "its pay took 100");
+    }
+
+    /// Opens shop `item` at a stellar offering mission 130 at `loc`, and
+    /// gives the offer open over it.
+    fn shop_offer(loc: i16, item: usize) -> Option<MissionId> {
+        let store = MemoryPilots::new();
+        let mut screen = landed_at_venues(&store, venue_data(loc));
+        assert!(
+            spaceport(&screen).offer_dialog().is_none(),
+            "not on landing"
+        );
+        click_port_item(&mut screen, item);
+        let spaceport = spaceport(&screen);
+        let opened = match loc {
+            TRADE_CENTER => spaceport.open_trade().and_then(TradeScreen::offer_dialog),
+            OUTFITTER => spaceport
+                .open_outfitter()
+                .and_then(OutfitterScreen::offer_dialog),
+            _ => spaceport
+                .open_shipyard()
+                .and_then(ShipyardScreen::offer_dialog),
+        };
+        offered_mission(opened)
+    }
+
+    #[test]
+    fn entering_the_trade_center_offers_its_mission_at_once() {
+        assert_eq!(shop_offer(TRADE_CENTER, 7), Some(MissionId(130)));
+    }
+
+    #[test]
+    fn entering_the_outfitter_offers_its_mission_at_once() {
+        assert_eq!(shop_offer(OUTFITTER, 8), Some(MissionId(130)));
+    }
+
+    #[test]
+    fn entering_the_shipyard_offers_its_mission_at_once() {
+        assert_eq!(shop_offer(SHIPYARD, 9), Some(MissionId(130)));
+    }
+
+    #[test]
+    fn an_accept_at_the_outfitter_hands_the_outfitter_back() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_at_venues(&store, venue_data(OUTFITTER));
+        click_port_item(&mut screen, 8);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(offered_mission(open.offer_dialog()), Some(MissionId(130)));
+        assert_eq!(open.outfitter().cash, 1000);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(active(&screen), [MissionId(130)]);
+        let open = spaceport(&screen)
+            .open_outfitter()
+            .expect("still outfitting");
+        assert!(open.offer_dialog().is_none());
+        assert_eq!(open.outfitter().cash, 900, "the cash shown changes");
+    }
+
+    #[test]
+    fn the_spaceport_does_not_offer_again_on_returning_from_a_service() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_at_venues(&store, venue_data_of(SPACEPORT, &[130, 131]));
+        assert_eq!(
+            offered_mission(spaceport(&screen).offer_dialog()),
+            Some(MissionId(130)),
+            "one offer as it lands"
+        );
+        screen.input(&key(Key::Char('n'), true));
+        assert!(spaceport(&screen).offer_dialog().is_none(), "refused");
+        screen.tick(Duration::from_secs(5));
+        assert!(spaceport(&screen).offer_dialog().is_none(), "131 waits");
+        click_port_item(&mut screen, 7);
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).open_trade().is_none(), "back");
+        screen.tick(Duration::from_secs(5));
+        assert!(
+            spaceport(&screen).offer_dialog().is_none(),
+            "nothing on returning"
+        );
     }
 }
