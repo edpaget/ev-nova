@@ -2074,6 +2074,27 @@ mod tests {
         assert_eq!(held(&session), []);
     }
 
+    #[test]
+    fn a_deadline_that_runs_out_in_flight_fails_on_that_day_with_no_take_off() {
+        let catalog = lifecycle(vec![MissionRecord {
+            time_limit: 1,
+            on_failure: Script::parse("b40"),
+            ..to_129(140)
+        }]);
+        let rules = Rulebook::default().with_override(RuleKey::StayDays, RuleSource::Bible);
+        let (mut session, _) = watched(&catalog, rules);
+        accept(&mut session, 140);
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        assert!(!session.control_bit(bit(40)), "a day still left");
+        assert_eq!(held(&session), [(0, 140)]);
+        session.pass_days(1, &mut NeverFires);
+        settle(&mut session, &catalog);
+        assert!(session.control_bit(bit(40)));
+        assert_eq!(held(&session), []);
+        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+    }
+
     /// Mission 140, unabortable, timed one day, completed at 128 for the
     /// Federation's reward of 4; its `OnFailure` marks 200.
     fn unabortable() -> MissionRecord {
