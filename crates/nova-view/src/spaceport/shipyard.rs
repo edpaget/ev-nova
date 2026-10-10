@@ -74,13 +74,12 @@ use nova_sim::shipyard::SHIP_NAME_CHARS;
 use nova_sim::{ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
 
 use super::catalog::SpaceportCatalog;
-use super::credits::{self, AMOUNT_COLUMN, credits_text};
+use super::credits::{self, AMOUNT_COLUMN, credits_text, tons_text};
 use super::grid::{
     self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE, text,
 };
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
-use super::outfitter::tons_text;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};

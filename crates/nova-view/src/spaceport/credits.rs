@@ -1,6 +1,8 @@
 //! Amounts of credits as the original's shop dialogs draw them:
 //! `_DrawCommaNumber` (@0x4895), a space (0xd97a0) and "cr", and the
-//! column the amounts start in.
+//! column the amounts start in; and numbers of tons with their unit.
+
+use nova_sim::{ShownTons, TonUnit};
 
 /// `STR#` 2002 #34, after each amount.
 pub const CR: &str = "cr";
@@ -31,6 +33,31 @@ pub fn comma_number(n: i64) -> String {
 #[must_use]
 pub fn credits_text(n: i64) -> String {
     format!("{} {CR}", comma_number(n))
+}
+
+/// `STR#` 2002 #1 (`_tonString`).
+pub const TON: &str = "ton";
+/// `STR#` 2002 #2 (`_tonsString`).
+pub const TONS: &str = "tons";
+
+/// The words for `unit`; the core picks the unit.
+fn ton_word(unit: TonUnit) -> &'static str {
+    match unit {
+        TonUnit::Ton => TON,
+        TonUnit::Tons => TONS,
+    }
+}
+
+/// `shown`'s number and the words for its unit, in plain digits, as the
+/// Shipyard Info panel's `NumToString` draws them.
+pub(crate) fn tons_text(shown: ShownTons) -> String {
+    format!("{} {}", shown.tons, ton_word(shown.unit))
+}
+
+/// `shown` as the outfitter's info box draws it: `_DrawCommaNumber`'s
+/// text, a space and the unit (@0x57cf6-0x57d19, @0x57d7a-0x57d9d).
+pub(crate) fn comma_tons_text(shown: ShownTons) -> String {
+    format!("{} {}", comma_number(shown.tons), ton_word(shown.unit))
 }
 
 #[cfg(test)]
@@ -78,6 +105,21 @@ mod tests {
         ] {
             assert_eq!(comma_number(n), drawn, "{n}");
         }
+    }
+
+    #[test]
+    fn comma_tons_text_separates_and_tons_text_does_not() {
+        for (tons, text) in [
+            (0, "0 tons"),
+            (1, "1 ton"),
+            (999, "999 tons"),
+            (1_000, "1,000 tons"),
+            (1_234_567, "1.23M tons"),
+        ] {
+            assert_eq!(comma_tons_text(ShownTons::of(tons)), text, "{tons}");
+        }
+        assert_eq!(tons_text(ShownTons::of(1_000)), "1000 tons");
+        assert_eq!(tons_text(ShownTons::of(1)), "1 ton");
     }
 
     #[test]

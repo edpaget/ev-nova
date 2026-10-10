@@ -94,11 +94,10 @@ use std::time::Duration;
 
 use nova_sim::{
     Direction, LcNames, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter, SaleAlert,
-    ShownTons, TonUnit,
 };
 
 use super::catalog::SpaceportCatalog;
-use super::credits::{self, AMOUNT_COLUMN, comma_number, credits_text};
+use super::credits::{self, AMOUNT_COLUMN, comma_tons_text, credits_text};
 use super::grid::{self, CellGrid, Shown, text};
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
@@ -180,10 +179,6 @@ pub const PRICE_LABEL: &str = "Item Price:";
 pub const MASS_LABEL: &str = "Item Mass:";
 /// `STR#` 2002 #218.
 pub const AVAILABLE_LABEL: &str = "Available:";
-/// `STR#` 2002 #1 (`_tonString`).
-pub const TON: &str = "ton";
-/// `STR#` 2002 #2 (`_tonsString`).
-pub const TONS: &str = "tons";
 /// The info box's rows' baselines below its top: Item Price, You Have,
 /// Item Mass and Available (`_OutfitDialogUpdate` @0x57b42, @0x57bef,
 /// @0x57c7e, @0x57d1e).
@@ -191,26 +186,6 @@ pub const INFO_ROWS: [f32; 4] = [12.0, 24.0, 48.0, 60.0];
 /// The refusal's baseline below the info box's top, mass lines or not
 /// (@0x57da2-0x57db5).
 pub const REFUSAL_ROW: f32 = 93.0;
-
-/// The words for `unit`; the core picks the unit.
-fn ton_word(unit: TonUnit) -> &'static str {
-    match unit {
-        TonUnit::Ton => TON,
-        TonUnit::Tons => TONS,
-    }
-}
-
-/// `shown`'s number and the words for its unit, in plain digits, as the
-/// Shipyard Info panel's `NumToString` draws them.
-pub(crate) fn tons_text(shown: ShownTons) -> String {
-    format!("{} {}", shown.tons, ton_word(shown.unit))
-}
-
-/// `shown` as the outfitter's info box draws it: `_DrawCommaNumber`'s
-/// text, a space and the unit (@0x57cf6-0x57d19, @0x57d7a-0x57d9d).
-pub(crate) fn comma_tons_text(shown: ShownTons) -> String {
-    format!("{} {}", comma_number(shown.tons), ton_word(shown.unit))
-}
 
 /// The info box's amounts for `row`, in the order `_OutfitDialogUpdate`
 /// draws them, each as its baseline below the box's top, its label and
@@ -2184,21 +2159,6 @@ mod tests {
         assert!(follows(&shown, AVAILABLE_LABEL, "2,500 tons"), "{shown:?}");
         let shown = one(100, 1, 5000, 1);
         assert!(follows(&shown, AVAILABLE_LABEL, "1 ton"), "{shown:?}");
-    }
-
-    #[test]
-    fn comma_tons_text_separates_and_tons_text_does_not() {
-        for (tons, text) in [
-            (0, "0 tons"),
-            (1, "1 ton"),
-            (999, "999 tons"),
-            (1_000, "1,000 tons"),
-            (1_234_567, "1.23M tons"),
-        ] {
-            assert_eq!(comma_tons_text(ShownTons::of(tons)), text, "{tons}");
-        }
-        assert_eq!(tons_text(ShownTons::of(1_000)), "1000 tons");
-        assert_eq!(tons_text(ShownTons::of(1)), "1 ton");
     }
 
     #[test]
