@@ -9,7 +9,9 @@
 //! carrier's fighters, whatever their AI type, to [`CarriedAi`] (the
 //! original's AI type 5 with an NPC parent), until their carrier is gone.
 //! `_PirateWarshipAI` (a warship of `Flags` 0x1000, which disables and
-//! plunders) waits for NPC boarding.
+//! plunders) waits for NPC boarding, and with it the plunder of the
+//! player's cargo and the mission failure it brings
+//! (`_AIPlunderShipContents` @0x84a0f, `mïsn` `Flags` 0x8000).
 
 use std::rc::Rc;
 

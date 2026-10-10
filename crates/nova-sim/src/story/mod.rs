@@ -207,7 +207,10 @@
 //!
 //! Mission cargo jettisoned (`_JettisonCargo` @0x3e18c), found by a scan
 //! (`_ScanPlayer` @0x7e7ac) or plundered by an NPC
-//! (`_AIPlunderShipContents` @0x84a0f) fails its mission at once.
+//! (`_AIPlunderShipContents` @0x84a0f) fails its mission at once. The
+//! jettison and the scan are built (see the [`mission`](crate::mission)
+//! module's "Cargo"); the plunder, and `mïsn` `Flags` 0x8000 ("fails if
+//! boarded by pirates"), wait for NPC boarding.
 //!
 //! ## Scripts that raise events
 //!
@@ -1466,8 +1469,8 @@
 //! - `Landed`: each slot's three landing subscriptions,
 //!   `{Missions, slot, 0..=2}`, after the mission ships' goal checks and
 //!   the offer roll, in `_MissionLandCheck`'s order: by slot, the arrival
-//!   (marking the destination reached; missions phase 5 adds the cargo),
-//!   failure, success. A failure runs `OnFailure` and applies the failure
+//!   (`_MissionLandCargoCheck`: the cargo picked up and dropped off, and
+//!   the destination reached), failure, success. A failure runs `OnFailure` and applies the failure
 //!   records; a success frees the slot, runs `OnSuccess`, passes its
 //!   `DatePostInc` days through the daily step, applies the legal records
 //!   and pays. The re-offer, `{Missions, 16, 0}`, runs after every slot
@@ -1483,7 +1486,10 @@
 //!   says whether `OnFailure` runs again;
 //! - `ShipFate`: mission-ships phase 2 counts the goals, and a loss that
 //!   fails the mission fails it at once, through this lifecycle; cargo
-//!   jettisoned, found or plundered does the same (missions phase 5);
+//!   jettisoned ([`Session::jettison_cargo`](crate::Session::jettison_cargo))
+//!   or found by an interceptor's scan does the same, through the one
+//!   quick failure the deadline uses; cargo plundered waits for NPC
+//!   boarding;
 //! - `S`, `A` and `F`, through `apply_op`: `S` accepts, running `OnAccept`
 //!   there as the original does, a mission active already taking another
 //!   slot as [`start_active_mission`](crate::RuleKey::StartActiveMission)

@@ -24,7 +24,8 @@
 //! missions"). [`Session::accept_mission`], [`Session::refuse_mission`]
 //! and [`Session::abort_mission`] are the player's; `S`, `A` and `F` are
 //! `apply_op`'s arms. Each slot filled registers its hooks, `{Missions,
-//! slot, hook}`: [`ARRIVAL`], [`FAILURE`] and [`SUCCESS`] on every
+//! slot, hook}`: [`ARRIVAL`] (the cargo check, in the `mission_cargo`
+//! module), [`FAILURE`] and [`SUCCESS`] on every
 //! landing, and, for a mission with a deadline, [`DEADLINE`] on every day
 //! and [`DEADLINE_TOOK_OFF`] on every take-off, each with a blank guard
 //! and no script; their effects come through the dispatcher's consumer
@@ -44,10 +45,13 @@
 //! the script's mission, so a `Q` in it fills its mission tags (see the
 //! `script_effects` module). The texts the lifecycle shows are queued for
 //! the view as they come (see the `mission_screens` module): `BriefText`
-//! filled for the slot after `OnAccept` and the accept's charge;
-//! `CompText` before the slot is freed; `FailText` after it is, its
-//! mission tags reading [`UNSET`](text_tags::UNSET); and `RefuseText`
-//! with no mission, before `OnRefuse` runs. The deadline's comm message
+//! filled for the slot after `OnAccept` and the accept's charge, then
+//! `LoadCargText` when the cargo is loaded at accept; `LoadCargText` and
+//! `DumpCargoText` as the cargo is picked up and dropped off, filled for
+//! the slot; `CompText` before the slot is freed; `FailText` after it is,
+//! its mission tags reading [`UNSET`](text_tags::UNSET); `RefuseText`
+//! with no mission, before `OnRefuse` runs; and an accept or a pickup
+//! refused for want of room for the cargo. The deadline's comm message
 //! is rdm:phase/missions/phase-17-deadline-message-and-flight-info.
 
 use super::Session;

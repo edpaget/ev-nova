@@ -60,7 +60,8 @@
 //!     mission no higher (@0x9b60b-0x9b63e; see "Draws");
 //! 12. cargo space: with `Flags2` 0x0001, room for a mission's cargo
 //!     (`_TotalMissionCargoSpace` @0xcffb: the ship's own holds less the
-//!     cargo the trader escorts' holds do not take) of at least `CargoQty`,
+//!     mission cargo aboard and the goods the trader escorts' holds do not
+//!     take) of at least `CargoQty`,
 //!     raw (@0x9b641-0x9b687), so a range below 0 passes;
 //! 13. `AvailShipType` (@0x9b6ae-0x9b77f): 128-896 that ship; 1128-1896
 //!     not ship `AvailShipType` - 1000; 2128-2384 a ship whose combat or
@@ -121,8 +122,8 @@
 //! A mission accepted goes into the lowest free of 16 slots
 //! ([`ActiveMissions`], `_currentMissions` 0x184688), holding its offer's
 //! values, its days left and deadline (from the accept, not the roll),
-//! whether its destination is reached and its ship goals met, and how it
-//! failed, if it did ([`ActiveMission`], [`FailedBy`]). Its own fields
+//! whether its destination is reached, its ship goals met and its cargo
+//! aboard, and how it failed, if it did ([`ActiveMission`], [`FailedBy`]). Its own fields
 //! (scripts, `CanAbort`, `CompGovt`, `CompReward`, `DatePostInc`,
 //! `Flags`) are read from its record when used. The slot is the record of
 //! its story subscriptions (see the [`story`](crate::story) module's
@@ -165,9 +166,10 @@
 //!   the end, with no `OnAbort`.
 //! - **The deadline** (`_MissionObjectivesCheck` @0x9eba5-0x9ec61): with
 //!   none of its days left, not failed, and the ship not docked, a mission
-//!   fails at once (`_QuickMissionFailure` @0x99d1b): `OnFailure`, marked
-//!   failed by its deadline, the end when it is abortable, and the
-//!   offers' stellar forgotten. No record changes. An unabortable one
+//!   fails at once (`_QuickMissionFailure` @0x99d1b), as its cargo
+//!   jettisoned or found by a scan does (see "Cargo"): `OnFailure`,
+//!   marked failed ([`FailedBy::Quick`]), the end when it is abortable,
+//!   and the offers' stellar forgotten. No record changes. An unabortable one
 //!   stays active and failed; at its return the original fails it again,
 //!   running `OnFailure` a second time and applying the failure records.
 //!   The Rulebook key [`repeat_mission_failure`](crate::RuleKey::RepeatMissionFailure)
@@ -192,6 +194,75 @@
 //! [`legal`](crate::legal) module keeps them, held within
 //! [`RECORD_LIMIT`](crate::legal::RECORD_LIMIT), and wider than the
 //! original's 16 bits.
+//!
+//! # Cargo
+//!
+//! A mission carries `CargoType` 0-999 or nothing, of the tons its offer
+//! resolved: a commodity, a `jünk`, or another of `STR#` 4000's cargoes,
+//! passengers among them (type 6, "*passengers"). Its cargo is aboard or
+//! not ([`ActiveMission::aboard`], the slot's +0x35), and a freed slot's
+//! cargo goes with it. It is never a good held, so the exchange never
+//! lists it and it cannot be sold ([`cargo`]).
+//!
+//! - **Room.** An accept, whatever its `PickupMode`, and a pickup each
+//!   need, for tons above none, the ship's own holds (`_ShipTotalHolds`
+//!   @0x5cb3) and then the room for a mission's cargo
+//!   (`_TotalMissionCargoSpace` @0xcffb) to take the tons
+//!   ([`accept_checks`], [`pickup_checks`]; `STR#` 2002 #355-#358).
+//!   Passengers are cargo like any other: nothing counts berths, so the
+//!   berths are the cargo space.
+//! - **The hold.** The cargo aboard counts as `_TotalCargo` (@0x4a0b)
+//!   counts it, whatever its type: against the exchange's free space, the
+//!   outfitter's for a mass expansion and the plunder's room. The room for
+//!   a mission's cargo keeps it in the ship alone: the goods held spill to
+//!   the trader escorts' holds, the mission cargo never does
+//!   (@0xd0c7-0xd0eb).
+//! - **Loading**, by `PickupMode`: 0 as it is accepted, after `BriefText`,
+//!   showing `LoadCargText` (@0xa1f28-0xa1fbf); 1 at the destination
+//!   ([`picks_up_at_destination`], `_MissionLandCargoCheck`
+//!   @0x9ee0e-0x9ef11), a refused pickup leaving the destination
+//!   unreached so that the next landing there tries again; 2 on boarding
+//!   its special ship (`_HandlePlayerBoardAttempt` @0x652ee-0x653ed,
+//!   mission-ships phase 2); any other never. Any other landing at the
+//!   destination reaches it.
+//! - **Unloading**, by `DropOffMode` ([`drops_off`]): 0 at the
+//!   destination, 1 at the return once its goals are met or it has no
+//!   `ShipGoal`, each showing `DumpCargoText`, before a success's
+//!   `CompText`; any other never, the cargo going with its slot. A mission
+//!   with no cargo type is loaded too, for its `DumpCargoText`, and one
+//!   loaded and unloaded at its destination (1 and 0) is loaded and
+//!   unloaded on the same landing.
+//! - **Jettison** ([`jettison`], `_JettisonCargo` @0x3dffd): the player's
+//!   Command+K jettisons every good and, in slot order, the typed cargo
+//!   aboard of every abortable mission, which fails at once
+//!   (`_QuickMissionFailure` @0x99d1b); an unabortable mission keeps its
+//!   cargo. Command+Option+K keeps every mission's, so the original
+//!   already leaves keeping mission cargo to the player, and no Rulebook
+//!   key does. In flight the player is told "Mission failed." unless the
+//!   mission has `Flags` 0x0400, else "Cargo jettisoned." or "Non-mission
+//!   cargo jettisoned."; landed, nothing. `Flags` 0x0080 is never read,
+//!   as the Bible says. The jettison's sound (@0x3e31a-0x3e33d) is not
+//!   played.
+//! - **Scan** ([`scan`], `_ScanPlayer` @0x7e46e): an interceptor that has
+//!   looked the player over scans it, when its government has a
+//!   `SmugPenalty`, on a draw of `Rand(100)` no higher than 75. The first
+//!   slot whose typed cargo aboard shares a `ScanMask` bit with the
+//!   government's decides: with `Flags` 0x0020, and not failed already,
+//!   the mission fails at once; otherwise the player is caught smuggling
+//!   and fined the government's `ScanFine` (below none, that percent of
+//!   the cash in hundreds, at least 1), the cash floored at none. No
+//!   legal record changes. Only interceptors inspect here, where the
+//!   original's warships may scan too.
+//!
+//! Not built here: the status bar's cargo display
+//! (rdm:phase/missions/phase-18-status-bar-cargo), the jettison's boxes
+//! (rdm:phase/missions/phase-19-jettison-boxes), mission cargo in the jünk
+//! step and the ship-change trim
+//! (rdm:phase/missions/phase-20-mission-cargo-in-junk-and-trim), the scan
+//! of illegal `jünk` and outfits and its jump-timing check
+//! (rdm:phase/missions/phase-21-illegal-cargo-scanning), the player info
+//! dialog's Jettison button, and the plunder of the player's cargo, which
+//! waits for NPC boarding.
 //!
 //! # Screens
 //!
@@ -386,8 +457,8 @@ pub struct Player {
     pub fuel: f32,
     /// The room for a mission's cargo, in tons, as
     /// `_TotalMissionCargoSpace` (@0xcffb) reckons it: the ship's own
-    /// holds less the cargo the escorts do not take; below 0 when it holds
-    /// more.
+    /// holds less the mission cargo aboard and the goods the escorts do
+    /// not take; below 0 when it holds more.
     pub free_cargo: i64,
     /// The pilot's credits.
     pub cash: i64,
