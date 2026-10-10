@@ -330,8 +330,8 @@ pub use ship_change::ShipChangeRules;
 pub use edit::RelocateRefusal;
 pub use events::SessionEvent;
 pub use mission_screens::{
-    ComputerRefusal, ComputerRow, MissionComputer, MissionText, MissionTextKind, OfferPrompt,
-    VenueOffer,
+    ComputerRefusal, ComputerRow, InfoRow, MissionComputer, MissionInfo, MissionText,
+    MissionTextKind, OfferPrompt, VenueOffer,
 };
 pub use missions::{AbortError, AcceptError, NotOffered};
 pub use persons::PersonQuote;

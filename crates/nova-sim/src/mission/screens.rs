@@ -56,6 +56,15 @@ pub const BAR: i16 = 1;
 /// (`_OfferMissionFromPort` @0xa36b8).
 pub const SPACEPORT: i16 = 3;
 
+/// `Flags`: the mission is not shown in the mission info screen, which
+/// does not open for it (`_SetupMissionInfoList` @0x9e04e-0x9e14e,
+/// @0xa3e37-0xa3ec1).
+pub const HIDDEN: u16 = 0x0400;
+
+/// What the mission info screen puts before a failed mission's name:
+/// 0xA5 0x20 in Mac Roman (`_SetupMissionInfoList`).
+pub const FAILED_MARK: &str = "\u{2022} ";
+
 /// `Flags`: the offer cannot be refused (`_OfferOneMission`
 /// @0xa21e2-0xa21f7).
 pub const UNREFUSABLE: u16 = 0x0004;

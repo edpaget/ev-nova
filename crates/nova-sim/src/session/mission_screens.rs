@@ -7,7 +7,7 @@ use super::Session;
 use super::missions::AcceptError;
 use crate::catalog::{MissionId, MissionTexts};
 use crate::chance::{Chance, NeverFires};
-use crate::mission::screens::{NO_MISSIONS_HERE, SPACEPORT, UNREFUSABLE};
+use crate::mission::screens::{HIDDEN, NO_MISSIONS_HERE, SPACEPORT, UNREFUSABLE};
 use crate::mission::{
     AcceptRefusal, AvailFacts, Offer, OfferLabels, Venue, availability, offer_labels,
 };
@@ -126,6 +126,30 @@ pub enum VenueOffer {
     },
 }
 
+/// One active mission the mission info screen lists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InfoRow {
+    /// Its slot.
+    pub slot: u8,
+    /// Its name, its tags filled for the slot.
+    pub name: String,
+    /// Whether it has failed: the screen marks it.
+    pub failed: bool,
+    /// Its `QuickBrief`, its tags filled for the slot: empty with none.
+    pub text: String,
+    /// Whether the player can abort it: its `CanAbort` is not 0.
+    pub abortable: bool,
+}
+
+/// The mission info screen, as the player sees it (`DLOG` 1012).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MissionInfo {
+    /// The active missions shown, in slot order.
+    pub rows: Vec<InfoRow>,
+    /// Today, as the medium date.
+    pub today: String,
+}
+
 impl Session {
     /// What the screens show of mission `id`, as the session read it as
     /// it started: `None` for a `mïsn` it has no texts of.
@@ -206,6 +230,39 @@ impl Session {
             rows,
             today: self.med_date_text(),
         })
+    }
+
+    /// The mission info screen (`_DoMissionInfoDialog` @0x9e19b): each
+    /// active slot whose mission lacks `Flags` 0x0400, in slot order
+    /// (`_SetupMissionInfoList` @0x9de7a), its name and `QuickBrief`
+    /// filled for the slot (@0x9e2e1-0x9e309), and today's medium date. A
+    /// slot whose `mïsn` is gone reads with no text, and abortable.
+    #[must_use]
+    pub fn mission_info(&self) -> MissionInfo {
+        let rows = self
+            .pilot
+            .missions
+            .iter()
+            .filter_map(|(slot, active)| {
+                let record = self.lifecycle_record(active.mission);
+                if record.flags & HIDDEN != 0 {
+                    return None;
+                }
+                let texts = self.mission_texts(active.mission);
+                let fill = |text: Option<&str>| self.mission_text(slot, text.unwrap_or_default());
+                Some(InfoRow {
+                    slot,
+                    name: fill(texts.map(|texts| texts.name.as_str())),
+                    failed: active.failed.is_some(),
+                    text: fill(texts.and_then(|texts| texts.quick_brief.as_deref())),
+                    abortable: record.can_abort != 0,
+                })
+            })
+            .collect();
+        MissionInfo {
+            rows,
+            today: self.med_date_text(),
+        }
     }
 
     /// The next offer at venue `loc` (an `AvailLoc` other than the mission
@@ -301,8 +358,10 @@ mod tests {
     use crate::catalog::{DateAffixes, MissionRecord, PlaceNames, StellarId, SystemId};
     use crate::control::{Bit, Script, SetExpr, Test};
     use crate::geometry::Vec2;
+    use crate::mission::AbortRefusal;
     use crate::mission::screens::{BAR, NO_LABEL, OKAY_LABEL};
     use crate::mission::{ActiveMission, SLOTS};
+    use crate::session::AbortError;
     use crate::testkit::{FakePilotCatalog, catalog, land_now, mission};
 
     /// Stellars 128 Earth, 129 Luna and 140 Mars; systems 130 Sol and 131
@@ -931,6 +990,128 @@ mod tests {
             "142 is still listed"
         );
         assert_eq!(session.next_offer(BAR, &mut NeverFires), None);
+    }
+
+    fn info_row(slot: u8, name: &str, failed: bool, text: &str, abortable: bool) -> InfoRow {
+        InfoRow {
+            slot,
+            name: name.to_owned(),
+            failed,
+            text: text.to_owned(),
+            abortable,
+        }
+    }
+
+    #[test]
+    fn mission_info_lists_the_shown_active_missions_filled_for_their_slots() {
+        let catalog = screens(
+            vec![
+                MissionRecord {
+                    time_limit: 7,
+                    ..to_mars(130)
+                },
+                MissionRecord {
+                    flags: HIDDEN,
+                    ..to_mars(131)
+                },
+                MissionRecord {
+                    can_abort: 0,
+                    ..to_mars(132)
+                },
+            ],
+            vec![
+                MissionTexts {
+                    quick_brief: Some("Deliver to <DST> by <DL>.".to_owned()),
+                    ..MissionTexts::named(MissionId(130), "Run to <DST>")
+                },
+                MissionTexts::named(MissionId(131), "Hidden"),
+                MissionTexts::named(MissionId(132), "Stay"),
+            ],
+        );
+        let mut session = docked(&catalog);
+        for id in [130, 131, 132] {
+            session
+                .accept_mission(MissionId(id), &mut NeverFires)
+                .expect("accepted");
+        }
+        run(&mut session, "F132");
+        assert_eq!(
+            session.mission_info(),
+            MissionInfo {
+                rows: vec![
+                    info_row(
+                        0,
+                        "Run to Mars",
+                        false,
+                        "Deliver to Mars by June 30th, 1177 NC.",
+                        true
+                    ),
+                    info_row(2, "Stay", true, "", false),
+                ],
+                today: session.med_date_text(),
+            },
+            "131 has Flags 0x0400; 132 failed by F, and cannot be aborted"
+        );
+    }
+
+    #[test]
+    fn a_slot_whose_mission_is_gone_reads_with_no_text() {
+        let catalog = screens(
+            vec![to_mars(130)],
+            vec![MissionTexts {
+                quick_brief: Some("Go.".to_owned()),
+                ..MissionTexts::named(MissionId(130), "Run")
+            }],
+        );
+        let mut session = docked(&catalog);
+        session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        let gone = screens(Vec::new(), Vec::new());
+        let flown = Session::fly(&gone, session.pilot().clone()).expect("flies");
+        assert_eq!(
+            flown.mission_info().rows,
+            [info_row(0, "", false, "", true)]
+        );
+        assert_eq!(
+            Session::start(&gone).expect("starts").mission_info().rows,
+            []
+        );
+    }
+
+    #[test]
+    fn mission_info_aborts_only_where_its_row_says() {
+        let catalog = screens(
+            vec![
+                to_mars(130),
+                MissionRecord {
+                    can_abort: 0,
+                    ..to_mars(131)
+                },
+            ],
+            Vec::new(),
+        );
+        let mut session = docked(&catalog);
+        for id in [130, 131] {
+            session
+                .accept_mission(MissionId(id), &mut NeverFires)
+                .expect("accepted");
+        }
+        let info = session.mission_info();
+        let refused = info.rows.iter().find(|row| !row.abortable).expect("131");
+        assert_eq!(
+            session.abort_mission(refused.slot, &mut NeverFires),
+            Err(AbortError::Refused(AbortRefusal::CannotAbort))
+        );
+        let allowed = info.rows.iter().find(|row| row.abortable).expect("130");
+        assert_eq!(session.abort_mission(allowed.slot, &mut NeverFires), Ok(()));
+        let left: Vec<_> = session
+            .mission_info()
+            .rows
+            .iter()
+            .map(|row| row.slot)
+            .collect();
+        assert_eq!(left, [refused.slot]);
     }
 
     #[test]

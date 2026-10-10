@@ -261,7 +261,7 @@ impl Session {
 
     /// The record an active mission's lifecycle reads: its own, or a
     /// blank one when its `mïsn` is gone.
-    fn lifecycle_record(&self, id: MissionId) -> MissionRecord {
+    pub(super) fn lifecycle_record(&self, id: MissionId) -> MissionRecord {
         self.mission_record(id)
             .cloned()
             .unwrap_or_else(|| blank(id))
