@@ -19,7 +19,8 @@
 //! trade given back ([`SpaceportView::set_market`]). The Outfitter's opens
 //! the stellar's outfitter likewise, an [`OutfitterScreen`] over it, when
 //! given one ([`SpaceportView::with_outfitter`],
-//! [`SpaceportView::take_outfit`], [`SpaceportView::set_outfitter`]), and
+//! [`SpaceportView::take_outfit`], [`SpaceportView::set_outfitter`],
+//! [`SpaceportView::outfit_ordered`]), and
 //! the Shipyard's the stellar's shipyard, a [`ShipyardScreen`]
 //! ([`SpaceportView::with_shipyard`], [`SpaceportView::set_shipyard`]):
 //! its Buy Ship asks for a ship ([`SpaceportView::take_ship_request`]),
@@ -48,8 +49,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    HireList, Market, Order, OutfitOrder, Outfitter, RechargeRefusal, SaleAlert, Service, ShipId,
-    ShipNaming, Shipyard, sells_fuel, services,
+    HireList, Market, Order, OutfitOrder, Outfitter, RechargeRefusal, Reselection, SaleAlert,
+    Service, ShipId, ShipNaming, Shipyard, sells_fuel, services,
 };
 
 use super::bar::{BarScreen, Hiring};
@@ -462,6 +463,21 @@ impl SpaceportView {
     pub fn alert_outfit(&mut self, alert: &SaleAlert) {
         if let Some(Open::Outfitter(screen)) = &mut self.open {
             screen.alert(alert);
+        }
+    }
+
+    /// Follows what an order left the outfitter's selection at
+    /// ([`OutfitterScreen::reselect`]), with the outfitter open; when
+    /// that closes it (nothing listed, and no alert open), it closes at
+    /// once, as the original leaves once the click is handled (@0x5da33).
+    /// With an alert open, the input that closes the alert closes the
+    /// outfitter.
+    pub fn outfit_ordered(&mut self, after: Reselection) {
+        if let Some(Open::Outfitter(screen)) = &mut self.open {
+            screen.reselect(after);
+            if screen.closed() {
+                self.open = None;
+            }
         }
     }
 
@@ -2092,6 +2108,28 @@ mod tests {
         view.input(&key(Key::Escape));
         let open = view.open_outfitter().expect("still outfitting");
         assert!(open.alert_dialog().is_none(), "Escape closed the alert");
+    }
+
+    #[test]
+    fn an_order_that_leaves_nothing_listed_closes_the_outfitter() {
+        let mut view = outfitting(Ok(outfit_template()));
+        view.outfit_ordered(Reselection::Leave);
+        assert!(view.open_outfitter().is_none(), "nothing open");
+        click_item(&mut view, 8);
+        view.outfit_ordered(Reselection::Reset(OutfitId(128)));
+        let open = view.open_outfitter().expect("still outfitting");
+        assert_eq!(open.selected(), None);
+        assert_eq!(open.selected_outfit(), Some(OutfitId(128)));
+        view.outfit_ordered(Reselection::Leave);
+        assert!(view.open_outfitter().is_none(), "closed at once");
+        assert!(!view.left());
+        click_item(&mut view, 8);
+        view.alert_outfit(&alert());
+        view.outfit_ordered(Reselection::Leave);
+        assert!(view.open_outfitter().is_some(), "its alert first");
+        view.input(&key(Key::Escape));
+        assert!(view.open_outfitter().is_none(), "closed with its alert");
+        assert!(!view.left());
     }
 
     #[test]

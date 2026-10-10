@@ -85,6 +85,21 @@
 //! and gives back the outfitter as it now is
 //! ([`OutfitterScreen::set_outfitter`]).
 //!
+//! After an order that changes the listing, the screen follows what the
+//! order left the selection at ([`OutfitterScreen::reselect`]), as
+//! [`RuleKey::RelistedSelection`](nova_sim::RuleKey::RelistedSelection)
+//! says. By the engine, the selection is reset as `_DoOutfitDialog` resets
+//! it (@0x5c32c-0x5c35b, @0x5d021-0x5d04b): no cell is highlighted, the
+//! grid scrolls to its top, and Buy and Sell answer for `oütf` 128,
+//! listed or not ([`OutfitterScreen::selected_outfit`]), while the
+//! picture, the description and the info box are blank
+//! (`_OutfitDialogUpdate` @0x5789b-0x578a5). A click on a listed cell, or
+//! an arrow, ends the reset: Right and Down pick the first cell shown, and
+//! Left and Up the last cell shown, or the last listed when fewer are
+//! (`_OutfitFilter` @0x583bd-0x58440). When the order leaves nothing
+//! listed, the outfitter closes as Done closes it, once any alert the
+//! order showed is closed (-0x63d, @0x5da33).
+//!
 //! Done, Return and Escape close it. Without the dialog, the screen says
 //! why, and Return or Escape still closes it.
 
@@ -93,7 +108,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    Direction, LcNames, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter, SaleAlert,
+    Direction, LcNames, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter, Reselection,
+    SaleAlert,
 };
 
 use super::catalog::SpaceportCatalog;
@@ -415,6 +431,13 @@ pub struct OutfitterScreen {
     alert_template: Option<DialogTemplate>,
     style: ButtonStyle,
     closed: bool,
+    /// The outfit Buy and Sell answer for while no cell is highlighted,
+    /// after an order that changed the listing
+    /// ([`OutfitterScreen::reselect`]).
+    reselected: Option<OutfitId>,
+    /// Whether an order left nothing listed, so the outfitter closes
+    /// once its alert is closed.
+    leaving: bool,
     sounds: Vec<Sound>,
 }
 
@@ -476,6 +499,8 @@ impl OutfitterScreen {
             alert_template: alert.ok(),
             style,
             closed: false,
+            reselected: None,
+            leaving: false,
             sounds: Vec::new(),
         };
         screen.read_pictures();
@@ -489,10 +514,25 @@ impl OutfitterScreen {
         &self.outfitter
     }
 
-    /// The selected cell's index, if anything is listed.
+    /// The selected cell's index, if anything is listed and a cell is
+    /// highlighted: none after an order that reset the selection, until
+    /// a cell is chosen ([`OutfitterScreen::reselect`]).
     #[must_use]
     pub fn selected(&self) -> Option<usize> {
-        self.grid.selected(self.outfitter.rows.len())
+        self.grid
+            .selected(self.outfitter.rows.len())
+            .filter(|_| self.reselected.is_none())
+    }
+
+    /// The outfit Buy and Sell answer for: the highlighted cell's, or
+    /// with none highlighted after a reset, the outfit the reset selected,
+    /// listed or not (`*0xded58`, which `_OutfitFilter` reads,
+    /// @0x5806f-0x580ca).
+    #[must_use]
+    pub fn selected_outfit(&self) -> Option<OutfitId> {
+        self.selected()
+            .map(|index| self.outfitter.rows[index].id)
+            .or(self.reselected)
     }
 
     /// The grid's first row shown.
@@ -513,10 +553,33 @@ impl OutfitterScreen {
         self.laid.as_ref().err().map(String::as_str)
     }
 
-    /// Whether Done has been activated.
+    /// Whether Done has been activated, or an order left nothing listed
+    /// and no alert is open: the original shows a sale's alert inside its
+    /// loop, then leaves (-0x63d, @0x5da33).
     #[must_use]
     pub fn closed(&self) -> bool {
-        self.closed
+        self.closed || (self.leaving && !self.alert.is_open())
+    }
+
+    /// Follows what an order left the selection at, as
+    /// [`RuleKey::RelistedSelection`](nova_sim::RuleKey::RelistedSelection)
+    /// reads it: [`Reselection::Kept`] changes nothing;
+    /// [`Reselection::Reset`] highlights no cell, scrolls the grid to its
+    /// top and has Buy and Sell answer for its outfit, listed or not, with
+    /// no picture, description or info box (`*0xded5c` = -1, `*0xdeda8`
+    /// = 0, @0x5c32c-0x5c35b, @0x5d021-0x5d04b; `_OutfitDialogUpdate`
+    /// @0x5789b-0x578a5); and [`Reselection::Leave`] closes the outfitter
+    /// once its alert is closed ([`closed`](Self::closed)).
+    pub fn reselect(&mut self, after: Reselection) {
+        match after {
+            Reselection::Kept => {}
+            Reselection::Reset(outfit) => {
+                self.reselected = Some(outfit);
+                self.grid = CellGrid::default();
+                self.selected_changed();
+            }
+            Reselection::Leave => self.leaving = true,
+        }
     }
 
     /// The order asked for since it was last taken, and how many it
@@ -565,7 +628,15 @@ impl OutfitterScreen {
 
     /// Shows `outfitter`, the outfitter after an order, keeping the same
     /// outfit selected when it is still listed, or the cell where it was.
+    /// After a reset, with no cell highlighted, it keeps the reset and
+    /// the grid's scroll.
     pub fn set_outfitter(&mut self, outfitter: Outfitter) {
+        if self.reselected.is_some() {
+            self.outfitter = outfitter;
+            self.read_pictures();
+            self.selected_changed();
+            return;
+        }
         let kept = self
             .selected()
             .map(|index| self.outfitter.rows[index].id)
@@ -649,15 +720,13 @@ impl OutfitterScreen {
         }
     }
 
-    /// Whether one of the selected outfit can go `direction`
-    /// ([`Outfitter::can`]).
+    /// Whether one of the selected outfit ([`selected_outfit`](Self::selected_outfit))
+    /// can go `direction` ([`Outfitter::can`]).
     fn allows(&self, direction: Direction) -> bool {
-        self.selected().is_some_and(|index| {
-            let order = OutfitOrder {
-                outfit: self.outfitter.rows[index].id,
-                direction,
-            };
-            self.outfitter.can(order).is_ok()
+        self.selected_outfit().is_some_and(|outfit| {
+            self.outfitter
+                .can(OutfitOrder { outfit, direction })
+                .is_ok()
         })
     }
 
@@ -666,13 +735,10 @@ impl OutfitterScreen {
     /// ([`Outfitter::count_asked`]), the quantity dialog at that count.
     /// `by_key` says B or S asked, whose character the dialog then drops.
     fn ask(&mut self, direction: Direction, by_key: bool) {
-        let Some(index) = self.selected().filter(|_| self.allows(direction)) else {
+        let Some(outfit) = self.selected_outfit().filter(|_| self.allows(direction)) else {
             return;
         };
-        let order = OutfitOrder {
-            outfit: self.outfitter.rows[index].id,
-            direction,
-        };
+        let order = OutfitOrder { outfit, direction };
         let asked = self
             .outfitter
             .count_asked(order.outfit, direction)
@@ -695,7 +761,7 @@ impl OutfitterScreen {
     /// key held while an order removes the outfit's cell never acts on
     /// the outfit that takes the cell.
     fn ask_by_key(&mut self, key: Key, input: &Input, direction: Direction) {
-        let selected = self.selected().map(|index| self.outfitter.rows[index].id);
+        let selected = self.selected_outfit();
         let repeat = matches!(*input, Input::Key { repeat: true, .. });
         if !repeat {
             self.held = Some((key, selected));
@@ -703,6 +769,27 @@ impl OutfitterScreen {
             return;
         }
         self.ask(direction, true);
+    }
+
+    /// Moves the selection for an arrow `key` going down, and says
+    /// whether it was an arrow. After a reset, an arrow ends it: Right and
+    /// Down pick the first cell shown, and Left and Up the last cell
+    /// shown, or the last listed when fewer are (`_OutfitFilter`
+    /// @0x583bd-0x58440); otherwise the grid moves the selection.
+    fn arrow(&mut self, key: Key) -> bool {
+        let count = self.outfitter.rows.len();
+        if self.reselected.is_none() {
+            return self.grid.arrow(key, count);
+        }
+        let first = self.grid.top_row() * COLUMNS;
+        let index = match key {
+            Key::Right | Key::Down => first,
+            Key::Left | Key::Up => first + COLUMNS * GRID_ROWS - 1,
+            _ => return false,
+        };
+        self.reselected = None;
+        self.grid.select(index, count);
+        true
     }
 
     /// Scrolls the grid a row down, or up, never past either end.
@@ -837,7 +924,7 @@ impl Screen for OutfitterScreen {
         let arrow = match *input {
             Input::Key {
                 key, pressed: true, ..
-            } => self.grid.arrow(key, self.outfitter.rows.len()),
+            } => self.arrow(key),
             _ => false,
         };
         if arrow {
@@ -852,6 +939,7 @@ impl Screen for OutfitterScreen {
             } => self.cell_at(at),
             _ => None,
         } {
+            self.reselected = None;
             self.select(index);
         } else if let Ok(laid) = &mut self.laid {
             let event = laid.dialog.input(input);
@@ -920,7 +1008,9 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use nova_sim::{Launcher, OutfitFacts, Raise, RuleKey, RuleSource, Rulebook, SaleAlert};
+    use nova_sim::{
+        Launcher, OutfitFacts, Raise, Reselection, RuleKey, RuleSource, Rulebook, SaleAlert,
+    };
 
     use crate::draw::DrawCommand;
     use crate::font::Font;
@@ -2511,6 +2601,237 @@ mod tests {
         assert_eq!(kept.selected(), None);
         kept.set_outfitter(long(5));
         assert_eq!(kept.selected(), Some(0));
+    }
+
+    // After an order that changes the listing
+    // (`RuleKey::RelistedSelection`).
+
+    const BLASTER: OutfitId = OutfitId(128);
+
+    /// `screen` after an order that reset the selection to the blaster.
+    fn reset(mut screen: OutfitterScreen) -> OutfitterScreen {
+        screen.reselect(Reselection::Reset(BLASTER));
+        screen
+    }
+
+    /// Whether any cell shown is highlighted.
+    fn any_highlight(screen: &OutfitterScreen) -> bool {
+        let commands = drawn(screen);
+        (0..COLUMNS * GRID_ROWS)
+            .filter(|&index| screen.cell_bounds(index).is_some())
+            .any(|index| contains(&commands, &highlight(screen, index)))
+    }
+
+    /// Whether outfit `outfit` can go `direction` by `screen`'s outfitter.
+    fn can(screen: &OutfitterScreen, outfit: OutfitId, direction: Direction) -> bool {
+        screen
+            .outfitter()
+            .can(OutfitOrder { outfit, direction })
+            .is_ok()
+    }
+
+    #[test]
+    fn after_a_reset_no_cell_is_highlighted_and_buy_and_sell_answer_for_the_outfit() {
+        let mut screen = screen();
+        press(&mut screen, Key::Right);
+        assert!(any_highlight(&screen));
+        let mut screen = reset(screen);
+        assert_eq!(screen.selected(), None);
+        assert_eq!(screen.selected_outfit(), Some(BLASTER));
+        assert_eq!(
+            enabled(&screen),
+            (
+                can(&screen, BLASTER, Direction::Buy),
+                can(&screen, BLASTER, Direction::Sell)
+            )
+        );
+        assert_eq!(enabled(&screen), (true, true));
+        assert!(!any_highlight(&screen));
+        press(&mut screen, BUY_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+        click_item(&mut screen, BUY_ITEM);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Buy)));
+        assert_eq!(screen.selected(), None, "still no cell");
+    }
+
+    #[test]
+    fn after_a_reset_the_picture_description_and_info_box_are_blank() {
+        let screen = screen();
+        let before = words(&screen);
+        assert!(before.contains(&"dësc 3000.".to_owned()), "{before:?}");
+        assert!(before.contains(&credits::YOU_HAVE.to_owned()));
+        let pictured = |screen: &OutfitterScreen| {
+            let area = item(screen, PICTURE_ITEM);
+            drawn(screen).iter().any(|command| {
+                matches!(command, DrawCommand::StretchedPicture { top_left, .. } if *top_left == area.min)
+            })
+        };
+        assert!(pictured(&screen));
+        let screen = reset(screen);
+        let shown = words(&screen);
+        for blank in [
+            PRICE_LABEL,
+            credits::YOU_HAVE,
+            MASS_LABEL,
+            AVAILABLE_LABEL,
+            NO_PICTURE,
+        ] {
+            assert!(!shown.contains(&blank.to_owned()), "{blank}: {shown:?}");
+        }
+        assert!(!shown.iter().any(|text| text.starts_with("dësc")));
+        assert!(!pictured(&screen));
+    }
+
+    /// An outfitter listing only the ammunition, with the blaster (2
+    /// owned) not listed.
+    fn unlisted_blaster() -> Outfitter {
+        let mut blaster = row(128, "Light\\nBlaster", 1000, 1, 2);
+        blaster.facts.listed = false;
+        Outfitter {
+            rows: vec![row(129, "*Ammo\\nPack", 50, 0, 0)],
+            unlisted: Some(blaster),
+            ..outfitter()
+        }
+    }
+
+    #[test]
+    fn a_reset_outfit_need_not_be_listed() {
+        let mut screen = reset(screen_of(unlisted_blaster()));
+        assert_eq!(screen.selected_outfit(), Some(BLASTER));
+        assert_eq!(enabled(&screen), (true, true));
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), Some(order(128, Direction::Sell)));
+        let commands = drawn(&screen);
+        assert!(contains(&commands, &frame(&screen, 0)));
+        assert!(!contains(&commands, &frame(&screen, 1)), "one cell");
+        press(&mut screen, COUNT_KEY);
+        press(&mut screen, SELL_KEY);
+        assert_eq!(field_text(&screen), Some("2"), "the blaster's count");
+    }
+
+    #[test]
+    fn a_reset_outfit_with_no_row_greys_both() {
+        let mut screen = reset(screen_of(long(3)));
+        assert_eq!(screen.selected_outfit(), Some(BLASTER));
+        assert_eq!(enabled(&screen), (false, false));
+        press(&mut screen, BUY_KEY);
+        press(&mut screen, SELL_KEY);
+        assert_eq!(screen.take_order(), None);
+    }
+
+    #[test]
+    fn a_reset_scrolls_the_grid_to_its_top() {
+        let mut screen = screen_of(long(30));
+        for _ in 0..6 {
+            press(&mut screen, Key::Down);
+        }
+        assert_eq!(screen.top_row(), 3);
+        let screen = reset(screen);
+        assert_eq!(screen.top_row(), 0);
+        assert_eq!(names(&screen)[0], "Good 0");
+    }
+
+    #[test]
+    fn a_click_or_an_arrow_ends_the_reset() {
+        let mut clicked = reset(screen());
+        click_cell(&mut clicked, 2);
+        assert_eq!(clicked.selected(), Some(2));
+        assert_eq!(clicked.selected_outfit(), Some(OutfitId(130)));
+        assert!(contains(&drawn(&clicked), &highlight(&clicked, 2)));
+        let mut empty = reset(screen());
+        click_cell(&mut empty, 4);
+        assert_eq!(empty.selected(), None, "an empty cell, as the port has it");
+        let arrowed = |outfitter: Outfitter, scrolled: usize, k: Key| {
+            let mut screen = reset(screen_of(outfitter));
+            for _ in 0..scrolled {
+                click_item(&mut screen, SCROLL_DOWN_ITEM);
+            }
+            press(&mut screen, k);
+            (
+                screen.selected(),
+                screen.top_row(),
+                screen.selected_outfit(),
+            )
+        };
+        let at = |index: usize, top_row: usize| {
+            (
+                Some(index),
+                top_row,
+                Some(OutfitId(200 + i16::try_from(index).expect("few"))),
+            )
+        };
+        for (k, first_or_last) in [
+            (Key::Right, 0),
+            (Key::Down, 0),
+            (Key::Left, 15),
+            (Key::Up, 15),
+        ] {
+            assert_eq!(arrowed(long(30), 0, k), at(first_or_last, 0), "{k:?}");
+            assert_eq!(
+                arrowed(long(30), 2, k),
+                at(first_or_last + 8, 2),
+                "{k:?} scrolled"
+            );
+        }
+        for k in [Key::Left, Key::Up] {
+            assert_eq!(arrowed(long(10), 0, k), at(9, 0), "{k:?}: the last");
+            assert_eq!(
+                arrowed(long(22), 2, k),
+                at(21, 2),
+                "{k:?}: the last, scrolled"
+            );
+        }
+        let mut ended = reset(screen_of(long(30)));
+        press(&mut ended, Key::Right);
+        press(&mut ended, Key::Right);
+        assert_eq!(ended.selected(), Some(1), "the arrows move as before");
+    }
+
+    #[test]
+    fn a_new_outfitter_keeps_the_reset() {
+        let mut screen = reset(screen());
+        let mut broke = outfitter();
+        broke.cash = 10;
+        screen.set_outfitter(broke.clone());
+        assert_eq!(screen.outfitter(), &broke);
+        assert_eq!(screen.selected(), None);
+        assert_eq!(screen.selected_outfit(), Some(BLASTER));
+        assert_eq!(enabled(&screen), (false, true), "regreyed");
+        assert!(!any_highlight(&screen));
+        let mut scrolled = reset(screen_of(long(30)));
+        click_item(&mut scrolled, SCROLL_DOWN_ITEM);
+        scrolled.set_outfitter(unlisted_blaster());
+        assert_eq!(scrolled.top_row(), 1, "the scroll kept");
+        assert_eq!(scrolled.selected(), None);
+        assert_eq!(enabled(&scrolled), (true, true), "the unlisted blaster");
+    }
+
+    #[test]
+    fn an_order_that_keeps_the_listing_keeps_the_selection() {
+        let mut screen = screen();
+        press(&mut screen, Key::Right);
+        let before = drawn(&screen);
+        screen.reselect(Reselection::Kept);
+        assert_eq!(screen.selected(), Some(1));
+        assert_eq!(screen.selected_outfit(), Some(OutfitId(129)));
+        assert_eq!(drawn(&screen), before);
+        assert!(!screen.closed());
+    }
+
+    #[test]
+    fn leave_closes_the_outfitter_once_its_alert_is_closed() {
+        let mut screen = screen();
+        assert!(!screen.closed());
+        screen.reselect(Reselection::Leave);
+        assert!(screen.closed());
+        let mut alerted = alerting(OutfitRefusal::NegativeFreeMass);
+        alerted.reselect(Reselection::Leave);
+        assert!(!alerted.closed(), "the alert first");
+        press(&mut alerted, Key::Escape);
+        assert!(alerted.alert_dialog().is_none());
+        assert!(alerted.closed());
     }
 
     #[test]
