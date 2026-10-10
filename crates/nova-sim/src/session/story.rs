@@ -454,6 +454,21 @@ impl Session {
             .collect()
     }
 
+    /// Lets `days` days go by through the daily step, landed or in
+    /// flight, the events rolled on `chance`, as a storyline walker waits:
+    /// each day moves the date on, counts the active missions' days left
+    /// down and raises a [`StoryEvent::DayPassed`] for the next settling
+    /// ([`Session::settle_script`]) to dispatch, the missions' deadlines
+    /// among its subscriptions. Unlike [`Session::set_date`], which lets
+    /// no day go by, every participant of each day runs. No escort's wage
+    /// is paid: the daily step pays none, and the take-off pays its own
+    /// once after its days. A lapsed deadline fails its mission only in
+    /// flight; docked it waits for the take-off, as the missions' deadline
+    /// check says.
+    pub fn let_days_pass(&mut self, days: u32, chance: &mut (impl Chance + ?Sized)) {
+        self.pass_days(days, chance);
+    }
+
     /// Lets `days` days go by through the daily step, each running its
     /// participants in the original's order, the events rolled on
     /// `chance`. No wage is paid here: the caller pays once after its
@@ -1437,5 +1452,120 @@ mod tests {
         );
         assert_eq!(session.take_script_notes(), []);
         assert_eq!(session.story_raised(), []);
+    }
+
+    // Letting days pass, as a walker does.
+
+    /// Fixture subscriptions on `DayPassed` that set b1, b2 and so on, a
+    /// bit a day: the last bit's first, so each day climbs one rung.
+    fn day_ladder(rungs: i16) -> Vec<Subscription> {
+        (1..=rungs)
+            .map(|n| {
+                let guard = if n == 1 {
+                    "!b1".to_owned()
+                } else {
+                    format!("b{} & !b{n}", n - 1)
+                };
+                sub(
+                    rungs + 1 - n,
+                    EventFilter::Any(StoryEventKind::DayPassed),
+                    &guard,
+                    &format!("b{n}"),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn letting_days_pass_moves_the_date_on_and_raises_a_day_passed_for_each() {
+        let catalog = testkit::catalog();
+        let mut session = quiet(Session::start(&catalog).expect("starts"));
+        register(&mut session, day_ladder(4));
+        let from = session.date();
+        session.let_days_pass(3, &mut NeverFires);
+        assert_eq!(session.date(), after(from, 3));
+        assert_eq!(session.story_raised(), days_after(from, 3));
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(bits(&session), [1, 2, 3], "three days dispatched");
+    }
+
+    #[test]
+    fn letting_days_pass_steps_the_events_and_pays_no_wage() {
+        let catalog = surplus();
+        let mut session = eventful(&catalog);
+        session.pilot.escorts.push(crate::pilot::Escort {
+            ship: ShipId(128),
+            reserves: crate::reserves::Reserves::full(30.0, 45.0, 300.0),
+            order: None,
+            carried: false,
+            wage: Some(100),
+            person: None,
+        });
+        session.set_credits(1000);
+        session.let_days_pass(2, &mut NeverFires);
+        assert_eq!(
+            session.pilot().events().collect::<Vec<_>>(),
+            [(DisasterId(128), 3)],
+            "the event stepped each day"
+        );
+        assert_eq!(session.pilot().cash(), 1000, "no wage paid");
+        assert_eq!(session.take_pay_notes(), []);
+    }
+
+    /// [`testkit::catalog`] with mission 140 offered at 128, going
+    /// nowhere, timed two days, its `OnFailure` setting b40.
+    fn timed() -> FakePilotCatalog {
+        FakePilotCatalog {
+            missions: vec![crate::catalog::MissionRecord {
+                avail_stel: 128,
+                time_limit: 2,
+                on_failure: Script::parse("b40"),
+                ..testkit::mission(140)
+            }],
+            ..testkit::catalog()
+        }
+    }
+
+    /// A session of `catalog` docked at 128, holding mission 140.
+    fn holding_timed(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        let _ = session.settle_script(catalog, &mut NeverFires);
+        session
+            .accept_mission(crate::catalog::MissionId(140), &mut NeverFires)
+            .expect("accepted");
+        session
+    }
+
+    #[test]
+    fn days_let_pass_in_flight_fail_a_mission_past_its_deadline() {
+        let catalog = timed();
+        let mut session = holding_timed(&catalog);
+        session.take_off(&mut NeverFires).expect("takes off");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(session.pilot().missions().missions().len(), 1, "held");
+        session.let_days_pass(3, &mut NeverFires);
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(
+            session
+                .pilot()
+                .control_bit(crate::control::Bit::new(40).expect("a bit"))
+        );
+        assert_eq!(session.pilot().missions().missions(), [], "freed");
+    }
+
+    #[test]
+    fn days_let_pass_docked_leave_a_mission_past_its_deadline_unfailed() {
+        let catalog = timed();
+        let mut session = holding_timed(&catalog);
+        session.let_days_pass(3, &mut NeverFires);
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        let active = session.pilot().missions().get(0).expect("held");
+        assert_eq!((active.days_left, active.failed), (Some(0), None));
+        assert!(
+            !session
+                .pilot()
+                .control_bit(crate::control::Bit::new(40).expect("a bit"))
+        );
     }
 }
