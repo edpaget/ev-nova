@@ -89,6 +89,10 @@ pub enum MissionTextKind {
     /// Why it has no room for its cargo: `STR#` 2002 #355 or #356 as its
     /// accept is refused.
     NoRoom,
+    /// Its `LoadCargText`, as its cargo is loaded.
+    LoadCargo,
+    /// Its `DumpCargoText`, as its cargo is unloaded.
+    DumpCargo,
 }
 
 impl MissionTextKind {
@@ -99,6 +103,8 @@ impl MissionTextKind {
             Self::Comp => texts.comp.as_deref(),
             Self::Fail => texts.fail.as_deref(),
             Self::Refuse => texts.refuse.as_deref(),
+            Self::LoadCargo => texts.load_cargo.as_deref(),
+            Self::DumpCargo => texts.dump_cargo.as_deref(),
             Self::NoRoom => None,
         }
     }

@@ -1,5 +1,27 @@
-//! Mission cargo: the room an accept and a pickup need for it ([`Room`]).
-//! See the [module docs](super)' "Cargo" for the original's rules.
+//! Mission cargo: the room an accept and a pickup need for it ([`Room`]),
+//! and when it is loaded ([`loads_at_accept`]). See the [module
+//! docs](super)' "Cargo" for the original's rules.
+
+use crate::catalog::MissionRecord;
+
+/// `PickupMode`: the cargo is loaded as the mission is accepted.
+pub const PICKUP_AT_ACCEPT: i16 = 0;
+/// `PickupMode`: the cargo is loaded at the destination.
+pub const PICKUP_AT_DESTINATION: i16 = 1;
+/// `PickupMode`: the cargo is loaded on boarding the mission's special
+/// ship.
+pub const PICKUP_BOARDING: i16 = 2;
+/// `DropOffMode`: the cargo is unloaded at the destination.
+pub const DROP_OFF_AT_DESTINATION: i16 = 0;
+/// `DropOffMode`: the cargo is unloaded at the return.
+pub const DROP_OFF_AT_RETURN: i16 = 1;
+
+/// Whether accepting `record` loads its cargo (`_DoMissionAccept`
+/// @0xa1f28-0xa1f3f): with `PickupMode` 0, whatever its cargo type.
+#[must_use]
+pub fn loads_at_accept(record: &MissionRecord) -> bool {
+    record.pickup_mode == PICKUP_AT_ACCEPT
+}
 
 /// The room a mission's cargo needs, as an accept (`_DoMissionAccept`
 /// @0xa1b61-0xa1be5) and a pickup (`_DoMissionCargoPickup` @0x98292)
@@ -34,6 +56,24 @@ impl Room {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::mission;
+
+    fn picking_up(pickup_mode: i16, cargo_type: i16) -> MissionRecord {
+        MissionRecord {
+            cargo_type,
+            pickup_mode,
+            ..mission(140)
+        }
+    }
+
+    #[test]
+    fn only_pickup_mode_0_loads_at_accept_whatever_the_cargo() {
+        assert!(loads_at_accept(&picking_up(0, 0)));
+        assert!(loads_at_accept(&picking_up(0, -1)), "no cargo type");
+        for mode in [1, 2, -1, 3] {
+            assert!(!loads_at_accept(&picking_up(mode, 0)), "{mode}");
+        }
+    }
 
     fn room(tons: i64, holds: i64, space: i64) -> Room {
         Room { tons, holds, space }

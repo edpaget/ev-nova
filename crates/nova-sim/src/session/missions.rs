@@ -418,7 +418,8 @@ impl Session {
     /// Accepts `record`'s `offer` into the lowest free slot, as the
     /// original's accept does once its checks pass (`_DoMissionAccept`
     /// @0xa1c0c-0xa2196): the slot filled and its hooks registered;
-    /// `OnAccept`; the cash a pay below -50000 takes; the destination
+    /// `OnAccept`; the cash a pay below -50000 takes; `BriefText`; the
+    /// cargo loaded with `PickupMode` 0, and its `LoadCargText`; the destination
     /// reached when it has none, or, docked, when it is the stellar docked
     /// at; docked, the mission's offer dropped and the others kept only
     /// while available; the auto-abort; and its roll made 0. The slot, or
@@ -433,13 +434,12 @@ impl Session {
         let slot = self.pilot.missions.fill(active)?;
         self.register_slot(slot);
         self.save_due = true;
-        // `LoadCargText`, filled for the slot (@0xa1f80), and the cargo
-        // loaded: missions phase 5.
         self.run_mission_script(slot, &record.on_accept, chance);
         self.pilot.cash = accept_charge(offer.pay, self.pilot.cash);
         // `BriefText`, filled for the slot after `OnAccept` and the charge
         // (@0xa1e0b-0xa1f13, @0xa1e56).
         self.show_mission_text(MissionTextKind::Brief, record.id, Some(slot));
+        self.load_at_accept(slot, record);
         let docked = self.landed;
         if let Some(active) = self.slot_holding(slot, record.id) {
             active.reached = active
@@ -476,7 +476,11 @@ impl Session {
     }
 
     /// The mission in `slot`, to change, if it is `mission`.
-    fn slot_holding(&mut self, slot: u8, mission: MissionId) -> Option<&mut ActiveMission> {
+    pub(super) fn slot_holding(
+        &mut self,
+        slot: u8,
+        mission: MissionId,
+    ) -> Option<&mut ActiveMission> {
         self.save_due = true;
         self.pilot
             .missions

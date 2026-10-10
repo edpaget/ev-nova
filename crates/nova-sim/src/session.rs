@@ -315,6 +315,7 @@ mod fighters;
 mod hail;
 mod hire;
 mod hooks;
+mod mission_cargo;
 mod mission_screens;
 mod missions;
 mod outfits;
