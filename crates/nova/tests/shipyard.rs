@@ -657,18 +657,12 @@ fn a_pilot_buys_a_heavy_shuttle_trading_in_its_shuttle_and_flies_it_after_a_rest
         .collect();
     assert_eq!(ids, [SHUTTLE, HEAVY]);
     let shown = texts(&game.frame());
-    for text in [
-        "Shuttle",
-        "Heavy",
-        "(current)",
-        "Ship Price: 10000",
-        "Trade-In: 2500",
-        "Final Price: 7500",
-        "Buy Ship",
-        "Info",
-        "Done",
-    ] {
+    for text in ["Shuttle", "Heavy", "(current)", "Buy Ship", "Info", "Done"] {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    }
+    // The Shuttle, flown and selected, shows no price lines.
+    for label in ["Ship Price:", "Trade-In:", "Final Price:", "You Have:"] {
+        assert!(!shown.contains(&label.to_owned()), "{label}: {shown:?}");
     }
 
     // The Heavy Shuttle, by its cell: its price, description and stats.
@@ -676,9 +670,14 @@ fn a_pilot_buys_a_heavy_shuttle_trading_in_its_shuttle_and_flies_it_after_a_rest
     game.click(cell);
     let shown = texts(&game.frame());
     for text in [
-        "Ship Price: 17500",
-        "Trade-In: 2500",
-        "Final Price: 15000",
+        "Ship Price:",
+        "17,500 cr",
+        "Trade-In:",
+        "2,500 cr",
+        "Final Price:",
+        "15,000 cr",
+        "You Have:",
+        "25,000 cr",
         "Room for more.",
     ] {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
@@ -766,9 +765,15 @@ fn buy_the_heavy_shuttle(game: &mut Harness, store: &MemoryPilots) {
     assert!(game.shipyard().naming().is_none());
     assert_eq!(game.pilot().cash(), 10_000);
     assert_eq!(store.writes(), writes + 1, "nothing more to save");
+    // The Heavy Shuttle, now flown and still selected, shows no price
+    // lines; the Shuttle shows the new trade-in.
+    let shown = texts(&game.frame());
+    assert!(!shown.contains(&"Trade-In:".to_owned()), "{shown:?}");
+    let cell = game.shipyard().cell_bounds(0).expect("a cell").center();
+    game.click(cell);
     let shown = texts(&game.frame());
     assert!(
-        shown.contains(&"Trade-In: 5375".to_owned()),
+        shown.contains(&"Trade-In:".to_owned()) && shown.contains(&"5,375 cr".to_owned()),
         "the Heavy Shuttle's quarter and its tank's half: {shown:?}"
     );
 }

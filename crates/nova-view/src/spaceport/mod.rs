@@ -31,6 +31,7 @@
 
 pub mod bar;
 pub mod catalog;
+pub mod credits;
 pub mod data;
 pub mod grid;
 pub mod hire;

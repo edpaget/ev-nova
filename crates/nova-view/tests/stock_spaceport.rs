@@ -256,15 +256,16 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
             .collect();
         // The trade-in is a quarter of the Shuttle and half its Light
         // Blaster, the stock weapon it owns.
-        for shown in [
-            "Ship Price: 10000",
-            "Trade-In: 5000",
-            "Final Price: 5000",
-            "Buy Ship",
-            "Info",
-            "Done",
-            "(current)",
-        ] {
+        assert_eq!(screen.shipyard().trade_in, 5000);
+        // The Shuttle selected is the class flown, so the info box shows
+        // no price lines.
+        let selected = screen.selected().expect("a ship selected");
+        assert_eq!(
+            screen.shipyard().current,
+            screen.shipyard().rows[selected].id
+        );
+        assert!(!texts.contains(&"Ship Price:".to_owned()), "{texts:?}");
+        for shown in ["Buy Ship", "Info", "Done", "(current)"] {
             assert!(texts.contains(&shown.to_owned()), "{shown}: {texts:?}");
         }
         assert!(list.iter().any(|c| matches!(

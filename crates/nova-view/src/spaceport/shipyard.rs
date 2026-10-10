@@ -25,8 +25,13 @@
 //! ID less 128, or else that of the lowest-numbered ship sharing its
 //! `shän` base image, as the Bible says target pictures are shared, or
 //! "No Picture". Its description is `dësc` 13000 plus its ID less 128. The
-//! info box shows its price, what the player's ship trades in for, and
-//! the final price (#225-227).
+//! info box shows, for any class but the one flown, four rows at the
+//! original's baselines (`_ShipyardDialogUpdate` @0x592e4-0x596f6): "Ship
+//! Price:", "Trade-In:", "Final Price:" (the price less the trade-in, at
+//! least 0) and "You Have:" with the cash (#225-227, #217). Each amount is
+//! drawn as `_DrawCommaNumber` draws it, followed by " cr"
+//! ([`credits`](super::credits)). For the class flown it shows none
+//! (@0x592d7-0x592de).
 //!
 //! Buy Ship, clicked or with B, requests the selected ship, and is greyed
 //! when it cannot be bought, the class flown among them (`_CalcShipCanBuy`
@@ -69,6 +74,7 @@ use nova_sim::shipyard::SHIP_NAME_CHARS;
 use nova_sim::{ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
 
 use super::catalog::SpaceportCatalog;
+use super::credits::{self, credits_text};
 use super::grid::{
     self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE, text,
 };
@@ -148,6 +154,12 @@ pub const PRICE_LABEL: &str = "Ship Price:";
 pub const TRADE_IN_LABEL: &str = "Trade-In:";
 /// `STR#` 2002 #227.
 pub const FINAL_PRICE_LABEL: &str = "Final Price:";
+/// How far each amount starts right of the info box's left (`MoveTo`
+/// h + 0x46, `_ShipyardDialogUpdate` @0x5931c-0x59333).
+pub const AMOUNT_COLUMN: f32 = 70.0;
+/// The info box's rows' baselines below its top: Ship Price, Trade-In,
+/// Final Price and You Have (@0x592f0, @0x593ba, @0x594db, @0x5954b).
+pub const PRICE_ROWS: [f32; 4] = [12.0, 24.0, 48.0, 72.0];
 /// `STR#` 2002 #229-237, the info panel's stat labels in order.
 pub const STAT_LABELS: [&str; 9] = [
     "Speed:", "Accel:", "Turn:", "Guns:", "Turrets:", "Space:", "Length:", "Mass:", "Crew:",
@@ -186,6 +198,26 @@ pub fn ship_picture(
         .collect();
     sharers.sort();
     sharers.into_iter().map(picture).find(|&id| exists(id))
+}
+
+/// The info box's rows for `row`, each a label and its amount: none for
+/// the class flown (`_ShipyardDialogUpdate` skips them,
+/// @0x592d7-0x592de), otherwise the price, the trade-in, the final price
+/// at least 0, and the cash.
+#[must_use]
+pub fn price_lines(shipyard: &Shipyard, row: &ShipRow) -> Vec<(&'static str, String)> {
+    if row.id == shipyard.current {
+        return Vec::new();
+    }
+    vec![
+        (PRICE_LABEL, credits_text(row.price)),
+        (TRADE_IN_LABEL, credits_text(shipyard.trade_in)),
+        (
+            FINAL_PRICE_LABEL,
+            credits_text(shipyard.final_price_clamped(row)),
+        ),
+        (credits::YOU_HAVE, credits_text(shipyard.cash)),
+    ]
 }
 
 /// The info panel's lines for `row`'s ship.
@@ -733,15 +765,15 @@ impl ShipyardScreen {
         let Some(info) = laid.dialog.item_bounds(INFO_BOX_ITEM) else {
             return;
         };
-        let line_height = laid.metrics.0.line_height(TEXT_FONT, TEXT_SIZE);
-        let lines = [
-            format!("{PRICE_LABEL} {}", row.price),
-            format!("{TRADE_IN_LABEL} {}", self.shipyard.trade_in),
-            format!("{FINAL_PRICE_LABEL} {}", self.shipyard.final_price(row)),
-        ];
-        for (n, line) in lines.iter().enumerate() {
-            let origin = Point::new(info.min.x + INSET, info.min.y + line_height * n as f32);
-            text(list, line, origin, TEXT_COLOR);
+        for (n, (label, amount)) in price_lines(&self.shipyard, row).into_iter().enumerate() {
+            let top = grid::baseline_top(info.min.y + PRICE_ROWS[n]);
+            text(list, label, Point::new(info.min.x, top), TEXT_COLOR);
+            text(
+                list,
+                &amount,
+                Point::new(info.min.x + AMOUNT_COLUMN, top),
+                TEXT_COLOR,
+            );
         }
     }
 
@@ -1190,6 +1222,10 @@ mod tests {
             ["Buy Ship", "Info", "Ship Price:", "Trade-In:"]
         );
         assert_eq!(FINAL_PRICE_LABEL, "Final Price:");
+        assert_eq!(
+            (AMOUNT_COLUMN, PRICE_ROWS),
+            (70.0, [12.0, 24.0, 48.0, 72.0])
+        );
         assert_eq!(NO_SHIPS, "There are no ships available for purchase here.");
         assert_eq!((MAXIMUM_OF, JUMP, JUMPS), ("Maximum of", "jump", "jumps"));
     }
@@ -1565,38 +1601,123 @@ mod tests {
     }
 
     #[test]
-    fn the_info_box_shows_the_price_the_trade_in_and_the_final_price() {
+    fn the_class_flown_shows_no_price_lines() {
         let mut screen = screen();
-        assert_eq!(
-            info_box(&screen),
-            ["Ship Price: 10000", "Trade-In: 2500", "Final Price: 7500"]
+        assert!(info_box(&screen).is_empty());
+        let flown = shipyard();
+        assert!(price_lines(&flown, &flown.rows[0]).is_empty());
+        assert!(
+            drawn(&screen).contains(&DrawCommand::StretchedPicture {
+                image: ImageKey::picture(5000),
+                top_left: item(&screen, PICTURE_ITEM).min,
+                width: 200.0,
+                height: 200.0,
+            }),
+            "the picture is still drawn"
         );
         press(&mut screen, Key::Right);
+        assert!(!info_box(&screen).is_empty(), "the Heavy Shuttle's lines");
+        press(&mut screen, Key::Left);
+        assert!(info_box(&screen).is_empty(), "none again for the Shuttle");
+    }
+
+    /// The shipyard's screen with the Heavy Shuttle (not flown) selected.
+    fn heavy_selected(shipyard: Shipyard) -> ShipyardScreen {
+        let mut screen = screen_of(shipyard);
+        press(&mut screen, Key::Right);
+        screen
+    }
+
+    #[test]
+    fn the_info_box_shows_the_price_the_trade_in_the_final_price_and_the_cash() {
+        let screen = heavy_selected(shipyard());
         assert_eq!(
             info_box(&screen),
-            ["Ship Price: 17500", "Trade-In: 2500", "Final Price: 15000"]
+            [
+                "Ship Price:",
+                "17,500 cr",
+                "Trade-In:",
+                "2,500 cr",
+                "Final Price:",
+                "15,000 cr",
+                "You Have:",
+                "25,000 cr"
+            ]
         );
-        let paid = Shipyard {
-            trade_in: 40_000,
-            ..shipyard()
-        };
-        assert_eq!(info_box(&screen_of(paid))[2], "Final Price: -30000");
-        // A line apart, from the box's top left.
+        // Each label at the box's left, its amount 70 right of it, on
+        // baselines 12, 24, 48 and 72 below its top.
         let info = item(&screen, INFO_BOX_ITEM);
-        let at = |n: f32| Point::new(info.min.x + INSET, info.min.y + 12.0 * n);
         let placed: Vec<_> = texts(&drawn(&screen))
             .into_iter()
-            .filter(|(text, _, _)| text.contains("Price:") || text.starts_with("Trade-In"))
+            .filter(|(_, at, _)| info.contains(*at))
             .map(|(_, origin, color)| (origin, color))
             .collect();
+        let at = |x: f32, baseline: f32| {
+            (
+                Point::new(info.min.x + x, info.min.y + baseline - TEXT_SIZE),
+                TEXT_COLOR,
+            )
+        };
         assert_eq!(
             placed,
             [
-                (at(0.0), TEXT_COLOR),
-                (at(1.0), TEXT_COLOR),
-                (at(2.0), TEXT_COLOR)
+                at(0.0, 12.0),
+                at(70.0, 12.0),
+                at(0.0, 24.0),
+                at(70.0, 24.0),
+                at(0.0, 48.0),
+                at(70.0, 48.0),
+                at(0.0, 72.0),
+                at(70.0, 72.0),
             ]
         );
+    }
+
+    /// The amount drawn after `label` in the info box.
+    fn amount_after(screen: &ShipyardScreen, label: &str) -> String {
+        let lines = info_box(screen);
+        let at = lines
+            .iter()
+            .position(|line| line == label)
+            .unwrap_or_else(|| panic!("{label}"));
+        lines[at + 1].clone()
+    }
+
+    #[test]
+    fn the_final_price_shown_is_at_least_0() {
+        let traded = |trade_in| {
+            heavy_selected(Shipyard {
+                trade_in,
+                ..shipyard()
+            })
+        };
+        let paid = traded(40_000);
+        assert_eq!(amount_after(&paid, FINAL_PRICE_LABEL), "0 cr");
+        assert_eq!(amount_after(&paid, TRADE_IN_LABEL), "40,000 cr");
+        assert_eq!(amount_after(&traded(17_500), FINAL_PRICE_LABEL), "0 cr");
+        assert_eq!(amount_after(&traded(17_499), FINAL_PRICE_LABEL), "1 cr");
+    }
+
+    #[test]
+    fn the_amounts_draw_as_draw_comma_number_does() {
+        let in_debt = heavy_selected(Shipyard {
+            cash: -25_000,
+            ..shipyard()
+        });
+        assert_eq!(amount_after(&in_debt, credits::YOU_HAVE), "-25000 cr");
+        let mut dear = Shipyard {
+            cash: 1_234_567,
+            ..shipyard()
+        };
+        dear.rows[1].price = 2_500_000;
+        let dear = heavy_selected(dear);
+        assert_eq!(amount_after(&dear, PRICE_LABEL), "2.50M cr");
+        assert_eq!(amount_after(&dear, credits::YOU_HAVE), "1.23M cr");
+        let broke = heavy_selected(Shipyard {
+            cash: 0,
+            ..shipyard()
+        });
+        assert_eq!(amount_after(&broke, credits::YOU_HAVE), "0 cr");
     }
 
     #[test]

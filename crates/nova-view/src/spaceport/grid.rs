@@ -121,7 +121,7 @@ pub fn draw_cell_picture(list: &mut DrawList, cell: Bounds, picture: Option<i16>
 }
 
 /// The top of a line of the screens' text whose baseline is `baseline`.
-fn baseline_top(baseline: f32) -> f32 {
+pub(crate) fn baseline_top(baseline: f32) -> f32 {
     baseline - TEXT_SIZE
 }
 
