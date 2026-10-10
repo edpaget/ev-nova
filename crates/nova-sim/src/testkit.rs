@@ -9,8 +9,8 @@ use crate::catalog::{
     DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord,
     LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, OutfitId,
     OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog, PlaceNames, ShipId, ShipRecord,
-    StarSystem, StartDate, StartError, StellarId, StellarLife, SystemId, SystemTraffic,
-    TrafficCatalog, WeaponId, WeaponRecord,
+    StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark, SystemId,
+    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -97,6 +97,8 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) place_names: PlaceNames,
     /// How many times the names were read.
     pub(crate) place_name_reads: RefCell<usize>,
+    /// What `stellar_marks` returns: none unless a test sets them.
+    pub(crate) marks: Vec<StellarMark>,
 }
 
 /// Stellar `id` of `Strength` 100 and `dead_time`, starting the game
@@ -490,6 +492,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         mission_texts: Vec::new(),
         place_names: PlaceNames::default(),
         place_name_reads: RefCell::default(),
+        marks: Vec::new(),
     }
 }
 
@@ -644,6 +647,10 @@ impl PilotCatalog for FakePilotCatalog {
     fn place_names(&self) -> PlaceNames {
         *self.place_name_reads.borrow_mut() += 1;
         self.place_names.clone()
+    }
+
+    fn stellar_marks(&self) -> Vec<StellarMark> {
+        self.marks.clone()
     }
 }
 

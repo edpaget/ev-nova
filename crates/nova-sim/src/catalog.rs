@@ -190,6 +190,20 @@ pub struct PlaceNames {
     pub systems: BTreeMap<SystemId, String>,
 }
 
+/// What the original compares of two stellars to count them as the same
+/// stop of a mission (`_StellarsAreIdentical` @0xab35-0xac90): a `spöb`'s
+/// place in its system and its name, as `_LoadObjectData` keeps them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StellarMark {
+    /// The `spöb`'s ID.
+    pub id: StellarId,
+    /// Its raw `xPos` and `yPos` (@0x7733b-0x7734d).
+    pub place: (i16, i16),
+    /// Its resource name up to its last ';', trailing spaces and ';'s
+    /// dropped (@0x772ab-0x7732a), empty when it has none.
+    pub name: String,
+}
+
 /// What a stellar's destruction and regeneration read from its `spöb`
 /// (see the [`story`](crate::story) module's "Galaxy overlay"): the
 /// story's wreck rules decide what the values mean.
@@ -1057,6 +1071,9 @@ pub trait PilotCatalog {
     fn listed_stellars(&self) -> Vec<ListedStellar>;
     /// Every stellar's and system's name that can be read.
     fn place_names(&self) -> PlaceNames;
+    /// Every `spöb` that can be read, by ascending ID, with the place and
+    /// name a mission's stop is matched by.
+    fn stellar_marks(&self) -> Vec<StellarMark>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -1139,6 +1156,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn place_names(&self) -> PlaceNames {
         (**self).place_names()
+    }
+
+    fn stellar_marks(&self) -> Vec<StellarMark> {
+        (**self).stellar_marks()
     }
 }
 
@@ -1223,6 +1244,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn place_names(&self) -> PlaceNames {
         (**self).place_names()
+    }
+
+    fn stellar_marks(&self) -> Vec<StellarMark> {
+        (**self).stellar_marks()
     }
 }
 
@@ -1449,6 +1474,15 @@ mod tests {
                 systems: BTreeMap::from([(SystemId(130), "Sol".to_owned())]),
             }
         }
+
+        /// Stellar 128 Earth at 30,-40.
+        fn stellar_marks(&self) -> Vec<StellarMark> {
+            vec![StellarMark {
+                id: StellarId(128),
+                place: (30, -40),
+                name: "Earth".to_owned(),
+            }]
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1480,6 +1514,7 @@ mod tests {
             format!("{:?}", catalog.mission_texts()),
             format!("{:?}", catalog.listed_stellars()),
             format!("{:?}", catalog.place_names()),
+            format!("{:?}", catalog.stellar_marks()),
         ]
     }
 
@@ -1522,6 +1557,7 @@ mod tests {
         );
         assert!(direct[23].contains("\"Earth\""), "{direct:?}");
         assert!(direct[23].contains("\"Sol\""), "{direct:?}");
+        assert!(direct[24].contains("place: (30, -40)"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

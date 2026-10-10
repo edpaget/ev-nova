@@ -33,8 +33,8 @@ use crate::catalog::{
     GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord,
     MissionShip, MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord,
     PersonWeapon, PilotCatalog, PlaceNames, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic,
-    TrafficCatalog, WeaponId, WeaponRecord,
+    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
+    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -401,6 +401,26 @@ impl PilotCatalog for GameData {
                 })
                 .collect(),
         }
+    }
+
+    /// Each `spöb`'s `xPos`/`yPos` (@0x7733b-0x7734d) and its name as
+    /// `_LoadObjectData` keeps it (@0x772ab-0x7732a): up to its last ';',
+    /// trailing spaces and ';'s dropped, empty when it has none.
+    fn stellar_marks(&self) -> Vec<StellarMark> {
+        self.records::<Stellar>()
+            .filter_map(|(id, stellar)| {
+                let stellar = stellar.ok()?;
+                Some(StellarMark {
+                    id: StellarId(id),
+                    place: (stellar.record.x_pos, stellar.record.y_pos),
+                    name: stellar
+                        .name
+                        .map(shown_resource_name)
+                        .unwrap_or_default()
+                        .to_owned(),
+                })
+            })
+            .collect()
     }
 
     /// Each text from its `dësc`, none for -1 or one that cannot be read;
@@ -1748,6 +1768,42 @@ mod tests {
             "undecodable 131 left out"
         );
         assert_eq!(store(&[]).place_names(), PlaceNames::default());
+    }
+
+    #[test]
+    fn stellar_marks_read_each_spobs_place_and_name_up_to_its_last_semicolon() {
+        let data = store_named(&[
+            (
+                Stellar::TYPE,
+                128,
+                Some("Tre'ar Zalom; variant ; "),
+                stellar(-300, 450, 0, 1, 0),
+            ),
+            (Stellar::TYPE, 129, None, stellar(7, -9, 0, 1, 0)),
+            (
+                Stellar::TYPE,
+                130,
+                Some("Broken"),
+                short(stellar(0, 0, 0, 1, 0)),
+            ),
+        ]);
+        assert_eq!(
+            data.stellar_marks(),
+            [
+                StellarMark {
+                    id: StellarId(128),
+                    place: (-300, 450),
+                    name: "Tre'ar Zalom; variant".to_owned(),
+                },
+                StellarMark {
+                    id: StellarId(129),
+                    place: (7, -9),
+                    name: String::new(),
+                },
+            ],
+            "up to the last ';', trailing spaces and ';'s dropped; unnamed, empty; \
+             undecodable 130 left out"
+        );
     }
 
     #[test]

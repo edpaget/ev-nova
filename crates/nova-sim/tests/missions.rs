@@ -216,6 +216,10 @@ impl PilotCatalog for Courier {
     fn place_names(&self) -> nova_sim::catalog::PlaceNames {
         nova_sim::catalog::PlaceNames::default()
     }
+
+    fn stellar_marks(&self) -> Vec<nova_sim::catalog::StellarMark> {
+        Vec::new()
+    }
 }
 
 /// No traffic anywhere.

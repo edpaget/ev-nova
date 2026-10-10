@@ -358,6 +358,7 @@
 
 pub mod active;
 pub mod cargo;
+pub mod identity;
 pub mod offer;
 pub mod screens;
 pub mod select;
@@ -379,6 +380,7 @@ pub use self::cargo::{
     JettisonMessage, Jettisoned, PickupFacts, PickupRefusal, Room, ScanOutcome, drops_off,
     jettison, picks_up_at_destination, pickup_checks, scan,
 };
+pub use self::identity::StellarMarks;
 pub use self::offer::{Offer, Offers, ROLLED, RollTable, Stop, resolve};
 pub use self::screens::{
     OfferLabels, OfferPrompt, VenueOffer, display_order, offer_gap, offer_labels,
