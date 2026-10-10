@@ -1526,11 +1526,16 @@ impl AppScreen {
             // A plain click's count of 1 is exactly one order. A sale
             // refused in the sell loop shows its words over the
             // outfitter, at whatever pass it is refused; the sales before
-            // it stand. Any other refusal changes nothing.
-            if let Some((order, count)) = outfit
-                && let Some(alert) = flight.outfit_order(order, count).alert
-            {
-                spaceport.alert_outfit(&alert);
+            // it stand. Any other refusal changes nothing. Then the
+            // outfitter follows what the order left its selection at: an
+            // order that changed the listing resets it, or closes the
+            // outfitter when nothing is listed.
+            if let Some((order, count)) = outfit {
+                let run = flight.outfit_order(order, count);
+                if let Some(alert) = &run.alert {
+                    spaceport.alert_outfit(alert);
+                }
+                spaceport.outfit_ordered(run.after);
             }
             if let Some(order) = ship {
                 let _ = flight.buy_ship(order.ship, &order.name);
@@ -2176,9 +2181,44 @@ pub(super) mod tests {
 
     /// The game data of `fork`'s resources.
     fn loaded(fork: &ForkBuilder) -> Rc<GameData> {
-        let file = OneFile(fork.build().bytes);
+        loaded_bytes(fork.build().bytes)
+    }
+
+    /// The game data of a built fork's `bytes`.
+    fn loaded_bytes(bytes: Vec<u8>) -> Rc<GameData> {
+        let file = OneFile(bytes);
         let data = GameData::load(&file, &file, Path::new("/data"), None).expect("opens");
         Rc::new(data)
+    }
+
+    /// [`outfitting_data`], where the outfitter also sells a license
+    /// (`oütf` 130, 100 credits, contributing bit 0x2) and `oütf` 131,
+    /// hidden until bit 0x2 is contributed (`Flags` 0x0100, `Require`
+    /// 0x2).
+    fn licensing_data() -> Rc<GameData> {
+        let mut license = booster_record(b"");
+        license[0x0E..0x12].copy_from_slice(&100_i32.to_be_bytes());
+        license[0x1E..0x26].copy_from_slice(&2_u64.to_be_bytes());
+        let mut licensed = booster_record(b"");
+        licensed[0x0C..0x0E].copy_from_slice(&0x0100_u16.to_be_bytes());
+        licensed[0x26..0x2E].copy_from_slice(&2_u64.to_be_bytes());
+        loaded(
+            &game_data_fork(true, true, false, 100, b"", b"", None)
+                .resource(Outfit::TYPE, 130, Some(b"License"), &license)
+                .resource(Outfit::TYPE, 131, Some(b"Licensed"), &licensed),
+        )
+    }
+
+    /// [`outfitting_data`], where the booster, the outfitter's only row,
+    /// hides itself once bought: flagged 0x0010 (taken away after
+    /// purchase) and 0x4000 (hidden unless available), its `Availability`
+    /// `!b7` and its `OnPurchase` `b7`.
+    fn self_hiding_data() -> Rc<GameData> {
+        let mut built = game_data_fork(true, true, false, 100, b"", b"b7", None).build();
+        let booster = built.layout.data_entry(Outfit::TYPE, 128) + 4;
+        built.put_u16(booster + 0x0C, 0x4010);
+        built.bytes[booster + 0x2E..booster + 0x31].copy_from_slice(b"!b7");
+        loaded_bytes(built.bytes)
     }
 
     /// The `shän` every fixture ship shares: one 1 x 1 frame of `rlë8`
@@ -4745,6 +4785,46 @@ pub(super) mod tests {
         );
         assert_eq!(screen.showing(), Showing::Spaceport);
         assert_eq!(drawn(&screen), drawn(spaceport(&screen)));
+    }
+
+    const LICENSE: OutfitId = OutfitId(130);
+    const LICENSED: OutfitId = OutfitId(131);
+
+    #[test]
+    fn an_outfit_purchase_that_relists_resets_the_outfitters_selection() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, licensing_data());
+        click_port_item(&mut screen, 8);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.outfitter().row(LICENSED), None, "hidden");
+        screen.input(&key(Key::Right, true));
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.selected_outfit(), Some(LICENSE));
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).owned(LICENSE), 1);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert!(open.outfitter().row(LICENSED).is_some(), "relisted");
+        assert_eq!(open.selected(), None);
+        assert_eq!(open.selected_outfit(), Some(BOOSTER));
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1, "Buy answers for 128");
+        assert_eq!(pilot(&screen).owned(LICENSE), 1);
+        assert_eq!(pilot(&screen).cash(), 400);
+    }
+
+    #[test]
+    fn an_outfit_purchase_that_leaves_nothing_listed_closes_the_outfitter() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, self_hiding_data());
+        click_port_item(&mut screen, 8);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.outfitter().rows.len(), 1);
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).cash(), 500, "bought");
+        assert_eq!(pilot(&screen).owned(BOOSTER), 0, "taken away");
+        assert!(spaceport(&screen).open_outfitter().is_none(), "closed");
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert!(!spaceport(&screen).left());
     }
 
     #[test]
