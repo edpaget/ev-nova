@@ -97,6 +97,11 @@
 //! there is no box. Without an item 8 (`DLOG` 1005 over `PICT` 8507,
 //! where the original's rect is undefined), neither is drawn.
 //!
+//! In both variants the title is drawn in font 20, Times ([`TITLE_FONT`],
+//! which the renderer draws in the bundled Noto Serif), at size 18, in
+//! white, centred by `_DrawCenteredText` across item 3 on baseline item
+//! 3's top + 18 (`_ShipDescDialogUpdate` @0x4f9f7-0x4faa3).
+//!
 //! Done, Return and Escape close the shipyard. Without its dialog, the
 //! screen says why, and Return or Escape still closes it.
 
@@ -109,7 +114,8 @@ use nova_sim::{Rating, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard, StockLi
 use super::catalog::SpaceportCatalog;
 use super::credits::{self, credits_text, draw_amount_rows, tons_text};
 use super::grid::{
-    self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE, text,
+    self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE,
+    TextStyle, text,
 };
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
@@ -170,6 +176,14 @@ pub const PANEL_DONE_ITEM: usize = 1;
 pub const PANEL_TITLE_ITEM: usize = 3;
 /// The info panel's text.
 pub const PANEL_TEXT_ITEM: usize = 5;
+/// The info panel title's font: QuickDraw font 20, Times
+/// (`_ShipDescDialogUpdate` `TextFont(0x14)` @0x4f9f7).
+pub const TITLE_FONT: Font = Font::Times;
+/// The info panel title's size (`TextSize(0x12)` @0x4fa0a).
+pub const TITLE_SIZE: f32 = 18.0;
+/// The info panel title's baseline below item 3's top (+0x12,
+/// @0x4fa0f-0x4faa3).
+pub const TITLE_BASELINE: f32 = 18.0;
 /// The picture info panel's graphic (`_ShipDescDialogUpdate`
 /// @0x50fd0-0x51043).
 pub const PANEL_GRAPHIC_ITEM: usize = 7;
@@ -741,9 +755,19 @@ impl Panel {
             list.picture(self.variant.background(), bounds.min);
         }
         if let Some(title) = self.dialog.item_bounds(PANEL_TITLE_ITEM) {
-            let width = metrics.width(Font::Charcoal, 12.0, &self.title);
-            let origin = Point::new(title.center().x - width / 2.0, title.min.y + INSET);
-            list.text_in(Font::Charcoal, &self.title, origin, 12.0, None, TEXT_COLOR);
+            let style = TextStyle {
+                font: TITLE_FONT,
+                size: TITLE_SIZE,
+                color: TEXT_COLOR,
+            };
+            grid::draw_centred_text_in(
+                list,
+                metrics,
+                style,
+                title,
+                title.min.y + TITLE_BASELINE,
+                &self.title,
+            );
         }
         self.dialog.draw(list);
         // The original clips to item 5 (`ClipRect` @0x4fb39); with no
@@ -1718,6 +1742,10 @@ mod tests {
         assert_eq!(INFO_BACKGROUND, ImageKey::picture(8506));
         assert_eq!(PICTURE_INFO_BACKGROUND, ImageKey::picture(8507));
         assert_eq!((PANEL_GRAPHIC_ITEM, LAST_UNSHOWN_GRAPHIC), (7, 127));
+        assert_eq!(
+            (TITLE_FONT, TITLE_SIZE, TITLE_BASELINE),
+            (Font::Times, 18.0, 18.0)
+        );
         assert_eq!(
             (
                 PANEL_WEAPONS_ITEM,
@@ -2989,13 +3017,13 @@ mod tests {
             unreachable!()
         };
         let area = panel_item(&screen, PANEL_TITLE_ITEM);
-        let width = MonoMetrics.width(Font::Charcoal, 12.0, "Ship 129");
+        let width = MonoMetrics.width(Font::Times, 18.0, "Ship 129");
         assert_eq!(
             *origin,
-            Point::new(area.center().x - width / 2.0, area.min.y + INSET),
-            "centred across the title"
+            Point::new(area.center().x.floor() - width / 2.0, area.min.y),
+            "centred across the title, on baseline 18"
         );
-        assert_eq!((*font, *size), (Font::Charcoal, 12.0));
+        assert_eq!((*font, *size), (Font::Times, 18.0));
         // Its Done closes it alone.
         let done = panel_item(&screen, PANEL_DONE_ITEM).center();
         click(&mut screen, done);
@@ -3426,6 +3454,49 @@ mod tests {
             "{words:?}"
         );
         assert!(words.contains(&"Speed:".to_owned()), "{words:?}");
+    }
+
+    /// The panel's title, as drawn: its words, font, size, origin and
+    /// colour.
+    fn title_of(screen: &ShipyardScreen, words: &str) -> (Font, f32, Point, Color) {
+        drawn(screen)
+            .into_iter()
+            .find_map(|c| match c {
+                DrawCommand::Text {
+                    text,
+                    font,
+                    size,
+                    origin,
+                    color,
+                    ..
+                } if text == words => Some((font, size, origin, color)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no title {words:?}"))
+    }
+
+    #[test]
+    fn the_panel_title_is_times_18_centred_on_baseline_18() {
+        for (art, title) in [
+            (art(), "Ship 129"),
+            (art_with(vec![(13_001, 5002)]), "The Long 129"),
+        ] {
+            let mut screen = long_named(&art);
+            press(&mut screen, INFO_KEY);
+            let area = panel_item(&screen, PANEL_TITLE_ITEM);
+            let middle = f32::midpoint(area.min.x, area.max.x).floor();
+            let width = MonoMetrics.width(Font::Times, 18.0, title);
+            assert_eq!(
+                title_of(&screen, title),
+                (
+                    Font::Times,
+                    18.0,
+                    Point::new(middle - width / 2.0, area.min.y + 18.0 - 18.0),
+                    Color::WHITE
+                ),
+                "{title}"
+            );
+        }
     }
 
     #[test]

@@ -495,6 +495,7 @@ mod tests {
 
     use super::*;
     use crate::draw::{DrawCommand, fill_rect};
+    use crate::font::Font;
     use crate::image::ImageKey;
     use crate::input::MouseButton;
     use crate::spaceport::catalog::{PortRecord, SpaceportCatalog, StellarId};
@@ -1233,6 +1234,43 @@ mod tests {
         assert!(
             !drawn.iter().any(|(_, at, _)| *at == item_5s_heading),
             "{drawn:?}"
+        );
+    }
+
+    #[test]
+    fn the_hire_panel_title_is_times_18() {
+        let art = art_with(vec![(14_000, 5000)]);
+        let mut screen = screen_of(&art, long_named());
+        screen.input(&key(INFO_KEY, false));
+        let area = screen
+            .info_panel()
+            .expect("open")
+            .item_bounds(3)
+            .expect("item 3");
+        let middle = f32::midpoint(area.min.x, area.max.x).floor();
+        let width = MonoMetrics.width(Font::Times, 18.0, "The Long 128");
+        let title = drawn(&screen)
+            .into_iter()
+            .find_map(|c| match c {
+                DrawCommand::Text {
+                    text,
+                    font,
+                    size,
+                    origin,
+                    color,
+                    ..
+                } if text == "The Long 128" => Some((font, size, origin, color)),
+                _ => None,
+            })
+            .expect("the title");
+        assert_eq!(
+            title,
+            (
+                Font::Times,
+                18.0,
+                Point::new(middle - width / 2.0, area.min.y),
+                Color::WHITE
+            )
         );
     }
 

@@ -131,6 +131,24 @@ pub(crate) fn baseline_top(baseline: f32) -> f32 {
     baseline - TEXT_SIZE
 }
 
+/// How a run of text is set: its font, size and colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextStyle {
+    /// The font.
+    pub font: Font,
+    /// The size.
+    pub size: f32,
+    /// The colour.
+    pub color: Color,
+}
+
+/// The screens' text: [`TEXT_FONT`] at [`TEXT_SIZE`] in [`TEXT_COLOR`].
+pub const SCREEN_TEXT: TextStyle = TextStyle {
+    font: TEXT_FONT,
+    size: TEXT_SIZE,
+    color: TEXT_COLOR,
+};
+
 /// `words` in white, centred across `area` on `baseline`, as
 /// `_DrawCenteredText` (@0x263d) draws it: from the floor of the middle of
 /// `area`'s sides, less half the text's width.
@@ -141,13 +159,30 @@ pub fn draw_centred_text(
     baseline: f32,
     words: &str,
 ) {
+    draw_centred_text_in(list, metrics, SCREEN_TEXT, area, baseline, words);
+}
+
+/// `words` set in `style`, centred across `area` on `baseline`, as
+/// `_DrawCenteredText` (@0x263d) draws it: from the floor of the middle of
+/// `area`'s sides, less half the text's width, its top the size above
+/// the baseline.
+pub fn draw_centred_text_in(
+    list: &mut DrawList,
+    metrics: &dyn TextMetrics,
+    style: TextStyle,
+    area: Bounds,
+    baseline: f32,
+    words: &str,
+) {
     let middle = f32::midpoint(area.min.x, area.max.x).floor();
-    let x = middle - metrics.width(TEXT_FONT, TEXT_SIZE, words) / 2.0;
-    text(
-        list,
+    let x = middle - metrics.width(style.font, style.size, words) / 2.0;
+    list.text_in(
+        style.font,
         words,
-        Point::new(x, baseline_top(baseline)),
-        TEXT_COLOR,
+        Point::new(x, baseline - style.size),
+        style.size,
+        None,
+        style.color,
     );
 }
 
@@ -409,6 +444,59 @@ mod tests {
 
     fn commands(list: &DrawList) -> Vec<DrawCommand> {
         list.iter().cloned().collect()
+    }
+
+    #[test]
+    fn centred_text_takes_its_font_size_and_colour() {
+        let mut list = DrawList::new();
+        let style = TextStyle {
+            font: Font::Times,
+            size: 18.0,
+            color: Color::WHITE,
+        };
+        let area = rect(7.0, 0.0, 600.0, 24.0);
+        draw_centred_text_in(&mut list, &MonoMetrics, style, area, 18.0, "Kestrel");
+        let width = MonoMetrics.width(Font::Times, 18.0, "Kestrel");
+        assert_eq!(
+            commands(&list),
+            [DrawCommand::Text {
+                text: "Kestrel".to_owned(),
+                font: Font::Times,
+                origin: Point::new(307.0 - width / 2.0, 0.0),
+                size: 18.0,
+                wrap_width: None,
+                color: Color::WHITE,
+            }]
+        );
+        // The middle is floored: 7..608 is 307.5, drawn from 307.
+        let mut odd = DrawList::new();
+        let grey = TextStyle {
+            color: Color::DIM,
+            ..style
+        };
+        draw_centred_text_in(
+            &mut odd,
+            &MonoMetrics,
+            grey,
+            rect(7.0, 10.0, 601.0, 24.0),
+            40.0,
+            "Kestrel",
+        );
+        let [DrawCommand::Text { origin, color, .. }] = &commands(&odd)[..] else {
+            panic!("one text: {:?}", commands(&odd));
+        };
+        assert_eq!(
+            (*origin, *color),
+            (Point::new(307.0 - width / 2.0, 22.0), Color::DIM)
+        );
+        assert_eq!(
+            SCREEN_TEXT,
+            TextStyle {
+                font: TEXT_FONT,
+                size: TEXT_SIZE,
+                color: TEXT_COLOR
+            }
+        );
     }
 
     fn texts(list: &DrawList) -> Vec<(String, Point, Color)> {
