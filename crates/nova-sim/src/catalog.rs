@@ -303,7 +303,8 @@ pub struct ShipRecord {
     /// The government it fights as, from its `InherentGovt`: a `gövt` ID,
     /// or one + 2000 ("combat only"); none for -1 or + 1000 ("attributes
     /// only"). A mission's `AvailShipType` 2128-3384 reads it beside
-    /// [`inherent_govt`](Self::inherent_govt).
+    /// [`inherent_govt`](Self::inherent_govt) (see
+    /// [`mission`](crate::mission)).
     pub combat_govt: Option<GovtId>,
     /// Its `EscortType`, raw: the class it has as the player's escort
     /// (see [`EscortClass::of`](crate::escort::EscortClass::of)).
@@ -542,7 +543,7 @@ pub struct MissionShip {
 }
 
 /// A mission, raw from its `mïsn`: the fields its offer reads. The
-/// mission rules decide what the values mean.
+/// [`mission`](crate::mission) rules decide what the values mean.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MissionRecord {
     /// The `mïsn`'s ID.

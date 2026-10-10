@@ -122,6 +122,13 @@
 //! - [`message`]: the [`SimMessage`] events a session raises for the
 //!   message line, such as arriving from a jump or through a gate; the
 //!   view words them.
+//! - [`mission`]: mission offers: which missions a docked stellar offers
+//!   at its mission computer and outside it ([`mission::availability`],
+//!   each field a plain [`Check`](rules::Check) refusing with a
+//!   [`mission::Refusal`]), the stellars a mission's codes choose
+//!   ([`mission::select_stellar`]), each [`mission::Offer`]'s resolved
+//!   values ([`mission::resolve`]), and the per-visit [`mission::Offers`]
+//!   with the roll table `AvailRandom` reads.
 //! - [`navigation`]: how the player selects the stellar navigation
 //!   target: by its `NavDef` slot, the nearest, or a click
 //!   ([`stellar_under`]), as the original does.
@@ -233,6 +240,7 @@ pub mod landing;
 pub mod legal;
 pub mod market;
 pub mod message;
+pub mod mission;
 pub mod navigation;
 pub mod outfit_effects;
 pub mod outfitter;

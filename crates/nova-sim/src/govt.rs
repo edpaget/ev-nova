@@ -27,7 +27,7 @@
 //!   is the same: slot by slot, not any class against any, as the
 //!   original compares them (@0x6e9d-0x6eb4). Being derelict does not
 //!   count, and nor does a class below 0. A mission's `AvailStel` and its
-//!   random destinations read it.
+//!   random destinations read it (see [`mission`](crate::mission)).
 //! - A government the table does not hold has no classes and no flags.
 //! - `MaxOdds` ([`Governments::max_odds`]) is a fraction, `MaxOdds / 100`,
 //!   no less than [`MIN_ODDS`] (`_LoadObjectData` @0x7bbb3); an
