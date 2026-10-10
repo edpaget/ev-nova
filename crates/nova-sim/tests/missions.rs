@@ -197,6 +197,10 @@ impl PilotCatalog for Courier {
             })
             .collect()
     }
+
+    fn place_names(&self) -> nova_sim::catalog::PlaceNames {
+        nova_sim::catalog::PlaceNames::default()
+    }
 }
 
 /// No traffic anywhere.

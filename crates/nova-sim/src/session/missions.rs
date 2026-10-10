@@ -32,9 +32,20 @@
 //! slot's hooks when a mission succeeded. [`Session::fly`] registers
 //! every active slot's hooks again, so a saved pilot's missions go on.
 //! Each end frees its slot and unregisters its hooks.
+//!
+//! **Text.** A mission's texts are filled through the one substitution
+//! path ([`text_tags`](crate::text_tags)): [`Session::offer_text`] for an
+//! offer on the visit under way, [`Session::mission_text`] for a slot,
+//! and [`Session::plain_text`] with no mission. Their names are the
+//! stellars' and systems' the session read as it started
+//! ([`PilotCatalog::place_names`](crate::PilotCatalog::place_names)), and
+//! the cargo names `STR#` 4001 of its string lists
+//! ([`Session::with_strings`]). Each mission script runs with its slot as
+//! the script's mission, so a `Q` in it fills its mission tags (see the
+//! `script_effects` module).
 
 use super::Session;
-use crate::catalog::{GovtId, MissionId, MissionRecord, MissionShip, StellarId};
+use crate::catalog::{GovtId, MissionId, MissionRecord, MissionShip, StellarId, SystemId};
 use crate::chance::Chance;
 use crate::control::{Script, Test};
 use crate::mission::active::{AUTO_ABORT_FUEL, AUTO_ABORT_FUEL_TAKEN, AUTO_ABORT_PAYS};
@@ -49,6 +60,7 @@ use crate::rules::Verdict;
 use crate::story::{
     Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
+use crate::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames};
 use crate::wares;
 
 /// The offer roll's subscription: the missions' first, before every
@@ -86,6 +98,10 @@ pub const DEADLINE_TOOK_OFF: u8 = 4;
 
 /// Every hook a slot can register, in order.
 const HOOKS: [u8; 5] = [ARRIVAL, FAILURE, SUCCESS, DEADLINE, DEADLINE_TOOK_OFF];
+
+/// The cargo names `<CT>` reads, lower case (`_lcCargoName`, from
+/// `_LoadStrings` @0x71ba4).
+const CARGO_NAMES: i16 = 4001;
 
 /// Slot `slot`'s subscription for `hook`.
 #[must_use]
@@ -311,7 +327,8 @@ impl Session {
     ) -> Result<(), NotOffered> {
         self.offer_of(mission).ok_or(NotOffered)?;
         let record = self.lifecycle_record(mission);
-        // `RefuseText`: missions phase 3.
+        // `RefuseText`, with no mission (index -1, @0xa2ec9): missions
+        // phase 4, through `Session::plain_text`.
         self.run_script(&record.on_refuse, chance);
         self.offers.drop_offer(mission);
         Ok(())
@@ -365,9 +382,10 @@ impl Session {
         let slot = self.pilot.missions.fill(active)?;
         self.register_slot(slot);
         self.save_due = true;
-        // `BriefText`, the cargo loaded and `LoadCargText`: missions phases
-        // 3 to 5.
-        self.run_script(&record.on_accept, chance);
+        // `BriefText` and `LoadCargText`, filled for the slot (@0xa1e56,
+        // @0xa1f80): missions phase 4, through `Session::mission_text`;
+        // the cargo loaded: missions phase 5.
+        self.run_mission_script(slot, &record.on_accept, chance);
         self.pilot.cash = accept_charge(offer.pay, self.pilot.cash);
         let docked = self.landed;
         if let Some(active) = self.slot_holding(slot, record.id) {
@@ -390,6 +408,18 @@ impl Session {
         }
         self.offers.set_roll(record.id, 0);
         Some(slot)
+    }
+
+    /// Runs `script`, the script of the mission in `slot`, drawing on
+    /// `chance`, as `_EvalCurrentMissionBitSetString` (@0x99a43) runs
+    /// one: with `slot` the script's mission
+    /// (`_currentMissionIndexForSetParser`, 0x31d6c2), so a `Q` fills its
+    /// mission tags from it, then none, not the one before (@0x99a79), so
+    /// after a nested mission's script the outer script has none.
+    fn run_mission_script(&mut self, slot: u8, script: &Script, chance: &mut dyn Chance) {
+        self.script_slot = Some(slot);
+        self.run_script(script, chance);
+        self.script_slot = None;
     }
 
     /// The mission in `slot`, to change, if it is `mission`.
@@ -429,7 +459,7 @@ impl Session {
             return;
         }
         if on_abort {
-            self.run_script(&record.on_abort, chance);
+            self.run_mission_script(slot, &record.on_abort, chance);
         }
         self.ending.remove(&slot);
         self.close_slot(slot, record.id);
@@ -457,7 +487,7 @@ impl Session {
         if !self.ending.insert(slot) {
             return;
         }
-        self.run_script(&record.on_abort, chance);
+        self.run_mission_script(slot, &record.on_abort, chance);
         self.pass_days(post_days(record.date_post_inc), chance);
         if record.flags & AUTO_ABORT_FUEL != 0 {
             self.pilot.reserves.fuel.now -= AUTO_ABORT_FUEL_TAKEN;
@@ -560,11 +590,13 @@ impl Session {
         let record = self.lifecycle_record(active.mission);
         let repeats = self.rules.source_for(RuleKey::RepeatMissionFailure) == RuleSource::Engine;
         if failed == FailedBy::Operator || repeats {
-            self.run_script(&record.on_failure, chance);
+            self.run_mission_script(slot, &record.on_failure, chance);
         }
         let changes = failure_records(&record, |govt| self.pilot.legal_record(govt));
         self.set_records(&changes);
-        // `FailText`: missions phase 3.
+        // `FailText`: missions phase 4, through `Session::mission_text`.
+        // The original fills it after the slot is freed (@0xa0398), so its
+        // mission tags read "[Error]".
         self.end_mission(slot, &record, false, chance);
         self.forget_offers();
     }
@@ -596,11 +628,13 @@ impl Session {
         }
         let mission = active.mission;
         let record = self.lifecycle_record(mission);
+        // `CompText`: missions phase 4, through `Session::mission_text`,
+        // here, before the slot is freed, as the original fills it
+        // (@0xa0457).
         let Some(done) = self.free_slot(slot) else {
             return;
         };
-        // `CompText`: missions phase 3.
-        self.run_script(&record.on_success, chance);
+        self.run_mission_script(slot, &record.on_success, chance);
         self.pass_days(post_days(record.date_post_inc), chance);
         let changes = success_records(&record, &self.govts, |govt| self.pilot.legal_record(govt));
         self.set_records(&changes);
@@ -625,8 +659,8 @@ impl Session {
         }
         let record = self.lifecycle_record(active.mission);
         // The comm message, `STR#` 2002 0x11d unless `Flags` has 0x0400:
-        // missions phase 3.
-        self.run_script(&record.on_failure, chance);
+        // missions phase 4.
+        self.run_mission_script(slot, &record.on_failure, chance);
         if let Some(active) = self.slot_holding(slot, record.id) {
             active.failed = Some(FailedBy::Deadline);
         }
@@ -837,6 +871,78 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn offer_rolls(&self) -> &mission::RollTable {
         self.offers.table()
+    }
+
+    /// What `text`'s tags read for `mission`, or no mission: the pilot,
+    /// its ship, no person, and the session's cash, date and rules.
+    fn tag_context(&self, mission: Option<MissionValues>) -> TagContext<'_> {
+        TagContext {
+            pilot: &self.pilot.name,
+            ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
+            ship_name: self.pilot.ship_name().unwrap_or_default(),
+            person: None,
+            mission: mission.map(|values| MissionTags {
+                values,
+                cash: self.pilot.cash,
+                today: self.pilot.date,
+                date_affixes: &self.date_affixes,
+                pay_millions: self.rules.source_for(RuleKey::PayMillions),
+            }),
+        }
+    }
+
+    /// `text` with its tags filled for `mission`'s offer on the visit
+    /// under way (`_MungeBriefing` with `offer` set; see
+    /// [`text_tags`](crate::text_tags)): none when it is not offered, or
+    /// in flight.
+    #[must_use]
+    pub fn offer_text(&self, mission: MissionId, text: &str) -> Option<String> {
+        let offer = self.offer_of(mission)?;
+        let context = self.tag_context(Some(MissionValues::offered(&offer)));
+        Some(text_tags::expand(text, &context, self))
+    }
+
+    /// `text` with its tags filled for the mission in `slot`
+    /// (`_MungeBriefing` with a slot; see [`text_tags`](crate::text_tags)):
+    /// a free slot's mission tags read [`UNSET`](text_tags::UNSET).
+    #[must_use]
+    pub fn mission_text(&self, slot: u8, text: &str) -> String {
+        let values = self
+            .pilot
+            .missions
+            .get(slot)
+            .map(MissionValues::active)
+            .unwrap_or_default();
+        text_tags::expand(text, &self.tag_context(Some(values)), self)
+    }
+
+    /// `text` with its tags filled with no mission, as the original's
+    /// `RefuseText`, comm dialog and hail quotes are (`_MungeBriefing`
+    /// with index -1; see [`text_tags`](crate::text_tags)): the mission
+    /// tags are left as written.
+    #[must_use]
+    pub fn plain_text(&self, text: &str) -> String {
+        text_tags::expand(text, &self.tag_context(None), self)
+    }
+}
+
+/// The names the session read as it started, and the cargo names its
+/// string lists hold (`STR#` 4001).
+impl TagNames for Session {
+    fn stellar_name(&self, stellar: StellarId) -> Option<String> {
+        self.place_names.stellars.get(&stellar).cloned()
+    }
+
+    fn system_name(&self, system: SystemId) -> Option<String> {
+        self.place_names.systems.get(&system).cloned()
+    }
+
+    fn cargo_name(&self, cargo: u8) -> Option<String> {
+        self.strings
+            .0
+            .string_list(CARGO_NAMES)
+            .into_iter()
+            .nth(usize::from(cargo))
     }
 }
 
@@ -2527,5 +2633,360 @@ mod tests {
         );
         assert!(REOFFER > slot_hook(15, DEADLINE_TOOK_OFF));
         assert!(ROLL < slot_hook(0, ARRIVAL));
+    }
+
+    // The text tags.
+
+    use crate::catalog::{CommCatalog, PlaceNames};
+    use crate::text_tags::UNSET;
+
+    /// `STR#` 4001, the cargo names, and 25048, one message naming the
+    /// pilot and the destination.
+    #[derive(Debug)]
+    struct Told;
+
+    impl CommCatalog for Told {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            let strings: &[&str] = match id {
+                4001 => &["food", "*passengers", "industrial"],
+                25048 => &["<PN>: off to <DST>."],
+                _ => &[],
+            };
+            strings.iter().map(|&string| string.to_owned()).collect()
+        }
+    }
+
+    /// Stellars 128 Earth, 129 Luna, 140 Mars and 150 Vega Prime;
+    /// systems 130 Sol, 131 Alpha and 132 Vega.
+    fn place_names() -> PlaceNames {
+        let names = |pairs: &[(i16, &str)]| {
+            pairs
+                .iter()
+                .map(|&(id, name)| (id, name.to_owned()))
+                .collect::<Vec<_>>()
+        };
+        PlaceNames {
+            stellars: names(&[
+                (128, "Earth"),
+                (129, "Luna"),
+                (140, "Mars"),
+                (150, "Vega Prime"),
+            ])
+            .into_iter()
+            .map(|(id, name)| (StellarId(id), name))
+            .collect(),
+            systems: names(&[(130, "Sol"), (131, "Alpha"), (132, "Vega")])
+                .into_iter()
+                .map(|(id, name)| (SystemId(id), name))
+                .collect(),
+        }
+    }
+
+    /// Stock's session of `catalog`, told [`Told`]'s strings, landed on
+    /// 128 and settled, every roll the first.
+    fn stocks(catalog: &FakePilotCatalog) -> Session {
+        let mut pilot = Pilot::new(catalog, "Stock").expect("a pilot");
+        pilot.ship_name = Some("Kestrel".to_owned());
+        let mut session = Session::fly(catalog, pilot)
+            .expect("flies")
+            .with_strings(Rc::new(Told));
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, catalog);
+        session
+    }
+
+    const BRIEFING: &str = "<PN>: take <CQ> tons of <CT> to <DST> in <DSY> by <DL> for <PAY>.";
+
+    /// [`offering`], its names given, with mission 130 (to a random
+    /// inhabited stellar) carrying 12 tons of industrial for 25,000 in 8
+    /// days.
+    fn briefed() -> FakePilotCatalog {
+        let mut catalog = offering();
+        catalog.place_names = place_names();
+        catalog.ship_records = vec![crate::testkit::ship(128, crate::testkit::FAST)];
+        let random = &mut catalog.missions[0];
+        random.cargo_type = 2;
+        random.cargo_qty = 12;
+        random.pay_val = 25_000;
+        random.time_limit = 8;
+        catalog
+    }
+
+    #[test]
+    fn an_offers_text_names_the_stellar_it_resolved_and_its_slot_the_same() {
+        let catalog = briefed();
+        let mut session = stocks(&catalog);
+        let filled = "Stock: take 12 tons of industrial to Vega Prime in Vega by July 1st, \
+                      1177 NC for 25,000.";
+        assert_eq!(
+            session.offer_text(MissionId(130), BRIEFING).as_deref(),
+            Some(filled),
+            "not the encoding, -2"
+        );
+        assert_eq!(
+            session.offer_text(MissionId(999), BRIEFING),
+            None,
+            "not offered"
+        );
+        let slot = accept(&mut session, 130);
+        assert_eq!(session.mission_text(slot, BRIEFING), filled);
+        assert_eq!(
+            session.offer_text(MissionId(130), BRIEFING),
+            None,
+            "accepted"
+        );
+        assert_eq!(
+            session.mission_text(slot, "<SN>|<OSN>"),
+            format!("|{UNSET}"),
+            "no ship name drawn yet, and no person"
+        );
+        assert_eq!(
+            *catalog.place_name_reads.borrow(),
+            1,
+            "read once, at the start"
+        );
+    }
+
+    #[test]
+    fn an_offers_ship_name_and_person_read_unset() {
+        let catalog = briefed();
+        let session = stocks(&catalog);
+        assert_eq!(
+            session.offer_text(MissionId(130), "<SN> <OSN>").as_deref(),
+            Some("[Error] [Error]")
+        );
+    }
+
+    #[test]
+    fn in_flight_nothing_is_offered_to_fill() {
+        let catalog = briefed();
+        let mut session = stocks(&catalog);
+        session.take_off(&mut NeverFires).expect("takes off");
+        assert_eq!(session.offer_text(MissionId(130), BRIEFING), None);
+    }
+
+    #[test]
+    fn a_free_slots_mission_tags_read_unset_and_its_player_tags_fill() {
+        let catalog = briefed();
+        let session = stocks(&catalog);
+        assert_eq!(
+            session.mission_text(3, BRIEFING),
+            "Stock: take [Error] tons of [Error] to [Error] in [Error] by [Error] for \
+             [Error]."
+        );
+    }
+
+    #[test]
+    fn a_plain_text_fills_the_player_tags_and_leaves_the_mission_tags() {
+        let catalog = briefed();
+        let session = stocks(&catalog);
+        assert_eq!(
+            session.plain_text("<PN> of the <PSN>, a <PST>, <PRK>: <DST> <PAY> <OSN>"),
+            "Stock of the Kestrel, a Ship 128, captain: <DST> <PAY> [Error]"
+        );
+    }
+
+    #[test]
+    fn a_pay_of_millions_follows_its_rule() {
+        let mut catalog = briefed();
+        catalog.missions[0].pay_val = 1_234_567;
+        let session = stocks(&catalog);
+        assert_eq!(
+            session.offer_text(MissionId(130), "<PAY>").as_deref(),
+            Some("1.23M")
+        );
+        let full = session
+            .with_rules(Rulebook::default().with_override(RuleKey::PayMillions, RuleSource::Bible));
+        assert_eq!(
+            full.offer_text(MissionId(130), "<PAY>").as_deref(),
+            Some("1,234,567")
+        );
+    }
+
+    #[test]
+    fn a_fining_pays_amount_is_its_percent_of_the_cash() {
+        let mut catalog = briefed();
+        catalog.missions[0].pay_val = -40_010;
+        let mut session = stocks(&catalog);
+        session.pilot.cash = 12_345;
+        assert_eq!(
+            session.offer_text(MissionId(130), "<PAY>").as_deref(),
+            Some("1,234")
+        );
+    }
+
+    // `Q` inside a mission's script.
+
+    /// [`lifecycle`] of `missions`, with [`place_names`].
+    fn scripted(missions: Vec<MissionRecord>) -> FakePilotCatalog {
+        let mut catalog = lifecycle(missions);
+        catalog.place_names = place_names();
+        catalog
+    }
+
+    /// The message the next settling leaves on.
+    fn left_on(session: &mut Session, catalog: &FakePilotCatalog) -> Option<String> {
+        session.settle_script(catalog, &mut NeverFires).message
+    }
+
+    const FILLED: &str = "Stock: off to Luna.";
+    const AS_WRITTEN: &str = "<PN>: off to <DST>.";
+
+    #[test]
+    fn a_q_in_a_missions_on_accept_fills_its_mission_tags() {
+        let catalog = scripted(vec![MissionRecord {
+            on_accept: Script::parse("Q25048"),
+            ..to_129(140)
+        }]);
+        let mut session = stocks(&catalog);
+        accept(&mut session, 140);
+        assert_eq!(left_on(&mut session, &catalog).as_deref(), Some(FILLED));
+    }
+
+    #[test]
+    fn a_q_from_no_mission_or_its_on_refuse_is_shown_as_written() {
+        let catalog = scripted(vec![MissionRecord {
+            on_refuse: Script::parse("Q25048"),
+            ..to_129(140)
+        }]);
+        let mut session = stocks(&catalog);
+        run(&mut session, "Q25048");
+        assert_eq!(left_on(&mut session, &catalog).as_deref(), Some(AS_WRITTEN));
+        let mut session = stocks(&catalog);
+        session
+            .refuse_mission(MissionId(140), &mut NeverFires)
+            .expect("offered");
+        assert_eq!(left_on(&mut session, &catalog).as_deref(), Some(AS_WRITTEN));
+    }
+
+    #[test]
+    fn a_q_in_a_missions_on_abort_fills_its_mission_tags() {
+        let catalog = scripted(vec![MissionRecord {
+            on_abort: Script::parse("Q25048"),
+            ..to_129(140)
+        }]);
+        let mut session = stocks(&catalog);
+        let slot = accept(&mut session, 140);
+        session
+            .abort_mission(slot, &mut NeverFires)
+            .expect("aborts");
+        assert_eq!(left_on(&mut session, &catalog).as_deref(), Some(FILLED));
+        let mut session = stocks(&catalog);
+        accept(&mut session, 140);
+        run(&mut session, "A140");
+        assert_eq!(
+            left_on(&mut session, &catalog).as_deref(),
+            Some(FILLED),
+            "by A too"
+        );
+    }
+
+    #[test]
+    fn a_q_in_an_auto_aborts_on_abort_fills_its_mission_tags() {
+        let catalog = scripted(vec![MissionRecord {
+            on_abort: Script::parse("Q25048"),
+            ..auto_aborting()
+        }]);
+        let mut session = stocks(&catalog);
+        accept(&mut session, 140);
+        assert_eq!(held(&session), [], "aborted at once");
+        assert_eq!(
+            left_on(&mut session, &catalog).as_deref(),
+            Some("Stock: off to [Error]."),
+            "its slot's, which has no stellar"
+        );
+    }
+
+    #[test]
+    fn a_q_in_a_missions_on_failure_fills_its_mission_tags() {
+        let catalog = scripted(vec![MissionRecord {
+            on_failure: Script::parse("Q25048"),
+            ..to_129(140)
+        }]);
+        let mut session = stocks(&catalog);
+        accept(&mut session, 140);
+        run(&mut session, "F140");
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        let site = *session
+            .sites
+            .iter()
+            .find(|site| site.id == StellarId(129))
+            .expect("shown");
+        session.player.position = site.position;
+        session.player.velocity = Vec2::ZERO;
+        assert_eq!(land_now(&mut session), Ok(StellarId(129)));
+        assert_eq!(left_on(&mut session, &catalog).as_deref(), Some(FILLED));
+        assert_eq!(held(&session), [], "failed at its return");
+    }
+
+    #[test]
+    fn a_q_in_a_missed_deadlines_on_failure_fills_its_mission_tags() {
+        let catalog = scripted(vec![MissionRecord {
+            time_limit: 1,
+            on_failure: Script::parse("Q25048"),
+            ..to_129(140)
+        }]);
+        let mut session = stocks(&catalog);
+        accept(&mut session, 140);
+        session.take_off(&mut NeverFires).expect("takes off");
+        assert_eq!(
+            left_on(&mut session, &catalog).as_deref(),
+            Some(FILLED),
+            "missed as the take-off's day passes"
+        );
+    }
+
+    #[test]
+    fn a_q_in_a_missions_on_success_reads_its_freed_slot() {
+        let catalog = scripted(vec![MissionRecord {
+            on_success: Script::parse("Q25048"),
+            ..back_to_128(140)
+        }]);
+        let mut session = stocks(&catalog);
+        accept(&mut session, 140);
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        assert_eq!(
+            left_on(&mut session, &catalog).as_deref(),
+            Some("Stock: off to [Error].")
+        );
+    }
+
+    #[test]
+    fn a_q_after_a_nested_missions_script_is_shown_as_written() {
+        let catalog = scripted(vec![
+            MissionRecord {
+                on_accept: Script::parse("S141 Q25048"),
+                ..to_129(140)
+            },
+            to_129(141),
+        ]);
+        let mut session = stocks(&catalog);
+        accept(&mut session, 140);
+        assert_eq!(held(&session), [(0, 140), (1, 141)]);
+        assert_eq!(left_on(&mut session, &catalog).as_deref(), Some(AS_WRITTEN));
+    }
+
+    #[test]
+    fn a_q_inside_a_nested_missions_script_fills_with_its_own_slot() {
+        let catalog = scripted(vec![
+            MissionRecord {
+                on_accept: Script::parse("S141"),
+                ..to_129(140)
+            },
+            MissionRecord {
+                on_accept: Script::parse("Q25048"),
+                travel_stel: 140,
+                ..to_129(141)
+            },
+        ]);
+        let mut session = stocks(&catalog);
+        accept(&mut session, 140);
+        assert_eq!(
+            left_on(&mut session, &catalog).as_deref(),
+            Some("Stock: off to Mars.")
+        );
     }
 }

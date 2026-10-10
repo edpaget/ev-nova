@@ -31,9 +31,9 @@ use crate::catalog::{
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
     GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord,
     MissionShip, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon,
-    PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId,
-    WeaponRecord,
+    PilotCatalog, PlaceNames, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
+    StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog,
+    WeaponId, WeaponRecord,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -379,6 +379,27 @@ impl PilotCatalog for GameData {
                 })
             })
             .collect()
+    }
+
+    /// Each name up to any ';', as the game shows it; a record with no
+    /// name is named empty.
+    fn place_names(&self) -> PlaceNames {
+        PlaceNames {
+            stellars: self
+                .records::<Stellar>()
+                .filter_map(|(id, stellar)| {
+                    let name = stellar.ok()?.name.map(shown_name).unwrap_or_default();
+                    Some((StellarId(id), name))
+                })
+                .collect(),
+            systems: self
+                .records::<System>()
+                .filter_map(|(id, system)| {
+                    let name = system.ok()?.name.map(shown_name).unwrap_or_default();
+                    Some((SystemId(id), name))
+                })
+                .collect(),
+        }
     }
 
     fn missions(&self) -> Vec<MissionRecord> {
@@ -1638,6 +1659,44 @@ mod tests {
              by an undecodable system left out"
         );
         assert_eq!(store(&[]).listed_stellars(), []);
+    }
+
+    #[test]
+    fn the_place_names_are_every_readable_stellars_and_systems_as_shown() {
+        let data = store_named(&[
+            (Stellar::TYPE, 128, Some("Earth"), stellar(0, 0, 0, 1, 0)),
+            (
+                Stellar::TYPE,
+                129,
+                Some("Luna;moon"),
+                stellar(0, 0, 0, 1, 0),
+            ),
+            (Stellar::TYPE, 130, None, stellar(0, 0, 0, 1, 0)),
+            (
+                Stellar::TYPE,
+                131,
+                Some("Broken"),
+                short(stellar(0, 0, 0, 1, 0)),
+            ),
+            (System::TYPE, 130, Some("Sol"), system()),
+            (System::TYPE, 131, Some("Gone"), short(system())),
+        ]);
+        let names = data.place_names();
+        assert_eq!(
+            names.stellars,
+            BTreeMap::from([
+                (StellarId(128), "Earth".to_owned()),
+                (StellarId(129), "Luna".to_owned()),
+                (StellarId(130), String::new()),
+            ]),
+            "up to any ';'; unnamed, empty; undecodable 131 left out"
+        );
+        assert_eq!(
+            names.systems,
+            BTreeMap::from([(SystemId(130), "Sol".to_owned())]),
+            "undecodable 131 left out"
+        );
+        assert_eq!(store(&[]).place_names(), PlaceNames::default());
     }
 
     #[test]

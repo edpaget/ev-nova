@@ -195,6 +195,10 @@ impl PilotCatalog for Home {
     fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
         Vec::new()
     }
+
+    fn place_names(&self) -> nova_sim::catalog::PlaceNames {
+        nova_sim::catalog::PlaceNames::default()
+    }
 }
 
 /// No traffic anywhere.

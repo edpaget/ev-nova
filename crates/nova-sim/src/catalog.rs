@@ -5,6 +5,7 @@
 //! from and the `T` set operator names the ship from, in the simulation's
 //! own terms.
 
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 pub use nova_data::{
@@ -176,6 +177,17 @@ pub struct ListedStellar {
     pub flags2: u16,
     /// Its `Govt`, or `None` when it is independent.
     pub govt: Option<GovtId>,
+}
+
+/// The stellars' and systems' names, by ID, that the text tags read
+/// (see [`text_tags`](crate::text_tags)): each `spöb` and `sÿst` that can
+/// be read, named as the game shows it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlaceNames {
+    /// Each stellar's name.
+    pub stellars: BTreeMap<StellarId, String>,
+    /// Each system's name.
+    pub systems: BTreeMap<SystemId, String>,
 }
 
 /// What a stellar's destruction and regeneration read from its `spöb`
@@ -971,6 +983,8 @@ pub trait PilotCatalog {
     /// Every stellar some system that can be read lists, that can be read
     /// itself, by ascending ID, with every system listing it.
     fn listed_stellars(&self) -> Vec<ListedStellar>;
+    /// Every stellar's and system's name that can be read.
+    fn place_names(&self) -> PlaceNames;
 }
 
 /// A borrowed catalog is a catalog.
@@ -1045,6 +1059,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn listed_stellars(&self) -> Vec<ListedStellar> {
         (**self).listed_stellars()
+    }
+
+    fn place_names(&self) -> PlaceNames {
+        (**self).place_names()
     }
 }
 
@@ -1121,6 +1139,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn listed_stellars(&self) -> Vec<ListedStellar> {
         (**self).listed_stellars()
+    }
+
+    fn place_names(&self) -> PlaceNames {
+        (**self).place_names()
     }
 }
 
@@ -1334,6 +1356,14 @@ mod tests {
                 govt: None,
             }]
         }
+
+        /// Stellar 128 Earth, in system 130 Sol.
+        fn place_names(&self) -> PlaceNames {
+            PlaceNames {
+                stellars: BTreeMap::from([(StellarId(128), "Earth".to_owned())]),
+                systems: BTreeMap::from([(SystemId(130), "Sol".to_owned())]),
+            }
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1363,6 +1393,7 @@ mod tests {
             format!("{:?}", catalog.fallback_frame_size()),
             format!("{:?}", catalog.missions()),
             format!("{:?}", catalog.listed_stellars()),
+            format!("{:?}", catalog.place_names()),
         ]
     }
 
@@ -1402,6 +1433,8 @@ mod tests {
             direct[21].contains("systems: [SystemId(130)]"),
             "{direct:?}"
         );
+        assert!(direct[22].contains("\"Earth\""), "{direct:?}");
+        assert!(direct[22].contains("\"Sol\""), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

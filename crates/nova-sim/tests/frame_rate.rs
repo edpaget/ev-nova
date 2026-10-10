@@ -111,6 +111,10 @@ impl PilotCatalog for Pilot {
     fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
         Vec::new()
     }
+
+    fn place_names(&self) -> nova_sim::catalog::PlaceNames {
+        nova_sim::catalog::PlaceNames::default()
+    }
 }
 
 /// The script, by half-seconds: thrust for a second, turn right for half

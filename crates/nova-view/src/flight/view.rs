@@ -3177,6 +3177,10 @@ mod tests {
         fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
             Vec::new()
         }
+
+        fn place_names(&self) -> nova_sim::catalog::PlaceNames {
+            nova_sim::catalog::PlaceNames::default()
+        }
     }
 
     /// The weapons, ship types' combat fields and governments given.

@@ -12,7 +12,7 @@
 //! | both | @0x15807-0x1583e | every active ship whose parent is the player (+0x9a 0: its escorts and fighters out) takes the new system; the others keep the old one, and `_DoPlayGameWork` runs only the ships in the player's system, so they stay behind |
 //! | both, landed | | `_dockedPortMissions` is filled with -1, and that is all |
 //! | both, in flight | @0x158a4 | the shots, cargo boxes, explosions, smoke and asteroids are killed, the stellar sprites rebuilt, and `_MissionHandlePlayerEnteredNewSystem` runs |
-//! | `Q` | @0x15bee-0x15c6c | `_absquatulateStr` (0x1635a0) becomes one of `STR#` `xxx`'s strings, the raw ID, with no range check, drawn as `T` draws (`_GetRandomIndString`: `Rand(count) + 1`); only inside a mission's set expression (`_currentMissionIndexForSetParser` ≤ 15, set by `_EvalCurrentMissionBitSetString` @0x99a6b alone) is it run through `_MungeBriefing`, so a hook's text is shown as it is. A missing or empty list, or an empty pick, leaves it empty (strcpy over an earlier one) |
+//! | `Q` | @0x15bee-0x15c6c | `_absquatulateStr` (0x1635a0) becomes one of `STR#` `xxx`'s strings, the raw ID, with no range check, drawn as `T` draws (`_GetRandomIndString`: `Rand(count) + 1`); only inside a mission's set expression (`_currentMissionIndexForSetParser` 0-15, set by `_EvalCurrentMissionBitSetString` @0x99a6b alone, and -1 after it @0x99a79) is it run through `_MungeBriefing(0, slot)` (@0x15c37-0x15c4b), so a hook's text, and `OnRefuse`'s, is shown as it is. A missing or empty list, or an empty pick, leaves it empty (strcpy over an earlier one) |
 //!
 //! Neither calls `_SetupShipsInSystem` or `_AutoSetExploration`, whose
 //! only callers are a new pilot, the main screen, the take-off and
@@ -119,8 +119,19 @@
 //!   @0x4654c) and shows the message: here the message, and
 //!   [`SimSound::ScriptMessage`].
 //!
-//! The text is the string as it is: mission text tags wait for missions,
-//! as the original munges them only inside one. A blank `Q` (a missing
+//! The text is filled only inside a mission's set expression, as the
+//! original munges it only there: drawn while a mission's script runs,
+//! it goes through the one substitution path for that mission's slot
+//! ([`Session::mission_text`]; see [`text_tags`](crate::text_tags)).
+//! The scripts that count are `OnAccept`, `OnAbort` (the player's, `A`'s
+//! and an auto-abort's), `OnFailure` (at the return and at a missed
+//! deadline) and `OnSuccess`; `OnSuccess` runs once its slot is freed, so
+//! its mission tags read `"[Error]"`, as the original's do. After each,
+//! the script's mission is none, not the one before (@0x99a79), so the
+//! rest of a mission's script after a nested one's (an `S` in an
+//! `OnAccept`) is shown as written. Anywhere else, `OnRefuse` and every
+//! hook that is not a mission's, the text is the string as it is. A
+//! blank `Q` (a missing
 //! or empty list, or an empty pick) does nothing and cancels an earlier
 //! one, unless [`ScriptEffectRules::blank_leave`] makes the player leave
 //! all the same, with no message.
@@ -328,7 +339,13 @@ impl Session {
     /// leaves with no message by [`ScriptEffectRules::blank_leave`]'s
     /// Bible reading.
     pub(super) fn leave_stellar(&mut self, list: i16, chance: &mut dyn Chance) {
-        self.queued.leave = self.pick_string(list, chance).or_else(|| {
+        let picked = self
+            .pick_string(list, chance)
+            .map(|text| match self.script_slot {
+                Some(slot) => self.mission_text(slot, &text),
+                None => text,
+            });
+        self.queued.leave = picked.or_else(|| {
             (self.script_effect_rules().blank_leave == RuleSource::Bible).then(String::new)
         });
     }

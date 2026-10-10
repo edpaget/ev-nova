@@ -114,6 +114,10 @@ impl PilotCatalog for Pilot {
     fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
         Vec::new()
     }
+
+    fn place_names(&self) -> nova_sim::catalog::PlaceNames {
+        nova_sim::catalog::PlaceNames::default()
+    }
 }
 
 /// Stellar 128 at the centre, where the ship starts, 200 x 200, with

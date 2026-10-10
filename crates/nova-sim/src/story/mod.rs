@@ -1513,13 +1513,18 @@
 //!
 //! Built by missions phase 3.
 //!
-//! The shared module missions phase 3 extracts from
-//! [`expand_tags`](crate::person::expand_tags) is the one substitution
-//! path, as `_MungeBriefing` is the original's. Its users:
+//! [`text_tags`](crate::text_tags), which missions phase 3 extracted
+//! from [`expand_tags`](crate::person::expand_tags), is the one
+//! substitution path, as `_MungeBriefing` is the original's: a text is
+//! filled for an offer, an active slot or no mission
+//! ([`Session::offer_text`](crate::Session::offer_text),
+//! [`Session::mission_text`](crate::Session::mission_text),
+//! [`Session::plain_text`](crate::Session::plain_text)). Its users:
 //!
 //! - mission text;
 //! - a `Q` message run from a mission's script;
-//! - person hail quotes, as today;
+//! - person hail quotes, with no mission
+//!   ([`expand_tags`](crate::person::expand_tags) wraps it);
 //! - mission ships' `ShipDone` (mission-ships phase 2);
 //! - news (crons-news-ranks phase 2), which the original fills with no
 //!   tags: a text with none comes out unchanged;

@@ -8,9 +8,9 @@ use crate::catalog::{
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterRecord,
     DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord,
     LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, OutfitId, OutfitRecord,
-    Penalties, PersonId, PersonRecord, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, SystemId, SystemTraffic, TrafficCatalog, WeaponId,
-    WeaponRecord,
+    Penalties, PersonId, PersonRecord, PilotCatalog, PlaceNames, ShipId, ShipRecord, StarSystem,
+    StartDate, StartError, StellarId, StellarLife, SystemId, SystemTraffic, TrafficCatalog,
+    WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -91,6 +91,10 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) fallback_frame: Option<(u32, u32)>,
     /// Every `mïsn`: none, by default.
     pub(crate) missions: Vec<MissionRecord>,
+    /// The stellars' and systems' names: none, by default.
+    pub(crate) place_names: PlaceNames,
+    /// How many times the names were read.
+    pub(crate) place_name_reads: RefCell<usize>,
 }
 
 /// Stellar `id` of `Strength` 100 and `dead_time`, starting the game
@@ -457,6 +461,8 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         life_reads: RefCell::default(),
         fallback_frame: Some((100, 100)),
         missions: Vec::new(),
+        place_names: PlaceNames::default(),
+        place_name_reads: RefCell::default(),
     }
 }
 
@@ -602,6 +608,11 @@ impl PilotCatalog for FakePilotCatalog {
             }
         }
         listed.into_values().collect()
+    }
+
+    fn place_names(&self) -> PlaceNames {
+        *self.place_name_reads.borrow_mut() += 1;
+        self.place_names.clone()
     }
 }
 
