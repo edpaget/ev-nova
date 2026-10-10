@@ -4,18 +4,22 @@
 //! computer, each of `AvailLoc` 0 and passing every availability field,
 //! and its mission computer lists them, each name cut at its ';' and each
 //! name and offer text filled. Every `mïsn`'s texts fill every tag but the
-//! ranks'. Skips, passing, when `NOVA_DATA` is unset.
+//! ranks'. A stock cargo mission loads its cargo as it is accepted, and
+//! landing at its destination unloads it, pays and runs its `OnSuccess`.
+//! Skips, passing, when `NOVA_DATA` is unset.
 
 mod common;
 
 use nova_data::GameData;
 use nova_data::records::desc::Desc;
 use nova_data::records::mission::Mission;
+use nova_sim::catalog::MissionRecord;
 use nova_sim::catalog::PlaceNames;
-use nova_sim::mission::{Stop, Venue};
+use nova_sim::control::SetOp;
+use nova_sim::mission::{Offer, Stop, Venue};
 use nova_sim::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames};
 use nova_sim::{
-    CommCatalog, DateAffixes, GameDate, NeverFires, Pilot, PilotCatalog, RuleSource, Session,
+    Bit, CommCatalog, DateAffixes, GameDate, NeverFires, Pilot, PilotCatalog, RuleSource, Session,
     StellarId, SystemId, is_landable,
 };
 
@@ -202,4 +206,106 @@ fn a_new_stock_pilots_mission_computer_lists_its_offers_named_and_filled() {
         computer.rows.iter().any(|row| !row.text.is_empty()),
         "the offers have texts"
     );
+}
+
+/// The first bit `record`'s `OnSuccess` sets that nothing after it in the
+/// script clears or toggles.
+fn bit_set_on_success(record: &MissionRecord) -> Option<Bit> {
+    let ops = &record.on_success.tree()?.ops;
+    ops.iter().enumerate().find_map(|(at, op)| {
+        let SetOp::Set(bit) = op else {
+            return None;
+        };
+        let undone = ops[at + 1..].iter().any(
+            |later| matches!(later, SetOp::Clear(other) | SetOp::Toggle(other) if other == bit),
+        );
+        (!undone).then_some(*bit)
+    })
+}
+
+/// Whether `offer` of `record` carries cargo loaded as it is accepted
+/// (`PickupMode` 0) and unloaded at its destination or its return, which
+/// is the destination (`ReturnStel` -1), paying credits, with no ship.
+fn carries_cargo_there_and_back(offer: &Offer, record: &MissionRecord) -> bool {
+    offer.cargo_type.is_some_and(|cargo| cargo >= 0)
+        && offer.cargo_tons > 0
+        && offer.pay > 0
+        && offer.destination.is_some()
+        && offer.return_to == offer.destination
+        && record.return_stel == -1
+        && record.pickup_mode == 0
+        && matches!(record.drop_off_mode, 0 | 1)
+        && record.ships.count <= 0
+}
+
+/// `date`, `days` days on.
+fn days_after(date: GameDate, days: i16) -> GameDate {
+    (0..days.max(0)).fold(date, |date, _| date.next_day())
+}
+
+#[test]
+fn a_stock_cargo_mission_loads_on_accept_and_completes_at_its_destination() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = docked_new_pilot(&data);
+    let missions = data.missions();
+    let record_of = |offer: &Offer| {
+        missions
+            .iter()
+            .find(|record| record.id == offer.mission)
+            .expect("a mïsn")
+    };
+    // The first such offer whose `OnSuccess` sets a bit, to see it run.
+    // None of the stock missions whose `OnSuccess` sets one is offered to
+    // a new pilot (each waits on the story's bits), so otherwise the
+    // first such offer: its `OnSuccess` is empty, and the success that
+    // runs it is seen by its pay and its `DatePostInc` days.
+    let offers = session.mission_offers(Venue::Computer);
+    let qualifies = |offer: &&Offer| carries_cargo_there_and_back(offer, record_of(offer));
+    let offer = offers
+        .iter()
+        .filter(qualifies)
+        .find(|offer| bit_set_on_success(record_of(offer)).is_some())
+        .or_else(|| offers.iter().find(qualifies))
+        .cloned()
+        .expect("a stock cargo mission to and from one stellar");
+    let record = record_of(&offer);
+    let bit = bit_set_on_success(record);
+    let slot = session
+        .accept_mission(offer.mission, &mut NeverFires)
+        .expect("accepted");
+    let active = session.pilot().missions().get(slot).expect("held");
+    assert!(active.aboard, "{:?} loaded at accept", offer.mission);
+    assert_eq!(session.pilot().total_cargo(), offer.cargo_tons);
+    let cash = session.pilot().cash();
+    let today = session.date();
+
+    // Docked at the destination, before the deadline.
+    let destination = offer.destination.expect("a destination");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(session.pilot())).expect("JSON");
+    save["stellar"] = serde_json::json!(destination.stellar.0);
+    save["system"] = serde_json::json!(destination.system.expect("a system").0);
+    let there = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(&data, there).expect("flies");
+    assert_eq!(session.landed(), Some(destination.stellar), "docked there");
+    let _ = session.settle_script(&data, &mut NeverFires);
+
+    assert!(
+        !session.pilot().missions().holds(slot, offer.mission),
+        "{:?} completed",
+        offer.mission
+    );
+    assert_eq!(session.pilot().total_cargo(), 0, "unloaded");
+    assert_eq!(session.pilot().cash(), cash + offer.pay, "paid");
+    assert_eq!(
+        session.date(),
+        days_after(today, record.date_post_inc),
+        "its DatePostInc days, after OnSuccess"
+    );
+    if let Some(bit) = bit {
+        assert!(session.control_bit(bit), "OnSuccess set {bit:?}");
+    }
 }

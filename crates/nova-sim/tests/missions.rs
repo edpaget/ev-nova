@@ -1,6 +1,7 @@
 //! A mission flown through a session, through the public API alone:
 //! accepted at one stellar, carried through a jump, and completed on
-//! landing at its destination, which pays it and frees its slot.
+//! landing at its destination, which pays it and frees its slot; and a
+//! cargo mission, its cargo loaded as it is accepted and unloaded there.
 
 use nova_sim::catalog::{ListedStellar, MissionId, MissionRecord, MissionShip};
 use nova_sim::landing::StellarFlags;
@@ -12,12 +13,18 @@ use nova_sim::{
     StartError, StellarId, SystemId, Test, Vec2, WeaponRecord,
 };
 
-/// One `chär` flying a slow ship, a pixel a tick at most, from system 130,
-/// linked with 131 to its east. Stellar 128 is in 130, out past the
-/// no-jump zone; 140 is in 131, where a jump from 130 arrives. Mission
-/// 140, offered at 128, goes to 140 and pays 900; its `OnSuccess` sets
-/// bit 31.
-struct Courier;
+/// One `chär` flying a slow ship of 20 holds, a pixel a tick at most, from
+/// system 130, linked with 131 to its east. Stellar 128 is in 130, out
+/// past the no-jump zone; 140 is in 131, where a jump from 130 arrives.
+/// Mission 140, offered at 128, goes to 140 and pays 900; its `OnSuccess`
+/// sets bit 31. With a `DropOffMode`, it carries 5 tons of food, loaded as
+/// it is accepted (`PickupMode` 0) and unloaded as that mode says.
+struct Courier {
+    drop_off: Option<i16>,
+}
+
+/// The courier carrying nothing.
+const COURIER: Courier = Courier { drop_off: None };
 
 /// Unarmed and ungoverned.
 impl CombatCatalog for Courier {
@@ -81,6 +88,7 @@ impl PilotCatalog for Courier {
             maneuver: 30,
             fuel: 300,
             fuel_regen: 1,
+            holds: 20,
             ..ShipFields::default()
         })
     }
@@ -167,10 +175,10 @@ impl PilotCatalog for Courier {
             flags2: 0,
             travel_stel: 140,
             return_stel: -1,
-            cargo_type: -1,
-            cargo_qty: 0,
-            pickup_mode: -1,
-            drop_off_mode: -1,
+            cargo_type: if self.drop_off.is_some() { 0 } else { -1 },
+            cargo_qty: if self.drop_off.is_some() { 5 } else { 0 },
+            pickup_mode: if self.drop_off.is_some() { 0 } else { -1 },
+            drop_off_mode: self.drop_off.unwrap_or(-1),
             scan_mask: 0,
             pay_val: 900,
             time_limit: 0,
@@ -229,17 +237,17 @@ impl nova_sim::TrafficCatalog for Courier {
     }
 }
 
-/// A new pilot, docked at 128 through a save that says so, flown and
-/// settled.
-fn docked_at_128() -> Session {
-    let pilot = Pilot::new(&Courier, "Courier").expect("starts");
+/// A new pilot of `courier`'s, docked at 128 through a save that says so,
+/// flown and settled.
+fn docked_at_128(courier: &Courier) -> Session {
+    let pilot = Pilot::new(courier, "Courier").expect("starts");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::json!(128);
     let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let mut session = Session::fly(&Courier, docked).expect("flies");
+    let mut session = Session::fly(courier, docked).expect("flies");
     assert_eq!(session.landed(), Some(StellarId(128)));
-    let _ = session.settle_script(&Courier, &mut NeverFires);
+    let _ = session.settle_script(courier, &mut NeverFires);
     session
 }
 
@@ -253,9 +261,31 @@ fn land(session: &mut Session) -> StellarId {
     panic!("never landed: {:?}", session.player());
 }
 
+/// Takes `session` off from 128, jumps to 131 and lands on 140, settling
+/// each step on `courier`.
+fn fly_to_140(session: &mut Session, courier: &Courier) {
+    session.take_off(&mut NeverFires).expect("takes off");
+    let _ = session.settle_script(courier, &mut NeverFires);
+    session.plot_course(SystemId(131)).expect("a route");
+    session.begin_jump().expect("out past the no-jump zone");
+    for _ in 0..1000 {
+        if session.jumping().is_some() {
+            break;
+        }
+        session.tick(Controls::default());
+    }
+    assert_eq!(
+        session.arrive(courier, &mut NeverFires),
+        Some(SystemId(131))
+    );
+    let _ = session.settle_script(courier, &mut NeverFires);
+    assert_eq!(land(session), StellarId(140));
+    let _ = session.settle_script(courier, &mut NeverFires);
+}
+
 #[test]
 fn a_mission_accepted_carried_through_a_jump_completes_on_landing_there() {
-    let mut session = docked_at_128();
+    let mut session = docked_at_128(&COURIER);
     let offers = session.mission_offers(Venue::Computer);
     assert_eq!(offers.len(), 1);
     assert_eq!(
@@ -278,23 +308,7 @@ fn a_mission_accepted_carried_through_a_jump_completes_on_landing_there() {
         Some(MissionId(140))
     );
 
-    session.take_off(&mut NeverFires).expect("takes off");
-    let _ = session.settle_script(&Courier, &mut NeverFires);
-    session.plot_course(SystemId(131)).expect("a route");
-    session.begin_jump().expect("out past the no-jump zone");
-    for _ in 0..1000 {
-        if session.jumping().is_some() {
-            break;
-        }
-        session.tick(Controls::default());
-    }
-    assert_eq!(
-        session.arrive(&Courier, &mut NeverFires),
-        Some(SystemId(131))
-    );
-    let _ = session.settle_script(&Courier, &mut NeverFires);
-    assert_eq!(land(&mut session), StellarId(140));
-    let _ = session.settle_script(&Courier, &mut NeverFires);
+    fly_to_140(&mut session, &COURIER);
 
     assert!(
         session.control_bit(Bit::new(31).expect("a bit")),
@@ -303,4 +317,32 @@ fn a_mission_accepted_carried_through_a_jump_completes_on_landing_there() {
     assert_eq!(session.pilot().cash(), cash + 900);
     assert_eq!(session.pilot().missions().lowest_free(), Some(0));
     assert_eq!(session.pilot().missions().iter().count(), 0);
+}
+
+#[test]
+fn a_cargo_missions_cargo_loads_on_accept_and_unloads_at_its_destination() {
+    for drop_off in [0, 1] {
+        let courier = Courier {
+            drop_off: Some(drop_off),
+        };
+        let mut session = docked_at_128(&courier);
+        let cash = session.pilot().cash();
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        let active = session.pilot().missions().get(0).expect("accepted");
+        assert!(active.aboard, "loaded at accept");
+        assert_eq!(session.pilot().total_cargo(), 5, "{drop_off}");
+
+        fly_to_140(&mut session, &courier);
+
+        assert_eq!(session.pilot().total_cargo(), 0, "unloaded: {drop_off}");
+        assert!(
+            session.control_bit(Bit::new(31).expect("a bit")),
+            "OnSuccess: {drop_off}"
+        );
+        assert_eq!(session.pilot().cash(), cash + 900, "{drop_off}");
+        assert_eq!(session.pilot().missions().iter().count(), 0, "{drop_off}");
+    }
 }
