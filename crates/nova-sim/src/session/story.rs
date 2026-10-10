@@ -106,8 +106,7 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
             // record and days are missions phase 2's.
             Consumer::Missions => {
                 if let (missions::ROLL, &StoryEvent::Landed { stellar }) = (id, event) {
-                    self.session
-                        .roll_offers(stellar, self.catalog, &mut *self.chance);
+                    self.session.roll_offers(stellar, &mut *self.chance);
                 }
             }
             // Each other consumer's arm is filled by its own phase: mission

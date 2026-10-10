@@ -347,9 +347,9 @@ use crate::board::{
     Take, Taken, check_board,
 };
 use crate::catalog::{
-    CombatCatalog, DateAffixes, GateSite, GovtId, LandingSite, MissionRecord, OutfitId,
-    OutfitRecord, PersonId, PilotCatalog, ShipId, ShipRecord, StartError, StellarId, StellarLife,
-    SystemId, TrafficCatalog, WeaponId,
+    CombatCatalog, DateAffixes, GateSite, GovtId, LandingSite, ListedStellar, MissionRecord,
+    OutfitId, OutfitRecord, PersonId, PilotCatalog, ShipId, ShipRecord, StartError, StellarId,
+    StellarLife, SystemId, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -707,6 +707,9 @@ pub struct Session {
     fallback_frame: Option<(u32, u32)>,
     /// Every `mïsn`, read when the session starts.
     missions: Vec<MissionRecord>,
+    /// Every stellar some system lists, read when the session starts:
+    /// what a mission's stellars are chosen from, with the galaxy overlay.
+    listed_stellars: Vec<ListedStellar>,
     /// The offers of the visit under way and the stellar they were rolled
     /// at (see the `missions` module); never saved, as the original saves
     /// none of it.
@@ -861,6 +864,7 @@ impl Session {
             rebuilt: Rebuilt::default(),
             fallback_frame: catalog.fallback_frame_size(),
             missions: catalog.missions(),
+            listed_stellars: catalog.listed_stellars(),
             offers: Offers::default(),
             pilot,
         };

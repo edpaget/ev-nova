@@ -110,6 +110,10 @@ impl PilotCatalog for Pilot {
     fn missions(&self) -> Vec<nova_sim::catalog::MissionRecord> {
         Vec::new()
     }
+
+    fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
+        Vec::new()
+    }
 }
 
 /// Stellar 128 at the centre, where the ship starts, 200 x 200, with

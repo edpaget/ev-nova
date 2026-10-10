@@ -20,8 +20,8 @@
 //! empties the offers and keeps the stellar (@0x1584b, @0x15949). None of
 //! it is saved.
 
-use super::{Session, overlaid_sites};
-use crate::catalog::{MissionId, PilotCatalog, StellarId};
+use super::Session;
+use crate::catalog::{MissionId, StellarId};
 use crate::chance::Chance;
 use crate::control::Script;
 use crate::mission::{self, AvailFacts, Offer, Player, Refusal, Venue, Visit, World, stellars_of};
@@ -50,18 +50,12 @@ impl Session {
         debug_assert!(registered.is_ok(), "a fresh session registers it once");
     }
 
-    /// Rolls the offers at `stellar`, the stellar landed on, reading the
-    /// galaxy from `catalog` and drawing on `chance`, unless they were
-    /// rolled there last (see the [`mission`](crate::mission) module). The
-    /// stellars are read only when there is a mission to offer.
-    pub(super) fn roll_offers(
-        &mut self,
-        stellar: StellarId,
-        catalog: &(impl PilotCatalog + ?Sized),
-        chance: &mut dyn Chance,
-    ) {
+    /// Rolls the offers at `stellar`, the stellar landed on, drawing on
+    /// `chance`, unless they were rolled there last (see the
+    /// [`mission`](crate::mission) module).
+    pub(super) fn roll_offers(&mut self, stellar: StellarId, chance: &mut dyn Chance) {
         let mut offers = std::mem::take(&mut self.offers);
-        self.at_visit(stellar, catalog, |visit| {
+        self.at_visit(stellar, |visit| {
             offers.roll(&self.missions, visit, chance);
         });
         self.offers = offers;
@@ -96,12 +90,11 @@ impl Session {
     #[must_use]
     pub fn offer_refusals(
         &self,
-        catalog: &(impl PilotCatalog + ?Sized),
         mission: MissionId,
     ) -> Option<Vec<(&'static str, Verdict<Refusal>)>> {
         let record = self.missions.iter().find(|record| record.id == mission)?;
         let stellar = self.landed?;
-        self.at_visit(stellar, catalog, |visit| {
+        self.at_visit(stellar, |visit| {
             let facts = AvailFacts {
                 visit,
                 mission: record,
@@ -116,22 +109,12 @@ impl Session {
         })
     }
 
-    /// `f` of the visit to `stellar`, one of the stellars shown, read from
-    /// `catalog`: `None` when it is not shown. The galaxy's stellars are
-    /// read only when there is a mission.
-    fn at_visit<T>(
-        &self,
-        stellar: StellarId,
-        catalog: &(impl PilotCatalog + ?Sized),
-        f: impl FnOnce(&Visit) -> T,
-    ) -> Option<T> {
+    /// `f` of the visit to `stellar`, one of the stellars shown: `None`
+    /// when it is not shown.
+    fn at_visit<T>(&self, stellar: StellarId, f: impl FnOnce(&Visit) -> T) -> Option<T> {
         let docked = *self.sites.iter().find(|site| site.id == stellar)?;
         let map = self.galaxy.map();
-        let stellars = if self.missions.is_empty() {
-            Vec::new()
-        } else {
-            stellars_of(map, |system| overlaid_sites(&self.galaxy, catalog, system))
-        };
+        let stellars = stellars_of(&self.galaxy, &self.listed_stellars);
         let ship = self.ship_record(self.pilot.ship);
         let player = Player {
             record: map
@@ -413,23 +396,16 @@ mod tests {
         let catalog = offering();
         let session = landed(&catalog, &mut Draws::of(&[]));
         assert_eq!(
-            session.offer_refusals(&catalog, MissionId(132)),
+            session.offer_refusals(MissionId(132)),
             Some(vec![(
                 "AvailRandom",
                 Verdict::Refuses(Refusal::AvailRandom)
             )])
         );
-        assert_eq!(
-            session.offer_refusals(&catalog, MissionId(130)),
-            Some(vec![])
-        );
-        assert_eq!(
-            session.offer_refusals(&catalog, MissionId(133)),
-            None,
-            "no such mïsn"
-        );
+        assert_eq!(session.offer_refusals(MissionId(130)), Some(vec![]));
+        assert_eq!(session.offer_refusals(MissionId(133)), None, "no such mïsn");
         let in_flight = Session::start(&catalog).expect("starts");
-        assert_eq!(in_flight.offer_refusals(&catalog, MissionId(130)), None);
+        assert_eq!(in_flight.offer_refusals(MissionId(130)), None);
     }
 
     #[test]
@@ -473,7 +449,7 @@ mod tests {
         let session = landed(&catalog, &mut NeverFires);
         let refused = |id| {
             session
-                .offer_refusals(&catalog, MissionId(id))
+                .offer_refusals(MissionId(id))
                 .expect("docked")
                 .into_iter()
                 .map(|(name, _)| name)

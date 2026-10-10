@@ -279,10 +279,11 @@ pub use board::{
 pub use catalog::{
     BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterId,
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
-    GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, MissionShip, NebulaId, OutfitId,
-    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId,
-    ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife, StockWeapon,
-    StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, ListedStellar, MissionId,
+    MissionRecord, MissionShip, NebulaId, OutfitId, OutfitRecord, Penalties, PersonId,
+    PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic,
+    TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};

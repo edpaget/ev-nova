@@ -3173,6 +3173,10 @@ mod tests {
         fn missions(&self) -> Vec<nova_sim::catalog::MissionRecord> {
             Vec::new()
         }
+
+        fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
+            Vec::new()
+        }
     }
 
     /// The weapons, ship types' combat fields and governments given.

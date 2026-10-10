@@ -4,42 +4,64 @@
 //! may land on ([`candidates`]), and the one drawn ([`select_stellar`]).
 //!
 //! The galaxy it chooses from is a [`World`]: every stellar of a visible
-//! system ([`stellars_of`]), the overlaid map and the governments.
+//! system, overlaid ([`stellars_of`]), the overlaid map and the
+//! governments.
 
-use std::collections::BTreeMap;
-
-use crate::catalog::{GovtId, LandingSite, StellarId, SystemId};
+use crate::catalog::{GovtId, ListedStellar, StellarId, SystemId};
 use crate::chance::Chance;
+use crate::gate::GateKind;
 use crate::govt::Governments;
 use crate::hyperspace::StarMap;
-use crate::landing::{StellarFlags, is_dockable};
+use crate::landing::{StellarFlags, landable};
+use crate::story::OverlaidGalaxy;
 
-/// A stellar of a visible system, with the system it belongs to.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A stellar of a visible system, overlaid, with the system it belongs
+/// to: what choosing it reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stellar {
-    /// The stellar, overlaid.
-    pub site: LandingSite,
+    /// The stellar.
+    pub id: StellarId,
     /// The lowest-ID visible system that lists it.
     pub system: SystemId,
+    /// Its `Flags`.
+    pub flags: u32,
+    /// Its `Flags2`.
+    pub flags2: u16,
+    /// Its government, the overlay's if it has one: `None` when it is
+    /// independent.
+    pub govt: Option<GovtId>,
+    /// Whether it is destroyed.
+    pub destroyed: bool,
 }
 
-/// Every stellar of a visible system on `map`, by ascending ID, each in
-/// the lowest-ID visible system that lists it, as the galaxy refresh
-/// gives each stellar its system (`_PropagateMissionBitEffects`
-/// @0x9970d-0x997bd); `sites` gives a system's stellars. A stellar no
-/// visible system lists is left out: the original's candidates are in a
-/// visible system (+0x1eb).
-pub fn stellars_of(
-    map: &StarMap,
-    mut sites: impl FnMut(SystemId) -> Vec<LandingSite>,
-) -> Vec<Stellar> {
-    let mut stellars = BTreeMap::new();
-    for system in map.systems() {
-        for site in sites(system) {
-            stellars.entry(site.id).or_insert(Stellar { site, system });
-        }
-    }
-    stellars.into_values().collect()
+/// Every stellar of `listed` that a visible system of `galaxy` lists, by
+/// ascending ID, each in the lowest-ID visible system that lists it, as
+/// the galaxy refresh gives each stellar its system
+/// (`_PropagateMissionBitEffects` @0x9970d-0x997bd), with the overlay's
+/// government and destroyed state. A stellar no visible system lists is
+/// left out: the original's candidates are in a visible system (+0x1eb).
+#[must_use]
+pub fn stellars_of(galaxy: &OverlaidGalaxy, listed: &[ListedStellar]) -> Vec<Stellar> {
+    let map = galaxy.map();
+    listed
+        .iter()
+        .filter_map(|stellar| {
+            let id = stellar.id;
+            let system = stellar
+                .systems
+                .iter()
+                .copied()
+                .find(|&system| map.position(system).is_some())?;
+            Some(Stellar {
+                id,
+                system,
+                flags: stellar.flags,
+                flags2: stellar.flags2,
+                govt: galaxy.overlay().stellar(id).govt.unwrap_or(stellar.govt),
+                destroyed: galaxy.destroyed(id),
+            })
+        })
+        .collect()
 }
 
 /// The galaxy a mission's stellars are chosen from.
@@ -58,7 +80,7 @@ impl World<'_> {
     #[must_use]
     pub fn stellar(&self, id: StellarId) -> Option<&Stellar> {
         self.stellars
-            .binary_search_by_key(&id, |stellar| stellar.site.id)
+            .binary_search_by_key(&id, |stellar| stellar.id)
             .ok()
             .and_then(|at| self.stellars.get(at))
     }
@@ -149,34 +171,40 @@ impl StellarCode {
     }
 }
 
-/// Whether `site` has the `Flags` `flag`.
-fn has(site: &LandingSite, flag: u32) -> bool {
-    site.flags & flag != 0
+/// Whether `stellar` has the `Flags` `flag`.
+fn has(stellar: &Stellar, flag: u32) -> bool {
+    stellar.flags & flag != 0
 }
 
-/// Whether `site` is inhabited: its uninhabited flag clear.
-fn inhabited(site: &LandingSite) -> bool {
-    !has(site, StellarFlags::UNINHABITED)
+/// Whether `stellar` is inhabited: its uninhabited flag clear.
+fn inhabited(stellar: &Stellar) -> bool {
+    !has(stellar, StellarFlags::UNINHABITED)
+}
+
+/// Whether `stellar` is "normal landable": landable, and no hypergate or
+/// wormhole (`_StellarIsNormalLandable` @0xa9f8).
+fn normal_landable(stellar: &Stellar) -> bool {
+    landable(stellar.flags, stellar.destroyed) && GateKind::of(stellar.flags2).is_none()
 }
 
 impl Kind {
-    /// Whether `site` is of this kind, the governments as `govts` say.
-    fn takes(self, site: &LandingSite, govts: &Governments) -> bool {
-        let govt = site.govt;
+    /// Whether `stellar` is of this kind, the governments as `govts` say.
+    fn takes(self, stellar: &Stellar, govts: &Governments) -> bool {
+        let govt = stellar.govt;
         // Of a government, and another than `of`.
         let other = |of: GovtId| govt.is_some_and(|govt| govt != of);
         match self {
-            Self::Inhabited => inhabited(site) && !has(site, StellarFlags::STATION),
-            Self::Uninhabited => !inhabited(site) && !has(site, StellarFlags::STATION),
-            Self::Govt(of) => govt == of && (inhabited(site) || govts.derelict(of)),
-            Self::Ally(of) => other(of) && inhabited(site) && govts.allies(govt, Some(of)),
-            Self::NotGovt(of) => govt != Some(of) && inhabited(site),
-            Self::Enemy(of) => other(of) && inhabited(site) && govts.enemies(govt, Some(of)),
+            Self::Inhabited => inhabited(stellar) && !has(stellar, StellarFlags::STATION),
+            Self::Uninhabited => !inhabited(stellar) && !has(stellar, StellarFlags::STATION),
+            Self::Govt(of) => govt == of && (inhabited(stellar) || govts.derelict(of)),
+            Self::Ally(of) => other(of) && inhabited(stellar) && govts.allies(govt, Some(of)),
+            Self::NotGovt(of) => govt != Some(of) && inhabited(stellar),
+            Self::Enemy(of) => other(of) && inhabited(stellar) && govts.enemies(govt, Some(of)),
             Self::SharedClass(of) => {
-                other(of) && inhabited(site) && govts.shared_class(govt, Some(of))
+                other(of) && inhabited(stellar) && govts.shared_class(govt, Some(of))
             }
             Self::NoSharedClass(of) => {
-                other(of) && inhabited(site) && !govts.shared_class(govt, Some(of))
+                other(of) && inhabited(stellar) && !govts.shared_class(govt, Some(of))
             }
         }
     }
@@ -202,14 +230,14 @@ pub fn candidates(
         .stellars
         .iter()
         .filter(|stellar| {
-            let id = Some(stellar.site.id);
+            let id = Some(stellar.id);
             id != origin
                 && id != exclude
-                && is_dockable(&stellar.site)
-                && kind.takes(&stellar.site, world.govts)
+                && normal_landable(stellar)
+                && kind.takes(stellar, world.govts)
                 && from.is_none_or(|from| world.distant(from, stellar.system))
         })
-        .map(|stellar| stellar.site.id)
+        .map(|stellar| stellar.id)
         .collect()
 }
 
@@ -260,7 +288,8 @@ mod tests {
     use super::*;
     use crate::catalog::{GovtRecord, StarSystem};
     use crate::govt::DERELICT;
-    use crate::testkit::{Draws, govt, planet, star};
+    use crate::story::{Countdown, GalaxyOverlay};
+    use crate::testkit::{Draws, govt, star};
 
     const FED: GovtId = GovtId(128);
     const CIVVIES: GovtId = GovtId(129);
@@ -304,16 +333,16 @@ mod tests {
         ])
     }
 
-    /// Stellar `id` in `system`, with these `Flags` beside landing, of
-    /// `govt`.
+    /// Stellar `id` in `system`, whole, with these `Flags` beside landing,
+    /// of `govt`.
     fn at(system: i16, id: i16, flags: u32, govt: Option<GovtId>) -> Stellar {
         Stellar {
-            site: LandingSite {
-                flags: StellarFlags::CAN_LAND | flags,
-                govt,
-                ..planet(id, 0.0, 0.0)
-            },
+            id: StellarId(id),
             system: SystemId(system),
+            flags: StellarFlags::CAN_LAND | flags,
+            flags2: 0,
+            govt,
+            destroyed: false,
         }
     }
 
@@ -441,21 +470,25 @@ mod tests {
     #[test]
     fn a_candidate_is_normal_landable_and_distant_from_the_origin() {
         let gate = Stellar {
-            site: LandingSite {
-                flags2: 0x1000,
-                ..at(133, 162, 0, None).site
-            },
+            flags2: 0x1000,
             ..at(133, 162, 0, None)
         };
         let wormhole = Stellar {
-            site: LandingSite {
-                flags2: 0x2000,
-                ..at(133, 163, 0, None).site
-            },
+            flags2: 0x2000,
             ..at(133, 163, 0, None)
         };
-        let mut unlandable = at(133, 164, 0, None);
-        unlandable.site.flags = 0;
+        let unlandable = Stellar {
+            flags: 0,
+            ..at(133, 164, 0, None)
+        };
+        let destroyed = Stellar {
+            destroyed: true,
+            ..at(133, 165, 0, None)
+        };
+        let wreck = Stellar {
+            destroyed: true,
+            ..at(133, 166, StellarFlags::ONLY_WHEN_DESTROYED, None)
+        };
         let stellars = with_origin(&[
             at(130, 129, 0, None),
             at(131, 140, 0, None),
@@ -464,10 +497,12 @@ mod tests {
             gate,
             wormhole,
             unlandable,
+            destroyed,
+            wreck,
         ]);
         assert_eq!(
             of(Kind::Inhabited, &stellars),
-            [150, 160],
+            [150, 160, 166],
             "not in the origin's system, nor one linked with it, nor a gate, nor unlandable"
         );
     }
@@ -612,35 +647,50 @@ mod tests {
 
     #[test]
     fn the_stellars_of_the_visible_systems_go_to_the_lowest_id_listing_each() {
-        let mut overlay = crate::story::GalaxyOverlay::default();
+        let mut overlay = GalaxyOverlay::default();
         overlay.set_visible(SystemId(130), Some(false));
+        overlay.set_stellar_govt(StellarId(150), Some(Some(CIVVIES)));
+        overlay.set_stellar_govt(StellarId(160), Some(None));
+        overlay.set_destroyed(StellarId(140), Some(Countdown { days_left: 3 }));
         let systems: Vec<StarSystem> = vec![
             star(130, (0.0, 0.0), &[]),
             star(131, (100.0, 0.0), &[]),
             star(132, (200.0, 0.0), &[]),
         ];
-        let galaxy = crate::story::OverlaidGalaxy::new(systems, overlay);
-        let mut asked = Vec::new();
-        let stellars = stellars_of(galaxy.map(), |system| {
-            asked.push(system);
-            match system.0 {
-                130 => vec![planet(128, 0.0, 0.0)],
-                131 => vec![planet(150, 0.0, 0.0), planet(140, 0.0, 0.0)],
-                132 => vec![planet(140, 0.0, 0.0), planet(160, 0.0, 0.0)],
-                _ => Vec::new(),
-            }
-        });
-        assert_eq!(
-            asked,
-            [SystemId(131), SystemId(132)],
-            "the hidden 130 unread"
+        let galaxy = OverlaidGalaxy::new(systems, overlay);
+        let listed = |id, systems: &[i16]| ListedStellar {
+            id: StellarId(id),
+            systems: systems.iter().copied().map(SystemId).collect(),
+            flags: 0x21,
+            flags2: 0x0010,
+            govt: Some(FED),
+        };
+        let stellars = stellars_of(
+            &galaxy,
+            &[
+                listed(128, &[130]),
+                listed(140, &[130, 131, 132]),
+                listed(150, &[131]),
+                listed(160, &[132, 134]),
+                listed(170, &[134]),
+            ],
         );
+        let stellar = |id, system, govt, destroyed| Stellar {
+            id: StellarId(id),
+            system: SystemId(system),
+            flags: 0x21,
+            flags2: 0x0010,
+            govt,
+            destroyed,
+        };
         assert_eq!(
-            stellars
-                .iter()
-                .map(|stellar| (stellar.site.id.0, stellar.system.0))
-                .collect::<Vec<_>>(),
-            [(140, 131), (150, 131), (160, 132)]
+            stellars,
+            [
+                stellar(140, 131, Some(FED), true),
+                stellar(150, 131, Some(CIVVIES), false),
+                stellar(160, 132, None, false),
+            ],
+            "128 only in the hidden 130, and 170 only in 134, not in the catalog"
         );
         let (map, govts) = (galaxy.map().clone(), Governments::empty());
         let world = World {

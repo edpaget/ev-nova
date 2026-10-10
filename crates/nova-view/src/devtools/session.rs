@@ -277,6 +277,10 @@ mod tests {
         fn missions(&self) -> Vec<nova_sim::catalog::MissionRecord> {
             Vec::new()
         }
+
+        fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
+            Vec::new()
+        }
     }
 
     impl CombatCatalog for Catalog {

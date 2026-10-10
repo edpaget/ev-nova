@@ -7,9 +7,9 @@ use crate::ai::Goal;
 use crate::catalog::{
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterRecord,
     DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord,
-    LandingSite, MissionId, MissionRecord, OutfitId, OutfitRecord, Penalties, PersonId,
-    PersonRecord, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    LandingSite, ListedStellar, MissionId, MissionRecord, OutfitId, OutfitRecord, Penalties,
+    PersonId, PersonRecord, PilotCatalog, ShipId, ShipRecord, StarSystem, StartDate, StartError,
+    StellarId, StellarLife, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -566,6 +566,31 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn missions(&self) -> Vec<MissionRecord> {
         self.missions.clone()
+    }
+
+    /// Every stellar of [`FakePilotCatalog::sites`], with every system
+    /// listing it.
+    fn listed_stellars(&self) -> Vec<ListedStellar> {
+        let mut listed: std::collections::BTreeMap<StellarId, ListedStellar> =
+            std::collections::BTreeMap::new();
+        let mut sites = self.sites.clone();
+        sites.sort_by_key(|(system, _)| *system);
+        for (system, sites) in sites {
+            for site in sites {
+                listed
+                    .entry(site.id)
+                    .or_insert_with(|| ListedStellar {
+                        id: site.id,
+                        systems: Vec::new(),
+                        flags: site.flags,
+                        flags2: site.flags2,
+                        govt: site.govt,
+                    })
+                    .systems
+                    .push(system);
+            }
+        }
+        listed.into_values().collect()
     }
 }
 

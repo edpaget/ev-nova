@@ -35,14 +35,23 @@ fn govts() -> Governments {
     ])
 }
 
-/// Stellar `id` in `system`, inhabited, of `govt`.
+/// Stellar `id` in `system`, inhabited and whole, of `govt`.
 fn at(system: i16, id: i16, govt: Option<GovtId>) -> Stellar {
     Stellar {
-        site: LandingSite {
-            govt,
-            ..planet(id, 0.0, 0.0)
-        },
+        id: StellarId(id),
         system: SystemId(system),
+        flags: StellarFlags::CAN_LAND,
+        flags2: 0,
+        govt,
+        destroyed: false,
+    }
+}
+
+/// The landing site of stellar `id`, the Federation's.
+fn docked_at(id: i16) -> LandingSite {
+    LandingSite {
+        govt: Some(FED),
+        ..planet(id, 0.0, 0.0)
     }
 }
 
@@ -60,7 +69,7 @@ struct Galaxy {
 impl Galaxy {
     fn new() -> Self {
         let mut uninhabited = at(132, 152, None);
-        uninhabited.site.flags |= StellarFlags::UNINHABITED;
+        uninhabited.flags |= StellarFlags::UNINHABITED;
         Self {
             stellars: vec![
                 at(130, 128, Some(FED)),
@@ -89,7 +98,7 @@ impl Galaxy {
     /// on 23 June 1177.
     fn visit(&self) -> Visit<'_> {
         Visit {
-            docked: self.stellars[0].site,
+            docked: docked_at(128),
             system: SystemId(130),
             world: World {
                 stellars: &self.stellars,
@@ -1012,7 +1021,7 @@ fn another_stellar_or_one_forgotten_rolls_afresh() {
     let mut visit = galaxy.visit();
     let mut offers = Offers::default();
     offers.roll(&catalog(), &visit, &mut NeverFires);
-    visit.docked = galaxy.stellars[1].site;
+    visit.docked = docked_at(129);
     let mut elsewhere = Draws::of(&[]);
     offers.roll(&catalog(), &visit, &mut elsewhere);
     assert_eq!(

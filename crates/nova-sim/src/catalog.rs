@@ -160,6 +160,24 @@ pub struct GateSite {
     pub exit_angle: i16,
 }
 
+/// A stellar some system lists, raw from its `spöb`: what a mission's
+/// stellars are chosen by (see [`mission`](crate::mission)), without the
+/// sprites a [`LandingSite`] reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedStellar {
+    /// The `spöb`'s ID.
+    pub id: StellarId,
+    /// Every `sÿst` that can be read and lists it, by ascending ID, each
+    /// once: the galaxy refresh gives it to the lowest visible one.
+    pub systems: Vec<SystemId>,
+    /// Its `Flags`.
+    pub flags: u32,
+    /// Its `Flags2`.
+    pub flags2: u16,
+    /// Its `Govt`, or `None` when it is independent.
+    pub govt: Option<GovtId>,
+}
+
 /// What a stellar's destruction and regeneration read from its `spöb`
 /// (see the [`story`](crate::story) module's "Galaxy overlay"): the
 /// story's wreck rules decide what the values mean.
@@ -929,6 +947,9 @@ pub trait PilotCatalog {
     fn fallback_frame_size(&self) -> Option<(u32, u32)>;
     /// Every `mïsn` that can be read, by ascending ID.
     fn missions(&self) -> Vec<MissionRecord>;
+    /// Every stellar some system that can be read lists, that can be read
+    /// itself, by ascending ID, with every system listing it.
+    fn listed_stellars(&self) -> Vec<ListedStellar>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -999,6 +1020,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn missions(&self) -> Vec<MissionRecord> {
         (**self).missions()
+    }
+
+    fn listed_stellars(&self) -> Vec<ListedStellar> {
+        (**self).listed_stellars()
     }
 }
 
@@ -1071,6 +1096,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn missions(&self) -> Vec<MissionRecord> {
         (**self).missions()
+    }
+
+    fn listed_stellars(&self) -> Vec<ListedStellar> {
+        (**self).listed_stellars()
     }
 }
 
@@ -1273,6 +1302,17 @@ mod tests {
         fn missions(&self) -> Vec<MissionRecord> {
             vec![crate::testkit::mission(130)]
         }
+
+        /// Stellar 128, listed by system 130.
+        fn listed_stellars(&self) -> Vec<ListedStellar> {
+            vec![ListedStellar {
+                id: StellarId(128),
+                systems: vec![SystemId(130)],
+                flags: 0x01,
+                flags2: 0,
+                govt: None,
+            }]
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1301,6 +1341,7 @@ mod tests {
             format!("{:?}", catalog.stellar_lives()),
             format!("{:?}", catalog.fallback_frame_size()),
             format!("{:?}", catalog.missions()),
+            format!("{:?}", catalog.listed_stellars()),
         ]
     }
 
@@ -1336,6 +1377,10 @@ mod tests {
         );
         assert_eq!(direct[19], "Some((7, 9))", "forwarded, not a default");
         assert!(direct[20].contains("MissionId(130)"), "{direct:?}");
+        assert!(
+            direct[21].contains("systems: [SystemId(130)]"),
+            "{direct:?}"
+        );
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

@@ -191,6 +191,10 @@ impl PilotCatalog for Home {
     fn missions(&self) -> Vec<nova_sim::catalog::MissionRecord> {
         Vec::new()
     }
+
+    fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
+        Vec::new()
+    }
 }
 
 /// No traffic anywhere.

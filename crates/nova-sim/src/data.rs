@@ -29,10 +29,11 @@ use crate::blink::Blink;
 use crate::catalog::{
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterId,
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
-    GovtRecord, HullRecord, JunkRecord, LandingSite, MissionId, MissionRecord, MissionShip,
-    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId,
-    ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife, StockWeapon,
-    StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord,
+    MissionShip, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon,
+    PilotCatalog, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
+    StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId,
+    WeaponRecord,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -349,6 +350,35 @@ impl PilotCatalog for GameData {
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         let sheet = self.spin_sheet(stellar_spin_id(0)?).ok()?.sheet;
         Some((sheet.frame_width(), sheet.frame_height()))
+    }
+
+    fn listed_stellars(&self) -> Vec<ListedStellar> {
+        // Systems come by ascending ID, so each stellar's come in order.
+        let mut listed: BTreeMap<StellarId, Vec<SystemId>> = BTreeMap::new();
+        for (id, system) in self.records::<System>() {
+            let Ok(system) = system else {
+                continue;
+            };
+            for stellar in system.record.nav_def.into_iter().flatten() {
+                let systems = listed.entry(stellar).or_default();
+                if !systems.contains(&SystemId(id)) {
+                    systems.push(SystemId(id));
+                }
+            }
+        }
+        listed
+            .into_iter()
+            .filter_map(|(id, systems)| {
+                let stellar = self.get::<Stellar>(id.0)?.ok()?.record;
+                Some(ListedStellar {
+                    id,
+                    systems,
+                    flags: stellar.flags.bits(),
+                    flags2: stellar.flags2.bits(),
+                    govt: stellar.govt,
+                })
+            })
+            .collect()
     }
 
     fn missions(&self) -> Vec<MissionRecord> {
@@ -1551,6 +1581,43 @@ mod tests {
             "unlisted 130, missing 999, and 133 listed only by an undecodable system left out"
         );
         assert_eq!(store(&[]).gate_sites(), []);
+    }
+
+    #[test]
+    fn the_listed_stellars_are_every_readable_one_some_system_lists_with_every_system_listing_it() {
+        let mut governed = stellar(5, 6, 0, 0x21, 0);
+        put_i16s(&mut governed, 0x14, &[140]);
+        let data = store(&[
+            (System::TYPE, 131, system_with(&[129, 128, 129])),
+            (System::TYPE, 130, system_with(&[129, 999])),
+            (System::TYPE, 132, short(system_with(&[133]))),
+            (Stellar::TYPE, 128, governed),
+            (Stellar::TYPE, 129, gate(-70, 250, 120, &[])),
+            (Stellar::TYPE, 130, stellar(0, 0, 0, 1, 0)),
+            (Stellar::TYPE, 133, stellar(0, 0, 0, 1, 0)),
+        ]);
+        assert_eq!(
+            data.listed_stellars(),
+            [
+                ListedStellar {
+                    id: StellarId(128),
+                    systems: vec![SystemId(131)],
+                    flags: 0x21,
+                    flags2: 0,
+                    govt: Some(GovtId(140)),
+                },
+                ListedStellar {
+                    id: StellarId(129),
+                    systems: vec![SystemId(130), SystemId(131)],
+                    flags: 0x21,
+                    flags2: 0x2000,
+                    govt: None,
+                },
+            ],
+            "by ID, each system once by ID; unlisted 130, missing 999, and 133 listed only \
+             by an undecodable system left out"
+        );
+        assert_eq!(store(&[]).listed_stellars(), []);
     }
 
     #[test]

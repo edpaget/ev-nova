@@ -341,8 +341,14 @@ pub fn land_or_select(
 /// clearance is landable.
 #[must_use]
 pub fn is_landable(site: &LandingSite) -> bool {
-    has(site, StellarFlags::CAN_LAND)
-        && site.destroyed == has(site, StellarFlags::ONLY_WHEN_DESTROYED)
+    landable(site.flags, site.destroyed)
+}
+
+/// Whether a stellar of `Flags` `flags`, `destroyed` or not, is landable
+/// (see [`is_landable`]).
+pub(crate) fn landable(flags: u32, destroyed: bool) -> bool {
+    flags & StellarFlags::CAN_LAND != 0
+        && destroyed == (flags & StellarFlags::ONLY_WHEN_DESTROYED != 0)
 }
 
 /// Whether a pilot may be docked at `site`: it is [landable](is_landable)
