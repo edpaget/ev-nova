@@ -315,6 +315,7 @@ mod fighters;
 mod hail;
 mod hire;
 mod hooks;
+mod missions;
 mod outfits;
 mod persons;
 mod script_effects;
@@ -346,9 +347,9 @@ use crate::board::{
     Take, Taken, check_board,
 };
 use crate::catalog::{
-    CombatCatalog, DateAffixes, GateSite, GovtId, LandingSite, OutfitId, OutfitRecord, PersonId,
-    PilotCatalog, ShipId, ShipRecord, StartError, StellarId, StellarLife, SystemId, TrafficCatalog,
-    WeaponId,
+    CombatCatalog, DateAffixes, GateSite, GovtId, LandingSite, MissionRecord, OutfitId,
+    OutfitRecord, PersonId, PilotCatalog, ShipId, ShipRecord, StartError, StellarId, StellarLife,
+    SystemId, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -387,6 +388,7 @@ use crate::market::{
     self, Direction, EscortHolds, Good, Goods, Market, Markup, Order, TradeRefusal,
 };
 use crate::message::SimMessage;
+use crate::mission::Offers;
 use crate::navigation::stellar_under;
 use crate::outfitter::{
     self, Hardpoints, OutfitFlags, OutfitOrder, OutfitRefusal, Outfitter, Shop, outfit_mods,
@@ -703,6 +705,12 @@ pub struct Session {
     /// point fills an empty sprite slot with, and the box a click on that
     /// slot reads (see the `stellars` module).
     fallback_frame: Option<(u32, u32)>,
+    /// Every `mïsn`, read when the session starts.
+    missions: Vec<MissionRecord>,
+    /// The offers of the visit under way and the stellar they were rolled
+    /// at (see the `missions` module); never saved, as the original saves
+    /// none of it.
+    offers: Offers,
 }
 
 impl Session {
@@ -852,8 +860,11 @@ impl Session {
             destroying: BTreeSet::new(),
             rebuilt: Rebuilt::default(),
             fallback_frame: catalog.fallback_frame_size(),
+            missions: catalog.missions(),
+            offers: Offers::default(),
             pilot,
         };
+        session.register_offer_roll();
         session.set_player_system(system, here, dock);
         // A load and the main screen are rebuild points (@0x751cf,
         // @0x75324, @0x1a354, @0x1a8ca, @0x1b003, @0x457ee): the view
@@ -865,6 +876,12 @@ impl Session {
         // A new pilot's and a load's nebulae (@0x19118, @0x765bc).
         let system = session.pilot.system;
         session.raise(StoryEvent::Explored { system });
+        // A load forgets the stellar the offers were rolled at (@0x75ef5)
+        // and opens the spaceport, so a pilot resumed docked has them
+        // rolled afresh (see the `missions` module).
+        if let Some(stellar) = session.landed {
+            session.raise(StoryEvent::Landed { stellar });
+        }
         Ok(session)
     }
 

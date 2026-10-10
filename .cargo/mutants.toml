@@ -148,7 +148,4 @@ exclude_re = [
     # row resets the traffic without reading a catalog, so no row ever
     # calls any of these bodies.
     "<impl TrafficCatalog for NoTraffic>::",
-    # The story dispatcher's consumer effects: every consumer's arm is
-    # empty until its own phase fills it, so the body is already `()`.
-    "replace <impl Stage for SessionStage<'_, C>>::effect with \\(\\)$",
 ]

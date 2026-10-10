@@ -11,6 +11,7 @@
 use std::collections::{BTreeSet, VecDeque};
 
 use super::entry::Dock;
+use super::missions;
 use super::script_effects::Settled;
 use super::{ScriptNote, Session, SessionEvent};
 use crate::catalog::{LandingSite, PilotCatalog, StellarId, SystemId, TrafficCatalog};
@@ -99,14 +100,20 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
 
     /// The one match on the consumer that routes its own effects, which
     /// are not set expressions (see the `story` module's "Dispatch").
-    fn effect(&mut self, id: SubscriptionId, _event: &StoryEvent) {
+    fn effect(&mut self, id: SubscriptionId, event: &StoryEvent) {
         match id.consumer {
-            // Each consumer's arm is filled by its own phase: mission
-            // ships' goal counts by mission-ships phase 2, a mission's pay,
-            // legal record and days by missions phase 2, and the crons',
+            // The offer roll (missions phase 1); a mission's pay, legal
+            // record and days are missions phase 2's.
+            Consumer::Missions => {
+                if let (missions::ROLL, &StoryEvent::Landed { stellar }) = (id, event) {
+                    self.session
+                        .roll_offers(stellar, self.catalog, &mut *self.chance);
+                }
+            }
+            // Each other consumer's arm is filled by its own phase: mission
+            // ships' goal counts by mission-ships phase 2, and the crons',
             // nebulae's and plug-ins' by theirs. A fixture has none.
             Consumer::MissionShips
-            | Consumer::Missions
             | Consumer::Crons
             | Consumer::Nebulae
             | Consumer::Plugins
@@ -1161,6 +1168,9 @@ mod tests {
 
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
         let mut session = Session::fly(&catalog, saved).expect("flies");
+        // The `Landed` a pilot resumed docked raises settles before the
+        // fixture registers again.
+        let _ = session.settle_script(&catalog, &mut NeverFires);
         register(&mut session, subs());
         session.take_off(&mut NeverFires).expect("takes off");
         land_and_settle(&mut session, &catalog);

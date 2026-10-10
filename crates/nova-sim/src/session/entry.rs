@@ -185,6 +185,12 @@ pub(super) enum Reset {
     ShopRolls,
     /// A save is due.
     SaveDue,
+    /// The stellar the offers were rolled at is forgotten, so the next
+    /// landing rolls them afresh (see the `missions` module).
+    ForgetOffers,
+    /// The offers are emptied, as a landed `M` or `N` empties them
+    /// (@0x1584b, @0x15949).
+    EmptyOffers,
     /// [`SimSound::Arrived`] sounds.
     ArrivalSound,
     /// [`SimMessage::Arrived`] is raised.
@@ -261,13 +267,15 @@ pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets 
 /// arrival, which sets the system up (`_SetupShipsInSystem`,
 /// `_AutoSetExploration` @0x6c1f9), abandons the fighters out without a
 /// jump's fuel (@0x6c0b9-0x6c0f9) and resets the mission sound ID
-/// (@0x6c4ff). It never clears the course, only drops the hops made; the
+/// (@0x6c4ff), and forgets the stellar the offers were rolled at
+/// (@0x6bfce). It never clears the course, only drops the hops made; the
 /// jump's start already stopped the thrust, and every tick ends a gate's
 /// pending entry. Populating lets go of the strikes, the boarding, the
 /// hail and the target too.
 fn jump(hops: usize) -> Resets {
     Resets::of(
         &[
+            Reset::ForgetOffers,
             Reset::Stellar,
             Reset::Explore,
             Reset::HeldSound,
@@ -315,13 +323,14 @@ fn gate() -> Resets {
 }
 
 /// A landed `M` or `N` (`_EvalSetExp` @0x1570e-0x158d4 and
-/// @0x158d9-0x159ad): landed, the original fills `_dockedPortMissions`
-/// and nothing more, so only the pilot's system and stellar change and
-/// the stellars wait for the take-off. As an `arrival` (the Bible's
-/// reading of `MoveArrival`) the system is explored and the course
-/// cleared at once.
+/// @0x158d9-0x159ad): landed, the original empties `_dockedPortMissions`
+/// (@0x1584b, @0x15949) and does nothing more, so only the pilot's
+/// system and stellar change, the offers are emptied (the stellar they
+/// were rolled at kept) and the stellars wait for the take-off. As an
+/// `arrival` (the Bible's reading of `MoveArrival`) the system is
+/// explored and the course cleared at once.
 fn script_move_landed(arrival: bool) -> Resets {
-    let mut set = vec![Reset::Stellar, Reset::SaveDue];
+    let mut set = vec![Reset::Stellar, Reset::SaveDue, Reset::EmptyOffers];
     let course = if arrival {
         set.push(Reset::Explore);
         CourseStep::Clear
@@ -372,10 +381,13 @@ fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
 /// The developer tools' move of a landed pilot: no original does it. It
 /// docks the ship as a landing does, the shops' rolls drawn afresh, and
 /// leaves the last system's traffic and scene behind; it keeps a held
-/// sound and the fighters out, and sounds nothing.
+/// sound and the fighters out, and sounds nothing. The offers are emptied
+/// and their stellar forgotten, so the next landing rolls them.
 fn relocate() -> Resets {
     Resets::of(
         &[
+            Reset::ForgetOffers,
+            Reset::EmptyOffers,
             Reset::Stellar,
             Reset::Explore,
             Reset::Touchdown,
@@ -515,6 +527,12 @@ impl Session {
         }
         if resets.has(Reset::SaveDue) {
             self.save_due = true;
+        }
+        if resets.has(Reset::ForgetOffers) {
+            self.forget_offers();
+        }
+        if resets.has(Reset::EmptyOffers) {
+            self.empty_offers();
         }
         self.announce(how, &resets, system, scene_event(how, scene_changed));
         // A jump's arrival raised its `Explored` before its days, at the
@@ -727,6 +745,7 @@ mod tests {
                         Reset::FightersOut,
                         Reset::ArrivalSound,
                         Reset::ArrivalMessage,
+                        Reset::ForgetOffers,
                     ],
                 ),
                 CourseStep::Drop(hops),
@@ -783,6 +802,8 @@ mod tests {
                         Reset::GateEntry,
                         Reset::ShopRolls,
                         Reset::SaveDue,
+                        Reset::ForgetOffers,
+                        Reset::EmptyOffers,
                     ],
                 ),
                 CourseStep::Clear,
@@ -797,7 +818,7 @@ mod tests {
         assert_eq!(
             resets(landed, &arrival(RuleSource::Engine), facts(true, false)),
             Resets::of(
-                &[Reset::Stellar, Reset::SaveDue],
+                &[Reset::Stellar, Reset::SaveDue, Reset::EmptyOffers],
                 CourseStep::Keep,
                 TrafficStep::None,
             ),
@@ -806,7 +827,12 @@ mod tests {
         assert_eq!(
             resets(landed, &arrival(RuleSource::Bible), facts(true, false)),
             Resets::of(
-                &[Reset::Stellar, Reset::Explore, Reset::SaveDue],
+                &[
+                    Reset::Stellar,
+                    Reset::Explore,
+                    Reset::SaveDue,
+                    Reset::EmptyOffers,
+                ],
                 CourseStep::Clear,
                 TrafficStep::None,
             ),
