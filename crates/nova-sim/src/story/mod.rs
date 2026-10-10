@@ -356,8 +356,9 @@
 //! [`Session::unregister_story`](crate::Session::unregister_story), which
 //! clears the once-fired entry too. The stock consumers register at
 //! [`Session::fly`](crate::Session::fly) from their catalog data: so far
-//! the missions' offer roll (missions phase 1). A mission's subscriptions, and its ships', are registered
-//! when it becomes active, keyed by its slot. When it ends (success,
+//! the missions' offer roll (missions phase 1) and re-offer, and each
+//! active slot's hooks (missions phase 2). A mission's subscriptions, and
+//! its ships', are registered when it becomes active, keyed by its slot. When it ends (success,
 //! failure, `A` or an auto-abort), they are unregistered and their
 //! once-fired entries cleared, so a mission accepted into the reused slot
 //! starts fresh.
@@ -1447,38 +1448,66 @@
 
 //! # Mission lifecycle
 //!
-//! Built by missions phase 2.
+//! Built by missions phase 2 (see the [`mission`](crate::mission)
+//! module's "Active missions" for the original's routines).
 //!
 //! A mission is offered (per visit), then active, in one of 16 slots
-//! saved on `Pilot`, until it succeeds, fails or is aborted. What moves
-//! it:
+//! saved on `Pilot` (save version 20), until it succeeds, fails or is
+//! aborted. What moves it:
 //!
-//! - the player: accepting runs `OnAccept` (and ends an auto-aborted
-//!   mission at once), refusing `OnRefuse`, aborting `OnAbort`;
-//! - `Landed`: the missions' landing subscriptions, after the mission
-//!   ships' goal checks, in `_MissionLandCheck`'s order: by slot, cargo
-//!   (missions phase 5), failure, success. A success pays, applies the
-//!   legal record, passes its `DatePostInc` days through the daily step,
-//!   runs `OnSuccess` and has the missions re-offered, the table kept;
-//! - the daily step: the days left count down; a `DayPassed`
-//!   subscription fails a mission whose days left reached 0, running
-//!   `OnFailure`;
+//! - the player, through [`Session`](crate::Session):
+//!   [`accept_mission`](crate::Session::accept_mission) runs the accept
+//!   checks, then fills the lowest free slot from the offer, registers
+//!   its hooks and runs `OnAccept`, and ends an auto-aborted mission at
+//!   once, its `DatePostInc` days passed through the daily step;
+//!   [`refuse_mission`](crate::Session::refuse_mission) runs `OnRefuse`
+//!   and drops the offer; [`abort_mission`](crate::Session::abort_mission)
+//!   runs the abort checks (`CanAbort`), then `OnAbort`;
+//! - `Landed`: each slot's three landing subscriptions,
+//!   `{Missions, slot, 0..=2}`, after the mission ships' goal checks and
+//!   the offer roll, in `_MissionLandCheck`'s order: by slot, the arrival
+//!   (marking the destination reached; missions phase 5 adds the cargo),
+//!   failure, success. A failure runs `OnFailure` and applies the failure
+//!   records; a success frees the slot, runs `OnSuccess`, passes its
+//!   `DatePostInc` days through the daily step, applies the legal records
+//!   and pays. The re-offer, `{Missions, 16, 0}`, runs after every slot
+//!   and offers the missions again, the table kept, when one succeeded;
+//! - the daily step: the days left count down (the third participant);
+//!   a timed slot's `DayPassed` subscription, `{Missions, slot, 3}`, fails
+//!   a mission whose days left reached 0, running `OnFailure`, once the
+//!   ship is not docked, as the original's per-frame check skips the open
+//!   spaceport. Its `TookOff` subscription, `{Missions, slot, 4}`,
+//!   catches a deadline that ran out docked when the take-off passes no
+//!   day. An unabortable mission stays active and failed until its
+//!   return, where [`repeat_mission_failure`](crate::RuleKey::RepeatMissionFailure)
+//!   says whether `OnFailure` runs again;
 //! - `ShipFate`: mission-ships phase 2 counts the goals, and a loss that
 //!   fails the mission fails it at once, through this lifecycle; cargo
 //!   jettisoned, found or plundered does the same (missions phase 5);
 //! - `S`, `A` and `F`, through `apply_op`: `S` accepts, running `OnAccept`
-//!   there as the original does, any event the accept raises being
-//!   dispatched as `story_reentry` says, nested by default (see
-//!   "Dispatch"); `A` aborts there; `F` marks the mission
-//!   failed, and it fails at the next landing check.
+//!   there as the original does, a mission active already taking another
+//!   slot as [`start_active_mission`](crate::RuleKey::StartActiveMission)
+//!   says; `A` aborts there, running `OnAbort`; `F` marks the mission
+//!   failed, and it fails at the next landing at its return.
 //!
+//! The scripts a transition runs (`OnAccept`, `OnAbort`, `OnSuccess`,
+//! `OnFailure`) run inline, as [`Session::run_set`](crate::Session::run_set)
+//! runs one, and the events they raise (an auto-abort's or a success's
+//! `DayPassed`) wait for the nearest nesting point: the dispatcher's right
+//! after the hook's effect, or the one after an `S` or `A` operator. So
+//! under `story_reentry`'s nested default they dispatch before the
+//! script's next operator, not between the transition's own operators.
+//!
+//! Every end (a success, a failure, `A`, an abort or an auto-abort) frees
+//! the slot and unregisters its hooks, clearing their once-fired entries,
+//! so a mission accepted into the reused slot starts fresh, and forgets
+//! the stellar the offers were rolled at (`Session::forget_offers`).
 //! `EnteredSystem` moves no mission: the original's enter-system hook only
 //! restarts its ships' timers (mission-ships phase 1). Offers are rolled
 //! as the player lands, before the spaceport opens, and kept until a
 //! landing at another stellar, a jump or a mission's end (missions
-//! phase 1, [`mission`](crate::mission)): `Session::forget_offers` is
-//! the hook a mission's end calls. A landed `M` or `N` empties them, the
-//! stellar kept. None of it is saved.
+//! phase 1, [`mission`](crate::mission)). A landed `M` or `N` empties
+//! them, the stellar kept. None of the offers is saved.
 //!
 //! # Text substitution
 //!

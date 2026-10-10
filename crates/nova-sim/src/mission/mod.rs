@@ -115,6 +115,87 @@
 //! `below(n)` over the candidates for each random stellar, a `roll(6)`
 //! for a random cargo and a `below(|q|)` for a ranged quantity. The
 //! engine keeps no other draw of the original's.
+//!
+//! # Active missions
+//!
+//! A mission accepted goes into the lowest free of 16 slots
+//! ([`ActiveMissions`], `_currentMissions` 0x184688), holding its offer's
+//! values, its days left and deadline (from the accept, not the roll),
+//! whether its destination is reached and its ship goals met, and how it
+//! failed, if it did ([`ActiveMission`], [`FailedBy`]). Its own fields
+//! (scripts, `CanAbort`, `CompGovt`, `CompReward`, `DatePostInc`,
+//! `Flags`) are read from its record when used. The slot is the record of
+//! its story subscriptions (see the [`story`](crate::story) module's
+//! "Mission lifecycle", which says what moves a mission). In order:
+//!
+//! - **Accept** (`_DoMissionAccept` @0xa1b11): the checks
+//!   ([`accept_checks`]: a free slot; missions phase 5 adds the cargo);
+//!   the slot filled; `OnAccept` (@0xa1da2); a `PayVal` below -50000 takes
+//!   `-50000 - PayVal`, the cash floored at none ([`accept_charge`]); the
+//!   destination reached when it has none, or, docked, when it is the
+//!   stellar docked at (@0xa1fc5-0xa1ff8); docked, the mission's offer
+//!   dropped and the others kept only while available (@0xa1ffd-0xa2136);
+//!   the auto-abort when docked, with `Flags` 0x0001, the destination
+//!   reached, and no return stellar nor ship ([`auto_aborts_at_accept`],
+//!   @0xa2139-0xa217b); its roll made 0 (@0xa2196).
+//! - **Refuse**: `OnRefuse` (@0xa2f41), and the offer dropped; nothing
+//!   forgotten.
+//! - **The player's abort** (`_DoMissionInfoDialog` @0x9e56d): the checks
+//!   ([`abort_checks`]: `CanAbort`); with `Flags` 0x0040, the record with
+//!   `CompGovt` less 5 × `CompReward` ([`abort_penalty`]); then the end.
+//! - **The end** (`_AbortMission` @0x99a92), shared by the abort, `A` and
+//!   the failures: the ships leave (mission-ships phase 2); `OnAbort` for
+//!   the abort and `A` only; the slot freed; the offers' stellar
+//!   forgotten (@0x99bcf).
+//! - **The auto-abort** (`_AutoAbortMission` @0x99bdc): `OnAbort`; the
+//!   `DatePostInc` days; `Flags` 0x0008, a jump's fuel taken; `Flags2`
+//!   0x0002, the pay; then the end, with no second `OnAbort`.
+//! - **Success**, landing at the return with the destination reached and
+//!   the goals met (`_DoMissionSuccess` @0xa03fc): the slot freed before
+//!   `OnSuccess`; the `DatePostInc` days; the records ([`success_records`]:
+//!   `CompGovt` + `CompReward`, its enemies less half and its allies plus
+//!   half, each record and half summed and truncated); the pay
+//!   ([`pay_effect`]); the offers' stellar forgotten; and, after the
+//!   landing's last slot, the offers again, the table kept. No end: its
+//!   ships stay.
+//! - **Failure**, landing at the return of a failed mission
+//!   (`_DoMissionFailure` @0xa0285): `OnFailure`; the record with
+//!   `CompGovt` less half `CompReward`, toward none ([`failure_records`]);
+//!   the end, with no `OnAbort`.
+//! - **The deadline** (`_MissionObjectivesCheck` @0x9eba5-0x9ec61): with
+//!   none of its days left, not failed, and the ship not docked, a mission
+//!   fails at once (`_QuickMissionFailure` @0x99d1b): `OnFailure`, marked
+//!   failed by its deadline, the end when it is abortable, and the
+//!   offers' stellar forgotten. No record changes. An unabortable one
+//!   stays active and failed; at its return the original fails it again,
+//!   running `OnFailure` a second time and applying the failure records.
+//!   The Rulebook key [`repeat_mission_failure`](crate::RuleKey::RepeatMissionFailure)
+//!   defaults to that; its other reading frees it there without running
+//!   `OnFailure` again, the failure records still applied once. A mission
+//!   failed by `F` ran nothing, so it runs `OnFailure` once at its return
+//!   under both.
+//! - **`S`, `A` and `F`** (`_EvalSetExp` @0x152f3-0x15418): `S` resolves the
+//!   mission from the stellar docked at, or in flight the first stellar
+//!   the player's system lists, and accepts it, checking neither its
+//!   availability nor whether it is active: a mission active already
+//!   takes another slot, unless the Rulebook key
+//!   [`start_active_mission`](crate::RuleKey::StartActiveMission) reads
+//!   otherwise. `A` ends every slot holding the mission, running
+//!   `OnAbort`, whatever its `CanAbort`. `F` marks each failed, running
+//!   nothing.
+//!
+//! A pay (`_ApplyMissionPay` @0x98326) above 0 is cash; -10000 to -39999
+//! clean the negative records of a government, its allies or those
+//! sharing a class with it; -40001 to -40099 fine a percent of the cash
+//! ([`fined`]). Each record is the pilot's with a government, as the
+//! [`legal`](crate::legal) module keeps them, held within
+//! [`RECORD_LIMIT`](crate::legal::RECORD_LIMIT), and wider than the
+//! original's 16 bits.
+//!
+//! A mission's stellars are matched by ID. The original also counts a
+//! stellar at the same place with the same name as the same
+//! (`_StellarsAreIdentical` @0xab35):
+//! rdm:phase/missions/phase-11-stellars-identical-by-place-and-name.
 
 pub mod active;
 pub mod offer;

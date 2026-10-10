@@ -1,7 +1,7 @@
-//! The session's side of mission offers (see the
-//! [`mission`](crate::mission) module): the visit's offers, rolled as the
-//! player lands and kept for the visit, and the facts they are rolled
-//! from.
+//! The session's side of missions (see the [`mission`](crate::mission)
+//! module): the visit's offers, rolled as the player lands and kept for
+//! the visit, and the facts they are rolled from; and the active
+//! missions' lifecycle.
 //!
 //! The roll is no loop of its own: [`Session::fly`] registers it as the
 //! missions' first `Landed` subscription, [`ROLL`], whose consumer effect
@@ -15,10 +15,23 @@
 //! What forgets the stellar rolled at, so that the next landing rolls the
 //! offers afresh, is [`Session::forget_offers`]: a jump's arrival
 //! (@0x6bfce) and the developer tools' relocation through the entry
-//! table, and a mission's abort, failure and success through missions
-//! phase 2 (@0x99bcf, @0x99db5, @0xa03ef, @0xa0691). A landed `M` or `N`
-//! empties the offers and keeps the stellar (@0x1584b, @0x15949). None of
-//! it is saved.
+//! table, and a mission's abort, failure and success (@0x99bcf, @0x99db5,
+//! @0xa03ef, @0xa0691). A landed `M` or `N` empties the offers and keeps
+//! the stellar (@0x1584b, @0x15949). None of it is saved.
+//!
+//! **Active missions.** The missions accepted are the pilot's, in their
+//! slots (see the [`mission`](crate::mission) module's "Active
+//! missions"). [`Session::accept_mission`], [`Session::refuse_mission`]
+//! and [`Session::abort_mission`] are the player's; `S`, `A` and `F` are
+//! `apply_op`'s arms. Each slot filled registers its hooks, `{Missions,
+//! slot, hook}`: [`ARRIVAL`], [`FAILURE`] and [`SUCCESS`] on every
+//! landing, and, for a mission with a deadline, [`DEADLINE`] on every day
+//! and [`DEADLINE_TOOK_OFF`] on every take-off, each with a blank guard
+//! and no script; their effects come through the dispatcher's consumer
+//! match. [`REOFFER`], registered with [`ROLL`], re-offers after the last
+//! slot's hooks when a mission succeeded. [`Session::fly`] registers
+//! every active slot's hooks again, so a saved pilot's missions go on.
+//! Each end frees its slot and unregisters its hooks.
 
 use super::Session;
 use crate::catalog::{GovtId, MissionId, MissionRecord, MissionShip, StellarId};
@@ -258,7 +271,7 @@ impl Session {
 
     /// Accepts `mission`, offered on the visit under way, drawing on
     /// `chance`: the accept checks, then the original's accept
-    /// (`_DoMissionAccept` @0xa1b11; see the [`mission`](crate::mission)
+    /// (`_DoMissionAccept` @0xa1b11; see the [`mission`]
     /// module's "Active missions"). The slot it went into.
     ///
     /// # Errors
