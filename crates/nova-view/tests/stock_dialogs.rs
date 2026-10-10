@@ -470,3 +470,172 @@ fn the_new_pilot_dialog_takes_a_name_in_its_full_name_field() {
         );
     }
 }
+
+/// The metrics mock, shared.
+fn mono() -> Rc<dyn nova_view::text::TextMetrics> {
+    Rc::new(MonoMetrics)
+}
+
+#[test]
+fn the_mission_computer_lays_out_with_its_items_where_recorded() {
+    use nova_sim::{ComputerRow, MissionComputer, MissionId};
+    use nova_view::spaceport::missions::{
+        ACCEPT_ITEM, COMPUTER_DIALOG, DATE_ITEM, HEADING_ITEM, LEAVE_ITEM, LIST_ITEM,
+        MissionComputerScreen, NAME_ITEM, TEXT_ITEM as COMPUTER_TEXT_ITEM,
+    };
+    for (_, path) in builds() {
+        let computer = interface(&path)
+            .dialog_template(COMPUTER_DIALOG)
+            .expect("converts");
+        assert_eq!(
+            (computer.bounds.width(), computer.bounds.height()),
+            (510.0, 201.0)
+        );
+        assert_eq!(computer.placement, Placement::Center);
+        for (item, bounds) in [
+            (ACCEPT_ITEM, rect(266.0, 170.0, 99.0, 25.0)),
+            (LIST_ITEM, rect(10.0, 30.0, 195.0, 144.0)),
+            (COMPUTER_TEXT_ITEM, rect(233.0, 60.0, 267.0, 93.0)),
+            (NAME_ITEM, rect(233.0, 34.0, 269.0, 21.0)),
+            (LEAVE_ITEM, rect(368.0, 170.0, 99.0, 25.0)),
+            (HEADING_ITEM, rect(14.0, 3.0, 396.0, 15.0)),
+            (DATE_ITEM, rect(311.0, 0.0, 87.0, 15.0)),
+        ] {
+            assert_eq!(computer.items[item - 1].bounds, bounds, "item {item}");
+        }
+        let screen = MissionComputerScreen::new(
+            Ok((computer, mono())),
+            MissionComputer {
+                rows: vec![ComputerRow {
+                    mission: MissionId(128),
+                    name: "Run".to_owned(),
+                    text: "Go.".to_owned(),
+                }],
+                today: "June 23rd, 1177 NC".to_owned(),
+            },
+            ButtonStyle::STOCK,
+        );
+        let dialog = screen.dialog().expect("laid out");
+        for parked in [6, 9, 10] {
+            assert!(!dialog.item_shown(parked), "item {parked} lies outside");
+        }
+    }
+}
+
+#[test]
+fn the_mission_info_screen_lays_out_with_its_items_where_recorded() {
+    use nova_sim::{InfoRow, MissionInfo};
+    use nova_view::spaceport::missions::{
+        ABORT_ITEM, INFO_DIALOG, INFO_DONE_ITEM, INFO_LIST_ITEM, INFO_TEXT_ITEM, MissionInfoScreen,
+    };
+    for (_, path) in builds() {
+        let info = interface(&path)
+            .dialog_template(INFO_DIALOG)
+            .expect("converts");
+        assert_eq!((info.bounds.width(), info.bounds.height()), (471.0, 155.0));
+        for (item, bounds) in [
+            (INFO_DONE_ITEM, rect(290.0, 125.0, 99.0, 25.0)),
+            (INFO_LIST_ITEM, rect(9.0, 24.0, 195.0, 84.0)),
+            (INFO_TEXT_ITEM, rect(218.0, 26.0, 242.0, 91.0)),
+            (ABORT_ITEM, rect(57.0, 125.0, 99.0, 25.0)),
+        ] {
+            assert_eq!(info.items[item - 1].bounds, bounds, "item {item}");
+        }
+        let screen = MissionInfoScreen::new(
+            Ok((info, mono())),
+            MissionInfo {
+                rows: vec![InfoRow {
+                    slot: 0,
+                    name: "Run".to_owned(),
+                    failed: false,
+                    text: "Go.".to_owned(),
+                    abortable: true,
+                }],
+                today: "June 23rd, 1177 NC".to_owned(),
+            },
+            ButtonStyle::STOCK,
+        );
+        let dialog = screen.dialog().expect("laid out");
+        assert!(!dialog.item_shown(6), "the map lies outside");
+    }
+}
+
+#[test]
+fn the_offer_dialog_lays_out_with_its_items_where_recorded_its_buttons_enabled() {
+    use nova_sim::mission::OfferLabels;
+    use nova_sim::{MissionId, OfferPrompt};
+    use nova_view::spaceport::OfferChoice;
+    use nova_view::spaceport::offer::{
+        ACCEPT_ITEM as OFFER_ACCEPT_ITEM, OFFER_DIALOG, OfferDialog, REFUSE_ITEM, SINGLE_ITEM,
+        TEXT_ITEM as OFFER_TEXT_ITEM,
+    };
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(OFFER_DIALOG)
+            .expect("converts");
+        assert_eq!(
+            (template.bounds.width(), template.bounds.height()),
+            (441.0, 317.0)
+        );
+        for (item, bounds) in [
+            (OFFER_ACCEPT_ITEM, rect(225.0, 285.0, 99.0, 25.0)),
+            (REFUSE_ITEM, rect(117.0, 285.0, 99.0, 25.0)),
+            (OFFER_TEXT_ITEM, rect(12.0, 9.0, 415.0, 267.0)),
+            (SINGLE_ITEM, rect(173.0, 285.0, 99.0, 25.0)),
+        ] {
+            assert_eq!(template.items[item - 1].bounds, bounds, "item {item}");
+        }
+        let mut dialog = OfferDialog::new(
+            Ok((template, mono())),
+            OfferPrompt {
+                mission: MissionId(128),
+                text: "Go.".to_owned(),
+                labels: OfferLabels {
+                    accept: "Yes".to_owned(),
+                    refuse: Some("No".to_owned()),
+                },
+            },
+            ButtonStyle::STOCK,
+        );
+        let refuse = dialog
+            .dialog()
+            .and_then(|laid| laid.item_bounds(REFUSE_ITEM))
+            .expect("refuse")
+            .center();
+        for pressed in [true, false] {
+            dialog.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: refuse,
+            });
+        }
+        assert_eq!(
+            dialog.take_choice(),
+            Some(OfferChoice::Refuse),
+            "the stock refuse button, enabled"
+        );
+    }
+}
+
+#[test]
+fn the_mission_screens_pictures_decode_at_their_dialogs_sizes() {
+    use nova_view::spaceport::missions::{COMPUTER_BACKGROUND, INFO_BACKGROUND};
+    use nova_view::spaceport::offer::FRAME as OFFER_FRAME;
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let size = |key: ImageKey| {
+        let image = picture(&data, key.id);
+        (image.width(), image.height())
+    };
+    assert_eq!(size(COMPUTER_BACKGROUND), (510, 201));
+    assert_eq!(size(INFO_BACKGROUND), (471, 155));
+    assert_eq!(size(OFFER_FRAME.top), (441, 9));
+    assert_eq!(size(OFFER_FRAME.middle), (441, 365));
+    assert_eq!(size(OFFER_FRAME.bottom), (441, 40));
+    assert_eq!(
+        (OFFER_FRAME.top_height, OFFER_FRAME.bottom_height),
+        (9.0, 40.0)
+    );
+}

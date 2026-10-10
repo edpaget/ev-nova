@@ -1,9 +1,10 @@
 //! Mission offers over the stock data: a new pilot docked at the first
 //! landable stellar of its starting system, its offers rolled as the
 //! session settles with every roll 1, is offered missions at the mission
-//! computer, each of `AvailLoc` 0 and passing every availability field.
-//! Every `mïsn`'s texts fill every tag but the ranks'. Skips, passing, when
-//! `NOVA_DATA` is unset.
+//! computer, each of `AvailLoc` 0 and passing every availability field,
+//! and its mission computer lists them, each name cut at its ';' and each
+//! name and offer text filled. Every `mïsn`'s texts fill every tag but the
+//! ranks'. Skips, passing, when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -174,4 +175,31 @@ fn every_stock_missions_texts_fill_every_tag_but_the_ranks() {
     );
     assert_eq!(names.cargo[6], "*passengers");
     assert_eq!(text_tags::expand("<CT>", &context(6), &names), "passengers");
+}
+
+#[test]
+fn a_new_stock_pilots_mission_computer_lists_its_offers_named_and_filled() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let session = docked_new_pilot(&data);
+    let computer = session.mission_computer().expect("the computer opens");
+    assert_eq!(
+        computer.rows.len(),
+        session.mission_offers(Venue::Computer).len()
+    );
+    assert!(!computer.rows.is_empty());
+    for row in &computer.rows {
+        assert!(!row.name.is_empty(), "{:?} is named", row.mission);
+        assert!(!row.name.contains(';'), "{:?}: {}", row.mission, row.name);
+        for tag in TAGS {
+            assert!(!row.name.contains(tag), "{:?}: {}", row.mission, row.name);
+            assert!(!row.text.contains(tag), "{:?}: {}", row.mission, row.text);
+        }
+    }
+    assert!(
+        computer.rows.iter().any(|row| !row.text.is_empty()),
+        "the offers have texts"
+    );
 }
