@@ -682,7 +682,7 @@ impl Session {
         // (@0x9ebd0-0x9ec53): rdm:phase/missions/phase-17-deadline-message-and-flight-info.
         self.run_mission_script(slot, &record.on_failure, chance);
         if let Some(active) = self.slot_holding(slot, record.id) {
-            active.failed = Some(FailedBy::Deadline);
+            active.failed = Some(FailedBy::Quick);
         }
         if record.can_abort != 0 {
             self.end_mission(slot, &record, false, chance);
@@ -1615,6 +1615,7 @@ mod tests {
                 deadline: Some(after(today, 3)),
                 reached: false,
                 goals_met: true,
+                aboard: false,
                 failed: None,
             })
         );
@@ -2281,7 +2282,7 @@ mod tests {
         session.take_off(&mut NeverFires).expect("takes off");
         settle(&mut session, &catalog);
         let active = session.pilot().missions().get(0).expect("stays").clone();
-        assert_eq!(active.failed, Some(FailedBy::Deadline));
+        assert_eq!(active.failed, Some(FailedBy::Quick));
         let deadline = (marks.taken(), session.pilot().legal_record(FED));
         land_on(&mut session, &catalog, 128);
         assert_eq!(held(&session), []);
@@ -2320,7 +2321,7 @@ mod tests {
         session.take_off(&mut NeverFires).expect("takes off");
         settle(&mut session, &catalog);
         let active = session.pilot().missions().get(0).expect("stays");
-        assert_eq!(active.failed, Some(FailedBy::Deadline));
+        assert_eq!(active.failed, Some(FailedBy::Quick));
         assert_eq!(session.offers.rolled_at(), None, "forgotten");
         back_over_128(&mut session);
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
@@ -2552,7 +2553,7 @@ mod tests {
         run(&mut session, "F140");
         assert_eq!(
             session.pilot().missions().get(0).and_then(|m| m.failed),
-            Some(FailedBy::Deadline)
+            Some(FailedBy::Quick)
         );
     }
 

@@ -44,9 +44,10 @@ const NO_GOAL: i16 = -1;
 /// How an active mission failed: what its return landing still runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FailedBy {
-    /// Its deadline passed: `_QuickMissionFailure` (@0x99d1b) ran its
+    /// It failed at once, by its deadline, its cargo jettisoned or a scan
+    /// finding its cargo: `_QuickMissionFailure` (@0x99d1b) ran its
     /// `OnFailure` already, and applied no legal record.
-    Deadline,
+    Quick,
     /// An `F` operator marked it (@0x1539f): nothing ran yet.
     Operator,
 }
@@ -79,6 +80,10 @@ pub struct ActiveMission {
     pub reached: bool,
     /// Whether its ship goals are met (+2).
     pub goals_met: bool,
+    /// Whether its cargo is aboard (+0x35): loaded and not yet unloaded,
+    /// jettisoned or lost with its slot. A mission with no cargo type can
+    /// have it aboard too, for its `DumpCargoText`.
+    pub aboard: bool,
     /// Whether it failed, and how (+3).
     pub failed: Option<FailedBy>,
 }
@@ -101,6 +106,7 @@ impl ActiveMission {
             deadline: limit.map(|days| after(today, days)),
             reached: false,
             goals_met: goals_met_at_accept(record),
+            aboard: false,
             failed: None,
         }
     }
@@ -191,6 +197,17 @@ impl ActiveMissions {
                 *days = days.saturating_sub(1);
             }
         }
+    }
+
+    /// The tons of mission cargo aboard, as `_TotalCargo` (@0x4a32-0x4a68)
+    /// counts them for the player: every slot's with its cargo aboard and
+    /// its tons not below none, whatever its cargo type.
+    #[must_use]
+    pub fn cargo_aboard(&self) -> i64 {
+        self.iter()
+            .filter(|(_, active)| active.aboard && active.cargo_tons >= 0)
+            .map(|(_, active)| active.cargo_tons)
+            .sum()
     }
 
     /// The missions held, in slot order, a mission held twice listed
@@ -542,6 +559,7 @@ mod tests {
                 deadline: GameDate::new(1177, 6, 27),
                 reached: false,
                 goals_met: true,
+                aboard: false,
                 failed: None,
             }
         );
@@ -621,6 +639,29 @@ mod tests {
         active.get_mut(2).expect("held").reached = true;
         assert!(active.get(2).expect("held").reached);
         assert!(active.get_mut(1).is_none());
+    }
+
+    #[test]
+    fn the_cargo_aboard_is_every_slots_tons_aboard_whatever_its_type() {
+        let mut active = ActiveMissions::default();
+        let with = |cargo_type, cargo_tons, aboard| ActiveMission {
+            cargo_type,
+            cargo_tons,
+            aboard,
+            ..accepted(140)
+        };
+        assert_eq!(active.cargo_aboard(), 0, "none held");
+        active.put(0, with(Some(2), 7, true));
+        active.put(3, with(Some(6), 5, false));
+        active.put(9, with(None, 4, true));
+        active.put(12, with(Some(1), -2, true));
+        active.put(15, with(Some(0), 3_000_000_000, true));
+        assert_eq!(
+            active.cargo_aboard(),
+            3_000_000_011,
+            "7 typed, 4 untyped, none for the one not aboard nor below none; \
+             wider than 16 bits"
+        );
     }
 
     #[test]

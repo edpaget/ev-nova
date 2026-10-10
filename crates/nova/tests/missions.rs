@@ -768,6 +768,7 @@ fn busy(pilot: &Pilot) -> Pilot {
                 "deadline": null,
                 "reached": false,
                 "goals_met": false,
+                "aboard": false,
                 "failed": null,
             })
         })

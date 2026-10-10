@@ -102,8 +102,9 @@
 //! visible system listed it) or `null` for none, its `cargo_type` (raw, or
 //! `null`), `cargo_tons` and `pay`, its `days_left` and `deadline` date,
 //! each `null` without a `TimeLimit`, whether its destination is
-//! `reached` and its `goals_met`, and how it `failed`: `null`,
-//! `deadline` or `operator`. A slot past 15 is unusable.
+//! `reached`, its `goals_met` and its cargo `aboard`, and how it
+//! `failed`: `null`, `quick` (at once, its `OnFailure` run) or
+//! `operator` (by `F`). A slot past 15 is unusable.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -562,14 +563,14 @@ impl From<SavedStop> for Stop {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum SavedFailure {
-    Deadline,
+    Quick,
     Operator,
 }
 
 impl From<FailedBy> for SavedFailure {
     fn from(failed: FailedBy) -> Self {
         match failed {
-            FailedBy::Deadline => Self::Deadline,
+            FailedBy::Quick => Self::Quick,
             FailedBy::Operator => Self::Operator,
         }
     }
@@ -578,7 +579,7 @@ impl From<FailedBy> for SavedFailure {
 impl From<SavedFailure> for FailedBy {
     fn from(saved: SavedFailure) -> Self {
         match saved {
-            SavedFailure::Deadline => Self::Deadline,
+            SavedFailure::Quick => Self::Quick,
             SavedFailure::Operator => Self::Operator,
         }
     }
@@ -603,6 +604,7 @@ struct SavedMission {
     deadline: Option<SavedDate>,
     reached: bool,
     goals_met: bool,
+    aboard: bool,
     #[serde(deserialize_with = "Option::deserialize")]
     failed: Option<SavedFailure>,
 }
@@ -622,6 +624,7 @@ impl SavedMission {
             deadline: active.deadline.map(SavedDate::from),
             reached: active.reached,
             goals_met: active.goals_met,
+            aboard: active.aboard,
             failed: active.failed.map(SavedFailure::from),
         }
     }
@@ -660,6 +663,7 @@ fn missions_of(saved: Vec<SavedMission>) -> Result<ActiveMissions, SaveError> {
             deadline: saved.deadline.map(date_of).transpose()?,
             reached: saved.reached,
             goals_met: saved.goals_met,
+            aboard: saved.aboard,
             failed: saved.failed.map(FailedBy::from),
         };
         if !missions.put(saved.slot, active) {
@@ -1215,8 +1219,8 @@ mod tests {
         }
     }
 
-    /// Slots 2 and 9 taken, every field set, one failed by its deadline
-    /// with a deadline, one by `F` with none.
+    /// Slots 2 and 9 taken, every field set, one failed at once with a
+    /// deadline and its cargo aboard, one by `F` with none.
     fn busy() -> ActiveMissions {
         let stop = |stellar, system| {
             Some(Stop {
@@ -1238,7 +1242,8 @@ mod tests {
                 deadline: GameDate::new(1180, 3, 1),
                 reached: true,
                 goals_met: false,
-                failed: Some(FailedBy::Deadline),
+                aboard: true,
+                failed: Some(FailedBy::Quick),
             },
         );
         missions.put(
@@ -1254,6 +1259,7 @@ mod tests {
                 deadline: None,
                 reached: false,
                 goals_met: true,
+                aboard: false,
                 failed: Some(FailedBy::Operator),
             },
         );
@@ -2560,7 +2566,8 @@ mod tests {
                     "deadline": {"year": 1180, "month": 3, "day": 1},
                     "reached": true,
                     "goals_met": false,
-                    "failed": "deadline"
+                    "aboard": true,
+                    "failed": "quick"
                 },
                 {
                     "slot": 9,
@@ -2574,6 +2581,7 @@ mod tests {
                     "deadline": null,
                     "reached": false,
                     "goals_met": true,
+                    "aboard": false,
                     "failed": "operator"
                 }
             ])
