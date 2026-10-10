@@ -75,8 +75,15 @@
 //!     it (@0x9b7f1-0x9b819);
 //! 16. a `TravelStel`, then a `ReturnStel`, of -2, -3 or above 0 must find
 //!     a stellar with no origin ([`select::selectable`], @0x9b832-0x9b8b5):
-//!     a fixed stellar, or a random code with a candidate anywhere; 1-127
-//!     and 2176-9998 name the origin, which availability has none of;
+//!     a fixed stellar, or a random code whose draw has a stellar to take,
+//!     the draw as
+//!     [`mission_stellar_draw`](crate::RuleKey::MissionStellarDraw) reads
+//!     it; with no origin, a stellar is distant by the engine's reading of
+//!     [`mission_stellar_distance`](crate::RuleKey::MissionStellarDistance)
+//!     only when every system at its place lists it
+//!     (`_StellarsAreDistant` @0x9e20-0x9ee4), and by the other reading
+//!     always; 1-127 and 2176-9998 name the origin, which availability
+//!     has none of;
 //! 17. not active (@0x9b8b7-0x9b8df).
 //!
 //! **From a ship** (`_offeringFromShip` set): `AvailStel` is not read
@@ -104,7 +111,9 @@
 //!    [`mission_stellar_draw`](crate::RuleKey::MissionStellarDraw) reads:
 //!    by the engine at any distance once the original's scan finds a
 //!    distant stellar (`_SelectMissionStellar` @0x9a3ce-0x9a3db), by the
-//!    other reading only a distant one;
+//!    other reading only a distant one, distance told as
+//!    [`mission_stellar_distance`](crate::RuleKey::MissionStellarDistance)
+//!    reads it;
 //! 2. its return: the destination for `ReturnStel` -1, else the stellar
 //!    the code chooses, never the destination;
 //! 3. its cargo: `CargoType` 0-999 as it is, 1000 a `Rand(6)` commodity,

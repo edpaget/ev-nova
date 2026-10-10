@@ -906,6 +906,7 @@ impl Session {
             map: self.galaxy.map(),
             govts: &self.govts,
             draw: self.rules.source_for(RuleKey::MissionStellarDraw),
+            distance: self.rules.source_for(RuleKey::MissionStellarDistance),
         })
     }
 
@@ -1198,6 +1199,35 @@ mod tests {
                     system: Some(SystemId(to.1)),
                 }),
                 "by the engine 129, in the origin's own system; by the other reading the distant 150"
+            );
+        }
+    }
+
+    #[test]
+    fn each_reading_of_the_mission_stellar_distance_reaches_the_world() {
+        let mut catalog = offering();
+        // 133 at 130's place, holding 160: distant only by the other
+        // reading.
+        catalog.star_map[3].position = Vec2::ZERO;
+        catalog
+            .sites
+            .push((SystemId(133), vec![planet(160, 0.0, 0.0)]));
+        let rules = |distance| {
+            Rulebook::default()
+                .with_override(RuleKey::MissionStellarDraw, RuleSource::Bible)
+                .with_override(RuleKey::MissionStellarDistance, distance)
+        };
+        for (distance, asked) in [(RuleSource::Engine, 1), (RuleSource::Bible, 2)] {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(rules(distance));
+            assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+            let mut chance = Draws::arriving(&[0]);
+            let _ = session.settle_script(&catalog, &mut chance);
+            assert_eq!(
+                chance.asked,
+                table_then(&[asked]),
+                "{distance:?}: 150, and by the other reading 160 too"
             );
         }
     }

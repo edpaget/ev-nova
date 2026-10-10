@@ -3,7 +3,12 @@
 //! `ReturnStel` code names ([`StellarCode`]), the stellars a random code
 //! may land on ([`candidates`]), and the one drawn ([`select_stellar`]),
 //! as [`mission_stellar_draw`](crate::RuleKey::MissionStellarDraw) reads
-//! the original's -2 draw.
+//! the original's -2 draw. Whether a stellar is distant from the origin
+//! is as [`mission_stellar_distance`](crate::RuleKey::MissionStellarDistance)
+//! reads `_StellarsAreDistant` (@0x9cb9-0x9ef6): by the engine it
+//! compares the places of the two systems (their co-located chain heads)
+//! and their own Con links, and asks that every system at the stellar's
+//! place list it, the last alone with no origin, as availability asks.
 //!
 //! The galaxy it chooses from is a [`World`]: every stellar of a visible
 //! system, overlaid ([`stellars_of`]), the overlaid map and the
@@ -35,14 +40,21 @@ pub struct Stellar {
     pub govt: Option<GovtId>,
     /// Whether it is destroyed.
     pub destroyed: bool,
+    /// Whether every system at its system's place, hidden or not, lists
+    /// it: the co-located chain walk of `_StellarsAreDistant`
+    /// (@0x9e60-0x9ee4), over the chain `_LoadObjectData` builds of every
+    /// system at a place (@0x783d9-0x78517).
+    pub listed_at_place: bool,
 }
 
 /// Every stellar of `listed` that a visible system of `galaxy` lists, by
 /// ascending ID, each in the lowest-ID visible system that lists it, as
 /// the galaxy refresh gives each stellar its system
 /// (`_PropagateMissionBitEffects` @0x9970d-0x997bd), with the overlay's
-/// government and destroyed state. A stellar no visible system lists is
-/// left out: the original's candidates are in a visible system (+0x1eb).
+/// government and destroyed state, and whether every system at its
+/// system's place lists it ([`Stellar::listed_at_place`]). A stellar no
+/// visible system lists is left out: the original's candidates are in a
+/// visible system (+0x1eb).
 #[must_use]
 pub fn stellars_of(galaxy: &OverlaidGalaxy, listed: &[ListedStellar]) -> Vec<Stellar> {
     let map = galaxy.map();
@@ -62,6 +74,10 @@ pub fn stellars_of(galaxy: &OverlaidGalaxy, listed: &[ListedStellar]) -> Vec<Ste
                 flags2: stellar.flags2,
                 govt: galaxy.overlay().stellar(id).govt.unwrap_or(stellar.govt),
                 destroyed: galaxy.destroyed(id),
+                listed_at_place: map
+                    .places()
+                    .at(system)
+                    .all(|at| stellar.systems.contains(&at)),
             })
         })
         .collect()
@@ -80,6 +96,10 @@ pub struct World<'a> {
     /// [`mission_stellar_draw`](crate::RuleKey::MissionStellarDraw), from
     /// the rule set the caller holds ([`select_stellar`]).
     pub draw: RuleSource,
+    /// How distance from an origin is told:
+    /// [`mission_stellar_distance`](crate::RuleKey::MissionStellarDistance),
+    /// from the rule set the caller holds (see [`candidates`]).
+    pub distance: RuleSource,
 }
 
 impl World<'_> {
@@ -98,11 +118,51 @@ impl World<'_> {
         self.stellar(id).map(|stellar| stellar.system)
     }
 
-    /// Whether a stellar in `to` is distant from one in `from`: in another
-    /// system, and one the map does not link with `from` either way
-    /// (`_StellarsAreDistant` @0x9cb9).
-    fn distant(&self, from: SystemId, to: SystemId) -> bool {
-        from != to && !self.map.neighbours(from).contains(&to)
+    /// Whether `stellar` is distant from `origin`, none as availability
+    /// asks, as `self.distance` reads
+    /// [`mission_stellar_distance`](crate::RuleKey::MissionStellarDistance)
+    /// (`_StellarsAreDistant` @0x9cb9-0x9ef6).
+    ///
+    /// By the engine, as the original tells it. From an origin in a
+    /// visible system, `stellar` is distant when its system is not at the
+    /// origin's place (the same co-located chain head, @0x9d35-0x9d9d),
+    /// neither system's own Con links reach a system at the other's place
+    /// (@0x9da3-0x9e1c), and every system at its system's place lists it
+    /// ([`Stellar::listed_at_place`], the chain walk @0x9e60-0x9ee4). With
+    /// no origin only that last test is made (@0x9e20-0x9e5c). From an
+    /// origin of no visible system nothing is distant: its system is -1
+    /// (@0x9d1d-0x9d24).
+    ///
+    /// By the other reading, phase 1's test: `stellar` is in another
+    /// system, one the map does not link with the origin's either way;
+    /// with no origin, or an origin of no visible system, it is not
+    /// tested.
+    fn distant(&self, origin: Option<StellarId>, stellar: &Stellar) -> bool {
+        let from = origin.map(|origin| self.system_of(origin));
+        let to = stellar.system;
+        match self.distance {
+            RuleSource::Engine => match from {
+                None => stellar.listed_at_place,
+                Some(None) => false,
+                Some(Some(from)) => {
+                    let places = self.map.places();
+                    // Whether one of `a`'s own Con links is at `b`'s place.
+                    let reaches = |a: SystemId, b: SystemId| {
+                        self.map
+                            .listed_links(a)
+                            .iter()
+                            .any(|&link| places.together(link, b))
+                    };
+                    !places.together(from, to)
+                        && !reaches(from, to)
+                        && !reaches(to, from)
+                        && stellar.listed_at_place
+                }
+            },
+            RuleSource::Bible => from
+                .flatten()
+                .is_none_or(|from| from != to && !self.map.neighbours(from).contains(&to)),
+        }
     }
 }
 
@@ -221,10 +281,13 @@ impl Kind {
 /// drawing nothing. A candidate is in a visible system (every stellar of
 /// the `world` is), is normal landable (landable, and no hypergate or
 /// wormhole: `_StellarIsNormalLandable` @0xa9f8), is neither `origin` nor
-/// `exclude`, is of the kind, and, with an `origin`, is distant from it
-/// ([`World`]'s map: not in its system nor one linked with it). With no
-/// `origin`, as availability asks, none is excluded for it and distance
-/// is not tested.
+/// `exclude`, is of the kind, and is distant from `origin` as
+/// `world.distance` reads
+/// [`mission_stellar_distance`](crate::RuleKey::MissionStellarDistance)
+/// (`World::distant`). With no `origin`, as availability asks, none is
+/// excluded for it, and distance is by the engine only the co-located
+/// chain walk (`_StellarsAreDistant` @0x9e20-0x9ee4), by the other
+/// reading not tested.
 #[must_use]
 pub fn candidates(
     kind: Kind,
@@ -232,7 +295,6 @@ pub fn candidates(
     exclude: Option<StellarId>,
     world: &World,
 ) -> Vec<StellarId> {
-    let from = origin.and_then(|origin| world.system_of(origin));
     world
         .stellars
         .iter()
@@ -242,7 +304,7 @@ pub fn candidates(
                 && id != exclude
                 && normal_landable(stellar)
                 && kind.takes(stellar, world.govts)
-                && from.is_none_or(|from| world.distant(from, stellar.system))
+                && world.distant(origin, stellar)
         })
         .map(|stellar| stellar.id)
         .collect()
@@ -256,11 +318,14 @@ pub fn candidates(
 ///
 /// For -2 the scan (@0x9a2c7-0x9a330) is only a gate: it needs a stellar,
 /// neither `origin` nor `exclude`, normal landable and inhabited, a
-/// station or not, distant from `origin` when there is one. A stellar of
-/// no visible system is never distant (its system is -1:
+/// station or not, distant from `origin` as `World::distant` tells it,
+/// with no origin too (the chain walk alone, @0x9e20-0x9ee4). A stellar
+/// of no visible system is never distant (its system is -1:
 /// `_StellarsAreDistant` @0x9d0e-0x9d17), so the world's stellars are all
-/// it can find, and an origin of no visible system finds none
-/// (@0x9d1d-0x9d24). Once it finds one, the draw (@0x9a365-0x9a3e2) takes
+/// it can find; whether an origin of no visible system finds none
+/// (@0x9d1d-0x9d24) is as
+/// [`mission_stellar_distance`](crate::RuleKey::MissionStellarDistance)
+/// reads it. Once it finds one, the draw (@0x9a365-0x9a3e2) takes
 /// every stellar of the kind, neither `origin` nor `exclude`, normal
 /// landable, at any distance: it tests the distance of the scan's first
 /// hit, not of the stellar drawn (@0x9a3ce-0x9a3db). Where that leaves
@@ -275,16 +340,14 @@ fn drawable(
     if kind != Kind::Inhabited {
         return candidates(kind, origin, exclude, world);
     }
-    let from = origin.map(|origin| world.system_of(origin));
     let open = |stellar: &Stellar| {
         let id = Some(stellar.id);
         id != origin && id != exclude && normal_landable(stellar)
     };
-    let found = world.stellars.iter().any(|stellar| {
-        open(stellar)
-            && inhabited(stellar)
-            && from.is_none_or(|from| from.is_some_and(|from| world.distant(from, stellar.system)))
-    });
+    let found = world
+        .stellars
+        .iter()
+        .any(|stellar| open(stellar) && inhabited(stellar) && world.distant(origin, stellar));
     if !found {
         return Vec::new();
     }
@@ -294,6 +357,22 @@ fn drawable(
         .filter(|stellar| open(stellar) && kind.takes(stellar, world.govts))
         .map(|stellar| stellar.id)
         .collect()
+}
+
+/// The stellars a random code of `kind` draws from, as `world.draw` reads
+/// [`mission_stellar_draw`](crate::RuleKey::MissionStellarDraw): by the
+/// engine the original's draw (`drawable`), by the other reading the
+/// [`candidates`].
+fn pool(
+    kind: Kind,
+    origin: Option<StellarId>,
+    exclude: Option<StellarId>,
+    world: &World,
+) -> Vec<StellarId> {
+    match world.draw {
+        RuleSource::Engine => drawable(kind, origin, exclude, world),
+        RuleSource::Bible => candidates(kind, origin, exclude, world),
+    }
 }
 
 /// The stellar `code` chooses from `origin`, never `exclude` when it
@@ -320,10 +399,7 @@ pub fn select_stellar(
         StellarCode::Origin => origin,
         StellarCode::Fixed(stellar) => Some(stellar),
         StellarCode::Random(kind) => {
-            let candidates = match world.draw {
-                RuleSource::Engine => drawable(kind, origin, exclude, world),
-                RuleSource::Bible => candidates(kind, origin, exclude, world),
-            };
+            let candidates = pool(kind, origin, exclude, world);
             if candidates.is_empty() {
                 return origin;
             }
@@ -335,15 +411,22 @@ pub fn select_stellar(
 }
 
 /// Whether availability finds `code` a stellar with no origin
-/// (`_IsMissionAvailable` @0x9b832-0x9b8b5): a fixed stellar, or a random
-/// code with a candidate anywhere. A code that names the origin finds
-/// none. Nothing is drawn.
+/// (`_IsMissionAvailable` @0x9b832-0x9b8b5, which refuses when
+/// `_SelectMissionStellar` gives -1): a fixed stellar, or a random code
+/// whose draw, with no origin, has a stellar to take, the same pool
+/// [`select_stellar`] draws from. With no origin, distance is as
+/// [`mission_stellar_distance`](crate::RuleKey::MissionStellarDistance)
+/// reads it: by the engine, only whether every system at the stellar's
+/// place lists it (`_StellarsAreDistant` @0x9e20-0x9ee4); by the other
+/// reading, not tested. By the engine's draw a -2 needs that of its
+/// gate's stellar only, station or not, and the stellar it takes need not
+/// pass it. A code that names the origin finds none. Nothing is drawn.
 #[must_use]
 pub fn selectable(code: i16, world: &World) -> bool {
     match StellarCode::of(code) {
         StellarCode::Origin => false,
         StellarCode::Fixed(_) => true,
-        StellarCode::Random(kind) => !candidates(kind, None, None, world).is_empty(),
+        StellarCode::Random(kind) => !pool(kind, None, None, world).is_empty(),
     }
 }
 
@@ -387,13 +470,19 @@ mod tests {
         ])
     }
 
-    /// 130 links to 131; 132 and 133 are far from both.
+    /// 130 links to 131; 132 and 133 are far from both. 135 is at 130's
+    /// place and 136 at 131's, neither linked; 134, at 132's place, lists
+    /// 130; 137, far, lists 135.
     fn map() -> StarMap {
         StarMap::new(vec![
             star(130, (0.0, 0.0), &[131]),
             star(131, (100.0, 0.0), &[]),
             star(132, (200.0, 0.0), &[]),
             star(133, (300.0, 0.0), &[]),
+            star(134, (200.0, 0.0), &[130]),
+            star(135, (0.0, 0.0), &[]),
+            star(136, (100.0, 0.0), &[]),
+            star(137, (400.0, 0.0), &[135]),
         ])
     }
 
@@ -407,6 +496,7 @@ mod tests {
             flags2: 0,
             govt,
             destroyed: false,
+            listed_at_place: true,
         }
     }
 
@@ -415,17 +505,31 @@ mod tests {
 
     /// The candidates of `kind` from 128, in system 130, among `stellars`.
     fn of(kind: Kind, stellars: &[Stellar]) -> Vec<i16> {
+        far(RuleSource::Engine, kind, Some(128), stellars)
+    }
+
+    /// The candidates of `kind` from `origin` among `stellars`, distance
+    /// told by `reading`.
+    fn far(reading: RuleSource, kind: Kind, origin: Option<i16>, stellars: &[Stellar]) -> Vec<i16> {
         let (map, govts) = (map(), govts());
         let world = World {
             stellars,
             map: &map,
             govts: &govts,
             draw: RuleSource::Engine,
+            distance: reading,
         };
-        candidates(kind, Some(StellarId(128)), None, &world)
+        candidates(kind, origin.map(StellarId), None, &world)
             .into_iter()
             .map(|id| id.0)
             .collect()
+    }
+
+    /// The -2 candidates from 128 among `stellars` by the engine's reading
+    /// of distance, then by the other.
+    fn both(stellars: &[Stellar]) -> (Vec<i16>, Vec<i16>) {
+        let by = |reading| far(reading, Kind::Inhabited, Some(128), stellars);
+        (by(RuleSource::Engine), by(RuleSource::Bible))
     }
 
     /// The origin, 128 in 130, then `more`.
@@ -586,6 +690,7 @@ mod tests {
             map: &map,
             govts: &govts,
             draw: RuleSource::Engine,
+            distance: RuleSource::Engine,
         };
         assert_eq!(
             candidates(Kind::Inhabited, Some(StellarId(128)), None, &world),
@@ -595,7 +700,94 @@ mod tests {
     }
 
     #[test]
-    fn with_no_origin_nothing_is_excluded_for_it_nor_tested_for_distance() {
+    fn by_the_engine_a_stellar_at_the_origins_place_is_not_distant() {
+        let stellars = with_origin(&[at(135, 160, 0, None), at(133, 170, 0, None)]);
+        assert_eq!(
+            both(&stellars),
+            (vec![170], vec![160, 170]),
+            "135 shares 130's chain head (@0x9d3e-0x9d9d)"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_link_from_the_origin_to_the_stellars_place_is_not_distant() {
+        let stellars = with_origin(&[at(136, 160, 0, None), at(133, 170, 0, None)]);
+        assert_eq!(
+            both(&stellars),
+            (vec![170], vec![160, 170]),
+            "130 lists 131, at 136's place (@0x9db4-0x9dde)"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_link_from_the_stellars_system_to_the_origins_place_is_not_distant() {
+        let stellars = with_origin(&[at(137, 160, 0, None), at(133, 170, 0, None)]);
+        assert_eq!(
+            both(&stellars),
+            (vec![170], vec![160, 170]),
+            "137 lists 135, at 130's place (@0x9de4-0x9e0e)"
+        );
+    }
+
+    #[test]
+    fn only_the_two_systems_own_links_count_for_distance() {
+        let stellars = with_origin(&[at(132, 150, 0, None)]);
+        assert_eq!(
+            both(&stellars),
+            (vec![150], vec![150]),
+            "134, at 132's place, lists 130, but 132 does not"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_stellar_not_every_system_at_its_place_lists_is_not_distant() {
+        let half_listed = Stellar {
+            listed_at_place: false,
+            ..at(132, 150, 0, None)
+        };
+        let stellars = with_origin(&[half_listed, at(133, 170, 0, None)]);
+        assert_eq!(
+            both(&stellars),
+            (vec![170], vec![150, 170]),
+            "the chain walk counts 132 and 134 but finds 150 in one (@0x9e60-0x9ee4)"
+        );
+    }
+
+    #[test]
+    fn with_no_origin_the_engine_tests_only_that_every_system_at_its_place_lists_it() {
+        let half_listed = Stellar {
+            listed_at_place: false,
+            ..at(132, 150, 0, None)
+        };
+        let stellars = with_origin(&[half_listed, at(135, 160, 0, None)]);
+        assert_eq!(
+            far(RuleSource::Engine, Kind::Inhabited, None, &stellars),
+            [128, 160],
+            "no Con slot nor head is read with no origin (@0x9e20-0x9e5c)"
+        );
+        assert_eq!(
+            far(RuleSource::Bible, Kind::Inhabited, None, &stellars),
+            [128, 150, 160]
+        );
+    }
+
+    #[test]
+    fn by_the_engine_an_origin_of_no_visible_system_has_no_distant_stellar() {
+        let stellars = [
+            at(132, 150, 0, Some(FED)),
+            at(132, 151, UNINHABITED, Some(FED)),
+        ];
+        for kind in [Kind::Inhabited, Kind::Uninhabited, Kind::Govt(Some(FED))] {
+            assert_eq!(
+                far(RuleSource::Engine, kind, Some(128), &stellars),
+                Vec::<i16>::new(),
+                "{kind:?}: its system is -1 (@0x9d1d-0x9d24)"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_bible_with_no_origin_nothing_is_excluded_for_it_nor_tested_for_distance() {
         let (map, govts) = (map(), govts());
         let stellars = with_origin(&[at(131, 140, 0, None), at(132, 150, 0, None)]);
         let world = World {
@@ -603,6 +795,7 @@ mod tests {
             map: &map,
             govts: &govts,
             draw: RuleSource::Engine,
+            distance: RuleSource::Bible,
         };
         assert_eq!(
             candidates(Kind::Inhabited, None, None, &world),
@@ -616,7 +809,7 @@ mod tests {
     }
 
     #[test]
-    fn an_origin_no_visible_system_lists_is_not_tested_for_distance() {
+    fn by_the_bible_an_origin_no_visible_system_lists_is_not_tested_for_distance() {
         let (map, govts) = (map(), govts());
         let stellars = [at(130, 129, 0, None), at(132, 150, 0, None)];
         let world = World {
@@ -624,6 +817,7 @@ mod tests {
             map: &map,
             govts: &govts,
             draw: RuleSource::Engine,
+            distance: RuleSource::Bible,
         };
         assert_eq!(
             candidates(Kind::Inhabited, Some(StellarId(128)), None, &world),
@@ -638,19 +832,32 @@ mod tests {
     }
 
     /// The world of `stellars` over [`map`] and [`govts`], drawn by
-    /// `reading`, handed to `f`.
+    /// `reading`, distance told by the engine, handed to `f`.
     fn by<T>(reading: RuleSource, stellars: &[Stellar], f: impl FnOnce(&World) -> T) -> T {
+        by_both(reading, RuleSource::Engine, stellars, f)
+    }
+
+    /// The world of `stellars` over [`map`] and [`govts`], drawn by
+    /// `draw` and distance told by `distance`, handed to `f`.
+    fn by_both<T>(
+        draw: RuleSource,
+        distance: RuleSource,
+        stellars: &[Stellar],
+        f: impl FnOnce(&World) -> T,
+    ) -> T {
         let (map, govts) = (map(), govts());
         f(&World {
             stellars,
             map: &map,
             govts: &govts,
-            draw: reading,
+            draw,
+            distance,
         })
     }
 
     /// What `code` chooses from 128, never `exclude`, among `stellars` by
-    /// `reading`, drawing `draws`, with the bounds asked.
+    /// `reading`, distance told by the engine, drawing `draws`, with the
+    /// bounds asked.
     fn drawn(
         reading: RuleSource,
         code: i16,
@@ -658,7 +865,21 @@ mod tests {
         stellars: &[Stellar],
         draws: &[u32],
     ) -> (Option<i16>, Vec<u32>) {
-        by(reading, stellars, |world| {
+        drawn_by(reading, RuleSource::Engine, code, exclude, stellars, draws)
+    }
+
+    /// What `code` chooses from 128, never `exclude`, among `stellars`,
+    /// drawn by `draw` and distance told by `distance`, drawing `draws`,
+    /// with the bounds asked.
+    fn drawn_by(
+        draw: RuleSource,
+        distance: RuleSource,
+        code: i16,
+        exclude: Option<i16>,
+        stellars: &[Stellar],
+        draws: &[u32],
+    ) -> (Option<i16>, Vec<u32>) {
+        by_both(draw, distance, stellars, |world| {
             let mut chance = Draws::of(draws);
             let exclude = exclude.map(StellarId);
             let chosen = select_stellar(code, Some(StellarId(128)), exclude, world, &mut chance);
@@ -768,7 +989,20 @@ mod tests {
         );
         assert_eq!(
             drawn(RuleSource::Bible, -2, None, &stellars, &[0]),
+            (Some(128), vec![]),
+            "nothing is distant from it by the engine's distance, whichever draw"
+        );
+        assert_eq!(
+            drawn_by(
+                RuleSource::Bible,
+                RuleSource::Bible,
+                -2,
+                None,
+                &stellars,
+                &[0]
+            ),
             (Some(129), vec![2]),
+            "phase 1's draw and distance: not tested"
         );
     }
 
@@ -794,6 +1028,56 @@ mod tests {
                 "{reading:?}"
             );
         }
+    }
+
+    /// A station alone in 133, and a planet in 132 that 134, at 132's
+    /// place, does not list.
+    fn station_and_half_listed_planet() -> Vec<Stellar> {
+        let half_listed = Stellar {
+            listed_at_place: false,
+            ..at(132, 150, 0, None)
+        };
+        vec![half_listed, at(133, 160, STATION, None)]
+    }
+
+    #[test]
+    fn by_the_engine_with_no_origin_minus_2s_gate_is_chain_tested_and_its_draw_is_not() {
+        let stellars = station_and_half_listed_planet();
+        let with_no_origin = |draw| {
+            by(draw, &stellars, |world| {
+                let mut chance = Draws::of(&[0]);
+                let chosen = select_stellar(-2, None, None, world, &mut chance);
+                (chosen.map(|id| id.0), chance.asked)
+            })
+        };
+        assert_eq!(
+            with_no_origin(RuleSource::Engine),
+            (Some(150), vec![1]),
+            "the station passes the gate (@0x9a2c7-0x9a330); the drawn 150 is not chain-tested (@0x9a3ce-0x9a3db)"
+        );
+        assert_eq!(
+            with_no_origin(RuleSource::Bible),
+            (None, vec![]),
+            "only a candidate, and 150 fails the chain walk"
+        );
+        let half_listed_only = [station_and_half_listed_planet()[0]];
+        let gate_shut = by(RuleSource::Engine, &half_listed_only, |world| {
+            select_stellar(-2, None, None, world, &mut Draws::default())
+        });
+        assert_eq!(gate_shut, None, "150 alone fails the gate's chain walk");
+    }
+
+    #[test]
+    fn availability_finds_what_the_draw_would_take_by_each_reading() {
+        let stellars = station_and_half_listed_planet();
+        assert!(
+            by(RuleSource::Engine, &stellars, |world| selectable(-2, world)),
+            "the station opens the gate and the draw takes 150"
+        );
+        assert!(
+            !by(RuleSource::Bible, &stellars, |world| selectable(-2, world)),
+            "no candidate: 150 fails the chain walk, 160 is a station"
+        );
     }
 
     #[test]
@@ -894,6 +1178,42 @@ mod tests {
     }
 
     #[test]
+    fn a_stellar_is_listed_at_its_place_when_every_system_there_lists_it() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(130), Some(false));
+        let systems: Vec<StarSystem> = vec![
+            star(130, (0.0, 0.0), &[]),
+            star(131, (0.0, 0.0), &[]),
+            star(132, (200.0, 0.0), &[]),
+        ];
+        let galaxy = OverlaidGalaxy::new(systems, overlay);
+        let listed = |id, systems: &[i16]| ListedStellar {
+            id: StellarId(id),
+            systems: systems.iter().copied().map(SystemId).collect(),
+            flags: 0,
+            flags2: 0,
+            govt: None,
+        };
+        let stellars = stellars_of(
+            &galaxy,
+            &[
+                listed(140, &[130, 131]),
+                listed(141, &[131]),
+                listed(150, &[132]),
+            ],
+        );
+        let at_place: Vec<(i16, i16, bool)> = stellars
+            .iter()
+            .map(|stellar| (stellar.id.0, stellar.system.0, stellar.listed_at_place))
+            .collect();
+        assert_eq!(
+            at_place,
+            [(140, 131, true), (141, 131, false), (150, 132, true)],
+            "the hidden 130 shares 131's place and lists 140 only: the chain takes in every system there (@0x78442-0x784e3)"
+        );
+    }
+
+    #[test]
     fn the_stellars_of_the_visible_systems_go_to_the_lowest_id_listing_each() {
         let mut overlay = GalaxyOverlay::default();
         overlay.set_visible(SystemId(130), Some(false));
@@ -930,6 +1250,7 @@ mod tests {
             flags2: 0x0010,
             govt,
             destroyed,
+            listed_at_place: true,
         };
         assert_eq!(
             stellars,
@@ -946,6 +1267,7 @@ mod tests {
             map: &map,
             govts: &govts,
             draw: RuleSource::Engine,
+            distance: RuleSource::Engine,
         };
         assert_eq!(world.system_of(StellarId(160)), Some(SystemId(132)));
         assert_eq!(world.system_of(StellarId(128)), None, "in a hidden system");

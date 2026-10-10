@@ -45,6 +45,7 @@ fn at(system: i16, id: i16, govt: Option<GovtId>) -> Stellar {
         flags2: 0,
         govt,
         destroyed: false,
+        listed_at_place: true,
     }
 }
 
@@ -93,12 +94,14 @@ impl Galaxy {
         }
     }
 
-    /// The galaxy, its random -2 drawn by the Bible's reading of
-    /// [`RuleKey::MissionStellarDraw`]: phase 1's draw.
+    /// The galaxy, its random -2 drawn and its distance told by the
+    /// Bible's readings of [`RuleKey::MissionStellarDraw`] and
+    /// [`RuleKey::MissionStellarDistance`]: phase 1's draw.
     fn by_bible() -> Self {
         Self {
             rules: Rulebook::default()
-                .with_override(RuleKey::MissionStellarDraw, RuleSource::Bible),
+                .with_override(RuleKey::MissionStellarDraw, RuleSource::Bible)
+                .with_override(RuleKey::MissionStellarDistance, RuleSource::Bible),
             ..Self::new()
         }
     }
@@ -116,6 +119,7 @@ impl Galaxy {
                 map: &self.map,
                 govts: &self.govts,
                 draw: self.rules.source_for(RuleKey::MissionStellarDraw),
+                distance: self.rules.source_for(RuleKey::MissionStellarDistance),
             },
             player: Player {
                 record: 0,
@@ -843,6 +847,27 @@ fn a_destination_or_return_that_finds_no_stellar_refuses() {
     for code in [-1, -4, -5, 0, 140, 2175, -2, -3, 10000, 10001] {
         assert_eq!(plainly(|m| m.travel_stel = code), [], "{code}");
     }
+}
+
+#[test]
+fn availability_chain_tests_a_random_destination_by_the_engine_alone() {
+    let mut galaxy = Galaxy::new();
+    for stellar in &mut galaxy.stellars {
+        stellar.listed_at_place = stellar.id != StellarId(152);
+    }
+    let minus_3 = with(|m| m.travel_stel = -3);
+    assert_eq!(
+        refusals(&galaxy.visit(), &minus_3),
+        [Refusal::TravelStel],
+        "152, the only uninhabited stellar, is not listed by every system at its place (@0x9e60-0x9ee4)"
+    );
+    galaxy.rules =
+        Rulebook::default().with_override(RuleKey::MissionStellarDistance, RuleSource::Bible);
+    assert_eq!(
+        refusals(&galaxy.visit(), &minus_3),
+        [],
+        "the other reading tests no distance with no origin"
+    );
 }
 
 #[test]
