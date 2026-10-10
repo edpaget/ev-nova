@@ -74,6 +74,12 @@ pub const HOLOVID_LABEL: &str = "Holovid";
 /// 14).
 pub const HIRE_KEYS: [Key; 2] = [Key::Char('h'), Key::Char('e')];
 
+/// The key that asks for the mission info screen from the bar, the
+/// spaceport and the mission computer. The original reads it from the
+/// player's key settings (`_keyPrefs` +0x50), whose default is not in
+/// `Nova-DF.rsrc`; I is free on every spaceport screen.
+pub const MISSION_INFO_KEY: Key = Key::Char('i');
+
 /// How long after the bar opens it first asks for an offer: 15 of the
 /// Mac's ticks (`_DoBarDialog` @0x48f51-0x48f5f).
 pub const FIRST_OFFER_DELAY: Duration = mac_ticks(FIRST_OFFER_TICKS);
@@ -148,6 +154,15 @@ struct Offering {
     choice: Option<(MissionId, OfferChoice)>,
 }
 
+/// What the bar has asked whoever holds the session for.
+#[derive(Clone, Copy, Debug, Default)]
+struct Asks {
+    /// The ships for hire: Hire Escort was pressed.
+    hire: bool,
+    /// The mission info screen: [`MISSION_INFO_KEY`] was pressed.
+    info: bool,
+}
+
 /// The bar of the stellar landed on.
 #[derive(Clone, Debug)]
 pub struct BarScreen {
@@ -161,9 +176,8 @@ pub struct BarScreen {
     hire: Option<HireScreen>,
     /// The mission offers, once given.
     offering: Option<Offering>,
-    /// Whether Hire Escort has asked for the list since this was last
-    /// taken.
-    requested: bool,
+    /// What the bar has asked for since each was last taken.
+    asks: Asks,
     closed: bool,
     sounds: Vec<Sound>,
 }
@@ -228,7 +242,7 @@ impl BarScreen {
             room,
             hire: None,
             offering: None,
-            requested: false,
+            asks: Asks::default(),
             closed: false,
             sounds: Vec::new(),
         }
@@ -326,7 +340,13 @@ impl BarScreen {
     /// was last asked: whoever holds the session answers with
     /// [`BarScreen::open_hire`].
     pub fn take_hire_request(&mut self) -> bool {
-        std::mem::take(&mut self.requested)
+        std::mem::take(&mut self.asks.hire)
+    }
+
+    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
+    /// since this was last asked.
+    pub fn take_info_request(&mut self) -> bool {
+        std::mem::take(&mut self.asks.info)
     }
 
     /// Opens the hire screen over the bar on `list`; with nothing for
@@ -380,7 +400,7 @@ impl BarScreen {
         {
             laid.dialog.set_text(TEXT_ITEM, &laid.text);
         }
-        self.requested = true;
+        self.asks.hire = true;
     }
 
     /// Activates dialog item `item`: Leave leaves and Hire Escort asks.
@@ -436,6 +456,16 @@ impl Screen for BarScreen {
             && HIRE_KEYS.contains(&key)
         {
             self.ask();
+            return ScreenAction::None;
+        }
+        if *input
+            == (Input::Key {
+                key: MISSION_INFO_KEY,
+                pressed: true,
+                repeat: false,
+            })
+        {
+            self.asks.info = true;
             return ScreenAction::None;
         }
         let event = laid.dialog.input(input);
@@ -1157,5 +1187,19 @@ mod tests {
             Some((MissionId(141), OfferChoice::Refuse))
         );
         assert_eq!(screen.take_sounds(), [DOWN, UP]);
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_for_mission_info_on_a_press_only() {
+        let mut screen = bar();
+        assert!(!screen.take_info_request());
+        screen.input(&key(MISSION_INFO_KEY, true));
+        assert!(!screen.take_info_request(), "a repeat");
+        screen.input(&key(MISSION_INFO_KEY, false));
+        assert!(screen.take_info_request());
+        assert!(!screen.take_info_request(), "once");
+        assert!(!screen.take_hire_request());
+        assert_eq!(MISSION_INFO_KEY, Key::Char('i'));
+        assert!(!HIRE_KEYS.contains(&MISSION_INFO_KEY));
     }
 }

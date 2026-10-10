@@ -1,15 +1,16 @@
 //! Missions through the whole app: synthetic game data (a `chär` with
 //! 25,000 credits flying the "Boarder" from Alpha, whose one stellar, the
 //! "Pad" at the centre, has a bar; mission 128, "Run to <DST>", offered
-//! at the Pad's mission computer, going to the Pad and back, with an
-//! offer text, a `BriefText` and a `CompText`; mission 129, "Errand",
-//! going nowhere, with no text; and at the bar, mission 130, "Bar job",
+//! at the Pad's mission computer, going to the Pad and back within 7
+//! days, with an offer text, a `BriefText`, a `QuickBrief` and a
+//! `CompText`; mission 129, "Errand", going nowhere, which cannot be
+//! aborted, with no text; and at the bar, mission 130, "Bar job",
 //! labelled "I'm in", with an offer text and a `BriefText`, and mission
 //! 131, "Second", with an offer text, a `RefuseText` and an `OnRefuse`
 //! setting bit 7) and a synthetic interface file holding the "Spaceport",
-//! the mission computer (`DLOG` 1006), "Bar" (1013), the offer dialog
-//! (1016) and "Desc Dialog" (3003), driven only by window events, with
-//! pilots kept in the in-memory store.
+//! the mission computer (`DLOG` 1006), the mission info screen (1012),
+//! "Bar" (1013), the offer dialog (1016) and "Desc Dialog" (3003), driven
+//! only by window events, with pilots kept in the in-memory store.
 //!
 //! The mission computer: the pilot lands, and Mission BBS lists "Run to
 //! Pad" and "Errand", the first one's text filled. Accept shows its
@@ -23,6 +24,11 @@
 //! `BriefText` shows. After the gap, the second is offered, and N refuses
 //! it: its `RefuseText` shows, and its `OnRefuse` set bit 7, which the
 //! saved pilot carries. Nothing more is offered.
+//!
+//! Mission info: with the run and the errand accepted, I in the spaceport
+//! lists both, the run's `QuickBrief` showing its deadline. Abort does
+//! nothing on the errand; on the run it frees its slot, which the saved
+//! pilot shows, and the screen lists the errand alone.
 
 use std::cell::RefCell;
 use std::io;
@@ -56,7 +62,9 @@ use nova_view::Key;
 use nova_view::flight::SharedChance;
 use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
-use nova_view::spaceport::missions::{ACCEPT_ITEM, MissionComputerScreen};
+use nova_view::spaceport::missions::{
+    ABORT_ITEM, ACCEPT_ITEM, MissionComputerScreen, MissionInfoScreen,
+};
 use nova_view::spaceport::{OfferDialog, SpaceportView};
 use nova_view::text::fixture::MonoMetrics;
 
@@ -207,6 +215,20 @@ fn mission(travel: i16, brief: i16, comp: i16) -> Vec<u8> {
     bytes
 }
 
+/// `mission` with a `QuickBrief` of `dësc` 204 and a `TimeLimit` of 7
+/// days.
+fn timed(mut mission: Vec<u8>) -> Vec<u8> {
+    put_i16s(&mut mission, 0x36, &[204]);
+    put_i16s(&mut mission, 0x40, &[7]);
+    mission
+}
+
+/// `mission` with a `CanAbort` of 0.
+fn unabortable(mut mission: Vec<u8>) -> Vec<u8> {
+    put_i16s(&mut mission, 0x42, &[0]);
+    mission
+}
+
 /// [`mission`] going nowhere, offered at the Pad's bar, with these raw
 /// labels, `RefuseText` and `OnRefuse`.
 fn bar_mission(brief: i16, refuse: i16, accept_label: &[u8], on_refuse: &[u8]) -> Vec<u8> {
@@ -263,9 +285,15 @@ fn game_data() -> Rc<GameData> {
             Mission::TYPE,
             128,
             Some(b"Run to <DST>;courier"),
-            &mission(128, 200, 201),
+            &timed(mission(128, 200, 201)),
         )
-        .resource(Mission::TYPE, 129, Some(b"Errand"), &mission(-1, -1, -1))
+        .resource(
+            Mission::TYPE,
+            129,
+            Some(b"Errand"),
+            &unabortable(mission(-1, -1, -1)),
+        )
+        .resource(Desc::TYPE, 204, None, &desc("Back to <DST> by <DL>."))
         .resource(
             Mission::TYPE,
             130,
@@ -294,7 +322,7 @@ fn game_data() -> Rc<GameData> {
         )
         .resource(PICT, 700, Some(b"Status Bar"), &pict(194, 16, [66, 66, 66]));
     for id in [
-        8500, 8501, 8503, 8505, 8521, 8522, 8523, 8524, 8525, 8526, 10_004,
+        8500, 8501, 8503, 8505, 8517, 8521, 8522, 8523, 8524, 8525, 8526, 10_004,
     ] {
         fork = fork.resource(PICT, id, None, &pict(6, 5, [40, 40, 40]));
     }
@@ -344,31 +372,10 @@ fn dialog(id: i16, (width, height): (i16, i16), items: &[Item]) -> [(ResType, i1
     [(Dlog::TYPE, id, dlog), (Ditl::TYPE, id, list)]
 }
 
-/// The interface file: stock "Spaceport" (`DLOG` 1000), the mission
-/// computer (1006), "Bar" (1013), the offer dialog (1016) and "Desc
-/// Dialog" (3003), each with its items as stock has them.
-fn interface() -> InterfaceData {
-    let spaceport = dialog(
-        1000,
-        (618, 517),
-        &[
-            ((242, 551, 200, 25), true),
-            ((452, 549, 68, 30), false),
-            ((159, 297, 303, 18), false),
-            ((471, 416, 145, 25), true),
-            ((3, 3, 612, 285), true),
-            ((160, 327, 301, 185), false),
-            ((3, 414, 145, 25), true),
-            ((471, 375, 145, 25), true),
-            ((471, 333, 145, 25), true),
-            ((3, 374, 145, 25), true),
-            ((3, 333, 145, 25), true),
-            ((471, 456, 145, 25), true),
-            ((3, 456, 145, 25), true),
-            ((524, 550, 68, 30), false),
-            ((605, 548, 32, 32), false),
-        ],
-    );
+/// The mission computer (`DLOG` 1006), the mission info screen (1012),
+/// "Bar" (1013), the offer dialog (1016) and "Desc Dialog" (3003), each
+/// with its items as stock has them.
+fn mission_dialogs() -> [[(ResType, i16, Vec<u8>); 2]; 5] {
     let computer = dialog(
         1006,
         (510, 201),
@@ -430,8 +437,50 @@ fn interface() -> InterfaceData {
             ((373, 287, 23, 23), false),
         ],
     );
-    let fork = [spaceport, computer, bar, offer, text]
-        .into_iter()
+    let info = dialog(
+        1012,
+        (471, 155),
+        &[
+            ((290, 125, 99, 25), true),
+            ((9, 24, 195, 84), true),
+            ((13, 1, 193, 12), true),
+            ((218, 26, 242, 91), false),
+            ((57, 125, 99, 25), true),
+            ((177, 222, 55, 37), true),
+            ((343, 4, 122, 12), false),
+        ],
+    );
+    [computer, info, bar, offer, text]
+}
+
+/// The interface file: stock "Spaceport" (`DLOG` 1000), the mission
+/// computer (1006), the mission info screen (1012), "Bar" (1013), the
+/// offer dialog (1016) and "Desc Dialog" (3003), each with its items as
+/// stock has them.
+fn interface() -> InterfaceData {
+    let spaceport = dialog(
+        1000,
+        (618, 517),
+        &[
+            ((242, 551, 200, 25), true),
+            ((452, 549, 68, 30), false),
+            ((159, 297, 303, 18), false),
+            ((471, 416, 145, 25), true),
+            ((3, 3, 612, 285), true),
+            ((160, 327, 301, 185), false),
+            ((3, 414, 145, 25), true),
+            ((471, 375, 145, 25), true),
+            ((471, 333, 145, 25), true),
+            ((3, 374, 145, 25), true),
+            ((3, 333, 145, 25), true),
+            ((471, 456, 145, 25), true),
+            ((3, 456, 145, 25), true),
+            ((524, 550, 68, 30), false),
+            ((605, 548, 32, 32), false),
+        ],
+    );
+    let fork = std::iter::once(spaceport)
+        .chain(mission_dialogs())
         .flatten()
         .fold(ForkBuilder::new(), |fork, (ty, id, bytes)| {
             fork.resource(ty, id, None, &bytes)
@@ -611,6 +660,28 @@ impl Game {
         None
     }
 
+    /// Accepts both of the mission computer's offers, closing the run's
+    /// `BriefText`.
+    fn accept_both(&mut self) {
+        self.click_port(MISSION_BBS);
+        self.accept();
+        self.tap(Key::Enter);
+        self.accept();
+        assert_eq!(self.active(), [(0, MissionId(128)), (1, MissionId(129))]);
+    }
+
+    /// Clicks the mission info screen's item `item`.
+    fn click_info(&mut self, item: usize) {
+        let at = self
+            .spaceport()
+            .mission_info()
+            .and_then(MissionInfoScreen::dialog)
+            .and_then(|dialog| dialog.item_bounds(item))
+            .expect("an item")
+            .center();
+        self.click(at);
+    }
+
     /// The mission text shown, its lines joined by spaces.
     fn shown_text(&self) -> Option<String> {
         self.spaceport()
@@ -757,4 +828,51 @@ fn the_bar_offers_its_missions_one_after_another_and_a_refusal_runs_on_refuse() 
     // Nothing more is offered.
     assert_eq!(game.await_offer(), None);
     assert!(game.spaceport().open_bar().is_some(), "still in the bar");
+}
+
+#[test]
+fn mission_info_lists_the_active_missions_and_aborts_only_where_allowed() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_pilot(&store, &ada());
+    game.frame();
+    game.land();
+    game.accept_both();
+
+    // I lists both, the run's QuickBrief showing its deadline.
+    game.tap(Key::Char('i'));
+    let info = game.spaceport().mission_info().expect("open");
+    let slots: Vec<_> = info.info().rows.iter().map(|row| row.slot).collect();
+    assert_eq!(slots, [0, 1]);
+    let shown = texts(&game.frame());
+    for text in [
+        "Currently active missions:",
+        "Run to Pad",
+        "Errand",
+        "Back to Pad by January 8th, 0.",
+        "Abort",
+        "Done",
+    ] {
+        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    }
+
+    // Abort does nothing on the errand, which cannot be aborted.
+    game.tap(Key::Down);
+    game.click_info(ABORT_ITEM);
+    assert_eq!(game.active(), [(0, MissionId(128)), (1, MissionId(129))]);
+
+    // On the run it frees its slot; the screen lists the errand alone.
+    game.tap(Key::Up);
+    game.click_info(ABORT_ITEM);
+    assert_eq!(game.active(), [(1, MissionId(129))]);
+    let missions: Vec<_> = saved(&store)
+        .missions()
+        .iter()
+        .map(|(slot, active)| (slot, active.mission))
+        .collect();
+    assert_eq!(missions, [(1, MissionId(129))], "saved");
+    let info = game.spaceport().mission_info().expect("still open");
+    assert_eq!(info.info().rows.len(), 1);
+    game.tap(Key::Escape);
+    assert!(game.spaceport().mission_info().is_none());
+    assert_eq!(game.showing(), Showing::Spaceport);
 }

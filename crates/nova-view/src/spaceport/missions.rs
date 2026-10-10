@@ -46,6 +46,7 @@ use nova_sim::mission::screens::{
 };
 use nova_sim::{InfoRow, MissionComputer, MissionId, MissionInfo};
 
+use super::bar::MISSION_INFO_KEY;
 use super::layout::LEAVE_LABEL;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -135,6 +136,9 @@ pub struct MissionComputerScreen {
     computer: MissionComputer,
     /// The mission Accept asked for, until it is taken.
     accepted: Option<MissionId>,
+    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
+    /// since this was last taken.
+    info_requested: bool,
     closed: bool,
     sounds: Vec<Sound>,
 }
@@ -187,6 +191,7 @@ impl MissionComputerScreen {
                 today: String::new(),
             },
             accepted: None,
+            info_requested: false,
             closed: false,
             sounds: Vec::new(),
         };
@@ -227,6 +232,13 @@ impl MissionComputerScreen {
     /// The mission Accept asked for since this was last taken, once.
     pub fn take_accept(&mut self) -> Option<MissionId> {
         self.accepted.take()
+    }
+
+    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
+    /// since this was last asked (`_DoMissionDialog` item 10,
+    /// @0xa3e37-0xa3ec1).
+    pub fn take_info_request(&mut self) -> bool {
+        std::mem::take(&mut self.info_requested)
     }
 
     /// Shows `computer` in place of the one shown, keeping the selected
@@ -298,6 +310,16 @@ impl Screen for MissionComputerScreen {
             && LEAVE_KEYS.contains(&key)
         {
             self.closed = true;
+            return ScreenAction::None;
+        }
+        if *input
+            == (Input::Key {
+                key: MISSION_INFO_KEY,
+                pressed: true,
+                repeat: false,
+            })
+        {
+            self.info_requested = true;
             return ScreenAction::None;
         }
         let Ok(laid) = &mut self.laid else {
@@ -1181,5 +1203,16 @@ mod tests {
         click_info(&mut screen, ABORT_ITEM);
         assert_eq!(screen.take_sounds(), [DOWN, UP]);
         assert_eq!(screen.take_abort(), Some(0));
+    }
+
+    #[test]
+    fn the_mission_info_key_in_the_computer_asks_for_mission_info() {
+        let mut screen = screen();
+        assert!(!screen.take_info_request());
+        screen.input(&key(MISSION_INFO_KEY));
+        assert!(screen.take_info_request());
+        assert!(!screen.take_info_request(), "once");
+        assert!(!screen.closed());
+        assert_eq!(screen.take_accept(), None);
     }
 }

@@ -46,7 +46,7 @@
 //! interface file's "Spaceport" dialog when the router has dialogs;
 //! without them the spaceport says why. The spaceport takes every input:
 //! Leave, Return and Escape take off, back into flight at the stellar,
-//! and Tab, F and I do nothing.
+//! Tab and F do nothing, and I opens the mission info screen.
 //!
 //! At a trade center, the spaceport's Trade Center opens the session's
 //! exchange, laid out by the interface file's "Trade" dialog. There a
@@ -96,6 +96,12 @@
 //! `RefuseText`) show one after another in "Desc Dialog" over the
 //! spaceport, after each input and tick; those queued in flight, by an
 //! `S`, wait for the next spaceport.
+//!
+//! I, in the spaceport, the bar or the mission computer, opens the
+//! mission info screen (`DLOG` 1012) over whatever is open, when an
+//! active mission is shown there; its Abort aborts the selected mission
+//! through the session, and the screen shows the missions left, closing
+//! once none is.
 //!
 //! In the bar, missions are offered as the original's
 //! `_OfferMissionFromPort` offers them: the bar asks a quarter second
@@ -197,7 +203,7 @@ use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::bar::BAR_DIALOG;
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
-use nova_view::spaceport::missions::COMPUTER_DIALOG;
+use nova_view::spaceport::missions::{COMPUTER_DIALOG, INFO_DIALOG};
 use nova_view::spaceport::offer::{OFFER_DIALOG, OfferChoice};
 use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
 use nova_view::spaceport::shipyard::{SHIP_INFO_DIALOG, SHIPYARD_DIALOG};
@@ -1268,6 +1274,7 @@ impl AppScreen {
                 )
                 .with_missions(
                     template_of(COMPUTER_DIALOG),
+                    template_of(INFO_DIALOG),
                     template_of(OFFER_DIALOG),
                     template_of(DESC_DIALOG),
                 );
@@ -1548,6 +1555,17 @@ impl AppScreen {
         if spaceport.take_mission_computer_request() {
             let computer = self.flight.as_ref().expect(ENTERED).mission_computer();
             spaceport.open_mission_computer(computer);
+        }
+        if spaceport.take_mission_info_request() {
+            let info = self.flight.as_ref().expect(ENTERED).mission_info();
+            spaceport.open_mission_info(info);
+        }
+        // An abort frees the slot, and the info goes back, closing once
+        // nothing is left; a refusal (greyed) changes nothing.
+        if let Some(slot) = spaceport.take_mission_abort() {
+            let flight = self.flight.as_mut().expect(ENTERED);
+            let _ = flight.abort_mission(slot);
+            spaceport.set_mission_info(flight.mission_info());
         }
         if spaceport.take_hire_request()
             && let Some(list) = self.flight.as_mut().expect(ENTERED).escorts_for_hire()

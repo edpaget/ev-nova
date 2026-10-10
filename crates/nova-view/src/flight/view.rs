@@ -282,9 +282,9 @@ use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::offer_gap;
 use nova_sim::mission::screens::mac_ticks;
 use nova_sim::{
-    AcceptError, ComputerRefusal, ControlBits, HireList, HireRefusal, HireTerms, Hired,
-    MissionComputer, MissionId, MissionText, NotOffered, PayNote, PersonRules, SessionEvent,
-    VenueOffer,
+    AbortError, AcceptError, ComputerRefusal, ControlBits, HireList, HireRefusal, HireTerms, Hired,
+    MissionComputer, MissionId, MissionInfo, MissionText, NotOffered, PayNote, PersonRules,
+    SessionEvent, VenueOffer,
 };
 use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
@@ -2145,6 +2145,32 @@ impl<C> FlightView<C> {
         match &mut self.session {
             Ok(session) => session.refuse_mission(mission, &mut self.chance),
             Err(_) => Err(NotOffered),
+        }
+    }
+
+    /// The mission info screen's view, as [`Session::mission_info`] gives
+    /// it; nothing listed for a session that failed.
+    pub fn mission_info(&self) -> MissionInfo {
+        match &self.session {
+            Ok(session) => session.mission_info(),
+            Err(_) => MissionInfo {
+                rows: Vec::new(),
+                today: String::new(),
+            },
+        }
+    }
+
+    /// Aborts the mission in `slot` as [`Session::abort_mission`] does, on
+    /// the flight's chance.
+    ///
+    /// # Errors
+    ///
+    /// The [`AbortError`] that applies; a session that failed has none
+    /// active.
+    pub fn abort_mission(&mut self, slot: u8) -> Result<(), AbortError> {
+        match &mut self.session {
+            Ok(session) => session.abort_mission(slot, &mut self.chance),
+            Err(_) => Err(AbortError::NotActive),
         }
     }
 
@@ -9575,6 +9601,34 @@ mod tests {
         );
         assert_eq!(broken.refuse_mission(MissionId(130)), Err(NotOffered));
         assert_eq!(broken.take_mission_texts(), []);
+    }
+
+    #[test]
+    fn mission_info_and_aborts_go_through_the_session() {
+        let mut errands = catalog();
+        errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        errands.missions = vec![errand(130)];
+        let mut view = FlightView::new(errands);
+        assert_eq!(view.mission_info().rows, []);
+        assert_eq!(view.abort_mission(0), Err(AbortError::NotActive));
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
+        let slots: Vec<_> = view
+            .mission_info()
+            .rows
+            .iter()
+            .map(|row| row.slot)
+            .collect();
+        assert_eq!(slots, [0]);
+        assert_eq!(view.abort_mission(0), Ok(()));
+        assert_eq!(view.mission_info().rows, []);
+        let mut broken = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        assert_eq!(broken.mission_info().rows, []);
+        assert_eq!(broken.abort_mission(0), Err(AbortError::NotActive));
     }
 
     #[test]

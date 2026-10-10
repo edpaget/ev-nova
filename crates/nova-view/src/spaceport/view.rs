@@ -49,18 +49,19 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    ComputerRefusal, HireList, Market, MissionComputer, MissionId, MissionText, OfferPrompt, Order,
-    OutfitOrder, Outfitter, RechargeRefusal, Service, ShipId, ShipNaming, Shipyard, sells_fuel,
-    services,
+    ComputerRefusal, HireList, Market, MissionComputer, MissionId, MissionInfo, MissionText,
+    OfferPrompt, Order, OutfitOrder, Outfitter, RechargeRefusal, Service, ShipId, ShipNaming,
+    Shipyard, sells_fuel, services,
 };
 
+use super::bar::MISSION_INFO_KEY;
 use super::bar::{BarScreen, Hiring};
 use super::catalog::{SpaceportCatalog, StellarId};
 use super::layout::{
     BACKGROUND, LANDSCAPE_ITEM, LEAVE_ITEM, LEAVE_LABEL, NAME_FONT, NAME_ITEM, NAME_SIZE,
     RECHARGE_ITEM, RECHARGE_LABEL, TEXT_ITEM, item_service, label, landscape_id, service_item,
 };
-use super::missions::MissionComputerScreen;
+use super::missions::{MissionComputerScreen, MissionInfoScreen};
 use super::offer::OfferChoice;
 use super::outfitter::{OutfitterCatalog, OutfitterScreen};
 use super::service::ServiceScreen;
@@ -242,6 +243,8 @@ struct Barkeeping {
 struct Missioning {
     /// The mission computer's.
     computer: Result<DialogTemplate, String>,
+    /// The mission info screen's.
+    info: Result<DialogTemplate, String>,
     /// The offer dialog's, which the bar's offers show in.
     offer: Result<DialogTemplate, String>,
     /// The "Desc Dialog"'s, which the mission texts show in.
@@ -249,6 +252,9 @@ struct Missioning {
     /// Whether Mission BBS has asked for the mission computer since this
     /// was last taken.
     requested: bool,
+    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
+    /// since this was last taken.
+    info_requested: bool,
 }
 
 /// The spaceport of the stellar landed on.
@@ -275,6 +281,8 @@ pub struct SpaceportView {
     barkeeping: Option<Barkeeping>,
     /// The mission screens, once given.
     missioning: Option<Missioning>,
+    /// The mission info screen, over whatever else is open.
+    info: Option<MissionInfoScreen>,
     /// The mission texts to show, the first shown over everything.
     texts: VecDeque<DescDialog>,
     left: bool,
@@ -357,6 +365,7 @@ impl SpaceportView {
             shipbuying: None,
             barkeeping: None,
             missioning: None,
+            info: None,
             texts: VecDeque::new(),
             left: false,
             recharge: false,
@@ -664,7 +673,8 @@ impl SpaceportView {
 
     /// The spaceport with the mission screens: Mission BBS opens the
     /// mission computer laid out by `computer`, its `DLOG` (or saying why
-    /// there is none); the bar, when given, offers missions in the offer
+    /// there is none); [`MISSION_INFO_KEY`] asks for the mission info
+    /// screen, laid out by `info`; the bar, when given, offers missions in the offer
     /// dialog laid out by `offer`; and the mission texts show in "Desc
     /// Dialog", laid out by `text` (and do not show without it). Without
     /// them, Mission BBS opens its placeholder and the bar offers nothing.
@@ -672,15 +682,18 @@ impl SpaceportView {
     pub fn with_missions(
         self,
         computer: Result<DialogTemplate, String>,
+        info: Result<DialogTemplate, String>,
         offer: Result<DialogTemplate, String>,
         text: Result<DialogTemplate, String>,
     ) -> Self {
         Self {
             missioning: Some(Missioning {
                 computer,
+                info,
                 offer,
                 text,
                 requested: false,
+                info_requested: false,
             }),
             ..self
         }
@@ -796,6 +809,63 @@ impl SpaceportView {
     pub fn show_mission_texts(&mut self, texts: Vec<MissionText>) {
         for text in texts {
             self.show_text(&text.text);
+        }
+    }
+
+    /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
+    /// since this was last asked, in the spaceport, the bar or the mission
+    /// computer: whoever flies the ship answers with
+    /// [`SpaceportView::open_mission_info`].
+    pub fn take_mission_info_request(&mut self) -> bool {
+        let own = self
+            .missioning
+            .as_mut()
+            .is_some_and(|missioning| std::mem::take(&mut missioning.info_requested));
+        let open = match &mut self.open {
+            Some(Open::Bar(screen)) => screen.take_info_request(),
+            Some(Open::Computer(screen)) => screen.take_info_request(),
+            _ => false,
+        };
+        own || open
+    }
+
+    /// Opens the mission info screen on `info` over whatever is open; with
+    /// nothing to show, it does not open, as the original's does not
+    /// (@0xa3e37-0xa3ec1).
+    pub fn open_mission_info(&mut self, info: MissionInfo) {
+        let (Ok(port), Some(missioning)) = (&self.port, &self.missioning) else {
+            return;
+        };
+        if info.rows.is_empty() {
+            return;
+        }
+        let layout = missioning
+            .info
+            .clone()
+            .map(|template| (template, Rc::clone(&port.metrics.0)));
+        self.info = Some(MissionInfoScreen::new(layout, info, port.style));
+    }
+
+    /// The mission info screen open, if it is.
+    #[must_use]
+    pub fn mission_info(&self) -> Option<&MissionInfoScreen> {
+        self.info.as_ref()
+    }
+
+    /// The slot the mission info screen asked to abort since this was
+    /// last taken, once.
+    pub fn take_mission_abort(&mut self) -> Option<u8> {
+        self.info.as_mut()?.take_abort()
+    }
+
+    /// After an abort, the mission info screen shows `info`, closing once
+    /// nothing is left.
+    pub fn set_mission_info(&mut self, info: MissionInfo) {
+        if let Some(screen) = &mut self.info {
+            screen.set_info(info);
+            if screen.closed() {
+                self.info = None;
+            }
         }
     }
 
@@ -978,6 +1048,14 @@ impl Screen for SpaceportView {
             }
             return ScreenAction::None;
         }
+        if let Some(info) = &mut self.info {
+            info.input(input);
+            self.sounds.extend(info.take_sounds());
+            if info.closed() {
+                self.info = None;
+            }
+            return ScreenAction::None;
+        }
         if let Some(open) = &mut self.open {
             let screen = open.screen_mut();
             screen.input(input);
@@ -985,6 +1063,18 @@ impl Screen for SpaceportView {
             if open.closed() {
                 self.open = None;
             }
+            return ScreenAction::None;
+        }
+        if let (
+            Input::Key {
+                key: MISSION_INFO_KEY,
+                pressed: true,
+                repeat: false,
+            },
+            Some(missioning),
+        ) = (*input, &mut self.missioning)
+        {
+            missioning.info_requested = true;
             return ScreenAction::None;
         }
         let event = match &mut self.port {
@@ -1011,6 +1101,7 @@ impl Screen for SpaceportView {
     /// The screen open ticks, unless a mission text is shown over it.
     fn tick(&mut self, dt: Duration) {
         if self.texts.is_empty()
+            && self.info.is_none()
             && let Some(open) = &mut self.open
         {
             open.screen_mut().tick(dt);
@@ -1020,6 +1111,9 @@ impl Screen for SpaceportView {
     /// What is open, then the mission text shown over it.
     fn draw(&self, list: &mut DrawList) {
         self.draw_below(list);
+        if let Some(info) = &self.info {
+            info.draw(list);
+        }
         if let Some(text) = self.texts.front() {
             text.draw(list);
         }
@@ -1028,6 +1122,10 @@ impl Screen for SpaceportView {
     fn cancel_pointer(&mut self) {
         if let Some(text) = self.texts.front_mut() {
             text.cancel_pointer();
+            return;
+        }
+        if let Some(info) = &mut self.info {
+            info.cancel_pointer();
             return;
         }
         match (&mut self.open, &mut self.port) {
@@ -2756,6 +2854,7 @@ mod tests {
     fn missioned() -> SpaceportView {
         earth().with_missions(
             Ok(computer_template()),
+            Ok(info_template()),
             Ok(text_template()),
             Ok(text_template()),
         )
@@ -2938,6 +3037,7 @@ mod tests {
     fn without_a_text_dialog_mission_texts_are_not_shown() {
         let mut view = earth().with_missions(
             Ok(computer_template()),
+            Err("no DLOG 1012".to_owned()),
             Err("no DLOG 1016".to_owned()),
             Err("no DLOG 3003".to_owned()),
         );
@@ -3030,5 +3130,116 @@ mod tests {
         view.open_offer(offered());
         view.rearm_offers(Duration::ZERO);
         assert_eq!(view.take_offer_choice(), None);
+    }
+
+    // Mission info.
+
+    use crate::spaceport::missions::ABORT_ITEM;
+    use nova_sim::InfoRow;
+
+    /// The mission info screen's shape, smaller: 300 x 150, fixed at
+    /// (0, 0), with Done (1), the list (2), the heading (3), the text (4),
+    /// Abort (5) and the date (7).
+    fn info_template() -> Template {
+        let mut items: Vec<ItemTemplate> = (0..7)
+            .map(|_| ItemTemplate {
+                bounds: rect(0.0, 300.0, 1.0, 1.0),
+                enabled: true,
+                kind: ItemSpec::User,
+            })
+            .collect();
+        let mut place = |number: usize, x, y, w, h| {
+            items[number - 1].bounds = rect(x, y, w, h);
+        };
+        place(1, 190.0, 120.0, 99.0, 25.0);
+        place(2, 10.0, 24.0, 100.0, 84.0);
+        place(3, 10.0, 1.0, 190.0, 12.0);
+        place(4, 120.0, 26.0, 170.0, 80.0);
+        place(5, 60.0, 120.0, 99.0, 25.0);
+        place(7, 200.0, 4.0, 90.0, 12.0);
+        Template {
+            bounds: rect(0.0, 0.0, 300.0, 150.0),
+            placement: Placement::Fixed,
+            items,
+        }
+    }
+
+    fn actives(rows: usize) -> MissionInfo {
+        MissionInfo {
+            rows: (0..rows)
+                .map(|n| InfoRow {
+                    slot: n as u8,
+                    name: format!("Mission {n}"),
+                    failed: false,
+                    text: format!("Text {n}."),
+                    abortable: true,
+                })
+                .collect(),
+            today: "June 23rd, 1177 NC".to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_the_spaceport_the_bar_and_the_computer() {
+        let mut view = missioned();
+        view.input(&key(MISSION_INFO_KEY));
+        assert!(view.take_mission_info_request(), "the spaceport");
+        assert!(!view.take_mission_info_request(), "once");
+        let mut view = drinking_with_offers();
+        click_item(&mut view, 10);
+        view.input(&key(MISSION_INFO_KEY));
+        assert!(view.take_mission_info_request(), "the bar");
+        let mut view = missioned();
+        click_item(&mut view, 11);
+        view.open_mission_computer(Ok(offers()));
+        view.input(&key(MISSION_INFO_KEY));
+        assert!(view.take_mission_info_request(), "the computer");
+        let mut view = earth();
+        view.input(&key(MISSION_INFO_KEY));
+        assert!(!view.take_mission_info_request(), "no mission screens");
+    }
+
+    #[test]
+    fn mission_info_opens_over_whatever_is_open_only_with_missions_to_show() {
+        let mut view = missioned();
+        click_item(&mut view, 11);
+        view.open_mission_computer(Ok(offers()));
+        view.open_mission_info(actives(0));
+        assert!(view.mission_info().is_none(), "nothing to show");
+        view.open_mission_info(actives(2));
+        let info = view.mission_info().expect("open");
+        assert_eq!(info.problem(), None, "laid out by the template given");
+        assert_eq!(info.info(), &actives(2));
+        let commands = drawn(&view);
+        let mut over = DrawList::new();
+        info.draw(&mut over);
+        let over: Vec<_> = over.iter().cloned().collect();
+        assert_eq!(commands[commands.len() - over.len()..], over[..]);
+        view.input(&key(Key::Escape));
+        assert!(view.mission_info().is_none(), "Escape closed it");
+        assert!(view.mission_computer().is_some(), "and nothing below");
+    }
+
+    #[test]
+    fn an_abort_is_taken_through_the_spaceport_and_the_info_handed_back() {
+        let mut view = missioned();
+        assert_eq!(view.take_mission_abort(), None);
+        view.open_mission_info(actives(2));
+        let at = view
+            .mission_info()
+            .and_then(MissionInfoScreen::dialog)
+            .and_then(|dialog| dialog.item_bounds(ABORT_ITEM))
+            .expect("Abort")
+            .center();
+        click(&mut view, at);
+        assert_eq!(view.take_mission_abort(), Some(0));
+        assert_eq!(view.take_mission_abort(), None, "once");
+        view.set_mission_info(actives(1));
+        assert_eq!(
+            view.mission_info().map(|info| info.info().rows.len()),
+            Some(1)
+        );
+        view.set_mission_info(actives(0));
+        assert!(view.mission_info().is_none(), "closed with nothing left");
     }
 }
