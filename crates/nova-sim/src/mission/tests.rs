@@ -1147,3 +1147,48 @@ fn a_mission_refused_by_avail_random_stays_refused_and_rechecking_draws_nothing(
     }
     assert!(chance.asked.is_empty(), "{:?}", chance.asked);
 }
+
+#[test]
+fn an_offer_dropped_leaves_the_others_and_the_stellar() {
+    let galaxy = Galaxy::new();
+    let visit = galaxy.visit();
+    let mut offers = Offers::default();
+    offers.roll(&catalog(), &visit, &mut NeverFires);
+    assert!(offers.drop_offer(MissionId(130)));
+    assert!(!offers.drop_offer(MissionId(130)), "dropped already");
+    assert!(offers.drop_offer(MissionId(131)), "outside");
+    assert_eq!(ids(offers.at(Venue::Computer)), [132]);
+    assert!(offers.at(Venue::Outside).is_empty());
+    assert_eq!(offers.rolled_at(), Some(StellarId(128)));
+}
+
+#[test]
+fn a_refilter_keeps_only_the_offers_still_available_resolving_nothing() {
+    let galaxy = Galaxy::new();
+    let mut visit = galaxy.visit();
+    let mut offers = Offers::default();
+    offers.roll(&catalog(), &visit, &mut NeverFires);
+    let kept = offers.at(Venue::Computer)[1].clone();
+    let active = [MissionId(130), MissionId(131)];
+    visit.active = &active;
+    offers.refilter(&catalog(), &visit);
+    assert_eq!(offers.at(Venue::Computer), [kept], "132 as rolled");
+    assert!(offers.at(Venue::Outside).is_empty(), "131 active now");
+    let mut fewer = catalog();
+    fewer.remove(2);
+    offers.refilter(&fewer, &visit);
+    assert!(offers.at(Venue::Computer).is_empty(), "132 has no record");
+}
+
+#[test]
+fn a_roll_set_is_read_back_and_one_outside_the_table_is_ignored() {
+    let galaxy = Galaxy::new();
+    let mut offers = Offers::default();
+    offers.roll(&catalog(), &galaxy.visit(), &mut NeverFires);
+    offers.set_roll(MissionId(130), 0);
+    assert_eq!(offers.table().roll(MissionId(130)), Some(0));
+    assert_eq!(offers.table().roll(MissionId(131)), Some(1));
+    offers.set_roll(MissionId(127), 0);
+    offers.set_roll(MissionId(1128), 0);
+    assert_eq!(offers.table().roll(MissionId(127)), None);
+}

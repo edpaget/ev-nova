@@ -182,6 +182,17 @@ impl ActiveMissions {
             .is_some_and(|active| active.mission == mission)
     }
 
+    /// Counts each mission's days left down a day, as the daily step does
+    /// (@0xb590-0xb5b6): only while above none, and never one without a
+    /// limit.
+    pub fn count_down(&mut self) {
+        for active in self.slots.iter_mut().flatten() {
+            if let Some(days) = &mut active.days_left {
+                *days = days.saturating_sub(1);
+            }
+        }
+    }
+
     /// The missions held, in slot order, a mission held twice listed
     /// twice.
     #[must_use]
@@ -589,6 +600,25 @@ mod tests {
         active.get_mut(2).expect("held").reached = true;
         assert!(active.get(2).expect("held").reached);
         assert!(active.get_mut(1).is_none());
+    }
+
+    #[test]
+    fn a_day_counts_each_limit_down_to_none_and_no_further() {
+        let mut active = ActiveMissions::default();
+        let with = |days_left| ActiveMission {
+            days_left,
+            ..accepted(140)
+        };
+        active.put(0, with(Some(2)));
+        active.put(5, with(Some(0)));
+        active.put(15, with(None));
+        let left =
+            |active: &ActiveMissions| active.iter().map(|(_, m)| m.days_left).collect::<Vec<_>>();
+        active.count_down();
+        assert_eq!(left(&active), [Some(1), Some(0), None]);
+        active.count_down();
+        active.count_down();
+        assert_eq!(left(&active), [Some(0), Some(0), None]);
     }
 
     #[test]

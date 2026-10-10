@@ -4,7 +4,7 @@
 //! [module docs](super) for the original's order.
 
 use crate::catalog::{MissionId, MissionRecord, StellarId, SystemId};
-use crate::chance::Chance;
+use crate::chance::{Chance, NeverFires};
 use crate::date::GameDate;
 
 use super::select::{World, select_stellar};
@@ -47,6 +47,15 @@ impl RollTable {
         let index = usize::try_from(i32::from(id.0) - FIRST_MISSION).expect("a mission index");
         self.rolls[index] = roll;
         self
+    }
+
+    /// Sets mission `id`'s roll to `roll`, as an accept sets it to 0
+    /// (`_DoMissionAccept` @0xa2196): nothing for an ID outside 128-1127.
+    pub fn set(&mut self, id: MissionId, roll: u16) {
+        let index = usize::try_from(i32::from(id.0) - FIRST_MISSION).ok();
+        if let Some(held) = index.and_then(|index| self.rolls.get_mut(index)) {
+            *held = roll;
+        }
     }
 
     /// Mission `id`'s roll: `None` for an ID outside 128-1127, which the
@@ -221,6 +230,47 @@ impl Offers {
                 Venue::Outside => self.outside = offers,
             }
         }
+    }
+
+    /// Keeps only the offers still available at their venue on `visit`,
+    /// each as it was rolled, the table read and nothing drawn: what an
+    /// accept leaves (`_DoMissionAccept` @0xa1ffd-0xa2136, each kept only
+    /// if `_IsMissionAvailable(j, 1)` passes). An offer of a mission
+    /// `missions` has no record of is dropped.
+    pub fn refilter(&mut self, missions: &[MissionRecord], visit: &Visit) {
+        let checks = availability();
+        let table = &self.table;
+        let available = |offer: &Offer| {
+            missions
+                .iter()
+                .find(|mission| mission.id == offer.mission)
+                .is_some_and(|mission| {
+                    let facts = AvailFacts {
+                        visit,
+                        mission,
+                        venue: offer.venue,
+                        rolls: table,
+                    };
+                    checks.first_refusal(&facts, &mut NeverFires).is_ok()
+                })
+        };
+        self.computer.retain(|offer| available(offer));
+        self.outside.retain(|offer| available(offer));
+    }
+
+    /// Drops the offer of `mission`, at either venue, as an accept or a
+    /// refusal does (`_OfferMissionFromPort` @0xa3765-0xa37a1): whether
+    /// there was one.
+    pub fn drop_offer(&mut self, mission: MissionId) -> bool {
+        let before = self.computer.len() + self.outside.len();
+        self.computer.retain(|offer| offer.mission != mission);
+        self.outside.retain(|offer| offer.mission != mission);
+        self.computer.len() + self.outside.len() != before
+    }
+
+    /// Sets mission `id`'s roll in the visit's table ([`RollTable::set`]).
+    pub fn set_roll(&mut self, id: MissionId, roll: u16) {
+        self.table.set(id, roll);
     }
 
     /// Forgets the stellar the offers were rolled at, so the next landing
