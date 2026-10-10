@@ -50,12 +50,17 @@
 //! 8. `Require`: every bit the ship and its outfits contribute
 //!    ([`wares::requirement_met`]);
 //! 9. `AvailRecord` (@0x9b519-0x9b5ce): 0 passes, above 0 needs the
-//!    legal record that high, below 0 needs it that low; -32000 (the
-//!    docked stellar dominated) and -32001 (any stellar dominated) refuse
-//!    until domination is built (rdm task planet-domination), and so does
-//!    any value below them. The record is the pilot's with the docked
-//!    stellar's system's government, as the original keeps one per
-//!    system;
+//!    legal record that high (@0x9b592-0x9b5a6), below 0 needs it that
+//!    low (@0x9b5b4-0x9b5c8); -32000 needs the docked stellar dominated
+//!    (its dominated byte +0x46, @0x9b539-0x9b560), -32001 any stellar of
+//!    a visible system dominated, destroyed or not (+0x44 and +0x46 over
+//!    every slot, @0x9b562-0x9b58b), both read through the
+//!    always-dominated bit until rdm task planet-domination builds more;
+//!    any value below them refuses (@0x9b567). The original reads
+//!    `_playerRecord` of the player's system, one record per system; the
+//!    record read here is the pilot's with that system's government, 0
+//!    in an independent system, the per-government store's stand-in (see
+//!    the [`legal`](crate::legal) module's stated divergence);
 //! 10. `AvailRating`: 0 or below passes, else the combat rating that high
 //!     (@0x9b5d6-0x9b608);
 //! 11. `AvailRandom`: above 99 passes, else the visit's roll for the
@@ -88,8 +93,9 @@
 //!
 //! **From a ship** (`_offeringFromShip` set): `AvailStel` is not read
 //! (@0x9b321), so the venue needs no stellar docked; an `AvailRecord` of
-//! -32000 or below is read as any value below 0, the record at or below
-//! it (@0x9b52e-0x9b537, @0x9b5b4), domination left out; and a
+//! -32000 or below is read as any value below 0, the player's system's
+//! record at or below it (@0x9b52e-0x9b537, @0x9b5b4-0x9b5c8),
+//! domination left out; and a
 //! `CargoQty` above 0 needs the room for it whatever `Flags2` says
 //! (@0x9b641-0x9b687). Every other check runs as at a stellar, against
 //! the player's system. At the other venues a visit with no stellar
@@ -427,8 +433,11 @@ const NOWHERE: i16 = -1;
 /// `AvailStel` at or below which a mission is never offered: an empty
 /// `mïsn` slot's.
 const UNOFFERED: i16 = -32000;
-/// `AvailRecord`: the docked stellar dominated.
+/// `AvailRecord`: the docked stellar dominated (@0x9b539-0x9b560).
 const DOMINATED_HERE: i16 = -32000;
+/// `AvailRecord`: any stellar of a visible system dominated
+/// (@0x9b562-0x9b58b).
+const DOMINATED_ANY: i16 = -32001;
 /// `AvailRandom` above which no roll is read.
 const ALWAYS: i16 = 99;
 /// `Flags`: needs a jump's fuel.
@@ -490,8 +499,9 @@ pub enum Refusal {
 /// What the checks read about the player.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Player {
-    /// The legal record with the docked stellar's system's government, 0
-    /// in an independent system.
+    /// The legal record with the player's system's government, 0 in an
+    /// independent system: the stand-in for the original's record of the
+    /// player's system (@0x9b592-0x9b5c4).
     pub record: i16,
     /// The combat rating.
     pub rating: i64,
@@ -702,11 +712,32 @@ fn avail_record(facts: &AvailFacts) -> Result<(), Refusal> {
         // From a ship, any value below 0 needs the record that low
         // (@0x9b52e-0x9b537, @0x9b5b4).
         ..=DOMINATED_HERE if facts.venue == Venue::Ship => record <= wanted,
-        // -32000, -32001 and below: domination, which is not built.
-        ..=DOMINATED_HERE => false,
+        DOMINATED_HERE => facts
+            .visit
+            .docked
+            .is_some_and(|site| dominated(site.flags2)),
+        DOMINATED_ANY => facts
+            .visit
+            .world
+            .stellars
+            .iter()
+            .any(|stellar| dominated(stellar.flags2)),
+        // Below -32001 at a stellar: never (@0x9b567).
+        ..DOMINATED_ANY => false,
         _ => record <= wanted,
     };
     pass(takes, Refusal::AvailRecord)
+}
+
+/// Whether a stellar of `flags2` is dominated: its always-dominated bit
+/// ([`DOMINATED`](crate::market::DOMINATED)), from which the original
+/// sets the stellar's dominated byte (+0x46) at `_ResetPlayerRecord`
+/// (@0x1dbdb-0x1dbdf) and `_HandleStellarSystemVisibility`
+/// (@0x32ce5-0x32ceb). That bit is the engine's whole domination state
+/// until rdm task planet-domination feeds the state it builds through
+/// here.
+fn dominated(flags2: u16) -> bool {
+    flags2 & crate::market::DOMINATED != 0
 }
 
 fn avail_rating(facts: &AvailFacts) -> Result<(), Refusal> {

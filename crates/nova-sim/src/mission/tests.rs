@@ -7,6 +7,7 @@ use crate::control::{ControlBits, FreshPilot, PilotFacts, Test, TestExpr};
 use crate::govt::Governments;
 use crate::hyperspace::StarMap;
 use crate::landing::StellarFlags;
+use crate::market::DOMINATED;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::rules::Verdict;
 use crate::testkit::{Draws, Scripted, govt, mission, planet, star};
@@ -398,6 +399,17 @@ fn from_a_ship_an_avail_record_of_domination_needs_a_record_that_low() {
     assert_eq!(record_of(-9, -10), [Refusal::AvailRecord]);
     assert_eq!(record_of(9, 10), [Refusal::AvailRecord]);
     assert_eq!(record_of(-500, 0), []);
+    assert_eq!(
+        from_a_ship(
+            |visit| {
+                visit.player.record = -31999;
+                dominate_docked(visit);
+            },
+            |m| m.avail_record = -32000
+        ),
+        [Refusal::AvailRecord],
+        "a dominated stellar does not stand in for the record"
+    );
 }
 
 #[test]
@@ -654,11 +666,129 @@ fn avail_record_0_passes_above_0_needs_that_high_and_below_that_low() {
     assert_eq!(record_of(-31999, -31999), []);
 }
 
+/// Why mission 130 with `AvailRecord` `avail_record` is not offered on
+/// [`Galaxy::visit`], once `stellars` has changed the galaxy's stellars
+/// and `adjust` the visit.
+fn dominion(
+    stellars: impl FnOnce(&mut Vec<Stellar>),
+    adjust: impl FnOnce(&mut Visit),
+    avail_record: i16,
+) -> Vec<Refusal> {
+    let mut galaxy = Galaxy::new();
+    stellars(&mut galaxy.stellars);
+    let mut visit = galaxy.visit();
+    adjust(&mut visit);
+    refusals(&visit, &with(|m| m.avail_record = avail_record))
+}
+
+/// Gives stellar `id` of the galaxy the always-dominated bit.
+fn dominate(stellars: &mut [Stellar], id: i16) {
+    for stellar in stellars.iter_mut().filter(|s| s.id == StellarId(id)) {
+        stellar.flags2 |= DOMINATED;
+    }
+}
+
+/// Gives the docked stellar's site the always-dominated bit.
+fn dominate_docked(visit: &mut Visit) {
+    if let Some(site) = visit.docked.as_mut() {
+        site.flags2 |= DOMINATED;
+    }
+}
+
 #[test]
-fn avail_record_of_domination_refuses_until_domination_is_built() {
-    for avail_record in [-32000, -32001, -32002, i16::MIN] {
+fn avail_record_minus_32000_needs_the_docked_stellar_dominated() {
+    for record in [i16::MAX, 0, i16::MIN] {
         assert_eq!(
-            record_of(i16::MIN, avail_record),
+            dominion(
+                |_| {},
+                |visit| {
+                    visit.player.record = record;
+                    dominate_docked(visit);
+                },
+                -32000
+            ),
+            [],
+            "dominated, record {record}"
+        );
+        assert_eq!(
+            dominion(|_| {}, |visit| visit.player.record = record, -32000),
+            [Refusal::AvailRecord],
+            "not dominated, record {record}"
+        );
+    }
+    assert_eq!(
+        dominion(
+            |stellars| {
+                dominate(stellars, 128);
+                dominate(stellars, 129);
+            },
+            |visit| visit.player.record = i16::MIN,
+            -32000
+        ),
+        [Refusal::AvailRecord],
+        "the docked site's bit, not the world list's"
+    );
+}
+
+#[test]
+fn avail_record_minus_32001_needs_any_stellar_of_a_visible_system_dominated() {
+    for record in [i16::MAX, 0, i16::MIN] {
+        assert_eq!(
+            dominion(
+                |stellars| dominate(stellars, 150),
+                |visit| visit.player.record = record,
+                -32001
+            ),
+            [],
+            "150 dominated, record {record}"
+        );
+        assert_eq!(
+            dominion(|_| {}, |visit| visit.player.record = record, -32001),
+            [Refusal::AvailRecord],
+            "none dominated, record {record}"
+        );
+    }
+    assert_eq!(
+        dominion(
+            |stellars| {
+                dominate(stellars, 160);
+                for stellar in stellars.iter_mut() {
+                    stellar.destroyed = stellar.id == StellarId(160);
+                }
+            },
+            |_| {},
+            -32001
+        ),
+        [],
+        "destroying a stellar leaves its +0x44 set"
+    );
+    assert_eq!(
+        dominion(
+            |stellars| stellars.retain(|s| s.id != StellarId(128)),
+            dominate_docked,
+            -32001
+        ),
+        [Refusal::AvailRecord],
+        "the world list's bits, not the docked site's"
+    );
+}
+
+#[test]
+fn avail_record_below_minus_32001_refuses_at_a_stellar() {
+    for avail_record in [-32002, i16::MIN] {
+        assert_eq!(
+            dominion(
+                |stellars| {
+                    for stellar in stellars.iter_mut() {
+                        stellar.flags2 |= DOMINATED;
+                    }
+                },
+                |visit| {
+                    visit.player.record = i16::MIN;
+                    dominate_docked(visit);
+                },
+                avail_record
+            ),
             [Refusal::AvailRecord],
             "{avail_record}"
         );
