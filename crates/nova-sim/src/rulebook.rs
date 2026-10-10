@@ -81,6 +81,7 @@
 //! | [`RepeatMissionFailure`](RuleKey::RepeatMissionFailure) | `repeat_mission_failure` | an unabortable mission failed by its deadline stays active and failed, and at its return landing runs `OnFailure` a second time and applies the failure records (`_QuickMissionFailure` @0x99d1b-0x99dab, `_MissionLandCheck` @0xa1a92, `_DoMissionFailure` @0xa0285; see [`mission`](crate::mission)) | its return landing frees it without running `OnFailure` again, the failure records still applied once; a mission failed by `F` runs `OnFailure` once at its return either way\* |
 //! | [`StartActiveMission`](RuleKey::StartActiveMission) | `start_active_mission` | `S` accepts a mission active already into another slot (`_EvalSetExp` @0x153b9-0x15418; see [`mission`](crate::mission)) | `S` leaves an active mission and the slots as they are\* |
 //! | [`PayMillions`](RuleKey::PayMillions) | `pay_millions` | a mission text's `<PAY>` of a million or more reads in millions to two places, truncated, "1.23M" (`_StrcatCommaNumber` @0x8990-0x8aa3; see [`text_tags`](crate::text_tags)) | it reads in full with its commas, "1,234,567"\* |
+//! | [`MissionOrder`](RuleKey::MissionOrder) | `mission_order` | offers of `DispWeight` 0 or more keep index order, the rest after by descending weight (`_RandomizeMissionData` @0xa1842-0xa197d; see [`mission`](crate::mission)) | all by descending `DispWeight`, ties in index order |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -892,6 +893,15 @@ rule_keys! {
     /// behaviour, not anything the Bible says (see
     /// [`text_tags`](crate::text_tags)).
     PayMillions => "pay_millions",
+    /// The order the mission computer and the other venues list their
+    /// offers in. By the engine, as `_RandomizeMissionData`
+    /// (@0xa1842-0xa197d) sorts them: every offer of `DispWeight` 0 or
+    /// more in mission-index order first, then the rest by descending
+    /// weight, ties in index order, as its first threshold reads the zero
+    /// padding before the weights. By the Bible's "higher values appear
+    /// nearer the top of the list", every offer by descending weight, ties
+    /// in index order (see [`mission`](crate::mission)).
+    MissionOrder => "mission_order",
 }
 
 impl RuleKey {
@@ -1059,7 +1069,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(2),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1071,7 +1081,20 @@ mod tests {
             RuleKey::from_key("pay_millions"),
             Some(RuleKey::PayMillions)
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::PayMillions));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::PayMillions)
+        );
+    }
+
+    #[test]
+    fn the_mission_order_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::MissionOrder.key(), "mission_order");
+        assert_eq!(
+            RuleKey::from_key("mission_order"),
+            Some(RuleKey::MissionOrder)
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::MissionOrder));
     }
 
     #[test]
@@ -1248,7 +1271,8 @@ mod tests {
                 RuleKey::TradeDebt,
                 RuleKey::RepeatMissionFailure,
                 RuleKey::StartActiveMission,
-                RuleKey::PayMillions
+                RuleKey::PayMillions,
+                RuleKey::MissionOrder
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");

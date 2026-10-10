@@ -7,8 +7,10 @@ use crate::catalog::{MissionId, MissionRecord, StellarId, SystemId};
 use crate::chance::{Chance, NeverFires};
 use crate::date::GameDate;
 
+use super::screens::display_order;
 use super::select::{World, select_stellar};
 use super::{AvailFacts, Venue, Visit, availability};
+use crate::rulebook::RuleKey;
 
 /// How many rolls the table holds: one for each mission index, 0-999
 /// (`_missionRandom`, 0x20f240).
@@ -196,7 +198,8 @@ impl Offers {
     /// Offers `missions` (by ascending ID) again without drawing the
     /// table, as a mission's success does (@0xa1b04): the mission
     /// computer's pass, then the others', each listing every mission
-    /// available at its venue and resolving each listed one in turn.
+    /// available at its venue and resolving each listed one in turn, then
+    /// putting the list in [`display_order`] (@0xa1842).
     pub fn reoffer(&mut self, missions: &[MissionRecord], visit: &Visit, chance: &mut dyn Chance) {
         let checks = availability();
         for venue in Venue::ORDER {
@@ -212,19 +215,21 @@ impl Offers {
                     checks.first_refusal(&facts, chance).is_ok()
                 })
                 .collect();
-            let offers = listed
+            let resolved = listed
                 .into_iter()
                 .map(|mission| {
-                    resolve(
+                    let offer = resolve(
                         mission,
                         venue,
                         visit.docked.id,
                         &visit.world,
                         visit.today,
                         chance,
-                    )
+                    );
+                    (offer, mission.disp_weight)
                 })
                 .collect();
+            let offers = display_order(resolved, visit.rules.source_for(RuleKey::MissionOrder));
             match venue {
                 Venue::Computer => self.computer = offers,
                 Venue::Outside => self.outside = offers,

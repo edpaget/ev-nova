@@ -192,6 +192,26 @@
 //! [`RECORD_LIMIT`](crate::legal::RECORD_LIMIT), and wider than the
 //! original's 16 bits.
 //!
+//! # Screens
+//!
+//! What the mission computer, the offer dialog and the mission info
+//! screen show is decided here and in the session ([`screens`]); the
+//! view draws it. Each mission's name, offer text (`dësc` 4000 + its
+//! index), `BriefText`, `QuickBrief`, `CompText`, `FailText`,
+//! `RefuseText` and button labels are read once, as the session starts
+//! ([`MissionTexts`](crate::MissionTexts)); a missing `dësc` is no text.
+//!
+//! Once both venues' offers are resolved, each list is put in the order
+//! it shows ([`display_order`], `_RandomizeMissionData`
+//! @0xa1842-0xa197d). The original means to list them by descending
+//! `DispWeight`, but its first threshold reads the weight of index -1,
+//! the zero padding before `_missionAvailData` (@0xa18bb): so every offer
+//! weighing 0 or more keeps its index order and comes first, and the
+//! rest follow by descending weight, ties in index order. Every stock
+//! weight is 0 or more, so the stock lists keep index order. The Rulebook
+//! key [`mission_order`](crate::RuleKey::MissionOrder) defaults to that;
+//! its other reading is the Bible's full descending sort.
+//!
 //! A mission's stellars are matched by ID. The original also counts a
 //! stellar at the same place with the same name as the same
 //! (`_StellarsAreIdentical` @0xab35):
@@ -199,6 +219,7 @@
 
 pub mod active;
 pub mod offer;
+pub mod screens;
 pub mod select;
 
 use crate::catalog::{GovtId, LandingSite, MissionId, MissionRecord, ShipId, StellarId, SystemId};
@@ -215,6 +236,7 @@ pub use self::active::{
     success_records,
 };
 pub use self::offer::{Offer, Offers, ROLLED, RollTable, Stop, resolve};
+pub use self::screens::display_order;
 pub use self::select::{Kind, Stellar, StellarCode, World, select_stellar, stellars_of};
 
 /// Where a mission is offered.

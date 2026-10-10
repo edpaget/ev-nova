@@ -7,6 +7,7 @@ use crate::control::{ControlBits, FreshPilot, PilotFacts, Test, TestExpr};
 use crate::govt::Governments;
 use crate::hyperspace::StarMap;
 use crate::landing::StellarFlags;
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::rules::Verdict;
 use crate::testkit::{Draws, Scripted, govt, mission, planet, star};
 
@@ -1191,4 +1192,54 @@ fn a_roll_set_is_read_back_and_one_outside_the_table_is_ignored() {
     offers.set_roll(MissionId(127), 0);
     offers.set_roll(MissionId(1128), 0);
     assert_eq!(offers.table().roll(MissionId(127)), None);
+}
+
+/// Computer missions 130-135 weighing 3, -1, 0, -5, -1 and 7, and bar
+/// missions 140 and 141 weighing -2 and 4.
+fn weighted() -> Vec<MissionRecord> {
+    let computer = [3, -1, 0, -5, -1, 7].into_iter().zip(130..);
+    let outside = [-2, 4].into_iter().zip(140..);
+    computer
+        .chain(outside)
+        .map(|(weight, id)| {
+            let mut record = mission(id);
+            record.disp_weight = weight;
+            if id >= 140 {
+                record.avail_loc = 1;
+            }
+            record
+        })
+        .collect()
+}
+
+#[test]
+fn a_roll_and_a_reoffer_put_each_venues_offers_in_display_order() {
+    let galaxy = Galaxy::new();
+    let visit = galaxy.visit();
+    let mut offers = Offers::default();
+    offers.roll(&weighted(), &visit, &mut NeverFires);
+    assert_eq!(
+        ids(offers.at(Venue::Computer)),
+        [130, 132, 135, 131, 134, 133]
+    );
+    assert_eq!(ids(offers.at(Venue::Outside)), [141, 140]);
+    offers.reoffer(&weighted(), &visit, &mut NeverFires);
+    assert_eq!(
+        ids(offers.at(Venue::Computer)),
+        [130, 132, 135, 131, 134, 133]
+    );
+}
+
+#[test]
+fn by_the_bibles_order_a_roll_sorts_every_offer_by_descending_weight() {
+    let mut galaxy = Galaxy::new();
+    galaxy.rules = Rulebook::default().with_override(RuleKey::MissionOrder, RuleSource::Bible);
+    let visit = galaxy.visit();
+    let mut offers = Offers::default();
+    offers.roll(&weighted(), &visit, &mut NeverFires);
+    assert_eq!(
+        ids(offers.at(Venue::Computer)),
+        [135, 130, 132, 131, 134, 133]
+    );
+    assert_eq!(ids(offers.at(Venue::Outside)), [141, 140]);
 }
