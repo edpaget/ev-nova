@@ -591,7 +591,7 @@ mod tests {
     use crate::control::Bit;
     use crate::mission::AcceptRefusal;
     use crate::person::{GONE_ON_ACCEPT, LEAVES_ON_ACCEPT};
-    use crate::session::{AcceptError, MissionTextKind};
+    use crate::session::{AcceptError, MissionTextKind, NotOffered};
 
     /// [`targeting_ace`] of [`talking`] with Ace of `flags`, hailed and
     /// offering mission 130.
@@ -656,6 +656,26 @@ mod tests {
             0,
             "130 has no BriefText"
         );
+    }
+
+    #[test]
+    fn in_flight_only_the_mission_the_ship_offers_can_be_answered() {
+        let (_, mut session) = offered(0);
+        assert_eq!(
+            session.accept_mission(MissionId(131), &mut NeverFires),
+            Err(AcceptError::NotOffered)
+        );
+        assert_eq!(
+            session.refuse_mission(MissionId(131), &mut NeverFires),
+            Err(NotOffered)
+        );
+        assert_eq!(session.offer_text(MissionId(131), "<OSN>"), None);
+        assert_eq!(
+            session.offer_text(MissionId(130), "<OSN>"),
+            Some("Ace".to_owned()),
+            "130 is still offered"
+        );
+        assert_eq!(accept(&mut session), Ok(0));
     }
 
     /// Whether mission 130, going to its origin, counts its destination
