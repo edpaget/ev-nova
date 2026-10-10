@@ -87,9 +87,10 @@ pub const HOLOVID_LABEL: &str = "Holovid";
 pub const HIRE_KEYS: [Key; 2] = [Key::Char('h'), Key::Char('e')];
 
 /// The key that asks for the mission info screen from the bar, the
-/// spaceport and the mission computer. The original reads it from the
-/// player's key settings (`_keyPrefs` +0x50), whose default is not in
-/// `Nova-DF.rsrc`; I is free on every spaceport screen.
+/// spaceport, the mission computer and flight. The original reads it
+/// from the player's key settings (`_keyPrefs` +0x50), whose default is
+/// not in `Nova-DF.rsrc`; I is free on every spaceport screen and in
+/// flight.
 pub const MISSION_INFO_KEY: Key = Key::Char('i');
 
 /// How long after the bar opens it first asks for an offer: 15 of the

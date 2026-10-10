@@ -229,6 +229,11 @@
 //!   player give their help ([`Session::tick_assistance`], by the screen's
 //!   [`DisableRule`]), and each says when it is done, as a message
 //!   ([`comm_message`]).
+//! - I ([`MISSION_INFO_KEY`], a press), outside the map and a jump, asks
+//!   the router for the mission info screen over the paused flight
+//!   ([`FlightView::take_mission_info_request`]), letting go of the
+//!   flight keys, when the session shows an active mission there; with
+//!   none it says "You have no active missions." (`STR#` 2002 #354).
 //! - The player's escorts fly beside it (see [`Session`]), their ship
 //!   types' sprite sheets read with the traffic's. F, D, V and C (presses)
 //!   command them ([`Session::command_escorts`]): attack the player's
@@ -288,7 +293,7 @@ use std::time::Duration;
 
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::offer_gap;
-use nova_sim::mission::screens::mac_ticks;
+use nova_sim::mission::screens::{NO_ACTIVE_MISSIONS, mac_ticks};
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
     HireTerms, Hired, MissionComputer, MissionId, MissionInfo, MissionText, NotOffered,
@@ -322,6 +327,7 @@ use super::weapons::{self, BeamShown, ShotShown};
 use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMode};
+use crate::spaceport::bar::MISSION_INFO_KEY;
 use crate::system::camera::{Camera, VIEW_SIZE};
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, StellarLook, SystemScene};
@@ -1010,6 +1016,9 @@ pub struct FlightView<C> {
     pending_boarding: bool,
     /// The hail just answered, for the router.
     pending_hail: Option<HailView>,
+    /// The mission info [`MISSION_INFO_KEY`] asked the screen be opened
+    /// on, for the router.
+    pending_mission_info: Option<MissionInfo>,
     /// The mission a person hailed or boarded just offered, for the
     /// router.
     pending_offer: Option<OfferPrompt>,
@@ -1208,6 +1217,7 @@ impl<
             message: None,
             pending_boarding: false,
             pending_hail: None,
+            pending_mission_info: None,
             pending_offer: None,
             pending_leads: Vec::new(),
             hail_options: HailOptions::default(),
@@ -1393,6 +1403,27 @@ impl<
     /// dialog.
     pub fn take_hail(&mut self) -> Option<HailView> {
         self.pending_hail.take()
+    }
+
+    /// The mission info [`MISSION_INFO_KEY`] asked for the mission info
+    /// screen on, once: the router opens the screen on it over the paused
+    /// flight.
+    pub fn take_mission_info_request(&mut self) -> Option<MissionInfo> {
+        self.pending_mission_info.take()
+    }
+
+    /// Presses [`MISSION_INFO_KEY`], as `_HandlePlayer` does
+    /// (@0x70405-0x705a8): with an active mission shown, asks the router
+    /// for the mission info screen, letting go of the flight keys; with
+    /// none, says #354 on the message line.
+    fn ask_mission_info(&mut self) {
+        let info = self.mission_info();
+        if info.rows.is_empty() {
+            self.say(NO_ACTIVE_MISSIONS);
+        } else {
+            self.pending_mission_info = Some(info);
+            self.held.clear();
+        }
     }
 
     /// The mission a person hailed or boarded just offered, once: the
@@ -2024,8 +2055,8 @@ impl<C> FlightView<C> {
     }
 
     /// Holds `offer`'s prompt for the router, letting go of the flight
-    /// keys; a mission accepted at once shows nothing, its texts waiting
-    /// for the spaceport.
+    /// keys; a mission accepted at once shows nothing here, its texts
+    /// queued in the session for the router to show over flight.
     fn hold_offer(&mut self, offer: VenueOffer) {
         if let VenueOffer::Prompt(prompt) = offer {
             self.pending_offer = Some(prompt);
@@ -2811,6 +2842,7 @@ impl<
                 return ScreenAction::None;
             }
             Some(JETTISON_KEY) => self.jettison(),
+            Some(MISSION_INFO_KEY) => self.ask_mission_info(),
             Some(HYPER_SELECT_KEY) => {
                 if let Ok(session) = &mut self.session {
                     session.select_next_system();
@@ -11428,6 +11460,44 @@ mod tests {
             view.pilot().expect("a pilot").missions().missions(),
             [MissionId(130)]
         );
+    }
+
+    #[test]
+    fn i_with_no_mission_says_you_have_no_active_missions() {
+        let mut view = flight();
+        tap(&mut view, MISSION_INFO_KEY);
+        assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS));
+        assert_eq!(view.take_mission_info_request(), None);
+    }
+
+    #[test]
+    fn i_with_an_active_mission_asks_for_the_info_screen_once() {
+        let mut view = targeting_ace(offering(0, Some("Help?"), false));
+        tap(&mut view, HAIL_KEY);
+        view.take_offer().expect("offered");
+        assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
+        view.input(&key(Key::Up, true));
+        tap(&mut view, MISSION_INFO_KEY);
+        let info = view.take_mission_info_request().expect("asked");
+        assert_eq!(info, view.mission_info());
+        assert_eq!(view.take_mission_info_request(), None, "once");
+        assert_eq!(view.message(), None);
+        view.tick(TICK);
+        assert_eq!(
+            view.session().expect("flying").player().velocity,
+            Vec2::ZERO,
+            "the flight keys let go"
+        );
+    }
+
+    #[test]
+    fn i_with_the_map_open_does_nothing() {
+        let mut view = flight();
+        tap(&mut view, MAP_KEY);
+        assert!(view.map_open());
+        tap(&mut view, MISSION_INFO_KEY);
+        assert_eq!(view.message(), None);
+        assert_eq!(view.take_mission_info_request(), None);
     }
 
     #[test]

@@ -18,8 +18,9 @@ pub const SLOTS_FULL_AFTER: &str =
 /// `STR#` 2002 #353: what the mission computer says with no offer
 /// available.
 pub const NO_MISSIONS_HERE: &str = "There are no missions available here.";
-/// `STR#` 2002 #354: what the in-flight mission info key says with no
-/// mission to show (missions phase 17).
+/// `STR#` 2002 #354: what the in-flight mission info key says on the
+/// flight message line with no mission to show (`_HandlePlayer`
+/// @0x7055c-0x705a8).
 pub const NO_ACTIVE_MISSIONS: &str = "You have no active missions.";
 /// `STR#` 2002 #359: the mission computer's heading.
 pub const AVAILABLE_HERE: &str = "The following missions are available here:";
