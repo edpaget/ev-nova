@@ -44,12 +44,13 @@
 //! Without the dialog, or the stellar's record, the screen says why, and
 //! Return or Escape still leaves.
 
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    HireList, Market, Order, OutfitOrder, Outfitter, RechargeRefusal, Service, ShipId, ShipNaming,
-    Shipyard, sells_fuel, services,
+    ComputerRefusal, HireList, Market, MissionComputer, MissionId, MissionText, Order, OutfitOrder,
+    Outfitter, RechargeRefusal, Service, ShipId, ShipNaming, Shipyard, sells_fuel, services,
 };
 
 use super::bar::{BarScreen, Hiring};
@@ -58,6 +59,7 @@ use super::layout::{
     BACKGROUND, LANDSCAPE_ITEM, LEAVE_ITEM, LEAVE_LABEL, NAME_FONT, NAME_ITEM, NAME_SIZE,
     RECHARGE_ITEM, RECHARGE_LABEL, TEXT_ITEM, item_service, label, landscape_id, service_item,
 };
+use super::missions::MissionComputerScreen;
 use super::outfitter::{OutfitterCatalog, OutfitterScreen};
 use super::service::ServiceScreen;
 use super::shipyard::{ShipOrder, ShipyardCatalog, ShipyardScreen};
@@ -73,7 +75,7 @@ use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
-use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
+use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DescDialog};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
 
 /// Where the reason the spaceport cannot be shown goes, its size and
@@ -150,6 +152,8 @@ enum Open {
     Shipyard(Box<ShipyardScreen>),
     /// The bar, and the hire screen over it.
     Bar(Box<BarScreen>),
+    /// The mission computer.
+    Computer(Box<MissionComputerScreen>),
 }
 
 impl Open {
@@ -160,6 +164,7 @@ impl Open {
             Self::Outfitter(screen) => screen.as_mut(),
             Self::Shipyard(screen) => screen.as_mut(),
             Self::Bar(screen) => screen.as_mut(),
+            Self::Computer(screen) => screen.as_mut(),
         }
     }
 
@@ -170,6 +175,7 @@ impl Open {
             Self::Outfitter(screen) => screen.closed(),
             Self::Shipyard(screen) => screen.closed(),
             Self::Bar(screen) => screen.closed(),
+            Self::Computer(screen) => screen.closed(),
         }
     }
 }
@@ -226,6 +232,19 @@ struct Barkeeping {
     room: bool,
 }
 
+/// The mission screens given: their dialog templates, or why there are
+/// none.
+#[derive(Clone, Debug)]
+struct Missioning {
+    /// The mission computer's.
+    computer: Result<DialogTemplate, String>,
+    /// The "Desc Dialog"'s, which the mission texts show in.
+    text: Result<DialogTemplate, String>,
+    /// Whether Mission BBS has asked for the mission computer since this
+    /// was last taken.
+    requested: bool,
+}
+
 /// The spaceport of the stellar landed on.
 #[derive(Clone, Debug)]
 pub struct SpaceportView {
@@ -248,6 +267,10 @@ pub struct SpaceportView {
     shipbuying: Option<Shipbuying>,
     /// The bar, once given.
     barkeeping: Option<Barkeeping>,
+    /// The mission screens, once given.
+    missioning: Option<Missioning>,
+    /// The mission texts to show, the first shown over everything.
+    texts: VecDeque<DescDialog>,
     left: bool,
     /// Whether Recharge has been clicked since this was last taken.
     recharge: bool,
@@ -327,6 +350,8 @@ impl SpaceportView {
             outfitting: None,
             shipbuying: None,
             barkeeping: None,
+            missioning: None,
+            texts: VecDeque::new(),
             left: false,
             recharge: false,
             outfitter_opened: false,
@@ -630,6 +655,123 @@ impl SpaceportView {
         }
     }
 
+    /// The spaceport with the mission screens: Mission BBS opens the
+    /// mission computer laid out by `computer`, its `DLOG` (or saying why
+    /// there is none), and the mission texts show in "Desc Dialog", laid
+    /// out by `text` (and do not show without it). Without them, Mission
+    /// BBS opens its placeholder.
+    #[must_use]
+    pub fn with_missions(
+        self,
+        computer: Result<DialogTemplate, String>,
+        text: Result<DialogTemplate, String>,
+    ) -> Self {
+        Self {
+            missioning: Some(Missioning {
+                computer,
+                text,
+                requested: false,
+            }),
+            ..self
+        }
+    }
+
+    /// Whether Mission BBS has asked for the mission computer since this
+    /// was last asked: whoever flies the ship answers with
+    /// [`SpaceportView::open_mission_computer`].
+    pub fn take_mission_computer_request(&mut self) -> bool {
+        self.missioning
+            .as_mut()
+            .is_some_and(|missioning| std::mem::take(&mut missioning.requested))
+    }
+
+    /// Opens the mission computer on `computer`; or, refused, shows why
+    /// over the spaceport (`_DoMissionDialog` @0xa380a-0xa3956).
+    pub fn open_mission_computer(&mut self, computer: Result<MissionComputer, ComputerRefusal>) {
+        let computer = match computer {
+            Ok(computer) => computer,
+            Err(refusal) => {
+                self.show_text(&refusal.message());
+                return;
+            }
+        };
+        let (Ok(port), Some(missioning)) = (&self.port, &self.missioning) else {
+            return;
+        };
+        let layout = missioning
+            .computer
+            .clone()
+            .map(|template| (template, Rc::clone(&port.metrics.0)));
+        self.open = Some(Open::Computer(Box::new(MissionComputerScreen::new(
+            layout, computer, port.style,
+        ))));
+    }
+
+    /// The mission computer open, if it is.
+    #[must_use]
+    pub fn mission_computer(&self) -> Option<&MissionComputerScreen> {
+        match &self.open {
+            Some(Open::Computer(screen)) => Some(screen),
+            _ => None,
+        }
+    }
+
+    /// The mission the mission computer open asked to accept since this
+    /// was last taken, once.
+    pub fn take_mission_accept(&mut self) -> Option<MissionId> {
+        match &mut self.open {
+            Some(Open::Computer(screen)) => screen.take_accept(),
+            _ => None,
+        }
+    }
+
+    /// After an accept, the mission computer open shows `computer`; or,
+    /// refused, it closes with nothing said, as the original's re-entry
+    /// does (`_reenterMissionDialog` @0xa380a, @0xa3910).
+    pub fn set_mission_computer(&mut self, computer: Result<MissionComputer, ComputerRefusal>) {
+        let Some(Open::Computer(screen)) = &mut self.open else {
+            return;
+        };
+        match computer {
+            Ok(computer) => screen.set_computer(computer),
+            Err(_) => self.open = None,
+        }
+    }
+
+    /// Shows each of `texts` in "Desc Dialog", one after another as Done
+    /// closes each, over whatever is open, each taking every input until
+    /// it closes (`_ShowTextDialog` @0x5a752).
+    pub fn show_mission_texts(&mut self, texts: Vec<MissionText>) {
+        for text in texts {
+            self.show_text(&text.text);
+        }
+    }
+
+    /// The mission text shown, if any.
+    #[must_use]
+    pub fn mission_text(&self) -> Option<&DescDialog> {
+        self.texts.front()
+    }
+
+    /// Queues `text` to show in "Desc Dialog", when there is one.
+    fn show_text(&mut self, text: &str) {
+        let (
+            Ok(port),
+            Some(Missioning {
+                text: Ok(template), ..
+            }),
+        ) = (&self.port, &self.missioning)
+        else {
+            return;
+        };
+        self.texts.push_back(DescDialog::new(
+            template,
+            text,
+            port.style,
+            Rc::clone(&port.metrics.0),
+        ));
+    }
+
     /// The stellar landed on.
     #[must_use]
     pub fn stellar(&self) -> StellarId {
@@ -702,6 +844,10 @@ impl SpaceportView {
             return;
         };
         port.show_description();
+        if let (Some(missioning), Service::MissionBbs) = (&mut self.missioning, service) {
+            missioning.requested = true;
+            return;
+        }
         let port = &*port;
         let metrics = Rc::clone(&port.metrics.0);
         if let (Some(barkeeping), Service::Bar) = (&self.barkeeping, service) {
@@ -767,6 +913,14 @@ impl Screen for SpaceportView {
     /// An open service takes every input until it closes. Otherwise every
     /// input goes to the dialog. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(text) = self.texts.front_mut() {
+            text.input(input);
+            self.sounds.extend(text.take_sounds());
+            if text.closed() {
+                self.texts.pop_front();
+            }
+            return ScreenAction::None;
+        }
         if let Some(open) = &mut self.open {
             let screen = open.screen_mut();
             screen.input(input);
@@ -800,7 +954,42 @@ impl Screen for SpaceportView {
     /// Nothing moves on its own.
     fn tick(&mut self, _dt: Duration) {}
 
+    /// What is open, then the mission text shown over it.
     fn draw(&self, list: &mut DrawList) {
+        self.draw_below(list);
+        if let Some(text) = self.texts.front() {
+            text.draw(list);
+        }
+    }
+
+    fn cancel_pointer(&mut self) {
+        if let Some(text) = self.texts.front_mut() {
+            text.cancel_pointer();
+            return;
+        }
+        match (&mut self.open, &mut self.port) {
+            (Some(open), _) => open.screen_mut().cancel_pointer(),
+            (None, Ok(port)) => port.dialog.cancel_pointer(),
+            (None, Err(_)) => {}
+        }
+    }
+
+    /// Lets go of the keys the screen open holds.
+    fn release_keys(&mut self) {
+        if let Some(open) = &mut self.open {
+            open.screen_mut().release_keys();
+        }
+    }
+
+    /// The buttons' sounds, the open service's included, in order.
+    fn take_sounds(&mut self) -> Vec<Sound> {
+        std::mem::take(&mut self.sounds)
+    }
+}
+
+impl SpaceportView {
+    /// Draws the spaceport and the screen open over it.
+    fn draw_below(&self, list: &mut DrawList) {
         // A service's placeholder takes the whole screen; the exchange and
         // the outfitter are dialogs over the spaceport.
         if let Some(Open::Service(screen)) = &self.open {
@@ -841,28 +1030,9 @@ impl Screen for SpaceportView {
             Some(Open::Outfitter(screen)) => screen.draw(list),
             Some(Open::Shipyard(screen)) => screen.draw(list),
             Some(Open::Bar(screen)) => screen.draw(list),
+            Some(Open::Computer(screen)) => screen.draw(list),
             _ => {}
         }
-    }
-
-    fn cancel_pointer(&mut self) {
-        match (&mut self.open, &mut self.port) {
-            (Some(open), _) => open.screen_mut().cancel_pointer(),
-            (None, Ok(port)) => port.dialog.cancel_pointer(),
-            (None, Err(_)) => {}
-        }
-    }
-
-    /// Lets go of the keys the screen open holds.
-    fn release_keys(&mut self) {
-        if let Some(open) = &mut self.open {
-            open.screen_mut().release_keys();
-        }
-    }
-
-    /// The buttons' sounds, the open service's included, in order.
-    fn take_sounds(&mut self) -> Vec<Sound> {
-        std::mem::take(&mut self.sounds)
     }
 }
 
@@ -2464,5 +2634,245 @@ mod tests {
         assert!(!view.take_hire_request());
         let debug = format!("{view:?}");
         assert!(debug.contains("Barkeeping"), "{debug}");
+    }
+
+    // The mission computer and the mission texts.
+
+    use crate::spaceport::missions::{ACCEPT_ITEM as COMPUTER_ACCEPT, MissionComputerScreen};
+    use nova_sim::{ComputerRow, MissionTextKind};
+
+    /// The mission computer's shape, smaller: 300 x 200, fixed at (0, 0),
+    /// with Accept (1), the list (2), the text (4), the name (5), Leave
+    /// (7), the heading (8) and the date (11).
+    fn computer_template() -> Template {
+        let mut items: Vec<ItemTemplate> = (0..11)
+            .map(|_| ItemTemplate {
+                bounds: rect(0.0, 300.0, 1.0, 1.0),
+                enabled: false,
+                kind: ItemSpec::User,
+            })
+            .collect();
+        let mut place = |number: usize, x, y, w, h| {
+            items[number - 1].bounds = rect(x, y, w, h);
+        };
+        place(1, 10.0, 170.0, 99.0, 25.0);
+        place(2, 10.0, 30.0, 100.0, 120.0);
+        place(4, 120.0, 60.0, 170.0, 90.0);
+        place(5, 120.0, 34.0, 170.0, 20.0);
+        place(7, 120.0, 170.0, 99.0, 25.0);
+        place(8, 10.0, 3.0, 200.0, 15.0);
+        place(11, 210.0, 3.0, 90.0, 15.0);
+        Template {
+            bounds: rect(0.0, 0.0, 300.0, 200.0),
+            placement: Placement::Fixed,
+            items,
+        }
+    }
+
+    /// "Desc Dialog"'s shape, smaller: 200 x 120 at (0, 0), fixed, with
+    /// Done (1) and a 60 x 36 text box (3).
+    fn text_template() -> Template {
+        let item = |bounds, enabled| ItemTemplate {
+            bounds,
+            enabled,
+            kind: ItemSpec::User,
+        };
+        Template {
+            bounds: rect(0.0, 0.0, 200.0, 120.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(rect(100.0, 90.0, 99.0, 25.0), true),
+                item(rect(10.0, 150.0, 20.0, 20.0), false),
+                item(rect(10.0, 10.0, 180.0, 36.0), false),
+            ],
+        }
+    }
+
+    /// Earth with its mission screens given.
+    fn missioned() -> SpaceportView {
+        earth().with_missions(Ok(computer_template()), Ok(text_template()))
+    }
+
+    fn offers() -> MissionComputer {
+        MissionComputer {
+            rows: vec![ComputerRow {
+                mission: MissionId(130),
+                name: "Run".to_owned(),
+                text: "Go.".to_owned(),
+            }],
+            today: "June 23rd, 1177 NC".to_owned(),
+        }
+    }
+
+    fn shown_text(view: &SpaceportView) -> Option<String> {
+        view.mission_text().map(|dialog| dialog.lines().join(" "))
+    }
+
+    fn done(view: &mut SpaceportView) {
+        view.input(&key(Key::Enter));
+    }
+
+    #[test]
+    fn mission_bbs_asks_for_the_mission_computer() {
+        let mut view = missioned();
+        assert!(!view.take_mission_computer_request());
+        click_item(&mut view, 11);
+        assert!(view.open_service().is_none(), "no placeholder");
+        assert!(view.take_mission_computer_request());
+        assert!(!view.take_mission_computer_request(), "once");
+        view.open_mission_computer(Ok(offers()));
+        let computer = view.mission_computer().expect("open");
+        assert_eq!(computer.computer(), &offers());
+        assert_eq!(computer.problem(), None, "laid out by the template given");
+        let mut expected: Vec<DrawCommand> = drawn(&earth());
+        let mut over = DrawList::new();
+        computer.draw(&mut over);
+        expected.extend(over.iter().cloned());
+        assert_eq!(drawn(&view), expected);
+        view.input(&key(Key::Escape));
+        assert!(view.mission_computer().is_none(), "left");
+        assert!(!view.left());
+    }
+
+    #[test]
+    fn without_mission_screens_mission_bbs_opens_its_placeholder() {
+        let mut view = earth();
+        click_item(&mut view, 11);
+        assert_eq!(
+            view.open_service().map(ServiceScreen::service),
+            Some(Service::MissionBbs)
+        );
+        assert!(!view.take_mission_computer_request());
+    }
+
+    #[test]
+    fn a_refused_computer_says_why_over_the_spaceport() {
+        let mut view = missioned();
+        click_item(&mut view, 11);
+        view.open_mission_computer(Err(ComputerRefusal::NoneAvailable));
+        assert!(view.mission_computer().is_none());
+        assert_eq!(
+            shown_text(&view).as_deref(),
+            Some("There are no missions available here.")
+        );
+        let dialog = view.mission_text().expect("shown");
+        let mut expected: Vec<DrawCommand> = drawn(&earth());
+        let mut over = DrawList::new();
+        dialog.draw(&mut over);
+        expected.extend(over.iter().cloned());
+        assert_eq!(drawn(&view), expected);
+        click_item(&mut view, 10);
+        assert!(
+            view.open_bar().is_none() && view.open_service().is_none(),
+            "it takes every input"
+        );
+        done(&mut view);
+        assert_eq!(shown_text(&view), None);
+        assert!(!view.left());
+    }
+
+    #[test]
+    fn an_accept_is_taken_through_the_spaceport_and_the_computer_handed_back() {
+        let mut view = missioned();
+        assert_eq!(view.take_mission_accept(), None, "nothing open");
+        click_item(&mut view, 11);
+        view.open_mission_computer(Ok(offers()));
+        let at = view
+            .mission_computer()
+            .and_then(MissionComputerScreen::dialog)
+            .and_then(|dialog| dialog.item_bounds(COMPUTER_ACCEPT))
+            .expect("Accept")
+            .center();
+        click(&mut view, at);
+        assert_eq!(view.take_mission_accept(), Some(MissionId(130)));
+        assert_eq!(view.take_mission_accept(), None, "once");
+        let fewer = MissionComputer {
+            rows: Vec::new(),
+            ..offers()
+        };
+        view.set_mission_computer(Ok(fewer.clone()));
+        assert_eq!(
+            view.mission_computer().map(MissionComputerScreen::computer),
+            Some(&fewer)
+        );
+        view.set_mission_computer(Err(ComputerRefusal::NoneAvailable));
+        assert!(view.mission_computer().is_none(), "closed");
+        assert_eq!(shown_text(&view), None, "silently");
+    }
+
+    #[test]
+    fn mission_texts_show_one_after_another_over_whatever_is_open() {
+        let mut view = missioned();
+        click_item(&mut view, 11);
+        view.open_mission_computer(Ok(offers()));
+        let text = |mission, text: &str| MissionText {
+            kind: MissionTextKind::Brief,
+            mission: MissionId(mission),
+            text: text.to_owned(),
+        };
+        view.show_mission_texts(vec![text(130, "First."), text(131, "Second.")]);
+        assert_eq!(shown_text(&view).as_deref(), Some("First."));
+        let mut expected = Vec::new();
+        let mut below = DrawList::new();
+        view.mission_computer().expect("open").draw(&mut below);
+        let dialog = view.mission_text().expect("shown");
+        let mut over = DrawList::new();
+        dialog.draw(&mut over);
+        expected.extend(over.iter().cloned());
+        let commands = drawn(&view);
+        assert_eq!(commands[commands.len() - expected.len()..], expected[..]);
+        view.input(&key(Key::Escape));
+        assert_eq!(shown_text(&view).as_deref(), Some("Second."));
+        assert!(view.mission_computer().is_some(), "Escape went to the text");
+        done(&mut view);
+        assert_eq!(shown_text(&view), None);
+        view.input(&key(Key::Escape));
+        assert!(view.mission_computer().is_none());
+        view.show_mission_texts(Vec::new());
+        assert_eq!(shown_text(&view), None);
+    }
+
+    #[test]
+    fn mission_texts_click_their_done_and_cancel_their_pointer() {
+        let mut view = missioned();
+        view.show_mission_texts(vec![MissionText {
+            kind: MissionTextKind::Comp,
+            mission: MissionId(130),
+            text: "Done.".to_owned(),
+        }]);
+        let at = view
+            .mission_text()
+            .and_then(|dialog| dialog.dialog().item_bounds(1))
+            .expect("Done")
+            .center();
+        view.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+            at,
+        });
+        view.cancel_pointer();
+        view.input(&Input::PointerButton {
+            button: MouseButton::Left,
+            pressed: false,
+            at,
+        });
+        assert!(view.mission_text().is_some(), "abandoned");
+        assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::ButtonDown)]);
+        click(&mut view, at);
+        assert!(view.mission_text().is_none());
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Ui(UiSound::ButtonDown), Sound::Ui(UiSound::ButtonUp)]
+        );
+    }
+
+    #[test]
+    fn without_a_text_dialog_mission_texts_are_not_shown() {
+        let mut view =
+            earth().with_missions(Ok(computer_template()), Err("no DLOG 3003".to_owned()));
+        view.open_mission_computer(Err(ComputerRefusal::SlotsFull));
+        assert!(view.mission_text().is_none());
+        let debug = format!("{view:?}");
+        assert!(debug.contains("Missioning"), "{debug}");
     }
 }
