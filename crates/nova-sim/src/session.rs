@@ -7975,6 +7975,19 @@ mod tests {
         let order = kept_selection.outfit_order(sell(CONTRABAND), 2, &mut NeverFires);
         assert_eq!(order.run.done, 3);
         assert_eq!(order.after, Reselection::Kept);
+        // The kept sale's passes sell the reset outfit 128 though it is
+        // not listed.
+        let mut unlisted = landed_owning(
+            &unlisted_blaster_catalog(),
+            relisted_by(RuleSource::Bible)
+                .with_override(RuleKey::RelistedSelection, RuleSource::Engine),
+            &[(BLASTER, 2), (CONTRABAND, 1)],
+        );
+        let order = unlisted.outfit_order(sell(CONTRABAND), 1, &mut NeverFires);
+        assert_eq!(order.after, Reselection::Reset(FIRST_OUTFIT));
+        let sold = unlisted.outfit_order(sell(BLASTER), 1, &mut NeverFires);
+        assert_eq!(sold.run.done, 1);
+        assert_eq!(unlisted.pilot().owned(BLASTER), 1);
     }
 
     #[test]
