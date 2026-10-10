@@ -42,7 +42,7 @@ pub mod view;
 pub use bar::{BarScreen, Hiring};
 pub use catalog::{PortRecord, SpaceportCatalog, StellarId};
 pub use hire::HireScreen;
-pub use missions::MissionComputerScreen;
+pub use missions::{MissionComputerScreen, MissionInfoScreen};
 pub use offer::{OfferChoice, OfferDialog};
 pub use outfitter::{OutfitterCatalog, OutfitterScreen};
 pub use service::ServiceScreen;
