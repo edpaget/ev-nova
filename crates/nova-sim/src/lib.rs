@@ -345,8 +345,9 @@ pub use rulebook::{RuleKey, RuleSource, Rulebook};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{
-    AbortError, AcceptError, HookRules, LandPress, NotOffered, PersonQuote, RelocateRefusal,
-    ScriptEffectRules, Session, SessionEvent, Settled, ShipChangeRules, StellarPick,
+    AbortError, AcceptError, ComputerRefusal, ComputerRow, HookRules, LandPress, MissionComputer,
+    MissionText, MissionTextKind, NotOffered, PersonQuote, RelocateRefusal, ScriptEffectRules,
+    Session, SessionEvent, Settled, ShipChangeRules, StellarPick,
 };
 pub use shipyard::{ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
 pub use sound::SimSound;

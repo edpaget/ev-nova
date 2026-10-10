@@ -366,6 +366,15 @@ impl Dialog {
         }
     }
 
+    /// The text of item `item` (from 1), if it is a text item.
+    #[must_use]
+    pub fn text(&self, item: usize) -> Option<&ScrollText> {
+        match &self.item(item)?.widget {
+            Widget::Text { text, .. } => Some(text),
+            _ => None,
+        }
+    }
+
     /// Where the dialog is on the screen.
     #[must_use]
     pub fn bounds(&self) -> Bounds {
@@ -1179,6 +1188,19 @@ mod tests {
         assert_eq!(lines, ["l0", "l1", "l2"]);
         let text = dialog.scroll_text().expect("scrolling text");
         assert_eq!((text.visible(), text.lines().len()), (3, 5));
+    }
+
+    #[test]
+    fn a_text_items_text_is_read_by_its_number_and_any_other_has_none() {
+        let mut dialog = dialog(&desc_like(), &desc_roles("l0"));
+        dialog.set_text(3, "new");
+        assert_eq!(
+            dialog.text(3).map(ScrollText::lines),
+            Some(&["new".to_owned()][..])
+        );
+        for other in [0, 1, 2, 4, 99] {
+            assert_eq!(dialog.text(other), None, "item {other}");
+        }
     }
 
     #[test]
