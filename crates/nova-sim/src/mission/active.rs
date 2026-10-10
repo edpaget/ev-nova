@@ -417,6 +417,11 @@ pub enum PayEffect {
     Cash(i64),
     /// Every negative record with the governments `among` those of `of`
     /// (none for an independent one, which keeps no record) goes to none.
+    /// The original cleans the records of the systems those governments
+    /// hold (@0x9835e-0x9844d); here each qualifying catalog government
+    /// stands in for its systems, so one that holds no system has a
+    /// record cleaned that nothing reads (the [`legal`](crate::legal)
+    /// module's stated divergence).
     Clean {
         /// The government named: `gövt` index + 128.
         of: Option<GovtId>,
@@ -480,7 +485,11 @@ fn held(record: f64) -> i16 {
 /// plus `CompReward`; each other government an enemy of it, minus half,
 /// and each ally plus half, the record and the half summed and
 /// truncated. Each is held within [`RECORD_LIMIT`]; one unchanged is
-/// left out.
+/// left out. The original walks the systems and changes each one's
+/// record by its government; here each qualifying catalog government
+/// stands in for its systems, so one that holds no system has a record
+/// changed that nothing reads (the [`legal`](crate::legal) module's
+/// stated divergence).
 #[must_use]
 pub fn success_records(
     record: &MissionRecord,
@@ -507,7 +516,11 @@ pub fn success_records(
 /// The records a mission's failure sets, `legal` giving each one now
 /// (`_DoMissionFailure` @0xa02f9-0xa033a): with a `CompGovt`, its record
 /// less half the `CompReward`, toward none, held within
-/// [`RECORD_LIMIT`].
+/// [`RECORD_LIMIT`]. The original lowers the record of each system the
+/// `CompGovt` holds; here its record with the government stands in for
+/// them, so a `CompGovt` that holds no system has a record changed that
+/// nothing reads (the [`legal`](crate::legal) module's stated
+/// divergence).
 #[must_use]
 pub fn failure_records(
     record: &MissionRecord,
@@ -522,7 +535,11 @@ pub fn failure_records(
 /// The records the player's abort sets, `legal` giving each one now
 /// (`_DoMissionInfoDialog` @0x9e58d-0x9e5cf): with `Flags` 0x0040 and a
 /// `CompGovt`, its record less 5 × `CompReward`, held within
-/// [`RECORD_LIMIT`].
+/// [`RECORD_LIMIT`]. The original lowers the record of each system the
+/// `CompGovt` holds (@0x9e5a3-0x9e5cf); here its record with the
+/// government stands in for them, so a `CompGovt` that holds no system
+/// has a record changed that nothing reads (the [`legal`](crate::legal)
+/// module's stated divergence).
 #[must_use]
 pub fn abort_penalty(record: &MissionRecord, legal: impl Fn(GovtId) -> i16) -> Vec<(GovtId, i16)> {
     let changes = record

@@ -38,6 +38,20 @@
 //! record with every government in the catalog not allied with the
 //! victim's, where the original improves it only in the nearby systems
 //! those governments hold.
+//!
+//! Missions share it. The original keeps `_playerRecord`, one record a
+//! system (2048 `i16` at 0x230760), and a mission's `AvailRecord` reads
+//! the player's system's (`_IsMissionAvailable` @0x9b592-0x9b5c4); here
+//! it reads the record with that system's government, 0 in an
+//! independent system. A mission's success, failure, abort and cleaning
+//! pay change the records of the systems a government holds
+//! (`_DoMissionSuccess` @0xa058e-0xa0672, `_DoMissionFailure`
+//! @0xa02f9-0xa033a, @0x9e5a3-0x9e5cf, `_ApplyMissionPay`
+//! @0x9835e-0x9844d); here they change the record with each qualifying
+//! catalog government, so one that holds no system has a record that
+//! nothing reads until the overlay gives it a system. The per-system
+//! record that closes both gaps is the rdm missions roadmap's
+//! per-system-legal-record phase.
 
 use std::fmt::Debug;
 
