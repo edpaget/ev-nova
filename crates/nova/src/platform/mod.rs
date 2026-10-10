@@ -127,6 +127,11 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::AltLeft | KeyCode::AltRight) => Key::Alt,
         // Either Control: flight's secondary fire key.
         PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) => Key::Control,
+        // Either Command (Super, the Windows key, off a Mac): what flight's
+        // jettison key needs held.
+        PhysicalKey::Code(KeyCode::SuperLeft | KeyCode::SuperRight) => Key::Command,
+        // Flight's jettison key, by position: K on a US-layout keyboard.
+        PhysicalKey::Code(KeyCode::KeyK) => Key::Char('k'),
         // The developer tools' toggle, by position: the key under Escape on
         // a US-layout keyboard. Without the developer tools, it reaches
         // flight as Nav Off, the original's default.
@@ -213,6 +218,9 @@ mod tests {
             (KeyCode::ControlLeft, Key::Control),
             (KeyCode::ControlRight, Key::Control),
             (KeyCode::KeyR, Key::Char('r')),
+            (KeyCode::KeyK, Key::Char('k')),
+            (KeyCode::SuperLeft, Key::Command),
+            (KeyCode::SuperRight, Key::Command),
             (KeyCode::Backquote, Key::Char('`')),
             (KeyCode::Backslash, Key::Char('\\')),
             (KeyCode::Digit1, Key::Char('1')),
@@ -239,7 +247,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 28] = [
+    const GAME_CHARACTER_KEYS: [Key; 29] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -250,6 +258,7 @@ mod tests {
         nova_view::flight::view::NEAREST_KEY,
         nova_view::flight::view::HYPER_SELECT_KEY,
         nova_view::flight::view::NAV_OFF_KEY,
+        nova_view::flight::view::JETTISON_KEY,
         nova_view::flight::view::STELLAR_SLOT_KEYS[0][0],
         nova_view::flight::view::STELLAR_SLOT_KEYS[1][0],
         nova_view::flight::view::STELLAR_SLOT_KEYS[2][0],
@@ -279,6 +288,7 @@ mod tests {
             'f' => KeyCode::KeyF,
             'i' => KeyCode::KeyI,
             'j' => KeyCode::KeyJ,
+            'k' => KeyCode::KeyK,
             'l' => KeyCode::KeyL,
             'm' => KeyCode::KeyM,
             'p' => KeyCode::KeyP,
@@ -311,7 +321,7 @@ mod tests {
     /// Every key other than a character's that a screen reacts to, where
     /// the screen names it with a constant, and the physical key that
     /// sends it.
-    const GAME_NAMED_KEYS: [(Key, KeyCode); 12] = [
+    const GAME_NAMED_KEYS: [(Key, KeyCode); 14] = [
         (nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltLeft),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltRight),
@@ -338,6 +348,9 @@ mod tests {
             KeyCode::F4,
         ),
         (nova_view::flight::view::NEAREST_STELLAR_KEY, KeyCode::F5),
+        // Flight's jettison key's modifier.
+        (Key::Command, KeyCode::SuperLeft),
+        (Key::Command, KeyCode::SuperRight),
     ];
 
     #[test]
