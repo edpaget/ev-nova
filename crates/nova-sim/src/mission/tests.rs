@@ -1177,6 +1177,24 @@ fn the_same_stellar_again_draws_nothing_and_keeps_the_offers() {
 }
 
 #[test]
+fn with_no_stellar_docked_a_roll_draws_nothing_and_keeps_the_offers() {
+    let galaxy = Galaxy::new();
+    let mut visit = galaxy.visit();
+    let mut offers = Offers::default();
+    offers.roll(&catalog(), &visit, &mut NeverFires);
+    let kept = offers.clone();
+    visit.docked = None;
+    let mut chance = Draws::of(&[]);
+    offers.roll(&catalog(), &visit, &mut chance);
+    assert!(chance.asked.is_empty(), "{:?}", chance.asked);
+    assert_eq!(offers, kept);
+    let mut fresh = Offers::default();
+    fresh.roll(&catalog(), &visit, &mut chance);
+    assert!(chance.asked.is_empty(), "never rolled: {:?}", chance.asked);
+    assert_eq!(fresh, Offers::default());
+}
+
+#[test]
 fn another_stellar_or_one_forgotten_rolls_afresh() {
     let galaxy = Galaxy::new();
     let mut visit = galaxy.visit();

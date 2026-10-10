@@ -536,7 +536,14 @@ mod tests {
         let mut unresolved = talking();
         unresolved.missions.clear();
         let mut session = targeting_ace(&unresolved);
-        assert!(opened_comm(&hail(&mut session, &unresolved).0), "no offer");
+        assert!(opened_comm(&hail(&mut session, &unresolved).0), "no record");
+        let mut session = targeting_ace(&catalog);
+        session.ship_offers.clear();
+        assert!(session.ship_mission_available(MissionId(130)));
+        assert!(
+            opened_comm(&hail(&mut session, &catalog).0),
+            "available, but never resolved at a spawn"
+        );
     }
 
     #[test]

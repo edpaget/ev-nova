@@ -2939,7 +2939,11 @@ impl Session {
     /// says its crew repels the boarders, its plunder is rolled on
     /// `chance` and the boarding is under way ([`Session::plunder`]). A
     /// board that passes the checks raises [`Fate::Boarded`], repelled
-    /// or not.
+    /// or not. A person of `Flags` 0x0200 whose `LinkMission` is
+    /// available from a ship offers it instead, once the crime is
+    /// convicted ([`Boarding::Offered`], see the `person_offers` module):
+    /// nothing is rolled or granted, and the ship is marked boarded, and
+    /// [`Fate::Boarded`] raised, only once the mission is accepted.
     ///
     /// # Errors
     ///
