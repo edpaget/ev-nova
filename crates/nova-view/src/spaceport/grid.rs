@@ -319,10 +319,13 @@ impl CellGrid {
         (self.top_row > 0, self.top_row < Self::last_top_row(count))
     }
 
-    /// The index of the cell of `count` under `at` on a grid item at
-    /// `grid`, if there is one.
+    /// The index, counted with the scroll, of the cell position under
+    /// `at` on a grid item at `grid`, listed or not: `None` outside the
+    /// item or past its [`COLUMNS`] x [`GRID_ROWS`] cells, as the
+    /// original bounds the column and row (`_OutfitFilter`
+    /// @0x585ea-0x58607).
     #[must_use]
-    pub fn cell_at(&self, grid: Bounds, at: Point, count: usize) -> Option<usize> {
+    pub fn cell_under(&self, grid: Bounds, at: Point) -> Option<usize> {
         if !grid.contains(at) {
             return None;
         }
@@ -331,8 +334,14 @@ impl CellGrid {
         if column >= COLUMNS || row >= GRID_ROWS {
             return None;
         }
-        let index = (self.top_row + row) * COLUMNS + column;
-        (index < count).then_some(index)
+        Some((self.top_row + row) * COLUMNS + column)
+    }
+
+    /// The index of the cell of `count` under `at` on a grid item at
+    /// `grid`, if there is one.
+    #[must_use]
+    pub fn cell_at(&self, grid: Bounds, at: Point, count: usize) -> Option<usize> {
+        self.cell_under(grid, at).filter(|&index| index < count)
     }
 
     /// The cells of `count` shown, each index with where its cell is in a
@@ -748,5 +757,39 @@ mod tests {
             Some(4),
             "under the scroll"
         );
+    }
+
+    #[test]
+    fn a_point_on_an_unlisted_cell_is_under_a_cell_but_at_none() {
+        let area = rect(10.0, 20.0, 333.0, 271.0);
+        let grid = CellGrid::default();
+        let listed = Point::new(100.0, 30.0);
+        assert_eq!(grid.cell_under(area, listed), Some(1));
+        assert_eq!(grid.cell_at(area, listed, 6), Some(1));
+        let empty = Point::new(100.0, 160.0);
+        assert_eq!(grid.cell_under(area, empty), Some(9), "an empty cell");
+        assert_eq!(grid.cell_at(area, empty, 6), None);
+        let last = Point::new(10.0 + 83.0 * 4.0 - 0.5, 20.0 + 67.0 * 4.0 - 0.5);
+        assert_eq!(grid.cell_under(area, last), Some(15), "the last cell");
+        for past in [
+            Point::new(10.0 + 83.0 * 4.0 + 0.5, 30.0),
+            Point::new(20.0, 20.0 + 67.0 * 4.0 + 0.5),
+        ] {
+            assert_eq!(grid.cell_under(area, past), None, "past the cells");
+            assert_eq!(grid.cell_at(area, past, 22), None);
+        }
+        for outside in [Point::new(9.5, 30.0), Point::new(20.0, 19.5)] {
+            assert_eq!(grid.cell_under(area, outside), None, "outside");
+            assert_eq!(grid.cell_at(area, outside, 22), None);
+        }
+
+        let mut scrolled = CellGrid::default();
+        scrolled.scroll(true, 22);
+        scrolled.scroll(true, 22);
+        assert_eq!(scrolled.cell_under(area, listed), Some(9), "scrolled");
+        assert_eq!(scrolled.cell_at(area, listed, 22), Some(9));
+        let empty = Point::new(10.0 + 83.0 * 3.5, 20.0 + 67.0 * 3.5);
+        assert_eq!(scrolled.cell_under(area, empty), Some(23));
+        assert_eq!(scrolled.cell_at(area, empty, 22), None);
     }
 }
