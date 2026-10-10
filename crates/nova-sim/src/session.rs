@@ -394,6 +394,7 @@ use crate::outfitter::{
 use crate::person::{NovaPersons, PersonRules, PersonWorld};
 use crate::pilot::{self, Escort, Pilot};
 use crate::pre_jump::{self, PreJump};
+use crate::rating;
 use crate::recharge::{self, RechargeRefusal};
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -1358,6 +1359,7 @@ impl Session {
         self.refill_invincible(&mut strikes);
         self.hold_grudges(&strikes);
         self.punish(&strikes, &was, rules.law);
+        self.credit_kills(&strikes, &was);
         self.strikes.extend(strikes);
         let sorties = self.combat.take_sorties();
         self.launch_fighters(&sorties);
@@ -1442,6 +1444,40 @@ impl Session {
                 let changes = law.penalties(crime, govt, &self.govts);
                 legal::convict(&mut self.pilot, &changes);
             }
+        }
+    }
+
+    /// Credits the player's combat rating for each NPC among `strikes`
+    /// that a hit started breaking up, when the kill counts (see
+    /// [`rating`](crate::rating)): the shooter is the player or a ship of
+    /// its fleet, its escorts and fighters, and the victim's government,
+    /// from `was`, is not derelict. As the original's `_DamageShip`
+    /// (@0x3ad4f-0x3ae53), the credit comes with the hit, before a
+    /// shooter in the fleet can be lost or the victim taken out.
+    fn credit_kills(&mut self, strikes: &[Strike], was: &[(NpcId, Condition, Option<GovtId>)]) {
+        for strike in strikes {
+            let (ShipRef::Npc(id), Some(Downed::BreakingUp)) = (strike.ship, strike.downed) else {
+                continue;
+            };
+            let Some(&(_, _, govt)) = was.iter().find(|(npc, ..)| *npc == id) else {
+                continue;
+            };
+            let by_players_fleet = match strike.by {
+                ShipRef::Player => true,
+                ShipRef::Npc(by) => self
+                    .traffic
+                    .npcs()
+                    .iter()
+                    .any(|npc| npc.id == by && npc.fleet() == ShipRef::Player),
+            };
+            if !rating::counts(by_players_fleet, self.govts.derelict(govt)) {
+                continue;
+            }
+            let Some(victim) = self.traffic.npcs().iter().find(|npc| npc.id == id) else {
+                continue;
+            };
+            let strength = i64::from(self.arsenal.strength(victim.ship));
+            self.pilot.combat_rating = rating::credit(self.pilot.combat_rating, strength);
         }
     }
 
@@ -10290,6 +10326,151 @@ mod tests {
             ],
             "as the original's _DamageShip slaps both"
         );
+    }
+
+    // The combat rating.
+
+    /// [`lawful`], its traffic's ship 129 of `strength`.
+    fn rated(strength: i16) -> FakePilotCatalog {
+        let mut catalog = lawful();
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(129) {
+                hull.strength = strength;
+            }
+        }
+        catalog
+    }
+
+    /// The player shooting `catalog`'s NPC for 80 ticks: the NPC's
+    /// condition and the player's combat rating each time either changes.
+    fn rating_while_shooting(catalog: &FakePilotCatalog) -> Vec<(Option<Condition>, i64)> {
+        let mut session = facing_an_npc(catalog, 180);
+        session.hold_trigger(FIRE);
+        let mut seen = Vec::new();
+        for _ in 0..80 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let condition = session.npcs().first().map(|npc| npc.condition);
+            let now = (condition, session.pilot().combat_rating());
+            if seen.last() != Some(&now) {
+                seen.push(now);
+            }
+        }
+        seen
+    }
+
+    #[test]
+    fn breaking_up_a_disabled_ship_raises_the_rating_by_a_fifth_of_its_strength_once() {
+        assert_eq!(
+            rating_while_shooting(&rated(50)),
+            [
+                (Some(Condition::Intact), 0),
+                (Some(Condition::Disabled), 0),
+                (Some(Condition::Dying { ticks_left: 1 }), 10),
+                (Some(Condition::Dying { ticks_left: 0 }), 10),
+                (None, 10),
+            ],
+            "disabling credits nothing, the break-up 50 / 5, its destruction nothing"
+        );
+    }
+
+    #[test]
+    fn breaking_up_a_ship_of_strength_4_or_less_raises_the_rating_by_1() {
+        let seen = rating_while_shooting(&rated(3));
+        assert_eq!(seen.last(), Some(&(None, 1)), "{seen:?}");
+    }
+
+    #[test]
+    fn the_rating_starts_from_the_chärs_kills() {
+        let mut catalog = rated(50);
+        if let Ok(character) = &mut catalog.character {
+            character.kills = 7;
+        }
+        let seen = rating_while_shooting(&catalog);
+        assert_eq!(seen.last(), Some(&(None, 17)), "{seen:?}");
+    }
+
+    #[test]
+    fn breaking_up_a_derelict_ship_leaves_the_rating() {
+        let mut catalog = rated(50);
+        catalog.govts[0].flags |= crate::govt::DERELICT;
+        let seen = rating_while_shooting(&catalog);
+        assert_eq!(seen.last(), Some(&(None, 0)), "{seen:?}");
+    }
+
+    #[test]
+    fn boarding_a_disabled_ship_leaves_the_rating() {
+        let session = aboard(&boardable());
+        assert_eq!(session.pilot().combat_rating(), 0);
+    }
+
+    /// [`alongside`]'s trader (NPC 0, ship 129 of strength 10, government
+    /// 140) broken up by NPC 1, the police, made the player's escort when
+    /// `escorting`, then by NPC 0 itself: the rating after each.
+    fn rating_after_npc_kills(escorting: bool) -> (i64, i64) {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        assert_eq!(session.arsenal.strength(ShipId(129)), 10);
+        if escorting {
+            session.traffic.npcs_mut()[1].escort = Some(EscortDuty {
+                slot: 2,
+                ships: 2,
+                spacing: 100.0,
+                order: None,
+            });
+        }
+        let was = [(NpcId(0), Condition::Disabled, Some(GovtId(140)))];
+        let broken_up_by = |by| Strike {
+            ship: ShipRef::Npc(NpcId(0)),
+            by,
+            damage: 9.0,
+            downed: Some(Downed::BreakingUp),
+        };
+        session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(1)))], &was);
+        let by_the_police = session.pilot().combat_rating();
+        session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(0)))], &was);
+        (by_the_police, session.pilot().combat_rating())
+    }
+
+    #[test]
+    fn a_kill_by_the_players_escort_or_fighter_raises_the_rating() {
+        assert_eq!(
+            rating_after_npc_kills(true),
+            (2, 2),
+            "10 / 5; NPC 0 is no escort"
+        );
+    }
+
+    #[test]
+    fn a_kill_by_an_npc_outside_the_players_fleet_leaves_the_rating() {
+        assert_eq!(rating_after_npc_kills(false), (0, 0));
+    }
+
+    #[test]
+    fn only_a_break_up_of_an_npc_credits_the_rating() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        let was = [(NpcId(0), Condition::Intact, Some(GovtId(140)))];
+        let strike = |ship, downed| Strike {
+            ship,
+            by: ShipRef::Player,
+            damage: 9.0,
+            downed,
+        };
+        session.credit_kills(
+            &[
+                strike(ShipRef::Npc(NpcId(0)), None),
+                strike(ShipRef::Npc(NpcId(0)), Some(Downed::Disabled)),
+                strike(ShipRef::Player, Some(Downed::BreakingUp)),
+                strike(ShipRef::Npc(NpcId(9)), Some(Downed::BreakingUp)),
+            ],
+            &was,
+        );
+        assert_eq!(session.pilot().combat_rating(), 0);
+        session.credit_kills(
+            &[strike(ShipRef::Npc(NpcId(0)), Some(Downed::BreakingUp))],
+            &was,
+        );
+        assert_eq!(session.pilot().combat_rating(), 2);
     }
 
     /// The ship fates raised and not yet settled.

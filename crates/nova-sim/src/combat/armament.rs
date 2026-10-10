@@ -586,6 +586,13 @@ impl Arsenal {
         self.hulls.get(&ship).map(HullSpec::new).unwrap_or_default()
     }
 
+    /// Ship type `ship`'s `Strength`, raw: none for one that cannot be
+    /// read.
+    #[must_use]
+    pub fn strength(&self, ship: ShipId) -> i16 {
+        self.hulls.get(&ship).map_or(0, |hull| hull.strength)
+    }
+
     /// The player's armament, owning `owned` of `outfits`: its weapon
     /// outfits, its stock weapons among them (see the module docs).
     #[must_use]
@@ -2051,6 +2058,18 @@ mod tests {
         let (_, unloaded) = arsenal.npc(ShipId(128), &BTreeMap::new(), &outfits());
         assert_eq!(unloaded, BTreeMap::from([(WeaponId(138), 20)]));
         assert_eq!(MOD_AMMO, 3);
+    }
+
+    #[test]
+    fn a_ships_strength_is_its_records_raw_or_none() {
+        let hull = |id, strength| HullRecord {
+            strength,
+            ..crate::testkit::hull(id)
+        };
+        let arsenal = Arsenal::new(&[], vec![hull(128, 325), hull(129, -2)]);
+        assert_eq!(arsenal.strength(ShipId(128)), 325);
+        assert_eq!(arsenal.strength(ShipId(129)), -2, "raw, below none");
+        assert_eq!(arsenal.strength(ShipId(130)), 0, "no record");
     }
 
     #[test]
