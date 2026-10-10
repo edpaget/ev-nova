@@ -25,12 +25,11 @@
 //! rdm:phase/missions/phase-15-accept-drops-next-offer.
 
 use super::Session;
-use super::missions::AcceptError;
 use crate::catalog::{MissionId, MissionTexts};
 use crate::chance::{Chance, NeverFires};
 use crate::mission::screens::{HIDDEN, NO_MISSIONS_HERE, SPACEPORT, UNREFUSABLE};
 use crate::mission::{
-    AcceptRefusal, AvailFacts, Offer, OfferLabels, Venue, availability, offer_labels,
+    AcceptRefusal, AvailFacts, Offer, OfferPrompt, Venue, VenueOffer, availability, offer_labels,
 };
 
 /// One offer the mission computer lists.
@@ -120,41 +119,6 @@ pub struct MissionText {
     pub mission: MissionId,
     /// The text.
     pub text: String,
-}
-
-/// A mission offered outside the mission computer, as the offer dialog
-/// shows it (`_OfferOneMission` @0xa21ac).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OfferPrompt {
-    /// The mission.
-    pub mission: MissionId,
-    /// Its offer text, its tags filled for the offer.
-    pub text: String,
-    /// Its buttons' labels: no refuse button when it cannot be refused.
-    pub labels: OfferLabels,
-}
-
-impl OfferPrompt {
-    /// Whether the offer can be refused: `Flags` 0x0004 is clear.
-    #[must_use]
-    pub fn can_refuse(&self) -> bool {
-        self.labels.refuse.is_some()
-    }
-}
-
-/// What a venue's next offer comes to ([`Session::next_offer`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum VenueOffer {
-    /// The offer dialog asks.
-    Prompt(OfferPrompt),
-    /// A mission that cannot be refused, with no offer text, was accepted
-    /// at once, with no dialog (@0xa22ec-0xa231c): how the accept went.
-    Accepted {
-        /// The mission.
-        mission: MissionId,
-        /// The slot it went into, or why it was not accepted.
-        accepted: Result<u8, AcceptError>,
-    },
 }
 
 /// One active mission the mission info screen lists.
@@ -405,7 +369,7 @@ mod tests {
     use crate::geometry::Vec2;
     use crate::mission::AbortRefusal;
     use crate::mission::screens::{BAR, NO_LABEL, OKAY_LABEL};
-    use crate::mission::{ActiveMission, SLOTS};
+    use crate::mission::{AcceptError, ActiveMission, OfferLabels, SLOTS};
     use crate::session::AbortError;
     use crate::testkit::{FakePilotCatalog, catalog, land_now, mission};
 

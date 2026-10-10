@@ -334,13 +334,14 @@ mod story;
 pub use hooks::HookRules;
 pub use ship_change::ShipChangeRules;
 
+pub use crate::mission::{AcceptError, OfferPrompt, VenueOffer};
 pub use edit::RelocateRefusal;
 pub use events::SessionEvent;
 pub use mission_screens::{
     ComputerRefusal, ComputerRow, InfoRow, MissionComputer, MissionInfo, MissionText,
-    MissionTextKind, OfferPrompt, VenueOffer,
+    MissionTextKind,
 };
-pub use missions::{AbortError, AcceptError, NotOffered};
+pub use missions::{AbortError, NotOffered};
 pub use person_offers::Hailed;
 pub use persons::PersonQuote;
 pub use script_effects::{ScriptEffectRules, Settled};

@@ -344,9 +344,9 @@ use crate::rules::{Check, Checks, Context};
 use crate::wares;
 
 pub use self::active::{
-    AbortFacts, AbortRefusal, AcceptFacts, AcceptRefusal, ActiveMission, ActiveMissions, Among,
-    FailedBy, PayEffect, SLOTS, abort_checks, abort_penalty, accept_charge, accept_checks,
-    auto_aborts_at_accept, failure_records, fined, goals_met_at_accept, pay_effect,
+    AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
+    ActiveMissions, Among, FailedBy, PayEffect, SLOTS, abort_checks, abort_penalty, accept_charge,
+    accept_checks, auto_aborts_at_accept, failure_records, fined, goals_met_at_accept, pay_effect,
     success_records,
 };
 pub use self::cargo::{
@@ -354,7 +354,9 @@ pub use self::cargo::{
     jettison, picks_up_at_destination, pickup_checks, scan,
 };
 pub use self::offer::{Offer, Offers, ROLLED, RollTable, Stop, resolve};
-pub use self::screens::{OfferLabels, display_order, offer_gap, offer_labels};
+pub use self::screens::{
+    OfferLabels, OfferPrompt, VenueOffer, display_order, offer_gap, offer_labels,
+};
 pub use self::select::{Kind, Stellar, StellarCode, World, select_stellar, stellars_of};
 
 /// Where a mission is offered.

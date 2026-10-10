@@ -251,6 +251,17 @@ pub enum AcceptRefusal {
     NoSpace,
 }
 
+/// Why [`Session::accept_mission`](crate::Session::accept_mission) accepted nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum AcceptError {
+    /// It is not offered here.
+    #[error("the mission is not offered here")]
+    NotOffered,
+    /// An accept check refused it.
+    #[error("the mission cannot be accepted: {0}")]
+    Refused(AcceptRefusal),
+}
+
 /// The checks an accept makes, in order (`_DoMissionAccept` @0xa1b11): a
 /// free slot; then, for an offer of tons above none, whatever its
 /// `PickupMode`, the ship's holds and then the free space for them

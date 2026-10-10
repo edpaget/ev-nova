@@ -74,9 +74,9 @@ use crate::chance::{Chance, NeverFires};
 use crate::control::{Script, Test};
 use crate::mission::active::{AUTO_ABORT_FUEL, AUTO_ABORT_FUEL_TAKEN, AUTO_ABORT_PAYS};
 use crate::mission::{
-    self, AbortFacts, AbortRefusal, AcceptFacts, AcceptRefusal, ActiveMission, AvailFacts,
-    FailedBy, Offer, PayEffect, Player, Refusal, Room, SLOTS, Stop, Venue, Visit, World,
-    abort_checks, abort_penalty, accept_charge, accept_checks, auto_aborts_at_accept,
+    self, AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
+    AvailFacts, FailedBy, Offer, PayEffect, Player, Refusal, Room, SLOTS, Stop, Venue, Visit,
+    World, abort_checks, abort_penalty, accept_charge, accept_checks, auto_aborts_at_accept,
     failure_records, fined, pay_effect, stellars_of, success_records,
 };
 use crate::rulebook::{RuleKey, RuleSource};
@@ -143,17 +143,6 @@ pub const fn slot_hook(slot: u8, hook: u8) -> SubscriptionId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("the mission is not offered here")]
 pub struct NotOffered;
-
-/// Why [`Session::accept_mission`] accepted nothing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum AcceptError {
-    /// It is not offered here.
-    #[error("the mission is not offered here")]
-    NotOffered,
-    /// An accept check refused it.
-    #[error("the mission cannot be accepted: {0}")]
-    Refused(AcceptRefusal),
-}
 
 /// Why [`Session::abort_mission`] aborted nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]

@@ -20,10 +20,10 @@ use std::collections::BTreeMap;
 
 use super::Session;
 use super::hail::make_leave;
-use super::mission_screens::VenueOffer;
 use crate::catalog::{CommCatalog, MissionId, PersonId, StellarId};
 use crate::chance::{Chance, NeverFires};
 use crate::hail::{Conversation, HailOptions, HailRefusal, HailView};
+use crate::mission::VenueOffer;
 use crate::mission::{self, Offer, Venue};
 use crate::person::{GONE_ON_ACCEPT, LEAVES_ON_ACCEPT, MISSION_ON_BOARD};
 use crate::rulebook::{RuleKey, RuleSource};
@@ -428,8 +428,8 @@ mod tests {
     use crate::combat::hull::Condition;
     use crate::hail::{HailOptions, HailRefusal};
     use crate::mission::OfferLabels;
+    use crate::mission::{OfferPrompt, VenueOffer};
     use crate::person::MISSION_ON_BOARD;
-    use crate::session::mission_screens::{OfferPrompt, VenueOffer};
 
     /// [`linked`] with mission 130's offer text "<OSN> needs a hand,
     /// <PN>." and its `RefuseText` "<OSN> sighs.".

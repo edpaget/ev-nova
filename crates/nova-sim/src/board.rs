@@ -111,8 +111,8 @@ use crate::combat::hull::Condition;
 use crate::flight::ShipState;
 use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::market::{Good, hold_tons};
+use crate::mission::VenueOffer;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-use crate::session::VenueOffer;
 use crate::traffic::npc::NpcId;
 
 /// Why the player cannot board its target.

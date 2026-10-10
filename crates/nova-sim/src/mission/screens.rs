@@ -4,7 +4,8 @@
 use std::cmp::Reverse;
 use std::time::Duration;
 
-use super::{AcceptRefusal, SLOTS};
+use super::{AcceptError, AcceptRefusal, SLOTS};
+use crate::catalog::MissionId;
 use crate::chance::Chance;
 use crate::rulebook::RuleSource;
 
@@ -111,6 +112,42 @@ pub fn offer_labels(accept: &str, refuse: &str, can_refuse: bool) -> OfferLabels
         accept: accept.to_owned(),
         refuse: refuse.map(str::to_owned),
     }
+}
+
+/// A mission offered outside the mission computer, as the offer dialog
+/// shows it (`_OfferOneMission` @0xa21ac).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OfferPrompt {
+    /// The mission.
+    pub mission: MissionId,
+    /// Its offer text, its tags filled for the offer.
+    pub text: String,
+    /// Its buttons' labels: no refuse button when it cannot be refused.
+    pub labels: OfferLabels,
+}
+
+impl OfferPrompt {
+    /// Whether the offer can be refused: `Flags` 0x0004 is clear.
+    #[must_use]
+    pub fn can_refuse(&self) -> bool {
+        self.labels.refuse.is_some()
+    }
+}
+
+/// What a venue's next offer comes to
+/// ([`Session::next_offer`](crate::Session::next_offer)).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VenueOffer {
+    /// The offer dialog asks.
+    Prompt(OfferPrompt),
+    /// A mission that cannot be refused, with no offer text, was accepted
+    /// at once, with no dialog (@0xa22ec-0xa231c): how the accept went.
+    Accepted {
+        /// The mission.
+        mission: MissionId,
+        /// The slot it went into, or why it was not accepted.
+        accepted: Result<u8, AcceptError>,
+    },
 }
 
 /// The ticks (60 a second) after the bar opens before it first offers a
