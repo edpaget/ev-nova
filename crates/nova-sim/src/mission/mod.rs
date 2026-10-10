@@ -281,7 +281,7 @@ pub struct Visit<'a> {
     pub world: World<'a>,
     /// The player.
     pub player: Player,
-    /// The missions active: none until missions phase 2.
+    /// The missions active, in slot order.
     pub active: &'a [MissionId],
     /// The control-bit test `AvailBits` goes through.
     pub gate: Gate<'a>,

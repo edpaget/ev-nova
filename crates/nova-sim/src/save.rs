@@ -104,6 +104,7 @@ use crate::control::Bit;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::{ActiveEvent, Good};
+use crate::mission::ActiveMissions;
 use crate::outfit_effects::Rgb15;
 use crate::pilot::{Escort, Gender, Pilot};
 use crate::reserves::{Gauge, Reserves};
@@ -911,6 +912,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
             .map(SubscriptionId::from)
             .collect(),
         galaxy: saved.galaxy.into(),
+        missions: ActiveMissions::default(),
     })
 }
 
@@ -1050,6 +1052,7 @@ mod tests {
             paint: Some(Rgb15 { r: 31, g: 0, b: 4 }),
             story_fired: all_fired(),
             galaxy: overlaid(),
+            missions: ActiveMissions::default(),
         }
     }
 

@@ -146,6 +146,7 @@ impl Session {
             free_cargo: self.mission_cargo_space(),
             cash: self.pilot.cash,
         };
+        let active = self.pilot.missions.missions();
         let visit = Visit {
             docked,
             system: self.shown,
@@ -155,7 +156,7 @@ impl Session {
                 govts: &self.govts,
             },
             player,
-            active: &[],
+            active: &active,
             gate: self.gate(),
             rules: &self.rules,
             today: self.pilot.date,
@@ -418,6 +419,24 @@ mod tests {
         assert_eq!(session.offer_refusals(MissionId(133)), None, "no such mïsn");
         let in_flight = Session::start(&catalog).expect("starts");
         assert_eq!(in_flight.offer_refusals(MissionId(130)), None);
+    }
+
+    #[test]
+    fn an_active_mission_is_refused_as_not_active() {
+        use crate::mission::ActiveMission;
+        let catalog = offering();
+        let mut session = landed(&catalog, &mut NeverFires);
+        let offer = session.mission_offers(Venue::Computer)[1].clone();
+        let record = mission(131);
+        session
+            .pilot
+            .missions
+            .fill(ActiveMission::accepted(&record, &offer, session.date()));
+        assert_eq!(
+            session.offer_refusals(MissionId(131)),
+            Some(vec![("not active", Verdict::Refuses(Refusal::Active))])
+        );
+        assert_eq!(session.offer_refusals(MissionId(130)), Some(vec![]));
     }
 
     #[test]

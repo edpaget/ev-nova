@@ -55,6 +55,10 @@
 //! [`GalaxyOverlay`]: none on a new pilot, so its galaxy is the
 //! catalog's (see the [`story`](crate::story) module's "Galaxy overlay").
 //!
+//! It keeps the missions it has accepted, in the original's 16 slots
+//! ([`ActiveMissions`]): none on a new pilot (see
+//! [`mission`](crate::mission)).
+//!
 //! A [`Session`](crate::Session) flies a pilot and changes it as the rules
 //! say.
 
@@ -69,6 +73,7 @@ use crate::control::{Bit, ControlBitSet};
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::{ActiveEvent, Good};
+use crate::mission::ActiveMissions;
 use crate::outfit_effects::Rgb15;
 use crate::outfitter::outfit_mods;
 use crate::reserves::Reserves;
@@ -139,6 +144,9 @@ pub struct Pilot {
     /// What play has changed of the galaxy (see the
     /// [`story`](crate::story) module's "Galaxy overlay").
     pub(crate) galaxy: GalaxyOverlay,
+    /// The missions accepted, in their 16 slots (see
+    /// [`mission`](crate::mission)).
+    pub(crate) missions: ActiveMissions,
 }
 
 /// The player's gender, which the `G` test reads (true when male). The
@@ -243,6 +251,7 @@ impl Pilot {
             paint: None,
             story_fired: BTreeSet::new(),
             galaxy: GalaxyOverlay::default(),
+            missions: ActiveMissions::default(),
         })
     }
 
@@ -256,6 +265,12 @@ impl Pilot {
     #[must_use]
     pub fn gender(&self) -> Gender {
         self.gender
+    }
+
+    /// The missions accepted, in their slots.
+    #[must_use]
+    pub fn missions(&self) -> &ActiveMissions {
+        &self.missions
     }
 
     /// The ship's paint, `None` when it is unpainted.
@@ -738,6 +753,13 @@ mod tests {
         assert!(!pilot.control_bit(Bit::new(0).expect("in range")));
         assert_eq!(pilot.gender(), Gender::Male);
         assert_eq!(Gender::default(), Gender::Male);
+    }
+
+    #[test]
+    fn a_new_pilot_has_every_mission_slot_free() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert_eq!(pilot.missions().lowest_free(), Some(0));
+        assert_eq!(pilot.missions().iter().count(), 0);
     }
 
     #[test]
