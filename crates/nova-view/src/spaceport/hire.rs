@@ -1201,6 +1201,42 @@ mod tests {
     }
 
     #[test]
+    fn the_hire_picture_panel_draws_the_weapons_sentence() {
+        let art = art_with(vec![(14_000, 5000)]);
+        let mut list = long_named();
+        list.rows[0].specs.weapons = vec![StockLine {
+            count: 2,
+            name: "Light Blaster".to_owned(),
+            ammo: None,
+        }];
+        let mut screen = screen_of(&art, list);
+        screen.input(&key(INFO_KEY, false));
+        let panel = screen.info_panel().expect("open");
+        let weapons = panel.item_bounds(8).expect("item 8");
+        let text_area = panel.item_bounds(5).expect("item 5");
+        let drawn = texts(&screen);
+        let white = Color::WHITE;
+        for expected in [
+            (
+                "Standard Weapons:",
+                Point::new(weapons.min.x, weapons.min.y + 2.0),
+            ),
+            (
+                "2 Light Blasters",
+                Point::new(weapons.min.x, weapons.min.y + 16.0),
+            ),
+        ] {
+            let expected = (expected.0.to_owned(), expected.1, white);
+            assert!(drawn.contains(&expected), "{expected:?}: {drawn:?}");
+        }
+        let item_5s_heading = Point::new(text_area.min.x, text_area.min.y + 98.0);
+        assert!(
+            !drawn.iter().any(|(_, at, _)| *at == item_5s_heading),
+            "{drawn:?}"
+        );
+    }
+
+    #[test]
     fn info_clicked_opens_the_panel() {
         let mut screen = screen();
         click_item(&mut screen, INFO_ITEM);

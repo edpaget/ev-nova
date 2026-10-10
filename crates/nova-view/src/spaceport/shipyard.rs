@@ -87,6 +87,16 @@
 //! @0x4fa33-0x4fa69), not its name. When the dialog picked is missing,
 //! nothing opens (@0x5b749-0x5b752).
 //!
+//! While the ID test holds, item 5 draws no stock weapons
+//! ([`spec_lines_for`]); they go into item 8 instead (@0x5061c-0x50ce0):
+//! "Standard Weapons:", or "No standard weapons" with none, in white at
+//! its left on baseline 12, then each weapon's line joined by ", " into
+//! one sentence ([`weapons_sentence`]), set in a box from 16 below item
+//! 8's top to its bottom, wrapped at word breaks and clipped to it, in
+//! white on black (`TETextBox`, then `InvertRect`). With none listed
+//! there is no box. Without an item 8 (`DLOG` 1005 over `PICT` 8507,
+//! where the original's rect is undefined), neither is drawn.
+//!
 //! Done, Return and Escape close the shipyard. Without its dialog, the
 //! screen says why, and Return or Escape still closes it.
 
@@ -98,7 +108,9 @@ use nova_sim::{Rating, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard, StockLi
 
 use super::catalog::SpaceportCatalog;
 use super::credits::{self, credits_text, draw_amount_rows, tons_text};
-use super::grid::{self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, text};
+use super::grid::{
+    self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE, text,
+};
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
@@ -249,6 +261,17 @@ pub const FIRST_WEAPON_ROW: f32 = 120.0;
 pub const WEAPON_STEP: f32 = 12.0;
 /// The stock weapons' indent (h +8).
 pub const WEAPON_INDENT: f32 = 8.0;
+/// The picture info panel's stock weapons, while the ID test holds
+/// (`_ShipDescDialogUpdate` @0x5061c-0x5066d).
+pub const PANEL_WEAPONS_ITEM: usize = 8;
+/// The weapons heading's baseline below item 8's top (v +0xc,
+/// @0x5065c).
+pub const WEAPONS_HEADING_ROW: f32 = 12.0;
+/// How far below item 8's top the weapons sentence's box starts (+0x10,
+/// @0x5066d).
+pub const WEAPONS_BOX_DROP: f32 = 16.0;
+/// What joins the weapons sentence's parts (@0x50c3c).
+pub const WEAPONS_SEPARATOR: &str = ", ";
 /// The info panel's labels' grey: `_rgbMedGrey`, 0x8000 in each channel
 /// (`_InitColors` @0x1bf10-0x1bf21).
 pub const LABEL_COLOR: Color = Color::rgba(128, 128, 128, 255);
@@ -442,6 +465,16 @@ fn stock_text(line: &StockLine) -> String {
     format!("{} {}{plural}{ammo}", line.count, line.name)
 }
 
+/// The stock weapons' heading: "Standard Weapons:", or "No standard
+/// weapons" with none (#241-242).
+fn weapons_heading(weapons: &[StockLine]) -> &'static str {
+    if weapons.is_empty() {
+        NO_STANDARD_WEAPONS
+    } else {
+        STANDARD_WEAPONS
+    }
+}
+
 /// A row's grey label and white value at `baseline`, in the left column
 /// (0) or the right (1).
 fn labelled(column: usize, baseline: f32, label: &str, value: String) -> [PanelText; 2] {
@@ -469,6 +502,35 @@ fn labelled(column: usize, baseline: f32, label: &str, value: String) -> [PanelT
 /// white value; the list is white.
 #[must_use]
 pub fn spec_lines(specs: &ShipSpecs) -> Vec<PanelText> {
+    panel_texts(specs, true)
+}
+
+/// The info panel's item-5 texts for a ship of `specs` in `variant`:
+/// [`spec_lines`] for [`InfoVariant::Plain`], and without the
+/// stock-weapons heading and lines while the ID test holds, as the
+/// weapons go into item 8 then (@0x50589-0x50590, @0x50613-0x5061a,
+/// @0x50716).
+#[must_use]
+pub fn spec_lines_for(specs: &ShipSpecs, variant: InfoVariant) -> Vec<PanelText> {
+    panel_texts(specs, !variant.id_test())
+}
+
+/// The stock weapons as one sentence, as `_ShipDescDialogUpdate` builds
+/// it while the ID test holds (@0x50786-0x50c41): each weapon's line
+/// ([`stock_text`]) in order, joined by [`WEAPONS_SEPARATOR`]; empty
+/// with none.
+#[must_use]
+pub fn weapons_sentence(weapons: &[StockLine]) -> String {
+    weapons
+        .iter()
+        .map(stock_text)
+        .collect::<Vec<_>>()
+        .join(WEAPONS_SEPARATOR)
+}
+
+/// [`spec_lines`]' texts, with the stock-weapons heading and lines only
+/// when `with_weapons`.
+fn panel_texts(specs: &ShipSpecs, with_weapons: bool) -> Vec<PanelText> {
     const LEFT: usize = 0;
     const RIGHT: usize = 1;
     let [speed, accel, turn, guns, turrets, space, length, mass, crew] = STAT_LABELS;
@@ -500,26 +562,23 @@ pub fn spec_lines(specs: &ShipSpecs) -> Vec<PanelText> {
     .into_iter()
     .flatten()
     .collect();
-    let heading = if specs.weapons.is_empty() {
-        NO_STANDARD_WEAPONS
-    } else {
-        STANDARD_WEAPONS
-    };
-    texts.push(PanelText {
-        dx: PANEL_LABEL_COLUMNS[LEFT],
-        baseline: WEAPONS_ROW,
-        text: heading.to_owned(),
-        color: TEXT_COLOR,
-    });
-    let mut baseline = FIRST_WEAPON_ROW;
-    for line in &specs.weapons {
+    if with_weapons {
         texts.push(PanelText {
-            dx: WEAPON_INDENT,
-            baseline,
-            text: stock_text(line),
+            dx: PANEL_LABEL_COLUMNS[LEFT],
+            baseline: WEAPONS_ROW,
+            text: weapons_heading(&specs.weapons).to_owned(),
             color: TEXT_COLOR,
         });
-        baseline += WEAPON_STEP;
+        let mut baseline = FIRST_WEAPON_ROW;
+        for line in &specs.weapons {
+            texts.push(PanelText {
+                dx: WEAPON_INDENT,
+                baseline,
+                text: stock_text(line),
+                color: TEXT_COLOR,
+            });
+            baseline += WEAPON_STEP;
+        }
     }
     texts.extend(labelled(
         RIGHT,
@@ -608,19 +667,23 @@ pub(super) struct Panel {
     dialog: Dialog,
     variant: InfoVariant,
     title: String,
-    /// Item 5's texts ([`spec_lines`]).
+    /// Item 5's texts ([`spec_lines_for`]).
     texts: Vec<PanelText>,
+    /// While the ID test holds, item 8's weapons: whether any stock weapon
+    /// is listed, and the sentence ([`weapons_sentence`]).
+    weapons: Option<(bool, String)>,
 }
 
 impl Panel {
     /// The panel of `variant` laid out by `template`, titled `title` and
-    /// drawing `texts` in item 5, its Done enabled and labelled in
-    /// `style`, its text measured by `metrics`.
+    /// drawing `texts` in item 5 and `weapons` in item 8, its Done
+    /// enabled and labelled in `style`, its text measured by `metrics`.
     fn open(
         template: &DialogTemplate,
         variant: InfoVariant,
         title: String,
         texts: Vec<PanelText>,
+        weapons: Option<(bool, String)>,
         metrics: &Rc<dyn TextMetrics>,
         style: ButtonStyle,
     ) -> Self {
@@ -638,6 +701,7 @@ impl Panel {
             variant,
             title,
             texts,
+            weapons,
         }
     }
 
@@ -698,12 +762,58 @@ impl Panel {
                 }
             }
         }
+        if let (Some((listed, sentence)), Some(area)) =
+            (&self.weapons, self.dialog.item_bounds(PANEL_WEAPONS_ITEM))
+        {
+            draw_weapons(list, metrics, area, *listed, sentence);
+        }
         if let (Some(id), Some(area)) = (
             self.variant.graphic(),
             self.dialog.item_bounds(PANEL_GRAPHIC_ITEM),
         ) {
             list.stretched_picture(ImageKey::picture(id), area.min, area.width(), area.height());
         }
+    }
+}
+
+/// Item 8's weapons, in `area`, as `_ShipDescDialogUpdate` draws them
+/// while the ID test holds: the heading in white at its left on baseline
+/// [`WEAPONS_HEADING_ROW`] (@0x5061c-0x5069b); then, when a weapon is
+/// `listed`, the box below [`WEAPONS_BOX_DROP`] (@0x5066d) holding
+/// `sentence`, set by `TETextBox` and inverted (@0x50c73-0x50ce0): white
+/// on black, wrapped at word breaks to its width, a line drawn only when
+/// its top is inside the box, as `TETextBox` clips. With none listed
+/// there is no box (@0x50602).
+fn draw_weapons(
+    list: &mut DrawList,
+    metrics: &dyn TextMetrics,
+    area: Bounds,
+    listed: bool,
+    sentence: &str,
+) {
+    let heading = if listed {
+        STANDARD_WEAPONS
+    } else {
+        NO_STANDARD_WEAPONS
+    };
+    let top = grid::baseline_top(area.min.y + WEAPONS_HEADING_ROW);
+    text(list, heading, Point::new(area.min.x, top), TEXT_COLOR);
+    if !listed {
+        return;
+    }
+    let boxed = Bounds {
+        min: Point::new(area.min.x, area.min.y + WEAPONS_BOX_DROP),
+        max: area.max,
+    };
+    fill_rect(list, boxed, Color::BLACK);
+    let step = metrics.line_height(TEXT_FONT, TEXT_SIZE);
+    let mut top = boxed.min.y;
+    for line in crate::text::wrap(&metrics, TEXT_FONT, TEXT_SIZE, sentence, boxed.width()) {
+        if top >= boxed.max.y {
+            break;
+        }
+        text(list, &line, Point::new(boxed.min.x, top), TEXT_COLOR);
+        top += step;
     }
 }
 
@@ -730,11 +840,15 @@ pub(super) fn open_panel(
     } else {
         name.to_owned()
     };
+    let weapons = variant
+        .id_test()
+        .then(|| (!specs.weapons.is_empty(), weapons_sentence(&specs.weapons)));
     Some(Panel::open(
         template,
         variant,
         title,
-        spec_lines(specs),
+        spec_lines_for(specs, variant),
+        weapons,
         metrics,
         style,
     ))
@@ -1604,6 +1718,15 @@ mod tests {
         assert_eq!(INFO_BACKGROUND, ImageKey::picture(8506));
         assert_eq!(PICTURE_INFO_BACKGROUND, ImageKey::picture(8507));
         assert_eq!((PANEL_GRAPHIC_ITEM, LAST_UNSHOWN_GRAPHIC), (7, 127));
+        assert_eq!(
+            (
+                PANEL_WEAPONS_ITEM,
+                WEAPONS_HEADING_ROW,
+                WEAPONS_BOX_DROP,
+                WEAPONS_SEPARATOR
+            ),
+            (8, 12.0, 16.0, ", ")
+        );
         assert_eq!(
             [
                 DONE_ITEM,
@@ -3090,6 +3213,219 @@ mod tests {
         press(&mut screen, INFO_KEY);
         let panel = screen.info_panel().expect("open");
         assert_eq!(panel.bounds(), rect(387.0, 241.0, 250.0, 285.0));
+    }
+
+    /// The five stock lines of phase 29's list test.
+    fn five_weapons() -> Vec<StockLine> {
+        vec![
+            stock(2, "Light Blaster", None),
+            stock(1, "Missile Launcher", Some(10)),
+            stock(4, "Viper", None),
+            stock(1, "Lone", None),
+            stock(2, "", None),
+        ]
+    }
+
+    #[test]
+    fn the_weapons_sentence_joins_each_stock_line_with_a_comma() {
+        assert_eq!(weapons_sentence(&[]), "");
+        assert_eq!(
+            weapons_sentence(&[stock(2, "Light Blaster", None)]),
+            "2 Light Blasters"
+        );
+        assert_eq!(
+            weapons_sentence(&five_weapons()),
+            "2 Light Blasters, 1 Missile Launcher + 10 ammo, 4 Vipers, 1 Lone, 2 s"
+        );
+    }
+
+    #[test]
+    fn spec_lines_for_drops_the_weapons_only_while_the_id_test_holds() {
+        let specs = ShipSpecs {
+            weapons: five_weapons(),
+            ..SPECS
+        };
+        assert_eq!(
+            spec_lines_for(&specs, InfoVariant::Plain),
+            spec_lines(&specs)
+        );
+        let mut expected = upper_rows();
+        expected.extend(lower_rows());
+        for variant in [InfoVariant::Picture(5002), InfoVariant::MissingPicture] {
+            assert_eq!(spec_lines_for(&specs, variant), expected, "{variant:?}");
+        }
+    }
+
+    /// The Heavy Shuttle's picture panel, open, its stock weapons
+    /// `weapons`.
+    fn picture_panel(weapons: Vec<StockLine>) -> ShipyardScreen {
+        let art = art_with(vec![(13_001, 5002)]);
+        let mut shipyard = shipyard();
+        shipyard.rows[1].specs.long_name = "The Long 129".to_owned();
+        shipyard.rows[1].specs.weapons = weapons;
+        let mut screen = screen_with(shipyard, &art);
+        press(&mut screen, Key::Right);
+        press(&mut screen, INFO_KEY);
+        screen
+    }
+
+    /// The black box under item 8's heading: item 8 less its top 16.
+    fn weapons_box(screen: &ShipyardScreen) -> Bounds {
+        let weapons = panel_item(screen, PANEL_WEAPONS_ITEM);
+        Bounds {
+            min: Point::new(weapons.min.x, weapons.min.y + 16.0),
+            max: weapons.max,
+        }
+    }
+
+    /// The panel's item-5 texts at phase 29's weapons places, (0, 108)
+    /// and (8, 120).
+    fn at_item_5s_weapons(screen: &ShipyardScreen) -> Vec<(String, Point, Color)> {
+        let area = panel_item(screen, PANEL_TEXT_ITEM);
+        let places = [
+            Point::new(area.min.x, area.min.y + 98.0),
+            Point::new(area.min.x + 8.0, area.min.y + 110.0),
+        ];
+        texts(&drawn(screen))
+            .into_iter()
+            .filter(|(_, at, _)| places.contains(at))
+            .collect()
+    }
+
+    #[test]
+    fn the_picture_panel_draws_the_weapons_heading_and_sentence_in_item_8() {
+        let screen = picture_panel(five_weapons());
+        let weapons = panel_item(&screen, PANEL_WEAPONS_ITEM);
+        assert_eq!(weapons, rect(471.0, 557.0, 342.0, 59.0));
+        let commands = drawn(&screen);
+        let heading = commands
+            .iter()
+            .position(|c| {
+                *c == DrawCommand::Text {
+                    text: STANDARD_WEAPONS.to_owned(),
+                    font: Font::Geneva,
+                    origin: Point::new(weapons.min.x, weapons.min.y + 12.0 - 10.0),
+                    size: TEXT_SIZE,
+                    wrap_width: None,
+                    color: Color::WHITE,
+                }
+            })
+            .expect("the heading in item 8");
+        let boxed = weapons_box(&screen);
+        assert_eq!(boxed.height(), 43.0);
+        let mut black = DrawList::new();
+        fill_rect(&mut black, boxed, Color::BLACK);
+        let fill = commands
+            .iter()
+            .position(|c| Some(c) == black.iter().next())
+            .expect("the box filled black");
+        let lines = crate::text::wrap(
+            &MonoMetrics,
+            Font::Geneva,
+            10.0,
+            &weapons_sentence(&five_weapons()),
+            342.0,
+        );
+        assert!(!lines.is_empty());
+        for (n, line) in lines.iter().enumerate() {
+            let expected = DrawCommand::Text {
+                text: line.clone(),
+                font: Font::Geneva,
+                origin: Point::new(boxed.min.x, boxed.min.y + 12.0 * n as f32),
+                size: TEXT_SIZE,
+                wrap_width: None,
+                color: Color::WHITE,
+            };
+            let at = commands
+                .iter()
+                .position(|c| *c == expected)
+                .unwrap_or_else(|| panic!("{expected:?}: {commands:?}"));
+            assert!(
+                heading < fill && fill < at,
+                "the heading, the box, then {line}"
+            );
+        }
+        assert_eq!(at_item_5s_weapons(&screen), []);
+        let words = words(&screen);
+        for row in ["Speed:", "Crew:"] {
+            assert!(words.contains(&row.to_owned()), "{row}: {words:?}");
+        }
+    }
+
+    #[test]
+    fn a_long_weapons_sentence_is_cut_at_item_8s_bottom() {
+        let weapons: Vec<StockLine> = (0..30)
+            .map(|n| stock(1, &format!("Gun{n:02}"), None))
+            .collect();
+        let lines = crate::text::wrap(
+            &MonoMetrics,
+            Font::Geneva,
+            10.0,
+            &weapons_sentence(&weapons),
+            342.0,
+        );
+        assert_eq!(lines.len(), 5, "{lines:?}");
+        let screen = picture_panel(weapons);
+        let boxed = weapons_box(&screen);
+        let drawn = texts(&drawn(&screen));
+        let top = |line: &str| {
+            drawn
+                .iter()
+                .find(|(text, _, _)| text == line)
+                .map(|(_, at, _)| at.y - boxed.min.y)
+        };
+        for (n, line) in lines[..4].iter().enumerate() {
+            assert_eq!(top(line), Some(12.0 * n as f32), "{line}");
+        }
+        assert_eq!(top(&lines[4]), None, "its top is 48, below the box's 43");
+    }
+
+    #[test]
+    fn the_picture_panel_without_stock_weapons_says_so_in_item_8_with_no_box() {
+        let screen = picture_panel(Vec::new());
+        let weapons = panel_item(&screen, PANEL_WEAPONS_ITEM);
+        let drawn_texts = texts(&drawn(&screen));
+        assert!(drawn_texts.contains(&(
+            NO_STANDARD_WEAPONS.to_owned(),
+            Point::new(weapons.min.x, weapons.min.y + 2.0),
+            Color::WHITE
+        )));
+        let mut black = DrawList::new();
+        fill_rect(&mut black, weapons_box(&screen), Color::BLACK);
+        assert!(
+            !drawn(&screen)
+                .iter()
+                .any(|c| Some(c) == black.iter().next())
+        );
+        assert!(
+            !drawn_texts
+                .iter()
+                .any(|(_, at, _)| weapons_box(&screen).contains(*at))
+        );
+        assert_eq!(at_item_5s_weapons(&screen), []);
+    }
+
+    #[test]
+    fn the_missing_picture_panel_draws_no_weapons() {
+        let art = art_with(vec![(13_001, 20_130)]);
+        let mut shipyard = shipyard();
+        shipyard.rows[1].specs.weapons = five_weapons();
+        let mut screen = screen_with(shipyard, &art);
+        press(&mut screen, Key::Right);
+        press(&mut screen, INFO_KEY);
+        assert_eq!(
+            screen.info_panel().expect("open").bounds(),
+            rect(387.0, 241.0, 250.0, 285.0)
+        );
+        let words = words(&screen);
+        for gone in [STANDARD_WEAPONS, NO_STANDARD_WEAPONS, "2 Light Blasters"] {
+            assert!(!words.contains(&gone.to_owned()), "{gone}: {words:?}");
+        }
+        assert!(
+            !words.iter().any(|word| word.contains("Light Blaster")),
+            "{words:?}"
+        );
+        assert!(words.contains(&"Speed:".to_owned()), "{words:?}");
     }
 
     #[test]

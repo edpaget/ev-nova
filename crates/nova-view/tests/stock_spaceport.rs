@@ -296,9 +296,12 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
 
 /// I on the Shuttle, selected in Viking's `screen`, opens the picture
 /// variant: its `dësc` 13000 has `Graphic` 20128, so its Info is `DLOG`
-/// 1019 over `PICT` 8507, with the graphic in item 7.
+/// 1019 over `PICT` 8507, with the graphic in item 7 and its stock
+/// weapon in item 8.
 fn the_shuttles_info_is_the_picture_panel(screen: &mut nova_view::spaceport::ShipyardScreen) {
-    use nova_view::spaceport::shipyard::{PANEL_GRAPHIC_ITEM, PICTURE_INFO_BACKGROUND};
+    use nova_view::spaceport::shipyard::{
+        PANEL_GRAPHIC_ITEM, PANEL_WEAPONS_ITEM, PICTURE_INFO_BACKGROUND,
+    };
     screen.input(&nova_view::Input::Key {
         key: nova_view::Key::Char('i'),
         pressed: true,
@@ -325,6 +328,16 @@ fn the_shuttles_info_is_the_picture_panel(screen: &mut nova_view::spaceport::Shi
             width: 600.0,
             height: 400.0,
         }));
+    // Its stock Light Blaster is the weapons sentence, in item 8.
+    let weapons = panel.item_bounds(PANEL_WEAPONS_ITEM).expect("item 8");
+    assert!(
+        list.iter().any(|c| matches!(
+            c,
+            DrawCommand::Text { text, origin, .. }
+                if text == "1 Light Blaster" && weapons.contains(*origin)
+        )),
+        "{list:?}"
+    );
 }
 
 /// A chance that draws the last of each roll's outcomes.
