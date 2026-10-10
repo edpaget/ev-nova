@@ -38,14 +38,23 @@ pub const YES_LABEL: &str = "Yes";
 /// `STR#` 150 #51: a blank refuse label.
 pub const NO_LABEL: &str = "No";
 
+/// `STR#` 2002 #355: an accept refused for want of cargo holds.
+pub const NO_HOLDS_TO_ACCEPT: &str =
+    "Your ship doesn't have enough cargo space to accept this mission.";
+/// `STR#` 2002 #356: an accept refused for want of free cargo space.
+pub const NO_SPACE_TO_ACCEPT: &str = "Your ship doesn't have enough free cargo space to accept this mission. Sell or jettison some and try again.";
+
 impl AcceptRefusal {
     /// What the original says of the refusal: with every slot taken,
     /// `STR#` 2002 #351, the slots' count and #352 (`_DoMissionDialog`
-    /// @0xa380a-0xa38b8).
+    /// @0xa380a-0xa38b8); without the cargo holds #355, and without the
+    /// free cargo space #356 (`_DoMissionAccept` @0xa1b61-0xa1be5).
     #[must_use]
     pub fn message(self) -> String {
         match self {
             Self::SlotsFull => format!("{SLOTS_FULL_BEFORE} {SLOTS} {SLOTS_FULL_AFTER}"),
+            Self::NoHolds => NO_HOLDS_TO_ACCEPT.to_owned(),
+            Self::NoSpace => NO_SPACE_TO_ACCEPT.to_owned(),
         }
     }
 }
@@ -238,6 +247,18 @@ mod tests {
         assert_eq!(
             AcceptRefusal::SlotsFull.message(),
             "You're already on 16 missions - you'll have to abort or finish one before you can accept another."
+        );
+    }
+
+    #[test]
+    fn a_cargo_refusal_says_whether_the_holds_or_the_free_space_are_short() {
+        assert_eq!(
+            AcceptRefusal::NoHolds.message(),
+            "Your ship doesn't have enough cargo space to accept this mission."
+        );
+        assert_eq!(
+            AcceptRefusal::NoSpace.message(),
+            "Your ship doesn't have enough free cargo space to accept this mission. Sell or jettison some and try again."
         );
     }
 

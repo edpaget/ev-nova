@@ -15,7 +15,8 @@
 //!   ([`Session::mission_info`], `_DoMissionInfoDialog` @0x9e19b);
 //! - the queue of mission texts to show ([`Session::take_mission_texts`]):
 //!   a mission's `BriefText`, `CompText`, `FailText` and `RefuseText`,
-//!   queued at the lifecycle's moments (see the `missions` module).
+//!   queued at the lifecycle's moments (see the `missions` module), and
+//!   an accept refused for want of room for its cargo.
 //!
 //! None of it is saved. The offers at the spaceport, trade center,
 //! shipyard and outfitter are
@@ -85,6 +86,9 @@ pub enum MissionTextKind {
     Fail,
     /// Its `RefuseText`, as its offer is refused.
     Refuse,
+    /// Why it has no room for its cargo: `STR#` 2002 #355 or #356 as its
+    /// accept is refused.
+    NoRoom,
 }
 
 impl MissionTextKind {
@@ -95,6 +99,7 @@ impl MissionTextKind {
             Self::Comp => texts.comp.as_deref(),
             Self::Fail => texts.fail.as_deref(),
             Self::Refuse => texts.refuse.as_deref(),
+            Self::NoRoom => None,
         }
     }
 }
@@ -204,6 +209,11 @@ impl Session {
             Some(slot) => self.mission_text(slot, raw),
             None => self.plain_text(raw),
         };
+        self.show_text(kind, mission, text);
+    }
+
+    /// Queues `text`, `mission`'s `kind` text, to show as it is.
+    pub(super) fn show_text(&mut self, kind: MissionTextKind, mission: MissionId, text: String) {
         self.shown_texts.push(MissionText {
             kind,
             mission,
@@ -224,7 +234,7 @@ impl Session {
     /// (`_IsMissionAvailable(i, 1)` @0xa38bd-0xa3956), checked as an
     /// accept leaves them, drawing nothing.
     pub fn mission_computer(&self) -> Result<MissionComputer, ComputerRefusal> {
-        if self.accept_refusal(&mut NeverFires) == Err(AcceptRefusal::SlotsFull) {
+        if self.accept_refusal(0, &mut NeverFires) == Err(AcceptRefusal::SlotsFull) {
             return Err(ComputerRefusal::SlotsFull);
         }
         let offers = self.mission_offers(Venue::Computer);

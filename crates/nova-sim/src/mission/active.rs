@@ -14,6 +14,7 @@ use crate::legal::RECORD_LIMIT;
 use crate::rulebook::Rulebook;
 use crate::rules::{Check, Checks, Context};
 
+use super::cargo::Room;
 use super::offer::{Offer, Stop, after};
 
 /// How many missions can be active at once: the original's slots
@@ -218,11 +219,14 @@ impl ActiveMissions {
     }
 }
 
-/// What the accept checks read: the slots, and the rule set.
+/// What the accept checks read: the slots, the room for the offer's
+/// cargo, and the rule set.
 #[derive(Clone, Copy, Debug)]
 pub struct AcceptFacts<'a> {
     /// The missions active.
     pub active: &'a ActiveMissions,
+    /// The offer's tons, and the room the ship has for them.
+    pub cargo: Room,
     /// The rule set.
     pub rules: &'a Rulebook,
 }
@@ -239,19 +243,51 @@ pub enum AcceptRefusal {
     /// All 16 slots are taken.
     #[error("every mission slot is taken")]
     SlotsFull,
+    /// The ship's holds are fewer than the cargo's tons.
+    #[error("the ship's cargo holds are too few for the mission's cargo")]
+    NoHolds,
+    /// The ship's free cargo space is less than the cargo's tons.
+    #[error("the ship's free cargo space is too little for the mission's cargo")]
+    NoSpace,
 }
 
-/// The checks an accept makes, in order (`_DoMissionAccept` @0xa1b11).
-/// Missions phase 5 adds the cargo holds, the cargo space and the berths
-/// (@0xa1b61-0xa1be5).
+/// The checks an accept makes, in order (`_DoMissionAccept` @0xa1b11): a
+/// free slot; then, for an offer of tons above none, whatever its
+/// `PickupMode`, the ship's holds and then the free space for them
+/// (@0xa1b61-0xa1be5). Passengers are cargo like any other, and nothing
+/// counts berths, so the berths are the cargo space.
 #[must_use]
 pub fn accept_checks<'a>() -> Checks<AcceptFacts<'a>, AcceptRefusal> {
-    [Check::plain(
-        "slot free",
-        "_DoMissionAccept @0xa1b32-0xa1b40",
-        slot_free,
-    )]
+    [
+        Check::plain("slot free", "_DoMissionAccept @0xa1b32-0xa1b40", slot_free),
+        Check::plain(
+            "cargo holds",
+            "_DoMissionAccept @0xa1b61-0xa1bbc",
+            cargo_holds,
+        ),
+        Check::plain(
+            "cargo space",
+            "_DoMissionAccept @0xa1bc3-0xa1be5",
+            cargo_space,
+        ),
+    ]
     .into()
+}
+
+fn cargo_holds(facts: &AcceptFacts) -> Result<(), AcceptRefusal> {
+    if facts.cargo.holds_take() {
+        Ok(())
+    } else {
+        Err(AcceptRefusal::NoHolds)
+    }
+}
+
+fn cargo_space(facts: &AcceptFacts) -> Result<(), AcceptRefusal> {
+    if facts.cargo.space_takes() {
+        Ok(())
+    } else {
+        Err(AcceptRefusal::NoSpace)
+    }
 }
 
 fn slot_free(facts: &AcceptFacts) -> Result<(), AcceptRefusal> {
@@ -583,6 +619,7 @@ mod tests {
         let record = mission(140);
         let accept = AcceptFacts {
             active: &active,
+            cargo: Room::default(),
             rules: &rules,
         };
         let abort = AbortFacts {
@@ -690,6 +727,7 @@ mod tests {
         for id in 0..16 {
             let facts = AcceptFacts {
                 active: &active,
+                cargo: Room::default(),
                 rules: &rules,
             };
             assert_eq!(
@@ -701,6 +739,7 @@ mod tests {
         }
         let facts = AcceptFacts {
             active: &active,
+            cargo: Room::default(),
             rules: &rules,
         };
         let refusals: Vec<_> = accept_checks()
@@ -712,6 +751,59 @@ mod tests {
             refusals,
             [("slot free", Verdict::Refuses(AcceptRefusal::SlotsFull))]
         );
+    }
+
+    #[test]
+    fn a_cargo_offer_is_refused_without_the_holds_then_without_the_space_for_its_tons() {
+        let rules = Rulebook::default();
+        let active = ActiveMissions::default();
+        let refusals = |tons, holds, space| {
+            let facts = AcceptFacts {
+                active: &active,
+                cargo: Room { tons, holds, space },
+                rules: &rules,
+            };
+            accept_checks()
+                .all_refusals(&facts)
+                .into_iter()
+                .map(|(about, verdict)| (about.name(), verdict))
+                .collect::<Vec<_>>()
+        };
+        let holds = ("cargo holds", Verdict::Refuses(AcceptRefusal::NoHolds));
+        let space = ("cargo space", Verdict::Refuses(AcceptRefusal::NoSpace));
+        assert_eq!(refusals(10, 10, 10), [], "room for exactly its tons");
+        assert_eq!(refusals(10, 9, 10), [holds]);
+        assert_eq!(refusals(10, 10, 9), [space]);
+        assert_eq!(refusals(10, 5, -3), [holds, space], "holds first");
+        assert_eq!(refusals(0, 0, -5), [], "no tons: no check");
+        assert_eq!(refusals(-1, -2, -5), [], "below none: no check");
+    }
+
+    #[test]
+    fn a_full_table_refuses_before_the_cargo() {
+        let rules = Rulebook::default();
+        let mut active = ActiveMissions::default();
+        for id in 0..16 {
+            active.fill(accepted(140 + id));
+        }
+        let facts = AcceptFacts {
+            active: &active,
+            cargo: Room {
+                tons: 10,
+                holds: 0,
+                space: 0,
+            },
+            rules: &rules,
+        };
+        assert_eq!(
+            accept_checks().first_refusal(&facts, &mut NeverFires),
+            Err(AcceptRefusal::SlotsFull)
+        );
+        let names: Vec<_> = accept_checks()
+            .descriptors()
+            .map(crate::rules::Descriptor::name)
+            .collect();
+        assert_eq!(names, ["slot free", "cargo holds", "cargo space"]);
     }
 
     #[test]

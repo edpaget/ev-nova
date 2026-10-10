@@ -58,9 +58,9 @@ use crate::control::{Script, Test};
 use crate::mission::active::{AUTO_ABORT_FUEL, AUTO_ABORT_FUEL_TAKEN, AUTO_ABORT_PAYS};
 use crate::mission::{
     self, AbortFacts, AbortRefusal, AcceptFacts, AcceptRefusal, ActiveMission, AvailFacts,
-    FailedBy, Offer, PayEffect, Player, Refusal, SLOTS, Stop, Venue, Visit, World, abort_checks,
-    abort_penalty, accept_charge, accept_checks, auto_aborts_at_accept, failure_records, fined,
-    pay_effect, stellars_of, success_records,
+    FailedBy, Offer, PayEffect, Player, Refusal, Room, SLOTS, Stop, Venue, Visit, World,
+    abort_checks, abort_penalty, accept_charge, accept_checks, auto_aborts_at_accept,
+    failure_records, fined, pay_effect, stellars_of, success_records,
 };
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::rules::Verdict;
@@ -288,13 +288,45 @@ impl Session {
         })
     }
 
-    /// The first refusal of the accept checks, drawing on `chance`.
-    pub(super) fn accept_refusal(&self, chance: &mut dyn Chance) -> Result<(), AcceptRefusal> {
+    /// The first refusal of the accept checks for an offer of `tons`,
+    /// drawing on `chance`: the room for them is the ship's own holds
+    /// and [`Session::mission_cargo_space`].
+    pub(super) fn accept_refusal(
+        &self,
+        tons: i64,
+        chance: &mut dyn Chance,
+    ) -> Result<(), AcceptRefusal> {
         let facts = AcceptFacts {
             active: &self.pilot.missions,
+            cargo: self.room_for(tons),
             rules: &self.rules,
         };
         accept_checks().first_refusal(&facts, chance)
+    }
+
+    /// The room the ship has for `tons` of a mission's cargo.
+    fn room_for(&self, tons: i64) -> Room {
+        Room {
+            tons,
+            holds: i64::from(self.stats.capacity),
+            space: self.mission_cargo_space(),
+        }
+    }
+
+    /// The first refusal of the accept checks for `offer`, drawing on
+    /// `chance`. A cargo refusal is shown as the original's
+    /// `_ShowTextDialog` shows it (@0xa1b61-0xa1be5); a full table shows
+    /// nothing here.
+    fn refuse_accept(
+        &mut self,
+        offer: &Offer,
+        chance: &mut dyn Chance,
+    ) -> Result<(), AcceptRefusal> {
+        let refused = self.accept_refusal(offer.cargo_tons, chance);
+        if let Err(refusal @ (AcceptRefusal::NoHolds | AcceptRefusal::NoSpace)) = refused {
+            self.show_text(MissionTextKind::NoRoom, offer.mission, refusal.message());
+        }
+        refused
     }
 
     /// Accepts `mission`, offered on the visit under way, drawing on
@@ -307,7 +339,8 @@ impl Session {
     /// [`AcceptError::NotOffered`] in flight or for a mission not offered;
     /// [`AcceptError::Refused`] when a check refuses, and then nothing
     /// runs but an outside offer's suppression (see
-    /// [`Session::next_offer`]).
+    /// [`Session::next_offer`]) and, for want of room for its cargo, the
+    /// refusal queued to show ([`MissionTextKind::NoRoom`]).
     pub fn accept_mission(
         &mut self,
         mission: MissionId,
@@ -318,7 +351,7 @@ impl Session {
             .mission_record(mission)
             .cloned()
             .ok_or(AcceptError::NotOffered)?;
-        let accepted = match self.accept_refusal(chance) {
+        let accepted = match self.refuse_accept(&offer, chance) {
             Ok(()) => self
                 .start_mission(&record, &offer, chance)
                 .ok_or(AcceptRefusal::SlotsFull),
@@ -733,8 +766,8 @@ impl Session {
     /// at, or in flight from the first stellar the player's system lists
     /// (128 with none, `_RandomizeOneMission` @0x153ff), then accepted as
     /// the player's accept is once its checks pass (`_DoMissionAccept`
-    /// @0x15407, its free-slot check @0xa1b32), without asking whether it
-    /// is available. A mission active already takes another slot, unless
+    /// @0x15407, its checks @0xa1b32-0xa1be5, a cargo refusal shown),
+    /// without asking whether it is available. A mission active already takes another slot, unless
     /// [`RuleKey::StartActiveMission`] reads otherwise. Nothing for a
     /// mission the session has no record of; with every slot taken, its
     /// values are still drawn, then nothing is accepted.
@@ -761,7 +794,7 @@ impl Session {
                 chance,
             )
         });
-        if self.accept_refusal(chance).is_err() {
+        if self.refuse_accept(&offer, chance).is_err() {
             return;
         }
         self.start_mission(&record, &offer, chance);
@@ -1440,9 +1473,11 @@ mod tests {
     use crate::catalog::{GovtId, GovtRecord};
     use crate::control::{Bit, SetOp};
     use crate::date::GameDate;
+    use crate::mission::screens::{NO_HOLDS_TO_ACCEPT, NO_SPACE_TO_ACCEPT};
     use crate::mission::{AbortRefusal, ActiveMissions};
     use crate::rulebook::Rulebook;
     use crate::session::control::SetOpObserver;
+    use crate::session::mission_screens::MissionText;
 
     const FED: GovtId = GovtId(128);
     const CIVVIES: GovtId = GovtId(129);
@@ -1653,6 +1688,142 @@ mod tests {
         );
         assert!(!session.control_bit(bit(20)));
         assert_eq!(session.mission_offers(Venue::Computer), [offer]);
+    }
+
+    /// Mission `id`, to 129, carrying `tons` of cargo `cargo_type`; its
+    /// `OnAccept` sets bit 20, and it takes 100 credits at accept.
+    fn freight(id: i16, cargo_type: i16, tons: i16) -> MissionRecord {
+        MissionRecord {
+            cargo_type,
+            cargo_qty: tons,
+            pay_val: -50_100,
+            on_accept: Script::parse("b20"),
+            ..to_129(id)
+        }
+    }
+
+    /// A session of `catalog` with 1000 credits and `held` tons of food,
+    /// landed on 128 and settled, its texts taken.
+    fn holding(catalog: &FakePilotCatalog, held: u32) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.pilot.cash = 1000;
+        session
+            .pilot
+            .cargo
+            .insert(crate::market::Good::Commodity(0), held);
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, catalog);
+        let _ = session.take_mission_texts();
+        session
+    }
+
+    fn refusal_text(mission: i16, text: &str) -> MissionText {
+        MissionText {
+            kind: MissionTextKind::NoRoom,
+            mission: MissionId(mission),
+            text: text.to_owned(),
+        }
+    }
+
+    #[test]
+    fn an_accept_without_the_holds_for_its_cargo_or_passengers_is_refused_shown_and_runs_nothing() {
+        for cargo_type in [0, 6] {
+            let catalog = lifecycle(vec![freight(140, cargo_type, 21)]);
+            let mut session = holding(&catalog, 0);
+            let offers = session.mission_offers(Venue::Computer).to_vec();
+            assert_eq!(
+                session.accept_mission(MissionId(140), &mut NeverFires),
+                Err(AcceptError::Refused(AcceptRefusal::NoHolds)),
+                "20 holds, 21 tons of {cargo_type}"
+            );
+            assert_eq!(
+                session.take_mission_texts(),
+                [refusal_text(140, NO_HOLDS_TO_ACCEPT)]
+            );
+            assert!(!session.control_bit(bit(20)), "no OnAccept");
+            assert_eq!(held(&session), []);
+            assert_eq!(session.pilot().cash(), 1000, "nothing taken");
+            assert_eq!(session.mission_offers(Venue::Computer), offers, "kept");
+        }
+    }
+
+    #[test]
+    fn an_accept_without_the_free_space_for_its_cargo_is_refused_and_one_with_exactly_it_is_not() {
+        let catalog = lifecycle(vec![freight(140, 0, 11)]);
+        let mut session = holding(&catalog, 10);
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Err(AcceptError::Refused(AcceptRefusal::NoSpace)),
+            "10 free, 11 tons"
+        );
+        assert_eq!(
+            session.take_mission_texts(),
+            [refusal_text(140, NO_SPACE_TO_ACCEPT)]
+        );
+        assert!(!session.control_bit(bit(20)));
+        let catalog = lifecycle(vec![freight(140, 0, 10)]);
+        let mut session = holding(&catalog, 10);
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        assert!(session.control_bit(bit(20)));
+        assert_eq!(session.pilot().cash(), 900);
+    }
+
+    #[test]
+    fn an_outside_offer_refused_for_want_of_room_is_suppressed() {
+        let catalog = lifecycle(vec![MissionRecord {
+            avail_loc: crate::mission::screens::BAR,
+            ..freight(140, 0, 21)
+        }]);
+        let mut session = holding(&catalog, 0);
+        session.enter_offer_venue(crate::mission::screens::BAR);
+        assert!(
+            session
+                .next_offer(crate::mission::screens::BAR, &mut NeverFires)
+                .is_some()
+        );
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Err(AcceptError::Refused(AcceptRefusal::NoHolds))
+        );
+        assert_eq!(
+            session.next_offer(crate::mission::screens::BAR, &mut NeverFires),
+            None
+        );
+    }
+
+    #[test]
+    fn s_of_a_mission_without_room_for_its_cargo_is_refused_the_same_way() {
+        let catalog = lifecycle(vec![freight(140, 0, 21), freight(141, 0, 5)]);
+        let mut session = holding(&catalog, 0);
+        run(&mut session, "S140");
+        assert_eq!(held(&session), []);
+        assert!(!session.control_bit(bit(20)));
+        assert_eq!(
+            session.take_mission_texts(),
+            [refusal_text(140, NO_HOLDS_TO_ACCEPT)]
+        );
+        run(&mut session, "S141");
+        assert_eq!(held(&session), [(0, 141)], "room for 5");
+    }
+
+    #[test]
+    fn a_full_table_shows_no_refusal() {
+        let catalog = lifecycle(vec![freight(140, 0, 5)]);
+        let mut session = holding(&catalog, 0);
+        let offer = session.mission_offers(Venue::Computer)[0].clone();
+        for _ in 0..SLOTS {
+            let active = ActiveMission::accepted(&mission(141), &offer, session.date());
+            session.pilot.missions.fill(active);
+        }
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Err(AcceptError::Refused(AcceptRefusal::SlotsFull))
+        );
+        run(&mut session, "S140");
+        assert_eq!(session.take_mission_texts(), []);
     }
 
     #[test]

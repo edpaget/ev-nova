@@ -129,7 +129,8 @@
 //! "Mission lifecycle", which says what moves a mission). In order:
 //!
 //! - **Accept** (`_DoMissionAccept` @0xa1b11): the checks
-//!   ([`accept_checks`]: a free slot; missions phase 5 adds the cargo);
+//!   ([`accept_checks`]: a free slot, then the room for its cargo; see
+//!   "Cargo");
 //!   the slot filled; `OnAccept` (@0xa1da2); a `PayVal` below -50000 takes
 //!   `-50000 - PayVal`, the cash floored at none ([`accept_charge`]); the
 //!   destination reached when it has none, or, docked, when it is the
@@ -233,6 +234,7 @@
 //! rdm:phase/missions/phase-11-stellars-identical-by-place-and-name.
 
 pub mod active;
+pub mod cargo;
 pub mod offer;
 pub mod screens;
 pub mod select;
@@ -250,6 +252,7 @@ pub use self::active::{
     auto_aborts_at_accept, failure_records, fined, goals_met_at_accept, pay_effect,
     success_records,
 };
+pub use self::cargo::Room;
 pub use self::offer::{Offer, Offers, ROLLED, RollTable, Stop, resolve};
 pub use self::screens::{OfferLabels, display_order, offer_gap, offer_labels};
 pub use self::select::{Kind, Stellar, StellarCode, World, select_stellar, stellars_of};
