@@ -78,6 +78,8 @@
 //! | [`TradeQuotient`](RuleKey::TradeQuotient) | `trade_quotient` | the most a buy can move is min(trunc(f32(cash) / f32(price)), free), in single floats, made 32000 from 32001 up, so above 2^24 cash it can buy a ton more than the cash covers and leave the cash below 0 (`_DoTradeDialog` @0x5e21d-0x5e234, @0x5e23a-0x5e24c; [`Market::row_max`](crate::Market::row_max)) | exact integer division\*\*\* |
 //! | [`TradeCount`](RuleKey::TradeCount) | `trade_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog, opening at the most the row offers, and trades the count confirmed (`_DoQuantityDialog` @0x56d5b; `_DoTradeDialog` @0x5e211, @0x5e45c; [`Market::trade_count`](crate::Market::trade_count)) | Alt trades the most at once††† |
 //! | [`TradeDebt`](RuleKey::TradeDebt) | `trade_debt` | a buy divides the cash, signed, by the price, so with cash below 0 a `jünk` priced exactly at the cash is bought, 1 ton, leaving the cash at 0; Buy is refused while cash < price under both readings (`_DoTradeDialog` @0x5e21d-0x5e234; `_CanBuyGoods` @0xccec-0xcd31; [`Market::trade_debt`](crate::Market::trade_debt)) | cash below 0 counts as none‡‡‡ |
+//! | [`RepeatMissionFailure`](RuleKey::RepeatMissionFailure) | `repeat_mission_failure` | an unabortable mission failed by its deadline stays active and failed, and at its return landing runs `OnFailure` a second time and applies the failure records (`_QuickMissionFailure` @0x99d1b-0x99dab, `_MissionLandCheck` @0xa1a92, `_DoMissionFailure` @0xa0285; see [`mission`](crate::mission)) | its return landing frees it without running `OnFailure` again, the failure records still applied once; a mission failed by `F` runs `OnFailure` once at its return either way\* |
+//! | [`StartActiveMission`](RuleKey::StartActiveMission) | `start_active_mission` | `S` accepts a mission active already into another slot (`_EvalSetExp` @0x153b9-0x15418; see [`mission`](crate::mission)) | `S` leaves an active mission and the slots as they are\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -85,7 +87,8 @@
 //! `remove_refund`, `refit_reserves`, `purchase_paint_order`,
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
 //! `ship_change_reserves`, `move_arrival`, `move_keep_flag`,
-//! `script_sound`, `landing_distance` or `comm_quote`
+//! `script_sound`, `landing_distance`, `repeat_mission_failure`,
+//! `start_active_mission` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -857,6 +860,29 @@ rule_keys! {
     /// so the other reading is the port's earlier behaviour, not anything
     /// the Bible says (see [`market`](crate::market)).
     TradeDebt => "trade_debt",
+    /// What an unabortable mission (`CanAbort` 0) failed by its deadline
+    /// does at its return landing. By the engine, it fails there again:
+    /// `_QuickMissionFailure` (@0x99d1b-0x99dab) runs its `OnFailure` and
+    /// leaves it active and failed, applying no legal record, and the
+    /// land check's `_DoMissionFailure` (@0xa1a92, @0xa0285) runs
+    /// `OnFailure` a second time and applies the failure records. By the
+    /// other reading, it is freed there without running `OnFailure` again,
+    /// the failure records still applied once, as the original applies
+    /// them only at that landing. A mission failed by `F` runs `OnFailure`
+    /// once at its return either way. The Bible says nothing of it, so
+    /// the other reading is the intended behaviour, not anything the
+    /// Bible says (see the [`mission`](crate::mission) module's "Active
+    /// missions").
+    RepeatMissionFailure => "repeat_mission_failure",
+    /// What `S` does with a mission active already. By the engine, it
+    /// accepts the mission into another slot, as `_EvalSetExp`
+    /// (@0x153b9-0x15418) checks neither its availability nor whether it
+    /// is active. By the other reading, the active mission and the slots
+    /// are left as they are. The Bible's "start mission xxx" says nothing
+    /// of it, so the other reading is the intended behaviour, not anything
+    /// the Bible says (see the [`mission`](crate::mission) module's
+    /// "Active missions").
+    StartActiveMission => "start_active_mission",
 }
 
 impl RuleKey {
@@ -1006,7 +1032,24 @@ mod tests {
     fn the_trade_debt_rule_is_found_by_its_key() {
         assert_eq!(RuleKey::TradeDebt.key(), "trade_debt");
         assert_eq!(RuleKey::from_key("trade_debt"), Some(RuleKey::TradeDebt));
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::TradeDebt));
+    }
+
+    #[test]
+    fn the_mission_rules_are_found_by_their_keys() {
+        assert_eq!(
+            RuleKey::RepeatMissionFailure.key(),
+            "repeat_mission_failure"
+        );
+        assert_eq!(
+            RuleKey::from_key("repeat_mission_failure"),
+            Some(RuleKey::RepeatMissionFailure)
+        );
+        assert_eq!(RuleKey::StartActiveMission.key(), "start_active_mission");
+        assert_eq!(
+            RuleKey::from_key("start_active_mission"),
+            Some(RuleKey::StartActiveMission)
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::StartActiveMission));
     }
 
     #[test]
@@ -1179,7 +1222,9 @@ mod tests {
                 RuleKey::TradeLot,
                 RuleKey::TradeQuotient,
                 RuleKey::TradeCount,
-                RuleKey::TradeDebt
+                RuleKey::TradeDebt,
+                RuleKey::RepeatMissionFailure,
+                RuleKey::StartActiveMission
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
