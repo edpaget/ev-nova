@@ -158,6 +158,9 @@ pub(crate) fn mission(id: i16) -> MissionRecord {
         return_stel: -1,
         cargo_type: -1,
         cargo_qty: 0,
+        pickup_mode: -1,
+        drop_off_mode: -1,
+        scan_mask: 0,
         pay_val: 0,
         time_limit: 0,
         disp_weight: 0,
@@ -317,7 +320,7 @@ pub(crate) fn hull(id: i16) -> HullRecord {
 
 /// `gövt` `id`: no flags, no classes, allies or enemies, no tolerance
 /// for crime, no penalties, and `MaxOdds` 100 (even odds), hailed as
-/// "Govt `id`".
+/// "Govt `id`", scanning for nothing and fining nothing.
 pub(crate) fn govt(id: i16) -> GovtRecord {
     GovtRecord {
         id: GovtId(id),
@@ -330,6 +333,8 @@ pub(crate) fn govt(id: i16) -> GovtRecord {
         allies: [-1; 4],
         enemies: [-1; 4],
         comm_name: format!("Govt {id}"),
+        scan_mask: 0,
+        scan_fine: 0,
     }
 }
 

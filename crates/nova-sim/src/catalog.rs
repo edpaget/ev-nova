@@ -606,6 +606,15 @@ pub struct MissionRecord {
     pub cargo_type: i16,
     /// Its `CargoQty`, raw: tons, or a range below -1.
     pub cargo_qty: i16,
+    /// Its `PickupMode`, raw: when its cargo is loaded (0 at the accept, 1
+    /// at the destination, 2 boarding its special ship; any other never).
+    pub pickup_mode: i16,
+    /// Its `DropOffMode`, raw: when its cargo is unloaded (0 at the
+    /// destination, 1 at the return; any other never).
+    pub drop_off_mode: i16,
+    /// Its `ScanMask`: the bits a scanning government's `ScanMask` finds
+    /// its cargo by.
+    pub scan_mask: u16,
     /// Its `PayVal`, raw.
     pub pay_val: i32,
     /// Its `TimeLimit`: the days it gives, none at 0 or below.
@@ -659,6 +668,10 @@ pub struct MissionTexts {
     pub fail: Option<String>,
     /// Its `RefuseText`, shown as its offer is refused.
     pub refuse: Option<String>,
+    /// Its `LoadCargText`, shown as its cargo is loaded.
+    pub load_cargo: Option<String>,
+    /// Its `DumpCargoText`, shown as its cargo is unloaded.
+    pub dump_cargo: Option<String>,
     /// Its `AcceptButton`, raw.
     pub accept_button: String,
     /// Its `RefuseButton`, raw.
@@ -678,6 +691,8 @@ impl MissionTexts {
             comp: None,
             fail: None,
             refuse: None,
+            load_cargo: None,
+            dump_cargo: None,
             accept_button: String::new(),
             refuse_button: String::new(),
         }
@@ -884,6 +899,11 @@ pub struct GovtRecord {
     pub enemies: [i16; 4],
     /// Its `CommName`: what its ships are called by when hailed.
     pub comm_name: String,
+    /// Its `ScanMask`: the bits it finds a mission's cargo by.
+    pub scan_mask: u16,
+    /// Its `ScanFine`: the credits a smuggler is fined, or below 0 that
+    /// percent of the cash.
+    pub scan_fine: i16,
 }
 
 /// The game data a session's ships fight with: the `wëap`s, each

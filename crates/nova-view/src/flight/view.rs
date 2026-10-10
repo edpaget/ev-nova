@@ -8437,6 +8437,8 @@ mod tests {
                 allies: [-1; 4],
                 enemies: [-1; 4],
                 comm_name: String::new(),
+                scan_mask: 0,
+                scan_fine: 0,
             }],
             ..catalog
         }
@@ -9525,6 +9527,9 @@ mod tests {
             return_stel: -1,
             cargo_type: -1,
             cargo_qty: 0,
+            pickup_mode: -1,
+            drop_off_mode: -1,
+            scan_mask: 0,
             pay_val: 0,
             time_limit: 0,
             disp_weight: 0,
@@ -10829,6 +10834,8 @@ mod tests {
             allies: [-1; 4],
             enemies: [-1; 4],
             comm_name: String::new(),
+            scan_mask: 0,
+            scan_fine: 0,
         }];
         for record in &mut catalog.ships {
             record.crew = 3;

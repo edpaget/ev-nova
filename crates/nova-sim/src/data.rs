@@ -427,6 +427,8 @@ impl PilotCatalog for GameData {
                     comp: raw(record.comp_text),
                     fail: raw(record.fail_text),
                     refuse: raw(record.refuse_text),
+                    load_cargo: raw(record.load_carg_text),
+                    dump_cargo: raw(record.dump_cargo_text),
                     accept_button: record.accept_button.as_str().to_owned(),
                     refuse_button: record.refuse_button.as_str().to_owned(),
                 })
@@ -457,6 +459,9 @@ impl PilotCatalog for GameData {
                     return_stel: record.return_stel,
                     cargo_type: record.cargo_type,
                     cargo_qty: record.cargo_qty,
+                    pickup_mode: record.pickup_mode,
+                    drop_off_mode: record.drop_off_mode,
+                    scan_mask: record.scan_mask.bits(),
                     pay_val: record.pay_val,
                     time_limit: record.time_limit,
                     disp_weight: record.disp_weight,
@@ -725,6 +730,8 @@ impl CombatCatalog for GameData {
                     allies: record.ally,
                     enemies: record.enemy,
                     comm_name: record.comm_name.as_str().to_owned(),
+                    scan_mask: record.scan_mask.bits(),
+                    scan_fine: record.scan_fine,
                 })
             })
             .collect()
@@ -2693,10 +2700,12 @@ mod tests {
         let mut bytes = vec![0; Govt::SIZE.expect("fixed")];
         bytes[0x02..0x04].copy_from_slice(&0xE2B0_u16.to_be_bytes());
         bytes[0x04..0x06].copy_from_slice(&0x0012_u16.to_be_bytes());
+        put_i16s(&mut bytes, 0x06, &[-5]);
         put_i16s(&mut bytes, 0x08, &[6, 1, 3, 5, 7, 2, -100, 200]);
         put_i16s(&mut bytes, 0x18, &[1, -1, 4, -1]);
         put_i16s(&mut bytes, 0x20, &[0, 1, 12, 13]);
         put_i16s(&mut bytes, 0x28, &[2, 10, 16, 9]);
+        bytes[0x32..0x34].copy_from_slice(&0x8004_u16.to_be_bytes());
         bytes[0x34..0x3F].copy_from_slice(b"Federation\0");
         bytes
     }
@@ -2725,6 +2734,8 @@ mod tests {
             allies: [0, 1, 12, 13],
             enemies: [2, 10, 16, 9],
             comm_name: "Federation".to_owned(),
+            scan_mask: 0x8004,
+            scan_fine: -5,
         };
         assert_eq!(
             data.governments(),
@@ -3133,8 +3144,9 @@ mod tests {
         put_i16s(
             &mut bytes,
             0x00,
-            &[10_005, 0, 0, -5, 40, 25, -2, -1, 1000, -10],
+            &[10_005, 0, 0, -5, 40, 25, -2, -1, 1000, -10, 1, -1],
         );
+        bytes[0x18..0x1A].copy_from_slice(&0x8020_u16.to_be_bytes());
         bytes[0x1C..0x20].copy_from_slice(&(-50_100_i32).to_be_bytes());
         put_i16s(&mut bytes, 0x20, &[2]);
         put_i16s(&mut bytes, 0x26, &[1]);
@@ -3200,6 +3212,9 @@ mod tests {
                 return_stel: -1,
                 cargo_type: 1000,
                 cargo_qty: -10,
+                pickup_mode: 1,
+                drop_off_mode: -1,
+                scan_mask: 0x8020,
                 pay_val: -50_100,
                 time_limit: 3,
                 disp_weight: 60,
@@ -3238,17 +3253,15 @@ mod tests {
         bytes
     }
 
-    /// A `mïsn` whose `BriefText`, `QuickBrief`, `CompText`, `FailText`
-    /// and `RefuseText` are `texts`, in that order, with these button
-    /// labels.
-    fn texted(texts: [i16; 5], accept: &[u8], refuse: &[u8]) -> Vec<u8> {
+    /// A `mïsn` whose `BriefText`, `QuickBrief`, `LoadCargText`,
+    /// `DumpCargoText`, `CompText`, `FailText` and `RefuseText` are
+    /// `texts`, in that order, with these button labels.
+    fn texted(texts: [i16; 7], accept: &[u8], refuse: &[u8]) -> Vec<u8> {
         use nova_data::records::mission::Mission;
         let mut bytes = vec![0; Mission::SIZE.expect("fixed")];
-        put_i16s(&mut bytes, 0x34, &texts[..2]);
-        put_i16s(&mut bytes, 0x38, &[-1, -1]);
-        put_i16s(&mut bytes, 0x3C, &texts[2..4]);
+        put_i16s(&mut bytes, 0x34, &texts[..6]);
         put_i16s(&mut bytes, 0x44, &[-1]);
-        put_i16s(&mut bytes, 0x58, &texts[4..]);
+        put_i16s(&mut bytes, 0x58, &texts[6..]);
         bytes[0x75F..0x75F + accept.len()].copy_from_slice(accept);
         bytes[0x77F..0x77F + refuse.len()].copy_from_slice(refuse);
         bytes
@@ -3262,20 +3275,29 @@ mod tests {
                 Mission::TYPE,
                 130,
                 Some("Delivery to <DST>; Vellos1 "),
-                texted([200, 201, 202, 203, 204], b"I'm in\0", b"No way\0"),
+                texted(
+                    [200, 201, 206, 207, 202, 203, 204],
+                    b"I'm in\0",
+                    b"No way\0",
+                ),
             ),
             (
                 Mission::TYPE,
                 131,
                 Some("Plain run  "),
-                texted([-1; 5], b"\0", b"\0"),
+                texted([-1; 7], b"\0", b"\0"),
             ),
-            (Mission::TYPE, 132, None, texted([205; 5], b" ok\0", b"\0")),
+            (
+                Mission::TYPE,
+                132,
+                None,
+                texted([205, 205, 205, 208, 205, 205, 205], b" ok\0", b"\0"),
+            ),
             (
                 Mission::TYPE,
                 133,
                 Some("Short"),
-                short(texted([-1; 5], b"\0", b"\0")),
+                short(texted([-1; 7], b"\0", b"\0")),
             ),
             (Desc::TYPE, 4002, None, desc("Offer <DST>.")),
             (Desc::TYPE, 200, None, desc("Brief.")),
@@ -3283,6 +3305,8 @@ mod tests {
             (Desc::TYPE, 202, None, desc("Comp.")),
             (Desc::TYPE, 203, None, desc("Fail.")),
             (Desc::TYPE, 204, None, desc("Refuse.")),
+            (Desc::TYPE, 206, None, desc("Load <CQ>.")),
+            (Desc::TYPE, 207, None, desc("Dump.")),
         ]);
         let texts = data.mission_texts();
         assert_eq!(
@@ -3297,6 +3321,8 @@ mod tests {
                     comp: Some("Comp.".to_owned()),
                     fail: Some("Fail.".to_owned()),
                     refuse: Some("Refuse.".to_owned()),
+                    load_cargo: Some("Load <CQ>.".to_owned()),
+                    dump_cargo: Some("Dump.".to_owned()),
                     accept_button: "I'm in".to_owned(),
                     refuse_button: "No way".to_owned(),
                 },
@@ -3318,7 +3344,7 @@ mod tests {
             Mission::TYPE,
             128,
             Some("Run"),
-            texted([-1; 5], b"\0", b"\0"),
+            texted([-1; 7], b"\0", b"\0"),
         )]));
         let texts = vec![MissionTexts::named(MissionId(128), "Run")];
         assert_eq!(PilotCatalog::mission_texts(&data), texts, "Rc");
