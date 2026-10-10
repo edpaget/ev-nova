@@ -69,6 +69,7 @@
 //! | [`SaleRefusal`](RuleKey::SaleRefusal) | `sale_refusal` | Sell is enabled by the Sell flag alone (some owned, not `CANNOT_SELL`). The free mass, a raised `Max` and a launcher's ammunition refuse only inside the sell loop. The first such refusal of an order shows its `STR#` 2002 #207-#212 words once in `DLOG` 3003, and nothing is sold. A counted sale runs on past it, each later pass refused silently; the sales before it stand (@0x5d19c-0x5d1b1) (`_DoOutfitDialog` @0x5c563-0x5c595, @0x5c735-0x5ce6c, flag -0x63e @0x5c6ca; `_OutfitFilter` @0x5808c-0x580b1; `_ShowTextDialog` @0x5a8cf; [`Outfitter::can`](crate::Outfitter::can) / [`Outfitter::sale_alert`](crate::Outfitter::sale_alert)) | Sell is greyed by any sale check too, and the info box words the first one; nothing is shown in a dialog‡‡‡‡ |
 //! | [`CountedSale`](RuleKey::CountedSale) | `counted_sale` | each pass of a counted sale checks the order as a whole: a raised `Max` refuses while the target owned exceeds its raw `Max` x (owned now - the whole count) (@0x5c82d-0x5c85e), and a launcher while the rounds held exceed `MaxAmmo` x (owned now - the pass index - 1) (@0x5cb9c-0x5cbc7), signed, so an Alt sale is refused sooner than as many single clicks; only the engine readings of `raised_max` and `launcher_sale` read it (`_DoOutfitDialog`; [`Outfitter::check_at`](crate::Outfitter::check_at)) | each pass is checked as one sale, (owned now - 1)¶¶¶¶ |
 //! | [`RelistedSale`](RuleKey::RelistedSale) | `relisted_sale` | a sale that changes the listing (`_SetupPortAvailableItems` true, @0x5d00a) resets the selection to `oütf` 128 and the loop index to 0, or 512 with nothing listed, so the passes left check and sell `oütf` 128, listed or not, and can outrun the count (`_DoOutfitDialog` @0x5d017-0x5d150, @0x5d164-0x5d1b1; [`Session`](crate::Session)) | the ordered outfit and the pass index are kept††††† |
+//! | [`RelistedSelection`](RuleKey::RelistedSelection) | `relisted_selection` | an order that changes the listing (`_SetupPortAvailableItems` true after the buy loop @0x5c314 or a sale @0x5d00a) selects `oütf` 128 with no cell highlighted (`*0xded58` = 0, `*0xded5c` = -1, @0x5c32c-0x5c33b, @0x5d01c-0x5d02b). Buy and Sell then answer for it, listed or not (`_OutfitFilter` @0x5806f-0x580ca), and the picture, description and info box are blank. With nothing listed the outfitter closes (-0x63d @0x5c40c, @0x5d128, @0x5da33; [`Session`](crate::Session)) | the selected cell is kept and the outfitter stays open§§§§§ |
 //! | [`MassPrice`](RuleKey::MassPrice) | `mass_price` | an outfit flagged 0x0200 costs max(`Cost`, `Cost` × the flown class's `Mass`), so `Cost` on a class of `Mass` 0 or less, and a `Cost` of 0 or less costs 0, flag or not (`_AdjustedItemCost` @0x5869-0x5895; `_PlayerShipTradeInPrice` @0xb0e3-0xb106; [`unit_price`](crate::outfitter::unit_price)) | `Cost` × `Mass`, never below 0§§§§ |
 //! | [`ScaledMass`](RuleKey::ScaledMass) | `scaled_mass` | an outfit flagged 0x0400 of `Mass` above 0 weighs max(`Mass`, `Mass` × the class's `Mass` / 100, truncated), so its own `Mass` on a class of `Mass` below 100, in the outfitter, the free mass, the grants and the Shipyard Info Space (`_AdjustedItemMass` @0x2889-0x28c2; `_ShipFreeMass` @0xb4c1-0xb4ed; [`unit_mass`](crate::outfitter::unit_mass)) | `Mass` × the class's `Mass` / 100, truncated, for `Mass` above 0‡‡‡‡‡ |
 //! | [`TradeInOutfits`](RuleKey::TradeInOutfits) | `trade_in_outfits` | a ship's trade-in counts every outfit owned but a persistent one, an unsellable one included, at half its line (`_PlayerShipTradeInPrice` @0xb0d5-0xb0e1, @0xb109-0xb11f; [`Session`](crate::Session)) | an unsellable outfit is left out too†††† |
@@ -194,6 +195,10 @@
 //! reach. The ceiling is the only guard, with no repeat check, as
 //! `OnSell`'s random draws and state outside any cheap key can end an
 //! order that revisits an earlier restart's state.
+//!
+//! §§§§§ The Bible says nothing of the outfitter's selection. The other
+//! reading is the port's earlier behaviour, the selected cell kept and
+//! the outfitter left open after any order, not anything the Bible says.
 //!
 //! \*\*\*\*\* The Bible says only that a persistent outfit "stays with
 //! you when you trade ships", as the engine has it. The other reading is
@@ -803,6 +808,26 @@ rule_keys! {
     /// earlier behaviour, not anything the Bible says (see
     /// [`Session::outfit_order`](crate::Session::outfit_order)).
     RelistedSale => "relisted_sale",
+    /// What the outfitter selects after an order that changes the
+    /// listing, and whether it stays open. By the engine, when
+    /// `_SetupPortAvailableItems` says the list changed (@0xc216-0xc23d),
+    /// once after the buy loop (@0x5c314) or after each sale (@0x5d00a),
+    /// `_DoOutfitDialog` selects index 0, `oütf` 128, listed or not
+    /// (`*0xded58` = 0, @0x5c336, @0x5d01c), highlights no cell and
+    /// scrolls the grid to the top (`*0xded5c` = -1, `*0xdeda8` = 0,
+    /// @0x5c32c-0x5c33b, @0x5d021-0x5d02b), and empties the description
+    /// (@0x5c350-0x5c35b, @0x5d030-0x5d04b). `_OutfitFilter` then sets Buy
+    /// and Sell from `oütf` 128 on every event, asking no list
+    /// (@0x5806f-0x580ca), and `_OutfitDialogUpdate` draws no picture and
+    /// no info box (@0x5789b-0x578a5), until a cell is chosen. With
+    /// nothing listed it sets the leave flag -0x63d (@0x5c40c, @0x5d128),
+    /// and the outfitter closes once the click is handled (@0x5da33). By
+    /// the other reading, the selected cell is kept and the outfitter
+    /// stays open. An order that leaves the listing unchanged is the same
+    /// by both. The Bible says nothing of it, so the other reading is the
+    /// port's earlier behaviour, not anything the Bible says (see
+    /// [`Session::outfit_order`](crate::Session::outfit_order)).
+    RelistedSelection => "relisted_selection",
     /// How an outfit flagged 0x0200 (price by ship mass) is priced. By
     /// the engine, `_AdjustedItemCost` (@0x5869-0x5895) gives 0 for a
     /// `Cost` of 0 or less (@0x5872-0x5878). Otherwise, with the flag, it
@@ -1126,6 +1151,15 @@ mod tests {
     }
 
     #[test]
+    fn the_relisted_selection_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::RelistedSelection.key(), "relisted_selection");
+        assert_eq!(
+            RuleKey::from_key("relisted_selection"),
+            Some(RuleKey::RelistedSelection)
+        );
+    }
+
+    #[test]
     fn the_outfitters_rules_have_settings_keys_found_by_name() {
         assert_eq!(RuleKey::OutfitRefund.key(), "outfit_refund");
         assert_eq!(
@@ -1209,6 +1243,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one line per rule key
     fn each_rule_has_a_settings_key_found_by_name() {
         assert_eq!(
             RuleKey::ALL,
@@ -1268,6 +1303,7 @@ mod tests {
                 RuleKey::SaleRefusal,
                 RuleKey::CountedSale,
                 RuleKey::RelistedSale,
+                RuleKey::RelistedSelection,
                 RuleKey::MassPrice,
                 RuleKey::ScaledMass,
                 RuleKey::TradeInOutfits,

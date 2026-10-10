@@ -377,7 +377,7 @@ use crate::navigation::stellar_under;
 use crate::order_loop::{self, Onward, OrderRun, Pass};
 use crate::outfitter::{
     self, FIRST_OUTFIT, Hardpoints, LIST_SLOTS, OutfitFlags, OutfitOrder, OutfitRefusal, OutfitRun,
-    OutfitVisit, Outfitter, SaleAlert, Shop, outfit_mods,
+    OutfitVisit, Outfitter, Reselection, SaleAlert, Shop, outfit_mods,
 };
 use crate::person::{NovaPersons, PersonRules, PersonWorld};
 use crate::pilot::{self, Escort, Pilot};
@@ -583,6 +583,13 @@ pub struct Session {
     /// opened, which a sale refunds against as [`RuleKey::OutfitRefund`]
     /// reads. None of it is saved.
     outfit_visit: OutfitVisit,
+    /// The outfit a relisting selected, `oütf` 128, while it may still be
+    /// selected: the engine's `*0xded58` after an order that changes the
+    /// listing, which Buy and Sell answer for, listed or not (see
+    /// [`RuleKey::RelistedSelection`]). The outfitter carries its row even
+    /// when it is not listed ([`Outfitter::unlisted`]). An order of
+    /// another outfit, and each opening, lets it go. It is not saved.
+    outfit_reselected: Option<OutfitId>,
     /// Each ship class's roll for sale since the last landing, drawn the
     /// first time the shipyard's list asks it.
     ship_rolls: DayRolls<ShipId>,
@@ -667,6 +674,7 @@ impl Session {
     /// # Errors
     ///
     /// When the ship cannot be read, or the system no longer exists.
+    #[allow(clippy::too_many_lines)] // one line per session field
     pub fn fly(
         catalog: &(impl PilotCatalog + CombatCatalog),
         mut pilot: Pilot,
@@ -750,6 +758,7 @@ impl Session {
             hire_rolls: DayRolls::default(),
             outfit_rolls: DayRolls::default(),
             outfit_visit: OutfitVisit::default(),
+            outfit_reselected: None,
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
             frame: 0,
@@ -2125,13 +2134,17 @@ impl Session {
 
     /// The outfitter of the stellar the ship is docked at, if it has
     /// landed at one, drawing on `chance` each outfit's roll for the day
-    /// not drawn yet since the landing (see [`outfitter`]).
+    /// not drawn yet since the landing (see [`outfitter`]). After an
+    /// order that changed the listing it carries the row of the outfit
+    /// the relisting selected even when it is not listed
+    /// ([`Outfitter::unlisted`]; see
+    /// [`RuleKey::RelistedSelection`]).
     pub fn outfitter(&mut self, chance: &mut dyn Chance) -> Option<Outfitter> {
-        self.outfitter_with(chance, None)
+        self.outfitter_with(chance, self.outfit_reselected)
     }
 
     /// The outfitter as [`outfitter`](Self::outfitter) builds it, with
-    /// the row of `also` among its rows even when it is not listed (see
+    /// the row of `also` found even when it is not listed (see
     /// `Shop::outfitter_with`).
     fn outfitter_with(
         &mut self,
@@ -2176,6 +2189,7 @@ impl Session {
     /// an outfit owned before never refunds in full.
     fn open_outfit_visit(&mut self) {
         self.outfit_visit = OutfitVisit::open(&self.pilot.outfits);
+        self.outfit_reselected = None;
     }
 
     /// Buys or sells one outfit as `order` asks, the rolls not drawn yet
@@ -2224,6 +2238,18 @@ impl Session {
     /// can pass the count. By the other reading, the ordered outfit and
     /// the pass index are kept.
     ///
+    /// The run's `after` says what the order leaves the outfitter's
+    /// selection at, as [`RuleKey::RelistedSelection`] reads it. By the
+    /// engine, an order that changes the listing, once after the buy loop
+    /// (@0x5c314) or after any sale (@0x5d00a), gives
+    /// [`Reselection::Reset`] of `oütf` 128, or [`Reselection::Leave`]
+    /// when a rebuild left nothing listed, and the session remembers 128
+    /// as selected: the outfitter then carries its row even when it is
+    /// not listed ([`Outfitter::unlisted`]), until an order of another
+    /// outfit or a new opening. Otherwise, and by the other reading,
+    /// [`Reselection::Kept`]. The rebuilds this needs draw no roll the
+    /// order would not have drawn.
+    ///
     /// A sale need not lower a count owned: an `OnSell` can grant the
     /// outfit sold back and change the listing again (`^b7 G128`), so
     /// every pass restarts. The original has no guard against that and
@@ -2243,56 +2269,122 @@ impl Session {
         count: u32,
         chance: &mut dyn Chance,
     ) -> OutfitRun {
+        let follows = self.rules.source_for(RuleKey::RelistedSelection) == RuleSource::Engine;
+        // An order of another outfit names another cell: the selection
+        // moved, so the relisting's selection is let go.
+        if self.outfit_reselected != Some(order.outfit) {
+            self.outfit_reselected = None;
+        }
+        let asked = self.outfit_reselected;
         let mut alert = None;
+        let mut relisting = Relisting::default();
         let run = match order.direction {
             Direction::Sell
                 if self.rules.source_for(RuleKey::RelistedSale) == RuleSource::Engine =>
             {
-                // The listing as the first pass sees it: building it draws
-                // the rolls that pass would, so that pass draws none. A
-                // count of none runs no pass, so it builds nothing.
-                let mut listing = if count > 0 {
-                    listed(self.outfitter(chance).as_ref())
-                } else {
-                    Vec::new()
-                };
-                let mut selected = None;
-                let mut restarts = 0;
+                self.relisted_sale(order, count, chance, &mut alert, asked, &mut relisting)
+            }
+            Direction::Sell => {
+                let mut listing = self.listing_for(follows, count, chance);
                 order_loop::run_on(count, |pass| {
-                    let asked = OutfitOrder {
-                        outfit: selected.unwrap_or(order.outfit),
-                        ..order
-                    };
-                    self.outfit_pass(asked, pass, chance, &mut alert, selected)?;
-                    let after = listed(self.outfitter(chance).as_ref());
-                    if after == listing {
-                        return Ok(Onward::Next);
+                    self.outfit_pass(order, pass, chance, &mut alert, asked)?;
+                    if let Some(listing) = listing.as_mut() {
+                        let after = listed(self.outfitter(chance).as_ref());
+                        relisting.note(listing, &after);
+                        *listing = after;
                     }
-                    // The port's guard, the ceiling alone: no repeat
-                    // check, as `OnSell`'s random draws and unkeyed state
-                    // can end an order that revisits an earlier state.
-                    if restarts >= RESTART_CEILING {
-                        return Ok(Onward::Stop);
-                    }
-                    restarts += 1;
-                    listing = after;
-                    selected = Some(FIRST_OUTFIT);
-                    Ok(Onward::From(if listing.is_empty() {
-                        LIST_SLOTS
-                    } else {
-                        0
-                    }))
+                    Ok(Onward::Next)
                 })
             }
-            Direction::Sell => order_loop::run_on(count, |pass| {
-                self.outfit_pass(order, pass, chance, &mut alert, None)
-                    .map(|()| Onward::Next)
-            }),
-            Direction::Buy => order_loop::run(count, |pass| {
-                self.outfit_pass(order, pass, chance, &mut alert, None)
-            }),
+            Direction::Buy => {
+                let listing = self.listing_for(follows, count, chance);
+                let run = order_loop::run(count, |pass| {
+                    self.outfit_pass(order, pass, chance, &mut alert, asked)
+                });
+                // The buy loop rebuilds the list once, after the loop
+                // (@0x5c314).
+                if let Some(listing) = listing {
+                    relisting.note(&listing, &listed(self.outfitter(chance).as_ref()));
+                }
+                run
+            }
         };
-        OutfitRun { run, alert }
+        let after = if follows {
+            relisting.reselection()
+        } else {
+            Reselection::Kept
+        };
+        if after != Reselection::Kept {
+            self.outfit_reselected = Some(FIRST_OUTFIT);
+        }
+        OutfitRun { run, alert, after }
+    }
+
+    /// The listing before an order's first pass, when
+    /// [`RuleKey::RelistedSelection`] follows the engine (`follows`) and
+    /// the order runs a pass: building it draws the rolls that pass
+    /// would, so that pass draws none. `None` otherwise, building
+    /// nothing.
+    fn listing_for(
+        &mut self,
+        follows: bool,
+        count: u32,
+        chance: &mut dyn Chance,
+    ) -> Option<Vec<OutfitId>> {
+        (follows && count > 0).then(|| listed(self.outfitter(chance).as_ref()))
+    }
+
+    /// A counted sale by the engine reading of
+    /// [`RuleKey::RelistedSale`]: a sale that changes the listing makes
+    /// the passes left check and sell `oütf` 128 from index 1, or 513
+    /// when nothing is listed (see [`outfit_order`](Self::outfit_order)).
+    /// Each relisting is noted in `relisting`. The first passes ask for
+    /// `asked`, the outfit a relisting selected before the order.
+    fn relisted_sale(
+        &mut self,
+        order: OutfitOrder,
+        count: u32,
+        chance: &mut dyn Chance,
+        alert: &mut Option<SaleAlert>,
+        asked: Option<OutfitId>,
+        relisting: &mut Relisting,
+    ) -> OrderRun<OutfitRefusal> {
+        // The listing as the first pass sees it: building it draws the
+        // rolls that pass would, so that pass draws none. A count of none
+        // runs no pass, so it builds nothing.
+        let mut listing = if count > 0 {
+            listed(self.outfitter(chance).as_ref())
+        } else {
+            Vec::new()
+        };
+        let mut selected = None;
+        let mut restarts = 0;
+        order_loop::run_on(count, |pass| {
+            let passed = OutfitOrder {
+                outfit: selected.unwrap_or(order.outfit),
+                ..order
+            };
+            self.outfit_pass(passed, pass, chance, alert, selected.or(asked))?;
+            let after = listed(self.outfitter(chance).as_ref());
+            relisting.note(&listing, &after);
+            if after == listing {
+                return Ok(Onward::Next);
+            }
+            // The port's guard, the ceiling alone: no repeat check, as
+            // `OnSell`'s random draws and unkeyed state can end an order
+            // that revisits an earlier state.
+            if restarts >= RESTART_CEILING {
+                return Ok(Onward::Stop);
+            }
+            restarts += 1;
+            listing = after;
+            selected = Some(FIRST_OUTFIT);
+            Ok(Onward::From(if listing.is_empty() {
+                LIST_SLOTS
+            } else {
+                0
+            }))
+        })
     }
 
     /// One pass of an outfit order: builds the outfitter afresh, drawing
@@ -2374,7 +2466,9 @@ impl Session {
     /// runs as the engine's does. A sale that changes the listing goes on
     /// with `oütf` 128 from index 1 (or 513), as
     /// [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale) says, and
-    /// the count it gives is every sale the order made.
+    /// the count it gives is every sale the order made. What the order
+    /// leaves the selection at is [`outfit_order`](Self::outfit_order)'s
+    /// `after`.
     pub fn outfit_counted(
         &mut self,
         order: OutfitOrder,
@@ -3323,6 +3417,42 @@ impl Session {
 /// as `OnSell`'s random draws and state outside any cheap key can end an
 /// order that revisits an earlier restart's state.
 const RESTART_CEILING: usize = LIST_SLOTS as usize;
+
+/// Whether an order changed the listing, and whether it ever left
+/// nothing listed: what `_DoOutfitDialog` does after a rebuild that
+/// `_SetupPortAvailableItems` says changed the list (@0xc216-0xc23d),
+/// after the buy loop (@0x5c314) and after each sale (@0x5d00a), as
+/// [`RuleKey::RelistedSelection`] reads it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Relisting {
+    /// The listing changed: the selection is reset to `oütf` 128
+    /// (@0x5c32c-0x5c33b, @0x5d01c-0x5d02b).
+    changed: bool,
+    /// A change left nothing listed: the leave flag -0x63d is set
+    /// (@0x5c40c, @0x5d128), and never cleared by a later relisting.
+    emptied: bool,
+}
+
+impl Relisting {
+    /// Notes a rebuild from `before` to `after`.
+    fn note(&mut self, before: &[OutfitId], after: &[OutfitId]) {
+        if before != after {
+            self.changed = true;
+            self.emptied |= after.is_empty();
+        }
+    }
+
+    /// What the order leaves the selection at.
+    fn reselection(self) -> Reselection {
+        if !self.changed {
+            Reselection::Kept
+        } else if self.emptied {
+            Reselection::Leave
+        } else {
+            Reselection::Reset(FIRST_OUTFIT)
+        }
+    }
+}
 
 /// The outfits `outfitter` lists, in order; none when there is no
 /// outfitter.
@@ -7286,7 +7416,8 @@ mod tests {
                     done: 3,
                     stopped: None
                 },
-                alert: None
+                alert: None,
+                after: Reselection::Reset(FIRST_OUTFIT)
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -7356,7 +7487,8 @@ mod tests {
                     done: 3,
                     stopped: None
                 },
-                alert: None
+                alert: None,
+                after: Reselection::Reset(FIRST_OUTFIT)
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -7403,7 +7535,8 @@ mod tests {
                         refusal: OutfitRefusal::NoneOwned
                     })
                 },
-                alert: None
+                alert: None,
+                after: Reselection::Reset(FIRST_OUTFIT)
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -7552,7 +7685,8 @@ mod tests {
                     done: 2,
                     stopped: None
                 },
-                alert: None
+                alert: None,
+                after: Reselection::Reset(FIRST_OUTFIT)
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -7639,6 +7773,316 @@ mod tests {
         assert_eq!(done, 3, "relisted");
         assert_eq!(engine, (vec![50], vec![]), "the first build rolls 313");
         assert_eq!(engine, drawn(RuleSource::Bible).1);
+    }
+
+    // What an order leaves the outfitter's selection at
+    // (`RuleKey::RelistedSelection`).
+
+    /// The rule set with `RelistedSelection` read by `source`.
+    fn relisted_selection_by(source: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::RelistedSelection, source)
+    }
+
+    const LICENSE: OutfitId = OutfitId(306);
+    const LICENSED: OutfitId = OutfitId(307);
+
+    /// [`outfitting`] also selling a license (306, tech 1, contributing
+    /// bit 0x2), an outfit (307, tech 1) hidden until bit 0x2 is
+    /// contributed, and a blaster (128).
+    fn licensing_catalog() -> FakePilotCatalog {
+        let mut catalog = outfitting();
+        catalog.outfits.extend([
+            OutfitRecord {
+                tech_level: 1,
+                contribute: 0x2,
+                ..outfit(306, &[])
+            },
+            OutfitRecord {
+                flags: OutfitFlags::HIDE_UNLESS_REQUIRED,
+                require: 0x2,
+                require_govt: -1,
+                tech_level: 1,
+                ..outfit(307, &[])
+            },
+            outfit(128, &[]),
+        ]);
+        catalog
+    }
+
+    /// [`relisting_catalog`] with the blaster off sale by tech (9), so it
+    /// is not listed, owned or not.
+    fn unlisted_blaster_catalog() -> FakePilotCatalog {
+        let mut catalog = relisting_catalog();
+        for record in &mut catalog.outfits {
+            if record.id == BLASTER {
+                record.tech_level = 9;
+            }
+        }
+        catalog
+    }
+
+    #[test]
+    fn relisting_notes_a_change_and_keeps_an_emptying() {
+        let some = [SPEED];
+        let more = [SPEED, BLASTER];
+        let mut unchanged = Relisting::default();
+        unchanged.note(&some, &some);
+        unchanged.note(&[], &[]);
+        assert_eq!(unchanged.reselection(), Reselection::Kept);
+        let mut changed = Relisting::default();
+        changed.note(&some, &more);
+        assert_eq!(changed.reselection(), Reselection::Reset(FIRST_OUTFIT));
+        changed.note(&more, &more);
+        assert_eq!(changed.reselection(), Reselection::Reset(FIRST_OUTFIT));
+        let mut emptied = Relisting::default();
+        emptied.note(&some, &[]);
+        assert_eq!(emptied.reselection(), Reselection::Leave);
+        emptied.note(&[], &more);
+        assert_eq!(emptied.reselection(), Reselection::Leave, "refilled");
+    }
+
+    #[test]
+    fn by_the_engine_a_sale_that_relists_resets_the_selection_to_outfit_128() {
+        let mut session = relisting(Rulebook::default());
+        let order = session.outfit_order(sell(CONTRABAND), 2, &mut NeverFires);
+        assert_eq!(order.after, Reselection::Reset(FIRST_OUTFIT));
+        let outfitter = session.outfitter(&mut NeverFires).expect("open");
+        assert!(outfitter.rows.iter().any(|row| row.id == BLASTER), "listed");
+        assert_eq!(outfitter.unlisted, None);
+    }
+
+    #[test]
+    fn by_the_engine_a_buy_that_meets_a_require_resets_the_selection() {
+        let mut session = outfitted(&licensing_catalog());
+        let before = session.outfitter(&mut NeverFires).expect("open");
+        assert_eq!(before.row(LICENSED), None, "hidden until required");
+        let order = session.outfit_order(buy(LICENSE), 1, &mut NeverFires);
+        assert_eq!(order.run.done, 1);
+        assert_eq!(order.after, Reselection::Reset(FIRST_OUTFIT));
+        let after = session.outfitter(&mut NeverFires).expect("open");
+        assert!(after.rows.iter().any(|row| row.id == LICENSED), "listed");
+    }
+
+    #[test]
+    fn by_the_engine_after_a_reset_the_outfitter_answers_for_an_unlisted_outfit_128() {
+        let mut session = landed_owning(
+            &unlisted_blaster_catalog(),
+            Rulebook::default(),
+            &[(BLASTER, 2), (CONTRABAND, 1)],
+        );
+        let order = session.outfit_order(sell(CONTRABAND), 1, &mut NeverFires);
+        assert_eq!(order.after, Reselection::Reset(FIRST_OUTFIT));
+        let outfitter = session.outfitter(&mut NeverFires).expect("open");
+        assert!(outfitter.rows.iter().all(|row| row.id != BLASTER));
+        assert_eq!(outfitter.unlisted.as_ref().map(|row| row.id), Some(BLASTER));
+        assert_eq!(outfitter.can(sell(BLASTER)), Ok(()));
+        let sold = session.outfit_order(sell(BLASTER), 1, &mut NeverFires);
+        assert_eq!(sold.run.done, 1);
+        assert_eq!(session.pilot().owned(BLASTER), 1);
+    }
+
+    #[test]
+    fn by_the_engine_the_reset_outfit_128_off_today_is_bought() {
+        let mut catalog = relisting_catalog();
+        for record in &mut catalog.outfits {
+            if record.id == BLASTER {
+                record.buy_random = 50;
+            }
+        }
+        let mut session = landed_owning(&catalog, Rulebook::default(), &[(CONTRABAND, 1)]);
+        let order = session.outfit_order(sell(CONTRABAND), 1, &mut NeverFires);
+        assert_eq!(order.after, Reselection::Reset(FIRST_OUTFIT));
+        let outfitter = session.outfitter(&mut NeverFires).expect("open");
+        assert!(
+            outfitter.rows.iter().all(|row| row.id != BLASTER),
+            "off today"
+        );
+        assert_eq!(session.outfit(buy(BLASTER), &mut NeverFires), Ok(()));
+        assert_eq!(session.pilot().owned(BLASTER), 1);
+        let owned = session.outfitter(&mut NeverFires).expect("open");
+        assert!(
+            owned.rows.iter().any(|row| row.id == BLASTER),
+            "listed, owned"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_sale_that_leaves_nothing_listed_leaves() {
+        let catalog = FakePilotCatalog {
+            outfits: vec![
+                OutfitRecord {
+                    tech_level: 9,
+                    ..outfit(128, &[])
+                },
+                OutfitRecord {
+                    flags: OutfitFlags::SELL_ANYWHERE,
+                    tech_level: 9,
+                    ..outfit(312, &[])
+                },
+            ],
+            ..outfitting()
+        };
+        let mut session = landed_owning(&catalog, Rulebook::default(), &[(CONTRABAND, 2)]);
+        let order = session.outfit_order(sell(CONTRABAND), 2, &mut NeverFires);
+        assert_eq!(order.run.done, 2);
+        assert_eq!(order.after, Reselection::Leave);
+    }
+
+    #[test]
+    fn by_the_other_reading_an_order_that_relists_keeps_the_selection() {
+        let mut selling = relisting(relisted_selection_by(RuleSource::Bible));
+        let sold = selling.outfit_order(sell(CONTRABAND), 2, &mut NeverFires);
+        assert_eq!(sold.run.done, 3, "the sale still relists");
+        assert_eq!(sold.after, Reselection::Kept);
+        let outfitter = selling.outfitter(&mut NeverFires).expect("open");
+        assert_eq!(outfitter.unlisted, None);
+        let mut buying =
+            outfitted(&licensing_catalog()).with_rules(relisted_selection_by(RuleSource::Bible));
+        let bought = buying.outfit_order(buy(LICENSE), 1, &mut NeverFires);
+        assert_eq!(bought.run.done, 1);
+        assert_eq!(bought.after, Reselection::Kept);
+        let outfitter = buying.outfitter(&mut NeverFires).expect("open");
+        assert!(
+            outfitter.rows.iter().any(|row| row.id == LICENSED),
+            "relisted"
+        );
+        assert_eq!(outfitter.unlisted, None);
+        let mut unlisted = landed_owning(
+            &unlisted_blaster_catalog(),
+            relisted_selection_by(RuleSource::Bible),
+            &[(BLASTER, 2), (CONTRABAND, 1)],
+        );
+        let order = unlisted.outfit_order(sell(CONTRABAND), 1, &mut NeverFires);
+        assert_eq!(order.after, Reselection::Kept);
+        let outfitter = unlisted.outfitter(&mut NeverFires).expect("open");
+        assert_eq!(outfitter.unlisted, None);
+    }
+
+    #[test]
+    fn the_relisted_sale_and_selection_keys_read_apart() {
+        let mut kept_sale = relisting(
+            relisted_by(RuleSource::Bible)
+                .with_override(RuleKey::RelistedSelection, RuleSource::Engine),
+        );
+        let order = kept_sale.outfit_order(sell(CONTRABAND), 2, &mut NeverFires);
+        assert_eq!(order.run.done, 2);
+        assert_eq!(order.after, Reselection::Reset(FIRST_OUTFIT));
+        assert_eq!(kept_sale.pilot().owned(BLASTER), 3);
+        let mut kept_selection = relisting(
+            relisted_by(RuleSource::Engine)
+                .with_override(RuleKey::RelistedSelection, RuleSource::Bible),
+        );
+        let order = kept_selection.outfit_order(sell(CONTRABAND), 2, &mut NeverFires);
+        assert_eq!(order.run.done, 3);
+        assert_eq!(order.after, Reselection::Kept);
+    }
+
+    #[test]
+    fn by_the_other_sale_reading_an_emptying_sale_leaves_unless_the_selection_is_kept() {
+        let catalog = FakePilotCatalog {
+            outfits: vec![OutfitRecord {
+                flags: OutfitFlags::SELL_ANYWHERE,
+                tech_level: 9,
+                ..outfit(312, &[])
+            }],
+            ..outfitting()
+        };
+        let ordered = |rules| {
+            let mut session = landed_owning(&catalog, rules, &[(CONTRABAND, 2)]);
+            session
+                .outfit_order(sell(CONTRABAND), 2, &mut NeverFires)
+                .after
+        };
+        assert_eq!(
+            ordered(relisted_by(RuleSource::Bible)),
+            Reselection::Leave,
+            "the kept sale's passes note the emptying"
+        );
+        assert_eq!(
+            ordered(
+                relisted_by(RuleSource::Bible)
+                    .with_override(RuleKey::RelistedSelection, RuleSource::Bible)
+            ),
+            Reselection::Kept
+        );
+    }
+
+    #[test]
+    fn an_order_that_leaves_the_listing_unchanged_keeps_the_selection_by_both_readings() {
+        let ordered = |source| {
+            let mut session = landed_owning(
+                &relisting_catalog(),
+                relisted_selection_by(source),
+                &[(BLASTER, 3), (CONTRABAND, 2), (SPEED, 3)],
+            );
+            let sold = session.outfit_order(sell(SPEED), 3, &mut NeverFires);
+            let bought = session.outfit_order(buy(SPEED), 1, &mut NeverFires);
+            (sold, bought, session.pilot().clone())
+        };
+        let (sold, bought, pilot) = ordered(RuleSource::Engine);
+        assert_eq!((sold.run.done, sold.after), (3, Reselection::Kept));
+        assert_eq!((bought.run.done, bought.after), (1, Reselection::Kept));
+        assert_eq!(pilot.owned(SPEED), 1);
+        assert_eq!((sold, bought, pilot), ordered(RuleSource::Bible));
+    }
+
+    #[test]
+    fn an_order_of_another_outfit_or_a_new_opening_lets_the_reset_go() {
+        let mut session = landed_owning(
+            &unlisted_blaster_catalog(),
+            Rulebook::default(),
+            &[(BLASTER, 2), (CONTRABAND, 1), (SPEED, 1)],
+        );
+        let order = session.outfit_order(sell(CONTRABAND), 1, &mut NeverFires);
+        assert_eq!(order.after, Reselection::Reset(FIRST_OUTFIT));
+        let unlisted = |session: &mut Session| {
+            session
+                .outfitter(&mut NeverFires)
+                .expect("open")
+                .unlisted
+                .map(|row| row.id)
+        };
+        assert_eq!(unlisted(&mut session), Some(BLASTER));
+        let mut reopened = session.clone();
+        reopened.open_outfitter();
+        assert_eq!(unlisted(&mut reopened), None, "a new opening");
+        let mut kept = session.clone();
+        let again = kept.outfit_order(sell(BLASTER), 1, &mut NeverFires);
+        assert_eq!(again.after, Reselection::Kept);
+        assert_eq!(unlisted(&mut kept), Some(BLASTER), "still selected");
+        assert_eq!(session.outfit(sell(SPEED), &mut NeverFires), Ok(()));
+        assert_eq!(unlisted(&mut session), None, "another outfit");
+    }
+
+    #[test]
+    fn building_for_the_selection_draws_no_extra_roll() {
+        // A booster of `BuyRandom` 50, not owned, rolled once at the
+        // first build.
+        let mut catalog = relisting_catalog();
+        catalog.outfits.push(OutfitRecord {
+            buy_random: 50,
+            ..outfit(313, &[])
+        });
+        let drawn = |source, order: OutfitOrder, count| {
+            let mut session = landed_owning(
+                &catalog,
+                relisted_by(RuleSource::Bible).with_override(RuleKey::RelistedSelection, source),
+                &[(BLASTER, 3), (CONTRABAND, 2)],
+            );
+            let mut chance = Scripted::default();
+            let run = session.outfit_order(order, count, &mut chance);
+            (run.run.done, (chance.asked, chance.sides_asked))
+        };
+        for (order, count) in [(sell(CONTRABAND), 2), (buy(SPEED), 2)] {
+            let (done, engine) = drawn(RuleSource::Engine, order, count);
+            assert_eq!(done, 2, "{order:?}");
+            assert_eq!(engine, (vec![50], vec![]), "{order:?}: the first build");
+            assert_eq!(
+                (done, engine),
+                drawn(RuleSource::Bible, order, count),
+                "{order:?}"
+            );
+        }
     }
 
     // The visit.
@@ -8095,6 +8539,7 @@ mod tests {
                     stopped: Some(Stopped { pass: 10, refusal }),
                 },
                 alert: None,
+                after: Reselection::Kept,
             }
         );
         assert_eq!(session.pilot().owned(SPEED), 10);

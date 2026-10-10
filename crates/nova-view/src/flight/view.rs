@@ -282,10 +282,11 @@ use nova_sim::{
     HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome, LandPress,
     LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
     NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot, PilotCatalog,
-    PlunderView, PointDefenceRule, RechargeRefusal, Reserves, Rulebook, Rules, Session, ShipId,
-    ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError,
-    StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal, TrafficCatalog,
-    Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level, lights_level,
+    PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, Rulebook, Rules,
+    Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard,
+    SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick,
+    TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn,
+    glow_level, lights_level,
 };
 use nova_sim::{
     ControlBits, HireList, HireRefusal, HireTerms, Hired, PayNote, PersonRules, SessionEvent,
@@ -2028,6 +2029,7 @@ impl<C> FlightView<C> {
                     }),
                 },
                 alert: None,
+                after: Reselection::Kept,
             },
         }
     }
@@ -6029,7 +6031,7 @@ mod tests {
     }
 
     use nova_sim::order_loop::{OrderRun, Stopped};
-    use nova_sim::{OutfitOrder, OutfitRefusal, OutfitRun};
+    use nova_sim::{OutfitOrder, OutfitRefusal, OutfitRun, Reselection};
 
     /// Earth at the centre, an outfitter selling a fuel tank (+100 fuel,
     /// a ton, 1000 credits), the first `chär` holding 1000 credits.
@@ -6147,6 +6149,7 @@ mod tests {
                 stopped: Some(Stopped { pass: 0, refusal }),
             },
             alert: None,
+            after: Reselection::Kept,
         };
         let mut view = FlightView::new(catalog);
         assert_eq!(
@@ -6167,6 +6170,7 @@ mod tests {
                     }),
                 },
                 alert: None,
+                after: Reselection::Kept,
             }
         );
         assert_eq!(view.pilot().map(Pilot::cash), Some(0));

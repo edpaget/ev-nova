@@ -150,7 +150,7 @@ mod tests {
     use crate::catalog::{CharacterStart, OutfitId, OutfitRecord, StartError};
     use crate::control::{Bit, ScriptNote, SetOp, SetOpKind};
     use crate::outfit_effects::Rgb15;
-    use crate::outfitter::OutfitRefusal;
+    use crate::outfitter::{FIRST_OUTFIT, OutfitFlags, OutfitRefusal, Reselection};
     use crate::pilot::Pilot;
     use crate::reserves::Reserves;
     use crate::session::control::SetOpObserver;
@@ -466,6 +466,54 @@ mod tests {
         };
         assert_eq!(sold(crate::RuleSource::Engine), (1, 0), "a blaster sold");
         assert_eq!(sold(crate::RuleSource::Bible), (0, 1), "two boosters");
+    }
+
+    #[test]
+    fn by_the_engine_on_purchase_bits_that_list_an_outfit_reset_the_selection() {
+        // The booster's OnPurchase sets bit 7, which lists the hidden 305.
+        let catalog = hooked_outfit(outfitting_on_bit_7(), SPEED, "b7", "");
+        let bought = |source| {
+            let mut session = outfitted(&catalog).with_rules(
+                crate::rulebook::Rulebook::default()
+                    .with_override(crate::RuleKey::RelistedSelection, source),
+            );
+            let listed = session.outfitter(&mut Scripted::default()).expect("open");
+            assert_eq!(listed.row(OutfitId(305)), None, "hidden until bit 7");
+            let order = session.outfit_order(buy(SPEED), 1, &mut Scripted::default());
+            assert_eq!(order.run.done, 1);
+            let relisted = session.outfitter(&mut Scripted::default()).expect("open");
+            assert!(relisted.row(OutfitId(305)).is_some(), "listed by bit 7");
+            order.after
+        };
+        assert_eq!(
+            bought(crate::RuleSource::Engine),
+            Reselection::Reset(FIRST_OUTFIT)
+        );
+        assert_eq!(bought(crate::RuleSource::Bible), Reselection::Kept);
+    }
+
+    #[test]
+    fn by_the_engine_a_buy_that_hides_the_only_row_leaves() {
+        // The only outfit listed hides itself once bought: its OnPurchase
+        // sets bit 7, its Availability is `!b7`, and it is taken away
+        // after purchase, so nothing is listed.
+        let catalog = FakePilotCatalog {
+            outfits: vec![OutfitRecord {
+                flags: OutfitFlags::REMOVE_AFTER_PURCHASE | OutfitFlags::HIDE_UNLESS_AVAILABLE,
+                availability: crate::control::Test::parse("!b7"),
+                on_purchase: Script::parse("b7"),
+                ..outfit(310, &[])
+            }],
+            ..outfitting()
+        };
+        let mut session = outfitted(&catalog);
+        let listed = session.outfitter(&mut Scripted::default()).expect("open");
+        assert_eq!(listed.rows.len(), 1);
+        let order = session.outfit_order(buy(OutfitId(310)), 1, &mut Scripted::default());
+        assert_eq!(order.run.done, 1);
+        assert_eq!(order.after, Reselection::Leave);
+        let emptied = session.outfitter(&mut Scripted::default()).expect("open");
+        assert_eq!(emptied.rows, []);
     }
 
     /// [`outfitting_on_bit_7`] also selling a blaster (128) whose

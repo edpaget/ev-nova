@@ -130,11 +130,14 @@
 //!
 //! # Buying and selling
 //!
-//! Each order buys or sells one, and a refused one changes nothing. A buy
-//! is refused, checked in `_CanBuyOutfitItem`'s order (@0x4e7c4-0x4ebbc),
-//! when `_CanBuyOutfitItem`'s own tech test refuses it (@0x4e7ff-0x4e83d;
-//! the port first refuses a row that is not listed, which the original
-//! never asks about), the player owns its
+//! Each order buys or sells one, and a refused one changes nothing. Buy
+//! is asked of the selected outfit, listed or not: `_CanBuyOutfitItem`
+//! reads no list, and after a relisting the selection is `oütf` 128
+//! whether or not it is listed (see
+//! [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)). A
+//! buy is refused, checked in `_CanBuyOutfitItem`'s order
+//! (@0x4e7c4-0x4ebbc), when `_CanBuyOutfitItem`'s own tech test refuses
+//! it (@0x4e7ff-0x4e83d), the player owns its
 //! ammunition cap (below) or its `Max` already, it is a gun or a turret
 //! past the ship's limit (below), there is not the free mass for it (an
 //! outfit of mass 0 or less always fits, even when the free mass is
@@ -234,7 +237,12 @@
 //! count (@0x5d19c-0x5d1b1). A sale that changes the listing
 //! makes the passes left check and sell `oütf` 128 ([`FIRST_OUTFIT`]),
 //! listed or not, from index 1 (or 513 when nothing is listed), as
-//! [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale) says.
+//! [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale) says. An
+//! order that changes the listing, a buy or a sale, leaves the dialog at
+//! `oütf` 128 with no cell highlighted, or closes it when nothing is
+//! listed ([`Reselection`]), as
+//! [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)
+//! says.
 //!
 //! **Ammunition cap** (`_HasMaxOfItem` @0x457e-0x45e4, before `Max`). An
 //! outfit whose **first** mod is `ModType` 3 naming a weapon of `MaxAmmo`
@@ -426,8 +434,7 @@ pub enum OutfitRefusal {
     NotListed,
     /// The outfit is listed but cannot be bought here:
     /// `_CanBuyOutfitItem`'s own tech test refuses it, or its `Require` is
-    /// not met, or its `Availability` does not hold (or it is the row a
-    /// relisting asks for, which is not listed).
+    /// not met, or its `Availability` does not hold.
     NotForSale,
     /// The player owns its `Max` already.
     MaxOwned,
@@ -511,14 +518,40 @@ pub struct SaleAlert {
     pub plural: bool,
 }
 
-/// What an outfit order did: the order loop's run, and the alert its
-/// refused sale shows, if any ([`Outfitter::sale_alert`]).
+/// What an outfit order did: the order loop's run, the alert its
+/// refused sale shows, if any ([`Outfitter::sale_alert`]), and what it
+/// leaves the outfitter's selection at.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutfitRun {
     /// The passes that went through, and the first refusal.
     pub run: OrderRun<OutfitRefusal>,
     /// The alert the first refused pass shows, if any.
     pub alert: Option<SaleAlert>,
+    /// What the order leaves the outfitter's selection at (see
+    /// [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)).
+    pub after: Reselection,
+}
+
+/// What an order leaves the outfitter's selection at, as
+/// [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)
+/// reads it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Reselection {
+    /// The selection is kept: the order left the listing as it was, or
+    /// the rule follows its other reading.
+    #[default]
+    Kept,
+    /// The listing changed (`_SetupPortAvailableItems` true,
+    /// @0xc216-0xc23d, after the buy loop @0x5c314 or a sale @0x5d00a),
+    /// so this outfit, index 0 (`*0xded58` = 0, @0x5c336, @0x5d01c), is
+    /// selected, listed or not, with no cell highlighted and the grid at
+    /// its top (`*0xded5c` = -1, `*0xdeda8` = 0, @0x5c32c-0x5c33b,
+    /// @0x5d021-0x5d02b).
+    Reset(OutfitId),
+    /// The listing changed and nothing is listed: the leave flag -0x63d
+    /// is set (@0x5c40c, @0x5d128), and the outfitter closes once the
+    /// click is handled (@0x5da33).
+    Leave,
 }
 
 /// An outfit's lower-case names, as the outfitter's words use them.
@@ -565,11 +598,8 @@ pub struct OutfitFacts {
     /// [`GUN`](OutfitFlags::GUN), [`TURRET`](OutfitFlags::TURRET) and
     /// [`CANNOT_SELL`](OutfitFlags::CANNOT_SELL).
     pub flags: u16,
-    /// Whether it is in the list, so Buy can be asked of it: false only
-    /// for the row a relisting's sell loop asks for that is not listed
-    /// (`_OutfitFilter` @0x5806f-0x5808a and `_DoOutfitDialog`
-    /// @0x5c07a-0x5c0ba ask `_CanBuyOutfitItem` only of the selected list
-    /// item).
+    /// Whether it is in the list: false only for
+    /// [`Outfitter::unlisted`].
     pub listed: bool,
     /// Whether `_CanBuyOutfitItem`'s own tech test passes it
     /// (@0x4e7ff-0x4e83d), as [`RuleKey::TechLevel`] reads it.
@@ -634,6 +664,12 @@ pub struct Raise {
 pub struct Outfitter {
     /// The outfits listed, highest `DispWeight` first, then by ID.
     pub rows: Vec<OutfitRow>,
+    /// The row of the outfit asked for when it is not listed: in no
+    /// cell, and found only through [`row`](Self::row). It is the outfit
+    /// a relisting selects, `oütf` 128 ([`FIRST_OUTFIT`]), which Buy and
+    /// Sell answer for listed or not (see
+    /// [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)).
+    pub unlisted: Option<OutfitRow>,
     /// The player's credits.
     pub cash: i64,
     /// The ship's free mass, in tons; negative when it carries more than
@@ -654,10 +690,14 @@ pub struct Outfitter {
 }
 
 impl Outfitter {
-    /// `outfit`'s row, if it is listed.
+    /// `outfit`'s row, if it is listed or is the [`unlisted`](Self::unlisted)
+    /// row asked for.
     #[must_use]
     pub fn row(&self, outfit: OutfitId) -> Option<&OutfitRow> {
-        self.rows.iter().find(|row| row.id == outfit)
+        self.rows
+            .iter()
+            .chain(self.unlisted.as_ref())
+            .find(|row| row.id == outfit)
     }
 
     /// The ship's free mass as `_ShipFreeMass` reads it, clamped at none
@@ -1043,20 +1083,12 @@ fn holds(holds: bool, refusal: OutfitRefusal) -> Result<(), OutfitRefusal> {
 }
 
 /// Whether Buy is enabled for an outfit, as `_CanBuyOutfitItem` has it
-/// (@0x4e7c4-0x4ebbc): the row is listed (the port's own), then its own
-/// tech test, [`has_max_checks`], the free mass, the bays' room, the two
+/// (@0x4e7c4-0x4ebbc), asking no list: its own tech test, [`has_max_checks`], the free mass, the bays' room, the two
 /// mass-expansion tests, the once-an-opening flags, `Require`,
 /// `Availability` and the cash.
 fn can_buy<'a>() -> Checks<RowOutfit<'a>, OutfitRefusal> {
     let [ammunition, raised, guns, turrets] = has_max_checks();
     [
-        Check::plain(
-            "listed",
-            "port-only: Buy is asked only of the selected list item (`_OutfitFilter` \
-             @0x5806f-0x5808a, `_DoOutfitDialog` @0x5c07a-0x5c0ba); the row the \
-             relisting sell loop asks for is not one",
-            in_the_list,
-        ),
         Check::plain(
             "tech",
             "`_CanBuyOutfitItem` @0x4e7ff-0x4e83d, as `buy tech` reads it at build \
@@ -1295,12 +1327,6 @@ fn never_alerts(_: &SaleAsk) -> Option<SaleAlert> {
 /// (@0x5c9ab-0x5c9dd), none past the count.
 fn passes_remain(pass: Pass) -> bool {
     pass.count.saturating_sub(pass.index) > 1
-}
-
-/// The row is listed, so Buy can be asked of it; refused as
-/// [`OutfitRefusal::NotForSale`].
-fn in_the_list(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
-    holds(asked.row.facts.listed, OutfitRefusal::NotForSale)
 }
 
 /// `_CanBuyOutfitItem`'s own tech test passes the outfit; refused as
@@ -2218,10 +2244,12 @@ fn lc_names(record: &OutfitRecord) -> LcNames {
     }
 }
 
-/// The outfit table's index 0, `oütf` 128: the outfit the sell loop
-/// selects after a sale that changes the listing (`*0xded58 = 0`,
-/// @0x5d01c), listed or not (see
-/// [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale)).
+/// The outfit table's index 0, `oütf` 128: the outfit the dialog selects
+/// after an order that changes the listing (`*0xded58 = 0`, @0x5c336,
+/// @0x5d01c), listed or not, which the sell loop's passes left sell (see
+/// [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale)) and Buy and
+/// Sell answer for (see
+/// [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)).
 pub const FIRST_OUTFIT: OutfitId = OutfitId(128);
 
 /// The length of the port's outfit list (0x3b500c, 0x200 entries,
@@ -2283,11 +2311,13 @@ impl Shop<'_> {
     }
 
     /// The outfitter as [`outfitter`](Self::outfitter) builds it, with
-    /// the row of `also`, when it has a record, among its rows even when
-    /// it is not listed, sold here: the row the sell loop sells after a
-    /// relisting selects [`FIRST_OUTFIT`], which asks no list
-    /// (@0x5d164-0x5d199; see
-    /// [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale)).
+    /// the row of `also`, when it has a record and is not listed, as its
+    /// [`unlisted`](Outfitter::unlisted) row, sold here: the outfit a
+    /// relisting selects, [`FIRST_OUTFIT`], which the sell loop sells and
+    /// Buy and Sell answer for, asking no list (@0x5d164-0x5d199,
+    /// `_OutfitFilter` @0x5806f-0x580ca; see
+    /// [`RuleKey::RelistedSale`](crate::RuleKey::RelistedSale) and
+    /// [`RuleKey::RelistedSelection`](crate::RuleKey::RelistedSelection)).
     pub(crate) fn outfitter_with(
         &self,
         pilot: &Pilot,
@@ -2312,6 +2342,7 @@ impl Shop<'_> {
         let buy_random = self.rules.source_for(RuleKey::BuyRandom);
         let mut sweep = HideHigher::default();
         let mut rows = Vec::new();
+        let mut unlisted = None;
         for record in sorted {
             let owned = pilot.owned(record.id);
             let offer = Offer {
@@ -2361,23 +2392,26 @@ impl Shop<'_> {
                 sold_here,
                 ..self.facts(&offer, owned)
             };
-            rows.push((
-                record.disp_weight,
-                OutfitRow {
-                    id: record.id,
-                    name: record.name.clone(),
-                    short_name: record.short_name.clone(),
-                    price,
-                    mass,
-                    owned,
-                    max: record.max,
-                    facts,
-                },
-            ));
+            let row = OutfitRow {
+                id: record.id,
+                name: record.name.clone(),
+                short_name: record.short_name.clone(),
+                price,
+                mass,
+                owned,
+                max: record.max,
+                facts,
+            };
+            if listed {
+                rows.push((record.disp_weight, row));
+            } else {
+                unlisted = Some(row);
+            }
         }
         wares::in_display_order(&mut rows, |(weight, row)| (*weight, row.id.0));
         Some(Outfitter {
             rows: rows.into_iter().map(|(_, row)| row).collect(),
+            unlisted,
             cash: pilot.cash,
             free_mass: free,
             armed,
@@ -4132,10 +4166,11 @@ mod tests {
     }
 
     #[test]
-    fn an_outfit_asked_for_is_in_the_rows_though_not_listed_and_sold_here() {
+    fn an_outfit_asked_for_is_found_though_in_no_cell_and_sold_here() {
         let records = [tech(128, 9), tech(129, 0)];
         let owner = owning(&[(128, 1)]);
         let asked = open_with(&records, &owner, Some(FIRST_OUTFIT));
+        assert_eq!(listed(&asked), [129], "in no cell");
         let found = row(&asked, 128);
         assert_eq!(found.owned, 1);
         assert_eq!(
@@ -4157,15 +4192,69 @@ mod tests {
         assert_eq!(asked, open(&records, &owner));
         assert_eq!(listed(&asked), [128]);
         let off_sale = open_with(&records, &owner, Some(OutfitId(129)));
-        assert_eq!(listed(&off_sale), [128, 129], "an unlisted one is added");
+        assert_eq!(listed(&off_sale), [128], "an unlisted one is in no cell");
+        assert_eq!(
+            off_sale.unlisted.as_ref().map(|row| row.id),
+            Some(OutfitId(129))
+        );
     }
 
     #[test]
-    fn an_outfit_asked_for_that_is_off_today_cannot_be_bought() {
+    fn an_outfit_asked_for_that_is_off_today_is_bought_as_canbuyoutfititem_says() {
         let asked = open_with(&[buying(128, 50)], &pilot(), Some(FIRST_OUTFIT));
-        assert!(listed(&asked).contains(&128));
-        assert!(!buyable(&row(&asked, 128).facts));
-        assert_eq!(buy(&asked), Err(OutfitRefusal::NotForSale));
+        assert!(!listed(&asked).contains(&128));
+        assert!(!row(&asked, 128).facts.listed);
+        assert_eq!(buy(&asked), Ok(()));
+    }
+
+    #[test]
+    fn an_unlisted_row_asked_for_is_found_by_row_and_in_no_cell() {
+        let records = [tech(128, 9), tech(129, 0)];
+        let owner = owning(&[(128, 2)]);
+        let asked = open_with(&records, &owner, Some(FIRST_OUTFIT));
+        assert_eq!(listed(&asked), [129]);
+        let unlisted = asked.unlisted.as_ref().expect("the row asked for");
+        assert_eq!((unlisted.id, unlisted.owned), (OutfitId(128), 2));
+        assert_eq!(asked.row(FIRST_OUTFIT), Some(unlisted));
+        assert_eq!(asked.row(OutfitId(129)), asked.rows.first());
+        assert_eq!(asked.row(OutfitId(130)), None);
+        assert_eq!(sell(&asked), Ok(()));
+        assert_eq!(open(&records, &owner).unlisted, None);
+    }
+
+    #[test]
+    fn buy_asks_no_list_of_the_outfit_asked_for() {
+        let records = [tech(128, 0), tech(129, 0)];
+        let off_today = [
+            OutfitRecord {
+                buy_random: 50,
+                ..tech(128, 0)
+            },
+            tech(129, 0),
+        ];
+        let asked = open_with(&off_today, &pilot(), Some(FIRST_OUTFIT));
+        assert_eq!(listed(&asked), [129]);
+        assert_eq!(buy(&asked), Ok(()), "bought though not listed");
+        let beyond = [tech(128, 9), tech(129, 0)];
+        let refused = open_with(&beyond, &pilot(), Some(FIRST_OUTFIT));
+        assert_eq!(listed(&refused), [129]);
+        assert_eq!(
+            buy(&refused),
+            Err(OutfitRefusal::NotForSale),
+            "at its tech step"
+        );
+        assert_eq!(buy(&open(&records, &pilot())), Ok(()));
+        assert!(
+            listed_checks(&can_buy())
+                .iter()
+                .all(|&(name, _)| name != "listed"),
+            "no list check"
+        );
+    }
+
+    #[test]
+    fn the_reselections_default_is_kept() {
+        assert_eq!(Reselection::default(), Reselection::Kept);
     }
 
     #[test]
@@ -6036,12 +6125,6 @@ mod tests {
             listed_checks(&can_buy()),
             [
                 (
-                    "listed",
-                    "port-only: Buy is asked only of the selected list item (`_OutfitFilter` \
-                     @0x5806f-0x5808a, `_DoOutfitDialog` @0x5c07a-0x5c0ba); the row the \
-                     relisting sell loop asks for is not one"
-                ),
-                (
                     "tech",
                     "`_CanBuyOutfitItem` @0x4e7ff-0x4e83d, as `buy tech` reads it at build \
                      (`TechLevel` -1 skips it @0x4e802)"
@@ -6082,7 +6165,7 @@ mod tests {
             has_max.iter().map(|&(name, _)| name).collect::<Vec<_>>(),
             ["ammunition cap", "raised max", "gun limit", "turret limit"]
         );
-        assert_eq!(has_max, listed_checks(&can_buy())[2..6]);
+        assert_eq!(has_max, listed_checks(&can_buy())[1..5]);
     }
 
     #[test]
@@ -6156,8 +6239,8 @@ mod tests {
 
     #[test]
     fn each_disputed_outfitter_rule_names_its_key() {
-        let mut buying = vec![None; 14];
-        buying[10] = Some(RuleKey::OutfitLimit);
+        let mut buying = vec![None; 13];
+        buying[9] = Some(RuleKey::OutfitLimit);
         assert_eq!(keys(&can_buy()), buying);
         assert_eq!(keys(&has_max()), [None; 4]);
         assert_eq!(keys(&sell_flag()), [None; 3]);
