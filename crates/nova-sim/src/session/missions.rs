@@ -127,12 +127,14 @@ pub enum AbortError {
 
 /// The record a mission's lifecycle reads for `id` when the session has
 /// none (a mission saved whose `mïsn` is gone): no script, abortable,
-/// with no reward, no days and no ships.
+/// with no reward, no days and no ships. Only those fields, and `Flags`
+/// and `Flags2`, are read of an active mission's record; the rest are
+/// none.
 fn blank(id: MissionId) -> MissionRecord {
     MissionRecord {
         id,
-        avail_stel: -1,
-        avail_loc: -1,
+        avail_stel: 0,
+        avail_loc: 0,
         avail_record: 0,
         avail_rating: 0,
         avail_random: 0,
@@ -141,9 +143,9 @@ fn blank(id: MissionId) -> MissionRecord {
         require: 0,
         flags: 0,
         flags2: 0,
-        travel_stel: -1,
-        return_stel: -1,
-        cargo_type: -1,
+        travel_stel: 0,
+        return_stel: 0,
+        cargo_type: 0,
         cargo_qty: 0,
         pay_val: 0,
         time_limit: 0,
@@ -157,7 +159,7 @@ fn blank(id: MissionId) -> MissionRecord {
         comp_govt: None,
         comp_reward: 0,
         date_post_inc: 0,
-        ships: MissionShip { count: 0, goal: -1 },
+        ships: MissionShip { count: 0, goal: 0 },
     }
 }
 
@@ -477,7 +479,9 @@ impl Session {
                 let cleaned: Vec<GovtId> = self
                     .pilot
                     .legal_records()
-                    .filter(|&(govt, record)| record < 0 && among.takes(govt, of, &self.govts))
+                    .filter(|&(govt, record)| {
+                        record.is_negative() && among.takes(govt, of, &self.govts)
+                    })
                     .map(|(govt, _)| govt)
                     .collect();
                 for govt in cleaned {
@@ -506,10 +510,7 @@ impl Session {
         event: &StoryEvent,
         chance: &mut dyn Chance,
     ) {
-        let Some(slot) = u8::try_from(id.record)
-            .ok()
-            .filter(|&slot| usize::from(slot) < SLOTS)
-        else {
+        let Ok(slot) = u8::try_from(id.record) else {
             return;
         };
         match (id.hook, *event) {
@@ -586,7 +587,6 @@ impl Session {
         if active
             .destination
             .is_none_or(|stop| at(active.return_to, stop.stellar))
-            && !active.reached
         {
             active.reached = true;
             self.save_due = true;
@@ -1773,6 +1773,70 @@ mod tests {
         let fuel = session.pilot().reserves().fuel.now;
         accept(&mut session, 140);
         assert_eq!(session.pilot().reserves().fuel.now, fuel - 100.0);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // untouched
+    fn an_auto_abort_without_flag_0x0008_keeps_the_fuel() {
+        let catalog = lifecycle(vec![auto_aborting()]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        let fuel = session.pilot().reserves().fuel.now;
+        accept(&mut session, 140);
+        assert_eq!(held(&session), []);
+        assert_eq!(session.pilot().reserves().fuel.now, fuel);
+    }
+
+    #[test]
+    fn a_cleaning_pay_sets_the_negative_records_of_a_government_and_its_allies_to_none() {
+        let catalog = lifecycle(vec![MissionRecord {
+            pay_val: -20_128,
+            ..back_to_128(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        for (govt, record) in [(FED, -5), (CIVVIES, 3), (PIRATES, -5), (NEUTRAL, -5)] {
+            session.pilot.set_legal_record(govt, record);
+        }
+        session.pilot.set_legal_record(GovtId(132), -7);
+        accept(&mut session, 140);
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(held(&session), []);
+        let records: Vec<i16> = [FED, CIVVIES, PIRATES, NEUTRAL, GovtId(132)]
+            .into_iter()
+            .map(|govt| session.pilot().legal_record(govt))
+            .collect();
+        assert_eq!(
+            records,
+            [0, 3, -5, -5, -7],
+            "the Federation's and its ally's, the positive one kept"
+        );
+    }
+
+    #[test]
+    fn a_mission_whose_record_is_gone_still_ends() {
+        let catalog = lifecycle(vec![to_129(140), back_to_128(141)]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        accept(&mut session, 141);
+        session.missions.clear();
+        assert_eq!(session.abort_mission(0, &mut NeverFires), Ok(()));
+        let cash = session.pilot().cash();
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(held(&session), [], "completed with no pay");
+        assert_eq!(session.pilot().cash(), cash);
+    }
+
+    #[test]
+    fn a_return_that_is_the_destination_counts_it_reached_at_the_landing() {
+        let catalog = lifecycle(vec![MissionRecord {
+            on_success: Script::parse("b31"),
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        assert!(session.unregister_story(slot_hook(0, ARRIVAL)));
+        land_on(&mut session, &catalog, 129);
+        assert!(session.control_bit(bit(31)), "reached by the success hook");
+        assert_eq!(held(&session), []);
     }
 
     #[test]

@@ -555,6 +555,26 @@ mod tests {
     }
 
     #[test]
+    fn the_accept_and_abort_facts_hand_over_their_rule_set() {
+        let rules = Rulebook::default().with_override(
+            crate::rulebook::RuleKey::StartActiveMission,
+            crate::rulebook::RuleSource::Bible,
+        );
+        let active = ActiveMissions::default();
+        let record = mission(140);
+        let accept = AcceptFacts {
+            active: &active,
+            rules: &rules,
+        };
+        let abort = AbortFacts {
+            mission: &record,
+            rules: &rules,
+        };
+        assert_eq!(accept.rulebook(), &rules);
+        assert_eq!(abort.rulebook(), &rules);
+    }
+
+    #[test]
     fn a_mission_goes_into_the_lowest_free_slot() {
         let mut active = ActiveMissions::default();
         assert_eq!(active.lowest_free(), Some(0));
@@ -747,6 +767,7 @@ mod tests {
         assert_eq!(accept_charge(-50_100, 50), 0, "floored at none");
         assert_eq!(accept_charge(-50_100, -20), 0, "floored at none");
         assert_eq!(accept_charge(-50_000, 1000), 1000, "not below");
+        assert_eq!(accept_charge(-50_000, -20), -20, "not below: no floor");
         assert_eq!(accept_charge(500, 1000), 1000);
     }
 
