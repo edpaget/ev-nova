@@ -321,6 +321,7 @@ use crate::system::starfield;
 use crate::text::TextMetrics;
 use crate::time::ticks;
 use crate::ui::PlunderShown;
+use crate::ui::comm::grouped;
 use crate::{
     Color, Diagnostic, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction,
     Sound,
@@ -412,10 +413,35 @@ pub const CARGO_JETTISONED: &str = "Cargo jettisoned.";
 /// `STR#` 2002 #290: all but the mission cargo was jettisoned.
 pub const NON_MISSION_CARGO_JETTISONED: &str = "Non-mission cargo jettisoned.";
 
+/// `STR#` 2002 #286: a scan found a mission's cargo and failed it.
+pub const MISSION_SCANNED: &str = "Your ship has been scanned - mission failed.";
+/// `STR#` 2002 #376-#379, a space between each: what follows the
+/// scanner's and the ship's names when a scan finds smuggling.
+pub const SMUGGLING_DETECTED: &str =
+    "your attempt to smuggle illegal cargo through this system has been detected";
+/// `STR#` 2002 #380: what comes before the fine.
+pub const FINED: &str = "You have been fined";
+
+/// What the message line says when a scan finds smuggling, as
+/// `_ScanPlayer` builds it (@0x7e7ce-0x7ea9b): "`scanner`:  `ship`, ...
+/// has been detected.", then with a fine " You have been fined `fine`
+/// credits." ("credit" for 1), the fine's thousands grouped. The
+/// scanner is named by its ship class; a mission's special ship by its
+/// own name is rdm:phase/mission-ships/phase-2-ship-goals'.
+#[must_use]
+pub fn smuggling_message(scanner: &str, ship: &str, fine: i64) -> String {
+    let detected = format!("{scanner}:  {ship}, {SMUGGLING_DETECTED}.");
+    if fine == 0 {
+        return detected;
+    }
+    let credits = if fine > 1 { "credits" } else { "credit" };
+    format!("{detected} {FINED} {} {credits}.", grouped(fine))
+}
+
 /// What the message line says of `message`, a session's message other
-/// than an arrival's: none for an arrival's, which [`arrival_lead`] leads
-/// the arrival message with.
-fn sim_message_text(message: SimMessage) -> Option<String> {
+/// than an arrival's, the names read from `session`: none for an
+/// arrival's, which [`arrival_lead`] leads the arrival message with.
+fn sim_message_text(message: SimMessage, session: &Session) -> Option<String> {
     let text = match message {
         SimMessage::Arrived(_) | SimMessage::ExitedHypergate(_) | SimMessage::PassedWormhole(_) => {
             return None;
@@ -423,8 +449,14 @@ fn sim_message_text(message: SimMessage) -> Option<String> {
         SimMessage::MissionFailed => MISSION_FAILED,
         SimMessage::CargoJettisoned => CARGO_JETTISONED,
         SimMessage::NonMissionCargoJettisoned => NON_MISSION_CARGO_JETTISONED,
-        // Worded with the scan's names: missions phase 5's next commit.
-        SimMessage::MissionScanned | SimMessage::Smuggling { .. } => return None,
+        SimMessage::MissionScanned => MISSION_SCANNED,
+        SimMessage::Smuggling { scanner, fine } => {
+            return Some(smuggling_message(
+                session.ship_name(scanner).unwrap_or_default(),
+                session.pilot().ship_name().unwrap_or_default(),
+                fine,
+            ));
+        }
     };
     Some(text.to_owned())
 }
@@ -1545,6 +1577,10 @@ impl<
         let date = session.date_text();
         let mut messages = std::mem::take(&mut self.pending_leads);
         messages.extend(session.take_messages());
+        let worded: Vec<String> = messages
+            .iter()
+            .filter_map(|&message| sim_message_text(message, session))
+            .collect();
         self.message = None;
         let Some(scene) = &self.scene else {
             return;
@@ -1560,7 +1596,7 @@ impl<
             })
             .into_iter()
             .collect();
-        said.extend(messages.into_iter().filter_map(sim_message_text));
+        said.extend(worded);
         said.extend(
             notes
                 .into_iter()
@@ -2058,11 +2094,15 @@ impl<C> FlightView<C> {
         let Ok(session) = &mut self.session else {
             return;
         };
+        let mut said = Vec::new();
         for message in session.take_messages() {
-            match sim_message_text(message) {
-                Some(text) => self.say(text),
+            match sim_message_text(message, session) {
+                Some(text) => said.push(text),
                 None => self.pending_leads.push(message),
             }
+        }
+        for text in said {
+            self.say(text);
         }
     }
 
@@ -9808,20 +9848,173 @@ mod tests {
 
     #[test]
     fn each_jettison_message_is_worded_and_the_arrivals_are_not_among_them() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        let text = |message| sim_message_text(message, session);
         assert_eq!(
-            sim_message_text(SimMessage::MissionFailed).as_deref(),
+            text(SimMessage::MissionFailed).as_deref(),
             Some(MISSION_FAILED)
         );
         assert_eq!(
-            sim_message_text(SimMessage::CargoJettisoned).as_deref(),
+            text(SimMessage::CargoJettisoned).as_deref(),
             Some(CARGO_JETTISONED)
         );
         assert_eq!(
-            sim_message_text(SimMessage::NonMissionCargoJettisoned).as_deref(),
+            text(SimMessage::NonMissionCargoJettisoned).as_deref(),
             Some(NON_MISSION_CARGO_JETTISONED)
         );
-        assert_eq!(sim_message_text(SimMessage::Arrived(SystemId(130))), None);
-        assert_eq!(arrival_lead(SimMessage::MissionFailed), None);
+        assert_eq!(text(SimMessage::Arrived(SystemId(130))), None);
+        assert_eq!(text(SimMessage::ExitedHypergate(SystemId(130))), None);
+        assert_eq!(text(SimMessage::PassedWormhole(SystemId(130))), None);
+        for message in [
+            SimMessage::MissionFailed,
+            SimMessage::CargoJettisoned,
+            SimMessage::NonMissionCargoJettisoned,
+            SimMessage::MissionScanned,
+            SimMessage::Smuggling {
+                scanner: ShipId(129),
+                fine: 0,
+            },
+        ] {
+            assert_eq!(arrival_lead(message), None, "{message:?}");
+        }
+    }
+
+    /// Inspects the player on its first decision; then it has looked the
+    /// player over, and idles.
+    #[derive(Debug, Default)]
+    struct Inspector(std::cell::Cell<bool>);
+
+    impl Behaviour for Inspector {
+        fn decide(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            if self.0.replace(true) {
+                Goal::Idle
+            } else {
+                Goal::Inspect(ShipRef::Player)
+            }
+        }
+    }
+
+    /// A flight in Sol with 1200 credits, its ship named Kestrel, with
+    /// mission 130's 4 tons
+    /// of food (`ScanMask` 0x0004, `Flags` `flags`) aboard in slot 0, and
+    /// one interceptor (ship 129) of a government scanning for 0x0004 and
+    /// fining `fine`, placed on the ship, that inspects it, its scan
+    /// drawing 0.
+    fn smuggling(flags: u16, fine: i16) -> View {
+        let mut catalog = trafficked(&[130], 1, 129, 4);
+        catalog.character = Ok(CharacterStart {
+            cash: 1200,
+            ..catalog.character.expect("a chär")
+        });
+        catalog.dudes[0].1.govt = Some(GovtId(140));
+        catalog.govts = vec![nova_sim::GovtRecord {
+            id: GovtId(140),
+            flags: 0,
+            flags2: 0,
+            crime_tol: 0,
+            penalties: nova_sim::Penalties {
+                smuggle: 5,
+                ..nova_sim::Penalties::default()
+            },
+            max_odds: 100,
+            classes: [-1; 4],
+            allies: [-1; 4],
+            enemies: [-1; 4],
+            comm_name: String::new(),
+            scan_mask: 0x0004,
+            scan_fine: fine,
+        }];
+        catalog.missions = vec![MissionRecord {
+            cargo_type: 0,
+            cargo_qty: 4,
+            pickup_mode: 0,
+            scan_mask: 0x0004,
+            flags,
+            ..errand(130)
+        }];
+        let pilot = Pilot::new(&catalog, "Ada").expect("a pilot");
+        let mut save: serde_json::Value =
+            serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+        save["ship_name"] = serde_json::json!("Kestrel");
+        save["missions"] = serde_json::json!([{
+            "slot": 0,
+            "mission": 130,
+            "destination": null,
+            "return": null,
+            "cargo_type": 0,
+            "cargo_tons": 4,
+            "pay": 0,
+            "days_left": null,
+            "deadline": null,
+            "reached": false,
+            "goals_met": true,
+            "aboard": true,
+            "failed": null,
+        }]);
+        let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+        let mut draws = placed(750, 750, 0).to_vec();
+        draws.push(0);
+        let (_, chance) = scripted(&draws);
+        FlightView::with_pilot(catalog, pilot)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Inspector::default()))
+    }
+
+    #[test]
+    fn a_scan_that_fails_a_mission_says_so_on_the_message_line() {
+        let mut view = smuggling(0x0020, 500);
+        for _ in 0..3 {
+            view.tick(TICK);
+        }
+        let pilot = view.pilot().expect("flying");
+        assert_eq!(pilot.missions().iter().count(), 0, "failed at once");
+        assert_eq!(view.message(), Some(MISSION_SCANNED));
+        assert_eq!(
+            MISSION_SCANNED,
+            "Your ship has been scanned - mission failed."
+        );
+    }
+
+    #[test]
+    fn a_scan_that_finds_smuggling_names_the_scanner_and_the_ship_and_the_fine() {
+        let mut view = smuggling(0, 500);
+        assert_eq!(view.pilot().expect("flying").cash(), 1200);
+        for _ in 0..3 {
+            view.tick(TICK);
+        }
+        assert_eq!(view.pilot().expect("flying").cash(), 700);
+        assert_eq!(
+            view.message(),
+            Some(
+                "Ship 129:  Kestrel, your attempt to smuggle illegal cargo through this \
+                 system has been detected. You have been fined 500 credits."
+            )
+        );
+    }
+
+    #[test]
+    fn the_smuggling_notice_reads_the_fine_in_the_originals_words() {
+        assert_eq!(
+            smuggling_message("Viper", "Kestrel", 0),
+            "Viper:  Kestrel, your attempt to smuggle illegal cargo through this system has \
+             been detected."
+        );
+        assert_eq!(
+            smuggling_message("Viper", "Kestrel", 1),
+            "Viper:  Kestrel, your attempt to smuggle illegal cargo through this system has \
+             been detected. You have been fined 1 credit."
+        );
+        assert_eq!(
+            smuggling_message("Viper", "Kestrel", 12_300),
+            "Viper:  Kestrel, your attempt to smuggle illegal cargo through this system has \
+             been detected. You have been fined 12,300 credits."
+        );
     }
 
     #[test]
