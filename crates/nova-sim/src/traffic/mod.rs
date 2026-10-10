@@ -33,7 +33,9 @@
 //!    unprovoked (until it is done, or provoked): first every goal, then, each NPC
 //!    seeing the new goals, the fire command it holds and the ship it
 //!    targets. An NPC that goes back to an idle goal (not fighting) loses
-//!    its provocation, and one that stops inspecting a ship remembers it;
+//!    its provocation, and one that stops inspecting a ship remembers it,
+//!    and, the player within its reach, has scanned the player
+//!    ([`Traffic::take_scans`]);
 //! 5. the autopilot and a flight step for every NPC, each flying towards
 //!    the ship its goal is about, the player's included (the one it
 //!    assists, or escorts in formation), a fighter docking its carrier;
@@ -55,6 +57,7 @@ pub mod npc;
 pub mod spawn;
 pub mod table;
 
+use crate::ai::interceptor::within_reach;
 use crate::ai::{Behaviour, Goal, PlayerSide, Reaction, Surroundings};
 use std::collections::BTreeSet;
 
@@ -64,6 +67,7 @@ use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
 use crate::flight::ShipState;
+use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::person::PersonWorld;
 use autopilot::Outcome;
@@ -148,6 +152,9 @@ pub struct Traffic {
     interval: u32,
     /// The NPCs that left on the last tick, and how.
     departed: Vec<(NpcId, Outcome)>,
+    /// The NPCs that have looked the player over since the scans were
+    /// last taken, in order.
+    scans: Vec<NpcId>,
 }
 
 impl Default for Traffic {
@@ -173,6 +180,7 @@ impl Traffic {
             ticks: 0,
             interval,
             departed: Vec::new(),
+            scans: Vec::new(),
         }
     }
 
@@ -261,20 +269,7 @@ impl Traffic {
             .zip(&due)
             .map(|(npc, &due)| due.then(|| behaviour.decide(npc, &around, &mut &mut *chance)))
             .collect();
-        for (npc, goal) in self.npcs.iter_mut().zip(goals) {
-            let Some(goal) = goal else {
-                continue;
-            };
-            if let Goal::Inspect(ship) = npc.goal
-                && goal != npc.goal
-            {
-                npc.inspected = Some(ship);
-            }
-            if !goal.fights() {
-                npc.provoked = 0.0;
-            }
-            npc.goal = goal;
-        }
+        self.take_goals(goals, world.player.map(|player| player.state.position));
         let around = world.around(&self.npcs);
         let commands: Vec<Option<(Trigger, Option<ShipRef>)>> = self
             .npcs
@@ -392,6 +387,41 @@ impl Traffic {
     #[must_use]
     pub fn departed(&self) -> &[(NpcId, Outcome)] {
         &self.departed
+    }
+
+    /// Gives each NPC its goal decided, if any, the player at `player_at`
+    /// if there is one: one that stops inspecting a ship remembers it,
+    /// and has scanned the player when it was inspecting the player
+    /// within its reach; one that does not fight loses its provocation.
+    fn take_goals(&mut self, goals: Vec<Option<Goal>>, player_at: Option<Vec2>) {
+        for (npc, goal) in self.npcs.iter_mut().zip(goals) {
+            let Some(goal) = goal else {
+                continue;
+            };
+            if let Goal::Inspect(ship) = npc.goal
+                && goal != npc.goal
+            {
+                npc.inspected = Some(ship);
+                let scans = ship == ShipRef::Player
+                    && player_at.is_some_and(|at| within_reach(at - npc.state.position));
+                if scans {
+                    self.scans.push(npc.id);
+                }
+            }
+            if !goal.fights() {
+                npc.provoked = 0.0;
+            }
+            npc.goal = goal;
+        }
+    }
+
+    /// The NPCs that have looked the player over since this was last
+    /// called, in order: each that stopped inspecting the player while
+    /// within an interceptor's reach of it (`_HighLevelAIHandler`
+    /// @0x8f11e-0x8f38a calls `_ScanPlayer` there). Taking them empties
+    /// the list.
+    pub fn take_scans(&mut self) -> Vec<NpcId> {
+        std::mem::take(&mut self.scans)
     }
 
     /// The ship types the system's traffic can spawn, by ascending ID.
@@ -1295,6 +1325,42 @@ mod tests {
         let next = Fighting::deciding(Goal::Inspect(ShipRef::Npc(NpcId(7))));
         traffic.tick_in(&next, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].inspected, Some(ShipRef::Player));
+    }
+
+    #[test]
+    fn an_npc_that_stops_inspecting_the_player_within_reach_reports_a_scan() {
+        let mut traffic = populated(3, 1);
+        for npc in traffic.npcs_mut() {
+            npc.goal = Goal::Inspect(ShipRef::Player);
+            npc.state.position = Vec2::ZERO;
+        }
+        traffic.npcs[1].state.position = Vec2::new(-1.0, 0.0);
+        traffic.npcs[2].goal = Goal::Inspect(ShipRef::Npc(NpcId(0)));
+        let world = World {
+            player: Some(player_at(100.0, -100.0)),
+            ..World::new(&[])
+        };
+        let still = Fighting::deciding(Goal::Inspect(ShipRef::Player));
+        traffic.tick_in(&still, world, &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.take_scans(), [], "still at it");
+        for npc in traffic.npcs_mut() {
+            npc.state.position = Vec2::ZERO;
+            npc.state.velocity = Vec2::ZERO;
+        }
+        traffic.npcs[1].state.position = Vec2::new(-1.0, 0.0);
+        traffic.npcs[2].goal = Goal::Inspect(ShipRef::Npc(NpcId(0)));
+        let done = Fighting::deciding(Goal::Idle);
+        traffic.tick_in(&done, world, &[], &mut Draws::of(&[]));
+        assert_eq!(
+            traffic.take_scans(),
+            [NpcId(0)],
+            "100 off on each axis is in reach; 101 is not; an NPC is no scan"
+        );
+        assert_eq!(traffic.take_scans(), [], "taken");
+        let mut alone = populated(1, 1);
+        alone.npcs[0].goal = Goal::Inspect(ShipRef::Player);
+        alone.tick_in(&done, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(alone.take_scans(), [], "no player");
     }
 
     /// The player at (`x`, `y`), at rest.

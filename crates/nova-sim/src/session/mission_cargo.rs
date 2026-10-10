@@ -2,8 +2,9 @@
 //! [`mission`](crate::mission) module's "Cargo"): loading it as a
 //! mission is accepted, picking it up and dropping it off as the player
 //! lands, the first of each slot's landing hooks
-//! ([`ARRIVAL`](super::missions::ARRIVAL)), or boards its ship, and the
-//! player's jettison ([`Session::jettison_cargo`]).
+//! ([`ARRIVAL`](super::missions::ARRIVAL)), or boards its ship, the
+//! player's jettison ([`Session::jettison_cargo`]), and an interceptor's
+//! scan of it once it has looked the player over.
 
 use super::Session;
 use super::mission_screens::MissionTextKind;
@@ -13,9 +14,10 @@ use crate::chance::{Chance, NeverFires};
 use crate::market::Good;
 use crate::message::SimMessage;
 use crate::mission::cargo::{
-    JettisonMessage, PICKUP_BOARDING, PickupFacts, drops_off, jettison, loads_at_accept,
-    picks_up_at_destination, pickup_checks,
+    JettisonMessage, PICKUP_BOARDING, PickupFacts, ScanOutcome, drops_off, jettison,
+    loads_at_accept, picks_up_at_destination, pickup_checks, scan,
 };
+use crate::traffic::npc::NpcId;
 
 impl Session {
     /// Loads the cargo of `record`, just accepted into `slot`, as the
@@ -110,7 +112,7 @@ impl Session {
     /// Jettisons the cargo, drawing on `chance`, as `_JettisonCargo`
     /// (@0x3dffd) does (see [`jettison`]): every `jünk` goes; with `all`,
     /// each abortable mission's cargo aboard goes and its mission fails at
-    /// once ([`Session::quick_failure`]), in slot order; then the
+    /// once, as a missed deadline does, in slot order; then the
     /// commodities go. In flight the player is told: "Mission failed.",
     /// or else "Cargo jettisoned." or "Non-mission cargo jettisoned."
     /// when anything went ([`SimMessage`]); landed, nothing. The cargo
@@ -146,6 +148,66 @@ impl Session {
                 JettisonMessage::CargoJettisoned => SimMessage::CargoJettisoned,
                 JettisonMessage::NonMissionCargoJettisoned => SimMessage::NonMissionCargoJettisoned,
             });
+        }
+    }
+
+    /// Scans the player's mission cargo for each NPC that has looked the
+    /// player over since the last
+    /// ([`Traffic::take_scans`](crate::traffic::Traffic::take_scans)),
+    /// drawing on `chance`.
+    pub(super) fn take_scans(&mut self, chance: &mut dyn Chance) {
+        for npc in self.traffic.take_scans() {
+            self.scanned_by(npc, chance);
+        }
+    }
+
+    /// The scan of the player's mission cargo by NPC `id` (`_ScanPlayer`
+    /// @0x7e46e; see [`scan`]), drawing on `chance`: nothing for a ship
+    /// gone, or of no government. A mission found with `Flags` 0x0020
+    /// fails at once ([`Session::quick_failure`]), the player told unless
+    /// it has `Flags` 0x0400; any other found costs the fine, the cash
+    /// floored at none, and the player is told of the smuggling. The
+    /// player is always visible to it (no cloak). Its jump-timing check
+    /// (@0x7e562-0x7e633) and the scan of illegal `jünk` and outfits
+    /// (@0x7eabd-0x7f3d7) are rdm:phase/missions/phase-21-illegal-cargo-scanning.
+    fn scanned_by(&mut self, id: NpcId, chance: &mut dyn Chance) {
+        let Some((scanner, govt)) = self
+            .traffic
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .and_then(|npc| Some((npc.ship, self.govts.get(npc.govt?)?.clone())))
+        else {
+            return;
+        };
+        let outcome = scan(
+            &govt,
+            &self.pilot.missions,
+            |mission| self.lifecycle_record(mission),
+            self.pilot.cash,
+            chance,
+        );
+        match outcome {
+            ScanOutcome::Nothing => {}
+            ScanOutcome::Fail { slot, announce } => {
+                let Some(mission) = self.pilot.missions.get(slot).map(|active| active.mission)
+                else {
+                    return;
+                };
+                let record = self.lifecycle_record(mission);
+                if announce {
+                    self.messages.push(SimMessage::MissionScanned);
+                }
+                self.quick_failure(slot, &record, chance);
+            }
+            ScanOutcome::Fined { credits, .. } => {
+                self.pilot.cash = self.pilot.cash.saturating_sub(credits).max(0);
+                self.save_due = true;
+                self.messages.push(SimMessage::Smuggling {
+                    scanner,
+                    fine: credits,
+                });
+            }
         }
     }
 
@@ -782,5 +844,149 @@ mod tests {
         assert_eq!(session.take_messages(), []);
         let kept = session.pilot().missions().get(0).expect("held");
         assert_eq!((kept.aboard, kept.failed), (true, None));
+    }
+
+    // The scan.
+
+    use crate::ai::{Behaviour, Goal, Surroundings};
+    use crate::catalog::{GovtId, GovtRecord, Penalties, ShipId};
+    use crate::combat::ShipRef;
+    use crate::testkit::{Draws, govt, npc};
+    use crate::traffic::npc::{AiType, Npc};
+
+    /// [`cargo_catalog`] of `missions` with the Federation (128): a
+    /// `SmugPenalty` of 5, scanning for bit 0x0004, fining `fine`.
+    fn policed(missions: Vec<MissionRecord>, fine: i16) -> FakePilotCatalog {
+        let mut catalog = cargo_catalog(missions, vec![]);
+        catalog.govts = vec![GovtRecord {
+            penalties: Penalties {
+                smuggle: 5,
+                ..Penalties::default()
+            },
+            scan_mask: 0x0004,
+            scan_fine: fine,
+            ..govt(128)
+        }];
+        catalog
+    }
+
+    /// Mission `id` of [`round_trip`] masked `mask`, with `Flags` `flags`;
+    /// its `OnFailure` sets bit 45.
+    fn masked(id: i16, mask: u16, flags: u16) -> MissionRecord {
+        MissionRecord {
+            scan_mask: mask,
+            flags,
+            on_failure: Script::parse("b45"),
+            ..round_trip(id, 0, 1)
+        }
+    }
+
+    /// Ends every goal: an inspection is over.
+    #[derive(Debug)]
+    struct LookedOver;
+
+    impl Behaviour for LookedOver {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            Goal::Idle
+        }
+    }
+
+    /// A session of `catalog` in flight with `missions` accepted and an
+    /// interceptor of `govt`, flying ship 129, inspecting the player where
+    /// it is, its messages taken.
+    fn inspected(catalog: &FakePilotCatalog, missions: &[i16], govt: Option<GovtId>) -> Session {
+        let mut session = loaded(catalog, missions);
+        in_flight(&mut session, catalog);
+        session.tick_traffic(catalog, &LookedOver, &mut NeverFires);
+        let mut police = npc(0, session.stats());
+        police.govt = govt;
+        police.ai_type = AiType::Interceptor;
+        police.ship = ShipId(129);
+        police.goal = Goal::Inspect(ShipRef::Player);
+        police.state.position = session.player.position;
+        session.traffic.add_npc(police);
+        let _ = session.take_messages();
+        session
+    }
+
+    /// The interceptor gives the inspection up, drawing `draw` for the
+    /// scan.
+    fn looked_over(session: &mut Session, catalog: &FakePilotCatalog, draw: u32) -> Vec<u32> {
+        let mut chance = Draws::of(&[draw]);
+        session.tick_traffic(catalog, &LookedOver, &mut chance);
+        chance.asked
+    }
+
+    #[test]
+    fn a_scan_finding_a_0x0020_missions_cargo_fails_it_at_once() {
+        let catalog = policed(vec![masked(140, 0x0006, 0x0020)], 500);
+        let mut session = inspected(&catalog, &[140], Some(GovtId(128)));
+        let cash = session.pilot().cash();
+        assert_eq!(looked_over(&mut session, &catalog, 75), [100]);
+        assert!(session.control_bit(bit(45)), "OnFailure ran");
+        assert_eq!(held_missions(&session), [], "ended");
+        assert_eq!(session.take_messages(), [SimMessage::MissionScanned]);
+        assert_eq!(session.pilot().cash(), cash, "no fine");
+    }
+
+    #[test]
+    fn a_hidden_0x0020_mission_found_fails_silently() {
+        let catalog = policed(vec![masked(140, 0x0004, 0x0420)], 500);
+        let mut session = inspected(&catalog, &[140], Some(GovtId(128)));
+        looked_over(&mut session, &catalog, 0);
+        assert!(session.control_bit(bit(45)));
+        assert_eq!(held_missions(&session), []);
+        assert_eq!(session.take_messages(), []);
+    }
+
+    #[test]
+    fn a_scan_sharing_no_mask_bit_leaves_the_mission_active() {
+        let catalog = policed(vec![masked(140, 0x0003, 0x0020)], 500);
+        let mut session = inspected(&catalog, &[140], Some(GovtId(128)));
+        let cash = session.pilot().cash();
+        looked_over(&mut session, &catalog, 0);
+        assert!(!session.control_bit(bit(45)));
+        assert_eq!(held_missions(&session), [(0, 140)]);
+        assert_eq!(session.take_messages(), []);
+        assert_eq!(session.pilot().cash(), cash);
+    }
+
+    #[test]
+    fn a_scan_finding_any_other_missions_cargo_fines_the_smuggler() {
+        let catalog = policed(vec![masked(140, 0x0004, 0)], 500);
+        let mut session = inspected(&catalog, &[140], Some(GovtId(128)));
+        session.pilot.cash = 1200;
+        let _ = session.take_save_due();
+        looked_over(&mut session, &catalog, 0);
+        assert_eq!(session.pilot().cash(), 700);
+        assert!(session.take_save_due());
+        assert_eq!(held_missions(&session), [(0, 140)], "still active");
+        assert!(!session.control_bit(bit(45)));
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::Smuggling {
+                scanner: ShipId(129),
+                fine: 500
+            }]
+        );
+        let mut session = inspected(&catalog, &[140], Some(GovtId(128)));
+        session.pilot.cash = 100;
+        looked_over(&mut session, &catalog, 0);
+        assert_eq!(session.pilot().cash(), 0, "floored at none");
+    }
+
+    #[test]
+    fn a_scan_drawing_above_75_or_by_an_ungoverned_ship_finds_nothing() {
+        let catalog = policed(vec![masked(140, 0x0004, 0x0020)], 500);
+        let mut session = inspected(&catalog, &[140], Some(GovtId(128)));
+        assert_eq!(looked_over(&mut session, &catalog, 76), [100]);
+        assert_eq!(held_missions(&session), [(0, 140)]);
+        assert_eq!(session.take_messages(), []);
+        let mut session = inspected(&catalog, &[140], None);
+        assert!(looked_over(&mut session, &catalog, 0).is_empty(), "no draw");
+        assert_eq!(held_missions(&session), [(0, 140)]);
+        let mut session = inspected(&catalog, &[140], Some(GovtId(130)));
+        assert!(looked_over(&mut session, &catalog, 0).is_empty(), "no gövt");
+        assert_eq!(held_missions(&session), [(0, 140)]);
     }
 }

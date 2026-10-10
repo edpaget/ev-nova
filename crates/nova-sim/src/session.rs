@@ -1240,6 +1240,7 @@ impl Session {
                 self.dock_fighters();
                 self.orphan_fighters();
                 self.observe_watched();
+                self.take_scans(&mut &mut *chance);
             }
         }
         self.clear_lost_target();

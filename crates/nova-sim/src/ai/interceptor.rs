@@ -11,9 +11,15 @@
 //!   first, then the NPCs in order), but not the one it last inspected
 //!   nor another interceptor (the original retries `Rand(64)` slots; here
 //!   one draw among them). Within [`INSPECT_REACH`] of it on both axes
-//!   (@0x8f11e) it has looked it over, and decides again; the traffic
-//!   remembers the ship ([`Npc::inspected`]). Scanning the player for
-//!   illegal cargo waits for mission cargo.
+//!   (@0x8f11e, [`within_reach`]) it has looked it over, and decides
+//!   again; the traffic remembers the ship ([`Npc::inspected`]). Having
+//!   looked the player over, it has scanned the player
+//!   ([`Traffic::take_scans`](crate::traffic::Traffic::take_scans)): the
+//!   session checks the player's mission cargo against the interceptor's
+//!   government (`_ScanPlayer` @0x7e46e; see the
+//!   [`mission`](crate::mission) module's "Cargo"), failing a mission
+//!   flagged 0x0020 or fining the smuggler. Scanning for illegal `jünk`
+//!   and outfits is rdm:phase/missions/phase-21-illegal-cargo-scanning.
 //! - With nothing to inspect it goes about its business
 //!   ([`idle`](super::idle)).
 
@@ -22,6 +28,7 @@ use crate::ai::{Behaviour, Goal, Reaction, Surroundings, fire, idle, react};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
+use crate::geometry::Vec2;
 use crate::govt::INTERCEPTORS_RETREAT;
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::{AiType, Npc};
@@ -29,6 +36,13 @@ use crate::traffic::npc::{AiType, Npc};
 /// How near, in pixels on either axis, an interceptor comes to the ship
 /// it inspects (100.0 @0xdd060).
 pub const INSPECT_REACH: f32 = 100.0;
+
+/// Whether a ship `off` from an interceptor is within its reach: within
+/// [`INSPECT_REACH`] on both axes (@0x8f11e).
+#[must_use]
+pub fn within_reach(off: Vec2) -> bool {
+    off.x.abs() <= INSPECT_REACH && off.y.abs() <= INSPECT_REACH
+}
 
 /// An interceptor's retreat: only when outnumbered, by `Flags` 0x0100.
 pub const INTERCEPTOR_RETREAT: Retreat = Retreat {
@@ -57,11 +71,9 @@ impl Behaviour for Interceptor {
         }
         if let Goal::Inspect(ship) = npc.goal
             && let Some(state) = around.state_of(ship).filter(|_| around.live(ship))
+            && !within_reach(state.position - npc.state.position)
         {
-            let off = state.position - npc.state.position;
-            if off.x.abs() > INSPECT_REACH || off.y.abs() > INSPECT_REACH {
-                return Goal::Inspect(ship);
-            }
+            return Goal::Inspect(ship);
         }
         inspect(npc, around, chance).unwrap_or_else(|| idle(npc, around, chance))
     }

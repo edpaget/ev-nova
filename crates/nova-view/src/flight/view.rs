@@ -423,6 +423,8 @@ fn sim_message_text(message: SimMessage) -> Option<String> {
         SimMessage::MissionFailed => MISSION_FAILED,
         SimMessage::CargoJettisoned => CARGO_JETTISONED,
         SimMessage::NonMissionCargoJettisoned => NON_MISSION_CARGO_JETTISONED,
+        // Worded with the scan's names: missions phase 5's next commit.
+        SimMessage::MissionScanned | SimMessage::Smuggling { .. } => return None,
     };
     Some(text.to_owned())
 }
@@ -551,7 +553,9 @@ fn arrival_lead(message: SimMessage) -> Option<&'static str> {
         SimMessage::PassedWormhole(_) => Some(PASSING_WORMHOLE),
         SimMessage::MissionFailed
         | SimMessage::CargoJettisoned
-        | SimMessage::NonMissionCargoJettisoned => None,
+        | SimMessage::NonMissionCargoJettisoned
+        | SimMessage::MissionScanned
+        | SimMessage::Smuggling { .. } => None,
     }
 }
 
