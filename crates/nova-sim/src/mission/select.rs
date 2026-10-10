@@ -1,7 +1,9 @@
 //! Choosing a mission's stellars, as the original's
 //! `_SelectMissionStellar` (@0x9a26a) does: what a `TravelStel` or
 //! `ReturnStel` code names ([`StellarCode`]), the stellars a random code
-//! may land on ([`candidates`]), and the one drawn ([`select_stellar`]).
+//! may land on ([`candidates`]), and the one drawn ([`select_stellar`]),
+//! as [`mission_stellar_draw`](crate::RuleKey::MissionStellarDraw) reads
+//! the original's -2 draw.
 //!
 //! The galaxy it chooses from is a [`World`]: every stellar of a visible
 //! system, overlaid ([`stellars_of`]), the overlaid map and the
@@ -13,6 +15,7 @@ use crate::gate::GateKind;
 use crate::govt::Governments;
 use crate::hyperspace::StarMap;
 use crate::landing::{StellarFlags, landable};
+use crate::rulebook::RuleSource;
 use crate::story::OverlaidGalaxy;
 
 /// A stellar of a visible system, overlaid, with the system it belongs
@@ -73,6 +76,10 @@ pub struct World<'a> {
     pub map: &'a StarMap,
     /// The governments and their relations.
     pub govts: &'a Governments,
+    /// How a random -2 is drawn:
+    /// [`mission_stellar_draw`](crate::RuleKey::MissionStellarDraw), from
+    /// the rule set the caller holds ([`select_stellar`]).
+    pub draw: RuleSource,
 }
 
 impl World<'_> {
@@ -241,12 +248,66 @@ pub fn candidates(
         .collect()
 }
 
+/// The stellars a random code of `kind` draws from by the engine's
+/// reading of [`mission_stellar_draw`](crate::RuleKey::MissionStellarDraw),
+/// by ascending ID, drawing nothing: none when its scan finds nothing. For every kind but -2 these
+/// are its [`candidates`], as the original's scan and draw make the same
+/// tests and the draw tests the distance of the stellar drawn.
+///
+/// For -2 the scan (@0x9a2c7-0x9a330) is only a gate: it needs a stellar,
+/// neither `origin` nor `exclude`, normal landable and inhabited, a
+/// station or not, distant from `origin` when there is one. A stellar of
+/// no visible system is never distant (its system is -1:
+/// `_StellarsAreDistant` @0x9d0e-0x9d17), so the world's stellars are all
+/// it can find, and an origin of no visible system finds none
+/// (@0x9d1d-0x9d24). Once it finds one, the draw (@0x9a365-0x9a3e2) takes
+/// every stellar of the kind, neither `origin` nor `exclude`, normal
+/// landable, at any distance: it tests the distance of the scan's first
+/// hit, not of the stellar drawn (@0x9a3ce-0x9a3db). Where that leaves
+/// none, the original redraws forever; this gives none, so the origin is
+/// chosen.
+fn drawable(
+    kind: Kind,
+    origin: Option<StellarId>,
+    exclude: Option<StellarId>,
+    world: &World,
+) -> Vec<StellarId> {
+    if kind != Kind::Inhabited {
+        return candidates(kind, origin, exclude, world);
+    }
+    let from = origin.map(|origin| world.system_of(origin));
+    let open = |stellar: &Stellar| {
+        let id = Some(stellar.id);
+        id != origin && id != exclude && normal_landable(stellar)
+    };
+    let found = world.stellars.iter().any(|stellar| {
+        open(stellar)
+            && inhabited(stellar)
+            && from.is_none_or(|from| from.is_some_and(|from| world.distant(from, stellar.system)))
+    });
+    if !found {
+        return Vec::new();
+    }
+    world
+        .stellars
+        .iter()
+        .filter(|stellar| open(stellar) && kind.takes(stellar, world.govts))
+        .map(|stellar| stellar.id)
+        .collect()
+}
+
 /// The stellar `code` chooses from `origin`, never `exclude` when it
 /// draws, drawing on `chance`: the origin for a code that names it, that
 /// stellar for a fixed code, and for a random one a single
-/// `chance.below(n)` over its [`candidates`] by ascending ID (the
-/// original redraws `Rand(2048)` until it hits one, which comes to the
-/// same odds), or the origin, drawing nothing, when there is none. `None`
+/// `chance.below(n)` over the stellars it draws from, by ascending ID, or
+/// the origin, drawing nothing, when there is none. The original redraws
+/// `Rand(2048)` until it hits one, which comes to the same odds. What it
+/// draws from is as `world.draw` reads
+/// [`mission_stellar_draw`](crate::RuleKey::MissionStellarDraw): by the
+/// engine the original's draw (`drawable`), which for -2 takes a stellar at any distance once its
+/// scan finds a distant one and stops where the original would redraw
+/// forever; by the other reading the [`candidates`], each distant from
+/// the origin. Every other random code draws the same by either. `None`
 /// only when the origin is: as availability asks, with no origin.
 pub fn select_stellar(
     code: i16,
@@ -259,7 +320,10 @@ pub fn select_stellar(
         StellarCode::Origin => origin,
         StellarCode::Fixed(stellar) => Some(stellar),
         StellarCode::Random(kind) => {
-            let candidates = candidates(kind, origin, exclude, world);
+            let candidates = match world.draw {
+                RuleSource::Engine => drawable(kind, origin, exclude, world),
+                RuleSource::Bible => candidates(kind, origin, exclude, world),
+            };
             if candidates.is_empty() {
                 return origin;
             }
@@ -356,6 +420,7 @@ mod tests {
             stellars,
             map: &map,
             govts: &govts,
+            draw: RuleSource::Engine,
         };
         candidates(kind, Some(StellarId(128)), None, &world)
             .into_iter()
@@ -520,6 +585,7 @@ mod tests {
             stellars: &stellars,
             map: &map,
             govts: &govts,
+            draw: RuleSource::Engine,
         };
         assert_eq!(
             candidates(Kind::Inhabited, Some(StellarId(128)), None, &world),
@@ -536,6 +602,7 @@ mod tests {
             stellars: &stellars,
             map: &map,
             govts: &govts,
+            draw: RuleSource::Engine,
         };
         assert_eq!(
             candidates(Kind::Inhabited, None, None, &world),
@@ -556,6 +623,7 @@ mod tests {
             stellars: &stellars,
             map: &map,
             govts: &govts,
+            draw: RuleSource::Engine,
         };
         assert_eq!(
             candidates(Kind::Inhabited, Some(StellarId(128)), None, &world),
@@ -563,14 +631,194 @@ mod tests {
         );
     }
 
-    /// The world of `stellars` over [`map`] and [`govts`], handed to `f`.
+    /// The world of `stellars` over [`map`] and [`govts`], drawn by the
+    /// engine's reading, handed to `f`.
     fn in_world<T>(stellars: &[Stellar], f: impl FnOnce(&World) -> T) -> T {
+        by(RuleSource::Engine, stellars, f)
+    }
+
+    /// The world of `stellars` over [`map`] and [`govts`], drawn by
+    /// `reading`, handed to `f`.
+    fn by<T>(reading: RuleSource, stellars: &[Stellar], f: impl FnOnce(&World) -> T) -> T {
         let (map, govts) = (map(), govts());
         f(&World {
             stellars,
             map: &map,
             govts: &govts,
+            draw: reading,
         })
+    }
+
+    /// What `code` chooses from 128, never `exclude`, among `stellars` by
+    /// `reading`, drawing `draws`, with the bounds asked.
+    fn drawn(
+        reading: RuleSource,
+        code: i16,
+        exclude: Option<i16>,
+        stellars: &[Stellar],
+        draws: &[u32],
+    ) -> (Option<i16>, Vec<u32>) {
+        by(reading, stellars, |world| {
+            let mut chance = Draws::of(draws);
+            let exclude = exclude.map(StellarId);
+            let chosen = select_stellar(code, Some(StellarId(128)), exclude, world, &mut chance);
+            (chosen.map(|id| id.0), chance.asked)
+        })
+    }
+
+    #[test]
+    fn by_the_engine_minus_2_draws_at_any_distance_once_its_scan_finds_a_distant_stellar() {
+        let stellars = with_origin(&[at(131, 140, 0, None), at(132, 150, 0, None)]);
+        assert_eq!(
+            drawn(RuleSource::Engine, -2, None, &stellars, &[0]),
+            (Some(140), vec![2]),
+            "the scan finds 150 first, and the draw tests 150's distance, not 140's"
+        );
+        assert_eq!(
+            drawn(RuleSource::Bible, -2, None, &stellars, &[0]),
+            (Some(150), vec![1]),
+            "only a distant candidate"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_minus_2_may_draw_in_the_origins_own_system_but_never_the_origin_or_exclude() {
+        let stellars = with_origin(&[
+            at(130, 129, 0, None),
+            at(131, 140, 0, None),
+            at(132, 150, 0, None),
+        ]);
+        let engine = |exclude, draw| drawn(RuleSource::Engine, -2, exclude, &stellars, &[draw]);
+        assert_eq!(engine(None, 0), (Some(129), vec![3]));
+        assert_eq!(engine(Some(129), 0), (Some(140), vec![2]));
+        assert_eq!(engine(Some(140), 1), (Some(150), vec![2]));
+    }
+
+    #[test]
+    fn by_the_engine_minus_2_draws_inhabited_normal_landable_planets() {
+        let unlandable = Stellar {
+            flags: 0,
+            ..at(131, 141, 0, None)
+        };
+        let gate = Stellar {
+            flags2: 0x1000,
+            ..at(131, 142, 0, None)
+        };
+        let stellars = with_origin(&[
+            at(131, 140, 0, None),
+            unlandable,
+            gate,
+            at(131, 143, UNINHABITED, None),
+            at(131, 144, STATION, None),
+            at(132, 150, 0, None),
+        ]);
+        assert_eq!(
+            drawn(RuleSource::Engine, -2, None, &stellars, &[1]),
+            (Some(150), vec![2]),
+            "140 and 150 only"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_distant_station_opens_minus_2s_scan() {
+        let stellars = with_origin(&[at(131, 140, 0, None), at(132, 150, STATION, None)]);
+        assert_eq!(
+            drawn(RuleSource::Engine, -2, None, &stellars, &[0]),
+            (Some(140), vec![1]),
+            "the scan does not test for a station (@0x9a2c7-0x9a330)"
+        );
+        assert_eq!(
+            drawn(RuleSource::Bible, -2, None, &stellars, &[0]),
+            (Some(128), vec![]),
+        );
+    }
+
+    #[test]
+    fn by_the_engine_minus_2_gives_the_origin_when_its_scan_finds_nothing_distant() {
+        let unlandable = Stellar {
+            flags: 0,
+            ..at(132, 151, 0, None)
+        };
+        let gate = Stellar {
+            flags2: 0x1000,
+            ..at(132, 152, 0, None)
+        };
+        let stellars = with_origin(&[
+            at(130, 129, 0, None),
+            at(131, 140, 0, None),
+            at(132, 150, UNINHABITED, None),
+            unlandable,
+            gate,
+            at(133, 160, 0, None),
+        ]);
+        assert_eq!(
+            drawn(RuleSource::Engine, -2, Some(160), &stellars, &[0]),
+            (Some(128), vec![]),
+            "nothing distant but the exclude: the crash-log path returns the origin (@0x9b02a-0x9b072)"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_an_origin_of_no_visible_system_has_no_distant_stellar_for_minus_2() {
+        let stellars = [at(130, 129, 0, None), at(132, 150, 0, None)];
+        assert_eq!(
+            drawn(RuleSource::Engine, -2, None, &stellars, &[0]),
+            (Some(128), vec![]),
+            "its system is -1 (@0x9d1d-0x9d24)"
+        );
+        assert_eq!(
+            drawn(RuleSource::Bible, -2, None, &stellars, &[0]),
+            (Some(129), vec![2]),
+        );
+    }
+
+    #[test]
+    fn where_the_original_draws_forever_both_readings_give_the_origin_drawing_nothing() {
+        // The scan passes the distant station 150, but nothing passes the
+        // draw: 150 is a station and 140, the only other planet, is
+        // excluded. A loop over `Draws`, which gives its last outcome
+        // forever, would never end.
+        let stellars = with_origin(&[at(131, 140, 0, None), at(132, 150, STATION, None)]);
+        for reading in RuleSource::ALL {
+            assert_eq!(
+                drawn(reading, -2, Some(140), &stellars, &[]),
+                (Some(128), vec![]),
+                "{reading:?}"
+            );
+        }
+        let only_a_station = with_origin(&[at(132, 150, STATION, None)]);
+        for reading in RuleSource::ALL {
+            assert_eq!(
+                drawn(reading, -2, None, &only_a_station, &[]),
+                (Some(128), vec![]),
+                "{reading:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_other_random_codes_draw_the_same_by_either_reading() {
+        let stellars = with_origin(&[
+            at(130, 129, UNINHABITED, Some(FED)),
+            at(131, 140, UNINHABITED, Some(FED)),
+            at(132, 150, UNINHABITED, Some(FED)),
+            at(132, 151, 0, Some(FED)),
+            at(133, 160, UNINHABITED, Some(FED)),
+            at(133, 161, 0, Some(CIVVIES)),
+        ]);
+        for code in [-3, 10000, 15000, 20000, 25000, 30000, 31000] {
+            let draws = |reading| drawn(reading, code, Some(160), &stellars, &[0]);
+            assert_eq!(
+                draws(RuleSource::Engine),
+                draws(RuleSource::Bible),
+                "{code}"
+            );
+        }
+        assert_eq!(
+            drawn(RuleSource::Engine, -3, None, &stellars, &[0]),
+            (Some(150), vec![2]),
+            "distant from the origin, as the drawn stellar's distance is tested (@0x9a52c-0x9a536)"
+        );
     }
 
     #[test]
@@ -697,6 +945,7 @@ mod tests {
             stellars: &stellars,
             map: &map,
             govts: &govts,
+            draw: RuleSource::Engine,
         };
         assert_eq!(world.system_of(StellarId(160)), Some(SystemId(132)));
         assert_eq!(world.system_of(StellarId(128)), None, "in a hidden system");

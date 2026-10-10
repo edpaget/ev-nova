@@ -99,7 +99,12 @@
 //! (`_RandomizeOneMission` @0xa14d1, [`resolve`]):
 //!
 //! 1. its destination: none for `TravelStel` -1, else the stellar the
-//!    code chooses from the docked stellar ([`select_stellar`]);
+//!    code chooses from the docked stellar ([`select_stellar`]), a
+//!    random -2 drawn as
+//!    [`mission_stellar_draw`](crate::RuleKey::MissionStellarDraw) reads:
+//!    by the engine at any distance once the original's scan finds a
+//!    distant stellar (`_SelectMissionStellar` @0x9a3ce-0x9a3db), by the
+//!    other reading only a distant one;
 //! 2. its return: the destination for `ReturnStel` -1, else the stellar
 //!    the code chooses, never the destination;
 //! 3. its cargo: `CargoType` 0-999 as it is, 1000 a `Rand(6)` commodity,

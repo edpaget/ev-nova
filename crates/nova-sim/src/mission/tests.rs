@@ -93,6 +93,16 @@ impl Galaxy {
         }
     }
 
+    /// The galaxy, its random -2 drawn by the Bible's reading of
+    /// [`RuleKey::MissionStellarDraw`]: phase 1's draw.
+    fn by_bible() -> Self {
+        Self {
+            rules: Rulebook::default()
+                .with_override(RuleKey::MissionStellarDraw, RuleSource::Bible),
+            ..Self::new()
+        }
+    }
+
     /// A visit docked at 128 in 130, by a pilot of a clean record and no
     /// rating in ship 128 (`InherentAI` 1, of no government) with a full
     /// tank (300), 20 tons free and 1000 credits, contributing nothing,
@@ -105,6 +115,7 @@ impl Galaxy {
                 stellars: &self.stellars,
                 map: &self.map,
                 govts: &self.govts,
+                draw: self.rules.source_for(RuleKey::MissionStellarDraw),
             },
             player: Player {
                 record: 0,
@@ -910,7 +921,8 @@ fn courier() -> MissionRecord {
 
 #[test]
 fn an_offer_resolves_its_values_in_the_originals_draw_order() {
-    let galaxy = Galaxy::new();
+    // Phase 1's draw: only distant candidates.
+    let galaxy = Galaxy::by_bible();
     let visit = galaxy.visit();
     let mut chance = Draws::of(&[1, 4, 7]);
     let offer = resolve(
@@ -947,7 +959,8 @@ fn an_offer_resolves_its_values_in_the_originals_draw_order() {
 
 #[test]
 fn a_return_draws_never_the_destination_and_minus_4_returns_to_the_origin() {
-    let galaxy = Galaxy::new();
+    // Phase 1's draw: only distant candidates.
+    let galaxy = Galaxy::by_bible();
     let visit = galaxy.visit();
     let mut chance = Draws::of(&[0, 0]);
     let there_and_back = with(|m| {
@@ -1142,7 +1155,8 @@ fn ids(offers: &[Offer]) -> Vec<i16> {
 
 #[test]
 fn a_roll_draws_the_table_then_resolves_the_computers_offers_then_the_others() {
-    let galaxy = Galaxy::new();
+    // Phase 1's draw: only distant candidates.
+    let galaxy = Galaxy::by_bible();
     let visit = galaxy.visit();
     let mut chance = Draws::of(&[]);
     let mut offers = Offers::default();
@@ -1256,7 +1270,8 @@ fn an_active_mission_is_skipped_by_a_roll() {
 
 #[test]
 fn a_reoffer_lists_and_resolves_again_keeping_the_table() {
-    let galaxy = Galaxy::new();
+    // Phase 1's draw: only distant candidates.
+    let galaxy = Galaxy::by_bible();
     let visit = galaxy.visit();
     let mut offers = Offers::default();
     offers.roll(&catalog(), &visit, &mut NeverFires);

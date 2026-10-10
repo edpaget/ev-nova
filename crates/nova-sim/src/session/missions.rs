@@ -905,6 +905,7 @@ impl Session {
             stellars: &stellars,
             map: self.galaxy.map(),
             govts: &self.govts,
+            draw: self.rules.source_for(RuleKey::MissionStellarDraw),
         })
     }
 
@@ -1163,8 +1164,8 @@ mod tests {
         let _ = session.settle_script(&catalog, &mut chance);
         assert_eq!(
             chance.asked,
-            table_then(&[1]),
-            "the table, then 130's stellar"
+            table_then(&[3]),
+            "the table, then 130's stellar: 129, 140 or 150, at any distance"
         );
         let offers = session.mission_offers(Venue::Computer);
         assert_eq!(ids(offers), [130, 131], "132's roll of 100 is above 10");
@@ -1177,6 +1178,28 @@ mod tests {
         assert_eq!(offers[0].destination, stop(150, 132));
         assert_eq!(offers[1].destination, stop(140, 131));
         assert!(session.mission_offers(Venue::Outside).is_empty());
+    }
+
+    #[test]
+    fn each_reading_of_the_mission_stellar_draw_reaches_an_offers_destination() {
+        let catalog = offering();
+        let bible =
+            Rulebook::default().with_override(RuleKey::MissionStellarDraw, RuleSource::Bible);
+        for (rules, to, asked) in [(Rulebook::default(), (129, 130), 3), (bible, (150, 132), 1)] {
+            let mut session = Session::start(&catalog).expect("starts").with_rules(rules);
+            assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+            let mut chance = Draws::arriving(&[0]);
+            let _ = session.settle_script(&catalog, &mut chance);
+            assert_eq!(chance.asked, table_then(&[asked]), "{to:?}");
+            assert_eq!(
+                session.mission_offers(Venue::Computer)[0].destination,
+                Some(Stop {
+                    stellar: StellarId(to.0),
+                    system: Some(SystemId(to.1)),
+                }),
+                "by the engine 129, in the origin's own system; by the other reading the distant 150"
+            );
+        }
     }
 
     #[test]
@@ -1226,7 +1249,7 @@ mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         let mut chance = Draws::of(&[]);
         let _ = session.settle_script(&catalog, &mut chance);
-        assert_eq!(chance.asked, table_then(&[1]));
+        assert_eq!(chance.asked, table_then(&[3]));
         assert_eq!(ids(session.mission_offers(Venue::Computer)), [130, 131]);
     }
 
@@ -1273,7 +1296,7 @@ mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         let mut chance = Draws::of(&[]);
         let _ = session.settle_script(&catalog, &mut chance);
-        assert_eq!(chance.asked, table_then(&[1]));
+        assert_eq!(chance.asked, table_then(&[3]));
         assert_eq!(session.offer_rolls().roll(MissionId(130)), Some(100));
     }
 
@@ -1308,7 +1331,7 @@ mod tests {
         assert!(session.mission_offers(Venue::Computer).is_empty());
         let mut chance = Draws::of(&[]);
         let _ = session.settle_script(&catalog, &mut chance);
-        assert_eq!(chance.asked, table_then(&[1]));
+        assert_eq!(chance.asked, table_then(&[3]));
         assert_eq!(ids(session.mission_offers(Venue::Computer)), [130, 131]);
     }
 
