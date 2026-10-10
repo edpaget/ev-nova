@@ -77,6 +77,7 @@
 //! | [`TradeDebt`](RuleKey::TradeDebt) | `trade_debt` | a buy divides the cash, signed, by the price, so with cash below 0 a `jünk` priced exactly at the cash is bought, 1 ton, leaving the cash at 0; Buy is refused while cash < price under both readings (`_DoTradeDialog` @0x5e21d-0x5e234; `_CanBuyGoods` @0xccec-0xcd31; [`Market::tons`](crate::Market::tons)) | cash below 0 counts as none‡‡‡ |
 //! | [`TechLevel`](RuleKey::TechLevel) | `tech_level` | an outfit of `TechLevel` below 0 or exactly 32767, and a ship of one below 0, is never sold by tech (`_SetupPortAvailableItems` @0xbf88-0xbf9d, `_SetupPortAvailableShipTypes` @0xbc4f-0xbc52; [`wares::outfit_tech_allows`](crate::wares::outfit_tech_allows), [`wares::ship_tech_allows`](crate::wares::ship_tech_allows)); and `_CanBuyOutfitItem` tests an outfit's Buy apart: one of `TechLevel` -1 always passes, any other passes at or below the stellar's tech or by a slot, with no sign or 0x7fff test (@0x4e7ff-0x4e83d; [`wares::outfit_buy_tech_allows`](crate::wares::outfit_buy_tech_allows)) | any `TechLevel` at or below the stellar's, or equal to a slot, is sold, and can be bought, by that one test ([`wares::by_tech_level`](crate::wares::by_tech_level)) |
 //! | [`PurchaseCarry`](RuleKey::PurchaseCarry) | `purchase_carry` | a ship purchase keeps every persistent outfit (`Flags` 0x0004) whatever its `Max` and mass, sells none back, and adds the new class's default items on top (`_DoShipyardDialog` @0x5ee1b-0x5ee97; [`Session`](crate::Session)) | each is kept up to its `Max` and while the new ship's free mass holds it, by ascending ID, and the rest sold back at the outfitter's rate on the old ship's mass\*\*\*\*\* |
+//! | [`ShipInfoRounding`](RuleKey::ShipInfoRounding) | `ship_info_rounding` | the Shipyard Info panel reads `Speed` / 100 and `Accel` / 10000 back from the loader's single floats, so `Speed` 190 draws 189 and `Accel` 130 and 250 rate a step higher (`_LoadObjectData` @0x7a0b3-0x7a0ef, `_ShipDescDialogUpdate` @0x4fbf0-0x4fbfe, @0x4fc74-0x4fd05; [`ShipSpecs`](crate::ShipSpecs)) | `Speed` as recorded and `Accel` rated on whole numbers\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -84,7 +85,7 @@
 //! `remove_refund`, `refit_reserves`, `purchase_paint_order`,
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
 //! `ship_change_reserves`, `move_arrival`, `move_keep_flag`,
-//! `script_sound` or `comm_quote`
+//! `script_sound`, `ship_info_rounding` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -901,6 +902,13 @@ rule_keys! {
     /// Bible says only that a persistent outfit "stays with you when you
     /// trade ships" (see [`shipyard`](crate::shipyard)).
     PurchaseCarry => "purchase_carry",
+    /// The Shipyard Info panel's Speed and Accel: by the engine, through
+    /// the loader's single-precision `Speed` / 100 and `Accel` / 10000, so
+    /// Speed can draw one less than recorded and Accel 130 and 250 rate a
+    /// step higher; otherwise exact (see [`ShipSpecs`](crate::ShipSpecs)).
+    /// The Bible is silent here, so the other reading is the intended
+    /// behaviour, not anything the Bible says.
+    ShipInfoRounding => "ship_info_rounding",
 }
 
 impl RuleKey {
@@ -1166,7 +1174,12 @@ mod tests {
             RuleKey::from_key("purchase_carry"),
             Some(RuleKey::PurchaseCarry)
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::PurchaseCarry));
+        assert_eq!(RuleKey::ShipInfoRounding.key(), "ship_info_rounding");
+        assert_eq!(
+            RuleKey::from_key("ship_info_rounding"),
+            Some(RuleKey::ShipInfoRounding)
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::ShipInfoRounding));
     }
 
     #[test]
@@ -1236,7 +1249,8 @@ mod tests {
                 RuleKey::TradeCount,
                 RuleKey::TradeDebt,
                 RuleKey::TechLevel,
-                RuleKey::PurchaseCarry
+                RuleKey::PurchaseCarry,
+                RuleKey::ShipInfoRounding
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
@@ -1263,6 +1277,7 @@ mod tests {
         assert_eq!(RuleKey::LongAdvice.key(), "long_advice");
         assert_eq!(RuleKey::EscortAi.key(), "escort_ai");
         assert_eq!(RuleKey::EscortOrders.key(), "escort_orders");
+        assert_eq!(RuleKey::ShipInfoRounding.key(), "ship_info_rounding");
         for rule in RuleKey::ALL {
             assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
         }

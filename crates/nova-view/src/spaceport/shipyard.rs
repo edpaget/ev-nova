@@ -219,7 +219,7 @@ pub fn price_lines(shipyard: &Shipyard, row: &ShipRow) -> Vec<(&'static str, Str
 /// The info panel's lines for `row`'s ship.
 #[must_use]
 pub fn stat_lines(row: &ShipRow) -> Vec<String> {
-    spec_lines(row.specs)
+    spec_lines(&row.specs)
 }
 
 /// The info panel's lines for a ship of `specs`: its speed,
@@ -227,7 +227,7 @@ pub fn stat_lines(row: &ShipRow) -> Vec<String> {
 /// length, mass, crew and how many jumps its fuel holds. Space, Cargo and
 /// Mass take "ton" at exactly 1 and "tons" otherwise.
 #[must_use]
-pub fn spec_lines(specs: ShipSpecs) -> Vec<String> {
+pub fn spec_lines(specs: &ShipSpecs) -> Vec<String> {
     let fields = specs.fields;
     let [speed, accel, turn, guns, turrets, space, length, mass, crew] = STAT_LABELS;
     let mut lines = vec![
@@ -1044,6 +1044,8 @@ mod tests {
         length: 26,
         crew: 4,
         space: 12,
+        rounding: nova_sim::RuleSource::Engine,
+        weapons: Vec::new(),
     };
 
     fn row(id: i16, short_name: &str, price: i64) -> ShipRow {
@@ -2063,7 +2065,7 @@ mod tests {
     #[test]
     fn the_space_cargo_and_mass_lines_have_a_ton_at_exactly_1() {
         let lines = |space, holds, mass| {
-            spec_lines(ShipSpecs {
+            spec_lines(&ShipSpecs {
                 fields: ShipFields {
                     holds,
                     mass,

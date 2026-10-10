@@ -2179,6 +2179,8 @@ mod tests {
                     length: 0,
                     crew: 0,
                     space: 0,
+                    rounding: nova_sim::RuleSource::Engine,
+                    weapons: Vec::new(),
                 },
                 facts: ShipFacts { buyable: true },
             }],
@@ -2430,6 +2432,8 @@ mod tests {
                         length: 0,
                         crew: 0,
                         space: 0,
+                        rounding: nova_sim::RuleSource::Engine,
+                        weapons: Vec::new(),
                     },
                     hire: Ok(()),
                 })

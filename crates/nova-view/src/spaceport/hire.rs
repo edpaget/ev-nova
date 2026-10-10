@@ -302,7 +302,7 @@ impl HireScreen {
         let Some(row) = self.selected_row() else {
             return;
         };
-        let (title, lines) = (row.name.clone(), spec_lines(row.specs));
+        let (title, lines) = (row.name.clone(), spec_lines(&row.specs));
         let Ok(laid) = &self.laid else {
             return;
         };
@@ -609,6 +609,8 @@ mod tests {
                 length: 20,
                 crew: 3,
                 space: 0,
+                rounding: nova_sim::RuleSource::Engine,
+                weapons: Vec::new(),
             },
             hire,
         }

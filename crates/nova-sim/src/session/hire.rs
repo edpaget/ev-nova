@@ -367,6 +367,8 @@ mod tests {
                     length: 20,
                     crew: 3,
                     space: 30,
+                    rounding: RuleSource::Engine,
+                    weapons: Vec::new(),
                 },
                 hire: Ok(()),
             }

@@ -428,7 +428,12 @@ impl Bar<'_> {
                     short_name: ship.short_name.clone(),
                     fee,
                     wage: self.terms.wage(ship),
-                    specs: ShipSpecs::of(ship, self.arsenal, self.outfits),
+                    specs: ShipSpecs::of(
+                        ship,
+                        self.arsenal,
+                        self.outfits,
+                        self.rules.source_for(RuleKey::ShipInfoRounding),
+                    ),
                     hire,
                 },
             ));
@@ -448,6 +453,7 @@ mod tests {
     use crate::catalog::{HullRecord, OutfitRecord, StockWeapon, WeaponId};
     use crate::combat::armament::{Arsenal, MOD_WEAPON};
     use crate::handling::ShipFields;
+    use crate::shipyard::StockLine;
     use crate::testkit::{FAST, hull, outfit, planet, ship};
 
     /// A site of tech level `tech`.
@@ -599,6 +605,8 @@ mod tests {
                 length: 0,
                 crew: 0,
                 space: 0,
+                rounding: RuleSource::Engine,
+                weapons: Vec::new(),
             },
             hire: if id == 129 {
                 Err(HireRefusal::CannotAfford)
@@ -662,5 +670,62 @@ mod tests {
         };
         let list = bar.list(|_, _| true);
         assert_eq!(list.row(ShipId(129)).map(|row| row.specs.space), Some(0));
+    }
+
+    #[test]
+    fn the_hire_list_gives_each_class_its_rounding_and_stock_lines() {
+        let ships = [ShipRecord {
+            hire_random: 100,
+            ..ship(129, FAST)
+        }];
+        let outfits = [OutfitRecord {
+            name: "Light Blaster;note".to_owned(),
+            ..outfit(150, &[(MOD_WEAPON, 130)])
+        }];
+        let arsenal = Arsenal::new(
+            &[],
+            vec![HullRecord {
+                weapons: vec![StockWeapon {
+                    weapon: WeaponId(130),
+                    count: 2,
+                    ammo: 0,
+                }],
+                ..hull(129)
+            }],
+        );
+        let at = site(7);
+        let specs = |rules| {
+            let bar = Bar {
+                ships: &ships,
+                site: &at,
+                contributed: 0,
+                cash: 0,
+                room: true,
+                terms: &NovaHire::default(),
+                control_bits: Gate::FRESH.control_bits,
+                pilot: Gate::FRESH.pilot,
+                rules,
+                arsenal: &arsenal,
+                outfits: &outfits,
+            };
+            bar.list(|_, _| true)
+                .row(ShipId(129))
+                .expect("listed")
+                .specs
+                .clone()
+        };
+        let engine = specs(Rulebook::default());
+        assert_eq!(engine.rounding, RuleSource::Engine);
+        assert_eq!(
+            engine.weapons,
+            [StockLine {
+                count: 2,
+                name: "Light Blaster".to_owned(),
+                ammo: None,
+            }]
+        );
+        let bible =
+            specs(Rulebook::default().with_override(RuleKey::ShipInfoRounding, RuleSource::Bible));
+        assert_eq!(bible.rounding, RuleSource::Bible);
     }
 }

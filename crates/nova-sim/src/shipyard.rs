@@ -228,18 +228,19 @@
 
 use std::collections::BTreeMap;
 
+use crate::bay::FIGHTER_BAY;
+use crate::catalog::WeaponId;
 use crate::catalog::{LandingSite, OutfitId, OutfitRecord, ShipId, ShipRecord};
 use crate::chance::{Chance, NeverFires};
-use crate::combat::armament::{
-    Arsenal, MOD_AMMO, MOD_WEAPON, StockFit, fit_stock, fitted, holder, holders,
-};
+use crate::combat::armament::{Arsenal, MOD_AMMO, MOD_WEAPON, StockFit, fit_stock, fitted};
+use crate::combat::weapon::Guidance;
 use crate::control::Gate;
 use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
 use crate::market::{EscortHolds, Good, escort_tons, fleet_holds};
 use crate::outfitter::{OutfitFlags, free_mass, outfit_mods, resale, unit_mass, unit_price};
 use crate::pilot::{Pilot, merged, tally};
-use crate::reserves::Reserves;
+use crate::reserves::{Reserves, shield_points};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context, Value};
 use crate::ship_change::{OutfitCarry, carried_outfits};
@@ -320,9 +321,85 @@ pub struct ShipFacts {
     pub buyable: bool,
 }
 
-/// What the shipyard's Info shows of a ship class: from its record, and
-/// its Space worked out from its stock.
+/// A rating word on the Shipyard Info panel's Accel and Turn lines:
+/// `STR#` 2002 #245-250, "Excellent" to "Terrible", or "N/A" (#396) for
+/// none (`_ShipDescDialogUpdate` @0x4fc18-0x4fe12).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rating {
+    /// "N/A" (#396): 0 or below.
+    NotApplicable,
+    /// "Terrible" (#250).
+    Terrible,
+    /// "Poor" (#249).
+    Poor,
+    /// "Average" (#248).
+    Average,
+    /// "Good" (#247).
+    Good,
+    /// "Very Good" (#246).
+    VeryGood,
+    /// "Excellent" (#245).
+    Excellent,
+}
+
+/// The ratings above N/A, lowest first, as [`rated`] steps through them.
+const RATINGS: [Rating; 6] = [
+    Rating::Terrible,
+    Rating::Poor,
+    Rating::Average,
+    Rating::Good,
+    Rating::VeryGood,
+    Rating::Excellent,
+];
+
+/// The rating of `value` on a ladder whose step n is reached strictly
+/// above `bounds[n]`: N/A at or below the first bound, then
+/// [`Rating::Terrible`] to [`Rating::Excellent`].
+fn rated<T: PartialOrd + Copy>(value: T, bounds: [T; 6]) -> Rating {
+    bounds
+        .iter()
+        .zip(RATINGS)
+        .filter(|(bound, _)| value > **bound)
+        .map(|(_, rating)| rating)
+        .last()
+        .unwrap_or(Rating::NotApplicable)
+}
+
+/// The Accel ladder's doubles, which `_ShipDescDialogUpdate` compares the
+/// loader's single float of `Accel` / 10000 against, lowest first
+/// (@0x4fc74-0x4fd05).
+pub(crate) const ACCEL_THRESHOLDS: [f64; 6] = [0.0, 0.013, 0.025, 0.038, 0.055, 0.073];
+
+/// `Accel` as the panel reads it by the engine: `Accel` / 10000 stored as
+/// a single float by the loader (`_LoadObjectData` @0x7a0b3-0x7a0c7) and
+/// widened back to a double.
+pub(crate) fn engine_accel(accel: i16) -> f64 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the loader's single float, as `cvtsd2ss` stores it"
+    )]
+    let stored = (f64::from(accel) / 10_000.0) as f32;
+    f64::from(stored)
+}
+
+/// One line of the Shipyard Info panel's stock-weapons list
+/// (`_ShipDescDialogUpdate` @0x50539-0x50c6d).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StockLine {
+    /// How many: the weapon's count, or for a fighter bay its
+    /// `AmmoLoad`, the fighters it carries.
+    pub count: i64,
+    /// The name of the outfit holding it ([`shown_outfit_name`]), or for
+    /// a bay of the one holding its fighters; empty with no such outfit.
+    pub name: String,
+    /// Its `AmmoLoad` when above 0; always none for a bay.
+    pub ammo: Option<i64>,
+}
+
+/// What the shipyard's Info shows of a ship class: from its record, its
+/// Space and stock-weapons list worked out from its stock, and how its
+/// Speed and Accel are read.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShipSpecs {
     /// Its handling, reserve, cargo and mass fields.
     pub fields: ShipFields,
@@ -337,12 +414,29 @@ pub struct ShipSpecs {
     /// The "Shipyard Info" panel's Space number, worked out when the list
     /// is built ([`space`]).
     pub space: i64,
+    /// How the panel reads `Speed` and `Accel`
+    /// ([`RuleKey::ShipInfoRounding`]), read when the list is built.
+    pub rounding: RuleSource,
+    /// The panel's stock-weapons list, worked out when the list is built
+    /// ([`stock_lines`]).
+    pub weapons: Vec<StockLine>,
+}
+
+/// `value` when above 0, otherwise none: the panel's "None" (#335).
+fn above_none(value: i64) -> Option<i64> {
+    (value > 0).then_some(value)
 }
 
 impl ShipSpecs {
-    /// The specs of class `ship`, its Space worked out from its stock in
-    /// `arsenal` and `outfits`.
-    pub(crate) fn of(ship: &ShipRecord, arsenal: &Arsenal, outfits: &[OutfitRecord]) -> Self {
+    /// The specs of class `ship`, its Space and stock-weapons list worked
+    /// out from its stock in `arsenal` and `outfits`, its Speed and Accel
+    /// read by `rounding`.
+    pub(crate) fn of(
+        ship: &ShipRecord,
+        arsenal: &Arsenal,
+        outfits: &[OutfitRecord],
+        rounding: RuleSource,
+    ) -> Self {
         Self {
             fields: ship.fields,
             max_gun: ship.max_gun,
@@ -350,7 +444,107 @@ impl ShipSpecs {
             length: ship.length,
             crew: ship.crew,
             space: space(ship, arsenal, outfits),
+            rounding,
+            weapons: stock_lines(ship, arsenal, outfits),
         }
+    }
+
+    /// The panel's "Speed:" number (`_ShipDescDialogUpdate`
+    /// @0x4fb78-0x4fc13). By the engine, the loader stores `Speed` / 100
+    /// as a single float (`_LoadObjectData` @0x7a0db-0x7a0ef) and the
+    /// panel multiplies it by 100 and truncates (@0x4fbf0-0x4fbfe), so
+    /// 190 shows 189; otherwise `Speed` as recorded
+    /// ([`RuleKey::ShipInfoRounding`]).
+    #[must_use]
+    pub fn speed_shown(&self) -> i64 {
+        let speed = self.fields.speed;
+        match self.rounding {
+            RuleSource::Engine => {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "the loader's single float, as `cvtsd2ss` stores it"
+                )]
+                let stored = (f64::from(speed) / 100.0) as f32;
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "`cvttsd2si` truncates; within i16 x 100"
+                )]
+                let shown = (f64::from(stored) * 100.0) as i64;
+                shown
+            }
+            RuleSource::Bible => i64::from(speed),
+        }
+    }
+
+    /// The panel's "Accel:" word (@0x4fc18-0x4fd0c). By the engine, the
+    /// loader's single float of `Accel` / 10000 ([`engine_accel`]) above
+    /// 0.073 is [`Rating::Excellent`], above 0.055 Very Good, 0.038 Good,
+    /// 0.025 Average, 0.013 Poor and 0.0 Terrible, else N/A
+    /// (@0x4fc74-0x4fd05): so 130 and 250 rate a step higher than exactly.
+    /// Otherwise `Accel` itself against 730, 550, 380, 250, 130 and 0
+    /// ([`RuleKey::ShipInfoRounding`]).
+    #[must_use]
+    pub fn accel_shown(&self) -> Rating {
+        let accel = self.fields.accel;
+        match self.rounding {
+            RuleSource::Engine => rated(engine_accel(accel), ACCEL_THRESHOLDS),
+            RuleSource::Bible => rated(accel, [0, 130, 250, 380, 550, 730]),
+        }
+    }
+
+    /// The panel's "Turn:" word (@0x4fd11-0x4fe12): `Maneuver` above 50 is
+    /// [`Rating::Excellent`], above 40 Very Good, 30 Good, 20 Average, 10
+    /// Poor and 0 Terrible, else N/A. The loader's float of `Maneuver` x
+    /// 0.1 (@0x7a0f5-0x7a10b), compared as a float (@0x4fd72-0x4fe03),
+    /// gives exactly these whole bounds for every `Maneuver`, so both
+    /// readings agree.
+    #[must_use]
+    pub fn turn_shown(&self) -> Rating {
+        rated(self.fields.maneuver, [0, 10, 20, 30, 40, 50])
+    }
+
+    /// The panel's "Shields:" number: [`shield_points`] of `Shield` when
+    /// above 0, otherwise none, "None" (@0x4fe17-0x4fe9f).
+    #[must_use]
+    pub fn shields_shown(&self) -> Option<i64> {
+        above_none(shield_points(self.fields.shield))
+    }
+
+    /// The panel's "Armor:" number: `Armor` when above 0, otherwise none
+    /// (@0x4fea4-0x4ff2c).
+    #[must_use]
+    pub fn armor_shown(&self) -> Option<i64> {
+        above_none(i64::from(self.fields.armor))
+    }
+
+    /// The panel's "Guns:" "Maximum of N": `MaxGun` when above 0,
+    /// otherwise none (@0x4ff31-0x4fffb).
+    #[must_use]
+    pub fn guns_shown(&self) -> Option<i64> {
+        above_none(i64::from(self.max_gun))
+    }
+
+    /// The panel's "Turrets:" "Maximum of N": `MaxTur` when above 0,
+    /// otherwise none (@0x50000-0x500ca).
+    #[must_use]
+    pub fn turrets_shown(&self) -> Option<i64> {
+        above_none(i64::from(self.max_tur))
+    }
+
+    /// The panel's "Energy:" jumps: none at `Fuel` exactly 0, otherwise
+    /// `Fuel` / 100 truncated toward zero, so -150 is -1
+    /// (@0x5044b-0x50534).
+    #[must_use]
+    pub fn jumps_shown(&self) -> Option<i64> {
+        let fuel = i64::from(self.fields.fuel);
+        (fuel != 0).then_some(fuel / 100)
+    }
+
+    /// The panel's "Crew:" number: `Crew` when above 0; otherwise the
+    /// line is not drawn (@0x50e68-0x50f17).
+    #[must_use]
+    pub fn crew_shown(&self) -> Option<i64> {
+        above_none(i64::from(self.crew))
     }
 
     /// The panel's "Space:" number with its unit: "ton" at exactly 1, else
@@ -607,6 +801,91 @@ pub(crate) fn floored_space(start: i64, taken: impl IntoIterator<Item = i64>) ->
         .fold(start, |space, mass| space.saturating_sub(mass).max(0))
 }
 
+/// Each of `outfits` whose first mod is `mod_type` naming `weapon`, by
+/// ascending ID: the only pair the original's outfit searches read, its
+/// in-memory `ModType`/`ModVal` copied from the record's first pair
+/// (`_LoadObjectData` @0x78b1d-0x78b30).
+fn first_named(
+    outfits: &[OutfitRecord],
+    mod_type: i16,
+    weapon: WeaponId,
+) -> impl Iterator<Item = &OutfitRecord> {
+    let mut named: Vec<&OutfitRecord> = outfits
+        .iter()
+        .filter(|record| record.mods[0] == (mod_type, weapon.0))
+        .collect();
+    named.sort_by_key(|record| record.id);
+    named.into_iter()
+}
+
+/// Class `ship`'s stock weapons, each with its count and `AmmoLoad`: the
+/// last slot naming a weapon gives them (@0x7aa72, @0x7aa90).
+fn stock_by_weapon(ship: &ShipRecord, arsenal: &Arsenal) -> BTreeMap<WeaponId, (i16, i16)> {
+    arsenal
+        .stock_weapons(ship.id)
+        .iter()
+        .map(|stock| (stock.weapon, (stock.count, stock.ammo)))
+        .collect()
+}
+
+/// An outfit's name as the panel's list shows it: up to its last ';',
+/// with trailing spaces and ';'s dropped, or whole without a ';'
+/// (`_LoadObjectData` @0x78ce4-0x78d56).
+pub(crate) fn shown_outfit_name(name: &str) -> &str {
+    match name.rfind(';') {
+        None => name,
+        Some(at) => name[..at].trim_end_matches([' ', ';']),
+    }
+}
+
+/// The Shipyard Info panel's stock-weapons list for class `ship`
+/// (`_ShipDescDialogUpdate` @0x50539-0x50c6d): each stock weapon whose
+/// count is above 0, by ascending ID. A fighter bay (`Guidance` 99,
+/// whatever its `AmmoType`, @0x50753) lists its `AmmoLoad` of the
+/// fighters named by the lowest-ID outfit whose first mod is
+/// [`MOD_AMMO`] naming the bay (@0x50a3b-0x50bdb); any other weapon its
+/// count of the lowest-ID one whose first mod is [`MOD_WEAPON`] naming
+/// it, and its `AmmoLoad` when above 0 (@0x5075f-0x50a36). Neither search
+/// reads `TechLevel`; with no such outfit the name is empty.
+pub(crate) fn stock_lines(
+    ship: &ShipRecord,
+    arsenal: &Arsenal,
+    outfits: &[OutfitRecord],
+) -> Vec<StockLine> {
+    let name = |mod_type, weapon| {
+        first_named(outfits, mod_type, weapon)
+            .next()
+            .map_or_else(String::new, |record| {
+                shown_outfit_name(&record.name).to_owned()
+            })
+    };
+    stock_by_weapon(ship, arsenal)
+        .into_iter()
+        .filter(|&(_, (count, _))| count > 0)
+        .map(|(weapon, (count, ammo))| {
+            let bay = arsenal.weapon(weapon).is_some_and(|spec| {
+                matches!(
+                    spec.guidance,
+                    Guidance::FighterBay | Guidance::Other(FIGHTER_BAY)
+                )
+            });
+            if bay {
+                StockLine {
+                    count: i64::from(ammo),
+                    name: name(MOD_AMMO, weapon),
+                    ammo: None,
+                }
+            } else {
+                StockLine {
+                    count: i64::from(count),
+                    name: name(MOD_WEAPON, weapon),
+                    ammo: (ammo > 0).then_some(i64::from(ammo)),
+                }
+            }
+        })
+        .collect()
+}
+
 /// The "Shipyard Info" panel's Space number for class `ship`, its stock
 /// in `arsenal` and `outfits`, as `_ShipDescDialogUpdate` works it out
 /// (@0x500cf-0x502cb).
@@ -617,49 +896,49 @@ pub(crate) fn floored_space(start: i64, taken: impl IntoIterator<Item = i64>) ->
 /// then takes off, through [`floored_space`]: each stock weapon by
 /// ascending ID (the last slot naming it giving its count and
 /// `AmmoLoad`, @0x7aa72, @0x7aa90), its count of the lowest-ID outfit
-/// whose [`MOD_WEAPON`] mod names it, then its `AmmoLoad` of the lowest-ID
-/// one whose [`MOD_AMMO`] mod names the weapon itself, not its
-/// `AmmoType` (@0x501c5-0x501d0); then each default item in slot order
-/// (@0x5025d-0x502c1). Each takes off only above none of it and with a
-/// record. The original's 16-bit sum into the class (@0x7ab0b) is not
-/// replicated.
+/// whose first mod is [`MOD_WEAPON`] naming it, then its `AmmoLoad` of
+/// the lowest-ID one whose first mod is [`MOD_AMMO`] naming the weapon
+/// itself, not its `AmmoType` (@0x501c5-0x501d0); then each default item
+/// in slot order (@0x5025d-0x502c1). Each takes off only above none of
+/// it and with a record. The searches read only an outfit's first mod
+/// pair (see [`first_named`]), and every step skips an outfit of
+/// `TechLevel` 0x7fff ([`wares::OUTFIT_TECH_NEVER`]): the weapon and
+/// ammunition searches pass over it for the next (`cmpw $0x7fff`
+/// @0x50143, @0x501d2), and such a default item is not taken off at all
+/// (@0x50286). The original's 16-bit sum into the class (@0x7ab0b) is
+/// not replicated.
 pub(crate) fn space(ship: &ShipRecord, arsenal: &Arsenal, outfits: &[OutfitRecord]) -> i64 {
-    let weighed = |outfit: OutfitId, count: u16| {
-        outfits
-            .iter()
-            .find(|record| record.id == outfit)
-            .map(|record| unit_mass(record, ship.fields.mass).saturating_mul(i64::from(count)))
+    let weighed = |record: &OutfitRecord, count: u16| {
+        unit_mass(record, ship.fields.mass).saturating_mul(i64::from(count))
     };
+    let record = |outfit: OutfitId| outfits.iter().find(|record| record.id == outfit);
     let standard = merged(
         &tally(ship.defaults.iter().copied()),
         &arsenal.stock_outfits(ship.id, outfits),
     );
     let start = standard
         .iter()
-        .filter_map(|(&outfit, &count)| weighed(outfit, count))
+        .filter_map(|(&outfit, &count)| Some(weighed(record(outfit)?, count)))
         .fold(i64::from(ship.fields.free_mass), i64::saturating_add);
-    let slots: BTreeMap<_, _> = arsenal
-        .stock_weapons(ship.id)
-        .iter()
-        .map(|stock| (stock.weapon, (stock.count, stock.ammo)))
-        .collect();
-    let weapon_holders = holders(outfits, MOD_WEAPON);
-    let ammo_holders = holders(outfits, MOD_AMMO);
-    let held = |holders: &[_], weapon, count: i16| {
+    let sold = |record: &&OutfitRecord| record.tech_level != wares::OUTFIT_TECH_NEVER;
+    let held = |mod_type, weapon, count: i16| {
         let count = u16::try_from(count).ok().filter(|&count| count > 0)?;
-        weighed(holder(holders, weapon)?, count)
+        let holder = first_named(outfits, mod_type, weapon).find(sold)?;
+        Some(weighed(holder, count))
     };
-    let weapons = slots.into_iter().flat_map(|(weapon, (count, ammo))| {
-        [
-            held(&weapon_holders, weapon, count),
-            held(&ammo_holders, weapon, ammo),
-        ]
-    });
+    let weapons = stock_by_weapon(ship, arsenal)
+        .into_iter()
+        .flat_map(|(weapon, (count, ammo))| {
+            [
+                held(MOD_WEAPON, weapon, count),
+                held(MOD_AMMO, weapon, ammo),
+            ]
+        });
     let defaults = ship
         .defaults
         .iter()
         .filter(|&&(_, count)| count > 0)
-        .map(|&(outfit, count)| weighed(outfit, count));
+        .map(|&(outfit, count)| Some(weighed(record(outfit).filter(sold)?, count)));
     floored_space(start, weapons.chain(defaults).flatten())
 }
 
@@ -743,7 +1022,12 @@ impl Yard<'_> {
                     name: ship.name.clone(),
                     short_name: ship.short_name.clone(),
                     price: price().of(&offer),
-                    specs: ShipSpecs::of(ship, self.arsenal, self.outfits),
+                    specs: ShipSpecs::of(
+                        ship,
+                        self.arsenal,
+                        self.outfits,
+                        self.rules.source_for(RuleKey::ShipInfoRounding),
+                    ),
                     facts: ShipFacts { buyable },
                 },
             ));
@@ -1854,6 +2138,8 @@ mod tests {
                         length: 26,
                         crew: 4,
                         space: 30,
+                        rounding: RuleSource::Engine,
+                        weapons: Vec::new(),
                     },
                     facts: ShipFacts { buyable: true },
                 }],
@@ -3938,6 +4224,17 @@ mod tests {
             length: 0,
             crew: 0,
             space,
+            rounding: RuleSource::Engine,
+            weapons: Vec::new(),
+        }
+    }
+
+    /// The specs of a class of `fields`, read by `rounding`.
+    fn handling(fields: ShipFields, rounding: RuleSource) -> ShipSpecs {
+        ShipSpecs {
+            fields,
+            rounding,
+            ..specs(0, 0, 0)
         }
     }
 
@@ -3971,5 +4268,353 @@ mod tests {
         .shipyard(&pilot(), &mut DayRolls::default(), &mut NeverFires)
         .expect("a shipyard");
         assert_eq!(row(&shipyard, 129).specs.space, 0);
+    }
+
+    // The Shipyard Info panel's other values.
+
+    #[test]
+    fn the_speed_shown_goes_through_single_precision_by_the_engine() {
+        let shown =
+            |speed, rounding| handling(ShipFields { speed, ..FAST }, rounding).speed_shown();
+        for (speed, engine) in [
+            (190, 189),
+            (130, 129),
+            (115, 114),
+            (355, 354),
+            (485, 484),
+            (300, 300),
+            (400, 400),
+            (600, 600),
+            (0, 0),
+            (-190, -189),
+        ] {
+            assert_eq!(shown(speed, RuleSource::Engine), engine, "{speed}");
+        }
+        for speed in [190, 485, -190] {
+            assert_eq!(shown(speed, RuleSource::Bible), i64::from(speed), "{speed}");
+        }
+    }
+
+    #[test]
+    fn the_accel_is_rated_on_the_loaders_float_by_the_engine() {
+        let rated =
+            |accel, rounding| handling(ShipFields { accel, ..FAST }, rounding).accel_shown();
+        for (accel, rating) in [
+            (-5, Rating::NotApplicable),
+            (0, Rating::NotApplicable),
+            (1, Rating::Terrible),
+            (129, Rating::Terrible),
+            (130, Rating::Poor),
+            (249, Rating::Poor),
+            (250, Rating::Average),
+            (380, Rating::Average),
+            (381, Rating::Good),
+            (550, Rating::Good),
+            (551, Rating::VeryGood),
+            (730, Rating::VeryGood),
+            (731, Rating::Excellent),
+            (i16::MAX, Rating::Excellent),
+        ] {
+            assert_eq!(rated(accel, RuleSource::Engine), rating, "{accel}");
+        }
+        for (accel, rating) in [
+            (0, Rating::NotApplicable),
+            (1, Rating::Terrible),
+            (130, Rating::Terrible),
+            (131, Rating::Poor),
+            (250, Rating::Poor),
+            (251, Rating::Average),
+            (380, Rating::Average),
+            (381, Rating::Good),
+            (550, Rating::Good),
+            (551, Rating::VeryGood),
+            (730, Rating::VeryGood),
+            (731, Rating::Excellent),
+        ] {
+            assert_eq!(rated(accel, RuleSource::Bible), rating, "{accel}");
+        }
+    }
+
+    #[test]
+    fn no_accel_float_equals_a_rating_threshold() {
+        // So `>` and `>=` against the engine's double thresholds above
+        // 0.0 choose alike for every `Accel`; 0.0 is met by `Accel` 0.
+        assert_eq!(engine_accel(0), ACCEL_THRESHOLDS[0]);
+        for accel in i16::MIN..=i16::MAX {
+            let float = engine_accel(accel);
+            assert!(
+                !ACCEL_THRESHOLDS[1..].contains(&float),
+                "{accel} widens to a threshold"
+            );
+        }
+    }
+
+    #[test]
+    fn the_turn_is_rated_by_whole_maneuver_under_both_readings() {
+        for rounding in RuleSource::ALL {
+            let rated = |maneuver| handling(ShipFields { maneuver, ..FAST }, rounding).turn_shown();
+            for (maneuver, rating) in [
+                (-3, Rating::NotApplicable),
+                (0, Rating::NotApplicable),
+                (1, Rating::Terrible),
+                (10, Rating::Terrible),
+                (11, Rating::Poor),
+                (20, Rating::Poor),
+                (21, Rating::Average),
+                (30, Rating::Average),
+                (31, Rating::Good),
+                (40, Rating::Good),
+                (41, Rating::VeryGood),
+                (50, Rating::VeryGood),
+                (51, Rating::Excellent),
+            ] {
+                assert_eq!(rated(maneuver), rating, "{maneuver} by {rounding:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn shields_armour_guns_and_turrets_are_none_at_0_or_below() {
+        let fielded = |shield, armor| {
+            handling(
+                ShipFields {
+                    shield,
+                    armor,
+                    ..FAST
+                },
+                RuleSource::Engine,
+            )
+        };
+        assert_eq!(fielded(0, 0).shields_shown(), None);
+        assert_eq!(fielded(30, 0).shields_shown(), Some(30));
+        assert_eq!(fielded(-4, 0).shields_shown(), Some(20));
+        assert_eq!(fielded(0, 0).armor_shown(), None);
+        assert_eq!(fielded(0, -1).armor_shown(), None);
+        assert_eq!(fielded(0, 45).armor_shown(), Some(45));
+        let armed = |max_gun, max_tur| ShipSpecs {
+            max_gun,
+            max_tur,
+            ..specs(0, 0, 0)
+        };
+        assert_eq!(armed(0, 0).guns_shown(), None);
+        assert_eq!(armed(-1, 0).guns_shown(), None);
+        assert_eq!(armed(2, 0).guns_shown(), Some(2));
+        assert_eq!(armed(0, 0).turrets_shown(), None);
+        assert_eq!(armed(0, 1).turrets_shown(), Some(1));
+    }
+
+    #[test]
+    fn the_jumps_are_whole_hundreds_and_none_only_at_0() {
+        let jumps = |fuel| handling(ShipFields { fuel, ..FAST }, RuleSource::Engine).jumps_shown();
+        assert_eq!(jumps(0), None);
+        assert_eq!(jumps(300), Some(3));
+        assert_eq!(jumps(199), Some(1));
+        assert_eq!(jumps(100), Some(1));
+        assert_eq!(jumps(99), Some(0));
+        assert_eq!(jumps(-50), Some(0));
+        assert_eq!(jumps(-150), Some(-1));
+    }
+
+    #[test]
+    fn the_crew_is_shown_only_above_0() {
+        let crew = |crew| {
+            ShipSpecs {
+                crew,
+                ..specs(0, 0, 0)
+            }
+            .crew_shown()
+        };
+        assert_eq!(crew(4), Some(4));
+        assert_eq!(crew(0), None);
+        assert_eq!(crew(-2), None);
+    }
+
+    /// `oütf` `id` named `name`, with these mods.
+    fn named(id: i16, name: &str, mods: &[(i16, i16)]) -> OutfitRecord {
+        OutfitRecord {
+            name: name.to_owned(),
+            ..outfit(id, mods)
+        }
+    }
+
+    /// A stock line of `count` of `name`, with `ammo`.
+    fn line(count: i64, name: &str, ammo: Option<i64>) -> StockLine {
+        StockLine {
+            count,
+            name: name.to_owned(),
+            ammo,
+        }
+    }
+
+    #[test]
+    fn the_stock_lines_list_each_weapon_with_a_count_by_ascending_id() {
+        let class = freeing(129, 0, &[]);
+        let arsenal = stocking(
+            &[weapon(128), weapon(131), weapon(133), weapon(134)],
+            129,
+            &[
+                (131, 1, 10),
+                (128, 2, 0),
+                (128, 3, 0),
+                (133, 0, 5),
+                (134, -1, 0),
+            ],
+        );
+        let outfits = [
+            named(151, "Missile Launcher", &[(MOD_WEAPON, 131)]),
+            named(150, "Light Blaster", &[(MOD_WEAPON, 128)]),
+            named(153, "Spare", &[(MOD_WEAPON, 133)]),
+            named(154, "Broken", &[(MOD_WEAPON, 134)]),
+        ];
+        assert_eq!(
+            stock_lines(&class, &arsenal, &outfits),
+            [
+                line(3, "Light Blaster", None),
+                line(1, "Missile Launcher", Some(10)),
+            ]
+        );
+        for no_ammo in [0, -1] {
+            let arsenal = stocking(&[weapon(131)], 129, &[(131, 1, no_ammo)]);
+            assert_eq!(
+                stock_lines(&class, &arsenal, &outfits),
+                [line(1, "Missile Launcher", None)],
+                "AmmoLoad {no_ammo}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fighter_bay_lists_its_fighters_by_its_ammunition_outfit() {
+        let class = freeing(129, 0, &[]);
+        let bay = |id, ammo_type| WeaponRecord {
+            guidance: crate::bay::FIGHTER_BAY,
+            ammo_type,
+            ..weapon(id)
+        };
+        let outfits = [
+            named(160, "Viper Bay", &[(MOD_WEAPON, 150)]),
+            named(161, "Viper", &[(MOD_AMMO, 150)]),
+            named(162, "Drone", &[(MOD_AMMO, 151)]),
+        ];
+        let arsenal = stocking(
+            &[bay(150, 140), bay(151, 5)],
+            129,
+            &[(150, 1, 4), (151, 2, 3)],
+        );
+        assert_eq!(
+            stock_lines(&class, &arsenal, &outfits),
+            [line(4, "Viper", None), line(3, "Drone", None)]
+        );
+        let empty = stocking(&[bay(150, 140)], 129, &[(150, 1, 0)]);
+        assert_eq!(
+            stock_lines(&class, &empty, &outfits),
+            [line(0, "Viper", None)]
+        );
+    }
+
+    #[test]
+    fn the_stock_lines_name_the_lowest_id_first_mod_holder_and_trim_its_name() {
+        let class = freeing(129, 0, &[]);
+        let arsenal = stocking(&[], 129, &[(128, 1, 0), (129, 1, 0)]);
+        let never = OutfitRecord {
+            tech_level: wares::OUTFIT_TECH_NEVER,
+            ..named(200, "Never", &[(MOD_WEAPON, 128)])
+        };
+        let outfits = [
+            named(201, "Later", &[(MOD_WEAPON, 128)]),
+            never,
+            named(202, "Second", &[(0, 0), (MOD_WEAPON, 129)]),
+        ];
+        assert_eq!(
+            stock_lines(&class, &arsenal, &outfits),
+            [line(1, "Never", None), line(1, "", None)]
+        );
+        for (name, shown) in [
+            ("Wraith Cannon;fire whilst cloaked", "Wraith Cannon"),
+            ("Map ; Sol", "Map"),
+            ("a;b;", "a;b"),
+            ("Plain ", "Plain "),
+            (";T5", ""),
+        ] {
+            assert_eq!(shown_outfit_name(name), shown, "{name:?}");
+            let outfits = [named(150, name, &[(MOD_WEAPON, 128)])];
+            let arsenal = stocking(&[], 129, &[(128, 1, 0)]);
+            assert_eq!(
+                stock_lines(&class, &arsenal, &outfits),
+                [line(1, shown, None)],
+                "{name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_space_walk_reads_the_first_mod_and_skips_tech_0x7fff() {
+        let never = |record: OutfitRecord| OutfitRecord {
+            tech_level: wares::OUTFIT_TECH_NEVER,
+            ..record
+        };
+        // The start (unchanged: any pair, any tech) is -10 + 6 - 4 = -8,
+        // with 1 gun of 130 held by 150 (6 tons, never sold) and the
+        // default item 152 (-4 tons, never sold). The walk takes off the
+        // next holder, 151's 2 (floored to 0), and not 152 at all, so 0;
+        // the old walk took off 150's 6 and then 152's -4, giving 4.
+        let class = freeing(129, -10, &[(152, 1)]);
+        let arsenal = stocking(&[], 129, &[(130, 1, 0)]);
+        let outfits = [
+            never(weighing(150, 6, &[(MOD_WEAPON, 130)])),
+            weighing(151, 2, &[(MOD_WEAPON, 130)]),
+            never(weighing(152, -4, &[])),
+        ];
+        assert_eq!(space(&class, &arsenal, &outfits), 0);
+        // A gun of 130 whose lowest holder, 150, of 5 tons, is never sold,
+        // and the next, 151, of -3: the start is 20 + 5 = 25, less -3 is
+        // 28; the old walk takes off 150's 5, leaving 20.
+        let class = freeing(129, 20, &[]);
+        let outfits = [
+            never(weighing(150, 5, &[(MOD_WEAPON, 130)])),
+            weighing(151, -3, &[(MOD_WEAPON, 130)]),
+        ];
+        assert_eq!(space(&class, &arsenal, &outfits), 28);
+        // A holder naming 130 only in its second pair is ignored: the
+        // start is 20 + 5 = 25 and nothing is taken off; the old walk
+        // takes off 5, leaving 20.
+        let outfits = [weighing(150, 5, &[(0, 0), (MOD_WEAPON, 130)])];
+        assert_eq!(space(&class, &arsenal, &outfits), 25);
+        // The same for ammunition, 2 rounds of 130's: the start is
+        // 20 + 2 x 5 = 30. A second-pair holder is ignored, leaving 30
+        // (the old walk 20); a first-pair one of tech 0x7fff is skipped
+        // for the next, of -1 ton, giving 32 (the old walk 20).
+        let arsenal = stocking(&[weapon(130)], 129, &[(130, 0, 2)]);
+        let outfits = [weighing(150, 5, &[(0, 0), (MOD_AMMO, 130)])];
+        assert_eq!(space(&class, &arsenal, &outfits), 30);
+        let outfits = [
+            never(weighing(150, 5, &[(MOD_AMMO, 130)])),
+            weighing(151, -1, &[(MOD_AMMO, 130)]),
+        ];
+        assert_eq!(space(&class, &arsenal, &outfits), 32);
+    }
+
+    #[test]
+    fn the_shipyard_lists_each_class_with_its_rounding_and_stock_lines() {
+        let ships = [cheap(129)];
+        let outfits = [named(150, "Light Blaster;note", &[(MOD_WEAPON, 130)])];
+        let arsenal = stocking(&[weapon(130)], 129, &[(130, 2, 0)]);
+        let site = port();
+        let listed = |rules| {
+            let shipyard = Yard {
+                arsenal: &arsenal,
+                rules,
+                ..yard(&ships, &outfits, &site)
+            }
+            .shipyard(&pilot(), &mut DayRolls::default(), &mut NeverFires)
+            .expect("a shipyard");
+            row(&shipyard, 129).specs.clone()
+        };
+        let engine = listed(Rulebook::default());
+        assert_eq!(engine.rounding, RuleSource::Engine);
+        assert_eq!(engine.weapons, [line(2, "Light Blaster", None)]);
+        let bible =
+            listed(Rulebook::default().with_override(RuleKey::ShipInfoRounding, RuleSource::Bible));
+        assert_eq!(bible.rounding, RuleSource::Bible);
     }
 }

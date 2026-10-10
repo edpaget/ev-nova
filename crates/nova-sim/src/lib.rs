@@ -330,7 +330,8 @@ pub use session::{
     Settled, ShipChangeRules, StellarPick,
 };
 pub use shipyard::{
-    ShipFacts, ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard,
+    Rating, ShipFacts, ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard,
+    StockLine,
 };
 pub use sound::SimSound;
 pub use stats::ShipStats;
