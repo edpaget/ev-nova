@@ -60,6 +60,7 @@
 //! - Version 19: adds the combat rating. No older save kept one, so the
 //!   upgrade gives 0, the original's value for a pilot with no `chär`
 //!   (@0x76f70).
+//! - Version 20: adds the active missions, none in an older save.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -93,25 +94,36 @@
 //! changes nothing; a `govt` override is `{"govt": id}`, or `{"govt":
 //! null}` for independent (`{"system": 131, "visible": false, "govt":
 //! {"govt": 128}}`).
+//!
+//! The active missions (`missions`) are listed by slot, the free slots
+//! left out: each its `slot` (0 to 15), its `mïsn` ID (`mission`), its
+//! `destination` and `return`, each a `spöb` ID with the `sÿst` it belongs
+//! to (`{"stellar": 150, "system": 132}`, the system `null` when no
+//! visible system listed it) or `null` for none, its `cargo_type` (raw, or
+//! `null`), `cargo_tons` and `pay`, its `days_left` and `deadline` date,
+//! each `null` without a `TimeLimit`, whether its destination is
+//! `reached` and its `goals_met`, and how it `failed`: `null`,
+//! `deadline` or `operator`. A slot past 15 is unusable.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::catalog::{
-    DisasterId, GovtId, JunkId, NebulaId, OutfitId, PersonId, ShipId, StellarId, SystemId,
+    DisasterId, GovtId, JunkId, MissionId, NebulaId, OutfitId, PersonId, ShipId, StellarId,
+    SystemId,
 };
 use crate::control::Bit;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::{ActiveEvent, Good};
-use crate::mission::ActiveMissions;
+use crate::mission::{ActiveMission, ActiveMissions, FailedBy, Stop};
 use crate::outfit_effects::Rgb15;
 use crate::pilot::{Escort, Gender, Pilot};
 use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 19;
+pub const CURRENT: u64 = 20;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -134,7 +146,7 @@ pub enum SaveError {
 }
 
 /// A save's date.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 struct SavedDate {
     year: i32,
     month: u8,
@@ -520,6 +532,146 @@ struct SavedOutfit {
     count: u16,
 }
 
+/// A saved stellar a mission names, with the system it belongs to.
+#[derive(Serialize, Deserialize)]
+struct SavedStop {
+    stellar: i16,
+    #[serde(deserialize_with = "Option::deserialize")]
+    system: Option<i16>,
+}
+
+impl From<Stop> for SavedStop {
+    fn from(stop: Stop) -> Self {
+        Self {
+            stellar: stop.stellar.0,
+            system: stop.system.map(|system| system.0),
+        }
+    }
+}
+
+impl From<SavedStop> for Stop {
+    fn from(saved: SavedStop) -> Self {
+        Self {
+            stellar: StellarId(saved.stellar),
+            system: saved.system.map(SystemId),
+        }
+    }
+}
+
+/// How a saved mission failed.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SavedFailure {
+    Deadline,
+    Operator,
+}
+
+impl From<FailedBy> for SavedFailure {
+    fn from(failed: FailedBy) -> Self {
+        match failed {
+            FailedBy::Deadline => Self::Deadline,
+            FailedBy::Operator => Self::Operator,
+        }
+    }
+}
+
+impl From<SavedFailure> for FailedBy {
+    fn from(saved: SavedFailure) -> Self {
+        match saved {
+            SavedFailure::Deadline => Self::Deadline,
+            SavedFailure::Operator => Self::Operator,
+        }
+    }
+}
+
+/// A saved active mission, in its slot.
+#[derive(Serialize, Deserialize)]
+struct SavedMission {
+    slot: u8,
+    mission: i16,
+    #[serde(deserialize_with = "Option::deserialize")]
+    destination: Option<SavedStop>,
+    #[serde(rename = "return", deserialize_with = "Option::deserialize")]
+    return_to: Option<SavedStop>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    cargo_type: Option<i16>,
+    cargo_tons: i64,
+    pay: i64,
+    #[serde(deserialize_with = "Option::deserialize")]
+    days_left: Option<u32>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    deadline: Option<SavedDate>,
+    reached: bool,
+    goals_met: bool,
+    #[serde(deserialize_with = "Option::deserialize")]
+    failed: Option<SavedFailure>,
+}
+
+impl SavedMission {
+    /// `active`, in `slot`.
+    fn new(slot: u8, active: &ActiveMission) -> Self {
+        Self {
+            slot,
+            mission: active.mission.0,
+            destination: active.destination.map(SavedStop::from),
+            return_to: active.return_to.map(SavedStop::from),
+            cargo_type: active.cargo_type,
+            cargo_tons: active.cargo_tons,
+            pay: active.pay,
+            days_left: active.days_left,
+            deadline: active.deadline.map(SavedDate::from),
+            reached: active.reached,
+            goals_met: active.goals_met,
+            failed: active.failed.map(SavedFailure::from),
+        }
+    }
+}
+
+impl From<GameDate> for SavedDate {
+    fn from(date: GameDate) -> Self {
+        Self {
+            year: date.year(),
+            month: date.month(),
+            day: date.day(),
+        }
+    }
+}
+
+/// The date `saved` names, or why it names none.
+fn date_of(saved: SavedDate) -> Result<GameDate, SaveError> {
+    let SavedDate { year, month, day } = saved;
+    GameDate::new(year, month, day)
+        .ok_or_else(|| SaveError::Unusable(format!("no such date, {day}/{month}/{year}")))
+}
+
+/// The active missions `saved` lists, each in its slot, or why they
+/// cannot be.
+fn missions_of(saved: Vec<SavedMission>) -> Result<ActiveMissions, SaveError> {
+    let mut missions = ActiveMissions::default();
+    for saved in saved {
+        let active = ActiveMission {
+            mission: MissionId(saved.mission),
+            destination: saved.destination.map(Stop::from),
+            return_to: saved.return_to.map(Stop::from),
+            cargo_type: saved.cargo_type,
+            cargo_tons: saved.cargo_tons,
+            pay: saved.pay,
+            days_left: saved.days_left,
+            deadline: saved.deadline.map(date_of).transpose()?,
+            reached: saved.reached,
+            goals_met: saved.goals_met,
+            failed: saved.failed.map(FailedBy::from),
+        };
+        if !missions.put(saved.slot, active) {
+            return Err(SaveError::Unusable(format!(
+                "no such mission slot, {}",
+                saved.slot
+            )));
+        }
+    }
+    Ok(missions)
+}
+
 /// The current version's save. No field has a default: a missing one is
 /// an error.
 #[derive(Serialize, Deserialize)]
@@ -559,6 +711,7 @@ struct Saved {
     paint: Option<SavedPaint>,
     story_fired: Vec<SavedFired>,
     galaxy: SavedGalaxy,
+    missions: Vec<SavedMission>,
 }
 
 /// `pilot` as the current version's save: pretty JSON.
@@ -571,11 +724,7 @@ pub fn encode(pilot: &Pilot) -> String {
         ship_name: pilot.ship_name.clone(),
         system: pilot.system.0,
         stellar: pilot.stellar.map(|stellar| stellar.0),
-        date: SavedDate {
-            year: pilot.date.year(),
-            month: pilot.date.month(),
-            day: pilot.date.day(),
-        },
+        date: pilot.date.into(),
         cash: pilot.cash,
         reserves: pilot.reserves.into(),
         course: pilot.course.iter().map(|system| system.0).collect(),
@@ -644,6 +793,11 @@ pub fn encode(pilot: &Pilot) -> String {
             .map(SavedFired::from)
             .collect(),
         galaxy: (&pilot.galaxy).into(),
+        missions: pilot
+            .missions
+            .iter()
+            .map(|(slot, active)| SavedMission::new(slot, active))
+            .collect(),
     };
     serde_json::to_string_pretty(&saved).expect("plain values always serialise")
 }
@@ -669,6 +823,7 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     galaxy,
     countdowns,
     combat_rating,
+    active_missions,
 ];
 
 /// Version 1 to 2: nothing explored, and no legal records.
@@ -793,6 +948,11 @@ fn combat_rating(save: &mut Value) {
     }
 }
 
+/// Version 19 to 20: no mission active.
+fn active_missions(save: &mut Value) {
+    add_empty(save, &["missions"]);
+}
+
 /// Adds `field` to every entry of `save`'s `list`, as `value`.
 fn add_to_each(save: &mut Value, list: &str, field: &str, value: &Value) {
     let Some(entries) = save.get_mut(list).and_then(Value::as_array_mut) else {
@@ -841,9 +1001,8 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         upgrade(&mut save);
     }
     let saved = Saved::deserialize(save).map_err(|error| unusable(error.to_string()))?;
-    let SavedDate { year, month, day } = saved.date;
-    let date = GameDate::new(year, month, day)
-        .ok_or_else(|| unusable(format!("no such date, {day}/{month}/{year}")))?;
+    let date = date_of(saved.date)?;
+    let missions = missions_of(saved.missions)?;
     Ok(Pilot {
         name: saved.name,
         ship: ShipId(saved.ship),
@@ -912,7 +1071,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
             .map(SubscriptionId::from)
             .collect(),
         galaxy: saved.galaxy.into(),
-        missions: ActiveMissions::default(),
+        missions,
     })
 }
 
@@ -1052,8 +1211,53 @@ mod tests {
             paint: Some(Rgb15 { r: 31, g: 0, b: 4 }),
             story_fired: all_fired(),
             galaxy: overlaid(),
-            missions: ActiveMissions::default(),
+            missions: busy(),
         }
+    }
+
+    /// Slots 2 and 9 taken, every field set, one failed by its deadline
+    /// with a deadline, one by `F` with none.
+    fn busy() -> ActiveMissions {
+        let stop = |stellar, system| {
+            Some(Stop {
+                stellar: StellarId(stellar),
+                system,
+            })
+        };
+        let mut missions = ActiveMissions::default();
+        missions.put(
+            2,
+            ActiveMission {
+                mission: MissionId(140),
+                destination: stop(150, Some(SystemId(132))),
+                return_to: stop(128, None),
+                cargo_type: Some(1000),
+                cargo_tons: 9_000_000_000,
+                pay: -40_050,
+                days_left: Some(4_000_000_000),
+                deadline: GameDate::new(1180, 3, 1),
+                reached: true,
+                goals_met: false,
+                failed: Some(FailedBy::Deadline),
+            },
+        );
+        missions.put(
+            9,
+            ActiveMission {
+                mission: MissionId(141),
+                destination: None,
+                return_to: None,
+                cargo_type: None,
+                cargo_tons: 0,
+                pay: 500,
+                days_left: None,
+                deadline: None,
+                reached: false,
+                goals_met: true,
+                failed: Some(FailedBy::Operator),
+            },
+        );
+        missions
     }
 
     /// A once-only subscription of every consumer fired, out of order.
@@ -1131,7 +1335,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 19);
+        assert_eq!(CURRENT, 20);
         assert_eq!(
             value["galaxy"],
             serde_json::json!({
@@ -1227,7 +1431,7 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert!(text.contains("\n  \"version\": 19"), "{text}");
+        assert!(text.contains("\n  \"version\": 20"), "{text}");
     }
 
     /// A version 1 save: before explored systems and legal records.
@@ -2290,6 +2494,110 @@ mod tests {
         }
     }"#;
 
+    /// A version 19 save: before the active missions.
+    const VERSION_19: &str = r#"{
+        "version": 19,
+        "name": "Courier",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [],
+        "combat_rating": 7,
+        "cargo": [],
+        "events": [],
+        "outfits": [],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [],
+        "gender": "male",
+        "paint": null,
+        "story_fired": [],
+        "galaxy": {"systems": [], "stellars": [], "nebulae": []}
+    }"#;
+
+    #[test]
+    fn an_older_save_loads_with_no_active_missions() {
+        let pilot = decode(VERSION_19).expect("loads");
+        assert_eq!(pilot.name(), "Courier");
+        assert_eq!(pilot.combat_rating(), 7);
+        assert_eq!(pilot.missions(), &ActiveMissions::default());
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["missions"], serde_json::json!([]));
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [VERSION_18, VERSION_17, VERSION_1] {
+            let pilot = decode(text).expect("loads");
+            assert_eq!(pilot.missions(), &ActiveMissions::default(), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_active_missions_are_saved_by_slot() {
+        let value: serde_json::Value = serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        assert_eq!(
+            value["missions"],
+            serde_json::json!([
+                {
+                    "slot": 2,
+                    "mission": 140,
+                    "destination": {"stellar": 150, "system": 132},
+                    "return": {"stellar": 128, "system": null},
+                    "cargo_type": 1000,
+                    "cargo_tons": 9_000_000_000_i64,
+                    "pay": -40_050,
+                    "days_left": 4_000_000_000_u32,
+                    "deadline": {"year": 1180, "month": 3, "day": 1},
+                    "reached": true,
+                    "goals_met": false,
+                    "failed": "deadline"
+                },
+                {
+                    "slot": 9,
+                    "mission": 141,
+                    "destination": null,
+                    "return": null,
+                    "cargo_type": null,
+                    "cargo_tons": 0,
+                    "pay": 500,
+                    "days_left": null,
+                    "deadline": null,
+                    "reached": false,
+                    "goals_met": true,
+                    "failed": "operator"
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn a_mission_in_no_slot_or_on_no_date_is_unusable() {
+        let with_slot = |slot: i64, day: u8| {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&encode(&seasoned())).expect("JSON");
+            value["missions"][0]["slot"] = serde_json::json!(slot);
+            value["missions"][0]["deadline"]["day"] = serde_json::json!(day);
+            value.to_string()
+        };
+        assert_eq!(unusable(&with_slot(16, 1)), "no such mission slot, 16");
+        assert_eq!(unusable(&with_slot(2, 32)), "no such date, 32/3/1180");
+        assert!(!unusable(&with_slot(-1, 1)).is_empty());
+        assert_eq!(
+            decode(&with_slot(15, 1)).map(|pilot| pilot.missions().holding(MissionId(140))),
+            Ok(vec![15])
+        );
+    }
+
     #[test]
     fn an_older_save_loads_with_a_combat_rating_of_0() {
         let pilot = decode(VERSION_18).expect("loads");
@@ -2565,12 +2873,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 19", "\"version\": 20");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 20 }));
+        let newer = encode(&seasoned()).replace("\"version\": 20", "\"version\": 21");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 21 }));
         assert_eq!(
-            SaveError::Newer { version: 20 }.to_string(),
+            SaveError::Newer { version: 21 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 20, and this version of Nova reads up to 19)."
+             (it is version 21, and this version of Nova reads up to 20)."
         );
     }
 
