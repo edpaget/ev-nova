@@ -17,12 +17,13 @@ use nova_data::records::outfit::Outfit;
 use nova_data::records::person::Person;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
+use nova_data::records::spin::Spin;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::string::StrResource;
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::records::weapon::Weapon;
-use nova_data::{GameData, Record};
+use nova_data::{GameData, Record, stellar_spin_id};
 
 use crate::blink::Blink;
 use crate::catalog::{
@@ -30,9 +31,10 @@ use crate::catalog::{
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
     GovtRecord, HullRecord, JunkRecord, LandingSite, MissionShip, OutfitId, OutfitRecord,
     Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId,
-    StarSystem, StartDate, StartError, StellarId, StockWeapon, StringPatch, SystemId,
+    StarSystem, StartDate, StartError, StellarId, StellarLife, StockWeapon, StringPatch, SystemId,
     SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
+use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 
@@ -178,6 +180,12 @@ impl PilotCatalog for GameData {
                     .stellar_sprite(id)
                     .ok()
                     .map(|sprite| (sprite.sheet.frame_width(), sprite.sheet.frame_height()));
+                let dead_frame_size = match self.stellar_dead_sprite(id) {
+                    Ok(Some(sprite)) => {
+                        Some((sprite.sheet.frame_width(), sprite.sheet.frame_height()))
+                    }
+                    _ => None,
+                };
                 let mut special_tech = [0; 8];
                 special_tech[..3].copy_from_slice(&stellar.special_tech1_3);
                 special_tech[3..].copy_from_slice(&stellar.special_tech4_8);
@@ -192,6 +200,11 @@ impl PilotCatalog for GameData {
                     special_tech,
                     govt: stellar.govt,
                     flags2: stellar.flags2.bits(),
+                    destroyed: false,
+                    graphic: stellar.graphic_type,
+                    dead_graphic: dead_frame_size.map(|_| stellar.dead_type),
+                    dead_frame_size,
+                    type_counts_frames: counts_frames(self, stellar.graphic_type),
                 })
             })
             .collect()
@@ -313,6 +326,38 @@ impl PilotCatalog for GameData {
             .filter_map(|(id, stellar)| Some((StellarId(id), stellar.ok()?.record.flags.bits())))
             .collect()
     }
+
+    fn stellar_lives(&self) -> Vec<StellarLife> {
+        self.records::<Stellar>()
+            .filter_map(|(id, stellar)| {
+                let stellar = stellar.ok()?.record;
+                Some(StellarLife {
+                    id: StellarId(id),
+                    strength: stellar.strength,
+                    dead_time: stellar.dead_time,
+                    flags2: stellar.flags2.bits(),
+                    explosion: Explosion::decode(stellar.explod_type),
+                    on_destroy: self.set_expr(stellar.on_destroy.as_str()).into(),
+                    on_regen: self.set_expr(stellar.on_regen.as_str()).into(),
+                })
+            })
+            .collect()
+    }
+
+    fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+        let sheet = self.spin_sheet(stellar_spin_id(0)?).ok()?.sheet;
+        Some((sheet.frame_width(), sheet.frame_height()))
+    }
+}
+
+/// Whether graphic type `graphic`'s `spïn` in `data` reads and gives a
+/// frame count above 0, its `xTiles` × `yTiles` in 32 bits, as the
+/// original's `_LoadMasterStellarSprite` multiplies them
+/// (@0x1ed8c-0x1ed97).
+fn counts_frames(data: &GameData, graphic: i16) -> bool {
+    stellar_spin_id(graphic)
+        .and_then(|spin| data.get::<Spin>(spin)?.ok())
+        .is_some_and(|spin| i32::from(spin.record.x_tiles) * i32::from(spin.record.y_tiles) > 0)
 }
 
 /// Reads the records afresh on every call; a session asks each time it
@@ -485,6 +530,7 @@ impl CombatCatalog for GameData {
                     sub_theta: record.sub_theta,
                     sub_limit: record.sub_limit,
                     max_ammo: record.max_ammo,
+                    prox_safety: record.prox_safety,
                 })
             })
             .collect()
@@ -729,6 +775,7 @@ mod tests {
         DisasterId, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties, StarSystem,
         StartDate, StellarId, StockWeapon, WeaponId, WeaponRecord,
     };
+    use crate::combat::weapon::Explosion;
     use crate::control::{Script, Test};
 
     /// One data file, `/data/Nova Data`, holding a fork.
@@ -1451,6 +1498,11 @@ mod tests {
                     special_tech: [0; 8],
                     govt: None,
                     flags2: 0x1200,
+                    destroyed: false,
+                    graphic: 0,
+                    dead_graphic: Some(0),
+                    dead_frame_size: Some((12, 30)),
+                    type_counts_frames: true,
                 },
                 LandingSite {
                     id: StellarId(128),
@@ -1463,9 +1515,157 @@ mod tests {
                     special_tech: [0; 8],
                     govt: None,
                     flags2: 0,
+                    destroyed: false,
+                    graphic: 7,
+                    dead_graphic: Some(0),
+                    dead_frame_size: Some((12, 30)),
+                    type_counts_frames: false,
                 },
             ]
         );
+    }
+
+    /// `bytes`, a `spöb`, with this `DeadType`.
+    fn dead_as(mut bytes: Vec<u8>, dead_type: i16) -> Vec<u8> {
+        put_i16s(&mut bytes, 0x240, &[dead_type]);
+        bytes
+    }
+
+    #[test]
+    fn a_landing_sites_dead_graphic_is_its_dead_type_when_that_sheet_reads() {
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[128, 129, 130, 131, 132])),
+            (Stellar::TYPE, 128, dead_as(stellar(0, 0, 4, 1, 0), 3)),
+            (Stellar::TYPE, 129, dead_as(stellar(0, 0, 4, 1, 0), -1)),
+            (Stellar::TYPE, 130, dead_as(stellar(0, 0, 4, 1, 0), 5)),
+            (Stellar::TYPE, 131, dead_as(stellar(0, 0, 4, 1, 0), 300)),
+            (Stellar::TYPE, 132, dead_as(stellar(0, 0, -2, 1, 0), 6)),
+            (Spin::TYPE, 1003, spin(1003)),
+            (RLED, 1003, sheet(12, 30)),
+            // 1005 names a sheet that is not there.
+            (Spin::TYPE, 1005, spin(1005)),
+            (Spin::TYPE, 1006, spin(1006)),
+            (RLED, 1006, sheet(4, 4)),
+        ]);
+        assert_eq!(
+            data.landing_sites(SystemId(130))
+                .iter()
+                .map(|site| (site.id.0, site.graphic, site.dead_graphic))
+                .collect::<Vec<_>>(),
+            [
+                (128, 4, Some(3)),
+                (129, 4, None),
+                (130, 4, None),
+                (131, 4, None),
+                (132, -2, Some(6)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_landing_sites_dead_frame_size_is_its_dead_type_sheets_frame() {
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[128, 129, 130, 131])),
+            (Stellar::TYPE, 128, dead_as(stellar(0, 0, 4, 1, 0), 3)),
+            (Stellar::TYPE, 129, dead_as(stellar(0, 0, 4, 1, 0), -1)),
+            (Stellar::TYPE, 130, dead_as(stellar(0, 0, 4, 1, 0), 5)),
+            (Stellar::TYPE, 131, dead_as(stellar(0, 0, 3, 1, 0), 6)),
+            (Spin::TYPE, 1003, spin(1003)),
+            (RLED, 1003, sheet(12, 30)),
+            // 1005 names a sheet that is not there.
+            (Spin::TYPE, 1005, spin(1005)),
+            (Spin::TYPE, 1006, spin(1006)),
+            (RLED, 1006, sheet(50, 20)),
+        ]);
+        assert_eq!(
+            data.landing_sites(SystemId(130))
+                .iter()
+                .map(|site| (site.id.0, site.frame_size, site.dead_frame_size))
+                .collect::<Vec<_>>(),
+            [
+                (128, None, Some((12, 30))),
+                (129, None, None),
+                (130, None, None),
+                (131, Some((12, 30)), Some((50, 20))),
+            ]
+        );
+    }
+
+    /// A `spïn` naming `rlëD` 1000, `x_tiles` across and `y_tiles` down.
+    fn tiled(x_tiles: i16, y_tiles: i16) -> Vec<u8> {
+        let mut bytes = spin(1000);
+        put_i16s(&mut bytes, 0x08, &[x_tiles, y_tiles]);
+        bytes
+    }
+
+    #[test]
+    fn a_landing_site_counts_frames_when_its_type_spins_tiles_multiply_above_0() {
+        for (x_tiles, y_tiles, counts) in [
+            (1, 1, true),
+            (6, 6, true),
+            (-2, -3, true),
+            (0, 5, false),
+            (5, 0, false),
+            (-1, 4, false),
+            (4, -1, false),
+            // 32 bits, as the original multiplies: no word wrap.
+            (300, 300, true),
+            (300, -300, false),
+        ] {
+            let data = store(&[
+                (System::TYPE, 130, system_with(&[128])),
+                (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
+                (Spin::TYPE, 1000, tiled(x_tiles, y_tiles)),
+                (RLED, 1000, sheet(12, 30)),
+            ]);
+            assert_eq!(
+                data.landing_sites(SystemId(130))[0].type_counts_frames,
+                counts,
+                "{x_tiles} x {y_tiles}"
+            );
+        }
+        let no_spin = store(&[
+            (System::TYPE, 130, system_with(&[128])),
+            (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
+        ]);
+        assert!(!no_spin.landing_sites(SystemId(130))[0].type_counts_frames);
+    }
+
+    #[test]
+    fn the_fallback_frame_size_is_spin_1000s_frame_when_it_reads() {
+        assert_eq!(
+            store(&[(Spin::TYPE, 1000, spin(1000)), (RLED, 1000, sheet(30, 12))])
+                .fallback_frame_size(),
+            Some((30, 12))
+        );
+        assert_eq!(
+            store(&[(Spin::TYPE, 1000, spin(1000))]).fallback_frame_size(),
+            None
+        );
+        assert_eq!(
+            store(&[(RLED, 1000, sheet(4, 4))]).fallback_frame_size(),
+            None
+        );
+        assert_eq!(
+            store(&[(Spin::TYPE, 1001, spin(1000)), (RLED, 1000, sheet(4, 4))])
+                .fallback_frame_size(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_borrowed_or_shared_game_data_forwards_the_fallback_frame_size() {
+        for (resources, size) in [
+            (
+                vec![(Spin::TYPE, 1000, spin(1000)), (RLED, 1000, sheet(30, 12))],
+                Some((30, 12)),
+            ),
+            (vec![(Spin::TYPE, 1000, spin(1000))], None),
+        ] {
+            let data = std::rc::Rc::new(store(&resources));
+            assert_eq!(PilotCatalog::fallback_frame_size(&data), size, "Rc");
+            assert_eq!(PilotCatalog::fallback_frame_size(&&*data), size, "&");
+        }
     }
 
     #[test]
@@ -2000,6 +2200,59 @@ mod tests {
     }
 
     #[test]
+    fn stellar_lives_list_every_readable_spöb_by_id_with_its_strength_dead_time_flags2_explosion_and_scripts()
+     {
+        let mut whole = stellar(0, 0, 0, 0, 0);
+        whole[0x23C..0x240].copy_from_slice(&70_000_i32.to_be_bytes());
+        put_i16s(&mut whole, 0x242, &[-1, 1004]);
+        whole[0x246..0x249].copy_from_slice(b"b12");
+        whole[0x345..0x34A].copy_from_slice(b"b9 b8");
+        let mut wreck = flagged2(stellar(0, 0, 0, 0, 0), 0x0040 | 0x0020);
+        wreck[0x23C..0x240].copy_from_slice(&(-1_i32).to_be_bytes());
+        put_i16s(&mut wreck, 0x242, &[3, -1]);
+        let data = store(&[
+            (Stellar::TYPE, 130, wreck),
+            (Stellar::TYPE, 128, whole),
+            (Stellar::TYPE, 129, short(stellar(0, 0, 0, 1, 0))),
+        ]);
+        let lives = data.stellar_lives();
+        assert_eq!(
+            lives
+                .iter()
+                .map(|life| (life.id, life.strength, life.dead_time, life.flags2))
+                .collect::<Vec<_>>(),
+            [
+                (StellarId(128), 70_000, -1, 0),
+                (StellarId(130), -1, 3, 0x0060),
+            ],
+            "the unreadable 129 left out"
+        );
+        assert_eq!(
+            lives[0].on_regen.tree().map(|expr| expr.ops.len()),
+            Some(2),
+            "b9 b8"
+        );
+        assert_eq!(lives[1].on_regen, Script::default(), "blank");
+        assert_eq!(
+            lives.iter().map(|life| life.explosion).collect::<Vec<_>>(),
+            [Explosion::decode(1004), None],
+            "-1 for none"
+        );
+        assert!(Explosion::decode(1004).is_some_and(|boom| boom.extra));
+        assert_eq!(
+            lives[0].on_destroy.tree().map(|expr| expr.ops.len()),
+            Some(1),
+            "b12"
+        );
+        assert_eq!(lives[1].on_destroy, Script::default(), "blank");
+        assert!(
+            shared_script(&lives[0].on_regen, &data.stellar_lives()[0].on_regen),
+            "parsed once"
+        );
+        assert_eq!(store(&[]).stellar_lives(), []);
+    }
+
+    #[test]
     fn stellar_flags_lists_every_readable_spöb_by_id_with_its_flags() {
         let data = store(&[
             (Stellar::TYPE, 130, stellar(0, 0, 0, 0x20, 0)),
@@ -2030,7 +2283,7 @@ mod tests {
         bytes[0x48..0x4A].copy_from_slice(&0x8200_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x5A, &[60, 30]);
         bytes[0x66..0x68].copy_from_slice(&0x0003_u16.to_be_bytes());
-        put_i16s(&mut bytes, 0x3E, &[5, 148, -10, 2]);
+        put_i16s(&mut bytes, 0x3E, &[5, 148, -10, 2, 8]);
         put_i16s(&mut bytes, 0x68, &[4, 70, 6]);
         bytes
     }
@@ -2071,6 +2324,7 @@ mod tests {
             sub_theta: -10,
             sub_limit: 2,
             max_ammo: 6,
+            prox_safety: 8,
         };
         assert_eq!(
             data.weapons(),

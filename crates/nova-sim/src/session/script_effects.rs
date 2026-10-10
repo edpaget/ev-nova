@@ -42,6 +42,17 @@
 //! nothing (the original indexes it blindly). Each move makes a save
 //! due. In flight a move gives up a jump being prepared.
 //!
+//! [`Session::run_set`] stays catalog-free, so a script it runs in the
+//! middle of something else (a record's hook) always queues.
+//! [`Session::settle_script`] is the story dispatcher's one dispatch
+//! point: it applies the moves, dispatches the story events raised, then
+//! applies a `Q`'s leave, until nothing is left. The scripts the
+//! dispatcher runs nest, by [`RuleKey::StoryReentry`]'s engine reading:
+//! after each operator, their moves settle and the events raised
+//! dispatch before the next operator. The events a deferred script's
+//! moves raise dispatch from the caller's next `settle_script` (see the
+//! [`story`](crate::story) module's "Dispatch").
+//!
 //! A move enters the system as every way in does, by its rows of the
 //! table in the `entry` module ([`Session::enter_system`]): `move_to`
 //! only chooses where the ship goes, as below.
@@ -62,8 +73,8 @@
 //! [`Session::market`] and the rest read it, until the take-off swaps the
 //! new system's stellars in. There is no other reading of that: an `N`
 //! leaves no stellar to rebuild the spaceport for. By `M` the pilot's
-//! stellar is the first one only when it can be landed on and is not a
-//! hypergate or wormhole, otherwise none: the pilot's stellar is what a
+//! stellar is the first one only when it has the can-land flag and is not
+//! a hypergate or wormhole, otherwise none: the pilot's stellar is what a
 //! save keeps as the stellar last landed on, through the flight after
 //! the take-off too, and [`Session::fly`] docks a reloaded pilot there,
 //! so the original's choice would dock it on a gate or a stellar that
@@ -139,15 +150,20 @@
 //!
 //! Not yet as the original: the mission work its moves do
 //! (`_dockedPortMissions`, `_MissionHandlePlayerEnteredNewSystem`) waits
-//! for missions, and the first stellar is the first of
-//! [`PilotCatalog::landing_sites`] until stellars can be destroyed.
+//! for missions. The first stellar is the first of
+//! [`PilotCatalog::landing_sites`], destroyed or not, as the original
+//! reads neither landability nor the destroyed state there. A landed `M`
+//! docks the pilot at it when it has the can-land flag and is no gate,
+//! destroyed or not and landable only once destroyed or not
+//! ([`is_dockable_destroyed_or_not`]), as the original docks there; only
+//! a gate or a stellar without the can-land flag leaves it on none.
 
 use super::Session;
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
 use crate::catalog::{PilotCatalog, SoundId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::geometry::Vec2;
-use crate::landing::is_dockable;
+use crate::landing::is_dockable_destroyed_or_not;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::sound::SimSound;
 
@@ -229,14 +245,30 @@ impl Session {
     /// Applies what the set expressions run since the last settling
     /// queued (see the module docs): the moves in order, each read from
     /// `catalog`, populating on `chance` where the rules say, then a `Q`'s
-    /// leave. Whoever runs set expressions calls it after each input and
-    /// tick, before saving.
+    /// leave. Before the leave, and after the moves and the leave, the
+    /// story events raised dispatch, each running the subscriptions it
+    /// matches (see the [`story`](crate::story) module's "Dispatch").
+    /// Whoever runs set expressions calls it after each input and tick,
+    /// before saving.
     pub fn settle_script(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) -> Settled {
         let mut settled = Settled::default();
+        self.settle_story(catalog, &mut &mut *chance, &mut settled);
+        settled
+    }
+
+    /// Applies the moves queued, in order, each read from `catalog`,
+    /// populating on `chance` where the rules say, and notes the last on
+    /// `settled`.
+    pub(super) fn settle_moves(
+        &mut self,
+        catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+        settled: &mut Settled,
+    ) {
         for step in std::mem::take(&mut self.queued.moves) {
             let (system, keep) = match step {
                 ScriptMove::To(system) => (system, false),
@@ -244,18 +276,28 @@ impl Session {
             };
             if catalog.system_exists(system) {
                 self.move_to(system, keep, catalog, chance);
-                settled.moved = Some(system);
+                settled.moved = Some(self.pilot.system);
             }
         }
-        if let Some(text) = self.queued.leave.take() {
-            settled.message = Some(text).filter(|text| !text.is_empty());
-            if self.landed.is_some() {
-                settled.took_off = self.take_off();
-            } else if settled.message.is_some() {
-                self.sounds.push(SimSound::ScriptMessage);
-            }
+    }
+
+    /// Applies a `Q`'s leave, if one is pending, noting it on `settled`:
+    /// whether one was.
+    pub(super) fn settle_leave(
+        &mut self,
+        chance: &mut (impl Chance + ?Sized),
+        settled: &mut Settled,
+    ) -> bool {
+        let Some(text) = self.queued.leave.take() else {
+            return false;
+        };
+        settled.message = Some(text).filter(|text| !text.is_empty());
+        if self.landed.is_some() {
+            settled.took_off = self.take_off(chance);
+        } else if settled.message.is_some() {
+            self.sounds.push(SimSound::ScriptMessage);
         }
-        settled
+        true
     }
 
     /// `P`: plays `sound`, held to the next flight tick or at once, as
@@ -302,10 +344,11 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        let sites = catalog.landing_sites(system);
-        let first = sites
-            .first()
-            .map(|site| (site.position, is_dockable(site).then_some(site.id)));
+        let sites = self.read_sites(catalog, system);
+        let first = sites.first().map(|site| {
+            let dock = is_dockable_destroyed_or_not(site).then_some(site.id);
+            (site.position, dock)
+        });
         let rules = self.script_effect_rules();
         let landed = self.landed.is_some();
         let ship = match first {
@@ -327,7 +370,13 @@ impl Session {
             sites,
             placement,
         };
-        self.enter_system(Entry::ScriptMove { landed }, arrival, catalog, chance);
+        self.enter_system(
+            Entry::ScriptMove { landed },
+            arrival,
+            catalog,
+            catalog,
+            chance,
+        );
     }
 }
 
@@ -490,6 +539,7 @@ mod tests {
     fn moved(session: &mut Session, catalog: &FakePilotCatalog, text: &str) {
         run(session, text);
         let _ = settle(session, catalog);
+        session.assert_docked_among_shown();
     }
 
     fn ids(sites: &[LandingSite]) -> Vec<i16> {
@@ -585,6 +635,7 @@ mod tests {
     fn a_move_to_a_system_that_is_not_there_changes_nothing() {
         let catalog = moving();
         let mut session = flying(&catalog);
+        let _ = settle(&mut session, &catalog);
         let before = session.clone();
         run(&mut session, "M150 N999");
         assert_eq!(settle(&mut session, &catalog), Settled::default());
@@ -629,7 +680,7 @@ mod tests {
     fn a_move_in_flight_to_another_system_forgets_the_stellar_last_landed_on() {
         let catalog = moving();
         let mut session = landed(&catalog);
-        assert_eq!(session.take_off(), Some(StellarId(128)));
+        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(128)));
         assert_eq!(session.pilot().stellar(), Some(StellarId(128)), "kept");
         moved(&mut session, &catalog, "M131");
         assert_eq!(session.pilot().stellar(), None);
@@ -649,7 +700,7 @@ mod tests {
     fn a_move_in_flight_within_the_system_keeps_the_stellar_last_landed_on() {
         let catalog = moving();
         let mut session = landed(&catalog);
-        session.take_off();
+        session.take_off(&mut NeverFires);
         moved(&mut session, &catalog, "N130");
         assert_eq!(session.system(), SystemId(130));
         assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
@@ -875,7 +926,7 @@ mod tests {
                 moved(&mut session, &catalog, text);
                 assert_eq!(session.take_sounds(), [], "landed: {case}");
                 assert_eq!(session.take_messages(), [], "landed: {case}");
-                session.take_off();
+                session.take_off(&mut NeverFires);
                 assert_eq!(session.take_sounds(), [SimSound::TookOff], "{case}");
                 session.tick(crate::flight::Controls::default());
                 assert_eq!(
@@ -922,7 +973,7 @@ mod tests {
                 [128, 129],
                 "the port's until the take-off: {reading:?}"
             );
-            session.take_off();
+            session.take_off(&mut NeverFires);
             assert_eq!(ids(&session.sites), [140, 141], "{reading:?}");
         }
     }
@@ -976,7 +1027,7 @@ mod tests {
         let catalog = moving();
         let mut session = landed(&catalog);
         moved(&mut session, &catalog, "M131");
-        assert_eq!(session.take_off(), Some(StellarId(128)));
+        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(128)));
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(ids(&session.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
@@ -985,7 +1036,7 @@ mod tests {
         assert_eq!(session.npcs().len(), 3, "131 populated");
         let mut session = landed(&catalog);
         moved(&mut session, &catalog, "M132");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.player().position, Vec2::ZERO, "the centre");
         assert_eq!(session.sites, []);
     }
@@ -1000,13 +1051,13 @@ mod tests {
         moved(&mut session, &catalog, "N131");
         assert_eq!(session.pilot().stellar(), None);
         assert_eq!(session.landed(), Some(StellarId(128)));
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.player().position, Vec2::new(10.0, -10.0));
         assert_eq!(ids(&session.sites), [140, 141]);
         session.player.position = Vec2::new(-45.0, 0.0);
         land_now(&mut session).expect("lands on 141");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(
             session.player().position,
             Vec2::new(-50.0, 0.0),
@@ -1024,7 +1075,8 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(141))
             .expect("moves");
-        session.take_off();
+        session.assert_docked_among_shown();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(
             session.player().position,
@@ -1053,7 +1105,8 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(141))
             .expect("moves");
-        session.take_off();
+        session.assert_docked_among_shown();
+        session.take_off(&mut NeverFires);
         assert_eq!(ids(&session.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(-50.0, 0.0));
     }
@@ -1069,7 +1122,7 @@ mod tests {
         moved(&mut session, &catalog, text);
         session.player.position = Vec2::new(10.0, -10.0);
         land_now(&mut session).expect("lands");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         session.player().position
     }
 
@@ -1102,7 +1155,7 @@ mod tests {
         session.player.position = Vec2::new(10.0, -10.0);
         land_now(&mut session).expect("lands");
         moved(&mut session, &catalog, "N130");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.player().position, Vec2::new(10.0, -10.0));
     }
 
@@ -1147,7 +1200,7 @@ mod tests {
         run(&mut session, "P300");
         session.tick(crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [], "landed");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.take_sounds(), [SimSound::TookOff]);
         session.tick(crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [mission_sound(300, true)]);
@@ -1177,7 +1230,7 @@ mod tests {
             session.take_sounds(),
             [mission_sound(300, false), mission_sound(301, false)]
         );
-        session.take_off();
+        session.take_off(&mut NeverFires);
         session.take_sounds();
         session.tick(crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [], "nothing held");
@@ -1215,6 +1268,18 @@ mod tests {
         let mut chance = Scripted::rolling(rolls);
         session.run_set(&SetExpr::parse(text).expect("parses"), &mut chance);
         chance.sides_asked
+    }
+
+    #[test]
+    fn a_q_leave_passes_the_take_offs_day() {
+        let catalog = moving();
+        let mut session = told(landed(&catalog));
+        let landed_on = session.date();
+        run_rolling(&mut session, "Q25048", &[2]);
+        assert_eq!(session.date(), landed_on, "nothing yet");
+        let settled = settle(&mut session, &catalog);
+        assert_eq!(settled.took_off, Some(StellarId(128)));
+        assert_eq!(session.date(), landed_on.next_day());
     }
 
     #[test]
@@ -1328,7 +1393,7 @@ mod tests {
         let mut session = landed(&catalog);
         moved(&mut session, &catalog, "M131");
         assert_eq!(session.take_events(), [], "the stellars wait");
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
     }
 
@@ -1339,11 +1404,11 @@ mod tests {
             let mut session = landed(&catalog);
             moved(&mut session, &catalog, text);
             assert_eq!(session.take_events(), [], "{text}: settled");
-            session.take_off();
+            session.take_off(&mut NeverFires);
             assert_eq!(session.take_events(), [], "{text}: taken off");
         }
         let mut session = landed(&catalog);
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.take_events(), [], "a plain take-off");
     }
 

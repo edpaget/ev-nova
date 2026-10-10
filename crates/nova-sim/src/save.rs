@@ -48,6 +48,15 @@
 //!   save's events were all at their record's `Stellar`, which only the
 //!   game data knows, so the upgrade saves `null`, read as the record's
 //!   own stellar. The next save keeps `null`.
+//! - Version 16: adds the once-only story subscriptions that have fired,
+//!   none in an older save.
+//! - Version 17: adds the galaxy overlay, what play has changed of the
+//!   galaxy, nothing in an older save.
+//! - Version 18: a destroyed stellar holds its regeneration countdown. A
+//!   version 17 save held only whether it was destroyed, which no version
+//!   17 writer ever set, so the upgrade gives a destroyed one 0 days left:
+//!   due to regenerate on its next day, as a `Y` with a `DeadTime` of 0
+//!   leaves it.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -68,12 +77,26 @@
 //! are each a list of `përs` IDs. The control bits (`bits`) are the
 //! numbers of the bits set, ascending, and the `gender` is `male` or
 //! `female`. The `paint` is `null` when unpainted, or its red, green and
-//! blue, each 0 to 31 (`{"r": 31, "g": 0, "b": 4}`).
+//! blue, each 0 to 31 (`{"r": 31, "g": 0, "b": 4}`). The once-only story
+//! subscriptions fired (`story_fired`) are each its consumer
+//! (`mission_ships`, `missions`, `crons`, `nebulae`, `plugins` or
+//! `fixture`), record and hook (`{"consumer": "missions", "record": 3,
+//! "hook": 1}`), listed by consumer, record and hook. The galaxy overlay
+//! (`galaxy`) is three lists, each by ascending ID: `systems`, each its
+//! `sÿst` ID, whether it is `visible` and its `govt`; `stellars`, each its
+//! `spöb` ID, its `govt` and, while it is `destroyed`, its regeneration
+//! countdown (`{"days_left": 3}`), else `null`; and `nebulae`, each its
+//! `nëbu` ID and whether it is `active`. A `visible` or `govt` of `null`
+//! changes nothing; a `govt` override is `{"govt": id}`, or `{"govt":
+//! null}` for independent (`{"system": 131, "visible": false, "govt":
+//! {"govt": 128}}`).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::catalog::{DisasterId, GovtId, JunkId, OutfitId, PersonId, ShipId, StellarId, SystemId};
+use crate::catalog::{
+    DisasterId, GovtId, JunkId, NebulaId, OutfitId, PersonId, ShipId, StellarId, SystemId,
+};
 use crate::control::Bit;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
@@ -81,9 +104,10 @@ use crate::market::{ActiveEvent, Good};
 use crate::outfit_effects::Rgb15;
 use crate::pilot::{Escort, Gender, Pilot};
 use crate::reserves::{Gauge, Reserves};
+use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 15;
+pub const CURRENT: u64 = 18;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -301,6 +325,190 @@ struct SavedEvent {
     stellar: Option<i16>,
 }
 
+/// A saved story consumer.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SavedConsumer {
+    MissionShips,
+    Missions,
+    Crons,
+    Nebulae,
+    Plugins,
+    Fixture,
+}
+
+impl From<Consumer> for SavedConsumer {
+    fn from(consumer: Consumer) -> Self {
+        match consumer {
+            Consumer::MissionShips => Self::MissionShips,
+            Consumer::Missions => Self::Missions,
+            Consumer::Crons => Self::Crons,
+            Consumer::Nebulae => Self::Nebulae,
+            Consumer::Plugins => Self::Plugins,
+            Consumer::Fixture => Self::Fixture,
+        }
+    }
+}
+
+impl From<SavedConsumer> for Consumer {
+    fn from(saved: SavedConsumer) -> Self {
+        match saved {
+            SavedConsumer::MissionShips => Self::MissionShips,
+            SavedConsumer::Missions => Self::Missions,
+            SavedConsumer::Crons => Self::Crons,
+            SavedConsumer::Nebulae => Self::Nebulae,
+            SavedConsumer::Plugins => Self::Plugins,
+            SavedConsumer::Fixture => Self::Fixture,
+        }
+    }
+}
+
+/// A saved once-only story subscription that has fired: its id.
+#[derive(Serialize, Deserialize)]
+struct SavedFired {
+    consumer: SavedConsumer,
+    record: i16,
+    hook: u8,
+}
+
+impl From<SubscriptionId> for SavedFired {
+    fn from(id: SubscriptionId) -> Self {
+        Self {
+            consumer: id.consumer.into(),
+            record: id.record,
+            hook: id.hook,
+        }
+    }
+}
+
+impl From<SavedFired> for SubscriptionId {
+    fn from(saved: SavedFired) -> Self {
+        Self {
+            consumer: saved.consumer.into(),
+            record: saved.record,
+            hook: saved.hook,
+        }
+    }
+}
+
+/// A saved government override: `None` for independent.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+struct SavedGovt {
+    #[serde(deserialize_with = "Option::deserialize")]
+    govt: Option<i16>,
+}
+
+impl From<Option<GovtId>> for SavedGovt {
+    fn from(govt: Option<GovtId>) -> Self {
+        Self {
+            govt: govt.map(|govt| govt.0),
+        }
+    }
+}
+
+impl From<SavedGovt> for Option<GovtId> {
+    fn from(saved: SavedGovt) -> Self {
+        saved.govt.map(GovtId)
+    }
+}
+
+/// What the overlay changes of a system.
+#[derive(Serialize, Deserialize)]
+struct SavedSystem {
+    system: i16,
+    #[serde(deserialize_with = "Option::deserialize")]
+    visible: Option<bool>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    govt: Option<SavedGovt>,
+}
+
+/// A destroyed stellar's regeneration countdown.
+#[derive(Serialize, Deserialize)]
+struct SavedCountdown {
+    days_left: u16,
+}
+
+/// What the overlay changes of a stellar: `destroyed` is `None` while it
+/// is not.
+#[derive(Serialize, Deserialize)]
+struct SavedStellar {
+    stellar: i16,
+    #[serde(deserialize_with = "Option::deserialize")]
+    govt: Option<SavedGovt>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    destroyed: Option<SavedCountdown>,
+}
+
+/// Whether a nebula is active, as the overlay says.
+#[derive(Serialize, Deserialize)]
+struct SavedNebula {
+    nebula: i16,
+    active: bool,
+}
+
+/// The saved galaxy overlay, each list by ascending ID.
+#[derive(Serialize, Deserialize)]
+struct SavedGalaxy {
+    systems: Vec<SavedSystem>,
+    stellars: Vec<SavedStellar>,
+    nebulae: Vec<SavedNebula>,
+}
+
+impl From<&GalaxyOverlay> for SavedGalaxy {
+    fn from(overlay: &GalaxyOverlay) -> Self {
+        Self {
+            systems: overlay
+                .systems()
+                .map(|(id, change)| SavedSystem {
+                    system: id.0,
+                    visible: change.visible,
+                    govt: change.govt.map(SavedGovt::from),
+                })
+                .collect(),
+            stellars: overlay
+                .stellars()
+                .map(|(id, change)| SavedStellar {
+                    stellar: id.0,
+                    govt: change.govt.map(SavedGovt::from),
+                    destroyed: change.destroyed.map(|countdown| SavedCountdown {
+                        days_left: countdown.days_left,
+                    }),
+                })
+                .collect(),
+            nebulae: overlay
+                .nebulae()
+                .map(|(id, active)| SavedNebula {
+                    nebula: id.0,
+                    active,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<SavedGalaxy> for GalaxyOverlay {
+    fn from(saved: SavedGalaxy) -> Self {
+        let mut overlay = Self::default();
+        for system in saved.systems {
+            let id = SystemId(system.system);
+            overlay.set_visible(id, system.visible);
+            overlay.set_govt(id, system.govt.map(Option::from));
+        }
+        for stellar in saved.stellars {
+            let id = StellarId(stellar.stellar);
+            overlay.set_stellar_govt(id, stellar.govt.map(Option::from));
+            let destroyed = stellar.destroyed.map(|saved| Countdown {
+                days_left: saved.days_left,
+            });
+            overlay.set_destroyed(id, destroyed);
+        }
+        for nebula in saved.nebulae {
+            overlay.set_nebula_active(NebulaId(nebula.nebula), Some(nebula.active));
+        }
+        overlay
+    }
+}
+
 /// An outfit carried, and how many.
 #[derive(Serialize, Deserialize)]
 struct SavedOutfit {
@@ -344,6 +552,8 @@ struct Saved {
     /// `None` when unpainted.
     #[serde(deserialize_with = "Option::deserialize")]
     paint: Option<SavedPaint>,
+    story_fired: Vec<SavedFired>,
+    galaxy: SavedGalaxy,
 }
 
 /// `pilot` as the current version's save: pretty JSON.
@@ -421,6 +631,13 @@ pub fn encode(pilot: &Pilot) -> String {
         bits: pilot.bits.iter().collect(),
         gender: pilot.gender.into(),
         paint: pilot.paint.map(SavedPaint::from),
+        story_fired: pilot
+            .story_fired
+            .iter()
+            .copied()
+            .map(SavedFired::from)
+            .collect(),
+        galaxy: (&pilot.galaxy).into(),
     };
     serde_json::to_string_pretty(&saved).expect("plain values always serialise")
 }
@@ -442,6 +659,9 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     ship_names,
     stock_weapons,
     event_stellars,
+    story_fired,
+    galaxy,
+    countdowns,
 ];
 
 /// Version 1 to 2: nothing explored, and no legal records.
@@ -523,6 +743,40 @@ fn ship_names(save: &mut Value) {
 /// Version 14 to 15: every event at its record's own stellar.
 fn event_stellars(save: &mut Value) {
     add_to_each(save, "events", "stellar", &Value::Null);
+}
+
+/// Version 15 to 16: no once-only story subscription has fired.
+fn story_fired(save: &mut Value) {
+    add_empty(save, &["story_fired"]);
+}
+
+/// Version 16 to 17: the galaxy as the catalog has it.
+fn galaxy(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert(
+            "galaxy".to_owned(),
+            serde_json::json!({"systems": [], "stellars": [], "nebulae": []}),
+        );
+    }
+}
+
+/// Version 17 to 18: a destroyed stellar due to regenerate on its next
+/// day, one not destroyed with no countdown.
+fn countdowns(save: &mut Value) {
+    let Some(stellars) = save
+        .pointer_mut("/galaxy/stellars")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for stellar in stellars {
+        if let Some(destroyed) = stellar.get_mut("destroyed") {
+            *destroyed = match destroyed {
+                Value::Bool(true) => serde_json::json!({"days_left": 0}),
+                _ => Value::Null,
+            };
+        }
+    }
 }
 
 /// Adds `field` to every entry of `save`'s `list`, as `value`.
@@ -637,6 +891,12 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         bits: saved.bits.into_iter().collect(),
         gender: saved.gender.into(),
         paint: saved.paint.map(Rgb15::from),
+        story_fired: saved
+            .story_fired
+            .into_iter()
+            .map(SubscriptionId::from)
+            .collect(),
+        galaxy: saved.galaxy.into(),
     })
 }
 
@@ -647,7 +907,7 @@ mod tests {
 
     use super::*;
     use crate::catalog::{
-        DisasterId, GovtId, JunkId, OutfitId, PersonId, ShipId, StellarId, SystemId,
+        DisasterId, GovtId, JunkId, NebulaId, OutfitId, PersonId, ShipId, StellarId, SystemId,
     };
     use crate::control::ControlBitSet;
     use crate::date::GameDate;
@@ -655,10 +915,27 @@ mod tests {
     use crate::market::Good;
     use crate::pilot::Escort;
     use crate::reserves::{Gauge, Reserves};
+    use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
     /// An event under way with `days` left, at `stellar`.
     fn active(days: u16, stellar: Option<StellarId>) -> ActiveEvent {
         ActiveEvent { days, stellar }
+    }
+
+    /// An overlay with every kind of change, set out of order.
+    fn overlaid() -> GalaxyOverlay {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(300), Some(true));
+        overlay.set_govt(SystemId(300), Some(Some(GovtId(140))));
+        overlay.set_visible(SystemId(131), Some(false));
+        overlay.set_govt(SystemId(200), Some(None));
+        overlay.set_stellar_govt(StellarId(151), Some(Some(GovtId(128))));
+        overlay.set_destroyed(StellarId(151), Some(Countdown { days_left: 3 }));
+        overlay.set_stellar_govt(StellarId(150), Some(None));
+        overlay.set_destroyed(StellarId(152), Some(Countdown { days_left: 0 }));
+        overlay.set_nebula_active(NebulaId(129), Some(true));
+        overlay.set_nebula_active(NebulaId(128), Some(false));
+        overlay
     }
 
     /// A pilot with every field away from its default.
@@ -756,6 +1033,29 @@ mod tests {
             bits: [0, 512, 9999].into_iter().filter_map(Bit::new).collect(),
             gender: Gender::Female,
             paint: Some(Rgb15 { r: 31, g: 0, b: 4 }),
+            story_fired: all_fired(),
+            galaxy: overlaid(),
+        }
+    }
+
+    /// A once-only subscription of every consumer fired, out of order.
+    fn all_fired() -> BTreeSet<SubscriptionId> {
+        BTreeSet::from([
+            fired(Consumer::Plugins, 128, 0),
+            fired(Consumer::Missions, 3, 1),
+            fired(Consumer::MissionShips, 15, 2),
+            fired(Consumer::Missions, 3, 0),
+            fired(Consumer::Crons, -5, 9),
+            fired(Consumer::Nebulae, 200, 0),
+            fired(Consumer::Fixture, 1, 255),
+        ])
+    }
+
+    fn fired(consumer: Consumer, record: i16, hook: u8) -> SubscriptionId {
+        SubscriptionId {
+            consumer,
+            record,
+            hook,
         }
     }
 
@@ -813,8 +1113,41 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 15);
+        assert_eq!(CURRENT, 18);
+        assert_eq!(
+            value["galaxy"],
+            serde_json::json!({
+                "systems": [
+                    {"system": 131, "visible": false, "govt": null},
+                    {"system": 200, "visible": null, "govt": {"govt": null}},
+                    {"system": 300, "visible": true, "govt": {"govt": 140}}
+                ],
+                "stellars": [
+                    {"stellar": 150, "govt": {"govt": null}, "destroyed": null},
+                    {"stellar": 151, "govt": {"govt": 128}, "destroyed": {"days_left": 3}},
+                    {"stellar": 152, "govt": null, "destroyed": {"days_left": 0}}
+                ],
+                "nebulae": [
+                    {"nebula": 128, "active": false},
+                    {"nebula": 129, "active": true}
+                ]
+            }),
+            "by ID"
+        );
         assert_eq!(value["stock_weapons_fitted"], true);
+        assert_eq!(
+            value["story_fired"],
+            serde_json::json!([
+                {"consumer": "mission_ships", "record": 15, "hook": 2},
+                {"consumer": "missions", "record": 3, "hook": 0},
+                {"consumer": "missions", "record": 3, "hook": 1},
+                {"consumer": "crons", "record": -5, "hook": 9},
+                {"consumer": "nebulae", "record": 200, "hook": 0},
+                {"consumer": "plugins", "record": 128, "hook": 0},
+                {"consumer": "fixture", "record": 1, "hook": 255}
+            ]),
+            "by consumer, record and hook"
+        );
         assert_eq!(value["ship_name"], "Kestrel");
         assert_eq!(value["paint"], serde_json::json!({"r": 31, "g": 0, "b": 4}));
         assert_eq!(value["bits"], serde_json::json!([0, 512, 9999]));
@@ -876,7 +1209,7 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert!(text.contains("\n  \"version\": 15"), "{text}");
+        assert!(text.contains("\n  \"version\": 18"), "{text}");
     }
 
     /// A version 1 save: before explored systems and legal records.
@@ -1726,6 +2059,273 @@ mod tests {
         }
     }
 
+    /// A version 15 save: before the story's once-fired subscriptions.
+    const VERSION_15: &str = r#"{
+        "version": 15,
+        "name": "Veteran",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [],
+        "cargo": [],
+        "events": [{"disaster": 128, "days": 12, "stellar": 150}],
+        "outfits": [{"outfit": 200, "count": 1}],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [7],
+        "gender": "female",
+        "paint": null
+    }"#;
+
+    #[test]
+    fn a_version_15_save_loads_with_no_story_subscription_fired() {
+        let pilot = decode(VERSION_15).expect("loads");
+        assert_eq!(pilot.name(), "Veteran");
+        assert_eq!(
+            pilot.events,
+            BTreeMap::from([(DisasterId(128), active(12, Some(StellarId(150))))])
+        );
+        assert_eq!(pilot.story_fired, BTreeSet::new());
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], CURRENT);
+        assert_eq!(value["story_fired"], serde_json::json!([]));
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [
+            VERSION_14, VERSION_13, VERSION_12, VERSION_11, VERSION_10, VERSION_9, VERSION_8,
+            VERSION_7, VERSION_6, VERSION_5, VERSION_4, VERSION_3, VERSION_2, VERSION_1,
+        ] {
+            let pilot = decode(text).expect("loads");
+            assert_eq!(pilot.story_fired, BTreeSet::new(), "{text}");
+        }
+    }
+
+    /// A version 16 save: before the galaxy overlay.
+    const VERSION_16: &str = r#"{
+        "version": 16,
+        "name": "Veteran",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [132],
+        "explored": [131],
+        "legal": [],
+        "cargo": [],
+        "events": [],
+        "outfits": [{"outfit": 200, "count": 1}],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [7],
+        "gender": "female",
+        "paint": null,
+        "story_fired": [{"consumer": "missions", "record": 3, "hook": 1}]
+    }"#;
+
+    #[test]
+    fn a_version_16_save_loads_with_the_galaxy_as_the_catalog_has_it() {
+        let pilot = decode(VERSION_16).expect("loads");
+        assert_eq!(pilot.name(), "Veteran");
+        assert_eq!(pilot.course(), [SystemId(132)]);
+        assert_eq!(
+            pilot.story_fired,
+            BTreeSet::from([fired(Consumer::Missions, 3, 1)])
+        );
+        assert_eq!(pilot.galaxy, GalaxyOverlay::default());
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], CURRENT);
+        assert_eq!(
+            value["galaxy"],
+            serde_json::json!({"systems": [], "stellars": [], "nebulae": []})
+        );
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [
+            VERSION_15, VERSION_14, VERSION_13, VERSION_12, VERSION_11, VERSION_10, VERSION_9,
+            VERSION_8, VERSION_7, VERSION_6, VERSION_5, VERSION_4, VERSION_3, VERSION_2, VERSION_1,
+        ] {
+            let pilot = decode(text).expect("loads");
+            assert_eq!(pilot.galaxy, GalaxyOverlay::default(), "{text}");
+        }
+    }
+
+    /// A version 17 save: a destroyed stellar held no countdown.
+    const VERSION_17: &str = r#"{
+        "version": 17,
+        "name": "Veteran",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [132],
+        "explored": [131],
+        "legal": [],
+        "cargo": [],
+        "events": [],
+        "outfits": [{"outfit": 200, "count": 1}],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [7],
+        "gender": "female",
+        "paint": null,
+        "story_fired": [],
+        "galaxy": {
+            "systems": [{"system": 131, "visible": false, "govt": null}],
+            "stellars": [
+                {"stellar": 150, "govt": {"govt": 128}, "destroyed": false},
+                {"stellar": 151, "govt": null, "destroyed": true}
+            ],
+            "nebulae": []
+        }
+    }"#;
+
+    #[test]
+    fn a_version_17_saves_destroyed_stellar_is_due_to_regenerate_on_its_next_day() {
+        let pilot = decode(VERSION_17).expect("loads");
+        assert_eq!(pilot.name(), "Veteran");
+        let mut expected = GalaxyOverlay::default();
+        expected.set_visible(SystemId(131), Some(false));
+        expected.set_stellar_govt(StellarId(150), Some(Some(GovtId(128))));
+        expected.set_destroyed(StellarId(151), Some(Countdown { days_left: 0 }));
+        assert_eq!(pilot.galaxy, expected);
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], CURRENT);
+        assert_eq!(
+            value["galaxy"]["stellars"],
+            serde_json::json!([
+                {"stellar": 150, "govt": {"govt": 128}, "destroyed": null},
+                {"stellar": 151, "govt": null, "destroyed": {"days_left": 0}}
+            ])
+        );
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [
+            VERSION_16, VERSION_15, VERSION_14, VERSION_13, VERSION_12, VERSION_11, VERSION_10,
+            VERSION_9, VERSION_8, VERSION_7, VERSION_6, VERSION_5, VERSION_4, VERSION_3, VERSION_2,
+            VERSION_1,
+        ] {
+            let pilot = decode(text).expect("loads");
+            assert_eq!(pilot.galaxy, GalaxyOverlay::default(), "{text}");
+        }
+    }
+
+    #[test]
+    fn any_overlay_survives_a_round_trip() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(i16::MIN), Some(false));
+        overlay.set_govt(SystemId(i16::MAX), Some(Some(GovtId(i16::MIN))));
+        overlay.set_stellar_govt(StellarId(-1), Some(None));
+        overlay.set_destroyed(
+            StellarId(i16::MAX),
+            Some(Countdown {
+                days_left: u16::MAX,
+            }),
+        );
+        overlay.set_nebula_active(NebulaId(i16::MAX), Some(false));
+        for galaxy in [overlay, GalaxyOverlay::default(), overlaid()] {
+            let pilot = Pilot {
+                galaxy,
+                ..seasoned()
+            };
+            assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        }
+    }
+
+    #[test]
+    fn a_current_save_missing_any_part_of_its_galaxy_is_unusable() {
+        let full: serde_json::Value = serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        for (list, field) in [
+            ("", "systems"),
+            ("", "stellars"),
+            ("", "nebulae"),
+            ("systems", "system"),
+            ("systems", "visible"),
+            ("systems", "govt"),
+            ("stellars", "stellar"),
+            ("stellars", "govt"),
+            ("stellars", "destroyed"),
+            ("nebulae", "nebula"),
+            ("nebulae", "active"),
+        ] {
+            let mut value = full.clone();
+            let galaxy = &mut value["galaxy"];
+            let object = if list.is_empty() {
+                galaxy.as_object_mut()
+            } else {
+                galaxy[list][0].as_object_mut()
+            };
+            object.expect("an object").remove(field);
+            let reason = unusable(&value.to_string());
+            assert!(reason.contains(field), "{list} {field}: {reason}");
+        }
+        let mut value = full.clone();
+        if let Some(govt) = value["galaxy"]["systems"][1]["govt"].as_object_mut() {
+            govt.remove("govt");
+        }
+        assert!(
+            unusable(&value.to_string()).contains("govt"),
+            "an empty override"
+        );
+        let mut value = full;
+        if let Some(countdown) = value["galaxy"]["stellars"][1]["destroyed"].as_object_mut() {
+            countdown.remove("days_left");
+        }
+        assert!(
+            unusable(&value.to_string()).contains("days_left"),
+            "an empty countdown"
+        );
+    }
+
+    #[test]
+    fn every_consumer_fired_survives_a_round_trip() {
+        use Consumer::{Crons, Fixture, MissionShips, Missions, Nebulae, Plugins};
+        for consumer in [MissionShips, Missions, Crons, Nebulae, Plugins, Fixture] {
+            let mut pilot = seasoned();
+            pilot.story_fired = BTreeSet::from([fired(consumer, i16::MIN, u8::MAX)]);
+            assert_eq!(decode(&encode(&pilot)), Ok(pilot), "{consumer:?}");
+        }
+    }
+
+    #[test]
+    fn a_current_save_missing_its_fired_subscriptions_or_of_no_known_consumer_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        if let Some(object) = value.as_object_mut() {
+            object.remove("story_fired");
+        }
+        assert!(unusable(&value.to_string()).contains("story_fired"));
+        let text =
+            encode(&seasoned()).replace("\"consumer\": \"nebulae\"", "\"consumer\": \"comets\"");
+        assert!(unusable(&text).contains("comets"), "{}", unusable(&text));
+    }
+
     #[test]
     fn a_current_save_event_missing_its_stellar_is_unusable() {
         let mut value: serde_json::Value =
@@ -1879,12 +2479,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 15", "\"version\": 16");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 16 }));
+        let newer = encode(&seasoned()).replace("\"version\": 18", "\"version\": 19");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 19 }));
         assert_eq!(
-            SaveError::Newer { version: 16 }.to_string(),
+            SaveError::Newer { version: 19 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 16, and this version of Nova reads up to 15)."
+             (it is version 19, and this version of Nova reads up to 18)."
         );
     }
 

@@ -1467,7 +1467,7 @@ mod tests {
         land_now(&mut session).expect("lands");
         assert_eq!(session.pilot().escorts().len(), 2, "still out");
         assert_eq!(session.pilot().owned(VIPERS), 0);
-        session.take_off().expect("takes off");
+        session.take_off(&mut NeverFires).expect("takes off");
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
         let npcs = fleet_npcs(&session);
         assert_eq!(
@@ -1713,7 +1713,7 @@ mod tests {
             .expect("bought");
         assert_eq!(session.pilot().escorts(), [warship(None)]);
         assert_eq!(session.pilot().owned(DARTS), 0, "no rounds");
-        session.take_off().expect("takes off");
+        session.take_off(&mut NeverFires).expect("takes off");
         session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
         assert_eq!(
             fleet_npcs(&session)

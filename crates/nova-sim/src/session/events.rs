@@ -15,6 +15,25 @@
 //! - [`SessionEvent::StellarChanged`]: the player was put at another
 //!   stellar of the system shown, whose scene is kept: a relocation within
 //!   the system.
+//! - [`SessionEvent::GalaxyChanged`]: the galaxy overlay changed, through
+//!   [`Session::change_galaxy`], an arrival that made a system visible, or
+//!   a stellar destroyed or regenerated (`Y`, `U`, the daily step, a new
+//!   pilot's): the galaxy map is rebuilt from [`Session::galaxy`], and
+//!   the flight view draws each stellar of the system shown by whether it
+//!   is destroyed
+//!   ([`OverlaidGalaxy::destroyed`](crate::story::OverlaidGalaxy::destroyed)),
+//!   with no new layout.
+//!   That is how a destroyed stellar's `DeadType` sheet shows from the
+//!   next frame (story-runtime phase 7), so every writer of the destroyed
+//!   state goes through `Session::set_stellar_state`, which raises this
+//!   event: `Y`, `U`, the daily step, a new pilot and the shots that
+//!   shoot a stellar down (story-runtime phase 8).
+//! - [`SessionEvent::StellarsRebuilt`]: a rebuild point changed which
+//!   stellars shown are dead since the last rebuild
+//!   ([`Session::dead_since_rebuild`]; see the `stellars` module). It is
+//!   told only on a change, as `GalaxyChanged` is, after the transition's
+//!   own events: the flight view draws each stellar of the scene shown
+//!   again, with no new layout (story-runtime phase 9).
 //!
 //! The session's other outboxes (its sounds, messages, script notes, pay
 //! notes, fighter notes and the rest, each with its own `take_*`) are not
@@ -31,6 +50,11 @@ pub enum SessionEvent {
     SystemChanged,
     /// The player was put at another stellar of the system shown.
     StellarChanged,
+    /// The galaxy overlay changed.
+    GalaxyChanged,
+    /// A rebuild point changed which stellars shown are dead since the
+    /// last rebuild.
+    StellarsRebuilt,
 }
 
 impl Session {

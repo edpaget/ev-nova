@@ -278,6 +278,9 @@ pub struct WeaponSpec {
     /// Its `MaxAmmo`: the rounds each launcher holds at most; none for no
     /// limit of its own.
     pub max_ammo: u32,
+    /// The ticks a shot of it flies before it can hit a stellar: its
+    /// `ProxSafety`, none when that is below none.
+    pub prox_safety: u32,
 }
 
 /// `Flags`: fired by the second trigger.
@@ -303,6 +306,9 @@ pub const PROXIMITY_BY_OTHERS: u16 = 0x0008;
 pub const SUBS_SEEK_NEAREST: u16 = 0x0010;
 /// `Flags2`: its shots release no sub-munitions at the end of their life.
 pub const NO_SUBS_ON_EXPIRY: u16 = 0x0020;
+/// `Flags2`: a planet-type weapon, whose shots can hit a destroyable
+/// stellar (see [`combat`](super)'s "Stellars").
+pub const PLANET_TYPE: u16 = 0x0400;
 /// `GuidedTurn` is in tenths of a degree.
 pub const GUIDED_TURN_PER_DEGREE: f32 = 10.0;
 
@@ -346,6 +352,7 @@ impl WeaponSpec {
             submunitions: Submunitions::of(record),
             carried,
             max_ammo: count(record.max_ammo),
+            prox_safety: count(record.prox_safety),
         }
     }
 
@@ -421,6 +428,13 @@ impl WeaponSpec {
         self.flags3 & AMMO_AT_BURST_END != 0
     }
 
+    /// Whether it is a planet-type weapon (`Flags2` 0x0400), whose shots
+    /// can hit a destroyable stellar.
+    #[must_use]
+    pub fn planet_type(&self) -> bool {
+        self.flags2 & PLANET_TYPE != 0
+    }
+
     /// Whether it is hidden while out of ammo.
     #[must_use]
     pub fn hides_when_empty(&self) -> bool {
@@ -476,6 +490,38 @@ mod tests {
     #[test]
     fn the_light_blasters_range_is_195_pixels() {
         assert_eq!(WeaponSpec::new(&light_blaster()).range(), 195.0);
+    }
+
+    #[test]
+    fn a_weapons_proximity_safety_is_its_prox_safety_in_ticks_none_below_none() {
+        for (raw, ticks) in [(8, 8), (0, 0), (-5, 0), (i16::MAX, 32_767)] {
+            let record = WeaponRecord {
+                prox_safety: raw,
+                ..light_blaster()
+            };
+            assert_eq!(WeaponSpec::new(&record).prox_safety, ticks, "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_planet_type_weapon_has_flags2_0x0400_whatever_its_other_bits() {
+        for (flags2, planet) in [
+            (0x0400, true),
+            (0xffff, true),
+            (0x0408, true),
+            (0, false),
+            (!0x0400, false),
+        ] {
+            let record = WeaponRecord {
+                flags2,
+                ..light_blaster()
+            };
+            assert_eq!(
+                WeaponSpec::new(&record).planet_type(),
+                planet,
+                "{flags2:#x}"
+            );
+        }
     }
 
     #[test]

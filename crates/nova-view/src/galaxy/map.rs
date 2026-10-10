@@ -2,7 +2,11 @@
 //! and zooms, and an info panel listing the selected system's stellars.
 //!
 //! The screen reads the galaxy once, through the [`GalaxyCatalog`] port,
-//! when it is built; drawing and input never read anything.
+//! when it is built; drawing and input never read anything. The course
+//! map is shown a flight's galaxy ([`GalaxyMap::show_galaxy`]): the
+//! session's galaxy overlay overrides which systems, links and nebulae
+//! the catalog's galaxy draws, and its governments, as each change to it
+//! is told; the geometry stays the catalog's.
 //!
 //! Input (presses only, except the left button's release):
 //!
@@ -47,6 +51,8 @@
 
 use std::collections::BTreeSet;
 use std::time::Duration;
+
+use nova_sim::story::OverlaidGalaxy;
 
 use super::catalog::{GalaxyCatalog, SystemEntry, SystemId};
 use super::model::{GalaxyModel, placement};
@@ -268,6 +274,14 @@ impl GalaxyMap {
     pub fn show_course(&mut self, current: SystemId, route: &[SystemId]) {
         self.current = Some(current);
         self.route = route.to_vec();
+    }
+
+    /// Draws the session's `galaxy` over the catalog's geometry
+    /// ([`GalaxyModel::apply`]): its visible systems, governments, links
+    /// and active nebulae. A selected system it hides is let go of.
+    pub fn show_galaxy(&mut self, galaxy: &OverlaidGalaxy) {
+        self.model.apply(galaxy);
+        self.selected = self.selected.filter(|&id| self.model.system(id).is_some());
     }
 
     /// Shows `explored` as the systems the pilot has explored, in place of
@@ -699,9 +713,10 @@ mod tests {
     use crate::galaxy::catalog::{
         Galaxy, GovtId, NebulaEntry, NebulaId, NebulaPicture, StellarEntry, StellarId, SystemEntry,
     };
-    use crate::galaxy::model::{NEUTRAL, placement};
+    use crate::galaxy::model::{NEUTRAL, placement, star_system};
     use crate::galaxy::view::{MAP_CENTER, SCALES};
     use crate::{DrawCommand, Font, ImageKey, Key, MouseButton};
+    use nova_sim::story::{GalaxyOverlay, OverlaidGalaxy};
 
     /// A canned galaxy; counts how often it is read.
     struct FakeCatalog {
@@ -2134,5 +2149,62 @@ mod tests {
         map.offer_gates(ids(&[131]));
         let here = dot(&map, 128);
         assert_eq!(lines(&drawn(&map), GATE), [(here, here, GATE_WIDTH)]);
+    }
+
+    // The session's galaxy.
+
+    /// The session's galaxy over [`galaxy`]'s systems, with `change` made.
+    fn session_galaxy(change: impl FnOnce(&mut GalaxyOverlay)) -> OverlaidGalaxy {
+        let mut overlay = GalaxyOverlay::default();
+        change(&mut overlay);
+        let systems = galaxy().systems.iter().map(star_system).collect();
+        OverlaidGalaxy::new(systems, overlay)
+    }
+
+    #[test]
+    fn showing_the_sessions_galaxy_lets_go_of_a_selection_it_hides() {
+        let mut map = map();
+        click_on(&mut map, 129);
+        map.show_galaxy(&session_galaxy(|_| {}));
+        assert_eq!(map.selected(), Some(SystemId(129)), "still drawn");
+        map.show_galaxy(&session_galaxy(|overlay| {
+            overlay.set_visible(SystemId(130), Some(false));
+        }));
+        assert_eq!(map.selected(), Some(SystemId(129)), "another hidden");
+        map.show_galaxy(&session_galaxy(|overlay| {
+            overlay.set_visible(SystemId(129), Some(false));
+        }));
+        assert_eq!(map.selected(), None);
+    }
+
+    #[test]
+    fn the_map_draws_the_sessions_galaxy() {
+        let mut map = map();
+        let list = drawn(&map);
+        assert_eq!(dots(&list, DOT_SIZE).len(), 4);
+        assert_eq!(lines(&list, LINK).len(), 2);
+        assert!(matches!(
+            list.iter().next(),
+            Some(DrawCommand::StretchedPicture { .. })
+        ));
+        map.show_galaxy(&session_galaxy(|overlay| {
+            overlay.set_visible(SystemId(129), Some(false));
+            overlay.set_govt(SystemId(130), Some(None));
+            overlay.set_nebula_active(NebulaId(128), Some(false));
+        }));
+        let list = drawn(&map);
+        let colors: Vec<Color> = dots(&list, DOT_SIZE).into_iter().map(|(_, c)| c).collect();
+        assert_eq!(
+            colors,
+            [NEUTRAL, NEUTRAL, Color::from_rgb24(BLUE)],
+            "131, 130 made independent, then 128"
+        );
+        assert_eq!(lines(&list, LINK), [(dot(&map, 128), dot(&map, 130), 1.0)]);
+        assert!(
+            !list
+                .iter()
+                .any(|command| matches!(command, DrawCommand::StretchedPicture { .. })),
+            "the nebula is inactive"
+        );
     }
 }

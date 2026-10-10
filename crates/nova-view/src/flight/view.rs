@@ -143,7 +143,12 @@
 //!   router's Escape). A system clicked on the map becomes the
 //!   destination: the session plots the course there and the map shows
 //!   it. The map shows the systems the pilot has explored, and the rest
-//!   unexplored.
+//!   unexplored. It draws the session's galaxy ([`Session::galaxy`]):
+//!   the catalog's geometry with only the visible systems, links and
+//!   active nebulae, each system coloured by its government there, rebuilt
+//!   on the frame after each change to it; and the course as it is flown
+//!   ([`Session::course_shown`]), each hop the visible system standing
+//!   for it.
 //! - The HUD's nav area shows the navigation target, or else the next
 //!   system on the course (see [`hud`](super::hud)). As in the original
 //!   (`_HandlePlayer` @0x68390; see [`navigation`](nova_sim::navigation)),
@@ -282,8 +287,8 @@ use nova_sim::{
     HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome, LandPress,
     LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
     NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot, PilotCatalog,
-    PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, Rulebook, Rules,
-    Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard,
+    PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey, Rulebook,
+    Rules, Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard,
     SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick,
     TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn,
     glow_level, lights_level,
@@ -308,7 +313,7 @@ use crate::draw::{crossed_box, lights_tint};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMode};
 use crate::system::camera::{Camera, VIEW_SIZE};
 use crate::system::catalog::SystemCatalog;
-use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, SystemScene};
+use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::system::starfield;
 use crate::text::TextMetrics;
 use crate::time::ticks;
@@ -989,6 +994,27 @@ struct Redrawn {
     system: bool,
     /// The ship was put at another stellar of the system shown.
     stellar: bool,
+    /// The galaxy overlay changed: the course map was rebuilt.
+    galaxy: bool,
+    /// A rebuild point changed which stellars shown are dead since it:
+    /// the stellars were drawn again.
+    rebuilt: bool,
+}
+
+/// Draws each stellar of `scene` as `session` holds it: by whether its
+/// galaxy holds it destroyed, its `DeadType` sheet or its `Type` sheet, as
+/// the original's per-frame sprite tick picks them (story-runtime phase
+/// 7), and, by the session's reading of [`RuleKey::DeadTypeFallback`],
+/// graphic type 0's sheet for one with no `DeadType` sheet that has been
+/// dead since the last rebuild point (story-runtime phase 9).
+fn show_destroyed(scene: &mut SystemScene, session: &Session) {
+    scene.set_destroyed(
+        |id| StellarLook {
+            destroyed: session.galaxy().destroyed(id),
+            dead_since_rebuild: session.dead_since_rebuild(id),
+        },
+        session.rules().source_for(RuleKey::DeadTypeFallback),
+    );
 }
 
 /// Text metrics, shared.
@@ -1045,7 +1071,11 @@ impl<
         let session = session.map_err(|err| err.to_string());
         let (scene, sheet, sheet_ship, status_bar) = match &session {
             Ok(session) => (
-                Some(SystemScene::load(&catalog, session.system())),
+                Some({
+                    let mut scene = SystemScene::load(&catalog, session.system());
+                    show_destroyed(&mut scene, session);
+                    scene
+                }),
                 catalog.ship_sheet(session.ship()),
                 Some(session.ship()),
                 hud::choose_status_bar(&catalog, session.government()),
@@ -1058,7 +1088,8 @@ impl<
             .unwrap_or_default();
         let mut map = GalaxyMap::course(&catalog);
         if let Ok(session) = &session {
-            map.show_course(session.system(), session.course());
+            map.show_galaxy(session.galaxy());
+            map.show_course(session.system(), &session.course_shown());
             map.show_explored(session.pilot().explored());
         }
         let pending_landing = session.as_ref().ok().and_then(Session::landed);
@@ -1116,13 +1147,17 @@ impl<
     }
 
     /// The flight with every disputed rule reading as `rules` says
-    /// ([`Session::with_rules`]).
+    /// ([`Session::with_rules`]). The stellars of the scene shown are
+    /// drawn again by the new rules, which say how a destroyed stellar
+    /// with no `DeadType` sheet draws, but not laid out again.
     #[must_use]
     pub fn with_rules(self, rules: Rulebook) -> Self {
-        Self {
+        let mut view = Self {
             session: self.session.map(|session| session.with_rules(rules)),
             ..self
-        }
+        };
+        view.show_destroyed();
+        view
     }
 
     /// The flight with `terms` giving the fee and wage of a hire
@@ -1369,7 +1404,8 @@ impl<
         if let Ok(session) = &mut self.session {
             // A failed plot clears the course, which the map then shows.
             let _ = session.plot_course(destination);
-            self.map.show_course(session.system(), session.course());
+            self.map
+                .show_course(session.system(), &session.course_shown());
         }
     }
 
@@ -1384,18 +1420,21 @@ impl<
             let name = scene.stellars().iter().find(|stellar| stellar.id == target);
             return NavDisplay::Stellar(name.map(|s| s.name.clone()).unwrap_or_default());
         }
-        session.course().first().map_or(NavDisplay::None, |&next| {
-            let name = session
-                .pilot()
-                .has_explored(next)
-                .then(|| self.map.model().system(next))
-                .flatten()
-                .map(|system| system.entry.name.clone());
-            NavDisplay::Hyperspace {
-                name,
-                readiness: session.jump_readiness(),
-            }
-        })
+        session
+            .course_shown()
+            .first()
+            .map_or(NavDisplay::None, |&next| {
+                let name = session
+                    .pilot()
+                    .has_explored(next)
+                    .then(|| self.map.model().system(next))
+                    .flatten()
+                    .map(|system| system.entry.name.clone());
+                NavDisplay::Hyperspace {
+                    name,
+                    readiness: session.jump_readiness(),
+                }
+            })
     }
 
     /// Begins a jump, or shows why not.
@@ -1494,7 +1533,9 @@ impl<
     /// do: a change of ship reads the player's sprite sheet afresh
     /// ([`FlightView::follow_ship`]); a system entered afresh is laid out
     /// ([`FlightView::lay_out`]); otherwise a move to another stellar of
-    /// the system shown draws the ship there ([`FlightView::place_ship`]).
+    /// the system shown draws the ship there ([`FlightView::place_ship`]);
+    /// and a change to the galaxy draws the session's galaxy on the course
+    /// map ([`GalaxyMap::show_galaxy`]) with the course as it is flown.
     ///
     /// The only caller of [`Session::take_events`]: each frame calls it
     /// first, so a change made outside the view's own methods (a
@@ -1512,7 +1553,14 @@ impl<
                 SessionEvent::ShipChanged => redrawn.ship = true,
                 SessionEvent::SystemChanged => redrawn.system = true,
                 SessionEvent::StellarChanged => redrawn.stellar = true,
+                SessionEvent::GalaxyChanged => redrawn.galaxy = true,
+                SessionEvent::StellarsRebuilt => redrawn.rebuilt = true,
             }
+        }
+        if redrawn.galaxy {
+            self.map.show_galaxy(session.galaxy());
+            self.map
+                .show_course(session.system(), &session.course_shown());
         }
         let system = session.system();
         if redrawn.ship {
@@ -1523,7 +1571,18 @@ impl<
         } else if redrawn.stellar {
             self.place_ship();
         }
+        if redrawn.galaxy || redrawn.system || redrawn.rebuilt {
+            self.show_destroyed();
+        }
         redrawn
+    }
+
+    /// Draws each stellar of the scene shown as the session holds it
+    /// ([`show_destroyed`]). The scene is not laid out again.
+    fn show_destroyed(&mut self) {
+        if let (Ok(session), Some(scene)) = (&self.session, &mut self.scene) {
+            show_destroyed(scene, session);
+        }
     }
 
     /// Lays out `system`, the session's: its scene, read from the catalog,
@@ -1534,7 +1593,7 @@ impl<
             return;
         };
         self.scene = Some(SystemScene::load(&self.catalog, system));
-        self.map.show_course(system, session.course());
+        self.map.show_course(system, &session.course_shown());
         self.map.show_explored(session.pilot().explored());
         self.previous = *session.player();
         self.alpha = 0.0;
@@ -1559,7 +1618,8 @@ impl<
         let Ok(session) = &self.session else {
             return;
         };
-        self.map.show_course(session.system(), session.course());
+        self.map
+            .show_course(session.system(), &session.course_shown());
         self.previous = *session.player();
         self.alpha = 0.0;
     }
@@ -1582,9 +1642,11 @@ impl<
     /// from before the landing, but says how many hired escorts defected
     /// for want of the take-off's pay ([`defection_message`]); the
     /// session populates the system's traffic afresh on its next tick
-    /// ([`Session::take_off`]).
+    /// ([`Session::take_off`]). Leaving passes the stay's days, their
+    /// events rolled on the flight's chance.
     pub fn take_off(&mut self) -> Option<StellarId> {
-        let stellar = self.session.as_mut().ok()?.take_off()?;
+        let session = self.session.as_mut().ok()?;
+        let stellar = session.take_off(&mut self.chance)?;
         let said = self.took_off();
         self.say_all(&said);
         Some(stellar)
@@ -2883,6 +2945,13 @@ mod tests {
         fan: bool,
         /// Every stellar a gate may lead to: none, by default.
         gates: Vec<GateSite>,
+        /// Whether Alpha Reborn (133) exists, at Alpha Centauri's place,
+        /// with no links and Proxima Reborn (141) at its centre: not by
+        /// default.
+        reborn: bool,
+        /// The stellars that can be destroyed and regenerated: none, by
+        /// default.
+        lives: Vec<nova_sim::StellarLife>,
     }
 
     /// No strings unless a test sets them.
@@ -2965,7 +3034,9 @@ mod tests {
             defaults: Vec::new(),
             onward: false,
             fan: false,
+            reborn: false,
             gates: Vec::new(),
+            lives: Vec::new(),
         }
     }
 
@@ -2982,6 +3053,11 @@ mod tests {
             special_tech: [0; 8],
             govt: None,
             flags2: 0,
+            destroyed: false,
+            graphic: 0,
+            dead_graphic: None,
+            dead_frame_size: None,
+            type_counts_frames: true,
         }
     }
 
@@ -3044,7 +3120,9 @@ mod tests {
         /// Sol and Alpha Centauri; Barnard, which has no stellars, only
         /// when Alpha Centauri links on to it.
         fn system_exists(&self, id: SystemId) -> bool {
-            matches!(id.0, 130 | 131) || (id.0 == 132 && self.onward)
+            matches!(id.0, 130 | 131)
+                || (id.0 == 132 && self.onward)
+                || (id.0 == 133 && self.reborn)
         }
 
         fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
@@ -3052,6 +3130,7 @@ mod tests {
                 130 => self.sites.clone(),
                 131 => vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)],
                 132 if self.onward => Vec::new(),
+                133 if self.reborn => vec![site(141, (0.0, 0.0), StellarFlags::CAN_LAND)],
                 other => panic!("asked for sÿst {other}'s sites"),
             }
         }
@@ -3066,11 +3145,15 @@ mod tests {
             };
             let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
             let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
-            vec![
+            let mut systems = vec![
                 star(130, (0.0, 0.0), sol),
                 star(131, (600.0, 0.0), onward),
                 star(132, (0.0, 600.0), &[]),
-            ]
+            ];
+            if self.reborn {
+                systems.push(star(133, (600.0, 0.0), &[]));
+            }
+            systems
         }
 
         fn commodity_strings(&self) -> CommodityStrings {
@@ -3099,6 +3182,14 @@ mod tests {
 
         fn gate_sites(&self) -> Vec<GateSite> {
             self.gates.clone()
+        }
+
+        fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
+            self.lives.clone()
+        }
+
+        fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+            Some((100, 100))
         }
     }
 
@@ -3154,11 +3245,30 @@ mod tests {
                 frame_width: 20,
                 frame_height: 20,
             }),
+            dead_sprite: None,
             animation: AnimationData {
                 delay: 1,
                 frame0_bias: 0,
                 only_when_destroyed: false,
             },
+        }
+    }
+
+    /// Graphic type 0's sheet (`spïn` 1000) in every system: one 40 x 40
+    /// frame.
+    const TYPE_ZERO: i16 = 3000;
+
+    /// `stellar`, drawing `DeadType` sheet 2000 + `id` (one 30 x 30 frame)
+    /// while destroyed.
+    fn dying(id: i16, name: &str, at: (i16, i16), frames: u16) -> StellarContents {
+        StellarContents {
+            dead_sprite: Some(Ok(StellarSheet {
+                image_id: 2000 + id,
+                frames: NonZeroU16::MIN,
+                frame_width: 30,
+                frame_height: 30,
+            })),
+            ..stellar(id, name, at, frames)
         }
     }
 
@@ -3169,18 +3279,28 @@ mod tests {
                 130 => (
                     "Sol",
                     vec![
-                        stellar(128, "Earth", (0, -600), 1),
+                        dying(128, "Earth", (0, -600), 1),
                         stellar(129, "Moon", (300, -200), 4),
                     ],
                 ),
-                131 => ("Alpha Centauri", vec![stellar(140, "Proxima", (0, 0), 1)]),
+                131 => ("Alpha Centauri", vec![dying(140, "Proxima", (0, 0), 1)]),
                 132 if self.onward => ("Barnard", Vec::new()),
+                133 if self.reborn => (
+                    "Alpha Reborn",
+                    vec![stellar(141, "Proxima Reborn", (0, 0), 1)],
+                ),
                 other => panic!("asked for sÿst {other}"),
             };
             SystemContents {
                 id,
                 name: name.to_owned(),
                 stellars,
+                type_zero_sprite: Ok(StellarSheet {
+                    image_id: TYPE_ZERO,
+                    frames: NonZeroU16::MIN,
+                    frame_width: 40,
+                    frame_height: 40,
+                }),
                 problems: Vec::new(),
             }
         }
@@ -3199,12 +3319,16 @@ mod tests {
             };
             let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
             let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
+            let mut systems = vec![
+                entry(130, "Sol", (0, 0), sol),
+                entry(131, "Alpha Centauri", (600, 0), onward),
+                entry(132, "Barnard", (0, 600), &[]),
+            ];
+            if self.reborn {
+                systems.push(entry(133, "Alpha Reborn", (600, 0), &[]));
+            }
             Galaxy {
-                systems: vec![
-                    entry(130, "Sol", (0, 0), sol),
-                    entry(131, "Alpha Centauri", (600, 0), onward),
-                    entry(132, "Barnard", (0, 600), &[]),
-                ],
+                systems,
                 ..Galaxy::default()
             }
         }
@@ -4781,7 +4905,8 @@ mod tests {
 
     #[test]
     fn a_refusal_is_forgotten_once_the_ship_lands() {
-        let mut view = flight_among(vec![site(140, (0.0, -12.0), StellarFlags::CAN_LAND)]);
+        // 20 wide: within 35 on each axis is over it.
+        let mut view = flight_among(vec![site(140, (0.0, -40.0), StellarFlags::CAN_LAND)]);
         land_now(&mut view);
         assert_eq!(view.message(), Some(TOO_FAR_PLANET));
         // Nudge the ship and drift over the planet.
@@ -4789,12 +4914,12 @@ mod tests {
         ticks(&mut view, 1);
         view.input(&key(Key::Up, false));
         for _ in 0..100 {
-            if player(&view).position.y <= -4.0 {
+            if player(&view).position.y <= -6.0 {
                 break;
             }
             ticks(&mut view, 1);
         }
-        assert!(player(&view).position.y <= -4.0, "{:?}", player(&view));
+        assert!(player(&view).position.y <= -6.0, "{:?}", player(&view));
         assert!(view.elapsed < MESSAGE_SHOWN_FOR, "still on screen");
         view.input(&key(LAND, true));
         assert_eq!(view.take_landing(), Some(StellarId(140)));
@@ -6362,6 +6487,21 @@ mod tests {
     }
 
     #[test]
+    fn leaving_rolls_the_stays_days_on_the_flights_chance() {
+        let always = Rc::new(RefCell::new(Always::default()));
+        let shared: Rc<RefCell<dyn Chance>> = always.clone();
+        let mut view = FlightView::with_pilot(eventful(), docked_pilot("Ada"))
+            .with_chance(SharedChance::new(shared));
+        view.take_landing();
+        let landed = view.session().expect("docked").date();
+        let shown = view.date_text();
+        view.take_off().expect("took off");
+        assert_eq!(always.borrow().asked, [35], "the take-off's day");
+        assert_eq!(view.session().expect("flying").date(), landed.next_day());
+        assert_ne!(view.date_text(), shown, "the HUD's date moves on");
+    }
+
+    #[test]
     fn without_a_chance_given_nothing_random_happens() {
         let mut view = FlightView::new(eventful());
         jump_to_alpha(&mut view);
@@ -7111,6 +7251,7 @@ mod tests {
             sub_theta: 0,
             sub_limit: 0,
             max_ammo: 0,
+            prox_safety: 0,
         };
         let hull = nova_sim::HullRecord {
             id: ShipId(129),
@@ -7238,6 +7379,7 @@ mod tests {
             sub_theta: 0,
             sub_limit: 0,
             max_ammo: 0,
+            prox_safety: 0,
         }
     }
 
@@ -9901,7 +10043,7 @@ mod tests {
         let mut view = landed_view();
         move_to(&mut view, 130, 129);
         let session = view.session.as_mut().expect("flying");
-        assert_eq!(session.take_off(), Some(StellarId(129)));
+        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(129)));
         run_set(&mut view, "M131");
         settle_session(&mut view);
         view.tick(TICK);
@@ -9909,6 +10051,399 @@ mod tests {
         assert_eq!(systems_read(&view), [SystemId(131)], "one layout");
         assert_eq!(view.course_map().current(), Some(SystemId(131)));
         assert_eq!(view.shown_position(), Point::new(0.0, 0.0), "at Proxima");
+    }
+
+    // The galaxy overlay.
+
+    /// Changes `view`'s galaxy by itself, not through the view.
+    fn change_galaxy(view: &mut View, change: impl FnOnce(&mut nova_sim::story::GalaxyOverlay)) {
+        let session = view.session.as_mut().expect("flying");
+        assert!(session.change_galaxy(&view.catalog, change));
+    }
+
+    /// Hides system `id`.
+    fn hiding(id: i16) -> impl FnOnce(&mut nova_sim::story::GalaxyOverlay) {
+        move |overlay| {
+            overlay.set_visible(SystemId(id), Some(false));
+        }
+    }
+
+    /// Whether `view`'s course map draws system `id`.
+    fn on_the_course_map(view: &View, id: i16) -> bool {
+        view.course_map().model().system(SystemId(id)).is_some()
+    }
+
+    #[test]
+    fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.change_galaxy(&catalog, hiding(132));
+        let view = FlightView::with_pilot(catalog, session.pilot().clone());
+        assert!(!on_the_course_map(&view, 132));
+        assert!(on_the_course_map(&view, 131));
+    }
+
+    #[test]
+    fn a_change_to_the_galaxy_is_drawn_on_the_next_frame_and_not_before() {
+        let mut view = flight();
+        change_galaxy(&mut view, hiding(132));
+        assert!(on_the_course_map(&view, 132), "not before the frame");
+        view.tick(TICK);
+        assert!(!on_the_course_map(&view, 132));
+    }
+
+    #[test]
+    fn the_course_map_shows_the_course_as_it_is_flown() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        let mut view = FlightView::with_pilot(catalog, session.pilot().clone());
+        assert_eq!(view.course_map().route(), [SystemId(131)]);
+        change_galaxy(&mut view, hiding(131));
+        view.tick(TICK);
+        assert_eq!(view.course_map().route(), [], "no system at its place");
+        let session = view.session.as_ref().expect("flying");
+        assert_eq!(session.course(), [SystemId(131)], "kept");
+    }
+
+    /// A flight of `reborn` Sol, bound for Alpha Centauri, Alpha Reborn
+    /// explored.
+    fn bound_for_alpha_with_reborn_explored() -> View {
+        let catalog = FakeCatalog {
+            reborn: true,
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        let explore = nova_sim::SetExpr::parse("X133").expect("parses");
+        session.run_set(&explore, &mut NeverFires);
+        FlightView::with_pilot(catalog, session.pilot().clone())
+    }
+
+    #[test]
+    fn the_nav_area_shows_the_system_standing_for_a_hidden_next_hop() {
+        let mut view = bound_for_alpha_with_reborn_explored();
+        change_galaxy(&mut view, hiding(131));
+        view.tick(TICK);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Alpha Reborn"]);
+    }
+
+    #[test]
+    fn the_nav_area_shows_no_destination_for_a_hop_with_no_system_visible_at_its_place() {
+        let mut view = bound_for_alpha_with_reborn_explored();
+        change_galaxy(&mut view, |overlay| {
+            overlay.set_visible(SystemId(131), Some(false));
+            overlay.set_visible(SystemId(133), Some(false));
+        });
+        view.tick(TICK);
+        assert_eq!(nav(&view), [hud::NAV_NO_DESTINATION]);
+        let session = view.session().expect("flying");
+        assert_eq!(session.course(), [SystemId(131)], "kept");
+    }
+
+    #[test]
+    fn several_galaxy_changes_before_a_frame_rebuild_the_map_once() {
+        let mut view = flight();
+        change_galaxy(&mut view, hiding(132));
+        change_galaxy(&mut view, |overlay| {
+            overlay.set_visible(SystemId(132), None);
+            overlay.set_visible(SystemId(131), Some(false));
+        });
+        let redrawn = view.catch_up();
+        assert!(redrawn.galaxy);
+        assert!(on_the_course_map(&view, 132), "the last galaxy");
+        assert!(!on_the_course_map(&view, 131));
+        assert!(!view.catch_up().galaxy, "once");
+    }
+
+    // Destroyed stellars (story-runtime phase 7).
+
+    /// Stellar `id` with `Strength` 100 and `DeadTime` 5, so that `Y`
+    /// destroys it, and `Flags2` `flags2`.
+    fn life(id: i16, flags2: u16) -> nova_sim::StellarLife {
+        nova_sim::StellarLife {
+            id: StellarId(id),
+            strength: 100,
+            dead_time: 5,
+            flags2,
+            explosion: None,
+            on_destroy: nova_sim::Script::default(),
+            on_regen: nova_sim::Script::default(),
+        }
+    }
+
+    /// A flight in Sol whose Earth (128, `DeadType` sheet 2128), Moon
+    /// (129, no different graphic) and Proxima (140, `DeadType` sheet
+    /// 2140) can be destroyed.
+    fn destructible() -> View {
+        FlightView::new(FakeCatalog {
+            lives: vec![life(128, 0), life(129, 0), life(140, 0)],
+            ..catalog()
+        })
+    }
+
+    /// Whether stellar `id` is drawn with its `Type` sheet (1000 + `id`)
+    /// and whether with its `DeadType` sheet (2000 + `id`), at any of the
+    /// first 4 frames.
+    fn sheets_drawn(view: &View, id: i16) -> (bool, bool) {
+        let images: Vec<ImageKey> = sprites(&drawn(view))
+            .into_iter()
+            .map(|(image, _)| image)
+            .collect();
+        let sheet = |image_id| (0..4).any(|f| images.contains(&ImageKey::sprite(image_id, f)));
+        (sheet(1000 + id), sheet(2000 + id))
+    }
+
+    const TYPE: (bool, bool) = (true, false);
+    const DEAD_TYPE: (bool, bool) = (false, true);
+
+    #[test]
+    fn a_stellar_destroyed_with_y_is_drawn_with_its_dead_type_from_the_next_frame_and_regenerated_with_u()
+     {
+        let mut view = destructible();
+        view.tick(TICK);
+        assert_eq!(sheets_drawn(&view, 128), TYPE);
+        view.catalog().systems_read.borrow_mut().clear();
+
+        run_set(&mut view, "Y128");
+        settle_session(&mut view);
+        assert_eq!(sheets_drawn(&view, 128), TYPE, "not before the frame");
+        view.tick(TICK);
+        assert_eq!(sheets_drawn(&view, 128), DEAD_TYPE, "from the next frame");
+        assert_eq!(systems_read(&view), [], "not laid out again");
+
+        run_set(&mut view, "U128");
+        settle_session(&mut view);
+        assert_eq!(sheets_drawn(&view, 128), DEAD_TYPE, "not before the frame");
+        view.tick(TICK);
+        assert_eq!(sheets_drawn(&view, 128), TYPE, "regenerated");
+        assert_eq!(systems_read(&view), []);
+    }
+
+    #[test]
+    fn y_and_u_before_one_frame_draw_type() {
+        let mut view = destructible();
+        view.tick(TICK);
+        run_set(&mut view, "Y128");
+        run_set(&mut view, "U128");
+        view.tick(TICK);
+        assert_eq!(sheets_drawn(&view, 128), TYPE);
+        let scene = view.scene().expect("a scene");
+        assert!(scene.stellars().iter().all(|stellar| !stellar.destroyed));
+    }
+
+    #[test]
+    fn y_on_a_stellar_of_another_system_changes_nothing_drawn() {
+        let mut view = destructible();
+        view.tick(TICK);
+        view.catalog().systems_read.borrow_mut().clear();
+        run_set(&mut view, "Y140");
+        view.tick(TICK);
+        assert_eq!(sheets_drawn(&view, 128), TYPE);
+        let scene = view.scene().expect("a scene");
+        assert!(scene.stellars().iter().all(|stellar| !stellar.destroyed));
+        assert_eq!(systems_read(&view), []);
+    }
+
+    #[test]
+    fn a_destroyed_stellar_with_no_dead_type_keeps_its_type() {
+        let mut view = destructible();
+        run_set(&mut view, "Y129");
+        view.tick(TICK);
+        assert_eq!(sheets_drawn(&view, 129), TYPE);
+        let scene = view.scene().expect("a scene");
+        assert!(scene.stellars()[1].destroyed, "destroyed all the same");
+    }
+
+    #[test]
+    fn a_system_entered_draws_its_destroyed_stellars_dead() {
+        let mut view = destructible();
+        run_set(&mut view, "Y140");
+        run_set(&mut view, "M131");
+        settle_session(&mut view);
+        view.tick(TICK);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(sheets_drawn(&view, 140), DEAD_TYPE);
+    }
+
+    #[test]
+    fn a_system_entered_after_its_stellar_was_destroyed_draws_it_dead() {
+        let mut view = destructible();
+        run_set(&mut view, "Y140");
+        view.tick(TICK);
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(130)));
+        run_set(&mut view, "M131");
+        settle_session(&mut view);
+        let redrawn = view.catch_up();
+        assert!(redrawn.system, "laid out");
+        assert!(!redrawn.galaxy, "by the system's reaction alone");
+        assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
+        assert_eq!(sheets_drawn(&view, 140), DEAD_TYPE);
+    }
+
+    #[test]
+    fn a_new_pilot_with_a_stellar_that_starts_destroyed_draws_it_dead_from_the_first_frame() {
+        let mut view = FlightView::new(FakeCatalog {
+            lives: vec![life(128, 0x0040)],
+            ..catalog()
+        });
+        assert_eq!(sheets_drawn(&view, 128), TYPE, "not begun yet");
+        view.begin();
+        view.tick(TICK);
+        assert_eq!(sheets_drawn(&view, 128), DEAD_TYPE);
+    }
+
+    #[test]
+    fn a_pilot_flown_with_a_stellar_destroyed_draws_it_dead_at_once() {
+        let catalog = FakeCatalog {
+            lives: vec![life(128, 0)],
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        let destroy = nova_sim::SetExpr::parse("Y128").expect("parses");
+        session.run_set(&destroy, &mut NeverFires);
+        let view = FlightView::with_pilot(catalog, session.pilot().clone());
+        assert_eq!(sheets_drawn(&view, 128), DEAD_TYPE, "before any frame");
+    }
+
+    // A `DeadType` with no sheet after a rebuild point (story-runtime
+    // phase 9).
+
+    /// Whether graphic type 0's sheet is drawn, at any of the first 4
+    /// frames: Moon (129) is the only stellar that can draw it.
+    fn type_zero_drawn(view: &View) -> bool {
+        sprites(&drawn(view))
+            .into_iter()
+            .any(|(image, _)| (0..4).any(|f| image == ImageKey::sprite(TYPE_ZERO, f)))
+    }
+
+    /// Moon (129) is drawn with its `Type` sheet, or graphic type 0's.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Moon {
+        Type,
+        TypeZero,
+    }
+
+    fn moon(view: &View) -> Moon {
+        match (sheets_drawn(view, 129), type_zero_drawn(view)) {
+            (TYPE, false) => Moon::Type,
+            ((false, false), true) => Moon::TypeZero,
+            other => panic!("the Moon drawn as {other:?}"),
+        }
+    }
+
+    /// [`destructible`] with `DeadTypeFallback` read as `reading`.
+    fn reading(reading: RuleSource) -> View {
+        destructible()
+            .with_rules(Rulebook::default().with_override(RuleKey::DeadTypeFallback, reading))
+    }
+
+    /// The Moon after `Y129` and a frame; then after an in-flight `M130`
+    /// and a frame; then `U129` and a frame; then `Y129` and a frame.
+    fn moon_through_a_rebuild(mut view: View) -> [Moon; 4] {
+        run_set(&mut view, "Y129");
+        view.tick(TICK);
+        let before = moon(&view);
+        run_set(&mut view, "M130");
+        settle_session(&mut view);
+        view.tick(TICK);
+        let rebuilt = moon(&view);
+        run_set(&mut view, "U129");
+        view.tick(TICK);
+        let regenerated = moon(&view);
+        run_set(&mut view, "Y129");
+        view.tick(TICK);
+        [before, rebuilt, regenerated, moon(&view)]
+    }
+
+    #[test]
+    fn a_stellar_with_no_dead_type_draws_type_zero_from_the_next_rebuild_point_until_seen_whole() {
+        assert_eq!(
+            moon_through_a_rebuild(destructible()),
+            [Moon::Type, Moon::TypeZero, Moon::Type, Moon::Type],
+            "by default, the engine's"
+        );
+        assert_eq!(
+            moon_through_a_rebuild(reading(RuleSource::Engine)),
+            [Moon::Type, Moon::TypeZero, Moon::Type, Moon::Type]
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_stellar_with_no_dead_type_keeps_its_type_throughout() {
+        assert_eq!(
+            moon_through_a_rebuild(reading(RuleSource::Bible)),
+            [Moon::Type; 4]
+        );
+    }
+
+    #[test]
+    fn a_take_off_that_only_rebuilds_draws_type_zero() {
+        let mut view = FlightView::new(FakeCatalog {
+            sites: vec![
+                site(128, (6.0, -8.0), StellarFlags::CAN_LAND),
+                site(129, (300.0, -200.0), StellarFlags::CAN_LAND),
+            ],
+            lives: vec![life(129, 0)],
+            ..catalog()
+        });
+        land_now(&mut view);
+        assert_eq!(
+            view.session().expect("flying").landed(),
+            Some(StellarId(128))
+        );
+        run_set(&mut view, "Y129");
+        view.tick(TICK);
+        assert_eq!(
+            moon(&view),
+            Moon::Type,
+            "destroyed after the landing's rebuild"
+        );
+        view.catalog().systems_read.borrow_mut().clear();
+        view.take_off();
+        assert_eq!(moon(&view), Moon::TypeZero, "the take-off's rebuild");
+        assert_eq!(systems_read(&view), [], "not laid out again");
+    }
+
+    /// A pilot loaded with the Moon destroyed, flown by `rules`.
+    fn loaded(rules: Rulebook) -> View {
+        let catalog = FakeCatalog {
+            lives: vec![life(129, 0)],
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        let destroy = nova_sim::SetExpr::parse("Y129").expect("parses");
+        session.run_set(&destroy, &mut NeverFires);
+        FlightView::with_pilot(catalog, session.pilot().clone()).with_rules(rules)
+    }
+
+    #[test]
+    fn a_pilot_loaded_with_a_stellar_destroyed_draws_it_as_its_rules_say_from_the_first_frame() {
+        let view = loaded(Rulebook::default());
+        assert!(
+            view.session()
+                .expect("flying")
+                .dead_since_rebuild(StellarId(129))
+        );
+        assert_eq!(moon(&view), Moon::TypeZero, "a load is a rebuild point");
+        let bible = Rulebook::default().with_override(RuleKey::DeadTypeFallback, RuleSource::Bible);
+        let view = loaded(bible);
+        assert_eq!(moon(&view), Moon::Type, "before any event");
+        let view = loaded(bible).with_rules(Rulebook::default());
+        assert_eq!(moon(&view), Moon::TypeZero, "and back");
+    }
+
+    #[test]
+    fn a_system_entered_by_a_jump_with_a_stellar_destroyed_draws_type_zero_from_its_first_frame() {
+        let mut view = destructible();
+        run_set(&mut view, "Y129");
+        jump_to_alpha(&mut view);
+        plot(&mut view, 130);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        arrive_now(&mut view);
+        assert_eq!(view.session().expect("flying").system(), SystemId(130));
+        assert_eq!(moon(&view), Moon::TypeZero);
     }
 
     #[test]
@@ -10854,6 +11389,24 @@ mod tests {
         assert_eq!(player(&view), stepped(arrived, THRUST, 3));
         assert_ne!(player(&view).position, arrived.position, "it flies");
         assert!(translucent_fade(&drawn(&view)), "still fading in");
+    }
+
+    #[test]
+    fn a_hypergate_whose_gates_system_is_hidden_is_picked_by_the_one_at_its_place() {
+        let mut view = FlightView::new(FakeCatalog {
+            reborn: true,
+            ..gated()
+        });
+        change_galaxy(&mut view, hiding(131));
+        view.tick(TICK);
+        land_now(&mut view);
+        assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+        let reborn = on_map(&view, 133);
+        click(&mut view, reborn);
+        tap(&mut view, MAP);
+        assert_eq!(system_of(&view), SystemId(133));
+        assert_eq!(player(&view).position, Vec2::new(100.0, 200.0), "at 310");
+        assert_eq!(view.scene().map(SystemScene::name), Some("Alpha Reborn"));
     }
 
     #[test]

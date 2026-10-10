@@ -51,7 +51,7 @@ pub use nova_data::{
 };
 
 pub use self::set::{BitStore, execute};
-use crate::catalog::{OutfitId, SystemId};
+use crate::catalog::{OutfitId, StellarId, SystemId};
 use crate::pilot::Gender;
 
 /// What a control-bit test reads about the pilot.
@@ -171,6 +171,22 @@ pub enum ScriptNote {
     /// An operator of this kind was skipped: nothing handles it yet. Each
     /// kind is told once a session.
     Unhandled(SetOpKind),
+    /// One settling raised more story events than it dispatches (see the
+    /// [`story`](crate::story) module's "Dispatch"): this many were
+    /// dropped.
+    EventsDropped {
+        /// The events dropped.
+        dropped: u32,
+    },
+    /// A `Y` destroyed this stellar while its own `OnDestroy` was running,
+    /// which by the Bible's reading of
+    /// [`RuleKey::YOnDestroy`](crate::RuleKey::YOnDestroy) would run it
+    /// again: it was destroyed, but its `OnDestroy` was not run again (see
+    /// the [`story`](crate::story) module's "Built by phase 8").
+    OnDestroyReentered {
+        /// The stellar.
+        stellar: StellarId,
+    },
 }
 
 /// Whether one operand holds for `pilot`.

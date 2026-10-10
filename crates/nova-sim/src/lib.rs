@@ -188,6 +188,14 @@
 //!   and the outfits it carries: the one place its handling, reserve
 //!   capacities, fuel, shield and armour regeneration and cargo space come
 //!   from.
+//! - [`story`]: the story runtime's design, with the original's event
+//!   sources and orderings, and the pure types it names: the
+//!   [`StoryEvent`](story::StoryEvent)s, the
+//!   [`Subscription`](story::Subscription)s consumers register and the
+//!   order they run in ([`dispatch_order`](story::dispatch_order)), and
+//!   the [`GalaxyOverlay`](story::GalaxyOverlay) play changes over the
+//!   static galaxy, which every reader sees through the
+//!   [`OverlaidGalaxy`](story::OverlaidGalaxy).
 //! - [`targeting`]: which NPC the player's target command picks
 //!   ([`TargetPick`]): the nearest, the nearest threat, the next in turn,
 //!   or the next of the player's escorts.
@@ -246,6 +254,7 @@ pub mod ship_change;
 pub mod shipyard;
 pub mod sound;
 pub mod stats;
+pub mod story;
 pub mod targeting;
 #[cfg(test)]
 mod testkit;
@@ -265,10 +274,10 @@ pub use board::{
 pub use catalog::{
     BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterId,
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
-    GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, MissionShip, OutfitId, OutfitRecord,
-    Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId, ShipRecord, SoundId,
-    StarSystem, StartDate, StartError, StellarId, StockWeapon, StringPatch, SystemId,
-    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, MissionShip, NebulaId, OutfitId,
+    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, ShipId,
+    ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife, StockWeapon,
+    StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
@@ -300,11 +309,12 @@ pub use handling::{Handling, ShipFields};
 pub use hire::{HireList, HireRefusal, HireRow, HireTerms, Hired, NovaHire, PayNote, price_flux};
 pub use hyperspace::{
     HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, JumpZoneRule, MultiJumpRule,
-    RouteError, StarMap, check_jump, hops_per_jump, jump_zone, next_hyper_destination,
+    Places, RouteError, StarMap, check_jump, hops_per_jump, jump_zone, next_hyper_destination,
 };
 pub use landing::{
-    Clearance, LandOutcome, LandingRefusal, Service, check_landing, is_landable, land_or_select,
-    landing_radius, nearest_landable, services,
+    Clearance, LandOutcome, LandingReach, LandingRefusal, NO_FRAME_REACH, OUT_OF_RANGE_FRAME_WIDTH,
+    REACH_PER_WIDTH, Service, StellarShown, TypeWidth, UNLOADED_TYPE_WIDTH, check_landing,
+    is_landable, land_or_select, landing_radius, landing_reach, nearest_landable, services,
 };
 pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};

@@ -150,7 +150,10 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags2, 0x0100, Any, Unimplemented),
     // Uses the ship's weapon sprite.
     (Flags2, 0x0200, Any, Presentation),
-    // Planet-type weapon.
+    // Planet-type weapon. Its shots hit destroyable stellars (`stellar`);
+    // the ship side (planet-type ships, blasts sparing ships) is not done
+    // (story-runtime phase 13 "planet-type-weapons-and-ships"), so it is
+    // still reported.
     (Flags2, 0x0400, Any, Unimplemented),
     // Not selectable or shown out of ammo.
     (Flags2, 0x0800, Any, Presentation),

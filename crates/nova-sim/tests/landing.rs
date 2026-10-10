@@ -7,8 +7,8 @@ use nova_sim::landing::StellarFlags;
 use nova_sim::{
     CharacterStart, Clearance, CombatCatalog, CommodityStrings, Controls, DateAffixes,
     DisasterRecord, GovtRecord, HullRecord, JunkRecord, LandOutcome, LandPress, LandingRefusal,
-    LandingSite, OutfitId, OutfitRecord, PilotCatalog, Session, ShipFields, ShipId, StarSystem,
-    StartDate, StartError, StellarId, SystemId, Vec2, WeaponRecord,
+    LandingSite, NeverFires, OutfitId, OutfitRecord, PilotCatalog, Session, ShipFields, ShipId,
+    StarSystem, StartDate, StartError, StellarId, SystemId, Vec2, WeaponRecord,
 };
 
 /// One `chär` flying an average ship that turns 6° a tick from system
@@ -98,6 +98,14 @@ impl PilotCatalog for Pilot {
     fn gate_sites(&self) -> Vec<nova_sim::GateSite> {
         Vec::new()
     }
+
+    fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
+        Vec::new()
+    }
+
+    fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+        Some((100, 100))
+    }
 }
 
 /// Stellar 128 at the centre, where the ship starts, 200 x 200, with
@@ -114,6 +122,11 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         special_tech: [0; 8],
         govt: None,
         flags2: 0,
+        destroyed: false,
+        graphic: 0,
+        dead_graphic: None,
+        dead_frame_size: None,
+        type_counts_frames: true,
     }
 }
 
@@ -234,6 +247,6 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
     );
     assert_eq!(session.player().velocity, Vec2::ZERO);
     assert_eq!(session.player().position, Vec2::ZERO);
-    assert_eq!(session.take_off(), Some(StellarId(128)));
+    assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(128)));
     assert_eq!(session.landed(), None);
 }

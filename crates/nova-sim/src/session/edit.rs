@@ -99,7 +99,7 @@ impl Session {
         if !catalog.system_exists(system) {
             return Err(RelocateRefusal::NoSystem);
         }
-        let sites = catalog.landing_sites(system);
+        let sites = self.read_sites(catalog, system);
         let site = sites
             .iter()
             .find(|site| site.id == stellar)
@@ -117,7 +117,13 @@ impl Session {
             sites,
             placement,
         };
-        self.enter_system(Entry::Relocate, arrival, &NoTraffic, &mut NeverFires);
+        self.enter_system(
+            Entry::Relocate,
+            arrival,
+            catalog,
+            &NoTraffic,
+            &mut NeverFires,
+        );
         Ok(())
     }
 
@@ -497,10 +503,47 @@ mod tests {
         assert_eq!(session.take_messages(), []);
     }
 
+    /// The original redraws the rolls only in its daily step
+    /// (`_IncrementGameTime` @0xb7c4-0xb833), and no landing path writes
+    /// them: a move, passing no day, keeps them, and only the redraw due
+    /// on landing (`_DoShipyardDialog` @0x5f0f8) is applied.
     #[test]
-    fn a_move_clears_the_hire_rolls_as_a_landing_does() {
+    fn a_move_keeps_the_day_rolls_as_a_landing_does() {
+        use crate::catalog::OutfitId;
+        use crate::wares::DayRolls;
         let catalog = atlas();
         let mut session = landed(&catalog);
+        session.hire_rolls.hold(ShipId(129));
+        session.outfit_rolls.hold(OutfitId(128));
+        session.ship_rolls.hold(ShipId(128));
+        session.ship_rolls.hold(ShipId(129));
+        session.ship_redraws.insert(ShipId(129));
+        session.outfit_visit.bought = crate::outfitter::Bought::after_buying(
+            &crate::testkit::outfit(128, &[(crate::outfit_effects::MAP, 1)]),
+        );
+        let (hire, outfits) = (session.hire_rolls.clone(), session.outfit_rolls.clone());
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("moves");
+        session.assert_docked_among_shown();
+        assert_eq!(session.hire_rolls, hire, "kept");
+        assert_eq!(session.outfit_rolls, outfits, "kept");
+        let mut kept = DayRolls::default();
+        kept.hold(ShipId(128));
+        assert_eq!(session.ship_rolls, kept, "the redraw due applied");
+        assert!(session.ship_redraws.is_empty());
+        assert_eq!(
+            session.outfit_visit.bought,
+            crate::outfitter::Bought::default()
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_move_clears_the_day_rolls_as_a_landing_does() {
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let catalog = atlas();
+        let rules = Rulebook::default().with_override(RuleKey::DayRolls, RuleSource::Bible);
+        let mut session = landed(&catalog).with_rules(rules);
         session.hire_rolls.hold(ShipId(129));
         session.outfit_rolls.hold(crate::catalog::OutfitId(128));
         session.ship_rolls.hold(ShipId(129));
@@ -511,6 +554,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
+        session.assert_docked_among_shown();
         assert_eq!(session.hire_rolls, crate::wares::DayRolls::default());
         assert_eq!(session.outfit_rolls, crate::wares::DayRolls::default());
         assert_eq!(session.ship_rolls, crate::wares::DayRolls::default());
@@ -544,6 +588,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(130), StellarId(129))
             .expect("moves");
+        session.assert_docked_among_shown();
         assert_eq!(session.landed(), Some(StellarId(129)));
         assert_eq!(session.player().position, Vec2::new(2000.0, 0.0));
     }
@@ -560,7 +605,7 @@ mod tests {
             let mut session = landed(&catalog);
             let _ = session.relocate(&catalog, SystemId(system), StellarId(stellar));
             assert_eq!(session.take_events(), told, "{system} {stellar}");
-            session.take_off();
+            session.take_off(&mut NeverFires);
             assert_eq!(session.take_events(), [], "{system} {stellar}: taken off");
         }
     }
@@ -582,8 +627,9 @@ mod tests {
             session
                 .relocate(&catalog, SystemId(system), StellarId(stellar))
                 .expect("moves");
+            session.assert_docked_among_shown();
             assert_eq!(session.take_events(), [told], "{system} {stellar}");
-            session.take_off();
+            session.take_off(&mut NeverFires);
             assert_eq!(session.take_events(), [], "{system} {stellar}: taken off");
         }
     }
@@ -595,7 +641,8 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
-        session.take_off();
+        session.assert_docked_among_shown();
+        session.take_off(&mut NeverFires);
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(session.npcs().len(), 3);
     }
@@ -607,8 +654,10 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
+        session.assert_docked_among_shown();
         let saved = save::decode(&save::encode(session.pilot())).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
+        flown.assert_docked_among_shown();
         assert_eq!(flown.system(), SystemId(131));
         assert_eq!(flown.landed(), Some(StellarId(140)));
         assert_eq!(flown.player().position, Vec2::new(50.0, 60.0));
@@ -674,6 +723,7 @@ mod tests {
         session
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
+        session.assert_docked_among_shown();
         assert_eq!(session.shots(), []);
         assert_eq!(session.nav_target(), None);
         assert_eq!(session.gate, None);
@@ -682,7 +732,7 @@ mod tests {
         assert!(session.traffic_due);
         assert_eq!(session.pilot().escorts().len(), 2, "the fighter still out");
         assert_eq!(session.take_fighter_notes(), []);
-        session.take_off();
+        session.take_off(&mut NeverFires);
         assert_eq!(session.take_sounds(), [crate::sound::SimSound::TookOff]);
         session.tick(crate::flight::Controls::default());
         assert_eq!(

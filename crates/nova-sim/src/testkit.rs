@@ -8,7 +8,7 @@ use crate::catalog::{
     CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterRecord,
     DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord,
     LandingSite, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog, ShipId,
-    ShipRecord, StarSystem, StartDate, StartError, StellarId, SystemId, SystemTraffic,
+    ShipRecord, StarSystem, StartDate, StartError, StellarId, StellarLife, SystemId, SystemTraffic,
     TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
@@ -81,6 +81,35 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) gates: Vec<GateSite>,
     /// How many times the gate sites were read.
     pub(crate) gate_reads: RefCell<usize>,
+    /// Every stellar's life: none, by default ([`FakePilotCatalog::living`]).
+    pub(crate) lives: Vec<StellarLife>,
+    /// How many times the stellars' lives were read.
+    pub(crate) life_reads: RefCell<usize>,
+    /// Graphic type 0's sheet's frame size, or `None` when it does not
+    /// read: 100 square, by default.
+    pub(crate) fallback_frame: Option<(u32, u32)>,
+}
+
+/// Stellar `id` of `Strength` 100 and `dead_time`, starting the game
+/// whole, with no `OnRegen`.
+pub(crate) fn life(id: i16, dead_time: i16) -> StellarLife {
+    StellarLife {
+        id: StellarId(id),
+        strength: 100,
+        dead_time,
+        flags2: 0,
+        explosion: None,
+        on_destroy: crate::control::Script::default(),
+        on_regen: crate::control::Script::default(),
+    }
+}
+
+impl FakePilotCatalog {
+    /// This catalog with `lives` among its stellars' lives.
+    pub(crate) fn living(mut self, lives: impl IntoIterator<Item = StellarLife>) -> Self {
+        self.lives.extend(lives);
+        self
+    }
 }
 
 pub(crate) const FAST: ShipFields = ShipFields {
@@ -113,6 +142,11 @@ pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         special_tech: [0; 8],
         govt: None,
         flags2: 0,
+        destroyed: false,
+        graphic: 0,
+        dead_graphic: None,
+        dead_frame_size: None,
+        type_counts_frames: true,
     }
 }
 
@@ -215,6 +249,7 @@ pub(crate) fn weapon(id: i16) -> WeaponRecord {
         sub_theta: 0,
         sub_limit: 0,
         max_ammo: 0,
+        prox_safety: 0,
     }
 }
 
@@ -378,6 +413,9 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         date_affix_reads: RefCell::default(),
         gates: Vec::new(),
         gate_reads: RefCell::default(),
+        lives: Vec::new(),
+        life_reads: RefCell::default(),
+        fallback_frame: Some((100, 100)),
     }
 }
 
@@ -485,6 +523,15 @@ impl PilotCatalog for FakePilotCatalog {
     fn gate_sites(&self) -> Vec<GateSite> {
         *self.gate_reads.borrow_mut() += 1;
         self.gates.clone()
+    }
+
+    fn stellar_lives(&self) -> Vec<StellarLife> {
+        *self.life_reads.borrow_mut() += 1;
+        self.lives.clone()
+    }
+
+    fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+        self.fallback_frame
     }
 }
 

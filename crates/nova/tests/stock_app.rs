@@ -453,10 +453,11 @@ impl Driver {
 /// A pilot saved at HG-Kania (`spöb` 1404, at (-70, 250) in Kania) and
 /// opened from the main menu resumes docked there; leaving takes off over
 /// the gate. L, L opens the hypergate map, Tichel is clicked, and M brings
-/// the ship out of HG-Tichel at (-400, -500) in Tichel (129), still on
-/// 23 June 1177, saying so. Its record with the Hypergate government (183)
-/// is HG-Kania's `MinStatus`, 32767, which the original never lets a
-/// record pass (task `landing-minstatus-32767-never`).
+/// the ship out of HG-Tichel at (-400, -500) in Tichel (129), on 24 June
+/// 1177, the take-off's day (`_PlayerLandOnStellar` @0x63440), saying
+/// so. Its record with the Hypergate government (183) is HG-Kania's
+/// `MinStatus`, 32767, which the original never lets a record pass (task
+/// `landing-minstatus-32767-never`).
 #[test]
 fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     use nova_sim::fixture::MemoryPilots;
@@ -518,9 +519,9 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     assert_eq!(session.system(), SystemId(129));
     assert_eq!(session.player().position, Vec2::new(-400.0, -500.0));
     let today = session.date();
-    assert_eq!((today.day(), today.month(), today.year()), (23, 6, 1177));
+    assert_eq!((today.day(), today.month(), today.year()), (24, 6, 1177));
     assert_eq!(
         flight.message(),
-        Some("Exiting hypergate in the Tichel system on June 23, 1177 NC.")
+        Some("Exiting hypergate in the Tichel system on June 24, 1177 NC.")
     );
 }

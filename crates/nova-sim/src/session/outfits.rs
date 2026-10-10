@@ -8,7 +8,8 @@
 //! [`GrantEffect`](crate::outfit_effects::GrantEffect) applies: a map
 //! explores the systems [`map_reveals`] gives from the pilot's system,
 //! along the session's hyperlinks and as
-//! [`OutfitRules::map_explore`] says, read when the grant runs; a paint
+//! [`OutfitRules::map_explore`] says, read when the grant runs, raising
+//! [`StoryEvent::Explored`] for each, in order; a paint
 //! paints the ship; a clean-record outfit cleans the legal records; and
 //! anything else is added, one more owned. An ID in range with no record
 //! is added as a plain item, as the original bumps that slot's count.
@@ -75,6 +76,7 @@ use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records};
 use crate::outfitter::{self, resale, unit_mass, unit_price};
 use crate::pilot::Pilot;
 use crate::rulebook::RuleSource;
+use crate::story::StoryEvent;
 
 /// The outfit IDs the grant path and `D` take: an index below 0x200
 /// (`_GrantOutfitItem` @0x44d5c, `_EvalSetExp` @0x15427 and @0x15455).
@@ -192,13 +194,14 @@ impl Session {
             let reached = map_reveals(
                 reach,
                 self.pilot.system,
-                &self.star_map,
+                self.galaxy.map(),
                 self.hyperlinks,
                 &self.govts,
                 self.outfit_rules().map_explore,
             );
             for system in reached {
                 self.pilot.explore(system);
+                self.raise(StoryEvent::Explored { system });
             }
         }
         if let Some(paint) = effect.paint {
@@ -248,9 +251,11 @@ impl Session {
         self.refit(false, self.script_reserves());
     }
 
-    /// `X`: explores `system` when it is on the star map.
+    /// `X`: explores `system` when it is in the catalog's galaxy, hidden
+    /// or not: the original writes the explored level itself (@0x15c71),
+    /// whatever the system's visibility.
     pub(super) fn explore_system(&mut self, system: SystemId) {
-        if self.star_map.position(system).is_some() {
+        if self.galaxy.exists(system) {
             self.pilot.explore(system);
         }
     }
@@ -695,10 +700,93 @@ mod tests {
         assert_eq!(session.take_script_notes(), []);
     }
 
+    /// Changes `session`'s galaxy as `change` says, read from `catalog`.
+    fn overlay(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        change: impl FnOnce(&mut crate::story::GalaxyOverlay),
+    ) {
+        assert!(session.change_galaxy(catalog, change));
+    }
+
+    #[test]
+    fn a_map_reaches_no_hidden_system() {
+        let catalog = mapped();
+        let mut session = session(&catalog);
+        overlay(&mut session, &catalog, |galaxy| {
+            galaxy.set_visible(SystemId(131), Some(false));
+        });
+        session.grant_outfit(JUMPS_2);
+        assert_eq!(explored(&session), ids(&[130, 132, 133]), "131 hidden");
+    }
+
+    #[test]
+    fn a_government_class_map_reads_the_overlays_governments() {
+        let catalog = mapped();
+        let mut session = session(&catalog);
+        overlay(&mut session, &catalog, |galaxy| {
+            galaxy.set_govt(SystemId(137), Some(Some(GovtId(140))));
+            galaxy.set_govt(SystemId(135), Some(None));
+        });
+        session.grant_outfit(CLASS_3);
+        assert_eq!(explored(&session), ids(&[130, 137]));
+    }
+
+    #[test]
+    fn x_explores_a_hidden_system_too() {
+        let catalog = mapped();
+        let mut session = scripted(&catalog);
+        overlay(&mut session, &catalog, |galaxy| {
+            galaxy.set_visible(SystemId(133), Some(false));
+        });
+        assert!(run(&mut session, "X133"));
+        assert_eq!(explored(&session), ids(&[130, 133]));
+    }
+
     #[test]
     fn the_operators_note_nothing_unhandled() {
         let mut session = scripted(&mapped());
         run(&mut session, "G305 D305 X131");
         assert_eq!(session.take_script_notes(), Vec::<ScriptNote>::new());
+    }
+
+    /// `session` with the story events raised so far let go of.
+    fn quiet(mut session: Session) -> Session {
+        session.drop_raised();
+        session
+    }
+
+    fn explored_events(systems: &[i16]) -> Vec<StoryEvent> {
+        systems
+            .iter()
+            .map(|&system| StoryEvent::Explored {
+                system: SystemId(system),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_map_raises_explored_for_each_system_it_reaches_explored_already_or_not() {
+        let mut session = quiet(scripted(&mapped()));
+        run(&mut session, "G300");
+        assert_eq!(session.story_raised(), explored_events(&[130, 131, 132]));
+        let mut session = quiet(session);
+        session.grant_outfit(JUMPS_2);
+        assert_eq!(
+            session.story_raised(),
+            explored_events(&[130, 131, 132]),
+            "again"
+        );
+        let mut session = quiet(session);
+        session.grant_outfit(BLANK_MAP);
+        session.grant_outfit(SHIELD);
+        assert_eq!(session.story_raised(), [], "a map of nothing, a shield");
+    }
+
+    #[test]
+    fn x_raises_nothing() {
+        let mut session = quiet(scripted(&mapped()));
+        run(&mut session, "X133 X130");
+        assert_eq!(session.story_raised(), []);
     }
 }

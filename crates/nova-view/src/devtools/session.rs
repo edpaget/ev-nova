@@ -174,6 +174,11 @@ mod tests {
             special_tech: [0; 8],
             govt: None,
             flags2,
+            destroyed: false,
+            graphic: 0,
+            dead_graphic: None,
+            dead_frame_size: None,
+            type_counts_frames: true,
         }
     }
 
@@ -258,6 +263,14 @@ mod tests {
 
         fn gate_sites(&self) -> Vec<GateSite> {
             Vec::new()
+        }
+
+        fn stellar_lives(&self) -> Vec<nova_sim::StellarLife> {
+            Vec::new()
+        }
+
+        fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+            Some((100, 100))
         }
     }
 

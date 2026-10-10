@@ -44,8 +44,8 @@ use nova_sim::{
     Chance, Clearance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good,
     GovtId, JunkId, LandOutcome, LandPress, LandingRefusal, NeverFires, OutfitId, OutfitMod,
     OutfitOrder, OutfitRefusal, Pilot, PilotCatalog, RechargeRefusal, Service, Session, ShipFields,
-    ShipId, ShipState, ShipStats, StartDate, StellarId, StringPatch, SystemId, Vec2, check_landing,
-    services,
+    ShipId, ShipState, ShipStats, StartDate, StellarId, StellarShown, StringPatch, SystemId,
+    TypeWidth, Vec2, check_landing, landing_reach, services,
 };
 
 /// A new pilot starts with the first `chär`'s ship, cash, location (its
@@ -211,6 +211,14 @@ fn stock_landing_sites_follow_their_flags_and_min_status() {
             kania,
             session.star_map().govt(session.system()),
             |govt| session.pilot().legal_record(govt),
+            landing_reach(
+                kania,
+                StellarShown {
+                    frame: true,
+                    type_width: TypeWidth::Frame,
+                },
+                RuleSource::Engine,
+            ),
         ),
         Err(LandingRefusal::Denied {
             stellar: kania.id,
@@ -1325,6 +1333,7 @@ fn fight_with(combat: &mut Combat, ships: &mut [Combatant], arsenal: &Arsenal) {
         arsenal,
         &nova_sim::Governments::default(),
         Rules::default(),
+        &mut [],
         &mut Straight,
     );
 }
@@ -3487,14 +3496,15 @@ fn over_hg_kania(data: &GameData) -> Session {
     save["stellar"] = serde_json::json!(1404);
     let parked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     let mut session = Session::fly(data, parked).expect("flies");
-    assert_eq!(session.take_off(), Some(StellarId(1404)));
+    assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(1404)));
     assert_eq!(session.player().position, Vec2::new(-70.0, 250.0));
     session
 }
 
 /// L, L over HG-Kania enters it, offering Tichel, Dani and Koria; picking
 /// Tichel brings the Shuttle out of HG-Tichel at (-400, -500), heading
-/// 120° at half its top speed, on the same day and with a full tank.
+/// 120° at half its top speed, a day on, the take-off's
+/// (`_PlayerLandOnStellar` @0x63440), and with a full tank.
 #[test]
 fn hg_kania_leads_to_hg_tichel() {
     let Some(dir) = common::nova_data() else {
@@ -3540,7 +3550,7 @@ fn hg_kania_leads_to_hg_tichel() {
         (speed - session.handling().max_speed / 2.0).abs() < 1e-4,
         "{speed}"
     );
-    assert_eq!(session.date_text(), "June 23, 1177 NC");
+    assert_eq!(session.date_text(), "June 24, 1177 NC");
     assert_eq!(session.reserves().fuel, full);
     assert_eq!(full, Gauge::full(300.0));
 }

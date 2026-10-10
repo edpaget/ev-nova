@@ -8,10 +8,11 @@
 use std::rc::Rc;
 
 pub use nova_data::{
-    BoomId, DudeId, FleetId, GovtId, JunkId, OutfitId, PersonId, ShipId, SoundId, StellarId,
-    SystemId, WeaponId,
+    BoomId, DudeId, FleetId, GovtId, JunkId, NebulaId, OutfitId, PersonId, ShipId, SoundId,
+    StellarId, SystemId, WeaponId,
 };
 
+use crate::combat::weapon::Explosion;
 use crate::control::{Script, Test};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
@@ -115,6 +116,25 @@ pub struct LandingSite {
     /// outfits ([`BUYS_OWNED_OUTFITS`](crate::outfitter::BUYS_OWNED_OUTFITS),
     /// 0x0400).
     pub flags2: u16,
+    /// Whether it is destroyed: never in the catalog, which gives `false`;
+    /// the galaxy overlay stamps it
+    /// ([`OverlaidGalaxy::site`](crate::story::OverlaidGalaxy::site)).
+    pub destroyed: bool,
+    /// Its `Type`, raw: the graphic type whose master the original's
+    /// landing distance reads (see [`landing`](crate::landing)).
+    pub graphic: i16,
+    /// Its `DeadType`, when that is 0 to 255 and its sheet can be read:
+    /// the graphic it shows while destroyed.
+    pub dead_graphic: Option<i16>,
+    /// The frame width and height of its `DeadType`'s sheet, `Some`
+    /// exactly when [`dead_graphic`](Self::dead_graphic) is: the box a
+    /// click on it reads while destroyed (story-runtime phase 11).
+    pub dead_frame_size: Option<(u32, u32)>,
+    /// Whether its `Type`'s `spïn` gives a frame count above 0, `xTiles` ×
+    /// `yTiles`: the original reads a width of 32 for a loaded `Type`
+    /// master without one (`_LoadMasterStellarSprite` @0x1ed8c-0x1ed97,
+    /// `_GetStellarSpriteXSize` @0xaced-0xacff).
+    pub type_counts_frames: bool,
 }
 
 /// A stellar a hypergate or wormhole may lead to, raw from its `spöb`: the
@@ -139,6 +159,29 @@ pub struct GateSite {
     /// Its `CustSndID`, raw: the heading a ship comes out of it on, when
     /// it is 0 to 359.
     pub exit_angle: i16,
+}
+
+/// What a stellar's destruction and regeneration read from its `spöb`
+/// (see the [`story`](crate::story) module's "Galaxy overlay"): the
+/// story's wreck rules decide what the values mean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StellarLife {
+    /// The `spöb`'s ID.
+    pub id: StellarId,
+    /// Its `Strength`: 0 or -1 for an invincible stellar.
+    pub strength: i32,
+    /// Its `DeadTime`: the days it stays destroyed, -1 for never.
+    pub dead_time: i16,
+    /// Its `Flags2`, raw: the wreck rules read whether it starts the game
+    /// destroyed from it.
+    pub flags2: u16,
+    /// Its `ExplodType`: the explosion it makes as it is destroyed, if
+    /// any.
+    pub explosion: Option<Explosion>,
+    /// Its `OnDestroy`, run as a shot destroys it.
+    pub on_destroy: Script,
+    /// Its `OnRegen`, run as it regenerates on its own.
+    pub on_regen: Script,
 }
 
 /// An outfit, raw from its `oütf`: the [`outfitter`](crate::outfitter)
@@ -609,6 +652,9 @@ pub struct WeaponRecord {
     /// Its `MaxAmmo`: how many rounds each launcher of it holds at most;
     /// none or below for no limit of its own.
     pub max_ammo: i16,
+    /// Its `ProxSafety`: the ticks a shot of it flies before its fuse is
+    /// armed.
+    pub prox_safety: i16,
 }
 
 /// One of a ship class's stock weapons, raw from its `shïp`: a `WeapType`
@@ -827,6 +873,13 @@ pub trait PilotCatalog {
     /// itself, by ascending ID, with the system it is in: where a
     /// hypergate or wormhole may lead.
     fn gate_sites(&self) -> Vec<GateSite>;
+    /// Every `spöb` that can be read, by ascending ID, with what its
+    /// destruction and regeneration read.
+    fn stellar_lives(&self) -> Vec<StellarLife>;
+    /// The frame width and height of graphic type 0's sheet (`spïn`
+    /// 1000), or `None` when it cannot be read: the frames the original's
+    /// rebuild gives a sprite slot it left empty.
+    fn fallback_frame_size(&self) -> Option<(u32, u32)>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -885,6 +938,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn gate_sites(&self) -> Vec<GateSite> {
         (**self).gate_sites()
+    }
+
+    fn stellar_lives(&self) -> Vec<StellarLife> {
+        (**self).stellar_lives()
+    }
+
+    fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+        (**self).fallback_frame_size()
     }
 }
 
@@ -945,6 +1006,14 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn gate_sites(&self) -> Vec<GateSite> {
         (**self).gate_sites()
+    }
+
+    fn stellar_lives(&self) -> Vec<StellarLife> {
+        (**self).stellar_lives()
+    }
+
+    fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+        (**self).fallback_frame_size()
     }
 }
 
@@ -1045,6 +1114,11 @@ mod tests {
                 special_tech: [0; 8],
                 govt: None,
                 flags2: 0,
+                destroyed: false,
+                graphic: 4,
+                dead_graphic: Some(5),
+                dead_frame_size: Some((60, 60)),
+                type_counts_frames: true,
             }]
         }
 
@@ -1119,6 +1193,24 @@ mod tests {
         fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
             vec![(StellarId(128), 0x20)]
         }
+
+        /// Stellar 128, back after 7 days.
+        fn stellar_lives(&self) -> Vec<StellarLife> {
+            vec![StellarLife {
+                id: StellarId(128),
+                strength: 500,
+                dead_time: 7,
+                flags2: 0x0040,
+                explosion: None,
+                on_destroy: Script::default(),
+                on_regen: Script::default(),
+            }]
+        }
+
+        /// `spïn` 1000's frames are 7 by 9.
+        fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+            Some((7, 9))
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1144,6 +1236,8 @@ mod tests {
             format!("{:?}", catalog.date_affixes()),
             format!("{:?}", catalog.gate_sites()),
             format!("{:?}", catalog.stellar_flags()),
+            format!("{:?}", catalog.stellar_lives()),
+            format!("{:?}", catalog.fallback_frame_size()),
         ]
     }
 
@@ -1172,6 +1266,12 @@ mod tests {
         );
         assert!(direct[16].contains("StellarId(1405)"), "{direct:?}");
         assert_eq!(direct[17], "[(StellarId(128), 32)]");
+        assert!(direct[18].contains("dead_time: 7"), "{direct:?}");
+        assert!(
+            direct[5].contains("graphic: 4, dead_graphic: Some(5)"),
+            "{direct:?}"
+        );
+        assert_eq!(direct[19], "Some((7, 9))", "forwarded, not a default");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

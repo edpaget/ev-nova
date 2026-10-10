@@ -25,7 +25,14 @@
 //! | [`FighterLaunch`](RuleKey::FighterLaunch) | `fighter_launch` | a fighter launched takes its class's standing order and no target, and attacks the player's target on command ([`Session`](crate::Session)) | it attacks the player's target at once\* |
 //! | [`FighterRecall`](RuleKey::FighterRecall) | `fighter_recall` | fighters out follow a jump when they hold a jump's fuel, the rest are abandoned, and they stay out while the player is landed ([`Session`](crate::Session)) | every fighter out goes back into its bay on arrival and on landing\* |
 //! | [`HireRequire`](RuleKey::HireRequire) | `hire_require` | hiring ignores a ship's `Require`, which hides it only with `Flags3` 0x0200 ([`Session`](crate::Session)) | an unmet `Require` makes a listed ship greyed and refused\* |
-//! | [`TakeOffPay`](RuleKey::TakeOffPay) | `take_off_pay` | each take-off pays every hired escort a day's wage ([`Session`](crate::Session)) | wages are paid only for the days that pass, a jump's\* |
+//! | [`TakeOffPay`](RuleKey::TakeOffPay) | `take_off_pay` | each take-off pays every hired escort a day's wage ([`Session`](crate::Session)) | wages are paid only for a jump's days; the days a stay passes pay none\* |
+//! | [`StayDays`](RuleKey::StayDays) | `stay_days` | leaving the spaceport passes days: half as many as escorts sold or upgraded, a day if an outfit was bought or sold, four if a ship was bought, and the take-off's own day (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa, @0x6020e, `_PlayerLandOnStellar` @0x63440; [`Session`](crate::Session)) | a stay passes no days: only a jump's and a gate's like a jump pass\*\*\*\*\*\* |
+//! | [`StoryReentry`](RuleKey::StoryReentry) | `story_reentry` | an event a script raises is dispatched depth first, before the script's next operator (`_EvalSetExp` @0x150fc; `_DoMissionAccept` @0x15407; @0x159a3, @0x159a8; see [`story`](crate::story)) | it waits until the script has settled, then dispatches first in, first out†††††† |
+//! | [`DestroyInvincible`](RuleKey::DestroyInvincible) | `destroy_invincible` | `Y` leaves an invincible stellar (`Strength` 0 or -1) as it was, as `_StellarIsDestroyed` holds none destroyed (@0x4e1a; see [`story`](crate::story)) | `Y` destroys any stellar: "Yxxx - destroy stellar ID xxx" |
+//! | [`DayRolls`](RuleKey::DayRolls) | `day_rolls` | the shop and hire rolls are drawn once a day in the daily step, and a landing keeps them (`_IncrementGameTime` @0xb7c4-0xb833; see [`story`](crate::story)) | a landing forgets them, and each is drawn the first time a list asks for it‡‡‡‡‡‡ |
+//! | [`YOnDestroy`](RuleKey::YOnDestroy) | `y_on_destroy` | `Y` runs no `OnDestroy`: only a shot's destruction does (`_EvalSetExp` @0x15a38-0x15ae6, `_CheckShotProximities` @0x374a9; see [`story`](crate::story)) | `Y` runs `OnDestroy` as it destroys a whole stellar: "evaluated when the stellar is destroyed" |
+//! | [`DeadTypeFallback`](RuleKey::DeadTypeFallback) | `dead_type_fallback` | from the next rebuild point until a flight frame sees it whole, a destroyed stellar whose `DeadType` has no readable sheet draws graphic type 0, `spïn` 1000 (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f, @0x33244-0x332d0; `_HandleStellarSprites` @0x2e77b-0x2e7e5; see [`story`](crate::story)) | it keeps its `Type` sheet throughout: "-1: Don't display different graphic type when destroyed" |
+//! | [`LandingDistance`](RuleKey::LandingDistance) | `landing_distance` | the ship lands when it is strictly within trunc(1.75 × the `Type` frame's width) of the stellar's centre on each axis; the width is 150 while the `Type` master is not loaded (a destroyed stellar from a rebuild point until a flight frame loads it again, or a `Type` sheet that cannot be read) and 32 when its `spïn` gives no frame count, and the reach is 75 when the stellar's slot shows no frame (`_HandlePlayerDockRequest` @0x66cc7-0x66cfd, @0x6773a-0x677b2; `_GetStellarSpriteXSize` @0xac91-0xad2d; see [`landing`](crate::landing)) | within half the larger side of the `Type` frame, as a circle, or 32 with no sprite\* |
 //! | [`HireFee`](RuleKey::HireFee) | `hire_fee` | a hire takes trunc(cash − 0.1 × price) off the cash, a credit more than the fee shown when the tenth has a fraction ([`NovaHire`](crate::NovaHire)) | exactly the fee shown\* |
 //! | [`EscortWage`](RuleKey::EscortWage) | `escort_wage` | a hired escort is paid the wage its ship type's `Cost` gives now ([`Session`](crate::Session)) | the wage kept on its record when hired\* |
 //! | [`PersonOdds`](RuleKey::PersonOdds) | `person_odds` | a person comes on `Rand(7)` 0, then `Rand(1022)` landing on one who may appear ([`NovaPersons`](crate::NovaPersons)) | 5 %, one of those who may appear picked evenly |
@@ -91,7 +98,7 @@
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
 //! `ship_change_reserves`, `move_arrival`, `move_keep_flag`,
 //! `script_sound`, `ship_info_rounding`, `stale_secondary`,
-//! `secondary_sale` or `comm_quote`
+//! `secondary_sale`, `landing_distance` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -213,6 +220,20 @@
 //! you when you trade ships", as the engine has it. The other reading is
 //! the port's earlier behaviour, its first shipyard's carry, not anything
 //! the Bible says.
+//!
+//! \*\*\*\*\*\* The Bible says nothing of days passing in port. The
+//! other reading is the port's earlier behaviour, no days passing, not
+//! anything the Bible says.
+//!
+//! †††††† The Bible says nothing of when the events a script raises are
+//! handled. The other reading is the port's earlier after-settle order,
+//! a script's moves applied once it has settled, not anything the Bible
+//! says.
+//!
+//! ‡‡‡‡‡‡ The Bible says only that `BuyRandom` and `HireRandom` are a
+//! percent chance, nothing of when they are drawn. The other reading is
+//! the port's earlier behaviour, the rolls drawn afresh after each
+//! landing, not anything the Bible says.
 //!
 //! # Adding a rule
 //!
@@ -370,12 +391,93 @@ rule_keys! {
     /// Whether leaving the spaceport costs the hired escorts' wages for a
     /// day: by the engine, each take-off pays every hired escort a day's
     /// wage, an escort the player cannot pay defecting
-    /// (`_DoEscortLand` @0x40853); otherwise wages are paid only for the
-    /// days that pass, which here means a jump's. The Bible is silent
-    /// here, so the other reading is the intended behaviour, not anything
-    /// the Bible says (see
+    /// (`_DoEscortLand` @0x40853); otherwise wages are paid only for a
+    /// jump's days; the days a stay passes ([`RuleKey::StayDays`]) pay
+    /// none. The Bible is silent here, so the other reading is the
+    /// intended behaviour, not anything the Bible says (see
     /// [`Session::with_rules`](crate::Session::with_rules)).
     TakeOffPay => "take_off_pay",
+    /// Whether days pass in the spaceport: by the engine, leaving it
+    /// passes, through the daily step, half as many days as escorts sold
+    /// or upgraded there, rounded down (`_DoEscortLand` @0x40849), then,
+    /// after their day's pay, a day if an outfit was bought or sold
+    /// (`_DoPortDialog` @0x601fa), four if a ship was bought (@0x6020e),
+    /// and the take-off's own day (`_PlayerLandOnStellar` @0x63440);
+    /// otherwise a stay passes no days, and only a jump's and a gate's
+    /// like a jump pass. The Bible says nothing of it, so the other
+    /// reading is the port's earlier behaviour, not anything the Bible
+    /// says (see [`Session::take_off`](crate::Session::take_off)).
+    StayDays => "stay_days",
+    /// When an event a script raises is dispatched (see the
+    /// [`story`](crate::story) module's "Dispatch"): by the engine, depth
+    /// first, before the script's next operator, as `_EvalSetExp`
+    /// (@0x150fc) handles `S` (`_DoMissionAccept` @0x15407) and an `M` or
+    /// `N` in flight (@0x159a3, @0x159a8) before going on; the moves a
+    /// script queues are applied there too. Otherwise the events wait
+    /// until the script has settled
+    /// ([`Session::settle_script`](crate::Session::settle_script)), then
+    /// dispatch first in, first out. Either way at most 64 events are
+    /// dispatched from one settling. The Bible says nothing of it, so the
+    /// other reading is the port's earlier after-settle order, not
+    /// anything the Bible says.
+    StoryReentry => "story_reentry",
+    /// Whether `Y` destroys an invincible stellar, one whose `Strength` is
+    /// 0 or -1: by the engine, it does not, as the original's
+    /// `_StellarIsDestroyed` holds a stellar destroyed only when its
+    /// `Strength` is above 0 (@0x4e1a), so the countdown `Y` sets
+    /// (@0x15ac8-0x15ade) leaves it landable and drawn whole, and its next
+    /// day restores it (@0xb700); by the Bible, whose `Y` is "destroy
+    /// stellar ID xxx" whatever its `Strength`, which it calls invincible
+    /// only to planetary weapons, it is destroyed (see the
+    /// [`story`](crate::story) module's "Galaxy overlay").
+    DestroyInvincible => "destroy_invincible",
+    /// When the shop and hire day rolls are drawn: by the engine, once a
+    /// day in the daily step, every ship class's hire and buy roll then
+    /// every outfit's (`_IncrementGameTime` @0xb7c4-0xb833), and a landing
+    /// keeps them, since no landing path writes one; otherwise a landing,
+    /// and a relocation, forget them and each is drawn the first time a
+    /// list asks for it. The Bible says nothing of it, so the other
+    /// reading is the port's earlier landing-time draw, not anything the
+    /// Bible says (see the [`story`](crate::story) module's "Built by
+    /// phase 6").
+    DayRolls => "day_rolls",
+    /// Whether `Y` runs the stellar's `OnDestroy`: by the engine, it does
+    /// not, as the original's `Y` (`_EvalSetExp` @0x15a38-0x15ae6) never
+    /// reads it, and only a shot's destruction runs it
+    /// (`_CheckShotProximities` @0x374a9); by the Bible, whose `OnDestroy`
+    /// is "evaluated when the stellar is destroyed", `Y` runs it as it
+    /// destroys a whole stellar, after the destruction, and not when the
+    /// stellar was destroyed already or stays whole (an invincible one
+    /// under [`RuleKey::DestroyInvincible`]'s engine reading; see the
+    /// [`story`](crate::story) module's "Built by phase 8").
+    YOnDestroy => "y_on_destroy",
+    /// What a destroyed stellar whose `DeadType` has no readable sheet
+    /// (-1, outside 0 to 255, no `spïn`, or an `rlëD` that cannot be
+    /// read) draws: by the engine, from the next rebuild point until a
+    /// flight frame sees it whole, graphic type 0 (`spïn` 1000), the
+    /// sheet the original's rebuild gives a sprite slot it left empty
+    /// (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f,
+    /// @0x33244-0x332d0), which its per-frame sprite tick replaces only
+    /// once it finds the stellar whole (`_HandleStellarSprites`
+    /// @0x2e77b-0x2e7e5); by the Bible, whose `DeadType` -1 is "Don't
+    /// display different graphic type when destroyed", its `Type` sheet
+    /// throughout (see the [`story`](crate::story) module's "Built by
+    /// phase 9").
+    DeadTypeFallback => "dead_type_fallback",
+    /// How close the player's ship must be to a stellar to land on it,
+    /// dock at it or enter it: by the engine, strictly within trunc(1.75 ×
+    /// the width) of its centre on each axis, as the original's dock
+    /// request (`_HandlePlayerDockRequest` @0x66cc7-0x66cfd) checks both
+    /// for landing and for which refusal it gives (@0x6773a-0x677b2), the
+    /// width being `_GetStellarSpriteXSize`'s (@0xac91-0xad2d): the `Type`
+    /// frame's, 150 while the `Type` master is not loaded, 32 when its
+    /// `spïn` gives no frame count, and the reach 75 when the stellar's
+    /// slot shows no frame; otherwise half the larger side of the `Type`
+    /// frame, as a circle, or 32 with no sprite, the port's earlier
+    /// radius. The Bible says nothing of a landing distance, so the other
+    /// reading is the intended behaviour, not anything the Bible says
+    /// (see the [`story`](crate::story) module's "Built by phase 10").
+    LandingDistance => "landing_distance",
     /// What hiring an escort takes from the cash: by the engine, a tenth
     /// of the hire price worked out in floating point and the cash cut
     /// down to whole credits, which can take one credit more than the
@@ -1317,6 +1419,36 @@ mod tests {
     }
 
     #[test]
+    fn the_story_rules_are_found_by_their_keys() {
+        assert_eq!(RuleKey::StayDays.key(), "stay_days");
+        assert_eq!(RuleKey::from_key("stay_days"), Some(RuleKey::StayDays));
+        assert_eq!(RuleKey::StoryReentry.key(), "story_reentry");
+        assert_eq!(
+            RuleKey::from_key("story_reentry"),
+            Some(RuleKey::StoryReentry)
+        );
+        assert_eq!(RuleKey::DestroyInvincible.key(), "destroy_invincible");
+        assert_eq!(
+            RuleKey::from_key("destroy_invincible"),
+            Some(RuleKey::DestroyInvincible)
+        );
+        assert_eq!(RuleKey::DayRolls.key(), "day_rolls");
+        assert_eq!(RuleKey::from_key("day_rolls"), Some(RuleKey::DayRolls));
+        assert_eq!(RuleKey::YOnDestroy.key(), "y_on_destroy");
+        assert_eq!(RuleKey::from_key("y_on_destroy"), Some(RuleKey::YOnDestroy));
+        assert_eq!(RuleKey::DeadTypeFallback.key(), "dead_type_fallback");
+        assert_eq!(
+            RuleKey::from_key("dead_type_fallback"),
+            Some(RuleKey::DeadTypeFallback)
+        );
+        assert_eq!(RuleKey::LandingDistance.key(), "landing_distance");
+        assert_eq!(
+            RuleKey::from_key("landing_distance"),
+            Some(RuleKey::LandingDistance)
+        );
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)] // one line per rule key
     fn each_rule_has_a_settings_key_found_by_name() {
         assert_eq!(
@@ -1334,6 +1466,13 @@ mod tests {
                 RuleKey::FighterRecall,
                 RuleKey::HireRequire,
                 RuleKey::TakeOffPay,
+                RuleKey::StayDays,
+                RuleKey::StoryReentry,
+                RuleKey::DestroyInvincible,
+                RuleKey::DayRolls,
+                RuleKey::YOnDestroy,
+                RuleKey::DeadTypeFallback,
+                RuleKey::LandingDistance,
                 RuleKey::HireFee,
                 RuleKey::EscortWage,
                 RuleKey::PersonOdds,

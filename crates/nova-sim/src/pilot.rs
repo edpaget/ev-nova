@@ -51,6 +51,10 @@
 //! leaves the name as it is for now (the shipyard's name dialog is not
 //! shown yet), and nothing displays it yet.
 //!
+//! It keeps what play has changed of the galaxy, the
+//! [`GalaxyOverlay`]: none on a new pilot, so its galaxy is the
+//! catalog's (see the [`story`](crate::story) module's "Galaxy overlay").
+//!
 //! A [`Session`](crate::Session) flies a pilot and changes it as the rules
 //! say.
 
@@ -69,6 +73,7 @@ use crate::outfit_effects::Rgb15;
 use crate::outfitter::outfit_mods;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
+use crate::story::{GalaxyOverlay, SubscriptionId};
 
 /// Everything about the player that a save keeps.
 #[derive(Clone, Debug, PartialEq)]
@@ -126,6 +131,12 @@ pub struct Pilot {
     pub(crate) gender: Gender,
     /// The ship's paint; `None` when unpainted.
     pub(crate) paint: Option<Rgb15>,
+    /// The once-only story subscriptions that have fired, by their stable
+    /// ids (see the [`story`](crate::story) module's "Dispatch").
+    pub(crate) story_fired: BTreeSet<SubscriptionId>,
+    /// What play has changed of the galaxy (see the
+    /// [`story`](crate::story) module's "Galaxy overlay").
+    pub(crate) galaxy: GalaxyOverlay,
 }
 
 /// The player's gender, which the `G` test reads (true when male). The
@@ -227,6 +238,8 @@ impl Pilot {
             bits: ControlBitSet::new(),
             gender: Gender::default(),
             paint: None,
+            story_fired: BTreeSet::new(),
+            galaxy: GalaxyOverlay::default(),
         })
     }
 
@@ -634,6 +647,12 @@ mod tests {
         assert_eq!(pilot.explored().collect::<Vec<_>>(), [SystemId(130)]);
         assert!(pilot.has_explored(SystemId(130)));
         assert!(!pilot.has_explored(SystemId(131)));
+    }
+
+    #[test]
+    fn a_new_pilots_galaxy_is_the_catalogs() {
+        let pilot = Pilot::new(&catalog(), "").expect("starts");
+        assert!(pilot.galaxy.is_empty());
     }
 
     #[test]
