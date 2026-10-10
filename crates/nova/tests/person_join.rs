@@ -3,24 +3,31 @@
 //! Alpha, whose one stellar, a pad at the centre, can be landed on; Alpha
 //! has no traffic of its own but two Person slots at 100 %: "Merchant",
 //! `përs` 128, independent, of `Flags` 0x0040, in the "Hauler", whose
-//! `LinkMission` 128, offered from a ship (`AvailLoc` 2) on every visit,
-//! has one special ship escorting the player (`mïsn` `ShipCount` 1,
-//! `ShipGoal` 3); and "Wreck", `përs` 129, of a derelict
-//! government (`gövt` `Flags` 0x0800), so disabled from the start, in the
-//! "Hulk" (a crew of 3), granting up to 2 outfits of class 7 every time;
-//! and `oütf` 128, "Spare Part", of `ItemClass` 7, massless) and a
-//! synthetic interface file holding the stock comm dialog, driven only by
-//! window events, with pilots kept in the in-memory store.
+//! `LinkMission` 128, offered from a ship (`AvailLoc` 2) on every visit
+//! and with no offer text, has one special ship escorting the player
+//! (`mïsn` `ShipCount` 1, `ShipGoal` 3); and "Wreck", `përs` 129, of a
+//! derelict government (`gövt` `Flags` 0x0800), so disabled from the
+//! start, in the "Hulk" (a crew of 3), granting up to 2 outfits of class
+//! 7 every time; and `oütf` 128, "Spare Part", of `ItemClass` 7,
+//! massless) and a synthetic interface file holding the stock comm dialog
+//! (and no offer dialog), driven only by window events, with pilots kept
+//! in the in-memory store.
 //!
-//! By the engine's default, hailing Merchant lists Greetings and Request
-//! Assistance only. With `person_join` set to its other reading in the
-//! settings file, it lists Use As Escort too, and U makes it say "Okay,
-//! I'm on my way." and join the fleet; landing saves the pilot with the
-//! escort's `"person": 128`, and the pilot reopened in a new app takes
-//! off with Merchant beside it, shown by its name. Boarding Wreck says
-//! "You retrieved two spare parts from this ship." in the message line,
-//! opens the plunder dialog and adds the two to the pilot's outfits; with
-//! a draw that yields one, it says "a spare part".
+//! By the engine's default, hailing Merchant opens the offer of mission
+//! 128 over the paused flight in place of the comm dialog: Return accepts
+//! it and N refuses it, each closing the dialog and resuming flight. A
+//! mission that cannot be refused, with no offer text, is accepted at
+//! once and shows nothing. With `person_join` set to its other reading in
+//! the settings file, hailing Merchant opens the comm dialog listing
+//! Greetings, Request Assistance and Use As Escort, and U makes it say
+//! "Okay, I'm on my way." and join the fleet; landing saves the pilot
+//! with the escort's `"person": 128`, and the pilot reopened in a new app
+//! takes off with Merchant beside it, shown by its name. Boarding Wreck
+//! says "You retrieved two spare parts from this ship." in the message
+//! line, opens the plunder dialog and adds the two to the pilot's
+//! outfits; with a draw that yields one, it says "a spare part". Wreck of
+//! `Flags` 0x0200, linked to mission 128, offers it on boarding in place
+//! of the plunder dialog.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -155,15 +162,33 @@ fn person(govt: i16, ship: i16, flags: u16, mission: i16, grant: [i16; 3]) -> Ve
 }
 
 /// A `mïsn` offered from a ship (`AvailLoc` 2) on every visit
-/// (`AvailRandom` 100), with one special ship escorting the player.
-fn escort_mission() -> Vec<u8> {
+/// (`AvailRandom` 100), of these `Flags`, with one special ship escorting
+/// the player.
+fn escort_mission(flags: u16) -> Vec<u8> {
     let mut bytes = vec![0; Mission::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x04, &[2]);
     put_i16s(&mut bytes, 0x0A, &[100]);
     put_i16s(&mut bytes, 0x20, &[1]);
     put_i16s(&mut bytes, 0x26, &[3]);
+    bytes[0x50..0x52].copy_from_slice(&flags.to_be_bytes());
     bytes
 }
+
+/// What the game data's knobs are set to: Wreck's `Flags` and
+/// `LinkMission`, and mission 128's `Flags`.
+#[derive(Clone, Copy)]
+struct Knobs {
+    wreck_flags: u16,
+    wreck_mission: i16,
+    mission_flags: u16,
+}
+
+/// The game data as the module docs give it.
+const PLAIN: Knobs = Knobs {
+    wreck_flags: 0,
+    wreck_mission: -1,
+    mission_flags: 0,
+};
 
 /// An `oütf` of `ItemClass` 7, massless, up to 10 owned, "spare part" and
 /// "spare parts".
@@ -284,8 +309,8 @@ fn comm_strings() -> Vec<String> {
         .collect()
 }
 
-/// The game data (see the module docs).
-fn game_data() -> Rc<GameData> {
+/// The game data (see the module docs), its knobs set as `knobs` say.
+fn game_data(knobs: Knobs) -> Rc<GameData> {
     let messages: Vec<String> = (1..=200).map(|n| format!("m{n}")).collect();
     let mut fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
@@ -303,9 +328,20 @@ fn game_data() -> Rc<GameData> {
             Person::TYPE,
             129,
             Some(b"Wreck"),
-            &person(150, 130, 0, -1, [7, 2, 100]),
+            &person(
+                150,
+                130,
+                knobs.wreck_flags,
+                knobs.wreck_mission,
+                [7, 2, 100],
+            ),
         )
-        .resource(Mission::TYPE, 128, Some(b"Escort"), &escort_mission())
+        .resource(
+            Mission::TYPE,
+            128,
+            Some(b"Escort"),
+            &escort_mission(knobs.mission_flags),
+        )
         .resource(Outfit::TYPE, 128, Some(b"Spare Part"), &spare_part())
         .resource(System::TYPE, 128, Some(b"Alpha"), &alpha())
         .resource(Stellar::TYPE, 128, Some(b"Pad"), &pad())
@@ -431,7 +467,18 @@ impl Game {
     /// `settings` chooses; then two frames, the second setting the system
     /// up in flight.
     fn opened(store: &MemoryPilots, draws: &[u32], showing: Showing, settings: &str) -> Self {
-        let data = game_data();
+        Self::opened_with(PLAIN, store, draws, showing, settings)
+    }
+
+    /// [`Game::opened`] over the game data with `knobs` set.
+    fn opened_with(
+        knobs: Knobs,
+        store: &MemoryPilots,
+        draws: &[u32],
+        showing: Showing,
+        settings: &str,
+    ) -> Self {
+        let data = game_data(knobs);
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         if store.text("Pilot").is_none() {
             let pilot = Pilot::new(data.as_ref(), "Pilot").expect("a pilot");
@@ -593,16 +640,90 @@ fn saved_rulebook(text: &str) -> nova_sim::Rulebook {
 /// The settings choosing `person_join`'s other reading.
 const JOINING: &str = r#"{"rule_overrides": {"person_join": "bible"}}"#;
 
+impl Game {
+    /// The mission the offer dialog offers, while it is open.
+    fn offered(&self) -> Option<i16> {
+        let dialog = self.app.screen().offer()?;
+        Some(dialog.prompt().mission.0)
+    }
+
+    /// The missions the pilot has accepted, in slot order.
+    fn active(&self) -> Vec<i16> {
+        self.session()
+            .pilot()
+            .missions()
+            .missions()
+            .iter()
+            .map(|mission| mission.0)
+            .collect()
+    }
+}
+
 #[test]
-fn by_the_engines_default_merchant_offers_only_greetings_and_assistance() {
+fn by_the_engines_default_merchant_offers_its_mission_in_place_of_the_comm_dialog() {
     let store = MemoryPilots::new();
     let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
     game.target_person(128);
     game.tap(Key::Char('y'));
-    assert_eq!(game.showing(), Showing::Comm);
-    let (options, reply) = game.hailing();
-    assert_eq!(reply, "Channel open.");
-    assert_eq!(options, ["Greetings", "Request Assistance"]);
+    assert_eq!(game.showing(), Showing::Offer, "over the paused flight");
+    assert_eq!(game.offered(), Some(128));
+    let shown = texts(&game.frame());
+    assert!(
+        shown
+            .iter()
+            .any(|text| text.starts_with("Cannot show the mission offer")),
+        "no offer dialog in the interface file: {shown:?}"
+    );
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight, "flight resumes");
+    assert_eq!(game.active(), [128]);
+}
+
+#[test]
+fn n_refuses_merchants_offer_and_flight_resumes() {
+    let store = MemoryPilots::new();
+    let mut game = Game::opened(&store, &BOTH, Showing::Flight, "{}");
+    game.target_person(128);
+    game.tap(Key::Char('y'));
+    assert_eq!(game.showing(), Showing::Offer);
+    game.tap(Key::Char('n'));
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.active(), Vec::<i16>::new());
+    game.tap(Key::Char('y'));
+    assert_eq!(game.offered(), Some(128), "offered again");
+}
+
+#[test]
+fn an_unrefusable_mission_with_no_offer_text_is_accepted_at_once_showing_nothing() {
+    let store = MemoryPilots::new();
+    let knobs = Knobs {
+        mission_flags: 0x0004,
+        ..PLAIN
+    };
+    let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
+    game.target_person(128);
+    game.tap(Key::Char('y'));
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.active(), [128]);
+}
+
+#[test]
+fn boarding_wreck_of_0x0200_offers_its_mission_in_place_of_the_plunder() {
+    let store = MemoryPilots::new();
+    let knobs = Knobs {
+        wreck_flags: 0x0200,
+        wreck_mission: 128,
+        ..PLAIN
+    };
+    let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
+    game.target_person(129);
+    game.tap(Key::Char('b'));
+    assert_eq!(game.showing(), Showing::Offer);
+    assert_eq!(game.offered(), Some(128));
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.active(), [128]);
+    assert_eq!(game.session().pilot().owned(OutfitId(128)), 0, "no grant");
 }
 
 #[test]

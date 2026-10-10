@@ -52,6 +52,9 @@ pub enum Showing {
     Comm,
     /// The haggle dialog, over the comm dialog.
     Haggle,
+    /// The offer dialog of a person hailed or boarded, over flight, which
+    /// it pauses.
+    Offer,
 }
 
 /// Something in the game data a screen cannot use, for the app to write

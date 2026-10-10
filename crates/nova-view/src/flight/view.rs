@@ -207,8 +207,16 @@
 //!   the old one, and the session tells the change of ship, so the new
 //!   ship's sprite sheet is read, once. Boarding a
 //!   person that grants outfits says what it retrieved
-//!   ([`grant_message`]) for [`GRANT_SHOWN_FOR`].
-//! - Y (a press) hails the target ([`Session::hail`]), the comm dialog
+//!   ([`grant_message`]) for [`GRANT_SHOWN_FOR`]. A person of `Flags`
+//!   0x0200 whose mission is available offers it in place of the plunder
+//!   ([`Boarding::Offered`]), held for the router as a hail's offer is.
+//! - Y (a press) hails the target ([`Session::open_hail`]): a person
+//!   whose mission is available offers it in place of the comm dialog,
+//!   held for the router ([`FlightView::take_offer`]), which opens the
+//!   offer dialog over the paused flight and answers it through
+//!   [`FlightView::accept_mission`] or [`FlightView::refuse_mission`]; a
+//!   mission that cannot be refused, with no offer text, is accepted at
+//!   once and shows nothing. Any other hail opens the comm dialog,
 //!   listing the screen's [`HailOptions`]
 //!   ([`FlightView::with_hail_options`]; Nova's by default), its replies
 //!   read through the [`CommCatalog`] port, and otherwise says why in the
@@ -282,9 +290,9 @@ use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::offer_gap;
 use nova_sim::mission::screens::mac_ticks;
 use nova_sim::{
-    AbortError, AcceptError, ComputerRefusal, ControlBits, HireList, HireRefusal, HireTerms, Hired,
-    MissionComputer, MissionId, MissionInfo, MissionText, NotOffered, PayNote, PersonRules,
-    SessionEvent, VenueOffer,
+    AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
+    HireTerms, Hired, MissionComputer, MissionId, MissionInfo, MissionText, NotOffered,
+    OfferPrompt, PayNote, PersonRules, SessionEvent, VenueOffer,
 };
 use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
@@ -998,6 +1006,9 @@ pub struct FlightView<C> {
     pending_boarding: bool,
     /// The hail just answered, for the router.
     pending_hail: Option<HailView>,
+    /// The mission a person hailed or boarded just offered, for the
+    /// router.
+    pending_offer: Option<OfferPrompt>,
     /// The session's arrival messages taken before their arrival is
     /// caught up with, which leads them.
     pending_leads: Vec<SimMessage>,
@@ -1193,6 +1204,7 @@ impl<
             message: None,
             pending_boarding: false,
             pending_hail: None,
+            pending_offer: None,
             pending_leads: Vec::new(),
             hail_options: HailOptions::default(),
             boarding_rule: Rc::new(NovaBoarding::default()),
@@ -1349,18 +1361,22 @@ impl<
         }
     }
 
-    /// Hails the target, or says why not: a hail answered is held for the
-    /// router ([`FlightView::take_hail`]) and lets go of the flight keys.
+    /// Hails the target ([`Session::open_hail`]), or says why not: a hail
+    /// answered is held for the router ([`FlightView::take_hail`]), and a
+    /// mission offered in its place too ([`FlightView::take_offer`]),
+    /// each letting go of the flight keys; one accepted at once shows
+    /// nothing.
     fn hail(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
         };
-        match session.hail(&self.catalog, &self.hail_options, &mut self.chance) {
-            Ok(view) => {
+        match session.open_hail(&self.catalog, &self.hail_options, &mut self.chance) {
+            Ok(Hailed::Comm(view)) => {
                 self.pending_hail = Some(view);
                 self.message = None;
                 self.held.clear();
             }
+            Ok(Hailed::Offer(offer)) => self.hold_offer(offer),
             Err(refusal) => {
                 if let Some(text) = hail_refusal_message(refusal) {
                     self.say(text);
@@ -1373,6 +1389,14 @@ impl<
     /// dialog.
     pub fn take_hail(&mut self) -> Option<HailView> {
         self.pending_hail.take()
+    }
+
+    /// The mission a person hailed or boarded just offered, once: the
+    /// router takes it to open the offer dialog over the paused flight,
+    /// and answers it through [`FlightView::accept_mission`] or
+    /// [`FlightView::refuse_mission`].
+    pub fn take_offer(&mut self) -> Option<OfferPrompt> {
+        self.pending_offer.take()
     }
 
     /// The comm dialog's contents while a hail is under way
@@ -1995,9 +2019,21 @@ impl<C> FlightView<C> {
         self.message = Some((text.into(), self.elapsed, lasting));
     }
 
+    /// Holds `offer`'s prompt for the router, letting go of the flight
+    /// keys; a mission accepted at once shows nothing, its texts waiting
+    /// for the spaceport.
+    fn hold_offer(&mut self, offer: VenueOffer) {
+        if let VenueOffer::Prompt(prompt) = offer {
+            self.pending_offer = Some(prompt);
+            self.message = None;
+            self.held.clear();
+        }
+    }
+
     /// Boards the target, or says why not: a boarding that opens is held
-    /// for the router ([`FlightView::take_boarding`]) and lets go of the
-    /// flight keys.
+    /// for the router ([`FlightView::take_boarding`]), and a mission
+    /// offered in its place too ([`FlightView::take_offer`]), each letting
+    /// go of the flight keys.
     fn board(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
@@ -2014,8 +2050,7 @@ impl<C> FlightView<C> {
                 }
             }
             Ok(Boarding::Repelled) => self.say(REPELLED),
-            // The offer dialog over flight comes with the router's side.
-            Ok(Boarding::Offered(_)) => {}
+            Ok(Boarding::Offered(offer)) => self.hold_offer(offer),
             Err(refusal) => {
                 if let Some(text) = board_refusal_message(refusal) {
                     self.say(text);
@@ -2753,13 +2788,13 @@ impl<
             Some(LAND_KEY) => self.land(),
             Some(BOARD_KEY) => {
                 self.board();
-                if self.pending_boarding {
+                if self.pending_boarding || self.pending_offer.is_some() {
                     return ScreenAction::None;
                 }
             }
             Some(HAIL_KEY) => {
                 self.hail();
-                if self.pending_hail.is_some() {
+                if self.pending_hail.is_some() || self.pending_offer.is_some() {
                     return ScreenAction::None;
                 }
             }
@@ -11288,6 +11323,140 @@ mod tests {
     fn boarding_a_person_that_grants_nothing_says_nothing() {
         let view = boarded_ace(2, Rc::new(Sure));
         assert_eq!(view.message(), None);
+    }
+
+    // Persons' mission offers.
+
+    /// [`peopled`] with Ace of `flags` linked to mission 130, offered
+    /// from a ship, its offer text `offer`, refusable unless
+    /// `unrefusable`.
+    fn offering(flags: u16, offer: Option<&str>, unrefusable: bool) -> FakeCatalog {
+        let mut catalog = peopled();
+        catalog.persons[0].flags = flags;
+        catalog.persons[0].link_mission = Some(130);
+        catalog.missions = vec![nova_sim::catalog::MissionRecord {
+            id: MissionId(130),
+            avail_stel: -1,
+            avail_loc: 2,
+            avail_record: 0,
+            avail_rating: 0,
+            avail_random: 100,
+            avail_ship_type: 0,
+            avail_bits: nova_sim::Test::default(),
+            require: 0,
+            flags: if unrefusable { 0x0004 } else { 0 },
+            flags2: 0,
+            travel_stel: -1,
+            return_stel: -1,
+            cargo_type: -1,
+            cargo_qty: 0,
+            pickup_mode: -1,
+            drop_off_mode: -1,
+            scan_mask: 0,
+            pay_val: 0,
+            time_limit: 0,
+            disp_weight: 0,
+            on_accept: nova_sim::Script::default(),
+            on_refuse: nova_sim::Script::default(),
+            on_success: nova_sim::Script::default(),
+            on_failure: nova_sim::Script::default(),
+            on_abort: nova_sim::Script::default(),
+            can_abort: 1,
+            comp_govt: None,
+            comp_reward: 0,
+            date_post_inc: 0,
+            ships: nova_sim::catalog::MissionShip { count: 0, goal: -1 },
+        }];
+        catalog.mission_texts = vec![nova_sim::catalog::MissionTexts {
+            offer: offer.map(str::to_owned),
+            ..nova_sim::catalog::MissionTexts::named(MissionId(130), "Help Ace")
+        }];
+        catalog
+    }
+
+    /// `catalog`'s flight with Ace listed and placed 100 above the
+    /// player, targeted.
+    fn targeting_ace(catalog: FakeCatalog) -> View {
+        let (_, chance) = scripted(&ACE[..4]);
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        tap(&mut view, TARGET_KEY);
+        view
+    }
+
+    #[test]
+    fn y_on_a_person_offering_its_mission_reports_the_offer_once() {
+        let mut view = targeting_ace(offering(0, Some("<OSN> needs help."), false));
+        assert_eq!(view.take_offer(), None);
+        view.input(&key(Key::Up, true));
+        tap(&mut view, HAIL_KEY);
+        assert_eq!(view.take_hail(), None, "no comm dialog");
+        let prompt = view.take_offer().expect("offered");
+        assert_eq!(prompt.mission, MissionId(130));
+        assert_eq!(prompt.text, "Ace needs help.");
+        assert_eq!(view.take_offer(), None, "once");
+        view.tick(TICK);
+        assert_eq!(
+            view.session().expect("flying").player().velocity,
+            Vec2::ZERO,
+            "the flight keys let go"
+        );
+        assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
+        assert_eq!(
+            view.pilot().expect("a pilot").missions().missions(),
+            [MissionId(130)]
+        );
+    }
+
+    #[test]
+    fn a_refusal_of_the_offer_goes_through_the_session() {
+        let mut view = targeting_ace(offering(0, Some("Help?"), false));
+        tap(&mut view, HAIL_KEY);
+        view.take_offer().expect("offered");
+        assert_eq!(view.refuse_mission(MissionId(130)), Ok(()));
+        assert_eq!(
+            view.refuse_mission(MissionId(130)),
+            Err(NotOffered),
+            "answered"
+        );
+    }
+
+    #[test]
+    fn b_on_a_person_offering_on_boarding_reports_the_offer_and_no_plunder() {
+        let mut catalog = granting(2);
+        let ace = &mut catalog.persons[0];
+        ace.flags = 0x0200;
+        ace.link_mission = Some(130);
+        catalog.missions = offering(0, None, false).missions;
+        catalog.mission_texts = offering(0, Some("Aboard."), false).mission_texts;
+        let (_, chance) = scripted(&[99, 750, 750, 0]);
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still))
+            .with_boarding_rule(Rc::new(Grants));
+        view.tick(TICK);
+        tap(&mut view, TARGET_KEY);
+        tap(&mut view, BOARD_KEY);
+        assert_eq!(view.take_boarding(), None, "no plunder dialog");
+        assert_eq!(
+            view.take_offer().map(|prompt| prompt.text),
+            Some("Aboard.".to_owned())
+        );
+        assert_eq!(view.message(), None, "nothing granted");
+    }
+
+    #[test]
+    fn an_offer_accepted_at_once_shows_nothing() {
+        let mut view = targeting_ace(offering(0, None, true));
+        tap(&mut view, HAIL_KEY);
+        assert_eq!(view.take_offer(), None);
+        assert_eq!(view.take_hail(), None);
+        assert_eq!(
+            view.pilot().expect("a pilot").missions().missions(),
+            [MissionId(130)]
+        );
     }
 
     // The navigation target.

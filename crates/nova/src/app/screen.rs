@@ -191,8 +191,8 @@ use nova_sim::mission::screens::{BAR, SPACEPORT};
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
     HailView, HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
-    NovaPersons, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule, Rulebook, Session,
-    Take, Taken, VenueOffer, pilot_key,
+    NovaPersons, OfferPrompt, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule,
+    Rulebook, Session, Take, Taken, VenueOffer, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
@@ -204,7 +204,7 @@ use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::bar::BAR_DIALOG;
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::spaceport::missions::{COMPUTER_DIALOG, INFO_DIALOG};
-use nova_view::spaceport::offer::{OFFER_DIALOG, OfferChoice};
+use nova_view::spaceport::offer::{OFFER_DIALOG, OfferChoice, OfferDialog};
 use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
 use nova_view::spaceport::shipyard::{SHIP_INFO_DIALOG, SHIPYARD_DIALOG};
 use nova_view::spaceport::trade::TRADE_DIALOG;
@@ -334,6 +334,9 @@ pub struct AppScreen {
     comm: Option<CommDialog>,
     /// The haggle dialog, over the comm dialog, while a price is asked.
     haggle: Option<HaggleDialog>,
+    /// The offer dialog of a person hailed or boarded, over flight, until
+    /// it is answered.
+    offer: Option<OfferDialog>,
 }
 
 /// The main menu, the metrics its screens' text is laid out by when there
@@ -408,6 +411,7 @@ impl AppScreen {
             person_rules: Rc::new(NovaPersons::default()),
             comm: None,
             haggle: None,
+            offer: None,
         }
     }
 
@@ -550,6 +554,12 @@ impl AppScreen {
     #[must_use]
     pub fn haggle(&self) -> Option<&HaggleDialog> {
         self.haggle.as_ref()
+    }
+
+    /// The offer dialog of a person hailed or boarded, while it is open.
+    #[must_use]
+    pub fn offer(&self) -> Option<&OfferDialog> {
+        self.offer.as_ref()
     }
 
     /// The plunder dialog, while a boarding is under way.
@@ -740,6 +750,9 @@ impl AppScreen {
         if self.comm.is_some() {
             return Showing::Comm;
         }
+        if self.offer.is_some() {
+            return Showing::Offer;
+        }
         if self.plunder.is_some() {
             return Showing::Plunder;
         }
@@ -925,6 +938,9 @@ impl AppScreen {
         if let Some(dialog) = &mut self.comm {
             return Some(dialog);
         }
+        if let Some(dialog) = &mut self.offer {
+            return Some(dialog);
+        }
         if let Some(dialog) = &mut self.plunder {
             return Some(dialog);
         }
@@ -988,6 +1004,48 @@ impl AppScreen {
         }
         if let Some(view) = self.flight.as_mut().and_then(FlightView::take_hail) {
             self.open_comm(&view);
+        }
+        if let Some(prompt) = self.flight.as_mut().and_then(FlightView::take_offer) {
+            self.open_offer(prompt);
+        }
+        ScreenAction::None
+    }
+
+    /// Opens the offer dialog on `prompt`, a person's mission offered on
+    /// its hail or boarding, over flight, which pauses: the interface
+    /// file's, or, without it or the metrics to lay it out, the dialog's
+    /// own note that Return accepts it.
+    fn open_offer(&mut self, prompt: OfferPrompt) {
+        let layout = match (&self.dialogs, self.metrics()) {
+            (Some(dialogs), Some(metrics)) => dialogs
+                .resources
+                .dialog_template(OFFER_DIALOG)
+                .map(|template| (template, metrics)),
+            _ => Err(NO_INTERFACE.to_owned()),
+        };
+        self.offer = Some(OfferDialog::new(layout, prompt, self.data.button_style()));
+    }
+
+    /// The offer dialog's input: the choice goes through flight, and the
+    /// dialog closes, keeping its sounds, and flight resumes. The texts
+    /// the answer queued wait for the next spaceport.
+    fn offer_input(&mut self, input: &Input) -> ScreenAction {
+        let dialog = self.offer.as_mut().expect("open");
+        dialog.input(input);
+        let Some(choice) = dialog.take_choice() else {
+            return ScreenAction::None;
+        };
+        let mission = dialog.prompt().mission;
+        self.sounds.extend(dialog.take_sounds());
+        self.offer = None;
+        let flight = self.flight.as_mut().expect(ENTERED);
+        match choice {
+            OfferChoice::Accept => {
+                let _ = flight.accept_mission(mission);
+            }
+            OfferChoice::Refuse => {
+                let _ = flight.refuse_mission(mission);
+            }
         }
         ScreenAction::None
     }
@@ -1334,8 +1392,10 @@ impl AppScreen {
     }
 
     /// Shows the mission texts the session queued over the spaceport, if
-    /// it is open. Those queued in flight (a `BriefText` an `S` accepted)
-    /// wait in the session and show at the next spaceport.
+    /// it is open. Those queued in flight (a `BriefText` an `S` accepted,
+    /// or the texts of a person's offer accepted or refused over flight)
+    /// wait in the session and show at the next spaceport
+    /// (rdm:phase/missions/phase-17-deadline-message-and-flight-info).
     fn show_mission_texts(&mut self) {
         if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
             spaceport.show_mission_texts(flight.take_mission_texts());
@@ -1693,6 +1753,9 @@ impl AppScreen {
         if self.comm.is_some() {
             return self.comm_input(input);
         }
+        if self.offer.is_some() {
+            return self.offer_input(input);
+        }
         if self.plunder.is_some() {
             return self.plunder_input(input);
         }
@@ -1914,6 +1977,9 @@ impl Screen for AppScreen {
         if let Some(dialog) = &self.comm {
             dialog.draw(list);
         }
+        if let Some(dialog) = &self.offer {
+            dialog.draw(list);
+        }
         if let Some(dialog) = &self.haggle {
             dialog.draw(list);
         }
@@ -1964,6 +2030,7 @@ impl Screen for AppScreen {
                 .map(|dialog| dialog as &mut dyn Screen),
             self.comm.as_mut().map(|dialog| dialog as &mut dyn Screen),
             self.haggle.as_mut().map(|dialog| dialog as &mut dyn Screen),
+            self.offer.as_mut().map(|dialog| dialog as &mut dyn Screen),
             self.spaceport.as_mut().map(|port| port as &mut dyn Screen),
             self.flight.as_mut().map(|flight| flight as &mut dyn Screen),
         ];
