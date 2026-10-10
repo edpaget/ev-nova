@@ -28,11 +28,13 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::hire::{HIRE_ESCORT, NONE_FOR_HIRE};
-use nova_sim::{HireList, ShipId};
+use nova_sim::mission::screens::{FIRST_OFFER_TICKS, mac_ticks};
+use nova_sim::{HireList, MissionId, OfferPrompt, ShipId};
 
 use super::catalog::StellarId;
 use super::hire::HireScreen;
 use super::layout::LEAVE_LABEL;
+use super::offer::{OfferChoice, OfferDialog};
 use super::shipyard::ShipyardCatalog;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -71,6 +73,10 @@ pub const HOLOVID_LABEL: &str = "Holovid";
 /// The keys that press Hire Escort (`_BarFilter`: Mac virtual keys 4 and
 /// 14).
 pub const HIRE_KEYS: [Key; 2] = [Key::Char('h'), Key::Char('e')];
+
+/// How long after the bar opens it first asks for an offer: 15 of the
+/// Mac's ticks (`_DoBarDialog` @0x48f51-0x48f5f).
+pub const FIRST_OFFER_DELAY: Duration = mac_ticks(FIRST_OFFER_TICKS);
 
 /// The first bar text's `dësc`, for `spöb` 128.
 pub const FIRST_BAR_DESC: i16 = 10_000;
@@ -126,6 +132,22 @@ struct Laid {
     said: Option<&'static str>,
 }
 
+/// The bar's mission offers: the offer dialog's template (or why there is
+/// none), the wait before the next ask, and the offer open.
+#[derive(Clone, Debug)]
+struct Offering {
+    template: Result<DialogTemplate, String>,
+    /// How long until the bar asks for an offer: none while it waits to be
+    /// rearmed.
+    wait: Option<Duration>,
+    /// Whether the bar has asked since this was last taken.
+    requested: bool,
+    /// The offer dialog, while it is open.
+    dialog: Option<OfferDialog>,
+    /// The offer answered and its choice, until it is taken.
+    choice: Option<(MissionId, OfferChoice)>,
+}
+
 /// The bar of the stellar landed on.
 #[derive(Clone, Debug)]
 pub struct BarScreen {
@@ -137,6 +159,8 @@ pub struct BarScreen {
     room: bool,
     /// The hire screen, while it is open.
     hire: Option<HireScreen>,
+    /// The mission offers, once given.
+    offering: Option<Offering>,
     /// Whether Hire Escort has asked for the list since this was last
     /// taken.
     requested: bool,
@@ -203,9 +227,68 @@ impl BarScreen {
             style,
             room,
             hire: None,
+            offering: None,
             requested: false,
             closed: false,
             sounds: Vec::new(),
+        }
+    }
+
+    /// The bar with mission offers, each shown in the offer dialog laid
+    /// out by `template` (or saying why there is none): it asks for the
+    /// first [`FIRST_OFFER_DELAY`] after it opens.
+    #[must_use]
+    pub fn with_offers(self, template: Result<DialogTemplate, String>) -> Self {
+        Self {
+            offering: Some(Offering {
+                template,
+                wait: Some(FIRST_OFFER_DELAY),
+                requested: false,
+                dialog: None,
+                choice: None,
+            }),
+            ..self
+        }
+    }
+
+    /// Whether the bar has asked for an offer since this was last asked
+    /// (`_BarFilter` @0x47be0-0x47c0f): whoever holds the session answers
+    /// with [`BarScreen::open_offer`], or, with none, rearms it
+    /// ([`BarScreen::rearm`]).
+    pub fn take_offer_request(&mut self) -> bool {
+        self.offering
+            .as_mut()
+            .is_some_and(|offering| std::mem::take(&mut offering.requested))
+    }
+
+    /// Opens the offer dialog over the bar on `prompt`.
+    pub fn open_offer(&mut self, prompt: OfferPrompt) {
+        let (Ok(laid), Some(offering)) = (&self.laid, &mut self.offering) else {
+            return;
+        };
+        let layout = offering
+            .template
+            .clone()
+            .map(|template| (template, Rc::clone(&laid.metrics.0)));
+        offering.dialog = Some(OfferDialog::new(layout, prompt, self.style));
+    }
+
+    /// The offer dialog, while it is open.
+    #[must_use]
+    pub fn offer_dialog(&self) -> Option<&OfferDialog> {
+        self.offering.as_ref()?.dialog.as_ref()
+    }
+
+    /// The offer answered since this was last taken, and the choice made,
+    /// once.
+    pub fn take_offer_choice(&mut self) -> Option<(MissionId, OfferChoice)> {
+        self.offering.as_mut()?.choice.take()
+    }
+
+    /// Asks for the next offer after `gap`.
+    pub fn rearm(&mut self, gap: Duration) {
+        if let Some(offering) = &mut self.offering {
+            offering.wait = Some(gap);
         }
     }
 
@@ -315,6 +398,17 @@ impl Screen for BarScreen {
     /// The hire screen takes every input while it is open; otherwise
     /// every input goes to the bar. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(offering) = &mut self.offering
+            && let Some(dialog) = &mut offering.dialog
+        {
+            dialog.input(input);
+            self.sounds.extend(dialog.take_sounds());
+            if let Some(choice) = dialog.take_choice() {
+                offering.choice = Some((dialog.prompt().mission, choice));
+                offering.dialog = None;
+            }
+            return ScreenAction::None;
+        }
         if let Some(hire) = &mut self.hire {
             hire.input(input);
             self.sounds.extend(hire.take_sounds());
@@ -352,8 +446,23 @@ impl Screen for BarScreen {
         ScreenAction::None
     }
 
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
+    /// The wait for the next offer runs down, while neither the hire
+    /// screen nor an offer is open; once it is out the bar asks.
+    fn tick(&mut self, dt: Duration) {
+        let Some(offering) = &mut self.offering else {
+            return;
+        };
+        if self.hire.is_some() || offering.dialog.is_some() {
+            return;
+        }
+        if let Some(wait) = &mut offering.wait {
+            *wait = wait.saturating_sub(dt);
+            if wait.is_zero() {
+                offering.wait = None;
+                offering.requested = true;
+            }
+        }
+    }
 
     fn draw(&self, list: &mut DrawList) {
         match &self.laid {
@@ -374,10 +483,19 @@ impl Screen for BarScreen {
         if let Some(hire) = &self.hire {
             hire.draw(list);
         }
+        if let Some(dialog) = self.offer_dialog() {
+            dialog.draw(list);
+        }
     }
 
     fn cancel_pointer(&mut self) {
-        if let Some(hire) = &mut self.hire {
+        if let Some(dialog) = self
+            .offering
+            .as_mut()
+            .and_then(|offering| offering.dialog.as_mut())
+        {
+            dialog.cancel_pointer();
+        } else if let Some(hire) = &mut self.hire {
             hire.cancel_pointer();
         } else if let Ok(laid) = &mut self.laid {
             laid.dialog.cancel_pointer();
@@ -887,5 +1005,157 @@ mod tests {
         for part in ["BarScreen", "Hiring", "no DLOG 1004", "TextMetrics"] {
             assert!(debug.contains(part), "{part}: {debug}");
         }
+    }
+
+    // The bar's mission offers.
+
+    use crate::spaceport::offer::{OfferChoice, REFUSE_ITEM};
+    use nova_sim::mission::OfferLabels;
+    use nova_sim::{MissionId, OfferPrompt};
+
+    /// The offer dialog's shape, smaller: 300 x 200, fixed at (0, 0),
+    /// with accept (1), refuse (2), the text (3) and the one button (6).
+    fn offer_template() -> DialogTemplate {
+        let mut slots = items(&[(0.0, 300.0, 1.0, 1.0); 6]);
+        slots[0].bounds = rect(200.0, 170.0, 90.0, 25.0);
+        slots[1].bounds = rect(100.0, 170.0, 90.0, 25.0);
+        slots[2].bounds = rect(10.0, 10.0, 280.0, 150.0);
+        slots[5].bounds = rect(150.0, 170.0, 90.0, 25.0);
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 300.0, 200.0),
+            placement: Placement::Fixed,
+            items: slots,
+        }
+    }
+
+    fn prompt() -> OfferPrompt {
+        OfferPrompt {
+            mission: MissionId(141),
+            text: "Ferry this to Mars.".to_owned(),
+            labels: OfferLabels {
+                accept: "I'm in".to_owned(),
+                refuse: Some("No".to_owned()),
+            },
+        }
+    }
+
+    /// Viking's bar, its offers given.
+    fn offering() -> BarScreen {
+        bar().with_offers(Ok(offer_template()))
+    }
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    #[test]
+    fn a_quarter_second_after_the_bar_opens_it_asks_for_an_offer_once() {
+        let mut screen = offering();
+        screen.tick(ms(249));
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(1));
+        assert!(screen.take_offer_request());
+        assert!(!screen.take_offer_request(), "once");
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not again until rearmed");
+        assert_eq!(FIRST_OFFER_DELAY, ms(250));
+    }
+
+    #[test]
+    fn without_offers_given_the_bar_never_asks() {
+        let mut screen = bar();
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request());
+        screen.open_offer(prompt());
+        assert!(screen.offer_dialog().is_none());
+    }
+
+    #[test]
+    fn an_offer_opens_over_the_bar_and_takes_every_input_until_it_is_answered() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let offer = screen.offer_dialog().expect("open");
+        assert_eq!(offer.prompt(), &prompt());
+        assert_eq!(offer.problem(), None, "laid out by the template given");
+        let mut expected = drawn(&bar());
+        let mut over = DrawList::new();
+        offer.draw(&mut over);
+        expected.extend(over.iter().cloned());
+        assert_eq!(drawn(&screen), expected);
+        screen.input(&key(Key::Escape, false));
+        assert!(!screen.closed(), "Escape does nothing in the offer");
+        assert!(screen.offer_dialog().is_some());
+        assert_eq!(screen.take_offer_choice(), None);
+        screen.input(&key(Key::Char('n'), false));
+        assert!(screen.offer_dialog().is_none(), "answered, it closes");
+        assert_eq!(
+            screen.take_offer_choice(),
+            Some((MissionId(141), OfferChoice::Refuse))
+        );
+        assert_eq!(screen.take_offer_choice(), None, "once");
+    }
+
+    #[test]
+    fn after_an_offer_the_next_ask_comes_after_the_gap_given() {
+        let mut screen = offering();
+        screen.tick(ms(250));
+        assert!(screen.take_offer_request());
+        screen.open_offer(prompt());
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request(), "not while the offer is open");
+        screen.input(&key(Key::Enter, false));
+        assert_eq!(
+            screen.take_offer_choice(),
+            Some((MissionId(141), OfferChoice::Accept))
+        );
+        screen.rearm(ms(600));
+        screen.tick(ms(599));
+        assert!(!screen.take_offer_request());
+        screen.tick(ms(1));
+        assert!(screen.take_offer_request());
+    }
+
+    #[test]
+    fn no_offer_is_asked_for_while_the_hire_screen_is_open() {
+        let mut screen = offering();
+        screen.open_hire(list(1));
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request());
+        screen.input(&key(Key::Escape, false));
+        assert!(screen.hire_screen().is_none());
+        screen.tick(ms(250));
+        assert!(
+            screen.take_offer_request(),
+            "the wait goes on once it closes"
+        );
+    }
+
+    #[test]
+    fn the_offers_buttons_sound_and_its_pointer_goes_through_the_bar() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        let at = screen
+            .offer_dialog()
+            .and_then(crate::spaceport::OfferDialog::dialog)
+            .and_then(|dialog| dialog.item_bounds(REFUSE_ITEM))
+            .expect("refuse")
+            .center();
+        let button = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at,
+        };
+        screen.input(&button(true));
+        screen.cancel_pointer();
+        screen.input(&button(false));
+        assert_eq!(screen.take_offer_choice(), None, "abandoned");
+        assert_eq!(screen.take_sounds(), [DOWN]);
+        screen.input(&button(true));
+        screen.input(&button(false));
+        assert_eq!(
+            screen.take_offer_choice(),
+            Some((MissionId(141), OfferChoice::Refuse))
+        );
+        assert_eq!(screen.take_sounds(), [DOWN, UP]);
     }
 }

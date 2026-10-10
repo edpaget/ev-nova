@@ -279,9 +279,12 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
+use nova_sim::mission::offer_gap;
+use nova_sim::mission::screens::mac_ticks;
 use nova_sim::{
     AcceptError, ComputerRefusal, ControlBits, HireList, HireRefusal, HireTerms, Hired,
     MissionComputer, MissionId, MissionText, NotOffered, PayNote, PersonRules, SessionEvent,
+    VenueOffer,
 };
 use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
@@ -2143,6 +2146,29 @@ impl<C> FlightView<C> {
             Ok(session) => session.refuse_mission(mission, &mut self.chance),
             Err(_) => Err(NotOffered),
         }
+    }
+
+    /// The next offer at venue `loc`, as [`Session::next_offer`] gives it,
+    /// on the flight's chance; none for a session that failed.
+    pub fn next_offer(&mut self, loc: i16) -> Option<VenueOffer> {
+        self.session
+            .as_mut()
+            .ok()?
+            .next_offer(loc, &mut self.chance)
+    }
+
+    /// Enters venue `loc` for its offers, as
+    /// [`Session::enter_offer_venue`] does.
+    pub fn enter_offer_venue(&mut self, loc: i16) {
+        if let Ok(session) = &mut self.session {
+            session.enter_offer_venue(loc);
+        }
+    }
+
+    /// The wait before a venue's next offer, drawn on the flight's chance
+    /// ([`offer_gap`]).
+    pub fn offer_gap(&mut self) -> Duration {
+        mac_ticks(offer_gap(&mut self.chance))
     }
 
     /// The mission texts to show since they were last taken, as
@@ -9549,6 +9575,36 @@ mod tests {
         );
         assert_eq!(broken.refuse_mission(MissionId(130)), Err(NotOffered));
         assert_eq!(broken.take_mission_texts(), []);
+    }
+
+    #[test]
+    fn the_bars_offers_go_through_the_session_on_the_flights_chance() {
+        let mut errands = catalog();
+        errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        errands.missions = vec![MissionRecord {
+            avail_loc: 1,
+            ..errand(141)
+        }];
+        let (script, chance) = scripted(&[]);
+        let mut view = FlightView::new(errands).with_chance(chance);
+        assert_eq!(view.next_offer(1), None, "in flight");
+        land_now(&mut view);
+        view.settle_script();
+        script.borrow_mut().asked.clear();
+        script.borrow_mut().draws.push_back(7);
+        view.enter_offer_venue(1);
+        let Some(VenueOffer::Prompt(prompt)) = view.next_offer(1) else {
+            panic!("an offer");
+        };
+        assert_eq!(prompt.mission, MissionId(141));
+        assert_eq!(view.offer_gap(), nova_sim::mission::screens::mac_ticks(37));
+        assert_eq!(script.borrow().asked, [30]);
+        let mut broken = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        broken.enter_offer_venue(1);
+        assert_eq!(broken.next_offer(1), None);
     }
 
     /// `pilot`, saved and read back with `escorts`, each a ship, whether

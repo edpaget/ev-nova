@@ -2,6 +2,7 @@
 //! "Screens"): the order offers show in, and the original's words.
 
 use std::cmp::Reverse;
+use std::time::Duration;
 
 use super::{AcceptRefusal, SLOTS};
 use crate::chance::Chance;
@@ -100,6 +101,16 @@ pub const FIRST_OFFER_TICKS: u32 = 15;
 /// The fewest ticks between one offer and the next.
 pub const OFFER_GAP_TICKS: u32 = 30;
 
+/// The Mac's ticks a second (`TickCount`), which the offers' times are
+/// counted in.
+pub const MAC_TICKS_PER_SECOND: u32 = 60;
+
+/// `ticks` of the Mac's clock as a duration.
+#[must_use]
+pub const fn mac_ticks(ticks: u32) -> Duration {
+    Duration::from_nanos(ticks as u64 * 1_000_000_000 / MAC_TICKS_PER_SECOND as u64)
+}
+
 /// The ticks before the next offer at a venue, drawing on `chance`:
 /// [`OFFER_GAP_TICKS`] + `Rand(30)` (`_BarFilter` @0x47be0-0x47c0f,
 /// `_OfferMissionFromPort` @0xa37a3-0xa37c0).
@@ -170,6 +181,13 @@ mod tests {
     fn an_offer_that_cannot_be_refused_has_no_refuse_button() {
         assert_eq!(offer_labels("Sure", "No way", false), labels("Sure", None));
         assert_eq!(UNREFUSABLE, 0x0004);
+    }
+
+    #[test]
+    fn the_macs_ticks_are_60_a_second() {
+        assert_eq!(mac_ticks(FIRST_OFFER_TICKS), Duration::from_millis(250));
+        assert_eq!(mac_ticks(60), Duration::from_secs(1));
+        assert_eq!(mac_ticks(1), Duration::from_nanos(16_666_666));
     }
 
     #[test]

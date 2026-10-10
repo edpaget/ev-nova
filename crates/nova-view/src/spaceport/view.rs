@@ -49,8 +49,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::{
-    ComputerRefusal, HireList, Market, MissionComputer, MissionId, MissionText, Order, OutfitOrder,
-    Outfitter, RechargeRefusal, Service, ShipId, ShipNaming, Shipyard, sells_fuel, services,
+    ComputerRefusal, HireList, Market, MissionComputer, MissionId, MissionText, OfferPrompt, Order,
+    OutfitOrder, Outfitter, RechargeRefusal, Service, ShipId, ShipNaming, Shipyard, sells_fuel,
+    services,
 };
 
 use super::bar::{BarScreen, Hiring};
@@ -60,6 +61,7 @@ use super::layout::{
     RECHARGE_ITEM, RECHARGE_LABEL, TEXT_ITEM, item_service, label, landscape_id, service_item,
 };
 use super::missions::MissionComputerScreen;
+use super::offer::OfferChoice;
 use super::outfitter::{OutfitterCatalog, OutfitterScreen};
 use super::service::ServiceScreen;
 use super::shipyard::{ShipOrder, ShipyardCatalog, ShipyardScreen};
@@ -230,6 +232,8 @@ struct Barkeeping {
     template: Result<DialogTemplate, String>,
     hiring: Hiring,
     room: bool,
+    /// Whether the bar has opened since this was last taken.
+    opened: bool,
 }
 
 /// The mission screens given: their dialog templates, or why there are
@@ -238,6 +242,8 @@ struct Barkeeping {
 struct Missioning {
     /// The mission computer's.
     computer: Result<DialogTemplate, String>,
+    /// The offer dialog's, which the bar's offers show in.
+    offer: Result<DialogTemplate, String>,
     /// The "Desc Dialog"'s, which the mission texts show in.
     text: Result<DialogTemplate, String>,
     /// Whether Mission BBS has asked for the mission computer since this
@@ -602,6 +608,7 @@ impl SpaceportView {
                     catalog,
                 },
                 room,
+                opened: false,
             }),
             ..self
         }
@@ -657,22 +664,67 @@ impl SpaceportView {
 
     /// The spaceport with the mission screens: Mission BBS opens the
     /// mission computer laid out by `computer`, its `DLOG` (or saying why
-    /// there is none), and the mission texts show in "Desc Dialog", laid
-    /// out by `text` (and do not show without it). Without them, Mission
-    /// BBS opens its placeholder.
+    /// there is none); the bar, when given, offers missions in the offer
+    /// dialog laid out by `offer`; and the mission texts show in "Desc
+    /// Dialog", laid out by `text` (and do not show without it). Without
+    /// them, Mission BBS opens its placeholder and the bar offers nothing.
     #[must_use]
     pub fn with_missions(
         self,
         computer: Result<DialogTemplate, String>,
+        offer: Result<DialogTemplate, String>,
         text: Result<DialogTemplate, String>,
     ) -> Self {
         Self {
             missioning: Some(Missioning {
                 computer,
+                offer,
                 text,
                 requested: false,
             }),
             ..self
+        }
+    }
+
+    /// Whether the bar has opened since this was last asked: whoever flies
+    /// the ship enters it for its offers.
+    pub fn take_bar_opened(&mut self) -> bool {
+        self.barkeeping
+            .as_mut()
+            .is_some_and(|barkeeping| std::mem::take(&mut barkeeping.opened))
+    }
+
+    /// Whether the bar open has asked for an offer since this was last
+    /// asked: whoever flies the ship answers with
+    /// [`SpaceportView::open_offer`], or rearms it
+    /// ([`SpaceportView::rearm_offers`]).
+    pub fn take_offer_request(&mut self) -> bool {
+        match &mut self.open {
+            Some(Open::Bar(screen)) => screen.take_offer_request(),
+            _ => false,
+        }
+    }
+
+    /// Opens the offer dialog on `prompt` over the bar open.
+    pub fn open_offer(&mut self, prompt: OfferPrompt) {
+        if let Some(Open::Bar(screen)) = &mut self.open {
+            screen.open_offer(prompt);
+        }
+    }
+
+    /// The offer the bar open answered since this was last taken, and the
+    /// choice made, once.
+    pub fn take_offer_choice(&mut self) -> Option<(MissionId, OfferChoice)> {
+        match &mut self.open {
+            Some(Open::Bar(screen)) => screen.take_offer_choice(),
+            _ => None,
+        }
+    }
+
+    /// The bar open asks for its next offer after `gap`.
+    pub fn rearm_offers(&mut self, gap: Duration) {
+        if let Some(Open::Bar(screen)) = &mut self.open {
+            screen.rearm(gap);
         }
     }
 
@@ -850,18 +902,23 @@ impl SpaceportView {
         }
         let port = &*port;
         let metrics = Rc::clone(&port.metrics.0);
-        if let (Some(barkeeping), Service::Bar) = (&self.barkeeping, service) {
+        if let (Some(barkeeping), Service::Bar) = (&mut self.barkeeping, service) {
             let layout = barkeeping
                 .template
                 .clone()
                 .map(|template| (template, metrics));
-            self.open = Some(Open::Bar(Box::new(BarScreen::new(
+            let mut bar = BarScreen::new(
                 layout,
                 self.stellar,
                 barkeeping.hiring.clone(),
                 port.style,
                 barkeeping.room,
-            ))));
+            );
+            if let Some(missioning) = &self.missioning {
+                bar = bar.with_offers(missioning.offer.clone());
+            }
+            self.open = Some(Open::Bar(Box::new(bar)));
+            barkeeping.opened = true;
             return;
         }
         self.open = Some(
@@ -951,8 +1008,14 @@ impl Screen for SpaceportView {
         ScreenAction::None
     }
 
-    /// Nothing moves on its own.
-    fn tick(&mut self, _dt: Duration) {}
+    /// The screen open ticks, unless a mission text is shown over it.
+    fn tick(&mut self, dt: Duration) {
+        if self.texts.is_empty()
+            && let Some(open) = &mut self.open
+        {
+            open.screen_mut().tick(dt);
+        }
+    }
 
     /// What is open, then the mission text shown over it.
     fn draw(&self, list: &mut DrawList) {
@@ -2688,9 +2751,14 @@ mod tests {
         }
     }
 
-    /// Earth with its mission screens given.
+    /// Earth with its mission screens given, its offers laid out by the
+    /// text's shape.
     fn missioned() -> SpaceportView {
-        earth().with_missions(Ok(computer_template()), Ok(text_template()))
+        earth().with_missions(
+            Ok(computer_template()),
+            Ok(text_template()),
+            Ok(text_template()),
+        )
     }
 
     fn offers() -> MissionComputer {
@@ -2868,11 +2936,99 @@ mod tests {
 
     #[test]
     fn without_a_text_dialog_mission_texts_are_not_shown() {
-        let mut view =
-            earth().with_missions(Ok(computer_template()), Err("no DLOG 3003".to_owned()));
+        let mut view = earth().with_missions(
+            Ok(computer_template()),
+            Err("no DLOG 1016".to_owned()),
+            Err("no DLOG 3003".to_owned()),
+        );
         view.open_mission_computer(Err(ComputerRefusal::SlotsFull));
         assert!(view.mission_text().is_none());
         let debug = format!("{view:?}");
         assert!(debug.contains("Missioning"), "{debug}");
+    }
+
+    // The bar's offers.
+
+    use crate::spaceport::bar::FIRST_OFFER_DELAY;
+    use crate::spaceport::offer::OfferChoice;
+    use nova_sim::OfferPrompt;
+    use nova_sim::mission::OfferLabels;
+
+    /// Earth with its bar and its mission screens given.
+    fn drinking_with_offers() -> SpaceportView {
+        let art: Rc<dyn ShipyardCatalog> = Rc::new(catalog());
+        missioned().with_bar(
+            Ok(bar_template()),
+            Ok(shipyard_template()),
+            Err("no DLOG 1005".to_owned()),
+            art,
+            true,
+        )
+    }
+
+    fn offered() -> OfferPrompt {
+        OfferPrompt {
+            mission: MissionId(141),
+            text: "Ferry this.".to_owned(),
+            labels: OfferLabels {
+                accept: "Yes".to_owned(),
+                refuse: Some("No".to_owned()),
+            },
+        }
+    }
+
+    #[test]
+    fn the_bar_opened_is_reported_once_and_asks_for_offers_through_the_spaceport() {
+        let mut view = drinking_with_offers();
+        assert!(!view.take_bar_opened());
+        view.tick(FIRST_OFFER_DELAY);
+        assert!(!view.take_offer_request(), "no bar open");
+        click_item(&mut view, 10);
+        assert!(view.take_bar_opened());
+        assert!(!view.take_bar_opened(), "once");
+        view.tick(FIRST_OFFER_DELAY);
+        assert!(view.take_offer_request());
+        view.open_offer(offered());
+        let offer = view
+            .open_bar()
+            .and_then(BarScreen::offer_dialog)
+            .expect("open");
+        assert_eq!(offer.problem(), None, "laid out by the template given");
+        view.input(&key(Key::Char('n')));
+        assert_eq!(
+            view.take_offer_choice(),
+            Some((MissionId(141), OfferChoice::Refuse))
+        );
+        view.rearm_offers(Duration::from_millis(500));
+        view.tick(Duration::from_millis(500));
+        assert!(view.take_offer_request());
+    }
+
+    #[test]
+    fn a_mission_text_shown_holds_the_bars_wait() {
+        let mut view = drinking_with_offers();
+        click_item(&mut view, 10);
+        view.show_mission_texts(vec![MissionText {
+            kind: MissionTextKind::Refuse,
+            mission: MissionId(141),
+            text: "Pity.".to_owned(),
+        }]);
+        view.tick(FIRST_OFFER_DELAY);
+        assert!(!view.take_offer_request());
+        done(&mut view);
+        view.tick(FIRST_OFFER_DELAY);
+        assert!(view.take_offer_request());
+    }
+
+    #[test]
+    fn without_mission_screens_the_bar_asks_for_no_offer() {
+        let mut view = drinking(true);
+        click_item(&mut view, 10);
+        assert!(view.take_bar_opened());
+        view.tick(Duration::from_secs(10));
+        assert!(!view.take_offer_request());
+        view.open_offer(offered());
+        view.rearm_offers(Duration::ZERO);
+        assert_eq!(view.take_offer_choice(), None);
     }
 }

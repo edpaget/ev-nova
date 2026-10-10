@@ -187,6 +187,7 @@ use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::bar::BAR_DIALOG;
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::spaceport::missions::COMPUTER_DIALOG;
+use nova_view::spaceport::offer::OFFER_DIALOG;
 use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
 use nova_view::spaceport::shipyard::{SHIP_INFO_DIALOG, SHIPYARD_DIALOG};
 use nova_view::spaceport::trade::TRADE_DIALOG;
@@ -1251,7 +1252,11 @@ impl AppScreen {
                     art,
                     pilot.escort_count() < MAX_ESCORTS,
                 )
-                .with_missions(template_of(COMPUTER_DIALOG), template_of(DESC_DIALOG));
+                .with_missions(
+                    template_of(COMPUTER_DIALOG),
+                    template_of(OFFER_DIALOG),
+                    template_of(DESC_DIALOG),
+                );
         }
         self.spaceport = Some(spaceport);
         self.switch_to(Side::Spaceport);
