@@ -487,7 +487,8 @@ pub enum Service {
     Shipyard,
     /// The bar.
     Bar,
-    /// The mission computer.
+    /// The mission computer, whose view the session gives
+    /// ([`Session::mission_computer`](crate::Session::mission_computer)).
     MissionBbs,
 }
 

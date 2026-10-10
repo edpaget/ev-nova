@@ -35,6 +35,27 @@
 //! ([`SpaceportView::take_hire`]), and after the hire the hire screen
 //! closes back to the bar ([`SpaceportView::set_hire`]).
 //!
+//! Given the mission screens ([`SpaceportView::with_missions`]), Mission
+//! BBS asks for the mission computer
+//! ([`SpaceportView::take_mission_computer_request`]); whoever flies the
+//! ship answers ([`SpaceportView::open_mission_computer`]), opening a
+//! [`MissionComputerScreen`] over it, or showing why not. Its accept is
+//! taken through the spaceport ([`SpaceportView::take_mission_accept`])
+//! and the computer handed back ([`SpaceportView::set_mission_computer`]).
+//! The bar opened is reported ([`SpaceportView::take_bar_opened`]) and
+//! its offers asked for and answered through the spaceport
+//! ([`SpaceportView::take_offer_request`], [`SpaceportView::open_offer`],
+//! [`SpaceportView::take_offer_choice`], [`SpaceportView::rearm_offers`]);
+//! the spaceport ticks the screen open for the bar's timer.
+//! [`MISSION_INFO_KEY`], in the spaceport, the bar or the mission
+//! computer, asks for the mission info screen
+//! ([`SpaceportView::take_mission_info_request`]), which opens over
+//! whatever is open ([`SpaceportView::open_mission_info`]); its abort is
+//! taken through the spaceport ([`SpaceportView::take_mission_abort`]).
+//! The mission texts show one after another in "Desc Dialog" over
+//! everything ([`SpaceportView::show_mission_texts`]), each taking every
+//! input until Done closes it.
+//!
 //! Where the stellar sells fuel, Recharge (item 4) asks for a refill,
 //! taken through the spaceport ([`SpaceportView::take_recharge`]). A
 //! refusal ([`SpaceportView::refuse_recharge`]) shows in the description

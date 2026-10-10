@@ -10,7 +10,7 @@
 //!   service gets and what it says, and which picture is the landscape.
 //! - [`view`]: the [`SpaceportView`] screen.
 //! - [`service`]: the [`ServiceScreen`], a placeholder for each service
-//!   until it is built.
+//!   the spaceport is not given.
 //! - [`bar`]: the Bar's [`BarScreen`], the stellar's bar text and its
 //!   Hire Escort button.
 //! - [`trade`]: the Trade Center's [`TradeScreen`], the stellar's
@@ -21,6 +21,10 @@
 //!   for sale, and its info panel.
 //! - [`hire`]: the bar's [`HireScreen`], the ships for hire, built from
 //!   the Shipyard's pieces.
+//! - [`missions`]: the [`MissionComputerScreen`], the offers of Mission
+//!   BBS, and the [`MissionInfoScreen`], the active missions, read and
+//!   aborted.
+//! - [`offer`]: the [`OfferDialog`], a mission offered at the bar.
 //! - [`grid`]: the parts the Outfitter and the Shipyard share: the grid
 //!   of cells, a `ShortName`'s lines, and the selected item's picture and
 //!   description.

@@ -42,7 +42,13 @@
 //! the cargo names `STR#` 4001 of its string lists
 //! ([`Session::with_strings`]). Each mission script runs with its slot as
 //! the script's mission, so a `Q` in it fills its mission tags (see the
-//! `script_effects` module).
+//! `script_effects` module). The texts the lifecycle shows are queued for
+//! the view as they come (see the `mission_screens` module): `BriefText`
+//! filled for the slot after `OnAccept` and the accept's charge;
+//! `CompText` before the slot is freed; `FailText` after it is, its
+//! mission tags reading [`UNSET`](text_tags::UNSET); and `RefuseText`
+//! with no mission, before `OnRefuse` runs. The deadline's comm message
+//! is rdm:phase/missions/phase-17-deadline-message-and-flight-info.
 
 use super::Session;
 use super::mission_screens::MissionTextKind;

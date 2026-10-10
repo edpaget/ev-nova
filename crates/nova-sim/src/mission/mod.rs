@@ -212,6 +212,21 @@
 //! key [`mission_order`](crate::RuleKey::MissionOrder) defaults to that;
 //! its other reading is the Bible's full descending sort.
 //!
+//! The mission computer lists every offer at the computer, each name and
+//! offer text filled for its offer, and opens only with a slot free and
+//! an offer still available (`_DoMissionDialog` @0xa37e9-0xa3956, saying
+//! why otherwise: [`screens`]' strings). Outside it, each venue offers
+//! the first offer at its `AvailLoc` that is not suppressed and is still
+//! available, on a timer of [`screens::FIRST_OFFER_TICKS`] and then
+//! [`offer_gap`] (`_OfferMissionFromPort` @0xa369e); one that cannot be
+//! refused (`Flags` 0x0004) with no offer text is accepted at once, and
+//! one whose accept is refused is suppressed until another venue but the
+//! spaceport is entered. The offer dialog's labels are the mission's own
+//! when each starts with a letter ([`offer_labels`]). The mission info
+//! screen lists the active missions lacking `Flags` 0x0400, each with its
+//! `QuickBrief`, which shows a deadline through `<DL>`; its abort is
+//! [`abort_checks`]'. Each text shown is filled through the session.
+//!
 //! A mission's stellars are matched by ID. The original also counts a
 //! stellar at the same place with the same name as the same
 //! (`_StellarsAreIdentical` @0xab35):

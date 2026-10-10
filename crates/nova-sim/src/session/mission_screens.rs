@@ -1,7 +1,27 @@
 //! The session's side of the mission screens (see the
-//! [`mission`](crate::mission) module's "Screens"): what each mission's
-//! screens show of it, read as the session starts, and the mission
-//! computer's view of the visit's offers.
+//! [`mission`](crate::mission) module's "Screens"), each a plain value the
+//! view draws, as [`HireList`](crate::HireList) is the bar's hire screen:
+//!
+//! - what each mission's screens show of it, read as the session starts
+//!   ([`Session::mission_texts`]);
+//! - the mission computer's view of the visit's offers
+//!   ([`Session::mission_computer`], `_DoMissionDialog` @0xa37cf), or why
+//!   it does not open;
+//! - a venue's next offer outside the computer
+//!   ([`Session::next_offer`], `_OfferMissionFromPort` @0xa369e), with
+//!   the offers suppressed after a refused accept until another venue is
+//!   entered ([`Session::enter_offer_venue`]);
+//! - the mission info screen's view of the active missions
+//!   ([`Session::mission_info`], `_DoMissionInfoDialog` @0x9e19b);
+//! - the queue of mission texts to show ([`Session::take_mission_texts`]):
+//!   a mission's `BriefText`, `CompText`, `FailText` and `RefuseText`,
+//!   queued at the lifecycle's moments (see the `missions` module).
+//!
+//! None of it is saved. The offers at the spaceport, trade center,
+//! shipyard and outfitter are
+//! rdm:phase/missions/phase-14-offers-at-other-venues; the next outside
+//! offer the original drops after an accept is
+//! rdm:phase/missions/phase-15-accept-drops-next-offer.
 
 use super::Session;
 use super::missions::AcceptError;

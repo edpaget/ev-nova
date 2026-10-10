@@ -21,6 +21,18 @@
 //! ([`BarScreen::take_hire`]), and after the hire the screen closes back
 //! to the bar ([`BarScreen::set_hire`]).
 //!
+//! Given the offer dialog's template ([`BarScreen::with_offers`]), the bar
+//! offers missions as `_BarFilter` (@0x47be0-0x47c0f) and
+//! `_OfferMissionFromPort` (@0xa369e) do: [`FIRST_OFFER_DELAY`] after it
+//! opens it asks for an offer ([`BarScreen::take_offer_request`]), and
+//! whoever holds the session answers with one, opening the
+//! [`OfferDialog`] over the bar ([`BarScreen::open_offer`]), or rearms it
+//! ([`BarScreen::rearm`]) with the gap drawn. The offer's choice is taken
+//! through the bar ([`BarScreen::take_offer_choice`]), and the bar asks
+//! again once rearmed. Nothing is asked while the hire screen or an offer
+//! is open. [`MISSION_INFO_KEY`] asks for the mission info screen
+//! ([`BarScreen::take_info_request`]).
+//!
 //! Leave, Return, Enter and Escape leave the bar. Without its dialog, the
 //! bar says why, and Return or Escape still leaves.
 
