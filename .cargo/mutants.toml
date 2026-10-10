@@ -159,4 +159,8 @@ exclude_re = [
     # -50000 itself that is 0, which the catch-all arm shows too, so `<`
     # and `<=` show the same.
     "replace < with <= in pay_shown",
+    # A row list scrolls up to a selected row above the first shown by
+    # making it the first: with `<=`, selecting the first row shown makes
+    # it the first, which it is already.
+    "replace < with <= in RowList::select",
 ]

@@ -9604,6 +9604,36 @@ mod tests {
     }
 
     #[test]
+    fn entering_another_venue_through_the_flight_offers_a_suppressed_offer_again() {
+        let mut errands = catalog();
+        errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        errands.missions = (130..146).map(errand).collect();
+        errands.missions.push(MissionRecord {
+            avail_loc: 1,
+            flags: nova_sim::mission::screens::UNREFUSABLE,
+            ..errand(150)
+        });
+        let mut view = FlightView::new(errands);
+        land_now(&mut view);
+        view.settle_script();
+        for id in 130..146 {
+            assert!(view.accept_mission(MissionId(id)).is_ok(), "{id}");
+        }
+        view.enter_offer_venue(1);
+        let refused = Some(VenueOffer::Accepted {
+            mission: MissionId(150),
+            accepted: Err(AcceptError::Refused(
+                nova_sim::mission::AcceptRefusal::SlotsFull,
+            )),
+        });
+        assert_eq!(view.next_offer(1), refused);
+        assert_eq!(view.next_offer(1), None, "suppressed");
+        view.enter_offer_venue(3);
+        view.enter_offer_venue(1);
+        assert_eq!(view.next_offer(1), refused, "offered again");
+    }
+
+    #[test]
     fn mission_info_and_aborts_go_through_the_session() {
         let mut errands = catalog();
         errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];

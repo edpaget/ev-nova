@@ -946,6 +946,28 @@ mod tests {
     }
 
     #[test]
+    fn an_outside_offer_accepted_is_not_suppressed() {
+        let catalog = screens(vec![at_the_bar(141)], Vec::new());
+        let mut session = docked(&catalog);
+        let slot = session
+            .accept_mission(MissionId(141), &mut NeverFires)
+            .expect("accepted");
+        session
+            .abort_mission(slot, &mut NeverFires)
+            .expect("aborted");
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        session.player.velocity = Vec2::ZERO;
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, &catalog);
+        assert_eq!(
+            prompted(session.next_offer(BAR, &mut NeverFires)),
+            MissionId(141),
+            "offered again on the next landing"
+        );
+    }
+
+    #[test]
     fn suppression_lasts_until_a_venue_other_than_the_last_but_the_spaceport_is_entered() {
         let catalog = screens(vec![at_the_bar(142), at_the_bar(143)], Vec::new());
         let mut session = docked(&catalog);

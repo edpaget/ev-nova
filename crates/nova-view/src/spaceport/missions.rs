@@ -1215,4 +1215,13 @@ mod tests {
         assert!(!screen.closed());
         assert_eq!(screen.take_accept(), None);
     }
+
+    #[test]
+    fn their_debug_names_what_they_hold() {
+        for debug in [format!("{:?}", screen()), format!("{:?}", info_screen())] {
+            for part in ["Dialog", "RowList", "TextMetrics"] {
+                assert!(debug.contains(part), "{part}: {debug}");
+            }
+        }
+    }
 }

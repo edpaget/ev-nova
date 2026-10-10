@@ -292,6 +292,19 @@ mod tests {
     }
 
     #[test]
+    fn stepping_down_a_long_list_keeps_scrolling_a_row_at_a_time() {
+        let mut rows = list(8);
+        for _ in 0..5 {
+            rows.input(&key(Key::Down, false));
+        }
+        assert_eq!(rows.selected(), Some(5));
+        assert_eq!(rows.first(), 3);
+        assert!(rows.row_bounds(5).is_some(), "shown");
+        rows.select(3);
+        assert_eq!(rows.first(), 3, "shown already");
+    }
+
+    #[test]
     fn it_draws_the_selections_highlight_under_its_row() {
         let mut rows = list(2);
         rows.select(1);
