@@ -330,7 +330,8 @@ pub use ship_change::ShipChangeRules;
 pub use edit::RelocateRefusal;
 pub use events::SessionEvent;
 pub use mission_screens::{
-    ComputerRefusal, ComputerRow, MissionComputer, MissionText, MissionTextKind,
+    ComputerRefusal, ComputerRow, MissionComputer, MissionText, MissionTextKind, OfferPrompt,
+    VenueOffer,
 };
 pub use missions::{AbortError, AcceptError, NotOffered};
 pub use persons::PersonQuote;
@@ -739,6 +740,12 @@ pub struct Session {
     /// The mission texts to show, until they are taken (see the
     /// `mission_screens` module); never saved.
     shown_texts: Vec<MissionText>,
+    /// The outside offers whose accept was refused, passed over until
+    /// another venue is entered (see the `mission_screens` module); never
+    /// saved, as the original saves none of it.
+    suppressed: BTreeSet<MissionId>,
+    /// The venue offers were last entered at, an `AvailLoc`; never saved.
+    offer_venue: Option<i16>,
 }
 
 impl Session {
@@ -900,6 +907,8 @@ impl Session {
             reoffer_due: false,
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
+            suppressed: BTreeSet::new(),
+            offer_venue: None,
             script_slot: None,
             pilot,
         };

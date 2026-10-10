@@ -49,6 +49,12 @@ impl AcceptRefusal {
     }
 }
 
+/// `AvailLoc`: the bar.
+pub const BAR: i16 = 1;
+/// `AvailLoc`: the spaceport, where entering keeps the offers suppressed
+/// (`_OfferMissionFromPort` @0xa36b8).
+pub const SPACEPORT: i16 = 3;
+
 /// `Flags`: the offer cannot be refused (`_OfferOneMission`
 /// @0xa21e2-0xa21f7).
 pub const UNREFUSABLE: u16 = 0x0004;

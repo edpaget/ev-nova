@@ -297,7 +297,8 @@ impl Session {
     ///
     /// [`AcceptError::NotOffered`] in flight or for a mission not offered;
     /// [`AcceptError::Refused`] when a check refuses, and then nothing
-    /// runs.
+    /// runs but an outside offer's suppression (see
+    /// [`Session::next_offer`]).
     pub fn accept_mission(
         &mut self,
         mission: MissionId,
@@ -308,9 +309,16 @@ impl Session {
             .mission_record(mission)
             .cloned()
             .ok_or(AcceptError::NotOffered)?;
-        self.accept_refusal(chance).map_err(AcceptError::Refused)?;
-        self.start_mission(&record, &offer, chance)
-            .ok_or(AcceptError::Refused(AcceptRefusal::SlotsFull))
+        let accepted = match self.accept_refusal(chance) {
+            Ok(()) => self
+                .start_mission(&record, &offer, chance)
+                .ok_or(AcceptRefusal::SlotsFull),
+            Err(refusal) => Err(refusal),
+        };
+        if accepted.is_err() && offer.venue == Venue::Outside {
+            self.suppress_offer(mission);
+        }
+        accepted.map_err(AcceptError::Refused)
     }
 
     /// Refuses `mission`, offered on the visit under way, drawing on
