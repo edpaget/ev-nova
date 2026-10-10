@@ -530,4 +530,71 @@ mod tests {
         assert_eq!(refused(146), ["Require"], "the ship contributes 0x1");
         assert_eq!(refused(147), ["AvailRecord"]);
     }
+
+    #[test]
+    fn the_offers_take_a_pilot_and_ship_that_meet_them() {
+        use crate::catalog::{GovtId, OutfitId, OutfitRecord, ShipRecord};
+        let mut catalog = offering();
+        // System 130 is govt 128's; the stellar docked at, 128, govt 129's.
+        catalog.star_map[0].govt = Some(GovtId(128));
+        catalog.sites[0].1[0].govt = Some(GovtId(129));
+        catalog.ship_records = vec![ShipRecord {
+            inherent_govt: Some(GovtId(130)),
+            combat_govt: Some(GovtId(131)),
+            ..crate::testkit::ship(128, crate::testkit::FAST)
+        }];
+        catalog.outfits = vec![OutfitRecord {
+            contribute: 0x2,
+            ..crate::testkit::outfit(200, &[])
+        }];
+        catalog.missions = vec![
+            MissionRecord {
+                avail_record: 3,
+                ..mission(140)
+            },
+            MissionRecord {
+                avail_rating: 5,
+                ..mission(141)
+            },
+            MissionRecord {
+                require: 0x2,
+                ..mission(142)
+            },
+            MissionRecord {
+                pay_val: -50100,
+                ..mission(143)
+            },
+            MissionRecord {
+                avail_ship_type: 2130,
+                ..mission(144)
+            },
+            MissionRecord {
+                avail_ship_type: 2131,
+                ..mission(145)
+            },
+        ];
+        let mut session = landed(&catalog, &mut NeverFires);
+        session.pilot.set_legal_record(GovtId(128), 3);
+        session.pilot.set_legal_record(GovtId(129), -5);
+        session.pilot.combat_rating = 5;
+        session.pilot.outfits.insert(OutfitId(200), 1);
+        session.pilot.cash = 100;
+        for (id, why) in [
+            (
+                140,
+                "a record of 3 with the system's govt, not the stellar's",
+            ),
+            (141, "a rating of 5"),
+            (142, "the outfit contributes 0x2"),
+            (143, "100 credits: -50000 less -50100"),
+            (144, "the ship's inherent govt, 130"),
+            (145, "the ship's combat govt, 131"),
+        ] {
+            assert_eq!(
+                session.offer_refusals(MissionId(id)),
+                Some(vec![]),
+                "{id}: {why}"
+            );
+        }
+    }
 }
