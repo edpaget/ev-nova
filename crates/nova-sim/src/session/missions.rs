@@ -677,20 +677,19 @@ impl Session {
     /// `S`: accepts `mission` at once, drawing on `chance`
     /// (`_EvalSetExp` @0x153b9-0x15418): resolved from the stellar docked
     /// at, or in flight from the first stellar the player's system lists
-    /// (128 with none), then accepted as the player's accept is once its
-    /// checks pass, without asking whether it is available. A mission
-    /// active already takes another slot, unless
+    /// (128 with none, `_RandomizeOneMission` @0x153ff), then accepted as
+    /// the player's accept is once its checks pass (`_DoMissionAccept`
+    /// @0x15407, its free-slot check @0xa1b32), without asking whether it
+    /// is available. A mission active already takes another slot, unless
     /// [`RuleKey::StartActiveMission`] reads otherwise. Nothing for a
-    /// mission the session has no record of, or with every slot taken.
+    /// mission the session has no record of; with every slot taken, its
+    /// values are still drawn, then nothing is accepted.
     pub(super) fn script_start(&mut self, mission: MissionId, chance: &mut dyn Chance) {
         let Some(record) = self.mission_record(mission).cloned() else {
             return;
         };
         let restarts = self.rules.source_for(RuleKey::StartActiveMission) == RuleSource::Engine;
         if !restarts && !self.pilot.missions.holding(mission).is_empty() {
-            return;
-        }
-        if self.accept_refusal(chance).is_err() {
             return;
         }
         let origin = self
@@ -708,6 +707,9 @@ impl Session {
                 chance,
             )
         });
+        if self.accept_refusal(chance).is_err() {
+            return;
+        }
         self.start_mission(&record, &offer, chance);
     }
 
@@ -2325,6 +2327,33 @@ mod tests {
         run(&mut session, "S140");
         assert_eq!(marks.taken(), Vec::<i16>::new());
         assert_eq!(session.pilot().missions().lowest_free(), None);
+    }
+
+    #[test]
+    fn s_with_every_slot_taken_draws_the_missions_values_then_refuses() {
+        let catalog = lifecycle(vec![
+            MissionRecord {
+                cargo_type: 1000,
+                cargo_qty: -10,
+                on_accept: Script::parse("X201"),
+                ..to_129(140)
+            },
+            to_129(141),
+        ]);
+        let (mut session, marks) = watched(&catalog, Rulebook::default());
+        for _ in 0..SLOTS {
+            run(&mut session, "S141");
+        }
+        let full = session.pilot().missions().clone();
+        let mut chance = Draws::of(&[]);
+        session.run_set(&SetExpr::parse("S140").expect("parses"), &mut chance);
+        assert_eq!(
+            chance.asked,
+            [6, 10],
+            "the random cargo, then its tons, before the slot check"
+        );
+        assert_eq!(marks.taken(), Vec::<i16>::new(), "no OnAccept");
+        assert_eq!(session.pilot().missions(), &full, "nothing accepted");
     }
 
     #[test]

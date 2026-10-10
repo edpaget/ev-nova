@@ -148,8 +148,11 @@ exclude_re = [
     # row resets the traffic without reading a catalog, so no row ever
     # calls any of these bodies.
     "<impl TrafficCatalog for NoTraffic>::",
-    # The accept checks' one check today is a free slot, which filling the
-    # slot asks again, so passing every check changes nothing yet; missions
-    # phase 5's cargo checks make it observable.
+    # The accept checks' one check today is a free slot. Both callers ask
+    # it just before `start_mission`, after every draw (`S` resolves its
+    # offer first, as the original's `_RandomizeOneMission` @0x153ff runs
+    # before `_DoMissionAccept` @0x15407), and `start_mission`'s fill
+    # refuses a full table the same way, so passing every check changes
+    # nothing yet; missions phase 5's cargo checks make it observable.
     "replace Session::accept_refusal -> Result<\\(\\), AcceptRefusal> with Ok\\(\\(\\)\\)",
 ]
