@@ -236,7 +236,7 @@ pub use self::active::{
     success_records,
 };
 pub use self::offer::{Offer, Offers, ROLLED, RollTable, Stop, resolve};
-pub use self::screens::display_order;
+pub use self::screens::{OfferLabels, display_order, offer_gap, offer_labels};
 pub use self::select::{Kind, Stellar, StellarCode, World, select_stellar, stellars_of};
 
 /// Where a mission is offered.

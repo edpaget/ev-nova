@@ -4,6 +4,7 @@
 use std::cmp::Reverse;
 
 use super::{AcceptRefusal, SLOTS};
+use crate::chance::Chance;
 use crate::rulebook::RuleSource;
 
 /// `STR#` 2002 #351: what the mission computer says before the slots'
@@ -48,6 +49,58 @@ impl AcceptRefusal {
     }
 }
 
+/// `Flags`: the offer cannot be refused (`_OfferOneMission`
+/// @0xa21e2-0xa21f7).
+pub const UNREFUSABLE: u16 = 0x0004;
+
+/// The offer dialog's buttons' labels.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OfferLabels {
+    /// The accept button's.
+    pub accept: String,
+    /// The refuse button's: none when the offer cannot be refused, and it
+    /// has one button alone.
+    pub refuse: Option<String>,
+}
+
+/// The offer dialog's labels from a mission's raw `AcceptButton` and
+/// `RefuseButton` (`_OfferOneMission` @0xa289c-0xa2a14).
+#[must_use]
+pub fn offer_labels(accept: &str, refuse: &str, can_refuse: bool) -> OfferLabels {
+    // Each is blanked unless its first character is a letter; a blank
+    // accept reads "Yes" beside a refuse button, else "Okay"; a blank
+    // refuse reads "No".
+    let lettered = |label: &str| {
+        label
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic())
+    };
+    let accept = match accept {
+        label if lettered(label) => label,
+        _ if can_refuse => YES_LABEL,
+        _ => OKAY_LABEL,
+    };
+    let refuse = can_refuse.then(|| if lettered(refuse) { refuse } else { NO_LABEL });
+    OfferLabels {
+        accept: accept.to_owned(),
+        refuse: refuse.map(str::to_owned),
+    }
+}
+
+/// The ticks (60 a second) after the bar opens before it first offers a
+/// mission (`_DoBarDialog` @0x48f51-0x48f5f).
+pub const FIRST_OFFER_TICKS: u32 = 15;
+/// The fewest ticks between one offer and the next.
+pub const OFFER_GAP_TICKS: u32 = 30;
+
+/// The ticks before the next offer at a venue, drawing on `chance`:
+/// [`OFFER_GAP_TICKS`] + `Rand(30)` (`_BarFilter` @0x47be0-0x47c0f,
+/// `_OfferMissionFromPort` @0xa37a3-0xa37c0).
+pub fn offer_gap(chance: &mut dyn Chance) -> u32 {
+    OFFER_GAP_TICKS + chance.below(OFFER_GAP_TICKS)
+}
+
 /// `items`, each with its `DispWeight`, in list order, put in the order
 /// they show, as [`RuleKey::MissionOrder`](crate::RuleKey::MissionOrder)
 /// reads it. By the engine (`_RandomizeMissionData` @0xa1842-0xa197d),
@@ -70,6 +123,57 @@ pub fn display_order<T>(items: Vec<(T, i16)>, reading: RuleSource) -> Vec<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn labels(accept: &str, refuse: Option<&str>) -> OfferLabels {
+        OfferLabels {
+            accept: accept.to_owned(),
+            refuse: refuse.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn an_offers_labels_are_kept_when_each_starts_with_a_letter() {
+        assert_eq!(
+            offer_labels("I accept", "No thanks", true),
+            labels("I accept", Some("No thanks"))
+        );
+        assert_eq!(
+            offer_labels("z", "Q", true),
+            labels("z", Some("Q")),
+            "lower case too"
+        );
+    }
+
+    #[test]
+    fn a_blank_or_non_letter_label_reads_the_originals_words() {
+        for blank in ["", " ok", "1st", "-"] {
+            assert_eq!(
+                offer_labels(blank, blank, true),
+                labels(YES_LABEL, Some(NO_LABEL)),
+                "{blank:?}"
+            );
+            assert_eq!(
+                offer_labels(blank, "Never", false),
+                labels(OKAY_LABEL, None),
+                "{blank:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_offer_that_cannot_be_refused_has_no_refuse_button() {
+        assert_eq!(offer_labels("Sure", "No way", false), labels("Sure", None));
+        assert_eq!(UNREFUSABLE, 0x0004);
+    }
+
+    #[test]
+    fn the_gap_between_offers_is_30_ticks_and_a_draw_below_30() {
+        let mut chance = crate::testkit::Draws::of(&[7, 29]);
+        assert_eq!(offer_gap(&mut chance), 37);
+        assert_eq!(offer_gap(&mut chance), 59);
+        assert_eq!(chance.asked, [30, 30]);
+        assert_eq!(FIRST_OFFER_TICKS, 15);
+    }
 
     #[test]
     fn the_originals_strings() {
