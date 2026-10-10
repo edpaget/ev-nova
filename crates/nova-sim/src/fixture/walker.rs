@@ -16,12 +16,21 @@
 //!   (where a `PickupMode` 1 cargo is picked up), then at its return, and
 //!   checks that the mission completed, unfailed, paid what its `PayVal`
 //!   pays ([`expected_pay`]) and set the bits its `OnSuccess` sets
-//!   ([`expected_bits`]).
+//!   ([`expected_bits`]). The pay of another mission completed at the
+//!   return is taken off the cash's rise first; when one of them is a
+//!   fine, the pay is not checked.
 //! - **`pass <n> days`** ([`Step::PassDays`]) takes off, when docked, then
 //!   lets `n` days go by ([`Session::let_days_pass`]): the take-off passes
 //!   its own days by the rules, on top of `n`. The walker stays in flight,
 //!   and its next landing is a walker's landing. A mission whose deadline
 //!   lapses fails, in flight, as the missions' deadline check says.
+//!
+//! A landing runs every held mission's `Landed` hooks, and an accept its
+//! `OnAccept`, so a step can start, reach, complete, fail or abort a
+//! mission other than its own. The walker compares the missions held
+//! either side of each landing and accept, and logs what became of each
+//! other mission ([`Became`]) on the step's [`Done`]: side completions
+//! are part of a storyline, not a fault.
 //!
 //! Every action is settled ([`Session::settle_script`]) before the next,
 //! so the `Landed`, `DayPassed` and `TookOff` subscriptions run. The
@@ -87,6 +96,9 @@ pub enum Done {
         stellar: StellarId,
         /// The slot it went into.
         slot: u8,
+        /// What became of the other missions at the walker's landings and
+        /// the accept, in order.
+        others: Vec<(MissionId, Became)>,
     },
     /// The mission completed at its return, `stellar`, its cash pay
     /// `pay`.
@@ -95,8 +107,12 @@ pub enum Done {
         mission: MissionId,
         /// Its return.
         stellar: StellarId,
-        /// How much the cash rose.
+        /// How much the cash rose at its return, less the pay of the
+        /// other missions completed there.
         pay: i64,
+        /// What became of the other missions at its destination and its
+        /// return, in order.
+        others: Vec<(MissionId, Became)>,
     },
     /// The days went by: `days`, and before them, when the ship was
     /// docked, the take-off's own days, as the rules pass them.
@@ -111,6 +127,26 @@ pub enum Done {
         /// held, after it, in slot order.
         failed: Vec<MissionId>,
     },
+}
+
+/// What became of a mission other than a step's own at one of the step's
+/// landings or its accept, as the walker reads it from the missions held
+/// either side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Became {
+    /// It was accepted: held after, not before (an `S`).
+    Started,
+    /// Its destination was reached, where a `PickupMode` 1 cargo is
+    /// picked up.
+    Reached,
+    /// It was completed: no longer held, unfailed, its return the stellar
+    /// landed at.
+    Completed,
+    /// It failed: still held, failed now; or no longer held, having
+    /// failed.
+    Failed,
+    /// It ended otherwise, unfailed and away from its return (an `A`).
+    Aborted,
 }
 
 /// What a walk did: one entry for each step, in order.
@@ -132,11 +168,13 @@ pub enum Fault {
     /// It was not completed at its return: failed, or not reached, or its
     /// goals not met. Its state.
     NotCompleted(Box<ActiveMission>),
-    /// The cash rose by `got`, not by the `expected` pay.
+    /// The cash rose by `got`, less the other missions' pay, not by the
+    /// `expected` pay.
     WrongPay {
         /// What its `PayVal` pays.
         expected: i64,
-        /// How much the cash rose.
+        /// How much the cash rose, less the pay of the other missions
+        /// completed at its return.
         got: i64,
     },
     /// These bits its `OnSuccess` sets are not set.
@@ -305,16 +343,23 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
         if let Some(here) = session.landed()
             && offered(session, mission, venue)
         {
-            return self.accept(session, mission, here);
+            return self.accept(session, mission, here, Vec::new());
         }
         let mut looked = Vec::new();
+        let mut others = Vec::new();
         for (stellar, system) in candidates(&self.catalog.listed_stellars(), session.landed()) {
-            if session.land_at(self.catalog, system, stellar).is_err() {
+            let stop = Stop {
+                stellar,
+                system: Some(system),
+            };
+            let (landed, _) = watched(session, mission, &mut others, |session| {
+                self.land(session, stop)
+            });
+            if landed.is_err() {
                 continue;
             }
-            self.settle(session);
             if offered(session, mission, venue) {
-                return self.accept(session, mission, stellar);
+                return self.accept(session, mission, stellar, others);
             }
             looked.push(Looked {
                 stellar,
@@ -325,21 +370,28 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
         Err((Fault::NotOffered, kept(looked)))
     }
 
-    /// Accepts `mission`, offered at `stellar`, the stellar docked at.
+    /// Accepts `mission`, offered at `stellar`, the stellar docked at,
+    /// logging on `others` what it did to the other missions.
     fn accept(
         &self,
         session: &mut Session,
         mission: MissionId,
         stellar: StellarId,
+        mut others: Vec<(MissionId, Became)>,
     ) -> Result<Done, Failed> {
-        let slot = session
-            .accept_mission(mission, &mut NeverFires)
-            .map_err(|error| (Fault::Refused(error), Vec::new()))?;
-        self.settle(session);
+        let (accepted, _) = watched(session, mission, &mut others, |session| {
+            let accepted = session.accept_mission(mission, &mut NeverFires);
+            if accepted.is_ok() {
+                self.settle(session);
+            }
+            accepted
+        });
+        let slot = accepted.map_err(|error| (Fault::Refused(error), Vec::new()))?;
         Ok(Done::Took {
             mission,
             stellar,
             slot,
+            others,
         })
     }
 
@@ -357,11 +409,15 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
         let Some(back) = active.return_to else {
             return Err((Fault::Undeliverable, Vec::new()));
         };
+        let mut others = Vec::new();
         if let Some(destination) = active.destination
             && !active.reached
             && destination.stellar != back.stellar
         {
-            self.land(session, destination)?;
+            watched(session, mission, &mut others, |session| {
+                self.land(session, destination)
+            })
+            .0?;
         }
         if let Some(active) = still_held(session, slot, mission)
             && active.failed.is_some()
@@ -369,12 +425,16 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
             return Err((Fault::NotCompleted(Box::new(active)), Vec::new()));
         }
         let cash = session.pilot().cash();
-        self.land(session, back)?;
+        let (landed, paid) = watched(session, mission, &mut others, |session| {
+            self.land(session, back)
+        });
+        landed?;
         if let Some(active) = still_held(session, slot, mission) {
             return Err((Fault::NotCompleted(Box::new(active)), Vec::new()));
         }
-        let got = session.pilot().cash() - cash;
+        let got = session.pilot().cash() - cash - paid.unwrap_or_default();
         if let Some(expected) = expected_pay(active.pay)
+            && paid.is_some()
             && got != expected
         {
             return Err((Fault::WrongPay { expected, got }, Vec::new()));
@@ -393,6 +453,7 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
             mission,
             stellar: back.stellar,
             pay: got,
+            others,
         })
     }
 
@@ -433,6 +494,84 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
             failed,
         }
     }
+}
+
+/// Does `act` to `session` (a landing or an accept, and its settling), and
+/// logs on `others` what became of each mission but `own` ([`changes`]):
+/// what `act` returned, and the pay of the missions it completed, as
+/// [`expected_pay`] reads them, `None` when one is a fine.
+fn watched<T>(
+    session: &mut Session,
+    own: MissionId,
+    others: &mut Vec<(MissionId, Became)>,
+    act: impl FnOnce(&mut Session) -> T,
+) -> (T, Option<i64>) {
+    let before = holding(session);
+    let done = act(session);
+    let after = holding(session);
+    let changed = changes(&before, &after, own, session.landed());
+    let paid = changed
+        .iter()
+        .filter(|&&(_, became)| became == Became::Completed)
+        .map(|(active, _)| expected_pay(active.pay))
+        .sum();
+    others.extend(
+        changed
+            .into_iter()
+            .map(|(active, became)| (active.mission, became)),
+    );
+    (done, paid)
+}
+
+/// The missions held, by slot.
+fn holding(session: &Session) -> Vec<(u8, ActiveMission)> {
+    session
+        .pilot()
+        .missions()
+        .iter()
+        .map(|(slot, active)| (slot, active.clone()))
+        .collect()
+}
+
+/// What became of each mission but `own` between `before` and `after`,
+/// the missions held, by slot, either side of an action that left the
+/// ship docked at `here`, with its state before (after, for one
+/// started); those held before first, in slot order, then those
+/// started. A mission no longer held was completed when it had not
+/// failed and its return is `here`: an `A` there reads as a completion.
+fn changes<'a>(
+    before: &'a [(u8, ActiveMission)],
+    after: &'a [(u8, ActiveMission)],
+    own: MissionId,
+    here: Option<StellarId>,
+) -> Vec<(&'a ActiveMission, Became)> {
+    let find = |held: &'a [(u8, ActiveMission)], slot: u8, mission: MissionId| {
+        held.iter()
+            .find(|(held, active)| *held == slot && active.mission == mission)
+            .map(|(_, active)| active)
+    };
+    let mut changes = Vec::new();
+    for (slot, was) in before {
+        if was.mission == own {
+            continue;
+        }
+        let returned = was.return_to.is_some_and(|stop| Some(stop.stellar) == here);
+        let became = match find(after, *slot, was.mission) {
+            None if was.failed.is_some() => Became::Failed,
+            None if returned => Became::Completed,
+            None => Became::Aborted,
+            Some(now) if was.failed.is_none() && now.failed.is_some() => Became::Failed,
+            Some(now) if !was.reached && now.reached => Became::Reached,
+            Some(_) => continue,
+        };
+        changes.push((was, became));
+    }
+    for (slot, now) in after {
+        if now.mission != own && find(before, *slot, now.mission).is_none() {
+            changes.push((now, Became::Started));
+        }
+    }
+    changes
 }
 
 /// Whether `mission` is offered at `venue` on the visit under way.

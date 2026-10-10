@@ -166,7 +166,8 @@ fn a_mission_offered_where_docked_is_accepted_there_without_landing() {
         [Done::Took {
             mission: A,
             stellar: StellarId(128),
-            slot: 0
+            slot: 0,
+            others: Vec::new(),
         }]
     );
     assert_eq!(session.landed(), Some(StellarId(128)));
@@ -188,7 +189,8 @@ fn a_mission_offered_elsewhere_is_accepted_where_the_walker_lands() {
         [Done::Took {
             mission: A,
             stellar: StellarId(140),
-            slot: 0
+            slot: 0,
+            others: Vec::new(),
         }]
     );
     assert_eq!(session.system(), SystemId(131));
@@ -284,7 +286,8 @@ fn a_stellar_that_cannot_be_landed_on_before_the_one_offering_the_mission_is_pas
         [Done::Took {
             mission: A,
             stellar: StellarId(140),
-            slot: 0
+            slot: 0,
+            others: Vec::new(),
         }]
     );
     assert_eq!(session.landed(), Some(StellarId(140)));
@@ -335,7 +338,8 @@ fn a_mission_is_delivered_at_its_return_paid_and_its_bits_set() {
         Done::Delivered {
             mission: A,
             stellar: StellarId(140),
-            pay: 1000
+            pay: 1000,
+            others: Vec::new(),
         }
     );
     assert_eq!(session.landed(), Some(StellarId(140)));
@@ -363,7 +367,8 @@ fn a_mission_with_a_destination_picks_its_cargo_up_there_then_is_delivered_at_it
         Done::Delivered {
             mission: A,
             stellar: StellarId(140),
-            pay: 1000
+            pay: 1000,
+            others: Vec::new(),
         }
     );
     assert_eq!(session.pilot().total_cargo(), 0, "dropped off");
@@ -431,24 +436,230 @@ fn an_on_success_bit_cleared_again_is_reported_unset() {
 }
 
 #[test]
+fn another_mission_completed_at_the_return_is_logged_and_its_pay_left_out() {
+    let catalog = galaxy(vec![
+        errand(200, 128, 140, ""),
+        MissionRecord {
+            pay_val: 300,
+            ..errand(201, 128, 140, "")
+        },
+    ]);
+    let mut session = docked(&catalog);
+    let cash = session.pilot().cash();
+    let walked = StoryWalker::new(&catalog)
+        .walk(
+            &mut session,
+            &[Step::Take(A), Step::Take(B), Step::Deliver(A)],
+        )
+        .expect("walks");
+    assert_eq!(
+        walked.done[2],
+        Done::Delivered {
+            mission: A,
+            stellar: StellarId(140),
+            pay: 1000,
+            others: vec![(B, Became::Completed)],
+        },
+        "both completed at 140"
+    );
+    assert_eq!(session.pilot().cash(), cash + 1300);
+    assert_eq!(held(&session), []);
+}
+
+#[test]
+fn another_mission_fining_at_the_return_leaves_the_pay_unchecked() {
+    let catalog = galaxy(vec![
+        errand(200, 128, 140, ""),
+        MissionRecord {
+            pay_val: -40_010,
+            ..errand(201, 128, 140, "")
+        },
+    ]);
+    let mut session = docked(&catalog);
+    let cash = session.pilot().cash();
+    let walked = StoryWalker::new(&catalog)
+        .walk(
+            &mut session,
+            &[Step::Take(A), Step::Take(B), Step::Deliver(A)],
+        )
+        .expect("walks");
+    let rise = session.pilot().cash() - cash;
+    assert_ne!(rise, 1000, "fined");
+    assert_eq!(
+        walked.done[2],
+        Done::Delivered {
+            mission: A,
+            stellar: StellarId(140),
+            pay: rise,
+            others: vec![(B, Became::Completed)],
+        }
+    );
+}
+
+#[test]
+fn a_mission_completed_where_a_take_looks_is_logged() {
+    let catalog = galaxy(vec![
+        errand(200, 128, 129, ""),
+        MissionRecord {
+            avail_stel: 140,
+            ..mission(201)
+        },
+    ]);
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::Take(A), Step::Take(B)])
+        .expect("walks");
+    assert_eq!(
+        walked.done[1],
+        Done::Took {
+            mission: B,
+            stellar: StellarId(140),
+            slot: 0,
+            others: vec![(A, Became::Completed)],
+        },
+        "completed at 129, on the way to 140"
+    );
+    assert_eq!(
+        StoryWalker::new(&catalog).walk(&mut session, &[Step::Deliver(A)]),
+        Err(failure(1, Step::Deliver(A), Fault::NotActive, &[]))
+    );
+}
+
+/// What a walk of `take A, take B, deliver A` over `missions` logged for
+/// the missions other than A as A was delivered.
+fn others_at_delivery(missions: Vec<MissionRecord>) -> Vec<(MissionId, Became)> {
+    let catalog = galaxy(missions);
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog)
+        .walk(
+            &mut session,
+            &[Step::Take(A), Step::Take(B), Step::Deliver(A)],
+        )
+        .expect("walks");
+    let Some(Done::Delivered { others, .. }) = walked.done.last() else {
+        panic!("{walked:?}");
+    };
+    others.clone()
+}
+
+#[test]
+fn another_mission_left_as_it_was_is_not_logged() {
+    let unchanged = others_at_delivery(vec![errand(200, 128, 140, ""), errand(201, 128, 129, "")]);
+    assert_eq!(unchanged, [], "201 held, reached since its accept");
+}
+
+#[test]
+fn another_missions_destination_reached_at_the_return_is_logged() {
+    let reached = others_at_delivery(vec![
+        errand(200, 128, 140, ""),
+        MissionRecord {
+            travel_stel: 140,
+            ..errand(201, 128, 129, "")
+        },
+    ]);
+    assert_eq!(reached, [(B, Became::Reached)]);
+}
+
+#[test]
+fn another_mission_failed_by_the_missions_on_success_is_logged() {
+    let failed = others_at_delivery(vec![
+        errand(200, 128, 140, "F201"),
+        errand(201, 128, 129, ""),
+    ]);
+    assert_eq!(failed, [(B, Became::Failed)]);
+}
+
+#[test]
+fn another_mission_failed_before_and_ended_at_the_return_is_logged_failed() {
+    let failed = others_at_delivery(vec![
+        errand(200, 128, 140, ""),
+        MissionRecord {
+            on_accept: Script::parse("F201"),
+            ..errand(201, 128, 140, "")
+        },
+    ]);
+    assert_eq!(failed, [(B, Became::Failed)]);
+}
+
+#[test]
+fn another_mission_aborted_by_the_missions_on_success_is_logged() {
+    let aborted = others_at_delivery(vec![
+        errand(200, 128, 140, "A201"),
+        errand(201, 128, 129, ""),
+    ]);
+    assert_eq!(aborted, [(B, Became::Aborted)]);
+}
+
+#[test]
+fn a_mission_started_by_the_missions_on_success_is_logged() {
+    let catalog = galaxy(vec![
+        errand(200, 128, 140, "S201"),
+        errand(201, 129, 128, ""),
+    ]);
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::Take(A), Step::Deliver(A)])
+        .expect("walks");
+    assert_eq!(
+        walked.done[1],
+        Done::Delivered {
+            mission: A,
+            stellar: StellarId(140),
+            pay: 1000,
+            others: vec![(B, Became::Started)],
+        }
+    );
+    assert_eq!(held(&session), [B]);
+}
+
+#[test]
+fn another_mission_failed_by_the_accept_is_logged() {
+    let catalog = galaxy(vec![
+        errand(200, 128, 129, ""),
+        MissionRecord {
+            on_accept: Script::parse("F200"),
+            ..errand(201, 128, 129, "")
+        },
+    ]);
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::Take(A), Step::Take(B)])
+        .expect("walks");
+    assert_eq!(
+        walked.done[1],
+        Done::Took {
+            mission: B,
+            stellar: StellarId(128),
+            slot: 1,
+            others: vec![(A, Became::Failed)],
+        }
+    );
+}
+
+#[test]
 fn a_pay_other_than_the_missions_is_reported() {
-    let catalog = galaxy(vec![errand(200, 128, 140, ""), errand(201, 128, 140, "")]);
+    let catalog = galaxy(vec![
+        errand(200, 128, 140, "S202"),
+        MissionRecord {
+            flags: 0x0001,
+            flags2: 0x0002,
+            pay_val: 300,
+            ..mission(202)
+        },
+    ]);
     let mut session = docked(&catalog);
     assert_eq!(
-        StoryWalker::new(&catalog).walk(
-            &mut session,
-            &[Step::Take(A), Step::Take(B), Step::Deliver(A)]
-        ),
+        StoryWalker::new(&catalog).walk(&mut session, &[Step::Take(A), Step::Deliver(A)]),
         Err(failure(
-            3,
+            2,
             Step::Deliver(A),
             Fault::WrongPay {
                 expected: 1000,
-                got: 2000
+                got: 1300
             },
             &[]
         )),
-        "both completed at 140"
+        "202 started and aborted at once, paying 300"
     );
 }
 
@@ -659,22 +870,26 @@ fn a_chain_is_walked_from_its_first_mission_to_its_last() {
             Done::Took {
                 mission: A,
                 stellar: StellarId(128),
-                slot: 0
+                slot: 0,
+                others: Vec::new(),
             },
             Done::Delivered {
                 mission: A,
                 stellar: StellarId(129),
-                pay: 1000
+                pay: 1000,
+                others: Vec::new(),
             },
             Done::Took {
                 mission: B,
                 stellar: StellarId(140),
-                slot: 0
+                slot: 0,
+                others: Vec::new(),
             },
             Done::Delivered {
                 mission: B,
                 stellar: StellarId(128),
-                pay: 500
+                pay: 500,
+                others: Vec::new(),
             },
         ]
     );

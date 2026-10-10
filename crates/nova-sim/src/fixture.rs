@@ -6,7 +6,7 @@
 mod walker;
 
 pub use walker::{
-    Done, Fault, Looked, Step, StoryWalker, WalkFailure, Walked, candidates, expected_bits,
+    Became, Done, Fault, Looked, Step, StoryWalker, WalkFailure, Walked, candidates, expected_bits,
     expected_pay,
 };
 
