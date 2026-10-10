@@ -2014,6 +2014,8 @@ impl<C> FlightView<C> {
                 }
             }
             Ok(Boarding::Repelled) => self.say(REPELLED),
+            // The offer dialog over flight comes with the router's side.
+            Ok(Boarding::Offered(_)) => {}
             Err(refusal) => {
                 if let Some(text) = board_refusal_message(refusal) {
                     self.say(text);

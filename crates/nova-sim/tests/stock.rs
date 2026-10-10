@@ -28,7 +28,8 @@
 //! greets with its comm quote; Jack Folstam appears in Nesre Primus and,
 //! by the engine's slip, in J'raphit; the Bounty Hunter's hail quote
 //! names him and the pilot, and once gone for good he never appears
-//! again. Skips, passing, when `NOVA_DATA` is unset.
+//! again; a Valkyrie hailed offers a new pilot its refuel mission in
+//! place of the comm dialog. Skips, passing, when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -3276,17 +3277,32 @@ fn persons_here(session: &Session) -> Vec<(i16, bool)> {
         .collect()
 }
 
+/// A pilot of combat rating `rating` flying in `sÿst` `system`, as
+/// [`flying_in`] flies one by `rules`.
+fn rated_flying_in(data: &GameData, system: i16, rating: i64, rules: NovaPersons) -> Session {
+    let pilot = flying_in(data, system, &[], rules).pilot().clone();
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["combat_rating"] = serde_json::json!(rating);
+    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    Session::fly(data, pilot)
+        .expect("flies")
+        .with_person_rules(std::rc::Rc::new(rules))
+}
+
 /// Hailed in Kania under `person_join`'s other reading, the Terrapin
-/// (`përs` 128) lists Use As Escort and joins the fleet as itself; saved
-/// and flown again it is placed as the Terrapin, and no other Terrapin
-/// comes. By the engine it lists no Use As Escort.
+/// (`përs` 128), whose mission 132 asks a combat rating of 10 and an
+/// `AvailRandom` of 40 (the roll still undrawn, 0), lists Use As Escort
+/// and joins the fleet as itself; saved and flown again it is placed as
+/// the Terrapin, and no other Terrapin comes. By the engine it offers
+/// mission 132 in place of the comm dialog.
 #[test]
 fn the_terrapin_hailed_in_kania_joins_the_player_under_person_join() {
     let Some(dir) = common::nova_data() else {
         return;
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
-    let mut session = flying_in(&data, 128, &[], NovaPersons::default());
+    let mut session = rated_flying_in(&data, 128, 10, NovaPersons::default());
     session.populate(&data, &mut terrapin_roll());
     assert_eq!(persons_here(&session), [(128, false)]);
     let terrapin = session
@@ -3307,6 +3323,19 @@ fn the_terrapin_hailed_in_kania_joins_the_player_under_person_join() {
         .hail(&data, &engine, &mut ByBound(&[]))
         .expect("answers");
     assert!(!labels(&opened).contains(&"Use As Escort".to_owned()));
+    let mut offering = session.clone();
+    assert!(
+        matches!(
+            offering.open_hail(&data, &engine, &mut ByBound(&[])),
+            Ok(nova_sim::Hailed::Offer(nova_sim::VenueOffer::Prompt(
+                nova_sim::OfferPrompt {
+                    mission: nova_sim::MissionId(132),
+                    ..
+                }
+            )))
+        ),
+        "by the engine, the offer"
+    );
     let bible = nova_sim::HailOptions::nova(
         &nova_sim::Rulebook::default()
             .with_override(nova_sim::RuleKey::PersonJoin, nova_sim::RuleSource::Bible),
@@ -3348,6 +3377,74 @@ fn the_terrapin_hailed_in_kania_joins_the_player_under_person_join() {
         .find(|npc| npc.escort.is_some())
         .expect("placed");
     assert_eq!(again.npc_name(escort), Some("Terrapin"));
+}
+
+/// Every setup pass's person roll lands on the Valkyrie `përs` 225, and
+/// no Person slot below 100 % lists its person.
+fn valkyrie_roll() -> ByBound {
+    ByBound(&[(7, 0), (1022, 97), (100, 99)])
+}
+
+/// A new pilot in a system the Valkyries' `gövt` 134 governs, where the
+/// Valkyrie `përs` 225 (`LinkSyst` 10006) appears, hails it: it offers
+/// "Refuel Trader", mission 141 (`AvailLoc` 2), in place of the comm
+/// dialog, and accepting it makes 141 active. The Terrapin's mission 132,
+/// which asks a combat rating of 10, is not available to the new pilot,
+/// so hailing the Terrapin in Kania opens the comm dialog.
+#[test]
+fn a_new_pilot_hailing_a_valkyrie_is_offered_its_refuel_mission() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let valkyries = data
+        .star_map()
+        .into_iter()
+        .find(|system| system.govt == Some(GovtId(134)))
+        .expect("a Valkyrie system");
+    let mut session = flying_in(&data, valkyries.id.0, &[], NovaPersons::default());
+    session.populate(&data, &mut valkyrie_roll());
+    assert_eq!(persons_here(&session), [(225, false)]);
+    let valkyrie = session
+        .npcs()
+        .iter()
+        .find(|npc| npc.person.is_some())
+        .expect("the Valkyrie")
+        .id;
+    while session.select_target(nova_sim::TargetPick::Next) != Some(valkyrie) {}
+    let options = nova_sim::HailOptions::default();
+    let hailed = session.open_hail(&data, &options, &mut ByBound(&[]));
+    let Ok(nova_sim::Hailed::Offer(nova_sim::VenueOffer::Prompt(prompt))) = hailed else {
+        panic!("an offer: {hailed:?}");
+    };
+    assert_eq!(prompt.mission, nova_sim::MissionId(141));
+    assert!(prompt.can_refuse());
+    assert!(session.hailing(&data, &options).is_none(), "no comm dialog");
+    assert_eq!(
+        session.accept_mission(nova_sim::MissionId(141), &mut ByBound(&[])),
+        Ok(0)
+    );
+    assert_eq!(
+        session.pilot().missions().missions(),
+        [nova_sim::MissionId(141)]
+    );
+
+    let mut session = flying_in(&data, 128, &[], NovaPersons::default());
+    session.populate(&data, &mut terrapin_roll());
+    let terrapin = session
+        .npcs()
+        .iter()
+        .find(|npc| npc.person.is_some())
+        .expect("the Terrapin")
+        .id;
+    while session.select_target(nova_sim::TargetPick::Next) != Some(terrapin) {}
+    assert!(
+        matches!(
+            session.open_hail(&data, &options, &mut ByBound(&[])),
+            Ok(nova_sim::Hailed::Comm(_))
+        ),
+        "mission 132 is not available to a new pilot"
+    );
 }
 
 #[test]

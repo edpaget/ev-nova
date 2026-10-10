@@ -74,6 +74,15 @@
 //! Placed at setup it is placed as any ship, and arriving it jumps in as
 //! any ship, but it draws no aggression.
 //!
+//! **Its mission** (`_HandlePlayerCommunication` @0x61f48,
+//! `_HandlePlayerBoardAttempt` @0x6585c): a person's `LinkMission` is
+//! resolved as it spawns, and offered from a ship when the person is
+//! hailed, or with [`MISSION_ON_BOARD`] boarded, while it is available;
+//! an accept makes it gone for good with [`GONE_ON_ACCEPT`] and, on its
+//! hail, leave with [`LEAVES_ON_ACCEPT`] (see the session's
+//! `person_offers`). Its hail quote with [`QUOTE_IF_MISSION`] waits for
+//! the mission to be available ([`QuoteView::mission_available`]).
+//!
 //! The values are defaults, not a contract.
 
 use std::collections::BTreeSet;
@@ -127,16 +136,25 @@ pub const REPLACED_BY_MISSION_SHIP: u16 = 0x0040;
 /// `Flags`: its mission is offered when it is boarded, not hailed
 /// (@0x621c3).
 pub const MISSION_ON_BOARD: u16 = 0x0200;
+/// `Flags`: it is gone for good once its mission is accepted on its hail
+/// (@0x622f4-0x62300), or once it is answered on its boarding, whatever
+/// the answer (@0x65982-0x65988).
+pub const GONE_ON_ACCEPT: u16 = 0x0100;
+/// `Flags`: it leaves once its mission is accepted on its hail
+/// (`_AIMakeShipLeave` @0x6234d); the boarding does not read it. The same
+/// bit as [`QUOTE_UNLESS_LEAVING`].
+pub const LEAVES_ON_ACCEPT: u16 = 0x0800;
 /// `mïsn` `ShipGoal`: the special ship escorts the player (@0x624f6).
 pub const ESCORT_GOAL: i16 = 3;
 
-/// Whether `record`'s person offers to join the player, under
+/// Whether `record`'s person's record lets it join the player, under
 /// [`RuleKey::PersonJoin`]'s other reading: the engine's own gate for
 /// swapping a hailed person for its mission's escort ship
 /// (`_HandlePlayerCommunication` @0x621a9-0x62509). Its `Flags` has
 /// [`REPLACED_BY_MISSION_SHIP`] and not [`MISSION_ON_BOARD`], and its
 /// `LinkMission` has one special ship whose goal is [`ESCORT_GOAL`]. The
-/// mission's availability is taken as met until missions exist.
+/// session asks too that the mission be available from a ship
+/// (@0x6220d).
 #[must_use]
 pub fn offers_to_join(record: &PersonRecord) -> bool {
     record.flags & REPLACED_BY_MISSION_SHIP != 0
@@ -220,8 +238,10 @@ pub struct QuoteView {
     pub player_jumping: bool,
     /// The player's ship type's `InherentAI`.
     pub player_ai: i16,
-    /// Whether the person's mission is available: always, until
-    /// missions exist (rdm `missions-and-storylines`).
+    /// Whether the person's `LinkMission` is available from a ship
+    /// (`_IsMissionAvailable(m, 0)` with `_offeringFromShip` set,
+    /// @0x33dc7-0x33e31), checked in full: the engine keeps no cached
+    /// `AvailBits` (rdm:phase/missions/phase-13-text-substitution-quirks).
     pub mission_available: bool,
 }
 
@@ -264,7 +284,6 @@ pub fn quote_eligible(npc: &Npc, person: &NpcPerson, view: &QuoteView) -> Eligib
     }
     let held_back = (flag(QUOTE_IF_GRUDGE) && !person.grudge)
         || (flag(QUOTE_IF_LIKED) && !view.liked)
-        // Missions: taken as available until missions-and-storylines.
         || (person.mission && flag(QUOTE_IF_MISSION) && !view.mission_available)
         || (flag(QUOTE_UNLESS_LEAVING) && npc.goal == Goal::JumpOut)
         || (flag(NOT_TO_WIMPY) && view.player_ai == 1)

@@ -320,30 +320,39 @@ impl Session {
                     && self.still_available(offer)
             })?
             .mission;
+        Some(self.offer_dialog(offer, chance))
+    }
+
+    /// The offer dialog for `mission`, offered now (`_OfferOneMission`
+    /// @0xa21ac), drawing on `chance`: its offer text filled for the
+    /// offer, and its labels; or, for one that cannot be refused with no
+    /// offer text, its accept at once (@0xa22ec-0xa231c).
+    pub(super) fn offer_dialog(
+        &mut self,
+        mission: MissionId,
+        chance: &mut dyn Chance,
+    ) -> VenueOffer {
         let can_refuse = self
-            .mission_record(offer)
+            .mission_record(mission)
             .is_some_and(|record| record.flags & UNREFUSABLE == 0);
-        let texts = self.mission_texts(offer);
+        let texts = self.mission_texts(mission);
         let raw = texts
             .and_then(|texts| texts.offer.as_deref())
             .unwrap_or_default();
         if !can_refuse && raw.is_empty() {
-            let accepted = self.accept_mission(offer, chance);
-            return Some(VenueOffer::Accepted {
-                mission: offer,
-                accepted,
-            });
+            let accepted = self.accept_mission(mission, chance);
+            return VenueOffer::Accepted { mission, accepted };
         }
         let labels = offer_labels(
             texts.map_or("", |texts| texts.accept_button.as_str()),
             texts.map_or("", |texts| texts.refuse_button.as_str()),
             can_refuse,
         );
-        Some(VenueOffer::Prompt(OfferPrompt {
-            mission: offer,
-            text: self.offer_text(offer, raw).unwrap_or_default(),
+        VenueOffer::Prompt(OfferPrompt {
+            mission,
+            text: self.offer_text(mission, raw).unwrap_or_default(),
             labels,
-        }))
+        })
     }
 
     /// Enters venue `loc` for its offers (`_OfferMissionFromPort`

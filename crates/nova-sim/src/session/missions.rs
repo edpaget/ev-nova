@@ -13,11 +13,22 @@
 //! the first settling rolls its offers afresh.
 //!
 //! What forgets the stellar rolled at, so that the next landing rolls the
-//! offers afresh, is [`Session::forget_offers`]: a jump's arrival
-//! (@0x6bfce) and the developer tools' relocation through the entry
-//! table, and a mission's abort, failure and success (@0x99bcf, @0x99db5,
-//! @0xa03ef, @0xa0691). A landed `M` or `N` empties the offers and keeps
-//! the stellar (@0x1584b, @0x15949). None of it is saved.
+//! offers afresh, is [`Session::forget_offers`]: the developer tools'
+//! relocation through the entry table, and a mission's abort, failure
+//! and success (@0x99bcf, @0x99db5, @0xa03ef, @0xa0691). A jump's arrival
+//! forgets it and draws the visit's roll table afresh before the system
+//! is populated (@0x6bfce, @0x6c040-0x6c066). A landed `M` or `N`
+//! empties the offers and keeps the stellar (@0x1584b, @0x15949). None
+//! of it is saved.
+//!
+//! **Offers from a ship.** In flight a mission is available from a ship
+//! as [`Session::ship_mission_available`] checks it: the visit's table
+//! read, the player's system and no stellar docked (see the
+//! [`mission`](crate::mission) module's "From a ship"). The persons'
+//! offers, their resolution at spawn and the accept or refusal of one are
+//! the `person_offers` module's; an offer from a ship is accepted and
+//! refused through [`Session::accept_mission`] and
+//! [`Session::refuse_mission`] while its dialog is open.
 //!
 //! **Active missions.** The missions accepted are the pilot's, in their
 //! slots (see the [`mission`](crate::mission) module's "Active
@@ -56,8 +67,10 @@
 
 use super::Session;
 use super::mission_screens::MissionTextKind;
-use crate::catalog::{GovtId, MissionId, MissionRecord, MissionShip, StellarId, SystemId};
-use crate::chance::Chance;
+use crate::catalog::{
+    GovtId, LandingSite, MissionId, MissionRecord, MissionShip, StellarId, SystemId,
+};
+use crate::chance::{Chance, NeverFires};
 use crate::control::{Script, Test};
 use crate::mission::active::{AUTO_ABORT_FUEL, AUTO_ABORT_FUEL_TAKEN, AUTO_ABORT_PAYS};
 use crate::mission::{
@@ -281,9 +294,16 @@ impl Session {
             .unwrap_or_else(|| blank(id))
     }
 
-    /// The offer of `mission` on the visit under way: none in flight.
+    /// The offer of `mission` on the visit under way, or in flight the
+    /// offer from a ship the offer dialog shows (see the `person_offers`
+    /// module).
     fn offer_of(&self, mission: MissionId) -> Option<Offer> {
-        self.landed?;
+        if self.landed.is_none() {
+            let offering = self
+                .offering
+                .filter(|offering| offering.mission == mission)?;
+            return self.ship_offer(offering.mission).cloned();
+        }
         Venue::ORDER.into_iter().find_map(|venue| {
             self.offers
                 .at(venue)
@@ -334,14 +354,16 @@ impl Session {
         refused
     }
 
-    /// Accepts `mission`, offered on the visit under way, drawing on
-    /// `chance`: the accept checks, then the original's accept
-    /// (`_DoMissionAccept` @0xa1b11; see the [`mission`]
-    /// module's "Active missions"). The slot it went into.
+    /// Accepts `mission`, offered on the visit under way or by a person in
+    /// flight, drawing on `chance`: the accept checks, then the original's
+    /// accept (`_DoMissionAccept` @0xa1b11; see the [`mission`] module's
+    /// "Active missions"), and a person's offer answered (see the
+    /// `person_offers` module). The slot it went into.
     ///
     /// # Errors
     ///
-    /// [`AcceptError::NotOffered`] in flight or for a mission not offered;
+    /// [`AcceptError::NotOffered`] for a mission not offered: in flight,
+    /// any but the offer from a ship the dialog shows;
     /// [`AcceptError::Refused`] when a check refuses, and then nothing
     /// runs but an outside offer's suppression (see
     /// [`Session::next_offer`]) and, for want of room for its cargo, the
@@ -365,17 +387,20 @@ impl Session {
         if accepted.is_err() && offer.venue == Venue::Outside {
             self.suppress_offer(mission);
         }
+        self.end_ship_offer(accepted.is_ok());
         accepted.map_err(AcceptError::Refused)
     }
 
     /// Refuses `mission`, offered on the visit under way, drawing on
     /// `chance`: its `OnRefuse` runs (`_OfferOneMission` @0xa2f41), then
     /// its offer is dropped (`_OfferMissionFromPort` @0xa3765-0xa37a1).
-    /// Nothing is forgotten.
+    /// Nothing is forgotten. An offer from a ship is answered (see the
+    /// `person_offers` module).
     ///
     /// # Errors
     ///
-    /// [`NotOffered`] in flight or for a mission not offered.
+    /// [`NotOffered`] for a mission not offered: in flight, any but the
+    /// offer from a ship the dialog shows.
     pub fn refuse_mission(
         &mut self,
         mission: MissionId,
@@ -387,6 +412,7 @@ impl Session {
         self.show_mission_text(MissionTextKind::Refuse, mission, None);
         self.run_script(&record.on_refuse, chance);
         self.offers.drop_offer(mission);
+        self.end_ship_offer(false);
         Ok(())
     }
 
@@ -426,7 +452,9 @@ impl Session {
     /// `OnAccept`; the cash a pay below -50000 takes; `BriefText`; the
     /// cargo loaded with `PickupMode` 0, and its `LoadCargText`; the destination
     /// reached when it has none, or, docked, when it is the stellar docked
-    /// at; docked, the mission's offer dropped and the others kept only
+    /// at, or, in flight with an offer from a ship open, when it is the
+    /// stellar [`Session::ship_offer_reaches`] gives (@0xa1fc5-0xa1ff8);
+    /// docked, the mission's offer dropped and the others kept only
     /// while available; the auto-abort; and its roll made 0. The slot, or
     /// `None` when every slot is taken.
     fn start_mission(
@@ -446,10 +474,11 @@ impl Session {
         self.show_mission_text(MissionTextKind::Brief, record.id, Some(slot));
         self.load_at_accept(slot, record);
         let docked = self.landed;
+        let here = docked.or_else(|| self.ship_offer_reaches());
         if let Some(active) = self.slot_holding(slot, record.id) {
             active.reached = active
                 .destination
-                .is_none_or(|stop| Some(stop.stellar) == docked);
+                .is_none_or(|stop| Some(stop.stellar) == here);
         }
         if docked.is_some() {
             self.offers.drop_offer(record.id);
@@ -796,7 +825,7 @@ impl Session {
             mission::resolve(
                 &record,
                 Venue::of(record.avail_loc),
-                origin,
+                Some(origin),
                 world,
                 today,
                 chance,
@@ -881,7 +910,7 @@ impl Session {
     }
 
     /// `f` of the galaxy a mission's stellars are chosen from.
-    fn in_world<T>(&self, f: impl FnOnce(&World) -> T) -> T {
+    pub(super) fn in_world<T>(&self, f: impl FnOnce(&World) -> T) -> T {
         let stellars = stellars_of(&self.galaxy, &self.listed_stellars);
         f(&World {
             stellars: &stellars,
@@ -894,11 +923,48 @@ impl Session {
     /// when it is not shown.
     pub(super) fn at_visit<T>(&self, stellar: StellarId, f: impl FnOnce(&Visit) -> T) -> Option<T> {
         let docked = *self.sites.iter().find(|site| site.id == stellar)?;
-        let map = self.galaxy.map();
+        Some(self.visit_with(Some(docked), self.shown, f))
+    }
+
+    /// `f` of the flight in the player's system, with no stellar docked:
+    /// what a ship's offer reads.
+    fn in_flight<T>(&self, f: impl FnOnce(&Visit) -> T) -> T {
+        self.visit_with(None, self.pilot.system, f)
+    }
+
+    /// `f` of a visit to `docked` (none in flight) in `system`, by the
+    /// pilot as it is now.
+    fn visit_with<T>(
+        &self,
+        docked: Option<LandingSite>,
+        system: SystemId,
+        f: impl FnOnce(&Visit) -> T,
+    ) -> T {
+        let player = self.mission_player(system);
+        let active = self.pilot.missions.missions();
+        self.in_world(|&world| {
+            f(&Visit {
+                docked,
+                system,
+                world,
+                player,
+                active: &active,
+                gate: self.gate(),
+                rules: &self.rules,
+                today: self.pilot.date,
+            })
+        })
+    }
+
+    /// The player as availability reads it, its legal record the one with
+    /// `system`'s government.
+    fn mission_player(&self, system: SystemId) -> Player {
         let ship = self.ship_record(self.pilot.ship);
-        let player = Player {
-            record: map
-                .govt(self.shown)
+        Player {
+            record: self
+                .galaxy
+                .map()
+                .govt(system)
                 .map_or(0, |govt| self.pilot.legal_record(govt)),
             rating: self.pilot.combat_rating,
             ship: self.pilot.ship,
@@ -913,20 +979,32 @@ impl Session {
             fuel: self.pilot.reserves.fuel.now,
             free_cargo: self.mission_cargo_space(),
             cash: self.pilot.cash,
+        }
+    }
+
+    /// Whether `mission` is available from a ship in flight, the visit's
+    /// rolls read and nothing drawn (`_IsMissionAvailable(m, 1)` with
+    /// `_offeringFromShip` set; see the [`mission`] module's "From a
+    /// ship"): never while docked, nor for a mission the session has no
+    /// record of.
+    pub(crate) fn ship_mission_available(&self, mission: MissionId) -> bool {
+        let Some(record) = self
+            .mission_record(mission)
+            .filter(|_| self.landed.is_none())
+        else {
+            return false;
         };
-        let active = self.pilot.missions.missions();
-        Some(self.in_world(|&world| {
-            f(&Visit {
-                docked,
-                system: self.shown,
-                world,
-                player,
-                active: &active,
-                gate: self.gate(),
-                rules: &self.rules,
-                today: self.pilot.date,
-            })
-        }))
+        self.in_flight(|visit| {
+            let facts = AvailFacts {
+                visit,
+                mission: record,
+                venue: Venue::Ship,
+                rolls: self.offers.table(),
+            };
+            mission::availability()
+                .first_refusal(&facts, &mut NeverFires)
+                .is_ok()
+        })
     }
 
     /// The visit's roll table.
@@ -942,7 +1020,7 @@ impl Session {
             pilot: &self.pilot.name,
             ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
             ship_name: self.pilot.ship_name().unwrap_or_default(),
-            person: None,
+            person: self.offering_person(),
             mission: mission.map(|values| MissionTags {
                 values,
                 cash: self.pilot.cash,
@@ -1161,6 +1239,40 @@ mod tests {
         let _ = session.settle_script(&catalog, &mut chance);
         assert_eq!(chance.asked, table_then(&[1]));
         assert_eq!(ids(session.mission_offers(Venue::Computer)), [130, 131]);
+    }
+
+    #[test]
+    fn a_jumps_arrival_draws_the_table_afresh_before_the_system_is_populated() {
+        let catalog = offering();
+        let mut session = landed(&catalog, &mut NeverFires);
+        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(128)));
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        session.player.position = Vec2::ZERO;
+        let mut chance = crate::testkit::Scripted::rolling(&[41]);
+        assert_eq!(
+            crate::testkit::jump_with(&mut session, &catalog, 131, &mut chance),
+            Some(SystemId(131))
+        );
+        assert_eq!(chance.sides_asked, vec![100; ROLLED], "the table alone");
+        assert_eq!(session.offer_rolls().roll(MissionId(128)), Some(42));
+        assert_eq!(session.offer_rolls().roll(MissionId(130)), Some(1));
+        assert_eq!(session.offers.rolled_at(), None);
+        assert_eq!(
+            ids(session.mission_offers(Venue::Computer)),
+            [130, 131, 132],
+            "kept until the next landing"
+        );
+    }
+
+    #[test]
+    fn a_relocation_draws_no_table() {
+        let catalog = offering();
+        let mut session = landed(&catalog, &mut NeverFires);
+        session.offers.set_roll(MissionId(130), 77);
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("relocates");
+        assert_eq!(session.offer_rolls().roll(MissionId(130)), Some(77));
     }
 
     #[test]
@@ -3252,5 +3364,63 @@ mod tests {
             left_on(&mut session, &catalog).as_deref(),
             Some("Stock: off to Mars.")
         );
+    }
+
+    // Offers from a ship.
+
+    /// [`catalog`] with mission 130 offered from a ship (`AvailLoc` 2,
+    /// `AvailRandom` 40), and mission 131 at the mission computer.
+    fn from_ships() -> FakePilotCatalog {
+        let mut catalog = catalog();
+        catalog.missions = vec![
+            MissionRecord {
+                avail_loc: 2,
+                avail_random: 40,
+                ..mission(130)
+            },
+            mission(131),
+        ];
+        catalog
+    }
+
+    #[test]
+    fn in_flight_a_ship_offers_its_mission_reading_the_visits_roll() {
+        let catalog = from_ships();
+        let mut session = Session::start(&catalog).expect("starts");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(session.ship_mission_available(MissionId(130)), "undrawn: 0");
+        session.offers.set_roll(MissionId(130), 41);
+        assert!(!session.ship_mission_available(MissionId(130)));
+        session.offers.set_roll(MissionId(130), 40);
+        assert!(session.ship_mission_available(MissionId(130)));
+        assert!(
+            !session.ship_mission_available(MissionId(131)),
+            "the computer's"
+        );
+        assert!(
+            !session.ship_mission_available(MissionId(132)),
+            "no such mïsn"
+        );
+    }
+
+    #[test]
+    fn docked_no_ship_offers_its_mission() {
+        let catalog = from_ships();
+        let session = landed(&catalog, &mut NeverFires);
+        assert!(!session.ship_mission_available(MissionId(130)));
+    }
+
+    #[test]
+    fn in_flight_a_ships_offer_reads_the_player_and_its_system() {
+        let mut catalog = from_ships();
+        catalog.missions[0].avail_stel = 129;
+        catalog.missions[0].flags = 0x0008;
+        let mut session = Session::start(&catalog).expect("starts");
+        assert!(
+            session.ship_mission_available(MissionId(130)),
+            "AvailStel unread"
+        );
+        session.pilot.reserves.fuel.now = 99.0;
+        assert!(!session.ship_mission_available(MissionId(130)), "fuel");
     }
 }

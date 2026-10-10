@@ -127,16 +127,18 @@ pub(super) fn after(today: GameDate, days: i16) -> GameDate {
 
 /// `mission`'s values for an offer at `venue`, from `origin`, the stellar
 /// docked at, in `world` on `today`, drawing on `chance` in the original's
-/// order (see the module docs; `_RandomizeOneMission` @0xa14d1).
+/// order (see the module docs; `_RandomizeOneMission` @0xa14d1). With no
+/// origin, as a person's offer may have, a random code draws among every
+/// candidate, with no distance kept, and a code naming the origin finds
+/// none ([`select_stellar`]).
 pub fn resolve(
     mission: &MissionRecord,
     venue: Venue,
-    origin: StellarId,
+    origin: Option<StellarId>,
     world: &World,
     today: GameDate,
     chance: &mut dyn Chance,
 ) -> Offer {
-    let origin = Some(origin);
     let destination = match mission.travel_stel {
         -1 => None,
         code => select_stellar(code, origin, None, world, chance),
@@ -186,13 +188,13 @@ impl Offers {
     /// the table, then offers `missions` (by ascending ID) as
     /// [`Offers::reoffer`] does, and keeps the stellar.
     pub fn roll(&mut self, missions: &[MissionRecord], visit: &Visit, chance: &mut dyn Chance) {
-        let stellar = visit.docked.id;
-        if self.rolled_at == Some(stellar) {
+        let stellar = visit.docked.map(|site| site.id);
+        if stellar.is_none() || self.rolled_at == stellar {
             return;
         }
         self.table.draw(chance);
         self.reoffer(missions, visit, chance);
-        self.rolled_at = Some(stellar);
+        self.rolled_at = stellar;
     }
 
     /// Offers `missions` (by ascending ID) again without drawing the
@@ -221,7 +223,7 @@ impl Offers {
                     let offer = resolve(
                         mission,
                         venue,
-                        visit.docked.id,
+                        visit.docked.map(|site| site.id),
                         &visit.world,
                         visit.today,
                         chance,
@@ -233,6 +235,8 @@ impl Offers {
             match venue {
                 Venue::Computer => self.computer = offers,
                 Venue::Outside => self.outside = offers,
+                // Never rolled: [`Venue::ORDER`] leaves it out.
+                Venue::Ship => {}
             }
         }
     }
@@ -284,6 +288,15 @@ impl Offers {
         self.rolled_at = None;
     }
 
+    /// Forgets the stellar the offers were rolled at and draws the
+    /// visit's table afresh on `chance` ([`RollTable::draw`]), as a jump's
+    /// arrival does (@0x6bfce, @0x6c040-0x6c066), for the offers from a
+    /// ship to read until the next landing; the offers stay until then.
+    pub fn redraw(&mut self, chance: &mut dyn Chance) {
+        self.forget();
+        self.table.draw(chance);
+    }
+
     /// Empties both venues' offers, keeping the stellar they were rolled
     /// at, as a landed `M` or `N` does (@0x1584b, @0x15949).
     pub fn empty(&mut self) {
@@ -297,6 +310,7 @@ impl Offers {
         match venue {
             Venue::Computer => &self.computer,
             Venue::Outside => &self.outside,
+            Venue::Ship => &[],
         }
     }
 

@@ -14,14 +14,21 @@
 //! engine, as Greetings' answer from a friendly person, in place of its
 //! advice; otherwise as the hail's opening line, whatever its attitude.
 //! A person's `HailPict` shows in the comm dialog
-//! ([`HailView::portrait`](crate::HailView::portrait)).
+//! ([`HailView::portrait`](crate::HailView::portrait)). A person whose
+//! `LinkMission` is available from a ship offers it when hailed, or with
+//! `Flags` 0x0200 when boarded, in place of the comm dialog or the
+//! plunder (see the `person_offers` module).
 //!
 //! **Hail quotes.** Each tick in flight ([`Session::tick_quotes`]) a
 //! person may say its hail quote (`STR#` 7101 #`HailQuote`, its tags
 //! read), on the trigger its `Flags` give: when it begins to attack the
 //! player, now and then, and so on (see [`person`](crate::person)); the
 //! flight shows each in its message line ([`Session::take_quotes`]).
-//! A person escorting the player says none. "No quote showing" counts
+//! A person escorting the player says none, nor does one gone for good
+//! (@0x33c62), as one whose mission was accepted with `Flags` 0x0100
+//! is. One of `Flags` 0x0400 says it only while its `LinkMission` is
+//! available from a ship, checked in full (`_HandleShip`
+//! @0x33dc7-0x33e31). "No quote showing" counts
 //! only the hail quotes, the last said
 //! [`QUOTE_SHOWN_TICKS`] or more ago. A person's quote state is never
 //! saved, and "once" is once for its stay.
@@ -41,7 +48,7 @@
 use std::rc::Rc;
 
 use super::{Session, hire};
-use crate::catalog::{CommCatalog, PersonId};
+use crate::catalog::{CommCatalog, MissionId, PersonId};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
@@ -133,14 +140,18 @@ impl Session {
                 // original's joined ship is a mission ship, not the person.
                 .filter(|npc| npc.escort.is_none())
                 .filter_map(|npc| {
-                    let person = npc.person?;
+                    // One gone for good says none (@0x33c62).
+                    let person = npc.person.filter(|person| !self.pilot.gone(person.id))?;
+                    let linked = self
+                        .traffic
+                        .person(person.id)
+                        .and_then(|spawned| spawned.record.link_mission);
                     let view = QuoteView {
                         liked: likes_player(npc, &around),
                         player_jumping: self.jumping().is_some(),
                         player_ai,
-                        // Missions: every mission is available until
-                        // missions-and-storylines brings them.
-                        mission_available: true,
+                        mission_available: linked
+                            .is_some_and(|mission| self.ship_mission_available(MissionId(mission))),
                     };
                     Some((npc.id, quote_eligible(npc, &person, &view)))
                 })
@@ -989,6 +1000,30 @@ mod tests {
             let (said, asked) = quote_tick(catalog, session, &[1]);
             assert_eq!((said.len(), asked), (0, vec![140]));
         }
+    }
+
+    #[test]
+    fn a_person_of_0x0400_says_its_quote_only_while_its_mission_is_available_from_a_ship() {
+        let mut catalog = quoters([crate::person::QUOTE_IF_MISSION, 0]);
+        catalog.persons[0].link_mission = Some(130);
+        catalog.missions = vec![crate::catalog::MissionRecord {
+            avail_loc: 2,
+            avail_random: 50,
+            ..crate::testkit::mission(130)
+        }];
+        let pilot = Pilot::new(&catalog, "Stock").expect("a pilot");
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.populate(&catalog, &mut NeverFires);
+        session.offers.set_roll(crate::catalog::MissionId(130), 51);
+        assert_eq!(
+            quote_tick(&catalog, &mut session, &[1]),
+            (vec![], vec![140]),
+            "unavailable: Bee alone draws"
+        );
+        session.offers.set_roll(crate::catalog::MissionId(130), 50);
+        let (said, asked) = quote_tick(&catalog, &mut session, &[0, 1]);
+        assert_eq!(said, ["Ace: Prepare to die, Stock!"]);
+        assert_eq!(asked, [140, 140]);
     }
 
     #[test]

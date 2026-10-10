@@ -99,7 +99,7 @@ impl Galaxy {
     /// on 23 June 1177.
     fn visit(&self) -> Visit<'_> {
         Visit {
-            docked: docked_at(128),
+            docked: Some(docked_at(128)),
             system: SystemId(130),
             world: World {
                 stellars: &self.stellars,
@@ -305,6 +305,106 @@ fn avail_loc_0_is_the_computers_and_every_other_but_minus_1_and_2_outside() {
     assert_eq!(Venue::of(-1), Venue::Outside);
 }
 
+/// The refusals of mission 130 offered from a ship (`AvailLoc` 2) with
+/// `edit` made, on the plain visit as `adjust` changes it.
+fn from_a_ship(
+    adjust: impl FnOnce(&mut Visit),
+    edit: impl FnOnce(&mut MissionRecord),
+) -> Vec<Refusal> {
+    offered(adjust, |m| {
+        m.avail_loc = SHIP;
+        edit(m);
+    })
+}
+
+#[test]
+fn a_ship_offers_avail_loc_2_alone_and_only_a_ship_does() {
+    let galaxy = Galaxy::new();
+    let visit = galaxy.visit();
+    let at = |venue, avail_loc| {
+        let mission = with(|m| m.avail_loc = avail_loc);
+        let facts = AvailFacts {
+            visit: &visit,
+            mission: &mission,
+            venue,
+            rolls: &ones(),
+        };
+        availability().first_refusal(&facts, &mut NeverFires)
+    };
+    assert_eq!(at(Venue::Ship, 2), Ok(()));
+    for avail_loc in [-1, 0, 1, 3, 6] {
+        assert_eq!(
+            at(Venue::Ship, avail_loc),
+            Err(Refusal::AvailLoc),
+            "{avail_loc}"
+        );
+    }
+    assert_eq!(at(Venue::Computer, 2), Err(Refusal::AvailLoc));
+    assert_eq!(at(Venue::Outside, 2), Err(Refusal::AvailLoc));
+    assert_eq!(Venue::of(2), Venue::Ship);
+    assert_eq!(Venue::ORDER, [Venue::Computer, Venue::Outside], "no ship");
+}
+
+#[test]
+fn from_a_ship_avail_stel_is_not_read_even_with_no_stellar_docked() {
+    for code in [129, 10001, 32000, -2] {
+        assert_eq!(from_a_ship(|_| {}, |m| m.avail_stel = code), [], "{code}");
+        assert_eq!(
+            from_a_ship(|visit| visit.docked = None, |m| m.avail_stel = code),
+            [],
+            "{code} in flight"
+        );
+    }
+    assert_eq!(
+        offered(|visit| visit.docked = None, |_| {}),
+        [Refusal::AvailStel],
+        "the computer with no stellar docked"
+    );
+    assert_eq!(
+        offered(|visit| visit.docked = None, |m| m.avail_loc = 1),
+        [Refusal::AvailStel],
+        "outside"
+    );
+}
+
+#[test]
+fn from_a_ship_an_avail_record_of_domination_needs_a_record_that_low() {
+    let record_of = |record, avail_record| {
+        from_a_ship(
+            |visit| visit.player.record = record,
+            |m| m.avail_record = avail_record,
+        )
+    };
+    assert_eq!(record_of(-32000, -32000), []);
+    assert_eq!(record_of(i16::MIN, -32001), []);
+    assert_eq!(record_of(-31999, -32000), [Refusal::AvailRecord]);
+    assert_eq!(record_of(-32000, -32001), [Refusal::AvailRecord]);
+    assert_eq!(record_of(-10, -10), [], "as at a stellar above it");
+    assert_eq!(record_of(-9, -10), [Refusal::AvailRecord]);
+    assert_eq!(record_of(9, 10), [Refusal::AvailRecord]);
+    assert_eq!(record_of(-500, 0), []);
+}
+
+#[test]
+fn from_a_ship_any_cargo_above_0_needs_room_whatever_flags2_says() {
+    let roomy = |free, qty, flags2| {
+        from_a_ship(
+            |visit| visit.player.free_cargo = free,
+            |m| {
+                m.flags2 = flags2;
+                m.cargo_qty = qty;
+            },
+        )
+    };
+    assert_eq!(roomy(20, 20, 0), []);
+    assert_eq!(roomy(19, 20, 0), [Refusal::CargoSpace]);
+    assert_eq!(roomy(19, 20, NEEDS_ROOM), [Refusal::CargoSpace]);
+    assert_eq!(roomy(-5, 1, 0), [Refusal::CargoSpace]);
+    assert_eq!(roomy(-5, 0, 0), [], "no tons");
+    assert_eq!(roomy(-11, -10, NEEDS_ROOM), [], "a range passes");
+    assert_eq!(roomy(-11, -1, 0), []);
+}
+
 #[test]
 fn a_fixed_destination_or_return_at_the_players_place_refuses_unless_avail_stel_is_a_stellar() {
     for code in [129, 160] {
@@ -363,7 +463,7 @@ fn flags_0x0008_needs_a_jumps_fuel() {
 /// in 130.
 fn avail_stel_at(govt: Option<GovtId>, avail_stel: i16) -> Vec<Refusal> {
     offered(
-        |visit| visit.docked.govt = govt,
+        |visit| visit.docked.as_mut().expect("docked").govt = govt,
         |m| m.avail_stel = avail_stel,
     )
 }
@@ -386,7 +486,7 @@ fn avail_stel_minus_1_and_the_docked_stellar_pass() {
 fn avail_stel_4999_is_a_stellar_and_5000_up_a_system_the_players_lists() {
     let galaxy = Galaxy::new();
     let mut visit = galaxy.visit();
-    visit.docked.id = StellarId(4999);
+    visit.docked.as_mut().expect("docked").id = StellarId(4999);
     assert_eq!(refusals(&visit, &with(|m| m.avail_stel = 4999)), []);
     assert_eq!(avail_stel_at(None, 5003), [], "130 lists 131");
     assert_eq!(avail_stel_at(None, 5007), [], "and 135");
@@ -749,7 +849,7 @@ fn availabilitys_destination_check_has_no_origin_to_keep_away_from() {
     let offer = resolve(
         &with(|m| m.travel_stel = -2),
         Venue::Computer,
-        StellarId(128),
+        Some(StellarId(128)),
         &visit.world,
         today(),
         &mut Draws::default(),
@@ -816,7 +916,7 @@ fn an_offer_resolves_its_values_in_the_originals_draw_order() {
     let offer = resolve(
         &courier(),
         Venue::Computer,
-        StellarId(128),
+        Some(StellarId(128)),
         &visit.world,
         today(),
         &mut chance,
@@ -857,7 +957,7 @@ fn a_return_draws_never_the_destination_and_minus_4_returns_to_the_origin() {
     let offer = resolve(
         &there_and_back,
         Venue::Computer,
-        StellarId(128),
+        Some(StellarId(128)),
         &visit.world,
         today(),
         &mut chance,
@@ -874,7 +974,7 @@ fn a_return_draws_never_the_destination_and_minus_4_returns_to_the_origin() {
     let home = resolve(
         &with(|m| m.return_stel = -4),
         Venue::Computer,
-        StellarId(128),
+        Some(StellarId(128)),
         &visit.world,
         today(),
         &mut chance,
@@ -897,7 +997,7 @@ fn a_fixed_stellar_in_no_visible_system_has_no_system() {
     let offer = resolve(
         &with(|m| m.travel_stel = 2000),
         Venue::Outside,
-        StellarId(128),
+        Some(StellarId(128)),
         &visit.world,
         today(),
         &mut Draws::default(),
@@ -921,7 +1021,7 @@ fn the_cargo_type_is_kept_from_0_to_999_drawn_at_1000_and_else_none() {
         let offer = resolve(
             &with(|m| m.cargo_type = cargo_type),
             Venue::Computer,
-            StellarId(128),
+            Some(StellarId(128)),
             &visit.world,
             today(),
             &mut chance,
@@ -944,7 +1044,7 @@ fn the_tons_are_kept_from_0_none_at_minus_1_and_drawn_below_even_with_no_cargo()
         let offer = resolve(
             &with(|m| m.cargo_qty = cargo_qty),
             Venue::Computer,
-            StellarId(128),
+            Some(StellarId(128)),
             &visit.world,
             today(),
             &mut chance,
@@ -960,6 +1060,44 @@ fn the_tons_are_kept_from_0_none_at_minus_1_and_drawn_below_even_with_no_cargo()
 }
 
 #[test]
+fn with_no_origin_a_random_code_draws_among_every_candidate_and_one_naming_it_finds_none() {
+    let galaxy = Galaxy::new();
+    let visit = galaxy.visit();
+    let mut chance = Draws::of(&[0]);
+    let offer = resolve(
+        &with(|m| {
+            m.travel_stel = -2;
+            m.return_stel = -4;
+        }),
+        Venue::Ship,
+        None,
+        &visit.world,
+        today(),
+        &mut chance,
+    );
+    assert_eq!(
+        offer.destination,
+        Some(Stop {
+            stellar: StellarId(128),
+            system: Some(SystemId(130)),
+        }),
+        "no distance kept: the lowest of all"
+    );
+    assert_eq!(chance.asked, [6], "128, 129, 140, 150, 151 and 160");
+    assert_eq!(offer.return_to, None, "-4 names the origin");
+    assert_eq!(offer.venue, Venue::Ship);
+    let nowhere = resolve(
+        &mission(130),
+        Venue::Ship,
+        None,
+        &visit.world,
+        today(),
+        &mut Draws::default(),
+    );
+    assert_eq!((nowhere.destination, nowhere.return_to), (None, None));
+}
+
+#[test]
 fn the_pay_is_raw_and_the_deadline_today_plus_its_days() {
     let galaxy = Galaxy::new();
     let visit = galaxy.visit();
@@ -970,7 +1108,7 @@ fn the_pay_is_raw_and_the_deadline_today_plus_its_days() {
                 m.time_limit = time_limit;
             }),
             Venue::Computer,
-            StellarId(128),
+            Some(StellarId(128)),
             &visit.world,
             today(),
             &mut Draws::default(),
@@ -1044,7 +1182,7 @@ fn another_stellar_or_one_forgotten_rolls_afresh() {
     let mut visit = galaxy.visit();
     let mut offers = Offers::default();
     offers.roll(&catalog(), &visit, &mut NeverFires);
-    visit.docked = docked_at(129);
+    visit.docked = Some(docked_at(129));
     let mut elsewhere = Draws::of(&[]);
     offers.roll(&catalog(), &visit, &mut elsewhere);
     assert_eq!(
@@ -1060,6 +1198,22 @@ fn another_stellar_or_one_forgotten_rolls_afresh() {
     let mut forgotten = Draws::of(&[]);
     offers.roll(&catalog(), &visit, &mut forgotten);
     assert_eq!(forgotten.asked.len(), ROLLED + 4);
+}
+
+#[test]
+fn a_redraw_draws_the_table_afresh_and_forgets_the_stellar_keeping_the_offers() {
+    let galaxy = Galaxy::new();
+    let visit = galaxy.visit();
+    let mut offers = Offers::default();
+    offers.roll(&catalog(), &visit, &mut NeverFires);
+    let kept = offers.at(Venue::Computer).to_vec();
+    let mut chance = Scripted::rolling(&[41]);
+    offers.redraw(&mut chance);
+    assert_eq!(chance.sides_asked, vec![100; ROLLED], "the table alone");
+    assert_eq!(offers.table().roll(MissionId(128)), Some(42));
+    assert_eq!(offers.table().roll(MissionId(129)), Some(1));
+    assert_eq!(offers.rolled_at(), None);
+    assert_eq!(offers.at(Venue::Computer), kept, "kept until the landing");
 }
 
 #[test]

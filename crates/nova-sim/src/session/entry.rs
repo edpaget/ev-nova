@@ -188,6 +188,10 @@ pub(super) enum Reset {
     /// The stellar the offers were rolled at is forgotten, so the next
     /// landing rolls them afresh (see the `missions` module).
     ForgetOffers,
+    /// The stellar the offers were rolled at is forgotten, and the
+    /// visit's roll table drawn afresh before the system is populated,
+    /// for the offers from a ship (see the `missions` module).
+    RedrawOffers,
     /// The offers are emptied, as a landed `M` or `N` empties them
     /// (@0x1584b, @0x15949).
     EmptyOffers,
@@ -268,14 +272,15 @@ pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets 
 /// `_AutoSetExploration` @0x6c1f9), abandons the fighters out without a
 /// jump's fuel (@0x6c0b9-0x6c0f9) and resets the mission sound ID
 /// (@0x6c4ff), and forgets the stellar the offers were rolled at
-/// (@0x6bfce). It never clears the course, only drops the hops made; the
+/// (@0x6bfce), drawing the roll table afresh before the system is set up
+/// (@0x6c040-0x6c066). It never clears the course, only drops the hops made; the
 /// jump's start already stopped the thrust, and every tick ends a gate's
 /// pending entry. Populating lets go of the strikes, the boarding, the
 /// hail and the target too.
 fn jump(hops: usize) -> Resets {
     Resets::of(
         &[
-            Reset::ForgetOffers,
+            Reset::RedrawOffers,
             Reset::Stellar,
             Reset::Explore,
             Reset::HeldSound,
@@ -520,6 +525,9 @@ impl Session {
         }
         let scene_changed = self.set_player_system(system, sites, dock);
         self.leave_behind(&resets);
+        if resets.has(Reset::RedrawOffers) {
+            self.offers.redraw(&mut &mut *chance);
+        }
         self.bring_in_traffic(resets.traffic, catalog, chance);
         if resets.has(Reset::ShopRolls) {
             self.land_day_rolls();
@@ -745,7 +753,7 @@ mod tests {
                         Reset::FightersOut,
                         Reset::ArrivalSound,
                         Reset::ArrivalMessage,
-                        Reset::ForgetOffers,
+                        Reset::RedrawOffers,
                     ],
                 ),
                 CourseStep::Drop(hops),

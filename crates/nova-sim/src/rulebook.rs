@@ -44,7 +44,7 @@
 //! | [`CommQuote`](RuleKey::CommQuote) | `comm_quote` | a person's comm quote is a friendly person's answer to Greetings ([`Session`](crate::Session)) | it opens the hail, in place of the opening line\* |
 //! | [`GrantCount`](RuleKey::GrantCount) | `grant_count` | boarding a person grants trunc((50 + `Rand(51)`) x `GrantCount` / 100) outfits, at least 1 ([`NovaBoarding`](crate::NovaBoarding)) | 1 + `Rand(GrantCount)`\* |
 //! | [`GrantMax`](RuleKey::GrantMax) | `grant_max` | a boarding grant may take the player past the outfit's `Max`, and `G` past its `Max` and the free mass ([`OutfitRules`](crate::OutfitRules), which the boarding grant reads too) | both are held to `Max` less the owned and to the free mass, weighed as the outfitter weighs it ([`held_to_max`](crate::grant::held_to_max))\* |
-//! | [`PersonJoin`](RuleKey::PersonJoin) | `person_join` | no person offers to join: the original offers its `LinkMission`, which waits for missions ([`JoinFleet`](crate::hail::nova::JoinFleet)) | a person whose record allows it lists Use As Escort and joins the fleet as itself, for good\* |
+//! | [`PersonJoin`](RuleKey::PersonJoin) | `person_join` | no person offers to join: one whose `LinkMission` is available offers that mission in place of the comm dialog (`_HandlePlayerCommunication` @0x6220d; [`JoinFleet`](crate::hail::nova::JoinFleet)) | a person whose record allows it, its `LinkMission` available, lists Use As Escort and joins the fleet as itself, for good\* |
 //! | [`MapExplore`](RuleKey::MapExplore) | `map_explore` | a map of `ModVal` N explores depth first, so it may miss systems within N jumps, and "inhabited" reads a system's first four stellars ([`OutfitRules`](crate::OutfitRules)) | every system within N jumps, and any stellar |
 //! | [`InvalidMap`](RuleKey::InvalidMap) | `invalid_map` | a map whose `ModVal` explores nothing (0, -2 to -999) is used up ([`OutfitRules`](crate::OutfitRules)) | it is added to the outfits as a plain item\* |
 //! | [`RemoveRefund`](RuleKey::RemoveRefund) | `remove_refund` | `D` removes an outfit and pays nothing ([`OutfitRules`](crate::OutfitRules)) | it pays what selling the outfit would\* |
@@ -82,6 +82,7 @@
 //! | [`StartActiveMission`](RuleKey::StartActiveMission) | `start_active_mission` | `S` accepts a mission active already into another slot (`_EvalSetExp` @0x153b9-0x15418; see [`mission`](crate::mission)) | `S` leaves an active mission and the slots as they are\* |
 //! | [`PayMillions`](RuleKey::PayMillions) | `pay_millions` | a mission text's `<PAY>` of a million or more reads in millions to two places, truncated, "1.23M" (`_StrcatCommaNumber` @0x8990-0x8aa3; see [`text_tags`](crate::text_tags)) | it reads in full with its commas, "1,234,567"\* |
 //! | [`MissionOrder`](RuleKey::MissionOrder) | `mission_order` | offers of `DispWeight` 0 or more keep index order, the rest after by descending weight (`_RandomizeMissionData` @0xa1842-0xa197d; see [`mission`](crate::mission)) | all by descending `DispWeight`, ties in index order |
+//! | [`PersonMissionStellar`](RuleKey::PersonMissionStellar) | `person_mission_stellar` | a person's mission is resolved at its spawn from the player's navigation target, or from no stellar with none, and an accept in flight reaches a destination that is the navigation target (`_RandomizeOneMission` @0xa151f-0xa1526, `_DoMissionAccept` @0xa1fc5-0xa1ff8; see [`mission`](crate::mission)) | it is resolved from the first stellar the player's system lists, and an accept in flight reaches no destination\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -90,7 +91,8 @@
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
 //! `ship_change_reserves`, `move_arrival`, `move_keep_flag`,
 //! `script_sound`, `landing_distance`, `repeat_mission_failure`,
-//! `start_active_mission`, `pay_millions` or `comm_quote`
+//! `start_active_mission`, `pay_millions`, `person_mission_stellar` or
+//! `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -508,14 +510,17 @@ rule_keys! {
     GrantMax => "grant_max",
     /// Whether a person offers to join the player when hailed: by the
     /// engine, none does, as the original brings a person to fly with the
-    /// player only through its `LinkMission`, offered in place of the comm
-    /// dialog and swapping the person's ship for a mission ship
-    /// (`_HandlePlayerCommunication` @0x621a9-0x62509), which waits for
-    /// missions; otherwise, as the phase has it, a person whose record
-    /// allows it ([`offers_to_join`](crate::person::offers_to_join)) lists
-    /// Use As Escort and joins the fleet as itself, for good. The Bible is
-    /// silent here, so the other reading is the intended behaviour, not
-    /// anything the Bible says (see
+    /// player only through its `LinkMission`: a person whose mission is
+    /// available offers it in place of the comm dialog
+    /// (`_HandlePlayerCommunication` @0x6220d), and only an accept with
+    /// `Flags` 0x0040, `ShipCount` 1 and `ShipGoal` 3 swaps it for a
+    /// mission ship that escorts the player (@0x62421-0x62509;
+    /// rdm:roadmap/mission-ships). Otherwise, a person whose record allows
+    /// it ([`offers_to_join`](crate::person::offers_to_join)), its
+    /// `LinkMission` available, opens the comm dialog listing Use As
+    /// Escort while the fleet has room, and joins the fleet as itself,
+    /// for good. The Bible is silent here, so the other reading is the
+    /// intended behaviour, not anything the Bible says (see
     /// [`JoinFleet`](crate::hail::nova::JoinFleet)).
     PersonJoin => "person_join",
     /// Which systems a map outfit (`ModType` 16) of `ModVal` N above 0
@@ -902,6 +907,20 @@ rule_keys! {
     /// nearer the top of the list", every offer by descending weight, ties
     /// in index order (see [`mission`](crate::mission)).
     MissionOrder => "mission_order",
+    /// The stellar a person's mission is offered from, the player ship's
+    /// stellar target (+0x6c), which the original reads both as a
+    /// person's offer is resolved at its spawn (`_RandomizeOneMission`
+    /// @0xa151f-0xa1526, from `_SpawnPerson` @0x4104b-0x41072) and as it
+    /// is accepted in flight (`_DoMissionAccept` @0xa1fc5-0xa1ff8). By the
+    /// engine it is the player's navigation target: the offer is resolved
+    /// from it, or from no stellar with none, and an accept in flight
+    /// reaches a destination that is the navigation target. By the other
+    /// reading it is the first stellar the player's system lists, as `S`
+    /// resolves in flight: the offer is resolved from it, and an accept
+    /// in flight reaches no destination. The Bible says nothing of it, so
+    /// the other reading is the intended behaviour, not anything the
+    /// Bible says (see [`mission`](crate::mission)).
+    PersonMissionStellar => "person_mission_stellar",
 }
 
 impl RuleKey {
@@ -1069,7 +1088,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1082,7 +1101,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(2),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1094,7 +1113,27 @@ mod tests {
             RuleKey::from_key("mission_order"),
             Some(RuleKey::MissionOrder)
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::MissionOrder));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::MissionOrder)
+        );
+    }
+
+    #[test]
+    fn the_person_mission_stellar_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(
+            RuleKey::PersonMissionStellar.key(),
+            "person_mission_stellar"
+        );
+        assert_eq!(
+            RuleKey::from_key("person_mission_stellar"),
+            Some(RuleKey::PersonMissionStellar)
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::PersonMissionStellar));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::PersonMissionStellar),
+            RuleSource::Engine
+        );
     }
 
     #[test]
@@ -1272,7 +1311,8 @@ mod tests {
                 RuleKey::RepeatMissionFailure,
                 RuleKey::StartActiveMission,
                 RuleKey::PayMillions,
-                RuleKey::MissionOrder
+                RuleKey::MissionOrder,
+                RuleKey::PersonMissionStellar
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");

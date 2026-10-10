@@ -345,7 +345,7 @@ pub use rulebook::{RuleKey, RuleSource, Rulebook};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{
-    AbortError, AcceptError, ComputerRefusal, ComputerRow, HookRules, InfoRow, LandPress,
+    AbortError, AcceptError, ComputerRefusal, ComputerRow, Hailed, HookRules, InfoRow, LandPress,
     MissionComputer, MissionInfo, MissionText, MissionTextKind, NotOffered, OfferPrompt,
     PersonQuote, RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled,
     ShipChangeRules, StellarPick, VenueOffer,

@@ -82,12 +82,16 @@
 //! **Use As Escort** (`STR#` 150 #46, key U), by
 //! [`RuleKey::PersonJoin`]'s reading. By the engine it is never listed:
 //! the original brings a person to fly with the player only through its
-//! `LinkMission`, offered in place of the comm dialog, which waits for
-//! missions. By the other reading it is listed for a person who may join
-//! ([`Hail::joins`]: its record allows it and the fleet has room), not
-//! hostile, and neither the player's escort nor a carried fighter: it
-//! says "Okay, I'm on my way." (group 29) and joins the fleet as itself
-//! at once ([`Deed::Join`]), at no cost.
+//! `LinkMission`, offered in place of the comm dialog
+//! (`_HandlePlayerCommunication` @0x6220d), no hail listing a way to
+//! join. By the other reading it is listed for a person who may join
+//! ([`Hail::joins`]: its record allows it, its `LinkMission` is
+//! available from a ship and the fleet has room), not hostile, and
+//! neither the player's escort nor a carried fighter: it says "Okay, I'm
+//! on my way." (group 29) and joins the fleet as itself at once
+//! ([`Deed::Join`]), at no cost. A hail that lists it opens the comm
+//! dialog in place of the person's mission offer
+//! ([`HailOption::joins`]).
 
 use super::reply::{
     self, BAD_MOOD, BUSY, COMEDIAN, GOOD_MOOD, HELP_FOR_PAY, HOW_DARE_YOU, IN_YOUR_DREAMS,
@@ -427,6 +431,10 @@ impl HailOption for JoinFleet {
             deed: Some(Deed::Join),
             ..Answer::say(Reply::Comm(ON_MY_WAY))
         }
+    }
+
+    fn joins(&self) -> bool {
+        true
     }
 }
 

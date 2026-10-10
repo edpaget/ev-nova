@@ -69,7 +69,6 @@ use crate::escort::{
     self, ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup,
 };
 use crate::flight::ShipState;
-use crate::hyperspace::JUMP_FUEL;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId, NpcPerson};
@@ -291,14 +290,7 @@ impl Session {
         }
         self.dismiss(id);
         if let Some(npc) = self.npc_mut(id) {
-            npc.goal = if npc.reserves.fuel.now >= JUMP_FUEL {
-                Goal::JumpOut
-            } else {
-                Goal::Idle
-            };
-            npc.target = None;
-            npc.trigger = Trigger::default();
-            npc.provoked = 0.0;
+            super::hail::make_leave(npc);
         }
     }
 

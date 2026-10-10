@@ -859,6 +859,17 @@ impl Draws {
             asked: Vec::new(),
         }
     }
+
+    /// A jump's arrival's draws: the roll table's
+    /// [`ROLLED`](crate::mission::ROLLED), each its last outcome, then
+    /// `draws`.
+    pub(crate) fn arriving(draws: &[u32]) -> Self {
+        let table = std::iter::repeat_n(99, crate::mission::ROLLED);
+        Self {
+            queue: table.chain(draws.iter().copied()).collect(),
+            asked: Vec::new(),
+        }
+    }
 }
 
 impl Chance for Draws {

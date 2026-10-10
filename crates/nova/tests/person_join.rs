@@ -3,8 +3,9 @@
 //! Alpha, whose one stellar, a pad at the centre, can be landed on; Alpha
 //! has no traffic of its own but two Person slots at 100 %: "Merchant",
 //! `përs` 128, independent, of `Flags` 0x0040, in the "Hauler", whose
-//! `LinkMission` 128 has one special ship escorting the player (`mïsn`
-//! `ShipCount` 1, `ShipGoal` 3); and "Wreck", `përs` 129, of a derelict
+//! `LinkMission` 128, offered from a ship (`AvailLoc` 2) on every visit,
+//! has one special ship escorting the player (`mïsn` `ShipCount` 1,
+//! `ShipGoal` 3); and "Wreck", `përs` 129, of a derelict
 //! government (`gövt` `Flags` 0x0800), so disabled from the start, in the
 //! "Hulk" (a crew of 3), granting up to 2 outfits of class 7 every time;
 //! and `oütf` 128, "Spare Part", of `ItemClass` 7, massless) and a
@@ -153,9 +154,12 @@ fn person(govt: i16, ship: i16, flags: u16, mission: i16, grant: [i16; 3]) -> Ve
     bytes
 }
 
-/// A `mïsn` with one special ship escorting the player.
+/// A `mïsn` offered from a ship (`AvailLoc` 2) on every visit
+/// (`AvailRandom` 100), with one special ship escorting the player.
 fn escort_mission() -> Vec<u8> {
     let mut bytes = vec![0; Mission::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x04, &[2]);
+    put_i16s(&mut bytes, 0x0A, &[100]);
     put_i16s(&mut bytes, 0x20, &[1]);
     put_i16s(&mut bytes, 0x26, &[3]);
     bytes

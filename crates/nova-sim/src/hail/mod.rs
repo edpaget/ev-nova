@@ -163,8 +163,9 @@ pub struct Hail<'a> {
     pub quote: Option<u16>,
     /// Whether the ship hailed is a person who may join the player's
     /// fleet: its record allows it
-    /// ([`offers_to_join`](crate::person::offers_to_join)) and the fleet
-    /// has room. The session sets it; none otherwise.
+    /// ([`offers_to_join`](crate::person::offers_to_join)), its
+    /// `LinkMission` is available from a ship, and the fleet has room. The
+    /// session sets it; none otherwise.
     pub joins: bool,
 }
 
@@ -366,6 +367,14 @@ pub trait HailOption: Debug {
 
     /// How the ship answers its press, rolling any choice on `chance`.
     fn press(&self, hail: &Hail, chance: &mut dyn Chance) -> Answer;
+
+    /// Whether its press makes the person hailed join the fleet
+    /// ([`Deed::Join`]): a hail that lists one opens the comm dialog in
+    /// place of the person's mission offer (see the session's
+    /// `person_offers`). None does by default.
+    fn joins(&self) -> bool {
+        false
+    }
 }
 
 /// The comm dialog's options, in the order it lists them.
@@ -412,6 +421,13 @@ impl HailOptions {
     pub fn with(mut self, option: Rc<dyn HailOption>) -> Self {
         self.options.push(option);
         self
+    }
+
+    /// Whether an option that applies to `hail` makes the person join
+    /// the fleet ([`HailOption::joins`]).
+    #[must_use]
+    pub fn lists_join(&self, hail: &Hail) -> bool {
+        self.listed(hail).iter().any(|option| option.joins())
     }
 
     /// The options that apply to `hail`, in order.
@@ -794,6 +810,12 @@ mod tests {
             "by the engine"
         );
         assert!(!hail(&npc).joins, "the fixture's hail may not join");
+        assert!(bible.lists_join(&joining), "Use As Escort joins");
+        assert!(!bible.lists_join(&hail(&npc)), "nothing to join");
+        assert!(
+            !HailOptions::nova(&Rulebook::default()).lists_join(&joining),
+            "by the engine"
+        );
     }
 
     #[test]

@@ -287,7 +287,12 @@
 //! quote as the rule set reads [`RuleKey::CommQuote`], and in flight its
 //! hail
 //! quote on its trigger ([`Session::tick_quotes`],
-//! [`Session::take_quotes`]).
+//! [`Session::take_quotes`]). A person's `LinkMission` is resolved as it
+//! spawns, and offered in place of the comm dialog when it is hailed
+//! ([`Session::open_hail`]), or, with `Flags` 0x0200, in place of the
+//! plunder when it is boarded, while the mission is available from a
+//! ship; the offer is answered through [`Session::accept_mission`] and
+//! [`Session::refuse_mission`] (see the `person_offers` module).
 //!
 //! The player targets an NPC ([`Session::select_target`]), the nearest,
 //! the nearest threat or the next in turn as the
@@ -319,6 +324,7 @@ mod mission_cargo;
 mod mission_screens;
 mod missions;
 mod outfits;
+mod person_offers;
 mod persons;
 mod script_effects;
 mod ship_change;
@@ -335,6 +341,7 @@ pub use mission_screens::{
     MissionTextKind, OfferPrompt, VenueOffer,
 };
 pub use missions::{AbortError, AcceptError, NotOffered};
+pub use person_offers::Hailed;
 pub use persons::PersonQuote;
 pub use script_effects::{ScriptEffectRules, Settled};
 
@@ -747,6 +754,13 @@ pub struct Session {
     suppressed: BTreeSet<MissionId>,
     /// The venue offers were last entered at, an `AvailLoc`; never saved.
     offer_venue: Option<i16>,
+    /// The offers from a ship, by mission, each resolved as a person
+    /// linked to it spawned (see the `person_offers` module); never saved,
+    /// as the original saves none of it.
+    ship_offers: person_offers::ShipOffers,
+    /// The offer from a ship the offer dialog shows, until the player
+    /// answers it (see the `person_offers` module); never saved.
+    offering: Option<person_offers::Offering>,
 }
 
 impl Session {
@@ -910,6 +924,8 @@ impl Session {
             shown_texts: Vec::new(),
             suppressed: BTreeSet::new(),
             offer_venue: None,
+            ship_offers: person_offers::ShipOffers::new(),
+            offering: None,
             script_slot: None,
             pilot,
         };
@@ -1163,7 +1179,9 @@ impl Session {
             },
             ..World::new(&[])
         };
+        let last = self.last_npc();
         self.traffic.enter_in(table, world, chance);
+        self.resolve_person_offers(last, &mut &mut *chance);
         self.traffic_due = false;
         self.story.watched.clear();
         self.enter_escorts();
@@ -1236,7 +1254,9 @@ impl Session {
                     },
                 };
                 let strikes = std::mem::take(&mut self.strikes);
+                let last = self.last_npc();
                 self.traffic.tick_in(behaviour, world, &strikes, chance);
+                self.resolve_person_offers(last, &mut &mut *chance);
                 self.dock_fighters();
                 self.orphan_fighters();
                 self.observe_watched();
@@ -2952,16 +2972,10 @@ impl Session {
             damage: 0.0,
             downed: None,
         });
-        for other in self.traffic.npcs_mut() {
-            if other.id == npc.id {
-                other.boarded = true;
-            }
+        if let Some(offering) = self.person_offering(&npc, person_offers::OfferedBy::Boarding) {
+            return Ok(Boarding::Offered(self.offer_from_ship(offering, chance)));
         }
-        self.raise(StoryEvent::ShipFate {
-            ship: npc.id,
-            fate: Fate::Boarded,
-        });
-        self.drop_quarry(npc.id);
+        self.mark_boarded(npc.id);
         if rule.repels(npc.booty) {
             return Ok(Boarding::Repelled);
         }
@@ -2976,6 +2990,20 @@ impl Session {
         };
         self.aboard = Some(aboard);
         Ok(Boarding::Opened(aboard.view()))
+    }
+
+    /// NPC `id` is marked boarded, raising [`Fate::Boarded`], and every
+    /// other NPC after it lets it go and decides again
+    /// (`_AIShipBoardedByPlayer`).
+    fn mark_boarded(&mut self, id: NpcId) {
+        if let Some(npc) = self.npc_mut(id) {
+            npc.boarded = true;
+        }
+        self.raise(StoryEvent::ShipFate {
+            ship: id,
+            fate: Fate::Boarded,
+        });
+        self.drop_quarry(id);
     }
 
     /// What boarding `npc` grants as `rule` says, drawn on `chance`, added
@@ -6744,7 +6772,11 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         let mut chance = Scripted::answering(&[true]).and_rolling(&[1]);
         jump_with(&mut session, &catalog, 131, &mut chance);
-        assert_eq!(chance.sides_asked, [2]);
+        assert_eq!(
+            chance.sides_asked,
+            [vec![2], vec![100; crate::mission::ROLLED]].concat(),
+            "the stellar, then the arrival's table"
+        );
         assert_eq!(places(&session), [(DisasterId(128), Some(StellarId(140)))]);
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         let market = session.market().expect("an exchange");
@@ -6783,7 +6815,11 @@ mod tests {
             [(DisasterId(128), 28)]
         );
         assert_eq!(places(&session), [(DisasterId(128), Some(StellarId(140)))]);
-        assert_eq!(chance.sides_asked, Vec::<u16>::new(), "not drawn again");
+        assert_eq!(
+            chance.sides_asked,
+            vec![100; crate::mission::ROLLED],
+            "the arrival's table alone: not drawn again"
+        );
     }
 
     #[test]
@@ -9819,7 +9855,12 @@ mod tests {
     fn arriving_brings_in_the_fleet_linked_to_the_new_systems_government() {
         let catalog = fleeted();
         let mut session = Session::start(&catalog).expect("starts");
-        jump_with(&mut session, &catalog, 131, &mut linked_fleet_draws(3));
+        jump_with(
+            &mut session,
+            &catalog,
+            131,
+            &mut Draws::arriving(&[1, 0, 3, 0, 2]),
+        );
         assert_eq!(fleet_of(&session), a_fleet_led_by(0));
         session.populate(&catalog, &mut linked_fleet_draws(2));
         assert_eq!(fleet_of(&session), [], "linked to another government");
@@ -14879,7 +14920,12 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         let mut chance = Logged::default();
         jump_with(&mut session, &catalog, 131, &mut chance);
-        let expected = [vec![Draw::Fires(35)], population_draws(&catalog, 131)].concat();
+        let expected = [
+            vec![Draw::Fires(35)],
+            vec![Draw::Roll(100); crate::mission::ROLLED],
+            population_draws(&catalog, 131),
+        ]
+        .concat();
         assert_eq!(chance.0, expected);
     }
 

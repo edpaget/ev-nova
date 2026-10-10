@@ -10,12 +10,14 @@
 //! # An offer
 //!
 //! An offer is a `mïsn` a stellar puts before the player on one visit,
-//! with the values the visit rolled for it: its destination and return
-//! stellar, its cargo and tons, its pay and its deadline ([`Offer`]).
+//! or a person in flight, with the values rolled for it: its destination
+//! and return stellar, its cargo and tons, its pay and its deadline
+//! ([`Offer`]).
 //! Each is offered at one venue ([`Venue`]): the mission computer
-//! (`AvailLoc` 0), or outside it, at the bar or a shop (every other
-//! `AvailLoc` but 2, which is offered only from a ship, missions phase
-//! 6). Every mission available is offered: there is no cap.
+//! (`AvailLoc` 0); outside it, at the bar or a shop (every other
+//! `AvailLoc` but -1 and 2); or from a ship, by a person hailed or
+//! boarded in flight (`AvailLoc` 2; see "From a ship"). Every mission
+//! available is offered: there is no cap.
 //!
 //! # Availability (`_IsMissionAvailable` @0x9b152)
 //!
@@ -28,7 +30,7 @@
 //!    not (@0x9b179);
 //! 2. `AvailRandom` above 0 (@0x9b184);
 //! 3. the venue: `AvailLoc` 0 at the mission computer, any other but -1
-//!    and 2 outside it (@0x9b195-0x9b1d5);
+//!    and 2 outside it, and 2 alone from a ship (@0x9b195-0x9b1d5);
 //! 4. when `AvailStel` is no stellar (128-2175), a `TravelStel` or
 //!    `ReturnStel` naming a stellar (128-2175) whose system is at the
 //!    player's system's place refuses (@0x9b1db-0x9b2c0), a rule the
@@ -77,6 +79,15 @@
 //!     and 2176-9998 name the origin, which availability has none of;
 //! 17. not active (@0x9b8b7-0x9b8df).
 //!
+//! **From a ship** (`_offeringFromShip` set): `AvailStel` is not read
+//! (@0x9b321), so the venue needs no stellar docked; an `AvailRecord` of
+//! -32000 or below is read as any value below 0, the record at or below
+//! it (@0x9b52e-0x9b537, @0x9b5b4), domination left out; and a
+//! `CargoQty` above 0 needs the room for it whatever `Flags2` says
+//! (@0x9b641-0x9b687). Every other check runs as at a stellar, against
+//! the player's system. At the other venues a visit with no stellar
+//! docked refuses `AvailStel`.
+//!
 //! # Rolling and resolving (`_RandomizeMissionData` @0xa1756)
 //!
 //! A landing at a stellar other than the one the offers were last
@@ -100,10 +111,22 @@
 //! 6. its deadline: today plus `TimeLimit` days, when that is above 0.
 //!
 //! A mission's success re-offers without drawing the table again
-//! ([`Offers::reoffer`], missions phase 2); a jump's arrival, an abort,
-//! a failure or a success forgets the stellar rolled at
-//! ([`Offers::forget`]), so the next landing rolls afresh; a landed `M`
-//! or `N` empties the offers ([`Offers::empty`]). None of it is saved.
+//! ([`Offers::reoffer`], missions phase 2); an abort, a failure or a
+//! success forgets the stellar rolled at ([`Offers::forget`]), so the
+//! next landing rolls afresh; a jump's arrival forgets it too and draws
+//! the table afresh before the system is set up ([`Offers::redraw`],
+//! @0x6bfce, @0x6c040-0x6c066), for the offers from a ship to read until
+//! the next landing; a landed `M` or `N` empties the offers
+//! ([`Offers::empty`]). None of it is saved.
+//!
+//! A person's `LinkMission` is resolved as the person spawns, with no
+//! availability check (`_SpawnPerson` @0x4104b-0x41072): from the
+//! player's navigation target, or no stellar, as
+//! [`person_mission_stellar`](crate::RuleKey::PersonMissionStellar)
+//! reads, with no origin a random code drawing among every candidate. Its
+//! values are kept by mission until another person linked to it spawns
+//! (`_briefMissionInfo`); the landing roll never lists a mission offered
+//! from a ship.
 //!
 //! # Draws
 //!
@@ -135,7 +158,10 @@
 //!   the slot filled; `OnAccept` (@0xa1da2); a `PayVal` below -50000 takes
 //!   `-50000 - PayVal`, the cash floored at none ([`accept_charge`]); the
 //!   destination reached when it has none, or, docked, when it is the
-//!   stellar docked at (@0xa1fc5-0xa1ff8); docked, the mission's offer
+//!   stellar docked at, or, an offer from a ship accepted in flight, when
+//!   it is the navigation target as
+//!   [`person_mission_stellar`](crate::RuleKey::PersonMissionStellar)
+//!   reads (@0xa1fc5-0xa1ff8); docked, the mission's offer
 //!   dropped and the others kept only while available (@0xa1ffd-0xa2136);
 //!   the auto-abort when docked, with `Flags` 0x0001, the destination
 //!   reached, and no return stellar nor ship ([`auto_aborts_at_accept`],
@@ -339,6 +365,9 @@ pub enum Venue {
     /// Outside it, at the bar or a shop: every other `AvailLoc` but -1,
     /// and 2, which is offered only from a ship.
     Outside,
+    /// From a ship in flight, a person hailed or boarded: `AvailLoc` 2
+    /// (`_offeringFromShip`, @0x9b19f-0x9b1d5).
+    Ship,
 }
 
 impl Venue {
@@ -349,10 +378,10 @@ impl Venue {
     /// The venue a mission of `avail_loc` is offered at.
     #[must_use]
     pub fn of(avail_loc: i16) -> Self {
-        if avail_loc == COMPUTER {
-            Self::Computer
-        } else {
-            Self::Outside
+        match avail_loc {
+            COMPUTER => Self::Computer,
+            SHIP => Self::Ship,
+            _ => Self::Outside,
         }
     }
 
@@ -361,13 +390,14 @@ impl Venue {
         match self {
             Self::Computer => avail_loc == COMPUTER,
             Self::Outside => !matches!(avail_loc, COMPUTER | NOWHERE | SHIP),
+            Self::Ship => avail_loc == SHIP,
         }
     }
 }
 
 /// `AvailLoc`: the mission computer.
 const COMPUTER: i16 = 0;
-/// `AvailLoc`: offered from a ship (missions phase 6).
+/// `AvailLoc`: offered from a ship.
 const SHIP: i16 = 2;
 /// `AvailLoc`: never offered.
 const NOWHERE: i16 = -1;
@@ -464,12 +494,13 @@ pub struct Player {
     pub cash: i64,
 }
 
-/// One visit to a docked stellar: everything availability and the
-/// resolution read but the mission, its venue and the roll table.
+/// One visit to a docked stellar, or the flight in a system: everything
+/// availability and the resolution read but the mission, its venue and
+/// the roll table.
 #[derive(Clone, Copy, Debug)]
 pub struct Visit<'a> {
-    /// The stellar docked at, overlaid.
-    pub docked: LandingSite,
+    /// The stellar docked at, overlaid: none in flight.
+    pub docked: Option<LandingSite>,
     /// The player's system, the one the stellar is in.
     pub system: SystemId,
     /// The galaxy the stellars are chosen from.
@@ -596,13 +627,20 @@ fn fuel(facts: &AvailFacts) -> Result<(), Refusal> {
 }
 
 fn avail_stel(facts: &AvailFacts) -> Result<(), Refusal> {
+    // From a ship it is not read (@0x9b321).
+    if facts.venue == Venue::Ship {
+        return Ok(());
+    }
     let visit = facts.visit;
+    let Some(docked) = visit.docked else {
+        return Err(Refusal::AvailStel);
+    };
     let code = facts.mission.avail_stel;
     let govts = visit.world.govts;
-    let here = visit.docked.govt;
+    let here = docked.govt;
     let takes = match code {
         -1 => true,
-        128..=4999 => visit.docked.id == StellarId(code),
+        128..=4999 => docked.id == StellarId(code),
         5000..=9998 => visit
             .world
             .map
@@ -639,6 +677,9 @@ fn avail_record(facts: &AvailFacts) -> Result<(), Refusal> {
     let takes = match wanted {
         0 => true,
         1.. => record >= wanted,
+        // From a ship, any value below 0 needs the record that low
+        // (@0x9b52e-0x9b537, @0x9b5b4).
+        ..=DOMINATED_HERE if facts.venue == Venue::Ship => record <= wanted,
         // -32000, -32001 and below: domination, which is not built.
         ..=DOMINATED_HERE => false,
         _ => record <= wanted,
@@ -667,9 +708,15 @@ fn avail_random(facts: &AvailFacts) -> Result<(), Refusal> {
 
 fn cargo_space(facts: &AvailFacts) -> Result<(), Refusal> {
     let mission = facts.mission;
+    // From a ship, any tons above none ask for the room, whatever
+    // `Flags2` says (@0x9b641-0x9b687).
+    let asks = if facts.venue == Venue::Ship {
+        mission.cargo_qty > 0
+    } else {
+        mission.flags2 & NEEDS_ROOM != 0
+    };
     pass(
-        mission.flags2 & NEEDS_ROOM == 0
-            || facts.visit.player.free_cargo >= i64::from(mission.cargo_qty),
+        !asks || facts.visit.player.free_cargo >= i64::from(mission.cargo_qty),
         Refusal::CargoSpace,
     )
 }

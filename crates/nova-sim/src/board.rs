@@ -17,7 +17,12 @@
 //! moving more than [`MAX_RELATIVE_SPEED`] against it on either axis
 //! (#132), then not off its centre by more than its board reach on either
 //! axis (#131); and, silently, the player must face within
-//! [`FACING_LIMIT`] of its heading or its reverse.
+//! [`FACING_LIMIT`] of its heading or its reverse. Once the boarding's
+//! crime is convicted, a person of `Flags` 0x0200 whose `LinkMission` is
+//! available from a ship offers it in place of the plunder
+//! ([`Boarding::Offered`], @0x65867-0x65936): nothing is rolled or
+//! granted, and the ship is marked boarded only once the mission is
+//! accepted (@0x65f43-0x65f6d), so a refusal leaves it boardable.
 //!
 //! **What is on board** ([`Plunder::roll`]), rolled once a boarding, from
 //! its `düde`'s `Booty` (none for a fleet's ship) and its `shïp`: credits
@@ -107,6 +112,7 @@ use crate::flight::ShipState;
 use crate::grant::{GrantStock, Granted, PersonGrant};
 use crate::market::{Good, hold_tons};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+use crate::session::VenueOffer;
 use crate::traffic::npc::NpcId;
 
 /// Why the player cannot board its target.
@@ -419,12 +425,16 @@ pub enum Taken {
 }
 
 /// What boarding a ship did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Boarding {
     /// The plunder dialog opens on what is on board.
     Opened(PlunderView),
     /// The crew repelled the boarders: nothing can be taken.
     Repelled,
+    /// The person boarded offers its mission in place of the plunder
+    /// (`_HandlePlayerBoardAttempt` @0x65936): the offer dialog, or the
+    /// mission accepted at once.
+    Offered(VenueOffer),
 }
 
 /// What is on board the ship being boarded, as the plunder dialog shows
