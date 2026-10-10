@@ -128,9 +128,16 @@ pub(super) fn after(today: GameDate, days: i16) -> GameDate {
 /// `mission`'s values for an offer at `venue`, from `origin`, the stellar
 /// docked at, in `world` on `today`, drawing on `chance` in the original's
 /// order (see the module docs; `_RandomizeOneMission` @0xa14d1). With no
-/// origin, as a person's offer may have, a random code draws among every
-/// candidate, with no distance kept, and a code naming the origin finds
-/// none ([`select_stellar`]).
+/// origin, as a person's offer may have (the -1 is passed on to
+/// `_StellarsAreDistant`, @0xa151f-0xa157e), a random code draws among
+/// the candidates distant from no origin, as
+/// [`mission_stellar_distance`](crate::RuleKey::MissionStellarDistance)
+/// reads it: by the engine those every system at their place lists (the
+/// co-located chain walk), by the other reading every candidate, though a
+/// -2 by the engine's
+/// [`mission_stellar_draw`](crate::RuleKey::MissionStellarDraw) tests
+/// only its gate's stellar so; and a code naming the origin finds none
+/// ([`select_stellar`]).
 pub fn resolve(
     mission: &MissionRecord,
     venue: Venue,

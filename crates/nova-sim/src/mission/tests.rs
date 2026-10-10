@@ -1136,6 +1136,42 @@ fn with_no_origin_a_random_code_draws_among_every_candidate_and_one_naming_it_fi
 }
 
 #[test]
+fn with_no_origin_a_drawn_stellar_is_chain_tested_by_the_engine_alone() {
+    // A person's offer with no navigation target passes the origin -1 on
+    // to `_StellarsAreDistant` (`_RandomizeOneMission` @0xa151f-0xa157e,
+    // @0x9a2b6-0x9a310), which then takes the chain walk (@0x9cf4-0x9cf9).
+    let federation = with(|m| m.travel_stel = 10000);
+    let drawn = |galaxy: &Galaxy, last: u32| {
+        let mut chance = Draws::of(&[last]);
+        let offer = resolve(
+            &federation,
+            Venue::Ship,
+            None,
+            &galaxy.visit().world,
+            today(),
+            &mut chance,
+        );
+        (offer.destination.map(|stop| stop.stellar.0), chance.asked)
+    };
+    let mut galaxy = Galaxy::new();
+    for stellar in &mut galaxy.stellars {
+        stellar.listed_at_place = stellar.id != StellarId(150);
+    }
+    assert_eq!(
+        drawn(&galaxy, 1),
+        (Some(129), vec![2]),
+        "128 and 129: 150 is not listed by every system at its place (@0x9e60-0x9ee4)"
+    );
+    galaxy.rules =
+        Rulebook::default().with_override(RuleKey::MissionStellarDistance, RuleSource::Bible);
+    assert_eq!(
+        drawn(&galaxy, 2),
+        (Some(150), vec![3]),
+        "the other reading tests no distance with no origin"
+    );
+}
+
+#[test]
 fn the_pay_is_raw_and_the_deadline_today_plus_its_days() {
     let galaxy = Galaxy::new();
     let visit = galaxy.visit();

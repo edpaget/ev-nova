@@ -54,7 +54,14 @@ pub struct Stellar {
 /// government and destroyed state, and whether every system at its
 /// system's place lists it ([`Stellar::listed_at_place`]). A stellar no
 /// visible system lists is left out: the original's candidates are in a
-/// visible system (+0x1eb).
+/// visible system (+0x1eb). So is a stellar that does not exist: every
+/// scan of `_SelectMissionStellar` tests a stellar's +0x44 before its
+/// distance, set only for a stellar that exists (+0x45: loaded and listed
+/// by a system, `_LoadObjectData` @0x77584-0x7758b, @0x779bf-0x779c6,
+/// @0x789ad-0x789c6) in a visible system
+/// (`_HandleStellarSystemVisibility` @0x32c42-0x32cdf), and
+/// `_StellarsAreDistant`'s refusal of a stellar that does not exist
+/// (@0x9cea-0x9cee) is never reached.
 #[must_use]
 pub fn stellars_of(galaxy: &OverlaidGalaxy, listed: &[ListedStellar]) -> Vec<Stellar> {
     let map = galaxy.map();
@@ -685,18 +692,20 @@ mod tests {
         ]);
         let govts = govts();
         let stellars = with_origin(&[at(131, 140, 0, None), at(132, 150, 0, None)]);
-        let world = World {
-            stellars: &stellars,
-            map: &map,
-            govts: &govts,
-            draw: RuleSource::Engine,
-            distance: RuleSource::Engine,
-        };
-        assert_eq!(
-            candidates(Kind::Inhabited, Some(StellarId(128)), None, &world),
-            [StellarId(150)],
-            "131 lists 130"
-        );
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let world = World {
+                stellars: &stellars,
+                map: &map,
+                govts: &govts,
+                draw: RuleSource::Engine,
+                distance: reading,
+            };
+            assert_eq!(
+                candidates(Kind::Inhabited, Some(StellarId(128)), None, &world),
+                [StellarId(150)],
+                "131 lists 130, by {reading:?}"
+            );
+        }
     }
 
     #[test]

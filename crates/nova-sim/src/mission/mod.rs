@@ -137,8 +137,14 @@
 //! availability check (`_SpawnPerson` @0x4104b-0x41072): from the
 //! player's navigation target, or no stellar, as
 //! [`person_mission_stellar`](crate::RuleKey::PersonMissionStellar)
-//! reads, with no origin a random code drawing among every candidate. Its
-//! values are kept by mission until another person linked to it spawns
+//! reads. With no origin a random code draws among the candidates
+//! distant from no origin, as
+//! [`mission_stellar_distance`](crate::RuleKey::MissionStellarDistance)
+//! reads it: by the engine those every system at their place lists (the
+//! -1 reaches `_StellarsAreDistant`'s chain walk, @0xa151f-0xa157e,
+//! @0x9cf4-0x9cf9), by the other reading every candidate; a -2 by the
+//! engine's [`mission_stellar_draw`](crate::RuleKey::MissionStellarDraw)
+//! tests only its gate's stellar so. Its values are kept by mission until another person linked to it spawns
 //! (`_briefMissionInfo`); the landing roll never lists a mission offered
 //! from a ship.
 //!
