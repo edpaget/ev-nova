@@ -2507,6 +2507,32 @@ mod tests {
             Some(62.0),
             "the rows after the list still draw"
         );
+        // In an item 5 218 high, line 9's top is exactly at its bottom:
+        // still not drawn.
+        let mut info = info_template();
+        info.items[PANEL_TEXT_ITEM - 1].bounds = rect(9.0, 32.0, 234.0, 218.0);
+        let mut shipyard = self::shipyard();
+        shipyard.rows[1].specs.weapons = (0..10)
+            .map(|n| stock(1, &format!("Gun {n}"), None))
+            .collect();
+        let catalog: Rc<dyn ShipyardCatalog> = art();
+        let mut taller = ShipyardScreen::new(
+            Ok(layout()),
+            Ok(info),
+            Ok(text_input_template()),
+            shipyard,
+            catalog,
+            ButtonStyle::STOCK,
+        );
+        press(&mut taller, Key::Right);
+        press(&mut taller, INFO_KEY);
+        assert_eq!(panel_item(&taller, PANEL_TEXT_ITEM).height(), 218.0);
+        let words: Vec<String> = texts(&self::drawn(&taller))
+            .into_iter()
+            .map(|(text, _, _)| text)
+            .collect();
+        assert!(words.contains(&"1 Gun 8".to_owned()));
+        assert!(!words.contains(&"1 Gun 9".to_owned()), "its top is 218");
     }
 
     #[test]
