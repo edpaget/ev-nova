@@ -45,6 +45,17 @@
 //! lists both, the run's `QuickBrief` showing its deadline. Abort does
 //! nothing on the errand; on the run it frees its slot, which the saved
 //! pilot shows, and the screen lists the errand alone.
+//!
+//! A deadline missed in flight: with the run's deadline due and its
+//! `OnFailure` `S130`, leaving the spaceport takes off, the run fails,
+//! the message line says "Time limit exceeded - mission failed.", and
+//! the bar job its `S` accepted shows its `BriefText` over the paused
+//! flight until Done.
+//!
+//! I in flight: with no mission, the message line says "You have no
+//! active missions."; with the run and the errand held, it opens the
+//! mission info screen over the paused flight, Abort there frees the
+//! run's slot, and Done goes back into flight.
 
 use std::cell::RefCell;
 use std::io;
@@ -298,6 +309,12 @@ fn at_venue(mut mission: Vec<u8>, loc: i16) -> Vec<u8> {
     mission
 }
 
+/// `mission` with this raw `OnFailure`.
+fn fails_into(mut mission: Vec<u8>, on_failure: &[u8]) -> Vec<u8> {
+    mission[0x458..0x458 + on_failure.len()].copy_from_slice(on_failure);
+    mission
+}
+
 /// `mission` that cannot be refused: `Flags` 0x0004.
 fn unrefusable(mut mission: Vec<u8>) -> Vec<u8> {
     put_i16s(&mut mission, 0x50, &[0x0004]);
@@ -311,7 +328,13 @@ fn game_data() -> Rc<GameData> {
 }
 
 /// [`game_data`] with this bar job, mission 130, and its offer text.
-fn game_data_with((bar_job, bar_job_offer): (Vec<u8>, &str)) -> Rc<GameData> {
+fn game_data_with(bar_job: (Vec<u8>, &str)) -> Rc<GameData> {
+    game_data_from(&timed(mission(128, 200, 201)), bar_job)
+}
+
+/// [`game_data`] with this run, mission 128, and this bar job, mission
+/// 130, and its offer text.
+fn game_data_from(run: &[u8], (bar_job, bar_job_offer): (Vec<u8>, &str)) -> Rc<GameData> {
     let mut fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Boarder"), &ship())
@@ -321,12 +344,7 @@ fn game_data_with((bar_job, bar_job_offer): (Vec<u8>, &str)) -> Rc<GameData> {
         .resource(Stellar::TYPE, 128, Some(b"Pad"), &pad())
         .resource(Spin::TYPE, 1004, None, &spin(1000))
         .resource(RLED, 1000, None, &sheet(1, 40))
-        .resource(
-            Mission::TYPE,
-            128,
-            Some(b"Run to <DST>;courier"),
-            &timed(mission(128, 200, 201)),
-        )
+        .resource(Mission::TYPE, 128, Some(b"Run to <DST>;courier"), run)
         .resource(
             Mission::TYPE,
             129,
@@ -733,6 +751,37 @@ impl Game {
         self.click(at);
     }
 
+    /// The mission text shown over flight, its lines joined by spaces.
+    fn flight_text(&self) -> Option<String> {
+        self.app
+            .screen()
+            .flight_mission_text()
+            .map(|dialog| dialog.lines().join(" "))
+    }
+
+    /// The flight's message line.
+    fn flight_message(&self) -> Option<String> {
+        self.app
+            .screen()
+            .flight_view()
+            .expect("flying")
+            .message()
+            .map(str::to_owned)
+    }
+
+    /// Clicks the item `item` of the mission info screen over flight.
+    fn click_flight_info(&mut self, item: usize) {
+        let at = self
+            .app
+            .screen()
+            .flight_mission_info()
+            .and_then(MissionInfoScreen::dialog)
+            .and_then(|dialog| dialog.item_bounds(item))
+            .expect("an item")
+            .center();
+        self.click(at);
+    }
+
     /// The mission text shown, its lines joined by spaces.
     fn shown_text(&self) -> Option<String> {
         self.spaceport()
@@ -761,22 +810,25 @@ fn ada() -> Pilot {
     Pilot::new(game_data().as_ref(), "Ada").expect("a pilot")
 }
 
-/// `pilot` with every mission slot taken by the errand, mission 129, as
-/// its save lists them.
-fn busy(pilot: &Pilot) -> Pilot {
+/// `pilot` holding each of `held`: a mission in a slot, with the days left
+/// to it and the stellar of Alpha it goes to and back to, if any, as its
+/// save lists them.
+fn holding(pilot: &Pilot, held: &[(usize, i16, Option<i16>, Option<i16>)]) -> Pilot {
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(pilot)).expect("a save");
-    save["missions"] = (0..SLOTS)
-        .map(|slot| {
+    save["missions"] = held
+        .iter()
+        .map(|&(slot, mission, days_left, stop)| {
+            let stop = stop.map(|stellar| serde_json::json!({"stellar": stellar, "system": 128}));
             serde_json::json!({
                 "slot": slot,
-                "mission": 129,
-                "destination": null,
-                "return": null,
+                "mission": mission,
+                "destination": stop,
+                "return": stop,
                 "cargo_type": null,
                 "cargo_tons": 0,
                 "pay": 1000,
-                "days_left": null,
+                "days_left": days_left,
                 "deadline": null,
                 "reached": false,
                 "goals_met": false,
@@ -786,6 +838,19 @@ fn busy(pilot: &Pilot) -> Pilot {
         })
         .collect();
     nova_sim::save::decode(&save.to_string()).expect("a pilot")
+}
+
+/// `pilot` with every mission slot taken by the errand, mission 129, as
+/// its save lists them.
+fn busy(pilot: &Pilot) -> Pilot {
+    let held: Vec<_> = (0..SLOTS).map(|slot| (slot, 129, None, None)).collect();
+    holding(pilot, &held)
+}
+
+/// `pilot` holding the run, mission 128, in slot 0, its deadline due:
+/// no days left.
+fn due(pilot: &Pilot) -> Pilot {
+    holding(pilot, &[(0, 128, Some(0), None)])
 }
 
 /// Mission BBS's item.
@@ -1048,4 +1113,91 @@ fn mission_info_lists_the_active_missions_and_aborts_only_where_allowed() {
     game.tap(Key::Escape);
     assert!(game.spaceport().mission_info().is_none());
     assert_eq!(game.showing(), Showing::Spaceport);
+}
+
+#[test]
+fn a_missed_deadline_says_so_and_the_text_its_on_failure_queues_shows_over_flight() {
+    let store = MemoryPilots::new();
+    let run = fails_into(timed(mission(128, 200, 201)), b"S130\0");
+    let data = game_data_from(&run, bar_job());
+    let mut game = Game::with_data(&store, &due(&ada()), data);
+    game.frame();
+    game.land();
+
+    // Leave takes off: the deadline fails the run, says so, and its
+    // OnFailure's S130 accepts the bar job, whose BriefText shows over
+    // the paused flight.
+    game.tap(Key::Escape);
+    assert_eq!(game.showing(), Showing::MissionText);
+    assert_eq!(game.flight_text().as_deref(), Some("Welcome aboard."));
+    assert_eq!(
+        game.flight_message().as_deref(),
+        Some("Time limit exceeded - mission failed.")
+    );
+    assert_eq!(
+        game.active(),
+        [(1, MissionId(130))],
+        "the run's slot freed after its OnFailure took the next"
+    );
+    game.frame();
+    assert_eq!(game.showing(), Showing::MissionText, "paused");
+
+    // Done closes it, back into flight, the message still shown.
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(game.flight_text(), None);
+    assert_eq!(
+        game.flight_message().as_deref(),
+        Some("Time limit exceeded - mission failed.")
+    );
+}
+
+#[test]
+fn in_flight_i_says_there_are_no_active_missions() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_pilot(&store, &ada());
+    game.frame();
+    game.tap(Key::Char('i'));
+    assert_eq!(game.showing(), Showing::Flight);
+    assert_eq!(
+        game.flight_message().as_deref(),
+        Some("You have no active missions.")
+    );
+    let shown = texts(&game.frame());
+    assert!(
+        shown.contains(&"You have no active missions.".to_owned()),
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn in_flight_i_opens_mission_info_and_abort_works_there() {
+    let store = MemoryPilots::new();
+    let pilot = holding(
+        &ada(),
+        &[(0, 128, Some(7), Some(128)), (1, 129, None, None)],
+    );
+    let mut game = Game::with_pilot(&store, &pilot);
+    game.frame();
+
+    game.tap(Key::Char('i'));
+    assert_eq!(game.showing(), Showing::MissionInfo);
+    let shown = texts(&game.frame());
+    for text in ["Currently active missions:", "Run to Pad", "Errand"] {
+        assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
+    }
+    assert_eq!(game.showing(), Showing::MissionInfo, "paused");
+
+    // Abort on the run, the first row, frees its slot; the screen stays
+    // open, listing the errand alone.
+    game.click_flight_info(ABORT_ITEM);
+    assert_eq!(game.active(), [(1, MissionId(129))]);
+    assert_eq!(game.showing(), Showing::MissionInfo);
+    let info = game.app.screen().flight_mission_info().expect("still open");
+    assert_eq!(info.info().rows.len(), 1);
+
+    // Done closes it, back into flight.
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+    assert!(game.app.screen().flight_mission_info().is_none());
 }

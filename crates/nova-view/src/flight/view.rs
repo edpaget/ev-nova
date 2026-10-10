@@ -1827,7 +1827,10 @@ impl<
     /// same one, as the original kills its explosions and smoke, and how
     /// many fighters were abandoned, if any, is shown after a `Q`'s
     /// message; a move while landed shows once the ship takes off; and a
-    /// `C`, `E` or `H` reads the player's sprite sheet afresh.
+    /// `C`, `E` or `H` reads the player's sprite sheet afresh. Then the
+    /// session's messages raised as it settled show at once, as a
+    /// deadline missed on the take-off does, before a text dialog can
+    /// pause flight; an arrival's waits for the arrival as on a tick.
     pub fn settle_script(&mut self) -> Option<StellarId> {
         let session = self.session.as_mut().ok()?;
         let settled = session.settle_script(&self.catalog, &mut self.chance);
@@ -1848,6 +1851,7 @@ impl<
             );
         }
         self.say_all(&said);
+        self.say_messages();
         settled.took_off
     }
 

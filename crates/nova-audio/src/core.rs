@@ -74,9 +74,10 @@ impl<A: Audio> AudioCore<A> {
         if let Some(scene) = showing.filter(|&scene| !is_overlay(scene)) {
             self.scene = Some(scene);
         }
-        // The Preferences dialog, the boarding dialogs, the comm dialogs
-        // and a person's offer dialog pause flight below them, and flight
-        // lets go of its keys, so the thrust is forgotten as for leaving it.
+        // The Preferences dialog, the boarding dialogs, the comm dialogs,
+        // a person's offer dialog and the mission dialogs pause flight
+        // below them, and flight lets go of its keys, so the thrust is
+        // forgotten as for leaving it.
         let pauses = matches!(
             showing,
             Some(
@@ -86,6 +87,8 @@ impl<A: Audio> AudioCore<A> {
                     | Showing::Comm
                     | Showing::Haggle
                     | Showing::Offer
+                    | Showing::MissionText
+                    | Showing::MissionInfo
             )
         );
         if self.scene != Some(Showing::Flight) || pauses {
@@ -283,7 +286,8 @@ pub fn distance_gain(offset: (i32, i32)) -> f32 {
 /// Whether `showing` is shown over another screen, keeping the scene
 /// below it: the About text, the Preferences dialog, the new pilot's name
 /// entry and the saved pilots' list over the main menu, and the plunder,
-/// assignment, comm, haggle and offer dialogs over flight.
+/// assignment, comm, haggle and offer dialogs, the mission texts and the
+/// mission info screen over flight.
 fn is_overlay(showing: Showing) -> bool {
     matches!(
         showing,
@@ -296,6 +300,8 @@ fn is_overlay(showing: Showing) -> bool {
             | Showing::Comm
             | Showing::Haggle
             | Showing::Offer
+            | Showing::MissionText
+            | Showing::MissionInfo
     )
 }
 
@@ -319,7 +325,9 @@ fn has_music(scene: Showing) -> bool {
         | Showing::Assignment
         | Showing::Comm
         | Showing::Haggle
-        | Showing::Offer => false,
+        | Showing::Offer
+        | Showing::MissionText
+        | Showing::MissionInfo => false,
     }
 }
 
@@ -863,6 +871,8 @@ mod tests {
             Showing::Comm,
             Showing::Haggle,
             Showing::Offer,
+            Showing::MissionText,
+            Showing::MissionInfo,
         ] {
             let (mut core, log) = engine();
             core.update(Some(Showing::Flight), &[THRUST]);

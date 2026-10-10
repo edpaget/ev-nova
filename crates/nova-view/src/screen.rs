@@ -55,6 +55,10 @@ pub enum Showing {
     /// The offer dialog of a person hailed or boarded, over flight, which
     /// it pauses.
     Offer,
+    /// A mission text in "Desc Dialog", over flight, which it pauses.
+    MissionText,
+    /// The mission info screen, over flight, which it pauses.
+    MissionInfo,
 }
 
 /// Something in the game data a screen cannot use, for the app to write

@@ -94,14 +94,20 @@
 //! closing silently once nothing is available. The mission texts the
 //! session queues (a mission's `BriefText`, `CompText`, `FailText` and
 //! `RefuseText`) show one after another in "Desc Dialog" over the
-//! spaceport, after each input and tick; those queued in flight, by an
-//! `S`, wait for the next spaceport.
+//! spaceport, after each input and tick. Those queued in flight (by an
+//! `S`, such as one a deadline missed on the take-off runs through the
+//! mission's `OnFailure`, or by a person's offer answered over flight)
+//! show the same way over flight, which pauses under them, as
+//! `_ShowTextDialog` shows them.
 //!
 //! I, in the spaceport, the bar or the mission computer, opens the
 //! mission info screen (`DLOG` 1012) over whatever is open, when an
 //! active mission is shown there; its Abort aborts the selected mission
 //! through the session, and the screen shows the missions left, closing
-//! once none is.
+//! once none is. I in flight opens it the same way over flight, which
+//! pauses under it; with no mission shown there, flight says "You have
+//! no active missions." on its message line, as it says "Time limit
+//! exceeded - mission failed." when a deadline runs out in flight.
 //!
 //! Missions are offered at five venues as the original's
 //! `_OfferMissionFromPort` offers them: the spaceport asks once, as it
@@ -199,14 +205,14 @@ use nova_sim::{
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
-use nova_view::flight::{FlightView, SharedChance};
+use nova_view::flight::{FlightMissionDialogs, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
 use nova_view::ships::ShipBrowser;
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::bar::BAR_DIALOG;
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
-use nova_view::spaceport::missions::{COMPUTER_DIALOG, INFO_DIALOG};
+use nova_view::spaceport::missions::{COMPUTER_DIALOG, INFO_DIALOG, MissionInfoScreen};
 use nova_view::spaceport::offer::{OFFER_DIALOG, OfferChoice, OfferDialog};
 use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
 use nova_view::spaceport::shipyard::{SHIP_INFO_DIALOG, SHIPYARD_DIALOG};
@@ -340,6 +346,9 @@ pub struct AppScreen {
     /// The offer dialog of a person hailed or boarded, over flight, until
     /// it is answered.
     offer: Option<OfferDialog>,
+    /// The mission texts and the mission info screen over flight, while
+    /// one is open.
+    missions: Option<FlightMissionDialogs>,
 }
 
 /// The main menu, the metrics its screens' text is laid out by when there
@@ -415,6 +424,7 @@ impl AppScreen {
             comm: None,
             haggle: None,
             offer: None,
+            missions: None,
         }
     }
 
@@ -563,6 +573,18 @@ impl AppScreen {
     #[must_use]
     pub fn offer(&self) -> Option<&OfferDialog> {
         self.offer.as_ref()
+    }
+
+    /// The mission text shown over flight, if any.
+    #[must_use]
+    pub fn flight_mission_text(&self) -> Option<&DescDialog> {
+        self.missions.as_ref()?.text()
+    }
+
+    /// The mission info screen open over flight, if it is.
+    #[must_use]
+    pub fn flight_mission_info(&self) -> Option<&MissionInfoScreen> {
+        self.missions.as_ref()?.info()
     }
 
     /// The plunder dialog, while a boarding is under way.
@@ -756,6 +778,13 @@ impl AppScreen {
         if self.offer.is_some() {
             return Showing::Offer;
         }
+        if let Some(missions) = &self.missions {
+            return if missions.text().is_some() {
+                Showing::MissionText
+            } else {
+                Showing::MissionInfo
+            };
+        }
         if self.plunder.is_some() {
             return Showing::Plunder;
         }
@@ -944,6 +973,9 @@ impl AppScreen {
         if let Some(dialog) = &mut self.offer {
             return Some(dialog);
         }
+        if let Some(dialogs) = &mut self.missions {
+            return Some(dialogs);
+        }
         if let Some(dialog) = &mut self.plunder {
             return Some(dialog);
         }
@@ -1011,6 +1043,60 @@ impl AppScreen {
         if let Some(prompt) = self.flight.as_mut().and_then(FlightView::take_offer) {
             self.open_offer(prompt);
         }
+        if let Some(info) = self
+            .flight
+            .as_mut()
+            .and_then(FlightView::take_mission_info_request)
+            && let Some(missions) = self.flight_missions()
+        {
+            missions.open_info(info);
+        }
+        self.drop_closed_missions();
+        ScreenAction::None
+    }
+
+    /// The mission dialogs over flight, built from the interface file's
+    /// "Desc Dialog" and mission info screen the first time they are
+    /// needed; none without dialogs.
+    fn flight_missions(&mut self) -> Option<&mut FlightMissionDialogs> {
+        if self.missions.is_none() {
+            let dialogs = self.dialogs.as_ref()?;
+            self.missions = Some(FlightMissionDialogs::new(
+                dialogs.resources.dialog_template(DESC_DIALOG),
+                dialogs.resources.dialog_template(INFO_DIALOG),
+                Rc::clone(&dialogs.metrics),
+                self.data.button_style(),
+            ));
+        }
+        self.missions.as_mut()
+    }
+
+    /// Drops the mission dialogs over flight once nothing is open,
+    /// keeping their sounds.
+    fn drop_closed_missions(&mut self) {
+        if let Some(missions) = &mut self.missions
+            && !missions.is_open()
+        {
+            self.sounds.extend(missions.take_sounds());
+            self.missions = None;
+        }
+    }
+
+    /// The input of the mission dialogs over flight: an Abort on the
+    /// mission info screen goes through flight, and the screen shows the
+    /// missions left. They are dropped once nothing is open.
+    fn missions_input(&mut self, input: &Input) -> ScreenAction {
+        let missions = self.missions.as_mut().expect("open");
+        missions.input(input);
+        if let Some(slot) = missions.take_abort() {
+            let flight = self.flight.as_mut().expect(ENTERED);
+            let _ = flight.abort_mission(slot);
+            let info = flight.mission_info();
+            if let Some(missions) = &mut self.missions {
+                missions.set_info(info);
+            }
+        }
+        self.drop_closed_missions();
         ScreenAction::None
     }
 
@@ -1031,7 +1117,7 @@ impl AppScreen {
 
     /// The offer dialog's input: the choice goes through flight, and the
     /// dialog closes, keeping its sounds, and flight resumes. The texts
-    /// the answer queued wait for the next spaceport.
+    /// the answer queued then show over flight as the input settles.
     fn offer_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.offer.as_mut().expect("open");
         dialog.input(input);
@@ -1397,15 +1483,33 @@ impl AppScreen {
         self.serve_offers();
     }
 
-    /// Shows the mission texts the session queued over the spaceport, if
-    /// it is open. Those queued in flight (a `BriefText` an `S` accepted,
-    /// or the texts of a person's offer accepted or refused over flight)
-    /// wait in the session and show at the next spaceport
-    /// (rdm:phase/missions/phase-17-deadline-message-and-flight-info).
+    /// Shows the mission texts the session queued: over the spaceport, if
+    /// it is open, and otherwise, in flight, over flight, which pauses
+    /// under them, as `_ShowTextDialog` (@0x5a752) shows them (a
+    /// `BriefText` an `S` accepted, the texts of a person's offer
+    /// accepted or refused over flight). Without dialogs, those in flight
+    /// are dropped, as the spaceport drops them without its template. On
+    /// any other side they stay queued in the session.
     fn show_mission_texts(&mut self) {
         if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
             spaceport.show_mission_texts(flight.take_mission_texts());
+            return;
         }
+        if self.side != Side::Flight {
+            return;
+        }
+        let Some(texts) = self
+            .flight
+            .as_mut()
+            .map(FlightView::take_mission_texts)
+            .filter(|texts| !texts.is_empty())
+        else {
+            return;
+        };
+        if let Some(missions) = self.flight_missions() {
+            missions.show_texts(texts);
+        }
+        self.drop_closed_missions();
     }
 
     /// Closes the spaceport, if it is open, keeping its sounds, and shows
@@ -1757,6 +1861,9 @@ impl AppScreen {
         if self.offer.is_some() {
             return self.offer_input(input);
         }
+        if self.missions.is_some() {
+            return self.missions_input(input);
+        }
         if self.plunder.is_some() {
             return self.plunder_input(input);
         }
@@ -1978,6 +2085,9 @@ impl Screen for AppScreen {
         if let Some(dialog) = &self.offer {
             dialog.draw(list);
         }
+        if let Some(dialogs) = &self.missions {
+            dialogs.draw(list);
+        }
         if let Some(dialog) = &self.haggle {
             dialog.draw(list);
         }
@@ -2029,6 +2139,9 @@ impl Screen for AppScreen {
             self.comm.as_mut().map(|dialog| dialog as &mut dyn Screen),
             self.haggle.as_mut().map(|dialog| dialog as &mut dyn Screen),
             self.offer.as_mut().map(|dialog| dialog as &mut dyn Screen),
+            self.missions
+                .as_mut()
+                .map(|dialogs| dialogs as &mut dyn Screen),
             self.spaceport.as_mut().map(|port| port as &mut dyn Screen),
             self.flight.as_mut().map(|flight| flight as &mut dyn Screen),
         ];
