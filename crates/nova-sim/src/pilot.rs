@@ -416,6 +416,21 @@ impl Pilot {
         self.cargo.get(&good).copied().unwrap_or(0)
     }
 
+    /// The tons of every good held, commodities and `jünk`: none of it a
+    /// mission's, which is never held as a good.
+    #[must_use]
+    pub fn goods_held(&self) -> i64 {
+        self.cargo.values().map(|&tons| i64::from(tons)).sum()
+    }
+
+    /// The tons the ship holds, as `_TotalCargo` (@0x4a0b) counts them for
+    /// the player: every good held, and the mission cargo aboard
+    /// ([`ActiveMissions::cargo_aboard`]).
+    #[must_use]
+    pub fn total_cargo(&self) -> i64 {
+        self.goods_held() + self.missions.cargo_aboard()
+    }
+
     /// Every good held, in [`Good`] order, with the tons held.
     pub fn cargo(&self) -> impl Iterator<Item = (Good, u32)> + '_ {
         self.cargo.iter().map(|(&good, &tons)| (good, tons))
@@ -721,6 +736,23 @@ mod tests {
         assert_eq!(
             pilot.events().collect::<Vec<_>>(),
             [(DisasterId(128), 9), (DisasterId(130), 4)]
+        );
+    }
+
+    #[test]
+    fn the_total_cargo_is_the_goods_held_and_the_mission_cargo_aboard() {
+        use crate::catalog::JunkId;
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        assert_eq!((pilot.goods_held(), pilot.total_cargo()), (0, 0));
+        pilot.cargo = BTreeMap::from([(Good::Junk(JunkId(146)), 2), (Good::Commodity(3), 7)]);
+        pilot.missions.put(4, crate::testkit::carrying(140, 5));
+        assert_eq!(pilot.goods_held(), 9, "the mission's food is no good held");
+        assert_eq!(pilot.total_cargo(), 14);
+        pilot.cargo.insert(Good::Commodity(0), u32::MAX);
+        assert_eq!(
+            pilot.goods_held(),
+            i64::from(u32::MAX) + 9,
+            "no 32-bit wrap"
         );
     }
 

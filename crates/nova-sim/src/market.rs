@@ -193,7 +193,9 @@
 //! tons. A warship or interceptor escort adds nothing, nor does a fighter
 //! launched from the player's bays, nor any escort's outfits or cargo:
 //! every good the fleet holds is held on the player's ship. The free
-//! space is that less everything held.
+//! space is that less everything held and the mission cargo aboard
+//! (`_TotalCargo` @0x4a0b), which takes space but is never a row's held
+//! tons, so it cannot be sold.
 //!
 //! A plain click on Buy or Sell ([`Lot::Click`]) moves up to
 //! [`CLICK_TONS`], as [`RuleKey::TradeLot`](crate::RuleKey::TradeLot)
@@ -990,16 +992,15 @@ pub(crate) fn market(
     for row in &mut rows {
         row.held = pilot.held(row.good);
     }
-    let held = pilot
-        .cargo
-        .values()
-        .fold(0_u32, |sum, &tons| sum.saturating_add(tons));
+    // `_TotalCargo`: the mission cargo aboard takes space too, though no
+    // row holds it, so it cannot be sold.
+    let free = (i64::from(capacity) - pilot.total_cargo()).max(0);
     Some(Market {
         rows,
         events: here.iter().map(|event| event.name.clone()).collect(),
         cash: pilot.cash,
         capacity,
-        free: capacity.saturating_sub(held),
+        free: u32::try_from(free).unwrap_or(u32::MAX),
         trade_lot: rules.source_for(RuleKey::TradeLot),
         trade_quotient: rules.source_for(RuleKey::TradeQuotient),
         trade_count: rules.source_for(RuleKey::TradeCount),
@@ -2707,6 +2708,62 @@ mod tests {
         )
         .expect("trades");
         assert_eq!(over.free, 0, "more held than there is space");
+    }
+
+    #[test]
+    fn the_mission_cargo_aboard_takes_space_but_is_never_held_to_sell() {
+        let mut pilot = pilot(0);
+        pilot.cargo = BTreeMap::from([(Good::Commodity(0), 3)]);
+        pilot.missions.put(0, crate::testkit::carrying(140, 5));
+        let found = market(
+            &goods(),
+            EARTH,
+            TRADE | (2 << 28),
+            &pilot,
+            12,
+            Gate::FRESH,
+            &rules(RuleSource::Engine),
+            Markup::Standard,
+        )
+        .expect("trades");
+        assert_eq!(found.free, 4, "3 tons of food held, 5 of the mission's");
+        assert_eq!(found.rows[0].held, 3, "the mission's food is not held");
+        pilot.cargo.clear();
+        let only = market(
+            &goods(),
+            EARTH,
+            TRADE | (2 << 28),
+            &pilot,
+            12,
+            Gate::FRESH,
+            &rules(RuleSource::Engine),
+            Markup::Standard,
+        )
+        .expect("trades");
+        assert_eq!(
+            (only.rows[0].good, only.rows[0].held),
+            (Good::Commodity(0), 0)
+        );
+        let sell = Order {
+            row: 0,
+            good: Good::Commodity(0),
+            direction: Direction::Sell,
+            lot: Lot::Max,
+        };
+        assert_eq!(only.tons(sell), Err(TradeRefusal::NoneHeld));
+        pilot.missions.put(1, crate::testkit::carrying(141, 20));
+        let over = market(
+            &goods(),
+            EARTH,
+            TRADE | (2 << 28),
+            &pilot,
+            12,
+            Gate::FRESH,
+            &rules(RuleSource::Engine),
+            Markup::Standard,
+        )
+        .expect("trades");
+        assert_eq!(over.free, 0, "more aboard than there is space");
     }
 
     /// An event of `record`'s, which is at `stellar`, with `days` left.

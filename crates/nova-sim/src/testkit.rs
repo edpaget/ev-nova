@@ -177,6 +177,25 @@ pub(crate) fn mission(id: i16) -> MissionRecord {
     }
 }
 
+/// Mission `id` active, going nowhere, with `tons` of cargo 0 (food)
+/// aboard.
+pub(crate) fn carrying(id: i16, tons: i64) -> crate::mission::ActiveMission {
+    crate::mission::ActiveMission {
+        mission: MissionId(id),
+        destination: None,
+        return_to: None,
+        cargo_type: Some(0),
+        cargo_tons: tons,
+        pay: 0,
+        days_left: None,
+        deadline: None,
+        reached: false,
+        goals_met: true,
+        aboard: true,
+        failed: None,
+    }
+}
+
 /// A landable planet at (`x`, `y`), 100 x 100 (radius 50).
 pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
     LandingSite {

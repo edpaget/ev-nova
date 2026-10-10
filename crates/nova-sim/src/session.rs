@@ -2469,13 +2469,13 @@ impl Session {
     }
 
     /// The ship's own free cargo, as the outfitter reads it for a mass
-    /// expansion: its cargo space less every ton held, commodities and
-    /// jünk, below zero when it holds more than that (`_CanBuyOutfitItem`
-    /// @0x4e980-0x4e9a8 subtracts `_TotalCargo(player)` from
-    /// `_ShipTotalHolds()`). The escorts' holds add nothing.
+    /// expansion: its cargo space less every ton held, commodities, jünk
+    /// and the mission cargo aboard, below zero when it holds more than
+    /// that (`_CanBuyOutfitItem` @0x4e980-0x4e9a8 subtracts
+    /// `_TotalCargo(player)` from `_ShipTotalHolds()`). The escorts' holds
+    /// add nothing.
     fn free_cargo(&self) -> i64 {
-        let held: i64 = self.pilot.cargo.values().map(|&tons| i64::from(tons)).sum();
-        i64::from(self.stats.capacity) - held
+        i64::from(self.stats.capacity) - self.pilot.total_cargo()
     }
 
     /// The outfitter of the stellar the ship is docked at, if it has
@@ -3138,10 +3138,11 @@ impl Session {
                 let Some((good, tons)) = plunder.cargo.take() else {
                     return Taken::Nothing;
                 };
-                let held: u32 = self.pilot.cargo.values().sum();
-                // The ship's own space, not the fleet's: plunder into
+                // The ship's own space, less `_TotalCargo` with the
+                // mission cargo aboard, not the fleet's: plunder into
                 // pooled holds waits for rdm task `boarding-follow-up`.
-                let stored = tons.min(self.stats.capacity.saturating_sub(held));
+                let room = (i64::from(self.stats.capacity) - self.pilot.total_cargo()).max(0);
+                let stored = tons.min(u32::try_from(room).unwrap_or(u32::MAX));
                 if stored > 0 {
                     *self.pilot.cargo.entry(good).or_default() += stored;
                 }
@@ -7881,6 +7882,26 @@ mod tests {
         assert_eq!(session.pilot().owned(EXPANSION), 1);
     }
 
+    #[test]
+    fn a_mass_expansion_counts_the_mission_cargo_aboard() {
+        let mut session = outfitted(&expanding());
+        session.pilot.cargo.insert(FOOD, 7);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 1));
+        assert_eq!(expansion_buy(&mut session), Ok(()), "exactly 12 free");
+        session
+            .pilot
+            .missions
+            .put(1, crate::testkit::carrying(141, 1));
+        assert_eq!(
+            expansion_buy(&mut session),
+            Err(OutfitRefusal::NoCargoRoom),
+            "a ton of a mission's cargo"
+        );
+    }
+
     /// The outfitting catalog with a map of 1 jump (306), an outfit
     /// cleaning the record with government 140 (307), a paint (308), a
     /// plain outfit removed after purchase (309) and a map removed after
@@ -12333,6 +12354,37 @@ mod tests {
     }
 
     // The plunder.
+
+    #[test]
+    fn the_mission_cargo_aboard_takes_the_plunders_room() {
+        let catalog = boardable();
+        let mut session = aboard(&catalog);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 10));
+        assert_eq!(
+            take(&mut session, Take::Cargo, &[]).0,
+            Taken::Cargo {
+                good: Good::Commodity(0),
+                stored: 10
+            },
+            "20 holds, 10 tons aboard"
+        );
+        let mut session = aboard(&catalog);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 25));
+        assert_eq!(
+            take(&mut session, Take::Cargo, &[]).0,
+            Taken::Cargo {
+                good: Good::Commodity(0),
+                stored: 0
+            },
+            "more aboard than the holds"
+        );
+    }
 
     #[test]
     fn the_cargo_is_stored_up_to_the_free_space_once() {

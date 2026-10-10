@@ -861,14 +861,15 @@ impl Session {
 
     /// The room a mission's cargo has, in tons, as `_TotalMissionCargoSpace`
     /// (@0xcffb) reckons it: the ship's own holds, with its cargo outfits,
-    /// less the cargo held that the trader escorts' holds do not take; below
-    /// 0 when it holds more. Mission cargo, which rides in the ship alone,
-    /// is missions phase 5's.
-    fn mission_cargo_space(&self) -> i64 {
+    /// less the goods held that the trader escorts' holds do not take and
+    /// the mission cargo aboard, which rides in the ship alone
+    /// (@0xd0c7-0xd0eb); below 0 when it holds more. With no escort's
+    /// holds this is the holds less `_TotalCargo` (@0xd0ed).
+    pub(super) fn mission_cargo_space(&self) -> i64 {
         let own = i64::from(self.stats.capacity);
         let escorts = i64::from(self.capacity()) - own;
-        let held: i64 = self.pilot.cargo.values().map(|&tons| i64::from(tons)).sum();
-        own - (held - escorts).max(0)
+        let spilled = (self.pilot.goods_held() - escorts).max(0);
+        own - (spilled + self.pilot.missions.cargo_aboard())
     }
 
     /// `f` of the galaxy a mission's stellars are chosen from.
@@ -1339,6 +1340,49 @@ mod tests {
         assert_eq!(session.mission_cargo_space(), 6, "no escort");
         session.pilot.cargo.insert(Good::Commodity(0), 25);
         assert_eq!(session.mission_cargo_space(), -5, "over the holds");
+    }
+
+    #[test]
+    fn mission_cargo_aboard_rides_in_the_ship_alone() {
+        use crate::market::Good;
+        use crate::pilot::Escort;
+        let mut catalog = offering();
+        catalog.ship_records = vec![crate::catalog::ShipRecord {
+            inherent_ai: 1,
+            ..crate::testkit::ship(
+                129,
+                crate::handling::ShipFields {
+                    holds: 15,
+                    ..crate::testkit::FAST
+                },
+            )
+        }];
+        let mut session = landed(&catalog, &mut NeverFires);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 4));
+        assert_eq!(session.mission_cargo_space(), 16, "20 own, 4 aboard");
+        session.pilot.escorts = vec![Escort {
+            ship: crate::catalog::ShipId(129),
+            reserves: crate::reserves::Reserves::default(),
+            order: None,
+            carried: false,
+            wage: None,
+            person: None,
+        }];
+        session.pilot.cargo.insert(Good::Commodity(0), 25);
+        assert_eq!(
+            session.mission_cargo_space(),
+            6,
+            "10 of the 25 tons spill past the escort's 15; the 4 aboard stay"
+        );
+        session.pilot.cargo.insert(Good::Commodity(0), 10);
+        assert_eq!(
+            session.mission_cargo_space(),
+            16,
+            "the escort takes all 10, but none of the mission's"
+        );
     }
 
     #[test]
