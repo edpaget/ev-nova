@@ -75,6 +75,18 @@
 //! Return and Escape close the panel alone. Without that dialog, Info is
 //! greyed.
 //!
+//! Which "Shipyard Info" opens follows the class's description `Graphic`
+//! (`_LoadDescription` @0x7186b-0x71892, read here when Info opens), as
+//! `_DoShipyardDescription` picks it (@0x5b6db-0x5b77e, [`InfoVariant`]).
+//! Above 127, when its `PICT` loads, "Shipyard Info" with a picture
+//! (`DLOG` 1019) opens over `PICT` 8507, with the graphic stretched into
+//! item 7 after Done (@0x50fd0-0x51043); when it does not load, `DLOG`
+//! 1005 opens over `PICT` 8507 stretched into it, as the background
+//! follows the ID test alone (@0x5b758-0x5b77e). While the ID test holds,
+//! the title is the class's `Long Name`, whole (`_shipyardLongNames`,
+//! @0x4fa33-0x4fa69), not its name. When the dialog picked is missing,
+//! nothing opens (@0x5b749-0x5b752).
+//!
 //! Done, Return and Escape close the shipyard. Without its dialog, the
 //! screen says why, and Return or Escape still closes it.
 
@@ -100,7 +112,7 @@ use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::catalog::DescriptionSource;
+use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
 use crate::ui::text_input::{TextInputDialog, TextInputOutcome};
 
@@ -108,11 +120,18 @@ use crate::ui::text_input::{TextInputDialog, TextInputOutcome};
 pub const SHIPYARD_DIALOG: i16 = 1004;
 /// The "Shipyard Info" dialog's `DLOG` (and `DITL`) ID.
 pub const SHIP_INFO_DIALOG: i16 = 1005;
+/// The "Shipyard Info" dialog with a picture: its `DLOG` (and `DITL`) ID
+/// (`_DoShipyardDescription` `GetNewDialog` 0x3fb, @0x5b70c-0x5b742).
+pub const SHIP_PICTURE_INFO_DIALOG: i16 = 1019;
 
 /// The picture the shipyard is drawn over: "Shipyard", in Nova Graphics.
 pub const BACKGROUND: ImageKey = ImageKey::picture(8501);
 /// The picture the info panel is drawn over.
 pub const INFO_BACKGROUND: ImageKey = ImageKey::picture(8506);
+/// The picture the info panel is drawn over while its graphic's ID is
+/// above [`LAST_UNSHOWN_GRAPHIC`], "Ship description + pict"
+/// (`_DoShipyardDescription` @0x5b758-0x5b77e).
+pub const PICTURE_INFO_BACKGROUND: ImageKey = ImageKey::picture(8507);
 
 /// Done's item.
 pub const DONE_ITEM: usize = 1;
@@ -139,6 +158,12 @@ pub const PANEL_DONE_ITEM: usize = 1;
 pub const PANEL_TITLE_ITEM: usize = 3;
 /// The info panel's text.
 pub const PANEL_TEXT_ITEM: usize = 5;
+/// The picture info panel's graphic (`_ShipDescDialogUpdate`
+/// @0x50fd0-0x51043).
+pub const PANEL_GRAPHIC_ITEM: usize = 7;
+/// The highest description `Graphic` that shows no picture: the engine
+/// shows one only above it (`_DoShipyardDescription` @0x5b6db-0x5b6e4).
+pub const LAST_UNSHOWN_GRAPHIC: i16 = 127;
 
 /// Buys the selected ship, as Buy Ship does: the original's default.
 pub const BUY_KEY: Key = Key::Char('b');
@@ -253,6 +278,104 @@ pub fn ship_picture(
         .collect();
     sharers.sort();
     sharers.into_iter().map(picture).find(|&id| exists(id))
+}
+
+/// Which "Shipyard Info" opens, as `_DoShipyardDescription` picks it
+/// (@0x5b6db-0x5b77e) from the selected class's description `Graphic`
+/// ([`info_variant`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InfoVariant {
+    /// No `Graphic` above [`LAST_UNSHOWN_GRAPHIC`]: `DLOG` 1005 over
+    /// `PICT` 8506, titled with the class's name.
+    Plain,
+    /// A `Graphic` above it whose `PICT` loads: `DLOG` 1019 over `PICT`
+    /// 8507, the graphic in item 7, titled with the `Long Name`.
+    Picture(i16),
+    /// A `Graphic` above it whose `PICT` does not load: `DLOG` 1005 over
+    /// `PICT` 8507 stretched into it, titled with the `Long Name`.
+    MissingPicture,
+}
+
+impl InfoVariant {
+    /// The dialog that opens: 1019 when the graphic loaded, else 1005
+    /// (`GetNewDialog` 0x3fb/0x3ed, @0x5b70c-0x5b742).
+    #[must_use]
+    pub fn dialog(self) -> i16 {
+        match self {
+            Self::Picture(_) => SHIP_PICTURE_INFO_DIALOG,
+            Self::Plain | Self::MissingPicture => SHIP_INFO_DIALOG,
+        }
+    }
+
+    /// The background, which follows the ID test alone: `PICT` 8507 above
+    /// 127, else 8506 (@0x5b758-0x5b77e).
+    #[must_use]
+    pub fn background(self) -> ImageKey {
+        if self.id_test() {
+            PICTURE_INFO_BACKGROUND
+        } else {
+            INFO_BACKGROUND
+        }
+    }
+
+    /// The graphic drawn in item 7, when it loaded (@0x50fd0-0x51043).
+    #[must_use]
+    pub fn graphic(self) -> Option<i16> {
+        match self {
+            Self::Picture(id) => Some(id),
+            Self::Plain | Self::MissingPicture => None,
+        }
+    }
+
+    /// Whether the `Graphic` is above 127, as `setg` records it
+    /// (`_ShipDescDialogUpdate` @0x4f97b-0x4f986): it titles the panel
+    /// with the `Long Name`.
+    #[must_use]
+    pub fn id_test(self) -> bool {
+        !matches!(self, Self::Plain)
+    }
+}
+
+/// The variant of "Shipyard Info" for a description whose `Graphic` is
+/// `graphic`: [`InfoVariant::Plain`] without one above
+/// [`LAST_UNSHOWN_GRAPHIC`]; otherwise [`InfoVariant::Picture`] when
+/// `exists` says its `PICT` is there, as `GetPicture` loads it
+/// (@0x5b6db-0x5b70a), and [`InfoVariant::MissingPicture`] when not.
+/// `exists` is asked only above 127.
+#[must_use]
+pub fn info_variant(graphic: Option<i16>, exists: impl Fn(i16) -> bool) -> InfoVariant {
+    match graphic {
+        Some(id) if id > LAST_UNSHOWN_GRAPHIC => {
+            if exists(id) {
+                InfoVariant::Picture(id)
+            } else {
+                InfoVariant::MissingPicture
+            }
+        }
+        _ => InfoVariant::Plain,
+    }
+}
+
+/// Both "Shipyard Info" templates, or why each is missing: `DLOG` 1005's
+/// and `DLOG` 1019's.
+#[derive(Clone, Debug)]
+pub struct InfoTemplates {
+    /// "Shipyard Info" ([`SHIP_INFO_DIALOG`]). Info is greyed without it.
+    pub plain: Result<DialogTemplate, String>,
+    /// "Shipyard Info" with a picture ([`SHIP_PICTURE_INFO_DIALOG`]).
+    pub picture: Result<DialogTemplate, String>,
+}
+
+impl InfoTemplates {
+    /// The template of `variant`'s dialog, if it is there.
+    fn of(&self, variant: InfoVariant) -> Option<&DialogTemplate> {
+        let template = if variant.dialog() == SHIP_PICTURE_INFO_DIALOG {
+            &self.picture
+        } else {
+            &self.plain
+        };
+        template.as_ref().ok()
+    }
 }
 
 /// The info box's rows for `row`, each a label and its amount: none for
@@ -420,12 +543,19 @@ pub trait ShipBaseImages {
 }
 
 /// What the shipyard reads about a ship: its description, through
-/// [`DescriptionSource`], whether a picture exists, through
+/// [`DescriptionSource`], the graphic it names, through
+/// [`DescriptionGraphics`], whether a picture exists, through
 /// [`SpaceportCatalog::picture_exists`], and the ships' base images,
-/// through [`ShipBaseImages`]. Anything that is all three is one.
-pub trait ShipyardCatalog: SpaceportCatalog + DescriptionSource + ShipBaseImages {}
+/// through [`ShipBaseImages`]. Anything that is all four is one.
+pub trait ShipyardCatalog:
+    SpaceportCatalog + DescriptionSource + DescriptionGraphics + ShipBaseImages
+{
+}
 
-impl<T: SpaceportCatalog + DescriptionSource + ShipBaseImages + ?Sized> ShipyardCatalog for T {}
+impl<T: SpaceportCatalog + DescriptionSource + DescriptionGraphics + ShipBaseImages + ?Sized>
+    ShipyardCatalog for T
+{
+}
 
 /// The catalog, shared, with a `Debug` that shows nothing of it.
 #[derive(Clone)]
@@ -454,8 +584,8 @@ struct Laid {
     metrics: MetricsHandle,
     /// The ship whose picture and description are shown, and them.
     shown: Option<(ShipId, Shown)>,
-    /// The info panel's template, if there is one.
-    info: Option<DialogTemplate>,
+    /// The info panel's templates.
+    info: InfoTemplates,
     /// The name prompt's template, if there is one.
     text_input: Option<DialogTemplate>,
 }
@@ -469,23 +599,26 @@ pub struct ShipOrder {
     pub name: String,
 }
 
-/// The info panel, open: "Shipyard Info" over [`INFO_BACKGROUND`], the
-/// ship's name centred in its title and its lines in its text. The hire
-/// screen opens it too.
+/// The info panel, open: "Shipyard Info" of its [`InfoVariant`] over
+/// that variant's background, the ship's name centred in its title, its
+/// lines in its text and, for [`InfoVariant::Picture`], its graphic in
+/// item 7. The hire screen opens it too.
 #[derive(Clone, Debug)]
 pub(super) struct Panel {
     dialog: Dialog,
+    variant: InfoVariant,
     title: String,
     /// Item 5's texts ([`spec_lines`]).
     texts: Vec<PanelText>,
 }
 
 impl Panel {
-    /// The panel laid out by `template`, titled `title` and drawing
-    /// `texts` in item 5, its Done enabled and labelled in `style`, its
-    /// text measured by `metrics`.
-    pub(super) fn open(
+    /// The panel of `variant` laid out by `template`, titled `title` and
+    /// drawing `texts` in item 5, its Done enabled and labelled in
+    /// `style`, its text measured by `metrics`.
+    fn open(
         template: &DialogTemplate,
+        variant: InfoVariant,
         title: String,
         texts: Vec<PanelText>,
         metrics: &Rc<dyn TextMetrics>,
@@ -502,6 +635,7 @@ impl Panel {
             .with_cancel(Some(PANEL_DONE_ITEM));
         Self {
             dialog,
+            variant,
             title,
             texts,
         }
@@ -525,9 +659,23 @@ impl Panel {
         self.dialog.cancel_pointer();
     }
 
-    /// Draws it, its title measured by `metrics`.
+    /// Draws it, its title measured by `metrics`: the background, drawn
+    /// into the dialog's bounds as `_DrawPicHandle` stretches it into the
+    /// port (@0x4f952-0x4f971), its title, the dialog, item 5's texts,
+    /// and, after Done, the graphic stretched into item 7
+    /// (@0x50fd0-0x51043).
     pub(super) fn draw(&self, list: &mut DrawList, metrics: &dyn TextMetrics) {
-        list.picture(INFO_BACKGROUND, self.dialog.bounds().min);
+        let bounds = self.dialog.bounds();
+        if self.variant == InfoVariant::MissingPicture {
+            list.stretched_picture(
+                self.variant.background(),
+                bounds.min,
+                bounds.width(),
+                bounds.height(),
+            );
+        } else {
+            list.picture(self.variant.background(), bounds.min);
+        }
         if let Some(title) = self.dialog.item_bounds(PANEL_TITLE_ITEM) {
             let width = metrics.width(Font::Charcoal, 12.0, &self.title);
             let origin = Point::new(title.center().x - width / 2.0, title.min.y + INSET);
@@ -550,7 +698,46 @@ impl Panel {
                 }
             }
         }
+        if let (Some(id), Some(area)) = (
+            self.variant.graphic(),
+            self.dialog.item_bounds(PANEL_GRAPHIC_ITEM),
+        ) {
+            list.stretched_picture(ImageKey::picture(id), area.min, area.width(), area.height());
+        }
     }
+}
+
+/// The info panel on a class named `name`, of `specs`, whose description
+/// is `dësc` `description`, laid out by `info`'s template for the
+/// variant its `Graphic` picks ([`info_variant`]), read from `catalog`
+/// when it opens. It is titled with the `Long Name` while the ID test
+/// holds, and `name` otherwise (@0x4fa33-0x4fa9d). None when that
+/// variant's dialog is missing, as nothing opens then (@0x5b749-0x5b752).
+pub(super) fn open_panel(
+    info: &InfoTemplates,
+    catalog: &dyn ShipyardCatalog,
+    description: Option<i16>,
+    name: &str,
+    specs: &ShipSpecs,
+    metrics: &Rc<dyn TextMetrics>,
+    style: ButtonStyle,
+) -> Option<Panel> {
+    let graphic = description.and_then(|id| catalog.description_graphic(id));
+    let variant = info_variant(graphic, |id| catalog.picture_exists(id));
+    let template = info.of(variant)?;
+    let title = if variant.id_test() {
+        specs.long_name.clone()
+    } else {
+        name.to_owned()
+    };
+    Some(Panel::open(
+        template,
+        variant,
+        title,
+        spec_lines(specs),
+        metrics,
+        style,
+    ))
 }
 
 /// The Shipyard of the stellar landed on.
@@ -594,7 +781,7 @@ impl ShipyardScreen {
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
-        info: Result<DialogTemplate, String>,
+        info: InfoTemplates,
         text_input: Result<DialogTemplate, String>,
         shipyard: Shipyard,
         catalog: Rc<dyn ShipyardCatalog>,
@@ -621,8 +808,7 @@ impl ShipyardScreen {
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(Some(DONE_ITEM))
                 .with_cancel(Some(DONE_ITEM));
-            let info = info.ok();
-            dialog.set_greyed(INFO_ITEM, info.is_none());
+            dialog.set_greyed(INFO_ITEM, info.plain.is_err());
             Laid {
                 dialog,
                 metrics: MetricsHandle(metrics),
@@ -853,20 +1039,21 @@ impl ShipyardScreen {
         let Some(row) = self.selected_row() else {
             return;
         };
-        let (title, lines) = (row.name.clone(), stat_lines(row));
         let Ok(laid) = &self.laid else {
             return;
         };
-        let Some(template) = &laid.info else {
+        if laid.info.plain.is_err() {
             return;
-        };
-        self.panel = Some(Panel::open(
-            template,
-            title,
-            lines,
+        }
+        self.panel = open_panel(
+            &laid.info,
+            &*self.catalog.0,
+            nova_data::ship_desc_id(row.id),
+            &row.name,
+            &row.specs,
             &laid.metrics.0,
             self.style,
-        ));
+        );
     }
 
     /// Activates dialog item `item`: Done closes, Buy Ship asks, Info
@@ -1135,6 +1322,34 @@ mod tests {
         }
     }
 
+    /// Stock "Shipyard Info" with a picture: `DLOG` 1019, 614 x 537 and
+    /// centred, with Done (1), the title (3), the text (5), the graphic
+    /// (7) and the weapons (8); items 2, 4 and 6 parked outside it.
+    fn picture_info_template() -> DialogTemplate {
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 614.0, 537.0),
+            placement: Placement::Center,
+            items: items(&[
+                (503.0, 507.0, 99.0, 25.0, false),
+                (700.0, 0.0, 1.0, 1.0, false),
+                (7.0, 413.0, 600.0, 24.0, false),
+                (700.0, 0.0, 1.0, 1.0, false),
+                (11.0, 442.0, 256.0, 92.0, false),
+                (700.0, 0.0, 1.0, 1.0, false),
+                (7.0, 6.0, 600.0, 400.0, false),
+                (266.0, 442.0, 342.0, 59.0, false),
+            ]),
+        }
+    }
+
+    /// Both info templates, stock.
+    fn info_templates() -> InfoTemplates {
+        InfoTemplates {
+            plain: Ok(info_template()),
+            picture: Ok(picture_info_template()),
+        }
+    }
+
     /// Where the dialog goes: (1024 - 765) / 2 and (768 - 323) / 2,
     /// floored.
     const ORIGIN: Point = Point::new(129.0, 222.0);
@@ -1145,6 +1360,8 @@ mod tests {
     struct FakeArt {
         pictures: Vec<i16>,
         bases: Vec<(ShipId, i16)>,
+        /// Each `dësc` with a `Graphic`, and it.
+        graphics: Vec<(i16, i16)>,
         asked: RefCell<Vec<String>>,
     }
 
@@ -1177,7 +1394,22 @@ mod tests {
         }
     }
 
+    impl DescriptionGraphics for FakeArt {
+        fn description_graphic(&self, id: i16) -> Option<i16> {
+            self.asked.borrow_mut().push(format!("graphic {id}"));
+            self.graphics
+                .iter()
+                .find(|(desc, _)| *desc == id)
+                .map(|(_, graphic)| *graphic)
+        }
+    }
+
     fn art() -> Rc<FakeArt> {
+        art_with(Vec::new())
+    }
+
+    /// [`art`], with these `dësc` graphics.
+    fn art_with(graphics: Vec<(i16, i16)>) -> Rc<FakeArt> {
         Rc::new(FakeArt {
             pictures: vec![5000, 5002],
             bases: vec![
@@ -1186,6 +1418,7 @@ mod tests {
                 (ShipId(130), 1000),
                 (ShipId(131), 1000),
             ],
+            graphics,
             asked: RefCell::default(),
         })
     }
@@ -1259,7 +1492,7 @@ mod tests {
         let catalog: Rc<dyn ShipyardCatalog> = Rc::clone(art) as Rc<dyn ShipyardCatalog>;
         ShipyardScreen::new(
             Ok(layout()),
-            Ok(info_template()),
+            info_templates(),
             Ok(text_input_template()),
             shipyard,
             catalog,
@@ -1363,9 +1596,14 @@ mod tests {
 
     #[test]
     fn the_named_values() {
-        assert_eq!((SHIPYARD_DIALOG, SHIP_INFO_DIALOG), (1004, 1005));
+        assert_eq!(
+            (SHIPYARD_DIALOG, SHIP_INFO_DIALOG, SHIP_PICTURE_INFO_DIALOG),
+            (1004, 1005, 1019)
+        );
         assert_eq!(BACKGROUND, ImageKey::picture(8501));
         assert_eq!(INFO_BACKGROUND, ImageKey::picture(8506));
+        assert_eq!(PICTURE_INFO_BACKGROUND, ImageKey::picture(8507));
+        assert_eq!((PANEL_GRAPHIC_ITEM, LAST_UNSHOWN_GRAPHIC), (7, 127));
         assert_eq!(
             [
                 DONE_ITEM,
@@ -1821,6 +2059,7 @@ mod tests {
         let art = Rc::new(FakeArt {
             pictures: vec![5000, 5002, 5004],
             bases: vec![(ShipId(128), 1000), (ShipId(132), 1004)],
+            graphics: Vec::new(),
             asked: RefCell::default(),
         });
         let mut screen = screen_with(shipyard(), &art);
@@ -2207,7 +2446,7 @@ mod tests {
     fn the_naming_falls_back_without_the_text_input_dialog() {
         let mut screen = ShipyardScreen::new(
             Ok(layout()),
-            Ok(info_template()),
+            info_templates(),
             Err("no DLOG 3001".to_owned()),
             shipyard(),
             art(),
@@ -2548,7 +2787,10 @@ mod tests {
         let catalog: Rc<dyn ShipyardCatalog> = art();
         let mut taller = ShipyardScreen::new(
             Ok(layout()),
-            Ok(info),
+            InfoTemplates {
+                plain: Ok(info),
+                ..info_templates()
+            },
             Ok(text_input_template()),
             shipyard,
             catalog,
@@ -2683,10 +2925,181 @@ mod tests {
     }
 
     #[test]
+    fn info_variant_shows_a_graphic_above_127_that_exists() {
+        let never = |id: i16| -> bool { panic!("asked whether PICT {id} exists") };
+        for graphic in [None, Some(0), Some(127), Some(-5)] {
+            assert_eq!(
+                info_variant(graphic, never),
+                InfoVariant::Plain,
+                "{graphic:?}"
+            );
+        }
+        let all = |_: i16| true;
+        assert_eq!(info_variant(Some(128), all), InfoVariant::Picture(128));
+        assert_eq!(info_variant(Some(20128), all), InfoVariant::Picture(20128));
+        let asked = RefCell::new(Vec::new());
+        let missing = |id: i16| {
+            asked.borrow_mut().push(id);
+            false
+        };
+        assert_eq!(
+            info_variant(Some(20128), missing),
+            InfoVariant::MissingPicture
+        );
+        assert_eq!(*asked.borrow(), [20128]);
+        let accessors = |variant: InfoVariant| {
+            (
+                variant.dialog(),
+                variant.background(),
+                variant.graphic(),
+                variant.id_test(),
+            )
+        };
+        assert_eq!(
+            accessors(InfoVariant::Plain),
+            (1005, ImageKey::picture(8506), None, false)
+        );
+        assert_eq!(
+            accessors(InfoVariant::Picture(20128)),
+            (1019, ImageKey::picture(8507), Some(20128), true)
+        );
+        assert_eq!(
+            accessors(InfoVariant::MissingPicture),
+            (1005, ImageKey::picture(8507), None, true)
+        );
+    }
+
+    /// The shipyard with the Heavy Shuttle (129) named "The Long 129" in
+    /// full, and selected, with `art`.
+    fn long_named(art: &Rc<FakeArt>) -> ShipyardScreen {
+        let mut shipyard = shipyard();
+        shipyard.rows[1].specs.long_name = "The Long 129".to_owned();
+        let mut screen = screen_with(shipyard, art);
+        press(&mut screen, Key::Right);
+        screen
+    }
+
+    #[test]
+    fn info_on_a_class_with_a_graphic_opens_the_picture_panel() {
+        let art = art_with(vec![(13_001, 5002)]);
+        let mut screen = long_named(&art);
+        art.asked.borrow_mut().clear();
+        press(&mut screen, INFO_KEY);
+        let panel = screen.info_panel().expect("open");
+        assert_eq!(panel.bounds(), rect(205.0, 115.0, 614.0, 537.0));
+        assert_eq!(
+            *art.asked.borrow(),
+            ["graphic 13001".to_owned(), "PICT 5002".to_owned()]
+        );
+        let commands = drawn(&screen);
+        let background = commands
+            .iter()
+            .position(|c| {
+                *c == DrawCommand::Picture {
+                    image: PICTURE_INFO_BACKGROUND,
+                    top_left: Point::new(205.0, 115.0),
+                }
+            })
+            .expect("the picture background");
+        let graphic_area = panel_item(&screen, PANEL_GRAPHIC_ITEM);
+        assert_eq!(graphic_area, rect(212.0, 121.0, 600.0, 400.0));
+        let graphic = commands
+            .iter()
+            .position(|c| {
+                *c == DrawCommand::StretchedPicture {
+                    image: ImageKey::picture(5002),
+                    top_left: graphic_area.min,
+                    width: 600.0,
+                    height: 400.0,
+                }
+            })
+            .expect("the graphic in item 7");
+        let done = commands
+            .iter()
+            .rposition(|c| matches!(c, DrawCommand::Text { text, .. } if text == DONE_LABEL))
+            .expect("the panel's Done");
+        assert!(
+            background < done && done < graphic,
+            "the graphic after Done"
+        );
+        assert!(
+            !commands.iter().any(
+                |c| matches!(c, DrawCommand::Picture { image, .. } if *image == INFO_BACKGROUND)
+            )
+        );
+        let words = words(&screen);
+        assert!(words.contains(&"The Long 129".to_owned()), "{words:?}");
+        assert!(!words.contains(&"Ship 129".to_owned()), "{words:?}");
+        // Its Done closes it alone.
+        let done = panel_item(&screen, PANEL_DONE_ITEM).center();
+        click(&mut screen, done);
+        assert!(screen.info_panel().is_none());
+        assert!(!screen.closed());
+    }
+
+    #[test]
+    fn info_on_a_class_whose_graphic_is_missing_opens_1005_over_the_picture_background() {
+        let art = art_with(vec![(13_001, 20_130)]);
+        let mut screen = long_named(&art);
+        press(&mut screen, INFO_KEY);
+        let panel = screen.info_panel().expect("open");
+        assert_eq!(panel.bounds(), rect(387.0, 241.0, 250.0, 285.0));
+        let commands = drawn(&screen);
+        assert!(commands.contains(&DrawCommand::StretchedPicture {
+            image: PICTURE_INFO_BACKGROUND,
+            top_left: Point::new(387.0, 241.0),
+            width: 250.0,
+            height: 285.0,
+        }));
+        assert!(!commands.iter().any(|c| matches!(
+            c,
+            DrawCommand::Picture { image, .. } if *image == INFO_BACKGROUND
+        )));
+        assert!(!commands.iter().any(|c| matches!(
+            c,
+            DrawCommand::Picture { image, .. } | DrawCommand::StretchedPicture { image, .. }
+                if image.id == 20_130
+        )));
+        let words = words(&screen);
+        assert!(words.contains(&"The Long 129".to_owned()), "{words:?}");
+        assert!(!words.contains(&"Ship 129".to_owned()), "{words:?}");
+    }
+
+    #[test]
+    fn without_the_picture_dialog_a_class_with_a_graphic_opens_nothing() {
+        let art = art_with(vec![(13_001, 5002)]);
+        let mut shipyard = shipyard();
+        shipyard.rows[1].specs.long_name = "The Long 129".to_owned();
+        let mut screen = ShipyardScreen::new(
+            Ok(layout()),
+            InfoTemplates {
+                picture: Err("no DLOG 1019".to_owned()),
+                ..info_templates()
+            },
+            Ok(text_input_template()),
+            shipyard,
+            Rc::clone(&art) as Rc<dyn ShipyardCatalog>,
+            ButtonStyle::STOCK,
+        );
+        assert!(enabled(&screen, INFO_LABEL));
+        press(&mut screen, Key::Right);
+        press(&mut screen, INFO_KEY);
+        assert!(screen.info_panel().is_none());
+        // A class without a graphic still opens 1005.
+        press(&mut screen, Key::Left);
+        press(&mut screen, INFO_KEY);
+        let panel = screen.info_panel().expect("open");
+        assert_eq!(panel.bounds(), rect(387.0, 241.0, 250.0, 285.0));
+    }
+
+    #[test]
     fn without_the_info_dialog_info_is_greyed() {
         let mut screen = ShipyardScreen::new(
             Ok(layout()),
-            Err("no DLOG 1005".to_owned()),
+            InfoTemplates {
+                plain: Err("no DLOG 1005".to_owned()),
+                ..info_templates()
+            },
             Ok(text_input_template()),
             shipyard(),
             art(),
@@ -2759,7 +3172,7 @@ mod tests {
             let art = art();
             let mut screen = ShipyardScreen::new(
                 Err("no DLOG 1004".to_owned()),
-                Ok(info_template()),
+                info_templates(),
                 Ok(text_input_template()),
                 shipyard(),
                 Rc::clone(&art) as Rc<dyn ShipyardCatalog>,

@@ -24,6 +24,11 @@
 //! screen shows and a hire takes, and the pay the escort is hired at, and
 //! its control bits can make a ship's `Availability` refuse the hire. With six escorts, the bar's
 //! Hire Escort asks for nothing.
+//!
+//! Info: when the Hireling's pilot description names a graphic, the hire
+//! screen's Info opens the picture panel ("Shipyard Info" with a picture,
+//! `DLOG` 1019) over `PICT` 8507, the graphic stretched into item 7 and
+//! the Hireling's `Long Name` as its title.
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
@@ -239,10 +244,26 @@ fn status_bar() -> Vec<u8> {
 /// (128) with the pad, Beta (129), the bar's text (`dësc` 10000), the
 /// Hireling's pilot (14001), and the pictures the screens draw.
 fn game_data() -> Rc<GameData> {
+    game_data_with(false)
+}
+
+/// [`game_data`], and when `pictured`, the Hireling's pilot description
+/// showing `PICT` 20129 (3 x 2) and the Hireling's `Long Name` "The
+/// Steady Hireling"; either way with the picture info panel's background,
+/// `PICT` 8507 (7 x 6), and `PICT` 20129.
+fn game_data_with(pictured: bool) -> Rc<GameData> {
+    let mut hireling = ship(10_000, 100);
+    let mut pilot = desc("A steady hand.");
+    if pictured {
+        let long_name = b"The Steady Hireling";
+        hireling[0x62E..0x62E + long_name.len()].copy_from_slice(long_name);
+        let at = "A steady hand.".len() + 1;
+        pilot[at..at + 2].copy_from_slice(&20_129_i16.to_be_bytes());
+    }
     let mut fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Boarder"), &ship(5000, 0))
-        .resource(Ship::TYPE, 129, Some(b"Hireling"), &ship(10_000, 100))
+        .resource(Ship::TYPE, 129, Some(b"Hireling"), &hireling)
         .resource(ShipAnim::TYPE, 128, None, &ship_anim(2000))
         .resource(ShipAnim::TYPE, 129, None, &ship_anim(2001))
         .resource(RLED, 2000, None, &sheet(36, 1))
@@ -258,7 +279,9 @@ fn game_data() -> Rc<GameData> {
         .resource(Spin::TYPE, 1004, None, &spin(1000))
         .resource(RLED, 1000, None, &sheet(1, 40))
         .resource(Desc::TYPE, 10_000, None, &desc("Smoke and quiet talk."))
-        .resource(Desc::TYPE, 14_001, None, &desc("A steady hand."))
+        .resource(Desc::TYPE, 14_001, None, &pilot)
+        .resource(PICT, 8507, None, &pict(7, 6, [30, 30, 30]))
+        .resource(PICT, 20_129, None, &pict(3, 2, [0, 0, 90]))
         .resource(
             Interface::TYPE,
             128,
@@ -316,9 +339,29 @@ fn dialog(id: i16, (width, height): (i16, i16), items: &[Item]) -> [(ResType, i1
     [(Dlog::TYPE, id, dlog), (Ditl::TYPE, id, list)]
 }
 
+/// Stock "Shipyard Info" with a picture (`DLOG` 1019, 614 x 537) and its
+/// eight items: Done (1), the title (3), the text (5), the graphic (7) and
+/// the weapons (8), with 2, 4 and 6 parked outside it.
+fn picture_info() -> [(ResType, i16, Vec<u8>); 2] {
+    dialog(
+        1019,
+        (614, 537),
+        &[
+            ((503, 507, 99, 25), false),
+            ((700, 0, 1, 1), false),
+            ((7, 413, 600, 24), false),
+            ((700, 0, 1, 1), false),
+            ((11, 442, 256, 92), false),
+            ((700, 0, 1, 1), false),
+            ((7, 6, 600, 400), false),
+            ((266, 442, 342, 59), false),
+        ],
+    )
+}
+
 /// The interface file: stock "Spaceport" (`DLOG` 1000), "Bar" (1013),
-/// "Shipyard" (1004), "Shipyard Info" (1005) and the comm dialog (1007),
-/// each with its items as stock has them.
+/// "Shipyard" (1004), "Shipyard Info" (1005 and 1019) and the comm
+/// dialog (1007), each with its items as stock has them.
 fn interface() -> InterfaceData {
     let spaceport = dialog(
         1000,
@@ -405,7 +448,7 @@ fn interface() -> InterfaceData {
             ((40, 73, 134, 46), false),
         ],
     );
-    let fork = [spaceport, bar, shipyard, info, comm]
+    let fork = [spaceport, bar, shipyard, info, picture_info(), comm]
         .into_iter()
         .flatten()
         .fold(ForkBuilder::new(), |fork, (ty, id, bytes)| {
@@ -439,7 +482,16 @@ impl Game {
     /// The app on the main menu, keeping pilots in `store`, the router as
     /// `router` makes it.
     fn opening(store: &MemoryPilots, router: impl FnOnce(AppScreen) -> AppScreen) -> Self {
-        let data = game_data();
+        Self::opening_over(store, game_data(), router)
+    }
+
+    /// The app on the main menu over `data`, keeping pilots in `store`,
+    /// the router as `router` makes it.
+    fn opening_over(
+        store: &MemoryPilots,
+        data: Rc<GameData>,
+        router: impl FnOnce(AppScreen) -> AppScreen,
+    ) -> Self {
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Nothing));
         let screen = start_screen(Rc::clone(&data))
@@ -946,6 +998,62 @@ fn the_routers_hire_terms_and_control_bits_decide_the_bar() {
         "its Availability does not hold"
     );
     assert_eq!(game.pilot().escorts().len(), 1, "the one hired already");
+}
+
+#[test]
+fn info_on_a_pilot_whose_description_has_a_graphic_opens_the_picture_panel() {
+    let store = MemoryPilots::new();
+    PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
+        .save(&hiring_already(&ada(), 25_000, true))
+        .expect("saved");
+    let mut game = Game::opening_over(&store, game_data_with(true), |screen| screen);
+    game.open_pilot(Showing::Spaceport);
+    game.open_bar();
+    game.tap(Key::Char('h'));
+    assert!(game.hiring());
+    game.tap(Key::Char('i'));
+    let bounds = game
+        .app
+        .screen()
+        .spaceport_view()
+        .and_then(|spaceport| spaceport.open_bar())
+        .and_then(|bar| bar.hire_screen())
+        .and_then(|hire| hire.info_panel())
+        .expect("the info panel")
+        .bounds();
+    assert_eq!(
+        (bounds.min.x, bounds.min.y, bounds.width(), bounds.height()),
+        (205.0, 115.0, 614.0, 537.0),
+        "DLOG 1019"
+    );
+    let frame = game.frame();
+    let quads: Vec<Rect> = frame
+        .batches
+        .iter()
+        .flat_map(|batch| match batch {
+            Batch::Sprites { quads, .. } => quads.iter().map(|quad| quad.dest).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    let background = Rect {
+        x: 205.0,
+        y: 115.0,
+        w: 7.0,
+        h: 6.0,
+    };
+    let graphic = Rect {
+        x: 212.0,
+        y: 121.0,
+        w: 600.0,
+        h: 400.0,
+    };
+    assert!(quads.contains(&background), "PICT 8507: {quads:?}");
+    assert!(quads.contains(&graphic), "PICT 20129 in item 7: {quads:?}");
+    let shown = texts(&frame);
+    assert!(
+        shown.contains(&"The Steady Hireling".to_owned()),
+        "the Long Name: {shown:?}"
+    );
 }
 
 #[test]

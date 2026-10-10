@@ -1,6 +1,6 @@
 //! The widgets' ports: dialog templates from the interface file, and
-//! descriptions and the button style from the game data, in the core's
-//! terms.
+//! descriptions, the graphics they name and the button style from the
+//! game data, in the core's terms.
 
 use std::rc::Rc;
 
@@ -22,6 +22,13 @@ pub trait DescriptionSource {
     /// How button labels are set, from `cölr` 128, or
     /// [`ButtonStyle::STOCK`] when it is missing or does not decode.
     fn button_style(&self) -> ButtonStyle;
+}
+
+/// The graphics that descriptions name.
+pub trait DescriptionGraphics {
+    /// `dësc` `id`'s `Graphic`, the `PICT` shown with it; none when it is
+    /// -1, or the `dësc` is missing or does not decode.
+    fn description_graphic(&self, id: i16) -> Option<i16>;
 }
 
 /// Borrowed dialog resources are dialog resources.
@@ -59,6 +66,20 @@ impl<T: DescriptionSource + ?Sized> DescriptionSource for Rc<T> {
 
     fn button_style(&self) -> ButtonStyle {
         (**self).button_style()
+    }
+}
+
+/// Borrowed description graphics are description graphics.
+impl<T: DescriptionGraphics + ?Sized> DescriptionGraphics for &T {
+    fn description_graphic(&self, id: i16) -> Option<i16> {
+        (**self).description_graphic(id)
+    }
+}
+
+/// Shared description graphics are description graphics.
+impl<T: DescriptionGraphics + ?Sized> DescriptionGraphics for Rc<T> {
+    fn description_graphic(&self, id: i16) -> Option<i16> {
+        (**self).description_graphic(id)
     }
 }
 
@@ -103,6 +124,16 @@ mod tests {
         Ok(resources.dialog_template(id)?.bounds.width())
     }
 
+    impl DescriptionGraphics for Fake {
+        fn description_graphic(&self, id: i16) -> Option<i16> {
+            (id > 0).then_some(id + 1)
+        }
+    }
+
+    fn graphic(graphics: impl DescriptionGraphics, id: i16) -> Option<i16> {
+        graphics.description_graphic(id)
+    }
+
     fn read(source: impl DescriptionSource) -> (Result<String, String>, Color) {
         (source.description(7), source.button_style().up)
     }
@@ -112,6 +143,13 @@ mod tests {
         assert_eq!(width(&Fake, 30), Ok(30.0));
         assert_eq!(width(Rc::new(Fake), 40), Ok(40.0));
         assert_eq!(width(Rc::new(Fake), -1), Err("no DLOG -1".to_owned()));
+    }
+
+    #[test]
+    fn borrowed_and_shared_graphics_are_graphics() {
+        assert_eq!(graphic(&Fake, 13000), Some(13001));
+        assert_eq!(graphic(Rc::new(Fake), 14000), Some(14001));
+        assert_eq!(graphic(Rc::new(Fake), -1), None);
     }
 
     #[test]

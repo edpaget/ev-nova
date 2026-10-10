@@ -8,7 +8,10 @@
 //! selected ship's picture ([`ship_picture`]); its description, the
 //! pilot's, `dësc` 14000 plus its ID less 128 (the Bible: "Ship pilot
 //! descriptions, shown in the hire-escort dialog"); and the Info panel
-//! ("Shipyard Info", `DLOG` 1005, [`spec_lines`]). Its info box draws two
+//! ("Shipyard Info", [`spec_lines`](super::shipyard::spec_lines)), whose
+//! variant ([`InfoVariant`](super::shipyard::InfoVariant)) follows the
+//! pilot's `dësc` 14000+ `Graphic`, as `_ShipyardFilter` loads it in
+//! hire mode (@0x60c01-0x60c33). Its info box draws two
 //! rows in white, as `_ShipyardDialogUpdate`'s hire mode does
 //! (@0x595a0-0x596f6): "Hiring Price:" (`STR#` 2002 #228) and the fee at
 //! baseline 12, and "You Have:" (#217) and the cash at baseline 36, each
@@ -40,8 +43,8 @@ use super::grid::{
 use super::layout::DONE_LABEL;
 use super::shipyard::{
     BACKGROUND, BUY_ITEM, DESCRIPTION_ITEM, DONE_ITEM, GRID_ITEM, INFO_BOX_ITEM, INFO_ITEM,
-    INFO_KEY, INFO_LABEL, PICTURE_ITEM, Panel, SCROLL_DOWN_ITEM, SCROLL_UP_ITEM, ShipyardCatalog,
-    ship_picture, spec_lines,
+    INFO_KEY, INFO_LABEL, InfoTemplates, PICTURE_ITEM, Panel, SCROLL_DOWN_ITEM, SCROLL_UP_ITEM,
+    ShipyardCatalog, open_panel, ship_picture,
 };
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -114,8 +117,8 @@ struct Laid {
     metrics: MetricsHandle,
     /// The ship whose picture and description are shown, and them.
     shown: Option<(ShipId, Shown)>,
-    /// The info panel's template, if there is one.
-    info: Option<DialogTemplate>,
+    /// The info panel's templates.
+    info: InfoTemplates,
 }
 
 /// The ships for hire in the bar.
@@ -147,7 +150,7 @@ impl HireScreen {
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
-        info: Result<DialogTemplate, String>,
+        info: InfoTemplates,
         list: HireList,
         catalog: Rc<dyn ShipyardCatalog>,
         style: ButtonStyle,
@@ -173,8 +176,7 @@ impl HireScreen {
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(Some(DONE_ITEM))
                 .with_cancel(Some(DONE_ITEM));
-            let info = info.ok();
-            dialog.set_greyed(INFO_ITEM, info.is_none());
+            dialog.set_greyed(INFO_ITEM, info.plain.is_err());
             Laid {
                 dialog,
                 metrics: MetricsHandle(metrics),
@@ -310,20 +312,21 @@ impl HireScreen {
         let Some(row) = self.selected_row() else {
             return;
         };
-        let (title, lines) = (row.name.clone(), spec_lines(&row.specs));
         let Ok(laid) = &self.laid else {
             return;
         };
-        let Some(template) = &laid.info else {
+        if laid.info.plain.is_err() {
             return;
-        };
-        self.panel = Some(Panel::open(
-            template,
-            title,
-            lines,
+        }
+        self.panel = open_panel(
+            &laid.info,
+            &*self.catalog.0,
+            Some(pilot_desc_id(row.id)),
+            &row.name,
+            &row.specs,
             &laid.metrics.0,
             self.style,
-        ));
+        );
     }
 
     /// Activates dialog item `item`: Done closes, Hire Escort asks, Info
@@ -492,12 +495,15 @@ mod tests {
 
     use super::*;
     use crate::draw::{DrawCommand, fill_rect};
+    use crate::image::ImageKey;
     use crate::input::MouseButton;
     use crate::spaceport::catalog::{PortRecord, SpaceportCatalog, StellarId};
     use crate::spaceport::grid::TEXT_COLOR;
-    use crate::spaceport::shipyard::ShipBaseImages;
+    use crate::spaceport::shipyard::{
+        INFO_BACKGROUND, PANEL_GRAPHIC_ITEM, PICTURE_INFO_BACKGROUND, ShipBaseImages,
+    };
     use crate::text::fixture::MonoMetrics;
-    use crate::ui::catalog::DescriptionSource;
+    use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
@@ -559,6 +565,8 @@ mod tests {
     /// Ship 128's picture (`PICT` 5000) exists; every description is
     /// "dësc n.". Records what it is asked.
     struct FakeArt {
+        /// Each `dësc` with a `Graphic`, and it.
+        graphics: Vec<(i16, i16)>,
         asked: RefCell<Vec<String>>,
     }
 
@@ -589,10 +597,54 @@ mod tests {
         }
     }
 
+    impl DescriptionGraphics for FakeArt {
+        fn description_graphic(&self, id: i16) -> Option<i16> {
+            self.asked.borrow_mut().push(format!("graphic {id}"));
+            self.graphics
+                .iter()
+                .find(|(desc, _)| *desc == id)
+                .map(|(_, graphic)| *graphic)
+        }
+    }
+
     fn art() -> Rc<FakeArt> {
+        art_with(Vec::new())
+    }
+
+    /// [`art`], with these `dësc` graphics.
+    fn art_with(graphics: Vec<(i16, i16)>) -> Rc<FakeArt> {
         Rc::new(FakeArt {
+            graphics,
             asked: RefCell::default(),
         })
+    }
+
+    /// Stock "Shipyard Info" with a picture: `DLOG` 1019, 614 x 537 and
+    /// centred, with Done (1), the title (3), the text (5), the graphic
+    /// (7) and the weapons (8); items 2, 4 and 6 parked outside it.
+    fn picture_info_template() -> DialogTemplate {
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 614.0, 537.0),
+            placement: Placement::Center,
+            items: items(&[
+                (503.0, 507.0, 99.0, 25.0, true),
+                (700.0, 0.0, 1.0, 1.0, false),
+                (7.0, 413.0, 600.0, 24.0, false),
+                (700.0, 0.0, 1.0, 1.0, false),
+                (11.0, 442.0, 256.0, 92.0, false),
+                (700.0, 0.0, 1.0, 1.0, false),
+                (7.0, 6.0, 600.0, 400.0, false),
+                (266.0, 442.0, 342.0, 59.0, false),
+            ]),
+        }
+    }
+
+    /// Both info templates, stock.
+    fn info_templates() -> InfoTemplates {
+        InfoTemplates {
+            plain: Ok(info_template()),
+            picture: Ok(picture_info_template()),
+        }
     }
 
     /// Ship `id`'s row, at `fee` and `wage`, hired or refused.
@@ -639,7 +691,7 @@ mod tests {
         let catalog: Rc<dyn ShipyardCatalog> = Rc::clone(art) as Rc<dyn ShipyardCatalog>;
         HireScreen::new(
             Ok((template(), Rc::new(MonoMetrics))),
-            Ok(info_template()),
+            info_templates(),
             list,
             catalog,
             ButtonStyle::STOCK,
@@ -924,7 +976,10 @@ mod tests {
         assert!(!screen.closed());
         let mut bare = HireScreen::new(
             Ok((template(), Rc::new(MonoMetrics))),
-            Err("no DLOG 1005".to_owned()),
+            InfoTemplates {
+                plain: Err("no DLOG 1005".to_owned()),
+                ..info_templates()
+            },
             list(),
             art(),
             ButtonStyle::STOCK,
@@ -993,7 +1048,7 @@ mod tests {
     fn without_its_dialog_it_says_why_and_return_closes_it() {
         let mut screen = HireScreen::new(
             Err("no DLOG 1004".to_owned()),
-            Ok(info_template()),
+            info_templates(),
             list(),
             art(),
             ButtonStyle::STOCK,
@@ -1091,6 +1146,58 @@ mod tests {
         assert_eq!(screen.top_row(), 1);
         screen.input(&key(Key::Down, false));
         assert_eq!(screen.selected(), Some(4));
+    }
+
+    /// Ship 128's row, its `Long Name` "The Long 128", alone in the list.
+    fn long_named() -> HireList {
+        let mut row = row(128, 970, 100, Ok(()));
+        row.specs.long_name = "The Long 128".to_owned();
+        HireList {
+            rows: vec![row],
+            ..list()
+        }
+    }
+
+    #[test]
+    fn info_on_a_pilot_description_with_a_graphic_opens_the_picture_panel() {
+        let art = art_with(vec![(13_000, 6000), (14_000, 5000)]);
+        let mut screen = screen_of(&art, long_named());
+        art.asked.borrow_mut().clear();
+        screen.input(&key(INFO_KEY, false));
+        let panel = screen.info_panel().expect("open");
+        assert_eq!(panel.bounds(), rect(205.0, 115.0, 614.0, 537.0));
+        assert_eq!(*art.asked.borrow(), ["graphic 14000"]);
+        let graphic = panel.item_bounds(PANEL_GRAPHIC_ITEM).expect("item 7");
+        let commands = drawn(&screen);
+        assert!(commands.contains(&DrawCommand::Picture {
+            image: PICTURE_INFO_BACKGROUND,
+            top_left: Point::new(205.0, 115.0),
+        }));
+        assert!(commands.contains(&DrawCommand::StretchedPicture {
+            image: ImageKey::picture(5000),
+            top_left: graphic.min,
+            width: 600.0,
+            height: 400.0,
+        }));
+        let words: Vec<String> = texts(&screen).into_iter().map(|(t, _, _)| t).collect();
+        assert!(words.contains(&"The Long 128".to_owned()), "{words:?}");
+        assert!(!words.contains(&"Ship 128".to_owned()), "{words:?}");
+    }
+
+    #[test]
+    fn info_on_a_pilot_description_without_a_graphic_opens_1005() {
+        let art = art_with(vec![(13_000, 5000)]);
+        let mut screen = screen_of(&art, long_named());
+        screen.input(&key(INFO_KEY, false));
+        let panel = screen.info_panel().expect("open");
+        assert_eq!(panel.bounds(), rect(387.0, 241.0, 250.0, 285.0));
+        assert!(drawn(&screen).contains(&DrawCommand::Picture {
+            image: INFO_BACKGROUND,
+            top_left: Point::new(387.0, 241.0),
+        }));
+        let words: Vec<String> = texts(&screen).into_iter().map(|(t, _, _)| t).collect();
+        assert!(words.contains(&"Ship 128".to_owned()), "{words:?}");
+        assert!(!words.contains(&"The Long 128".to_owned()), "{words:?}");
     }
 
     #[test]

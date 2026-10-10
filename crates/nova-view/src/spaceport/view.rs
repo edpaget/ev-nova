@@ -61,7 +61,7 @@ use super::layout::{
 };
 use super::outfitter::{OutfitterCatalog, OutfitterScreen};
 use super::service::ServiceScreen;
-use super::shipyard::{ShipOrder, ShipyardCatalog, ShipyardScreen};
+use super::shipyard::{InfoTemplates, ShipOrder, ShipyardCatalog, ShipyardScreen};
 use super::trade::TradeScreen;
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -203,7 +203,7 @@ impl std::fmt::Debug for Outfitting {
 #[derive(Clone)]
 struct Shipbuying {
     template: Result<DialogTemplate, String>,
-    info: Result<DialogTemplate, String>,
+    info: InfoTemplates,
     text_input: Result<DialogTemplate, String>,
     shipyard: Shipyard,
     catalog: Rc<dyn ShipyardCatalog>,
@@ -510,7 +510,7 @@ impl SpaceportView {
     pub fn with_shipyard(
         self,
         template: Result<DialogTemplate, String>,
-        info: Result<DialogTemplate, String>,
+        info: InfoTemplates,
         text_input: Result<DialogTemplate, String>,
         shipyard: Shipyard,
         catalog: Rc<dyn ShipyardCatalog>,
@@ -593,7 +593,7 @@ impl SpaceportView {
         self,
         template: Result<DialogTemplate, String>,
         hire_template: Result<DialogTemplate, String>,
-        info_template: Result<DialogTemplate, String>,
+        info_template: InfoTemplates,
         catalog: Rc<dyn ShipyardCatalog>,
         room: bool,
     ) -> Self {
@@ -2170,6 +2170,20 @@ mod tests {
         }
     }
 
+    impl crate::ui::catalog::DescriptionGraphics for FakePort {
+        fn description_graphic(&self, _id: i16) -> Option<i16> {
+            None
+        }
+    }
+
+    /// Neither info template.
+    fn no_info() -> InfoTemplates {
+        InfoTemplates {
+            plain: Err("no DLOG 1005".to_owned()),
+            picture: Err("no DLOG 1019".to_owned()),
+        }
+    }
+
     /// "Shipyard": 765 x 323, centred, with Done (1), the grid (5), the
     /// description (6), Buy Ship (7), the picture (8), the info box (9)
     /// and Info (10).
@@ -2245,7 +2259,7 @@ mod tests {
         let art: Rc<dyn ShipyardCatalog> = Rc::new(shipyard_port());
         view_of(&shipyard_port()).with_shipyard(
             template,
-            Err("no DLOG 1005".to_owned()),
+            no_info(),
             Err("no DLOG 3001".to_owned()),
             yard(17_500),
             art,
@@ -2489,7 +2503,7 @@ mod tests {
         earth().with_bar(
             Ok(bar_template()),
             Ok(shipyard_template()),
-            Err("no DLOG 1005".to_owned()),
+            no_info(),
             art,
             room,
         )

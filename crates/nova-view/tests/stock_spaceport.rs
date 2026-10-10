@@ -200,18 +200,23 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
     use nova_view::spaceport::SpaceportCatalog;
     use nova_view::spaceport::shipyard::{
         BACKGROUND as SHIPYARD_BACKGROUND, BUY_ITEM as BUY_SHIP_ITEM, DONE_ITEM as SHIPYARD_DONE,
-        INFO_BACKGROUND, INFO_ITEM, SHIP_INFO_DIALOG, SHIPYARD_DIALOG, ShipBaseImages,
-        ShipyardScreen, ship_picture,
+        INFO_ITEM, InfoTemplates, SHIP_INFO_DIALOG, SHIP_PICTURE_INFO_DIALOG, SHIPYARD_DIALOG,
+        ShipBaseImages, ShipyardScreen, ship_picture,
     };
     for (dir, ui) in builds() {
         let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
         let ui = InterfaceData::open(&ui).expect("the interface file opens");
         let template = ui.dialog_template(SHIPYARD_DIALOG).expect("Shipyard");
-        let info = ui.dialog_template(SHIP_INFO_DIALOG).expect("Shipyard Info");
+        let info = InfoTemplates {
+            plain: Ok(ui.dialog_template(SHIP_INFO_DIALOG).expect("Shipyard Info")),
+            picture: Ok(ui
+                .dialog_template(SHIP_PICTURE_INFO_DIALOG)
+                .expect("Shipyard Info with a picture")),
+        };
         let shipyard = at_viking(&data).shipyard(&mut Fires).expect("a shipyard");
         let mut screen = ShipyardScreen::new(
             Ok((template, Rc::new(MonoMetrics))),
-            Ok(info),
+            info,
             ui.dialog_template(nova_view::ui::text_input::TEXT_INPUT_DIALOG),
             shipyard,
             Rc::clone(&data) as Rc<dyn nova_view::spaceport::ShipyardCatalog>,
@@ -233,7 +238,12 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
                 "{item}"
             );
         }
-        for (id, size) in [(8501, (765, 323)), (8506, (250, 285))] {
+        for (id, size) in [
+            (8501, (765, 323)),
+            (8506, (250, 285)),
+            (8507, (614, 537)),
+            (20128, (600, 400)),
+        ] {
             let picture = data.resource(PICT, id).expect("the picture");
             let picture = decode_pict(picture.resource.data()).expect("decodes");
             assert_eq!((picture.width(), picture.height()), size, "{id}");
@@ -280,24 +290,41 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
             ship_picture(nova_sim::ShipId(361), &bases, |id| data.picture_exists(id)),
             Some(5000)
         );
-        screen.input(&nova_view::Input::Key {
-            key: nova_view::Key::Char('i'),
-            pressed: true,
-            repeat: false,
-        });
-        let panel = screen.info_panel().expect("the info panel");
-        assert_eq!(
-            panel.bounds(),
-            Bounds::at(Point::new(387.0, 241.0), 250.0, 285.0)
-        );
-        let mut list = DrawList::new();
-        screen.draw(&mut list);
-        assert!(list.iter().any(|c| *c
-            == DrawCommand::Picture {
-                image: INFO_BACKGROUND,
-                top_left: Point::new(387.0, 241.0),
-            }));
+        the_shuttles_info_is_the_picture_panel(&mut screen);
     }
+}
+
+/// I on the Shuttle, selected in Viking's `screen`, opens the picture
+/// variant: its `dësc` 13000 has `Graphic` 20128, so its Info is `DLOG`
+/// 1019 over `PICT` 8507, with the graphic in item 7.
+fn the_shuttles_info_is_the_picture_panel(screen: &mut nova_view::spaceport::ShipyardScreen) {
+    use nova_view::spaceport::shipyard::{PANEL_GRAPHIC_ITEM, PICTURE_INFO_BACKGROUND};
+    screen.input(&nova_view::Input::Key {
+        key: nova_view::Key::Char('i'),
+        pressed: true,
+        repeat: false,
+    });
+    let panel = screen.info_panel().expect("the info panel");
+    assert_eq!(
+        panel.bounds(),
+        Bounds::at(Point::new(205.0, 115.0), 614.0, 537.0)
+    );
+    let graphic = panel.item_bounds(PANEL_GRAPHIC_ITEM).expect("item 7");
+    assert_eq!(graphic, Bounds::at(Point::new(212.0, 121.0), 600.0, 400.0));
+    let mut list = DrawList::new();
+    screen.draw(&mut list);
+    assert!(list.iter().any(|c| *c
+        == DrawCommand::Picture {
+            image: PICTURE_INFO_BACKGROUND,
+            top_left: Point::new(205.0, 115.0),
+        }));
+    assert!(list.iter().any(|c| *c
+        == DrawCommand::StretchedPicture {
+            image: nova_view::ImageKey::picture(20128),
+            top_left: graphic.min,
+            width: 600.0,
+            height: 400.0,
+        }));
 }
 
 /// A chance that draws the last of each roll's outcomes.

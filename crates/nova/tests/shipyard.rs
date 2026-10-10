@@ -18,6 +18,10 @@
 //! less the trade-in, flies the new ship, named, with its fuel tank, and
 //! is saved; a held B buys nothing more. It takes off at the new ship's
 //! top speed, and in a new app the pilot still flies it, by its name.
+//!
+//! When the Heavy Shuttle's description names a graphic, its Info opens
+//! the picture panel ("Shipyard Info" with a picture, `DLOG` 1019) over
+//! `PICT` 8507, the graphic stretched into item 7.
 
 use std::io;
 use std::path::Path;
@@ -42,7 +46,7 @@ use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_data::{GameData, InterfaceData, Record};
 use nova_render::recording::RecordingGpu;
 use nova_render::wgpu::GlyphonMetrics;
-use nova_render::{Batch, FontFaces, Frame};
+use nova_render::{Batch, FontFaces, Frame, Rect};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::fixture::MemoryPilots;
@@ -244,6 +248,14 @@ fn desc(text: &str) -> Vec<u8> {
     bytes
 }
 
+/// A `dësc` of `text` showing `PICT` `graphic`.
+fn pictured_desc(text: &str, graphic: i16) -> Vec<u8> {
+    let mut bytes = desc(text);
+    let at = text.len() + 1;
+    bytes[at..at + 2].copy_from_slice(&graphic.to_be_bytes());
+    bytes
+}
+
 /// A `spïn` naming `rlëD` 1000, one frame across.
 fn spin() -> Vec<u8> {
     let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
@@ -252,6 +264,13 @@ fn spin() -> Vec<u8> {
 }
 
 fn game_data() -> Rc<GameData> {
+    game_data_with(desc("Room for more."))
+}
+
+/// The game data with the Heavy Shuttle's `dësc` 13001 `heavy_desc`, the
+/// picture info panel's background (`PICT` 8507, 7 x 6) and a ship
+/// graphic (`PICT` 20129, 3 x 2).
+fn game_data_with(heavy_desc: Vec<u8>) -> Rc<GameData> {
     let mut resources = vec![
         (Character::TYPE, 128, character()),
         (Ship::TYPE, 128, shuttle()),
@@ -269,7 +288,9 @@ fn game_data() -> Rc<GameData> {
         (PICT, 8506, pict(6, 5, [20, 20, 20])),
         (PICT, 5000, pict(4, 4, [200, 200, 0])),
         (PICT, 10_004, pict(6, 3, [0, 90, 0])),
-        (Desc::TYPE, 13_001, desc("Room for more.")),
+        (Desc::TYPE, 13_001, heavy_desc),
+        (PICT, 8507, pict(7, 6, [30, 30, 30])),
+        (PICT, 20_129, pict(3, 2, [0, 0, 90])),
     ];
     for state in [7500, 7503, 7506] {
         resources.push((PICT, state, pict(13, 25, [200, 0, 0])));
@@ -363,6 +384,16 @@ fn shipyard_dialogs() -> Vec<(ResType, i16, Vec<u8>)> {
         ((300, 0, 1, 1), false),
         ((9, 32, 234, 214), false),
     ]);
+    let picture_info = user_items(&[
+        ((503, 507, 99, 25), true),
+        ((700, 0, 1, 1), false),
+        ((7, 413, 600, 24), false),
+        ((700, 0, 1, 1), false),
+        ((11, 442, 256, 92), false),
+        ((700, 0, 1, 1), false),
+        ((7, 6, 600, 400), false),
+        ((266, 442, 342, 59), false),
+    ]);
     let text_input = vec![
         ditl_item((252, 106, 322, 126), BUTTON, b"OK"),
         ditl_item((7, 147, 39, 179), PICTURE | DISABLED, &be(&[129])),
@@ -378,6 +409,8 @@ fn shipyard_dialogs() -> Vec<(ResType, i16, Vec<u8>)> {
         (Ditl::TYPE, 1004, ditl(&shipyard)),
         (Dlog::TYPE, 1005, dlog((100, 100, 385, 350), 1005)),
         (Ditl::TYPE, 1005, ditl(&info)),
+        (Dlog::TYPE, 1019, dlog((100, 100, 637, 714), 1019)),
+        (Ditl::TYPE, 1019, ditl(&picture_info)),
     ]
 }
 
@@ -447,7 +480,12 @@ impl Harness {
     /// The app on the main menu, keeping pilots in `store`, before any
     /// frame.
     fn opening(store: &MemoryPilots) -> Self {
-        let data = game_data();
+        Self::opening_with(store, game_data())
+    }
+
+    /// The app on the main menu over `data`, keeping pilots in `store`,
+    /// before any frame.
+    fn opening_with(store: &MemoryPilots, data: Rc<GameData>) -> Self {
         let metrics = Rc::new(GlyphonMetrics::new(&FontFaces::bundled()));
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         let screen = start_screen(Rc::clone(&data))
@@ -722,6 +760,62 @@ fn a_pilot_buys_a_heavy_shuttle_trading_in_its_shuttle_and_flies_it_after_a_rest
     assert_eq!(game.pilot(), flown);
     assert_eq!(game.pilot().ship_name(), Some("Kestrel"));
     assert!((game.top_speed() - 6.0).abs() < 1e-6);
+}
+
+fn quads(frame: &Frame) -> Vec<Rect> {
+    frame
+        .batches
+        .iter()
+        .flat_map(|batch| match batch {
+            Batch::Sprites { quads, .. } => quads.iter().map(|quad| quad.dest).collect(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+#[test]
+fn info_on_a_class_whose_description_has_a_graphic_opens_the_picture_panel() {
+    let store = MemoryPilots::new();
+    let data = game_data_with(pictured_desc("Room for more.", 20_129));
+    let mut game = Harness::opening_with(&store, data);
+    let new_pilot = game.menu_button(MenuChoice::NewPilot);
+    game.click(new_pilot);
+    game.type_name("Ada");
+    game.press(KeyCode::Enter);
+    game.frame();
+    game.land();
+    game.open_shipyard();
+    let cell = game.shipyard().cell_bounds(1).expect("a cell").center();
+    game.click(cell);
+    game.press(KeyCode::KeyI);
+    let panel = game.shipyard().info_panel().expect("the info panel");
+    let bounds = panel.bounds();
+    assert_eq!(
+        (bounds.min.x, bounds.min.y, bounds.width(), bounds.height()),
+        (205.0, 115.0, 614.0, 537.0),
+        "DLOG 1019"
+    );
+    let frame = game.frame();
+    let quads = quads(&frame);
+    let background = Rect {
+        x: 205.0,
+        y: 115.0,
+        w: 7.0,
+        h: 6.0,
+    };
+    let graphic = Rect {
+        x: 212.0,
+        y: 121.0,
+        w: 600.0,
+        h: 400.0,
+    };
+    assert!(quads.contains(&background), "PICT 8507: {quads:?}");
+    assert!(quads.contains(&graphic), "PICT 20129 in item 7: {quads:?}");
+    let shown = texts(&frame);
+    assert!(
+        shown.contains(&"Heavy Shuttle".to_owned()),
+        "the Long Name: {shown:?}"
+    );
 }
 
 /// Buys the Heavy Shuttle, selected in the open shipyard, naming it "The

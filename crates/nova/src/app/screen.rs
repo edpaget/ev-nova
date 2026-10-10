@@ -176,7 +176,9 @@ use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::bar::BAR_DIALOG;
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
-use nova_view::spaceport::shipyard::{SHIP_INFO_DIALOG, SHIPYARD_DIALOG};
+use nova_view::spaceport::shipyard::{
+    InfoTemplates, SHIP_INFO_DIALOG, SHIP_PICTURE_INFO_DIALOG, SHIPYARD_DIALOG,
+};
 use nova_view::spaceport::trade::TRADE_DIALOG;
 use nova_view::spaceport::{OutfitterCatalog, ShipyardCatalog};
 use nova_view::system::SystemView;
@@ -1220,11 +1222,15 @@ impl AppScreen {
             spaceport = spaceport.with_outfitter(outfit, quantity, alert, outfitter, art);
         }
         let template_of = |id| template(id).map(|(template, _)| template);
+        let info_templates = || InfoTemplates {
+            plain: template_of(SHIP_INFO_DIALOG),
+            picture: template_of(SHIP_PICTURE_INFO_DIALOG),
+        };
         if let Some(shipyard) = self.flight.as_mut().and_then(FlightView::shipyard) {
             let art: Rc<dyn ShipyardCatalog> = Rc::clone(&self.data) as Rc<dyn ShipyardCatalog>;
             spaceport = spaceport.with_shipyard(
                 template_of(SHIPYARD_DIALOG),
-                template_of(SHIP_INFO_DIALOG),
+                info_templates(),
                 template_of(TEXT_INPUT_DIALOG),
                 shipyard,
                 art,
@@ -1235,7 +1241,7 @@ impl AppScreen {
             spaceport = spaceport.with_bar(
                 template_of(BAR_DIALOG),
                 template_of(SHIPYARD_DIALOG),
-                template_of(SHIP_INFO_DIALOG),
+                info_templates(),
                 art,
                 pilot.escort_count() < MAX_ESCORTS,
             );
