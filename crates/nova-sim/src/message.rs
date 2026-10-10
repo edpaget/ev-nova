@@ -15,6 +15,10 @@ pub enum SimMessage {
     /// A mission failed as its cargo was jettisoned (`_JettisonCargo`
     /// @0x3e114-0x3e182).
     MissionFailed,
+    /// A mission's deadline ran out in flight and failed it, for a
+    /// mission whose `Flags` lacks 0x0400 (`_MissionObjectivesCheck`
+    /// @0x9ebd0-0x9ec53).
+    DeadlineMissed,
     /// Every ton of cargo was jettisoned (`_JettisonCargo` @0x3e354).
     CargoJettisoned,
     /// The cargo but the missions' was jettisoned (`_JettisonCargo`

@@ -423,6 +423,8 @@ pub const NON_MISSION_CARGO_JETTISONED: &str = "Non-mission cargo jettisoned.";
 
 /// `STR#` 2002 #286: a scan found a mission's cargo and failed it.
 pub const MISSION_SCANNED: &str = "Your ship has been scanned - mission failed.";
+/// `STR#` 2002 #285: a mission's deadline ran out in flight and failed it.
+pub const TIME_LIMIT_EXCEEDED: &str = "Time limit exceeded - mission failed.";
 /// `STR#` 2002 #376-#379, a space between each: what follows the
 /// scanner's and the ship's names when a scan finds smuggling.
 pub const SMUGGLING_DETECTED: &str =
@@ -458,6 +460,7 @@ fn sim_message_text(message: SimMessage, session: &Session) -> Option<String> {
         SimMessage::CargoJettisoned => CARGO_JETTISONED,
         SimMessage::NonMissionCargoJettisoned => NON_MISSION_CARGO_JETTISONED,
         SimMessage::MissionScanned => MISSION_SCANNED,
+        SimMessage::DeadlineMissed => TIME_LIMIT_EXCEEDED,
         SimMessage::Smuggling { scanner, fine } => {
             return Some(smuggling_message(
                 session.ship_name(scanner).unwrap_or_default(),
@@ -595,6 +598,7 @@ fn arrival_lead(message: SimMessage) -> Option<&'static str> {
         | SimMessage::CargoJettisoned
         | SimMessage::NonMissionCargoJettisoned
         | SimMessage::MissionScanned
+        | SimMessage::DeadlineMissed
         | SimMessage::Smuggling { .. } => None,
     }
 }
@@ -9919,6 +9923,18 @@ mod tests {
         ] {
             assert_eq!(arrival_lead(message), None, "{message:?}");
         }
+    }
+
+    #[test]
+    fn the_deadline_message_is_str_2002_285() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        assert_eq!(
+            sim_message_text(SimMessage::DeadlineMissed, session).as_deref(),
+            Some(TIME_LIMIT_EXCEEDED)
+        );
+        assert_eq!(arrival_lead(SimMessage::DeadlineMissed), None);
+        assert_eq!(TIME_LIMIT_EXCEEDED, "Time limit exceeded - mission failed.");
     }
 
     /// Inspects the player on its first decision; then it has looked the

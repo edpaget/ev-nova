@@ -62,8 +62,8 @@
 //! the slot; `CompText` before the slot is freed; `FailText` after it is,
 //! its mission tags reading [`UNSET`](text_tags::UNSET); `RefuseText`
 //! with no mission, before `OnRefuse` runs; and an accept or a pickup
-//! refused for want of room for the cargo. The deadline's comm message
-//! is rdm:phase/missions/phase-17-deadline-message-and-flight-info.
+//! refused for want of room for the cargo. A deadline missed in flight
+//! raises [`SimMessage::DeadlineMissed`] unless the mission is hidden.
 
 use super::Session;
 use super::mission_screens::MissionTextKind;
@@ -72,7 +72,9 @@ use crate::catalog::{
 };
 use crate::chance::{Chance, NeverFires};
 use crate::control::{Script, Test};
+use crate::message::SimMessage;
 use crate::mission::active::{AUTO_ABORT_FUEL, AUTO_ABORT_FUEL_TAKEN, AUTO_ABORT_PAYS};
+use crate::mission::screens::HIDDEN;
 use crate::mission::{
     self, AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
     AvailFacts, FailedBy, Offer, PayEffect, Player, Refusal, Room, SLOTS, Stop, Venue, Visit,
@@ -745,8 +747,11 @@ impl Session {
             return;
         }
         let record = self.lifecycle_record(active.mission);
-        // The comm message, `STR#` 2002 #285 unless `Flags` has 0x0400
-        // (@0x9ebd0-0x9ec53): rdm:phase/missions/phase-17-deadline-message-and-flight-info.
+        // The comm message, `STR#` 2002 #285, before the failure, unless
+        // `Flags` has 0x0400 (@0x9ebd0-0x9ec53).
+        if record.flags & HIDDEN == 0 {
+            self.messages.push(SimMessage::DeadlineMissed);
+        }
         self.quick_failure(slot, &record, chance);
     }
 
@@ -2755,6 +2760,39 @@ mod tests {
         assert!(session.control_bit(bit(40)));
         assert_eq!(held(&session), []);
         assert_eq!(session.offers.rolled_at(), None, "forgotten");
+    }
+
+    #[test]
+    fn a_deadline_missed_in_flight_says_so() {
+        let catalog = lifecycle(vec![MissionRecord {
+            time_limit: 1,
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        session.pass_days(1, &mut NeverFires);
+        settle(&mut session, &catalog);
+        assert_eq!(session.take_messages(), [], "docked: nothing yet");
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        assert_eq!(session.take_messages(), [SimMessage::DeadlineMissed]);
+    }
+
+    #[test]
+    fn a_hidden_missions_missed_deadline_says_nothing() {
+        let catalog = lifecycle(vec![MissionRecord {
+            time_limit: 1,
+            flags: crate::mission::screens::HIDDEN,
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        session.pass_days(1, &mut NeverFires);
+        settle(&mut session, &catalog);
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        assert_eq!(held(&session), [], "failed all the same");
+        assert_eq!(session.take_messages(), []);
     }
 
     #[test]
