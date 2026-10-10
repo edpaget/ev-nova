@@ -21,12 +21,21 @@
 //! it is saved.
 
 use super::Session;
-use crate::catalog::{MissionId, StellarId};
+use crate::catalog::{GovtId, MissionId, MissionRecord, MissionShip, StellarId};
 use crate::chance::Chance;
-use crate::control::Script;
-use crate::mission::{self, AvailFacts, Offer, Player, Refusal, Venue, Visit, World, stellars_of};
+use crate::control::{Script, Test};
+use crate::mission::active::{AUTO_ABORT_FUEL, AUTO_ABORT_FUEL_TAKEN, AUTO_ABORT_PAYS};
+use crate::mission::{
+    self, AbortFacts, AbortRefusal, AcceptFacts, AcceptRefusal, ActiveMission, AvailFacts,
+    FailedBy, Offer, PayEffect, Player, Refusal, SLOTS, Stop, Venue, Visit, World, abort_checks,
+    abort_penalty, accept_charge, accept_checks, auto_aborts_at_accept, failure_records, fined,
+    pay_effect, stellars_of, success_records,
+};
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::rules::Verdict;
-use crate::story::{Consumer, EventFilter, StoryEventKind, Subscription, SubscriptionId};
+use crate::story::{
+    Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
+};
 use crate::wares;
 
 /// The offer roll's subscription: the missions' first, before every
@@ -37,17 +46,656 @@ pub const ROLL: SubscriptionId = SubscriptionId {
     hook: 0,
 };
 
+/// The re-offer's subscription: the missions' last, after every slot's
+/// landing hooks, as the original re-offers once after its last slot
+/// (@0xa1b04).
+pub const REOFFER: SubscriptionId = SubscriptionId {
+    consumer: Consumer::Missions,
+    record: SLOTS as i16,
+    hook: 0,
+};
+
+/// A slot's landing hook that marks its destination reached: the cargo
+/// check's place in `_MissionLandCheck` (@0xa1a1b), which missions phase
+/// 5 fills.
+pub const ARRIVAL: u8 = 0;
+/// A slot's landing hook that fails a failed mission at its return
+/// (@0xa1a92).
+pub const FAILURE: u8 = 1;
+/// A slot's landing hook that completes a mission at its return
+/// (@0xa1ace).
+pub const SUCCESS: u8 = 2;
+/// A timed slot's daily deadline check, on `DayPassed`.
+pub const DEADLINE: u8 = 3;
+/// A timed slot's deadline check on `TookOff`, for a deadline that ran
+/// out while docked with no day passing as the ship leaves.
+pub const DEADLINE_TOOK_OFF: u8 = 4;
+
+/// Every hook a slot can register, in order.
+const HOOKS: [u8; 5] = [ARRIVAL, FAILURE, SUCCESS, DEADLINE, DEADLINE_TOOK_OFF];
+
+/// Slot `slot`'s subscription for `hook`.
+#[must_use]
+pub const fn slot_hook(slot: u8, hook: u8) -> SubscriptionId {
+    SubscriptionId {
+        consumer: Consumer::Missions,
+        record: slot as i16,
+        hook,
+    }
+}
+
+/// The mission is not offered on the visit under way: there is no such
+/// offer, or the ship is not docked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("the mission is not offered here")]
+pub struct NotOffered;
+
+/// Why [`Session::accept_mission`] accepted nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum AcceptError {
+    /// It is not offered here.
+    #[error("the mission is not offered here")]
+    NotOffered,
+    /// An accept check refused it.
+    #[error("the mission cannot be accepted: {0:?}")]
+    Refused(AcceptRefusal),
+}
+
+/// Why [`Session::abort_mission`] aborted nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum AbortError {
+    /// The slot holds no mission.
+    #[error("no mission is in that slot")]
+    NotActive,
+    /// An abort check refused it.
+    #[error("the mission cannot be aborted: {0:?}")]
+    Refused(AbortRefusal),
+}
+
+/// The record a mission's lifecycle reads for `id` when the session has
+/// none (a mission saved whose `mïsn` is gone): no script, abortable,
+/// with no reward, no days and no ships.
+fn blank(id: MissionId) -> MissionRecord {
+    MissionRecord {
+        id,
+        avail_stel: -1,
+        avail_loc: -1,
+        avail_record: 0,
+        avail_rating: 0,
+        avail_random: 0,
+        avail_ship_type: 0,
+        avail_bits: Test::default(),
+        require: 0,
+        flags: 0,
+        flags2: 0,
+        travel_stel: -1,
+        return_stel: -1,
+        cargo_type: -1,
+        cargo_qty: 0,
+        pay_val: 0,
+        time_limit: 0,
+        disp_weight: 0,
+        on_accept: Script::default(),
+        on_refuse: Script::default(),
+        on_success: Script::default(),
+        on_failure: Script::default(),
+        on_abort: Script::default(),
+        can_abort: 1,
+        comp_govt: None,
+        comp_reward: 0,
+        date_post_inc: 0,
+        ships: MissionShip { count: 0, goal: -1 },
+    }
+}
+
+/// The days a `DatePostInc` of `days` passes: none for 0 or below.
+fn post_days(days: i16) -> u32 {
+    u32::try_from(days).unwrap_or(0)
+}
+
+/// Whether `stop` is `stellar`: by ID, where the original also counts a
+/// stellar at the same place with the same name (`_StellarsAreIdentical`
+/// @0xab35; rdm:phase/missions/phase-11-stellars-identical-by-place-and-name).
+fn at(stop: Option<Stop>, stellar: StellarId) -> bool {
+    stop.is_some_and(|stop| stop.stellar == stellar)
+}
+
 impl Session {
-    /// Registers the offer roll ([`ROLL`]) on every landing, with a blank
-    /// guard and no script.
+    /// Registers the offer roll ([`ROLL`]) and the re-offer
+    /// ([`REOFFER`]) on every landing, each with a blank guard and no
+    /// script.
     pub(super) fn register_offer_roll(&mut self) {
-        let roll = Subscription::new(
-            ROLL,
-            EventFilter::Any(StoryEventKind::Landed),
-            Script::default(),
-        );
-        let registered = self.register_story(roll);
-        debug_assert!(registered.is_ok(), "a fresh session registers it once");
+        for id in [ROLL, REOFFER] {
+            let landed = Subscription::new(
+                id,
+                EventFilter::Any(StoryEventKind::Landed),
+                Script::default(),
+            );
+            let registered = self.register_story(landed);
+            debug_assert!(registered.is_ok(), "a fresh session registers it once");
+        }
+    }
+
+    /// Registers every active slot's hooks, as a pilot is flown.
+    pub(super) fn register_slots(&mut self) {
+        let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
+        for slot in slots {
+            self.register_slot(slot);
+        }
+    }
+
+    /// Registers `slot`'s hooks: its landing hooks, and, with a deadline,
+    /// its deadline checks, each with a blank guard and no script.
+    fn register_slot(&mut self, slot: u8) {
+        let Some(active) = self.pilot.missions.get(slot) else {
+            return;
+        };
+        let mut hooks = vec![
+            (ARRIVAL, StoryEventKind::Landed),
+            (FAILURE, StoryEventKind::Landed),
+            (SUCCESS, StoryEventKind::Landed),
+        ];
+        if active.days_left.is_some() {
+            hooks.push((DEADLINE, StoryEventKind::DayPassed));
+            hooks.push((DEADLINE_TOOK_OFF, StoryEventKind::TookOff));
+        }
+        for (hook, kind) in hooks {
+            let subscription = Subscription::new(
+                slot_hook(slot, hook),
+                EventFilter::Any(kind),
+                Script::default(),
+            );
+            let registered = self.register_story(subscription);
+            debug_assert!(registered.is_ok(), "a slot filled registers once");
+        }
+    }
+
+    /// Frees `slot` and unregisters its hooks, clearing their once-fired
+    /// entries, so a mission accepted into it starts fresh: the mission it
+    /// held, if any.
+    fn free_slot(&mut self, slot: u8) -> Option<ActiveMission> {
+        let freed = self.pilot.missions.free(slot)?;
+        for hook in HOOKS {
+            self.unregister_story(slot_hook(slot, hook));
+        }
+        self.save_due = true;
+        Some(freed)
+    }
+
+    /// The record of `mïsn` `id`, if the session has one.
+    fn mission_record(&self, id: MissionId) -> Option<&MissionRecord> {
+        self.missions.iter().find(|record| record.id == id)
+    }
+
+    /// The record an active mission's lifecycle reads: its own, or a
+    /// blank one when its `mïsn` is gone.
+    fn lifecycle_record(&self, id: MissionId) -> MissionRecord {
+        self.mission_record(id)
+            .cloned()
+            .unwrap_or_else(|| blank(id))
+    }
+
+    /// The offer of `mission` on the visit under way: none in flight.
+    fn offer_of(&self, mission: MissionId) -> Option<Offer> {
+        self.landed?;
+        Venue::ORDER.into_iter().find_map(|venue| {
+            self.offers
+                .at(venue)
+                .iter()
+                .find(|offer| offer.mission == mission)
+                .cloned()
+        })
+    }
+
+    /// The first refusal of the accept checks, drawing on `chance`.
+    fn accept_refusal(&self, chance: &mut dyn Chance) -> Result<(), AcceptRefusal> {
+        let facts = AcceptFacts {
+            active: &self.pilot.missions,
+            rules: &self.rules,
+        };
+        accept_checks().first_refusal(&facts, chance)
+    }
+
+    /// Accepts `mission`, offered on the visit under way, drawing on
+    /// `chance`: the accept checks, then the original's accept
+    /// (`_DoMissionAccept` @0xa1b11; see the [`mission`](crate::mission)
+    /// module's "Active missions"). The slot it went into.
+    ///
+    /// # Errors
+    ///
+    /// [`AcceptError::NotOffered`] in flight or for a mission not offered;
+    /// [`AcceptError::Refused`] when a check refuses, and then nothing
+    /// runs.
+    pub fn accept_mission(
+        &mut self,
+        mission: MissionId,
+        chance: &mut dyn Chance,
+    ) -> Result<u8, AcceptError> {
+        let offer = self.offer_of(mission).ok_or(AcceptError::NotOffered)?;
+        let record = self
+            .mission_record(mission)
+            .cloned()
+            .ok_or(AcceptError::NotOffered)?;
+        self.accept_refusal(chance).map_err(AcceptError::Refused)?;
+        self.start_mission(&record, &offer, chance)
+            .ok_or(AcceptError::Refused(AcceptRefusal::SlotsFull))
+    }
+
+    /// Refuses `mission`, offered on the visit under way, drawing on
+    /// `chance`: its `OnRefuse` runs (`_OfferOneMission` @0xa2f41), then
+    /// its offer is dropped (`_OfferMissionFromPort` @0xa3765-0xa37a1).
+    /// Nothing is forgotten.
+    ///
+    /// # Errors
+    ///
+    /// [`NotOffered`] in flight or for a mission not offered.
+    pub fn refuse_mission(
+        &mut self,
+        mission: MissionId,
+        chance: &mut dyn Chance,
+    ) -> Result<(), NotOffered> {
+        self.offer_of(mission).ok_or(NotOffered)?;
+        let record = self.lifecycle_record(mission);
+        // `RefuseText`: missions phase 3.
+        self.run_script(&record.on_refuse, chance);
+        self.offers.drop_offer(mission);
+        Ok(())
+    }
+
+    /// The player's abort of the mission in `slot`, drawing on `chance`
+    /// (`_DoMissionInfoDialog` @0x9e56d-0x9e5e6): the abort checks, then
+    /// with `Flags` 0x0040 the record with `CompGovt` less 5 ×
+    /// `CompReward`, then the mission ends, running its `OnAbort`.
+    ///
+    /// # Errors
+    ///
+    /// [`AbortError::NotActive`] for a free slot; [`AbortError::Refused`]
+    /// when a check refuses, and then nothing runs.
+    pub fn abort_mission(&mut self, slot: u8, chance: &mut dyn Chance) -> Result<(), AbortError> {
+        let mission = self
+            .pilot
+            .missions
+            .get(slot)
+            .ok_or(AbortError::NotActive)?
+            .mission;
+        let record = self.lifecycle_record(mission);
+        let facts = AbortFacts {
+            mission: &record,
+            rules: &self.rules,
+        };
+        abort_checks()
+            .first_refusal(&facts, chance)
+            .map_err(AbortError::Refused)?;
+        let penalty = abort_penalty(&record, |govt| self.pilot.legal_record(govt));
+        self.set_records(&penalty);
+        self.end_mission(slot, &record, true, chance);
+        Ok(())
+    }
+
+    /// Accepts `record`'s `offer` into the lowest free slot, as the
+    /// original's accept does once its checks pass (`_DoMissionAccept`
+    /// @0xa1c0c-0xa2196): the slot filled and its hooks registered;
+    /// `OnAccept`; the cash a pay below -50000 takes; the destination
+    /// reached when it has none, or, docked, when it is the stellar docked
+    /// at; docked, the mission's offer dropped and the others kept only
+    /// while available; the auto-abort; and its roll made 0. The slot, or
+    /// `None` when every slot is taken.
+    fn start_mission(
+        &mut self,
+        record: &MissionRecord,
+        offer: &Offer,
+        chance: &mut dyn Chance,
+    ) -> Option<u8> {
+        let active = ActiveMission::accepted(record, offer, self.pilot.date);
+        let slot = self.pilot.missions.fill(active)?;
+        self.register_slot(slot);
+        self.save_due = true;
+        // `BriefText`, the cargo loaded and `LoadCargText`: missions phases
+        // 3 to 5.
+        self.run_script(&record.on_accept, chance);
+        self.pilot.cash = accept_charge(offer.pay, self.pilot.cash);
+        let docked = self.landed;
+        if let Some(active) = self.slot_holding(slot, record.id) {
+            active.reached = active
+                .destination
+                .is_none_or(|stop| Some(stop.stellar) == docked);
+        }
+        if docked.is_some() {
+            self.offers.drop_offer(record.id);
+            self.refilter_offers();
+        }
+        let aborts = self
+            .pilot
+            .missions
+            .get(slot)
+            .filter(|active| active.mission == record.id)
+            .is_some_and(|active| auto_aborts_at_accept(record, active, docked.is_some()));
+        if aborts {
+            self.auto_abort(slot, record, chance);
+        }
+        self.offers.set_roll(record.id, 0);
+        Some(slot)
+    }
+
+    /// The mission in `slot`, to change, if it is `mission`.
+    fn slot_holding(&mut self, slot: u8, mission: MissionId) -> Option<&mut ActiveMission> {
+        self.save_due = true;
+        self.pilot
+            .missions
+            .get_mut(slot)
+            .filter(|active| active.mission == mission)
+    }
+
+    /// Keeps only the offers still available at the stellar docked at
+    /// ([`Offers::refilter`](mission::Offers::refilter)).
+    fn refilter_offers(&mut self) {
+        let Some(stellar) = self.landed else {
+            return;
+        };
+        let mut offers = std::mem::take(&mut self.offers);
+        self.at_visit(stellar, |visit| offers.refilter(&self.missions, visit));
+        self.offers = offers;
+    }
+
+    /// Ends the mission `record` in `slot` as `_AbortMission` (@0x99a92)
+    /// does, drawing on `chance`: its ships leave (mission-ships phase 2);
+    /// its `OnAbort` runs when `on_abort` says; the slot is freed and its
+    /// hooks unregistered; and the offers' stellar is forgotten. Nothing
+    /// when the slot holds another mission, or is ending already, so an
+    /// `A` of the mission inside its own `OnAbort` does not end it twice.
+    fn end_mission(
+        &mut self,
+        slot: u8,
+        record: &MissionRecord,
+        on_abort: bool,
+        chance: &mut dyn Chance,
+    ) {
+        if !self.pilot.missions.holds(slot, record.id) || !self.ending.insert(slot) {
+            return;
+        }
+        if on_abort {
+            self.run_script(&record.on_abort, chance);
+        }
+        self.ending.remove(&slot);
+        self.close_slot(slot, record.id);
+    }
+
+    /// Frees `slot` if it still holds `mission`, and forgets the offers'
+    /// stellar (@0x99bb4-0x99bcf).
+    fn close_slot(&mut self, slot: u8, mission: MissionId) {
+        if self.pilot.missions.holds(slot, mission) {
+            self.free_slot(slot);
+        }
+        self.forget_offers();
+    }
+
+    /// Aborts the mission `record` in `slot` at once, as an accept that
+    /// leaves it nothing to do does (`_AutoAbortMission` @0x99bdc),
+    /// drawing on `chance`: its `OnAbort`; its `DatePostInc` days through
+    /// the daily step; with `Flags` 0x0008, a jump's fuel taken; with
+    /// `Flags2` 0x0002, its pay; then the slot freed and the offers'
+    /// stellar forgotten, with no second `OnAbort`.
+    fn auto_abort(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
+        let Some(pay) = self.pilot.missions.get(slot).map(|active| active.pay) else {
+            return;
+        };
+        if !self.ending.insert(slot) {
+            return;
+        }
+        self.run_script(&record.on_abort, chance);
+        self.pass_days(post_days(record.date_post_inc), chance);
+        if record.flags & AUTO_ABORT_FUEL != 0 {
+            self.pilot.reserves.fuel.now -= AUTO_ABORT_FUEL_TAKEN;
+        }
+        if record.flags2 & AUTO_ABORT_PAYS != 0 {
+            self.apply_pay(pay);
+        }
+        self.ending.remove(&slot);
+        self.close_slot(slot, record.id);
+    }
+
+    /// Applies a mission's pay (`_ApplyMissionPay` @0x98326; see
+    /// [`pay_effect`]).
+    fn apply_pay(&mut self, pay: i64) {
+        match pay_effect(pay) {
+            PayEffect::Nothing => return,
+            PayEffect::Cash(credits) => self.pilot.cash = self.pilot.cash.saturating_add(credits),
+            PayEffect::Clean { of, among } => {
+                let cleaned: Vec<GovtId> = self
+                    .pilot
+                    .legal_records()
+                    .filter(|&(govt, record)| record < 0 && among.takes(govt, of, &self.govts))
+                    .map(|(govt, _)| govt)
+                    .collect();
+                for govt in cleaned {
+                    self.pilot.set_legal_record(govt, 0);
+                }
+            }
+            PayEffect::Fine(percent) => self.pilot.cash = fined(self.pilot.cash, percent),
+        }
+        self.save_due = true;
+    }
+
+    /// Sets each government's record as `records` says.
+    fn set_records(&mut self, records: &[(GovtId, i16)]) {
+        for &(govt, record) in records {
+            self.pilot.set_legal_record(govt, record);
+            self.save_due = true;
+        }
+    }
+
+    /// A slot's own effect on `event`, routed by its hook (see the
+    /// [`story`](crate::story) module's "Mission lifecycle"), drawing on
+    /// `chance`.
+    pub(super) fn mission_effect(
+        &mut self,
+        id: SubscriptionId,
+        event: &StoryEvent,
+        chance: &mut dyn Chance,
+    ) {
+        let Some(slot) = u8::try_from(id.record)
+            .ok()
+            .filter(|&slot| usize::from(slot) < SLOTS)
+        else {
+            return;
+        };
+        match (id.hook, *event) {
+            (ARRIVAL, StoryEvent::Landed { stellar }) => self.mission_arrival(slot, stellar),
+            (FAILURE, StoryEvent::Landed { stellar }) => {
+                self.mission_failure_at(slot, stellar, chance);
+            }
+            (SUCCESS, StoryEvent::Landed { stellar }) => {
+                self.mission_success_at(slot, stellar, chance);
+            }
+            (DEADLINE, StoryEvent::DayPassed { .. })
+            | (DEADLINE_TOOK_OFF, StoryEvent::TookOff { .. }) => {
+                self.mission_deadline(slot, chance);
+            }
+            _ => {}
+        }
+    }
+
+    /// Landing on `stellar` marks the destination of the mission in
+    /// `slot` reached (`_MissionLandCargoCheck` @0x9edfd-0x9ef20; with
+    /// `PickupMode` 1, missions phase 5 marks it only once the pickup
+    /// succeeds).
+    fn mission_arrival(&mut self, slot: u8, stellar: StellarId) {
+        if let Some(active) = self.pilot.missions.get_mut(slot)
+            && at(active.destination, stellar)
+            && !active.reached
+        {
+            active.reached = true;
+            self.save_due = true;
+        }
+    }
+
+    /// Landing on `stellar`, the return of the failed mission in `slot`,
+    /// fails it (`_DoMissionFailure` @0xa0285), drawing on `chance`: its
+    /// `OnFailure`, the record with `CompGovt` less half `CompReward`,
+    /// then the slot freed and the offers' stellar forgotten, no
+    /// `OnAbort` run. A mission failed by its deadline ran `OnFailure`
+    /// already: by [`RuleKey::RepeatMissionFailure`]'s engine reading it
+    /// runs again; by the other, not.
+    fn mission_failure_at(&mut self, slot: u8, stellar: StellarId, chance: &mut dyn Chance) {
+        let Some(active) = self.pilot.missions.get(slot) else {
+            return;
+        };
+        let Some(failed) = active.failed.filter(|_| at(active.return_to, stellar)) else {
+            return;
+        };
+        let record = self.lifecycle_record(active.mission);
+        let repeats = self.rules.source_for(RuleKey::RepeatMissionFailure) == RuleSource::Engine;
+        if failed == FailedBy::Operator || repeats {
+            self.run_script(&record.on_failure, chance);
+        }
+        let changes = failure_records(&record, |govt| self.pilot.legal_record(govt));
+        self.set_records(&changes);
+        // `FailText`: missions phase 3.
+        self.end_mission(slot, &record, false, chance);
+        self.forget_offers();
+    }
+
+    /// Landing on `stellar`, the return of the mission in `slot`,
+    /// completes it once its destination is reached and its goals are
+    /// met, and it has not failed (`_MissionLandCheck` @0xa1a4e-0xa1ace,
+    /// `_DoMissionSuccess` @0xa03fc), drawing on `chance`: the slot freed,
+    /// then its `OnSuccess`, its `DatePostInc` days, the legal records
+    /// ([`success_records`]), its pay, the offers' stellar forgotten, and
+    /// a re-offer due. Its destination is reached here when it is the
+    /// return, or there is none.
+    fn mission_success_at(&mut self, slot: u8, stellar: StellarId, chance: &mut dyn Chance) {
+        let Some(active) = self.pilot.missions.get_mut(slot) else {
+            return;
+        };
+        if !at(active.return_to, stellar) {
+            return;
+        }
+        if active
+            .destination
+            .is_none_or(|stop| at(active.return_to, stop.stellar))
+            && !active.reached
+        {
+            active.reached = true;
+            self.save_due = true;
+        }
+        if !active.reached || !active.goals_met || active.failed.is_some() {
+            return;
+        }
+        let mission = active.mission;
+        let record = self.lifecycle_record(mission);
+        let Some(done) = self.free_slot(slot) else {
+            return;
+        };
+        // `CompText`: missions phase 3.
+        self.run_script(&record.on_success, chance);
+        self.pass_days(post_days(record.date_post_inc), chance);
+        let changes = success_records(&record, &self.govts, |govt| self.pilot.legal_record(govt));
+        self.set_records(&changes);
+        self.apply_pay(done.pay);
+        self.forget_offers();
+        self.reoffer_due = true;
+    }
+
+    /// The deadline check of the mission in `slot` (`_MissionObjectivesCheck`
+    /// @0x9eba5-0x9ec61), drawing on `chance`: with none of its days left,
+    /// not failed already, and the ship not docked, it fails at once
+    /// (`_QuickMissionFailure` @0x99d1b): its `OnFailure`, then marked
+    /// failed by its deadline; an abortable one ends, its slot freed, no
+    /// `OnAbort` run; and the offers' stellar is forgotten either way. An
+    /// unabortable one stays active and failed until its return.
+    fn mission_deadline(&mut self, slot: u8, chance: &mut dyn Chance) {
+        let Some(active) = self.pilot.missions.get(slot) else {
+            return;
+        };
+        if active.failed.is_some() || active.days_left != Some(0) || self.landed.is_some() {
+            return;
+        }
+        let record = self.lifecycle_record(active.mission);
+        // The comm message, `STR#` 2002 0x11d unless `Flags` has 0x0400:
+        // missions phase 3.
+        self.run_script(&record.on_failure, chance);
+        if let Some(active) = self.slot_holding(slot, record.id) {
+            active.failed = Some(FailedBy::Deadline);
+        }
+        if record.can_abort != 0 {
+            self.end_mission(slot, &record, false, chance);
+        }
+        self.forget_offers();
+    }
+
+    /// Re-offers the missions at the stellar docked at, the table kept,
+    /// once after a landing's last slot when a mission succeeded
+    /// (`_RandomizeMissionData` @0xa1b04), drawing on `chance`.
+    pub(super) fn reoffer_missions(&mut self, chance: &mut dyn Chance) {
+        if !std::mem::take(&mut self.reoffer_due) {
+            return;
+        }
+        let Some(stellar) = self.landed else {
+            return;
+        };
+        let mut offers = std::mem::take(&mut self.offers);
+        self.at_visit(stellar, |visit| {
+            offers.reoffer(&self.missions, visit, chance);
+        });
+        self.offers = offers;
+    }
+
+    /// `A`: ends every slot holding `mission`, running its `OnAbort`,
+    /// whatever its `CanAbort` (`_EvalSetExp` @0x152f3-0x1534c), drawing
+    /// on `chance`.
+    pub(super) fn script_abort(&mut self, mission: MissionId, chance: &mut dyn Chance) {
+        let record = self.lifecycle_record(mission);
+        for slot in self.pilot.missions.holding(mission) {
+            self.end_mission(slot, &record, true, chance);
+        }
+    }
+
+    /// `F`: marks every slot holding `mission` failed, running nothing
+    /// (`_EvalSetExp` @0x15353-0x153b2): it fails at its return. One
+    /// failed by its deadline already stays so.
+    pub(super) fn script_fail(&mut self, mission: MissionId) {
+        for slot in self.pilot.missions.holding(mission) {
+            if let Some(active) = self.slot_holding(slot, mission) {
+                active.failed.get_or_insert(FailedBy::Operator);
+            }
+        }
+    }
+
+    /// `S`: accepts `mission` at once, drawing on `chance`
+    /// (`_EvalSetExp` @0x153b9-0x15418): resolved from the stellar docked
+    /// at, or in flight from the first stellar the player's system lists
+    /// (128 with none), then accepted as the player's accept is once its
+    /// checks pass, without asking whether it is available. A mission
+    /// active already takes another slot, unless
+    /// [`RuleKey::StartActiveMission`] reads otherwise. Nothing for a
+    /// mission the session has no record of, or with every slot taken.
+    pub(super) fn script_start(&mut self, mission: MissionId, chance: &mut dyn Chance) {
+        let Some(record) = self.mission_record(mission).cloned() else {
+            return;
+        };
+        let restarts = self.rules.source_for(RuleKey::StartActiveMission) == RuleSource::Engine;
+        if !restarts && !self.pilot.missions.holding(mission).is_empty() {
+            return;
+        }
+        if self.accept_refusal(chance).is_err() {
+            return;
+        }
+        let origin = self
+            .landed
+            .or_else(|| self.sites.first().map(|site| site.id))
+            .unwrap_or(StellarId(128));
+        let today = self.pilot.date;
+        let offer = self.in_world(|world| {
+            mission::resolve(
+                &record,
+                Venue::of(record.avail_loc),
+                origin,
+                world,
+                today,
+                chance,
+            )
+        });
+        self.start_mission(&record, &offer, chance);
     }
 
     /// Rolls the offers at `stellar`, the stellar landed on, drawing on
@@ -121,12 +769,21 @@ impl Session {
         own - (held - escorts).max(0)
     }
 
+    /// `f` of the galaxy a mission's stellars are chosen from.
+    fn in_world<T>(&self, f: impl FnOnce(&World) -> T) -> T {
+        let stellars = stellars_of(&self.galaxy, &self.listed_stellars);
+        f(&World {
+            stellars: &stellars,
+            map: self.galaxy.map(),
+            govts: &self.govts,
+        })
+    }
+
     /// `f` of the visit to `stellar`, one of the stellars shown: `None`
     /// when it is not shown.
     fn at_visit<T>(&self, stellar: StellarId, f: impl FnOnce(&Visit) -> T) -> Option<T> {
         let docked = *self.sites.iter().find(|site| site.id == stellar)?;
         let map = self.galaxy.map();
-        let stellars = stellars_of(&self.galaxy, &self.listed_stellars);
         let ship = self.ship_record(self.pilot.ship);
         let player = Player {
             record: map
@@ -147,21 +804,18 @@ impl Session {
             cash: self.pilot.cash,
         };
         let active = self.pilot.missions.missions();
-        let visit = Visit {
-            docked,
-            system: self.shown,
-            world: World {
-                stellars: &stellars,
-                map,
-                govts: &self.govts,
-            },
-            player,
-            active: &active,
-            gate: self.gate(),
-            rules: &self.rules,
-            today: self.pilot.date,
-        };
-        Some(f(&visit))
+        Some(self.in_world(|&world| {
+            f(&Visit {
+                docked,
+                system: self.shown,
+                world,
+                player,
+                active: &active,
+                gate: self.gate(),
+                rules: &self.rules,
+                today: self.pilot.date,
+            })
+        }))
     }
 
     /// The visit's roll table.
@@ -615,5 +1269,1087 @@ mod tests {
                 "{id}: {why}"
             );
         }
+    }
+
+    // The active missions' lifecycle.
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use crate::catalog::{GovtId, GovtRecord};
+    use crate::control::{Bit, SetOp};
+    use crate::date::GameDate;
+    use crate::mission::{AbortRefusal, ActiveMissions};
+    use crate::rulebook::Rulebook;
+    use crate::session::control::SetOpObserver;
+
+    const FED: GovtId = GovtId(128);
+    const CIVVIES: GovtId = GovtId(129);
+    const PIRATES: GovtId = GovtId(130);
+    const NEUTRAL: GovtId = GovtId(131);
+
+    fn bit(n: u16) -> Bit {
+        Bit::new(n).expect("in range")
+    }
+
+    /// The date `days` days after `date`.
+    fn after(date: GameDate, days: usize) -> GameDate {
+        std::iter::successors(Some(date), |date| Some(date.next_day()))
+            .nth(days)
+            .expect("a date")
+    }
+
+    /// [`catalog`] with 131 linked back to 130, the Federation (class 1,
+    /// allied with 13, at war with 9), the Civvies (class 13), the pirates
+    /// (class 9) and a neutral (class 4), and `missions`.
+    fn lifecycle(missions: Vec<MissionRecord>) -> FakePilotCatalog {
+        let mut catalog = catalog();
+        catalog.star_map[1].links.push(SystemId(130));
+        catalog.govts = vec![
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                allies: [13, -1, -1, -1],
+                enemies: [9, -1, -1, -1],
+                ..crate::testkit::govt(128)
+            },
+            GovtRecord {
+                classes: [13, -1, -1, -1],
+                ..crate::testkit::govt(129)
+            },
+            GovtRecord {
+                classes: [9, -1, -1, -1],
+                ..crate::testkit::govt(130)
+            },
+            GovtRecord {
+                classes: [4, -1, -1, -1],
+                ..crate::testkit::govt(131)
+            },
+        ];
+        catalog.missions = missions;
+        catalog
+    }
+
+    /// The `X` operators each script runs, by the system each names: the
+    /// marks a test's scripts leave, in the order run.
+    #[derive(Debug, Default)]
+    struct Marks(RefCell<Vec<i16>>);
+
+    impl SetOpObserver for Marks {
+        fn saw(&self, op: &SetOp, _session: &Session) {
+            if let SetOp::Explore(system) = op {
+                self.0.borrow_mut().push(system.0);
+            }
+        }
+    }
+
+    impl Marks {
+        fn taken(&self) -> Vec<i16> {
+            std::mem::take(&mut *self.0.borrow_mut())
+        }
+    }
+
+    /// A session of `catalog` under `rules`, its marks watched, landed on
+    /// 128 and settled, every roll 1.
+    fn watched(catalog: &FakePilotCatalog, rules: Rulebook) -> (Session, Rc<Marks>) {
+        let marks = Rc::new(Marks::default());
+        let mut session = Session::start(catalog)
+            .expect("starts")
+            .with_rules(rules)
+            .with_set_op_observer(marks.clone());
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, catalog);
+        (session, marks)
+    }
+
+    fn settle(session: &mut Session, catalog: &FakePilotCatalog) {
+        let _ = session.settle_script(catalog, &mut NeverFires);
+    }
+
+    /// Takes `session` off, settles, puts it at rest over `stellar` (one
+    /// of 130's), lands there and settles.
+    fn land_on(session: &mut Session, catalog: &FakePilotCatalog, stellar: i16) {
+        if session.landed().is_some() {
+            session.take_off(&mut NeverFires).expect("takes off");
+            settle(session, catalog);
+        }
+        let site = *session
+            .sites
+            .iter()
+            .find(|site| site.id == StellarId(stellar))
+            .expect("shown");
+        session.player.position = site.position;
+        session.player.velocity = Vec2::ZERO;
+        assert_eq!(land_now(session), Ok(StellarId(stellar)));
+        settle(session, catalog);
+    }
+
+    fn accept(session: &mut Session, id: i16) -> u8 {
+        session
+            .accept_mission(MissionId(id), &mut NeverFires)
+            .expect("accepted")
+    }
+
+    fn held(session: &Session) -> Vec<(u8, i16)> {
+        session
+            .pilot()
+            .missions()
+            .iter()
+            .map(|(slot, active)| (slot, active.mission.0))
+            .collect()
+    }
+
+    fn run(session: &mut Session, script: &str) {
+        session.run_set(&SetExpr::parse(script).expect("parses"), &mut NeverFires);
+    }
+
+    /// Mission `id`, offered at 128, to 129 and back to 129. (Offered
+    /// anywhere, a mission to a stellar of the player's system would not
+    /// be.)
+    fn to_129(id: i16) -> MissionRecord {
+        MissionRecord {
+            avail_stel: 128,
+            travel_stel: 129,
+            ..mission(id)
+        }
+    }
+
+    /// Mission `id`, offered at 128, with no destination, completed at
+    /// 128.
+    fn back_to_128(id: i16) -> MissionRecord {
+        MissionRecord {
+            avail_stel: 128,
+            return_stel: 128,
+            ..mission(id)
+        }
+    }
+
+    #[test]
+    fn accepting_runs_on_accept_and_holds_the_offer_with_a_deadline_from_the_accept() {
+        let catalog = lifecycle(vec![MissionRecord {
+            time_limit: 3,
+            pay_val: 900,
+            on_accept: Script::parse("b20"),
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        let offer = session.mission_offers(Venue::Computer)[0].clone();
+        let today = after(session.date(), 2);
+        session.set_date(today);
+        let _ = session.take_save_due();
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        assert!(session.control_bit(bit(20)));
+        assert_eq!(
+            session.pilot().missions().get(0),
+            Some(&ActiveMission {
+                mission: MissionId(140),
+                destination: offer.destination,
+                return_to: offer.return_to,
+                cargo_type: None,
+                cargo_tons: 0,
+                pay: 900,
+                days_left: Some(3),
+                deadline: Some(after(today, 3)),
+                reached: false,
+                goals_met: true,
+                failed: None,
+            })
+        );
+        assert_eq!(
+            offer.destination.map(|stop| stop.stellar),
+            Some(StellarId(129))
+        );
+        assert!(
+            session.mission_offers(Venue::Computer).is_empty(),
+            "dropped"
+        );
+        assert!(session.take_save_due());
+        assert_eq!(
+            session.offers.rolled_at(),
+            Some(StellarId(128)),
+            "nothing forgotten"
+        );
+    }
+
+    #[test]
+    fn an_accept_with_every_slot_taken_is_refused_and_runs_nothing() {
+        let catalog = lifecycle(vec![MissionRecord {
+            on_accept: Script::parse("b20"),
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        let offer = session.mission_offers(Venue::Computer)[0].clone();
+        for _ in 0..SLOTS {
+            let active = ActiveMission::accepted(&mission(141), &offer, session.date());
+            session.pilot.missions.fill(active);
+        }
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Err(AcceptError::Refused(AcceptRefusal::SlotsFull))
+        );
+        assert!(!session.control_bit(bit(20)));
+        assert_eq!(session.mission_offers(Venue::Computer), [offer]);
+    }
+
+    #[test]
+    fn only_a_mission_offered_while_docked_is_accepted_or_refused() {
+        let catalog = lifecycle(vec![to_129(140)]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        assert_eq!(
+            session.accept_mission(MissionId(141), &mut NeverFires),
+            Err(AcceptError::NotOffered)
+        );
+        assert_eq!(
+            session.refuse_mission(MissionId(141), &mut NeverFires),
+            Err(NotOffered)
+        );
+        session.take_off(&mut NeverFires).expect("takes off");
+        assert_eq!(session.mission_offers(Venue::Computer).len(), 1, "kept");
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Err(AcceptError::NotOffered),
+            "in flight"
+        );
+        assert_eq!(
+            session.refuse_mission(MissionId(140), &mut NeverFires),
+            Err(NotOffered)
+        );
+        assert_eq!(held(&session), []);
+    }
+
+    #[test]
+    fn an_accept_takes_the_lowest_slot_an_abort_freed() {
+        let catalog = lifecycle(vec![to_129(140), to_129(141), to_129(142)]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        assert_eq!(accept(&mut session, 140), 0);
+        assert_eq!(accept(&mut session, 141), 1);
+        assert_eq!(session.abort_mission(0, &mut NeverFires), Ok(()));
+        assert_eq!(accept(&mut session, 142), 0);
+        assert_eq!(held(&session), [(0, 142), (1, 141)]);
+    }
+
+    #[test]
+    fn an_accept_drops_the_offers_its_on_accept_makes_unavailable() {
+        let catalog = lifecycle(vec![
+            MissionRecord {
+                on_accept: Script::parse("b21"),
+                ..to_129(140)
+            },
+            MissionRecord {
+                avail_bits: Test::parse("!b21"),
+                ..to_129(141)
+            },
+            MissionRecord {
+                avail_loc: 1,
+                ..to_129(142)
+            },
+        ]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        assert_eq!(ids(session.mission_offers(Venue::Computer)), [140, 141]);
+        let kept = session.mission_offers(Venue::Outside).to_vec();
+        accept(&mut session, 140);
+        assert!(session.mission_offers(Venue::Computer).is_empty());
+        assert_eq!(session.mission_offers(Venue::Outside), kept, "as rolled");
+    }
+
+    #[test]
+    fn an_accepted_missions_roll_is_0() {
+        let catalog = lifecycle(vec![to_129(140), to_129(141)]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        assert_eq!(session.offer_rolls().roll(MissionId(140)), Some(0));
+        assert_eq!(session.offer_rolls().roll(MissionId(141)), Some(1));
+    }
+
+    #[test]
+    fn a_pay_below_minus_50000_takes_its_cash_at_accept() {
+        let catalog = lifecycle(vec![MissionRecord {
+            pay_val: -50_100,
+            ..to_129(140)
+        }]);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.pilot.cash = 1000;
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, &catalog);
+        accept(&mut session, 140);
+        assert_eq!(session.pilot().cash(), 900);
+    }
+
+    #[test]
+    fn an_on_accept_that_aborts_its_own_mission_leaves_the_slot_free_aborted_once() {
+        let catalog = lifecycle(vec![MissionRecord {
+            flags: 0x0001,
+            on_accept: Script::parse("A719"),
+            on_abort: Script::parse("X200"),
+            ..mission(719)
+        }]);
+        let (mut session, marks) = watched(&catalog, Rulebook::default());
+        assert_eq!(accept(&mut session, 719), 0);
+        assert_eq!(held(&session), []);
+        assert_eq!(marks.taken(), [200], "the A's OnAbort, and no auto-abort");
+        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+    }
+
+    #[test]
+    fn refusing_runs_on_refuse_and_drops_the_offer_forgetting_nothing() {
+        let catalog = lifecycle(vec![
+            MissionRecord {
+                on_refuse: Script::parse("b22"),
+                ..to_129(140)
+            },
+            to_129(141),
+        ]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        assert_eq!(
+            session.refuse_mission(MissionId(140), &mut NeverFires),
+            Ok(())
+        );
+        assert!(session.control_bit(bit(22)));
+        assert_eq!(ids(session.mission_offers(Venue::Computer)), [141]);
+        assert_eq!(session.offers.rolled_at(), Some(StellarId(128)));
+        assert_eq!(held(&session), []);
+    }
+
+    #[test]
+    fn aborting_runs_on_abort_and_frees_the_slot() {
+        let catalog = lifecycle(vec![MissionRecord {
+            on_abort: Script::parse("b23"),
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        let _ = session.take_save_due();
+        assert_eq!(session.abort_mission(0, &mut NeverFires), Ok(()));
+        assert!(session.control_bit(bit(23)));
+        assert_eq!(held(&session), []);
+        assert!(session.take_save_due());
+        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+        assert_eq!(
+            session.abort_mission(0, &mut NeverFires),
+            Err(AbortError::NotActive)
+        );
+        assert_eq!(
+            session.abort_mission(16, &mut NeverFires),
+            Err(AbortError::NotActive)
+        );
+    }
+
+    #[test]
+    fn an_a_of_the_mission_inside_its_own_on_abort_ends_it_once() {
+        let catalog = lifecycle(vec![
+            MissionRecord {
+                on_abort: Script::parse("A140 X203"),
+                ..to_129(140)
+            },
+            MissionRecord {
+                on_abort: Script::parse("A141 X204"),
+                ..MissionRecord {
+                    id: MissionId(141),
+                    ..auto_aborting()
+                }
+            },
+        ]);
+        let (mut session, marks) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        assert_eq!(session.abort_mission(0, &mut NeverFires), Ok(()));
+        assert_eq!(marks.taken(), [203]);
+        assert_eq!(accept(&mut session, 141), 0);
+        assert_eq!(marks.taken(), [200, 204], "auto-aborted once");
+        assert_eq!(held(&session), []);
+    }
+
+    #[test]
+    fn can_abort_0_refuses_the_abort_and_runs_nothing() {
+        let catalog = lifecycle(vec![MissionRecord {
+            can_abort: 0,
+            on_abort: Script::parse("b23"),
+            comp_govt: Some(FED),
+            comp_reward: 5,
+            flags: 0x0040,
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        assert_eq!(
+            session.abort_mission(0, &mut NeverFires),
+            Err(AbortError::Refused(AbortRefusal::CannotAbort))
+        );
+        assert!(!session.control_bit(bit(23)));
+        assert_eq!(held(&session), [(0, 140)]);
+        assert_eq!(session.pilot().legal_record(FED), 0, "no penalty");
+        assert_eq!(session.offers.rolled_at(), Some(StellarId(128)));
+    }
+
+    #[test]
+    fn an_abort_with_flag_0x0040_costs_five_times_the_reward() {
+        let rewarding = |id, flags| MissionRecord {
+            comp_govt: Some(FED),
+            comp_reward: 5,
+            flags,
+            ..to_129(id)
+        };
+        let catalog = lifecycle(vec![rewarding(140, 0x0040), rewarding(141, 0x0002)]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        session.pilot.set_legal_record(FED, 10);
+        accept(&mut session, 140);
+        accept(&mut session, 141);
+        assert_eq!(session.abort_mission(1, &mut NeverFires), Ok(()));
+        assert_eq!(session.pilot().legal_record(FED), 10, "no 0x0040");
+        assert_eq!(session.abort_mission(0, &mut NeverFires), Ok(()));
+        assert_eq!(session.pilot().legal_record(FED), -15);
+    }
+
+    #[test]
+    fn after_an_abort_landing_again_on_the_same_stellar_rolls_afresh() {
+        let catalog = lifecycle(vec![to_129(140)]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        session.abort_mission(0, &mut NeverFires).expect("aborts");
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        let mut chance = Draws::of(&[]);
+        let _ = session.settle_script(&catalog, &mut chance);
+        assert_eq!(chance.asked, table_then(&[]), "the whole table");
+        assert_eq!(ids(session.mission_offers(Venue::Computer)), [140]);
+    }
+
+    /// Mission 140, auto-aborting with nothing to do: no destination,
+    /// return or ships, `DatePostInc` 2; its `OnAccept` marks 200 and its
+    /// `OnAbort` 201.
+    fn auto_aborting() -> MissionRecord {
+        MissionRecord {
+            flags: 0x0001,
+            date_post_inc: 2,
+            on_accept: Script::parse("X200"),
+            on_abort: Script::parse("X201"),
+            ..mission(140)
+        }
+    }
+
+    #[test]
+    fn accepting_an_auto_aborted_mission_aborts_it_at_once_passing_its_days() {
+        let catalog = lifecycle(vec![auto_aborting()]);
+        let (mut session, marks) = watched(&catalog, Rulebook::default());
+        let today = session.date();
+        session.drop_raised();
+        assert_eq!(accept(&mut session, 140), 0);
+        assert_eq!(marks.taken(), [200, 201], "OnAccept, then OnAbort once");
+        assert_eq!(session.date(), after(today, 2));
+        let days = session
+            .story_raised()
+            .into_iter()
+            .filter(|event| matches!(event, StoryEvent::DayPassed { .. }))
+            .count();
+        assert_eq!(days, 2);
+        assert_eq!(held(&session), []);
+        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+        assert_eq!(session.offer_rolls().roll(MissionId(140)), Some(0));
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // 300 less 100, exact
+    fn an_auto_abort_with_flag_0x0008_takes_a_jumps_fuel() {
+        let catalog = lifecycle(vec![MissionRecord {
+            flags: 0x0009,
+            ..auto_aborting()
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        let fuel = session.pilot().reserves().fuel.now;
+        accept(&mut session, 140);
+        assert_eq!(session.pilot().reserves().fuel.now, fuel - 100.0);
+    }
+
+    #[test]
+    fn an_auto_abort_with_flags2_0x0002_applies_its_pay() {
+        let paying = |id, flags2| MissionRecord {
+            flags2,
+            pay_val: 500,
+            ..MissionRecord {
+                id: MissionId(id),
+                ..auto_aborting()
+            }
+        };
+        let catalog = lifecycle(vec![paying(140, 0x0002), paying(141, 0x0004)]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        let cash = session.pilot().cash();
+        accept(&mut session, 141);
+        assert_eq!(session.pilot().cash(), cash, "no 0x0002");
+        accept(&mut session, 140);
+        assert_eq!(session.pilot().cash(), cash + 500);
+    }
+
+    #[test]
+    fn an_auto_aborted_mission_with_a_destination_or_a_ship_stays_active() {
+        let catalog = lifecycle(vec![
+            MissionRecord {
+                avail_stel: 128,
+                travel_stel: 129,
+                ..auto_aborting()
+            },
+            MissionRecord {
+                id: MissionId(141),
+                ships: crate::catalog::MissionShip { count: 1, goal: -1 },
+                ..auto_aborting()
+            },
+        ]);
+        let (mut session, marks) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        accept(&mut session, 141);
+        assert_eq!(held(&session), [(0, 140), (1, 141)]);
+        assert_eq!(marks.taken(), [200, 200], "no OnAbort");
+    }
+
+    #[test]
+    fn a_completion_pays_rewards_passes_its_days_and_re_offers_at_that_stellar() {
+        let catalog = lifecycle(vec![
+            MissionRecord {
+                pay_val: 900,
+                comp_govt: Some(FED),
+                comp_reward: 4,
+                date_post_inc: 2,
+                on_success: Script::parse("b30"),
+                ..to_129(140)
+            },
+            MissionRecord {
+                avail_bits: Test::parse("b30"),
+                ..mission(150)
+            },
+        ]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        for govt in [FED, CIVVIES, PIRATES, NEUTRAL] {
+            session.pilot.set_legal_record(govt, 10);
+        }
+        let cash = session.pilot().cash();
+        accept(&mut session, 140);
+        assert!(session.mission_offers(Venue::Computer).is_empty());
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        let landed = session.date();
+        land_on(&mut session, &catalog, 129);
+        assert!(session.control_bit(bit(30)));
+        assert_eq!(held(&session), []);
+        assert_eq!(session.pilot().cash(), cash + 900);
+        let records: Vec<i16> = [FED, CIVVIES, PIRATES, NEUTRAL]
+            .into_iter()
+            .map(|govt| session.pilot().legal_record(govt))
+            .collect();
+        assert_eq!(records, [14, 12, 8, 10], "the govt, its ally, its enemy");
+        assert_eq!(session.date(), after(landed, 2));
+        assert_eq!(
+            ids(session.mission_offers(Venue::Computer)),
+            [150],
+            "re-offered with OnSuccess's bit"
+        );
+        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+    }
+
+    #[test]
+    fn missions_settled_on_one_landing_run_in_slot_order_each_failure_before_its_success() {
+        let catalog = lifecycle(vec![
+            MissionRecord {
+                on_failure: Script::parse("X200"),
+                on_success: Script::parse("X210"),
+                ..back_to_128(140)
+            },
+            MissionRecord {
+                on_failure: Script::parse("X201"),
+                on_success: Script::parse("X211"),
+                ..back_to_128(141)
+            },
+            MissionRecord {
+                on_failure: Script::parse("X202"),
+                on_success: Script::parse("X212"),
+                ..back_to_128(142)
+            },
+        ]);
+        let (mut session, marks) = watched(&catalog, Rulebook::default());
+        for id in [140, 141, 142] {
+            accept(&mut session, id);
+        }
+        run(&mut session, "F140 F142");
+        assert_eq!(marks.taken(), Vec::<i16>::new(), "F runs nothing");
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(marks.taken(), [200, 211, 202]);
+        assert_eq!(held(&session), []);
+    }
+
+    #[test]
+    fn a_failure_applies_half_the_reward_and_forgets_the_stellar() {
+        let catalog = lifecycle(vec![MissionRecord {
+            comp_govt: Some(FED),
+            comp_reward: 5,
+            ..back_to_128(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        session.pilot.set_legal_record(FED, 10);
+        accept(&mut session, 140);
+        run(&mut session, "F140");
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(held(&session), []);
+        assert_eq!(session.pilot().legal_record(FED), 8);
+        assert_eq!(session.offers.rolled_at(), None);
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        let mut chance = Draws::of(&[]);
+        let _ = session.settle_script(&catalog, &mut chance);
+        assert_eq!(chance.asked, table_then(&[]), "the whole table");
+    }
+
+    #[test]
+    fn a_mission_with_a_destination_completes_only_once_it_was_reached() {
+        let catalog = lifecycle(vec![MissionRecord {
+            return_stel: 128,
+            on_success: Script::parse("b31"),
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(held(&session), [(0, 140)], "not there yet");
+        land_on(&mut session, &catalog, 129);
+        assert!(session.pilot().missions().get(0).expect("held").reached);
+        assert!(!session.control_bit(bit(31)));
+        land_on(&mut session, &catalog, 128);
+        assert!(session.control_bit(bit(31)));
+        assert_eq!(held(&session), []);
+    }
+
+    #[test]
+    fn a_mission_whose_ship_goal_is_not_met_stays_active_at_its_return() {
+        let catalog = lifecycle(vec![MissionRecord {
+            ships: crate::catalog::MissionShip { count: 1, goal: 0 },
+            ..back_to_128(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(held(&session), [(0, 140)]);
+        assert!(session.pilot().missions().get(0).expect("held").reached);
+    }
+
+    #[test]
+    fn a_day_takes_one_off_each_limit_and_none_below_none() {
+        let catalog = lifecycle(vec![
+            MissionRecord {
+                time_limit: 2,
+                ..to_129(140)
+            },
+            to_129(141),
+        ]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        accept(&mut session, 141);
+        let left = |session: &Session| {
+            session
+                .pilot()
+                .missions()
+                .iter()
+                .map(|(_, active)| active.days_left)
+                .collect::<Vec<_>>()
+        };
+        session.pass_days(1, &mut NeverFires);
+        assert_eq!(left(&session), [Some(1), None]);
+        session.pass_days(2, &mut NeverFires);
+        assert_eq!(left(&session), [Some(0), None]);
+    }
+
+    #[test]
+    fn a_missed_deadline_fails_the_mission_after_the_take_offs_day() {
+        let catalog = lifecycle(vec![MissionRecord {
+            time_limit: 1,
+            on_failure: Script::parse("b40"),
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        session.pass_days(1, &mut NeverFires);
+        settle(&mut session, &catalog);
+        assert!(!session.control_bit(bit(40)), "docked: not yet");
+        assert_eq!(held(&session), [(0, 140)]);
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        assert!(session.control_bit(bit(40)));
+        assert_eq!(held(&session), []);
+        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+    }
+
+    #[test]
+    fn a_deadline_that_ran_out_docked_fails_on_the_take_off_with_no_day() {
+        let catalog = lifecycle(vec![MissionRecord {
+            time_limit: 1,
+            on_failure: Script::parse("b40"),
+            ..to_129(140)
+        }]);
+        let rules = Rulebook::default().with_override(RuleKey::StayDays, RuleSource::Bible);
+        let (mut session, _) = watched(&catalog, rules);
+        accept(&mut session, 140);
+        session.pass_days(1, &mut NeverFires);
+        settle(&mut session, &catalog);
+        let today = session.date();
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        assert_eq!(session.date(), today, "no day passed");
+        assert!(session.control_bit(bit(40)));
+        assert_eq!(held(&session), []);
+    }
+
+    /// Mission 140, unabortable, timed one day, completed at 128 for the
+    /// Federation's reward of 4; its `OnFailure` marks 200.
+    fn unabortable() -> MissionRecord {
+        MissionRecord {
+            can_abort: 0,
+            time_limit: 1,
+            comp_govt: Some(FED),
+            comp_reward: 4,
+            on_failure: Script::parse("X200"),
+            ..back_to_128(140)
+        }
+    }
+
+    /// Takes an unabortable mission past its deadline in flight, then
+    /// back to its return under `rules`: the marks at the deadline and at
+    /// the return, and the Federation's record at each.
+    fn missed_unabortable(rules: Rulebook) -> [(Vec<i16>, i16); 2] {
+        let catalog = lifecycle(vec![unabortable()]);
+        let (mut session, marks) = watched(&catalog, rules);
+        session.pilot.set_legal_record(FED, 10);
+        accept(&mut session, 140);
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        let active = session.pilot().missions().get(0).expect("stays").clone();
+        assert_eq!(active.failed, Some(FailedBy::Deadline));
+        let deadline = (marks.taken(), session.pilot().legal_record(FED));
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(held(&session), []);
+        [deadline, (marks.taken(), session.pilot().legal_record(FED))]
+    }
+
+    #[test]
+    fn by_default_an_unabortable_missions_deadline_fails_it_again_at_its_return() {
+        assert_eq!(
+            missed_unabortable(Rulebook::default()),
+            [(vec![200], 10), (vec![200], 8)],
+            "OnFailure twice, the records at the return"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_its_return_frees_it_running_on_failure_no_second_time() {
+        let rules =
+            Rulebook::default().with_override(RuleKey::RepeatMissionFailure, RuleSource::Bible);
+        assert_eq!(
+            missed_unabortable(rules),
+            [(vec![200], 10), (vec![], 8)],
+            "OnFailure once, the records once"
+        );
+    }
+
+    #[test]
+    fn a_mission_failed_by_f_runs_on_failure_once_at_its_return_by_either_reading() {
+        for reading in [RuleSource::Engine, RuleSource::Bible] {
+            let catalog = lifecycle(vec![MissionRecord {
+                time_limit: 0,
+                ..unabortable()
+            }]);
+            let rules = Rulebook::default().with_override(RuleKey::RepeatMissionFailure, reading);
+            let (mut session, marks) = watched(&catalog, rules);
+            session.pilot.set_legal_record(FED, 10);
+            accept(&mut session, 140);
+            run(&mut session, "F140");
+            assert_eq!(
+                session.pilot().missions().get(0).and_then(|m| m.failed),
+                Some(FailedBy::Operator)
+            );
+            land_on(&mut session, &catalog, 128);
+            assert_eq!(marks.taken(), [200], "{reading:?}");
+            assert_eq!(session.pilot().legal_record(FED), 8, "{reading:?}");
+            assert_eq!(held(&session), []);
+        }
+    }
+
+    #[test]
+    fn a_deadline_a_completions_days_run_out_docked_fails_only_after_the_take_off() {
+        let catalog = lifecycle(vec![
+            MissionRecord {
+                time_limit: 2,
+                on_failure: Script::parse("b42"),
+                ..to_129(140)
+            },
+            MissionRecord {
+                date_post_inc: 5,
+                ..back_to_128(141)
+            },
+        ]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        accept(&mut session, 141);
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(held(&session), [(0, 140)], "141 completed");
+        let active = session.pilot().missions().get(0).expect("held");
+        assert_eq!((active.days_left, active.failed), (Some(0), None));
+        assert!(!session.control_bit(bit(42)));
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        assert!(session.control_bit(bit(42)));
+        assert_eq!(held(&session), []);
+    }
+
+    #[test]
+    fn s_accepts_the_mission_running_its_on_accept_before_the_next_operator() {
+        let catalog = lifecycle(vec![MissionRecord {
+            on_accept: Script::parse("X201"),
+            ..to_129(140)
+        }]);
+        let (mut session, marks) = watched(&catalog, Rulebook::default());
+        run(&mut session, "S140 X202");
+        assert_eq!(marks.taken(), [201, 202]);
+        assert_eq!(held(&session), [(0, 140)]);
+        let active = session.pilot().missions().get(0).expect("held");
+        assert_eq!(
+            active.destination.map(|stop| stop.stellar),
+            Some(StellarId(129))
+        );
+        assert!(
+            session.mission_offers(Venue::Computer).is_empty(),
+            "dropped"
+        );
+        run(&mut session, "S141");
+        assert_eq!(held(&session), [(0, 140)], "no such mïsn");
+    }
+
+    #[test]
+    fn s_in_flight_resolves_from_the_systems_first_stellar() {
+        let catalog = lifecycle(vec![MissionRecord {
+            travel_stel: -1,
+            return_stel: -2,
+            ..mission(140)
+        }]);
+        let mut catalog = catalog;
+        catalog
+            .sites
+            .push((SystemId(132), vec![planet(150, 0.0, 0.0)]));
+        catalog.systems.push(SystemId(132));
+        let mut session = Session::start(&catalog).expect("starts");
+        settle(&mut session, &catalog);
+        run(&mut session, "S140");
+        let active = session.pilot().missions().get(0).expect("held").clone();
+        assert!(active.reached, "no destination");
+        assert_eq!(
+            active.return_to.map(|stop| stop.stellar),
+            Some(StellarId(150)),
+            "distant from 128"
+        );
+        assert_eq!(session.offer_rolls().roll(MissionId(140)), Some(0));
+    }
+
+    #[test]
+    fn s_of_a_mission_active_already_takes_another_slot_by_the_engine() {
+        let catalog = lifecycle(vec![MissionRecord {
+            on_accept: Script::parse("X201"),
+            ..to_129(140)
+        }]);
+        for (reading, slots, marks_run) in [
+            (RuleSource::Engine, vec![(0, 140), (1, 140)], vec![201, 201]),
+            (RuleSource::Bible, vec![(0, 140)], vec![201]),
+        ] {
+            let rules = Rulebook::default().with_override(RuleKey::StartActiveMission, reading);
+            let (mut session, marks) = watched(&catalog, rules);
+            run(&mut session, "S140 S140");
+            assert_eq!(held(&session), slots, "{reading:?}");
+            assert_eq!(marks.taken(), marks_run, "{reading:?}");
+        }
+    }
+
+    #[test]
+    fn s_with_every_slot_taken_does_nothing() {
+        let catalog = lifecycle(vec![MissionRecord {
+            on_accept: Script::parse("X201"),
+            ..to_129(140)
+        }]);
+        let (mut session, marks) = watched(&catalog, Rulebook::default());
+        for _ in 0..SLOTS {
+            run(&mut session, "S140");
+        }
+        let _ = marks.taken();
+        run(&mut session, "S140");
+        assert_eq!(marks.taken(), Vec::<i16>::new());
+        assert_eq!(session.pilot().missions().lowest_free(), None);
+    }
+
+    #[test]
+    fn a_runs_on_abort_and_frees_every_slot_holding_the_mission_whatever_can_abort() {
+        let catalog = lifecycle(vec![
+            MissionRecord {
+                can_abort: 0,
+                on_abort: Script::parse("X203"),
+                ..to_129(140)
+            },
+            to_129(141),
+        ]);
+        let (mut session, marks) = watched(&catalog, Rulebook::default());
+        run(&mut session, "S140 S141 S140");
+        run(&mut session, "A140");
+        assert_eq!(marks.taken(), [203, 203]);
+        assert_eq!(held(&session), [(1, 141)]);
+        assert_eq!(session.offers.rolled_at(), None, "forgotten");
+    }
+
+    #[test]
+    fn f_marks_the_mission_failed_running_nothing_and_it_fails_at_its_return() {
+        let catalog = lifecycle(vec![MissionRecord {
+            on_failure: Script::parse("X200"),
+            on_success: Script::parse("X210"),
+            ..back_to_128(140)
+        }]);
+        let (mut session, marks) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        let _ = session.take_save_due();
+        run(&mut session, "F140");
+        assert_eq!(marks.taken(), Vec::<i16>::new());
+        assert!(session.take_save_due());
+        assert_eq!(
+            session.pilot().missions().get(0).and_then(|m| m.failed),
+            Some(FailedBy::Operator)
+        );
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(marks.taken(), [200]);
+        assert_eq!(held(&session), []);
+    }
+
+    #[test]
+    fn f_leaves_a_mission_failed_by_its_deadline_so() {
+        let catalog = lifecycle(vec![unabortable()]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        run(&mut session, "F140");
+        assert_eq!(
+            session.pilot().missions().get(0).and_then(|m| m.failed),
+            Some(FailedBy::Deadline)
+        );
+    }
+
+    /// Lands on 128 with a fixture subscription that runs `S140 b2` on the
+    /// landing, and another that runs `b3` on a day passing while `!b2`,
+    /// under `reading` of `StoryReentry`: whether `b3` was set.
+    fn reentered(reading: RuleSource) -> bool {
+        let catalog = lifecycle(vec![MissionRecord {
+            date_post_inc: 1,
+            ..auto_aborting()
+        }]);
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_rules(Rulebook::default().with_override(RuleKey::StoryReentry, reading));
+        let fixture = |hook, on, guard, script| Subscription {
+            guard: Test::parse(guard),
+            ..Subscription::new(
+                SubscriptionId {
+                    consumer: Consumer::Fixture,
+                    record: 1,
+                    hook,
+                },
+                EventFilter::Any(on),
+                Script::parse(script),
+            )
+        };
+        for sub in [
+            fixture(0, StoryEventKind::Landed, "", "S140 b2"),
+            fixture(1, StoryEventKind::DayPassed, "!b2", "b3"),
+        ] {
+            session.register_story(sub).expect("registers");
+        }
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, &catalog);
+        assert!(session.control_bit(bit(2)));
+        assert_eq!(held(&session), [], "auto-aborted");
+        session.control_bit(bit(3))
+    }
+
+    #[test]
+    fn by_the_engine_the_days_an_s_passes_dispatch_before_the_scripts_next_operator() {
+        assert!(reentered(RuleSource::Engine));
+    }
+
+    #[test]
+    fn by_the_other_reading_the_days_an_s_passes_wait_for_the_script() {
+        assert!(!reentered(RuleSource::Bible));
+    }
+
+    #[test]
+    fn a_saved_pilots_missions_fly_on_and_complete_at_their_return() {
+        let catalog = lifecycle(vec![MissionRecord {
+            on_success: Script::parse("b31"),
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        let pilot = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
+        assert_eq!(pilot.missions(), session.pilot().missions());
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        settle(&mut session, &catalog);
+        assert_eq!(held(&session), [(0, 140)]);
+        land_on(&mut session, &catalog, 129);
+        assert!(session.control_bit(bit(31)));
+        assert_eq!(held(&session), []);
+    }
+
+    #[test]
+    fn a_slot_freed_unregisters_its_hooks_and_clears_their_fired_entries() {
+        let catalog = lifecycle(vec![MissionRecord {
+            time_limit: 2,
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        for hook in HOOKS {
+            session.pilot.story_fired.insert(slot_hook(0, hook));
+        }
+        session.abort_mission(0, &mut NeverFires).expect("aborts");
+        assert!(session.pilot().missions().get(0).is_none());
+        for hook in HOOKS {
+            assert!(!session.unregister_story(slot_hook(0, hook)), "{hook}");
+        }
+        assert!(session.pilot.story_fired.is_empty());
+        assert_eq!(session.pilot().missions(), &ActiveMissions::default());
+    }
+
+    #[test]
+    fn a_timed_slot_registers_its_deadline_checks_and_an_untimed_one_none() {
+        let catalog = lifecycle(vec![
+            MissionRecord {
+                time_limit: 2,
+                ..to_129(140)
+            },
+            to_129(141),
+        ]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        accept(&mut session, 141);
+        for (slot, timed) in [(0, true), (1, false)] {
+            for hook in [ARRIVAL, FAILURE, SUCCESS] {
+                assert!(
+                    session.unregister_story(slot_hook(slot, hook)),
+                    "{slot} {hook}"
+                );
+            }
+            for hook in [DEADLINE, DEADLINE_TOOK_OFF] {
+                assert_eq!(
+                    session.unregister_story(slot_hook(slot, hook)),
+                    timed,
+                    "{slot} {hook}"
+                );
+            }
+        }
+        assert!(
+            session.unregister_story(REOFFER),
+            "registered as the session starts"
+        );
+        assert!(REOFFER > slot_hook(15, DEADLINE_TOOK_OFF));
+        assert!(ROLL < slot_hook(0, ARRIVAL));
     }
 }

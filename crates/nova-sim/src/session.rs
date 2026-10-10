@@ -328,6 +328,7 @@ pub use ship_change::ShipChangeRules;
 
 pub use edit::RelocateRefusal;
 pub use events::SessionEvent;
+pub use missions::{AbortError, AcceptError, NotOffered};
 pub use persons::PersonQuote;
 pub use script_effects::{ScriptEffectRules, Settled};
 
@@ -714,6 +715,13 @@ pub struct Session {
     /// at (see the `missions` module); never saved, as the original saves
     /// none of it.
     offers: Offers,
+    /// Whether a mission succeeded on the landing under way, so the
+    /// offers are re-offered after its last slot (see the `missions`
+    /// module); never saved.
+    reoffer_due: bool,
+    /// The mission slots whose `OnAbort` is running, so that none ends
+    /// again inside itself (see the `missions` module); never saved.
+    ending: BTreeSet<u8>,
 }
 
 impl Session {
@@ -866,9 +874,12 @@ impl Session {
             missions: catalog.missions(),
             listed_stellars: catalog.listed_stellars(),
             offers: Offers::default(),
+            reoffer_due: false,
+            ending: BTreeSet::new(),
             pilot,
         };
         session.register_offer_roll();
+        session.register_slots();
         session.set_player_system(system, here, dock);
         // A load and the main screen are rebuild points (@0x751cf,
         // @0x75324, @0x1a354, @0x1a8ca, @0x1b003, @0x457ee): the view

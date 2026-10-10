@@ -217,12 +217,12 @@ mod tests {
     #[test]
     fn a_script_runs_as_its_set_expression() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.run_script(&Script::parse("b7 S300"), &mut Scripted::default());
+        session.run_script(&Script::parse("b7 K200"), &mut Scripted::default());
         assert!(session.control_bit(bit(7)));
         assert!(session.take_save_due());
         assert_eq!(
             session.take_script_notes(),
-            [ScriptNote::Unhandled(SetOpKind::StartMission)]
+            [ScriptNote::Unhandled(SetOpKind::ActivateRank)]
         );
     }
 

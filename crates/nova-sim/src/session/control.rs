@@ -22,8 +22,10 @@
 //! Nova's `G`, `D` and `X` (see the `outfits` module), the ship changes
 //! `C`, `E`, `H` and `T` (see the `ship_change` module), and the moves `M` and `N`, the
 //! leave `Q`, which apply when [`Session::settle_script`] settles them,
-//! the sound `P` (see the `script_effects` module), and the stellars
-//! destroyed and regenerated, `Y` and `U` (see the `stellars` module).
+//! the sound `P` (see the `script_effects` module), the stellars
+//! destroyed and regenerated, `Y` and `U` (see the `stellars` module), and
+//! the missions started, aborted and failed, `S`, `A` and `F` (see the
+//! `missions` module).
 //! Any change to the pilot makes a save due. An operator nothing handles is skipped, and its kind told
 //! once a session as a [`ScriptNote`] ([`Session::take_script_notes`]);
 //! which kinds were told is never saved.
@@ -35,8 +37,8 @@
 //! next operator (see the [`story`](crate::story) module's "Dispatch").
 //! A script run inside another is one more run like it: an unhandled
 //! kind is told the first time it is met, outer or nested. The operators
-//! still unhandled are those of the missions (`A`, `F`, `S`) and ranks
-//! (`K`, `L`), whose arms other work adds.
+//! still unhandled are the ranks' (`K`, `L`), whose arms crons-news-ranks
+//! adds.
 //!
 //! **Hooks.** The records' set-expression hooks (the `chär`'s `OnStart`,
 //! an outfit's `OnPurchase` and `OnSell`, a ship's `OnPurchase`,
@@ -188,11 +190,11 @@ impl Session {
             SetOp::PlaySound(sound) => self.play_script_sound(*sound),
             SetOp::DestroyStellar(stellar) => self.destroy_stellar(*stellar, chance),
             SetOp::RegenerateStellar(stellar) => self.regenerate_stellar(*stellar),
-            // Missions and ranks: other roadmaps add their arms here.
-            SetOp::AbortMission(_)
-            | SetOp::FailMission(_)
-            | SetOp::StartMission(_)
-            | SetOp::ActivateRank(_)
+            SetOp::AbortMission(mission) => self.script_abort(*mission, chance),
+            SetOp::FailMission(mission) => self.script_fail(*mission),
+            SetOp::StartMission(mission) => self.script_start(*mission, chance),
+            // Ranks: crons-news-ranks adds their arms here.
+            SetOp::ActivateRank(_)
             | SetOp::DeactivateRank(_)
             // `execute` writes the bits and draws `R(...)` itself, never
             // handing them here.
@@ -432,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_op_applies_novas_thirteen_and_gives_back_the_rest() {
+    fn apply_op_applies_novas_sixteen_and_gives_back_the_rest() {
         let mut session = session();
         let expr = set(
             "A128 F129 S130 G128 D128 C128 E128 H128 M130 N130 K128 L128 P128 Y128 U128 \
@@ -458,9 +460,6 @@ mod tests {
                 .map(|(kind, _)| kind)
                 .collect::<Vec<_>>(),
             [
-                SetOpKind::AbortMission,
-                SetOpKind::FailMission,
-                SetOpKind::StartMission,
                 SetOpKind::ActivateRank,
                 SetOpKind::DeactivateRank,
                 SetOpKind::Set,
@@ -496,19 +495,19 @@ mod tests {
     #[test]
     fn an_unhandled_operator_is_noted_once_and_the_next_still_applies() {
         let mut session = session();
-        session.run_set(&set("S300 b4"), &mut Scripted::default());
+        session.run_set(&set("K200 b4"), &mut Scripted::default());
         assert!(session.control_bit(bit(4)));
-        session.run_set(&set("S301 b5"), &mut Scripted::default());
+        session.run_set(&set("K201 b5"), &mut Scripted::default());
         assert!(session.control_bit(bit(5)));
         assert_eq!(
             session.take_script_notes(),
-            [ScriptNote::Unhandled(SetOpKind::StartMission)]
+            [ScriptNote::Unhandled(SetOpKind::ActivateRank)]
         );
         assert_eq!(session.take_script_notes(), [], "taken");
-        session.run_set(&set("K128"), &mut Scripted::default());
+        session.run_set(&set("L128"), &mut Scripted::default());
         assert_eq!(
             session.take_script_notes(),
-            [ScriptNote::Unhandled(SetOpKind::ActivateRank)]
+            [ScriptNote::Unhandled(SetOpKind::DeactivateRank)]
         );
     }
 
@@ -517,11 +516,11 @@ mod tests {
         let mut session = session();
         let mut nested = false;
         session.run_ops(
-            &set("S300 K128 F130 b4"),
+            &set("L200 K128 b4"),
             &mut Scripted::default(),
             &mut |session, chance| {
                 if !std::mem::replace(&mut nested, true) {
-                    session.run_ops(&set("S301 A130 b5"), chance, &mut |_, _| {});
+                    session.run_ops(&set("L201 K129 b5"), chance, &mut |_, _| {});
                 }
             },
         );
@@ -530,14 +529,12 @@ mod tests {
         assert_eq!(
             session.take_script_notes(),
             [
-                ScriptNote::Unhandled(SetOpKind::StartMission),
-                ScriptNote::Unhandled(SetOpKind::AbortMission),
+                ScriptNote::Unhandled(SetOpKind::DeactivateRank),
                 ScriptNote::Unhandled(SetOpKind::ActivateRank),
-                ScriptNote::Unhandled(SetOpKind::FailMission),
             ],
             "each once, in the order met"
         );
-        session.run_set(&set("A131 S302 K129 F131"), &mut Scripted::default());
+        session.run_set(&set("K131 L132"), &mut Scripted::default());
         assert_eq!(session.take_script_notes(), [], "told already");
     }
 
@@ -595,14 +592,7 @@ mod tests {
         );
         assert_eq!(
             session.take_script_notes(),
-            [
-                SetOpKind::AbortMission,
-                SetOpKind::FailMission,
-                SetOpKind::StartMission,
-                SetOpKind::ActivateRank,
-                SetOpKind::DeactivateRank,
-            ]
-            .map(ScriptNote::Unhandled)
+            [SetOpKind::ActivateRank, SetOpKind::DeactivateRank].map(ScriptNote::Unhandled)
         );
         assert!(session.pilot().has_explored(SystemId(131)), "X ran");
         let settled = session.settle_script(&catalog, &mut Scripted::default());

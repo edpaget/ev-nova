@@ -102,13 +102,17 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
     /// are not set expressions (see the `story` module's "Dispatch").
     fn effect(&mut self, id: SubscriptionId, event: &StoryEvent) {
         match id.consumer {
-            // The offer roll (missions phase 1); a mission's pay, legal
-            // record and days are missions phase 2's.
-            Consumer::Missions => {
-                if let (missions::ROLL, &StoryEvent::Landed { stellar }) = (id, event) {
+            // The offer roll, the re-offer, and each slot's landing hooks
+            // and deadline checks (see the `missions` module).
+            Consumer::Missions => match (id, event) {
+                (missions::ROLL, &StoryEvent::Landed { stellar }) => {
                     self.session.roll_offers(stellar, &mut *self.chance);
                 }
-            }
+                (missions::REOFFER, StoryEvent::Landed { .. }) => {
+                    self.session.reoffer_missions(&mut *self.chance);
+                }
+                _ => self.session.mission_effect(id, event, &mut *self.chance),
+            },
             // Each other consumer's arm is filled by its own phase: mission
             // ships' goal counts by mission-ships phase 2, and the crons',
             // nebulae's and plug-ins' by theirs. A fixture has none.
@@ -180,13 +184,14 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
             Participant::DayPassed => session.raise(StoryEvent::DayPassed {
                 date: session.pilot.date,
             }),
+            // The active missions' days left; their deadlines fail on the
+            // missions' `DayPassed` subscriptions.
+            Participant::MissionDays => session.pilot.missions.count_down(),
             // Each slot is filled by its own phase: the crons by
-            // crons-news-ranks phase 1, the missions' days left by missions
-            // phase 2, the tribute by rdm task planet-domination, the
-            // reinforcements once they are built, and the ranks by
-            // crons-news-ranks phase 3.
+            // crons-news-ranks phase 1, the tribute by rdm task
+            // planet-domination, the reinforcements once they are built,
+            // and the ranks by crons-news-ranks phase 3.
             Participant::Crons
-            | Participant::MissionDays
             | Participant::Tribute
             | Participant::Reinforcements
             | Participant::Ranks => {}
