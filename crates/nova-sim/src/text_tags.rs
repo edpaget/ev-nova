@@ -93,12 +93,9 @@ pub fn pay_shown(pay: i64, cash: i64) -> Option<i64> {
 }
 
 /// `n` grouped by threes with commas: "1,234,567".
-fn with_commas(n: i64) -> String {
-    let digits = n.unsigned_abs().to_string();
-    let mut grouped = String::with_capacity(digits.len() * 4 / 3 + 1);
-    if n < 0 {
-        grouped.push('-');
-    }
+fn with_commas(n: u64) -> String {
+    let digits = n.to_string();
+    let mut grouped = String::with_capacity(digits.len() * 4 / 3);
     for (at, digit) in digits.chars().enumerate() {
         if at > 0 && (digits.len() - at).is_multiple_of(3) {
             grouped.push(',');
@@ -120,7 +117,7 @@ pub fn comma_number(n: i64, millions: RuleSource) -> String {
         1_000_000.. if millions == RuleSource::Engine => {
             format!("{}.{:02}M", n / 1_000_000, n % 1_000_000 / 10_000)
         }
-        _ => with_commas(n),
+        _ => with_commas(n.unsigned_abs()),
     }
 }
 
@@ -748,8 +745,11 @@ mod tests {
     #[test]
     fn a_rank_tag_of_a_government_outside_128_to_383_is_left_as_written() {
         assert_eq!(
-            with(values(), "<PRK999> <SRK127> <PRK384> <PRK> <PRKx> <PRK12a>"),
-            "<PRK999> <SRK127> <PRK384> captain <PRKx> <PRK12a>"
+            with(
+                values(),
+                "<PRK999> <SRK127> <PRK384> <PRK> <PRKx> <PRK12a> <PRK130x> <SRK130"
+            ),
+            "<PRK999> <SRK127> <PRK384> captain <PRKx> <PRK12a> <PRK130x> <SRK130"
         );
     }
 
@@ -810,6 +810,13 @@ mod tests {
             ),
             "<DST> <DSY> <RST> <RSY> <CT> <CQ> <SN> <DL> <PAY> Stock captain"
         );
+    }
+
+    #[test]
+    fn no_names_names_nothing() {
+        assert_eq!(NoNames.stellar_name(StellarId(128)), None);
+        assert_eq!(NoNames.system_name(SystemId(130)), None);
+        assert_eq!(NoNames.cargo_name(0), None);
     }
 
     // The values.

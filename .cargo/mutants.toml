@@ -155,4 +155,8 @@ exclude_re = [
     # refuses a full table the same way, so passing every check changes
     # nothing yet; missions phase 5's cargo checks make it observable.
     "replace Session::accept_refusal -> Result<\\(\\), AcceptRefusal> with Ok\\(\\(\\)\\)",
+    # `<PAY>` of a charging pay, below -50000, shows `-50000 - pay`: at
+    # -50000 itself that is 0, which the catch-all arm shows too, so `<`
+    # and `<=` show the same.
+    "replace < with <= in pay_shown",
 ]
