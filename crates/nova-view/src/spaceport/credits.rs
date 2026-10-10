@@ -4,6 +4,10 @@
 
 use nova_sim::{ShownTons, TonUnit};
 
+use super::grid::{self, TEXT_COLOR, text};
+use crate::draw::DrawList;
+use crate::geometry::{Bounds, Point};
+
 /// `STR#` 2002 #34, after each amount.
 pub const CR: &str = "cr";
 /// `STR#` 2002 #217, the cash's label.
@@ -12,6 +16,27 @@ pub const YOU_HAVE: &str = "You Have:";
 /// h + 0x46 (`_ShipyardDialogUpdate` @0x5931c-0x59333,
 /// `_OutfitDialogUpdate` @0x57b6e-0x57b85).
 pub const AMOUNT_COLUMN: f32 = 70.0;
+
+/// Draws an info box's amount rows, each `(baseline, label, amount)`: the
+/// label at `info`'s left and the amount [`AMOUNT_COLUMN`] right of it, in
+/// white, on a line whose baseline is `baseline` below `info`'s top, as the
+/// shop dialogs' updates do.
+pub fn draw_amount_rows<'a>(
+    list: &mut DrawList,
+    info: Bounds,
+    rows: impl IntoIterator<Item = (f32, &'a str, String)>,
+) {
+    for (baseline, label, amount) in rows {
+        let top = grid::baseline_top(info.min.y + baseline);
+        text(list, label, Point::new(info.min.x, top), TEXT_COLOR);
+        text(
+            list,
+            &amount,
+            Point::new(info.min.x + AMOUNT_COLUMN, top),
+            TEXT_COLOR,
+        );
+    }
+}
 
 /// `n` as `_DrawCommaNumber` (@0x4895) draws it: up to 999, negatives
 /// included, plain digits (@0x48aa-0x48c7); up to 999,999, thousands, a
@@ -120,6 +145,54 @@ mod tests {
         }
         assert_eq!(tons_text(ShownTons::of(1_000)), "1000 tons");
         assert_eq!(tons_text(ShownTons::of(1)), "1 ton");
+    }
+
+    #[test]
+    fn each_amount_row_draws_its_label_at_the_left_and_its_amount_70_right() {
+        use crate::draw::{DrawCommand, DrawList};
+        use crate::geometry::{Bounds, Point};
+        use crate::spaceport::grid::{TEXT_COLOR, TEXT_FONT, TEXT_SIZE};
+
+        let info = Bounds::at(Point::new(100.0, 200.0), 150.0, 90.0);
+        let mut list = DrawList::new();
+        draw_amount_rows(
+            &mut list,
+            info,
+            [
+                (12.0, "Hiring Price:", "970 cr".to_owned()),
+                (36.0, "You Have:", "25,000 cr".to_owned()),
+            ],
+        );
+        let drawn: Vec<_> = list
+            .iter()
+            .map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    font,
+                    origin,
+                    size,
+                    wrap_width,
+                    color,
+                } => {
+                    assert_eq!(
+                        (*font, *size, *wrap_width, *color),
+                        (TEXT_FONT, TEXT_SIZE, None, TEXT_COLOR)
+                    );
+                    (text.clone(), *origin)
+                }
+                other => panic!("not text: {other:?}"),
+            })
+            .collect();
+        // Tops are the baselines less the text size, 10.
+        assert_eq!(
+            drawn,
+            [
+                ("Hiring Price:".to_owned(), Point::new(100.0, 202.0)),
+                ("970 cr".to_owned(), Point::new(170.0, 202.0)),
+                ("You Have:".to_owned(), Point::new(100.0, 226.0)),
+                ("25,000 cr".to_owned(), Point::new(170.0, 226.0)),
+            ]
+        );
     }
 
     #[test]

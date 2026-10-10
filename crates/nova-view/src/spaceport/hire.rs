@@ -33,10 +33,9 @@ use std::time::Duration;
 use nova_sim::hire::{HIRE_ESCORT, HIRING_PRICE};
 use nova_sim::{HireList, HireRow, ShipId};
 
-use super::credits::{self, AMOUNT_COLUMN, credits_text};
+use super::credits::{self, credits_text, draw_amount_rows};
 use super::grid::{
-    self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE,
-    name_lines, text,
+    self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_FONT, TEXT_SIZE, name_lines, text,
 };
 use super::layout::DONE_LABEL;
 use super::shipyard::{
@@ -378,16 +377,7 @@ impl HireScreen {
         let Some(info) = laid.dialog.item_bounds(INFO_BOX_ITEM) else {
             return;
         };
-        for (baseline, label, amount) in hire_lines(row, self.list.cash) {
-            let top = grid::baseline_top(info.min.y + baseline);
-            text(list, label, Point::new(info.min.x, top), TEXT_COLOR);
-            text(
-                list,
-                &amount,
-                Point::new(info.min.x + AMOUNT_COLUMN, top),
-                TEXT_COLOR,
-            );
-        }
+        draw_amount_rows(list, info, hire_lines(row, self.list.cash));
     }
 }
 
@@ -504,6 +494,7 @@ mod tests {
     use crate::draw::{DrawCommand, fill_rect};
     use crate::input::MouseButton;
     use crate::spaceport::catalog::{PortRecord, SpaceportCatalog, StellarId};
+    use crate::spaceport::grid::TEXT_COLOR;
     use crate::spaceport::shipyard::ShipBaseImages;
     use crate::text::fixture::MonoMetrics;
     use crate::ui::catalog::DescriptionSource;

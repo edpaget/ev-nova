@@ -84,7 +84,7 @@ use nova_sim::shipyard::SHIP_NAME_CHARS;
 use nova_sim::{Rating, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard, StockLine};
 
 use super::catalog::SpaceportCatalog;
-use super::credits::{self, AMOUNT_COLUMN, credits_text, tons_text};
+use super::credits::{self, credits_text, draw_amount_rows, tons_text};
 use super::grid::{self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, text};
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
@@ -934,16 +934,11 @@ impl ShipyardScreen {
         let Some(info) = laid.dialog.item_bounds(INFO_BOX_ITEM) else {
             return;
         };
-        for (n, (label, amount)) in price_lines(&self.shipyard, row).into_iter().enumerate() {
-            let top = grid::baseline_top(info.min.y + PRICE_ROWS[n]);
-            text(list, label, Point::new(info.min.x, top), TEXT_COLOR);
-            text(
-                list,
-                &amount,
-                Point::new(info.min.x + AMOUNT_COLUMN, top),
-                TEXT_COLOR,
-            );
-        }
+        let rows = PRICE_ROWS
+            .into_iter()
+            .zip(price_lines(&self.shipyard, row))
+            .map(|(baseline, (label, amount))| (baseline, label, amount));
+        draw_amount_rows(list, info, rows);
     }
 
     fn draw_panel(&self, laid: &Laid, list: &mut DrawList) {
@@ -1078,6 +1073,7 @@ mod tests {
     use crate::input::MouseButton;
     use crate::sound::UiSound;
     use crate::spaceport::catalog::{PortRecord, StellarId};
+    use crate::spaceport::credits::AMOUNT_COLUMN;
     use crate::spaceport::grid::{NO_PICTURE, TEXT_SIZE};
     use crate::text::fixture::MonoMetrics;
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};

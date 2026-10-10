@@ -113,7 +113,7 @@ use nova_sim::{
 };
 
 use super::catalog::SpaceportCatalog;
-use super::credits::{self, AMOUNT_COLUMN, comma_tons_text, credits_text};
+use super::credits::{self, comma_tons_text, credits_text, draw_amount_rows};
 use super::grid::{self, CellGrid, Shown, text};
 use super::layout::DONE_LABEL;
 use super::modal::ModalHost;
@@ -852,12 +852,7 @@ impl OutfitterScreen {
         let Some(info) = laid.dialog.item_bounds(INFO_ITEM) else {
             return;
         };
-        for (baseline, label, amount) in amount_lines(&self.outfitter, row) {
-            let top = grid::baseline_top(info.min.y + baseline);
-            text(list, label, Point::new(info.min.x, top), TEXT_COLOR);
-            let at = Point::new(info.min.x + AMOUNT_COLUMN, top);
-            text(list, &amount, at, TEXT_COLOR);
-        }
+        draw_amount_rows(list, info, amount_lines(&self.outfitter, row));
         let line_height = laid.metrics.0.line_height(TEXT_FONT, TEXT_SIZE);
         let sale = OutfitOrder {
             outfit: row.id,
