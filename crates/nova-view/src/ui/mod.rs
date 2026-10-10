@@ -12,6 +12,8 @@
 //!   and `TrackControl`-style pointer tracking.
 //! - [`scroll_text`]: text wrapped into a box and scrolled a line at a
 //!   time.
+//! - [`row_list`]: a [`RowList`] of one-line rows in a box, one of them
+//!   selected by a click or the arrow keys.
 //! - [`dialog`]: a modal [`Dialog`] laid out from a `DLOG`/`DITL`
 //!   [`DialogTemplate`].
 //! - [`desc`]: the "Desc Dialog" ([`DescDialog`]), a long description in
@@ -52,6 +54,7 @@ pub mod new_pilot;
 pub mod plunder;
 pub mod prefs;
 pub mod quantity;
+pub mod row_list;
 pub mod scroll_text;
 pub mod slice;
 pub mod text_field;
@@ -71,6 +74,7 @@ pub use new_pilot::{NewPilotDialog, NewPilotOutcome};
 pub use plunder::{AssignmentDialog, PlunderDialog, PlunderShown};
 pub use prefs::PrefsDialog;
 pub use quantity::QuantityDialog;
+pub use row_list::RowList;
 pub use scroll_text::ScrollText;
 pub use slice::{Axis, Piece, three_slice};
 pub use text_field::TextField;
