@@ -303,6 +303,69 @@ mod tests {
         assert_eq!(aux_here(&session), 2);
     }
 
+    /// [`aux_only`] with `count` auxiliary ships into `syst`, mission 140
+    /// offered at 128, going to 140 (in 131) and returning to 128 (in
+    /// 130).
+    fn stopping(count: i16, syst: i16) -> FakePilotCatalog {
+        let mut catalog = aux_only(count, syst, 0);
+        catalog.missions[0].avail_stel = 128;
+        catalog.missions[0].travel_stel = 140;
+        catalog.missions[0].return_stel = 128;
+        catalog
+    }
+
+    #[test]
+    fn aux_ships_of_minus_2_come_in_at_the_destination_not_the_return_stop() {
+        let catalog = stopping(2, -2);
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert_eq!(session.system(), SystemId(130), "the return stop's");
+        ticks(&mut session, &catalog, 300);
+        assert_eq!(aux_here(&session), 0, "not at the return stop");
+        jump_to(&mut session, &catalog, 131);
+        ticks(&mut session, &catalog, 139);
+        assert_eq!(aux_here(&session), 0, "not before the countdown runs out");
+        tick(&mut session, &catalog);
+        assert_eq!(aux_here(&session), 2, "at the destination");
+    }
+
+    #[test]
+    fn aux_ships_of_minus_3_come_in_at_the_return_stop_not_the_destination() {
+        let catalog = stopping(2, -3);
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        jump_to(&mut session, &catalog, 131);
+        ticks(&mut session, &catalog, 300);
+        assert_eq!(aux_here(&session), 0, "not at the destination");
+        jump_to(&mut session, &catalog, 130);
+        ticks(&mut session, &catalog, 139);
+        assert_eq!(aux_here(&session), 0, "not before the countdown runs out");
+        tick(&mut session, &catalog);
+        assert_eq!(aux_here(&session), 2, "at the return stop");
+    }
+
+    #[test]
+    fn aux_ships_of_a_hidden_system_come_in_at_the_visible_one_standing_for_it() {
+        let mut catalog = aux_only(2, 134, 0);
+        catalog
+            .star_map
+            .push(crate::testkit::star(134, (0.0, 0.0), &[]));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        ticks(&mut session, &catalog, 140);
+        assert_eq!(aux_here(&session), 0, "134 visible stands for itself");
+        assert!(session.change_galaxy(&catalog, |galaxy| {
+            galaxy.set_visible(SystemId(134), Some(false));
+        }));
+        assert_eq!(session.system(), SystemId(130));
+        jump_to(&mut session, &catalog, 131);
+        jump_to(&mut session, &catalog, 130);
+        ticks(&mut session, &catalog, 139);
+        assert_eq!(aux_here(&session), 0, "not before the countdown runs out");
+        tick(&mut session, &catalog);
+        assert_eq!(aux_here(&session), 2, "130 stands for the hidden 134");
+    }
+
     #[test]
     fn a_lost_countdown_stands() {
         let catalog = aux_only(2, -1, 0);
