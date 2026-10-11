@@ -51,6 +51,16 @@
 //! ([`SimMessage::MissionShipLost`] and the quick failure); the goal
 //! checks follow as the `ShipFate` the loss raised settles.
 //!
+//! **No crime** against a marked ship changes the legal records: the
+//! original's `_SlapWithPenalty` (@0x9bbc) slaps only for a mission slot
+//! of -1 (@0x9c10), and disabling, destroying and boarding pass the
+//! ship's mark (`_DamageShip` @0x3adb3, @0x3ae08;
+//! `_HandlePlayerBoardAttempt` @0x6582b). It reads the mark alone, so a
+//! ship of an active mission, of a failed one, and one whose slot is
+//! freed with its mark not yet cleared all escape it
+//! ([`Session::board`]; the fight's `punish`). A failed mission's ship is
+//! plundered as it is boarded, but uncharged.
+//!
 //! **Rescue ships** (`ShipGoal` 5) are held disabled. The original's
 //! `_IsDisabled` reads mission state: a marked ship (never the player)
 //! whose slot is active, whose `ShipGoal` is 5, whose goals are not yet
@@ -701,8 +711,9 @@ impl Session {
     /// velocity matched already: on the assist path ([`assists`]) its
     /// slot counts it boarded, and the comm line is said; then it is
     /// marked boarded (@0x65f43), with no `BoardPenalty`, person's offer
-    /// or plunder. A ship of a failed mission is boarded as ordinary
-    /// traffic: none. The assist path's ship +0x4c (the AI's wait
+    /// or plunder. A ship of a failed mission is boarded for plunder,
+    /// but still with no `BoardPenalty` (the slap @0x6582b passes its
+    /// mark; see [`Session::board`]): none. The assist path's ship +0x4c (the AI's wait
     /// countdown, 100 @0x65746) is not kept.
     pub(super) fn board_mission_ship(&mut self, npc: &Npc) -> Option<Boarding> {
         let mark = npc.mission?;
@@ -1802,7 +1813,7 @@ pub(super) mod tests {
         let was: Vec<_> = session
             .npcs()
             .iter()
-            .map(|npc| (npc.id, npc.condition, npc.govt))
+            .map(crate::session::NpcBefore::of)
             .collect();
         session.traffic.npcs_mut()[index].condition = Condition::Disabled;
         session.raise_disabled(&was, &mut NeverFires);
@@ -2852,8 +2863,11 @@ pub(super) mod tests {
         }
     }
 
+    /// The original's slap @0x6582b passes the boarded ship's mark, so
+    /// `_SlapWithPenalty` charges no `BoardPenalty` (@0x9c10), though the
+    /// ship missed the no-plunder branch (@0x657df-0x657e3).
     #[test]
-    fn a_failed_missions_ship_is_boarded_as_ordinary_traffic() {
+    fn a_failed_missions_ship_is_boarded_for_plunder_without_board_penalty() {
         let catalog = rescuing(5, 1, 0x0001);
         let mut session = in_flight_with(&catalog, 1);
         if let Some(active) = session.pilot.missions.get_mut(0) {
@@ -2864,7 +2878,7 @@ pub(super) mod tests {
             matches!(boarding, Ok(crate::board::Boarding::Opened(_))),
             "{boarding:?}"
         );
-        assert_eq!(crimes, [crate::legal::Crime::Board]);
+        assert_eq!(crimes, [], "no BoardPenalty");
         assert_eq!(ships_of(&session).boarded, 0);
     }
 

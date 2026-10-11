@@ -179,12 +179,15 @@
 //! disabling it too when it was intact), each against the NPC's
 //! government, the record with each government changed and, by that
 //! government's change, the record in each of its systems
-//! ([`legal::convict`]). A mere hit is no crime, as in the original.
+//! ([`legal::convict`]). A mere hit is no crime, as in the original,
+//! and a mission's special ship, of any mark, is no victim of any of
+//! them (see the [`legal`] module's "Crimes").
 //!
 //! The player boards its target once it is disabled
 //! ([`Session::board`]), as the [`board`](crate::board) rules say: the
-//! boarding is the [`Crime::Board`] against the target's government, and
-//! the NPCs come to its help as for a hit. Then the player plunders it
+//! boarding is the [`Crime::Board`] against the target's government, but
+//! for a mission's special ship, and the NPCs come to its help as for a
+//! hit. Then the player plunders it
 //! ([`Session::plunder`]): its cargo into the hold, its credits, its
 //! ammunition as outfits and its energy into the tank, each once, at the
 //! risk of its self-destruct; and captures it, with odds from the crews,
@@ -1473,20 +1476,17 @@ impl Session {
     /// [`Fate::Disabled`], and each destroyed raises [`Fate::Destroyed`]
     /// as it is taken out (see the `story` module's findings). A rescue
     /// mission's ship not yet boarded fights held disabled
-    /// ([`Session::mission_ship_held`]; see the `mission_ships` module). The
-    /// stellars shown that shots can hit take their damage, and each shot
+    /// ([`Session::mission_ship_held`]; see the `mission_ships` module).
+    /// The player is convicted of disabling and destroying an NPC, but
+    /// not a mission's special ship (see `punish`). The stellars
+    /// shown that shots can hit take their damage, and each shot
     /// down is destroyed and runs its `OnDestroy` (see the `stellars`
     /// module).
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         if self.landed.is_some() || self.jumping().is_some() {
             return;
         }
-        let was: Vec<(NpcId, Condition, Option<GovtId>)> = self
-            .traffic
-            .npcs()
-            .iter()
-            .map(|npc| (npc.id, npc.condition, npc.govt))
-            .collect();
+        let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
         let held: Vec<bool> = self
             .traffic
             .npcs()
@@ -1611,11 +1611,7 @@ impl Session {
     /// @0x3af8b), as [`Session::punish`] convicts it of both. A mission's
     /// special ship is counted disabled, drawing on `chance` (see the
     /// `mission_ships` module).
-    fn raise_disabled(
-        &mut self,
-        was: &[(NpcId, Condition, Option<GovtId>)],
-        chance: &mut dyn Chance,
-    ) {
+    fn raise_disabled(&mut self, was: &[NpcBefore], chance: &mut dyn Chance) {
         let downed: Vec<NpcId> = self
             .traffic
             .npcs()
@@ -1624,7 +1620,7 @@ impl Session {
                 npc.condition != Condition::Intact
                     && was
                         .iter()
-                        .any(|&(id, before, _)| id == npc.id && before == Condition::Intact)
+                        .any(|before| before.id == npc.id && before.condition == Condition::Intact)
             })
             .map(|npc| npc.id)
             .collect();
@@ -1640,19 +1636,23 @@ impl Session {
     /// Convicts the player of its crimes among `strikes`, as `law` says:
     /// disabling an NPC, and breaking one up, which is disabling it too
     /// when it `was` intact before (as `_DamageShip` slaps both). Each
-    /// victim's condition and government are as it `was` before the
-    /// fight's tick.
-    fn punish(
-        &mut self,
-        strikes: &[Strike],
-        was: &[(NpcId, Condition, Option<GovtId>)],
-        law: &dyn LegalCode,
-    ) {
+    /// victim's condition, government and mission mark are as it `was`
+    /// before the fight's tick. A mission's special ship, of any mark,
+    /// is convicted of neither: `_DamageShip` passes the ship's mark
+    /// (@0x3adb3, @0x3ae08), and `_SlapWithPenalty` slaps only for none
+    /// (@0x9c10; see the [`legal`] module's "Crimes").
+    fn punish(&mut self, strikes: &[Strike], was: &[NpcBefore], law: &dyn LegalCode) {
         for strike in strikes.iter().filter(|strike| strike.by == ShipRef::Player) {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
             };
-            let Some(&(_, condition, govt)) = was.iter().find(|(npc, ..)| *npc == id) else {
+            let Some(&NpcBefore {
+                condition,
+                govt,
+                marked: false,
+                ..
+            }) = was.iter().find(|before| before.id == id)
+            else {
                 continue;
             };
             let crimes: &[Crime] = match (strike.downed, condition) {
@@ -1675,12 +1675,16 @@ impl Session {
     /// from `was`, is not derelict. As the original's `_DamageShip`
     /// (@0x3ad4f-0x3ae53), the credit comes with the hit, before a
     /// shooter in the fleet can be lost or the victim taken out.
-    fn credit_kills(&mut self, strikes: &[Strike], was: &[(NpcId, Condition, Option<GovtId>)]) {
+    fn credit_kills(&mut self, strikes: &[Strike], was: &[NpcBefore]) {
         for strike in strikes {
             let (ShipRef::Npc(id), Some(Downed::BreakingUp)) = (strike.ship, strike.downed) else {
                 continue;
             };
-            let Some(&(_, _, govt)) = was.iter().find(|(npc, ..)| *npc == id) else {
+            let Some(govt) = was
+                .iter()
+                .find(|before| before.id == id)
+                .map(|before| before.govt)
+            else {
                 continue;
             };
             let by_players_fleet = match strike.by {
@@ -3340,7 +3344,10 @@ impl Session {
     /// Boards the player's target, if it is not landed or jumping and the
     /// [`board`](crate::board) checks allow it, and gives what is on
     /// board: the player matches the target's velocity, `law` convicts it
-    /// of the [`Crime::Board`] against the target's government, the
+    /// of the [`Crime::Board`] against the target's government (but for
+    /// a mission's special ship, here one of a failed mission: the
+    /// original passes its mark, `_HandlePlayerBoardAttempt` @0x6582b,
+    /// and `_SlapWithPenalty` slaps only for none, @0x9c10), the
     /// NPCs come to the target's help as for a hit by the player (a
     /// strike of no damage, answered on the next traffic tick), the
     /// target is marked boarded, and every other NPC after it lets it go
@@ -3355,7 +3362,8 @@ impl Session {
     /// [`Fate::Boarded`] raised, only once the mission is accepted. A
     /// mission's special ship, but one of a failed mission, is only
     /// marked boarded, after the velocity match, and maybe counted
-    /// ([`Boarding::MissionShip`], see the `mission_ships` module).
+    /// ([`Boarding::MissionShip`], see the `mission_ships` module); one
+    /// of a failed mission is plundered, uncharged.
     ///
     /// # Errors
     ///
@@ -3383,8 +3391,10 @@ impl Session {
         if let Some(boarding) = self.board_mission_ship(&npc) {
             return Ok(boarding);
         }
-        let changes = law.penalties(Crime::Board, npc.govt, &self.govts);
-        legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+        if npc.mission.is_none() {
+            let changes = law.penalties(Crime::Board, npc.govt, &self.govts);
+            legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+        }
         self.strikes.push(Strike {
             ship: ShipRef::Npc(npc.id),
             by: ShipRef::Player,
@@ -3923,6 +3933,29 @@ impl Session {
             .ok()
             .filter(|&fuel| fuel > 0)
             .map_or(0.0, |fuel| chance.below(fuel) as f32);
+    }
+}
+
+/// An NPC as it was before a fight's tick: what the tick's disablings,
+/// crimes and kills are read against, as the tick can change each (a
+/// mission failed by its ship's loss can lose the ship its mark).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct NpcBefore {
+    id: NpcId,
+    condition: Condition,
+    govt: Option<GovtId>,
+    /// Whether it carried a mission's mark, of any slot.
+    marked: bool,
+}
+
+impl NpcBefore {
+    fn of(npc: &Npc) -> Self {
+        Self {
+            id: npc.id,
+            condition: npc.condition,
+            govt: npc.govt,
+            marked: npc.mission.is_some(),
+        }
     }
 }
 
@@ -12502,6 +12535,120 @@ mod tests {
         );
     }
 
+    /// How NPC 0 is a mission's special ship, if it is: a mark of slot 0
+    /// holding a mission, unfailed or failed, or a stale mark of slot 5,
+    /// free.
+    #[derive(Clone, Copy, Debug)]
+    enum Marked {
+        Active,
+        Failed,
+        Stale,
+    }
+
+    /// Marks NPC 0 of `session` as `marked` says, filling slot 0 with
+    /// mission 140 for a mark of it.
+    fn mark_the_npc(session: &mut Session, marked: Marked) {
+        let slot = match marked {
+            Marked::Active | Marked::Failed => {
+                let mut active = crate::testkit::carrying(140, 0);
+                if matches!(marked, Marked::Failed) {
+                    active.failed = Some(crate::mission::FailedBy::Marked);
+                }
+                assert!(session.pilot.missions.put(0, active));
+                0
+            }
+            Marked::Stale => 5,
+        };
+        session.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
+            slot,
+            behav: crate::mission::ships::ShipBehav::Own,
+            cloaked: false,
+            formation: None,
+        });
+    }
+
+    const MARKS: [Marked; 3] = [Marked::Active, Marked::Failed, Marked::Stale];
+
+    /// [`lawful`]'s NPC, marked as `marked` says, shot at until it is
+    /// destroyed, by the weapons of `catalog`, fire held for the first
+    /// tick only when `once`: the crimes a [`Witness`] heard, then the
+    /// records by the engine's law.
+    fn crimes_against(
+        catalog: &FakePilotCatalog,
+        marked: Option<Marked>,
+        once: bool,
+    ) -> (Vec<(Crime, Option<GovtId>)>, [i16; 4]) {
+        let fight = |law: &dyn LegalCode| {
+            let mut session = facing_an_npc(catalog, 180);
+            if let Some(marked) = marked {
+                mark_the_npc(&mut session, marked);
+            }
+            session.hold_trigger(FIRE);
+            let rules = Rules {
+                law,
+                ..Rules::default()
+            };
+            for _ in 0..80 {
+                session.tick_combat(rules, &mut NeverFires);
+                if once {
+                    session.hold_trigger(Trigger::default());
+                }
+            }
+            assert_eq!(session.npcs(), [], "destroyed");
+            records(&session)
+        };
+        let witness = Witness::default();
+        fight(&witness);
+        (
+            witness.seen.take(),
+            fight(&crate::legal::NovaLaw::default()),
+        )
+    }
+
+    #[test]
+    fn disabling_and_destroying_a_mission_ship_changes_no_record() {
+        let catalog = lawful();
+        assert_eq!(
+            crimes_against(&catalog, None, false),
+            (
+                vec![
+                    (Crime::Disable, Some(GovtId(140))),
+                    (Crime::Kill, Some(GovtId(140)))
+                ],
+                [-10, -10, 9, 20]
+            ),
+            "the same ship of no mission"
+        );
+        for marked in MARKS {
+            assert_eq!(
+                crimes_against(&catalog, Some(marked), false),
+                (vec![], [0; 4]),
+                "{marked:?}: any mark escapes the penalty, as _SlapWithPenalty \
+                 slaps only for a mission slot of -1 (@0x9c10)"
+            );
+        }
+    }
+
+    #[test]
+    fn breaking_up_an_intact_mission_ship_at_once_changes_no_record() {
+        let catalog = FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                mass_dmg: 500,
+                energy_dmg: 500,
+                ..blaster()
+            }],
+            ..lawful()
+        };
+        assert_eq!(crimes_against(&catalog, None, true).0.len(), 2);
+        for marked in MARKS {
+            assert_eq!(
+                crimes_against(&catalog, Some(marked), true),
+                (vec![], [0; 4]),
+                "{marked:?}"
+            );
+        }
+    }
+
     // The combat rating.
 
     /// [`lawful`], its traffic's ship 129 of `strength`.
@@ -12610,7 +12757,12 @@ mod tests {
                 order: None,
             });
         }
-        let was = [(NpcId(0), Condition::Disabled, Some(GovtId(140)))];
+        let was = [NpcBefore {
+            id: NpcId(0),
+            condition: Condition::Disabled,
+            govt: Some(GovtId(140)),
+            marked: false,
+        }];
         let broken_up_by = |by| Strike {
             ship: ShipRef::Npc(NpcId(0)),
             by,
@@ -12651,7 +12803,12 @@ mod tests {
             .map(|npc| npc.id)
             .find(|id| !before.contains(id))
             .expect("launched");
-        let was = [(NpcId(0), Condition::Disabled, Some(GovtId(140)))];
+        let was = [NpcBefore {
+            id: NpcId(0),
+            condition: Condition::Disabled,
+            govt: Some(GovtId(140)),
+            marked: false,
+        }];
         session.credit_kills(
             &[Strike {
                 ship: ShipRef::Npc(NpcId(0)),
@@ -12673,7 +12830,12 @@ mod tests {
     fn only_a_break_up_of_an_npc_credits_the_rating() {
         let catalog = boardable();
         let mut session = alongside(&catalog);
-        let was = [(NpcId(0), Condition::Intact, Some(GovtId(140)))];
+        let was = [NpcBefore {
+            id: NpcId(0),
+            condition: Condition::Intact,
+            govt: Some(GovtId(140)),
+            marked: false,
+        }];
         let strike = |ship, downed| Strike {
             ship,
             by: ShipRef::Player,

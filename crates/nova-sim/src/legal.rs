@@ -74,6 +74,17 @@
 //! every government not allied with the victim's, where the original
 //! improves it only in the nearby systems those governments hold. The
 //! walk is rdm:phase/missions-fidelity/phase-22-crime-walk-per-system.
+//!
+//! A crime against a mission's special ship changes no record. The
+//! original's callers pass the slot of the ship's mission mark, and
+//! `_SlapWithPenalty` returns before the walk unless it is -1 (@0x9c10),
+//! reading the mark alone: a ship of a mission active, failed, or whose
+//! slot is freed with the mark not yet cleared, escapes it. Disabling,
+//! destroying and boarding pass the mark (`_DamageShip` @0x3adb3,
+//! @0x3ae08; `_HandlePlayerBoardAttempt` @0x6582b); a stellar's kill,
+//! the scans and the planet hails pass -1. The same return skips rank
+//! loss (`_DeactivateRank` @0x9c9e), which goes with ranks in
+//! rdm:roadmap/crons-news-ranks.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
