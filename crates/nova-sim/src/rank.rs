@@ -53,6 +53,17 @@
 //! Neither function plays a sound or shows a message: their only calls
 //! are crash-log lines (`_crashlog_print` @0x45305-0x45326,
 //! @0x45433-0x45454), which the engine leaves out.
+//!
+//! **Salary** ([`pay_salaries`], `_IncrementGameTime` @0xb75b-0xb7c2,
+//! the day's eighth participant). In ID order, each active rank with a
+//! record and a nonzero `Salary` adds it to the cash unless the cash is
+//! at or above a `SalaryCap` above 0 (@0xb779-0xb794), then floors the
+//! cash at 0 (@0xb79a-0xb7ac). So the cap is tested before paying and one
+//! payment can overshoot it; a cap of 0 or less is no cap; a negative
+//! salary is a fee, and the floor runs for every salaried rank, capped or
+//! not. The [`SalaryCap`](crate::rulebook::RuleKey::SalaryCap) rule's
+//! other reading pays only up to the cap ([`salary_paid`]). The loop plays
+//! no sound.
 
 use std::collections::BTreeSet;
 
@@ -120,6 +131,39 @@ pub fn deactivate(records: &[RankRecord], mut held: Held, id: RankId, unaffiliat
     }
     if *held.recent == Some(id) {
         *held.recent = None;
+    }
+}
+
+/// What `rank` pays today on `cash`, by `cap`'s reading of its
+/// `SalaryCap` (see the module docs): nothing at or above a cap above 0;
+/// otherwise its `Salary`, or by the other reading no more than takes the
+/// cash to the cap. A fee is never capped further.
+#[must_use]
+pub fn salary_paid(rank: &RankRecord, cash: i64, cap: RuleSource) -> i64 {
+    let capped = rank.salary_cap > 0;
+    if capped && cash >= rank.salary_cap {
+        0
+    } else if cap == RuleSource::Bible && capped && rank.salary > 0 {
+        rank.salary.min(rank.salary_cap - cash)
+    } else {
+        rank.salary
+    }
+}
+
+/// One day's salaries: each rank of `records` in `active` with a nonzero
+/// `Salary`, in ID order, adds [`salary_paid`] to `cash`, then floors it
+/// at 0 (`_IncrementGameTime` @0xb75b-0xb7c2).
+pub fn pay_salaries(
+    records: &[RankRecord],
+    active: &BTreeSet<RankId>,
+    cash: &mut i64,
+    cap: RuleSource,
+) {
+    for rank in records {
+        if active.contains(&rank.id) && rank.salary != 0 {
+            *cash = cash.saturating_add(salary_paid(rank, *cash, cap));
+            *cash = (*cash).max(0);
+        }
     }
 }
 
@@ -459,5 +503,134 @@ mod tests {
         let mut state = State::holding(&[201]);
         activate(&records, state.held(), RankId(200), RuleSource::Bible);
         assert_eq!(state.active(), [200, 201], "an affiliated one never");
+    }
+
+    /// Rank `id` paying `salary` a day up to `cap`.
+    fn paying(id: i16, salary: i64, cap: i64) -> RankRecord {
+        RankRecord {
+            salary,
+            salary_cap: cap,
+            ..testkit::rank(id)
+        }
+    }
+
+    /// The cash after one day's salaries from `records`, all active, on
+    /// `cash`, by `source`.
+    fn paid(records: &[RankRecord], cash: i64, source: RuleSource) -> i64 {
+        let active = records.iter().map(|record| record.id).collect();
+        let mut cash = cash;
+        pay_salaries(records, &active, &mut cash, source);
+        cash
+    }
+
+    #[test]
+    fn a_salary_is_paid_each_day() {
+        for source in RuleSource::ALL {
+            assert_eq!(paid(&[paying(200, 200, 0)], 1000, source), 1200);
+        }
+    }
+
+    #[test]
+    fn a_cap_of_0_or_less_is_no_cap() {
+        for source in RuleSource::ALL {
+            for cap in [0, -1, -500] {
+                assert_eq!(
+                    paid(&[paying(200, 200, cap)], 1000, source),
+                    1200,
+                    "{cap} {source:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn by_the_engine_the_cap_is_tested_before_paying_so_it_can_overshoot() {
+        let records = [paying(200, 200, 1100)];
+        assert_eq!(paid(&records, 1000, RuleSource::Engine), 1200);
+        assert_eq!(paid(&records, 1099, RuleSource::Engine), 1299);
+    }
+
+    #[test]
+    fn by_the_other_reading_the_cash_never_passes_the_cap() {
+        let records = [paying(200, 200, 1100)];
+        assert_eq!(paid(&records, 1000, RuleSource::Bible), 1100);
+        assert_eq!(paid(&records, 1099, RuleSource::Bible), 1100);
+        assert_eq!(paid(&records, 800, RuleSource::Bible), 1000, "room left");
+    }
+
+    #[test]
+    fn at_or_above_the_cap_nothing_is_paid_by_either_reading() {
+        for source in RuleSource::ALL {
+            assert_eq!(paid(&[paying(200, 200, 1000)], 1000, source), 1000);
+            assert_eq!(paid(&[paying(200, 200, 1000)], 1500, source), 1500);
+            assert_eq!(
+                paid(&[paying(200, -200, 1000)], 1500, source),
+                1500,
+                "a fee too"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fee_takes_cash_and_floors_it_at_0() {
+        for source in RuleSource::ALL {
+            assert_eq!(paid(&[paying(200, -200, 0)], 1000, source), 800);
+            assert_eq!(paid(&[paying(200, -200, 0)], 150, source), 0);
+            assert_eq!(
+                paid(&[paying(200, -200, 5000)], 1000, source),
+                800,
+                "below the cap, a fee is not capped further"
+            );
+        }
+    }
+
+    #[test]
+    fn any_salaried_rank_floors_a_negative_cash() {
+        for source in RuleSource::ALL {
+            assert_eq!(paid(&[paying(200, 10, 0)], -50, source), 0, "not -40");
+        }
+    }
+
+    #[test]
+    fn ranks_pay_in_id_order_each_tested_against_the_cash_so_far() {
+        let records = [paying(200, 300, 0), paying(201, 100, 1200)];
+        assert_eq!(
+            paid(&records, 1000, RuleSource::Engine),
+            1300,
+            "200 took the cash to the cap of 201"
+        );
+        let records = [paying(200, 100, 1200), paying(201, 300, 0)];
+        assert_eq!(paid(&records, 1000, RuleSource::Engine), 1400);
+        let records = [paying(200, -100, 0), paying(201, 50, 0)];
+        assert_eq!(
+            paid(&records, 60, RuleSource::Engine),
+            50,
+            "the fee floored at 0 before the next pays"
+        );
+    }
+
+    #[test]
+    fn an_inactive_rank_or_one_with_no_record_or_no_salary_pays_nothing_and_floors_nothing() {
+        let records = [paying(200, 100, 0), paying(201, 0, 0)];
+        for source in RuleSource::ALL {
+            let mut cash = -50;
+            let active = BTreeSet::from([RankId(201), RankId(250)]);
+            pay_salaries(&records, &active, &mut cash, source);
+            assert_eq!(cash, -50, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_salary_paid_is_the_salary_under_the_cap_test() {
+        let rank = paying(200, 200, 1100);
+        assert_eq!(salary_paid(&rank, 1000, RuleSource::Engine), 200);
+        assert_eq!(salary_paid(&rank, 1000, RuleSource::Bible), 100);
+        assert_eq!(salary_paid(&rank, 1100, RuleSource::Engine), 0);
+        assert_eq!(salary_paid(&rank, 1100, RuleSource::Bible), 0);
+        assert_eq!(salary_paid(&rank, -5000, RuleSource::Engine), 200);
+        assert_eq!(
+            salary_paid(&paying(200, -30, 0), 10, RuleSource::Bible),
+            -30
+        );
     }
 }

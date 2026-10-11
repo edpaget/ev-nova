@@ -11,6 +11,11 @@
 //! [`Session::fly`](crate::Session::fly), as the original's `ResetPlayer`
 //! (@0x1db44) and `ResetPlayerRecord` (@0x1dbf1) reset it.
 //!
+//! The daily step's eighth participant pays the active ranks' salaries
+//! ([`rank::pay_salaries`]), reading the session's
+//! [`SalaryCap`](crate::rulebook::RuleKey::SalaryCap) rule; a change to
+//! the cash makes a save due.
+//!
 //! The pilot keeps its active ranks by ID. A pilot flown from a save
 //! naming a rank the data no longer has forgets it, so the next save
 //! leaves it out, as the original's `_LoadPilotData` drops an active flag
@@ -46,11 +51,24 @@ impl Session {
         let records = std::rc::Rc::clone(&self.ranks);
         rank::deactivate(&records, self.held_ranks(), rank, unaffiliated);
     }
+
+    /// The day's eighth participant: the active ranks' salaries (see
+    /// [`rank::pay_salaries`]), capped by the session's `salary_cap`
+    /// rule. A change to the cash makes a save due.
+    pub(super) fn ranks_day(&mut self) {
+        let cap = self.rules.source_for(RuleKey::SalaryCap);
+        let before = self.pilot.cash;
+        rank::pay_salaries(&self.ranks, &self.pilot.ranks, &mut self.pilot.cash, cap);
+        if self.pilot.cash != before {
+            self.save_due = true;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::catalog::{RankId, RankRecord};
+    use crate::chance::NeverFires;
     use crate::control::SetExpr;
     use crate::pilot::Pilot;
     use crate::rank::{SWEEP_GOVT_ON_ACTIVATE, SWEEP_GOVT_ON_DEACTIVATE};
@@ -149,6 +167,50 @@ mod tests {
             assert_eq!(active(&session), after_k, "{source:?}");
             session.run_set(&set("K201 K202 L201"), &mut Scripted::default());
             assert_eq!(active(&session), after_l, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn letting_a_day_pass_pays_each_active_ranks_salary() {
+        let mut session = ranked(vec![
+            RankRecord {
+                salary: 100,
+                ..rank(200)
+            },
+            RankRecord {
+                salary: 50,
+                salary_cap: 700,
+                ..rank(201)
+            },
+            RankRecord {
+                salary: 1000,
+                ..rank(202)
+            },
+        ]);
+        session.run_set(&set("K200 K201"), &mut Scripted::default());
+        session.pilot.cash = 500;
+        let _ = session.take_save_due();
+        session.let_days_pass(1, &mut NeverFires);
+        assert_eq!(session.pilot().cash(), 650);
+        assert!(session.take_save_due());
+        session.let_days_pass(2, &mut NeverFires);
+        assert_eq!(session.pilot().cash(), 850, "201 stops at its cap");
+    }
+
+    #[test]
+    fn the_day_reads_the_sessions_salary_cap() {
+        let ranks = vec![RankRecord {
+            salary: 200,
+            salary_cap: 1100,
+            ..rank(200)
+        }];
+        for (source, cash) in [(RuleSource::Engine, 1200), (RuleSource::Bible, 1100)] {
+            let mut session = ranked(ranks.clone())
+                .with_rules(Rulebook::default().with_override(RuleKey::SalaryCap, source));
+            session.run_set(&set("K200"), &mut Scripted::default());
+            session.pilot.cash = 1000;
+            session.let_days_pass(1, &mut NeverFires);
+            assert_eq!(session.pilot().cash(), cash, "{source:?}");
         }
     }
 }

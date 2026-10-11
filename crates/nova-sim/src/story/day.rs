@@ -27,7 +27,9 @@ pub(crate) enum Participant {
     /// The reinforcement countdowns (@0xb724-0xb759), once reinforcements
     /// are built.
     Reinforcements,
-    /// The ranks' salaries (@0xb75b-0xb7c2): crons-news-ranks phase 3.
+    /// The ranks' salaries (@0xb75b-0xb7c2): each active rank's, in ID
+    /// order, built by crons-news-ranks phase 3 (see
+    /// [`rank`](crate::rank)).
     Ranks,
     /// The shipyard, hire and outfitter day rolls (@0xb7c4-0xb833): each
     /// ship class's hire roll (+0xa2a, @0xb7dd) then buy roll (+0xa2c,

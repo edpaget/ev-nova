@@ -195,10 +195,12 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
             // The active missions' days left; their deadlines fail on the
             // missions' `DayPassed` subscriptions.
             Participant::MissionDays => session.pilot.missions.count_down(),
+            // The active ranks' salaries (see the `ranks` module).
+            Participant::Ranks => session.ranks_day(),
             // Each slot is filled by its own phase: the tribute by rdm
-            // task planet-domination, the reinforcements once they are
-            // built, and the ranks by crons-news-ranks phase 3.
-            Participant::Tribute | Participant::Reinforcements | Participant::Ranks => {}
+            // task planet-domination, and the reinforcements once they
+            // are built.
+            Participant::Tribute | Participant::Reinforcements => {}
         }
     }
 }

@@ -558,8 +558,9 @@
 //! `day::Day` port the session implements (`session/story.rs`). Phase 2
 //! fills the date and the events, phase 3 `DayPassed`, phase 5 the
 //! destroyed stellars' regeneration, phase 6 the day rolls, phase 8
-//! the damaged stellars' repair, and crons-news-ranks phase 1 the crons;
-//! the others are empty slots until their phase:
+//! the damaged stellars' repair, crons-news-ranks phase 1 the crons and
+//! crons-news-ranks phase 3 the ranks' salaries; the others are empty
+//! slots until their phase:
 //!
 //! 1. the date moves on a day;
 //! 2. the crons, each starting or ending cron's script run as it is
@@ -576,7 +577,9 @@
 //!    reached (story-runtime phase 5; see "Built by phase 5"), and a
 //!    dominated one's defence regrowing (planet-domination);
 //! 7. the reinforcement countdown, once reinforcements are built;
-//! 8. the ranks' salaries (crons-news-ranks phase 3);
+//! 8. the ranks' salaries, each active rank's in ID order, the cash
+//!    floored at 0 after each (crons-news-ranks phase 3; see
+//!    [`rank`](crate::rank));
 //! 9. the day rolls (`wares::DayRolls`): every ship class's hire and buy
 //!    rolls, then every outfit's, drawn afresh (story-runtime phase 6;
 //!    see "Built by phase 6");
