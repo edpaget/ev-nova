@@ -536,6 +536,9 @@ impl PilotCatalog for GameData {
                     on_end: self.set_expr(record.on_end.as_str()).into(),
                     contribute: record.contribute.bits(),
                     require: record.require.bits(),
+                    news_govt: record.news_govt.map(|id| id.map_or(-1, |id| id.0)),
+                    govt_news: record.govt_news_str.map(|id| id.map_or(-1, |id| id.0)),
+                    ind_news: record.ind_news_str.map_or(-1, |id| id.0),
                 })
             })
             .collect()
@@ -3383,6 +3386,9 @@ mod tests {
                 on_end: Script::parse("!b42"),
                 contribute: 0x0000_0004_0000_0001,
                 require: 8,
+                news_govt: [0; 4],
+                govt_news: [0; 4],
+                ind_news: -1,
             }
         );
         assert_eq!(crons[1].enable_on, Test::default(), "a blank EnableOn");
@@ -3397,6 +3403,20 @@ mod tests {
             assert!(shared_script(&a.on_start, &b.on_start), "parsed once");
             assert!(shared_script(&a.on_end, &b.on_end), "parsed once");
         }
+    }
+
+    #[test]
+    fn crons_carry_their_news_fields_raw() {
+        let mut bytes = cron(b"\0", b"\0", b"\0");
+        put_i16s(&mut bytes, 0x14, &[0]);
+        put_i16s(&mut bytes, 0x326, &[130, 0, -1, 0, 15_000, 0, -1, 0]);
+        let data = store_named(&[(Cron::TYPE, 156, None, bytes)]);
+        let record = &data.crons()[0];
+        assert_eq!(record.news_govt, [130, 0, -1, 0], "-1 and 0 both kept");
+        assert_eq!(record.govt_news, [15_000, 0, -1, 0]);
+        assert_eq!(record.ind_news, 0);
+        let crons = store_named(&[(Cron::TYPE, 157, None, cron(b"\0", b"\0", b"\0"))]).crons();
+        assert_eq!(crons[0].ind_news, -1, "an IndNews of -1 stays -1");
     }
 
     #[test]

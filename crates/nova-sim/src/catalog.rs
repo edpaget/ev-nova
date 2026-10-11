@@ -780,6 +780,15 @@ pub struct CronRecord {
     pub contribute: u64,
     /// Its `Require` bits, asked of the player before it starts.
     pub require: u64,
+    /// Its `NewsGovt1-4`, raw: -1 or, in stock data, 0 for unused; the
+    /// `news` module reads it.
+    pub news_govt: [i16; 4],
+    /// Its `GovtNewsStr1-4`, raw: -1 or, in stock data, 0 for unused; the
+    /// `news` module reads it.
+    pub govt_news: [i16; 4],
+    /// Its `IndNewsStr`, raw: -1 or, in stock data, 0 for unused; the
+    /// `news` module reads it.
+    pub ind_news: i16,
 }
 
 /// What a mission's screens show of it, read from its `mïsn` and its

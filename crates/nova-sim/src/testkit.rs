@@ -125,6 +125,9 @@ pub(crate) fn cron(id: i16) -> CronRecord {
         on_end: Script::default(),
         contribute: 0,
         require: 0,
+        news_govt: [-1; 4],
+        govt_news: [-1; 4],
+        ind_news: -1,
     }
 }
 
