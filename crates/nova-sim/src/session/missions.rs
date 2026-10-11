@@ -217,7 +217,9 @@ impl Session {
 
     /// Whether the ship is docked at a mission's `stop`, as
     /// [`Session::docked_at_stop`] matches it: what tells a mission
-    /// gone at its return from one aborted.
+    /// gone at its return from one aborted. Built only for the
+    /// storyline walker (`fixture`), its one caller.
+    #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn docked_at_mission_stop(&self, stop: Stop) -> bool {
         self.landed
             .is_some_and(|docked| self.docked_at_stop(Some(stop), docked))

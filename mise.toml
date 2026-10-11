@@ -18,6 +18,10 @@ run = "cargo fmt --all --check"
 description = "Clippy over every crate and target, warnings are errors"
 run = "cargo clippy --workspace --all-targets --locked -- -D warnings"
 
+[tasks.lint-lib]
+description = "Clippy over every crate's libs and bins without dev-dependency features (so no `fixture`), warnings are errors"
+run = "cargo clippy --workspace --locked -- -D warnings"
+
 [tasks.test]
 description = "Unit/integration tests (nextest) plus doctests"
 run = [
@@ -47,4 +51,4 @@ run = "cargo mutants --workspace"
 
 [tasks.ci]
 description = "Everything CI would run; the pre-commit hook runs this"
-depends = ["fmt", "lint", "test", "lint-dev-tools", "test-dev-tools"]
+depends = ["fmt", "lint", "lint-lib", "test", "lint-dev-tools", "test-dev-tools"]
