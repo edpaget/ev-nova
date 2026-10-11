@@ -297,8 +297,8 @@ use nova_sim::mission::screens::{NO_ACTIVE_MISSIONS, mac_ticks};
 use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
-    HireTerms, Hired, MissionComputer, MissionId, MissionInfo, MissionText, NotOffered,
-    OfferPrompt, PayNote, PersonRules, SessionEvent, VenueOffer,
+    HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText,
+    NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, VenueOffer,
 };
 use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
@@ -497,6 +497,30 @@ pub fn hail_refusal_message(refusal: HailRefusal) -> Option<&'static str> {
         HailRefusal::NoTarget => None,
         HailRefusal::NoResponse => Some(NO_RESPONSE),
         HailRefusal::InHyperspace => Some(HAIL_IN_HYPERSPACE),
+    }
+}
+
+/// `STR#` 2002 #126: a mission's special ship boarded on the assist
+/// path.
+pub const TARGET_BOARDED: &str = "Target ship has been boarded.";
+
+/// What the comm line says as a mission's special ship of `Flags` 0x0008
+/// is boarded on the assist path, as `_HandlePlayerBoardAttempt` builds
+/// it (@0x655ae-0x65663): "`ship`:  Energy transfer complete,
+/// `player_ship`."
+#[must_use]
+pub fn refuelled_message(ship: &str, player_ship: &str) -> String {
+    format!("{ship}:  {ENERGY_TRANSFER}, {player_ship}.")
+}
+
+/// What the comm line says of `line`, the names read from `session`.
+fn mission_board_message(line: MissionBoardLine, session: &Session) -> String {
+    match line {
+        MissionBoardLine::Boarded => TARGET_BOARDED.to_owned(),
+        MissionBoardLine::Refuelled { ship } => refuelled_message(
+            session.ship_name(ship).unwrap_or_default(),
+            session.pilot().ship_name().unwrap_or_default(),
+        ),
     }
 }
 
@@ -2093,6 +2117,12 @@ impl<C> FlightView<C> {
             }
             Ok(Boarding::Repelled) => self.say(REPELLED),
             Ok(Boarding::Offered(offer)) => self.hold_offer(offer),
+            Ok(Boarding::MissionShip(line)) => {
+                if let Some(line) = line {
+                    let said = mission_board_message(line, session);
+                    self.say(said);
+                }
+            }
             Err(refusal) => {
                 if let Some(text) = board_refusal_message(refusal) {
                     self.say(text);
@@ -10107,6 +10137,21 @@ mod tests {
         ] {
             assert_eq!(arrival_lead(message), None, "{message:?}");
         }
+    }
+
+    #[test]
+    fn a_mission_ship_boarded_on_the_assist_path_says_its_line() {
+        assert_eq!(TARGET_BOARDED, "Target ship has been boarded.");
+        assert_eq!(
+            refuelled_message("Freighter", "Kestrel"),
+            "Freighter:  Energy transfer complete, Kestrel."
+        );
+        let view = flight();
+        let session = view.session().expect("flying");
+        assert_eq!(
+            mission_board_message(MissionBoardLine::Boarded, session),
+            TARGET_BOARDED
+        );
     }
 
     #[test]

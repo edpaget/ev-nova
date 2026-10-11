@@ -214,6 +214,52 @@ pub const fn fails_on_disabled(facts: LossFacts) -> bool {
     first_loss(facts) && matches!(facts.goal, ShipGoal::Escort)
 }
 
+/// What the comm line says as one of a mission's ships is boarded on the
+/// assist path ([`assists`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssistLine {
+    /// `STR#` 2002 #126, "Target ship has been boarded." (@0x65665-0x65685).
+    Boarded,
+    /// With `Flags` 0x0008, the boarded ship's thanks for the fuel: its
+    /// `shïp` name, `STR#` 2002 #3 and the player's ship's name
+    /// (@0x655ae-0x65663).
+    Refuelled,
+}
+
+/// The `PickupMode` that picks the cargo up by boarding the special ship
+/// (rdm:phase/mission-ships/phase-14-boarded-cargo).
+const PICKUP_ON_BOARD: i16 = 2;
+/// `Flags`: the auto-abort takes a jump's fuel, and the assist path says
+/// so.
+const TAKES_FUEL: u16 = 0x0008;
+
+/// Whether boarding one of the special ships of a mission of `goal`,
+/// `Flags` `flags` and `PickupMode` `pickup_mode`, with `left` of them
+/// left, takes the assist path (`_HandlePlayerBoardAttempt`
+/// @0x65575-0x65762) that counts it boarded, and what its comm line
+/// says: a board or rescue goal with `Flags` 0x0001 and exactly one ship
+/// left. A `PickupMode` of 2 takes the cargo pickup instead
+/// (@0x652ee-0x65570, rdm:phase/mission-ships/phase-14-boarded-cargo).
+#[must_use]
+pub const fn assists(
+    goal: ShipGoal,
+    flags: u16,
+    pickup_mode: i16,
+    left: i16,
+) -> Option<AssistLine> {
+    let assisted = matches!(goal, ShipGoal::Board | ShipGoal::Rescue)
+        && flags & AUTO_ABORT != 0
+        && left == 1
+        && pickup_mode != PICKUP_ON_BOARD;
+    if !assisted {
+        None
+    } else if flags & TAKES_FUEL != 0 {
+        Some(AssistLine::Refuelled)
+    } else {
+        Some(AssistLine::Boarded)
+    }
+}
+
 /// The first loss of its kind, of a mission not failed and not hidden.
 const fn first_loss(facts: LossFacts) -> bool {
     facts.before == 0 && !facts.failed && facts.flags & HIDDEN == 0
@@ -589,6 +635,35 @@ mod tests {
         };
         assert!(fails_on_destroyed(other_flags));
         assert!(fails_on_disabled(other_flags));
+    }
+
+    #[test]
+    fn the_assist_path_takes_a_board_or_rescue_goal_of_flag_0x0001_with_one_ship_left() {
+        for goal in [ShipGoal::Board, ShipGoal::Rescue] {
+            assert_eq!(
+                assists(goal, AUTO_ABORT, -1, 1),
+                Some(AssistLine::Boarded),
+                "{goal:?}"
+            );
+            assert_eq!(
+                assists(goal, AUTO_ABORT | TAKES_FUEL | HIDDEN, 0, 1),
+                Some(AssistLine::Refuelled),
+                "{goal:?}"
+            );
+            assert_eq!(assists(goal, 0, -1, 1), None, "{goal:?}: no 0x0001");
+            assert_eq!(assists(goal, TAKES_FUEL, -1, 1), None, "{goal:?}");
+            for left in [0, 2] {
+                assert_eq!(assists(goal, AUTO_ABORT, -1, left), None, "{goal:?} {left}");
+            }
+            assert_eq!(
+                assists(goal, AUTO_ABORT, PICKUP_ON_BOARD, 1),
+                None,
+                "{goal:?}: the pickup's"
+            );
+        }
+        for goal in [ShipGoal::Destroy, ShipGoal::Escort, ShipGoal::None] {
+            assert_eq!(assists(goal, AUTO_ABORT, -1, 1), None, "{goal:?}");
+        }
     }
 
     #[test]

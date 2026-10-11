@@ -6,6 +6,7 @@
 
 use crate::catalog::{GovtRecord, MissionId, MissionRecord};
 use crate::chance::Chance;
+use crate::person::ESCORT_GOAL;
 use crate::rulebook::Rulebook;
 use crate::rules::{Check, Checks, Context};
 
@@ -52,8 +53,8 @@ pub fn picks_up_at_destination(record: &MissionRecord, active: &ActiveMission) -
 /// and `at_return` say (`_MissionLandCargoCheck` @0x9ef25-0x9ef3e,
 /// @0x9f00c-0x9f070): with its cargo aboard, `DropOffMode` 0 at the
 /// destination, or `DropOffMode` 1 at the return once its ship goals are
-/// met or it has no `ShipGoal`. (`ShipGoal` 3's escorted ships left,
-/// @0x9f061-0x9f070, are rdm:phase/mission-ships/phase-2-ship-goals'.)
+/// met, it has no `ShipGoal`, or its `ShipGoal` is to escort its ships
+/// and none of them has been destroyed (@0x9f061-0x9f070).
 #[must_use]
 pub fn drops_off(
     record: &MissionRecord,
@@ -64,7 +65,9 @@ pub fn drops_off(
     let at_destination = at_destination && record.drop_off_mode == DROP_OFF_AT_DESTINATION;
     let at_return = at_return
         && record.drop_off_mode == DROP_OFF_AT_RETURN
-        && (active.goals_met || record.ships.goal == NO_GOAL);
+        && (active.goals_met
+            || record.ships.goal == NO_GOAL
+            || (record.ships.goal == ESCORT_GOAL && active.ships.destroyed <= 0));
     active.aboard && (at_destination || at_return)
 }
 
@@ -420,8 +423,23 @@ mod tests {
         };
         assert!(!drops_off(&goal(0), &unmet, false, true), "a goal not met");
         assert!(
-            !drops_off(&goal(3), &unmet, false, true),
-            "escorts: mission-ships'"
+            drops_off(&goal(3), &unmet, false, true),
+            "escorts none of which was destroyed"
+        );
+        let escort_lost = ActiveMission {
+            ships: crate::mission::SpecialShips {
+                destroyed: 1,
+                ..crate::mission::SpecialShips::default()
+            },
+            ..unmet.clone()
+        };
+        assert!(
+            !drops_off(&goal(3), &escort_lost, false, true),
+            "one destroyed"
+        );
+        assert!(
+            !drops_off(&goal(0), &escort_lost, false, true),
+            "another goal reads no count"
         );
         assert!(drops_off(&goal(-1), &unmet, false, true), "no goal");
         let empty = ActiveMission {

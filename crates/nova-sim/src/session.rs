@@ -3322,7 +3322,10 @@ impl Session {
     /// available from a ship offers it instead, once the crime is
     /// convicted ([`Boarding::Offered`], see the `person_offers` module):
     /// nothing is rolled or granted, and the ship is marked boarded, and
-    /// [`Fate::Boarded`] raised, only once the mission is accepted.
+    /// [`Fate::Boarded`] raised, only once the mission is accepted. A
+    /// mission's special ship, but one of a failed mission, is only
+    /// marked boarded, after the velocity match, and maybe counted
+    /// ([`Boarding::MissionShip`], see the `mission_ships` module).
     ///
     /// # Errors
     ///
@@ -3347,6 +3350,9 @@ impl Session {
         check_board(&self.player, self.condition, target)?;
         let npc = self.target().cloned().ok_or(BoardRefusal::NoTarget)?;
         self.player.velocity = npc.state.velocity;
+        if let Some(boarding) = self.board_mission_ship(&npc) {
+            return Ok(boarding);
+        }
         let changes = law.penalties(Crime::Board, npc.govt, &self.govts);
         legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
         self.strikes.push(Strike {

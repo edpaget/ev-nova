@@ -435,6 +435,25 @@ pub enum Boarding {
     /// (`_HandlePlayerBoardAttempt` @0x65936): the offer dialog, or the
     /// mission accepted at once.
     Offered(VenueOffer),
+    /// A mission's special ship was boarded, with no plunder, no crime
+    /// and no person's offer (@0x657bf-0x657e3 → @0x65f43), saying the
+    /// assist path's comm line when it took it.
+    MissionShip(Option<MissionBoardLine>),
+}
+
+/// What the comm line says as a mission's special ship is boarded on the
+/// assist path (see the session's `mission_ships` module).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MissionBoardLine {
+    /// `STR#` 2002 #126, "Target ship has been boarded."
+    Boarded,
+    /// The ship boarded, of class `ship`, thanks the player for the fuel:
+    /// "<its `shïp` name>:  " `STR#` 2002 #3 ", <the player's ship's
+    /// name>." (@0x655ae-0x65663).
+    Refuelled {
+        /// The class of the ship boarded, which names it.
+        ship: ShipId,
+    },
 }
 
 /// What is on board the ship being boarded, as the plunder dialog shows

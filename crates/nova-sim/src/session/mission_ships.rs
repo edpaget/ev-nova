@@ -20,6 +20,7 @@
 //! restart. Its timer is drawn after the setup's draws, not before.
 
 use super::Session;
+use crate::board::{Boarding, MissionBoardLine};
 use crate::catalog::{DudeId, MissionId, MissionRecord, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::Script;
@@ -28,14 +29,14 @@ use crate::message::SimMessage;
 use crate::mission::active::AUTO_ABORT;
 use crate::mission::ships::{ShipBehav, ShipFacts, ShipStart, appear_timer};
 use crate::mission::{
-    ActiveMission, FailedBy, GoalFacts, LossFacts, ShipGoal, ShipSystem, SpecialShips, check_goals,
-    fails_on_destroyed, fails_on_disabled, goals_met_moment,
+    ActiveMission, AssistLine, FailedBy, GoalFacts, LossFacts, ShipGoal, ShipSystem, SpecialShips,
+    assists, check_goals, fails_on_destroyed, fails_on_disabled, goals_met_moment,
 };
 use crate::session::mission_screens::MissionTextKind;
 use crate::story::{
     Consumer, Entrance, EventFilter, Fate, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
-use crate::traffic::npc::NpcId;
+use crate::traffic::npc::{Npc, NpcId};
 use crate::traffic::spawn::{self, MissionSpawn, NewShip};
 use crate::traffic::table::SpawnTable;
 
@@ -423,6 +424,42 @@ impl Session {
         }
     }
 
+    /// Boards `npc` when it is a mission's special ship
+    /// (`_HandlePlayerBoardAttempt` @0x652a2-0x657e3), the player's
+    /// velocity matched already: on the assist path ([`assists`]) its
+    /// slot counts it boarded, and the comm line is said; then it is
+    /// marked boarded (@0x65f43), with no `BoardPenalty`, person's offer
+    /// or plunder. A ship of a failed mission is boarded as ordinary
+    /// traffic: none. The assist path's ship +0x4c (the AI's wait
+    /// countdown, 100 @0x65746) is not kept.
+    pub(super) fn board_mission_ship(&mut self, npc: &Npc) -> Option<Boarding> {
+        let mark = npc.mission?;
+        let mut line = None;
+        if let Some(active) = self.pilot.missions.get(mark.slot) {
+            if active.failed.is_some() {
+                return None;
+            }
+            let record = self.lifecycle_record(active.mission);
+            let assist = assists(
+                ShipGoal::from_code(record.ships.goal),
+                record.flags,
+                record.pickup_mode,
+                active.ships.left,
+            );
+            if let Some(assist) = assist {
+                line = Some(match assist {
+                    AssistLine::Boarded => MissionBoardLine::Boarded,
+                    AssistLine::Refuelled => MissionBoardLine::Refuelled { ship: npc.ship },
+                });
+                if let Some(active) = self.slot_holding(mark.slot, record.id) {
+                    active.ships.boarded = active.ships.boarded.saturating_add(1);
+                }
+            }
+        }
+        self.mark_boarded(npc.id);
+        Some(Boarding::MissionShip(line))
+    }
+
     /// The special ships just brought into the system, each numbered
     /// above `last` (every one with none): each raises [`Fate::Arrived`],
     /// and each of a mission whose goal is to observe them, not yet met,
@@ -574,6 +611,7 @@ mod tests {
     use super::*;
     use crate::ai::Goal;
     use crate::ai::NovaAi;
+    use crate::board::MissionBoardLine;
     use crate::catalog::{
         CommCatalog, DudeRecord, GovtId, MissionId, MissionShip, PersonId, PersonRecord, ShipId,
         StellarId, SystemId, SystemTraffic,
@@ -1942,5 +1980,185 @@ mod tests {
                 .is_empty(),
             "the offers were rolled"
         );
+    }
+
+    // Boarding.
+
+    /// Records each crime it is asked about, and changes nothing.
+    #[derive(Debug, Default)]
+    struct Witness {
+        seen: std::cell::RefCell<Vec<crate::legal::Crime>>,
+    }
+
+    impl crate::legal::LegalCode for Witness {
+        fn penalties(
+            &self,
+            crime: crate::legal::Crime,
+            _victim: Option<GovtId>,
+            _govts: &crate::govt::Governments,
+        ) -> Vec<(GovtId, i32)> {
+            self.seen.borrow_mut().push(crime);
+            Vec::new()
+        }
+    }
+
+    /// [`returning`] of `goal` with `count` ships, `Flags` `flags`, its
+    /// auto-abort paying with `Flags2` 0x0002.
+    fn rescuing(goal: i16, count: i16, flags: u16) -> FakePilotCatalog {
+        let mut catalog = returning(goal, flags);
+        catalog.missions[0].ships.count = count;
+        catalog.missions[0].flags2 = 0x0002;
+        catalog
+    }
+
+    /// Boards NPC 0, disabled under the player at rest, both facing up,
+    /// as `law` says: the boarding, and the crimes `law` was asked of.
+    fn board_first(
+        session: &mut Session,
+    ) -> (
+        Result<crate::board::Boarding, crate::board::BoardRefusal>,
+        Vec<crate::legal::Crime>,
+    ) {
+        session.player = crate::flight::ShipState::default();
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.state = crate::flight::ShipState::default();
+        npc.condition = Condition::Disabled;
+        session.target = Some(session.npcs()[0].id);
+        let law = Witness::default();
+        let boarding = session.board(
+            &law,
+            &crate::board::NovaBoarding::default(),
+            &mut NeverFires,
+        );
+        (boarding, law.seen.take())
+    }
+
+    #[test]
+    fn the_assist_path_counts_a_rescue_ship_boarded_and_its_goal_auto_aborts_the_mission() {
+        let catalog = rescuing(5, 1, 0x0001);
+        let mut session = in_flight_with(&catalog, 1);
+        let _ = shown(&mut session);
+        let (boarding, crimes) = board_first(&mut session);
+        assert_eq!(
+            boarding,
+            Ok(crate::board::Boarding::MissionShip(Some(
+                MissionBoardLine::Boarded
+            )))
+        );
+        assert_eq!(crimes, [], "no BoardPenalty");
+        assert_eq!(session.boarding(), None, "no plunder");
+        assert!(session.npcs()[0].boarded);
+        assert_eq!(ships_of(&session).boarded, 1);
+        assert!(session.story_raised().contains(&StoryEvent::ShipFate {
+            ship: session.npcs()[0].id,
+            fate: Fate::Boarded,
+        }));
+        let cash = session.pilot().cash;
+        settle(&mut session, &catalog);
+        assert_eq!(shown(&mut session), [ship_done("Rover done.")]);
+        assert_eq!(bits(&session), [6, 7], "OnShipDone, then OnAbort");
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert_eq!(session.pilot().cash, cash + 1000, "Flags2 0x0002 pays");
+    }
+
+    #[test]
+    fn with_flag_0x0008_the_assist_path_says_the_refuel_and_the_auto_abort_takes_the_fuel() {
+        let catalog = rescuing(5, 1, 0x0409);
+        let mut session = in_flight_with(&catalog, 1);
+        let fuel = session.reserves().fuel.now;
+        let (boarding, _) = board_first(&mut session);
+        assert_eq!(
+            boarding,
+            Ok(crate::board::Boarding::MissionShip(Some(
+                MissionBoardLine::Refuelled { ship: ShipId(200) }
+            )))
+        );
+        settle(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert!((session.reserves().fuel.now - (fuel - 100.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_board_goals_ship_is_counted_on_the_assist_path_too() {
+        let catalog = rescuing(2, 1, 0x0001);
+        let mut session = in_flight_with(&catalog, 1);
+        let (boarding, _) = board_first(&mut session);
+        assert_eq!(
+            boarding,
+            Ok(crate::board::Boarding::MissionShip(Some(
+                MissionBoardLine::Boarded
+            )))
+        );
+        assert_eq!(ships_of(&session).boarded, 1);
+    }
+
+    #[test]
+    fn a_mission_ship_boarded_off_the_assist_path_is_marked_boarded_and_not_counted() {
+        for (goal, count, flags, pickup) in [
+            (5, 2, 0x0001, -1),
+            (2, 1, 0, -1),
+            (2, 1, 0x0001, 2),
+            (0, 1, 0x0001, -1),
+        ] {
+            let mut catalog = rescuing(goal, count, flags);
+            catalog.missions[0].pickup_mode = pickup;
+            let mut session = in_flight_with(&catalog, count);
+            let (boarding, crimes) = board_first(&mut session);
+            assert_eq!(
+                boarding,
+                Ok(crate::board::Boarding::MissionShip(None)),
+                "{goal} {count} {flags:#x} {pickup}"
+            );
+            assert_eq!(crimes, [], "{goal}");
+            assert_eq!(session.boarding(), None, "{goal}");
+            assert!(session.npcs()[0].boarded, "{goal}");
+            assert_eq!(ships_of(&session).boarded, 0, "{goal}");
+            settle(&mut session, &catalog);
+            assert!(!goals_met(&session), "{goal}");
+        }
+    }
+
+    #[test]
+    fn a_failed_missions_ship_is_boarded_as_ordinary_traffic() {
+        let catalog = rescuing(5, 1, 0x0001);
+        let mut session = in_flight_with(&catalog, 1);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.failed = Some(FailedBy::Marked);
+        }
+        let (boarding, crimes) = board_first(&mut session);
+        assert!(
+            matches!(boarding, Ok(crate::board::Boarding::Opened(_))),
+            "{boarding:?}"
+        );
+        assert_eq!(crimes, [crate::legal::Crime::Board]);
+        assert_eq!(ships_of(&session).boarded, 0);
+    }
+
+    #[test]
+    fn a_ship_whose_slot_is_free_is_boarded_without_plunder() {
+        let catalog = rescuing(5, 1, 0x0001);
+        let mut session = in_flight_with(&catalog, 1);
+        if let Some(npc) = session.traffic.npcs_mut().first_mut() {
+            npc.mission = Some(crate::traffic::npc::MissionMark {
+                slot: 5,
+                behav: ShipBehav::Own,
+                cloaked: false,
+            });
+        }
+        let (boarding, crimes) = board_first(&mut session);
+        assert_eq!(boarding, Ok(crate::board::Boarding::MissionShip(None)));
+        assert_eq!(crimes, []);
+    }
+
+    /// [`in_flight`] for a mission of `count` ships.
+    fn in_flight_with(catalog: &FakePilotCatalog, count: i16) -> Session {
+        let mut session = accepted(catalog);
+        take_off(&mut session, catalog);
+        assert_eq!(
+            marked(&session).len(),
+            usize::try_from(count).expect("count")
+        );
+        settle(&mut session, catalog);
+        session
     }
 }
