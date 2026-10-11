@@ -1121,4 +1121,54 @@ mod tests {
         assert_eq!(session.class_order(class), Some(EscortOrder::Hold));
         assert_eq!(session.class_order(other), Some(EscortOrder::Attack));
     }
+
+    #[test]
+    fn with_no_hired_escort_a_jump_keeps_the_class_order_by_the_bible_only() {
+        for (source, kept) in [
+            (RuleSource::Engine, None),
+            (RuleSource::Bible, Some(EscortOrder::Attack)),
+        ] {
+            let catalog = ships_catalog(escorting(-6, 0));
+            let mut session = accepted(&catalog);
+            session.rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
+            take_off(&mut session, &catalog);
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack);
+            jump_to(&mut session, &catalog, 131);
+            assert_eq!(orders(&session), [kept; 2], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_class_command_keeps_only_its_classs_order_across_a_jump() {
+        let catalog = ships_catalog(escorting(-6, 0));
+        let mut session = accepted(&catalog);
+        session.rules = Rulebook::default().with_override(RuleKey::EscortOrders, RuleSource::Bible);
+        take_off(&mut session, &catalog);
+        let class = mission_escorts(&session)[0].class;
+        let other = EscortClass::ALL
+            .into_iter()
+            .find(|&other| other != class)
+            .expect("another class");
+        session.command_escorts(EscortGroup::Class(other), EscortCommand::Hold);
+        jump_to(&mut session, &catalog, 131);
+        assert_eq!(orders(&session), [None; 2]);
+        session.command_escorts(EscortGroup::Class(class), EscortCommand::Hold);
+        jump_to(&mut session, &catalog, 130);
+        assert_eq!(orders(&session), [Some(EscortOrder::Hold); 2]);
+    }
+
+    #[test]
+    fn the_fixture_disables_a_ship_the_player_cannot_shoot() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = flying(&catalog);
+        let id = mission_escorts(&session)[0].id;
+        crate::fixture::disable(&mut session, id);
+        let npc = session.npc(id).expect("here");
+        assert_eq!(npc.condition, Condition::Disabled);
+        assert_eq!(
+            (npc.reserves.shield.now, npc.reserves.armor.now),
+            (0.0, 1.0)
+        );
+        assert!(session.escorts_flying(), "the other is intact");
+    }
 }

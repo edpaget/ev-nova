@@ -13308,4 +13308,43 @@ mod tests {
         }
         assert_eq!(ship_129_sprites(&drawn(&view)), 1, "drawn once out");
     }
+
+    #[test]
+    fn the_escort_menu_closes_once_its_only_mission_escort_is_disabled() {
+        let mut catalog = trafficked(&[130], 0, 129, 3);
+        // One ship of düde 128 escorting the player (`ShipBehav` 1).
+        catalog.missions = vec![MissionRecord {
+            ships: MissionShip {
+                count: 1,
+                syst: -1,
+                dude: Some(nova_sim::DudeId(128)),
+                behav: 1,
+                start: 0,
+                ..MissionShip::NONE
+            },
+            ..errand(140)
+        }];
+        let mut view = FlightView::new(catalog).with_behaviour(Rc::new(Still));
+        run_set(&mut view, "S140");
+        settle_session(&mut view);
+        view.tick(TICK);
+        let escort = view
+            .session()
+            .expect("flying")
+            .npcs()
+            .iter()
+            .find(|npc| npc.mission_escort())
+            .map(|npc| npc.id)
+            .expect("a mission escort");
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open(), "a mission escort opens it");
+        nova_sim::fixture::disable(view.session.as_mut().expect("flying"), escort);
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        assert!(
+            session.escort_menu().iter().any(|row| row.present),
+            "its row stays"
+        );
+        assert!(!view.escort_menu().is_open(), "no escort is flying");
+    }
 }

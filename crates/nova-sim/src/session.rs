@@ -641,6 +641,14 @@ pub struct Session {
     /// ships as they are placed next: after a take-off, and when a pilot
     /// is flown.
     restock_persons: bool,
+    /// The last order the player gave each escort class, in
+    /// [`EscortClass::ALL`](crate::escort::EscortClass::ALL) order: the
+    /// original's one order per class (0x3b5394), which a ship joining
+    /// the class takes (see [`Session::class_order`]). Not saved, as the
+    /// hired escorts keep theirs on their records and mission escorts are
+    /// never saved; reset with their orders on entering a system by the
+    /// engine's [`RuleKey::EscortOrders`].
+    class_orders: [Option<crate::escort::EscortOrder>; 4],
     /// The fee and wage of a hire (see [`Session::with_hire_terms`]).
     hire_terms: hire::Shared<dyn HireTerms>,
     /// The control-bit test a ship's `Availability` for hire goes through
@@ -938,6 +946,7 @@ impl Session {
             fighter_notes: Vec::new(),
             fleet: Vec::new(),
             restock_persons: false,
+            class_orders: [None; 4],
             hire_terms: hire::Shared(Rc::new(NovaHire::default())),
             control_bits: hire::Shared(Rc::new(NovaBits)),
             hire_rolls: DayRolls::default(),

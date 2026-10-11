@@ -95,6 +95,7 @@ impl Session {
                     mark.order = None;
                 }
             }
+            self.class_orders = [None; 4];
         }
         self.fleet = (0..self.pilot.escorts.len())
             .map(|index| self.place_escort(index))
@@ -240,7 +241,7 @@ impl Session {
     }
 
     /// NPC `id`, if it is in the system, to change.
-    pub(super) fn npc_mut(&mut self, id: NpcId) -> Option<&mut Npc> {
+    pub(crate) fn npc_mut(&mut self, id: NpcId) -> Option<&mut Npc> {
         self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id)
     }
 
@@ -392,6 +393,11 @@ impl Session {
             }
             changed |= take_target(npc, target);
         }
+        for (class, kept) in EscortClass::ALL.into_iter().zip(&mut self.class_orders) {
+            if group.holds(class) {
+                *kept = command.order();
+            }
+        }
         let mission_escorts: Vec<NpcId> = self
             .player_led()
             .filter(|npc| npc.mission_escort() && group.holds(npc.class))
@@ -424,50 +430,48 @@ impl Session {
         })
     }
 
-    /// The standing order of `class` that a ship joining it takes, as
-    /// the original's one order per class does (`_EscortAI`
-    /// @0x83ad8-0x83b2b): its first hired escort's, else its first
-    /// mission escort's, Return to Hangar excepted. A fighter the player
-    /// launches and a mission escort joining both take it.
-    pub(super) fn class_order(&self, class: EscortClass) -> Option<EscortOrder> {
+    /// `class`'s row in the escort menu: whether the player leads a ship
+    /// of it, hired or a mission escort, and the standing order of its
+    /// first hired escort, else of its first mission escort.
+    fn class_row(&self, class: EscortClass) -> ClassRow {
         let hired = (0..self.pilot.escorts.len())
             .find(|&index| self.escort_class(index) == class)
             .map(|index| self.pilot.escorts[index].order);
-        let mission = || {
+        let first = hired.or_else(|| {
             self.player_led()
                 .find(|npc| npc.mission_escort() && npc.class == class)
                 .map(Npc::escort_order)
-        };
-        hired
-            .or_else(mission)
-            .flatten()
-            .filter(|&order| order != EscortOrder::Dock)
+        });
+        ClassRow {
+            class,
+            present: first.is_some(),
+            order: first.flatten(),
+        }
+    }
+
+    /// The standing order of `class` that a ship joining it takes, as
+    /// the original's one order per class does (`_EscortAI`
+    /// @0x83ad8-0x83b2b): its first escort's (`class_row`),
+    /// else the last order given the class (kept across a jump or a
+    /// landing unless the engine's [`RuleKey::EscortOrders`] reset it),
+    /// Return to Hangar excepted. A fighter the player launches and a
+    /// mission escort joining both take it.
+    pub(super) fn class_order(&self, class: EscortClass) -> Option<EscortOrder> {
+        let kept = EscortClass::ALL
+            .iter()
+            .position(|&each| each == class)
+            .and_then(|index| self.class_orders[index]);
+        let row = self.class_row(class);
+        if row.present { row.order } else { kept }.filter(|&order| order != EscortOrder::Dock)
     }
 
     /// The escort menu's class rows, in its order: whether the player
     /// leads a ship of each class, hired or a mission escort, disabled
     /// included (`_DrawEscortMenuInFrame` @0x56392-0x563ca), and the
-    /// standing order of its first hired escort, else of its first
-    /// mission escort.
+    /// standing order of its first escort (`class_row`).
     #[must_use]
     pub fn escort_menu(&self) -> [ClassRow; 4] {
-        EscortClass::ALL.map(|class| {
-            let hired = (0..self.pilot.escorts.len())
-                .find(|&index| self.escort_class(index) == class)
-                .and_then(|index| self.pilot.escorts.get(index))
-                .map(|escort| escort.order);
-            let mission = || {
-                self.player_led()
-                    .find(|npc| npc.mission_escort() && npc.class == class)
-                    .map(Npc::escort_order)
-            };
-            let first = hired.or_else(mission);
-            ClassRow {
-                class,
-                present: first.is_some(),
-                order: first.flatten(),
-            }
-        })
+        EscortClass::ALL.map(|class| self.class_row(class))
     }
 
     /// Whether the player has an escort flying, for the escort menu to
