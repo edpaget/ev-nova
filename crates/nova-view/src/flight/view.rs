@@ -2536,9 +2536,13 @@ impl<C> FlightView<C> {
     }
 
     /// Draws each NPC with its own ship's sprite, or a crossed box when its
-    /// sheet cannot be read.
+    /// sheet cannot be read, but for one emerging from a gate
+    /// ([`sprite_drawn`]).
     fn draw_npcs(&self, list: &mut DrawList, camera: &Camera) {
         for (npc, at, heading) in self.shown_npcs() {
+            if !sprite_drawn(npc) {
+                continue;
+            }
             let at = camera.world_to_screen(at);
             match self.npc_sheets.get(&npc.ship) {
                 Some(Ok(sheet)) => {
@@ -3181,6 +3185,14 @@ fn dying(
         )
     });
     me.into_iter().chain(npcs).collect()
+}
+
+/// Whether `npc`'s sprite is drawn: not while it emerges from a hypergate
+/// or wormhole, as `_HandleShipDisplay` (@0x2c090) skips a ship
+/// `_AIShipIsEmergingFromHypergate` reads emerging. The radar still
+/// shows it, as `_DrawStatusRadar` does not ask.
+fn sprite_drawn(npc: &Npc) -> bool {
+    !npc.emerging()
 }
 
 #[cfg(test)]
@@ -7368,6 +7380,21 @@ mod tests {
             ],
             "after the stellars, before the player"
         );
+    }
+
+    #[test]
+    fn a_ship_emerging_from_a_gate_is_not_drawn_but_one_jumping_in_is() {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let mut npc = view.session().expect("flying").npcs()[0].clone();
+        assert!(sprite_drawn(&npc), "flying");
+        npc.mode = nova_sim::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
+        assert!(sprite_drawn(&npc), "jumping in");
+        npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
+        assert!(!sprite_drawn(&npc), "emerging");
     }
 
     #[test]

@@ -71,6 +71,14 @@ pub enum Mode {
     },
     /// Flying under its own controls.
     Flying,
+    /// Coming out of a hypergate or wormhole after the player, for this
+    /// many more ticks: at rest, seen by no one, untargetable and not
+    /// drawn, with no decisions (`_AIMakeShipEmergeFromHyperGate`, goal
+    /// 21; see the session's `gate_follow` module).
+    Emerging {
+        /// The ticks of the wait left.
+        ticks_left: u32,
+    },
 }
 
 /// What an NPC flown by a person (`përs`) carries of it (see
@@ -241,6 +249,13 @@ impl Npc {
             && self.goal.quarry() == Some(ship)
     }
 
+    /// Whether it is emerging from a hypergate or wormhole
+    /// ([`Mode::Emerging`]).
+    #[must_use]
+    pub fn emerging(&self) -> bool {
+        matches!(self.mode, Mode::Emerging { .. })
+    }
+
     /// Whether it threatens the player (`_IsThreatToPlayer` @0x7f501):
     /// intact and attacking, sniping at or fleeing from the player. There
     /// is no legal or government test; inspecting is no threat.
@@ -406,6 +421,18 @@ mod tests {
             ..crate::testkit::npc(1, ShipStats::default())
         };
         assert!(hunter.threatens(other));
+    }
+
+    #[test]
+    fn only_a_ship_coming_out_of_a_gate_is_emerging() {
+        let mut npc = crate::testkit::npc(1, ShipStats::default());
+        npc.goal = Goal::Attack(ShipRef::Player);
+        assert!(!npc.emerging());
+        npc.mode = Mode::JumpingIn { ticks_left: 2 };
+        assert!(!npc.emerging());
+        npc.mode = Mode::Emerging { ticks_left: 2 };
+        assert!(npc.emerging());
+        assert!(!npc.threatens_player(), "while it emerges");
     }
 
     #[test]

@@ -795,6 +795,21 @@ mod tests {
     }
 
     #[test]
+    fn a_target_emerging_from_a_gate_cannot_be_hailed_and_is_let_go() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        npc(&mut session).mode = Mode::Emerging { ticks_left: 4 };
+        let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
+        assert!(hailed.is_err(), "{hailed:?}");
+        assert!(asked.is_empty());
+        session.clear_lost_target();
+        assert_eq!(
+            session.target, None,
+            "as the original lets it go (@0x686a4)"
+        );
+    }
+
+    #[test]
     fn a_target_still_jumping_in_cannot_be_hailed() {
         let catalog = hailable();
         let mut session = targeting(&catalog);

@@ -47,6 +47,10 @@
 //!   cancels a disabled ship's jump out but lets its jump in run
 //!   (@0x8fccb-0x8fd08), so a rescue mission's ship held disabled as it
 //!   comes in ends its glide in the system.
+//! - While it emerges from a gate ([`Mode::Emerging`]) it holds where it
+//!   is, at rest, whatever its condition, as the original's goal 21 holds
+//!   it until its +0x4c runs out (`_HighLevelAIHandler`
+//!   @0x8dd61-0x8dd93); then it flies its goal.
 //! - Otherwise a ship that is not [`Condition::Intact`] (disabled,
 //!   breaking up or destroyed) drifts: it flies on with no controls, and
 //!   never lands or jumps.
@@ -107,6 +111,14 @@ pub enum Outcome {
 /// goal is about (the lead it follows, the ship it fights or inspects)
 /// at `other`, when it is there.
 pub fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> Outcome {
+    if let Mode::Emerging { ticks_left } = npc.mode {
+        npc.state.velocity = Vec2::ZERO;
+        npc.mode = match ticks_left.saturating_sub(1) {
+            0 => Mode::Flying,
+            left => Mode::Emerging { ticks_left: left },
+        };
+        return Outcome::Flying;
+    }
     let gliding = matches!(npc.condition, Condition::Intact | Condition::Disabled);
     if let (Mode::JumpingIn { ticks_left }, true) = (npc.mode, gliding) {
         glide(npc, ticks_left);
@@ -792,6 +804,32 @@ mod tests {
             assert_eq!(jumper.state, at(1.0, -2002.0, 1.0, -2.0, 90.0), "drifting");
             assert_eq!(jumper.mode, Mode::JumpingIn { ticks_left: 3 }, "no glide");
         }
+    }
+
+    #[test]
+    fn a_ship_emerging_from_a_gate_holds_at_rest_for_its_ticks_then_flies_its_goal() {
+        let start = at(100.0, 200.0, 3.0, -4.0, 45.0);
+        let mut ship = npc(FAST, Goal::Attack(ShipRef::Player), start);
+        ship.mode = Mode::Emerging { ticks_left: 3 };
+        let player = at(600.0, 200.0, 0.0, 0.0, 0.0);
+        for left in [2, 1, 0] {
+            assert_eq!(fly(&mut ship, &[], Some(&player)), Outcome::Flying);
+            assert_eq!(ship.state, at(100.0, 200.0, 0.0, 0.0, 45.0), "{left}");
+            let mode = if left == 0 {
+                Mode::Flying
+            } else {
+                Mode::Emerging { ticks_left: left }
+            };
+            assert_eq!(ship.mode, mode);
+        }
+        fly(&mut ship, &[], Some(&player));
+        assert_ne!(ship.state.heading, 45.0, "turns on the player");
+        let mut wreck = npc(FAST, Goal::Idle, start);
+        wreck.condition = Condition::Disabled;
+        wreck.mode = Mode::Emerging { ticks_left: 2 };
+        fly(&mut wreck, &[], None);
+        assert_eq!(wreck.state, at(100.0, 200.0, 0.0, 0.0, 45.0), "held too");
+        assert_eq!(wreck.mode, Mode::Emerging { ticks_left: 1 });
     }
 
     #[test]

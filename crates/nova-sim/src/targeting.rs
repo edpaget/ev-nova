@@ -6,8 +6,12 @@
 //! - A ship is targetable ([`targetable`]) while it is intact or
 //!   disabled: a ship breaking up or destroyed is not (`_IsDying`). Target
 //!   Select and Closest Target skip the player's escorts ([`candidate`]);
-//!   cloaked and untargetable ships and ships coming out of a hypergate
-//!   are skipped too, once they exist.
+//!   cloaked and untargetable ships are skipped too, once they exist. A
+//!   ship coming out of a hypergate or wormhole is not targetable
+//!   (`_AIShipIsEmergingFromHypergate` @0x7e2e8, read by
+//!   `_FindNearestShipToPlayer` @0x9330 and the next and previous
+//!   searches @0xa42d-0xa918), and a target emerging is let go
+//!   (`_HandlePlayer` @0x686a4).
 //! - Escort Select (Option-Tab here) walks the player's escorts alone,
 //!   in the same order, from the one after the target, and does not wrap
 //!   ([`next_escort`]).
@@ -29,6 +33,8 @@
 
 use crate::combat::hull::Condition;
 use crate::geometry::Vec2;
+#[cfg(doc)]
+use crate::traffic::npc::Mode;
 use crate::traffic::npc::{Npc, NpcId};
 
 /// How a target command picks.
@@ -46,10 +52,11 @@ pub enum TargetPick {
     NextEscort,
 }
 
-/// Whether `npc` can be targeted: it is intact or disabled.
+/// Whether `npc` can be targeted: it is intact or disabled, and not
+/// emerging from a gate ([`Mode::Emerging`]).
 #[must_use]
 pub fn targetable(npc: &Npc) -> bool {
-    matches!(npc.condition, Condition::Intact | Condition::Disabled)
+    matches!(npc.condition, Condition::Intact | Condition::Disabled) && !npc.emerging()
 }
 
 /// Whether `npc` is a candidate for Target Select and Closest Target:
@@ -128,6 +135,20 @@ mod tests {
         assert!(of(Condition::Disabled));
         assert!(!of(DYING));
         assert!(!of(Condition::Destroyed));
+    }
+
+    #[test]
+    fn a_ship_emerging_from_a_gate_is_neither_targetable_nor_a_candidate() {
+        let mut emerging = intact(1, 10.0, 0.0);
+        emerging.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 9 };
+        assert!(!targetable(&emerging));
+        let mut arriving = intact(1, 10.0, 0.0);
+        arriving.mode = crate::traffic::npc::Mode::JumpingIn { ticks_left: 9 };
+        assert!(targetable(&arriving), "a ship jumping in still is");
+        let npcs = [emerging, intact(2, 300.0, 0.0)];
+        assert_eq!(nearest(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));
+        assert_eq!(next(&npcs, None), Some(NpcId(2)));
+        assert_eq!(next(&npcs[..1], None), None);
     }
 
     #[test]

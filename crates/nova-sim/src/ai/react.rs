@@ -298,6 +298,8 @@ mod tests {
         npcs[1].leader = None;
         npcs[0].mode = Mode::JumpingIn { ticks_left: 4 };
         assert_eq!(answered(&govts, &npcs, 0, &hit), Reaction::default());
+        npcs[0].mode = Mode::Emerging { ticks_left: 4 };
+        assert_eq!(answered(&govts, &npcs, 0, &hit), Reaction::default());
         npcs[0].mode = Mode::Flying;
         npcs[0].govt = None;
         npcs[1].govt = None;
