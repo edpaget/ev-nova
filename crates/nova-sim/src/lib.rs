@@ -229,6 +229,7 @@ pub mod blink;
 pub mod board;
 pub mod catalog;
 pub mod chance;
+pub mod cloak;
 pub mod clock;
 pub mod combat;
 pub mod control;
