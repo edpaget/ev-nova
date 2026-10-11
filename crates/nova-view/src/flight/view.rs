@@ -8623,6 +8623,7 @@ mod tests {
                 flags: 0,
                 flags2: 0,
                 crime_tol: 0,
+                initial_rec: 0,
                 penalties: nova_sim::Penalties {
                     disable: 3,
                     ..nova_sim::Penalties::default()
@@ -10011,6 +10012,7 @@ mod tests {
             flags: 0,
             flags2: 0,
             crime_tol: 0,
+            initial_rec: 0,
             penalties: nova_sim::Penalties {
                 smuggle: 5,
                 ..nova_sim::Penalties::default()
@@ -11300,6 +11302,7 @@ mod tests {
             flags: 0x0800,
             flags2: 0,
             crime_tol: 0,
+            initial_rec: 0,
             penalties: nova_sim::Penalties::default(),
             max_odds: 100,
             classes: [-1; 4],

@@ -53,9 +53,10 @@
 //! record that closes both gaps is the rdm missions roadmap's
 //! per-system-legal-record phase.
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 
-use crate::catalog::GovtId;
+use crate::catalog::{GovtId, SystemId};
 use crate::govt::{Governments, NOSY};
 use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -142,6 +143,31 @@ impl LegalCode for NovaLaw {
             })
             .collect()
     }
+}
+
+/// The record in each of `systems` (each with its government) derived
+/// from the records with each government: the system's government's
+/// record if it has one, else that government's `InitialRec`, and none in
+/// an independent system, as the original's `_ResetPlayer` seeds a new
+/// pilot's (@0x1d9a4-0x1da0b). A system whose record is none is left
+/// out.
+#[must_use]
+pub fn systems_from_govts(
+    systems: impl IntoIterator<Item = (SystemId, Option<GovtId>)>,
+    legal: &BTreeMap<GovtId, i16>,
+    govts: &Governments,
+) -> BTreeMap<SystemId, i16> {
+    systems
+        .into_iter()
+        .filter_map(|(system, govt)| {
+            let govt = govt?;
+            let record = legal
+                .get(&govt)
+                .copied()
+                .unwrap_or_else(|| govts.initial_record(Some(govt)));
+            (record != 0).then_some((system, record))
+        })
+        .collect()
 }
 
 /// Applies `changes` to `pilot`'s records, each held within
@@ -383,6 +409,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn each_systems_record_is_its_governments_or_else_its_initial_record() {
+        use std::collections::BTreeMap;
+
+        use crate::catalog::SystemId;
+        let govts = Governments::new([
+            govt(130),
+            GovtRecord {
+                initial_rec: -5,
+                ..govt(131)
+            },
+            govt(133),
+            GovtRecord {
+                initial_rec: 7,
+                ..govt(134)
+            },
+        ]);
+        let legal = BTreeMap::from([(VICTIM, 10), (XENOPHOBE, 0)]);
+        let systems = [
+            (SystemId(130), Some(VICTIM)),
+            (SystemId(131), Some(ALLY)),
+            (SystemId(132), None),
+            (SystemId(133), Some(NEUTRAL)),
+            (SystemId(134), Some(XENOPHOBE)),
+        ];
+        assert_eq!(
+            systems_from_govts(systems, &legal, &govts),
+            BTreeMap::from([(SystemId(130), 10), (SystemId(131), -5)]),
+            "the government's record, else its InitialRec; the independent, \
+             the zero InitialRec and the record of 0 over an InitialRec of 7 \
+             left out as none"
+        );
     }
 
     #[test]

@@ -284,6 +284,13 @@ impl OverlaidGalaxy {
         self.overlay.system(system).govt.unwrap_or(catalog)
     }
 
+    /// Every system in the catalog, visible or not, by ascending ID, with
+    /// its government ([`OverlaidGalaxy::govt`]): what the original's
+    /// loops over every `_systemData` slot read (@0xa05a3-0xa0672).
+    pub fn governed(&self) -> impl Iterator<Item = (SystemId, Option<GovtId>)> + '_ {
+        self.govts.keys().map(|&system| (system, self.govt(system)))
+    }
+
     /// Whether `stellar` is destroyed: whether the overlay holds its
     /// regeneration countdown. The flight view draws a stellar by this
     /// (story-runtime phase 7), and [`site`](Self::site) stamps it.
@@ -668,6 +675,26 @@ mod tests {
         assert!(!galaxy.set_overlay(overlay));
         assert!(galaxy.set_overlay(GalaxyOverlay::default()));
         assert_eq!(*galaxy.map(), StarMap::new(systems()), "back");
+    }
+
+    #[test]
+    fn every_system_is_governed_as_overlaid_hidden_or_not_by_ascending_id() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(3), Some(false));
+        overlay.set_govt(SystemId(1), Some(Some(GovtId(7))));
+        overlay.set_govt(SystemId(4), Some(None));
+        let galaxy = OverlaidGalaxy::new(systems(), overlay);
+        assert_eq!(
+            galaxy.governed().collect::<Vec<_>>(),
+            [
+                (SystemId(1), Some(GovtId(7))),
+                (SystemId(2), None),
+                (SystemId(3), Some(GovtId(140))),
+                (SystemId(4), None),
+                (SystemId(5), None),
+            ],
+            "1 by its override, 3 though hidden, 4 made independent"
+        );
     }
 
     /// [`systems`] with 2 hidden and 1 governed by 7.

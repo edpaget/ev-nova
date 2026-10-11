@@ -340,7 +340,7 @@ pub(crate) fn hull(id: i16) -> HullRecord {
 }
 
 /// `gövt` `id`: no flags, no classes, allies or enemies, no tolerance
-/// for crime, no penalties, and `MaxOdds` 100 (even odds), hailed as
+/// for crime, no initial record, no penalties, and `MaxOdds` 100 (even odds), hailed as
 /// "Govt `id`", scanning for nothing and fining nothing.
 pub(crate) fn govt(id: i16) -> GovtRecord {
     GovtRecord {
@@ -348,6 +348,7 @@ pub(crate) fn govt(id: i16) -> GovtRecord {
         flags: 0,
         flags2: 0,
         crime_tol: 0,
+        initial_rec: 0,
         penalties: Penalties::default(),
         max_odds: 100,
         classes: [-1; 4],

@@ -784,7 +784,11 @@ impl Session {
     /// `AmmoLoad` on top of its outfits, keeping the armament it flew
     /// with; one whose ship was never named, from a save before ships had
     /// names, names it after its class (empty when the class has no
-    /// record); and the reserves hold no more than the stats allow.
+    /// record); one whose legal records in each system are not yet
+    /// derived, a new pilot or a save from before they were kept, derives
+    /// them from its records with each government
+    /// ([`legal::systems_from_govts`]); and the reserves hold no more than
+    /// the stats allow.
     ///
     /// A pilot last landed on a stellar of its system resumes docked there,
     /// silently, as the original resumes a pilot at its last planet; so
@@ -815,6 +819,16 @@ impl Session {
         // hidden system flies from the one standing for it, silently.
         story::leave_hidden(&mut pilot, &mut galaxy);
         pilot.explore(pilot.system);
+        let govts = Governments::read(catalog);
+        if !pilot.system_records_derived() {
+            // A new pilot, or a save from before the records were kept
+            // per system (see the `legal` module).
+            pilot.system_legal = Some(legal::systems_from_govts(
+                galaxy.governed(),
+                &pilot.legal,
+                &govts,
+            ));
+        }
         let system = pilot.system;
         let here = overlaid_sites(&galaxy, catalog, system);
         let (docked, dock) = docking(&galaxy, catalog, &pilot, &here);
@@ -864,7 +878,7 @@ impl Session {
             traffic: Traffic::new(),
             traffic_due: true,
             arsenal,
-            govts: Governments::read(catalog),
+            govts,
             // Refitted below, from the ship and the outfits the pilot owns.
             hull: HullSpec::default(),
             armament: Armament::default(),
@@ -4182,6 +4196,63 @@ mod tests {
         assert_eq!(loaded.legal_record(WANTED), 9);
         assert_eq!(land_at(&catalog, &loaded, 128), Ok(StellarId(128)));
         assert_eq!(land_at(&catalog, &loaded, 129), denied(129));
+    }
+
+    /// [`governed`] with system 130 governed by [`WANTED`], 131 by
+    /// [`LAWFUL`], 132 by a government with an `InitialRec` of -5 and no
+    /// record, and 133 by one with an `InitialRec` but a record of 0.
+    fn four_governed() -> FakePilotCatalog {
+        let mut catalog = governed([None, None], Some(WANTED));
+        catalog.star_map[1].govt = Some(LAWFUL);
+        catalog.star_map[2].govt = Some(GovtId(160));
+        catalog.star_map[3].govt = Some(GovtId(161));
+        catalog.govts = vec![
+            crate::catalog::GovtRecord {
+                initial_rec: 3,
+                ..crate::testkit::govt(140)
+            },
+            crate::testkit::govt(150),
+            crate::catalog::GovtRecord {
+                initial_rec: -5,
+                ..crate::testkit::govt(160)
+            },
+            crate::catalog::GovtRecord {
+                initial_rec: 7,
+                ..crate::testkit::govt(161)
+            },
+        ];
+        catalog
+    }
+
+    #[test]
+    fn flying_a_pilot_derives_each_systems_record_from_its_government() {
+        let catalog = four_governed();
+        let mut pilot = on_record(&catalog);
+        pilot.set_legal_record(GovtId(161), 0);
+        pilot
+            .galaxy
+            .set_govt(SystemId(131), Some(Some(GovtId(160))));
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(
+            session.pilot().system_records().collect::<Vec<_>>(),
+            [(SystemId(130), 9), (SystemId(131), -5), (SystemId(132), -5)],
+            "130 WANTED's record; 131 overlaid to 160 and 132, with no record \
+             with 160, its InitialRec; 133's government has a record of 0, \
+             which wins"
+        );
+    }
+
+    #[test]
+    fn flying_a_pilot_keeps_its_derived_system_records() {
+        let catalog = four_governed();
+        let mut pilot = on_record(&catalog);
+        pilot.set_system_record(SystemId(130), -50);
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(
+            session.pilot().system_records().collect::<Vec<_>>(),
+            [(SystemId(130), -50)],
+            "derived already, so nothing is derived again"
+        );
     }
 
     // Hyperspace.

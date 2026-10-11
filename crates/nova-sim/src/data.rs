@@ -738,6 +738,7 @@ impl CombatCatalog for GameData {
                     flags: record.flags.bits(),
                     flags2: record.flags2.bits(),
                     crime_tol: record.crime_tol,
+                    initial_rec: record.initial_rec,
                     penalties: Penalties {
                         smuggle: record.smug_penalty,
                         disable: record.disab_penalty,
@@ -2778,6 +2779,7 @@ mod tests {
             flags: 0xE2B0,
             flags2: 0x0012,
             crime_tol: 6,
+            initial_rec: -100,
             penalties: Penalties {
                 smuggle: 1,
                 disable: 3,

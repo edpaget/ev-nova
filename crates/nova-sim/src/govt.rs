@@ -137,6 +137,13 @@ impl Governments {
         self.record(govt).map_or(0, |record| record.crime_tol)
     }
 
+    /// `govt`'s `InitialRec`: none for an independent or a government the
+    /// table does not hold.
+    #[must_use]
+    pub fn initial_record(&self, govt: Option<GovtId>) -> i16 {
+        self.record(govt).map_or(0, |record| record.initial_rec)
+    }
+
     /// `govt`'s penalty for `crime` against its ships: none for an
     /// independent or a government the table does not hold.
     #[must_use]
@@ -537,6 +544,17 @@ mod tests {
         assert!(table().xenophobic(PIRATES));
         assert!(table().derelict(WRECKS));
         assert!(!table().derelict(FED));
+    }
+
+    #[test]
+    fn the_initial_record_is_the_governments_and_none_for_others() {
+        let govts = Governments::new([GovtRecord {
+            initial_rec: -5,
+            ..govt(128)
+        }]);
+        assert_eq!(govts.initial_record(FED), -5);
+        assert_eq!(govts.initial_record(None), 0, "independent");
+        assert_eq!(govts.initial_record(UNKNOWN), 0);
     }
 
     #[test]

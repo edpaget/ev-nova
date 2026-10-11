@@ -106,6 +106,11 @@ pub struct Pilot {
     pub(crate) explored: BTreeSet<SystemId>,
     /// The legal record with each government that has one.
     pub(crate) legal: BTreeMap<GovtId, i16>,
+    /// The legal record in each system that has one (see
+    /// [`legal`](crate::legal)); `None` until it is derived from `legal`
+    /// when the pilot first flies: a new pilot, or a save from before
+    /// records were kept per system.
+    pub(crate) system_legal: Option<BTreeMap<SystemId, i16>>,
     /// The combat rating (see [`rating`](crate::rating)).
     pub(crate) combat_rating: i64,
     /// The tons held of each good the ship carries; none of a good not
@@ -237,6 +242,7 @@ impl Pilot {
             course: Vec::new(),
             explored: BTreeSet::from([system]),
             legal: character.legal.into_iter().flatten().collect(),
+            system_legal: None,
             combat_rating: i64::from(character.kills),
             cargo: BTreeMap::new(),
             events: BTreeMap::new(),
@@ -401,6 +407,37 @@ impl Pilot {
     /// record.
     pub fn legal_records(&self) -> impl Iterator<Item = (GovtId, i16)> + '_ {
         self.legal.iter().map(|(&govt, &record)| (govt, record))
+    }
+
+    /// The legal record in `system`: 0 when it has none, or while the
+    /// records in each system are not yet derived.
+    #[must_use]
+    pub fn system_record(&self, system: SystemId) -> i16 {
+        self.system_legal
+            .as_ref()
+            .and_then(|legal| legal.get(&system).copied())
+            .unwrap_or(0)
+    }
+
+    /// Sets the legal record in `system` to `record`. A pilot given one
+    /// counts as having its records in each system derived.
+    pub fn set_system_record(&mut self, system: SystemId, record: i16) {
+        self.system_legal
+            .get_or_insert_with(BTreeMap::new)
+            .insert(system, record);
+    }
+
+    /// Every system with a legal record, by ascending ID, and the record.
+    pub fn system_records(&self) -> impl Iterator<Item = (SystemId, i16)> + '_ {
+        self.system_legal
+            .iter()
+            .flatten()
+            .map(|(&system, &record)| (system, record))
+    }
+
+    /// Whether the records in each system are derived yet.
+    pub(crate) fn system_records_derived(&self) -> bool {
+        self.system_legal.is_some()
     }
 
     /// The combat rating: the `chär`'s `Kills` to start, raised by each
@@ -905,6 +942,24 @@ mod tests {
         assert_eq!(pilot.cash(), -12);
         pilot.set_legal_record(GovtId(128), 300);
         assert_eq!(pilot.legal_record(GovtId(128)), 300);
+    }
+
+    #[test]
+    fn a_new_pilot_has_its_system_records_pending() {
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        assert_eq!(pilot.system_records().count(), 0);
+        assert!(!pilot.system_records_derived());
+        assert_eq!(pilot.system_record(SystemId(130)), 0, "pending is none");
+        pilot.set_system_record(SystemId(130), -4);
+        assert_eq!(pilot.system_record(SystemId(130)), -4);
+        assert_eq!(pilot.system_record(SystemId(131)), 0, "unset");
+        assert!(pilot.system_records_derived(), "a record set derives them");
+        pilot.set_system_record(SystemId(129), 6);
+        assert_eq!(
+            pilot.system_records().collect::<Vec<_>>(),
+            [(SystemId(129), 6), (SystemId(130), -4)],
+            "by ascending ID"
+        );
     }
 
     #[test]

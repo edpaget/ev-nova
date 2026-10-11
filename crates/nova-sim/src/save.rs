@@ -61,6 +61,11 @@
 //!   upgrade gives 0, the original's value for a pilot with no `chär`
 //!   (@0x76f70).
 //! - Version 20: adds the active missions, none in an older save.
+//! - Version 21: adds the legal record in each system (`system_legal`,
+//!   each its `system` and `record`, or `null` until derived). An older
+//!   save kept only the record with each government, so the upgrade
+//!   saves `null`, and flying the pilot derives each system's
+//!   ([`Session::fly`](crate::Session::fly)).
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -124,7 +129,7 @@ use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 20;
+pub const CURRENT: u64 = 21;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -314,6 +319,13 @@ impl From<SavedPaint> for Rgb15 {
 #[derive(Serialize, Deserialize)]
 struct SavedRecord {
     govt: i16,
+    record: i16,
+}
+
+/// A saved legal record in a system.
+#[derive(Serialize, Deserialize)]
+struct SavedSystemRecord {
+    system: i16,
     record: i16,
 }
 
@@ -696,6 +708,9 @@ struct Saved {
     course: Vec<i16>,
     explored: Vec<i16>,
     legal: Vec<SavedRecord>,
+    /// `None` until the records in each system are derived.
+    #[serde(deserialize_with = "Option::deserialize")]
+    system_legal: Option<Vec<SavedSystemRecord>>,
     combat_rating: i64,
     cargo: Vec<SavedCargo>,
     events: Vec<SavedEvent>,
@@ -741,6 +756,15 @@ pub fn encode(pilot: &Pilot) -> String {
                 record,
             })
             .collect(),
+        system_legal: pilot.system_legal.as_ref().map(|legal| {
+            legal
+                .iter()
+                .map(|(system, &record)| SavedSystemRecord {
+                    system: system.0,
+                    record,
+                })
+                .collect()
+        }),
         combat_rating: pilot.combat_rating,
         cargo: pilot
             .cargo
@@ -828,6 +852,7 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     countdowns,
     combat_rating,
     active_missions,
+    system_records,
 ];
 
 /// Version 1 to 2: nothing explored, and no legal records.
@@ -957,6 +982,13 @@ fn active_missions(save: &mut Value) {
     add_empty(save, &["missions"]);
 }
 
+/// Version 20 to 21: the records in each system not yet derived.
+fn system_records(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("system_legal".to_owned(), Value::Null);
+    }
+}
+
 /// Adds `field` to every entry of `save`'s `list`, as `value`.
 fn add_to_each(save: &mut Value, list: &str, field: &str, value: &Value) {
     let Some(entries) = save.get_mut(list).and_then(Value::as_array_mut) else {
@@ -1023,6 +1055,12 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
             .into_iter()
             .map(|saved| (GovtId(saved.govt), saved.record))
             .collect(),
+        system_legal: saved.system_legal.map(|legal| {
+            legal
+                .into_iter()
+                .map(|saved| (SystemId(saved.system), saved.record))
+                .collect()
+        }),
         combat_rating: saved.combat_rating,
         cargo: saved
             .cargo
@@ -1144,6 +1182,7 @@ mod tests {
             course: vec![SystemId(132), SystemId(133)],
             explored: BTreeSet::from([SystemId(130), SystemId(131), SystemId(200)]),
             legal: BTreeMap::from([(GovtId(128), -40), (GovtId(129), 300)]),
+            system_legal: Some(BTreeMap::from([(SystemId(130), -12), (SystemId(131), 7)])),
             combat_rating: 12_345,
             cargo: BTreeMap::from([(Good::Commodity(2), 7), (Good::Junk(JunkId(146)), 2)]),
             events: BTreeMap::from([
@@ -1341,7 +1380,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 20);
+        assert_eq!(CURRENT, 21);
         assert_eq!(
             value["galaxy"],
             serde_json::json!({
@@ -1437,7 +1476,7 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert!(text.contains("\n  \"version\": 20"), "{text}");
+        assert!(text.contains("\n  \"version\": 21"), "{text}");
     }
 
     /// A version 1 save: before explored systems and legal records.
@@ -2534,6 +2573,92 @@ mod tests {
     }"#;
 
     #[test]
+    fn the_records_in_each_system_are_saved_by_system() {
+        let value: serde_json::Value = serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        assert_eq!(
+            value["system_legal"],
+            serde_json::json!([{"system": 130, "record": -12}, {"system": 131, "record": 7}])
+        );
+    }
+
+    /// A version 20 save: before the legal record in each system.
+    const VERSION_20: &str = r#"{
+        "version": 20,
+        "name": "Lawful",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [{"govt": 128, "record": 25}],
+        "combat_rating": 7,
+        "cargo": [],
+        "events": [],
+        "outfits": [],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [],
+        "gender": "male",
+        "paint": null,
+        "story_fired": [],
+        "galaxy": {"systems": [], "stellars": [], "nebulae": []},
+        "missions": []
+    }"#;
+
+    #[test]
+    fn a_version_20_save_loads_with_its_system_records_pending() {
+        let pilot = decode(VERSION_20).expect("loads");
+        assert_eq!(pilot.name(), "Lawful");
+        assert!(!pilot.system_records_derived());
+        assert_eq!(pilot.legal_record(GovtId(128)), 25, "kept");
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["system_legal"], serde_json::Value::Null);
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [VERSION_19, VERSION_18, VERSION_1] {
+            let pilot = decode(text).expect("loads");
+            assert!(!pilot.system_records_derived(), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_pilot_with_its_system_records_pending_saves_null() {
+        let pilot = Pilot {
+            system_legal: None,
+            ..seasoned()
+        };
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["system_legal"], serde_json::Value::Null);
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        let derived_empty = Pilot {
+            system_legal: Some(BTreeMap::new()),
+            ..seasoned()
+        };
+        let value: serde_json::Value = serde_json::from_str(&encode(&derived_empty)).expect("JSON");
+        assert_eq!(value["system_legal"], serde_json::json!([]));
+        assert_eq!(decode(&encode(&derived_empty)), Ok(derived_empty));
+    }
+
+    #[test]
+    fn a_current_save_missing_its_system_records_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        if let Some(object) = value.as_object_mut() {
+            object.remove("system_legal");
+        }
+        assert!(unusable(&value.to_string()).contains("system_legal"));
+    }
+
+    #[test]
     fn an_older_save_loads_with_no_active_missions() {
         let pilot = decode(VERSION_19).expect("loads");
         assert_eq!(pilot.name(), "Courier");
@@ -2881,12 +3006,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 20", "\"version\": 21");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 21 }));
+        let newer = encode(&seasoned()).replace("\"version\": 21", "\"version\": 22");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 22 }));
         assert_eq!(
-            SaveError::Newer { version: 21 }.to_string(),
+            SaveError::Newer { version: 22 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 21, and this version of Nova reads up to 20)."
+             (it is version 22, and this version of Nova reads up to 21)."
         );
     }
 

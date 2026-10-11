@@ -899,6 +899,9 @@ pub struct GovtRecord {
     pub flags2: u16,
     /// Its `CrimeTol`.
     pub crime_tol: i16,
+    /// Its `InitialRec`: the legal record a system it governs starts
+    /// with (`_ResetPlayer` @0x1d9a4-0x1da0b reads it at +0x52).
+    pub initial_rec: i16,
     /// Its penalties.
     pub penalties: Penalties,
     /// Its `MaxOdds`, in percent.
