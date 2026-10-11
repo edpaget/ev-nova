@@ -319,6 +319,54 @@ fn is_rdm_ref(item: &str) -> bool {
     }
 }
 
+/// What is wrong with mission `id` walking to `result`, `listed` or not:
+/// an unlisted miss, or a listed mission that now walks.
+fn mismatch(
+    id: i16,
+    result: Result<(), String>,
+    listed: Option<&ExpectedFailure>,
+) -> Option<String> {
+    match (result, listed) {
+        (Ok(()), Some(failure)) => Some(format!(
+            "{id} now walks; remove it from EXPECTED_FAILURES ({})",
+            failure.item
+        )),
+        (Err(why), None) => Some(format!(
+            "{id} ({:?}) missed its outcome: {why}",
+            outcome(id)
+        )),
+        (Ok(()), None) | (Err(_), Some(_)) => None,
+    }
+}
+
+#[test]
+fn a_mismatch_is_an_unlisted_miss_or_a_listed_walk() {
+    let listed = ExpectedFailure {
+        mission: 132,
+        reason: "it cannot",
+        item: "rdm:task/fix-it",
+    };
+    assert_eq!(mismatch(132, Ok(()), None), None);
+    assert_eq!(
+        mismatch(132, Ok(()), Some(&listed)),
+        Some("132 now walks; remove it from EXPECTED_FAILURES (rdm:task/fix-it)".to_owned())
+    );
+    assert_eq!(
+        mismatch(
+            132,
+            Err("meet goal: step 0\n      bits set: b1".to_owned()),
+            None
+        ),
+        Some(
+            "132 (Completed) missed its outcome: meet goal: step 0\n      bits set: b1".to_owned()
+        )
+    );
+    assert_eq!(
+        mismatch(132, Err("meet goal: step 0".to_owned()), Some(&listed)),
+        None
+    );
+}
+
 #[test]
 fn a_report_keeps_every_line_nested_under_its_headline() {
     assert_eq!(
@@ -809,24 +857,16 @@ fn walk_shard(shard: &Shard) {
         return;
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
-    let mut mismatches = Vec::new();
-    for record in members(&data, shard) {
-        let id = record.id.0;
-        let listed = EXPECTED_FAILURES
-            .iter()
-            .find(|failure| failure.mission == id);
-        match (walk(&data, &record), listed) {
-            (Ok(()), Some(failure)) => mismatches.push(format!(
-                "{id} now walks; remove it from EXPECTED_FAILURES ({})",
-                failure.item
-            )),
-            (Err(why), None) => mismatches.push(format!(
-                "{id} ({:?}) missed its outcome: {why}",
-                outcome(id)
-            )),
-            _ => {}
-        }
-    }
+    let mismatches: Vec<String> = members(&data, shard)
+        .iter()
+        .filter_map(|record| {
+            let id = record.id.0;
+            let listed = EXPECTED_FAILURES
+                .iter()
+                .find(|failure| failure.mission == id);
+            mismatch(id, walk(&data, record), listed)
+        })
+        .collect();
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
