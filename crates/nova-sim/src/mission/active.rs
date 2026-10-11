@@ -14,6 +14,7 @@ use crate::legal::RECORD_LIMIT;
 use crate::rulebook::Rulebook;
 use crate::rules::{Check, Checks, Context};
 
+use super::aux::AuxShips;
 use super::cargo::Room;
 use super::offer::{Offer, Stop, after};
 use super::ships::SpecialShips;
@@ -91,6 +92,9 @@ pub struct ActiveMission {
     /// Its special ships: where they are, how many are left, their
     /// timer and their name (see [`ships`](super::ships)).
     pub ships: SpecialShips,
+    /// Its auxiliary ships: their countdown, how many have come and how
+    /// many are left to come (see [`aux`](super::aux)).
+    pub aux: AuxShips,
 }
 
 impl ActiveMission {
@@ -116,6 +120,7 @@ impl ActiveMission {
             aboard: false,
             failed: None,
             ships: SpecialShips::default(),
+            aux: AuxShips::default(),
         }
     }
 }
@@ -661,6 +666,7 @@ mod tests {
                 aboard: false,
                 failed: None,
                 ships: crate::mission::SpecialShips::default(),
+                aux: crate::mission::aux::AuxShips::default(),
             }
         );
         for limit in [0, -1, i16::MIN] {

@@ -1102,8 +1102,8 @@ pub(super) mod tests {
     use crate::ai::NovaAi;
     use crate::board::MissionBoardLine;
     use crate::catalog::{
-        CommCatalog, DudeRecord, GovtId, MissionId, MissionShip, PersonId, PersonRecord, ShipId,
-        StellarId, SystemId, SystemTraffic,
+        AuxShip, CommCatalog, DudeRecord, GovtId, MissionId, MissionShip, PersonId, PersonRecord,
+        ShipId, StellarId, SystemId, SystemTraffic,
     };
     use crate::chance::NeverFires;
     use crate::combat::ShipRef;
@@ -1112,6 +1112,7 @@ pub(super) mod tests {
     use crate::gate::GateKind;
     use crate::message::SimMessage;
     use crate::mission::FailedBy;
+    use crate::mission::aux::AuxShips;
     use crate::session::mission_screens::MissionTextKind;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, jump, land_now, mission, ship};
     use crate::traffic::npc::{Mode, Npc};
@@ -1168,6 +1169,39 @@ pub(super) mod tests {
             ships,
             ..mission(140)
         }];
+        catalog
+    }
+
+    /// `count` auxiliary ships of düde 151 into `AuxShipSyst` `syst`.
+    pub(in crate::session) fn aux_ships(count: i16, syst: i16) -> AuxShip {
+        AuxShip {
+            count,
+            dude: Some(crate::catalog::DudeId(151)),
+            syst,
+        }
+    }
+
+    /// [`ships_catalog`] with düde 151 (traders of govt 129 flying ship
+    /// 201) and mission 140 of `Flags` `flags` with `aux` too.
+    pub(in crate::session) fn aux_catalog(
+        ships: MissionShip,
+        aux: AuxShip,
+        flags: u16,
+    ) -> FakePilotCatalog {
+        let mut catalog = ships_catalog(ships);
+        catalog.ship_records.push(ship(201, FAST));
+        catalog.dudes.push((
+            crate::catalog::DudeId(151),
+            DudeRecord {
+                ai_type: 1,
+                govt: Some(GovtId(129)),
+                ships: vec![(ShipId(201), 100)],
+                booty: 0,
+                info_types: 0,
+            },
+        ));
+        catalog.missions[0].aux = aux;
+        catalog.missions[0].flags = flags;
         catalog
     }
 
@@ -1256,6 +1290,35 @@ pub(super) mod tests {
             "Rover waits.",
             "<SN> reads the name drawn"
         );
+    }
+
+    #[test]
+    fn the_aux_countdown_is_drawn_first_at_accept_for_every_mission() {
+        for aux in [AuxShip::NONE, aux_ships(3, -1)] {
+            let catalog = aux_catalog(shipping(-1, 1), aux, 0);
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_strings(Rc::new(Names));
+            assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+            settle(&mut session, &catalog);
+            let mut draws = crate::testkit::Draws::of(&[5, 0, 1, 0]);
+            assert_eq!(session.accept_mission(MissionId(140), &mut draws), Ok(0));
+            assert_eq!(
+                draws.asked,
+                [70, 100, 2, 1],
+                "the countdown, then the appear timer, name and subtitle"
+            );
+            let active = session.pilot().missions().get(0).expect("held");
+            assert_eq!(
+                active.aux,
+                AuxShips {
+                    countdown: 75,
+                    arrived: 0,
+                    left: aux.count.max(0),
+                }
+            );
+            assert_eq!(active.ships.name, "Rover");
+        }
     }
 
     #[test]

@@ -1084,6 +1084,7 @@ fn each_fault_is_reported_with_its_mission() {
         aboard: false,
         failed: None,
         ships: crate::mission::SpecialShips::default(),
+        aux: crate::mission::aux::AuxShips::default(),
     };
     for (at, fault, line) in [
         (

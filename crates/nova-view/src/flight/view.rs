@@ -10283,6 +10283,7 @@ mod tests {
             "aboard": true,
             "failed": null,
             "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": "", "destroyed": 0, "boarded": 0, "disabled": 0, "chased_off": 0},
+            "aux": {"countdown": 0, "arrived": 0, "left": 0},
         }]);
         let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
         let mut draws = placed(750, 750, 0).to_vec();

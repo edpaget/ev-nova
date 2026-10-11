@@ -66,11 +66,14 @@
 //!   save kept only the record with each government, so the upgrade
 //!   saves `null`, and flying the pilot derives each system's
 //!   ([`Session::fly`](crate::Session::fly)).
-//! - Version 22: adds each active mission's special ships (`ships`). An
-//!   older save kept none of their state, so the upgrade gives each
-//!   mission none left, nowhere, with no timer and no name, and none
-//!   destroyed, boarded, disabled or chased off: an old save's mission
-//!   spawns no ship, and its `<SN>` reads empty.
+//! - Version 22: adds each active mission's special ships (`ships`) and
+//!   auxiliary ships (`aux`: their `countdown`, how many `arrived` and
+//!   how many are `left` to come). An older save kept none of their
+//!   state, so the upgrade gives each mission none left, nowhere, with no
+//!   timer and no name, and none destroyed, boarded, disabled or chased
+//!   off: an old save's mission spawns no ship, and its `<SN>` reads
+//!   empty. It gives each no auxiliary ship left to come, its countdown
+//!   0, so none comes until a restart refills them (`Flags` 0x0010).
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -133,6 +136,7 @@ use crate::control::Bit;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::{ActiveEvent, Good};
+use crate::mission::aux::AuxShips;
 use crate::mission::{ActiveMission, ActiveMissions, FailedBy, ShipSystem, SpecialShips, Stop};
 use crate::outfit_effects::Rgb15;
 use crate::pilot::{Escort, Gender, Pilot};
@@ -677,6 +681,34 @@ impl From<SavedShips> for SpecialShips {
     }
 }
 
+/// A saved mission's auxiliary ships.
+#[derive(Serialize, Deserialize)]
+struct SavedAux {
+    countdown: i16,
+    arrived: i16,
+    left: i16,
+}
+
+impl From<AuxShips> for SavedAux {
+    fn from(aux: AuxShips) -> Self {
+        Self {
+            countdown: aux.countdown,
+            arrived: aux.arrived,
+            left: aux.left,
+        }
+    }
+}
+
+impl From<SavedAux> for AuxShips {
+    fn from(saved: SavedAux) -> Self {
+        Self {
+            countdown: saved.countdown,
+            arrived: saved.arrived,
+            left: saved.left,
+        }
+    }
+}
+
 /// A saved active mission, in its slot.
 #[derive(Serialize, Deserialize)]
 struct SavedMission {
@@ -700,6 +732,7 @@ struct SavedMission {
     #[serde(deserialize_with = "Option::deserialize")]
     failed: Option<SavedFailure>,
     ships: SavedShips,
+    aux: SavedAux,
 }
 
 impl SavedMission {
@@ -720,6 +753,7 @@ impl SavedMission {
             aboard: active.aboard,
             failed: active.failed.map(SavedFailure::from),
             ships: SavedShips::from(&active.ships),
+            aux: SavedAux::from(active.aux),
         }
     }
 }
@@ -760,6 +794,7 @@ fn missions_of(saved: Vec<SavedMission>) -> Result<ActiveMissions, SaveError> {
             aboard: saved.aboard,
             failed: saved.failed.map(FailedBy::from),
             ships: SpecialShips::from(saved.ships),
+            aux: AuxShips::from(saved.aux),
         };
         if !missions.put(saved.slot, active) {
             return Err(SaveError::Unusable(format!(
@@ -1075,7 +1110,8 @@ fn system_records(save: &mut Value) {
 
 /// Version 21 to 22: each active mission with no special ships left,
 /// nowhere, with no timer and no name, none of them destroyed, boarded,
-/// disabled or chased off.
+/// disabled or chased off; and no auxiliary ship left to come, none
+/// arrived, its countdown 0.
 fn mission_ships(save: &mut Value) {
     let none = serde_json::json!({
         "system": null,
@@ -1090,6 +1126,8 @@ fn mission_ships(save: &mut Value) {
         "chased_off": 0
     });
     add_to_each(save, "missions", "ships", &none);
+    let no_aux = serde_json::json!({"countdown": 0, "arrived": 0, "left": 0});
+    add_to_each(save, "missions", "aux", &no_aux);
 }
 
 /// Adds `field` to every entry of `save`'s `list`, as `value`.
@@ -1398,6 +1436,11 @@ mod tests {
                     disabled: 4,
                     chased_off: 5,
                 },
+                aux: AuxShips {
+                    countdown: 33,
+                    arrived: 1,
+                    left: -2,
+                },
             },
         );
         missions.put(
@@ -1419,6 +1462,7 @@ mod tests {
                     system: ShipSystem::FollowsPlayer,
                     ..SpecialShips::default()
                 },
+                aux: AuxShips::default(),
             },
         );
         missions
@@ -2830,7 +2874,8 @@ mod tests {
                         "boarded": 1,
                         "disabled": 4,
                         "chased_off": 5
-                    }
+                    },
+                    "aux": {"countdown": 33, "arrived": 1, "left": -2}
                 },
                 {
                     "slot": 9,
@@ -2857,7 +2902,8 @@ mod tests {
                         "boarded": 0,
                         "disabled": 0,
                         "chased_off": 0
-                    }
+                    },
+                    "aux": {"countdown": 0, "arrived": 0, "left": 0}
                 }
             ])
         );
@@ -2920,6 +2966,7 @@ mod tests {
         assert_eq!(active.ships, SpecialShips::default());
         assert_eq!(active.ships.system, ShipSystem::Nowhere);
         assert_eq!(active.ships.chased_off, 0);
+        assert_eq!(active.aux, AuxShips::default(), "none to come");
         assert_eq!(decode(&encode(&pilot)), Ok(pilot));
     }
 
@@ -2935,6 +2982,14 @@ mod tests {
         assert_eq!(
             back.missions().get(2).map(|active| active.ships.chased_off),
             Some(5)
+        );
+        assert_eq!(
+            back.missions().get(2).map(|active| active.aux),
+            Some(AuxShips {
+                countdown: 33,
+                arrived: 1,
+                left: -2,
+            })
         );
     }
 

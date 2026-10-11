@@ -79,6 +79,7 @@ use crate::chance::{Chance, NeverFires};
 use crate::control::{Script, Test};
 use crate::message::SimMessage;
 use crate::mission::active::{AUTO_ABORT_FUEL, AUTO_ABORT_FUEL_TAKEN, AUTO_ABORT_PAYS};
+use crate::mission::aux::AuxShips;
 use crate::mission::screens::HIDDEN;
 use crate::mission::{
     self, AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
@@ -488,6 +489,9 @@ impl Session {
         let mut active = ActiveMission::accepted(record, offer, self.pilot.date);
         // A full table draws nothing.
         self.pilot.missions.lowest_free()?;
+        // The aux countdown is drawn first, for every mission
+        // (@0xa0e5f, before the appear timer @0xa0ed4).
+        active.aux = AuxShips::at_accept(&record.aux, chance);
         active.ships = self.ships_at_accept(record, &active, chance);
         let slot = self.pilot.missions.fill(active)?;
         self.register_slot(slot);
@@ -2039,6 +2043,11 @@ mod tests {
                 aboard: false,
                 failed: None,
                 ships: crate::mission::SpecialShips::default(),
+                // NeverFires draws the countdown's highest, 69.
+                aux: AuxShips {
+                    countdown: 139,
+                    ..AuxShips::default()
+                },
             })
         );
         assert_eq!(
