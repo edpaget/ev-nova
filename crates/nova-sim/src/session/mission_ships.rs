@@ -1031,14 +1031,37 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_missions_ships_stay_and_lose_their_mark_on_the_next_tick() {
+    fn a_completed_missions_ships_stay_while_docked_and_are_not_set_up_again() {
+        // Offered at 128 and completed back there.
+        let mut catalog = ships_catalog(shipping(-1, 0));
+        catalog.missions[0].avail_stel = 128;
+        catalog.missions[0].return_stel = 128;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert_eq!(marked(&session), [0, 0]);
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_none(), "completed");
+        assert_eq!(session.npcs().len(), 2, "not taken out, as an abort would");
+        assert_eq!(marked(&session), [0, 0], "until the AI next thinks");
+        take_off(&mut session, &catalog);
+        assert!(marked(&session).is_empty(), "the slot brings none");
+    }
+
+    #[test]
+    fn an_auto_aborted_missions_ships_stay_and_lose_their_mark_on_the_next_tick() {
+        // An auto-abort is reached today only at accept, with no ships;
+        // rdm:phase/mission-ships/phase-10-auto-abort-at-spawn reaches it
+        // once they are in.
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        let _ = session.pilot.missions.free(0);
+        let record = catalog.missions[0].clone();
+        session.auto_abort(0, &record, &mut NeverFires);
+        assert!(session.pilot().missions().get(0).is_none(), "aborted");
         assert_eq!(marked(&session), [0, 0], "until the AI next thinks");
         tick(&mut session, &catalog);
-        assert_eq!(session.npcs().len(), 2);
+        assert_eq!(session.npcs().len(), 2, "they stay");
         assert!(marked(&session).is_empty());
     }
 

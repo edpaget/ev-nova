@@ -592,7 +592,7 @@ impl Session {
     /// the daily step; with `Flags` 0x0008, a jump's fuel taken; with
     /// `Flags2` 0x0002, its pay; then the slot freed and the offers'
     /// stellar forgotten, with no second `OnAbort`.
-    fn auto_abort(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
+    pub(super) fn auto_abort(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
         let Some(pay) = self.pilot.missions.get(slot).map(|active| active.pay) else {
             return;
         };
