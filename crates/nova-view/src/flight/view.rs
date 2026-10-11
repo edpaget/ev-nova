@@ -329,7 +329,7 @@ use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMode};
 use crate::spaceport::bar::MISSION_INFO_KEY;
-use crate::system::camera::{Camera, VIEW_SIZE};
+use crate::system::camera::{Camera, VIEW_CENTER, VIEW_SIZE};
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::system::starfield;
@@ -2579,11 +2579,14 @@ impl<C> FlightView<C> {
     }
 
     /// Draws each NPC with its own ship's sprite, or a crossed box when its
-    /// sheet cannot be read, but for one emerging from a gate
-    /// ([`sprite_drawn`]).
+    /// sheet cannot be read, but for one the player cannot see: emerging
+    /// from a gate, or cloaked ([`sprite_drawn`]).
     fn draw_npcs(&self, list: &mut DrawList, camera: &Camera) {
+        let Ok(session) = &self.session else {
+            return;
+        };
         for (npc, at, heading) in self.shown_npcs() {
-            if !sprite_drawn(npc) {
+            if !sprite_drawn(session, npc) {
                 continue;
             }
             let at = camera.world_to_screen(at);
@@ -3035,6 +3038,7 @@ impl<
         let mut notes = Vec::new();
         let mut quotes = Vec::new();
         if let Ok(session) = &mut self.session {
+            session.set_play_area(play_area());
             session.hold_fire(fire.0, fire.1);
             for _ in 0..steps {
                 self.previous = *session.player();
@@ -3134,7 +3138,10 @@ impl<
         match &self.status_bar {
             Ok(bar) => {
                 let stellars: Vec<Point> = scene.stellars().iter().map(|s| s.position).collect();
-                let ships: Vec<Point> = self.shown_npcs().iter().map(|&(_, at, _)| at).collect();
+                let ships = match &self.session {
+                    Ok(session) => radar_ships(session, &self.shown_npcs()),
+                    Err(_) => Vec::new(),
+                };
                 let date = self.date_text();
                 let state = HudState {
                     position: self.shown_position(),
@@ -3234,8 +3241,32 @@ fn dying(
 /// or wormhole, as `_HandleShipDisplay` (@0x2c090) skips a ship
 /// `_AIShipIsEmergingFromHypergate` reads emerging. The radar still
 /// shows it, as `_DrawStatusRadar` does not ask.
-fn sprite_drawn(npc: &Npc) -> bool {
-    !npc.emerging()
+fn sprite_drawn(session: &Session, npc: &Npc) -> bool {
+    session.sees(npc)
+}
+
+/// Where each of `shown` the radar shows is drawn: those
+/// [`Session::on_radar`] says, a cloaked ship only when its cloak shows
+/// there or the player scans for cloaked ships.
+fn radar_ships(session: &Session, shown: &[(&Npc, Point, f32)]) -> Vec<Point> {
+    shown
+        .iter()
+        .filter(|(npc, _, _)| session.on_radar(npc))
+        .map(|&(_, at, _)| at)
+        .collect()
+}
+
+/// The play area about the ship, in world units: the screen left of the
+/// status bar, the ship drawn at [`VIEW_CENTER`]. The session reads it to
+/// tell whether a ship is on screen.
+fn play_area() -> nova_sim::cloak::Area {
+    let scale = crate::system::camera::WORLD_SCALE;
+    nova_sim::cloak::Area {
+        left: -VIEW_CENTER.x / scale,
+        top: -VIEW_CENTER.y / scale,
+        right: (VIEW_SIZE.0 - STATUS_BAR_WIDTH - VIEW_CENTER.x) / scale,
+        bottom: (VIEW_SIZE.1 - VIEW_CENTER.y) / scale,
+    }
 }
 
 #[cfg(test)]
@@ -3261,7 +3292,7 @@ mod tests {
     use crate::flight::hud::{self, HudState, NavDisplay, StatusBar};
     use crate::galaxy::{Galaxy, MapMode, SystemEntry};
     use crate::sound::Sound;
-    use crate::system::camera::VIEW_CENTER;
+
     use crate::system::catalog::{
         AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
     };
@@ -7438,12 +7469,73 @@ mod tests {
             .with_chance(chance)
             .with_behaviour(Rc::new(Still));
         view.tick(TICK);
-        let mut npc = view.session().expect("flying").npcs()[0].clone();
-        assert!(sprite_drawn(&npc), "flying");
+        let session = view.session().expect("flying");
+        let mut npc = session.npcs()[0].clone();
+        assert!(sprite_drawn(session, &npc), "flying");
         npc.mode = nova_sim::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
-        assert!(sprite_drawn(&npc), "jumping in");
+        assert!(sprite_drawn(session, &npc), "jumping in");
         npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
-        assert!(!sprite_drawn(&npc), "emerging");
+        assert!(!sprite_drawn(session, &npc), "emerging");
+    }
+
+    /// A full cloak.
+    const CLOAKED: nova_sim::cloak::Cloak = nova_sim::cloak::Cloak {
+        fade: nova_sim::cloak::FADE_FULL,
+        direction: 0,
+    };
+
+    #[test]
+    fn a_ship_the_player_cannot_see_for_its_cloak_is_not_drawn() {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        let mut npc = session.npcs()[0].clone();
+        npc.cloak = CLOAKED;
+        assert!(!sprite_drawn(session, &npc), "cloaked");
+        npc.cloak.direction = -1;
+        npc.cloak.fade = 8.0;
+        assert!(sprite_drawn(session, &npc), "faded out enough to be seen");
+    }
+
+    #[test]
+    fn a_cloaked_ship_is_on_the_radar_only_when_the_session_says() {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        let npc = session.npcs()[0].clone();
+        let blip = at(100.0, -100.0);
+        assert_eq!(radar_ships(session, &[(&npc, blip, 0.0)]), [blip]);
+        let mut cloaked = npc.clone();
+        cloaked.cloak = CLOAKED;
+        assert_eq!(radar_ships(session, &[(&cloaked, blip, 0.0)]), []);
+        cloaked.cloak_gear.on_radar = true;
+        assert_eq!(radar_ships(session, &[(&cloaked, blip, 0.0)]), [blip]);
+    }
+
+    #[test]
+    fn the_play_area_is_the_screen_left_of_the_status_bar_about_the_ship() {
+        let area = play_area();
+        assert_eq!(
+            area,
+            nova_sim::cloak::Area {
+                left: -512.0,
+                top: -384.0,
+                right: 1024.0 - 194.0 - 512.0,
+                bottom: 384.0,
+            }
+        );
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        assert_eq!(view.session().expect("flying").play_area(), area, "told");
     }
 
     #[test]
