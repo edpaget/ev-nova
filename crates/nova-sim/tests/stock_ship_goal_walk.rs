@@ -320,6 +320,15 @@ fn is_rdm_ref(item: &str) -> bool {
 }
 
 #[test]
+fn a_report_keeps_every_line_nested_under_its_headline() {
+    assert_eq!(
+        report(&"step 0 (Take) failed\n  stellar 128 in system 128: AvailStel\n  bits set: b1"),
+        "step 0 (Take) failed\n      stellar 128 in system 128: AvailStel\n      bits set: b1"
+    );
+    assert_eq!(report(&"one line"), "one line");
+}
+
+#[test]
 fn the_expected_lists_are_well_formed() {
     for failure in EXPECTED_FAILURES {
         assert!(!failure.reason.is_empty(), "{}: a reason", failure.mission);
@@ -430,9 +439,11 @@ fn set_up(data: &GameData, record: &MissionRecord, extra: &[&Test]) -> Session {
     session
 }
 
-/// The first line of `text`.
-fn first_line(text: &str) -> &str {
-    text.lines().next().unwrap_or_default()
+/// The whole of the walker's `failure` report, each line after its
+/// headline indented four more spaces so it stays nested under the
+/// mismatch it ends up in.
+fn report(failure: &impl std::fmt::Display) -> String {
+    failure.to_string().replace('\n', "\n    ")
 }
 
 /// Where `record` is offered: its `AvailStel` when that names a stellar,
@@ -518,8 +529,8 @@ fn take_at_a_stellar(
         .map(|_| ())
         .map_err(|failure| {
             format!(
-                "take at {stellar:?}: {} {:?}",
-                first_line(&failure.to_string()),
+                "take at {stellar:?}: {}\n      offer refusals here: {:?}",
+                report(&failure),
                 session.offer_refusals(record.id)
             )
         })
@@ -670,7 +681,7 @@ fn meet_goal(
     let mut walker = StoryWalker::new(data);
     walker
         .walk(session, &[Step::MeetGoal(record.id)])
-        .map_err(|failure| format!("meet goal: {}", first_line(&failure.to_string())))?;
+        .map_err(|failure| format!("meet goal: {}", report(&failure)))?;
     let held = session
         .pilot()
         .missions()
@@ -681,7 +692,7 @@ fn meet_goal(
         (Outcome::Completed, Some(_)) => walker
             .walk(session, &[Step::Deliver(record.id)])
             .map(|_| ())
-            .map_err(|failure| format!("deliver: {}", first_line(&failure.to_string()))),
+            .map_err(|failure| format!("deliver: {}", report(&failure))),
         (Outcome::EndsAtGoal, None) => {
             let unset = unset_ship_done_bits(session, record);
             if unset.is_empty() {
