@@ -43,7 +43,10 @@
 //! match. [`REOFFER`], registered with [`ROLL`], re-offers after the last
 //! slot's hooks when a mission succeeded. [`Session::fly`] registers
 //! every active slot's hooks again, so a saved pilot's missions go on.
-//! Each end frees its slot and unregisters its hooks.
+//! Each slot also registers its special ships' enter-system hook,
+//! `{MissionShips, slot, 0}` on every `EnteredSystem` (see the
+//! `mission_ships` module). Each end frees its slot and unregisters its
+//! hooks.
 //!
 //! **Text.** A mission's texts are filled through the one substitution
 //! path ([`text_tags`](crate::text_tags)): [`Session::offer_text`] for an
@@ -276,6 +279,7 @@ impl Session {
             let registered = self.register_story(subscription);
             debug_assert!(registered.is_ok(), "a slot filled registers once");
         }
+        self.register_ship_hook(slot);
     }
 
     /// Frees `slot` and unregisters its hooks, clearing their once-fired
@@ -286,6 +290,7 @@ impl Session {
         for hook in HOOKS {
             self.unregister_story(slot_hook(slot, hook));
         }
+        self.unregister_story(super::mission_ships::ship_hook(slot));
         self.save_due = true;
         Some(freed)
     }
@@ -477,7 +482,10 @@ impl Session {
         offer: &Offer,
         chance: &mut dyn Chance,
     ) -> Option<u8> {
-        let active = ActiveMission::accepted(record, offer, self.pilot.date);
+        let mut active = ActiveMission::accepted(record, offer, self.pilot.date);
+        // A full table draws nothing.
+        self.pilot.missions.lowest_free()?;
+        active.ships = self.ships_at_accept(record, &active, chance);
         let slot = self.pilot.missions.fill(active)?;
         self.register_slot(slot);
         self.save_due = true;
@@ -548,7 +556,9 @@ impl Session {
     }
 
     /// Ends the mission `record` in `slot` as `_AbortMission` (@0x99a92)
-    /// does, drawing on `chance`: its ships leave (mission-ships phase 2);
+    /// does, drawing on `chance`: its special ships lose their mark and
+    /// fly on as ordinary traffic, or, docked, are taken out of the
+    /// system (@0x99ab5-0x99b24; see the `mission_ships` module);
     /// its `OnAbort` runs when `on_abort` says; the slot is freed and its
     /// hooks unregistered; and the offers' stellar is forgotten. Nothing
     /// when the slot holds another mission, or is ending already, so an
@@ -563,6 +573,7 @@ impl Session {
         if !self.pilot.missions.holds(slot, record.id) || !self.ending.insert(slot) {
             return;
         }
+        self.release_mission_ships(slot);
         if on_abort {
             self.run_mission_script(slot, &record.on_abort, chance);
         }
@@ -585,7 +596,7 @@ impl Session {
     /// the daily step; with `Flags` 0x0008, a jump's fuel taken; with
     /// `Flags2` 0x0002, its pay; then the slot freed and the offers'
     /// stellar forgotten, with no second `OnAbort`.
-    fn auto_abort(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
+    pub(super) fn auto_abort(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
         let Some(pay) = self.pilot.missions.get(slot).map(|active| active.pay) else {
             return;
         };
@@ -2014,6 +2025,7 @@ mod tests {
                 goals_met: true,
                 aboard: false,
                 failed: None,
+                ships: crate::mission::SpecialShips::default(),
             })
         );
         assert_eq!(

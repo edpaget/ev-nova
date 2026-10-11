@@ -605,12 +605,12 @@ pub struct MissionShip {
 }
 
 impl MissionShip {
-    /// No special ships: a `ShipCount` of 0, no goal, no `düde`, no
-    /// behaviour, names or subtitles.
+    /// No special ships: a `ShipCount` of 0, no goal, a `ShipSyst` that
+    /// names no system, no `düde`, no behaviour, names or subtitles.
     pub const NONE: Self = Self {
         count: 0,
         goal: -1,
-        syst: -1,
+        syst: 0,
         dude: None,
         behav: -1,
         start: 0,

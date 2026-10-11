@@ -964,6 +964,7 @@ fn each_fault_is_reported_with_its_mission() {
         goals_met: false,
         aboard: false,
         failed: None,
+        ships: crate::mission::SpecialShips::default(),
     };
     for (at, fault, line) in [
         (

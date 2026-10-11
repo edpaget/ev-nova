@@ -113,14 +113,15 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
                 }
                 _ => self.session.mission_effect(id, event, &mut *self.chance),
             },
-            // Each other consumer's arm is filled by its own phase: mission
-            // ships' goal counts by mission-ships phase 2, and the crons',
-            // nebulae's and plug-ins' by theirs. A fixture has none.
-            Consumer::MissionShips
-            | Consumer::Crons
-            | Consumer::Nebulae
-            | Consumer::Plugins
-            | Consumer::Fixture => {}
+            // Each slot's enter-system hook (see the `mission_ships`
+            // module).
+            Consumer::MissionShips => {
+                self.session
+                    .mission_ships_effect(id, event, &mut *self.chance);
+            }
+            // Each other consumer's arm is filled by its own phase: the
+            // crons', nebulae's and plug-ins'. A fixture has none.
+            Consumer::Crons | Consumer::Nebulae | Consumer::Plugins | Consumer::Fixture => {}
         }
     }
 

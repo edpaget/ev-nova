@@ -75,6 +75,9 @@ use npc::{Mode, Npc, NpcId, NpcPerson};
 use spawn::{JUMP_IN_TICKS, NewShip, PersonDraw};
 use table::{SpawnPerson, SpawnTable};
 
+/// `ShipBehav` 0: a mission's special ships attack the player.
+pub const HUNTS_PLAYER: i16 = 0;
+
 /// How many ticks apart an NPC's decisions are: every tick, as the
 /// original at full speed.
 pub const DECISION_INTERVAL: u32 = 1;
@@ -200,12 +203,45 @@ impl Traffic {
         world: World,
         chance: &mut (impl Chance + ?Sized),
     ) {
+        self.enter_with(table, world, Vec::new(), chance);
+    }
+
+    /// Enters a system as [`Traffic::enter_in`] does, with `missions`, the
+    /// active missions' special ships set up there, first: as
+    /// `_SetupShipsInSystem` sets them up before the system's own passes
+    /// (@0x42dc4-0x43194), none of which they use up.
+    pub fn enter_with(
+        &mut self,
+        table: SpawnTable,
+        world: World,
+        missions: Vec<NewShip>,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
         self.table = table;
         self.npcs.clear();
         self.departed.clear();
+        self.add(missions, world.persons.grudges);
         let mut draw = PersonDraw::new(world.persons);
         let ships = spawn::initial(&self.table, &mut draw, chance);
         self.add(ships, world.persons.grudges);
+    }
+
+    /// Brings `ships` into the system as they are, numbered after every
+    /// other NPC: the mission ships whose appear timer ran out.
+    pub fn bring_in(&mut self, ships: Vec<NewShip>) {
+        self.add(ships, &BTreeSet::new());
+    }
+
+    /// What the system's traffic is drawn from.
+    #[must_use]
+    pub fn table(&self) -> &SpawnTable {
+        &self.table
+    }
+
+    /// What the system's traffic is drawn from, to add the mission
+    /// `düde`s to ([`SpawnTable::add_mission_dudes`]).
+    pub(crate) fn table_mut(&mut self) -> &mut SpawnTable {
+        &mut self.table
     }
 
     /// Goes on in another system whose traffic is drawn from `table`,
@@ -463,6 +499,9 @@ impl Traffic {
                 .map(|person| NpcPerson::of(&person.record, grudges.contains(&person.record.id)));
             let id = NpcId(self.next_id);
             self.next_id += 1;
+            // `ShipBehav` 0 aims a mission ship at the player as it spawns
+            // (`_AIMakeShipAttackPlayer` @0x3d099-0x3d0bb).
+            let hunts = ship.mission.is_some_and(|mark| mark.behav == HUNTS_PLAYER);
             self.npcs.push(Npc {
                 id,
                 ship: ship.ship,
@@ -481,13 +520,17 @@ impl Traffic {
                 } else {
                     Mode::Flying
                 },
-                goal: Goal::Idle,
+                goal: if hunts {
+                    Goal::Attack(ShipRef::Player)
+                } else {
+                    Goal::Idle
+                },
                 condition,
                 hull: kind.hull,
                 armament: kind.armament.clone(),
                 rounds: kind.rounds.clone(),
                 trigger: Trigger::default(),
-                target: None,
+                target: hunts.then_some(ShipRef::Player),
                 provoked: 0.0,
                 aggression: ship.aggression,
                 inspected: None,
@@ -498,6 +541,7 @@ impl Traffic {
                 assisting: 0,
                 carrier: None,
                 person: traits,
+                mission: ship.mission,
             });
         }
     }
@@ -1602,5 +1646,81 @@ mod tests {
         let mut traffic = Traffic::new();
         traffic.enter(peopled(1), &mut Draws::of(&[0, 382, 750, 750, 0]));
         assert!(!traffic.npcs()[0].person.expect("a person").grudge);
+    }
+
+    // Mission ships.
+
+    /// A mission ship of ship 200 for slot 2, of `ShipBehav` `behav`, at
+    /// (`x`, 0).
+    fn mission_ship(behav: i16, x: f32) -> NewShip {
+        NewShip {
+            ship: ShipId(200),
+            govt: Some(GovtId(131)),
+            ai_type: AiType::Interceptor,
+            lead: None,
+            state: ShipState {
+                position: Vec2::new(x, 0.0),
+                ..ShipState::default()
+            },
+            jumping_in: false,
+            aggression: 3,
+            booty: 2,
+            info_types: 1,
+            person: None,
+            mission: Some(npc::MissionMark {
+                slot: 2,
+                behav,
+                cloaked: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn a_systems_mission_ships_come_first_and_use_up_no_setup_pass() {
+        let mut traffic = Traffic::new();
+        let mut chance = Draws::of(&placed(750, 750));
+        traffic.enter_with(
+            table(1),
+            World::new(&[]),
+            vec![mission_ship(-1, 5.0), mission_ship(-1, 6.0)],
+            &mut chance,
+        );
+        let npcs = traffic.npcs();
+        assert_eq!(npcs.len(), 3, "both, and the one setup pass");
+        assert_eq!(
+            npcs.iter()
+                .map(|npc| npc.mission.map(|mark| mark.slot))
+                .collect::<Vec<_>>(),
+            [Some(2), Some(2), None]
+        );
+        assert_eq!(
+            (npcs[0].govt, npcs[0].ai_type),
+            (Some(GovtId(131)), AiType::Interceptor)
+        );
+        assert_eq!(
+            (npcs[0].booty, npcs[0].info_types, npcs[0].aggression),
+            (2, 1, 3)
+        );
+        assert_eq!(npcs[1].state.position, Vec2::new(6.0, 0.0));
+        assert_eq!((npcs[0].goal, npcs[0].target), (Goal::Idle, None));
+    }
+
+    #[test]
+    fn a_mission_ship_of_ship_behav_0_starts_attacking_the_player() {
+        let mut traffic = Traffic::new();
+        traffic.enter_with(
+            table(0),
+            World::new(&[]),
+            vec![mission_ship(0, 0.0)],
+            &mut Draws::of(&[]),
+        );
+        traffic.bring_in(vec![mission_ship(0, 9.0), mission_ship(1, 9.0)]);
+        let npcs = traffic.npcs();
+        for npc in &npcs[..2] {
+            assert_eq!(npc.goal, Goal::Attack(ShipRef::Player));
+            assert_eq!(npc.target, Some(ShipRef::Player));
+        }
+        assert_eq!((npcs[2].goal, npcs[2].target), (Goal::Idle, None));
+        assert_eq!(npcs[1].id, NpcId(1), "numbered after the others");
     }
 }

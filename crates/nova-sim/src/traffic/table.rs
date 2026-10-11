@@ -296,24 +296,7 @@ impl SpawnTable {
         let dude_records: BTreeMap<_, _> = decoded
             .dudes
             .iter()
-            .filter_map(|&(id, _)| {
-                let dude = catalog.dude(id)?;
-                let ships = dude
-                    .ships
-                    .iter()
-                    .map(|&(ship, prob)| (ship, u32::try_from(prob).unwrap_or(0)))
-                    .collect();
-                Some((
-                    id,
-                    SpawnDude {
-                        ai_type: dude.ai_type,
-                        govt: dude.govt,
-                        ships,
-                        booty: dude.booty,
-                        info_types: dude.info_types,
-                    },
-                ))
-            })
+            .filter_map(|&(id, _)| Some((id, spawn_dude(catalog, id)?)))
             .collect();
         let named: BTreeSet<_> = decoded.fleets.iter().map(|&(id, _)| id).collect();
         let mut link_fleets = BTreeSet::new();
@@ -364,11 +347,59 @@ impl SpawnTable {
         }
     }
 
+    /// Adds `dudes`, the `düde`s of the active missions' special ships,
+    /// read from `catalog`, and the ship types they fly with a record in
+    /// `ships`, resolved as [`SpawnTable::resolve`] resolves them: they
+    /// join the `düde`s that can be read, not the system's own weights.
+    /// A `düde` or ship type the table has already is kept as it is.
+    pub fn add_mission_dudes(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        dudes: &[DudeId],
+        ships: &[ShipRecord],
+        outfits: &[OutfitRecord],
+        arsenal: &Arsenal,
+    ) {
+        for &id in dudes {
+            if self.dude_records.contains_key(&id) {
+                continue;
+            }
+            if let Some(dude) = spawn_dude(catalog, id) {
+                self.dude_records.insert(id, dude);
+            }
+        }
+        let wanted: BTreeSet<ShipId> = dudes
+            .iter()
+            .filter_map(|id| self.dude_records.get(id))
+            .flat_map(|dude| dude.ships.iter().map(|&(ship, _)| ship))
+            .filter(|ship| !self.ships.contains_key(ship))
+            .collect();
+        self.ships.extend(kinds(ships, &wanted, outfits, arsenal));
+    }
+
     /// The ship types the table can spawn, by ascending ID.
     #[must_use]
     pub fn ship_types(&self) -> Vec<ShipId> {
         self.ships.keys().copied().collect()
     }
+}
+
+/// `düde` `id` as the traffic spawns from it, read from `catalog`: none
+/// when it has no record.
+fn spawn_dude(catalog: &(impl TrafficCatalog + ?Sized), id: DudeId) -> Option<SpawnDude> {
+    let dude = catalog.dude(id)?;
+    let ships = dude
+        .ships
+        .iter()
+        .map(|&(ship, prob)| (ship, u32::try_from(prob).unwrap_or(0)))
+        .collect();
+    Some(SpawnDude {
+        ai_type: dude.ai_type,
+        govt: dude.govt,
+        ships,
+        booty: dude.booty,
+        info_types: dude.info_types,
+    })
 }
 
 /// Each of `ships` whose ID is `wanted`, as the traffic flies it.
@@ -707,13 +738,23 @@ mod tests {
 
         fn dude(&self, id: DudeId) -> Option<DudeRecord> {
             self.dudes_asked.borrow_mut().push(id);
-            (id == DudeId(128)).then(|| DudeRecord {
-                ai_type: 3,
-                govt: Some(GovtId(130)),
-                ships: vec![(ShipId(200), 70), (ShipId(999), 30), (ShipId(201), -5)],
-                booty: 0x0041,
-                info_types: 0x4005,
-            })
+            match id.0 {
+                128 => Some(DudeRecord {
+                    ai_type: 3,
+                    govt: Some(GovtId(130)),
+                    ships: vec![(ShipId(200), 70), (ShipId(999), 30), (ShipId(201), -5)],
+                    booty: 0x0041,
+                    info_types: 0x4005,
+                }),
+                150 => Some(DudeRecord {
+                    ai_type: 4,
+                    govt: Some(GovtId(131)),
+                    ships: vec![(ShipId(202), 40), (ShipId(999), 60)],
+                    booty: 0x0002,
+                    info_types: 0x0001,
+                }),
+                _ => None,
+            }
         }
 
         fn fleets(&self) -> Vec<FleetRecord> {
@@ -847,6 +888,57 @@ mod tests {
                 .linked,
             "a fleet person linked here is linked"
         );
+    }
+
+    #[test]
+    fn a_table_resolves_the_mission_dudes_with_their_ships_beside_its_own() {
+        let catalog = Traffic::default();
+        let mut table = SpawnTable::resolve(
+            &catalog,
+            SystemId(131),
+            None,
+            &Governments::default(),
+            &records(),
+            &[],
+            &Arsenal::default(),
+            &NovaPersons::default(),
+            &BTreeSet::new(),
+        );
+        table.add_mission_dudes(
+            &catalog,
+            &[DudeId(150), DudeId(151), DudeId(150)],
+            &records(),
+            &[],
+            &Arsenal::default(),
+        );
+        assert_eq!(
+            table.dude_records.keys().copied().collect::<Vec<_>>(),
+            [DudeId(150)],
+            "151 has no record"
+        );
+        assert_eq!(
+            table.dude_records[&DudeId(150)],
+            SpawnDude {
+                ai_type: 4,
+                govt: Some(GovtId(131)),
+                ships: vec![(ShipId(202), 40), (ShipId(999), 60)],
+                booty: 0x0002,
+                info_types: 0x0001,
+            }
+        );
+        assert!(table.dudes.is_empty(), "not among the system's own");
+        assert_eq!(table.ship_types(), [ShipId(202)], "999 has no record");
+        assert_eq!(table.ships[&ShipId(202)].inherent_ai, 3);
+
+        let mut own = resolved();
+        let before = own.clone();
+        own.add_mission_dudes(&catalog, &[DudeId(150)], &records(), &[], &arsenal());
+        assert_eq!(own.dudes, before.dudes, "the system's weights kept");
+        assert_eq!(
+            own.dude_records[&DudeId(128)],
+            before.dude_records[&DudeId(128)]
+        );
+        assert_eq!(own.ships[&ShipId(200)], before.ships[&ShipId(200)], "kept");
     }
 
     #[test]

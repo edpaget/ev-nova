@@ -10195,6 +10195,7 @@ mod tests {
             "goals_met": true,
             "aboard": true,
             "failed": null,
+            "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": ""},
         }]);
         let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
         let mut draws = placed(750, 750, 0).to_vec();

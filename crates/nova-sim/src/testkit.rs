@@ -195,6 +195,7 @@ pub(crate) fn carrying(id: i16, tons: i64) -> crate::mission::ActiveMission {
         goals_met: true,
         aboard: true,
         failed: None,
+        ships: crate::mission::SpecialShips::default(),
     }
 }
 
@@ -425,6 +426,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         assisting: 0,
         carrier: None,
         person: None,
+        mission: None,
     }
 }
 

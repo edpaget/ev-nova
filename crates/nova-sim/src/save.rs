@@ -66,6 +66,10 @@
 //!   save kept only the record with each government, so the upgrade
 //!   saves `null`, and flying the pilot derives each system's
 //!   ([`Session::fly`](crate::Session::fly)).
+//! - Version 22: adds each active mission's special ships (`ships`). An
+//!   older save kept none of their state, so the upgrade gives each
+//!   mission none left, nowhere, with no timer and no name: an old save's
+//!   mission spawns no ship, and its `<SN>` reads empty.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -109,7 +113,10 @@
 //! each `null` without a `TimeLimit`, whether its destination is
 //! `reached`, its `goals_met` and its cargo `aboard`, and how it
 //! `failed`: `null`, `quick` (at once, its `OnFailure` run) or
-//! `operator` (by `F`). A slot past 15 is unusable.
+//! `operator` (by `F`), and its special `ships`: their `system` (`{"at":
+//! 130}`, `"follows_player"`, or `null` for nowhere), how many are `left`
+//! and have `arrived`, their `appear` timer (-1 when it does not run),
+//! and their drawn `name` and `subtitle`. A slot past 15 is unusable.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -122,14 +129,14 @@ use crate::control::Bit;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::{ActiveEvent, Good};
-use crate::mission::{ActiveMission, ActiveMissions, FailedBy, Stop};
+use crate::mission::{ActiveMission, ActiveMissions, FailedBy, ShipSystem, SpecialShips, Stop};
 use crate::outfit_effects::Rgb15;
 use crate::pilot::{Escort, Gender, Pilot};
 use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 21;
+pub const CURRENT: u64 = 22;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -597,6 +604,60 @@ impl From<SavedFailure> for FailedBy {
     }
 }
 
+/// Where a saved mission's special ships are; `null` for nowhere.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SavedShipSystem {
+    At(i16),
+    FollowsPlayer,
+}
+
+/// A saved mission's special ships.
+#[derive(Serialize, Deserialize)]
+struct SavedShips {
+    #[serde(deserialize_with = "Option::deserialize")]
+    system: Option<SavedShipSystem>,
+    left: i16,
+    arrived: i16,
+    appear: i16,
+    name: String,
+    subtitle: String,
+}
+
+impl From<&SpecialShips> for SavedShips {
+    fn from(ships: &SpecialShips) -> Self {
+        Self {
+            system: match ships.system {
+                ShipSystem::At(system) => Some(SavedShipSystem::At(system.0)),
+                ShipSystem::FollowsPlayer => Some(SavedShipSystem::FollowsPlayer),
+                ShipSystem::Nowhere => None,
+            },
+            left: ships.left,
+            arrived: ships.arrived,
+            appear: ships.appear,
+            name: ships.name.clone(),
+            subtitle: ships.subtitle.clone(),
+        }
+    }
+}
+
+impl From<SavedShips> for SpecialShips {
+    fn from(saved: SavedShips) -> Self {
+        Self {
+            system: match saved.system {
+                Some(SavedShipSystem::At(system)) => ShipSystem::At(SystemId(system)),
+                Some(SavedShipSystem::FollowsPlayer) => ShipSystem::FollowsPlayer,
+                None => ShipSystem::Nowhere,
+            },
+            left: saved.left,
+            arrived: saved.arrived,
+            appear: saved.appear,
+            name: saved.name,
+            subtitle: saved.subtitle,
+        }
+    }
+}
+
 /// A saved active mission, in its slot.
 #[derive(Serialize, Deserialize)]
 struct SavedMission {
@@ -619,6 +680,7 @@ struct SavedMission {
     aboard: bool,
     #[serde(deserialize_with = "Option::deserialize")]
     failed: Option<SavedFailure>,
+    ships: SavedShips,
 }
 
 impl SavedMission {
@@ -638,6 +700,7 @@ impl SavedMission {
             goals_met: active.goals_met,
             aboard: active.aboard,
             failed: active.failed.map(SavedFailure::from),
+            ships: SavedShips::from(&active.ships),
         }
     }
 }
@@ -677,6 +740,7 @@ fn missions_of(saved: Vec<SavedMission>) -> Result<ActiveMissions, SaveError> {
             goals_met: saved.goals_met,
             aboard: saved.aboard,
             failed: saved.failed.map(FailedBy::from),
+            ships: SpecialShips::from(saved.ships),
         };
         if !missions.put(saved.slot, active) {
             return Err(SaveError::Unusable(format!(
@@ -853,6 +917,7 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     combat_rating,
     active_missions,
     system_records,
+    mission_ships,
 ];
 
 /// Version 1 to 2: nothing explored, and no legal records.
@@ -987,6 +1052,20 @@ fn system_records(save: &mut Value) {
     if let Some(object) = save.as_object_mut() {
         object.insert("system_legal".to_owned(), Value::Null);
     }
+}
+
+/// Version 21 to 22: each active mission with no special ships left,
+/// nowhere, with no timer and no name.
+fn mission_ships(save: &mut Value) {
+    let none = serde_json::json!({
+        "system": null,
+        "left": 0,
+        "arrived": 0,
+        "appear": -1,
+        "name": "",
+        "subtitle": ""
+    });
+    add_to_each(save, "missions", "ships", &none);
 }
 
 /// Adds `field` to every entry of `save`'s `list`, as `value`.
@@ -1283,6 +1362,14 @@ mod tests {
                 goals_met: false,
                 aboard: true,
                 failed: Some(FailedBy::Quick),
+                ships: SpecialShips {
+                    system: ShipSystem::At(SystemId(131)),
+                    left: 3,
+                    arrived: 1,
+                    appear: 57,
+                    name: "Rover".to_owned(),
+                    subtitle: "Hunter".to_owned(),
+                },
             },
         );
         missions.put(
@@ -1300,6 +1387,10 @@ mod tests {
                 goals_met: true,
                 aboard: false,
                 failed: Some(FailedBy::Operator),
+                ships: SpecialShips {
+                    system: ShipSystem::FollowsPlayer,
+                    ..SpecialShips::default()
+                },
             },
         );
         missions
@@ -1380,7 +1471,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 21);
+        assert_eq!(CURRENT, 22);
         assert_eq!(
             value["galaxy"],
             serde_json::json!({
@@ -1476,7 +1567,7 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert!(text.contains("\n  \"version\": 21"), "{text}");
+        assert!(text.contains("\n  \"version\": 22"), "{text}");
     }
 
     /// A version 1 save: before explored systems and legal records.
@@ -2692,7 +2783,15 @@ mod tests {
                     "reached": true,
                     "goals_met": false,
                     "aboard": true,
-                    "failed": "quick"
+                    "failed": "quick",
+                    "ships": {
+                        "system": {"at": 131},
+                        "left": 3,
+                        "arrived": 1,
+                        "appear": 57,
+                        "name": "Rover",
+                        "subtitle": "Hunter"
+                    }
                 },
                 {
                     "slot": 9,
@@ -2707,9 +2806,87 @@ mod tests {
                     "reached": false,
                     "goals_met": true,
                     "aboard": false,
-                    "failed": "operator"
+                    "failed": "operator",
+                    "ships": {
+                        "system": "follows_player",
+                        "left": 0,
+                        "arrived": 0,
+                        "appear": -1,
+                        "name": "",
+                        "subtitle": ""
+                    }
                 }
             ])
+        );
+    }
+
+    /// A version 21 save: before the active missions' special ships.
+    const VERSION_21: &str = r#"{
+        "version": 21,
+        "name": "Hunter",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [],
+        "system_legal": null,
+        "combat_rating": 7,
+        "cargo": [],
+        "events": [],
+        "outfits": [],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [],
+        "gender": "male",
+        "paint": null,
+        "story_fired": [],
+        "galaxy": {"systems": [], "stellars": [], "nebulae": []},
+        "missions": [{
+            "slot": 4,
+            "mission": 140,
+            "destination": null,
+            "return": null,
+            "cargo_type": null,
+            "cargo_tons": 0,
+            "pay": 500,
+            "days_left": null,
+            "deadline": null,
+            "reached": false,
+            "goals_met": false,
+            "aboard": false,
+            "failed": null
+        }]
+    }"#;
+
+    #[test]
+    fn a_version_21_saves_missions_load_with_no_special_ships() {
+        let pilot = decode(VERSION_21).expect("loads");
+        let active = pilot.missions().get(4).expect("held");
+        assert_eq!(active.mission, MissionId(140));
+        assert_eq!(active.ships, SpecialShips::default());
+        assert_eq!(active.ships.system, ShipSystem::Nowhere);
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+    }
+
+    #[test]
+    fn the_special_ships_survive_a_round_trip() {
+        let pilot = seasoned();
+        let back = decode(&encode(&pilot)).expect("loads");
+        assert_eq!(back.missions(), pilot.missions());
+        assert_eq!(
+            back.missions().get(2).map(|active| active.ships.system),
+            Some(ShipSystem::At(SystemId(131)))
         );
     }
 
@@ -3006,12 +3183,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 21", "\"version\": 22");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 22 }));
+        let newer = encode(&seasoned()).replace("\"version\": 22", "\"version\": 23");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 23 }));
         assert_eq!(
-            SaveError::Newer { version: 22 }.to_string(),
+            SaveError::Newer { version: 23 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 22, and this version of Nova reads up to 21)."
+             (it is version 23, and this version of Nova reads up to 22)."
         );
     }
 

@@ -473,6 +473,7 @@ fn fighter(
         assisting: 0,
         carrier: Some(carrier),
         person: None,
+        mission: None,
     }
 }
 

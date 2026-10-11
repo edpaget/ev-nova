@@ -15,14 +15,17 @@
 
 use std::rc::Rc;
 
+use crate::ai::fire;
 use crate::ai::{
     Behaviour, BraveTrader, CarriedAi, EscortAi, Goal, Interceptor, Reaction, Surroundings,
     Warship, WimpyTrader,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
+use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
 use crate::rulebook::{RuleKey, Rulebook};
+use crate::traffic::HUNTS_PLAYER;
 use crate::traffic::npc::{AiType, Npc};
 
 /// Nova's combat AI (see the module docs).
@@ -122,8 +125,27 @@ impl NovaAi {
     }
 }
 
+/// Whether `npc` is a mission's special ship of `ShipBehav` 0 that
+/// attacks the player now, among `around`: on every think
+/// (`_HighLevelAIHandler` @0x8d628-0x8d6ea), while the player is in the
+/// system, unless the player is disabled and the ship has no destroying
+/// weapons ([`fire::destroys`]), when it gives up and decides as its type
+/// does. A cloaked or gate-emerging player is no matter: the engine has
+/// neither, so the player is always visible to it.
+fn hunts_player(npc: &Npc, around: &Surroundings) -> bool {
+    npc.mission.is_some_and(|mark| mark.behav == HUNTS_PLAYER)
+        && around
+            .player
+            .is_some_and(|player| player.condition != Condition::Disabled || fire::destroys(npc))
+}
+
 impl Behaviour for NovaAi {
+    /// A mission ship of `ShipBehav` 0 attacks the player
+    /// ([`hunts_player`]); every other NPC decides as its behaviour does.
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+        if hunts_player(npc, around) {
+            return Goal::Attack(ShipRef::Player);
+        }
         self.of(npc).decide(npc, around, chance)
     }
 
@@ -131,7 +153,12 @@ impl Behaviour for NovaAi {
         self.of(npc).trigger(npc, around)
     }
 
+    /// A mission ship of `ShipBehav` 0 targets the player
+    /// ([`hunts_player`]).
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
+        if hunts_player(npc, around) {
+            return Some(ShipRef::Player);
+        }
         self.of(npc).target(npc, around)
     }
 
@@ -492,5 +519,123 @@ mod tests {
         assert!(format!("{ai:?}").contains("BraveTrader"));
         assert!(format!("{ai:?}").contains("Warship"));
         assert!(format!("{ai:?}").contains("Interceptor"));
+    }
+
+    /// `npc` as slot 1's special ship of `ShipBehav` `behav`.
+    fn mission_ship(mut npc: Npc, behav: i16) -> Npc {
+        npc.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 1,
+            behav,
+            cloaked: false,
+        });
+        npc
+    }
+
+    /// The ships `npcs` with the player intact or `disabled` at the
+    /// centre.
+    fn with_player(npcs: &[Npc], condition: Condition) -> Surroundings<'_> {
+        let mut player = crate::ai::fixture::player(0.0, 0.0);
+        player.condition = condition;
+        Surroundings {
+            player: Some(player),
+            ..Surroundings::new(&[], npcs)
+        }
+    }
+
+    #[test]
+    fn a_mission_ship_of_ship_behav_0_attacks_the_player_on_every_think() {
+        let mark = Marked::new(7);
+        let ai = NovaAi::default().with(AiType::Warship, mark.clone());
+        let mut hunter = mission_ship(of(1, AiType::Warship), 0);
+        hunter.goal = Goal::Attack(mark.ship());
+        hunter.target = Some(mark.ship());
+        let npcs = [hunter];
+        let around = with_player(&npcs, Condition::Intact);
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Attack(ShipRef::Player)
+        );
+        assert_eq!(ai.target(&npcs[0], &around), Some(ShipRef::Player));
+        assert_eq!(
+            ai.trigger(&npcs[0], &around).only,
+            Some(WeaponId(7)),
+            "it fires as its type does"
+        );
+        let strike = Strike {
+            ship: ShipRef::Npc(NpcId(1)),
+            by: ShipRef::Player,
+            damage: 1.0,
+            downed: None,
+        };
+        assert_eq!(ai.react(&npcs[0], &strike, &around).provoked, 7.0);
+        assert_eq!(
+            *mark.asked.borrow(),
+            [NpcId(1); 2],
+            "trigger and react only"
+        );
+    }
+
+    #[test]
+    fn a_mission_ship_goes_back_to_its_types_ai_unmarked_or_of_another_behaviour() {
+        let mark = Marked::new(7);
+        let ai = NovaAi::default().with(AiType::Warship, mark.clone());
+        let plain = of(1, AiType::Warship);
+        let npcs = [
+            plain.clone(),
+            mission_ship(plain.clone(), -1),
+            mission_ship(plain.clone(), 1),
+            mission_ship(plain, 2),
+        ];
+        let around = with_player(&npcs, Condition::Intact);
+        for npc in &npcs {
+            assert_eq!(
+                ai.decide(npc, &around, &mut Draws::of(&[])),
+                Goal::Attack(mark.ship()),
+                "{:?}",
+                npc.mission
+            );
+            assert_eq!(ai.target(npc, &around), Some(mark.ship()));
+        }
+    }
+
+    #[test]
+    fn a_ship_behav_0_ship_without_destroying_weapons_gives_up_on_a_disabled_player() {
+        let mark = Marked::new(7);
+        let ai = NovaAi::default().with(AiType::Warship, mark.clone());
+        let npcs = [mission_ship(of(1, AiType::Warship), 0)];
+        let disabled = with_player(&npcs, Condition::Disabled);
+        assert_eq!(
+            ai.decide(&npcs[0], &disabled, &mut Draws::of(&[])),
+            Goal::Attack(mark.ship())
+        );
+        assert_eq!(ai.target(&npcs[0], &disabled), Some(mark.ship()));
+        let dying = with_player(&npcs, Condition::Dying { ticks_left: 3 });
+        assert_eq!(
+            ai.decide(&npcs[0], &dying, &mut Draws::of(&[])),
+            Goal::Attack(ShipRef::Player)
+        );
+        let gone = Surroundings::new(&[], &npcs);
+        assert_eq!(
+            ai.decide(&npcs[0], &gone, &mut Draws::of(&[])),
+            Goal::Attack(mark.ship()),
+            "no player in the system"
+        );
+        let armed = [Npc {
+            armament: crate::combat::armament::Armament::new([(
+                crate::combat::weapon::WeaponSpec::new(&crate::catalog::WeaponRecord {
+                    mass_dmg: 5,
+                    ..crate::testkit::weapon(128)
+                }),
+                1,
+            )]),
+            ..npcs[0].clone()
+        }];
+        assert!(fire::destroys(&armed[0]));
+        let disabled = with_player(&armed, Condition::Disabled);
+        assert_eq!(
+            ai.decide(&armed[0], &disabled, &mut Draws::of(&[])),
+            Goal::Attack(ShipRef::Player),
+            "with destroying weapons it goes on"
+        );
     }
 }

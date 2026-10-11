@@ -16,6 +16,7 @@ use crate::rules::{Check, Checks, Context};
 
 use super::cargo::Room;
 use super::offer::{Offer, Stop, after};
+use super::ships::SpecialShips;
 
 /// How many missions can be active at once: the original's slots
 /// (`_currentMissions`, 0x184688).
@@ -87,6 +88,9 @@ pub struct ActiveMission {
     pub aboard: bool,
     /// Whether it failed, and how (+3).
     pub failed: Option<FailedBy>,
+    /// Its special ships: where they are, how many are left, their
+    /// timer and their name (see [`ships`](super::ships)).
+    pub ships: SpecialShips,
 }
 
 impl ActiveMission {
@@ -109,6 +113,7 @@ impl ActiveMission {
             goals_met: goals_met_at_accept(record),
             aboard: false,
             failed: None,
+            ships: SpecialShips::default(),
         }
     }
 }
@@ -661,6 +666,7 @@ mod tests {
                 goals_met: true,
                 aboard: false,
                 failed: None,
+                ships: crate::mission::SpecialShips::default(),
             }
         );
         for limit in [0, -1, i16::MIN] {

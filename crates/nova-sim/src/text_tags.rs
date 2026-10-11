@@ -187,9 +187,9 @@ impl MissionValues {
         }
     }
 
-    /// `active`'s values (`_currentMissions`, 0x184688). Its ship name
-    /// (slot +0x70) is empty until mission ships draw one at accept
-    /// (rdm:phase/mission-ships/phase-1-spawn-mission-ships).
+    /// `active`'s values (`_currentMissions`, 0x184688), its ship name
+    /// the one drawn at accept (slot +0x70, `_LoadCurrentMissionData`
+    /// @0xa1195-0xa1273): empty when it has none.
     #[must_use]
     pub fn active(active: &ActiveMission) -> Self {
         Self {
@@ -199,7 +199,7 @@ impl MissionValues {
             cargo_tons: active.cargo_tons,
             pay: Some(active.pay),
             deadline: active.deadline,
-            ship_name: Some(String::new()),
+            ship_name: Some(active.ships.name.clone()),
         }
     }
 }
@@ -843,6 +843,17 @@ mod tests {
                 ship_name: None,
                 ..values()
             }
+        );
+    }
+
+    #[test]
+    fn an_active_missions_ship_name_is_the_one_drawn_at_accept() {
+        let record = crate::testkit::mission(130);
+        let mut active = ActiveMission::accepted(&record, &offer(), today());
+        active.ships.name = "Rover".to_owned();
+        assert_eq!(
+            MissionValues::active(&active).ship_name.as_deref(),
+            Some("Rover")
         );
     }
 

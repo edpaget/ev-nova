@@ -30,8 +30,9 @@
 //! 5. arriving by hyperspace, its government is not derelict (`gövt`
 //!    `Flags` 0x0800): drifting derelicts never jump in;
 //! 6. no person of its name is in the system already, in any condition
-//!    (@0x40baa-0x40c48; the original skips mission ships, of which there
-//!    are none yet), the persons escorting the player counted;
+//!    (@0x40baa-0x40c48), the persons escorting the player counted; a
+//!    mission's special ship, which no person flies, never counts, whatever
+//!    its name;
 //! 7. it does not escort the player ([`PersonWorld::fleet`]): a person in
 //!    the fleet is never rolled nor slotted.
 //!

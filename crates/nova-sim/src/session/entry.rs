@@ -664,7 +664,7 @@ impl Session {
     {
         match step {
             TrafficStep::None => {}
-            TrafficStep::Populate => self.populate(catalog, chance),
+            TrafficStep::Populate => self.populate_entering(catalog, chance),
             TrafficStep::Retarget => {
                 let table = self.spawn_table(catalog);
                 let fleet: BTreeSet<_> = self.fleet.iter().flatten().copied().collect();

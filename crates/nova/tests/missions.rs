@@ -840,6 +840,7 @@ fn holding(pilot: &Pilot, held: &[(usize, i16, Option<i16>, Option<i16>)]) -> Pi
                 "goals_met": false,
                 "aboard": false,
                 "failed": null,
+                "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": ""},
             })
         })
         .collect();

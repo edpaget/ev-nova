@@ -336,6 +336,7 @@ mod hire;
 mod hooks;
 mod mission_cargo;
 mod mission_screens;
+mod mission_ships;
 mod missions;
 mod outfits;
 mod person_offers;
@@ -577,6 +578,10 @@ pub struct Session {
     /// Whether the system is to be populated on the next traffic tick in
     /// flight: from the session's start, and after each take-off.
     traffic_due: bool,
+    /// The system the player last jumped from (the original's player
+    /// +0x94, set @0x6bd4f): the side mission ships coming in later enter
+    /// from. None until the session's first jump.
+    jumped_from: Option<SystemId>,
     /// Every weapon and ship type's combat fields, read when the session
     /// starts.
     arsenal: Arsenal,
@@ -893,6 +898,7 @@ impl Session {
             date_affixes: catalog.date_affixes(),
             traffic: Traffic::new(),
             traffic_due: true,
+            jumped_from: None,
             arsenal,
             govts,
             // Refitted below, from the ship and the outfits the pilot owns.
@@ -1202,7 +1208,21 @@ impl Session {
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
+        self.populate_as(catalog, chance, false);
+    }
+
+    /// Fills the system as [`Session::populate`] does, the active
+    /// missions' special ships set up first, `entering` it by a way in
+    /// whose enter-system hook is still to run (see the `mission_ships`
+    /// module); a mission of `Flags` 0x0001 whose ships came auto-aborts.
+    fn populate_as(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+        entering: bool,
+    ) {
         let table = self.spawn_table(catalog);
+        let (missions, spawned) = self.setup_mission_ships(&table, entering, chance);
         let facts = control::Facts {
             pilot: &self.pilot,
             ammo_outfits: &self.ammo_outfits,
@@ -1220,7 +1240,7 @@ impl Session {
             ..World::new(&[])
         };
         let last = self.last_npc();
-        self.traffic.enter_in(table, world, chance);
+        self.traffic.enter_with(table, world, missions, chance);
         self.resolve_person_offers(last, &mut &mut *chance);
         self.traffic_due = false;
         self.story.watched.clear();
@@ -1229,13 +1249,25 @@ impl Session {
         self.aboard = None;
         self.talk = None;
         self.clear_lost_target();
+        self.auto_abort_on_ships(&spawned, &mut &mut *chance);
+    }
+
+    /// Fills the system as it is entered by a way in whose enter-system
+    /// hook is still to run (see [`Session::populate_as`]).
+    pub(super) fn populate_entering(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        self.populate_as(catalog, chance, true);
     }
 
     /// What the system's traffic is drawn from, read from `catalog`: its
-    /// ships, persons and fleets, the pilot's person escorts aside.
+    /// ships, persons and fleets, the pilot's person escorts aside, and
+    /// the `düde`s of the active missions' special ships.
     fn spawn_table(&self, catalog: &(impl TrafficCatalog + ?Sized)) -> SpawnTable {
         let system = self.pilot.system;
-        SpawnTable::resolve(
+        let mut table = SpawnTable::resolve(
             catalog,
             system,
             self.galaxy.govt(system),
@@ -1250,7 +1282,15 @@ impl Session {
                 .iter()
                 .filter_map(|escort| escort.person)
                 .collect(),
-        )
+        );
+        table.add_mission_dudes(
+            catalog,
+            &self.mission_dudes(),
+            &self.ships,
+            &self.outfits,
+            &self.arsenal,
+        );
+        table
     }
 
     /// Advances the NPC traffic one tick, NPCs deciding as `behaviour`
@@ -1272,6 +1312,8 @@ impl Session {
             if self.traffic_due {
                 self.populate(catalog, chance);
             } else {
+                self.mission_ship_arrivals(catalog, chance);
+                self.unmark_inactive_mission_ships();
                 let system_govt = self.galaxy.govt(self.pilot.system);
                 let facts = control::Facts {
                     pilot: &self.pilot,
@@ -1521,6 +1563,7 @@ impl Session {
                 ship: id,
                 fate: Fate::Destroyed,
             });
+            self.count_lost_mission_ship(id);
             self.lose_destroyed(id);
         }
     }
@@ -1982,6 +2025,7 @@ impl Session {
                 hold: false,
             },
         };
+        self.jumped_from = Some(from);
         self.enter_system(Entry::Jump { hops }, entered, catalog, catalog, chance);
         Some(self.pilot.system)
     }

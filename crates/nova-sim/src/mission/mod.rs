@@ -369,6 +369,7 @@ pub mod identity;
 pub mod offer;
 pub mod screens;
 pub mod select;
+pub mod ships;
 
 use crate::catalog::{GovtId, LandingSite, MissionId, MissionRecord, ShipId, StellarId, SystemId};
 use crate::control::Gate;
@@ -393,6 +394,7 @@ pub use self::screens::{
     OfferLabels, OfferPrompt, VenueOffer, display_order, offer_gap, offer_labels,
 };
 pub use self::select::{Kind, Stellar, StellarCode, World, select_stellar, stellars_of};
+pub use self::ships::{ShipSystem, SpecialShips};
 
 /// Where a mission is offered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

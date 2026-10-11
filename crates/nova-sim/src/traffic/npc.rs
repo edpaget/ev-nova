@@ -171,6 +171,22 @@ pub struct Npc {
     pub carrier: Option<Carrier>,
     /// The person flying it, if any.
     pub person: Option<NpcPerson>,
+    /// The mission whose special ship it is, while it is one (the
+    /// original's ship +0xc8d2): none for any other ship.
+    pub mission: Option<MissionMark>,
+}
+
+/// What marks an NPC as an active mission's special ship (see the
+/// [`traffic::spawn`](crate::traffic::spawn) module's "Mission ships").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MissionMark {
+    /// The slot of the mission.
+    pub slot: u8,
+    /// The mission's `ShipBehav`, raw.
+    pub behav: i16,
+    /// Whether it spawned cloaked (`ShipStart` 2): only recorded, as the
+    /// engine has no cloak (rdm:phase/mission-ships/phase-16-cloaked-mission-ships).
+    pub cloaked: bool,
 }
 
 impl Npc {

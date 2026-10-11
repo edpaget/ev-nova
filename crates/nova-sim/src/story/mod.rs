@@ -161,8 +161,9 @@
 //! and ship days (@0x601fa, @0x6020e). Then `_PlayerLandOnStellar` passes
 //! the take-off's day (@0x63440), runs the global price flux (@0x63445),
 //! explores the system (`_AutoSetExploration` @0x634c8) and its nebulae
-//! (@0x634da), restarts each mission's ship hail timers
-//! (@0x634df-0x6353c) and saves the pilot (@0x6354b). Back in
+//! (@0x634da), restarts each mission's aux ships' countdown (+0x6c) and
+//! zeroes their arrived count (+0x6a) (@0x634df-0x6353c, mission-ships
+//! phase 13) and saves the pilot (@0x6354b). Back in
 //! `_HandlePlayerDockRequest`, the system's ships are set up
 //! (`_SetupShipsInSystem` @0x674c2) and its stellars redrawn (@0x674c7).
 //! The enter-system hook does not run.
@@ -182,12 +183,18 @@
 //! (@0x6c620).
 //!
 //! The enter-system hook (@0x99f11) runs no script. For each active
-//! mission, in slot order, it restarts the timers its ships appear and
-//! hail by (+0x4e, +0x6c, +0x6a). It runs on a jump's arrival
-//! (@0x6c15d), a gate's or wormhole's exit (@0x67159) and an `M` or `N`
-//! in flight (@0x159a8); not on a landed `M` or `N` (@0x15947, which only
-//! empties the docked offers), nor on a take-off, which restarts only the
-//! hail timers.
+//! mission, in slot order, it restarts the timers its ships appear by:
+//! with `ShipStart` 1, ships left (+0x6) and the player in their system
+//! (or `ShipSyst` -6), the special ships' appear timer (+0x4e), their
+//! arrived count (+0x2e) zeroed (@0x99f5b-0x99fae); and the aux ships'
+//! countdown (+0x6c), their arrived count (+0x6a) zeroed (@0x99fb5-0x99ff4,
+//! mission-ships phase 13). Here it is the [`Consumer::MissionShips`]
+//! subscription each slot registers on `EnteredSystem` (see the
+//! [`traffic::spawn`](crate::traffic::spawn) module's "Mission ships"). It
+//! runs on a jump's arrival (@0x6c15d), a gate's or wormhole's exit
+//! (@0x67159) and an `M` or `N` in flight (@0x159a8); not on a landed `M`
+//! or `N` (@0x15947, which only empties the docked offers), nor on a
+//! take-off, which restarts only the aux ships' countdowns.
 //!
 //! ## Ship goals
 //!

@@ -741,6 +741,7 @@ mod tests {
             assisting: 0,
             carrier: None,
             person: None,
+            mission: None,
         }
     }
 
