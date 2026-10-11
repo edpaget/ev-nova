@@ -2,12 +2,16 @@
 //! [`traffic::spawn`](crate::traffic::spawn) module's "Mission ships"):
 //! their state drawn as a mission is accepted, their setup with the
 //! system's ships, the enter-system hook that restarts their appear
-//! timer, the timer and the ships it brings in, and what becomes of them
-//! as they are destroyed and as their mission ends.
+//! timer, the timer and the ships it brings in, their goals (see the
+//! [`story`](crate::story) module's "Ship goals"), and what becomes of
+//! them as they are destroyed, disabled or boarded and as their mission
+//! ends.
 //!
-//! **The hook** is no loop of its own: each slot filled registers
-//! [`ship_hook`], `{MissionShips, slot, 0}`, on every `EnteredSystem`,
-//! with a blank guard and no script, and its effect reads the event's
+//! **The hooks** are no loop of their own: each slot filled registers
+//! [`ship_hook`]s, `{MissionShips, slot, hook}`, with a blank guard and
+//! no script: [`ENTERED`] on every `EnteredSystem`, [`LANDED`] on every
+//! `Landed`, [`SHIP_FATE`] on every `ShipFate` and [`TOOK_OFF`] on every
+//! `TookOff`. The enter-system hook's effect reads the event's
 //! [`Entrance`]. It restarts the timer on a jump's arrival, a gate's or
 //! wormhole's exit and an `M` or `N` in flight, never on a landed move
 //! nor a relocation (`_MissionHandlePlayerEnteredNewSystem`
@@ -18,6 +22,30 @@
 //! entry settles: the setup on such an entry ([`Session::populate`]
 //! through the entry table) leaves out every slot the hook is about to
 //! restart. Its timer is drawn after the setup's draws, not before.
+//!
+//! **The goals** are checked by every hook but in docked entries, the
+//! enter-system hook after its restart, as the original's per-frame poll
+//! and its land check check them (`_MissionObjectivesCheck` @0x9e79e; see
+//! [`check_goals`]): the landing's before the missions' landing hooks, as
+//! [`Consumer::MissionShips`] sorts before [`Consumer::Missions`], and
+//! after the offer roll; the take-off's as the first flight frame after
+//! a docked accept or a landing; every `ShipFate`'s, a sighting of one of
+//! the slot's own ships counting as seen. An accept in flight queues its
+//! slot's check for the end of [`Session::settle_script`]'s settling, so
+//! a mission an `S` starts is checked after the script that started it.
+//! The moment the goals are met shows `ShipDoneText`, runs `OnShipDone`
+//! and auto-aborts a mission of `Flags` 0x0001 ([`Session::auto_abort`]).
+//! Escorted ships count while they are in the system: both spawn paths
+//! raise [`Fate::Arrived`] for each ship they bring in, and watch the
+//! ships of an unmet observe goal for their first sighting
+//! ([`Session::watch_ship`]).
+//!
+//! **The counts** go up where the original counts them: a ship destroyed
+//! as it is taken out of the fight, one disabled as the fight's tick
+//! downs it, one boarded on the assist path of [`Session::board`]. The
+//! first loss that fails its mission fails it there, at once
+//! ([`SimMessage::MissionShipLost`] and the quick failure); the goal
+//! checks follow as the `ShipFate` the loss raised settles.
 
 use super::Session;
 use crate::board::{Boarding, MissionBoardLine};

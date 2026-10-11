@@ -4,9 +4,10 @@
 //! missions' lifecycle.
 //!
 //! The roll is no loop of its own: [`Session::fly`] registers it as the
-//! missions' first `Landed` subscription, [`ROLL`], whose consumer effect
-//! rolls the offers at the stellar landed on (`_HandlePlayerDockRequest`
-//! @0x66d2b-0x66d77), before any mission slot's landing hooks (see the
+//! offers' one `Landed` subscription, [`ROLL`], `{Offers, 0, 0}`, whose
+//! consumer effect rolls the offers at the stellar landed on
+//! (`_HandlePlayerDockRequest` @0x66d2b-0x66d77), before the mission
+//! ships' goal checks and every mission slot's landing hooks (see the
 //! [`story`](crate::story) module's "Dispatch"). A pilot flown docked has
 //! `Landed` raised for its stellar, after its `Explored`, as a load
 //! forgets the stellar rolled at (@0x75ef5) and opens the spaceport, so
@@ -43,10 +44,11 @@
 //! match. [`REOFFER`], registered with [`ROLL`], re-offers after the last
 //! slot's hooks when a mission succeeded. [`Session::fly`] registers
 //! every active slot's hooks again, so a saved pilot's missions go on.
-//! Each slot also registers its special ships' enter-system hook,
-//! `{MissionShips, slot, 0}` on every `EnteredSystem` (see the
-//! `mission_ships` module). Each end frees its slot and unregisters its
-//! hooks.
+//! Each slot also registers its special ships' hooks, `{MissionShips,
+//! slot, hook}`: the enter-system hook and the goal checks (see the
+//! `mission_ships` module); an accept in flight queues its slot's first
+//! goal check for the end of the settling. Each end frees its slot and
+//! unregisters its hooks.
 //!
 //! **Text.** A mission's texts are filled through the one substitution
 //! path ([`text_tags`](crate::text_tags)): [`Session::offer_text`] for an

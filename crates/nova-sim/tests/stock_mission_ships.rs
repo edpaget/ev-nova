@@ -1,7 +1,8 @@
 //! Mission ships over the stock data: a stock mission with special ships,
 //! started by `S` on a new pilot, puts them in the system its `ShipSyst`
-//! names, and the system is set up with them there and nowhere else.
-//! Skips, passing, when `NOVA_DATA` is unset.
+//! names, and the system is set up with them there and nowhere else; and
+//! a stock mission of each ship goal has its goal met by the storyline
+//! walker's `meet goal`. Skips, passing, when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -106,4 +107,47 @@ fn a_stock_missions_special_ships_spawn_in_their_system_and_no_other() {
         other.npcs().iter().all(|npc| npc.mission.is_none()),
         "none in {elsewhere:?}"
     );
+}
+
+/// Starts `mission` by `S` on a new pilot docked where it starts, then
+/// meets its ship goal by the walker's `meet goal`: whether the walk
+/// passed, and the mission's goals met after it, or none once it ended
+/// (an auto-abort).
+fn met_by_the_walker(data: &GameData, mission: MissionId) -> (bool, Option<bool>) {
+    let mut session = docked_new_pilot(data);
+    session.run_set(
+        &SetExpr::parse(&format!("S{}", mission.0)).expect("parses"),
+        &mut NeverFires,
+    );
+    let _ = session.settle_script(data, &mut NeverFires);
+    let walked = nova_sim::fixture::StoryWalker::new(data)
+        .walk(&mut session, &[nova_sim::fixture::Step::MeetGoal(mission)])
+        .is_ok();
+    let met = session
+        .pilot()
+        .missions()
+        .iter()
+        .find(|(_, active)| active.mission == mission)
+        .map(|(_, active)| active.goals_met);
+    (walked, met)
+}
+
+#[test]
+fn a_stock_mission_of_each_ship_goal_has_it_met_by_the_walker() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let missions = data.missions();
+    for goal in 0..=5 {
+        let record = missions
+            .iter()
+            .find(|record| {
+                record.ships.goal == goal && record.ships.count > 0 && record.ships.dude.is_some()
+            })
+            .unwrap_or_else(|| panic!("a stock mission of ship goal {goal}"));
+        let (walked, met) = met_by_the_walker(&data, record.id);
+        assert!(walked, "mission {} of goal {goal}", record.id.0);
+        assert_ne!(met, Some(false), "mission {} of goal {goal}", record.id.0);
+    }
 }
