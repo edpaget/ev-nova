@@ -59,7 +59,8 @@ impl AiType {
     }
 }
 
-/// Whether an NPC is still coming out of hyperspace.
+/// Whether an NPC is still coming out of hyperspace, or of a hypergate or
+/// wormhole (see [`emerge`](crate::traffic::emerge)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     /// Gliding in from hyperspace, for this many more ticks: no steering
@@ -67,6 +68,19 @@ pub enum Mode {
     JumpingIn {
         /// The ticks of the glide left.
         ticks_left: u32,
+    },
+    /// Waiting at the centre of the gate it comes out of, for this many
+    /// more ticks: hidden, still, seen by no ship, and no decisions.
+    Emerging {
+        /// The ticks of the wait left.
+        ticks_left: u32,
+    },
+    /// Bursting out of the gate along its heading, on this tick of the
+    /// burst (from 0), at [`exit_speed`](crate::traffic::emerge::exit_speed):
+    /// no steering and no decisions.
+    LeavingGate {
+        /// The tick of the burst.
+        tick: u32,
     },
     /// Flying under its own controls.
     Flying,
@@ -212,6 +226,15 @@ impl Npc {
     #[must_use]
     pub fn threatens_player(&self) -> bool {
         self.threatens(ShipRef::Player)
+    }
+
+    /// Whether it is waiting at the gate it comes out of
+    /// ([`Mode::Emerging`]): `_AIShipIsEmergingFromHypergate` (@0x7e2e8),
+    /// which holds it invisible to every ship (`_ShipVisibleToShip`
+    /// @0x972d). Bursting out of the gate, it is no longer.
+    #[must_use]
+    pub fn emerging(&self) -> bool {
+        matches!(self.mode, Mode::Emerging { .. })
     }
 }
 

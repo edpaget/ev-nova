@@ -871,6 +871,25 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_coming_out_of_a_gate_never_decides_until_it_is_out() {
+        let mut traffic = populated(2, 1);
+        traffic.npcs[1].mode = Mode::Emerging { ticks_left: 2 };
+        let behaviour = Recording::deciding(Goal::JumpOut);
+        let mut ticks = 0;
+        while traffic.npcs()[1].mode != Mode::Flying {
+            traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
+            assert_eq!(behaviour.take(), [NpcId(0)], "tick {ticks}");
+            assert_eq!(traffic.npcs()[1].goal, Goal::Idle);
+            ticks += 1;
+            assert!(ticks < 20, "out");
+        }
+        // Two ticks waiting; top speed 6: 30 down to 9 is 8 ticks.
+        assert_eq!(ticks, 10);
+        traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
+        assert_eq!(behaviour.take(), [NpcId(0), NpcId(1)]);
+    }
+
+    #[test]
     fn decisions_set_goals_that_the_autopilot_flies() {
         let mut traffic = populated(1, 1);
         let lander = Recording::deciding(Goal::Land(StellarId(140)));
