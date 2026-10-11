@@ -1197,7 +1197,8 @@ impl Session {
 
     /// Fills the system with its initial NPC population, replacing any
     /// NPCs there (the target with them), its traffic read from `catalog`
-    /// and rolled on `chance`.
+    /// and rolled on `chance`, its stationary warships placed by the
+    /// first stellar shown, destroyed or not.
     pub fn populate(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -1218,7 +1219,7 @@ impl Session {
                 pilot: &facts,
                 fleet: &self.pilot.escorts,
             },
-            ..World::new(&[])
+            ..World::new(&self.sites)
         };
         let last = self.last_npc();
         self.traffic.enter_in(table, world, chance);
@@ -11468,6 +11469,36 @@ mod tests {
         session.populate(&catalog, &mut NeverFires);
         assert_eq!(session.npcs().len(), 2);
         assert_eq!(session.traffic_ships(), [ShipId(129)]);
+    }
+
+    #[test]
+    fn a_warship_of_no_speed_is_placed_by_the_first_stellar_shown_destroyed_or_not() {
+        // Ship 129 of no speed, flown as a warship; stellar 128, the
+        // system's first, at (30, -40).
+        let mut catalog = trafficked(130, 1, 3);
+        catalog.ship_records = vec![ship(129, ShipFields { speed: 0, ..FAST })];
+        let catalog = catalog.living([crate::testkit::life(128, 2)]);
+        for destroyed in [false, true] {
+            let mut session = Session::start(&catalog).expect("starts");
+            if destroyed {
+                session.run_set(
+                    &crate::control::SetExpr::parse("Y128").expect("parses"),
+                    &mut NeverFires,
+                );
+            }
+            assert_eq!(
+                (session.sites[0].id, session.sites[0].destroyed),
+                (StellarId(128), destroyed)
+            );
+            // At angle 90 from it, facing 45.
+            session.populate(&catalog, &mut Draws::of(&[6, 6, 0, 0, 90, 45, 0]));
+            let state = session.npcs()[0].state;
+            assert!(
+                (state.position - Vec2::new(130.0, -40.0)).length() < 1e-3,
+                "{destroyed}: {state:?}"
+            );
+            assert_eq!((state.velocity, state.heading), (Vec2::ZERO, 45.0));
+        }
     }
 
     #[test]
