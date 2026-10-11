@@ -39,6 +39,7 @@
 //! | [`SystemPersons`](RuleKey::SystemPersons) | `system_persons` | a `sÿst` Person slot brings its person on `Rand(100) + 1` at most its chance ([`NovaPersons`](crate::NovaPersons)) | always |
 //! | [`LinkSystSlip`](RuleKey::LinkSystSlip) | `link_syst_slip` | a person's system `LinkSyst` also allows the system of ID `LinkSyst` + 128 ([`NovaPersons`](crate::NovaPersons)) | that system only |
 //! | [`ShieldMod`](RuleKey::ShieldMod) | `shield_mod` | a person's `ShieldMod` scales its shield and armour ([`NovaPersons`](crate::NovaPersons)) | its shield only |
+//! | [`DerelictSetupSpeed`](RuleKey::DerelictSetupSpeed) | `derelict_setup_speed` | a person of a derelict government (`Flags` 0x0800) brought by a setup pass starts at its top speed, as its zeroed velocity is accelerated again (`_SetupShipsInSystem` @0x43245, @0x432eb), and one brought by its Person slot at rest (@0x433fe, then @0x43438) ([`NovaPersons`](crate::NovaPersons)) | both start at rest\* |
 //! | [`PersonCoward`](RuleKey::PersonCoward) | `person_coward` | only a warship person of a government with `Flags` 0x0010 runs at `Coward` % ([`NovaAi`](crate::NovaAi)) | any warship or interceptor person |
 //! | [`PersonCredits`](RuleKey::PersonCredits) | `person_credits` | a person carries half its `Credits` in thousands, kept in 16 bits, and a draw of as many more ([`NovaBoarding`](crate::NovaBoarding)) | its `Credits`, ±25 % |
 //! | [`CommQuote`](RuleKey::CommQuote) | `comm_quote` | a person's comm quote is a friendly person's answer to Greetings ([`Session`](crate::Session)) | it opens the hail, in place of the opening line\* |
@@ -114,7 +115,8 @@
 //! `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
-//! `mission_stellar_draw`, `mission_stellar_distance` or `comm_quote`
+//! `mission_stellar_draw`, `mission_stellar_distance`,
+//! `derelict_setup_speed` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -541,6 +543,15 @@ rule_keys! {
     /// much to increase/decrease the person's shield capacity"), its
     /// shield only (see [`person`](crate::person)).
     ShieldMod => "shield_mod",
+    /// How fast a person of a derelict government (`gövt` `Flags`
+    /// 0x0800) starts at system setup: by the engine, at its top speed
+    /// along its heading when a setup pass brings it, as the zeroing of
+    /// its velocity (`_SetupShipsInSystem` @0x43245-0x4325b) jumps on to
+    /// the pass's shared `_AdjustedAccel` (@0x432b0, @0x432eb), and at
+    /// rest when its Person slot brings it, the zeroing (@0x43418-0x43443)
+    /// coming after that slot's `_AdjustedAccel` (@0x433fe); by the other
+    /// reading, at rest either way (see [`spawn`](crate::traffic::spawn)).
+    DerelictSetupSpeed => "derelict_setup_speed",
     /// Which persons run below `Coward`% of their shields: by the engine,
     /// only a warship person of a government with `Flags` 0x0010 and no
     /// fleet lead (`_WarshipAI` @0x8be36); by the Bible ("At what percent
@@ -1793,6 +1804,7 @@ mod tests {
                 RuleKey::SystemPersons,
                 RuleKey::LinkSystSlip,
                 RuleKey::ShieldMod,
+                RuleKey::DerelictSetupSpeed,
                 RuleKey::PersonCoward,
                 RuleKey::PersonCredits,
                 RuleKey::CommQuote,
@@ -1865,6 +1877,7 @@ mod tests {
         assert_eq!(RuleKey::SystemPersons.key(), "system_persons");
         assert_eq!(RuleKey::LinkSystSlip.key(), "link_syst_slip");
         assert_eq!(RuleKey::ShieldMod.key(), "shield_mod");
+        assert_eq!(RuleKey::DerelictSetupSpeed.key(), "derelict_setup_speed");
         assert_eq!(RuleKey::PersonCoward.key(), "person_coward");
         assert_eq!(RuleKey::PersonCredits.key(), "person_credits");
         assert_eq!(RuleKey::CommQuote.key(), "comm_quote");

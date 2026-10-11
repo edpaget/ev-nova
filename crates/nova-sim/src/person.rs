@@ -509,8 +509,8 @@ pub enum PersonRoll {
 
 /// The persons' rules that a mod might replace: how often a person
 /// appears, whether a Person slot brings its person, and which readings
-/// of the `LinkSyst` slip and `ShieldMod` apply. Nova's is
-/// [`NovaPersons`].
+/// of the `LinkSyst` slip, `ShieldMod` and a derelict's setup speed
+/// apply. Nova's is [`NovaPersons`].
 pub trait PersonRules: Debug {
     /// The person roll among the persons who may appear, `eligible` in
     /// ascending ID, rolled on `chance`.
@@ -523,6 +523,9 @@ pub trait PersonRules: Debug {
     fn link_slip(&self) -> RuleSource;
     /// What `ShieldMod` scales ([`RuleKey::ShieldMod`]).
     fn shield_mod(&self) -> RuleSource;
+    /// How fast a derelict person starts at system setup
+    /// ([`RuleKey::DerelictSetupSpeed`]).
+    fn derelict_setup_speed(&self) -> RuleSource;
 }
 
 /// Nova's persons' rules (see the module docs), the engine's by default.
@@ -536,6 +539,9 @@ pub struct NovaPersons {
     pub link: RuleSource,
     /// What `ShieldMod` scales ([`RuleKey::ShieldMod`]).
     pub shield_mod: RuleSource,
+    /// How fast a derelict person starts at setup
+    /// ([`RuleKey::DerelictSetupSpeed`]).
+    pub derelict_speed: RuleSource,
 }
 
 impl NovaPersons {
@@ -545,11 +551,12 @@ impl NovaPersons {
         slots: RuleSource::Engine,
         link: RuleSource::Engine,
         shield_mod: RuleSource::Engine,
+        derelict_speed: RuleSource::Engine,
     };
 
     /// The rules `rulebook` chooses: its [`RuleKey::PersonOdds`],
-    /// [`RuleKey::SystemPersons`], [`RuleKey::LinkSystSlip`] and
-    /// [`RuleKey::ShieldMod`] entries.
+    /// [`RuleKey::SystemPersons`], [`RuleKey::LinkSystSlip`],
+    /// [`RuleKey::ShieldMod`] and [`RuleKey::DerelictSetupSpeed`] entries.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         Self {
@@ -557,6 +564,7 @@ impl NovaPersons {
             slots: rulebook.source_for(RuleKey::SystemPersons),
             link: rulebook.source_for(RuleKey::LinkSystSlip),
             shield_mod: rulebook.source_for(RuleKey::ShieldMod),
+            derelict_speed: rulebook.source_for(RuleKey::DerelictSetupSpeed),
         }
     }
 }
@@ -606,6 +614,10 @@ impl PersonRules for NovaPersons {
 
     fn shield_mod(&self) -> RuleSource {
         self.shield_mod
+    }
+
+    fn derelict_setup_speed(&self) -> RuleSource {
+        self.derelict_speed
     }
 }
 
@@ -871,7 +883,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rules_follow_their_four_rulebook_keys() {
+    fn the_rules_follow_their_five_rulebook_keys() {
         assert_eq!(NovaPersons::default(), NovaPersons::ENGINE);
         assert_eq!(
             NovaPersons::from_rulebook(&Rulebook::default()),
@@ -906,14 +918,35 @@ mod tests {
                     ..NovaPersons::ENGINE
                 },
             ),
+            (
+                RuleKey::DerelictSetupSpeed,
+                NovaPersons {
+                    derelict_speed: BIBLE,
+                    ..NovaPersons::ENGINE
+                },
+            ),
         ] {
             let rulebook = Rulebook::default().with_override(key, BIBLE);
             assert_eq!(NovaPersons::from_rulebook(&rulebook), expected, "{key:?}");
         }
         let bible = bible();
-        assert_eq!((bible.link_slip(), bible.shield_mod()), (BIBLE, BIBLE));
+        assert_eq!(
+            (
+                bible.link_slip(),
+                bible.shield_mod(),
+                bible.derelict_setup_speed()
+            ),
+            (BIBLE, BIBLE, BIBLE)
+        );
         let engine = NovaPersons::ENGINE;
-        assert_eq!((engine.link_slip(), engine.shield_mod()), (ENGINE, ENGINE));
+        assert_eq!(
+            (
+                engine.link_slip(),
+                engine.shield_mod(),
+                engine.derelict_setup_speed()
+            ),
+            (ENGINE, ENGINE, ENGINE)
+        );
     }
 
     #[test]

@@ -85,9 +85,10 @@ use crate::chance::Chance;
 use crate::control::Gate;
 use crate::flight::{ShipState, facing, heading_of};
 use crate::geometry::Vec2;
-use crate::person::{PersonRoll, PersonWorld, aggression_of};
+use crate::person::{PersonRoll, PersonRules, PersonWorld, aggression_of};
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::AiType;
-use crate::traffic::table::{ShipKind, SpawnDude, SpawnTable, pick};
+use crate::traffic::table::{ShipKind, SpawnDude, SpawnPerson, SpawnTable, pick};
 
 /// `Rand(7) == 0`: a person, rather than anything else, by the engine
 /// (see [`person`](crate::person)).
@@ -259,7 +260,10 @@ pub fn initial(
         match draw.roll(table, false, chance) {
             PersonRoll::Person(id) => {
                 let state = in_system(chance);
-                out.extend(draw.spawn(table, id, state));
+                if let Some(person) = table.persons.get(&id) {
+                    let speed = person_setup_speed(person, true, draw.world.rules);
+                    out.extend(draw.spawn(table, id, at_speed(state, speed)));
+                }
                 continue;
             }
             PersonRoll::Empty => continue,
@@ -297,8 +301,8 @@ pub fn initial(
         if world.rules.listed(prob, &mut &mut *chance)
             && !draw.named_here(table, &person.record.name)
         {
-            let state = in_system(chance);
-            out.extend(draw.spawn(table, id, state));
+            let speed = person_setup_speed(person, false, world.rules);
+            out.extend(draw.spawn(table, id, at_speed(in_system(chance), speed)));
         }
     }
     out
@@ -553,6 +557,20 @@ pub fn at_speed(state: ShipState, max_speed: f32) -> ShipState {
     ShipState {
         velocity: facing(state.heading) * max_speed,
         ..state
+    }
+}
+
+/// How fast `person` starts when setup places it, brought by a setup pass
+/// (`by_pass`) or by its Person slot: its top speed, but at rest when it
+/// is derelict and comes by its slot, or by a pass when `rules` take the
+/// other reading of [`RuleKey::DerelictSetupSpeed`](crate::RuleKey::DerelictSetupSpeed).
+fn person_setup_speed(person: &SpawnPerson, by_pass: bool, rules: &dyn PersonRules) -> f32 {
+    let at_rest =
+        person.derelict && (!by_pass || rules.derelict_setup_speed() == RuleSource::Bible);
+    if at_rest {
+        0.0
+    } else {
+        person.kind.stats.handling.max_speed
     }
 }
 
@@ -1539,6 +1557,10 @@ mod tests {
             [7, 1022, 1500, 1500, 360, 100],
             "no aggression drawn"
         );
+        assert!(
+            near(ships[0].state.velocity, Vec2::new(6.0, 0.0)),
+            "{ships:?}"
+        );
         assert_eq!(
             ships,
             [NewShip {
@@ -1548,7 +1570,7 @@ mod tests {
                 lead: None,
                 state: ShipState {
                     position: Vec2::new(-750.0, 749.0),
-                    velocity: Vec2::ZERO,
+                    velocity: ships[0].state.velocity,
                     heading: 90.0,
                 },
                 jumping_in: false,
@@ -1649,6 +1671,72 @@ mod tests {
         assert!(!ships[0].jumping_in);
         let (ships, asked) = set_up(&none, PersonWorld::NONE, &[50]);
         assert_eq!((ships.len(), asked), (0, vec![100]));
+    }
+
+    #[test]
+    fn a_person_at_setup_starts_at_its_own_ships_top_speed_along_its_heading() {
+        let mut table = peopled();
+        for id in [510, 600] {
+            let slower = ShipFields { speed: 250, ..FAST };
+            table.persons.get_mut(&PersonId(id)).expect("there").kind = kind(3, slower);
+        }
+        // Rolled in a pass, facing 90.
+        let (ships, _) = set_up(&table, PersonWorld::NONE, &[0, 382, 0, 1499, 90, 99]);
+        assert_eq!(persons_of(&ships), [Some(510)]);
+        assert!(
+            near(ships[0].state.velocity, Vec2::new(2.5, 0.0)),
+            "{ships:?}"
+        );
+        // In its slot, facing 180.
+        let none = SpawnTable {
+            avg_ships: 0,
+            ..table
+        };
+        let (ships, _) = set_up(&none, PersonWorld::NONE, &[49, 0, 0, 180]);
+        assert_eq!(persons_of(&ships), [Some(600)]);
+        assert!(
+            near(ships[0].state.velocity, Vec2::new(0.0, 2.5)),
+            "{ships:?}"
+        );
+    }
+
+    /// The velocity [`peopled`]'s persons, derelict or not, start at in
+    /// `world`: 510 brought by a pass facing 90, and 600 by its slot
+    /// facing 180.
+    fn setup_velocities(derelict: bool, world: PersonWorld) -> (Vec2, Vec2) {
+        let mut table = peopled();
+        for person in table.persons.values_mut() {
+            person.derelict = derelict;
+        }
+        let (pass, _) = set_up(&table, world, &[0, 382, 0, 1499, 90, 99]);
+        assert_eq!(persons_of(&pass), [Some(510)]);
+        let slots = SpawnTable {
+            avg_ships: 0,
+            ..table
+        };
+        let (slot, _) = set_up(&slots, world, &[49, 0, 0, 180]);
+        assert_eq!(persons_of(&slot), [Some(600)]);
+        (pass[0].state.velocity, slot[0].state.velocity)
+    }
+
+    #[test]
+    fn by_the_engine_a_derelict_starts_at_speed_from_a_pass_and_at_rest_from_its_slot() {
+        let (pass, slot) = setup_velocities(true, PersonWorld::NONE);
+        assert!(near(pass, Vec2::new(6.0, 0.0)), "{pass:?}");
+        assert_eq!(slot, Vec2::ZERO);
+    }
+
+    #[test]
+    fn by_the_other_reading_a_derelict_starts_at_rest_either_way() {
+        let rules = by(RuleKey::DerelictSetupSpeed);
+        let world = PersonWorld {
+            rules: &rules,
+            ..PersonWorld::NONE
+        };
+        assert_eq!(setup_velocities(true, world), (Vec2::ZERO, Vec2::ZERO));
+        let (pass, slot) = setup_velocities(false, world);
+        assert!(near(pass, Vec2::new(6.0, 0.0)), "{pass:?}");
+        assert!(near(slot, Vec2::new(0.0, 6.0)), "not derelict: {slot:?}");
     }
 
     #[test]

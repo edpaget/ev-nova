@@ -416,6 +416,10 @@ mod tests {
         fn shield_mod(&self) -> RuleSource {
             RuleSource::Engine
         }
+
+        fn derelict_setup_speed(&self) -> RuleSource {
+            RuleSource::Engine
+        }
     }
 
     #[test]
