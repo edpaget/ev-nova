@@ -5,9 +5,12 @@
 //!
 //! - A ship is targetable ([`targetable`]) while it is intact or
 //!   disabled: a ship breaking up or destroyed is not (`_IsDying`). Target
-//!   Select and Closest Target skip the player's escorts ([`candidate`]);
-//!   cloaked and untargetable ships and ships coming out of a hypergate
-//!   are skipped too, once they exist.
+//!   Select and Closest Target skip the player's escorts ([`candidate`]),
+//!   and a ship waiting at the hypergate or wormhole it comes out of
+//!   ([`Npc::emerging`], `_AIShipIsEmergingFromHypergate` in
+//!   `_FindNextShipInSystem` @0xa801 and `_FindNearestShipToPlayer`
+//!   @0x9330); once it bursts out of the gate it is a candidate again.
+//!   Cloaked and untargetable ships are skipped too, once they exist.
 //! - Escort Select (Option-Tab here) walks the player's escorts alone,
 //!   in the same order, from the one after the target, and does not wrap
 //!   ([`next_escort`]).
@@ -53,10 +56,11 @@ pub fn targetable(npc: &Npc) -> bool {
 }
 
 /// Whether `npc` is a candidate for Target Select and Closest Target:
-/// targetable, and not one of the player's escorts.
+/// targetable, not one of the player's escorts, and not waiting at the
+/// gate it comes out of ([`Npc::emerging`]).
 #[must_use]
 pub fn candidate(npc: &Npc) -> bool {
-    targetable(npc) && npc.escort.is_none()
+    targetable(npc) && npc.escort.is_none() && !npc.emerging()
 }
 
 /// The candidate among `npcs` that passes `filter` nearest `from`, by
@@ -165,6 +169,22 @@ mod tests {
         ];
         assert_eq!(nearest(&npcs, Vec2::ZERO, |_| true), Some(NpcId(3)));
         assert_eq!(nearest(&npcs[..2], Vec2::ZERO, |_| true), None);
+    }
+
+    #[test]
+    fn a_ship_waiting_at_its_gate_is_skipped_but_not_one_bursting_out() {
+        use crate::traffic::npc::Mode;
+        let mut waiting = intact(1, 10.0, 0.0);
+        waiting.mode = Mode::Emerging { ticks_left: 30 };
+        let mut leaving = intact(2, 20.0, 0.0);
+        leaving.mode = Mode::LeavingGate { tick: 1 };
+        let npcs = [waiting, leaving, intact(3, 30.0, 0.0)];
+        assert!(!candidate(&npcs[0]));
+        assert!(candidate(&npcs[1]));
+        assert_eq!(nearest(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));
+        assert_eq!(nearest(&npcs[..1], Vec2::ZERO, |_| true), None);
+        assert_eq!(next(&npcs, None), Some(NpcId(2)));
+        assert_eq!(next(&npcs[..1], None), None);
     }
 
     #[test]
