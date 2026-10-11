@@ -53,7 +53,9 @@
 //!   every ship (@0x3501f-0x35048) and the original's goal 21 holds it
 //!   until its +0x4c runs out (`_HighLevelAIHandler` @0x8dd61-0x8dd93).
 //!   Then ([`Mode::LeavingGate`]) it bursts out along its heading at
-//!   [`exit_speed`], with no steering, and flies on at that speed once
+//!   [`exit_speed`] (from [`LED_BURST_TICK`] for a ship
+//!   [`led_out`](Npc::led_out) of the gate by the player, so from 15),
+//!   with no steering, and flies on at that speed once
 //!   the next tick's would be at or below its top speed (see
 //!   [`emerge`](crate::traffic::emerge)), then flies its goal. An
 //!   escort's burst is not capped at its lead's top speed, as the
@@ -77,7 +79,7 @@ use crate::hail::assist;
 use crate::handling::Handling;
 use crate::hyperspace::JUMP_FUEL;
 use crate::landing::{LANDING_SPEED, landing_radius};
-use crate::traffic::emerge::exit_speed;
+use crate::traffic::emerge::{LED_BURST_TICK, exit_speed};
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::spawn::{JUMP_IN_TICKS, glide_speed};
 
@@ -364,7 +366,9 @@ fn wait_at_gate(npc: &mut Npc, ticks_left: u32) {
     npc.state.velocity = Vec2::ZERO;
     let left = ticks_left.saturating_sub(1);
     npc.mode = if left == 0 {
-        Mode::LeavingGate { tick: 0 }
+        Mode::LeavingGate {
+            tick: if npc.led_out { LED_BURST_TICK } else { 0 },
+        }
     } else {
         Mode::Emerging { ticks_left: left }
     };
@@ -535,7 +539,7 @@ mod tests {
     use crate::handling::ShipFields;
     use crate::stats::ShipStats;
     use crate::testkit::{FAST, planet};
-    use crate::traffic::emerge::EMERGE_TICKS;
+    use crate::traffic::emerge::{EMERGE_TICKS, LED_BURST_TICK};
     use crate::traffic::npc::NpcId;
     use crate::traffic::spawn::{hyperspace_entry, jump_in_distance};
 
@@ -880,6 +884,24 @@ mod tests {
             at(100.0, -200.0, 0.0, 0.0, 90.0),
             "not yet moving"
         );
+    }
+
+    #[test]
+    fn a_ship_led_out_of_a_gate_bursts_from_15() {
+        let sites = [planet(140, 0.0, 0.0)];
+        // Top speed 3: 15, 12, 9, then on at 6.
+        let mut ship = emerging(AVERAGE, 1);
+        ship.led_out = true;
+        fly(&mut ship, &sites, None);
+        let mut x = 100.0;
+        for (tick, speed) in (LED_BURST_TICK..).zip([15.0, 12.0, 9.0, 6.0]) {
+            assert_eq!(ship.mode, Mode::LeavingGate { tick });
+            fly(&mut ship, &sites, None);
+            x += speed;
+            assert!((ship.state.velocity - Vec2::new(speed, 0.0)).length() < 1e-4);
+            assert!((ship.state.position - Vec2::new(x, -200.0)).length() < 1e-3);
+        }
+        assert_eq!(ship.mode, Mode::Flying);
     }
 
     #[test]

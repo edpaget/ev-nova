@@ -466,6 +466,7 @@ fn fighter(
         aux: None,
         cloak: crate::cloak::Cloak::default(),
         cloak_gear: kind.cloak,
+        led_out: false,
     }
 }
 

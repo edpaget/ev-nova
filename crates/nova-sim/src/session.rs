@@ -336,6 +336,7 @@ mod entry;
 mod escorts;
 mod events;
 mod fighters;
+mod gate_escorts;
 mod gate_follow;
 mod hail;
 mod hire;
@@ -2439,7 +2440,9 @@ impl Session {
     /// @0x6706f). The special ships following the player are decided
     /// next, as [`RuleKey::GateFollow`] says (see the `gate_follow`
     /// module): those that follow come out of the exit gate after the
-    /// player, or where it arrived like a jump.
+    /// player, or where it arrived like a jump. Last, every ship the
+    /// player leads comes out of the exit gate after it, as
+    /// [`RuleKey::GateEscorts`] says (see the `gate_escorts` module).
     pub fn enter_wormhole(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -2461,7 +2464,8 @@ impl Session {
     /// [`Session::enter_wormhole`]. Before it enters, the exit decides
     /// what becomes of the special ships following the player
     /// ([`Session::exit_gate_slots`]); once it has, those that follow come
-    /// out of the gate after it ([`Session::emerge_followers`]).
+    /// out of the gate after it ([`Session::emerge_followers`]), and then
+    /// every ship the player leads ([`Session::lead_out_of_gate`]).
     fn come_out(
         &mut self,
         system: SystemId,
@@ -2498,6 +2502,7 @@ impl Session {
         };
         self.enter_system(Entry::Gate, entered, catalog, catalog, chance);
         self.emerge_followers(exit.position, catalog, chance);
+        self.lead_out_of_gate(exit.position, chance);
     }
 
     /// Docks the ship at `stellar`, one of the system's, and last raises
@@ -18237,7 +18242,8 @@ mod tests {
     }
 
     /// Asserts `session` came out into a system of three düde ships,
-    /// the fight and the scene left behind and its escort on its slot.
+    /// the fight and the scene left behind and its escort coming out of
+    /// the exit gate after it.
     fn assert_came_out_afresh(session: &Session, case: &str) {
         assert_eq!(session.shots(), [], "{case}");
         session.assert_scene_left(case);
@@ -18248,12 +18254,13 @@ mod tests {
             .iter()
             .find(|npc| npc.id == fleet[0])
             .expect("the escort is in");
-        let duty = escort.escort.expect("an escort");
-        assert_eq!(
-            escort.state.position,
-            duty.formation.position(session.player()),
-            "on its slot: {case}"
+        assert!(escort.escort.is_some(), "an escort: {case}");
+        assert!(
+            escort.emerging() && escort.led_out,
+            "led out of the exit gate: {case}"
         );
+        assert_eq!(escort.state.velocity, Vec2::ZERO, "{case}");
+        assert_eq!(escort.state.heading, session.player().heading, "{case}");
         let dudes: Vec<&Npc> = session
             .npcs()
             .iter()

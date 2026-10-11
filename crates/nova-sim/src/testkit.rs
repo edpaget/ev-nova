@@ -435,6 +435,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         aux: None,
         cloak: crate::cloak::Cloak::default(),
         cloak_gear: crate::cloak::CloakGear::default(),
+        led_out: false,
     }
 }
 

@@ -694,6 +694,7 @@ impl Traffic {
                     Cloak::default()
                 },
                 cloak_gear: kind.cloak,
+                led_out: false,
             });
         }
     }

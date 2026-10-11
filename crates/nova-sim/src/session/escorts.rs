@@ -16,7 +16,10 @@
 //! (`_MakeEscortsHyperWithParent` @0x3fd54) and arrives with its shield
 //! and armour as they were; taking off, and flying a pilot, restock them
 //! full (`_RespawnEscort` @0x3d4b8, restock 1 @0x674c2), the fuel as
-//! recorded. Landed, the escorts wait in the record. A trader escort's
+//! recorded. At a hypergate or wormhole exit each is placed on its slot
+//! and then comes out of the exit gate after the player (see
+//! [`gate_escorts`](super::gate_escorts)). Landed, the escorts wait in
+//! the record. A trader escort's
 //! `Holds` count in the fleet's cargo space, in flight and landed (see
 //! [`market`](crate::market)).
 //!
@@ -169,6 +172,7 @@ impl Session {
             aux: None,
             cloak: Cloak::default(),
             cloak_gear: kind.cloak,
+            led_out: false,
         };
         Some(self.traffic.add_npc(npc))
     }

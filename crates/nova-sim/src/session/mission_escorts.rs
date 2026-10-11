@@ -42,8 +42,9 @@
 //! leaves. Set up at take-off or as a pilot is flown, a mission escort
 //! sits on its slot with the player's heading and velocity
 //! (`_AICalcFormationPositions(player, 1)` @0x4319a-0x431b2); set up on a
-//! jump's arrival or a gate's exit it stays where it was set up and flies
-//! to its slot.
+//! jump's arrival it stays where it was set up and flies to its slot; at
+//! a gate's exit it comes out of the exit gate (see
+//! [`gate_escorts`](super::gate_escorts)).
 //!
 //! **Following.** The original's setup first deletes every mission escort
 //! (`_DeleteAllComputerShips` @0x3bf7e-0x3bfb6), so its "already with the

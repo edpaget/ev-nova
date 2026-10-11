@@ -205,6 +205,12 @@ pub struct Npc {
     pub cloak: Cloak,
     /// What its ship type gives its cloak.
     pub cloak_gear: CloakGear,
+    /// Made to come out of a gate while the player led it, so its burst
+    /// starts at [`LED_EXIT_SPEED`](crate::traffic::emerge::LED_EXIT_SPEED)
+    /// (`_AIMakeShipEmergeFromHyperGate` @0x895aa-0x895bd). Read only as
+    /// its wait runs out: decided at the emerge, as the original decides
+    /// by the leader then.
+    pub led_out: bool,
 }
 
 /// What marks an NPC as an active mission's special ship (see the
