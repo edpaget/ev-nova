@@ -15,6 +15,11 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # The fold's last pass puts what is left of an array on the first
+    # outfit naming it only when it is above none. With `>=`, a remainder
+    # of exactly none adds 0 to that outfit, and an outfit left at none is
+    # dropped from the map at the end, so the outcome is the same.
+    "replace > with >= in fold",
     # The exchange's single-float quotient holds a price past 16 bits at
     # i16::MIN when it is below 0 and i16::MAX otherwise. `engine_quotient`
     # has already returned for a price of 0, so `price < 0` and
