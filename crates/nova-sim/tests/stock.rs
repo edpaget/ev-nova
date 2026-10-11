@@ -982,6 +982,35 @@ fn e_to_the_fed_carrier_loses_its_fighters_by_the_engine() {
     assert_eq!(changed(loaded), [1, 4, 1, 2], "4 Vipers and 2 Anacondas");
 }
 
+/// `E241` makes a new stock pilot's ship the Abomination (`shïp` 241),
+/// which stocks the Hail Chaingun (`wëap` 155) with a load of 60 and the
+/// Storm Chaingun (161) with a load of -1, both firing `wëap` 155's
+/// rounds (`AmmoType` 27). By the engine the loads add signed
+/// (`_EvalSetExp` @0x155c3), leaving 59 Chaingun Ammunition (`oütf`
+/// 170); by the other reading of `ship_change_negative_stock` the -1 adds
+/// nothing, leaving 60.
+#[test]
+fn e_to_the_abomination_nets_its_negative_load_by_the_engine() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let changed = |rules: nova_sim::Rulebook| {
+        let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+        let mut session = Session::fly(&data, pilot).expect("flies").with_rules(rules);
+        let expr = nova_sim::SetExpr::parse("E241").expect("parses");
+        session.run_set(&expr, &mut NeverFires);
+        assert_eq!(session.ship(), ShipId(241), "the Abomination");
+        session.pilot().owned(OutfitId(170))
+    };
+    assert_eq!(changed(nova_sim::Rulebook::default()), 59, "60 - 1");
+    let unsigned = nova_sim::Rulebook::default().with_override(
+        nova_sim::RuleKey::ShipChangeNegativeStock,
+        nova_sim::RuleSource::Bible,
+    );
+    assert_eq!(changed(unsigned), 60, "the -1 adds nothing");
+}
+
 /// A new stock pilot, docked at `stellar` in `system` with `fuel` units
 /// in its tank, through a save that says so.
 fn docked_with_fuel(data: &GameData, system: i16, stellar: i16, fuel: f32) -> Session {

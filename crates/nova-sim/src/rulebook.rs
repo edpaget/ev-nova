@@ -57,6 +57,8 @@
 //! | [`ShipChangeCargo`](RuleKey::ShipChangeCargo) | `ship_change_cargo` | `C`, `E` and `H` keep all the cargo, even past the new hold ([`ShipChangeRules`](crate::ShipChangeRules)) | the cargo is trimmed to the new hold, as a purchase trims it\* |
 //! | [`ShipChangeReserves`](RuleKey::ShipChangeReserves) | `ship_change_reserves` | `C`, `E` and `H` keep a shield or armour above the new class's most until damage takes it ([`ShipChangeRules`](crate::ShipChangeRules)) | each is held to its new most\* |
 //! | [`ShipChangeBayAmmo`](RuleKey::ShipChangeBayAmmo) | `ship_change_bay_ammo` | `E` and `H` load a fighter bay's `AmmoLoad` onto the weapon its raw `AmmoType` names, so a bay of fighter `shïp` 128 to 255 loses its fighters ([`ShipChangeRules`](crate::ShipChangeRules)) | the bay's own fighters are loaded, as a purchase loads them\* |
+//! | [`ShipChangeDefaultWeapons`](RuleKey::ShipChangeDefaultWeapons) | `ship_change_default_weapons` | `E` and `H` add a default item that is a weapon or ammunition outfit to the outfits alone, so the fold pulls it back to the weapon and rounds arrays' count and it is lost unless the array has a surplus (`_EvalSetExp` @0x15609, `_ShipStatsToSystemInfo` @0xcaee called @0x15622; [`ShipChangeRules`](crate::ShipChangeRules)) | its first-mod weapons and rounds are added to the arrays too, so it is kept\* |
+//! | [`ShipChangeNegativeStock`](RuleKey::ShipChangeNegativeStock) | `ship_change_negative_stock` | `E` and `H` add a negative `WeapCount` or `AmmoLoad` signed, taking that many launchers or rounds away, floored at none (`_EvalSetExp` @0x15555, @0x155c3; [`ShipChangeRules`](crate::ShipChangeRules)) | it adds nothing, as a purchase reads it\* |
 //! | [`MoveStarless`](RuleKey::MoveStarless) | `move_starless` | `M` in flight into a system with no stellar keeps the ship's position and velocity ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the ship is put at rest at the system's centre |
 //! | [`MoveArrival`](RuleKey::MoveArrival) | `move_arrival` | `M` and `N` only change where the ship is: the course is kept, the system is explored by the next take-off, and in flight only the escorts and fighters out follow, the new system filling with arrivals over time ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the move is an arrival: explored, the course cleared, and in flight populated at once\* |
 //! | [`MoveKeepFlag`](RuleKey::MoveKeepFlag) | `move_keep_flag` | an `N` in flight leaves the next take-off keeping the ship where it landed ([`ScriptEffectRules`](crate::ScriptEffectRules)) | only a landed `N` keeps the landing position\* |
@@ -106,7 +108,8 @@
 //! `hire_fee`, `escort_wage`, `grant_max`, `person_join`, `invalid_map`,
 //! `remove_refund`, `refit_reserves`, `purchase_paint_order`,
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
-//! `ship_change_reserves`, `ship_change_bay_ammo`, `move_arrival`,
+//! `ship_change_reserves`, `ship_change_bay_ammo`,
+//! `ship_change_default_weapons`, `ship_change_negative_stock`, `move_arrival`,
 //! `move_keep_flag`, `script_sound`, `ship_info_rounding`,
 //! `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
@@ -708,6 +711,29 @@ rule_keys! {
     /// is the obvious alternative, not anything the Bible says (see
     /// [`ShipChangeRules`](crate::ShipChangeRules)).
     ShipChangeBayAmmo => "ship_change_bay_ammo",
+    /// What becomes of a new class's default item that is a weapon or
+    /// ammunition outfit when the `E` and `H` set operators add it: by
+    /// the engine, the default items are added to the outfits alone and
+    /// not to the weapon and rounds arrays, so the fold that follows
+    /// (`_ShipStatsToSystemInfo` @0xcaee, called @0x15622) pulls the
+    /// outfits whose first mod names a weapon back to the arrays' count,
+    /// and the default is lost unless the array has a surplus left;
+    /// otherwise the default items' first-mod weapons and rounds are added
+    /// to the arrays too, so they are kept. The Bible is silent here, so
+    /// the other reading is the obvious alternative, not anything the
+    /// Bible says (see [`ship_change`](crate::ship_change) and
+    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    ShipChangeDefaultWeapons => "ship_change_default_weapons",
+    /// What a new class's negative `WeapCount` or `AmmoLoad` does when the
+    /// `E` and `H` set operators add its stock weapons: by the engine, it
+    /// is added signed (`_EvalSetExp` @0x15555, @0x155c3), so it takes
+    /// that many launchers or rounds away from the outfits holding them,
+    /// floored at none, through the fold (`_ShipStatsToSystemInfo`
+    /// @0xcaee); otherwise it adds nothing, as a purchase reads it. The
+    /// Bible is silent here, so the other reading is the obvious
+    /// alternative, not anything the Bible says (see
+    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    ShipChangeNegativeStock => "ship_change_negative_stock",
     /// Where the `M` set operator puts a ship in flight when the system
     /// moved to has no stellar: by the engine, nowhere new, its position
     /// and velocity kept, as `_EvalSetExp` places the ship only on a
@@ -1633,6 +1659,14 @@ mod tests {
         assert_eq!(RuleKey::ShipChangeCargo.key(), "ship_change_cargo");
         assert_eq!(RuleKey::ShipChangeReserves.key(), "ship_change_reserves");
         assert_eq!(RuleKey::ShipChangeBayAmmo.key(), "ship_change_bay_ammo");
+        assert_eq!(
+            RuleKey::ShipChangeDefaultWeapons.key(),
+            "ship_change_default_weapons"
+        );
+        assert_eq!(
+            RuleKey::ShipChangeNegativeStock.key(),
+            "ship_change_negative_stock"
+        );
         assert_eq!(RuleKey::PurchasePaintOrder.key(), "purchase_paint_order");
         assert_eq!(RuleKey::CaptureHookOrder.key(), "capture_hook_order");
         assert_eq!(RuleKey::StartShipPurchase.key(), "start_ship_purchase");
@@ -1777,6 +1811,8 @@ mod tests {
                 RuleKey::ShipChangeCargo,
                 RuleKey::ShipChangeReserves,
                 RuleKey::ShipChangeBayAmmo,
+                RuleKey::ShipChangeDefaultWeapons,
+                RuleKey::ShipChangeNegativeStock,
                 RuleKey::MoveStarless,
                 RuleKey::MoveArrival,
                 RuleKey::MoveKeepFlag,

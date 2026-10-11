@@ -3777,6 +3777,7 @@ impl Session {
             },
             &defaults,
             None,
+            None,
             records,
         );
         let fits = self.arsenal.stock_fits(record.id, records);
