@@ -1475,11 +1475,15 @@ mod tests {
         jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
         let mut disabled = helped(&catalog, Help::Refuel, 0.0);
         npc(&mut disabled).condition = Condition::Disabled;
-        for mut session in [landed, jumping, disabled] {
+        // One at a time: three sessions make too large an array.
+        let given_nothing = |mut session: Session| {
             session.pilot.reserves.fuel.now = 40.0;
             session.tick_assistance(&NovaDisable);
             assert_eq!(session.reserves().fuel.now, 40.0);
-        }
+        };
+        given_nothing(landed);
+        given_nothing(jumping);
+        given_nothing(disabled);
     }
 
     #[test]

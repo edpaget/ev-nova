@@ -1298,6 +1298,7 @@ impl Session {
                         pilot: &facts,
                         fleet: &self.pilot.escorts,
                     },
+                    escort_holds: 0,
                 };
                 let strikes = std::mem::take(&mut self.strikes);
                 let last = self.last_npc();
@@ -1333,6 +1334,7 @@ impl Session {
                 pilot: self,
                 fleet: &self.pilot.escorts,
             },
+            escort_holds: 0,
         }
     }
 

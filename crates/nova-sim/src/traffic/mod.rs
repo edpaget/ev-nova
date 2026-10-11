@@ -8,6 +8,8 @@
 //!   where each ship starts.
 //! - [`emerge`]: the hypergate or wormhole an arrival comes out of, and
 //!   how long it waits there.
+//! - [`strength`]: the escort-strength timer, and the fleet it brings
+//!   for a player whose escorts carry a lot of cargo.
 //! - [`npc`]: an [`Npc`]: its ship, government, AI type, escort class
 //!   and duty as the player's escort, stats, reserves, flight state and
 //!   goal, its condition, armament and fire command, its provocation,
@@ -28,7 +30,11 @@
 //! 1. the arrival roll, while fewer NPCs than `AvgShips` that are not the
 //!    player's ([`Npc::is_players`]) are in the system, each arrival
 //!    coming out of one of the world's stellars ([`emerge`]) or by
-//!    hyperspace;
+//!    hyperspace, then the escort-strength timer's tick ([`strength`]):
+//!    when it fires, the fleet the [`World`]'s escorts' tons call for
+//!    comes, whatever `AvgShips` says, its lead an interceptor. The
+//!    timer is armed by its session ([`Traffic::arm_strength_timer`]),
+//!    and entering or going on into a system keeps it;
 //! 2. each flying, intact NPC answers the fight's strikes since the last
 //!    tick ([`Behaviour::react`]): the ship it targets, its provocation,
 //!    and any goal it takes at once;
@@ -74,13 +80,15 @@ use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
+use crate::control::Gate;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::person::PersonWorld;
 use autopilot::Outcome;
-use npc::{Mode, Npc, NpcId, NpcPerson};
+use npc::{AiType, Mode, Npc, NpcId, NpcPerson};
 use spawn::{Entry, JUMP_IN_TICKS, NewShip, PersonDraw, Stellars};
+use strength::StrengthTimer;
 use table::{SpawnPerson, SpawnTable};
 
 /// How many ticks apart an NPC's decisions are: every tick, as the
@@ -113,11 +121,14 @@ pub struct World<'a> {
     /// What the persons' spawning sees: the rules, the persons gone and
     /// grudging, and the control bits.
     pub persons: PersonWorld<'a>,
+    /// The tons the player's escorts that count toward the
+    /// escort-strength timer carry ([`strength::escort_holds`]).
+    pub escort_holds: i32,
 }
 
 impl<'a> World<'a> {
-    /// `sites` alone: no player, no governments, no record, and no person
-    /// gone or grudging ([`PersonWorld::NONE`]).
+    /// `sites` alone: no player, no governments, no record, no person
+    /// gone or grudging ([`PersonWorld::NONE`]), and no escorts' tons.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -128,6 +139,7 @@ impl<'a> World<'a> {
             system_govt: None,
             record: 0,
             persons: PersonWorld::NONE,
+            escort_holds: 0,
         }
     }
 
@@ -173,6 +185,8 @@ pub struct Traffic {
     /// The NPCs that have looked the player over since the scans were
     /// last taken, in order.
     scans: Vec<NpcId>,
+    /// The escort-strength timer, kept across systems.
+    strength_timer: StrengthTimer,
 }
 
 impl Default for Traffic {
@@ -199,7 +213,14 @@ impl Traffic {
             interval,
             departed: Vec::new(),
             scans: Vec::new(),
+            strength_timer: StrengthTimer::default(),
         }
+    }
+
+    /// Arms the escort-strength timer, drawing its ticks on `chance` (see
+    /// [`strength`]).
+    pub fn arm_strength_timer(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        self.strength_timer.arm(chance);
     }
 
     /// Enters a system whose traffic is drawn from `table`: its NPCs are
@@ -278,6 +299,7 @@ impl Traffic {
             chance,
         );
         self.add(arrivals, world.persons.grudges);
+        self.escort_strength(world, draw.world.gate(), chance);
         self.react(behaviour, world, strikes);
         for npc in &mut self.npcs {
             if npc.condition != Condition::Intact {
@@ -355,6 +377,30 @@ impl Traffic {
         let mut flying = outcomes.iter().map(|outcome| *outcome == Outcome::Flying);
         self.npcs.retain(|_| flying.next().unwrap_or(false));
         self.ticks += 1;
+    }
+
+    /// Counts the escort-strength timer down a tick; when it fires, the
+    /// fleet `world`'s escorts' tons call for comes among its stellars,
+    /// its lead an interceptor, its `AppearOn` asked by `gate`, rolled on
+    /// `chance`.
+    fn escort_strength(&mut self, world: World, gate: Gate, chance: &mut (impl Chance + ?Sized)) {
+        if !self.strength_timer.tick() {
+            return;
+        }
+        let Some(id) = strength::fleet_for(world.escort_holds) else {
+            return;
+        };
+        let mut fleet = Vec::new();
+        spawn::fleet(
+            &self.table,
+            id,
+            gate,
+            world.stellars(),
+            Some(AiType::Interceptor),
+            chance,
+            &mut fleet,
+        );
+        self.add(fleet, world.persons.grudges);
     }
 
     /// Each flying, intact NPC answers each of `strikes` in `world`, as
@@ -1885,5 +1931,172 @@ mod tests {
         let mut traffic = Traffic::new();
         traffic.enter(peopled(1), &mut Draws::of(&[0, 382, 750, 750, 0]));
         assert!(!traffic.npcs()[0].person.expect("a person").grudge);
+    }
+
+    // The escort-strength timer.
+
+    /// [`table`] of `avg_ships` holding the escort-strength fleets: 382
+    /// led by ship 200 alone, 383 led by ship 200 with one more of it, each
+    /// of government 131.
+    fn strong(avg_ships: u32) -> SpawnTable {
+        let mut strong = table(avg_ships);
+        for (id, escorts) in [(382, 0), (383, 1)] {
+            strong.fleets.insert(
+                FleetId(id),
+                FleetRecord {
+                    id: FleetId(id),
+                    lead: Some(ShipId(200)),
+                    escorts: vec![EscortRecord {
+                        ship: ShipId(200),
+                        min: escorts,
+                        max: escorts,
+                    }],
+                    govt: Some(GovtId(131)),
+                    link_syst: -1,
+                    appear_on: Test::default(),
+                },
+            );
+        }
+        strong
+    }
+
+    /// A world of no stellars whose player's escorts carry `holds` tons.
+    fn escorted(holds: i32) -> World<'static> {
+        World {
+            escort_holds: holds,
+            ..World::new(&[])
+        }
+    }
+
+    /// Traffic in a system of [`strong`] of `avg_ships`, its timer armed
+    /// to 30 + `draw`.
+    fn armed(avg_ships: u32, draw: u32) -> Traffic {
+        let mut traffic = Traffic::new();
+        traffic.enter(strong(avg_ships), &mut Draws::of(&[]));
+        traffic.arm_strength_timer(&mut Draws::of(&[draw]));
+        traffic
+    }
+
+    /// Ticks `traffic` `ticks` times in `world`, on draws of the last
+    /// outcome.
+    fn ticked(traffic: &mut Traffic, world: World, ticks: u32) {
+        for _ in 0..ticks {
+            traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
+        }
+    }
+
+    /// The ships of `traffic`'s NPCs, with their governments and AI
+    /// types.
+    fn ships_of(traffic: &Traffic) -> Vec<(ShipId, Option<GovtId>, AiType)> {
+        traffic
+            .npcs()
+            .iter()
+            .map(|npc| (npc.ship, npc.govt, npc.ai_type))
+            .collect()
+    }
+
+    #[test]
+    fn arming_draws_below_30() {
+        let mut traffic = Traffic::new();
+        let mut chance = Draws::of(&[4]);
+        traffic.arm_strength_timer(&mut chance);
+        assert_eq!(chance.asked, [30]);
+    }
+
+    #[test]
+    fn escorts_above_49_tons_bring_fleet_382_on_the_tick_after_the_countdown() {
+        for draw in [0, 7] {
+            let mut traffic = armed(0, draw);
+            ticked(&mut traffic, escorted(60), 30 + draw);
+            assert_eq!(traffic.npcs(), [], "armed at {}", 30 + draw);
+            ticked(&mut traffic, escorted(60), 1);
+            assert_eq!(
+                ships_of(&traffic),
+                [(ShipId(200), Some(GovtId(131)), AiType::Interceptor)],
+                "its lead an interceptor"
+            );
+            assert_eq!(
+                traffic.npcs()[0].mode,
+                Mode::JumpingIn {
+                    ticks_left: JUMP_IN_TICKS - 1
+                },
+                "by hyperspace, gliding from the tick it came"
+            );
+        }
+    }
+
+    #[test]
+    fn escorts_above_199_tons_bring_fleet_383_its_escorts_their_own_ai() {
+        let mut traffic = armed(0, 0);
+        ticked(&mut traffic, escorted(250), 31);
+        assert_eq!(
+            ships_of(&traffic),
+            [
+                (ShipId(200), Some(GovtId(131)), AiType::Interceptor),
+                (ShipId(200), Some(GovtId(131)), AiType::Warship),
+            ]
+        );
+        assert_eq!(traffic.npcs()[1].leader, Some(traffic.npcs()[0].id));
+    }
+
+    #[test]
+    fn escorts_of_49_tons_or_less_bring_nothing_then_or_later() {
+        let mut traffic = armed(0, 0);
+        ticked(&mut traffic, escorted(49), 31);
+        ticked(&mut traffic, escorted(250), 200);
+        assert_eq!(traffic.npcs(), [], "fired once, and disarmed");
+    }
+
+    #[test]
+    fn the_timer_fires_once() {
+        let mut traffic = armed(0, 0);
+        ticked(&mut traffic, escorted(60), 31);
+        ticked(&mut traffic, escorted(60), 200);
+        assert_eq!(traffic.npcs().len(), 1);
+    }
+
+    #[test]
+    fn the_timer_fires_in_a_system_at_avg_ships_and_after_the_arrival_roll() {
+        // An empty system of AvgShips 1, so the arrival is rolled.
+        let mut traffic = armed(0, 0);
+        traffic.retarget(strong(1), &BTreeSet::new());
+        ticked(&mut traffic, escorted(60), 30);
+        let mut chance = Draws::of(&[]);
+        traffic.tick_in(&Keep, escorted(60), &[], &mut chance);
+        assert_eq!(
+            chance.asked,
+            [500, 360, 3],
+            "the arrival roll, then the lead's jump-in angle and aggression"
+        );
+        assert_eq!(traffic.npcs().len(), 1);
+        // Now at its AvgShips: no arrival roll, and the timer still runs.
+        let mut traffic = armed(0, 0);
+        traffic.retarget(strong(1), &BTreeSet::new());
+        traffic.add_npc(crate::testkit::npc(0, ShipStats::new(FAST, &[])));
+        ticked(&mut traffic, escorted(60), 30);
+        let mut chance = Draws::of(&[]);
+        traffic.tick_in(&Keep, escorted(60), &[], &mut chance);
+        assert_eq!(chance.asked, [360, 3]);
+        assert_eq!(traffic.npcs().len(), 2);
+    }
+
+    #[test]
+    fn new_traffic_is_disarmed() {
+        let mut traffic = Traffic::new();
+        traffic.enter(strong(0), &mut Draws::of(&[]));
+        ticked(&mut traffic, escorted(250), 200);
+        assert_eq!(traffic.npcs(), []);
+    }
+
+    #[test]
+    fn entering_or_going_on_into_a_system_keeps_the_timer_counting() {
+        let mut traffic = armed(0, 0);
+        ticked(&mut traffic, escorted(60), 10);
+        traffic.enter(strong(0), &mut Draws::of(&[]));
+        ticked(&mut traffic, escorted(60), 20);
+        traffic.retarget(strong(0), &BTreeSet::new());
+        assert_eq!(traffic.npcs(), []);
+        ticked(&mut traffic, escorted(60), 1);
+        assert_eq!(traffic.npcs().len(), 1, "on the 31st tick in all");
     }
 }
