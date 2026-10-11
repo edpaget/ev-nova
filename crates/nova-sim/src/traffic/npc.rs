@@ -11,6 +11,7 @@ use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::escort::{EscortClass, EscortDuty};
 use crate::flight::ShipState;
+use crate::mission::ships::ShipBehav;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
 
@@ -182,8 +183,8 @@ pub struct Npc {
 pub struct MissionMark {
     /// The slot of the mission.
     pub slot: u8,
-    /// The mission's `ShipBehav`, raw.
-    pub behav: i16,
+    /// The mission's `ShipBehav`.
+    pub behav: ShipBehav,
     /// Whether it spawned cloaked (`ShipStart` 2): only recorded, as the
     /// engine has no cloak (rdm:phase/mission-ships/phase-16-cloaked-mission-ships).
     pub cloaked: bool,

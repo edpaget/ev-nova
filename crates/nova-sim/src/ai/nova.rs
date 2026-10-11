@@ -24,8 +24,8 @@ use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
+use crate::mission::ships::ShipBehav;
 use crate::rulebook::{RuleKey, Rulebook};
-use crate::traffic::HUNTS_PLAYER;
 use crate::traffic::npc::{AiType, Npc};
 
 /// Nova's combat AI (see the module docs).
@@ -133,7 +133,8 @@ impl NovaAi {
 /// does. A cloaked or gate-emerging player is no matter: the engine has
 /// neither, so the player is always visible to it.
 fn hunts_player(npc: &Npc, around: &Surroundings) -> bool {
-    npc.mission.is_some_and(|mark| mark.behav == HUNTS_PLAYER)
+    npc.mission
+        .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer)
         && around
             .player
             .is_some_and(|player| player.condition != Condition::Disabled || fire::destroys(npc))
@@ -525,7 +526,7 @@ mod tests {
     fn mission_ship(mut npc: Npc, behav: i16) -> Npc {
         npc.mission = Some(crate::traffic::npc::MissionMark {
             slot: 1,
-            behav,
+            behav: ShipBehav::from_code(behav),
             cloaked: false,
         });
         npc

@@ -24,8 +24,7 @@ use crate::catalog::{DudeId, MissionRecord, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::Script;
 use crate::geometry::Vec2;
-use crate::mission::ships::ShipFacts;
-use crate::mission::ships::{COMES_LATER, appear_timer};
+use crate::mission::ships::{ShipBehav, ShipFacts, ShipStart, appear_timer};
 use crate::mission::{ActiveMission, ShipSystem, SpecialShips};
 use crate::story::{
     Consumer, Entrance, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
@@ -112,7 +111,7 @@ impl Session {
     /// mission in `slot`, `active` of `record`: `ShipStart` 1, ships
     /// left, and the player in their system (@0x99f5b-0x99f8a).
     fn hook_restarts(&self, record: &MissionRecord, active: &ActiveMission) -> bool {
-        record.ships.start == COMES_LATER
+        ShipStart::from_code(record.ships.start) == ShipStart::ComesLater
             && active.ships.left > 0
             && self.ships_here(active.ships.system)
     }
@@ -199,8 +198,8 @@ impl Session {
                 slot,
                 dude,
                 count: state.left,
-                start: record.ships.start,
-                behav: record.ships.behav,
+                start: ShipStart::from_code(record.ships.start),
+                behav: ShipBehav::from_code(record.ships.behav),
                 nav: &nav,
             };
             ships.extend(spawn::mission_ships(table, &spawn, self.gate(), chance));
@@ -240,7 +239,7 @@ impl Session {
             if !self.ships_here(state.system) {
                 continue;
             }
-            let coming = if record.ships.start == COMES_LATER {
+            let coming = if ShipStart::from_code(record.ships.start) == ShipStart::ComesLater {
                 state.left - state.arrived
             } else {
                 state.left
@@ -276,8 +275,8 @@ impl Session {
                 slot,
                 dude,
                 count: coming,
-                start: record.ships.start,
-                behav: record.ships.behav,
+                start: ShipStart::from_code(record.ships.start),
+                behav: ShipBehav::from_code(record.ships.behav),
                 nav: &nav,
             };
             let ships = spawn::arriving_mission_ships(
@@ -1032,7 +1031,7 @@ mod tests {
         take_off(&mut session, &catalog);
         session.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
             slot: 5,
-            behav: -1,
+            behav: ShipBehav::Own,
             cloaked: false,
         });
         session.release_mission_ships(0);

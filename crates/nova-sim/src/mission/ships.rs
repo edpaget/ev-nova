@@ -7,6 +7,7 @@ use crate::catalog::{CommCatalog, GovtId, MissionShip, SystemId};
 use crate::chance::Chance;
 use crate::govt::Governments;
 use crate::hyperspace::StarMap;
+use crate::person::ESCORT_GOAL;
 
 use super::offer::Stop;
 
@@ -71,14 +72,79 @@ impl Default for SpecialShips {
     }
 }
 
-/// `ShipStart`: the ships come in later, on the appear timer.
-pub const COMES_LATER: i16 = 1;
-/// `ShipStart`: the ships spawn cloaked.
-pub const CLOAKED: i16 = 2;
-/// `ShipBehav`: the ships escort the player.
-pub const ESCORTS_PLAYER: i16 = 1;
-/// `ShipGoal`: escort the ships.
-pub const ESCORT_GOAL: i16 = 3;
+/// A mission's `ShipStart`, read: where and when its ships appear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShipStart {
+    /// -1 to -16: at the stellar of nav slot `-ShipStart - 1` as the
+    /// system is set up, or at random when that slot is empty
+    /// (@0x4300a-0x43091).
+    Nav(u8),
+    /// 0, or a code below -16 that no `NavDefs` slot answers: placed at
+    /// random.
+    Random,
+    /// 1: they come in later, on the appear timer, as many as have not
+    /// arrived since it last restarted.
+    ComesLater,
+    /// 2: they first come in on the appear timer, then are set up
+    /// cloaked (`_DoShipCloak` @0x43114-0x43121).
+    Cloaked,
+    /// Any code above 2, which no stock mission uses: on the appear timer
+    /// as 2, never cloaked.
+    Timed,
+}
+
+impl ShipStart {
+    /// The `ShipStart` `code` names.
+    #[must_use]
+    pub const fn from_code(code: i16) -> Self {
+        match code {
+            // -1 to -16: 0 to 15, which fits.
+            -16..=-1 => Self::Nav((-code - 1) as u8),
+            1 => Self::ComesLater,
+            2 => Self::Cloaked,
+            3.. => Self::Timed,
+            _ => Self::Random,
+        }
+    }
+
+    /// Whether the appear timer runs from accept: any `ShipStart` above 0
+    /// (@0xa0ed4-0xa0f09).
+    #[must_use]
+    pub const fn timed(self) -> bool {
+        matches!(self, Self::ComesLater | Self::Cloaked | Self::Timed)
+    }
+}
+
+/// A mission's `ShipBehav`, read: how its ships behave.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShipBehav {
+    /// -1, or any code it does not read: as their `düde`'s AI decides.
+    Own,
+    /// 0: they attack the player (`_AIMakeShipAttackPlayer`
+    /// @0x3d099-0x3d0bb, `_HighLevelAIHandler` @0x8d628-0x8d6ea).
+    AttackPlayer,
+    /// 1: they escort the player. Until
+    /// rdm:phase/mission-ships/phase-7-mission-escorts, as [`Self::Own`].
+    EscortPlayer,
+    /// 2: they attack stellars (`_DeathStarAI`). Until
+    /// rdm:phase/mission-ships/phase-12-stellar-attackers, as
+    /// [`Self::Own`].
+    AttackStellars,
+}
+
+impl ShipBehav {
+    /// The `ShipBehav` `code` names.
+    #[must_use]
+    pub const fn from_code(code: i16) -> Self {
+        match code {
+            0 => Self::AttackPlayer,
+            1 => Self::EscortPlayer,
+            2 => Self::AttackStellars,
+            _ => Self::Own,
+        }
+    }
+}
+
 /// The appear timer of escorts the player is to escort (30 @0xa0eec).
 pub const ESCORT_APPEAR: i16 = 30;
 /// `Rand(100) + 100`: any other appear timer.
@@ -90,7 +156,7 @@ pub const NOT_APPEARING: i16 = -1;
 /// [`ESCORT_APPEAR`] for ships that escort the player with `ShipGoal`
 /// 3, else `Rand(100) + 100`, drawn (@0xa0ede-0xa0f03, @0x99f5b-0x99f9a).
 pub fn appear_timer(ships: &MissionShip, chance: &mut dyn Chance) -> i16 {
-    if ships.behav == ESCORTS_PLAYER && ships.goal == ESCORT_GOAL {
+    if ShipBehav::from_code(ships.behav) == ShipBehav::EscortPlayer && ships.goal == ESCORT_GOAL {
         ESCORT_APPEAR
     } else {
         i16::try_from(chance.below(APPEAR_DRAW) + APPEAR_DRAW).unwrap_or(i16::MAX)
@@ -115,8 +181,9 @@ fn drawn_string(list: Option<i16>, strings: &dyn CommCatalog, chance: &mut dyn C
 impl SpecialShips {
     /// The ships of a mission whose `mïsn` gives `ships`, as
     /// `_LoadCurrentMissionData` loads them at accept (@0xa0a38), drawing
-    /// on `chance` in its order: the appear timer, for a `ShipStart` above
-    /// 0 (see [`appear_timer`]), else none (@0xa0ed4-0xa0f09); their
+    /// on `chance` in its order: the appear timer, for a timed `ShipStart`
+    /// ([`ShipStart::timed`], see [`appear_timer`]), else none
+    /// (@0xa0ed4-0xa0f09); their
     /// system ([`select_ship_system`] from `facts` over `map` and
     /// `govts`); their name from their `ShipNameID` and their subtitle
     /// from their `ShipSubtitle`, each string `Rand(count) + 1` of its
@@ -130,7 +197,8 @@ impl SpecialShips {
         strings: &dyn CommCatalog,
         chance: &mut dyn Chance,
     ) -> Self {
-        let appear = if ships.start > 0 {
+        let start = ShipStart::from_code(ships.start);
+        let appear = if start.timed() {
             appear_timer(ships, chance)
         } else {
             NOT_APPEARING
@@ -141,7 +209,7 @@ impl SpecialShips {
         Self {
             system,
             left: ships.count,
-            arrived: if ships.start == COMES_LATER {
+            arrived: if start == ShipStart::ComesLater {
                 0
             } else {
                 ships.count
@@ -521,6 +589,37 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_start_reads_its_nav_slots_the_timed_starts_and_else_random() {
+        assert_eq!(ShipStart::from_code(-1), ShipStart::Nav(0));
+        assert_eq!(ShipStart::from_code(-16), ShipStart::Nav(15));
+        for code in [0, -17, i16::MIN] {
+            assert_eq!(ShipStart::from_code(code), ShipStart::Random, "{code}");
+        }
+        assert_eq!(ShipStart::from_code(1), ShipStart::ComesLater);
+        assert_eq!(ShipStart::from_code(2), ShipStart::Cloaked);
+        for code in [3, i16::MAX] {
+            assert_eq!(ShipStart::from_code(code), ShipStart::Timed, "{code}");
+        }
+    }
+
+    #[test]
+    fn only_the_starts_above_0_run_the_appear_timer() {
+        for (code, timed) in [(-1, false), (0, false), (1, true), (2, true), (3, true)] {
+            assert_eq!(ShipStart::from_code(code).timed(), timed, "{code}");
+        }
+    }
+
+    #[test]
+    fn a_ship_behav_reads_0_to_2_and_else_the_ships_own_ai() {
+        assert_eq!(ShipBehav::from_code(0), ShipBehav::AttackPlayer);
+        assert_eq!(ShipBehav::from_code(1), ShipBehav::EscortPlayer);
+        assert_eq!(ShipBehav::from_code(2), ShipBehav::AttackStellars);
+        for code in [-1, 3, i16::MIN, i16::MAX] {
+            assert_eq!(ShipBehav::from_code(code), ShipBehav::Own, "{code}");
+        }
+    }
+
+    #[test]
     fn a_ship_system_holds_its_own_system_or_any_for_one_following_the_player() {
         assert!(at(130).holds(SystemId(130)));
         assert!(!at(130).holds(SystemId(131)));
@@ -592,6 +691,9 @@ mod tests {
         }
     }
 
+    /// `ShipBehav` 1: they escort the player.
+    const ESCORTS_PLAYER: i16 = 1;
+
     #[test]
     fn escorts_of_an_escort_goal_appear_after_30_drawing_nothing() {
         let escorts = MissionShip {
@@ -617,7 +719,7 @@ mod tests {
         let unbehaved = MissionShip {
             count: 1,
             goal: ESCORT_GOAL,
-            start: COMES_LATER,
+            start: 1,
             ..MissionShip::NONE
         };
         assert_eq!(appear_timer(&unbehaved, &mut Draws::of(&[5])), 105);

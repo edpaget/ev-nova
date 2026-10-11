@@ -69,14 +69,12 @@ use crate::combat::{ShipRef, Strike};
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
+use crate::mission::ships::ShipBehav;
 use crate::person::PersonWorld;
 use autopilot::Outcome;
 use npc::{Mode, Npc, NpcId, NpcPerson};
 use spawn::{JUMP_IN_TICKS, NewShip, PersonDraw};
 use table::{SpawnPerson, SpawnTable};
-
-/// `ShipBehav` 0: a mission's special ships attack the player.
-pub const HUNTS_PLAYER: i16 = 0;
 
 /// How many ticks apart an NPC's decisions are: every tick, as the
 /// original at full speed.
@@ -501,7 +499,9 @@ impl Traffic {
             self.next_id += 1;
             // `ShipBehav` 0 aims a mission ship at the player as it spawns
             // (`_AIMakeShipAttackPlayer` @0x3d099-0x3d0bb).
-            let hunts = ship.mission.is_some_and(|mark| mark.behav == HUNTS_PLAYER);
+            let hunts = ship
+                .mission
+                .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer);
             self.npcs.push(Npc {
                 id,
                 ship: ship.ship,
@@ -1669,7 +1669,7 @@ mod tests {
             person: None,
             mission: Some(npc::MissionMark {
                 slot: 2,
-                behav,
+                behav: ShipBehav::from_code(behav),
                 cloaked: false,
             }),
         }

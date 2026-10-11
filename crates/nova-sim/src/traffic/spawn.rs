@@ -122,6 +122,7 @@ use crate::chance::Chance;
 use crate::control::Gate;
 use crate::flight::{ShipState, facing, heading_of};
 use crate::geometry::Vec2;
+use crate::mission::ships::{ShipBehav, ShipStart};
 use crate::person::{PersonRoll, PersonWorld, aggression_of};
 use crate::traffic::npc::{AiType, MissionMark};
 use crate::traffic::table::{ShipKind, SpawnDude, SpawnTable, pick};
@@ -468,19 +469,13 @@ pub struct MissionSpawn<'a> {
     pub dude: DudeId,
     /// How many to bring in.
     pub count: i16,
-    /// Its `ShipStart`, raw.
-    pub start: i16,
-    /// Its `ShipBehav`, raw.
-    pub behav: i16,
+    /// Its `ShipStart`.
+    pub start: ShipStart,
+    /// Its `ShipBehav`.
+    pub behav: ShipBehav,
     /// The system's `NavDefs` slots, in order: each its stellar's
     /// position, none for an empty slot.
     pub nav: &'a [Option<Vec2>],
-}
-
-/// The nav slot a negative `ShipStart` places the ships at: slot
-/// `-start - 1`, which a system's 16 `NavDefs` hold for -1 to -16 only.
-fn nav_slot(start: i16) -> Option<usize> {
-    usize::try_from(-i32::from(start) - 1).ok()
 }
 
 /// One of `spawn`'s ships as `_MissionDudeSpawn` (@0x3cd3b) brings it in:
@@ -551,7 +546,10 @@ pub fn mission_ships(
     gate: Gate,
     chance: &mut (impl Chance + ?Sized),
 ) -> Vec<NewShip> {
-    let nav = nav_slot(spawn.start).and_then(|slot| spawn.nav.get(slot).copied().flatten());
+    let nav = match spawn.start {
+        ShipStart::Nav(slot) => spawn.nav.get(usize::from(slot)).copied().flatten(),
+        _ => None,
+    };
     (0..spawn.count.max(0))
         .filter_map(|_| mission_dude_ship(table, spawn, gate, chance))
         .map(|mut ship| {
@@ -559,7 +557,7 @@ pub fn mission_ships(
                 ship.state.position = at;
             }
             if let Some(mark) = &mut ship.mission {
-                mark.cloaked = spawn.start == CLOAKED_START;
+                mark.cloaked = spawn.start == ShipStart::Cloaked;
             }
             ship
         })
@@ -605,9 +603,6 @@ pub fn arriving_mission_ships(
         })
         .collect()
 }
-
-/// `ShipStart` 2: the ships spawn cloaked at setup.
-const CLOAKED_START: i16 = 2;
 
 /// A `düde` ship: a `düde` by weight, a ship of it by `Probability`
 /// among those whose `AppearOn` holds by `gate`, and the `düde`, its AI
@@ -2031,8 +2026,8 @@ mod tests {
             slot: 3,
             dude: DudeId(150),
             count,
-            start,
-            behav: 0,
+            start: ShipStart::from_code(start),
+            behav: ShipBehav::AttackPlayer,
             nav: &NAV,
         }
     }
@@ -2070,7 +2065,7 @@ mod tests {
                 person: None,
                 mission: Some(MissionMark {
                     slot: 3,
-                    behav: 0,
+                    behav: ShipBehav::AttackPlayer,
                     cloaked: false,
                 }),
             }]
