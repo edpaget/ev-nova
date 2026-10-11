@@ -214,16 +214,56 @@ pub enum Kind {
     NoSharedClass(GovtId),
 }
 
-/// The government a code's government index names: `gövt` index + 128,
-/// none below 0.
-fn govt_index(index: i16) -> Option<GovtId> {
-    (index >= 0).then(|| GovtId(index + 128))
+/// What a government code, 9999-31999, names: a relation and the
+/// government (`gövt` index + 128) it is to, as both a mission's stellar
+/// codes ([`StellarCode`]) and its `ShipSyst` read them. What each
+/// relation takes is the reader's own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GovtCode {
+    /// 9999-14999: this government, `None` for 9999's independent.
+    Govt(Option<GovtId>),
+    /// 15000-19999: allied with this government.
+    Ally(GovtId),
+    /// 20000-24999: not this government.
+    NotGovt(GovtId),
+    /// 25000-29999: an enemy of this government.
+    Enemy(GovtId),
+    /// 30000-30999: sharing a class with this government.
+    SharedClass(GovtId),
+    /// 31000-31999: sharing no class with this government.
+    NoSharedClass(GovtId),
 }
 
-/// The government a code's government index names, from `base`, as a
-/// code above 9999 reads it: never independent.
-fn govt_from(code: i16, base: i16) -> GovtId {
-    GovtId(code - base + 128)
+impl GovtCode {
+    /// What `code` names; `None` outside 9999-31999.
+    #[must_use]
+    pub fn of(code: i16) -> Option<Self> {
+        // The government `code`'s index from `base` names.
+        let govt = |base: i16| GovtId(code - base + 128);
+        Some(match code {
+            9999 => Self::Govt(None),
+            10000..=14999 => Self::Govt(Some(govt(10000))),
+            15000..=19999 => Self::Ally(govt(15000)),
+            20000..=24999 => Self::NotGovt(govt(20000)),
+            25000..=29999 => Self::Enemy(govt(25000)),
+            30000..=30999 => Self::SharedClass(govt(30000)),
+            31000..=31999 => Self::NoSharedClass(govt(31000)),
+            _ => return None,
+        })
+    }
+}
+
+impl From<GovtCode> for Kind {
+    fn from(code: GovtCode) -> Self {
+        match code {
+            GovtCode::Govt(of) => Self::Govt(of),
+            GovtCode::Ally(of) => Self::Ally(of),
+            GovtCode::NotGovt(of) => Self::NotGovt(of),
+            GovtCode::Enemy(of) => Self::Enemy(of),
+            GovtCode::SharedClass(of) => Self::SharedClass(of),
+            GovtCode::NoSharedClass(of) => Self::NoSharedClass(of),
+        }
+    }
 }
 
 impl StellarCode {
@@ -234,13 +274,7 @@ impl StellarCode {
             -2 => Self::Random(Kind::Inhabited),
             -3 => Self::Random(Kind::Uninhabited),
             128..=2175 => Self::Fixed(StellarId(code)),
-            9999..=14999 => Self::Random(Kind::Govt(govt_index(code - 10000))),
-            15000..=19999 => Self::Random(Kind::Ally(govt_from(code, 15000))),
-            20000..=24999 => Self::Random(Kind::NotGovt(govt_from(code, 20000))),
-            25000..=29999 => Self::Random(Kind::Enemy(govt_from(code, 25000))),
-            30000..=30999 => Self::Random(Kind::SharedClass(govt_from(code, 30000))),
-            31000..=31999 => Self::Random(Kind::NoSharedClass(govt_from(code, 31000))),
-            _ => Self::Origin,
+            _ => GovtCode::of(code).map_or(Self::Origin, |code| Self::Random(code.into())),
         }
     }
 }
@@ -582,6 +616,34 @@ mod tests {
             (i16::MIN, Origin),
         ] {
             assert_eq!(StellarCode::of(code), chooses, "{code}");
+        }
+    }
+
+    #[test]
+    fn a_government_code_names_its_relation_and_government_at_each_range_edge() {
+        use GovtCode::{Ally, Enemy, Govt, NoSharedClass, NotGovt, SharedClass};
+        for (code, names) in [
+            (i16::MIN, None),
+            (-2, None),
+            (128, None),
+            (9998, None),
+            (9999, Some(Govt(None))),
+            (10000, Some(Govt(Some(GovtId(128))))),
+            (14999, Some(Govt(Some(GovtId(5127))))),
+            (15000, Some(Ally(GovtId(128)))),
+            (19999, Some(Ally(GovtId(5127)))),
+            (20000, Some(NotGovt(GovtId(128)))),
+            (24999, Some(NotGovt(GovtId(5127)))),
+            (25000, Some(Enemy(GovtId(128)))),
+            (29999, Some(Enemy(GovtId(5127)))),
+            (30000, Some(SharedClass(GovtId(128)))),
+            (30999, Some(SharedClass(GovtId(1127)))),
+            (31000, Some(NoSharedClass(GovtId(128)))),
+            (31999, Some(NoSharedClass(GovtId(1127)))),
+            (32000, None),
+            (i16::MAX, None),
+        ] {
+            assert_eq!(GovtCode::of(code), names, "{code}");
         }
     }
 

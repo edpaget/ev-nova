@@ -10,6 +10,7 @@ use crate::hyperspace::{Places, StarMap};
 use crate::person::ESCORT_GOAL;
 
 use super::offer::Stop;
+use super::select::GovtCode;
 
 /// Where an active mission's special ships are: its `ShipSyst` as
 /// `_LoadCurrentMissionData` resolves it into the slot (+0x10) at accept
@@ -243,51 +244,43 @@ pub struct ShipFacts {
 enum Kind {
     /// -2: any (@0x9b9a7-0x9ba6b).
     Any,
-    /// 9999-14999: governed by this government, `None` for 9999's
-    /// independents (@0x9bae1-0x9bbcf).
-    Govt(Option<GovtId>),
-    /// 15000-19999: governed, by another government allied with this one
-    /// (@0x9bbd4-0x9bd08).
-    Ally(GovtId),
-    /// 20000-24999: not governed by this government, an independent
-    /// included (@0x9bd0d-0x9bdfb).
-    NotGovt(GovtId),
-    /// 25000-29999: governed by an enemy of this government
-    /// (@0x9be00-0x9bf02).
-    Enemy(GovtId),
-    /// 30000-30999: governed by a government sharing a class with this
-    /// one, its own included (@0x9bf07-0x9c009).
-    SharedClass(GovtId),
-    /// 31000-31999: governed by none sharing a class with this one, an
-    /// independent included (@0x9c00e-0x9c111).
-    NoSharedClass(GovtId),
+    /// 9999-31999: of the relation the code names (see [`Kind::takes`]).
+    Relation(GovtCode),
 }
 
 impl Kind {
     /// Whether a system governed by `govt` is of this kind, the relations
     /// as `govts` say.
     fn takes(self, govt: Option<GovtId>, govts: &Governments) -> bool {
-        match self {
-            Self::Any => true,
-            Self::Govt(of) => govt == of,
-            Self::Ally(of) => govt.is_some_and(|govt| govt != of) && govts.allies(govt, Some(of)),
-            Self::NotGovt(of) => govt != Some(of),
-            Self::Enemy(of) => govts.enemies(govt, Some(of)),
-            Self::SharedClass(of) => govts.shared_class(govt, Some(of)),
-            Self::NoSharedClass(of) => !govts.shared_class(govt, Some(of)),
+        let Self::Relation(code) = self else {
+            return true;
+        };
+        match code {
+            // Governed by this government, an independent for 9999
+            // (@0x9bae1-0x9bbcf).
+            GovtCode::Govt(of) => govt == of,
+            // Governed, by another government allied with this one
+            // (@0x9bbd4-0x9bd08).
+            GovtCode::Ally(of) => {
+                govt.is_some_and(|govt| govt != of) && govts.allies(govt, Some(of))
+            }
+            // Not governed by this government, an independent included
+            // (@0x9bd0d-0x9bdfb).
+            GovtCode::NotGovt(of) => govt != Some(of),
+            // Governed by an enemy of this government (@0x9be00-0x9bf02).
+            GovtCode::Enemy(of) => govts.enemies(govt, Some(of)),
+            // Governed by a government sharing a class with this one, its
+            // own included (@0x9bf07-0x9c009).
+            GovtCode::SharedClass(of) => govts.shared_class(govt, Some(of)),
+            // Governed by none sharing a class with this one, an
+            // independent included (@0x9c00e-0x9c111).
+            GovtCode::NoSharedClass(of) => !govts.shared_class(govt, Some(of)),
         }
     }
 }
 
 /// The `ShipSyst` -6: the ships follow the player.
 const FOLLOWS_PLAYER: i16 = -6;
-
-/// The government a code's index from `base` names: index + 128, none
-/// below 0.
-fn govt_from(code: i16, base: i16) -> Option<GovtId> {
-    let index = code - base;
-    (index >= 0).then(|| GovtId(index + 128))
-}
 
 /// Where `code`, a `ShipSyst`, puts a mission's ships, as
 /// `_LoadCurrentMissionData` resolves it at accept (@0xa0f67-0xa1142),
@@ -330,13 +323,10 @@ pub fn select_ship_system(
         -5 => return drawn(map.listed_links(facts.player_system), chance),
         128..=9998 => return ShipSystem::At(SystemId(code)),
         -2 => Kind::Any,
-        9999..=14_999 => Kind::Govt(govt_from(code, 10_000)),
-        15_000..=19_999 => Kind::Ally(GovtId(code - 15_000 + 128)),
-        20_000..=24_999 => Kind::NotGovt(GovtId(code - 20_000 + 128)),
-        25_000..=29_999 => Kind::Enemy(GovtId(code - 25_000 + 128)),
-        30_000..=30_999 => Kind::SharedClass(GovtId(code - 30_000 + 128)),
-        31_000..=31_999 => Kind::NoSharedClass(GovtId(code - 31_000 + 128)),
-        _ => return ShipSystem::Nowhere,
+        _ => match GovtCode::of(code) {
+            Some(code) => Kind::Relation(code),
+            None => return ShipSystem::Nowhere,
+        },
     };
     let places = map.places();
     let candidates: Vec<SystemId> = map
