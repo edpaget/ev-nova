@@ -2868,6 +2868,18 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_flag_0x0001_slot_of_no_dude_the_setup_takes_aborts_with_no_ship() {
+        // _MissionDudeSpawn fails for each, and the call still comes.
+        let mut catalog = returning(0, 0x0001);
+        catalog.missions[0].ships.dude = None;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert!(session.npcs().is_empty());
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert_eq!(bits(&session), [7]);
+    }
+
+    #[test]
     fn two_flag_0x0001_slots_set_up_together_abort_in_slot_order() {
         // 140's OnAbort sets b7; 141's clears it and sets b8: 140 first
         // leaves b8 alone.
