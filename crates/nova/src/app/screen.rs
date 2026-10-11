@@ -215,7 +215,9 @@ use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::spaceport::missions::{COMPUTER_DIALOG, INFO_DIALOG, MissionInfoScreen};
 use nova_view::spaceport::offer::{OFFER_DIALOG, OfferChoice, OfferDialog};
 use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
-use nova_view::spaceport::shipyard::{SHIP_INFO_DIALOG, SHIPYARD_DIALOG};
+use nova_view::spaceport::shipyard::{
+    InfoTemplates, SHIP_INFO_DIALOG, SHIP_PICTURE_INFO_DIALOG, SHIPYARD_DIALOG,
+};
 use nova_view::spaceport::trade::TRADE_DIALOG;
 use nova_view::spaceport::{OutfitterCatalog, ShipyardCatalog};
 use nova_view::system::SystemView;
@@ -1393,14 +1395,19 @@ impl AppScreen {
             let outfit = template(OUTFIT_DIALOG).map(|(template, _)| template);
             let quantity = template(QUANTITY_DIALOG).map(|(template, _)| template);
             let art: Rc<dyn OutfitterCatalog> = Rc::clone(&self.data) as Rc<dyn OutfitterCatalog>;
-            spaceport = spaceport.with_outfitter(outfit, quantity, outfitter, art);
+            let alert = template(DESC_DIALOG).map(|(template, _)| template);
+            spaceport = spaceport.with_outfitter(outfit, quantity, alert, outfitter, art);
         }
         let template_of = |id| template(id).map(|(template, _)| template);
+        let info_templates = || InfoTemplates {
+            plain: template_of(SHIP_INFO_DIALOG),
+            picture: template_of(SHIP_PICTURE_INFO_DIALOG),
+        };
         if let Some(shipyard) = self.flight.as_mut().and_then(FlightView::shipyard) {
             let art: Rc<dyn ShipyardCatalog> = Rc::clone(&self.data) as Rc<dyn ShipyardCatalog>;
             spaceport = spaceport.with_shipyard(
                 template_of(SHIPYARD_DIALOG),
-                template_of(SHIP_INFO_DIALOG),
+                info_templates(),
                 template_of(TEXT_INPUT_DIALOG),
                 shipyard,
                 art,
@@ -1412,7 +1419,7 @@ impl AppScreen {
                 .with_bar(
                     template_of(BAR_DIALOG),
                     template_of(SHIPYARD_DIALOG),
-                    template_of(SHIP_INFO_DIALOG),
+                    info_templates(),
                     art,
                     pilot.escort_count() < MAX_ESCORTS,
                 )
@@ -1772,9 +1779,19 @@ impl AppScreen {
             if let Some(order) = trade {
                 let _ = flight.trade(order);
             }
-            // A plain click's count of 1 is exactly one order.
+            // A plain click's count of 1 is exactly one order. A sale
+            // refused in the sell loop shows its words over the
+            // outfitter, at whatever pass it is refused; the sales before
+            // it stand. Any other refusal changes nothing. Then the
+            // outfitter follows what the order left its selection at: an
+            // order that changed the listing resets it, or closes the
+            // outfitter when nothing is listed.
             if let Some((order, count)) = outfit {
-                let _ = flight.outfit_counted(order, count);
+                let run = flight.outfit_order(order, count);
+                if let Some(alert) = &run.alert {
+                    spaceport.alert_outfit(alert);
+                }
+                spaceport.outfit_ordered(run.after);
             }
             if let Some(order) = ship {
                 let _ = flight.buy_ship(order.ship, &order.name);
@@ -2214,7 +2231,7 @@ pub(super) mod tests {
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_data::{GameData, Record, SystemId};
     use nova_rsrc::fixture::ForkBuilder;
-    use nova_rsrc::{Fork, ForkReader, ResType};
+    use nova_rsrc::{Fork, ForkReader};
     use nova_sim::{RuleKey, RuleSource};
     use nova_view::galaxy::GalaxyMap;
     use nova_view::galaxy::map::ENTER_BUTTON;
@@ -2342,6 +2359,21 @@ pub(super) mod tests {
         game_data_with(trading, outfitting, shipbuying, 100, on_start, on_purchase)
     }
 
+    /// [`outfitting_data`], where the booster is a pod of -20 tons, and
+    /// the outfitter also sells `oütf` 129, a hold of 25 tons for 100
+    /// credits: with both owned, 5 tons are free, and selling the pod
+    /// would leave -15.
+    fn pod_data() -> Rc<GameData> {
+        game_data_full(true, true, false, 100, b"", b"", Some(500))
+    }
+
+    /// [`pod_data`], the pod 450 credits: the 1000 credits buy two pods
+    /// and the hold, leaving 25 tons free, so one pod sold leaves 5 and a
+    /// second would leave -15.
+    fn two_pod_data() -> Rc<GameData> {
+        game_data_full(true, true, false, 100, b"", b"", Some(450))
+    }
+
     /// [`game_data`], ship 129 for sale on a `BuyRandom` of `buy_random`,
     /// the `chär`'s `OnStart` `on_start` and the booster's `OnPurchase`
     /// `on_purchase`.
@@ -2353,38 +2385,59 @@ pub(super) mod tests {
         on_start: &[u8],
         on_purchase: &[u8],
     ) -> Rc<GameData> {
-        game_data_holding(
-            (trading, outfitting, shipbuying),
+        game_data_full(
+            trading,
+            outfitting,
+            shipbuying,
             buy_random,
             on_start,
             on_purchase,
-            Vec::new(),
+            None,
         )
     }
 
-    /// A resource: its type, ID, name and bytes.
-    type Resource = (ResType, i16, &'static [u8], Vec<u8>);
-
-    /// [`game_data_with`], the trade center, outfitter and shipyard as
-    /// `shops` says, holding `extra` too.
-    fn game_data_holding(
-        (trading, outfitting, shipbuying): (bool, bool, bool),
+    /// [`game_data_with`], the booster a pod of -20 tons priced `pod` and
+    /// a 25-ton hold (`oütf` 129) for sale too when `pod` is some
+    /// ([`pod_data`]).
+    #[allow(clippy::fn_params_excessive_bools)] // A fixture's switches.
+    fn game_data_full(
+        trading: bool,
+        outfitting: bool,
+        shipbuying: bool,
         buy_random: i16,
         on_start: &[u8],
         on_purchase: &[u8],
-        extra: Vec<Resource>,
+        pod: Option<i32>,
     ) -> Rc<GameData> {
-        let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
-        anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
-        anim[0x04..0x06].copy_from_slice(&1_i16.to_be_bytes());
-        anim[0x34..0x36].copy_from_slice(&4_i16.to_be_bytes());
+        loaded(&game_data_fork(
+            trading,
+            outfitting,
+            shipbuying,
+            buy_random,
+            on_start,
+            on_purchase,
+            pod,
+        ))
+    }
+
+    /// The resources of [`game_data_full`], before they are loaded.
+    #[allow(clippy::fn_params_excessive_bools)] // A fixture's switches.
+    fn game_data_fork(
+        trading: bool,
+        outfitting: bool,
+        shipbuying: bool,
+        buy_random: i16,
+        on_start: &[u8],
+        on_purchase: &[u8],
+        pod: Option<i32>,
+    ) -> ForkBuilder {
+        let anim = ship_anim();
         let sheet = (0..4)
             .fold(RledBuilder::new(1, 1), |sheet, _| {
                 sheet.frame(|f| f.line().pixels(&[0x7C00]))
             })
             .build();
-        let mut ship = vec![0; Ship::SIZE.expect("fixed")];
-        let mut average = ship.clone();
+        let mut average = vec![0; Ship::SIZE.expect("fixed")];
         for (at, value) in [(0x04, 300_i16), (0x06, 300), (0x08, 10)] {
             average[at..at + 2].copy_from_slice(&value.to_be_bytes());
         }
@@ -2404,52 +2457,36 @@ pub(super) mod tests {
             stellar[0x09] |= 0x04;
             stellar[0x0C..0x0E].copy_from_slice(&1_i16.to_be_bytes());
             average[0x0C..0x0E].copy_from_slice(&10_i16.to_be_bytes());
-            let booster = booster_record(on_purchase);
+            let mut booster = booster_record(on_purchase);
             if !on_purchase.is_empty() {
                 let leave = str_list(&["Off you go, <PSN>."]);
                 fork = fork.resource(StrList::TYPE, 25048, None, &leave);
             }
+            if let Some(price) = pod {
+                booster[0x02..0x04].copy_from_slice(&(-20_i16).to_be_bytes());
+                booster[0x0E..0x12].copy_from_slice(&price.to_be_bytes());
+                let mut hold = booster_record(b"");
+                hold[0x02..0x04].copy_from_slice(&25_i16.to_be_bytes());
+                hold[0x0E..0x12].copy_from_slice(&100_i32.to_be_bytes());
+                fork = fork.resource(Outfit::TYPE, 129, Some(b"Hold"), &hold);
+            }
             fork = fork.resource(Outfit::TYPE, 128, Some(b"Booster"), &booster);
         }
-        if shipbuying {
+        let ship = if shipbuying {
             stellar[0x09] |= 0x08;
-            for (at, value) in [
-                (0x00, 20_i16),
-                (0x04, 300),
-                (0x06, 600),
-                (0x08, 10),
-                (0x0C, 12),
-                (0x2E, 1),
-                (0x388, buy_random),
-            ] {
-                ship[at..at + 2].copy_from_slice(&value.to_be_bytes());
-            }
-            ship[0x30..0x34].copy_from_slice(&800_i32.to_be_bytes());
-            for (slot, (id, count)) in [(128_i16, 1_i16), (-1, 0), (-1, 0), (-1, 0)]
-                .into_iter()
-                .enumerate()
-            {
-                let at = 0x4E + 2 * slot;
-                ship[at..at + 2].copy_from_slice(&id.to_be_bytes());
-                ship[at + 8..at + 10].copy_from_slice(&count.to_be_bytes());
-                ship[0x370 + 2 * slot..0x372 + 2 * slot].copy_from_slice(&(-1_i16).to_be_bytes());
-            }
-            ship[0x5CE..0x5D4].copy_from_slice(b"Second");
-            ship[0x62E..0x63D].copy_from_slice(b"Second Shipyard");
-        }
+            second_ship(buy_random)
+        } else {
+            vec![0; Ship::SIZE.expect("fixed")]
+        };
         character[0x04..0x06].copy_from_slice(&128_i16.to_be_bytes());
         character[0x06..0x08].copy_from_slice(&128_i16.to_be_bytes());
         for slot in 1..4 {
             let at = 0x06 + 2 * slot;
             character[at..at + 2].copy_from_slice(&(-1_i16).to_be_bytes());
         }
-        for (kind, id, name, bytes) in extra {
-            fork = fork.resource(kind, id, Some(name), &bytes);
-        }
         let mut spin = vec![0; Spin::SIZE.expect("fixed")];
         spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
-        let fork = fork
-            .resource(Ship::TYPE, 129, Some(b"Second"), &ship)
+        fork.resource(Ship::TYPE, 129, Some(b"Second"), &ship)
             .resource(Ship::TYPE, 128, Some(b"First"), &average)
             .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
             .resource(ShipAnim::TYPE, 128, None, &anim)
@@ -2461,11 +2498,102 @@ pub(super) mod tests {
             .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &landable())
             .resource(Spin::TYPE, 1000, None, &spin)
             .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
-            .build()
-            .bytes;
-        let file = OneFile(fork);
+    }
+
+    /// The game data of `fork`'s resources.
+    fn loaded(fork: &ForkBuilder) -> Rc<GameData> {
+        loaded_bytes(fork.build().bytes)
+    }
+
+    /// The game data of a built fork's `bytes`.
+    fn loaded_bytes(bytes: Vec<u8>) -> Rc<GameData> {
+        let file = OneFile(bytes);
         let data = GameData::load(&file, &file, Path::new("/data"), None).expect("opens");
         Rc::new(data)
+    }
+
+    /// [`outfitting_data`], where the outfitter also sells a license
+    /// (`oütf` 130, 100 credits, contributing bit 0x2) and `oütf` 131,
+    /// hidden until bit 0x2 is contributed (`Flags` 0x0100, `Require`
+    /// 0x2).
+    fn licensing_data() -> Rc<GameData> {
+        let mut license = booster_record(b"");
+        license[0x0E..0x12].copy_from_slice(&100_i32.to_be_bytes());
+        license[0x1E..0x26].copy_from_slice(&2_u64.to_be_bytes());
+        let mut licensed = booster_record(b"");
+        licensed[0x0C..0x0E].copy_from_slice(&0x0100_u16.to_be_bytes());
+        licensed[0x26..0x2E].copy_from_slice(&2_u64.to_be_bytes());
+        loaded(
+            &game_data_fork(true, true, false, 100, b"", b"", None)
+                .resource(Outfit::TYPE, 130, Some(b"License"), &license)
+                .resource(Outfit::TYPE, 131, Some(b"Licensed"), &licensed),
+        )
+    }
+
+    /// [`outfitting_data`], where the booster, the outfitter's only row,
+    /// hides itself once bought: flagged 0x0010 (taken away after
+    /// purchase) and 0x4000 (hidden unless available), its `Availability`
+    /// `!b7` and its `OnPurchase` `b7`.
+    fn self_hiding_data() -> Rc<GameData> {
+        let mut built = game_data_fork(true, true, false, 100, b"", b"b7", None).build();
+        let booster = built.layout.data_entry(Outfit::TYPE, 128) + 4;
+        built.put_u16(booster + 0x0C, 0x4010);
+        built.bytes[booster + 0x2E..booster + 0x31].copy_from_slice(b"!b7");
+        loaded_bytes(built.bytes)
+    }
+
+    /// The `shän` every fixture ship shares: one 1 x 1 frame of `rlë8`
+    /// 1000.
+    fn ship_anim() -> Vec<u8> {
+        let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
+        anim[0x00..0x02].copy_from_slice(&1000_i16.to_be_bytes());
+        anim[0x04..0x06].copy_from_slice(&1_i16.to_be_bytes());
+        anim[0x34..0x36].copy_from_slice(&4_i16.to_be_bytes());
+        anim
+    }
+
+    /// `shïp` 129, "Second": 800 credits, for sale on a `BuyRandom` of
+    /// `buy_random`, carrying a booster.
+    fn second_ship(buy_random: i16) -> Vec<u8> {
+        let mut ship = vec![0; Ship::SIZE.expect("fixed")];
+        for (at, value) in [
+            (0x00, 20_i16),
+            (0x04, 300),
+            (0x06, 600),
+            (0x08, 10),
+            (0x0C, 12),
+            (0x2E, 1),
+            (0x388, buy_random),
+        ] {
+            ship[at..at + 2].copy_from_slice(&value.to_be_bytes());
+        }
+        ship[0x30..0x34].copy_from_slice(&800_i32.to_be_bytes());
+        for (slot, (id, count)) in [(128_i16, 1_i16), (-1, 0), (-1, 0), (-1, 0)]
+            .into_iter()
+            .enumerate()
+        {
+            let at = 0x4E + 2 * slot;
+            ship[at..at + 2].copy_from_slice(&id.to_be_bytes());
+            ship[at + 8..at + 10].copy_from_slice(&count.to_be_bytes());
+            ship[0x370 + 2 * slot..0x372 + 2 * slot].copy_from_slice(&(-1_i16).to_be_bytes());
+        }
+        ship[0x5CE..0x5D4].copy_from_slice(b"Second");
+        ship[0x62E..0x63D].copy_from_slice(b"Second Shipyard");
+        ship
+    }
+
+    /// [`shipbuying_data`], where the shipyard also sells `shïp` 130,
+    /// "Third", [`second_ship`] at 5,000 credits: more than the pilot's
+    /// cash and any trade-in cover.
+    fn dear_shipbuying_data() -> Rc<GameData> {
+        let mut third = second_ship(100);
+        third[0x30..0x34].copy_from_slice(&5000_i32.to_be_bytes());
+        third[0x5CE..0x5D4].copy_from_slice(b"Third\0");
+        loaded(
+            &game_data_fork(true, true, true, 100, b"", b"", None)
+                .resource(Ship::TYPE, 130, Some(b"Third"), &third)
+                .resource(ShipAnim::TYPE, 130, None, &ship_anim()),
+        )
     }
 
     /// The booster `oütf` of [`game_data_with`]: for sale every day
@@ -4899,7 +5027,9 @@ pub(super) mod tests {
     // The Outfitter.
 
     use nova_sim::OutfitId;
-    use nova_view::spaceport::outfitter::{BUY_ITEM as OUTFIT_BUY_ITEM, OUTFIT_DIALOG};
+    use nova_view::spaceport::outfitter::{
+        BUY_ITEM as OUTFIT_BUY_ITEM, NEGATIVE_FREE_MASS, OUTFIT_DIALOG,
+    };
 
     /// "Outfit", smaller: 400 x 300 at (0, 0), with Done (1), Sell (4),
     /// the grid (5), the description (6), Buy (7), the picture (8) and the
@@ -4978,6 +5108,82 @@ pub(super) mod tests {
         assert_eq!(drawn(&screen), drawn(spaceport(&screen)));
     }
 
+    /// [`landed_outfitter`], with Nova's rules as `rulebook` chooses.
+    fn landed_outfitter_by(store: &MemoryPilots, rulebook: &Rulebook) -> AppScreen {
+        let mut screen = AppScreen::new(outfitting_data())
+            .with_rulebook(rulebook)
+            .with_dialogs(Rc::new(OutfitDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        screen
+    }
+
+    #[test]
+    fn an_empty_outfitter_cell_clicked_follows_the_grid_selection_rule() {
+        let other = Rulebook::default().with_override(RuleKey::GridSelection, RuleSource::Bible);
+        for (rulebook, kept) in [(Rulebook::default(), false), (other, true)] {
+            let store = MemoryPilots::new();
+            let mut screen = landed_outfitter_by(&store, &rulebook);
+            click_port_item(&mut screen, 8);
+            let open = spaceport(&screen).open_outfitter().expect("outfitting");
+            let first = open.selected_outfit();
+            assert!(first.is_some(), "the first cell");
+            let empty = open
+                .cell_bounds(open.outfitter().rows.len())
+                .expect("a cell")
+                .center();
+            click_at(&mut screen, empty);
+            let open = spaceport(&screen).open_outfitter().expect("outfitting");
+            assert_eq!(
+                open.selected_outfit(),
+                first.filter(|_| kept),
+                "kept: {kept}"
+            );
+        }
+    }
+
+    const LICENSE: OutfitId = OutfitId(130);
+    const LICENSED: OutfitId = OutfitId(131);
+
+    #[test]
+    fn an_outfit_purchase_that_relists_resets_the_outfitters_selection() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, licensing_data());
+        click_port_item(&mut screen, 8);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.outfitter().row(LICENSED), None, "hidden");
+        screen.input(&key(Key::Right, true));
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.selected_outfit(), Some(LICENSE));
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).owned(LICENSE), 1);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert!(open.outfitter().row(LICENSED).is_some(), "relisted");
+        assert_eq!(open.selected(), None);
+        assert_eq!(open.selected_outfit(), Some(BOOSTER));
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1, "Buy answers for 128");
+        assert_eq!(pilot(&screen).owned(LICENSE), 1);
+        assert_eq!(pilot(&screen).cash(), 400);
+    }
+
+    #[test]
+    fn an_outfit_purchase_that_leaves_nothing_listed_closes_the_outfitter() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, self_hiding_data());
+        click_port_item(&mut screen, 8);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.outfitter().rows.len(), 1);
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).cash(), 500, "bought");
+        assert_eq!(pilot(&screen).owned(BOOSTER), 0, "taken away");
+        assert!(spaceport(&screen).open_outfitter().is_none(), "closed");
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        assert!(!spaceport(&screen).left());
+    }
+
     #[test]
     fn an_outfit_order_changes_the_pilot_refreshes_the_outfitter_and_saves() {
         let store = MemoryPilots::new();
@@ -5030,6 +5236,75 @@ pub(super) mod tests {
         screen.input(&key(Key::Escape, true));
         assert!(spaceport(&screen).open_outfitter().is_none());
         assert_eq!(screen.showing(), Showing::Spaceport);
+    }
+
+    #[test]
+    fn a_sale_refused_in_the_loop_opens_its_words_over_the_outfitter() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, pod_data());
+        click_port_item(&mut screen, 8);
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Right, true));
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Left, true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1);
+        assert_eq!(pilot(&screen).owned(OutfitId(129)), 1);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.outfitter().free_mass, 5);
+        assert!(open.alert_dialog().is_none());
+        let (cash, writes) = (pilot(&screen).cash(), store.writes());
+        screen.input(&key(Key::Char('s'), true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1, "nothing sold");
+        assert_eq!(pilot(&screen).cash(), cash);
+        assert_eq!(store.writes(), writes, "nothing to save");
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        let alert = open.alert_dialog().expect("the words in DLOG 3003");
+        assert_eq!(alert.lines().join(" "), NEGATIVE_FREE_MASS);
+        screen.input(&key(Key::Escape, true));
+        let open = spaceport(&screen)
+            .open_outfitter()
+            .expect("still outfitting");
+        assert!(open.alert_dialog().is_none(), "Escape closed the words");
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).open_outfitter().is_none());
+        assert_eq!(screen.showing(), Showing::Spaceport);
+    }
+
+    #[test]
+    fn a_counted_sale_refused_part_way_keeps_its_sales_and_opens_its_words() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, two_pod_data());
+        click_port_item(&mut screen, 8);
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Right, true));
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Left, true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 2);
+        assert_eq!(pilot(&screen).owned(OutfitId(129)), 1);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.outfitter().free_mass, 25);
+        let refund = open.outfitter().refund(BOOSTER).expect("a refund");
+        let (cash, writes) = (pilot(&screen).cash(), store.writes());
+        // Alt-S, as a Mac sends Option-S, then a count of 2.
+        screen.input(&key(Key::Alt, true));
+        screen.input(&key(Key::Char('s'), true));
+        screen.input(&Input::Text('ß'));
+        screen.input(&key(Key::Alt, false));
+        screen.input(&key(Key::Char('2'), true));
+        screen.input(&Input::Text('2'));
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1, "one sold, then refused");
+        assert_eq!(pilot(&screen).cash(), cash + refund);
+        assert_eq!(store.writes(), writes + 1, "saved after the input");
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        let alert = open.alert_dialog().expect("the words in DLOG 3003");
+        assert_eq!(alert.lines().join(" "), NEGATIVE_FREE_MASS);
+        screen.input(&key(Key::Escape, true));
+        let open = spaceport(&screen)
+            .open_outfitter()
+            .expect("still outfitting");
+        assert!(open.alert_dialog().is_none(), "Escape closed the words");
     }
 
     #[test]
@@ -5288,7 +5563,12 @@ pub(super) mod tests {
     /// The router over [`shipbuying_data`] with every dialog, keeping
     /// pilots in `store`, flying a new pilot named Ada, landed.
     fn landed_shipyard(store: &MemoryPilots) -> AppScreen {
-        let mut screen = AppScreen::new(shipbuying_data())
+        landed_shipyard_of(shipbuying_data(), store)
+    }
+
+    /// [`landed_shipyard`], on `data`.
+    fn landed_shipyard_of(data: Rc<GameData>, store: &MemoryPilots) -> AppScreen {
+        let mut screen = AppScreen::new(data)
             .with_dialogs(Rc::new(ShipyardDialogs), Rc::new(MonoMetrics))
             .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
         create(&mut screen, "Ada");
@@ -5373,13 +5653,19 @@ pub(super) mod tests {
     #[test]
     fn a_refused_ship_order_changes_nothing_and_saves_nothing() {
         let store = MemoryPilots::new();
-        let mut screen = landed_shipyard(&store);
+        let mut screen = landed_shipyard_of(dear_shipbuying_data(), &store);
         click_port_item(&mut screen, 9);
         press_b(&mut screen);
         screen.input(&key(Key::Enter, true));
         let writes = store.writes();
         let before = pilot(&screen).clone();
-        // Ship 129 again: 200 and a 400 trade-in do not cover 800.
+        // Ship 130: 200 and a 400 trade-in do not cover 5,000.
+        screen.input(&key(Key::Right, true));
+        let open = spaceport(&screen).open_shipyard().expect("shipbuying");
+        assert_eq!(
+            open.shipyard().can(ShipId(130)),
+            Err(nova_sim::ShipRefusal::CannotAfford)
+        );
         press_b(&mut screen);
         assert!(name_prompt(&screen).is_none(), "nothing to name");
         screen.input(&key(Key::Enter, true));
@@ -6771,21 +7057,19 @@ pub(super) mod tests {
     /// refusable, paying -50,100 so an accept takes 100 credits, with
     /// the offer text "Job `id`." (`dësc` `id` + 3872).
     fn venue_data_of(loc: i16, ids: &[i16]) -> Rc<GameData> {
-        let extra = ids
-            .iter()
-            .flat_map(|&id| {
-                [
-                    (Mission::TYPE, id, &b"Venue job"[..], venue_mission(loc)),
-                    (
+        let fork = ids.iter().fold(
+            game_data_fork(true, true, true, 100, b"", b"", None),
+            |fork, &id| {
+                fork.resource(Mission::TYPE, id, Some(b"Venue job"), &venue_mission(loc))
+                    .resource(
                         Desc::TYPE,
                         id + 3872,
-                        &b"Offer"[..],
-                        desc_of(&format!("Job {id}.")),
-                    ),
-                ]
-            })
-            .collect();
-        game_data_holding((true, true, true), 100, b"", b"", extra)
+                        Some(b"Offer"),
+                        &desc_of(&format!("Job {id}.")),
+                    )
+            },
+        );
+        loaded(&fork)
     }
 
     /// [`shipbuying_data`] with one mission, 130, at venue `loc`: see

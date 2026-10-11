@@ -182,6 +182,8 @@ impl Session {
             control_bits: &*self.control_bits.0,
             pilot: &facts,
             rules: self.rules,
+            arsenal: &self.arsenal,
+            outfits: &self.outfits,
         };
         let rolls = &mut self.hire_rolls;
         Some(bar.list(|ship, percent| rolls.today(ship, Roll::Chance(percent), chance)))
@@ -369,6 +371,10 @@ mod tests {
                     max_tur: 1,
                     length: 20,
                     crew: 3,
+                    space: 30,
+                    rounding: RuleSource::Engine,
+                    weapons: Vec::new(),
+                    long_name: "The Ship 129".to_owned(),
                 },
                 hire: Ok(()),
             }
@@ -377,6 +383,37 @@ mod tests {
         assert_eq!(list.cash, 25_000);
         assert!(list.room);
         assert!(!session.take_save_due(), "listing changes nothing");
+    }
+
+    #[test]
+    fn the_bar_walks_each_space_over_the_sessions_stock() {
+        // `FreeMass` -10 and a stock gun of 6 tons: -4 to start, and the
+        // gun leaves 0.
+        let mut catalog = barred(vec![ShipRecord {
+            fields: crate::handling::ShipFields {
+                free_mass: -10,
+                ..FAST
+            },
+            ..hireable(129, 100)
+        }]);
+        catalog.outfits.push(crate::catalog::OutfitRecord {
+            mass: 6,
+            ..crate::testkit::outfit(310, &[(crate::combat::armament::MOD_WEAPON, 130)])
+        });
+        catalog.hulls.push(crate::catalog::HullRecord {
+            weapons: vec![crate::catalog::StockWeapon {
+                weapon: crate::catalog::WeaponId(130),
+                count: 1,
+                ammo: 0,
+            }],
+            ..crate::testkit::hull(129)
+        });
+        let mut session = landed(&catalog, 25_000);
+        assert_eq!(
+            row(&list(&mut session), 129).specs.space,
+            0,
+            "not its FreeMass of -10"
+        );
     }
 
     #[test]
@@ -510,6 +547,22 @@ mod tests {
         let mut session = landed(&special, 25_000);
         let list = session.escorts_for_hire(&mut Scripted::answering(&[true, true]));
         assert_eq!(listed(&list.expect("a bar")), [129], "its special tech");
+    }
+
+    #[test]
+    fn a_special_tech_slot_of_0_lists_a_ship_of_tech_0_for_hire() {
+        let tech = |id, tech_level| ShipRecord {
+            tech_level,
+            ..hireable(id, 100)
+        };
+        let mut catalog = barred(vec![tech(129, 0), tech(130, -1), tech(131, 1)]);
+        let mut site = bar();
+        site.tech_level = -5;
+        site.special_tech[1] = -1;
+        catalog.sites[0].1[0] = site;
+        let mut session = landed(&catalog, 25_000);
+        let list = session.escorts_for_hire(&mut NeverFires).expect("a bar");
+        assert_eq!(listed(&list), [129], "slot 0 lists tech 0; -1 never");
     }
 
     #[test]

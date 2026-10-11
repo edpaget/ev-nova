@@ -7,7 +7,8 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use nova_data::GameData;
-use nova_view::ships::{ShipBrowser, ShipCatalog, ShipEntry, ShipId};
+use nova_sim::{HashedRolls, lights_level};
+use nova_view::ships::{SheetInfo, ShipBrowser, ShipCatalog, ShipEntry, ShipId};
 use nova_view::{DrawCommand, DrawList, ImageKey, Input, Key, Screen};
 
 /// Every problem with the browser's view of `ship`.
@@ -46,6 +47,22 @@ fn sprite_ids(browser: &impl Screen) -> Vec<i16> {
         .collect()
 }
 
+/// The `rlëD` IDs `ship` draws `tick` ticks after it is selected: its
+/// base, its glow, and its lights while its blink has them lit, rolling as
+/// the browser does on [`HashedRolls`] from seed 0.
+fn expected_sprites(ship: &ShipEntry, sprite: SheetInfo, tick: u64) -> Vec<i16> {
+    let mut expected = vec![sprite.image_id];
+    if let Some(Ok(glow)) = &ship.glow {
+        expected.push(glow.image_id);
+    }
+    if let Some(Ok(lights)) = &ship.lights
+        && lights_level(&ship.blink, tick, &HashedRolls::new(0)).is_some()
+    {
+        expected.push(lights.image_id);
+    }
+    expected
+}
+
 #[test]
 fn every_stock_ship_is_browsed_with_every_frame_and_layer() {
     let Some(dir) = common::nova_data() else {
@@ -71,20 +88,18 @@ fn every_stock_ship_is_browsed_with_every_frame_and_layer() {
         visited.push(ship.id);
         problems_seen.extend(problems(&ship));
         if let Ok(sprite) = ship.sprite {
-            let mut expected = vec![sprite.image_id];
             for (layer, count) in [(&ship.glow, &mut glows), (&ship.lights, &mut lights)] {
-                if let Some(Ok(layer)) = layer {
-                    expected.push(layer.image_id);
-                    *count += 1;
-                }
+                *count += usize::from(matches!(layer, Some(Ok(_))));
             }
-            if sprite_ids(&browser) != expected {
-                problems_seen.push(format!("shïp {} draws the wrong sprites", ship.id.0));
-            }
+            let mut wrong_sprites = false;
             let mut frames = BTreeSet::new();
-            for _ in 0..sprite.frames.get() {
+            for tick in 0..u64::from(sprite.frames.get()) {
+                wrong_sprites |= sprite_ids(&browser) != expected_sprites(&ship, sprite, tick);
                 frames.insert(browser.frame().expect("a frame"));
                 browser.tick(Duration::from_secs(1) / 30);
+            }
+            if wrong_sprites {
+                problems_seen.push(format!("shïp {} draws the wrong sprites", ship.id.0));
             }
             if frames.len() != usize::from(sprite.frames.get()) {
                 problems_seen.push(format!(

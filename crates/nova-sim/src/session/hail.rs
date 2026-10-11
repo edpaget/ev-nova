@@ -745,9 +745,9 @@ mod tests {
         inherited.ship_records[0].inherent_govt = Some(MUTED);
         let inheriting = targeting(&inherited);
         for (mut session, catalog) in [
-            (disabled, &catalog),
-            (mute, &catalog),
-            (inheriting, &inherited),
+            (Box::new(disabled), &catalog),
+            (Box::new(mute), &catalog),
+            (Box::new(inheriting), &inherited),
         ] {
             let (hailed, asked) = hail_with(&mut session, catalog, &opening(0));
             assert_eq!(hailed, Err(HailRefusal::NoResponse));

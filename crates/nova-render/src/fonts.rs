@@ -2,10 +2,12 @@
 //!
 //! The renderer never scans the system's fonts: it draws only the faces
 //! it is handed in [`FontFaces`], so text looks the same on every machine.
-//! [`FALLBACK_FONT`], compiled in, draws Geneva, and Charcoal when the
-//! player's own Charcoal (`nova_data::fonts`) is missing or does not load.
-//! A face that does not load is never drawn in: [`face_for`] picks among
-//! the faces that did.
+//! There are three faces. [`FALLBACK_FONT`], compiled in, draws Geneva,
+//! and Charcoal when the player's own Charcoal (`nova_data::fonts`) is
+//! missing or does not load. [`SERIF_FONT`], compiled in, draws Times
+//! (QuickDraw font 20), which EV Nova.app does not ship. A face that does
+//! not load is never drawn in: [`face_for`] picks among the faces that
+//! did.
 
 use std::sync::Arc;
 
@@ -15,28 +17,50 @@ use nova_view::Font;
 /// Regular, under the SIL Open Font License 1.1 (`fonts/OFL.txt`).
 pub const FALLBACK_FONT: &[u8] = include_bytes!("../fonts/NotoSans-Regular.ttf");
 
-/// The font files the adapter loads: the fallback face, and Charcoal's when
-/// the game data has it.
+/// The bundled stand-in for font 20, Times: Noto Serif Regular, under the
+/// SIL Open Font License 1.1 (`fonts/NotoSerif-OFL.txt`).
+pub const SERIF_FONT: &[u8] = include_bytes!("../fonts/NotoSerif-Regular.ttf");
+
+/// The font files the adapter loads: the fallback face, the serif when
+/// there is one, and Charcoal's when the game data has it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FontFaces {
     charcoal: Option<Arc<[u8]>>,
     fallback: Arc<[u8]>,
+    serif: Option<Arc<[u8]>>,
 }
 
 impl FontFaces {
-    /// Just `fallback`, with no Charcoal.
+    /// Just `fallback`, with no Charcoal and no serif.
     #[must_use]
     pub fn new(fallback: impl Into<Arc<[u8]>>) -> Self {
         Self {
             charcoal: None,
             fallback: fallback.into(),
+            serif: None,
         }
     }
 
-    /// Just the bundled [`FALLBACK_FONT`].
+    /// The bundled faces: [`FALLBACK_FONT`] and, for Times,
+    /// [`SERIF_FONT`].
     #[must_use]
     pub fn bundled() -> Self {
-        Self::new(FALLBACK_FONT)
+        Self::new(FALLBACK_FONT).with_serif(SERIF_FONT)
+    }
+
+    /// These faces with the serif's font file, `bytes`, which draws Times.
+    #[must_use]
+    pub fn with_serif(self, bytes: impl Into<Arc<[u8]>>) -> Self {
+        Self {
+            serif: Some(bytes.into()),
+            ..self
+        }
+    }
+
+    /// The serif's font file, if there is one.
+    #[must_use]
+    pub fn serif(&self) -> Option<&Arc<[u8]>> {
+        self.serif.as_ref()
     }
 
     /// These faces with Charcoal's font file, `bytes`.
@@ -68,6 +92,8 @@ pub enum Face {
     Charcoal,
     /// The bundled fallback.
     Fallback,
+    /// The bundled serif.
+    Serif,
 }
 
 /// Which of the [`FontFaces`] loaded a face.
@@ -77,16 +103,20 @@ pub struct Loaded {
     pub charcoal: bool,
     /// The fallback font file did.
     pub fallback: bool,
+    /// The serif's font file did.
+    pub serif: bool,
 }
 
 /// The face that draws `font`, given which faces `loaded`: Charcoal draws
-/// in its own face when that face loaded, and everything else in the
-/// fallback. When the fallback did not load, everything draws in Charcoal;
-/// when neither did, nothing draws (`None`).
+/// in its own face when that face loaded, Times in the serif when it
+/// loaded, and everything else in the fallback. When the fallback did not
+/// load, everything else draws in Charcoal; when neither did, nothing
+/// draws (`None`).
 #[must_use]
 pub fn face_for(font: Font, loaded: Loaded) -> Option<Face> {
     match font {
         Font::Charcoal if loaded.charcoal => Some(Face::Charcoal),
+        Font::Times if loaded.serif => Some(Face::Serif),
         _ if loaded.fallback => Some(Face::Fallback),
         _ if loaded.charcoal => Some(Face::Charcoal),
         _ => None,
@@ -104,10 +134,12 @@ mod tests {
         let both = Loaded {
             charcoal: true,
             fallback: true,
+            serif: false,
         };
         let fallback_only = Loaded {
             charcoal: false,
             fallback: true,
+            serif: false,
         };
         assert_eq!(face_for(Font::Charcoal, both), Some(Face::Charcoal));
         assert_eq!(
@@ -123,6 +155,7 @@ mod tests {
         let charcoal_only = Loaded {
             charcoal: true,
             fallback: false,
+            serif: false,
         };
         assert_eq!(
             face_for(Font::Charcoal, charcoal_only),
@@ -136,17 +169,60 @@ mod tests {
         let none = Loaded {
             charcoal: false,
             fallback: false,
+            serif: false,
         };
         assert_eq!(face_for(Font::Charcoal, none), None);
         assert_eq!(face_for(Font::Geneva, none), None);
     }
 
     #[test]
-    fn the_bundled_faces_are_the_fallback_alone() {
+    fn times_draws_in_the_serif_when_it_loaded() {
+        let loaded = |charcoal, fallback, serif| Loaded {
+            charcoal,
+            fallback,
+            serif,
+        };
+        let all = loaded(true, true, true);
+        assert_eq!(face_for(Font::Times, all), Some(Face::Serif));
+        assert_eq!(face_for(Font::Geneva, all), Some(Face::Fallback));
+        assert_eq!(face_for(Font::Charcoal, all), Some(Face::Charcoal));
+        assert_eq!(
+            face_for(Font::Times, loaded(true, true, false)),
+            Some(Face::Fallback)
+        );
+        assert_eq!(
+            face_for(Font::Times, loaded(true, false, false)),
+            Some(Face::Charcoal)
+        );
+        assert_eq!(face_for(Font::Times, loaded(false, false, false)), None);
+        let serif_only = loaded(false, false, true);
+        assert_eq!(face_for(Font::Times, serif_only), Some(Face::Serif));
+        assert_eq!(face_for(Font::Geneva, serif_only), None);
+    }
+
+    #[test]
+    fn the_bundled_faces_are_the_fallback_and_the_serif() {
         let faces = FontFaces::bundled();
         assert_eq!(&faces.fallback()[..], FALLBACK_FONT);
+        assert_eq!(faces.serif().map(|serif| &serif[..]), Some(SERIF_FONT));
         assert_eq!(faces.charcoal(), None);
-        assert_eq!(faces, FontFaces::new(FALLBACK_FONT));
+        assert_eq!(faces, FontFaces::new(FALLBACK_FONT).with_serif(SERIF_FONT));
+    }
+
+    #[test]
+    fn the_bundled_serif_is_a_usable_outline_font() {
+        assert_eq!(check_sfnt(SERIF_FONT), Ok(()));
+        assert_eq!(SERIF_FONT.len(), 482_540);
+    }
+
+    #[test]
+    fn the_serif_is_added_beside_the_fallback() {
+        let plain = FontFaces::new(&b"fallback"[..]);
+        assert_eq!(plain.serif(), None);
+        let faces = plain.with_serif(&b"serif"[..]);
+        assert_eq!(&faces.fallback()[..], b"fallback");
+        assert_eq!(faces.serif().map(|s| &s[..]), Some(&b"serif"[..]));
+        assert_eq!(faces.charcoal(), None);
     }
 
     #[test]

@@ -26,10 +26,10 @@
 //! | [`FighterRecall`](RuleKey::FighterRecall) | `fighter_recall` | fighters out follow a jump when they hold a jump's fuel, the rest are abandoned, and they stay out while the player is landed ([`Session`](crate::Session)) | every fighter out goes back into its bay on arrival and on landing\* |
 //! | [`HireRequire`](RuleKey::HireRequire) | `hire_require` | hiring ignores a ship's `Require`, which hides it only with `Flags3` 0x0200 ([`Session`](crate::Session)) | an unmet `Require` makes a listed ship greyed and refused\* |
 //! | [`TakeOffPay`](RuleKey::TakeOffPay) | `take_off_pay` | each take-off pays every hired escort a day's wage ([`Session`](crate::Session)) | wages are paid only for a jump's days; the days a stay passes pay none\* |
-//! | [`StayDays`](RuleKey::StayDays) | `stay_days` | leaving the spaceport passes days: half as many as escorts sold or upgraded, a day if an outfit was bought or sold, four if a ship was bought, and the take-off's own day (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa, @0x6020e, `_PlayerLandOnStellar` @0x63440; [`Session`](crate::Session)) | a stay passes no days: only a jump's and a gate's like a jump pass‡‡‡‡ |
-//! | [`StoryReentry`](RuleKey::StoryReentry) | `story_reentry` | an event a script raises is dispatched depth first, before the script's next operator (`_EvalSetExp` @0x150fc; `_DoMissionAccept` @0x15407; @0x159a3, @0x159a8; see [`story`](crate::story)) | it waits until the script has settled, then dispatches first in, first out§§§§ |
+//! | [`StayDays`](RuleKey::StayDays) | `stay_days` | leaving the spaceport passes days: half as many as escorts sold or upgraded, a day if an outfit was bought or sold, four if a ship was bought, and the take-off's own day (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa, @0x6020e, `_PlayerLandOnStellar` @0x63440; [`Session`](crate::Session)) | a stay passes no days: only a jump's and a gate's like a jump pass\*\*\*\*\*\* |
+//! | [`StoryReentry`](RuleKey::StoryReentry) | `story_reentry` | an event a script raises is dispatched depth first, before the script's next operator (`_EvalSetExp` @0x150fc; `_DoMissionAccept` @0x15407; @0x159a3, @0x159a8; see [`story`](crate::story)) | it waits until the script has settled, then dispatches first in, first out†††††† |
 //! | [`DestroyInvincible`](RuleKey::DestroyInvincible) | `destroy_invincible` | `Y` leaves an invincible stellar (`Strength` 0 or -1) as it was, as `_StellarIsDestroyed` holds none destroyed (@0x4e1a; see [`story`](crate::story)) | `Y` destroys any stellar: "Yxxx - destroy stellar ID xxx" |
-//! | [`DayRolls`](RuleKey::DayRolls) | `day_rolls` | the shop and hire rolls are drawn once a day in the daily step, and a landing keeps them (`_IncrementGameTime` @0xb7c4-0xb833; see [`story`](crate::story)) | a landing forgets them, and each is drawn the first time a list asks for it¶¶¶¶ |
+//! | [`DayRolls`](RuleKey::DayRolls) | `day_rolls` | the shop and hire rolls are drawn once a day in the daily step, and a landing keeps them (`_IncrementGameTime` @0xb7c4-0xb833; see [`story`](crate::story)) | a landing forgets them, and each is drawn the first time a list asks for it‡‡‡‡‡‡ |
 //! | [`YOnDestroy`](RuleKey::YOnDestroy) | `y_on_destroy` | `Y` runs no `OnDestroy`: only a shot's destruction does (`_EvalSetExp` @0x15a38-0x15ae6, `_CheckShotProximities` @0x374a9; see [`story`](crate::story)) | `Y` runs `OnDestroy` as it destroys a whole stellar: "evaluated when the stellar is destroyed" |
 //! | [`DeadTypeFallback`](RuleKey::DeadTypeFallback) | `dead_type_fallback` | from the next rebuild point until a flight frame sees it whole, a destroyed stellar whose `DeadType` has no readable sheet draws graphic type 0, `spïn` 1000 (`_HandleStellarSystemVisibility` @0x32f0f-0x32f2f, @0x33244-0x332d0; `_HandleStellarSprites` @0x2e77b-0x2e7e5; see [`story`](crate::story)) | it keeps its `Type` sheet throughout: "-1: Don't display different graphic type when destroyed" |
 //! | [`LandingDistance`](RuleKey::LandingDistance) | `landing_distance` | the ship lands when it is strictly within trunc(1.75 × the `Type` frame's width) of the stellar's centre on each axis; the width is 150 while the `Type` master is not loaded (a destroyed stellar from a rebuild point until a flight frame loads it again, or a `Type` sheet that cannot be read) and 32 when its `spïn` gives no frame count, and the reach is 75 when the stellar's slot shows no frame (`_HandlePlayerDockRequest` @0x66cc7-0x66cfd, @0x6773a-0x677b2; `_GetStellarSpriteXSize` @0xac91-0xad2d; see [`landing`](crate::landing)) | within half the larger side of the `Type` frame, as a circle, or 32 with no sprite\* |
@@ -63,21 +63,33 @@
 //! | [`ScriptSound`](RuleKey::ScriptSound) | `script_sound` | one mission sound at a time: `P` sounds on the next flight tick, the last one before it counting, and not while the last is still playing ([`ScriptEffectRules`](crate::ScriptEffectRules)) | every `P` sounds at once, landed or not\* |
 //! | [`BuyRandom`](RuleKey::BuyRandom) | `buy_random` | an outfit's `BuyRandom` below 1 is never for sale and a ship's below 0 always (`_LoadObjectData` @0x78b8d, @0x7a340; [`Session`](crate::Session)) | an outfit's below 1 or above 100 always, and a ship's 0 or below never† |
 //! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b; [`Session`](crate::Session)) | tribbles goods grow only into free space, and perishable goods always decay‡ |
-//! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; [`Session`](crate::Session)) | a launcher cannot be sold while any of its ammunition is held§ |
-//! | [`RaisedMax`](RuleKey::RaisedMax) | `raised_max` | a `ModType` 27 outfit multiplies its target's `Max` by the outfits owned times their mods naming it, at least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), and one of n cannot be sold while the target owned exceeds its raw `Max` x (n - 1) (`_DoOutfitDialog` @0x5c7be-0x5ca6f; [`Session`](crate::Session)) | the multiplier is the items owned with such a mod, at least 1, and a sale is refused only while the target owned exceeds that maximum after it¶ |
+//! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; [`Session`](crate::Session)); in a counted sale, (n - 1) is as `counted_sale` says | a launcher cannot be sold while any of its ammunition is held§ |
+//! | [`RaisedMax`](RuleKey::RaisedMax) | `raised_max` | a `ModType` 27 outfit multiplies its target's `Max` by the outfits owned times their mods naming it, at least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), and one of n cannot be sold while the target owned exceeds its raw `Max` x (n - 1) (`_DoOutfitDialog` @0x5c7be-0x5ca6f; [`Session`](crate::Session)); in a counted sale, (n - 1) is as `counted_sale` says | the multiplier is the items owned with such a mod, at least 1, and a sale is refused only while the target owned exceeds that maximum after it¶ |
 //! | [`EventPrice`](RuleKey::EventPrice) | `event_price` | an active event prices its commodity at `BasePrice` + `PriceDelta`, whatever the level, the highest ID winning, and lists a commodity not traded there (`_DoTradeDialog` @0x5dcf8-0x5dd58; [`Session`](crate::Session)) | the level price plus every event's `PriceDelta`\*\* |
 //! | [`PurchaseCargo`](RuleKey::PurchaseCargo) | `purchase_cargo` | a ship purchase keeps each commodity's share A/B (the new ship's cargo space over that plus the trader escorts' `Holds`, uncapped) and loses that share of each `jünk`, then trims the commodities to the fleet's holds (`_DestroyPartialFleetCargo` @0xcd32-0xcff6, `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c; [`Session`](crate::Session)) | it keeps what fits the new ship's own cargo space, goods in order†† |
 //! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; [`Session`](crate::Session)) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
 //! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; [`Session`](crate::Session)) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
 //! | [`OutfitLimit`](RuleKey::OutfitLimit) | `outfit_limit` | a map (`ModType` 16) or clean-record (`ModType` 21) outfit is refused while the last outfit bought since the outfitter opened was of its kind; any other buy, or opening the outfitter again, lifts it (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, `_GrantOutfitItem` @0x44d67-0x44f8b, `_DoOutfitDialog` @0x5bb37-0x5bb44; [`Session`](crate::Session)) | no limit§§ |
-//! | [`OutfitRefund`](RuleKey::OutfitRefund) | `outfit_refund` | an outfit sold while its count owned is above the count owned when the outfitter opened (one bought since) refunds its full price, any other half, item by item in a counted sale (`_DoOutfitDialog` @0x5badd-0x5bafa, @0x5ceee-0x5cf08; [`Session`](crate::Session)) | every sale refunds half§§§ |
+//! | [`OutfitRefund`](RuleKey::OutfitRefund) | `outfit_refund` | an outfit sold while its count owned is above the count owned when the outfitter opened (one bought since) refunds its full price, any other half, item by item in a counted sale (`_DoOutfitDialog` @0x5badd-0x5bafa, @0x5ceee-0x5cf08; [`Outfitter::refund`](crate::Outfitter::refund)) | every sale refunds half§§§ |
 //! | [`OutfitCount`](RuleKey::OutfitCount) | `outfit_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog at the most the order allows, and buys or sells the count confirmed (`_DoOutfitDialog` @0x5c0c0-0x5c1aa, @0x5c5e3-0x5c628; `_DoQuantityDialog` @0x56d5b; [`Outfitter::count_asked`](crate::Outfitter::count_asked)) | Alt changes nothing: each click moves one¶¶¶ |
 //! | [`SaleMass`](RuleKey::SaleMass) | `sale_mass` | only an outfit of negative mass is refused, when the free mass clamped at 0 plus its mass is below 0; one of mass 0 or more sells while the free mass is below 0 (`_DoOutfitDialog` @0x5c735-0x5c747, `_ShipFreeMass` @0xb506-0xb50a; [`Session`](crate::Session)) | a sale is refused whenever it would leave the free mass below 0\*\*\*\* |
+//! | [`SaleRefusal`](RuleKey::SaleRefusal) | `sale_refusal` | Sell is enabled by the Sell flag alone (some owned, not `CANNOT_SELL`). The free mass, a raised `Max` and a launcher's ammunition refuse only inside the sell loop. The first such refusal of an order shows its `STR#` 2002 #207-#212 words once in `DLOG` 3003, and nothing is sold. A counted sale runs on past it, each later pass refused silently; the sales before it stand (@0x5d19c-0x5d1b1) (`_DoOutfitDialog` @0x5c563-0x5c595, @0x5c735-0x5ce6c, flag -0x63e @0x5c6ca; `_OutfitFilter` @0x5808c-0x580b1; `_ShowTextDialog` @0x5a8cf; [`Outfitter::can`](crate::Outfitter::can) / [`Outfitter::sale_alert`](crate::Outfitter::sale_alert)) | Sell is greyed by any sale check too, and the info box words the first one; nothing is shown in a dialog‡‡‡‡ |
+//! | [`CountedSale`](RuleKey::CountedSale) | `counted_sale` | each pass of a counted sale checks the order as a whole: a raised `Max` refuses while the target owned exceeds its raw `Max` x (owned now - the whole count) (@0x5c82d-0x5c85e), and a launcher while the rounds held exceed `MaxAmmo` x (owned now - the pass index - 1) (@0x5cb9c-0x5cbc7), signed, so an Alt sale is refused sooner than as many single clicks; only the engine readings of `raised_max` and `launcher_sale` read it (`_DoOutfitDialog`; [`Outfitter::check_at`](crate::Outfitter::check_at)) | each pass is checked as one sale, (owned now - 1)¶¶¶¶ |
+//! | [`RelistedSale`](RuleKey::RelistedSale) | `relisted_sale` | a sale that changes the listing (`_SetupPortAvailableItems` true, @0x5d00a) resets the selection to `oütf` 128 and the loop index to 0, or 512 with nothing listed, so the passes left check and sell `oütf` 128, listed or not, and can outrun the count (`_DoOutfitDialog` @0x5d017-0x5d150, @0x5d164-0x5d1b1; [`Session`](crate::Session)) | the ordered outfit and the pass index are kept††††† |
+//! | [`RelistedSelection`](RuleKey::RelistedSelection) | `relisted_selection` | an order that changes the listing (`_SetupPortAvailableItems` true after the buy loop @0x5c314 or a sale @0x5d00a) selects `oütf` 128 with no cell highlighted (`*0xded58` = 0, `*0xded5c` = -1, @0x5c32c-0x5c33b, @0x5d01c-0x5d02b). Buy and Sell then answer for it, listed or not (`_OutfitFilter` @0x5806f-0x580ca), and the picture, description and info box are blank. With nothing listed the outfitter closes (-0x63d @0x5c40c, @0x5d128, @0x5da33; [`Session`](crate::Session)) | the selected cell is kept and the outfitter stays open§§§§§ |
+//! | [`GridSelection`](RuleKey::GridSelection) | `grid_selection` | the outfitter's selection is the selected outfit (`*0xded58`), which can be none, and its description is read only when it changes: a press on an empty cell position in the grid selects nothing (`*0xded58` = `*0xded5c` = -1, @0x58632-0x58648), greying Buy and Sell and blanking the picture, info box and description (@0x588e4-0x588fe; `_OutfitDialogUpdate` @0x5789b-0x578a5), and an arrow that leaves the selected outfit as it was reads no description (@0x58442-0x5844f) while the picture and info box follow the highlighted cell (@0x57949-0x579d6) (nova-view's `OutfitterScreen`) | the selection is the highlighted cell: a press on an empty cell is ignored, and the description follows the cell¶¶¶¶¶ |
+//! | [`MassPrice`](RuleKey::MassPrice) | `mass_price` | an outfit flagged 0x0200 costs max(`Cost`, `Cost` × the flown class's `Mass`), so `Cost` on a class of `Mass` 0 or less, and a `Cost` of 0 or less costs 0, flag or not (`_AdjustedItemCost` @0x5869-0x5895; `_PlayerShipTradeInPrice` @0xb0e3-0xb106; [`unit_price`](crate::outfitter::unit_price)) | `Cost` × `Mass`, never below 0§§§§ |
+//! | [`ScaledMass`](RuleKey::ScaledMass) | `scaled_mass` | an outfit flagged 0x0400 of `Mass` above 0 weighs max(`Mass`, `Mass` × the class's `Mass` / 100, truncated), so its own `Mass` on a class of `Mass` below 100, in the outfitter, the free mass, the grants and the Shipyard Info Space (`_AdjustedItemMass` @0x2889-0x28c2; `_ShipFreeMass` @0xb4c1-0xb4ed; [`unit_mass`](crate::outfitter::unit_mass)) | `Mass` × the class's `Mass` / 100, truncated, for `Mass` above 0‡‡‡‡‡ |
 //! | [`TradeInOutfits`](RuleKey::TradeInOutfits) | `trade_in_outfits` | a ship's trade-in counts every outfit owned but a persistent one, an unsellable one included, at half its line (`_PlayerShipTradeInPrice` @0xb0d5-0xb0e1, @0xb109-0xb11f; [`Session`](crate::Session)) | an unsellable outfit is left out too†††† |
 //! | [`TradeLot`](RuleKey::TradeLot) | `trade_lot` | a plain Buy at the exchange moves min(trunc(cash / price), 10, free) tons and a plain Sell min(held, 10); Option (Alt here) asks for a count (see [`TradeCount`](RuleKey::TradeCount)) (`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa; [`Session`](crate::Session)) | a plain trade moves 1 ton¶¶ |
 //! | [`TradeQuotient`](RuleKey::TradeQuotient) | `trade_quotient` | the most a buy can move is min(trunc(f32(cash) / f32(price)), free), in single floats, made 32000 from 32001 up, so above 2^24 cash it can buy a ton more than the cash covers and leave the cash below 0 (`_DoTradeDialog` @0x5e21d-0x5e234, @0x5e23a-0x5e24c; [`Market::row_max`](crate::Market::row_max)) | exact integer division\*\*\* |
-//! | [`TradeCount`](RuleKey::TradeCount) | `trade_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog, opening at the most the row offers, and trades the count confirmed (`_DoQuantityDialog` @0x56d5b; `_DoTradeDialog` @0x5e211, @0x5e45c; [`Market::trade_count`](crate::Market::trade_count)) | Alt trades the most at once††† |
-//! | [`TradeDebt`](RuleKey::TradeDebt) | `trade_debt` | a buy divides the cash, signed, by the price, so with cash below 0 a `jünk` priced exactly at the cash is bought, 1 ton, leaving the cash at 0; Buy is refused while cash < price under both readings (`_DoTradeDialog` @0x5e21d-0x5e234; `_CanBuyGoods` @0xccec-0xcd31; [`Market::trade_debt`](crate::Market::trade_debt)) | cash below 0 counts as none‡‡‡ |
+//! | [`TradeCount`](RuleKey::TradeCount) | `trade_count` | Option (Alt here) with Buy or Sell asks for a count in the quantity dialog, opening at the most the row offers, and trades the count confirmed (`_DoQuantityDialog` @0x56d5b; `_DoTradeDialog` @0x5e211, @0x5e45c; [`Market::option_asks_count`](crate::Market::option_asks_count)) | Alt trades the most at once††† |
+//! | [`TradeDebt`](RuleKey::TradeDebt) | `trade_debt` | a buy divides the cash, signed, by the price, so with cash below 0 a `jünk` priced exactly at the cash is bought, 1 ton, leaving the cash at 0; Buy is refused while cash < price under both readings (`_DoTradeDialog` @0x5e21d-0x5e234; `_CanBuyGoods` @0xccec-0xcd31; [`Market::tons`](crate::Market::tons)) | cash below 0 counts as none‡‡‡ |
+//! | [`TechLevel`](RuleKey::TechLevel) | `tech_level` | an outfit of `TechLevel` below 0 or exactly 32767, and a ship of one below 0, is never sold by tech (`_SetupPortAvailableItems` @0xbf88-0xbf9d, `_SetupPortAvailableShipTypes` @0xbc4f-0xbc52; [`wares::outfit_tech_allows`](crate::wares::outfit_tech_allows), [`wares::ship_tech_allows`](crate::wares::ship_tech_allows)); and `_CanBuyOutfitItem` tests an outfit's Buy apart: one of `TechLevel` -1 always passes, any other passes at or below the stellar's tech or by a slot, with no sign or 0x7fff test (@0x4e7ff-0x4e83d; [`wares::outfit_buy_tech_allows`](crate::wares::outfit_buy_tech_allows)) | any `TechLevel` at or below the stellar's, or equal to a slot, is sold, and can be bought, by that one test ([`wares::by_tech_level`](crate::wares::by_tech_level)) |
+//! | [`PurchaseCarry`](RuleKey::PurchaseCarry) | `purchase_carry` | a ship purchase keeps every persistent outfit (`Flags` 0x0004) whatever its `Max` and mass, sells none back, and adds the new class's default items on top (`_DoShipyardDialog` @0x5ee1b-0x5ee97; [`Session`](crate::Session)) | each is kept up to its `Max` and while the new ship's free mass holds it, by ascending ID, and the rest sold back at the outfitter's rate on the old ship's mass\*\*\*\*\* |
+//! | [`ShipInfoRounding`](RuleKey::ShipInfoRounding) | `ship_info_rounding` | the Shipyard Info panel reads `Speed` / 100 and `Accel` / 10000 back from the loader's single floats, so `Speed` 190 draws 189 and `Accel` 130 and 250 rate a step higher (`_LoadObjectData` @0x7a0b3-0x7a0ef, `_ShipDescDialogUpdate` @0x4fbf0-0x4fbfe, @0x4fc74-0x4fd05; [`ShipSpecs`](crate::ShipSpecs)) | `Speed` as recorded and `Accel` rated on whole numbers\* |
+//! | [`StaleSecondary`](RuleKey::StaleSecondary) | `stale_secondary` | a refit outside the shops (`G`, `D`, a script's change of ship, boarding) leaves the secondary selected as it is, one the ship no longer carries too: it is still named and fires nothing, as `_EvalSetExp` and `_SystemInfoToShipStats` never write it and `_DrawStatusWeap` draws it (@0x4c16c-0x4c1b9; [`Session`](crate::Session)) | a refit lets go of a secondary the ship no longer carries\* |
+//! | [`SecondarySale`](RuleKey::SecondarySale) | `secondary_sale` | the outfitter's sale lets go of the secondary selected when the sold outfit's own count falls to 0 and one of its `ModType` 1 slots names it, even with another outfit still mounting it (`_DoOutfitDialog` @0x5cf73-0x5cf8c, @0x5ce82; [`Session`](crate::Session)) | the sale lets it go when it leaves the ship not carrying it\* |
 //! | [`RepeatMissionFailure`](RuleKey::RepeatMissionFailure) | `repeat_mission_failure` | an unabortable mission failed by its deadline stays active and failed, and at its return landing runs `OnFailure` a second time and applies the failure records (`_QuickMissionFailure` @0x99d1b-0x99dab, `_MissionLandCheck` @0xa1a92, `_DoMissionFailure` @0xa0285; see [`mission`](crate::mission)) | its return landing frees it without running `OnFailure` again, the failure records still applied once; a mission failed by `F` runs `OnFailure` once at its return either way\* |
 //! | [`StartActiveMission`](RuleKey::StartActiveMission) | `start_active_mission` | `S` accepts a mission active already into another slot (`_EvalSetExp` @0x153b9-0x15418; see [`mission`](crate::mission)) | `S` leaves an active mission and the slots as they are\* |
 //! | [`PayMillions`](RuleKey::PayMillions) | `pay_millions` | a mission text's `<PAY>` of a million or more reads in millions to two places, truncated, "1.23M" (`_StrcatCommaNumber` @0x8990-0x8aa3; see [`text_tags`](crate::text_tags)) | it reads in full with its commas, "1,234,567"\* |
@@ -94,7 +106,8 @@
 //! `remove_refund`, `refit_reserves`, `purchase_paint_order`,
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
 //! `ship_change_reserves`, `move_arrival`, `move_keep_flag`,
-//! `script_sound`, `landing_distance`, `repeat_mission_failure`,
+//! `script_sound`, `ship_info_rounding`, `stale_secondary`,
+//! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
@@ -173,16 +186,62 @@
 //! other reading is the port's earlier behaviour, leaving unsellable
 //! outfits out of the trade-in too, not anything the Bible says.
 //!
-//! ‡‡‡‡ The Bible says nothing of days passing in port. The other reading
-//! is the port's earlier behaviour, no days passing, not anything the
+//! ‡‡‡‡ The Bible says nothing of when Sell is enabled or how a refused
+//! sale is worded. The other reading is the port's earlier behaviour,
+//! Sell greyed and the refusal worded in the info box, not anything the
 //! Bible says.
 //!
-//! §§§§ The Bible says nothing of when the events a script raises are
+//! §§§§ The Bible gives the price as the ship class's `Mass` times the
+//! item's `Cost`, and says nothing of a `Cost` or `Mass` of 0 or less.
+//! Its reading here is that product never below 0, the port's earlier
+//! price, so a negative `Cost` on a class of negative `Mass` is priced
+//! at the positive product.
+//!
+//! ‡‡‡‡‡ The Bible gives the mass as the ship class's `Mass` times the
+//! item's `Mass`, divided by 100, for positive-mass items ("Only works
+//! for positive-mass items"), and gives no floor. Its reading here is
+//! that product, the port's earlier mass, so a flagged outfit can weigh
+//! less than its own `Mass`, and 0 or a negative mass on a class of
+//! `Mass` 0 or less.
+//!
+//! ¶¶¶¶ The Bible says nothing of a counted sale. The other reading is
+//! the port's earlier behaviour, each pass of a counted sale checked as a
+//! single sale, not anything the Bible says.
+//!
+//! ††††† The Bible says nothing of a counted sale. The other reading is
+//! the port's earlier behaviour, the ordered outfit sold for each pass
+//! whatever the listing does, not anything the Bible says. By the engine
+//! reading the port also ends an order once it has restarted 512 times,
+//! where the original has no guard and would sell forever: a deliberate
+//! divergence that only a plug-in `OnSell` granting the outfit back can
+//! reach. The ceiling is the only guard, with no repeat check, as
+//! `OnSell`'s random draws and state outside any cheap key can end an
+//! order that revisits an earlier restart's state.
+//!
+//! §§§§§ The Bible says nothing of the outfitter's selection. The other
+//! reading is the port's earlier behaviour, the selected cell kept and
+//! the outfitter left open after any order, not anything the Bible says.
+//!
+//! ¶¶¶¶¶ The Bible says nothing of the outfitter's grid. The other
+//! reading is the port's earlier behaviour, a press on an empty cell
+//! ignored and the description read whenever the highlighted cell shows
+//! an outfit not already described, not anything the Bible says.
+//!
+//! \*\*\*\*\* The Bible says only that a persistent outfit "stays with
+//! you when you trade ships", as the engine has it. The other reading is
+//! the port's earlier behaviour, its first shipyard's carry, not anything
+//! the Bible says.
+//!
+//! \*\*\*\*\*\* The Bible says nothing of days passing in port. The
+//! other reading is the port's earlier behaviour, no days passing, not
+//! anything the Bible says.
+//!
+//! †††††† The Bible says nothing of when the events a script raises are
 //! handled. The other reading is the port's earlier after-settle order,
 //! a script's moves applied once it has settled, not anything the Bible
 //! says.
 //!
-//! ¶¶¶¶ The Bible says only that `BuyRandom` and `HireRandom` are a
+//! ‡‡‡‡‡‡ The Bible says only that `BuyRandom` and `HireRandom` are a
 //! percent chance, nothing of when they are drawn. The other reading is
 //! the port's earlier behaviour, the rolls drawn afresh after each
 //! landing, not anything the Bible says.
@@ -714,7 +773,8 @@ rule_keys! {
     /// ammunition is held, whatever its `MaxAmmo`. The Bible says nothing
     /// of it, so the other reading is the phase's first wording of the
     /// rule, not anything the Bible says (see
-    /// [`outfitter`](crate::outfitter)).
+    /// [`outfitter`](crate::outfitter)). In a counted sale, (n - 1) is as
+    /// [`CountedSale`](RuleKey::CountedSale) says.
     LauncherSale => "launcher_sale",
     /// How an `oütf` of `ModType` 27 raises the `Max` of the outfit its
     /// `ModVal` names, and when one can be sold. By the engine, the
@@ -727,7 +787,8 @@ rule_keys! {
     /// the Bible, the multiplier is the number of owned items with any
     /// such mod, at least 1, and a sale is refused while the target owned
     /// exceeds that maximum after the sale (see
-    /// [`outfitter`](crate::outfitter)).
+    /// [`outfitter`](crate::outfitter)). In a counted sale, (n - 1) is as
+    /// [`CountedSale`](RuleKey::CountedSale) says.
     RaisedMax => "raised_max",
     /// How an active `öops` event prices its commodity at its stellar. By
     /// the engine, the price is the commodity's `BasePrice` plus the
@@ -800,7 +861,7 @@ rule_keys! {
     /// @0xdd128); a counted sale does so item by item. By the other
     /// reading, every sale refunds half. The Bible says nothing of it, so
     /// the other reading is the port's earlier behaviour, not anything the
-    /// Bible says (see [`outfitter::refund`](crate::outfitter::refund)).
+    /// Bible says (see [`Outfitter::refund`](crate::Outfitter::refund)).
     OutfitRefund => "outfit_refund",
     /// What Option (Alt here) does with Buy or Sell at the outfitter. By
     /// the engine, it asks for a count in the quantity dialog
@@ -825,6 +886,123 @@ rule_keys! {
     /// earlier behaviour, not anything the Bible says (see
     /// [`outfitter`](crate::outfitter)).
     SaleMass => "sale_mass",
+    /// When Sell is enabled at the outfitter, and where a sale refused for
+    /// the free mass, a raised `Max` or a launcher's ammunition is worded.
+    /// By the engine, the Sell flag alone enables Sell (some owned and not
+    /// `CANNOT_SELL`, `_DoOutfitDialog` @0x5c563-0x5c595, `_OutfitFilter`
+    /// @0x5808c-0x580b1); those three refuse only inside the sell loop
+    /// (@0x5c735-0x5ce6c), whose first refusal of an order shows its
+    /// `STR#` 2002 #207-#212 words once (flag -0x63e, @0x5c6ca) in
+    /// `DLOG` 3003 (`_ShowTextDialog` @0x5a8cf), and the info box never
+    /// words them. By the other reading, any of them greys Sell and the
+    /// info box words the first, with no dialog. The Bible says nothing
+    /// of it, so the other reading is the port's earlier behaviour, not
+    /// anything the Bible says (see [`outfitter`](crate::outfitter)).
+    SaleRefusal => "sale_refusal",
+    /// How each pass of a counted sale checks a raised `Max` and a
+    /// launcher's ammunition. By the engine, each pass checks the order as
+    /// a whole: `_DoOutfitDialog` refuses a raiser while the target owned
+    /// exceeds its raw `Max` x (owned now - the whole count, -0x68c)
+    /// (@0x5c82d-0x5c85e), and a launcher while the rounds held exceed
+    /// `MaxAmmo` x (owned now - the pass index, -0x63a, - 1)
+    /// (@0x5cb9c-0x5cbc7), owned now falling by one with each sale
+    /// (@0x5cf22), signed and with no floor; so an Alt sale is refused
+    /// sooner than as many single clicks. By the other reading, each pass
+    /// is checked as one sale, (owned now - 1). A count of 1 at pass 0 is
+    /// the same by both. Only the engine readings of
+    /// [`RaisedMax`](RuleKey::RaisedMax) and
+    /// [`LauncherSale`](RuleKey::LauncherSale) read it. The Bible says
+    /// nothing of it, so the other reading is the port's earlier
+    /// behaviour, not anything the Bible says (see
+    /// [`outfitter`](crate::outfitter)).
+    CountedSale => "counted_sale",
+    /// Which outfit, and from which index, the passes of a counted sale
+    /// go on after a sale that changes the listing. By the engine, after
+    /// each sale `_DoOutfitDialog` rebuilds the list
+    /// (`_SetupPortAvailableItems` @0x5d00a), and when it changed
+    /// (@0xc216-0xc23d) sets the selected outfit to index 0, `oütf` 128,
+    /// listed or not (@0x5d01c), and the loop index -0x63a to 0, or to
+    /// 512 when nothing is listed (@0x5d0fe-0x5d120), before its
+    /// increment (@0x5d19c-0x5d1b1). So the passes left, from index 1 (or
+    /// 513), check and sell `oütf` 128 as any sale is checked and sold,
+    /// the Sell flag asking no list (@0x5d164-0x5d199), and an order can
+    /// sell more than its count; with 128 not owned they do nothing. By
+    /// the other reading, the ordered outfit and the pass index are kept.
+    /// A sale that leaves the listing unchanged is the same by both. By
+    /// the engine reading the port ends an order once it has restarted
+    /// 512 times, where the original, with no such guard, would sell
+    /// forever (an `OnSell` that grants the outfit back and relists,
+    /// reachable only by plug-ins). The ceiling is the only guard, with
+    /// no repeat check, as `OnSell`'s random draws and state outside any
+    /// cheap key can end an order that revisits an earlier state. The
+    /// Bible says nothing of it, so the other reading is the port's
+    /// earlier behaviour, not anything the Bible says (see
+    /// [`Session::outfit_order`](crate::Session::outfit_order)).
+    RelistedSale => "relisted_sale",
+    /// What the outfitter selects after an order that changes the
+    /// listing, and whether it stays open. By the engine, when
+    /// `_SetupPortAvailableItems` says the list changed (@0xc216-0xc23d),
+    /// once after the buy loop (@0x5c314) or after each sale (@0x5d00a),
+    /// `_DoOutfitDialog` selects index 0, `oütf` 128, listed or not
+    /// (`*0xded58` = 0, @0x5c336, @0x5d01c), highlights no cell and
+    /// scrolls the grid to the top (`*0xded5c` = -1, `*0xdeda8` = 0,
+    /// @0x5c32c-0x5c33b, @0x5d021-0x5d02b), and empties the description
+    /// (@0x5c350-0x5c35b, @0x5d030-0x5d04b). `_OutfitFilter` then sets Buy
+    /// and Sell from `oütf` 128 on every event, asking no list
+    /// (@0x5806f-0x580ca), and `_OutfitDialogUpdate` draws no picture and
+    /// no info box (@0x5789b-0x578a5), until a cell is chosen. With
+    /// nothing listed it sets the leave flag -0x63d (@0x5c40c, @0x5d128),
+    /// and the outfitter closes once the click is handled (@0x5da33). By
+    /// the other reading, the selected cell is kept and the outfitter
+    /// stays open. An order that leaves the listing unchanged is the same
+    /// by both. The Bible says nothing of it, so the other reading is the
+    /// port's earlier behaviour, not anything the Bible says (see
+    /// [`Session::outfit_order`](crate::Session::outfit_order)).
+    RelistedSelection => "relisted_selection",
+    /// What the outfitter's selection is, as its grid's presses and
+    /// arrow keys move it. By the engine, `_OutfitFilter` (@0x58039)
+    /// keeps the selected outfit (`*0xded58`) apart from the highlighted
+    /// cell (`*0xded5c`), and the outfit can be none (-1). A press on an
+    /// empty cell position within the grid's 4 × 5 cells
+    /// (@0x585ea-0x58607) sets both to -1 (@0x58632-0x58648): Buy and
+    /// Sell grey, the picture, the info box and the description blank
+    /// (@0x588e4-0x588fe; `_OutfitDialogUpdate` @0x5789b-0x578a5), and
+    /// the press reaches no dialog item (@0x58902-0x58920). After a
+    /// [`RelistedSelection`](RuleKey::RelistedSelection) reset, that lets
+    /// `oütf` 128 go. An arrow key that leaves the selected outfit as it
+    /// was skips `_LoadDescription` (@0x58442-0x5844f), while the
+    /// picture and the info box follow the highlighted cell
+    /// (@0x57949-0x579d6): an arrow onto 128's cell after a reset shows
+    /// its picture and info box over the blank description. By the other
+    /// reading, the selection is the highlighted cell: a press on an
+    /// empty cell is ignored, falling through to the dialog with the
+    /// selection or reset kept, and an arrow reads the description of an
+    /// outfit not already described. The Bible says nothing of the grid,
+    /// so the other reading is the port's earlier behaviour, not anything
+    /// the Bible says (see nova-view's `OutfitterScreen`).
+    GridSelection => "grid_selection",
+    /// How an outfit flagged 0x0200 (price by ship mass) is priced. By
+    /// the engine, `_AdjustedItemCost` (@0x5869-0x5895) gives 0 for a
+    /// `Cost` of 0 or less (@0x5872-0x5878). Otherwise, with the flag, it
+    /// gives max(`Cost`, `Cost` × the flown class's `Mass`)
+    /// (@0x5883-0x588f), so `Cost` on a class of `Mass` 0 or less.
+    /// `_PlayerShipTradeInPrice` inlines the same (@0xb0e3-0xb106). By the
+    /// other reading, the price is `Cost` × `Mass`, never below 0, as the
+    /// Bible's "ship class Mass field is multiplied by this item's Cost
+    /// field" reads (see [`outfitter`](crate::outfitter)).
+    MassPrice => "mass_price",
+    /// How much an outfit flagged 0x0400 (mass by ship mass) weighs. By
+    /// the engine, `_AdjustedItemMass` (@0x2889-0x28c2) gives the outfit's
+    /// `Mass` when that is 0 or less (@0x2893-0x2895) or the flag is
+    /// clear. Otherwise it gives max(`Mass`, `Mass` × the class's `Mass` /
+    /// 100, truncated) (@0x28a0-0x28bc), so `Mass` on a class of `Mass`
+    /// below 100. `_ShipFreeMass` inlines the same (@0xb4c1-0xb4ed). By
+    /// the other reading, the mass is the bare product for a positive
+    /// `Mass`, as the Bible's "ship class Mass field is multiplied by this
+    /// item's Mass field and then divided by 100" reads, so a flagged
+    /// outfit can weigh less than its `Mass`, and 0 or less on a class of
+    /// `Mass` 0 or less (see [`outfitter`](crate::outfitter)).
+    ScaledMass => "scaled_mass",
     /// Which outfits a ship's trade-in counts. By the engine,
     /// `_PlayerShipTradeInPrice` skips only an outfit with a count of 0
     /// or less (@0xb0d5-0xb0d8) and a persistent one (the record byte
@@ -877,6 +1055,78 @@ rule_keys! {
     /// so the other reading is the port's earlier behaviour, not anything
     /// the Bible says (see [`market`](crate::market)).
     TradeDebt => "trade_debt",
+    /// Whether an outfit or a ship class of a negative `TechLevel`, or an
+    /// outfit of 0x7fff, is sold by tech. By the engine, never: an outfit
+    /// is tested by tech only when its `TechLevel` is 0 or more and not
+    /// 0x7fff (`_SetupPortAvailableItems` @0xbf88-0xbf9d), and a ship
+    /// class only when 0 or more, with no 0x7fff test
+    /// (`_SetupPortAvailableShipTypes` @0xbc4b-0xbc52;
+    /// [`wares::outfit_tech_allows`](crate::wares::outfit_tech_allows),
+    /// [`wares::ship_tech_allows`](crate::wares::ship_tech_allows)). An
+    /// outfit's Buy runs a tech test of its own (`_CanBuyOutfitItem`
+    /// @0x4e7ff-0x4e83d; [`wares::outfit_buy_tech_allows`](crate::wares::outfit_buy_tech_allows)):
+    /// one of `TechLevel` -1 always passes (`cmpw $-0x1` @0x4e802), and any
+    /// other passes at or below the stellar's tech or by a slot, with no
+    /// sign or 0x7fff test, so an owned `SELL_ANYWHERE` or `Flags2` 0x0400
+    /// row listed off tech can still be bought. By the other reading, any
+    /// `TechLevel` at or below the stellar's is sold, and the listing and
+    /// Buy test that one rule: the Bible's `spöb` introduces the field with
+    /// "The next fields tell Nova what items and ships are available for
+    /// purchase at this stellar", and names no exception for -1.
+    /// The Bible's `oütf` says "This item will be available at all
+    /// spaceports with a tech level of this value or higher", its `shïp`
+    /// "This ship will be available at all shipyards with a tech level of
+    /// this value or higher", and its `spöb` `TechLevel` "Only items and
+    /// ships with `TechLevels` at or below this value will be available"
+    /// ([`wares::by_tech_level`](crate::wares::by_tech_level)). Under both
+    /// readings a `SpecialTech` slot is compared raw, 0 and below
+    /// included: the Bible's "only items and ships with exactly this
+    /// `TechLevel` will appear here" gives no exception, and the engine
+    /// makes none (@0xbfb2-0xbfbd, @0xbc67-0xbc72). The bar's hire list
+    /// follows the engine alone (see [`hire`](crate::hire)).
+    TechLevel => "tech_level",
+    /// Which persistent outfits a ship purchase carries over. By the
+    /// engine, `_DoShipyardDialog` zeroes only the outfits whose record
+    /// byte +0x378 is clear (@0x5ee1b-0x5ee4f), which `_LoadObjectData`
+    /// sets from `Flags` 0x0004 alone (@0x78cad-0x78cb3), and then adds
+    /// the new class's default items on top (@0x5ee51-0x5ee97). It calls
+    /// no `_HasMaxOfItem` and no `_ShipFreeMass`, and writes the cash only
+    /// for the trade-in and the price, so every persistent outfit is kept
+    /// whole, whatever its `Max` and mass, and none is sold back. By the
+    /// other reading, each persistent outfit is capped at its `Max`, then
+    /// kept one unit at a time by ascending ID while the new ship's free
+    /// mass holds it with its default items and stock fitted, and the rest
+    /// is sold back at the outfitter's rate on the old ship's mass. The
+    /// Bible says only that a persistent outfit "stays with you when you
+    /// trade ships" (see [`shipyard`](crate::shipyard)).
+    PurchaseCarry => "purchase_carry",
+    /// The Shipyard Info panel's Speed and Accel: by the engine, through
+    /// the loader's single-precision `Speed` / 100 and `Accel` / 10000, so
+    /// Speed can draw one less than recorded and Accel 130 and 250 rate a
+    /// step higher; otherwise exact (see [`ShipSpecs`](crate::ShipSpecs)).
+    /// The Bible is silent here, so the other reading is the intended
+    /// behaviour, not anything the Bible says.
+    ShipInfoRounding => "ship_info_rounding",
+    /// What a refit does to the secondary selected when the ship no
+    /// longer carries it: no outfit the pilot owns, at a count above 0,
+    /// has a `ModType` 1 slot naming it. By the engine, nothing: it stays
+    /// named and fires nothing, as `_EvalSetExp` and
+    /// `_SystemInfoToShipStats` never write it (ship record +0x72) and
+    /// `_DrawStatusWeap` still draws it (@0x4c16c-0x4c1b9). Otherwise, it
+    /// is let go. The Bible is silent here, so the other reading is the
+    /// intended behaviour, not anything the Bible says (see
+    /// [`Session`](crate::Session)).
+    StaleSecondary => "stale_secondary",
+    /// When the outfitter's sale lets go of the secondary selected. By the
+    /// engine, when the sold outfit's own count falls to 0 and one of its
+    /// `ModType` 1 slots names it (`_DoOutfitDialog` @0x5cf73-0x5cf8c,
+    /// @0x5ce82), even while another outfit still mounts the weapon.
+    /// Otherwise, when the sale leaves the ship not carrying it. Under
+    /// both, the test is made after the sale and before `OnSell`. The
+    /// Bible is silent here, so the other reading is the intended
+    /// behaviour, not anything the Bible says (see
+    /// [`Session`](crate::Session)).
+    SecondarySale => "secondary_sale",
     /// What an unabortable mission (`CanAbort` 0) failed by its deadline
     /// does at its return landing. By the engine, it fails there again:
     /// `_QuickMissionFailure` (@0x99d1b-0x99dab) runs its `OnFailure` and
@@ -1152,6 +1402,33 @@ mod tests {
     }
 
     #[test]
+    fn the_tech_level_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::TechLevel.key(), "tech_level");
+        assert_eq!(RuleKey::from_key("tech_level"), Some(RuleKey::TechLevel));
+    }
+
+    #[test]
+    fn the_mass_price_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::MassPrice.key(), "mass_price");
+        assert_eq!(RuleKey::from_key("mass_price"), Some(RuleKey::MassPrice));
+    }
+
+    #[test]
+    fn the_scaled_mass_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::ScaledMass.key(), "scaled_mass");
+        assert_eq!(RuleKey::from_key("scaled_mass"), Some(RuleKey::ScaledMass));
+    }
+
+    #[test]
+    fn the_sale_refusal_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::SaleRefusal.key(), "sale_refusal");
+        assert_eq!(
+            RuleKey::from_key("sale_refusal"),
+            Some(RuleKey::SaleRefusal)
+        );
+    }
+
+    #[test]
     fn the_pay_millions_rule_is_found_by_its_key() {
         assert_eq!(RuleKey::PayMillions.key(), "pay_millions");
         assert_eq!(
@@ -1165,6 +1442,15 @@ mod tests {
     }
 
     #[test]
+    fn the_counted_sale_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::CountedSale.key(), "counted_sale");
+        assert_eq!(
+            RuleKey::from_key("counted_sale"),
+            Some(RuleKey::CountedSale)
+        );
+    }
+
+    #[test]
     fn the_mission_order_rule_is_found_by_its_key() {
         assert_eq!(RuleKey::MissionOrder.key(), "mission_order");
         assert_eq!(
@@ -1174,6 +1460,15 @@ mod tests {
         assert_eq!(
             RuleKey::ALL.iter().rev().nth(5),
             Some(&RuleKey::MissionOrder)
+        );
+    }
+
+    #[test]
+    fn the_relisted_sale_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::RelistedSale.key(), "relisted_sale");
+        assert_eq!(
+            RuleKey::from_key("relisted_sale"),
+            Some(RuleKey::RelistedSale)
         );
     }
 
@@ -1194,6 +1489,15 @@ mod tests {
         assert_eq!(
             Rulebook::default().source_for(RuleKey::PersonMissionStellar),
             RuleSource::Engine
+        );
+    }
+
+    #[test]
+    fn the_relisted_selection_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::RelistedSelection.key(), "relisted_selection");
+        assert_eq!(
+            RuleKey::from_key("relisted_selection"),
+            Some(RuleKey::RelistedSelection)
         );
     }
 
@@ -1269,6 +1573,15 @@ mod tests {
     }
 
     #[test]
+    fn the_grid_selection_rule_is_found_by_its_key() {
+        assert_eq!(RuleKey::GridSelection.key(), "grid_selection");
+        assert_eq!(
+            RuleKey::from_key("grid_selection"),
+            Some(RuleKey::GridSelection)
+        );
+    }
+
+    #[test]
     fn the_outfitters_rules_have_settings_keys_found_by_name() {
         assert_eq!(RuleKey::OutfitRefund.key(), "outfit_refund");
         assert_eq!(
@@ -1338,6 +1651,34 @@ mod tests {
         assert_eq!(RuleKey::from_key("junk_flags"), Some(RuleKey::JunkFlags));
         assert_eq!(RuleKey::BuyRandom.key(), "buy_random");
         assert_eq!(RuleKey::from_key("buy_random"), Some(RuleKey::BuyRandom));
+        assert_eq!(RuleKey::PurchaseCarry.key(), "purchase_carry");
+        assert_eq!(
+            RuleKey::from_key("purchase_carry"),
+            Some(RuleKey::PurchaseCarry)
+        );
+        assert_eq!(RuleKey::ShipInfoRounding.key(), "ship_info_rounding");
+        assert_eq!(
+            RuleKey::from_key("ship_info_rounding"),
+            Some(RuleKey::ShipInfoRounding)
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(9),
+            Some(&RuleKey::SecondarySale)
+        );
+    }
+
+    #[test]
+    fn the_secondary_selection_rules_are_found_by_their_keys() {
+        assert_eq!(RuleKey::StaleSecondary.key(), "stale_secondary");
+        assert_eq!(
+            RuleKey::from_key("stale_secondary"),
+            Some(RuleKey::StaleSecondary)
+        );
+        assert_eq!(RuleKey::SecondarySale.key(), "secondary_sale");
+        assert_eq!(
+            RuleKey::from_key("secondary_sale"),
+            Some(RuleKey::SecondarySale)
+        );
     }
 
     #[test]
@@ -1371,7 +1712,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)] // one line for each rule
+    #[allow(clippy::too_many_lines)] // one line per rule key
     fn each_rule_has_a_settings_key_found_by_name() {
         assert_eq!(
             RuleKey::ALL,
@@ -1435,11 +1776,23 @@ mod tests {
                 RuleKey::OutfitRefund,
                 RuleKey::OutfitCount,
                 RuleKey::SaleMass,
+                RuleKey::SaleRefusal,
+                RuleKey::CountedSale,
+                RuleKey::RelistedSale,
+                RuleKey::RelistedSelection,
+                RuleKey::GridSelection,
+                RuleKey::MassPrice,
+                RuleKey::ScaledMass,
                 RuleKey::TradeInOutfits,
                 RuleKey::TradeLot,
                 RuleKey::TradeQuotient,
                 RuleKey::TradeCount,
                 RuleKey::TradeDebt,
+                RuleKey::TechLevel,
+                RuleKey::PurchaseCarry,
+                RuleKey::ShipInfoRounding,
+                RuleKey::StaleSecondary,
+                RuleKey::SecondarySale,
                 RuleKey::RepeatMissionFailure,
                 RuleKey::StartActiveMission,
                 RuleKey::PayMillions,
@@ -1475,6 +1828,7 @@ mod tests {
         assert_eq!(RuleKey::LongAdvice.key(), "long_advice");
         assert_eq!(RuleKey::EscortAi.key(), "escort_ai");
         assert_eq!(RuleKey::EscortOrders.key(), "escort_orders");
+        assert_eq!(RuleKey::ShipInfoRounding.key(), "ship_info_rounding");
         for rule in RuleKey::ALL {
             assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
         }

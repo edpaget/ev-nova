@@ -51,6 +51,7 @@ pub const FRAME: DialogFrame = DialogFrame {
 pub struct DescDialog {
     dialog: Dialog,
     closed: bool,
+    reported: bool,
 }
 
 impl DescDialog {
@@ -83,6 +84,7 @@ impl DescDialog {
         Self {
             dialog,
             closed: false,
+            reported: false,
         }
     }
 
@@ -90,6 +92,17 @@ impl DescDialog {
     #[must_use]
     pub fn closed(&self) -> bool {
         self.closed
+    }
+
+    /// `Some(())` the first time it is asked after Done has been
+    /// activated, and `None` before and after: how a host hears, once,
+    /// that the dialog closed ([`Modal`](crate::spaceport::modal::Modal)).
+    pub(crate) fn take_done(&mut self) -> Option<()> {
+        if !self.closed || self.reported {
+            return None;
+        }
+        self.reported = true;
+        Some(())
     }
 
     /// The first line of the description shown.

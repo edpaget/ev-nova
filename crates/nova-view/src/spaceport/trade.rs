@@ -18,7 +18,7 @@
 //! Command and Control change nothing, as the original tests Option alone
 //! (`_DoTradeDialog` @0x5e211, @0x5e45c). With Alt held, by the engine's
 //! reading of [`RuleKey::TradeCount`](nova_sim::RuleKey::TradeCount)
-//! ([`Market::trade_count`]), they open the quantity dialog over the
+//! ([`Market::option_asks_count`]), they open the quantity dialog over the
 //! exchange ([`QuantityDialog`], `DLOG` 1003, or its fallback) at the most
 //! the row offers ([`Market::row_max`]), even when that is 0 or less; a
 //! count above 0 confirmed there is traded ([`Lot::Count`]), and 0 or
@@ -49,10 +49,11 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::{Direction, Lot, Market, MissionId, OfferPrompt, Order, RuleSource};
+use nova_sim::{Direction, Lot, Market, MissionId, OfferPrompt, Order};
 
 use super::layout::DONE_LABEL;
 use super::offer::{OfferChoice, OfferDialog, VenueOffers};
+use super::quantity_ask::QuantityAsk;
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::{DrawList, fill_rect};
@@ -65,7 +66,7 @@ use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
-use crate::ui::quantity::{PROMPT, QuantityDialog};
+use crate::ui::quantity::QuantityDialog;
 
 /// The "Trade" dialog's `DLOG` (and `DITL`) ID.
 pub const TRADE_DIALOG: i16 = 1001;
@@ -139,16 +140,6 @@ pub fn status_line(market: &Market) -> String {
 struct Laid {
     dialog: Dialog,
     metrics: MetricsHandle,
-    /// The quantity dialog's template, if the interface file has one.
-    quantity: Option<DialogTemplate>,
-}
-
-/// The quantity dialog open over the exchange, and the trade it counts.
-#[derive(Clone, Debug)]
-struct Asking {
-    row: usize,
-    direction: Direction,
-    dialog: QuantityDialog,
 }
 
 /// The metrics, shared, with a `Debug` that shows nothing of them.
@@ -171,15 +162,15 @@ pub struct TradeScreen {
     selected: usize,
     /// The row shown first.
     top: usize,
-    /// Whether Alt is held.
-    max_lot: bool,
-    /// The quantity dialog, while it is open.
-    asking: Option<Asking>,
+    /// The quantity dialog, while it is open, the row and direction it
+    /// counts, and whether Alt is held.
+    quantity: QuantityAsk<(usize, Direction)>,
     /// The mission offers, once given.
     offering: Option<VenueOffers>,
     /// The order asked for, until it is taken.
     order: Option<Order>,
     closed: bool,
+    /// The buttons' style, for the offer dialog.
     style: ButtonStyle,
     sounds: Vec<Sound>,
 }
@@ -210,7 +201,6 @@ impl TradeScreen {
             Laid {
                 dialog,
                 metrics: MetricsHandle(metrics),
-                quantity: quantity.ok(),
             }
         });
         let mut screen = Self {
@@ -218,8 +208,7 @@ impl TradeScreen {
             market,
             selected: 0,
             top: 0,
-            max_lot: false,
-            asking: None,
+            quantity: QuantityAsk::new(quantity.ok(), style),
             offering: None,
             order: None,
             closed: false,
@@ -361,7 +350,7 @@ impl TradeScreen {
     /// The quantity dialog, while it is open.
     #[must_use]
     pub fn quantity(&self) -> Option<&QuantityDialog> {
-        self.asking.as_ref().map(|asking| &asking.dialog)
+        self.quantity.dialog()
     }
 
     /// Asks to trade on the selected row `direction`, if that button is
@@ -373,12 +362,14 @@ impl TradeScreen {
         let Some(index) = self.selected().filter(|_| self.allows(direction)) else {
             return;
         };
-        let lot = match (self.max_lot, self.market.trade_count) {
+        let lot = match (self.quantity.alt_held(), self.market.option_asks_count()) {
             (false, _) => Lot::Click,
-            (true, RuleSource::Bible) => Lot::Max,
-            (true, RuleSource::Engine) => {
-                if let Some(max) = self.market.row_max(index, direction) {
-                    self.open_quantity(index, direction, max, by_key);
+            (true, false) => Lot::Max,
+            (true, true) => {
+                if let (Some(max), Ok(laid)) = (self.market.row_max(index, direction), &self.laid) {
+                    let metrics = Rc::clone(&laid.metrics.0);
+                    self.quantity
+                        .open((index, direction), direction, max, by_key, metrics);
                 }
                 return;
             }
@@ -389,71 +380,6 @@ impl TradeScreen {
             direction,
             lot,
         });
-    }
-
-    /// Opens the quantity dialog over the exchange for row `row`'s trade
-    /// `direction`, at `max`, laid out by its template or its fallback.
-    fn open_quantity(&mut self, row: usize, direction: Direction, max: i64, by_key: bool) {
-        let Ok(laid) = &self.laid else {
-            return;
-        };
-        let metrics = Rc::clone(&laid.metrics.0);
-        let title = match direction {
-            Direction::Buy => BUY_LABEL,
-            Direction::Sell => SELL_LABEL,
-        };
-        let built = laid.quantity.as_ref().and_then(|template| {
-            QuantityDialog::new(
-                template,
-                max,
-                title,
-                PROMPT,
-                self.style,
-                Rc::clone(&metrics),
-            )
-            .ok()
-        });
-        let mut dialog = built
-            .unwrap_or_else(|| QuantityDialog::fallback(max, title, PROMPT, self.style, metrics));
-        if by_key {
-            dialog.flush_typed_key();
-        }
-        self.asking = Some(Asking {
-            row,
-            direction,
-            dialog,
-        });
-    }
-
-    /// Gives `input` to the quantity dialog open, after following Alt, and
-    /// records a count above 0 confirmed there as the order; 0 or Cancel
-    /// closes it with none.
-    fn quantity_input(&mut self, input: &Input) {
-        let Some(asking) = &mut self.asking else {
-            return;
-        };
-        if let Input::Key {
-            key: MAX_LOT_KEY,
-            pressed,
-            ..
-        } = *input
-        {
-            self.max_lot = pressed;
-        }
-        asking.dialog.input(input);
-        self.sounds.extend(asking.dialog.take_sounds());
-        let Some(count) = asking.dialog.take_outcome() else {
-            return;
-        };
-        if count > 0 {
-            self.order = Some(Order {
-                row: asking.row,
-                good: self.market.rows[asking.row].good,
-                direction: asking.direction,
-                lot: Lot::Count(count),
-            });
-        }
-        self.asking = None;
     }
 
     /// Activates dialog item `item`: Done closes, Buy and Sell ask, and a
@@ -508,8 +434,15 @@ impl Screen for TradeScreen {
         {
             return ScreenAction::None;
         }
-        if self.asking.is_some() {
-            self.quantity_input(input);
+        if self.quantity.is_open() {
+            if let Some(((row, direction), count)) = self.quantity.input(input, &mut self.sounds) {
+                self.order = Some(Order {
+                    row,
+                    good: self.market.rows[row].good,
+                    direction,
+                    lot: Lot::Count(count),
+                });
+            }
             return ScreenAction::None;
         }
         let Ok(laid) = &mut self.laid else {
@@ -525,10 +458,8 @@ impl Screen for TradeScreen {
         };
         match *input {
             Input::Key {
-                key: MAX_LOT_KEY,
-                pressed,
-                ..
-            } => self.max_lot = pressed,
+                key: MAX_LOT_KEY, ..
+            } => self.quantity.follow_alt(input),
             Input::Key {
                 key: Key::Up,
                 pressed: true,
@@ -564,7 +495,7 @@ impl Screen for TradeScreen {
     /// dialog nor an offer is open.
     fn tick(&mut self, dt: Duration) {
         if let Some(offering) = &mut self.offering
-            && self.asking.is_none()
+            && !self.quantity.is_open()
         {
             offering.tick(dt);
         }
@@ -620,9 +551,7 @@ impl Screen for TradeScreen {
             &status_line(&self.market),
         );
         dialog.draw(list);
-        if let Some(asking) = &self.asking {
-            asking.dialog.draw(list);
-        }
+        self.quantity.draw(list);
         if let Some(offering) = &self.offering {
             offering.draw(list);
         }
@@ -636,19 +565,16 @@ impl Screen for TradeScreen {
         {
             return;
         }
-        if let Some(asking) = &mut self.asking {
-            asking.dialog.cancel_pointer();
-        } else if let Ok(laid) = &mut self.laid {
+        if !self.quantity.cancel_pointer()
+            && let Ok(laid) = &mut self.laid
+        {
             laid.dialog.cancel_pointer();
         }
     }
 
     /// Lets go of Alt, and of the keys held in the quantity dialog.
     fn release_keys(&mut self) {
-        self.max_lot = false;
-        if let Some(asking) = &mut self.asking {
-            asking.dialog.release_keys();
-        }
+        self.quantity.release_keys();
     }
 
     /// The buttons' sounds and the quantity dialog's, in order.
@@ -660,7 +586,7 @@ impl Screen for TradeScreen {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use nova_sim::{Good, JunkId, MarketRow};
+    use nova_sim::{Good, JunkId, MarketRow, RuleKey, RuleSource, Rulebook};
 
     use super::*;
     use crate::draw::DrawCommand;
@@ -1168,7 +1094,7 @@ mod tests {
     #[test]
     fn by_the_other_count_reading_with_alt_held_buy_and_sell_ask_for_the_most() {
         let mut screen = screen_of(Market {
-            trade_count: RuleSource::Bible,
+            rules: Rulebook::default().with_override(RuleKey::TradeCount, RuleSource::Bible),
             ..market()
         });
         press(&mut screen, MAX_LOT_KEY);

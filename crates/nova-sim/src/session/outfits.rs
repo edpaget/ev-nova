@@ -68,7 +68,8 @@
 //!   from a map's level 2.
 
 use super::{Session, clamp_i16};
-use crate::catalog::{OutfitId, OutfitRecord, SystemId};
+use crate::catalog::{OutfitId, OutfitRecord, SystemId, WeaponId};
+use crate::combat::armament::MOD_WEAPON;
 use crate::exploration::map_reveals;
 use crate::grant::{GrantStock, held_to_max};
 use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records, cleaned_records};
@@ -85,6 +86,35 @@ pub const OUTFIT_IDS: std::ops::RangeInclusive<i16> = 128..=639;
 fn add_one(pilot: &mut Pilot, outfit: OutfitId) {
     let owned = pilot.outfits.entry(outfit).or_default();
     *owned = owned.saturating_add(1);
+}
+
+/// Whether `record` mounts the secondary `selected`: whether one of its
+/// mod slots is a weapon (`ModType` 1) whose `ModVal` names it, as the
+/// outfitter's sale checks by the engine once the outfit's count falls
+/// to 0 (`_DoOutfitDialog` @0x5cf73-0x5cf8c;
+/// [`RuleKey::SecondarySale`](crate::RuleKey::SecondarySale)). None
+/// selected is mounted by nothing.
+pub(super) fn launches(record: &OutfitRecord, selected: Option<WeaponId>) -> bool {
+    selected.is_some_and(|weapon| {
+        record
+            .mods
+            .iter()
+            .any(|&(mod_type, mod_val)| mod_type == MOD_WEAPON && mod_val == weapon.0)
+    })
+}
+
+/// Whether the ship carries the secondary `selected`: whether an outfit
+/// among `outfits` that `pilot` owns, at a count above 0, mounts it (see
+/// [`launches`]). This reads the outfits, not the armament, so it holds
+/// in the outfitter's sale before the refit. None selected is carried by
+/// nothing. The other readings of
+/// [`RuleKey::StaleSecondary`](crate::RuleKey::StaleSecondary) and
+/// [`RuleKey::SecondarySale`](crate::RuleKey::SecondarySale) let go of a
+/// selection not carried.
+pub(super) fn carries(pilot: &Pilot, outfits: &[OutfitRecord], selected: Option<WeaponId>) -> bool {
+    outfits
+        .iter()
+        .any(|record| pilot.owned(record.id) > 0 && launches(record, selected))
 }
 
 /// Takes one of `outfit` from `pilot`'s, if it owns any: whether it did.
@@ -135,7 +165,7 @@ impl Session {
             outfit: record.id,
             item_class: record.item_class,
             mass: record.mass,
-            unit_mass: unit_mass(record, self.fields.mass),
+            unit_mass: unit_mass(record, self.fields.mass, &self.rules),
             owned: self.pilot.owned(record.id),
             max: clamp_i16(self.raised_max_of(record)),
         }
@@ -149,6 +179,7 @@ impl Session {
             &self.standard(),
             &self.pilot.outfits,
             &self.outfits,
+            &self.rules,
         )
     }
 
@@ -225,9 +256,9 @@ impl Session {
             return;
         }
         if self.outfit_rules().remove_refund == RuleSource::Bible {
-            let price = self
-                .outfit_record(outfit)
-                .map_or(0, |record| unit_price(record, self.fields.mass));
+            let price = self.outfit_record(outfit).map_or(0, |record| {
+                unit_price(record, self.fields.mass, &self.rules)
+            });
             self.pilot.cash = self.pilot.cash.saturating_add(resale(price));
         }
         self.refit(false, self.script_reserves());
@@ -545,6 +576,28 @@ mod tests {
     }
 
     #[test]
+    fn the_sessions_free_mass_and_grant_stock_weigh_a_scaled_outfit_as_its_rules_say() {
+        // HEAVY made 20 tons scaled by the ship's 40: 8 by the bare
+        // product, but never below its own 20 by the engine.
+        let mut catalog = mapped();
+        catalog.outfits[7].mass = 20;
+        catalog.outfits[7].flags = outfitter::OutfitFlags::MASS_BY_MASS;
+        let record = catalog.outfits[7].clone();
+        let weighed = |source| {
+            let rules = Rulebook::default().with_override(RuleKey::ScaledMass, source);
+            let mut session = session(&catalog).with_rules(rules);
+            let free = session.free_mass();
+            session.pilot.outfits.insert(HEAVY, 1);
+            (
+                free - session.free_mass(),
+                session.grant_stock(&record).unit_mass,
+            )
+        };
+        assert_eq!(weighed(RuleSource::Engine), (20, 20));
+        assert_eq!(weighed(RuleSource::Bible), (8, 8));
+    }
+
+    #[test]
     fn d_removes_one_freeing_its_mass_and_stats_and_paying_nothing() {
         let mut session = scripted(&mapped());
         run(&mut session, "G305 G305");
@@ -625,6 +678,31 @@ mod tests {
         run(&mut session, "D600");
         assert_eq!(session.pilot().owned(OutfitId(600)), 0);
         assert_eq!(session.pilot().cash(), cash + 1500, "no record, no price");
+    }
+
+    #[test]
+    fn d_refunds_half_the_cost_of_an_outfit_priced_by_mass_on_a_massless_ship() {
+        let mut catalog = mapped();
+        catalog.outfits.push(OutfitRecord {
+            cost: 100,
+            flags: outfitter::OutfitFlags::PRICE_BY_MASS,
+            ..outfit(310, &[])
+        });
+        let refund = |mass_price| {
+            let rules = Rulebook::default()
+                .with_override(RuleKey::RemoveRefund, RuleSource::Bible)
+                .with_override(RuleKey::MassPrice, mass_price);
+            let mut session = scripted(&catalog).with_rules(rules);
+            run(&mut session, "G310");
+            assert_eq!(session.pilot().owned(OutfitId(310)), 1);
+            session.fields.mass = 0;
+            let cash = session.pilot().cash();
+            run(&mut session, "D310");
+            assert_eq!(session.pilot().owned(OutfitId(310)), 0);
+            session.pilot().cash() - cash
+        };
+        assert_eq!(refund(RuleSource::Engine), 50, "half the cost");
+        assert_eq!(refund(RuleSource::Bible), 0, "half of 100 x 0");
     }
 
     #[test]

@@ -71,6 +71,43 @@ under `tests/`, or doctests) so `cargo` runs them.
 - Keep `mise` tasks as one-line `cargo` invocations. When a check needs logic,
   write it in Rust.
 
+### Stock-data tests
+
+Tests over the original game's data (`stock_*.rs` under each crate's `tests/`)
+skip, passing, unless `NOVA_DATA` points at a `Nova Files` folder. CI and
+`mise run ci` don't set it, so these tests can break without anyone noticing.
+When a change touches anything those tests cover, run them with the data:
+
+```sh
+NOVA_DATA="/path/to/Nova Files" cargo nextest run --workspace
+```
+
+When a change to behaviour breaks a stock test on purpose, update the test in
+the same commit. Don't leave the test failing for later.
+
+### Slow or timing-out tests: check the target directory first
+
+When the `nova-render::wgpu_offscreen` tests (or any other wgpu test) run for
+seconds each or hit nextest's timeout, check how many files are in
+`target/debug/deps` before you blame machine load or the code:
+
+```sh
+ls target/debug/deps | wc -l
+```
+
+A healthy count is a few thousand, and then the 23 offscreen tests take about
+a second in parallel. Repeated `cargo-mutants` and stock runs can grow it to
+hundreds of thousands. wgpu's Metal adapter setup reads the test binary's
+directory, and nextest starts a new process for each test, so every test pays
+that cost again. Run `cargo clean` in that worktree to fix it. Don't run the
+tests serially or raise the timeouts to work around it. Long autopilot or
+mutants sessions should clean the target directory now and then.
+
+Give a `git bisect` (or any second checkout) its own `CARGO_TARGET_DIR`.
+Sharing the main worktree's target directory can leave stale build artifacts
+behind, which cause false compile errors and test failures until you run
+`cargo clean -p` on the affected crates.
+
 ## Mutation testing
 
 Use `cargo-mutants` to check that tests actually catch broken code. Let the

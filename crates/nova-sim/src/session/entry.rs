@@ -534,7 +534,7 @@ impl Session {
         self.bring_in_traffic(resets.traffic, catalog, chance);
         if resets.has(Reset::ShopRolls) {
             self.land_day_rolls();
-            self.open_opening();
+            self.open_outfit_visit();
         }
         if resets.has(Reset::SaveDue) {
             self.save_due = true;

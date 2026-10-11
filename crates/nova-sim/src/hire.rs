@@ -16,8 +16,12 @@
 //! lists a ship class for hire when, in this order:
 //!
 //! 1. its `TechLevel` is 0 or more and allowed there, as the shipyard's
-//!    is ([`wares::tech_allows`]); a negative one is never listed
-//!    (@0xbc4b-0xbc72);
+//!    engine reading has it ([`wares::ship_tech_allows`]): at or below
+//!    the stellar's, or equal to a `SpecialTech` slot, compared raw, so a
+//!    slot of 0 lists a class of `TechLevel` 0; a negative one is never
+//!    listed (@0xbc4b-0xbc72). The Bible speaks of purchase, not hire,
+//!    so [`RuleKey::TechLevel`] does not reach
+//!    the bar;
 //! 2. its roll for the day holds: a `HireRandom` of 0 or less is never
 //!    for hire, one of [`MAX_HIRE_RANDOM`] or more always (above 100
 //!    counts as 100, `_LoadObjectData` @0x7a35d), and any other is a
@@ -106,14 +110,12 @@
 //!
 //! # Not modelled
 //!
-//! The original's hire dialog shows only the fee and the cash; the daily
-//! pay shown beside them is the phase's. A freighter that defects would
-//! destroy its share of the fleet's cargo (`_DestroyPartialFleetCargo`
-//! @0x40240): its holds now count in the fleet's cargo space
-//! ([`fleet_holds`](crate::market::fleet_holds)), but the share destroyed
-//! waits for rdm task `hire-escorts-follow-up`; mission escorts, never paid,
-//! wait for missions; and the extra days the original passes for
-//! outfitting and buying a ship are not passed.
+//! A freighter that defects would destroy its share of the fleet's cargo
+//! (`_DestroyPartialFleetCargo` @0x40240): its holds now count in the
+//! fleet's cargo space ([`fleet_holds`](crate::market::fleet_holds)), but
+//! the share destroyed waits for rdm task `hire-escorts-follow-up`;
+//! mission escorts, never paid, wait for missions; and the extra days the
+//! original passes for outfitting and buying a ship are not passed.
 //!
 //! # Why the session keeps these ports
 //!
@@ -128,7 +130,8 @@
 
 use std::fmt::Debug;
 
-use crate::catalog::{LandingSite, ShipId, ShipRecord};
+use crate::catalog::{LandingSite, OutfitRecord, ShipId, ShipRecord};
+use crate::combat::armament::Arsenal;
 use crate::control::{ControlBits, Gate, PilotFacts, Test};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::shipyard::{HIDE_BITS, ShipFlags3, ShipSpecs};
@@ -359,6 +362,10 @@ pub(crate) struct Bar<'a> {
     /// How each disputed rule reads: among them whether `Require` gates
     /// hiring ([`RuleKey::HireRequire`]).
     pub(crate) rules: Rulebook,
+    /// Every ship class's stock weapons, which the Info's Space reads.
+    pub(crate) arsenal: &'a Arsenal,
+    /// Every `oütf`, which the Info's Space weighs.
+    pub(crate) outfits: &'a [OutfitRecord],
 }
 
 /// How a ship class of `hire_random` rolls for hire each day: 0 or less
@@ -387,7 +394,7 @@ impl Bar<'_> {
         let mut sweep = HideHigher::default();
         let mut rows = Vec::new();
         for ship in sorted {
-            if ship.tech_level < 0 || !wares::tech_allows(ship.tech_level, self.site) {
+            if !wares::ship_tech_allows(ship.tech_level, self.site) {
                 continue;
             }
             let today = match hire_roll(ship.hire_random) {
@@ -430,13 +437,7 @@ impl Bar<'_> {
                     short_name: ship.short_name.clone(),
                     fee,
                     wage: self.terms.wage(ship),
-                    specs: ShipSpecs {
-                        fields: ship.fields,
-                        max_gun: ship.max_gun,
-                        max_tur: ship.max_tur,
-                        length: ship.length,
-                        crew: ship.crew,
-                    },
+                    specs: ShipSpecs::of(ship, self.arsenal, self.outfits, &self.rules),
                     hire,
                 },
             ));
@@ -453,7 +454,11 @@ impl Bar<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{FAST, planet, ship};
+    use crate::catalog::{HullRecord, OutfitRecord, StockWeapon, WeaponId};
+    use crate::combat::armament::{Arsenal, MOD_WEAPON};
+    use crate::handling::ShipFields;
+    use crate::shipyard::StockLine;
+    use crate::testkit::{FAST, hull, outfit, planet, ship};
 
     /// A site of tech level `tech`.
     fn site(tech: i16) -> LandingSite {
@@ -603,6 +608,10 @@ mod tests {
                 max_tur: 0,
                 length: 0,
                 crew: 0,
+                space: 0,
+                rounding: RuleSource::Engine,
+                weapons: Vec::new(),
+                long_name: String::new(),
             },
             hire: if id == 129 {
                 Err(HireRefusal::CannotAfford)
@@ -620,5 +629,108 @@ mod tests {
         assert_eq!(list.check(ShipId(128)), Ok(()));
         assert_eq!(list.check(ShipId(129)), Err(HireRefusal::CannotAfford));
         assert_eq!(list.check(ShipId(130)), Err(HireRefusal::NotListed));
+    }
+
+    #[test]
+    fn the_hire_list_gives_each_class_its_space() {
+        // -10 + 6 = -4 to start; the gun leaves 0, where `FreeMass` is -10.
+        let ships = [ShipRecord {
+            hire_random: 100,
+            ..ship(
+                129,
+                ShipFields {
+                    free_mass: -10,
+                    ..FAST
+                },
+            )
+        }];
+        let outfits = [OutfitRecord {
+            mass: 6,
+            ..outfit(150, &[(MOD_WEAPON, 130)])
+        }];
+        let arsenal = Arsenal::new(
+            &[],
+            vec![HullRecord {
+                weapons: vec![StockWeapon {
+                    weapon: WeaponId(130),
+                    count: 1,
+                    ammo: 0,
+                }],
+                ..hull(129)
+            }],
+        );
+        let at = site(7);
+        let bar = Bar {
+            ships: &ships,
+            site: &at,
+            contributed: 0,
+            cash: 0,
+            room: true,
+            terms: &NovaHire::default(),
+            control_bits: Gate::FRESH.control_bits,
+            pilot: Gate::FRESH.pilot,
+            rules: Rulebook::default(),
+            arsenal: &arsenal,
+            outfits: &outfits,
+        };
+        let list = bar.list(|_, _| true);
+        assert_eq!(list.row(ShipId(129)).map(|row| row.specs.space), Some(0));
+    }
+
+    #[test]
+    fn the_hire_list_gives_each_class_its_rounding_and_stock_lines() {
+        let ships = [ShipRecord {
+            hire_random: 100,
+            ..ship(129, FAST)
+        }];
+        let outfits = [OutfitRecord {
+            name: "Light Blaster;note".to_owned(),
+            ..outfit(150, &[(MOD_WEAPON, 130)])
+        }];
+        let arsenal = Arsenal::new(
+            &[],
+            vec![HullRecord {
+                weapons: vec![StockWeapon {
+                    weapon: WeaponId(130),
+                    count: 2,
+                    ammo: 0,
+                }],
+                ..hull(129)
+            }],
+        );
+        let at = site(7);
+        let specs = |rules| {
+            let bar = Bar {
+                ships: &ships,
+                site: &at,
+                contributed: 0,
+                cash: 0,
+                room: true,
+                terms: &NovaHire::default(),
+                control_bits: Gate::FRESH.control_bits,
+                pilot: Gate::FRESH.pilot,
+                rules,
+                arsenal: &arsenal,
+                outfits: &outfits,
+            };
+            bar.list(|_, _| true)
+                .row(ShipId(129))
+                .expect("listed")
+                .specs
+                .clone()
+        };
+        let engine = specs(Rulebook::default());
+        assert_eq!(engine.rounding, RuleSource::Engine);
+        assert_eq!(
+            engine.weapons,
+            [StockLine {
+                count: 2,
+                name: "Light Blaster".to_owned(),
+                ammo: None,
+            }]
+        );
+        let bible =
+            specs(Rulebook::default().with_override(RuleKey::ShipInfoRounding, RuleSource::Bible));
+        assert_eq!(bible.rounding, RuleSource::Bible);
     }
 }

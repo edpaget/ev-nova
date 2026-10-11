@@ -34,12 +34,13 @@
 //! `OnCapture` or `OnRetire` runs, and it names and paints nothing.
 //!
 //! The shipyard by contrast (`_DoShipyardDialog` ~0x5ebc8-0x5f0ac) trades
-//! in, runs `OnRetire` then `OnPurchase`, names the ship from its dialog
+//! in, runs `OnRetire`, names the ship from its dialog
 //! (`_CullNameString`, 0x40), clears the fighters out, strips the outfits
 //! whose persistent byte (+0x378, which the loader sets from 0x0004 alone,
-//! @0x78cad) is clear, adds the defaults (`+=`), keeps the cargo that fits
-//! (`_DestroyPartialFleetCargo(0)`) and fills the reserves, with no
-//! `_HasMaxOfItem` clamp. Capture (`_DoShipCapture`) strips by +0x378 too.
+//! @0x78cad) is clear, adds the defaults (`+=`), with no `_HasMaxOfItem`
+//! clamp, keeps the cargo that fits (`_DestroyPartialFleetCargo(0)`),
+//! runs `OnPurchase` (@0x5f00d), and only then fills the reserves
+//! (@0x5f051-0x5f07b), to the class and outfits `OnPurchase` leaves. Capture (`_DoShipCapture`) strips by +0x378 too.
 //!
 //! **Here.** [`Session::change_ship`] is that block, for the set
 //! operators alone: with no record of the class nothing changes (the
@@ -92,9 +93,11 @@
 //! 0x0004 alone, holding nothing to its `Max`, and topping its stock
 //! weapons up rather than adding them; its hooks and its take-over
 //! reserves run between the outfits and the class, and it always holds
-//! the reserves. [`Session::buy_ship`] alone keeps its own carry, a trade
-//! (`Max` and the free mass, the sale of the rest, the trade-in), until
-//! it becomes `become_class`'s third caller.
+//! the reserves. [`Session::buy_ship`] is the third caller, with the
+//! shipyard's carry
+//! ([`RuleKey::PurchaseCarry`](crate::RuleKey::PurchaseCarry): by the
+//! engine every persistent outfit, by the other reading `Max` and the free
+//! mass with the sale of the rest) and the reserves held.
 //!
 //! **`Txxx`** (@0x15b25-0x15be9) reads `STR#` `xxx`,
 //! the raw ID, with no range check, from the session's string lists
@@ -183,6 +186,22 @@ pub(super) struct ClassChange {
     pub(super) outfits: BTreeMap<OutfitId, u16>,
     /// How the refit treats a shield or armour above the new most.
     pub(super) reserves: ReservePolicy,
+}
+
+impl ClassChange {
+    /// A purchase's change: the shipyard's carry, the reserves held, as the
+    /// shipyard has always refitted. The purchase fills them only after
+    /// `OnPurchase` (`_DoShipyardDialog` @0x5f051-0x5f07b, after
+    /// @0x5f00d); until then, holding keeps the old ship's within the new
+    /// most. The original leaves them unclamped while `OnPurchase` runs
+    /// (`_SystemInfoToShipStats` clamps no reserve), which only a
+    /// set-operator observer could see; that is not modelled.
+    pub(super) fn bought(outfits: BTreeMap<OutfitId, u16>) -> Self {
+        Self {
+            outfits,
+            reserves: ReservePolicy::Hold,
+        }
+    }
 }
 
 /// The game's string lists, as `T` reads them, shared.
@@ -667,6 +686,23 @@ mod tests {
             assert_eq!((now.shield.now, now.armor.now), kept, "{reserves:?}");
             assert_eq!(now.fuel, Gauge::full(100.0), "{reserves:?}: always held");
         }
+    }
+
+    #[test]
+    fn a_purchases_class_change_holds_the_reserves() {
+        let outfits = owned(&[(LICENCE, 1)]);
+        let change = ClassChange::bought(outfits.clone());
+        assert_eq!(change.outfits, outfits);
+        assert_eq!(change.reserves, ReservePolicy::Hold);
+        let catalog = changing();
+        let mut session = session(&catalog);
+        session.become_class(
+            &record(&session, 130),
+            ClassChange::bought(BTreeMap::new()),
+            |_| {},
+        );
+        let now = session.reserves();
+        assert_eq!((now.shield.now, now.armor.now), (10.0, 20.0), "held");
     }
 
     // C.

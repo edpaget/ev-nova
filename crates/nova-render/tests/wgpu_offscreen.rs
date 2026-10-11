@@ -5,7 +5,7 @@
 use nova_data::fonts::check_sfnt;
 use nova_data::fonts::fixture::{SfntBuilder, block_font, block_sfnt};
 use nova_data::graphics::Image;
-use nova_render::fonts::FontFaces;
+use nova_render::fonts::{FALLBACK_FONT, FontFaces};
 use nova_render::wgpu::{
     InitError, OffscreenGpu, OverlayGpu, OverlayPainter, PaintTarget, WithOverlay,
 };
@@ -579,12 +579,12 @@ fn zero_size_text_draws_nothing_and_the_frame_goes_on() {
 
 #[test]
 fn only_the_handed_fonts_load() {
-    let Some(bundled) = gpu() else {
+    let Some(fallback) = gpu_with(SIZE, SIZE, &FontFaces::new(FALLBACK_FONT)) else {
         return;
     };
-    assert_eq!(bundled.font_faces(), 1);
-    assert!(!bundled.charcoal_loaded());
-    let faces = FontFaces::bundled().with_charcoal(block_font("Charcoal"));
+    assert_eq!(fallback.font_faces(), 1);
+    assert!(!fallback.charcoal_loaded());
+    let faces = FontFaces::new(FALLBACK_FONT).with_charcoal(block_font("Charcoal"));
     let Some(with_charcoal) = gpu_with(SIZE, SIZE, &faces) else {
         return;
     };
@@ -593,8 +593,17 @@ fn only_the_handed_fonts_load() {
 }
 
 #[test]
+fn the_bundled_faces_load_the_fallback_and_the_serif() {
+    let Some(bundled) = gpu() else {
+        return;
+    };
+    assert_eq!(bundled.font_faces(), 2);
+    assert!(!bundled.charcoal_loaded());
+}
+
+#[test]
 fn charcoal_bytes_that_load_no_face_are_not_loaded() {
-    let faces = FontFaces::bundled().with_charcoal(&b"not a font"[..]);
+    let faces = FontFaces::new(FALLBACK_FONT).with_charcoal(&b"not a font"[..]);
     let Some(gpu) = gpu_with(SIZE, SIZE, &faces) else {
         return;
     };
@@ -764,7 +773,7 @@ fn a_fallback_that_loads_no_face_draws_no_text() {
     };
     assert_eq!(gpu.font_faces(), 0);
     assert!(!gpu.charcoal_loaded());
-    for font in [Font::Geneva, Font::Charcoal] {
+    for font in [Font::Geneva, Font::Charcoal, Font::Times] {
         let Some(picture) = draw_sample(&faces, font, 12.0, 2) else {
             return;
         };
@@ -801,7 +810,7 @@ fn both_fonts_draw_at_the_original_sizes_at_1x_and_2x() {
     let faces = FontFaces::bundled().with_charcoal(block_font("Charcoal"));
     // Nova's interface sizes (`cölr`, `ïntf`): Geneva 9, 10 and 12;
     // Charcoal 12.
-    for font in [Font::Geneva, Font::Charcoal] {
+    for font in [Font::Geneva, Font::Charcoal, Font::Times] {
         for size in [9.0, 10.0, 12.0] {
             let (Some(one), Some(two)) = (
                 draw_sample(&faces, font, size, 1),

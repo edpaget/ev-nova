@@ -1,7 +1,7 @@
 //! The parts the Outfitter and the Shipyard share: the grid of cells in
 //! their dialog's grid item, with its selection, scrolling and arrows; a
-//! `ShortName`'s lines; and the selected item's picture or "No Picture",
-//! and its description, as read.
+//! `ShortName`'s lines; and the selected item's picture, or "No Picture"
+//! and "Available" centred on its item, and its description, as read.
 //!
 //! The grid shows [`COLUMNS`] cells across and [`GRID_ROWS`] down, each
 //! [`CELL_WIDTH`] x [`CELL_HEIGHT`] from the grid item's top left. One cell
@@ -38,8 +38,14 @@ pub const CELL_WIDTH: f32 = 83.0;
 /// A cell's height: four fit the stock grid's 271.
 pub const CELL_HEIGHT: f32 = 67.0;
 
-/// `STR#` 2002 #213.
+/// `STR#` 2002 #213: the first line drawn on a missing picture.
 pub const NO_PICTURE: &str = "No Picture";
+/// `STR#` 2002 #214: the second line drawn on a missing picture.
+pub const PICTURE_AVAILABLE: &str = "Available";
+/// How far [`NO_PICTURE`]'s baseline is above, and [`PICTURE_AVAILABLE`]'s
+/// below, the picture item's vertical middle (`_OutfitDialogUpdate`
+/// @0x57a2a-0x57a43, @0x57a75-0x57a8e).
+pub const NO_PICTURE_OFFSET: f32 = 6.0;
 
 /// The screens' text font.
 pub const TEXT_FONT: Font = Font::Geneva;
@@ -121,8 +127,63 @@ pub fn draw_cell_picture(list: &mut DrawList, cell: Bounds, picture: Option<i16>
 }
 
 /// The top of a line of the screens' text whose baseline is `baseline`.
-fn baseline_top(baseline: f32) -> f32 {
+pub(crate) fn baseline_top(baseline: f32) -> f32 {
     baseline - TEXT_SIZE
+}
+
+/// How a run of text is set: its font, size and colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextStyle {
+    /// The font.
+    pub font: Font,
+    /// The size.
+    pub size: f32,
+    /// The colour.
+    pub color: Color,
+}
+
+/// The screens' text: [`TEXT_FONT`] at [`TEXT_SIZE`] in [`TEXT_COLOR`].
+pub const SCREEN_TEXT: TextStyle = TextStyle {
+    font: TEXT_FONT,
+    size: TEXT_SIZE,
+    color: TEXT_COLOR,
+};
+
+/// `words` in white, centred across `area` on `baseline`, as
+/// `_DrawCenteredText` (@0x263d) draws it: from the floor of the middle of
+/// `area`'s sides, less half the text's width.
+pub fn draw_centred_text(
+    list: &mut DrawList,
+    metrics: &dyn TextMetrics,
+    area: Bounds,
+    baseline: f32,
+    words: &str,
+) {
+    draw_centred_text_in(list, metrics, SCREEN_TEXT, area, baseline, words);
+}
+
+/// `words` set in `style`, centred across `area` on `baseline`, as
+/// `_DrawCenteredText` (@0x263d) draws it: from the floor of the middle of
+/// `area`'s sides, less half the text's width, its top the size above
+/// the baseline.
+pub fn draw_centred_text_in(
+    list: &mut DrawList,
+    metrics: &dyn TextMetrics,
+    style: TextStyle,
+    area: Bounds,
+    baseline: f32,
+    words: &str,
+) {
+    let middle = f32::midpoint(area.min.x, area.max.x).floor();
+    let x = middle - metrics.width(style.font, style.size, words) / 2.0;
+    list.text_in(
+        style.font,
+        words,
+        Point::new(x, baseline - style.size),
+        style.size,
+        None,
+        style.color,
+    );
 }
 
 /// `short_name`'s lines, each in its colour and centred across `cell`: a
@@ -258,10 +319,13 @@ impl CellGrid {
         (self.top_row > 0, self.top_row < Self::last_top_row(count))
     }
 
-    /// The index of the cell of `count` under `at` on a grid item at
-    /// `grid`, if there is one.
+    /// The index, counted with the scroll, of the cell position under
+    /// `at` on a grid item at `grid`, listed or not: `None` outside the
+    /// item or past its [`COLUMNS`] x [`GRID_ROWS`] cells, as the
+    /// original bounds the column and row (`_OutfitFilter`
+    /// @0x585ea-0x58607).
     #[must_use]
-    pub fn cell_at(&self, grid: Bounds, at: Point, count: usize) -> Option<usize> {
+    pub fn cell_under(&self, grid: Bounds, at: Point) -> Option<usize> {
         if !grid.contains(at) {
             return None;
         }
@@ -270,8 +334,14 @@ impl CellGrid {
         if column >= COLUMNS || row >= GRID_ROWS {
             return None;
         }
-        let index = (self.top_row + row) * COLUMNS + column;
-        (index < count).then_some(index)
+        Some((self.top_row + row) * COLUMNS + column)
+    }
+
+    /// The index of the cell of `count` under `at` on a grid item at
+    /// `grid`, if there is one.
+    #[must_use]
+    pub fn cell_at(&self, grid: Bounds, at: Point, count: usize) -> Option<usize> {
+        self.cell_under(grid, at).filter(|&index| index < count)
     }
 
     /// The cells of `count` shown, each index with where its cell is in a
@@ -349,14 +419,22 @@ impl Shown {
         }
     }
 
-    /// The picture stretched into `area`, or "No Picture" in it, then the
-    /// description.
-    pub fn draw(&self, list: &mut DrawList, area: Bounds) {
+    /// The picture stretched into `area`, or, with none, "No Picture" and
+    /// "Available" centred across it in white, [`NO_PICTURE_OFFSET`] above
+    /// and below the floor of its vertical middle (`_OutfitDialogUpdate`
+    /// @0x579e0-0x57aa3, `_ShipyardDialogUpdate` @0x59164-0x59227); then
+    /// the description.
+    pub fn draw(&self, list: &mut DrawList, area: Bounds, metrics: &dyn TextMetrics) {
         if let Some(id) = self.picture {
             list.stretched_picture(ImageKey::picture(id), area.min, area.width(), area.height());
         } else {
-            let origin = Point::new(area.min.x + INSET, area.min.y + INSET);
-            text(list, NO_PICTURE, origin, GREY);
+            let middle = f32::midpoint(area.min.y, area.max.y).floor();
+            for (words, baseline) in [
+                (NO_PICTURE, middle - NO_PICTURE_OFFSET),
+                (PICTURE_AVAILABLE, middle + NO_PICTURE_OFFSET),
+            ] {
+                draw_centred_text(list, metrics, area, baseline, words);
+            }
         }
         self.description.draw(list);
     }
@@ -375,6 +453,59 @@ mod tests {
 
     fn commands(list: &DrawList) -> Vec<DrawCommand> {
         list.iter().cloned().collect()
+    }
+
+    #[test]
+    fn centred_text_takes_its_font_size_and_colour() {
+        let mut list = DrawList::new();
+        let style = TextStyle {
+            font: Font::Times,
+            size: 18.0,
+            color: Color::WHITE,
+        };
+        let area = rect(7.0, 0.0, 600.0, 24.0);
+        draw_centred_text_in(&mut list, &MonoMetrics, style, area, 18.0, "Kestrel");
+        let width = MonoMetrics.width(Font::Times, 18.0, "Kestrel");
+        assert_eq!(
+            commands(&list),
+            [DrawCommand::Text {
+                text: "Kestrel".to_owned(),
+                font: Font::Times,
+                origin: Point::new(307.0 - width / 2.0, 0.0),
+                size: 18.0,
+                wrap_width: None,
+                color: Color::WHITE,
+            }]
+        );
+        // The middle is floored: 7..608 is 307.5, drawn from 307.
+        let mut odd = DrawList::new();
+        let grey = TextStyle {
+            color: Color::DIM,
+            ..style
+        };
+        draw_centred_text_in(
+            &mut odd,
+            &MonoMetrics,
+            grey,
+            rect(7.0, 10.0, 601.0, 24.0),
+            40.0,
+            "Kestrel",
+        );
+        let [DrawCommand::Text { origin, color, .. }] = &commands(&odd)[..] else {
+            panic!("one text: {:?}", commands(&odd));
+        };
+        assert_eq!(
+            (*origin, *color),
+            (Point::new(307.0 - width / 2.0, 22.0), Color::DIM)
+        );
+        assert_eq!(
+            SCREEN_TEXT,
+            TextStyle {
+                font: TEXT_FONT,
+                size: TEXT_SIZE,
+                color: TEXT_COLOR
+            }
+        );
     }
 
     fn texts(list: &DrawList) -> Vec<(String, Point, Color)> {
@@ -517,6 +648,71 @@ mod tests {
         );
     }
 
+    fn shown(picture: Option<i16>, area: Bounds) -> Shown {
+        let metrics: Rc<dyn TextMetrics> = Rc::new(MonoMetrics);
+        Shown::read_text("", picture, area, &metrics)
+    }
+
+    #[test]
+    fn a_missing_picture_draws_no_picture_and_available_centred_6_either_side_of_the_middle() {
+        let area = rect(100.0, 40.0, 200.0, 200.0);
+        let mut list = DrawList::new();
+        shown(None, area).draw(&mut list, area, &MonoMetrics);
+        assert_eq!(
+            texts(&list),
+            [
+                (
+                    "No Picture".to_owned(),
+                    Point::new(200.0 - 25.0, baseline_top(140.0 - 6.0)),
+                    TEXT_COLOR
+                ),
+                (
+                    "Available".to_owned(),
+                    Point::new(200.0 - 22.5, baseline_top(140.0 + 6.0)),
+                    TEXT_COLOR
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_middle_is_halved_to_a_whole_number_and_the_width_exactly() {
+        let area = rect(10.0, 20.0, 201.0, 101.0);
+        let mut list = DrawList::new();
+        shown(None, area).draw(&mut list, area, &MonoMetrics);
+        assert_eq!(
+            texts(&list),
+            [
+                (
+                    "No Picture".to_owned(),
+                    Point::new(110.0 - 25.0, baseline_top(70.0 - 6.0)),
+                    TEXT_COLOR
+                ),
+                (
+                    "Available".to_owned(),
+                    Point::new(110.0 - 22.5, baseline_top(70.0 + 6.0)),
+                    TEXT_COLOR
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_picture_draws_no_text() {
+        let area = rect(10.0, 20.0, 201.0, 101.0);
+        let mut list = DrawList::new();
+        shown(Some(6000), area).draw(&mut list, area, &MonoMetrics);
+        assert_eq!(
+            commands(&list),
+            [DrawCommand::StretchedPicture {
+                image: ImageKey::picture(6000),
+                top_left: area.min,
+                width: 201.0,
+                height: 101.0,
+            }]
+        );
+    }
+
     #[test]
     fn cells_go_across_then_down_from_the_grids_corner() {
         let grid = rect(10.0, 20.0, 333.0, 271.0);
@@ -561,5 +757,43 @@ mod tests {
             Some(4),
             "under the scroll"
         );
+    }
+
+    #[test]
+    fn a_point_on_an_unlisted_cell_is_under_a_cell_but_at_none() {
+        let area = rect(10.0, 20.0, 333.0, 271.0);
+        let grid = CellGrid::default();
+        let listed = Point::new(100.0, 30.0);
+        assert_eq!(grid.cell_under(area, listed), Some(1));
+        assert_eq!(grid.cell_at(area, listed, 6), Some(1));
+        let empty = Point::new(100.0, 160.0);
+        assert_eq!(grid.cell_under(area, empty), Some(9), "an empty cell");
+        assert_eq!(grid.cell_at(area, empty, 6), None);
+        let next = Point::new(190.0, 100.0);
+        assert_eq!(grid.cell_under(area, next), Some(6));
+        assert_eq!(grid.cell_at(area, next, 7), Some(6), "the last listed");
+        assert_eq!(grid.cell_at(area, next, 6), None, "the first empty");
+        let last = Point::new(10.0 + 83.0 * 4.0 - 0.5, 20.0 + 67.0 * 4.0 - 0.5);
+        assert_eq!(grid.cell_under(area, last), Some(15), "the last cell");
+        for past in [
+            Point::new(10.0 + 83.0 * 4.0 + 0.5, 30.0),
+            Point::new(20.0, 20.0 + 67.0 * 4.0 + 0.5),
+        ] {
+            assert_eq!(grid.cell_under(area, past), None, "past the cells");
+            assert_eq!(grid.cell_at(area, past, 22), None);
+        }
+        for outside in [Point::new(9.5, 30.0), Point::new(20.0, 19.5)] {
+            assert_eq!(grid.cell_under(area, outside), None, "outside");
+            assert_eq!(grid.cell_at(area, outside, 22), None);
+        }
+
+        let mut scrolled = CellGrid::default();
+        scrolled.scroll(true, 22);
+        scrolled.scroll(true, 22);
+        assert_eq!(scrolled.cell_under(area, listed), Some(9), "scrolled");
+        assert_eq!(scrolled.cell_at(area, listed, 22), Some(9));
+        let empty = Point::new(10.0 + 83.0 * 3.5, 20.0 + 67.0 * 3.5);
+        assert_eq!(scrolled.cell_under(area, empty), Some(23));
+        assert_eq!(scrolled.cell_at(area, empty, 22), None);
     }
 }

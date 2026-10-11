@@ -47,7 +47,7 @@ use super::catalog::StellarId;
 use super::hire::HireScreen;
 use super::layout::LEAVE_LABEL;
 use super::offer::{OfferChoice, OfferDialog, VenueOffers};
-use super::shipyard::ShipyardCatalog;
+use super::shipyard::{InfoTemplates, ShipyardCatalog};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -115,8 +115,8 @@ pub fn bar_desc_id(stellar: StellarId) -> i16 {
 pub struct Hiring {
     /// The "Shipyard" dialog's template, or why there is none.
     pub template: Result<DialogTemplate, String>,
-    /// The "Shipyard Info" panel's template, or why there is none.
-    pub info: Result<DialogTemplate, String>,
+    /// The "Shipyard Info" panels' templates, or why each is missing.
+    pub info: InfoTemplates,
     /// The pictures and descriptions.
     pub catalog: Rc<dyn ShipyardCatalog>,
 }
@@ -526,7 +526,7 @@ mod tests {
     use crate::spaceport::catalog::{PortRecord, SpaceportCatalog};
     use crate::spaceport::shipyard::ShipBaseImages;
     use crate::text::fixture::MonoMetrics;
-    use crate::ui::catalog::DescriptionSource;
+    use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
@@ -603,10 +603,19 @@ mod tests {
         }
     }
 
+    impl DescriptionGraphics for FakeArt {
+        fn description_graphic(&self, _id: i16) -> Option<i16> {
+            None
+        }
+    }
+
     fn hiring(art: &Rc<FakeArt>) -> Hiring {
         Hiring {
             template: Err("no DLOG 1004".to_owned()),
-            info: Err("no DLOG 1005".to_owned()),
+            info: InfoTemplates {
+                plain: Err("no DLOG 1005".to_owned()),
+                picture: Err("no DLOG 1019".to_owned()),
+            },
             catalog: Rc::clone(art) as Rc<dyn ShipyardCatalog>,
         }
     }
@@ -695,6 +704,10 @@ mod tests {
                         max_tur: 0,
                         length: 0,
                         crew: 0,
+                        space: 0,
+                        rounding: nova_sim::RuleSource::Engine,
+                        weapons: Vec::new(),
+                        long_name: String::new(),
                     },
                     hire: Ok(()),
                 })

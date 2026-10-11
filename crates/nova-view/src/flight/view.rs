@@ -294,6 +294,7 @@ use std::time::Duration;
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::offer_gap;
 use nova_sim::mission::screens::{NO_ACTIVE_MISSIONS, mac_ticks};
+use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
     HireTerms, Hired, MissionComputer, MissionId, MissionInfo, MissionText, NotOffered,
@@ -305,12 +306,12 @@ use nova_sim::{
     EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal, Good, GovtId, Haggle,
     HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome, LandPress,
     LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
-    NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, Outfitter, Pilot, PilotCatalog,
-    PlunderView, PointDefenceRule, RechargeRefusal, Reserves, RuleKey, Rulebook, Rules, Session,
-    ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage,
-    StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick, TradeRefusal,
-    TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn, glow_level,
-    lights_level,
+    NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot, PilotCatalog,
+    PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey, Rulebook,
+    Rules, Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard,
+    SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick,
+    TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn,
+    glow_level, lights_level,
 };
 
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
@@ -2263,6 +2264,27 @@ impl<C> FlightView<C> {
         match &mut self.session {
             Ok(session) => session.outfit_counted(order, count, &mut self.chance),
             Err(_) => Err(OutfitRefusal::NoOutfitter),
+        }
+    }
+
+    /// Buys or sells up to `count` of an outfit as
+    /// [`Session::outfit_order`] does, on the flight's chance, giving the
+    /// whole run and its alert; a session that failed has no outfitter,
+    /// refused at the first pass with no alert.
+    pub fn outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
+        match &mut self.session {
+            Ok(session) => session.outfit_order(order, count, &mut self.chance),
+            Err(_) => OutfitRun {
+                run: OrderRun {
+                    done: 0,
+                    stopped: Some(Stopped {
+                        pass: 0,
+                        refusal: OutfitRefusal::NoOutfitter,
+                    }),
+                },
+                alert: None,
+                after: Reselection::Kept,
+            },
         }
     }
 
@@ -6455,7 +6477,8 @@ mod tests {
         assert_eq!(broken.trade(BUY_FOOD), Err(TradeRefusal::NoMarket));
     }
 
-    use nova_sim::{OutfitOrder, OutfitRefusal};
+    use nova_sim::order_loop::{OrderRun, Stopped};
+    use nova_sim::{OutfitOrder, OutfitRefusal, OutfitRun, Reselection};
 
     /// Earth at the centre, an outfitter selling a fuel tank (+100 fuel,
     /// a ton, 1000 credits), the first `chär` holding 1000 credits.
@@ -6558,6 +6581,119 @@ mod tests {
             broken.outfit_counted(BUY_TANK, 2),
             Err(OutfitRefusal::NoOutfitter)
         );
+    }
+
+    #[test]
+    fn an_outfit_order_goes_through_the_session_with_its_run() {
+        let mut catalog = outfitting();
+        catalog.character = Ok(CharacterStart {
+            cash: 3000,
+            ..catalog.character.expect("a chär")
+        });
+        let refused = |refusal| OutfitRun {
+            run: OrderRun {
+                done: 0,
+                stopped: Some(Stopped { pass: 0, refusal }),
+            },
+            alert: None,
+            after: Reselection::Kept,
+        };
+        let mut view = FlightView::new(catalog);
+        assert_eq!(
+            view.outfit_order(BUY_TANK, 2),
+            refused(OutfitRefusal::NoOutfitter),
+            "in flight"
+        );
+        land_now(&mut view);
+        view.take_save_due();
+        assert_eq!(
+            view.outfit_order(BUY_TANK, 4),
+            OutfitRun {
+                run: OrderRun {
+                    done: 3,
+                    stopped: Some(Stopped {
+                        pass: 3,
+                        refusal: OutfitRefusal::CannotAfford,
+                    }),
+                },
+                alert: None,
+                after: Reselection::Kept,
+            }
+        );
+        assert_eq!(view.pilot().map(Pilot::cash), Some(0));
+        assert!(view.take_save_due(), "a purchase");
+        let broken = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..outfitting()
+        };
+        let mut broken = FlightView::new(broken);
+        assert_eq!(
+            broken.outfit_order(BUY_TANK, 2),
+            refused(OutfitRefusal::NoOutfitter)
+        );
+    }
+
+    /// [`outfitting`] with 10,000 credits, a -10-ton pod (201) and an
+    /// outfit (202) of `heavy` tons, each 100 credits.
+    fn pod_outfitting(heavy: i16) -> FakeCatalog {
+        let mut catalog = outfitting();
+        catalog.character = Ok(CharacterStart {
+            cash: 10_000,
+            ..catalog.character.expect("a chär")
+        });
+        let tank = catalog.outfits[0].clone();
+        for (id, mass) in [(201, -10), (202, heavy)] {
+            catalog.outfits.push(OutfitRecord {
+                id: OutfitId(id),
+                mass,
+                cost: 100,
+                lc_name: "pod".to_owned(),
+                lc_plural: "pods".to_owned(),
+                ..tank.clone()
+            });
+        }
+        catalog
+    }
+
+    #[test]
+    fn a_counted_sale_refused_part_way_goes_through_the_session_with_its_alert() {
+        let pod = OutfitId(201);
+        let mut probe = FlightView::new(pod_outfitting(0));
+        land_now(&mut probe);
+        let free = probe.outfitter().expect("open").free_mass;
+        // Three pods and the heavy outfit leave ten tons free: one pod
+        // sold leaves none, and the next is refused at pass 1.
+        let heavy = i16::try_from(free).expect("small") + 20;
+        let mut view = FlightView::new(pod_outfitting(heavy));
+        land_now(&mut view);
+        let buy = |outfit| OutfitOrder {
+            outfit,
+            direction: Direction::Buy,
+        };
+        assert_eq!(view.outfit_order(buy(pod), 3).run.done, 3);
+        assert_eq!(view.outfit_order(buy(OutfitId(202)), 1).run.done, 1);
+        assert_eq!(view.outfitter().expect("open").free_mass, 10);
+        view.take_save_due();
+        let sell = OutfitOrder {
+            outfit: pod,
+            direction: Direction::Sell,
+        };
+        let order = view.outfit_order(sell, 3);
+        assert_eq!(
+            order.run,
+            OrderRun {
+                done: 1,
+                stopped: Some(Stopped {
+                    pass: 1,
+                    refusal: OutfitRefusal::NegativeFreeMass,
+                }),
+            }
+        );
+        let alert = order.alert.expect("an alert");
+        assert_eq!(alert.refusal, OutfitRefusal::NegativeFreeMass);
+        assert!(alert.plural, "a pass remains");
+        assert_eq!(view.pilot().map(|pilot| pilot.owned(pod)), Some(2));
+        assert!(view.take_save_due(), "a sale");
     }
 
     #[test]
@@ -7810,6 +7946,7 @@ mod tests {
     #[test]
     fn space_fires_the_primaries_and_control_the_secondary_while_held() {
         let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+        tap(&mut view, SELECT_KEY);
         view.input(&key(FIRE_KEY, true));
         ticks(&mut view, 2);
         view.input(&held(FIRE_KEY));
@@ -7830,6 +7967,7 @@ mod tests {
     #[test]
     fn letting_go_of_the_keys_lets_go_of_the_fire_keys() {
         let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+        tap(&mut view, SELECT_KEY);
         view.input(&key(FIRE_KEY, true));
         view.input(&key(SECONDARY_KEY, true));
         ticks(&mut view, 1);
@@ -7845,6 +7983,8 @@ mod tests {
     #[test]
     fn w_selects_the_next_secondary_and_alt_w_the_one_before() {
         let mut view = fighting(armed(0, &[BLASTER, ROCKET, MISSILE, TORCH]), &[]);
+        assert_eq!(secondary_of(&view), None);
+        tap(&mut view, SELECT_KEY);
         assert_eq!(secondary_of(&view), Some(ROCKET));
         tap(&mut view, SELECT_KEY);
         assert_eq!(secondary_of(&view), Some(MISSILE));
@@ -7875,13 +8015,14 @@ mod tests {
         tap(&mut view, MAP);
         ticks(&mut view, 2);
         assert_eq!(target_of(&view), None);
-        assert_eq!(secondary_of(&view), Some(ROCKET));
+        assert_eq!(secondary_of(&view), None);
         assert_eq!(view.session().expect("flying").shots(), []);
     }
 
     #[test]
     fn the_combat_keys_do_nothing_while_a_jump_plays() {
         let mut view = fighting(armed(0, &[BLASTER, ROCKET, MISSILE]), &[]);
+        tap(&mut view, SELECT_KEY);
         plot(&mut view, 131);
         fly_out(&mut view);
         view.input(&key(JUMP, true));
@@ -8375,9 +8516,12 @@ mod tests {
 
     #[test]
     fn the_hud_shows_no_target_and_the_secondary_weapon() {
-        let view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
+        let mut view = fighting(armed(0, &[BLASTER, ROCKET]), &[]);
         let list = texts(&drawn(&view));
         assert!(list.contains(&NO_TARGET.to_owned()), "{list:?}");
+        assert!(list.contains(&NO_SECONDARY.to_owned()), "{list:?}");
+        tap(&mut view, SELECT_KEY);
+        let list = texts(&drawn(&view));
         assert!(list.contains(&"Rocket".to_owned()), "{list:?}");
         let unarmed = texts(&drawn(&fighting(armed(0, &[BLASTER]), &[])));
         assert!(unarmed.contains(&NO_SECONDARY.to_owned()), "{unarmed:?}");

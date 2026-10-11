@@ -1,7 +1,7 @@
 //! The widgets' ports over `nova_data`: dialog templates from the
-//! interface file ([`InterfaceData`]), and descriptions and the button
-//! style from the game data ([`GameData`]). Thin mappings; the decisions
-//! are the core's.
+//! interface file ([`InterfaceData`]), and descriptions, their graphics
+//! and the button style from the game data ([`GameData`]). Thin
+//! mappings; the decisions are the core's.
 
 use nova_data::records::colors::Colors;
 use nova_data::records::desc::Desc;
@@ -10,7 +10,7 @@ use nova_data::records::dialog_items::{DialogItem, ItemKind};
 use nova_data::{GameData, InterfaceData, Rect};
 
 use super::button::ButtonStyle;
-use super::catalog::{DescriptionSource, DialogResources};
+use super::catalog::{DescriptionGraphics, DescriptionSource, DialogResources};
 use super::dialog::{DialogTemplate, ItemSpec, ItemTemplate, Placement};
 use crate::color::Color;
 use crate::font::Font;
@@ -100,6 +100,15 @@ impl DescriptionSource for GameData {
             up: Color::from_rgb24(colors.button_up),
             down: Color::from_rgb24(colors.button_down),
             grey: Color::from_rgb24(colors.button_grey),
+        }
+    }
+}
+
+impl DescriptionGraphics for GameData {
+    fn description_graphic(&self, id: i16) -> Option<i16> {
+        match self.get::<Desc>(id) {
+            Some(Ok(desc)) => desc.record.graphic.map(|pict| pict.0),
+            _ => None,
         }
     }
 }
@@ -359,6 +368,27 @@ mod tests {
         bytes.extend([0; 32]);
         bytes.extend([0, 0]);
         bytes
+    }
+
+    /// A `dësc` holding `text` and `graphic`.
+    fn pictured(text: &[u8], graphic: i16) -> Vec<u8> {
+        let mut bytes = desc(text);
+        let at = text.len() + 1;
+        bytes[at..at + 2].copy_from_slice(&graphic.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn a_descriptions_graphic_is_its_pict_or_none() {
+        let data = game(&[
+            (Desc::TYPE, 13000, pictured(b"Shuttle", 20128)),
+            (Desc::TYPE, 13001, pictured(b"Plain", -1)),
+            (Desc::TYPE, 13002, vec![0xFF; 2]),
+        ]);
+        assert_eq!(data.description_graphic(13000), Some(20128));
+        assert_eq!(data.description_graphic(13001), None, "-1 is none");
+        assert_eq!(data.description_graphic(13002), None, "undecodable");
+        assert_eq!(data.description_graphic(13003), None, "missing");
     }
 
     #[test]

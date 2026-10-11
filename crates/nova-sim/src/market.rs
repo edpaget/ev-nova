@@ -234,12 +234,13 @@ use crate::catalog::{
     CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord, PilotCatalog, StellarId,
     StringPatch,
 };
-use crate::chance::Chance;
+use crate::chance::{Chance, NeverFires};
 use crate::control::Gate;
 use crate::fuel::OutfitMod;
 use crate::landing::StellarFlags;
 use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+use crate::rules::{Check, Checks, Context, Value};
 
 /// How many standard commodities there are.
 pub const COMMODITIES: u8 = 6;
@@ -725,21 +726,21 @@ pub struct Market {
     pub capacity: u32,
     /// The cargo space free, in tons.
     pub free: u32,
-    /// How many tons a [`Lot::Click`] moves
-    /// ([`RuleKey::TradeLot`](crate::RuleKey::TradeLot)).
-    pub trade_lot: RuleSource,
-    /// How the most a buy moves divides the cash by the price
-    /// ([`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient)).
-    pub trade_quotient: RuleSource,
-    /// Whether Option (Alt) on Buy or Sell asks for a count, by the
-    /// engine, or trades the most at once
-    /// ([`RuleKey::TradeCount`](crate::RuleKey::TradeCount)). The trade
-    /// itself is the same either way; whoever shows the exchange reads it.
-    pub trade_count: RuleSource,
-    /// Whether a buy divides cash below nothing by the price signed, by
-    /// the engine, or counts it as none
-    /// ([`RuleKey::TradeDebt`](crate::RuleKey::TradeDebt)).
-    pub trade_debt: RuleSource,
+    /// The rule set the exchange was built by, which its questions read:
+    /// how many tons a [`Lot::Click`] moves
+    /// ([`RuleKey::TradeLot`](crate::RuleKey::TradeLot)), how the most a
+    /// buy moves divides the cash by the price
+    /// ([`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient)),
+    /// whether that cash is signed
+    /// ([`RuleKey::TradeDebt`](crate::RuleKey::TradeDebt)), and whether
+    /// Option asks for a count ([`Market::option_asks_count`]).
+    pub rules: Rulebook,
+}
+
+impl Context for Market {
+    fn rulebook(&self) -> &Rulebook {
+        &self.rules
+    }
 }
 
 impl Market {
@@ -766,109 +767,25 @@ impl Market {
     }
 
     /// How many tons `lot` of `row` would move `direction`, or why it
-    /// moves none.
+    /// moves none: refused by the Buy or Sell checks ([`Market::row_allows`]),
+    /// then by the order's own, and otherwise sized.
     fn row_tons(
         &self,
         row: &MarketRow,
         direction: Direction,
         lot: Lot,
     ) -> Result<u32, TradeRefusal> {
-        if !row.trades(direction) {
-            return Err(TradeRefusal::NotTraded);
-        }
-        let most = match direction {
-            Direction::Buy => {
-                if self.free == 0 {
-                    return Err(TradeRefusal::NoSpace);
-                }
-                // `_CanBuyGoods` greys Buy while cash < price, compared
-                // signed (@0xcd07-0xcd0d), so no buy reaches the quotient
-                // there ([`Market::row_allows`]).
-                if self.cash < row.price {
-                    return Err(TradeRefusal::CannotAfford);
-                }
-                if lot == Lot::Click {
-                    let wanted = self.click_tons().min(self.free);
-                    let affordable = self
-                        .quotient(row.price, RuleSource::Bible)
-                        .map_or(wanted, |tons| {
-                            u32::try_from(tons.max(0)).unwrap_or(u32::MAX)
-                        });
-                    return match wanted.min(affordable) {
-                        0 => Err(TradeRefusal::CannotAfford),
-                        tons => Ok(tons),
-                    };
-                }
-                // A good priced below nothing buys none, as the engine's
-                // cash / price is negative and its `jle` @0x5e27d skips
-                // the buy.
-                u32::try_from(self.most(row, direction))
-                    .ok()
-                    .filter(|&most| most > 0)
-                    .ok_or(TradeRefusal::CannotAfford)?
-            }
-            Direction::Sell => match (row.held, lot) {
-                (0, _) => return Err(TradeRefusal::NoneHeld),
-                (held, Lot::Click) => return Ok(held.min(self.click_tons())),
-                _ => u32::try_from(self.most(row, direction)).unwrap_or(0),
-            },
+        let trade = RowTrade { market: self, row };
+        // `_CanBuyGoods` greys Buy while cash < price, compared signed
+        // (@0xcd07-0xcd0d), so no buy reaches the quotient there.
+        refusal(&can(direction), &trade)?;
+        let order = RowOrder {
+            trade,
+            direction,
+            lot,
         };
-        match lot {
-            Lot::Count(n) if n == 0 || n > most => Err(TradeRefusal::OutOfRange),
-            Lot::Count(n) => Ok(n),
-            Lot::Click | Lot::Max => Ok(most),
-        }
-    }
-
-    /// The most `row` offers `direction`: the maximum the original's
-    /// quantity dialog opens with (`_DoTradeDialog`), signed, as it can be
-    /// 0 or less. A buy's is min(cash / price, free), the quotient as
-    /// [`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient) says,
-    /// and anything from 32001 up made 32000 (@0x5e23a-0x5e24c); a row
-    /// priced at nothing is limited by space alone. A sale's is
-    /// min(held, 32000) (@0x5e44f-0x5e457).
-    fn most(&self, row: &MarketRow, direction: Direction) -> i64 {
-        let tons = match direction {
-            Direction::Buy => {
-                let space = i64::from(self.free);
-                self.quotient(row.price, self.trade_quotient)
-                    .map_or(space, |tons| tons.min(space))
-            }
-            Direction::Sell => i64::from(row.held),
-        };
-        tons.min(LOT_CAP)
-    }
-
-    /// The cash divided by `price`, as `source` says, or `None` at a price
-    /// of nothing, which the engine never lists (phase 23). The cash is
-    /// read as [`RuleKey::TradeDebt`](crate::RuleKey::TradeDebt) says: by
-    /// the engine signed, so cash below nothing at a price below nothing
-    /// gives a positive quotient; by the other reading cash below nothing
-    /// counts as none, so a price below nothing gives 0 or less. By the
-    /// engine's division, trunc(f32(cash) / f32(price))
-    /// (@0x5e21d-0x5e234), the cash is held in the engine's 32 bits and
-    /// the price in its 16, each held at the least or most it can hold
-    /// rather than wrapped past it; above 2^24 cash it can round up to a
-    /// ton more than the cash covers. By the other division, exact
-    /// integer division.
-    fn quotient(&self, price: i64, source: RuleSource) -> Option<i64> {
-        if price == 0 {
-            return None;
-        }
-        let cash = match self.trade_debt {
-            RuleSource::Engine => self.cash,
-            RuleSource::Bible => self.cash.max(0),
-        };
-        Some(match source {
-            RuleSource::Engine => {
-                let cash =
-                    i32::try_from(cash).unwrap_or(if cash < 0 { i32::MIN } else { i32::MAX });
-                let price =
-                    i16::try_from(price).unwrap_or(if price < 0 { i16::MIN } else { i16::MAX });
-                (cash as f32 / f32::from(price)) as i64
-            }
-            RuleSource::Bible => cash / price,
-        })
+        refusal(&order_checks(direction), &order)?;
+        Ok(tons().of(&order))
     }
 
     /// The most row `index` offers `direction` ([`Lot::Max`]), which the
@@ -880,17 +797,16 @@ impl Market {
         self.rows
             .get(index)
             .filter(|row| row.trades(direction))
-            .map(|row| self.most(row, direction))
+            .map(|row| most(direction).of(&RowTrade { market: self, row }))
     }
 
-    /// The most tons a [`Lot::Click`] moves, as
-    /// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot) says: [`CLICK_TONS`]
-    /// by the engine, a ton by the other reading.
-    const fn click_tons(&self) -> u32 {
-        match self.trade_lot {
-            RuleSource::Engine => CLICK_TONS,
-            RuleSource::Bible => 1,
-        }
+    /// Whether Option (Alt) on Buy or Sell asks for a count in the
+    /// quantity dialog, by the engine, or trades the most at once, as
+    /// [`RuleKey::TradeCount`](crate::RuleKey::TradeCount) says. The trade
+    /// itself is the same either way; whoever shows the exchange reads it.
+    #[must_use]
+    pub fn option_asks_count(&self) -> bool {
+        option_asks_count().of(self)
     }
 
     /// Whether the Buy or Sell button of row `index` is enabled now. A buy
@@ -899,15 +815,370 @@ impl Market {
     /// free: so on a row priced below nothing it is enabled, though the
     /// buy then moves nothing. A sale is, as `_CanSellGoods` has it
     /// (@0x4a94), where the row is bought here and some of it is held.
+    /// The same Buy and Sell checks refuse an order in [`Market::tons`]
+    /// before it is sized.
     #[must_use]
     pub fn row_allows(&self, index: usize, direction: Direction) -> bool {
-        self.rows.get(index).is_some_and(|row| {
-            row.trades(direction)
-                && match direction {
-                    Direction::Buy => self.free > 0 && self.cash >= row.price,
-                    Direction::Sell => row.held > 0,
-                }
-        })
+        self.rows
+            .get(index)
+            .is_some_and(|row| refusal(&can(direction), &RowTrade { market: self, row }).is_ok())
+    }
+}
+
+/// One row of an exchange, asked whether it trades and how much: the
+/// facts the Buy and Sell checks and the most read.
+#[derive(Clone, Copy)]
+struct RowTrade<'a> {
+    /// The exchange: its cash, free space and rule set.
+    market: &'a Market,
+    /// The row: its price, the tons held and the ways it trades.
+    row: &'a MarketRow,
+}
+
+impl Context for RowTrade<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        &self.market.rules
+    }
+}
+
+/// The first of `checks` that refuses `facts`, if any.
+fn refusal<C: Context>(checks: &Checks<C, TradeRefusal>, facts: &C) -> Result<(), TradeRefusal> {
+    // No exchange check draws (`no_exchange_check_draws`), so no chance
+    // is ever asked.
+    checks.first_refusal(facts, &mut NeverFires)
+}
+
+/// Whether a row can be traded `direction`: [`can_buy`] or [`can_sell`].
+fn can<'a>(direction: Direction) -> Checks<RowTrade<'a>, TradeRefusal> {
+    match direction {
+        Direction::Buy => can_buy(),
+        Direction::Sell => can_sell(),
+    }
+}
+
+/// Whether Buy is enabled on a row, as `_CanBuyGoods` has it
+/// (@0xccec-0xcd31): the row is sold here, the cash is at least the
+/// price, compared signed (@0xcd07-0xcd0d), and a ton of space is free
+/// (@0xcd0f-0xcd26), in `_CanBuyGoods`'s order.
+fn can_buy<'a>() -> Checks<RowTrade<'a>, TradeRefusal> {
+    [
+        Check::plain(
+            "sold here",
+            "the row's ways as listed (`jünk ways`); `_CanBuyGoods` @0xccec asks no list",
+            sold_here,
+        ),
+        Check::plain(
+            "cash for the price",
+            "`_CanBuyGoods` @0xcd07-0xcd0d, signed",
+            cash_for_the_price,
+        ),
+        Check::plain("space free", "`_CanBuyGoods` @0xcd0f-0xcd26", space_free),
+    ]
+    .into()
+}
+
+/// Whether Sell is enabled on a row, as `_CanSellGoods` has it
+/// (@0x4a94): the row is bought here, and some of it is held.
+fn can_sell<'a>() -> Checks<RowTrade<'a>, TradeRefusal> {
+    [
+        Check::plain(
+            "bought here",
+            "the row's ways as listed (`jünk ways`); `_CanSellGoods` @0x4a94 asks no list",
+            bought_here,
+        ),
+        Check::plain(
+            "held",
+            "`_CanSellGoods` @0x4aab-0x4ab1 (a commodity), @0x4ad9 (a `jünk`)",
+            held,
+        ),
+    ]
+    .into()
+}
+
+/// `Ok` when `holds`, else `refusal`.
+fn holds(holds: bool, refusal: TradeRefusal) -> Result<(), TradeRefusal> {
+    if holds { Ok(()) } else { Err(refusal) }
+}
+
+/// The row is sold here: by the engine every listed row is.
+fn sold_here(trade: &RowTrade) -> Result<(), TradeRefusal> {
+    holds(trade.row.sold_here, TradeRefusal::NotTraded)
+}
+
+/// A ton of space is free.
+fn space_free(trade: &RowTrade) -> Result<(), TradeRefusal> {
+    holds(trade.market.free > 0, TradeRefusal::NoSpace)
+}
+
+/// The cash is at least the price, compared signed.
+fn cash_for_the_price(trade: &RowTrade) -> Result<(), TradeRefusal> {
+    holds(
+        trade.market.cash >= trade.row.price,
+        TradeRefusal::CannotAfford,
+    )
+}
+
+/// The row is bought here: by the engine every listed row is.
+fn bought_here(trade: &RowTrade) -> Result<(), TradeRefusal> {
+    holds(trade.row.bought_here, TradeRefusal::NotTraded)
+}
+
+/// Some of the row's good is held.
+fn held(trade: &RowTrade) -> Result<(), TradeRefusal> {
+    holds(trade.row.held > 0, TradeRefusal::NoneHeld)
+}
+
+/// How many tons a [`Lot::Click`] moves at most, as
+/// [`RuleKey::TradeLot`](crate::RuleKey::TradeLot) says: [`CLICK_TONS`]
+/// by the engine, a ton by the other reading.
+fn click_lot<'a>() -> Value<RowTrade<'a>, u32> {
+    Value::disputed(
+        "click lot",
+        "`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa",
+        RuleKey::TradeLot,
+        ten_tons,
+        one_ton,
+    )
+}
+
+/// The engine's click: up to [`CLICK_TONS`].
+fn ten_tons(_: &RowTrade) -> u32 {
+    CLICK_TONS
+}
+
+/// The other reading's click: a ton.
+fn one_ton(_: &RowTrade) -> u32 {
+    1
+}
+
+/// The cash a buy divides by the price, as
+/// [`RuleKey::TradeDebt`](crate::RuleKey::TradeDebt) says: by the engine
+/// signed, so cash below nothing at a price below nothing gives a
+/// positive quotient; by the other reading cash below nothing counts as
+/// none, so a price below nothing gives 0 or less.
+fn cash_divided<'a>() -> Value<RowTrade<'a>, i64> {
+    Value::disputed(
+        "cash divided",
+        "`_DoTradeDialog` @0x5e21d-0x5e234",
+        RuleKey::TradeDebt,
+        signed_cash,
+        cash_never_below_none,
+    )
+}
+
+/// The engine's cash: signed.
+fn signed_cash(trade: &RowTrade) -> i64 {
+    trade.market.cash
+}
+
+/// The other reading's cash: none when below nothing.
+fn cash_never_below_none(trade: &RowTrade) -> i64 {
+    trade.market.cash.max(0)
+}
+
+/// The [`cash_divided`] divided by the row's price, as
+/// [`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient) says, or
+/// `None` at a price of nothing, which the engine never lists (phase 23).
+/// By the engine's division, trunc(f32(cash) / f32(price)), the cash is
+/// held in the engine's 32 bits and the price in its 16, each held at the
+/// least or most it can hold rather than wrapped past it; above 2^24 cash
+/// it can round up to a ton more than the cash covers. By the other
+/// division, exact integer division.
+fn quotient<'a>() -> Value<RowTrade<'a>, Option<i64>> {
+    Value::disputed(
+        "quotient",
+        "`_DoTradeDialog` @0x5e21d-0x5e234",
+        RuleKey::TradeQuotient,
+        engine_quotient,
+        exact_quotient,
+    )
+}
+
+/// The engine's quotient, in single floats.
+fn engine_quotient(trade: &RowTrade) -> Option<i64> {
+    let price = trade.row.price;
+    if price == 0 {
+        return None;
+    }
+    let cash = cash_divided().of(trade);
+    let cash = i32::try_from(cash).unwrap_or(if cash < 0 { i32::MIN } else { i32::MAX });
+    let price = i16::try_from(price).unwrap_or(if price < 0 { i16::MIN } else { i16::MAX });
+    Some((cash as f32 / f32::from(price)) as i64)
+}
+
+/// The exact quotient, in integers.
+fn exact_quotient(trade: &RowTrade) -> Option<i64> {
+    let price = trade.row.price;
+    (price != 0).then(|| cash_divided().of(trade) / price)
+}
+
+/// The [`cash_divided`] a plain buy divides by the row's price: exact
+/// integer division whatever
+/// [`RuleKey::TradeQuotient`](crate::RuleKey::TradeQuotient) says, as the
+/// single-float quotient differs from it only above 2^24 cash, where it
+/// is at least 512 and a click moves at most 10 either way ([`Lot::Click`]).
+fn click_quotient<'a>() -> Value<RowTrade<'a>, Option<i64>> {
+    Value::plain(
+        "click quotient",
+        "`_DoTradeDialog` @0x5e268-0x5e278",
+        exact_quotient,
+    )
+}
+
+/// The most a buy on a row offers, which the original's quantity dialog
+/// opens with, signed, as it can be 0 or less: min([`quotient`], free),
+/// and anything from 32001 up made 32000; a row priced at nothing is
+/// limited by space alone.
+fn buy_most<'a>() -> Value<RowTrade<'a>, i64> {
+    Value::plain("buy most", "`_DoTradeDialog` @0x5e23a-0x5e25a", most_bought)
+}
+
+/// The quotient or the free space, whichever is less, at most 32000.
+fn most_bought(trade: &RowTrade) -> i64 {
+    let space = i64::from(trade.market.free);
+    quotient()
+        .of(trade)
+        .map_or(space, |tons| tons.min(space))
+        .min(LOT_CAP)
+}
+
+/// The most a sale on a row offers: min(held, 32000).
+fn sell_most<'a>() -> Value<RowTrade<'a>, i64> {
+    Value::plain("sell most", "`_DoTradeDialog` @0x5e44f-0x5e47f", most_sold)
+}
+
+/// Everything held, at most 32000.
+fn most_sold(trade: &RowTrade) -> i64 {
+    i64::from(trade.row.held).min(LOT_CAP)
+}
+
+/// The most a row offers `direction`: [`buy_most`] or [`sell_most`].
+fn most<'a>(direction: Direction) -> Value<RowTrade<'a>, i64> {
+    match direction {
+        Direction::Buy => buy_most(),
+        Direction::Sell => sell_most(),
+    }
+}
+
+/// Whether Option (Alt) on Buy or Sell asks for a count, as
+/// [`RuleKey::TradeCount`](crate::RuleKey::TradeCount) says: by the
+/// engine it opens the quantity dialog at the most the row offers; by the
+/// other reading it trades the most at once.
+fn option_asks_count() -> Value<Market, bool> {
+    Value::disputed(
+        "option asks count",
+        "`_DoTradeDialog` @0x5e211, @0x5e45c; `_DoQuantityDialog` @0x56d5b",
+        RuleKey::TradeCount,
+        asks_a_count,
+        trades_the_most,
+    )
+}
+
+/// The engine's Option: a count.
+fn asks_a_count(_: &Market) -> bool {
+    true
+}
+
+/// The other reading's Option: the most.
+fn trades_the_most(_: &Market) -> bool {
+    false
+}
+
+/// One order on a row: the row, the way and the lot, as the order's
+/// checks and its tons read them.
+#[derive(Clone, Copy)]
+struct RowOrder<'a> {
+    /// The row traded.
+    trade: RowTrade<'a>,
+    /// Buying or selling.
+    direction: Direction,
+    /// How much.
+    lot: Lot,
+}
+
+impl Context for RowOrder<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        self.trade.rulebook()
+    }
+}
+
+/// Whether an order the Buy or Sell checks allow moves anything. A buy
+/// must move a ton: a click its tons, any other lot the most; so a good
+/// priced below nothing buys none, as the engine's cash / price is then
+/// negative and its `jle` @0x5e27d skips the buy. A counted lot must
+/// then be from 1 up to the most ([`TradeRefusal::OutOfRange`]).
+fn order_checks<'a>(direction: Direction) -> Checks<RowOrder<'a>, TradeRefusal> {
+    let in_range = |reproduces| Check::plain("count in range", reproduces, count_in_range);
+    match direction {
+        Direction::Buy => [
+            Check::plain(
+                "moves a ton",
+                "`_DoTradeDialog` `jle` @0x5e27d",
+                moves_a_ton,
+            ),
+            in_range(
+                "`_DoTradeDialog` `jle` @0x5e27d skips none; \
+                 the quantity dialog gives no more than the most",
+            ),
+        ]
+        .into(),
+        Direction::Sell => [in_range(
+            "`_DoTradeDialog` `jle` @0x5e4d8 skips none; \
+             the quantity dialog gives no more than the most",
+        )]
+        .into(),
+    }
+}
+
+/// A buy moves a ton: a click's tons, or the most, above 0.
+fn moves_a_ton(order: &RowOrder) -> Result<(), TradeRefusal> {
+    let tons = match order.lot {
+        Lot::Click => i64::from(click_bought(&order.trade)),
+        Lot::Max | Lot::Count(_) => buy_most().of(&order.trade),
+    };
+    holds(tons > 0, TradeRefusal::CannotAfford)
+}
+
+/// A counted lot is from 1 up to the most; any other lot passes.
+fn count_in_range(order: &RowOrder) -> Result<(), TradeRefusal> {
+    match order.lot {
+        Lot::Count(n) => holds(
+            n > 0 && i64::from(n) <= most(order.direction).of(&order.trade),
+            TradeRefusal::OutOfRange,
+        ),
+        Lot::Click | Lot::Max => Ok(()),
+    }
+}
+
+/// The tons an order the checks allow moves: a click's, the most, or
+/// its count.
+fn tons<'a>() -> Value<RowOrder<'a>, u32> {
+    Value::plain(
+        "tons",
+        "`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa (a click); \
+         @0x5e23a-0x5e25a, @0x5e44f-0x5e47f (the most); the quantity dialog's count",
+        order_tons,
+    )
+}
+
+/// A plain buy's tons: min(cash / price, [`click_lot`], free), the cash
+/// divided exactly ([`click_quotient`]); at a price of nothing, the click
+/// lot or the free space.
+fn click_bought(trade: &RowTrade) -> u32 {
+    let wanted = click_lot().of(trade).min(trade.market.free);
+    click_quotient().of(trade).map_or(wanted, |tons| {
+        wanted.min(u32::try_from(tons.max(0)).unwrap_or(u32::MAX))
+    })
+}
+
+/// A click buys [`click_bought`] and sells min(held, [`click_lot`]);
+/// [`Lot::Max`] moves the most and [`Lot::Count`] its count.
+fn order_tons(order: &RowOrder) -> u32 {
+    match (order.lot, order.direction) {
+        (Lot::Count(n), _) => n,
+        (Lot::Click, Direction::Buy) => click_bought(&order.trade),
+        (Lot::Click, Direction::Sell) => order.trade.row.held.min(click_lot().of(&order.trade)),
+        (Lot::Max, direction) => u32::try_from(most(direction).of(&order.trade)).unwrap_or(0),
     }
 }
 
@@ -923,22 +1194,47 @@ impl MarketRow {
     }
 }
 
-/// The exchange of `stellar`, with these `flags`, for `pilot` with
-/// `capacity` tons of cargo space, its `jünk` tests asked of `gate`,
-/// priced by `rules`, its low and high prices by `markup`; `None` without
-/// a trade center.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn market(
-    goods: &Goods,
-    stellar: StellarId,
-    flags: u32,
-    pilot: &Pilot,
-    capacity: u32,
-    gate: Gate,
-    rules: &Rulebook,
-    markup: Markup,
-) -> Option<Market> {
-    let source = rules.source_for(RuleKey::EventPrice);
+/// What an exchange is built from, gathered once: the goods and events,
+/// the stellar and its `spöb` `Flags`, the player's pilot and the fleet's
+/// cargo space, the control-bit tests a `jünk` asks (a [`Gate`]), the
+/// rule set and the stellar's [`Markup`].
+#[derive(Clone, Copy)]
+pub(crate) struct Exchange<'a> {
+    /// Everything the exchange trades and every event that can move its
+    /// prices.
+    pub(crate) goods: &'a Goods,
+    /// The stellar the exchange is at.
+    pub(crate) stellar: StellarId,
+    /// The stellar's `spöb` `Flags`: its trade center and price levels.
+    pub(crate) flags: u32,
+    /// The player's pilot: cash, cargo and the events under way.
+    pub(crate) pilot: &'a Pilot,
+    /// The fleet's cargo space, in tons ([`fleet_holds`]).
+    pub(crate) capacity: u32,
+    /// What a `jünk`'s `BuyOn` and `SellOn` tests are asked of.
+    pub(crate) gate: Gate<'a>,
+    /// The rule set the exchange is priced and traded by.
+    pub(crate) rules: Rulebook,
+    /// What the stellar's low and high prices are marked down and up by.
+    pub(crate) markup: Markup,
+}
+
+/// The exchange `exchange` describes; `None` without a trade center.
+///
+/// Each standard commodity is listed at its [`commodity_price`], when it
+/// has one, traded both ways; each `jünk` row a stellar lists, as
+/// [`junk_listing`] lists it. Then the rows are ordered by good, and
+/// each shows the tons held.
+pub(crate) fn market(exchange: &Exchange) -> Option<Market> {
+    let &Exchange {
+        goods,
+        stellar,
+        flags,
+        pilot,
+        capacity,
+        ref rules,
+        ..
+    } = exchange;
     if flags & StellarFlags::TRADE_CENTER == 0 {
         return None;
     }
@@ -955,39 +1251,28 @@ pub(crate) fn market(
         .commodities
         .iter()
         .filter_map(|(n, commodity)| {
-            let level = price_level(flags, *n)?;
-            let delta: i64 = match source {
-                RuleSource::Engine => 0,
-                RuleSource::Bible => here
-                    .iter()
-                    .filter(|event| standard(event.commodity) == Some(*n))
-                    .map(|event| i64::from(event.price_delta))
-                    .sum(),
+            // By ascending ID, as `pilot.events` is ordered.
+            let deltas: Vec<i64> = here
+                .iter()
+                .filter(|event| standard(event.commodity) == Some(*n))
+                .map(|event| i64::from(event.price_delta))
+                .collect();
+            let quote = CommodityQuote {
+                exchange,
+                base: commodity.base_price,
+                level: price_level(flags, *n),
+                deltas: &deltas,
             };
-            let price = word(band_price(commodity.base_price, level, markup) + delta);
-            Some(commodity_row(*n, commodity, price))
+            let price = commodity_price().of(&quote)?;
+            Some(listed(
+                Good::Commodity(*n),
+                &commodity.name,
+                price,
+                (true, true),
+            ))
         })
         .collect();
-    if source == RuleSource::Engine {
-        // By ascending ID (`pilot.events` is ordered), so the last wins.
-        for event in &here {
-            let Some((n, commodity)) = standard(event.commodity)
-                .and_then(|n| goods.commodities.iter().find(|(number, _)| *number == n))
-            else {
-                continue;
-            };
-            let row = commodity_row(
-                *n,
-                commodity,
-                word(commodity.base_price + i64::from(event.price_delta)),
-            );
-            match rows.iter_mut().find(|listed| listed.good == row.good) {
-                Some(listed) => *listed = row,
-                None => rows.push(row),
-            }
-        }
-    }
-    rows.extend(junk_listing(goods, stellar, gate, rules, markup));
+    rows.extend(junk_listing(exchange));
     rows.sort_by_key(|row| row.good);
     for row in &mut rows {
         row.held = pilot.held(row.good);
@@ -1001,88 +1286,233 @@ pub(crate) fn market(
         cash: pilot.cash,
         capacity,
         free: u32::try_from(free).unwrap_or(u32::MAX),
-        trade_lot: rules.source_for(RuleKey::TradeLot),
-        trade_quotient: rules.source_for(RuleKey::TradeQuotient),
-        trade_count: rules.source_for(RuleKey::TradeCount),
-        trade_debt: rules.source_for(RuleKey::TradeDebt),
+        rules: *rules,
     })
 }
 
-/// The `jünk` rows `stellar` lists, its tests asked of `gate`, priced by
-/// `markup` and as `rules` reads [`RuleKey::JunkPrice`], traded as it reads
-/// [`RuleKey::JunkTrade`]. A `jünk` the stellar both buys and sells has a row each way, the
-/// bought one first, as the original's rows 6 and 7 (@0x5dd83-0x5de2f).
-/// By the engine a row priced 0 is not listed, each way on its own
-/// (`_TradeDialogUpdate` @0x4d2a2-0x4d2ac).
-fn junk_listing<'a>(
-    goods: &'a Goods,
-    stellar: StellarId,
-    gate: Gate<'a>,
-    rules: &Rulebook,
-    markup: Markup,
-) -> impl Iterator<Item = MarketRow> + 'a {
-    let (high_ways, low_ways) = junk_ways(rules.source_for(RuleKey::JunkTrade));
-    let junk_price = rules.source_for(RuleKey::JunkPrice);
-    goods.junk.iter().flat_map(move |junk| {
-        let bought = junk.bought_at.contains(&stellar) && gate.allows(&junk.buy_on);
-        let sold = junk.sold_at.contains(&stellar) && gate.allows(&junk.sell_on);
-        let row = |level, ways| {
-            let price = listed_junk_price(
-                band_price(i64::from(junk.base_price), level, markup),
-                junk_price,
-            )?;
-            Some(listed(Good::Junk(junk.id), &junk.name, price, ways))
-        };
-        [
-            bought.then(|| row(PriceLevel::High, high_ways)),
-            sold.then(|| row(PriceLevel::Low, low_ways)),
-        ]
-        .into_iter()
-        .flatten()
-        .flatten()
-    })
+/// The `jünk` rows `exchange` lists. A `jünk` whose `BoughtAt` lists the
+/// stellar, while the gate allows its `BuyOn`, has a row at
+/// [`JunkSide::BoughtAt`]; one whose `SoldAt` lists it, while the gate
+/// allows its `SellOn`, a row at [`JunkSide::SoldAt`]: the bought one
+/// first, as the original's rows 6 and 7 (@0x5dd83-0x5de2f). Each is
+/// priced by [`junk_price`], and not listed without a price, and traded
+/// the [`junk_ways`].
+fn junk_listing(exchange: &Exchange) -> Vec<MarketRow> {
+    let mut rows = Vec::new();
+    for junk in &exchange.goods.junk {
+        let bought =
+            junk.bought_at.contains(&exchange.stellar) && exchange.gate.allows(&junk.buy_on);
+        let sold = junk.sold_at.contains(&exchange.stellar) && exchange.gate.allows(&junk.sell_on);
+        let sides = [
+            bought.then_some(JunkSide::BoughtAt),
+            sold.then_some(JunkSide::SoldAt),
+        ];
+        for side in sides.into_iter().flatten() {
+            let quote = JunkQuote {
+                exchange,
+                base: i64::from(junk.base_price),
+                side,
+            };
+            if let Some(price) = junk_price().of(&quote) {
+                let ways = junk_ways().of(&quote);
+                rows.push(listed(Good::Junk(junk.id), &junk.name, price, ways));
+            }
+        }
+    }
+    rows
 }
 
-/// The ways (sold here, bought here) a `jünk`'s `BoughtAt` row and its
-/// `SoldAt` row trade, as `source` says
-/// ([`RuleKey::JunkTrade`](crate::RuleKey::JunkTrade)): by the engine
-/// both ways each, as `_CanBuyGoods` (@0xccec) and `_CanSellGoods`
-/// (@0x4a94) never ask which list a row came from; by the Bible, the
-/// `BoughtAt` row is sold only and the `SoldAt` row bought only.
-const fn junk_ways(source: RuleSource) -> ((bool, bool), (bool, bool)) {
-    match source {
-        RuleSource::Engine => ((true, true), (true, true)),
-        RuleSource::Bible => ((false, true), (true, false)),
+/// One standard commodity being priced at an exchange: the facts its
+/// price rules read.
+struct CommodityQuote<'a> {
+    /// The exchange: its rule set and markup.
+    exchange: &'a Exchange<'a>,
+    /// The commodity's `BasePrice`.
+    base: i64,
+    /// The stellar's price level for it ([`price_level`]); `None` where
+    /// it is not traded at a level.
+    level: Option<PriceLevel>,
+    /// The `PriceDelta` of each event active here on it, by ascending
+    /// `öops` ID.
+    deltas: &'a [i64],
+}
+
+impl Context for CommodityQuote<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        &self.exchange.rules
     }
 }
 
-/// A `jünk` row's `price`, as listed by `source`
-/// ([`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice)), or `None` when the
-/// row is not listed. By the engine the price is signed, with no floor,
-/// and a row priced 0 is not listed (`_TradeDialogUpdate`
-/// @0x4d2a2-0x4d2ac); by the other reading it is never below 0, and a row
-/// priced 0 is listed.
-fn listed_junk_price(price: i64, source: RuleSource) -> Option<i64> {
-    match source {
-        RuleSource::Engine => (price != 0).then_some(price),
-        RuleSource::Bible => Some(price.max(0)),
+/// The price of a commodity at its level: its [`band_price`], held in 16
+/// bits; none where it is not traded at a level.
+fn level_price<'a>() -> Value<CommodityQuote<'a>, Option<i64>> {
+    Value::plain(
+        "level price",
+        "`_DoTradeDialog` @0x5dc0c-0x5dc48, @0x5dc87-0x5dcc5, held in 16 bits @0x5dcc5",
+        level_band,
+    )
+}
+
+/// `quote`'s band price at its level, if it has one.
+fn level_band(quote: &CommodityQuote) -> Option<i64> {
+    quote
+        .level
+        .map(|level| band_price(quote.base, level, quote.exchange.markup))
+}
+
+/// The price of a commodity with the events active here, as
+/// [`RuleKey::EventPrice`](crate::RuleKey::EventPrice) says: by the
+/// engine its `BasePrice` plus the highest ID's `PriceDelta`, whatever
+/// its level, so an event lists a commodity not traded here; by the
+/// other reading its [`level_price`] plus every `PriceDelta`. Either way
+/// held in 16 bits; with no event, the level price.
+fn event_price<'a>() -> Value<CommodityQuote<'a>, Option<i64>> {
+    Value::disputed(
+        "event price",
+        "`_DoTradeDialog` @0x5dcf8-0x5dd58, held in 16 bits by `addw` @0x5dd19-0x5dd40",
+        RuleKey::EventPrice,
+        last_event_price,
+        summed_event_price,
+    )
+}
+
+/// The engine's event price: the base plus the last (highest ID) delta,
+/// held in 16 bits, or else the level price.
+fn last_event_price(quote: &CommodityQuote) -> Option<i64> {
+    quote.deltas.last().map_or_else(
+        || level_price().of(quote),
+        |delta| Some(word(quote.base + delta)),
+    )
+}
+
+/// The other reading's event price: the level price plus every delta,
+/// held in 16 bits. Wrapping the sum once is wrapping each addition, so
+/// the deltas' order does not matter.
+fn summed_event_price(quote: &CommodityQuote) -> Option<i64> {
+    let delta: i64 = quote.deltas.iter().sum();
+    level_price().of(quote).map(|price| word(price + delta))
+}
+
+/// A commodity's price on the exchange: its [`event_price`], but never
+/// below [`MIN_COMMODITY_PRICE`]; none where it is not listed.
+fn commodity_price<'a>() -> Value<CommodityQuote<'a>, Option<i64>> {
+    Value::plain(
+        "commodity price",
+        "floor of 5: `_DoTradeDialog` @0x5dcc8-0x5dcce, @0x5dd39-0x5dd40",
+        floored_commodity_price,
+    )
+}
+
+/// `quote`'s event price, raised to [`MIN_COMMODITY_PRICE`].
+fn floored_commodity_price(quote: &CommodityQuote) -> Option<i64> {
+    event_price()
+        .of(quote)
+        .map(|price| price.max(MIN_COMMODITY_PRICE))
+}
+
+/// Which of a stellar's lists a `jünk` row comes from.
+#[derive(Clone, Copy, Debug)]
+enum JunkSide {
+    /// Its `BoughtAt`: the stellar buys it, at the high price.
+    BoughtAt,
+    /// Its `SoldAt`: the stellar sells it, at the low price.
+    SoldAt,
+}
+
+impl JunkSide {
+    /// The level the row is priced at.
+    const fn level(self) -> PriceLevel {
+        match self {
+            Self::BoughtAt => PriceLevel::High,
+            Self::SoldAt => PriceLevel::Low,
+        }
+    }
+}
+
+/// One `jünk` row being priced and listed at an exchange: the facts its
+/// rules read.
+struct JunkQuote<'a> {
+    /// The exchange: its rule set and markup.
+    exchange: &'a Exchange<'a>,
+    /// The `jünk`'s `BasePrice`.
+    base: i64,
+    /// The list the row comes from.
+    side: JunkSide,
+}
+
+impl Context for JunkQuote<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        &self.exchange.rules
+    }
+}
+
+/// A `jünk` row's price, as
+/// [`RuleKey::JunkPrice`](crate::RuleKey::JunkPrice) says, or `None` when
+/// the row is not listed. Its band price at its side's level, held in 16
+/// bits: by the engine signed, with no floor, and a row priced 0 not
+/// listed; by the other reading never below 0, and a row priced 0 listed.
+fn junk_price<'a>() -> Value<JunkQuote<'a>, Option<i64>> {
+    Value::disputed(
+        "jünk price",
+        "rows 6/7 `_DoTradeDialog` @0x5dd83-0x5de2f, held in 16 bits @0x5dddb/@0x5de2f; \
+         unlisted at 0 `_TradeDialogUpdate` @0x4d2a2-0x4d2ac, `_TradeFilter` @0x4e262; \
+         signed `_TradeDialogUpdate` @0x4d545-0x4d54b",
+        RuleKey::JunkPrice,
+        signed_junk_price,
+        floored_junk_price,
+    )
+}
+
+/// `quote`'s band price at its side's level.
+fn junk_band(quote: &JunkQuote) -> i64 {
+    band_price(quote.base, quote.side.level(), quote.exchange.markup)
+}
+
+/// The engine's `jünk` price: signed, and unlisted at 0.
+fn signed_junk_price(quote: &JunkQuote) -> Option<i64> {
+    let band = junk_band(quote);
+    (band != 0).then_some(band)
+}
+
+/// The other reading's `jünk` price: never below 0, and listed at 0.
+#[allow(clippy::unnecessary_wraps)] // The engine's reading's type: a row it does not list.
+fn floored_junk_price(quote: &JunkQuote) -> Option<i64> {
+    Some(junk_band(quote).max(0))
+}
+
+/// The ways (sold here, bought here) a `jünk` row trades, as
+/// [`RuleKey::JunkTrade`](crate::RuleKey::JunkTrade) says: by the engine
+/// both ways, as `_CanBuyGoods` and `_CanSellGoods` never ask which list a
+/// row came from; by the Bible, the `BoughtAt` row is sold only and the
+/// `SoldAt` row bought only.
+fn junk_ways<'a>() -> Value<JunkQuote<'a>, (bool, bool)> {
+    Value::disputed(
+        "jünk ways",
+        "`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` \
+         @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e",
+        RuleKey::JunkTrade,
+        traded_both_ways,
+        traded_by_side,
+    )
+}
+
+/// The engine's ways: both.
+fn traded_both_ways(_: &JunkQuote) -> (bool, bool) {
+    (true, true)
+}
+
+/// The Bible's ways: a `BoughtAt` row sold here only, a `SoldAt` row
+/// bought here only.
+fn traded_by_side(quote: &JunkQuote) -> (bool, bool) {
+    match quote.side {
+        JunkSide::BoughtAt => (false, true),
+        JunkSide::SoldAt => (true, false),
     }
 }
 
 /// `commodity` as a standard commodity's number, if it is one.
 fn standard(commodity: i16) -> Option<u8> {
     u8::try_from(commodity).ok().filter(|&n| n < COMMODITIES)
-}
-
-/// Standard commodity `n`'s row, priced at `price` but never below
-/// [`MIN_COMMODITY_PRICE`], traded both ways.
-fn commodity_row(n: u8, commodity: &Commodity, price: i64) -> MarketRow {
-    listed(
-        Good::Commodity(n),
-        &commodity.name,
-        price.max(MIN_COMMODITY_PRICE),
-        (true, true),
-    )
 }
 
 /// A row for `good`, priced at `price`, traded these ways (sold here,
@@ -1358,6 +1788,7 @@ pub(crate) fn step_junk(
 mod tests {
     use super::*;
     use crate::control::{Gate, Test};
+    use crate::rules::{Descriptor, Verdict};
     use crate::testkit::{AllowAll, RefuseBits, Scripted, catalog};
 
     // Price levels and prices.
@@ -2066,118 +2497,163 @@ mod tests {
     fn without_a_trade_center_there_is_no_exchange() {
         let flags = PORT_KANE & !StellarFlags::TRADE_CENTER;
         assert_eq!(
-            market(
-                &goods(),
-                EARTH,
-                flags,
-                &pilot(0),
-                10,
-                Gate::FRESH,
-                &rules(RuleSource::Engine),
-                Markup::Standard
-            ),
+            market(&Exchange {
+                capacity: 10,
+                rules: rules(RuleSource::Engine),
+                ..exchange(&goods(), EARTH, flags, &pilot(0))
+            }),
             None
         );
         assert_eq!(
-            market(
-                &goods(),
-                MARS,
-                0,
-                &pilot(0),
-                10,
-                Gate::FRESH,
-                &rules(RuleSource::Engine),
-                Markup::Standard
-            ),
+            market(&Exchange {
+                capacity: 10,
+                rules: rules(RuleSource::Engine),
+                ..exchange(&goods(), MARS, 0, &pilot(0))
+            }),
             None
         );
+    }
+
+    /// The exchange's facts, as [`market`] takes them: `goods` at
+    /// `stellar` with these `flags`, for `pilot`, with no cargo space, the
+    /// fresh pilot's tests, the default rule set and the standard markup.
+    fn exchange<'a>(
+        goods: &'a Goods,
+        stellar: StellarId,
+        flags: u32,
+        pilot: &'a Pilot,
+    ) -> Exchange<'a> {
+        Exchange {
+            goods,
+            stellar,
+            flags,
+            pilot,
+            capacity: 0,
+            gate: Gate::FRESH,
+            rules: Rulebook::default(),
+            markup: Markup::Standard,
+        }
+    }
+
+    #[test]
+    fn a_market_is_built_from_one_exchange_context() {
+        let goods = goods();
+        let mut holding = pilot(500);
+        holding.cargo = BTreeMap::from([(Good::Commodity(0), 3)]);
+        let rules = Rulebook::default().with_override(RuleKey::TradeLot, RuleSource::Bible);
+        let found = market(&Exchange {
+            capacity: 10,
+            rules,
+            markup: Markup::Dominated,
+            ..exchange(&goods, StellarId(137), PORT_KANE, &holding)
+        })
+        .expect("trades");
+        let rows: Vec<_> = found
+            .rows
+            .iter()
+            .map(|row| (row.good, row.price, row.held))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (Good::Commodity(0), 112, 3),
+                (Good::Commodity(1), 350, 0),
+                (Good::Commodity(2), 1125, 0),
+                (Good::Commodity(3), 900, 0),
+                (Good::Commodity(4), 200, 0),
+                (Good::Commodity(5), 366, 0),
+            ],
+            "Port Kane's levels by 1.5"
+        );
+        assert_eq!((found.cash, found.capacity, found.free), (500, 10, 7));
+        assert_eq!(found.rules, rules);
+    }
+
+    #[test]
+    fn a_market_carries_the_rule_set_it_was_built_by() {
+        let goods = goods();
+        let pilot = pilot(500);
+        for key in [
+            RuleKey::TradeLot,
+            RuleKey::TradeQuotient,
+            RuleKey::TradeCount,
+            RuleKey::TradeDebt,
+        ] {
+            for source in RuleSource::ALL {
+                let rules = Rulebook::default().with_override(key, source);
+                let found = market(&Exchange {
+                    rules,
+                    ..exchange(&goods, StellarId(137), PORT_KANE, &pilot)
+                })
+                .expect("trades");
+                assert_eq!(found.rules, rules, "{key:?} {source:?}");
+            }
+        }
     }
 
     #[test]
     fn the_exchange_trades_a_click_by_its_rule() {
         for trade_lot in RuleSource::ALL {
-            let found = market(
-                &goods(),
-                StellarId(137),
-                PORT_KANE,
-                &pilot(500),
-                10,
-                Gate::FRESH,
-                &Rulebook::default().with_override(RuleKey::TradeLot, trade_lot),
-                Markup::Standard,
-            )
+            let found = market(&Exchange {
+                capacity: 10,
+                rules: Rulebook::default().with_override(RuleKey::TradeLot, trade_lot),
+                ..exchange(&goods(), StellarId(137), PORT_KANE, &pilot(500))
+            })
             .expect("trades");
-            assert_eq!(found.trade_lot, trade_lot);
+            assert_eq!(found.rules.source_for(RuleKey::TradeLot), trade_lot);
         }
     }
 
     #[test]
     fn the_exchange_divides_by_its_quotient_rule() {
         for trade_quotient in RuleSource::ALL {
-            let found = market(
-                &goods(),
-                StellarId(137),
-                PORT_KANE,
-                &pilot(500),
-                10,
-                Gate::FRESH,
-                &Rulebook::default().with_override(RuleKey::TradeQuotient, trade_quotient),
-                Markup::Standard,
-            )
+            let found = market(&Exchange {
+                capacity: 10,
+                rules: Rulebook::default().with_override(RuleKey::TradeQuotient, trade_quotient),
+                ..exchange(&goods(), StellarId(137), PORT_KANE, &pilot(500))
+            })
             .expect("trades");
-            assert_eq!(found.trade_quotient, trade_quotient);
+            assert_eq!(
+                found.rules.source_for(RuleKey::TradeQuotient),
+                trade_quotient
+            );
         }
     }
 
     #[test]
     fn the_exchange_carries_its_count_rule() {
         for trade_count in RuleSource::ALL {
-            let found = market(
-                &goods(),
-                StellarId(137),
-                PORT_KANE,
-                &pilot(500),
-                10,
-                Gate::FRESH,
-                &Rulebook::default().with_override(RuleKey::TradeCount, trade_count),
-                Markup::Standard,
-            )
+            let found = market(&Exchange {
+                capacity: 10,
+                rules: Rulebook::default().with_override(RuleKey::TradeCount, trade_count),
+                ..exchange(&goods(), StellarId(137), PORT_KANE, &pilot(500))
+            })
             .expect("trades");
-            assert_eq!(found.trade_count, trade_count);
+            assert_eq!(found.rules.source_for(RuleKey::TradeCount), trade_count);
         }
     }
 
     #[test]
     fn the_exchange_carries_its_debt_rule() {
         for trade_debt in RuleSource::ALL {
-            let found = market(
-                &goods(),
-                StellarId(137),
-                PORT_KANE,
-                &pilot(500),
-                10,
-                Gate::FRESH,
-                &Rulebook::default().with_override(RuleKey::TradeDebt, trade_debt),
-                Markup::Standard,
-            )
+            let found = market(&Exchange {
+                capacity: 10,
+                rules: Rulebook::default().with_override(RuleKey::TradeDebt, trade_debt),
+                ..exchange(&goods(), StellarId(137), PORT_KANE, &pilot(500))
+            })
             .expect("trades");
-            assert_eq!(found.trade_debt, trade_debt);
+            assert_eq!(found.rules.source_for(RuleKey::TradeDebt), trade_debt);
         }
     }
 
     #[test]
     fn the_exchange_lists_the_commodities_traded_at_their_levels() {
         let flags = PORT_KANE;
-        let found = market(
-            &goods(),
-            StellarId(137),
-            flags,
-            &pilot(500),
-            10,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            capacity: 10,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), StellarId(137), flags, &pilot(500))
+        })
         .expect("trades");
         assert_eq!(
             found,
@@ -2194,23 +2670,14 @@ mod tests {
                 cash: 500,
                 capacity: 10,
                 free: 10,
-                trade_lot: RuleSource::Engine,
-                trade_quotient: RuleSource::Engine,
-                trade_count: RuleSource::Engine,
-                trade_debt: RuleSource::Engine,
+                rules: rules(RuleSource::Engine),
             }
         );
         let some = TRADE | (1 << 24) | (4 << 12);
-        let found = market(
-            &goods(),
-            StellarId(137),
-            some,
-            &pilot(0),
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), StellarId(137), some, &pilot(0))
+        })
         .expect("trades");
         assert_eq!(
             found.rows,
@@ -2219,32 +2686,20 @@ mod tests {
                 row(Good::Commodity(4), "Metal", 250),
             ]
         );
-        let none = market(
-            &goods(),
-            StellarId(137),
-            TRADE,
-            &pilot(0),
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let none = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), StellarId(137), TRADE, &pilot(0))
+        })
         .expect("trades");
         assert_eq!(none.rows, [], "a trade center that trades nothing");
     }
 
     #[test]
     fn junk_is_sold_low_where_it_is_sold_and_bought_high_where_it_is_bought() {
-        let at_earth = market(
-            &goods(),
-            EARTH,
-            TRADE,
-            &pilot(0),
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let at_earth = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), EARTH, TRADE, &pilot(0))
+        })
         .expect("trades");
         assert_eq!(
             at_earth.rows,
@@ -2254,28 +2709,16 @@ mod tests {
             ],
             "by ID, each traded both ways by the engine"
         );
-        let at_mars = market(
-            &goods(),
-            MARS,
-            TRADE,
-            &pilot(0),
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let at_mars = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), MARS, TRADE, &pilot(0))
+        })
         .expect("trades");
         assert_eq!(at_mars.rows, [row(Good::Junk(JunkId(146)), "Opals", 1500)]);
-        let elsewhere = market(
-            &goods(),
-            StellarId(150),
-            TRADE,
-            &pilot(0),
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let elsewhere = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), StellarId(150), TRADE, &pilot(0))
+        })
         .expect("trades");
         assert_eq!(elsewhere.rows, []);
     }
@@ -2290,16 +2733,10 @@ mod tests {
     fn by_the_bible_junk_is_only_bought_where_it_is_sold_and_sold_where_it_is_bought() {
         let at = |stellar| {
             let rules = trading_by(RuleSource::Bible);
-            market(
-                &goods(),
-                stellar,
-                TRADE,
-                &pilot(0),
-                0,
-                Gate::FRESH,
-                &rules,
-                Markup::Standard,
-            )
+            market(&Exchange {
+                rules,
+                ..exchange(&goods(), stellar, TRADE, &pilot(0))
+            })
             .expect("trades")
             .rows
         };
@@ -2328,16 +2765,10 @@ mod tests {
     #[test]
     fn commodities_trade_both_ways_by_either_reading() {
         for source in RuleSource::ALL {
-            let found = market(
-                &goods(),
-                StellarId(137),
-                PORT_KANE,
-                &pilot(0),
-                0,
-                Gate::FRESH,
-                &trading_by(source),
-                Markup::Standard,
-            )
+            let found = market(&Exchange {
+                rules: trading_by(source),
+                ..exchange(&goods(), StellarId(137), PORT_KANE, &pilot(0))
+            })
             .expect("trades");
             assert_eq!(found.rows.len(), 6, "{source:?}");
             for row in &found.rows {
@@ -2367,16 +2798,12 @@ mod tests {
             ..unlisted()
         };
         let goods = Goods::new(&CommodityStrings::default(), vec![both], Vec::new());
-        market(
-            &goods,
-            EARTH,
-            TRADE,
-            pilot,
+        market(&Exchange {
             capacity,
-            Gate::FRESH,
-            &trading_by(junk_trade),
+            rules: trading_by(junk_trade),
             markup,
-        )
+            ..exchange(&goods, EARTH, TRADE, pilot)
+        })
         .expect("trades")
     }
 
@@ -2500,16 +2927,11 @@ mod tests {
 
     /// The (good, price) rows at `stellar`, with `flags`, by `markup`.
     fn priced(stellar: StellarId, flags: u32, markup: Markup) -> Vec<(Good, i64)> {
-        market(
-            &goods(),
-            stellar,
-            flags,
-            &pilot(0),
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
+        market(&Exchange {
+            rules: rules(RuleSource::Engine),
             markup,
-        )
+            ..exchange(&goods(), stellar, flags, &pilot(0))
+        })
         .expect("trades")
         .rows
         .iter()
@@ -2568,16 +2990,11 @@ mod tests {
     /// `BoughtAt` row at the high price first, then its `SoldAt` row at the
     /// low price.
     fn gold_at_earth(goods: &Goods, gate: Gate) -> Vec<i64> {
-        let found = market(
-            goods,
-            EARTH,
-            TRADE,
-            &pilot(0),
-            0,
+        let found = market(&Exchange {
             gate,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+            rules: rules(RuleSource::Engine),
+            ..exchange(goods, EARTH, TRADE, &pilot(0))
+        })
         .expect("trades");
         found
             .rows
@@ -2647,16 +3064,10 @@ mod tests {
     #[test]
     fn junk_follows_the_commodities() {
         let flags = TRADE | (2 << 28);
-        let found = market(
-            &goods(),
-            MARS,
-            flags,
-            &pilot(0),
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), MARS, flags, &pilot(0))
+        })
         .expect("trades");
         let listed: Vec<_> = found.rows.iter().map(|row| row.good).collect();
         assert_eq!(listed, [Good::Commodity(0), Good::Junk(JunkId(146))]);
@@ -2671,16 +3082,11 @@ mod tests {
             (Good::Commodity(5), 4),
             (Good::Junk(JunkId(999)), 1),
         ]);
-        let found = market(
-            &goods(),
-            EARTH,
-            TRADE | (2 << 28),
-            &pilot,
-            12,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            capacity: 12,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), EARTH, TRADE | (2 << 28), &pilot)
+        })
         .expect("trades");
         let held: Vec<_> = found.rows.iter().map(|row| (row.good, row.held)).collect();
         assert_eq!(
@@ -2696,16 +3102,11 @@ mod tests {
             (12, 2),
             "everything held counts"
         );
-        let over = market(
-            &goods(),
-            EARTH,
-            TRADE,
-            &pilot,
-            5,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let over = market(&Exchange {
+            capacity: 5,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), EARTH, TRADE, &pilot)
+        })
         .expect("trades");
         assert_eq!(over.free, 0, "more held than there is space");
     }
@@ -2715,30 +3116,20 @@ mod tests {
         let mut pilot = pilot(0);
         pilot.cargo = BTreeMap::from([(Good::Commodity(0), 3)]);
         pilot.missions.put(0, crate::testkit::carrying(140, 5));
-        let found = market(
-            &goods(),
-            EARTH,
-            TRADE | (2 << 28),
-            &pilot,
-            12,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            capacity: 12,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), EARTH, TRADE | (2 << 28), &pilot)
+        })
         .expect("trades");
         assert_eq!(found.free, 4, "3 tons of food held, 5 of the mission's");
         assert_eq!(found.rows[0].held, 3, "the mission's food is not held");
         pilot.cargo.clear();
-        let only = market(
-            &goods(),
-            EARTH,
-            TRADE | (2 << 28),
-            &pilot,
-            12,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let only = market(&Exchange {
+            capacity: 12,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), EARTH, TRADE | (2 << 28), &pilot)
+        })
         .expect("trades");
         assert_eq!(
             (only.rows[0].good, only.rows[0].held),
@@ -2752,16 +3143,11 @@ mod tests {
         };
         assert_eq!(only.tons(sell), Err(TradeRefusal::NoneHeld));
         pilot.missions.put(1, crate::testkit::carrying(141, 20));
-        let over = market(
-            &goods(),
-            EARTH,
-            TRADE | (2 << 28),
-            &pilot,
-            12,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let over = market(&Exchange {
+            capacity: 12,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), EARTH, TRADE | (2 << 28), &pilot)
+        })
         .expect("trades");
         assert_eq!(over.free, 0, "more aboard than there is space");
     }
@@ -2802,16 +3188,10 @@ mod tests {
                     )
             })
             .collect();
-        market(
-            &goods(),
-            stellar,
-            flags,
-            &pilot,
-            0,
-            Gate::FRESH,
-            &rules(source),
-            Markup::Standard,
-        )
+        market(&Exchange {
+            rules: rules(source),
+            ..exchange(&goods(), stellar, flags, &pilot)
+        })
         .expect("trades")
     }
 
@@ -2890,16 +3270,10 @@ mod tests {
         let goods = Goods::new(&stock(), Vec::new(), records);
         let mut pilot = pilot(0);
         pilot.events = BTreeMap::from([at(&disasters()[2], 7), at(&disasters()[0], 1)]);
-        let found = market(
-            &goods,
-            EARTH,
-            PORT_KANE,
-            &pilot,
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods, EARTH, PORT_KANE, &pilot)
+        })
         .expect("trades");
         assert_eq!(
             price(&found, Good::Commodity(0)),
@@ -2931,16 +3305,10 @@ mod tests {
                 stellar: Some(EARTH),
             },
         )]);
-        market(
-            &goods,
-            EARTH,
-            flags,
-            &pilot,
-            0,
-            Gate::FRESH,
-            &rules(source),
-            Markup::Standard,
-        )
+        market(&Exchange {
+            rules: rules(source),
+            ..exchange(&goods, EARTH, flags, &pilot)
+        })
         .expect("trades")
     }
 
@@ -2960,16 +3328,11 @@ mod tests {
         let mut buyer = pilot(1000);
         buyer.events = BTreeMap::from([at(&disasters()[0], 30)]);
         buyer.cargo = BTreeMap::from([(FOOD, 2)]);
-        let found = market(
-            &goods(),
-            EARTH,
-            industrial_only,
-            &buyer,
-            10,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            capacity: 10,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), EARTH, industrial_only, &buyer)
+        })
         .expect("trades");
         assert_eq!(
             found.rows,
@@ -2996,29 +3359,19 @@ mod tests {
 
         let priced_at_0 = patched(&[(0, StringPatch::Unreadable)]);
         let unreadable = Goods::new(&priced_at_0, Vec::new(), disasters());
-        let found = market(
-            &unreadable,
-            EARTH,
-            industrial_only,
-            &buyer,
-            10,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            capacity: 10,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&unreadable, EARTH, industrial_only, &buyer)
+        })
         .expect("trades");
         assert_eq!(price(&found, FOOD), 5, "a commodity priced at 0, 0 - 15");
 
-        let found = market(
-            &goods(),
-            MARS,
-            industrial_only,
-            &buyer,
-            10,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            capacity: 10,
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods(), MARS, industrial_only, &buyer)
+        })
         .expect("trades");
         assert_eq!(found.row(FOOD), None, "an event at another stellar");
     }
@@ -3070,16 +3423,10 @@ mod tests {
                 ("", food_high, 5),
             ] {
                 let goods = Goods::new(&strings(&["Food"], &[base]), Vec::new(), Vec::new());
-                let found = market(
-                    &goods,
-                    EARTH,
-                    flags,
-                    &pilot(0),
-                    0,
-                    Gate::FRESH,
-                    &rules(source),
-                    Markup::Standard,
-                )
+                let found = market(&Exchange {
+                    rules: rules(source),
+                    ..exchange(&goods, EARTH, flags, &pilot(0))
+                })
                 .expect("trades");
                 assert_eq!(price(&found, FOOD), expected, "{base} {source:?}");
             }
@@ -3108,16 +3455,10 @@ mod tests {
                 let rules = Rulebook::default()
                     .with_override(RuleKey::EventPrice, event_price)
                     .with_override(RuleKey::JunkPrice, junk_price);
-                let found = market(
-                    &goods,
-                    EARTH,
-                    TRADE,
-                    &pilot(0),
-                    0,
-                    Gate::FRESH,
-                    &rules,
-                    Markup::Standard,
-                )
+                let found = market(&Exchange {
+                    rules,
+                    ..exchange(&goods, EARTH, TRADE, &pilot(0))
+                })
                 .expect("trades");
                 let prices: Vec<_> = found.rows.iter().map(|row| row.price).collect();
                 assert_eq!(prices, expected, "{rules:?}");
@@ -3187,16 +3528,10 @@ mod tests {
                 )
             })
             .collect();
-        market(
-            &goods,
-            EARTH,
-            flags,
-            &pilot,
-            0,
-            Gate::FRESH,
-            &rules(source),
-            Markup::Standard,
-        )
+        market(&Exchange {
+            rules: rules(source),
+            ..exchange(&goods, EARTH, flags, &pilot)
+        })
         .expect("trades")
     }
 
@@ -3250,16 +3585,11 @@ mod tests {
             ..unlisted()
         };
         let goods = Goods::new(&CommodityStrings::default(), vec![odd], Vec::new());
-        market(
-            &goods,
-            EARTH,
-            TRADE,
-            pilot,
-            10,
-            Gate::FRESH,
-            &rules,
-            Markup::Standard,
-        )
+        market(&Exchange {
+            capacity: 10,
+            rules,
+            ..exchange(&goods, EARTH, TRADE, pilot)
+        })
         .expect("trades")
     }
 
@@ -3458,16 +3788,10 @@ mod tests {
                 stellar: Some(EARTH),
             },
         )]);
-        let found = market(
-            &goods,
-            EARTH,
-            PORT_KANE,
-            &pilot,
-            0,
-            Gate::FRESH,
-            &rules(RuleSource::Engine),
-            Markup::Standard,
-        )
+        let found = market(&Exchange {
+            rules: rules(RuleSource::Engine),
+            ..exchange(&goods, EARTH, PORT_KANE, &pilot)
+        })
         .expect("trades");
         assert_eq!(found.events, Vec::<String>::new());
         assert_eq!(price(&found, Good::Commodity(5)), 440);
@@ -3500,16 +3824,10 @@ mod tests {
                 stellar: stored,
             },
         )]);
-        market(
-            &goods,
-            here,
-            PORT_KANE,
-            &pilot,
-            0,
-            Gate::FRESH,
-            &rules(source),
-            Markup::Standard,
-        )
+        market(&Exchange {
+            rules: rules(source),
+            ..exchange(&goods, here, PORT_KANE, &pilot)
+        })
         .expect("trades")
     }
 
@@ -3550,6 +3868,248 @@ mod tests {
         }
     }
 
+    // The price rules.
+
+    /// What `ask` makes of a commodity of `base` price, at `level` by the
+    /// standard markup, moved by events of these `deltas` (by ascending
+    /// ID), under `rules`.
+    fn quoted<T>(
+        rules: Rulebook,
+        base: i64,
+        level: Option<PriceLevel>,
+        deltas: &[i64],
+        ask: impl FnOnce(&CommodityQuote) -> T,
+    ) -> T {
+        let goods = Goods::default();
+        let pilot = pilot(0);
+        let exchange = Exchange {
+            rules,
+            ..exchange(&goods, EARTH, TRADE, &pilot)
+        };
+        ask(&CommodityQuote {
+            exchange: &exchange,
+            base,
+            level,
+            deltas,
+        })
+    }
+
+    #[test]
+    fn level_price_is_the_band_price_held_in_16_bits() {
+        for source in RuleSource::ALL {
+            let at = |base, level| quoted(rules(source), base, level, &[], |q| level_price().of(q));
+            assert_eq!(at(75, Some(PriceLevel::High)), Some(93), "{source:?}");
+            assert_eq!(at(26_215, Some(PriceLevel::Medium)), Some(26_215));
+            assert_eq!(
+                at(26_215, Some(PriceLevel::High)),
+                Some(-32_768),
+                "32768 wraps"
+            );
+            assert_eq!(at(75, None), None, "not traded at a level");
+            let moved = quoted(rules(source), 75, Some(PriceLevel::Low), &[-15], |q| {
+                level_price().of(q)
+            });
+            assert_eq!(moved, Some(60), "no event moves it");
+        }
+    }
+
+    #[test]
+    fn event_price_by_the_engine_is_the_base_plus_the_highest_ids_delta_whatever_the_level() {
+        let at = |level, deltas: &[i64]| {
+            quoted(rules(RuleSource::Engine), 75, level, deltas, |q| {
+                event_price().of(q)
+            })
+        };
+        assert_eq!(at(Some(PriceLevel::High), &[]), Some(93), "no event");
+        assert_eq!(at(Some(PriceLevel::High), &[-15]), Some(60));
+        assert_eq!(at(Some(PriceLevel::Low), &[-15, 15]), Some(90), "the last");
+        assert_eq!(at(Some(PriceLevel::High), &[15, -15]), Some(60));
+        let wrapped = quoted(rules(RuleSource::Engine), 32_000, None, &[1000], |q| {
+            event_price().of(q)
+        });
+        assert_eq!(wrapped, Some(-32_536), "33000 held in 16 bits");
+    }
+
+    #[test]
+    fn event_price_by_the_other_reading_adds_every_delta_to_the_level_price() {
+        let at = |level, deltas: &[i64]| {
+            quoted(rules(RuleSource::Bible), 75, level, deltas, |q| {
+                event_price().of(q)
+            })
+        };
+        assert_eq!(at(Some(PriceLevel::High), &[]), Some(93), "no event");
+        assert_eq!(at(Some(PriceLevel::High), &[-15]), Some(78));
+        assert_eq!(at(Some(PriceLevel::High), &[-15, 15]), Some(93));
+        assert_eq!(at(Some(PriceLevel::Low), &[-15, -5]), Some(40));
+        let wrapped = quoted(
+            rules(RuleSource::Bible),
+            32_000,
+            Some(PriceLevel::Medium),
+            &[20_000, 15_000],
+            |q| event_price().of(q),
+        );
+        assert_eq!(wrapped, Some(1464), "67000 held in 16 bits");
+    }
+
+    #[test]
+    fn event_price_lists_an_untraded_commodity_only_by_the_engine() {
+        let at = |source| quoted(rules(source), 75, None, &[-15], |q| event_price().of(q));
+        assert_eq!(at(RuleSource::Engine), Some(60));
+        assert_eq!(at(RuleSource::Bible), None);
+    }
+
+    #[test]
+    fn commodity_price_is_never_below_5_by_either_reading() {
+        for source in RuleSource::ALL {
+            let at = |base, level, deltas: &[i64]| {
+                quoted(rules(source), base, level, deltas, |q| {
+                    commodity_price().of(q)
+                })
+            };
+            let medium = Some(PriceLevel::Medium);
+            assert_eq!(at(10, medium, &[-8]), Some(5), "{source:?}");
+            assert_eq!(at(4, medium, &[]), Some(5), "{source:?}");
+            assert_eq!(at(5, medium, &[]), Some(5), "{source:?}");
+            assert_eq!(at(6, medium, &[]), Some(6), "{source:?}");
+            assert_eq!(at(-50, medium, &[]), Some(5), "{source:?}");
+            assert_eq!(at(26_215, Some(PriceLevel::High), &[]), Some(5), "wrapped");
+            assert_eq!(at(75, None, &[]), None, "{source:?}");
+        }
+        let untraded = |source| quoted(rules(source), 6, None, &[-4], |q| commodity_price().of(q));
+        assert_eq!(untraded(RuleSource::Engine), Some(5));
+        assert_eq!(untraded(RuleSource::Bible), None);
+    }
+
+    /// What `ask` makes of a `jünk` of `base` price on its `side`'s row,
+    /// by the standard markup, under `rules`.
+    fn junk_quoted<T>(
+        rules: Rulebook,
+        base: i64,
+        side: JunkSide,
+        ask: impl FnOnce(&JunkQuote) -> T,
+    ) -> T {
+        let goods = Goods::default();
+        let pilot = pilot(0);
+        let exchange = Exchange {
+            rules,
+            ..exchange(&goods, EARTH, TRADE, &pilot)
+        };
+        ask(&JunkQuote {
+            exchange: &exchange,
+            base,
+            side,
+        })
+    }
+
+    /// The rule set with `jünk` priced by `junk_price`.
+    fn junk_priced_by(junk_price: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::JunkPrice, junk_price)
+    }
+
+    #[test]
+    fn junk_price_by_the_engine_is_signed_and_unlisted_at_0() {
+        let at = |base, side| {
+            junk_quoted(junk_priced_by(RuleSource::Engine), base, side, |q| {
+                junk_price().of(q)
+            })
+        };
+        assert_eq!(at(400, JunkSide::BoughtAt), Some(500), "high");
+        assert_eq!(at(400, JunkSide::SoldAt), Some(320), "low");
+        assert_eq!(at(-100, JunkSide::BoughtAt), Some(-125));
+        assert_eq!(at(-100, JunkSide::SoldAt), Some(-80));
+        assert_eq!(at(30_000, JunkSide::BoughtAt), Some(-28_036), "wrapped");
+        assert_eq!(at(0, JunkSide::BoughtAt), None);
+        assert_eq!(at(1, JunkSide::SoldAt), None, "1 / 1.25 is 0");
+        assert_eq!(at(1, JunkSide::BoughtAt), Some(1));
+    }
+
+    #[test]
+    fn junk_price_by_the_other_reading_is_never_below_0_and_listed_at_0() {
+        let at = |base, side| {
+            junk_quoted(junk_priced_by(RuleSource::Bible), base, side, |q| {
+                junk_price().of(q)
+            })
+        };
+        assert_eq!(at(400, JunkSide::BoughtAt), Some(500), "high");
+        assert_eq!(at(400, JunkSide::SoldAt), Some(320), "low");
+        assert_eq!(at(-100, JunkSide::BoughtAt), Some(0));
+        assert_eq!(at(-30_000, JunkSide::BoughtAt), Some(28_036), "wrapped");
+        assert_eq!(at(30_000, JunkSide::BoughtAt), Some(0), "wrapped");
+        assert_eq!(at(0, JunkSide::BoughtAt), Some(0));
+        assert_eq!(at(1, JunkSide::SoldAt), Some(0));
+    }
+
+    #[test]
+    fn junk_ways_by_the_engine_trade_both_ways() {
+        for side in [JunkSide::BoughtAt, JunkSide::SoldAt] {
+            let ways = junk_quoted(trading_by(RuleSource::Engine), 400, side, |q| {
+                junk_ways().of(q)
+            });
+            assert_eq!(ways, (true, true));
+        }
+    }
+
+    #[test]
+    fn junk_ways_by_the_other_reading_trade_one_way_by_side() {
+        let at = |side| {
+            junk_quoted(trading_by(RuleSource::Bible), 400, side, |q| {
+                junk_ways().of(q)
+            })
+        };
+        assert_eq!(at(JunkSide::BoughtAt), (false, true), "sold here only");
+        assert_eq!(at(JunkSide::SoldAt), (true, false), "bought here only");
+    }
+
+    #[test]
+    fn each_disputed_exchange_rule_names_its_key() {
+        let disputed = [
+            (event_price().about().reads(), RuleKey::EventPrice),
+            (junk_price().about().reads(), RuleKey::JunkPrice),
+            (junk_ways().about().reads(), RuleKey::JunkTrade),
+            (click_lot().about().reads(), RuleKey::TradeLot),
+            (cash_divided().about().reads(), RuleKey::TradeDebt),
+            (quotient().about().reads(), RuleKey::TradeQuotient),
+            (option_asks_count().about().reads(), RuleKey::TradeCount),
+        ];
+        for (reads, key) in disputed {
+            assert_eq!(reads, Some(key));
+        }
+        for plain in [
+            *level_price().about(),
+            *commodity_price().about(),
+            *click_quotient().about(),
+            *buy_most().about(),
+            *sell_most().about(),
+            *tons().about(),
+        ] {
+            assert_eq!(plain.reads(), None, "{}", plain.name());
+        }
+    }
+
+    #[test]
+    fn the_price_rules_cite_the_originals_addresses() {
+        let cited = [
+            level_price().about().reproduces(),
+            event_price().about().reproduces(),
+            commodity_price().about().reproduces(),
+            junk_price().about().reproduces(),
+            junk_ways().about().reproduces(),
+        ];
+        assert_eq!(
+            cited,
+            [
+                "`_DoTradeDialog` @0x5dc0c-0x5dc48, @0x5dc87-0x5dcc5, held in 16 bits @0x5dcc5",
+                "`_DoTradeDialog` @0x5dcf8-0x5dd58, held in 16 bits by `addw` @0x5dd19-0x5dd40",
+                "floor of 5: `_DoTradeDialog` @0x5dcc8-0x5dcce, @0x5dd39-0x5dd40",
+                "rows 6/7 `_DoTradeDialog` @0x5dd83-0x5de2f, held in 16 bits @0x5dddb/@0x5de2f; \
+                 unlisted at 0 `_TradeDialogUpdate` @0x4d2a2-0x4d2ac, `_TradeFilter` @0x4e262; \
+                 signed `_TradeDialogUpdate` @0x4d545-0x4d54b",
+                "`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` \
+                 @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e",
+            ]
+        );
+    }
+
     // Buying and selling.
 
     /// An exchange selling food at 100 and buying it, buying only opals at
@@ -3570,10 +4130,7 @@ mod tests {
             cash,
             capacity: 100,
             free,
-            trade_lot: RuleSource::Engine,
-            trade_quotient: RuleSource::Engine,
-            trade_count: RuleSource::Engine,
-            trade_debt: RuleSource::Engine,
+            rules: Rulebook::default(),
         }
     }
 
@@ -3611,7 +4168,7 @@ mod tests {
     /// `market` traded by `trade_lot`.
     fn lots_by(trade_lot: RuleSource, market: Market) -> Market {
         Market {
-            trade_lot,
+            rules: market.rules.with_override(RuleKey::TradeLot, trade_lot),
             ..market
         }
     }
@@ -3634,7 +4191,11 @@ mod tests {
             Err(TradeRefusal::NoneHeld)
         );
         let engine = lots_by(RuleSource::Engine, stall(100_000, 25, 50));
-        assert_eq!(engine, stall(100_000, 25, 50), "the engine's by default");
+        assert_eq!(
+            stall(100_000, 25, 50).rules.source_for(RuleKey::TradeLot),
+            RuleSource::Engine,
+            "the engine's by default"
+        );
         assert_eq!(buy(&engine, Lot::Click), Ok(10));
         assert_eq!(sell(&engine, Lot::Click), Ok(10));
     }
@@ -3649,7 +4210,7 @@ mod tests {
                 buy(&stall(-500, 0, 5), lot),
                 Err(TradeRefusal::CannotAfford)
             );
-            assert_eq!(buy(&stall(0, 0, 0), lot), Err(TradeRefusal::NoSpace));
+            assert_eq!(buy(&stall(0, 0, 0), lot), Err(TradeRefusal::CannotAfford));
         }
     }
 
@@ -3728,6 +4289,145 @@ mod tests {
         assert!(!buy(&stall(100_000, 0, 50), 3), "no such row");
     }
 
+    // Can: the Buy and Sell checks.
+
+    /// Row `index` of `market`, as the checks read it.
+    fn trade(market: &Market, index: usize) -> RowTrade<'_> {
+        RowTrade {
+            market,
+            row: &market.rows[index],
+        }
+    }
+
+    /// Each check of `checks` with its citation, in order.
+    fn listed_checks<C>(checks: &Checks<C, TradeRefusal>) -> Vec<(&'static str, &'static str)> {
+        checks
+            .descriptors()
+            .map(|about| (about.name(), about.reproduces()))
+            .collect()
+    }
+
+    /// The verdict of each check of `checks` that refuses `facts`, in
+    /// order.
+    fn verdicts<C: Context>(
+        checks: &Checks<C, TradeRefusal>,
+        facts: &C,
+    ) -> Vec<Verdict<TradeRefusal>> {
+        checks
+            .all_refusals(facts)
+            .into_iter()
+            .map(|(_, verdict)| verdict)
+            .collect()
+    }
+
+    /// The Buy checks are `_CanBuyGoods`'s (@0xccec-0xcd31), and the row's
+    /// ways, in `_CanBuyGoods`'s order: the cash (@0xcd07-0xcd0d), then the
+    /// space (@0xcd0f-0xcd26). The original returns only whether both
+    /// hold, but the order decides which reason a buy with neither gives
+    /// (`a_buy_with_no_space_or_not_enough_cash_for_a_ton_is_refused`).
+    #[test]
+    fn the_buy_checks_are_canbuygoods_checks_in_order() {
+        assert_eq!(
+            listed_checks(&can_buy()),
+            [
+                (
+                    "sold here",
+                    "the row's ways as listed (`jünk ways`); `_CanBuyGoods` @0xccec asks no list"
+                ),
+                (
+                    "cash for the price",
+                    "`_CanBuyGoods` @0xcd07-0xcd0d, signed"
+                ),
+                ("space free", "`_CanBuyGoods` @0xcd0f-0xcd26"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_sell_checks_are_cansellgoods_checks_in_order() {
+        assert_eq!(
+            listed_checks(&can_sell()),
+            [
+                (
+                    "bought here",
+                    "the row's ways as listed (`jünk ways`); `_CanSellGoods` @0x4a94 asks no list"
+                ),
+                (
+                    "held",
+                    "`_CanSellGoods` @0x4aab-0x4ab1 (a commodity), @0x4ad9 (a `jünk`)"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_buy_checks_refuse_in_list_order() {
+        let refuses = Verdict::Refuses;
+        let broke = stall(0, 0, 0);
+        assert_eq!(
+            verdicts(&can(Direction::Buy), &trade(&broke, 1)),
+            [
+                refuses(TradeRefusal::NotTraded),
+                refuses(TradeRefusal::CannotAfford),
+                refuses(TradeRefusal::NoSpace),
+            ],
+            "opals, not sold here"
+        );
+        assert_eq!(
+            verdicts(&can(Direction::Buy), &trade(&broke, 0)),
+            [
+                refuses(TradeRefusal::CannotAfford),
+                refuses(TradeRefusal::NoSpace),
+            ]
+        );
+        let roomy = stall(0, 0, 5);
+        assert_eq!(
+            verdicts(&can(Direction::Buy), &trade(&roomy, 0)),
+            [refuses(TradeRefusal::CannotAfford)]
+        );
+        let first = |market: &Market, index| refusal(&can(Direction::Buy), &trade(market, index));
+        assert_eq!(first(&broke, 1), Err(TradeRefusal::NotTraded));
+        assert_eq!(first(&broke, 0), Err(TradeRefusal::CannotAfford));
+        assert_eq!(first(&roomy, 0), Err(TradeRefusal::CannotAfford));
+        assert_eq!(first(&stall(100, 0, 5), 0), Ok(()));
+    }
+
+    #[test]
+    fn the_sell_checks_refuse_in_list_order() {
+        let refuses = Verdict::Refuses;
+        let empty = stall(0, 0, 0);
+        assert_eq!(
+            verdicts(&can(Direction::Sell), &trade(&empty, 2)),
+            [
+                refuses(TradeRefusal::NotTraded),
+                refuses(TradeRefusal::NoneHeld),
+            ],
+            "water, not bought here"
+        );
+        assert_eq!(
+            verdicts(&can(Direction::Sell), &trade(&empty, 0)),
+            [refuses(TradeRefusal::NoneHeld)]
+        );
+        let first = |market: &Market, index| refusal(&can(Direction::Sell), &trade(market, index));
+        assert_eq!(first(&empty, 2), Err(TradeRefusal::NotTraded));
+        assert_eq!(first(&empty, 0), Err(TradeRefusal::NoneHeld));
+        assert_eq!(first(&stall(0, 1, 0), 0), Ok(()));
+    }
+
+    #[test]
+    fn no_exchange_check_draws() {
+        for direction in [Direction::Buy, Direction::Sell] {
+            for about in can(direction).descriptors() {
+                assert!(!about.draws(), "{}", about.name());
+                assert_eq!(about.reads(), None, "{}", about.name());
+            }
+            for about in order_checks(direction).descriptors() {
+                assert!(!about.draws(), "{}", about.name());
+                assert_eq!(about.reads(), None, "{}", about.name());
+            }
+        }
+    }
+
     /// A stall whose only row is a `jünk` at -200, traded both ways, for
     /// a player with `cash` and `free` tons free.
     fn negative(cash: i64, free: u32) -> Market {
@@ -3740,7 +4440,7 @@ mod tests {
     /// `market` reading its cash below nothing as `trade_debt` says.
     fn debt_by(trade_debt: RuleSource, market: Market) -> Market {
         Market {
-            trade_debt,
+            rules: market.rules.with_override(RuleKey::TradeDebt, trade_debt),
             ..market
         }
     }
@@ -3752,7 +4452,11 @@ mod tests {
     fn by_the_engine_negative_cash_buys_a_negative_price_junk_at_its_price() {
         let buy = |market: &Market, lot| market.tons(order(0, OPALS, Direction::Buy, lot));
         let at_price = negative(-200, 3);
-        assert_eq!(at_price.trade_debt, RuleSource::Engine, "by default");
+        assert_eq!(
+            at_price.rules.source_for(RuleKey::TradeDebt),
+            RuleSource::Engine,
+            "by default"
+        );
         assert_eq!(buy(&at_price, Lot::Click), Ok(1));
         assert_eq!(buy(&at_price, Lot::Max), Ok(1));
         assert_eq!(buy(&at_price, Lot::Count(1)), Ok(1));
@@ -3866,7 +4570,9 @@ mod tests {
     /// `market` dividing its cash by a price as `trade_quotient` says.
     fn quotient_by(trade_quotient: RuleSource, market: Market) -> Market {
         Market {
-            trade_quotient,
+            rules: market
+                .rules
+                .with_override(RuleKey::TradeQuotient, trade_quotient),
             ..market
         }
     }
@@ -3972,7 +4678,10 @@ mod tests {
     #[test]
     fn by_the_engine_the_most_a_buy_moves_is_the_single_float_quotient() {
         let market = dear(32_766_999);
-        assert_eq!(market, quotient_by(RuleSource::Engine, dear(32_766_999)));
+        assert_eq!(
+            market.rules.source_for(RuleKey::TradeQuotient),
+            RuleSource::Engine
+        );
         let buy = |lot| market.tons(order(0, FOOD, Direction::Buy, lot));
         assert_eq!(market.row_max(0, Direction::Buy), Some(1000));
         assert_eq!(buy(Lot::Max), Ok(1000));
@@ -4090,6 +4799,287 @@ mod tests {
                 }
             }
         }
+    }
+
+    // The tons rules.
+
+    #[test]
+    fn click_lot_is_10_by_the_engine_and_1_by_the_other_reading() {
+        let market = stall(100_000, 25, 50);
+        assert_eq!(click_lot().of(&trade(&market, 0)), 10);
+        let one_ton = lots_by(RuleSource::Bible, market);
+        assert_eq!(click_lot().of(&trade(&one_ton, 0)), 1);
+    }
+
+    #[test]
+    fn cash_divided_is_signed_by_the_engine_and_never_below_0_by_the_other() {
+        for (cash, engine, other) in [(-5, -5, 0), (0, 0, 0), (500, 500, 500)] {
+            let signed = debt_by(RuleSource::Engine, stall(cash, 0, 9));
+            assert_eq!(cash_divided().of(&trade(&signed, 0)), engine, "{cash}");
+            let none = debt_by(RuleSource::Bible, stall(cash, 0, 9));
+            assert_eq!(cash_divided().of(&trade(&none, 0)), other, "{cash}");
+        }
+    }
+
+    #[test]
+    fn quotient_is_single_float_by_the_engine_and_exact_by_the_other() {
+        let at = |source, market: Market| {
+            let market = quotient_by(source, market);
+            quotient().of(&trade(&market, 0))
+        };
+        assert_eq!(at(RuleSource::Engine, dear(32_766_999)), Some(1000));
+        assert_eq!(at(RuleSource::Bible, dear(32_766_999)), Some(999));
+        for source in RuleSource::ALL {
+            let at_nothing = quotient_by(source, stall(500, 0, 9));
+            assert_eq!(quotient().of(&trade(&at_nothing, 2)), None, "{source:?}");
+            assert_eq!(at(source, negative(-200, 3)), Some(1), "{source:?}");
+            let none = debt_by(RuleSource::Bible, negative(-200, 3));
+            assert_eq!(at(source, none), Some(0), "{source:?}");
+            assert_eq!(at(source, negative(1000, 3)), Some(-5), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn click_quotient_is_exact_whatever_the_quotient_rule() {
+        for source in RuleSource::ALL {
+            let at = |market: Market, index| {
+                let market = quotient_by(source, market);
+                click_quotient().of(&trade(&market, index))
+            };
+            assert_eq!(at(dear(32_766_999), 0), Some(999), "{source:?}");
+            assert_eq!(at(stall(399, 0, 9), 0), Some(3), "{source:?}");
+            assert_eq!(at(stall(500, 0, 9), 2), None, "{source:?}");
+            assert_eq!(at(negative(-200, 3), 0), Some(1), "{source:?}");
+            let none = debt_by(RuleSource::Bible, negative(-200, 3));
+            assert_eq!(at(none, 0), Some(0), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn buy_most_is_the_quotient_or_the_space_at_most_32000() {
+        let at = |market: Market, index| buy_most().of(&trade(&market, index));
+        assert_eq!(at(stall(5000, 0, 70), 0), 50, "the quotient");
+        assert_eq!(at(stall(100_000, 0, 7), 0), 7, "the space");
+        assert_eq!(at(stall(100_000_000, 0, 40_000), 0), 32_000);
+        assert_eq!(at(stall(100_000_000, 0, 32_001), 0), 32_000);
+        assert_eq!(at(stall(100_000_000, 0, 31_999), 0), 31_999);
+        assert_eq!(at(stall(0, 0, 9), 2), 9, "at no price, the space");
+        assert_eq!(at(stall(0, 0, 40_000), 2), 32_000);
+        assert_eq!(at(negative(1000, 3), 0), -5, "below nothing");
+        assert_eq!(at(dear(32_766_999), 0), 1000, "by the engine");
+        assert_eq!(at(quotient_by(RuleSource::Bible, dear(32_766_999)), 0), 999);
+    }
+
+    #[test]
+    fn sell_most_is_everything_held_at_most_32000() {
+        let at = |held| sell_most().of(&trade(&stall(0, held, 0), 0));
+        assert_eq!(at(25), 25);
+        assert_eq!(at(0), 0);
+        assert_eq!(at(31_999), 31_999);
+        assert_eq!(at(32_000), 32_000);
+        assert_eq!(at(40_000), 32_000);
+    }
+
+    /// `lot` of row `index` of `market`, `direction`, as the order rules
+    /// read it.
+    fn row_order(market: &Market, index: usize, direction: Direction, lot: Lot) -> RowOrder<'_> {
+        RowOrder {
+            trade: trade(market, index),
+            direction,
+            lot,
+        }
+    }
+
+    #[test]
+    fn tons_sizes_a_click_the_most_and_a_count() {
+        let buy =
+            |market: &Market, index, lot| tons().of(&row_order(market, index, Direction::Buy, lot));
+        let sell = |market: &Market, lot| tons().of(&row_order(market, 0, Direction::Sell, lot));
+        assert_eq!(buy(&stall(100_000, 0, 50), 0, Lot::Click), 10, "10");
+        assert_eq!(buy(&stall(399, 0, 50), 0, Lot::Click), 3, "the cash");
+        assert_eq!(buy(&stall(100_000, 0, 4), 0, Lot::Click), 4, "the space");
+        assert_eq!(buy(&stall(0, 0, 9), 2, Lot::Click), 9, "at no price");
+        assert_eq!(buy(&negative(-199, 3), 0, Lot::Click), 0, "0 at -200");
+        let one_ton = lots_by(RuleSource::Bible, stall(100_000, 25, 50));
+        assert_eq!(buy(&one_ton, 0, Lot::Click), 1);
+        assert_eq!(sell(&one_ton, Lot::Click), 1);
+        assert_eq!(sell(&stall(0, 25, 0), Lot::Click), 10);
+        assert_eq!(sell(&stall(0, 4, 0), Lot::Click), 4);
+        assert_eq!(buy(&stall(5000, 0, 70), 0, Lot::Max), 50);
+        assert_eq!(sell(&stall(0, 25, 0), Lot::Max), 25);
+        assert_eq!(sell(&stall(0, 40_000, 0), Lot::Max), 32_000);
+        assert_eq!(buy(&stall(5000, 0, 70), 0, Lot::Count(7)), 7);
+        assert_eq!(sell(&stall(0, 25, 0), Lot::Count(3)), 3);
+    }
+
+    #[test]
+    fn the_order_checks_refuse_a_ton_before_the_count() {
+        let named = |direction| -> Vec<&str> {
+            order_checks(direction)
+                .descriptors()
+                .map(Descriptor::name)
+                .collect()
+        };
+        assert_eq!(named(Direction::Buy), ["moves a ton", "count in range"]);
+        assert_eq!(named(Direction::Sell), ["count in range"]);
+        let refuses = Verdict::Refuses;
+        let buy = |market: &Market, lot| {
+            verdicts(
+                &order_checks(Direction::Buy),
+                &row_order(market, 0, Direction::Buy, lot),
+            )
+        };
+        let poor = stall(99, 0, 5);
+        assert_eq!(
+            buy(&poor, Lot::Count(0)),
+            [
+                refuses(TradeRefusal::CannotAfford),
+                refuses(TradeRefusal::OutOfRange),
+            ]
+        );
+        assert_eq!(
+            refusal(
+                &order_checks(Direction::Buy),
+                &row_order(&poor, 0, Direction::Buy, Lot::Count(0))
+            ),
+            Err(TradeRefusal::CannotAfford)
+        );
+        assert_eq!(
+            buy(&poor, Lot::Count(1)),
+            [
+                refuses(TradeRefusal::CannotAfford),
+                refuses(TradeRefusal::OutOfRange),
+            ],
+            "1 is past a most of 0"
+        );
+        assert_eq!(buy(&poor, Lot::Max), [refuses(TradeRefusal::CannotAfford)]);
+        assert_eq!(
+            buy(&negative(-199, 3), Lot::Click),
+            [refuses(TradeRefusal::CannotAfford)]
+        );
+        let rich = stall(5000, 0, 70);
+        assert_eq!(
+            buy(&rich, Lot::Count(51)),
+            [refuses(TradeRefusal::OutOfRange)]
+        );
+        assert_eq!(
+            buy(&rich, Lot::Count(0)),
+            [refuses(TradeRefusal::OutOfRange)]
+        );
+        for lot in [Lot::Click, Lot::Max, Lot::Count(1), Lot::Count(50)] {
+            assert_eq!(buy(&rich, lot), [], "{lot:?}");
+        }
+        let sell = |lot| {
+            let holding = stall(0, 25, 0);
+            verdicts(
+                &order_checks(Direction::Sell),
+                &row_order(&holding, 0, Direction::Sell, lot),
+            )
+        };
+        assert_eq!(sell(Lot::Count(26)), [refuses(TradeRefusal::OutOfRange)]);
+        assert_eq!(sell(Lot::Count(0)), [refuses(TradeRefusal::OutOfRange)]);
+        for lot in [Lot::Click, Lot::Max, Lot::Count(1), Lot::Count(25)] {
+            assert_eq!(sell(lot), [], "{lot:?}");
+        }
+    }
+
+    #[test]
+    fn an_order_reads_its_rows_rule_set() {
+        let market = Market {
+            rules: Rulebook::new(RuleSource::Bible),
+            ..stall(0, 0, 0)
+        };
+        let order = row_order(&market, 0, Direction::Buy, Lot::Click);
+        assert_eq!(order.rulebook(), &Rulebook::new(RuleSource::Bible));
+        assert_eq!(
+            trade(&market, 0).rulebook(),
+            &Rulebook::new(RuleSource::Bible)
+        );
+    }
+
+    #[test]
+    fn the_snapshot_reads_its_rules_from_its_rule_set() {
+        let engine = dear(32_766_999);
+        let bible = Market {
+            rules: Rulebook::new(RuleSource::Bible),
+            ..engine.clone()
+        };
+        let buy = |market: &Market, lot| market.tons(order(0, FOOD, Direction::Buy, lot));
+        assert_eq!(buy(&engine, Lot::Click), Ok(10));
+        assert_eq!(buy(&bible, Lot::Click), Ok(1));
+        assert_eq!(buy(&engine, Lot::Max), Ok(1000));
+        assert_eq!(buy(&bible, Lot::Max), Ok(999));
+        assert_eq!(engine.row_max(0, Direction::Buy), Some(1000));
+        assert_eq!(bible.row_max(0, Direction::Buy), Some(999));
+        assert!(engine.option_asks_count());
+        assert!(!bible.option_asks_count());
+        let in_debt = negative(-200, 3);
+        let none = Market {
+            rules: Rulebook::new(RuleSource::Bible),
+            ..in_debt.clone()
+        };
+        let opals = order(0, OPALS, Direction::Buy, Lot::Click);
+        assert_eq!(in_debt.tons(opals), Ok(1));
+        assert_eq!(none.tons(opals), Err(TradeRefusal::CannotAfford));
+    }
+
+    #[test]
+    fn option_asks_count_by_the_engine_and_not_by_the_other_reading() {
+        let market = stall(1000, 5, 5);
+        assert!(option_asks_count().of(&market));
+        assert!(market.option_asks_count());
+        let at_once = Market {
+            rules: market
+                .rules
+                .with_override(RuleKey::TradeCount, RuleSource::Bible),
+            ..market.clone()
+        };
+        assert!(!option_asks_count().of(&at_once));
+        assert!(!at_once.option_asks_count());
+        assert_eq!(
+            option_asks_count().about().reproduces(),
+            "`_DoTradeDialog` @0x5e211, @0x5e45c; `_DoQuantityDialog` @0x56d5b"
+        );
+    }
+
+    #[test]
+    fn the_tons_rules_cite_the_originals_addresses() {
+        let cited = [
+            click_lot().about().reproduces(),
+            cash_divided().about().reproduces(),
+            quotient().about().reproduces(),
+            click_quotient().about().reproduces(),
+            buy_most().about().reproduces(),
+            sell_most().about().reproduces(),
+        ];
+        assert_eq!(
+            cited,
+            [
+                "`_DoTradeDialog` @0x5e268-0x5e278, @0x5e48d-0x5e4fa",
+                "`_DoTradeDialog` @0x5e21d-0x5e234",
+                "`_DoTradeDialog` @0x5e21d-0x5e234",
+                "`_DoTradeDialog` @0x5e268-0x5e278",
+                "`_DoTradeDialog` @0x5e23a-0x5e25a",
+                "`_DoTradeDialog` @0x5e44f-0x5e47f",
+            ]
+        );
+        let order_cited: Vec<_> = [Direction::Buy, Direction::Sell]
+            .into_iter()
+            .flat_map(|direction| {
+                order_checks(direction)
+                    .descriptors()
+                    .map(Descriptor::reproduces)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(
+            order_cited,
+            [
+                "`_DoTradeDialog` `jle` @0x5e27d",
+                "`_DoTradeDialog` `jle` @0x5e27d skips none; the quantity dialog gives no more than the most",
+                "`_DoTradeDialog` `jle` @0x5e4d8 skips none; the quantity dialog gives no more than the most",
+            ]
+        );
     }
 
     #[test]

@@ -19,7 +19,8 @@
 //! trade given back ([`SpaceportView::set_market`]). The Outfitter's opens
 //! the stellar's outfitter likewise, an [`OutfitterScreen`] over it, when
 //! given one ([`SpaceportView::with_outfitter`],
-//! [`SpaceportView::take_outfit`], [`SpaceportView::set_outfitter`]), and
+//! [`SpaceportView::take_outfit`], [`SpaceportView::set_outfitter`],
+//! [`SpaceportView::outfit_ordered`]), and
 //! the Shipyard's the stellar's shipyard, a [`ShipyardScreen`]
 //! ([`SpaceportView::with_shipyard`], [`SpaceportView::set_shipyard`]):
 //! its Buy Ship asks for a ship ([`SpaceportView::take_ship_request`]),
@@ -81,8 +82,8 @@ use std::time::Duration;
 use nova_sim::mission::screens::{BAR, OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENTER};
 use nova_sim::{
     ComputerRefusal, HireList, Market, MissionComputer, MissionId, MissionInfo, MissionText,
-    OfferPrompt, Order, OutfitOrder, Outfitter, RechargeRefusal, Service, ShipId, ShipNaming,
-    Shipyard, sells_fuel, services,
+    OfferPrompt, Order, OutfitOrder, Outfitter, RechargeRefusal, Reselection, SaleAlert, Service,
+    ShipId, ShipNaming, Shipyard, sells_fuel, services,
 };
 
 use super::bar::MISSION_INFO_KEY;
@@ -96,7 +97,7 @@ use super::missions::{MissionComputerScreen, MissionInfoScreen};
 use super::offer::{OfferChoice, OfferDialog, VenueOffers};
 use super::outfitter::{OutfitterCatalog, OutfitterScreen};
 use super::service::ServiceScreen;
-use super::shipyard::{ShipOrder, ShipyardCatalog, ShipyardScreen};
+use super::shipyard::{InfoTemplates, ShipOrder, ShipyardCatalog, ShipyardScreen};
 use super::trade::TradeScreen;
 use crate::color::Color;
 use crate::draw::DrawList;
@@ -214,13 +215,14 @@ impl Open {
     }
 }
 
-/// The outfitter given: its dialog template and the quantity dialog's
-/// (or why there are none), the outfitter as it is, and where its
-/// pictures and descriptions come from.
+/// The outfitter given: its dialog template, the quantity dialog's and
+/// the alert's (or why there are none), the outfitter as it is, and where
+/// its pictures and descriptions come from.
 #[derive(Clone)]
 struct Outfitting {
     template: Result<DialogTemplate, String>,
     quantity: Result<DialogTemplate, String>,
+    alert: Result<DialogTemplate, String>,
     outfitter: Outfitter,
     catalog: Rc<dyn OutfitterCatalog>,
 }
@@ -230,6 +232,7 @@ impl std::fmt::Debug for Outfitting {
         f.debug_struct("Outfitting")
             .field("template", &self.template)
             .field("quantity", &self.quantity)
+            .field("alert", &self.alert)
             .field("outfitter", &self.outfitter)
             .finish_non_exhaustive()
     }
@@ -240,7 +243,7 @@ impl std::fmt::Debug for Outfitting {
 #[derive(Clone)]
 struct Shipbuying {
     template: Result<DialogTemplate, String>,
-    info: Result<DialogTemplate, String>,
+    info: InfoTemplates,
     text_input: Result<DialogTemplate, String>,
     shipyard: Shipyard,
     catalog: Rc<dyn ShipyardCatalog>,
@@ -483,14 +486,16 @@ impl SpaceportView {
     /// The spaceport with the stellar's outfitter, `outfitter`, which the
     /// Outfitter opens laid out by `template`, the "Outfit" dialog (or
     /// saying why there is none), its quantity dialog laid out by
-    /// `quantity` (or its fallback), each outfit's picture and description
-    /// read from `catalog`. Without it, the Outfitter opens its
-    /// placeholder.
+    /// `quantity` (or its fallback), a sale's alert by `alert` ("Desc
+    /// Dialog", `DLOG` 3003, or none), each outfit's picture and
+    /// description read from `catalog`. Without it, the Outfitter opens
+    /// its placeholder.
     #[must_use]
     pub fn with_outfitter(
         self,
         template: Result<DialogTemplate, String>,
         quantity: Result<DialogTemplate, String>,
+        alert: Result<DialogTemplate, String>,
         outfitter: Outfitter,
         catalog: Rc<dyn OutfitterCatalog>,
     ) -> Self {
@@ -498,6 +503,7 @@ impl SpaceportView {
             outfitting: Some(Outfitting {
                 template,
                 quantity,
+                alert,
                 outfitter,
                 catalog,
             }),
@@ -520,6 +526,29 @@ impl SpaceportView {
         match &mut self.open {
             Some(Open::Outfitter(screen)) => screen.take_order(),
             _ => None,
+        }
+    }
+
+    /// Opens `alert`'s words over the outfitter open
+    /// ([`OutfitterScreen::alert`]); with none open, does nothing.
+    pub fn alert_outfit(&mut self, alert: &SaleAlert) {
+        if let Some(Open::Outfitter(screen)) = &mut self.open {
+            screen.alert(alert);
+        }
+    }
+
+    /// Follows what an order left the outfitter's selection at
+    /// ([`OutfitterScreen::reselect`]), with the outfitter open; when
+    /// that closes it (nothing listed, and no alert open), it closes at
+    /// once, as the original leaves once the click is handled (@0x5da33).
+    /// With an alert open, the input that closes the alert closes the
+    /// outfitter.
+    pub fn outfit_ordered(&mut self, after: Reselection) {
+        if let Some(Open::Outfitter(screen)) = &mut self.open {
+            screen.reselect(after);
+            if screen.closed() {
+                self.open = None;
+            }
         }
     }
 
@@ -552,7 +581,7 @@ impl SpaceportView {
     pub fn with_shipyard(
         self,
         template: Result<DialogTemplate, String>,
-        info: Result<DialogTemplate, String>,
+        info: InfoTemplates,
         text_input: Result<DialogTemplate, String>,
         shipyard: Shipyard,
         catalog: Rc<dyn ShipyardCatalog>,
@@ -635,7 +664,7 @@ impl SpaceportView {
         self,
         template: Result<DialogTemplate, String>,
         hire_template: Result<DialogTemplate, String>,
-        info_template: Result<DialogTemplate, String>,
+        info_template: InfoTemplates,
         catalog: Rc<dyn ShipyardCatalog>,
         room: bool,
     ) -> Self {
@@ -1112,6 +1141,7 @@ impl SpaceportView {
                     let screen = OutfitterScreen::new(
                         layout,
                         outfitting.quantity.clone(),
+                        outfitting.alert.clone(),
                         outfitting.outfitter.clone(),
                         Rc::clone(&outfitting.catalog),
                         port.style,
@@ -2233,8 +2263,13 @@ mod tests {
 
     // The Outfitter.
 
-    use crate::spaceport::outfitter::{OutfitterCatalog, OutfitterScreen};
-    use nova_sim::{OutfitId, OutfitOrder, OutfitRow, Outfitter};
+    use std::collections::BTreeMap;
+
+    use crate::spaceport::outfitter::{NEGATIVE_FREE_MASS, OutfitterCatalog, OutfitterScreen};
+    use crate::ui::desc::DescDialog;
+    use nova_sim::{
+        OutfitFacts, OutfitId, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter, SaleAlert,
+    };
 
     /// "Outfit": 765 x 321, centred, with Done (1), Sell (4), the grid
     /// (5), the description (6), Buy (7), the picture (8) and the info box
@@ -2279,10 +2314,14 @@ mod tests {
                 mass: 1,
                 owned,
                 max: 10,
-                cap: 10,
-                buy: Ok(()),
-                sell: Ok(()),
-                words: None,
+                facts: OutfitFacts {
+                    listed: true,
+                    buy_tech: true,
+                    required: true,
+                    available: true,
+                    sold_here: true,
+                    ..OutfitFacts::default()
+                },
             }],
             cash: 5000,
             free_mass: 8,
@@ -2303,7 +2342,13 @@ mod tests {
 
     fn outfitting(template: Result<Template, String>) -> SpaceportView {
         let art: Rc<dyn OutfitterCatalog> = Rc::new(outfitting_port());
-        view_of(&outfitting_port()).with_outfitter(template, Ok(quantity_template()), tanks(0), art)
+        view_of(&outfitting_port()).with_outfitter(
+            template,
+            Ok(quantity_template()),
+            Ok(desc_template()),
+            tanks(0),
+            art,
+        )
     }
 
     fn outfit_item(view: &SpaceportView, number: usize) -> Point {
@@ -2458,6 +2503,73 @@ mod tests {
         );
     }
 
+    /// "Desc Dialog", fixed at (0, 0): Done (1), a parked picture (2) and
+    /// a text box (3).
+    fn desc_template() -> Template {
+        let item = |bounds, kind| ItemTemplate {
+            bounds,
+            enabled: true,
+            kind,
+        };
+        Template {
+            bounds: rect(0.0, 0.0, 200.0, 120.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(rect(100.0, 90.0, 99.0, 25.0), ItemSpec::User),
+                item(rect(10.0, 150.0, 20.0, 20.0), ItemSpec::Picture(1431)),
+                item(rect(10.0, 10.0, 2000.0, 60.0), ItemSpec::User),
+            ],
+        }
+    }
+
+    fn alert() -> SaleAlert {
+        SaleAlert {
+            outfit: OutfitId(200),
+            refusal: OutfitRefusal::NegativeFreeMass,
+            names: BTreeMap::new(),
+            plural: false,
+        }
+    }
+
+    #[test]
+    fn an_alert_opens_over_the_open_outfitter_only() {
+        let mut view = outfitting(Ok(outfit_template()));
+        view.alert_outfit(&alert());
+        assert!(view.open_outfitter().is_none(), "nothing open");
+        click_item(&mut view, 8);
+        view.alert_outfit(&alert());
+        let open = view.open_outfitter().expect("outfitting");
+        assert_eq!(
+            open.alert_dialog().map(DescDialog::lines),
+            Some([NEGATIVE_FREE_MASS.to_owned()].as_slice())
+        );
+        view.input(&key(Key::Escape));
+        let open = view.open_outfitter().expect("still outfitting");
+        assert!(open.alert_dialog().is_none(), "Escape closed the alert");
+    }
+
+    #[test]
+    fn an_order_that_leaves_nothing_listed_closes_the_outfitter() {
+        let mut view = outfitting(Ok(outfit_template()));
+        view.outfit_ordered(Reselection::Leave);
+        assert!(view.open_outfitter().is_none(), "nothing open");
+        click_item(&mut view, 8);
+        view.outfit_ordered(Reselection::Reset(OutfitId(128)));
+        let open = view.open_outfitter().expect("still outfitting");
+        assert_eq!(open.selected(), None);
+        assert_eq!(open.selected_outfit(), Some(OutfitId(128)));
+        view.outfit_ordered(Reselection::Leave);
+        assert!(view.open_outfitter().is_none(), "closed at once");
+        assert!(!view.left());
+        click_item(&mut view, 8);
+        view.alert_outfit(&alert());
+        view.outfit_ordered(Reselection::Leave);
+        assert!(view.open_outfitter().is_some(), "its alert first");
+        view.input(&key(Key::Escape));
+        assert!(view.open_outfitter().is_none(), "closed with its alert");
+        assert!(!view.left());
+    }
+
     #[test]
     fn the_outfitter_takes_cancel_pointer_and_its_sounds_are_kept() {
         let mut view = outfitting(Ok(outfit_template()));
@@ -2486,13 +2598,27 @@ mod tests {
     // The Shipyard.
 
     use crate::spaceport::shipyard::{ShipBaseImages, ShipyardCatalog, ShipyardScreen};
-    use nova_sim::{ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
+    use nova_sim::{Rulebook, ShipFacts, ShipId, ShipNaming, ShipRow, ShipSpecs, Shipyard};
 
     use crate::spaceport::shipyard::ShipOrder;
 
     impl ShipBaseImages for FakePort {
         fn ship_base_images(&self) -> Vec<(ShipId, i16)> {
             Vec::new()
+        }
+    }
+
+    impl crate::ui::catalog::DescriptionGraphics for FakePort {
+        fn description_graphic(&self, _id: i16) -> Option<i16> {
+            None
+        }
+    }
+
+    /// Neither info template.
+    fn no_info() -> InfoTemplates {
+        InfoTemplates {
+            plain: Err("no DLOG 1005".to_owned()),
+            picture: Err("no DLOG 1019".to_owned()),
         }
     }
 
@@ -2542,12 +2668,17 @@ mod tests {
                     max_tur: 0,
                     length: 0,
                     crew: 0,
+                    space: 0,
+                    rounding: nova_sim::RuleSource::Engine,
+                    weapons: Vec::new(),
+                    long_name: String::new(),
                 },
-                buy: Ok(()),
+                facts: ShipFacts { buyable: true },
             }],
             trade_in: 2500,
             cash: 25_000,
             current: ShipId(128),
+            rules: Rulebook::default(),
         }
     }
 
@@ -2566,7 +2697,7 @@ mod tests {
         let art: Rc<dyn ShipyardCatalog> = Rc::new(shipyard_port());
         view_of(&shipyard_port()).with_shipyard(
             template,
-            Err("no DLOG 1005".to_owned()),
+            no_info(),
             Err("no DLOG 3001".to_owned()),
             yard(17_500),
             art,
@@ -2791,6 +2922,10 @@ mod tests {
                         max_tur: 0,
                         length: 0,
                         crew: 0,
+                        space: 0,
+                        rounding: nova_sim::RuleSource::Engine,
+                        weapons: Vec::new(),
+                        long_name: String::new(),
                     },
                     hire: Ok(()),
                 })
@@ -2806,7 +2941,7 @@ mod tests {
         earth().with_bar(
             Ok(bar_template()),
             Ok(shipyard_template()),
-            Err("no DLOG 1005".to_owned()),
+            no_info(),
             art,
             room,
         )
@@ -3167,7 +3302,7 @@ mod tests {
         missioned().with_bar(
             Ok(bar_template()),
             Ok(shipyard_template()),
-            Err("no DLOG 1005".to_owned()),
+            no_info(),
             art,
             true,
         )
@@ -3205,12 +3340,13 @@ mod tests {
             .with_outfitter(
                 Ok(outfit_template()),
                 Ok(quantity_template()),
+                Ok(desc_template()),
                 tanks(0),
                 outfits,
             )
             .with_shipyard(
                 Ok(shipyard_template()),
-                Err("no DLOG 1005".to_owned()),
+                no_info(),
                 Err("no DLOG 3001".to_owned()),
                 yard(17_500),
                 Rc::clone(&ships),
@@ -3218,7 +3354,7 @@ mod tests {
             .with_bar(
                 Ok(bar_template()),
                 Ok(shipyard_template()),
-                Err("no DLOG 1005".to_owned()),
+                no_info(),
                 ships,
                 true,
             )

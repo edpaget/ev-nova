@@ -9,8 +9,9 @@
 //! `OnPurchase` and `OnSell` set and clear its bit; Viking's shipyard
 //! sells what its tech levels and the ships' `BuyRandom` allow, and
 //! trades the Shuttle in; on a day no roll fires, both sell only their
-//! items of `BuyRandom` 100; the ships go by
-//! their names without the designers' notes. Port Kane sells
+//! items of `BuyRandom` 100; Sirrusa's outfitter buys back the outfits
+//! the player owns, whatever their tech, but not one that can't be sold;
+//! the ships go by their names without the designers' notes. Port Kane sells
 //! fuel and uninhabited Reflex-ion sells none. The date reads with the
 //! first `chär`'s affixes. HG-Kania leads to HG-Tichel. NPC traffic flies the
 //! ships and governments its system's `düde`s and fleets give, and
@@ -318,6 +319,14 @@ fn at_port_kane(data: &GameData) -> Session {
     session
 }
 
+/// Buying one of `oütf` `id`.
+fn buying(id: i16) -> OutfitOrder {
+    OutfitOrder {
+        outfit: OutfitId(id),
+        direction: Direction::Buy,
+    }
+}
+
 /// Port Kane trades every standard commodity: food and medical supplies
 /// high, industrial, luxury goods and metal medium, equipment low, at the
 /// community's table of prices.
@@ -469,15 +478,47 @@ fn port_kanes_outfitter_sells_what_its_tech_levels_allow() {
         (battery.name.as_str(), battery.price, battery.mass),
         ("Battery Pack", 10_000, 3)
     );
-    assert_eq!(battery.buy, Ok(()));
+    assert_eq!(outfitter.can(buying(256)), Ok(()));
     assert_eq!(row(228).map(|r| r.name.as_str()), Some("Solar Panels"));
     let fission = row(179).expect("the Fission Reactor");
-    assert_eq!(fission.buy, Err(OutfitRefusal::NoSpaceForAny));
+    assert_eq!(
+        outfitter.can(buying(179)),
+        Err(OutfitRefusal::NoSpaceForAny)
+    );
     assert!(fission.mass > 8, "{}", fission.mass);
     assert!(row(177).is_none(), "the Fusion Reactor is tech 8");
-    let fiber = row(180).expect("Carbon Fiber");
-    assert_eq!(fiber.buy, Err(OutfitRefusal::NotForSale));
+    assert!(row(180).is_some(), "Carbon Fiber");
+    assert_eq!(outfitter.can(buying(180)), Err(OutfitRefusal::NotForSale));
     assert_eq!((outfitter.cash, outfitter.free_mass), (25_000, 8));
+}
+
+/// Carbon Fiber (`oütf` 180, `Mass` 1, `Flags` 0x0400) on the Shuttle
+/// (`shïp` 128, `Mass` 15): Port Kane's outfitter weighs it at its own
+/// ton by the engine (`_AdjustedItemMass` @0x28ba-0x28bc), and at
+/// 15 × 1 / 100 = 0 by the other reading of `ScaledMass`.
+#[test]
+fn carbon_fiber_weighs_a_ton_on_the_shuttle_at_port_kane() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let weighed = |rules: nova_sim::Rulebook| {
+        at_port_kane(&data)
+            .with_rules(rules)
+            .outfitter(&mut Fires)
+            .expect("an outfitter")
+            .row(OutfitId(180))
+            .expect("Carbon Fiber")
+            .mass
+    };
+    assert_eq!(weighed(nova_sim::Rulebook::default()), 1);
+    assert_eq!(
+        weighed(
+            nova_sim::Rulebook::default()
+                .with_override(nova_sim::RuleKey::ScaledMass, nova_sim::RuleSource::Bible)
+        ),
+        0
+    );
 }
 
 /// Stock `oütf` 342, "Area Map - Vell-os", tech level 0 and hidden while
@@ -498,7 +539,7 @@ fn port_kanes_outfitter_lists_the_vell_os_map_only_once_its_bit_is_set() {
     let outfitter = session.outfitter(&mut Fires).expect("an outfitter");
     let row = outfitter.row(map).expect("listed once bit 9999 is set");
     assert_eq!(row.name, "Area Map - Vell-os");
-    assert_eq!(row.buy, Ok(()));
+    assert_eq!(outfitter.can(buying(342)), Ok(()));
 }
 
 /// Buying the stock Vell-os map (`oütf` 342, `ModType` 16, `ModVal` 2, no
@@ -624,11 +665,15 @@ fn the_shuttle_at_port_kane_buys_one_more_gun_and_then_none() {
     assert_eq!(session.pilot().owned(OutfitId(128)), 2);
     let outfitter = session.outfitter(&mut Fires).expect("an outfitter");
     assert_eq!(outfitter.check(blaster), Err(OutfitRefusal::GunLimit));
-    if let Some(laser) = outfitter.row(OutfitId(270)) {
-        assert_eq!(laser.buy, Err(OutfitRefusal::GunLimit), "the mining laser");
+    if outfitter.row(OutfitId(270)).is_some() {
+        assert_eq!(
+            outfitter.can(buying(270)),
+            Err(OutfitRefusal::GunLimit),
+            "the mining laser"
+        );
     }
-    let battery = outfitter.row(OutfitId(256)).expect("the Battery Pack");
-    assert_eq!(battery.buy, Ok(()), "not a gun");
+    assert!(outfitter.row(OutfitId(256)).is_some(), "the Battery Pack");
+    assert_eq!(outfitter.can(buying(256)), Ok(()), "not a gun");
 }
 
 /// The Viper Bay (`oütf` 157) launches the Viper (`wëap` 149, `MaxAmmo`
@@ -685,7 +730,9 @@ fn vikings_shipyard_sells_what_its_tech_levels_and_buy_random_allow() {
     let never: Vec<_> = data
         .ships()
         .into_iter()
-        .filter(|ship| ship.buy_random <= 0 && nova_sim::wares::tech_allows(ship.tech_level, &site))
+        .filter(|ship| {
+            ship.buy_random <= 0 && nova_sim::wares::ship_tech_allows(ship.tech_level, &site)
+        })
         .map(|ship| ship.id)
         .collect();
     // Among them the Cargo Drone, `shïp` 130, of tech level 4.
@@ -727,6 +774,46 @@ fn port_kane_and_viking_sell_only_their_always_items_when_no_roll_fires() {
     assert!(listed(167), "the Viper");
     assert!(!listed(136), "the Terrapin");
     assert!(!listed(128), "the Shuttle");
+}
+
+/// Sirrusa (`spöb` 156 in Archenar, `sÿst` 142; tech level 0, `Flags2`
+/// 0x0400) lists the Battery Pack (`oütf` 256, tech 3) the player owns,
+/// sell-only, but not the Fighter Bay License (259, flagged 0x0008, can't
+/// be sold) they own, nor the Solar Panels (228, tech 3) they don't, on a
+/// day every roll fires.
+#[test]
+fn sirrusas_outfitter_buys_back_owned_outfits_but_not_cannot_sell_ones() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["system"] = serde_json::json!(142);
+    save["stellar"] = serde_json::json!(156);
+    let outfits = save["outfits"].as_array_mut().expect("a list");
+    outfits.push(serde_json::json!({"outfit": 256, "count": 1}));
+    outfits.push(serde_json::json!({"outfit": 259, "count": 1}));
+    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let mut session = Session::fly(&data, docked).expect("flies");
+    assert_eq!(session.landed(), Some(StellarId(156)), "docked at Sirrusa");
+    let outfitter = session.outfitter(&mut Fires).expect("an outfitter");
+    let order = |id, direction| OutfitOrder {
+        outfit: OutfitId(id),
+        direction,
+    };
+    assert!(outfitter.row(OutfitId(256)).is_some(), "the Battery Pack");
+    assert_eq!(outfitter.can(order(256, Direction::Sell)), Ok(()));
+    assert_eq!(
+        outfitter.can(order(256, Direction::Buy)),
+        Err(OutfitRefusal::NotForSale)
+    );
+    assert!(
+        outfitter.row(OutfitId(259)).is_none(),
+        "the Fighter Bay License"
+    );
+    assert!(outfitter.row(OutfitId(228)).is_none(), "the Solar Panels");
 }
 
 /// The stock ships go by their names without the designers' notes after
@@ -2971,7 +3058,11 @@ fn boarding_dr_ralph_grants_his_map_half_the_time() {
             outfit: outfit.id,
             item_class: outfit.item_class,
             mass: outfit.mass,
-            unit_mass: nova_sim::outfitter::unit_mass(outfit, fields.mass),
+            unit_mass: nova_sim::outfitter::unit_mass(
+                outfit,
+                fields.mass,
+                &nova_sim::Rulebook::default(),
+            ),
             owned: 0,
             max: outfit.max,
         })

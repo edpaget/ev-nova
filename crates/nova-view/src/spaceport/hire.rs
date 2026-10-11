@@ -8,10 +8,17 @@
 //! selected ship's picture ([`ship_picture`]); its description, the
 //! pilot's, `dësc` 14000 plus its ID less 128 (the Bible: "Ship pilot
 //! descriptions, shown in the hire-escort dialog"); and the Info panel
-//! ("Shipyard Info", `DLOG` 1005, [`spec_lines`]). Its info box shows
-//! "Hiring Price:" and the fee (`STR#` 2002 #228), the daily pay ("Pay:
-//! 100 credits per day", which the original's dialog does not show) and
-//! "You Have:" and the cash (#217).
+//! ("Shipyard Info", [`spec_lines`](super::shipyard::spec_lines)), whose
+//! variant ([`InfoVariant`](super::shipyard::InfoVariant)) follows the
+//! pilot's `dësc` 14000+ `Graphic`, as `_ShipyardFilter` loads it in
+//! hire mode (@0x60c01-0x60c33). Its info box draws two
+//! rows in white, as `_ShipyardDialogUpdate`'s hire mode does
+//! (@0x595a0-0x596f6): "Hiring Price:" (`STR#` 2002 #228) and the fee at
+//! baseline 12, and "You Have:" (#217) and the cash at baseline 36, each
+//! label at the box's left and each amount at its left + 70, drawn by
+//! `_DrawCommaNumber` with " cr" after it ([`credits_text`]). The original
+//! shows an escort's daily pay only once it is hired, in the escort dialog,
+//! which the port's comm dialog stands in for.
 //!
 //! Hire Escort (item 7, `STR#` 150 #13), clicked or with H, asks for the
 //! selected ship, and is greyed when it cannot be hired. H acts on a
@@ -26,18 +33,18 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use nova_sim::hire::{HIRE_ESCORT, HIRING_PRICE, YOU_HAVE};
+use nova_sim::hire::{HIRE_ESCORT, HIRING_PRICE};
 use nova_sim::{HireList, HireRow, ShipId};
 
+use super::credits::{self, credits_text, draw_amount_rows};
 use super::grid::{
-    self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_COLOR, TEXT_FONT, TEXT_SIZE,
-    name_lines, text,
+    self, CellGrid, GREY, INSET, SELECTED_COLOR, Shown, TEXT_FONT, TEXT_SIZE, name_lines, text,
 };
 use super::layout::DONE_LABEL;
 use super::shipyard::{
     BACKGROUND, BUY_ITEM, DESCRIPTION_ITEM, DONE_ITEM, GRID_ITEM, INFO_BOX_ITEM, INFO_ITEM,
-    INFO_KEY, INFO_LABEL, PICTURE_ITEM, Panel, SCROLL_DOWN_ITEM, SCROLL_UP_ITEM, ShipyardCatalog,
-    ship_picture, spec_lines,
+    INFO_KEY, INFO_LABEL, InfoTemplates, PICTURE_ITEM, Panel, SCROLL_DOWN_ITEM, SCROLL_UP_ITEM,
+    ShipyardCatalog, open_panel, ship_picture,
 };
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
@@ -48,7 +55,6 @@ use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
-use crate::ui::comm::{grouped, pay_text};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
 
 /// Hire Escort's item: the shipyard's Buy Ship.
@@ -68,14 +74,19 @@ pub fn pilot_desc_id(ship: ShipId) -> i16 {
     FIRST_PILOT_DESC.saturating_add(ship.0.saturating_sub(FIRST_SHIP))
 }
 
-/// The info box's lines for `row`, with `cash` in hand: the fee, the
-/// daily pay and the cash.
+/// The info box's rows' baselines below its top: Hiring Price and You
+/// Have (`_ShipyardDialogUpdate` @0x595ac, @0x59683).
+pub const HIRE_ROWS: [f32; 2] = [12.0, 36.0];
+
+/// The info box's rows for `row`, with `cash` in hand, as
+/// `_ShipyardDialogUpdate`'s hire mode draws them (@0x595a0-0x596f6): each
+/// row's baseline, its label and its amount, the fee and then the cash.
+/// There is no Pay line.
 #[must_use]
-pub fn hire_lines(row: &HireRow, cash: i64) -> [String; 3] {
+pub fn hire_lines(row: &HireRow, cash: i64) -> [(f32, &'static str, String); 2] {
     [
-        format!("{HIRING_PRICE} {}", grouped(row.fee)),
-        pay_text(row.wage),
-        format!("{YOU_HAVE} {}", grouped(cash)),
+        (HIRE_ROWS[0], HIRING_PRICE, credits_text(row.fee)),
+        (HIRE_ROWS[1], credits::YOU_HAVE, credits_text(cash)),
     ]
 }
 
@@ -106,8 +117,8 @@ struct Laid {
     metrics: MetricsHandle,
     /// The ship whose picture and description are shown, and them.
     shown: Option<(ShipId, Shown)>,
-    /// The info panel's template, if there is one.
-    info: Option<DialogTemplate>,
+    /// The info panel's templates.
+    info: InfoTemplates,
 }
 
 /// The ships for hire in the bar.
@@ -139,7 +150,7 @@ impl HireScreen {
     #[must_use]
     pub fn new(
         layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
-        info: Result<DialogTemplate, String>,
+        info: InfoTemplates,
         list: HireList,
         catalog: Rc<dyn ShipyardCatalog>,
         style: ButtonStyle,
@@ -165,8 +176,7 @@ impl HireScreen {
                 .with_buttons(ButtonSkin::NOVA, style)
                 .with_default(Some(DONE_ITEM))
                 .with_cancel(Some(DONE_ITEM));
-            let info = info.ok();
-            dialog.set_greyed(INFO_ITEM, info.is_none());
+            dialog.set_greyed(INFO_ITEM, info.plain.is_err());
             Laid {
                 dialog,
                 metrics: MetricsHandle(metrics),
@@ -302,20 +312,21 @@ impl HireScreen {
         let Some(row) = self.selected_row() else {
             return;
         };
-        let (title, lines) = (row.name.clone(), spec_lines(row.specs));
         let Ok(laid) = &self.laid else {
             return;
         };
-        let Some(template) = &laid.info else {
+        if laid.info.plain.is_err() {
             return;
-        };
-        self.panel = Some(Panel::open(
-            template,
-            title,
-            &lines,
+        }
+        self.panel = open_panel(
+            &laid.info,
+            &*self.catalog.0,
+            Some(pilot_desc_id(row.id)),
+            &row.name,
+            &row.specs,
             &laid.metrics.0,
             self.style,
-        ));
+        );
     }
 
     /// Activates dialog item `item`: Done closes, Hire Escort asks, Info
@@ -364,16 +375,12 @@ impl HireScreen {
         };
         if let (Some((_, shown)), Some(area)) = (&laid.shown, laid.dialog.item_bounds(PICTURE_ITEM))
         {
-            shown.draw(list, area);
+            shown.draw(list, area, &*laid.metrics.0);
         }
         let Some(info) = laid.dialog.item_bounds(INFO_BOX_ITEM) else {
             return;
         };
-        let line_height = laid.metrics.0.line_height(TEXT_FONT, TEXT_SIZE);
-        for (n, line) in hire_lines(row, self.list.cash).iter().enumerate() {
-            let origin = Point::new(info.min.x + INSET, info.min.y + line_height * n as f32);
-            text(list, line, origin, TEXT_COLOR);
-        }
+        draw_amount_rows(list, info, hire_lines(row, self.list.cash));
     }
 }
 
@@ -484,15 +491,20 @@ impl Screen for HireScreen {
 mod tests {
     use std::cell::RefCell;
 
-    use nova_sim::{HireRefusal, ShipFields, ShipSpecs};
+    use nova_sim::{HireRefusal, ShipFields, ShipSpecs, StockLine};
 
     use super::*;
     use crate::draw::{DrawCommand, fill_rect};
+    use crate::font::Font;
+    use crate::image::ImageKey;
     use crate::input::MouseButton;
     use crate::spaceport::catalog::{PortRecord, SpaceportCatalog, StellarId};
-    use crate::spaceport::shipyard::ShipBaseImages;
+    use crate::spaceport::grid::TEXT_COLOR;
+    use crate::spaceport::shipyard::{
+        INFO_BACKGROUND, PANEL_GRAPHIC_ITEM, PICTURE_INFO_BACKGROUND, ShipBaseImages,
+    };
     use crate::text::fixture::MonoMetrics;
-    use crate::ui::catalog::DescriptionSource;
+    use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
     use crate::ui::dialog::{ItemSpec, ItemTemplate, Placement};
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds {
@@ -554,6 +566,8 @@ mod tests {
     /// Ship 128's picture (`PICT` 5000) exists; every description is
     /// "dësc n.". Records what it is asked.
     struct FakeArt {
+        /// Each `dësc` with a `Graphic`, and it.
+        graphics: Vec<(i16, i16)>,
         asked: RefCell<Vec<String>>,
     }
 
@@ -584,10 +598,54 @@ mod tests {
         }
     }
 
+    impl DescriptionGraphics for FakeArt {
+        fn description_graphic(&self, id: i16) -> Option<i16> {
+            self.asked.borrow_mut().push(format!("graphic {id}"));
+            self.graphics
+                .iter()
+                .find(|(desc, _)| *desc == id)
+                .map(|(_, graphic)| *graphic)
+        }
+    }
+
     fn art() -> Rc<FakeArt> {
+        art_with(Vec::new())
+    }
+
+    /// [`art`], with these `dësc` graphics.
+    fn art_with(graphics: Vec<(i16, i16)>) -> Rc<FakeArt> {
         Rc::new(FakeArt {
+            graphics,
             asked: RefCell::default(),
         })
+    }
+
+    /// Stock "Shipyard Info" with a picture: `DLOG` 1019, 614 x 537 and
+    /// centred, with Done (1), the title (3), the text (5), the graphic
+    /// (7) and the weapons (8); items 2, 4 and 6 parked outside it.
+    fn picture_info_template() -> DialogTemplate {
+        DialogTemplate {
+            bounds: rect(0.0, 0.0, 614.0, 537.0),
+            placement: Placement::Center,
+            items: items(&[
+                (503.0, 507.0, 99.0, 25.0, true),
+                (700.0, 0.0, 1.0, 1.0, false),
+                (7.0, 413.0, 600.0, 24.0, false),
+                (700.0, 0.0, 1.0, 1.0, false),
+                (11.0, 442.0, 256.0, 92.0, false),
+                (700.0, 0.0, 1.0, 1.0, false),
+                (7.0, 6.0, 600.0, 400.0, false),
+                (266.0, 442.0, 342.0, 59.0, false),
+            ]),
+        }
+    }
+
+    /// Both info templates, stock.
+    fn info_templates() -> InfoTemplates {
+        InfoTemplates {
+            plain: Ok(info_template()),
+            picture: Ok(picture_info_template()),
+        }
     }
 
     /// Ship `id`'s row, at `fee` and `wage`, hired or refused.
@@ -608,6 +666,10 @@ mod tests {
                 max_tur: 1,
                 length: 20,
                 crew: 3,
+                space: 0,
+                rounding: nova_sim::RuleSource::Engine,
+                weapons: Vec::new(),
+                long_name: String::new(),
             },
             hire,
         }
@@ -630,7 +692,7 @@ mod tests {
         let catalog: Rc<dyn ShipyardCatalog> = Rc::clone(art) as Rc<dyn ShipyardCatalog>;
         HireScreen::new(
             Ok((template(), Rc::new(MonoMetrics))),
-            Ok(info_template()),
+            info_templates(),
             list,
             catalog,
             ButtonStyle::STOCK,
@@ -706,43 +768,131 @@ mod tests {
             .collect()
     }
 
+    /// The picture item's two missing-picture lines as drawn: centred
+    /// across it (`MonoMetrics` sets Geneva 10 at 5 a character), on
+    /// baselines 6 either side of the floor of its middle, in white.
+    fn no_picture_lines(picture: Bounds) -> Vec<(String, Point, Color)> {
+        let mid_x = f32::midpoint(picture.min.x, picture.max.x).floor();
+        let mid_y = f32::midpoint(picture.min.y, picture.max.y).floor();
+        vec![
+            (
+                "No Picture".to_owned(),
+                Point::new(mid_x - 25.0, grid::baseline_top(mid_y - 6.0)),
+                grid::TEXT_COLOR,
+            ),
+            (
+                "Available".to_owned(),
+                Point::new(mid_x - 22.5, grid::baseline_top(mid_y + 6.0)),
+                grid::TEXT_COLOR,
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_missing_picture_shows_no_picture_and_available_centred_in_white() {
+        let mut screen = screen();
+        screen.input(&key(Key::Right, false));
+        let picture = item(&screen, PICTURE_ITEM);
+        let in_picture: Vec<_> = texts(&screen)
+            .into_iter()
+            .filter(|(_, at, _)| picture.contains(*at))
+            .collect();
+        assert_eq!(in_picture, no_picture_lines(picture));
+    }
+
     #[test]
     fn the_named_values() {
         assert_eq!((HIRE_ITEM, HIRE_KEY), (7, Key::Char('h')));
         assert_eq!(pilot_desc_id(ShipId(128)), 14_000);
         assert_eq!(pilot_desc_id(ShipId(129)), 14_001);
         assert_eq!(pilot_desc_id(ShipId(895)), 14_767);
+        assert_eq!(HIRE_ROWS, [12.0, 36.0]);
+    }
+
+    /// The texts drawn in the info box, with their origins and colours.
+    fn info_box_texts(screen: &HireScreen) -> Vec<(String, Point, Color)> {
+        let info = item(screen, INFO_BOX_ITEM);
+        texts(screen)
+            .into_iter()
+            .filter(|(_, at, _)| info.contains(*at))
+            .collect()
+    }
+
+    /// The four texts the info box should draw, `fee` and `cash` as
+    /// given, relative to `info`'s top left.
+    fn expected_box(info: Bounds, fee: &str, cash: &str) -> Vec<(String, Point, Color)> {
+        let at = |x: f32, y: f32| Point::new(info.min.x + x, info.min.y + y);
+        vec![
+            ("Hiring Price:".to_owned(), at(0.0, 2.0), TEXT_COLOR),
+            (fee.to_owned(), at(70.0, 2.0), TEXT_COLOR),
+            ("You Have:".to_owned(), at(0.0, 26.0), TEXT_COLOR),
+            (cash.to_owned(), at(70.0, 26.0), TEXT_COLOR),
+        ]
     }
 
     #[test]
-    fn the_info_box_shows_the_fee_the_daily_pay_and_the_cash() {
-        let screen = screen();
+    fn the_info_box_draws_the_fee_and_the_cash_at_the_originals_rows_and_columns() {
+        let mut screen = screen();
+        let info = item(&screen, INFO_BOX_ITEM);
         assert_eq!(
-            info_box(&screen),
+            info_box_texts(&screen),
+            expected_box(info, "970 cr", "25,000 cr")
+        );
+        assert!(
+            texts(&screen)
+                .iter()
+                .all(|(text, _, _)| !text.starts_with("Pay:") && !text.contains("per day")),
+            "no Pay line"
+        );
+        screen.input(&key(Key::Right, false));
+        assert_eq!(
+            screen.selected(),
+            Some(1),
+            "the row that cannot be afforded"
+        );
+        assert_eq!(
+            info_box_texts(&screen),
+            expected_box(info, "50,000 cr", "25,000 cr")
+        );
+    }
+
+    #[test]
+    fn the_amounts_draw_as_draw_comma_number_does() {
+        let line =
+            |baseline: f32, label: &'static str, amount: &str| (baseline, label, amount.to_owned());
+        assert_eq!(
+            hire_lines(&row(128, 1_234_567, 1, Ok(())), -1_500),
             [
-                "Hiring Price: 970",
-                "Pay: 100 credits per day",
-                "You Have: 25,000"
+                line(12.0, "Hiring Price:", "1.23M cr"),
+                line(36.0, "You Have:", "-1500 cr")
             ]
+        );
+        assert_eq!(
+            hire_lines(&row(128, 999, 1, Ok(())), 1_000),
+            [
+                line(12.0, "Hiring Price:", "999 cr"),
+                line(36.0, "You Have:", "1,000 cr")
+            ]
+        );
+        assert_eq!(
+            hire_lines(&row(128, 0, 0, Ok(())), 0),
+            [
+                line(12.0, "Hiring Price:", "0 cr"),
+                line(36.0, "You Have:", "0 cr")
+            ]
+        );
+        let screen = screen_of(
+            &art(),
+            HireList {
+                rows: vec![row(128, 2_500_000, 100, Ok(()))],
+                cash: -1_500,
+                room: true,
+            },
         );
         let info = item(&screen, INFO_BOX_ITEM);
-        let line = MonoMetrics.line_height(TEXT_FONT, TEXT_SIZE);
-        let origins: Vec<Point> = texts(&screen)
-            .into_iter()
-            .filter(|(_, at, _)| info.contains(*at))
-            .map(|(_, at, _)| at)
-            .collect();
         assert_eq!(
-            origins,
-            [0.0, 1.0, 2.0].map(|n| Point::new(info.min.x + INSET, info.min.y + line * n))
-        );
-        assert_eq!(
-            hire_lines(&row(128, 12_000, 1, Ok(())), 3),
-            [
-                "Hiring Price: 12,000".to_owned(),
-                "Pay: 1 credit per day".to_owned(),
-                "You Have: 3".to_owned()
-            ]
+            info_box_texts(&screen),
+            expected_box(info, "2.50M cr", "-1500 cr")
         );
     }
 
@@ -818,29 +968,95 @@ mod tests {
         assert!(screen.info_panel().is_some());
         let words: Vec<String> = texts(&screen).into_iter().map(|(t, _, _)| t).collect();
         assert!(words.contains(&"Ship 128".to_owned()), "{words:?}");
-        assert!(words.contains(&"Speed: 300".to_owned()), "{words:?}");
+        assert!(words.contains(&"Speed:".to_owned()), "{words:?}");
+        assert!(words.contains(&"300".to_owned()), "{words:?}");
         screen.input(&key(HIRE_KEY, false));
         assert_eq!(screen.take_order(), None, "the panel takes the keys");
         screen.input(&key(Key::Escape, false));
         assert!(screen.info_panel().is_none());
         assert!(!screen.closed());
-        let mut bare = HireScreen::new(
-            Ok((template(), Rc::new(MonoMetrics))),
-            Err("no DLOG 1005".to_owned()),
-            list(),
-            art(),
-            ButtonStyle::STOCK,
+        // Ship 128's pilot `dësc` 14000 has a graphic whose picture
+        // dialog is there: greyed Info still opens nothing for it.
+        for art in [art(), art_with(vec![(14_000, 5000)])] {
+            let mut bare = HireScreen::new(
+                Ok((template(), Rc::new(MonoMetrics))),
+                InfoTemplates {
+                    plain: Err("no DLOG 1005".to_owned()),
+                    picture: Ok(picture_info_template()),
+                },
+                list(),
+                art,
+                ButtonStyle::STOCK,
+            );
+            assert!(!enabled(&bare, INFO_LABEL));
+            assert_eq!(bare.selected(), Some(0));
+            bare.input(&key(INFO_KEY, false));
+            let info = item(&bare, INFO_ITEM).center();
+            click(&mut bare, info);
+            assert!(bare.info_panel().is_none());
+        }
+    }
+
+    #[test]
+    fn the_hire_panel_draws_the_two_columns_and_the_stock_weapons() {
+        let mut armed = row(128, 970, 100, Ok(()));
+        armed.specs.weapons = vec![StockLine {
+            count: 2,
+            name: "Light Blaster".to_owned(),
+            ammo: None,
+        }];
+        let panel_texts = |row: HireRow| {
+            let mut screen = screen_of(
+                &art(),
+                HireList {
+                    rows: vec![row],
+                    ..list()
+                },
+            );
+            screen.input(&key(INFO_KEY, false));
+            let area = screen
+                .info_panel()
+                .expect("open")
+                .item_bounds(5)
+                .expect("item 5");
+            (texts(&screen), area.min)
+        };
+        let (drawn, at) = panel_texts(armed);
+        let white = Color::WHITE;
+        for expected in [
+            (
+                "Standard Weapons:",
+                Point::new(at.x, at.y + 108.0 - 10.0),
+                white,
+            ),
+            (
+                "2 Light Blasters",
+                Point::new(at.x + 8.0, at.y + 120.0 - 10.0),
+                white,
+            ),
+            (
+                "Speed:",
+                Point::new(at.x, at.y + 2.0),
+                Color::rgba(128, 128, 128, 255),
+            ),
+            ("300", Point::new(at.x + 45.0, at.y + 2.0), white),
+        ] {
+            let expected = (expected.0.to_owned(), expected.1, expected.2);
+            assert!(drawn.contains(&expected), "{expected:?}: {drawn:?}");
+        }
+        let (bare, _) = panel_texts(row(128, 970, 100, Ok(())));
+        assert!(
+            bare.iter()
+                .any(|(text, _, _)| text == "No standard weapons"),
+            "{bare:?}"
         );
-        assert!(!enabled(&bare, INFO_LABEL));
-        bare.input(&key(INFO_KEY, false));
-        assert!(bare.info_panel().is_none());
     }
 
     #[test]
     fn without_its_dialog_it_says_why_and_return_closes_it() {
         let mut screen = HireScreen::new(
             Err("no DLOG 1004".to_owned()),
-            Ok(info_template()),
+            info_templates(),
             list(),
             art(),
             ButtonStyle::STOCK,
@@ -938,6 +1154,131 @@ mod tests {
         assert_eq!(screen.top_row(), 1);
         screen.input(&key(Key::Down, false));
         assert_eq!(screen.selected(), Some(4));
+    }
+
+    /// Ship 128's row, its `Long Name` "The Long 128", alone in the list.
+    fn long_named() -> HireList {
+        let mut row = row(128, 970, 100, Ok(()));
+        row.specs.long_name = "The Long 128".to_owned();
+        HireList {
+            rows: vec![row],
+            ..list()
+        }
+    }
+
+    #[test]
+    fn info_on_a_pilot_description_with_a_graphic_opens_the_picture_panel() {
+        let art = art_with(vec![(13_000, 6000), (14_000, 5000)]);
+        let mut screen = screen_of(&art, long_named());
+        art.asked.borrow_mut().clear();
+        screen.input(&key(INFO_KEY, false));
+        let panel = screen.info_panel().expect("open");
+        assert_eq!(panel.bounds(), rect(205.0, 115.0, 614.0, 537.0));
+        assert_eq!(*art.asked.borrow(), ["graphic 14000"]);
+        let graphic = panel.item_bounds(PANEL_GRAPHIC_ITEM).expect("item 7");
+        let commands = drawn(&screen);
+        assert!(commands.contains(&DrawCommand::Picture {
+            image: PICTURE_INFO_BACKGROUND,
+            top_left: Point::new(205.0, 115.0),
+        }));
+        assert!(commands.contains(&DrawCommand::StretchedPicture {
+            image: ImageKey::picture(5000),
+            top_left: graphic.min,
+            width: 600.0,
+            height: 400.0,
+        }));
+        let words: Vec<String> = texts(&screen).into_iter().map(|(t, _, _)| t).collect();
+        assert!(words.contains(&"The Long 128".to_owned()), "{words:?}");
+        assert!(!words.contains(&"Ship 128".to_owned()), "{words:?}");
+    }
+
+    #[test]
+    fn info_on_a_pilot_description_without_a_graphic_opens_1005() {
+        let art = art_with(vec![(13_000, 5000)]);
+        let mut screen = screen_of(&art, long_named());
+        screen.input(&key(INFO_KEY, false));
+        let panel = screen.info_panel().expect("open");
+        assert_eq!(panel.bounds(), rect(387.0, 241.0, 250.0, 285.0));
+        assert!(drawn(&screen).contains(&DrawCommand::Picture {
+            image: INFO_BACKGROUND,
+            top_left: Point::new(387.0, 241.0),
+        }));
+        let words: Vec<String> = texts(&screen).into_iter().map(|(t, _, _)| t).collect();
+        assert!(words.contains(&"Ship 128".to_owned()), "{words:?}");
+        assert!(!words.contains(&"The Long 128".to_owned()), "{words:?}");
+    }
+
+    #[test]
+    fn the_hire_picture_panel_draws_the_weapons_sentence() {
+        let art = art_with(vec![(14_000, 5000)]);
+        let mut list = long_named();
+        list.rows[0].specs.weapons = vec![StockLine {
+            count: 2,
+            name: "Light Blaster".to_owned(),
+            ammo: None,
+        }];
+        let mut screen = screen_of(&art, list);
+        screen.input(&key(INFO_KEY, false));
+        let panel = screen.info_panel().expect("open");
+        let weapons = panel.item_bounds(8).expect("item 8");
+        let text_area = panel.item_bounds(5).expect("item 5");
+        let drawn = texts(&screen);
+        let white = Color::WHITE;
+        for expected in [
+            (
+                "Standard Weapons:",
+                Point::new(weapons.min.x, weapons.min.y + 2.0),
+            ),
+            (
+                "2 Light Blasters",
+                Point::new(weapons.min.x, weapons.min.y + 16.0),
+            ),
+        ] {
+            let expected = (expected.0.to_owned(), expected.1, white);
+            assert!(drawn.contains(&expected), "{expected:?}: {drawn:?}");
+        }
+        let item_5s_heading = Point::new(text_area.min.x, text_area.min.y + 98.0);
+        assert!(
+            !drawn.iter().any(|(_, at, _)| *at == item_5s_heading),
+            "{drawn:?}"
+        );
+    }
+
+    #[test]
+    fn the_hire_panel_title_is_times_18() {
+        let art = art_with(vec![(14_000, 5000)]);
+        let mut screen = screen_of(&art, long_named());
+        screen.input(&key(INFO_KEY, false));
+        let area = screen
+            .info_panel()
+            .expect("open")
+            .item_bounds(3)
+            .expect("item 3");
+        let middle = f32::midpoint(area.min.x, area.max.x).floor();
+        let width = MonoMetrics.width(Font::Times, 18.0, "The Long 128");
+        let title = drawn(&screen)
+            .into_iter()
+            .find_map(|c| match c {
+                DrawCommand::Text {
+                    text,
+                    font,
+                    size,
+                    origin,
+                    color,
+                    ..
+                } if text == "The Long 128" => Some((font, size, origin, color)),
+                _ => None,
+            })
+            .expect("the title");
+        assert_eq!(
+            title,
+            (
+                Font::Times,
+                18.0,
+                Point::new(middle - width / 2.0, area.min.y),
+                Color::WHITE
+            )
+        );
     }
 
     #[test]

@@ -19,7 +19,7 @@
 //! | `oütf` `OnPurchase` | [`Session::outfit`], each unit bought (`_DoOutfitDialog` @0x5c2cb) | after the cash and the grant, even when the grant added nothing (a map, a paint); then an outfit removed after purchase goes, and the ship is refitted |
 //! | `oütf` `OnSell` | [`Session::outfit`], each unit sold (@0x5cff6) | after one is removed and the cash credited, before the refit |
 //! | `shïp` `OnRetire` | [`Session::buy_ship`], the ship traded in (`_DoShipyardDialog` @0x5ecff) | first, the old class still flown and its outfits still owned |
-//! | `shïp` `OnPurchase` | [`Session::buy_ship`], the ship bought (@0x5f00d) | last: the new class, cash and outfits in place. By the engine the paint is cleared after it (@0x5f022), so a paint it grants is lost; by the other reading of [`RuleKey::PurchasePaintOrder`](crate::RuleKey::PurchasePaintOrder) the paint is cleared before it |
+//! | `shïp` `OnPurchase` | [`Session::buy_ship`], the ship bought (@0x5f00d) | last: the new class, cash and outfits in place, the reserves not yet filled. By the engine the paint is cleared after it (@0x5f022), so a paint it grants is lost; by the other reading of [`RuleKey::PurchasePaintOrder`](crate::RuleKey::PurchasePaintOrder) the paint is cleared before it. Either way the shield, armour and fuel are then filled, to the class and outfits it leaves (@0x5f051-0x5f07b) |
 //! | `shïp` `OnCapture` | [`Session::plunder`]'s capture taken as an escort straight away, and [`Session::assign`]'s Use As Escort (`_DoPlunderDialog` @0x9460e) | before the ship joins the fleet |
 //! | `shïp` `OnRetire`, then `OnCapture` | [`Session::assign`]'s Use As My Ship (`_DoShipCapture` @0x41662, @0x416c9) | the old class's `OnRetire`, then the captured class's `OnCapture`, the old class still flown. By the engine both run before the outfit swap, which strips a non-persistent outfit either grants, and before the fuel draw; by the other reading of [`RuleKey::CaptureHookOrder`](crate::RuleKey::CaptureHookOrder) they run after the swap (still before the class changes and the fuel draw). No hook runs when the prize is abandoned |
 //!
@@ -152,15 +152,16 @@ mod tests {
 
     use super::*;
     use crate::board::{Assigned, Assignment, Take, Taken};
-    use crate::catalog::{CharacterStart, OutfitId, StartError};
+    use crate::catalog::{CharacterStart, OutfitId, OutfitRecord, StartError};
     use crate::control::{Bit, ScriptNote, SetOp, SetOpKind};
     use crate::outfit_effects::Rgb15;
-    use crate::outfitter::OutfitRefusal;
+    use crate::outfitter::{FIRST_OUTFIT, OutfitFlags, OutfitRefusal, Reselection};
     use crate::pilot::Pilot;
+    use crate::reserves::Reserves;
     use crate::session::control::SetOpObserver;
     use crate::session::tests::{
-        NEW, aboard, boardable, buy, captured, kitted, outfitted, outfitting, outfitting_effects,
-        sell, shipbuying, take,
+        BLASTER, NEW, aboard, boardable, buy, captured, kitted, outfitted, outfitting,
+        outfitting_effects, outfitting_on_bit_7, sell, shipbuying, take,
     };
     use crate::shipyard::ShipRefusal;
     use crate::testkit::{Draws, FakePilotCatalog, Scripted, catalog, outfit};
@@ -179,6 +180,7 @@ mod tests {
         outfits: BTreeMap<OutfitId, u16>,
         escorts: usize,
         paint: Option<Rgb15>,
+        reserves: Reserves,
     }
 
     /// Records a [`Snap`] each time an `S<tag>` runs: the hooks are
@@ -197,6 +199,7 @@ mod tests {
                     outfits: pilot.outfits.clone(),
                     escorts: pilot.escorts().len(),
                     paint: pilot.paint,
+                    reserves: pilot.reserves(),
                 });
             }
         }
@@ -413,6 +416,198 @@ mod tests {
         assert!(sold.cash > 24_000, "credited: {}", sold.cash);
     }
 
+    #[test]
+    fn a_counted_sale_refused_part_way_runs_on_sell_for_each_sale_made() {
+        // A -10-ton pod whose OnSell toggles bit 400, three owned with a
+        // 50-ton outfit: 30 + 30 - 50 = 10 tons free, so one pod sold
+        // leaves none and the second pass is refused. Two passes keep the
+        // count even: an OnSell on the refused pass would clear the bit.
+        let pod = OutfitId(310);
+        let mut catalog = outfitting();
+        catalog.outfits.push(OutfitRecord {
+            mass: -10,
+            on_sell: Script::parse("^b400"),
+            ..outfit(310, &[])
+        });
+        catalog.outfits.push(OutfitRecord {
+            mass: 50,
+            ..outfit(311, &[])
+        });
+        let mut session = outfitted(&catalog);
+        session.pilot.outfits = BTreeMap::from([(OutfitId(311), 1), (pod, 3)]);
+        let free = session.outfitter(&mut Scripted::default()).expect("open");
+        assert_eq!(free.free_mass, 10);
+        let order = session.outfit_order(sell(pod), 2, &mut Scripted::default());
+        assert_eq!(order.run.done, 1);
+        assert_eq!(
+            order
+                .run
+                .stopped
+                .map(|stopped| (stopped.pass, stopped.refusal)),
+            Some((1, OutfitRefusal::NegativeFreeMass))
+        );
+        assert!(session.control_bit(bit(400)), "toggled once: one sale");
+        assert_eq!(session.pilot().owned(pod), 2);
+    }
+
+    #[test]
+    fn by_the_engine_on_sell_bits_that_list_an_outfit_reset_the_selection() {
+        // The booster's OnSell sets bit 7, which lists the hidden 305, so
+        // its first sale changes the listing.
+        let mut catalog = hooked_outfit(outfitting_on_bit_7(), SPEED, "", "b7");
+        catalog.outfits.push(outfit(128, &[]));
+        let sold = |source| {
+            let mut session = outfitted(&catalog).with_rules(
+                crate::rulebook::Rulebook::default()
+                    .with_override(crate::RuleKey::RelistedSale, source),
+            );
+            session.pilot.outfits = BTreeMap::from([(SPEED, 2), (BLASTER, 1)]);
+            let listed = session.outfitter(&mut Scripted::default()).expect("open");
+            assert_eq!(listed.row(OutfitId(305)), None, "hidden until bit 7");
+            let order = session.outfit_order(sell(SPEED), 2, &mut Scripted::default());
+            assert_eq!((order.run.done, order.run.stopped), (2, None));
+            assert!(session.control_bit(bit(7)));
+            (session.pilot().owned(SPEED), session.pilot().owned(BLASTER))
+        };
+        assert_eq!(sold(crate::RuleSource::Engine), (1, 0), "a blaster sold");
+        assert_eq!(sold(crate::RuleSource::Bible), (0, 1), "two boosters");
+    }
+
+    #[test]
+    fn by_the_engine_on_purchase_bits_that_list_an_outfit_reset_the_selection() {
+        // The booster's OnPurchase sets bit 7, which lists the hidden 305.
+        let catalog = hooked_outfit(outfitting_on_bit_7(), SPEED, "b7", "");
+        let bought = |source| {
+            let mut session = outfitted(&catalog).with_rules(
+                crate::rulebook::Rulebook::default()
+                    .with_override(crate::RuleKey::RelistedSelection, source),
+            );
+            let listed = session.outfitter(&mut Scripted::default()).expect("open");
+            assert_eq!(listed.row(OutfitId(305)), None, "hidden until bit 7");
+            let order = session.outfit_order(buy(SPEED), 1, &mut Scripted::default());
+            assert_eq!(order.run.done, 1);
+            let relisted = session.outfitter(&mut Scripted::default()).expect("open");
+            assert!(relisted.row(OutfitId(305)).is_some(), "listed by bit 7");
+            order.after
+        };
+        assert_eq!(
+            bought(crate::RuleSource::Engine),
+            Reselection::Reset(FIRST_OUTFIT)
+        );
+        assert_eq!(bought(crate::RuleSource::Bible), Reselection::Kept);
+    }
+
+    #[test]
+    fn by_the_engine_a_buy_that_hides_the_only_row_leaves() {
+        // The only outfit listed hides itself once bought: its OnPurchase
+        // sets bit 7, its Availability is `!b7`, and it is taken away
+        // after purchase, so nothing is listed.
+        let catalog = FakePilotCatalog {
+            outfits: vec![OutfitRecord {
+                flags: OutfitFlags::REMOVE_AFTER_PURCHASE | OutfitFlags::HIDE_UNLESS_AVAILABLE,
+                availability: crate::control::Test::parse("!b7"),
+                on_purchase: Script::parse("b7"),
+                ..outfit(310, &[])
+            }],
+            ..outfitting()
+        };
+        let mut session = outfitted(&catalog);
+        let listed = session.outfitter(&mut Scripted::default()).expect("open");
+        assert_eq!(listed.rows.len(), 1);
+        let order = session.outfit_order(buy(OutfitId(310)), 1, &mut Scripted::default());
+        assert_eq!(order.run.done, 1);
+        assert_eq!(order.after, Reselection::Leave);
+        let emptied = session.outfitter(&mut Scripted::default()).expect("open");
+        assert_eq!(emptied.rows, []);
+    }
+
+    /// [`outfitting_on_bit_7`] also selling a blaster (128) whose
+    /// `OnSell` is `on_sell`, owning `blasters` of it, by `source`'s
+    /// reading of `RelistedSale`.
+    fn selling_blasters(on_sell: &str, blasters: u16, source: crate::RuleSource) -> Session {
+        let mut catalog = outfitting_on_bit_7();
+        catalog.outfits.push(OutfitRecord {
+            on_sell: Script::parse(on_sell),
+            ..outfit(128, &[])
+        });
+        let mut session = outfitted(&catalog).with_rules(
+            crate::rulebook::Rulebook::default()
+                .with_override(crate::RuleKey::RelistedSale, source),
+        );
+        session.pilot.outfits = BTreeMap::from([(BLASTER, blasters)]);
+        session
+    }
+
+    #[test]
+    fn by_the_engine_a_sale_that_relists_and_grants_itself_back_ends_at_the_restart_ceiling() {
+        // Each sale toggles bit 7, which lists or hides 305, and grants
+        // the blaster back: the original would restart forever. The port
+        // ends the order once it has restarted 512 times, on the 513th
+        // sale.
+        let mut session = selling_blasters("^b7 G128", 1, crate::RuleSource::Engine);
+        let order = session.outfit_order(sell(BLASTER), 2, &mut Scripted::default());
+        assert_eq!((order.run.done, order.run.stopped), (513, None));
+        assert_eq!(session.pilot().owned(BLASTER), 1);
+        assert!(session.control_bit(bit(7)), "toggled 513 times");
+        let mut bible = selling_blasters("^b7 G128", 1, crate::RuleSource::Bible);
+        let order = bible.outfit_order(sell(BLASTER), 2, &mut Scripted::default());
+        assert_eq!((order.run.done, order.run.stopped), (2, None));
+    }
+
+    #[test]
+    fn by_the_engine_a_random_on_sell_that_revisits_a_state_still_ends_as_the_original() {
+        // Each sale toggles bit 7, relisting, and draws: a 1 grants the
+        // blaster back, a 0 sets bit 8. Drawing 1, 1, 1, 0: the third sale
+        // brings back the counts, listing and bits of the first restart,
+        // yet the fourth sells the last blaster, and the restart after it
+        // finds none, as the original's order does.
+        let mut session = selling_blasters("^b7 R(G128 b8)", 1, crate::RuleSource::Engine);
+        let mut chance = Scripted::default().and_rolling(&[1, 1, 1, 0]);
+        let order = session.outfit_order(sell(BLASTER), 2, &mut chance);
+        assert_eq!(order.run.done, 4);
+        assert_eq!(
+            order
+                .run
+                .stopped
+                .map(|stopped| (stopped.pass, stopped.refusal)),
+            Some((1, OutfitRefusal::NoneOwned))
+        );
+        assert_eq!(session.pilot().owned(BLASTER), 0);
+        assert!(!session.control_bit(bit(7)), "toggled four times");
+        assert!(session.control_bit(bit(8)), "the last draw");
+    }
+
+    #[test]
+    fn by_the_engine_a_sale_that_grants_back_more_than_it_sells_ends_at_the_restart_ceiling() {
+        // Each sale toggles bit 7, relisting, and grants two blasters
+        // back, so the counts owned grow and no restart ever repeats: the
+        // order ends once 512 restarts are made, on the 513th sale.
+        let mut session = selling_blasters("^b7 G128 G128", 1, crate::RuleSource::Engine);
+        let order = session.outfit_order(sell(BLASTER), 2, &mut Scripted::default());
+        assert_eq!((order.run.done, order.run.stopped), (513, None));
+        assert_eq!(session.pilot().owned(BLASTER), 1 + 513);
+    }
+
+    #[test]
+    fn by_the_engine_a_relisting_that_alternates_its_listing_sells_until_none_is_left() {
+        // Each sale toggles bit 7, so every sale relists, the listing
+        // alternating, and the passes restart on the blaster. The counts
+        // owned fall with each sale, so the order sells all four blasters,
+        // well under the restart ceiling, and the pass after the last
+        // finds none.
+        let mut session = selling_blasters("^b7", 4, crate::RuleSource::Engine);
+        let order = session.outfit_order(sell(BLASTER), 3, &mut Scripted::default());
+        assert_eq!(order.run.done, 4);
+        assert_eq!(
+            order
+                .run
+                .stopped
+                .map(|stopped| (stopped.pass, stopped.refusal)),
+            Some((1, OutfitRefusal::NoneOwned))
+        );
+        assert_eq!(session.pilot().owned(BLASTER), 0);
+    }
+
     // The shipyard.
 
     /// [`shipbuying`] with ship 128's `OnRetire` and `OnPurchase`, and
@@ -506,6 +701,98 @@ mod tests {
             .buy_ship(NEW, "Kestrel", &mut Scripted::default())
             .expect("bought");
         assert_eq!(plain.pilot.paint, None, "the old paint still goes");
+    }
+
+    #[test]
+    fn on_purchase_runs_before_the_reserves_are_filled() {
+        let catalog = hooked_ships("", "S211");
+        let (mut session, probe) = probed(outfitted(&catalog));
+        session.pilot.reserves.shield.now = 1.0;
+        session
+            .buy_ship(NEW, "Kestrel", &mut Scripted::default())
+            .expect("bought");
+        assert_eq!(tags(&probe), [211]);
+        let snaps = probe.0.borrow().clone();
+        assert_eq!(
+            snaps[0].reserves.shield.now, 1.0,
+            "OnPurchase sees the old shield, held within the new most"
+        );
+        assert_eq!(session.reserves(), Reserves::full(80.0, 45.0, 400.0));
+    }
+
+    #[test]
+    fn a_d_in_on_purchase_leaves_the_shield_full_without_a_surplus() {
+        let mut catalog = hooked_ships("", "D302");
+        for record in &mut catalog.ship_records {
+            if record.id == NEW {
+                record.defaults.push((OutfitId(302), 1));
+            }
+        }
+        for (ship, defaults) in &mut catalog.defaults {
+            if *ship == NEW {
+                defaults.push((OutfitId(302), 1));
+            }
+        }
+        let mut session = outfitted(&catalog);
+        session
+            .buy_ship(NEW, "Kestrel", &mut Scripted::default())
+            .expect("bought");
+        assert_eq!(session.pilot().owned(OutfitId(302)), 0, "removed");
+        assert_eq!(session.reserves().shield.max, 80.0);
+        assert_eq!(session.reserves().shield.now, 80.0, "no surplus kept");
+        assert_eq!(session.reserves(), session.stats().full());
+    }
+
+    #[test]
+    fn a_change_to_a_smaller_class_in_on_purchase_leaves_its_reserves_full() {
+        let catalog = hooked_ships("", "C128");
+        let mut session = outfitted(&catalog);
+        session
+            .buy_ship(NEW, "Kestrel", &mut Scripted::default())
+            .expect("bought");
+        assert_eq!(session.ship(), ShipId(128));
+        assert_eq!(session.reserves(), Reserves::full(30.0, 45.0, 400.0));
+    }
+
+    #[test]
+    fn a_change_to_a_larger_class_in_on_purchase_fills_its_reserves() {
+        let mut catalog = hooked_ships("", "E130");
+        let heavy = catalog
+            .ship_records
+            .iter()
+            .find(|record| record.id == NEW)
+            .expect("ship 129")
+            .fields;
+        let larger = crate::handling::ShipFields {
+            armor: 90,
+            fuel: 500,
+            ..heavy
+        };
+        catalog.ships.push((ShipId(130), Ok(larger)));
+        catalog.ship_records.push(crate::testkit::ship(130, larger));
+        let mut session = outfitted(&catalog);
+        session
+            .buy_ship(NEW, "Kestrel", &mut Scripted::default())
+            .expect("bought");
+        assert_eq!(session.ship(), ShipId(130));
+        assert_eq!(session.reserves().armor.now, 90.0);
+        assert_eq!(session.reserves(), session.stats().full());
+    }
+
+    #[test]
+    fn the_fill_comes_after_the_paint_under_either_paint_order() {
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = Rulebook::default().with_override(RuleKey::PurchasePaintOrder, source);
+            let mut session = outfitted(&hooked_ships("", "C128")).with_rules(rules);
+            session
+                .buy_ship(NEW, "Kestrel", &mut Scripted::default())
+                .expect("bought");
+            assert_eq!(
+                session.reserves(),
+                Reserves::full(30.0, 45.0, 400.0),
+                "{source:?}"
+            );
+        }
     }
 
     // Capture.

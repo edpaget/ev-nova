@@ -135,6 +135,11 @@
 //! - [`navigation`]: how the player selects the stellar navigation
 //!   target: by its `NavDef` slot, the nearest, or a click
 //!   ([`stellar_under`]), as the original does.
+//! - [`order_loop`]: an order of a count run one pass at a time: each
+//!   pass handed its [`order_loop::Pass`], the buy loop
+//!   ([`order_loop::run`]) stopping at the first refusal and the sell
+//!   loop ([`order_loop::run_on`]) running on past it, with the
+//!   [`order_loop::OrderRun`] keeping the first refusal and its pass.
 //! - [`outfit_effects`]: what granting an outfit does: a map explores, a
 //!   clean-record outfit cleans the legal record and a paint paints the
 //!   ship ([`Rgb15`]) instead of being added
@@ -250,6 +255,7 @@ pub mod market;
 pub mod message;
 pub mod mission;
 pub mod navigation;
+pub mod order_loop;
 pub mod outfit_effects;
 pub mod outfitter;
 pub mod person;
@@ -336,7 +342,10 @@ pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use message::SimMessage;
 pub use navigation::{next_after, stellar_under};
 pub use outfit_effects::{OutfitRules, Rgb15};
-pub use outfitter::{LcNames, OutfitOrder, OutfitRefusal, OutfitRow, Outfitter};
+pub use outfitter::{
+    Armed, Launcher, LcNames, OpeningLimit, OutfitFacts, OutfitOrder, OutfitRefusal, OutfitRow,
+    OutfitRun, OutfitVisit, Outfitter, Raise, Reselection, SaleAlert,
+};
 pub use person::{
     COMM_QUOTES, ESCAPE_POD, GRUDGE, HAIL_QUOTES, NovaPersons, PersonRoll, PersonRules,
     PersonWorld, QuoteTags, expand_tags,
@@ -353,10 +362,14 @@ pub use session::{
     PersonQuote, RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled,
     ShipChangeRules, StellarPick, VenueOffer,
 };
-pub use shipyard::{ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard};
+pub use shipyard::{
+    Rating, ShipFacts, ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard,
+    StockLine,
+};
 pub use sound::SimSound;
 pub use stats::ShipStats;
 pub use targeting::TargetPick;
 pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};
 pub use traffic::{Traffic, World};
+pub use wares::{ShownTons, TonUnit};

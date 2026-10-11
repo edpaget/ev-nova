@@ -28,16 +28,23 @@
 //! - [`grid`]: the parts the Outfitter and the Shipyard share: the grid
 //!   of cells, a `ShortName`'s lines, and the selected item's picture and
 //!   description.
+//! - [`modal`]: the [`ModalHost`](modal::ModalHost) the screens open
+//!   their dialogs in, over themselves.
+//! - [`quantity_ask`]: the [`QuantityAsk`](quantity_ask::QuantityAsk),
+//!   the quantity dialog as the exchange and the outfitter host it.
 
 pub mod bar;
 pub mod catalog;
+pub mod credits;
 pub mod data;
 pub mod grid;
 pub mod hire;
 pub mod layout;
 pub mod missions;
+pub mod modal;
 pub mod offer;
 pub mod outfitter;
+pub mod quantity_ask;
 pub mod service;
 pub mod shipyard;
 pub mod trade;

@@ -913,7 +913,16 @@ fn outfit_for_the_ship(game: &mut Harness, store: &MemoryPilots) {
         Err(ShipRefusal::NotForSale)
     );
     let shown = texts(&game.frame());
-    for text in ["Ship Price: 8000", "Trade-In: 2500", "Final Price: 5500"] {
+    for text in [
+        "Ship Price:",
+        "8,000 cr",
+        "Trade-In:",
+        "2,500 cr",
+        "Final Price:",
+        "5,500 cr",
+        "You Have:",
+        "9,650 cr",
+    ] {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
     }
     let writes = store.writes();
@@ -947,7 +956,16 @@ fn buy_the_ship(game: &mut Harness, store: &MemoryPilots) {
     game.open(9);
     assert_eq!(game.shipyard().shipyard().check(NEW), Ok(()));
     let shown = texts(&game.frame());
-    for text in ["Ship Price: 8000", "Trade-In: 3500", "Final Price: 4500"] {
+    for text in [
+        "Ship Price:",
+        "8,000 cr",
+        "Trade-In:",
+        "3,500 cr",
+        "Final Price:",
+        "4,500 cr",
+        "You Have:",
+        "6,650 cr",
+    ] {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
     }
     let writes = store.writes();

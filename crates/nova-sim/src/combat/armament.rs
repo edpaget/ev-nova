@@ -81,7 +81,7 @@ use super::projectile::ShotId;
 use super::report::{Reports, SimDiagnostic};
 use super::weapon::{Ammo, Guidance, WeaponSpec};
 use crate::catalog::{
-    CombatCatalog, HullRecord, OutfitId, OutfitRecord, ShipId, WeaponId, WeaponRecord,
+    CombatCatalog, HullRecord, OutfitId, OutfitRecord, ShipId, StockWeapon, WeaponId, WeaponRecord,
 };
 use crate::chance::Chance;
 use crate::flight::normalized;
@@ -648,6 +648,14 @@ impl Arsenal {
         (armament, rounds)
     }
 
+    /// Ship class `ship`'s stock weapon slots that name a weapon, in slot
+    /// order, raw; none for a class that cannot be read.
+    pub(crate) fn stock_weapons(&self, ship: ShipId) -> &[StockWeapon] {
+        self.hulls
+            .get(&ship)
+            .map_or(&[], |hull| hull.weapons.as_slice())
+    }
+
     /// Ship type `ship`'s stock weapons that carry any, each with its
     /// count and its `AmmoLoad` (none below none).
     fn stock(&self, ship: ShipId) -> impl Iterator<Item = (WeaponId, u32, u32)> + '_ {
@@ -825,7 +833,7 @@ pub(crate) fn fit_stock(
 
 /// Each outfit among `outfits` with a mod of `mod_type`, with the `wëap`
 /// it names, by ascending outfit ID.
-fn holders(outfits: &[OutfitRecord], mod_type: i16) -> Vec<(WeaponId, OutfitId)> {
+pub(crate) fn holders(outfits: &[OutfitRecord], mod_type: i16) -> Vec<(WeaponId, OutfitId)> {
     let mut sorted: Vec<&OutfitRecord> = outfits.iter().collect();
     sorted.sort_by_key(|record| record.id);
     sorted
@@ -841,7 +849,7 @@ fn holders(outfits: &[OutfitRecord], mod_type: i16) -> Vec<(WeaponId, OutfitId)>
 }
 
 /// The first outfit among `holders` naming `weapon`: the lowest ID.
-fn holder(holders: &[(WeaponId, OutfitId)], weapon: WeaponId) -> Option<OutfitId> {
+pub(crate) fn holder(holders: &[(WeaponId, OutfitId)], weapon: WeaponId) -> Option<OutfitId> {
     holders
         .iter()
         .find(|&&(of, _)| of == weapon)
