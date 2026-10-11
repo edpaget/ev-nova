@@ -17,7 +17,11 @@
 //! 128 over the paused flight in place of the comm dialog: Return accepts
 //! it and N refuses it, each closing the dialog and resuming flight. A
 //! mission that cannot be refused, with no offer text, is accepted at
-//! once and shows nothing. With `person_join` set to its other reading in
+//! once and shows nothing. With mission 128's `BriefText` "Stay close."
+//! and `RefuseText` "Your loss.", accepting it shows the first and
+//! refusing it the second over the paused flight, until Done goes back
+//! to flight; accepted at once by a hail made with Up held, its
+//! `BriefText` shows and lets go of Up, so the ship coasts after Done. With `person_join` set to its other reading in
 //! the settings file, hailing Merchant opens the comm dialog listing
 //! Greetings, Request Assistance and Use As Escort, and U makes it say
 //! "Okay, I'm on my way." and join the fleet; landing saves the pilot
@@ -40,6 +44,7 @@ use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
 use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
 use nova_data::graphics::{PICT, RLED};
 use nova_data::records::character::Character;
+use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
 use nova_data::records::govt::Govt;
@@ -163,24 +168,39 @@ fn person(govt: i16, ship: i16, flags: u16, mission: i16, grant: [i16; 3]) -> Ve
 
 /// A `mïsn` offered from a ship (`AvailLoc` 2) on every visit
 /// (`AvailRandom` 100), of these `Flags`, with one special ship escorting
-/// the player.
-fn escort_mission(flags: u16) -> Vec<u8> {
+/// the player, its `BriefText` and `RefuseText` the `dësc`s `brief` and
+/// `refuse`.
+fn escort_mission(flags: u16, brief: i16, refuse: i16) -> Vec<u8> {
     let mut bytes = vec![0; Mission::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x04, &[2]);
     put_i16s(&mut bytes, 0x0A, &[100]);
     put_i16s(&mut bytes, 0x20, &[1]);
     put_i16s(&mut bytes, 0x26, &[3]);
+    put_i16s(&mut bytes, 0x34, &[brief]);
     bytes[0x50..0x52].copy_from_slice(&flags.to_be_bytes());
+    put_i16s(&mut bytes, 0x58, &[refuse]);
+    bytes
+}
+
+/// A `dësc` of `text`.
+fn desc(text: &str) -> Vec<u8> {
+    let mut bytes = text.as_bytes().to_vec();
+    bytes.push(0);
+    bytes.extend([0xFF; 2]);
+    bytes.extend([0; 34]);
     bytes
 }
 
 /// What the game data's knobs are set to: Wreck's `Flags` and
-/// `LinkMission`, and mission 128's `Flags`.
+/// `LinkMission`, and mission 128's `Flags`, `BriefText` and
+/// `RefuseText`.
 #[derive(Clone, Copy)]
 struct Knobs {
     wreck_flags: u16,
     wreck_mission: i16,
     mission_flags: u16,
+    brief: i16,
+    refuse: i16,
 }
 
 /// The game data as the module docs give it.
@@ -188,6 +208,16 @@ const PLAIN: Knobs = Knobs {
     wreck_flags: 0,
     wreck_mission: -1,
     mission_flags: 0,
+    brief: -1,
+    refuse: -1,
+};
+
+/// The game data with mission 128's `BriefText` `dësc` 200, "Stay close.",
+/// and its `RefuseText` `dësc` 201, "Your loss.".
+const TEXTED: Knobs = Knobs {
+    brief: 200,
+    refuse: 201,
+    ..PLAIN
 };
 
 /// An `oütf` of `ItemClass` 7, massless, up to 10 owned, "spare part" and
@@ -340,8 +370,10 @@ fn game_data(knobs: Knobs) -> Rc<GameData> {
             Mission::TYPE,
             128,
             Some(b"Escort"),
-            &escort_mission(knobs.mission_flags),
+            &escort_mission(knobs.mission_flags, knobs.brief, knobs.refuse),
         )
+        .resource(Desc::TYPE, 200, None, &desc("Stay close."))
+        .resource(Desc::TYPE, 201, None, &desc("Your loss."))
         .resource(Outfit::TYPE, 128, Some(b"Spare Part"), &spare_part())
         .resource(System::TYPE, 128, Some(b"Alpha"), &alpha())
         .resource(Stellar::TYPE, 128, Some(b"Pad"), &pad())
@@ -368,6 +400,10 @@ fn game_data(knobs: Knobs) -> Rc<GameData> {
     }
     // The offer dialog's frame.
     for (id, height) in [(8521, 9), (8522, 4), (8523, 40)] {
+        fork = fork.resource(PICT, id, None, &pict(441, height, [30, 30, 60]));
+    }
+    // The Desc Dialog's frame.
+    for (id, height) in [(8524, 9), (8525, 4), (8526, 40)] {
         fork = fork.resource(PICT, id, None, &pict(441, height, [30, 30, 60]));
     }
     for state in [7500, 7503, 7506] {
@@ -417,7 +453,8 @@ fn dialog(id: i16, (width, height): (i16, i16), items: &[Item]) -> (Vec<u8>, Vec
 }
 
 /// The interface file: the stock comm dialog (`DLOG` 1007, 423 x 215),
-/// and an offer dialog (`DLOG` 1016, 441 x 317) of the stock's ten items.
+/// an offer dialog (`DLOG` 1016, 441 x 317) of the stock's ten items,
+/// and "Desc Dialog" (`DLOG` 3003, 441 x 313) of the stock's six.
 fn interface() -> InterfaceData {
     let items = [
         ((21, 181, 166, 26), true),
@@ -447,11 +484,22 @@ fn interface() -> InterfaceData {
         ((425, 245, 10, 10), false),
     ];
     let (offer_dlog, offer_list) = dialog(1016, (441, 317), &offer_items);
+    let text_items = [
+        ((173, 281, 99, 25), true),
+        ((221, 329, 68, 30), false),
+        ((11, 10, 417, 262), false),
+        ((70, 345, 78, 25), true),
+        ((330, 282, 23, 23), false),
+        ((363, 282, 23, 23), false),
+    ];
+    let (text_dlog, text_list) = dialog(3003, (441, 313), &text_items);
     let fork = ForkBuilder::new()
         .resource(Dlog::TYPE, 1007, None, &dlog)
         .resource(Ditl::TYPE, 1007, None, &list)
         .resource(Dlog::TYPE, 1016, None, &offer_dlog)
         .resource(Ditl::TYPE, 1016, None, &offer_list)
+        .resource(Dlog::TYPE, 3003, None, &text_dlog)
+        .resource(Ditl::TYPE, 3003, None, &text_list)
         .build()
         .bytes;
     InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
@@ -678,6 +726,20 @@ impl Game {
         Some(dialog.prompt().mission.0)
     }
 
+    /// The mission text shown over flight, its lines joined by spaces.
+    fn flight_text(&self) -> Option<String> {
+        self.app
+            .screen()
+            .flight_mission_text()
+            .map(|dialog| dialog.lines().join(" "))
+    }
+
+    /// How far flight's display is between its last two steps: it moves
+    /// on each frame flight ticks, and holds while flight is paused.
+    fn alpha(&self) -> f32 {
+        self.app.screen().flight_view().expect("flying").alpha()
+    }
+
     /// The missions the pilot has accepted, in slot order.
     fn active(&self) -> Vec<i16> {
         self.session()
@@ -733,6 +795,76 @@ fn an_unrefusable_mission_with_no_offer_text_is_accepted_at_once_showing_nothing
     game.tap(Key::Char('y'));
     assert_eq!(game.showing(), Showing::Flight);
     assert_eq!(game.active(), [128]);
+}
+
+/// Merchant's offer answered with `answer`, then its text shown over the
+/// paused flight until Done: `shown`.
+fn answered_over_flight(answer: Key, shown: &str) -> Game {
+    let store = MemoryPilots::new();
+    let mut game = Game::opened_with(TEXTED, &store, &BOTH, Showing::Flight, "{}");
+    game.target_person(128);
+    game.tap(Key::Char('y'));
+    assert_eq!(game.showing(), Showing::Offer);
+    game.tap(answer);
+    assert_eq!(game.showing(), Showing::MissionText, "over flight");
+    assert_eq!(game.flight_text().as_deref(), Some(shown));
+    let alpha = game.alpha();
+    for _ in 0..2 {
+        let frame = game.frame();
+        assert!(texts(&frame).contains(&shown.to_owned()), "drawn");
+        assert_eq!(game.showing(), Showing::MissionText);
+        assert_eq!(game.alpha().to_bits(), alpha.to_bits(), "flight is paused");
+    }
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight, "Done goes back to flight");
+    assert_eq!(game.flight_text(), None);
+    game
+}
+
+#[test]
+fn merchants_offer_accepted_shows_its_brief_text_over_the_paused_flight() {
+    let game = answered_over_flight(Key::Enter, "Stay close.");
+    assert_eq!(game.active(), [128]);
+}
+
+#[test]
+fn merchants_offer_refused_shows_its_refuse_text_over_the_paused_flight() {
+    let game = answered_over_flight(Key::Char('n'), "Your loss.");
+    assert_eq!(game.active(), Vec::<i16>::new());
+}
+
+#[test]
+fn a_hail_accepting_at_once_lets_go_of_flights_keys_under_the_brief_text() {
+    let store = MemoryPilots::new();
+    let knobs = Knobs {
+        mission_flags: 0x0004,
+        ..TEXTED
+    };
+    let mut game = Game::opened_with(knobs, &store, &BOTH, Showing::Flight, "{}");
+    game.target_person(128);
+
+    // Up held, Y hails Merchant, whose mission, unrefusable and with no
+    // offer text, is accepted at once: its BriefText shows over flight,
+    // and Up is let go under it.
+    game.key(Key::Up, true);
+    game.tap(Key::Char('y'));
+    assert_eq!(game.showing(), Showing::MissionText);
+    assert_eq!(game.flight_text().as_deref(), Some("Stay close."));
+    game.key(Key::Up, false);
+    game.tap(Key::Enter);
+    assert_eq!(game.showing(), Showing::Flight);
+
+    // The ship coasts: it no longer speeds up.
+    game.frame();
+    let speed = game.session().player().velocity.length();
+    for _ in 0..30 {
+        game.frame();
+    }
+    assert_eq!(
+        game.session().player().velocity.length().to_bits(),
+        speed.to_bits(),
+        "Up is no longer held"
+    );
 }
 
 #[test]

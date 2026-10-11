@@ -1487,9 +1487,11 @@ impl AppScreen {
     /// it is open, and otherwise, in flight, over flight, which pauses
     /// under them, as `_ShowTextDialog` (@0x5a752) shows them (a
     /// `BriefText` an `S` accepted, the texts of a person's offer
-    /// accepted or refused over flight). Without dialogs, those in flight
-    /// are dropped, as the spaceport drops them without its template. On
-    /// any other side they stay queued in the session.
+    /// accepted or refused over flight), first cancelling flight's
+    /// pointer gesture and letting go of its keys (their releases will go
+    /// to the texts), as any dialog over flight does. Without dialogs,
+    /// those in flight are dropped, as the spaceport drops them without
+    /// its template. On any other side they stay queued in the session.
     fn show_mission_texts(&mut self) {
         if let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) {
             spaceport.show_mission_texts(flight.take_mission_texts());
@@ -1506,7 +1508,13 @@ impl AppScreen {
         else {
             return;
         };
-        if let Some(missions) = self.flight_missions() {
+        if self.flight_missions().is_none() {
+            return;
+        }
+        let below = self.shown_mut();
+        below.cancel_pointer();
+        below.release_keys();
+        if let Some(missions) = &mut self.missions {
             missions.show_texts(texts);
         }
         self.drop_closed_missions();
@@ -2002,7 +2010,9 @@ impl Screen for AppScreen {
     /// otherwise goes back to the side flight was entered from, letting go
     /// of the keys held in flight; it never quits, and its repeats and
     /// release are consumed. Everything else goes to flight, where Tab
-    /// targets the next ship, and F and I do nothing.
+    /// targets the next ship and F does nothing; I opens the mission info
+    /// screen over flight, or, with no active mission listed, says "You
+    /// have no active missions." on the message line.
     ///
     /// In the spaceport, every event goes to it; leaving it takes off,
     /// back into flight, letting go of its keys.
