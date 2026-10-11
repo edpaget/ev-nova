@@ -749,6 +749,7 @@ mod tests {
             carrier: None,
             person: None,
             mission: None,
+            aux: None,
         }
     }
 

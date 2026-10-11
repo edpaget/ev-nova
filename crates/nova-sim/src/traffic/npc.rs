@@ -183,6 +183,11 @@ pub struct Npc {
     /// The mission whose special ship it is, while it is one (the
     /// original's ship +0xc8d2): none for any other ship.
     pub mission: Option<MissionMark>,
+    /// The slot of the mission whose auxiliary ship it is (the original's
+    /// ship +0x8a): ordinary traffic, given back to its slot as the
+    /// system's ships are dropped (see the [`mission::aux`](crate::mission::aux)
+    /// module); none for any other ship.
+    pub aux: Option<u8>,
 }
 
 /// What marks an NPC as an active mission's special ship (see the

@@ -155,6 +155,7 @@ impl Session {
             carrier,
             person,
             mission: None,
+            aux: None,
         };
         Some(self.traffic.add_npc(npc))
     }

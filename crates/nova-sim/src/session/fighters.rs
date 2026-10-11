@@ -472,6 +472,7 @@ fn fighter(
         carrier: Some(carrier),
         person: None,
         mission: None,
+        aux: None,
     }
 }
 

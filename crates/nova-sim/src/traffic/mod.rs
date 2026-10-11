@@ -549,6 +549,7 @@ impl Traffic {
                 carrier: None,
                 person: traits,
                 mission: ship.mission,
+                aux: ship.aux,
             });
         }
     }
@@ -1683,6 +1684,7 @@ mod tests {
                 formation: None,
             }),
             derelict: false,
+            aux: None,
         }
     }
 
