@@ -138,6 +138,10 @@ pub struct LandingSite {
     /// master without one (`_LoadMasterStellarSprite` @0x1ed8c-0x1ed97,
     /// `_GetStellarSpriteXSize` @0xaced-0xacff).
     pub type_counts_frames: bool,
+    /// Its `CustSndID`, raw, as [`GateSite::exit_angle`]: the heading an
+    /// NPC comes out of it on when it is a hypergate or wormhole and the
+    /// value is 0 to 359 ([`exit_heading`](crate::gate::exit_heading)).
+    pub exit_angle: i16,
 }
 
 /// A stellar a hypergate or wormhole may lead to, raw from its `spöb`: the
@@ -1409,6 +1413,7 @@ mod tests {
                 dead_graphic: Some(5),
                 dead_frame_size: Some((60, 60)),
                 type_counts_frames: true,
+                exit_angle: -1,
             }]
         }
 
