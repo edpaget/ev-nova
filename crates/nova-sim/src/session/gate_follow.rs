@@ -565,4 +565,22 @@ pub(super) mod tests {
         assert!(marked(&session).is_empty(), "none set up the hook restarts");
         assert_eq!(timer(&session), (199, 0), "restarted");
     }
+
+    #[test]
+    fn a_slot_of_a_fixed_system_due_on_the_exit_frame_is_left_to_the_hook() {
+        let catalog = gated(shipping(131, 1), 0);
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            // Left counting when the player last left 131.
+            active.ships.appear = 1;
+            active.ships.arrived = 0;
+        }
+        exit_gate(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
+        assert!(
+            marked(&session).is_empty(),
+            "the exit's frame does not bring in ships the hook restarts"
+        );
+        assert_eq!(timer(&session), (199, 0), "restarted");
+    }
 }
