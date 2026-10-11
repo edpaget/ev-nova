@@ -164,6 +164,23 @@ mod tests {
     }
 
     #[test]
+    fn a_led_ship_loses_its_target_as_it_is_led_out() {
+        let catalog = catalog();
+        let mut session = flying(&catalog, Rulebook::default());
+        exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
+        let ids: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
+        for &id in &ids {
+            session.npc_mut(id).expect("here").target = Some(crate::combat::ShipRef::Player);
+        }
+        assert!(session.player_led().any(Npc::is_players));
+        assert!(session.player_led().any(Npc::mission_escort));
+        session.lead_out_of_gate(exit_of(GateKind::Hypergate), &mut NeverFires);
+        for &id in &ids {
+            assert_eq!(session.npc(id).expect("here").target, None);
+        }
+    }
+
+    #[test]
     fn each_led_ship_waits_rand_20_plus_15() {
         let catalog = catalog();
         let mut session = flying(&catalog, Rulebook::default());
