@@ -1117,6 +1117,7 @@ impl Session {
             ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
             ship_name: self.pilot.ship_name().unwrap_or_default(),
             person: self.offering_person(),
+            ranks: self.rank_names(),
             mission: mission.map(|values| MissionTags {
                 values,
                 cash: self.pilot.cash,

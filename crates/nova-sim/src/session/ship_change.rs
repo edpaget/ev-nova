@@ -448,6 +448,15 @@ impl Session {
         strings.into_iter().nth(usize::from(chance.roll(sides)))
     }
 
+    /// String `index` (1-based) of `STR#` `list`, from the session's
+    /// string lists, if it has one: what the bar's news and the rank tags
+    /// read through.
+    pub(super) fn nth_string(&self, list: i16, index: usize) -> Option<String> {
+        let mut strings = self.strings.0.string_list(list);
+        let at = index.checked_sub(1)?;
+        (at < strings.len()).then(|| strings.swap_remove(at))
+    }
+
     /// [`random_string`](Self::random_string), with an empty pick read as
     /// none, as the `T` rename, the `Q` leave message, and the bar's commercial
     /// and generic story read it.

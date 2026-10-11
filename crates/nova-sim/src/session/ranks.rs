@@ -21,8 +21,12 @@
 //! leaves it out, as the original's `_LoadPilotData` drops an active flag
 //! whose `ränk` is gone (@0x75e47-0x75eb6).
 
+use std::borrow::Cow;
+
 use crate::catalog::RankId;
-use crate::rank::{self, Held};
+use crate::news::MISC_STRINGS;
+use crate::person::NO_RANK;
+use crate::rank::{self, Held, NO_RANK_STRING, RankNames};
 use crate::rulebook::RuleKey;
 use crate::session::Session;
 
@@ -50,6 +54,21 @@ impl Session {
         let unaffiliated = self.rules.source_for(RuleKey::RankUnaffiliatedGroup);
         let records = std::rc::Rc::clone(&self.ranks);
         rank::deactivate(&records, self.held_ranks(), rank, unaffiliated);
+    }
+
+    /// What the rank tags read: the pilot's active ranks, the recent
+    /// rank, and `STR#` 2002 #341 from the session's string lists as the
+    /// fallback, [`NO_RANK`] when the lists lack it (none are wired by
+    /// default).
+    pub(super) fn rank_names(&self) -> RankNames<'_> {
+        RankNames {
+            records: &self.ranks,
+            active: &self.pilot.ranks,
+            recent: self.recent_rank,
+            fallback: self
+                .nth_string(MISC_STRINGS, NO_RANK_STRING)
+                .map_or(Cow::Borrowed(NO_RANK), Cow::Owned),
+        }
     }
 
     /// The day's eighth participant: the active ranks' salaries (see
@@ -260,5 +279,64 @@ mod tests {
         assert_eq!(listed(&mut session), (false, false), "not held");
         session.run_set(&set("K200"), &mut Scripted::default());
         assert_eq!(listed(&mut session), (true, true), "held");
+    }
+
+    /// Rank 128, "Commander" of government 128, "Cmdr" in conversation.
+    fn commander() -> RankRecord {
+        RankRecord {
+            name: "Commander".to_owned(),
+            conv_name: "Cmdr".to_owned(),
+            short_name: "Cdr".to_owned(),
+            affil_govt: Some(crate::catalog::GovtId(128)),
+            ..rank(128)
+        }
+    }
+
+    #[test]
+    fn ranks_survive_save_and_reload_and_rrk_reads_captain_after_a_load() {
+        let catalog = FakePilotCatalog {
+            ranks: vec![commander()],
+            ..catalog()
+        };
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.plain_text("<PRK> <RRK>"), "captain captain");
+        session.run_set(&set("K128"), &mut Scripted::default());
+        assert_eq!(
+            session.plain_text("<PRK> <SRK> <RRK> <PRK128>"),
+            "Cmdr Cdr Commander Cdr"
+        );
+        let pilot = save::decode(&save::encode(session.pilot())).expect("loads");
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(active(&session), [128]);
+        assert_eq!(
+            session.plain_text("<PRK> <RRK>"),
+            "Cmdr captain",
+            "the recent rank is not saved"
+        );
+    }
+
+    /// `STR#` 2002 with #341 `fallback`.
+    struct Misc(&'static str);
+
+    impl crate::catalog::CommCatalog for Misc {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            if id == crate::news::MISC_STRINGS {
+                let mut strings = vec![String::new(); 400];
+                strings[340] = self.0.to_owned();
+                strings
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    #[test]
+    fn the_rank_fallback_reads_str_2002_341_when_the_lists_have_it() {
+        let session = ranked(vec![commander()]).with_strings(std::rc::Rc::new(Misc("skipper")));
+        assert_eq!(
+            session.plain_text("<PRK> <SRK> <RRK>"),
+            "skipper skipper skipper"
+        );
+        assert_eq!(session.plain_text("<PRK128>"), "skipper");
     }
 }

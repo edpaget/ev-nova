@@ -170,6 +170,8 @@
 //! - [`pre_jump`]: what the ship does between the jump key and the jump:
 //!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
 //!   turns to the bearing of the next system.
+//! - [`rank`]: the ranks, as `_ActivateRank` and `_DeactivateRank` change
+//!   them, their salaries, `Contribute` bits and names in the text tags.
 //! - [`rating`]: the player's combat rating: what a kill adds
 //!   ([`rating::credit`]) and which kills count ([`rating::counts`]).
 //! - [`recharge`]: recharging in the spaceport: which stellars sell
@@ -224,8 +226,8 @@
 //!   or the next of the player's escorts.
 //! - [`text_tags`]: the one substitution path for the text tags, as the
 //!   original's `_MungeBriefing`: a [`TagContext`] of the pilot, the
-//!   person and the mission's resolved [`MissionValues`], its names read
-//!   through the [`TagNames`] port ([`text_tags::expand`]).
+//!   person, the ranks and the mission's resolved [`MissionValues`], its
+//!   names read through the [`TagNames`] port ([`text_tags::expand`]).
 //! - [`traffic`]: NPC [`Traffic`]: the ships spawned from a system's
 //!   `düde`s and fleets on arrival and over time, each [`Npc`] flown by an
 //!   autopilot with the player's flight physics and stats.

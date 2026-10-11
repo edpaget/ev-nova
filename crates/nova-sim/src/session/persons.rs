@@ -203,6 +203,7 @@ impl Session {
                 pilot: &self.pilot.name,
                 ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
                 ship_name: self.pilot.ship_name().unwrap_or_default(),
+                ranks: self.rank_names(),
             };
             let text = expand_tags(&line, &tags);
             self.quotes.push(PersonQuote { npc: id, text });

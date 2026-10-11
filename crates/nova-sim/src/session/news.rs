@@ -92,13 +92,6 @@ impl Session {
     fn disaster_story(&self, _chance: &mut dyn Chance) -> String {
         String::new()
     }
-
-    /// String `index` (1-based) of `STR#` `list`, if it has one.
-    fn nth_string(&self, list: i16, index: usize) -> Option<String> {
-        let mut strings = self.strings.0.string_list(list);
-        let at = index.checked_sub(1)?;
-        (at < strings.len()).then(|| strings.swap_remove(at))
-    }
 }
 
 /// One of `count` (above 0) equal outcomes, drawn on `chance`.

@@ -58,6 +58,18 @@
 //! adds its 64 `Contribute` bits to the player's, whatever its
 //! government (`_GetPlayerContributeBits` @0x76de-0x7701).
 //!
+//! **Text** ([`RankNames`], `_MungeBriefing` @0x9d039-0x9d3b3). `<PRK>`
+//! and `<SRK>` are the `ConvName` and `ShortName` of the active rank of
+//! highest `Weight` with that name non-empty, in ID order, a rank
+//! replacing the best only with a strictly greater `Weight`, so a tie
+//! goes to the lowest ID (@0x9d039-0x9d1a5). `<PRKnnn>` and `<SRKnnn>`
+//! both read the `ShortName` of government nnn's such rank (+0xde
+//! @0x9d1ef, @0x9d2d0); an unaffiliated rank is no government's. `<RRK>`
+//! is the recent rank's full name, with no active, record or emptiness
+//! test (@0x9d35f-0x9d391), so it reads empty for a recent rank with no
+//! record or no name. Each falls back to `STR#` 2002 #341, "captain"
+//! (@0x9d0d6), only when no rank qualifies, or there is no recent rank.
+//!
 //! **Salary** ([`pay_salaries`], `_IncrementGameTime` @0xb75b-0xb7c2,
 //! the day's eighth participant). In ID order, each active rank with a
 //! record and a nonzero `Salary` adds it to the cash unless the cash is
@@ -69,10 +81,15 @@
 //! other reading pays only up to the cap ([`salary_paid`]). The loop plays
 //! no sound.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use crate::catalog::{RankId, RankRecord};
+use crate::catalog::{GovtId, RankId, RankRecord};
 use crate::rulebook::RuleSource;
+
+/// The index (1-based) in `STR#` 2002 of what a rank tag reads with no
+/// rank to name: stock "captain" (0x155 @0x9d0d6).
+pub const NO_RANK_STRING: usize = 341;
 
 /// `Flags` 0x0001: activating the rank clears the other active ranks of
 /// its government.
@@ -181,6 +198,81 @@ pub fn contributed(records: &[RankRecord], active: &BTreeSet<RankId>) -> u64 {
         .fold(0, |bits, rank| bits | rank.contribute)
 }
 
+/// The names the rank tags read (see the module docs): the records, the
+/// active ranks, the recent rank and the fallback.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RankNames<'a> {
+    /// Every `ränk`.
+    pub records: &'a [RankRecord],
+    /// The active ranks.
+    pub active: &'a BTreeSet<RankId>,
+    /// The recent rank, if any.
+    pub recent: Option<RankId>,
+    /// What a tag reads with no rank to name: `STR#` 2002 #341.
+    pub fallback: Cow<'a, str>,
+}
+
+/// No rank held, for a text read with no ranks wired.
+static NONE_HELD: BTreeSet<RankId> = BTreeSet::new();
+
+impl RankNames<'_> {
+    /// No rank held, and the fallback [`NO_RANK`](crate::person::NO_RANK).
+    #[must_use]
+    pub fn none() -> RankNames<'static> {
+        RankNames {
+            records: &[],
+            active: &NONE_HELD,
+            recent: None,
+            fallback: Cow::Borrowed(crate::person::NO_RANK),
+        }
+    }
+
+    /// `<PRK>`: the highest active rank's `ConvName`.
+    #[must_use]
+    pub fn conversation(&self) -> &str {
+        self.highest(|rank| &rank.conv_name, None)
+    }
+
+    /// `<SRK>`: the highest active rank's `ShortName`.
+    #[must_use]
+    pub fn short(&self) -> &str {
+        self.highest(|rank| &rank.short_name, None)
+    }
+
+    /// `<PRKnnn>` and `<SRKnnn>`: the `ShortName` of government `govt`'s
+    /// highest active rank.
+    #[must_use]
+    pub fn short_of(&self, govt: GovtId) -> &str {
+        self.highest(|rank| &rank.short_name, Some(govt))
+    }
+
+    /// `<RRK>`: the recent rank's full name, empty when it has no record.
+    #[must_use]
+    pub fn recent(&self) -> &str {
+        match self.recent {
+            Some(id) => record(self.records, id).map_or("", |rank| &rank.name),
+            None => &self.fallback,
+        }
+    }
+
+    /// `name_of` the active rank of highest `Weight`, of government
+    /// `govt` when given, whose `name_of` is not empty, a tie going to the
+    /// lowest ID; the fallback with none.
+    fn highest(&self, name_of: fn(&RankRecord) -> &String, govt: Option<GovtId>) -> &str {
+        let mut best: Option<&RankRecord> = None;
+        for rank in self.records {
+            if self.active.contains(&rank.id)
+                && !name_of(rank).is_empty()
+                && govt.is_none_or(|govt| rank.affil_govt == Some(govt))
+                && best.is_none_or(|best| rank.weight > best.weight)
+            {
+                best = Some(rank);
+            }
+        }
+        best.map_or(&self.fallback, |rank| name_of(rank))
+    }
+}
+
 /// Whether ranks of `a` and `b` share a government for the sweeps.
 fn same_govt(a: &RankRecord, b: &RankRecord, unaffiliated: RuleSource) -> bool {
     match (a.affil_govt, b.affil_govt) {
@@ -217,7 +309,6 @@ fn sweep(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::GovtId;
     use crate::testkit;
 
     /// Rank `id` of government `govt` (`None` unaffiliated), `weight`
@@ -646,5 +737,157 @@ mod tests {
             salary_paid(&paying(200, -30, 0), 10, RuleSource::Bible),
             -30
         );
+    }
+
+    /// Rank `id` of government `govt`, `weight`, full name `name`,
+    /// `ConvName` `conv` and `ShortName` `short`.
+    fn named(
+        id: i16,
+        govt: Option<i16>,
+        weight: i16,
+        [name, conv, short]: [&str; 3],
+    ) -> RankRecord {
+        RankRecord {
+            name: name.to_owned(),
+            conv_name: conv.to_owned(),
+            short_name: short.to_owned(),
+            ..rank(id, govt, weight, 0)
+        }
+    }
+
+    /// The names `records` give with `active` held and `recent` the
+    /// recent rank, falling back to "captain".
+    fn names<'a>(
+        records: &'a [RankRecord],
+        active: &'a BTreeSet<RankId>,
+        recent: Option<i16>,
+    ) -> RankNames<'a> {
+        RankNames {
+            records,
+            active,
+            recent: recent.map(RankId),
+            fallback: "captain".into(),
+        }
+    }
+
+    fn ids(ids: &[i16]) -> BTreeSet<RankId> {
+        ids.iter().copied().map(RankId).collect()
+    }
+
+    #[test]
+    fn prk_is_the_highest_weight_active_ranks_conv_name() {
+        let records = [
+            named(200, Some(128), 1, ["Ensign", "Ensign", "Ens"]),
+            named(201, Some(129), 7, ["Admiral", "Admiral Sir", "Adm"]),
+            named(202, Some(128), 9, ["Lord", "Lord High", "Ld"]),
+            named(203, None, -2, ["Low", "Lowly", "Lo"]),
+        ];
+        let active = ids(&[200, 201, 203]);
+        let held = names(&records, &active, None);
+        assert_eq!(held.conversation(), "Admiral Sir", "202 is not active");
+        assert_eq!(held.short(), "Adm");
+        let low = ids(&[203]);
+        assert_eq!(names(&records, &low, None).short(), "Lo", "below 0");
+    }
+
+    #[test]
+    fn a_weight_tie_goes_to_the_lowest_id() {
+        let records = [
+            named(200, Some(128), 1, ["", "Low", "L"]),
+            named(201, Some(128), 5, ["", "First", "F"]),
+            named(202, Some(129), 5, ["", "Second", "S"]),
+        ];
+        let active = ids(&[200, 201, 202]);
+        let names = names(&records, &active, None);
+        assert_eq!(names.conversation(), "First");
+        assert_eq!(names.short(), "F");
+    }
+
+    #[test]
+    fn a_rank_with_an_empty_conv_name_is_skipped_for_prk_but_counts_for_srk() {
+        let records = [
+            named(200, Some(128), 1, ["", "Ensign", "Ens"]),
+            named(201, Some(128), 9, ["", "", "Adm"]),
+            named(202, Some(128), 8, ["", "Captain", ""]),
+        ];
+        let active = ids(&[200, 201, 202]);
+        let names = names(&records, &active, None);
+        assert_eq!(names.conversation(), "Captain");
+        assert_eq!(names.short(), "Adm");
+    }
+
+    #[test]
+    fn with_no_named_active_rank_each_tag_reads_the_fallback() {
+        let records = [
+            named(200, Some(128), 1, ["", "", ""]),
+            named(201, Some(128), 9, ["Lord", "Lord", "Ld"]),
+        ];
+        for active in [ids(&[]), ids(&[200]), ids(&[250])] {
+            let names = names(&records, &active, None);
+            assert_eq!(names.conversation(), "captain", "{active:?}");
+            assert_eq!(names.short(), "captain", "{active:?}");
+            assert_eq!(names.recent(), "captain", "{active:?}");
+            assert_eq!(names.short_of(GovtId(128)), "captain", "{active:?}");
+        }
+        let none = RankNames::none();
+        assert_eq!(none.conversation(), crate::person::NO_RANK);
+        assert_eq!(none.short(), "captain");
+        assert_eq!(none.recent(), "captain");
+        assert_eq!(none.short_of(GovtId(128)), "captain");
+    }
+
+    #[test]
+    fn rrk_is_the_recent_ranks_full_name_even_when_empty_and_the_fallback_with_none() {
+        let records = [
+            named(200, Some(128), 1, ["Commander", "Cmdr", "C"]),
+            named(201, Some(128), 9, ["", "Lord", "Ld"]),
+        ];
+        let active = ids(&[200, 201]);
+        assert_eq!(names(&records, &active, Some(200)).recent(), "Commander");
+        assert_eq!(names(&records, &active, Some(201)).recent(), "", "empty");
+        assert_eq!(
+            names(&records, &ids(&[]), Some(200)).recent(),
+            "Commander",
+            "no active test (@0x9d35f-0x9d391)"
+        );
+        assert_eq!(
+            names(&records, &active, Some(250)).recent(),
+            "",
+            "no record"
+        );
+        assert_eq!(names(&records, &active, None).recent(), "captain");
+    }
+
+    #[test]
+    fn rrk_reads_the_fallback_after_l_clears_it() {
+        let records = [named(200, Some(128), 1, ["Commander", "Cmdr", "C"])];
+        let mut state = State::default();
+        state.k(&records, 200);
+        assert_eq!(
+            names(&records, &state.active, state.recent.map(|id| id.0)).recent(),
+            "Commander"
+        );
+        state.l(&records, 200);
+        assert_eq!(
+            names(&records, &state.active, state.recent.map(|id| id.0)).recent(),
+            "captain"
+        );
+    }
+
+    #[test]
+    fn short_of_a_government_reads_its_highest_short_name_rank_and_never_an_unaffiliated_one() {
+        let records = [
+            named(200, Some(128), 1, ["", "Envoy", "Env"]),
+            named(201, Some(128), 4, ["", "Ambassador Sir", "Ambassador"]),
+            named(202, Some(128), 9, ["", "Lord", ""]),
+            named(203, Some(129), 99, ["", "Admiral", "Adm"]),
+            named(204, None, 99, ["", "Rogue", "Rg"]),
+        ];
+        let active = ids(&[200, 201, 202, 203, 204]);
+        let names = names(&records, &active, None);
+        assert_eq!(names.short_of(GovtId(128)), "Ambassador", "ShortName");
+        assert_eq!(names.short_of(GovtId(129)), "Adm");
+        assert_eq!(names.short_of(GovtId(130)), "captain");
+        assert_eq!(names.short_of(GovtId(127)), "captain", "never -1's");
     }
 }

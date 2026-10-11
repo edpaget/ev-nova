@@ -3684,6 +3684,7 @@ fn the_bounty_hunters_hail_quote_names_him_and_the_pilot() {
         pilot: "Stock",
         ship_type: "Shuttle",
         ship_name: "Kestrel",
+        ranks: nova_sim::rank::RankNames::none(),
     };
     assert_eq!(
         expand_tags(line, &tags),
