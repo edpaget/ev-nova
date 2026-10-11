@@ -653,6 +653,12 @@ impl Game {
             .expect("a session")
     }
 
+    /// How far flight's display is between its last two steps: it moves
+    /// on each frame flight ticks, and holds while flight is paused.
+    fn alpha(&self) -> f32 {
+        self.app.screen().flight_view().expect("flying").alpha()
+    }
+
     fn spaceport(&self) -> &SpaceportView {
         self.app.screen().spaceport_view().expect("landed")
     }
@@ -1139,8 +1145,14 @@ fn a_missed_deadline_says_so_and_the_text_its_on_failure_queues_shows_over_fligh
         [(1, MissionId(130))],
         "the run's slot freed after its OnFailure took the next"
     );
-    game.frame();
-    assert_eq!(game.showing(), Showing::MissionText, "paused");
+    // The first frame after take-off only sets flight's clock, so the
+    // second is the one a running flight would step on.
+    let alpha = game.alpha();
+    for _ in 0..2 {
+        game.frame();
+        assert_eq!(game.showing(), Showing::MissionText);
+        assert_eq!(game.alpha().to_bits(), alpha.to_bits(), "flight is paused");
+    }
 
     // Done closes it, back into flight, the message still shown.
     game.tap(Key::Enter);
@@ -1182,11 +1194,13 @@ fn in_flight_i_opens_mission_info_and_abort_works_there() {
 
     game.tap(Key::Char('i'));
     assert_eq!(game.showing(), Showing::MissionInfo);
+    let alpha = game.alpha();
     let shown = texts(&game.frame());
     for text in ["Currently active missions:", "Run to Pad", "Errand"] {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
     }
-    assert_eq!(game.showing(), Showing::MissionInfo, "paused");
+    assert_eq!(game.showing(), Showing::MissionInfo);
+    assert_eq!(game.alpha().to_bits(), alpha.to_bits(), "flight is paused");
 
     // Abort on the run, the first row, frees its slot; the screen stays
     // open, listing the errand alone.
