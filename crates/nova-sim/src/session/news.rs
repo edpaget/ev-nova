@@ -93,18 +93,6 @@ impl Session {
         String::new()
     }
 
-    /// A string of `STR#` `list` drawn on `chance`, each equally likely
-    /// (`_GetRandomIndString` @0x72f6e); `None` when the list is missing
-    /// or empty, drawing nothing.
-    fn random_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
-        let mut strings = self.strings.0.string_list(list);
-        if strings.is_empty() {
-            return None;
-        }
-        let index = pick(strings.len(), chance);
-        Some(strings.swap_remove(index))
-    }
-
     /// String `index` (1-based) of `STR#` `list`, if it has one.
     fn nth_string(&self, list: i16, index: usize) -> Option<String> {
         let mut strings = self.strings.0.string_list(list);
@@ -361,6 +349,30 @@ mod tests {
         assert_eq!(news.story, "", "nor #191");
         let mut session = landed(&catalog, Lists::default());
         assert_eq!(opened(&mut session, &mut NeverFires).commercial, "");
+    }
+
+    #[test]
+    fn an_empty_commercial_or_generic_story_drawn_is_kept_empty() {
+        let catalog = barred(Some(130), vec![]);
+        let lists = Lists::default()
+            .with(COMMERCIALS, &["", "Drink Fizz"])
+            .with(GENERIC_NEWS, &["", "G2"])
+            .with(MISC_STRINGS, &misc());
+        let mut session = landed(&catalog, lists);
+        let mut chance = Scripted::rolling(&[0, 0]);
+        let news = opened(&mut session, &mut chance);
+        assert_eq!(news.commercial, "", "not #190");
+        assert_eq!(news.story, "", "not #191");
+        assert_eq!(chance.sides_asked, [2, 2], "commercial, generic story");
+    }
+
+    #[test]
+    fn an_empty_cron_story_drawn_falls_through_to_generic_news() {
+        let catalog = barred(Some(130), vec![newsy(128, &[(130, 15_000)], 0)]);
+        let mut session = landed(&catalog, lists().with(15_000, &["", "Cron news"]));
+        let mut chance = Scripted::rolling(&[0, 0, 0, 0]);
+        assert_eq!(opened(&mut session, &mut chance).story, "Nothing happened");
+        assert_eq!(chance.sides_asked, [1, 1, 2, 1], "then the generic story");
     }
 
     #[test]
