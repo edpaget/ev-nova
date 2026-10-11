@@ -1164,15 +1164,22 @@ mod tests {
                 .collect();
             assert_eq!(all, [("roll", Verdict::Draws)], "{source:?}");
         }
-        let panics: Checks<Panics, ()> = [Check::disputed_drawing(
+        let panics: Checks<Event, EventRefusal> = [Check::disputed_drawing(
             "roll",
             "@0x4000",
             RuleKey::TradeDebt,
-            |_: &Panics, _: &mut dyn Chance| panic!("the engine reading ran"),
-            |_: &Panics, _: &mut dyn Chance| panic!("the other reading ran"),
+            |_: &Event, _: &mut dyn Chance| panic!("the engine reading ran"),
+            |_: &Event, _: &mut dyn Chance| panic!("the other reading ran"),
         )]
         .into();
-        assert_eq!(panics.descriptors().count(), 1);
+        for source in RuleSource::ALL {
+            let all: Vec<_> = panics
+                .all_refusals(&Event::new(0, source))
+                .into_iter()
+                .map(|(about, verdict)| (about.name(), verdict))
+                .collect();
+            assert_eq!(all, [("roll", Verdict::Draws)], "{source:?}");
+        }
     }
 
     #[test]
