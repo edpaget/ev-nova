@@ -749,22 +749,80 @@ fn meet_goal(
                 Err(format!("ended, its OnShipDone bits {unset:?} clear"))
             }
         }
-        (Outcome::HeldAfterGoal, Some(active)) => {
-            let unset = unset_ship_done_bits(session, record);
-            if active.goals_met && active.failed.is_none() && unset.is_empty() {
-                Ok(())
-            } else {
-                Err(format!(
-                    "held: goals met {}, failed {:?}, OnShipDone bits {unset:?} clear",
-                    active.goals_met, active.failed
-                ))
-            }
+        (Outcome::HeldAfterGoal, Some(_)) => {
+            let slot = held_after_goal(session, record).map_err(|held| format!("held: {held}"))?;
+            land_held(data, session, record, slot)
         }
         (_, Some(active)) => Err(format!(
             "still held after meet goal: goals met {}, failed {:?}",
             active.goals_met, active.failed
         )),
         (_, None) => Err("ended at meet goal".into()),
+    }
+}
+
+/// The slot holding `record`, its goal met, not failed and its
+/// `OnShipDone` bits set; else what is off.
+fn held_after_goal(session: &Session, record: &MissionRecord) -> Result<u8, String> {
+    let (slot, active) = session
+        .pilot()
+        .missions()
+        .iter()
+        .find(|(_, active)| active.mission == record.id)
+        .ok_or("not held")?;
+    let unset = unset_ship_done_bits(session, record);
+    if active.goals_met && active.failed.is_none() && unset.is_empty() {
+        Ok(slot)
+    } else {
+        Err(format!(
+            "goals met {}, failed {:?}, OnShipDone bits {unset:?} clear",
+            active.goals_met, active.failed
+        ))
+    }
+}
+
+/// Lands `record`, held in `slot` with its goal met, at a landable
+/// stellar of the system the ship is in, and checks no landing completes
+/// it: still held in `slot` as [`held_after_goal`] asks, and its
+/// `OnSuccess` has set none of its bits.
+fn land_held(
+    data: &GameData,
+    session: &mut Session,
+    record: &MissionRecord,
+    slot: u8,
+) -> Result<(), String> {
+    let unset_before: Vec<_> = expected_bits(&record.on_success)
+        .into_iter()
+        .filter(|&bit| !session.control_bit(bit))
+        .collect();
+    let system = session.pilot().system();
+    let stellar = data
+        .landing_sites(system)
+        .into_iter()
+        .find(is_landable)
+        .ok_or_else(|| format!("nowhere to land in {system:?}"))?
+        .id;
+    session
+        .land_at(data, system, stellar)
+        .map_err(|refusal| format!("lands at {stellar:?}: {refusal:?}"))?;
+    let _ = session.settle_script(data, &mut NeverFires);
+    let now = held_after_goal(session, record)
+        .map_err(|held| format!("after landing at {stellar:?}: {held}"))?;
+    if now != slot {
+        return Err(format!(
+            "after landing at {stellar:?}: held in slot {now}, not {slot}"
+        ));
+    }
+    let ran: Vec<_> = unset_before
+        .into_iter()
+        .filter(|&bit| session.control_bit(bit))
+        .collect();
+    if ran.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "after landing at {stellar:?}: its OnSuccess ran: {ran:?} set"
+        ))
     }
 }
 
