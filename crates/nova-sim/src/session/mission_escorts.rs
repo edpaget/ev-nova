@@ -308,6 +308,73 @@ mod tests {
         assert_eq!(slots(&session), [(2, 3), (3, 3)]);
     }
 
+    // Following.
+
+    /// The marked ships of slot 0 in the system.
+    fn of_slot_0(session: &Session) -> usize {
+        session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.mission.is_some_and(|mark| mark.slot == 0))
+            .count()
+    }
+
+    #[test]
+    fn ships_following_the_player_are_set_up_again_after_a_jump_never_doubled() {
+        let catalog = ships_catalog(escorting(-6, 0));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert_eq!(slots(&session), [(2, 3), (3, 3)]);
+        let before: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        jump_to(&mut session, &catalog, 131);
+        assert_eq!(of_slot_0(&session), 2, "exactly the two left");
+        assert!(
+            session.npcs().iter().all(|npc| !before.contains(&npc.id)),
+            "the old ones left behind"
+        );
+        assert_eq!(slots(&session), [(2, 3), (3, 3)], "both join");
+        ticks(&mut session, &catalog, 5);
+        assert_eq!(of_slot_0(&session), 2);
+    }
+
+    #[test]
+    fn ships_coming_later_come_in_on_the_restarted_timer_after_a_jump_and_join() {
+        // ShipGoal 3 restarts the timer at 30 on a jump's arrival.
+        let catalog = ships_catalog(MissionShip {
+            goal: 3,
+            ..escorting(-6, 1)
+        });
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        ticks(&mut session, &catalog, 300);
+        assert_eq!(slots(&session), [(2, 3), (3, 3)]);
+        jump_to(&mut session, &catalog, 131);
+        assert_eq!(of_slot_0(&session), 0, "setup brings none");
+        assert_eq!(ships_of(&session).appear, 30);
+        for _ in 0..29 {
+            tick(&mut session, &catalog);
+            assert_eq!(of_slot_0(&session), 0);
+        }
+        tick(&mut session, &catalog);
+        assert_eq!(slots(&session), [(2, 3), (3, 3)], "come in and join");
+        for _ in 0..100 {
+            tick(&mut session, &catalog);
+            assert!(of_slot_0(&session) <= 2);
+        }
+    }
+
+    #[test]
+    fn ships_of_a_fixed_system_stay_behind_and_are_set_up_again_on_return() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert_eq!(slots(&session), [(2, 3), (3, 3)]);
+        jump_to(&mut session, &catalog, 131);
+        assert_eq!(of_slot_0(&session), 0, "none with the player");
+        jump_to(&mut session, &catalog, 130);
+        assert_eq!(slots(&session), [(2, 3), (3, 3)]);
+    }
+
     // One formation.
 
     /// A hired escort of ship 200.
