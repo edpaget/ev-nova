@@ -12859,6 +12859,24 @@ mod tests {
     }
 
     #[test]
+    fn a_watched_ship_coming_out_of_a_gate_is_observed_once_it_is_out() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::Emerging { ticks_left: 3 };
+        session.watch_ship(NpcId(0));
+        for left in [2, 1] {
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            assert!(session.npcs()[0].emerging(), "{left} to go");
+            assert_eq!(fates(&session), [], "not seen while it waits");
+            assert_eq!(session.story.watched, BTreeSet::from([NpcId(0)]), "kept");
+        }
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert!(!session.npcs()[0].emerging(), "bursting out");
+        assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
+        assert!(session.story.watched.is_empty(), "forgotten once seen");
+    }
+
+    #[test]
     fn a_watched_ship_is_not_observed_while_landed_or_jumping() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);

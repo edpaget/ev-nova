@@ -221,26 +221,34 @@ impl Session {
     }
 
     /// Watches the NPC `ship`: the next flight tick of the traffic that
-    /// finds it in the system raises its first sighting,
-    /// [`Fate::Observed`], once, and forgets it. A ship no longer in the
-    /// system is forgotten, and populating the system or resetting its
-    /// traffic forgets every one, its ships replaced (see the `story`
-    /// module's findings).
+    /// finds it in the system, out of any gate it came through, raises its
+    /// first sighting, [`Fate::Observed`], once, and forgets it. A ship no
+    /// longer in the system is forgotten, and populating the system or
+    /// resetting its traffic forgets every one, its ships replaced (see the
+    /// `story` module's findings).
     pub fn watch_ship(&mut self, ship: NpcId) {
         self.story.watched.insert(ship);
     }
 
     /// Raises the first sighting of each watched ship in the system, and
-    /// forgets every watched ship: seen, or no longer here. Every ship in
-    /// the system is visible, as the engine has no cloak and no ship
-    /// emerging from a gate (`_ShipVisibleToShip` @0x971c).
+    /// forgets every watched ship seen or no longer here. A ship waiting
+    /// at the gate it comes out of ([`Npc::emerging`](crate::traffic::npc::Npc::emerging))
+    /// is invisible (`_ShipVisibleToShip` @0x972d, as
+    /// `_MissionObjectivesCheck` @0x9ea5c asks it) and stays watched
+    /// until it is out; every other ship in the system is visible, as the
+    /// engine has no cloak.
     pub(super) fn observe_watched(&mut self) {
-        for ship in std::mem::take(&mut self.story.watched) {
-            if self.traffic.npcs().iter().any(|npc| npc.id == ship) {
-                self.raise(StoryEvent::ShipFate {
+        let watched = std::mem::take(&mut self.story.watched);
+        for ship in watched {
+            match self.traffic.npcs().iter().find(|npc| npc.id == ship) {
+                Some(npc) if npc.emerging() => {
+                    self.story.watched.insert(ship);
+                }
+                Some(_) => self.raise(StoryEvent::ShipFate {
                     ship,
                     fate: Fate::Observed,
-                });
+                }),
+                None => {}
             }
         }
     }

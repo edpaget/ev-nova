@@ -1577,8 +1577,12 @@
 //!   @0x972d), and a cloaked one (its fade level, +0x64) visible only to
 //!   a cloaking ship of its own side (`_HasCloak` @0x979b) or one close
 //!   enough on both axes (@0x97ae-0x97f8); every other ship is visible.
-//!   The engine has neither a cloak nor a ship emerging from a gate, so a
-//!   watched ship in the system is visible.
+//!   The engine has no cloak. It holds a ship waiting at the hypergate or
+//!   wormhole it comes out of invisible (`_ShipVisibleToShip` @0x972d, as
+//!   `_MissionObjectivesCheck` @0x9ea5c asks it), so a watched ship there
+//!   stays watched until it has emerged (see
+//!   [`emerge`](crate::traffic::emerge)); any other watched ship in the
+//!   system is visible.
 //! - `S` (`_DoMissionAccept` @0x15407), `A` (`_AbortMission` @0x1532e)
 //!   and `M` and `N` in flight (@0x159a3, @0x159a8) are handled inside
 //!   `_EvalSetExp`, before its next operator. `Q` only sets
