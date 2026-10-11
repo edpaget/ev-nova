@@ -22,7 +22,8 @@
 //!   else a fade at or below 0 starts fading in, and a fade going down
 //!   stops (direction 0, so it drifts down). **`_DoShipUncloak`**
 //!   ([`Cloak::uncloak`], @0xdf55): nothing unless cloaked; then a fade
-//!   above 0 starts fading out, and a fade going up stops. So a ship
+//!   above 0 starts fading out (its other branch, stopping a fade at 0
+//!   going in, cannot follow: a cloaked fade is above 8). So a ship
 //!   cloaking from 0 reads cloaked only past 16, and an uncloak asked
 //!   before then does nothing.
 //!
@@ -70,7 +71,8 @@
 //! Zephyr's weapons have no burst); the think's 30-59 frame delay after a
 //! ship's hyperspace glide (`_HandleShip` @0x34d74); a cloak's fuel and
 //! shield usage forcing an uncloak (@0x83422-0x83452) and
-//! `_CloakZeroesShields`; the player's own cloak; area cloaks; NPCs'
+//! `_CloakZeroesShields`; a dying ship's fade out at twice the rate
+//! (direction -2, @0x2d17e); the player's own cloak; area cloaks; NPCs'
 //! own sight of cloaked ships; the visual fade and the cloak's sounds.
 //!
 //! # Seeing a cloaked ship
@@ -971,8 +973,9 @@ mod tests {
         // 0.75 x 400 = 300 each side of a 600-wide view leaves nothing.
         assert!(!on_screen(VIEW, Vec2::ZERO, 400.0, 10.0));
         assert!(on_screen(VIEW, Vec2::ZERO, 398.0, 10.0));
-        // 0.75 x 268 = 201 each side of a 400-tall view leaves nothing.
-        assert!(!on_screen(VIEW, Vec2::ZERO, 10.0, 268.0));
+        // 0.75 x 267 = 200.25, inset 200 each side of a 400-tall view,
+        // leaves nothing.
+        assert!(!on_screen(VIEW, Vec2::ZERO, 10.0, 267.0));
         assert!(on_screen(VIEW, Vec2::ZERO, 10.0, 264.0));
     }
 

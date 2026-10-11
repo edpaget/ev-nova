@@ -329,7 +329,7 @@ use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMode};
 use crate::spaceport::bar::MISSION_INFO_KEY;
-use crate::system::camera::{Camera, VIEW_CENTER, VIEW_SIZE};
+use crate::system::camera::{Camera, VIEW_SIZE};
 use crate::system::catalog::SystemCatalog;
 use crate::system::scene::{self, PLACEHOLDER, PLACEHOLDER_SIZE, StellarLook, SystemScene};
 use crate::system::starfield;
@@ -3257,15 +3257,18 @@ fn radar_ships(session: &Session, shown: &[(&Npc, Point, f32)]) -> Vec<Point> {
 }
 
 /// The play area about the ship, in world units: the screen left of the
-/// status bar, the ship drawn at [`VIEW_CENTER`]. The session reads it to
+/// status bar, the ship drawn at the screen's centre. The session reads it to
 /// tell whether a ship is on screen.
 fn play_area() -> nova_sim::cloak::Area {
-    let scale = crate::system::camera::WORLD_SCALE;
+    let camera = Camera::centred_on(Point::default());
+    let top_left = camera.screen_to_world(Point::default());
+    let bottom_right =
+        camera.screen_to_world(Point::new(VIEW_SIZE.0 - STATUS_BAR_WIDTH, VIEW_SIZE.1));
     nova_sim::cloak::Area {
-        left: -VIEW_CENTER.x / scale,
-        top: -VIEW_CENTER.y / scale,
-        right: (VIEW_SIZE.0 - STATUS_BAR_WIDTH - VIEW_CENTER.x) / scale,
-        bottom: (VIEW_SIZE.1 - VIEW_CENTER.y) / scale,
+        left: top_left.x,
+        top: top_left.y,
+        right: bottom_right.x,
+        bottom: bottom_right.y,
     }
 }
 
@@ -3275,6 +3278,7 @@ mod tests {
     use std::cell::RefCell;
     use std::num::NonZeroU16;
 
+    use crate::system::camera::VIEW_CENTER;
     use nova_sim::landing::{LandingRefusal, StellarFlags};
     use nova_sim::{
         CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, GateSite, Handling,

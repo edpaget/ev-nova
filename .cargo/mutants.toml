@@ -15,6 +15,14 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `Cloak::step` tests the direction for 0 and returns before its
+    # clamps, so there `< 0` and `<= 0`, and `> 0` and `>= 0`, choose the
+    # same.
+    "replace < with <= in Cloak::step",
+    "replace > with >= in Cloak::step",
+    # `Cloak::cloak` stops a fade going out by setting its direction to 0:
+    # for a direction already 0, `< 0` and `<= 0` leave it the same.
+    "replace < with <= in Cloak::cloak",
     # The exchange's single-float quotient holds a price past 16 bits at
     # i16::MIN when it is below 0 and i16::MAX otherwise. `engine_quotient`
     # has already returned for a price of 0, so `price < 0` and
