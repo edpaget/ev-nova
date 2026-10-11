@@ -7,39 +7,63 @@ use crate::control::{Bit, Test, TestExpr, TestOperand};
 /// other facts are a new pilot's: each bit named, with whether to set it
 /// (`true`) or clear it.
 ///
-/// `&` asks both sides, `|` its first side (its second when the first
-/// cannot hold), and `!` flips what is asked. A blank test and `P` (the
-/// game counts as paid for) ask nothing.
+/// `&` asks both sides, `|` either side, and `!` flips what is asked. A
+/// blank test and `P` (the game counts as paid for) ask nothing.
+///
+/// Every way of making the test hold is tried, an `|` its first side's
+/// ways before its second's, and the first that neither sets and clears
+/// one bit is given: `(b1 | b2) & !b1` sets `b2` because setting `b1`
+/// would clash with `!b1`.
 ///
 /// `None` when bits alone cannot make it hold: a count, an outfit, an
-/// explored system, the gender, an unpaid game, an assignment that would
-/// both set and clear one bit, or a test that did not parse.
+/// explored system, the gender, an unpaid game, every way would both set
+/// and clear one bit, or a test that did not parse.
 #[must_use]
 pub fn bits_allowing(test: &Test) -> Option<Vec<(Bit, bool)>> {
-    let bits = making(test.tree()?, true)?;
-    let conflicts = bits
-        .iter()
-        .any(|&(bit, on)| bits.iter().any(|&(other, set)| other == bit && set != on));
-    (!conflicts).then_some(bits)
+    making(test.tree()?, true).into_iter().next()
 }
 
-/// The bits that make `expr` come out `want`, or `None` when bits alone
-/// cannot.
-fn making(expr: &TestExpr, want: bool) -> Option<Vec<(Bit, bool)>> {
+/// Every assignment of bits that makes `expr` come out `want` without
+/// both setting and clearing one bit, preferred first. Empty when bits
+/// alone cannot.
+fn making(expr: &TestExpr, want: bool) -> Vec<Vec<(Bit, bool)>> {
     match expr {
-        TestExpr::Always | TestExpr::Operand(TestOperand::Paid { .. }) => want.then(Vec::new),
-        TestExpr::Operand(TestOperand::Bit(bit)) => Some(vec![(*bit, want)]),
-        TestExpr::Operand(_) | TestExpr::Count { .. } => None,
+        TestExpr::Always | TestExpr::Operand(TestOperand::Paid { .. }) => {
+            if want {
+                vec![Vec::new()]
+            } else {
+                Vec::new()
+            }
+        }
+        TestExpr::Operand(TestOperand::Bit(bit)) => vec![vec![(*bit, want)]],
+        TestExpr::Operand(_) | TestExpr::Count { .. } => Vec::new(),
         TestExpr::Not(inner) => making(inner, !want),
         // Both sides come out `want` for an `&` asked true or an `|`
         // asked false; one side does for the others.
         TestExpr::And(a, b) | TestExpr::Or(a, b) if want == matches!(expr, TestExpr::And(..)) => {
-            let mut bits = making(a, want)?;
-            bits.extend(making(b, want)?);
-            Some(bits)
+            let seconds = making(b, want);
+            making(a, want)
+                .into_iter()
+                .flat_map(|first| {
+                    seconds.iter().filter_map(move |second| {
+                        let both: Vec<_> = first.iter().chain(second).copied().collect();
+                        (!clashes(&both)).then_some(both)
+                    })
+                })
+                .collect()
         }
-        TestExpr::And(a, b) | TestExpr::Or(a, b) => making(a, want).or_else(|| making(b, want)),
+        TestExpr::And(a, b) | TestExpr::Or(a, b) => {
+            let mut ways = making(a, want);
+            ways.extend(making(b, want));
+            ways
+        }
     }
+}
+
+/// Whether `bits` both sets and clears one bit.
+fn clashes(bits: &[(Bit, bool)]) -> bool {
+    bits.iter()
+        .any(|&(bit, on)| bits.iter().any(|&(other, set)| other == bit && set != on))
 }
 
 #[cfg(test)]
@@ -129,6 +153,24 @@ mod tests {
         assert_eq!(allowing("b1 | b2"), Some(vec![(bit(1), true)]));
         assert_eq!(allowing("o128 | b2"), Some(vec![(bit(2), true)]));
         assert_eq!(allowing("o128 | e130"), None);
+    }
+
+    #[test]
+    fn or_falls_back_to_its_second_side_when_its_first_clashes_with_a_sibling() {
+        assert_eq!(
+            allowing("(b1 | b2) & !b1"),
+            Some(vec![(bit(2), true), (bit(1), false)])
+        );
+        assert_eq!(
+            allowing("!b1 & (b1 | b2)"),
+            Some(vec![(bit(1), false), (bit(2), true)])
+        );
+        assert_eq!(
+            allowing("!(b1 & b2) & b1"),
+            Some(vec![(bit(2), false), (bit(1), true)]),
+            "a negated and falls back the same way"
+        );
+        assert_eq!(allowing("(b1 | b2) & (!b1 & !b2)"), None);
     }
 
     #[test]
