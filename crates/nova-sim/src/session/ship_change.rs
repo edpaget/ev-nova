@@ -1085,6 +1085,44 @@ mod tests {
         assert_eq!(own(413), 3, "3 x the one held launcher, counted once");
     }
 
+    #[test]
+    fn e_caps_ammunition_by_a_stock_launcher_named_only_in_a_later_mod() {
+        // Ship 139 stocks two of weapon 206, of `MaxAmmo` 3. Outfit 415
+        // names 206 only in its second mod, so it neither holds 206 in the
+        // weapon array nor takes the surplus; 416 is 206's ammunition.
+        let mut catalog = stocked();
+        catalog.weapons.push(WeaponRecord {
+            max_ammo: 3,
+            ..weapon(206)
+        });
+        catalog.hulls.push(HullRecord {
+            weapons: vec![StockWeapon {
+                weapon: WeaponId(206),
+                count: 2,
+                ammo: 0,
+            }],
+            ..hull(139)
+        });
+        catalog.ships.push((ShipId(139), Ok(FAST)));
+        catalog.ship_records.push(ship(139, FAST));
+        catalog.outfits.extend([
+            outfit(415, &[(MORE_SHIELD, 1), (armament::MOD_WEAPON, 206)]),
+            OutfitRecord {
+                max: 50,
+                ..outfit(416, &[(armament::MOD_AMMO, 206)])
+            },
+        ]);
+        let mut session = session(&catalog);
+        session
+            .pilot
+            .outfits
+            .extend([(OutfitId(415), 1), (OutfitId(416), 10)]);
+        run(&mut session, "E139");
+        let own = |id| session.pilot.owned(OutfitId(id));
+        assert_eq!(own(415), 1, "a later mod naming 206 takes no surplus");
+        assert_eq!(own(416), 6, "3 x the two stock launchers, not three");
+    }
+
     /// A second outfit holding weapon 200, of higher ID than 405.
     const SPARE_GUN: OutfitId = OutfitId(414);
 
