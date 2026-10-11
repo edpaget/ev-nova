@@ -19,7 +19,8 @@
 //! it brings. Drawing and input never read anything.
 //!
 //! The session populates the system's NPC traffic when it says to (see
-//! [`Session::tick_traffic`]), rolled on the screen's [`SharedChance`].
+//! [`Session::tick_traffic`]), and as the ship takes off
+//! ([`Session::take_off`]), rolled on the screen's [`SharedChance`].
 //! Each time, the sprite sheet of each ship type the traffic can spawn is
 //! read, once per type for the life of the screen. After each step of the
 //! player's ship, the traffic takes a step,
@@ -1797,8 +1798,10 @@ impl<
 
     /// Catches the screen up with the session having taken off: the ship
     /// drawn where it is, in the system laid out afresh if the session
-    /// tells a move while landed changed it, no message from before kept;
-    /// gives what paying the escorts for the take-off has to say.
+    /// tells a move while landed changed it, the traffic populated afresh
+    /// drawn where it is with its ship types' sheets read, no message from
+    /// before kept; gives what paying the escorts for the take-off has to
+    /// say.
     fn took_off(&mut self) -> Vec<String> {
         let pay = self
             .session
@@ -1807,6 +1810,7 @@ impl<
             .unwrap_or_default();
         self.catch_up();
         self.place_ship();
+        self.read_npc_sheets();
         self.message = None;
         pay_notes_message(&pay)
     }
@@ -7478,8 +7482,79 @@ mod tests {
         assert_eq!(npc_ids(&view), [NpcId(0), NpcId(1)]);
         land_now(&mut view);
         view.take_off().expect("took off");
+        assert_eq!(npc_ids(&view), [NpcId(2), NpcId(3)], "before any tick");
         view.tick(TICK);
-        assert_eq!(npc_ids(&view), [NpcId(2), NpcId(3)]);
+        assert_eq!(npc_ids(&view), [NpcId(2), NpcId(3)], "populated once");
+    }
+
+    /// [`trafficked`] with one ship 129 of AI 3 in 130, over planet 128
+    /// at the centre.
+    fn trafficked_over_128() -> FakeCatalog {
+        FakeCatalog {
+            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            ..trafficked(&[130], 1, 129, 3)
+        }
+    }
+
+    /// Whether `list` draws a sprite at world point `world`.
+    fn sprite_at(view: &View, list: &DrawList, world: Vec2) -> bool {
+        let screen = view.camera().world_to_screen(point(world));
+        sprites(list).iter().any(|&(_, center)| center == screen)
+    }
+
+    #[test]
+    fn the_first_frame_after_take_off_draws_none_of_the_ships_from_before_the_landing() {
+        let mut draws = placed(850, 650, 90).to_vec();
+        draws.extend(placed(650, 850, 90));
+        let (_, chance) = scripted(&draws);
+        let mut view = FlightView::new(trafficked_over_128())
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let before = npc_states(&view)[0].position;
+        assert_eq!(before, Vec2::new(100.0, -100.0));
+        land_now(&mut view);
+        view.take_off().expect("took off");
+        let after = npc_states(&view)[0].position;
+        assert_eq!(after, Vec2::new(-100.0, 100.0));
+
+        let list = drawn(&view);
+        assert!(!sprite_at(&view, &list, before), "with no tick");
+        assert!(sprite_at(&view, &list, after), "with no tick");
+
+        let states = npc_states(&view);
+        view.tick(TICK / 4);
+        assert_eq!(npc_states(&view), states, "no step");
+        let list = drawn(&view);
+        assert!(!sprite_at(&view, &list, before), "after a frame of no step");
+        assert!(sprite_at(&view, &list, after), "after a frame of no step");
+    }
+
+    #[test]
+    fn a_ship_type_first_flown_at_take_off_is_drawn_with_its_sprite_at_once() {
+        let (_, chance) = scripted(&placed(650, 850, 90));
+        let mut view = FlightView::new(trafficked_over_128())
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        land_now(&mut view);
+        assert!(view.take_landing().is_some(), "landed before any traffic");
+        view.take_off().expect("took off");
+        let after = npc_states(&view)[0].position;
+        let list = drawn(&view);
+        let mut boxed = DrawList::new();
+        crossed_box(
+            &mut boxed,
+            view.camera().world_to_screen(point(after)),
+            PLACEHOLDER_SIZE,
+            PLACEHOLDER,
+        );
+        let commands: Vec<_> = list.iter().cloned().collect();
+        let expected: Vec<_> = boxed.iter().cloned().collect();
+        assert!(
+            !commands.windows(expected.len()).any(|run| run == expected),
+            "no placeholder"
+        );
+        assert!(sprite_at(&view, &list, after), "its own sprite");
     }
 
     // Combat.
