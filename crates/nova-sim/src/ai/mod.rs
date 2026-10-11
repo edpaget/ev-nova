@@ -234,7 +234,9 @@ impl<'a> Surroundings<'a> {
     }
 
     /// Whether `ship` is here to be fought: in the system, intact or
-    /// disabled, and not still jumping in.
+    /// disabled, and not still jumping in or coming out of a gate (seen by
+    /// no ship while it waits there, `_ShipVisibleToShip` @0x972d, and
+    /// unfought while it bursts out, as during the glide).
     #[must_use]
     pub fn live(&self, ship: ShipRef) -> bool {
         let jumping_in = match ship {
