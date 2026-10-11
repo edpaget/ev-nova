@@ -949,7 +949,11 @@ fn a_jump_takes_a_jumps_fuel_off_the_gauge_and_the_hud_bar_and_it_stays_off() {
     let after = before.now - JUMP_FUEL;
     assert_eq!(harness.session().reserves().fuel.now, after);
     let bar = fuel_bar(&arrived);
-    assert!(close(bar, bar_before * after / before.max), "{bar}");
+    // Its right edge truncated, as `_DrawStatusFuel` draws it.
+    assert!(
+        close(bar, (bar_before * after / before.max).trunc()),
+        "{bar}"
+    );
 
     let later = harness.run(5);
     assert_eq!(harness.session().reserves().fuel.now, after);
@@ -1012,7 +1016,7 @@ fn an_opened_pilot_resumes_with_the_fuel_its_saved_jump_left() {
     assert_eq!(session.system(), SystemId(129));
     assert_eq!(session.reserves().fuel.now, 300.0 - JUMP_FUEL);
     let bar = fuel_bar(&harness.frame());
-    assert!(close(bar, 149.0 * 2.0 / 3.0), "{bar}");
+    assert!(close(bar, (149.0_f32 * 2.0 / 3.0).trunc()), "{bar}");
 }
 
 /// `ïntf` 128's bright text colour.

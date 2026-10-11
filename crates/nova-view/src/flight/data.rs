@@ -72,11 +72,11 @@ fn layer_sheet(layer: Result<LayerSprite<'_>, LayerError>) -> Option<LayerSheet>
 
 /// Decodes on every call; the flight screen asks once, when it opens.
 impl StatusBars for GameData {
-    fn government_interface(&self, id: GovtId) -> Result<i16, String> {
+    fn government_interface(&self, id: GovtId) -> Result<Option<i16>, String> {
         match self.get::<Govt>(id.0) {
-            Some(Ok(govt)) => Ok(govt.record.interface),
+            Some(Ok(govt)) => Ok(Some(govt.record.interface)),
             Some(Err(err)) => Err(err.to_string()),
-            None => Err(format!("no gövt {}", id.0)),
+            None => Ok(None),
         }
     }
 
@@ -581,12 +581,9 @@ mod tests {
             (Govt::TYPE, 129, govt(-1)),
             (Govt::TYPE, 131, short),
         ]);
-        assert_eq!(data.government_interface(GovtId(128)), Ok(130));
-        assert_eq!(data.government_interface(GovtId(129)), Ok(-1));
-        assert_eq!(
-            data.government_interface(GovtId(130)),
-            Err("no gövt 130".to_owned())
-        );
+        assert_eq!(data.government_interface(GovtId(128)), Ok(Some(130)));
+        assert_eq!(data.government_interface(GovtId(129)), Ok(Some(-1)));
+        assert_eq!(data.government_interface(GovtId(130)), Ok(None), "none");
         let Err(message) = data.government_interface(GovtId(131)) else {
             panic!("an error")
         };

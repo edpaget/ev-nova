@@ -1089,7 +1089,8 @@ pub struct FlightView<C> {
     scene: Option<SystemScene>,
     /// The player ship's sheet, or why it cannot be shown.
     sheet: Result<ShipSheet, String>,
-    /// The class `sheet` was read for; `None` when the session failed.
+    /// The class `sheet` and `status_bar` were read for; `None` when the
+    /// session failed.
     sheet_ship: Option<ShipId>,
     /// The HUD's status bar, or why it cannot be shown.
     status_bar: Result<StatusBar, String>,
@@ -1273,7 +1274,7 @@ impl<
                 }),
                 catalog.ship_sheet(session.ship()),
                 Some(session.ship()),
-                hud::choose_status_bar(&catalog, session.government()),
+                hud::choose_status_bar(&catalog, session.interface_government()),
             ),
             Err(reason) => (None, Err(reason.clone()), None, Err(reason.clone())),
         };
@@ -2098,17 +2099,33 @@ impl<
         Some(assigned)
     }
 
-    /// Reads the player's sprite sheet afresh when the session flies a
-    /// class other than the one it was read for, so a ship bought,
-    /// captured or changed by a set expression is drawn; called only when
-    /// the session tells the ship changed ([`FlightView::catch_up`]), which
-    /// it may tell of the class it was. A sheet that cannot be read is
-    /// kept against its class too, so it is not tried again.
+    /// Reads the player's sprite sheet and status bar afresh when the
+    /// session flies a class other than the one they were read for, so a
+    /// ship bought, captured or changed by a set expression is drawn under
+    /// its own bar; called only when the session tells the ship changed
+    /// ([`FlightView::catch_up`]), which it may tell of the class it was.
+    /// A sheet that cannot be read is kept against its class too, so it is
+    /// not tried again. The bar is chosen again as `_LoadIntfResource`
+    /// does ([`hud::rechoose_status_bar`]); the original returns at once
+    /// for the bar already loaded, and asking only on a new class does the
+    /// same.
+    ///
+    /// The original loads the bar inside the purchase, capture or set
+    /// expression. Ours waits for the next `catch_up`, on the next frame or
+    /// in the view call that drove the change, which is still before any
+    /// frame is drawn, so the player never sees the old bar on the new
+    /// ship; a purchase while landed is chosen before flight is drawn
+    /// again.
     fn follow_ship(&mut self) {
         let Ok(session) = &self.session else { return };
         let ship = session.ship();
         if self.sheet_ship != Some(ship) {
             self.sheet = self.catalog.ship_sheet(ship);
+            self.status_bar = hud::rechoose_status_bar(
+                &self.catalog,
+                session.interface_government(),
+                self.status_bar.as_ref().ok(),
+            );
             self.sheet_ship = Some(ship);
         }
     }
@@ -3184,6 +3201,10 @@ impl<
                     reserves: self.reserves(),
                     nav: self.nav_display(scene),
                     date: &date,
+                    disabled: self
+                        .session
+                        .as_ref()
+                        .is_ok_and(|session| session.player_condition() == Condition::Disabled),
                 };
                 hud::draw(list, bar, &state);
                 self.draw_combat_hud(list, bar);
@@ -3353,6 +3374,12 @@ mod tests {
         sheet: Result<ShipSheet, String>,
         /// `ïntf` 128: stock-like, or why it cannot be read.
         bar: Result<StatusBarLayout, String>,
+        /// Each `gövt`'s `Interface`: none, by default.
+        interfaces: Vec<(i16, i16)>,
+        /// The `ïntf`s past 128: none, by default.
+        other_bars: Vec<(i16, StatusBarLayout)>,
+        /// The `ïntf`s asked for.
+        bars_asked: RefCell<Vec<i16>>,
         /// System 130's landing sites: Earth and Moon, by default.
         sites: Vec<LandingSite>,
         /// System 130's `NavDefs` slots on the map: none, by default.
@@ -3469,6 +3496,9 @@ mod tests {
             fields: FIELDS,
             sheet: Ok(sheet()),
             bar: Ok(layout()),
+            interfaces: Vec::new(),
+            other_bars: Vec::new(),
+            bars_asked: RefCell::default(),
             sites: vec![
                 site(128, (0.0, -600.0), StellarFlags::CAN_LAND),
                 site(129, (300.0, -200.0), StellarFlags::CAN_LAND),
@@ -3889,21 +3919,32 @@ mod tests {
         hilite: Color::from_rgb24(0x0065_4321),
     };
 
-    /// A new pilot has no government, so only `ïntf` 128 and its picture
-    /// are ever asked for.
+    /// `ïntf` 128 and the others listed; every government listed has an
+    /// `Interface`, and the others have no record. `PICT` 700 (128's
+    /// background), 705 and 128 are 194 x 767, and there are no others.
     impl StatusBars for FakeCatalog {
-        fn government_interface(&self, id: GovtId) -> Result<i16, String> {
-            panic!("asked for gövt {}", id.0)
+        fn government_interface(&self, id: GovtId) -> Result<Option<i16>, String> {
+            Ok(self
+                .interfaces
+                .iter()
+                .find(|(govt, _)| *govt == id.0)
+                .map(|&(_, interface)| interface))
         }
 
         fn status_bar(&self, id: i16) -> Result<StatusBarLayout, String> {
-            assert_eq!(id, 128);
-            self.bar.clone()
+            self.bars_asked.borrow_mut().push(id);
+            if id == 128 {
+                return self.bar.clone();
+            }
+            self.other_bars
+                .iter()
+                .find(|(bar, _)| *bar == id)
+                .map(|(_, layout)| layout.clone())
+                .ok_or_else(|| format!("no ïntf {id}"))
         }
 
         fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
-            assert_eq!(id, 700);
-            Some((194, 767))
+            [700, 705, 128].contains(&id).then_some((194, 767))
         }
     }
 
@@ -4297,6 +4338,7 @@ mod tests {
                 reserves: ShipStats::new(FIELDS, &[]).full(),
                 nav: NavDisplay::None,
                 date: DATE,
+                disabled: false,
             },
         );
         let bar = view.status_bar().expect("a status bar");
@@ -4880,8 +4922,9 @@ mod tests {
                 }),
             "{list:?}"
         );
-        // The shïp's shield 40, armour 60 and fuel 250: two whole jumps,
-        // then half of one.
+        // The shïp's shield 40, armour 60 and fuel 250: all of it in the
+        // full colour, then the half jump past the two whole ones (from
+        // 119.2 pixels) over it.
         let width = 149.0;
         let bar = |top: f32, from: f32, to: f32, color| DrawCommand::Line {
             from: at(865.0 + from, top + 3.5),
@@ -4895,8 +4938,8 @@ mod tests {
             [
                 bar(199.0, 0.0, width, layout.shield_color),
                 bar(216.0, 0.0, width, layout.armor_color),
-                bar(234.0, 0.0, width * 0.8, layout.fuel_full),
-                bar(234.0, width * 0.8, width, layout.fuel_partial),
+                bar(234.0, 0.0, width, layout.fuel_full),
+                bar(234.0, 119.0, width, layout.fuel_partial),
             ]
         );
         let radar = layout.radar.offset(at(830.0, 0.0));
@@ -4949,6 +4992,7 @@ mod tests {
                 reserves,
                 nav: NavDisplay::None,
                 date: DATE,
+                disabled: false,
             },
         );
         assert_eq!(lines(&drawn(&view)), lines(&expected));
@@ -4972,6 +5016,67 @@ mod tests {
         assert_eq!(lines(&list), [], "no bars");
         assert_eq!(dots_on_radar(&list), [], "no radar");
         assert_eq!(sprites(&list).len(), 3, "stellars and ship");
+    }
+
+    /// `ïntf` 129: [`layout`] in another shield colour, over `PICT` 705.
+    fn bar_129() -> StatusBarLayout {
+        StatusBarLayout {
+            shield_color: Color::rgba(0, 255, 255, 255),
+            status_bkgnd: 705,
+            ..layout()
+        }
+    }
+
+    /// `catalog` where ship type `ship` (given a record if it has none)
+    /// belongs to gövt 150, whose `Interface` is `interface`, and with
+    /// `ïntf` 129 ([`bar_129`]).
+    fn governed(mut catalog: FakeCatalog, ship: i16, interface: i16) -> FakeCatalog {
+        if !catalog.ships.iter().any(|record| record.id == ShipId(ship)) {
+            let mut record = shipbuying().ships[0].clone();
+            record.id = ShipId(ship);
+            catalog.ships.push(record);
+        }
+        for record in &mut catalog.ships {
+            if record.id == ShipId(ship) {
+                record.inherent_govt = Some(GovtId(150));
+            }
+        }
+        catalog.interfaces = vec![(150, interface)];
+        catalog.other_bars = vec![(129, bar_129())];
+        catalog
+    }
+
+    #[test]
+    fn a_ship_type_whose_government_has_its_own_interface_shows_that_bar() {
+        let view = FlightView::new(governed(catalog(), 128, 129));
+        assert_eq!(
+            view.status_bar(),
+            Ok(&StatusBar {
+                layout: bar_129(),
+                background: Some(hud::Background {
+                    id: 705,
+                    width: 194.0,
+                    height: 767.0,
+                }),
+            })
+        );
+        let list = drawn(&view);
+        assert!(
+            list.iter().any(|c| *c
+                == DrawCommand::Picture {
+                    image: ImageKey::picture(705),
+                    top_left: at(830.0, 0.0),
+                }),
+            "{list:?}"
+        );
+        for interface in [127, 0, -1] {
+            let view = FlightView::new(governed(catalog(), 128, interface));
+            assert_eq!(
+                view.status_bar().map(|bar| &bar.layout),
+                Ok(&layout()),
+                "{interface}"
+            );
+        }
     }
 
     #[test]
@@ -5811,6 +5916,7 @@ mod tests {
                 reserves: reserves(&view),
                 nav: NavDisplay::None,
                 date: "June 24, 1177 NC",
+                disabled: false,
             },
         );
         assert!(
@@ -8890,6 +8996,40 @@ mod tests {
         assert!(texts(&list).contains(&target::DISABLED.to_owned()));
     }
 
+    #[test]
+    fn a_disabled_player_has_no_fuel_gauge() {
+        let mut catalog = armed(1, &[]);
+        catalog.hulls[1] = hull_of(129, &[BLASTER]);
+        let mut view = fighting(catalog, &placed(750, 650, 180))
+            .with_behaviour(Rc::new(Firing))
+            .with_disable_rule(Rc::new(Disabling));
+        let colors = |view: &View| -> Vec<Color> {
+            lines(&drawn(view))
+                .into_iter()
+                .filter_map(|command| match command {
+                    DrawCommand::Line { color, .. } => Some(color),
+                    _ => None,
+                })
+                .collect()
+        };
+        let layout = layout();
+        assert!(colors(&view).contains(&layout.fuel_full), "intact");
+        for _ in 0..40 {
+            if view.session().expect("flying").player_condition() == Condition::Disabled {
+                break;
+            }
+            view.tick(TICK);
+        }
+        assert_eq!(
+            view.session().expect("flying").player_condition(),
+            Condition::Disabled
+        );
+        let shown = colors(&view);
+        assert!(!shown.contains(&layout.fuel_full), "{shown:?}");
+        assert!(!shown.contains(&layout.fuel_partial), "{shown:?}");
+        assert!(shown.contains(&layout.armor_color), "{shown:?}");
+    }
+
     /// Disables every ship.
     #[derive(Debug)]
     struct Disabling;
@@ -9507,8 +9647,13 @@ mod tests {
     /// [`beside`], boarded by [`Sure`] and captured, awaiting its
     /// assignment.
     fn captured() -> View {
+        captured_in(boardable())
+    }
+
+    /// [`captured`], from `catalog`, a [`boardable`] one.
+    fn captured_in(catalog: FakeCatalog) -> View {
         let (_, chance) = scripted(&placed(750, 750, 0));
-        let mut view = FlightView::new(boardable())
+        let mut view = FlightView::new(catalog)
             .with_chance(chance)
             .with_behaviour(Rc::new(Still))
             .with_disable_rule(Rc::new(DisablesTheStrong))
@@ -11441,6 +11586,65 @@ mod tests {
             .expect("bought");
         view.tick(TICK);
         assert_eq!(sheets(&view), [ShipId(128), ShipId(129)], "a purchase");
+    }
+
+    /// The background of the status bar `view` shows.
+    fn bar_shown(view: &View) -> Option<i16> {
+        view.status_bar().ok().map(|bar| bar.layout.status_bkgnd)
+    }
+
+    fn bars_read(view: &View) -> Vec<i16> {
+        view.catalog().bars_asked.borrow().clone()
+    }
+
+    #[test]
+    fn the_status_bar_follows_the_ship_type_on_the_next_frame() {
+        let mut view = FlightView::new(governed(shipbuying(), 129, 129));
+        run_set(&mut view, "H129");
+        settle_session(&mut view);
+        assert_eq!(bar_shown(&view), Some(700), "not before the frame");
+        view.tick(TICK);
+        assert_eq!(bar_shown(&view), Some(705), "a set expression");
+        view.tick(TICK);
+        assert_eq!(bars_read(&view), [128, 129], "once");
+
+        let mut view = captured_in(governed(boardable(), 129, 129));
+        let session = view.session.as_mut().expect("flying");
+        assert_eq!(
+            session.assign(Assignment::MyShip, &mut NeverFires),
+            Some(Assigned::MyShip)
+        );
+        assert_eq!(bar_shown(&view), Some(700), "not before the frame");
+        view.tick(TICK);
+        assert_eq!(bar_shown(&view), Some(705), "a capture");
+
+        let mut view = FlightView::new(governed(shipbuying(), 129, 129));
+        land_now(&mut view);
+        let session = view.session.as_mut().expect("flying");
+        session
+            .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
+            .expect("bought");
+        view.tick(TICK);
+        assert_eq!(bar_shown(&view), Some(705), "a purchase");
+    }
+
+    #[test]
+    fn a_new_ship_types_missing_bar_keeps_the_layout_over_picture_128() {
+        let mut view = FlightView::new(governed(shipbuying(), 129, 131));
+        run_set(&mut view, "H129");
+        view.tick(TICK);
+        assert_eq!(bars_read(&view), [128, 131]);
+        assert_eq!(
+            view.status_bar(),
+            Ok(&StatusBar {
+                layout: layout(),
+                background: Some(hud::Background {
+                    id: 128,
+                    width: 194.0,
+                    height: 767.0,
+                }),
+            })
+        );
     }
 
     #[test]

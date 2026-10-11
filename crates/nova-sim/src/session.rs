@@ -3377,13 +3377,19 @@ impl Session {
         self.stats.handling
     }
 
-    /// The government the player belongs to, if any. Always `None`: a new
-    /// pilot belongs to no government. Nova grants membership later, through
-    /// storyline play, and the first `chär` names none (its `Govt1-4` set
-    /// starting legal records, not membership).
+    /// The government whose `Interface` picks the status bar, as
+    /// `_LoadIntfResource` (@0x735f2) reads it from the player's ship type:
+    /// its attributes government (runtime +0x9f6, our
+    /// [`ShipRecord::inherent_govt`]), or its combat government (+0x9f4,
+    /// [`ShipRecord::combat_govt`]) when that is none (@0x7361d-0x73635),
+    /// which is so only for a combat-only `InherentGovt` (2128-2383; the
+    /// `shïp` loader @0x7a261-0x7a330). `None` when it has neither, or the
+    /// ship type has no record (the original's type range check @0x73609);
+    /// either way the bar is `ïntf` 128.
     #[must_use]
-    pub fn government(&self) -> Option<GovtId> {
-        None
+    pub fn interface_government(&self) -> Option<GovtId> {
+        let record = self.ship_record(self.ship())?;
+        record.inherent_govt.or(record.combat_govt)
     }
 
     /// `good`'s name, as the exchange names it, if it is traded
@@ -4344,9 +4350,26 @@ mod tests {
     }
 
     #[test]
-    fn a_new_pilot_belongs_to_no_government() {
+    fn the_interface_government_is_the_ship_types_then_its_combat_one() {
+        let interface = |inherent: Option<i16>, combat: Option<i16>| {
+            let mut record = crate::testkit::ship(128, FAST);
+            record.inherent_govt = inherent.map(GovtId);
+            record.combat_govt = combat.map(GovtId);
+            let catalog = FakePilotCatalog {
+                ship_records: vec![record],
+                ..catalog()
+            };
+            Session::start(&catalog)
+                .expect("starts")
+                .interface_government()
+        };
+        assert_eq!(interface(Some(130), Some(131)), Some(GovtId(130)));
+        assert_eq!(interface(Some(130), None), Some(GovtId(130)));
+        assert_eq!(interface(None, Some(131)), Some(GovtId(131)));
+        assert_eq!(interface(None, None), None);
+        // No record for the ship type: no government.
         let session = Session::start(&catalog()).expect("starts");
-        assert_eq!(session.government(), None);
+        assert_eq!(session.interface_government(), None);
     }
 
     #[test]

@@ -19,11 +19,21 @@
 //! and target areas have their own texts. A cargo display would fill the
 //! area from the top and leave its last line to the date.
 //!
-//! Which `ïntf`: a pilot with no government shows `ïntf` 128, the
-//! "Default status bar"; one who belongs to a government shows that
-//! `gövt`'s `Interface`. Either way an ID below 128 means 128
-//! ([`interface_id`]), and the same rule picks the background `PICT` from
-//! the bar's `StatusBkgnd`.
+//! Which `ïntf`: as `_LoadIntfResource` (@0x735f2) picks it, the player's
+//! ship type does, not the pilot. Its `InherentGovt` names a government
+//! ([`Session::interface_government`](nova_sim::Session::interface_government)),
+//! whose `gövt` `Interface` is the bar. A ship type with no government, a
+//! government with no `gövt` record, or an `Interface` below 128 means
+//! `ïntf` 128, the "Default status bar" ([`interface_id`]), and the same
+//! rule picks the background `PICT` from the bar's `StatusBkgnd`
+//! (@0x738ed). The bar is chosen again whenever the ship type changes
+//! ([`rechoose_status_bar`]).
+//!
+//! The gauges are `_DrawStatusShield` (@0x4a452) and `_DrawStatusFuel`
+//! (@0x4a8ff): each fills from the left when its area is wider than tall,
+//! otherwise from the bottom ([`gauge_rect`]). Shield and armour past
+//! their capacity fill the whole area ([`shield_share`]); the fuel gauge is
+//! not drawn while the player is disabled.
 //!
 //! Every `ïntf` area is relative to the bar's top-left corner. The bar is
 //! as wide as its background picture (194 pixels in every stock bar) and
@@ -32,7 +42,10 @@
 use nova_sim::hyperspace::max_jumps;
 use nova_sim::{JumpReadiness, Reserves};
 
+use nova_sim::Gauge;
+
 use super::catalog::{GovtId, StatusBarLayout, StatusBars};
+use crate::draw::fill_rect;
 use crate::geometry::{Bounds, Point};
 use crate::system::camera::VIEW_SIZE;
 use crate::text::LINE_HEIGHT;
@@ -83,26 +96,70 @@ pub struct StatusBar {
     pub background: Option<Background>,
 }
 
-/// The status bar for a pilot of `government`, read from `catalog`, or why
-/// it cannot be read.
+/// The status bar for a ship type of `government` (see the module docs),
+/// read from `catalog`, or why it cannot be read: a `gövt` or `ïntf` that
+/// does not decode, or a missing `ïntf`.
 pub fn choose_status_bar(
     catalog: &impl StatusBars,
     government: Option<GovtId>,
 ) -> Result<StatusBar, String> {
-    let id = match government {
-        None => DEFAULT_INTERFACE,
-        Some(govt) => interface_id(catalog.government_interface(govt)?),
-    };
-    let layout = catalog.status_bar(id)?;
-    let picture = interface_id(layout.status_bkgnd);
-    let background = catalog
-        .picture_size(picture)
-        .map(|(width, height)| Background {
-            id: picture,
-            width: width as f32,
-            height: height as f32,
-        });
+    let layout = catalog.status_bar(chosen_interface(catalog, government)?)?;
+    let background = background(catalog, interface_id(layout.status_bkgnd));
     Ok(StatusBar { layout, background })
+}
+
+/// The status bar once the player's ship type changes to one of
+/// `government`, where `previous` is the bar shown, if one is.
+///
+/// With a bar shown, a new `ïntf` that is missing or does not decode
+/// keeps the bar's layout and colours under `PICT` 128, as
+/// `_LoadIntfResource` does when `GetResource` fails (@0x7369a ->
+/// 0x7390d). We treat an `ïntf` that does not decode as missing, since
+/// that is the original's one path for an `ïntf` it cannot use. A `gövt`
+/// that does not decode is still an error, as on the first choice: the
+/// original's `gövt` table always has the record. With no bar shown (the
+/// first choice failed) it is a first choice ([`choose_status_bar`]), so
+/// a missing `ïntf` is an error again.
+pub fn rechoose_status_bar(
+    catalog: &impl StatusBars,
+    government: Option<GovtId>,
+    previous: Option<&StatusBar>,
+) -> Result<StatusBar, String> {
+    let Some(previous) = previous else {
+        return choose_status_bar(catalog, government);
+    };
+    let id = chosen_interface(catalog, government)?;
+    Ok(match catalog.status_bar(id) {
+        Ok(layout) => StatusBar {
+            background: background(catalog, interface_id(layout.status_bkgnd)),
+            layout,
+        },
+        Err(_) => StatusBar {
+            layout: previous.layout.clone(),
+            background: background(catalog, DEFAULT_INTERFACE),
+        },
+    })
+}
+
+/// The `ïntf` ID a ship type of `government` shows: its `gövt`'s
+/// `Interface` (@0x73648), 128 for none or one with no record, and any
+/// below 128 meaning 128 (@0x7364d-0x7365a).
+fn chosen_interface(catalog: &impl StatusBars, government: Option<GovtId>) -> Result<i16, String> {
+    Ok(match government {
+        None => DEFAULT_INTERFACE,
+        Some(govt) => catalog
+            .government_interface(govt)?
+            .map_or(DEFAULT_INTERFACE, interface_id),
+    })
+}
+
+/// `PICT` `id` as a background, if it reads.
+fn background(catalog: &impl StatusBars, id: i16) -> Option<Background> {
+    catalog.picture_size(id).map(|(width, height)| Background {
+        id,
+        width: width as f32,
+        height: height as f32,
+    })
 }
 
 /// Where the bar's top-left corner goes: against the right edge of the
@@ -168,6 +225,9 @@ pub struct HudState<'a> {
     pub nav: NavDisplay,
     /// Today's date, as it is displayed.
     pub date: &'a str,
+    /// Whether the player's ship is disabled (`_IsDisabled`), which hides
+    /// the fuel gauge.
+    pub disabled: bool,
 }
 
 /// Draws `bar` showing `state`: its background, a radar dot for each
@@ -192,32 +252,17 @@ pub fn draw(list: &mut DrawList, bar: &StatusBar, state: &HudState) {
         }
     }
     let reserves = &state.reserves;
-    let shield = layout.shield.offset(origin);
-    let armor = layout.armor.offset(origin);
-    let fuel = layout.fuel.offset(origin);
-    fill(
-        list,
-        shield,
-        0.0,
-        reserves.shield.fraction(),
-        layout.shield_color,
-    );
-    fill(
-        list,
-        armor,
-        0.0,
-        reserves.armor.fraction(),
-        layout.armor_color,
-    );
-    let whole = whole_jumps(reserves);
-    fill(list, fuel, 0.0, whole, layout.fuel_full);
-    fill(
-        list,
-        fuel,
-        whole,
-        reserves.fuel.fraction(),
-        layout.fuel_partial,
-    );
+    for (area, gauge, color) in [
+        (layout.shield, reserves.shield, layout.shield_color),
+        (layout.armor, reserves.armor, layout.armor_color),
+    ] {
+        if let Some(share) = shield_share(gauge) {
+            paint(list, gauge_rect(area.offset(origin), 0.0, share), color);
+        }
+    }
+    if !state.disabled {
+        draw_fuel(list, layout, layout.fuel.offset(origin), reserves.fuel);
+    }
     draw_nav(list, layout, origin, &state.nav);
     draw_date(list, layout, origin, state.date);
 }
@@ -271,32 +316,66 @@ fn draw_nav(list: &mut DrawList, layout: &StatusBarLayout, origin: Point, nav: &
     }
 }
 
-/// The fraction of the fuel bar the whole jumps' worth of fuel fills.
-fn whole_jumps(reserves: &Reserves) -> f32 {
-    let fuel = reserves.fuel;
-    if fuel.max > 0.0 {
-        let held = fuel.now.clamp(0.0, fuel.max);
-        (max_jumps(held) as f32 * FUEL_PER_JUMP / fuel.max).min(1.0)
+/// How much of a shield or armour gauge `_DrawStatusShield` fills: none
+/// when it holds nothing (@0x4a518-0x4a524), all of it past its capacity,
+/// a capacity of 0 or less included (the jb @0x4a550), and otherwise
+/// `now / max`.
+#[must_use]
+pub fn shield_share(gauge: Gauge) -> Option<f32> {
+    if gauge.now <= 0.0 {
+        None
+    } else if gauge.max < gauge.now {
+        Some(1.0)
     } else {
-        0.0
+        Some(gauge.now / gauge.max)
     }
 }
 
-/// Fills `area` from `from` to `to` of its width, as one horizontal line as
-/// thick as `area` is tall; nothing when that is empty, since a line of no
-/// length still draws a square.
-fn fill(list: &mut DrawList, area: Bounds, from: f32, to: f32, color: Color) {
-    if to <= from {
+/// The part of `area` a gauge fills from `from` to `to` of its capacity,
+/// as `_DrawStatusShield` and `_DrawStatusFuel` work it out: from the left
+/// when the area is wider than tall (@0x4a570-0x4a596), otherwise, square
+/// included, from the bottom (@0x4a59c-0x4a5bf). Each moved edge is
+/// truncated toward zero, and the far one goes no further than the area.
+/// `None` when that leaves nothing, which also covers an empty or inverted
+/// area (@0x4a46f-0x4a485), since a line of no length still draws a
+/// square.
+#[must_use]
+pub fn gauge_rect(area: Bounds, from: f32, to: f32) -> Option<Bounds> {
+    let (min, max) = (area.min, area.max);
+    let (width, height) = (max.x - min.x, max.y - min.y);
+    let painted = if width > height {
+        Bounds {
+            min: Point::new(width.mul_add(from, min.x).trunc(), min.y),
+            max: Point::new(width.mul_add(to, min.x).trunc().min(max.x), max.y),
+        }
+    } else {
+        Bounds {
+            min: Point::new(min.x, (-height).mul_add(to, max.y).trunc().max(min.y)),
+            max: Point::new(max.x, (-height).mul_add(from, max.y).trunc()),
+        }
+    };
+    (painted.min.x < painted.max.x && painted.min.y < painted.max.y).then_some(painted)
+}
+
+/// Fills `painted`, if there is any, with `color`.
+fn paint(list: &mut DrawList, painted: Option<Bounds>, color: Color) {
+    if let Some(painted) = painted {
+        fill_rect(list, painted, color);
+    }
+}
+
+/// Draws the fuel gauge in `area` as `_DrawStatusFuel` does: nothing for
+/// no fuel (or no capacity, where the original divides by zero), else the
+/// full colour over all the fuel (@0x4aa1f-0x4aaf6), then the partial
+/// colour over the part past the whole jumps (@0x4ab5d-0x4ac11).
+fn draw_fuel(list: &mut DrawList, layout: &StatusBarLayout, area: Bounds, fuel: Gauge) {
+    if fuel.now <= 0.0 || fuel.max <= 0.0 {
         return;
     }
-    let y = area.center().y;
-    let width = area.width();
-    list.line(
-        Point::new(from.mul_add(width, area.min.x), y),
-        Point::new(to.mul_add(width, area.min.x), y),
-        area.height(),
-        color,
-    );
+    let to = fuel.now / fuel.max;
+    paint(list, gauge_rect(area, 0.0, to), layout.fuel_full);
+    let whole = max_jumps(fuel.now) as f32 * FUEL_PER_JUMP / fuel.max;
+    paint(list, gauge_rect(area, whole, to), layout.fuel_partial);
 }
 
 /// Draws why no status bar can be shown, where the bar would go.
@@ -376,12 +455,12 @@ mod tests {
     }
 
     impl StatusBars for FakeBars {
-        fn government_interface(&self, id: GovtId) -> Result<i16, String> {
+        fn government_interface(&self, id: GovtId) -> Result<Option<i16>, String> {
             self.asked.borrow_mut().push(format!("gövt {}", id.0));
             self.governments
                 .iter()
                 .find(|(govt, _)| *govt == id.0)
-                .map_or_else(|| Err(format!("no gövt {}", id.0)), |(_, i)| i.clone())
+                .map_or(Ok(None), |(_, i)| i.clone().map(Some))
         }
 
         fn status_bar(&self, id: i16) -> Result<StatusBarLayout, String> {
@@ -401,13 +480,35 @@ mod tests {
         }
     }
 
-    /// `ïntf` 128 (background 700) and 130 (background 702); govt 128
-    /// shows 130 and govt 129 shows 0; both pictures are 194 x 767.
+    /// `ïntf` 128 (background 700), 129 (background 701) and 130
+    /// (background 702); govt 128 shows 130, govt 129 shows 0, govt 130
+    /// shows 129, govt 131 shows 127, govt 132 shows -1, govt 133 shows
+    /// 131, which is missing, and govt 134 shows 132, which does not
+    /// decode; there is no govt 135. The pictures are 194 x 767, but
+    /// `PICT` 128 is 200 x 600.
     fn bars() -> FakeBars {
         FakeBars {
-            governments: vec![(128, Ok(130)), (129, Ok(0))],
-            bars: vec![(128, Ok(layout(700))), (130, Ok(layout(702)))],
-            pictures: vec![(700, (194, 767)), (702, (194, 767))],
+            governments: vec![
+                (128, Ok(130)),
+                (129, Ok(0)),
+                (130, Ok(129)),
+                (131, Ok(127)),
+                (132, Ok(-1)),
+                (133, Ok(131)),
+                (134, Ok(132)),
+            ],
+            bars: vec![
+                (128, Ok(layout(700))),
+                (129, Ok(layout(701))),
+                (130, Ok(layout(702))),
+                (132, Err("ïntf 132: too short".to_owned())),
+            ],
+            pictures: vec![
+                (128, (200, 600)),
+                (700, (194, 767)),
+                (701, (194, 767)),
+                (702, (194, 767)),
+            ],
             asked: RefCell::default(),
         }
     }
@@ -452,12 +553,133 @@ mod tests {
             *catalog.asked.borrow(),
             ["gövt 128", "ïntf 130", "PICT 702"]
         );
+        for govt in [129, 131, 132] {
+            let catalog = bars();
+            let shown = choose_status_bar(&catalog, Some(GovtId(govt))).expect("reads");
+            assert_eq!(shown.layout, layout(700));
+            assert_eq!(
+                *catalog.asked.borrow(),
+                [format!("gövt {govt}"), "ïntf 128".into(), "PICT 700".into()]
+            );
+        }
+    }
+
+    #[test]
+    fn an_interface_of_129_shows_that_bar_and_its_background() {
         let catalog = bars();
-        let shown = choose_status_bar(&catalog, Some(GovtId(129))).expect("reads");
+        assert_eq!(
+            choose_status_bar(&catalog, Some(GovtId(130))),
+            Ok(StatusBar {
+                layout: layout(701),
+                background: Some(background(701)),
+            })
+        );
+        assert_eq!(
+            *catalog.asked.borrow(),
+            ["gövt 130", "ïntf 129", "PICT 701"]
+        );
+    }
+
+    #[test]
+    fn a_government_with_no_record_shows_the_default_bar() {
+        let catalog = bars();
+        let shown = choose_status_bar(&catalog, Some(GovtId(135))).expect("reads");
         assert_eq!(shown.layout, layout(700));
         assert_eq!(
             *catalog.asked.borrow(),
-            ["gövt 129", "ïntf 128", "PICT 700"]
+            ["gövt 135", "ïntf 128", "PICT 700"]
+        );
+    }
+
+    // Choosing again, when the ship type changes.
+
+    fn kept_with_picture_128() -> StatusBar {
+        StatusBar {
+            layout: layout(702),
+            background: Some(Background {
+                id: 128,
+                width: 200.0,
+                height: 600.0,
+            }),
+        }
+    }
+
+    #[test]
+    fn choosing_again_reads_the_new_governments_bar() {
+        let catalog = bars();
+        let previous = choose_status_bar(&catalog, Some(GovtId(128))).expect("reads");
+        assert_eq!(
+            rechoose_status_bar(&catalog, Some(GovtId(130)), Some(&previous)),
+            choose_status_bar(&catalog, Some(GovtId(130)))
+        );
+    }
+
+    #[test]
+    fn a_missing_or_undecodable_new_bar_keeps_the_layout_over_picture_128() {
+        for govt in [133, 134] {
+            let catalog = bars();
+            let previous = choose_status_bar(&catalog, Some(GovtId(128))).expect("reads");
+            catalog.asked.borrow_mut().clear();
+            assert_eq!(
+                rechoose_status_bar(&catalog, Some(GovtId(govt)), Some(&previous)),
+                Ok(kept_with_picture_128()),
+                "gövt {govt}"
+            );
+            let intf = if govt == 133 {
+                "ïntf 131"
+            } else {
+                "ïntf 132"
+            };
+            assert_eq!(
+                *catalog.asked.borrow(),
+                [format!("gövt {govt}"), intf.into(), "PICT 128".into()]
+            );
+        }
+        // With no picture 128 the kept layout has no background.
+        let catalog = FakeBars {
+            pictures: Vec::new(),
+            ..bars()
+        };
+        let previous = StatusBar {
+            layout: layout(702),
+            background: Some(background(702)),
+        };
+        assert_eq!(
+            rechoose_status_bar(&catalog, Some(GovtId(133)), Some(&previous)),
+            Ok(StatusBar {
+                layout: layout(702),
+                background: None,
+            })
+        );
+    }
+
+    #[test]
+    fn with_no_bar_shown_choosing_again_is_a_first_choice() {
+        let catalog = bars();
+        assert_eq!(
+            rechoose_status_bar(&catalog, Some(GovtId(133)), None),
+            Err("no ïntf 131".to_owned())
+        );
+        assert_eq!(
+            rechoose_status_bar(&catalog, Some(GovtId(134)), None),
+            Err("ïntf 132: too short".to_owned())
+        );
+        assert_eq!(
+            rechoose_status_bar(&catalog, Some(GovtId(130)), None),
+            choose_status_bar(&catalog, Some(GovtId(130)))
+        );
+    }
+
+    #[test]
+    fn an_undecodable_government_is_an_error_even_when_choosing_again() {
+        let catalog = FakeBars {
+            governments: vec![(128, Err("gövt 128: too short".to_owned()))],
+            ..bars()
+        };
+        let previous = kept_with_picture_128();
+        assert_eq!(
+            rechoose_status_bar(&catalog, Some(GovtId(128)), Some(&previous)),
+            Err("gövt 128: too short".to_owned())
         );
     }
 
@@ -635,6 +857,7 @@ mod tests {
             reserves,
             nav: NavDisplay::None,
             date: DATE,
+            disabled: false,
         }
     }
 
@@ -677,14 +900,15 @@ mod tests {
     }
 
     #[test]
-    fn each_bar_fills_as_far_as_its_gauge() {
+    fn each_bar_fills_as_far_as_its_gauge_truncated() {
+        // 74.5, 37.25 and 99.33 pixels of 149.
         let list = drawn(&stock(), &state(reserves(15.0, 15.0, 200.0)));
         assert_eq!(
             lines(&list),
             [
-                bar_line(199.0, 0.0, 74.5, SHIELD),
-                bar_line(216.0, 0.0, 37.25, ARMOR),
-                bar_line(234.0, 0.0, 149.0 * 2.0 / 3.0, FUEL_FULL),
+                bar_line(199.0, 0.0, 74.0, SHIELD),
+                bar_line(216.0, 0.0, 37.0, ARMOR),
+                bar_line(234.0, 0.0, 99.0, FUEL_FULL),
             ]
         );
     }
@@ -698,25 +922,49 @@ mod tests {
             ..state(Reserves::default())
         };
         assert_eq!(lines(&drawn(&stock(), &none)), []);
+        let negative = drawn(&stock(), &state(reserves(-1.0, -1.0, -50.0)));
+        assert_eq!(lines(&negative), []);
     }
 
     #[test]
-    fn fuel_beyond_whole_jumps_is_drawn_in_the_partial_colour() {
-        // 250 of 300: two jumps (2/3 of the bar), then half a jump (1/6).
+    fn over_capacity_shield_and_armour_draw_full() {
+        let over = Reserves {
+            shield: Gauge {
+                now: 40.0,
+                max: 30.0,
+            },
+            armor: Gauge { now: 5.0, max: 0.0 },
+            fuel: Gauge::default(),
+        };
+        assert_eq!(
+            lines(&drawn(&stock(), &state(over))),
+            [
+                bar_line(199.0, 0.0, 149.0, SHIELD),
+                bar_line(216.0, 0.0, 149.0, ARMOR),
+            ]
+        );
+    }
+
+    #[test]
+    fn fuel_beyond_whole_jumps_is_painted_over_in_the_partial_colour() {
+        // 250 of 300: all of it (124.17 pixels) in the full colour, then
+        // the half jump past the two whole ones (from 99.33) over it.
         let list = drawn(&stock(), &state(reserves(0.0, 0.0, 250.0)));
-        let third = 149.0 / 3.0;
         assert_eq!(
             lines(&list),
             [
-                bar_line(234.0, 0.0, 2.0 * third, FUEL_FULL),
-                bar_line(234.0, 2.0 * third, 149.0 * 250.0 / 300.0, FUEL_PARTIAL),
+                bar_line(234.0, 0.0, 124.0, FUEL_FULL),
+                bar_line(234.0, 99.0, 124.0, FUEL_PARTIAL),
             ]
         );
-        // Under one jump is all partial.
+        // Under one jump: the partial colour over all of it.
         let list = drawn(&stock(), &state(reserves(0.0, 0.0, 50.0)));
         assert_eq!(
             lines(&list),
-            [bar_line(234.0, 0.0, 149.0 / 6.0, FUEL_PARTIAL)]
+            [
+                bar_line(234.0, 0.0, 24.0, FUEL_FULL),
+                bar_line(234.0, 0.0, 24.0, FUEL_PARTIAL),
+            ]
         );
     }
 
@@ -725,7 +973,7 @@ mod tests {
         let over = drawn(&stock(), &state(reserves(0.0, 0.0, 450.0)));
         assert_eq!(lines(&over), [bar_line(234.0, 0.0, 149.0, FUEL_FULL)]);
         // A capacity that is not whole jumps: 250 of 250 is two jumps, then
-        // a half.
+        // a half (from 119.2).
         let odd = Reserves {
             fuel: Gauge::full(250.0),
             ..Reserves::default()
@@ -733,12 +981,156 @@ mod tests {
         assert_eq!(
             lines(&drawn(&stock(), &state(odd))),
             [
-                bar_line(234.0, 0.0, 149.0 * 0.8, FUEL_FULL),
-                bar_line(234.0, 149.0 * 0.8, 149.0, FUEL_PARTIAL),
+                bar_line(234.0, 0.0, 149.0, FUEL_FULL),
+                bar_line(234.0, 119.0, 149.0, FUEL_PARTIAL),
             ]
         );
-        let negative = drawn(&stock(), &state(reserves(0.0, 0.0, -50.0)));
-        assert_eq!(lines(&negative), []);
+        // No capacity: no gauge, whatever the fuel.
+        let none = Reserves {
+            fuel: Gauge {
+                now: 50.0,
+                max: 0.0,
+            },
+            ..Reserves::default()
+        };
+        assert_eq!(lines(&drawn(&stock(), &state(none))), []);
+    }
+
+    #[test]
+    fn a_disabled_player_has_no_fuel_gauge() {
+        let hud = HudState {
+            disabled: true,
+            ..state(reserves(30.0, 60.0, 250.0))
+        };
+        assert_eq!(
+            lines(&drawn(&stock(), &hud)),
+            [
+                bar_line(199.0, 0.0, 149.0, SHIELD),
+                bar_line(216.0, 0.0, 149.0, ARMOR),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tall_fuel_area_fills_from_the_bottom() {
+        // (10, 100)-(20, 200) on the bar at (830, 0): 250 of 300 is 83.33
+        // pixels up from 200, and the two whole jumps 66.67.
+        let mut bar = stock();
+        bar.layout.fuel = rect(10.0, 100.0, 20.0, 200.0);
+        let fill = |top: f32, bottom: f32, color| {
+            (
+                at(840.0, f32::midpoint(top, bottom)),
+                at(850.0, f32::midpoint(top, bottom)),
+                bottom - top,
+                color,
+            )
+        };
+        let list = drawn(&bar, &state(reserves(0.0, 0.0, 250.0)));
+        assert_eq!(
+            lines(&list),
+            [
+                fill(116.0, 200.0, FUEL_FULL),
+                fill(116.0, 133.0, FUEL_PARTIAL)
+            ]
+        );
+        // An exact number of jumps has no partial part.
+        let list = drawn(&bar, &state(reserves(0.0, 0.0, 200.0)));
+        assert_eq!(lines(&list), [fill(133.0, 200.0, FUEL_FULL)]);
+    }
+
+    // Gauge geometry.
+
+    const WIDE: Bounds = Bounds {
+        min: Point::new(10.0, 20.0),
+        max: Point::new(110.0, 30.0),
+    };
+
+    const TALL: Bounds = Bounds {
+        min: Point::new(10.0, 20.0),
+        max: Point::new(20.0, 120.0),
+    };
+
+    #[test]
+    fn a_wide_gauge_fills_from_the_left_truncating_its_edges() {
+        assert_eq!(
+            gauge_rect(WIDE, 0.0, 0.5),
+            Some(rect(10.0, 20.0, 60.0, 30.0))
+        );
+        assert_eq!(
+            gauge_rect(WIDE, 0.0, 0.505),
+            Some(rect(10.0, 20.0, 60.0, 30.0))
+        );
+        assert_eq!(
+            gauge_rect(WIDE, 0.255, 0.5),
+            Some(rect(35.0, 20.0, 60.0, 30.0))
+        );
+        // Toward zero, not down.
+        let left = rect(-110.0, 20.0, -10.0, 30.0);
+        assert_eq!(
+            gauge_rect(left, 0.0, 0.505),
+            Some(rect(-110.0, 20.0, -59.0, 30.0))
+        );
+    }
+
+    #[test]
+    fn a_tall_or_square_gauge_fills_from_the_bottom() {
+        assert_eq!(
+            gauge_rect(TALL, 0.0, 0.5),
+            Some(rect(10.0, 70.0, 20.0, 120.0))
+        );
+        assert_eq!(
+            gauge_rect(TALL, 0.0, 0.505),
+            Some(rect(10.0, 69.0, 20.0, 120.0))
+        );
+        assert_eq!(
+            gauge_rect(TALL, 0.255, 0.5),
+            Some(rect(10.0, 70.0, 20.0, 94.0))
+        );
+        let square = rect(0.0, 0.0, 10.0, 10.0);
+        assert_eq!(
+            gauge_rect(square, 0.0, 0.5),
+            Some(rect(0.0, 5.0, 10.0, 10.0))
+        );
+    }
+
+    #[test]
+    fn a_gauge_past_its_capacity_stops_at_its_area() {
+        assert_eq!(gauge_rect(WIDE, 0.0, 1.5), Some(WIDE));
+        assert_eq!(gauge_rect(TALL, 0.0, 1.5), Some(TALL));
+        assert_eq!(gauge_rect(WIDE, 1.2, 1.5), None);
+        assert_eq!(gauge_rect(TALL, 1.2, 1.5), None);
+    }
+
+    #[test]
+    fn an_empty_span_or_area_paints_nothing() {
+        assert_eq!(gauge_rect(WIDE, 0.5, 0.5), None);
+        assert_eq!(gauge_rect(WIDE, 0.0, 0.001), None, "under a pixel");
+        // Truncating the top edge moves it up: under a pixel is one.
+        assert_eq!(
+            gauge_rect(TALL, 0.0, 0.001),
+            Some(rect(10.0, 119.0, 20.0, 120.0))
+        );
+        assert_eq!(gauge_rect(TALL, 0.5, 0.5), None);
+        for area in [
+            rect(10.0, 20.0, 10.0, 30.0),
+            rect(110.0, 20.0, 10.0, 30.0),
+            rect(10.0, 20.0, 110.0, 20.0),
+            rect(10.0, 30.0, 110.0, 20.0),
+        ] {
+            assert_eq!(gauge_rect(area, 0.0, 1.0), None, "{area:?}");
+        }
+    }
+
+    #[test]
+    fn a_shield_shows_its_share_or_full_past_its_capacity() {
+        let share = |now, max| shield_share(Gauge { now, max });
+        assert_eq!(share(0.0, 30.0), None);
+        assert_eq!(share(-1.0, 30.0), None);
+        assert_eq!(share(15.0, 30.0), Some(0.5));
+        assert_eq!(share(30.0, 30.0), Some(1.0));
+        assert_eq!(share(40.0, 30.0), Some(1.0));
+        assert_eq!(share(5.0, 0.0), Some(1.0));
+        assert_eq!(share(5.0, -10.0), Some(1.0));
     }
 
     #[test]
@@ -752,6 +1144,7 @@ mod tests {
             reserves: reserves(30.0, 60.0, 300.0),
             nav: NavDisplay::Stellar("Earth".to_owned()),
             date: DATE,
+            disabled: false,
         };
         let list = drawn(&stock(), &hud);
         let mut expected = DrawList::new();
@@ -985,6 +1378,7 @@ mod tests {
             reserves: reserves(30.0, 60.0, 300.0),
             nav: NavDisplay::None,
             date: DATE,
+            disabled: false,
         };
         let list = drawn(&stock(), &hud);
         assert_eq!(dots(&list, DIM_RADAR), [at(927.0, 94.0), at(1014.0, 96.0)]);

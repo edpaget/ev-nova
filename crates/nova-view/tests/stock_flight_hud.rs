@@ -1,6 +1,7 @@
-//! The flight HUD over the stock data: a new pilot, with no government,
-//! shows `ïntf` 128, the "Default status bar", over its 194 x 767
-//! background against the right edge, and every stock `ïntf` reads; and
+//! The flight HUD over the stock data: a new pilot, whose shuttle has no
+//! government, shows `ïntf` 128, the "Default status bar", over its 194 x
+//! 767 background against the right edge, a Fed Destroyer shows the
+//! Federation's `ïntf` 130, and every stock `ïntf` reads; and
 //! the combat looks: every weapon the simulation flies, every explosion
 //! type and a ship's target card read, and every looped weapon sound's
 //! length; and a boarding grant's message reads the strings it is built
@@ -14,7 +15,7 @@ mod common;
 use nova_data::records::interface::Interface;
 use nova_data::records::weapon::Weapon;
 use nova_data::{GameData, Record};
-use nova_sim::{BoomId, ShipId, SoundId, WeaponId};
+use nova_sim::{BoomId, Pilot, ShipId, SoundId, WeaponId};
 use nova_view::flight::hud::{Background, bar_origin, interface_id};
 use nova_view::flight::{CombatLooks, FlightView, Looks, StatusBars};
 use nova_view::geometry::Bounds;
@@ -212,5 +213,31 @@ fn a_grants_message_reads_its_stock_strings() {
             &strings[393]
         ],
         [RETRIEVED, THE, FROM_THIS_SHIP, ARTICLE_A, ARTICLE_AN]
+    );
+}
+
+#[test]
+fn a_fed_destroyer_flies_under_the_federation_status_bar() {
+    let Some(data) = open() else {
+        return;
+    };
+    // shïp 141, the Fed Destroyer, is of gövt 128, the Federation, whose
+    // Interface is ïntf 130, over PICT 702.
+    let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["ship"] = serde_json::json!(141);
+    let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    assert_eq!(pilot.ship(), ShipId(141));
+    let view = FlightView::with_pilot(&data, pilot);
+    let bar = view.status_bar().expect("the Federation status bar reads");
+    assert_eq!(bar.layout, data.status_bar(130).expect("reads"));
+    assert_eq!(
+        bar.background,
+        Some(Background {
+            id: 702,
+            width: 194.0,
+            height: 767.0,
+        })
     );
 }
