@@ -437,12 +437,13 @@ pub enum Boarding {
     Offered(VenueOffer),
     /// A mission's special ship was boarded, with no plunder, no crime
     /// and no person's offer (@0x657bf-0x657e3 → @0x65f43), saying the
-    /// assist path's comm line when it took it.
+    /// pickup path's or the assist path's comm line when it took one.
     MissionShip(Option<MissionBoardLine>),
 }
 
 /// What the comm line says as a mission's special ship is boarded on the
-/// assist path (see the session's `mission_ships` module).
+/// pickup path or the assist path (see the session's `mission_ships`
+/// module).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MissionBoardLine {
     /// `STR#` 2002 #126, "Target ship has been boarded."
@@ -453,6 +454,14 @@ pub enum MissionBoardLine {
     Refuelled {
         /// The class of the ship boarded, which names it.
         ship: ShipId,
+    },
+    /// The mission's cargo, picked up as its ship of `PickupMode` 2 is
+    /// boarded: `STR#` 2002 #106, a space, #107 and a space unless the
+    /// cargo's name starts with `*`, the name without its `*`, a space,
+    /// #108 (@0x653fb-0x65543).
+    Retrieved {
+        /// The cargo type, raw, whose `STR#` 4001 name the line says.
+        cargo: Option<i16>,
     },
 }
 

@@ -294,8 +294,8 @@ pub enum AssistLine {
     Refuelled,
 }
 
-/// The `PickupMode` that picks the cargo up by boarding the special ship
-/// (rdm:phase/mission-ships/phase-14-boarded-cargo).
+/// The `PickupMode` that picks the cargo up by boarding the special
+/// ship.
 const PICKUP_ON_BOARD: i16 = 2;
 /// `Flags`: the auto-abort takes a jump's fuel, and the assist path says
 /// so.
@@ -307,7 +307,8 @@ const TAKES_FUEL: u16 = 0x0008;
 /// @0x65575-0x65762) that counts it boarded, and what its comm line
 /// says: a board or rescue goal with `Flags` 0x0001 and exactly one ship
 /// left. A `PickupMode` of 2 takes the cargo pickup instead
-/// (@0x652ee-0x65570, rdm:phase/mission-ships/phase-14-boarded-cargo).
+/// (@0x652ee-0x65570; the session's `Session::board_mission_ship`
+/// takes it first).
 #[must_use]
 pub const fn assists(
     goal: ShipGoal,

@@ -298,7 +298,7 @@ use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
     HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText,
-    NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, VenueOffer,
+    NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, TagNames, VenueOffer,
 };
 use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
@@ -513,6 +513,27 @@ pub fn refuelled_message(ship: &str, player_ship: &str) -> String {
     format!("{ship}:  {ENERGY_TRANSFER}, {player_ship}.")
 }
 
+/// `STR#` 2002 #107: the article before a cargo's name as a boarding
+/// picks it up.
+pub const THE: &str = "the";
+/// How long a boarding pickup's line stays on screen: 250 frames at 30 a
+/// second (0xfa @0x65538).
+pub const RETRIEVED_SHOWN_FOR: Duration = Duration::from_millis(250 * 1000 / 30);
+
+/// What the comm line says as a `PickupMode` 2 mission's cargo, its
+/// `STR#` 4001 name `cargo`, is picked up by boarding its special ship,
+/// as `_HandlePlayerBoardAttempt` builds it (@0x653fb-0x65543):
+/// [`RETRIEVED`] and a space (two in all), then [`THE`] and a space
+/// unless the name starts with `*`, the name without its `*`, a space,
+/// and [`FROM_THIS_SHIP`].
+#[must_use]
+pub fn retrieved_message(cargo: &str) -> String {
+    match cargo.strip_prefix('*') {
+        Some(name) => format!("{RETRIEVED} {name} {FROM_THIS_SHIP}"),
+        None => format!("{RETRIEVED} {THE} {cargo} {FROM_THIS_SHIP}"),
+    }
+}
+
 /// What the comm line says of `line`, the names read from `session`.
 fn mission_board_message(line: MissionBoardLine, session: &Session) -> String {
     match line {
@@ -521,6 +542,21 @@ fn mission_board_message(line: MissionBoardLine, session: &Session) -> String {
             session.ship_name(ship).unwrap_or_default(),
             session.pilot().ship_name().unwrap_or_default(),
         ),
+        MissionBoardLine::Retrieved { cargo } => retrieved_message(
+            &cargo
+                .and_then(|cargo| u8::try_from(cargo).ok())
+                .and_then(|cargo| session.cargo_name(cargo))
+                .unwrap_or_default(),
+        ),
+    }
+}
+
+/// How long the comm line of `line` stays on screen: a pickup's for
+/// [`RETRIEVED_SHOWN_FOR`], the assist path's for [`MESSAGE_SHOWN_FOR`].
+fn mission_board_shown_for(line: MissionBoardLine) -> Duration {
+    match line {
+        MissionBoardLine::Retrieved { .. } => RETRIEVED_SHOWN_FOR,
+        MissionBoardLine::Boarded | MissionBoardLine::Refuelled { .. } => MESSAGE_SHOWN_FOR,
     }
 }
 
@@ -2120,7 +2156,7 @@ impl<C> FlightView<C> {
             Ok(Boarding::MissionShip(line)) => {
                 if let Some(line) = line {
                     let said = mission_board_message(line, session);
-                    self.say(said);
+                    self.say_for(said, mission_board_shown_for(line));
                 }
             }
             Err(refusal) => {
@@ -3242,6 +3278,8 @@ mod tests {
         bar: Result<StatusBarLayout, String>,
         /// System 130's landing sites: Earth and Moon, by default.
         sites: Vec<LandingSite>,
+        /// System 130's `NavDefs` slots on the map: none, by default.
+        sol_navs: Vec<Option<(u32, u16)>>,
         systems_read: RefCell<Vec<SystemId>>,
         /// The commodities: none, by default.
         commodities: CommodityStrings,
@@ -3379,6 +3417,7 @@ mod tests {
             onward: false,
             fan: false,
             reborn: false,
+            sol_navs: Vec::new(),
             gates: Vec::new(),
             lives: Vec::new(),
             missions: Vec::new(),
@@ -3492,7 +3531,10 @@ mod tests {
             let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
             let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
             let mut systems = vec![
-                star(130, (0.0, 0.0), sol),
+                StarSystem {
+                    stellars: self.sol_navs.clone(),
+                    ..star(130, (0.0, 0.0), sol)
+                },
                 star(131, (600.0, 0.0), onward),
                 star(132, (0.0, 600.0), &[]),
             ];
@@ -10182,6 +10224,44 @@ mod tests {
         );
     }
 
+    /// `_HandlePlayerBoardAttempt` @0x653fb-0x65543: #106 ("You
+    /// retrieved ", its own trailing space) and a space, #107 and a space
+    /// unless the name starts with `*`, the name without it, a space,
+    /// #108.
+    #[test]
+    fn a_pickup_ships_line_names_its_cargo_as_the_original_spaces_it() {
+        assert_eq!(THE, "the");
+        assert_eq!(
+            retrieved_message("Food"),
+            "You retrieved  the Food from this ship."
+        );
+        assert_eq!(
+            retrieved_message("*Medical Supplies"),
+            "You retrieved  Medical Supplies from this ship."
+        );
+        assert_eq!(
+            RETRIEVED_SHOWN_FOR,
+            Duration::from_millis(250 * 1000 / 30),
+            "0xfa frames @0x65538"
+        );
+    }
+
+    #[test]
+    fn a_pickup_ships_line_reads_the_cargo_name_from_str_4001() {
+        let strings = FakeCatalog {
+            strings: vec![(4001, vec!["Food".to_owned(), "*Passengers".to_owned()])],
+            ..catalog()
+        };
+        let view = flight().with_strings(Rc::new(strings));
+        let session = view.session().expect("flying");
+        let said = |cargo| mission_board_message(MissionBoardLine::Retrieved { cargo }, session);
+        assert_eq!(said(Some(0)), "You retrieved  the Food from this ship.");
+        assert_eq!(said(Some(1)), "You retrieved  Passengers from this ship.");
+        assert_eq!(said(Some(2)), "You retrieved  the  from this ship.");
+        assert_eq!(said(None), "You retrieved  the  from this ship.");
+        assert_eq!(said(Some(256)), "You retrieved  the  from this ship.");
+    }
+
     #[test]
     fn a_mission_ship_lost_says_str_2002_284() {
         let view = flight();
@@ -10621,6 +10701,112 @@ mod tests {
             .collect();
         assert!(texts.iter().any(|text| text == "Ace"), "{texts:?}");
         assert!(texts.iter().any(|text| text == "Top Gun"), "{texts:?}");
+    }
+
+    /// A flight from Sol after accepting mission 140, whose one special
+    /// ship, a rescue held disabled, is set up on Earth under the player
+    /// at take-off, and which carries 10 tons of food (`STR#` 4001 #1),
+    /// picked up by boarding it; the player's ship holds 10 tons. With
+    /// `full`, mission 141, of 10 tons loaded at its accept, fills them
+    /// first. The ship is targeted.
+    fn rescuing(full: bool) -> View {
+        let mut hunted = trafficked(&[130], 0, 129, 3);
+        hunted.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        hunted.sol_navs = vec![Some((0, 0))];
+        hunted.fields.holds = 10;
+        for record in &mut hunted.ships {
+            record.crew = 3;
+        }
+        hunted.strings = vec![(4001, vec!["Food".to_owned()])];
+        let cargo = |id, pickup_mode| MissionRecord {
+            cargo_type: 0,
+            cargo_qty: 10,
+            pickup_mode,
+            ..errand(id)
+        };
+        hunted.missions = vec![
+            MissionRecord {
+                ships: MissionShip {
+                    count: 1,
+                    goal: 5,
+                    syst: -1,
+                    dude: Some(nova_sim::DudeId(128)),
+                    start: -1,
+                    ..MissionShip::NONE
+                },
+                ..cargo(140, 2)
+            },
+            cargo(141, 0),
+        ];
+        hunted.mission_texts = vec![
+            MissionTexts::named(MissionId(140), "Rescue"),
+            MissionTexts::named(MissionId(141), "Haul"),
+        ];
+        let strings = FakeCatalog {
+            strings: hunted.strings.clone(),
+            ..catalog()
+        };
+        let mut view = FlightView::new(hunted)
+            .with_strings(Rc::new(strings))
+            .with_behaviour(Rc::new(Still));
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(view.accept_mission(MissionId(140)), Ok(0));
+        if full {
+            assert_eq!(view.accept_mission(MissionId(141)), Ok(1));
+        }
+        view.settle_script();
+        assert!(view.take_off().is_some());
+        view.settle_script();
+        view.tick(TICK);
+        let _ = view.take_mission_texts();
+        tap(&mut view, TARGET_KEY);
+        let session = view.session().expect("flying");
+        assert!(session.target().is_some_and(|npc| npc.mission.is_some()));
+        view
+    }
+
+    #[test]
+    fn b_on_a_pickup_ship_says_the_cargo_retrieved_for_250_frames() {
+        let mut view = rescuing(false);
+        tap(&mut view, BOARD_KEY);
+        let said = "You retrieved  the Food from this ship.";
+        assert_eq!(view.message(), Some(said));
+        assert_eq!(view.take_boarding(), None, "no plunder");
+        assert_eq!(view.take_mission_texts(), [], "no dialog");
+        let at = view.elapsed;
+        while view.elapsed + TICK < at + RETRIEVED_SHOWN_FOR {
+            view.tick(TICK);
+        }
+        assert_eq!(view.message(), Some(said));
+        while view.elapsed < at + RETRIEVED_SHOWN_FOR {
+            view.tick(TICK);
+        }
+        assert_eq!(view.message(), None);
+    }
+
+    /// The refused pickup's dialog (`_DoMissionCargoPickup` @0x982ff) is
+    /// queued as the B press returns, so the router shows it over flight
+    /// as it settles that input, and the comm line says #130.
+    #[test]
+    fn b_on_a_pickup_ship_without_room_shows_the_dialog_at_once_and_says_cant_board() {
+        let mut view = rescuing(true);
+        tap(&mut view, BOARD_KEY);
+        assert_eq!(view.message(), Some(CANT_BOARD));
+        let texts: Vec<(MissionTextKind, String)> = view
+            .take_mission_texts()
+            .into_iter()
+            .map(|text| (text.kind, text.text))
+            .collect();
+        assert_eq!(
+            texts,
+            [(
+                MissionTextKind::NoRoom,
+                nova_sim::mission::cargo::NO_SPACE_TO_LOAD.to_owned()
+            )]
+        );
+        let session = view.session().expect("flying");
+        assert!(!session.npcs()[0].boarded);
     }
 
     #[test]

@@ -74,8 +74,8 @@ impl Session {
     /// mission whose special ship the player has boarded
     /// (`_HandlePlayerBoardAttempt` @0x652ee-0x653ed), through the
     /// pickup's checks: whether it is aboard now. False for a free slot,
-    /// or a mission of another `PickupMode`. Mission-ships phase 2 calls
-    /// it from the boarding (rdm:phase/mission-ships/phase-2-ship-goals).
+    /// or a mission of another `PickupMode`. [`Session::board`] calls it
+    /// as it boards the mission's special ship.
     pub fn pick_up_boarded_cargo(&mut self, slot: u8) -> bool {
         let Some(mission) = self.pilot.missions.get(slot).map(|active| active.mission) else {
             return false;

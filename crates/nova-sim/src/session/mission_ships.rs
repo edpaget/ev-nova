@@ -75,7 +75,9 @@
 //!
 //! **The counts** go up where the original counts them: a ship destroyed
 //! as it is taken out of the fight, one disabled as the fight's tick
-//! downs it, one boarded on the assist path of [`Session::board`], and
+//! downs it, one boarded on the pickup path or the assist path of
+//! [`Session::board`] (a `PickupMode` 2 mission's whatever its goal, once
+//! its cargo is aboard; a pickup refused refuses the board), and
 //! one that leaves the system as the traffic's tick takes it out
 //! ([`Fate::Departed`]), chased off and its ships left lowered as the
 //! ships-left rule says ([`RuleKey::LeftRespawn`]; a landing leaves only
@@ -145,7 +147,7 @@
 //! it as their marks are cleared.
 
 use super::Session;
-use crate::board::{Boarding, MissionBoardLine};
+use crate::board::{BoardRefusal, Boarding, MissionBoardLine};
 use crate::catalog::{DudeId, MissionId, MissionRecord, ShipId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
@@ -153,6 +155,7 @@ use crate::control::Script;
 use crate::geometry::Vec2;
 use crate::message::SimMessage;
 use crate::mission::active::AUTO_ABORT;
+use crate::mission::cargo::PICKUP_BOARDING;
 use crate::mission::ships::{ShipBehav, ShipFacts, ShipStart, appear_timer, swapped_ship_type};
 use crate::mission::{
     ActiveMission, AssistLine, Departure, FailedBy, GoalFacts, LossFacts, ShipGoal, ShipSystem,
@@ -827,15 +830,25 @@ impl Session {
     }
 
     /// Boards `npc` when it is a mission's special ship
-    /// (`_HandlePlayerBoardAttempt` @0x652a2-0x657e3), the player's
-    /// velocity matched already: on the assist path ([`assists`]) its
-    /// slot counts it boarded, and the comm line is said; then it is
-    /// marked boarded (@0x65f43), with no `BoardPenalty`, person's offer
-    /// or plunder. A ship of a failed mission is boarded for plunder,
-    /// but still with no `BoardPenalty` (the slap @0x6582b passes its
-    /// mark; see [`Session::board`]): none. The assist path's ship +0x4c (the AI's wait
-    /// countdown, 100 @0x65746) is not kept.
-    pub(super) fn board_mission_ship(&mut self, npc: &Npc) -> Option<Boarding> {
+    /// (`_HandlePlayerBoardAttempt` @0x652a2-0x657e3), before the
+    /// player's velocity is matched. A mission of `PickupMode` 2 takes
+    /// the pickup path (@0x652ee-0x65570): its cargo is picked up
+    /// ([`Session::pick_up_boarded_cargo`]), and once aboard its slot
+    /// counts the ship boarded, whatever its goal (@0x653a7), and the
+    /// comm line names the cargo; a pickup refused refuses the board
+    /// ([`BoardRefusal::CantBoard`], @0x65fdb), its dialog shown and
+    /// nothing else changed. Any other takes the assist path
+    /// ([`assists`]), on which its slot counts it boarded and the comm
+    /// line is said. Then it is marked boarded (@0x65f43), with no
+    /// `BoardPenalty`, person's offer or plunder. A ship of a failed
+    /// mission is boarded for plunder, but still with no `BoardPenalty`
+    /// (the slap @0x6582b passes its mark; see [`Session::board`]):
+    /// none. The assist path's ship +0x4c (the AI's wait countdown, 100
+    /// @0x65746) is not kept.
+    pub(super) fn board_mission_ship(
+        &mut self,
+        npc: &Npc,
+    ) -> Option<Result<Boarding, BoardRefusal>> {
         let mark = npc.mission?;
         let mut line = None;
         if let Some(active) = self.pilot.missions.get(mark.slot) {
@@ -843,6 +856,19 @@ impl Session {
                 return None;
             }
             let record = self.lifecycle_record(active.mission);
+            let cargo = active.cargo_type;
+            if record.pickup_mode == PICKUP_BOARDING {
+                if !self.pick_up_boarded_cargo(mark.slot) {
+                    return Some(Err(BoardRefusal::CantBoard));
+                }
+                if let Some(active) = self.slot_holding(mark.slot, record.id) {
+                    active.ships.boarded = active.ships.boarded.saturating_add(1);
+                }
+                self.mark_boarded(npc.id);
+                return Some(Ok(Boarding::MissionShip(Some(
+                    MissionBoardLine::Retrieved { cargo },
+                ))));
+            }
             let assist = assists(
                 ShipGoal::from_code(record.ships.goal),
                 record.flags,
@@ -860,7 +886,7 @@ impl Session {
             }
         }
         self.mark_boarded(npc.id);
-        Some(Boarding::MissionShip(line))
+        Some(Ok(Boarding::MissionShip(line)))
     }
 
     /// Whether `npc` is held disabled whatever its armour, as
@@ -3245,11 +3271,31 @@ pub(super) mod tests {
         Result<crate::board::Boarding, crate::board::BoardRefusal>,
         Vec<crate::legal::Crime>,
     ) {
+        board_at(session, 0, Vec2::ZERO)
+    }
+
+    /// The velocity a ship boarded drifts at in [`board_at`]: within the
+    /// boarding speed of the player at rest, so a matched velocity shows.
+    const DRIFT: Vec2 = Vec2::new(0.25, -0.125);
+
+    /// [`board_first`], boarding NPC `index`, which drifts at `velocity`
+    /// as the player is at rest.
+    fn board_at(
+        session: &mut Session,
+        index: usize,
+        velocity: Vec2,
+    ) -> (
+        Result<crate::board::Boarding, crate::board::BoardRefusal>,
+        Vec<crate::legal::Crime>,
+    ) {
         session.player = crate::flight::ShipState::default();
-        let npc = &mut session.traffic.npcs_mut()[0];
-        npc.state = crate::flight::ShipState::default();
+        let npc = &mut session.traffic.npcs_mut()[index];
+        npc.state = crate::flight::ShipState {
+            velocity,
+            ..crate::flight::ShipState::default()
+        };
         npc.condition = Condition::Disabled;
-        session.target = Some(session.npcs()[0].id);
+        session.target = Some(session.npcs()[index].id);
         let law = Witness::default();
         let boarding = session.board(
             &law,
@@ -3324,12 +3370,8 @@ pub(super) mod tests {
 
     #[test]
     fn a_mission_ship_boarded_off_the_assist_path_is_marked_boarded_and_not_counted() {
-        for (goal, count, flags, pickup) in [
-            (5, 2, 0x0001, -1),
-            (2, 1, 0, -1),
-            (2, 1, 0x0001, 2),
-            (0, 1, 0x0001, -1),
-        ] {
+        for (goal, count, flags, pickup) in [(5, 2, 0x0001, -1), (2, 1, 0, -1), (0, 1, 0x0001, -1)]
+        {
             let mut catalog = rescuing(goal, count, flags);
             catalog.missions[0].pickup_mode = pickup;
             let mut session = in_flight_with(&catalog, count);
@@ -3346,6 +3388,141 @@ pub(super) mod tests {
             settle(&mut session, &catalog);
             assert!(!goals_met(&session), "{goal}");
         }
+    }
+
+    /// [`rescuing`] whose mission carries 5 tons of cargo type 1, picked
+    /// up as its special ship is boarded (`PickupMode` 2).
+    fn picking_up(goal: i16, count: i16, flags: u16) -> FakePilotCatalog {
+        let mut catalog = rescuing(goal, count, flags);
+        catalog.missions[0].pickup_mode = 2;
+        catalog.missions[0].cargo_type = 1;
+        catalog.missions[0].cargo_qty = 5;
+        catalog
+    }
+
+    fn cargo_aboard(session: &Session) -> bool {
+        session.pilot().missions().get(0).expect("held").aboard
+    }
+
+    fn boarded_fates(session: &Session) -> usize {
+        session
+            .story_raised()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    StoryEvent::ShipFate {
+                        fate: Fate::Boarded,
+                        ..
+                    }
+                )
+            })
+            .count()
+    }
+
+    /// `_HandlePlayerBoardAttempt`'s pickup path (@0x652ee-0x65570): the
+    /// pickup passes, the slot counts the ship boarded (@0x653a7), it is
+    /// marked boarded and its cargo goes aboard (@0x653ed), the line
+    /// names the cargo, and the velocity is matched (@0x6578f).
+    #[test]
+    fn boarding_a_pickup_ship_takes_its_cargo_and_counts_toward_a_board_or_rescue_goal() {
+        for goal in [2, 5] {
+            let catalog = picking_up(goal, 1, 0x0001);
+            let mut session = in_flight_with(&catalog, 1);
+            let _ = shown(&mut session);
+            assert!(!cargo_aboard(&session), "{goal}");
+            let (boarding, crimes) = board_at(&mut session, 0, DRIFT);
+            assert_eq!(
+                boarding,
+                Ok(crate::board::Boarding::MissionShip(Some(
+                    MissionBoardLine::Retrieved { cargo: Some(1) }
+                ))),
+                "{goal}"
+            );
+            assert_eq!(crimes, [], "no BoardPenalty");
+            assert_eq!(session.boarding(), None, "no plunder");
+            assert!(session.strikes.is_empty(), "no help called");
+            assert!(cargo_aboard(&session), "{goal}");
+            assert_eq!(ships_of(&session).boarded, 1, "{goal}");
+            assert!(session.npcs()[0].boarded, "{goal}");
+            assert_eq!(boarded_fates(&session), 1, "{goal}");
+            assert_eq!(session.player.velocity, DRIFT, "{goal}");
+            assert_eq!(shown(&mut session), [], "no LoadCargText");
+            settle(&mut session, &catalog);
+            assert_eq!(shown(&mut session), [ship_done("Rover done.")], "{goal}");
+            assert_eq!(bits(&session), [6, 7], "OnShipDone, then OnAbort");
+        }
+    }
+
+    /// @0x653a7 reads no `ShipGoal` and no `Flags`: the pickup path is
+    /// taken, and counts, ahead of any assist.
+    #[test]
+    fn a_pickup_ship_boarded_counts_whatever_its_goal_and_flags() {
+        for (goal, flags) in [(0, 0), (-1, 0), (5, 0x0409)] {
+            let catalog = picking_up(goal, 1, flags);
+            let mut session = in_flight_with(&catalog, 1);
+            let (boarding, _) = board_first(&mut session);
+            assert_eq!(
+                boarding,
+                Ok(crate::board::Boarding::MissionShip(Some(
+                    MissionBoardLine::Retrieved { cargo: Some(1) }
+                ))),
+                "{goal} {flags:#x}"
+            );
+            assert_eq!(ships_of(&session).boarded, 1, "{goal} {flags:#x}");
+            assert!(cargo_aboard(&session), "{goal} {flags:#x}");
+        }
+    }
+
+    /// The original re-runs the pickup for each ship of the mission
+    /// boarded, its cargo aboard already counted against the free space:
+    /// a second ship boarded with room for both tons counts again.
+    #[test]
+    fn a_second_pickup_ship_of_the_mission_boarded_with_room_counts_again() {
+        let catalog = picking_up(2, 2, 0);
+        let mut session = in_flight_with(&catalog, 2);
+        let (first, _) = board_at(&mut session, 0, Vec2::ZERO);
+        assert!(first.is_ok(), "{first:?}");
+        let (second, _) = board_at(&mut session, 1, Vec2::ZERO);
+        assert_eq!(
+            second,
+            Ok(crate::board::Boarding::MissionShip(Some(
+                MissionBoardLine::Retrieved { cargo: Some(1) }
+            )))
+        );
+        assert_eq!(ships_of(&session).boarded, 2);
+    }
+
+    /// `_DoMissionCargoPickup` refuses (@0x98292-0x9830b) and the board
+    /// jumps to @0x65fdb: the dialog, then #130, and nothing else: no
+    /// count, no mark, no velocity match.
+    #[test]
+    fn a_pickup_refused_for_room_refuses_the_board_and_changes_nothing_else() {
+        let catalog = picking_up(2, 1, 0x0001);
+        let mut session = in_flight_with(&catalog, 1);
+        let _ = shown(&mut session);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.cargo_tons = 100_000;
+        }
+        let (boarding, crimes) = board_at(&mut session, 0, DRIFT);
+        assert_eq!(boarding, Err(crate::board::BoardRefusal::CantBoard));
+        assert_eq!(crimes, []);
+        assert!(session.strikes.is_empty(), "no help called");
+        assert_eq!(session.boarding(), None);
+        assert!(!cargo_aboard(&session));
+        assert_eq!(ships_of(&session).boarded, 0);
+        assert!(!session.npcs()[0].boarded);
+        assert_eq!(boarded_fates(&session), 0);
+        assert_eq!(session.player.velocity, Vec2::ZERO, "not matched");
+        assert_eq!(
+            shown(&mut session),
+            [(
+                MissionTextKind::NoRoom,
+                crate::mission::cargo::NO_HOLDS_TO_LOAD.to_owned()
+            )]
+        );
+        settle(&mut session, &catalog);
+        assert!(!goals_met(&session));
     }
 
     /// The original's slap @0x6582b passes the boarded ship's mark, so

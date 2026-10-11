@@ -3384,14 +3384,20 @@ impl Session {
     /// nothing is rolled or granted, and the ship is marked boarded, and
     /// [`Fate::Boarded`] raised, only once the mission is accepted. A
     /// mission's special ship, but one of a failed mission, is only
-    /// marked boarded, after the velocity match, and maybe counted
+    /// marked boarded, its velocity matched, and maybe counted, a
+    /// `PickupMode` 2 mission's cargo picked up
     /// ([`Boarding::MissionShip`], see the `mission_ships` module); one
     /// of a failed mission is plundered, uncharged.
     ///
     /// # Errors
     ///
     /// The [`BoardRefusal`] that applies, and nothing changes;
-    /// [`BoardRefusal::NoTarget`] while landed or jumping.
+    /// [`BoardRefusal::NoTarget`] while landed or jumping. A `PickupMode`
+    /// 2 mission's special ship whose cargo has no room is
+    /// [`BoardRefusal::CantBoard`], and the pickup's refusal is queued
+    /// as a mission text, as `_DoMissionCargoPickup` shows its dialog
+    /// (@0x982ff); nothing else changes, the velocity not matched
+    /// (@0x65fdb).
     pub fn board(
         &mut self,
         law: &dyn LegalCode,
@@ -3410,10 +3416,12 @@ impl Session {
         });
         check_board(&self.player, self.condition, target)?;
         let npc = self.target().cloned().ok_or(BoardRefusal::NoTarget)?;
-        self.player.velocity = npc.state.velocity;
         if let Some(boarding) = self.board_mission_ship(&npc) {
+            let boarding = boarding?;
+            self.player.velocity = npc.state.velocity;
             return Ok(boarding);
         }
+        self.player.velocity = npc.state.velocity;
         if npc.mission.is_none() {
             let changes = law.penalties(Crime::Board, npc.govt, &self.govts);
             legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
