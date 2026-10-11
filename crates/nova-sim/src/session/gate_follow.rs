@@ -89,8 +89,7 @@ impl Session {
     /// [`Session::mission_ship_arrivals`]) brings the followers in, their
     /// `düde`s read from `catalog`, leaving to the enter-system hook the
     /// slots it is about to restart. Then each ship of a slot following
-    /// the player, attacking it, with ships left and its timer just
-    /// stopped (loop B, @0x67346-0x67487) comes out after the player, in
+    /// the player, attacking it, its timer just stopped (loop B, @0x67346-0x67487) comes out after the player, in
     /// order: at rest at `exit`, or where the player arrived under
     /// [`GateArrivalRule::LikeJump`], with the player's heading, emerging
     /// for `Rand(50) + 100` ticks, drawn on `chance`. A mission that
@@ -112,8 +111,9 @@ impl Session {
             .filter(|(_, active)| {
                 let ships = &active.ships;
                 let behav = self.lifecycle_record(active.mission).ships.behav;
+                // The original also asks for ships left (@0x67383): a slot
+                // with none has no ship here to move.
                 ships.system == ShipSystem::FollowsPlayer
-                    && ships.left > 0
                     && ShipBehav::from_code(behav) == ShipBehav::AttackPlayer
                     && ships.appear == NOT_APPEARING
             })
