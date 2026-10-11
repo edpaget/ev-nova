@@ -53,6 +53,7 @@ use crate::catalog::{GovtId, ShipId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::govt::{Governments, XENOPHOBIC};
+use crate::rank::Favour;
 use crate::rulebook::Rulebook;
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -96,8 +97,12 @@ pub struct Dispositions {
     pub untalkative: bool,
     /// Its government is quiet.
     pub quiet: bool,
-    /// It helps for free.
+    /// It helps for free: its government's `Flags2` 0x0010, or a rank's
+    /// [`HELPS_FREE`](crate::rank::HELPS_FREE).
     pub free_help: bool,
+    /// It fights a threat to the player for free: a rank's
+    /// [`HELPS_IN_BATTLE`](crate::rank::HELPS_IN_BATTLE).
+    pub battle_help: bool,
     /// It is a warship or interceptor that plunders.
     pub plunderer: bool,
     /// Its government is xenophobic.
@@ -106,9 +111,15 @@ pub struct Dispositions {
 
 impl Dispositions {
     /// What `npc`, of a ship type whose inherent government is
-    /// `inherent_govt`, makes of hails, by `govts` (see the module docs).
+    /// `inherent_govt`, makes of hails, by `govts`, the pilot's ranks
+    /// granting it `favour` (see the module docs).
     #[must_use]
-    pub fn of(npc: &Npc, inherent_govt: Option<GovtId>, govts: &Governments) -> Self {
+    pub fn of(
+        npc: &Npc,
+        inherent_govt: Option<GovtId>,
+        govts: &Governments,
+        favour: Favour,
+    ) -> Self {
         let govt = npc.govt;
         let fights = !npc.ai_type.trades();
         let bribable = match govt {
@@ -122,7 +133,8 @@ impl Dispositions {
             bribable,
             untalkative: govts.flag2(govt, UNTALKATIVE),
             quiet: govts.flag2(govt, QUIET) || govts.flag2(inherent_govt, QUIET),
-            free_help: govts.flag2(govt, FREE_HELP),
+            free_help: govts.flag2(govt, FREE_HELP) || favour.free_help,
+            battle_help: favour.battle_help,
             plunderer: fights && govts.flag(govt, PLUNDERS),
             xenophobe: govts.flag(govt, XENOPHOBIC),
         }
@@ -500,10 +512,12 @@ pub(crate) mod fixture {
 mod tests {
     use super::fixture::{hail, ship};
     use super::*;
-    use crate::catalog::GovtRecord;
+    use crate::catalog::{GovtRecord, RankId, RankRecord};
+    use crate::rank::{self, Favour, HELPS_FREE, HELPS_IN_BATTLE};
     use crate::rulebook::{RuleKey, RuleSource};
     use crate::testkit::govt;
     use crate::traffic::npc::{AiType, NpcId};
+    use std::collections::BTreeSet;
 
     const G: GovtId = GovtId(140);
     const INHERENT: GovtId = GovtId(141);
@@ -531,7 +545,7 @@ mod tests {
         let mut npc = ship();
         npc.ai_type = ai_type;
         npc.govt = govt;
-        Dispositions::of(&npc, Some(INHERENT), govts)
+        Dispositions::of(&npc, Some(INHERENT), govts, Favour::default())
     }
 
     /// Every flag on the inherent government, none on its own.
@@ -567,7 +581,7 @@ mod tests {
         let mut npc = ship();
         npc.govt = Some(G);
         assert_eq!(
-            Dispositions::of(&npc, None, &govts),
+            Dispositions::of(&npc, None, &govts, Favour::default()),
             Dispositions::default(),
             "no inherent government"
         );
@@ -615,6 +629,76 @@ mod tests {
         assert!(of(AiType::Interceptor, Some(G), &govts).plunderer);
         assert!(!of(AiType::BraveTrader, Some(G), &govts).plunderer);
         assert!(!of(AiType::Warship, Some(G), &inherited()).plunderer);
+    }
+
+    #[test]
+    fn rank_favour_gives_battle_help_and_ors_free_help_beside_the_government_flag() {
+        let mut npc = ship();
+        npc.govt = Some(G);
+        let plain = govts(0, 0, (0, 0));
+        let battle = Dispositions::of(
+            &npc,
+            None,
+            &plain,
+            Favour {
+                battle_help: true,
+                free_help: false,
+            },
+        );
+        assert!(battle.battle_help && !battle.free_help, "{battle:?}");
+        let free = Dispositions::of(
+            &npc,
+            None,
+            &plain,
+            Favour {
+                battle_help: false,
+                free_help: true,
+            },
+        );
+        assert!(free.free_help && !free.battle_help, "{free:?}");
+        let flagged = Dispositions::of(&npc, None, &govts(0, FREE_HELP, (0, 0)), Favour::default());
+        assert!(flagged.free_help && !flagged.battle_help, "{flagged:?}");
+    }
+
+    #[test]
+    fn the_rank_dispositions_reach_an_allied_and_not_an_unallied_ship_under_both_readings() {
+        // G (140, class 1, allied with class 2), A (141, class 2) and U
+        // (142, class 3).
+        let govts = Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                allies: [2, -1, -1, -1],
+                ..govt(140)
+            },
+            GovtRecord {
+                classes: [2, -1, -1, -1],
+                ..govt(141)
+            },
+            GovtRecord {
+                classes: [3, -1, -1, -1],
+                ..govt(142)
+            },
+        ]);
+        let rank_of = |id, govt| RankRecord {
+            affil_govt: Some(GovtId(govt)),
+            flags: HELPS_IN_BATTLE | HELPS_FREE,
+            ..crate::testkit::rank(id)
+        };
+        let records = [rank_of(130, 141), rank_of(131, 140)];
+        let made = |active: &[i16], ship_govt: i16, reach| {
+            let mut npc = ship();
+            npc.govt = Some(GovtId(ship_govt));
+            let active: BTreeSet<RankId> = active.iter().copied().map(RankId).collect();
+            let favour = rank::favour(&records, &active, npc.govt, &govts, reach);
+            let made = Dispositions::of(&npc, None, &govts, favour);
+            (made.battle_help, made.free_help)
+        };
+        let (engine, bible) = (RuleSource::Engine, RuleSource::Bible);
+        assert_eq!(made(&[130], 140, engine), (true, true), "allied");
+        assert_eq!(made(&[130], 142, engine), (false, false), "unallied");
+        assert_eq!(made(&[130], 140, bible), (false, false), "allied");
+        assert_eq!(made(&[130], 142, bible), (false, false), "unallied");
+        assert_eq!(made(&[131], 140, bible), (true, true), "its own");
     }
 
     /// NPC `id` of government 140, flying `goal`.

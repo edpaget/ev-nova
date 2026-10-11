@@ -69,6 +69,7 @@ use crate::hyperspace::JUMP_FUEL;
 use crate::mission::goals::ShipGoal;
 use crate::mission::ships::ShipBehav;
 use crate::person::{COMM_QUOTES, offers_to_join};
+use crate::rank;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 
@@ -212,12 +213,20 @@ impl Session {
         })
     }
 
-    /// What `npc`'s government and ship type make of hails.
+    /// What `npc`'s government and ship type make of hails, the pilot's
+    /// ranks reaching it by the session's `rank_govt_reach` rule.
     fn dispositions(&self, npc: &Npc) -> Dispositions {
         let inherent = self
             .ship_record(npc.ship)
             .and_then(|record| record.inherent_govt);
-        Dispositions::of(npc, inherent, &self.govts)
+        let favour = rank::favour(
+            &self.ranks,
+            &self.pilot.ranks,
+            npc.govt,
+            &self.govts,
+            self.rules.source_for(RuleKey::RankGovtReach),
+        );
+        Dispositions::of(npc, inherent, &self.govts, favour)
     }
 
     /// The hail of `npc` in conversation `talk`, as the options see it.
@@ -540,7 +549,7 @@ mod tests {
     use super::*;
     use crate::ai::NovaAi;
     use crate::catalog::{DudeId, DudeRecord, GovtId, GovtRecord, ShipId, SystemTraffic};
-    use crate::catalog::{StellarId, SystemId};
+    use crate::catalog::{RankId, RankRecord, StellarId, SystemId};
     use crate::combat::Strike;
     use crate::combat::hull::{HullSpec, NovaDisable};
     use crate::geometry::Vec2;
@@ -1201,6 +1210,43 @@ mod tests {
         press(&mut session, &catalog, 1, 99);
         let view = haggle(&mut session, &catalog, Haggle::LowerPrice);
         assert_eq!(view.reply, "Ha ha ha. What a comedian.");
+        assert_eq!(session.npcs()[0].goal, Goal::Idle);
+    }
+
+    /// `hailable`, its government 129 allied with the Federation, with
+    /// rank 128 of 129 carrying `flags`, active on the pilot of a session
+    /// as `targeting` makes it.
+    fn ranked(flags: u16) -> (FakePilotCatalog, Session) {
+        let mut catalog = hailable();
+        catalog.govts[1].allies = [1, -1, -1, -1];
+        catalog.ranks = vec![RankRecord {
+            affil_govt: Some(OTHER),
+            flags,
+            ..crate::testkit::rank(128)
+        }];
+        let mut session = targeting(&catalog);
+        session.pilot.ranks.insert(RankId(128));
+        (catalog, session)
+    }
+
+    #[test]
+    fn a_rank_allied_with_the_ships_government_gives_it_free_help_by_the_engine_only() {
+        let (catalog, mut session) = ranked(crate::rank::HELPS_FREE);
+        session.pilot.reserves.fuel.now = 40.0;
+        hail(&mut session, &catalog);
+        let view = press(&mut session, &catalog, 1, 99);
+        assert_eq!(view.reply, "Okay, I'm on my way.");
+        assert_eq!(view.asking, None);
+        assert_eq!(session.pilot().cash, 100_000);
+        assert_eq!(session.npcs()[0].goal, Goal::Assist(Help::Refuel));
+        let (catalog, mut session) = ranked(crate::rank::HELPS_FREE);
+        session.rules =
+            Rulebook::default().with_override(RuleKey::RankGovtReach, RuleSource::Bible);
+        session.pilot.reserves.fuel.now = 40.0;
+        hail(&mut session, &catalog);
+        let view = press(&mut session, &catalog, 1, 99);
+        assert_eq!(view.reply, "I'll help you out if you pay me.");
+        assert_eq!(view.asking, Some(3000));
         assert_eq!(session.npcs()[0].goal, Goal::Idle);
     }
 
