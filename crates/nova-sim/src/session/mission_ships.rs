@@ -310,6 +310,9 @@ impl Session {
         match (id.hook, *event) {
             (ENTERED, StoryEvent::EnteredSystem { how, .. }) => {
                 self.restart_on_entry(slot, how, chance);
+                if restarts_on(how) {
+                    self.aux_on_entry(slot, how, chance);
+                }
                 if self.landed.is_none() {
                     self.check_ship_goals(slot, false, chance);
                 }
@@ -318,6 +321,7 @@ impl Session {
                 self.check_ship_goals(slot, false, chance);
             }
             (TOOK_OFF, StoryEvent::TookOff { .. }) => {
+                self.restart_aux(slot, chance);
                 if self.traffic_due {
                     if !self.take_off_checks.contains(&slot) {
                         self.take_off_checks.push(slot);
@@ -433,7 +437,12 @@ impl Session {
     /// 0x0001 and the slot still holds it ([`Session::auto_abort`]),
     /// drawing on `chance`: as its goals are met, and as its ships are
     /// set up or come in by hyperspace (see the module docs).
-    fn abort_on_spawn(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
+    pub(super) fn abort_on_spawn(
+        &mut self,
+        slot: u8,
+        record: &MissionRecord,
+        chance: &mut dyn Chance,
+    ) {
         if record.flags & AUTO_ABORT != 0 && self.pilot.missions.holds(slot, record.id) {
             self.auto_abort(slot, record, chance);
         }
@@ -551,48 +560,72 @@ impl Session {
         entering: Option<Entrance>,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
-        for slot in slots {
-            let Some(active) = self.pilot.missions.get(slot) else {
-                continue;
-            };
-            let record = self.lifecycle_record(active.mission);
-            let state = active.ships.clone();
-            if !self.ships_here(state.system)
-                || entering.is_some_and(|how| self.hook_restarts(&record, active, how))
-            {
-                continue;
+        let hook_due = entering.is_some_and(restarts_on);
+        let slots: Vec<(u8, MissionId)> = self
+            .pilot
+            .missions
+            .iter()
+            .map(|(slot, active)| (slot, active.mission))
+            .collect();
+        for (slot, mission) in slots {
+            if !hook_due {
+                self.aux_arrivals(catalog, slot, chance);
             }
-            let coming = if ShipStart::from_code(record.ships.start) == ShipStart::ComesLater {
-                state.left - state.arrived
-            } else {
-                state.left
-            };
-            if coming <= 0 {
-                continue;
+            self.special_arrivals(catalog, slot, entering, chance);
+            if !hook_due {
+                self.tick_aux(slot, mission);
             }
-            let mut appear = state.appear;
-            if (1..=COUNTED).contains(&appear) {
-                appear -= 1;
-            }
-            // With any to come, ships are left.
-            let fires = appear == 0;
-            if fires {
-                appear = -1;
-            }
-            // The timer is kept, not saved, as it runs: no save is due.
-            if let Some(active) = self.pilot.missions.get_mut(slot) {
-                active.ships.appear = appear;
-            }
-            if !fires {
-                continue;
-            }
-            let count = self.bring_in_mission_ships(catalog, slot, &record, coming, chance);
-            if let Some(active) = self.pilot.missions.get_mut(slot) {
-                active.ships.arrived = active.ships.arrived.saturating_add(count);
-            }
-            self.abort_on_spawn(slot, &record, &mut &mut *chance);
         }
+    }
+
+    /// The special ships' part of [`Session::mission_ship_arrivals`] for
+    /// the slot `slot`, read afresh: nothing once it is free.
+    fn special_arrivals(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        slot: u8,
+        entering: Option<Entrance>,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        let Some(active) = self.pilot.missions.get(slot) else {
+            return;
+        };
+        let record = self.lifecycle_record(active.mission);
+        let state = active.ships.clone();
+        if !self.ships_here(state.system)
+            || entering.is_some_and(|how| self.hook_restarts(&record, active, how))
+        {
+            return;
+        }
+        let coming = if ShipStart::from_code(record.ships.start) == ShipStart::ComesLater {
+            state.left - state.arrived
+        } else {
+            state.left
+        };
+        if coming <= 0 {
+            return;
+        }
+        let mut appear = state.appear;
+        if (1..=COUNTED).contains(&appear) {
+            appear -= 1;
+        }
+        // With any to come, ships are left.
+        let fires = appear == 0;
+        if fires {
+            appear = -1;
+        }
+        // The timer is kept, not saved, as it runs: no save is due.
+        if let Some(active) = self.pilot.missions.get_mut(slot) {
+            active.ships.appear = appear;
+        }
+        if !fires {
+            return;
+        }
+        let count = self.bring_in_mission_ships(catalog, slot, &record, coming, chance);
+        if let Some(active) = self.pilot.missions.get_mut(slot) {
+            active.ships.arrived = active.ships.arrived.saturating_add(count);
+        }
+        self.abort_on_spawn(slot, &record, &mut &mut *chance);
     }
 
     /// Brings `coming` special ships of `record`, the mission in `slot`,
@@ -1188,7 +1221,17 @@ pub(super) mod tests {
         aux: AuxShip,
         flags: u16,
     ) -> FakePilotCatalog {
-        let mut catalog = ships_catalog(ships);
+        with_aux(ships_catalog(ships), aux, flags)
+    }
+
+    /// `catalog`, built on [`ships_catalog`], with düde 151 (traders of
+    /// govt 129 flying ship 201) and its mission 140 of `Flags` `flags`
+    /// with `aux`.
+    pub(in crate::session) fn with_aux(
+        mut catalog: FakePilotCatalog,
+        aux: AuxShip,
+        flags: u16,
+    ) -> FakePilotCatalog {
         catalog.ship_records.push(ship(201, FAST));
         catalog.dudes.push((
             crate::catalog::DudeId(151),

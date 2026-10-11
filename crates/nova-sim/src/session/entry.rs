@@ -674,9 +674,11 @@ impl Session {
             TrafficStep::Retarget => {
                 let table = self.spawn_table(catalog);
                 let fleet: BTreeSet<_> = self.fleet.iter().flatten().copied().collect();
+                self.give_back_aux_ships(&fleet);
                 self.traffic.retarget(table, &fleet);
             }
             TrafficStep::Reset => {
+                self.give_back_aux_ships(&BTreeSet::new());
                 self.traffic = Traffic::new();
                 self.traffic_due = true;
                 self.fleet.clear();

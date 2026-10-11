@@ -328,6 +328,7 @@
 //! data the simulation does not handle yet, each once a session, with
 //! [`Session::take_diagnostics`].
 
+mod aux_ships;
 mod control;
 mod edit;
 mod entry;
@@ -1244,6 +1245,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
         entering: Option<Entrance>,
     ) {
+        self.give_back_aux_ships(&BTreeSet::new());
         let table = self.spawn_table(catalog);
         let (missions, set_up) = self.setup_mission_ships(&table, entering, chance);
         let facts = control::Facts {

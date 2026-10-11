@@ -101,6 +101,7 @@
 //! | [`LegalRecords`](RuleKey::LegalRecords) | `legal_records` | one record a system (`_playerRecord`), read in the player's system (`_HandlePlayerDockRequest` @0x67903, `_IsMissionAvailable` @0x9b59d, `_DoTradeDialog` @0x5dc17; see [`legal`](crate::legal)) | one record a government, read through the system's (landing: the stellar's) government |
 //! | [`LeftRespawn`](RuleKey::LeftRespawn) | `left_respawn` | only a chase-off goal's ship (`ShipGoal` 6) that leaves the system lowers its mission's ships left, so a ship of another goal comes back at the next setup (`_LowLevelAIHandler` @0x85983-0x859aa; see [`mission::goals`](crate::mission::goals)) | any departed mission ship not of `ShipSyst` -6 lowers its ships left, and is not brought back\* |
 //! | [`LandedLeaves`](RuleKey::LandedLeaves) | `landed_leaves` | a mission ship that lands does not leave the system, as the original's waits at the stellar (`_HighLevelAIHandler` @0x8dadc-0x8db5a), so the engine taking it out counts nothing and it comes back at the next setup (see [`story`](crate::story)) | it leaves the system, counted as one that jumped out\* |
+//! | [`AuxGate`](RuleKey::AuxGate) | `aux_gate` | at a hypergate or wormhole exit, the auxiliary ships of a mission of `AuxShipSyst` -1 come no more until their countdown next restarts (`_HandlePlayerDockRequest` @0x6729b-0x672ac; see [`mission::aux`](crate::mission::aux)) | the exit restarts them as a jump does: "-1: any system" |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
@@ -1276,6 +1277,16 @@ rule_keys! {
     /// behaviour, not anything the Bible says (see the session's
     /// `mission_ships` module).
     GateFollow => "gate_follow",
+    /// What the player's exit from a hypergate or wormhole does to the
+    /// auxiliary ships of a mission whose `AuxShipSyst` is -1. By the
+    /// engine, as the original's loop A does after the enter-system
+    /// hook's restart (`_HandlePlayerDockRequest` @0x6729b-0x672ac): their
+    /// countdown is set to 0x7fff, above the 32000 it counts down from,
+    /// so they come no more until the next restart (a jump, an `M` or
+    /// `N` in flight, or a take-off). By the other reading, the Bible's
+    /// "-1: any system": the exit restarts them as a jump does (see
+    /// [`mission::aux`](crate::mission::aux)).
+    AuxGate => "aux_gate",
 }
 
 impl RuleKey {
@@ -1443,7 +1454,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1483,7 +1494,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1505,7 +1516,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1530,7 +1541,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1556,7 +1567,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1576,7 +1587,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1596,7 +1607,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(5),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1616,7 +1627,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(2),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -1629,7 +1640,18 @@ mod tests {
             Rulebook::default().source_for(RuleKey::GateFollow),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::GateFollow));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(1), Some(&RuleKey::GateFollow));
+    }
+
+    #[test]
+    fn the_aux_gate_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::AuxGate.key(), "aux_gate");
+        assert_eq!(RuleKey::from_key("aux_gate"), Some(RuleKey::AuxGate));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::AuxGate),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -1640,7 +1662,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -1739,7 +1761,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(13),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -1881,7 +1903,8 @@ mod tests {
                 RuleKey::LegalRecords,
                 RuleKey::LeftRespawn,
                 RuleKey::LandedLeaves,
-                RuleKey::GateFollow
+                RuleKey::GateFollow,
+                RuleKey::AuxGate
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
