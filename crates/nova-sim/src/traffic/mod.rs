@@ -62,6 +62,7 @@ pub mod autopilot;
 pub mod emerge;
 pub mod npc;
 pub mod spawn;
+pub mod strength;
 pub mod table;
 
 use crate::ai::interceptor::within_reach;
