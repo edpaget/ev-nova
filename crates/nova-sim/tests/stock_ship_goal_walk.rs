@@ -305,6 +305,15 @@ fn outcome(mission: i16) -> Outcome {
         .map_or(Outcome::Completed, |&(_, outcome, _)| outcome)
 }
 
+/// The missions of `failing` that `outcomes` lists too.
+fn listed_in_both(failing: &[ExpectedFailure], outcomes: &[(i16, Outcome, &str)]) -> Vec<i16> {
+    failing
+        .iter()
+        .map(|failure| failure.mission)
+        .filter(|&id| outcomes.iter().any(|&(listed, ..)| listed == id))
+        .collect()
+}
+
 /// Whether `item` is an rdm ref.
 fn is_rdm_ref(item: &str) -> bool {
     let Some(rest) = item.strip_prefix("rdm:") else {
@@ -397,6 +406,33 @@ fn the_expected_lists_are_well_formed() {
     for &(id, _, reason) in OUTCOMES {
         assert!(!reason.is_empty(), "{id}: a reason");
     }
+    assert_eq!(
+        listed_in_both(EXPECTED_FAILURES, OUTCOMES),
+        [0_i16; 0],
+        "an expected failure is not also an outcome"
+    );
+}
+
+#[test]
+fn a_mission_listed_as_failing_and_as_an_outcome_is_caught() {
+    let failing = [
+        ExpectedFailure {
+            mission: 132,
+            reason: "it cannot",
+            item: "rdm:task/fix-it",
+        },
+        ExpectedFailure {
+            mission: 141,
+            reason: "it cannot",
+            item: "rdm:task/fix-it",
+        },
+    ];
+    let outcomes = [
+        (141, Outcome::EndsAtGoal, "ends at its goal"),
+        (133, Outcome::AbortsAtSpawn, "aborts as its ships come in"),
+    ];
+    assert_eq!(listed_in_both(&failing, &outcomes), [141]);
+    assert_eq!(listed_in_both(&failing[..1], &outcomes), [0_i16; 0]);
 }
 
 #[test]
