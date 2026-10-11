@@ -272,7 +272,9 @@
 //!   ([`FlightView::with_rules`]).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
-//!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance;
+//!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance,
+//!   and has it draw the visit's news as the bar opens
+//!   ([`FlightView::open_bar`], [`FlightView::news`]);
 //!   the session's hire terms and control bits are set on the screen
 //!   ([`FlightView::with_hire_terms`], [`FlightView::with_control_bits`]),
 //!   and its disputed hiring rules come from its rule set
@@ -302,7 +304,7 @@ use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
 use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
-    HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText,
+    HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText, News,
     NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, TagNames, VenueOffer,
 };
 use nova_sim::{
@@ -2410,6 +2412,22 @@ impl<C> FlightView<C> {
             .as_mut()
             .ok()?
             .escorts_for_hire(&mut self.chance)
+    }
+
+    /// Opens the bar of the stellar landed on as [`Session::open_bar`]
+    /// does, drawing the visit's news on the flight's chance; false for a
+    /// session that failed, or not landed at a bar.
+    pub fn open_bar(&mut self) -> bool {
+        self.session
+            .as_mut()
+            .is_ok_and(|session| session.open_bar(&mut self.chance))
+    }
+
+    /// The news of the bar visit under way, as [`Session::news`] gives
+    /// it; none for a session that failed.
+    #[must_use]
+    pub fn news(&self) -> Option<&News> {
+        self.session.as_ref().ok()?.news()
     }
 
     /// Hires a ship as [`Session::hire`] does, on the flight's chance; a
@@ -10233,6 +10251,40 @@ mod tests {
         });
         assert_eq!(broken.escorts_for_hire(), None);
         assert_eq!(broken.hire(ShipId(129)), Err(HireRefusal::NoBar));
+    }
+
+    #[test]
+    fn the_bars_news_is_drawn_through_the_session_on_the_flights_chance() {
+        let always = Rc::new(RefCell::new(Always::default()));
+        let shared: Rc<RefCell<dyn Chance>> = always.clone();
+        let strings = FakeCatalog {
+            strings: vec![
+                (8100, vec!["C1".to_owned(), "C2".to_owned()]),
+                (8101, vec!["G1".to_owned(), "G2".to_owned()]),
+            ],
+            ..catalog()
+        };
+        let mut view = FlightView::new(hiring())
+            .with_chance(SharedChance::new(shared))
+            .with_strings(Rc::new(strings));
+        assert!(!view.open_bar(), "in flight");
+        assert_eq!(view.news(), None);
+        land_now(&mut view);
+        assert!(view.open_bar());
+        assert_eq!(
+            view.news(),
+            Some(&nova_sim::News {
+                commercial: "C2".to_owned(),
+                story: "G2".to_owned(),
+            }),
+            "each the last string, as the flight's chance rolls"
+        );
+        let mut broken = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..hiring()
+        });
+        assert!(!broken.open_bar());
+        assert_eq!(broken.news(), None);
     }
 
     // The mission screens.

@@ -1713,7 +1713,8 @@ impl AppScreen {
     }
 
     /// The spaceport's input, all of it: the outfitter opening tells the
-    /// flight and shows its outfitter afresh; an order on its exchange trades,
+    /// flight and shows its outfitter afresh; the bar opening has the
+    /// flight draw the visit's news, which the bar's News then shows; an order on its exchange trades,
     /// and one in its outfitter buys or sells, and the exchange and the
     /// outfitter as they then are go back to it. A ship asked for in its
     /// shipyard opens the prompt for its name, when it can be bought; the
@@ -1753,6 +1754,16 @@ impl AppScreen {
             let flight = self.flight.as_mut().expect(ENTERED);
             let _ = flight.abort_mission(slot);
             spaceport.set_mission_info(flight.mission_info());
+        }
+        // The bar draws the visit's news as it opens, before News can
+        // show it; News shows what was drawn.
+        if spaceport.take_bar_opened() {
+            self.flight.as_mut().expect(ENTERED).open_bar();
+        }
+        if spaceport.take_news_request()
+            && let Some(news) = self.flight.as_ref().expect(ENTERED).news()
+        {
+            spaceport.open_news(news);
         }
         if spaceport.take_hire_request()
             && let Some(list) = self.flight.as_mut().expect(ENTERED).escorts_for_hire()
