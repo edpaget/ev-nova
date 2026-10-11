@@ -52,7 +52,9 @@
 //!   `_SpawnPerson` places it through `_GenericRandomShipSpawn`'s box
 //!   alone (@0x3ccf0-0x3cd1a).
 //! - **Arrivals** ([`arrivals`]), every tick while the system holds fewer
-//!   NPCs than `AvgShips`, draw `Rand(500)`. On 1, when the system's
+//!   NPCs than `AvgShips`, draw `Rand(500)`. The count leaves out the
+//!   player's escorts and fighters but takes in an NPC carrier's fighters
+//!   (`_EnterMoreShips` @0x43b14-0x43b5c). On 1, when the system's
 //!   `DudeTypes` name fleets, `Rand(100) + 1` at or below the sum of their
 //!   `% Prob` brings one in, picked by `% Prob`; otherwise it falls
 //!   through to 0's case. On 0, when the system has a `düde`, the person
@@ -348,8 +350,9 @@ pub fn initial(
     out
 }
 
-/// The ships that arrive this tick in a system holding `present` NPCs,
-/// its persons drawn as `draw` says (see the module docs).
+/// The ships that arrive this tick in a system holding `present` ships
+/// that count toward `AvgShips` (not the player's), its persons drawn as
+/// `draw` says (see the module docs).
 pub fn arrivals(
     table: &SpawnTable,
     present: usize,

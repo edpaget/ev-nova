@@ -23,7 +23,8 @@
 //! tick ([`Traffic::tick_in`]) in its [`World`] (the stellars, the player,
 //! the governments and the player's legal record there), in order:
 //!
-//! 1. the arrival roll;
+//! 1. the arrival roll, while fewer NPCs than `AvgShips` that are not the
+//!    player's ([`Npc::is_players`]) are in the system;
 //! 2. each flying, intact NPC answers the fight's strikes since the last
 //!    tick ([`Behaviour::react`]): the ship it targets, its provocation,
 //!    and any goal it takes at once;
@@ -246,7 +247,7 @@ impl Traffic {
             world: world.persons,
             here: self.person_names(),
         };
-        let arrivals = spawn::arrivals(&self.table, self.npcs.len(), &mut draw, chance);
+        let arrivals = spawn::arrivals(&self.table, self.strangers(), &mut draw, chance);
         self.add(arrivals, world.persons.grudges);
         self.react(behaviour, world, strikes);
         for npc in &mut self.npcs {
@@ -369,6 +370,15 @@ impl Traffic {
     /// The NPCs, in the order they appeared, to fight with.
     pub(crate) fn npcs_mut(&mut self) -> &mut [Npc] {
         &mut self.npcs
+    }
+
+    /// The NPCs that count toward the system's `AvgShips`: those not the
+    /// player's ([`Npc::is_players`]). `_EnterMoreShips` (@0x43b14-0x43b45)
+    /// counts the ships in the system whose parent (+0x9a) is not the
+    /// player, and rolls for an arrival only while that count is below
+    /// `AvgShips` (@0x43b5c).
+    fn strangers(&self) -> usize {
+        self.npcs.iter().filter(|npc| !npc.is_players()).count()
     }
 
     /// Adds `npc` to the system, numbered as the next NPC, and gives its
@@ -989,6 +999,117 @@ mod tests {
         let mut chance = Draws::of(&[0]);
         traffic.tick(&behaviour, &[], &mut chance);
         assert!(chance.asked.is_empty(), "at AvgShips, no roll");
+    }
+
+    /// The player's escort duty on slot `slot`.
+    fn duty(slot: u8) -> crate::escort::EscortDuty {
+        crate::escort::EscortDuty {
+            slot,
+            ships: 3,
+            spacing: 30.0,
+            order: None,
+        }
+    }
+
+    /// The number of NPCs that are not the player's.
+    fn strangers(traffic: &Traffic) -> usize {
+        traffic
+            .npcs()
+            .iter()
+            .filter(|npc| npc.escort.is_none())
+            .count()
+    }
+
+    /// Ticks once on the draws that bring ship 200 in on its roll; what
+    /// was asked.
+    fn tick_arrival(traffic: &mut Traffic) -> Vec<u32> {
+        let mut chance = Draws::of(&[0, 6, 6, 0, 0, 90]);
+        traffic.tick(&Recording::deciding(Goal::Idle), &[], &mut chance);
+        chance.asked
+    }
+
+    #[test]
+    fn escorts_do_not_count_toward_avg_ships() {
+        // `_EnterMoreShips` (0x43b14) leaves out ships whose parent
+        // (+0x9a) is the player.
+        let mut traffic = Traffic::new();
+        traffic.enter(table(1), &mut Draws::of(&[0]));
+        traffic.add_npc(Npc {
+            escort: Some(duty(2)),
+            ..crate::testkit::npc(0, ShipStats::default())
+        });
+        let asked = tick_arrival(&mut traffic);
+        assert_eq!(asked.first(), Some(&spawn::ARRIVAL_ODDS), "rolled");
+        assert_eq!(strangers(&traffic), 1);
+    }
+
+    #[test]
+    fn a_system_fills_to_avg_ships_beside_the_players_escorts() {
+        let mut traffic = Traffic::new();
+        traffic.enter(table(2), &mut Draws::of(&[0, 0]));
+        for slot in [2, 3] {
+            traffic.add_npc(Npc {
+                escort: Some(duty(slot)),
+                ..crate::testkit::npc(0, ShipStats::default())
+            });
+        }
+        for _ in 0..2 {
+            assert_eq!(tick_arrival(&mut traffic).first(), Some(&500));
+        }
+        assert_eq!((strangers(&traffic), traffic.npcs().len()), (2, 4));
+        assert!(
+            tick_arrival(&mut traffic).is_empty(),
+            "at AvgShips, no roll"
+        );
+    }
+
+    /// The carrier of a fighter launched from `ship`'s bay.
+    fn launched_from(ship: ShipRef) -> crate::bay::Carrier {
+        crate::bay::Carrier {
+            ship,
+            window: 100.0,
+            reach: 30.0,
+        }
+    }
+
+    /// The player's fighters are not counted: `_LaunchFighter` (0x3d870)
+    /// gives a fighter its carrier's index as its parent (+0x9a), and the
+    /// player's launches (`_FirePlayerWeapon` 0x62c61) come from ship 0,
+    /// the player, which `_EnterMoreShips` (0x43b14) leaves out.
+    #[test]
+    fn the_players_fighters_do_not_count_toward_avg_ships() {
+        let mut traffic = Traffic::new();
+        traffic.enter(table(1), &mut Draws::of(&[0]));
+        traffic.add_npc(Npc {
+            escort: Some(duty(2)),
+            carrier: Some(launched_from(ShipRef::Player)),
+            ..crate::testkit::npc(0, ShipStats::default())
+        });
+        assert_eq!(tick_arrival(&mut traffic).first(), Some(&500), "rolled");
+        assert_eq!(strangers(&traffic), 1);
+    }
+
+    /// An NPC carrier's fighters are counted: `_LaunchFighter` (0x3d870)
+    /// gives a fighter its carrier's index as its parent (+0x9a), and an
+    /// NPC carrier's launches (`_AILaunchFighter` 0x8141c) come from a
+    /// ship of index 1 or more, which `_EnterMoreShips` (0x43b14) counts,
+    /// unlike the player's (`_FirePlayerWeapon` 0x62c61).
+    #[test]
+    fn an_npc_carriers_fighters_count_toward_avg_ships() {
+        let mut traffic = Traffic::new();
+        traffic.enter(table(2), &mut Draws::of(&[0, 0]));
+        let carrier = traffic.add_npc(crate::testkit::npc(0, ShipStats::default()));
+        let fighter = traffic.add_npc(Npc {
+            leader: Some(carrier),
+            carrier: Some(launched_from(ShipRef::Npc(carrier))),
+            ..crate::testkit::npc(0, ShipStats::default())
+        });
+        assert!(
+            tick_arrival(&mut traffic).is_empty(),
+            "at AvgShips, no roll"
+        );
+        traffic.remove(fighter);
+        assert_eq!(tick_arrival(&mut traffic).first(), Some(&500), "rolled");
     }
 
     #[test]

@@ -174,13 +174,23 @@ pub struct Npc {
 }
 
 impl Npc {
+    /// Whether it is the player's: an escort hired or captured, or a
+    /// fighter the player launched. In the original its parent (+0x9a)
+    /// is the player (0), and `_EnterMoreShips` (@0x43b14) leaves it out
+    /// of the count it holds to `AvgShips`. An NPC carrier's fighters and
+    /// orphaned fighters are not the player's.
+    #[must_use]
+    pub fn is_players(&self) -> bool {
+        self.escort.is_some()
+    }
+
     /// Its fleet: the player, for the player's escort; otherwise the lead
     /// it escorts, or itself. Ships of one fleet never hit each other
     /// (`_ShipsShareParent` @0x7926), and count each other's missiles
     /// friendly.
     #[must_use]
     pub fn fleet(&self) -> ShipRef {
-        if self.escort.is_some() {
+        if self.is_players() {
             ShipRef::Player
         } else {
             ShipRef::Npc(self.leader.unwrap_or(self.id))
@@ -295,6 +305,37 @@ mod tests {
             ..crate::testkit::npc(1, ShipStats::default())
         };
         assert!(hunter.threatens(other));
+    }
+
+    #[test]
+    fn only_the_players_escorts_and_fighters_are_the_players() {
+        let traffic = crate::testkit::npc(3, ShipStats::default());
+        assert!(!traffic.is_players());
+        let carrier = crate::bay::Carrier {
+            ship: ShipRef::Npc(NpcId(3)),
+            window: 100.0,
+            reach: 30.0,
+        };
+        let npc_fighter = Npc {
+            leader: Some(NpcId(3)),
+            carrier: Some(carrier),
+            ..crate::testkit::npc(4, ShipStats::default())
+        };
+        assert!(!npc_fighter.is_players());
+        let players = Npc {
+            escort: Some(crate::escort::EscortDuty {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+                order: None,
+            }),
+            carrier: Some(crate::bay::Carrier {
+                ship: ShipRef::Player,
+                ..carrier
+            }),
+            ..crate::testkit::npc(5, ShipStats::default())
+        };
+        assert!(players.is_players());
     }
 
     #[test]
