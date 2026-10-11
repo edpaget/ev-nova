@@ -973,6 +973,28 @@ mod tests {
     }
 
     #[test]
+    fn a_quote_names_the_players_rank_once_one_is_granted() {
+        let mut catalog = quoters([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
+        catalog.strings = vec![(7101, vec!["Halt, <PRK>! A <RRK>?".to_owned()])];
+        catalog.ranks = vec![crate::catalog::RankRecord {
+            name: "Commander".to_owned(),
+            conv_name: "Cmdr".to_owned(),
+            ..crate::testkit::rank(128)
+        }];
+        let pilot = Pilot::new(&catalog, "Stock").expect("a pilot");
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.populate(&catalog, &mut NeverFires);
+        session.run_set(
+            &crate::control::SetExpr::parse("K128").expect("parses"),
+            &mut crate::testkit::Scripted::default(),
+        );
+        session.traffic.npcs_mut()[1].person = None;
+        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        let (said, _) = quote_tick(&catalog, &mut session, &[77]);
+        assert_eq!(said, ["Halt, Cmdr! A Commander?"], "not captain");
+    }
+
+    #[test]
     fn a_plain_person_says_its_quote_on_a_draw_of_0_in_140() {
         let (catalog, mut session) = quoting([0, 0]);
         assert_eq!(
