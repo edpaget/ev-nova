@@ -164,8 +164,17 @@ pub struct Hail<'a> {
     pub busy: bool,
     /// Whether it is already assisting the player.
     pub assisting_player: bool,
-    /// Whether any NPC threatens the player.
+    /// Whether any NPC threatens the player (`_IsPlayerThreatened`
+    /// @0x82442).
     pub player_threatened: bool,
+    /// Whether an NPC other than the ship hailed threatens the player and
+    /// is of a government [`Governments::npc_enemies`] finds an enemy of
+    /// the ship's (`_IsPlayerThreatenedByMyEnemy` @0x82483-0x824f5, see
+    /// [`Hail::new`]).
+    pub threatened_by_enemy: bool,
+    /// Every NPC in the system, the ship hailed among them: what battle
+    /// help picks its target from ([`Hail::threats_to_player`]).
+    pub npcs: &'a [Npc],
     /// The help the player needs, if any.
     pub need: Option<Help>,
     /// The comm quote (an entry in `STR#` 7100) Greetings says in place
@@ -210,6 +219,18 @@ impl Hail<'_> {
 }
 
 impl<'a> Hail<'a> {
+    /// Every NPC but the ship hailed that threatens the player
+    /// ([`Npc::threatens_player`]), in the system's order: the ships
+    /// `_AIFightEnemyThreatToPlayer` (@0x82c9f-0x82d11) picks among.
+    pub fn threats_to_player(&self) -> impl Iterator<Item = &'a Npc> + use<'a> {
+        let me = self.npc.id;
+        self.npcs
+            .iter()
+            .filter(move |other| other.id != me && other.threatens_player())
+    }
+}
+
+impl<'a> Hail<'a> {
     /// The hail of `npc` among `around`, of `dispositions`, in
     /// conversation `talk`, the player needing `need`, of `mission` when
     /// it is a mission ship ([`Hail::mission`]). It is busy while
@@ -217,10 +238,27 @@ impl<'a> Hail<'a> {
     /// formation (goals 10 and 12), or an NPC attacks or snipes at it
     /// (`_AIIsShipBusy` @0x82fac, `_IsShipThreatened` @0x82068); the
     /// player is threatened while any NPC threatens it.
+    ///
+    /// It is threatened by the ship's enemy
+    /// (`_IsPlayerThreatenedByMyEnemy` @0x82483-0x824f5) when another NPC
+    /// threatens it whose government [`Governments::npc_enemies`] finds
+    /// an enemy of the ship's. The original loops over slots 1-63: an
+    /// active one (@0x824a0), not the ship (@0x824ac), that
+    /// `_ExtendedIsThreatToPlayer` holds for (@0x824b8) and
+    /// `_IsShipMyEnemy` (@0x8196c) finds the ship's enemy (@0x824cf).
+    /// `_IsShipMyEnemy` needs two ships with different governments that
+    /// `_GovtEnemies` finds enemies, or the other's xenophobic and not
+    /// allied (@0x819c9-0x81a14): `npc_enemies`. Its test that the other
+    /// is not the shareware nag ship (`+0xc8d0 != 0x3ff` @0x819a4,
+    /// `_SpawnNagShip` @0x61b5) is left out, as the engine has none.
+    /// `_ExtendedIsThreatToPlayer` (@0x81b70) is read as
+    /// [`Npc::threatens_player`]; its broader branches (visibility, the
+    /// player's own escorts, attacks on the player's fighters, a threat
+    /// through an escort) are deferred. Nothing plays a sound.
     #[must_use]
     pub fn new(
         npc: &'a Npc,
-        around: &Surroundings,
+        around: &Surroundings<'a>,
         dispositions: Dispositions,
         talk: &Conversation,
         need: Option<Help>,
@@ -245,6 +283,12 @@ impl<'a> Hail<'a> {
                 || attacked,
             assisting_player,
             player_threatened: around.npcs.iter().any(Npc::threatens_player),
+            threatened_by_enemy: around.npcs.iter().any(|other| {
+                other.id != npc.id
+                    && other.threatens_player()
+                    && around.govts.npc_enemies(npc.govt, other.govt)
+            }),
+            npcs: around.npcs,
             need,
             quote: None,
             joins: false,
@@ -268,6 +312,10 @@ pub enum Deed {
     Release,
     /// The person hailed joins the player's fleet, as itself, at once.
     Join,
+    /// It attacks this NPC, a threat to the player
+    /// (`_AIFightEnemyThreatToPlayer` @0x82c80), and calls for
+    /// reinforcements (`_AICallForReinforcements` @0x9636d).
+    Defend(NpcId),
 }
 
 /// A price a ship asks, and what it says and does as the haggling ends.
@@ -499,6 +547,8 @@ pub(crate) mod fixture {
             busy: false,
             assisting_player: false,
             player_threatened: false,
+            threatened_by_enemy: false,
+            npcs: &[],
             need: None,
             quote: None,
             joins: false,
@@ -709,12 +759,21 @@ mod tests {
         npc
     }
 
-    /// The hail of `npcs[0]` among `npcs`, in a system of 140 with the
-    /// player's record `record`, its conversation `talk`.
-    fn hailing<'a>(npcs: &'a [Npc], record: i16, talk: &Conversation) -> Hail<'a> {
-        let govts = govts(0, 0, (0, 0));
+    /// No flags on 140 or 141.
+    fn plain() -> Governments {
+        govts(0, 0, (0, 0))
+    }
+
+    /// The hail of `npcs[0]` among `npcs` and `govts`, in a system of 140
+    /// with the player's record `record`, its conversation `talk`.
+    fn hailing<'a>(
+        npcs: &'a [Npc],
+        govts: &'a Governments,
+        record: i16,
+        talk: &Conversation,
+    ) -> Hail<'a> {
         let around = Surroundings {
-            govts: &govts,
+            govts,
             system_govt: Some(G),
             record,
             ..Surroundings::new(&[], npcs)
@@ -736,9 +795,10 @@ mod tests {
 
     #[test]
     fn a_hail_carries_the_conversations_variant_mood_and_advice() {
+        let plain = plain();
         let npcs = [flying(1, Goal::Idle)];
         let talk = talk();
-        let hail = hailing(&npcs, 0, &talk);
+        let hail = hailing(&npcs, &plain, 0, &talk);
         assert_eq!(hail.npc.id, NpcId(1));
         assert_eq!(hail.variant, 3);
         assert_eq!(hail.mood, talk.mood);
@@ -749,15 +809,26 @@ mod tests {
 
     #[test]
     fn a_hail_reads_the_ships_attitude() {
+        let plain = plain();
         let npcs = [flying(1, Goal::Idle)];
-        assert_eq!(hailing(&npcs, 0, &talk()).attitude, Attitude::Friendly);
-        assert_eq!(hailing(&npcs, -100, &talk()).attitude, Attitude::Unfriendly);
+        assert_eq!(
+            hailing(&npcs, &plain, 0, &talk()).attitude,
+            Attitude::Friendly
+        );
+        assert_eq!(
+            hailing(&npcs, &plain, -100, &talk()).attitude,
+            Attitude::Unfriendly
+        );
         let hunting = [flying(1, Goal::Attack(ShipRef::Player))];
-        assert_eq!(hailing(&hunting, 0, &talk()).attitude, Attitude::Hostile);
+        assert_eq!(
+            hailing(&hunting, &plain, 0, &talk()).attitude,
+            Attitude::Hostile
+        );
     }
 
     #[test]
     fn a_ship_fighting_assisting_or_attacked_is_busy() {
+        let plain = plain();
         for goal in [
             Goal::Attack(ShipRef::Npc(NpcId(5))),
             Goal::Snipe(ShipRef::Npc(NpcId(5))),
@@ -769,7 +840,7 @@ mod tests {
             },
         ] {
             let npcs = [flying(1, goal)];
-            assert!(hailing(&npcs, 0, &talk()).busy, "{goal:?}");
+            assert!(hailing(&npcs, &plain, 0, &talk()).busy, "{goal:?}");
         }
         for goal in [
             Goal::Idle,
@@ -777,39 +848,136 @@ mod tests {
             Goal::Inspect(ShipRef::Npc(NpcId(5))),
         ] {
             let npcs = [flying(1, goal)];
-            assert!(!hailing(&npcs, 0, &talk()).busy, "{goal:?}");
+            assert!(!hailing(&npcs, &plain, 0, &talk()).busy, "{goal:?}");
         }
         for goal in [
             Goal::Attack(ShipRef::Npc(NpcId(1))),
             Goal::Snipe(ShipRef::Npc(NpcId(1))),
         ] {
             let npcs = [flying(1, Goal::Idle), flying(2, goal)];
-            assert!(hailing(&npcs, 0, &talk()).busy, "attacked: {goal:?}");
+            assert!(
+                hailing(&npcs, &plain, 0, &talk()).busy,
+                "attacked: {goal:?}"
+            );
         }
         for goal in [
             Goal::Flee(ShipRef::Npc(NpcId(1))),
             Goal::Attack(ShipRef::Npc(NpcId(3))),
         ] {
             let npcs = [flying(1, Goal::Idle), flying(2, goal)];
-            assert!(!hailing(&npcs, 0, &talk()).busy, "{goal:?}");
+            assert!(!hailing(&npcs, &plain, 0, &talk()).busy, "{goal:?}");
         }
     }
 
     #[test]
     fn a_hail_knows_whether_the_ship_assists_the_player_and_whether_the_player_is_threatened() {
+        let plain = plain();
         let npcs = [flying(1, Goal::Assist(Help::Refuel))];
-        let hail = hailing(&npcs, 0, &talk());
+        let hail = hailing(&npcs, &plain, 0, &talk());
         assert!(hail.assisting_player);
         assert!(!hail.player_threatened);
         let npcs = [
             flying(1, Goal::Idle),
             flying(2, Goal::Snipe(ShipRef::Player)),
         ];
-        let hail = hailing(&npcs, 0, &talk());
+        let hail = hailing(&npcs, &plain, 0, &talk());
         assert!(!hail.assisting_player);
         assert!(hail.player_threatened);
         let hunting = [flying(1, Goal::Attack(ShipRef::Player))];
-        assert!(hailing(&hunting, 0, &talk()).player_threatened, "itself");
+        assert!(
+            hailing(&hunting, &plain, 0, &talk()).player_threatened,
+            "itself"
+        );
+    }
+
+    /// 140 (class 1, enemies with class 2, allied with class 3), 142
+    /// (class 2), 143 (class 3) and 144 (class 4).
+    fn rivals() -> Governments {
+        Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                enemies: [2, -1, -1, -1],
+                allies: [3, -1, -1, -1],
+                ..govt(140)
+            },
+            GovtRecord {
+                classes: [2, -1, -1, -1],
+                ..govt(142)
+            },
+            GovtRecord {
+                classes: [3, -1, -1, -1],
+                ..govt(143)
+            },
+            GovtRecord {
+                classes: [4, -1, -1, -1],
+                ..govt(144)
+            },
+        ])
+    }
+
+    /// NPC `id` of `govt`, flying `goal`.
+    fn of_govt(id: u32, govt: Option<i16>, goal: Goal) -> Npc {
+        Npc {
+            govt: govt.map(GovtId),
+            ..flying(id, goal)
+        }
+    }
+
+    #[test]
+    fn a_hail_knows_whether_an_enemy_of_the_ship_threatens_the_player() {
+        let rivals = rivals();
+        let threatened = |other: Npc| {
+            let npcs = [flying(1, Goal::Idle), other];
+            let hail = hailing(&npcs, &rivals, 0, &talk());
+            (hail.player_threatened, hail.threatened_by_enemy)
+        };
+        let sniping = Goal::Snipe(ShipRef::Player);
+        assert_eq!(threatened(of_govt(2, Some(142), sniping)), (true, true));
+        assert_eq!(
+            threatened(of_govt(2, Some(142), Goal::Attack(ShipRef::Player))),
+            (true, true)
+        );
+        for govt in [Some(143), Some(144), Some(140), None] {
+            assert_eq!(
+                threatened(of_govt(2, govt, sniping)),
+                (true, false),
+                "{govt:?}"
+            );
+        }
+        for goal in [Goal::Idle, Goal::Attack(ShipRef::Npc(NpcId(1)))] {
+            assert_eq!(
+                threatened(of_govt(2, Some(142), goal)),
+                (false, false),
+                "{goal:?}"
+            );
+        }
+        let npcs = [of_govt(1, Some(142), Goal::Attack(ShipRef::Player))];
+        let hail = hailing(&npcs, &rivals, 0, &talk());
+        assert!(
+            hail.player_threatened && !hail.threatened_by_enemy,
+            "itself"
+        );
+        let mut independent = flying(1, Goal::Idle);
+        independent.govt = None;
+        let npcs = [independent, of_govt(2, Some(142), sniping)];
+        assert!(
+            !hailing(&npcs, &rivals, 0, &talk()).threatened_by_enemy,
+            "an independent has no enemy"
+        );
+    }
+
+    #[test]
+    fn the_threats_to_the_player_are_every_other_npc_that_threatens_it() {
+        let rivals = rivals();
+        let npcs = [
+            of_govt(1, Some(142), Goal::Attack(ShipRef::Player)),
+            of_govt(2, Some(142), Goal::Snipe(ShipRef::Player)),
+            of_govt(3, Some(143), Goal::Idle),
+            of_govt(4, None, Goal::Flee(ShipRef::Player)),
+        ];
+        let hail = hailing(&npcs, &rivals, 0, &talk());
+        let ids: Vec<NpcId> = hail.threats_to_player().map(|npc| npc.id).collect();
+        assert_eq!(ids, [NpcId(2), NpcId(4)]);
     }
 
     #[test]
