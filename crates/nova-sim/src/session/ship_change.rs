@@ -449,7 +449,8 @@ impl Session {
     }
 
     /// [`random_string`](Self::random_string), with an empty pick read as
-    /// none, as the `T` rename and the `Q` leave message read it.
+    /// none, as the `T` rename, the `Q` leave message, and the bar's commercial
+    /// and generic story read it.
     pub(super) fn pick_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
         self.random_string(list, chance)
             .filter(|pick| !pick.is_empty())

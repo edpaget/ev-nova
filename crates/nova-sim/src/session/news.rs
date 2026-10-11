@@ -6,8 +6,8 @@
 //! (@0x48f15), in this order:
 //!
 //! 1. The commercial line: a string of `STR#`
-//!    [`COMMERCIALS`] (@0x4826a), else
-//!    `STR#` 2002 #190 (@0x48294), else nothing.
+//!    [`COMMERCIALS`] (@0x4826a), else, with none or an empty one
+//!    drawn (@0x4826f), `STR#` 2002 #190 (@0x48294), else nothing.
 //! 2. The story starts as the `öops` story, empty until crons-news-ranks
 //!    phase 8 fills it.
 //! 3. With any government candidates ([`candidates`]), one of them, else
@@ -15,8 +15,8 @@
 //!    (@0x486e2, @0x48704); that cron's `STR#` string **replaces** the
 //!    story, empty when its list is missing or empty (@0x72f0f).
 //! 4. With the story empty, a string of `STR#`
-//!    [`GENERIC_NEWS`] (@0x48763), else
-//!    `STR#` 2002 #191 (@0x4878d), else nothing.
+//!    [`GENERIC_NEWS`] (@0x48763), else, with none or an empty one
+//!    drawn (@0x48768), `STR#` 2002 #191 (@0x4878d), else nothing.
 //!
 //! Each string is drawn uniformly among its list's, and every list is
 //! read through the session's string lists ([`Session::with_strings`]).
@@ -48,7 +48,7 @@ impl Session {
             return false;
         };
         let commercial = self
-            .random_string(COMMERCIALS, chance)
+            .pick_string(COMMERCIALS, chance)
             .or_else(|| self.nth_string(MISC_STRINGS, TOP_NEWS))
             .unwrap_or_default();
         let mut story = self.disaster_story(chance);
@@ -70,7 +70,7 @@ impl Session {
         }
         if story.is_empty() {
             story = self
-                .random_string(GENERIC_NEWS, chance)
+                .pick_string(GENERIC_NEWS, chance)
                 .or_else(|| self.nth_string(MISC_STRINGS, NO_NEWS))
                 .unwrap_or_default();
         }
@@ -352,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_commercial_or_generic_story_drawn_is_kept_empty() {
+    fn an_empty_commercial_or_generic_story_drawn_falls_back_to_string_190_or_191() {
         let catalog = barred(Some(130), vec![]);
         let lists = Lists::default()
             .with(COMMERCIALS, &["", "Drink Fizz"])
@@ -361,8 +361,8 @@ mod tests {
         let mut session = landed(&catalog, lists);
         let mut chance = Scripted::rolling(&[0, 0]);
         let news = opened(&mut session, &mut chance);
-        assert_eq!(news.commercial, "", "not #190");
-        assert_eq!(news.story, "", "not #191");
+        assert_eq!(news.commercial, "Today's top news:", "#190");
+        assert_eq!(news.story, "No news is good news", "#191");
         assert_eq!(chance.sides_asked, [2, 2], "commercial, generic story");
     }
 
