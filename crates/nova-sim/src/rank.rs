@@ -87,6 +87,20 @@
 //! the same cap test against today's cash (`_PlayerInfoDialogUpdate`
 //! @0x53585-0x535c1), with no floor.
 //!
+//! **Hails** ([`favour`], `_DoCommDialog` @0x95d80-0x95e46). As the
+//! comm dialog opens, it loops over the 128 rank slots (stride 0x120,
+//! @0x95d9c-0x95e06). A slot that is active (+0), has a record (+1) and
+//! whose `AffilGovt` (+6) `_GovtAllies` finds allied with the hailed
+//! ship's government (+0x98, @0x95dbf) adds its `Flags` (+0x1c): 0x0400
+//! ([`HELPS_IN_BATTLE`]) gives battle help (@0x95ddb), 0x0800
+//! ([`HELPS_FREE`]) free help (@0x95de1). `_GovtAllies` holds at once for
+//! equal IDs (@0x4e4e), -1 and -1 included, so by the engine an
+//! unaffiliated rank reaches an independent ship. The
+//! [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach) rule's
+//! other reading reaches only ships of the rank's own government. The
+//! loop plays no sound. What the help does is the hail's (see
+//! [`hail`](crate::hail)).
+//!
 //! **Salary** ([`pay_salaries`], `_IncrementGameTime` @0xb75b-0xb7c2,
 //! the day's eighth participant). In ID order, each active rank with a
 //! record and a nonzero `Salary` adds it to the cash unless the cash is
@@ -102,6 +116,7 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use crate::catalog::{GovtId, RankId, RankRecord};
+use crate::govt::Governments;
 use crate::rulebook::RuleSource;
 
 /// The index (1-based) in `STR#` 2002 of what a rank tag reads with no
@@ -126,6 +141,22 @@ pub const SWEEP_LOWER_ON_ACTIVATE: u16 = 0x0010;
 /// `Flags` 0x0020: deactivating the rank clears the active ranks of its
 /// government of strictly lower `Weight`.
 pub const SWEEP_LOWER_ON_DEACTIVATE: u16 = 0x0020;
+/// `Flags` 0x0400: ships the rank reaches fight a threat to the player
+/// when hailed, for nothing (`_DoCommDialog` @0x95ddb).
+pub const HELPS_IN_BATTLE: u16 = 0x0400;
+/// `Flags` 0x0800: ships the rank reaches refuel or repair the player
+/// for nothing (`_DoCommDialog` @0x95de1).
+pub const HELPS_FREE: u16 = 0x0800;
+
+/// What the pilot's ranks grant a hailed ship's help (see the module
+/// docs' **Hails**).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Favour {
+    /// Some rank that reaches the ship has [`HELPS_IN_BATTLE`].
+    pub battle_help: bool,
+    /// Some rank that reaches the ship has [`HELPS_FREE`].
+    pub free_help: bool,
+}
 
 /// The rank state `K` and `L` change: the active ranks, and the recent
 /// rank `<RRK>` reads.
@@ -218,6 +249,32 @@ pub fn contributed(records: &[RankRecord], active: &BTreeSet<RankId>) -> u64 {
         .iter()
         .filter(|rank| active.contains(&rank.id))
         .fold(0, |bits, rank| bits | rank.contribute)
+}
+
+/// What the ranks of `records` in `active` grant a ship of `govt` (see
+/// the module docs' **Hails**): each one that reaches `govt` by `reach`'s
+/// reading of [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach)
+/// adds its [`HELPS_IN_BATTLE`] and [`HELPS_FREE`].
+#[must_use]
+pub fn favour(
+    records: &[RankRecord],
+    active: &BTreeSet<RankId>,
+    govt: Option<GovtId>,
+    govts: &Governments,
+    reach: RuleSource,
+) -> Favour {
+    let reaches = |rank: &RankRecord| match reach {
+        RuleSource::Engine => govts.allies(govt, rank.affil_govt),
+        RuleSource::Bible => rank.affil_govt.is_some() && rank.affil_govt == govt,
+    };
+    let flags = records
+        .iter()
+        .filter(|rank| active.contains(&rank.id) && reaches(rank))
+        .fold(0, |flags, rank| flags | rank.flags);
+    Favour {
+        battle_help: flags & HELPS_IN_BATTLE != 0,
+        free_help: flags & HELPS_FREE != 0,
+    }
 }
 
 /// The names the rank tags read (see the module docs): the records, the
@@ -375,6 +432,7 @@ fn sweep(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::GovtRecord;
     use crate::testkit;
 
     /// Rank `id` of government `govt` (`None` unaffiliated), `weight`
@@ -1083,6 +1141,148 @@ mod tests {
         );
         assert_eq!(fee.salary, -50, "no floor");
         assert_eq!(fee.line, "", "no name");
+    }
+
+    /// Govt 140 (G, class 1, allied with class 2), 141 (A, class 2) and
+    /// 142 (U, class 3, allied with nobody).
+    fn favour_govts() -> Governments {
+        Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                allies: [2, -1, -1, -1],
+                ..testkit::govt(140)
+            },
+            GovtRecord {
+                classes: [2, -1, -1, -1],
+                ..testkit::govt(141)
+            },
+            GovtRecord {
+                classes: [3, -1, -1, -1],
+                ..testkit::govt(142)
+            },
+        ])
+    }
+
+    /// The favour of active ranks `active` among `records` to a ship of
+    /// `govt`, by `reach`.
+    fn favour_of(
+        records: &[RankRecord],
+        active: &[i16],
+        govt: Option<i16>,
+        reach: RuleSource,
+    ) -> Favour {
+        favour(
+            records,
+            &ids(active),
+            govt.map(GovtId),
+            &favour_govts(),
+            reach,
+        )
+    }
+
+    const BOTH: Favour = Favour {
+        battle_help: true,
+        free_help: true,
+    };
+
+    #[test]
+    fn the_hail_flags_are_0x0400_and_0x0800() {
+        assert_eq!(HELPS_IN_BATTLE, 0x0400);
+        assert_eq!(HELPS_FREE, 0x0800);
+    }
+
+    #[test]
+    fn a_rank_reaches_its_own_and_allied_governments_by_the_engine() {
+        let records = [
+            rank(130, Some(140), 0, HELPS_IN_BATTLE),
+            rank(131, Some(141), 0, HELPS_FREE),
+            rank(132, Some(142), 0, HELPS_IN_BATTLE | HELPS_FREE),
+        ];
+        let engine = RuleSource::Engine;
+        assert_eq!(favour_of(&records, &[130, 131], Some(140), engine), BOTH);
+        assert_eq!(
+            favour_of(&records, &[130], Some(140), engine),
+            Favour {
+                battle_help: true,
+                free_help: false
+            }
+        );
+        assert_eq!(
+            favour_of(&records, &[131], Some(140), engine),
+            Favour {
+                battle_help: false,
+                free_help: true
+            }
+        );
+        assert_eq!(
+            favour_of(&records, &[132], Some(140), engine),
+            Favour::default()
+        );
+    }
+
+    #[test]
+    fn a_rank_reaches_only_its_own_government_by_the_bible() {
+        let records = [
+            rank(130, Some(140), 0, HELPS_IN_BATTLE | HELPS_FREE),
+            rank(131, Some(141), 0, HELPS_IN_BATTLE | HELPS_FREE),
+            rank(132, None, 0, HELPS_IN_BATTLE | HELPS_FREE),
+        ];
+        let bible = RuleSource::Bible;
+        assert_eq!(favour_of(&records, &[130], Some(140), bible), BOTH);
+        assert_eq!(
+            favour_of(&records, &[131], Some(140), bible),
+            Favour::default()
+        );
+        assert_eq!(favour_of(&records, &[132], None, RuleSource::Engine), BOTH);
+        assert_eq!(favour_of(&records, &[132], None, bible), Favour::default());
+        assert_eq!(
+            favour_of(&records, &[132], Some(140), RuleSource::Engine),
+            Favour::default()
+        );
+    }
+
+    #[test]
+    fn only_active_ranks_with_a_record_favour() {
+        let records = [rank(130, Some(140), 0, HELPS_IN_BATTLE | HELPS_FREE)];
+        for reach in [RuleSource::Engine, RuleSource::Bible] {
+            assert_eq!(
+                favour_of(&records, &[], Some(140), reach),
+                Favour::default()
+            );
+            assert_eq!(
+                favour_of(&records, &[131], Some(140), reach),
+                Favour::default()
+            );
+            assert_eq!(favour_of(&records, &[130], Some(140), reach), BOTH);
+        }
+    }
+
+    #[test]
+    fn battle_help_and_free_help_are_separate_flags() {
+        let records = [
+            rank(130, Some(140), 0, HELPS_IN_BATTLE),
+            rank(131, Some(140), 0, HELPS_FREE),
+            rank(132, Some(140), 0, 0x0001 | 0x0008 | 0x0100),
+        ];
+        let engine = RuleSource::Engine;
+        assert_eq!(
+            favour_of(&records, &[130], Some(140), engine),
+            Favour {
+                battle_help: true,
+                free_help: false
+            }
+        );
+        assert_eq!(
+            favour_of(&records, &[131], Some(140), engine),
+            Favour {
+                battle_help: false,
+                free_help: true
+            }
+        );
+        assert_eq!(
+            favour_of(&records, &[132], Some(140), engine),
+            Favour::default()
+        );
     }
 
     #[test]
