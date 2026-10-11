@@ -1343,7 +1343,7 @@ impl Session {
             if self.traffic_due {
                 self.populate(catalog, chance);
             } else {
-                self.mission_ship_arrivals(catalog, chance);
+                self.mission_ship_arrivals(catalog, None, chance);
                 self.unmark_inactive_mission_ships();
                 self.join_mission_escorts();
                 let system_govt = self.galaxy.govt(self.pilot.system);
@@ -2413,7 +2413,8 @@ impl Session {
     /// Brings the ship out of `exit`, a gate of `kind`, in `system`: see
     /// [`Session::enter_wormhole`]. Before it enters, the exit decides
     /// what becomes of the special ships following the player
-    /// ([`Session::exit_gate_slots`]).
+    /// ([`Session::exit_gate_slots`]); once it has, those that follow come
+    /// out of the gate after it ([`Session::emerge_followers`]).
     fn come_out(
         &mut self,
         system: SystemId,
@@ -2446,6 +2447,7 @@ impl Session {
             },
         };
         self.enter_system(Entry::Gate, entered, catalog, catalog, chance);
+        self.emerge_followers(exit.position, catalog, chance);
     }
 
     /// Docks the ship at `stellar`, one of the system's, and last raises

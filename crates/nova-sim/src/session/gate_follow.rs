@@ -17,11 +17,19 @@
 use super::Session;
 use crate::catalog::TrafficCatalog;
 use crate::chance::Chance;
-use crate::gate::GateKind;
+use crate::flight::ShipState;
+use crate::gate::{GateArrivalRule, GateKind};
+use crate::geometry::Vec2;
 use crate::mission::ShipSystem;
-use crate::mission::ships::{GateSlot, ShipBehav, through_gate};
+use crate::mission::ships::{GateSlot, NOT_APPEARING, ShipBehav, through_gate};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::Entrance;
+use crate::traffic::npc::Mode;
+
+/// `Rand(50) + 100`: the ticks a follower waits in the gate (@0x6745c).
+const EMERGE_DRAW: u32 = 50;
+/// The least a follower waits in the gate (@0x67469).
+const EMERGE_LEAST: u32 = 100;
 
 impl Session {
     /// Whether the engine's reading of [`RuleKey::GateFollow`] decides
@@ -74,23 +82,89 @@ impl Session {
             }
         }
     }
+
+    /// The player just out of a gate at `exit`, the system entered: under
+    /// the engine's reading of [`RuleKey::GateFollow`], one frame of the
+    /// appear timers (`_EnterMoreShips` @0x672f2,
+    /// [`Session::mission_ship_arrivals`]) brings the followers in, their
+    /// `düde`s read from `catalog`, leaving to the enter-system hook the
+    /// slots it is about to restart. Then each ship of a slot following
+    /// the player, attacking it, with ships left and its timer just
+    /// stopped (loop B, @0x67346-0x67487) comes out after the player, in
+    /// order: at rest at `exit`, or where the player arrived under
+    /// [`GateArrivalRule::LikeJump`], with the player's heading, emerging
+    /// for `Rand(50) + 100` ticks, drawn on `chance`. A mission that
+    /// auto-aborted as they came in leaves its ships as they came.
+    pub(super) fn emerge_followers(
+        &mut self,
+        exit: Vec2,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        if self.rules.source_for(RuleKey::GateFollow) != RuleSource::Engine {
+            return;
+        }
+        self.mission_ship_arrivals(catalog, Some(Entrance::Gate), chance);
+        let followers: Vec<u8> = self
+            .pilot
+            .missions
+            .iter()
+            .filter(|(_, active)| {
+                let ships = &active.ships;
+                let behav = self.lifecycle_record(active.mission).ships.behav;
+                ships.system == ShipSystem::FollowsPlayer
+                    && ships.left > 0
+                    && ShipBehav::from_code(behav) == ShipBehav::AttackPlayer
+                    && ships.appear == NOT_APPEARING
+            })
+            .map(|(slot, _)| slot)
+            .collect();
+        let position = match self.gate_arrival {
+            GateArrivalRule::Engine => exit,
+            GateArrivalRule::LikeJump => self.player.position,
+        };
+        let heading = self.player.heading;
+        for npc in self.traffic.npcs_mut() {
+            if !npc
+                .mission
+                .is_some_and(|mark| followers.contains(&mark.slot))
+            {
+                continue;
+            }
+            npc.state = ShipState {
+                position,
+                velocity: Vec2::ZERO,
+                heading,
+            };
+            let wait = chance.below(EMERGE_DRAW) + EMERGE_LEAST;
+            npc.mode = Mode::Emerging { ticks_left: wait };
+        }
+    }
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use crate::catalog::{GateSite, MissionShip, StellarId, SystemId};
     use crate::chance::NeverFires;
+    use crate::combat::ShipRef;
     use crate::gate::{HYPERGATE, WORMHOLE};
     use crate::geometry::Vec2;
-    use crate::govt::NEVER_FOLLOWS_THROUGH_HYPERGATE;
+    use crate::govt::{
+        ALWAYS_FOLLOWS_THROUGH_HYPERGATE, ALWAYS_FOLLOWS_THROUGH_WORMHOLE,
+        NEVER_FOLLOWS_THROUGH_HYPERGATE,
+    };
     use crate::mission::ships::LOST_AT_GATE;
     use crate::rulebook::Rulebook;
     use crate::session::LandPress;
     use crate::session::mission_ships::tests::{
-        accepted, jump_to, marked, settle, shipping, ships_catalog, ships_of, take_off, ticks,
+        accepted, jump_to, marked, settle, shipping, ships_catalog, ships_of, take_off, tick, ticks,
     };
+    use crate::story::{Fate, StoryEvent};
+    use crate::testkit::Draws;
     use crate::testkit::{FakePilotCatalog, govt, land_now, planet};
+    use crate::traffic::npc::Npc;
 
     /// Where hypergate 300 is in 130.
     const HYPERGATE_AT: Vec2 = Vec2::new(-3000.0, 0.0);
@@ -289,6 +363,177 @@ mod tests {
             "by the other reading, on the hook's timer"
         );
         assert_eq!(timer(&session), (199, 0));
+    }
+
+    /// [`exit_gate`] without the settling: the events raised stay raised.
+    fn exit_gate_raising(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        kind: GateKind,
+        chance: &mut dyn Chance,
+    ) {
+        session.player.position = match kind {
+            GateKind::Hypergate => HYPERGATE_AT,
+            GateKind::Wormhole => WORMHOLE_AT,
+        };
+        session.player.velocity = Vec2::ZERO;
+        session.nav_target = None;
+        session.land().expect("selects");
+        session.land().expect("at the gate");
+        let out = match kind {
+            GateKind::Hypergate => session.enter_hypergate(Some(SystemId(131)), catalog, chance),
+            GateKind::Wormhole => session.enter_wormhole(catalog, chance),
+        };
+        assert_eq!(out, Ok(SystemId(131)));
+    }
+
+    /// Where the exit gate of `kind` is in 131.
+    fn exit_of(kind: GateKind) -> Vec2 {
+        match kind {
+            GateKind::Hypergate => Vec2::new(100.0, 200.0),
+            GateKind::Wormhole => Vec2::new(-300.0, 40.0),
+        }
+    }
+
+    /// The special ships in the system.
+    fn specials(session: &Session) -> Vec<Npc> {
+        session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.mission.is_some())
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn attackers_that_follow_come_out_of_the_exit_gate_after_the_player_once() {
+        for (kind, flags2) in [
+            (GateKind::Hypergate, ALWAYS_FOLLOWS_THROUGH_HYPERGATE),
+            (GateKind::Wormhole, ALWAYS_FOLLOWS_THROUGH_WORMHOLE),
+        ] {
+            let catalog = gated(following(0, 0), flags2);
+            let mut session = accepted(&catalog);
+            take_off(&mut session, &catalog);
+            session.drop_raised();
+            exit_gate_raising(&mut session, &catalog, kind, &mut NeverFires);
+            let ships = specials(&session);
+            assert_eq!(ships.len(), 2, "{kind:?}: ships left, none set up besides");
+            assert_eq!(session.npcs().len(), 2, "{kind:?}: nothing else");
+            let heading = session.player().heading;
+            for ship in &ships {
+                assert_eq!(
+                    ship.state,
+                    ShipState {
+                        position: exit_of(kind),
+                        velocity: Vec2::ZERO,
+                        heading,
+                    },
+                    "{kind:?}"
+                );
+                assert_eq!(ship.mode, Mode::Emerging { ticks_left: 149 }, "{kind:?}");
+            }
+            let arrived: Vec<StoryEvent> = ships
+                .iter()
+                .map(|ship| StoryEvent::ShipFate {
+                    ship: ship.id,
+                    fate: Fate::Arrived,
+                })
+                .collect();
+            let fates: Vec<StoryEvent> = session
+                .story_raised()
+                .into_iter()
+                .filter(|event| matches!(event, StoryEvent::ShipFate { .. }))
+                .collect();
+            assert_eq!(fates, arrived, "{kind:?}");
+            settle(&mut session, &catalog);
+            assert_eq!(timer(&session), (-1, 2), "{kind:?}: brought in");
+            ticks(&mut session, &catalog, 148);
+            assert!(session.npcs().iter().all(Npc::emerging), "{kind:?}");
+            assert_eq!(
+                session.npcs()[0].state.position,
+                exit_of(kind),
+                "{kind:?}: held"
+            );
+            tick(&mut session, &catalog);
+            for ship in session.npcs() {
+                assert_eq!(ship.mode, Mode::Flying, "{kind:?}");
+                assert_eq!(ship.goal.quarry(), Some(ShipRef::Player), "{kind:?}");
+            }
+            assert_eq!(marked(&session), [0, 0], "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn attackers_of_no_flag_follow_through_a_hypergate_on_rand_2_and_each_waits_rand_50() {
+        let catalog = gated(following(0, 0), 0);
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        let mut chance = Draws::of(&[0]);
+        exit_gate(&mut session, &catalog, GateKind::Hypergate, &mut chance);
+        assert_eq!(chance.asked.first(), Some(&2), "the follow roll first");
+        assert_eq!(&chance.asked[chance.asked.len() - 2..], [50, 50]);
+        assert_eq!(specials(&session).len(), 2);
+        assert!(session.npcs().iter().all(Npc::emerging));
+        let catalog = gated(following(0, 0), 0);
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        exit_gate(
+            &mut session,
+            &catalog,
+            GateKind::Hypergate,
+            &mut Draws::of(&[1]),
+        );
+        assert!(specials(&session).is_empty(), "lost");
+        assert_eq!(timer(&session), (LOST_AT_GATE, 2));
+    }
+
+    #[test]
+    fn a_follower_that_auto_aborts_as_it_comes_in_stays_as_it_came() {
+        // Starting 1, none are set up at the take-off, so none abort it.
+        let mut catalog = gated(following(0, 1), ALWAYS_FOLLOWS_THROUGH_HYPERGATE);
+        catalog.missions[0].flags |= crate::mission::active::AUTO_ABORT;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_some());
+        exit_gate(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
+        assert!(session.pilot().missions().get(0).is_none(), "aborted");
+        assert_eq!(session.npcs().len(), 2);
+        for ship in session.npcs() {
+            assert!(matches!(ship.mode, Mode::JumpingIn { .. }), "{ship:?}");
+            assert_ne!(ship.state.position, exit_of(GateKind::Hypergate));
+        }
+        tick(&mut session, &catalog);
+        assert!(
+            marked(&session).is_empty(),
+            "their marks go at the next think"
+        );
+    }
+
+    #[test]
+    fn under_the_jump_like_arrival_followers_come_out_where_the_player_arrives() {
+        let catalog = gated(following(0, 0), ALWAYS_FOLLOWS_THROUGH_HYPERGATE);
+        let mut session = accepted(&catalog).with_gate_arrival(GateArrivalRule::LikeJump);
+        take_off(&mut session, &catalog);
+        exit_gate(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
+        let player = *session.player();
+        assert_ne!(player.position, exit_of(GateKind::Hypergate));
+        for ship in specials(&session) {
+            assert_eq!(ship.state.position, player.position);
+            assert_eq!(ship.state.heading, player.heading);
+            assert_eq!(ship.state.velocity, Vec2::ZERO);
+            assert!(ship.emerging());
+        }
+        assert_eq!(specials(&session).len(), 2);
+    }
+
+    #[test]
+    fn by_the_other_reading_no_ship_emerges_and_the_exits_setup_brings_them() {
+        let catalog = gated(following(0, 0), ALWAYS_FOLLOWS_THROUGH_HYPERGATE);
+        let mut session = accepted(&catalog).with_rules(reading(RuleSource::Bible));
+        take_off(&mut session, &catalog);
+        exit_gate(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
+        assert_eq!(marked(&session), [0, 0]);
+        assert!(!session.npcs().iter().any(Npc::emerging));
     }
 
     #[test]

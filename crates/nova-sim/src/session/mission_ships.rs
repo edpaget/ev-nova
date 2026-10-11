@@ -530,10 +530,13 @@ impl Session {
     /// (from 32000 or below), and at 0 it stops and
     /// they come in by hyperspace ([`spawn::arriving_mission_ships`]),
     /// each counted arrived. Once all have come, a mission of `Flags`
-    /// 0x0001 auto-aborts (@0x43abc-0x43ad4), its ships staying.
+    /// 0x0001 auto-aborts (@0x43abc-0x43ad4), its ships staying. As the
+    /// system is `entering` by a way in whose enter-system hook is still
+    /// to run, if any, a slot the hook is about to restart is left to it.
     pub(super) fn mission_ship_arrivals(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
+        entering: Option<Entrance>,
         chance: &mut (impl Chance + ?Sized),
     ) {
         let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
@@ -543,7 +546,9 @@ impl Session {
             };
             let record = self.lifecycle_record(active.mission);
             let state = active.ships.clone();
-            if !self.ships_here(state.system) {
+            if !self.ships_here(state.system)
+                || entering.is_some_and(|how| self.hook_restarts(&record, active, how))
+            {
                 continue;
             }
             let coming = if ShipStart::from_code(record.ships.start) == ShipStart::ComesLater {
