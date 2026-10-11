@@ -334,7 +334,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::catalog::{GovtId, LandingSite, OutfitId, OutfitRecord, WeaponId};
+use crate::catalog::{CronRecord, GovtId, LandingSite, OutfitId, OutfitRecord, WeaponId};
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::MOD_AMMO;
 use crate::control::Gate;
@@ -2350,6 +2350,8 @@ pub const LIST_SLOTS: u32 = 512;
 pub(crate) struct Shop<'a> {
     /// Every `oütf`.
     pub(crate) records: &'a [OutfitRecord],
+    /// Every `crön`, whose running ones contribute bits.
+    pub(crate) crons: &'a [CronRecord],
     /// The ship's fields.
     pub(crate) fields: ShipFields,
     /// The ship's standard equipment: its default items, and its stock
@@ -2417,7 +2419,12 @@ impl Shop<'_> {
         if self.site.flags & StellarFlags::OUTFITTER == 0 {
             return None;
         }
-        let contributed = wares::contributed(self.fields.contribute, &pilot.outfits, self.records);
+        let by = wares::Contributors {
+            ship: self.fields.contribute,
+            outfits: self.records,
+            crons: self.crons,
+        };
+        let contributed = wares::contributed(&by, pilot);
         let free = free_mass(
             self.fields,
             self.standard,
@@ -2831,6 +2838,7 @@ mod tests {
     fn shop<'a>(records: &'a [OutfitRecord], site: &'a LandingSite) -> Shop<'a> {
         Shop {
             records,
+            crons: &[],
             fields: FAST,
             free_cargo: ROOMY_CARGO,
             standard: &NO_STANDARD,
@@ -4753,6 +4761,7 @@ mod tests {
         let open_with = |fighter_room: &BTreeMap<OutfitId, u32>, pilot: &Pilot| {
             Shop {
                 records: std::slice::from_ref(&fighters),
+                crons: &[],
                 fields: FAST,
                 free_cargo: ROOMY_CARGO,
                 standard: &NO_STANDARD,
@@ -4873,6 +4882,7 @@ mod tests {
         }];
         Shop {
             records: &records,
+            crons: &[],
             fields: ShipFields { holds, ..FAST },
             free_cargo,
             standard: &NO_STANDARD,

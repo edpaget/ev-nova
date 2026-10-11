@@ -18,8 +18,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::catalog::{LandingSite, OutfitId, OutfitRecord, ShipId};
+use crate::catalog::{CronRecord, LandingSite, OutfitId, OutfitRecord, ShipId};
 use crate::chance::Chance;
+use crate::pilot::Pilot;
 
 /// The `BuyRandom` or `HireRandom` from which an item is always on offer:
 /// the original's loader clamps above it to it (`_LoadObjectData`).
@@ -219,14 +220,28 @@ pub fn ship_tech_allows(tech_level: i16, site: &LandingSite) -> bool {
     tech_level >= 0 && by_tech_level(tech_level, site)
 }
 
-/// The `Contribute` bits of a ship contributing `ship`, carrying `owned`:
-/// the ship's, and those of each outfit owned that has a record.
+/// Everything whose `Contribute` bits the player may hold
+/// (`_GetPlayerContributeBits` @0x76b2): the ship class flown, the
+/// `oütf`s and the `crön`s.
+#[derive(Clone, Copy, Debug)]
+pub struct Contributors<'a> {
+    /// The ship class's `Contribute` bits.
+    pub ship: u64,
+    /// Every `oütf`.
+    pub outfits: &'a [OutfitRecord],
+    /// Every `crön`.
+    pub crons: &'a [CronRecord],
+}
+
+/// The `Contribute` bits `pilot` holds, `by` the ship flown and the
+/// records: the ship's, and those of each outfit owned that has a record.
 #[must_use]
-pub fn contributed(ship: u64, owned: &BTreeMap<OutfitId, u16>, records: &[OutfitRecord]) -> u64 {
-    owned
+pub fn contributed(by: &Contributors<'_>, pilot: &Pilot) -> u64 {
+    pilot
+        .outfits
         .keys()
-        .filter_map(|id| records.iter().find(|record| record.id == *id))
-        .fold(ship, |bits, record| bits | record.contribute)
+        .filter_map(|id| by.outfits.iter().find(|record| record.id == *id))
+        .fold(by.ship, |bits, record| bits | record.contribute)
 }
 
 /// Whether `require` is met by the bits `contributed`: each of its bits is
@@ -294,7 +309,7 @@ pub fn in_display_order<T>(rows: &mut [T], key: impl Fn(&T) -> (i16, i16)) {
 mod tests {
     use super::*;
     use crate::chance::NeverFires;
-    use crate::testkit::{Scripted, outfit, planet};
+    use crate::testkit::{Scripted, catalog, outfit, planet};
 
     #[test]
     fn a_ton_count_takes_the_singular_unit_at_exactly_one() {
@@ -481,15 +496,24 @@ mod tests {
                 ..outfit(129, &[])
             },
         ];
-        let owned: BTreeMap<OutfitId, u16> = [(OutfitId(128), 1), (OutfitId(999), 2)]
-            .into_iter()
-            .collect();
-        assert_eq!(contributed(0x1, &owned, &records), 0x11);
-        assert_eq!(contributed(0x1, &BTreeMap::new(), &records), 0x1);
-        let both: BTreeMap<OutfitId, u16> = [(OutfitId(128), 1), (OutfitId(129), 1)]
-            .into_iter()
-            .collect();
-        assert_eq!(contributed(0, &both, &records), 0x0100_0000_0010);
+        let by = |ship| Contributors {
+            ship,
+            outfits: &records,
+            crons: &[],
+        };
+        let mut pilot = owning(&[(128, 1), (999, 2)]);
+        assert_eq!(contributed(&by(0x1), &pilot), 0x11);
+        pilot.outfits.clear();
+        assert_eq!(contributed(&by(0x1), &pilot), 0x1);
+        let both = owning(&[(128, 1), (129, 1)]);
+        assert_eq!(contributed(&by(0), &both), 0x0100_0000_0010);
+    }
+
+    /// A new pilot owning `owned`, each an outfit ID with its count.
+    fn owning(owned: &[(i16, u16)]) -> Pilot {
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        pilot.outfits = owned.iter().map(|&(id, n)| (OutfitId(id), n)).collect();
+        pilot
     }
 
     #[test]

@@ -87,7 +87,6 @@ use crate::story::{
     Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
 use crate::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames};
-use crate::wares;
 
 /// The offer roll's subscription: the missions' first, before every
 /// mission slot's (slots 0-15) landing hooks.
@@ -1040,11 +1039,7 @@ impl Session {
             inherent_ai: ship.map_or(0, |ship| ship.inherent_ai),
             inherent_govt: ship.and_then(|ship| ship.inherent_govt),
             combat_govt: ship.and_then(|ship| ship.combat_govt),
-            contributed: wares::contributed(
-                self.fields.contribute,
-                &self.pilot.outfits,
-                &self.outfits,
-            ),
+            contributed: self.contributed(),
             fuel: self.pilot.reserves.fuel.now,
             free_cargo: self.mission_cargo_space(),
             cash: self.pilot.cash,

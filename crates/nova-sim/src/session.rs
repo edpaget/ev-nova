@@ -378,9 +378,10 @@ use crate::board::{
     Take, Taken, check_board,
 };
 use crate::catalog::{
-    CombatCatalog, DateAffixes, GateSite, GovtId, LandingSite, ListedStellar, MissionId,
-    MissionRecord, MissionTexts, OutfitId, OutfitRecord, PersonId, PilotCatalog, PlaceNames,
-    ShipId, ShipRecord, StartError, StellarId, StellarLife, SystemId, TrafficCatalog, WeaponId,
+    CombatCatalog, CronRecord, DateAffixes, GateSite, GovtId, LandingSite, ListedStellar,
+    MissionId, MissionRecord, MissionTexts, OutfitId, OutfitRecord, PersonId, PilotCatalog,
+    PlaceNames, ShipId, ShipRecord, StartError, StellarId, StellarLife, SystemId, TrafficCatalog,
+    WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -738,6 +739,9 @@ pub struct Session {
     fallback_frame: Option<(u32, u32)>,
     /// Every `mïsn`, read when the session starts.
     missions: Vec<MissionRecord>,
+    /// Every `crön`, read when the session starts, shared so the daily
+    /// pass holds them while their scripts run (see the `crons` module).
+    crons: Rc<[CronRecord]>,
     /// What the screens show of each `mïsn`, read when the session
     /// starts (see the `mission_screens` module).
     mission_texts: BTreeMap<MissionId, MissionTexts>,
@@ -850,7 +854,7 @@ impl Session {
         }
         // A crön the data no longer has is inactive (`_LoadPilotData`
         // @0x75fbc-0x76025; see the `crons` module).
-        let crons = catalog.crons();
+        let crons: Rc<[CronRecord]> = catalog.crons().into();
         pilot
             .crons
             .retain(|id, _| crons.iter().any(|record| record.id == *id));
@@ -955,6 +959,7 @@ impl Session {
             rebuilt: Rebuilt::default(),
             fallback_frame: catalog.fallback_frame_size(),
             missions: catalog.missions(),
+            crons,
             mission_texts: catalog
                 .mission_texts()
                 .into_iter()
@@ -2644,6 +2649,7 @@ impl Session {
         let mut rolls = std::mem::take(&mut self.outfit_rolls);
         let outfitter = Shop {
             records: &self.outfits,
+            crons: &self.crons,
             fields: self.fields,
             standard: &self.standard(),
             site,
@@ -3015,6 +3021,7 @@ impl Session {
         let shipyard = Yard {
             ships: &self.ships,
             outfits: &self.outfits,
+            crons: &self.crons,
             arsenal: &self.arsenal,
             fields: self.fields,
             site,

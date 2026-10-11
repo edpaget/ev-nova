@@ -57,7 +57,7 @@ use crate::landing::StellarFlags;
 use crate::pilot::Escort;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::table;
-use crate::wares::{self, Roll};
+use crate::wares::Roll;
 
 /// A port the session keeps, shared: equal to another when it is the
 /// same one.
@@ -171,11 +171,7 @@ impl Session {
         let bar = Bar {
             ships: &self.ships,
             site: &site,
-            contributed: wares::contributed(
-                self.fields.contribute,
-                &self.pilot.outfits,
-                &self.outfits,
-            ),
+            contributed: self.contributed(),
             cash: self.pilot.cash,
             room: self.pilot.escort_count() < MAX_ESCORTS,
             terms: &*self.hire_terms.0,

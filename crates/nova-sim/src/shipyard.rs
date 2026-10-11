@@ -237,7 +237,7 @@ use std::collections::BTreeMap;
 
 use crate::bay::FIGHTER_BAY;
 use crate::catalog::WeaponId;
-use crate::catalog::{LandingSite, OutfitId, OutfitRecord, ShipId, ShipRecord};
+use crate::catalog::{CronRecord, LandingSite, OutfitId, OutfitRecord, ShipId, ShipRecord};
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Arsenal, MOD_AMMO, MOD_WEAPON, StockFit, fit_stock, fitted};
 use crate::combat::weapon::Guidance;
@@ -962,6 +962,8 @@ pub(crate) struct Yard<'a> {
     pub(crate) ships: &'a [ShipRecord],
     /// Every `oütf`.
     pub(crate) outfits: &'a [OutfitRecord],
+    /// Every `crön`, whose running ones contribute bits.
+    pub(crate) crons: &'a [CronRecord],
     /// Every ship class's stock weapons, which the Info's Space reads.
     pub(crate) arsenal: &'a Arsenal,
     /// The ship flown's fields.
@@ -1000,7 +1002,12 @@ impl Yard<'_> {
         if self.site.flags & StellarFlags::SHIPYARD == 0 {
             return None;
         }
-        let contributed = wares::contributed(self.fields.contribute, &pilot.outfits, self.outfits);
+        let by = wares::Contributors {
+            ship: self.fields.contribute,
+            outfits: self.outfits,
+            crons: self.crons,
+        };
+        let contributed = wares::contributed(&by, pilot);
         let trade_in = trade_in_value().of(&Flown { yard: self, pilot });
         let mut sorted: Vec<&ShipRecord> = self.ships.iter().collect();
         sorted.sort_by_key(|ship| ship.id);
@@ -1750,6 +1757,7 @@ mod tests {
         Yard {
             ships,
             outfits,
+            crons: &[],
             arsenal: &NO_STOCK,
             fields: FAST,
             site,

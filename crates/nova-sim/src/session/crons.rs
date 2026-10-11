@@ -5,6 +5,27 @@
 //! data no longer has forgets it, so it is inactive and the next save
 //! leaves it out, as the original's `_LoadPilotData` forces a slot whose
 //! crön is gone to inactive (@0x75fbc-0x76025).
+//!
+//! **Contribute.** Every reader of the `Contribute` bits the player
+//! holds sums them through one function, [`wares::contributed`]: the
+//! mission offers, the bar's hires ([`Session::contributed`]), the
+//! outfitter and the shipyard.
+
+use crate::session::Session;
+use crate::wares::{self, Contributors};
+
+impl Session {
+    /// The `Contribute` bits the player holds, as they stand
+    /// (`_GetPlayerContributeBits` @0x76b2; see [`wares::contributed`]).
+    pub(super) fn contributed(&self) -> u64 {
+        let by = Contributors {
+            ship: self.fields.contribute,
+            outfits: &self.outfits,
+            crons: &self.crons,
+        };
+        wares::contributed(&by, &self.pilot)
+    }
+}
 
 #[cfg(test)]
 mod tests {
