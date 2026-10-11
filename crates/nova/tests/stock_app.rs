@@ -5,6 +5,7 @@
 
 mod common;
 
+use std::ops::RangeInclusive;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -30,20 +31,21 @@ impl WindowPort for Window {
     fn request_redraw(&mut self) {}
 }
 
-/// The ship browser's selected ship: its ID and how many sprites it draws
-/// (the base, plus each layer the `shän` defines).
-fn selected(app: &App<Rc<GameData>>) -> (ShipId, usize) {
+/// The ship browser's selected ship: its ID and how many sprites it may
+/// draw: the base, plus each layer the `shän` defines, its lights left out
+/// while a blinking `BlinkMode` (1 to 3) has them dark.
+fn selected(app: &App<Rc<GameData>>) -> (ShipId, RangeInclusive<usize>) {
     assert_eq!(app.screen().showing(), Showing::ShipBrowser);
     let ship = app.screen().ship_browser().current().expect("a ship");
-    let layers = [&ship.glow, &ship.lights]
-        .into_iter()
-        .filter(|layer| matches!(layer, Some(Ok(_))))
-        .count();
-    (ship.id, 1 + layers)
+    let has = |layer: &Option<Result<_, _>>| usize::from(matches!(layer, Some(Ok(_))));
+    let most = 1 + has(&ship.glow) + has(&ship.lights);
+    let blinks = (1..=3).contains(&ship.blink.mode);
+    let least = most - usize::from(blinks) * has(&ship.lights);
+    (ship.id, least..=most)
 }
 
 /// The app opens on the ship browser and draws, through the renderer, the
-/// first ship, the first with both glow and lights, and the last (reached
+/// first ship, the first with both glow and steady lights, and the last (reached
 /// by going left from the first). Only a few ships go through the renderer,
 /// to bound the decoding this debug-build test does; `nova-view`'s stock
 /// test browses them all.
@@ -89,20 +91,20 @@ fn the_ship_browser_draws_stock_ships() {
     };
 
     assert_eq!(selected(&app).0, ShipId(128));
-    assert_eq!(redraw(&mut app), selected(&app).1);
+    assert!(selected(&app).1.contains(&redraw(&mut app)));
 
     // Each search presses Right at most once per ship, so a browser that
     // never reaches its target fails the test instead of hanging it.
     for _ in 0..ship_count {
-        if selected(&app).1 == 3 {
+        if selected(&app).1 == (3..=3) {
             break;
         }
         press(&mut app, Key::Right);
     }
     assert_eq!(
         selected(&app).1,
-        3,
-        "no stock ship within {ship_count} presses of Right has both glow and lights"
+        3..=3,
+        "no stock ship within {ship_count} presses of Right has both glow and steady lights"
     );
     assert_eq!(redraw(&mut app), 3);
     assert_eq!(redraw(&mut app), 3);
@@ -120,7 +122,7 @@ fn the_ship_browser_draws_stock_ships() {
     );
     press(&mut app, Key::Left);
     assert_eq!(selected(&app).0, ShipId(895));
-    assert_eq!(redraw(&mut app), selected(&app).1);
+    assert!(selected(&app).1.contains(&redraw(&mut app)));
 }
 
 /// Tab opens the galaxy map, whose first frame draws every nebula picture
@@ -453,7 +455,8 @@ impl Driver {
 /// A pilot saved at HG-Kania (`spöb` 1404, at (-70, 250) in Kania) and
 /// opened from the main menu resumes docked there; leaving takes off over
 /// the gate. L, L opens the hypergate map, Tichel is clicked, and M brings
-/// the ship out of HG-Tichel at (-400, -500) in Tichel (129), on 24 June
+/// the ship out of HG-Tichel at (-400, -500) in Tichel (129), flying on
+/// from there under the fade-in, on 24 June
 /// 1177, the take-off's day (`_PlayerLandOnStellar` @0x63440), saying
 /// so. Its record with the Hypergate government (183) is HG-Kania's
 /// `MinStatus`, 32767, which the original never lets a record pass (task
@@ -513,11 +516,15 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     driver.click(at);
     driver.press(Key::Char('m'));
     assert_eq!(driver.showing(), Showing::Flight);
+    let session = driver.flight().session().expect("flying");
+    assert_eq!(session.system(), SystemId(129));
+    assert_eq!(session.player().position, Vec2::new(-400.0, -500.0));
+    // The ship flies on under the arrival fade-in, so the exit point is
+    // read before the redraw.
     driver.redraw();
     let flight = driver.flight();
     let session = flight.session().expect("flying");
     assert_eq!(session.system(), SystemId(129));
-    assert_eq!(session.player().position, Vec2::new(-400.0, -500.0));
     let today = session.date();
     assert_eq!((today.day(), today.month(), today.year()), (24, 6, 1177));
     assert_eq!(
