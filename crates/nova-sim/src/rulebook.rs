@@ -109,6 +109,7 @@
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //! | [`CronRandomScale`](RuleKey::CronRandomScale) | `cron_random_scale` | `Rand(101) <= Random`, rolled for every inactive crön before its other checks (`_CronEventHandler` @0x38804-0x38818; see [`cron`](crate::cron)) | `Random` % (0 never, 100 or more always)§§§§§§ |
 //! | [`CronDateCompare`](RuleKey::CronDateCompare) | `cron_date_compare` | year on its own, month and day on their own; a range across a year end with month/day set never matches (`_CronDateInRange` @0x74d3-0x75bf; see [`cron`](crate::cron)) | compared as dates; a range may cross a year end¶¶¶¶¶¶ |
+//! | [`NewsGovtMatch`](RuleKey::NewsGovtMatch) | `news_govt_match` | a cron's news shows at a stellar whose government is allied with its `NewsGovt` (`_GovtAllies` @0x4e3d, called @0x48640; see [`news`](crate::news)) | only at a stellar of that government\*\*\*\*\*\*\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -277,6 +278,11 @@
 //! port's choice, not anything the Bible says: each end compared at the
 //! precision it gives, a yearless range allowed to cross the year end
 //! (see [`cron`](crate::cron)).
+//!
+//! \*\*\*\*\*\*\* The Bible names the government whose stellars show a
+//! cron's news and says nothing of its allies. The other reading takes
+//! that government only; it is the port's choice, not anything the Bible
+//! says (see [`news`](crate::news)).
 //!
 //! # Adding a rule
 //!
@@ -1365,6 +1371,12 @@ rule_keys! {
     /// range is compared as dates and may cross a year end (see
     /// [`cron`](crate::cron)).
     CronDateCompare => "cron_date_compare",
+    /// Whose stellars show a cron's government news: by the engine, a
+    /// stellar whose government `_GovtAllies` finds allied with the
+    /// slot's `NewsGovt` (the same government, or a shared ally class);
+    /// by the other reading, only a stellar of that government (see
+    /// [`news`](crate::news)).
+    NewsGovtMatch => "news_govt_match",
 }
 
 impl RuleKey {
@@ -1532,7 +1544,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1572,7 +1584,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(13),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1594,7 +1606,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1619,7 +1631,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1645,7 +1657,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1665,7 +1677,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1685,7 +1697,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1705,7 +1717,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(5),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -1718,7 +1730,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::GateFollow),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(3), Some(&RuleKey::GateFollow));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(4), Some(&RuleKey::GateFollow));
     }
 
     #[test]
@@ -1729,7 +1741,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(2), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(3), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -1740,7 +1752,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -1757,7 +1769,24 @@ mod tests {
             assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::CronDateCompare));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::CronDateCompare)
+        );
+    }
+
+    #[test]
+    fn the_news_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::NewsGovtMatch.key(), "news_govt_match");
+        assert_eq!(
+            RuleKey::from_key("news_govt_match"),
+            Some(RuleKey::NewsGovtMatch)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::NewsGovtMatch),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::NewsGovtMatch));
     }
 
     #[test]
@@ -1859,7 +1888,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(16),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -2008,7 +2037,8 @@ mod tests {
                 RuleKey::GateFollow,
                 RuleKey::AuxGate,
                 RuleKey::CronRandomScale,
-                RuleKey::CronDateCompare
+                RuleKey::CronDateCompare,
+                RuleKey::NewsGovtMatch
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
