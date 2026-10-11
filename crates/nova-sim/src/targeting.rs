@@ -5,15 +5,17 @@
 //!
 //! - A ship is targetable ([`targetable`]) while it is intact or
 //!   disabled: a ship breaking up or destroyed is not (`_IsDying`). Target
-//!   Select and Closest Target skip the player's escorts ([`candidate`]).
+//!   Select skips the player's hired escorts ([`candidate`]), and Closest
+//!   Target every ship the player leads, mission escorts too ([`nearest`]).
 //!   A cloaked ship ([`Cloak::is_cloaked`](crate::cloak::Cloak::is_cloaked))
 //!   other than the player's escort is not targetable, and a target that
 //!   cloaks is let go, unless the player can target cloaked ships (a cloak
 //!   scanner's `ModVal` 0x0008, `_ShipCanTargetCloakedShips` @0x2466;
 //!   `_HandlePlayer` @0x686bf-0x686ee, the searches @0x6a440-0x6a460, a
 //!   mouse click @0x3810b-0x38130): the original asks the cloak itself,
-//!   not whether the player sees the ship. Untargetable ships are not
-//!   modelled. A
+//!   not whether the player sees the ship. Untargetable ships (`shïp`
+//!   `Flags2` 0x0004) are not modelled yet: rdm phase
+//!   player-led-ships/phase-18-untargetable-ships takes them. A
 //!   ship waiting at the hypergate or wormhole it comes out of
 //!   ([`Npc::emerging`]) is not targetable
 //!   (`_AIShipIsEmergingFromHypergate` @0x7e2e8, read by
@@ -72,22 +74,24 @@ pub fn targetable(npc: &Npc, cloaked_ok: bool) -> bool {
         && (cloaked_ok || npc.escorts_player() || !npc.cloak.is_cloaked())
 }
 
-/// Whether `npc` is a candidate for Target Select and Closest Target:
-/// targetable, as `cloaked_ok` says, and not one of the player's escorts.
-/// A mission escort is a candidate, as Target Select's escort class
-/// leaves out an active `ShipBehav` 1 ship (`_FindNextShipInSystem`
-/// @0xa6c1-0xa72b). Closest Target skips every ship the player leads
-/// ([`Session::player_led`](crate::Session::player_led),
-/// `_FindNearestShipToPlayer` @0x92a6), which rdm phase
-/// player-led-ships/phase-6-closest-target-skips-mission-escorts takes.
+/// Whether `npc` is a candidate for Target Select: targetable, as
+/// `cloaked_ok` says, and not one of the player's hired escorts. A
+/// mission escort is a candidate, as Target Select's escort class leaves
+/// out an active `ShipBehav` 1 ship (`_FindNextShipInSystem`
+/// @0xa6c1-0xa72b).
 #[must_use]
 pub fn candidate(npc: &Npc, cloaked_ok: bool) -> bool {
     targetable(npc, cloaked_ok) && npc.escort.is_none()
 }
 
-/// The candidate among `npcs` that passes `filter` nearest `from`, by
-/// squared distance, a tie going to the earlier; none when none qualifies.
-/// Cloaked ships are candidates when `cloaked_ok`.
+/// The ship among `npcs` that passes `filter` nearest `from`, by squared
+/// distance, a tie going to the earlier; none when none qualifies. Cloaked
+/// ships are candidates when `cloaked_ok`. Every ship the player leads
+/// ([`Npc::escorts_player`], [`Session::player_led`](crate::Session::player_led))
+/// is skipped, mission escorts too (`_FindNearestShipToPlayer` @0x92a6,
+/// `_FindNearestThreatToPlayer` @0x94db), so [`targetable`]'s exception
+/// for a cloaked escort never applies here: the original skips the
+/// escorts (@0x92a6) before it asks about the cloak (@0x92d6).
 #[must_use]
 pub fn nearest(
     npcs: &[Npc],
@@ -98,7 +102,7 @@ pub fn nearest(
     let mut best: Option<(f32, NpcId)> = None;
     for npc in npcs
         .iter()
-        .filter(|npc| candidate(npc, cloaked_ok) && filter(npc))
+        .filter(|npc| nearest_candidate(npc, cloaked_ok) && filter(npc))
     {
         let off = npc.state.position - from;
         let distance = off.x * off.x + off.y * off.y;
@@ -107,6 +111,12 @@ pub fn nearest(
         }
     }
     best.map(|(_, id)| id)
+}
+
+/// Whether `npc` is a candidate for Closest Target: targetable, as
+/// `cloaked_ok` says, and not led by the player.
+fn nearest_candidate(npc: &Npc, cloaked_ok: bool) -> bool {
+    targetable(npc, cloaked_ok) && !npc.escorts_player()
 }
 
 /// The first candidate among `npcs` numbered after `current`, or the
@@ -310,6 +320,43 @@ mod tests {
             order: None,
         });
         npc
+    }
+
+    /// NPC `id` at (`x`, `y`), a mission escort (`ShipBehav` 1) that has
+    /// joined the player.
+    fn mission_escort(id: u32, x: f32, y: f32) -> Npc {
+        let mut npc = intact(id, x, y);
+        npc.mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            formation: Some(crate::escort::FormationSlot::default()),
+        });
+        npc
+    }
+
+    #[test]
+    fn the_nearest_passes_over_a_mission_escort_for_the_next_nearest_ship() {
+        let npcs = [mission_escort(1, 5.0, 0.0), intact(2, 10.0, 0.0)];
+        assert_eq!(nearest_(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));
+        assert_eq!(nearest_(&npcs[..1], Vec2::ZERO, |_| true), None);
+        assert_eq!(
+            next(&npcs, None, false),
+            Some(NpcId(1)),
+            "Tab still takes a mission escort"
+        );
+    }
+
+    #[test]
+    fn a_disabled_or_cloaked_mission_escort_is_never_the_nearest() {
+        let mut disabled = mission_escort(1, 5.0, 0.0);
+        disabled.condition = Condition::Disabled;
+        let npcs = [disabled, intact(2, 10.0, 0.0)];
+        assert_eq!(nearest_(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));
+        let mut hidden = mission_escort(1, 5.0, 0.0);
+        hidden.cloak = cloaked(1, 0.0, 0.0).cloak;
+        let npcs = [hidden, intact(2, 10.0, 0.0)];
+        assert_eq!(nearest(&npcs, Vec2::ZERO, true, |_| true), Some(NpcId(2)));
     }
 
     #[test]

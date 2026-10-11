@@ -908,7 +908,7 @@ mod tests {
     // Not a hired escort.
 
     #[test]
-    fn a_mission_escort_is_no_hired_escort_and_the_nearest_target_can_pick_it() {
+    fn a_mission_escort_is_no_hired_escort_and_the_nearest_target_passes_it_over() {
         let catalog = ships_catalog(escorting(-1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
@@ -919,11 +919,32 @@ mod tests {
         assert!(session.pilot().escorts().is_empty());
         assert_eq!(session.pilot.escort_count(), 0, "the hiring room's count");
         assert_eq!(session.select_target(TargetPick::NextEscort), None);
-        // The original's Closest Target skips every ship led by the player
-        // (`_FindNearestShipToPlayer` @0x92a6-0x92ae), mission escorts
-        // too; here only the hired escorts are skipped.
-        assert!(session.select_target(TargetPick::Nearest).is_some());
         assert_eq!(session.pilot.system, SystemId(130));
+        // Closest Target skips every ship led by the player, mission
+        // escorts too (`_FindNearestShipToPlayer` @0x92a6-0x92ae,
+        // `_FindNearestThreatToPlayer` @0x94db), even one attacking him.
+        for npc in session.traffic.npcs_mut() {
+            npc.goal = Goal::Attack(crate::combat::ShipRef::Player);
+        }
+        assert_eq!(session.select_target(TargetPick::Nearest), None);
+        assert_eq!(session.select_target(TargetPick::NearestThreat), None);
+        let player = session.player.position;
+        let npcs = session.traffic.npcs_mut();
+        npcs[0].state.position = player + crate::geometry::Vec2::new(5.0, 0.0);
+        npcs[1].state.position = player + crate::geometry::Vec2::new(500.0, 0.0);
+        npcs[1].mission = None;
+        let ordinary = npcs[1].id;
+        assert_eq!(session.select_target(TargetPick::Nearest), Some(ordinary));
+        assert_eq!(
+            session.select_target(TargetPick::NearestThreat),
+            Some(ordinary)
+        );
+        session.traffic.npcs_mut()[1].condition = Condition::Destroyed;
+        assert_eq!(
+            session.select_target(TargetPick::Nearest),
+            Some(ordinary),
+            "the target is left as it was"
+        );
     }
 
     // Escort commands (`_IssueNewEscortCommand` @0x660d5).
