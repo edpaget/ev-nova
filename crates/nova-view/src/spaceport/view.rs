@@ -34,7 +34,11 @@
 //! answers with them ([`SpaceportView::open_hire`]), the ship the hire
 //! screen asks for is taken through the spaceport
 //! ([`SpaceportView::take_hire`]), and after the hire the hire screen
-//! closes back to the bar ([`SpaceportView::set_hire`]).
+//! closes back to the bar ([`SpaceportView::set_hire`]). As the bar
+//! opens it says so ([`SpaceportView::take_bar_opened`]), so whoever
+//! flies the ship draws the visit's news; its Holovid (News) asks for it
+//! ([`SpaceportView::take_news_request`]), and the answer opens the news
+//! over the bar ([`SpaceportView::open_news`]).
 //!
 //! Given the mission screens ([`SpaceportView::with_missions`]), Mission
 //! BBS asks for the mission computer
@@ -81,7 +85,7 @@ use std::time::Duration;
 
 use nova_sim::mission::screens::{BAR, OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENTER};
 use nova_sim::{
-    ComputerRefusal, HireList, Market, MissionComputer, MissionId, MissionInfo, MissionText,
+    ComputerRefusal, HireList, Market, MissionComputer, MissionId, MissionInfo, MissionText, News,
     OfferPrompt, Order, OutfitOrder, Outfitter, RechargeRefusal, Reselection, SaleAlert, Service,
     ShipId, ShipNaming, Shipyard, sells_fuel, services,
 };
@@ -260,13 +264,18 @@ impl std::fmt::Debug for Shipbuying {
     }
 }
 
-/// The bar given: its dialog template (or why there is none), what its
-/// hire screen is built from, and whether the fleet has room.
+/// The bar given: its dialog template and its news dialog's (or why
+/// there are none), what its hire screen is built from, and whether the
+/// fleet has room.
 #[derive(Clone, Debug)]
 struct Barkeeping {
     template: Result<DialogTemplate, String>,
+    /// The news dialog's template, or why there is none.
+    news: Result<DialogTemplate, String>,
     hiring: Hiring,
     room: bool,
+    /// Whether the bar has opened since this was last taken.
+    opened: bool,
 }
 
 /// The mission screens given: their dialog templates, or why there are
@@ -655,14 +664,16 @@ impl SpaceportView {
     /// The spaceport with the stellar's bar, which the Bar opens laid out
     /// by `template`, the bar dialog (or saying why there is none), its
     /// text and the ships' pictures and descriptions read from `catalog`;
-    /// its hire screen is laid out by `hire_template`, the "Shipyard"
-    /// dialog, with its info panel by `info_template`, "Shipyard Info".
-    /// Hire Escort is greyed unless the fleet has `room`. Without it, the
-    /// Bar opens its placeholder.
+    /// its news is laid out by `news_template`, the news dialog, and its
+    /// hire screen by `hire_template`, the "Shipyard" dialog, with its
+    /// info panel by `info_template`, "Shipyard Info". Hire Escort is
+    /// greyed unless the fleet has `room`. Without it, the Bar opens its
+    /// placeholder.
     #[must_use]
     pub fn with_bar(
         self,
         template: Result<DialogTemplate, String>,
+        news_template: Result<DialogTemplate, String>,
         hire_template: Result<DialogTemplate, String>,
         info_template: InfoTemplates,
         catalog: Rc<dyn ShipyardCatalog>,
@@ -671,12 +682,14 @@ impl SpaceportView {
         Self {
             barkeeping: Some(Barkeeping {
                 template,
+                news: news_template,
                 hiring: Hiring {
                     template: hire_template,
                     info: info_template,
                     catalog,
                 },
                 room,
+                opened: false,
             }),
             ..self
         }
@@ -688,6 +701,32 @@ impl SpaceportView {
         match &self.open {
             Some(Open::Bar(screen)) => Some(screen),
             _ => None,
+        }
+    }
+
+    /// Whether the bar has opened since this was last asked: whoever flies
+    /// the ship draws the visit's news then, before anything can show it.
+    pub fn take_bar_opened(&mut self) -> bool {
+        self.barkeeping
+            .as_mut()
+            .is_some_and(|barkeeping| std::mem::take(&mut barkeeping.opened))
+    }
+
+    /// Whether the bar's Holovid (News) has asked for the visit's news
+    /// since this was last asked: whoever flies the ship answers with
+    /// [`SpaceportView::open_news`].
+    pub fn take_news_request(&mut self) -> bool {
+        match &mut self.open {
+            Some(Open::Bar(screen)) => screen.take_news_request(),
+            _ => false,
+        }
+    }
+
+    /// Opens the news dialog over the bar open on `news`.
+    pub fn open_news(&mut self, news: &News) {
+        if let Some(Open::Bar(screen)) = &mut self.open {
+            screen.open_news(news);
+            self.sounds.extend(screen.take_sounds());
         }
     }
 
@@ -1093,9 +1132,11 @@ impl SpaceportView {
                 port.style,
                 barkeeping.room,
             );
+            bar = bar.with_news(barkeeping.news.clone());
             if let Some(missioning) = &self.missioning {
                 bar = bar.with_offers(missioning.offer.clone());
             }
+            barkeeping.opened = true;
             self.open = Some(Open::Bar(Box::new(bar)));
             return;
         }
@@ -2906,6 +2947,70 @@ mod tests {
         }
     }
 
+    /// "News": 300 x 230, centred, with no items.
+    fn news_template() -> Template {
+        Template {
+            bounds: rect(40.0, 40.0, 300.0, 230.0),
+            placement: Placement::Center,
+            items: Vec::new(),
+        }
+    }
+
+    fn the_news() -> nova_sim::News {
+        nova_sim::News {
+            commercial: "Buy Bibble".to_owned(),
+            story: "<PN> wins".to_owned(),
+        }
+    }
+
+    #[test]
+    fn opening_the_bar_is_told_once() {
+        let mut view = drinking(true);
+        assert!(!view.take_bar_opened(), "nothing open");
+        click_item(&mut view, 10);
+        assert!(view.take_bar_opened());
+        assert!(!view.take_bar_opened(), "once");
+        view.input(&key(Key::Escape));
+        assert!(!view.take_bar_opened(), "leaving is not opening");
+        click_item(&mut view, 10);
+        assert!(view.take_bar_opened(), "each time it opens");
+        let mut view = earth();
+        click_item(&mut view, 10);
+        assert!(!view.take_bar_opened(), "the placeholder is not the bar");
+    }
+
+    #[test]
+    fn the_bars_news_asks_through_the_spaceport_and_opens_over_the_bar() {
+        let mut view = drinking(true);
+        assert!(!view.take_news_request(), "nothing open");
+        view.open_news(&the_news());
+        click_item(&mut view, 10);
+        assert!(
+            view.open_bar().and_then(BarScreen::news_screen).is_none(),
+            "only an answer opens it"
+        );
+        let at = bar_item(&view, 3);
+        click(&mut view, at);
+        assert!(view.take_news_request());
+        assert!(!view.take_news_request(), "once");
+        view.take_sounds();
+        view.open_news(&the_news());
+        let news = view
+            .open_bar()
+            .and_then(BarScreen::news_screen)
+            .expect("open over the bar");
+        assert_eq!(news.problem(), None, "laid out by the template given");
+        assert_eq!(
+            news.story().map(|story| story.lines().join(" ")),
+            Some("<PN> wins".to_owned())
+        );
+        assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::NewsOpened)]);
+        view.input(&key(Key::Escape));
+        assert!(view.open_bar().is_some(), "closed back to the bar");
+        assert!(view.open_bar().and_then(BarScreen::news_screen).is_none());
+        assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::NewsClosed)]);
+    }
+
     /// `rows` ships for hire, the fleet with `room` or not.
     fn hirelings(rows: usize, room: bool) -> HireList {
         HireList {
@@ -2940,6 +3045,7 @@ mod tests {
         let art: Rc<dyn ShipyardCatalog> = Rc::new(catalog());
         earth().with_bar(
             Ok(bar_template()),
+            Ok(news_template()),
             Ok(shipyard_template()),
             no_info(),
             art,
@@ -3301,6 +3407,7 @@ mod tests {
         let art: Rc<dyn ShipyardCatalog> = Rc::new(catalog());
         missioned().with_bar(
             Ok(bar_template()),
+            Ok(news_template()),
             Ok(shipyard_template()),
             no_info(),
             art,
@@ -3353,6 +3460,7 @@ mod tests {
             )
             .with_bar(
                 Ok(bar_template()),
+                Ok(news_template()),
                 Ok(shipyard_template()),
                 no_info(),
                 ships,

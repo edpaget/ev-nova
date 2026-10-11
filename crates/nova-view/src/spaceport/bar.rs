@@ -7,8 +7,8 @@
 //! (`dësc` 10000 plus the stellar's ID less 128) in item 7, and below it
 //! Hire Escort (item 5, `STR#` 150 #13) and Gamble (item 2, #11) on one
 //! row, Holovid (item 3, #12) and Leave (item 1, #1) on the next. Gamble
-//! and Holovid are not built yet, so they show greyed. The screen enables
-//! its buttons itself, as the stock items are all disabled.
+//! is not built yet, so it shows greyed. The screen enables its buttons
+//! itself, as the stock items are all disabled.
 //!
 //! Hire Escort, clicked or with H or E (presses, never repeats), asks for
 //! the ships for hire ([`BarScreen::take_hire_request`]); it is greyed
@@ -21,6 +21,17 @@
 //! ([`BarScreen::take_hire`]), and after the hire the screen closes back
 //! to the bar ([`BarScreen::set_hire`]).
 //!
+//! Holovid is the original's News button, always enabled
+//! (`_DrawBarButtons` @0x26e83). Clicked, or with N or W (`_BarFilter`'s
+//! Mac virtual keys 0x2D and 0x0D, @0x47b33-0x47b48; presses, never
+//! repeats), it asks for the visit's news
+//! ([`BarScreen::take_news_request`]), drawn as the bar opened; whoever
+//! holds the session answers with it ([`BarScreen::open_news`]), and the
+//! [`NewsScreen`] opens over the bar, laid out by the news dialog's
+//! template ([`BarScreen::with_news`]). It covers the bar, as the
+//! original's news picture does, and takes every input until it closes
+//! back to the bar.
+//!
 //! Given the offer dialog's template ([`BarScreen::with_offers`]), the bar
 //! offers missions as `_BarFilter` (@0x47be0-0x47c0f) and
 //! `_OfferMissionFromPort` (@0xa369e) do: [`FIRST_OFFER_DELAY`] after it
@@ -29,8 +40,8 @@
 //! [`OfferDialog`] over the bar ([`BarScreen::open_offer`]), or rearms it
 //! ([`BarScreen::rearm`]) with the gap drawn. The offer's choice is taken
 //! through the bar ([`BarScreen::take_offer_choice`]), and the bar asks
-//! again once rearmed. Nothing is asked while the hire screen or an offer
-//! is open. [`MISSION_INFO_KEY`] asks for the mission info screen
+//! again once rearmed. Nothing is asked while the hire screen, the news
+//! or an offer is open. [`MISSION_INFO_KEY`] asks for the mission info screen
 //! ([`BarScreen::take_info_request`]).
 //!
 //! Leave, Return, Enter and Escape leave the bar. Without its dialog, the
@@ -41,11 +52,12 @@ use std::time::Duration;
 
 use nova_sim::hire::{HIRE_ESCORT, NONE_FOR_HIRE};
 use nova_sim::mission::screens::{FIRST_OFFER_TICKS, mac_ticks};
-use nova_sim::{HireList, MissionId, OfferPrompt, ShipId};
+use nova_sim::{HireList, MissionId, News, OfferPrompt, ShipId};
 
 use super::catalog::StellarId;
 use super::hire::HireScreen;
 use super::layout::LEAVE_LABEL;
+use super::news::{NEWS_DIALOG, NewsScreen};
 use super::offer::{OfferChoice, OfferDialog, VenueOffers};
 use super::shipyard::{InfoTemplates, ShipyardCatalog};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
@@ -70,7 +82,7 @@ pub const BACKGROUND: ImageKey = ImageKey::picture(8503);
 pub const LEAVE_ITEM: usize = 1;
 /// Gamble's item.
 pub const GAMBLE_ITEM: usize = 2;
-/// Holovid's item.
+/// Holovid's item: the original's News button.
 pub const HOLOVID_ITEM: usize = 3;
 /// Hire Escort's item.
 pub const HIRE_ITEM: usize = 5;
@@ -85,6 +97,10 @@ pub const HOLOVID_LABEL: &str = "Holovid";
 /// The keys that press Hire Escort (`_BarFilter`: Mac virtual keys 4 and
 /// 14).
 pub const HIRE_KEYS: [Key; 2] = [Key::Char('h'), Key::Char('e')];
+
+/// The keys that press Holovid, the News button (`_BarFilter`: Mac
+/// virtual keys 0x2D and 0x0D, @0x47b33-0x47b48).
+pub const NEWS_KEYS: [Key; 2] = [Key::Char('n'), Key::Char('w')];
 
 /// The key that asks for the mission info screen from the bar, the
 /// spaceport, the mission computer and flight. The original reads it
@@ -158,6 +174,8 @@ struct Asks {
     hire: bool,
     /// The mission info screen: [`MISSION_INFO_KEY`] was pressed.
     info: bool,
+    /// The visit's news: Holovid was pressed.
+    news: bool,
 }
 
 /// The bar of the stellar landed on.
@@ -171,6 +189,10 @@ pub struct BarScreen {
     room: bool,
     /// The hire screen, while it is open.
     hire: Option<HireScreen>,
+    /// The news dialog's template, or why there is none.
+    news_template: Result<DialogTemplate, String>,
+    /// The news, while it is open.
+    news: Option<NewsScreen>,
     /// The mission offers, once given.
     offering: Option<VenueOffers>,
     /// What the bar has asked for since each was last taken.
@@ -223,7 +245,6 @@ impl BarScreen {
                 .with_default(Some(LEAVE_ITEM))
                 .with_cancel(Some(LEAVE_ITEM));
             dialog.set_greyed(GAMBLE_ITEM, true);
-            dialog.set_greyed(HOLOVID_ITEM, true);
             dialog.set_greyed(HIRE_ITEM, !room);
             Laid {
                 dialog,
@@ -238,11 +259,50 @@ impl BarScreen {
             style,
             room,
             hire: None,
+            news_template: Err(format!("the news dialog (DLOG {NEWS_DIALOG}) is not given")),
+            news: None,
             offering: None,
             asks: Asks::default(),
             closed: false,
             sounds: Vec::new(),
         }
+    }
+
+    /// The bar with its news shown in the news dialog laid out by
+    /// `template` (or saying why there is none).
+    #[must_use]
+    pub fn with_news(self, template: Result<DialogTemplate, String>) -> Self {
+        Self {
+            news_template: template,
+            ..self
+        }
+    }
+
+    /// Whether Holovid has asked for the visit's news since this was last
+    /// asked: whoever holds the session answers with
+    /// [`BarScreen::open_news`].
+    pub fn take_news_request(&mut self) -> bool {
+        std::mem::take(&mut self.asks.news)
+    }
+
+    /// Opens the news dialog over the bar on `news`.
+    pub fn open_news(&mut self, news: &News) {
+        let Ok(laid) = &self.laid else {
+            return;
+        };
+        let layout = self
+            .news_template
+            .clone()
+            .map(|template| (template, Rc::clone(&laid.metrics.0)));
+        let mut screen = NewsScreen::new(layout, news);
+        self.sounds.extend(screen.take_sounds());
+        self.news = Some(screen);
+    }
+
+    /// The news, while it is open.
+    #[must_use]
+    pub fn news_screen(&self) -> Option<&NewsScreen> {
+        self.news.as_ref()
     }
 
     /// The bar with mission offers, each shown in the offer dialog laid
@@ -390,21 +450,30 @@ impl BarScreen {
         self.asks.hire = true;
     }
 
-    /// Activates dialog item `item`: Leave leaves and Hire Escort asks.
-    /// Anything else does nothing.
+    /// Activates dialog item `item`: Leave leaves, and Hire Escort and
+    /// Holovid ask. Anything else does nothing.
     fn activate(&mut self, item: usize) {
         match item {
             LEAVE_ITEM => self.closed = true,
             HIRE_ITEM => self.ask(),
+            HOLOVID_ITEM => self.asks.news = true,
             _ => {}
         }
     }
 }
 
 impl Screen for BarScreen {
-    /// The hire screen takes every input while it is open; otherwise
-    /// every input goes to the bar. It never quits.
+    /// The news, the offer and the hire screen each take every input
+    /// while open; otherwise every input goes to the bar. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(news) = &mut self.news {
+            news.input(input);
+            self.sounds.extend(news.take_sounds());
+            if news.closed() {
+                self.news = None;
+            }
+            return ScreenAction::None;
+        }
         if let Some(offering) = &mut self.offering
             && offering.input(input, &mut self.sounds)
         {
@@ -439,6 +508,16 @@ impl Screen for BarScreen {
             self.ask();
             return ScreenAction::None;
         }
+        if let Input::Key {
+            key,
+            pressed: true,
+            repeat: false,
+        } = *input
+            && NEWS_KEYS.contains(&key)
+        {
+            self.asks.news = true;
+            return ScreenAction::None;
+        }
         if *input
             == (Input::Key {
                 key: MISSION_INFO_KEY,
@@ -458,16 +537,23 @@ impl Screen for BarScreen {
     }
 
     /// The wait for the next offer runs down, while neither the hire
-    /// screen nor an offer is open; once it is out the bar asks.
+    /// screen, the news nor an offer is open; once it is out the bar asks.
     fn tick(&mut self, dt: Duration) {
         if let Some(offering) = &mut self.offering
             && self.hire.is_none()
+            && self.news.is_none()
         {
             offering.tick(dt);
         }
     }
 
+    /// The news, while it is open, covering the bar; otherwise the bar,
+    /// with the hire screen and the offer over it.
     fn draw(&self, list: &mut DrawList) {
+        if let Some(news) = &self.news {
+            news.draw(list);
+            return;
+        }
         match &self.laid {
             Ok(laid) => {
                 list.picture(BACKGROUND, laid.dialog.bounds().min);
@@ -506,7 +592,8 @@ impl Screen for BarScreen {
         }
     }
 
-    /// The buttons' sounds, the hire screen's included, in order.
+    /// The buttons' sounds, the hire screen's and the news' included, in
+    /// order.
     fn take_sounds(&mut self) -> Vec<Sound> {
         std::mem::take(&mut self.sounds)
     }
@@ -756,13 +843,14 @@ mod tests {
             Some(rect(ORIGIN.x + 16.0, ORIGIN.y + 10.0, 230.0, 106.0))
         );
         let words = texts(&screen);
-        for label in [LEAVE_LABEL, HIRE_ESCORT] {
+        for label in [LEAVE_LABEL, HIRE_ESCORT, HOLOVID_LABEL] {
             assert!(enabled(&screen, label), "{label}: {words:?}");
         }
-        for label in [GAMBLE_LABEL, HOLOVID_LABEL] {
-            assert!(!enabled(&screen, label), "{label} greyed");
-            assert!(words.iter().any(|(text, _)| text == label), "{label}");
-        }
+        assert!(!enabled(&screen, GAMBLE_LABEL), "Gamble greyed");
+        assert!(
+            words.iter().any(|(text, _)| text == GAMBLE_LABEL),
+            "Gamble shown"
+        );
         assert_eq!(screen.problem(), None);
         assert_eq!(screen.message(), None);
     }
@@ -779,9 +867,9 @@ mod tests {
         assert!(screen.closed());
         let mut screen = bar();
         click_item(&mut screen, GAMBLE_ITEM);
-        click_item(&mut screen, HOLOVID_ITEM);
         assert!(!screen.closed());
-        assert!(!screen.take_hire_request(), "greyed, they do nothing");
+        assert!(!screen.take_hire_request(), "greyed, it does nothing");
+        assert!(!screen.take_news_request());
     }
 
     #[test]
@@ -1174,6 +1262,127 @@ mod tests {
             Some((MissionId(141), OfferChoice::Refuse))
         );
         assert_eq!(screen.take_sounds(), [DOWN, UP]);
+    }
+
+    // The news.
+
+    use crate::sound::UiSound;
+    use nova_sim::News;
+
+    /// "News": 300 x 230, centred, with no items.
+    fn news_template() -> DialogTemplate {
+        DialogTemplate {
+            bounds: rect(40.0, 40.0, 300.0, 230.0),
+            placement: Placement::Center,
+            items: Vec::new(),
+        }
+    }
+
+    fn news() -> News {
+        News {
+            commercial: "Buy Bibble".to_owned(),
+            story: "<PN> wins".to_owned(),
+        }
+    }
+
+    fn newsy() -> BarScreen {
+        bar().with_news(Ok(news_template()))
+    }
+
+    #[test]
+    fn news_n_and_w_ask_for_the_news_on_a_press_only() {
+        let mut screen = newsy();
+        assert!(!screen.take_news_request());
+        click_item(&mut screen, HOLOVID_ITEM);
+        assert!(screen.take_news_request());
+        assert!(!screen.take_news_request(), "once");
+        for news in NEWS_KEYS {
+            screen.input(&key(news, true));
+            assert!(!screen.take_news_request(), "{news:?} repeating");
+            screen.input(&key(news, false));
+            assert!(screen.take_news_request(), "{news:?}");
+        }
+        assert_eq!(NEWS_KEYS, [Key::Char('n'), Key::Char('w')]);
+        assert!(!screen.take_hire_request());
+        assert!(!screen.closed());
+        assert!(screen.news_screen().is_none(), "the answer opens it");
+    }
+
+    #[test]
+    fn the_news_opens_over_the_bar_and_takes_every_input_until_it_closes() {
+        let mut screen = newsy();
+        screen.take_sounds();
+        screen.open_news(&news());
+        let open = screen.news_screen().expect("open");
+        assert_eq!(open.problem(), None, "its own template");
+        assert_eq!(
+            open.story().map(|story| story.lines().join(" ")),
+            Some("<PN> wins".to_owned())
+        );
+        let words: Vec<String> = texts(&screen).into_iter().map(|(text, _)| text).collect();
+        assert!(words.iter().any(|text| text == "Buy Bibble"), "{words:?}");
+        assert!(
+            !words
+                .iter()
+                .any(|text| text == LEAVE_LABEL || text.contains("dësc")),
+            "the news covers the bar: {words:?}"
+        );
+        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::NewsOpened)]);
+        for taken in [key(Key::Char('h'), false), key(Key::Char('n'), false)] {
+            screen.input(&taken);
+        }
+        assert!(!screen.take_hire_request() && !screen.take_news_request());
+        screen.input(&key(Key::Escape, false));
+        assert!(screen.news_screen().is_none(), "closed back to the bar");
+        assert!(!screen.closed(), "the bar stays open");
+        assert_eq!(screen.take_sounds(), [Sound::Ui(UiSound::NewsClosed)]);
+        assert!(texts(&screen).iter().any(|(text, _)| text == LEAVE_LABEL));
+    }
+
+    #[test]
+    fn without_the_news_dialog_given_the_news_says_so() {
+        let mut screen = bar();
+        screen.open_news(&news());
+        let open = screen.news_screen().expect("open");
+        assert!(open.problem().is_some_and(|why| why.contains("1014")));
+        screen.input(&key(Key::Enter, false));
+        assert!(screen.news_screen().is_none());
+        let mut screen = bar().with_news(Err("no DLOG 1014 here".to_owned()));
+        screen.open_news(&news());
+        assert_eq!(
+            screen.news_screen().and_then(NewsScreen::problem),
+            Some("no DLOG 1014 here")
+        );
+    }
+
+    #[test]
+    fn a_bar_that_cannot_be_shown_opens_no_news() {
+        let mut screen = BarScreen::new(
+            Err("no DLOG 1013".to_owned()),
+            StellarId(157),
+            hiring(&Rc::new(FakeArt {
+                asked: RefCell::default(),
+            })),
+            ButtonStyle::STOCK,
+            true,
+        )
+        .with_news(Ok(news_template()));
+        screen.open_news(&news());
+        assert!(screen.news_screen().is_none());
+    }
+
+    #[test]
+    fn no_offer_is_asked_for_while_the_news_is_open() {
+        let mut screen = offering().with_news(Ok(news_template()));
+        screen.open_news(&news());
+        screen.tick(ms(10_000));
+        assert!(!screen.take_offer_request());
+        screen.input(&key(Key::Escape, false));
+        screen.tick(ms(250));
+        assert!(
+            screen.take_offer_request(),
+            "the wait goes on once it closes"
+        );
     }
 
     #[test]

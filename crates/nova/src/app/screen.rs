@@ -213,6 +213,7 @@ use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::bar::BAR_DIALOG;
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::spaceport::missions::{COMPUTER_DIALOG, INFO_DIALOG, MissionInfoScreen};
+use nova_view::spaceport::news::NEWS_DIALOG;
 use nova_view::spaceport::offer::{OFFER_DIALOG, OfferChoice, OfferDialog};
 use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
 use nova_view::spaceport::shipyard::{
@@ -1418,6 +1419,7 @@ impl AppScreen {
             spaceport = spaceport
                 .with_bar(
                     template_of(BAR_DIALOG),
+                    template_of(NEWS_DIALOG),
                     template_of(SHIPYARD_DIALOG),
                     info_templates(),
                     art,
