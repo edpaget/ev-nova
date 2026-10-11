@@ -771,7 +771,7 @@ impl Arsenal {
     /// `WeapCount` and `AmmoLoad`, a later slot naming the same weapon
     /// replacing an earlier one's (`_LoadObjectData` @0x7aa72, @0x7aa90);
     /// none for a class that cannot be read.
-    fn stock_slots(&self, ship: ShipId) -> BTreeMap<WeaponId, (i16, i16)> {
+    pub(crate) fn stock_slots(&self, ship: ShipId) -> BTreeMap<WeaponId, (i16, i16)> {
         self.stock_weapons(ship)
             .iter()
             .map(|stock| (stock.weapon, (stock.count, stock.ammo)))
