@@ -93,18 +93,10 @@ impl Session {
         debug_assert!(registered.is_ok(), "a slot filled registers once");
     }
 
-    /// Whether ships in `system` are in the player's system: the system
-    /// standing for theirs at its place is the player's, as the original
-    /// resolves +0x10 through `_FindActiveCoLocatedSystem` (@0x42e5c,
-    /// @0x43776), or they follow the player.
+    /// Whether ships in `system` are in the player's system
+    /// ([`ShipSystem::with_player`]), over the overlaid map's places.
     fn ships_here(&self, system: ShipSystem) -> bool {
-        match system {
-            ShipSystem::At(at) => {
-                self.galaxy.map().places().stand_in(at) == Some(self.pilot.system)
-            }
-            ShipSystem::FollowsPlayer => true,
-            ShipSystem::Nowhere => false,
-        }
+        system.with_player(self.pilot.system, self.galaxy.map().places())
     }
 
     /// Whether the enter-system hook restarts the appear timer of the

@@ -6,7 +6,7 @@
 use crate::catalog::{CommCatalog, GovtId, MissionShip, SystemId};
 use crate::chance::Chance;
 use crate::govt::Governments;
-use crate::hyperspace::StarMap;
+use crate::hyperspace::{Places, StarMap};
 use crate::person::ESCORT_GOAL;
 
 use super::offer::Stop;
@@ -26,11 +26,15 @@ pub enum ShipSystem {
 }
 
 impl ShipSystem {
-    /// Whether the ships are in `system`.
+    /// Whether the ships are with the player in `player`'s system: the
+    /// system standing for theirs at its place among `places` is the
+    /// player's, as the original resolves +0x10 through
+    /// `_FindActiveCoLocatedSystem` (@0x42e5c, @0x43776), or they follow
+    /// the player.
     #[must_use]
-    pub fn holds(self, system: SystemId) -> bool {
+    pub fn with_player(self, player: SystemId, places: &Places) -> bool {
         match self {
-            Self::At(at) => at == system,
+            Self::At(at) => places.stand_in(at) == Some(player),
             Self::FollowsPlayer => true,
             Self::Nowhere => false,
         }
@@ -620,11 +624,37 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_system_holds_its_own_system_or_any_for_one_following_the_player() {
-        assert!(at(130).holds(SystemId(130)));
-        assert!(!at(130).holds(SystemId(131)));
-        assert!(ShipSystem::FollowsPlayer.holds(SystemId(131)));
-        assert!(!ShipSystem::Nowhere.holds(SystemId(130)));
+    fn ships_are_with_the_player_in_their_system_or_any_when_following() {
+        let map = map();
+        let places = map.places();
+        assert!(at(130).with_player(SystemId(130), places));
+        assert!(!at(130).with_player(SystemId(131), places));
+        assert!(
+            !at(135).with_player(SystemId(130), places),
+            "135 is visible: it stands for itself, not 130 at its place"
+        );
+        assert!(ShipSystem::FollowsPlayer.with_player(SystemId(131), places));
+        assert!(!ShipSystem::Nowhere.with_player(SystemId(130), places));
+    }
+
+    #[test]
+    fn ships_in_a_hidden_system_are_with_the_player_in_the_one_standing_for_it() {
+        // 138 is hidden at 130's place, 139 hidden alone.
+        let map = StarMap::with_hidden(
+            vec![
+                system(130, (0.0, 0.0), &[], Some(FED)),
+                system(138, (0.0, 0.0), &[], Some(FED)),
+                system(139, (100.0, 0.0), &[], None),
+            ],
+            &[SystemId(138), SystemId(139)].into(),
+        );
+        let places = map.places();
+        assert!(at(138).with_player(SystemId(130), places));
+        assert!(!at(138).with_player(SystemId(138), places));
+        assert!(
+            !at(139).with_player(SystemId(139), places),
+            "nothing stands for it"
+        );
     }
 
     /// `STR#` 7000 names, 7001 subtitles; 7002 is empty.
