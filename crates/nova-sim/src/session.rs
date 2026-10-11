@@ -761,6 +761,10 @@ pub struct Session {
     /// offers are re-offered after its last slot (see the `missions`
     /// module); never saved.
     reoffer_due: bool,
+    /// The slots of the missions accepted in flight, whose ship goals are
+    /// checked once the settling that accepted them is done (see the
+    /// `mission_ships` module); never saved.
+    goal_checks_due: Vec<u8>,
     /// The slot whose mission's script is running, if any: what a `Q`
     /// fills its mission tags from (see the `missions` module); never
     /// saved.
@@ -962,6 +966,7 @@ impl Session {
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
             offers: Offers::default(),
             reoffer_due: false,
+            goal_checks_due: Vec::new(),
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
             suppressed: BTreeSet::new(),
@@ -1244,6 +1249,7 @@ impl Session {
         self.resolve_person_offers(last, &mut &mut *chance);
         self.traffic_due = false;
         self.story.watched.clear();
+        self.mission_ships_came(last);
         self.enter_escorts();
         self.strikes.clear();
         self.aboard = None;
@@ -1529,7 +1535,7 @@ impl Session {
             &mut stellars,
             chance,
         );
-        self.raise_disabled(&was);
+        self.raise_disabled(&was, &mut &mut *chance);
         let mut strikes = self.combat.take_strikes();
         self.refill_invincible(&mut strikes);
         self.hold_grudges(&strikes);
@@ -1540,7 +1546,7 @@ impl Session {
         self.launch_fighters(&sorties);
         self.sync_fleet();
         self.lose_escorts();
-        self.take_out_the_destroyed();
+        self.take_out_the_destroyed(&mut &mut *chance);
         self.orphan_fighters();
         self.clear_lost_target();
         self.strike_stellars(&stellars, rules.law, chance);
@@ -1548,8 +1554,10 @@ impl Session {
     }
 
     /// Takes each NPC destroyed out of the system, raising
-    /// [`Fate::Destroyed`] for it as it goes.
-    fn take_out_the_destroyed(&mut self) {
+    /// [`Fate::Destroyed`] for it and counting it lost when it is a
+    /// mission's special ship, drawing on `chance` (see the
+    /// `mission_ships` module), as it goes.
+    fn take_out_the_destroyed(&mut self, chance: &mut dyn Chance) {
         let destroyed: Vec<NpcId> = self
             .traffic
             .npcs()
@@ -1562,7 +1570,7 @@ impl Session {
                 ship: id,
                 fate: Fate::Destroyed,
             });
-            self.count_lost_mission_ship(id);
+            self.count_lost_mission_ship(id, chance);
             self.lose_destroyed(id);
         }
     }
@@ -1570,8 +1578,14 @@ impl Session {
     /// Raises [`Fate::Disabled`] for each NPC that `was` intact before the
     /// fight's tick and is no longer: disabled, or broken up at once, which
     /// the original counts as disabled too (`_DamageShip` @0x3ae5b,
-    /// @0x3af8b), as [`Session::punish`] convicts it of both.
-    fn raise_disabled(&mut self, was: &[(NpcId, Condition, Option<GovtId>)]) {
+    /// @0x3af8b), as [`Session::punish`] convicts it of both. A mission's
+    /// special ship is counted disabled, drawing on `chance` (see the
+    /// `mission_ships` module).
+    fn raise_disabled(
+        &mut self,
+        was: &[(NpcId, Condition, Option<GovtId>)],
+        chance: &mut dyn Chance,
+    ) {
         let downed: Vec<NpcId> = self
             .traffic
             .npcs()
@@ -1589,6 +1603,7 @@ impl Session {
                 ship,
                 fate: Fate::Disabled,
             });
+            self.count_disabled_mission_ship(ship, chance);
         }
     }
 

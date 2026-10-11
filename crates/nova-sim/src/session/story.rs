@@ -248,6 +248,12 @@ impl Session {
         }
     }
 
+    /// The subscriptions `event` would run now, in the order they run.
+    #[cfg(test)]
+    pub(super) fn story_matching(&self, event: &StoryEvent) -> Vec<SubscriptionId> {
+        self.story.registry.matching(event)
+    }
+
     /// Lets go of the events raised, undispatched: a test's clean slate.
     #[cfg(test)]
     pub(super) fn drop_raised(&mut self) {

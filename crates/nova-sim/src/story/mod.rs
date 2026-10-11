@@ -1707,6 +1707,10 @@ pub enum Fate {
     /// First seen by the player: on screen and visible to it, which the
     /// original polls each frame and the flight tick raises here.
     Observed,
+    /// Brought into the player's system, a mission's special ship set up
+    /// with the system or come in on its timer: what the original's
+    /// per-frame poll sees of an escort goal's ships (@0x9e931-0x9e980).
+    Arrived,
 }
 
 /// Something that happened that story scripts react to, with its data,

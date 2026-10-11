@@ -114,7 +114,8 @@
 //! each `null` without a `TimeLimit`, whether its destination is
 //! `reached`, its `goals_met` and its cargo `aboard`, and how it
 //! `failed`: `null`, `quick` (at once, its `OnFailure` run) or
-//! `operator` (by `F`), and its special `ships`: their `system` (`{"at":
+//! `operator` (marked, by `F` or a ship goal's check, nothing run yet),
+//! and its special `ships`: their `system` (`{"at":
 //! 130}`, `"follows_player"`, or `null` for nowhere), how many are `left`
 //! and have `arrived`, their `appear` timer (-1 when it does not run),
 //! their drawn `name` and `subtitle`, and how many have been
@@ -595,7 +596,7 @@ impl From<FailedBy> for SavedFailure {
     fn from(failed: FailedBy) -> Self {
         match failed {
             FailedBy::Quick => Self::Quick,
-            FailedBy::Operator => Self::Operator,
+            FailedBy::Marked => Self::Operator,
         }
     }
 }
@@ -604,7 +605,7 @@ impl From<SavedFailure> for FailedBy {
     fn from(saved: SavedFailure) -> Self {
         match saved {
             SavedFailure::Quick => Self::Quick,
-            SavedFailure::Operator => Self::Operator,
+            SavedFailure::Operator => Self::Marked,
         }
     }
 }
@@ -1407,7 +1408,7 @@ mod tests {
                 reached: false,
                 goals_met: true,
                 aboard: false,
-                failed: Some(FailedBy::Operator),
+                failed: Some(FailedBy::Marked),
                 ships: SpecialShips {
                     system: ShipSystem::FollowsPlayer,
                     ..SpecialShips::default()

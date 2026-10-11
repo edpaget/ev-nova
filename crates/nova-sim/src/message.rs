@@ -19,6 +19,11 @@ pub enum SimMessage {
     /// mission whose `Flags` lacks 0x0400 (`_MissionObjectivesCheck`
     /// @0x9ebd0-0x9ec53).
     DeadlineMissed,
+    /// A mission failed as one of its special ships was destroyed or
+    /// disabled, for a mission whose `Flags` lacks 0x0400
+    /// (`_HandleShipDisplay` @0x2db31-0x2dbab, `_DamageShip`
+    /// @0x3aee8-0x3af62).
+    MissionShipLost,
     /// Every ton of cargo was jettisoned (`_JettisonCargo` @0x3e354).
     CargoJettisoned,
     /// The cargo but the missions' was jettisoned (`_JettisonCargo`

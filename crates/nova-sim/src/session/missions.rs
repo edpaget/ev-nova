@@ -277,7 +277,7 @@ impl Session {
             let registered = self.register_story(subscription);
             debug_assert!(registered.is_ok(), "a slot filled registers once");
         }
-        self.register_ship_hook(slot);
+        self.register_ship_hooks(slot);
     }
 
     /// Frees `slot` and unregisters its hooks, clearing their once-fired
@@ -288,7 +288,9 @@ impl Session {
         for hook in HOOKS {
             self.unregister_story(slot_hook(slot, hook));
         }
-        self.unregister_story(super::mission_ships::ship_hook(slot));
+        for id in super::mission_ships::ship_hooks(slot) {
+            self.unregister_story(id);
+        }
         self.save_due = true;
         Some(freed)
     }
@@ -486,6 +488,11 @@ impl Session {
         active.ships = self.ships_at_accept(record, &active, chance);
         let slot = self.pilot.missions.fill(active)?;
         self.register_slot(slot);
+        if self.landed.is_none() {
+            // In flight the original's per-frame poll checks the goals
+            // next (see the `mission_ships` module).
+            self.goal_checks_due.push(slot);
+        }
         self.save_due = true;
         self.run_mission_script(slot, &record.on_accept, chance);
         self.pilot.cash = accept_charge(offer.pay, self.pilot.cash);
@@ -523,7 +530,12 @@ impl Session {
     /// (`_currentMissionIndexForSetParser`, 0x31d6c2), so a `Q` fills its
     /// mission tags from it, then none, not the one before (@0x99a79), so
     /// after a nested mission's script the outer script has none.
-    fn run_mission_script(&mut self, slot: u8, script: &Script, chance: &mut dyn Chance) {
+    pub(super) fn run_mission_script(
+        &mut self,
+        slot: u8,
+        script: &Script,
+        chance: &mut dyn Chance,
+    ) {
         self.script_slot = Some(slot);
         self.run_script(script, chance);
         self.script_slot = None;
@@ -717,7 +729,7 @@ impl Session {
         };
         let record = self.lifecycle_record(active.mission);
         let repeats = self.rules.source_for(RuleKey::RepeatMissionFailure) == RuleSource::Engine;
-        if failed == FailedBy::Operator || repeats {
+        if failed == FailedBy::Marked || repeats {
             self.run_mission_script(slot, &record.on_failure, chance);
         }
         let changes = failure_records(&record, self.govt_targets(&record), |govt| {
@@ -866,7 +878,7 @@ impl Session {
     pub(super) fn script_fail(&mut self, mission: MissionId) {
         for slot in self.pilot.missions.holding(mission) {
             if let Some(active) = self.slot_holding(slot, mission) {
-                active.failed.get_or_insert(FailedBy::Operator);
+                active.failed.get_or_insert(FailedBy::Marked);
             }
         }
     }
@@ -1495,7 +1507,7 @@ mod tests {
             hook: 0,
         };
         assert!(ROLL < slot(i16::MIN));
-        assert!(ROLL < crate::session::mission_ships::ship_hook(0));
+        assert!(ROLL < crate::session::mission_ships::ship_hook(0, 0));
         assert!(
             session.unregister_story(ROLL),
             "registered as the session starts"
@@ -2020,7 +2032,7 @@ mod tests {
                 days_left: Some(3),
                 deadline: Some(after(today, 3)),
                 reached: false,
-                goals_met: true,
+                goals_met: false,
                 aboard: false,
                 failed: None,
                 ships: crate::mission::SpecialShips::default(),
@@ -3136,7 +3148,7 @@ mod tests {
             run(&mut session, "F140");
             assert_eq!(
                 session.pilot().missions().get(0).and_then(|m| m.failed),
-                Some(FailedBy::Operator)
+                Some(FailedBy::Marked)
             );
             land_on(&mut session, &catalog, 128);
             assert_eq!(marks.taken(), [200], "{reading:?}");
@@ -3327,7 +3339,7 @@ mod tests {
         assert!(session.take_save_due());
         assert_eq!(
             session.pilot().missions().get(0).and_then(|m| m.failed),
-            Some(FailedBy::Operator)
+            Some(FailedBy::Marked)
         );
         land_on(&mut session, &catalog, 128);
         assert_eq!(marks.taken(), [200]);

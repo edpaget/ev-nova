@@ -40,8 +40,6 @@ pub const AUTO_ABORT_FUEL_TAKEN: f32 = 100.0;
 /// `PayVal` below which the accept takes cash (`_DoMissionAccept`
 /// @0xa1da7-0xa1dee).
 const TAKES_CASH: i64 = -50_000;
-/// `ShipGoal`: none.
-const NO_GOAL: i16 = -1;
 
 /// How an active mission failed: what its return landing still runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,8 +48,10 @@ pub enum FailedBy {
     /// finding its cargo: `_QuickMissionFailure` (@0x99d1b) ran its
     /// `OnFailure` already, and applied no legal record.
     Quick,
-    /// An `F` operator marked it (@0x1539f): nothing ran yet.
-    Operator,
+    /// It was marked failed, by an `F` operator (@0x1539f) or a ship goal's
+    /// check (a disable goal with a ship destroyed, an escort goal with one
+    /// destroyed or disabled, @0x9e8a6, @0x9e922): nothing ran yet.
+    Marked,
 }
 
 /// A mission accepted into a slot, with its offer's values
@@ -96,7 +96,9 @@ pub struct ActiveMission {
 impl ActiveMission {
     /// `offer` of `record` accepted on `today`: its deadline counted from
     /// today, not from the roll, its destination not yet reached, and its
-    /// goals met as [`goals_met_at_accept`] says.
+    /// goals not yet met, as `_DoMissionAccept` zeroes them
+    /// (@0xa1c0e-0xa1c1c) for the first check to meet them (see the
+    /// session's `mission_ships` module).
     #[must_use]
     pub fn accepted(record: &MissionRecord, offer: &Offer, today: GameDate) -> Self {
         let limit = (record.time_limit > 0).then_some(record.time_limit);
@@ -110,7 +112,7 @@ impl ActiveMission {
             days_left: limit.and_then(|days| u32::try_from(days).ok()),
             deadline: limit.map(|days| after(today, days)),
             reached: false,
-            goals_met: goals_met_at_accept(record),
+            goals_met: false,
             aboard: false,
             failed: None,
             ships: SpecialShips::default(),
@@ -353,14 +355,6 @@ fn can_abort(facts: &AbortFacts) -> Result<(), AbortRefusal> {
     } else {
         Ok(())
     }
-}
-
-/// Whether `record`'s ship goals are met as it is accepted: with no
-/// ships (`ShipCount` 0 or below), or with no goal (`ShipGoal` -1)
-/// unless it auto-aborts (@0x9e82f-0x9e840, @0x9eb85).
-#[must_use]
-pub fn goals_met_at_accept(record: &MissionRecord) -> bool {
-    record.ships.count <= 0 || (record.ships.goal == NO_GOAL && record.flags & AUTO_ABORT == 0)
 }
 
 /// Whether accepting `record` into `active` aborts it at once
@@ -663,7 +657,7 @@ mod tests {
                 days_left: Some(3),
                 deadline: GameDate::new(1177, 6, 27),
                 reached: false,
-                goals_met: true,
+                goals_met: false,
                 aboard: false,
                 failed: None,
                 ships: crate::mission::SpecialShips::default(),
@@ -899,39 +893,6 @@ mod tests {
         );
         assert_eq!(refusals(1), []);
         assert_eq!(refusals(-1), [], "any but 0");
-    }
-
-    #[test]
-    fn ships_of_no_goal_have_their_goals_met_at_accept() {
-        let record = MissionRecord {
-            ships: MissionShip {
-                count: 2,
-                ..MissionShip::NONE
-            },
-            ..mission(140)
-        };
-        assert!(goals_met_at_accept(&record));
-    }
-
-    #[test]
-    fn goals_are_met_at_accept_with_no_ships_or_no_goal_unless_it_auto_aborts() {
-        let with = |count, goal, flags| MissionRecord {
-            ships: MissionShip {
-                count,
-                goal,
-                ..MissionShip::NONE
-            },
-            flags,
-            ..mission(140)
-        };
-        assert!(goals_met_at_accept(&with(0, 2, 0)), "no ships");
-        assert!(goals_met_at_accept(&with(-1, 2, AUTO_ABORT)), "below 0");
-        assert!(goals_met_at_accept(&with(2, -1, 0)), "no goal");
-        assert!(
-            !goals_met_at_accept(&with(2, -1, AUTO_ABORT)),
-            "auto-aborts"
-        );
-        assert!(!goals_met_at_accept(&with(1, 0, 0)), "a goal");
     }
 
     #[test]

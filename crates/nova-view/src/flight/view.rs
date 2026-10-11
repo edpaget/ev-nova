@@ -421,7 +421,8 @@ pub const ESCORT_RECALL_KEY: Key = Key::Char('c');
 /// (`ackComm`).
 pub const MENU_CLOSE_KEY: Key = Key::Enter;
 
-/// `STR#` 2002 #284: a mission failed as its cargo was jettisoned.
+/// `STR#` 2002 #284: a mission failed as its cargo was jettisoned, or as
+/// one of its special ships was lost.
 pub const MISSION_FAILED: &str = "Mission failed.";
 /// `STR#` 2002 #289: everything was jettisoned.
 pub const CARGO_JETTISONED: &str = "Cargo jettisoned.";
@@ -463,7 +464,7 @@ fn sim_message_text(message: SimMessage, session: &Session) -> Option<String> {
         SimMessage::Arrived(_) | SimMessage::ExitedHypergate(_) | SimMessage::PassedWormhole(_) => {
             return None;
         }
-        SimMessage::MissionFailed => MISSION_FAILED,
+        SimMessage::MissionFailed | SimMessage::MissionShipLost => MISSION_FAILED,
         SimMessage::CargoJettisoned => CARGO_JETTISONED,
         SimMessage::NonMissionCargoJettisoned => NON_MISSION_CARGO_JETTISONED,
         SimMessage::MissionScanned => MISSION_SCANNED,
@@ -602,6 +603,7 @@ fn arrival_lead(message: SimMessage) -> Option<&'static str> {
         SimMessage::ExitedHypergate(_) => Some(EXITING_HYPERGATE),
         SimMessage::PassedWormhole(_) => Some(PASSING_WORMHOLE),
         SimMessage::MissionFailed
+        | SimMessage::MissionShipLost
         | SimMessage::CargoJettisoned
         | SimMessage::NonMissionCargoJettisoned
         | SimMessage::MissionScanned
@@ -10105,6 +10107,17 @@ mod tests {
         ] {
             assert_eq!(arrival_lead(message), None, "{message:?}");
         }
+    }
+
+    #[test]
+    fn a_mission_ship_lost_says_str_2002_284() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        assert_eq!(
+            sim_message_text(SimMessage::MissionShipLost, session).as_deref(),
+            Some(MISSION_FAILED)
+        );
+        assert_eq!(arrival_lead(SimMessage::MissionShipLost), None);
     }
 
     #[test]

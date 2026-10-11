@@ -382,8 +382,8 @@ use crate::wares;
 pub use self::active::{
     AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
     ActiveMissions, Among, FailedBy, PayEffect, SLOTS, abort_checks, abort_penalty, accept_charge,
-    accept_checks, auto_aborts_at_accept, cleaned, failure_records, fined, goals_met_at_accept,
-    pay_effect, success_records,
+    accept_checks, auto_aborts_at_accept, cleaned, failure_records, fined, pay_effect,
+    success_records,
 };
 pub use self::cargo::{
     JettisonMessage, Jettisoned, PickupFacts, PickupRefusal, Room, ScanOutcome, drops_off,
