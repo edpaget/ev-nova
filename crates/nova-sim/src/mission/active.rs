@@ -902,6 +902,18 @@ mod tests {
     }
 
     #[test]
+    fn ships_of_no_goal_have_their_goals_met_at_accept() {
+        let record = MissionRecord {
+            ships: MissionShip {
+                count: 2,
+                ..MissionShip::NONE
+            },
+            ..mission(140)
+        };
+        assert!(goals_met_at_accept(&record));
+    }
+
+    #[test]
     fn goals_are_met_at_accept_with_no_ships_or_no_goal_unless_it_auto_aborts() {
         let with = |count, goal, flags| MissionRecord {
             ships: MissionShip {

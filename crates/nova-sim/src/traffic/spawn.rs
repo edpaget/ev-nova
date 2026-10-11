@@ -80,8 +80,7 @@
 //!   session's `mission_ships` module and the [`story`](crate::story)
 //!   module's "One arrival").
 //!
-//! A mission of `Flags` 0x0001 auto-aborts once its ships are in. A ship
-//! destroyed lowers its slot's ships left, so it does not come again. An
+//! A ship destroyed lowers its slot's ships left, so it does not come again. An
 //! abort unmarks its ships, or takes them out while docked; a freed slot's
 //! ships are unmarked on the next tick, as `_AIDispatch` does; either way
 //! they fly on as ordinary traffic.
@@ -478,13 +477,10 @@ pub struct MissionSpawn<'a> {
     pub nav: &'a [Option<Vec2>],
 }
 
-/// The nav slot a `ShipStart` of -1 to -16 places the ships at: slot
-/// `-start - 1`.
+/// The nav slot a negative `ShipStart` places the ships at: slot
+/// `-start - 1`, which a system's 16 `NavDefs` hold for -1 to -16 only.
 fn nav_slot(start: i16) -> Option<usize> {
-    (-16..=-1)
-        .contains(&start)
-        .then(|| usize::try_from(-start - 1).ok())
-        .flatten()
+    usize::try_from(-i32::from(start) - 1).ok()
 }
 
 /// One of `spawn`'s ships as `_MissionDudeSpawn` (@0x3cd3b) brings it in:
@@ -545,7 +541,7 @@ fn mission_dude_ship(
 
 /// `spawn`'s ships as the system is set up (`_SetupShipsInSystem`
 /// @0x42e89-0x43121): `count` of them, each placed as
-/// [`mission_dude_ship`] places it; with a `ShipStart` of -1 to -16 then
+/// `mission_dude_ship` places it; with a `ShipStart` of -1 to -16 then
 /// moved to that nav slot's stellar, unless the slot is empty
 /// (@0x4300a-0x43091); with `ShipStart` 2, cloaked (`_DoShipCloak`
 /// @0x43114-0x43121).
@@ -574,7 +570,7 @@ pub fn mission_ships(
 /// their appear timer runs out (@0x43821-0x43aa5): an entry point
 /// [`jump_in_distance`] out, toward `from` (the way to the system the
 /// player last jumped from) or else at an angle `Rand(360)`, drawn first;
-/// then `count` ships, each placed as [`mission_dude_ship`] places it and
+/// then `count` ships, each placed as `mission_dude_ship` places it and
 /// moved to the entry point plus `Rand(512) - 256` each way, facing the
 /// centre and gliding in from hyperspace. None is cloaked, and a ship
 /// with no fuel comes all the same.

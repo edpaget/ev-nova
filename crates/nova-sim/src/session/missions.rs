@@ -197,11 +197,7 @@ fn blank(id: MissionId) -> MissionRecord {
         comp_govt: None,
         comp_reward: 0,
         date_post_inc: 0,
-        ships: MissionShip {
-            count: 0,
-            goal: 0,
-            ..MissionShip::NONE
-        },
+        ships: MissionShip::NONE,
     }
 }
 
@@ -596,7 +592,7 @@ impl Session {
     /// the daily step; with `Flags` 0x0008, a jump's fuel taken; with
     /// `Flags2` 0x0002, its pay; then the slot freed and the offers'
     /// stellar forgotten, with no second `OnAbort`.
-    pub(super) fn auto_abort(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
+    fn auto_abort(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
         let Some(pay) = self.pilot.missions.get(slot).map(|active| active.pay) else {
             return;
         };

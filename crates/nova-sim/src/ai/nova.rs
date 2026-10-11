@@ -141,7 +141,7 @@ fn hunts_player(npc: &Npc, around: &Surroundings) -> bool {
 
 impl Behaviour for NovaAi {
     /// A mission ship of `ShipBehav` 0 attacks the player
-    /// ([`hunts_player`]); every other NPC decides as its behaviour does.
+    /// (`hunts_player`); every other NPC decides as its behaviour does.
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
         if hunts_player(npc, around) {
             return Goal::Attack(ShipRef::Player);
@@ -154,7 +154,7 @@ impl Behaviour for NovaAi {
     }
 
     /// A mission ship of `ShipBehav` 0 targets the player
-    /// ([`hunts_player`]).
+    /// (`hunts_player`).
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
         if hunts_player(npc, around) {
             return Some(ShipRef::Player);

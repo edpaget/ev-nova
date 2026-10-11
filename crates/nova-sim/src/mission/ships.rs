@@ -103,17 +103,13 @@ fn drawn_string(list: Option<i16>, strings: &dyn CommCatalog, chance: &mut dyn C
     let Some(list) = list else {
         return String::new();
     };
-    let mut strings = strings.string_list(list);
+    let strings = strings.string_list(list);
     if strings.is_empty() {
         return String::new();
     }
     let n = u32::try_from(strings.len()).unwrap_or(u32::MAX);
     let at = usize::try_from(chance.below(n)).unwrap_or(0);
-    if at < strings.len() {
-        strings.swap_remove(at)
-    } else {
-        String::new()
-    }
+    strings.into_iter().nth(at).unwrap_or_default()
 }
 
 impl SpecialShips {
@@ -503,6 +499,10 @@ mod tests {
             [132, 133, 134],
             "sharing none, an independent too"
         );
+        assert_eq!(pool(20_002), [131, 133, 134, 136], "not the pirates'");
+        assert_eq!(pool(25_002), [136], "the pirates' enemies");
+        assert_eq!(pool(30_002), [132], "sharing the pirates' class 9");
+        assert_eq!(pool(31_002), [131, 133, 134, 136], "sharing none with them");
     }
 
     #[test]
@@ -610,6 +610,17 @@ mod tests {
             };
             assert_eq!(accepted(&other, &[99, 0, 0]).0.appear, 199);
         }
+    }
+
+    #[test]
+    fn ships_of_no_behaviour_draw_their_timer_even_with_an_escort_goal() {
+        let unbehaved = MissionShip {
+            count: 1,
+            goal: ESCORT_GOAL,
+            start: COMES_LATER,
+            ..MissionShip::NONE
+        };
+        assert_eq!(appear_timer(&unbehaved, &mut Draws::of(&[5])), 105);
     }
 
     #[test]

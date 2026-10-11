@@ -24,7 +24,6 @@ use crate::catalog::{DudeId, MissionRecord, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::Script;
 use crate::geometry::Vec2;
-use crate::mission::active::AUTO_ABORT;
 use crate::mission::ships::ShipFacts;
 use crate::mission::ships::{COMES_LATER, appear_timer};
 use crate::mission::{ActiveMission, ShipSystem, SpecialShips};
@@ -169,10 +168,10 @@ impl Session {
     }
 
     /// The active missions' special ships set up in the system from
-    /// `table`, drawing on `chance`, and the slots that brought any, in
-    /// slot order (`_SetupShipsInSystem` @0x42dc4-0x43194): a slot whose
-    /// ships are here, with ships left and its appear timer not running,
-    /// brings ships left of them ([`spawn::mission_ships`]). `entering`
+    /// `table`, drawing on `chance`, in slot order (`_SetupShipsInSystem`
+    /// @0x42dc4-0x43194): a slot whose ships are here, with ships left and
+    /// its appear timer not running, brings ships left of them
+    /// ([`spawn::mission_ships`]). `entering`
     /// by an entry its enter-system hook runs on, a slot the hook is
     /// about to restart brings none (see the module docs).
     pub(super) fn setup_mission_ships(
@@ -180,10 +179,9 @@ impl Session {
         table: &SpawnTable,
         entering: bool,
         chance: &mut (impl Chance + ?Sized),
-    ) -> (Vec<NewShip>, Vec<u8>) {
+    ) -> Vec<NewShip> {
         let nav = self.nav_slots();
         let mut ships = Vec::new();
-        let mut slots = Vec::new();
         for (slot, active) in self.pilot.missions.iter() {
             let record = self.lifecycle_record(active.mission);
             let Some(dude) = record.ships.dude else {
@@ -206,24 +204,8 @@ impl Session {
                 nav: &nav,
             };
             ships.extend(spawn::mission_ships(table, &spawn, self.gate(), chance));
-            slots.push(slot);
         }
-        (ships, slots)
-    }
-
-    /// Auto-aborts each mission of `slots` with `Flags` 0x0001, its ships
-    /// just in (`_SetupShipsInSystem` @0x43169-0x4317e, `_EnterMoreShips`
-    /// @0x43ac7-0x43ad4), drawing on `chance`.
-    pub(super) fn auto_abort_on_ships(&mut self, slots: &[u8], chance: &mut dyn Chance) {
-        for &slot in slots {
-            let Some(active) = self.pilot.missions.get(slot) else {
-                continue;
-            };
-            let record = self.lifecycle_record(active.mission);
-            if record.flags & AUTO_ABORT != 0 {
-                self.auto_abort(slot, &record, chance);
-            }
-        }
+        ships
     }
 
     /// The way from the player's system to the one it last jumped from,
@@ -239,17 +221,16 @@ impl Session {
     /// ships read from `catalog` and drawn on `chance`: for each slot in
     /// order whose ships are here with any to come (ships left, less
     /// those arrived for `ShipStart` 1), a running timer counts down
-    /// (from 32000 or below), and at 0, with ships left, it stops and
+    /// (from 32000 or below), and at 0 it stops and
     /// they come in by hyperspace ([`spawn::arriving_mission_ships`]),
-    /// each counted arrived. A mission of `Flags` 0x0001 then
-    /// auto-aborts.
+    /// each counted arrived. (A mission of `Flags` 0x0001 then
+    /// auto-aborts: rdm:phase/mission-ships/phase-10-auto-abort-at-spawn.)
     pub(super) fn mission_ship_arrivals(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
         let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
-        let mut arrived = Vec::new();
         for slot in slots {
             let Some(active) = self.pilot.missions.get(slot) else {
                 continue;
@@ -271,11 +252,13 @@ impl Session {
             if (1..=COUNTED).contains(&appear) {
                 appear -= 1;
             }
-            let fires = state.left > 0 && appear == 0;
+            // With any to come, ships are left.
+            let fires = appear == 0;
             if fires {
                 appear = -1;
             }
-            if let Some(active) = self.slot_holding(slot, record.id) {
+            // The timer is kept, not saved, as it runs: no save is due.
+            if let Some(active) = self.pilot.missions.get_mut(slot) {
                 active.ships.appear = appear;
             }
             let Some(dude) = record.ships.dude.filter(|_| fires) else {
@@ -306,12 +289,10 @@ impl Session {
             );
             let count = i16::try_from(ships.len()).unwrap_or(i16::MAX);
             self.traffic.bring_in(ships);
-            if let Some(active) = self.slot_holding(slot, record.id) {
+            if let Some(active) = self.pilot.missions.get_mut(slot) {
                 active.ships.arrived = active.ships.arrived.saturating_add(count);
             }
-            arrived.push(slot);
         }
-        self.auto_abort_on_ships(&arrived, &mut &mut *chance);
     }
 
     /// NPC `id`, destroyed: when it is a mission's special ship, its
@@ -650,6 +631,50 @@ mod tests {
         take_off(&mut session, &catalog);
         assert_eq!(marked(&session), [0, 0]);
         assert!(session.npcs().iter().all(|npc| npc.mode == Mode::Flying));
+    }
+
+    #[test]
+    fn the_timer_counting_down_makes_no_save_due() {
+        let catalog = ships_catalog(shipping(-1, 1));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        let _ = session.take_save_due();
+        ticks(&mut session, &catalog, 5);
+        assert_eq!(ships_of(&session).appear, 194);
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn a_mission_started_in_flight_brings_its_dudes_ships_in_on_its_timer() {
+        // `S` in flight, after the system was set up without the düde.
+        let catalog = ships_catalog(shipping(-1, 1));
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_strings(Rc::new(Names));
+        tick(&mut session, &catalog);
+        assert!(session.traffic.table().dude_records.is_empty());
+        session.run_set(&SetExpr::parse("S140").expect("parses"), &mut NeverFires);
+        settle(&mut session, &catalog);
+        assert_eq!(ships_of(&session).appear, 199);
+        ticks(&mut session, &catalog, 199);
+        assert_eq!(marked(&session), [0, 0]);
+    }
+
+    #[test]
+    fn only_the_ships_starting_1_not_yet_arrived_come_in() {
+        let catalog = ships_catalog(MissionShip {
+            count: 3,
+            ..shipping(-1, 1)
+        });
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.ships.arrived = 1;
+            active.ships.appear = 1;
+        }
+        tick(&mut session, &catalog);
+        assert_eq!(marked(&session), [0, 0], "3 left, 1 arrived");
+        assert_eq!(ships_of(&session).arrived, 3);
     }
 
     #[test]
@@ -1047,28 +1072,5 @@ mod tests {
         session.lose_captured(id);
         assert_eq!(marked(&session), [0]);
         assert_eq!(ships_of(&session).left, 2);
-    }
-
-    #[test]
-    fn an_auto_aborting_mission_ends_once_its_ships_are_in() {
-        let mut catalog = ships_catalog(shipping(-1, 0));
-        catalog.missions[0].flags = AUTO_ABORT;
-        catalog.missions[0].on_abort = crate::control::Script::parse("b30");
-        let mut session = accepted(&catalog);
-        assert!(session.pilot().missions().get(0).is_some(), "ships to come");
-        take_off(&mut session, &catalog);
-        assert!(session.pilot().missions().get(0).is_none(), "aborted");
-        assert!(session.control_bit(crate::control::Bit::new(30).expect("a bit")));
-        assert_eq!(session.npcs().len(), 2, "its ships stay");
-        let mut catalog = ships_catalog(shipping(-1, 1));
-        catalog.missions[0].flags = AUTO_ABORT;
-        let mut session = accepted(&catalog);
-        take_off(&mut session, &catalog);
-        assert!(session.pilot().missions().get(0).is_some());
-        ticks(&mut session, &catalog, 199);
-        assert!(
-            session.pilot().missions().get(0).is_none(),
-            "on the timer too"
-        );
     }
 }

@@ -1214,7 +1214,7 @@ impl Session {
     /// Fills the system as [`Session::populate`] does, the active
     /// missions' special ships set up first, `entering` it by a way in
     /// whose enter-system hook is still to run (see the `mission_ships`
-    /// module); a mission of `Flags` 0x0001 whose ships came auto-aborts.
+    /// module).
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -1222,7 +1222,7 @@ impl Session {
         entering: bool,
     ) {
         let table = self.spawn_table(catalog);
-        let (missions, spawned) = self.setup_mission_ships(&table, entering, chance);
+        let missions = self.setup_mission_ships(&table, entering, chance);
         let facts = control::Facts {
             pilot: &self.pilot,
             ammo_outfits: &self.ammo_outfits,
@@ -1249,7 +1249,6 @@ impl Session {
         self.aboard = None;
         self.talk = None;
         self.clear_lost_target();
-        self.auto_abort_on_ships(&spawned, &mut &mut *chance);
     }
 
     /// Fills the system as it is entered by a way in whose enter-system
