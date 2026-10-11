@@ -134,7 +134,9 @@ impl NovaAi {
 /// (`_HighLevelAIHandler` @0x8d628-0x8d6ea), while the player is in the
 /// system, unless the player is disabled and the ship has no destroying
 /// weapons ([`fire::destroys`]), when it gives up and decides as its type
-/// does. A cloaked or gate-emerging player is no matter: the engine has
+/// does; there [`select_target`](crate::ai::target::select_target)'s
+/// `ShipBehav` 0 step gives it no other target while the player is here.
+/// A cloaked or gate-emerging player is no matter: the engine has
 /// neither, so the player is always visible to it.
 fn hunts_player(npc: &Npc, around: &Surroundings) -> bool {
     npc.mission
@@ -673,6 +675,40 @@ mod tests {
             ai.decide(&armed[0], &disabled, &mut Draws::of(&[])),
             Goal::Attack(ShipRef::Player),
             "with destroying weapons it goes on"
+        );
+    }
+
+    #[test]
+    fn a_ship_behav_0_warship_that_gives_up_on_a_disabled_player_turns_on_no_other_ship() {
+        use crate::ai::fixture::{PIRATES, TRADERS, govts, ship};
+        let govts = govts(0, 0);
+        let npcs = [
+            mission_ship(ship(1, TRADERS, AiType::Warship, 0.0, 0.0), 0),
+            ship(2, PIRATES, AiType::Warship, 0.0, 50.0),
+        ];
+        let mut player = crate::ai::fixture::player(0.0, -100.0);
+        player.condition = Condition::Disabled;
+        let around = Surroundings {
+            player: Some(player),
+            govts: &govts,
+            system_govt: Some(TRADERS),
+            record: 30,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert!(!fire::destroys(&npcs[0]));
+        let ai = NovaAi::default();
+        let goal = ai.decide(&npcs[0], &around, &mut Draws::of(&[0; 16]));
+        assert_ne!(goal, Goal::Attack(ShipRef::Npc(NpcId(2))));
+        assert_eq!(goal.quarry(), None, "{goal:?}");
+        let free = [ship(1, TRADERS, AiType::Warship, 0.0, 0.0), npcs[1].clone()];
+        let around = Surroundings {
+            npcs: &free,
+            ..around
+        };
+        assert_eq!(
+            ai.decide(&free[0], &around, &mut Draws::of(&[0; 16])),
+            Goal::Attack(ShipRef::Npc(NpcId(2))),
+            "without the mark it fights the pirate"
         );
     }
 }

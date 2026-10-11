@@ -31,6 +31,11 @@
 //! another `ShipBehav` never joins: the swap's `_AIMakeEscortFlyInForm`
 //! (@0x62509) follows its leader, which `_GenericRandomShipSpawn` left at
 //! -1 (@0x3c9cd), so it never forms on the player.
+//! Because the join comes before its type's AI decides, a `ShipBehav` 1
+//! ship never thinks as a warship or interceptor while its mission is
+//! active, so `_SelectWarshipTarget`'s `ShipBehav` 1 branch
+//! (@0x89f86-0x89fef: clear a player target, else fight a threat to the
+//! player, else fly with it) never runs and is not modelled.
 //!
 //! **One formation.** The hired escorts and the mission escorts share one
 //! formation with the player, as the original numbers every ship whose
@@ -329,6 +334,81 @@ mod tests {
         session.traffic.npcs_mut()[0].condition = Condition::Intact;
         tick(&mut session, &catalog);
         assert_eq!(slots(&session), [(2, 3), (3, 3)]);
+    }
+
+    /// Records the NPCs a type's behaviour is asked to decide about.
+    #[derive(Debug, Default)]
+    struct Asked(std::cell::RefCell<Vec<NpcId>>);
+
+    impl crate::ai::Behaviour for Asked {
+        fn decide(
+            &self,
+            npc: &Npc,
+            _around: &crate::ai::Surroundings,
+            _chance: &mut dyn crate::chance::Chance,
+        ) -> Goal {
+            self.0.borrow_mut().push(npc.id);
+            Goal::default()
+        }
+
+        fn trigger(
+            &self,
+            _npc: &Npc,
+            _around: &crate::ai::Surroundings,
+        ) -> crate::combat::armament::Trigger {
+            crate::combat::armament::Trigger::default()
+        }
+
+        fn target(
+            &self,
+            _npc: &Npc,
+            _around: &crate::ai::Surroundings,
+        ) -> Option<crate::combat::ShipRef> {
+            None
+        }
+
+        fn react(
+            &self,
+            _npc: &Npc,
+            _strike: &crate::combat::Strike,
+            _around: &crate::ai::Surroundings,
+        ) -> crate::ai::Reaction {
+            crate::ai::Reaction::default()
+        }
+    }
+
+    /// `_SelectWarshipTarget`'s `ShipBehav` 1 branch (@0x89f86-0x89fef)
+    /// never runs: a ship out of formation joins before its type's AI
+    /// decides, so the warship's or interceptor's behaviour is never
+    /// asked about it.
+    #[test]
+    fn a_ship_out_of_formation_joins_before_its_types_ai_decides() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        let id = npc.id;
+        if let Some(mark) = &mut npc.mission {
+            mark.formation = None;
+        }
+        npc.condition = Condition::Disabled;
+        session.reform();
+        tick(&mut session, &catalog);
+        session.traffic.npcs_mut()[0].condition = Condition::Intact;
+        assert!(!session.npcs()[0].mission_escort(), "out of formation");
+        let asked = std::rc::Rc::new(Asked::default());
+        let ai = crate::ai::NovaAi::default()
+            .with(AiType::Warship, asked.clone())
+            .with(AiType::Interceptor, asked.clone())
+            .with(AiType::WimpyTrader, asked.clone())
+            .with(AiType::BraveTrader, asked.clone());
+        for _ in 0..16 {
+            session.tick_traffic(&catalog, &ai, &mut NeverFires);
+            let npc = &session.npcs()[0];
+            assert!(npc.mission_escort());
+            assert!(matches!(npc.goal, Goal::Formation { .. }), "{:?}", npc.goal);
+        }
+        assert!(!asked.0.borrow().contains(&id), "{:?}", asked.0.borrow());
     }
 
     // Following.

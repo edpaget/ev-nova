@@ -49,7 +49,7 @@ use crate::combat::ShipRef;
 use crate::combat::aim::{FRONT_ARC, angle_off, bearing, blind, lead};
 use crate::combat::armament::{Mount, Trigger};
 use crate::combat::projectile::Target;
-use crate::combat::weapon::{Guidance, WeaponSpec};
+use crate::combat::weapon::{Ammo, Guidance, WeaponSpec};
 use crate::flight::ShipState;
 use crate::traffic::npc::Npc;
 
@@ -172,6 +172,50 @@ pub fn destroys(npc: &Npc) -> bool {
         .mounts()
         .iter()
         .any(|mount| destroying(&mount.spec) && mount.affords(&npc.rounds, npc.reserves.fuel))
+}
+
+/// How much of its weapons a ship can still fire (`_AIShipIsOutOfAmmo`
+/// @0x7f71f, which returns 0, 1 or 2 for these in order).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AmmoLeft {
+    /// Every weapon it holds can fire, or some ammunition- or fuel-using
+    /// one still can.
+    Armed,
+    /// Every ammunition- or fuel-using weapon is out, but a weapon of
+    /// unlimited ammunition remains (the original's `AmmoType`
+    /// -1000..-1, @0x7f750-0x7f75f; here [`Ammo::Unlimited`] and
+    /// [`Ammo::Other`]).
+    OnlyUnlimited,
+    /// It holds no weapon, or every weapon it holds is out of rounds
+    /// (a fighter bay's rounds are its fighters) or of fuel (a shot
+    /// costing more than the fuel left, @0x7f797).
+    Dry,
+}
+
+/// How much of its weapons `npc` can still fire (see [`AmmoLeft`]).
+///
+/// Only [`AmmoLeft::Dry`] is read today, by
+/// [`select_target`](crate::ai::target::select_target); the escort's
+/// fallback that reads the others (`_EscortAI` @0x83bb5) stays with
+/// rdm:task/escorts-follow-up.
+#[must_use]
+pub fn ammo_left(npc: &Npc) -> AmmoLeft {
+    let mut unlimited = false;
+    let mut spending = false;
+    for mount in npc.armament.mounts() {
+        if matches!(mount.spec.ammo, Ammo::Unlimited | Ammo::Other(_)) {
+            unlimited = true;
+        } else if mount.affords(&npc.rounds, npc.reserves.fuel) {
+            return AmmoLeft::Armed;
+        } else {
+            spending = true;
+        }
+    }
+    match (spending, unlimited) {
+        (false, true) => AmmoLeft::Armed,
+        (true, true) => AmmoLeft::OnlyUnlimited,
+        (_, false) => AmmoLeft::Dry,
+    }
 }
 
 /// The weapon `npc` fires now among `around`, if any (see the module
@@ -858,5 +902,87 @@ mod tests {
         let mut wreck = crate::testkit::npc(7, ShipStats::new(FAST, &[]));
         wreck.condition = Condition::Dying { ticks_left: 3 };
         assert!(!bays(&shooter(&all, Goal::Attack(at)), &[wreck]));
+    }
+
+    /// A launcher of `id` firing rounds of weapon `id + 10`.
+    fn launcher(id: i16) -> WeaponRecord {
+        WeaponRecord {
+            ammo_type: 10,
+            ..weapon(id)
+        }
+    }
+
+    /// A weapon of `id` spending `cost` fuel a shot.
+    fn fuel_weapon(id: i16, cost: f32) -> WeaponRecord {
+        #[allow(clippy::cast_possible_truncation)]
+        let raw = -1000 - (cost * 10.0) as i16;
+        WeaponRecord {
+            ammo_type: raw,
+            ..weapon(id)
+        }
+    }
+
+    #[test]
+    fn an_unarmed_ship_is_dry() {
+        assert_eq!(ammo_left(&shooter(&[], ATTACK)), AmmoLeft::Dry);
+    }
+
+    #[test]
+    fn a_gun_alone_is_armed() {
+        assert_eq!(ammo_left(&shooter(&[weapon(128)], ATTACK)), AmmoLeft::Armed);
+        let other = WeaponRecord {
+            ammo_type: -2,
+            ..weapon(128)
+        };
+        assert_eq!(ammo_left(&shooter(&[other], ATTACK)), AmmoLeft::Armed);
+    }
+
+    #[test]
+    fn a_launcher_is_dry_without_rounds_and_armed_with_them() {
+        let mut ship = shooter(&[launcher(128)], ATTACK);
+        assert_eq!(ammo_left(&ship), AmmoLeft::Dry);
+        ship.rounds = BTreeMap::from([(WeaponId(138), 1)]);
+        assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
+    }
+
+    #[test]
+    fn a_gun_beside_an_empty_launcher_is_only_unlimited() {
+        let ship = shooter(&[weapon(128), launcher(129)], ATTACK);
+        assert_eq!(ammo_left(&ship), AmmoLeft::OnlyUnlimited);
+        let ship = shooter(&[launcher(129), weapon(128)], ATTACK);
+        assert_eq!(ammo_left(&ship), AmmoLeft::OnlyUnlimited);
+    }
+
+    #[test]
+    fn one_launcher_with_rounds_arms_a_ship_whose_others_are_empty() {
+        let other = WeaponRecord {
+            ammo_type: 12,
+            ..weapon(130)
+        };
+        let mut ship = shooter(&[weapon(127), launcher(128), other], ATTACK);
+        ship.rounds = BTreeMap::from([(WeaponId(140), 1)]);
+        assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
+    }
+
+    #[test]
+    fn a_fuel_weapon_is_armed_while_fuel_covers_its_cost() {
+        let mut ship = shooter(&[fuel_weapon(128, 5.0)], ATTACK);
+        ship.reserves.fuel.now = 4.0;
+        assert_eq!(ammo_left(&ship), AmmoLeft::Dry);
+        ship.reserves.fuel.now = 5.0;
+        assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
+    }
+
+    #[test]
+    fn a_fighter_bay_counts_its_fighters_as_rounds() {
+        let bay = WeaponRecord {
+            guidance: 99,
+            ammo_type: 128,
+            ..weapon(150)
+        };
+        let mut ship = shooter(&[bay], ATTACK);
+        assert_eq!(ammo_left(&ship), AmmoLeft::Dry);
+        ship.rounds = BTreeMap::from([(WeaponId(150), 1)]);
+        assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
     }
 }

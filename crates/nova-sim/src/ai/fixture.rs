@@ -3,13 +3,15 @@
 use crate::ai::{PlayerSide, Surroundings};
 use crate::catalog::{GovtId, GovtRecord, LandingSite};
 use crate::combat::ShipRef;
+use crate::combat::armament::Armament;
 use crate::combat::hull::{Condition, HullSpec};
+use crate::combat::weapon::WeaponSpec;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
-use crate::testkit::{FAST, govt, planet};
+use crate::testkit::{FAST, govt, planet, weapon};
 use crate::traffic::npc::{AiType, Npc, NpcId};
 
 /// Traders: class 1, `CrimeTol` 6.
@@ -48,9 +50,12 @@ pub(crate) fn govts(flags: u16, police_flags: u16) -> Governments {
 }
 
 /// NPC `id` of `govt` and `ai_type` at (`x`, `y`), at rest facing up, of
-/// strength 100 and aggression 2, its reserves full (30 shield).
+/// strength 100 and aggression 2, its reserves full (30 shield), armed
+/// with a harmless gun of unlimited ammunition (so it is not out of
+/// ammunition, and holds no destroying weapon).
 pub(crate) fn ship(id: u32, govt: GovtId, ai_type: AiType, x: f32, y: f32) -> Npc {
     let mut npc = crate::testkit::npc(id, ShipStats::new(FAST, &[]));
+    npc.armament = Armament::new([(WeaponSpec::new(&weapon(127)), 1)]);
     npc.govt = Some(govt);
     npc.ai_type = ai_type;
     npc.state.position = Vec2::new(x, y);

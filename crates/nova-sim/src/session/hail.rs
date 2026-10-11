@@ -1006,10 +1006,16 @@ mod tests {
     // Answers and haggling.
 
     /// The pirates' warship (NPC 0, AI 3), 300 above the player at the
-    /// centre and attacking it after a tick of Nova's AI, targeted.
+    /// centre and attacking it after a tick of Nova's AI, targeted. It
+    /// carries a harmless gun of unlimited ammunition, as a warship out
+    /// of ammunition takes no target (@0x89ff4).
     fn pirate(catalog: &FakePilotCatalog, govt: GovtId) -> Session {
         let mut session = targeting(catalog);
         npc(&mut session).govt = Some(govt);
+        npc(&mut session).armament = crate::combat::armament::Armament::new([(
+            crate::combat::weapon::WeaponSpec::new(&crate::testkit::weapon(127)),
+            1,
+        )]);
         session.tick_traffic(catalog, &NovaAi::default(), &mut crate::NeverFires);
         assert_eq!(session.npcs()[0].goal, Goal::Attack(ShipRef::Player));
         session
