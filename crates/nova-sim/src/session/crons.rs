@@ -103,20 +103,25 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use crate::catalog::{
-        CronId, CronRecord, MissionId, MissionRecord, OutfitId, OutfitRecord, StellarId, SystemId,
+        CronId, CronRecord, MissionId, MissionRecord, OutfitId, OutfitRecord, ShipId, ShipRecord,
+        StellarId, SystemId,
     };
     use crate::chance::NeverFires;
     use crate::control::{Bit, Script, Test};
     use crate::cron::CronState;
     use crate::date::GameDate;
     use crate::mission::Refusal;
+    use crate::outfitter::OutfitFlags;
     use crate::pilot::Pilot;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::rules::Verdict;
     use crate::save;
     use crate::session::Session;
+    use crate::shipyard::ShipFlags3;
     use crate::story::{Consumer, EventFilter, StoryEventKind, Subscription, SubscriptionId};
-    use crate::testkit::{FakePilotCatalog, Scripted, catalog, cron, land_now, mission, outfit};
+    use crate::testkit::{
+        FakePilotCatalog, Scripted, catalog, cron, land_now, mission, outfit, ship,
+    };
 
     /// [`catalog`] with crön 128 contributing 0x4, and mission 130 at the
     /// computer requiring it.
@@ -350,6 +355,58 @@ mod tests {
         assert!(requires(&session));
         session.let_days_pass(1, &mut NeverFires);
         assert!(!requires(&session));
+    }
+
+    /// [`shipbuying`](crate::session::tests::shipbuying) with crön 128
+    /// contributing 0x4, and ship 130 and outfit 310 hidden until 0x4 is
+    /// contributed.
+    fn cron_gated_wares() -> FakePilotCatalog {
+        let mut catalog = crate::session::tests::shipbuying();
+        catalog.crons = contributing().crons;
+        catalog.ship_records.push(ShipRecord {
+            require: 0x4,
+            flags3: ShipFlags3::HIDE_UNLESS_REQUIRED,
+            ..ship(130, catalog.ship_records[0].fields)
+        });
+        catalog.outfits.push(OutfitRecord {
+            flags: OutfitFlags::HIDE_UNLESS_REQUIRED,
+            require: 0x4,
+            require_govt: -1,
+            tech_level: 1,
+            ..outfit(310, &[])
+        });
+        catalog
+    }
+
+    #[test]
+    fn a_running_crons_contribute_lists_a_required_ship_and_outfit() {
+        let catalog = cron_gated_wares();
+        let mut session = crate::session::tests::outfitted(&catalog);
+        let listed = |session: &mut Session| {
+            let yard = session.shipyard(&mut NeverFires).expect("a shipyard");
+            let shop = session.outfitter(&mut NeverFires).expect("an outfitter");
+            (
+                yard.row(ShipId(130)).is_some(),
+                shop.row(OutfitId(310)).is_some(),
+            )
+        };
+        assert_eq!(listed(&mut session), (false, false), "not running");
+        session.pilot.crons.insert(
+            CronId(128),
+            CronState {
+                days: 5,
+                holdoff: 0,
+            },
+        );
+        assert_eq!(listed(&mut session), (true, true), "running");
+        session.pilot.crons.insert(
+            CronId(128),
+            CronState {
+                days: 5,
+                holdoff: 2,
+            },
+        );
+        assert_eq!(listed(&mut session), (false, false), "in its pre-holdoff");
     }
 
     #[test]
