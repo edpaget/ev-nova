@@ -229,9 +229,11 @@ mod tests {
     fn escort(id: u32, x: f32, y: f32) -> Npc {
         let mut npc = intact(id, x, y);
         npc.escort = Some(crate::escort::EscortDuty {
-            slot: 2,
-            ships: 2,
-            spacing: 30.0,
+            formation: crate::escort::FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
             order: None,
         });
         npc

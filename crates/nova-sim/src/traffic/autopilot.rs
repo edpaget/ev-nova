@@ -525,9 +525,11 @@ mod tests {
     fn escort(fields: ShipFields, start: ShipState) -> Npc {
         Npc {
             escort: Some(EscortDuty {
-                slot: 2,
-                ships: 3,
-                spacing: 30.0,
+                formation: FormationSlot {
+                    slot: 2,
+                    ships: 3,
+                    spacing: 30.0,
+                },
                 order: None,
             }),
             ..npc(fields, Goal::Formation { guard: None }, start)

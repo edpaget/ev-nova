@@ -207,9 +207,11 @@ mod tests {
         let govts = govts(0);
         let mut escort = ship(Some(ALLY));
         escort.escort = Some(crate::escort::EscortDuty {
-            slot: 2,
-            ships: 2,
-            spacing: 30.0,
+            formation: FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
             order: None,
         });
         let around = Surroundings {

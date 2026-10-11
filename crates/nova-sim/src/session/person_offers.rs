@@ -544,9 +544,7 @@ mod tests {
         let catalog = talking();
         let mut session = targeting_ace(&catalog);
         session.traffic.npcs_mut()[0].escort = Some(crate::escort::EscortDuty {
-            slot: 0,
-            ships: 0,
-            spacing: 0.0,
+            formation: crate::escort::FormationSlot::default(),
             order: None,
         });
         assert!(opened_comm(&hail(&mut session, &catalog).0), "an escort");

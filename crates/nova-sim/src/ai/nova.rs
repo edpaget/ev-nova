@@ -303,9 +303,11 @@ mod tests {
     /// `npc` as the player's escort.
     fn escorting(mut npc: Npc) -> Npc {
         npc.escort = Some(crate::escort::EscortDuty {
-            slot: 2,
-            ships: 2,
-            spacing: 30.0,
+            formation: crate::escort::FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
             order: None,
         });
         npc

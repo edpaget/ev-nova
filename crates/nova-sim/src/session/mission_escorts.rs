@@ -405,7 +405,7 @@ mod tests {
             .npc(hired_id)
             .and_then(|npc| npc.escort)
             .expect("hired");
-        assert_eq!((duty.slot, duty.ships), (2, 4));
+        assert_eq!((duty.formation.slot, duty.formation.ships), (2, 4));
         assert_eq!(slots(&session), [(3, 4), (4, 4)]);
         let widths: Vec<Option<f32>> = session
             .npcs()
@@ -413,7 +413,7 @@ mod tests {
             .map(|npc| npc.hull.sprite_size)
             .collect();
         let spacing = escort::spacing(session.hull.sprite_size, &widths);
-        assert_eq!(duty.spacing, spacing);
+        assert_eq!(duty.formation.spacing, spacing);
         for npc in mission_escorts(&session) {
             assert_eq!(npc.formation().map(|place| place.spacing), Some(spacing));
         }
@@ -488,7 +488,7 @@ mod tests {
     fn hired_slot(session: &Session) -> (u8, u8) {
         let id = session.fleet[0].expect("placed");
         let duty = session.npc(id).and_then(|npc| npc.escort).expect("hired");
-        (duty.slot, duty.ships)
+        (duty.formation.slot, duty.formation.ships)
     }
 
     #[test]

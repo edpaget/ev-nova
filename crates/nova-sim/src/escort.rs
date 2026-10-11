@@ -278,27 +278,11 @@ pub struct ClassRow {
 /// player; it is never saved.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EscortDuty {
-    /// Its slot in the formation ([`slot_offset`]): 2, 3, … by its place
-    /// in the fleet, the player being slot 1.
-    pub slot: u8,
-    /// How many ships the formation holds, the player included.
-    pub ships: u8,
-    /// The formation's spacing, in pixels ([`spacing`]).
-    pub spacing: f32,
+    /// Its place in the formation: slot 2, 3, … by its place in the
+    /// fleet, the player being slot 1.
+    pub formation: FormationSlot,
     /// Its standing order; none keeps formation.
     pub order: Option<EscortOrder>,
-}
-
-impl EscortDuty {
-    /// Its place in the formation.
-    #[must_use]
-    pub fn formation(&self) -> FormationSlot {
-        FormationSlot {
-            slot: self.slot,
-            ships: self.ships,
-            spacing: self.spacing,
-        }
-    }
 }
 
 /// A place in the player's formation, held by a hired escort (its
@@ -853,9 +837,11 @@ mod tests {
         let escort = ship(1, MEDIUM, 0.0, 0.0, true);
         let mut fellow = ship(2, MEDIUM, 10.0, 0.0, true);
         fellow.escort = Some(EscortDuty {
-            slot: 3,
-            ships: 3,
-            spacing: 30.0,
+            formation: FormationSlot {
+                slot: 3,
+                ships: 3,
+                spacing: 30.0,
+            },
             order: None,
         });
         let calm = ship(3, MEDIUM, 10.0, 0.0, false);

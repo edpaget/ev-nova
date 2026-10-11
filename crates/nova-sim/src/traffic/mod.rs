@@ -1225,9 +1225,11 @@ mod tests {
         let mut traffic = populated(1, 1);
         traffic.npcs[0].goal = Goal::Formation { guard: None };
         traffic.npcs[0].escort = Some(crate::escort::EscortDuty {
-            slot: 2,
-            ships: 2,
-            spacing: 30.0,
+            formation: crate::escort::FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
             order: None,
         });
         // The escort at the centre, on slot 2, behind and left of the

@@ -224,9 +224,11 @@ mod tests {
         npc.class = EscortClass::Medium;
         npc.armament = armed();
         npc.escort = Some(EscortDuty {
-            slot: 2,
-            ships: 2,
-            spacing: 30.0,
+            formation: crate::escort::FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
             order,
         });
         npc

@@ -228,7 +228,7 @@ impl Npc {
     #[must_use]
     pub fn formation(&self) -> Option<FormationSlot> {
         self.escort
-            .map(|duty| duty.formation())
+            .map(|duty| duty.formation)
             .or_else(|| self.mission.and_then(|mark| mark.formation))
     }
 
@@ -282,9 +282,11 @@ mod tests {
         assert_eq!(escort.fleet(), ShipRef::Npc(NpcId(3)));
         let players = Npc {
             escort: Some(crate::escort::EscortDuty {
-                slot: 2,
-                ships: 2,
-                spacing: 30.0,
+                formation: FormationSlot {
+                    slot: 2,
+                    ships: 2,
+                    spacing: 30.0,
+                },
                 order: None,
             }),
             ..crate::testkit::npc(6, ShipStats::default())
@@ -336,9 +338,11 @@ mod tests {
     fn a_hired_escorts_formation_is_its_dutys() {
         let hired = Npc {
             escort: Some(EscortDuty {
-                slot: 2,
-                ships: 4,
-                spacing: 35.0,
+                formation: FormationSlot {
+                    slot: 2,
+                    ships: 4,
+                    spacing: 35.0,
+                },
                 order: None,
             }),
             ..crate::testkit::npc(6, ShipStats::default())

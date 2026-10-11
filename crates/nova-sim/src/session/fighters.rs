@@ -43,7 +43,7 @@ use crate::catalog::{OutfitId, ShipId, WeaponId};
 use crate::combat::armament::{MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Sortie};
-use crate::escort::{EscortClass, EscortDuty, EscortOrder, NO_SPRITE};
+use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot, NO_SPRITE};
 use crate::flight::ShipState;
 use crate::hyperspace::JUMP_FUEL;
 use crate::outfitter::Launcher;
@@ -124,9 +124,7 @@ impl Session {
             self.class_order(npc.class)
         };
         npc.escort = Some(EscortDuty {
-            slot: 0,
-            ships: 0,
-            spacing: 0.0,
+            formation: FormationSlot::default(),
             order,
         });
         npc.goal = Goal::Formation { guard: None };
@@ -749,7 +747,9 @@ mod tests {
             "its class's stock weapons"
         );
         assert_eq!(
-            fighter.escort.map(|duty| (duty.slot, duty.ships)),
+            fighter
+                .escort
+                .map(|duty| (duty.formation.slot, duty.formation.ships)),
             Some((2, 2))
         );
         assert!(session.is_escort(fighter.id));
@@ -1070,7 +1070,7 @@ mod tests {
         assert_eq!(
             fleet_npcs(&session)[0]
                 .escort
-                .map(|duty| (duty.slot, duty.ships)),
+                .map(|duty| (duty.formation.slot, duty.formation.ships)),
             Some((2, 2)),
             "the rest re-form"
         );
@@ -1450,7 +1450,7 @@ mod tests {
         let duty = viper.escort.expect("an escort");
         assert_eq!(
             viper.state.position,
-            crate::escort::slot_position(session.player(), duty.slot, duty.ships, duty.spacing),
+            duty.formation.position(session.player()),
             "beside the player on its slot"
         );
         assert_eq!(viper.reserves.shield.now, 10.0, "as it was");

@@ -395,7 +395,7 @@ use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
 use crate::control::{ControlBits, NovaBits, ScriptNote, SetOpKind};
 use crate::date::{self, GameDate};
-use crate::escort::EscortDuty;
+use crate::escort::{EscortDuty, FormationSlot};
 use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
 use crate::gate::{
@@ -3775,9 +3775,7 @@ impl Session {
         npc.trigger = Trigger::default();
         npc.provoked = 0.0;
         npc.escort = Some(EscortDuty {
-            slot: 0,
-            ships: 0,
-            spacing: 0.0,
+            formation: FormationSlot::default(),
             order: None,
         });
         let escort = Escort {
@@ -11920,9 +11918,11 @@ mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         let escort = &mut session.traffic.npcs_mut()[0];
         escort.escort = Some(crate::escort::EscortDuty {
-            slot: 2,
-            ships: 2,
-            spacing: 30.0,
+            formation: FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
             order: None,
         });
         escort.trigger = FIRE;
@@ -11950,7 +11950,7 @@ mod tests {
     /// The fight's 60 ticks of the player and NPC 0, 100 above it, firing
     /// at each other point-blank, NPC 0 marked by slot 0 as `formation`
     /// says: the NPC's shield and the player's after them.
-    fn exchange_with_a_mission_ship(formation: Option<crate::escort::FormationSlot>) -> (f32, f32) {
+    fn exchange_with_a_mission_ship(formation: Option<FormationSlot>) -> (f32, f32) {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
         let ship = &mut session.traffic.npcs_mut()[0];
@@ -11976,7 +11976,7 @@ mod tests {
 
     #[test]
     fn the_players_shots_pass_through_a_mission_escort_but_not_a_mission_ship_yet_to_join() {
-        let joined = crate::escort::FormationSlot {
+        let joined = FormationSlot {
             slot: 2,
             ships: 2,
             spacing: 30.0,
@@ -12602,9 +12602,11 @@ mod tests {
         assert_eq!(session.arsenal.strength(ShipId(129)), 10);
         if escorting {
             session.traffic.npcs_mut()[1].escort = Some(EscortDuty {
-                slot: 2,
-                ships: 2,
-                spacing: 100.0,
+                formation: FormationSlot {
+                    slot: 2,
+                    ships: 2,
+                    spacing: 100.0,
+                },
                 order: None,
             });
         }
@@ -15510,9 +15512,11 @@ mod tests {
         assert_eq!(
             escort.escort,
             Some(EscortDuty {
-                slot: 2,
-                ships: 2,
-                spacing: crate::escort::spacing(None, &[None]),
+                formation: FormationSlot {
+                    slot: 2,
+                    ships: 2,
+                    spacing: crate::escort::spacing(None, &[None]),
+                },
                 order: None,
             })
         );
@@ -15594,11 +15598,19 @@ mod tests {
         let old = &session.npcs()[1];
         assert!(session.is_escort(old.id));
         let duty = old.escort.expect("an escort");
-        assert_eq!((duty.slot, duty.ships, duty.order), (2, 2, None));
+        assert_eq!(
+            (duty.formation.slot, duty.formation.ships, duty.order),
+            (2, 2, None)
+        );
         assert_eq!(
             old.state,
             ShipState {
-                position: crate::escort::slot_position(session.player(), 2, 2, duty.spacing),
+                position: crate::escort::slot_position(
+                    session.player(),
+                    2,
+                    2,
+                    duty.formation.spacing
+                ),
                 ..*session.player()
             },
             "on its slot"
@@ -17340,7 +17352,7 @@ mod tests {
         let duty = escort.escort.expect("an escort");
         assert_eq!(
             escort.state.position,
-            crate::escort::slot_position(session.player(), duty.slot, duty.ships, duty.spacing),
+            duty.formation.position(session.player()),
             "on its slot: {case}"
         );
         let dudes: Vec<&Npc> = session

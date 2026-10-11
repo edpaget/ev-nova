@@ -130,9 +130,7 @@ impl Session {
             leader: None,
             class: kind.escort_class,
             escort: Some(EscortDuty {
-                slot: 0,
-                ships: 0,
-                spacing: 0.0,
+                formation: FormationSlot::default(),
                 order: escort.order,
             }),
             stats: kind.stats,
@@ -197,12 +195,7 @@ impl Session {
                 spacing,
             };
             if let Some(duty) = &mut npc.escort {
-                *duty = EscortDuty {
-                    slot,
-                    ships,
-                    spacing,
-                    ..*duty
-                };
+                duty.formation = formation;
             } else if let Some(mark) = &mut npc.mission
                 && mark.formation.is_some()
             {
@@ -687,7 +680,7 @@ mod tests {
     /// Where escort `npc` should be: its slot beside the player.
     fn slot_of(session: &Session, npc: &Npc) -> Vec2 {
         let duty = npc.escort.expect("an escort");
-        escort::slot_position(session.player(), duty.slot, duty.ships, duty.spacing)
+        duty.formation.position(session.player())
     }
 
     #[test]
@@ -719,9 +712,11 @@ mod tests {
             assert_eq!(
                 npc.escort,
                 Some(EscortDuty {
-                    slot,
-                    ships: 3,
-                    spacing,
+                    formation: FormationSlot {
+                        slot,
+                        ships: 3,
+                        spacing,
+                    },
                     order
                 })
             );
@@ -781,7 +776,9 @@ mod tests {
         assert_eq!(
             placed
                 .iter()
-                .map(|npc| npc.escort.map(|duty| (duty.slot, duty.ships)))
+                .map(|npc| npc
+                    .escort
+                    .map(|duty| (duty.formation.slot, duty.formation.ships)))
                 .collect::<Vec<_>>(),
             [Some((2, 3)), Some((3, 3))]
         );
@@ -952,7 +949,9 @@ mod tests {
         assert!(session.take_save_due());
         let freighter = escort_npcs(&session)[0];
         assert_eq!(
-            freighter.escort.map(|duty| (duty.slot, duty.ships)),
+            freighter
+                .escort
+                .map(|duty| (duty.formation.slot, duty.formation.ships)),
             Some((2, 2)),
             "the rest re-form"
         );
