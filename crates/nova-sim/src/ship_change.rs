@@ -271,7 +271,7 @@ pub fn fold(outfits: &mut BTreeMap<OutfitId, u16>, arrays: &Arrays, records: &[O
             continue;
         };
         if let Some(have) = array.remove(&WeaponId(weapon))
-            && have > 0
+            && have.is_positive()
         {
             let count = outfits.entry(record.id).or_default();
             *count = count.saturating_add(u16::try_from(have).unwrap_or(u16::MAX));
