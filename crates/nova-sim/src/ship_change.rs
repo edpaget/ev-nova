@@ -456,6 +456,24 @@ mod tests {
         let records = [mounted(410, OutfitFlags::GUN | OutfitFlags::TURRET)];
         assert_eq!(held(&[(410, 5)], &limits(9, 2), &records), map(&[(410, 2)]));
         assert_eq!(held(&[(410, 5)], &limits(3, 9), &records), map(&[(410, 3)]));
+        assert_eq!(
+            held(&[(410, 3)], &limits(3, 2), &records),
+            map(&[(410, 3)]),
+            "the guns exactly at the gun limit: it returns there, the turrets never read"
+        );
+    }
+
+    #[test]
+    fn a_gun_at_its_max_is_held_by_the_max_before_the_gun_limit() {
+        let records = [OutfitRecord {
+            max: 3,
+            ..mounted(417, OutfitFlags::GUN)
+        }];
+        assert_eq!(
+            held(&[(417, 3)], &limits(2, 0), &records),
+            map(&[(417, 3)]),
+            "exactly at its Max: it returns there, the gun limit of 2 never read"
+        );
     }
 
     #[test]
@@ -529,6 +547,11 @@ mod tests {
             at(&[(420, 1), (422, 12)]),
             map(&[(420, 1), (422, 10)]),
             "the cap returns before the Max of 5"
+        );
+        assert_eq!(
+            at(&[(420, 1), (422, 10)]),
+            map(&[(420, 1), (422, 10)]),
+            "exactly at the cap: it returns before the Max of 5"
         );
         assert_eq!(
             at(&[(420, 2), (422, 12)]),
