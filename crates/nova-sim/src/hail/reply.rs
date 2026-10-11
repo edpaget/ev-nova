@@ -18,6 +18,19 @@
 //! want?" ([`WHAT_IS_IT`]) from a talkative ship that is hostile or does
 //! not like the player, and "Channel open." ([`CHANNEL_OPEN`]) otherwise.
 //!
+//! A talkative mission ship ([`MissionHail`], its mark's slot active)
+//! opens by its mission instead, whatever its attitude (@0x95b9c-0x95cb3),
+//! each step overriding the one before: "Channel open."; "What is it you
+//! want?" for `ShipGoal` 0, destroy them (@0x95bf8-0x95c09); "Glad to see
+//! you, " ([`GLAD_TO_SEE_YOU`]) then the player's ship's name and "." for
+//! `ShipGoal` 3, escort them (@0x95c10-0x95c6c, [`Reply::Named`]); and
+//! "What is it you want?" for `ShipBehav` 0, attacking the player
+//! (@0x95c71-0x95c97). The original then has `ShipBehav` 1, escorting
+//! the player, open "What can I do for you?" (@0x95ca0-0x95cb3,
+//! @0x95d22-0x95d49); until rdm:phase/mission-ships/phase-7-mission-escorts
+//! such a ship opens as one of `ShipBehav` -1 does. An untalkative mission
+//! ship opens "Channel open." as any untalkative ship does (@0x95cb5).
+//!
 //! **Advice lines** ([`Reply::Advice`]). Greetings to a friendly ship
 //! reads one string of a list. A blank one, when the option says so,
 //! reads "Greetings." (`STR#` 2002 #175, [`GREETINGS`]) instead. Then the
@@ -33,6 +46,8 @@
 
 use super::like::Attitude;
 use crate::catalog::CommCatalog;
+use crate::mission::goals::ShipGoal;
+use crate::mission::ships::ShipBehav;
 use crate::rulebook::RuleSource;
 
 /// How many variants each group of ship comm strings has.
@@ -66,6 +81,10 @@ pub const NO_RESPONSE: u8 = 1;
 /// Group 2: "What is it you want?": the opening line to a ship that is
 /// hostile or does not like the player.
 pub const WHAT_IS_IT: u8 = 2;
+/// Group 8: "Glad to see you, ": a mission ship's opening line to the
+/// player escorting it, the player's ship's name and "." following
+/// ([`Reply::Named`]).
+pub const GLAD_TO_SEE_YOU: u8 = 8;
 /// Group 9: "Nice to meet you.": in place of an advice line passed over.
 pub const NICE_TO_MEET_YOU: u8 = 9;
 /// Group 12: "Yeah, come back when you actually have some money.": a
@@ -120,6 +139,10 @@ pub enum Reply {
     /// A ship comm string group, said in the conversation's variant (see
     /// [`Reply::locate`]).
     Comm(u8),
+    /// A ship comm string group, said in the conversation's variant, then
+    /// the player's ship's name and "." (`strcat` @0x95c56, the `.`
+    /// @0x95c63): a missing string leaves the name and ".".
+    Named(u8),
     /// String `index` of `STR#` `list`, as it is: none when it is
     /// missing.
     Line {
@@ -156,10 +179,16 @@ impl Reply {
         }
     }
 
-    /// The reply's words in `variant`, read from `catalog` (see the
+    /// The reply's words in `variant`, read from `catalog`, a
+    /// [`Reply::Named`] naming the player's ship `ship_name` (see the
     /// module docs): a string missing, or of a list missing, is none.
     #[must_use]
-    pub fn say(self, variant: u8, catalog: &(impl CommCatalog + ?Sized)) -> String {
+    pub fn say(
+        self,
+        variant: u8,
+        catalog: &(impl CommCatalog + ?Sized),
+        ship_name: &str,
+    ) -> String {
         let line = |(list, index): (i16, u16)| {
             let at = usize::from(index.checked_sub(1)?);
             catalog.string_list(list).into_iter().nth(at)
@@ -167,6 +196,7 @@ impl Reply {
         let line = |at| line(at).unwrap_or_default();
         match self {
             Self::Comm(group) => line(Self::locate(group, variant)),
+            Self::Named(group) => format!("{}{ship_name}.", line(Self::locate(group, variant))),
             Self::Line { list, index } => line((list, index)),
             Self::Advice {
                 list,
@@ -188,13 +218,39 @@ impl Reply {
     }
 }
 
-/// The group a ship opens with when hailed (see the module docs).
+/// A hailed mission ship's mission, as its opening line reads it: the
+/// `ShipGoal` of its slot's mission and its mark's `ShipBehav`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MissionHail {
+    /// What the player must do to it.
+    pub goal: ShipGoal,
+    /// How it behaves. [`ShipBehav::EscortPlayer`] reads as
+    /// [`ShipBehav::Own`] here until
+    /// rdm:phase/mission-ships/phase-7-mission-escorts.
+    pub behav: ShipBehav,
+}
+
+/// What a ship opens with when hailed: by its `mission`, when it is a
+/// talkative mission ship, and otherwise by its attitude (see the module
+/// docs).
 #[must_use]
-pub fn opening(talkative: bool, attitude: Attitude) -> u8 {
-    if talkative && attitude != Attitude::Friendly {
-        WHAT_IS_IT
-    } else {
-        CHANNEL_OPEN
+pub fn opening(talkative: bool, attitude: Attitude, mission: Option<MissionHail>) -> Reply {
+    match mission {
+        Some(mission) if talkative => mission_opening(mission),
+        _ if talkative && attitude != Attitude::Friendly => Reply::Comm(WHAT_IS_IT),
+        _ => Reply::Comm(CHANNEL_OPEN),
+    }
+}
+
+/// A talkative mission ship's opening line (see the module docs).
+fn mission_opening(mission: MissionHail) -> Reply {
+    if mission.behav == ShipBehav::AttackPlayer {
+        return Reply::Comm(WHAT_IS_IT);
+    }
+    match mission.goal {
+        ShipGoal::Destroy => Reply::Comm(WHAT_IS_IT),
+        ShipGoal::Escort => Reply::Named(GLAD_TO_SEE_YOU),
+        _ => Reply::Comm(CHANNEL_OPEN),
     }
 }
 
@@ -211,6 +267,8 @@ pub fn advice_fallback(line: &str, long_advice: RuleSource) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mission::goals::ShipGoal;
+    use crate::mission::ships::ShipBehav;
 
     /// `STR#` 3000 is "c<n>" for each string n up to 200, and 3001 "d<n>"
     /// up to 20; 2002 #175 is "Greetings."; 7000 holds `line` as #1, a
@@ -257,15 +315,15 @@ mod tests {
     #[test]
     fn a_comm_reply_is_said_in_the_variant() {
         let catalog = strings("Fine.");
-        assert_eq!(Reply::Comm(0).say(3, &catalog), "c4");
-        assert_eq!(Reply::Comm(9).say(0, &catalog), "c46");
-        assert_eq!(Reply::Comm(38).say(2, &catalog), "d3");
+        assert_eq!(Reply::Comm(0).say(3, &catalog, ""), "c4");
+        assert_eq!(Reply::Comm(9).say(0, &catalog, ""), "c46");
+        assert_eq!(Reply::Comm(38).say(2, &catalog, ""), "d3");
     }
 
     #[test]
     fn a_line_is_its_string_as_it_is_or_none() {
         let catalog = strings("*Hidden");
-        let line = |list, index| Reply::Line { list, index }.say(4, &catalog);
+        let line = |list, index| Reply::Line { list, index }.say(4, &catalog, "");
         assert_eq!(line(7000, 1), "*Hidden", "no check");
         assert_eq!(line(7000, 2), "");
         assert_eq!(line(7000, 4), "", "past the end");
@@ -278,11 +336,11 @@ mod tests {
     fn an_advice_line_is_shown_as_written() {
         let catalog = strings("Welcome to Federation space.");
         assert_eq!(
-            advice(7000, 1, false, RuleSource::Engine).say(2, &catalog),
+            advice(7000, 1, false, RuleSource::Engine).say(2, &catalog, ""),
             "Welcome to Federation space."
         );
         assert_eq!(
-            advice(7000, 3, false, RuleSource::Engine).say(2, &catalog),
+            advice(7000, 3, false, RuleSource::Engine).say(2, &catalog, ""),
             "Hi",
             "a two-character line is shown"
         );
@@ -295,19 +353,19 @@ mod tests {
             let catalog = strings(line);
             for variant in [0, 4] {
                 assert_eq!(
-                    advice(7000, index, false, RuleSource::Engine).say(variant, &catalog),
+                    advice(7000, index, false, RuleSource::Engine).say(variant, &catalog, ""),
                     format!("c{}", 46 + u16::from(variant)),
                     "{line:?} #{index}"
                 );
             }
         }
         assert_eq!(
-            advice(7001, 1, false, RuleSource::Engine).say(1, &strings("")),
+            advice(7001, 1, false, RuleSource::Engine).say(1, &strings(""), ""),
             "c47",
             "an empty list"
         );
         assert_eq!(
-            advice(9999, 1, true, RuleSource::Engine).say(1, &strings("")),
+            advice(9999, 1, true, RuleSource::Engine).say(1, &strings(""), ""),
             "Greetings.",
             "a missing list, greeted"
         );
@@ -318,11 +376,11 @@ mod tests {
         let long = "x".repeat(42);
         let catalog = strings(&long);
         assert_eq!(
-            advice(7000, 1, false, RuleSource::Bible).say(0, &catalog),
+            advice(7000, 1, false, RuleSource::Bible).say(0, &catalog, ""),
             long
         );
         assert_eq!(
-            advice(7000, 2, false, RuleSource::Bible).say(0, &catalog),
+            advice(7000, 2, false, RuleSource::Bible).say(0, &catalog, ""),
             "c46",
             "a blank line still is not"
         );
@@ -332,21 +390,21 @@ mod tests {
     fn a_blank_advice_line_greets_when_asked_to_before_the_check() {
         let catalog = strings("");
         assert_eq!(
-            advice(7000, 2, true, RuleSource::Engine).say(3, &catalog),
+            advice(7000, 2, true, RuleSource::Engine).say(3, &catalog, ""),
             "Greetings."
         );
         assert_eq!(
-            advice(7000, 1, true, RuleSource::Engine).say(3, &catalog),
+            advice(7000, 1, true, RuleSource::Engine).say(3, &catalog, ""),
             "Greetings."
         );
         assert_eq!(
-            advice(7000, 3, true, RuleSource::Engine).say(3, &catalog),
+            advice(7000, 3, true, RuleSource::Engine).say(3, &catalog, ""),
             "Hi",
             "only a blank one"
         );
         let starred = strings("*Secret");
         assert_eq!(
-            advice(7000, 1, true, RuleSource::Engine).say(3, &starred),
+            advice(7000, 1, true, RuleSource::Engine).say(3, &starred, ""),
             "c49",
             "a starred line is not blank"
         );
@@ -363,15 +421,167 @@ mod tests {
 
     #[test]
     fn a_talkative_ship_that_is_not_friendly_asks_what_the_player_wants() {
-        assert_eq!(opening(true, Attitude::Hostile), WHAT_IS_IT);
-        assert_eq!(opening(true, Attitude::Unfriendly), WHAT_IS_IT);
-        assert_eq!(opening(true, Attitude::Friendly), CHANNEL_OPEN);
-        assert_eq!(opening(false, Attitude::Hostile), CHANNEL_OPEN);
-        assert_eq!(opening(false, Attitude::Unfriendly), CHANNEL_OPEN);
+        let opening = |talkative, attitude| opening(talkative, attitude, None);
+        assert_eq!(opening(true, Attitude::Hostile), Reply::Comm(WHAT_IS_IT));
+        assert_eq!(opening(true, Attitude::Unfriendly), Reply::Comm(WHAT_IS_IT));
+        assert_eq!(opening(true, Attitude::Friendly), Reply::Comm(CHANNEL_OPEN));
+        assert_eq!(opening(false, Attitude::Hostile), Reply::Comm(CHANNEL_OPEN));
+        assert_eq!(
+            opening(false, Attitude::Unfriendly),
+            Reply::Comm(CHANNEL_OPEN)
+        );
+    }
+
+    const ATTITUDES: [Attitude; 3] = [Attitude::Friendly, Attitude::Unfriendly, Attitude::Hostile];
+    const GOALS: [ShipGoal; 9] = [
+        ShipGoal::None,
+        ShipGoal::Destroy,
+        ShipGoal::Disable,
+        ShipGoal::Board,
+        ShipGoal::Escort,
+        ShipGoal::Observe,
+        ShipGoal::Rescue,
+        ShipGoal::ChaseOff,
+        ShipGoal::Other,
+    ];
+    const BEHAVS: [ShipBehav; 4] = [
+        ShipBehav::Own,
+        ShipBehav::AttackPlayer,
+        ShipBehav::EscortPlayer,
+        ShipBehav::AttackStellars,
+    ];
+
+    /// The opening of a talkative mission ship of `goal` and `behav`, the
+    /// same whatever its attitude.
+    fn mission_opening(goal: ShipGoal, behav: ShipBehav) -> Reply {
+        let mission = Some(MissionHail { goal, behav });
+        let said = opening(true, Attitude::Friendly, mission);
+        for attitude in ATTITUDES {
+            assert_eq!(opening(true, attitude, mission), said, "{attitude:?}");
+        }
+        said
+    }
+
+    #[test]
+    fn a_talkative_mission_ship_to_destroy_or_attacking_the_player_asks_what_it_wants() {
+        for behav in BEHAVS {
+            if behav != ShipBehav::AttackPlayer {
+                assert_eq!(
+                    mission_opening(ShipGoal::Destroy, behav),
+                    Reply::Comm(WHAT_IS_IT),
+                    "{behav:?}"
+                );
+            }
+        }
+        for goal in GOALS {
+            assert_eq!(
+                mission_opening(goal, ShipBehav::AttackPlayer),
+                Reply::Comm(WHAT_IS_IT),
+                "{goal:?}, the escort goal included"
+            );
+        }
+    }
+
+    #[test]
+    fn a_talkative_mission_ship_to_escort_is_glad_to_see_the_player() {
+        for behav in [
+            ShipBehav::Own,
+            ShipBehav::EscortPlayer,
+            ShipBehav::AttackStellars,
+        ] {
+            assert_eq!(
+                mission_opening(ShipGoal::Escort, behav),
+                Reply::Named(GLAD_TO_SEE_YOU),
+                "{behav:?}, escorting the player as its own until phase 7"
+            );
+        }
+    }
+
+    #[test]
+    fn any_other_talkative_mission_ship_opens_the_channel_whatever_its_attitude() {
+        for goal in GOALS {
+            if matches!(goal, ShipGoal::Destroy | ShipGoal::Escort) {
+                continue;
+            }
+            for behav in [
+                ShipBehav::Own,
+                ShipBehav::EscortPlayer,
+                ShipBehav::AttackStellars,
+            ] {
+                assert_eq!(
+                    mission_opening(goal, behav),
+                    Reply::Comm(CHANNEL_OPEN),
+                    "{goal:?} {behav:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_untalkative_mission_ship_opens_the_channel() {
+        for goal in GOALS {
+            for behav in BEHAVS {
+                for attitude in ATTITUDES {
+                    assert_eq!(
+                        opening(false, attitude, Some(MissionHail { goal, behav })),
+                        Reply::Comm(CHANNEL_OPEN),
+                        "{goal:?} {behav:?} {attitude:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_named_reply_is_said_in_the_variant_then_the_ship_name_and_a_full_stop() {
+        let catalog = strings("");
+        assert_eq!(
+            Reply::Named(GLAD_TO_SEE_YOU).say(0, &catalog, "Pathfinder"),
+            "c41Pathfinder."
+        );
+        assert_eq!(
+            Reply::Named(GLAD_TO_SEE_YOU).say(4, &catalog, "Pathfinder"),
+            "c45Pathfinder."
+        );
+        assert_eq!(
+            Reply::Named(GLAD_TO_SEE_YOU).say(2, &catalog, ""),
+            "c43.",
+            "a ship never named"
+        );
+    }
+
+    #[test]
+    fn a_named_reply_missing_its_string_is_the_name_and_a_full_stop() {
+        struct Nothing;
+        impl CommCatalog for Nothing {
+            fn string_list(&self, _id: i16) -> Vec<String> {
+                Vec::new()
+            }
+        }
+        assert_eq!(
+            Reply::Named(GLAD_TO_SEE_YOU).say(1, &Nothing, "Pathfinder"),
+            "Pathfinder."
+        );
+    }
+
+    #[test]
+    fn only_a_named_reply_says_the_ship_name() {
+        let catalog = strings("Fine.");
+        assert_eq!(Reply::Comm(8).say(0, &catalog, "Pathfinder"), "c41");
+        assert_eq!(
+            Reply::Line {
+                list: 7000,
+                index: 1
+            }
+            .say(0, &catalog, "Pathfinder"),
+            "Fine."
+        );
     }
 
     #[test]
     fn the_groups_are_the_originals() {
+        assert_eq!(GLAD_TO_SEE_YOU, 8);
+        assert_eq!(Reply::locate(GLAD_TO_SEE_YOU, 0), (3000, 41));
         assert_eq!(
             [
                 CHANNEL_OPEN,

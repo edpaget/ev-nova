@@ -60,7 +60,7 @@ pub use crate::ai::Help;
 pub use deal::{Conversation, Haggle, Mood, Settled};
 pub use like::{Attitude, attitude, likes_player};
 pub use nova::{BegForMercy, Greetings, JoinFleet, Release, RequestAssistance};
-pub use reply::Reply;
+pub use reply::{MissionHail, Reply};
 
 /// `Flags`: its ships answer no hail.
 pub const MUTE: u16 = 0x0400;
@@ -167,6 +167,10 @@ pub struct Hail<'a> {
     /// `LinkMission` is available from a ship, and the fleet has room. The
     /// session sets it; none otherwise.
     pub joins: bool,
+    /// The mission of the ship hailed, when it is a mission ship: its
+    /// slot's `ShipGoal` and its mark's `ShipBehav`. The session sets it;
+    /// none otherwise.
+    pub mission: Option<MissionHail>,
 }
 
 impl Hail<'_> {
@@ -218,6 +222,7 @@ impl<'a> Hail<'a> {
             need,
             quote: None,
             joins: false,
+            mission: None,
         }
     }
 }
@@ -471,6 +476,7 @@ pub(crate) mod fixture {
             need: None,
             quote: None,
             joins: false,
+            mission: None,
         }
     }
 }

@@ -62,9 +62,12 @@ use crate::combat::armament::Trigger;
 use crate::combat::hull::{Condition, DisableRule};
 use crate::hail::{
     Ask, Attitude, CommNote, Conversation, Deed, Dispositions, EscortStatus, Haggle, Hail,
-    HailButton, HailOptions, HailRefusal, HailView, Help, Reply, Settled, assist, attitude, reply,
+    HailButton, HailOptions, HailRefusal, HailView, Help, MissionHail, Reply, Settled, assist,
+    attitude, reply,
 };
 use crate::hyperspace::JUMP_FUEL;
+use crate::mission::goals::ShipGoal;
+use crate::mission::ships::ShipBehav;
 use crate::person::{COMM_QUOTES, offers_to_join};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
@@ -124,11 +127,12 @@ impl Session {
         let conversation =
             Conversation::open(self.pilot.cash, dispositions.greedy, npc.info_types, chance);
         let opening = if escort {
-            reply::ESCORT_OPENING
+            Reply::Comm(reply::ESCORT_OPENING)
         } else {
             reply::opening(
                 !dispositions.untalkative,
                 attitude(npc, &self.world().around(self.npcs())),
+                self.mission_hail(npc),
             )
         };
         let opening = match Self::quote_of(npc) {
@@ -138,7 +142,7 @@ impl Session {
                     index,
                 }
             }
-            _ => Reply::Comm(opening),
+            _ => opening,
         };
         self.talk = Some(Talk {
             npc: npc.id,
@@ -184,6 +188,26 @@ impl Session {
         })
     }
 
+    /// The mission of `npc`, when it is a mission ship: its slot's
+    /// mission's `ShipGoal` and its mark's `ShipBehav`. A mark whose slot
+    /// no longer holds a mission (until the AI next thinks) reads as a
+    /// mission of no goal and of its own behaviour, as the original reads
+    /// a mark of an inactive slot: "Channel open." whatever its attitude
+    /// (@0x95be4), and no refusal to be bribed (@0x9612d).
+    fn mission_hail(&self, npc: &Npc) -> Option<MissionHail> {
+        let mark = npc.mission?;
+        Some(match self.pilot.missions.get(mark.slot) {
+            Some(active) => MissionHail {
+                goal: ShipGoal::from_code(self.lifecycle_record(active.mission).ships.goal),
+                behav: mark.behav,
+            },
+            None => MissionHail {
+                goal: ShipGoal::None,
+                behav: ShipBehav::Own,
+            },
+        })
+    }
+
     /// What `npc`'s government and ship type make of hails.
     fn dispositions(&self, npc: &Npc) -> Dispositions {
         let inherent = self
@@ -202,6 +226,7 @@ impl Session {
         Hail {
             quote,
             joins: self.joins(npc),
+            mission: self.mission_hail(npc),
             ..Hail::new(npc, &around, self.dispositions(npc), talk, need)
         }
     }
@@ -246,7 +271,11 @@ impl Session {
         Some(HailView {
             npc: npc.id,
             ship: npc.ship,
-            reply: talk.reply.say(talk.conversation.variant, catalog),
+            reply: talk.reply.say(
+                talk.conversation.variant,
+                catalog,
+                self.pilot.ship_name().unwrap_or_default(),
+            ),
             comm_name: self
                 .ship_record(npc.ship)
                 .map(|record| record.comm_name.clone())

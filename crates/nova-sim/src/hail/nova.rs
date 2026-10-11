@@ -71,9 +71,12 @@
 //! bribe, listed for a talkative hostile ship. In order:
 //!
 //! 1. A quiet ship, by the engine: nothing happens.
-//! 2. A ship that takes no bribes: "In your dreams, pal.", and it keeps
+//! 2. A mission ship of `ShipBehav` 0, attacking the player, its slot
+//!    active ([`Hail::mission`], @0x9610f-0x96142): "In your dreams,
+//!    pal." (@0x9664c), and it keeps attacking, bribable or not.
+//! 3. A ship that takes no bribes: "In your dreams, pal.", and it keeps
 //!    attacking.
-//! 3. It says its mood (as above, or "You'll have to pay me first.") and
+//! 4. It says its mood (as above, or "You'll have to pay me first.") and
 //!    asks its price: paid, "A pleasure doing business with you." and it
 //!    spares the player; declined, "What? How dare you! Prepare to die!"
 //!    and it attacks; short, "Yeah, come back when you actually have some
@@ -101,6 +104,7 @@ use super::reply::{
 use super::{Answer, Ask, Attitude, Deed, Hail, HailOption, Mood, Reply};
 use crate::catalog::GovtId;
 use crate::chance::Chance;
+use crate::mission::ships::ShipBehav;
 use crate::person::COMM_QUOTES;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 
@@ -340,7 +344,10 @@ impl HailOption for BegForMercy {
         if ignores_middle(hail, self.quiet_hails) {
             return Answer::default();
         }
-        if !hail.dispositions.bribable {
+        let attacks_player = hail
+            .mission
+            .is_some_and(|mission| mission.behav == ShipBehav::AttackPlayer);
+        if attacks_player || !hail.dispositions.bribable {
             return Answer::say(Reply::Comm(IN_YOUR_DREAMS));
         }
         Answer {
@@ -441,10 +448,11 @@ impl HailOption for JoinFleet {
 #[cfg(test)]
 mod tests {
     use super::super::fixture::{hail, ship};
-    use super::super::{Dispositions, Help};
+    use super::super::{Dispositions, Help, MissionHail};
     use super::*;
     use crate::ai::Goal;
     use crate::combat::ShipRef;
+    use crate::mission::goals::ShipGoal;
     use crate::traffic::npc::{AiType, Npc};
 
     /// A chance that a test never expects drawn on.
@@ -1019,6 +1027,97 @@ mod tests {
             quiet_hails: RuleSource::Bible,
         };
         assert!(press(&bible, &hail).ask.is_some(), "as usual");
+    }
+
+    // Mission ships.
+
+    const BEHAVS: [ShipBehav; 4] = [
+        ShipBehav::Own,
+        ShipBehav::AttackPlayer,
+        ShipBehav::EscortPlayer,
+        ShipBehav::AttackStellars,
+    ];
+
+    /// `hail` of a ship of an active mission of `behav`.
+    fn on_mission(hail: Hail<'_>, behav: ShipBehav) -> Hail<'_> {
+        Hail {
+            mission: Some(MissionHail {
+                goal: ShipGoal::Destroy,
+                behav,
+            }),
+            ..hail
+        }
+    }
+
+    #[test]
+    fn a_mission_ship_attacking_the_player_will_not_be_bribed() {
+        let npc = ship();
+        assert_eq!(
+            press(
+                &BegForMercy::default(),
+                &on_mission(begging(&npc, true), ShipBehav::AttackPlayer)
+            ),
+            says(IN_YOUR_DREAMS),
+            "no price asked, nothing done"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_quiet_mission_ship_attacking_the_player_ignores_begging_first() {
+        let npc = ship();
+        let hail = Hail {
+            dispositions: quiet(),
+            ..on_mission(begging(&npc, true), ShipBehav::AttackPlayer)
+        };
+        assert_eq!(press(&BegForMercy::default(), &hail), Answer::default());
+        let bible = BegForMercy {
+            quiet_hails: RuleSource::Bible,
+        };
+        assert_eq!(press(&bible, &hail), says(IN_YOUR_DREAMS));
+    }
+
+    #[test]
+    fn a_mission_ship_of_another_behaviour_is_bribed_as_any_ship_is() {
+        let npc = ship();
+        let unmarked = press(&BegForMercy::default(), &begging(&npc, true));
+        assert!(unmarked.ask.is_some());
+        for behav in [
+            ShipBehav::Own,
+            ShipBehav::EscortPlayer,
+            ShipBehav::AttackStellars,
+        ] {
+            assert_eq!(
+                press(
+                    &BegForMercy::default(),
+                    &on_mission(begging(&npc, true), behav)
+                ),
+                unmarked,
+                "{behav:?}"
+            );
+            assert_eq!(
+                press(
+                    &BegForMercy::default(),
+                    &on_mission(begging(&npc, false), behav)
+                ),
+                says(IN_YOUR_DREAMS),
+                "{behav:?}, taking no bribes"
+            );
+        }
+    }
+
+    #[test]
+    fn request_assistance_has_no_mission_branch() {
+        let npc = ship();
+        let request = RequestAssistance::default();
+        let unmarked = press(&request, &needy(&npc));
+        assert!(unmarked.ask.is_some());
+        for behav in BEHAVS {
+            assert_eq!(
+                press(&request, &on_mission(needy(&npc), behav)),
+                unmarked,
+                "{behav:?}"
+            );
+        }
     }
 
     // Joining the fleet.

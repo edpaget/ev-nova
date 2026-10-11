@@ -2642,11 +2642,11 @@ fn the_three_stock_42_character_advice_lines_follow_long_advice() {
                 long_advice,
             };
             assert_eq!(
-                advice(RuleSource::Engine).say(variant, &data),
+                advice(RuleSource::Engine).say(variant, &data, ""),
                 comm[45 + usize::from(variant)],
                 "STR# {list} #{index}"
             );
-            assert_eq!(advice(RuleSource::Bible).say(variant, &data), line);
+            assert_eq!(advice(RuleSource::Bible).say(variant, &data, ""), line);
         }
     }
 }

@@ -2939,4 +2939,129 @@ mod tests {
                 .all(|button| button.label != "Use As Escort")
         );
     }
+
+    // Hails.
+
+    /// [`ships_catalog`] of `ShipGoal` `goal` and `ShipBehav` `behav`,
+    /// its ships' government 131 taking bribes, and the ship comm strings
+    /// "c<n>" in `STR#` 3000.
+    fn hailing(goal: i16, behav: i16) -> FakePilotCatalog {
+        let mut catalog = ships_catalog(MissionShip {
+            goal,
+            behav,
+            ..shipping(-1, 0)
+        });
+        catalog.govts.push(crate::catalog::GovtRecord {
+            flags: crate::hail::BRIBABLE_WARSHIPS,
+            ..crate::testkit::govt(131)
+        });
+        catalog
+            .strings
+            .push((3000, (1..=200).map(|n| format!("c{n}")).collect()));
+        catalog
+    }
+
+    /// A session of `catalog` in flight with its mission's ships, the
+    /// first targeted, its pilot flying the "Pathfinder"; `hostile` has
+    /// that ship attacking the player.
+    fn hailing_session(catalog: &FakePilotCatalog, hostile: bool) -> Session {
+        let mut session = accepted(catalog);
+        take_off(&mut session, catalog);
+        session.pilot.ship_name = Some("Pathfinder".to_owned());
+        assert_eq!(marked(&session), [0, 0]);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        if hostile {
+            npc.goal = Goal::Attack(ShipRef::Player);
+        }
+        session.target = Some(npc.id);
+        session
+    }
+
+    /// The opening line of the targeted ship and whether it is hostile, in
+    /// variant 4, the one [`NeverFires`] draws.
+    fn opening_line(session: &mut Session, catalog: &FakePilotCatalog) -> (String, bool) {
+        let view = session
+            .hail(catalog, &HailOptions::default(), &mut NeverFires)
+            .expect("answered");
+        (view.reply, view.hostile)
+    }
+
+    #[test]
+    fn a_mission_ship_to_escort_is_glad_to_see_the_players_ship() {
+        let catalog = hailing(3, -1);
+        let mut session = hailing_session(&catalog, false);
+        assert_eq!(
+            opening_line(&mut session, &catalog),
+            ("c45Pathfinder.".to_owned(), false)
+        );
+    }
+
+    #[test]
+    fn a_mission_ship_to_destroy_asks_what_the_player_wants() {
+        let catalog = hailing(0, -1);
+        let mut session = hailing_session(&catalog, false);
+        assert_eq!(
+            opening_line(&mut session, &catalog),
+            ("c15".to_owned(), false)
+        );
+    }
+
+    #[test]
+    fn a_hostile_mission_ship_to_board_opens_the_channel() {
+        let catalog = hailing(2, -1);
+        let mut session = hailing_session(&catalog, true);
+        assert_eq!(
+            opening_line(&mut session, &catalog),
+            ("c5".to_owned(), true)
+        );
+    }
+
+    #[test]
+    fn a_ship_still_marked_after_its_mission_left_its_slot_opens_the_channel() {
+        let catalog = hailing(3, 0);
+        let mut session = hailing_session(&catalog, true);
+        let record = catalog.missions[0].clone();
+        session.auto_abort(0, &record, &mut NeverFires);
+        assert_eq!(marked(&session), [0, 0], "until the AI next thinks");
+        assert_eq!(
+            opening_line(&mut session, &catalog),
+            ("c5".to_owned(), true),
+            "neither its goal nor its behaviour, nor its attitude"
+        );
+        let view = session
+            .answer(1, &catalog, &HailOptions::default(), &mut NeverFires)
+            .expect("answered");
+        assert!(view.asking.is_some(), "bribed as any ship is");
+    }
+
+    #[test]
+    fn a_mission_ship_attacking_the_player_will_not_be_bribed() {
+        let catalog = hailing(0, 0);
+        let mut session = hailing_session(&catalog, true);
+        let view = session
+            .hail(&catalog, &HailOptions::default(), &mut NeverFires)
+            .expect("answered");
+        assert_eq!(view.reply, "c15");
+        assert_eq!(view.options[1].label, "Beg For Mercy");
+        let mut draws = crate::testkit::Draws::of(&[]);
+        let view = session
+            .answer(1, &catalog, &HailOptions::default(), &mut draws)
+            .expect("answered");
+        assert_eq!(view.reply, "c100");
+        assert!(view.asking.is_none(), "no price asked");
+        assert!(draws.asked.is_empty(), "nothing drawn");
+    }
+
+    #[test]
+    fn a_mission_ship_of_its_own_behaviour_names_its_price() {
+        let catalog = hailing(0, -1);
+        let mut session = hailing_session(&catalog, true);
+        session
+            .hail(&catalog, &HailOptions::default(), &mut NeverFires)
+            .expect("answered");
+        let view = session
+            .answer(1, &catalog, &HailOptions::default(), &mut NeverFires)
+            .expect("answered");
+        assert!(view.asking.is_some(), "a price asked");
+    }
 }
