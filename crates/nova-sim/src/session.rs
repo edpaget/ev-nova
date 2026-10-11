@@ -2392,7 +2392,10 @@ impl Session {
     /// [`SimMessage::ExitedHypergate`], and no [`SimMessage::Arrived`].
     /// The ship enters the system by the gate's row of the table in the
     /// `entry` module, which keeps a held `P` sound and lets go of the
-    /// strikes, the target, the boarding and the hail.
+    /// strikes, the target, the boarding and the hail. The special ships
+    /// following the player are decided as [`RuleKey::GateFollow`] says
+    /// (see the `gate_follow` module): those that follow come out of the
+    /// exit gate after the player, or where it arrived like a jump.
     pub fn enter_wormhole(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),

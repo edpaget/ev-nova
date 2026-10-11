@@ -21,7 +21,19 @@
 //! setup comes first, as the system is entered, and the hook as the
 //! entry settles: the setup on such an entry ([`Session::populate`]
 //! through the entry table) leaves out every slot the hook is about to
-//! restart. Its timer is drawn after the setup's draws, not before.
+//! restart. Its timer is drawn after the setup's draws, not before. On a
+//! hypergate's or wormhole's exit the original's loop A then overwrites
+//! the restart of every slot whose ships follow the player (`ShipSyst`
+//! -6, @0x6716a-0x67294), so, as the engine reads
+//! [`RuleKey::GateFollow`], the hook leaves such a slot alone there
+//! ([`Session::gate_decides`]).
+//!
+//! **Following through a gate** is the [`gate_follow`](super::gate_follow)
+//! module's: at a gate's exit a -6 slot of escorts is set up at once, one
+//! of attackers follows the player on its `düde` government's `Flags2`
+//! or odds, its fresh ships waiting in the exit gate before they attack,
+//! and any other loses its ships until the hook next restarts a
+//! `ShipStart` 1 timer.
 //!
 //! **The goals** are checked by every hook but in docked entries, the
 //! enter-system hook after its restart, as the original's per-frame poll

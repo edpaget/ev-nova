@@ -29,7 +29,7 @@
 //!    and any goal it takes at once;
 //! 3. an NPC not intact loses its provocation;
 //! 4. the decisions due on the AI timer, never for a ship still jumping
-//!    in, one that is not intact, or one assisting the player while
+//!    in or emerging from a gate, one that is not intact, or one assisting the player while
 //!    unprovoked (until it is done, or provoked): first every goal, then, each NPC
 //!    seeing the new goals, the fire command it holds and the ship it
 //!    targets. An NPC that goes back to an idle goal (not fighting) loses

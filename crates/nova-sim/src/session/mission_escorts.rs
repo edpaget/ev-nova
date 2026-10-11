@@ -50,7 +50,12 @@
 //! it is here: the traffic of the system left goes with it, and the new
 //! system's setup brings the ships left, never a second set; a slot of
 //! `ShipStart` 1 brings none at setup, and its ships come in on the
-//! restarted timer.
+//! restarted timer. A hypergate's or wormhole's exit is the exception:
+//! there the original's loop A stops a -6 escort slot's timer before the
+//! setup (@0x671a1-0x671b0), so the exit's setup brings its ships at
+//! once, `ShipStart` 1 or not, as the engine reads
+//! [`RuleKey::GateFollow`](crate::RuleKey::GateFollow) (see the
+//! [`gate_follow`](super::gate_follow) module).
 //!
 //! **Release.** A mission escort whose mark is cleared, its mission
 //! aborted in flight ([`Session::release_mission_ships`], `_AbortMission`
