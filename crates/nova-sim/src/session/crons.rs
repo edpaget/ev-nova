@@ -102,10 +102,13 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use crate::catalog::{CronId, CronRecord, MissionId, MissionRecord, StellarId, SystemId};
+    use crate::catalog::{
+        CronId, CronRecord, MissionId, MissionRecord, OutfitId, OutfitRecord, StellarId, SystemId,
+    };
     use crate::chance::NeverFires;
     use crate::control::{Bit, Script, Test};
     use crate::cron::CronState;
+    use crate::date::GameDate;
     use crate::mission::Refusal;
     use crate::pilot::Pilot;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -113,7 +116,7 @@ mod tests {
     use crate::save;
     use crate::session::Session;
     use crate::story::{Consumer, EventFilter, StoryEventKind, Subscription, SubscriptionId};
-    use crate::testkit::{FakePilotCatalog, Scripted, catalog, cron, land_now, mission};
+    use crate::testkit::{FakePilotCatalog, Scripted, catalog, cron, land_now, mission, outfit};
 
     /// [`catalog`] with crön 128 contributing 0x4, and mission 130 at the
     /// computer requiring it.
@@ -347,6 +350,63 @@ mod tests {
         assert!(requires(&session));
         session.let_days_pass(1, &mut NeverFires);
         assert!(!requires(&session));
+    }
+
+    #[test]
+    fn a_crons_dates_are_read_on_the_sessions_date() {
+        let mut autumn = scripted(128, 2, "b10", "");
+        autumn.first_month = 9;
+        autumn.first_day = 1;
+        let catalog = timing(vec![autumn]);
+        let mut session = quiet(&catalog);
+        let year = session.date().year();
+        let date = |month, day| GameDate::new(year, month, day).expect("a date");
+        session.set_date(date(8, 30));
+        session.let_days_pass(1, &mut NeverFires);
+        assert_eq!(session.date(), date(8, 31));
+        assert!(!session.control_bit(bit(10)), "31 Aug is before its window");
+        session.let_days_pass(1, &mut NeverFires);
+        assert_eq!(session.date(), date(9, 1));
+        assert!(session.control_bit(bit(10)), "its OnStart on 1 Sep");
+    }
+
+    /// Crön 129 requiring 0x4, its `OnStart` setting b12, and `others`.
+    fn requiring(others: Vec<CronRecord>) -> FakePilotCatalog {
+        let mut needy = scripted(129, 2, "b12", "");
+        needy.require = 0x4;
+        let mut crons = others;
+        crons.push(needy);
+        timing(crons)
+    }
+
+    #[test]
+    fn a_crons_require_is_met_by_another_running_crons_contribute() {
+        let mut giver = scripted(128, 5, "b11", "");
+        giver.contribute = 0x4;
+        giver.enable_on = Test::parse("b5");
+        let catalog = requiring(vec![giver]);
+        let mut session = quiet(&catalog);
+        session.let_days_pass(2, &mut NeverFires);
+        assert!(!session.control_bit(bit(12)), "nothing contributes 0x4");
+        session.set_control_bit(bit(5), true);
+        session.let_days_pass(1, &mut NeverFires);
+        assert!(session.control_bit(bit(11)));
+        assert!(session.control_bit(bit(12)), "crön 128 contributes 0x4");
+    }
+
+    #[test]
+    fn a_crons_require_is_met_by_an_outfit_owned() {
+        let mut catalog = requiring(Vec::new());
+        catalog.outfits = vec![OutfitRecord {
+            contribute: 0x4,
+            ..outfit(300, &[])
+        }];
+        let mut session = quiet(&catalog);
+        session.let_days_pass(2, &mut NeverFires);
+        assert!(!session.control_bit(bit(12)), "nothing contributes 0x4");
+        session.pilot.outfits.insert(OutfitId(300), 1);
+        session.let_days_pass(1, &mut NeverFires);
+        assert!(session.control_bit(bit(12)), "outfit 300 contributes 0x4");
     }
 
     #[test]
