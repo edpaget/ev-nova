@@ -12645,4 +12645,90 @@ mod tests {
         );
         assert_eq!(view.jump_effect(), None);
     }
+
+    /// The sprites of ship 129's sheet (`rlëD` 2001) drawn.
+    fn ship_129_sprites(list: &DrawList) -> usize {
+        sprites(list)
+            .iter()
+            .filter(|(image, _)| image.id == 2001)
+            .count()
+    }
+
+    /// The dim radar dots drawn: NPCs' blips.
+    fn dim_blips(list: &DrawList) -> usize {
+        list.iter()
+            .filter(|command| {
+                matches!(command, DrawCommand::Dot { color, .. } if *color == layout().dim_radar)
+            })
+            .count()
+    }
+
+    #[test]
+    fn an_attacker_following_through_a_wormhole_is_not_drawn_while_it_emerges_but_is_on_radar() {
+        let mut catalog = FakeCatalog {
+            sites: holed().sites,
+            gates: holed().gates,
+            ..trafficked(&[130, 131], 0, 129, 3)
+        };
+        catalog.dudes[0].1.govt = Some(GovtId(140));
+        catalog.govts = vec![nova_sim::GovtRecord {
+            id: GovtId(140),
+            flags: 0,
+            flags2: nova_sim::govt::ALWAYS_FOLLOWS_THROUGH_WORMHOLE,
+            crime_tol: 0,
+            initial_rec: 0,
+            penalties: nova_sim::Penalties::default(),
+            max_odds: 100,
+            classes: [-1; 4],
+            allies: [-1; 4],
+            enemies: [-1; 4],
+            comm_name: String::new(),
+            scan_mask: 0,
+            scan_fine: 0,
+        }];
+        // One ship of düde 128 (ship 129) attacking the player and
+        // following it (`ShipSyst` -6).
+        catalog.missions = vec![MissionRecord {
+            ships: MissionShip {
+                count: 1,
+                syst: -6,
+                dude: Some(nova_sim::DudeId(128)),
+                behav: 0,
+                start: 0,
+                ..MissionShip::NONE
+            },
+            ..errand(140)
+        }];
+        let mut view = FlightView::new(catalog).with_behaviour(Rc::new(Still));
+        run_set(&mut view, "S140");
+        settle_session(&mut view);
+        land_now(&mut view);
+        assert_eq!(system_of(&view), SystemId(131));
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        assert!(
+            session.npcs().iter().any(Npc::emerging),
+            "the attacker emerges after the player"
+        );
+        let list = drawn(&view);
+        assert_eq!(
+            sprites(&list),
+            [
+                (ImageKey::sprite(1140, 0), at(812.0, 344.0)),
+                (ImageKey::sprite(2000, 0), VIEW_CENTER),
+            ],
+            "Proxima and the player, not the ship emerging"
+        );
+        assert_eq!(dim_blips(&list), 1, "on radar while it emerges");
+        while view
+            .session()
+            .expect("flying")
+            .npcs()
+            .iter()
+            .any(Npc::emerging)
+        {
+            view.tick(TICK);
+        }
+        assert_eq!(ship_129_sprites(&drawn(&view)), 1, "drawn once out");
+    }
 }
