@@ -19,6 +19,15 @@
 //!   ([`expected_bits`]). The pay of another mission completed at the
 //!   return is taken off the cash's rise first; when one of them is a
 //!   fine, the pay is not checked.
+//! - **`meet goal <mission>`** ([`Step::MeetGoal`]) leaves the active
+//!   mission's special ships as meeting its ship goal in flight would,
+//!   then checks its goals as the flight does, so its `ShipDoneText`,
+//!   `OnShipDone` and auto-abort run (the session's `meet_ship_goal`):
+//!   destroyed, disabled, boarded or seen. For an escort goal it first
+//!   lands at the mission's destination, when it is not reached and is
+//!   not its return, then at its return, as `deliver` does, and brings
+//!   the escorts in there, where the `deliver` after it docks again and
+//!   completes the mission with them.
 //! - **`pass <n> days`** ([`Step::PassDays`]) takes off, when docked, then
 //!   lets `n` days go by ([`Session::let_days_pass`]): the take-off passes
 //!   its own days by the rules, on top of `n`. The walker stays in flight,
@@ -45,9 +54,10 @@
 //! availability fields refused it at each stellar, and the control bits
 //! set. Its `Display` is the report a stock test prints.
 //!
-//! The walker skips flight: ship goals, crons and ranks get their own step
-//! kinds as their features land. A mission whose goals need ships is never
-//! completed by a landing, and is reported [`Fault::NotCompleted`].
+//! The walker skips flight: a mission's ship goals are met by `meet
+//! goal`, and crons and ranks get their own step kinds as their features
+//! land. A mission whose goals need ships, delivered without a `meet goal`,
+//! is reported [`Fault::NotCompleted`].
 
 use std::fmt;
 
@@ -58,6 +68,7 @@ use crate::chance::{Chance, NeverFires};
 use crate::control::{Bit, Script, SetOp};
 use crate::date::GameDate;
 use crate::mission::{AcceptError, ActiveMission, PayEffect, Refusal, Stop, Venue, pay_effect};
+use crate::person::ESCORT_GOAL;
 use crate::rules::Verdict;
 use crate::session::{RelocateRefusal, Session};
 
@@ -71,14 +82,18 @@ pub enum Step {
     Deliver(MissionId),
     /// Take off, when docked, and let so many days go by.
     PassDays(u32),
+    /// Meet the active mission's ship goal.
+    MeetGoal(MissionId),
 }
 
 impl fmt::Display for Step {
-    /// "take 504", "deliver 504", "pass 3 days" or "pass 1 day".
+    /// "take 504", "deliver 504", "meet goal 504", "pass 3 days" or "pass
+    /// 1 day".
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Self::Take(mission) => write!(f, "take {}", mission.0),
             Self::Deliver(mission) => write!(f, "deliver {}", mission.0),
+            Self::MeetGoal(mission) => write!(f, "meet goal {}", mission.0),
             Self::PassDays(1) => write!(f, "pass 1 day"),
             Self::PassDays(days) => write!(f, "pass {days} days"),
         }
@@ -112,6 +127,14 @@ pub enum Done {
         pay: i64,
         /// What became of the other missions at its destination and its
         /// return, in order.
+        others: Vec<(MissionId, Became)>,
+    },
+    /// The mission's ship goal was met.
+    MetGoal {
+        /// The mission.
+        mission: MissionId,
+        /// What became of the other missions at the landings an escort
+        /// goal takes and as the goal was met, in order.
         others: Vec<(MissionId, Became)>,
     },
     /// The days went by: `days`, and before them, when the ship was
@@ -183,6 +206,9 @@ pub enum Fault {
     CannotLand(RelocateRefusal),
     /// It has no return stellar, so no landing completes it.
     Undeliverable,
+    /// It has no ship goal `meet goal` meets: no ships, or no goal, or a
+    /// goal to chase them off.
+    NoShipGoal,
 }
 
 /// A stellar the walker landed at looking for a mission, and why the
@@ -218,7 +244,9 @@ impl fmt::Display for WalkFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "step {} ({}) failed: ", self.step, self.at)?;
         let subject = match self.at {
-            Step::Take(mission) | Step::Deliver(mission) => format!("mission {}", mission.0),
+            Step::Take(mission) | Step::Deliver(mission) | Step::MeetGoal(mission) => {
+                format!("mission {}", mission.0)
+            }
             Step::PassDays(_) => "the step".to_owned(),
         };
         match &self.fault {
@@ -239,6 +267,7 @@ impl fmt::Display for WalkFailure {
             }
             Fault::CannotLand(refusal) => write!(f, "{subject}: cannot land: {refusal}")?,
             Fault::Undeliverable => write!(f, "{subject} has no return stellar")?,
+            Fault::NoShipGoal => write!(f, "{subject} has no ship goal to meet")?,
         }
         for looked in &self.looked {
             write!(
@@ -304,6 +333,7 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
                 Step::Take(mission) => self.take(session, mission),
                 Step::Deliver(mission) => self.deliver(session, mission),
                 Step::PassDays(days) => Ok(self.pass(session, days)),
+                Step::MeetGoal(mission) => self.meet_goal(session, mission),
             };
             match done {
                 Ok(done) => walked.done.push(done),
@@ -455,6 +485,47 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
             pay: got,
             others,
         })
+    }
+
+    /// `meet goal <mission>` (see the module docs).
+    fn meet_goal(&self, session: &mut Session, mission: MissionId) -> Result<Done, Failed> {
+        let held = session
+            .pilot()
+            .missions()
+            .iter()
+            .find(|(_, active)| active.mission == mission)
+            .map(|(slot, active)| (slot, active.clone()));
+        let Some((slot, active)) = held else {
+            return Err((Fault::NotActive, Vec::new()));
+        };
+        let mut others = Vec::new();
+        let escorts = self
+            .record(mission)
+            .is_some_and(|record| record.ships.goal == ESCORT_GOAL);
+        if escorts && let Some(back) = active.return_to {
+            if let Some(destination) = active.destination
+                && !active.reached
+                && destination.stellar != back.stellar
+            {
+                watched(session, mission, &mut others, |session| {
+                    self.land(session, destination)
+                })
+                .0?;
+            }
+            watched(session, mission, &mut others, |session| {
+                self.land(session, back)
+            })
+            .0?;
+        }
+        let (met, _) = watched(session, mission, &mut others, |session| {
+            let met = session.meet_ship_goal(self.catalog, slot, &mut NeverFires);
+            self.settle(session);
+            met
+        });
+        if !met {
+            return Err((Fault::NoShipGoal, Vec::new()));
+        }
+        Ok(Done::MetGoal { mission, others })
     }
 
     /// Lands at `stop` and settles.

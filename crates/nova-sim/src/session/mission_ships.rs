@@ -43,6 +43,15 @@ use crate::traffic::table::SpawnTable;
 /// The appear timer's highest value that counts down (32000 @0x437f5).
 const COUNTED: i16 = 32_000;
 
+/// What a goal check takes as seen of a mission's ships.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Sighting {
+    /// One of them was just seen.
+    sighted: bool,
+    /// They are taken to be here, wherever they are (the walker's).
+    here: bool,
+}
+
 /// How a mission ship was lost.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Loss {
@@ -222,6 +231,13 @@ impl Session {
     /// (@0x9ed87). Its escorted ships are those of the slot in the system
     /// now (@0x9e931-0x9e962). Nothing for a free slot.
     pub(super) fn check_ship_goals(&mut self, slot: u8, sighted: bool, chance: &mut dyn Chance) {
+        let here = false;
+        self.check_goals_seen(slot, Sighting { sighted, here }, chance);
+    }
+
+    /// [`Session::check_ship_goals`], one of the ships seen as `seen`
+    /// says.
+    fn check_goals_seen(&mut self, slot: u8, seen: Sighting, chance: &mut dyn Chance) {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
@@ -236,12 +252,12 @@ impl Session {
             destroyed: ships.destroyed,
             boarded: ships.boarded,
             disabled: ships.disabled,
-            here: self.ships_here(ships.system),
+            here: seen.here || self.ships_here(ships.system),
             escorted: self
                 .npcs()
                 .iter()
                 .any(|npc| npc.mission.is_some_and(|mark| mark.slot == slot)),
-            sighted,
+            sighted: seen.sighted,
             met: active.goals_met,
         };
         let failed_before = active.failed.is_some();
@@ -388,40 +404,125 @@ impl Session {
             if let Some(active) = self.pilot.missions.get_mut(slot) {
                 active.ships.appear = appear;
             }
-            let Some(dude) = record.ships.dude.filter(|_| fires) else {
+            if !fires {
                 continue;
-            };
-            self.traffic.table_mut().add_mission_dudes(
-                catalog,
-                &[dude],
-                &self.ships,
-                &self.outfits,
-                &self.arsenal,
-            );
-            let nav = Vec::new();
-            let spawn = MissionSpawn {
-                slot,
-                dude,
-                count: coming,
-                start: ShipStart::from_code(record.ships.start),
-                behav: ShipBehav::from_code(record.ships.behav),
-                nav: &nav,
-            };
-            let ships = spawn::arriving_mission_ships(
-                self.traffic.table(),
-                &spawn,
-                self.way_back(),
-                self.gate(),
-                chance,
-            );
-            let count = i16::try_from(ships.len()).unwrap_or(i16::MAX);
-            let last = self.last_npc();
-            self.traffic.bring_in(ships);
-            self.mission_ships_came(last);
+            }
+            let count = self.bring_in_mission_ships(catalog, slot, &record, coming, chance);
             if let Some(active) = self.pilot.missions.get_mut(slot) {
                 active.ships.arrived = active.ships.arrived.saturating_add(count);
             }
         }
+    }
+
+    /// Brings `coming` special ships of `record`, the mission in `slot`,
+    /// into the system by hyperspace ([`spawn::arriving_mission_ships`]),
+    /// their `düde`'s ships read from `catalog`, drawing on `chance`
+    /// (@0x43821-0x43aa5): how many came, none for a mission of no
+    /// `düde`.
+    fn bring_in_mission_ships(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        slot: u8,
+        record: &MissionRecord,
+        coming: i16,
+        chance: &mut (impl Chance + ?Sized),
+    ) -> i16 {
+        let Some(dude) = record.ships.dude else {
+            return 0;
+        };
+        self.traffic.table_mut().add_mission_dudes(
+            catalog,
+            &[dude],
+            &self.ships,
+            &self.outfits,
+            &self.arsenal,
+        );
+        let nav = Vec::new();
+        let spawn = MissionSpawn {
+            slot,
+            dude,
+            count: coming,
+            start: ShipStart::from_code(record.ships.start),
+            behav: ShipBehav::from_code(record.ships.behav),
+            nav: &nav,
+        };
+        let ships = spawn::arriving_mission_ships(
+            self.traffic.table(),
+            &spawn,
+            self.way_back(),
+            self.gate(),
+            chance,
+        );
+        let count = i16::try_from(ships.len()).unwrap_or(i16::MAX);
+        let last = self.last_npc();
+        self.traffic.bring_in(ships);
+        self.mission_ships_came(last);
+        count
+    }
+
+    /// Leaves the special ships of the mission in `slot` as meeting its
+    /// goal in flight would, then checks its goals as the subscriptions
+    /// do, so the moment's `ShipDoneText`, `OnShipDone` and auto-abort
+    /// run, drawing on `chance`: all of them arrived; for a destroy goal,
+    /// all destroyed and none left; for a disable goal, all disabled; for
+    /// a board or rescue goal, all boarded; for an observe goal, one seen
+    /// with them here; for an escort goal, all of them brought into the
+    /// system the ship is in now, docked or not, through the arrivals'
+    /// spawn path, their `düde` read from `catalog`. Whether the mission
+    /// has such a goal: none for a free slot, a mission of no ships, or of
+    /// no goal this meets. Built only for the storyline walker
+    /// (`fixture`), its one caller.
+    #[cfg(any(test, feature = "fixture"))]
+    pub(crate) fn meet_ship_goal(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        slot: u8,
+        chance: &mut dyn Chance,
+    ) -> bool {
+        let Some(active) = self.pilot.missions.get(slot) else {
+            return false;
+        };
+        let record = self.lifecycle_record(active.mission);
+        let count = record.ships.count;
+        let goal = ShipGoal::from_code(record.ships.goal);
+        let meets = matches!(
+            goal,
+            ShipGoal::Destroy
+                | ShipGoal::Disable
+                | ShipGoal::Board
+                | ShipGoal::Escort
+                | ShipGoal::Observe
+                | ShipGoal::Rescue
+        );
+        if count <= 0 || !meets {
+            return false;
+        }
+        if goal == ShipGoal::Escort {
+            self.bring_in_mission_ships(catalog, slot, &record, count, chance);
+        }
+        if let Some(active) = self.slot_holding(slot, record.id) {
+            let ships = &mut active.ships;
+            ships.arrived = count;
+            match goal {
+                ShipGoal::Destroy => {
+                    ships.destroyed = count;
+                    ships.left = 0;
+                }
+                ShipGoal::Disable => ships.disabled = count,
+                ShipGoal::Board | ShipGoal::Rescue => ships.boarded = count,
+                _ => {}
+            }
+        }
+        let observed = goal == ShipGoal::Observe;
+        self.check_goals_seen(
+            slot,
+            Sighting {
+                sighted: observed,
+                here: observed,
+            },
+            chance,
+        );
+        true
     }
 
     /// Boards `npc` when it is a mission's special ship
@@ -2160,5 +2261,104 @@ mod tests {
         );
         settle(&mut session, catalog);
         session
+    }
+
+    // The walker's hook.
+
+    #[test]
+    fn meeting_a_ship_goal_leaves_the_ships_as_flight_would_and_runs_the_moment() {
+        for (goal, destroyed, disabled, boarded, left) in [
+            (0, 2, 0, 0, 0),
+            (1, 0, 2, 0, 2),
+            (2, 0, 0, 2, 2),
+            (5, 0, 0, 2, 2),
+            (4, 0, 0, 0, 2),
+        ] {
+            let mut catalog = returning(goal, 0);
+            catalog.missions[0].ships.start = 1;
+            let mut session = accepted(&catalog);
+            let _ = shown(&mut session);
+            assert!(
+                session.meet_ship_goal(&catalog, 0, &mut NeverFires),
+                "{goal}"
+            );
+            let ships = ships_of(&session);
+            assert_eq!(
+                (
+                    ships.destroyed,
+                    ships.disabled,
+                    ships.boarded,
+                    ships.left,
+                    ships.arrived
+                ),
+                (destroyed, disabled, boarded, left, 2),
+                "{goal}"
+            );
+            assert!(goals_met(&session), "{goal}");
+            assert_eq!(shown(&mut session), [ship_done("Rover done.")], "{goal}");
+            assert_eq!(bits(&session), [6], "{goal}");
+        }
+    }
+
+    #[test]
+    fn meeting_an_observe_goal_needs_no_ship_here() {
+        let mut catalog = returning(4, 0);
+        catalog.missions[0].ships.syst = 131;
+        let mut session = accepted(&catalog);
+        assert!(session.meet_ship_goal(&catalog, 0, &mut NeverFires));
+        assert!(goals_met(&session));
+    }
+
+    #[test]
+    fn meeting_an_escort_goal_brings_its_ships_in_where_the_ship_is() {
+        let mut catalog = returning(3, 0);
+        catalog.missions[0].ships.syst = 131;
+        let mut session = accepted(&catalog);
+        assert!(marked(&session).is_empty());
+        assert!(session.meet_ship_goal(&catalog, 0, &mut NeverFires));
+        assert_eq!(marked(&session), [0, 0], "docked at 128");
+        assert!(goals_met(&session));
+        let stellar = session.landed().expect("docked");
+        let system = session.system();
+        session
+            .land_at(&catalog, system, stellar)
+            .expect("docks again");
+        settle(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_none(), "completed");
+    }
+
+    #[test]
+    fn a_free_slot_or_a_mission_of_no_ships_or_no_goal_has_no_goal_to_meet() {
+        let catalog = returning(0, 0);
+        let mut session = accepted(&catalog);
+        assert!(
+            !session.meet_ship_goal(&catalog, 1, &mut NeverFires),
+            "free"
+        );
+        for ships in [
+            MissionShip::NONE,
+            MissionShip {
+                goal: -1,
+                ..shipping(-1, 0)
+            },
+            MissionShip {
+                goal: 6,
+                ..shipping(-1, 0)
+            },
+            MissionShip {
+                count: 0,
+                goal: 0,
+                ..shipping(-1, 0)
+            },
+        ] {
+            let mut catalog = returning(0, 0);
+            catalog.missions[0].ships = ships;
+            let mut session = accepted(&catalog);
+            assert!(
+                !session.meet_ship_goal(&catalog, 0, &mut NeverFires),
+                "{ships:?}"
+            );
+            assert_eq!(ships_of(&session).destroyed, 0, "{ships:?}");
+        }
     }
 }
