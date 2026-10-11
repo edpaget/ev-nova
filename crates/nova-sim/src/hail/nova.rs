@@ -45,7 +45,10 @@
 //! 2. An unfriendly ship, a plunderer or a xenophobe: "In your dreams,
 //!    pal."
 //! 3. A busy one (`_AIIsShipBusy` @0x82fac): "Okay, I'm on my way." when
-//!    it is already assisting the player, else "I'm busy.".
+//!    it is already assisting the player; "Sorry sir, I'm just an
+//!    escort." for a mission escort, the original's AI type above 4
+//!    (@0x962ee-0x96304), which is busy whenever it keeps formation or
+//!    fights; else "I'm busy.".
 //! 4. While any NPC threatens the player, the original asks for battle
 //!    help; a placeholder here: "I'd rather not.".
 //! 5. A player who needs nothing: "You're not in any trouble.".
@@ -98,8 +101,8 @@
 
 use super::reply::{
     self, BAD_MOOD, BUSY, COMEDIAN, GOOD_MOOD, HELP_FOR_PAY, HOW_DARE_YOU, IN_YOUR_DREAMS,
-    NO_MONEY, NO_RESPONSE, NOT_IN_TROUBLE, ON_MY_WAY, PAY_ME_FIRST, PLEASURE, RATHER_NOT, RELEASED,
-    WASTING_TIME,
+    JUST_AN_ESCORT, NO_MONEY, NO_RESPONSE, NOT_IN_TROUBLE, ON_MY_WAY, PAY_ME_FIRST, PLEASURE,
+    RATHER_NOT, RELEASED, WASTING_TIME,
 };
 use super::{Answer, Ask, Attitude, Deed, Hail, HailOption, Mood, Reply};
 use crate::catalog::GovtId;
@@ -280,6 +283,8 @@ impl HailOption for RequestAssistance {
         if hail.busy {
             let group = if hail.assisting_player {
                 ON_MY_WAY
+            } else if hail.mission_escort() {
+                JUST_AN_ESCORT
             } else {
                 BUSY
             };
@@ -842,6 +847,37 @@ mod tests {
             ..busy
         };
         assert_eq!(press(&request, &assisting), says(ON_MY_WAY));
+    }
+
+    #[test]
+    fn a_busy_mission_escort_is_just_an_escort_unless_it_is_already_on_its_way() {
+        let mut npc = ship();
+        npc.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: ShipBehav::EscortPlayer,
+            cloaked: false,
+            formation: Some(crate::escort::FormationSlot::default()),
+        });
+        let request = RequestAssistance::default();
+        let busy = Hail {
+            busy: true,
+            ..needy(&npc)
+        };
+        assert!(busy.mission_escort());
+        assert!(request.applies(&busy), "not the hired escort's dialog");
+        assert!(!Release.applies(&busy));
+        assert_eq!(press(&request, &busy), says(JUST_AN_ESCORT));
+        let assisting = Hail {
+            assisting_player: true,
+            ..busy
+        };
+        assert_eq!(press(&request, &assisting), says(ON_MY_WAY));
+        let idle = Hail {
+            busy: false,
+            ..busy
+        };
+        assert_ne!(press(&request, &idle), says(JUST_AN_ESCORT));
+        assert!(!needy(&ship()).mission_escort());
     }
 
     #[test]

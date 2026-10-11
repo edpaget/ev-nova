@@ -131,7 +131,11 @@ impl Session {
         } else {
             reply::opening(
                 !dispositions.untalkative,
-                attitude(npc, &self.world().around(self.npcs())),
+                attitude(
+                    npc,
+                    &self.world().around(self.npcs()),
+                    self.mission_hail(npc),
+                ),
                 self.mission_hail(npc),
             )
         };
@@ -194,7 +198,7 @@ impl Session {
     /// mission of no goal and of its own behaviour, as the original reads
     /// a mark of an inactive slot: "Channel open." whatever its attitude
     /// (@0x95be4), and no refusal to be bribed (@0x9612d).
-    fn mission_hail(&self, npc: &Npc) -> Option<MissionHail> {
+    pub(super) fn mission_hail(&self, npc: &Npc) -> Option<MissionHail> {
         let mark = npc.mission?;
         Some(match self.pilot.missions.get(mark.slot) {
             Some(active) => MissionHail {
@@ -226,8 +230,14 @@ impl Session {
         Hail {
             quote,
             joins: self.joins(npc),
-            mission: self.mission_hail(npc),
-            ..Hail::new(npc, &around, self.dispositions(npc), talk, need)
+            ..Hail::new(
+                npc,
+                &around,
+                self.dispositions(npc),
+                talk,
+                need,
+                self.mission_hail(npc),
+            )
         }
     }
 

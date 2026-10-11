@@ -25,11 +25,11 @@
 //! you, " ([`GLAD_TO_SEE_YOU`]) then the player's ship's name and "." for
 //! `ShipGoal` 3, escort them (@0x95c10-0x95c6c, [`Reply::Named`]); and
 //! "What is it you want?" for `ShipBehav` 0, attacking the player
-//! (@0x95c71-0x95c97). The original then has `ShipBehav` 1, escorting
-//! the player, open "What can I do for you?" (@0x95ca0-0x95cb3,
-//! @0x95d22-0x95d49); until rdm:phase/mission-ships/phase-7-mission-escorts
-//! such a ship opens as one of `ShipBehav` -1 does. An untalkative mission
-//! ship opens "Channel open." as any untalkative ship does (@0x95cb5).
+//! (@0x95c71-0x95c97); then "What can I do for you?"
+//! ([`ESCORT_OPENING`]) for `ShipBehav` 1, escorting the player
+//! (@0x95ca0-0x95cb3, @0x95d22-0x95d49), whatever its goal. An
+//! untalkative mission ship opens "Channel open." as any untalkative ship
+//! does (@0x95cb5).
 //!
 //! **Advice lines** ([`Reply::Advice`]). Greetings to a friendly ship
 //! reads one string of a list. A blank one, when the option says so,
@@ -127,8 +127,8 @@ pub const COMEDIAN: u8 = 31;
 /// escort.
 pub const ESCORT_OPENING: u8 = 4;
 /// Group 22: "Sorry sir, I'm just an escort.": Request Assistance to a
-/// carried fighter or a mission escort that likes the player and is
-/// busy. No escort lists Request Assistance yet, so it is not said.
+/// mission escort that is busy (the original's AI type above 4,
+/// @0x96304).
 pub const JUST_AN_ESCORT: u8 = 22;
 /// Group 38: "Goodbye, captain.": an escort released.
 pub const RELEASED: u8 = 38;
@@ -224,9 +224,7 @@ impl Reply {
 pub struct MissionHail {
     /// What the player must do to it.
     pub goal: ShipGoal,
-    /// How it behaves. [`ShipBehav::EscortPlayer`] reads as
-    /// [`ShipBehav::Own`] here until
-    /// rdm:phase/mission-ships/phase-7-mission-escorts.
+    /// How it behaves.
     pub behav: ShipBehav,
 }
 
@@ -244,8 +242,10 @@ pub fn opening(talkative: bool, attitude: Attitude, mission: Option<MissionHail>
 
 /// A talkative mission ship's opening line (see the module docs).
 fn mission_opening(mission: MissionHail) -> Reply {
-    if mission.behav == ShipBehav::AttackPlayer {
-        return Reply::Comm(WHAT_IS_IT);
+    match mission.behav {
+        ShipBehav::AttackPlayer => return Reply::Comm(WHAT_IS_IT),
+        ShipBehav::EscortPlayer => return Reply::Comm(ESCORT_OPENING),
+        _ => {}
     }
     match mission.goal {
         ShipGoal::Destroy => Reply::Comm(WHAT_IS_IT),
@@ -464,14 +464,12 @@ mod tests {
 
     #[test]
     fn a_talkative_mission_ship_to_destroy_or_attacking_the_player_asks_what_it_wants() {
-        for behav in BEHAVS {
-            if behav != ShipBehav::AttackPlayer {
-                assert_eq!(
-                    mission_opening(ShipGoal::Destroy, behav),
-                    Reply::Comm(WHAT_IS_IT),
-                    "{behav:?}"
-                );
-            }
+        for behav in [ShipBehav::Own, ShipBehav::AttackStellars] {
+            assert_eq!(
+                mission_opening(ShipGoal::Destroy, behav),
+                Reply::Comm(WHAT_IS_IT),
+                "{behav:?}"
+            );
         }
         for goal in GOALS {
             assert_eq!(
@@ -484,17 +482,36 @@ mod tests {
 
     #[test]
     fn a_talkative_mission_ship_to_escort_is_glad_to_see_the_player() {
-        for behav in [
-            ShipBehav::Own,
-            ShipBehav::EscortPlayer,
-            ShipBehav::AttackStellars,
-        ] {
+        for behav in [ShipBehav::Own, ShipBehav::AttackStellars] {
             assert_eq!(
                 mission_opening(ShipGoal::Escort, behav),
                 Reply::Named(GLAD_TO_SEE_YOU),
-                "{behav:?}, escorting the player as its own until phase 7"
+                "{behav:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_talkative_mission_ship_escorting_the_player_asks_what_it_can_do_whatever_its_goal() {
+        for goal in GOALS {
+            assert_eq!(
+                mission_opening(goal, ShipBehav::EscortPlayer),
+                Reply::Comm(ESCORT_OPENING),
+                "{goal:?}, the escort goal included"
+            );
+        }
+        assert_eq!(
+            opening(
+                false,
+                Attitude::Friendly,
+                Some(MissionHail {
+                    goal: ShipGoal::Escort,
+                    behav: ShipBehav::EscortPlayer
+                })
+            ),
+            Reply::Comm(CHANNEL_OPEN),
+            "untalkative"
+        );
     }
 
     #[test]
@@ -503,11 +520,7 @@ mod tests {
             if matches!(goal, ShipGoal::Destroy | ShipGoal::Escort) {
                 continue;
             }
-            for behav in [
-                ShipBehav::Own,
-                ShipBehav::EscortPlayer,
-                ShipBehav::AttackStellars,
-            ] {
+            for behav in [ShipBehav::Own, ShipBehav::AttackStellars] {
                 assert_eq!(
                     mission_opening(goal, behav),
                     Reply::Comm(CHANNEL_OPEN),

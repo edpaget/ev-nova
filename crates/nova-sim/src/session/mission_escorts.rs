@@ -152,6 +152,9 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::escort::{self, KEEP_FORMATION};
     use crate::flight::ShipState;
+    use crate::hail::nova::{RELEASE, REQUEST_ASSISTANCE};
+    use crate::hail::reply::{ESCORT_OPENING, IN_YOUR_DREAMS, JUST_AN_ESCORT};
+    use crate::hail::{HailOptions, HailRefusal};
     use crate::pilot::Escort;
     use crate::reserves::Reserves;
     use crate::session::mission_ships::tests::{
@@ -536,6 +539,141 @@ mod tests {
             assert_eq!(npc.ai_type, AiType::Warship, "its düde's still");
             assert_ne!(npc.goal, Goal::JumpOut);
         }
+    }
+
+    // Hails.
+
+    /// [`ships_catalog`] of `ships`, the ship comm strings "c<n>" in
+    /// `STR#` 3000, and government 131, the düde's, of `flags`.
+    fn hailing(ships: MissionShip, flags: u16) -> FakePilotCatalog {
+        let mut catalog = ships_catalog(ships);
+        catalog.govts.push(crate::catalog::GovtRecord {
+            flags,
+            ..crate::testkit::govt(131)
+        });
+        catalog
+            .strings
+            .push((3000, (1..=200).map(|n| format!("c{n}")).collect()));
+        catalog
+    }
+
+    /// Group `group`'s line in variant 4, the one [`NeverFires`] draws.
+    fn line(group: u8) -> String {
+        format!("c{}", crate::hail::Reply::locate(group, 4).1)
+    }
+
+    /// The comm dialog of `catalog`'s session in flight, NPC 0 targeted
+    /// and hailed.
+    fn hailed(catalog: &FakePilotCatalog) -> (Session, crate::hail::HailView) {
+        let mut session = accepted(catalog);
+        take_off(&mut session, catalog);
+        session.target = Some(session.npcs()[0].id);
+        let view = session
+            .hail(catalog, &HailOptions::default(), &mut NeverFires)
+            .expect("answered");
+        (session, view)
+    }
+
+    /// The labels of `view`'s options.
+    fn labels(view: &crate::hail::HailView) -> Vec<&str> {
+        view.options
+            .iter()
+            .map(|button| button.label.as_str())
+            .collect()
+    }
+
+    /// What the hailed ship says to Request Assistance.
+    fn request_assistance(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        view: &crate::hail::HailView,
+    ) -> String {
+        let pick = labels(view)
+            .iter()
+            .position(|&label| label == REQUEST_ASSISTANCE)
+            .expect("listed");
+        session
+            .answer(pick, catalog, &HailOptions::default(), &mut NeverFires)
+            .expect("answered")
+            .reply
+    }
+
+    #[test]
+    fn a_mission_escort_opens_with_what_can_i_do_for_you_whatever_its_goal() {
+        for goal in [-1, 3, 0] {
+            let catalog = hailing(
+                MissionShip {
+                    goal,
+                    ..escorting(-1, 0)
+                },
+                0,
+            );
+            let (session, view) = hailed(&catalog);
+            assert!(session.npcs()[0].mission_escort());
+            assert_eq!(view.reply, line(ESCORT_OPENING), "{goal}");
+        }
+    }
+
+    #[test]
+    fn a_mission_escort_is_just_an_escort_to_request_assistance_with_no_escort_dialog() {
+        let catalog = hailing(escorting(-1, 0), 0);
+        let (mut session, view) = hailed(&catalog);
+        assert!(labels(&view).contains(&REQUEST_ASSISTANCE));
+        assert!(!labels(&view).contains(&RELEASE), "{:?}", labels(&view));
+        assert_eq!(view.escort, None, "not the hired escort's dialog");
+        assert!(!view.hostile);
+        assert_eq!(
+            request_assistance(&mut session, &catalog, &view),
+            line(JUST_AN_ESCORT)
+        );
+    }
+
+    #[test]
+    fn a_marked_ship_not_escorting_the_player_is_no_friend_whatever_its_government() {
+        // A ShipGoal 3 ship of ShipBehav -1, as a swapped person's: it
+        // never forms on the player, and its mark keeps it from liking it.
+        let ships = MissionShip {
+            goal: 3,
+            ..shipping(-1, 0)
+        };
+        let catalog = hailing(ships, 0);
+        let (mut session, view) = hailed(&catalog);
+        assert!(!session.npcs()[0].escorts_player());
+        assert_eq!(
+            request_assistance(&mut session, &catalog, &view),
+            line(IN_YOUR_DREAMS)
+        );
+        session.traffic.npcs_mut()[0].mission = None;
+        let view = session
+            .hail(&catalog, &HailOptions::default(), &mut NeverFires)
+            .expect("answered");
+        assert_ne!(
+            request_assistance(&mut session, &catalog, &view),
+            line(IN_YOUR_DREAMS),
+            "unmarked, its government likes the player"
+        );
+    }
+
+    #[test]
+    fn a_mission_escort_of_a_mute_government_answers_no_hail_while_a_hired_escort_does() {
+        let mut catalog = hailing(escorting(-1, 0), crate::hail::MUTE);
+        catalog.ship_records[1].inherent_govt = Some(crate::catalog::GovtId(131));
+        let mut session = accepted(&catalog);
+        session.pilot.escorts.push(hired());
+        take_off(&mut session, &catalog);
+        let mission_escort = mission_escorts(&session)[0].id;
+        session.target = Some(mission_escort);
+        assert_eq!(
+            session
+                .hail(&catalog, &HailOptions::default(), &mut NeverFires)
+                .map(|view| view.reply),
+            Err(HailRefusal::NoResponse)
+        );
+        session.target = session.fleet[0];
+        let view = session
+            .hail(&catalog, &HailOptions::default(), &mut NeverFires)
+            .expect("the hired escort answers");
+        assert!(labels(&view).contains(&RELEASE));
     }
 
     // Not a hired escort.

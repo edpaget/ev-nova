@@ -156,7 +156,7 @@ impl Session {
                         .person(person.id)
                         .and_then(|spawned| spawned.record.link_mission);
                     let view = QuoteView {
-                        liked: likes_player(npc, &around),
+                        liked: likes_player(npc, &around, self.mission_hail(npc)),
                         player_jumping: self.jumping().is_some(),
                         player_ai,
                         mission_available: linked
