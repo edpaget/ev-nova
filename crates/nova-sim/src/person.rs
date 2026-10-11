@@ -1423,7 +1423,11 @@ mod tests {
     fn joining(flags: u16, ship: Option<(i16, i16)>) -> PersonRecord {
         PersonRecord {
             flags,
-            mission_ship: ship.map(|(count, goal)| crate::catalog::MissionShip { count, goal }),
+            mission_ship: ship.map(|(count, goal)| crate::catalog::MissionShip {
+                count,
+                goal,
+                ..crate::catalog::MissionShip::NONE
+            }),
             ..person(128, 136)
         }
     }

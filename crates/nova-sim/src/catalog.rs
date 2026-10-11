@@ -580,13 +580,43 @@ pub struct PersonRecord {
 }
 
 /// A mission's special ships, raw from its `mïsn`: as many as its
-/// `ShipCount`, with its `ShipGoal`.
+/// `ShipCount`, with its `ShipGoal`, and where, of what and how they
+/// spawn (see the [`traffic::spawn`](crate::traffic::spawn) module's
+/// "Mission ships").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MissionShip {
     /// Its `ShipCount`.
     pub count: i16,
     /// Its `ShipGoal`.
     pub goal: i16,
+    /// Its `ShipSyst`, raw: the system they are in, encoded.
+    pub syst: i16,
+    /// Its `ShipDude`: the `düde` they are drawn from, none at -1.
+    pub dude: Option<DudeId>,
+    /// Its `ShipBehav`, raw.
+    pub behav: i16,
+    /// Its `ShipStart`, raw: where and when they appear.
+    pub start: i16,
+    /// Its `ShipNameID`: the `STR#` their name is drawn from, none at -1.
+    pub name_id: Option<i16>,
+    /// Its `ShipSubtitle`: the `STR#` their subtitle is drawn from, none
+    /// at -1.
+    pub subtitle: Option<i16>,
+}
+
+impl MissionShip {
+    /// No special ships: a `ShipCount` of 0, no goal, no `düde`, no
+    /// behaviour, names or subtitles.
+    pub const NONE: Self = Self {
+        count: 0,
+        goal: -1,
+        syst: -1,
+        dude: None,
+        behav: -1,
+        start: 0,
+        name_id: None,
+        subtitle: None,
+    };
 }
 
 /// A mission, raw from its `mïsn`: the fields its offer reads. The

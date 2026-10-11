@@ -1648,7 +1648,11 @@ mod tests {
             name: "Merchant".to_owned(),
             flags: crate::person::REPLACED_BY_MISSION_SHIP,
             link_mission: Some(130),
-            mission_ship: Some(crate::catalog::MissionShip { count: 1, goal: 3 }),
+            mission_ship: Some(crate::catalog::MissionShip {
+                count: 1,
+                goal: 3,
+                ..crate::catalog::MissionShip::NONE
+            }),
             ..crate::testkit::person(600, 129)
         }];
         catalog.missions = vec![crate::catalog::MissionRecord {

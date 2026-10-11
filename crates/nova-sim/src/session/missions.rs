@@ -194,7 +194,11 @@ fn blank(id: MissionId) -> MissionRecord {
         comp_govt: None,
         comp_reward: 0,
         date_post_inc: 0,
-        ships: MissionShip { count: 0, goal: 0 },
+        ships: MissionShip {
+            count: 0,
+            goal: 0,
+            ..MissionShip::NONE
+        },
     }
 }
 
@@ -2767,7 +2771,11 @@ mod tests {
             },
             MissionRecord {
                 id: MissionId(141),
-                ships: crate::catalog::MissionShip { count: 1, goal: -1 },
+                ships: crate::catalog::MissionShip {
+                    count: 1,
+                    goal: -1,
+                    ..crate::catalog::MissionShip::NONE
+                },
                 ..auto_aborting()
             },
         ]);
@@ -2897,7 +2905,11 @@ mod tests {
     #[test]
     fn a_mission_whose_ship_goal_is_not_met_stays_active_at_its_return() {
         let catalog = lifecycle(vec![MissionRecord {
-            ships: crate::catalog::MissionShip { count: 1, goal: 0 },
+            ships: crate::catalog::MissionShip {
+                count: 1,
+                goal: 0,
+                ..crate::catalog::MissionShip::NONE
+            },
             ..back_to_128(140)
         }]);
         let (mut session, _) = watched(&catalog, Rulebook::default());

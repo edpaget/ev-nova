@@ -377,7 +377,11 @@ fn a_mission_with_a_destination_picks_its_cargo_up_there_then_is_delivered_at_it
 #[test]
 fn a_mission_whose_ship_goals_are_unmet_is_not_completed() {
     let catalog = galaxy(vec![MissionRecord {
-        ships: MissionShip { count: 1, goal: 0 },
+        ships: MissionShip {
+            count: 1,
+            goal: 0,
+            ..MissionShip::NONE
+        },
         ..errand(200, 128, 140, "b10")
     }]);
     let mut session = docked(&catalog);

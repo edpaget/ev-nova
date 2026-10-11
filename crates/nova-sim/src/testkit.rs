@@ -175,7 +175,7 @@ pub(crate) fn mission(id: i16) -> MissionRecord {
         comp_govt: None,
         comp_reward: 0,
         date_post_inc: 0,
-        ships: MissionShip { count: 0, goal: -1 },
+        ships: MissionShip::NONE,
     }
 }
 

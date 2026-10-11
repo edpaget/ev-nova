@@ -192,7 +192,7 @@ impl PilotCatalog for Courier {
             comp_govt: None,
             comp_reward: 0,
             date_post_inc: 0,
-            ships: MissionShip { count: 0, goal: -1 },
+            ships: MissionShip::NONE,
         }]
     }
 

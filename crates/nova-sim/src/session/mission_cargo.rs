@@ -662,7 +662,11 @@ mod tests {
     fn drop_off_1_keeps_the_cargo_aboard_until_the_goals_are_met_unless_there_is_no_goal() {
         let catalog = cargo_catalog(
             vec![MissionRecord {
-                ships: MissionShip { count: 1, goal: 0 },
+                ships: MissionShip {
+                    count: 1,
+                    goal: 0,
+                    ..MissionShip::NONE
+                },
                 ..round_trip(140, 0, 1)
             }],
             vec![texts(140, Some(LOAD), Some(DUMP))],
@@ -674,7 +678,11 @@ mod tests {
         assert_eq!(kinds(&mut session), []);
         let catalog = cargo_catalog(
             vec![MissionRecord {
-                ships: MissionShip { count: 1, goal: -1 },
+                ships: MissionShip {
+                    count: 1,
+                    goal: -1,
+                    ..MissionShip::NONE
+                },
                 flags: 0x0001,
                 ..round_trip(140, 0, 1)
             }],

@@ -498,10 +498,7 @@ impl PilotCatalog for GameData {
                         0
                     },
                     date_post_inc: record.date_post_inc,
-                    ships: MissionShip {
-                        count: record.ship_count,
-                        goal: record.ship_goal,
-                    },
+                    ships: mission_ship(record),
                 })
             })
             .collect()
@@ -621,13 +618,24 @@ impl TrafficCatalog for GameData {
                     mission_ship: record
                         .link_mission
                         .and_then(|mission| self.get::<Mission>(mission.0)?.ok())
-                        .map(|mission| MissionShip {
-                            count: mission.record.ship_count,
-                            goal: mission.record.ship_goal,
-                        }),
+                        .map(|mission| mission_ship(mission.record)),
                 })
             })
             .collect()
+    }
+}
+
+/// A `mïsn`'s special ships, raw.
+fn mission_ship(record: &Mission) -> MissionShip {
+    MissionShip {
+        count: record.ship_count,
+        goal: record.ship_goal,
+        syst: record.ship_syst,
+        dude: record.ship_dude,
+        behav: record.ship_behav,
+        start: record.ship_start,
+        name_id: record.ship_name_id.map(|id| id.0),
+        subtitle: record.ship_subtitle.map(|id| id.0),
     }
 }
 
@@ -3186,8 +3194,8 @@ mod tests {
         ]);
         let persons = data.persons();
         assert_eq!(
-            persons[0].mission_ship,
-            Some(MissionShip { count: 1, goal: 3 })
+            persons[0].mission_ship.map(|ship| (ship.count, ship.goal)),
+            Some((1, 3))
         );
         assert_eq!(persons[1].mission_ship, None, "no LinkMission");
         assert_eq!(persons[2].mission_ship, None, "its mission missing");
@@ -3206,9 +3214,8 @@ mod tests {
         );
         bytes[0x18..0x1A].copy_from_slice(&0x8020_u16.to_be_bytes());
         bytes[0x1C..0x20].copy_from_slice(&(-50_100_i32).to_be_bytes());
-        put_i16s(&mut bytes, 0x20, &[2]);
-        put_i16s(&mut bytes, 0x26, &[1]);
-        put_i16s(&mut bytes, 0x2E, &[383, 7]);
+        put_i16s(&mut bytes, 0x20, &[2, -5, 150, 1, 2, 7000, -3]);
+        put_i16s(&mut bytes, 0x2E, &[383, 7, 7001]);
         put_i16s(&mut bytes, 0x40, &[3, 0]);
         put_i16s(&mut bytes, 0x50, &[0x2008, 0x0001]);
         put_i16s(&mut bytes, 0x5A, &[1129]);
@@ -3285,7 +3292,16 @@ mod tests {
                 comp_govt: Some(GovtId(383)),
                 comp_reward: 7,
                 date_post_inc: 4,
-                ships: MissionShip { count: 2, goal: 1 },
+                ships: MissionShip {
+                    count: 2,
+                    goal: 1,
+                    syst: -5,
+                    dude: Some(DudeId(150)),
+                    behav: 2,
+                    start: -3,
+                    name_id: Some(7000),
+                    subtitle: Some(7001),
+                },
             }
         );
         assert!(

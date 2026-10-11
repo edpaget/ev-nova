@@ -411,7 +411,11 @@ mod tests {
             ..active.clone()
         };
         let goal = |goal| MissionRecord {
-            ships: crate::catalog::MissionShip { count: 1, goal },
+            ships: crate::catalog::MissionShip {
+                count: 1,
+                goal,
+                ..crate::catalog::MissionShip::NONE
+            },
             ..record.clone()
         };
         assert!(!drops_off(&goal(0), &unmet, false, true), "a goal not met");

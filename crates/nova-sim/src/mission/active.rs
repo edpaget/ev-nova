@@ -898,7 +898,11 @@ mod tests {
     #[test]
     fn goals_are_met_at_accept_with_no_ships_or_no_goal_unless_it_auto_aborts() {
         let with = |count, goal, flags| MissionRecord {
-            ships: MissionShip { count, goal },
+            ships: MissionShip {
+                count,
+                goal,
+                ..MissionShip::NONE
+            },
             flags,
             ..mission(140)
         };
@@ -948,7 +952,11 @@ mod tests {
         );
         for count in [1, -1] {
             let shipped = MissionRecord {
-                ships: MissionShip { count, goal: -1 },
+                ships: MissionShip {
+                    count,
+                    goal: -1,
+                    ..MissionShip::NONE
+                },
                 ..record.clone()
             };
             assert!(

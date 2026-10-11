@@ -9882,7 +9882,7 @@ mod tests {
             comp_govt: None,
             comp_reward: 0,
             date_post_inc: 0,
-            ships: MissionShip { count: 0, goal: -1 },
+            ships: MissionShip::NONE,
         }
     }
 
@@ -11568,7 +11568,7 @@ mod tests {
             comp_govt: None,
             comp_reward: 0,
             date_post_inc: 0,
-            ships: nova_sim::catalog::MissionShip { count: 0, goal: -1 },
+            ships: nova_sim::catalog::MissionShip::NONE,
         }];
         catalog.mission_texts = vec![nova_sim::catalog::MissionTexts {
             offer: offer.map(str::to_owned),
