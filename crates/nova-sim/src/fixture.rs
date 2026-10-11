@@ -1,10 +1,14 @@
 //! Test support for tests outside the crate's own unit tests (the
-//! `fixture` feature): [`MemoryPilots`], a [`PilotStore`] in memory; and
-//! the storyline walker, [`StoryWalker`], which drives a session through a
-//! mission chain from a script of [`Step`]s (see the `walker` module).
+//! `fixture` feature): [`MemoryPilots`], a [`PilotStore`] in memory; the
+//! storyline walker, [`StoryWalker`], which drives a session through a
+//! mission chain from a script of [`Step`]s (see the `walker` module); and
+//! [`bits_allowing`], the control bits that make a test hold, for setting
+//! a pilot up directly.
 
+mod bits;
 mod walker;
 
+pub use bits::bits_allowing;
 pub use walker::{
     Became, Done, Fault, Looked, Step, StoryWalker, WalkFailure, Walked, candidates, expected_bits,
     expected_pay,
