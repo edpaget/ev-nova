@@ -73,7 +73,7 @@
 use super::Session;
 use super::mission_screens::MissionTextKind;
 use crate::catalog::{
-    GovtId, LandingSite, MissionId, MissionRecord, MissionShip, StellarId, SystemId,
+    AuxShip, GovtId, LandingSite, MissionId, MissionRecord, MissionShip, StellarId, SystemId,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::control::{Script, Test};
@@ -202,6 +202,7 @@ fn blank(id: MissionId) -> MissionRecord {
         comp_reward: 0,
         date_post_inc: 0,
         ships: MissionShip::NONE,
+        aux: AuxShip::NONE,
     }
 }
 

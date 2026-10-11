@@ -368,6 +368,7 @@
 //! raw IDs.
 
 pub mod active;
+pub mod aux;
 pub mod cargo;
 pub mod goals;
 pub mod identity;

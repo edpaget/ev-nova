@@ -9943,6 +9943,7 @@ mod tests {
             comp_reward: 0,
             date_post_inc: 0,
             ships: MissionShip::NONE,
+            aux: nova_sim::catalog::AuxShip::NONE,
         }
     }
 
@@ -11718,6 +11719,7 @@ mod tests {
             comp_reward: 0,
             date_post_inc: 0,
             ships: nova_sim::catalog::MissionShip::NONE,
+            aux: nova_sim::catalog::AuxShip::NONE,
         }];
         catalog.mission_texts = vec![nova_sim::catalog::MissionTexts {
             offer: offer.map(str::to_owned),

@@ -692,6 +692,31 @@ pub struct MissionRecord {
     pub date_post_inc: i16,
     /// Its `ShipCount` and `ShipGoal`.
     pub ships: MissionShip,
+    /// Its `AuxShipCount`, `AuxShipDude` and `AuxShipSyst`.
+    pub aux: AuxShip,
+}
+
+/// A mission's auxiliary ships, raw from its `mïsn`: ordinary traffic of
+/// its `AuxShipDude` that comes into the systems its `AuxShipSyst` allows
+/// on a countdown (see the [`mission::aux`](crate::mission::aux) module).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AuxShip {
+    /// Its `AuxShipCount`.
+    pub count: i16,
+    /// Its `AuxShipDude`: the `düde` they are drawn from, none at -1.
+    pub dude: Option<DudeId>,
+    /// Its `AuxShipSyst`, raw: the systems they come into, encoded.
+    pub syst: i16,
+}
+
+impl AuxShip {
+    /// No auxiliary ships: an `AuxShipCount` of 0, no `düde`, and an
+    /// `AuxShipSyst` that names no system.
+    pub const NONE: Self = Self {
+        count: 0,
+        dude: None,
+        syst: 0,
+    };
 }
 
 /// What a mission's screens show of it, read from its `mïsn` and its

@@ -5,11 +5,11 @@ use std::cell::RefCell;
 
 use crate::ai::Goal;
 use crate::catalog::{
-    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterRecord,
-    DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord,
-    LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, OutfitId,
-    OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog, PlaceNames, ShipId, ShipRecord,
-    StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark, SystemId,
+    AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes,
+    DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord,
+    JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts,
+    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog, PlaceNames, ShipId,
+    ShipRecord, StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark, SystemId,
     SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
@@ -177,6 +177,7 @@ pub(crate) fn mission(id: i16) -> MissionRecord {
         comp_reward: 0,
         date_post_inc: 0,
         ships: MissionShip::NONE,
+        aux: AuxShip::NONE,
     }
 }
 

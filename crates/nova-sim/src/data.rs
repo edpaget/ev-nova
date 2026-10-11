@@ -28,7 +28,7 @@ use nova_data::{GameData, Record, stellar_spin_id};
 
 use crate::blink::Blink;
 use crate::catalog::{
-    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterId,
+    AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterId,
     DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
     GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord,
     MissionShip, MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord,
@@ -501,6 +501,11 @@ impl PilotCatalog for GameData {
                     },
                     date_post_inc: record.date_post_inc,
                     ships: mission_ship(record),
+                    aux: AuxShip {
+                        count: record.aux_ship_count,
+                        dude: record.aux_ship_dude,
+                        syst: record.aux_ship_syst,
+                    },
                 })
             })
             .collect()
@@ -3219,6 +3224,7 @@ mod tests {
         put_i16s(&mut bytes, 0x20, &[2, -5, 150, 1, 2, 7000, -3]);
         put_i16s(&mut bytes, 0x2E, &[383, 7, 7001]);
         put_i16s(&mut bytes, 0x40, &[3, 0]);
+        put_i16s(&mut bytes, 0x48, &[4, 151, -3]);
         put_i16s(&mut bytes, 0x50, &[0x2008, 0x0001]);
         put_i16s(&mut bytes, 0x5A, &[1129]);
         bytes[0x5C..0x5C + avail_bits.len()].copy_from_slice(avail_bits);
@@ -3305,6 +3311,11 @@ mod tests {
                     start: -3,
                     name_id: Some(7000),
                     subtitle: Some(7001),
+                },
+                aux: AuxShip {
+                    count: 4,
+                    dude: Some(DudeId(151)),
+                    syst: -3,
                 },
             }
         );

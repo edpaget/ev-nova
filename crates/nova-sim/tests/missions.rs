@@ -3,7 +3,7 @@
 //! landing at its destination, which pays it and frees its slot; and a
 //! cargo mission, its cargo loaded as it is accepted and unloaded there.
 
-use nova_sim::catalog::{ListedStellar, MissionId, MissionRecord, MissionShip};
+use nova_sim::catalog::{AuxShip, ListedStellar, MissionId, MissionRecord, MissionShip};
 use nova_sim::landing::StellarFlags;
 use nova_sim::mission::Venue;
 use nova_sim::{
@@ -194,6 +194,7 @@ impl PilotCatalog for Courier {
             comp_reward: 0,
             date_post_inc: 0,
             ships: MissionShip::NONE,
+            aux: AuxShip::NONE,
         }]
     }
 
