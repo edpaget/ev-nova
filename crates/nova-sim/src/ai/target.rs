@@ -37,16 +37,14 @@
 //!    whose `Flags` has 0x0001 and who holds a grudge against the player
 //!    (see [`person`](crate::person)) picks the player, while it is in
 //!    the system and not breaking up, unless it spares it.
-//! 3. **A mission ship of `ShipBehav` 0** (@0x89f25-0x89f84), its
-//!    mission in its slot: the player, while it is in the system and not
-//!    breaking up, and no later step runs. The player is taken as seen
-//!    (as [`hunts_player`](crate::ai::nova) does; cloaking-fidelity phase
-//!    4 owns visibility). A player it would drop at once (see below) gives
-//!    none, as `_WarshipAI` drops a disabled target in the same think
-//!    when it has no destroying weapons (@0x8bc8b-0x8bca9): such a hunter
-//!    never turns on another ship while the player is here. The
-//!    `ShipBehav` 1 branch (@0x89f86-0x89fef) never runs (see the
-//!    session's `mission_escorts` module).
+//! 3. **A mission ship of `ShipBehav` 0** (@0x89f25-0x89f84, see
+//!    [`mission_hunt`]): while the player is in the system, the player,
+//!    or none when it is disabled and the ship has no destroying weapons
+//!    (as `_WarshipAI` drops such a target in the same think,
+//!    @0x8bc8b-0x8bca9); no later step runs, so such a hunter never turns
+//!    on another ship while the player is here, and a paid-off one takes
+//!    the player again. The `ShipBehav` 1 branch (@0x89f86-0x89fef) never
+//!    runs (see the session's `mission_escorts` module).
 //! 4. **Out of ammunition** (@0x89ff4-0x8a006): a ship with no weapon,
 //!    or every weapon out of rounds or fuel
 //!    ([`AmmoLeft::Dry`](crate::ai::fire::AmmoLeft::Dry)), takes no new
@@ -75,7 +73,8 @@
 //!
 //! **A ship the player paid off** ([`Npc::spared`], see
 //! [`hail`](crate::hail)) spares the player too: no step gives the
-//! player, it keeps no player target, and drops one. The original makes
+//! player (a `ShipBehav` 0 mission ship aside, step 3), it keeps no
+//! player target, and drops one. The original makes
 //! such a ship a wimpy trader that leaves, which never targets the
 //! player unprovoked; this holds for any behaviour that asks here.
 //!
@@ -174,6 +173,27 @@ fn nearest(
     best.map(|(_, ship)| ship)
 }
 
+/// Whether `npc`, a mission's special ship of `ShipBehav` 0, attacks the
+/// player among `around`: none when it is no such ship or the player is
+/// not in the system; else whether it attacks, which it does unless the
+/// player is disabled and it has no destroying weapons ([`fire::destroys`]).
+///
+/// The one rule behind both `_SelectWarshipTarget` @0x89f25-0x89f84 and
+/// `_HighLevelAIHandler` @0x8d628-0x8d6ea, which the AI's dispatch reads
+/// on every think and [`select_target`] reads as its step 3. A ship the
+/// player paid off is no exception: neither site reads the bribe, whose
+/// leave (`_AIMakeShipLeave`, state 2, @0x961eb) is no state the handler
+/// skips (8, 11 and 21), so the ship takes the player again on its next
+/// think. A cloaked or gate-emerging player is no matter: the engine has
+/// neither, so the player is always visible to it.
+#[must_use]
+pub fn mission_hunt(npc: &Npc, around: &Surroundings) -> Option<bool> {
+    npc.mission
+        .filter(|mark| mark.behav == ShipBehav::AttackPlayer)?;
+    let player = around.player.as_ref()?;
+    Some(player.condition != Condition::Disabled || fire::destroys(npc))
+}
+
 /// The ship `npc` attacks among `around`, keeping `current` while it is
 /// live (see the module docs).
 #[must_use]
@@ -192,11 +212,8 @@ pub fn select_target(
     if grudging && !npc.spared && around.live(ShipRef::Player) {
         return Some(ShipRef::Player);
     }
-    let hunts_player = npc
-        .mission
-        .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer);
-    if hunts_player && around.live(ShipRef::Player) {
-        return (!dropped(npc, ShipRef::Player, around)).then_some(ShipRef::Player);
+    if let Some(attacks) = mission_hunt(npc, around) {
+        return attacks.then_some(ShipRef::Player);
     }
     if fire::ammo_left(npc) == AmmoLeft::Dry {
         return None;
@@ -1193,7 +1210,30 @@ mod tests {
     }
 
     #[test]
-    fn a_paid_off_ship_behav_0_ship_takes_nothing() {
-        assert_eq!(hunter_target(false, true, true, Condition::Intact), None);
+    fn a_paid_off_ship_behav_0_ship_still_takes_the_player() {
+        // Neither @0x89f25 nor `_HighLevelAIHandler` @0x8d628 reads the
+        // bribe; the bribe's leave (state 2, @0x961eb) is no state it skips.
+        assert_eq!(hunter_target(false, true, true, Condition::Intact), Some(P));
+    }
+
+    #[test]
+    fn a_ship_behav_0_ship_out_of_ammunition_still_takes_the_player() {
+        let govts = govts(0);
+        let mut hunter = dry();
+        hunter.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::AttackPlayer,
+            formation: None,
+            order: None,
+        });
+        let npcs = [hunter, ship(2, ENEMY, 0.0, 50.0)];
+        let around = Surroundings {
+            player: Some(player(0.0, -1000.0)),
+            govts: &govts,
+            system_govt: Some(ME),
+            record: 30,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(select_target(&npcs[0], None, &around), Some(P));
     }
 }

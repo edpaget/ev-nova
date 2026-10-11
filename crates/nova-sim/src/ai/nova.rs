@@ -18,16 +18,13 @@
 
 use std::rc::Rc;
 
-use crate::ai::fire;
 use crate::ai::{
     Behaviour, BraveTrader, CarriedAi, EscortAi, Goal, Interceptor, Reaction, Surroundings,
     Warship, WimpyTrader,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
-use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
-use crate::mission::ships::ShipBehav;
 use crate::rulebook::{RuleKey, Rulebook};
 use crate::traffic::npc::{AiType, Npc};
 
@@ -130,20 +127,11 @@ impl NovaAi {
 }
 
 /// Whether `npc` is a mission's special ship of `ShipBehav` 0 that
-/// attacks the player now, among `around`: on every think
-/// (`_HighLevelAIHandler` @0x8d628-0x8d6ea), while the player is in the
-/// system, unless the player is disabled and the ship has no destroying
-/// weapons ([`fire::destroys`]), when it gives up and decides as its type
-/// does; there [`select_target`](crate::ai::target::select_target)'s
-/// `ShipBehav` 0 step gives it no other target while the player is here.
-/// A cloaked or gate-emerging player is no matter: the engine has
-/// neither, so the player is always visible to it.
+/// attacks the player now, among `around`, on every think (see
+/// [`mission_hunt`](crate::ai::target::mission_hunt)); one that does not
+/// decides as its type does.
 fn hunts_player(npc: &Npc, around: &Surroundings) -> bool {
-    npc.mission
-        .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer)
-        && around
-            .player
-            .is_some_and(|player| player.condition != Condition::Disabled || fire::destroys(npc))
+    crate::ai::target::mission_hunt(npc, around) == Some(true)
 }
 
 impl Behaviour for NovaAi {
@@ -180,7 +168,10 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
+    use crate::ai::fire;
     use crate::catalog::WeaponId;
+    use crate::combat::hull::Condition;
+    use crate::mission::ships::ShipBehav;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::ShipStats;
     use crate::testkit::{Draws, FAST};
@@ -710,5 +701,19 @@ mod tests {
             Goal::Attack(ShipRef::Npc(NpcId(2))),
             "without the mark it fights the pirate"
         );
+    }
+
+    #[test]
+    fn a_paid_off_ship_behav_0_ship_attacks_the_player_again() {
+        let mut hunter = mission_ship(of(1, AiType::WimpyTrader), 0);
+        hunter.spared = true;
+        let npcs = [hunter];
+        let around = with_player(&npcs, Condition::Intact);
+        let ai = NovaAi::default();
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[0; 16])),
+            Goal::Attack(ShipRef::Player)
+        );
+        assert_eq!(ai.target(&npcs[0], &around), Some(ShipRef::Player));
     }
 }
