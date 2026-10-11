@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{CronRecord, LandingSite, OutfitId, OutfitRecord, ShipId};
 use crate::chance::Chance;
+use crate::cron;
 use crate::pilot::Pilot;
 
 /// The `BuyRandom` or `HireRandom` from which an item is always on offer:
@@ -234,14 +235,23 @@ pub struct Contributors<'a> {
 }
 
 /// The `Contribute` bits `pilot` holds, `by` the ship flown and the
-/// records: the ship's, and those of each outfit owned that has a record.
+/// records: the ship's, those of each outfit owned that has a record, and
+/// those of each crön running outside its holdoffs that has a record
+/// ([`cron::contributes`](crate::cron::contributes)).
 #[must_use]
 pub fn contributed(by: &Contributors<'_>, pilot: &Pilot) -> u64 {
-    pilot
+    let outfits = pilot
         .outfits
         .keys()
         .filter_map(|id| by.outfits.iter().find(|record| record.id == *id))
-        .fold(by.ship, |bits, record| bits | record.contribute)
+        .map(|record| record.contribute);
+    let crons = pilot
+        .crons
+        .iter()
+        .filter(|(_, state)| cron::contributes(**state))
+        .filter_map(|(id, _)| by.crons.iter().find(|record| record.id == *id))
+        .map(|record| record.contribute);
+    outfits.chain(crons).fold(by.ship, |bits, more| bits | more)
 }
 
 /// Whether `require` is met by the bits `contributed`: each of its bits is
@@ -308,8 +318,10 @@ pub fn in_display_order<T>(rows: &mut [T], key: impl Fn(&T) -> (i16, i16)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::CronId;
     use crate::chance::NeverFires;
-    use crate::testkit::{Scripted, catalog, outfit, planet};
+    use crate::cron::CronState;
+    use crate::testkit::{Scripted, catalog, cron, outfit, planet};
 
     #[test]
     fn a_ton_count_takes_the_singular_unit_at_exactly_one() {
@@ -507,6 +519,52 @@ mod tests {
         assert_eq!(contributed(&by(0x1), &pilot), 0x1);
         let both = owning(&[(128, 1), (129, 1)]);
         assert_eq!(contributed(&by(0), &both), 0x0100_0000_0010);
+    }
+
+    /// What `pilot` holds with `crons` set to `states`, from a ship of no
+    /// bits, crön 128 contributing 0x4 and crön 129 0x8.
+    fn with_crons(states: &[(i16, i16, i16)]) -> u64 {
+        let crons = [
+            CronRecord {
+                contribute: 0x4,
+                ..cron(128)
+            },
+            CronRecord {
+                contribute: 0x8,
+                ..cron(129)
+            },
+        ];
+        let by = Contributors {
+            ship: 0,
+            outfits: &[],
+            crons: &crons,
+        };
+        let mut pilot = owning(&[]);
+        pilot.crons = states
+            .iter()
+            .map(|&(id, days, holdoff)| (CronId(id), CronState { days, holdoff }))
+            .collect();
+        contributed(&by, &pilot)
+    }
+
+    #[test]
+    fn a_running_cron_contributes_its_bits() {
+        assert_eq!(with_crons(&[(128, 3, 0)]), 0x4);
+        assert_eq!(with_crons(&[(128, 0, -1)]), 0x4, "holdoff below 0");
+        assert_eq!(with_crons(&[(128, 3, 0), (129, 1, 0)]), 0xC);
+    }
+
+    #[test]
+    fn a_cron_holding_off_contributes_nothing() {
+        assert_eq!(with_crons(&[(128, 3, 2)]), 0, "in its pre-holdoff");
+        assert_eq!(with_crons(&[(128, 3, 1)]), 0, "a day of pre-holdoff");
+        assert_eq!(with_crons(&[(129, -1, 3)]), 0, "in its post-holdoff");
+        assert_eq!(with_crons(&[(128, 3, 2), (129, 1, 0)]), 0x8);
+    }
+
+    #[test]
+    fn a_cron_whose_record_is_gone_contributes_nothing() {
+        assert_eq!(with_crons(&[(300, 3, 0)]), 0);
     }
 
     /// A new pilot owning `owned`, each an outfit ID with its count.

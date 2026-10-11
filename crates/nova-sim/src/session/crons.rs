@@ -29,12 +29,73 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use crate::catalog::CronId;
+    use crate::catalog::{CronId, CronRecord, MissionId, MissionRecord, StellarId};
+    use crate::chance::NeverFires;
     use crate::cron::CronState;
+    use crate::mission::Refusal;
     use crate::pilot::Pilot;
+    use crate::rules::Verdict;
     use crate::save;
     use crate::session::Session;
-    use crate::testkit::{FakePilotCatalog, catalog, cron};
+    use crate::testkit::{FakePilotCatalog, catalog, cron, land_now, mission};
+
+    /// [`catalog`] with crön 128 contributing 0x4, and mission 130 at the
+    /// computer requiring it.
+    fn contributing() -> FakePilotCatalog {
+        FakePilotCatalog {
+            crons: vec![CronRecord {
+                duration: 5,
+                contribute: 0x4,
+                ..cron(128)
+            }],
+            missions: vec![MissionRecord {
+                require: 0x4,
+                ..mission(130)
+            }],
+            ..catalog()
+        }
+    }
+
+    /// A session of `catalog` landed on 128.
+    fn landed(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        let _ = session.settle_script(catalog, &mut NeverFires);
+        session
+    }
+
+    /// Whether `session` refuses mission 130 for its `Require`.
+    fn requires(session: &Session) -> bool {
+        session
+            .offer_refusals(MissionId(130))
+            .expect("docked")
+            .contains(&("Require", Verdict::Refuses(Refusal::Require)))
+    }
+
+    #[test]
+    fn a_running_crons_contribute_unlocks_a_missions_require() {
+        let catalog = contributing();
+        let mut session = landed(&catalog);
+        assert!(requires(&session));
+        assert_eq!(session.contributed() & 0x4, 0);
+        session.pilot.crons.insert(
+            CronId(128),
+            CronState {
+                days: 5,
+                holdoff: 0,
+            },
+        );
+        assert!(!requires(&session));
+        assert_eq!(session.contributed() & 0x4, 0x4);
+        session.pilot.crons.insert(
+            CronId(128),
+            CronState {
+                days: 5,
+                holdoff: 2,
+            },
+        );
+        assert!(requires(&session), "in its pre-holdoff");
+    }
 
     #[test]
     fn a_save_naming_a_missing_cron_flies_with_it_inactive() {

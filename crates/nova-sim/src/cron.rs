@@ -2,6 +2,15 @@
 //! original's `_CronEventHandler` (@0x3874f) does each day after the date
 //! moves on (@0xb58b).
 //!
+//! # Contribute
+//!
+//! A running crön's `Contribute` bits are among those the player holds
+//! only outside its holdoffs, at a `holdoff` of 0 or below
+//! ([`contributes`]; `_GetPlayerContributeBits` @0x770f-0x7724): a crön
+//! in its pre-holdoff or its post-holdoff contributes nothing, and a
+//! running crön's own bits count towards a later crön's `Require`. Every
+//! reader sums them through [`wares::contributed`].
+//!
 //! # Eligibility
 //!
 //! An inactive crön starts when every check of [`eligibility`] passes, in
@@ -79,6 +88,14 @@ impl CronState {
     pub fn active(self) -> bool {
         self.days >= 0 || self.holdoff >= 0
     }
+}
+
+/// Whether a crön with counters `state` contributes its `Contribute`
+/// bits: only outside its holdoffs, at a `holdoff` of 0 or below
+/// (`_GetPlayerContributeBits` @0x770f-0x7724).
+#[must_use]
+pub fn contributes(state: CronState) -> bool {
+    state.holdoff <= 0
 }
 
 /// Whether `record` is disabled: a `Duration` below 0 (@0x38766), which
@@ -398,6 +415,25 @@ mod tests {
                 None
             ]
         );
+    }
+
+    #[test]
+    fn a_cron_contributes_only_outside_its_holdoffs() {
+        let state = |days, holdoff| CronState { days, holdoff };
+        assert!(contributes(state(3, 0)));
+        assert!(contributes(state(0, -1)));
+        assert!(!contributes(state(3, 1)));
+        assert!(!contributes(state(-1, 2)));
+    }
+
+    #[test]
+    fn a_saved_cron_is_active_with_days_or_holdoff_0_or_more() {
+        let state = |days, holdoff| CronState { days, holdoff };
+        assert!(state(0, -1).active());
+        assert!(state(-1, 0).active());
+        assert!(state(5, 2).active());
+        assert!(!state(-1, -1).active());
+        assert!(!state(-2, -3).active());
     }
 
     #[test]
