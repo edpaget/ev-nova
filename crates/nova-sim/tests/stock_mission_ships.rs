@@ -1,8 +1,10 @@
 //! Mission ships over the stock data: a stock mission with special ships,
 //! started by `S` on a new pilot, puts them in the system its `ShipSyst`
-//! names, and the system is set up with them there and nowhere else; and
-//! a stock mission of each ship goal has its goal met by the storyline
-//! walker's `meet goal`. Skips, passing, when `NOVA_DATA` is unset.
+//! names, and the system is set up with them there and nowhere else; a
+//! stock mission of each ship goal has its goal met by the storyline
+//! walker's `meet goal`; and a stock mission's escorts come in on their
+//! timer and join the player's formation. Skips, passing, when
+//! `NOVA_DATA` is unset.
 
 mod common;
 
@@ -150,4 +152,56 @@ fn a_stock_mission_of_each_ship_goal_has_it_met_by_the_walker() {
         assert!(walked, "mission {} of goal {goal}", record.id.0);
         assert_ne!(met, Some(false), "mission {} of goal {goal}", record.id.0);
     }
+}
+
+/// `mïsn` 171: ships escorting the player (`ShipBehav` 1) that it must
+/// escort (`ShipGoal` 3), following it (`ShipSyst` -6) and coming later
+/// (`ShipStart` 1).
+const ESCORTED: i16 = 171;
+
+#[test]
+fn a_stock_missions_escorts_come_in_on_their_timer_and_join_the_players_formation() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let record = data
+        .missions()
+        .into_iter()
+        .find(|record| record.id == MissionId(ESCORTED))
+        .expect("mïsn 171");
+    assert_eq!(
+        (
+            record.ships.behav,
+            record.ships.goal,
+            record.ships.syst,
+            record.ships.start
+        ),
+        (1, 3, -6, 1)
+    );
+    let mut session = docked_new_pilot(&data);
+    session.run_set(
+        &SetExpr::parse(&format!("S{ESCORTED}")).expect("parses"),
+        &mut NeverFires,
+    );
+    let _ = session.settle_script(&data, &mut NeverFires);
+    let mut flying = in_flight(&data, session.pilot(), session.pilot().system());
+    let escorts = |session: &Session| {
+        session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.mission_escort())
+            .count()
+    };
+    assert_eq!(escorts(&flying), 0, "none at setup");
+    for _ in 0..30 {
+        flying.tick_traffic(&data, &NovaAi::default(), &mut NeverFires);
+    }
+    let count = usize::try_from(record.ships.count).expect("a count");
+    assert_eq!(escorts(&flying), count, "come in after the timer, joined");
+    for npc in flying.npcs().iter().filter(|npc| npc.mission_escort()) {
+        assert_eq!(npc.escort, None, "not hired");
+        assert!(npc.formation().is_some());
+    }
+    assert!(flying.pilot().escorts().is_empty());
 }
