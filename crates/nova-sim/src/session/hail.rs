@@ -51,6 +51,12 @@
 //!   ([`Session::take_comm`]) and decides again; a repair for a player no
 //!   longer disabled ends at once, silently. The traffic lets an
 //!   assisting ship decide again once anything provokes it.
+//! - **Defend** (battle help, `_AIFightEnemyThreatToPlayer` @0x82c80):
+//!   it attacks the threat to the player picked
+//!   ([`Goal::Attack`], its target set, @0x82d9b-0x82d9f), and calls for
+//!   reinforcements, forced past their strength test
+//!   (`_AICallForReinforcements(ship, 1)` @0x9636d). Reinforcements
+//!   aren't built, so the call is an empty hook until they are.
 
 use super::Session;
 use crate::ai::Goal;

@@ -49,16 +49,37 @@
 //!    escort." for a mission escort, the original's AI type above 4
 //!    (@0x962ee-0x96304), which is busy whenever it keeps formation or
 //!    fights; else "I'm busy.".
-//! 4. While any NPC threatens the player, the original asks for battle
-//!    help; a placeholder here: "I'd rather not.".
+//! 4. While any NPC threatens the player (`_IsPlayerThreatened`
+//!    @0x96310):
+//!    - unless an NPC of a government that is an enemy of the ship's
+//!      threatens it ([`Hail::threatened_by_enemy`],
+//!      `_IsPlayerThreatenedByMyEnemy` @0x96328-0x9632f): "In your
+//!      dreams, pal.";
+//!    - with battle help (a rank's `Flags` 0x0400, @0x96335): "Okay,
+//!      I'm on my way.", whatever its AI type, for nothing. It attacks a
+//!      ship picked uniformly among every other ship that threatens the
+//!      player, enemy or not ([`Deed::Defend`],
+//!      `_AIFightEnemyThreatToPlayer` @0x82c80), and calls for
+//!      reinforcements (`_AICallForReinforcements(ship, 1)` @0x9636d);
+//!    - otherwise "I'd rather not.". The original's AI-type ladder here
+//!      (@0x9638e-0x96514: a warship or interceptor's paid help, a
+//!      brave trader's when independent, an escort's free help) is
+//!      deferred; "I'd rather not." is its own answer for a wimpy trader
+//!      (@0x96399).
 //! 5. A player who needs nothing: "You're not in any trouble.".
-//! 6. Free help ("Roadside Assistance"): "Okay, I'm on my way.", and it
-//!    helps at once. Otherwise it says its mood ("You're lucky - I'm in
-//!    a good mood today.", "I'm in a bad mood today, so it's going to
-//!    cost you." or "I'll help you out if you pay me.") and asks its
-//!    price: paid, "Okay, I'm on my way." and it helps; declined, "Ha ha
-//!    ha. What a comedian."; short, "Yeah, come back when you actually
-//!    have some money.".
+//! 6. A mission escort, the original's AI type above 4: "Sorry, I can't
+//!    do that." (group 25, @0x96564-0x9656c), before any price.
+//! 7. It says its mood ("You're lucky - I'm in a good mood today.", "I'm
+//!    in a bad mood today, so it's going to cost you." or "I'll help you
+//!    out if you pay me."). With free help ("Roadside Assistance", or a
+//!    rank's `Flags` 0x0800) it then says "Okay, I'm on my way." in the
+//!    same press ([`Answer::first`](super::Answer::first)) and helps at
+//!    once, for nothing (@0x965b4-0x965e3). Otherwise it asks its price:
+//!    paid, "Okay, I'm on my way." and it helps; declined, "Ha ha ha.
+//!    What a comedian."; short, "Yeah, come back when you actually have
+//!    some money.".
+//!
+//! Request Assistance plays no sound (@0x9625d-0x96665).
 //!
 //! **Release** (`STR#` 150 #32, key R, the escort dialog's), listed for
 //! the player's escort alone (`_DoCommDialog` @0x95721): it says "Goodbye,

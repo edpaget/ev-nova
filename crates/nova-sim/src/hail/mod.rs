@@ -31,7 +31,11 @@
 //! - *untalkative* (Greetings alone, "No response."): `Flags2` 0x0001;
 //! - *quiet* (see [`RuleKey::QuietHails`](crate::RuleKey::QuietHails)):
 //!   `Flags2` 0x0008 of its government or its inherent government;
-//! - *free help* ("Roadside Assistance"): `Flags2` 0x0010;
+//! - *free help* ("Roadside Assistance"): `Flags2` 0x0010, or a rank of
+//!   the pilot's with `Flags` 0x0800 that reaches the ship's government;
+//! - *battle help*: a rank of the pilot's with `Flags` 0x0400 that
+//!   reaches the ship's government (see [`rank::favour`](crate::rank::favour),
+//!   by [`RuleKey::RankGovtReach`](crate::RuleKey::RankGovtReach));
 //! - *plunderer*: a warship or interceptor of `Flags` 0x1000;
 //! - *xenophobe*: `Flags` 0x0001.
 //!

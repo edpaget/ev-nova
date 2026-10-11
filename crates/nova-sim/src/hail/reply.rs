@@ -98,8 +98,10 @@ pub const WASTING_TIME: u8 = 13;
 pub const NOT_IN_TROUBLE: u8 = 14;
 /// Group 16: "I'm busy.".
 pub const BUSY: u8 = 16;
-/// Group 17: "I'd rather not.": help while the player is under attack (a
-/// placeholder for the battle help a follow-up adds).
+/// Group 17: "I'd rather not.": help while an enemy of the ship's
+/// threatens the player and it has no battle help. It stands in for the
+/// original's AI-type ladder there (@0x9638e-0x96514), which is deferred,
+/// and is the original's own answer for a wimpy trader (@0x96399).
 pub const RATHER_NOT: u8 = 17;
 /// Group 18: "You'll have to pay me first.": a bribe's price, in a
 /// neutral mood.
