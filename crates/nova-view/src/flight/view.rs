@@ -1783,12 +1783,13 @@ impl<
     /// ([`SessionEvent`]); it shows no message
     /// from before the landing, but says how many hired escorts defected
     /// for want of the take-off's pay ([`defection_message`]); the
-    /// session populates the system's traffic afresh on its next tick
-    /// ([`Session::take_off`]). Leaving passes the stay's days, their
+    /// session has populated the system's traffic afresh
+    /// ([`Session::take_off`]), so no frame draws the ships from before
+    /// the landing. Leaving passes the stay's days, their
     /// events rolled on the flight's chance.
     pub fn take_off(&mut self) -> Option<StellarId> {
         let session = self.session.as_mut().ok()?;
-        let stellar = session.take_off(&mut self.chance)?;
+        let stellar = session.take_off(&self.catalog, &mut self.chance)?;
         let said = self.took_off();
         self.say_all(&said);
         Some(stellar)
@@ -10842,7 +10843,10 @@ mod tests {
         let mut view = landed_view();
         move_to(&mut view, 130, 129);
         let session = view.session.as_mut().expect("flying");
-        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(129)));
+        assert_eq!(
+            session.take_off(&view.catalog, &mut NeverFires),
+            Some(StellarId(129))
+        );
         run_set(&mut view, "M131");
         settle_session(&mut view);
         view.tick(TICK);

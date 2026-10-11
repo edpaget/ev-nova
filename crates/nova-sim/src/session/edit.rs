@@ -656,7 +656,7 @@ mod tests {
             let mut session = landed(&catalog);
             let _ = session.relocate(&catalog, SystemId(system), StellarId(stellar));
             assert_eq!(session.take_events(), told, "{system} {stellar}");
-            session.take_off(&mut NeverFires);
+            session.take_off(&catalog, &mut NeverFires);
             assert_eq!(session.take_events(), [], "{system} {stellar}: taken off");
         }
     }
@@ -680,7 +680,7 @@ mod tests {
                 .expect("moves");
             session.assert_docked_among_shown();
             assert_eq!(session.take_events(), [told], "{system} {stellar}");
-            session.take_off(&mut NeverFires);
+            session.take_off(&catalog, &mut NeverFires);
             assert_eq!(session.take_events(), [], "{system} {stellar}: taken off");
         }
     }
@@ -693,7 +693,7 @@ mod tests {
             .relocate(&catalog, SystemId(131), StellarId(140))
             .expect("moves");
         session.assert_docked_among_shown();
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(session.npcs().len(), 3);
     }
@@ -847,7 +847,9 @@ mod tests {
         }]);
         for (system, stellar) in [(131, 140), (130, 129), (130, 128)] {
             let mut session = docked(&catalog);
-            session.take_off(&mut NeverFires).expect("takes off");
+            session
+                .take_off(&catalog, &mut NeverFires)
+                .expect("takes off");
             let _ = session.settle_script(&catalog, &mut NeverFires);
             session.player.velocity = Vec2::new(5.0, 0.0);
             session.drop_raised();
@@ -1010,7 +1012,7 @@ mod tests {
         assert!(session.traffic_due);
         assert_eq!(session.pilot().escorts().len(), 2, "the fighter still out");
         assert_eq!(session.take_fighter_notes(), []);
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.take_sounds(), [crate::sound::SimSound::TookOff]);
         session.tick(crate::flight::Controls::default());
         assert_eq!(

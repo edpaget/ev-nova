@@ -477,7 +477,7 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
             .map(|(slot, active)| (slot, active.mission))
             .collect();
         let chance = &mut *self.day_chance;
-        let took_off = session.take_off(chance).is_some();
+        let took_off = session.take_off(self.catalog, chance).is_some();
         session.let_days_pass(days, chance);
         let _ = session.settle_script(self.catalog, chance);
         let failed = held

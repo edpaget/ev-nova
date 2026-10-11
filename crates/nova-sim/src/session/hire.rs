@@ -249,6 +249,7 @@ mod tests {
     use crate::hire::{HireRow, NovaHire, PayNote};
     use crate::reserves::Reserves;
     use crate::rulebook::Rulebook;
+    use crate::session::entry::NoTraffic;
     use crate::stats::HYPERSPACE_DAYS;
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
@@ -459,7 +460,7 @@ mod tests {
             [129]
         );
         let mut day = Scripted::answering(&[false]);
-        session.take_off(&mut day).expect("takes off");
+        session.take_off(&catalog, &mut day).expect("takes off");
         assert_eq!(day.asked, [50], "the take-off's day draws it");
         assert_eq!(land_now(&mut session), Ok(BAR_AT));
         let list = session.escorts_for_hire(&mut listing).expect("a bar");
@@ -478,7 +479,7 @@ mod tests {
             listed(&session.escorts_for_hire(&mut chance).expect("a bar")),
             [129]
         );
-        session.take_off(&mut chance).expect("takes off");
+        session.take_off(&catalog, &mut chance).expect("takes off");
         assert_eq!(land_now(&mut session), Ok(BAR_AT));
         let list = session.escorts_for_hire(&mut chance).expect("a bar");
         assert_eq!(listed(&list), [129], "kept");
@@ -496,7 +497,9 @@ mod tests {
             listed(&session.escorts_for_hire(&mut chance).expect("a bar")),
             [129]
         );
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         assert_eq!(session.escorts_for_hire(&mut chance), None, "in flight");
         assert_eq!(land_now(&mut session), Ok(BAR_AT));
         let list = session.escorts_for_hire(&mut chance).expect("a bar");
@@ -834,8 +837,9 @@ mod tests {
         let catalog = barred(vec![hireable(129, 100)]);
         let mut session = landed(&catalog, 25_000);
         session.hire(ShipId(129), &mut NeverFires).expect("hires");
-        session.take_off(&mut NeverFires).expect("takes off");
-        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         let placed = |session: &Session| {
             let id = session.fleet[0].expect("placed");
             session.npc(id).expect("in the system").clone()
@@ -1045,7 +1049,9 @@ mod tests {
         let mut session = Session::fly(&catalog, pilot).expect("flies");
         assert_eq!(session.landed(), Some(BAR_AT), "resumed docked");
         assert_eq!(session.fleet, [], "none placed yet");
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         assert_eq!(ships(&session), [(129, None, false), (129, None, true)]);
         assert_eq!(session.take_pay_notes(), [PayNote::Defected(2)]);
     }
@@ -1073,7 +1079,9 @@ mod tests {
     fn by_the_engine_each_take_off_pays_a_days_wages() {
         let mut session = docked(1000, RuleSource::Engine);
         assert_eq!(session.pilot().cash(), 1000, "landing pays nothing");
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&NoTraffic, &mut NeverFires)
+            .expect("takes off");
         assert_eq!(session.pilot().cash(), 600);
         assert_eq!(session.take_pay_notes(), []);
         assert_eq!(
@@ -1092,7 +1100,9 @@ mod tests {
             let mut session = docked(1000, rule);
             let landed = session.date();
             session.stay.ship_bought = true;
-            session.take_off(&mut NeverFires).expect("takes off");
+            session
+                .take_off(&NoTraffic, &mut NeverFires)
+                .expect("takes off");
             assert_eq!(session.pilot().cash(), cash, "{rule:?}");
             let mut days = std::iter::successors(Some(landed), |date| Some(date.next_day()));
             assert_eq!(Some(session.date()), days.nth(5), "{rule:?}");
@@ -1106,7 +1116,9 @@ mod tests {
             session.rules().source_for(RuleKey::TakeOffPay),
             RuleSource::Engine
         );
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&NoTraffic, &mut NeverFires)
+            .expect("takes off");
         assert_eq!(session.pilot().cash(), 250);
         assert_eq!(session.pilot().escorts().len(), 3);
         assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);
@@ -1121,7 +1133,9 @@ mod tests {
             session.rules().source_for(RuleKey::TakeOffPay),
             RuleSource::Bible
         );
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&NoTraffic, &mut NeverFires)
+            .expect("takes off");
         assert_eq!(session.pilot().cash(), 1000);
         session.tick_traffic(&paying(), &Peaceful, &mut NeverFires);
         jump(&mut session, &paying(), 131).expect("arrives");

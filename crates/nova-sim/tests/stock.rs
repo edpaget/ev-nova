@@ -3660,7 +3660,10 @@ fn over_hg_kania(data: &GameData) -> Session {
     save["stellar"] = serde_json::json!(1404);
     let parked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     let mut session = Session::fly(data, parked).expect("flies");
-    assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(1404)));
+    assert_eq!(
+        session.take_off(data, &mut NeverFires),
+        Some(StellarId(1404))
+    );
     assert_eq!(session.player().position, Vec2::new(-70.0, 250.0));
     session
 }

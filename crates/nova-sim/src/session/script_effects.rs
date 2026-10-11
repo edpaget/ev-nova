@@ -296,6 +296,7 @@ impl Session {
     /// whether one was.
     pub(super) fn settle_leave(
         &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
         settled: &mut Settled,
     ) -> bool {
@@ -304,7 +305,7 @@ impl Session {
         };
         settled.message = Some(text).filter(|text| !text.is_empty());
         if self.landed.is_some() {
-            settled.took_off = self.take_off(chance);
+            settled.took_off = self.take_off(catalog, chance);
         } else if settled.message.is_some() {
             self.sounds.push(SimSound::ScriptMessage);
         }
@@ -697,7 +698,10 @@ mod tests {
     fn a_move_in_flight_to_another_system_forgets_the_stellar_last_landed_on() {
         let catalog = moving();
         let mut session = landed(&catalog);
-        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(128)));
+        assert_eq!(
+            session.take_off(&catalog, &mut NeverFires),
+            Some(StellarId(128))
+        );
         assert_eq!(session.pilot().stellar(), Some(StellarId(128)), "kept");
         moved(&mut session, &catalog, "M131");
         assert_eq!(session.pilot().stellar(), None);
@@ -717,7 +721,7 @@ mod tests {
     fn a_move_in_flight_within_the_system_keeps_the_stellar_last_landed_on() {
         let catalog = moving();
         let mut session = landed(&catalog);
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         moved(&mut session, &catalog, "N130");
         assert_eq!(session.system(), SystemId(130));
         assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
@@ -943,7 +947,7 @@ mod tests {
                 moved(&mut session, &catalog, text);
                 assert_eq!(session.take_sounds(), [], "landed: {case}");
                 assert_eq!(session.take_messages(), [], "landed: {case}");
-                session.take_off(&mut NeverFires);
+                session.take_off(&catalog, &mut NeverFires);
                 assert_eq!(session.take_sounds(), [SimSound::TookOff], "{case}");
                 session.tick(crate::flight::Controls::default());
                 assert_eq!(
@@ -990,7 +994,7 @@ mod tests {
                 [128, 129],
                 "the port's until the take-off: {reading:?}"
             );
-            session.take_off(&mut NeverFires);
+            session.take_off(&catalog, &mut NeverFires);
             assert_eq!(ids(&session.sites), [140, 141], "{reading:?}");
         }
     }
@@ -1044,7 +1048,10 @@ mod tests {
         let catalog = moving();
         let mut session = landed(&catalog);
         moved(&mut session, &catalog, "M131");
-        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(128)));
+        assert_eq!(
+            session.take_off(&catalog, &mut NeverFires),
+            Some(StellarId(128))
+        );
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(ids(&session.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
@@ -1053,7 +1060,7 @@ mod tests {
         assert_eq!(session.npcs().len(), 3, "131 populated");
         let mut session = landed(&catalog);
         moved(&mut session, &catalog, "M132");
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.player().position, Vec2::ZERO, "the centre");
         assert_eq!(session.sites, []);
     }
@@ -1068,13 +1075,13 @@ mod tests {
         moved(&mut session, &catalog, "N131");
         assert_eq!(session.pilot().stellar(), None);
         assert_eq!(session.landed(), Some(StellarId(128)));
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(session.player().position, Vec2::new(10.0, -10.0));
         assert_eq!(ids(&session.sites), [140, 141]);
         session.player.position = Vec2::new(-45.0, 0.0);
         land_now(&mut session).expect("lands on 141");
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(
             session.player().position,
             Vec2::new(-50.0, 0.0),
@@ -1093,7 +1100,7 @@ mod tests {
             .relocate(&catalog, SystemId(131), StellarId(141))
             .expect("moves");
         session.assert_docked_among_shown();
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(
             session.player().position,
@@ -1123,7 +1130,7 @@ mod tests {
             .relocate(&catalog, SystemId(131), StellarId(141))
             .expect("moves");
         session.assert_docked_among_shown();
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(ids(&session.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(-50.0, 0.0));
     }
@@ -1139,7 +1146,7 @@ mod tests {
         moved(&mut session, &catalog, text);
         session.player.position = Vec2::new(10.0, -10.0);
         land_now(&mut session).expect("lands");
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         session.player().position
     }
 
@@ -1172,7 +1179,7 @@ mod tests {
         session.player.position = Vec2::new(10.0, -10.0);
         land_now(&mut session).expect("lands");
         moved(&mut session, &catalog, "N130");
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.player().position, Vec2::new(10.0, -10.0));
     }
 
@@ -1217,7 +1224,7 @@ mod tests {
         run(&mut session, "P300");
         session.tick(crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [], "landed");
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.take_sounds(), [SimSound::TookOff]);
         session.tick(crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [mission_sound(300, true)]);
@@ -1247,7 +1254,7 @@ mod tests {
             session.take_sounds(),
             [mission_sound(300, false), mission_sound(301, false)]
         );
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         session.take_sounds();
         session.tick(crate::flight::Controls::default());
         assert_eq!(session.take_sounds(), [], "nothing held");
@@ -1410,7 +1417,7 @@ mod tests {
         let mut session = landed(&catalog);
         moved(&mut session, &catalog, "M131");
         assert_eq!(session.take_events(), [], "the stellars wait");
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);
     }
 
@@ -1421,11 +1428,11 @@ mod tests {
             let mut session = landed(&catalog);
             moved(&mut session, &catalog, text);
             assert_eq!(session.take_events(), [], "{text}: settled");
-            session.take_off(&mut NeverFires);
+            session.take_off(&catalog, &mut NeverFires);
             assert_eq!(session.take_events(), [], "{text}: taken off");
         }
         let mut session = landed(&catalog);
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.take_events(), [], "a plain take-off");
     }
 

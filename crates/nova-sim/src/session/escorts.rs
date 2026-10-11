@@ -486,7 +486,9 @@ mod tests {
         defend_all(&mut session);
         land_now(&mut session).expect("lands on 128, under the ship");
         assert!(crate::save::encode(session.pilot()).contains("\"defend\""));
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         tick(&mut session, &catalog);
         let took_off = orders(&session);
 
@@ -857,7 +859,9 @@ mod tests {
         tick(&mut session, &catalog);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.pilot().escorts()[0].reserves.shield.now, 4.0);
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         assert_eq!(session.pilot().escorts()[0].reserves.shield.now, 30.0);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(
@@ -1434,7 +1438,9 @@ mod tests {
         session.npc_mut(ace).expect("there").reserves.shield.now = 5.0;
         session.sync_fleet();
         land_now(&mut session).expect("lands on 128, under the ship");
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         tick(&mut session, &catalog);
         assert_eq!(escort_npcs(&session)[0].reserves.shield.now, 60.0);
     }

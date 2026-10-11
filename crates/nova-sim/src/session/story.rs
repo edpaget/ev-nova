@@ -150,7 +150,8 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
     }
 
     fn settle_leave(&mut self) -> bool {
-        self.session.settle_leave(&mut *self.chance, self.settled)
+        self.session
+            .settle_leave(self.catalog, &mut *self.chance, self.settled)
     }
 
     fn take_raised(&mut self) -> VecDeque<StoryEvent> {
@@ -527,6 +528,7 @@ mod tests {
     use crate::date::GameDate;
     use crate::market::ActiveEvent;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+    use crate::session::entry::NoTraffic;
     use crate::session::tests::{NEW, buy, outfitted, sell, shipbuying, surplus};
     use crate::session::{SessionEvent, Settled};
     use crate::story::{
@@ -547,7 +549,9 @@ mod tests {
     /// Takes off from `session`, landed, and gives how many days passed.
     fn days_at_take_off(session: &mut Session) -> usize {
         let landed = session.date();
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&NoTraffic, &mut NeverFires)
+            .expect("takes off");
         (0..10)
             .find(|&days| after(landed, days) == session.date())
             .expect("fewer than ten days")
@@ -566,7 +570,7 @@ mod tests {
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         let landed = session.date();
         let mut chance = Scripted::default();
-        session.take_off(&mut chance).expect("takes off");
+        session.take_off(&catalog, &mut chance).expect("takes off");
         assert_eq!(session.date(), after(landed, 1));
         assert_eq!((landed.day(), landed.month(), landed.year()), (24, 6, 1177));
         assert_eq!(chance.asked, [35], "one roll for the one day");
@@ -676,7 +680,7 @@ mod tests {
         jump(&mut session, &catalog, 131).expect("arrives");
         land_now(&mut session).expect("lands");
         let mut chance = Scripted::default();
-        session.take_off(&mut chance).expect("takes off");
+        session.take_off(&catalog, &mut chance).expect("takes off");
         assert_eq!(chance.asked, Vec::<u8>::new(), "no roll");
     }
 
@@ -711,7 +715,7 @@ mod tests {
         jump(&mut session, &catalog, 131).expect("arrives");
         land_now(&mut session).expect("lands");
         let mut chance = Scripted::default();
-        session.take_off(&mut chance).expect("takes off");
+        session.take_off(&catalog, &mut chance).expect("takes off");
         assert_eq!(
             chance.asked,
             [35, 30, 40, 50, 60, 70],
@@ -748,7 +752,9 @@ mod tests {
         session
             .buy_ship(NEW, "Kestrel", &mut NeverFires)
             .expect("buys");
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&NoTraffic, &mut NeverFires)
+            .expect("takes off");
         assert!(session.take_save_due());
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("loads");
         assert_eq!(saved.date(), after(landed, 5));
@@ -868,7 +874,9 @@ mod tests {
         let mut session = quiet(shopping());
         assert_eq!(session.outfit(buy(SPEED), &mut NeverFires), Ok(()));
         let landed = session.date();
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&NoTraffic, &mut NeverFires)
+            .expect("takes off");
         let mut expected = days_after(landed, 2);
         expected.extend([EXPLORED_130, TOOK_OFF_128]);
         assert_eq!(session.story_raised(), expected);
@@ -879,7 +887,9 @@ mod tests {
         let rules = Rulebook::default().with_override(RuleKey::StayDays, RuleSource::Bible);
         let mut session = quiet(shopping().with_rules(rules));
         assert_eq!(session.outfit(buy(SPEED), &mut NeverFires), Ok(()));
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&NoTraffic, &mut NeverFires)
+            .expect("takes off");
         assert_eq!(session.story_raised(), [EXPLORED_130, TOOK_OFF_128]);
     }
 
@@ -887,7 +897,7 @@ mod tests {
     fn a_take_off_unlanded_raises_nothing() {
         let catalog = testkit::catalog();
         let mut session = quiet(Session::start(&catalog).expect("starts"));
-        assert_eq!(session.take_off(&mut NeverFires), None);
+        assert_eq!(session.take_off(&catalog, &mut NeverFires), None);
         assert_eq!(session.story_raised(), []);
     }
 
@@ -1140,7 +1150,9 @@ mod tests {
         );
         land_and_settle(&mut session, &catalog);
         assert_eq!(bits(&session), [0_u16; 0], "b9 clear");
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         session.set_control_bit(crate::control::Bit::new(9).expect("a bit"), true);
         land_and_settle(&mut session, &catalog);
         assert_eq!(
@@ -1180,7 +1192,9 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         register(&mut session, subs());
         land_and_settle(&mut session, &catalog);
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         land_and_settle(&mut session, &catalog);
         assert_eq!(bits(&session), [5], "once, and twice toggled");
         assert!(session.take_save_due());
@@ -1191,18 +1205,24 @@ mod tests {
         // fixture registers again.
         let _ = session.settle_script(&catalog, &mut NeverFires);
         register(&mut session, subs());
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         land_and_settle(&mut session, &catalog);
         assert_eq!(bits(&session), [5, 6], "still fired after the reload");
 
         assert!(session.unregister_story(fixture(1)));
         assert!(!session.unregister_story(fixture(1)), "gone");
         assert!(session.take_save_due(), "its once-fired entry cleared");
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         land_and_settle(&mut session, &catalog);
         assert_eq!(bits(&session), [5], "unregistered, it runs no more");
         register(&mut session, [subs()[0].clone()]);
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         land_and_settle(&mut session, &catalog);
         assert_eq!(bits(&session), [6], "registered afresh, it runs again");
     }
@@ -1396,7 +1416,9 @@ mod tests {
         assert_eq!(session_reads(&catalog), reads, "nothing read again");
         session.set_stellar_state(StellarId(129), None);
         assert_eq!(destroyed(&session.sites), [(128, false), (129, false)]);
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         assert_eq!(destroyed(&session.sites), [(140, true)]);
     }
 
@@ -1541,7 +1563,9 @@ mod tests {
     fn days_let_pass_in_flight_fail_a_mission_past_its_deadline() {
         let catalog = timed();
         let mut session = holding_timed(&catalog);
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert_eq!(session.pilot().missions().missions().len(), 1, "held");
         session.let_days_pass(3, &mut NeverFires);
