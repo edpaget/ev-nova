@@ -60,6 +60,27 @@ use crate::rulebook::{RuleKey, Rulebook};
 use crate::rules::{Check, Checks, Context};
 use crate::wares;
 
+/// One crön's counters while it runs or holds off, as the original keeps
+/// them in its slot (+0x26, +0x28). A crön with none is inactive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CronState {
+    /// The days left of its duration; -1 in its post-holdoff.
+    pub days: i16,
+    /// The days left of its holdoff: its pre-holdoff while `days` is 0 or
+    /// more, its post-holdoff once `days` is -1.
+    pub holdoff: i16,
+}
+
+impl CronState {
+    /// Whether a crön saved with these counters is active, as a load
+    /// derives it: `days` or `holdoff` 0 or more (`_LoadPilotData`
+    /// @0x75fbc-0x76025).
+    #[must_use]
+    pub fn active(self) -> bool {
+        self.days >= 0 || self.holdoff >= 0
+    }
+}
+
 /// Whether `record` is disabled: a `Duration` below 0 (@0x38766), which
 /// the pass skips whether the crön runs or not.
 #[must_use]

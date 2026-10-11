@@ -66,6 +66,8 @@
 //!   save kept only the record with each government, so the upgrade
 //!   saves `null`, and flying the pilot derives each system's
 //!   ([`Session::fly`](crate::Session::fly)).
+//! - Version 22: adds the crons running or holding off, each its `crön`
+//!   ID, `days` and `holdoff`; none in an older save.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -110,15 +112,28 @@
 //! `reached`, its `goals_met` and its cargo `aboard`, and how it
 //! `failed`: `null`, `quick` (at once, its `OnFailure` run) or
 //! `operator` (by `F`). A slot past 15 is unusable.
+//!
+//! The crons (`crons`) are those running or holding off, by ascending
+//! ID: each its `crön` ID (`cron`), its `days` left (-1 in its
+//! post-holdoff) and its `holdoff` (`{"cron": 156, "days": 105,
+//! "holdoff": 0}`). A load keeps an entry only while its `days` or
+//! `holdoff` is 0 or more, as the original derives a slot's `active`
+//! (`_LoadPilotData` @0x75fbc-0x76025), so an entry of -1 and -1 is an
+//! inactive crön, and a save leaves the inactive ones out. One whose
+//! record is gone is kept as saved, and flying the pilot drops it
+//! ([`Session::fly`](crate::Session::fly)).
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::catalog::{
-    DisasterId, GovtId, JunkId, MissionId, NebulaId, OutfitId, PersonId, ShipId, StellarId,
+    CronId, DisasterId, GovtId, JunkId, MissionId, NebulaId, OutfitId, PersonId, ShipId, StellarId,
     SystemId,
 };
 use crate::control::Bit;
+use crate::cron::CronState;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::{ActiveEvent, Good};
@@ -129,7 +144,7 @@ use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 21;
+pub const CURRENT: u64 = 22;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -731,6 +746,44 @@ struct Saved {
     story_fired: Vec<SavedFired>,
     galaxy: SavedGalaxy,
     missions: Vec<SavedMission>,
+    crons: Vec<SavedCron>,
+}
+
+/// A saved crön running or holding off: its ID and its counters.
+#[derive(Serialize, Deserialize)]
+struct SavedCron {
+    cron: i16,
+    days: i16,
+    holdoff: i16,
+}
+
+/// The crons `crons` holds as saved: the active ones, by ID.
+fn saved_crons(crons: &BTreeMap<CronId, CronState>) -> Vec<SavedCron> {
+    crons
+        .iter()
+        .filter(|(_, state)| state.active())
+        .map(|(id, state)| SavedCron {
+            cron: id.0,
+            days: state.days,
+            holdoff: state.holdoff,
+        })
+        .collect()
+}
+
+/// The crons `saved` lists that a load finds active
+/// (`_LoadPilotData` @0x75fbc-0x76025).
+fn crons_of(saved: Vec<SavedCron>) -> BTreeMap<CronId, CronState> {
+    saved
+        .into_iter()
+        .map(|saved| {
+            let state = CronState {
+                days: saved.days,
+                holdoff: saved.holdoff,
+            };
+            (CronId(saved.cron), state)
+        })
+        .filter(|(_, state)| state.active())
+        .collect()
 }
 
 /// `pilot` as the current version's save: pretty JSON.
@@ -826,6 +879,7 @@ pub fn encode(pilot: &Pilot) -> String {
             .iter()
             .map(|(slot, active)| SavedMission::new(slot, active))
             .collect(),
+        crons: saved_crons(&pilot.crons),
     };
     serde_json::to_string_pretty(&saved).expect("plain values always serialise")
 }
@@ -853,6 +907,7 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     combat_rating,
     active_missions,
     system_records,
+    crons,
 ];
 
 /// Version 1 to 2: nothing explored, and no legal records.
@@ -989,6 +1044,11 @@ fn system_records(save: &mut Value) {
     }
 }
 
+/// Version 21 to 22: no crön running or holding off.
+fn crons(save: &mut Value) {
+    add_empty(save, &["crons"]);
+}
+
 /// Adds `field` to every entry of `save`'s `list`, as `value`.
 fn add_to_each(save: &mut Value, list: &str, field: &str, value: &Value) {
     let Some(entries) = save.get_mut(list).and_then(Value::as_array_mut) else {
@@ -1114,6 +1174,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
             .collect(),
         galaxy: saved.galaxy.into(),
         missions,
+        crons: crons_of(saved.crons),
     })
 }
 
@@ -1255,6 +1316,7 @@ mod tests {
             story_fired: all_fired(),
             galaxy: overlaid(),
             missions: busy(),
+            crons: holding_off(),
         }
     }
 
@@ -1380,7 +1442,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 21);
+        assert_eq!(CURRENT, 22);
         assert_eq!(
             value["galaxy"],
             serde_json::json!({
@@ -1476,7 +1538,7 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert!(text.contains("\n  \"version\": 21"), "{text}");
+        assert!(text.contains("\n  \"version\": 22"), "{text}");
     }
 
     /// A version 1 save: before explored systems and legal records.
@@ -2658,6 +2720,165 @@ mod tests {
         assert!(unusable(&value.to_string()).contains("system_legal"));
     }
 
+    /// Crön 156 in its pre-holdoff, and crön 129 in its post-holdoff.
+    fn holding_off() -> BTreeMap<CronId, CronState> {
+        BTreeMap::from([
+            (
+                CronId(156),
+                CronState {
+                    days: 105,
+                    holdoff: 2,
+                },
+            ),
+            (
+                CronId(129),
+                CronState {
+                    days: -1,
+                    holdoff: 3,
+                },
+            ),
+        ])
+    }
+
+    #[test]
+    fn the_crons_running_or_holding_off_are_saved_by_id() {
+        let pilot = seasoned();
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["version"], 22);
+        assert_eq!(
+            value["crons"],
+            serde_json::json!([
+                {"cron": 129, "days": -1, "holdoff": 3},
+                {"cron": 156, "days": 105, "holdoff": 2}
+            ])
+        );
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+    }
+
+    #[test]
+    fn an_inactive_cron_is_left_out_of_the_save() {
+        let mut crons = holding_off();
+        crons.insert(
+            CronId(200),
+            CronState {
+                days: -1,
+                holdoff: -1,
+            },
+        );
+        let pilot = Pilot {
+            crons,
+            ..seasoned()
+        };
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(
+            value["crons"]
+                .as_array()
+                .expect("a list")
+                .iter()
+                .map(|cron| cron["cron"].clone())
+                .collect::<Vec<_>>(),
+            [129, 156]
+        );
+    }
+
+    /// A version 21 save: before the crons.
+    const VERSION_21: &str = r#"{
+        "version": 21,
+        "name": "Lawful",
+        "ship": 129,
+        "ship_name": "Kestrel",
+        "system": 131,
+        "stellar": 150,
+        "date": {"year": 1177, "month": 6, "day": 24},
+        "cash": 4000,
+        "reserves": {
+            "shield": {"now": 30.0, "max": 30.0},
+            "armor": {"now": 45.0, "max": 45.0},
+            "fuel": {"now": 200.0, "max": 300.0}
+        },
+        "course": [],
+        "explored": [131],
+        "legal": [{"govt": 128, "record": 25}],
+        "system_legal": null,
+        "combat_rating": 7,
+        "cargo": [],
+        "events": [],
+        "outfits": [],
+        "stock_weapons_fitted": true,
+        "escorts": [],
+        "gone_persons": [],
+        "grudges": [],
+        "bits": [],
+        "gender": "male",
+        "paint": null,
+        "story_fired": [],
+        "galaxy": {"systems": [], "stellars": [], "nebulae": []},
+        "missions": []
+    }"#;
+
+    #[test]
+    fn an_older_save_loads_with_no_cron_running() {
+        let pilot = decode(VERSION_21).expect("loads");
+        assert_eq!(pilot.name(), "Lawful");
+        assert!(pilot.crons().is_empty());
+        let value: serde_json::Value = serde_json::from_str(&encode(&pilot)).expect("JSON");
+        assert_eq!(value["crons"], serde_json::json!([]));
+        assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+        for text in [VERSION_20, VERSION_19, VERSION_1] {
+            let pilot = decode(text).expect("loads");
+            assert!(pilot.crons().is_empty(), "{text}");
+        }
+    }
+
+    /// The current save of `seasoned`, its crons `crons`.
+    fn with_crons(crons: serde_json::Value) -> String {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value["crons"] = crons;
+        value.to_string()
+    }
+
+    #[test]
+    fn a_saved_cron_is_active_while_its_days_or_holdoff_are_0_or_more() {
+        let pilot = decode(&with_crons(serde_json::json!([
+            {"cron": 128, "days": -1, "holdoff": -1},
+            {"cron": 129, "days": 0, "holdoff": -1},
+            {"cron": 130, "days": -1, "holdoff": 0},
+            {"cron": 131, "days": -2, "holdoff": -5}
+        ])))
+        .expect("loads");
+        assert_eq!(
+            pilot.crons(),
+            &BTreeMap::from([
+                (
+                    CronId(129),
+                    CronState {
+                        days: 0,
+                        holdoff: -1
+                    }
+                ),
+                (
+                    CronId(130),
+                    CronState {
+                        days: -1,
+                        holdoff: 0
+                    }
+                ),
+            ]),
+            "_LoadPilotData @0x75fbc-0x76025"
+        );
+    }
+
+    #[test]
+    fn a_current_save_missing_its_crons_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        if let Some(object) = value.as_object_mut() {
+            object.remove("crons");
+        }
+        assert!(unusable(&value.to_string()).contains("crons"));
+    }
+
     #[test]
     fn an_older_save_loads_with_no_active_missions() {
         let pilot = decode(VERSION_19).expect("loads");
@@ -3006,12 +3227,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 21", "\"version\": 22");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 22 }));
+        let newer = encode(&seasoned()).replace("\"version\": 22", "\"version\": 23");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 23 }));
         assert_eq!(
-            SaveError::Newer { version: 22 }.to_string(),
+            SaveError::Newer { version: 23 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 22, and this version of Nova reads up to 21)."
+             (it is version 23, and this version of Nova reads up to 22)."
         );
     }
 

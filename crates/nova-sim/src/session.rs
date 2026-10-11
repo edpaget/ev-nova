@@ -326,6 +326,7 @@
 //! [`Session::take_diagnostics`].
 
 mod control;
+mod crons;
 mod edit;
 mod entry;
 mod escorts;
@@ -802,8 +803,9 @@ impl Session {
     /// record); one whose legal records in each system are not yet
     /// derived, a new pilot or a save from before they were kept, derives
     /// them from its records with each government
-    /// ([`legal::systems_from_govts`]); and the reserves hold no more than
-    /// the stats allow. No secondary is selected, as the original's
+    /// ([`legal::systems_from_govts`]); one saved with a crön running
+    /// that the data no longer has forgets it; and the reserves hold no
+    /// more than the stats allow. No secondary is selected, as the original's
     /// `_ResetPlayer` leaves it before `_LoadPilotData` (@0x76502,
     /// @0x7673e), which never sets one.
     ///
@@ -846,6 +848,12 @@ impl Session {
                 &govts,
             ));
         }
+        // A crön the data no longer has is inactive (`_LoadPilotData`
+        // @0x75fbc-0x76025; see the `crons` module).
+        let crons = catalog.crons();
+        pilot
+            .crons
+            .retain(|id, _| crons.iter().any(|record| record.id == *id));
         let system = pilot.system;
         let here = overlaid_sites(&galaxy, catalog, system);
         let (docked, dock) = docking(&galaxy, catalog, &pilot, &here);

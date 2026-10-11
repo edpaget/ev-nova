@@ -59,17 +59,23 @@
 //! ([`ActiveMissions`]): none on a new pilot (see
 //! [`mission`](crate::mission)).
 //!
+//! It keeps each crön running or holding off, with its `days` and
+//! `holdoff` ([`CronState`]), by ID: none on a new pilot, as
+//! `_DoNewPilot` resets every slot (@0x7d77f-0x7d7a9; see
+//! [`cron`](crate::cron)).
+//!
 //! A [`Session`](crate::Session) flies a pilot and changes it as the rules
 //! say.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{
-    CombatCatalog, DisasterId, GovtId, OutfitId, PersonId, PilotCatalog, ShipId, ShipRecord,
-    StartError, StellarId, SystemId,
+    CombatCatalog, CronId, DisasterId, GovtId, OutfitId, PersonId, PilotCatalog, ShipId,
+    ShipRecord, StartError, StellarId, SystemId,
 };
 use crate::combat::armament::Arsenal;
 use crate::control::{Bit, ControlBitSet};
+use crate::cron::CronState;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::{ActiveEvent, Good};
@@ -152,6 +158,9 @@ pub struct Pilot {
     /// The missions accepted, in their 16 slots (see
     /// [`mission`](crate::mission)).
     pub(crate) missions: ActiveMissions,
+    /// Each crön running or holding off, by ID, with its counters; any
+    /// other is inactive (see [`cron`](crate::cron)).
+    pub(crate) crons: BTreeMap<CronId, CronState>,
 }
 
 /// The player's gender, which the `G` test reads (true when male). The
@@ -258,6 +267,7 @@ impl Pilot {
             story_fired: BTreeSet::new(),
             galaxy: GalaxyOverlay::default(),
             missions: ActiveMissions::default(),
+            crons: BTreeMap::new(),
         })
     }
 
@@ -277,6 +287,12 @@ impl Pilot {
     #[must_use]
     pub fn missions(&self) -> &ActiveMissions {
         &self.missions
+    }
+
+    /// Each crön running or holding off, by ID, with its counters.
+    #[must_use]
+    pub fn crons(&self) -> &BTreeMap<CronId, CronState> {
+        &self.crons
     }
 
     /// The ship's paint, `None` when it is unpainted.
@@ -822,6 +838,12 @@ mod tests {
         assert!(!pilot.control_bit(Bit::new(0).expect("in range")));
         assert_eq!(pilot.gender(), Gender::Male);
         assert_eq!(Gender::default(), Gender::Male);
+    }
+
+    #[test]
+    fn a_new_pilot_has_no_cron_running_or_holding_off() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert!(pilot.crons().is_empty());
     }
 
     #[test]
