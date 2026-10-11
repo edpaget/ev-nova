@@ -332,6 +332,10 @@ pub struct Ask {
 /// How a ship answers an option's press.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Answer {
+    /// What it says just before `reply` in the same press, drawn and then
+    /// replaced, as a free helper's price text is (`_DoCommDialog`
+    /// @0x965aa-0x965af, then @0x965e3).
+    pub first: Option<Reply>,
     /// What it says; none leaves the reply as it was.
     pub reply: Option<Reply>,
     /// What it does at once, if anything.
@@ -383,6 +387,11 @@ pub struct HailView {
     pub npc: NpcId,
     /// Its ship type.
     pub ship: ShipId,
+    /// What it said just before `reply` in the last press, if anything: a
+    /// free helper's price text. The original draws it and replaces it in
+    /// the same click (`_DoCommDialog` @0x965aa-0x965af, then @0x965e3),
+    /// so a panel may show `reply` alone.
+    pub first: Option<String>,
     /// What it last said.
     pub reply: String,
     /// Its ship type's `CommName`.
@@ -749,6 +758,26 @@ mod tests {
         assert_eq!(made(&[130], 140, bible), (false, false), "allied");
         assert_eq!(made(&[130], 142, bible), (false, false), "unallied");
         assert_eq!(made(&[131], 140, bible), (true, true), "its own");
+    }
+
+    #[test]
+    fn the_government_flag_gives_free_help_through_the_rank_aware_dispositions_with_the_price_text()
+    {
+        let govts = govts(0, FREE_HELP, (0, 0));
+        let mut npc = ship();
+        npc.govt = Some(G);
+        let favour = rank::favour(&[], &BTreeSet::new(), npc.govt, &govts, RuleSource::Engine);
+        let dispositions = Dispositions::of(&npc, None, &govts, favour);
+        let needy = Hail {
+            dispositions,
+            need: Some(Help::Repair),
+            ..hail(&npc)
+        };
+        let answer = RequestAssistance::default().press(&needy, &mut crate::NeverFires);
+        assert_eq!(answer.first, Some(Reply::Comm(reply::HELP_FOR_PAY)));
+        assert_eq!(answer.reply, Some(Reply::Comm(reply::ON_MY_WAY)));
+        assert_eq!(answer.ask, None);
+        assert_eq!(answer.deed, Some(Deed::Help(Help::Repair)));
     }
 
     /// NPC `id` of government 140, flying `goal`.

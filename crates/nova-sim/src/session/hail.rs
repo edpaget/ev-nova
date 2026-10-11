@@ -79,6 +79,8 @@ use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 pub(super) struct Talk {
     npc: NpcId,
     conversation: Conversation,
+    /// What it said just before `reply` in the last press, if anything.
+    first: Option<Reply>,
     reply: Reply,
     ask: Option<Ask>,
     /// Whether the escort hailed is to be released once the channel
@@ -95,6 +97,7 @@ impl Talk {
         Self {
             npc,
             conversation: Conversation::open(0, false, 0, &mut crate::chance::NeverFires),
+            first: None,
             reply: Reply::Comm(1),
             ask: None,
             release: false,
@@ -152,6 +155,7 @@ impl Session {
         self.talk = Some(Talk {
             npc: npc.id,
             conversation,
+            first: None,
             reply: opening,
             ask: None,
             release: false,
@@ -287,14 +291,18 @@ impl Session {
                 key: option.key(),
             })
             .collect();
-        Some(HailView {
-            npc: npc.id,
-            ship: npc.ship,
-            reply: talk.reply.say(
+        let say = |reply: Reply| {
+            reply.say(
                 talk.conversation.variant,
                 catalog,
                 self.pilot.ship_name().unwrap_or_default(),
-            ),
+            )
+        };
+        Some(HailView {
+            npc: npc.id,
+            ship: npc.ship,
+            first: talk.first.map(say),
+            reply: say(talk.reply),
             comm_name: self
                 .ship_record(npc.ship)
                 .map(|record| record.comm_name.clone())
@@ -334,6 +342,7 @@ impl Session {
             let hail = self.hail_of(npc, &talk.conversation);
             options.listed(&hail).get(pick)?.press(&hail, chance)
         };
+        talk.first = answer.first;
         if let Some(said) = answer.reply {
             talk.reply = said;
         }
@@ -374,6 +383,7 @@ impl Session {
         if settled != Settled::Lowered {
             talk.ask = None;
         }
+        talk.first = None;
         talk.reply = said;
         self.talk = Some(talk);
         if let Some(deed) = deed {
@@ -1305,6 +1315,80 @@ mod tests {
         assert_eq!(helper.target, Some(ShipRef::Npc(pirate)));
         let view = press(&mut session, &catalog, 1, 0);
         assert_eq!(view.reply, "I'm busy.");
+    }
+
+    #[test]
+    fn free_help_says_its_price_first_then_is_on_its_way_and_takes_no_cash() {
+        let mut catalog = hailable();
+        catalog.govts[0].flags2 = crate::hail::FREE_HELP;
+        let mut session = targeting(&catalog);
+        session.pilot.reserves.fuel.now = 40.0;
+        let view = hail(&mut session, &catalog);
+        assert_eq!(view.first, None);
+        let view = press(&mut session, &catalog, 1, 99);
+        assert_eq!(
+            view.first.as_deref(),
+            Some("I'll help you out if you pay me.")
+        );
+        assert_eq!(view.reply, "Okay, I'm on my way.");
+        assert_eq!(view.asking, None);
+        assert_eq!(session.pilot().cash, 100_000);
+        assert_eq!(session.npcs()[0].goal, Goal::Assist(Help::Refuel));
+        let view = press(&mut session, &catalog, 0, 99);
+        assert_eq!(view.first, None, "Greetings says one line");
+        assert_eq!(
+            session
+                .hailing(&catalog, &HailOptions::default())
+                .and_then(|view| view.first),
+            None
+        );
+    }
+
+    /// An option that says "Nice to meet you." before asking a price
+    /// with "What is it you want?".
+    #[derive(Debug)]
+    struct Haggler;
+
+    impl HailOption for Haggler {
+        fn label(&self) -> String {
+            "Haggle".to_owned()
+        }
+
+        fn applies(&self, _hail: &Hail) -> bool {
+            true
+        }
+
+        fn press(&self, _hail: &Hail, _chance: &mut dyn Chance) -> Answer {
+            Answer {
+                first: Some(Reply::Comm(reply::NICE_TO_MEET_YOU)),
+                ask: Some(Ask {
+                    paid: (Reply::Comm(reply::ON_MY_WAY), None),
+                    declined: (Reply::Comm(reply::COMEDIAN), None),
+                    short: Reply::Comm(reply::NO_MONEY),
+                }),
+                ..Answer::say(Reply::Comm(reply::WHAT_IS_IT))
+            }
+        }
+    }
+
+    #[test]
+    fn a_haggle_clears_the_line_said_first() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        let options = HailOptions::empty().with(Rc::new(Haggler));
+        session
+            .hail(&catalog, &options, &mut Draws::of(&opening(0)))
+            .expect("answered");
+        let view = session
+            .answer(0, &catalog, &options, &mut Draws::of(&[99]))
+            .expect("open");
+        assert_eq!(view.first.as_deref(), Some("Nice to meet you."));
+        assert_eq!(view.reply, "What is it you want?");
+        let view = session
+            .haggle(Haggle::LowerPrice, &catalog, &options)
+            .expect("open");
+        assert_eq!(view.reply, "Ha ha ha. What a comedian.");
+        assert_eq!(view.first, None);
     }
 
     #[test]

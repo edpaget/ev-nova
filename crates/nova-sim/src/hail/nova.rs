@@ -100,9 +100,9 @@
 //! ([`HailOption::joins`]).
 
 use super::reply::{
-    self, BAD_MOOD, BUSY, COMEDIAN, GOOD_MOOD, HELP_FOR_PAY, HOW_DARE_YOU, IN_YOUR_DREAMS,
-    JUST_AN_ESCORT, NO_MONEY, NO_RESPONSE, NOT_IN_TROUBLE, ON_MY_WAY, PAY_ME_FIRST, PLEASURE,
-    RATHER_NOT, RELEASED, WASTING_TIME,
+    self, BAD_MOOD, BUSY, CANT_DO_THAT, COMEDIAN, GOOD_MOOD, HELP_FOR_PAY, HOW_DARE_YOU,
+    IN_YOUR_DREAMS, JUST_AN_ESCORT, NO_MONEY, NO_RESPONSE, NOT_IN_TROUBLE, ON_MY_WAY, PAY_ME_FIRST,
+    PLEASURE, RATHER_NOT, RELEASED, WASTING_TIME,
 };
 use super::{Answer, Ask, Attitude, Deed, Hail, HailOption, Mood, Reply};
 use crate::catalog::GovtId;
@@ -296,9 +296,14 @@ impl HailOption for RequestAssistance {
         let Some(need) = hail.need else {
             return Answer::say(Reply::Comm(NOT_IN_TROUBLE));
         };
+        if hail.mission_escort() {
+            return Answer::say(Reply::Comm(CANT_DO_THAT));
+        }
         let help = Some(Deed::Help(need));
+        let price = Reply::Comm(mood_reply(hail.mood, HELP_FOR_PAY));
         if dispositions.free_help {
             return Answer {
+                first: Some(price),
                 deed: help,
                 ..Answer::say(Reply::Comm(ON_MY_WAY))
             };
@@ -309,7 +314,7 @@ impl HailOption for RequestAssistance {
                 declined: (Reply::Comm(COMEDIAN), None),
                 short: Reply::Comm(NO_MONEY),
             }),
-            ..Answer::say(Reply::Comm(mood_reply(hail.mood, HELP_FOR_PAY)))
+            ..Answer::say(price)
         }
     }
 }
@@ -1004,6 +1009,7 @@ mod tests {
                 assert_eq!(
                     answer,
                     Answer {
+                        first: None,
                         reply: Some(Reply::Comm(ON_MY_WAY)),
                         deed: Some(Deed::Defend(NpcId(2))),
                         ask: None,
@@ -1105,6 +1111,7 @@ mod tests {
                 assert_eq!(
                     press(&RequestAssistance::default(), &hail),
                     Answer {
+                        first: None,
                         reply: Some(Reply::Comm(group)),
                         deed: None,
                         ask: Some(help_ask(need)),
@@ -1116,23 +1123,57 @@ mod tests {
     }
 
     #[test]
-    fn free_help_is_on_its_way_at_once_with_no_price() {
+    fn free_help_shows_its_price_then_is_on_its_way_without_payment() {
         let npc = ship();
-        let hail = Hail {
-            dispositions: Dispositions {
-                free_help: true,
-                ..Dispositions::default()
-            },
-            need: Some(Help::Repair),
-            ..hail(&npc)
-        };
-        assert_eq!(
-            press(&RequestAssistance::default(), &hail),
-            Answer {
-                reply: Some(Reply::Comm(ON_MY_WAY)),
-                deed: Some(Deed::Help(Help::Repair)),
-                ask: None,
+        for (mood, group) in [(0.79, GOOD_MOOD), (1.0, HELP_FOR_PAY), (1.2, BAD_MOOD)] {
+            for need in [Help::Refuel, Help::Repair] {
+                let hail = Hail {
+                    dispositions: Dispositions {
+                        free_help: true,
+                        ..Dispositions::default()
+                    },
+                    mood,
+                    need: Some(need),
+                    ..hail(&npc)
+                };
+                assert_eq!(
+                    press(&RequestAssistance::default(), &hail),
+                    Answer {
+                        first: Some(Reply::Comm(group)),
+                        reply: Some(Reply::Comm(ON_MY_WAY)),
+                        deed: Some(Deed::Help(need)),
+                        ask: None,
+                    },
+                    "{mood} {need:?}"
+                );
             }
+        }
+    }
+
+    #[test]
+    fn a_mission_escort_will_not_refuel_or_repair() {
+        let npc = mission_escort();
+        for free_help in [false, true] {
+            for need in [Help::Refuel, Help::Repair] {
+                let hail = Hail {
+                    dispositions: Dispositions {
+                        free_help,
+                        ..Dispositions::default()
+                    },
+                    need: Some(need),
+                    ..hail(&npc)
+                };
+                assert_eq!(
+                    press(&RequestAssistance::default(), &hail),
+                    says(CANT_DO_THAT),
+                    "{free_help} {need:?}"
+                );
+            }
+        }
+        assert_eq!(
+            press(&RequestAssistance::default(), &hail(&npc)),
+            says(NOT_IN_TROUBLE),
+            "it needs nothing first"
         );
     }
 
@@ -1218,6 +1259,7 @@ mod tests {
             assert_eq!(
                 press(&BegForMercy::default(), &hail),
                 Answer {
+                    first: None,
                     reply: Some(Reply::Comm(group)),
                     deed: None,
                     ask: Some(ask),
