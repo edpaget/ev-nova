@@ -557,6 +557,7 @@ fn mission_dude_ship(
             slot: spawn.slot,
             behav: spawn.behav,
             cloaked: false,
+            formation: None,
         }),
         derelict: false,
     })
@@ -2134,6 +2135,7 @@ mod tests {
                     slot: 3,
                     behav: ShipBehav::AttackPlayer,
                     cloaked: false,
+                    formation: None,
                 }),
                 derelict: false,
             }]
@@ -2484,6 +2486,7 @@ mod tests {
                     slot: 3,
                     behav: ShipBehav::AttackPlayer,
                     cloaked: false,
+                    formation: None,
                 }),
                 derelict: false,
             })
@@ -2517,6 +2520,7 @@ mod tests {
                 slot: 3,
                 behav: ShipBehav::EscortPlayer,
                 cloaked: false,
+                formation: None,
             }),
             "never cloaked"
         );

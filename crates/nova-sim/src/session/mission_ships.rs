@@ -1669,6 +1669,7 @@ mod tests {
             slot: 5,
             behav: ShipBehav::Own,
             cloaked: false,
+            formation: None,
         });
         session.release_mission_ships(0);
         assert_eq!(marked(&session), [5]);
@@ -1905,6 +1906,7 @@ mod tests {
             slot: 5,
             behav: ShipBehav::Own,
             cloaked: false,
+            formation: None,
         });
         disable(&mut session, 0);
         destroy(&mut session, 1);
@@ -1927,6 +1929,7 @@ mod tests {
             slot,
             behav: ShipBehav::Own,
             cloaked: false,
+            formation: None,
         }
     }
 
@@ -2480,6 +2483,7 @@ mod tests {
                     slot: 5,
                     behav: ShipBehav::Own,
                     cloaked: false,
+                    formation: None,
                 });
             }
         }));
@@ -2495,6 +2499,7 @@ mod tests {
                 slot: 5,
                 behav: ShipBehav::Own,
                 cloaked: false,
+                formation: None,
             });
             session.story.watched.clear();
             session.watch_ship(first);
@@ -2841,6 +2846,7 @@ mod tests {
                 slot: 5,
                 behav: ShipBehav::Own,
                 cloaked: false,
+                formation: None,
             });
         }
         let (boarding, crimes) = board_first(&mut session);
@@ -3009,6 +3015,7 @@ mod tests {
             slot: 5,
             behav: ShipBehav::Own,
             cloaked: false,
+            formation: None,
         });
         full_armour(&mut session);
         fight(&mut session, 1);

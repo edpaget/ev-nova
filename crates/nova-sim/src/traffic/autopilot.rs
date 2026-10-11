@@ -19,8 +19,9 @@
 //! - [`Goal::Assist`]: outside its reach of the player (see
 //!   [`assist`]) it follows the player as an escort its lead; within it,
 //!   it brakes.
-//! - [`Goal::Formation`]: the player's escort keeps its slot beside the
-//!   player ([`escort::slot_position`]). Within
+//! - [`Goal::Formation`]: the player's escort, hired or a mission escort,
+//!   keeps its slot beside the player ([`Npc::formation`],
+//!   [`slot_position`](crate::escort::slot_position)); with no slot it brakes. Within
 //!   [`KEEP_FORMATION`] of it on each axis, it takes the player's
 //!   velocity and heading and moves with it, nudged back towards the slot
 //!   on each axis more than [`FORMATION_SLACK`] off by at most
@@ -56,7 +57,7 @@ use crate::catalog::{LandingSite, ShipId, StellarId};
 use crate::combat::ShipRef;
 use crate::combat::aim::bearing;
 use crate::combat::hull::Condition;
-use crate::escort::{self, APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
+use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
 use crate::flight::{self, AT_REST_SPEED, Controls, ShipState, Turn, heading_of, shortest_turn};
 use crate::geometry::Vec2;
 use crate::hail::assist;
@@ -173,9 +174,9 @@ pub fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> O
             }
             _ => brake(&state, &handling),
         },
-        Goal::Formation { .. } => match (other, npc.escort) {
-            (Some(leader), Some(duty)) => {
-                let slot = escort::slot_position(leader, duty.slot, duty.ships, duty.spacing);
+        Goal::Formation { .. } => match (other, npc.formation()) {
+            (Some(leader), Some(place)) => {
+                let slot = place.position(leader);
                 let off = slot - state.position;
                 let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
                 if within(KEEP_FORMATION) {
@@ -474,7 +475,7 @@ fn match_velocity(state: &ShipState, handling: &Handling, desired: Vec2) -> Cont
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::escort::EscortDuty;
+    use crate::escort::{EscortDuty, FormationSlot};
     use crate::hail::{Help, assist};
     use crate::handling::ShipFields;
     use crate::stats::ShipStats;
@@ -642,6 +643,38 @@ mod tests {
         dutiless.escort = None;
         fly(&mut dutiless, &[], Some(&leader));
         assert_ne!(dutiless.state.heading, 180.0, "{:?}", dutiless.state);
+        let mut unjoined = escort(AVERAGE, at(0.0, 0.0, 0.0, 2.0, 180.0));
+        unjoined.escort = None;
+        unjoined.mission = Some(mark(None));
+        fly(&mut unjoined, &[], Some(&leader));
+        assert_ne!(unjoined.state.heading, 180.0, "{:?}", unjoined.state);
+    }
+
+    /// A mark of slot 0's escorting mission, holding `formation`.
+    fn mark(formation: Option<FormationSlot>) -> crate::traffic::npc::MissionMark {
+        crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            cloaked: false,
+            formation,
+        }
+    }
+
+    #[test]
+    fn a_mission_escort_flies_its_formation_slot_with_no_escort_duty() {
+        let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
+        let slot = slot_of(&leader);
+        let mut ship = escort(FAST, at(slot.x, slot.y, 0.0, 0.0, 200.0));
+        ship.escort = None;
+        ship.mission = Some(mark(Some(FormationSlot {
+            slot: 2,
+            ships: 3,
+            spacing: 30.0,
+        })));
+        assert_eq!(fly(&mut ship, &[], Some(&leader)), Outcome::Flying);
+        assert_eq!(ship.state.velocity, leader.velocity);
+        assert_eq!(ship.state.position, slot + leader.velocity);
+        assert_eq!(ship.escort, None);
     }
 
     #[test]

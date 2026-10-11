@@ -528,6 +528,7 @@ mod tests {
             slot: 1,
             behav: ShipBehav::from_code(behav),
             cloaked: false,
+            formation: None,
         });
         npc
     }

@@ -1678,6 +1678,7 @@ mod tests {
                 slot: 2,
                 behav: ShipBehav::from_code(behav),
                 cloaked: false,
+                formation: None,
             }),
             derelict: false,
         }

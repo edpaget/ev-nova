@@ -11936,6 +11936,49 @@ mod tests {
         assert_eq!(session.reserves().armor.now, 45.0);
     }
 
+    /// The fight's 60 ticks of the player and NPC 0, 100 above it, firing
+    /// at each other point-blank, NPC 0 marked by slot 0 as `formation`
+    /// says: the NPC's shield and the player's after them.
+    fn exchange_with_a_mission_ship(formation: Option<crate::escort::FormationSlot>) -> (f32, f32) {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let ship = &mut session.traffic.npcs_mut()[0];
+        ship.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            cloaked: false,
+            formation,
+        });
+        ship.trigger = FIRE;
+        ship.target = Some(ShipRef::Player);
+        session.hold_trigger(FIRE);
+        session.target = Some(NpcId(0));
+        for _ in 0..60 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        let npc = session
+            .npcs()
+            .first()
+            .map_or(0.0, |npc| npc.reserves.shield.now);
+        (npc, session.reserves().shield.now)
+    }
+
+    #[test]
+    fn the_players_shots_pass_through_a_mission_escort_but_not_a_mission_ship_yet_to_join() {
+        let joined = crate::escort::FormationSlot {
+            slot: 2,
+            ships: 2,
+            spacing: 30.0,
+        };
+        assert_eq!(
+            exchange_with_a_mission_ship(Some(joined)),
+            (30.0, 30.0),
+            "untouched"
+        );
+        let (npc, player) = exchange_with_a_mission_ship(None);
+        assert!(npc < 30.0 && player < 30.0, "{npc} {player}");
+    }
+
     #[test]
     fn the_players_trigger_fires_its_stock_weapon_and_disables_then_destroys_an_npc() {
         let catalog = armed();

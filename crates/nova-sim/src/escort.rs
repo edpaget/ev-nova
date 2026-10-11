@@ -287,6 +287,40 @@ pub struct EscortDuty {
     pub order: Option<EscortOrder>,
 }
 
+impl EscortDuty {
+    /// Its place in the formation.
+    #[must_use]
+    pub fn formation(&self) -> FormationSlot {
+        FormationSlot {
+            slot: self.slot,
+            ships: self.ships,
+            spacing: self.spacing,
+        }
+    }
+}
+
+/// A place in the player's formation, held by a hired escort (its
+/// [`EscortDuty`]) or a mission escort (its mission's mark): its slot,
+/// how many ships the formation holds, and its spacing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FormationSlot {
+    /// Its slot in the formation ([`slot_offset`]): 2, 3, …, the player
+    /// being slot 1.
+    pub slot: u8,
+    /// How many ships the formation holds, the player included.
+    pub ships: u8,
+    /// The formation's spacing, in pixels ([`spacing`]).
+    pub spacing: f32,
+}
+
+impl FormationSlot {
+    /// Where it is behind a leader at `leader` ([`slot_position`]).
+    #[must_use]
+    pub fn position(&self, leader: &ShipState) -> Vec2 {
+        slot_position(leader, self.slot, self.ships, self.spacing)
+    }
+}
+
 /// How near its slot, in pixels on each axis, an escort keeps formation
 /// (300.0 @0xdd95c).
 pub const KEEP_FORMATION: f32 = 300.0;
