@@ -156,4 +156,8 @@ exclude_re = [
     # making it the first: with `<=`, selecting the first row shown makes
     # it the first, which it is already.
     "replace < with <= in RowList::select",
+    # A shield or armour gauge past its capacity (`max < now`) fills all of
+    # its area: with `<=`, a gauge exactly full takes that branch too, and
+    # its `now / max` would be exactly 1.0 anyway.
+    "replace < with <= in shield_share",
 ]
