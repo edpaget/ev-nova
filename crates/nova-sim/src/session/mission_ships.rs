@@ -42,7 +42,11 @@
 //!
 //! **The counts** go up where the original counts them: a ship destroyed
 //! as it is taken out of the fight, one disabled as the fight's tick
-//! downs it, one boarded on the assist path of [`Session::board`]. The
+//! downs it, one boarded on the assist path of [`Session::board`], and
+//! one that leaves the system as the traffic's tick takes it out
+//! ([`Fate::Departed`]), chased off and its ships left lowered as the
+//! ships-left rule says ([`RuleKey::LeftRespawn`]; a landing leaves only
+//! as [`RuleKey::LandedLeaves`] says). The
 //! first loss that fails its mission fails it there, at once
 //! ([`SimMessage::MissionShipLost`] and the quick failure); the goal
 //! checks follow as the `ShipFate` the loss raised settles.
@@ -72,14 +76,17 @@ use crate::message::SimMessage;
 use crate::mission::active::AUTO_ABORT;
 use crate::mission::ships::{ShipBehav, ShipFacts, ShipStart, appear_timer, swapped_ship_type};
 use crate::mission::{
-    ActiveMission, AssistLine, FailedBy, GoalFacts, LossFacts, ShipGoal, ShipSystem, SpecialShips,
-    assists, check_goals, fails_on_destroyed, fails_on_disabled, goals_met_moment,
+    ActiveMission, AssistLine, Departure, FailedBy, GoalFacts, LossFacts, ShipGoal, ShipSystem,
+    SpecialShips, assists, check_goals, departure, fails_on_destroyed, fails_on_disabled,
+    goals_met_moment,
 };
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::session::mission_screens::MissionTextKind;
 use crate::story::{
     Consumer, Entrance, EventFilter, Fate, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
-use crate::traffic::npc::{Npc, NpcId};
+use crate::traffic::autopilot::Outcome;
+use crate::traffic::npc::{MissionMark, Npc, NpcId};
 use crate::traffic::spawn::{self, MissionSpawn, NewShip};
 use crate::traffic::table::SpawnTable;
 
@@ -295,6 +302,7 @@ impl Session {
             destroyed: ships.destroyed,
             boarded: ships.boarded,
             disabled: ships.disabled,
+            chased_off: ships.chased_off,
             here: seen.here || self.ships_here(ships.system),
             escorted: self
                 .npcs()
@@ -582,8 +590,9 @@ impl Session {
     /// do, so the moment's `ShipDoneText`, `OnShipDone` and auto-abort
     /// run, drawing on `chance`: all of them arrived; for a destroy goal,
     /// all destroyed and none left; for a disable goal, all disabled; for
-    /// a board or rescue goal, all boarded; for an observe goal, one seen
-    /// with them here; for an escort goal, all of them brought into the
+    /// a board or rescue goal, all boarded; for a chase-off goal, all
+    /// chased off and none left; for an observe goal, one seen with them
+    /// here; for an escort goal, all of them brought into the
     /// system the ship is in now, docked or not, through the arrivals'
     /// spawn path, their `düde` read from `catalog`. Whether the mission
     /// has such a goal: none for a free slot, a mission of no ships, or of
@@ -610,6 +619,7 @@ impl Session {
                 | ShipGoal::Escort
                 | ShipGoal::Observe
                 | ShipGoal::Rescue
+                | ShipGoal::ChaseOff
         );
         if count <= 0 || !meets {
             return false;
@@ -627,6 +637,10 @@ impl Session {
                 }
                 ShipGoal::Disable => ships.disabled = count,
                 ShipGoal::Board | ShipGoal::Rescue => ships.boarded = count,
+                ShipGoal::ChaseOff => {
+                    ships.chased_off = count;
+                    ships.left = 0;
+                }
                 _ => {}
             }
         }
@@ -719,6 +733,76 @@ impl Session {
             active.ships.destroyed = active.ships.destroyed.saturating_add(1);
             if active.ships.left > 0 {
                 active.ships.left -= 1;
+            }
+        }
+    }
+
+    /// The marks of the special ships in the system, each with its NPC:
+    /// what [`Session::mission_ships_left`] reads once the traffic's tick
+    /// has taken those that left out.
+    pub(super) fn mission_marks(&self) -> Vec<(NpcId, MissionMark)> {
+        self.npcs()
+            .iter()
+            .filter_map(|npc| Some((npc.id, npc.mission?)))
+            .collect()
+    }
+
+    /// The special ships among those the traffic's last tick took out,
+    /// marked as `marks` had them before it, in the order they left: each
+    /// that left the system raises [`Fate::Departed`], then its slot
+    /// counts it ([`Session::count_left_mission_ship`]). One that jumped
+    /// out left; one that landed left only under
+    /// [`RuleKey::LandedLeaves`]'s other reading, as the original's waits
+    /// at the stellar; a docked fighter never did.
+    pub(super) fn mission_ships_left(&mut self, marks: &[(NpcId, MissionMark)]) {
+        let landed_leaves = self.rules.source_for(RuleKey::LandedLeaves) == RuleSource::Bible;
+        let left: Vec<(NpcId, MissionMark)> = self
+            .traffic
+            .departed()
+            .iter()
+            .filter(|(_, outcome)| match outcome {
+                Outcome::JumpedOut => true,
+                Outcome::Landed(_) => landed_leaves,
+                Outcome::Docked { .. } | Outcome::Flying => false,
+            })
+            .filter_map(|&(id, _)| marks.iter().find(|(ship, _)| *ship == id).copied())
+            .collect();
+        for (ship, mark) in left {
+            self.raise(StoryEvent::ShipFate {
+                ship,
+                fate: Fate::Departed,
+            });
+            self.count_left_mission_ship(mark);
+        }
+    }
+
+    /// A special ship marked `mark` that left the system, its NPC gone
+    /// already: while its slot holds a mission, its ships chased off and
+    /// left change as [`departure`] says, over the slot's `ShipGoal`, its
+    /// ships following the player or not, and the ships-left rule
+    /// ([`RuleKey::LeftRespawn`]) (`_LowLevelAIHandler` @0x85960-0x859aa).
+    /// A failed mission's ship counts too, as the original tests no
+    /// failure; leaving fails nothing.
+    pub(super) fn count_left_mission_ship(&mut self, mark: MissionMark) {
+        let Some(active) = self.pilot.missions.get(mark.slot) else {
+            return;
+        };
+        let record = self.lifecycle_record(active.mission);
+        let counted = departure(
+            ShipGoal::from_code(record.ships.goal),
+            active.ships.system == ShipSystem::FollowsPlayer,
+            self.rules.source_for(RuleKey::LeftRespawn),
+        );
+        if counted == Departure::default() {
+            return;
+        }
+        if let Some(active) = self.slot_holding(mark.slot, record.id) {
+            let ships = &mut active.ships;
+            if counted.chased_off {
+                ships.chased_off = ships.chased_off.saturating_add(1);
+            }
+            if counted.lowers_left && ships.left > 0 {
+                ships.left -= 1;
             }
         }
     }
@@ -976,6 +1060,7 @@ mod tests {
                 destroyed: 0,
                 boarded: 0,
                 disabled: 0,
+                chased_off: 0,
             }
         );
         assert_eq!(
@@ -1769,6 +1854,283 @@ mod tests {
         });
     }
 
+    // Departures.
+
+    /// `ShipGoal` 6: chase them off.
+    const CHASE_OFF: i16 = 6;
+
+    /// A mark of slot `slot`'s ships.
+    fn mark(slot: u8) -> crate::traffic::npc::MissionMark {
+        crate::traffic::npc::MissionMark {
+            slot,
+            behav: ShipBehav::Own,
+            cloaked: false,
+        }
+    }
+
+    /// The ships chased off and left of slot 0's mission.
+    fn chased_and_left(session: &Session) -> (i16, i16) {
+        let ships = ships_of(session);
+        (ships.chased_off, ships.left)
+    }
+
+    /// [`goal_catalog`] whose ships follow the player (`ShipSyst` -6).
+    fn following_catalog(goal: i16) -> FakePilotCatalog {
+        let mut catalog = goal_catalog(goal, 0);
+        catalog.missions[0].ships.syst = -6;
+        catalog
+    }
+
+    #[test]
+    fn a_chase_off_ship_that_left_is_chased_off_and_lowers_the_ships_left() {
+        let catalog = goal_catalog(CHASE_OFF, 0);
+        let mut session = in_flight(&catalog);
+        let _ = session.take_save_due();
+        session.count_left_mission_ship(mark(0));
+        assert_eq!(chased_and_left(&session), (1, 1));
+        assert!(session.take_save_due());
+        session.count_left_mission_ship(mark(0));
+        session.count_left_mission_ship(mark(0));
+        assert_eq!(chased_and_left(&session), (3, 0), "never below none");
+    }
+
+    #[test]
+    fn a_ship_of_another_goal_that_left_counts_nothing_by_the_engine() {
+        for goal in [-1, 0, 1, 2, 3, 4, 5] {
+            let catalog = goal_catalog(goal, 0);
+            let mut session = in_flight(&catalog);
+            let _ = session.take_save_due();
+            session.count_left_mission_ship(mark(0));
+            assert_eq!(chased_and_left(&session), (0, 2), "{goal}");
+            assert!(!session.take_save_due(), "{goal}");
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_a_ship_of_another_goal_that_left_lowers_the_ships_left() {
+        let catalog = goal_catalog(0, 0);
+        let mut session = in_flight(&catalog).with_rules(
+            crate::Rulebook::default()
+                .with_override(crate::RuleKey::LeftRespawn, crate::RuleSource::Bible),
+        );
+        session.count_left_mission_ship(mark(0));
+        assert_eq!(chased_and_left(&session), (0, 1));
+    }
+
+    #[test]
+    fn a_ship_following_the_player_that_left_counts_nothing_by_either_reading() {
+        for source in [crate::RuleSource::Engine, crate::RuleSource::Bible] {
+            for goal in [0, CHASE_OFF] {
+                let catalog = following_catalog(goal);
+                let mut session = in_flight(&catalog).with_rules(
+                    crate::Rulebook::default().with_override(crate::RuleKey::LeftRespawn, source),
+                );
+                session.count_left_mission_ship(mark(0));
+                assert_eq!(chased_and_left(&session), (0, 2), "{source:?} {goal}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_ship_of_a_free_slot_that_left_counts_nothing() {
+        let catalog = goal_catalog(CHASE_OFF, 0);
+        let mut session = in_flight(&catalog);
+        session.count_left_mission_ship(mark(5));
+        assert_eq!(chased_and_left(&session), (0, 2));
+    }
+
+    #[test]
+    fn a_failed_missions_chase_off_ship_that_left_still_counts() {
+        let catalog = goal_catalog(CHASE_OFF, 0);
+        let mut session = in_flight(&catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.failed = Some(FailedBy::Quick);
+        }
+        session.count_left_mission_ship(mark(0));
+        assert_eq!(chased_and_left(&session), (1, 1));
+    }
+
+    /// Thinks nothing new: each ship keeps its goal.
+    #[derive(Debug)]
+    struct Keeping;
+
+    impl crate::ai::Behaviour for Keeping {
+        fn decide(
+            &self,
+            npc: &Npc,
+            _around: &crate::ai::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            npc.goal
+        }
+    }
+
+    /// Sends the NPC at `index` out of the system by hyperspace, from far
+    /// out, on one traffic tick.
+    fn jump_out(session: &mut Session, catalog: &FakePilotCatalog, index: usize) {
+        let npc = &mut session.traffic.npcs_mut()[index];
+        npc.goal = Goal::JumpOut;
+        npc.state.position = Vec2::new(0.0, -100_000.0);
+        session.tick_traffic(catalog, &Keeping, &mut NeverFires);
+    }
+
+    /// Lands the NPC at `index` on the system's first stellar, from rest
+    /// over it, on one traffic tick.
+    fn land_ship(session: &mut Session, catalog: &FakePilotCatalog, index: usize) {
+        let site = session.sites[0];
+        let npc = &mut session.traffic.npcs_mut()[index];
+        npc.goal = Goal::Land(site.id);
+        npc.state.position = site.position;
+        npc.state.velocity = Vec2::ZERO;
+        session.tick_traffic(catalog, &Keeping, &mut NeverFires);
+    }
+
+    /// Whether a [`Fate::Departed`] is raised for `ship`, not yet settled.
+    fn departed(session: &Session, ship: NpcId) -> bool {
+        session.story_raised().contains(&StoryEvent::ShipFate {
+            ship,
+            fate: Fate::Departed,
+        })
+    }
+
+    #[test]
+    fn a_chase_off_ship_jumping_out_raises_its_departure_and_is_counted() {
+        let catalog = goal_catalog(CHASE_OFF, 0);
+        let mut session = in_flight(&catalog);
+        let id = session.npcs()[0].id;
+        jump_out(&mut session, &catalog, 0);
+        assert!(session.npcs().iter().all(|npc| npc.id != id), "gone");
+        assert!(departed(&session, id));
+        assert_eq!(chased_and_left(&session), (1, 1));
+        assert_eq!(marked(&session), [0]);
+    }
+
+    #[test]
+    fn a_ship_of_no_mission_jumping_out_raises_nothing() {
+        let catalog = goal_catalog(CHASE_OFF, 0);
+        let mut session = in_flight(&catalog);
+        session.traffic.npcs_mut()[0].mission = None;
+        let id = session.npcs()[0].id;
+        jump_out(&mut session, &catalog, 0);
+        assert!(!departed(&session, id));
+        assert_eq!(chased_and_left(&session), (0, 2));
+    }
+
+    #[test]
+    fn a_chase_off_goal_is_met_by_its_last_ship_leaving() {
+        let catalog = returning(CHASE_OFF, 0);
+        let mut session = in_flight(&catalog);
+        let _ = shown(&mut session);
+        jump_out(&mut session, &catalog, 0);
+        settle(&mut session, &catalog);
+        assert!(!goals_met(&session));
+        assert_eq!(shown(&mut session), []);
+        jump_out(&mut session, &catalog, 0);
+        settle(&mut session, &catalog);
+        assert!(goals_met(&session));
+        assert_eq!(shown(&mut session), [ship_done("Rover done.")]);
+        assert_eq!(bits(&session), [6]);
+    }
+
+    #[test]
+    fn a_chase_off_goal_is_met_by_a_ship_destroyed_and_one_leaving() {
+        let catalog = returning(CHASE_OFF, 0);
+        let mut session = in_flight(&catalog);
+        destroy(&mut session, 0);
+        settle(&mut session, &catalog);
+        assert!(!goals_met(&session));
+        jump_out(&mut session, &catalog, 0);
+        settle(&mut session, &catalog);
+        assert!(goals_met(&session));
+        let ships = ships_of(&session);
+        assert_eq!((ships.destroyed, ships.chased_off, ships.left), (1, 1, 0));
+        assert_eq!(bits(&session), [6]);
+    }
+
+    #[test]
+    fn an_auto_abort_chase_off_mission_ends_as_its_last_ship_leaves() {
+        let catalog = returning(CHASE_OFF, 0x0001);
+        let mut session = in_flight(&catalog);
+        jump_out(&mut session, &catalog, 0);
+        jump_out(&mut session, &catalog, 0);
+        settle(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_none(), "aborted");
+        assert_eq!(bits(&session), [6, 7], "OnShipDone, then OnAbort");
+    }
+
+    #[test]
+    fn a_chase_off_ship_that_lands_counts_nothing_by_the_engine() {
+        let catalog = goal_catalog(CHASE_OFF, 0);
+        let mut session = in_flight(&catalog);
+        let id = session.npcs()[0].id;
+        land_ship(&mut session, &catalog, 0);
+        assert!(session.npcs().iter().all(|npc| npc.id != id), "gone");
+        assert!(!departed(&session, id));
+        assert_eq!(chased_and_left(&session), (0, 2));
+    }
+
+    #[test]
+    fn by_the_other_reading_a_chase_off_ship_that_lands_leaves_the_system() {
+        let catalog = goal_catalog(CHASE_OFF, 0);
+        let mut session = in_flight(&catalog).with_rules(
+            crate::Rulebook::default()
+                .with_override(crate::RuleKey::LandedLeaves, crate::RuleSource::Bible),
+        );
+        let id = session.npcs()[0].id;
+        land_ship(&mut session, &catalog, 0);
+        assert!(departed(&session, id));
+        assert_eq!(chased_and_left(&session), (1, 1));
+    }
+
+    /// The mission ships set up as the player lands at 128 and takes off
+    /// again.
+    fn set_up_again(session: &mut Session, catalog: &FakePilotCatalog) -> Vec<u8> {
+        assert_eq!(land_now(session), Ok(StellarId(128)));
+        settle(session, catalog);
+        take_off(session, catalog);
+        marked(session)
+    }
+
+    #[test]
+    fn a_chase_off_ship_that_left_is_not_brought_back_but_another_goals_is() {
+        for (goal, again) in [(CHASE_OFF, vec![0]), (0, vec![0, 0])] {
+            let catalog = goal_catalog(goal, 0);
+            let mut session = in_flight(&catalog);
+            jump_out(&mut session, &catalog, 0);
+            settle(&mut session, &catalog);
+            assert_eq!(set_up_again(&mut session, &catalog), again, "{goal}");
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_no_ship_that_left_is_brought_back() {
+        for goal in [CHASE_OFF, 0] {
+            let catalog = goal_catalog(goal, 0);
+            let mut session = in_flight(&catalog).with_rules(
+                crate::Rulebook::default()
+                    .with_override(crate::RuleKey::LeftRespawn, crate::RuleSource::Bible),
+            );
+            jump_out(&mut session, &catalog, 0);
+            settle(&mut session, &catalog);
+            assert_eq!(set_up_again(&mut session, &catalog), [0], "{goal}");
+        }
+    }
+
+    #[test]
+    fn a_chase_off_ship_following_the_player_that_left_is_not_counted() {
+        for source in [crate::RuleSource::Engine, crate::RuleSource::Bible] {
+            let catalog = following_catalog(CHASE_OFF);
+            let mut session = in_flight(&catalog).with_rules(
+                crate::Rulebook::default().with_override(crate::RuleKey::LeftRespawn, source),
+            );
+            jump_out(&mut session, &catalog, 0);
+            jump_out(&mut session, &catalog, 0);
+            settle(&mut session, &catalog);
+            assert_eq!(chased_and_left(&session), (0, 2), "{source:?}");
+            assert!(!goals_met(&session), "{source:?}");
+        }
+    }
+
     // Goals.
 
     /// [`goal_catalog`] whose mission 140 is offered at 128 and completed
@@ -2474,6 +2836,23 @@ mod tests {
     }
 
     #[test]
+    fn meeting_a_chase_off_goal_chases_them_all_off() {
+        let mut catalog = returning(CHASE_OFF, 0);
+        catalog.missions[0].ships.start = 1;
+        let mut session = accepted(&catalog);
+        let _ = shown(&mut session);
+        assert!(session.meet_ship_goal(&catalog, 0, &mut NeverFires));
+        let ships = ships_of(&session);
+        assert_eq!(
+            (ships.chased_off, ships.destroyed, ships.left, ships.arrived),
+            (2, 0, 0, 2)
+        );
+        assert!(goals_met(&session));
+        assert_eq!(shown(&mut session), [ship_done("Rover done.")]);
+        assert_eq!(bits(&session), [6]);
+    }
+
+    #[test]
     fn meeting_an_observe_goal_needs_no_ship_here() {
         let mut catalog = returning(4, 0);
         catalog.missions[0].ships.syst = 131;
@@ -2515,7 +2894,7 @@ mod tests {
                 ..shipping(-1, 0)
             },
             MissionShip {
-                goal: 6,
+                goal: 7,
                 ..shipping(-1, 0)
             },
             MissionShip {

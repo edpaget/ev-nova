@@ -219,6 +219,19 @@
 //!   thanks. Any board of a mission ship whose mission has not failed
 //!   then skips the `BoardPenalty`, the persons and the plunder
 //!   (@0x657bf-0x657e3).
+//! - **Chased off** (+0x30) is counted as a mission ship leaves the
+//!   system, at the end of its warp out (`_LowLevelAIHandler` @0x8598a),
+//!   for a chase-off goal (`ShipGoal` 6) whose ships do not follow the
+//!   player (`ShipSyst` -6), with its ships left one fewer so it is not
+//!   brought in again; a ship of any other goal that leaves counts
+//!   nothing and comes back at the next setup
+//!   ([`left_respawn`](crate::RuleKey::LeftRespawn) has the other
+//!   reading). An AI ship that lands stays in the system, waiting at the
+//!   stellar, so a landing counts nothing
+//!   ([`landed_leaves`](crate::RuleKey::LandedLeaves)). Here the
+//!   traffic's tick raises [`Fate::Departed`] for such a ship and counts
+//!   it. Chase off is met while those destroyed and those chased off
+//!   together reach `ShipCount`, and unmet otherwise (@0x9eb48-0x9eb78).
 //!
 //! Every frame `_DoPlayGameWork` (@0x44214) runs `_MissionHandler`
 //! (@0x9eda8), which checks each slot's goals (`_MissionObjectivesCheck`
@@ -242,8 +255,9 @@
 //! `TookOff` (the first flight frame after a landing or a docked accept),
 //! and in flight on `EnteredSystem`; an accept in flight is checked once
 //! its settling is done. The ships' arrivals raise
-//! [`Fate::Arrived`] and their first sighting [`Fate::Observed`], so an
-//! escort's presence and an observation are checked as they change.
+//! [`Fate::Arrived`], their first sighting [`Fate::Observed`] and their
+//! leaving [`Fate::Departed`], so an escort's presence, an observation
+//! and a chase-off are checked as they change.
 //!
 //! Mission cargo jettisoned (`_JettisonCargo` @0x3e18c), found by a scan
 //! (`_ScanPlayer` @0x7e7ac) or plundered by an NPC
@@ -340,7 +354,7 @@
 //! | [`TookOff`](StoryEvent::TookOff) | [`Session::take_off`](crate::Session::take_off), after its day | `_PlayerLandOnStellar` after the spaceport |
 //! | [`DayPassed`](StoryEvent::DayPassed) | the daily step, as its last participant | `_IncrementGameTime` |
 //! | [`Explored`](StoryEvent::Explored) | exploring a system: a jump's arrival, for each system it passes and the one it arrives at; every other way in whose row explores; a take-off; a map granted, for each system it reaches; [`Session::fly`](crate::Session::fly), for its system. `X` raises none | `_ExploreNebulaeFromSystem` |
-//! | [`ShipFate`](StoryEvent::ShipFate) | combat's destruction and disabling (a ship broken up while intact is disabled too); the session's boarding, repelled or not, a mission ship's included; the system's setup and the appear timer's arrivals, for each mission ship they bring in ([`Fate::Arrived`]); and the traffic's flight tick for a watched ship first seen ([`Session::watch_ship`](crate::Session::watch_ship)) | the goal counts and the per-frame poll |
+//! | [`ShipFate`](StoryEvent::ShipFate) | combat's destruction and disabling (a ship broken up while intact is disabled too); the session's boarding, repelled or not, a mission ship's included; the system's setup and the appear timer's arrivals, for each mission ship they bring in ([`Fate::Arrived`]); the traffic's tick, for each mission ship that leaves the system ([`Fate::Departed`]); and the traffic's flight tick for a watched ship first seen ([`Session::watch_ship`](crate::Session::watch_ship)) | the goal counts and the per-frame poll |
 //!
 //! A consumer that wants only some entrances reads the [`Entrance`] in
 //! its subscription: mission ships restart their timers on a `Jump`, a
@@ -1754,6 +1768,13 @@ pub enum Fate {
     /// with the system or come in on its timer: what the original's
     /// per-frame poll sees of an escort goal's ships (@0x9e931-0x9e980).
     Arrived,
+    /// Left the player's system, a mission's special ship: jumped out, as
+    /// the original frees its slot at the end of its warp out
+    /// (`_LowLevelAIHandler` @0x85960-0x859bf), or landed under
+    /// [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)'s other
+    /// reading. Raised as the traffic's tick takes it out, before its
+    /// slot counts it.
+    Departed,
 }
 
 /// Something that happened that story scripts react to, with its data,

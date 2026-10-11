@@ -1311,7 +1311,9 @@ impl Session {
     /// system up on arrival and on take-off; its NPCs move from the next.
     /// A target that landed or jumped out is let go. Each tick that moves
     /// the NPCs raises the first sighting of the ships watched
-    /// ([`Session::watch_ship`]).
+    /// ([`Session::watch_ship`]), and each mission ship that left the
+    /// system raises [`Fate::Departed`] and is counted (see the
+    /// `mission_ships` module).
     pub fn tick_traffic(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -1347,7 +1349,9 @@ impl Session {
                 };
                 let strikes = std::mem::take(&mut self.strikes);
                 let last = self.last_npc();
+                let marks = self.mission_marks();
                 self.traffic.tick_in(behaviour, world, &strikes, chance);
+                self.mission_ships_left(&marks);
                 self.resolve_person_offers(last, &mut &mut *chance);
                 self.dock_fighters();
                 self.orphan_fighters();

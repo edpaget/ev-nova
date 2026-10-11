@@ -390,8 +390,8 @@ pub use self::cargo::{
     jettison, picks_up_at_destination, pickup_checks, scan,
 };
 pub use self::goals::{
-    AssistLine, GoalCheck, GoalFacts, LossFacts, ShipGoal, assists, check_goals,
-    fails_on_destroyed, fails_on_disabled, goals_met_moment,
+    AssistLine, Departure, GoalCheck, GoalFacts, LossFacts, ShipGoal, assists, check_goals,
+    departure, fails_on_destroyed, fails_on_disabled, goals_met_moment,
 };
 pub use self::identity::StellarMarks;
 pub use self::offer::{Offer, Offers, ROLLED, RollTable, Stop, resolve};

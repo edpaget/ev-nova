@@ -1,8 +1,9 @@
 //! A mission's ship goals: what its `ShipGoal` asks of the player
 //! ([`ShipGoal`]), the check that says whether it is met or failed
 //! ([`check_goals`], `_MissionObjectivesCheck` @0x9e79e), the moment a
-//! goal is met ([`goals_met_moment`]), and the losses that fail a mission
-//! at once ([`fails_on_destroyed`], [`fails_on_disabled`]). They are pure
+//! goal is met ([`goals_met_moment`]), the losses that fail a mission
+//! at once ([`fails_on_destroyed`], [`fails_on_disabled`]), and what a
+//! ship that leaves the system counts ([`departure`]). They are pure
 //! rules over the counts the slot keeps of its ships
 //! ([`SpecialShips`](super::SpecialShips)); when they are checked, and
 //! what the moment shows and runs, is the session's `mission_ships`
@@ -10,6 +11,7 @@
 
 use super::active::AUTO_ABORT;
 use super::screens::HIDDEN;
+use crate::rulebook::RuleSource;
 
 /// A mission's `ShipGoal`, read: what the player must do to its special
 /// ships.
@@ -31,7 +33,7 @@ pub enum ShipGoal {
     Observe,
     /// 5: rescue them all, by boarding them.
     Rescue,
-    /// 6: chase them off (rdm:phase/mission-ships/phase-5-chase-off-goal).
+    /// 6: chase them off: make them leave the system, or destroy them.
     ChaseOff,
     /// Any other code: nothing to do, and nothing checked.
     Other,
@@ -77,6 +79,8 @@ pub struct GoalFacts {
     pub boarded: i16,
     /// Its ships disabled (+0x2c).
     pub disabled: i16,
+    /// Its ships chased off (+0x30).
+    pub chased_off: i16,
     /// Whether its ships are in the player's system, or follow the player
     /// (@0x9e9bb-0x9e9f1).
     pub here: bool,
@@ -120,7 +124,9 @@ pub struct GoalCheck {
 ///   is (@0x9e90d-0x9e980).
 /// - Observe, only while unmet, is met once one of its ships is seen
 ///   with its ships here and all of them arrived (@0x9e98f-0x9eb38).
-/// - Chase off (phase 5) and any other goal leave it as it was.
+/// - Chase off is met while those destroyed and those chased off
+///   together reach the count, and unmet otherwise (@0x9eb48-0x9eb78).
+/// - Any other goal leaves it as it was.
 #[must_use]
 pub fn check_goals(facts: &GoalFacts) -> GoalCheck {
     let unchanged = GoalCheck {
@@ -163,6 +169,10 @@ pub fn check_goals(facts: &GoalFacts) -> GoalCheck {
         {
             met
         }
+        ShipGoal::ChaseOff => GoalCheck {
+            met: i32::from(facts.destroyed) + i32::from(facts.chased_off) >= i32::from(facts.count),
+            failed: false,
+        },
         _ => unchanged,
     }
 }
@@ -213,6 +223,39 @@ pub const fn fails_on_destroyed(facts: LossFacts) -> bool {
 #[must_use]
 pub const fn fails_on_disabled(facts: LossFacts) -> bool {
     first_loss(facts) && matches!(facts.goal, ShipGoal::Escort)
+}
+
+/// What one of a mission's ships leaving the system counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Departure {
+    /// Its ships chased off go up by one (+0x30).
+    pub chased_off: bool,
+    /// Its ships left go down by one while above none (+0x6), so it is
+    /// not brought in again.
+    pub lowers_left: bool,
+}
+
+/// What a ship of a mission of `goal` leaving the system counts, its
+/// ships following the player (`ShipSyst` -6) or not, the ships-left
+/// rule ([`RuleKey::LeftRespawn`](crate::RuleKey::LeftRespawn)) read as
+/// `source`, as `_LowLevelAIHandler` counts it as it frees the ship's
+/// slot (@0x85960-0x859aa): nothing for ships following the player
+/// (@0x8597c-0x85981); for a chase-off goal, chased off up and ships left
+/// down (@0x85983-0x859aa); for any other goal, nothing by the engine
+/// (`jne 0x859ae` @0x85988), and ships left down by the other reading.
+#[must_use]
+pub const fn departure(goal: ShipGoal, follows_player: bool, source: RuleSource) -> Departure {
+    if follows_player {
+        return Departure {
+            chased_off: false,
+            lowers_left: false,
+        };
+    }
+    let chased_off = matches!(goal, ShipGoal::ChaseOff);
+    Departure {
+        chased_off,
+        lowers_left: chased_off || matches!(source, RuleSource::Bible),
+    }
 }
 
 /// What the comm line says as one of a mission's ships is boarded on the
@@ -282,6 +325,7 @@ mod tests {
             destroyed: 0,
             boarded: 0,
             disabled: 0,
+            chased_off: 0,
             here: true,
             escorted: false,
             sighted: false,
@@ -530,21 +574,100 @@ mod tests {
     }
 
     #[test]
-    fn chase_off_and_other_goals_are_left_as_they_were() {
-        for goal in [ShipGoal::ChaseOff, ShipGoal::Other] {
-            for met in [false, true] {
-                let all = GoalFacts {
-                    destroyed: 2,
-                    boarded: 2,
-                    disabled: 2,
-                    escorted: true,
-                    sighted: true,
-                    met,
-                    ..facts(goal)
-                };
-                assert_eq!(check_goals(&all), GoalCheck { met, failed: false });
-            }
+    fn other_goals_are_left_as_they_were() {
+        for met in [false, true] {
+            let all = GoalFacts {
+                destroyed: 2,
+                boarded: 2,
+                disabled: 2,
+                chased_off: 2,
+                escorted: true,
+                sighted: true,
+                met,
+                ..facts(ShipGoal::Other)
+            };
+            assert_eq!(check_goals(&all), GoalCheck { met, failed: false });
         }
+    }
+
+    #[test]
+    fn chase_off_is_met_once_all_are_chased_off() {
+        let chase = facts(ShipGoal::ChaseOff);
+        let one = GoalFacts {
+            chased_off: 1,
+            left: 1,
+            ..chase
+        };
+        assert_eq!(check_goals(&one), UNMET);
+        let both = GoalFacts {
+            chased_off: 2,
+            left: 0,
+            ..chase
+        };
+        assert_eq!(check_goals(&both), MET);
+        let more = GoalFacts {
+            chased_off: 3,
+            ..both
+        };
+        assert_eq!(check_goals(&more), MET);
+    }
+
+    #[test]
+    fn chase_off_is_met_by_a_mix_of_chased_off_and_destroyed() {
+        let mix = GoalFacts {
+            chased_off: 1,
+            destroyed: 1,
+            left: 0,
+            ..facts(ShipGoal::ChaseOff)
+        };
+        assert_eq!(check_goals(&mix), MET);
+        let destroyed = GoalFacts {
+            chased_off: 0,
+            destroyed: 2,
+            ..mix
+        };
+        assert_eq!(check_goals(&destroyed), MET, "destroyed alone");
+        let short = GoalFacts {
+            destroyed: 0,
+            ..mix
+        };
+        assert_eq!(check_goals(&short), UNMET);
+    }
+
+    #[test]
+    fn chase_off_below_the_count_is_unmet_even_if_it_was_met() {
+        let was = GoalFacts {
+            chased_off: 1,
+            met: true,
+            ..facts(ShipGoal::ChaseOff)
+        };
+        assert_eq!(check_goals(&was), UNMET, "the check clears it");
+        let many = GoalFacts {
+            count: i16::MAX,
+            arrived: i16::MAX,
+            chased_off: i16::MAX,
+            destroyed: i16::MAX,
+            ..was
+        };
+        assert_eq!(check_goals(&many), MET, "no wrap in the sum");
+        let just_short = GoalFacts {
+            chased_off: i16::MAX - 1,
+            destroyed: 0,
+            ..many
+        };
+        assert_eq!(check_goals(&just_short), UNMET);
+    }
+
+    #[test]
+    fn chase_off_with_ships_still_to_come_is_unmet() {
+        let coming = GoalFacts {
+            arrived: 1,
+            left: 1,
+            chased_off: 2,
+            met: true,
+            ..facts(ShipGoal::ChaseOff)
+        };
+        assert_eq!(check_goals(&coming), UNMET);
     }
 
     #[test]
@@ -664,6 +787,76 @@ mod tests {
         }
         for goal in [ShipGoal::Destroy, ShipGoal::Escort, ShipGoal::None] {
             assert_eq!(assists(goal, AUTO_ABORT, -1, 1), None, "{goal:?}");
+        }
+    }
+
+    const ALL_GOALS: [ShipGoal; 9] = [
+        ShipGoal::None,
+        ShipGoal::Destroy,
+        ShipGoal::Disable,
+        ShipGoal::Board,
+        ShipGoal::Escort,
+        ShipGoal::Observe,
+        ShipGoal::Rescue,
+        ShipGoal::ChaseOff,
+        ShipGoal::Other,
+    ];
+
+    #[test]
+    fn by_the_engine_only_a_chase_off_ship_that_leaves_counts() {
+        assert_eq!(
+            departure(ShipGoal::ChaseOff, false, RuleSource::Engine),
+            Departure {
+                chased_off: true,
+                lowers_left: true
+            }
+        );
+        for goal in ALL_GOALS
+            .into_iter()
+            .filter(|&goal| goal != ShipGoal::ChaseOff)
+        {
+            assert_eq!(
+                departure(goal, false, RuleSource::Engine),
+                Departure::default(),
+                "{goal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_every_ship_that_leaves_lowers_the_ships_left() {
+        assert_eq!(
+            departure(ShipGoal::ChaseOff, false, RuleSource::Bible),
+            Departure {
+                chased_off: true,
+                lowers_left: true
+            }
+        );
+        for goal in ALL_GOALS
+            .into_iter()
+            .filter(|&goal| goal != ShipGoal::ChaseOff)
+        {
+            assert_eq!(
+                departure(goal, false, RuleSource::Bible),
+                Departure {
+                    chased_off: false,
+                    lowers_left: true
+                },
+                "{goal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_ship_following_the_player_that_leaves_never_counts() {
+        for goal in ALL_GOALS {
+            for source in [RuleSource::Engine, RuleSource::Bible] {
+                assert_eq!(
+                    departure(goal, true, source),
+                    Departure::default(),
+                    "{goal:?} {source:?}"
+                );
+            }
         }
     }
 

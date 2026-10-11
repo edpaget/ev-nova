@@ -49,7 +49,9 @@ pub struct SpecialShips {
     /// Where they are (+0x10).
     pub system: ShipSystem,
     /// How many are left to spawn or still alive (+0x6): its `ShipCount`
-    /// at accept, one fewer for each destroyed.
+    /// at accept, one fewer for each destroyed, and one fewer for each
+    /// that leaves the system as the ships-left rule says
+    /// ([`RuleKey::LeftRespawn`](crate::RuleKey::LeftRespawn)).
     pub left: i16,
     /// How many of those that come in later have come since the timer
     /// last restarted (+0x2e).
@@ -69,6 +71,8 @@ pub struct SpecialShips {
     pub boarded: i16,
     /// How many have been disabled (+0x2c).
     pub disabled: i16,
+    /// How many of a chase-off goal's have left the system (+0x30).
+    pub chased_off: i16,
 }
 
 impl Default for SpecialShips {
@@ -83,6 +87,7 @@ impl Default for SpecialShips {
             destroyed: 0,
             boarded: 0,
             disabled: 0,
+            chased_off: 0,
         }
     }
 }
@@ -224,7 +229,7 @@ impl SpecialShips {
     /// `STR#` in `strings`, or empty (@0xa1195-0xa1358). Ships left are
     /// their `ShipCount`, and they have all arrived but for a `ShipStart`
     /// of 1 (@0xa0b39-0xa0b46, @0xa1468-0xa147d). None have been
-    /// destroyed, boarded or disabled (@0xa1c35-0xa1c59).
+    /// destroyed, boarded, disabled or chased off (@0xa1c35-0xa1c59).
     pub fn at_accept(
         ships: &MissionShip,
         facts: &ShipFacts,
@@ -255,6 +260,7 @@ impl SpecialShips {
             destroyed: 0,
             boarded: 0,
             disabled: 0,
+            chased_off: 0,
         }
     }
 }
@@ -756,6 +762,7 @@ mod tests {
                     destroyed: 0,
                     boarded: 0,
                     disabled: 0,
+                    chased_off: 0,
                 },
                 "{start}"
             );
@@ -839,6 +846,14 @@ mod tests {
         assert_eq!(ships.system, ShipSystem::Nowhere);
         assert_eq!((ships.left, ships.arrived, ships.appear), (0, 0, -1));
         assert!(ships.name.is_empty() && ships.subtitle.is_empty());
-        assert_eq!((ships.destroyed, ships.boarded, ships.disabled), (0, 0, 0));
+        assert_eq!(
+            (
+                ships.destroyed,
+                ships.boarded,
+                ships.disabled,
+                ships.chased_off
+            ),
+            (0, 0, 0, 0)
+        );
     }
 }

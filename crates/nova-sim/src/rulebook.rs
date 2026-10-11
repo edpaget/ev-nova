@@ -99,6 +99,8 @@
 //! | [`MissionStellarDistance`](RuleKey::MissionStellarDistance) | `mission_stellar_distance` | a random stellar is distant from an origin in a visible system when its system is not at the origin's place, neither system's own Con links reach a system at the other's place, and every system at its system's place lists it; with no origin, as availability asks, only by that last test; from an origin of no visible system nothing is distant (`_StellarsAreDistant` @0x9cb9-0x9ef6, the co-located chain walk @0x9e60-0x9ee4; see [`mission`](crate::mission)) | it is in another system that the visible map does not link with the origin's either way, and nothing is tested with no origin or an origin of no visible system\* |
 //! | [`MissionStellarIdentity`](RuleKey::MissionStellarIdentity) | `mission_stellar_identity` | a mission's destination or return is the stellar docked at when their IDs match, or when both have the same `xPos` and `yPos` and the same name, in any system (`_StellarsAreIdentical` @0xab35-0xac90, called by `_MissionLandCargoCheck` @0x9edfd, @0x9f01d and `_MissionLandCheck` @0xa1a37; see [`mission`](crate::mission)) | only the stellar of that ID, as `TravelStel` and `ReturnStel` each name one stellar by ID |
 //! | [`LegalRecords`](RuleKey::LegalRecords) | `legal_records` | one record a system (`_playerRecord`), read in the player's system (`_HandlePlayerDockRequest` @0x67903, `_IsMissionAvailable` @0x9b59d, `_DoTradeDialog` @0x5dc17; see [`legal`](crate::legal)) | one record a government, read through the system's (landing: the stellar's) government |
+//! | [`LeftRespawn`](RuleKey::LeftRespawn) | `left_respawn` | only a chase-off goal's ship (`ShipGoal` 6) that leaves the system lowers its mission's ships left, so a ship of another goal comes back at the next setup (`_LowLevelAIHandler` @0x85983-0x859aa; see [`mission::goals`](crate::mission::goals)) | any departed mission ship not of `ShipSyst` -6 lowers its ships left, and is not brought back\* |
+//! | [`LandedLeaves`](RuleKey::LandedLeaves) | `landed_leaves` | a mission ship that lands does not leave the system, as the original's waits at the stellar (`_HighLevelAIHandler` @0x8dadc-0x8db5a), so the engine taking it out counts nothing and it comes back at the next setup (see [`story`](crate::story)) | it leaves the system, counted as one that jumped out\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -109,7 +111,8 @@
 //! `script_sound`, `ship_info_rounding`, `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
-//! `mission_stellar_draw`, `mission_stellar_distance` or `comm_quote`
+//! `mission_stellar_draw`, `mission_stellar_distance`, `left_respawn`,
+//! `landed_leaves` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -1231,6 +1234,29 @@ rule_keys! {
     /// system's government, and at a landing through the stellar's (see
     /// [`legal`](crate::legal)). Both stores are always written.
     LegalRecords => "legal_records",
+    /// Which mission ships that leave the system lower their mission's
+    /// ships left, so they are not brought in again. By the engine, as
+    /// the original counts them, only a chase-off goal's (`ShipGoal` 6):
+    /// a ship of any other goal that jumps out keeps its ships left and
+    /// comes back at the next setup (`_LowLevelAIHandler`
+    /// @0x85983-0x859aa). By the other reading, every departed mission
+    /// ship lowers its ships left and is not brought back. Under both, a
+    /// ship of a mission whose ships follow the player (`ShipSyst` -6)
+    /// counts nothing (@0x8597c-0x85981), and only a chase-off goal's
+    /// counts chased off. The Bible says nothing of it, so the other
+    /// reading is the intended behaviour, not anything the Bible says
+    /// (see [`mission::goals`](crate::mission::goals)).
+    LeftRespawn => "left_respawn",
+    /// Whether a mission ship that lands leaves the system, for the
+    /// counts of [`RuleKey::LeftRespawn`]. By the engine, no: in the
+    /// original an AI ship that lands stays in the system, waiting at the
+    /// stellar (`_HighLevelAIHandler` @0x8dadc-0x8db5a), and only its
+    /// later jump out counts, so the ship the engine takes out as it
+    /// lands counts nothing. By the other reading, it leaves as one that
+    /// jumped out does. The Bible says nothing of it, so the other
+    /// reading is the intended behaviour, not anything the Bible says
+    /// (see [`story`](crate::story)).
+    LandedLeaves => "landed_leaves",
 }
 
 impl RuleKey {
@@ -1398,7 +1424,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1438,7 +1464,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1460,7 +1486,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1485,7 +1511,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1511,7 +1537,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(5),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1531,7 +1557,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1551,7 +1577,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1561,13 +1587,29 @@ mod tests {
     }
 
     #[test]
+    fn the_mission_ship_departure_rules_are_found_by_their_keys_and_read_the_engine() {
+        for (rule, key) in [
+            (RuleKey::LeftRespawn, "left_respawn"),
+            (RuleKey::LandedLeaves, "landed_leaves"),
+        ] {
+            assert_eq!(rule.key(), key);
+            assert_eq!(RuleKey::from_key(key), Some(rule));
+            assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        }
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::LandedLeaves));
+    }
+
+    #[test]
     fn the_legal_records_rule_is_found_by_its_key_and_reads_the_engine() {
         assert_eq!(RuleKey::LegalRecords.key(), "legal_records");
         assert_eq!(
             RuleKey::from_key("legal_records"),
             Some(RuleKey::LegalRecords)
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::LegalRecords));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(2),
+            Some(&RuleKey::LegalRecords)
+        );
         assert_eq!(
             Rulebook::default().source_for(RuleKey::LegalRecords),
             RuleSource::Engine
@@ -1664,7 +1706,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -1803,7 +1845,9 @@ mod tests {
                 RuleKey::MissionStellarDraw,
                 RuleKey::MissionStellarDistance,
                 RuleKey::MissionStellarIdentity,
-                RuleKey::LegalRecords
+                RuleKey::LegalRecords,
+                RuleKey::LeftRespawn,
+                RuleKey::LandedLeaves
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");

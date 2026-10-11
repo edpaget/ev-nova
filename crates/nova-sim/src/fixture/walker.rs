@@ -23,11 +23,11 @@
 //!   mission's special ships as meeting its ship goal in flight would,
 //!   then checks its goals as the flight does, so its `ShipDoneText`,
 //!   `OnShipDone` and auto-abort run (the session's `meet_ship_goal`):
-//!   destroyed, disabled, boarded or seen. For an escort goal it first
-//!   lands at the mission's destination, when it is not reached and is
-//!   not its return, then at its return, as `deliver` does, and brings
-//!   the escorts in there, where the `deliver` after it docks again and
-//!   completes the mission with them.
+//!   destroyed, disabled, boarded, seen or chased off. For an escort
+//!   goal it first lands at the mission's destination, when it is not
+//!   reached and is not its return, then at its return, as `deliver`
+//!   does, and brings the escorts in there, where the `deliver` after it
+//!   docks again and completes the mission with them.
 //! - **`pass <n> days`** ([`Step::PassDays`]) takes off, when docked, then
 //!   lets `n` days go by ([`Session::let_days_pass`]): the take-off passes
 //!   its own days by the rules, on top of `n`. The walker stays in flight,
@@ -208,7 +208,7 @@ pub enum Fault {
     /// It has no return stellar, so no landing completes it.
     Undeliverable,
     /// It has no ship goal `meet goal` meets: no ships, or no goal, or a
-    /// goal to chase them off.
+    /// goal code it does not read.
     NoShipGoal,
 }
 

@@ -455,6 +455,19 @@ fn meeting_a_destroy_goal_lets_the_mission_be_delivered() {
 }
 
 #[test]
+fn meeting_a_chase_off_goal_lets_the_mission_be_delivered() {
+    let catalog = hunt(6, -1);
+    let mut session = docked(&catalog);
+    StoryWalker::new(&catalog)
+        .walk(
+            &mut session,
+            &[Step::Take(A), Step::MeetGoal(A), Step::Deliver(A)],
+        )
+        .expect("walks");
+    assert!(held(&session).is_empty(), "completed");
+}
+
+#[test]
 fn meeting_an_escort_goal_lands_at_the_return_and_brings_the_escorts_in_there() {
     let catalog = hunt(3, 130);
     let mut session = docked(&catalog);

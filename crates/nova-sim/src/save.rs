@@ -69,8 +69,8 @@
 //! - Version 22: adds each active mission's special ships (`ships`). An
 //!   older save kept none of their state, so the upgrade gives each
 //!   mission none left, nowhere, with no timer and no name, and none
-//!   destroyed, boarded or disabled: an old save's mission spawns no
-//!   ship, and its `<SN>` reads empty.
+//!   destroyed, boarded, disabled or chased off: an old save's mission
+//!   spawns no ship, and its `<SN>` reads empty.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -119,7 +119,8 @@
 //! 130}`, `"follows_player"`, or `null` for nowhere), how many are `left`
 //! and have `arrived`, their `appear` timer (-1 when it does not run),
 //! their drawn `name` and `subtitle`, and how many have been
-//! `destroyed`, `boarded` and `disabled`. A slot past 15 is unusable.
+//! `destroyed`, `boarded`, `disabled` and `chased_off`. A slot past 15
+//! is unusable.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -631,6 +632,7 @@ struct SavedShips {
     destroyed: i16,
     boarded: i16,
     disabled: i16,
+    chased_off: i16,
 }
 
 impl From<&SpecialShips> for SavedShips {
@@ -649,6 +651,7 @@ impl From<&SpecialShips> for SavedShips {
             destroyed: ships.destroyed,
             boarded: ships.boarded,
             disabled: ships.disabled,
+            chased_off: ships.chased_off,
         }
     }
 }
@@ -669,6 +672,7 @@ impl From<SavedShips> for SpecialShips {
             destroyed: saved.destroyed,
             boarded: saved.boarded,
             disabled: saved.disabled,
+            chased_off: saved.chased_off,
         }
     }
 }
@@ -1070,8 +1074,8 @@ fn system_records(save: &mut Value) {
 }
 
 /// Version 21 to 22: each active mission with no special ships left,
-/// nowhere, with no timer and no name, none of them destroyed, boarded
-/// or disabled.
+/// nowhere, with no timer and no name, none of them destroyed, boarded,
+/// disabled or chased off.
 fn mission_ships(save: &mut Value) {
     let none = serde_json::json!({
         "system": null,
@@ -1082,7 +1086,8 @@ fn mission_ships(save: &mut Value) {
         "subtitle": "",
         "destroyed": 0,
         "boarded": 0,
-        "disabled": 0
+        "disabled": 0,
+        "chased_off": 0
     });
     add_to_each(save, "missions", "ships", &none);
 }
@@ -1391,6 +1396,7 @@ mod tests {
                     destroyed: 2,
                     boarded: 1,
                     disabled: 4,
+                    chased_off: 5,
                 },
             },
         );
@@ -2822,7 +2828,8 @@ mod tests {
                         "subtitle": "Hunter",
                         "destroyed": 2,
                         "boarded": 1,
-                        "disabled": 4
+                        "disabled": 4,
+                        "chased_off": 5
                     }
                 },
                 {
@@ -2848,7 +2855,8 @@ mod tests {
                         "subtitle": "",
                         "destroyed": 0,
                         "boarded": 0,
-                        "disabled": 0
+                        "disabled": 0,
+                        "chased_off": 0
                     }
                 }
             ])
@@ -2911,6 +2919,7 @@ mod tests {
         assert_eq!(active.mission, MissionId(140));
         assert_eq!(active.ships, SpecialShips::default());
         assert_eq!(active.ships.system, ShipSystem::Nowhere);
+        assert_eq!(active.ships.chased_off, 0);
         assert_eq!(decode(&encode(&pilot)), Ok(pilot));
     }
 
@@ -2922,6 +2931,10 @@ mod tests {
         assert_eq!(
             back.missions().get(2).map(|active| active.ships.system),
             Some(ShipSystem::At(SystemId(131)))
+        );
+        assert_eq!(
+            back.missions().get(2).map(|active| active.ships.chased_off),
+            Some(5)
         );
     }
 

@@ -139,7 +139,7 @@ fn a_stock_mission_of_each_ship_goal_has_it_met_by_the_walker() {
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
     let missions = data.missions();
-    for goal in 0..=5 {
+    for goal in 0..=6 {
         let record = missions
             .iter()
             .find(|record| {
