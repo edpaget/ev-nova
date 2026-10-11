@@ -64,7 +64,9 @@
 //! - **A `LinkSyst` fleet** ([`link_fleet`]) draws `Rand(256)`, `flët`
 //!   `128 + slot`, and comes only when that fleet's `LinkSyst` matches.
 //! - **A fleet** ([`fleet`]) is its lead, with the fleet's government and
-//!   its ship's `InherentAI`, and `Min + Rand(Max - Min + 1)` of each
+//!   its ship's `InherentAI` (or the AI type its caller gives: the
+//!   escort-strength timer's fleet is led by an interceptor, see
+//!   [`strength`](crate::traffic::strength)), and `Min + Rand(Max - Min + 1)` of each
 //!   escort type, each at the lead's place plus `Rand(300) - 150` each way,
 //!   with its heading and velocity, its own ship's `InherentAI`, escorting
 //!   the lead. Fleets always arrive, at setup too: by hyperspace, or out
@@ -463,7 +465,7 @@ fn named_fleet(
     let Some(id) = pick(&appearing, chance) else {
         return false;
     };
-    fleet(table, id, gate, stellars, chance, out);
+    fleet(table, id, gate, stellars, None, chance, out);
     true
 }
 
@@ -563,7 +565,7 @@ pub fn link_fleet(
     let slot = chance.below(FLEET_SLOTS) as i16;
     let id = FleetId(FIRST_FLEET_ID + slot);
     if table.link_fleets.contains(&id) {
-        fleet(table, id, gate, stellars, chance, out);
+        fleet(table, id, gate, stellars, None, chance, out);
     }
 }
 
@@ -571,12 +573,15 @@ pub fn link_fleet(
 /// `stellars` or by hyperspace, then its escorts whose ship type's
 /// `AppearOn` holds by `gate`, each near the lead by hyperspace or at the
 /// lead's gate; nothing, and no draw, when the fleet's own `AppearOn`
-/// does not.
+/// does not. The lead flies as `lead_ai` when given, in place of its
+/// ship's `InherentAI` (`_HyperSpawnFleet`'s third argument,
+/// @0x41d5d-0x41d69); its escorts always fly as their own.
 pub fn fleet(
     table: &SpawnTable,
     id: FleetId,
     gate: Gate,
     stellars: Stellars,
+    lead_ai: Option<AiType>,
     chance: &mut (impl Chance + ?Sized),
     out: &mut Vec<NewShip>,
 ) {
@@ -604,7 +609,7 @@ pub fn fleet(
     out.push(NewShip {
         ship: lead_ship,
         govt: record.govt,
-        ai_type: AiType::from_raw(kind.inherent_ai),
+        ai_type: lead_ai.unwrap_or_else(|| AiType::from_raw(kind.inherent_ai)),
         lead: None,
         state,
         entry,
@@ -1402,6 +1407,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             Stellars::NONE,
+            None,
             &mut chance,
             &mut out,
         );
@@ -1418,6 +1424,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             Stellars::NONE,
+            None,
             &mut chance,
             &mut out,
         );
@@ -1434,6 +1441,7 @@ mod tests {
             FleetId(150),
             Gate::FRESH,
             Stellars::NONE,
+            None,
             &mut Draws::of(&[]),
             &mut out,
         );
@@ -1445,6 +1453,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             Stellars::NONE,
+            None,
             &mut Draws::of(&[]),
             &mut out,
         );
@@ -1485,6 +1494,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             Stellars::NONE,
+            None,
             &mut crate::NeverFires,
             &mut out,
         );
@@ -1493,6 +1503,42 @@ mod tests {
             out.iter().map(|ship| ship.lead).collect::<Vec<_>>(),
             [None, None, Some(1), Some(1)]
         );
+    }
+
+    #[test]
+    fn a_lead_ai_given_flies_the_lead_so_and_leaves_its_escorts_their_own() {
+        let flown = |lead_ai| {
+            let mut out = Vec::new();
+            let mut chance = Draws::of(&[]);
+            fleet(
+                &table(),
+                FleetId(141),
+                Gate::FRESH,
+                Stellars::NONE,
+                lead_ai,
+                &mut chance,
+                &mut out,
+            );
+            (
+                out.iter().map(|ship| ship.ai_type).collect::<Vec<_>>(),
+                chance.asked,
+            )
+        };
+        let (own, own_draws) = flown(None);
+        assert_eq!(
+            own,
+            [
+                AiType::BraveTrader,
+                AiType::Interceptor,
+                AiType::Interceptor
+            ]
+        );
+        let (led, led_draws) = flown(Some(AiType::Warship));
+        assert_eq!(
+            led,
+            [AiType::Warship, AiType::Interceptor, AiType::Interceptor]
+        );
+        assert_eq!(led_draws, own_draws, "the same draws");
     }
 
     #[test]
@@ -1603,6 +1649,7 @@ mod tests {
             FleetId(141),
             gate,
             Stellars::NONE,
+            None,
             &mut crate::NeverFires,
             &mut out,
         );
@@ -1622,6 +1669,7 @@ mod tests {
             FleetId(140),
             gate,
             Stellars::NONE,
+            None,
             &mut chance,
             &mut out,
         );
@@ -1637,6 +1685,7 @@ mod tests {
             FleetId(140),
             allowing().world.gate(),
             Stellars::NONE,
+            None,
             &mut crate::NeverFires,
             &mut out,
         );
@@ -1663,6 +1712,7 @@ mod tests {
             FleetId(141),
             refusing_7().world.gate(),
             Stellars::NONE,
+            None,
             &mut chance,
             &mut out,
         );
@@ -1673,6 +1723,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             Stellars::NONE,
+            None,
             &mut chance,
             &mut out,
         );
@@ -1683,6 +1734,7 @@ mod tests {
             FleetId(141),
             allowing().world.gate(),
             Stellars::NONE,
+            None,
             &mut chance,
             &mut out,
         );
@@ -1798,6 +1850,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             Stellars::NONE,
+            None,
             &mut chance,
             &mut out,
         );
@@ -2612,6 +2665,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             among(&sites),
+            None,
             &mut chance,
             &mut out,
         );
@@ -2643,6 +2697,7 @@ mod tests {
             FleetId(141),
             Gate::FRESH,
             among(&sites),
+            None,
             &mut chance,
             &mut out,
         );
@@ -2707,6 +2762,7 @@ mod tests {
                         FleetId(141),
                         Gate::FRESH,
                         stellars,
+                        None,
                         chance,
                         &mut out,
                     );
