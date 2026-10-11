@@ -910,6 +910,26 @@ mod tests {
     }
 
     #[test]
+    fn a_move_never_arms_the_escort_strength_timer_by_either_reading() {
+        let catalog = moving();
+        for reading in READINGS {
+            for text in ["M131", "N130"] {
+                for mut session in [flying(&catalog), landed(&catalog)] {
+                    session = session.with_rules(arrival(reading));
+                    run(&mut session, text);
+                    let mut chance = crate::testkit::Draws::of(&[]);
+                    let _ = session.settle_script(&catalog, &mut chance);
+                    assert!(
+                        !chance.asked.contains(&30),
+                        "{reading:?} {text}: {:?}",
+                        chance.asked
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_move_in_flight_lets_go_of_the_boarding_and_the_hail_by_either_reading() {
         let catalog = moving();
         for reading in READINGS {

@@ -7595,6 +7595,8 @@ mod tests {
     #[test]
     fn the_first_frame_after_take_off_draws_none_of_the_ships_from_before_the_landing() {
         let mut draws = placed(850, 650, 90).to_vec();
+        // The take-off's escort-strength seed, then its population.
+        draws.push(0);
         draws.extend(placed(650, 850, 90));
         let (_, chance) = scripted(&draws);
         let mut view = FlightView::new(trafficked_over_128())
@@ -7622,7 +7624,10 @@ mod tests {
 
     #[test]
     fn a_ship_type_first_flown_at_take_off_is_drawn_with_its_sprite_at_once() {
-        let (_, chance) = scripted(&placed(650, 850, 90));
+        // The take-off's escort-strength seed, then its population.
+        let mut draws = vec![0];
+        draws.extend(placed(650, 850, 90));
+        let (_, chance) = scripted(&draws);
         let mut view = FlightView::new(trafficked_over_128())
             .with_chance(chance)
             .with_behaviour(Rc::new(Still));

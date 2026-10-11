@@ -445,7 +445,7 @@ use crate::targeting::{self, TargetPick};
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Npc, NpcId};
 use crate::traffic::table::SpawnTable;
-use crate::traffic::{Traffic, World};
+use crate::traffic::{Traffic, World, strength};
 use crate::wares::DayRolls;
 
 /// A jump, from J being accepted until the ship arrives.
@@ -1298,7 +1298,7 @@ impl Session {
                         pilot: &facts,
                         fleet: &self.pilot.escorts,
                     },
-                    escort_holds: 0,
+                    escort_holds: strength::escort_holds(self.traffic.npcs(), &self.ships),
                 };
                 let strikes = std::mem::take(&mut self.strikes);
                 let last = self.last_npc();
@@ -1334,7 +1334,7 @@ impl Session {
                 pilot: self,
                 fleet: &self.pilot.escorts,
             },
-            escort_holds: 0,
+            escort_holds: strength::escort_holds(self.traffic.npcs(), &self.ships),
         }
     }
 
@@ -1934,6 +1934,10 @@ impl Session {
     /// Before its days it raises [`StoryEvent::Explored`] for each system
     /// passed and the one arrived in, as the original explores their
     /// nebulae first; [`StoryEvent::EnteredSystem`] follows the days.
+    ///
+    /// Its first draw on `chance` arms the escort-strength timer (see
+    /// [`strength`]), before the days, the roll
+    /// table and the population, as the original does (@0x6c013).
     pub fn arrive(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -1944,6 +1948,9 @@ impl Session {
         };
         self.jump = None;
         let mark = self.story_mark();
+        // The escort-strength timer armed before the roll table, the days
+        // and the setup (@0x6c013).
+        self.arm_strength_timer(chance);
         self.take_jump_cost(chance);
         let (mut from, mut at) = (self.pilot.system, first);
         let mut hops = 0;
@@ -1992,6 +1999,13 @@ impl Session {
         };
         self.enter_system(Entry::Jump { hops }, entered, catalog, catalog, chance);
         Some(self.pilot.system)
+    }
+
+    /// Arms the escort-strength timer on `chance`, as a take-off, a gate
+    /// exit and a hyperspace arrival do (see
+    /// [`strength`]).
+    fn arm_strength_timer(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        self.traffic.arm_strength_timer(chance);
     }
 
     /// Uses a jump's fuel and lets its days go by ([`Session::pass_jump_days`]).
@@ -2296,7 +2310,11 @@ impl Session {
     /// [`SimMessage::ExitedHypergate`], and no [`SimMessage::Arrived`].
     /// The ship enters the system by the gate's row of the table in the
     /// `entry` module, which keeps a held `P` sound and lets go of the
-    /// strikes, the target, the boarding and the hail.
+    /// strikes, the target, the boarding and the hail. Just before, after
+    /// the exit's roll or the days, the escort-strength timer is armed on
+    /// `chance` (see [`strength`]), as a gate's
+    /// exit joins the take-off's path in the original
+    /// (`_HandlePlayerDockRequest` @0x66f40, @0x6706f).
     pub fn enter_wormhole(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -2336,6 +2354,9 @@ impl Session {
                 placed
             }
         };
+        // A gate's exit joins the take-off's path before its seed
+        // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f).
+        self.arm_strength_timer(chance);
         let entered = Arrival {
             system,
             sites: self.read_sites(catalog, system),
@@ -2426,7 +2447,9 @@ impl Session {
     /// or sold, four if a ship was bought, and the take-off's own day
     /// (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa-0x6020e,
     /// `_PlayerLandOnStellar` @0x63440). The wage is a day's whatever the
-    /// days. The population rolls on `chance` after the days.
+    /// days. After every day the escort-strength timer is armed on
+    /// `chance` (see [`strength`], @0x6706f),
+    /// and the population rolls on it last.
     pub fn take_off(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -2458,9 +2481,12 @@ impl Session {
             system: self.pilot.system,
         });
         self.restock_fleet();
-        // The old computer ships deleted and the system set up afresh
-        // before the first frame (`_DeleteAllComputerShips` @0x67096,
-        // `_SetupShipsInSystem` @0x674c2), the escorts among them.
+        // The escort-strength timer armed after every day of the stay
+        // (@0x6706f), then the old computer ships deleted and the system
+        // set up afresh before the first frame (`_DeleteAllComputerShips`
+        // @0x67096, `_SetupShipsInSystem` @0x674c2), the escorts among
+        // them.
+        self.arm_strength_timer(chance);
         self.populate(catalog, chance);
         self.sounds.push(SimSound::TookOff);
         self.save_due = true;
@@ -11705,12 +11731,13 @@ mod tests {
         let spawns = [5, 11, 3, 17, 7, 23, 2, 13, 19, 29, 31, 37, 41];
         let mut session = Session::start(&catalog).expect("starts");
         land_now(&mut session).expect("lands on planet 128");
-        let mut chance = QueuedLog::of(&[[99, 99].as_slice(), &spawns].concat());
+        // The day's two rolls, the escort-strength seed, then the spawns.
+        let mut chance = QueuedLog::of(&[[99, 99, 0].as_slice(), &spawns].concat());
         session.take_off(&catalog, &mut chance).expect("took off");
         assert_eq!(
-            chance.log[..2],
-            [Asked::Fires(30), Asked::Fires(40)],
-            "the day's hire then buy roll first"
+            chance.log[..3],
+            [Asked::Fires(30), Asked::Fires(40), Asked::Below(30)],
+            "the day's hire then buy roll first, then the seed"
         );
         assert!(chance.log.len() > 2, "then the population draws");
         assert!(
@@ -11863,12 +11890,11 @@ mod tests {
     fn arriving_brings_in_the_fleet_linked_to_the_new_systems_government() {
         let catalog = fleeted();
         let mut session = Session::start(&catalog).expect("starts");
-        jump_with(
-            &mut session,
-            &catalog,
-            131,
-            &mut Draws::arriving(&[1, 0, 3, 0, 2]),
-        );
+        // The escort-strength seed, then the roll table and the fleet.
+        let mut seeded: Vec<u32> = vec![0];
+        seeded.extend(std::iter::repeat_n(99, crate::mission::ROLLED));
+        seeded.extend([1, 0, 3, 0, 2]);
+        jump_with(&mut session, &catalog, 131, &mut Draws::of(&seeded));
         assert_eq!(fleet_of(&session), a_fleet_led_by(0));
         session.populate(&catalog, &mut linked_fleet_draws(2));
         assert_eq!(fleet_of(&session), [], "linked to another government");
@@ -17561,14 +17587,19 @@ mod tests {
         }
     }
 
+    /// The escort-strength timer's seed, `Rand(30)`.
+    const SEED: Draw = Draw::Below(30);
+
     #[test]
     fn a_jumps_days_draw_before_the_population_of_the_system_arrived_in() {
         let catalog = with_event(busy(catalog()));
         let mut session = Session::start(&catalog).expect("starts");
         let mut chance = Logged::default();
         jump_with(&mut session, &catalog, 131, &mut chance);
+        // The seed first (@0x6c013), then the days, the roll table and the
+        // population.
         let expected = [
-            vec![Draw::Fires(35)],
+            vec![SEED, Draw::Fires(35)],
             vec![Draw::Roll(100); crate::mission::ROLLED],
             population_draws(&catalog, 131),
         ]
@@ -17584,7 +17615,7 @@ mod tests {
         session
             .enter_hypergate(Some(SystemId(131)), &catalog, &mut chance)
             .expect("enters");
-        let expected = [vec![Draw::Fires(35)], population_draws(&catalog, 131)].concat();
+        let expected = [vec![Draw::Fires(35), SEED], population_draws(&catalog, 131)].concat();
         assert_eq!(chance.0, expected);
     }
 
@@ -17596,7 +17627,7 @@ mod tests {
         session
             .enter_hypergate(Some(SystemId(132)), &catalog, &mut chance)
             .expect("enters");
-        let expected = [vec![Draw::Roll(360)], population_draws(&catalog, 132)].concat();
+        let expected = [vec![Draw::Roll(360), SEED], population_draws(&catalog, 132)].concat();
         assert_eq!(chance.0, expected);
     }
 
@@ -17608,8 +17639,134 @@ mod tests {
         session
             .enter_wormhole(&catalog, &mut chance)
             .expect("enters");
-        let expected = [vec![Draw::Roll(2)], population_draws(&catalog, 131)].concat();
+        let expected = [vec![Draw::Roll(2), SEED], population_draws(&catalog, 131)].concat();
         assert_eq!(chance.0, expected);
+    }
+
+    #[test]
+    fn a_take_off_draws_the_seed_after_the_stays_days_and_before_the_population() {
+        let catalog = with_event(busy(catalog()));
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        // Two escorts changed (a day before the wage), an outfit traded
+        // and a ship bought (five days after it), and the take-off's day.
+        session.stay.escorts_changed = 2;
+        session.stay.outfit_traded = true;
+        session.stay.ship_bought = true;
+        let mut chance = Logged::default();
+        session.take_off(&catalog, &mut chance).expect("takes off");
+        let expected = [
+            vec![Draw::Fires(35); 7],
+            vec![SEED],
+            population_draws(&catalog, 130),
+        ]
+        .concat();
+        assert_eq!(chance.0, expected);
+    }
+
+    // The escort-strength timer.
+
+    /// [`busy`] [`catalog`] with escort classes 150 (a wimpy trader of 60
+    /// tons), 151 (a brave trader of 250) and 152 (a warship of 300), and
+    /// `flët` 382, led by ship 160, and 383, led by ship 161, which link
+    /// to no system.
+    fn strong() -> FakePilotCatalog {
+        let mut catalog = busy(catalog());
+        catalog.ship_records.extend([
+            holds_record(150, 60, 1),
+            holds_record(151, 250, 2),
+            holds_record(152, 300, 3),
+            ship(160, FAST),
+            ship(161, FAST),
+        ]);
+        let fleet = |id, lead| FleetRecord {
+            id: FleetId(id),
+            lead: Some(ShipId(lead)),
+            escorts: Vec::new(),
+            govt: None,
+            link_syst: 0,
+            appear_on: Test::default(),
+        };
+        catalog.fleets = vec![fleet(382, 160), fleet(383, 161)];
+        catalog
+    }
+
+    /// [`strong`]'s session with an escort of each of `classes`, landed on
+    /// planet 128 and taken off, the timer armed to 59 ([`NeverFires`]).
+    fn escorted_take_off(catalog: &FakePilotCatalog, classes: &[i16]) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.pilot.escorts = classes.iter().map(|&id| fleet_escort(id)).collect();
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        session
+            .take_off(catalog, &mut NeverFires)
+            .expect("takes off");
+        session
+    }
+
+    /// The AI types of `session`'s NPCs of ship `id`.
+    fn flying_as(session: &Session, id: i16) -> Vec<AiType> {
+        session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.ship == ShipId(id))
+            .map(|npc| npc.ai_type)
+            .collect()
+    }
+
+    #[test]
+    fn escorts_above_49_tons_bring_fleet_382_on_the_60th_tick_after_a_take_off() {
+        let catalog = strong();
+        let mut session = escorted_take_off(&catalog, &[150]);
+        assert_eq!(flying_as(&session, 150).len(), 1, "the escort is out");
+        for _ in 0..59 {
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        }
+        assert_eq!(flying_as(&session, 160), []);
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(flying_as(&session, 160), [AiType::Interceptor]);
+        assert_eq!(flying_as(&session, 161), []);
+    }
+
+    #[test]
+    fn escorts_above_199_tons_bring_fleet_383() {
+        let catalog = strong();
+        for classes in [&[151][..], &[150, 150, 150, 150]] {
+            let mut session = escorted_take_off(&catalog, classes);
+            for _ in 0..60 {
+                session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            }
+            assert_eq!(
+                flying_as(&session, 161),
+                [AiType::Interceptor],
+                "{classes:?}"
+            );
+            assert_eq!(flying_as(&session, 160), []);
+        }
+    }
+
+    #[test]
+    fn a_warship_escort_or_none_brings_nothing() {
+        let catalog = strong();
+        for classes in [&[152][..], &[]] {
+            let mut session = escorted_take_off(&catalog, classes);
+            for _ in 0..100 {
+                session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            }
+            assert_eq!(flying_as(&session, 160), [], "{classes:?}");
+            assert_eq!(flying_as(&session, 161), [], "{classes:?}");
+        }
+    }
+
+    #[test]
+    fn a_flight_never_taken_off_or_arrived_in_is_never_timed() {
+        let catalog = strong();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.pilot.escorts = vec![fleet_escort(151)];
+        session.populate(&catalog, &mut NeverFires);
+        for _ in 0..100 {
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        }
+        assert_eq!(flying_as(&session, 161), []);
     }
 
     // The galaxy overlay.
