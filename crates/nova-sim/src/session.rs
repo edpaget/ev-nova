@@ -13233,6 +13233,16 @@ mod tests {
     }
 
     #[test]
+    fn the_play_area_is_the_originals_smallest_until_the_view_says() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        assert_eq!(session.play_area(), crate::cloak::DEFAULT_PLAY_AREA);
+        let wide = crate::cloak::Area::centred(Vec2::ZERO, 2000.0, 100.0);
+        session.set_play_area(wide);
+        assert_eq!(session.play_area(), wide);
+    }
+
+    #[test]
     fn a_ships_sprite_width_and_height_inset_the_play_area() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);

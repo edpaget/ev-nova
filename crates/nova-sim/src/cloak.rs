@@ -179,13 +179,11 @@ impl Cloak {
 
     /// Starts uncloaking, as `_DoShipUncloak` does (see the module docs).
     pub fn uncloak(&mut self) {
-        if !self.is_cloaked() {
-            return;
-        }
-        if self.fade > 0.0 {
+        // The original sets direction -1 for a fade above 0, else stops a
+        // fade going in (@0xdfda-0xdff8); a cloaked ship's fade is above 8,
+        // so only the first can happen.
+        if self.is_cloaked() {
             self.direction = -1;
-        } else if self.direction > 0 {
-            self.direction = 0;
         }
     }
 
@@ -510,6 +508,12 @@ mod tests {
         assert_eq!(cloak, at(0.0, 0));
         cloak.step(false);
         assert_eq!(cloak, at(0.0, 0), "seen and holding");
+        let mut onto_0 = at(0.75, -1);
+        onto_0.step(false);
+        assert_eq!(onto_0, at(0.0, 0), "stops on reaching 0");
+        let mut onto_32 = at(31.25, 1);
+        onto_32.step(false);
+        assert_eq!(onto_32, at(FADE_FULL, 0), "stops on reaching 32");
     }
 
     #[test]
@@ -534,6 +538,9 @@ mod tests {
         assert_eq!(cloak, at(-0.5, 0), "a drift is not stopped at 0");
         cloak.step(false);
         assert_eq!(cloak, at(-0.5, 0), "nothing to drift");
+        let mut seen = Cloak::default();
+        seen.step(false);
+        assert_eq!(seen, Cloak::default(), "nothing to drift at 0");
         let mut full = at(FADE_FULL, 0);
         full.step(true);
         assert_eq!(full, at(FADE_FULL, 0), "a full cloak holds");
@@ -596,8 +603,16 @@ mod tests {
         let unowned = CloakGear::of(0, &BTreeMap::new(), &outfits);
         assert!(!unowned.device);
         let in_a_later_slot = outfit(301, &[(1, 1), (MOD_CLOAK, 0x0008)]);
-        let later = CloakGear::of(0, &one(301), &[in_a_later_slot]);
+        let later = CloakGear::of(0, &one(301), std::slice::from_ref(&in_a_later_slot));
         assert!(later.device && later.decloaks_when_hit);
+        let twice = outfit(302, &[(MOD_CLOAK, 0x000a), (MOD_CLOAK, 0x000a)]);
+        let both = CloakGear::of(0, &one(302), &[twice]);
+        assert!(
+            both.decloaks_when_hit && both.on_radar,
+            "a bit set twice is set"
+        );
+        let none_held: BTreeMap<OutfitId, u16> = [(OutfitId(301), 0)].into();
+        assert!(!CloakGear::of(0, &none_held, &[in_a_later_slot]).device);
     }
 
     #[test]
@@ -637,6 +652,16 @@ mod tests {
             }
         );
         assert_eq!(Scanner::of(&one(312), &outfits), Scanner::default());
+        let twice = outfit(313, &[(MOD_SCANNER, 0x000b), (MOD_SCANNER, 0x000b)]);
+        assert_eq!(
+            Scanner::of(&one(313), &[twice]),
+            Scanner {
+                on_screen: true,
+                on_radar: true,
+                targets: true,
+            },
+            "a bit set twice is set"
+        );
     }
 
     const CLOAKED: Cloak = Cloak {
@@ -939,6 +964,16 @@ mod tests {
         let shown = |x| on_screen(VIEW, Vec2::new(x, 0.0), 30.0, 30.0);
         assert!(shown(292.0));
         assert!(!shown(293.0));
+    }
+
+    #[test]
+    fn a_sprite_whose_inset_closes_the_view_is_never_on_screen() {
+        // 0.75 x 400 = 300 each side of a 600-wide view leaves nothing.
+        assert!(!on_screen(VIEW, Vec2::ZERO, 400.0, 10.0));
+        assert!(on_screen(VIEW, Vec2::ZERO, 398.0, 10.0));
+        // 0.75 x 268 = 201 each side of a 400-tall view leaves nothing.
+        assert!(!on_screen(VIEW, Vec2::ZERO, 10.0, 268.0));
+        assert!(on_screen(VIEW, Vec2::ZERO, 10.0, 264.0));
     }
 
     #[test]

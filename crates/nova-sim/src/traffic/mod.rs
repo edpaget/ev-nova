@@ -1927,7 +1927,7 @@ mod tests {
 
     #[test]
     fn a_cloaked_ship_keeps_its_cloak_attacking_the_player_from_afar_and_drops_it_close() {
-        let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
+        let mut traffic = with_mission_ship(ZEPHYR, false, 1000.0);
         traffic.npcs[0].cloak = Cloak {
             fade: FADE_FULL,
             direction: 0,
@@ -1946,6 +1946,22 @@ mod tests {
         };
         traffic.tick_in(&attacking, near, &[], &mut Draws::of(&[]));
         assert_eq!(traffic.npcs()[0].cloak.direction, -1, "close in to fight");
+    }
+
+    #[test]
+    fn a_cloaked_ship_attacking_another_npc_measures_from_it() {
+        for (x, kept) in [(1300.0, true), (1100.0, false)] {
+            let mut traffic = with_mission_ship(ZEPHYR, false, 1000.0);
+            traffic.bring_in(vec![mission_ship(-1, x)]);
+            traffic.npcs[0].cloak = Cloak {
+                fade: FADE_FULL,
+                direction: 0,
+            };
+            let attacking = Recording::deciding(Goal::Attack(ShipRef::Npc(NpcId(1))));
+            traffic.tick_in(&attacking, World::new(&[]), &[], &mut Draws::of(&[]));
+            let direction = traffic.npcs()[0].cloak.direction;
+            assert_eq!(direction == 0, kept, "{x}: {direction}");
+        }
     }
 
     #[test]
