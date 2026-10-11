@@ -30,6 +30,10 @@ pub struct SoundTable {
     pub alert: Option<SoundId>,
     /// Plays as a `Q` set operator's message is shown in flight.
     pub script_message: Option<SoundId>,
+    /// Plays as the bar's news dialog opens.
+    pub news_open: Option<SoundId>,
+    /// Plays as the bar's news dialog closes.
+    pub news_close: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -59,6 +63,10 @@ impl SoundTable {
     ///   from `snd ` 150 to 154 into `_beepSnd` (@0x1c174), which
     ///   `_PlayGame` plays as it shows a `Q`'s message in flight
     ///   (`_beepSnd[4]`, @0x4657a).
+    /// - `news_open`: 151, `_beepSnd[1]`, which `_DoNewsDialog` plays as
+    ///   it opens (`PlaySound` @0x47f36).
+    /// - `news_close`: 152, `_beepSnd[2]`, which `_DoNewsDialog` plays as
+    ///   it closes (@0x4814e).
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -69,6 +77,8 @@ impl SoundTable {
         button_up: Some(SoundId(601)),
         alert: None,
         script_message: Some(SoundId(154)),
+        news_open: Some(SoundId(151)),
+        news_close: Some(SoundId(152)),
     };
 }
 
@@ -88,5 +98,7 @@ mod tests {
         assert_eq!(table.button_up, Some(SoundId(601)), "Menu button up");
         assert_eq!(table.alert, None, "the system's alert");
         assert_eq!(table.script_message, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.news_open, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.news_close, Some(SoundId(152)), "_beepSnd[2]");
     }
 }
