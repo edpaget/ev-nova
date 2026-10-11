@@ -1,18 +1,20 @@
 //! The bar's news through the whole app: synthetic game data (a `chär`
 //! flying the "Boarder" from Alpha, whose one stellar, a pad at the
 //! centre with a bar, `spöb` flags 0x41; the bar's text; `STR#` 8100 with
-//! one commercial and `STR#` 8101 with one story holding a tag-like
-//! `<PN>`, so every draw is fixed) and a synthetic interface file holding
-//! the stock "Spaceport", "Bar" and "News" (`DLOG` 1014, 300 x 230, no
-//! items) dialogs, driven only by window events, with pilots kept in the
-//! in-memory store.
+//! two commercials and `STR#` 8101 with two stories, each holding a
+//! tag-like `<PN>`) and a synthetic interface file holding the stock
+//! "Spaceport", "Bar" and "News" (`DLOG` 1014, 300 x 230, no items)
+//! dialogs, driven only by window events, with pilots kept in the
+//! in-memory store. The app draws on a [`Dial`] the test turns, so each
+//! draw gives the outcome the dial is set to.
 //!
 //! The pilot lands and opens the bar, whose News button (Holovid), or N,
 //! shows the commercial and the story over the bar, `<PN>` left as
 //! written; Escape closes it back to the bar, and News again shows the
-//! same two strings.
+//! same two strings though the dial has turned. Leaving the bar and
+//! opening it again draws the other two.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -46,10 +48,13 @@ use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
 use nova_view::text::fixture::MonoMetrics;
 
-/// The one commercial.
-const COMMERCIAL: &str = "Bibble: the drink of champions.";
-/// The one story, with a tag the news leaves as written.
-const STORY: &str = "<PN> wins the Nova Cup.";
+/// The commercials, `STR#` 8100.
+const COMMERCIALS: [&str; 2] = [
+    "Bibble: the drink of champions.",
+    "Fizz: the drink of runners-up.",
+];
+/// The stories, `STR#` 8101, each with a tag the news leaves as written.
+const STORIES: [&str; 2] = ["<PN> wins the Nova Cup.", "<PN> loses the Nova Cup."];
 
 /// A 1024 x 768 window at scale 1: window pixels are logical units.
 struct FakeWindow;
@@ -233,8 +238,8 @@ fn game_data() -> Rc<GameData> {
         .resource(Spin::TYPE, 1004, None, &spin(1000))
         .resource(RLED, 1000, None, &sheet(1, 40))
         .resource(Desc::TYPE, 10_000, None, &desc("Smoke and quiet talk."))
-        .resource(StrList::TYPE, 8100, None, &str_list(&[COMMERCIAL]))
-        .resource(StrList::TYPE, 8101, None, &str_list(&[STORY]))
+        .resource(StrList::TYPE, 8100, None, &str_list(&COMMERCIALS))
+        .resource(StrList::TYPE, 8101, None, &str_list(&STORIES))
         .resource(
             Interface::TYPE,
             128,
@@ -345,16 +350,17 @@ fn interface() -> InterfaceData {
     InterfaceData::load(&OneFile(fork), Path::new("/Nova-DF.rsrc")).expect("loads")
 }
 
-/// Never fires; every draw is the last outcome.
-struct Nothing;
+/// Never fires; every draw is the outcome the dial is set to, or the
+/// last when there are fewer.
+struct Dial(Rc<Cell<u32>>);
 
-impl Chance for Nothing {
+impl Chance for Dial {
     fn fires(&mut self, _percent: u8) -> bool {
         false
     }
 
     fn below(&mut self, n: u32) -> u32 {
-        n - 1
+        self.0.get().min(n - 1)
     }
 }
 
@@ -362,6 +368,8 @@ struct Game {
     app: App<Rc<GameData>>,
     gpu: RecordingGpu,
     frames: u64,
+    /// The outcome the app's draws give.
+    dial: Rc<Cell<u32>>,
 }
 
 impl Game {
@@ -374,7 +382,8 @@ impl Game {
         keeper
             .save(&Pilot::new(data.as_ref(), "Ada").expect("a pilot"))
             .expect("saved");
-        let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Nothing));
+        let dial = Rc::new(Cell::new(0));
+        let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Dial(Rc::clone(&dial))));
         let screen = start_screen(Rc::clone(&data))
             .with_pilots(Some(keeper), Rc::new(MonoMetrics))
             .with_dialogs(Rc::new(interface()), Rc::new(MonoMetrics))
@@ -383,6 +392,7 @@ impl Game {
             app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),
             frames: 0,
+            dial,
         };
         let at = game
             .app
@@ -506,11 +516,24 @@ fn texts(frame: &Frame) -> Vec<String> {
         .collect()
 }
 
-/// Whether `frame` shows the commercial and the story, `<PN>` as
-/// written, wrapped to the news dialog's lines.
-fn shows_the_news(frame: &Frame) -> bool {
+/// Whether `frame` shows commercial `n` and story `n` and not the
+/// others, `<PN>` as written, wrapped to the news dialog's lines.
+fn shows_the_news(frame: &Frame, n: usize) -> bool {
     let shown = texts(frame).join(" ");
-    shown.contains(COMMERCIAL) && shown.contains(STORY)
+    let other = 1 - n;
+    shown.contains(COMMERCIALS[n])
+        && shown.contains(STORIES[n])
+        && !shown.contains(COMMERCIALS[other])
+        && !shown.contains(STORIES[other])
+}
+
+/// Whether `frame` shows any of the news.
+fn shows_any_news(frame: &Frame) -> bool {
+    let shown = texts(frame).join(" ");
+    COMMERCIALS
+        .iter()
+        .chain(&STORIES)
+        .any(|text| shown.contains(text))
 }
 
 #[test]
@@ -519,18 +542,23 @@ fn the_bars_news_shows_the_commercial_and_the_story_as_written() {
     game.land();
     game.open_bar();
     let shown = texts(&game.frame());
-    assert!(!shows_the_news(&game.frame()), "not before News: {shown:?}");
+    assert!(!shows_any_news(&game.frame()), "not before News: {shown:?}");
+    game.dial.set(1);
     game.tap(Key::Char('n'));
     assert!(game.reading());
     let frame = game.frame();
-    assert!(shows_the_news(&frame), "{:?}", texts(&frame));
+    assert!(
+        shows_the_news(&frame, 0),
+        "drawn as the bar opened: {:?}",
+        texts(&frame)
+    );
     assert!(
         !texts(&frame).contains(&"Smoke and quiet talk.".to_owned()),
         "the news covers the bar"
     );
 
     // Escape closes it back to the bar, and News again shows the same
-    // two strings.
+    // two strings, though the dial has turned.
     game.tap(Key::Escape);
     assert!(!game.reading());
     assert_eq!(game.showing(), Showing::Spaceport);
@@ -542,5 +570,42 @@ fn the_bars_news_shows_the_commercial_and_the_story_as_written() {
     game.click_news();
     assert!(game.reading());
     let frame = game.frame();
-    assert!(shows_the_news(&frame), "{:?}", texts(&frame));
+    assert!(
+        shows_the_news(&frame, 0),
+        "the same visit: {:?}",
+        texts(&frame)
+    );
+}
+
+#[test]
+fn opening_the_bar_again_draws_the_news_afresh() {
+    let mut game = Game::flying();
+    game.land();
+    game.open_bar();
+    game.tap(Key::Char('n'));
+    let frame = game.frame();
+    assert!(shows_the_news(&frame, 0), "{:?}", texts(&frame));
+
+    // Closing the news and then the bar, and opening the bar again with
+    // the dial turned, draws the other two.
+    game.tap(Key::Escape);
+    game.tap(Key::Escape);
+    assert!(
+        game.app
+            .screen()
+            .spaceport_view()
+            .and_then(|spaceport| spaceport.open_bar())
+            .is_none(),
+        "left the bar"
+    );
+    game.dial.set(1);
+    game.open_bar();
+    game.click_news();
+    assert!(game.reading());
+    let frame = game.frame();
+    assert!(
+        shows_the_news(&frame, 1),
+        "a new visit: {:?}",
+        texts(&frame)
+    );
 }
