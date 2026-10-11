@@ -19,15 +19,23 @@ mod common;
 
 use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
+use std::sync::Arc;
 
 use nova_data::GameData;
-use nova_sim::catalog::{CombatCatalog, MissionRecord, PilotCatalog, TrafficCatalog};
-use nova_sim::fixture::{Step, StoryWalker, bits_allowing, candidates, expected_bits};
+use nova_sim::catalog::{
+    self as cat, CombatCatalog, MissionId, MissionRecord, OutfitId, PilotCatalog, TrafficCatalog,
+};
+use nova_sim::fixture::{
+    Step, StoryWalker, bits_allowing, candidates, expected_bits, expected_pay,
+};
 use nova_sim::mission::ShipSystem;
+use nova_sim::mission::active::{
+    AUTO_ABORT, AUTO_ABORT_FUEL, AUTO_ABORT_FUEL_TAKEN, AUTO_ABORT_PAYS,
+};
 use nova_sim::rules::Verdict;
 use nova_sim::{
-    Chance, GovtId, NeverFires, NovaAi, NovaPersons, Pilot, Session, SetExpr, StellarId, SystemId,
-    Test, is_landable,
+    Bit, Chance, GovtId, NeverFires, NovaAi, NovaPersons, Pilot, Script, Session, SetExpr, SetOp,
+    StellarId, SystemId, Test, is_landable,
 };
 
 /// How a mission the walk covers ends, the way the original plays it.
@@ -493,7 +501,8 @@ fn the_walk_covers_every_stock_mission_with_ship_goals() {
 /// A new stock pilot docked at the first landable stellar of its system,
 /// set up for `record`: the combat rating it asks, a record every
 /// government passes when it asks one, the bits its `AvailBits` and
-/// `extra` ask, and cash to spare.
+/// `extra` ask, and cash to spare. Its session reads `record` probed
+/// ([`Probed`]).
 fn set_up(data: &GameData, record: &MissionRecord, extra: &[&Test]) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let site = data
@@ -511,7 +520,11 @@ fn set_up(data: &GameData, record: &MissionRecord, extra: &[&Test]) -> Session {
             docked.set_legal_record(govt.id, 1000);
         }
     }
-    let mut session = Session::fly(data, docked).expect("flies");
+    let probed = Probed {
+        data,
+        mission: record.id,
+    };
+    let mut session = Session::fly(&probed, docked).expect("flies");
     let _ = session.settle_script(data, &mut NeverFires);
     session.set_credits(100_000_000);
     for test in std::iter::once(&record.avail_bits).chain(extra.iter().copied()) {
@@ -528,6 +541,419 @@ fn set_up(data: &GameData, record: &MissionRecord, extra: &[&Test]) -> Session {
 /// mismatch it ends up in.
 fn report(failure: &impl std::fmt::Display) -> String {
     failure.to_string().replace('\n', "\n    ")
+}
+
+/// One of the scripts by which a mission ends, or meets its goals, that
+/// the walk tells apart: the probe ([`Probed`]) has each set its own bit
+/// as it starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Hook {
+    /// `OnShipDone`, run as its goals are met.
+    ShipDone,
+    /// `OnSuccess`, run as it completes.
+    Success,
+    /// `OnFailure`, run as it fails.
+    Failure,
+    /// `OnAbort`, run as it is aborted.
+    Abort,
+}
+
+impl Hook {
+    /// Every hook.
+    const ALL: [Self; 4] = [Self::ShipDone, Self::Success, Self::Failure, Self::Abort];
+
+    /// The bit this hook's probe sets: 9990 to 9993, which no stock
+    /// record uses.
+    fn bit(self) -> Bit {
+        let n = match self {
+            Self::ShipDone => 9990,
+            Self::Success => 9991,
+            Self::Failure => 9992,
+            Self::Abort => 9993,
+        };
+        Bit::new(n).expect("a bit")
+    }
+
+    /// This hook's script of `record`.
+    fn script(self, record: &mut MissionRecord) -> &mut Script {
+        match self {
+            Self::ShipDone => &mut record.on_ship_done,
+            Self::Success => &mut record.on_success,
+            Self::Failure => &mut record.on_failure,
+            Self::Abort => &mut record.on_abort,
+        }
+    }
+}
+
+/// The stock data, with `mission`'s hooks ([`Hook`]) each setting its own
+/// bit before it does anything else, so the walk sees which of them ran:
+/// how the mission ended, not just that its slot was freed.
+struct Probed<'d> {
+    /// The stock data.
+    data: &'d GameData,
+    /// The mission probed.
+    mission: MissionId,
+}
+
+impl PilotCatalog for Probed<'_> {
+    fn first_character(&self) -> Result<cat::CharacterStart, cat::StartError> {
+        self.data.first_character()
+    }
+
+    fn ship_fields(&self, id: cat::ShipId) -> Result<nova_sim::ShipFields, String> {
+        self.data.ship_fields(id)
+    }
+
+    fn default_outfits(&self, id: cat::ShipId) -> Vec<(OutfitId, u16)> {
+        self.data.default_outfits(id)
+    }
+
+    fn outfits(&self) -> Vec<cat::OutfitRecord> {
+        self.data.outfits()
+    }
+
+    fn ships(&self) -> Vec<cat::ShipRecord> {
+        self.data.ships()
+    }
+
+    fn system_exists(&self, id: SystemId) -> bool {
+        self.data.system_exists(id)
+    }
+
+    fn landing_sites(&self, system: SystemId) -> Vec<cat::LandingSite> {
+        self.data.landing_sites(system)
+    }
+
+    fn star_map(&self) -> Vec<cat::StarSystem> {
+        self.data.star_map()
+    }
+
+    fn commodity_strings(&self) -> cat::CommodityStrings {
+        self.data.commodity_strings()
+    }
+
+    fn junk(&self) -> Vec<cat::JunkRecord> {
+        self.data.junk()
+    }
+
+    fn disasters(&self) -> Vec<cat::DisasterRecord> {
+        self.data.disasters()
+    }
+
+    fn stellar_flags(&self) -> Vec<(StellarId, u32)> {
+        self.data.stellar_flags()
+    }
+
+    fn date_affixes(&self) -> cat::DateAffixes {
+        self.data.date_affixes()
+    }
+
+    fn gate_sites(&self) -> Vec<cat::GateSite> {
+        self.data.gate_sites()
+    }
+
+    fn stellar_lives(&self) -> Vec<cat::StellarLife> {
+        self.data.stellar_lives()
+    }
+
+    fn fallback_frame_size(&self) -> Option<(u32, u32)> {
+        self.data.fallback_frame_size()
+    }
+
+    fn missions(&self) -> Vec<MissionRecord> {
+        let mut missions = self.data.missions();
+        for record in missions.iter_mut().filter(|r| r.id == self.mission) {
+            for hook in Hook::ALL {
+                let script = hook.script(record);
+                *script = probed(script, hook.bit());
+            }
+        }
+        missions
+    }
+
+    fn mission_texts(&self) -> Vec<cat::MissionTexts> {
+        self.data.mission_texts()
+    }
+
+    fn listed_stellars(&self) -> Vec<cat::ListedStellar> {
+        self.data.listed_stellars()
+    }
+
+    fn place_names(&self) -> cat::PlaceNames {
+        self.data.place_names()
+    }
+
+    fn stellar_marks(&self) -> Vec<cat::StellarMark> {
+        self.data.stellar_marks()
+    }
+}
+
+impl CombatCatalog for Probed<'_> {
+    fn weapons(&self) -> Vec<cat::WeaponRecord> {
+        self.data.weapons()
+    }
+
+    fn hulls(&self) -> Vec<cat::HullRecord> {
+        self.data.hulls()
+    }
+
+    fn governments(&self) -> Vec<cat::GovtRecord> {
+        self.data.governments()
+    }
+}
+
+/// `script` setting `bit` first, then doing what it did.
+fn probed(script: &Script, bit: Bit) -> Script {
+    let mut ops = vec![SetOp::Set(bit)];
+    ops.extend(
+        script
+            .tree()
+            .map(|tree| tree.ops.clone())
+            .unwrap_or_default(),
+    );
+    Script::from(Arc::new(Ok(SetExpr { ops })))
+}
+
+/// `Ok` when, of the probed hooks, exactly `want` have run in `session`;
+/// else which did.
+fn ran_only(session: &Session, want: &[Hook]) -> Result<(), String> {
+    let ran: Vec<Hook> = Hook::ALL
+        .into_iter()
+        .filter(|hook| session.control_bit(hook.bit()))
+        .collect();
+    let wanted: Vec<Hook> = Hook::ALL
+        .into_iter()
+        .filter(|hook| want.contains(hook))
+        .collect();
+    if ran == wanted {
+        Ok(())
+    } else {
+        Err(format!("ran {ran:?}, not {wanted:?}"))
+    }
+}
+
+#[test]
+fn the_probe_sets_its_bit_then_runs_the_script() {
+    let bit = Bit::new(9990).expect("a bit");
+    let script = probed(&Script::parse("!b6100 G348"), bit);
+    assert_eq!(
+        script.tree().map(|tree| tree.ops.clone()),
+        SetExpr::parse("b9990 !b6100 G348")
+            .ok()
+            .map(|tree| tree.ops)
+    );
+    let blank = probed(&Script::default(), bit);
+    assert_eq!(
+        blank.tree().map(|tree| tree.ops.clone()),
+        Some(vec![SetOp::Set(bit)])
+    );
+}
+
+#[test]
+fn no_stock_record_uses_the_probe_bits() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let records: Vec<String> = data
+        .missions()
+        .iter()
+        .map(|record| format!("{record:?}"))
+        .chain(
+            TrafficCatalog::persons(&data)
+                .iter()
+                .map(|person| format!("{person:?}")),
+        )
+        .chain(data.outfits().iter().map(|outfit| format!("{outfit:?}")))
+        .chain(data.ships().iter().map(|ship| format!("{ship:?}")))
+        .collect();
+    for hook in Hook::ALL {
+        let named = format!("{:?}", hook.bit());
+        assert!(
+            records.iter().all(|record| !record.contains(&named)),
+            "{named} is used"
+        );
+    }
+}
+
+/// The outfits of `outfit` the ship carries.
+fn outfit_count(session: &Session, outfit: OutfitId) -> u16 {
+    session
+        .pilot()
+        .outfits()
+        .find(|&(id, _)| id == outfit)
+        .map_or(0, |(_, count)| count)
+}
+
+/// What a script must leave behind, the session primed so that each of
+/// its effects shows: a bit it sets cleared first, one it clears set,
+/// and an outfit it removes granted.
+#[derive(Debug, Default)]
+struct Effects {
+    /// Each bit it writes, and how it leaves it.
+    bits: Vec<(Bit, bool)>,
+    /// Each outfit it grants or removes, and how many it leaves.
+    outfits: Vec<(OutfitId, u16)>,
+    /// Each mission it starts or aborts, and whether it leaves it held.
+    held: Vec<(MissionId, bool)>,
+}
+
+/// Sets `key`'s value in `list` to `value`.
+fn upsert<K: PartialEq, V>(list: &mut Vec<(K, V)>, key: K, value: V) {
+    match list.iter_mut().find(|(held, _)| *held == key) {
+        Some(entry) => entry.1 = value,
+        None => list.push((key, value)),
+    }
+}
+
+impl Effects {
+    /// The effects of `script` as it would run in `session` now, the
+    /// session primed for them; or why it cannot be.
+    fn primed(session: &mut Session, script: &Script) -> Result<Self, String> {
+        let mut effects = Self::default();
+        let ops = script
+            .tree()
+            .map(|tree| tree.ops.clone())
+            .unwrap_or_default();
+        for op in ops {
+            match op {
+                SetOp::Set(bit) | SetOp::Clear(bit) => {
+                    let on = matches!(op, SetOp::Set(_));
+                    if effects.bits.iter().all(|&(held, _)| held != bit) {
+                        session.set_control_bit(bit, !on);
+                    }
+                    upsert(&mut effects.bits, bit, on);
+                }
+                SetOp::GrantOutfit(outfit) => {
+                    let count = effects.outfit(session, outfit);
+                    upsert(&mut effects.outfits, outfit, count + 1);
+                }
+                SetOp::RemoveOutfit(outfit) => {
+                    let mut count = effects.outfit(session, outfit);
+                    if count == 0 {
+                        session.run_set(
+                            &SetExpr::parse(&format!("G{}", outfit.0)).expect("parses"),
+                            &mut NeverFires,
+                        );
+                        count = outfit_count(session, outfit);
+                        if count == 0 {
+                            return Err(format!("outfit {} cannot be granted", outfit.0));
+                        }
+                    }
+                    upsert(&mut effects.outfits, outfit, count - 1);
+                }
+                SetOp::StartMission(mission) => upsert(&mut effects.held, mission, true),
+                SetOp::AbortMission(mission) => upsert(&mut effects.held, mission, false),
+                _ => {}
+            }
+        }
+        Ok(effects)
+    }
+
+    /// How many of `outfit` the script has left so far, else the ship's.
+    fn outfit(&self, session: &Session, outfit: OutfitId) -> u16 {
+        self.outfits
+            .iter()
+            .find(|&&(held, _)| held == outfit)
+            .map_or_else(|| outfit_count(session, outfit), |&(_, count)| count)
+    }
+
+    /// `Ok` when `session` shows every effect; else those it does not.
+    fn check(&self, session: &Session) -> Result<(), String> {
+        let mut missing: Vec<String> = Vec::new();
+        for &(bit, on) in &self.bits {
+            if session.control_bit(bit) != on {
+                missing.push(format!("{bit:?} {}", if on { "set" } else { "clear" }));
+            }
+        }
+        for &(outfit, count) in &self.outfits {
+            let now = outfit_count(session, outfit);
+            if now != count {
+                missing.push(format!("{count} of outfit {}, not {now}", outfit.0));
+            }
+        }
+        for &(mission, held) in &self.held {
+            if session.pilot().missions().holding(mission).is_empty() == held {
+                missing.push(format!(
+                    "{} {}",
+                    mission.0,
+                    if held { "held" } else { "ended" }
+                ));
+            }
+        }
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("missing {}", missing.join(", ")))
+        }
+    }
+}
+
+/// The session as a mission's goals are about to be met: the cash and
+/// fuel, the pay its slot holds, and what its `OnShipDone` must leave.
+struct AtGoal {
+    /// The cash before.
+    cash: i64,
+    /// The fuel before.
+    fuel: f32,
+    /// The pay the slot holds.
+    pay: i64,
+    /// What its `OnShipDone` must leave.
+    ship_done: Effects,
+}
+
+impl AtGoal {
+    /// The session as `record`'s goals are about to be met, primed for
+    /// its `OnShipDone`.
+    fn before(session: &mut Session, record: &MissionRecord) -> Result<Self, String> {
+        let pay = session
+            .pilot()
+            .missions()
+            .iter()
+            .find(|(_, active)| active.mission == record.id)
+            .map(|(_, active)| active.pay)
+            .ok_or("not held")?;
+        let ship_done = Effects::primed(session, &record.on_ship_done)
+            .map_err(|why| format!("OnShipDone: {why}"))?;
+        Ok(Self {
+            cash: session.pilot().cash(),
+            fuel: session.reserves().fuel.now,
+            pay,
+            ship_done,
+        })
+    }
+
+    /// `Ok` when `record` ended by abort as its goals were met: its
+    /// `OnShipDone` ran, leaving its effects, and its `OnAbort`, and
+    /// neither its `OnSuccess` nor its `OnFailure`; with `Flags` 0x0001
+    /// by auto-abort, which takes a jump's fuel with `Flags` 0x0008 and
+    /// pays with `Flags2` 0x0002, and otherwise with neither.
+    fn ended_by_abort(&self, session: &Session, record: &MissionRecord) -> Result<(), String> {
+        ran_only(session, &[Hook::ShipDone, Hook::Abort])?;
+        self.ship_done
+            .check(session)
+            .map_err(|why| format!("OnShipDone: {why}"))?;
+        let auto = record.flags & AUTO_ABORT != 0;
+        let paid = if auto && record.flags2 & AUTO_ABORT_PAYS != 0 {
+            expected_pay(self.pay).ok_or("a fine")?
+        } else {
+            0
+        };
+        let cash = session.pilot().cash();
+        if cash != self.cash + paid {
+            return Err(format!("cash {} to {cash}, not paid {paid}", self.cash));
+        }
+        let taken = if auto && record.flags & AUTO_ABORT_FUEL != 0 {
+            AUTO_ABORT_FUEL_TAKEN
+        } else {
+            0.0
+        };
+        let fuel = session.reserves().fuel.now;
+        if (self.fuel - fuel - taken).abs() > 0.01 {
+            return Err(format!("fuel {} to {fuel}, not less {taken}", self.fuel));
+        }
+        Ok(())
+    }
 }
 
 /// Where `record` is offered: its `AvailStel` when that names a stellar,
@@ -707,7 +1133,11 @@ fn take_from_a_ship(data: &GameData, record: &MissionRecord) -> Result<Session, 
     save["system"] = serde_json::json!(system);
     save["stellar"] = serde_json::Value::Null;
     let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let mut session = Session::fly(data, pilot)
+    let probed = Probed {
+        data,
+        mission: record.id,
+    };
+    let mut session = Session::fly(&probed, pilot)
         .expect("flies")
         .with_person_rules(std::rc::Rc::new(NovaPersons::default()));
     let index = u32::try_from(index).expect("an index");
@@ -755,13 +1185,17 @@ fn unset_ship_done_bits(session: &Session, record: &MissionRecord) -> Vec<nova_s
 }
 
 /// Meets `record`'s goal with the walker and checks it ends as `outcome`
-/// says.
+/// says; one that ends at its goal, by abort ([`AtGoal::ended_by_abort`]).
 fn meet_goal(
     data: &GameData,
     session: &mut Session,
     record: &MissionRecord,
     outcome: Outcome,
 ) -> Result<(), String> {
+    let at_goal = match outcome {
+        Outcome::EndsAtGoal => Some(AtGoal::before(session, record)?),
+        _ => None,
+    };
     let mut walker = StoryWalker::new(data);
     walker
         .walk(session, &[Step::MeetGoal(record.id)])
@@ -777,14 +1211,10 @@ fn meet_goal(
             .walk(session, &[Step::Deliver(record.id)])
             .map(|_| ())
             .map_err(|failure| format!("deliver: {}", report(&failure))),
-        (Outcome::EndsAtGoal, None) => {
-            let unset = unset_ship_done_bits(session, record);
-            if unset.is_empty() {
-                Ok(())
-            } else {
-                Err(format!("ended, its OnShipDone bits {unset:?} clear"))
-            }
-        }
+        (Outcome::EndsAtGoal, None) => at_goal
+            .ok_or("not primed")?
+            .ended_by_abort(session, record)
+            .map_err(|why| format!("ended at its goal: {why}")),
         (Outcome::HeldAfterGoal, Some(_)) => {
             let slot = held_after_goal(session, record).map_err(|held| format!("held: {held}"))?;
             land_held(data, session, record, slot)
