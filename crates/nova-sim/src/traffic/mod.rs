@@ -2081,6 +2081,63 @@ mod tests {
     }
 
     #[test]
+    fn a_strength_fleet_whose_appear_on_the_world_refuses_brings_nothing_then_or_later() {
+        // `_HyperSpawnFleet` honours the fleet only when its AppearOn holds
+        // (@0x41cbb-0x41cda): `!b7` holds for a fresh pilot, but this
+        // world's control bits refuse every test of bit 7.
+        let mut traffic = Traffic::new();
+        let mut gated = strong(0);
+        gated
+            .fleets
+            .get_mut(&FleetId(382))
+            .expect("fleet 382")
+            .appear_on = Test::parse("!b7");
+        traffic.enter(gated, &mut Draws::of(&[]));
+        traffic.arm_strength_timer(&mut Draws::of(&[0]));
+        let refusing = World {
+            persons: PersonWorld {
+                control_bits: &crate::testkit::RefuseBits(&[7]),
+                ..PersonWorld::NONE
+            },
+            ..escorted(60)
+        };
+        ticked(&mut traffic, refusing, 31);
+        assert_eq!(traffic.npcs(), [], "refused when the timer fired");
+        ticked(&mut traffic, escorted(60), 200);
+        assert_eq!(traffic.npcs(), [], "fired once, and disarmed");
+    }
+
+    #[test]
+    fn a_strength_fleet_among_a_hypergate_may_come_out_of_it() {
+        let sites = gated();
+        let world = World {
+            escort_tons: 60,
+            ..World::new(&sites)
+        };
+        let mut traffic = armed(0, 0);
+        ticked(&mut traffic, world, 30);
+        assert_eq!(traffic.npcs(), []);
+        // The gate of the two stellars, then the lead's aggression.
+        let mut chance = Draws::of(&[1, 0]);
+        traffic.tick_in(&Keep, world, &[], &mut chance);
+        assert_eq!(chance.asked, [2, 3], "as `spawn::fleet` draws");
+        let lead = &traffic.npcs()[0];
+        assert_eq!(
+            (lead.ship, lead.ai_type),
+            (ShipId(200), AiType::Interceptor)
+        );
+        assert_eq!(
+            lead.mode,
+            Mode::Emerging {
+                ticks_left: emerge::EMERGE_TICKS - 1
+            },
+            "out of the gate, not by hyperspace"
+        );
+        assert_eq!(lead.state.position, Vec2::new(300.0, -400.0));
+        assert_eq!(lead.state.heading, 90.0);
+    }
+
+    #[test]
     fn new_traffic_is_disarmed() {
         let mut traffic = Traffic::new();
         traffic.enter(strong(0), &mut Draws::of(&[]));
