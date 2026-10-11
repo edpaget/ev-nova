@@ -112,6 +112,7 @@
 //! | [`NewsGovtMatch`](RuleKey::NewsGovtMatch) | `news_govt_match` | a cron's news shows at a stellar whose government is allied with its `NewsGovt` (`_GovtAllies` @0x4e3d, called @0x48640; see [`news`](crate::news)) | only at a stellar of that government\*\*\*\*\*\*\* |
 //! | [`RankUnaffiliatedGroup`](RuleKey::RankUnaffiliatedGroup) | `rank_unaffiliated_group` | the sweeps take every rank of `AffilGovt` -1 (or 127 and below) as one government, by raw equality (`_ActivateRank` @0x4535f-0x45367, `_DeactivateRank` @0x45487-0x4548f; see [`rank`](crate::rank)) | an unaffiliated rank shares no government: it is never swept, and its own sweeps clear nothing††††††† |
 //! | [`SalaryCap`](RuleKey::SalaryCap) | `salary_cap` | the cap is tested before paying, so one payment can overshoot it; a cap of 0 or less is none (`_IncrementGameTime` @0xb779-0xb794; see [`rank`](crate::rank)) | the cash never goes past the cap‡‡‡‡‡‡‡ |
+//! | [`RankGovtReach`](RuleKey::RankGovtReach) | `rank_govt_reach` | a rank's flags reach ships of its government and of every government `_GovtAllies` finds allied with it (`_DoCommDialog` @0x95dbf; see [`rank`](crate::rank)) | only ships of the rank's own government§§§§§§§ |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -295,6 +296,12 @@
 //! player can have"; the other reading pays only up to it. A fee (a
 //! negative `Salary`) stops at the cap too under both readings, since
 //! nothing is paid at or above it (see [`rank`](crate::rank)).
+//!
+//! §§§§§§§ The Bible gives a rank's flags to its affiliated government
+//! and says nothing of that government's allies. The other reading
+//! reaches only ships of the rank's own government, so an unaffiliated
+//! rank reaches no ship; it is the port's choice, not anything the Bible
+//! says (see [`rank`](crate::rank)).
 //!
 //! # Adding a rule
 //!
@@ -1400,6 +1407,12 @@ rule_keys! {
     /// overshoot it; by the other reading, the cash never goes past it
     /// (see [`rank`](crate::rank)).
     SalaryCap => "salary_cap",
+    /// Which governments a rank's `Flags` reach: by the engine, ships of
+    /// the rank's government and of every government `_GovtAllies` finds
+    /// allied with it; by the other reading, only ships of the rank's
+    /// own government, so an unaffiliated rank reaches none (see
+    /// [`rank`](crate::rank)).
+    RankGovtReach => "rank_govt_reach",
 }
 
 impl RuleKey {
@@ -1567,7 +1580,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(16),
+            RuleKey::ALL.iter().rev().nth(17),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1607,7 +1620,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(16),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1629,7 +1642,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1654,7 +1667,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1680,7 +1693,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(13),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1700,7 +1713,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1720,7 +1733,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1740,7 +1753,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -1753,7 +1766,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::GateFollow),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(6), Some(&RuleKey::GateFollow));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(7), Some(&RuleKey::GateFollow));
     }
 
     #[test]
@@ -1764,7 +1777,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(5), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(6), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -1775,7 +1788,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -1793,7 +1806,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -1810,7 +1823,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -1827,10 +1840,24 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(2),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::SalaryCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(1), Some(&RuleKey::SalaryCap));
+    }
+
+    #[test]
+    fn the_rank_govt_reach_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::RankGovtReach.key(), "rank_govt_reach");
+        assert_eq!(
+            RuleKey::from_key("rank_govt_reach"),
+            Some(RuleKey::RankGovtReach)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::RankGovtReach),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::RankGovtReach));
     }
 
     #[test]
@@ -1932,7 +1959,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(18),
+            RuleKey::ALL.iter().rev().nth(19),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -2084,7 +2111,8 @@ mod tests {
                 RuleKey::CronDateCompare,
                 RuleKey::NewsGovtMatch,
                 RuleKey::RankUnaffiliatedGroup,
-                RuleKey::SalaryCap
+                RuleKey::SalaryCap,
+                RuleKey::RankGovtReach
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
