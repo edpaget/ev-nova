@@ -717,9 +717,7 @@ mod tests {
         // The parser takes 128 to 639 only; a handler given another ID
         // ignores it.
         for id in [127, 640] {
-            session
-                .apply_op(&SetOp::RemoveOutfit(OutfitId(id)), &mut Scripted::default())
-                .expect("D applies");
+            session.apply_op(&SetOp::RemoveOutfit(OutfitId(id)), &mut Scripted::default());
         }
         assert_eq!(session.pilot().owned(OutfitId(127)), 1, "out of range");
         assert_eq!(session.pilot().owned(OutfitId(640)), 1, "out of range");
@@ -779,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    fn the_operators_note_nothing_unhandled() {
+    fn the_operators_tell_nothing() {
         let mut session = scripted(&mapped());
         run(&mut session, "G305 D305 X131");
         assert_eq!(session.take_script_notes(), Vec::<ScriptNote>::new());

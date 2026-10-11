@@ -595,12 +595,10 @@ mod tests {
         let mut session = quiet(&catalog);
         run(&mut session, "Y300");
         for id in [127, 2176] {
-            session
-                .apply_op(
-                    &SetOp::DestroyStellar(StellarId(id)),
-                    &mut Scripted::default(),
-                )
-                .expect("handled");
+            session.apply_op(
+                &SetOp::DestroyStellar(StellarId(id)),
+                &mut Scripted::default(),
+            );
         }
         assert!(session.galaxy().overlay().is_empty());
         assert_eq!(session.take_events(), []);

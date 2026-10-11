@@ -18,7 +18,7 @@
 //! session (see [`control::execute`](crate::control::execute)): it writes
 //! the pilot's bits, drawing `R(...)` on the caller's [`Chance`], and
 //! hands every other operator to [`Session::apply_op`], one match over the
-//! set operators, which other roadmaps extend with a match arm. It applies
+//! set operators. It applies
 //! Nova's `G`, `D` and `X` (see the `outfits` module), the ship changes
 //! `C`, `E`, `H` and `T` (see the `ship_change` module), and the moves `M` and `N`, the
 //! leave `Q`, which apply when [`Session::settle_script`] settles them,
@@ -27,19 +27,14 @@
 //! the missions started, aborted and failed, `S`, `A` and `F` (see the
 //! `missions` module), and the ranks activated and deactivated, `K` and
 //! `L` (see the `ranks` module).
-//! Any change to the pilot makes a save due. An operator nothing handles is skipped, and its kind told
-//! once a session as a [`ScriptNote`] ([`Session::take_script_notes`]);
-//! which kinds were told is never saved.
+//! Any change to the pilot makes a save due.
 //!
 //! **The nested runner.** The story dispatcher runs its subscriptions'
 //! scripts through the same runner, `Session::run_ops`, which calls it
 //! back after each operator handed to `apply_op`, that operator applied:
 //! where it settles the moves and dispatches the events raised before the
 //! next operator (see the [`story`](crate::story) module's "Dispatch").
-//! A script run inside another is one more run like it: an unhandled
-//! kind is told the first time it is met, outer or nested. Every set
-//! operator now applies: the ranks' `K` and `L` too (see the `ranks`
-//! module).
+//! A script run inside another is one more run like it.
 //!
 //! **Hooks.** The records' set-expression hooks (the `chär`'s `OnStart`,
 //! an outfit's `OnPurchase` and `OnSell`, a ship's `OnPurchase`,
@@ -54,7 +49,7 @@ use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament::{Armament, lowest_ammo_outfit};
 use crate::control::{
-    Bit, BitStore, ControlBitSet, Gate, PilotFacts, ScriptNote, SetExpr, SetOp, SetOpKind, execute,
+    Bit, BitStore, ControlBitSet, Gate, PilotFacts, ScriptNote, SetExpr, SetOp, execute,
 };
 use crate::pilot::{Gender, Pilot};
 use crate::ship_change::OutfitCarry;
@@ -158,14 +153,8 @@ impl Session {
         self
     }
 
-    /// Applies one set operator beyond the bit writes and `R(...)`; gives
-    /// back its kind when nothing here applies it yet (another roadmap's
-    /// operator).
-    pub(crate) fn apply_op(
-        &mut self,
-        op: &SetOp,
-        chance: &mut dyn Chance,
-    ) -> Result<(), SetOpKind> {
+    /// Applies one set operator beyond the bit writes and `R(...)`.
+    pub(crate) fn apply_op(&mut self, op: &SetOp, chance: &mut dyn Chance) {
         match op {
             SetOp::GrantOutfit(outfit) => self.script_grant(*outfit),
             SetOp::RemoveOutfit(outfit) => self.script_remove(*outfit),
@@ -198,11 +187,8 @@ impl Session {
             SetOp::DeactivateRank(rank) => self.deactivate_rank(*rank),
             // `execute` writes the bits and draws `R(...)` itself, never
             // handing them here.
-            SetOp::Set(_) | SetOp::Clear(_) | SetOp::Toggle(_) | SetOp::Random(..) => {
-                return Err(op.kind());
-            }
+            SetOp::Set(_) | SetOp::Clear(_) | SetOp::Toggle(_) | SetOp::Random(..) => {}
         }
-        Ok(())
     }
 
     /// Runs `expr` on the session (see the module docs), drawing `R(...)`
@@ -214,8 +200,7 @@ impl Session {
     /// Runs `expr` as [`Session::run_set`] does, calling `between` after
     /// each operator handed to `apply_op`, with that operator applied:
     /// where the story dispatcher nests. A script run inside `between`
-    /// runs as any other: each unhandled kind is noted the first time it
-    /// is met, here or nested, so none is noted twice or lost.
+    /// runs as any other.
     pub(super) fn run_ops(
         &mut self,
         expr: &SetExpr,
@@ -228,11 +213,7 @@ impl Session {
             if let Some(observer) = &observer {
                 observer.0.saw(op, session);
             }
-            if let Err(kind) = session.apply_op(op, chance)
-                && session.unhandled_ops.insert(kind)
-            {
-                session.script_notes.push(ScriptNote::Unhandled(kind));
-            }
+            session.apply_op(op, chance);
             between(session, chance);
             Ok(())
         };
@@ -291,7 +272,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::control::{SetExpr, SetOp, SetOpKind};
+    use crate::control::{SetExpr, SetOp};
     use crate::save;
     use crate::testkit::Scripted;
     use crate::testkit::catalog;
@@ -433,38 +414,15 @@ mod tests {
     }
 
     #[test]
-    fn apply_op_applies_novas_eighteen_and_gives_back_the_rest() {
+    fn apply_op_leaves_the_bit_writes_and_r_to_execute() {
         let mut session = session();
-        let expr = set(
-            "A128 F129 S130 G128 D128 C128 E128 H128 M130 N130 K128 L128 P128 Y128 U128 \
-              T128 Q128 X131 b1 !b1 ^b1 R(b1 b2)",
-        );
-        let given_back: Vec<_> = expr
-            .ops
-            .iter()
-            .filter_map(|op| {
-                session
-                    .apply_op(op, &mut Scripted::default())
-                    .err()
-                    .map(|kind| (kind, op.kind()))
-            })
-            .collect();
-        assert!(
-            given_back.iter().all(|(kind, own)| kind == own),
-            "{given_back:?}"
-        );
-        assert_eq!(
-            given_back
-                .into_iter()
-                .map(|(kind, _)| kind)
-                .collect::<Vec<_>>(),
-            [
-                SetOpKind::Set,
-                SetOpKind::Clear,
-                SetOpKind::Toggle,
-                SetOpKind::Random,
-            ]
-        );
+        for op in &set("b1 ^b2 R(b3 b4)").ops {
+            session.apply_op(op, &mut Scripted::default());
+        }
+        for n in 1..=4 {
+            assert!(!session.control_bit(bit(n)), "b{n}");
+        }
+        assert!(!session.take_save_due());
     }
 
     /// Records whether system 131 is explored each time it sees an

@@ -403,7 +403,7 @@ use crate::combat::projectile::Shot;
 use crate::combat::report::SimDiagnostic;
 use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
-use crate::control::{ControlBits, NovaBits, ScriptNote, SetOpKind};
+use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
 use crate::escort::{EscortDuty, FormationSlot};
 use crate::flight::{Controls, ShipState, step};
@@ -703,9 +703,6 @@ pub struct Session {
     /// What sees each set operator `run_set` hands to `apply_op`: none
     /// outside tests (see `control::SetOpObserver`).
     op_observer: Option<hire::Shared<dyn control::SetOpObserver>>,
-    /// The set operator kinds skipped for want of a handler and told
-    /// already; never saved.
-    unhandled_ops: BTreeSet<SetOpKind>,
     /// What running set expressions had to tell since this was last taken.
     script_notes: Vec<ScriptNote>,
     /// How persons appear (see [`Session::with_person_rules`]).
@@ -984,7 +981,6 @@ impl Session {
             frame: 0,
             pay_notes: Vec::new(),
             op_observer: None,
-            unhandled_ops: BTreeSet::new(),
             script_notes: Vec::new(),
             person_rules: hire::Shared(Rc::new(NovaPersons::default())),
             quote_clock: persons::QuoteClock::default(),
