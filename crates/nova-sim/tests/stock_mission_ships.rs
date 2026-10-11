@@ -3,8 +3,10 @@
 //! names, and the system is set up with them there and nowhere else; a
 //! stock mission of each ship goal has its goal met by the storyline
 //! walker's `meet goal`; and a stock mission's escorts come in on their
-//! timer and join the player's formation. Skips, passing, when
-//! `NOVA_DATA` is unset.
+//! timer and join the player's formation. Every stock mission's
+//! auxiliary ships name a `düde` in range and an `AuxShipSyst` the engine
+//! reads, and a stock mission's come in on their countdown as ordinary
+//! traffic. Skips, passing, when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -326,4 +328,74 @@ fn a_stock_avoid_mission_whose_hunters_come_later_auto_aborts_as_they_come_in() 
     assert!(session.npcs().len() >= before, "none taken out");
     assert!(jumping_in >= count, "its hunters came in, then it aborted");
     assert!(of_dude(&data, &session, dude) >= count);
+}
+
+#[test]
+fn every_stock_missions_aux_ships_are_of_a_built_aux_ship_syst_and_a_dude_in_range() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let missions = data.missions();
+    let aux: Vec<_> = missions
+        .iter()
+        .filter(|record| record.aux.count > 0)
+        .collect();
+    assert_eq!(aux.len(), 136, "stock missions with aux ships");
+    for record in aux {
+        assert!(
+            matches!(record.aux.syst, -1 | -2 | -3 | 128..=2175),
+            "{:?}: AuxShipSyst {}",
+            record.id,
+            record.aux.syst
+        );
+        let dude = nova_sim::mission::aux::aux_dude(&record.aux).expect("a düde in range");
+        assert!(data.dude(dude).is_some(), "{:?}: {dude:?}", record.id);
+    }
+}
+
+/// The auxiliary ships in `session`'s system.
+fn aux(session: &Session) -> Vec<&nova_sim::traffic::npc::Npc> {
+    session
+        .npcs()
+        .iter()
+        .filter(|npc| npc.aux.is_some())
+        .collect()
+}
+
+#[test]
+fn a_stock_missions_aux_ships_come_in_on_their_countdown_as_ordinary_traffic() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let record = data
+        .missions()
+        .into_iter()
+        .find(|record| {
+            record.aux.count > 0
+                && record.aux.syst == -1
+                && record.flags & 0x0001 == 0
+                && record.ships.count <= 0
+        })
+        .expect("a stock mission of aux ships anywhere and no special ship");
+    let mut session = docked_new_pilot(&data);
+    session.run_set(
+        &SetExpr::parse(&format!("S{}", record.id.0)).expect("parses"),
+        &mut NeverFires,
+    );
+    let _ = session.settle_script(&data, &mut NeverFires);
+    let mut flying = in_flight(&data, session.pilot(), session.pilot().system());
+    assert!(aux(&flying).is_empty(), "none at setup");
+    for _ in 0..140 {
+        flying.tick_traffic(&data, &NovaAi::default(), &mut NeverFires);
+    }
+    let came = aux(&flying);
+    assert_eq!(
+        came.len(),
+        usize::try_from(record.aux.count).expect("a count"),
+        "{:?}",
+        record.id
+    );
+    assert!(came.iter().all(|npc| npc.mission.is_none()), "unmarked");
 }
