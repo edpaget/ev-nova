@@ -517,8 +517,9 @@ mod tests {
             (2, Some(GovtId(128))),
             (3, Some(GovtId(129))),
             (4, None),
+            (5, Some(GovtId(128))),
         ];
-        let legal = |key: i32| [-5, 3, -2, -9][usize::try_from(key - 1).expect("a key")];
+        let legal = |key: i32| [-5, 3, -2, -9, 0][usize::try_from(key - 1).expect("a key")];
         assert_eq!(
             cleaned_records(targets, legal, &[CleanScope::Govt(GovtId(128))]),
             [1]
@@ -526,7 +527,8 @@ mod tests {
         assert_eq!(
             cleaned_records(targets, legal, &[CleanScope::All]),
             [1, 3, 4],
-            "every negative one, an independent system's too (@0x44f5f)"
+            "every negative one, an independent system's too (@0x44f5f); \
+             none is left out"
         );
         assert_eq!(cleaned_records(targets, legal, &[]), [] as [i32; 0]);
     }

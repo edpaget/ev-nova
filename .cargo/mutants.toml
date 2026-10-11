@@ -20,9 +20,6 @@ exclude_re = [
     # has already returned for a price of 0, so `price < 0` and
     # `price <= 0` choose the same.
     "replace < with <= in Market::quotient",
-    # Cleaning a legal record raises one below none to none: with `<=` a
-    # record of none is set to none too, which changes nothing.
-    "replace < with <= in clean_records",
     # The shipyard's trade-in leaves out outfits flagged persistent (0x0004)
     # or unsellable (0x0008): two distinct bits, so `|` and `^` combine them
     # the same.
