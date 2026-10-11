@@ -7,8 +7,8 @@ use crate::catalog::{CommCatalog, GovtId, MissionShip, SystemId};
 use crate::chance::Chance;
 use crate::govt::Governments;
 use crate::hyperspace::{Places, StarMap};
-use crate::person::ESCORT_GOAL;
 
+use super::goals::ShipGoal;
 use super::offer::Stop;
 use super::select::GovtCode;
 
@@ -171,7 +171,9 @@ pub const NOT_APPEARING: i16 = -1;
 /// [`ESCORT_APPEAR`] for ships that escort the player with `ShipGoal`
 /// 3, else `Rand(100) + 100`, drawn (@0xa0ede-0xa0f03, @0x99f5b-0x99f9a).
 pub fn appear_timer(ships: &MissionShip, chance: &mut dyn Chance) -> i16 {
-    if ShipBehav::from_code(ships.behav) == ShipBehav::EscortPlayer && ships.goal == ESCORT_GOAL {
+    if ShipBehav::from_code(ships.behav) == ShipBehav::EscortPlayer
+        && ShipGoal::from_code(ships.goal) == ShipGoal::Escort
+    {
         ESCORT_APPEAR
     } else {
         i16::try_from(chance.below(APPEAR_DRAW) + APPEAR_DRAW).unwrap_or(i16::MAX)
@@ -730,6 +732,8 @@ mod tests {
 
     /// `ShipBehav` 1: they escort the player.
     const ESCORTS_PLAYER: i16 = 1;
+    /// `ShipGoal` 3: the player escorts them.
+    const ESCORT_GOAL: i16 = 3;
 
     #[test]
     fn escorts_of_an_escort_goal_appear_after_30_drawing_nothing() {

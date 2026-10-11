@@ -6,15 +6,12 @@
 
 use crate::catalog::{GovtRecord, MissionId, MissionRecord};
 use crate::chance::Chance;
-use crate::person::ESCORT_GOAL;
 use crate::rulebook::Rulebook;
 use crate::rules::{Check, Checks, Context};
 
 use super::active::{ActiveMission, ActiveMissions};
+use super::goals::ShipGoal;
 use super::screens::HIDDEN;
-
-/// `ShipGoal`: none.
-const NO_GOAL: i16 = -1;
 
 /// `STR#` 2002 #357: a pickup refused for want of cargo holds.
 pub const NO_HOLDS_TO_LOAD: &str = "Your ship doesn't have enough cargo space to load this cargo.";
@@ -66,8 +63,11 @@ pub fn drops_off(
     let at_return = at_return
         && record.drop_off_mode == DROP_OFF_AT_RETURN
         && (active.goals_met
-            || record.ships.goal == NO_GOAL
-            || (record.ships.goal == ESCORT_GOAL && active.ships.destroyed <= 0));
+            || match ShipGoal::from_code(record.ships.goal) {
+                ShipGoal::None => true,
+                ShipGoal::Escort => active.ships.destroyed <= 0,
+                _ => false,
+            });
     active.aboard && (at_destination || at_return)
 }
 

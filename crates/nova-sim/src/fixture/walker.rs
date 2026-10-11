@@ -67,8 +67,9 @@ use crate::catalog::{
 use crate::chance::{Chance, NeverFires};
 use crate::control::{Bit, Script, SetOp};
 use crate::date::GameDate;
-use crate::mission::{AcceptError, ActiveMission, PayEffect, Refusal, Stop, Venue, pay_effect};
-use crate::person::ESCORT_GOAL;
+use crate::mission::{
+    AcceptError, ActiveMission, PayEffect, Refusal, ShipGoal, Stop, Venue, pay_effect,
+};
 use crate::rules::Verdict;
 use crate::session::{RelocateRefusal, Session};
 
@@ -501,7 +502,7 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
         let mut others = Vec::new();
         let escorts = self
             .record(mission)
-            .is_some_and(|record| record.ships.goal == ESCORT_GOAL);
+            .is_some_and(|record| ShipGoal::from_code(record.ships.goal) == ShipGoal::Escort);
         if escorts && let Some(back) = active.return_to {
             if let Some(destination) = active.destination
                 && !active.reached

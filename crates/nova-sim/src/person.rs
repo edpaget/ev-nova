@@ -97,6 +97,7 @@ use crate::combat::hull::Condition;
 use crate::combat::weapon::{Ammo, WeaponSpec};
 use crate::control::{ControlBits, FreshPilot, Gate, NovaBits, PilotFacts, Test};
 use crate::govt::Governments;
+use crate::mission::ShipGoal;
 use crate::pilot::Escort;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -145,24 +146,22 @@ pub const GONE_ON_ACCEPT: u16 = 0x0100;
 /// (`_AIMakeShipLeave` @0x6234d); the boarding does not read it. The same
 /// bit as [`QUOTE_UNLESS_LEAVING`].
 pub const LEAVES_ON_ACCEPT: u16 = 0x0800;
-/// `mïsn` `ShipGoal`: the special ship escorts the player (@0x624f6).
-pub const ESCORT_GOAL: i16 = 3;
 
 /// Whether `record`'s person's record lets it join the player, under
 /// [`RuleKey::PersonJoin`]'s other reading: the engine's own gate for
 /// swapping a hailed person for its mission's escort ship
 /// (`_HandlePlayerCommunication` @0x621a9-0x62509). Its `Flags` has
 /// [`REPLACED_BY_MISSION_SHIP`] and not [`MISSION_ON_BOARD`], and its
-/// `LinkMission` has one special ship whose goal is [`ESCORT_GOAL`]. The
+/// `LinkMission` has one special ship whose goal is [`ShipGoal::Escort`]. The
 /// session asks too that the mission be available from a ship
 /// (@0x6220d).
 #[must_use]
 pub fn offers_to_join(record: &PersonRecord) -> bool {
     record.flags & REPLACED_BY_MISSION_SHIP != 0
         && record.flags & MISSION_ON_BOARD == 0
-        && record
-            .mission_ship
-            .is_some_and(|ship| ship.count == 1 && ship.goal == ESCORT_GOAL)
+        && record.mission_ship.is_some_and(|ship| {
+            ship.count == 1 && ShipGoal::from_code(ship.goal) == ShipGoal::Escort
+        })
 }
 
 /// `Rand(1022)` (0x3fe @0x40c8e): the person a roll lands on.
@@ -1441,8 +1440,8 @@ mod tests {
             "stock Terrapin"
         );
         assert_eq!(
-            (REPLACED_BY_MISSION_SHIP, MISSION_ON_BOARD, ESCORT_GOAL),
-            (0x0040, 0x0200, 3)
+            (REPLACED_BY_MISSION_SHIP, MISSION_ON_BOARD),
+            (0x0040, 0x0200)
         );
     }
 

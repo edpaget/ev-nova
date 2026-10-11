@@ -24,7 +24,8 @@ pub enum ShipGoal {
     /// 2: board them all.
     Board,
     /// 3: escort them: met while one is with the player, failed once one
-    /// is destroyed or disabled.
+    /// is destroyed or disabled. A person's hail reads it to offer to join
+    /// the player (`_HandlePlayerCommunication` @0x624f6).
     Escort,
     /// 4: observe one.
     Observe,
