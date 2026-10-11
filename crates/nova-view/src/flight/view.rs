@@ -10595,6 +10595,67 @@ mod tests {
     }
 
     #[test]
+    fn a_mission_ship_targeted_shows_its_missions_name_and_subtitle_and_no_tag() {
+        let mut hunted = trafficked(&[130], 0, 129, 3);
+        hunted.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        hunted.missions = vec![MissionRecord {
+            ships: MissionShip {
+                count: 1,
+                syst: -1,
+                dude: Some(nova_sim::DudeId(128)),
+                start: 0,
+                name_id: Some(7000),
+                subtitle: Some(7001),
+                ..MissionShip::NONE
+            },
+            ..errand(140)
+        }];
+        hunted.mission_texts = vec![MissionTexts::named(MissionId(140), "Hunt")];
+        let strings = FakeCatalog {
+            strings: vec![
+                (7000, vec!["Rover".to_owned()]),
+                (7001, vec!["Bounty Hunter".to_owned()]),
+            ],
+            ..catalog()
+        };
+        let mut view = FlightView::new(hunted)
+            .with_strings(Rc::new(strings))
+            .with_behaviour(Rc::new(Still));
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(view.accept_mission(MissionId(140)), Ok(0));
+        view.settle_script();
+        assert!(view.take_off().is_some());
+        view.settle_script();
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        assert!(
+            session.npcs().iter().any(|npc| npc.mission.is_some()),
+            "the mission ship is in the system"
+        );
+        tap(&mut view, Key::Tab);
+        let texts: Vec<String> = drawn(&view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.iter().any(|text| text == "Rover"), "{texts:?}");
+        assert!(
+            texts.iter().any(|text| text == "Bounty Hunter"),
+            "{texts:?}"
+        );
+        assert!(!texts.iter().any(|text| text == "Ship 129"), "{texts:?}");
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.trim() == "Sp" || text.trim() == "Df"),
+            "no cheats-only tag: {texts:?}"
+        );
+    }
+
+    #[test]
     fn a_hail_quote_shows_in_the_message_line_for_14_seconds() {
         let (_, chance) = scripted(&ACE);
         let mut view = FlightView::new(peopled())

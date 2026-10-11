@@ -7,11 +7,16 @@
 //! The panel fills the `ïntf`'s `TargArea`:
 //!
 //! - With no target, "No Target" (`STR#` 2002 #349), dim, centred.
-//! - Otherwise the target's name, bright, centred, at `StatFontSize`; its
-//!   picture stretched into a 128 x 64 rectangle centred in the area (none
-//!   without one); its subtitle, bright, centred, at `SubtitleSize`; its
+//! - Otherwise the target's name (a marked mission ship's drawn name
+//!   first, @0x4b6c8, then a person's, then its ship type's), bright,
+//!   centred, at `StatFontSize`; its picture stretched into a 128 x 64
+//!   rectangle centred in the area (none without one); its subtitle, bright, centred, at `SubtitleSize`; its
 //!   status at the bottom left, a dim label and a bright value; and its
 //!   government's `TargetCode`, dim, against the bottom right.
+//! - The original also draws an "Sp" tag on a mission ship (and "Df " on
+//!   a defence ship), but only in its cheats-only AI debug overlay, behind
+//!   `_cheatsActive` and `_targKeyOnNow` (@0x4ae42-0x4b698); the engine
+//!   leaves that overlay out, so no tag is drawn.
 //! - The status is "Disabled" (#347), bright, for a disabled target;
 //!   "Shield:" (#13) and its percentage while its shields hold; and
 //!   otherwise "Armor:" (#16) and its armour's percentage, each truncated
@@ -132,10 +137,12 @@ impl Pen<'_, '_> {
 /// What the panel shows of the target.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TargetShown<'a> {
-    /// Its name: a person's own, or its ship type's.
+    /// Its name: a marked mission ship's drawn name (`_DrawStatusTarg`
+    /// @0x4b6c8), else a person's own, else its ship type's.
     pub name: &'a str,
-    /// A person's subtitle, shown in place of its ship type's
-    /// (`_DrawStatusTarg` @0x4b860); none for any other ship.
+    /// A marked mission ship's drawn subtitle (`_DrawStatusTarg`
+    /// @0x4b81b), else a person's, shown in place of its ship type's
+    /// (@0x4b860); none for any other ship.
     pub subtitle: Option<&'a str>,
     /// Its ship type's subtitle and picture.
     pub card: &'a TargetCard,
