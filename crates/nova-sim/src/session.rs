@@ -11620,6 +11620,84 @@ mod tests {
         assert_eq!(npc_ids(&session), [NpcId(2), NpcId(3)], "populated once");
     }
 
+    /// A draw a [`QueuedLog`] chance was asked for.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Asked {
+        Fires(u8),
+        Below(u32),
+    }
+
+    /// A [`Chance`] that takes every draw, percentages too, from one
+    /// queue (each `fires` a draw below 100), wrapped into range, the last
+    /// outcome once it runs out, and logs each draw asked in order.
+    #[derive(Debug, Default)]
+    struct QueuedLog {
+        queue: std::collections::VecDeque<u32>,
+        log: Vec<Asked>,
+    }
+
+    impl QueuedLog {
+        fn of(draws: &[u32]) -> Self {
+            Self {
+                queue: draws.iter().copied().collect(),
+                log: Vec::new(),
+            }
+        }
+
+        fn draw(&mut self, n: u32) -> u32 {
+            self.queue.pop_front().map_or(n - 1, |draw| draw % n)
+        }
+    }
+
+    impl Chance for QueuedLog {
+        fn fires(&mut self, percent: u8) -> bool {
+            self.log.push(Asked::Fires(percent));
+            self.draw(100) < u32::from(percent)
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.log.push(Asked::Below(n));
+            self.draw(n)
+        }
+    }
+
+    #[test]
+    fn taking_off_rolls_the_days_then_populates() {
+        let mut catalog = trafficked(130, 2, 1);
+        catalog.ship_records[0].hire_random = 30;
+        catalog.ship_records[0].buy_random = 40;
+        let spawns = [5, 11, 3, 17, 7, 23, 2, 13, 19, 29, 31, 37, 41];
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands on planet 128");
+        let mut chance = QueuedLog::of(&[[99, 99].as_slice(), &spawns].concat());
+        session.take_off(&catalog, &mut chance).expect("took off");
+        assert_eq!(
+            chance.log[..2],
+            [Asked::Fires(30), Asked::Fires(40)],
+            "the day's hire then buy roll first"
+        );
+        assert!(chance.log.len() > 2, "then the population draws");
+        assert!(
+            chance.log[2..]
+                .iter()
+                .all(|asked| matches!(asked, Asked::Below(_))),
+            "{:?}",
+            chance.log
+        );
+
+        let mut populated = Session::start(&catalog).expect("starts");
+        populated.populate(&catalog, &mut QueuedLog::of(&spawns));
+        let at = |session: &Session| {
+            session
+                .npcs()
+                .iter()
+                .map(|npc| npc.state.position)
+                .collect::<Vec<_>>()
+        };
+        assert!(!at(&session).is_empty());
+        assert_eq!(at(&session), at(&populated), "placed by the later draws");
+    }
+
     #[test]
     fn a_ship_landed_from_the_start_populates_once_it_takes_off() {
         let catalog = trafficked(130, 2, 1);

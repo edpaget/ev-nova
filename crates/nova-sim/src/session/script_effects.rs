@@ -1390,6 +1390,21 @@ mod tests {
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(ids(&session.sites), [140, 141]);
         assert_eq!(session.player().position, Vec2::new(100.0, 200.0));
+        assert_eq!(session.npcs().len(), 3, "131's ships");
+    }
+
+    #[test]
+    fn a_landed_q_takes_off_into_the_system_populated_afresh() {
+        let catalog = moving();
+        let mut session = told(landed(&catalog));
+        let before: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(before.len(), 2, "130's ships before the landing");
+        run_rolling(&mut session, "Q25048", &[0]);
+        let settled = settle(&mut session, &catalog);
+        assert_eq!(settled.took_off, Some(StellarId(128)));
+        let after: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(after.len(), 2, "130's ships afresh");
+        assert!(after.iter().all(|id| !before.contains(id)), "{after:?}");
     }
 
     // Events.
