@@ -181,6 +181,9 @@ pub struct Traffic {
     npcs: Vec<Npc>,
     /// The next NPC's number: never reused, even across systems.
     next_id: u32,
+    /// The berths held back for the player's escorts still to be placed
+    /// ([`Traffic::reserve`]), kept across systems.
+    reserved: BTreeSet<u32>,
     /// Ticks since the traffic began.
     ticks: u64,
     /// How many ticks apart decisions are.
@@ -214,6 +217,7 @@ impl Traffic {
             table: SpawnTable::default(),
             npcs: Vec::new(),
             next_id: 0,
+            reserved: BTreeSet::new(),
             ticks: 0,
             interval,
             departed: Vec::new(),
@@ -518,8 +522,8 @@ impl Traffic {
         &mut self.npcs
     }
 
-    /// The ships the player leads, in ship-table order (the order the
-    /// NPCs appeared): its hired and captured escorts, the fighters it
+    /// The ships the player leads, in ship-table order (berth order,
+    /// [`Npc::berth`]; ships at one berth in the order they appeared): its hired and captured escorts, the fighters it
     /// launched, and its mission escorts ([`Npc::escorts_player`]). In
     /// the original each is a ship whose leader (+0x9a) is the player,
     /// 0, hired or a mission's `ShipBehav` 1 escort alike. The original's
@@ -527,7 +531,13 @@ impl Traffic {
     /// escorts or the fighters, are listed in the session's `player_led`
     /// module.
     pub fn player_led(&self) -> impl Iterator<Item = &Npc> + '_ {
-        self.npcs.iter().filter(|npc| npc.escorts_player())
+        let mut led: Vec<&Npc> = self
+            .npcs
+            .iter()
+            .filter(|npc| npc.escorts_player())
+            .collect();
+        led.sort_by_key(|npc| npc.berth);
+        led.into_iter()
     }
 
     /// The NPCs that count toward the system's `AvgShips`: those the
@@ -542,10 +552,35 @@ impl Traffic {
     /// Adds `npc` to the system, numbered as the next NPC, and gives its
     /// number.
     pub(crate) fn add_npc(&mut self, npc: Npc) -> NpcId {
+        let berth = self.next_berth();
+        self.add_npc_at(npc, berth)
+    }
+
+    /// Holds `berths` back from the first-free numbering until an NPC is
+    /// placed at each ([`Traffic::add_npc_at`]), replacing any held before.
+    pub(crate) fn reserve(&mut self, berths: BTreeSet<u32>) {
+        self.reserved = berths;
+    }
+
+    /// Adds `npc` to the system at berth `berth`, numbered as the next NPC,
+    /// and gives its number.
+    pub(crate) fn add_npc_at(&mut self, npc: Npc, berth: u32) -> NpcId {
+        self.reserved.remove(&berth);
         let id = NpcId(self.next_id);
         self.next_id += 1;
-        self.npcs.push(Npc { id, ..npc });
+        self.npcs.push(Npc { id, berth, ..npc });
         id
+    }
+
+    /// The first berth from 1 that no NPC in the system holds and none is
+    /// reserved for: the slot `_GenericRandomShipSpawn` (@0x3c8b1-0x3c90b)
+    /// gives a new ship.
+    fn next_berth(&self) -> u32 {
+        (1..=u32::MAX)
+            .find(|berth| {
+                !self.reserved.contains(berth) && self.npcs.iter().all(|npc| npc.berth != *berth)
+            })
+            .unwrap_or(u32::MAX)
     }
 
     /// Takes NPC `id` out of the system, if it is there.
@@ -645,8 +680,10 @@ impl Traffic {
             let hunts = ship
                 .mission
                 .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer);
+            let berth = self.next_berth();
             self.npcs.push(Npc {
                 id,
+                berth,
                 ship: ship.ship,
                 govt: ship.govt,
                 ai_type: ship.ai_type,
@@ -1461,6 +1498,115 @@ mod tests {
         let led: Vec<NpcId> = traffic.player_led().map(|npc| npc.id).collect();
         assert_eq!(led, [mission, hired, fighter]);
         assert_eq!(traffic.strangers(), 4, "the rest");
+    }
+
+    /// The berths of the system's NPCs, in `Vec` order.
+    fn berths(traffic: &Traffic) -> Vec<u32> {
+        traffic.npcs().iter().map(|npc| npc.berth).collect()
+    }
+
+    #[test]
+    fn each_npc_takes_the_first_free_berth_from_1() {
+        let mut traffic = Traffic::new();
+        let ship = || crate::testkit::npc(0, ShipStats::default());
+        traffic.add_npc(ship());
+        let second = traffic.add_npc(ship());
+        traffic.add_npc(ship());
+        assert_eq!(berths(&traffic), [1, 2, 3]);
+        traffic.remove(second);
+        traffic.add_npc(ship());
+        traffic.add_npc(ship());
+        assert_eq!(berths(&traffic), [1, 3, 2, 4]);
+        traffic.remove(NpcId(0));
+        traffic.table = table(0);
+        traffic.bring_in(vec![mission_ship(-1, 0.0), mission_ship(-1, 1.0)]);
+        assert_eq!(berths(&traffic), [3, 2, 4, 1, 5], "brought in alike");
+    }
+
+    #[test]
+    fn a_systems_ships_take_berths_from_1_as_they_are_set_up() {
+        let mut traffic = Traffic::new();
+        traffic.add_npc(crate::testkit::npc(0, ShipStats::default()));
+        traffic.enter_with(
+            table(1),
+            World::new(&[]),
+            vec![mission_ship(-1, 5.0), mission_ship(-1, 6.0)],
+            &mut Draws::of(&placed(750, 750)),
+        );
+        assert_eq!(berths(&traffic), [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_reserved_berth_is_skipped_until_an_npc_is_placed_at_it() {
+        let mut traffic = Traffic::new();
+        let ship = || crate::testkit::npc(0, ShipStats::default());
+        traffic.reserve(BTreeSet::from([1, 3]));
+        traffic.add_npc(ship());
+        traffic.add_npc(ship());
+        assert_eq!(berths(&traffic), [2, 4]);
+        let placed_at = traffic.add_npc_at(ship(), 1);
+        assert_eq!(traffic.npcs()[2].id, placed_at);
+        assert_eq!(berths(&traffic), [2, 4, 1]);
+        traffic.add_npc(ship());
+        assert_eq!(
+            berths(&traffic),
+            [2, 4, 1, 5],
+            "1 is held, 3 still reserved"
+        );
+        traffic.reserve(BTreeSet::from([2]));
+        traffic.enter_with(
+            table(0),
+            World::new(&[]),
+            vec![mission_ship(-1, 0.0), mission_ship(-1, 1.0)],
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(
+            berths(&traffic),
+            [1, 3],
+            "the reservation outlives the system"
+        );
+    }
+
+    #[test]
+    fn player_led_follows_berth_order() {
+        let mut traffic = Traffic::new();
+        let ship = |id| crate::testkit::npc(id, ShipStats::default());
+        traffic.reserve(BTreeSet::from([1]));
+        let hired = traffic.add_npc(Npc {
+            escort: Some(duty(2)),
+            ..ship(0)
+        });
+        let mission = traffic.add_npc_at(
+            Npc {
+                mission: Some(escorting(true)),
+                ..ship(0)
+            },
+            1,
+        );
+        let led: Vec<NpcId> = traffic.player_led().map(|npc| npc.id).collect();
+        assert_eq!(led, [mission, hired]);
+    }
+
+    #[test]
+    fn ships_led_at_one_berth_keep_the_order_they_appeared_in() {
+        let mut traffic = Traffic::new();
+        let ship = |id| crate::testkit::npc(id, ShipStats::default());
+        let first = traffic.add_npc_at(
+            Npc {
+                escort: Some(duty(2)),
+                ..ship(0)
+            },
+            7,
+        );
+        let second = traffic.add_npc_at(
+            Npc {
+                mission: Some(escorting(true)),
+                ..ship(0)
+            },
+            7,
+        );
+        let led: Vec<NpcId> = traffic.player_led().map(|npc| npc.id).collect();
+        assert_eq!(led, [first, second]);
     }
 
     #[test]

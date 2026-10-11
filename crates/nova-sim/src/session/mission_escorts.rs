@@ -35,10 +35,11 @@
 //! **One formation.** The hired escorts and the mission escorts share one
 //! formation with the player, as the original numbers every ship whose
 //! formation parent is the player in one count and spacing
-//! (`_AICalcFormationPositions` @0x850bc-0x85192). Here the hired escorts
-//! take slots 2, 3, … in fleet order, then the mission escorts in the
-//! order they came (by [`NpcId`]); the original's order is ship-table
-//! order across both. The formation re-forms whenever one joins or
+//! (`_AICalcFormationPositions` @0x850bc-0x85192). Both take slots 2, 3,
+//! … together in ship-table order, by their berths
+//! ([`Npc::berth`](crate::traffic::npc::Npc::berth)): the hired escorts
+//! keep theirs across each setup, and the mission escorts, set up again,
+//! fill the first free ones. The formation re-forms whenever one joins or
 //! leaves. Set up at take-off or as a pilot is flown, a mission escort
 //! sits on its slot with the player's heading and velocity
 //! (`_AICalcFormationPositions(player, 1)` @0x4319a-0x431b2); set up on a

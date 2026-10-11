@@ -22,8 +22,11 @@
 //! [`EscortDuty`](crate::escort::EscortDuty), and marks a mission escort
 //! by its mission's mark ([`Npc::mission_escort`]). [`Session::player_led`]
 //! is the original's relation over both: the NPCs whose
-//! [`Npc::escorts_player`] holds, in the order they appeared, which is
-//! ship-table order (an [`NpcId`](crate::traffic::npc::NpcId) only grows).
+//! [`Npc::escorts_player`] holds, in ship-table order: by
+//! [`Npc::berth`], the slot each takes in the ship table. A new ship takes
+//! the first free berth (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b), and
+//! the hired escorts keep theirs across each setup, as
+//! `_DeleteAllComputerShips` (@0x3bf5f) keeps them in the table.
 //! The sites that ask it narrow it as the original does:
 //! [`Npc::is_players`] for the hired escorts and fighters,
 //! [`Npc::mission_escort`] for the mission escorts. A disabled mission
@@ -50,7 +53,7 @@ mod tests {
     use crate::pilot::Escort;
     use crate::reserves::Reserves;
     use crate::session::mission_ships::tests::{
-        accepted, shipping, ships_catalog, take_off, ticks,
+        accepted, jump_to, shipping, ships_catalog, take_off, ticks,
     };
     use crate::traffic::npc::NpcId;
 
@@ -98,22 +101,91 @@ mod tests {
         (session, marked, hired)
     }
 
+    /// NPC `id`'s formation slot, if it has one.
+    fn slot(session: &Session, id: NpcId) -> Option<u8> {
+        session
+            .npc(id)
+            .and_then(Npc::formation)
+            .map(|place| place.slot)
+    }
+
+    /// NPC `id`'s berth.
+    fn berth(session: &Session, id: NpcId) -> u32 {
+        session.npc(id).expect("in the system").berth
+    }
+
     #[test]
     fn the_player_leads_hired_and_mission_escorts_in_ship_table_order() {
         let (session, mission, hired) = flying(1);
         assert_eq!(mission.len(), 2);
-        // The mission's ships are set up with the system, before the hired
-        // escort is placed: the ship table puts them first, where the
-        // formation gives the hired escort slot 2.
-        assert_eq!(led(&session), [mission[0], mission[1], hired]);
-        let slot = |id| {
+        // The hired escort, in the pilot's records with no ship yet, takes
+        // the first slot of the ship table, as a loaded pilot's escorts do
+        // (`_LoadPilotData` @0x75a25); the mission's ships, set up with the
+        // system, fill the next free slots.
+        assert_eq!(led(&session), [hired, mission[0], mission[1]]);
+        assert_eq!(berth(&session, hired), 1);
+        assert_eq!(slot(&session, hired), Some(2));
+        assert_eq!(slot(&session, mission[0]), Some(3));
+        assert_eq!(slot(&session, mission[1]), Some(4));
+    }
+
+    #[test]
+    fn hired_and_mission_escorts_take_formation_slots_in_ship_table_order() {
+        let catalog = ships_catalog(MissionShip {
+            behav: 1,
+            ..shipping(-6, 0)
+        });
+        let mut session = accepted(&catalog);
+        session.pilot.escorts.extend([hired(), hired()]);
+        take_off(&mut session, &catalog);
+        let (a, b) = (
+            session.fleet[0].expect("placed"),
+            session.fleet[1].expect("placed"),
+        );
+        let mission = |session: &Session| -> Vec<NpcId> {
             session
-                .npc(id)
-                .and_then(Npc::formation)
-                .map(|place| place.slot)
+                .npcs()
+                .iter()
+                .filter(|npc| npc.mission_escort())
+                .map(|npc| npc.id)
+                .collect()
         };
-        assert_eq!(slot(hired), Some(2));
-        assert_eq!(slot(mission[0]), Some(3));
+        let m = mission(&session);
+        assert_eq!(m.len(), 2);
+        let berths = |session: &Session, ids: &[NpcId]| -> Vec<u32> {
+            ids.iter().map(|&id| berth(session, id)).collect()
+        };
+        assert_eq!(berths(&session, &[a, b, m[0], m[1]]), [1, 2, 3, 4]);
+        let slots = |session: &Session, ids: &[NpcId]| -> Vec<Option<u8>> {
+            ids.iter().map(|&id| slot(session, id)).collect()
+        };
+        assert_eq!(
+            slots(&session, &[a, b, m[0], m[1]]),
+            [Some(2), Some(3), Some(4), Some(5)]
+        );
+
+        // A is lost: B keeps its slot of the table across the jump, and the
+        // mission escorts, set up again, fill the first free slots around it.
+        session.dismiss(a);
+        jump_to(&mut session, &catalog, 131);
+        let b = session.fleet[0].expect("placed");
+        let m = mission(&session);
+        assert_eq!(m.len(), 2);
+        assert_eq!(berths(&session, &[m[0], b, m[1]]), [1, 2, 3]);
+        assert_eq!(led(&session), [m[0], b, m[1]]);
+        assert_eq!(
+            slots(&session, &[m[0], b, m[1]]),
+            [Some(2), Some(3), Some(4)]
+        );
+        let widths: Vec<Option<f32>> = [m[0], b, m[1]]
+            .iter()
+            .map(|&id| session.npc(id).expect("here").hull.sprite_size)
+            .collect();
+        let spacing = crate::escort::spacing(session.hull.sprite_size, &widths);
+        for id in [m[0], b, m[1]] {
+            let place = session.npc(id).and_then(Npc::formation).expect("a slot");
+            assert_eq!((place.ships, place.spacing), (4, spacing));
+        }
     }
 
     #[test]

@@ -67,6 +67,8 @@
 //! escort leaves the fleet and the system. Each change of the fleet makes
 //! a save due.
 
+use std::collections::BTreeSet;
+
 use super::Session;
 use crate::ai::Goal;
 use crate::bay::{Carrier, dock_window};
@@ -85,10 +87,40 @@ use crate::traffic::npc::{AiType, Mode, Npc, NpcId, NpcPerson};
 use crate::traffic::table::{self, ShipKind};
 
 impl Session {
+    /// The ship-table slot ([`Npc::berth`]) each of the fleet's escorts
+    /// takes as the system is set up, by its index. As
+    /// `_DeleteAllComputerShips` (@0x3bf5f) keeps the player's ships in
+    /// the table across every setup, an escort whose NPC is in the system
+    /// keeps its berth. Every other (a loaded pilot's, one just hired, the
+    /// old ship kept after a capture) takes the lowest berth not already
+    /// chosen, in fleet order, before anything else is set up, as
+    /// `_LoadPilotData` spawns a loaded pilot's escorts first
+    /// (@0x759a4-0x75b2b).
+    pub(super) fn fleet_berths(&self) -> Vec<u32> {
+        let kept: Vec<Option<u32>> = (0..self.pilot.escorts.len())
+            .map(|index| {
+                let id = self.fleet.get(index).copied().flatten()?;
+                self.npc(id).map(|npc| npc.berth)
+            })
+            .collect();
+        let mut taken: BTreeSet<u32> = kept.iter().flatten().copied().collect();
+        kept.into_iter()
+            .map(|berth| {
+                berth.unwrap_or_else(|| {
+                    let free = (1..=u32::MAX)
+                        .find(|b| !taken.contains(b))
+                        .unwrap_or(u32::MAX);
+                    taken.insert(free);
+                    free
+                })
+            })
+            .collect()
+    }
+
     /// The escorts enter the system (see the module docs): by the
     /// engine their standing orders are reset, and each is placed on its
-    /// slot.
-    pub(super) fn enter_escorts(&mut self) {
+    /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`]).
+    pub(super) fn enter_escorts(&mut self, berths: &[u32]) {
         if self.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine {
             for escort in &mut self.pilot.escorts {
                 escort.order = None;
@@ -101,8 +133,9 @@ impl Session {
             self.class_orders = [None; 4];
         }
         self.fleet = (0..self.pilot.escorts.len())
-            .map(|index| self.place_escort(index))
+            .map(|index| self.place_escort_at(index, berths.get(index).copied()))
             .collect();
+        self.traffic.reserve(BTreeSet::new());
         self.restock_persons = false;
         self.reform();
         for id in self.fleet.clone().into_iter().flatten() {
@@ -110,9 +143,16 @@ impl Session {
         }
     }
 
-    /// Escort `index` as an NPC in the system, beside the player until it
-    /// is snapped to its slot; none when its ship type has no record.
+    /// Escort `index` as an NPC in the system at the first free berth (see
+    /// [`Session::place_escort_at`]).
     pub(super) fn place_escort(&mut self, index: usize) -> Option<NpcId> {
+        self.place_escort_at(index, None)
+    }
+
+    /// Escort `index` as an NPC in the system, at `berth` or else the
+    /// first free one, beside the player until it is snapped to its slot;
+    /// none when its ship type has no record.
+    pub(super) fn place_escort_at(&mut self, index: usize, berth: Option<u32>) -> Option<NpcId> {
         let mut escort = *self.pilot.escorts.get(index)?;
         let record = self.ship_record(escort.ship)?;
         let maneuver = record.fields.maneuver;
@@ -138,6 +178,7 @@ impl Session {
         });
         let npc = Npc {
             id: NpcId::default(),
+            berth: 0,
             ship: escort.ship,
             govt: None,
             ai_type: AiType::from_raw(kind.inherent_ai),
@@ -174,30 +215,24 @@ impl Session {
             cloak_gear: kind.cloak,
             led_out: false,
         };
-        Some(self.traffic.add_npc(npc))
+        Some(match berth {
+            Some(berth) => self.traffic.add_npc_at(npc, berth),
+            None => self.traffic.add_npc(npc),
+        })
     }
 
-    /// Gives each escort in the system its slot in one formation of them
-    /// all and the player, spaced by the widest sprite among them
-    /// ([`escort::spacing`]): the hired escorts 2, 3, … in fleet order,
-    /// then the mission escorts in the order they came (see the
-    /// [`mission_escorts`](super::mission_escorts) module), the ships the
-    /// player leads ([`Session::player_led`]) narrowed to them. The
-    /// original numbers both together in ship-table order, which is
-    /// [`Session::player_led`]'s own order
-    /// (rdm:phase/player-led-ships/phase-4-formation-slot-order).
+    /// Gives each ship the player leads ([`Session::player_led`]) its slot
+    /// in one formation of them all and the player, spaced by the widest
+    /// sprite among them ([`escort::spacing`]): 2, 3, … in ship-table
+    /// order, by berth, hired and mission escorts alike, as
+    /// `_AICalcFormationPositions` numbers every ship whose formation
+    /// parent is the player in table-slot order (@0x85137-0x851cc). That
+    /// parent is the player for each ship it leads (`_DoPlayGameWork`
+    /// @0x44160-0x441c0). The original recomputes the formation every
+    /// frame (the parent's +0xc2 flag); the engine re-forms on each change
+    /// to the led set, which gives the same slots at every frame.
     pub(super) fn reform(&mut self) {
-        let mission_escorts = self
-            .player_led()
-            .filter(|npc| npc.mission_escort())
-            .map(|npc| npc.id);
-        let placed: Vec<NpcId> = self
-            .fleet
-            .iter()
-            .flatten()
-            .copied()
-            .chain(mission_escorts)
-            .collect();
+        let placed: Vec<NpcId> = self.player_led().map(|npc| npc.id).collect();
         let ships = u8::try_from(placed.len() + 1).unwrap_or(u8::MAX);
         let widths: Vec<Option<f32>> = placed
             .iter()

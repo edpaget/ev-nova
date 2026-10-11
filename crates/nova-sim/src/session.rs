@@ -1280,13 +1280,15 @@ impl Session {
             ..World::new(&self.sites)
         };
         let last = self.last_npc();
+        let berths = self.fleet_berths();
+        self.traffic.reserve(berths.iter().copied().collect());
         self.traffic.enter_with(table, world, missions, chance);
         self.resolve_person_offers(last, &mut &mut *chance);
         self.traffic_due = false;
         self.story.watched.clear();
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
-        self.enter_escorts();
+        self.enter_escorts(&berths);
         if entering.is_none() {
             self.snap_mission_escorts();
         }

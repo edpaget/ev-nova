@@ -721,6 +721,7 @@ mod tests {
     fn npc(goal: Goal, condition: Condition) -> nova_sim::Npc {
         nova_sim::Npc {
             id: NpcId(1),
+            berth: 0,
             ship: nova_sim::ShipId(128),
             govt: None,
             ai_type: nova_sim::AiType::Warship,

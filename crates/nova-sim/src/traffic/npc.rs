@@ -129,6 +129,13 @@ pub struct NpcPerson {
 pub struct Npc {
     /// Its number.
     pub id: NpcId,
+    /// Its ship-table slot (the original's ship index +0x86): the first
+    /// slot free counting up from 1 as it is added
+    /// (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b), or the slot it is
+    /// placed at. The ships the player leads take formation slots in this
+    /// order ([`Traffic::player_led`](crate::traffic::Traffic::player_led)).
+    /// Unlike its [`id`](Npc::id), a berth is reused once its ship leaves.
+    pub berth: u32,
     /// Its ship type.
     pub ship: ShipId,
     /// Its government, or `None` for independent.

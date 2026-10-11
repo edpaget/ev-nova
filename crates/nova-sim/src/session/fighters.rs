@@ -435,6 +435,7 @@ fn fighter(
 ) -> Npc {
     Npc {
         id: NpcId::default(),
+        berth: 0,
         ship,
         govt: None,
         ai_type: AiType::from_raw(kind.inherent_ai),

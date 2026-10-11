@@ -31,10 +31,11 @@
 //!
 //! **Formation** ([`spacing`], [`slot_offset`], [`slot_position`];
 //! `_AICalcFormationPositions` @0x85040, `_AICalcShipFormPos` @0x84cb8):
-//! the player leads, in slot 1, and its escorts take slots 2, 3, … in
-//! fleet order, then its mission escorts (a `ShipBehav` 1 mission's ships,
-//! which hold a [`FormationSlot`] of their own and no [`EscortDuty`]; see
-//! the session's `mission_escorts` module), each a number of spacings
+//! the player leads, in slot 1, and the ships it leads take slots 2, 3, …
+//! in ship-table order (their berths): its hired escorts and its mission
+//! escorts together (a `ShipBehav` 1 mission's ships, which hold a
+//! [`FormationSlot`] of their own and no [`EscortDuty`]; see the
+//! session's `mission_escorts` module), each a number of spacings
 //! behind and beside the player along its heading. The spacing is six tenths of the widest sprite,
 //! held between 24 and 60 pixels. An escort within [`KEEP_FORMATION`] of
 //! its slot moves with the player, nudged back towards the slot
