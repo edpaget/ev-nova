@@ -3000,6 +3000,51 @@ mod tests {
         assert_eq!(disabled_fates(&session), 0);
     }
 
+    #[test]
+    fn a_rescue_ship_coming_in_by_hyperspace_ends_its_glide_held_and_can_be_boarded() {
+        let catalog = ships_catalog(MissionShip {
+            goal: 5,
+            ..shipping(-1, 1)
+        });
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        ticks(&mut session, &catalog, 199);
+        assert_eq!(marked(&session), [0, 0]);
+        assert!(
+            session
+                .npcs()
+                .iter()
+                .all(|npc| matches!(npc.mode, Mode::JumpingIn { .. }))
+        );
+        // The fight holds them disabled through the glide, as
+        // `_AIDispatch` lets a disabled ship's jump in run on
+        // (@0x8fccb-0x8fd08).
+        for _ in 0..crate::traffic::spawn::JUMP_IN_TICKS {
+            fight(&mut session, 1);
+            tick(&mut session, &catalog);
+        }
+        assert!(session.npcs().iter().all(|npc| npc.mode == Mode::Flying));
+        assert_eq!(conditions(&session), [Condition::Disabled; 2], "held");
+        assert!(
+            session
+                .npcs()
+                .iter()
+                .all(|npc| npc.state.position.length() < 1100.0),
+            "glided in to about 1000 out"
+        );
+        session.player = session.npcs()[0].state;
+        session.target = Some(session.npcs()[0].id);
+        let boarding = session.board(
+            &Witness::default(),
+            &crate::board::NovaBoarding::default(),
+            &mut NeverFires,
+        );
+        assert!(
+            matches!(boarding, Ok(crate::board::Boarding::MissionShip(_))),
+            "{boarding:?}"
+        );
+    }
+
     // The walker's hook.
 
     #[test]

@@ -39,13 +39,16 @@
 //!   leaves the system ([`Outcome::Docked`]).
 //! - [`Goal::Idle`], or a goal it cannot fly (a stellar, lead, player or
 //!   carrier that is not there): it brakes to a stop.
-//! - A ship that is not [`Condition::Intact`] (disabled, breaking up or
-//!   destroyed) drifts: it flies on with no controls, and never lands or
-//!   jumps.
 //! - While it jumps in ([`Mode::JumpingIn`]) it glides towards the centre,
 //!   [`glide_speed`] a tick, with no steering, for
 //!   [`JUMP_IN_TICKS`](crate::traffic::spawn::JUMP_IN_TICKS); then it flies
-//!   on at its top speed.
+//!   on at its top speed. A disabled ship glides on too: `_AIDispatch`
+//!   cancels a disabled ship's jump out but lets its jump in run
+//!   (@0x8fccb-0x8fd08), so a rescue mission's ship held disabled as it
+//!   comes in ends its glide in the system.
+//! - Otherwise a ship that is not [`Condition::Intact`] (disabled,
+//!   breaking up or destroyed) drifts: it flies on with no controls, and
+//!   never lands or jumps.
 
 use crate::ai::{Goal, fire};
 use crate::bay::DOCK_TURN_SLACK;
@@ -103,12 +106,13 @@ pub enum Outcome {
 /// goal is about (the lead it follows, the ship it fights or inspects)
 /// at `other`, when it is there.
 pub fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> Outcome {
-    if npc.condition != Condition::Intact {
-        flight::step(&mut npc.state, &npc.stats.handling, Controls::default());
+    let gliding = matches!(npc.condition, Condition::Intact | Condition::Disabled);
+    if let (Mode::JumpingIn { ticks_left }, true) = (npc.mode, gliding) {
+        glide(npc, ticks_left);
         return Outcome::Flying;
     }
-    if let Mode::JumpingIn { ticks_left } = npc.mode {
-        glide(npc, ticks_left);
+    if npc.condition != Condition::Intact {
+        flight::step(&mut npc.state, &npc.stats.handling, Controls::default());
         return Outcome::Flying;
     }
     let handling = npc.stats.handling;
@@ -738,11 +742,38 @@ mod tests {
             );
             let mut jumper = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
             jumper.condition = condition;
-            jumper.mode = Mode::JumpingIn { ticks_left: 3 };
             assert_eq!(fly(&mut jumper, &sites, None), Outcome::Flying);
+            assert_eq!(jumper.state, at(1.0, -2002.0, 1.0, -2.0, 90.0), "drifting");
+        }
+    }
+
+    #[test]
+    fn a_ship_breaking_up_or_destroyed_jumping_in_drifts_with_no_glide() {
+        for condition in [Condition::Dying { ticks_left: 4 }, Condition::Destroyed] {
+            let mut jumper = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
+            jumper.condition = condition;
+            jumper.mode = Mode::JumpingIn { ticks_left: 3 };
+            assert_eq!(fly(&mut jumper, &[], None), Outcome::Flying);
             assert_eq!(jumper.state, at(1.0, -2002.0, 1.0, -2.0, 90.0), "drifting");
             assert_eq!(jumper.mode, Mode::JumpingIn { ticks_left: 3 }, "no glide");
         }
+    }
+
+    #[test]
+    fn a_disabled_ship_jumping_in_glides_in_as_an_intact_one_does() {
+        let start = at(0.0, -2000.0, 0.0, 0.0, 180.0);
+        let mut intact = npc(FAST, Goal::JumpOut, start);
+        intact.mode = Mode::JumpingIn { ticks_left: 2 };
+        let mut disabled = intact.clone();
+        disabled.condition = Condition::Disabled;
+        for _ in 0..2 {
+            assert_eq!(fly(&mut disabled, &[], None), Outcome::Flying);
+            fly(&mut intact, &[], None);
+            assert_eq!(disabled.state, intact.state);
+            assert_eq!(disabled.mode, intact.mode);
+        }
+        assert_eq!(disabled.mode, Mode::Flying);
+        assert_eq!(disabled.condition, Condition::Disabled);
     }
 
     #[test]
