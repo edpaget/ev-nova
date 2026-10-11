@@ -17,6 +17,7 @@ use nova_data::records::junk::Junk;
 use nova_data::records::mission::Mission;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::person::Person;
+use nova_data::records::rank::Rank;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -33,9 +34,10 @@ use crate::catalog::{
     DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
     FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar,
     MissionId, MissionRecord, MissionShip, MissionTexts, OutfitId, OutfitRecord, Penalties,
-    PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, ShipId, ShipRecord, SoundId,
-    StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark, StockWeapon,
-    StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId,
+    ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark,
+    StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -543,7 +545,36 @@ impl PilotCatalog for GameData {
             })
             .collect()
     }
+
+    /// Only IDs 128-255 have a slot (@0x7da37); `AffilGovt` up to 127
+    /// loads as -1 (@0x7dab0-0x7dac3).
+    fn ranks(&self) -> Vec<RankRecord> {
+        self.records::<Rank>()
+            .filter(|(id, _)| (FIRST_RANK..=LAST_RANK).contains(id))
+            .filter_map(|(id, rank)| {
+                let rank = rank.ok()?;
+                let record = rank.record;
+                Some(RankRecord {
+                    id: RankId(id),
+                    name: shown_resource_name(rank.name.unwrap_or_default()).to_owned(),
+                    weight: record.weight,
+                    affil_govt: record.affil_govt.filter(|govt| govt.0 > 127),
+                    salary: record.salary.into(),
+                    salary_cap: record.salary_cap.into(),
+                    contribute: record.contribute.bits(),
+                    flags: record.flags.bits(),
+                    conv_name: record.conv_name.as_str().to_owned(),
+                    short_name: record.short_name.as_str().to_owned(),
+                })
+            })
+            .collect()
+    }
 }
+
+/// The first `ränk` ID the original's table holds.
+const FIRST_RANK: i16 = 128;
+/// The last: the table holds 128 slots.
+const LAST_RANK: i16 = 255;
 
 /// Whether graphic type `graphic`'s `spïn` in `data` reads and gives a
 /// frame count above 0, its `xTiles` × `yTiles` in 32 bits, as the
@@ -3417,6 +3448,92 @@ mod tests {
         assert_eq!(record.ind_news, 0);
         let crons = store_named(&[(Cron::TYPE, 157, None, cron(b"\0", b"\0", b"\0"))]).crons();
         assert_eq!(crons[0].ind_news, -1, "an IndNews of -1 stays -1");
+    }
+
+    /// A `ränk` of `Weight` -3 affiliated with `affil_govt`, `PriceMod`
+    /// 85, `Salary` -200, `SalaryCap` 350000, `Contribute`
+    /// `0x4_0000_0001`, `Flags` 0x0018, `ConvName` "Commander" and
+    /// `ShortName` "Cmdr".
+    fn rank(affil_govt: i16) -> Vec<u8> {
+        use nova_data::records::rank::Rank;
+        let mut bytes = vec![0; Rank::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x00, &[-3, affil_govt, 85]);
+        bytes[0x06..0x0A].copy_from_slice(&(-200_i32).to_be_bytes());
+        bytes[0x0A..0x0E].copy_from_slice(&350_000_i32.to_be_bytes());
+        bytes[0x0E..0x16].copy_from_slice(&0x0000_0004_0000_0001_u64.to_be_bytes());
+        put_i16s(&mut bytes, 0x16, &[0x0018]);
+        bytes[0x18..0x18 + 9].copy_from_slice(b"Commander");
+        bytes[0x58..0x58 + 4].copy_from_slice(b"Cmdr");
+        bytes
+    }
+
+    #[test]
+    fn ranks_read_each_rank_raw_with_its_name_up_to_its_last_semicolon() {
+        use nova_data::records::rank::Rank;
+        let data = store_named(&[
+            (Rank::TYPE, 140, Some("; Rebel 1"), rank(130)),
+            (Rank::TYPE, 128, Some("T5; Vell-os 1"), rank(129)),
+            (Rank::TYPE, 129, None, rank(129)),
+            (Rank::TYPE, 141, Some("Broken"), rank(129)[..100].to_vec()),
+        ]);
+        let ranks = data.ranks();
+        assert_eq!(
+            ranks.iter().map(|rank| rank.id).collect::<Vec<_>>(),
+            [RankId(128), RankId(129), RankId(140)],
+            "by ID, the undecodable one skipped"
+        );
+        assert_eq!(
+            ranks[0],
+            RankRecord {
+                id: RankId(128),
+                name: "T5".to_owned(),
+                weight: -3,
+                affil_govt: Some(GovtId(129)),
+                salary: -200,
+                salary_cap: 350_000,
+                contribute: 0x0000_0004_0000_0001,
+                flags: 0x0018,
+                conv_name: "Commander".to_owned(),
+                short_name: "Cmdr".to_owned(),
+            }
+        );
+        assert_eq!(ranks[1].name, "", "no resource name");
+        assert_eq!(ranks[2].name, "", "nothing before the last ';'");
+        assert_eq!(ranks[2].affil_govt, Some(GovtId(130)));
+        assert_eq!(store(&[]).ranks(), []);
+    }
+
+    #[test]
+    fn a_rank_affiliated_at_127_or_below_is_unaffiliated() {
+        use nova_data::records::rank::Rank;
+        let data = store(&[
+            (Rank::TYPE, 128, rank(127)),
+            (Rank::TYPE, 129, rank(-1)),
+            (Rank::TYPE, 130, rank(128)),
+            (Rank::TYPE, 131, rank(0)),
+        ]);
+        assert_eq!(
+            data.ranks()
+                .iter()
+                .map(|rank| rank.affil_govt)
+                .collect::<Vec<_>>(),
+            [None, None, Some(GovtId(128)), None]
+        );
+    }
+
+    #[test]
+    fn only_ranks_128_to_255_are_read() {
+        use nova_data::records::rank::Rank;
+        let data = store(&[
+            (Rank::TYPE, 127, rank(128)),
+            (Rank::TYPE, 128, rank(128)),
+            (Rank::TYPE, 255, rank(128)),
+            (Rank::TYPE, 256, rank(128)),
+        ]);
+        assert_eq!(
+            data.ranks().iter().map(|rank| rank.id).collect::<Vec<_>>(),
+            [RankId(128), RankId(255)]
+        );
     }
 
     #[test]

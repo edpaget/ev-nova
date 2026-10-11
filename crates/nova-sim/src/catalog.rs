@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 pub use nova_data::{
     BoomId, CronId, DudeId, FleetId, GovtId, JunkId, MissionId, NebulaId, OutfitId, PersonId,
-    ShipId, SoundId, StellarId, SystemId, WeaponId,
+    RankId, ShipId, SoundId, StellarId, SystemId, WeaponId,
 };
 
 use crate::combat::weapon::Explosion;
@@ -791,6 +791,35 @@ pub struct CronRecord {
     pub ind_news: i16,
 }
 
+/// A rank, from its `ränk` as `_LoadObjectData` keeps it
+/// (@0x7da37-0x7dc4d): the fields the [`rank`](crate::rank) module
+/// reads, which decides what the values mean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RankRecord {
+    /// The `ränk`'s ID.
+    pub id: RankId,
+    /// Its full name: the resource name up to its last ';', trailing
+    /// spaces and ';'s dropped (@0x7db7d-0x7dbc0), empty when it has none.
+    pub name: String,
+    /// Its `Weight`, raw.
+    pub weight: i16,
+    /// Its `AffilGovt`: `None` for -1 or any ID up to 127, which the
+    /// original loads as -1 (@0x7dab0-0x7dac3).
+    pub affil_govt: Option<GovtId>,
+    /// Its `Salary`, raw: credits a day, a fee when negative.
+    pub salary: i64,
+    /// Its `SalaryCap`, raw: 0 or less is no cap.
+    pub salary_cap: i64,
+    /// Its `Contribute` bits, given to the player while it is active.
+    pub contribute: u64,
+    /// Its `Flags`.
+    pub flags: u16,
+    /// Its `ConvName`, read by `<PRK>`.
+    pub conv_name: String,
+    /// Its `ShortName`, read by `<SRK>`.
+    pub short_name: String,
+}
+
 /// What a mission's screens show of it, read from its `mïsn` and its
 /// `dësc`s (see the [`mission`](crate::mission) module's "Screens"): each
 /// text as written, its tags not yet filled, and `None` for an ID of -1
@@ -1218,6 +1247,8 @@ pub trait PilotCatalog {
     fn stellar_marks(&self) -> Vec<StellarMark>;
     /// Every `crön` that can be read, by ascending ID.
     fn crons(&self) -> Vec<CronRecord>;
+    /// Every `ränk` 128-255 that can be read, by ascending ID.
+    fn ranks(&self) -> Vec<RankRecord>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -1308,6 +1339,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn crons(&self) -> Vec<CronRecord> {
         (**self).crons()
+    }
+
+    fn ranks(&self) -> Vec<RankRecord> {
+        (**self).ranks()
     }
 }
 
@@ -1400,6 +1435,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn crons(&self) -> Vec<CronRecord> {
         (**self).crons()
+    }
+
+    fn ranks(&self) -> Vec<RankRecord> {
+        (**self).ranks()
     }
 }
 
@@ -1676,6 +1715,14 @@ mod tests {
                 ..crate::testkit::cron(156)
             }]
         }
+
+        /// Rank 140, paying 200.
+        fn ranks(&self) -> Vec<RankRecord> {
+            vec![RankRecord {
+                salary: 200,
+                ..crate::testkit::rank(140)
+            }]
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1709,6 +1756,7 @@ mod tests {
             format!("{:?}", catalog.place_names()),
             format!("{:?}", catalog.stellar_marks()),
             format!("{:?}", catalog.crons()),
+            format!("{:?}", catalog.ranks()),
         ]
     }
 
@@ -1754,6 +1802,8 @@ mod tests {
         assert!(direct[24].contains("place: (30, -40)"), "{direct:?}");
         assert!(direct[25].contains("CronId(156)"), "{direct:?}");
         assert!(direct[25].contains("duration: 105"), "{direct:?}");
+        assert!(direct[26].contains("RankId(140)"), "{direct:?}");
+        assert!(direct[26].contains("salary: 200"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

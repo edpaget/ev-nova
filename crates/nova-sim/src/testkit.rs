@@ -9,8 +9,9 @@ use crate::catalog::{
     DateAffixes, DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord,
     HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip,
     MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog,
-    PlaceNames, ShipId, ShipRecord, StarSystem, StartDate, StartError, StellarId, StellarLife,
-    StellarMark, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem, StartDate, StartError,
+    StellarId, StellarLife, StellarMark, SystemId, SystemTraffic, TrafficCatalog, WeaponId,
+    WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -101,6 +102,8 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) marks: Vec<StellarMark>,
     /// Every `crön`: none, by default.
     pub(crate) crons: Vec<CronRecord>,
+    /// Every `ränk`: none, by default.
+    pub(crate) ranks: Vec<RankRecord>,
 }
 
 /// Cron `id`, open on every date, starting on any roll and asking
@@ -128,6 +131,23 @@ pub(crate) fn cron(id: i16) -> CronRecord {
         news_govt: [-1; 4],
         govt_news: [-1; 4],
         ind_news: -1,
+    }
+}
+
+/// Rank `id`: unaffiliated, of `Weight` 0, paying nothing, with no cap,
+/// no `Contribute`, no flags and every name empty.
+pub(crate) fn rank(id: i16) -> RankRecord {
+    RankRecord {
+        id: RankId(id),
+        name: String::new(),
+        weight: 0,
+        affil_govt: None,
+        salary: 0,
+        salary_cap: 0,
+        contribute: 0,
+        flags: 0,
+        conv_name: String::new(),
+        short_name: String::new(),
     }
 }
 
@@ -535,6 +555,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         place_name_reads: RefCell::default(),
         marks: Vec::new(),
         crons: Vec::new(),
+        ranks: Vec::new(),
     }
 }
 
@@ -730,6 +751,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn crons(&self) -> Vec<CronRecord> {
         self.crons.clone()
+    }
+
+    fn ranks(&self) -> Vec<RankRecord> {
+        self.ranks.clone()
     }
 }
 

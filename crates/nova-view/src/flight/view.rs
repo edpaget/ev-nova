@@ -3699,6 +3699,10 @@ mod tests {
         fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
             Vec::new()
         }
+
+        fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
+            Vec::new()
+        }
     }
 
     /// The weapons, ship types' combat fields and governments given.

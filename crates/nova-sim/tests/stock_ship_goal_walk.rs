@@ -693,6 +693,10 @@ impl PilotCatalog for Probed<'_> {
     fn crons(&self) -> Vec<cat::CronRecord> {
         self.data.crons()
     }
+
+    fn ranks(&self) -> Vec<cat::RankRecord> {
+        self.data.ranks()
+    }
 }
 
 impl CombatCatalog for Probed<'_> {

@@ -27,8 +27,8 @@
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's fields and default items, the
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
-//!   `jünk` and `öops` the exchange trades and is moved by, and the
-//!   `crön`s the day's cron pass runs; the
+//!   `jünk` and `öops` the exchange trades and is moved by, the
+//!   `crön`s the day's cron pass runs and the `ränk`s the pilot can hold; the
 //!   [`TrafficCatalog`] port, the `sÿst` traffic, `düde`s and `flët`s NPC
 //!   traffic is spawned from; the [`CombatCatalog`] port, the `wëap`s,
 //!   each `shïp`'s combat fields and the `gövt`s ships fight by; and the
@@ -310,8 +310,9 @@ pub use catalog::{
     FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite,
     ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, OutfitId,
     OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
-    ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife,
-    StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
+    StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId,
+    WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};

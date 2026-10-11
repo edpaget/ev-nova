@@ -227,6 +227,10 @@ impl PilotCatalog for Courier {
     fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
         Vec::new()
     }
+
+    fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
+        Vec::new()
+    }
 }
 
 /// No traffic anywhere.
