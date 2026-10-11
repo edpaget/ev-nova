@@ -64,13 +64,16 @@
 //! `_DoNewPilot` resets every slot (@0x7d77f-0x7d7a9; see
 //! [`cron`](crate::cron)).
 //!
+//! It keeps its active ranks, by `ränk` ID: none on a new pilot, as every
+//! rank loads inactive (@0x7da5e, @0x190f0; see [`rank`](crate::rank)).
+//!
 //! A [`Session`](crate::Session) flies a pilot and changes it as the rules
 //! say.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{
-    CombatCatalog, CronId, DisasterId, GovtId, OutfitId, PersonId, PilotCatalog, ShipId,
+    CombatCatalog, CronId, DisasterId, GovtId, OutfitId, PersonId, PilotCatalog, RankId, ShipId,
     ShipRecord, StartError, StellarId, SystemId,
 };
 use crate::combat::armament::Arsenal;
@@ -161,6 +164,8 @@ pub struct Pilot {
     /// Each crön running or holding off, by ID, with its counters; any
     /// other is inactive (see [`cron`](crate::cron)).
     pub(crate) crons: BTreeMap<CronId, CronState>,
+    /// The active ranks, by ID (see [`rank`](crate::rank)).
+    pub(crate) ranks: BTreeSet<RankId>,
 }
 
 /// The player's gender, which the `G` test reads (true when male). The
@@ -268,6 +273,7 @@ impl Pilot {
             galaxy: GalaxyOverlay::default(),
             missions: ActiveMissions::default(),
             crons: BTreeMap::new(),
+            ranks: BTreeSet::new(),
         })
     }
 
@@ -293,6 +299,12 @@ impl Pilot {
     #[must_use]
     pub fn crons(&self) -> &BTreeMap<CronId, CronState> {
         &self.crons
+    }
+
+    /// The active ranks, by ID.
+    #[must_use]
+    pub fn ranks(&self) -> &BTreeSet<RankId> {
+        &self.ranks
     }
 
     /// The ship's paint, `None` when it is unpainted.
@@ -844,6 +856,12 @@ mod tests {
     fn a_new_pilot_has_no_cron_running_or_holding_off() {
         let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
         assert!(pilot.crons().is_empty());
+    }
+
+    #[test]
+    fn a_new_pilot_holds_no_rank() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert!(pilot.ranks().is_empty());
     }
 
     #[test]

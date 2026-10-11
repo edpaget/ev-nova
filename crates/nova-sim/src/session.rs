@@ -350,6 +350,7 @@ mod news;
 mod outfits;
 mod person_offers;
 mod persons;
+mod ranks;
 mod script_effects;
 mod ship_change;
 mod stellars;
@@ -837,9 +838,10 @@ impl Session {
     /// derived, a new pilot or a save from before they were kept, derives
     /// them from its records with each government
     /// ([`legal::systems_from_govts`]); one saved with a crön running
-    /// that the data no longer has forgets it; and the reserves hold no
-    /// more than the stats allow. No secondary is selected, as the original's
-    /// `_ResetPlayer` leaves it before `_LoadPilotData` (@0x76502,
+    /// or a rank active that the data no longer has forgets it; and the
+    /// reserves hold no more than the stats allow. No secondary is
+    /// selected, as the original's `_ResetPlayer` leaves it before
+    /// `_LoadPilotData` (@0x76502,
     /// @0x7673e), which never sets one.
     ///
     /// A pilot last landed on a stellar of its system resumes docked there,
@@ -887,6 +889,12 @@ impl Session {
         pilot
             .crons
             .retain(|id, _| crons.iter().any(|record| record.id == *id));
+        // So is a rank (`_LoadPilotData` @0x75e47-0x75eb6; see the
+        // `ranks` module).
+        let ranks = catalog.ranks();
+        pilot
+            .ranks
+            .retain(|id| ranks.iter().any(|record| record.id == *id));
         let system = pilot.system;
         let here = overlaid_sites(&galaxy, catalog, system);
         let (docked, dock) = docking(&galaxy, catalog, &pilot, &here);
