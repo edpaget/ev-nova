@@ -1071,6 +1071,59 @@ mod tests {
     }
 
     #[test]
+    fn e_holds_an_outfit_to_its_max_as_raised_max_reads_it() {
+        // Outfit 414 names 404 (`Max` 2) in two `ModType` 27 mods: by the
+        // engine one of it raises the `Max` to 4, by the other reading to 2.
+        let raiser = OutfitId(414);
+        let mut catalog = changing();
+        catalog.outfits.push(outfit(
+            414,
+            &[
+                (crate::outfitter::RAISES_MAX, 404),
+                (crate::outfitter::RAISES_MAX, 404),
+            ],
+        ));
+        let owning = |mut changed: Session| {
+            changed.pilot.outfits.extend([(LIMITED, 6), (raiser, 1)]);
+            changed
+        };
+        let mut engine = owning(session(&catalog));
+        run(&mut engine, "E130");
+        assert_eq!(engine.pilot.owned(LIMITED), 4, "each mod counts");
+        let mut other =
+            owning(session(&catalog).with_rules(
+                Rulebook::default().with_override(RuleKey::RaisedMax, RuleSource::Bible),
+            ));
+        run(&mut other, "E130");
+        assert_eq!(other.pilot.owned(LIMITED), 2, "each raiser counts once");
+    }
+
+    #[test]
+    fn e_holds_the_turrets_to_the_new_classs_turret_slots() {
+        // Outfit 414 is a turret; ships 135 and 136 have `MaxTur` 2 and 3,
+        // ship 128's being 1 and each one's `MaxGun` 2.
+        let turret = OutfitId(414);
+        let mut catalog = changing();
+        catalog.outfits.push(OutfitRecord {
+            flags: OutfitFlags::TURRET,
+            ..outfit(414, &[])
+        });
+        for (id, max_tur) in [(135, 2), (136, 3)] {
+            catalog.ships.push((ShipId(id), Ok(FAST)));
+            catalog.ship_records.push(ShipRecord {
+                max_tur,
+                ..ship(id, FAST)
+            });
+        }
+        for (op, held) in [("E135", 2), ("E136", 3)] {
+            let mut session = session(&catalog);
+            session.pilot.outfits.insert(turret, 5);
+            run(&mut session, op);
+            assert_eq!(session.pilot.owned(turret), held, "{op}: its own MaxTur");
+        }
+    }
+
+    #[test]
     fn c_leaves_everything_but_the_ship_as_it_was() {
         let catalog = changing();
         let mut session = session(&catalog);
