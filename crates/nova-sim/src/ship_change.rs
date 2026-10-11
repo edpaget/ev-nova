@@ -87,7 +87,7 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::{OutfitId, OutfitRecord, WeaponId};
-use crate::combat::armament::{MOD_AMMO, MOD_WEAPON, StockAdded};
+use crate::combat::armament::{MOD_AMMO, MOD_WEAPON};
 use crate::outfitter::{Hardpoints, ItemRoom, OutfitFlags, item_limit};
 use crate::rulebook::RuleSource;
 
@@ -129,7 +129,7 @@ pub struct Limits<'a> {
 #[derive(Clone, Copy)]
 pub struct Fold<'a> {
     /// What the new class's stock weapons add to the arrays.
-    pub stock: &'a StockAdded,
+    pub stock: &'a Arrays,
     /// Whether the default items' first mods are added to the arrays
     /// ([`RuleKey::ShipChangeDefaultWeapons`](crate::RuleKey::ShipChangeDefaultWeapons)):
     /// by the engine they are not, and the fold takes them away.
@@ -137,13 +137,15 @@ pub struct Fold<'a> {
 }
 
 /// The original's weapon and rounds arrays: how many of each weapon, and
-/// of each weapon's rounds. Wide and signed, where the original's are
-/// 16-bit and wrap.
+/// of each weapon's rounds, as the outfits owned make them ([`Arrays::of`])
+/// or as a new class's stock adds to them
+/// ([`Arsenal::stock_added`](crate::combat::armament::Arsenal::stock_added)).
+/// Wide and signed, where the original's are 16-bit and wrap.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Arrays {
     /// Each weapon's count.
     pub weapons: BTreeMap<WeaponId, i64>,
-    /// Each weapon's rounds.
+    /// Each weapon's rounds, by the weapon whose rounds they are.
     pub rounds: BTreeMap<WeaponId, i64>,
 }
 
@@ -185,15 +187,6 @@ impl Arrays {
     }
 }
 
-impl From<&StockAdded> for Arrays {
-    fn from(stock: &StockAdded) -> Self {
-        Self {
-            weapons: stock.weapons.clone(),
-            rounds: stock.rounds.clone(),
-        }
-    }
-}
-
 /// Adds `count` to `weapon`'s entry of `array`, saturating.
 fn add(array: &mut BTreeMap<WeaponId, i64>, weapon: WeaponId, count: i64) {
     let entry = array.entry(weapon).or_default();
@@ -221,7 +214,7 @@ pub fn carried_outfits(
     }
     let mut arrays = Arrays::of(&outfits, records);
     if let Some(fold) = fold {
-        arrays.add(&Arrays::from(fold.stock));
+        arrays.add(fold.stock);
     }
     if carry != OutfitCarry::Keep {
         if fold.is_none_or(|fold| fold.default_weapons == RuleSource::Bible) {
@@ -728,7 +721,7 @@ mod tests {
             max_ammo: &max_ammo_10,
             ..limits(1, 0)
         };
-        let stock = StockAdded {
+        let stock = Arrays {
             weapons: BTreeMap::from([(WeaponId(300), 2)]),
             rounds: BTreeMap::new(),
         };
@@ -762,7 +755,7 @@ mod tests {
             map(&[(420, 1), (421, 20)]),
             "the launcher folded to 2, held to its one slot, still counts twice for its rounds"
         );
-        let none = StockAdded::default();
+        let none = Arrays::default();
         let by = |default_weapons| {
             let fold = Fold {
                 stock: &none,
@@ -816,7 +809,7 @@ mod tests {
             max_ammo: &max_ammo_10_each,
             ..limits(0, 0)
         };
-        let stock = StockAdded {
+        let stock = Arrays {
             weapons: BTreeMap::from([(WeaponId(300), -1), (WeaponId(301), 2)]),
             rounds: BTreeMap::new(),
         };
@@ -982,7 +975,7 @@ mod tests {
     }
 
     /// No stock added.
-    static NO_STOCK: StockAdded = StockAdded {
+    static NO_STOCK: Arrays = Arrays {
         weapons: BTreeMap::new(),
         rounds: BTreeMap::new(),
     };
@@ -992,7 +985,7 @@ mod tests {
     /// and not clamped.
     fn changed(
         owned: &[(i16, u16)],
-        stock: &StockAdded,
+        stock: &Arrays,
         defaults: &[(i16, u16)],
         default_weapons: RuleSource,
     ) -> BTreeMap<OutfitId, u16> {
@@ -1012,7 +1005,7 @@ mod tests {
 
     #[test]
     fn e_and_h_fold_the_stock_into_the_carried_outfits() {
-        let stock = StockAdded {
+        let stock = Arrays {
             weapons: array(&[(300, 2)]),
             rounds: array(&[(300, -1)]),
         };
@@ -1057,7 +1050,7 @@ mod tests {
             map(&[(442, 1)]),
             "a later mod is no holder: kept"
         );
-        let stock = StockAdded {
+        let stock = Arrays {
             weapons: array(&[(300, 2)]),
             rounds: BTreeMap::new(),
         };

@@ -96,6 +96,7 @@ use crate::flight::normalized;
 use crate::pilot::tally;
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
+use crate::ship_change::Arrays;
 
 /// The `oütf` `ModType` that is a weapon: its `ModVal` is the `wëap`.
 pub const MOD_WEAPON: i16 = 1;
@@ -725,7 +726,7 @@ impl Arsenal {
     }
 
     /// What ship class `ship`'s stock weapons and their ammunition add to
-    /// the weapon and rounds arrays when the `E` and `H` set operators
+    /// the weapon and rounds arrays ([`Arrays`]) when the `E` and `H` set operators
     /// change to it (`_EvalSetExp` @0x1551c-0x155de; see the module
     /// docs): each weapon's `WeapCount` to its own entry, and its
     /// `AmmoLoad` to the weapon its raw `AmmoType` names (`wëap` 128 +
@@ -744,7 +745,7 @@ impl Arsenal {
     /// them is the fold's ([`crate::ship_change`]); none for a class that
     /// cannot be read.
     #[must_use]
-    pub fn stock_added(&self, ship: ShipId, bays: RuleSource, negative: RuleSource) -> StockAdded {
+    pub fn stock_added(&self, ship: ShipId, bays: RuleSource, negative: RuleSource) -> Arrays {
         let route = |spec: &WeaponSpec| match (bays, spec.carried) {
             (RuleSource::Engine, Some(fighter)) if (0..=LAST_AMMO_TYPE).contains(&fighter.0) => {
                 WeaponId(FIRST_AMMO_WEAPON + fighter.0)
@@ -755,7 +756,7 @@ impl Arsenal {
             RuleSource::Engine => value != 0,
             RuleSource::Bible => value > 0,
         };
-        let mut added = StockAdded::default();
+        let mut added = Arrays::default();
         for (weapon, (count, load)) in self.stock_slots(ship) {
             if counts(count) {
                 *added.weapons.entry(weapon).or_default() += i64::from(count);
@@ -856,18 +857,6 @@ pub struct StockFit {
     pub weapon: WeaponId,
     /// Its `WeapCount`, or its `AmmoLoad`.
     pub count: u16,
-}
-
-/// What a ship class's stock weapons add to the weapon and rounds arrays
-/// on an `E` or `H` change of ship ([`Arsenal::stock_added`]), before the
-/// fold puts them on outfits. Wide and signed: the original's arrays are
-/// 16-bit and wrap.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct StockAdded {
-    /// Each weapon's `WeapCount`.
-    pub weapons: BTreeMap<WeaponId, i64>,
-    /// Each ammunition's loads, by the weapon whose rounds they are.
-    pub rounds: BTreeMap<WeaponId, i64>,
 }
 
 /// One launcher outfit's link to its ammunition, as the outfitter's Sell
@@ -2109,8 +2098,8 @@ mod tests {
     }
 
     /// What `E` and `H` add to the arrays: `weapons`, then `rounds`.
-    fn adds(weapons: &[(i16, i64)], rounds: &[(i16, i64)]) -> StockAdded {
-        StockAdded {
+    fn adds(weapons: &[(i16, i64)], rounds: &[(i16, i64)]) -> Arrays {
+        Arrays {
             weapons: array(weapons),
             rounds: array(rounds),
         }
@@ -2118,7 +2107,7 @@ mod tests {
 
     /// Ship 130's stock weapons and rounds as `E` and `H` add them, with
     /// bays loaded by `bays`, negative stock read by the engine.
-    fn added(arsenal: &Arsenal, bays: RuleSource) -> StockAdded {
+    fn added(arsenal: &Arsenal, bays: RuleSource) -> Arrays {
         arsenal.stock_added(ShipId(130), bays, RuleSource::Engine)
     }
 
