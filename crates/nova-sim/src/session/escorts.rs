@@ -6,7 +6,9 @@
 //! a system (a jump's arrival, and the first traffic tick after a
 //! take-off or after a pilot is flown, new or loaded), each escort whose
 //! ship type has a record is placed on its formation slot (2, 3, … in
-//! fleet order), with the player's heading and velocity, of no
+//! fleet order, the mission escorts after them in one formation, see
+//! [`mission_escorts`](super::mission_escorts)), with the player's
+//! heading and velocity, of no
 //! government, its AI type its `InherentAI`, carrying its class's stock
 //! weapons and rounds, with its record's shield, armour and fuel and its
 //! standing order. Its record follows its reserves as it fights. Every
@@ -66,7 +68,7 @@ use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::escort::{
-    self, ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup,
+    self, ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, FormationSlot,
 };
 use crate::flight::ShipState;
 use crate::reserves::Reserves;
@@ -159,11 +161,24 @@ impl Session {
         Some(self.traffic.add_npc(npc))
     }
 
-    /// Gives each escort in the system its slot, 2, 3, … in fleet order,
-    /// in a formation of them all and the player, spaced by the widest
-    /// sprite among them ([`escort::spacing`]).
+    /// Gives each escort in the system its slot in one formation of them
+    /// all and the player, spaced by the widest sprite among them
+    /// ([`escort::spacing`]): the hired escorts 2, 3, … in fleet order,
+    /// then the mission escorts in the order they came (see the
+    /// [`mission_escorts`](super::mission_escorts) module).
     pub(super) fn reform(&mut self) {
-        let placed: Vec<NpcId> = self.fleet.iter().flatten().copied().collect();
+        let mission_escorts = self
+            .npcs()
+            .iter()
+            .filter(|npc| npc.mission_escort())
+            .map(|npc| npc.id);
+        let placed: Vec<NpcId> = self
+            .fleet
+            .iter()
+            .flatten()
+            .copied()
+            .chain(mission_escorts)
+            .collect();
         let ships = u8::try_from(placed.len() + 1).unwrap_or(u8::MAX);
         let widths: Vec<Option<f32>> = placed
             .iter()
@@ -173,28 +188,38 @@ impl Session {
         let spacing = escort::spacing(self.hull.sprite_size, &widths);
         for (place, id) in placed.into_iter().enumerate() {
             let slot = u8::try_from(place + 2).unwrap_or(u8::MAX);
-            if let Some(npc) = self.npc_mut(id)
-                && let Some(duty) = &mut npc.escort
-            {
+            let Some(npc) = self.npc_mut(id) else {
+                continue;
+            };
+            let formation = FormationSlot {
+                slot,
+                ships,
+                spacing,
+            };
+            if let Some(duty) = &mut npc.escort {
                 *duty = EscortDuty {
                     slot,
                     ships,
                     spacing,
                     ..*duty
                 };
+            } else if let Some(mark) = &mut npc.mission
+                && mark.formation.is_some()
+            {
+                mark.formation = Some(formation);
             }
         }
     }
 
-    /// Puts escort NPC `id` on its slot beside the player, with the
-    /// player's heading and velocity.
+    /// Puts escort NPC `id`, hired or a mission escort, on its slot beside
+    /// the player, with the player's heading and velocity.
     pub(super) fn snap(&mut self, id: NpcId) {
         let player = self.player;
         if let Some(npc) = self.npc_mut(id)
-            && let Some(duty) = npc.escort
+            && let Some(formation) = npc.formation()
         {
             npc.state = ShipState {
-                position: escort::slot_position(&player, duty.slot, duty.ships, duty.spacing),
+                position: formation.position(&player),
                 ..player
             };
         }

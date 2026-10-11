@@ -86,10 +86,20 @@
 //! under mission `Flags` 0x0800 when the `düde` lists it. The person's
 //! NPC is taken out of the system (ship +0xb8 cleared), without being
 //! gone for good, and the player's target moves to the ship. The ship
-//! raises [`Fate::Arrived`] as the other paths' ships do. It joins no
-//! fleet, and no count of the slot changes: it is the slot's one ship
-//! left, so a later setup brings one, never a second beside it, and
-//! phase 1's lifetime rule releases it as it does any mission ship.
+//! raises [`Fate::Arrived`] as the other paths' ships do. It joins none
+//! of the hired escorts, and no count of the slot changes: it is the
+//! slot's one ship left, so a later setup brings one, never a second
+//! beside it, and phase 1's lifetime rule releases it as it does any
+//! mission ship. Of a `ShipBehav` 1 mission (stock 132) it joins the
+//! player's formation as a mission escort, as every `ShipBehav` 1 ship
+//! does (see the [`mission_escorts`](super::mission_escorts) module); of
+//! another `ShipBehav`, its `ShipGoal` 3 fly-in-form (@0x62509) follows a
+//! leader of -1 and it keeps its own AI.
+//!
+//! **Mission escorts** are the [`mission_escorts`](super::mission_escorts)
+//! module's: `ShipBehav` 1 ships join the player's formation as they come
+//! ([`Session::mission_ships_came`]) and on every traffic tick, and leave
+//! it as their marks are cleared.
 
 use super::Session;
 use crate::board::{Boarding, MissionBoardLine};
@@ -550,10 +560,11 @@ impl Session {
     /// and it becomes the player's target when the person was. No count
     /// of the slot changes. Nothing when the NPC is no longer here, the
     /// slot no longer holds a mission of a `düde`, or the ship cannot be
-    /// spawned. Flying in formation for `ShipGoal` 3
-    /// (`_AIMakeEscortFlyInForm` @0x62509) is
-    /// rdm:phase/mission-ships/phase-7-mission-escorts: until then the
-    /// ship keeps its `düde`'s AI.
+    /// spawned. Of a `ShipBehav` 1 mission it joins the player's
+    /// formation as it comes ([`Session::mission_ships_came`]); of
+    /// another, it keeps its `düde`'s AI, as `_AIMakeEscortFlyInForm`
+    /// (@0x62509) gives it no leader to follow (see the
+    /// [`mission_escorts`](super::mission_escorts) module).
     pub(super) fn swap_in_mission_ship(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -744,7 +755,9 @@ impl Session {
     /// The special ships just brought into the system, each numbered
     /// above `last` (every one with none): each held disabled
     /// ([`Session::mission_ship_held`]) is stored disabled, so it reads so
-    /// before any fight; each raises [`Fate::Arrived`], and each of a
+    /// before any fight; each that may join the player's formation joins
+    /// it ([`Session::join_mission_escorts`]); each raises
+    /// [`Fate::Arrived`], and each of a
     /// mission whose goal is to observe them, not yet met, is watched for
     /// its first sighting ([`Session::watch_ship`]).
     pub(super) fn mission_ships_came(&mut self, last: Option<NpcId>) {
@@ -765,6 +778,7 @@ impl Session {
                 npc.condition = Condition::Disabled;
             }
         }
+        self.join_mission_escorts();
         for (ship, slot) in came {
             self.raise(StoryEvent::ShipFate {
                 ship,
@@ -922,8 +936,10 @@ impl Session {
 
     /// The special ships of the mission in `slot`, aborted
     /// (`_AbortMission` @0x99ab5-0x99b24): each loses its mark and flies
-    /// on as ordinary traffic, or, while the player is docked, is taken
-    /// out of the system.
+    /// on as ordinary traffic, a mission escort leaving the formation and
+    /// the system (see the [`mission_escorts`](super::mission_escorts)
+    /// module); or, while the player is docked, each is taken out of the
+    /// system.
     pub(super) fn release_mission_ships(&mut self, slot: u8) {
         let marked: Vec<NpcId> = self
             .npcs()
@@ -931,28 +947,43 @@ impl Session {
             .filter(|npc| npc.mission.is_some_and(|mark| mark.slot == slot))
             .map(|npc| npc.id)
             .collect();
-        for id in marked {
-            if self.landed.is_some() {
-                self.traffic.remove(id);
-            } else if let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) {
-                npc.mission = None;
-            }
-        }
+        self.unmark_mission_ships(&marked);
     }
 
     /// Clears the mark of every special ship whose slot is free, as
-    /// `_AIDispatch` does on each think (@0x8fbcd-0x8fc3a): it flies on as
-    /// ordinary traffic. A mission still in its slot keeps its ships
-    /// marked, failed or not.
+    /// `_AIDispatch` does on each think (@0x8fbcd-0x8fc96): it flies on as
+    /// ordinary traffic, a mission escort leaving the formation and the
+    /// system. A mission still in its slot keeps its ships marked, failed
+    /// or not.
     pub(super) fn unmark_inactive_mission_ships(&mut self) {
         let missions = &self.pilot.missions;
-        for npc in self.traffic.npcs_mut() {
-            if npc
-                .mission
-                .is_some_and(|mark| missions.get(mark.slot).is_none())
-            {
-                npc.mission = None;
+        let freed: Vec<NpcId> = self
+            .npcs()
+            .iter()
+            .filter(|npc| {
+                npc.mission
+                    .is_some_and(|mark| missions.get(mark.slot).is_none())
+            })
+            .map(|npc| npc.id)
+            .collect();
+        self.unmark_mission_ships(&freed);
+    }
+
+    /// The special ships `ids` lose their marks
+    /// ([`Session::unmark_mission_ship`]), or, while the player is
+    /// docked, are taken out of the system; the formation re-forms when a
+    /// mission escort left it.
+    fn unmark_mission_ships(&mut self, ids: &[NpcId]) {
+        let mut reform = false;
+        for &id in ids {
+            if self.landed.is_some() {
+                self.traffic.remove(id);
+            } else {
+                reform |= self.unmark_mission_ship(id);
             }
+        }
+        if reform {
+            self.reform();
         }
     }
 
@@ -969,7 +1000,7 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::rc::Rc;
 
     use super::*;
@@ -1006,7 +1037,7 @@ mod tests {
     /// Mission 140, offered anywhere, its two special ships of düde 150
     /// as `ships` says: `ShipSyst` `syst`, `ShipStart` `start`,
     /// `ShipBehav` -1, named from 7000 and subtitled from 7001.
-    fn shipping(syst: i16, start: i16) -> MissionShip {
+    pub(in crate::session) fn shipping(syst: i16, start: i16) -> MissionShip {
         MissionShip {
             count: 2,
             goal: -1,
@@ -1021,7 +1052,7 @@ mod tests {
 
     /// [`catalog`] with düde 150 (warships of govt 131 flying ship 200)
     /// and mission 140 with `ships`.
-    fn ships_catalog(ships: MissionShip) -> FakePilotCatalog {
+    pub(in crate::session) fn ships_catalog(ships: MissionShip) -> FakePilotCatalog {
         let mut catalog = catalog();
         catalog.star_map[1].links.push(SystemId(130));
         catalog.ship_records = vec![ship(128, FAST), ship(200, FAST)];
@@ -1045,13 +1076,13 @@ mod tests {
         catalog
     }
 
-    fn settle(session: &mut Session, catalog: &FakePilotCatalog) {
+    pub(in crate::session) fn settle(session: &mut Session, catalog: &FakePilotCatalog) {
         let _ = session.settle_script(catalog, &mut NeverFires);
     }
 
     /// A session of `catalog`, named from [`Names`], docked at 128 with
     /// mission 140 accepted into slot 0.
-    fn accepted(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn accepted(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog)
             .expect("starts")
             .with_strings(Rc::new(Names));
@@ -1067,7 +1098,7 @@ mod tests {
 
     /// Takes off, settles, and runs the first traffic tick, which sets
     /// the system up.
-    fn take_off(session: &mut Session, catalog: &FakePilotCatalog) {
+    pub(in crate::session) fn take_off(session: &mut Session, catalog: &FakePilotCatalog) {
         session.take_off(&mut NeverFires).expect("takes off");
         settle(session, catalog);
         tick(session, catalog);
@@ -1075,18 +1106,18 @@ mod tests {
 
     /// Jumps from the centre, where `fly_out` heads straight out, to `to`,
     /// and settles.
-    fn jump_to(session: &mut Session, catalog: &FakePilotCatalog, to: i16) {
+    pub(in crate::session) fn jump_to(session: &mut Session, catalog: &FakePilotCatalog, to: i16) {
         session.player.position = Vec2::ZERO;
         assert_eq!(jump(session, catalog, to), Some(SystemId(to)));
         settle(session, catalog);
     }
 
-    fn tick(session: &mut Session, catalog: &FakePilotCatalog) {
+    pub(in crate::session) fn tick(session: &mut Session, catalog: &FakePilotCatalog) {
         session.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
     }
 
     /// The slots of the mission ships in the system, in order.
-    fn marked(session: &Session) -> Vec<u8> {
+    pub(in crate::session) fn marked(session: &Session) -> Vec<u8> {
         session
             .npcs()
             .iter()
@@ -1094,7 +1125,7 @@ mod tests {
             .collect()
     }
 
-    fn ships_of(session: &Session) -> SpecialShips {
+    pub(in crate::session) fn ships_of(session: &Session) -> SpecialShips {
         session
             .pilot()
             .missions()
@@ -1204,7 +1235,7 @@ mod tests {
     // The appear timer.
 
     /// Ticks the traffic `n` times.
-    fn ticks(session: &mut Session, catalog: &FakePilotCatalog, n: usize) {
+    pub(in crate::session) fn ticks(session: &mut Session, catalog: &FakePilotCatalog, n: usize) {
         for _ in 0..n {
             tick(session, catalog);
         }
@@ -3548,6 +3579,50 @@ mod tests {
         take_off(&mut session, &catalog);
         assert_eq!(marked(&session), [0], "one, not two");
         assert_eq!(ships_of(&session).left, 1);
+    }
+
+    // Flying with the player.
+
+    #[test]
+    fn a_swapped_ship_of_ship_behav_1_joins_the_formation_and_flies_in_it_with_the_player() {
+        // Stock 132's shape: ShipGoal 3, ShipBehav 1, mission Flags 0x0800.
+        let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        catalog.missions[0].ships.behav = 1;
+        let mut session = swapped(&catalog);
+        let ship = &session.npcs()[0];
+        assert_eq!(ship.state, ACE_AT, "in Ace's place");
+        assert!(ship.mission_escort());
+        assert_eq!(ship.escort, None);
+        let place = ship.formation().expect("in formation");
+        assert_eq!((place.slot, place.ships), (2, 2));
+        assert_eq!(ship.goal, Goal::Formation { guard: None });
+        session.player.velocity = Vec2::new(1.0, 0.0);
+        for _ in 0..600 {
+            tick(&mut session, &catalog);
+            session.player.position = session.player.position + session.player.velocity;
+        }
+        let ship = &session.npcs()[0];
+        let off = place.position(&session.player) - ship.state.position;
+        assert!(
+            off.x.abs() <= crate::escort::KEEP_FORMATION
+                && off.y.abs() <= crate::escort::KEEP_FORMATION,
+            "{off:?}"
+        );
+        assert_eq!(ship.state.velocity, session.player.velocity, "with it");
+    }
+
+    #[test]
+    fn a_swapped_ship_of_ship_goal_3_and_another_behaviour_does_not_join() {
+        // Its fly-in-form follows a leader of -1 (step 1 of the phase):
+        // it never forms on the player.
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        assert_eq!(catalog.missions[0].ships.behav, -1);
+        let mut session = swapped(&catalog);
+        tick(&mut session, &catalog);
+        let ship = &session.npcs()[0];
+        assert_eq!(marked(&session), [0]);
+        assert!(!ship.escorts_player());
+        assert_eq!(ship.formation(), None);
     }
 
     // Released by the lifetime rule.

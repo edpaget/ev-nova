@@ -335,6 +335,7 @@ mod hail;
 mod hire;
 mod hooks;
 mod mission_cargo;
+mod mission_escorts;
 mod mission_screens;
 mod mission_ships;
 mod missions;
@@ -1256,6 +1257,9 @@ impl Session {
         self.story.watched.clear();
         self.mission_ships_came(last);
         self.enter_escorts();
+        if !entering {
+            self.snap_mission_escorts();
+        }
         self.strikes.clear();
         self.aboard = None;
         self.talk = None;
@@ -1326,6 +1330,7 @@ impl Session {
             } else {
                 self.mission_ship_arrivals(catalog, chance);
                 self.unmark_inactive_mission_ships();
+                self.join_mission_escorts();
                 let system_govt = self.galaxy.govt(self.pilot.system);
                 let facts = control::Facts {
                     pilot: &self.pilot,
@@ -1575,22 +1580,28 @@ impl Session {
     /// Takes each NPC destroyed out of the system, raising
     /// [`Fate::Destroyed`] for it and counting it lost when it is a
     /// mission's special ship, drawing on `chance` (see the
-    /// `mission_ships` module), as it goes.
+    /// `mission_ships` module), as it goes. The formation re-forms when a
+    /// mission escort was among them.
     fn take_out_the_destroyed(&mut self, chance: &mut dyn Chance) {
-        let destroyed: Vec<NpcId> = self
+        let destroyed: Vec<(NpcId, bool)> = self
             .traffic
             .npcs()
             .iter()
             .filter(|npc| npc.condition == Condition::Destroyed)
-            .map(|npc| npc.id)
+            .map(|npc| (npc.id, npc.mission_escort()))
             .collect();
-        for id in destroyed {
+        let mut reform = false;
+        for (id, mission_escort) in destroyed {
             self.raise(StoryEvent::ShipFate {
                 ship: id,
                 fate: Fate::Destroyed,
             });
             self.count_lost_mission_ship(id, chance);
             self.lose_destroyed(id);
+            reform |= mission_escort;
+        }
+        if reform {
+            self.reform();
         }
     }
 
