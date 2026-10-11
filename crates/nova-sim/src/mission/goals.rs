@@ -1,7 +1,8 @@
 //! A mission's ship goals: what its `ShipGoal` asks of the player
 //! ([`ShipGoal`]), the check that says whether it is met or failed
 //! ([`check_goals`], `_MissionObjectivesCheck` @0x9e79e), the moment a
-//! goal is met ([`goals_met_moment`]), the losses that fail a mission
+//! goal is met ([`goals_met_moment`]) and the goals met it reads as
+//! before ([`met_before`]), the losses that fail a mission
 //! at once ([`fails_on_destroyed`], [`fails_on_disabled`]), what a
 //! ship that leaves the system counts ([`departure`]), and which ships a
 //! rescue goal holds disabled ([`held_disabled`]). They are pure
@@ -12,6 +13,7 @@
 
 use super::active::AUTO_ABORT;
 use super::screens::HIDDEN;
+use super::ships::ShipStart;
 use crate::rulebook::RuleSource;
 
 /// A mission's `ShipGoal`, read: what the player must do to its special
@@ -59,7 +61,7 @@ impl ShipGoal {
 }
 
 /// What one check of a mission's ship goals reads: its `mïsn`'s
-/// `ShipGoal`, `ShipCount` and `Flags`, the counts its slot keeps, where
+/// `ShipGoal`, `ShipCount`, `ShipStart` and `Flags`, the counts its slot keeps, where
 /// its ships are, and whether its goals were met as the check began.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // each is one fact the check reads
@@ -91,6 +93,8 @@ pub struct GoalFacts {
     /// Whether one of its ships was just seen by the player
     /// (@0x9ea1a-0x9eb15).
     pub sighted: bool,
+    /// Its `ShipStart` (+0xe).
+    pub start: ShipStart,
     /// Whether its goals were met as the check began (+2, @0x9e821).
     pub met: bool,
 }
@@ -105,13 +109,31 @@ pub struct GoalCheck {
     pub failed: bool,
 }
 
+/// Whether the goals of the mission `facts` describes count as met
+/// before its check, as `_MissionObjectivesCheck` reads them after its
+/// pre-step (@0x9e7ef-0x9e821): met as the check began, but cleared for
+/// no goal (`ShipGoal` -1) with ships left, none arrived, and `Flags`
+/// 0x0001. `ShipCount` is not read.
+#[must_use]
+pub const fn met_before(facts: &GoalFacts) -> bool {
+    let cleared = matches!(facts.goal, ShipGoal::None)
+        && facts.left > 0
+        && facts.arrived <= 0
+        && facts.flags & AUTO_ABORT != 0;
+    facts.met && !cleared
+}
+
 /// The check of a mission's ship goals on `facts`, as
-/// `_MissionObjectivesCheck` (@0x9e79e) runs it:
+/// `_MissionObjectivesCheck` (@0x9e79e) runs it, its goals met before
+/// read after the pre-step ([`met_before`]):
 ///
-/// - No goal (`ShipGoal` -1) is met, but with ships (`ShipCount` above
-///   0) and `Flags` 0x0001, which
-///   rdm:phase/mission-ships/phase-10-auto-abort-at-spawn reads and this
-///   leaves as it was (@0x9e835-0x9e840, @0x9ed8e-0x9ed98).
+/// - No goal (`ShipGoal` -1) is met (@0x9e835-0x9e840 → @0x9eb85),
+///   unless it has ships (`ShipCount` above 0), `Flags` 0x0001, none
+///   arrived and `ShipStart` 1: then it is left as it was
+///   (@0x9ed8e-0x9ed98 → @0x9e865-0x9e87b → @0x9eb89), which the
+///   pre-step makes unmet while ships are left. So a mission of no goal
+///   whose ships come in later stays active until they come, and one
+///   whose ships are set up is met at its first check.
 /// - Any other goal with no ships is met (@0x9e849).
 /// - While ships are still to come (`ShipCount` above those arrived)
 ///   and any are left, the goals are unmet (@0x9e852-0x9e85d →
@@ -130,8 +152,9 @@ pub struct GoalCheck {
 /// - Any other goal leaves it as it was.
 #[must_use]
 pub fn check_goals(facts: &GoalFacts) -> GoalCheck {
+    let before = met_before(facts);
     let unchanged = GoalCheck {
-        met: facts.met,
+        met: before,
         failed: false,
     };
     let met = GoalCheck {
@@ -139,15 +162,15 @@ pub fn check_goals(facts: &GoalFacts) -> GoalCheck {
         failed: false,
     };
     let failed = GoalCheck {
-        met: facts.met,
+        met: before,
         failed: true,
     };
     if facts.goal == ShipGoal::None {
-        return if facts.count > 0 && facts.flags & AUTO_ABORT != 0 {
-            unchanged
-        } else {
-            met
-        };
+        let held = facts.count > 0
+            && facts.flags & AUTO_ABORT != 0
+            && facts.arrived <= 0
+            && matches!(facts.start, ShipStart::ComesLater);
+        return if held { unchanged } else { met };
     }
     if facts.count <= 0 {
         return met;
@@ -166,7 +189,7 @@ pub fn check_goals(facts: &GoalFacts) -> GoalCheck {
             failed: false,
         },
         ShipGoal::Observe
-            if !facts.met && facts.here && facts.arrived >= facts.left && facts.sighted =>
+            if !before && facts.here && facts.arrived >= facts.left && facts.sighted =>
         {
             met
         }
@@ -341,6 +364,7 @@ mod tests {
             here: true,
             escorted: false,
             sighted: false,
+            start: ShipStart::Random,
             met: false,
         }
     }
@@ -393,31 +417,130 @@ mod tests {
         }
     }
 
+    /// No goal, with two ships, none arrived, both left, `Flags` 0x0001
+    /// and `ShipStart` 1, met before as `met` says.
+    fn held(met: bool) -> GoalFacts {
+        GoalFacts {
+            flags: AUTO_ABORT | 0x0008,
+            arrived: 0,
+            start: ShipStart::ComesLater,
+            met,
+            ..facts(ShipGoal::None)
+        }
+    }
+
     #[test]
-    fn no_goal_is_met_but_with_ships_and_flag_0x0001_it_is_left_to_phase_10() {
-        let none = facts(ShipGoal::None);
-        assert_eq!(check_goals(&none), MET);
+    fn no_goal_of_no_ships_or_no_flag_0x0001_is_met() {
+        assert_eq!(check_goals(&held(false)), UNMET, "held");
         for count in [0, -1] {
             let shipless = GoalFacts {
                 count,
-                flags: AUTO_ABORT,
-                ..none
+                ..held(false)
             };
             assert_eq!(check_goals(&shipless), MET, "{count}");
         }
-        for met in [false, true] {
-            let auto = GoalFacts {
-                flags: AUTO_ABORT | 0x0008,
-                met,
-                ..none
-            };
-            assert_eq!(check_goals(&auto), GoalCheck { met, failed: false });
-        }
         let other_flags = GoalFacts {
             flags: 0x0008,
-            ..none
+            ..held(false)
         };
         assert_eq!(check_goals(&other_flags), MET);
+    }
+
+    #[test]
+    fn no_goal_of_flag_0x0001_is_met_once_a_ship_arrived() {
+        for arrived in [1, 2] {
+            let arrived = GoalFacts {
+                arrived,
+                ..held(false)
+            };
+            assert_eq!(check_goals(&arrived), MET, "{arrived:?}");
+        }
+    }
+
+    #[test]
+    fn no_goal_of_flag_0x0001_with_ships_set_up_is_met_with_none_arrived() {
+        for start in [
+            ShipStart::Random,
+            ShipStart::Cloaked,
+            ShipStart::Timed,
+            ShipStart::Nav(0),
+            ShipStart::Nav(15),
+        ] {
+            let set_up = GoalFacts {
+                start,
+                ..held(false)
+            };
+            assert_eq!(check_goals(&set_up), MET, "{start:?}");
+        }
+    }
+
+    #[test]
+    fn no_goal_of_flag_0x0001_coming_later_is_unmet_while_ships_are_left_even_if_met() {
+        assert_eq!(check_goals(&held(true)), UNMET);
+        for arrived in [0, -1] {
+            let none = GoalFacts {
+                arrived,
+                ..held(true)
+            };
+            assert_eq!(check_goals(&none), UNMET, "{arrived}");
+        }
+    }
+
+    #[test]
+    fn no_goal_of_flag_0x0001_coming_later_with_none_left_is_left_as_it_was() {
+        for met in [false, true] {
+            let none_left = GoalFacts {
+                left: 0,
+                ..held(met)
+            };
+            assert_eq!(check_goals(&none_left), GoalCheck { met, failed: false });
+        }
+    }
+
+    #[test]
+    fn the_goals_met_before_are_cleared_for_no_goal_of_flag_0x0001_with_ships_left_unarrived() {
+        assert!(!met_before(&held(true)), "cleared");
+        assert!(!met_before(&held(false)));
+        let arrived = GoalFacts {
+            arrived: 1,
+            ..held(true)
+        };
+        assert!(met_before(&arrived), "one arrived");
+        let none_left = GoalFacts {
+            left: 0,
+            ..held(true)
+        };
+        assert!(met_before(&none_left), "none left");
+        let no_flag = GoalFacts {
+            flags: 0x0008,
+            ..held(true)
+        };
+        assert!(met_before(&no_flag), "no 0x0001");
+        let a_goal = GoalFacts {
+            goal: ShipGoal::Destroy,
+            ..held(true)
+        };
+        assert!(met_before(&a_goal), "a goal");
+        // ShipCount is not read: the pre-step clears it with none.
+        let shipless = GoalFacts {
+            count: 0,
+            ..held(true)
+        };
+        assert!(!met_before(&shipless), "no ShipCount read");
+    }
+
+    #[test]
+    fn a_goal_the_pre_step_cleared_and_the_branch_meets_is_the_moment() {
+        // Met before, set up at random with none arrived: the pre-step
+        // clears it, the branch meets it again.
+        let set_up = GoalFacts {
+            start: ShipStart::Random,
+            ..held(true)
+        };
+        let before = met_before(&set_up);
+        let now = check_goals(&set_up);
+        assert_eq!(now, MET);
+        assert!(goals_met_moment(before, now, false));
     }
 
     #[test]

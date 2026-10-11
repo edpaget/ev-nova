@@ -205,3 +205,125 @@ fn a_stock_missions_escorts_come_in_on_their_timer_and_join_the_players_formatio
     }
     assert!(flying.pilot().escorts().is_empty());
 }
+
+/// The "Avoid" missions' shape: no ships of their own to fight
+/// (`ShipGoal` 0, `ShipBehav` 0), hunters following the player
+/// (`ShipSyst` -6), `Flags` 0x1445 with 0x0001.
+fn avoid(data: &GameData, id: i16, start: i16) -> nova_sim::catalog::MissionRecord {
+    let record = data
+        .missions()
+        .into_iter()
+        .find(|record| record.id == MissionId(id))
+        .unwrap_or_else(|| panic!("mïsn {id}"));
+    assert_eq!(
+        (
+            record.ships.goal,
+            record.ships.behav,
+            record.ships.syst,
+            record.ships.start,
+            record.flags
+        ),
+        (0, 0, -6, start, 0x1445),
+        "mïsn {id}"
+    );
+    record
+}
+
+/// A new pilot docked with `mission` started by `S`, its slot.
+fn started_docked(data: &GameData, mission: i16) -> (Session, u8) {
+    let mut session = docked_new_pilot(data);
+    session.run_set(
+        &SetExpr::parse(&format!("S{mission}")).expect("parses"),
+        &mut NeverFires,
+    );
+    let _ = session.settle_script(data, &mut NeverFires);
+    let slot = *session
+        .pilot()
+        .missions()
+        .holding(MissionId(mission))
+        .first()
+        .expect("started");
+    (session, slot)
+}
+
+/// The NPCs of the system that fly one of `düde`'s ships.
+fn of_dude(data: &GameData, session: &Session, dude: DudeId) -> usize {
+    let ships: Vec<ShipId> = data
+        .dude(dude)
+        .expect("its düde")
+        .ships
+        .iter()
+        .map(|&(ship, _)| ship)
+        .collect();
+    session
+        .npcs()
+        .iter()
+        .filter(|npc| ships.contains(&npc.ship))
+        .count()
+}
+
+/// `mïsn` 618, an "Avoid" mission whose hunters are set up with the
+/// system (`ShipStart` 0).
+const AVOID_SET_UP: i16 = 618;
+/// `mïsn` 614, an "Avoid" mission whose hunters come in later
+/// (`ShipStart` 1).
+const AVOID_LATER: i16 = 614;
+
+#[test]
+fn a_stock_avoid_mission_set_up_with_the_system_spawns_its_hunters_then_auto_aborts() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let record = avoid(&data, AVOID_SET_UP, 0);
+    let dude = record.ships.dude.expect("a düde");
+    let count = usize::try_from(record.ships.count).expect("a count");
+    let (mut session, slot) = started_docked(&data, AVOID_SET_UP);
+    session.take_off(&mut NeverFires).expect("takes off");
+    let _ = session.settle_script(&data, &mut NeverFires);
+    assert!(session.pilot().missions().get(slot).is_some(), "not yet");
+    session.tick_traffic(&data, &NovaAi::default(), &mut NeverFires);
+    assert!(
+        session.pilot().missions().get(slot).is_none(),
+        "auto-aborted at the take-off's setup"
+    );
+    assert!(of_dude(&data, &session, dude) >= count, "its hunters came");
+    session.tick_traffic(&data, &NovaAi::default(), &mut NeverFires);
+    assert!(session.npcs().iter().all(|npc| npc.mission.is_none()));
+    assert!(
+        of_dude(&data, &session, dude) >= count,
+        "and stay as traffic"
+    );
+}
+
+#[test]
+fn a_stock_avoid_mission_whose_hunters_come_later_auto_aborts_as_they_come_in() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let record = avoid(&data, AVOID_LATER, 1);
+    let dude = record.ships.dude.expect("a düde");
+    let count = usize::try_from(record.ships.count).expect("a count");
+    let (mut session, slot) = started_docked(&data, AVOID_LATER);
+    session.take_off(&mut NeverFires).expect("takes off");
+    let _ = session.settle_script(&data, &mut NeverFires);
+    let ai = NovaAi::default();
+    session.tick_traffic(&data, &ai, &mut NeverFires);
+    let _ = session.settle_script(&data, &mut NeverFires);
+    let mut before = 0;
+    while let Some(active) = session.pilot().missions().get(slot) {
+        assert!(active.ships.appear > 0, "the timer runs until they come");
+        before = session.npcs().len();
+        session.tick_traffic(&data, &ai, &mut NeverFires);
+        let _ = session.settle_script(&data, &mut NeverFires);
+    }
+    let jumping_in = session
+        .npcs()
+        .iter()
+        .filter(|npc| matches!(npc.mode, nova_sim::traffic::npc::Mode::JumpingIn { .. }))
+        .count();
+    assert!(session.npcs().len() >= before, "none taken out");
+    assert!(jumping_in >= count, "its hunters came in, then it aborted");
+    assert!(of_dude(&data, &session, dude) >= count);
+}

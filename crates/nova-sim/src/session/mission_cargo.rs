@@ -678,9 +678,11 @@ mod tests {
         assert_eq!(kinds(&mut session), []);
         let catalog = cargo_catalog(
             vec![MissionRecord {
+                // Its ship comes later, so its goals stay unmet.
                 ships: MissionShip {
                     count: 1,
                     goal: -1,
+                    start: 1,
                     ..MissionShip::NONE
                 },
                 flags: 0x0001,

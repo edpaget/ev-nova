@@ -203,7 +203,11 @@
 //!   forgotten (@0x99bcf).
 //! - **The auto-abort** (`_AutoAbortMission` @0x99bdc): `OnAbort`; the
 //!   `DatePostInc` days; `Flags` 0x0008, a jump's fuel taken; `Flags2`
-//!   0x0002, the pay; then the end, with no second `OnAbort`.
+//!   0x0002, the pay; then the end, with no second `OnAbort`. A mission
+//!   of `Flags` 0x0001 reaches it at accept (above), as its ship goals
+//!   are met (@0x9ed87), and once per slot as its special ships spawn: at
+//!   the system's setup (@0x4317e) and as its appear timer brings them in
+//!   (@0x43ad4).
 //! - **Success**, landing at the return with the destination reached and
 //!   the goals met (`_DoMissionSuccess` @0xa03fc): the slot freed before
 //!   `OnSuccess`; the `DatePostInc` days; the records ([`success_records`]:
@@ -391,7 +395,7 @@ pub use self::cargo::{
 };
 pub use self::goals::{
     AssistLine, Departure, GoalCheck, GoalFacts, LossFacts, ShipGoal, assists, check_goals,
-    departure, fails_on_destroyed, fails_on_disabled, goals_met_moment, held_disabled,
+    departure, fails_on_destroyed, fails_on_disabled, goals_met_moment, held_disabled, met_before,
 };
 pub use self::identity::StellarMarks;
 pub use self::offer::{Offer, Offers, ROLLED, RollTable, Stop, resolve};

@@ -245,15 +245,25 @@
 //! engine, a ship in the player's system is seen. The goals met now and
 //! not before, unfailed, show `ShipDone` (@0x9ed0f), run `OnShipDone`
 //! for a mission with a `ShipGoal` (@0x9ed70), and auto-abort a mission
-//! of `Flags` 0x0001 (@0x9ed87). The same poll fails a mission whose
+//! of `Flags` 0x0001 (@0x9ed87). A mission of no goal (`ShipGoal` -1)
+//! is met at once, except one with ships, `Flags` 0x0001 and `ShipStart`
+//! 1 none of whose ships has arrived: the check first clears its goals
+//! met while ships are left (@0x9e7ef-0x9e80a) and then leaves them
+//! (@0x9ed8e-0x9ed98), so it waits for them. A mission of `Flags`
+//! 0x0001 also auto-aborts, whatever its goal, once per slot as its
+//! special ships spawn: after the system's setup brings them
+//! (`_SetupShipsInSystem` @0x4317e) and after its appear timer brings
+//! them in by hyperspace (`_EnterMoreShips` @0x43ad4); its ships stay as
+//! ordinary traffic. The same poll fails a mission whose
 //! days left reached 0 (@0x9eba5-0x9ec61), so a deadline fails after its
 //! transition has finished. The landing check runs it too (above).
 //!
 //! Here the poll is the [`Consumer::MissionShips`] subscriptions each slot
 //! registers (see the session's `mission_ships` module): a check on every
 //! `ShipFate`, on `Landed` before the missions' landing hooks, on
-//! `TookOff` (the first flight frame after a landing or a docked accept),
-//! and in flight on `EnteredSystem`; an accept in flight is checked once
+//! `TookOff` (the first flight frame after a landing or a docked accept,
+//! held until the take-off's setup has run, as the original sets the
+//! system up first, @0x674c2), and in flight on `EnteredSystem`; an accept in flight is checked once
 //! its settling is done. The ships' arrivals raise
 //! [`Fate::Arrived`], their first sighting [`Fate::Observed`] and their
 //! leaving [`Fate::Departed`], so an escort's presence, an observation
@@ -1543,7 +1553,8 @@
 //!   see "Ship goals"), each slot's `{MissionShips, slot, 2}`. The goals
 //!   met show `ShipDone`, run `OnShipDone`, and auto-abort a mission of
 //!   `Flags` 0x0001, with its `OnAbort`, its `DatePostInc` days and its
-//!   pay or fuel as an auto-abort at accept does; a check that fails a
+//!   pay or fuel as an auto-abort at accept does (as do the system's
+//!   setup and the appear timer's arrivals, once they bring its ships); a check that fails a
 //!   disable or escort goal marks the mission failed, nothing run, to
 //!   fail at its return. A mission ship's loss that fails its mission
 //!   fails it at once, at the loss, through the quick failure; cargo

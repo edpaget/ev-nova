@@ -33,8 +33,25 @@
 //! the slot's own ships counting as seen. An accept in flight queues its
 //! slot's check for the end of [`Session::settle_script`]'s settling, so
 //! a mission an `S` starts is checked after the script that started it.
+//! The take-off's check waits for the system it took off into to be set
+//! up, as the original sets it up (@0x674c2) before its first flight
+//! frame: the hook holds it while the system's traffic is due, and the
+//! setup runs it once its ships are in and its auto-aborts are done.
 //! The moment the goals are met shows `ShipDoneText`, runs `OnShipDone`
 //! and auto-aborts a mission of `Flags` 0x0001 ([`Session::auto_abort`]).
+//! A mission of no goal is met at its first check, unless its ships come
+//! later (`ShipStart` 1) with `Flags` 0x0001: then it waits for them
+//! (see [`check_goals`]).
+//!
+//! **The auto-abort as the ships spawn**: a mission of `Flags` 0x0001
+//! also auto-aborts, whatever its goal, once per slot as its special
+//! ships spawn: after the system's setup, for each slot the setup took,
+//! whether or not a ship came (`_SetupShipsInSystem` @0x43169-0x4317e),
+//! and after its appear timer brought them in by hyperspace
+//! (`_EnterMoreShips` @0x43abc-0x43ad4). Its ships stay in the system,
+//! losing their marks as the next think finds the slot free. The
+//! original aborts each slot inside setup's slot loop; here the aborts
+//! follow once the system's ships are all in, in slot order.
 //! Escorted ships count while they are in the system: both spawn paths
 //! raise [`Fate::Arrived`] for each ship they bring in, and watch the
 //! ships of an unmet observe goal for their first sighting
@@ -124,7 +141,7 @@ use crate::mission::ships::{ShipBehav, ShipFacts, ShipStart, appear_timer, swapp
 use crate::mission::{
     ActiveMission, AssistLine, Departure, FailedBy, GoalFacts, LossFacts, ShipGoal, ShipSystem,
     SpecialShips, assists, check_goals, departure, fails_on_destroyed, fails_on_disabled,
-    goals_met_moment, held_disabled,
+    goals_met_moment, held_disabled, met_before,
 };
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::session::mission_screens::MissionTextKind;
@@ -166,7 +183,7 @@ pub const LANDED: u8 = 1;
 /// A slot's goal check on every `ShipFate`.
 pub const SHIP_FATE: u8 = 2;
 /// A slot's goal check on `TookOff`: the first flight frame after a
-/// docked accept or a landing.
+/// docked accept or a landing, held until the system is set up.
 pub const TOOK_OFF: u8 = 3;
 
 /// Every hook a slot registers, each on its event, in order.
@@ -279,8 +296,17 @@ impl Session {
                     self.check_ship_goals(slot, false, chance);
                 }
             }
-            (LANDED, StoryEvent::Landed { .. }) | (TOOK_OFF, StoryEvent::TookOff { .. }) => {
+            (LANDED, StoryEvent::Landed { .. }) => {
                 self.check_ship_goals(slot, false, chance);
+            }
+            (TOOK_OFF, StoryEvent::TookOff { .. }) => {
+                if self.traffic_due {
+                    if !self.take_off_checks.contains(&slot) {
+                        self.take_off_checks.push(slot);
+                    }
+                } else {
+                    self.check_ship_goals(slot, false, chance);
+                }
             }
             (SHIP_FATE, StoryEvent::ShipFate { ship, fate }) => {
                 let sighted = fate == Fate::Observed && self.marked_here(ship, slot);
@@ -355,6 +381,7 @@ impl Session {
                 .iter()
                 .any(|npc| npc.mission.is_some_and(|mark| mark.slot == slot)),
             sighted: seen.sighted,
+            start: ShipStart::from_code(record.ships.start),
             met: active.goals_met,
         };
         let failed_before = active.failed.is_some();
@@ -367,7 +394,7 @@ impl Session {
                 active.failed.get_or_insert(FailedBy::Marked);
             }
         }
-        if goals_met_moment(facts.met, check, failed_before) {
+        if goals_met_moment(met_before(&facts), check, failed_before) {
             self.ship_goals_met(slot, &record, chance);
         }
     }
@@ -381,8 +408,35 @@ impl Session {
         if ShipGoal::from_code(record.ships.goal) != ShipGoal::None {
             self.run_mission_script(slot, &record.on_ship_done, chance);
         }
+        self.abort_on_spawn(slot, record, chance);
+    }
+
+    /// Auto-aborts `record`, the mission in `slot`, when it has `Flags`
+    /// 0x0001 and the slot still holds it ([`Session::auto_abort`]),
+    /// drawing on `chance`: as its goals are met, and as its ships are
+    /// set up or come in by hyperspace (see the module docs).
+    fn abort_on_spawn(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
         if record.flags & AUTO_ABORT != 0 && self.pilot.missions.holds(slot, record.id) {
             self.auto_abort(slot, record, chance);
+        }
+    }
+
+    /// Auto-aborts each mission of `Flags` 0x0001 among `set_up`, the
+    /// slots and missions the system's setup took, in order, drawing on
+    /// `chance` (`_SetupShipsInSystem` @0x43169-0x4317e).
+    pub(super) fn abort_set_up(&mut self, set_up: &[(u8, MissionId)], chance: &mut dyn Chance) {
+        for &(slot, mission) in set_up {
+            let record = self.lifecycle_record(mission);
+            self.abort_on_spawn(slot, &record, chance);
+        }
+    }
+
+    /// Runs the goal checks a take-off held for the system's setup (see
+    /// the module docs), in the order the take-off raised them, drawing
+    /// on `chance`.
+    pub(super) fn check_after_take_off(&mut self, chance: &mut dyn Chance) {
+        for slot in std::mem::take(&mut self.take_off_checks) {
+            self.check_ship_goals(slot, false, chance);
         }
     }
 
@@ -413,20 +467,21 @@ impl Session {
     /// its appear timer not running, brings ships left of them
     /// ([`spawn::mission_ships`]). `entering`
     /// by an entry its enter-system hook runs on, a slot the hook is
-    /// about to restart brings none (see the module docs).
+    /// about to restart brings none (see the module docs). With the ships,
+    /// the slots it took and their missions, in order, a slot of no
+    /// `düde` among them: each is auto-aborted with `Flags` 0x0001
+    /// ([`Session::abort_set_up`]).
     pub(super) fn setup_mission_ships(
         &self,
         table: &SpawnTable,
         entering: bool,
         chance: &mut (impl Chance + ?Sized),
-    ) -> Vec<NewShip> {
+    ) -> (Vec<NewShip>, Vec<(u8, MissionId)>) {
         let nav = self.nav_slots();
         let mut ships = Vec::new();
+        let mut set_up = Vec::new();
         for (slot, active) in self.pilot.missions.iter() {
             let record = self.lifecycle_record(active.mission);
-            let Some(dude) = record.ships.dude else {
-                continue;
-            };
             let state = &active.ships;
             if !self.ships_here(state.system)
                 || state.left <= 0
@@ -435,6 +490,10 @@ impl Session {
             {
                 continue;
             }
+            set_up.push((slot, record.id));
+            let Some(dude) = record.ships.dude else {
+                continue;
+            };
             let spawn = MissionSpawn {
                 slot,
                 dude,
@@ -446,7 +505,7 @@ impl Session {
             };
             ships.extend(spawn::mission_ships(table, &spawn, self.gate(), chance));
         }
-        ships
+        (ships, set_up)
     }
 
     /// The way from the player's system to the one it last jumped from,
@@ -464,8 +523,8 @@ impl Session {
     /// those arrived for `ShipStart` 1), a running timer counts down
     /// (from 32000 or below), and at 0 it stops and
     /// they come in by hyperspace ([`spawn::arriving_mission_ships`]),
-    /// each counted arrived. (A mission of `Flags` 0x0001 then
-    /// auto-aborts: rdm:phase/mission-ships/phase-10-auto-abort-at-spawn.)
+    /// each counted arrived. Once all have come, a mission of `Flags`
+    /// 0x0001 auto-aborts (@0x43abc-0x43ad4), its ships staying.
     pub(super) fn mission_ship_arrivals(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -509,6 +568,7 @@ impl Session {
             if let Some(active) = self.pilot.missions.get_mut(slot) {
                 active.ships.arrived = active.ships.arrived.saturating_add(count);
             }
+            self.abort_on_spawn(slot, &record, &mut &mut *chance);
         }
     }
 
@@ -1736,23 +1796,6 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn an_auto_aborted_missions_ships_stay_and_lose_their_mark_on_the_next_tick() {
-        // An auto-abort is reached today only at accept, with no ships;
-        // rdm:phase/mission-ships/phase-10-auto-abort-at-spawn reaches it
-        // once they are in.
-        let catalog = ships_catalog(shipping(-1, 0));
-        let mut session = accepted(&catalog);
-        take_off(&mut session, &catalog);
-        let record = catalog.missions[0].clone();
-        session.auto_abort(0, &record, &mut NeverFires);
-        assert!(session.pilot().missions().get(0).is_none(), "aborted");
-        assert_eq!(marked(&session), [0, 0], "until the AI next thinks");
-        tick(&mut session, &catalog);
-        assert_eq!(session.npcs().len(), 2, "they stay");
-        assert!(marked(&session).is_empty());
-    }
-
-    #[test]
     fn a_failed_mission_still_in_its_slot_keeps_its_ships_marked() {
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
@@ -1823,9 +1866,30 @@ pub(super) mod tests {
     /// the system around the player.
     fn in_flight(catalog: &FakePilotCatalog) -> Session {
         let mut session = accepted(catalog);
-        take_off(&mut session, catalog);
+        take_off_unaborted(&mut session, catalog);
         assert_eq!(marked(&session), [0, 0]);
         session
+    }
+
+    /// [`take_off`], mission 140's ships set up as if it had no `Flags`
+    /// 0x0001, whose auto-abort would end it as they come: they are here
+    /// with it still active, as a swap leaves them.
+    fn take_off_unaborted(session: &mut Session, catalog: &FakePilotCatalog) {
+        let record = session
+            .missions
+            .iter_mut()
+            .find(|record| record.id == MissionId(140))
+            .expect("140");
+        let flags = record.flags;
+        record.flags &= !AUTO_ABORT;
+        take_off(session, catalog);
+        if let Some(record) = session
+            .missions
+            .iter_mut()
+            .find(|record| record.id == MissionId(140))
+        {
+            record.flags = flags;
+        }
     }
 
     fn failed(session: &Session) -> Option<FailedBy> {
@@ -1848,7 +1912,10 @@ pub(super) mod tests {
                 [SimMessage::MissionShipLost],
                 "{goal}"
             );
-            assert_eq!(bits(&session), [5], "{goal}: OnFailure ran");
+            // An escort goal's take-off check, after the setup, met it
+            // with its ships here: OnShipDone (b6) ran.
+            let ran: &[u16] = if goal == 3 { &[5, 6] } else { &[5] };
+            assert_eq!(bits(&session), ran, "{goal}: OnFailure ran");
             assert!(
                 session.pilot().missions().get(0).is_none(),
                 "{goal}: abortable, so it ends"
@@ -1863,13 +1930,14 @@ pub(super) mod tests {
         catalog.missions[0].on_failure = Script::parse("^b5");
         let mut session = in_flight(&catalog);
         let _ = session.take_messages();
+        assert_eq!(bits(&session), [6], "the take-off's check met it");
         destroy(&mut session, 0);
         assert_eq!(failed(&session), Some(FailedBy::Quick));
-        assert_eq!(bits(&session), [5]);
+        assert_eq!(bits(&session), [5, 6]);
         assert_eq!(session.take_messages(), [SimMessage::MissionShipLost]);
         destroy(&mut session, 0);
         assert_eq!(session.take_messages(), [], "fails once");
-        assert_eq!(bits(&session), [5], "OnFailure ran once");
+        assert_eq!(bits(&session), [5, 6], "OnFailure ran once");
         let ships = ships_of(&session);
         assert_eq!((ships.destroyed, ships.left), (2, 0), "both counted");
     }
@@ -1909,7 +1977,11 @@ pub(super) mod tests {
         disable(&mut session, 0);
         assert_eq!(session.take_messages(), []);
         assert_eq!(failed(&session), None);
-        assert_eq!(bits(&session), Vec::<u16>::new());
+        assert_eq!(
+            bits(&session),
+            [6],
+            "only the take-off's check's OnShipDone"
+        );
         let ships = ships_of(&session);
         assert_eq!((ships.destroyed, ships.disabled), (1, 1));
     }
@@ -1921,7 +1993,7 @@ pub(super) mod tests {
         let _ = session.take_messages();
         disable(&mut session, 1);
         assert_eq!(session.take_messages(), [SimMessage::MissionShipLost]);
-        assert_eq!(bits(&session), [5]);
+        assert_eq!(bits(&session), [5, 6], "OnShipDone at the take-off's check");
         assert!(session.pilot().missions().get(0).is_none());
     }
 
@@ -2631,21 +2703,6 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn an_auto_abort_mission_of_no_ship_count_accepted_docked_aborts_as_it_takes_off() {
-        let none = MissionShip {
-            count: -1,
-            ..MissionShip::NONE
-        };
-        let catalog = shipless(none, 0x0001);
-        let mut session = accepted(&catalog);
-        assert!(session.pilot().missions().get(0).is_some(), "not at accept");
-        session.take_off(&mut NeverFires).expect("takes off");
-        settle(&mut session, &catalog);
-        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
-        assert_eq!(bits(&session), [7], "OnAbort ran");
-    }
-
-    #[test]
     fn an_auto_abort_mission_started_in_flight_aborts_as_the_script_settles() {
         let none = MissionShip {
             count: -1,
@@ -2663,13 +2720,219 @@ pub(super) mod tests {
         assert_eq!(bits(&session), [7], "OnAbort ran");
     }
 
+    // No goal with ships and flag 0x0001.
+
     #[test]
-    fn a_mission_of_no_goal_with_ships_and_flag_0x0001_is_left_unmet() {
-        let catalog = shipless(shipping(-1, 0), 0x0001);
-        let mut session = in_flight(&catalog);
+    fn a_no_goal_auto_abort_mission_whose_ships_are_elsewhere_aborts_at_its_first_check() {
+        let mut catalog = shipless(shipping(131, 0), 0x0001);
+        catalog.missions[0].on_ship_done = Script::parse("b6");
+        let mut session = accepted(&catalog);
+        assert!(session.pilot().missions().get(0).is_some(), "not at accept");
+        take_off(&mut session, &catalog);
         settle(&mut session, &catalog);
-        assert!(!goals_met(&session));
-        assert!(session.pilot().missions().get(0).is_some(), "not aborted");
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert_eq!(shown(&mut session), [ship_done("Rover done.")]);
+        assert_eq!(bits(&session), [7], "OnAbort once, no OnShipDone");
+    }
+
+    #[test]
+    fn a_no_goal_auto_abort_mission_whose_ships_come_later_stays_until_they_come() {
+        let catalog = shipless(shipping(131, 1), 0x0001);
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        settle(&mut session, &catalog);
+        assert!(!goals_met(&session), "the take-off's check");
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, &catalog);
+        assert!(!goals_met(&session), "the landing's check");
+        take_off(&mut session, &catalog);
+        jump_to(&mut session, &catalog, 131);
+        assert!(!goals_met(&session), "the entry's check");
+        let appear = ships_of(&session).appear;
+        ticks(
+            &mut session,
+            &catalog,
+            usize::try_from(appear - 1).expect("positive"),
+        );
+        settle(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_some(), "still active");
+        assert_eq!(shown(&mut session), []);
+        tick(&mut session, &catalog);
+        assert_eq!(session.npcs().len(), 2, "they came");
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        settle(&mut session, &catalog);
+        assert_eq!(bits(&session), [7]);
+        assert_eq!(shown(&mut session), [], "no moment");
+    }
+
+    // The auto-abort as the ships spawn.
+
+    #[test]
+    fn a_flag_0x0001_mission_aborts_once_its_ships_come_in_by_hyperspace() {
+        let mut catalog = returning(0, 0x0001);
+        catalog.missions[0].ships.start = 1;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        ticks(&mut session, &catalog, 198);
+        assert!(
+            session.pilot().missions().get(0).is_some(),
+            "the timer runs"
+        );
+        assert_eq!(bits(&session), Vec::<u16>::new());
+        tick(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert_eq!(bits(&session), [7], "OnAbort once");
+        // The same tick's think after the arrivals clears their marks.
+        assert_eq!(session.npcs().len(), 2, "they stay");
+        assert!(marked(&session).is_empty());
+        ticks(&mut session, &catalog, 2);
+        assert_eq!(session.npcs().len(), 2, "as traffic");
+        settle(&mut session, &catalog);
+        assert_eq!(bits(&session), [7], "no OnShipDone");
+    }
+
+    #[test]
+    fn a_flag_0x0001_mission_whose_ships_have_not_come_stays() {
+        let mut catalog = returning(0, 0x0001);
+        catalog.missions[0].ships.start = 1;
+        catalog.missions[0].ships.syst = 131;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        ticks(&mut session, &catalog, 300);
+        assert!(session.pilot().missions().get(0).is_some(), "not here");
+        assert_eq!(bits(&session), Vec::<u16>::new());
+    }
+
+    #[test]
+    fn a_flag_0x0001_mission_aborts_once_its_ships_are_set_up_on_take_off() {
+        let catalog = returning(0, 0x0001);
+        let mut session = accepted(&catalog);
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        assert!(
+            session.pilot().missions().get(0).is_some(),
+            "not yet set up"
+        );
+        tick(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert_eq!(bits(&session), [7], "OnAbort once");
+        assert_eq!(marked(&session), [0, 0], "until the AI next thinks");
+        tick(&mut session, &catalog);
+        assert_eq!(session.npcs().len(), 2, "they stay");
+        assert!(marked(&session).is_empty());
+    }
+
+    #[test]
+    fn a_flag_0x0001_mission_aborts_once_its_ships_are_set_up_on_a_jump_into_their_system() {
+        let mut catalog = returning(0, 0x0001);
+        catalog.missions[0].ships.syst = 131;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_some(), "elsewhere");
+        jump_to(&mut session, &catalog, 131);
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert_eq!(bits(&session), [7]);
+        tick(&mut session, &catalog);
+        assert_eq!(session.npcs().len(), 2, "they stay");
+        assert!(marked(&session).is_empty());
+    }
+
+    #[test]
+    fn a_slot_the_setup_skips_is_not_aborted() {
+        // Its ships elsewhere.
+        let mut catalog = returning(0, 0x0001);
+        catalog.missions[0].ships.syst = 131;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_some(), "elsewhere");
+        // Its appear timer running.
+        let mut catalog = returning(0, 0x0001);
+        catalog.missions[0].ships.start = 2;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_some(), "timer runs");
+        // Entering, the slot the enter-system hook is about to restart.
+        let mut catalog = returning(0, 0x0001);
+        catalog.missions[0].ships.start = 1;
+        catalog.missions[0].ships.syst = 131;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.ships.appear = -1;
+            active.ships.arrived = 2;
+        }
+        jump_to(&mut session, &catalog, 131);
+        assert!(session.pilot().missions().get(0).is_some(), "restarted");
+        assert!(ships_of(&session).appear > 0);
+        assert_eq!(bits(&session), Vec::<u16>::new());
+    }
+
+    #[test]
+    fn two_flag_0x0001_slots_set_up_together_abort_in_slot_order() {
+        // 140's OnAbort sets b7; 141's clears it and sets b8: 140 first
+        // leaves b8 alone.
+        let mut catalog = returning(0, 0x0001);
+        let mut second = catalog.missions[0].clone();
+        second.id = MissionId(141);
+        second.on_abort = Script::parse("!b7 b8");
+        catalog.missions.push(second);
+        let mut session = accepted(&catalog);
+        assert_eq!(
+            session.accept_mission(MissionId(141), &mut NeverFires),
+            Ok(1)
+        );
+        settle(&mut session, &catalog);
+        take_off(&mut session, &catalog);
+        assert!(session.pilot().missions().iter().next().is_none(), "both");
+        assert_eq!(bits(&session), [8], "140, then 141");
+        assert_eq!(marked(&session), [0, 0, 1, 1]);
+    }
+
+    #[test]
+    fn with_flag_0x0008_the_setups_auto_abort_takes_the_fuel() {
+        let catalog = returning(0, 0x0009);
+        let mut session = accepted(&catalog);
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        let fuel = session.reserves().fuel.now;
+        tick(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert!((session.reserves().fuel.now - (fuel - 100.0)).abs() < f32::EPSILON);
+    }
+
+    // The take-off's order.
+
+    #[test]
+    fn a_no_goal_auto_abort_missions_ships_here_come_before_the_take_offs_check() {
+        // The setup brings them and auto-aborts it; the take-off's goal
+        // check then finds the slot free, so no moment comes.
+        let catalog = shipless(shipping(-1, 0), 0x0001);
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        settle(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert_eq!(bits(&session), [7], "OnAbort once");
+        assert_eq!(shown(&mut session), [], "no ShipDoneText");
+        assert_eq!(marked(&session), [0, 0], "they spawned");
+        tick(&mut session, &catalog);
+        assert_eq!(session.npcs().len(), 2, "they stay as traffic");
+        assert!(marked(&session).is_empty());
+    }
+
+    #[test]
+    fn the_take_offs_goal_check_waits_for_the_setup() {
+        let none = MissionShip {
+            count: -1,
+            ..MissionShip::NONE
+        };
+        let catalog = shipless(none, 0x0001);
+        let mut session = accepted(&catalog);
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_some(), "not yet");
+        tick(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        assert_eq!(shown(&mut session), [ship_done(" done.")]);
     }
 
     // A landing's order.
@@ -2902,7 +3165,7 @@ pub(super) mod tests {
     /// [`in_flight`] for a mission of `count` ships.
     fn in_flight_with(catalog: &FakePilotCatalog, count: i16) -> Session {
         let mut session = accepted(catalog);
-        take_off(&mut session, catalog);
+        take_off_unaborted(&mut session, catalog);
         assert_eq!(
             marked(&session).len(),
             usize::try_from(count).expect("count")

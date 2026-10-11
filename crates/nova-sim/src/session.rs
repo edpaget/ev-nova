@@ -769,6 +769,11 @@ pub struct Session {
     /// checked once the settling that accepted them is done (see the
     /// `mission_ships` module); never saved.
     goal_checks_due: Vec<u8>,
+    /// The slots whose take-off goal check waits for the system the ship
+    /// took off into to be set up, as the original sets it up before the
+    /// take-off's first goal check (see the `mission_ships` module);
+    /// never saved.
+    take_off_checks: Vec<u8>,
     /// The person's NPC an accept on its hail swaps for the ship of the
     /// mission in the slot, once the settling that accepted it begins
     /// (see the `mission_ships` module); never saved.
@@ -975,6 +980,7 @@ impl Session {
             offers: Offers::default(),
             reoffer_due: false,
             goal_checks_due: Vec::new(),
+            take_off_checks: Vec::new(),
             swap_due: None,
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
@@ -1228,7 +1234,9 @@ impl Session {
     /// Fills the system as [`Session::populate`] does, the active
     /// missions' special ships set up first, `entering` it by a way in
     /// whose enter-system hook is still to run (see the `mission_ships`
-    /// module).
+    /// module). Once the ships are in, each mission of `Flags` 0x0001
+    /// whose slot the setup took auto-aborts, in slot order, then the
+    /// goal checks a take-off held run.
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -1236,7 +1244,7 @@ impl Session {
         entering: bool,
     ) {
         let table = self.spawn_table(catalog);
-        let missions = self.setup_mission_ships(&table, entering, chance);
+        let (missions, set_up) = self.setup_mission_ships(&table, entering, chance);
         let facts = control::Facts {
             pilot: &self.pilot,
             ammo_outfits: &self.ammo_outfits,
@@ -1259,6 +1267,8 @@ impl Session {
         self.traffic_due = false;
         self.story.watched.clear();
         self.mission_ships_came(last);
+        self.abort_set_up(&set_up, &mut &mut *chance);
+        self.check_after_take_off(&mut &mut *chance);
         self.enter_escorts();
         if !entering {
             self.snap_mission_escorts();
