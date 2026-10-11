@@ -6,6 +6,8 @@
 //! - [`spawn`]: the rolls: the initial population, the arrivals over time,
 //!   the fleets and the persons (see [`person`](crate::person)), and
 //!   where each ship starts.
+//! - [`emerge`]: the hypergate or wormhole an arrival comes out of, and
+//!   how long it waits there.
 //! - [`npc`]: an [`Npc`]: its ship, government, AI type, escort class
 //!   and duty as the player's escort, stats, reserves, flight state and
 //!   goal, its condition, armament and fire command, its provocation,
@@ -24,13 +26,16 @@
 //! the governments and the player's legal record there), in order:
 //!
 //! 1. the arrival roll, while fewer NPCs than `AvgShips` that are not the
-//!    player's ([`Npc::is_players`]) are in the system;
+//!    player's ([`Npc::is_players`]) are in the system, each arrival
+//!    coming out of one of the world's stellars ([`emerge`]) or by
+//!    hyperspace;
 //! 2. each flying, intact NPC answers the fight's strikes since the last
 //!    tick ([`Behaviour::react`]): the ship it targets, its provocation,
 //!    and any goal it takes at once;
 //! 3. an NPC not intact loses its provocation;
 //! 4. the decisions due on the AI timer, never for a ship still jumping
-//!    in, one that is not intact, or one assisting the player while
+//!    in or emerging from a gate (waiting there or bursting out of it),
+//!    one that is not intact, or one assisting the player while
 //!    unprovoked (until it is done, or provoked): first every goal, then, each NPC
 //!    seeing the new goals, the fire command it holds and the ship it
 //!    targets. An NPC that goes back to an idle goal (not fighting) loses
@@ -125,6 +130,16 @@ impl<'a> World<'a> {
         }
     }
 
+    /// The stellars arrivals may come out of, and the governments that
+    /// judge whether one may.
+    #[must_use]
+    pub fn stellars(self) -> Stellars<'a> {
+        Stellars {
+            sites: self.sites,
+            govts: self.govts,
+        }
+    }
+
     /// What `npcs` see in this world.
     #[must_use]
     pub fn around(self, npcs: &'a [Npc]) -> Surroundings<'a> {
@@ -212,7 +227,7 @@ impl Traffic {
             &self.table,
             &mut draw,
             first_stellar,
-            Stellars::NONE,
+            world.stellars(),
             chance,
         );
         self.add(ships, world.persons.grudges);
@@ -258,7 +273,7 @@ impl Traffic {
             &self.table,
             self.strangers(),
             &mut draw,
-            Stellars::NONE,
+            world.stellars(),
             chance,
         );
         self.add(arrivals, world.persons.grudges);
@@ -899,6 +914,85 @@ mod tests {
         assert_eq!(ticks, 10);
         traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
         assert_eq!(behaviour.take(), [NpcId(0), NpcId(1)]);
+    }
+
+    /// A planet at the centre and a hypergate at (300, -400) heading ships
+    /// out on 90°.
+    fn gated() -> [LandingSite; 2] {
+        [
+            planet(128, 0.0, 0.0),
+            LandingSite {
+                flags2: crate::gate::HYPERGATE,
+                exit_angle: 90,
+                ..planet(129, 300.0, -400.0)
+            },
+        ]
+    }
+
+    #[test]
+    fn an_arrival_among_a_hypergate_comes_out_of_it_and_flies_once_out() {
+        let mut traffic = populated(1, 1);
+        traffic.table.avg_ships = 2;
+        let sites = gated();
+        // An arrival: 0, not a person, not a fleet, düde 128, ship 200, at
+        // angle 0, then the gate.
+        traffic.tick(&Keep, &sites, &mut Draws::of(&[0, 6, 6, 0, 0, 0, 1]));
+        let arrived = &traffic.npcs()[1];
+        assert_eq!(arrived.mode, Mode::Emerging { ticks_left: 59 });
+        assert_eq!(arrived.state.position, Vec2::new(300.0, -400.0));
+        assert_eq!(arrived.state.heading, 90.0);
+        for _ in 1..emerge::EMERGE_TICKS {
+            traffic.tick(&Keep, &sites, &mut Draws::of(&[2]));
+        }
+        assert_eq!(traffic.npcs()[1].mode, Mode::LeavingGate { tick: 0 });
+        assert_eq!(traffic.npcs()[1].state.position, Vec2::new(300.0, -400.0));
+        for _ in 0..8 {
+            traffic.tick(&Keep, &sites, &mut Draws::of(&[2]));
+        }
+        let out = &traffic.npcs()[1];
+        assert_eq!(out.mode, Mode::Flying, "top speed 6: 30 down to 9");
+        assert!((out.state.position - Vec2::new(456.0, -400.0)).length() < 1e-3);
+    }
+
+    #[test]
+    fn a_linksyst_fleet_entering_among_a_hypergate_may_come_out_of_it() {
+        let mut fleet_table = table(1);
+        fleet_table.link_fleets.insert(FleetId(141));
+        fleet_table.fleets.insert(
+            FleetId(141),
+            FleetRecord {
+                id: FleetId(141),
+                lead: Some(ShipId(200)),
+                escorts: vec![EscortRecord {
+                    ship: ShipId(200),
+                    min: 1,
+                    max: 1,
+                }],
+                govt: None,
+                link_syst: -1,
+                appear_on: Test::default(),
+            },
+        );
+        let sites = gated();
+        let mut traffic = Traffic::new();
+        // Not a person, a fleet, slot 13, the gate, the lead's aggression,
+        // its escort's offsets and extra wait.
+        traffic.enter_in(
+            fleet_table,
+            World::new(&sites),
+            &mut Draws::of(&[6, 0, 13, 1, 0, 0, 0, 3]),
+        );
+        assert_eq!(
+            traffic
+                .npcs()
+                .iter()
+                .map(|npc| npc.mode)
+                .collect::<Vec<_>>(),
+            [
+                Mode::Emerging { ticks_left: 60 },
+                Mode::Emerging { ticks_left: 68 }
+            ]
+        );
     }
 
     #[test]

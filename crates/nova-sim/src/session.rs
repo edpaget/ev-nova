@@ -1198,7 +1198,9 @@ impl Session {
     /// Fills the system with its initial NPC population, replacing any
     /// NPCs there (the target with them), its traffic read from `catalog`
     /// and rolled on `chance`, its stationary warships placed by the
-    /// first stellar shown, destroyed or not.
+    /// first stellar shown, destroyed or not, and its `LinkSyst` fleets
+    /// coming out of a gate shown that the governments allow, or by
+    /// hyperspace.
     pub fn populate(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -1211,6 +1213,7 @@ impl Session {
             armament: &self.armament,
         };
         let world = World {
+            govts: &self.govts,
             persons: PersonWorld {
                 rules: &*self.person_rules.0,
                 gone: &self.pilot.gone_persons,
@@ -11882,6 +11885,65 @@ mod tests {
         assert_eq!(fleet_of(&session), [], "31 is above its 30%");
         session.tick_traffic(&catalog, &Peaceful, &mut Draws::of(&[1, 29, 0, 0, 2]));
         assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+    }
+
+    /// `catalog` with a hypergate of `govt` at (300, -400) in system 130,
+    /// heading ships out on 90°, and govt 150 (class 1) at war with 160
+    /// (class 2).
+    fn with_hypergate(mut catalog: FakePilotCatalog, govt: Option<GovtId>) -> FakePilotCatalog {
+        catalog.sites[0].1.push(LandingSite {
+            flags2: crate::gate::HYPERGATE,
+            exit_angle: 90,
+            govt,
+            ..planet(141, 300.0, -400.0)
+        });
+        catalog.govts = vec![
+            crate::catalog::GovtRecord {
+                classes: [1, -1, -1, -1],
+                enemies: [2, -1, -1, -1],
+                ..crate::testkit::govt(150)
+            },
+            crate::catalog::GovtRecord {
+                classes: [2, -1, -1, -1],
+                ..crate::testkit::govt(160)
+            },
+        ];
+        catalog
+    }
+
+    #[test]
+    fn traffic_arriving_among_a_hypergate_may_come_out_of_it() {
+        let catalog = with_hypergate(trafficked(130, 1, 3), None);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut Draws::of(&[0]));
+        assert_eq!(session.npcs(), []);
+        // An arrival, then the gate: 1 of planet 128 and the gate, planet
+        // 129 being 2000 out.
+        let mut chance = Draws::of(&[0, 6, 6, 0, 0, 0, 1]);
+        session.tick_traffic(&catalog, &Peaceful, &mut chance);
+        assert_eq!(chance.asked, [500, 7, 7, 100, 1, 360, 2, 3]);
+        let npc = &session.npcs()[0];
+        assert!(npc.emerging(), "{:?}", npc.mode);
+        assert_eq!(npc.state.position, Vec2::new(300.0, -400.0));
+    }
+
+    #[test]
+    fn populating_judges_a_fleets_gate_by_the_sessions_governments() {
+        // Fleet 130 (govt 150) at setup: by a gate of independents it may
+        // come out of the gate; by govt 160's, at war with it, it never
+        // does, and nothing is drawn for the pick.
+        let catalog = with_hypergate(fleeted(), None);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut Draws::of(&[1, 0, 2, 1, 2]));
+        assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+        assert!(session.npcs().iter().all(Npc::emerging));
+        let catalog = with_hypergate(fleeted(), Some(GovtId(160)));
+        let mut session = Session::start(&catalog).expect("starts");
+        let mut chance = linked_fleet_draws(2);
+        session.populate(&catalog, &mut chance);
+        assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+        assert_eq!(&chance.asked[..4], [7, 7, 256, 360], "jumping in");
+        assert!(session.npcs().iter().all(|npc| !npc.emerging()));
     }
 
     // Combat.
