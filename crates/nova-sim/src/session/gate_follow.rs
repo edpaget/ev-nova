@@ -352,6 +352,7 @@ pub(super) mod tests {
                     .all(crate::traffic::npc::Npc::mission_escort),
                 "{kind:?}: in formation"
             );
+            assert!(!session.npcs().iter().any(Npc::emerging), "{kind:?}");
             assert_eq!(timer(&session), (-1, 0), "{kind:?}: not restarted");
         }
         let catalog = gated(following(1, 1), 0);
@@ -530,6 +531,22 @@ pub(super) mod tests {
     fn by_the_other_reading_no_ship_emerges_and_the_exits_setup_brings_them() {
         let catalog = gated(following(0, 0), ALWAYS_FOLLOWS_THROUGH_HYPERGATE);
         let mut session = accepted(&catalog).with_rules(reading(RuleSource::Bible));
+        take_off(&mut session, &catalog);
+        exit_gate(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
+        assert_eq!(marked(&session), [0, 0]);
+        assert!(!session.npcs().iter().any(Npc::emerging));
+    }
+
+    #[test]
+    fn attackers_of_the_exits_own_system_are_set_up_there_and_do_not_emerge() {
+        let catalog = gated(
+            MissionShip {
+                behav: 0,
+                ..shipping(131, 0)
+            },
+            ALWAYS_FOLLOWS_THROUGH_HYPERGATE,
+        );
+        let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         exit_gate(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
         assert_eq!(marked(&session), [0, 0]);
