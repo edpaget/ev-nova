@@ -69,7 +69,11 @@
 //!   them. `ShipStart` 0 places them at random, as any ship at setup; -1
 //!   to -16 at that nav slot's stellar, or at random when the slot is
 //!   empty (@0x4300a-0x43091); 2 cloaked (`_DoShipCloak`
-//!   @0x43114-0x43121, recorded only: the engine has no cloak).
+//!   @0x43114-0x43121, recorded only: the engine has no cloak). A rescue
+//!   goal's ship (`ShipGoal` 5) first draws a heading `Rand(360)`, after
+//!   its own draws, and starts still and derelict: shields 0 and its
+//!   armour cut just below where it is disabled (@0x42f35-0x42fdc). The
+//!   other two paths give it no such placement.
 //! - **On the appear timer** (`_EnterMoreShips` @0x43757-0x43ad9): every
 //!   tick in flight a slot whose ships are in the system with any to come
 //!   counts its timer down, and at 0 they come in by hyperspace, uncloaked,
@@ -129,6 +133,7 @@ use crate::chance::Chance;
 use crate::control::Gate;
 use crate::flight::{ShipState, facing, heading_of};
 use crate::geometry::Vec2;
+use crate::mission::ShipGoal;
 use crate::mission::ships::{ShipBehav, ShipStart};
 use crate::person::{PersonRoll, PersonWorld, aggression_of};
 use crate::traffic::npc::{AiType, MissionMark};
@@ -194,6 +199,10 @@ pub struct NewShip {
     pub person: Option<PersonId>,
     /// The mission whose special ship it is, if any.
     pub mission: Option<MissionMark>,
+    /// Whether it starts as a derelict does: its shield gone, its armour
+    /// cut just below where it is disabled, and disabled. A rescue
+    /// mission's ship set up in the system starts so ([`mission_ships`]).
+    pub derelict: bool,
 }
 
 /// The persons' side of a system's spawning: their world, and the names
@@ -277,6 +286,7 @@ impl<'a> PersonDraw<'a> {
             info_types: 0,
             person: Some(id),
             mission: None,
+            derelict: false,
         })
     }
 }
@@ -331,6 +341,7 @@ pub fn initial(
                 info_types: dude.info_types,
                 person: None,
                 mission: None,
+                derelict: false,
             });
         }
     }
@@ -458,6 +469,7 @@ fn hyper_ship(
             info_types: dude.info_types,
             person: None,
             mission: None,
+            derelict: false,
         });
     }
 }
@@ -476,6 +488,8 @@ pub struct MissionSpawn<'a> {
     pub dude: DudeId,
     /// How many to bring in.
     pub count: i16,
+    /// Its `ShipGoal`: only the setup reads it ([`mission_ships`]).
+    pub goal: ShipGoal,
     /// Its `ShipStart`.
     pub start: ShipStart,
     /// Its `ShipBehav`.
@@ -544,15 +558,21 @@ fn mission_dude_ship(
             behav: spawn.behav,
             cloaked: false,
         }),
+        derelict: false,
     })
 }
 
 /// `spawn`'s ships as the system is set up (`_SetupShipsInSystem`
 /// @0x42e89-0x43121): `count` of them, each placed as
-/// `mission_dude_ship` places it; with a `ShipStart` of -1 to -16 then
-/// moved to that nav slot's stellar, unless the slot is empty
-/// (@0x4300a-0x43091); with `ShipStart` 2, cloaked (`_DoShipCloak`
-/// @0x43114-0x43121).
+/// `mission_dude_ship` places it; for a rescue goal (`ShipGoal` 5) then
+/// facing a heading `Rand(360)`, still, and set up derelict
+/// ([`NewShip::derelict`]: shields 0, armour cut, @0x42f35-0x42fdc);
+/// with a `ShipStart` of -1 to -16 then moved to that nav slot's stellar,
+/// unless the slot is empty (@0x4300a-0x43091); with `ShipStart` 2,
+/// cloaked (`_DoShipCloak` @0x43114-0x43121). The original also zeroes a
+/// rescue ship's +0x48, an inertialess ship's speed along its heading
+/// (`_AdjustInertialessShipVelocity` @0x334c9-0x334d9), which the engine
+/// does not keep: the zero velocity covers it.
 pub fn mission_ships(
     table: &SpawnTable,
     spawn: &MissionSpawn,
@@ -563,8 +583,17 @@ pub fn mission_ships(
         ShipStart::Nav(slot) => spawn.nav.get(usize::from(slot)).copied().flatten(),
         _ => None,
     };
+    let rescue = spawn.goal == ShipGoal::Rescue;
     (0..spawn.count.max(0))
-        .filter_map(|_| mission_dude_ship(table, spawn, None, gate, chance))
+        .filter_map(|_| {
+            let mut ship = mission_dude_ship(table, spawn, None, gate, chance)?;
+            if rescue {
+                ship.state.heading = chance.below(DEGREES) as f32;
+                ship.state.velocity = Vec2::ZERO;
+                ship.derelict = true;
+            }
+            Some(ship)
+        })
         .map(|mut ship| {
             if let Some(at) = nav {
                 ship.state.position = at;
@@ -719,6 +748,7 @@ pub fn fleet(
         info_types: 0,
         person: None,
         mission: None,
+        derelict: false,
     });
     for escort in &record.escorts {
         let count = escort_count(escort.min, escort.max, chance);
@@ -743,6 +773,7 @@ pub fn fleet(
                 info_types: 0,
                 person: None,
                 mission: None,
+                derelict: false,
             });
         }
     }
@@ -1032,6 +1063,7 @@ mod tests {
                 info_types: 0x4005,
                 person: None,
                 mission: None,
+                derelict: false,
             }]
         );
     }
@@ -1752,6 +1784,7 @@ mod tests {
                 info_types: 0,
                 person: Some(PersonId(510)),
                 mission: None,
+                derelict: false,
             }]
         );
     }
@@ -2059,6 +2092,7 @@ mod tests {
             slot: 3,
             dude: DudeId(150),
             count,
+            goal: ShipGoal::Destroy,
             start: ShipStart::from_code(start),
             behav: ShipBehav::AttackPlayer,
             nav: &NAV,
@@ -2101,6 +2135,7 @@ mod tests {
                     behav: ShipBehav::AttackPlayer,
                     cloaked: false,
                 }),
+                derelict: false,
             }]
         );
     }
@@ -2234,6 +2269,103 @@ mod tests {
         }
     }
 
+    /// [`mission_spawn`] of `ShipGoal` `goal`.
+    fn goal_spawn(count: i16, start: i16, goal: ShipGoal) -> MissionSpawn<'static> {
+        MissionSpawn {
+            goal,
+            ..mission_spawn(count, start)
+        }
+    }
+
+    #[test]
+    fn a_rescue_ship_set_up_draws_its_heading_after_its_ship_and_starts_still_and_derelict() {
+        let mut chance = Draws::of(&[0, 0, 0, 0, 90, 0, 0, 0, 99, 270]);
+        let ships = mission_ships(
+            &with_mission_dude(),
+            &goal_spawn(2, -2, ShipGoal::Rescue),
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!(
+            chance.asked,
+            [3, 1500, 1500, 100, 360, 3, 1500, 1500, 100, 360]
+        );
+        assert_eq!(
+            ships
+                .iter()
+                .map(|ship| (ship.ship, ship.state, ship.derelict))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    ShipId(202),
+                    ShipState {
+                        position: Vec2::new(100.0, 200.0),
+                        velocity: Vec2::ZERO,
+                        heading: 90.0,
+                    },
+                    true
+                ),
+                (
+                    ShipId(203),
+                    ShipState {
+                        position: Vec2::new(100.0, 200.0),
+                        velocity: Vec2::ZERO,
+                        heading: 270.0,
+                    },
+                    true
+                ),
+            ],
+            "at nav slot 1 after the heading"
+        );
+    }
+
+    #[test]
+    fn a_mission_ship_of_another_goal_set_up_draws_no_heading_and_is_not_derelict() {
+        for goal in [
+            ShipGoal::None,
+            ShipGoal::Destroy,
+            ShipGoal::Disable,
+            ShipGoal::Board,
+            ShipGoal::Escort,
+            ShipGoal::Observe,
+            ShipGoal::ChaseOff,
+            ShipGoal::Other,
+        ] {
+            let mut chance = Draws::of(&[0, 0, 0, 0]);
+            let ships = mission_ships(
+                &with_mission_dude(),
+                &goal_spawn(1, 0, goal),
+                mission_gate(),
+                &mut chance,
+            );
+            assert_eq!(chance.asked, [3, 1500, 1500, 100], "{goal:?}");
+            assert_eq!(ships[0].state.heading, 0.0, "{goal:?}");
+            assert!(!ships[0].derelict, "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn a_rescue_ship_coming_later_or_swapped_in_gets_no_setup_placement() {
+        let table = with_mission_dude();
+        let rescue = goal_spawn(1, 1, ShipGoal::Rescue);
+        let mut chance = Draws::of(&[0, 0, 0, 0, 0, 0, 0]);
+        let ships = arriving_mission_ships(&table, &rescue, None, mission_gate(), &mut chance);
+        assert_eq!(chance.asked, [360, 3, 1500, 1500, 100, 512, 512]);
+        assert!(!ships[0].derelict);
+        let mut chance = Draws::of(&[0, 0, 0, 0]);
+        let swapped = swapped_mission_ship(
+            &table,
+            &rescue,
+            ShipState::default(),
+            None,
+            mission_gate(),
+            &mut chance,
+        )
+        .expect("a ship");
+        assert_eq!(chance.asked, [3, 1500, 1500, 100]);
+        assert!(!swapped.derelict);
+    }
+
     #[test]
     fn mission_ships_coming_later_glide_in_around_an_entry_point_drawn_first() {
         // Angle 0 (straight up), then each ship: aggression, place, ship,
@@ -2353,6 +2485,7 @@ mod tests {
                     behav: ShipBehav::AttackPlayer,
                     cloaked: false,
                 }),
+                derelict: false,
             })
         );
     }

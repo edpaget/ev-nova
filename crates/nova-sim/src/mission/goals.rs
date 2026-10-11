@@ -2,8 +2,9 @@
 //! ([`ShipGoal`]), the check that says whether it is met or failed
 //! ([`check_goals`], `_MissionObjectivesCheck` @0x9e79e), the moment a
 //! goal is met ([`goals_met_moment`]), the losses that fail a mission
-//! at once ([`fails_on_destroyed`], [`fails_on_disabled`]), and what a
-//! ship that leaves the system counts ([`departure`]). They are pure
+//! at once ([`fails_on_destroyed`], [`fails_on_disabled`]), what a
+//! ship that leaves the system counts ([`departure`]), and which ships a
+//! rescue goal holds disabled ([`held_disabled`]). They are pure
 //! rules over the counts the slot keeps of its ships
 //! ([`SpecialShips`](super::SpecialShips)); when they are checked, and
 //! what the moment shows and runs, is the session's `mission_ships`
@@ -302,6 +303,17 @@ pub const fn assists(
     } else {
         Some(AssistLine::Boarded)
     }
+}
+
+/// Whether a special ship of a mission of `goal`, its goals met
+/// (`goals_met`, +2) or not, the ship `boarded` (+0xb9) or not, is held
+/// disabled at any armour, as `_IsDisabled` reads it (@0x2d24-0x2d69): a
+/// rescue goal not yet met, the ship not yet boarded. Whether the
+/// mission has failed (+3) is not read, so a failed rescue still in its
+/// slot keeps its ships held.
+#[must_use]
+pub const fn held_disabled(goal: ShipGoal, goals_met: bool, boarded: bool) -> bool {
+    matches!(goal, ShipGoal::Rescue) && !goals_met && !boarded
 }
 
 /// The first loss of its kind, of a mission not failed and not hidden.
@@ -871,6 +883,28 @@ mod tests {
             ShipGoal::Observe,
         ] {
             assert!(!fails_on_disabled(loss(goal)), "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn a_rescue_ship_unmet_and_unboarded_is_held_disabled() {
+        assert!(held_disabled(ShipGoal::Rescue, false, false));
+    }
+
+    #[test]
+    fn a_rescue_ship_boarded_or_of_goals_met_is_not_held() {
+        assert!(!held_disabled(ShipGoal::Rescue, false, true));
+        assert!(!held_disabled(ShipGoal::Rescue, true, false));
+        assert!(!held_disabled(ShipGoal::Rescue, true, true));
+    }
+
+    #[test]
+    fn a_ship_of_any_other_goal_is_never_held() {
+        for goal in ALL_GOALS
+            .into_iter()
+            .filter(|&goal| goal != ShipGoal::Rescue)
+        {
+            assert!(!held_disabled(goal, false, false), "{goal:?}");
         }
     }
 }

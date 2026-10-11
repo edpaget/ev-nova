@@ -70,7 +70,7 @@ use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::mission::ships::ShipBehav;
-use crate::person::PersonWorld;
+use crate::person::{PersonWorld, derelict_armor};
 use autopilot::Outcome;
 use npc::{Mode, Npc, NpcId, NpcPerson};
 use spawn::{JUMP_IN_TICKS, NewShip, PersonDraw};
@@ -480,7 +480,9 @@ impl Traffic {
     }
 
     /// Adds `ships`, numbering each and pointing each escort at its lead; a
-    /// person flies its fitted ship, holding a grudge when `grudges` say.
+    /// person flies its fitted ship, holding a grudge when `grudges` say;
+    /// a ship set up derelict ([`NewShip::derelict`]) starts disabled, its
+    /// shield gone and its armour cut ([`derelict_armor`]).
     fn add(&mut self, ships: Vec<NewShip>, grudges: &BTreeSet<PersonId>) {
         let first = self.next_id;
         for ship in ships {
@@ -491,8 +493,13 @@ impl Traffic {
             else {
                 continue;
             };
-            let reserves = person.map_or_else(|| kind.stats.full(), |person| person.reserves);
-            let condition = person.map_or(Condition::Intact, |person| person.condition);
+            let mut reserves = person.map_or_else(|| kind.stats.full(), |person| person.reserves);
+            let mut condition = person.map_or(Condition::Intact, |person| person.condition);
+            if ship.derelict {
+                reserves.shield.now = 0.0;
+                reserves.armor.now = derelict_armor(kind.stats.armor, kind.hull.tough);
+                condition = Condition::Disabled;
+            }
             let traits = person
                 .map(|person| NpcPerson::of(&person.record, grudges.contains(&person.record.id)));
             let id = NpcId(self.next_id);
@@ -1672,6 +1679,7 @@ mod tests {
                 behav: ShipBehav::from_code(behav),
                 cloaked: false,
             }),
+            derelict: false,
         }
     }
 
@@ -1722,5 +1730,30 @@ mod tests {
         }
         assert_eq!((npcs[2].goal, npcs[2].target), (Goal::Idle, None));
         assert_eq!(npcs[1].id, NpcId(1), "numbered after the others");
+    }
+
+    #[test]
+    fn a_derelict_mission_ship_starts_disabled_with_no_shield_and_its_armour_cut() {
+        let mut tough = table(0);
+        tough.ships.get_mut(&ShipId(200)).expect("200").hull.tough = true;
+        for (table, share) in [(table(0), 0.33_f32), (tough, 0.1)] {
+            let mut traffic = Traffic::new();
+            traffic.enter_with(table, World::new(&[]), Vec::new(), &mut Draws::of(&[]));
+            traffic.bring_in(vec![
+                NewShip {
+                    derelict: true,
+                    ..mission_ship(-1, 0.0)
+                },
+                mission_ship(-1, 1.0),
+            ]);
+            let npcs = traffic.npcs();
+            assert_eq!(npcs[0].condition, Condition::Disabled);
+            assert_eq!(npcs[0].reserves.shield.now, 0.0);
+            assert_eq!(npcs[0].reserves.armor.now, 45.0_f32.mul_add(share, -1.0));
+            assert_eq!(npcs[0].reserves.armor.max, 45.0);
+            assert_eq!(npcs[0].reserves.fuel, npcs[1].reserves.fuel);
+            assert_eq!(npcs[1].condition, Condition::Intact);
+            assert_eq!(npcs[1].reserves, npcs[1].stats.full());
+        }
     }
 }

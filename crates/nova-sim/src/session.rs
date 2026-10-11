@@ -1466,7 +1466,9 @@ impl Session {
     ///
     /// Each NPC intact before the tick and no longer raises
     /// [`Fate::Disabled`], and each destroyed raises [`Fate::Destroyed`]
-    /// as it is taken out (see the `story` module's findings). The
+    /// as it is taken out (see the `story` module's findings). A rescue
+    /// mission's ship not yet boarded fights held disabled
+    /// ([`Session::mission_ship_held`]; see the `mission_ships` module). The
     /// stellars shown that shots can hit take their damage, and each shot
     /// down is destroyed and runs its `OnDestroy` (see the `stellars`
     /// module).
@@ -1479,6 +1481,12 @@ impl Session {
             .npcs()
             .iter()
             .map(|npc| (npc.id, npc.condition, npc.govt))
+            .collect();
+        let held: Vec<bool> = self
+            .traffic
+            .npcs()
+            .iter()
+            .map(|npc| self.mission_ship_held(npc))
             .collect();
         let mut stellars = self.stellar_targets();
         let pilot = &mut self.pilot;
@@ -1499,10 +1507,11 @@ impl Session {
             target: self.target.map(ShipRef::Npc),
             reserves: &mut pilot.reserves,
             condition: &mut self.condition,
+            held_disabled: false,
             armament: &mut self.armament,
             rounds: &mut rounds,
         }];
-        for npc in self.traffic.npcs_mut() {
+        for (npc, held_disabled) in self.traffic.npcs_mut().iter_mut().zip(held) {
             let fleet = npc.fleet();
             let Npc {
                 id,
@@ -1532,6 +1541,7 @@ impl Session {
                 target: *target,
                 reserves,
                 condition,
+                held_disabled,
                 armament,
                 rounds,
             });

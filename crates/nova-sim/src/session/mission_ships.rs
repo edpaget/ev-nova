@@ -51,6 +51,31 @@
 //! ([`SimMessage::MissionShipLost`] and the quick failure); the goal
 //! checks follow as the `ShipFate` the loss raised settles.
 //!
+//! **Rescue ships** (`ShipGoal` 5) are held disabled. The original's
+//! `_IsDisabled` reads mission state: a marked ship (never the player)
+//! whose slot is active, whose `ShipGoal` is 5, whose goals are not yet
+//! met (+2) and which is not boarded (+0xb9) reads disabled at any
+//! armour (@0x2d24-0x2d69); failed (+3) is not read. Here a condition is
+//! stored, and the fight recomputes it from armour, so the session works
+//! the hold out for each NPC ([`Session::mission_ship_held`], over
+//! [`held_disabled`]) and hands it to the fight
+//! ([`Fighter::held_disabled`](crate::combat::Fighter::held_disabled)),
+//! which keeps a held ship disabled with no new disabling, so no
+//! [`Fate::Disabled`] and no disabled count, as `_DamageShip` counts
+//! only a ship newly disabled (@0x3a9ad-0x3a9b2); its armour does not
+//! regenerate, as `_ShipArmorRechargeRate` gives none while disabled
+//! (@0x2e1d). A held ship whose armour is gone still breaks up. Each
+//! held ship is stored disabled as it comes, by any of the three paths
+//! ([`Session::mission_ships_came`]), so the AI, boarding, hails and the
+//! target panel read it disabled from its first frame. Once it is
+//! boarded, its goals are met, or it loses its mark, the next fight's
+//! tick reads its armour again: a swapped ship at full armour comes back
+//! intact, with no event. At setup a rescue ship also starts derelict
+//! (see the [`traffic::spawn`](crate::traffic::spawn) module's "Mission
+//! ships"), so it stays disabled by its armour once released. The target
+//! panel's "Waiting" for a held ship at or above the threshold
+//! (`_DrawStatusTarg` @0x4bab1-0x4bb87) is not shown.
+//!
 //! **The swap** (`_HandlePlayerCommunication` @0x62421-0x6252f): a person
 //! of `Flags` 0x0040 whose mission is accepted on its hail, with one of
 //! the mission's ships left, is swapped for that ship at the start of the
@@ -70,6 +95,7 @@ use super::Session;
 use crate::board::{Boarding, MissionBoardLine};
 use crate::catalog::{DudeId, MissionId, MissionRecord, ShipId, TrafficCatalog};
 use crate::chance::Chance;
+use crate::combat::hull::Condition;
 use crate::control::Script;
 use crate::geometry::Vec2;
 use crate::message::SimMessage;
@@ -78,7 +104,7 @@ use crate::mission::ships::{ShipBehav, ShipFacts, ShipStart, appear_timer, swapp
 use crate::mission::{
     ActiveMission, AssistLine, Departure, FailedBy, GoalFacts, LossFacts, ShipGoal, ShipSystem,
     SpecialShips, assists, check_goals, departure, fails_on_destroyed, fails_on_disabled,
-    goals_met_moment,
+    goals_met_moment, held_disabled,
 };
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::session::mission_screens::MissionTextKind;
@@ -393,6 +419,7 @@ impl Session {
                 slot,
                 dude,
                 count: state.left,
+                goal: ShipGoal::from_code(record.ships.goal),
                 start: ShipStart::from_code(record.ships.start),
                 behav: ShipBehav::from_code(record.ships.behav),
                 nav: &nav,
@@ -493,6 +520,7 @@ impl Session {
             slot,
             dude,
             count: coming,
+            goal: ShipGoal::from_code(record.ships.goal),
             start: ShipStart::from_code(record.ships.start),
             behav: ShipBehav::from_code(record.ships.behav),
             nav: &nav,
@@ -560,6 +588,7 @@ impl Session {
             slot,
             dude,
             count: 1,
+            goal: ShipGoal::from_code(record.ships.goal),
             start: ShipStart::from_code(record.ships.start),
             behav: ShipBehav::from_code(record.ships.behav),
             nav: &[],
@@ -692,10 +721,32 @@ impl Session {
         Some(Boarding::MissionShip(line))
     }
 
+    /// Whether `npc` is held disabled whatever its armour, as
+    /// `_IsDisabled` reads it (@0x2d24-0x2d69; see [`held_disabled`]): a
+    /// special ship of the mission in its slot whose `ShipGoal` is to
+    /// rescue them, its goals not yet met and the ship not yet boarded.
+    /// A ship with no mark, or of a free slot, is not held.
+    pub(crate) fn mission_ship_held(&self, npc: &Npc) -> bool {
+        let Some(active) = npc
+            .mission
+            .and_then(|mark| self.pilot.missions.get(mark.slot))
+        else {
+            return false;
+        };
+        let goal = self
+            .mission_record(active.mission)
+            .map_or(ShipGoal::None, |record| {
+                ShipGoal::from_code(record.ships.goal)
+            });
+        held_disabled(goal, active.goals_met, npc.boarded)
+    }
+
     /// The special ships just brought into the system, each numbered
-    /// above `last` (every one with none): each raises [`Fate::Arrived`],
-    /// and each of a mission whose goal is to observe them, not yet met,
-    /// is watched for its first sighting ([`Session::watch_ship`]).
+    /// above `last` (every one with none): each held disabled
+    /// ([`Session::mission_ship_held`]) is stored disabled, so it reads so
+    /// before any fight; each raises [`Fate::Arrived`], and each of a
+    /// mission whose goal is to observe them, not yet met, is watched for
+    /// its first sighting ([`Session::watch_ship`]).
     pub(super) fn mission_ships_came(&mut self, last: Option<NpcId>) {
         let came: Vec<(NpcId, u8)> = self
             .npcs()
@@ -703,6 +754,17 @@ impl Session {
             .filter(|npc| last.is_none_or(|last| npc.id > last))
             .filter_map(|npc| Some((npc.id, npc.mission?.slot)))
             .collect();
+        let held: Vec<NpcId> = self
+            .npcs()
+            .iter()
+            .filter(|npc| came.iter().any(|&(id, _)| id == npc.id) && self.mission_ship_held(npc))
+            .map(|npc| npc.id)
+            .collect();
+        for npc in self.traffic.npcs_mut() {
+            if held.contains(&npc.id) {
+                npc.condition = Condition::Disabled;
+            }
+        }
         for (ship, slot) in came {
             self.raise(StoryEvent::ShipFate {
                 ship,
@@ -2798,6 +2860,146 @@ mod tests {
         session
     }
 
+    // Rescue ships held disabled.
+
+    /// `ticks` of the fight, by Nova's rules.
+    fn fight(session: &mut Session, ticks: usize) {
+        for _ in 0..ticks {
+            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        }
+    }
+
+    /// Fills the armour of every NPC in the system.
+    fn full_armour(session: &mut Session) {
+        for npc in session.traffic.npcs_mut() {
+            npc.reserves.armor.now = npc.reserves.armor.max;
+        }
+    }
+
+    fn conditions(session: &Session) -> Vec<Condition> {
+        session.npcs().iter().map(|npc| npc.condition).collect()
+    }
+
+    fn disabled_fates(session: &Session) -> usize {
+        session
+            .story_raised()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    StoryEvent::ShipFate {
+                        fate: Fate::Disabled,
+                        ..
+                    }
+                )
+            })
+            .count()
+    }
+
+    #[test]
+    fn a_rescue_ship_set_up_in_flight_is_disabled_and_stays_so_at_full_armour() {
+        let catalog = goal_catalog(5, 0);
+        let mut session = in_flight(&catalog);
+        assert_eq!(conditions(&session), [Condition::Disabled; 2], "at spawn");
+        full_armour(&mut session);
+        let _ = session.take_messages();
+        fight(&mut session, 30);
+        assert_eq!(conditions(&session), [Condition::Disabled; 2]);
+        assert_eq!(disabled_fates(&session), 0, "never newly disabled");
+        assert_eq!(ships_of(&session).disabled, 0);
+        assert_eq!(session.take_messages(), []);
+        assert_eq!(failed(&session), None);
+    }
+
+    #[test]
+    fn a_ship_of_another_goal_at_full_armour_is_intact() {
+        for goal in [-1, 0, 1, 2, 3, 4, 6] {
+            let catalog = goal_catalog(goal, 0);
+            let mut session = in_flight(&catalog);
+            assert_eq!(conditions(&session), [Condition::Intact; 2], "{goal}");
+            fight(&mut session, 1);
+            assert_eq!(conditions(&session), [Condition::Intact; 2], "{goal}");
+        }
+    }
+
+    #[test]
+    fn a_failed_rescue_missions_ships_stay_held() {
+        let catalog = goal_catalog(5, 0);
+        let mut session = in_flight(&catalog);
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.failed = Some(FailedBy::Marked);
+        }
+        full_armour(&mut session);
+        fight(&mut session, 1);
+        assert_eq!(conditions(&session), [Condition::Disabled; 2]);
+    }
+
+    #[test]
+    fn a_held_rescue_ship_is_boarded_as_it_spawned_and_then_released() {
+        let catalog = rescuing(5, 1, 0x0001);
+        let mut session = in_flight_with(&catalog, 1);
+        assert_eq!(conditions(&session), [Condition::Disabled]);
+        session.player = crate::flight::ShipState::default();
+        session.traffic.npcs_mut()[0].state = crate::flight::ShipState::default();
+        session.target = Some(session.npcs()[0].id);
+        let boarding = session.board(
+            &Witness::default(),
+            &crate::board::NovaBoarding::default(),
+            &mut NeverFires,
+        );
+        assert_eq!(
+            boarding,
+            Ok(crate::board::Boarding::MissionShip(Some(
+                MissionBoardLine::Boarded
+            )))
+        );
+        assert_eq!(ships_of(&session).boarded, 1);
+        full_armour(&mut session);
+        fight(&mut session, 1);
+        assert_eq!(conditions(&session), [Condition::Intact], "released");
+        assert_eq!(disabled_fates(&session), 0);
+    }
+
+    #[test]
+    fn a_rescue_ship_is_released_once_its_goal_is_met_unboarded() {
+        let catalog = goal_catalog(5, 0);
+        let mut session = in_flight(&catalog);
+        assert!(session.meet_ship_goal(&catalog, 0, &mut NeverFires));
+        assert!(goals_met(&session));
+        assert!(session.npcs().iter().all(|npc| !npc.boarded));
+        full_armour(&mut session);
+        fight(&mut session, 1);
+        assert_eq!(conditions(&session), [Condition::Intact; 2]);
+    }
+
+    #[test]
+    fn a_rescue_ship_unmarked_or_of_a_freed_slot_is_released() {
+        let catalog = goal_catalog(5, 0);
+        let mut session = in_flight(&catalog);
+        session.traffic.npcs_mut()[0].mission = None;
+        session.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
+            slot: 5,
+            behav: ShipBehav::Own,
+            cloaked: false,
+        });
+        full_armour(&mut session);
+        fight(&mut session, 1);
+        assert_eq!(conditions(&session), [Condition::Intact; 2]);
+    }
+
+    #[test]
+    fn a_rescue_ship_held_at_low_armour_stays_disabled_once_released() {
+        let catalog = goal_catalog(5, 0);
+        let mut session = in_flight(&catalog);
+        for npc in session.traffic.npcs_mut() {
+            npc.boarded = true;
+            npc.reserves.armor.now = 1.0;
+        }
+        fight(&mut session, 1);
+        assert_eq!(conditions(&session), [Condition::Disabled; 2]);
+        assert_eq!(disabled_fates(&session), 0);
+    }
+
     // The walker's hook.
 
     #[test]
@@ -3128,6 +3330,39 @@ mod tests {
         let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
         catalog.missions[0].ships.goal = 5;
         assert!(swaps(&catalog, true));
+    }
+
+    #[test]
+    fn a_swapped_rescue_ship_is_disabled_at_once_with_full_reserves_until_boarded() {
+        let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        catalog.missions[0].ships.goal = 5;
+        catalog.missions[0].flags = 0x0409;
+        let mut session = swapped(&catalog);
+        assert_eq!(marked(&session), [0]);
+        let ship = &session.npcs()[0];
+        assert_eq!(ship.condition, Condition::Disabled, "at once");
+        assert_eq!(ship.reserves, ship.stats.full(), "full reserves");
+        fight(&mut session, 10);
+        assert_eq!(conditions(&session), [Condition::Disabled]);
+        assert_eq!(disabled_fates(&session), 0);
+        session.player = ShipState::default();
+        session.traffic.npcs_mut()[0].state = ShipState::default();
+        let boarding = session.board(
+            &Witness::default(),
+            &crate::board::NovaBoarding::default(),
+            &mut NeverFires,
+        );
+        assert!(
+            matches!(
+                boarding,
+                Ok(crate::board::Boarding::MissionShip(Some(
+                    MissionBoardLine::Refuelled { .. }
+                )))
+            ),
+            "{boarding:?}"
+        );
+        fight(&mut session, 1);
+        assert_eq!(conditions(&session), [Condition::Intact], "released");
     }
 
     #[test]

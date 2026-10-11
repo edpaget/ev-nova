@@ -488,13 +488,8 @@ pub fn fit(
         reserves.fuel.now = 0.0;
     }
     let condition = if derelict {
-        let share = if kind.hull.tough {
-            TOUGH_DERELICT_ARMOR_SHARE
-        } else {
-            DERELICT_ARMOR_SHARE
-        };
         reserves.shield.now = 0.0;
-        reserves.armor.now = kind.stats.armor.mul_add(share, -DERELICT_ARMOR_LESS);
+        reserves.armor.now = derelict_armor(kind.stats.armor, kind.hull.tough);
         Condition::Disabled
     } else {
         Condition::Intact
@@ -506,6 +501,21 @@ pub fn fit(
         ..kind.clone()
     };
     (fitted, reserves, condition)
+}
+
+/// A derelict's armour, of a ship type holding `armor`, its hull `tough`
+/// or not: a third of it (a tenth for a tough hull), less one, just below
+/// where it is disabled (@0xdd568, @0xdd110, @0xdd0c0). The original reads
+/// the `shïp`'s own `Armor` (+0x60); `armor` here carries its default
+/// outfits' armour too.
+#[must_use]
+pub fn derelict_armor(armor: f32, tough: bool) -> f32 {
+    let share = if tough {
+        TOUGH_DERELICT_ARMOR_SHARE
+    } else {
+        DERELICT_ARMOR_SHARE
+    };
+    armor.mul_add(share, -DERELICT_ARMOR_LESS)
 }
 
 /// What a person roll gave (see the module docs).

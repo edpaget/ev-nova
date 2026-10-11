@@ -1315,6 +1315,7 @@ impl Combatant {
             target: self.target,
             reserves: &mut self.reserves,
             condition: &mut self.condition,
+            held_disabled: false,
             armament: &mut self.armament,
             rounds: &mut self.rounds as &mut dyn Rounds,
         }
