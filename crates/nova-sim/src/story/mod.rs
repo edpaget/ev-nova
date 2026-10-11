@@ -154,7 +154,7 @@
 //!    and resolution again, the table kept.
 //! 4. The news is chosen as the bar opens: `_DoBarDialog` (0x48ef5)
 //!    calls `_RandomizeNewsDialog` (0x48238) as it opens (@0x48f15). It
-//!    has no trigger point of its own.
+//!    has no trigger point of its own (see [`news`](crate::news)).
 //!
 //! ## One take-off
 //!

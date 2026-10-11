@@ -263,6 +263,7 @@ pub mod market;
 pub mod message;
 pub mod mission;
 pub mod navigation;
+pub mod news;
 pub mod order_loop;
 pub mod outfit_effects;
 pub mod outfitter;
@@ -349,6 +350,7 @@ pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use message::SimMessage;
 pub use navigation::{next_after, stellar_under};
+pub use news::News;
 pub use outfit_effects::{OutfitRules, Rgb15};
 pub use outfitter::{
     Armed, Launcher, LcNames, OpeningLimit, OutfitFacts, OutfitOrder, OutfitRefusal, OutfitRow,
