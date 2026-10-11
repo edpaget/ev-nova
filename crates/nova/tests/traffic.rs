@@ -550,15 +550,37 @@ fn entering_flight_shows_the_trader_with_its_sprite_and_a_radar_blip() {
     assert_eq!(trader.state.position, Vec2::new(100.0, -100.0));
     // The player is at the centre of the screen, (512, 384).
     assert_eq!(traders(&first), [centred(612.0, 284.0, 2.0, 2.0)]);
-    let blips: Vec<Point> = solids(&first)
+    // The planet's 2 x 2 oval on the radar; the trader joins it at the
+    // radar's next refresh, within 8 ticks (16 frames), a dim pixel where
+    // it is then: (100, -100) is 3.125 radar pixels each way from the
+    // player, at the radar's centre, (926, 96).
+    let planet = dim_pixels(&first);
+    assert_eq!(planet.len(), 4, "{planet:?}");
+    let mut frames = 0;
+    let blip = loop {
+        let shown = dim_pixels(&harness.frame());
+        frames += 1;
+        if shown.len() > 4 {
+            break shown[4];
+        }
+        assert!(frames < 16, "no blip after {frames} frames");
+    };
+    let at = harness.session().npcs()[0].state.position;
+    let expected = |world: f32, centre: f32| centre + (world / 32.0).trunc() + 0.5;
+    assert!(
+        (blip.x - expected(at.x, 926.0)).abs() <= 1.0
+            && (blip.y - expected(at.y, 96.0)).abs() <= 1.0,
+        "{blip:?} for {at:?}"
+    );
+}
+
+/// The centres of the 1-pixel quads drawn in the dim radar colour.
+fn dim_pixels(frame: &Frame) -> Vec<Point> {
+    solids(frame)
         .iter()
         .filter(|quad| quad.color == submitted(DIM_RADAR))
         .map(centre)
-        .collect();
-    assert_eq!(
-        blips,
-        [Point::new(926.0 + 100.0 / 16.0, 96.0 - 100.0 / 16.0)]
-    );
+        .collect()
 }
 
 #[test]

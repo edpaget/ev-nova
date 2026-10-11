@@ -1,5 +1,7 @@
 //! The flight screen: the player's ship flying in its starting system.
 //!
+//! - [`cadence`]: when the HUD refreshes, [`HudCadence`](cadence::HudCadence),
+//!   and the target's blink on the radar.
 //! - [`catalog`]: the [`ShipSprites`] port, the player ship's sprite
 //!   sheet, and the [`StatusBars`] port, the `ïntf` status bar layouts.
 //! - [`data`]: the ports' adapters over `nova_data`'s `GameData`.
@@ -13,6 +15,8 @@
 //!   the mission info screen shown over flight.
 //! - [`hud`]: the HUD, the `ïntf` status bar with its radar, shield,
 //!   armour and fuel bars and the system's name.
+//! - [`radar`]: the radar's view model, the marks `_DrawStatusRadar`
+//!   draws for a [`RadarScene`](radar::RadarScene) snapshot.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
 //!   its heading.
 //! - [`target`]: the target panel, the secondary weapon's line and the
@@ -21,6 +25,7 @@
 //!   it.
 //! - [`weapons`]: drawing shots and beams.
 
+pub mod cadence;
 pub mod catalog;
 pub mod data;
 pub mod effects;
@@ -28,6 +33,7 @@ pub mod escorts;
 pub mod hud;
 pub mod jump;
 pub mod missions;
+pub mod radar;
 pub mod sprite;
 pub mod target;
 pub mod view;

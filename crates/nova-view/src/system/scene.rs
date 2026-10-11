@@ -44,6 +44,9 @@ pub struct SceneStellar {
     pub dead_sprite: Option<Result<StellarSheet, String>>,
     /// Its animation fields.
     pub animation_data: AnimationData,
+    /// Whether the radar draws it as a square: a station, hypergate or
+    /// wormhole ([`StellarContents::radar_square`]).
+    pub radar_square: bool,
     /// Whether it is destroyed, as last set.
     pub destroyed: bool,
     /// Whether it draws graphic type 0's sheet, as last set: destroyed,
@@ -79,6 +82,7 @@ impl SceneStellar {
             sprite: stellar.sprite,
             dead_sprite: stellar.dead_sprite,
             animation_data: stellar.animation,
+            radar_square: stellar.radar_square,
             destroyed: false,
             type_zero: false,
             type_zero_sprite: type_zero,
@@ -318,6 +322,7 @@ mod tests {
             sprite,
             dead_sprite: None,
             animation: WORMHOLE,
+            radar_square: false,
         }
     }
 
@@ -334,14 +339,18 @@ mod tests {
         }
     }
 
-    /// System 130 holds a 4-frame stellar 129 at (900, -600), a 1-frame
+    /// System 130 holds a 4-frame stellar 129 at (900, -600), a square on
+    /// the radar, a 1-frame
     /// stellar 128 at (0, 0) and stellar 140, with no sheet, at (-1700, 900).
     fn catalog() -> FakeCatalog {
         FakeCatalog::new(vec![
             system(
                 130,
                 vec![
-                    stellar(129, 900, -600, Ok(sheet(1001, 4))),
+                    StellarContents {
+                        radar_square: true,
+                        ..stellar(129, 900, -600, Ok(sheet(1001, 4)))
+                    },
                     stellar(128, 0, 0, Ok(sheet(1000, 1))),
                     stellar(140, -1700, 900, Err("no spïn 1002".to_owned())),
                 ],
@@ -370,6 +379,7 @@ mod tests {
                     destroyed: false,
                     type_zero: false,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
+                    radar_square: true,
                     animation: Animation::new(frames(4), WORMHOLE, false),
                 },
                 SceneStellar {
@@ -382,6 +392,7 @@ mod tests {
                     destroyed: false,
                     type_zero: false,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
+                    radar_square: false,
                     animation: Animation::new(frames(1), WORMHOLE, false),
                 },
                 SceneStellar {
@@ -394,6 +405,7 @@ mod tests {
                     destroyed: false,
                     type_zero: false,
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
+                    radar_square: false,
                     animation: Animation::new(frames(1), WORMHOLE, false),
                 },
             ]

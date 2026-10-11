@@ -35,6 +35,12 @@
 //! their capacity fill the whole area ([`shield_share`]); the fuel gauge is
 //! not drawn while the player is disabled.
 //!
+//! The radar draws the [`RadarMark`]s [`radar::marks`] works out for the
+//! [`RadarScene`] the view last took, as `_DrawStatusRadar` (@0x496e0)
+//! draws them without IFF: a pixel for each ship and the player, a filled
+//! 2×2 square for a station or gate (framing a rect that small fills it),
+//! and an oval framed as [`oval_frame_pixels`] rasterizes it.
+//!
 //! Every `ïntf` area is relative to the bar's top-left corner. The bar is
 //! as wide as its background picture (194 pixels in every stock bar) and
 //! sits against the right edge of the screen, at the top.
@@ -45,6 +51,7 @@ use nova_sim::{JumpReadiness, Reserves};
 use nova_sim::Gauge;
 
 use super::catalog::{GovtId, StatusBarLayout, StatusBars};
+use super::radar::{self, IRect, RadarColor, RadarMark, RadarScene};
 use crate::draw::fill_rect;
 use crate::geometry::{Bounds, Point};
 use crate::system::camera::VIEW_SIZE;
@@ -56,12 +63,6 @@ use crate::{Color, DrawList, Font, ImageKey};
 pub const DEFAULT_INTERFACE: i16 = 128;
 /// The bar's width when its background cannot be read: the stock bars'.
 pub const STATUS_BAR_WIDTH: f32 = 194.0;
-/// Radar units per world unit: the stock radar, 176 pixels across, shows
-/// 1408 pixels each way from the player, which holds nearly every stock
-/// system's stellars.
-pub const RADAR_SCALE: f32 = 1.0 / 16.0;
-/// The side of a radar dot.
-pub const RADAR_DOT_SIZE: f32 = 2.0;
 /// Fuel for one jump (the Bible: "100 is one jump"): the simulation's
 /// [`JUMP_FUEL`](nova_sim::hyperspace::JUMP_FUEL).
 pub const FUEL_PER_JUMP: f32 = nova_sim::hyperspace::JUMP_FUEL;
@@ -170,19 +171,6 @@ pub fn bar_origin(bar: &StatusBar) -> Point {
     Point::new(VIEW_SIZE.0 - width, 0.0)
 }
 
-/// Where the radar shows a stellar at `stellar` to a player at `player`
-/// (both in world units): the radar's centre plus the offset scaled by
-/// [`RADAR_SCALE`], or `None` when that falls outside `radar`.
-#[must_use]
-pub fn radar_point(radar: Bounds, player: Point, stellar: Point) -> Option<Point> {
-    let center = radar.center();
-    let at = Point::new(
-        (stellar.x - player.x).mul_add(RADAR_SCALE, center.x),
-        (stellar.y - player.y).mul_add(RADAR_SCALE, center.y),
-    );
-    radar.contains(at).then_some(at)
-}
-
 /// `STR#` 2002 #343: the nav area's label over a selected stellar.
 pub const NAV_STELLAR: &str = "Stellar Navigation";
 /// `STR#` 2002 #344: the nav area with nothing to show.
@@ -213,12 +201,11 @@ pub enum NavDisplay {
 /// What the HUD shows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HudState<'a> {
-    /// Where the player's ship is drawn, in world units.
-    pub position: Point,
-    /// Where the system's stellars are, in world units.
-    pub stellars: &'a [Point],
-    /// Where the other ships are drawn, in world units.
-    pub ships: &'a [Point],
+    /// What the radar shows: the snapshot taken at its last refresh, or
+    /// this frame's.
+    pub radar: &'a RadarScene,
+    /// Whether the radar's target shows bright.
+    pub blink_on: bool,
     /// The player's shield, armour and fuel.
     pub reserves: Reserves,
     /// What the nav area shows.
@@ -230,26 +217,17 @@ pub struct HudState<'a> {
     pub disabled: bool,
 }
 
-/// Draws `bar` showing `state`: its background, a radar dot for each
-/// stellar within range in the bright radar colour and one for each ship
-/// within range in the dim one (until ships are told apart by how they
-/// feel about the player), then the shield, armour and fuel bars.
+/// Draws `bar` showing `state`: its background, the radar (see the
+/// module docs), then the shield, armour and fuel bars.
 pub fn draw(list: &mut DrawList, bar: &StatusBar, state: &HudState) {
     let origin = bar_origin(bar);
     let layout = &bar.layout;
     if let Some(background) = bar.background {
         list.picture(ImageKey::picture(background.id), origin);
     }
-    let radar = layout.radar.offset(origin);
-    for &stellar in state.stellars {
-        if let Some(at) = radar_point(radar, state.position, stellar) {
-            list.dot(at, RADAR_DOT_SIZE, layout.bright_radar);
-        }
-    }
-    for &ship in state.ships {
-        if let Some(at) = radar_point(radar, state.position, ship) {
-            list.dot(at, RADAR_DOT_SIZE, layout.dim_radar);
-        }
+    let radar = IRect::from_bounds(layout.radar.offset(origin));
+    for mark in radar::marks(radar, state.radar, state.blink_on) {
+        draw_mark(list, layout, mark);
     }
     let reserves = &state.reserves;
     for (area, gauge, color) in [
@@ -265,6 +243,63 @@ pub fn draw(list: &mut DrawList, bar: &StatusBar, state: &HudState) {
     }
     draw_nav(list, layout, origin, &state.nav);
     draw_date(list, layout, origin, state.date);
+}
+
+/// Draws one radar mark in the layout's radar colours: a pixel as a
+/// 1-pixel dot over it (a QuickDraw pixel at (x, y) covers [x, x + 1)),
+/// a square filled, and an oval as [`oval_frame_pixels`].
+fn draw_mark(list: &mut DrawList, layout: &StatusBarLayout, mark: RadarMark) {
+    let color = |color| match color {
+        RadarColor::Dim => layout.dim_radar,
+        RadarColor::Bright => layout.bright_radar,
+    };
+    match mark {
+        RadarMark::Pixel { x, y, color: c } => pixel(list, x, y, color(c)),
+        RadarMark::Square { rect, color: c } => fill_rect(list, rect.to_bounds(), color(c)),
+        RadarMark::Oval { rect, color: c } => {
+            for (x, y) in oval_frame_pixels(rect) {
+                pixel(list, x, y, color(c));
+            }
+        }
+    }
+}
+
+/// Draws the pixel at (`x`, `y`) in `color`.
+fn pixel(list: &mut DrawList, x: i32, y: i32, color: Color) {
+    list.dot(Point::new(x as f32 + 0.5, y as f32 + 0.5), 1.0, color);
+}
+
+/// The pixels framing the oval inscribed in `rect`, row by row: those
+/// whose centres lie inside the ellipse (on it included) with a pixel
+/// above, below, left or right that does not. QuickDraw's own `FrameOval`
+/// raster is in the Toolbox, not in the original's binary, so this is our
+/// approximation of it: a 2×2 oval is all 4 pixels, and a 4×4 one the 8
+/// that are not its corners.
+#[must_use]
+pub fn oval_frame_pixels(rect: IRect) -> Vec<(i32, i32)> {
+    let (width, height) = (
+        i64::from(rect.right) - i64::from(rect.left),
+        i64::from(rect.bottom) - i64::from(rect.top),
+    );
+    // Twice each pixel centre's offset from the oval's centre, scaled so
+    // the test stays in whole numbers.
+    let inside = |x: i32, y: i32| {
+        let dx = 2 * (i64::from(x) - i64::from(rect.left)) + 1 - width;
+        let dy = 2 * (i64::from(y) - i64::from(rect.top)) + 1 - height;
+        dx * dx * height * height + dy * dy * width * width <= width * width * height * height
+    };
+    let mut pixels = Vec::new();
+    for y in rect.top..rect.bottom {
+        for x in rect.left..rect.right {
+            let edge = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
+                .into_iter()
+                .any(|(x, y)| !inside(x, y));
+            if inside(x, y) && edge {
+                pixels.push((x, y));
+            }
+        }
+    }
+    pixels
 }
 
 /// Draws `date` on the last line of the layout's cargo area, at the bar's
@@ -399,6 +434,7 @@ mod tests {
 
     use super::*;
     use crate::DrawCommand;
+    use crate::flight::radar::{RadarShip, RadarStellar};
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -755,66 +791,48 @@ mod tests {
 
     // The radar.
 
-    const RADAR_AREA: Bounds = Bounds {
-        min: Point::new(8.0, 8.0),
-        max: Point::new(184.0, 184.0),
-    };
-
     #[test]
-    fn a_stellar_under_the_player_is_at_the_radars_centre() {
+    fn small_ovals_frame_every_pixel_and_a_four_pixel_one_leaves_its_corners() {
         assert_eq!(
-            radar_point(RADAR_AREA, at(300.0, -200.0), at(300.0, -200.0)),
-            Some(at(96.0, 96.0))
+            oval_frame_pixels(IRect::new(10, 20, 12, 22)),
+            [(10, 20), (11, 20), (10, 21), (11, 21)]
+        );
+        assert_eq!(
+            oval_frame_pixels(IRect::new(0, 0, 4, 4)),
+            [
+                (1, 0),
+                (2, 0),
+                (0, 1),
+                (3, 1),
+                (0, 2),
+                (3, 2),
+                (1, 3),
+                (2, 3)
+            ]
         );
     }
 
     #[test]
-    fn offsets_scale_by_the_radar_scale_with_y_down() {
-        assert_eq!(RADAR_SCALE, 0.0625);
-        assert_eq!(
-            radar_point(RADAR_AREA, at(0.0, 0.0), at(500.0, -250.0)),
-            Some(at(127.25, 80.375))
-        );
-        assert_eq!(
-            radar_point(RADAR_AREA, at(0.0, 0.0), at(-1000.0, 1000.0)),
-            Some(at(33.5, 158.5))
-        );
-    }
-
-    #[test]
-    fn a_stellar_beyond_the_radar_is_not_shown() {
-        // 1408 is the edge, still in; just past it, on each side, is out.
-        assert_eq!(
-            radar_point(RADAR_AREA, at(0.0, 0.0), at(1408.0, -1408.0)),
-            Some(at(184.0, 8.0))
-        );
-        assert_eq!(
-            radar_point(RADAR_AREA, at(0.0, 0.0), at(-1408.0, 1408.0)),
-            Some(at(8.0, 184.0))
-        );
-        for stellar in [
-            at(1424.0, 0.0),
-            at(-1424.0, 0.0),
-            at(0.0, 1424.0),
-            at(0.0, -1424.0),
-        ] {
-            assert_eq!(radar_point(RADAR_AREA, at(0.0, 0.0), stellar), None);
+    fn a_six_pixel_oval_is_rounded() {
+        // Rows 0 and 5 run from 1 to 4; rows 1 to 4 are their ends alone.
+        let mut expected = vec![(1, 0), (2, 0), (3, 0), (4, 0)];
+        for y in 1..5 {
+            expected.extend([(0, y), (5, y)]);
         }
+        expected.extend([(1, 5), (2, 5), (3, 5), (4, 5)]);
+        assert_eq!(oval_frame_pixels(IRect::new(0, 0, 6, 6)), expected);
     }
 
     #[test]
-    fn moving_the_player_moves_the_dots_the_other_way() {
-        let earth = at(0.0, -600.0);
-        let still = radar_point(RADAR_AREA, at(0.0, 0.0), earth).expect("in range");
-        let up = radar_point(RADAR_AREA, at(0.0, -100.0), earth).expect("in range");
-        let right = radar_point(RADAR_AREA, at(100.0, 0.0), earth).expect("in range");
-        assert_eq!(still, at(96.0, 58.5));
-        assert_eq!(up, at(96.0, 64.75), "the player went up, the dot down");
-        assert_eq!(
-            right,
-            at(89.75, 58.5),
-            "the player went right, the dot left"
-        );
+    fn a_clipped_oval_is_squashed_into_its_rect() {
+        // 3 across and 6 down: a point at each end, the sides between.
+        let mut expected = vec![(101, 0)];
+        for y in 1..5 {
+            expected.extend([(100, y), (102, y)]);
+        }
+        expected.push((101, 5));
+        assert_eq!(oval_frame_pixels(IRect::new(100, 0, 103, 6)), expected);
+        assert_eq!(oval_frame_pixels(IRect::new(0, 0, 0, 6)), []);
     }
 
     // Drawing.
@@ -849,11 +867,18 @@ mod tests {
         }
     }
 
+    /// A radar with nothing on it but the player, at (0, 0).
+    static NO_RADAR: RadarScene = RadarScene {
+        player: Point::new(0.0, 0.0),
+        stellars: Vec::new(),
+        ships: Vec::new(),
+        blank: false,
+    };
+
     fn state(reserves: Reserves) -> HudState<'static> {
         HudState {
-            position: at(0.0, 0.0),
-            stellars: &[],
-            ships: &[],
+            radar: &NO_RADAR,
+            blink_on: false,
             reserves,
             nav: NavDisplay::None,
             date: DATE,
@@ -1135,12 +1160,43 @@ mod tests {
 
     #[test]
     fn it_draws_the_background_then_the_radar_then_the_bars() {
-        let stellars = [at(0.0, -600.0), at(300.0, -200.0), at(5000.0, 0.0)];
-        let ships = [at(-160.0, 0.0), at(0.0, 2000.0)];
+        // About the stock radar's centre, (926, 96): a station 10 up, a
+        // small planet 10 right, a big one 2 left (an oval 6 across), a
+        // ship 5 left, and the targeted ship 5 down, bright with the blink.
+        let scene = RadarScene {
+            player: at(0.0, 0.0),
+            stellars: vec![
+                RadarStellar {
+                    position: at(0.0, -320.0),
+                    square: true,
+                    sprite_width: Some(300),
+                },
+                RadarStellar {
+                    position: at(320.0, 0.0),
+                    square: false,
+                    sprite_width: Some(40),
+                },
+                RadarStellar {
+                    position: at(-64.0, 0.0),
+                    square: false,
+                    sprite_width: Some(200),
+                },
+            ],
+            ships: vec![
+                RadarShip {
+                    position: at(-160.0, 0.0),
+                    targeted: false,
+                },
+                RadarShip {
+                    position: at(0.0, 160.0),
+                    targeted: true,
+                },
+            ],
+            blank: false,
+        };
         let hud = HudState {
-            position: at(0.0, 0.0),
-            stellars: &stellars,
-            ships: &ships,
+            radar: &scene,
+            blink_on: true,
             reserves: reserves(30.0, 60.0, 300.0),
             nav: NavDisplay::Stellar("Earth".to_owned()),
             date: DATE,
@@ -1149,9 +1205,16 @@ mod tests {
         let list = drawn(&stock(), &hud);
         let mut expected = DrawList::new();
         expected.picture(ImageKey::picture(700), at(830.0, 0.0));
-        expected.dot(at(926.0, 58.5), RADAR_DOT_SIZE, RADAR);
-        expected.dot(at(944.75, 83.5), RADAR_DOT_SIZE, RADAR);
-        expected.dot(at(916.0, 96.0), RADAR_DOT_SIZE, DIM_RADAR);
+        fill_rect(&mut expected, rect(925.0, 85.0, 927.0, 87.0), DIM_RADAR);
+        for (x, y) in [(935, 95), (936, 95), (935, 96), (936, 96)] {
+            expected.dot(pixel_at(x, y), 1.0, DIM_RADAR);
+        }
+        for (x, y) in oval_frame_pixels(IRect::new(921, 93, 927, 99)) {
+            expected.dot(pixel_at(x, y), 1.0, DIM_RADAR);
+        }
+        expected.dot(pixel_at(921, 96), 1.0, DIM_RADAR);
+        expected.dot(pixel_at(926, 101), 1.0, RADAR);
+        expected.dot(pixel_at(926, 96), 1.0, RADAR);
         expected.line(at(865.0, 202.5), at(1014.0, 202.5), 7.0, SHIELD);
         expected.line(at(865.0, 219.5), at(1014.0, 219.5), 7.0, ARMOR);
         expected.line(at(865.0, 237.5), at(1014.0, 237.5), 7.0, FUEL_FULL);
@@ -1159,7 +1222,78 @@ mod tests {
         expected.push(nav_text("Earth", 1, TEXT));
         expected.push(date_text(DATE));
         assert_eq!(list, expected);
-        assert_eq!(RADAR_DOT_SIZE, 2.0);
+        let blink_off = HudState {
+            blink_on: false,
+            ..hud
+        };
+        assert_eq!(
+            dots(&drawn(&stock(), &blink_off), RADAR),
+            [pixel_at(926, 96)],
+            "the target dim, the player bright"
+        );
+    }
+
+    /// The centre of the pixel at (`x`, `y`).
+    fn pixel_at(x: i32, y: i32) -> Point {
+        at(x as f32 + 0.5, y as f32 + 0.5)
+    }
+
+    #[test]
+    fn a_clipped_ovals_pixels_stay_inside_the_radar() {
+        // A big planet at the radar's right edge, x = 1013.
+        let scene = RadarScene {
+            stellars: vec![RadarStellar {
+                position: at(2784.0, 0.0),
+                square: false,
+                sprite_width: Some(200),
+            }],
+            ..NO_RADAR.clone()
+        };
+        let hud = HudState {
+            radar: &scene,
+            ..state(reserves(30.0, 60.0, 300.0))
+        };
+        let shown = dots(&drawn(&stock(), &hud), DIM_RADAR);
+        assert!(!shown.is_empty());
+        for dot in shown {
+            assert!(
+                (838.0..1014.0).contains(&dot.x) && (8.0..184.0).contains(&dot.y),
+                "{dot:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_radar_moves_with_the_bar_and_reads_its_layout() {
+        let mut bar = stock();
+        bar.background = Some(Background {
+            id: 700,
+            width: 200.0,
+            height: 767.0,
+        });
+        bar.layout.radar = rect(10.0, 20.0, 110.0, 120.0);
+        bar.layout.dim_radar = SHIELD;
+        bar.layout.bright_radar = ARMOR;
+        let scene = RadarScene {
+            ships: vec![RadarShip {
+                position: at(64.0, 0.0),
+                targeted: false,
+            }],
+            ..NO_RADAR.clone()
+        };
+        let hud = HudState {
+            radar: &scene,
+            ..state(reserves(0.0, 0.0, 0.0))
+        };
+        // The bar at (824, 0): the radar (834, 20)-(934, 120), centred on
+        // (884, 70).
+        let list = drawn(&bar, &hud);
+        assert_eq!(dots(&list, SHIELD), [pixel_at(886, 70)]);
+        assert_eq!(dots(&list, ARMOR), [pixel_at(884, 70)]);
+        bar.layout.radar = rect(10.0, 20.0, 10.0, 120.0);
+        let list = drawn(&bar, &hud);
+        assert_eq!(dots(&list, SHIELD), []);
+        assert_eq!(dots(&list, ARMOR), [], "an empty radar draws nothing");
     }
 
     /// The dots drawn in `color`.
@@ -1359,35 +1493,6 @@ mod tests {
             .into_iter()
             .filter(|command| matches!(command, DrawCommand::Text { text, .. } if text == DATE))
             .collect()
-    }
-
-    #[test]
-    fn each_ship_in_range_is_a_dim_blip_on_the_radar() {
-        // The radar is centred on (926, 96) and reaches 88 each way: 1408
-        // world pixels.
-        let ships = [
-            at(16.0, -32.0),
-            at(1408.0, 0.0),
-            at(1409.0, 0.0),
-            at(0.0, -5000.0),
-        ];
-        let hud = HudState {
-            position: at(0.0, 0.0),
-            stellars: &[],
-            ships: &ships,
-            reserves: reserves(30.0, 60.0, 300.0),
-            nav: NavDisplay::None,
-            date: DATE,
-            disabled: false,
-        };
-        let list = drawn(&stock(), &hud);
-        assert_eq!(dots(&list, DIM_RADAR), [at(927.0, 94.0), at(1014.0, 96.0)]);
-        assert_eq!(dots(&list, RADAR), [], "no stellars");
-        let away = HudState {
-            position: at(1000.0, 0.0),
-            ..hud
-        };
-        assert_eq!(dots(&drawn(&stock(), &away), DIM_RADAR)[0], at(864.5, 94.0));
     }
 
     #[test]

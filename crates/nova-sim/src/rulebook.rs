@@ -106,6 +106,7 @@
 //! | [`LeftRespawn`](RuleKey::LeftRespawn) | `left_respawn` | only a chase-off goal's ship (`ShipGoal` 6) that leaves the system lowers its mission's ships left, so a ship of another goal comes back at the next setup (`_LowLevelAIHandler` @0x85983-0x859aa; see [`mission::goals`](crate::mission::goals)) | any departed mission ship not of `ShipSyst` -6 lowers its ships left, and is not brought back\* |
 //! | [`LandedLeaves`](RuleKey::LandedLeaves) | `landed_leaves` | a mission ship that lands does not leave the system, as the original's waits at the stellar (`_HighLevelAIHandler` @0x8dadc-0x8db5a), so the engine taking it out counts nothing and it comes back at the next setup (see [`story`](crate::story)) | it leaves the system, counted as one that jumped out\* |
 //! | [`AuxGate`](RuleKey::AuxGate) | `aux_gate` | at a hypergate or wormhole exit, the auxiliary ships of a mission of `AuxShipSyst` -1 come no more until their countdown next restarts (`_HandlePlayerDockRequest` @0x6729b-0x672ac; see [`mission::aux`](crate::mission::aux)) | the exit restarts them as a jump does: "-1: any system" |
+//! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f; see `nova_view::flight::cadence`) | it follows every frame\* |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
@@ -120,8 +121,8 @@
 //! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance`,
-//! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`
-//! or `comm_quote`
+//! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
+//! `hud_cadence` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -1340,6 +1341,17 @@ rule_keys! {
     /// "-1: any system": the exit restarts them as a jump does (see
     /// [`mission::aux`](crate::mission::aux)).
     AuxGate => "aux_gate",
+    /// When the flight HUD's content refreshes. By the engine, on the
+    /// original's timing, which `_DrawStatus` (@0x4c85d) keeps in 60 Hz
+    /// `TickCount` units: the radar's blips every 15 Mac ticks
+    /// (@0x4c911-0x4c94f), which is every 8 engine ticks (≈0.267 s), so
+    /// they step a few times a second; the nav area and the target panel
+    /// follow in hud-fidelity phases 4 and 5. By the other reading, every
+    /// frame. The target's blink keeps the engine's timing under both,
+    /// as it is a feature, not a redraw artefact. The Bible says nothing
+    /// of it, so the other reading is the obvious alternative, not
+    /// anything the Bible says (see `nova_view::flight::cadence`).
+    HudCadence => "hud_cadence",
 }
 
 impl RuleKey {
@@ -1507,7 +1519,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1547,7 +1559,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1569,7 +1581,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1594,7 +1606,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1620,7 +1632,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1640,7 +1652,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1660,7 +1672,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1680,7 +1692,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -1693,7 +1705,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::GateFollow),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(1), Some(&RuleKey::GateFollow));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(2), Some(&RuleKey::GateFollow));
     }
 
     #[test]
@@ -1704,7 +1716,18 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(1), Some(&RuleKey::AuxGate));
+    }
+
+    #[test]
+    fn the_hud_cadence_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::HudCadence.key(), "hud_cadence");
+        assert_eq!(RuleKey::from_key("hud_cadence"), Some(RuleKey::HudCadence));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::HudCadence),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::HudCadence));
     }
 
     #[test]
@@ -1715,7 +1738,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(5),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -1823,7 +1846,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -1970,7 +1993,8 @@ mod tests {
                 RuleKey::LeftRespawn,
                 RuleKey::LandedLeaves,
                 RuleKey::GateFollow,
-                RuleKey::AuxGate
+                RuleKey::AuxGate,
+                RuleKey::HudCadence
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");

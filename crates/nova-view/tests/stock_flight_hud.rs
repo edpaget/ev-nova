@@ -4,8 +4,9 @@
 //! Federation's `ïntf` 130, and every stock `ïntf` reads; and
 //! the combat looks: every weapon the simulation flies, every explosion
 //! type and a ship's target card read, and every looped weapon sound's
-//! length; and a boarding grant's message reads the strings it is built
-//! from. Skips, passing, when `NOVA_DATA` is unset.
+//! length; a boarding grant's message reads the strings it is built
+//! from; and the radar draws the stock stations, hypergates and wormholes
+//! as squares. Skips, passing, when `NOVA_DATA` is unset.
 
 // The stock areas are small whole numbers, exact in floating point.
 #![allow(clippy::float_cmp)]
@@ -13,12 +14,15 @@
 mod common;
 
 use nova_data::records::interface::Interface;
+use nova_data::records::stellar::Stellar;
+use nova_data::records::system::System;
 use nova_data::records::weapon::Weapon;
 use nova_data::{GameData, Record};
 use nova_sim::{BoomId, Pilot, ShipId, SoundId, WeaponId};
 use nova_view::flight::hud::{Background, bar_origin, interface_id};
 use nova_view::flight::{CombatLooks, FlightView, Looks, StatusBars};
 use nova_view::geometry::Bounds;
+use nova_view::system::catalog::{SystemCatalog, SystemId};
 use nova_view::{DrawCommand, DrawList, ImageKey, Point, Screen};
 
 fn open() -> Option<GameData> {
@@ -239,5 +243,35 @@ fn a_fed_destroyer_flies_under_the_federation_status_bar() {
             width: 194.0,
             height: 767.0,
         })
+    );
+}
+
+#[test]
+fn stock_stations_and_gates_are_squares_on_the_radar_and_the_rest_ovals() {
+    let Some(data) = open() else {
+        return;
+    };
+    let (mut stations, mut gates, mut ovals) = (0, 0, 0);
+    for &id in data.ids(System::TYPE) {
+        for stellar in SystemCatalog::system(&data, SystemId(id)).stellars {
+            let Some(Ok(spob)) = data.get::<Stellar>(stellar.id.0) else {
+                continue;
+            };
+            let station = spob.record.flags.bits() & 0x10 != 0;
+            let gate = spob.record.flags2.bits() & 0x3000 != 0;
+            assert_eq!(
+                stellar.radar_square,
+                station || gate,
+                "spöb {} in sÿst {id}",
+                stellar.id.0
+            );
+            stations += usize::from(station);
+            gates += usize::from(gate);
+            ovals += usize::from(!station && !gate);
+        }
+    }
+    assert!(
+        stations > 0 && gates > 0 && ovals > 0,
+        "{stations} {gates} {ovals}"
     );
 }

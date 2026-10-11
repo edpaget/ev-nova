@@ -178,6 +178,7 @@ mod tests {
                     }),
                     dead_sprite: None,
                     animation: AnimationData::default(),
+                    radar_square: false,
                 }]
             } else {
                 Vec::new()

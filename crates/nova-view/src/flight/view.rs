@@ -79,10 +79,16 @@
 //! shown draws the ship there.
 //!
 //! The HUD is drawn over everything but a jump's fade: the status bar against the
-//! right edge, its radar showing the stellars around the ship as drawn,
-//! its bars the session's shield, armour and fuel, and its nav area the
-//! navigation target or else the course. Without a status bar it says
-//! why, and flight goes on.
+//! right edge, its radar showing the stellars and ships around the ship
+//! as drawn, its bars the session's shield, armour and fuel, and its nav
+//! area the navigation target or else the course. Without a status bar it
+//! says why, and flight goes on. By [`RuleKey::HudCadence`]'s engine
+//! reading the radar shows what it held at its last refresh, every 8
+//! ticks ([`HudCadence`]) or when the original's `_RedrawStatus` would
+//! redraw it (a new system, landing, take-off, or closing the map, the
+//! comm dialog or a mission dialog); by the other, every frame. Its target blinks bright on the
+//! same 8 ticks either way, and it shows no stellars or ships while the
+//! ship is landed.
 //!
 //! Each [`Screen::tick`] runs the simulation's fixed-step clock: the
 //! frame's time becomes whole steps of 1/30 s, each flown with the keys
@@ -289,6 +295,7 @@
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
@@ -312,13 +319,14 @@ use nova_sim::{
     HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome, LandPress,
     LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
     NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot, PilotCatalog,
-    PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey, Rulebook,
-    Rules, Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard,
-    SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick,
-    TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn,
-    glow_level, lights_level,
+    PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey, RuleSource,
+    Rulebook, Rules, Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState,
+    Shipyard, SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken,
+    TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized,
+    flight::shortest_turn, glow_level, lights_level,
 };
 
+use super::cadence::HudCadence;
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
 use super::effects::{Dying, Effects, Scene};
 use super::escorts::{
@@ -327,6 +335,7 @@ use super::escorts::{
 };
 use super::hud::{self, HudState, NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
+use super::radar::{RadarScene, RadarShip, RadarStellar};
 use super::sprite::rotation_frame;
 use super::target::{self, TargetShown};
 use super::weapons::{self, BeamShown, ShotShown};
@@ -1177,6 +1186,12 @@ pub struct FlightView<C> {
     escort_menu: EscortMenu,
     /// The escort menu's colours, read once.
     escort_colors: EscortMenuColors,
+    /// When the HUD refreshes, and the radar target's blink.
+    hud_cadence: HudCadence,
+    /// What the radar showed at its last refresh, which it shows until the
+    /// next under [`RuleKey::HudCadence`]'s engine reading; `None` before
+    /// the first.
+    radar_scene: Option<RadarScene>,
 }
 
 /// What [`FlightView::catch_up`] redrew, from the session's events.
@@ -1342,6 +1357,8 @@ impl<
             metrics: None,
             escort_menu: EscortMenu::default(),
             escort_colors,
+            hud_cadence: HudCadence::default(),
+            radar_scene: None,
         }
     }
 
@@ -1812,6 +1829,9 @@ impl<
         if redrawn.galaxy || redrawn.system || redrawn.rebuilt {
             self.show_destroyed();
         }
+        if redrawn.system {
+            self.redraw_status();
+        }
         redrawn
     }
 
@@ -1907,6 +1927,7 @@ impl<
         self.place_ship();
         self.read_npc_sheets();
         self.message = None;
+        self.redraw_status();
         pay_notes_message(&pay)
     }
 
@@ -1998,6 +2019,7 @@ impl<
                 self.pending_landing = Some(stellar);
                 self.message = None;
                 self.effects.clear();
+                self.redraw_status();
             }
             Ok(LandPress::AtGate {
                 kind: GateKind::Hypergate,
@@ -2051,6 +2073,7 @@ impl<
         self.map.cancel_pointer();
         self.map.release_keys();
         self.map_open = false;
+        self.redraw_status();
         if self.map.mode() != MapMode::Hypergate {
             return;
         }
@@ -2132,6 +2155,79 @@ impl<
 }
 
 impl<C> FlightView<C> {
+    /// What the radar shows now ([`RadarScene`]): the player's ship and
+    /// the other ships where they are drawn, the scene's stellars in nav
+    /// order with the shape and sprite width the radar reads, and blank
+    /// while the ship is landed (`_playerIsLanded`).
+    fn radar_now(&self) -> RadarScene {
+        let stellars = self.scene.as_ref().map_or_else(Vec::new, |scene| {
+            scene
+                .stellars()
+                .iter()
+                .map(|stellar| RadarStellar {
+                    position: stellar.position,
+                    square: stellar.radar_square,
+                    sprite_width: stellar.drawn().as_ref().ok().map(|sheet| sheet.frame_width),
+                })
+                .collect()
+        });
+        let (ships, blank) = match &self.session {
+            Ok(session) => (
+                radar_ships(session, &self.shown_npcs()),
+                session.landed().is_some(),
+            ),
+            Err(_) => (Vec::new(), false),
+        };
+        RadarScene {
+            player: self.shown_position(),
+            stellars,
+            ships,
+            blank,
+        }
+    }
+
+    /// Redraws the HUD at once, as the original's `_RedrawStatus`
+    /// (@0x4cac0) does: the radar's snapshot is taken afresh, but the
+    /// refresh timer and the target's blink are left as they are.
+    ///
+    /// The original calls it at flight start (`_PlayGame` @0x457d8, ours
+    /// the first frame, which shows the radar as it is), on landing and
+    /// take-off (`_PlayerLandOnStellar`), on arrival in a system
+    /// (`_HandlePlayer`; ours whenever a system is laid out), on closing
+    /// the map (`_DoSystemMap`), on entering a hypergate
+    /// (`_PlayerEnterHypergate`, ours as the map closes) and on closing
+    /// the comm dialog ([`FlightView::hang_up`]), the mission dialog
+    /// ([`FlightView::accept_mission`], [`FlightView::refuse_mission`]) and
+    /// the text dialog ([`FlightView::take_mission_texts`]). The shipyard
+    /// dialog is the spaceport's, while the radar is blank, and taking off
+    /// redraws it.
+    fn redraw_status(&mut self) {
+        self.radar_scene = Some(self.radar_now());
+    }
+
+    /// Moves the HUD's timer to the view's elapsed ticks, and takes the
+    /// radar's snapshot afresh when it refreshes ([`HudCadence::advance`]).
+    fn advance_hud(&mut self) {
+        let now = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
+        if self.hud_cadence.advance(now) {
+            self.radar_scene = Some(self.radar_now());
+        }
+    }
+
+    /// What the radar shows this frame: by [`RuleKey::HudCadence`]'s
+    /// engine reading, the snapshot taken at its last refresh; by the
+    /// other, or before the first refresh, the radar as it is now
+    /// ([`FlightView::radar_now`]).
+    fn radar_shown(&self) -> Cow<'_, RadarScene> {
+        let waits = self.session.as_ref().map_or(RuleSource::Engine, |session| {
+            session.rules().source_for(RuleKey::HudCadence)
+        }) == RuleSource::Engine;
+        match &self.radar_scene {
+            Some(shown) if waits => Cow::Borrowed(shown),
+            _ => Cow::Owned(self.radar_now()),
+        }
+    }
+
     /// Whether the course map is shown.
     #[must_use]
     pub fn map_open(&self) -> bool {
@@ -2221,11 +2317,14 @@ impl<C> FlightView<C> {
         }
     }
 
-    /// Ends the hail under way, if any ([`Session::hang_up`]).
+    /// Ends the hail under way, if any ([`Session::hang_up`]), and
+    /// refreshes the HUD as the original's comm dialog does on closing
+    /// ([`FlightView::redraw_status`]).
     pub fn hang_up(&mut self) {
         if let Ok(session) = &mut self.session {
             session.hang_up();
         }
+        self.redraw_status();
     }
 
     /// What is on board the ship just boarded, named, once: the router
@@ -2453,31 +2552,37 @@ impl<C> FlightView<C> {
     }
 
     /// Accepts `mission` as [`Session::accept_mission`] does, on the
-    /// flight's chance: the slot it went into.
+    /// flight's chance: the slot it went into. The HUD is redrawn, as the
+    /// original's mission dialog does on closing
+    /// ([`FlightView::redraw_status`]).
     ///
     /// # Errors
     ///
     /// The [`AcceptError`] that applies; a session that failed offers
     /// nothing.
     pub fn accept_mission(&mut self, mission: MissionId) -> Result<u8, AcceptError> {
-        match &mut self.session {
+        let accepted = match &mut self.session {
             Ok(session) => session.accept_mission(mission, &mut self.chance),
             Err(_) => Err(AcceptError::NotOffered),
-        }
+        };
+        self.redraw_status();
+        accepted
     }
 
     /// Refuses `mission` as [`Session::refuse_mission`] does, on the
-    /// flight's chance.
+    /// flight's chance. The HUD is redrawn, as on accepting.
     ///
     /// # Errors
     ///
     /// [`NotOffered`] when it is not offered; a session that failed offers
     /// nothing.
     pub fn refuse_mission(&mut self, mission: MissionId) -> Result<(), NotOffered> {
-        match &mut self.session {
+        let refused = match &mut self.session {
             Ok(session) => session.refuse_mission(mission, &mut self.chance),
             Err(_) => Err(NotOffered),
-        }
+        };
+        self.redraw_status();
+        refused
     }
 
     /// The mission info screen's view, as [`Session::mission_info`] gives
@@ -2531,12 +2636,20 @@ impl<C> FlightView<C> {
 
     /// The mission texts to show since they were last taken, as
     /// [`Session::take_mission_texts`] gives them; none for a session that
-    /// failed.
+    /// failed. When there are any, the HUD is redrawn
+    /// ([`FlightView::redraw_status`]): the original's text dialog redraws
+    /// it on closing, and flight does not tick under the dialog, so
+    /// redrawing as the texts are taken shows the same.
     pub fn take_mission_texts(&mut self) -> Vec<MissionText> {
-        self.session
+        let texts = self
+            .session
             .as_mut()
             .map(Session::take_mission_texts)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if !texts.is_empty() {
+            self.redraw_status();
+        }
+        texts
     }
 
     /// The shipyard of the stellar landed on, as [`Session::shipyard`]
@@ -3060,6 +3173,10 @@ impl<
     /// From then on the session flies again while the rest of the effect,
     /// the fade-in or the white flash, plays over it; that plays on with
     /// the map open too, as the original's display fade does.
+    ///
+    /// Then, unless the map is open, the HUD's timer moves on, refreshing
+    /// the radar when it is due ([`FlightView::advance_hud`]), still
+    /// before the frame is drawn.
     fn tick(&mut self, dt: Duration) {
         self.catch_up();
         if let Some(effect) = &mut self.fade_in {
@@ -3077,6 +3194,7 @@ impl<
                 self.arrive();
                 self.fade_in = self.jump.take().filter(|effect| !effect.done());
             }
+            self.advance_hud();
             return;
         }
         self.elapsed += dt;
@@ -3136,6 +3254,7 @@ impl<
         self.escort_menu.update(self.elapsed, &rows);
         self.alpha = alpha;
         self.start_streak_if_jumping();
+        self.advance_hud();
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -3188,16 +3307,11 @@ impl<
         }
         match &self.status_bar {
             Ok(bar) => {
-                let stellars: Vec<Point> = scene.stellars().iter().map(|s| s.position).collect();
-                let ships = match &self.session {
-                    Ok(session) => radar_ships(session, &self.shown_npcs()),
-                    Err(_) => Vec::new(),
-                };
+                let radar = self.radar_shown();
                 let date = self.date_text();
                 let state = HudState {
-                    position: self.shown_position(),
-                    stellars: &stellars,
-                    ships: &ships,
+                    radar: &radar,
+                    blink_on: self.hud_cadence.blink_on(),
                     reserves: self.reserves(),
                     nav: self.nav_display(scene),
                     date: &date,
@@ -3301,14 +3415,18 @@ fn sprite_drawn(session: &Session, npc: &Npc) -> bool {
     session.sees_past_cloak(npc)
 }
 
-/// Where each of `shown` the radar shows is drawn: those
-/// [`Session::on_radar`] says, a cloaked ship only when its cloak shows
-/// there or the player scans for cloaked ships.
-fn radar_ships(session: &Session, shown: &[(&Npc, Point, f32)]) -> Vec<Point> {
+/// Each of `shown` the radar shows, where it is drawn and whether it is
+/// the player's target: those [`Session::on_radar`] says, a cloaked ship
+/// only when its cloak shows there or the player scans for cloaked ships.
+fn radar_ships(session: &Session, shown: &[(&Npc, Point, f32)]) -> Vec<RadarShip> {
+    let target = session.target().map(|npc| npc.id);
     shown
         .iter()
         .filter(|(npc, _, _)| session.on_radar(npc))
-        .map(|&(_, at, _)| at)
+        .map(|&(npc, at, _)| RadarShip {
+            position: at,
+            targeted: target == Some(npc.id),
+        })
         .collect()
 }
 
@@ -3350,6 +3468,7 @@ mod tests {
         Blink, BoomLook, GovtId, LayerSheet, StatusBarLayout, TargetCard, WeaponLook,
     };
     use crate::flight::hud::{self, HudState, NavDisplay, StatusBar};
+    use crate::flight::radar::{self, IRect, RadarColor, RadarMark};
     use crate::galaxy::{Galaxy, MapMode, SystemEntry};
     use crate::sound::Sound;
 
@@ -3767,6 +3886,7 @@ mod tests {
                 frame0_bias: 0,
                 only_when_destroyed: false,
             },
+            radar_square: false,
         }
     }
 
@@ -4293,16 +4413,60 @@ mod tests {
             .collect()
     }
 
-    /// The radar dots drawn: the dots in the radar's colour.
-    fn dots_on_radar(list: &DrawList) -> Vec<Point> {
-        let radar = layout().bright_radar;
+    /// The radar's pixels drawn, in either radar colour, row by row as
+    /// drawn.
+    fn dots_on_radar(list: &DrawList) -> Vec<(i32, i32)> {
+        let layout = layout();
         list.iter()
             .filter_map(|command| match *command {
-                DrawCommand::Dot { center, color, .. } if color == radar => Some(center),
+                DrawCommand::Dot {
+                    center,
+                    size: 1.0,
+                    color,
+                } if color == layout.dim_radar || color == layout.bright_radar => {
+                    Some(((center.x - 0.5) as i32, (center.y - 0.5) as i32))
+                }
                 _ => None,
             })
             .collect()
     }
+
+    /// The stock radar, with the bar at (830, 0): centred on (926, 96).
+    const STOCK_RADAR: IRect = IRect::new(838, 8, 1014, 184);
+
+    /// What the radar shows this frame, as marks on the stock radar.
+    fn radar_marks(view: &View) -> Vec<RadarMark> {
+        radar::marks(
+            STOCK_RADAR,
+            &view.radar_shown(),
+            view.hud_cadence.blink_on(),
+        )
+    }
+
+    /// The ships' blips on the radar this frame: its pixels but the
+    /// player's, the last.
+    fn blips(view: &View) -> Vec<RadarMark> {
+        let mut marks: Vec<RadarMark> = radar_marks(view)
+            .into_iter()
+            .filter(|mark| matches!(mark, RadarMark::Pixel { .. }))
+            .collect();
+        marks.pop();
+        marks
+    }
+
+    /// The 2×2 oval a small stellar at radar pixel (`x`, `y`) draws.
+    fn small_oval(x: i32, y: i32) -> RadarMark {
+        RadarMark::Oval {
+            rect: IRect::around(x, y, 1),
+            color: RadarColor::Dim,
+        }
+    }
+
+    const PLAYER_PIXEL: RadarMark = RadarMark::Pixel {
+        x: 926,
+        y: 96,
+        color: RadarColor::Bright,
+    };
 
     fn texts(list: &DrawList) -> Vec<String> {
         list.iter()
@@ -4332,9 +4496,24 @@ mod tests {
             &mut expected,
             view.status_bar().expect("a status bar"),
             &HudState {
-                position: at(0.0, 0.0),
-                stellars: &[at(0.0, -600.0), at(300.0, -200.0)],
-                ships: &[],
+                radar: &RadarScene {
+                    player: at(0.0, 0.0),
+                    stellars: vec![
+                        RadarStellar {
+                            position: at(0.0, -600.0),
+                            square: false,
+                            sprite_width: Some(20),
+                        },
+                        RadarStellar {
+                            position: at(300.0, -200.0),
+                            square: false,
+                            sprite_width: Some(20),
+                        },
+                    ],
+                    ships: Vec::new(),
+                    blank: false,
+                },
+                blink_on: false,
                 reserves: ShipStats::new(FIELDS, &[]).full(),
                 nav: NavDisplay::None,
                 date: DATE,
@@ -4942,38 +5121,189 @@ mod tests {
                 bar(234.0, 119.0, width, layout.fuel_partial),
             ]
         );
-        let radar = layout.radar.offset(at(830.0, 0.0));
-        let on_radar = |stellar| hud::radar_point(radar, at(0.0, 0.0), stellar);
+        // Earth, 600 up, is 18.75 pixels up the radar, at 77.25; the Moon,
+        // (300, -200), at (935.375, 89.75): small ovals, dim, then the
+        // player, bright.
         assert_eq!(
             dots_on_radar(&list),
             [
-                on_radar(at(0.0, -600.0)).expect("in range"),
-                on_radar(at(300.0, -200.0)).expect("in range"),
+                (925, 76),
+                (926, 76),
+                (925, 77),
+                (926, 77),
+                (934, 88),
+                (935, 88),
+                (934, 89),
+                (935, 89),
+                (926, 96)
             ]
+        );
+        assert_eq!(
+            radar_marks(&view),
+            [small_oval(926, 77), small_oval(935, 89), PLAYER_PIXEL]
         );
         // No system name in the nav area (the dev title still names it).
         assert!(!texts(&list).contains(&"Sol".to_owned()), "{list:?}");
     }
 
+    /// The radar's player position: where it was when the radar last
+    /// refreshed, or now.
+    fn radar_player(view: &View) -> Point {
+        view.radar_shown().player
+    }
+
     #[test]
-    fn the_radar_follows_the_ship_as_drawn() {
+    fn by_the_engine_the_radar_holds_between_refreshes_eight_ticks_apart() {
         let mut view = flight();
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 1);
+        let refreshed = view.shown_position();
+        assert_eq!(radar_player(&view), refreshed, "refreshed on the first");
+        for tick in 2..=8 {
+            ticks(&mut view, 1);
+            assert_eq!(radar_player(&view), refreshed, "held on tick {tick}");
+        }
+        assert_ne!(view.shown_position(), refreshed, "the ship moved");
+        ticks(&mut view, 1);
+        assert_eq!(radar_player(&view), view.shown_position(), "the 9th");
+        assert_eq!(
+            radar_marks(&view)[0],
+            small_oval(
+                926,
+                radar::radar_offset(-600.0, view.shown_position().y, 96)
+            )
+        );
+    }
+
+    /// `view`'s flight with [`RuleKey::HudCadence`] read the Bible's way:
+    /// the HUD every frame.
+    fn every_frame(view: View) -> View {
+        view.with_rules(Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Bible))
+    }
+
+    #[test]
+    fn by_the_other_reading_the_radar_follows_the_ship_every_frame() {
+        let mut view = every_frame(flight());
         let before = dots_on_radar(&drawn(&view));
         view.input(&key(Key::Up, true));
-        view.tick(Duration::from_millis(1500));
+        for _ in 0..45 {
+            ticks(&mut view, 1);
+            assert_eq!(radar_player(&view), view.shown_position());
+        }
         view.tick(TICK / 2);
         let shown = view.shown_position();
         assert!(shown.y < -10.0, "{shown:?}");
+        assert_eq!(radar_player(&view), shown, "between ticks too");
         let after = dots_on_radar(&drawn(&view));
-        let radar = layout().radar.offset(at(830.0, 0.0));
+        let y = |world| radar::radar_offset(world, shown.y, 96);
         assert_eq!(
-            after,
+            radar_marks(&view),
             [
-                hud::radar_point(radar, shown, at(0.0, -600.0)).expect("in range"),
-                hud::radar_point(radar, shown, at(300.0, -200.0)).expect("in range"),
+                small_oval(926, y(-600.0)),
+                small_oval(935, y(-200.0)),
+                PLAYER_PIXEL
             ]
         );
-        assert!(after[0].y > before[0].y, "{before:?} {after:?}");
+        assert!(after[0].1 > before[0].1, "{before:?} {after:?}");
+    }
+
+    #[test]
+    fn while_landed_the_radar_shows_only_the_player_until_take_off() {
+        for every in [false, true] {
+            let view = flight_among(vec![site(129, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+            let mut view = if every { every_frame(view) } else { view };
+            ticks(&mut view, 3);
+            let flying = radar_marks(&view);
+            assert_eq!(flying.len(), 3, "the Sun, the Moon and the player");
+            land_now(&mut view);
+            assert!(view.session().expect("flying").landed().is_some());
+            assert!(view.radar_shown().blank, "at once, as _RedrawStatus");
+            assert_eq!(radar_marks(&view), [PLAYER_PIXEL]);
+            let list = drawn(&view);
+            assert_eq!(dots_on_radar(&list), [(926, 96)]);
+            view.take_off().expect("took off");
+            assert!(!view.radar_shown().blank, "at once on take-off");
+            assert_eq!(radar_marks(&view).len(), 3);
+        }
+    }
+
+    #[test]
+    fn a_new_system_shows_on_the_radar_at_once_leaving_the_timer_and_blink() {
+        let mut view = landed_view();
+        ticks(&mut view, 3);
+        let cadence = view.hud_cadence;
+        move_to(&mut view, 131, 140);
+        view.resync();
+        assert_eq!(view.hud_cadence, cadence, "neither timed nor flipped");
+        let shown = view.radar_shown();
+        assert_eq!(shown.player, view.shown_position());
+        let stellars: Vec<Point> = shown.stellars.iter().map(|s| s.position).collect();
+        let scene: Vec<Point> = view
+            .scene()
+            .expect("a scene")
+            .stellars()
+            .iter()
+            .map(|s| s.position)
+            .collect();
+        assert_eq!(stellars, scene, "Alpha Centauri's");
+    }
+
+    #[test]
+    fn an_arrival_shows_the_new_systems_stellars_at_once() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let leaving = view.session().expect("flying").system();
+        for _ in 0..1000 {
+            let cadence = view.hud_cadence;
+            view.tick(TICK);
+            if view.session().expect("flying").system() != leaving {
+                assert_eq!(view.hud_cadence, cadence, "not a refresh tick");
+                break;
+            }
+        }
+        assert_ne!(view.session().expect("flying").system(), leaving);
+        let stellars: Vec<Point> = view
+            .radar_shown()
+            .stellars
+            .iter()
+            .map(|s| s.position)
+            .collect();
+        assert_eq!(stellars, [at(0.0, 0.0)], "Alpha Centauri's");
+        assert_eq!(view.radar_shown().player, view.shown_position());
+    }
+
+    #[test]
+    fn the_targets_blip_blinks_bright_every_eight_ticks_under_both_readings() {
+        for every in [false, true] {
+            let (_, chance) = scripted(&placed(850, 650, 90));
+            let view = FlightView::new(trafficked(&[130], 1, 129, 3))
+                .with_chance(chance)
+                .with_behaviour(Rc::new(Still));
+            let mut view = if every { every_frame(view) } else { view };
+            view.tick(TICK);
+            tap(&mut view, TARGET_KEY);
+            assert!(view.session().expect("flying").target().is_some());
+            ticks(&mut view, 7);
+            let mut seen = Vec::new();
+            for _ in 0..24 {
+                ticks(&mut view, 1);
+                let [RadarMark::Pixel { color, .. }] = blips(&view)[..] else {
+                    panic!("one blip: {:?}", blips(&view));
+                };
+                seen.push(color);
+            }
+            let mut expected = vec![RadarColor::Dim; 8];
+            expected.extend([RadarColor::Bright; 8]);
+            expected.extend([RadarColor::Dim; 8]);
+            assert_eq!(seen, expected, "every frame: {every}");
+            let list = drawn(&view);
+            let bright = list.iter().filter(|command| {
+                matches!(command, DrawCommand::Dot { color, .. } if *color == layout().bright_radar)
+            });
+            assert_eq!(bright.count(), 1, "the player alone, the target dim");
+        }
     }
 
     #[test]
@@ -4986,9 +5316,8 @@ mod tests {
             &mut expected,
             view.status_bar().expect("a status bar"),
             &HudState {
-                position: at(0.0, 0.0),
-                stellars: &[],
-                ships: &[],
+                radar: &RadarScene::default(),
+                blink_on: false,
                 reserves,
                 nav: NavDisplay::None,
                 date: DATE,
@@ -5910,9 +6239,8 @@ mod tests {
             &mut hud,
             view.status_bar().expect("a status bar"),
             &HudState {
-                position: at(-1001.0, 0.0),
-                stellars: &[at(0.0, 0.0)],
-                ships: &[],
+                radar: &view.radar_shown(),
+                blink_on: view.hud_cadence.blink_on(),
                 reserves: reserves(&view),
                 nav: NavDisplay::None,
                 date: "June 24, 1177 NC",
@@ -7665,13 +7993,17 @@ mod tests {
         view.tick(TICK);
         let session = view.session().expect("flying");
         let npc = session.npcs()[0].clone();
-        let blip = at(100.0, -100.0);
-        assert_eq!(radar_ships(session, &[(&npc, blip, 0.0)]), [blip]);
+        let blip = RadarShip {
+            position: at(100.0, -100.0),
+            targeted: false,
+        };
+        let at_blip = at(100.0, -100.0);
+        assert_eq!(radar_ships(session, &[(&npc, at_blip, 0.0)]), [blip]);
         let mut cloaked = npc.clone();
         cloaked.cloak = CLOAKED;
-        assert_eq!(radar_ships(session, &[(&cloaked, blip, 0.0)]), []);
+        assert_eq!(radar_ships(session, &[(&cloaked, at_blip, 0.0)]), []);
         cloaked.cloak_gear.on_radar = true;
-        assert_eq!(radar_ships(session, &[(&cloaked, blip, 0.0)]), [blip]);
+        assert_eq!(radar_ships(session, &[(&cloaked, at_blip, 0.0)]), [blip]);
     }
 
     #[test]
@@ -7701,20 +8033,23 @@ mod tests {
             .with_chance(chance)
             .with_behaviour(Rc::new(Still));
         view.tick(TICK);
-        let bar = view.status_bar().expect("a status bar");
-        let radar = bar.layout.radar.offset(hud::bar_origin(bar));
-        let blip = hud::radar_point(radar, at(0.0, 0.0), at(100.0, -100.0)).expect("in range");
+        // (100, -100) is 3.125 pixels each way: (929.125, 92.875).
+        let blip = RadarMark::Pixel {
+            x: 929,
+            y: 92,
+            color: RadarColor::Dim,
+        };
+        assert_eq!(blips(&view), [blip]);
         let list = drawn(&view);
-        let dim: Vec<Point> = list
-            .iter()
-            .filter_map(|command| match *command {
-                DrawCommand::Dot { center, color, .. } if color == layout().dim_radar => {
-                    Some(center)
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(dim, [blip]);
+        assert!(
+            list.iter().any(|command| *command
+                == DrawCommand::Dot {
+                    center: at(929.5, 92.5),
+                    size: 1.0,
+                    color: layout().dim_radar,
+                }),
+            "{list:?}"
+        );
     }
 
     /// The tints the NPC sprite (ship 129's sheet, 2001) is drawn with.
@@ -7725,15 +8060,6 @@ mod tests {
                 _ => None,
             })
             .collect()
-    }
-
-    /// The dim radar dots drawn: one for each NPC.
-    fn dim_dots(list: &DrawList) -> usize {
-        list.iter()
-            .filter(|command| {
-                matches!(command, DrawCommand::Dot { color, .. } if *color == layout().dim_radar)
-            })
-            .count()
     }
 
     #[test]
@@ -7758,7 +8084,7 @@ mod tests {
         assert_eq!(mode(&view), Mode::Emerging { ticks_left: 40 });
         let list = drawn(&view);
         assert_eq!(npc_tints(&list), [], "hidden");
-        assert_eq!(dim_dots(&list), 1, "on the radar all the same");
+        assert_eq!(blips(&view).len(), 1, "on the radar all the same");
         ticks(&mut view, 32);
         assert_eq!(mode(&view), Mode::Emerging { ticks_left: 8 });
         let list = drawn(&view);
@@ -7767,7 +8093,7 @@ mod tests {
             [Color::rgba(255, 255, 255, 128)],
             "half in"
         );
-        assert_eq!(dim_dots(&list), 1);
+        assert_eq!(blips(&view).len(), 1);
         ticks(&mut view, 8);
         assert_eq!(mode(&view), Mode::LeavingGate { tick: 0 });
         assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE]);
@@ -10482,6 +10808,36 @@ mod tests {
         );
         assert_eq!(broken.refuse_mission(MissionId(130)), Err(NotOffered));
         assert_eq!(broken.take_mission_texts(), []);
+    }
+
+    #[test]
+    fn closing_a_mission_dialog_or_showing_its_texts_redraws_the_hud() {
+        let mut errands = catalog();
+        errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        errands.missions = vec![errand(130)];
+        errands.mission_texts = vec![MissionTexts {
+            brief: Some("Go.".to_owned()),
+            ..MissionTexts::named(MissionId(130), "Run")
+        }];
+        let mut view = FlightView::new(errands);
+        let stale = RadarScene::default();
+        let fresh = view.radar_now();
+        assert_ne!(fresh, stale);
+        view.radar_scene = Some(stale.clone());
+        let _ = view.accept_mission(MissionId(130));
+        assert_eq!(view.radar_scene.as_ref(), Some(&fresh), "accepted");
+        view.radar_scene = Some(stale.clone());
+        let _ = view.refuse_mission(MissionId(130));
+        assert_eq!(view.radar_scene.as_ref(), Some(&fresh), "refused");
+        view.radar_scene = Some(stale.clone());
+        assert_eq!(view.take_mission_texts(), []);
+        assert_eq!(view.radar_scene.as_ref(), Some(&stale), "nothing shown");
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
+        view.radar_scene = Some(stale.clone());
+        assert_eq!(view.take_mission_texts().len(), 1);
+        assert_eq!(view.radar_scene, Some(view.radar_now()), "the brief shown");
     }
 
     #[test]
@@ -13370,15 +13726,6 @@ mod tests {
             .count()
     }
 
-    /// The dim radar dots drawn: NPCs' blips.
-    fn dim_blips(list: &DrawList) -> usize {
-        list.iter()
-            .filter(|command| {
-                matches!(command, DrawCommand::Dot { color, .. } if *color == layout().dim_radar)
-            })
-            .count()
-    }
-
     #[test]
     fn an_attacker_following_through_a_wormhole_is_not_drawn_while_it_emerges_but_is_on_radar() {
         let mut catalog = FakeCatalog {
@@ -13435,7 +13782,11 @@ mod tests {
             ],
             "Proxima and the player, not the ship emerging"
         );
-        assert_eq!(dim_blips(&list), 1, "on radar while it emerges");
+        // Once the radar has refreshed, the ship is on it, still emerging.
+        ticks(&mut view, 8);
+        let session = view.session().expect("flying");
+        assert!(session.npcs().iter().any(Npc::emerging));
+        assert_eq!(blips(&view).len(), 1, "on radar while it emerges");
         while view
             .session()
             .expect("flying")
