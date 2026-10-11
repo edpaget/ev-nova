@@ -10,10 +10,8 @@ use crate::rulebook::Rulebook;
 use crate::rules::{Check, Checks, Context};
 
 use super::active::{ActiveMission, ActiveMissions};
+use super::goals::ShipGoal;
 use super::screens::HIDDEN;
-
-/// `ShipGoal`: none.
-const NO_GOAL: i16 = -1;
 
 /// `STR#` 2002 #357: a pickup refused for want of cargo holds.
 pub const NO_HOLDS_TO_LOAD: &str = "Your ship doesn't have enough cargo space to load this cargo.";
@@ -52,8 +50,8 @@ pub fn picks_up_at_destination(record: &MissionRecord, active: &ActiveMission) -
 /// and `at_return` say (`_MissionLandCargoCheck` @0x9ef25-0x9ef3e,
 /// @0x9f00c-0x9f070): with its cargo aboard, `DropOffMode` 0 at the
 /// destination, or `DropOffMode` 1 at the return once its ship goals are
-/// met or it has no `ShipGoal`. (`ShipGoal` 3's escorted ships left,
-/// @0x9f061-0x9f070, are rdm:phase/mission-ships/phase-2-ship-goals'.)
+/// met, it has no `ShipGoal`, or its `ShipGoal` is to escort its ships
+/// and none of them has been destroyed (@0x9f061-0x9f070).
 #[must_use]
 pub fn drops_off(
     record: &MissionRecord,
@@ -64,7 +62,12 @@ pub fn drops_off(
     let at_destination = at_destination && record.drop_off_mode == DROP_OFF_AT_DESTINATION;
     let at_return = at_return
         && record.drop_off_mode == DROP_OFF_AT_RETURN
-        && (active.goals_met || record.ships.goal == NO_GOAL);
+        && (active.goals_met
+            || match ShipGoal::from_code(record.ships.goal) {
+                ShipGoal::None => true,
+                ShipGoal::Escort => active.ships.destroyed <= 0,
+                _ => false,
+            });
     active.aboard && (at_destination || at_return)
 }
 
@@ -411,13 +414,32 @@ mod tests {
             ..active.clone()
         };
         let goal = |goal| MissionRecord {
-            ships: crate::catalog::MissionShip { count: 1, goal },
+            ships: crate::catalog::MissionShip {
+                count: 1,
+                goal,
+                ..crate::catalog::MissionShip::NONE
+            },
             ..record.clone()
         };
         assert!(!drops_off(&goal(0), &unmet, false, true), "a goal not met");
         assert!(
-            !drops_off(&goal(3), &unmet, false, true),
-            "escorts: mission-ships'"
+            drops_off(&goal(3), &unmet, false, true),
+            "escorts none of which was destroyed"
+        );
+        let escort_lost = ActiveMission {
+            ships: crate::mission::SpecialShips {
+                destroyed: 1,
+                ..crate::mission::SpecialShips::default()
+            },
+            ..unmet.clone()
+        };
+        assert!(
+            !drops_off(&goal(3), &escort_lost, false, true),
+            "one destroyed"
+        );
+        assert!(
+            !drops_off(&goal(0), &escort_lost, false, true),
+            "another goal reads no count"
         );
         assert!(drops_off(&goal(-1), &unmet, false, true), "no goal");
         let empty = ActiveMission {

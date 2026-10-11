@@ -682,11 +682,14 @@ mod tests {
         let mut disabled = npc(4, AiType::Warship);
         disabled.condition = Condition::Disabled;
         disabled.state.position = crate::geometry::Vec2::new(5.0, 6.0);
-        let npcs = [npc(1, AiType::Warship), jumping, dying, disabled];
+        let mut emerging = npc(5, AiType::Warship);
+        emerging.mode = Mode::Emerging { ticks_left: 3 };
+        let npcs = [npc(1, AiType::Warship), jumping, dying, disabled, emerging];
         let mut around = Surroundings::new(&[], &npcs);
         let n = |id| ShipRef::Npc(NpcId(id));
         assert!(around.live(n(1)));
         assert!(!around.live(n(2)), "jumping in");
+        assert!(!around.live(n(5)), "emerging from a gate: seen by no one");
         assert!(!around.live(n(3)), "dying");
         assert!(around.live(n(4)), "disabled");
         assert!(!around.live(n(9)), "not here");

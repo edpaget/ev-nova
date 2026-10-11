@@ -102,25 +102,29 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
     /// are not set expressions (see the `story` module's "Dispatch").
     fn effect(&mut self, id: SubscriptionId, event: &StoryEvent) {
         match id.consumer {
-            // The offer roll, the re-offer, and each slot's landing hooks
-            // and deadline checks (see the `missions` module).
-            Consumer::Missions => match (id, event) {
-                (missions::ROLL, &StoryEvent::Landed { stellar }) => {
+            // The offer roll (see the `missions` module).
+            Consumer::Offers => {
+                if let (missions::ROLL, &StoryEvent::Landed { stellar }) = (id, event) {
                     self.session.roll_offers(stellar, &mut *self.chance);
                 }
+            }
+            // The re-offer, and each slot's landing hooks and deadline
+            // checks (see the `missions` module).
+            Consumer::Missions => match (id, event) {
                 (missions::REOFFER, StoryEvent::Landed { .. }) => {
                     self.session.reoffer_missions(&mut *self.chance);
                 }
                 _ => self.session.mission_effect(id, event, &mut *self.chance),
             },
-            // Each other consumer's arm is filled by its own phase: mission
-            // ships' goal counts by mission-ships phase 2, and the crons',
-            // nebulae's and plug-ins' by theirs. A fixture has none.
-            Consumer::MissionShips
-            | Consumer::Crons
-            | Consumer::Nebulae
-            | Consumer::Plugins
-            | Consumer::Fixture => {}
+            // Each slot's enter-system hook (see the `mission_ships`
+            // module).
+            Consumer::MissionShips => {
+                self.session
+                    .mission_ships_effect(id, event, &mut *self.chance);
+            }
+            // Each other consumer's arm is filled by its own phase: the
+            // crons', nebulae's and plug-ins'. A fixture has none.
+            Consumer::Crons | Consumer::Nebulae | Consumer::Plugins | Consumer::Fixture => {}
         }
     }
 
@@ -220,36 +224,45 @@ impl Session {
     }
 
     /// Watches the NPC `ship`: the next flight tick of the traffic that
-    /// finds it in the system, out of any gate it came through, raises its
-    /// first sighting, [`Fate::Observed`], once, and forgets it. A ship no
-    /// longer in the system is forgotten, and populating the system or
-    /// resetting its traffic forgets every one, its ships replaced (see the
-    /// `story` module's findings).
+    /// finds it in the system and observed raises its first sighting,
+    /// [`Fate::Observed`], once, and forgets it. Observed is seen by the
+    /// player ([`Session::sees`]: not waiting at the gate it comes out of
+    /// ([`Npc::emerging`](crate::traffic::npc::Npc::emerging)), and uncloaked
+    /// or within a cloak scanner's sight) and, for a ship that can cloak,
+    /// on screen ([`Session::on_screen`]); until then it stays watched. A
+    /// ship no longer in the system is forgotten, and populating the
+    /// system or resetting its traffic forgets every one, its ships
+    /// replaced (see the `story` module's findings).
     pub fn watch_ship(&mut self, ship: NpcId) {
         self.story.watched.insert(ship);
     }
 
-    /// Raises the first sighting of each watched ship in the system, and
-    /// forgets every watched ship seen or no longer here. A ship waiting
-    /// at the gate it comes out of ([`Npc::emerging`](crate::traffic::npc::Npc::emerging))
-    /// is invisible (`_ShipVisibleToShip` @0x972d, as
-    /// `_MissionObjectivesCheck` @0x9ea5c asks it) and stays watched
-    /// until it is out; every other ship in the system is visible, as the
-    /// engine has no cloak.
+    /// Raises the first sighting of each watched ship in the system that
+    /// the player observes (`_ShipVisibleToShip` @0x971c, which hides a
+    /// ship waiting at its gate @0x972d, as `_MissionObjectivesCheck`
+    /// @0x9ea5c asks it, and on screen
+    /// for one that can cloak, @0x9ea74-0x9eb09), forgetting it; keeps
+    /// watching one not yet observed, and forgets one no longer here.
     pub(super) fn observe_watched(&mut self) {
-        let watched = std::mem::take(&mut self.story.watched);
-        for ship in watched {
-            match self.traffic.npcs().iter().find(|npc| npc.id == ship) {
-                Some(npc) if npc.emerging() => {
-                    self.story.watched.insert(ship);
-                }
-                Some(_) => self.raise(StoryEvent::ShipFate {
+        for ship in std::mem::take(&mut self.story.watched) {
+            let Some(npc) = self.traffic.npcs().iter().find(|npc| npc.id == ship) else {
+                continue;
+            };
+            if self.observes(npc) {
+                self.raise(StoryEvent::ShipFate {
                     ship,
                     fate: Fate::Observed,
-                }),
-                None => {}
+                });
+            } else {
+                self.story.watched.insert(ship);
             }
         }
+    }
+
+    /// The subscriptions `event` would run now, in the order they run.
+    #[cfg(test)]
+    pub(super) fn story_matching(&self, event: &StoryEvent) -> Vec<SubscriptionId> {
+        self.story.registry.matching(event)
     }
 
     /// Lets go of the events raised, undispatched: a test's clean slate.

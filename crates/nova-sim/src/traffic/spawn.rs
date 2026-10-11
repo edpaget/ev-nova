@@ -102,6 +102,82 @@
 //! A ship type with no record spawns nothing, a `Max` below `Min` gives
 //! `Min`, a negative count none, and a draw is never asked over 0.
 //!
+//! # Mission ships
+//!
+//! An active mission's special ships ([`SpecialShips`](crate::mission::SpecialShips))
+//! are resolved as it is accepted: their system from `ShipSyst`
+//! ([`select_ship_system`](crate::mission::ships::select_ship_system)),
+//! their name and subtitle, and, for a `ShipStart` above 0, their appear
+//! timer. Each ship carries its mission's mark ([`MissionMark`], the
+//! original's ship +0xc8d2: the slot and its `ShipBehav`). They come in
+//! three ways, each through
+//! `_MissionDudeSpawn` (@0x3cd3b, [`mission_ships`],
+//! [`arriving_mission_ships`], [`swapped_mission_ship`]): a ship drawn from the mission's `düde`,
+//! its government, `Booty`, `InfoTypes` and AI, aimed at the player for
+//! `ShipBehav` 0 (`_AIMakeShipAttackPlayer` @0x3d099-0x3d0bb).
+//!
+//! - **At setup** (`_SetupShipsInSystem` @0x42dc4-0x43194), before the
+//!   system's own passes, none of which they use up: each slot in order
+//!   whose ships are in the system (or follow the player, `ShipSyst` -6),
+//!   with ships left and no appear timer running, brings ships left of
+//!   them. `ShipStart` 0 places them at random, as any ship at setup; -1
+//!   to -16 at that nav slot's stellar, or at random when the slot is
+//!   empty (@0x4300a-0x43091); 2 cloaked (`_DoShipCloak`
+//!   @0x43114-0x43121, [`NewShip::cloaked`]): it starts fading in, and
+//!   its think uncloaks it once it reads cloaked unless one of its ship
+//!   type's AI-cloak conditions holds (see [`cloak`](crate::cloak)). An
+//!   escort goal's ship (`ShipGoal` 3), after its own draws, is moved to
+//!   `Rand(512) - 256` each way about the centre (@0x42ed8-0x42f33), and
+//!   then to its nav slot's stellar for -1 to -16. A rescue goal's ship
+//!   (`ShipGoal` 5) first draws a heading `Rand(360)`, after its own
+//!   draws, and starts still and derelict: shields 0 and its armour cut
+//!   just below where it is disabled (@0x42f35-0x42fdc). The other two
+//!   paths give it no such placement.
+//! - **On the appear timer** (`_EnterMoreShips` @0x43757-0x43ad9): every
+//!   tick in flight a slot whose ships are in the system with any to come
+//!   counts its timer down, and at 0 they come in by hyperspace, uncloaked,
+//!   around an entry point toward the system the player last jumped from.
+//!   `ShipStart` 1 and 2 start the timer at accept, so they come this way
+//!   first; once it has run out, a later setup brings them in place.
+//!   The enter-system hook restarts the timer for `ShipStart` 1 (see the
+//!   session's `mission_ships` module and the [`story`](crate::story)
+//!   module's "One arrival").
+//! - **In a person's place** (`_HandlePlayerCommunication`
+//!   @0x62421-0x6252f): a person of `Flags` 0x0040 whose mission is
+//!   accepted on its hail, with one of its ships left, is swapped for that
+//!   one ship, which takes the person's position, velocity and heading.
+//!   With mission `Flags` 0x0800 it flies the person's own type when the
+//!   `düde` lists it, drawing no type. No count changes: it is the slot's
+//!   one ship left (see the session's `mission_ships` module).
+//!
+//! A `ShipBehav` 1 ship joins the player's formation as a mission escort
+//! as it comes by any of the three paths (see the session's
+//! `mission_escorts` module).
+//!
+//! A ship destroyed lowers its slot's ships left, so it does not come again. An
+//! abort unmarks its ships, or takes them out while docked; a freed slot's
+//! ships are unmarked on the next tick, as `_AIDispatch` does; either way
+//! they fly on as ordinary traffic, a mission escort taking its ship
+//! type's `InherentAI` and leaving the system.
+//!
+//! # Auxiliary ships
+//!
+//! A mission's auxiliary ships (`AuxShipCount` of its `AuxShipDude`, see
+//! [`mission::aux`](crate::mission::aux)) are ordinary traffic: each
+//! comes through `_SpecificDudeSpawn` (@0x3d0eb, [`arriving_aux_ships`]),
+//! not `_MissionDudeSpawn`, with no mission mark, so it counts toward no
+//! goal and gets none of a special ship's handling. It carries only its
+//! slot's aux mark (ship +0x8a), which gives it back to its slot's ships
+//! left to come if it is still in the system as the system's ships are
+//! dropped. Once their countdown runs out, in a system their
+//! `AuxShipSyst` allows, all those left to come and not yet arrived come
+//! in one frame by hyperspace around one entry point at an angle drawn,
+//! never toward the system the player jumped from (`_EnterMoreShips`
+//! @0x434c9-0x43734). A ship type is drawn among the `düde`'s whose
+//! `AppearOn` holds, with no fallback: a `düde` none of whose types may
+//! appear brings none. When the session brings them in is its
+//! `mission_ships` module's.
+//!
 //! # `AppearOn`
 //!
 //! The `flët` and `shïp` `AppearOn` tests are asked through the
@@ -134,19 +210,21 @@
 
 use std::collections::BTreeSet;
 
-use crate::catalog::{FleetId, GovtId, LandingSite, PersonId, ShipId};
+use crate::catalog::{DudeId, FleetId, GovtId, LandingSite, PersonId, ShipId};
 use crate::chance::Chance;
 use crate::control::Gate;
 use crate::flight::{ShipState, facing, heading_of};
 use crate::gate::exit_heading;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
+use crate::mission::ShipGoal;
+use crate::mission::ships::{ShipBehav, ShipStart};
 use crate::person::{PersonRoll, PersonRules, PersonWorld, aggression_of};
 use crate::rulebook::RuleSource;
 use crate::traffic::emerge::{
     EMERGE_TICKS, ESCORT_EMERGE_EXTRA, ESCORT_EMERGE_SPREAD, emerge_stellar,
 };
-use crate::traffic::npc::AiType;
+use crate::traffic::npc::{AiType, MissionMark};
 use crate::traffic::table::{ShipKind, SpawnDude, SpawnPerson, SpawnTable, pick};
 
 /// `Rand(7) == 0`: a person, rather than anything else, by the engine
@@ -247,6 +325,17 @@ pub struct NewShip {
     pub info_types: u16,
     /// The person flying it, if any.
     pub person: Option<PersonId>,
+    /// The mission whose special ship it is, if any.
+    pub mission: Option<MissionMark>,
+    /// The slot of the mission whose auxiliary ship it is, if any.
+    pub aux: Option<u8>,
+    /// Whether it starts as a derelict does: its shield gone, its armour
+    /// cut just below where it is disabled, and disabled. A rescue
+    /// mission's ship set up in the system starts so ([`mission_ships`]).
+    pub derelict: bool,
+    /// Whether it starts cloaking (`_DoShipCloak`): a `ShipStart` 2
+    /// mission's ship set up in the system does ([`mission_ships`]).
+    pub cloaked: bool,
 }
 
 /// The persons' side of a system's spawning: their world, and the names
@@ -329,6 +418,10 @@ impl<'a> PersonDraw<'a> {
             booty: 0,
             info_types: 0,
             person: Some(id),
+            mission: None,
+            derelict: false,
+            cloaked: false,
+            aux: None,
         })
     }
 }
@@ -389,6 +482,10 @@ pub fn initial(
                 booty: dude.booty,
                 info_types: dude.info_types,
                 person: None,
+                mission: None,
+                derelict: false,
+                cloaked: false,
+                aux: None,
             });
         }
     }
@@ -522,8 +619,308 @@ fn hyper_ship(
             booty: dude.booty,
             info_types: dude.info_types,
             person: None,
+            mission: None,
+            derelict: false,
+            cloaked: false,
+            aux: None,
         });
     }
+}
+
+/// `Rand(512) - 256`: how far from their entry point each mission ship
+/// coming in later is placed, each way (@0x43992-0x43a10).
+pub const MISSION_ARRIVAL_SPREAD: u32 = 512;
+
+/// `Rand(512) - 256`: where about the system's centre each ship of a
+/// `ShipGoal` 3 mission set up in the system is placed, each way
+/// (`_SetupShipsInSystem` @0x42ed8-0x42f33).
+pub const ESCORTED_SETUP_SPREAD: u32 = 512;
+
+/// A mission's special ships to bring in, as its slot holds them (see
+/// the module docs' "Mission ships").
+#[derive(Clone, Copy, Debug)]
+pub struct MissionSpawn<'a> {
+    /// The mission's slot.
+    pub slot: u8,
+    /// Its `ShipDude`.
+    pub dude: DudeId,
+    /// How many to bring in.
+    pub count: i16,
+    /// Its `ShipGoal`: only the setup reads it ([`mission_ships`]).
+    pub goal: ShipGoal,
+    /// Its `ShipStart`.
+    pub start: ShipStart,
+    /// Its `ShipBehav`.
+    pub behav: ShipBehav,
+    /// The system's `NavDefs` slots, in order: each its stellar's
+    /// position, none for an empty slot.
+    pub nav: &'a [Option<Vec2>],
+}
+
+/// One of `spawn`'s ships as `_MissionDudeSpawn` (@0x3cd3b) brings it in:
+/// placed as any ship at setup, its aggression drawn first, then x and y
+/// (`_GenericRandomShipSpawn` @0x3c89f), with no heading drawn; then its
+/// ship type: `preset` when given, drawing nothing (the slot's +0x56,
+/// @0x3cdea-0x3cdf3); else drawn from the `düde` by `Probability` among
+/// the ship types whose `AppearOn` holds by `gate`, or, with none, among
+/// them all (`_SelectShipFieldFromDude` with 0, then 1, @0x3cdf5-0x3ce36). It
+/// carries the `düde`'s government, `Booty` and `InfoTypes`, the `düde`'s
+/// `AIType` above 0 or else its ship's `InherentAI`, and the mission's
+/// mark. `None`, after the place's draws, when the `düde` has no record
+/// or no ship.
+fn mission_dude_ship(
+    table: &SpawnTable,
+    spawn: &MissionSpawn,
+    preset: Option<ShipId>,
+    gate: Gate,
+    chance: &mut (impl Chance + ?Sized),
+) -> Option<NewShip> {
+    let ship = specific_dude_ship(table, spawn.dude, preset, Fallback::AllShips, gate, chance)?;
+    Some(NewShip {
+        mission: Some(MissionMark {
+            slot: spawn.slot,
+            behav: spawn.behav,
+            formation: None,
+        }),
+        ..ship
+    })
+}
+
+/// Where a ship type is drawn from when none of a `düde`'s may appear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fallback {
+    /// From all of them (`_MissionDudeSpawn`'s second draw, @0x3ce1b).
+    AllShips,
+    /// None: the spawn fails (`_SpecificDudeSpawn` @0x3d146-0x3d14c).
+    Fails,
+}
+
+/// A ship of `düde` `dude`, as `_GenericRandomShipSpawn` and
+/// `_SelectShipFieldFromDude` bring it in: its aggression drawn, then x
+/// and y (@0x3c89f), with no heading drawn; then its ship type: `preset`
+/// when given, drawing nothing; else drawn by `Probability` among the
+/// ship types whose `AppearOn` holds by `gate`, or with none as
+/// `fallback` says. It carries the `düde`'s government, `Booty` and
+/// `InfoTypes`, and the `düde`'s `AIType` above 0 or else its ship's
+/// `InherentAI`, and no mark. `None`, after the place's draws, when the
+/// `düde` has no record or no ship comes of it.
+fn specific_dude_ship(
+    table: &SpawnTable,
+    dude: DudeId,
+    preset: Option<ShipId>,
+    fallback: Fallback,
+    gate: Gate,
+    chance: &mut (impl Chance + ?Sized),
+) -> Option<NewShip> {
+    let aggression = aggression(chance);
+    let x = spread(SPAWN_SPREAD, chance);
+    let y = spread(SPAWN_SPREAD, chance);
+    let dude = table.dude_records.get(&dude)?;
+    let ship = if let Some(ship) = preset {
+        ship
+    } else {
+        let appearing: Vec<(ShipId, u32)> = dude
+            .ships
+            .iter()
+            .copied()
+            .filter(|(ship, _)| appears(table, *ship, gate))
+            .collect();
+        match fallback {
+            Fallback::AllShips => pick(&appearing, chance).or_else(|| pick(&dude.ships, chance))?,
+            Fallback::Fails => pick(&appearing, chance)?,
+        }
+    };
+    let inherent_ai = table.ships.get(&ship).map_or(0, |kind| kind.inherent_ai);
+    let ai_type = if dude.ai_type > 0 {
+        dude.ai_type
+    } else {
+        inherent_ai
+    };
+    Some(NewShip {
+        ship,
+        govt: dude.govt,
+        ai_type: AiType::from_raw(ai_type),
+        lead: None,
+        state: ShipState {
+            position: Vec2::new(x, y),
+            velocity: Vec2::ZERO,
+            heading: 0.0,
+        },
+        entry: Entry::Placed,
+        aggression,
+        booty: dude.booty,
+        info_types: dude.info_types,
+        person: None,
+        mission: None,
+        derelict: false,
+        cloaked: false,
+        aux: None,
+    })
+}
+
+/// `spawn`'s ships as the system is set up (`_SetupShipsInSystem`
+/// @0x42e89-0x43121): `count` of them, each placed as
+/// `mission_dude_ship` places it; for an escort goal (`ShipGoal` 3) then
+/// moved to `Rand(512) - 256` each way about the centre, x drawn first
+/// ([`ESCORTED_SETUP_SPREAD`], @0x42ed8-0x42f33); for a rescue goal
+/// (`ShipGoal` 5) then
+/// facing a heading `Rand(360)`, still, and set up derelict
+/// ([`NewShip::derelict`]: shields 0, armour cut, @0x42f35-0x42fdc);
+/// with a `ShipStart` of -1 to -16 then moved to that nav slot's stellar,
+/// unless the slot is empty (@0x4300a-0x43091); with `ShipStart` 2,
+/// cloaking ([`NewShip::cloaked`], `_DoShipCloak` @0x43114-0x43121). The
+/// original also zeroes a
+/// rescue ship's +0x48, an inertialess ship's speed along its heading
+/// (`_AdjustInertialessShipVelocity` @0x334c9-0x334d9), which the engine
+/// does not keep: the zero velocity covers it.
+pub fn mission_ships(
+    table: &SpawnTable,
+    spawn: &MissionSpawn,
+    gate: Gate,
+    chance: &mut (impl Chance + ?Sized),
+) -> Vec<NewShip> {
+    let nav = match spawn.start {
+        ShipStart::Nav(slot) => spawn.nav.get(usize::from(slot)).copied().flatten(),
+        _ => None,
+    };
+    let rescue = spawn.goal == ShipGoal::Rescue;
+    let escorted = spawn.goal == ShipGoal::Escort;
+    (0..spawn.count.max(0))
+        .filter_map(|_| {
+            let mut ship = mission_dude_ship(table, spawn, None, gate, chance)?;
+            if escorted {
+                let x = spread(ESCORTED_SETUP_SPREAD, chance);
+                let y = spread(ESCORTED_SETUP_SPREAD, chance);
+                ship.state.position = Vec2::new(x, y);
+            }
+            if rescue {
+                ship.state.heading = chance.below(DEGREES) as f32;
+                ship.state.velocity = Vec2::ZERO;
+                ship.derelict = true;
+            }
+            Some(ship)
+        })
+        .map(|mut ship| {
+            if let Some(at) = nav {
+                ship.state.position = at;
+            }
+            ship.cloaked = spawn.start == ShipStart::Cloaked;
+            ship
+        })
+        .collect()
+}
+
+/// `spawn`'s ships coming in later, as `_EnterMoreShips` brings them when
+/// their appear timer runs out (@0x43821-0x43aa5): an entry point
+/// [`jump_in_distance`] out, toward `from` (the way to the system the
+/// player last jumped from) or else at an angle `Rand(360)`, drawn first;
+/// then `count` ships, each placed as `mission_dude_ship` places it and
+/// moved to the entry point plus `Rand(512) - 256` each way, facing the
+/// centre and gliding in from hyperspace. None is cloaked, and a ship
+/// with no fuel comes all the same.
+pub fn arriving_mission_ships(
+    table: &SpawnTable,
+    spawn: &MissionSpawn,
+    from: Option<Vec2>,
+    gate: Gate,
+    chance: &mut (impl Chance + ?Sized),
+) -> Vec<NewShip> {
+    let toward = from.filter(|way| way.length() > 0.0).map_or_else(
+        || facing(chance.below(DEGREES) as f32),
+        |way| way * (1.0 / way.length()),
+    );
+    let entry = toward * jump_in_distance();
+    (0..spawn.count.max(0))
+        .filter_map(|_| {
+            let ship = mission_dude_ship(table, spawn, None, gate, chance)?;
+            Some(glide_in(ship, entry, chance))
+        })
+        .collect()
+}
+
+/// `ship` moved to `entry` plus `Rand(512) - 256` each way, x drawn
+/// first, facing the centre and gliding in from hyperspace at
+/// [`JUMP_IN_SPEED`] (@0x43992-0x43a10, @0x43617-0x4372a).
+fn glide_in(ship: NewShip, entry: Vec2, chance: &mut (impl Chance + ?Sized)) -> NewShip {
+    let x = spread(MISSION_ARRIVAL_SPREAD, chance);
+    let y = spread(MISSION_ARRIVAL_SPREAD, chance);
+    let position = entry + Vec2::new(x, y);
+    let heading = heading_of(Vec2::ZERO - position);
+    NewShip {
+        state: ShipState {
+            position,
+            velocity: facing(heading) * JUMP_IN_SPEED,
+            heading,
+        },
+        entry: Entry::JumpingIn,
+        ..ship
+    }
+}
+
+/// A mission's auxiliary ships to bring in (see the module docs'
+/// "Auxiliary ships").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AuxSpawn {
+    /// The mission's slot.
+    pub slot: u8,
+    /// Its `AuxShipDude`.
+    pub dude: DudeId,
+    /// How many to bring in.
+    pub count: i16,
+}
+
+/// `spawn`'s auxiliary ships, as `_EnterMoreShips` brings them in once
+/// their countdown runs out (@0x43525-0x43734): an entry point
+/// [`jump_in_distance`] out at an angle `Rand(360)`, drawn first, never
+/// toward the system the player jumped from; then `count` ships, each
+/// through `_SpecificDudeSpawn` (@0x3d0eb): placed as any ship at setup,
+/// its aggression, x and y drawn, then its ship type among those of the
+/// `düde` whose `AppearOn` holds, with no fallback, so a `düde` none of
+/// whose types may appear brings that ship nowhere, drawing nothing more
+/// for it; then moved to the entry point plus `Rand(512) - 256` each way,
+/// facing the centre and gliding in. Each is ordinary traffic, of no
+/// mission, with its slot's aux mark (ship +0x8a, @0x435e3). A ship with
+/// no fuel comes all the same.
+pub fn arriving_aux_ships(
+    table: &SpawnTable,
+    spawn: &AuxSpawn,
+    gate: Gate,
+    chance: &mut (impl Chance + ?Sized),
+) -> Vec<NewShip> {
+    let entry = facing(chance.below(DEGREES) as f32) * jump_in_distance();
+    (0..spawn.count.max(0))
+        .filter_map(|_| {
+            let ship = specific_dude_ship(table, spawn.dude, None, Fallback::Fails, gate, chance)?;
+            Some(glide_in(
+                NewShip {
+                    aux: Some(spawn.slot),
+                    ..ship
+                },
+                entry,
+                chance,
+            ))
+        })
+        .collect()
+}
+
+/// `spawn`'s one ship swapped in for a person whose mission was just
+/// accepted on its hail (`_HandlePlayerCommunication` @0x6244b-0x624e5):
+/// brought in as `mission_dude_ship` brings it, its type `preset` when
+/// given ([`swapped_ship_type`](crate::mission::ships::swapped_ship_type)),
+/// then given the person's `state` (position +0x18, velocity +0x20,
+/// heading +0x44), not gliding in and never cloaked. `spawn`'s count and
+/// start are not read. `None`, after the place's draws, when the `düde`
+/// has no record or no ship.
+pub fn swapped_mission_ship(
+    table: &SpawnTable,
+    spawn: &MissionSpawn,
+    state: ShipState,
+    preset: Option<ShipId>,
+    gate: Gate,
+    chance: &mut (impl Chance + ?Sized),
+) -> Option<NewShip> {
+    let ship = mission_dude_ship(table, spawn, preset, gate, chance)?;
+    Some(NewShip { state, ..ship })
 }
 
 /// A `düde` ship: a `düde` by weight, a ship of it by `Probability`
@@ -617,6 +1014,10 @@ pub fn fleet(
         booty: 0,
         info_types: 0,
         person: None,
+        mission: None,
+        derelict: false,
+        cloaked: false,
+        aux: None,
     });
     for escort in &record.escorts {
         let count = escort_count(escort.min, escort.max, chance);
@@ -651,6 +1052,10 @@ pub fn fleet(
                 booty: 0,
                 info_types: 0,
                 person: None,
+                mission: None,
+                derelict: false,
+                cloaked: false,
+                aux: None,
             });
         }
     }
@@ -1062,6 +1467,10 @@ mod tests {
                 booty: 0x0041,
                 info_types: 0x4005,
                 person: None,
+                mission: None,
+                derelict: false,
+                cloaked: false,
+                aux: None,
             }]
         );
     }
@@ -2187,6 +2596,10 @@ mod tests {
                 booty: 0,
                 info_types: 0,
                 person: Some(PersonId(510)),
+                mission: None,
+                derelict: false,
+                cloaked: false,
+                aux: None,
             }]
         );
     }
@@ -2531,6 +2944,701 @@ mod tests {
         };
         let (ships, asked) = set_up(&slot, world, &[0]);
         assert_eq!((persons_of(&ships), asked), (vec![], vec![100]));
+    }
+
+    // Mission ships.
+
+    /// Düde 150, a mission's and not the system's: `AIType` 4, govt 131,
+    /// flying ship 202 or 203 half and half.
+    fn with_mission_dude() -> SpawnTable {
+        let mut table = table();
+        table.dude_records.insert(
+            DudeId(150),
+            SpawnDude {
+                ai_type: 4,
+                govt: Some(GovtId(131)),
+                ships: vec![(ShipId(202), 50), (ShipId(203), 50)],
+                booty: 0x0002,
+                info_types: 0x0001,
+            },
+        );
+        table
+    }
+
+    /// Nav slot 0 empty, slot 1 at (100, 200), slot 2 at (-300, 0).
+    const NAV: [Option<Vec2>; 3] = [
+        None,
+        Some(Vec2::new(100.0, 200.0)),
+        Some(Vec2::new(-300.0, 0.0)),
+    ];
+
+    /// `count` ships of düde 150 for slot 3, of `ShipStart` `start` and
+    /// `ShipBehav` 0.
+    fn mission_spawn(count: i16, start: i16) -> MissionSpawn<'static> {
+        MissionSpawn {
+            slot: 3,
+            dude: DudeId(150),
+            count,
+            goal: ShipGoal::Destroy,
+            start: ShipStart::from_code(start),
+            behav: ShipBehav::AttackPlayer,
+            nav: &NAV,
+        }
+    }
+
+    fn mission_gate() -> Gate<'static> {
+        PersonWorld::NONE.gate()
+    }
+
+    #[test]
+    fn a_mission_ship_draws_its_aggression_its_place_then_its_ship_from_its_dude() {
+        let mut chance = Draws::of(&[0, 0, 1499, 50]);
+        let ships = mission_ships(
+            &with_mission_dude(),
+            &mission_spawn(1, 0),
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [3, 1500, 1500, 100]);
+        assert_eq!(
+            ships,
+            [NewShip {
+                ship: ShipId(203),
+                govt: Some(GovtId(131)),
+                ai_type: AiType::Interceptor,
+                lead: None,
+                state: ShipState {
+                    position: Vec2::new(-750.0, 749.0),
+                    velocity: Vec2::ZERO,
+                    heading: 0.0,
+                },
+                entry: Entry::Placed,
+                aggression: 2,
+                booty: 0x0002,
+                info_types: 0x0001,
+                person: None,
+                mission: Some(MissionMark {
+                    slot: 3,
+                    behav: ShipBehav::AttackPlayer,
+                    formation: None,
+                }),
+                derelict: false,
+                cloaked: false,
+                aux: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn as_many_mission_ships_come_as_asked_and_none_for_none_or_below() {
+        let table = with_mission_dude();
+        for (count, ships) in [(3, 3), (1, 1), (0, 0), (-1, 0)] {
+            let spawned = mission_ships(
+                &table,
+                &mission_spawn(count, 0),
+                mission_gate(),
+                &mut crate::NeverFires,
+            );
+            assert_eq!(spawned.len(), ships, "{count}");
+            assert!(
+                spawned
+                    .iter()
+                    .all(|ship| ship.mission.map(|mark| mark.slot) == Some(3))
+            );
+        }
+    }
+
+    #[test]
+    fn a_mission_ships_ai_is_its_dudes_above_0_else_its_ships_inherent_ai() {
+        let mut table = with_mission_dude();
+        table
+            .dude_records
+            .get_mut(&DudeId(150))
+            .expect("150")
+            .ai_type = 0;
+        let mut chance = Draws::of(&[0, 0, 0, 0]);
+        let ships = mission_ships(&table, &mission_spawn(1, 0), mission_gate(), &mut chance);
+        assert_eq!(
+            (ships[0].ship, ships[0].ai_type),
+            (ShipId(202), AiType::Interceptor),
+            "ship 202's InherentAI 4"
+        );
+    }
+
+    #[test]
+    fn a_mission_dude_with_no_record_or_no_ship_brings_none_after_the_places_draws() {
+        let table = with_mission_dude();
+        let unknown = MissionSpawn {
+            dude: DudeId(151),
+            ..mission_spawn(1, 0)
+        };
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            mission_ships(&table, &unknown, mission_gate(), &mut chance),
+            []
+        );
+        assert_eq!(chance.asked, [3, 1500, 1500]);
+        let mut shipless = with_mission_dude();
+        shipless
+            .dude_records
+            .get_mut(&DudeId(150))
+            .expect("150")
+            .ships = vec![(ShipId(202), 0)];
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            mission_ships(&shipless, &mission_spawn(1, 0), mission_gate(), &mut chance),
+            []
+        );
+        assert_eq!(chance.asked, [3, 1500, 1500]);
+    }
+
+    #[test]
+    fn with_none_of_its_ships_appearing_a_mission_dude_draws_among_them_all() {
+        let gated = appearing(appearing(with_mission_dude(), 202, "b7"), 203, "b7");
+        let refusing = refusing_7();
+        let mut chance = Draws::of(&[0, 0, 0, 99]);
+        let ships = mission_ships(
+            &gated,
+            &mission_spawn(1, 0),
+            refusing.world.gate(),
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [3, 1500, 1500, 100]);
+        assert_eq!(ships[0].ship, ShipId(203));
+        let half = appearing(with_mission_dude(), 203, "b7");
+        let mut chance = Draws::of(&[0, 0, 0, 49]);
+        let ships = mission_ships(
+            &half,
+            &mission_spawn(1, 0),
+            refusing.world.gate(),
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [3, 1500, 1500, 50]);
+        assert_eq!(ships[0].ship, ShipId(202), "only 202 appears");
+    }
+
+    #[test]
+    fn a_ship_start_of_minus_1_to_minus_16_puts_the_ships_at_that_nav_slots_stellar() {
+        let table = with_mission_dude();
+        let at = |start| {
+            mission_ships(
+                &table,
+                &mission_spawn(2, start),
+                mission_gate(),
+                &mut crate::NeverFires,
+            )
+            .iter()
+            .map(|ship| ship.state.position)
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(at(-2), [Vec2::new(100.0, 200.0); 2], "slot 1");
+        assert_eq!(at(-3), [Vec2::new(-300.0, 0.0); 2], "slot 2");
+        let random = Vec2::new(749.0, 749.0);
+        assert_eq!(at(-1), [random; 2], "slot 0 is empty: placed at random");
+        assert_eq!(at(-16), [random; 2], "no slot 15");
+        assert_eq!(at(0), [random; 2], "0 places at random");
+        assert_eq!(at(-17), [random; 2], "out of range");
+    }
+
+    #[test]
+    fn only_a_ship_start_of_2_spawns_cloaked() {
+        let table = with_mission_dude();
+        for (start, cloaked) in [(2, true), (0, false), (1, false), (-1, false)] {
+            let ships = mission_ships(
+                &table,
+                &mission_spawn(1, start),
+                mission_gate(),
+                &mut crate::NeverFires,
+            );
+            assert_eq!(ships[0].cloaked, cloaked, "{start}");
+        }
+    }
+
+    /// [`mission_spawn`] of `ShipGoal` `goal`.
+    fn goal_spawn(count: i16, start: i16, goal: ShipGoal) -> MissionSpawn<'static> {
+        MissionSpawn {
+            goal,
+            ..mission_spawn(count, start)
+        }
+    }
+
+    #[test]
+    fn a_rescue_ship_set_up_draws_its_heading_after_its_ship_and_starts_still_and_derelict() {
+        let mut chance = Draws::of(&[0, 0, 0, 0, 90, 0, 0, 0, 99, 270]);
+        let ships = mission_ships(
+            &with_mission_dude(),
+            &goal_spawn(2, -2, ShipGoal::Rescue),
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!(
+            chance.asked,
+            [3, 1500, 1500, 100, 360, 3, 1500, 1500, 100, 360]
+        );
+        assert_eq!(
+            ships
+                .iter()
+                .map(|ship| (ship.ship, ship.state, ship.derelict))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    ShipId(202),
+                    ShipState {
+                        position: Vec2::new(100.0, 200.0),
+                        velocity: Vec2::ZERO,
+                        heading: 90.0,
+                    },
+                    true
+                ),
+                (
+                    ShipId(203),
+                    ShipState {
+                        position: Vec2::new(100.0, 200.0),
+                        velocity: Vec2::ZERO,
+                        heading: 270.0,
+                    },
+                    true
+                ),
+            ],
+            "at nav slot 1 after the heading"
+        );
+    }
+
+    #[test]
+    fn an_escorted_ship_set_up_is_moved_near_the_centre_by_two_draws_after_its_ship() {
+        // Ship 1: aggression, place, ship, then x and y; ship 2 the same.
+        let mut chance = Draws::of(&[0, 0, 0, 0, 0, 511, 0, 0, 0, 99, 300, 256]);
+        let ships = mission_ships(
+            &with_mission_dude(),
+            &goal_spawn(2, 0, ShipGoal::Escort),
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!(
+            chance.asked,
+            [3, 1500, 1500, 100, 512, 512, 3, 1500, 1500, 100, 512, 512]
+        );
+        assert_eq!(
+            ships
+                .iter()
+                .map(|ship| (ship.ship, ship.state))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    ShipId(202),
+                    ShipState {
+                        position: Vec2::new(-256.0, 255.0),
+                        ..ShipState::default()
+                    }
+                ),
+                (
+                    ShipId(203),
+                    ShipState {
+                        position: Vec2::new(44.0, 0.0),
+                        ..ShipState::default()
+                    }
+                ),
+            ]
+        );
+        assert!(ships.iter().all(|ship| !ship.derelict));
+    }
+
+    #[test]
+    fn an_escorted_ship_set_up_at_a_nav_slot_ends_at_its_stellar() {
+        let mut chance = Draws::of(&[0, 0, 0, 0, 7, 9]);
+        let ships = mission_ships(
+            &with_mission_dude(),
+            &goal_spawn(1, -2, ShipGoal::Escort),
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [3, 1500, 1500, 100, 512, 512]);
+        assert_eq!(ships[0].state.position, Vec2::new(100.0, 200.0));
+    }
+
+    #[test]
+    fn an_escorted_ship_coming_later_or_swapped_in_draws_no_setup_offset() {
+        let table = with_mission_dude();
+        let escorted = goal_spawn(1, 1, ShipGoal::Escort);
+        let mut chance = Draws::of(&[0, 0, 0, 0, 0, 0, 0]);
+        arriving_mission_ships(&table, &escorted, None, mission_gate(), &mut chance);
+        assert_eq!(chance.asked, [360, 3, 1500, 1500, 100, 512, 512]);
+        let mut chance = Draws::of(&[0, 0, 0, 0]);
+        let at = ShipState {
+            position: Vec2::new(900.0, 900.0),
+            ..ShipState::default()
+        };
+        let swapped =
+            swapped_mission_ship(&table, &escorted, at, None, mission_gate(), &mut chance)
+                .expect("a ship");
+        assert_eq!(chance.asked, [3, 1500, 1500, 100]);
+        assert_eq!(swapped.state.position, at.position);
+    }
+
+    #[test]
+    fn a_mission_ship_of_another_goal_set_up_draws_no_heading_and_is_not_derelict() {
+        for goal in [
+            ShipGoal::None,
+            ShipGoal::Destroy,
+            ShipGoal::Disable,
+            ShipGoal::Board,
+            ShipGoal::Observe,
+            ShipGoal::ChaseOff,
+            ShipGoal::Other,
+        ] {
+            let mut chance = Draws::of(&[0, 0, 0, 0]);
+            let ships = mission_ships(
+                &with_mission_dude(),
+                &goal_spawn(1, 0, goal),
+                mission_gate(),
+                &mut chance,
+            );
+            assert_eq!(chance.asked, [3, 1500, 1500, 100], "{goal:?}");
+            assert_eq!(ships[0].state.heading, 0.0, "{goal:?}");
+            assert!(!ships[0].derelict, "{goal:?}");
+        }
+    }
+
+    #[test]
+    fn a_rescue_ship_coming_later_or_swapped_in_gets_no_setup_placement() {
+        let table = with_mission_dude();
+        let rescue = goal_spawn(1, 1, ShipGoal::Rescue);
+        let mut chance = Draws::of(&[0, 0, 0, 0, 0, 0, 0]);
+        let ships = arriving_mission_ships(&table, &rescue, None, mission_gate(), &mut chance);
+        assert_eq!(chance.asked, [360, 3, 1500, 1500, 100, 512, 512]);
+        assert!(!ships[0].derelict);
+        let mut chance = Draws::of(&[0, 0, 0, 0]);
+        let swapped = swapped_mission_ship(
+            &table,
+            &rescue,
+            ShipState::default(),
+            None,
+            mission_gate(),
+            &mut chance,
+        )
+        .expect("a ship");
+        assert_eq!(chance.asked, [3, 1500, 1500, 100]);
+        assert!(!swapped.derelict);
+    }
+
+    #[test]
+    fn mission_ships_coming_later_glide_in_around_an_entry_point_drawn_first() {
+        // Angle 0 (straight up), then each ship: aggression, place, ship,
+        // and its spread from the entry point.
+        let mut chance = Draws::of(&[0, 0, 0, 0, 0, 0, 511, 2, 0, 0, 50, 256, 256]);
+        let ships = arriving_mission_ships(
+            &with_mission_dude(),
+            &mission_spawn(2, 1),
+            None,
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!(
+            chance.asked,
+            [
+                360, 3, 1500, 1500, 100, 512, 512, 3, 1500, 1500, 100, 512, 512
+            ]
+        );
+        let entry = Vec2::new(0.0, -jump_in_distance());
+        assert_eq!(ships.len(), 2);
+        assert!(near(
+            ships[0].state.position,
+            entry + Vec2::new(-256.0, 255.0)
+        ));
+        assert!(near(ships[1].state.position, entry));
+        assert_eq!((ships[0].ship, ships[1].ship), (ShipId(202), ShipId(203)));
+        for ship in &ships {
+            assert_eq!(ship.entry, Entry::JumpingIn);
+            let inward = Vec2::ZERO - ship.state.position;
+            assert!(near(
+                ship.state.velocity,
+                inward * (JUMP_IN_SPEED / inward.length())
+            ));
+            assert_eq!(ship.state.heading, heading_of(inward));
+            assert!(!ship.cloaked);
+        }
+    }
+
+    #[test]
+    fn mission_ships_coming_later_enter_from_the_way_the_player_came_drawing_no_angle() {
+        let mut chance = Draws::of(&[]);
+        let ships = arriving_mission_ships(
+            &with_mission_dude(),
+            &mission_spawn(1, 2),
+            Some(Vec2::new(30.0, 40.0)),
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [3, 1500, 1500, 100, 512, 512]);
+        let entry = Vec2::new(0.6, 0.8) * jump_in_distance();
+        assert!(near(
+            ships[0].state.position,
+            entry + Vec2::new(255.0, 255.0)
+        ));
+        assert!(!ships[0].cloaked, "a ShipStart of 2 comes in uncloaked");
+        let mut chance = Draws::of(&[90]);
+        let _ = arriving_mission_ships(
+            &with_mission_dude(),
+            &mission_spawn(1, 1),
+            Some(Vec2::ZERO),
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!(chance.asked[0], 360, "no way back is drawn");
+    }
+
+    #[test]
+    fn a_mission_ship_with_no_fuel_comes_in_later_all_the_same() {
+        let mut chance = Draws::of(&[0, 0, 0, 0, 99]);
+        let ships = arriving_mission_ships(
+            &with_mission_dude(),
+            &mission_spawn(1, 1),
+            None,
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!(ships[0].ship, ShipId(203), "no fuel tank");
+    }
+    // Auxiliary ships.
+
+    /// `count` auxiliary ships of düde 150 for slot 4.
+    fn aux_spawn(count: i16) -> AuxSpawn {
+        AuxSpawn {
+            slot: 4,
+            dude: DudeId(150),
+            count,
+        }
+    }
+
+    #[test]
+    fn aux_ships_glide_in_around_one_entry_point_drawn_first_unmarked_but_for_their_slot() {
+        // Angle 90 (right), then each ship: aggression, place, ship, and
+        // its spread from the entry point.
+        let mut chance = Draws::of(&[90, 0, 0, 0, 0, 0, 511, 2, 0, 0, 50, 256, 256]);
+        let ships = arriving_aux_ships(
+            &with_mission_dude(),
+            &aux_spawn(2),
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!(
+            chance.asked,
+            [
+                360, 3, 1500, 1500, 100, 512, 512, 3, 1500, 1500, 100, 512, 512
+            ]
+        );
+        let entry = facing(90.0) * jump_in_distance();
+        assert_eq!(ships.len(), 2);
+        assert!(near(
+            ships[0].state.position,
+            entry + Vec2::new(-256.0, 255.0)
+        ));
+        assert!(near(ships[1].state.position, entry));
+        assert_eq!((ships[0].ship, ships[1].ship), (ShipId(202), ShipId(203)));
+        for ship in &ships {
+            assert_eq!(ship.entry, Entry::JumpingIn);
+            let inward = Vec2::ZERO - ship.state.position;
+            assert!(near(
+                ship.state.velocity,
+                inward * (JUMP_IN_SPEED / inward.length())
+            ));
+            assert_eq!(ship.state.heading, heading_of(inward));
+            assert_eq!(ship.mission, None, "ordinary traffic");
+            assert_eq!(ship.aux, Some(4));
+            assert_eq!(
+                (ship.govt, ship.ai_type, ship.booty, ship.info_types),
+                (Some(GovtId(131)), AiType::Interceptor, 0x0002, 0x0001),
+                "the düde's"
+            );
+            assert!(!ship.derelict);
+        }
+        assert_eq!((ships[0].aggression, ships[1].aggression), (2, 0));
+    }
+
+    #[test]
+    fn as_many_aux_ships_come_as_asked_and_none_for_none_or_below() {
+        let table = with_mission_dude();
+        for (count, ships) in [(3, 3), (1, 1), (0, 0), (-1, 0)] {
+            let spawned = arriving_aux_ships(
+                &table,
+                &aux_spawn(count),
+                mission_gate(),
+                &mut crate::NeverFires,
+            );
+            assert_eq!(spawned.len(), ships, "{count}");
+        }
+        let mut chance = Draws::of(&[]);
+        let _ = arriving_aux_ships(&table, &aux_spawn(0), mission_gate(), &mut chance);
+        assert_eq!(chance.asked, [360], "the angle is drawn all the same");
+    }
+
+    #[test]
+    fn an_aux_ship_of_no_type_that_may_appear_fails_drawing_no_spread() {
+        let gated = appearing(appearing(with_mission_dude(), 202, "b7"), 203, "b7");
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            arriving_aux_ships(&gated, &aux_spawn(2), mission_gate(), &mut chance),
+            []
+        );
+        assert_eq!(
+            chance.asked,
+            [360, 3, 1500, 1500, 3, 1500, 1500],
+            "no fallback to every type, and no spread"
+        );
+        // One type refused: the other is drawn alone.
+        let gated = appearing(with_mission_dude(), 202, "b7");
+        let mut chance = Draws::of(&[]);
+        let ships = arriving_aux_ships(&gated, &aux_spawn(1), mission_gate(), &mut chance);
+        assert_eq!(chance.asked, [360, 3, 1500, 1500, 50, 512, 512]);
+        assert_eq!(ships[0].ship, ShipId(203), "no fuel tank, and it comes");
+    }
+
+    #[test]
+    fn an_aux_dude_with_no_record_brings_none_after_the_places_draws() {
+        let unknown = AuxSpawn {
+            dude: DudeId(151),
+            ..aux_spawn(1)
+        };
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            arriving_aux_ships(&with_mission_dude(), &unknown, mission_gate(), &mut chance),
+            []
+        );
+        assert_eq!(chance.asked, [360, 3, 1500, 1500]);
+    }
+
+    #[test]
+    fn an_aux_ships_ai_is_its_dudes_above_0_else_its_ships_inherent_ai() {
+        let mut table = with_mission_dude();
+        table
+            .dude_records
+            .get_mut(&DudeId(150))
+            .expect("150")
+            .ai_type = 0;
+        let ships = arriving_aux_ships(
+            &table,
+            &aux_spawn(1),
+            mission_gate(),
+            &mut Draws::of(&[0, 0, 0, 0, 0]),
+        );
+        assert_eq!(
+            (ships[0].ship, ships[0].ai_type),
+            (ShipId(202), AiType::Interceptor),
+            "ship 202's InherentAI 4"
+        );
+    }
+
+    /// A person's place: at (40, -60), moving (1, 2), heading 90.
+    const PERSON_AT: ShipState = ShipState {
+        position: Vec2::new(40.0, -60.0),
+        velocity: Vec2::new(1.0, 2.0),
+        heading: 90.0,
+    };
+
+    #[test]
+    fn a_swapped_mission_ship_takes_the_persons_place_its_ship_drawn_from_its_dude() {
+        let mut chance = Draws::of(&[0, 0, 1499, 50]);
+        let ship = swapped_mission_ship(
+            &with_mission_dude(),
+            &mission_spawn(1, 0),
+            PERSON_AT,
+            None,
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [3, 1500, 1500, 100]);
+        assert_eq!(
+            ship,
+            Some(NewShip {
+                ship: ShipId(203),
+                govt: Some(GovtId(131)),
+                ai_type: AiType::Interceptor,
+                lead: None,
+                state: PERSON_AT,
+                entry: Entry::Placed,
+                aggression: 2,
+                booty: 0x0002,
+                info_types: 0x0001,
+                person: None,
+                mission: Some(MissionMark {
+                    slot: 3,
+                    behav: ShipBehav::AttackPlayer,
+                    formation: None,
+                }),
+                derelict: false,
+                cloaked: false,
+                aux: None,
+            })
+        );
+    }
+
+    #[test]
+    fn a_swapped_mission_ship_of_a_preset_type_flies_it_drawing_no_pick() {
+        let gated = appearing(with_mission_dude(), 202, "b7");
+        let refusing = refusing_7();
+        let mut chance = Draws::of(&[]);
+        let ship = swapped_mission_ship(
+            &gated,
+            &MissionSpawn {
+                behav: ShipBehav::EscortPlayer,
+                start: ShipStart::from_code(2),
+                ..mission_spawn(1, 0)
+            },
+            PERSON_AT,
+            Some(ShipId(202)),
+            refusing.world.gate(),
+            &mut chance,
+        )
+        .expect("a ship");
+        assert_eq!(chance.asked, [3, 1500, 1500], "no pick, AppearOn unasked");
+        assert_eq!(ship.ship, ShipId(202));
+        assert_eq!((ship.state, ship.entry), (PERSON_AT, Entry::Placed));
+        assert_eq!(
+            ship.mission,
+            Some(MissionMark {
+                slot: 3,
+                behav: ShipBehav::EscortPlayer,
+                formation: None,
+            }),
+        );
+        assert!(!ship.cloaked, "never cloaked");
+        let mut inherent = with_mission_dude();
+        inherent
+            .dude_records
+            .get_mut(&DudeId(150))
+            .expect("150")
+            .ai_type = 0;
+        let ship = swapped_mission_ship(
+            &inherent,
+            &mission_spawn(1, 0),
+            PERSON_AT,
+            Some(ShipId(202)),
+            mission_gate(),
+            &mut crate::NeverFires,
+        );
+        assert_eq!(
+            ship.map(|ship| ship.ai_type),
+            Some(AiType::Interceptor),
+            "ship 202's InherentAI 4"
+        );
+    }
+
+    #[test]
+    fn a_swap_whose_dude_has_no_record_brings_no_ship() {
+        let unknown = MissionSpawn {
+            dude: DudeId(151),
+            ..mission_spawn(1, 0)
+        };
+        let mut chance = Draws::of(&[]);
+        let ship = swapped_mission_ship(
+            &with_mission_dude(),
+            &unknown,
+            PERSON_AT,
+            Some(ShipId(202)),
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!((ship, chance.asked), (None, vec![3, 1500, 1500]));
     }
 
     /// A planet at the centre, then a hypergate at (300, -400) heading

@@ -235,6 +235,7 @@ pub mod blink;
 pub mod board;
 pub mod catalog;
 pub mod chance;
+pub mod cloak;
 pub mod clock;
 pub mod combat;
 pub mod control;
@@ -295,8 +296,8 @@ pub use ai::{
 pub use bay::{Carrier, FighterNote, capacity, dock_window};
 pub use blink::{Blink, BlinkChance, HashedRolls, lights_level};
 pub use board::{
-    Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, NovaBoarding, Plunder, PlunderView,
-    Take, Taken,
+    Assigned, Assignment, BoardRefusal, Boarding, BoardingRule, MissionBoardLine, NovaBoarding,
+    Plunder, PlunderView, Take, Taken,
 };
 pub use catalog::{
     BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,

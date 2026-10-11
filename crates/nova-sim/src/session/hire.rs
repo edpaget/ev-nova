@@ -843,10 +843,10 @@ mod tests {
         let npc = placed(&session);
         assert_eq!(npc.ship, ShipId(129));
         let duty = npc.escort.expect("an escort");
-        assert_eq!((duty.slot, duty.ships), (2, 2));
+        assert_eq!((duty.formation.slot, duty.formation.ships), (2, 2));
         assert_eq!(
             npc.state.position,
-            slot_position(session.player(), 2, 2, duty.spacing)
+            slot_position(session.player(), 2, 2, duty.formation.spacing)
         );
         assert_eq!(npc.govt, None);
         assert_eq!(npc.goal, Goal::Formation { guard: None });
@@ -857,13 +857,13 @@ mod tests {
         let npc = placed(&session);
         assert_eq!(npc.ship, ShipId(129));
         assert_eq!(
-            npc.escort.map(|duty: EscortDuty| duty.slot),
+            npc.escort.map(|duty: EscortDuty| duty.formation.slot),
             Some(2),
             "through the jump"
         );
         assert_eq!(
             npc.state.position,
-            slot_position(session.player(), 2, 2, duty.spacing)
+            slot_position(session.player(), 2, 2, duty.formation.spacing)
         );
 
         let quarry = pirate(&mut session, 0.0, -400.0);
@@ -1029,7 +1029,7 @@ mod tests {
             .iter()
             .flatten()
             .filter_map(|&id| session.npc(id))
-            .filter_map(|npc| npc.escort.map(|duty| duty.slot))
+            .filter_map(|npc| npc.escort.map(|duty| duty.formation.slot))
             .collect();
         assert_eq!(slots, [2, 3, 4], "re-formed");
         assert_eq!(session.take_pay_notes(), [PayNote::Defected(1)]);

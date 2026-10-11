@@ -45,7 +45,7 @@
 //! | [`CommQuote`](RuleKey::CommQuote) | `comm_quote` | a person's comm quote is a friendly person's answer to Greetings ([`Session`](crate::Session)) | it opens the hail, in place of the opening line\* |
 //! | [`GrantCount`](RuleKey::GrantCount) | `grant_count` | boarding a person grants trunc((50 + `Rand(51)`) x `GrantCount` / 100) outfits, at least 1 ([`NovaBoarding`](crate::NovaBoarding)) | 1 + `Rand(GrantCount)`\* |
 //! | [`GrantMax`](RuleKey::GrantMax) | `grant_max` | a boarding grant may take the player past the outfit's `Max`, and `G` past its `Max` and the free mass ([`OutfitRules`](crate::OutfitRules), which the boarding grant reads too) | both are held to `Max` less the owned and to the free mass, weighed as the outfitter weighs it ([`held_to_max`](crate::grant::held_to_max))\* |
-//! | [`PersonJoin`](RuleKey::PersonJoin) | `person_join` | no person offers to join: one whose `LinkMission` is available offers that mission in place of the comm dialog (`_HandlePlayerCommunication` @0x6220d; [`JoinFleet`](crate::hail::nova::JoinFleet)) | a person whose record allows it, its `LinkMission` available, lists Use As Escort and joins the fleet as itself, for good\* |
+//! | [`PersonJoin`](RuleKey::PersonJoin) | `person_join` | no person offers to join: one whose `LinkMission` is available offers that mission in place of the comm dialog (`_HandlePlayerCommunication` @0x6220d; [`JoinFleet`](crate::hail::nova::JoinFleet)), and an accept with `Flags` 0x0040 and one ship left swaps it for its mission's ship | a person whose record allows it, its `LinkMission` available, lists Use As Escort and joins the fleet as itself, for good\* |
 //! | [`MapExplore`](RuleKey::MapExplore) | `map_explore` | a map of `ModVal` N explores depth first, so it may miss systems within N jumps, and "inhabited" reads a system's first four stellars ([`OutfitRules`](crate::OutfitRules)) | every system within N jumps, and any stellar |
 //! | [`InvalidMap`](RuleKey::InvalidMap) | `invalid_map` | a map whose `ModVal` explores nothing (0, -2 to -999) is used up ([`OutfitRules`](crate::OutfitRules)) | it is added to the outfits as a plain item\* |
 //! | [`RemoveRefund`](RuleKey::RemoveRefund) | `remove_refund` | `D` removes an outfit and pays nothing ([`OutfitRules`](crate::OutfitRules)) | it pays what selling the outfit would\* |
@@ -103,6 +103,10 @@
 //! | [`MissionStellarDistance`](RuleKey::MissionStellarDistance) | `mission_stellar_distance` | a random stellar is distant from an origin in a visible system when its system is not at the origin's place, neither system's own Con links reach a system at the other's place, and every system at its system's place lists it; with no origin, as availability asks, only by that last test; from an origin of no visible system nothing is distant (`_StellarsAreDistant` @0x9cb9-0x9ef6, the co-located chain walk @0x9e60-0x9ee4; see [`mission`](crate::mission)) | it is in another system that the visible map does not link with the origin's either way, and nothing is tested with no origin or an origin of no visible system\* |
 //! | [`MissionStellarIdentity`](RuleKey::MissionStellarIdentity) | `mission_stellar_identity` | a mission's destination or return is the stellar docked at when their IDs match, or when both have the same `xPos` and `yPos` and the same name, in any system (`_StellarsAreIdentical` @0xab35-0xac90, called by `_MissionLandCargoCheck` @0x9edfd, @0x9f01d and `_MissionLandCheck` @0xa1a37; see [`mission`](crate::mission)) | only the stellar of that ID, as `TravelStel` and `ReturnStel` each name one stellar by ID |
 //! | [`LegalRecords`](RuleKey::LegalRecords) | `legal_records` | one record a system (`_playerRecord`), read in the player's system (`_HandlePlayerDockRequest` @0x67903, `_IsMissionAvailable` @0x9b59d, `_DoTradeDialog` @0x5dc17; see [`legal`](crate::legal)) | one record a government, read through the system's (landing: the stellar's) government |
+//! | [`LeftRespawn`](RuleKey::LeftRespawn) | `left_respawn` | only a chase-off goal's ship (`ShipGoal` 6) that leaves the system lowers its mission's ships left, so a ship of another goal comes back at the next setup (`_LowLevelAIHandler` @0x85983-0x859aa; see [`mission::goals`](crate::mission::goals)) | any departed mission ship not of `ShipSyst` -6 lowers its ships left, and is not brought back\* |
+//! | [`LandedLeaves`](RuleKey::LandedLeaves) | `landed_leaves` | a mission ship that lands does not leave the system, as the original's waits at the stellar (`_HighLevelAIHandler` @0x8dadc-0x8db5a), so the engine taking it out counts nothing and it comes back at the next setup (see [`story`](crate::story)) | it leaves the system, counted as one that jumped out\* |
+//! | [`AuxGate`](RuleKey::AuxGate) | `aux_gate` | at a hypergate or wormhole exit, the auxiliary ships of a mission of `AuxShipSyst` -1 come no more until their countdown next restarts (`_HandlePlayerDockRequest` @0x6729b-0x672ac; see [`mission::aux`](crate::mission::aux)) | the exit restarts them as a jump does: "-1: any system" |
+//! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //! | [`CronRandomScale`](RuleKey::CronRandomScale) | `cron_random_scale` | `Rand(101) <= Random`, rolled for every inactive crön before its other checks (`_CronEventHandler` @0x38804-0x38818; see [`cron`](crate::cron)) | `Random` % (0 never, 100 or more always)§§§§§§ |
 //! | [`CronDateCompare`](RuleKey::CronDateCompare) | `cron_date_compare` | year on its own, month and day on their own; a range across a year end with month/day set never matches (`_CronDateInRange` @0x74d3-0x75bf; see [`cron`](crate::cron)) | compared as dates; a range may cross a year end¶¶¶¶¶¶ |
 //!
@@ -118,7 +122,8 @@
 //! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance`,
-//! `derelict_setup_speed` or `comm_quote`
+//! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`
+//! or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -611,10 +616,13 @@ rule_keys! {
     /// engine, none does, as the original brings a person to fly with the
     /// player only through its `LinkMission`: a person whose mission is
     /// available offers it in place of the comm dialog
-    /// (`_HandlePlayerCommunication` @0x6220d), and only an accept with
-    /// `Flags` 0x0040, `ShipCount` 1 and `ShipGoal` 3 swaps it for a
-    /// mission ship that escorts the player (@0x62421-0x62509;
-    /// rdm:roadmap/mission-ships). Otherwise, a person whose record allows
+    /// (`_HandlePlayerCommunication` @0x6220d), and an accept of a person
+    /// of `Flags` 0x0040 whose mission has one ship left, whatever its
+    /// goal, swaps it for that ship (@0x62421-0x6252f;
+    /// [`swaps_for_mission_ship`](crate::person::swaps_for_mission_ship)),
+    /// which flies in formation with the player as a mission escort when
+    /// the mission's `ShipBehav` is 1 (@0x62509, @0x8fc03-0x8fc22).
+    /// Otherwise, a person whose record allows
     /// it ([`offers_to_join`](crate::person::offers_to_join)), its
     /// `LinkMission` available, opens the comm dialog listing Use As
     /// Escort while the fleet has room, and joins the fleet as itself,
@@ -1296,6 +1304,56 @@ rule_keys! {
     /// system's government, and at a landing through the stellar's (see
     /// [`legal`](crate::legal)). Both stores are always written.
     LegalRecords => "legal_records",
+    /// Which mission ships that leave the system lower their mission's
+    /// ships left, so they are not brought in again. By the engine, as
+    /// the original counts them, only a chase-off goal's (`ShipGoal` 6):
+    /// a ship of any other goal that jumps out keeps its ships left and
+    /// comes back at the next setup (`_LowLevelAIHandler`
+    /// @0x85983-0x859aa). By the other reading, every departed mission
+    /// ship lowers its ships left and is not brought back. Under both, a
+    /// ship of a mission whose ships follow the player (`ShipSyst` -6)
+    /// counts nothing (@0x8597c-0x85981), and only a chase-off goal's
+    /// counts chased off. The Bible says nothing of it, so the other
+    /// reading is the intended behaviour, not anything the Bible says
+    /// (see [`mission::goals`](crate::mission::goals)).
+    LeftRespawn => "left_respawn",
+    /// Whether a mission ship that lands leaves the system, for the
+    /// counts of [`RuleKey::LeftRespawn`]. By the engine, no: in the
+    /// original an AI ship that lands stays in the system, waiting at the
+    /// stellar (`_HighLevelAIHandler` @0x8dadc-0x8db5a), and only its
+    /// later jump out counts, so the ship the engine takes out as it
+    /// lands counts nothing. By the other reading, it leaves as one that
+    /// jumped out does. The Bible says nothing of it, so the other
+    /// reading is the intended behaviour, not anything the Bible says
+    /// (see [`story`](crate::story)).
+    LandedLeaves => "landed_leaves",
+    /// What the player's exit from a hypergate or wormhole does to the
+    /// special ships of a mission that follow the player (`ShipSyst` -6).
+    /// By the engine, as the original's loop A decides
+    /// (`_HandlePlayerDockRequest` @0x6716a-0x67294, see
+    /// [`mission::ships::through_gate`](crate::mission::ships::through_gate)):
+    /// escorts of the player are set up at once; attackers of the player
+    /// follow on their `düde` government's `Flags2` or odds and come out
+    /// of the exit gate after the player (@0x67346-0x67487), fresh ships;
+    /// every other slot loses its ships until the enter-system hook
+    /// restarts a `ShipStart` 1 slot's timer, and a `ShipStart` 0 or 2
+    /// slot's for good. By the other reading, the exit leaves the slots as
+    /// any jump does: the hook restarts a `ShipStart` 1 slot's timer, and
+    /// the exit's setup sets the others up again in the new system. The
+    /// Bible says nothing of it, so the other reading is the intended
+    /// behaviour, not anything the Bible says (see the session's
+    /// `mission_ships` module).
+    GateFollow => "gate_follow",
+    /// What the player's exit from a hypergate or wormhole does to the
+    /// auxiliary ships of a mission whose `AuxShipSyst` is -1. By the
+    /// engine, as the original's loop A does after the enter-system
+    /// hook's restart (`_HandlePlayerDockRequest` @0x6729b-0x672ac): their
+    /// countdown is set to 0x7fff, above the 32000 it counts down from,
+    /// so they come no more until the next restart (a jump, an `M` or
+    /// `N` in flight, or a take-off). By the other reading, the Bible's
+    /// "-1: any system": the exit restarts them as a jump does (see
+    /// [`mission::aux`](crate::mission::aux)).
+    AuxGate => "aux_gate",
     /// A crön's `Random`: by the engine, it starts when `_Rand(101)`
     /// (0-100) is at most `Random`, so 0 still fires 1 day in 101 and
     /// below 0 never; by the Bible, `Random` is a percent chance (see
@@ -1474,7 +1532,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(13),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1514,7 +1572,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1536,7 +1594,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1561,7 +1619,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1587,7 +1645,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1607,7 +1665,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1627,13 +1685,51 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
             Rulebook::default().source_for(RuleKey::MissionStellarIdentity),
             RuleSource::Engine
         );
+    }
+
+    #[test]
+    fn the_mission_ship_departure_rules_are_found_by_their_keys_and_read_the_engine() {
+        for (rule, key) in [
+            (RuleKey::LeftRespawn, "left_respawn"),
+            (RuleKey::LandedLeaves, "landed_leaves"),
+        ] {
+            assert_eq!(rule.key(), key);
+            assert_eq!(RuleKey::from_key(key), Some(rule));
+            assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        }
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(4),
+            Some(&RuleKey::LandedLeaves)
+        );
+    }
+
+    #[test]
+    fn the_gate_follow_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::GateFollow.key(), "gate_follow");
+        assert_eq!(RuleKey::from_key("gate_follow"), Some(RuleKey::GateFollow));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::GateFollow),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(3), Some(&RuleKey::GateFollow));
+    }
+
+    #[test]
+    fn the_aux_gate_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::AuxGate.key(), "aux_gate");
+        assert_eq!(RuleKey::from_key("aux_gate"), Some(RuleKey::AuxGate));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::AuxGate),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.iter().rev().nth(2), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -1644,7 +1740,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -1763,7 +1859,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -1907,6 +2003,10 @@ mod tests {
                 RuleKey::MissionStellarDistance,
                 RuleKey::MissionStellarIdentity,
                 RuleKey::LegalRecords,
+                RuleKey::LeftRespawn,
+                RuleKey::LandedLeaves,
+                RuleKey::GateFollow,
+                RuleKey::AuxGate,
                 RuleKey::CronRandomScale,
                 RuleKey::CronDateCompare
             ]

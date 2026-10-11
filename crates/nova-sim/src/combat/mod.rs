@@ -73,7 +73,12 @@
 //! 8. Conditions follow the damage: a ship with no armour left (of the
 //!    armour it holds) starts breaking up, and any other that holds armour
 //!    is disabled, or not, as the [`DisableRule`](hull::DisableRule) says;
-//!    a ship that holds none is never disabled.
+//!    a ship that holds none is never disabled. A ship held disabled
+//!    ([`Fighter::held_disabled`], a rescue mission's ship not yet
+//!    boarded, as `_IsDisabled` reads it @0x2d24-0x2d69) is kept disabled
+//!    at any armour, and is never newly disabled, so it reports no
+//!    [`CombatEvent::Disabled`]; once it is no longer held, its armour
+//!    decides again, with no event as it comes back intact.
 //! 9. A ship breaking up counts down its `DeathDelay`, then is destroyed.
 //! 10. Shields regenerate on an intact or disabled ship, armour only on an
 //!     intact one, each up to what it holds.
@@ -259,6 +264,11 @@ pub struct Fighter<'a> {
     pub reserves: &'a mut Reserves,
     /// How it is holding up.
     pub condition: &'a mut Condition,
+    /// Whether it is held disabled whatever its armour: a rescue
+    /// mission's ship not yet boarded (see the session's `mission_ships`
+    /// module). It is kept disabled until its armour is gone, never
+    /// newly disabled, and the [`DisableRule`] is not asked of it.
+    pub held_disabled: bool,
     /// Its weapons.
     pub armament: &'a mut Armament,
     /// Its rounds of ammunition.
@@ -727,6 +737,9 @@ impl Combat {
                 });
                 downed = Some(Downed::BreakingUp);
             }
+            Condition::Intact | Condition::Disabled if fighter.held_disabled => {
+                *fighter.condition = Condition::Disabled;
+            }
             Condition::Intact | Condition::Disabled => {
                 let armor = fighter.reserves.armor;
                 let disabled = holds_armour(armor) && rule.disabled(armor, &fighter.hull);
@@ -917,6 +930,7 @@ mod tests {
         trigger: Trigger,
         reserves: Reserves,
         condition: Condition,
+        held_disabled: bool,
         armament: Armament,
         rounds: BTreeMap<WeaponId, u32>,
     }
@@ -941,6 +955,7 @@ mod tests {
                 trigger: Trigger::default(),
                 reserves: Reserves::full(10.0, 30.0, 100.0),
                 condition: Condition::Intact,
+                held_disabled: false,
                 armament: Armament::default(),
                 rounds: BTreeMap::new(),
             }
@@ -975,6 +990,7 @@ mod tests {
                 target: self.target,
                 reserves: &mut self.reserves,
                 condition: &mut self.condition,
+                held_disabled: self.held_disabled,
                 armament: &mut self.armament,
                 rounds: &mut self.rounds,
             }
@@ -1295,6 +1311,87 @@ mod tests {
         tick(&mut combat, &mut ships, &well);
         assert_eq!(ships[1].condition, Condition::Intact, "as the rule says");
         assert_eq!(combat.take_events(), []);
+    }
+
+    #[test]
+    fn a_held_ship_at_full_armour_is_stored_disabled_with_no_event_and_no_armour_back() {
+        let mut combat = Combat::default();
+        let mut held = Ship::at(1, 0.0, 0.0);
+        held.held_disabled = true;
+        held.reserves.armor.now = 20.0;
+        held.armor_regen = 1.0;
+        held.shield_regen = 1.0;
+        held.reserves.shield.now = 0.0;
+        let mut ships = [held];
+        let well = Recording::default();
+        for _ in 0..3 {
+            tick(&mut combat, &mut ships, &well);
+            assert_eq!(ships[0].condition, Condition::Disabled);
+        }
+        assert_eq!(combat.take_events(), [], "never newly disabled");
+        assert_eq!(well.asked.take(), [], "the rule is not asked");
+        assert_eq!(ships[0].reserves.armor.now, 20.0, "no armour back");
+        assert_eq!(ships[0].reserves.shield.now, 3.0, "shields still do");
+        ships[0].reserves.armor.now = 30.0;
+        tick(&mut combat, &mut ships, &well);
+        assert_eq!(ships[0].condition, Condition::Disabled, "at full armour");
+    }
+
+    #[test]
+    fn a_held_ship_hit_strikes_no_downing() {
+        let mut combat = Combat::default();
+        let mut held = Ship::at(2, 100.0, 0.0);
+        held.held_disabled = true;
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(blaster()), held];
+        let mut strikes = Vec::new();
+        for _ in 0..12 {
+            tick(&mut combat, &mut ships, &NovaDisable);
+            strikes.extend(combat.take_strikes());
+            if ships[1].reserves.armor.now <= 0.0 {
+                break;
+            }
+        }
+        let on_b: Vec<Option<Downed>> = strikes
+            .iter()
+            .filter(|strike| strike.ship == B)
+            .map(|strike| strike.downed)
+            .collect();
+        assert!(!on_b.is_empty());
+        assert!(
+            on_b.iter().all(|downed| *downed != Some(Downed::Disabled)),
+            "{on_b:?}"
+        );
+    }
+
+    #[test]
+    fn a_held_ship_whose_armour_runs_out_breaks_up_and_is_destroyed() {
+        let mut combat = Combat::default();
+        let mut held = Ship::at(2, 0.0, 0.0);
+        held.held_disabled = true;
+        held.condition = Condition::Disabled;
+        held.reserves.armor.now = 0.0;
+        let mut ships = [held];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let events = combat.take_events();
+        assert!(matches!(events[0], CombatEvent::BreakingUp { ship: B, .. }));
+        assert!(matches!(events[1], CombatEvent::Destroyed { ship: B, .. }));
+        assert_eq!(ships[0].condition, Condition::Destroyed);
+    }
+
+    #[test]
+    fn a_ship_no_longer_held_reads_its_armour_again_with_no_event() {
+        let mut combat = Combat::default();
+        let mut released = Ship::at(1, 0.0, 0.0);
+        released.condition = Condition::Disabled;
+        let mut ships = [released];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(ships[0].condition, Condition::Intact, "full armour");
+        assert_eq!(combat.take_events(), []);
+        ships[0].condition = Condition::Disabled;
+        ships[0].reserves.armor.now = 5.0;
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(ships[0].condition, Condition::Disabled, "below a third");
+        assert_eq!(combat.take_events(), [], "not newly disabled");
     }
 
     #[test]

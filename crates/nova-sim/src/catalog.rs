@@ -602,13 +602,43 @@ pub struct PersonRecord {
 }
 
 /// A mission's special ships, raw from its `mïsn`: as many as its
-/// `ShipCount`, with its `ShipGoal`.
+/// `ShipCount`, with its `ShipGoal`, and where, of what and how they
+/// spawn (see the [`traffic::spawn`](crate::traffic::spawn) module's
+/// "Mission ships").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MissionShip {
     /// Its `ShipCount`.
     pub count: i16,
     /// Its `ShipGoal`.
     pub goal: i16,
+    /// Its `ShipSyst`, raw: the system they are in, encoded.
+    pub syst: i16,
+    /// Its `ShipDude`: the `düde` they are drawn from, none at -1.
+    pub dude: Option<DudeId>,
+    /// Its `ShipBehav`, raw.
+    pub behav: i16,
+    /// Its `ShipStart`, raw: where and when they appear.
+    pub start: i16,
+    /// Its `ShipNameID`: the `STR#` their name is drawn from, none at -1.
+    pub name_id: Option<i16>,
+    /// Its `ShipSubtitle`: the `STR#` their subtitle is drawn from, none
+    /// at -1.
+    pub subtitle: Option<i16>,
+}
+
+impl MissionShip {
+    /// No special ships: a `ShipCount` of 0, no goal, a `ShipSyst` that
+    /// names no system, no `düde`, no behaviour, names or subtitles.
+    pub const NONE: Self = Self {
+        count: 0,
+        goal: -1,
+        syst: 0,
+        dude: None,
+        behav: -1,
+        start: 0,
+        name_id: None,
+        subtitle: None,
+    };
 }
 
 /// A mission, raw from its `mïsn`: the fields its offer reads. The
@@ -670,6 +700,9 @@ pub struct MissionRecord {
     pub on_failure: Script,
     /// Its `OnAbort`, run as it is aborted.
     pub on_abort: Script,
+    /// Its `OnShipDone`, run as its ship goals are met (see the
+    /// `mission_ships` module of the session).
+    pub on_ship_done: Script,
     /// Its `CanAbort`, raw: the player may abort it unless it is 0.
     pub can_abort: i16,
     /// Its `CompGovt`: the government whose record its end changes, none
@@ -681,6 +714,31 @@ pub struct MissionRecord {
     pub date_post_inc: i16,
     /// Its `ShipCount` and `ShipGoal`.
     pub ships: MissionShip,
+    /// Its `AuxShipCount`, `AuxShipDude` and `AuxShipSyst`.
+    pub aux: AuxShip,
+}
+
+/// A mission's auxiliary ships, raw from its `mïsn`: ordinary traffic of
+/// its `AuxShipDude` that comes into the systems its `AuxShipSyst` allows
+/// on a countdown (see the [`mission::aux`](crate::mission::aux) module).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AuxShip {
+    /// Its `AuxShipCount`.
+    pub count: i16,
+    /// Its `AuxShipDude`: the `düde` they are drawn from, none at -1.
+    pub dude: Option<DudeId>,
+    /// Its `AuxShipSyst`, raw: the systems they come into, encoded.
+    pub syst: i16,
+}
+
+impl AuxShip {
+    /// No auxiliary ships: an `AuxShipCount` of 0, no `düde`, and an
+    /// `AuxShipSyst` that names no system.
+    pub const NONE: Self = Self {
+        count: 0,
+        dude: None,
+        syst: 0,
+    };
 }
 
 /// A timed event, raw from its `crön`: the fields the daily cron pass
@@ -752,6 +810,8 @@ pub struct MissionTexts {
     pub load_cargo: Option<String>,
     /// Its `DumpCargoText`, shown as its cargo is unloaded.
     pub dump_cargo: Option<String>,
+    /// Its `ShipDoneText`, shown as its ship goals are met.
+    pub ship_done: Option<String>,
     /// Its `AcceptButton`, raw.
     pub accept_button: String,
     /// Its `RefuseButton`, raw.
@@ -773,6 +833,7 @@ impl MissionTexts {
             refuse: None,
             load_cargo: None,
             dump_cargo: None,
+            ship_done: None,
             accept_button: String::new(),
             refuse_button: String::new(),
         }
@@ -933,6 +994,9 @@ pub struct HullRecord {
     /// Its `shän`'s `BaseXSize`, in pixels, or `None` when it has no
     /// `shän` that can be read.
     pub size: Option<i16>,
+    /// Its `shän`'s `BaseYSize`, in pixels, or `None` when it has no
+    /// `shän` that can be read.
+    pub height: Option<i16>,
     /// Its `Strength`: how strong it counts in a fight.
     pub strength: i16,
 }

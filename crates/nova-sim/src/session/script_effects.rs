@@ -254,21 +254,36 @@ impl Session {
     }
 
     /// Applies what the set expressions run since the last settling
-    /// queued (see the module docs): the moves in order, each read from
+    /// queued (see the module docs): first a person's swap for its
+    /// mission's ship that an accept on its hail made due (see the
+    /// `mission_ships` module), then the moves in order, each read from
     /// `catalog`, populating on `chance` where the rules say, then a `Q`'s
     /// leave. Before the leave, and after the moves and the leave, the
     /// story events raised dispatch, each running the subscriptions it
     /// matches (see the [`story`](crate::story) module's "Dispatch").
-    /// Whoever runs set expressions calls it after each input and tick,
-    /// before saving.
+    /// Once nothing is left, the ship goals of each mission accepted in
+    /// flight are checked, and what that runs settles in turn (see the
+    /// `mission_ships` module). Whoever runs set expressions calls it
+    /// after each input and tick, before saving.
     pub fn settle_script(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) -> Settled {
         let mut settled = Settled::default();
-        self.settle_story(catalog, &mut &mut *chance, &mut settled);
-        settled
+        loop {
+            if let Some((npc, slot)) = self.swap_due.take() {
+                self.swap_in_mission_ship(catalog, npc, slot, chance);
+            }
+            self.settle_story(catalog, &mut &mut *chance, &mut settled);
+            let due = std::mem::take(&mut self.goal_checks_due);
+            if due.is_empty() {
+                return settled;
+            }
+            for slot in due {
+                self.check_ship_goals(slot, false, &mut &mut *chance);
+            }
+        }
     }
 
     /// Applies the moves queued, in order, each read from `catalog`,

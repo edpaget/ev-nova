@@ -302,8 +302,8 @@ use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
 use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
-    HireTerms, Hired, MissionComputer, MissionId, MissionInfo, MissionText, NotOffered,
-    OfferPrompt, PayNote, PersonRules, SessionEvent, VenueOffer,
+    HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText,
+    NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, TagNames, VenueOffer,
 };
 use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
@@ -426,7 +426,8 @@ pub const ESCORT_RECALL_KEY: Key = Key::Char('c');
 /// (`ackComm`).
 pub const MENU_CLOSE_KEY: Key = Key::Enter;
 
-/// `STR#` 2002 #284: a mission failed as its cargo was jettisoned.
+/// `STR#` 2002 #284: a mission failed as its cargo was jettisoned, or as
+/// one of its special ships was lost.
 pub const MISSION_FAILED: &str = "Mission failed.";
 /// `STR#` 2002 #289: everything was jettisoned.
 pub const CARGO_JETTISONED: &str = "Cargo jettisoned.";
@@ -448,8 +449,9 @@ pub const FINED: &str = "You have been fined";
 /// `_ScanPlayer` builds it (@0x7e7ce-0x7ea9b): "`scanner`:  `ship`, ...
 /// has been detected.", then with a fine " You have been fined `fine`
 /// credits." ("credit" for 1), the fine's thousands grouped. The
-/// scanner is named by its ship class; a mission's special ship by its
-/// own name is rdm:phase/mission-ships/phase-2-ship-goals'.
+/// scanner is named by the drawn ship name of the mission whose cargo
+/// the scan found, when it has one, whatever ship scanned, and otherwise
+/// by its ship class (@0x7e7ce-0x7e7ef; see [`SimMessage::Smuggling`]).
 #[must_use]
 pub fn smuggling_message(scanner: &str, ship: &str, fine: i64) -> String {
     let detected = format!("{scanner}:  {ship}, {SMUGGLING_DETECTED}.");
@@ -463,21 +465,28 @@ pub fn smuggling_message(scanner: &str, ship: &str, fine: i64) -> String {
 /// What the message line says of `message`, a session's message other
 /// than an arrival's, the names read from `session`: none for an
 /// arrival's, which [`arrival_lead`] leads the arrival message with.
-fn sim_message_text(message: SimMessage, session: &Session) -> Option<String> {
+fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
     let text = match message {
         SimMessage::Arrived(_) | SimMessage::ExitedHypergate(_) | SimMessage::PassedWormhole(_) => {
             return None;
         }
-        SimMessage::MissionFailed => MISSION_FAILED,
+        SimMessage::MissionFailed | SimMessage::MissionShipLost => MISSION_FAILED,
         SimMessage::CargoJettisoned => CARGO_JETTISONED,
         SimMessage::NonMissionCargoJettisoned => NON_MISSION_CARGO_JETTISONED,
         SimMessage::MissionScanned => MISSION_SCANNED,
         SimMessage::DeadlineMissed => TIME_LIMIT_EXCEEDED,
-        SimMessage::Smuggling { scanner, fine } => {
+        SimMessage::Smuggling {
+            scanner,
+            ship_name,
+            fine,
+        } => {
             return Some(smuggling_message(
-                session.ship_name(scanner).unwrap_or_default(),
+                ship_name
+                    .as_deref()
+                    .or_else(|| session.ship_name(*scanner))
+                    .unwrap_or_default(),
                 session.pilot().ship_name().unwrap_or_default(),
-                fine,
+                *fine,
             ));
         }
     };
@@ -501,6 +510,66 @@ pub fn hail_refusal_message(refusal: HailRefusal) -> Option<&'static str> {
         HailRefusal::NoTarget => None,
         HailRefusal::NoResponse => Some(NO_RESPONSE),
         HailRefusal::InHyperspace => Some(HAIL_IN_HYPERSPACE),
+    }
+}
+
+/// `STR#` 2002 #126: a mission's special ship boarded on the assist
+/// path.
+pub const TARGET_BOARDED: &str = "Target ship has been boarded.";
+
+/// What the comm line says as a mission's special ship of `Flags` 0x0008
+/// is boarded on the assist path, as `_HandlePlayerBoardAttempt` builds
+/// it (@0x655ae-0x65663): "`ship`:  Energy transfer complete,
+/// `player_ship`."
+#[must_use]
+pub fn refuelled_message(ship: &str, player_ship: &str) -> String {
+    format!("{ship}:  {ENERGY_TRANSFER}, {player_ship}.")
+}
+
+/// `STR#` 2002 #107: the article before a cargo's name as a boarding
+/// picks it up.
+pub const THE: &str = "the";
+/// How long a boarding pickup's line stays on screen: 250 frames at 30 a
+/// second (0xfa @0x65538).
+pub const RETRIEVED_SHOWN_FOR: Duration = Duration::from_millis(250 * 1000 / 30);
+
+/// What the comm line says as a `PickupMode` 2 mission's cargo, its
+/// `STR#` 4001 name `cargo`, is picked up by boarding its special ship,
+/// as `_HandlePlayerBoardAttempt` builds it (@0x653fb-0x65543):
+/// [`RETRIEVED`] and a space (two in all), then [`THE`] and a space
+/// unless the name starts with `*`, the name without its `*`, a space,
+/// and [`FROM_THIS_SHIP`].
+#[must_use]
+pub fn retrieved_message(cargo: &str) -> String {
+    match cargo.strip_prefix('*') {
+        Some(name) => format!("{RETRIEVED} {name} {FROM_THIS_SHIP}"),
+        None => format!("{RETRIEVED} {THE} {cargo} {FROM_THIS_SHIP}"),
+    }
+}
+
+/// What the comm line says of `line`, the names read from `session`.
+fn mission_board_message(line: MissionBoardLine, session: &Session) -> String {
+    match line {
+        MissionBoardLine::Boarded => TARGET_BOARDED.to_owned(),
+        MissionBoardLine::Refuelled { ship } => refuelled_message(
+            session.ship_name(ship).unwrap_or_default(),
+            session.pilot().ship_name().unwrap_or_default(),
+        ),
+        MissionBoardLine::Retrieved { cargo } => retrieved_message(
+            &cargo
+                .and_then(|cargo| u8::try_from(cargo).ok())
+                .and_then(|cargo| session.cargo_name(cargo))
+                .unwrap_or_default(),
+        ),
+    }
+}
+
+/// How long the comm line of `line` stays on screen: a pickup's for
+/// [`RETRIEVED_SHOWN_FOR`], the assist path's for [`MESSAGE_SHOWN_FOR`].
+fn mission_board_shown_for(line: MissionBoardLine) -> Duration {
+    match line {
+        MissionBoardLine::Retrieved { .. } => RETRIEVED_SHOWN_FOR,
+        MissionBoardLine::Boarded | MissionBoardLine::Refuelled { .. } => MESSAGE_SHOWN_FOR,
     }
 }
 
@@ -601,12 +670,13 @@ pub fn arrival_message_with(lead: &str, system: &str, date: &str, stellars: bool
 
 /// The lead of the message line on the arrival `message` raises: none for
 /// a message of another kind.
-fn arrival_lead(message: SimMessage) -> Option<&'static str> {
+fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
     match message {
         SimMessage::Arrived(_) => Some(JUMPING_INTO),
         SimMessage::ExitedHypergate(_) => Some(EXITING_HYPERGATE),
         SimMessage::PassedWormhole(_) => Some(PASSING_WORMHOLE),
         SimMessage::MissionFailed
+        | SimMessage::MissionShipLost
         | SimMessage::CargoJettisoned
         | SimMessage::NonMissionCargoJettisoned
         | SimMessage::MissionScanned
@@ -1665,7 +1735,7 @@ impl<
         messages.extend(session.take_messages());
         let worded: Vec<String> = messages
             .iter()
-            .filter_map(|&message| sim_message_text(message, session))
+            .filter_map(|message| sim_message_text(message, session))
             .collect();
         self.message = None;
         let Some(scene) = &self.scene else {
@@ -1673,7 +1743,6 @@ impl<
         };
         let mut said: Vec<String> = messages
             .iter()
-            .copied()
             .filter_map(arrival_lead)
             .next_back()
             .map(|lead| {
@@ -2121,6 +2190,12 @@ impl<C> FlightView<C> {
             }
             Ok(Boarding::Repelled) => self.say(REPELLED),
             Ok(Boarding::Offered(offer)) => self.hold_offer(offer),
+            Ok(Boarding::MissionShip(line)) => {
+                if let Some(line) = line {
+                    let said = mission_board_message(line, session);
+                    self.say_for(said, mission_board_shown_for(line));
+                }
+            }
             Err(refusal) => {
                 if let Some(text) = board_refusal_message(refusal) {
                     self.say(text);
@@ -2203,7 +2278,7 @@ impl<C> FlightView<C> {
         };
         let mut said = Vec::new();
         for message in session.take_messages() {
-            match sim_message_text(message, session) {
+            match sim_message_text(&message, session) {
                 Some(text) => said.push(text),
                 None => self.pending_leads.push(message),
             }
@@ -2534,10 +2609,17 @@ impl<C> FlightView<C> {
     }
 
     /// Draws each NPC with its own ship's sprite, or a crossed box when its
-    /// sheet cannot be read. One waiting at the gate it comes out of is
-    /// hidden, then fades in over its last ticks there ([`npc_tint`]).
+    /// sheet cannot be read, but for one the player cannot see for its
+    /// cloak ([`sprite_drawn`]). One waiting at the gate it comes out of
+    /// is hidden, then fades in over its last ticks there ([`npc_tint`]).
     fn draw_npcs(&self, list: &mut DrawList, camera: &Camera) {
+        let Ok(session) = &self.session else {
+            return;
+        };
         for (npc, at, heading) in self.shown_npcs() {
+            if !sprite_drawn(session, npc) {
+                continue;
+            }
             let Some(tint) = npc_tint(npc) else {
                 continue;
             };
@@ -2990,6 +3072,7 @@ impl<
         let mut notes = Vec::new();
         let mut quotes = Vec::new();
         if let Ok(session) = &mut self.session {
+            session.set_play_area(play_area());
             session.hold_fire(fire.0, fire.1);
             for _ in 0..steps {
                 self.previous = *session.player();
@@ -3089,7 +3172,10 @@ impl<
         match &self.status_bar {
             Ok(bar) => {
                 let stellars: Vec<Point> = scene.stellars().iter().map(|s| s.position).collect();
-                let ships: Vec<Point> = self.shown_npcs().iter().map(|&(_, at, _)| at).collect();
+                let ships = match &self.session {
+                    Ok(session) => radar_ships(session, &self.shown_npcs()),
+                    Err(_) => Vec::new(),
+                };
                 let date = self.date_text();
                 let state = HudState {
                     position: self.shown_position(),
@@ -3185,12 +3271,49 @@ fn dying(
     me.into_iter().chain(npcs).collect()
 }
 
+/// Whether `npc`'s sprite may be drawn for its cloak: not while the
+/// player cannot see past it ([`Session::sees_past_cloak`]). A ship
+/// waiting at the gate it comes out of is hidden, then faded in, by its
+/// tint ([`npc_tint`]), as `_HandleShipDisplay` (@0x2c090-0x2c18e) fades
+/// it. The radar still shows it, as `_DrawStatusRadar` does not ask.
+fn sprite_drawn(session: &Session, npc: &Npc) -> bool {
+    session.sees_past_cloak(npc)
+}
+
+/// Where each of `shown` the radar shows is drawn: those
+/// [`Session::on_radar`] says, a cloaked ship only when its cloak shows
+/// there or the player scans for cloaked ships.
+fn radar_ships(session: &Session, shown: &[(&Npc, Point, f32)]) -> Vec<Point> {
+    shown
+        .iter()
+        .filter(|(npc, _, _)| session.on_radar(npc))
+        .map(|&(_, at, _)| at)
+        .collect()
+}
+
+/// The play area about the ship, in world units: the screen left of the
+/// status bar, the ship drawn at the screen's centre. The session reads it to
+/// tell whether a ship is on screen.
+fn play_area() -> nova_sim::cloak::Area {
+    let camera = Camera::centred_on(Point::default());
+    let top_left = camera.screen_to_world(Point::default());
+    let bottom_right =
+        camera.screen_to_world(Point::new(VIEW_SIZE.0 - STATUS_BAR_WIDTH, VIEW_SIZE.1));
+    nova_sim::cloak::Area {
+        left: top_left.x,
+        top: top_left.y,
+        right: bottom_right.x,
+        bottom: bottom_right.y,
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use std::cell::RefCell;
     use std::num::NonZeroU16;
 
+    use crate::system::camera::VIEW_CENTER;
     use nova_sim::landing::{LandingRefusal, StellarFlags};
     use nova_sim::{
         CharacterStart, CommodityStrings, DateAffixes, DisasterRecord, GateSite, Handling,
@@ -3208,7 +3331,7 @@ mod tests {
     use crate::flight::hud::{self, HudState, NavDisplay, StatusBar};
     use crate::galaxy::{Galaxy, MapMode, SystemEntry};
     use crate::sound::Sound;
-    use crate::system::camera::VIEW_CENTER;
+
     use crate::system::catalog::{
         AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
     };
@@ -3232,6 +3355,8 @@ mod tests {
         bar: Result<StatusBarLayout, String>,
         /// System 130's landing sites: Earth and Moon, by default.
         sites: Vec<LandingSite>,
+        /// System 130's `NavDefs` slots on the map: none, by default.
+        sol_navs: Vec<Option<(u32, u16)>>,
         systems_read: RefCell<Vec<SystemId>>,
         /// The commodities: none, by default.
         commodities: CommodityStrings,
@@ -3369,6 +3494,7 @@ mod tests {
             onward: false,
             fan: false,
             reborn: false,
+            sol_navs: Vec::new(),
             gates: Vec::new(),
             lives: Vec::new(),
             missions: Vec::new(),
@@ -3483,7 +3609,10 @@ mod tests {
             let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
             let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
             let mut systems = vec![
-                star(130, (0.0, 0.0), sol),
+                StarSystem {
+                    stellars: self.sol_navs.clone(),
+                    ..star(130, (0.0, 0.0), sol)
+                },
                 star(131, (600.0, 0.0), onward),
                 star(132, (0.0, 600.0), &[]),
             ];
@@ -7382,6 +7511,88 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_waiting_at_its_gate_is_drawn_by_its_tint_and_any_ship_by_its_cloak() {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        let mut npc = session.npcs()[0].clone();
+        assert!(sprite_drawn(session, &npc), "flying");
+        npc.mode = nova_sim::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
+        assert!(sprite_drawn(session, &npc), "jumping in");
+        npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
+        assert!(sprite_drawn(session, &npc), "fading in at its gate");
+        npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 30 };
+        assert!(sprite_drawn(session, &npc));
+        assert_eq!(npc_tint(&npc), None, "hidden at its gate");
+        npc.cloak = CLOAKED;
+        npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
+        assert!(!sprite_drawn(session, &npc), "cloaked at its gate");
+    }
+
+    /// A full cloak.
+    const CLOAKED: nova_sim::cloak::Cloak = nova_sim::cloak::Cloak {
+        fade: nova_sim::cloak::FADE_FULL,
+        direction: 0,
+    };
+
+    #[test]
+    fn a_ship_the_player_cannot_see_for_its_cloak_is_not_drawn() {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        let mut npc = session.npcs()[0].clone();
+        npc.cloak = CLOAKED;
+        assert!(!sprite_drawn(session, &npc), "cloaked");
+        npc.cloak.direction = -1;
+        npc.cloak.fade = 8.0;
+        assert!(sprite_drawn(session, &npc), "faded out enough to be seen");
+    }
+
+    #[test]
+    fn a_cloaked_ship_is_on_the_radar_only_when_the_session_says() {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        let npc = session.npcs()[0].clone();
+        let blip = at(100.0, -100.0);
+        assert_eq!(radar_ships(session, &[(&npc, blip, 0.0)]), [blip]);
+        let mut cloaked = npc.clone();
+        cloaked.cloak = CLOAKED;
+        assert_eq!(radar_ships(session, &[(&cloaked, blip, 0.0)]), []);
+        cloaked.cloak_gear.on_radar = true;
+        assert_eq!(radar_ships(session, &[(&cloaked, blip, 0.0)]), [blip]);
+    }
+
+    #[test]
+    fn the_play_area_is_the_screen_left_of_the_status_bar_about_the_ship() {
+        let area = play_area();
+        assert_eq!(
+            area,
+            nova_sim::cloak::Area {
+                left: -512.0,
+                top: -384.0,
+                right: 1024.0 - 194.0 - 512.0,
+                bottom: 384.0,
+            }
+        );
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        assert_eq!(view.session().expect("flying").play_area(), area, "told");
+    }
+
+    #[test]
     fn an_npc_is_a_dim_blip_on_the_radar() {
         let (_, chance) = scripted(&placed(850, 650, 90));
         let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
@@ -7765,6 +7976,7 @@ mod tests {
                 ammo: 0,
             }],
             size: None,
+            height: None,
             strength: 0,
         };
         let (_, chance) = scripted(&placed(850, 650, 90));
@@ -7901,6 +8113,7 @@ mod tests {
                 })
                 .collect(),
             size: None,
+            height: None,
             strength: 0,
         }
     }
@@ -10058,11 +10271,13 @@ mod tests {
             on_success: SetScript::default(),
             on_failure: SetScript::default(),
             on_abort: SetScript::default(),
+            on_ship_done: SetScript::default(),
             can_abort: 1,
             comp_govt: None,
             comp_reward: 0,
             date_post_inc: 0,
-            ships: MissionShip { count: 0, goal: -1 },
+            ships: MissionShip::NONE,
+            aux: nova_sim::catalog::AuxShip::NONE,
         }
     }
 
@@ -10256,7 +10471,7 @@ mod tests {
     fn each_jettison_message_is_worded_and_the_arrivals_are_not_among_them() {
         let view = flight();
         let session = view.session().expect("flying");
-        let text = |message| sim_message_text(message, session);
+        let text = |message| sim_message_text(&message, session);
         assert_eq!(
             text(SimMessage::MissionFailed).as_deref(),
             Some(MISSION_FAILED)
@@ -10279,11 +10494,76 @@ mod tests {
             SimMessage::MissionScanned,
             SimMessage::Smuggling {
                 scanner: ShipId(129),
+                ship_name: None,
                 fine: 0,
             },
         ] {
-            assert_eq!(arrival_lead(message), None, "{message:?}");
+            assert_eq!(arrival_lead(&message), None, "{message:?}");
         }
+    }
+
+    #[test]
+    fn a_mission_ship_boarded_on_the_assist_path_says_its_line() {
+        assert_eq!(TARGET_BOARDED, "Target ship has been boarded.");
+        assert_eq!(
+            refuelled_message("Freighter", "Kestrel"),
+            "Freighter:  Energy transfer complete, Kestrel."
+        );
+        let view = flight();
+        let session = view.session().expect("flying");
+        assert_eq!(
+            mission_board_message(MissionBoardLine::Boarded, session),
+            TARGET_BOARDED
+        );
+    }
+
+    /// `_HandlePlayerBoardAttempt` @0x653fb-0x65543: #106 ("You
+    /// retrieved ", its own trailing space) and a space, #107 and a space
+    /// unless the name starts with `*`, the name without it, a space,
+    /// #108.
+    #[test]
+    fn a_pickup_ships_line_names_its_cargo_as_the_original_spaces_it() {
+        assert_eq!(THE, "the");
+        assert_eq!(
+            retrieved_message("Food"),
+            "You retrieved  the Food from this ship."
+        );
+        assert_eq!(
+            retrieved_message("*Medical Supplies"),
+            "You retrieved  Medical Supplies from this ship."
+        );
+        assert_eq!(
+            RETRIEVED_SHOWN_FOR,
+            Duration::from_millis(250 * 1000 / 30),
+            "0xfa frames @0x65538"
+        );
+    }
+
+    #[test]
+    fn a_pickup_ships_line_reads_the_cargo_name_from_str_4001() {
+        let strings = FakeCatalog {
+            strings: vec![(4001, vec!["Food".to_owned(), "*Passengers".to_owned()])],
+            ..catalog()
+        };
+        let view = flight().with_strings(Rc::new(strings));
+        let session = view.session().expect("flying");
+        let said = |cargo| mission_board_message(MissionBoardLine::Retrieved { cargo }, session);
+        assert_eq!(said(Some(0)), "You retrieved  the Food from this ship.");
+        assert_eq!(said(Some(1)), "You retrieved  Passengers from this ship.");
+        assert_eq!(said(Some(2)), "You retrieved  the  from this ship.");
+        assert_eq!(said(None), "You retrieved  the  from this ship.");
+        assert_eq!(said(Some(256)), "You retrieved  the  from this ship.");
+    }
+
+    #[test]
+    fn a_mission_ship_lost_says_str_2002_284() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        assert_eq!(
+            sim_message_text(&SimMessage::MissionShipLost, session).as_deref(),
+            Some(MISSION_FAILED)
+        );
+        assert_eq!(arrival_lead(&SimMessage::MissionShipLost), None);
     }
 
     #[test]
@@ -10291,10 +10571,10 @@ mod tests {
         let view = flight();
         let session = view.session().expect("flying");
         assert_eq!(
-            sim_message_text(SimMessage::DeadlineMissed, session).as_deref(),
+            sim_message_text(&SimMessage::DeadlineMissed, session).as_deref(),
             Some(TIME_LIMIT_EXCEEDED)
         );
-        assert_eq!(arrival_lead(SimMessage::DeadlineMissed), None);
+        assert_eq!(arrival_lead(&SimMessage::DeadlineMissed), None);
         assert_eq!(TIME_LIMIT_EXCEEDED, "Time limit exceeded - mission failed.");
     }
 
@@ -10375,6 +10655,8 @@ mod tests {
             "goals_met": true,
             "aboard": true,
             "failed": null,
+            "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": "", "destroyed": 0, "boarded": 0, "disabled": 0, "chased_off": 0},
+            "aux": {"countdown": 0, "arrived": 0, "left": 0},
         }]);
         let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
         let mut draws = placed(750, 750, 0).to_vec();
@@ -10433,6 +10715,37 @@ mod tests {
             smuggling_message("Viper", "Kestrel", 12_300),
             "Viper:  Kestrel, your attempt to smuggle illegal cargo through this system has \
              been detected. You have been fined 12,300 credits."
+        );
+    }
+
+    /// The found mission's drawn ship name names the scanner when it has
+    /// one (`_ScanPlayer` @0x7e7ce); otherwise its ship class does.
+    #[test]
+    fn the_smuggling_notice_names_the_scanner_by_the_found_missions_ship_name() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        let ship = session.pilot().ship_name().unwrap_or_default();
+        let text = |ship_name: Option<&str>| {
+            sim_message_text(
+                &SimMessage::Smuggling {
+                    scanner: ShipId(128),
+                    ship_name: ship_name.map(str::to_owned),
+                    fine: 500,
+                },
+                session,
+            )
+        };
+        assert_eq!(
+            text(Some("Rover")),
+            Some(smuggling_message("Rover", ship, 500))
+        );
+        assert_eq!(
+            text(None),
+            Some(smuggling_message(
+                session.ship_name(ShipId(128)).unwrap_or_default(),
+                ship,
+                500
+            ))
         );
     }
 
@@ -10712,6 +11025,173 @@ mod tests {
             .collect();
         assert!(texts.iter().any(|text| text == "Ace"), "{texts:?}");
         assert!(texts.iter().any(|text| text == "Top Gun"), "{texts:?}");
+    }
+
+    /// A flight from Sol after accepting mission 140, whose one special
+    /// ship, a rescue held disabled, is set up on Earth under the player
+    /// at take-off, and which carries 10 tons of food (`STR#` 4001 #1),
+    /// picked up by boarding it; the player's ship holds 10 tons. With
+    /// `full`, mission 141, of 10 tons loaded at its accept, fills them
+    /// first. The ship is targeted.
+    fn rescuing(full: bool) -> View {
+        let mut hunted = trafficked(&[130], 0, 129, 3);
+        hunted.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        hunted.sol_navs = vec![Some((0, 0))];
+        hunted.fields.holds = 10;
+        for record in &mut hunted.ships {
+            record.crew = 3;
+        }
+        hunted.strings = vec![(4001, vec!["Food".to_owned()])];
+        let cargo = |id, pickup_mode| MissionRecord {
+            cargo_type: 0,
+            cargo_qty: 10,
+            pickup_mode,
+            ..errand(id)
+        };
+        hunted.missions = vec![
+            MissionRecord {
+                ships: MissionShip {
+                    count: 1,
+                    goal: 5,
+                    syst: -1,
+                    dude: Some(nova_sim::DudeId(128)),
+                    start: -1,
+                    ..MissionShip::NONE
+                },
+                ..cargo(140, 2)
+            },
+            cargo(141, 0),
+        ];
+        hunted.mission_texts = vec![
+            MissionTexts::named(MissionId(140), "Rescue"),
+            MissionTexts::named(MissionId(141), "Haul"),
+        ];
+        let strings = FakeCatalog {
+            strings: hunted.strings.clone(),
+            ..catalog()
+        };
+        let mut view = FlightView::new(hunted)
+            .with_strings(Rc::new(strings))
+            .with_behaviour(Rc::new(Still));
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(view.accept_mission(MissionId(140)), Ok(0));
+        if full {
+            assert_eq!(view.accept_mission(MissionId(141)), Ok(1));
+        }
+        view.settle_script();
+        assert!(view.take_off().is_some());
+        view.settle_script();
+        view.tick(TICK);
+        let _ = view.take_mission_texts();
+        tap(&mut view, TARGET_KEY);
+        let session = view.session().expect("flying");
+        assert!(session.target().is_some_and(|npc| npc.mission.is_some()));
+        view
+    }
+
+    #[test]
+    fn b_on_a_pickup_ship_says_the_cargo_retrieved_for_250_frames() {
+        let mut view = rescuing(false);
+        tap(&mut view, BOARD_KEY);
+        let said = "You retrieved  the Food from this ship.";
+        assert_eq!(view.message(), Some(said));
+        assert_eq!(view.take_boarding(), None, "no plunder");
+        assert_eq!(view.take_mission_texts(), [], "no dialog");
+        let at = view.elapsed;
+        while view.elapsed + TICK < at + RETRIEVED_SHOWN_FOR {
+            view.tick(TICK);
+        }
+        assert_eq!(view.message(), Some(said));
+        while view.elapsed < at + RETRIEVED_SHOWN_FOR {
+            view.tick(TICK);
+        }
+        assert_eq!(view.message(), None);
+    }
+
+    /// The refused pickup's dialog (`_DoMissionCargoPickup` @0x982ff) is
+    /// queued as the B press returns, so the router shows it over flight
+    /// as it settles that input, and the comm line says #130.
+    #[test]
+    fn b_on_a_pickup_ship_without_room_shows_the_dialog_at_once_and_says_cant_board() {
+        let mut view = rescuing(true);
+        tap(&mut view, BOARD_KEY);
+        assert_eq!(view.message(), Some(CANT_BOARD));
+        let texts: Vec<(MissionTextKind, String)> = view
+            .take_mission_texts()
+            .into_iter()
+            .map(|text| (text.kind, text.text))
+            .collect();
+        assert_eq!(
+            texts,
+            [(
+                MissionTextKind::NoRoom,
+                nova_sim::mission::cargo::NO_SPACE_TO_LOAD.to_owned()
+            )]
+        );
+        let session = view.session().expect("flying");
+        assert!(!session.npcs()[0].boarded);
+    }
+
+    #[test]
+    fn a_mission_ship_targeted_shows_its_missions_name_and_subtitle_and_no_tag() {
+        let mut hunted = trafficked(&[130], 0, 129, 3);
+        hunted.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        hunted.missions = vec![MissionRecord {
+            ships: MissionShip {
+                count: 1,
+                syst: -1,
+                dude: Some(nova_sim::DudeId(128)),
+                start: 0,
+                name_id: Some(7000),
+                subtitle: Some(7001),
+                ..MissionShip::NONE
+            },
+            ..errand(140)
+        }];
+        hunted.mission_texts = vec![MissionTexts::named(MissionId(140), "Hunt")];
+        let strings = FakeCatalog {
+            strings: vec![
+                (7000, vec!["Rover".to_owned()]),
+                (7001, vec!["Bounty Hunter".to_owned()]),
+            ],
+            ..catalog()
+        };
+        let mut view = FlightView::new(hunted)
+            .with_strings(Rc::new(strings))
+            .with_behaviour(Rc::new(Still));
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(view.accept_mission(MissionId(140)), Ok(0));
+        view.settle_script();
+        assert!(view.take_off().is_some());
+        view.settle_script();
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        assert!(
+            session.npcs().iter().any(|npc| npc.mission.is_some()),
+            "the mission ship is in the system"
+        );
+        tap(&mut view, Key::Tab);
+        let texts: Vec<String> = drawn(&view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.iter().any(|text| text == "Rover"), "{texts:?}");
+        assert!(
+            texts.iter().any(|text| text == "Bounty Hunter"),
+            "{texts:?}"
+        );
+        assert!(!texts.iter().any(|text| text == "Ship 129"), "{texts:?}");
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.trim() == "Sp" || text.trim() == "Df"),
+            "no cheats-only tag: {texts:?}"
+        );
     }
 
     #[test]
@@ -11747,11 +12227,13 @@ mod tests {
             on_success: nova_sim::Script::default(),
             on_failure: nova_sim::Script::default(),
             on_abort: nova_sim::Script::default(),
+            on_ship_done: nova_sim::Script::default(),
             can_abort: 1,
             comp_govt: None,
             comp_reward: 0,
             date_post_inc: 0,
-            ships: nova_sim::catalog::MissionShip { count: 0, goal: -1 },
+            ships: nova_sim::catalog::MissionShip::NONE,
+            aux: nova_sim::catalog::AuxShip::NONE,
         }];
         catalog.mission_texts = vec![nova_sim::catalog::MissionTexts {
             offer: offer.map(str::to_owned),
@@ -12678,5 +13160,91 @@ mod tests {
             )
         );
         assert_eq!(view.jump_effect(), None);
+    }
+
+    /// The sprites of ship 129's sheet (`rlëD` 2001) drawn.
+    fn ship_129_sprites(list: &DrawList) -> usize {
+        sprites(list)
+            .iter()
+            .filter(|(image, _)| image.id == 2001)
+            .count()
+    }
+
+    /// The dim radar dots drawn: NPCs' blips.
+    fn dim_blips(list: &DrawList) -> usize {
+        list.iter()
+            .filter(|command| {
+                matches!(command, DrawCommand::Dot { color, .. } if *color == layout().dim_radar)
+            })
+            .count()
+    }
+
+    #[test]
+    fn an_attacker_following_through_a_wormhole_is_not_drawn_while_it_emerges_but_is_on_radar() {
+        let mut catalog = FakeCatalog {
+            sites: holed().sites,
+            gates: holed().gates,
+            ..trafficked(&[130, 131], 0, 129, 3)
+        };
+        catalog.dudes[0].1.govt = Some(GovtId(140));
+        catalog.govts = vec![nova_sim::GovtRecord {
+            id: GovtId(140),
+            flags: 0,
+            flags2: nova_sim::govt::ALWAYS_FOLLOWS_THROUGH_WORMHOLE,
+            crime_tol: 0,
+            initial_rec: 0,
+            penalties: nova_sim::Penalties::default(),
+            max_odds: 100,
+            classes: [-1; 4],
+            allies: [-1; 4],
+            enemies: [-1; 4],
+            comm_name: String::new(),
+            scan_mask: 0,
+            scan_fine: 0,
+        }];
+        // One ship of düde 128 (ship 129) attacking the player and
+        // following it (`ShipSyst` -6).
+        catalog.missions = vec![MissionRecord {
+            ships: MissionShip {
+                count: 1,
+                syst: -6,
+                dude: Some(nova_sim::DudeId(128)),
+                behav: 0,
+                start: 0,
+                ..MissionShip::NONE
+            },
+            ..errand(140)
+        }];
+        let mut view = FlightView::new(catalog).with_behaviour(Rc::new(Still));
+        run_set(&mut view, "S140");
+        settle_session(&mut view);
+        land_now(&mut view);
+        assert_eq!(system_of(&view), SystemId(131));
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        assert!(
+            session.npcs().iter().any(Npc::emerging),
+            "the attacker emerges after the player"
+        );
+        let list = drawn(&view);
+        assert_eq!(
+            sprites(&list),
+            [
+                (ImageKey::sprite(1140, 0), at(812.0, 344.0)),
+                (ImageKey::sprite(2000, 0), VIEW_CENTER),
+            ],
+            "Proxima and the player, not the ship emerging"
+        );
+        assert_eq!(dim_blips(&list), 1, "on radar while it emerges");
+        while view
+            .session()
+            .expect("flying")
+            .npcs()
+            .iter()
+            .any(Npc::emerging)
+        {
+            view.tick(TICK);
+        }
+        assert_eq!(ship_129_sprites(&drawn(&view)), 1, "drawn once out");
     }
 }

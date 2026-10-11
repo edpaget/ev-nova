@@ -16,8 +16,9 @@
 //!   ([`Session::mission_info`], `_DoMissionInfoDialog` @0x9e19b);
 //! - the queue of mission texts to show ([`Session::take_mission_texts`]):
 //!   a mission's `BriefText`, `CompText`, `FailText` and `RefuseText`,
-//!   queued at the lifecycle's moments (see the `missions` module), and
-//!   an accept refused for want of room for its cargo.
+//!   queued at the lifecycle's moments (see the `missions` module), its
+//!   `ShipDoneText` as its ship goals are met (see the `mission_ships`
+//!   module), and an accept refused for want of room for its cargo.
 //!
 //! None of it is saved. The next outside offer the original drops after
 //! an accept is rdm:phase/missions/phase-15-accept-drops-next-offer.
@@ -90,6 +91,8 @@ pub enum MissionTextKind {
     LoadCargo,
     /// Its `DumpCargoText`, as its cargo is unloaded.
     DumpCargo,
+    /// Its `ShipDoneText`, as its ship goals are met.
+    ShipDone,
 }
 
 impl MissionTextKind {
@@ -102,6 +105,7 @@ impl MissionTextKind {
             Self::Refuse => texts.refuse.as_deref(),
             Self::LoadCargo => texts.load_cargo.as_deref(),
             Self::DumpCargo => texts.dump_cargo.as_deref(),
+            Self::ShipDone => texts.ship_done.as_deref(),
             Self::NoRoom => None,
         }
     }
@@ -608,6 +612,20 @@ mod tests {
             travel_stel: 129,
             ..mission(id)
         }
+    }
+
+    #[test]
+    fn ship_done_picks_the_ship_done_text() {
+        let texts = MissionTexts {
+            ship_done: Some("Done.".to_owned()),
+            comp: Some("Comp.".to_owned()),
+            ..MissionTexts::named(MissionId(130), "Run")
+        };
+        assert_eq!(MissionTextKind::ShipDone.of(&texts), Some("Done."));
+        assert_eq!(
+            MissionTextKind::ShipDone.of(&MissionTexts::named(MissionId(130), "Run")),
+            None
+        );
     }
 
     fn text(kind: MissionTextKind, mission: i16, text: &str) -> MissionText {

@@ -60,7 +60,7 @@ pub use crate::ai::Help;
 pub use deal::{Conversation, Haggle, Mood, Settled};
 pub use like::{Attitude, attitude, likes_player};
 pub use nova::{BegForMercy, Greetings, JoinFleet, Release, RequestAssistance};
-pub use reply::Reply;
+pub use reply::{MissionHail, Reply};
 
 /// `Flags`: its ships answer no hail.
 pub const MUTE: u16 = 0x0400;
@@ -167,6 +167,10 @@ pub struct Hail<'a> {
     /// `LinkMission` is available from a ship, and the fleet has room. The
     /// session sets it; none otherwise.
     pub joins: bool,
+    /// The mission of the ship hailed, when it is a mission ship: its
+    /// slot's `ShipGoal` and its mark's `ShipBehav`. The session sets it;
+    /// none otherwise.
+    pub mission: Option<MissionHail>,
 }
 
 impl Hail<'_> {
@@ -174,6 +178,15 @@ impl Hail<'_> {
     #[must_use]
     pub fn escort(&self) -> bool {
         self.npc.escort.is_some()
+    }
+
+    /// Whether the ship hailed is a mission escort
+    /// ([`Npc::mission_escort`]): not the player's hired escort, but, as
+    /// the original's AI type above 4, "just an escort" to Request
+    /// Assistance.
+    #[must_use]
+    pub fn mission_escort(&self) -> bool {
+        self.npc.mission_escort()
     }
 
     /// Whether the ship hailed is a fighter out of a bay (see
@@ -186,11 +199,12 @@ impl Hail<'_> {
 
 impl<'a> Hail<'a> {
     /// The hail of `npc` among `around`, of `dispositions`, in
-    /// conversation `talk`, the player needing `need`. It is busy while
-    /// it attacks, snipes at, flees from or assists a ship, or an NPC
-    /// attacks or snipes at it (`_AIIsShipBusy` @0x82fac,
-    /// `_IsShipThreatened` @0x82068); the player is threatened while any
-    /// NPC threatens it.
+    /// conversation `talk`, the player needing `need`, of `mission` when
+    /// it is a mission ship ([`Hail::mission`]). It is busy while
+    /// it attacks, snipes at, flees from or assists a ship, keeps
+    /// formation (goals 10 and 12), or an NPC attacks or snipes at it
+    /// (`_AIIsShipBusy` @0x82fac, `_IsShipThreatened` @0x82068); the
+    /// player is threatened while any NPC threatens it.
     #[must_use]
     pub fn new(
         npc: &'a Npc,
@@ -198,6 +212,7 @@ impl<'a> Hail<'a> {
         dispositions: Dispositions,
         talk: &Conversation,
         need: Option<Help>,
+        mission: Option<MissionHail>,
     ) -> Self {
         let me = ShipRef::Npc(npc.id);
         let assisting_player = matches!(npc.goal, Goal::Assist(_));
@@ -207,17 +222,21 @@ impl<'a> Hail<'a> {
             .any(|other| other.id != npc.id && other.goal.attacking() == Some(me));
         Self {
             npc,
-            attitude: attitude(npc, around),
+            attitude: attitude(npc, around, mission),
             variant: talk.variant,
             advice: talk.advice,
             mood: talk.mood,
             dispositions,
-            busy: npc.goal.fights() || assisting_player || attacked,
+            busy: npc.goal.fights()
+                || assisting_player
+                || matches!(npc.goal, Goal::Formation { .. })
+                || attacked,
             assisting_player,
             player_threatened: around.npcs.iter().any(Npc::threatens_player),
             need,
             quote: None,
             joins: false,
+            mission,
         }
     }
 }
@@ -471,6 +490,7 @@ pub(crate) mod fixture {
             need: None,
             quote: None,
             joins: false,
+            mission: None,
         }
     }
 }
@@ -621,6 +641,7 @@ mod tests {
             Dispositions::default(),
             talk,
             Some(Help::Refuel),
+            None,
         )
     }
 
@@ -658,6 +679,10 @@ mod tests {
             Goal::Snipe(ShipRef::Npc(NpcId(5))),
             Goal::Flee(ShipRef::Npc(NpcId(5))),
             Goal::Assist(Help::Repair),
+            Goal::Formation { guard: None },
+            Goal::Formation {
+                guard: Some(ShipRef::Npc(NpcId(5))),
+            },
         ] {
             let npcs = [flying(1, goal)];
             assert!(hailing(&npcs, 0, &talk()).busy, "{goal:?}");
@@ -766,9 +791,11 @@ mod tests {
         assert_eq!(labels(&options, &untalkative), ["Greetings"]);
         let mut escort = ship();
         escort.escort = Some(crate::escort::EscortDuty {
-            slot: 2,
-            ships: 2,
-            spacing: 30.0,
+            formation: crate::escort::FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
             order: None,
         });
         assert_eq!(

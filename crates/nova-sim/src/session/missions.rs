@@ -4,9 +4,10 @@
 //! missions' lifecycle.
 //!
 //! The roll is no loop of its own: [`Session::fly`] registers it as the
-//! missions' first `Landed` subscription, [`ROLL`], whose consumer effect
-//! rolls the offers at the stellar landed on (`_HandlePlayerDockRequest`
-//! @0x66d2b-0x66d77), before any mission slot's landing hooks (see the
+//! offers' one `Landed` subscription, [`ROLL`], `{Offers, 0, 0}`, whose
+//! consumer effect rolls the offers at the stellar landed on
+//! (`_HandlePlayerDockRequest` @0x66d2b-0x66d77), before the mission
+//! ships' goal checks and every mission slot's landing hooks (see the
 //! [`story`](crate::story) module's "Dispatch"). A pilot flown docked has
 //! `Landed` raised for its stellar, after its `Explored`, as a load
 //! forgets the stellar rolled at (@0x75ef5) and opens the spaceport, so
@@ -43,7 +44,11 @@
 //! match. [`REOFFER`], registered with [`ROLL`], re-offers after the last
 //! slot's hooks when a mission succeeded. [`Session::fly`] registers
 //! every active slot's hooks again, so a saved pilot's missions go on.
-//! Each end frees its slot and unregisters its hooks.
+//! Each slot also registers its special ships' hooks, `{MissionShips,
+//! slot, hook}`: the enter-system hook and the goal checks (see the
+//! `mission_ships` module); an accept in flight queues its slot's first
+//! goal check for the end of the settling. Each end frees its slot and
+//! unregisters its hooks.
 //!
 //! **Text.** A mission's texts are filled through the one substitution
 //! path ([`text_tags`](crate::text_tags)): [`Session::offer_text`] for an
@@ -68,12 +73,13 @@
 use super::Session;
 use super::mission_screens::MissionTextKind;
 use crate::catalog::{
-    GovtId, LandingSite, MissionId, MissionRecord, MissionShip, StellarId, SystemId,
+    AuxShip, GovtId, LandingSite, MissionId, MissionRecord, MissionShip, StellarId, SystemId,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::control::{Script, Test};
 use crate::message::SimMessage;
 use crate::mission::active::{AUTO_ABORT_FUEL, AUTO_ABORT_FUEL_TAKEN, AUTO_ABORT_PAYS};
+use crate::mission::aux::AuxShips;
 use crate::mission::screens::HIDDEN;
 use crate::mission::{
     self, AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
@@ -88,11 +94,12 @@ use crate::story::{
 };
 use crate::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames};
 
-/// The offer roll's subscription: the missions' first, before every
-/// mission slot's (slots 0-15) landing hooks.
+/// The offer roll's subscription: the offers', which run first on a
+/// landing, before the mission ships' goal checks and every mission
+/// slot's (slots 0-15) landing hooks.
 pub const ROLL: SubscriptionId = SubscriptionId {
-    consumer: Consumer::Missions,
-    record: -1,
+    consumer: Consumer::Offers,
+    record: 0,
     hook: 0,
 };
 
@@ -189,11 +196,13 @@ fn blank(id: MissionId) -> MissionRecord {
         on_success: Script::default(),
         on_failure: Script::default(),
         on_abort: Script::default(),
+        on_ship_done: Script::default(),
         can_abort: 1,
         comp_govt: None,
         comp_reward: 0,
         date_post_inc: 0,
-        ships: MissionShip { count: 0, goal: 0 },
+        ships: MissionShip::NONE,
+        aux: AuxShip::NONE,
     }
 }
 
@@ -271,6 +280,7 @@ impl Session {
             let registered = self.register_story(subscription);
             debug_assert!(registered.is_ok(), "a slot filled registers once");
         }
+        self.register_ship_hooks(slot);
     }
 
     /// Frees `slot` and unregisters its hooks, clearing their once-fired
@@ -280,6 +290,9 @@ impl Session {
         let freed = self.pilot.missions.free(slot)?;
         for hook in HOOKS {
             self.unregister_story(slot_hook(slot, hook));
+        }
+        for id in super::mission_ships::ship_hooks(slot) {
+            self.unregister_story(id);
         }
         self.save_due = true;
         Some(freed)
@@ -472,9 +485,20 @@ impl Session {
         offer: &Offer,
         chance: &mut dyn Chance,
     ) -> Option<u8> {
-        let active = ActiveMission::accepted(record, offer, self.pilot.date);
+        let mut active = ActiveMission::accepted(record, offer, self.pilot.date);
+        // A full table draws nothing.
+        self.pilot.missions.lowest_free()?;
+        // The aux countdown is drawn first, for every mission
+        // (@0xa0e5f, before the appear timer @0xa0ed4).
+        active.aux = AuxShips::at_accept(&record.aux, chance);
+        active.ships = self.ships_at_accept(record, &active, chance);
         let slot = self.pilot.missions.fill(active)?;
         self.register_slot(slot);
+        if self.landed.is_none() {
+            // In flight the original's per-frame poll checks the goals
+            // next (see the `mission_ships` module).
+            self.goal_checks_due.push(slot);
+        }
         self.save_due = true;
         self.run_mission_script(slot, &record.on_accept, chance);
         self.pilot.cash = accept_charge(offer.pay, self.pilot.cash);
@@ -512,7 +536,12 @@ impl Session {
     /// (`_currentMissionIndexForSetParser`, 0x31d6c2), so a `Q` fills its
     /// mission tags from it, then none, not the one before (@0x99a79), so
     /// after a nested mission's script the outer script has none.
-    fn run_mission_script(&mut self, slot: u8, script: &Script, chance: &mut dyn Chance) {
+    pub(super) fn run_mission_script(
+        &mut self,
+        slot: u8,
+        script: &Script,
+        chance: &mut dyn Chance,
+    ) {
         self.script_slot = Some(slot);
         self.run_script(script, chance);
         self.script_slot = None;
@@ -543,7 +572,9 @@ impl Session {
     }
 
     /// Ends the mission `record` in `slot` as `_AbortMission` (@0x99a92)
-    /// does, drawing on `chance`: its ships leave (mission-ships phase 2);
+    /// does, drawing on `chance`: its special ships lose their mark and
+    /// fly on as ordinary traffic, or, docked, are taken out of the
+    /// system (@0x99ab5-0x99b24; see the `mission_ships` module);
     /// its `OnAbort` runs when `on_abort` says; the slot is freed and its
     /// hooks unregistered; and the offers' stellar is forgotten. Nothing
     /// when the slot holds another mission, or is ending already, so an
@@ -558,6 +589,7 @@ impl Session {
         if !self.pilot.missions.holds(slot, record.id) || !self.ending.insert(slot) {
             return;
         }
+        self.release_mission_ships(slot);
         if on_abort {
             self.run_mission_script(slot, &record.on_abort, chance);
         }
@@ -580,7 +612,7 @@ impl Session {
     /// the daily step; with `Flags` 0x0008, a jump's fuel taken; with
     /// `Flags2` 0x0002, its pay; then the slot freed and the offers'
     /// stellar forgotten, with no second `OnAbort`.
-    fn auto_abort(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
+    pub(super) fn auto_abort(&mut self, slot: u8, record: &MissionRecord, chance: &mut dyn Chance) {
         let Some(pay) = self.pilot.missions.get(slot).map(|active| active.pay) else {
             return;
         };
@@ -703,7 +735,7 @@ impl Session {
         };
         let record = self.lifecycle_record(active.mission);
         let repeats = self.rules.source_for(RuleKey::RepeatMissionFailure) == RuleSource::Engine;
-        if failed == FailedBy::Operator || repeats {
+        if failed == FailedBy::Marked || repeats {
             self.run_mission_script(slot, &record.on_failure, chance);
         }
         let changes = failure_records(&record, self.govt_targets(&record), |govt| {
@@ -852,7 +884,7 @@ impl Session {
     pub(super) fn script_fail(&mut self, mission: MissionId) {
         for slot in self.pilot.missions.holding(mission) {
             if let Some(active) = self.slot_holding(slot, mission) {
-                active.failed.get_or_insert(FailedBy::Operator);
+                active.failed.get_or_insert(FailedBy::Marked);
             }
         }
     }
@@ -1485,8 +1517,8 @@ mod tests {
             record,
             hook: 0,
         };
-        assert!(ROLL < slot(0));
-        assert!(ROLL > slot(-2));
+        assert!(ROLL < slot(i16::MIN));
+        assert!(ROLL < crate::session::mission_ships::ship_hook(0, 0));
         assert!(
             session.unregister_story(ROLL),
             "registered as the session starts"
@@ -2013,9 +2045,15 @@ mod tests {
                 days_left: Some(3),
                 deadline: Some(after(today, 3)),
                 reached: false,
-                goals_met: true,
+                goals_met: false,
                 aboard: false,
                 failed: None,
+                ships: crate::mission::SpecialShips::default(),
+                // NeverFires draws the countdown's highest, 69.
+                aux: AuxShips {
+                    countdown: 139,
+                    ..AuxShips::default()
+                },
             })
         );
         assert_eq!(
@@ -2779,7 +2817,11 @@ mod tests {
             },
             MissionRecord {
                 id: MissionId(141),
-                ships: crate::catalog::MissionShip { count: 1, goal: -1 },
+                ships: crate::catalog::MissionShip {
+                    count: 1,
+                    goal: -1,
+                    ..crate::catalog::MissionShip::NONE
+                },
                 ..auto_aborting()
             },
         ]);
@@ -2913,7 +2955,11 @@ mod tests {
     #[test]
     fn a_mission_whose_ship_goal_is_not_met_stays_active_at_its_return() {
         let catalog = lifecycle(vec![MissionRecord {
-            ships: crate::catalog::MissionShip { count: 1, goal: 0 },
+            ships: crate::catalog::MissionShip {
+                count: 1,
+                goal: 0,
+                ..crate::catalog::MissionShip::NONE
+            },
             ..back_to_128(140)
         }]);
         let (mut session, _) = watched(&catalog, Rulebook::default());
@@ -3144,7 +3190,7 @@ mod tests {
             run(&mut session, "F140");
             assert_eq!(
                 session.pilot().missions().get(0).and_then(|m| m.failed),
-                Some(FailedBy::Operator)
+                Some(FailedBy::Marked)
             );
             land_on(&mut session, &catalog, 128);
             assert_eq!(marks.taken(), [200], "{reading:?}");
@@ -3337,7 +3383,7 @@ mod tests {
         assert!(session.take_save_due());
         assert_eq!(
             session.pilot().missions().get(0).and_then(|m| m.failed),
-            Some(FailedBy::Operator)
+            Some(FailedBy::Marked)
         );
         land_on(&mut session, &catalog, 128);
         assert_eq!(marks.taken(), [200]);

@@ -6,11 +6,13 @@ use std::collections::BTreeMap;
 use crate::ai::Goal;
 use crate::bay::Carrier;
 use crate::catalog::{GovtId, PersonId, ShipId, WeaponId};
+use crate::cloak::{Cloak, CloakGear};
 use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
-use crate::escort::{EscortClass, EscortDuty};
+use crate::escort::{EscortClass, EscortDuty, FormationSlot};
 use crate::flight::ShipState;
+use crate::mission::ships::ShipBehav;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
 
@@ -70,7 +72,11 @@ pub enum Mode {
         ticks_left: u32,
     },
     /// Waiting at the centre of the gate it comes out of, for this many
-    /// more ticks: hidden, still, seen by no ship, and no decisions.
+    /// more ticks: hidden, still, seen by no ship, and no decisions. An
+    /// arrival out of a gate (see [`emerge`](crate::traffic::emerge)) and
+    /// a mission ship following the player through one
+    /// (`_AIMakeShipEmergeFromHyperGate`, goal 21; see the session's
+    /// `gate_follow` module) both wait so, untargetable and not drawn.
     Emerging {
         /// The ticks of the wait left.
         ticks_left: u32,
@@ -185,6 +191,35 @@ pub struct Npc {
     pub carrier: Option<Carrier>,
     /// The person flying it, if any.
     pub person: Option<NpcPerson>,
+    /// The mission whose special ship it is, while it is one (the
+    /// original's ship +0xc8d2): none for any other ship.
+    pub mission: Option<MissionMark>,
+    /// The slot of the mission whose auxiliary ship it is (the original's
+    /// ship +0x8a): ordinary traffic, given back to its slot as the
+    /// system's ships are dropped (see the [`mission::aux`](crate::mission::aux)
+    /// module); none for any other ship.
+    pub aux: Option<u8>,
+    /// Its cloak: how far it has faded, and which way (see
+    /// [`cloak`](crate::cloak)). A mission's special ship set up cloaked
+    /// (`ShipStart` 2) starts fading in.
+    pub cloak: Cloak,
+    /// What its ship type gives its cloak.
+    pub cloak_gear: CloakGear,
+}
+
+/// What marks an NPC as an active mission's special ship (see the
+/// [`traffic::spawn`](crate::traffic::spawn) module's "Mission ships").
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MissionMark {
+    /// The slot of the mission.
+    pub slot: u8,
+    /// The mission's `ShipBehav`.
+    pub behav: ShipBehav,
+    /// Its place in the player's formation once it has joined it as a
+    /// mission escort (the original's AI type 6 led by the player): none
+    /// before (see the session's `mission_ships` module). It is never an
+    /// [`EscortDuty`], so every hired-escort path leaves it out.
+    pub formation: Option<FormationSlot>,
 }
 
 impl Npc {
@@ -192,23 +227,48 @@ impl Npc {
     /// fighter the player launched. In the original its parent (+0x9a)
     /// is the player (0), and `_EnterMoreShips` (@0x43b14) leaves it out
     /// of the count it holds to `AvgShips`. An NPC carrier's fighters and
-    /// orphaned fighters are not the player's.
+    /// orphaned fighters are not the player's, and neither is a mission
+    /// escort ([`Npc::mission_escort`]), which carries no
+    /// [`EscortDuty`].
     #[must_use]
     pub fn is_players(&self) -> bool {
         self.escort.is_some()
     }
 
-    /// Its fleet: the player, for the player's escort; otherwise the lead
-    /// it escorts, or itself. Ships of one fleet never hit each other
-    /// (`_ShipsShareParent` @0x7926), and count each other's missiles
-    /// friendly.
+    /// Its fleet: the player, for the player's escort, hired or a mission
+    /// escort; otherwise the lead it escorts, or itself. Ships of one fleet
+    /// never hit each other (`_ShipsShareParent` @0x7926, which follows the
+    /// leader +0x9a), and count each other's missiles friendly.
     #[must_use]
     pub fn fleet(&self) -> ShipRef {
-        if self.is_players() {
+        if self.escorts_player() {
             ShipRef::Player
         } else {
             ShipRef::Npc(self.leader.unwrap_or(self.id))
         }
+    }
+
+    /// Whether it escorts the player: a hired escort (its fighters too) or
+    /// a mission escort.
+    #[must_use]
+    pub fn escorts_player(&self) -> bool {
+        self.escort.is_some() || self.mission_escort()
+    }
+
+    /// Whether it is a mission escort: a mission's special ship that has
+    /// joined the player's formation ([`MissionMark::formation`]).
+    #[must_use]
+    pub fn mission_escort(&self) -> bool {
+        self.mission.is_some_and(|mark| mark.formation.is_some())
+    }
+
+    /// Its place in the player's formation: a hired escort's
+    /// ([`EscortDuty`]) or a mission escort's; none for any other ship.
+    #[must_use]
+    pub fn formation(&self) -> Option<FormationSlot> {
+        self.escort
+            .map(|duty| duty.formation)
+            .or_else(|| self.mission.and_then(|mark| mark.formation))
     }
 
     /// Whether it threatens `ship` (`_ExtendedIsThreatToShip`): it is
@@ -218,6 +278,17 @@ impl Npc {
         self.condition == Condition::Intact
             && self.mode == Mode::Flying
             && self.goal.quarry() == Some(ship)
+    }
+
+    /// Whether it can cloak now (`_ShipCanCloak` @0x553c): its
+    /// [`CloakGear::can_cloak`], knowing whether it is disabled and how
+    /// much fuel it has left.
+    #[must_use]
+    pub fn can_cloak(&self) -> bool {
+        self.cloak_gear.can_cloak(
+            self.condition == Condition::Disabled,
+            self.reserves.fuel.now,
+        )
     }
 
     /// Whether it threatens the player (`_IsThreatToPlayer` @0x7f501):
@@ -270,14 +341,79 @@ mod tests {
         assert_eq!(escort.fleet(), ShipRef::Npc(NpcId(3)));
         let players = Npc {
             escort: Some(crate::escort::EscortDuty {
-                slot: 2,
-                ships: 2,
-                spacing: 30.0,
+                formation: FormationSlot {
+                    slot: 2,
+                    ships: 2,
+                    spacing: 30.0,
+                },
                 order: None,
             }),
             ..crate::testkit::npc(6, ShipStats::default())
         };
         assert_eq!(players.fleet(), ShipRef::Player);
+    }
+
+    /// A mark of slot 1 of `behav`, holding `formation`.
+    fn mark(behav: ShipBehav, formation: Option<FormationSlot>) -> MissionMark {
+        MissionMark {
+            slot: 1,
+            behav,
+            formation,
+        }
+    }
+
+    #[test]
+    fn a_mission_escort_is_of_the_players_fleet_and_a_marked_ship_not_yet_joined_its_own() {
+        let slot = FormationSlot {
+            slot: 3,
+            ships: 3,
+            spacing: 40.0,
+        };
+        let joined = Npc {
+            mission: Some(mark(ShipBehav::EscortPlayer, Some(slot))),
+            ..crate::testkit::npc(7, ShipStats::default())
+        };
+        assert!(joined.mission_escort());
+        assert_eq!(joined.fleet(), ShipRef::Player);
+        assert_eq!(joined.formation(), Some(slot));
+        assert_eq!(joined.escort, None);
+        let unjoined = Npc {
+            mission: Some(mark(ShipBehav::EscortPlayer, None)),
+            ..joined.clone()
+        };
+        assert!(!unjoined.mission_escort());
+        assert_eq!(unjoined.fleet(), ShipRef::Npc(NpcId(7)));
+        assert_eq!(unjoined.formation(), None);
+        let unmarked = Npc {
+            mission: None,
+            ..joined
+        };
+        assert!(!unmarked.mission_escort());
+        assert_eq!(unmarked.formation(), None);
+    }
+
+    #[test]
+    fn a_hired_escorts_formation_is_its_dutys() {
+        let hired = Npc {
+            escort: Some(EscortDuty {
+                formation: FormationSlot {
+                    slot: 2,
+                    ships: 4,
+                    spacing: 35.0,
+                },
+                order: None,
+            }),
+            ..crate::testkit::npc(6, ShipStats::default())
+        };
+        assert_eq!(
+            hired.formation(),
+            Some(FormationSlot {
+                slot: 2,
+                ships: 4,
+                spacing: 35.0
+            })
+        );
+        assert!(!hired.mission_escort());
     }
 
     #[test]
@@ -331,6 +467,34 @@ mod tests {
     }
 
     #[test]
+    fn only_a_ship_coming_out_of_a_gate_is_emerging() {
+        let mut npc = crate::testkit::npc(1, ShipStats::default());
+        npc.goal = Goal::Attack(ShipRef::Player);
+        assert!(!npc.emerging());
+        npc.mode = Mode::JumpingIn { ticks_left: 2 };
+        assert!(!npc.emerging());
+        npc.mode = Mode::Emerging { ticks_left: 2 };
+        assert!(npc.emerging());
+        assert!(!npc.threatens_player(), "while it emerges");
+    }
+
+    #[test]
+    fn an_npc_can_cloak_with_a_cloak_and_fuel_while_not_disabled() {
+        let mut npc = crate::testkit::npc(1, ShipStats::default());
+        npc.cloak_gear.device = true;
+        npc.reserves.fuel.now = 1.0;
+        assert!(npc.can_cloak());
+        npc.condition = Condition::Disabled;
+        assert!(!npc.can_cloak(), "disabled");
+        npc.condition = Condition::Intact;
+        npc.reserves.fuel.now = 0.0;
+        assert!(!npc.can_cloak(), "no fuel");
+        npc.reserves.fuel.now = 1.0;
+        npc.cloak_gear.device = false;
+        assert!(!npc.can_cloak(), "no cloak");
+    }
+
+    #[test]
     fn only_the_players_escorts_and_fighters_are_the_players() {
         let traffic = crate::testkit::npc(3, ShipStats::default());
         assert!(!traffic.is_players());
@@ -347,9 +511,11 @@ mod tests {
         assert!(!npc_fighter.is_players());
         let players = Npc {
             escort: Some(crate::escort::EscortDuty {
-                slot: 2,
-                ships: 2,
-                spacing: 30.0,
+                formation: crate::escort::FormationSlot {
+                    slot: 2,
+                    ships: 2,
+                    spacing: 30.0,
+                },
                 order: None,
             }),
             carrier: Some(crate::bay::Carrier {

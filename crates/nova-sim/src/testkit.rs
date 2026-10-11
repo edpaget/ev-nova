@@ -5,12 +5,12 @@ use std::cell::RefCell;
 
 use crate::ai::Goal;
 use crate::catalog::{
-    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
-    DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord,
-    JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts,
-    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog, PlaceNames, ShipId,
-    ShipRecord, StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark, SystemId,
-    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
+    DateAffixes, DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord,
+    HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip,
+    MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog,
+    PlaceNames, ShipId, ShipRecord, StarSystem, StartDate, StartError, StellarId, StellarLife,
+    StellarMark, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -198,11 +198,13 @@ pub(crate) fn mission(id: i16) -> MissionRecord {
         on_success: Script::default(),
         on_failure: Script::default(),
         on_abort: Script::default(),
+        on_ship_done: Script::default(),
         can_abort: 1,
         comp_govt: None,
         comp_reward: 0,
         date_post_inc: 0,
-        ships: MissionShip { count: 0, goal: -1 },
+        ships: MissionShip::NONE,
+        aux: AuxShip::NONE,
     }
 }
 
@@ -222,6 +224,8 @@ pub(crate) fn carrying(id: i16, tons: i64) -> crate::mission::ActiveMission {
         goals_met: true,
         aboard: true,
         failed: None,
+        ships: crate::mission::SpecialShips::default(),
+        aux: crate::mission::aux::AuxShips::default(),
     }
 }
 
@@ -363,6 +367,7 @@ pub(crate) fn hull(id: i16) -> HullRecord {
         mass: 0,
         weapons: Vec::new(),
         size: None,
+        height: None,
         strength: 0,
     }
 }
@@ -453,6 +458,10 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         assisting: 0,
         carrier: None,
         person: None,
+        mission: None,
+        aux: None,
+        cloak: crate::cloak::Cloak::default(),
+        cloak_gear: crate::cloak::CloakGear::default(),
     }
 }
 

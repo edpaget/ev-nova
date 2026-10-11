@@ -19,8 +19,9 @@
 //! - [`Goal::Assist`]: outside its reach of the player (see
 //!   [`assist`]) it follows the player as an escort its lead; within it,
 //!   it brakes.
-//! - [`Goal::Formation`]: the player's escort keeps its slot beside the
-//!   player ([`escort::slot_position`]). Within
+//! - [`Goal::Formation`]: the player's escort, hired or a mission escort,
+//!   keeps its slot beside the player ([`Npc::formation`],
+//!   [`slot_position`](crate::escort::slot_position)); with no slot it brakes. Within
 //!   [`KEEP_FORMATION`] of it on each axis, it takes the player's
 //!   velocity and heading and moves with it, nudged back towards the slot
 //!   on each axis more than [`FORMATION_SLACK`] off by at most
@@ -39,23 +40,29 @@
 //!   leaves the system ([`Outcome::Docked`]).
 //! - [`Goal::Idle`], or a goal it cannot fly (a stellar, lead, player or
 //!   carrier that is not there): it brakes to a stop.
-//! - A ship that is not [`Condition::Intact`] (disabled, breaking up or
-//!   destroyed) drifts: it flies on with no controls, and never lands or
-//!   jumps.
 //! - While it jumps in ([`Mode::JumpingIn`]) it glides towards the centre,
 //!   [`glide_speed`] a tick, with no steering, for
 //!   [`JUMP_IN_TICKS`](crate::traffic::spawn::JUMP_IN_TICKS); then it flies
-//!   on at its top speed.
+//!   on at its top speed. A disabled ship glides on too: `_AIDispatch`
+//!   cancels a disabled ship's jump out but lets its jump in run
+//!   (@0x8fccb-0x8fd08), so a rescue mission's ship held disabled as it
+//!   comes in ends its glide in the system.
 //! - While it waits at the gate it comes out of ([`Mode::Emerging`]) it
-//!   holds still at the gate's centre, its wait counting down whatever
-//!   its condition, as `_HandleShip` counts the timer down for every ship
-//!   (@0x3501f-0x35048). Then ([`Mode::LeavingGate`]) it bursts out along
-//!   its heading at [`exit_speed`], with no steering, and flies on at that
-//!   speed once the next tick's would be at or below its top speed (see
-//!   [`emerge`](crate::traffic::emerge)). An escort's burst is not capped
-//!   at its lead's top speed, as the original's is: the autopilot sees no
-//!   lead while the escort has no goal yet. A ship not intact by then
-//!   drifts instead of bursting, flying from there on.
+//!   holds still where it was put, at rest, its wait counting down
+//!   whatever its condition, as `_HandleShip` counts the timer down for
+//!   every ship (@0x3501f-0x35048) and the original's goal 21 holds it
+//!   until its +0x4c runs out (`_HighLevelAIHandler` @0x8dd61-0x8dd93).
+//!   Then ([`Mode::LeavingGate`]) it bursts out along its heading at
+//!   [`exit_speed`], with no steering, and flies on at that speed once
+//!   the next tick's would be at or below its top speed (see
+//!   [`emerge`](crate::traffic::emerge)), then flies its goal. An
+//!   escort's burst is not capped at its lead's top speed, as the
+//!   original's is: the autopilot sees no lead while the escort has no
+//!   goal yet. A ship not intact by then drifts instead of bursting,
+//!   flying from there on.
+//! - Otherwise a ship that is not [`Condition::Intact`] (disabled,
+//!   breaking up or destroyed) drifts: it flies on with no controls, and
+//!   never lands or jumps.
 
 use crate::ai::{Goal, fire};
 use crate::bay::DOCK_TURN_SLACK;
@@ -63,7 +70,7 @@ use crate::catalog::{LandingSite, ShipId, StellarId};
 use crate::combat::ShipRef;
 use crate::combat::aim::bearing;
 use crate::combat::hull::Condition;
-use crate::escort::{self, APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
+use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
 use crate::flight::{self, AT_REST_SPEED, Controls, ShipState, Turn, heading_of, shortest_turn};
 use crate::geometry::Vec2;
 use crate::hail::assist;
@@ -175,9 +182,9 @@ pub fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> O
             }
             _ => brake(&state, &handling),
         },
-        Goal::Formation { .. } => match (other, npc.escort) {
-            (Some(leader), Some(duty)) => {
-                let slot = escort::slot_position(leader, duty.slot, duty.ships, duty.spacing);
+        Goal::Formation { .. } => match (other, npc.formation()) {
+            (Some(leader), Some(place)) => {
+                let slot = place.position(leader);
                 let off = slot - state.position;
                 let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
                 if within(KEEP_FORMATION) {
@@ -330,11 +337,14 @@ fn glide(npc: &mut Npc, ticks_left: u32) {
 }
 
 /// Flies `npc` one tick when it has no say in its flight: waiting at a
-/// gate, drifting while not intact, gliding in from hyperspace or
-/// bursting out of a gate (see the module docs). Whether it did.
+/// gate, drifting while not intact, gliding in from hyperspace (intact
+/// or disabled) or bursting out of a gate (see the module docs). Whether it did.
 fn unsteered(npc: &mut Npc) -> bool {
     match (npc.mode, npc.condition == Condition::Intact) {
         (Mode::Emerging { ticks_left }, _) => wait_at_gate(npc, ticks_left),
+        (Mode::JumpingIn { ticks_left }, false) if npc.condition == Condition::Disabled => {
+            glide(npc, ticks_left);
+        }
         (mode, false) => {
             if let Mode::LeavingGate { .. } = mode {
                 npc.mode = Mode::Flying;
@@ -520,7 +530,7 @@ fn match_velocity(state: &ShipState, handling: &Handling, desired: Vec2) -> Cont
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::escort::EscortDuty;
+    use crate::escort::{EscortDuty, FormationSlot};
     use crate::hail::{Help, assist};
     use crate::handling::ShipFields;
     use crate::stats::ShipStats;
@@ -571,9 +581,11 @@ mod tests {
     fn escort(fields: ShipFields, start: ShipState) -> Npc {
         Npc {
             escort: Some(EscortDuty {
-                slot: 2,
-                ships: 3,
-                spacing: 30.0,
+                formation: FormationSlot {
+                    slot: 2,
+                    ships: 3,
+                    spacing: 30.0,
+                },
                 order: None,
             }),
             ..npc(fields, Goal::Formation { guard: None }, start)
@@ -689,6 +701,37 @@ mod tests {
         dutiless.escort = None;
         fly(&mut dutiless, &[], Some(&leader));
         assert_ne!(dutiless.state.heading, 180.0, "{:?}", dutiless.state);
+        let mut unjoined = escort(AVERAGE, at(0.0, 0.0, 0.0, 2.0, 180.0));
+        unjoined.escort = None;
+        unjoined.mission = Some(mark(None));
+        fly(&mut unjoined, &[], Some(&leader));
+        assert_ne!(unjoined.state.heading, 180.0, "{:?}", unjoined.state);
+    }
+
+    /// A mark of slot 0's escorting mission, holding `formation`.
+    fn mark(formation: Option<FormationSlot>) -> crate::traffic::npc::MissionMark {
+        crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            formation,
+        }
+    }
+
+    #[test]
+    fn a_mission_escort_flies_its_formation_slot_with_no_escort_duty() {
+        let leader = at(400.0, -200.0, 1.0, -2.0, 30.0);
+        let slot = slot_of(&leader);
+        let mut ship = escort(FAST, at(slot.x, slot.y, 0.0, 0.0, 200.0));
+        ship.escort = None;
+        ship.mission = Some(mark(Some(FormationSlot {
+            slot: 2,
+            ships: 3,
+            spacing: 30.0,
+        })));
+        assert_eq!(fly(&mut ship, &[], Some(&leader)), Outcome::Flying);
+        assert_eq!(ship.state.velocity, leader.velocity);
+        assert_eq!(ship.state.position, slot + leader.velocity);
+        assert_eq!(ship.escort, None);
     }
 
     #[test]
@@ -789,8 +832,18 @@ mod tests {
             );
             let mut jumper = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
             jumper.condition = condition;
-            jumper.mode = Mode::JumpingIn { ticks_left: 3 };
             assert_eq!(fly(&mut jumper, &sites, None), Outcome::Flying);
+            assert_eq!(jumper.state, at(1.0, -2002.0, 1.0, -2.0, 90.0), "drifting");
+        }
+    }
+
+    #[test]
+    fn a_ship_breaking_up_or_destroyed_jumping_in_drifts_with_no_glide() {
+        for condition in [Condition::Dying { ticks_left: 4 }, Condition::Destroyed] {
+            let mut jumper = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
+            jumper.condition = condition;
+            jumper.mode = Mode::JumpingIn { ticks_left: 3 };
+            assert_eq!(fly(&mut jumper, &[], None), Outcome::Flying);
             assert_eq!(jumper.state, at(1.0, -2002.0, 1.0, -2.0, 90.0), "drifting");
             assert_eq!(jumper.mode, Mode::JumpingIn { ticks_left: 3 }, "no glide");
         }
@@ -889,6 +942,53 @@ mod tests {
         fly(&mut ship, &[], None);
         assert_eq!(ship.mode, Mode::Flying, "no burst");
         assert_eq!(ship.state, at(100.0, -200.0, 0.0, 0.0, 90.0), "drifting");
+    }
+
+    #[test]
+    fn a_ship_emerging_from_a_gate_holds_at_rest_for_its_ticks_then_flies_its_goal() {
+        let start = at(100.0, 200.0, 3.0, -4.0, 45.0);
+        let mut ship = npc(FAST, Goal::Attack(ShipRef::Player), start);
+        ship.mode = Mode::Emerging { ticks_left: 3 };
+        let player = at(600.0, 200.0, 0.0, 0.0, 0.0);
+        for left in [2, 1, 0] {
+            assert_eq!(fly(&mut ship, &[], Some(&player)), Outcome::Flying);
+            assert_eq!(ship.state, at(100.0, 200.0, 0.0, 0.0, 45.0), "{left}");
+            let mode = if left == 0 {
+                Mode::LeavingGate { tick: 0 }
+            } else {
+                Mode::Emerging { ticks_left: left }
+            };
+            assert_eq!(ship.mode, mode);
+        }
+        while ship.mode != Mode::Flying {
+            fly(&mut ship, &[], Some(&player));
+            assert_eq!(ship.state.heading, 45.0, "bursting out, unsteered");
+        }
+        fly(&mut ship, &[], Some(&player));
+        assert_ne!(ship.state.heading, 45.0, "turns on the player");
+        let mut wreck = npc(FAST, Goal::Idle, start);
+        wreck.condition = Condition::Disabled;
+        wreck.mode = Mode::Emerging { ticks_left: 2 };
+        fly(&mut wreck, &[], None);
+        assert_eq!(wreck.state, at(100.0, 200.0, 0.0, 0.0, 45.0), "held too");
+        assert_eq!(wreck.mode, Mode::Emerging { ticks_left: 1 });
+    }
+
+    #[test]
+    fn a_disabled_ship_jumping_in_glides_in_as_an_intact_one_does() {
+        let start = at(0.0, -2000.0, 0.0, 0.0, 180.0);
+        let mut intact = npc(FAST, Goal::JumpOut, start);
+        intact.mode = Mode::JumpingIn { ticks_left: 2 };
+        let mut disabled = intact.clone();
+        disabled.condition = Condition::Disabled;
+        for _ in 0..2 {
+            assert_eq!(fly(&mut disabled, &[], None), Outcome::Flying);
+            fly(&mut intact, &[], None);
+            assert_eq!(disabled.state, intact.state);
+            assert_eq!(disabled.mode, intact.mode);
+        }
+        assert_eq!(disabled.mode, Mode::Flying);
+        assert_eq!(disabled.condition, Condition::Disabled);
     }
 
     #[test]

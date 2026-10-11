@@ -30,8 +30,9 @@
 //! 5. arriving by hyperspace, its government is not derelict (`gövt`
 //!    `Flags` 0x0800): drifting derelicts never jump in;
 //! 6. no person of its name is in the system already, in any condition
-//!    (@0x40baa-0x40c48; the original skips mission ships, of which there
-//!    are none yet), the persons escorting the player counted;
+//!    (@0x40baa-0x40c48), the persons escorting the player counted; a
+//!    mission's special ship, which no person flies, never counts, whatever
+//!    its name;
 //! 7. it does not escort the player ([`PersonWorld::fleet`]): a person in
 //!    the fleet is never rolled nor slotted.
 //!
@@ -96,6 +97,7 @@ use crate::combat::hull::Condition;
 use crate::combat::weapon::{Ammo, WeaponSpec};
 use crate::control::{ControlBits, FreshPilot, Gate, NovaBits, PilotFacts, Test};
 use crate::govt::Governments;
+use crate::mission::ShipGoal;
 use crate::pilot::Escort;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -130,8 +132,9 @@ pub const NOT_TO_BRAVE: u16 = 0x2000;
 pub const NOT_TO_WARSHIP: u16 = 0x4000;
 /// `Flags2`: it starts with no fuel (@0x40f1f-0x40f55).
 pub const ZERO_FUEL: u16 = 0x0001;
-/// `Flags`: accepting its one-ship mission swaps its ship for the
-/// mission's ship (@0x62421).
+/// `Flags`: accepting its mission on its hail, with one of the mission's
+/// ships left, swaps its ship for the mission's ship, whatever the
+/// mission's `ShipGoal` (@0x62421-0x62440; [`swaps_for_mission_ship`]).
 pub const REPLACED_BY_MISSION_SHIP: u16 = 0x0040;
 /// `Flags`: its mission is offered when it is boarded, not hailed
 /// (@0x621c3).
@@ -144,24 +147,35 @@ pub const GONE_ON_ACCEPT: u16 = 0x0100;
 /// (`_AIMakeShipLeave` @0x6234d); the boarding does not read it. The same
 /// bit as [`QUOTE_UNLESS_LEAVING`].
 pub const LEAVES_ON_ACCEPT: u16 = 0x0800;
-/// `mïsn` `ShipGoal`: the special ship escorts the player (@0x624f6).
-pub const ESCORT_GOAL: i16 = 3;
+
+/// Whether a person of `Flags` `flags`, its mission just accepted on its
+/// hail, is swapped for the mission's ship, the mission's slot holding
+/// `ships_left` of its ships after `OnAccept`
+/// (`_HandlePlayerCommunication` @0x62421-0x62445): `Flags` has
+/// [`REPLACED_BY_MISSION_SHIP`], and exactly one ship is left. Neither
+/// `ShipGoal` nor `ShipCount` is asked.
+#[must_use]
+pub const fn swaps_for_mission_ship(flags: u16, ships_left: i16) -> bool {
+    flags & REPLACED_BY_MISSION_SHIP != 0 && ships_left == 1
+}
 
 /// Whether `record`'s person's record lets it join the player, under
-/// [`RuleKey::PersonJoin`]'s other reading: the engine's own gate for
-/// swapping a hailed person for its mission's escort ship
-/// (`_HandlePlayerCommunication` @0x621a9-0x62509). Its `Flags` has
+/// [`RuleKey::PersonJoin`]'s other reading, which reads the swap of a
+/// person of [`REPLACED_BY_MISSION_SHIP`] for its mission's escort ship
+/// (`_HandlePlayerCommunication` @0x621a9-0x62509) as an offer to join.
+/// This is that reading's gate, narrower than the swap's
+/// ([`swaps_for_mission_ship`]): its `Flags` has
 /// [`REPLACED_BY_MISSION_SHIP`] and not [`MISSION_ON_BOARD`], and its
-/// `LinkMission` has one special ship whose goal is [`ESCORT_GOAL`]. The
+/// `LinkMission` has one special ship whose goal is [`ShipGoal::Escort`]. The
 /// session asks too that the mission be available from a ship
 /// (@0x6220d).
 #[must_use]
 pub fn offers_to_join(record: &PersonRecord) -> bool {
     record.flags & REPLACED_BY_MISSION_SHIP != 0
         && record.flags & MISSION_ON_BOARD == 0
-        && record
-            .mission_ship
-            .is_some_and(|ship| ship.count == 1 && ship.goal == ESCORT_GOAL)
+        && record.mission_ship.is_some_and(|ship| {
+            ship.count == 1 && ShipGoal::from_code(ship.goal) == ShipGoal::Escort
+        })
 }
 
 /// `Rand(1022)` (0x3fe @0x40c8e): the person a roll lands on.
@@ -474,13 +488,8 @@ pub fn fit(
         reserves.fuel.now = 0.0;
     }
     let condition = if derelict {
-        let share = if kind.hull.tough {
-            TOUGH_DERELICT_ARMOR_SHARE
-        } else {
-            DERELICT_ARMOR_SHARE
-        };
         reserves.shield.now = 0.0;
-        reserves.armor.now = kind.stats.armor.mul_add(share, -DERELICT_ARMOR_LESS);
+        reserves.armor.now = derelict_armor(kind.stats.armor, kind.hull.tough);
         Condition::Disabled
     } else {
         Condition::Intact
@@ -492,6 +501,21 @@ pub fn fit(
         ..kind.clone()
     };
     (fitted, reserves, condition)
+}
+
+/// A derelict's armour, of a ship type holding `armor`, its hull `tough`
+/// or not: a third of it (a tenth for a tough hull), less one, just below
+/// where it is disabled (@0xdd568, @0xdd110, @0xdd0c0). The original reads
+/// the `shïp`'s own `Armor` (+0x60); `armor` here carries its default
+/// outfits' armour too.
+#[must_use]
+pub fn derelict_armor(armor: f32, tough: bool) -> f32 {
+    let share = if tough {
+        TOUGH_DERELICT_ARMOR_SHARE
+    } else {
+        DERELICT_ARMOR_SHARE
+    };
+    armor.mul_add(share, -DERELICT_ARMOR_LESS)
 }
 
 /// What a person roll gave (see the module docs).
@@ -1456,7 +1480,11 @@ mod tests {
     fn joining(flags: u16, ship: Option<(i16, i16)>) -> PersonRecord {
         PersonRecord {
             flags,
-            mission_ship: ship.map(|(count, goal)| crate::catalog::MissionShip { count, goal }),
+            mission_ship: ship.map(|(count, goal)| crate::catalog::MissionShip {
+                count,
+                goal,
+                ..crate::catalog::MissionShip::NONE
+            }),
             ..person(128, 136)
         }
     }
@@ -1469,9 +1497,32 @@ mod tests {
             "stock Terrapin"
         );
         assert_eq!(
-            (REPLACED_BY_MISSION_SHIP, MISSION_ON_BOARD, ESCORT_GOAL),
-            (0x0040, 0x0200, 3)
+            (REPLACED_BY_MISSION_SHIP, MISSION_ON_BOARD),
+            (0x0040, 0x0200)
         );
+    }
+
+    #[test]
+    fn a_person_of_0x0040_swaps_for_its_missions_one_ship_left_whatever_the_goal() {
+        assert!(swaps_for_mission_ship(0x0040, 1));
+        assert!(swaps_for_mission_ship(0x14ca, 1), "stock Terrapin");
+        assert!(
+            swaps_for_mission_ship(0x0409 | 0x0040, 1),
+            "a refuel trader"
+        );
+        assert!(
+            swaps_for_mission_ship(0x0240, 1),
+            "0x0200 is not the gate's"
+        );
+        for (flags, left) in [
+            (0x0000, 1),
+            (0x0bbf, 1),
+            (0x0040, 0),
+            (0x0040, 2),
+            (0x0040, -1),
+        ] {
+            assert!(!swaps_for_mission_ship(flags, left), "{flags:#x} {left}");
+        }
     }
 
     #[test]

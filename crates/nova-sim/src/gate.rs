@@ -54,15 +54,21 @@
 //! among several systems listing the same gate by visibility waits for the
 //! port to give every lister.
 //!
+//! A mission's special ships following the player (`ShipSyst` -6) come
+//! out of the exit gate after it, or are lost, as the `gövt` `Flags2`
+//! bits 0x0020-0x0080 and the odds say (the session's `gate_follow`
+//! module, [`RuleKey::GateFollow`](crate::RuleKey::GateFollow)).
+//!
 //! AI ships coming out of gates (`_AIMakeShipEmergeFromHyperGate`, the
 //! `gövt` `Flags2` 0x20-0x80) are modelled in the traffic
 //! ([`emerge`](crate::traffic::emerge)), on this module's
 //! [`exit_heading`].
 //!
 //! Not modelled: the `dësc` QuickTime movie a gate may play
-//! (`_PlayQTMovieFromDesc`), AI ships entering gates, the mission and
-//! ship-spawn hooks on the shared arrival path, the `spöb` `Fee`, and the
-//! failure sound for a wormhole with no exit.
+//! (`_PlayQTMovieFromDesc`), AI ships entering gates, the player's escorts
+//! coming out of the exit gate after it (@0x674ef-0x675c8), the ship-spawn
+//! hooks on the shared arrival path (`_SpawnBountyHunter`), the `spöb`
+//! `Fee`, and the failure sound for a wormhole with no exit.
 
 use crate::catalog::{GateSite, StellarId, SystemId};
 use crate::chance::Chance;

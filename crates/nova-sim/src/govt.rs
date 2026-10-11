@@ -55,6 +55,16 @@ pub const NEVER_ATTACKS_PLAYER: u16 = 0x0040;
 pub const INTERCEPTORS_RETREAT: u16 = 0x0100;
 /// `Flags`: derelict: no relations at all, and no crime against it.
 pub const DERELICT: u16 = 0x0800;
+/// `Flags2`: its mission ships that attack the player never follow the
+/// player through a hypergate (`_HandlePlayerDockRequest` @0x6721d; see
+/// [`mission::ships::through_gate`](crate::mission::ships::through_gate)).
+pub const NEVER_FOLLOWS_THROUGH_HYPERGATE: u16 = 0x0020;
+/// `Flags2`: its mission ships that attack the player always follow the
+/// player through a hypergate (@0x67221).
+pub const ALWAYS_FOLLOWS_THROUGH_HYPERGATE: u16 = 0x0040;
+/// `Flags2`: its mission ships that attack the player always follow the
+/// player through a wormhole (@0x6726b).
+pub const ALWAYS_FOLLOWS_THROUGH_WORMHOLE: u16 = 0x0080;
 /// `Flags2`: its ships never take a hypergate for a stellar to come out
 /// of (`_SelectRandomStellarDest` @0x80625, see
 /// [`emerge`](crate::traffic::emerge)).

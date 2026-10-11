@@ -29,13 +29,13 @@ use nova_data::{GameData, Record, stellar_spin_id};
 
 use crate::blink::Blink;
 use crate::catalog::{
-    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
-    DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite,
-    GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId,
-    MissionRecord, MissionShip, MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId,
-    PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, ShipId, ShipRecord, SoundId, StarSystem,
-    StartDate, StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
-    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
+    DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
+    FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar,
+    MissionId, MissionRecord, MissionShip, MissionTexts, OutfitId, OutfitRecord, Penalties,
+    PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, ShipId, ShipRecord, SoundId,
+    StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark, StockWeapon,
+    StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -452,6 +452,7 @@ impl PilotCatalog for GameData {
                     refuse: raw(record.refuse_text),
                     load_cargo: raw(record.load_carg_text),
                     dump_cargo: raw(record.dump_cargo_text),
+                    ship_done: raw(record.ship_done_text),
                     accept_button: record.accept_button.as_str().to_owned(),
                     refuse_button: record.refuse_button.as_str().to_owned(),
                 })
@@ -493,6 +494,7 @@ impl PilotCatalog for GameData {
                     on_success: self.set_expr(record.on_success.as_str()).into(),
                     on_failure: self.set_expr(record.on_failure.as_str()).into(),
                     on_abort: self.set_expr(record.on_abort.as_str()).into(),
+                    on_ship_done: self.set_expr(record.on_ship_done.as_str()).into(),
                     can_abort: record.can_abort,
                     comp_govt,
                     comp_reward: if comp_govt.is_some() {
@@ -501,9 +503,11 @@ impl PilotCatalog for GameData {
                         0
                     },
                     date_post_inc: record.date_post_inc,
-                    ships: MissionShip {
-                        count: record.ship_count,
-                        goal: record.ship_goal,
+                    ships: mission_ship(record),
+                    aux: AuxShip {
+                        count: record.aux_ship_count,
+                        dude: record.aux_ship_dude,
+                        syst: record.aux_ship_syst,
                     },
                 })
             })
@@ -651,13 +655,24 @@ impl TrafficCatalog for GameData {
                     mission_ship: record
                         .link_mission
                         .and_then(|mission| self.get::<Mission>(mission.0)?.ok())
-                        .map(|mission| MissionShip {
-                            count: mission.record.ship_count,
-                            goal: mission.record.ship_goal,
-                        }),
+                        .map(|mission| mission_ship(mission.record)),
                 })
             })
             .collect()
+    }
+}
+
+/// A `mïsn`'s special ships, raw.
+fn mission_ship(record: &Mission) -> MissionShip {
+    MissionShip {
+        count: record.ship_count,
+        goal: record.ship_goal,
+        syst: record.ship_syst,
+        dude: record.ship_dude,
+        behav: record.ship_behav,
+        start: record.ship_start,
+        name_id: record.ship_name_id.map(|id| id.0),
+        subtitle: record.ship_subtitle.map(|id| id.0),
     }
 }
 
@@ -740,9 +755,11 @@ impl CombatCatalog for GameData {
         self.records::<Ship>()
             .filter_map(|(id, ship)| {
                 let record = ship.ok()?.record;
-                let size = match self.get::<ShipAnim>(id) {
-                    Some(Ok(anim)) => Some(anim.record.base_x_size),
-                    _ => None,
+                let (size, height) = match self.get::<ShipAnim>(id) {
+                    Some(Ok(anim)) => {
+                        (Some(anim.record.base_x_size), Some(anim.record.base_y_size))
+                    }
+                    _ => (None, None),
                 };
                 Some(HullRecord {
                     id: ShipId(id),
@@ -753,6 +770,7 @@ impl CombatCatalog for GameData {
                     mass: record.mass,
                     weapons: stock_weapons(record),
                     size,
+                    height,
                     strength: record.strength,
                 })
             })
@@ -2767,23 +2785,24 @@ mod tests {
     }
 
     /// A `shän` whose `BaseXSize` is `size`.
-    fn anim(size: i16) -> Vec<u8> {
+    fn anim(width: i16, height: i16) -> Vec<u8> {
         let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-        put_i16s(&mut bytes, 0x06, &[size]);
+        put_i16s(&mut bytes, 0x06, &[width, height]);
         bytes
     }
 
     #[test]
     fn each_readable_shïp_is_a_hull_record_by_id_with_its_shäns_size() {
+        // Ship 128's sprite is 24 x 40.
         let data = store(&[
             (Ship::TYPE, 130, armed()),
             (Ship::TYPE, 128, armed()),
             (Ship::TYPE, 129, short(armed())),
             (Ship::TYPE, 131, armed()),
-            (ShipAnim::TYPE, 128, anim(24)),
-            (ShipAnim::TYPE, 131, short(anim(30))),
+            (ShipAnim::TYPE, 128, anim(24, 40)),
+            (ShipAnim::TYPE, 131, short(anim(30, 30))),
         ]);
-        let record = |id, size| HullRecord {
+        let record = |id, size, height| HullRecord {
             id: ShipId(id),
             flags: 0x0130,
             death_delay: 60,
@@ -2808,11 +2827,16 @@ mod tests {
                 },
             ],
             size,
+            height,
             strength: 325,
         };
         assert_eq!(
             data.hulls(),
-            [record(128, Some(24)), record(130, None), record(131, None)],
+            [
+                record(128, Some(24), Some(40)),
+                record(130, None, None),
+                record(131, None, None)
+            ],
             "by ID, the undecodable shïp left out; without a shän that can be read, no size"
         );
         assert_eq!(store(&[]).hulls(), []);
@@ -3253,8 +3277,8 @@ mod tests {
         ]);
         let persons = data.persons();
         assert_eq!(
-            persons[0].mission_ship,
-            Some(MissionShip { count: 1, goal: 3 })
+            persons[0].mission_ship.map(|ship| (ship.count, ship.goal)),
+            Some((1, 3))
         );
         assert_eq!(persons[1].mission_ship, None, "no LinkMission");
         assert_eq!(persons[2].mission_ship, None, "its mission missing");
@@ -3273,10 +3297,10 @@ mod tests {
         );
         bytes[0x18..0x1A].copy_from_slice(&0x8020_u16.to_be_bytes());
         bytes[0x1C..0x20].copy_from_slice(&(-50_100_i32).to_be_bytes());
-        put_i16s(&mut bytes, 0x20, &[2]);
-        put_i16s(&mut bytes, 0x26, &[1]);
-        put_i16s(&mut bytes, 0x2E, &[383, 7]);
+        put_i16s(&mut bytes, 0x20, &[2, -5, 150, 1, 2, 7000, -3]);
+        put_i16s(&mut bytes, 0x2E, &[383, 7, 7001]);
         put_i16s(&mut bytes, 0x40, &[3, 0]);
+        put_i16s(&mut bytes, 0x48, &[4, 151, -3]);
         put_i16s(&mut bytes, 0x50, &[0x2008, 0x0001]);
         put_i16s(&mut bytes, 0x5A, &[1129]);
         bytes[0x5C..0x5C + avail_bits.len()].copy_from_slice(avail_bits);
@@ -3286,6 +3310,7 @@ mod tests {
             (0x359, b"b12\0"),
             (0x458, b"b13\0"),
             (0x557, b"b14\0"),
+            (0x660, b"b15\0"),
         ] {
             bytes[offset..offset + script.len()].copy_from_slice(script);
         }
@@ -3420,11 +3445,26 @@ mod tests {
                 on_success: Script::parse("b12"),
                 on_failure: Script::parse("b13"),
                 on_abort: Script::parse("b14"),
+                on_ship_done: Script::parse("b15"),
                 can_abort: 0,
                 comp_govt: Some(GovtId(383)),
                 comp_reward: 7,
                 date_post_inc: 4,
-                ships: MissionShip { count: 2, goal: 1 },
+                ships: MissionShip {
+                    count: 2,
+                    goal: 1,
+                    syst: -5,
+                    dude: Some(DudeId(150)),
+                    behav: 2,
+                    start: -3,
+                    name_id: Some(7000),
+                    subtitle: Some(7001),
+                },
+                aux: AuxShip {
+                    count: 4,
+                    dude: Some(DudeId(151)),
+                    syst: -3,
+                },
             }
         );
         assert!(
@@ -3451,14 +3491,15 @@ mod tests {
     }
 
     /// A `mïsn` whose `BriefText`, `QuickBrief`, `LoadCargText`,
-    /// `DumpCargoText`, `CompText`, `FailText` and `RefuseText` are
-    /// `texts`, in that order, with these button labels.
-    fn texted(texts: [i16; 7], accept: &[u8], refuse: &[u8]) -> Vec<u8> {
+    /// `DumpCargoText`, `CompText`, `FailText`, `RefuseText` and
+    /// `ShipDoneText` are `texts`, in that order, with these button
+    /// labels.
+    fn texted(texts: [i16; 8], accept: &[u8], refuse: &[u8]) -> Vec<u8> {
         use nova_data::records::mission::Mission;
         let mut bytes = vec![0; Mission::SIZE.expect("fixed")];
         put_i16s(&mut bytes, 0x34, &texts[..6]);
-        put_i16s(&mut bytes, 0x44, &[-1]);
-        put_i16s(&mut bytes, 0x58, &texts[6..]);
+        put_i16s(&mut bytes, 0x44, &texts[7..]);
+        put_i16s(&mut bytes, 0x58, &texts[6..7]);
         bytes[0x75F..0x75F + accept.len()].copy_from_slice(accept);
         bytes[0x77F..0x77F + refuse.len()].copy_from_slice(refuse);
         bytes
@@ -3473,7 +3514,7 @@ mod tests {
                 130,
                 Some("Delivery to <DST>; Vellos1 "),
                 texted(
-                    [200, 201, 206, 207, 202, 203, 204],
+                    [200, 201, 206, 207, 202, 203, 204, 209],
                     b"I'm in\0",
                     b"No way\0",
                 ),
@@ -3482,19 +3523,19 @@ mod tests {
                 Mission::TYPE,
                 131,
                 Some("Plain run  "),
-                texted([-1; 7], b"\0", b"\0"),
+                texted([-1; 8], b"\0", b"\0"),
             ),
             (
                 Mission::TYPE,
                 132,
                 None,
-                texted([205, 205, 205, 208, 205, 205, 205], b" ok\0", b"\0"),
+                texted([205, 205, 205, 208, 205, 205, 205, 0], b" ok\0", b"\0"),
             ),
             (
                 Mission::TYPE,
                 133,
                 Some("Short"),
-                short(texted([-1; 7], b"\0", b"\0")),
+                short(texted([-1; 8], b"\0", b"\0")),
             ),
             (Desc::TYPE, 4002, None, desc("Offer <DST>.")),
             (Desc::TYPE, 200, None, desc("Brief.")),
@@ -3504,6 +3545,7 @@ mod tests {
             (Desc::TYPE, 204, None, desc("Refuse.")),
             (Desc::TYPE, 206, None, desc("Load <CQ>.")),
             (Desc::TYPE, 207, None, desc("Dump.")),
+            (Desc::TYPE, 209, None, desc("Done <SN>.")),
         ]);
         let texts = data.mission_texts();
         assert_eq!(
@@ -3520,6 +3562,7 @@ mod tests {
                     refuse: Some("Refuse.".to_owned()),
                     load_cargo: Some("Load <CQ>.".to_owned()),
                     dump_cargo: Some("Dump.".to_owned()),
+                    ship_done: Some("Done <SN>.".to_owned()),
                     accept_button: "I'm in".to_owned(),
                     refuse_button: "No way".to_owned(),
                 },
@@ -3529,7 +3572,7 @@ mod tests {
                     ..MissionTexts::named(MissionId(132), "")
                 },
             ],
-            "-1 and a missing dësc are none; the undecodable mïsn is skipped"
+            "-1 and a missing dësc (0 among them) are none; the undecodable mïsn is skipped"
         );
         assert_eq!(store(&[]).mission_texts(), []);
     }
@@ -3541,7 +3584,7 @@ mod tests {
             Mission::TYPE,
             128,
             Some("Run"),
-            texted([-1; 7], b"\0", b"\0"),
+            texted([-1; 8], b"\0", b"\0"),
         )]));
         let texts = vec![MissionTexts::named(MissionId(128), "Run")];
         assert_eq!(PilotCatalog::mission_texts(&data), texts, "Rc");

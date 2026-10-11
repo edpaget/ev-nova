@@ -901,9 +901,11 @@ mod tests {
         dying.condition = Condition::Dying { ticks_left: 3 };
         let mut arriving = ship(3, ENEMY, 150.0, 0.0);
         arriving.mode = Mode::JumpingIn { ticks_left: 3 };
-        let npcs = [me(), dying, arriving, ship(4, RIVAL, 900.0, 0.0)];
+        let mut emerging = ship(5, ENEMY, 120.0, 0.0);
+        emerging.mode = Mode::Emerging { ticks_left: 3 };
+        let npcs = [me(), dying, arriving, emerging, ship(4, RIVAL, 900.0, 0.0)];
         assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(4)));
-        assert_eq!(chosen(0, &npcs[..3], None, 0, NEAR), None);
+        assert_eq!(chosen(0, &npcs[..4], None, 0, NEAR), None);
     }
 
     #[test]

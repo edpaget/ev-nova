@@ -227,9 +227,11 @@ mod tests {
         Npc {
             ship: ShipId(id),
             escort: escort.then_some(EscortDuty {
-                slot: 2,
-                ships: 2,
-                spacing: 30.0,
+                formation: crate::escort::FormationSlot {
+                    slot: 2,
+                    ships: 2,
+                    spacing: 30.0,
+                },
                 order: None,
             }),
             ..npc(n, ShipStats::new(FAST, &[]))

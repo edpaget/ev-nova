@@ -32,8 +32,10 @@
 //! **Formation** ([`spacing`], [`slot_offset`], [`slot_position`];
 //! `_AICalcFormationPositions` @0x85040, `_AICalcShipFormPos` @0x84cb8):
 //! the player leads, in slot 1, and its escorts take slots 2, 3, … in
-//! fleet order, each a number of spacings behind and beside the player
-//! along its heading. The spacing is six tenths of the widest sprite,
+//! fleet order, then its mission escorts (a `ShipBehav` 1 mission's ships,
+//! which hold a [`FormationSlot`] of their own and no [`EscortDuty`]; see
+//! the session's `mission_escorts` module), each a number of spacings
+//! behind and beside the player along its heading. The spacing is six tenths of the widest sprite,
 //! held between 24 and 60 pixels. An escort within [`KEEP_FORMATION`] of
 //! its slot moves with the player, nudged back towards the slot
 //! (`_AIMaintainFormation` @0x84f04); farther off it flies there.
@@ -276,15 +278,33 @@ pub struct ClassRow {
 /// player; it is never saved.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EscortDuty {
-    /// Its slot in the formation ([`slot_offset`]): 2, 3, … by its place
-    /// in the fleet, the player being slot 1.
+    /// Its place in the formation: slot 2, 3, … by its place in the
+    /// fleet, the player being slot 1.
+    pub formation: FormationSlot,
+    /// Its standing order; none keeps formation.
+    pub order: Option<EscortOrder>,
+}
+
+/// A place in the player's formation, held by a hired escort (its
+/// [`EscortDuty`]) or a mission escort (its mission's mark): its slot,
+/// how many ships the formation holds, and its spacing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FormationSlot {
+    /// Its slot in the formation ([`slot_offset`]): 2, 3, …, the player
+    /// being slot 1.
     pub slot: u8,
     /// How many ships the formation holds, the player included.
     pub ships: u8,
     /// The formation's spacing, in pixels ([`spacing`]).
     pub spacing: f32,
-    /// Its standing order; none keeps formation.
-    pub order: Option<EscortOrder>,
+}
+
+impl FormationSlot {
+    /// Where it is behind a leader at `leader` ([`slot_position`]).
+    #[must_use]
+    pub fn position(&self, leader: &ShipState) -> Vec2 {
+        slot_position(leader, self.slot, self.ships, self.spacing)
+    }
 }
 
 /// How near its slot, in pixels on each axis, an escort keeps formation
@@ -386,10 +406,10 @@ pub const DEFEND_KEEP_SQ: f32 = 408_375.0;
 /// The ships among `npcs` that threaten the player, which `escort` may
 /// fight (`_AIFightThreatToParent` @0x81de6): any that threatens the
 /// player ([`Npc::threatens_player`]), but never `escort` itself or a
-/// fellow escort.
+/// fellow escort, hired or a mission escort ([`Npc::escorts_player`]).
 pub fn threats<'a>(escort: &'a Npc, npcs: &'a [Npc]) -> impl Iterator<Item = &'a Npc> + 'a {
     npcs.iter().filter(move |candidate| {
-        candidate.id != escort.id && candidate.escort.is_none() && candidate.threatens_player()
+        candidate.id != escort.id && !candidate.escorts_player() && candidate.threatens_player()
     })
 }
 
@@ -400,7 +420,8 @@ pub fn threats<'a>(escort: &'a Npc, npcs: &'a [Npc]) -> impl Iterator<Item = &'a
 /// candidate must be within it, and its distance squared from the player
 /// is added. It is halved for a candidate of another class than the
 /// escort's, and halved again for a fighter against a warship escort.
-/// The original's visibility test (cloaks) is not modelled.
+/// The original's visibility test (`_ShipVisibleToShip` @0x8370e, the
+/// escort observing) is not modelled: NPCs see cloaked ships.
 #[must_use]
 pub fn threat_score(
     escort: &Npc,
@@ -408,7 +429,7 @@ pub fn threat_score(
     player: &ShipState,
     radius: Option<f32>,
 ) -> Option<f32> {
-    if candidate.id == escort.id || candidate.escort.is_some() || !candidate.threatens_player() {
+    if candidate.id == escort.id || candidate.escorts_player() || !candidate.threatens_player() {
         return None;
     }
     let squared = |off: Vec2| off.x * off.x + off.y * off.y;
@@ -817,19 +838,28 @@ mod tests {
         let escort = ship(1, MEDIUM, 0.0, 0.0, true);
         let mut fellow = ship(2, MEDIUM, 10.0, 0.0, true);
         fellow.escort = Some(EscortDuty {
-            slot: 3,
-            ships: 3,
-            spacing: 30.0,
+            formation: FormationSlot {
+                slot: 3,
+                ships: 3,
+                spacing: 30.0,
+            },
             order: None,
         });
         let calm = ship(3, MEDIUM, 10.0, 0.0, false);
-        for candidate in [&escort, &fellow, &calm] {
+        let mut mission_escort = ship(5, MEDIUM, 5.0, 0.0, true);
+        mission_escort.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            formation: Some(FormationSlot::default()),
+        });
+        for candidate in [&escort, &fellow, &calm, &mission_escort] {
             assert_eq!(threat_score(&escort, candidate, &player, None), None);
         }
         let npcs = [
             escort.clone(),
             fellow,
             calm,
+            mission_escort,
             ship(4, MEDIUM, 900.0, 0.0, true),
         ];
         assert_eq!(best_threat(&escort, &npcs, &player, None), Some(NpcId(4)));

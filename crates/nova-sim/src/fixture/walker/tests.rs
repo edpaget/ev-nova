@@ -90,6 +90,7 @@ fn each_step_reads_as_its_script_line() {
     assert_eq!(Step::Deliver(MissionId(505)).to_string(), "deliver 505");
     assert_eq!(Step::PassDays(3).to_string(), "pass 3 days");
     assert_eq!(Step::PassDays(1).to_string(), "pass 1 day");
+    assert_eq!(Step::MeetGoal(MissionId(506)).to_string(), "meet goal 506");
 }
 
 // The plain decisions.
@@ -377,7 +378,11 @@ fn a_mission_with_a_destination_picks_its_cargo_up_there_then_is_delivered_at_it
 #[test]
 fn a_mission_whose_ship_goals_are_unmet_is_not_completed() {
     let catalog = galaxy(vec![MissionRecord {
-        ships: MissionShip { count: 1, goal: 0 },
+        ships: MissionShip {
+            count: 1,
+            goal: 0,
+            ..MissionShip::NONE
+        },
         ..errand(200, 128, 140, "b10")
     }]);
     let mut session = docked(&catalog);
@@ -394,6 +399,124 @@ fn a_mission_whose_ship_goals_are_unmet_is_not_completed() {
             Fault::NotCompleted(Box::new(active)),
             &[]
         )
+    );
+}
+
+// Ship goals.
+
+/// [`errand`] 200, offered at 128 and completed at 140, with one ship of
+/// `goal` of düde 150 (warships of govt 131 flying ship 200), in system
+/// `syst`.
+fn hunt(goal: i16, syst: i16) -> FakePilotCatalog {
+    let mut catalog = galaxy(vec![MissionRecord {
+        ships: MissionShip {
+            count: 1,
+            goal,
+            syst,
+            dude: Some(crate::catalog::DudeId(150)),
+            ..MissionShip::NONE
+        },
+        ..errand(200, 128, 140, "b10")
+    }]);
+    catalog
+        .ship_records
+        .push(crate::testkit::ship(200, crate::testkit::FAST));
+    catalog.dudes = vec![(
+        crate::catalog::DudeId(150),
+        crate::catalog::DudeRecord {
+            ai_type: 3,
+            govt: Some(crate::catalog::GovtId(131)),
+            ships: vec![(crate::catalog::ShipId(200), 100)],
+            booty: 0,
+            info_types: 0,
+        },
+    )];
+    catalog
+}
+
+#[test]
+fn meeting_a_destroy_goal_lets_the_mission_be_delivered() {
+    let catalog = hunt(0, -1);
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog)
+        .walk(
+            &mut session,
+            &[Step::Take(A), Step::MeetGoal(A), Step::Deliver(A)],
+        )
+        .expect("walks");
+    assert_eq!(
+        walked.done[1],
+        Done::MetGoal {
+            mission: A,
+            others: Vec::new()
+        }
+    );
+    assert!(held(&session).is_empty(), "completed");
+}
+
+#[test]
+fn meeting_a_chase_off_goal_lets_the_mission_be_delivered() {
+    let catalog = hunt(6, -1);
+    let mut session = docked(&catalog);
+    StoryWalker::new(&catalog)
+        .walk(
+            &mut session,
+            &[Step::Take(A), Step::MeetGoal(A), Step::Deliver(A)],
+        )
+        .expect("walks");
+    assert!(held(&session).is_empty(), "completed");
+}
+
+#[test]
+fn meeting_an_escort_goal_lands_at_the_return_and_brings_the_escorts_in_there() {
+    let catalog = hunt(3, 130);
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog)
+        .walk(
+            &mut session,
+            &[Step::Take(A), Step::MeetGoal(A), Step::Deliver(A)],
+        )
+        .expect("walks");
+    assert!(held(&session).is_empty(), "completed");
+    assert!(matches!(
+        walked.done[2],
+        Done::Delivered {
+            stellar: StellarId(140),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn meeting_an_escort_goal_lands_at_an_unreached_destination_first() {
+    let mut catalog = hunt(3, 130);
+    catalog.missions[0].travel_stel = 129;
+    let mut session = docked(&catalog);
+    StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::Take(A), Step::MeetGoal(A)])
+        .expect("walks");
+    let active = session.pilot().missions().get(0).expect("held").clone();
+    assert!(active.reached, "landed at 129 on the way");
+    assert!(active.goals_met);
+    assert_eq!(session.landed(), Some(StellarId(140)), "then at the return");
+}
+
+#[test]
+fn meeting_the_goal_of_a_mission_not_held_or_of_no_ship_goal_fails() {
+    let catalog = hunt(0, -1);
+    let mut session = docked(&catalog);
+    let failure = StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::MeetGoal(A)])
+        .expect_err("not held");
+    assert_eq!(failure.fault, Fault::NotActive);
+    let catalog = galaxy(vec![errand(200, 128, 140, "b10")]);
+    let mut session = docked(&catalog);
+    let failure = StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::Take(A), Step::MeetGoal(A)])
+        .expect_err("no goal");
+    assert_eq!(
+        failure,
+        super::tests::failure(2, Step::MeetGoal(A), Fault::NoShipGoal, &[])
     );
 }
 
@@ -960,6 +1083,8 @@ fn each_fault_is_reported_with_its_mission() {
         goals_met: false,
         aboard: false,
         failed: None,
+        ships: crate::mission::SpecialShips::default(),
+        aux: crate::mission::aux::AuxShips::default(),
     };
     for (at, fault, line) in [
         (
@@ -999,6 +1124,11 @@ fn each_fault_is_reported_with_its_mission() {
             Step::Deliver(A),
             Fault::Undeliverable,
             "mission 200 has no return stellar",
+        ),
+        (
+            Step::MeetGoal(A),
+            Fault::NoShipGoal,
+            "mission 200 has no ship goal to meet",
         ),
         (
             Step::PassDays(3),

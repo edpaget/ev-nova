@@ -4,7 +4,7 @@
 use crate::catalog::{ShipId, SystemId};
 
 /// Something a [`Session`](crate::Session) did that the player is told of.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SimMessage {
     /// A jump ended in this system, the last of a multi-jump.
     Arrived(SystemId),
@@ -19,6 +19,11 @@ pub enum SimMessage {
     /// mission whose `Flags` lacks 0x0400 (`_MissionObjectivesCheck`
     /// @0x9ebd0-0x9ec53).
     DeadlineMissed,
+    /// A mission failed as one of its special ships was destroyed or
+    /// disabled, for a mission whose `Flags` lacks 0x0400
+    /// (`_HandleShipDisplay` @0x2db31-0x2dbab, `_DamageShip`
+    /// @0x3aee8-0x3af62).
+    MissionShipLost,
     /// Every ton of cargo was jettisoned (`_JettisonCargo` @0x3e354).
     CargoJettisoned,
     /// The cargo but the missions' was jettisoned (`_JettisonCargo`
@@ -30,8 +35,13 @@ pub enum SimMessage {
     /// A scan found a mission's cargo: the player is caught smuggling
     /// (`_ScanPlayer` @0x7e7ce-0x7ea9b).
     Smuggling {
-        /// The scanner's ship class, which names it.
+        /// The scanner's ship class, which names it when there is no
+        /// `ship_name` (ship +0x76 → `shïp` +0x6c, @0x7e7d7-0x7e7ec).
         scanner: ShipId,
+        /// The drawn ship name of the mission whose cargo the scan found,
+        /// when not empty, which names the scanner in place of its class,
+        /// whichever ship it is (the found slot's +0x70, @0x7e7ce).
+        ship_name: Option<String>,
         /// The credits fined: none for no fine.
         fine: i64,
     },

@@ -203,7 +203,11 @@
 //!   forgotten (@0x99bcf).
 //! - **The auto-abort** (`_AutoAbortMission` @0x99bdc): `OnAbort`; the
 //!   `DatePostInc` days; `Flags` 0x0008, a jump's fuel taken; `Flags2`
-//!   0x0002, the pay; then the end, with no second `OnAbort`.
+//!   0x0002, the pay; then the end, with no second `OnAbort`. A mission
+//!   of `Flags` 0x0001 reaches it at accept (above), as its ship goals
+//!   are met (@0x9ed87), and once per slot as its special ships spawn: at
+//!   the system's setup (@0x4317e) and as its appear timer brings them in
+//!   (@0x43ad4).
 //! - **Success**, landing at the return with the destination reached and
 //!   the goals met (`_DoMissionSuccess` @0xa03fc): the slot freed before
 //!   `OnSuccess`; the `DatePostInc` days; the records ([`success_records`]:
@@ -364,11 +368,14 @@
 //! raw IDs.
 
 pub mod active;
+pub mod aux;
 pub mod cargo;
+pub mod goals;
 pub mod identity;
 pub mod offer;
 pub mod screens;
 pub mod select;
+pub mod ships;
 
 use crate::catalog::{GovtId, LandingSite, MissionId, MissionRecord, ShipId, StellarId, SystemId};
 use crate::control::Gate;
@@ -380,12 +387,16 @@ use crate::wares;
 pub use self::active::{
     AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
     ActiveMissions, Among, FailedBy, PayEffect, SLOTS, abort_checks, abort_penalty, accept_charge,
-    accept_checks, auto_aborts_at_accept, cleaned, failure_records, fined, goals_met_at_accept,
-    pay_effect, success_records,
+    accept_checks, auto_aborts_at_accept, cleaned, failure_records, fined, pay_effect,
+    success_records,
 };
 pub use self::cargo::{
     JettisonMessage, Jettisoned, PickupFacts, PickupRefusal, Room, ScanOutcome, drops_off,
     jettison, picks_up_at_destination, pickup_checks, scan,
+};
+pub use self::goals::{
+    AssistLine, Departure, GoalCheck, GoalFacts, LossFacts, ShipGoal, assists, check_goals,
+    departure, fails_on_destroyed, fails_on_disabled, goals_met_moment, held_disabled, met_before,
 };
 pub use self::identity::StellarMarks;
 pub use self::offer::{Offer, Offers, ROLLED, RollTable, Stop, resolve};
@@ -393,6 +404,7 @@ pub use self::screens::{
     OfferLabels, OfferPrompt, VenueOffer, display_order, offer_gap, offer_labels,
 };
 pub use self::select::{Kind, Stellar, StellarCode, World, select_stellar, stellars_of};
+pub use self::ships::{ShipSystem, SpecialShips};
 
 /// Where a mission is offered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

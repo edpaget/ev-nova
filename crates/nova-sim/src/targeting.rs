@@ -5,12 +5,22 @@
 //!
 //! - A ship is targetable ([`targetable`]) while it is intact or
 //!   disabled: a ship breaking up or destroyed is not (`_IsDying`). Target
-//!   Select and Closest Target skip the player's escorts ([`candidate`]),
-//!   and a ship waiting at the hypergate or wormhole it comes out of
-//!   ([`Npc::emerging`], `_AIShipIsEmergingFromHypergate` in
-//!   `_FindNextShipInSystem` @0xa801 and `_FindNearestShipToPlayer`
-//!   @0x9330); once it bursts out of the gate it is a candidate again.
-//!   Cloaked and untargetable ships are skipped too, once they exist.
+//!   Select and Closest Target skip the player's escorts ([`candidate`]).
+//!   A cloaked ship ([`Cloak::is_cloaked`](crate::cloak::Cloak::is_cloaked))
+//!   other than the player's escort is not targetable, and a target that
+//!   cloaks is let go, unless the player can target cloaked ships (a cloak
+//!   scanner's `ModVal` 0x0008, `_ShipCanTargetCloakedShips` @0x2466;
+//!   `_HandlePlayer` @0x686bf-0x686ee, the searches @0x6a440-0x6a460, a
+//!   mouse click @0x3810b-0x38130): the original asks the cloak itself,
+//!   not whether the player sees the ship. Untargetable ships are not
+//!   modelled. A
+//!   ship waiting at the hypergate or wormhole it comes out of
+//!   ([`Npc::emerging`]) is not targetable
+//!   (`_AIShipIsEmergingFromHypergate` @0x7e2e8, read by
+//!   `_FindNearestShipToPlayer` @0x9330 and the next and previous
+//!   searches @0xa42d-0xa918, `_FindNextShipInSystem` @0xa801), and a
+//!   target emerging is let go (`_HandlePlayer` @0x686a4); once it bursts
+//!   out of the gate it is a candidate again.
 //! - Escort Select (Option-Tab here) walks the player's escorts alone,
 //!   in the same order, from the one after the target, and does not wrap
 //!   ([`next_escort`]).
@@ -32,6 +42,8 @@
 
 use crate::combat::hull::Condition;
 use crate::geometry::Vec2;
+#[cfg(doc)]
+use crate::traffic::npc::Mode;
 use crate::traffic::npc::{Npc, NpcId};
 
 /// How a target command picks.
@@ -49,26 +61,39 @@ pub enum TargetPick {
     NextEscort,
 }
 
-/// Whether `npc` can be targeted: it is intact or disabled.
+/// Whether `npc` can be targeted by a player that can target cloaked
+/// ships (`cloaked_ok`) or not: it is intact or disabled, not emerging
+/// from a gate ([`Mode::Emerging`]), and not cloaked unless `cloaked_ok`
+/// or it escorts the player.
 #[must_use]
-pub fn targetable(npc: &Npc) -> bool {
+pub fn targetable(npc: &Npc, cloaked_ok: bool) -> bool {
     matches!(npc.condition, Condition::Intact | Condition::Disabled)
+        && !npc.emerging()
+        && (cloaked_ok || npc.escorts_player() || !npc.cloak.is_cloaked())
 }
 
 /// Whether `npc` is a candidate for Target Select and Closest Target:
-/// targetable, not one of the player's escorts, and not waiting at the
-/// gate it comes out of ([`Npc::emerging`]).
+/// targetable, as `cloaked_ok` says, and not one of the player's escorts.
 #[must_use]
-pub fn candidate(npc: &Npc) -> bool {
-    targetable(npc) && npc.escort.is_none() && !npc.emerging()
+pub fn candidate(npc: &Npc, cloaked_ok: bool) -> bool {
+    targetable(npc, cloaked_ok) && npc.escort.is_none()
 }
 
 /// The candidate among `npcs` that passes `filter` nearest `from`, by
 /// squared distance, a tie going to the earlier; none when none qualifies.
+/// Cloaked ships are candidates when `cloaked_ok`.
 #[must_use]
-pub fn nearest(npcs: &[Npc], from: Vec2, filter: impl Fn(&Npc) -> bool) -> Option<NpcId> {
+pub fn nearest(
+    npcs: &[Npc],
+    from: Vec2,
+    cloaked_ok: bool,
+    filter: impl Fn(&Npc) -> bool,
+) -> Option<NpcId> {
     let mut best: Option<(f32, NpcId)> = None;
-    for npc in npcs.iter().filter(|npc| candidate(npc) && filter(npc)) {
+    for npc in npcs
+        .iter()
+        .filter(|npc| candidate(npc, cloaked_ok) && filter(npc))
+    {
         let off = npc.state.position - from;
         let distance = off.x * off.x + off.y * off.y;
         if best.is_none_or(|(nearest, _)| distance < nearest) {
@@ -79,17 +104,20 @@ pub fn nearest(npcs: &[Npc], from: Vec2, filter: impl Fn(&Npc) -> bool) -> Optio
 }
 
 /// The first candidate among `npcs` numbered after `current`, or the
-/// first candidate when there is no target; none past the last.
+/// first candidate when there is no target; none past the last. Cloaked
+/// ships are candidates when `cloaked_ok`.
 #[must_use]
-pub fn next(npcs: &[Npc], current: Option<NpcId>) -> Option<NpcId> {
-    first_after(npcs, current, candidate)
+pub fn next(npcs: &[Npc], current: Option<NpcId>, cloaked_ok: bool) -> Option<NpcId> {
+    first_after(npcs, current, |npc| candidate(npc, cloaked_ok))
 }
 
 /// The first of the player's escorts among `npcs` numbered after
 /// `current`, or the first when there is no target; none past the last.
 #[must_use]
 pub fn next_escort(npcs: &[Npc], current: Option<NpcId>) -> Option<NpcId> {
-    first_after(npcs, current, |npc| targetable(npc) && npc.escort.is_some())
+    first_after(npcs, current, |npc| {
+        targetable(npc, false) && npc.escort.is_some()
+    })
 }
 
 /// The first NPC among `npcs` passing `filter` numbered after `current`,
@@ -119,6 +147,11 @@ mod tests {
         npc
     }
 
+    /// [`nearest`] for a player that cannot target cloaked ships.
+    fn nearest_(npcs: &[Npc], from: Vec2, filter: impl Fn(&Npc) -> bool) -> Option<NpcId> {
+        nearest(npcs, from, false, filter)
+    }
+
     fn intact(id: u32, x: f32, y: f32) -> Npc {
         at(id, x, y, Condition::Intact)
     }
@@ -127,11 +160,25 @@ mod tests {
 
     #[test]
     fn intact_and_disabled_ships_are_targetable_and_dying_or_destroyed_ones_are_not() {
-        let of = |condition| targetable(&at(0, 0.0, 0.0, condition));
+        let of = |condition| targetable(&at(0, 0.0, 0.0, condition), false);
         assert!(of(Condition::Intact));
         assert!(of(Condition::Disabled));
         assert!(!of(DYING));
         assert!(!of(Condition::Destroyed));
+    }
+
+    #[test]
+    fn a_ship_emerging_from_a_gate_is_neither_targetable_nor_a_candidate() {
+        let mut emerging = intact(1, 10.0, 0.0);
+        emerging.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 9 };
+        assert!(!targetable(&emerging, false));
+        let mut arriving = intact(1, 10.0, 0.0);
+        arriving.mode = crate::traffic::npc::Mode::JumpingIn { ticks_left: 9 };
+        assert!(targetable(&arriving, false), "a ship jumping in still is");
+        let npcs = [emerging, intact(2, 300.0, 0.0)];
+        assert_eq!(nearest_(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));
+        assert_eq!(next(&npcs, None, false), Some(NpcId(2)));
+        assert_eq!(next(&npcs[..1], None, false), None);
     }
 
     #[test]
@@ -142,9 +189,9 @@ mod tests {
             intact(3, 0.0, -200.0),
         ];
         let any = |_: &Npc| true;
-        assert_eq!(nearest(&npcs, Vec2::ZERO, any), Some(NpcId(2)));
-        assert_eq!(nearest(&npcs, Vec2::new(250.0, 0.0), any), Some(NpcId(1)));
-        assert_eq!(nearest(&npcs, Vec2::new(0.0, -150.0), any), Some(NpcId(3)));
+        assert_eq!(nearest_(&npcs, Vec2::ZERO, any), Some(NpcId(2)));
+        assert_eq!(nearest_(&npcs, Vec2::new(250.0, 0.0), any), Some(NpcId(1)));
+        assert_eq!(nearest_(&npcs, Vec2::new(0.0, -150.0), any), Some(NpcId(3)));
     }
 
     #[test]
@@ -154,9 +201,9 @@ mod tests {
             intact(5, 100.0, 0.0),
             intact(6, -100.0, 0.0),
         ];
-        assert_eq!(nearest(&npcs, Vec2::ZERO, |_| true), Some(NpcId(4)));
+        assert_eq!(nearest_(&npcs, Vec2::ZERO, |_| true), Some(NpcId(4)));
         let later = [intact(7, 0.0, 200.0), npcs[1].clone(), npcs[2].clone()];
-        assert_eq!(nearest(&later, Vec2::ZERO, |_| true), Some(NpcId(5)));
+        assert_eq!(nearest_(&later, Vec2::ZERO, |_| true), Some(NpcId(5)));
     }
 
     #[test]
@@ -167,8 +214,8 @@ mod tests {
             at(3, 30.0, 0.0, Condition::Disabled),
             intact(4, 40.0, 0.0),
         ];
-        assert_eq!(nearest(&npcs, Vec2::ZERO, |_| true), Some(NpcId(3)));
-        assert_eq!(nearest(&npcs[..2], Vec2::ZERO, |_| true), None);
+        assert_eq!(nearest_(&npcs, Vec2::ZERO, |_| true), Some(NpcId(3)));
+        assert_eq!(nearest_(&npcs[..2], Vec2::ZERO, |_| true), None);
     }
 
     #[test]
@@ -179,23 +226,23 @@ mod tests {
         let mut leaving = intact(2, 20.0, 0.0);
         leaving.mode = Mode::LeavingGate { tick: 1 };
         let npcs = [waiting, leaving, intact(3, 30.0, 0.0)];
-        assert!(!candidate(&npcs[0]));
-        assert!(candidate(&npcs[1]));
-        assert_eq!(nearest(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));
-        assert_eq!(nearest(&npcs[..1], Vec2::ZERO, |_| true), None);
-        assert_eq!(next(&npcs, None), Some(NpcId(2)));
-        assert_eq!(next(&npcs[..1], None), None);
+        assert!(!candidate(&npcs[0], false));
+        assert!(candidate(&npcs[1], false));
+        assert_eq!(nearest_(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));
+        assert_eq!(nearest_(&npcs[..1], Vec2::ZERO, |_| true), None);
+        assert_eq!(next(&npcs, None, false), Some(NpcId(2)));
+        assert_eq!(next(&npcs[..1], None, false), None);
     }
 
     #[test]
     fn the_nearest_passes_the_filter() {
         let npcs = [intact(1, 10.0, 0.0), intact(2, 20.0, 0.0)];
         assert_eq!(
-            nearest(&npcs, Vec2::ZERO, |npc| npc.id != NpcId(1)),
+            nearest_(&npcs, Vec2::ZERO, |npc| npc.id != NpcId(1)),
             Some(NpcId(2))
         );
-        assert_eq!(nearest(&npcs, Vec2::ZERO, |_| false), None);
-        assert_eq!(nearest(&[], Vec2::ZERO, |_| true), None);
+        assert_eq!(nearest_(&npcs, Vec2::ZERO, |_| false), None);
+        assert_eq!(nearest_(&[], Vec2::ZERO, |_| true), None);
     }
 
     #[test]
@@ -208,7 +255,7 @@ mod tests {
         let mut walked = Vec::new();
         let mut current = None;
         for _ in 0..5 {
-            current = next(&npcs, current);
+            current = next(&npcs, current, false);
             walked.push(current);
         }
         assert_eq!(
@@ -221,15 +268,15 @@ mod tests {
                 Some(NpcId(2))
             ]
         );
-        assert_eq!(next(&[], None), None);
+        assert_eq!(next(&[], None, false), None);
     }
 
     #[test]
     fn next_after_a_target_that_has_gone_is_the_next_number_after_it() {
         let npcs = [intact(2, 0.0, 0.0), intact(9, 0.0, 0.0)];
-        assert_eq!(next(&npcs, Some(NpcId(5))), Some(NpcId(9)));
-        assert_eq!(next(&npcs, Some(NpcId(1))), Some(NpcId(2)));
-        assert_eq!(next(&npcs, Some(NpcId(10))), None);
+        assert_eq!(next(&npcs, Some(NpcId(5)), false), Some(NpcId(9)));
+        assert_eq!(next(&npcs, Some(NpcId(1)), false), Some(NpcId(2)));
+        assert_eq!(next(&npcs, Some(NpcId(10)), false), None);
     }
 
     #[test]
@@ -240,18 +287,20 @@ mod tests {
             at(3, 0.0, 0.0, Condition::Destroyed),
             intact(4, 0.0, 0.0),
         ];
-        assert_eq!(next(&npcs, None), Some(NpcId(2)));
-        assert_eq!(next(&npcs, Some(NpcId(2))), Some(NpcId(4)));
-        assert_eq!(next(&npcs[..1], None), None);
+        assert_eq!(next(&npcs, None, false), Some(NpcId(2)));
+        assert_eq!(next(&npcs, Some(NpcId(2)), false), Some(NpcId(4)));
+        assert_eq!(next(&npcs[..1], None, false), None);
     }
 
     /// NPC `id` at (`x`, `y`), the player's escort.
     fn escort(id: u32, x: f32, y: f32) -> Npc {
         let mut npc = intact(id, x, y);
         npc.escort = Some(crate::escort::EscortDuty {
-            slot: 2,
-            ships: 2,
-            spacing: 30.0,
+            formation: crate::escort::FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
             order: None,
         });
         npc
@@ -264,11 +313,14 @@ mod tests {
             intact(2, 20.0, 0.0),
             escort(3, 5.0, 0.0),
         ];
-        assert_eq!(nearest(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));
-        assert_eq!(next(&npcs, None), Some(NpcId(2)));
-        assert_eq!(next(&npcs, Some(NpcId(2))), None);
-        assert_eq!(nearest(&[escort(1, 0.0, 0.0)], Vec2::ZERO, |_| true), None);
-        assert!(targetable(&npcs[0]), "an escort targeted stays targeted");
+        assert_eq!(nearest_(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));
+        assert_eq!(next(&npcs, None, false), Some(NpcId(2)));
+        assert_eq!(next(&npcs, Some(NpcId(2)), false), None);
+        assert_eq!(nearest_(&[escort(1, 0.0, 0.0)], Vec2::ZERO, |_| true), None);
+        assert!(
+            targetable(&npcs[0], false),
+            "an escort targeted stays targeted"
+        );
     }
 
     #[test]
@@ -302,5 +354,41 @@ mod tests {
             "after a non-escort"
         );
         assert_eq!(next_escort(&npcs[1..2], None), None);
+    }
+
+    /// [`intact`], cloaked.
+    fn cloaked(id: u32, x: f32, y: f32) -> Npc {
+        let mut npc = intact(id, x, y);
+        npc.cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        npc
+    }
+
+    #[test]
+    fn a_cloaked_ship_is_targetable_only_by_a_player_that_can_target_cloaked_ships() {
+        let hidden = cloaked(1, 10.0, 0.0);
+        assert!(!targetable(&hidden, false));
+        assert!(targetable(&hidden, true));
+        let npcs = [hidden, intact(2, 20.0, 0.0)];
+        assert_eq!(nearest(&npcs, Vec2::ZERO, false, |_| true), Some(NpcId(2)));
+        assert_eq!(nearest(&npcs, Vec2::ZERO, true, |_| true), Some(NpcId(1)));
+        assert_eq!(next(&npcs, None, false), Some(NpcId(2)));
+        assert_eq!(next(&npcs, None, true), Some(NpcId(1)));
+        let mut fading = intact(3, 0.0, 0.0);
+        fading.cloak = crate::cloak::Cloak {
+            fade: 16.0,
+            direction: 1,
+        };
+        assert!(targetable(&fading, false), "not cloaked yet");
+    }
+
+    #[test]
+    fn the_players_cloaked_escort_stays_targetable() {
+        let mut ours = escort(1, 0.0, 0.0);
+        ours.cloak = cloaked(1, 0.0, 0.0).cloak;
+        assert!(targetable(&ours, false));
+        assert_eq!(next_escort(&[ours], None), Some(NpcId(1)));
     }
 }

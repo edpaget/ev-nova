@@ -7,15 +7,22 @@
 //!
 //! 1. A ship that threatens the player ([`Npc::threatens_player`]) does
 //!    not like it.
-//! 2. The player's escorts do. (So do the governments that bless the
-//!    player, which does not happen yet.)
-//! 3. An independent ship does.
-//! 4. A xenophobic G in another government's system does not when L is
+//! 2. The player's escorts do, hired or mission escorts (leader 0,
+//!    @0x82199). (So do the governments that bless the player, which
+//!    does not happen yet.)
+//! 3. Any other mission's special ship (@0x821c6-0x8221e) likes it when
+//!    its slot's `ShipGoal` is 3 or 4 and its `ShipBehav` is 1, and
+//!    otherwise does not, with no government test; one whose slot no
+//!    longer holds a mission does not. The one such ship that likes it
+//!    is a `ShipBehav` 1 ship not in the formation, disabled before it
+//!    joined.
+//! 4. An independent ship does.
+//! 5. A xenophobic G in another government's system does not when L is
 //!    above that government's tol. At home, and otherwise, the rules
 //!    below apply. (The original compares an independent system against
 //!    government index 0's tol, a slip that cannot matter, as L is none
 //!    there.)
-//! 5. In an independent system it does. When S is G, or allied with G,
+//! 6. In an independent system it does. When S is G, or allied with G,
 //!    it does while L is at least -tol(S); when S is G's enemy, only
 //!    while L is below -tol(S). When S is neutral to G, a nosy G
 //!    (`Flags` 0x0002) does while L is at least -tol(S), and any other G
@@ -29,6 +36,9 @@
 
 use crate::ai::Surroundings;
 use crate::govt::NOSY;
+use crate::hail::MissionHail;
+use crate::mission::goals::ShipGoal;
+use crate::mission::ships::ShipBehav;
 use crate::traffic::npc::Npc;
 
 /// How a hailed ship feels about the player.
@@ -42,14 +52,24 @@ pub enum Attitude {
     Hostile,
 }
 
-/// Whether `npc` likes the player among `around` (see the module docs).
+/// Whether `npc` likes the player among `around` (see the module docs),
+/// `mission` its mission's `ShipGoal` and `ShipBehav` as the session reads
+/// them when it is a mission's special ship ([`MissionHail`]; a slot
+/// that no longer holds a mission reads as no goal and its own
+/// behaviour), none otherwise.
 #[must_use]
-pub fn likes_player(npc: &Npc, around: &Surroundings) -> bool {
+pub fn likes_player(npc: &Npc, around: &Surroundings, mission: Option<MissionHail>) -> bool {
     if npc.threatens_player() {
         return false;
     }
-    if npc.escort.is_some() {
+    if npc.escorts_player() {
         return true;
+    }
+    if npc.mission.is_some() {
+        return mission.is_some_and(|mission| {
+            matches!(mission.goal, ShipGoal::Escort | ShipGoal::Observe)
+                && mission.behav == ShipBehav::EscortPlayer
+        });
     }
     let Some(govt) = npc.govt else {
         return true;
@@ -74,13 +94,13 @@ pub fn likes_player(npc: &Npc, around: &Surroundings) -> bool {
     }
 }
 
-/// How `npc` feels about the player among `around` (see the module
-/// docs).
+/// How `npc` feels about the player among `around`, of `mission` (see
+/// [`likes_player`] and the module docs).
 #[must_use]
-pub fn attitude(npc: &Npc, around: &Surroundings) -> Attitude {
+pub fn attitude(npc: &Npc, around: &Surroundings, mission: Option<MissionHail>) -> Attitude {
     if npc.threatens_player() {
         Attitude::Hostile
-    } else if likes_player(npc, around) {
+    } else if likes_player(npc, around, mission) {
         Attitude::Friendly
     } else {
         Attitude::Unfriendly
@@ -93,9 +113,13 @@ mod tests {
     use crate::ai::Goal;
     use crate::catalog::{GovtId, GovtRecord};
     use crate::combat::ShipRef;
+    use crate::escort::FormationSlot;
     use crate::govt::{Governments, XENOPHOBIC};
+    use crate::mission::goals::ShipGoal;
+    use crate::mission::ships::ShipBehav;
     use crate::stats::ShipStats;
     use crate::testkit::{FAST, govt};
+    use crate::traffic::npc::MissionMark;
 
     const ME: GovtId = GovtId(140);
     const ALLY: GovtId = GovtId(141);
@@ -158,7 +182,7 @@ mod tests {
             record,
             ..Surroundings::new(&[], &[])
         };
-        likes_player(&npc, &around)
+        likes_player(&npc, &around, None)
     }
 
     #[test]
@@ -173,8 +197,8 @@ mod tests {
                 record: 100,
                 ..Surroundings::new(&[], &[])
             };
-            assert!(!likes_player(&npc, &around), "{govt:?}");
-            assert_eq!(attitude(&npc, &around), Attitude::Hostile);
+            assert!(!likes_player(&npc, &around, None), "{govt:?}");
+            assert_eq!(attitude(&npc, &around, None), Attitude::Hostile);
         }
     }
 
@@ -183,9 +207,11 @@ mod tests {
         let govts = govts(0);
         let mut escort = ship(Some(ALLY));
         escort.escort = Some(crate::escort::EscortDuty {
-            slot: 2,
-            ships: 2,
-            spacing: 30.0,
+            formation: FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
             order: None,
         });
         let around = Surroundings {
@@ -195,8 +221,8 @@ mod tests {
             ..Surroundings::new(&[], &[])
         };
         assert!(!likes(0, Some(ALLY), Some(ME), -100), "not as a stranger");
-        assert!(likes_player(&escort, &around));
-        assert_eq!(attitude(&escort, &around), Attitude::Friendly);
+        assert!(likes_player(&escort, &around, None));
+        assert_eq!(attitude(&escort, &around, None), Attitude::Friendly);
     }
 
     #[test]
@@ -271,10 +297,120 @@ mod tests {
             ..Surroundings::new(&[], &[])
         };
         let npc = ship(Some(ME));
-        assert_eq!(attitude(&npc, &around(0)), Attitude::Friendly);
-        assert_eq!(attitude(&npc, &around(-7)), Attitude::Unfriendly);
+        assert_eq!(attitude(&npc, &around(0), None), Attitude::Friendly);
+        assert_eq!(attitude(&npc, &around(-7), None), Attitude::Unfriendly);
         let mut hunting = npc.clone();
         hunting.goal = Goal::Snipe(ShipRef::Player);
-        assert_eq!(attitude(&hunting, &around(0)), Attitude::Hostile);
+        assert_eq!(attitude(&hunting, &around(0), None), Attitude::Hostile);
+    }
+
+    // Mission ships.
+
+    /// A ship of `govt` marked by slot 0's mission of `behav`, in the
+    /// player's formation when `joined`.
+    fn marked(govt: Option<GovtId>, behav: ShipBehav, joined: bool) -> Npc {
+        let mut npc = ship(govt);
+        npc.mission = Some(MissionMark {
+            slot: 0,
+            behav,
+            formation: joined.then(FormationSlot::default),
+        });
+        npc
+    }
+
+    /// The mission of a marked ship whose slot holds one of `goal`, of
+    /// `behav`.
+    fn of(goal: ShipGoal, behav: ShipBehav) -> MissionHail {
+        MissionHail { goal, behav }
+    }
+
+    /// Surroundings of `govts` in a system of `system`, the player's
+    /// record there `record`.
+    fn among(govts: &Governments, system: Option<GovtId>, record: i16) -> Surroundings<'_> {
+        Surroundings {
+            govts,
+            system_govt: system,
+            record,
+            ..Surroundings::new(&[], &[])
+        }
+    }
+
+    const GOALS: [ShipGoal; 9] = [
+        ShipGoal::None,
+        ShipGoal::Destroy,
+        ShipGoal::Disable,
+        ShipGoal::Board,
+        ShipGoal::Escort,
+        ShipGoal::Observe,
+        ShipGoal::Rescue,
+        ShipGoal::ChaseOff,
+        ShipGoal::Other,
+    ];
+    const BEHAVS: [ShipBehav; 4] = [
+        ShipBehav::Own,
+        ShipBehav::AttackPlayer,
+        ShipBehav::EscortPlayer,
+        ShipBehav::AttackStellars,
+    ];
+
+    #[test]
+    fn a_mission_escort_likes_the_player_whatever_its_government() {
+        let govts = govts(0);
+        for govt in [ENEMY, XENO] {
+            let around = among(&govts, Some(ME), 100);
+            assert!(!likes(0, Some(govt), Some(ME), 100), "not as a stranger");
+            let escort = marked(Some(govt), ShipBehav::EscortPlayer, true);
+            for goal in [ShipGoal::Escort, ShipGoal::Observe, ShipGoal::Destroy] {
+                let mission = Some(of(goal, ShipBehav::EscortPlayer));
+                assert!(likes_player(&escort, &around, mission), "{govt:?} {goal:?}");
+                assert_eq!(attitude(&escort, &around, mission), Attitude::Friendly);
+            }
+        }
+    }
+
+    #[test]
+    fn a_marked_ship_not_escorting_likes_the_player_only_for_goal_3_or_4_and_behaviour_1() {
+        let govts = govts(0);
+        for (govt, system, record) in [(None, None, 0), (Some(ENEMY), Some(ME), 100)] {
+            let around = among(&govts, system, record);
+            for behav in BEHAVS {
+                let npc = marked(govt, behav, false);
+                for goal in GOALS {
+                    let liked = matches!(goal, ShipGoal::Escort | ShipGoal::Observe)
+                        && behav == ShipBehav::EscortPlayer;
+                    assert_eq!(
+                        likes_player(&npc, &around, Some(of(goal, behav))),
+                        liked,
+                        "{govt:?} {behav:?} {goal:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_marked_ship_of_a_free_slot_or_with_no_mission_read_does_not_like_the_player() {
+        let govts = govts(0);
+        let around = among(&govts, None, 0);
+        let npc = marked(None, ShipBehav::EscortPlayer, false);
+        assert!(
+            likes_player(&ship(None), &around, None),
+            "unmarked, independent"
+        );
+        assert!(!likes_player(&npc, &around, None));
+        let free = Some(of(ShipGoal::None, ShipBehav::Own));
+        assert!(!likes_player(&npc, &around, free));
+    }
+
+    #[test]
+    fn a_mission_ship_threatening_the_player_never_likes_it() {
+        let govts = govts(0);
+        let around = among(&govts, None, 0);
+        for joined in [false, true] {
+            let mut npc = marked(None, ShipBehav::EscortPlayer, joined);
+            npc.goal = Goal::Attack(ShipRef::Player);
+            let mission = Some(of(ShipGoal::Escort, ShipBehav::EscortPlayer));
+            assert!(!likes_player(&npc, &around, mission), "{joined}");
+        }
     }
 }

@@ -100,19 +100,28 @@ impl Session {
             .filter(|&quote| quote > 0)
     }
 
-    /// `npc`'s name: its person's, or its ship type's, if the session
-    /// has either.
+    /// `npc`'s name: a mission ship's drawn name while it is marked and
+    /// that is not empty (`_DrawStatusTarg` @0x4b6c8-0x4b6e7), else its
+    /// person's, or its ship type's, if the session has either.
     #[must_use]
     pub fn npc_name(&self, npc: &Npc) -> Option<&str> {
+        if let Some(name) = self.mission_ship_text(npc.mission, |ships| &ships.name) {
+            return Some(name);
+        }
         match npc.person.and_then(|person| self.traffic.person(person.id)) {
             Some(person) => Some(&person.record.name),
             None => self.ship_name(npc.ship),
         }
     }
 
-    /// `npc`'s person's subtitle, unless it has none or it is empty.
+    /// `npc`'s subtitle: a mission ship's drawn subtitle while it is
+    /// marked and that is not empty (@0x4b81b-0x4b880), else its
+    /// person's, unless it has none or it is empty.
     #[must_use]
     pub fn npc_subtitle(&self, npc: &Npc) -> Option<&str> {
+        if let Some(subtitle) = self.mission_ship_text(npc.mission, |ships| &ships.subtitle) {
+            return Some(subtitle);
+        }
         let person = self.traffic.person(npc.person?.id)?;
         Some(person.record.subtitle.as_str()).filter(|subtitle| !subtitle.is_empty())
     }
@@ -147,7 +156,7 @@ impl Session {
                         .person(person.id)
                         .and_then(|spawned| spawned.record.link_mission);
                     let view = QuoteView {
-                        liked: likes_player(npc, &around),
+                        liked: likes_player(npc, &around, self.mission_hail(npc)),
                         player_jumping: self.jumping().is_some(),
                         player_ai,
                         mission_available: linked
@@ -234,7 +243,13 @@ impl Session {
     /// good, escape pod or not (`_DoShipCapture` @0x41180).
     pub(super) fn lose_captured(&mut self, id: NpcId) {
         let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
-        if let Some(person) = npc.and_then(|npc| npc.person.take()) {
+        // A capture also unmarks a mission's special ship, its ships left
+        // kept (`_DoShipCapture` @0x413c2).
+        let person = npc.and_then(|npc| {
+            npc.mission = None;
+            npc.person.take()
+        });
+        if let Some(person) = person {
             self.go(person.id);
         }
     }

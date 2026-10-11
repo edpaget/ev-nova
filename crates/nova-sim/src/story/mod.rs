@@ -162,8 +162,12 @@
 //! and ship days (@0x601fa, @0x6020e). Then `_PlayerLandOnStellar` passes
 //! the take-off's day (@0x63440), runs the global price flux (@0x63445),
 //! explores the system (`_AutoSetExploration` @0x634c8) and its nebulae
-//! (@0x634da), restarts each mission's ship hail timers
-//! (@0x634df-0x6353c) and saves the pilot (@0x6354b). Back in
+//! (@0x634da), restarts each mission's aux ships (@0x634df-0x6353c:
+//! with `Flags` 0x0010 those left to come refilled, +0x6e; their
+//! countdown, +0x6c, drawn again; their arrived count, +0x6a, zeroed) and
+//! saves the pilot (@0x6354b). Here that restart is each slot's
+//! [`Consumer::MissionShips`] subscription on `TookOff`, before the
+//! system's setup and its draws (see the session's `aux_ships` module). Back in
 //! `_HandlePlayerDockRequest`, the system's ships are set up
 //! (`_SetupShipsInSystem` @0x674c2) and its stellars redrawn (@0x674c7).
 //! The enter-system hook does not run.
@@ -183,28 +187,95 @@
 //! (@0x6c620).
 //!
 //! The enter-system hook (@0x99f11) runs no script. For each active
-//! mission, in slot order, it restarts the timers its ships appear and
-//! hail by (+0x4e, +0x6c, +0x6a). It runs on a jump's arrival
-//! (@0x6c15d), a gate's or wormhole's exit (@0x67159) and an `M` or `N`
-//! in flight (@0x159a8); not on a landed `M` or `N` (@0x15947, which only
-//! empties the docked offers), nor on a take-off, which restarts only the
-//! hail timers.
+//! mission, in slot order, it restarts the timers its ships appear by:
+//! with `ShipStart` 1, ships left (+0x6) and the player in their system
+//! (or `ShipSyst` -6), the special ships' appear timer (+0x4e), their
+//! arrived count (+0x2e) zeroed (@0x99f5b-0x99fae); and its aux ships,
+//! as the take-off restarts them (@0x99fb5-0x99ff4). On a hypergate's or
+//! wormhole's exit, the aux ships of `AuxShipSyst` -1 are then lost until
+//! the next restart (@0x6729b-0x672ac, as
+//! [`RuleKey::AuxGate`](crate::RuleKey::AuxGate) reads). Here it is the
+//! [`Consumer::MissionShips`] subscription each slot registers on
+//! `EnteredSystem` (see the
+//! [`traffic::spawn`](crate::traffic::spawn) module's "Mission ships"). It
+//! runs on a jump's arrival (@0x6c15d), a gate's or wormhole's exit
+//! (@0x67159) and an `M` or `N` in flight (@0x159a8); not on a landed `M`
+//! or `N` (@0x15947, which only empties the docked offers), nor on a
+//! take-off, which restarts only the aux ships' countdowns.
 //!
 //! ## Ship goals
 //!
-//! Goals are counted where they happen and checked by polling. A mission
-//! ship destroyed is counted in `_HandleShipDisplay` (@0x2dbd4), disabled
-//! in `_DamageShip` (@0x3af8b), boarded in `_HandlePlayerBoardAttempt`
-//! (@0x653a7, @0x65730). A ship whose loss fails its mission fails it
-//! there and then (`_QuickMissionFailure` @0x2dbba, @0x3af71). Every frame
-//! `_DoPlayGameWork` (@0x44214) runs `_MissionHandler` (@0x9eda8), which
-//! checks each slot's goals (`_MissionObjectivesCheck` @0x9edb5): the
-//! counts, whether the escorted ships are still with the player
-//! (@0x9e931-0x9e980), and whether an observed ship is on screen and
-//! visible (@0x9ea5c, @0x9eb02). A goal met shows `ShipDone` (@0x9ed0f)
-//! and runs `OnShipDone` (@0x9ed70). The same poll fails a mission whose
+//! Goals are counted where they happen and checked by polling.
+//! `_DoMissionAccept` zeroes the goals met, the failure and the counts
+//! (@0xa1c0e-0xa1c59).
+//!
+//! - **Destroyed** (+0x28) is counted at a mission ship's final explosion,
+//!   whoever destroyed it (`_HandleShipDisplay` @0x2dbd4), with its ships
+//!   left (+0x6) one fewer. The first destroyed fails its mission there
+//!   and then (`_QuickMissionFailure` @0x2dbba) for a goal to disable or
+//!   escort them, or to board or rescue them with this one not boarded,
+//!   unless the mission is failed already or hidden (`Flags` 0x0400).
+//! - **Disabled** (+0x2c) is counted as a mission ship is newly disabled
+//!   (`_DamageShip` @0x3af8b); the first fails an escort goal at once
+//!   (@0x3af71), on the same terms.
+//! - **Boarded** (+0x2a) is counted only on two paths of
+//!   `_HandlePlayerBoardAttempt`: the `PickupMode` 2 cargo pickup
+//!   (@0x653a7, mission-ships phase 14) and the assist path, for a board
+//!   or rescue goal of `Flags` 0x0001 with one ship left (@0x65730), which
+//!   says `STR#` 2002 #126 or, with `Flags` 0x0008, the refuelled ship's
+//!   thanks. Any board of a mission ship whose mission has not failed
+//!   then skips the `BoardPenalty`, the persons and the plunder
+//!   (@0x657bf-0x657e3).
+//! - **Chased off** (+0x30) is counted as a mission ship leaves the
+//!   system, at the end of its warp out (`_LowLevelAIHandler` @0x8598a),
+//!   for a chase-off goal (`ShipGoal` 6) whose ships do not follow the
+//!   player (`ShipSyst` -6), with its ships left one fewer so it is not
+//!   brought in again; a ship of any other goal that leaves counts
+//!   nothing and comes back at the next setup
+//!   ([`left_respawn`](crate::RuleKey::LeftRespawn) has the other
+//!   reading). An AI ship that lands stays in the system, waiting at the
+//!   stellar, so a landing counts nothing
+//!   ([`landed_leaves`](crate::RuleKey::LandedLeaves)). Here the
+//!   traffic's tick raises [`Fate::Departed`] for such a ship and counts
+//!   it. Chase off is met while those destroyed and those chased off
+//!   together reach `ShipCount`, and unmet otherwise (@0x9eb48-0x9eb78).
+//!
+//! Every frame `_DoPlayGameWork` (@0x44214) runs `_MissionHandler`
+//! (@0x9eda8), which checks each slot's goals (`_MissionObjectivesCheck`
+//! @0x9edb5): the counts against `ShipCount`, unmet while ships are still
+//! to come; whether the escorted ships are still with the player
+//! (@0x9e931-0x9e980), which fails an escort goal once one is destroyed
+//! or disabled, as one destroyed fails a disable goal; and whether an
+//! observed ship is visible to the player (`_ShipVisibleToShip`
+//! @0x9ea5c: not emerging from a gate, and uncloaked or within a cloak
+//! scanner's sight, see [`cloak`](crate::cloak)). Only a ship that can
+//! cloak must also be on screen (@0x9ea74-0x9eb09,
+//! [`cloak::on_screen`](crate::cloak::on_screen)). The goals met now and
+//! not before, unfailed, show `ShipDone` (@0x9ed0f), run `OnShipDone`
+//! for a mission with a `ShipGoal` (@0x9ed70), and auto-abort a mission
+//! of `Flags` 0x0001 (@0x9ed87). A mission of no goal (`ShipGoal` -1)
+//! is met at once, except one with ships, `Flags` 0x0001 and `ShipStart`
+//! 1 none of whose ships has arrived: the check first clears its goals
+//! met while ships are left (@0x9e7ef-0x9e80a) and then leaves them
+//! (@0x9ed8e-0x9ed98), so it waits for them. A mission of `Flags`
+//! 0x0001 also auto-aborts, whatever its goal, once per slot as its
+//! special ships spawn: after the system's setup brings them
+//! (`_SetupShipsInSystem` @0x4317e) and after its appear timer brings
+//! them in by hyperspace (`_EnterMoreShips` @0x43ad4); its ships stay as
+//! ordinary traffic. The same poll fails a mission whose
 //! days left reached 0 (@0x9eba5-0x9ec61), so a deadline fails after its
 //! transition has finished. The landing check runs it too (above).
+//!
+//! Here the poll is the [`Consumer::MissionShips`] subscriptions each slot
+//! registers (see the session's `mission_ships` module): a check on every
+//! `ShipFate`, on `Landed` before the missions' landing hooks, on
+//! `TookOff` (the first flight frame after a landing or a docked accept,
+//! held until the take-off's setup has run, as the original sets the
+//! system up first, @0x674c2), and in flight on `EnteredSystem`; an accept in flight is checked once
+//! its settling is done. The ships' arrivals raise
+//! [`Fate::Arrived`], their first sighting [`Fate::Observed`] and their
+//! leaving [`Fate::Departed`], so an escort's presence, an observation
+//! and a chase-off are checked as they change.
 //!
 //! Mission cargo jettisoned (`_JettisonCargo` @0x3e18c), found by a scan
 //! (`_ScanPlayer` @0x7e7ac) or plundered by an NPC
@@ -301,7 +372,7 @@
 //! | [`TookOff`](StoryEvent::TookOff) | [`Session::take_off`](crate::Session::take_off), after its day | `_PlayerLandOnStellar` after the spaceport |
 //! | [`DayPassed`](StoryEvent::DayPassed) | the daily step, as its last participant | `_IncrementGameTime` |
 //! | [`Explored`](StoryEvent::Explored) | exploring a system: a jump's arrival, for each system it passes and the one it arrives at; every other way in whose row explores; a take-off; a map granted, for each system it reaches; [`Session::fly`](crate::Session::fly), for its system. `X` raises none | `_ExploreNebulaeFromSystem` |
-//! | [`ShipFate`](StoryEvent::ShipFate) | combat's destruction and disabling (a ship broken up while intact is disabled too), the session's boarding, repelled or not, and the traffic's flight tick for a watched ship first seen ([`Session::watch_ship`](crate::Session::watch_ship)) | the goal counts and the per-frame poll |
+//! | [`ShipFate`](StoryEvent::ShipFate) | combat's destruction and disabling (a ship broken up while intact is disabled too); the session's boarding, repelled or not, a mission ship's included (a `PickupMode` 2 pickup's too; a refused pickup raises none); the system's setup and the appear timer's arrivals, for each mission ship they bring in ([`Fate::Arrived`]); the traffic's tick, for each mission ship that leaves the system ([`Fate::Departed`]); and the traffic's flight tick for a watched ship first seen ([`Session::watch_ship`](crate::Session::watch_ship)) | the goal counts and the per-frame poll |
 //!
 //! A consumer that wants only some entrances reads the [`Entrance`] in
 //! its subscription: mission ships restart their timers on a `Jump`, a
@@ -381,17 +452,18 @@
 //! **Order.** [`dispatch_order`] runs an event's subscriptions by id:
 //! consumer, then record, then hook. The consumers' order is
 //! [`Consumer`]'s, the same for every event, because only one event has
-//! two stock consumers in the original: a landing, which checks each
+//! several stock consumers in the original: a landing, which rolls the
+//! offers before the spaceport opens (@0x66d62), then checks each
 //! mission's ship goals before its cargo, failure and success
-//! (@0xa1a0c-0xa1ace), so [`Consumer::MissionShips`] comes first. Missions
-//! go by slot, as the original's land check (@0xa19f7), and a mission's
-//! landing hooks go cargo, failure, success. The offer roll is the
-//! missions' record -1, `{Missions, -1, 0}`, so it runs before every
-//! slot's hooks, as the original rolls before the spaceport opens
-//! (@0x66d62); it would still run after a `MissionShips` landing
-//! subscription, which mission-ships must keep after it. Plug-ins run after every
-//! stock consumer: an engine decision with no Rulebook key, since the
-//! original has no plug-ins. One difference stays: the original checks
+//! (@0xa1a0c-0xa1ace). So [`Consumer::Offers`], whose one subscription is
+//! the roll, `{Offers, 0, 0}`, comes first, then
+//! [`Consumer::MissionShips`], whose landing hook per slot,
+//! `{MissionShips, slot, 1}`, checks the goals, then
+//! [`Consumer::Missions`]. Missions go by slot, as the original's land
+//! check (@0xa19f7), and a mission's landing hooks go cargo, failure,
+//! success; the re-offer, `{Missions, 16, 0}`, comes after every slot.
+//! Plug-ins run after every stock consumer: an engine decision with no
+//! Rulebook key, since the original has no plug-ins. One difference stays: the original checks
 //! goals and then cargo, failure and success slot by slot, and here every
 //! slot's goals come first. Goal checks read only their own mission's
 //! counts, so the two differ only when a success script changes another
@@ -1471,8 +1543,8 @@
 //!   and drops the offer; [`abort_mission`](crate::Session::abort_mission)
 //!   runs the abort checks (`CanAbort`), then `OnAbort`;
 //! - `Landed`: each slot's three landing subscriptions,
-//!   `{Missions, slot, 0..=2}`, after the mission ships' goal checks and
-//!   the offer roll, in `_MissionLandCheck`'s order: by slot, the arrival
+//!   `{Missions, slot, 0..=2}`, after the offer roll and the mission
+//!   ships' goal checks, in `_MissionLandCheck`'s order: by slot, the arrival
 //!   (`_MissionLandCargoCheck`: the cargo picked up and dropped off, and
 //!   the destination reached), failure, success. A failure runs `OnFailure` and applies the failure
 //!   records; a success frees the slot, runs `OnSuccess`, passes its
@@ -1488,8 +1560,15 @@
 //!   day. An unabortable mission stays active and failed until its
 //!   return, where [`repeat_mission_failure`](crate::RuleKey::RepeatMissionFailure)
 //!   says whether `OnFailure` runs again;
-//! - `ShipFate`: mission-ships phase 2 counts the goals, and a loss that
-//!   fails the mission fails it at once, through this lifecycle; cargo
+//! - `ShipFate`: the mission ships' goal checks (mission-ships phase 2;
+//!   see "Ship goals"), each slot's `{MissionShips, slot, 2}`. The goals
+//!   met show `ShipDone`, run `OnShipDone`, and auto-abort a mission of
+//!   `Flags` 0x0001, with its `OnAbort`, its `DatePostInc` days and its
+//!   pay or fuel as an auto-abort at accept does (as do the system's
+//!   setup and the appear timer's arrivals, once they bring its ships); a check that fails a
+//!   disable or escort goal marks the mission failed, nothing run, to
+//!   fail at its return. A mission ship's loss that fails its mission
+//!   fails it at once, at the loss, through the quick failure; cargo
 //!   jettisoned ([`Session::jettison_cargo`](crate::Session::jettison_cargo))
 //!   or found by an interceptor's scan does the same, through the one
 //!   quick failure the deadline uses; cargo plundered waits for NPC
@@ -1579,14 +1658,16 @@
 //! - `_ShipVisibleToShip` (@0x971c) holds a ship invisible while it is
 //!   emerging from a hypergate (`_AIShipIsEmergingFromHypergate`
 //!   @0x972d), and a cloaked one (its fade level, +0x64) visible only to
-//!   a cloaking ship of its own side (`_HasCloak` @0x979b) or one close
-//!   enough on both axes (@0x97ae-0x97f8); every other ship is visible.
-//!   The engine has no cloak. It holds a ship waiting at the hypergate or
-//!   wormhole it comes out of invisible (`_ShipVisibleToShip` @0x972d, as
-//!   `_MissionObjectivesCheck` @0x9ea5c asks it), so a watched ship there
-//!   stays watched until it has emerged (see
-//!   [`emerge`](crate::traffic::emerge)); any other watched ship in the
-//!   system is visible.
+//!   an escort of it that has a cloak itself (its parent +0x9a the
+//!   target, `_HasCloak` @0x979b; never the player) or to an observer
+//!   with a cloak scanner (+0xc91c) within 200 on both axes
+//!   (@0x97a4-0x97f8); every other ship is visible. No stock outfit is a
+//!   cloak scanner, so the stock player sees a cloaked ship only once it
+//!   uncloaks (see [`cloak`](crate::cloak)). `_MissionObjectivesCheck`
+//!   (@0x9ea5c) asks it, so a watched ship waiting at the hypergate or
+//!   wormhole it comes out of stays watched until it has emerged (see
+//!   [`emerge`](crate::traffic::emerge)). A watched ship not yet visible
+//!   stays watched.
 //! - `S` (`_DoMissionAccept` @0x15407), `A` (`_AbortMission` @0x1532e)
 //!   and `M` and `N` in flight (@0x159a3, @0x159a8) are handled inside
 //!   `_EvalSetExp`, before its next operator. `Q` only sets
@@ -1705,9 +1786,24 @@ pub enum Fate {
     Disabled,
     /// Boarded by the player.
     Boarded,
-    /// First seen by the player: on screen and visible to it, which the
-    /// original polls each frame and the flight tick raises here.
+    /// First seen by the player: visible to it, which the original polls
+    /// each frame (`_ShipVisibleToShip` @0x9ea5c) and the flight tick
+    /// raises here ([`Session::sees`](crate::Session::sees): not
+    /// emerging from a gate, and uncloaked or within a cloak scanner's
+    /// sight). Only a ship that can cloak must also be on screen
+    /// (@0x9ea74-0x9eb09, [`Session::on_screen`](crate::Session::on_screen)).
     Observed,
+    /// Brought into the player's system, a mission's special ship set up
+    /// with the system or come in on its timer: what the original's
+    /// per-frame poll sees of an escort goal's ships (@0x9e931-0x9e980).
+    Arrived,
+    /// Left the player's system, a mission's special ship: jumped out, as
+    /// the original frees its slot at the end of its warp out
+    /// (`_LowLevelAIHandler` @0x85960-0x859bf), or landed under
+    /// [`RuleKey::LandedLeaves`](crate::RuleKey::LandedLeaves)'s other
+    /// reading. Raised as the traffic's tick takes it out, before its
+    /// slot counts it.
+    Departed,
 }
 
 /// Something that happened that story scripts react to, with its data,
@@ -1818,11 +1914,14 @@ impl EventFilter {
 }
 
 /// Who registered a subscription, in the order consumers run on one
-/// event: mission ships before missions, as a landing checks the goals
-/// before the missions, and every stock consumer before the plug-ins
-/// (see the module docs' "Dispatch").
+/// event: the offers first, as a landing rolls them before the land
+/// check; mission ships before missions, as the land check checks the
+/// goals before the missions; and every stock consumer before the
+/// plug-ins (see the module docs' "Dispatch").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Consumer {
+    /// The missions' offers (`mïsn` availability and resolution).
+    Offers,
     /// A mission's ships (`mïsn` `Ship*` fields).
     MissionShips,
     /// Missions (`mïsn`).
@@ -1953,11 +2052,13 @@ mod tests {
             on(Consumer::MissionShips, 5, 0, any),
             on(Consumer::Missions, 1, 4, any),
             on(Consumer::Nebulae, 130, 0, any),
+            on(Consumer::Offers, 0, 0, any),
         ]
     }
 
     fn sorted_ids() -> Vec<SubscriptionId> {
         vec![
+            id(Consumer::Offers, 0, 0),
             id(Consumer::MissionShips, 5, 0),
             id(Consumer::Missions, 1, 4),
             id(Consumer::Missions, 3, 0),
@@ -1992,6 +2093,22 @@ mod tests {
                 "rotated {turn}, reversed"
             );
         }
+    }
+
+    #[test]
+    fn a_landing_rolls_the_offers_before_it_checks_the_ship_goals() {
+        let landed = EventFilter::Any(StoryEventKind::Landed);
+        let subs = [
+            on(Consumer::MissionShips, i16::MIN, 0, landed),
+            on(Consumer::Offers, i16::MAX, 9, landed),
+        ];
+        assert_eq!(
+            ids(&dispatch_order(&subs, &LANDED)),
+            [
+                id(Consumer::Offers, i16::MAX, 9),
+                id(Consumer::MissionShips, i16::MIN, 0)
+            ]
+        );
     }
 
     #[test]

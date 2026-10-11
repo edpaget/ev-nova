@@ -179,12 +179,15 @@
 //! disabling it too when it was intact), each against the NPC's
 //! government, the record with each government changed and, by that
 //! government's change, the record in each of its systems
-//! ([`legal::convict`]). A mere hit is no crime, as in the original.
+//! ([`legal::convict`]). A mere hit is no crime, as in the original,
+//! and a mission's special ship, of any mark, is no victim of any of
+//! them (see the [`legal`] module's "Crimes").
 //!
 //! The player boards its target once it is disabled
 //! ([`Session::board`]), as the [`board`](crate::board) rules say: the
-//! boarding is the [`Crime::Board`] against the target's government, and
-//! the NPCs come to its help as for a hit. Then the player plunders it
+//! boarding is the [`Crime::Board`] against the target's government, but
+//! for a mission's special ship, and the NPCs come to its help as for a
+//! hit. Then the player plunders it
 //! ([`Session::plunder`]): its cargo into the hold, its credits, its
 //! ammunition as outfits and its energy into the tank, each once, at the
 //! risk of its self-destruct; and captures it, with odds from the crews,
@@ -325,6 +328,8 @@
 //! data the simulation does not handle yet, each once a session, with
 //! [`Session::take_diagnostics`].
 
+mod aux_ships;
+mod cloaks;
 mod control;
 mod crons;
 mod edit;
@@ -332,11 +337,14 @@ mod entry;
 mod escorts;
 mod events;
 mod fighters;
+mod gate_follow;
 mod hail;
 mod hire;
 mod hooks;
 mod mission_cargo;
+mod mission_escorts;
 mod mission_screens;
+mod mission_ships;
 mod missions;
 mod outfits;
 mod person_offers;
@@ -395,7 +403,7 @@ use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
 use crate::control::{ControlBits, NovaBits, ScriptNote, SetOpKind};
 use crate::date::{self, GameDate};
-use crate::escort::EscortDuty;
+use crate::escort::{EscortDuty, FormationSlot};
 use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
 use crate::gate::{
@@ -442,7 +450,7 @@ use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::story::day::Stay;
 use crate::story::rebuild::Rebuilt;
-use crate::story::{Fate, OverlaidGalaxy, StoryEvent};
+use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent};
 use crate::targeting::{self, TargetPick};
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Npc, NpcId};
@@ -580,6 +588,10 @@ pub struct Session {
     /// flight: from the session's start, and after a relocation that
     /// resets the traffic while landed. A take-off populates at once.
     traffic_due: bool,
+    /// The system the player last jumped from (the original's player
+    /// +0x94, set @0x6bd4f): the side mission ships coming in later enter
+    /// from. None until the session's first jump.
+    jumped_from: Option<SystemId>,
     /// Every weapon and ship type's combat fields, read when the session
     /// starts.
     arsenal: Arsenal,
@@ -600,6 +612,9 @@ pub struct Session {
     combat: Combat,
     /// The NPC the player targets, if any.
     target: Option<NpcId>,
+    /// What the view shows of space about the player's ship (see the
+    /// `cloaks` module).
+    play_area: crate::cloak::Area,
     /// The secondary weapon the player has selected, if any: none to
     /// start with, set by the select key alone, and let go as the module
     /// docs say. By the engine it may name a weapon the ship no longer
@@ -762,6 +777,14 @@ pub struct Session {
     /// offers are re-offered after its last slot (see the `missions`
     /// module); never saved.
     reoffer_due: bool,
+    /// The slots of the missions accepted in flight, whose ship goals are
+    /// checked once the settling that accepted them is done (see the
+    /// `mission_ships` module); never saved.
+    goal_checks_due: Vec<u8>,
+    /// The person's NPC an accept on its hail swaps for the ship of the
+    /// mission in the slot, once the settling that accepted it begins
+    /// (see the `mission_ships` module); never saved.
+    swap_due: Option<(NpcId, u8)>,
     /// The slot whose mission's script is running, if any: what a `Q`
     /// fills its mission tags from (see the `missions` module); never
     /// saved.
@@ -906,6 +929,7 @@ impl Session {
             date_affixes: catalog.date_affixes(),
             traffic: Traffic::new(),
             traffic_due: true,
+            jumped_from: None,
             arsenal,
             govts,
             // Refitted below, from the ship and the outfits the pilot owns.
@@ -915,6 +939,7 @@ impl Session {
             trigger: Trigger::default(),
             combat: Combat::default(),
             target: None,
+            play_area: crate::cloak::DEFAULT_PLAY_AREA,
             secondary: None,
             strikes: Vec::new(),
             aboard: None,
@@ -970,6 +995,8 @@ impl Session {
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
             offers: Offers::default(),
             reoffer_due: false,
+            goal_checks_due: Vec::new(),
+            swap_due: None,
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
             suppressed: BTreeSet::new(),
@@ -1219,7 +1246,24 @@ impl Session {
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
+        self.populate_as(catalog, chance, None);
+    }
+
+    /// Fills the system as [`Session::populate`] does, the active
+    /// missions' special ships set up first, `entering` it by a way in
+    /// whose enter-system hook is still to run, if any (see the
+    /// `mission_ships` module). Once the ships are in, each mission of
+    /// `Flags` 0x0001 whose slot the setup took auto-aborts, in slot
+    /// order.
+    fn populate_as(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+        entering: Option<Entrance>,
+    ) {
+        self.give_back_aux_ships(&BTreeSet::new());
         let table = self.spawn_table(catalog);
+        let (missions, set_up) = self.setup_mission_ships(&table, entering, chance);
         let facts = control::Facts {
             pilot: &self.pilot,
             ammo_outfits: &self.ammo_outfits,
@@ -1238,22 +1282,39 @@ impl Session {
             ..World::new(&self.sites)
         };
         let last = self.last_npc();
-        self.traffic.enter_in(table, world, chance);
+        self.traffic.enter_with(table, world, missions, chance);
         self.resolve_person_offers(last, &mut &mut *chance);
         self.traffic_due = false;
         self.story.watched.clear();
+        self.mission_ships_came(last);
+        self.abort_set_up(&set_up, &mut &mut *chance);
         self.enter_escorts();
+        if entering.is_none() {
+            self.snap_mission_escorts();
+        }
         self.strikes.clear();
         self.aboard = None;
         self.talk = None;
         self.clear_lost_target();
     }
 
+    /// Fills the system as it is entered `how`, by a way in whose
+    /// enter-system hook is still to run (see [`Session::populate_as`]).
+    pub(super) fn populate_entering(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        how: Entrance,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        self.populate_as(catalog, chance, Some(how));
+    }
+
     /// What the system's traffic is drawn from, read from `catalog`: its
-    /// ships, persons and fleets, the pilot's person escorts aside.
+    /// ships, persons and fleets, the pilot's person escorts aside, and
+    /// the `düde`s of the active missions' special ships.
     fn spawn_table(&self, catalog: &(impl TrafficCatalog + ?Sized)) -> SpawnTable {
         let system = self.pilot.system;
-        SpawnTable::resolve(
+        let mut table = SpawnTable::resolve(
             catalog,
             system,
             self.galaxy.govt(system),
@@ -1268,7 +1329,15 @@ impl Session {
                 .iter()
                 .filter_map(|escort| escort.person)
                 .collect(),
-        )
+        );
+        table.add_mission_dudes(
+            catalog,
+            &self.mission_dudes(),
+            &self.ships,
+            &self.outfits,
+            &self.arsenal,
+        );
+        table
     }
 
     /// Advances the NPC traffic one tick, NPCs deciding as `behaviour`
@@ -1280,7 +1349,9 @@ impl Session {
     /// ([`Session::take_off`]).
     /// A target that landed or jumped out is let go. Each tick that moves
     /// the NPCs raises the first sighting of the ships watched
-    /// ([`Session::watch_ship`]).
+    /// ([`Session::watch_ship`]), and each mission ship that left the
+    /// system raises [`Fate::Departed`] and is counted (see the
+    /// `mission_ships` module).
     pub fn tick_traffic(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -1291,6 +1362,9 @@ impl Session {
             if self.traffic_due {
                 self.populate(catalog, chance);
             } else {
+                self.mission_ship_arrivals(catalog, None, chance);
+                self.unmark_inactive_mission_ships();
+                self.join_mission_escorts();
                 let system_govt = self.galaxy.govt(self.pilot.system);
                 let facts = control::Facts {
                     pilot: &self.pilot,
@@ -1315,7 +1389,9 @@ impl Session {
                 };
                 let strikes = std::mem::take(&mut self.strikes);
                 let last = self.last_npc();
+                let marks = self.mission_marks();
                 self.traffic.tick_in(behaviour, world, &strikes, chance);
+                self.mission_ships_left(&marks);
                 self.resolve_person_offers(last, &mut &mut *chance);
                 self.dock_fighters();
                 self.orphan_fighters();
@@ -1431,19 +1507,24 @@ impl Session {
     ///
     /// Each NPC intact before the tick and no longer raises
     /// [`Fate::Disabled`], and each destroyed raises [`Fate::Destroyed`]
-    /// as it is taken out (see the `story` module's findings). The
-    /// stellars shown that shots can hit take their damage, and each shot
+    /// as it is taken out (see the `story` module's findings). A rescue
+    /// mission's ship not yet boarded fights held disabled
+    /// ([`Session::mission_ship_held`]; see the `mission_ships` module).
+    /// The player is convicted of disabling and destroying an NPC, but
+    /// not a mission's special ship (see `punish`). The stellars
+    /// shown that shots can hit take their damage, and each shot
     /// down is destroyed and runs its `OnDestroy` (see the `stellars`
     /// module).
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         if self.landed.is_some() || self.jumping().is_some() {
             return;
         }
-        let was: Vec<(NpcId, Condition, Option<GovtId>)> = self
+        let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
+        let held: Vec<bool> = self
             .traffic
             .npcs()
             .iter()
-            .map(|npc| (npc.id, npc.condition, npc.govt))
+            .map(|npc| self.mission_ship_held(npc))
             .collect();
         let mut stellars = self.stellar_targets();
         let pilot = &mut self.pilot;
@@ -1464,10 +1545,11 @@ impl Session {
             target: self.target.map(ShipRef::Npc),
             reserves: &mut pilot.reserves,
             condition: &mut self.condition,
+            held_disabled: false,
             armament: &mut self.armament,
             rounds: &mut rounds,
         }];
-        for npc in self.traffic.npcs_mut() {
+        for (npc, held_disabled) in self.traffic.npcs_mut().iter_mut().zip(held) {
             let fleet = npc.fleet();
             let Npc {
                 id,
@@ -1497,6 +1579,7 @@ impl Session {
                 target: *target,
                 reserves,
                 condition,
+                held_disabled,
                 armament,
                 rounds,
             });
@@ -1509,18 +1592,19 @@ impl Session {
             &mut stellars,
             chance,
         );
-        self.raise_disabled(&was);
+        self.raise_disabled(&was, &mut &mut *chance);
         let mut strikes = self.combat.take_strikes();
         self.refill_invincible(&mut strikes);
         self.hold_grudges(&strikes);
         self.punish(&strikes, &was, rules.law);
         self.credit_kills(&strikes, &was);
+        self.cloak_hits(&strikes);
         self.strikes.extend(strikes);
         let sorties = self.combat.take_sorties();
         self.launch_fighters(&sorties);
         self.sync_fleet();
         self.lose_escorts();
-        self.take_out_the_destroyed();
+        self.take_out_the_destroyed(&mut &mut *chance);
         self.orphan_fighters();
         self.clear_lost_target();
         self.strike_stellars(&stellars, rules.law, chance);
@@ -1528,29 +1612,40 @@ impl Session {
     }
 
     /// Takes each NPC destroyed out of the system, raising
-    /// [`Fate::Destroyed`] for it as it goes.
-    fn take_out_the_destroyed(&mut self) {
-        let destroyed: Vec<NpcId> = self
+    /// [`Fate::Destroyed`] for it and counting it lost when it is a
+    /// mission's special ship, drawing on `chance` (see the
+    /// `mission_ships` module), as it goes. The formation re-forms when a
+    /// mission escort was among them.
+    fn take_out_the_destroyed(&mut self, chance: &mut dyn Chance) {
+        let destroyed: Vec<(NpcId, bool)> = self
             .traffic
             .npcs()
             .iter()
             .filter(|npc| npc.condition == Condition::Destroyed)
-            .map(|npc| npc.id)
+            .map(|npc| (npc.id, npc.mission_escort()))
             .collect();
-        for id in destroyed {
+        let mut reform = false;
+        for (id, mission_escort) in destroyed {
             self.raise(StoryEvent::ShipFate {
                 ship: id,
                 fate: Fate::Destroyed,
             });
+            self.count_lost_mission_ship(id, chance);
             self.lose_destroyed(id);
+            reform |= mission_escort;
+        }
+        if reform {
+            self.reform();
         }
     }
 
     /// Raises [`Fate::Disabled`] for each NPC that `was` intact before the
     /// fight's tick and is no longer: disabled, or broken up at once, which
     /// the original counts as disabled too (`_DamageShip` @0x3ae5b,
-    /// @0x3af8b), as [`Session::punish`] convicts it of both.
-    fn raise_disabled(&mut self, was: &[(NpcId, Condition, Option<GovtId>)]) {
+    /// @0x3af8b), as [`Session::punish`] convicts it of both. A mission's
+    /// special ship is counted disabled, drawing on `chance` (see the
+    /// `mission_ships` module).
+    fn raise_disabled(&mut self, was: &[NpcBefore], chance: &mut dyn Chance) {
         let downed: Vec<NpcId> = self
             .traffic
             .npcs()
@@ -1559,7 +1654,7 @@ impl Session {
                 npc.condition != Condition::Intact
                     && was
                         .iter()
-                        .any(|&(id, before, _)| id == npc.id && before == Condition::Intact)
+                        .any(|before| before.id == npc.id && before.condition == Condition::Intact)
             })
             .map(|npc| npc.id)
             .collect();
@@ -1568,25 +1663,30 @@ impl Session {
                 ship,
                 fate: Fate::Disabled,
             });
+            self.count_disabled_mission_ship(ship, chance);
         }
     }
 
     /// Convicts the player of its crimes among `strikes`, as `law` says:
     /// disabling an NPC, and breaking one up, which is disabling it too
     /// when it `was` intact before (as `_DamageShip` slaps both). Each
-    /// victim's condition and government are as it `was` before the
-    /// fight's tick.
-    fn punish(
-        &mut self,
-        strikes: &[Strike],
-        was: &[(NpcId, Condition, Option<GovtId>)],
-        law: &dyn LegalCode,
-    ) {
+    /// victim's condition, government and mission mark are as it `was`
+    /// before the fight's tick. A mission's special ship, of any mark,
+    /// is convicted of neither: `_DamageShip` passes the ship's mark
+    /// (@0x3adb3, @0x3ae08), and `_SlapWithPenalty` slaps only for none
+    /// (@0x9c10; see the [`legal`] module's "Crimes").
+    fn punish(&mut self, strikes: &[Strike], was: &[NpcBefore], law: &dyn LegalCode) {
         for strike in strikes.iter().filter(|strike| strike.by == ShipRef::Player) {
             let ShipRef::Npc(id) = strike.ship else {
                 continue;
             };
-            let Some(&(_, condition, govt)) = was.iter().find(|(npc, ..)| *npc == id) else {
+            let Some(&NpcBefore {
+                condition,
+                govt,
+                marked: false,
+                ..
+            }) = was.iter().find(|before| before.id == id)
+            else {
                 continue;
             };
             let crimes: &[Crime] = match (strike.downed, condition) {
@@ -1609,12 +1709,16 @@ impl Session {
     /// from `was`, is not derelict. As the original's `_DamageShip`
     /// (@0x3ad4f-0x3ae53), the credit comes with the hit, before a
     /// shooter in the fleet can be lost or the victim taken out.
-    fn credit_kills(&mut self, strikes: &[Strike], was: &[(NpcId, Condition, Option<GovtId>)]) {
+    fn credit_kills(&mut self, strikes: &[Strike], was: &[NpcBefore]) {
         for strike in strikes {
             let (ShipRef::Npc(id), Some(Downed::BreakingUp)) = (strike.ship, strike.downed) else {
                 continue;
             };
-            let Some(&(_, _, govt)) = was.iter().find(|(npc, ..)| *npc == id) else {
+            let Some(govt) = was
+                .iter()
+                .find(|before| before.id == id)
+                .map(|before| before.govt)
+            else {
                 continue;
             };
             let by_players_fleet = match strike.by {
@@ -1638,10 +1742,15 @@ impl Session {
 
     /// Lets go of the target once it is no longer in the system (it was
     /// destroyed, landed or jumped out, or the system was populated
-    /// afresh) or no longer targetable (it is breaking up), as the
-    /// original does every frame.
+    /// afresh) or no longer targetable (it is breaking up, or cloaked and
+    /// the player cannot target cloaked ships), as the original does every
+    /// frame.
     fn clear_lost_target(&mut self) {
-        if self.target().is_none_or(|npc| !targeting::targetable(npc)) {
+        let cloaked_ok = self.scanner().targets;
+        if self
+            .target()
+            .is_none_or(|npc| !targeting::targetable(npc, cloaked_ok))
+        {
             self.target = None;
         }
     }
@@ -1652,18 +1761,20 @@ impl Session {
     /// next. While the ship is landed or jumping, nothing changes.
     pub fn select_target(&mut self, pick: TargetPick) -> Option<NpcId> {
         if self.landed.is_none() && self.jumping().is_none() {
+            let cloaked_ok = self.scanner().targets;
             let npcs = self.traffic.npcs();
             let from = self.player.position;
             match pick {
                 TargetPick::Nearest => {
-                    let nearest = targeting::nearest(npcs, from, |_| true);
+                    let nearest = targeting::nearest(npcs, from, cloaked_ok, |_| true);
                     self.target = nearest.or(self.target);
                 }
                 TargetPick::NearestThreat => {
-                    let nearest = targeting::nearest(npcs, from, Npc::threatens_player);
+                    let threat = Npc::threatens_player;
+                    let nearest = targeting::nearest(npcs, from, cloaked_ok, threat);
                     self.target = nearest.or(self.target);
                 }
-                TargetPick::Next => self.target = targeting::next(npcs, self.target),
+                TargetPick::Next => self.target = targeting::next(npcs, self.target, cloaked_ok),
                 TargetPick::NextEscort => {
                     self.target = targeting::next_escort(npcs, self.target);
                 }
@@ -2010,6 +2121,7 @@ impl Session {
                 hold: false,
             },
         };
+        self.jumped_from = Some(from);
         self.enter_system(Entry::Jump { hops }, entered, catalog, catalog, chance);
         Some(self.pilot.system)
     }
@@ -2290,7 +2402,7 @@ impl Session {
         };
         match exit {
             Ok((system, exit)) => {
-                self.come_out(system, &exit, catalog, chance);
+                self.come_out(system, &exit, GateKind::Hypergate, catalog, chance);
                 let system = self.pilot.system;
                 self.messages.push(SimMessage::ExitedHypergate(system));
                 Ok(system)
@@ -2325,9 +2437,12 @@ impl Session {
     /// `entry` module, which keeps a held `P` sound and lets go of the
     /// strikes, the target, the boarding and the hail. Just before, after
     /// the exit's roll or the days, the escort-strength timer is armed on
-    /// `chance` (see [`strength`]), as a gate's
-    /// exit joins the take-off's path in the original
-    /// (`_HandlePlayerDockRequest` @0x66f40, @0x6706f).
+    /// `chance` (see [`strength`]), as a gate's exit joins the take-off's
+    /// path in the original (`_HandlePlayerDockRequest` @0x66f40,
+    /// @0x6706f). The special ships following the player are decided
+    /// next, as [`RuleKey::GateFollow`] says (see the `gate_follow`
+    /// module): those that follow come out of the exit gate after the
+    /// player, or where it arrived like a jump.
     pub fn enter_wormhole(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -2339,18 +2454,22 @@ impl Session {
         let sites = catalog.gate_sites();
         let exit = *wormhole_exit(here, self.pilot.system, &sites, self.wormholes, chance)
             .ok_or(GateRefusal::NoExit)?;
-        self.come_out(exit.system, &exit, catalog, chance);
+        self.come_out(exit.system, &exit, GateKind::Wormhole, catalog, chance);
         let system = self.pilot.system;
         self.messages.push(SimMessage::PassedWormhole(system));
         Ok(system)
     }
 
-    /// Brings the ship out of `exit` in `system`: see
-    /// [`Session::enter_wormhole`].
+    /// Brings the ship out of `exit`, a gate of `kind`, in `system`: see
+    /// [`Session::enter_wormhole`]. Before it enters, the exit decides
+    /// what becomes of the special ships following the player
+    /// ([`Session::exit_gate_slots`]); once it has, those that follow come
+    /// out of the gate after it ([`Session::emerge_followers`]).
     fn come_out(
         &mut self,
         system: SystemId,
         exit: &GateSite,
+        kind: GateKind,
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),
     ) {
@@ -2370,6 +2489,7 @@ impl Session {
         // A gate's exit joins the take-off's path before its seed
         // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f).
         self.arm_strength_timer(chance);
+        self.exit_gate_slots(kind, catalog, &mut &mut *chance);
         let entered = Arrival {
             system,
             sites: self.read_sites(catalog, system),
@@ -2380,6 +2500,7 @@ impl Session {
             },
         };
         self.enter_system(Entry::Gate, entered, catalog, catalog, chance);
+        self.emerge_followers(exit.position, catalog, chance);
     }
 
     /// Docks the ship at `stellar`, one of the system's, and last raises
@@ -2460,9 +2581,10 @@ impl Session {
     /// or sold, four if a ship was bought, and the take-off's own day
     /// (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa-0x6020e,
     /// `_PlayerLandOnStellar` @0x63440). The wage is a day's whatever the
-    /// days. After every day the escort-strength timer is armed on
-    /// `chance` (see [`strength`], @0x6706f),
-    /// and the population rolls on it last.
+    /// days. After every day each active mission's auxiliary ships are
+    /// restarted on `chance` (@0x634df-0x6353c; see the `aux_ships`
+    /// module), then the escort-strength timer is armed on it (see
+    /// [`strength`], @0x6706f), and the population rolls on it last.
     pub fn take_off(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -2498,7 +2620,9 @@ impl Session {
         // (@0x6706f), then the old computer ships deleted and the system
         // set up afresh before the first frame (`_DeleteAllComputerShips`
         // @0x67096, `_SetupShipsInSystem` @0x674c2), the escorts among
-        // them.
+        // them. The take-off's restart of the auxiliary ships comes
+        // before both (@0x634df-0x6353c).
+        self.restart_every_aux(&mut &mut *chance);
         self.arm_strength_timer(chance);
         self.populate(catalog, chance);
         self.sounds.push(SimSound::TookOff);
@@ -3313,7 +3437,10 @@ impl Session {
     /// Boards the player's target, if it is not landed or jumping and the
     /// [`board`](crate::board) checks allow it, and gives what is on
     /// board: the player matches the target's velocity, `law` convicts it
-    /// of the [`Crime::Board`] against the target's government, the
+    /// of the [`Crime::Board`] against the target's government (but for
+    /// a mission's special ship, here one of a failed mission: the
+    /// original passes its mark, `_HandlePlayerBoardAttempt` @0x6582b,
+    /// and `_SlapWithPenalty` slaps only for none, @0x9c10), the
     /// NPCs come to the target's help as for a hit by the player (a
     /// strike of no damage, answered on the next traffic tick), the
     /// target is marked boarded, and every other NPC after it lets it go
@@ -3325,12 +3452,22 @@ impl Session {
     /// available from a ship offers it instead, once the crime is
     /// convicted ([`Boarding::Offered`], see the `person_offers` module):
     /// nothing is rolled or granted, and the ship is marked boarded, and
-    /// [`Fate::Boarded`] raised, only once the mission is accepted.
+    /// [`Fate::Boarded`] raised, only once the mission is accepted. A
+    /// mission's special ship, but one of a failed mission, is only
+    /// marked boarded, its velocity matched, and maybe counted, a
+    /// `PickupMode` 2 mission's cargo picked up
+    /// ([`Boarding::MissionShip`], see the `mission_ships` module); one
+    /// of a failed mission is plundered, uncharged.
     ///
     /// # Errors
     ///
     /// The [`BoardRefusal`] that applies, and nothing changes;
-    /// [`BoardRefusal::NoTarget`] while landed or jumping.
+    /// [`BoardRefusal::NoTarget`] while landed or jumping. A `PickupMode`
+    /// 2 mission's special ship whose cargo has no room is
+    /// [`BoardRefusal::CantBoard`], and the pickup's refusal is queued
+    /// as a mission text, as `_DoMissionCargoPickup` shows its dialog
+    /// (@0x982ff); nothing else changes, the velocity not matched
+    /// (@0x65fdb).
     pub fn board(
         &mut self,
         law: &dyn LegalCode,
@@ -3349,9 +3486,16 @@ impl Session {
         });
         check_board(&self.player, self.condition, target)?;
         let npc = self.target().cloned().ok_or(BoardRefusal::NoTarget)?;
+        if let Some(boarding) = self.board_mission_ship(&npc) {
+            let boarding = boarding?;
+            self.player.velocity = npc.state.velocity;
+            return Ok(boarding);
+        }
         self.player.velocity = npc.state.velocity;
-        let changes = law.penalties(Crime::Board, npc.govt, &self.govts);
-        legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+        if npc.mission.is_none() {
+            let changes = law.penalties(Crime::Board, npc.govt, &self.govts);
+            legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+        }
         self.strikes.push(Strike {
             ship: ShipRef::Npc(npc.id),
             by: ShipRef::Player,
@@ -3742,9 +3886,7 @@ impl Session {
         npc.trigger = Trigger::default();
         npc.provoked = 0.0;
         npc.escort = Some(EscortDuty {
-            slot: 0,
-            ships: 0,
-            spacing: 0.0,
+            formation: FormationSlot::default(),
             order: None,
         });
         let escort = Escort {
@@ -3893,6 +4035,29 @@ impl Session {
             .ok()
             .filter(|&fuel| fuel > 0)
             .map_or(0.0, |fuel| chance.below(fuel) as f32);
+    }
+}
+
+/// An NPC as it was before a fight's tick: what the tick's disablings,
+/// crimes and kills are read against, as the tick can change each (a
+/// mission failed by its ship's loss can lose the ship its mark).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct NpcBefore {
+    id: NpcId,
+    condition: Condition,
+    govt: Option<GovtId>,
+    /// Whether it carried a mission's mark, of any slot.
+    marked: bool,
+}
+
+impl NpcBefore {
+    fn of(npc: &Npc) -> Self {
+        Self {
+            id: npc.id,
+            condition: npc.condition,
+            govt: npc.govt,
+            marked: npc.mission.is_some(),
+        }
     }
 }
 
@@ -12085,9 +12250,11 @@ mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         let escort = &mut session.traffic.npcs_mut()[0];
         escort.escort = Some(crate::escort::EscortDuty {
-            slot: 2,
-            ships: 2,
-            spacing: 30.0,
+            formation: FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
             order: None,
         });
         escort.trigger = FIRE;
@@ -12110,6 +12277,48 @@ mod tests {
         );
         assert_eq!(session.reserves().shield.now, 30.0, "untouched");
         assert_eq!(session.reserves().armor.now, 45.0);
+    }
+
+    /// The fight's 60 ticks of the player and NPC 0, 100 above it, firing
+    /// at each other point-blank, NPC 0 marked by slot 0 as `formation`
+    /// says: the NPC's shield and the player's after them.
+    fn exchange_with_a_mission_ship(formation: Option<FormationSlot>) -> (f32, f32) {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let ship = &mut session.traffic.npcs_mut()[0];
+        ship.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            formation,
+        });
+        ship.trigger = FIRE;
+        ship.target = Some(ShipRef::Player);
+        session.hold_trigger(FIRE);
+        session.target = Some(NpcId(0));
+        for _ in 0..60 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        let npc = session
+            .npcs()
+            .first()
+            .map_or(0.0, |npc| npc.reserves.shield.now);
+        (npc, session.reserves().shield.now)
+    }
+
+    #[test]
+    fn the_players_shots_pass_through_a_mission_escort_but_not_a_mission_ship_yet_to_join() {
+        let joined = FormationSlot {
+            slot: 2,
+            ships: 2,
+            spacing: 30.0,
+        };
+        assert_eq!(
+            exchange_with_a_mission_ship(Some(joined)),
+            (30.0, 30.0),
+            "untouched"
+        );
+        let (npc, player) = exchange_with_a_mission_ship(None);
+        assert!(npc < 30.0 && player < 30.0, "{npc} {player}");
     }
 
     #[test]
@@ -12624,6 +12833,211 @@ mod tests {
         );
     }
 
+    /// How NPC 0 is a mission's special ship, if it is: a mark of slot 0
+    /// holding a mission, unfailed or failed, or a stale mark of slot 5,
+    /// free.
+    #[derive(Clone, Copy, Debug)]
+    enum Marked {
+        Active,
+        Failed,
+        Stale,
+    }
+
+    /// Marks NPC 0 of `session` as `marked` says, filling slot 0 with
+    /// mission 140 for a mark of it.
+    fn mark_the_npc(session: &mut Session, marked: Marked) {
+        let slot = match marked {
+            Marked::Active | Marked::Failed => {
+                let mut active = crate::testkit::carrying(140, 0);
+                if matches!(marked, Marked::Failed) {
+                    active.failed = Some(crate::mission::FailedBy::Marked);
+                }
+                assert!(session.pilot.missions.put(0, active));
+                0
+            }
+            Marked::Stale => 5,
+        };
+        session.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
+            slot,
+            behav: crate::mission::ships::ShipBehav::Own,
+            formation: None,
+        });
+    }
+
+    const MARKS: [Marked; 3] = [Marked::Active, Marked::Failed, Marked::Stale];
+
+    /// [`lawful`]'s NPC, marked as `marked` says, shot at until it is
+    /// destroyed, by the weapons of `catalog`, fire held for the first
+    /// tick only when `once`: the crimes a [`Witness`] heard, then the
+    /// records by the engine's law.
+    fn crimes_against(
+        catalog: &FakePilotCatalog,
+        marked: Option<Marked>,
+        once: bool,
+    ) -> (Vec<(Crime, Option<GovtId>)>, [i16; 4]) {
+        let fight = |law: &dyn LegalCode| {
+            let mut session = facing_an_npc(catalog, 180);
+            if let Some(marked) = marked {
+                mark_the_npc(&mut session, marked);
+            }
+            session.hold_trigger(FIRE);
+            let rules = Rules {
+                law,
+                ..Rules::default()
+            };
+            for _ in 0..80 {
+                session.tick_combat(rules, &mut NeverFires);
+                if once {
+                    session.hold_trigger(Trigger::default());
+                }
+            }
+            assert_eq!(session.npcs(), [], "destroyed");
+            records(&session)
+        };
+        let witness = Witness::default();
+        fight(&witness);
+        (
+            witness.seen.take(),
+            fight(&crate::legal::NovaLaw::default()),
+        )
+    }
+
+    #[test]
+    fn disabling_and_destroying_a_mission_ship_changes_no_record() {
+        let catalog = lawful();
+        assert_eq!(
+            crimes_against(&catalog, None, false),
+            (
+                vec![
+                    (Crime::Disable, Some(GovtId(140))),
+                    (Crime::Kill, Some(GovtId(140)))
+                ],
+                [-10, -10, 9, 20]
+            ),
+            "the same ship of no mission"
+        );
+        for marked in MARKS {
+            assert_eq!(
+                crimes_against(&catalog, Some(marked), false),
+                (vec![], [0; 4]),
+                "{marked:?}: any mark escapes the penalty, as _SlapWithPenalty \
+                 slaps only for a mission slot of -1 (@0x9c10)"
+            );
+        }
+    }
+
+    #[test]
+    fn breaking_up_an_intact_mission_ship_at_once_changes_no_record() {
+        let catalog = FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                mass_dmg: 500,
+                energy_dmg: 500,
+                ..blaster()
+            }],
+            ..lawful()
+        };
+        assert_eq!(crimes_against(&catalog, None, true).0.len(), 2);
+        for marked in MARKS {
+            assert_eq!(
+                crimes_against(&catalog, Some(marked), true),
+                (vec![], [0; 4]),
+                "{marked:?}"
+            );
+        }
+    }
+
+    /// What downing [`crimes_against_a_failing_escort`]'s ship did.
+    #[derive(Debug, PartialEq)]
+    struct EscortDowned {
+        /// The crimes a [`Witness`] heard.
+        crimes: Vec<(Crime, Option<GovtId>)>,
+        /// The records by the engine's law.
+        records: [i16; 4],
+        /// Whether slot 0 still holds the mission after the tick.
+        held: bool,
+        /// Whether the NPC is still marked after the tick.
+        marked: bool,
+    }
+
+    /// [`lawful`]'s NPC marked as an escort of mission 140 in slot 0,
+    /// abortable, so its first loss fails the mission at once and
+    /// releases the ship, shot at by `catalog`'s weapons until the tick
+    /// it is downed.
+    fn crimes_against_a_failing_escort(mut catalog: FakePilotCatalog) -> EscortDowned {
+        catalog.missions = vec![MissionRecord {
+            ships: crate::catalog::MissionShip {
+                goal: 3,
+                ..crate::catalog::MissionShip::NONE
+            },
+            ..crate::testkit::mission(140)
+        }];
+        let fight = |law: &dyn LegalCode| {
+            let mut session = facing_an_npc(&catalog, 180);
+            mark_the_npc(&mut session, Marked::Active);
+            session.hold_trigger(FIRE);
+            let rules = Rules {
+                law,
+                ..Rules::default()
+            };
+            for _ in 0..80 {
+                session.tick_combat(rules, &mut NeverFires);
+                if session.npcs()[0].condition != Condition::Intact {
+                    break;
+                }
+            }
+            assert_ne!(session.npcs()[0].condition, Condition::Intact, "downed");
+            (
+                records(&session),
+                session.pilot().missions().get(0).is_some(),
+                session.npcs()[0].mission.is_some(),
+            )
+        };
+        let witness = Witness::default();
+        let (_, held, marked) = fight(&witness);
+        let (records, ..) = fight(&crate::legal::NovaLaw::default());
+        EscortDowned {
+            crimes: witness.seen.take(),
+            records,
+            held,
+            marked,
+        }
+    }
+
+    /// A loss that fails the ship's mission clears its mark within the
+    /// tick (`raise_disabled` before `punish`), so `punish` must read the
+    /// mark from before the tick.
+    #[test]
+    fn downing_a_mission_ship_whose_loss_fails_its_mission_changes_no_record() {
+        assert_eq!(
+            crimes_against_a_failing_escort(lawful()),
+            EscortDowned {
+                crimes: vec![],
+                records: [0; 4],
+                held: false,
+                marked: false,
+            },
+            "disabled: the mission ended and the ship unmarked in the tick"
+        );
+        let at_once = FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                mass_dmg: 500,
+                energy_dmg: 500,
+                ..blaster()
+            }],
+            ..lawful()
+        };
+        assert_eq!(
+            crimes_against_a_failing_escort(at_once),
+            EscortDowned {
+                crimes: vec![],
+                records: [0; 4],
+                held: false,
+                marked: false,
+            },
+            "broken up at once: neither Disable nor Kill"
+        );
+    }
+
     // The combat rating.
 
     /// [`lawful`], its traffic's ship 129 of `strength`.
@@ -12724,13 +13138,20 @@ mod tests {
         assert_eq!(session.arsenal.strength(ShipId(129)), 10);
         if escorting {
             session.traffic.npcs_mut()[1].escort = Some(EscortDuty {
-                slot: 2,
-                ships: 2,
-                spacing: 100.0,
+                formation: FormationSlot {
+                    slot: 2,
+                    ships: 2,
+                    spacing: 100.0,
+                },
                 order: None,
             });
         }
-        let was = [(NpcId(0), Condition::Disabled, Some(GovtId(140)))];
+        let was = [NpcBefore {
+            id: NpcId(0),
+            condition: Condition::Disabled,
+            govt: Some(GovtId(140)),
+            marked: false,
+        }];
         let broken_up_by = |by| Strike {
             ship: ShipRef::Npc(NpcId(0)),
             by,
@@ -12771,7 +13192,12 @@ mod tests {
             .map(|npc| npc.id)
             .find(|id| !before.contains(id))
             .expect("launched");
-        let was = [(NpcId(0), Condition::Disabled, Some(GovtId(140)))];
+        let was = [NpcBefore {
+            id: NpcId(0),
+            condition: Condition::Disabled,
+            govt: Some(GovtId(140)),
+            marked: false,
+        }];
         session.credit_kills(
             &[Strike {
                 ship: ShipRef::Npc(NpcId(0)),
@@ -12793,7 +13219,12 @@ mod tests {
     fn only_a_break_up_of_an_npc_credits_the_rating() {
         let catalog = boardable();
         let mut session = alongside(&catalog);
-        let was = [(NpcId(0), Condition::Intact, Some(GovtId(140)))];
+        let was = [NpcBefore {
+            id: NpcId(0),
+            condition: Condition::Intact,
+            govt: Some(GovtId(140)),
+            marked: false,
+        }];
         let strike = |ship, downed| Strike {
             ship,
             by: ShipRef::Player,
@@ -12899,6 +13330,320 @@ mod tests {
         }
         assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
         assert!(session.story.watched.is_empty(), "forgotten once seen");
+    }
+
+    /// A full cloak: fading out from 32, it reads cloaked for 32 more
+    /// ticks.
+    const CLOAKED: crate::cloak::Cloak = crate::cloak::Cloak {
+        fade: crate::cloak::FADE_FULL,
+        direction: 0,
+    };
+
+    /// A cloak and fuel: a ship of it can cloak, and none of its AI-cloak
+    /// conditions fire.
+    const CAN_CLOAK: crate::cloak::CloakGear = crate::cloak::CloakGear {
+        device: true,
+        decloaks_when_hit: false,
+        on_radar: false,
+        flags2: 0,
+    };
+
+    /// [`armed`], with outfit 260, a cloak scanner of `ModVal` `scan`, the
+    /// player owns.
+    fn scanning(scan: i16) -> FakePilotCatalog {
+        let mut catalog = armed();
+        catalog
+            .outfits
+            .push(outfit(260, &[(crate::cloak::MOD_SCANNER, scan)]));
+        catalog
+    }
+
+    /// `catalog`'s [`facing_an_npc`], the player owning outfit 260.
+    fn holding_260(catalog: &FakePilotCatalog) -> Session {
+        let mut session = facing_an_npc(catalog, 180);
+        session.pilot.outfits.insert(OutfitId(260), 1);
+        session
+    }
+
+    #[test]
+    fn a_watched_cloaked_ship_is_not_observed_and_stays_watched_until_it_decloaks() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        session.watch_ship(NpcId(0));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [], "cloaked, and no scanner");
+        assert_eq!(session.story.watched, BTreeSet::from([NpcId(0)]), "kept");
+        let mut ticks = 1;
+        while fates(&session).is_empty() {
+            assert!(
+                session.npcs()[0].cloak.is_cloaked(),
+                "seen at once uncloaked"
+            );
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            ticks += 1;
+        }
+        assert_eq!(
+            ticks, 32,
+            "fading out from 32 at 0.75 a tick, cloaked above 8"
+        );
+        assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
+        assert!(session.story.watched.is_empty(), "forgotten once seen");
+    }
+
+    #[test]
+    fn a_cloak_scanner_sees_a_watched_cloaked_ship_within_200_on_each_axis() {
+        let catalog = scanning(crate::cloak::SCAN_SCREEN);
+        let mut session = holding_260(&catalog);
+        assert!(session.scanner().on_screen);
+        let player = session.player().position;
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak = CLOAKED;
+        npc.state.position = player + Vec2::new(0.0, -250.0);
+        session.watch_ship(NpcId(0));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [], "beyond 200");
+        session.traffic.npcs_mut()[0].state.position = player + Vec2::new(150.0, -150.0);
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert!(session.npcs()[0].cloak.is_cloaked());
+        assert_eq!(fates(&session), [fate(0, Fate::Observed)], "within 200");
+        let other = scanning(crate::cloak::SCAN_RADAR | crate::cloak::SCAN_TARGET);
+        let mut session = holding_260(&other);
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        session.watch_ship(NpcId(0));
+        session.tick_traffic(&other, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [], "no on-screen bit");
+    }
+
+    #[test]
+    fn a_watched_ship_that_can_cloak_is_observed_only_once_it_is_also_on_screen() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let player = session.player().position;
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear = CAN_CLOAK;
+        npc.state.position = player + Vec2::new(0.0, -400.0);
+        session.watch_ship(NpcId(0));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert!(!session.npcs()[0].cloak.is_cloaked());
+        assert_eq!(fates(&session), [], "seen, but off screen");
+        assert_eq!(session.story.watched, BTreeSet::from([NpcId(0)]), "kept");
+        session.traffic.npcs_mut()[0].state.position = player + Vec2::new(0.0, -200.0);
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
+    }
+
+    #[test]
+    fn a_watched_ship_that_cannot_cloak_is_observed_off_screen() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let player = session.player().position;
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.state.position = player + Vec2::new(0.0, -2000.0);
+        session.watch_ship(NpcId(0));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
+        let mut disabled = facing_an_npc(&catalog, 180);
+        let npc = &mut disabled.traffic.npcs_mut()[0];
+        npc.cloak_gear = CAN_CLOAK;
+        npc.condition = Condition::Disabled;
+        npc.state.position = player + Vec2::new(0.0, -2000.0);
+        disabled.watch_ship(NpcId(0));
+        disabled.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(
+            fates(&disabled),
+            [fate(0, Fate::Observed)],
+            "disabled: cannot cloak"
+        );
+    }
+
+    #[test]
+    fn the_play_area_the_view_gives_decides_what_is_on_screen() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let player = session.player().position;
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear = CAN_CLOAK;
+        npc.state.position = player + Vec2::new(0.0, -400.0);
+        assert!(
+            !session.on_screen(&session.npcs()[0]),
+            "the default play area"
+        );
+        session.set_play_area(crate::cloak::Area::centred(Vec2::ZERO, 1024.0, 1024.0));
+        assert!(session.on_screen(&session.npcs()[0]));
+        session.set_play_area(crate::cloak::Area {
+            left: -100.0,
+            top: 0.0,
+            right: 100.0,
+            bottom: 500.0,
+        });
+        assert!(
+            !session.on_screen(&session.npcs()[0]),
+            "the area is below the player"
+        );
+        session.watch_ship(NpcId(0));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), []);
+    }
+
+    #[test]
+    fn the_play_area_is_the_originals_smallest_until_the_view_says() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        assert_eq!(session.play_area(), crate::cloak::DEFAULT_PLAY_AREA);
+        let wide = crate::cloak::Area::centred(Vec2::ZERO, 2000.0, 100.0);
+        session.set_play_area(wide);
+        assert_eq!(session.play_area(), wide);
+    }
+
+    #[test]
+    fn a_ships_sprite_width_and_height_inset_the_play_area() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let player = session.player().position;
+        session.set_play_area(crate::cloak::Area::centred(Vec2::ZERO, 600.0, 600.0));
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.hull.sprite_size = Some(40.0);
+        npc.hull.sprite_height = Some(80.0);
+        // A quarter of the sprite inside: 10 across, 20 down.
+        npc.state.position = player + Vec2::new(289.0, 0.0);
+        assert!(session.on_screen(&session.npcs()[0]));
+        session.traffic.npcs_mut()[0].state.position = player + Vec2::new(290.0, 0.0);
+        assert!(!session.on_screen(&session.npcs()[0]));
+        session.traffic.npcs_mut()[0].state.position = player + Vec2::new(0.0, 279.0);
+        assert!(session.on_screen(&session.npcs()[0]));
+        session.traffic.npcs_mut()[0].state.position = player + Vec2::new(0.0, 280.0);
+        assert!(!session.on_screen(&session.npcs()[0]));
+    }
+
+    #[test]
+    fn the_player_sees_a_ship_uncloaked_and_not_emerging() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        assert!(session.sees(&session.npcs()[0]));
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        assert!(!session.sees(&session.npcs()[0]));
+        session.traffic.npcs_mut()[0].cloak = crate::cloak::Cloak::default();
+        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::Emerging { ticks_left: 5 };
+        assert!(!session.sees(&session.npcs()[0]));
+    }
+
+    #[test]
+    fn the_player_sees_past_a_ships_cloak_whether_or_not_it_waits_at_its_gate() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::Emerging { ticks_left: 5 };
+        assert!(session.sees_past_cloak(&session.npcs()[0]), "emerging");
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        assert!(!session.sees_past_cloak(&session.npcs()[0]), "cloaked");
+        let scans = scanning(crate::cloak::SCAN_SCREEN);
+        let mut session = holding_260(&scans);
+        let player = session.player().position;
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak = CLOAKED;
+        npc.state.position = player + Vec2::new(0.0, -150.0);
+        assert!(
+            session.sees_past_cloak(&session.npcs()[0]),
+            "a scanner within 200"
+        );
+    }
+
+    #[test]
+    fn a_cloaked_ship_is_on_the_radar_only_when_its_cloak_shows_there_or_the_player_scans_for_it() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        assert!(session.on_radar(&session.npcs()[0]), "uncloaked");
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        assert!(!session.on_radar(&session.npcs()[0]));
+        session.traffic.npcs_mut()[0].cloak_gear.on_radar = true;
+        assert!(session.on_radar(&session.npcs()[0]), "its cloak shows");
+        let scans = scanning(crate::cloak::SCAN_RADAR);
+        let mut session = holding_260(&scans);
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        assert!(session.on_radar(&session.npcs()[0]), "the player scans");
+    }
+
+    #[test]
+    fn a_cloaked_target_is_let_go_unless_the_player_can_target_cloaked_ships() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.target = Some(NpcId(0));
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(session.target, None);
+        assert_eq!(session.select_target(TargetPick::Nearest), None, "unpicked");
+        let targets = scanning(crate::cloak::SCAN_TARGET);
+        let mut session = holding_260(&targets);
+        session.target = Some(NpcId(0));
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        session.tick_traffic(&targets, &Peaceful, &mut NeverFires);
+        assert_eq!(session.target, Some(NpcId(0)), "it can");
+        session.target = None;
+        assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
+    }
+
+    #[test]
+    fn a_hit_by_the_player_cloaks_a_ship_that_cloaks_when_hit_by_a_ship_it_is_not_attacking() {
+        let catalog = FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                mass_dmg: 1,
+                energy_dmg: 1,
+                ..blaster()
+            }],
+            ..armed()
+        };
+        let mut session = facing_an_npc(&catalog, 180);
+        session.traffic.npcs_mut()[0].cloak_gear = crate::cloak::CloakGear {
+            flags2: crate::cloak::CLOAK_WHEN_HIT,
+            ..CAN_CLOAK
+        };
+        session.hold_trigger(FIRE);
+        let shield = session.npcs()[0].reserves.shield.now;
+        for _ in 0..20 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if session.npcs()[0].reserves.shield.now < shield {
+                break;
+            }
+        }
+        assert!(session.npcs()[0].reserves.shield.now < shield, "hit");
+        assert_eq!(session.npcs()[0].cloak.direction, 1, "fading in");
+        let mut fighting = facing_an_npc(&catalog, 180);
+        let npc = &mut fighting.traffic.npcs_mut()[0];
+        npc.cloak_gear = crate::cloak::CloakGear {
+            flags2: crate::cloak::CLOAK_WHEN_HIT,
+            ..CAN_CLOAK
+        };
+        npc.goal = Goal::Attack(ShipRef::Player);
+        fighting.hold_trigger(FIRE);
+        for _ in 0..20 {
+            fighting.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert_eq!(
+            fighting.npcs()[0].cloak,
+            crate::cloak::Cloak::default(),
+            "it attacks the player"
+        );
+    }
+
+    #[test]
+    fn a_hit_uncloaks_a_cloaked_ship_whose_cloak_decloaks_when_hit() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear = crate::cloak::CloakGear {
+            decloaks_when_hit: true,
+            ..CAN_CLOAK
+        };
+        npc.cloak = CLOAKED;
+        session.hold_trigger(FIRE);
+        for _ in 0..20 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if session.npcs()[0].cloak.direction != 0 {
+                break;
+            }
+        }
+        assert_eq!(session.npcs()[0].cloak.direction, -1);
     }
 
     #[test]
@@ -15668,9 +16413,11 @@ mod tests {
         assert_eq!(
             escort.escort,
             Some(EscortDuty {
-                slot: 2,
-                ships: 2,
-                spacing: crate::escort::spacing(None, &[None]),
+                formation: FormationSlot {
+                    slot: 2,
+                    ships: 2,
+                    spacing: crate::escort::spacing(None, &[None]),
+                },
                 order: None,
             })
         );
@@ -15752,11 +16499,19 @@ mod tests {
         let old = &session.npcs()[1];
         assert!(session.is_escort(old.id));
         let duty = old.escort.expect("an escort");
-        assert_eq!((duty.slot, duty.ships, duty.order), (2, 2, None));
+        assert_eq!(
+            (duty.formation.slot, duty.formation.ships, duty.order),
+            (2, 2, None)
+        );
         assert_eq!(
             old.state,
             ShipState {
-                position: crate::escort::slot_position(session.player(), 2, 2, duty.spacing),
+                position: crate::escort::slot_position(
+                    session.player(),
+                    2,
+                    2,
+                    duty.formation.spacing
+                ),
                 ..*session.player()
             },
             "on its slot"
@@ -17499,7 +18254,7 @@ mod tests {
         let duty = escort.escort.expect("an escort");
         assert_eq!(
             escort.state.position,
-            crate::escort::slot_position(session.player(), duty.slot, duty.ships, duty.spacing),
+            duty.formation.position(session.player()),
             "on its slot: {case}"
         );
         let dudes: Vec<&Npc> = session

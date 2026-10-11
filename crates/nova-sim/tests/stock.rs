@@ -1379,6 +1379,7 @@ impl Combatant {
             target: self.target,
             reserves: &mut self.reserves,
             condition: &mut self.condition,
+            held_disabled: false,
             armament: &mut self.armament,
             rounds: &mut self.rounds as &mut dyn Rounds,
         }
@@ -2706,11 +2707,11 @@ fn the_three_stock_42_character_advice_lines_follow_long_advice() {
                 long_advice,
             };
             assert_eq!(
-                advice(RuleSource::Engine).say(variant, &data),
+                advice(RuleSource::Engine).say(variant, &data, ""),
                 comm[45 + usize::from(variant)],
                 "STR# {list} #{index}"
             );
-            assert_eq!(advice(RuleSource::Bible).say(variant, &data), line);
+            assert_eq!(advice(RuleSource::Bible).say(variant, &data, ""), line);
         }
     }
 }
@@ -3416,6 +3417,74 @@ fn only_the_terrapins_may_join_the_player() {
     assert!(!nova_sim::person::offers_to_join(&person_record(
         &data, 510
     )));
+}
+
+/// The swap of a person for its mission's ship on an accept on its hail
+/// admits exactly 141 persons, `Flags` 0x0040 and the one ship of its
+/// `LinkMission` left at accept: the 78 Terrapins of escort mission 132,
+/// whose type (ship 136) its `düde` flies under its `Flags` 0x0800, and
+/// the refuel traders of rescue missions 141, 650, 651 and 652. Each of
+/// those missions has `ShipStart` 0 and follows the player
+/// (`ShipSyst` -6).
+#[test]
+fn only_the_terrapins_and_the_refuel_traders_swap_for_their_missions_ship() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let persons = nova_sim::TrafficCatalog::persons(&data);
+    let mut by_mission = std::collections::BTreeMap::<i16, usize>::new();
+    for person in &persons {
+        let left = person.mission_ship.map_or(0, |ship| ship.count);
+        if nova_sim::person::swaps_for_mission_ship(person.flags, left) {
+            *by_mission
+                .entry(person.link_mission.expect("linked"))
+                .or_default() += 1;
+        }
+    }
+    assert_eq!(
+        by_mission,
+        [(132, 78), (141, 27), (650, 13), (651, 10), (652, 13)].into()
+    );
+    let missions = nova_sim::PilotCatalog::missions(&data);
+    for &id in by_mission.keys() {
+        let record = missions
+            .iter()
+            .find(|mission| mission.id == nova_sim::MissionId(id))
+            .expect("a mission");
+        let ships = record.ships;
+        assert_eq!((ships.count, ships.start, ships.syst), (1, 0, -6), "{id}");
+        assert_eq!(
+            ships.goal,
+            if id == 132 { 3 } else { 5 },
+            "{id}: escort or rescue"
+        );
+    }
+    let terrapins = missions
+        .iter()
+        .find(|mission| mission.id == nova_sim::MissionId(132))
+        .expect("132");
+    let dude = nova_sim::TrafficCatalog::dude(&data, terrapins.ships.dude.expect("a düde"))
+        .expect("its düde");
+    let dude_ships: Vec<_> = dude.ships.iter().map(|&(ship, _)| ship).collect();
+    assert_eq!(
+        nova_sim::mission::ships::swapped_ship_type(
+            terrapins.flags,
+            &dude_ships,
+            person_record(&data, 128).ship.expect("a ship")
+        ),
+        Some(nova_sim::ShipId(136)),
+        "a Terrapin is swapped for its own type"
+    );
+    let refuel = missions
+        .iter()
+        .find(|mission| mission.id == nova_sim::MissionId(141))
+        .expect("141");
+    assert_eq!(
+        refuel.flags & nova_sim::mission::ships::UNIFORM_SHIP_TYPE,
+        0,
+        "a refuel trader's type is drawn"
+    );
 }
 
 /// Every setup pass's person roll lands on the Terrapin `përs` 128, and

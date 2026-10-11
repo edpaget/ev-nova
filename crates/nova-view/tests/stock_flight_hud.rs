@@ -194,16 +194,23 @@ fn the_first_ships_target_card_has_its_picture() {
 }
 
 /// A grant's message is built from `STR#` 2002 #106, #108, #393 and
-/// #394, as the stock strings read.
+/// #394, and a boarding pickup's from #106-#108, as the stock strings
+/// read.
 #[test]
 fn a_grants_message_reads_its_stock_strings() {
-    use nova_view::flight::view::{ARTICLE_A, ARTICLE_AN, FROM_THIS_SHIP, RETRIEVED};
+    use nova_view::flight::view::{ARTICLE_A, ARTICLE_AN, FROM_THIS_SHIP, RETRIEVED, THE};
     let Some(data) = open() else {
         return;
     };
     let strings = nova_sim::CommCatalog::string_list(&data, 2002);
     assert_eq!(
-        [&strings[105], &strings[107], &strings[392], &strings[393]],
-        [RETRIEVED, FROM_THIS_SHIP, ARTICLE_A, ARTICLE_AN]
+        [
+            &strings[105],
+            &strings[106],
+            &strings[107],
+            &strings[392],
+            &strings[393]
+        ],
+        [RETRIEVED, THE, FROM_THIS_SHIP, ARTICLE_A, ARTICLE_AN]
     );
 }
