@@ -802,6 +802,10 @@ mod tests {
         assert_dates(
             dates_engine,
             &[
+                // A year of 0 is skipped even before year 0, which a
+                // plug-in's start date can reach.
+                ((0, 0, 0), (0, 0, -1), date(-5, 6, 15), true),
+                ((0, 0, -1), (0, 0, 0), date(-5, 6, 15), true),
                 (yearly.0, yearly.1, date(1177, 9, 1), true),
                 (yearly.0, yearly.1, date(1177, 12, 30), true),
                 (yearly.0, yearly.1, date(1177, 8, 31), false),
@@ -899,6 +903,13 @@ mod tests {
                 (month_end.0, month_end.1, date(1177, 6, 15), false),
                 (month_end.0, month_end.1, date(1177, 6, 6), false),
                 (month_end.0, month_end.1, date(1177, 6, 24), false),
+                // Equal yearless ends are one day, not a wrap.
+                ((15, 6, 0), (15, 6, 0), date(1177, 6, 15), true),
+                ((15, 6, 0), (15, 6, 0), date(1177, 6, 16), false),
+                ((15, 6, 0), (15, 6, 0), date(1177, 6, 14), false),
+                ((15, 0, 0), (15, 0, 0), date(1177, 6, 15), true),
+                ((15, 0, 0), (15, 0, 0), date(1177, 7, 16), false),
+                ((15, 0, 0), (15, 0, 0), date(1177, 7, 14), false),
             ],
         );
     }

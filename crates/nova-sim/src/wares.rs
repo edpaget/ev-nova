@@ -555,6 +555,32 @@ mod tests {
     }
 
     #[test]
+    fn bits_given_twice_are_held_once() {
+        let outfits = [OutfitRecord {
+            contribute: 0x5,
+            ..outfit(128, &[])
+        }];
+        let crons = [CronRecord {
+            contribute: 0x6,
+            ..cron(128)
+        }];
+        let by = Contributors {
+            ship: 0x3,
+            outfits: &outfits,
+            crons: &crons,
+        };
+        let mut pilot = owning(&[(128, 1)]);
+        pilot.crons.insert(
+            CronId(128),
+            CronState {
+                days: 1,
+                holdoff: 0,
+            },
+        );
+        assert_eq!(contributed(&by, &pilot), 0x7);
+    }
+
+    #[test]
     fn a_cron_holding_off_contributes_nothing() {
         assert_eq!(with_crons(&[(128, 3, 2)]), 0, "in its pre-holdoff");
         assert_eq!(with_crons(&[(128, 3, 1)]), 0, "a day of pre-holdoff");
