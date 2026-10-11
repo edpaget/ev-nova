@@ -211,8 +211,10 @@ pub struct GateSlot {
     pub behav: ShipBehav,
     /// How many are left (+0x6).
     pub left: i16,
-    /// Their `düde`'s government's `Flags2`: none for an independent
-    /// `düde`, or none.
+    /// Their `düde`'s government's `Flags2`: none for a mission of no
+    /// `düde`, a `düde` that cannot be read, or an independent `düde` (of
+    /// no government). A government that cannot be read has `Flags2` 0.
+    /// [`through_gate`] reads none as never following.
     pub flags2: Option<u16>,
 }
 
