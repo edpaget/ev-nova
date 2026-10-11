@@ -2912,6 +2912,34 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)] // the reserves are set to these exact values
+    fn a_rescue_ship_set_up_in_flight_starts_derelict_and_stays_disabled_once_boarded() {
+        let catalog = goal_catalog(5, 0);
+        let mut session = in_flight(&catalog);
+        for npc in session.npcs() {
+            assert!(npc.stats.armor > 0.0);
+            assert_eq!(npc.reserves.shield.now, 0.0);
+            assert_eq!(
+                npc.reserves.armor.now,
+                crate::person::derelict_armor(npc.stats.armor, npc.hull.tough)
+            );
+        }
+        for npc in session.traffic.npcs_mut() {
+            npc.boarded = true;
+        }
+        fight(&mut session, 1);
+        assert_eq!(conditions(&session), [Condition::Disabled; 2]);
+        assert_eq!(disabled_fates(&session), 0);
+
+        let catalog = goal_catalog(2, 0);
+        let session = in_flight(&catalog);
+        for npc in session.npcs() {
+            assert_eq!(npc.reserves.shield.now, npc.reserves.shield.max);
+            assert_eq!(npc.reserves.armor.now, npc.reserves.armor.max);
+        }
+    }
+
+    #[test]
     fn a_ship_of_another_goal_at_full_armour_is_intact() {
         for goal in [-1, 0, 1, 2, 3, 4, 6] {
             let catalog = goal_catalog(goal, 0);
