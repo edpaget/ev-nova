@@ -7,15 +7,50 @@
 //! "`below(n) < k` fires":
 //!
 //! - **Setup** ([`initial`]) makes `AvgShips` passes. Each first rolls
-//!   for a person ([`PersonRules::roll`](crate::person::PersonRules::roll),
+//!   for a person ([`PersonRules::roll`],
 //!   see [`person`](crate::person)): a person who may appear is placed as
 //!   a `düde` ship is, an empty roll brings nothing that pass, and no
 //!   person goes on to a `LinkSyst` fleet (`Rand(7) == 0`, [`link_fleet`]),
 //!   else one `düde` ship, placed in the system already: x and y each
-//!   `Rand(1500) - 750`, heading `Rand(360)`, at rest. Then each of the
-//!   system's Person slots naming a person alive whose `ActiveOn` holds is
-//!   rolled ([`PersonRules::listed`](crate::person::PersonRules::listed)),
-//!   and brings its person, placed so, unless one of its name is there.
+//!   `Rand(1500) - 750`, heading `Rand(360)`, at its top speed along its
+//!   heading ([`at_speed`]). Then each of the system's Person slots naming
+//!   a person alive whose `ActiveOn` holds is rolled
+//!   ([`PersonRules::listed`]), and
+//!   brings its person, placed so, unless one of its name is there.
+//!
+//! # Setup speed and stationary warships
+//!
+//! - **Speed.** `_SetupShipsInSystem` (@0x42b61) gives every pass's ship
+//!   (@0x432eb) and every slot's person (@0x433fe)
+//!   `_AdjustedAccel(heading, max, max, &vel)` (@0x2ae4b), which adds to
+//!   the velocity while it is short of the top speed: from rest, exactly
+//!   the top speed along the heading. The top speed is ship-class +0x40,
+//!   `shïp` `Speed` / 100 (`_LoadObjectData` @0x7a0db-0x7a0ef), here the
+//!   ship's [`Handling::max_speed`](crate::handling::Handling::max_speed)
+//!   with the outfits it flies with: a `düde` ship's default items, or a
+//!   person's fitted ship. The original reads the bare `Speed`; each ship
+//!   here still starts at exactly its own top speed. A `LinkSyst` fleet
+//!   gets none: it comes by hyperspace.
+//! - **Derelicts.** A person of a derelict government (`gövt` `Flags`
+//!   0x0800) brought by a pass has its velocity zeroed (@0x43245-0x4325b),
+//!   but the code jumps on to the pass's shared `_AdjustedAccel`
+//!   (@0x432b0), so it starts at its top speed. One brought by its slot is
+//!   zeroed after its `_AdjustedAccel` (@0x43418-0x43443), and starts at
+//!   rest. The other reading of
+//!   [`RuleKey::DerelictSetupSpeed`](crate::RuleKey::DerelictSetupSpeed)
+//!   starts both at rest.
+//! - **Stationary warships** ([`dude_setup_state`]). A `düde` ship flown
+//!   as a warship (AI type 3) whose ship has no speed starts, when the
+//!   system has a first stellar, at that stellar plus
+//!   [`STATIONARY_DISTANCE`] at angle `Rand(360)`, at rest, then heading
+//!   `Rand(360)` (`_RandomShipSpawn` @0x3c254-0x3c324, @0x3c410). The
+//!   stellar is the first the galaxy overlay shows for the system,
+//!   destroyed or not, as the original reads its first stellar slot with
+//!   no other check. Here that is the first readable `spöb` of its
+//!   `nav_def`s: where slot 0 is empty or unreadable, the original falls
+//!   back to the box and this takes the next stellar. A person never is:
+//!   `_SpawnPerson` places it through `_GenericRandomShipSpawn`'s box
+//!   alone (@0x3ccf0-0x3cd1a).
 //! - **Arrivals** ([`arrivals`]), every tick while the system holds fewer
 //!   NPCs than `AvgShips`, draw `Rand(500)`. On 1, when the system's
 //!   `DudeTypes` name fleets, `Rand(100) + 1` at or below the sum of their
@@ -542,8 +577,9 @@ pub fn escort_count(min: i16, max: i16, chance: &mut (impl Chance + ?Sized)) -> 
     min + chance.below(max - min + 1)
 }
 
-/// Where a ship placed at setup starts: somewhere within 750 pixels of
-/// the centre each way, at rest, facing anywhere.
+/// Where in the system a ship placed at setup starts: somewhere within
+/// 750 pixels of the centre each way, facing anywhere, still at rest
+/// until [`at_speed`] sets it moving.
 pub fn in_system(chance: &mut (impl Chance + ?Sized)) -> ShipState {
     let x = spread(SPAWN_SPREAD, chance);
     let y = spread(SPAWN_SPREAD, chance);
