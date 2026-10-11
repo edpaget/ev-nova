@@ -3,7 +3,10 @@
 //! rating, record and ship), the mission offered where its `AvailLoc`
 //! says (at a stellar, from a hailed person, or started by a script's
 //! `S`), accepted, its goal met by the storyline walker's `meet goal` or
-//! its ships flown in, and its end checked.
+//! its ships flown in, and its end checked. Each is flown on a probed
+//! catalog ([`Probed`]) whose `OnShipDone`, `OnSuccess`, `OnFailure` and
+//! `OnAbort` for it each first set a bit of their own, so the walk tells
+//! an abort apart from a completion or a failure by which of them ran.
 //!
 //! [`OUTCOMES`] lists the missions that do not complete at their return
 //! and how each ends instead; every other one completes.
@@ -1167,15 +1170,6 @@ fn take_from_a_ship(data: &GameData, record: &MissionRecord) -> Result<Session, 
     Ok(session)
 }
 
-/// The bits `record`'s `OnShipDone` sets that its `OnAbort` does not.
-fn ship_done_only(record: &MissionRecord) -> Vec<nova_sim::Bit> {
-    let aborted = expected_bits(&record.on_abort);
-    expected_bits(&record.on_ship_done)
-        .into_iter()
-        .filter(|bit| !aborted.contains(bit))
-        .collect()
-}
-
 /// The `OnShipDone` bits of `record` not set in `session`.
 fn unset_ship_done_bits(session: &Session, record: &MissionRecord) -> Vec<nova_sim::Bit> {
     expected_bits(&record.on_ship_done)
@@ -1295,9 +1289,40 @@ fn land_held(
 /// The traffic ticks a flown mission is given for its ships to come in.
 const TICKS: u32 = 2_000;
 
+/// The ships in `session`, by ID.
+fn npc_ids(session: &Session) -> BTreeSet<nova_sim::NpcId> {
+    session.npcs().iter().map(|npc| npc.id).collect()
+}
+
+/// How many ships of `record`'s special ships' `düde` are in `session`
+/// and not among `before`: those that came in with the last step, its
+/// own and any traffic of that `düde`.
+fn came_in(
+    data: &GameData,
+    session: &Session,
+    record: &MissionRecord,
+    before: &BTreeSet<nova_sim::NpcId>,
+) -> usize {
+    let ships: Vec<cat::ShipId> = record
+        .ships
+        .dude
+        .and_then(|dude| TrafficCatalog::dude(data, dude))
+        .map(|dude| dude.ships.iter().map(|&(ship, _)| ship).collect())
+        .unwrap_or_default();
+    session
+        .npcs()
+        .iter()
+        .filter(|npc| !before.contains(&npc.id) && ships.contains(&npc.ship))
+        .count()
+}
+
 /// Flies `record`, held, until its ships come in and it auto-aborts:
 /// takes off (in its ships' system, when they have one), then ticks the
-/// traffic. Its `OnShipDone` must not have run.
+/// traffic. Its ships must have come in with the step that freed its
+/// slot, as they do before its auto-abort; it must have ended by its
+/// `OnAbort`, leaving that script's effects (the session primed for them
+/// before the take-off), and neither its `OnShipDone`, `OnSuccess` nor
+/// `OnFailure` may have run.
 fn fly_until_aborted(
     data: &GameData,
     session: &mut Session,
@@ -1329,6 +1354,9 @@ fn fly_until_aborted(
             .relocate(data, system, stellar)
             .map_err(|refusal| format!("to {system:?}: {refusal:?}"))?;
     }
+    let on_abort =
+        Effects::primed(session, &record.on_abort).map_err(|why| format!("OnAbort: {why}"))?;
+    let mut before = npc_ids(session);
     session.take_off(&mut NeverFires).ok_or("takes off")?;
     let _ = session.settle_script(data, &mut NeverFires);
     let ai = NovaAi::default();
@@ -1337,19 +1365,22 @@ fn fly_until_aborted(
         if ticks == TICKS {
             return Err(format!("still held after {TICKS} ticks"));
         }
+        before = npc_ids(session);
         session.tick_traffic(data, &ai, &mut NeverFires);
         let _ = session.settle_script(data, &mut NeverFires);
         ticks += 1;
     }
-    let ran: Vec<_> = ship_done_only(record)
-        .into_iter()
-        .filter(|&bit| session.control_bit(bit))
-        .collect();
-    if ran.is_empty() {
-        Ok(())
-    } else {
-        Err(format!("its OnShipDone ran: {ran:?} set"))
+    let came = came_in(data, session, record, &before);
+    let count = usize::try_from(record.ships.count).unwrap_or_default();
+    if came < count {
+        return Err(format!(
+            "ended after {ticks} ticks with {came} of its {count} ships come in"
+        ));
     }
+    ran_only(session, &[Hook::Abort]).map_err(|why| format!("ended: {why}"))?;
+    on_abort
+        .check(session)
+        .map_err(|why| format!("ended: OnAbort: {why}"))
 }
 
 /// Walks `record` to its outcome: `Ok` when it gets there, else what went
