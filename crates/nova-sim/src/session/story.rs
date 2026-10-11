@@ -170,6 +170,9 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
         let session = &mut *self.session;
         match participant {
             Participant::Date => session.pilot.date = session.pilot.date.next_day(),
+            // One pass over the crons, each script run at once (see the
+            // `crons` module).
+            Participant::Crons => session.crons_day(&mut *self.chance),
             Participant::Events => {
                 // The events step out of the pilot, so that their
                 // `ActivateOn` can read the pilot through the session's
@@ -188,14 +191,10 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
             // The active missions' days left; their deadlines fail on the
             // missions' `DayPassed` subscriptions.
             Participant::MissionDays => session.pilot.missions.count_down(),
-            // Each slot is filled by its own phase: the crons by
-            // crons-news-ranks phase 1, the tribute by rdm task
-            // planet-domination, the reinforcements once they are built,
-            // and the ranks by crons-news-ranks phase 3.
-            Participant::Crons
-            | Participant::Tribute
-            | Participant::Reinforcements
-            | Participant::Ranks => {}
+            // Each slot is filled by its own phase: the tribute by rdm
+            // task planet-domination, the reinforcements once they are
+            // built, and the ranks by crons-news-ranks phase 3.
+            Participant::Tribute | Participant::Reinforcements | Participant::Ranks => {}
         }
     }
 }

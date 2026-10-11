@@ -47,7 +47,9 @@
 //!   over the set operators).
 //! - [`cron`]: the `crön`s the day's second participant runs: whether an
 //!   inactive one starts ([`cron::eligibility`], with its disputed
-//!   `Random` and date range).
+//!   `Random` and date range), the daily pass over their holdoffs and
+//!   durations, each one's [`CronState`](cron::CronState), and whose
+//!   `Contribute` bits count ([`cron::contributes`]).
 //! - [`combat`]: ships fighting: firing their [`Armament`] on a
 //!   [`Trigger`] at their target, shots and beams flying and hitting,
 //!   homing missiles steering, turrets aiming in their arcs, point defence

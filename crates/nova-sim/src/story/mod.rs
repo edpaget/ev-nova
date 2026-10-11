@@ -44,7 +44,8 @@
 //!    duration and ends (`_TerminateCron`, `OnEnd` @0x384dc), or, its
 //!    `Random`, date range, `Require` and `EnableOn` met, starts
 //!    (`_ActivateCron`, `OnStart` @0x38650). Each script runs at once, so
-//!    a later cron in the pass sees the bits an earlier one set.
+//!    a later cron in the pass sees the bits an earlier one set. Built by
+//!    crons-news-ranks phase 1: see the [`cron`](crate::cron) module.
 //! 3. Every active mission's days left (slot +0x48) go down by one while
 //!    above 0 (@0xb590-0xb5b6). Nothing fails here: the per-frame goal
 //!    check notices a deadline at 0 (see "Ship goals").
@@ -484,13 +485,16 @@
 //! the original's order, `Participant::ORDER` (see "A day"), through the
 //! `day::Day` port the session implements (`session/story.rs`). Phase 2
 //! fills the date and the events, phase 3 `DayPassed`, phase 5 the
-//! destroyed stellars' regeneration, phase 6 the day rolls, and phase 8
-//! the damaged stellars' repair; the others
-//! are empty slots until their phase:
+//! destroyed stellars' regeneration, phase 6 the day rolls, phase 8
+//! the damaged stellars' repair, and crons-news-ranks phase 1 the crons;
+//! the others are empty slots until their phase:
 //!
 //! 1. the date moves on a day;
 //! 2. the crons, each starting or ending cron's script run as it is
-//!    reached (crons-news-ranks phase 1);
+//!    reached (crons-news-ranks phase 1; see [`cron`](crate::cron)): run
+//!    as a participant's effect through `Session::run_set`, as `OnRegen`
+//!    is, each named by `cron::cron_hook` and never registered, its `M`,
+//!    `N`, `Q` and `S` deferred to the next settling as any hook's are;
 //! 3. the active missions' days left (missions phase 2);
 //! 4. the dominated stellars' tribute (rdm task planet-domination);
 //! 5. the day's events, `öops`: today's `market::step_day`;

@@ -2,6 +2,54 @@
 //! original's `_CronEventHandler` (@0x3874f) does each day after the date
 //! moves on (@0xb58b).
 //!
+//! # The daily pass
+//!
+//! The original keeps 512 slots, crön 128 + i (`_InitArrays` @0x1bb3d;
+//! `_LoadObjectData` @0x7d76f-0x7da23), each with `active`, `days` (+0x26:
+//! the days left of the duration, -1 marking the post-holdoff) and
+//! `holdoff` (+0x28). The port keeps a [`CronState`] for each crön
+//! running or holding off, on the pilot, keyed by ID, so there is no
+//! cap. A new pilot has none, and a save keeps them.
+//!
+//! The pass (`pass`, through the `CronDay` port the session implements)
+//! goes over the crons once a day by ascending ID
+//! (@0x38762-0x38912), each one this way:
+//!
+//! 1. A crön whose `Duration` is below 0 is skipped, running or not
+//!    (@0x38766).
+//! 2. Holding off (`holdoff` above 0): the holdoff counts down a day. At
+//!    0 with `days` 0 or more the pre-holdoff is over: `OnStart` runs,
+//!    unconditionally, even if its `EnableOn` no longer holds, and with
+//!    `days` 0 it ends the same day (@0x38784-0x387c1). At 0 with `days`
+//!    -1 the post-holdoff is over: inactive (@0x387cb).
+//! 3. Running: `days` counts down; at 0 or below it ends (@0x387d3-0x387e8).
+//! 4. Inactive: when [`eligibility`] passes it starts, `days` its
+//!    `Duration` (@0x38867-0x38871). With `PreHoldoff` above 0 it holds
+//!    off that many days and nothing runs yet (@0x388c5); otherwise
+//!    `OnStart` runs, and with `Duration` 0 it ends the same day.
+//!
+//! A crön ends by running `OnEnd`, then, with `PostHoldoff` above 0,
+//! `days` -1 and `holdoff` its `PostHoldoff`, counted down by step 2;
+//! otherwise it is inactive. Each state is written before the crön's
+//! scripts run, and each script runs at once, so a later crön in the
+//! pass sees what an earlier one set. A running crön never rechecks its
+//! dates, `Require` or `EnableOn`; one that goes inactive may start again
+//! the next day. `_ActivateCron` and `_TerminateCron` have no other
+//! callers: no operator, mission or new pilot starts or ends a crön.
+//!
+//! These are the intended ends, decided 2026-10-11, where the engine has
+//! bugs that crons-news-ranks phase 7 adds as opt-in Rulebook readings:
+//! after a running crön's normal end the engine loads its `PreHoldoff`
+//! into the holdoff rather than its `PostHoldoff` (@0x387f1 → 0x388c5),
+//! and a `Duration` 0 crön whose pre-holdoff ends runs `OnEnd` again the
+//! next day. The port runs `OnEnd` once and waits out the `PostHoldoff`.
+//! The `Flags` that run `OnStart` or `OnEnd` each day (0x1, 0x2) are
+//! crons-news-ranks phase 6's: here every crön runs each script once.
+//!
+//! The session runs each script as a participant's effect (its `M`, `N`,
+//! `Q` and `S` deferred to the next settling), named by [`cron_hook`]
+//! and never registered, so it keeps no once-fired entry.
+//!
 //! # Contribute
 //!
 //! A running crön's `Contribute` bits are among those the player holds
@@ -61,13 +109,124 @@
 
 use std::cmp::Ordering;
 
-use crate::catalog::CronRecord;
+use crate::catalog::{CronId, CronRecord};
 use crate::chance::Chance;
-use crate::control::Gate;
+use crate::control::{Gate, Script};
 use crate::date::GameDate;
 use crate::rulebook::{RuleKey, Rulebook};
 use crate::rules::{Check, Checks, Context};
+use crate::story::{Consumer, SubscriptionId};
 use crate::wares;
+
+/// A crön's `OnStart` hook.
+pub const START: u8 = 0;
+/// A crön's `OnEnd` hook.
+pub const END: u8 = 1;
+
+/// The name of crön `cron`'s `hook` ([`START`] or [`END`]) as it runs:
+/// never registered, and never kept as fired, since a crön recurs.
+#[must_use]
+pub const fn cron_hook(cron: CronId, hook: u8) -> SubscriptionId {
+    SubscriptionId {
+        consumer: Consumer::Crons,
+        record: cron.0,
+        hook,
+    }
+}
+
+/// What the daily pass asks of the session it runs on: the crons'
+/// states, whether an inactive crön may start, and running a crön's
+/// script.
+pub(crate) trait CronDay {
+    /// Crön `cron`'s counters, or `None` while it is inactive.
+    fn state(&self, cron: CronId) -> Option<CronState>;
+    /// Sets crön `cron`'s counters, `None` making it inactive.
+    fn set_state(&mut self, cron: CronId, state: Option<CronState>);
+    /// Whether inactive crön `record` starts today: runs
+    /// [`eligibility`] now, the roll and then the dates, `Require` (the
+    /// bits contributed as they stand) and `EnableOn`.
+    fn eligible(&mut self, record: &CronRecord) -> bool;
+    /// Runs `script`, named `id` ([`cron_hook`]), at once.
+    fn run(&mut self, id: SubscriptionId, script: &Script);
+}
+
+/// One day's pass over the crons, by ascending ID, as
+/// `_CronEventHandler` (@0x3874f) makes it, with the intended ends (see
+/// the module docs). Each state is written before the crön's scripts
+/// run, and each script runs at once, so a later crön in the pass sees
+/// what an earlier one set.
+pub(crate) fn pass(records: &[CronRecord], day: &mut (impl CronDay + ?Sized)) {
+    let mut sorted: Vec<&CronRecord> = records.iter().collect();
+    sorted.sort_by_key(|record| record.id);
+    for record in sorted {
+        if disabled(record) {
+            continue;
+        }
+        let id = record.id;
+        match day.state(id) {
+            // The holdoff counts down (@0x38784-0x387cb).
+            Some(mut state) if state.holdoff > 0 => {
+                state.holdoff = state.holdoff.saturating_sub(1);
+                if state.holdoff > 0 {
+                    day.set_state(id, Some(state));
+                } else if state.days >= 0 {
+                    day.set_state(id, Some(state));
+                    start(record, state.days, day);
+                } else {
+                    day.set_state(id, None);
+                }
+            }
+            // Running: a day of its duration (@0x387d3-0x387fc).
+            Some(mut state) => {
+                state.days = state.days.saturating_sub(1);
+                day.set_state(id, Some(state));
+                if state.days <= 0 {
+                    end(record, day);
+                }
+            }
+            // Inactive: it may start (@0x38804-0x38901).
+            None => {
+                if !day.eligible(record) {
+                    continue;
+                }
+                if record.pre_holdoff > 0 {
+                    let state = CronState {
+                        days: record.duration,
+                        holdoff: record.pre_holdoff,
+                    };
+                    day.set_state(id, Some(state));
+                } else {
+                    let state = CronState {
+                        days: record.duration,
+                        holdoff: 0,
+                    };
+                    day.set_state(id, Some(state));
+                    start(record, record.duration, day);
+                }
+            }
+        }
+    }
+}
+
+/// Runs `record`'s `OnStart`, and with `days` 0 left its `OnEnd` and its
+/// end the same day (@0x388d4-0x388e6).
+fn start(record: &CronRecord, days: i16, day: &mut (impl CronDay + ?Sized)) {
+    day.run(cron_hook(record.id, START), &record.on_start);
+    if days == 0 {
+        end(record, day);
+    }
+}
+
+/// Runs `record`'s `OnEnd`, then its intended end: its post-holdoff when
+/// `PostHoldoff` is above 0, else inactive.
+fn end(record: &CronRecord, day: &mut (impl CronDay + ?Sized)) {
+    day.run(cron_hook(record.id, END), &record.on_end);
+    let after = (record.post_holdoff > 0).then_some(CronState {
+        days: -1,
+        holdoff: record.post_holdoff,
+    });
+    day.set_state(record.id, after);
+}
 
 /// One crön's counters while it runs or holds off, as the original keeps
 /// them in its slot (+0x26, +0x28). A crön with none is inactive.
@@ -320,6 +479,7 @@ impl Bound {
 mod tests {
     use super::*;
     use std::cell::RefCell;
+    use std::collections::BTreeMap;
 
     use crate::control::{ControlBits, FreshPilot, PilotFacts, Test, TestExpr};
     use crate::rulebook::RuleSource;
@@ -813,5 +973,336 @@ mod tests {
                 [TestExpr::parse("b5").expect("parses")]
             );
         }
+    }
+
+    #[test]
+    fn a_crons_scripts_are_named_by_its_id_and_hook() {
+        assert_eq!(
+            cron_hook(CronId(156), START),
+            SubscriptionId {
+                consumer: Consumer::Crons,
+                record: 156,
+                hook: 0,
+            }
+        );
+        assert_eq!(cron_hook(CronId(129), END).hook, 1);
+        assert_eq!(cron_hook(CronId(129), END).record, 129);
+    }
+
+    /// What the pass did, in order.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Did {
+        /// Asked whether crön `.0` is eligible.
+        Asked(i16),
+        /// Ran crön `.0`'s `OnStart`.
+        Started(i16),
+        /// Ran crön `.0`'s `OnEnd`.
+        Ended(i16),
+    }
+
+    /// A hand-written day: the crons' states in a map, each crön's
+    /// eligibility a canned answer (no by default), and a log of each ask
+    /// and each script run, in order.
+    #[derive(Default)]
+    struct MockDay {
+        states: BTreeMap<CronId, CronState>,
+        eligible: BTreeMap<i16, bool>,
+        log: Vec<Did>,
+    }
+
+    impl CronDay for MockDay {
+        fn state(&self, cron: CronId) -> Option<CronState> {
+            self.states.get(&cron).copied()
+        }
+
+        fn set_state(&mut self, cron: CronId, state: Option<CronState>) {
+            match state {
+                Some(state) => self.states.insert(cron, state),
+                None => self.states.remove(&cron),
+            };
+        }
+
+        fn eligible(&mut self, record: &CronRecord) -> bool {
+            self.log.push(Did::Asked(record.id.0));
+            self.eligible.get(&record.id.0).copied().unwrap_or(false)
+        }
+
+        fn run(&mut self, id: SubscriptionId, script: &Script) {
+            assert_eq!(id.consumer, Consumer::Crons);
+            let expected = match id.hook {
+                START => Script::parse(&format!("b{}", id.record)),
+                END => Script::parse(&format!("!b{}", id.record)),
+                hook => panic!("no hook {hook}"),
+            };
+            assert_eq!(*script, expected, "the record's own script");
+            self.log.push(match id.hook {
+                START => Did::Started(id.record),
+                _ => Did::Ended(id.record),
+            });
+        }
+    }
+
+    impl MockDay {
+        /// A day with crön `id` eligible.
+        fn eligible(id: i16) -> Self {
+            Self {
+                eligible: BTreeMap::from([(id, true)]),
+                ..Self::default()
+            }
+        }
+
+        /// Runs a day's pass over `records`, and what it did.
+        fn day(&mut self, records: &[CronRecord]) -> Vec<Did> {
+            pass(records, self);
+            std::mem::take(&mut self.log)
+        }
+
+        /// Crön `id`'s state.
+        fn of(&self, id: i16) -> Option<(i16, i16)> {
+            self.states
+                .get(&CronId(id))
+                .map(|state| (state.days, state.holdoff))
+        }
+    }
+
+    /// Crön `id` of `Duration` `duration` and these holdoffs, its
+    /// `OnStart` setting `b<id>` and its `OnEnd` clearing it.
+    fn timed(id: i16, duration: i16, pre_holdoff: i16, post_holdoff: i16) -> CronRecord {
+        CronRecord {
+            duration,
+            pre_holdoff,
+            post_holdoff,
+            on_start: Script::parse(&format!("b{id}")),
+            on_end: Script::parse(&format!("!b{id}")),
+            ..cron(id)
+        }
+    }
+
+    use Did::{Asked, Ended, Started};
+
+    #[test]
+    fn a_disabled_cron_is_skipped_running_or_not() {
+        let records = [timed(128, -1, 0, 0)];
+        let mut day = MockDay::eligible(128);
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.of(128), None);
+        day.states.insert(
+            CronId(128),
+            CronState {
+                days: 3,
+                holdoff: 0,
+            },
+        );
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.of(128), Some((3, 0)), "untouched");
+        day.states.insert(
+            CronId(128),
+            CronState {
+                days: 3,
+                holdoff: 2,
+            },
+        );
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.of(128), Some((3, 2)), "untouched");
+    }
+
+    #[test]
+    fn a_cron_starts_runs_its_duration_and_ends() {
+        let records = [timed(128, 3, 0, 0)];
+        let mut day = MockDay::eligible(128);
+        assert_eq!(day.day(&records), [Asked(128), Started(128)]);
+        assert_eq!(day.of(128), Some((3, 0)));
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.of(128), Some((2, 0)));
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.of(128), Some((1, 0)));
+        assert_eq!(day.day(&records), [Ended(128)]);
+        assert_eq!(day.of(128), None);
+    }
+
+    #[test]
+    fn a_cron_of_duration_0_starts_and_ends_the_same_day() {
+        let records = [timed(128, 0, 0, 0)];
+        let mut day = MockDay::eligible(128);
+        assert_eq!(day.day(&records), [Asked(128), Started(128), Ended(128)]);
+        assert_eq!(day.of(128), None);
+        assert_eq!(
+            day.day(&records),
+            [Asked(128), Started(128), Ended(128)],
+            "asked again the next day"
+        );
+    }
+
+    #[test]
+    fn a_cron_not_eligible_stays_inactive() {
+        let records = [timed(128, 3, 0, 0)];
+        let mut day = MockDay::default();
+        assert_eq!(day.day(&records), [Asked(128)]);
+        assert_eq!(day.of(128), None);
+    }
+
+    #[test]
+    fn a_pre_holdoff_delays_on_start_with_no_recheck() {
+        let records = [timed(128, 1, 2, 0)];
+        let mut day = MockDay::eligible(128);
+        assert_eq!(day.day(&records), [Asked(128)]);
+        assert_eq!(day.of(128), Some((1, 2)));
+        day.eligible.clear();
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.of(128), Some((1, 1)));
+        assert_eq!(day.day(&records), [Started(128)], "not eligible now");
+        assert_eq!(day.of(128), Some((1, 0)));
+        assert_eq!(day.day(&records), [Ended(128)]);
+        assert_eq!(day.of(128), None);
+    }
+
+    #[test]
+    fn a_running_cron_never_rechecks() {
+        let records = [timed(128, 4, 0, 0)];
+        let mut day = MockDay::eligible(128);
+        assert_eq!(day.day(&records), [Asked(128), Started(128)]);
+        day.eligible.clear();
+        for _ in 0..3 {
+            assert_eq!(day.day(&records), []);
+        }
+        assert_eq!(day.day(&records), [Ended(128)]);
+    }
+
+    #[test]
+    fn a_cron_that_ended_starts_again_on_a_later_day() {
+        let records = [timed(128, 1, 0, 0)];
+        let mut day = MockDay::eligible(128);
+        assert_eq!(day.day(&records), [Asked(128), Started(128)]);
+        assert_eq!(day.day(&records), [Ended(128)]);
+        assert_eq!(day.day(&records), [Asked(128), Started(128)]);
+        assert_eq!(day.of(128), Some((1, 0)));
+    }
+
+    #[test]
+    fn a_post_holdoff_follows_the_end_and_then_the_cron_is_inactive() {
+        let records = [timed(128, 2, 0, 3)];
+        let mut day = MockDay::eligible(128);
+        assert_eq!(day.day(&records), [Asked(128), Started(128)]);
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.day(&records), [Ended(128)]);
+        assert_eq!(day.of(128), Some((-1, 3)));
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.of(128), Some((-1, 2)));
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.of(128), Some((-1, 1)));
+        assert_eq!(day.day(&records), [], "OnEnd ran once");
+        assert_eq!(day.of(128), None);
+        assert_eq!(day.day(&records), [Asked(128), Started(128)]);
+    }
+
+    #[test]
+    fn a_duration_0_cron_after_a_pre_holdoff_ends_once() {
+        let records = [timed(128, 0, 2, 0)];
+        let mut day = MockDay::eligible(128);
+        assert_eq!(day.day(&records), [Asked(128)]);
+        assert_eq!(day.of(128), Some((0, 2)));
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.day(&records), [Started(128), Ended(128)]);
+        assert_eq!(day.of(128), None);
+        day.eligible.clear();
+        assert_eq!(day.day(&records), [Asked(128)], "no second OnEnd");
+    }
+
+    #[test]
+    fn a_duration_0_cron_after_a_pre_holdoff_takes_its_post_holdoff() {
+        let records = [timed(128, 0, 2, 2)];
+        let mut day = MockDay::eligible(128);
+        assert_eq!(day.day(&records), [Asked(128)]);
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.day(&records), [Started(128), Ended(128)]);
+        assert_eq!(day.of(128), Some((-1, 2)));
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.of(128), Some((-1, 1)));
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.of(128), None);
+    }
+
+    #[test]
+    fn a_duration_0_cron_takes_its_post_holdoff() {
+        let records = [timed(128, 0, 0, 1)];
+        let mut day = MockDay::eligible(128);
+        assert_eq!(day.day(&records), [Asked(128), Started(128), Ended(128)]);
+        assert_eq!(day.of(128), Some((-1, 1)));
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.of(128), None);
+    }
+
+    #[test]
+    fn the_pass_goes_by_ascending_id_each_crons_scripts_before_the_next_ask() {
+        let records = [timed(130, 0, 0, 0), timed(129, 1, 0, 0)];
+        let mut day = MockDay {
+            eligible: BTreeMap::from([(129, true), (130, true)]),
+            ..MockDay::default()
+        };
+        assert_eq!(
+            day.day(&records),
+            [
+                Asked(129),
+                Started(129),
+                Asked(130),
+                Started(130),
+                Ended(130)
+            ]
+        );
+    }
+
+    /// A day whose eligibility asks write the day's state: the pass writes
+    /// each state before it runs the crön's scripts.
+    struct Watching {
+        day: MockDay,
+        seen: Vec<Option<(i16, i16)>>,
+    }
+
+    impl CronDay for Watching {
+        fn state(&self, cron: CronId) -> Option<CronState> {
+            self.day.state(cron)
+        }
+
+        fn set_state(&mut self, cron: CronId, state: Option<CronState>) {
+            self.day.set_state(cron, state);
+        }
+
+        fn eligible(&mut self, record: &CronRecord) -> bool {
+            self.day.eligible(record)
+        }
+
+        fn run(&mut self, id: SubscriptionId, script: &Script) {
+            self.seen.push(self.day.of(id.record));
+            self.day.run(id, script);
+        }
+    }
+
+    #[test]
+    fn each_state_is_written_before_the_crons_scripts_run() {
+        let records = [timed(128, 0, 0, 0), timed(129, 2, 0, 0)];
+        let mut watching = Watching {
+            day: MockDay {
+                eligible: BTreeMap::from([(128, true), (129, true)]),
+                ..MockDay::default()
+            },
+            seen: Vec::new(),
+        };
+        pass(&records, &mut watching);
+        assert_eq!(watching.seen, [Some((0, 0)), Some((0, 0)), Some((2, 0))]);
+    }
+
+    #[test]
+    fn a_saved_counter_at_its_floor_does_not_overflow() {
+        let records = [timed(128, 3, 0, 0)];
+        let mut day = MockDay::default();
+        day.states.insert(
+            CronId(128),
+            CronState {
+                days: i16::MIN,
+                holdoff: 0,
+            },
+        );
+        assert_eq!(day.day(&records), [Ended(128)]);
+        assert_eq!(day.of(128), None);
     }
 }

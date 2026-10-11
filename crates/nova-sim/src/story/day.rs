@@ -9,7 +9,9 @@
 pub(crate) enum Participant {
     /// The date moves on a day (@0xb51f-0xb585).
     Date,
-    /// The crons (`_CronEventHandler` @0xb58b): crons-news-ranks phase 1.
+    /// The crons (`_CronEventHandler` @0xb58b): one pass over every
+    /// `crön` by ID, built by crons-news-ranks phase 1 (see
+    /// [`cron`](crate::cron)).
     Crons,
     /// The active missions' days left (@0xb590-0xb5b6): missions phase 2.
     MissionDays,
