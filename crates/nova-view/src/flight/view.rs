@@ -39,7 +39,9 @@
 //! drawn with its own ship's sprite, after the stellars and before the
 //! player, smoothed between its last two steps as the player's ship is
 //! (a crossed box when its sheet cannot be read), and as a dim blip on the
-//! radar.
+//! radar. One waiting at the hypergate or wormhole it comes out of is not
+//! drawn until its last 16 ticks there, over which it fades in; it is on
+//! the radar all along, as the original's radar does not ask.
 //!
 //! Each step's fight events are drained into the [`Effects`]: its
 //! explosions, debris and sounds, rolled on their own [`SharedChance`]
@@ -296,6 +298,8 @@ use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::offer_gap;
 use nova_sim::mission::screens::{NO_ACTIVE_MISSIONS, mac_ticks};
 use nova_sim::order_loop::{OrderRun, Stopped};
+use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
+use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
     HireTerms, Hired, MissionComputer, MissionId, MissionInfo, MissionText, NotOffered,
@@ -767,6 +771,27 @@ fn shown_position(from: &ShipState, to: &ShipState, alpha: f32) -> Point {
 /// round, from `from` to `to`.
 fn shown_heading(from: &ShipState, to: &ShipState, alpha: f32) -> f32 {
     normalized(shortest_turn(from.heading, to.heading).mul_add(alpha, from.heading))
+}
+
+/// How `npc`'s sprite is tinted: `None` while it waits hidden at the gate
+/// it comes out of; white with the alpha of its [`emerge_level`] over
+/// its last [`FADE_TICKS`](nova_sim::traffic::emerge::FADE_TICKS) there;
+/// plain white otherwise.
+///
+/// The original (`_HandleShipDisplay` @0x2c090-0x2c18e) fades the hull in
+/// at 16-bit depth by a destination factor of twice the ticks left and a
+/// bias of four times them, at most 32. That translucent blit was not
+/// traced; this draws the ship's alpha rising from none to full, as the
+/// cloak's fade does. An NPC gets no screen flash, as the player's own
+/// gate arrival does (see [`jump`](super::jump)).
+fn npc_tint(npc: &Npc) -> Option<Color> {
+    let Mode::Emerging { ticks_left } = npc.mode else {
+        return Some(Color::WHITE);
+    };
+    let level = u16::from(emerge_level(ticks_left)?);
+    let full = u16::from(FULL_LEVEL);
+    let alpha = u8::try_from((level * 255 + full / 2) / full).unwrap_or(u8::MAX);
+    Some(Color::rgba(255, 255, 255, alpha))
 }
 
 /// `STR#` 2002 #130: the target cannot be boarded.
@@ -2509,14 +2534,18 @@ impl<C> FlightView<C> {
     }
 
     /// Draws each NPC with its own ship's sprite, or a crossed box when its
-    /// sheet cannot be read.
+    /// sheet cannot be read. One waiting at the gate it comes out of is
+    /// hidden, then fades in over its last ticks there ([`npc_tint`]).
     fn draw_npcs(&self, list: &mut DrawList, camera: &Camera) {
         for (npc, at, heading) in self.shown_npcs() {
+            let Some(tint) = npc_tint(npc) else {
+                continue;
+            };
             let at = camera.world_to_screen(at);
             match self.npc_sheets.get(&npc.ship) {
                 Some(Ok(sheet)) => {
                     let frame = rotation_frame(heading, sheet.rotations);
-                    list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
+                    list.sprite(ImageKey::sprite(sheet.image_id, frame), at, tint);
                 }
                 _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
             }
@@ -7369,6 +7398,62 @@ mod tests {
             })
             .collect();
         assert_eq!(dim, [blip]);
+    }
+
+    /// The tints the NPC sprite (ship 129's sheet, 2001) is drawn with.
+    fn npc_tints(list: &DrawList) -> Vec<Color> {
+        list.iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite { image, tint, .. } if image.id == 2001 => Some(*tint),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The dim radar dots drawn: one for each NPC.
+    fn dim_dots(list: &DrawList) -> usize {
+        list.iter()
+            .filter(|command| {
+                matches!(command, DrawCommand::Dot { color, .. } if *color == layout().dim_radar)
+            })
+            .count()
+    }
+
+    #[test]
+    fn an_npc_coming_out_of_a_gate_is_hidden_then_fades_in_but_always_on_the_radar() {
+        let mut catalog = trafficked(&[130], 1, 129, 3);
+        catalog.sites.push(LandingSite {
+            flags2: nova_sim::gate::HYPERGATE,
+            exit_angle: 90,
+            ..site(141, (200.0, 100.0), StellarFlags::CAN_LAND)
+        });
+        // Setup brings nobody (an empty person roll); then an arrival
+        // comes out of the gate, the third of the stellars.
+        let (script, chance) = scripted(&[0, 0, 6, 6, 0, 0, 0, 2]);
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        ticks(&mut view, 2);
+        assert_eq!(&script.borrow().asked[1..9], [500, 7, 7, 100, 1, 360, 3, 3]);
+        let mode = |view: &View| view.session().expect("flying").npcs()[0].mode;
+        assert_eq!(mode(&view), Mode::Emerging { ticks_left: 59 });
+        ticks(&mut view, 19);
+        assert_eq!(mode(&view), Mode::Emerging { ticks_left: 40 });
+        let list = drawn(&view);
+        assert_eq!(npc_tints(&list), [], "hidden");
+        assert_eq!(dim_dots(&list), 1, "on the radar all the same");
+        ticks(&mut view, 32);
+        assert_eq!(mode(&view), Mode::Emerging { ticks_left: 8 });
+        let list = drawn(&view);
+        assert_eq!(
+            npc_tints(&list),
+            [Color::rgba(255, 255, 255, 128)],
+            "half in"
+        );
+        assert_eq!(dim_dots(&list), 1);
+        ticks(&mut view, 8);
+        assert_eq!(mode(&view), Mode::LeavingGate { tick: 0 });
+        assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE]);
     }
 
     #[test]
