@@ -93,6 +93,7 @@
 //! is also on screen ([`on_screen`], `_MissionObjectivesCheck`
 //! @0x9ea81-0x9eb09).
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use crate::catalog::{OutfitId, OutfitRecord};
@@ -198,21 +199,30 @@ impl Cloak {
     /// One tick of the fade, at [`FAST_FADE_RATE`] when `fast`, else
     /// [`FADE_RATE`] (see the module docs).
     pub fn step(&mut self, fast: bool) {
-        if self.direction == 0 {
-            if self.fade > 0.0 && self.fade < FADE_FULL {
-                self.fade -= DRIFT;
-            }
-            return;
-        }
         let rate = if fast { FAST_FADE_RATE } else { FADE_RATE };
-        self.fade += f32::from(self.direction) * rate;
-        if self.fade <= 0.0 && self.direction < 0 {
-            self.fade = 0.0;
-            self.direction = 0;
-        }
-        if self.fade >= FADE_FULL && self.direction > 0 {
-            self.fade = FADE_FULL;
-            self.direction = 0;
+        // Matching on the direction's sign, rather than testing it for 0
+        // and again for each clamp, leaves no `< 0` or `> 0` whose `<= 0`
+        // or `>= 0` mutant chooses the same.
+        match self.direction.cmp(&0) {
+            Ordering::Equal => {
+                if self.fade > 0.0 && self.fade < FADE_FULL {
+                    self.fade -= DRIFT;
+                }
+            }
+            Ordering::Less => {
+                self.fade += f32::from(self.direction) * rate;
+                if self.fade <= 0.0 {
+                    self.fade = 0.0;
+                    self.direction = 0;
+                }
+            }
+            Ordering::Greater => {
+                self.fade += f32::from(self.direction) * rate;
+                if self.fade >= FADE_FULL {
+                    self.fade = FADE_FULL;
+                    self.direction = 0;
+                }
+            }
         }
     }
 }
@@ -546,6 +556,18 @@ mod tests {
         let mut full = at(FADE_FULL, 0);
         full.step(true);
         assert_eq!(full, at(FADE_FULL, 0), "a full cloak holds");
+    }
+
+    #[test]
+    fn with_no_direction_a_full_cloak_holds_at_32_and_an_uncloaked_ship_at_0() {
+        let mut full = at(FADE_FULL, 0);
+        let mut seen = Cloak::default();
+        for _ in 0..40 {
+            full.step(false);
+            seen.step(false);
+        }
+        assert_eq!(full, at(FADE_FULL, 0));
+        assert_eq!(seen, Cloak::default());
     }
 
     #[test]
