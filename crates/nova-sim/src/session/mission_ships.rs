@@ -1097,6 +1097,7 @@ pub(super) mod tests {
     use crate::combat::ShipRef;
     use crate::combat::hull::Condition;
     use crate::control::SetExpr;
+    use crate::gate::GateKind;
     use crate::message::SimMessage;
     use crate::mission::FailedBy;
     use crate::session::mission_screens::MissionTextKind;
@@ -1587,6 +1588,82 @@ pub(super) mod tests {
         session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
         settle(&mut session, &catalog);
         assert_eq!(ships_of(&session).appear, 199);
+    }
+
+    // Setup on each way in.
+
+    #[test]
+    fn a_gate_exit_into_the_ships_system_sets_them_up() {
+        use crate::session::gate_follow::tests::{exit_gate, gated};
+        for kind in [GateKind::Hypergate, GateKind::Wormhole] {
+            let catalog = gated(shipping(131, 0), 0);
+            let mut session = accepted(&catalog);
+            take_off(&mut session, &catalog);
+            assert!(marked(&session).is_empty(), "{kind:?}");
+            exit_gate(&mut session, &catalog, kind, &mut NeverFires);
+            assert_eq!(marked(&session), [0, 0], "{kind:?}");
+            assert!(!session.npcs().iter().any(Npc::emerging), "{kind:?}");
+        }
+    }
+
+    /// The rules with `MoveArrival` read as `source`.
+    fn move_arrival(source: RuleSource) -> crate::Rulebook {
+        crate::Rulebook::default().with_override(RuleKey::MoveArrival, source)
+    }
+
+    /// Lands at 140, at 131's centre, settles, and takes off again.
+    fn land_and_take_off_in_131(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.player.position = Vec2::ZERO;
+        session.player.velocity = Vec2::ZERO;
+        session.nav_target = None;
+        assert_eq!(land_now(session), Ok(StellarId(140)));
+        settle(session, catalog);
+        take_off(session, catalog);
+    }
+
+    #[test]
+    fn a_move_in_flight_into_the_ships_system_as_an_arrival_sets_them_up_at_once() {
+        let catalog = ships_catalog(shipping(131, 0));
+        let mut session = accepted(&catalog).with_rules(move_arrival(RuleSource::Bible));
+        take_off(&mut session, &catalog);
+        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+        settle(&mut session, &catalog);
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(marked(&session), [0, 0]);
+    }
+
+    #[test]
+    fn a_move_in_flight_by_the_engine_sets_up_none_until_the_next_setup() {
+        // As the original's: `M` calls no `_SetupShipsInSystem`
+        // (@0x158a4-0x159ad).
+        let catalog = ships_catalog(shipping(131, 0));
+        let mut session = accepted(&catalog).with_rules(move_arrival(RuleSource::Engine));
+        take_off(&mut session, &catalog);
+        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+        settle(&mut session, &catalog);
+        ticks(&mut session, &catalog, 5);
+        assert_eq!(session.system(), SystemId(131));
+        assert!(marked(&session).is_empty(), "none until the next setup");
+        land_and_take_off_in_131(&mut session, &catalog);
+        assert_eq!(marked(&session), [0, 0]);
+    }
+
+    #[test]
+    fn a_move_in_flight_by_the_engine_leaves_attackers_following_the_player_behind() {
+        // The original moves only the ships the player leads (@0x15807-0x1583e).
+        let catalog = ships_catalog(MissionShip {
+            behav: 0,
+            ..shipping(-6, 0)
+        });
+        let mut session = accepted(&catalog).with_rules(move_arrival(RuleSource::Engine));
+        take_off(&mut session, &catalog);
+        assert_eq!(marked(&session), [0, 0]);
+        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+        settle(&mut session, &catalog);
+        assert!(marked(&session).is_empty(), "left behind");
+        assert_eq!(ships_of(&session).left, 2);
+        land_and_take_off_in_131(&mut session, &catalog);
+        assert_eq!(marked(&session), [0, 0], "set up again");
     }
 
     #[test]

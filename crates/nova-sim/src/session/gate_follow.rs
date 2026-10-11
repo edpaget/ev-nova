@@ -144,7 +144,7 @@ impl Session {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::{GateSite, MissionShip, StellarId, SystemId};
     use crate::chance::NeverFires;
