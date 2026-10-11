@@ -16,8 +16,9 @@
 //!
 //! The ship lands on a stellar of its system, on the land key's second
 //! press, when the [`landing`](crate::landing) rules allow it, which read
-//! the pilot's legal record with the stellar's government, or with its
-//! system's on the star map when the stellar has none: docked, it rests
+//! the pilot's legal record in its system (by the Bible's reading of
+//! [`RuleKey::LegalRecords`], the record with the stellar's government,
+//! or with its system's when the stellar has none): docked, it rests
 //! at the stellar's centre and ticks move nothing until it takes off
 //! again, from the same place. A landed ship cannot jump, nor a jumping
 //! one land.
@@ -151,7 +152,7 @@
 //! NPCs deciding as a [`Behaviour`] says and rolling on the caller's
 //! [`Chance`], seeing the player's ship, the governments read when the
 //! session starts, the system's government and the player's legal record
-//! with it, and answering the fight's strikes since the last traffic
+//! in the system (see [`legal`](crate::legal)), and answering the fight's strikes since the last traffic
 //! tick; it stands still while the player is landed or jumping, as the
 //! player's own ship does.
 //!
@@ -176,7 +177,9 @@
 //! The player's crimes change its legal records as the fight's
 //! [`LegalCode`] says: disabling an NPC, and breaking one up (which is
 //! disabling it too when it was intact), each against the NPC's
-//! government. A mere hit is no crime, as in the original.
+//! government, the record with each government changed and, by that
+//! government's change, the record in each of its systems
+//! ([`legal::convict`]). A mere hit is no crime, as in the original.
 //!
 //! The player boards its target once it is disabled
 //! ([`Session::board`]), as the [`board`](crate::board) rules say: the
@@ -1551,7 +1554,7 @@ impl Session {
             };
             for &crime in crimes {
                 let changes = law.penalties(crime, govt, &self.govts);
-                legal::convict(&mut self.pilot, &changes);
+                legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
             }
         }
     }
@@ -2133,8 +2136,7 @@ impl Session {
             self.nav_target,
             &self.player,
             &self.sites,
-            self.galaxy.govt(self.pilot.system),
-            |govt| self.pilot.legal_record(govt),
+            |site| self.landing_record(site),
             |site| self.landing_reach(site),
         )?;
         match outcome {
@@ -2478,12 +2480,33 @@ impl Session {
         )
     }
 
-    /// The player's legal record in the current system: the record with
-    /// its government, 0 in an independent system.
+    /// The player's legal record in the current system, as the
+    /// [`LegalRecords`](RuleKey::LegalRecords) rule reads it: by the
+    /// engine the system's own; by the Bible the record with its
+    /// government, 0 in an independent system.
     fn system_record(&self) -> i16 {
-        self.galaxy
-            .govt(self.pilot.system)
-            .map_or(0, |govt| self.pilot.legal_record(govt))
+        match self.rules.source_for(RuleKey::LegalRecords) {
+            RuleSource::Engine => self.pilot.system_record(self.pilot.system),
+            RuleSource::Bible => self
+                .galaxy
+                .govt(self.pilot.system)
+                .map_or(0, |govt| self.pilot.legal_record(govt)),
+        }
+    }
+
+    /// The player's legal record that `site`'s `MinStatus` is checked
+    /// against: by the engine the record in the current system, whatever
+    /// the stellar's government (`_HandlePlayerDockRequest` @0x67903); by
+    /// the Bible [`landing_record`](crate::landing::landing_record).
+    fn landing_record(&self, site: &LandingSite) -> i16 {
+        match self.rules.source_for(RuleKey::LegalRecords) {
+            RuleSource::Engine => self.pilot.system_record(self.pilot.system),
+            RuleSource::Bible => {
+                crate::landing::landing_record(site, self.galaxy.govt(self.pilot.system), |govt| {
+                    self.pilot.legal_record(govt)
+                })
+            }
+        }
     }
 
     /// Trades on the exchange as `order` asks, on its row at that row's
@@ -2988,7 +3011,7 @@ impl Session {
         let npc = self.target().cloned().ok_or(BoardRefusal::NoTarget)?;
         self.player.velocity = npc.state.velocity;
         let changes = law.penalties(Crime::Board, npc.govt, &self.govts);
-        legal::convict(&mut self.pilot, &changes);
+        legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
         self.strikes.push(Strike {
             ship: ShipRef::Npc(npc.id),
             by: ShipRef::Player,
@@ -3992,7 +4015,6 @@ mod tests {
             crate::landing::check_landing(
                 &flying,
                 &planet(128, 30.0, -40.0),
-                None,
                 |_| 0,
                 crate::landing::LandingReach::Box(175.0)
             )
@@ -4148,7 +4170,7 @@ mod tests {
     }
 
     /// Lands `pilot` on `stellar` in system 130 from right over it: docked
-    /// there, taking off and landing again.
+    /// there, taking off and landing again, the records read by the Bible.
     fn land_at(
         catalog: &FakePilotCatalog,
         pilot: &Pilot,
@@ -4156,7 +4178,9 @@ mod tests {
     ) -> Result<StellarId, LandingRefusal> {
         let mut pilot = pilot.clone();
         pilot.stellar = Some(StellarId(stellar));
-        let mut session = Session::fly(catalog, pilot).expect("flies");
+        let mut session = Session::fly(catalog, pilot)
+            .expect("flies")
+            .with_rules(bible_records());
         assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(stellar)));
         land_now(&mut session)
     }
@@ -4170,7 +4194,7 @@ mod tests {
     }
 
     #[test]
-    fn landing_reads_the_pilots_record_with_each_stellars_government() {
+    fn by_the_bible_landing_reads_the_pilots_record_with_each_stellars_government() {
         let catalog = governed([Some(LAWFUL), Some(WANTED)], None);
         let pilot = on_record(&catalog);
         assert_eq!(land_at(&catalog, &pilot, 128), Ok(StellarId(128)));
@@ -4178,7 +4202,7 @@ mod tests {
     }
 
     #[test]
-    fn landing_on_a_stellar_without_a_government_reads_its_systems_record() {
+    fn by_the_bible_landing_on_a_stellar_without_a_government_reads_its_systems_record() {
         let lawful = governed([None, None], Some(LAWFUL));
         let pilot = on_record(&lawful);
         assert_eq!(land_at(&lawful, &pilot, 129), Ok(StellarId(129)));
@@ -4188,7 +4212,7 @@ mod tests {
     }
 
     #[test]
-    fn a_loaded_pilots_records_decide_landing() {
+    fn by_the_bible_a_loaded_pilots_records_decide_landing() {
         let catalog = governed([Some(LAWFUL), Some(WANTED)], None);
         let loaded =
             crate::save::decode(&crate::save::encode(&on_record(&catalog))).expect("loads");
@@ -4252,6 +4276,55 @@ mod tests {
             session.pilot().system_records().collect::<Vec<_>>(),
             [(SystemId(130), -50)],
             "derived already, so nothing is derived again"
+        );
+    }
+
+    /// Sets `session`'s legal record with `govt`, and in each system
+    /// `govt` governs, to `record`: the record the session reads by
+    /// either reading of [`RuleKey::LegalRecords`].
+    pub(super) fn with_record(session: &mut Session, govt: GovtId, record: i16) {
+        let systems: Vec<SystemId> = session
+            .galaxy
+            .governed()
+            .filter(|&(_, governing)| governing == Some(govt))
+            .map(|(system, _)| system)
+            .collect();
+        session.pilot.set_legal_record(govt, record);
+        for system in systems {
+            session.pilot.set_system_record(system, record);
+        }
+    }
+
+    /// The default rulebook with the legal records read per government,
+    /// as the Bible has them.
+    fn bible_records() -> Rulebook {
+        Rulebook::default().with_override(RuleKey::LegalRecords, RuleSource::Bible)
+    }
+
+    #[test]
+    fn by_the_engine_the_record_is_the_systems_own() {
+        let catalog = governed([None, None], Some(WANTED));
+        let mut session = Session::fly(&catalog, on_record(&catalog)).expect("flies");
+        session.pilot.set_system_record(SystemId(130), -3);
+        assert_eq!(session.system_record(), -3);
+        assert_eq!(session.pilot.legal_record(WANTED), 9, "kept");
+        let session = session.with_rules(bible_records());
+        assert_eq!(session.system_record(), 9, "by the Bible, WANTED's");
+    }
+
+    #[test]
+    fn by_the_engine_landing_reads_the_systems_record_whatever_the_stellars_government() {
+        let catalog = governed([Some(LAWFUL), None], Some(WANTED));
+        let pilot = on_record(&catalog);
+        let mut session = Session::fly(&catalog, pilot.clone()).expect("flies");
+        assert_eq!(land_now(&mut session), denied(128), "system 130's 9");
+        let mut session = Session::fly(&catalog, pilot)
+            .expect("flies")
+            .with_rules(bible_records());
+        assert_eq!(
+            land_now(&mut session),
+            Ok(StellarId(128)),
+            "by the Bible, LAWFUL's 10"
         );
     }
 
@@ -5693,10 +5766,26 @@ mod tests {
         let mut session = Session::start(catalog).expect("starts");
         land_now(&mut session).expect("lands");
         for &(govt, record) in records {
-            session.pilot.set_legal_record(GovtId(govt), record);
+            with_record(&mut session, GovtId(govt), record);
         }
         let market = session.market().expect("an exchange");
         [FOOD, METAL].map(|good| market.row(good).expect("traded").price)
+    }
+
+    #[test]
+    fn by_the_engine_the_markup_reads_the_systems_record() {
+        let catalog = marked_up(Some(150), Some(150), 0);
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        session.pilot.set_legal_record(GovtId(150), 5);
+        session.pilot.set_system_record(SystemId(130), -1);
+        let prices = |session: &Session| {
+            let market = session.market().expect("an exchange");
+            [FOOD, METAL].map(|good| market.row(good).expect("traded").price)
+        };
+        assert_eq!(prices(&session), [82, 181], "1.1, by the system's -1");
+        let session = session.with_rules(bible_records());
+        assert_eq!(prices(&session), [93, 160], "1.25, by the Bible 150's 5");
     }
 
     #[test]
@@ -10352,8 +10441,8 @@ mod tests {
         catalog.star_map[0].govt = Some(GovtId(150));
         catalog.govts = vec![crate::testkit::govt(150), crate::testkit::govt(151)];
         let mut session = facing_an_npc(&catalog, 180);
-        session.pilot.set_legal_record(GovtId(150), -20);
-        session.pilot.set_legal_record(GovtId(151), 30);
+        with_record(&mut session, GovtId(150), -20);
+        with_record(&mut session, GovtId(151), 30);
         let spy = Spy::default();
         session.tick_traffic(&catalog, &spy, &mut NeverFires);
         let seen = spy.seen.take();
@@ -10368,10 +10457,28 @@ mod tests {
         assert_eq!((system, record, govts), (Some(GovtId(150)), -20, 2));
         catalog.star_map[0].govt = None;
         let mut session = facing_an_npc(&catalog, 180);
-        session.pilot.set_legal_record(GovtId(150), -20);
+        with_record(&mut session, GovtId(150), -20);
         session.tick_traffic(&catalog, &spy, &mut NeverFires);
         let (_, system, record, _) = spy.seen.take()[0];
         assert_eq!((system, record), (None, 0), "an independent system");
+    }
+
+    #[test]
+    fn by_the_engine_npcs_see_the_record_in_the_system() {
+        let mut catalog = armed();
+        catalog.star_map[0].govt = Some(GovtId(150));
+        catalog.govts = vec![crate::testkit::govt(150)];
+        let mut session = facing_an_npc(&catalog, 180);
+        session.pilot.set_legal_record(GovtId(150), 30);
+        session.pilot.set_system_record(SystemId(130), -20);
+        let spy = Spy::default();
+        session.tick_traffic(&catalog, &spy, &mut NeverFires);
+        let (_, _, record, _) = spy.seen.take()[0];
+        assert_eq!(record, -20, "the system's own");
+        let mut session = session.with_rules(bible_records());
+        session.tick_traffic(&catalog, &spy, &mut NeverFires);
+        let (_, _, record, _) = spy.seen.take()[0];
+        assert_eq!(record, 30, "by the Bible, 150's");
     }
 
     #[test]
@@ -10491,6 +10598,35 @@ mod tests {
         );
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
         assert_eq!(&saved, session.pilot(), "the records saved as they are");
+    }
+
+    #[test]
+    fn disabling_an_npc_changes_the_records_in_each_system_of_a_changed_government() {
+        let mut catalog = lawful();
+        for (system, govt) in catalog
+            .star_map
+            .iter_mut()
+            .zip([Some(140), Some(142), None])
+        {
+            system.govt = govt.map(GovtId);
+        }
+        let mut session = facing_an_npc(&catalog, 180);
+        session.hold_trigger(FIRE);
+        let systems = |session: &Session| {
+            [130, 131, 132].map(|system| session.pilot().system_record(SystemId(system)))
+        };
+        for _ in 0..80 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if session.npcs().first().map(|npc| npc.condition) == Some(Condition::Disabled) {
+                break;
+            }
+        }
+        assert_eq!(
+            systems(&session),
+            [-3, 4, 0],
+            "the victim's system and its enemy's, each its government's change; \
+             the independent untouched"
+        );
     }
 
     #[test]
@@ -11999,7 +12135,7 @@ mod tests {
         let catalog = skirmish(&[(3, 143, 132)], Some(143));
         for (record, hunted) in [(-6, false), (-7, true)] {
             let mut session = Session::start(&catalog).expect("starts");
-            session.pilot.set_legal_record(GovtId(143), record);
+            with_record(&mut session, GovtId(143), record);
             session.populate(&catalog, &mut placing(1, &[(0, 300, 0, 0)]));
             fight(&mut session, &catalog);
             assert_eq!(
@@ -12200,6 +12336,15 @@ mod tests {
         assert!(!session.npcs()[1].boarded);
         assert_eq!(session.boarding(), Some(ON_BOARD));
         assert!(!session.take_save_due(), "nothing to save yet");
+    }
+
+    #[test]
+    fn boarding_changes_the_record_in_each_system_of_the_victims_government() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        board_by(&mut session, &NovaLaw::default()).expect("boards");
+        assert_eq!(session.pilot().system_record(SystemId(130)), -5);
+        assert_eq!(session.pilot().legal_record(GovtId(140)), -5);
     }
 
     #[test]
@@ -15183,11 +15328,13 @@ mod tests {
     }
 
     #[test]
-    fn a_government_override_changes_the_record_and_landing_in_the_system() {
+    fn by_the_bible_a_government_override_changes_the_record_and_landing_in_the_system() {
         let catalog = governed([None, None], Some(WANTED));
         let mut pilot = on_record(&catalog);
         pilot.stellar = Some(StellarId(128));
-        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        let mut session = Session::fly(&catalog, pilot)
+            .expect("flies")
+            .with_rules(bible_records());
         session.take_off(&mut NeverFires).expect("takes off");
         assert_eq!(session.system_record(), 9);
         assert_eq!(land_now(&mut session), denied(128));
@@ -15203,11 +15350,32 @@ mod tests {
     }
 
     #[test]
-    fn a_stellars_government_override_changes_landing_there() {
+    fn by_the_engine_a_government_override_keeps_the_systems_record() {
         let catalog = governed([None, None], Some(WANTED));
         let mut pilot = on_record(&catalog);
         pilot.stellar = Some(StellarId(128));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.take_off(&mut NeverFires).expect("takes off");
+        assert_eq!(session.system_record(), 9);
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_govt(SystemId(130), Some(Some(LAWFUL)));
+        });
+        assert_eq!(session.system_record(), 9, "the system's own record");
+        assert_eq!(land_now(&mut session), denied(128));
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_govt(SystemId(130), Some(None));
+        });
+        assert_eq!(session.system_record(), 9, "made independent, kept");
+    }
+
+    #[test]
+    fn by_the_bible_a_stellars_government_override_changes_landing_there() {
+        let catalog = governed([None, None], Some(WANTED));
+        let mut pilot = on_record(&catalog);
+        pilot.stellar = Some(StellarId(128));
+        let mut session = Session::fly(&catalog, pilot)
+            .expect("flies")
+            .with_rules(bible_records());
         session.take_off(&mut NeverFires).expect("takes off");
         assert_eq!(land_now(&mut session), denied(128));
         session.change_galaxy(&catalog, |overlay| {

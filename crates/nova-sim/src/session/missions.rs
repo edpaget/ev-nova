@@ -79,7 +79,7 @@ use crate::mission::{
     self, AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
     AvailFacts, FailedBy, Offer, PayEffect, Player, Refusal, Room, SLOTS, Stop, Venue, Visit,
     World, abort_checks, abort_penalty, accept_charge, accept_checks, auto_aborts_at_accept,
-    failure_records, fined, pay_effect, stellars_of, success_records,
+    cleaned, failure_records, fined, pay_effect, stellars_of, success_records,
 };
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::rules::Verdict;
@@ -443,8 +443,13 @@ impl Session {
         abort_checks()
             .first_refusal(&facts, chance)
             .map_err(AbortError::Refused)?;
-        let penalty = abort_penalty(&record, |govt| self.pilot.legal_record(govt));
-        self.set_records(&penalty);
+        let penalty = abort_penalty(&record, self.govt_targets(&record), |govt| {
+            self.pilot.legal_record(govt)
+        });
+        let in_systems = abort_penalty(&record, self.galaxy.governed(), |system| {
+            self.pilot.system_record(system)
+        });
+        self.set_records(&penalty, &in_systems);
         self.end_mission(slot, &record, true, chance);
         Ok(())
     }
@@ -600,16 +605,27 @@ impl Session {
             PayEffect::Nothing => return,
             PayEffect::Cash(credits) => self.pilot.cash = self.pilot.cash.saturating_add(credits),
             PayEffect::Clean { of, among } => {
-                let cleaned: Vec<GovtId> = self
-                    .pilot
-                    .legal_records()
-                    .filter(|&(govt, record)| {
-                        record.is_negative() && among.takes(govt, of, &self.govts)
-                    })
-                    .map(|(govt, _)| govt)
-                    .collect();
-                for govt in cleaned {
+                let govts = cleaned(
+                    self.pilot
+                        .legal_records()
+                        .map(|(govt, _)| (govt, Some(govt))),
+                    |govt| self.pilot.legal_record(govt),
+                    of,
+                    among,
+                    &self.govts,
+                );
+                let systems = cleaned(
+                    self.galaxy.governed(),
+                    |system| self.pilot.system_record(system),
+                    of,
+                    among,
+                    &self.govts,
+                );
+                for govt in govts {
                     self.pilot.set_legal_record(govt, 0);
+                }
+                for system in systems {
+                    self.pilot.set_system_record(system, 0);
                 }
             }
             PayEffect::Fine(percent) => self.pilot.cash = fined(self.pilot.cash, percent),
@@ -617,10 +633,24 @@ impl Session {
         self.save_due = true;
     }
 
-    /// Sets each government's record as `records` says.
-    fn set_records(&mut self, records: &[(GovtId, i16)]) {
+    /// Every government a mission writer changes the record with, each its
+    /// own target ([`success_records`]): each in the catalog, and
+    /// `record`'s `CompGovt` though it is not.
+    fn govt_targets(&self, record: &MissionRecord) -> Vec<(GovtId, Option<GovtId>)> {
+        let ids: std::collections::BTreeSet<GovtId> =
+            self.govts.ids().chain(record.comp_govt).collect();
+        ids.into_iter().map(|govt| (govt, Some(govt))).collect()
+    }
+
+    /// Sets each government's record as `records` says, and each
+    /// system's as `in_systems` says.
+    fn set_records(&mut self, records: &[(GovtId, i16)], in_systems: &[(SystemId, i16)]) {
         for &(govt, record) in records {
             self.pilot.set_legal_record(govt, record);
+            self.save_due = true;
+        }
+        for &(system, record) in in_systems {
+            self.pilot.set_system_record(system, record);
             self.save_due = true;
         }
     }
@@ -675,8 +705,13 @@ impl Session {
         if failed == FailedBy::Operator || repeats {
             self.run_mission_script(slot, &record.on_failure, chance);
         }
-        let changes = failure_records(&record, |govt| self.pilot.legal_record(govt));
-        self.set_records(&changes);
+        let changes = failure_records(&record, self.govt_targets(&record), |govt| {
+            self.pilot.legal_record(govt)
+        });
+        let in_systems = failure_records(&record, self.galaxy.governed(), |system| {
+            self.pilot.system_record(system)
+        });
+        self.set_records(&changes, &in_systems);
         self.end_mission(slot, &record, false, chance);
         // `FailText` (@0xa0358-0xa03cd), filled after the slot is freed
         // (@0xa0398), so its mission tags read "[Error]".
@@ -728,8 +763,13 @@ impl Session {
         };
         self.run_mission_script(slot, &record.on_success, chance);
         self.pass_days(post_days(record.date_post_inc), chance);
-        let changes = success_records(&record, &self.govts, |govt| self.pilot.legal_record(govt));
-        self.set_records(&changes);
+        let changes = success_records(&record, &self.govts, self.govt_targets(&record), |govt| {
+            self.pilot.legal_record(govt)
+        });
+        let in_systems = success_records(&record, &self.govts, self.galaxy.governed(), |system| {
+            self.pilot.system_record(system)
+        });
+        self.set_records(&changes, &in_systems);
         self.apply_pay(done.pay);
         self.forget_offers();
         self.reoffer_due = true;
@@ -976,16 +1016,23 @@ impl Session {
         })
     }
 
-    /// The player as availability reads it, its legal record the one with
-    /// `system`'s government.
+    /// The player as availability reads it, its legal record the one in
+    /// `system`, as the [`LegalRecords`](RuleKey::LegalRecords) rule reads
+    /// it: by the engine the system's own, by the Bible the one with its
+    /// government.
     fn mission_player(&self, system: SystemId) -> Player {
         let ship = self.ship_record(self.pilot.ship);
         Player {
-            record: self
-                .galaxy
-                .map()
-                .govt(system)
-                .map_or(0, |govt| self.pilot.legal_record(govt)),
+            // `_IsMissionAvailable` reads the system's slot (@0x9b59d,
+            // @0x9b5bf); by the Bible, the record with its government.
+            record: match self.rules.source_for(RuleKey::LegalRecords) {
+                RuleSource::Engine => self.pilot.system_record(system),
+                RuleSource::Bible => self
+                    .galaxy
+                    .map()
+                    .govt(system)
+                    .map_or(0, |govt| self.pilot.legal_record(govt)),
+            },
             rating: self.pilot.combat_rating,
             ship: self.pilot.ship,
             inherent_ai: ship.map_or(0, |ship| ship.inherent_ai),
@@ -1678,8 +1725,8 @@ mod tests {
             },
         ];
         let mut session = landed(&catalog, &mut NeverFires);
-        session.pilot.set_legal_record(GovtId(128), 3);
-        session.pilot.set_legal_record(GovtId(129), -5);
+        crate::session::tests::with_record(&mut session, GovtId(128), 3);
+        crate::session::tests::with_record(&mut session, GovtId(129), -5);
         session.pilot.combat_rating = 5;
         session.pilot.outfits.insert(OutfitId(200), 1);
         session.pilot.cash = 100;
@@ -1700,6 +1747,38 @@ mod tests {
                 "{id}: {why}"
             );
         }
+    }
+
+    #[test]
+    fn by_the_engine_avail_record_reads_the_systems_record() {
+        use crate::catalog::GovtId;
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        let mut catalog = offering();
+        catalog.star_map[0].govt = Some(GovtId(128));
+        catalog.missions = vec![MissionRecord {
+            avail_record: 3,
+            ..mission(140)
+        }];
+        let mut session = landed(&catalog, &mut NeverFires);
+        session.pilot.set_legal_record(GovtId(128), -5);
+        session.pilot.set_system_record(SystemId(130), 5);
+        assert_eq!(
+            session.offer_refusals(MissionId(140)),
+            Some(vec![]),
+            "the system's 5"
+        );
+        let session = session.with_rules(
+            Rulebook::default().with_override(RuleKey::LegalRecords, RuleSource::Bible),
+        );
+        let refused = session.offer_refusals(MissionId(140)).expect("docked");
+        assert_eq!(
+            refused
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            ["AvailRecord"],
+            "by the Bible, govt 128's -5"
+        );
     }
 
     #[test]
@@ -2406,6 +2485,116 @@ mod tests {
             [0, 3, -5, -5, -7],
             "the Federation's and its ally's, the positive one kept"
         );
+    }
+
+    /// [`lifecycle`] with 130 and 131 the Federation's, 132 the pirates'
+    /// and 133 the Civvies'.
+    fn governed_lifecycle(missions: Vec<MissionRecord>) -> FakePilotCatalog {
+        let mut catalog = lifecycle(missions);
+        for (system, govt) in catalog
+            .star_map
+            .iter_mut()
+            .zip([FED, FED, PIRATES, CIVVIES])
+        {
+            system.govt = Some(govt);
+        }
+        catalog
+    }
+
+    /// `session`'s records in systems 130 to 133.
+    fn system_records(session: &Session) -> Vec<i16> {
+        (130..=133)
+            .map(|system| session.pilot().system_record(SystemId(system)))
+            .collect()
+    }
+
+    /// `session` with its records in systems 130 to 133 set to `records`,
+    /// and 133 hidden.
+    fn on_system_records(session: &mut Session, catalog: &FakePilotCatalog, records: [i16; 4]) {
+        for (system, record) in (130..=133).zip(records) {
+            session.pilot.set_system_record(SystemId(system), record);
+        }
+        session.change_galaxy(catalog, |overlay| {
+            overlay.set_visible(SystemId(133), Some(false));
+        });
+    }
+
+    #[test]
+    fn a_mission_success_changes_the_records_in_each_system_and_with_each_government() {
+        let catalog = governed_lifecycle(vec![MissionRecord {
+            comp_govt: Some(FED),
+            comp_reward: 4,
+            ..to_129(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        session.pilot.set_legal_record(FED, 10);
+        on_system_records(&mut session, &catalog, [10, -2, 10, 10]);
+        accept(&mut session, 140);
+        session.take_off(&mut NeverFires).expect("takes off");
+        settle(&mut session, &catalog);
+        land_on(&mut session, &catalog, 129);
+        assert_eq!(held(&session), []);
+        assert_eq!(
+            system_records(&session),
+            [14, 2, 8, 12],
+            "the Federation's two, its enemy's, and its ally's though hidden"
+        );
+        assert_eq!(
+            session.pilot().legal_record(FED),
+            14,
+            "and the government's"
+        );
+    }
+
+    #[test]
+    fn a_mission_failure_and_abort_change_the_records_in_each_system_of_its_government() {
+        let catalog = governed_lifecycle(vec![
+            MissionRecord {
+                comp_govt: Some(FED),
+                comp_reward: 5,
+                ..back_to_128(140)
+            },
+            MissionRecord {
+                comp_govt: Some(FED),
+                comp_reward: 1,
+                flags: 0x0040,
+                ..to_129(141)
+            },
+        ]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        session.pilot.set_legal_record(FED, 10);
+        on_system_records(&mut session, &catalog, [10, -2, 10, 10]);
+        accept(&mut session, 140);
+        run(&mut session, "F140");
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(system_records(&session), [8, -4, 10, 10], "half of 5");
+        assert_eq!(session.pilot().legal_record(FED), 8);
+        let slot = accept(&mut session, 141);
+        assert_eq!(session.abort_mission(slot, &mut NeverFires), Ok(()));
+        assert_eq!(system_records(&session), [3, -9, 10, 10], "five times 1");
+        assert_eq!(session.pilot().legal_record(FED), 3);
+    }
+
+    #[test]
+    fn a_cleaning_pay_cleans_the_records_in_each_system_of_its_governments() {
+        let catalog = governed_lifecycle(vec![MissionRecord {
+            pay_val: -20_128,
+            ..back_to_128(140)
+        }]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        session.pilot.set_legal_record(FED, -5);
+        // 130 clean enough to land in.
+        on_system_records(&mut session, &catalog, [4, -3, -5, -6]);
+        accept(&mut session, 140);
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(held(&session), []);
+        assert_eq!(
+            system_records(&session),
+            [4, 0, -5, 0],
+            "the Federation's and its ally's though hidden, the positive one \
+             kept, the enemy's untouched"
+        );
+        assert_eq!(session.pilot().legal_record(FED), 0);
     }
 
     #[test]

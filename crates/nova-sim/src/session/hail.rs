@@ -771,14 +771,14 @@ mod tests {
     fn a_ship_opens_by_the_players_record_with_its_government() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
-        session.pilot.set_legal_record(FED, -6);
+        crate::session::tests::with_record(&mut session, FED, -6);
         let view = hail(&mut session, &catalog);
         assert_eq!(view.reply, "Channel open.");
         assert_eq!(
             labels(&view),
             [("Greetings", Some('G')), ("Request Assistance", Some('R'))]
         );
-        session.pilot.set_legal_record(FED, -7);
+        crate::session::tests::with_record(&mut session, FED, -7);
         let view = hail(&mut session, &catalog);
         assert_eq!(view.reply, "What is it you want?");
         assert_eq!(
@@ -836,7 +836,7 @@ mod tests {
         let (hailed, asked) = hail_with(&mut session, &catalog, &opening(3));
         assert_eq!(hailed.map(|view| view.reply), Ok("c4".to_owned()));
         assert_eq!(asked, [5, 41, 5, 5, 1], "the conversation's draws");
-        session.pilot.set_legal_record(FED, -7);
+        crate::session::tests::with_record(&mut session, FED, -7);
         let mut chance = Draws::of(&[]);
         let view = session
             .answer(0, &catalog, &HailOptions::default(), &mut chance)

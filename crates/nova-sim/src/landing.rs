@@ -38,10 +38,11 @@
 //! 2. [`LandingRefusal::NotLandable`]: the stellar lacks the can-land flag,
 //!    or it is destroyed, or it can be landed on only once destroyed and
 //!    is not ([`is_landable`]).
-//! 3. [`LandingRefusal::Denied`]: the pilot's legal record with the
-//!    stellar's government, or its system's when it has none, is below the
-//!    stellar's `MinStatus`, which the Bible says uninhabited stellars
-//!    ignore.
+//! 3. [`LandingRefusal::Denied`]: the pilot's legal record the caller
+//!    gives (by the engine the one in the player's system; by the Bible
+//!    the one with the stellar's government, or its system's when it has
+//!    none, [`landing_record`]) is below the stellar's `MinStatus`, which
+//!    the Bible says uninhabited stellars ignore.
 //! 4. [`LandingRefusal::TooFast`]: the ship is moving faster than
 //!    [`LANDING_SPEED`].
 //!
@@ -294,15 +295,14 @@ pub enum LandOutcome {
 
 /// What the land key does with the navigation target `target`, for the
 /// ship `player` among the system's stellars `sites` (in navigation
-/// order), in a system governed by `system_govt`, where `record` gives the
-/// pilot's legal record with a government and `reach` a stellar's
+/// order), where `record` gives the pilot's legal record that a stellar's
+/// `MinStatus` is checked against and `reach` a stellar's
 /// [`LandingReach`]: see the module docs.
 pub fn land_or_select(
     target: Option<StellarId>,
     player: &ShipState,
     sites: &[LandingSite],
-    system_govt: Option<GovtId>,
-    record: impl Fn(GovtId) -> i16,
+    record: impl Fn(&LandingSite) -> i16,
     reach: impl Fn(&LandingSite) -> LandingReach,
 ) -> Result<LandOutcome, LandingRefusal> {
     let target = target.and_then(|id| sites.iter().find(|site| site.id == id));
@@ -310,8 +310,7 @@ pub fn land_or_select(
         if !is_landable(site) {
             return Err(not_landable(site));
         }
-        return check_landing(player, site, system_govt, record, reach(site))
-            .map(LandOutcome::Landed);
+        return check_landing(player, site, record, reach(site)).map(LandOutcome::Landed);
     }
     let Some(site) = nearest_landable_site(player.position, sites) else {
         return Err(
@@ -320,7 +319,7 @@ pub fn land_or_select(
     };
     let clearance = if has(site, StellarFlags::UNINHABITED) {
         Clearance::NoTrafficControl
-    } else if landing_record(site, system_govt, record) < site.min_status {
+    } else if record(site) < site.min_status {
         Clearance::Denied
     } else {
         Clearance::Granted
@@ -403,16 +402,16 @@ fn has(site: &LandingSite, flag: u32) -> bool {
     site.flags & flag != 0
 }
 
-/// Whether `player` lands on `site`, in a system governed by
-/// `system_govt`, over it within `reach`: the stellar, or the first
-/// refusal that applies (see the module docs). `record` gives the
-/// pilot's legal record with a government; see [`landing_record`] for
-/// which one landing reads.
+/// Whether `player` lands on `site`, over it within `reach`: the stellar,
+/// or the first refusal that applies (see the module docs). `record` gives
+/// the pilot's legal record that `site`'s `MinStatus` is checked against:
+/// by the engine the record in the player's system, whatever the
+/// stellar's government (`_HandlePlayerDockRequest` @0x67903), and by the
+/// Bible [`landing_record`].
 pub fn check_landing(
     player: &ShipState,
     site: &LandingSite,
-    system_govt: Option<GovtId>,
-    record: impl Fn(GovtId) -> i16,
+    record: impl Fn(&LandingSite) -> i16,
     reach: LandingReach,
 ) -> Result<StellarId, LandingRefusal> {
     let (stellar, station) = (site.id, is_station(site));
@@ -422,9 +421,7 @@ pub fn check_landing(
     if !is_landable(site) {
         return Err(not_landable(site));
     }
-    if !has(site, StellarFlags::UNINHABITED)
-        && landing_record(site, system_govt, record) < site.min_status
-    {
+    if !has(site, StellarFlags::UNINHABITED) && record(site) < site.min_status {
         return Err(LandingRefusal::Denied {
             stellar,
             station,
@@ -442,9 +439,12 @@ pub fn check_landing(
     Ok(stellar)
 }
 
-/// The legal record that `site`'s `MinStatus` is checked against, in a
-/// system governed by `system_govt`, where `record` gives the pilot's
-/// record with a government.
+/// The legal record that `site`'s `MinStatus` is checked against by the
+/// Bible (the [`LegalRecords`](crate::RuleKey::LegalRecords) rule's
+/// reading of a record with each government), in a system governed by
+/// `system_govt`, where `record` gives the pilot's record with a
+/// government. By the engine, landing reads the record in the player's
+/// system instead, as the original does (see [`legal`](crate::legal)).
 ///
 /// The Bible's `spöb` `MinStatus` is "the point on your record in the
 /// current system" below which you are denied landing clearance, and the
@@ -461,10 +461,9 @@ pub fn check_landing(
 ///   Bible's "independent counts as govt 128" rule scales the displayed
 ///   status label, not a record, so it does not apply here.
 ///
-/// Out of scope here: `chär` status spreading to allies and enemies, the
-/// `gövt` `InitialRec`, and the rank flag that grants landing regardless
-/// of `MinStatus`.
-fn landing_record(
+/// Out of scope here: `chär` status spreading to allies and enemies, and
+/// the rank flag that grants landing regardless of `MinStatus`.
+pub fn landing_record(
     site: &LandingSite,
     system_govt: Option<GovtId>,
     record: impl Fn(GovtId) -> i16,
@@ -586,7 +585,12 @@ mod tests {
         system_govt: Option<GovtId>,
         record: impl Fn(GovtId) -> i16,
     ) -> Result<StellarId, LandingRefusal> {
-        check_landing(player, site, system_govt, record, engine_reach(site))
+        check_landing(
+            player,
+            site,
+            |site| landing_record(site, system_govt, &record),
+            engine_reach(site),
+        )
     }
 
     #[test]
@@ -840,7 +844,7 @@ mod tests {
     fn exactly_at_the_radius_is_over_it_and_just_beyond_is_not() {
         let target = site(128, 0.0, 0.0);
         let circle = LandingReach::Circle(landing_radius(&target));
-        let at = |x, y| check_landing(&ship(x, y, 0.0, 0.0), &target, None, |_| 0, circle);
+        let at = |x, y| check_landing(&ship(x, y, 0.0, 0.0), &target, |_| 0, circle);
         assert_eq!(at(30.0, 40.0), Ok(StellarId(128)));
         assert!(matches!(
             at(30.0, 40.01),
@@ -875,14 +879,14 @@ mod tests {
     fn the_same_reach_decides_too_fast_and_too_far() {
         let target = site(128, 0.0, 0.0);
         let reach = LandingReach::Box(175.0);
-        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, None, |_| 0, reach);
+        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, |_| 0, reach);
         assert!(matches!(fast(174.0), Err(LandingRefusal::TooFast { .. })));
         assert!(matches!(fast(175.0), Err(LandingRefusal::TooFar { .. })));
         // Outside today's 50 circle but inside the box: too fast, not too
         // far.
         assert!(matches!(fast(60.0), Err(LandingRefusal::TooFast { .. })));
         let circle = LandingReach::Circle(50.0);
-        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, None, |_| 0, circle);
+        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, |_| 0, circle);
         assert!(matches!(fast(50.0), Err(LandingRefusal::TooFast { .. })));
         assert!(matches!(fast(60.0), Err(LandingRefusal::TooFar { .. })));
     }
@@ -1233,14 +1237,7 @@ mod tests {
         player: &ShipState,
         sites: &[LandingSite],
     ) -> Result<LandOutcome, LandingRefusal> {
-        land_or_select(
-            target.map(StellarId),
-            player,
-            sites,
-            None,
-            |_| 0,
-            engine_reach,
-        )
+        land_or_select(target.map(StellarId), player, sites, |_| 0, engine_reach)
     }
 
     fn selected(stellar: i16, station: bool, clearance: Clearance) -> LandOutcome {
@@ -1304,7 +1301,6 @@ mod tests {
                 Some(StellarId(128)),
                 &parked(),
                 &strict,
-                GOVT,
                 |_| 4,
                 engine_reach
             ),
@@ -1380,16 +1376,8 @@ mod tests {
     #[test]
     fn the_clearance_given_follows_the_record_and_traffic_control() {
         let strict = [needing(5, StellarFlags::CAN_LAND)];
-        let select = |record| {
-            land_or_select(
-                None,
-                &parked(),
-                &strict,
-                GOVT,
-                move |_| record,
-                engine_reach,
-            )
-        };
+        let select =
+            |record| land_or_select(None, &parked(), &strict, move |_| record, engine_reach);
         assert_eq!(select(4), Ok(selected(128, false, Clearance::Denied)));
         assert_eq!(select(5), Ok(selected(128, false, Clearance::Granted)));
         let uninhabited = [needing(
@@ -1397,14 +1385,7 @@ mod tests {
             StellarFlags::CAN_LAND | StellarFlags::UNINHABITED | StellarFlags::STATION,
         )];
         assert_eq!(
-            land_or_select(
-                None,
-                &parked(),
-                &uninhabited,
-                GOVT,
-                |_| -32768,
-                engine_reach
-            ),
+            land_or_select(None, &parked(), &uninhabited, |_| -32768, engine_reach),
             Ok(selected(128, true, Clearance::NoTrafficControl))
         );
         // The record read is the stellar's government's.
@@ -1413,7 +1394,13 @@ mod tests {
             ..needing(10, StellarFlags::CAN_LAND)
         }];
         assert_eq!(
-            land_or_select(None, &parked(), &governed, Some(A), record, engine_reach),
+            land_or_select(
+                None,
+                &parked(),
+                &governed,
+                |site| landing_record(site, Some(A), record),
+                engine_reach
+            ),
             Ok(selected(128, false, Clearance::Denied))
         );
     }

@@ -2176,6 +2176,7 @@ mod tests {
         pilot.course = vec![SystemId(131), SystemId(132)];
         pilot.explore(SystemId(131));
         pilot.set_legal_record(GovtId(128), 40);
+        pilot.set_system_record(SystemId(130), -6);
         pilot.events = BTreeMap::from([(
             DisasterId(128),
             crate::market::ActiveEvent {
@@ -2226,5 +2227,6 @@ mod tests {
             (&pilot.escorts, &pilot.gone_persons, &pilot.grudges),
             (&before.escorts, &before.gone_persons, &before.grudges)
         );
+        assert_eq!(pilot.system_legal, before.system_legal);
     }
 }

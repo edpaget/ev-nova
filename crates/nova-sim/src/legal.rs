@@ -1,18 +1,53 @@
 //! The player's legal record: what the player's crimes against a ship do
-//! to it, government by government.
+//! to it, and the records it is kept in.
 //!
 //! The [`LegalCode`] port says how a crime changes the records; Nova's is
 //! [`NovaLaw`], and [`convict`] applies what it says to a pilot.
 //!
+//! # Two stores, one reading
+//!
+//! The original keeps `_playerRecord`, one record a system (2048 `i16`
+//! at 0x230760, the save keeping all of them, `_WritePilotData`
+//! @0x72420, `_LoadPilotData` @0x75567). The pilot keeps it so too, the
+//! record in each system, and beside it the record with each government,
+//! the engine's earlier store. Every writer changes both, and the
+//! [`Rulebook`]'s [`RuleKey::LegalRecords`] entry says which one the
+//! readers read (the markup, the hail and the AI through the session's
+//! system record, landing and a mission's `AvailRecord`): by the engine,
+//! the record in the player's system, whatever the landed stellar's
+//! government, as the original reads it (`_HandlePlayerDockRequest`
+//! @0x67903, `_IsMissionAvailable` @0x9b59d, `_DoTradeDialog` @0x5dc17);
+//! by the Bible, the record with the system's government (at a landing,
+//! the stellar's, [`landing_record`](crate::landing::landing_record)).
+//!
+//! The records in each system are derived when the pilot first flies,
+//! for a new pilot and for a save from before they were kept
+//! ([`systems_from_govts`]): each system gets its government's record,
+//! else that government's `InitialRec`, and none when independent, as
+//! the original's `_ResetPlayer` seeds them (@0x1d9a4-0x1da0b). A
+//! government override leaves each system's record as it is; only later
+//! writes read the new government (the original never writes a system's
+//! government in play, `_systemData` +0x8). The `chär`'s statuses spread
+//! to allied and enemy systems (`_ActivateCharResource` @0x76dc0), the
+//! escape pod's reset (`_HandlePlayer` @0x6923c) and the readers the
+//! engine lacks belong to
+//! rdm:phase/missions-fidelity/phase-23-legal-record-other-readers-and-writers.
+//!
+//! The mission writers (success, failure, abort and the cleaning pay,
+//! see [`mission`](crate::mission)) change the record in every system of
+//! a qualifying government, hidden ones included, as the original's
+//! loops over every slot do; the clean-record outfit cleans the visible
+//! ones (see [`outfit_effects`](crate::outfit_effects)).
+//!
+//! # Crimes
+//!
 //! The original (`_SlapWithPenalty` @0x9bbc and `_RecursivePenaltySlap`
-//! @0x980a in the `EV Nova` executable) keeps the record per system, and
-//! a crime against a ship of government V changes the record of every
-//! system reached from the crime's, along the hyperlinks, by a factor of
-//! 0.65 a jump. Here the record is per government, as the save keeps it:
-//! the record with government G stands for the original's in G's
-//! systems. So a crime against V, with P the crime's penalty field
-//! (`DisabPenalty`, `BoardPenalty`, `KillPenalty`), changes the record
-//! with each government S in the catalog by:
+//! @0x980a in the `EV Nova` executable) changes, for a crime against a
+//! ship of government V, the record of every system reached from the
+//! crime's, along the hyperlinks, by a factor of 0.65 a jump. Here a
+//! crime against V, with P the crime's penalty field (`DisabPenalty`,
+//! `BoardPenalty`, `KillPenalty`), changes the record with each
+//! government S in the catalog by:
 //!
 //! - **-V.P** when S is V, or allied with V and not its enemy (@0x998d,
 //!   @0x9a23);
@@ -31,27 +66,14 @@
 //! record is held within [`RECORD_LIMIT`] either way (@0x9ad1-0x9b1e).
 //! A derelict victim's government (`Flags` 0x0800) changes nothing, and
 //! neither does [`Crime::Shoot`]: the original never passes
-//! `ShootPenalty`, as the Bible says ("currently ignored").
+//! `ShootPenalty`, as the Bible says ("currently ignored"). The record in
+//! each system of S takes S's change whole.
 //!
-//! Stated divergence: there is no 0.65 decay along the hyperlinks (there
-//! is no per-system record). So by the engine's rule a crime improves the
-//! record with every government in the catalog not allied with the
-//! victim's, where the original improves it only in the nearby systems
-//! those governments hold.
-//!
-//! Missions share it. The original keeps `_playerRecord`, one record a
-//! system (2048 `i16` at 0x230760), and a mission's `AvailRecord` reads
-//! the player's system's (`_IsMissionAvailable` @0x9b592-0x9b5c4); here
-//! it reads the record with that system's government, 0 in an
-//! independent system. A mission's success, failure, abort and cleaning
-//! pay change the records of the systems a government holds
-//! (`_DoMissionSuccess` @0xa058e-0xa0672, `_DoMissionFailure`
-//! @0xa02f9-0xa033a, @0x9e5a3-0x9e5cf, `_ApplyMissionPay`
-//! @0x9835e-0x9844d); here they change the record with each qualifying
-//! catalog government, so one that holds no system has a record that
-//! nothing reads until the overlay gives it a system. The per-system
-//! record that closes both gaps is the rdm missions roadmap's
-//! per-system-legal-record phase.
+//! Stated divergence: there is no 0.65 decay along the hyperlinks. So by
+//! the engine's rule a crime improves the record in every system of
+//! every government not allied with the victim's, where the original
+//! improves it only in the nearby systems those governments hold. The
+//! walk is rdm:phase/missions-fidelity/phase-22-crime-walk-per-system.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -170,13 +192,29 @@ pub fn systems_from_govts(
         .collect()
 }
 
-/// Applies `changes` to `pilot`'s records, each held within
-/// [`RECORD_LIMIT`].
-pub fn convict(pilot: &mut Pilot, changes: &[(GovtId, i32)]) {
+/// Applies `changes` to `pilot`'s records with each government, and to
+/// its record in each of `systems` (each with its government) whose
+/// government a change names, each held within [`RECORD_LIMIT`]. Until
+/// rdm:phase/missions-fidelity/phase-22-crime-walk-per-system walks a
+/// crime as `_RecursivePenaltySlap` does, each system of a government
+/// takes that government's change whole (see the module docs).
+pub fn convict(
+    pilot: &mut Pilot,
+    changes: &[(GovtId, i32)],
+    systems: impl IntoIterator<Item = (SystemId, Option<GovtId>)>,
+) {
+    let held = |record: i16, change: i32| {
+        let record = (i32::from(record) + change).clamp(-RECORD_LIMIT, RECORD_LIMIT);
+        i16::try_from(record).unwrap_or_default()
+    };
     for &(govt, change) in changes {
-        let record =
-            (i32::from(pilot.legal_record(govt)) + change).clamp(-RECORD_LIMIT, RECORD_LIMIT);
-        pilot.set_legal_record(govt, i16::try_from(record).unwrap_or_default());
+        pilot.set_legal_record(govt, held(pilot.legal_record(govt), change));
+    }
+    for (system, govt) in systems {
+        let change = changes.iter().find(|&&(changed, _)| Some(changed) == govt);
+        if let Some(&(_, change)) = change {
+            pilot.set_system_record(system, held(pilot.system_record(system), change));
+        }
     }
 }
 
@@ -446,6 +484,38 @@ mod tests {
     }
 
     #[test]
+    fn convicting_changes_each_system_of_a_changed_government() {
+        use crate::catalog::SystemId;
+        let catalog = crate::testkit::catalog();
+        let mut pilot = Pilot::new(&catalog, "").expect("a pilot");
+        pilot.set_system_record(SystemId(1), -31_990);
+        pilot.set_system_record(SystemId(2), 5);
+        pilot.set_system_record(SystemId(3), 40);
+        pilot.set_system_record(SystemId(4), 8);
+        convict(
+            &mut pilot,
+            &[(VICTIM, -20), (ALLY, -4)],
+            [
+                (SystemId(1), Some(VICTIM)),
+                (SystemId(2), Some(VICTIM)),
+                (SystemId(3), Some(ALLY)),
+                (SystemId(4), None),
+                (SystemId(5), Some(NEUTRAL)),
+            ],
+        );
+        let records: Vec<i16> = (1..=5)
+            .map(|system| pilot.system_record(SystemId(system)))
+            .collect();
+        assert_eq!(
+            records,
+            [-32_000, -15, 36, 8, 0],
+            "the victim's two, one held; the ally's; the independent and the \
+             unchanged neutral untouched"
+        );
+        assert_eq!(pilot.legal_record(VICTIM), -20, "and the government's");
+    }
+
+    #[test]
     fn convicting_changes_each_record_held_within_32000() {
         let catalog = crate::testkit::catalog();
         let mut pilot = Pilot::new(&catalog, "").expect("a pilot");
@@ -455,12 +525,13 @@ mod tests {
         convict(
             &mut pilot,
             &[(VICTIM, -20), (ENEMY, 20), (ALLY, -4), (NEUTRAL, 7)],
+            [],
         );
         assert_eq!(pilot.legal_record(VICTIM), -32_000);
         assert_eq!(pilot.legal_record(ENEMY), 32_000);
         assert_eq!(pilot.legal_record(ALLY), 6);
         assert_eq!(pilot.legal_record(NEUTRAL), 7, "from none");
-        convict(&mut pilot, &[(VICTIM, -70_000), (ENEMY, 70_000)]);
+        convict(&mut pilot, &[(VICTIM, -70_000), (ENEMY, 70_000)], []);
         assert_eq!(pilot.legal_record(VICTIM), -32_000);
         assert_eq!(pilot.legal_record(ENEMY), 32_000);
         assert_eq!((RECORD_LIMIT, ENEMY_SHARE), (32_000, 0.5));

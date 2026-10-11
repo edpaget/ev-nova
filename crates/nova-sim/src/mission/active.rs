@@ -415,13 +415,11 @@ pub enum PayEffect {
     Nothing,
     /// The cash goes up by this much.
     Cash(i64),
-    /// Every negative record with the governments `among` those of `of`
-    /// (none for an independent one, which keeps no record) goes to none.
-    /// The original cleans the records of the systems those governments
-    /// hold (@0x9835e-0x9844d); here each qualifying catalog government
-    /// stands in for its systems, so one that holds no system has a
-    /// record cleaned that nothing reads (the [`legal`](crate::legal)
-    /// module's stated divergence).
+    /// Every negative record of the governments `among` those of `of`
+    /// (none for an independent one) goes to none ([`cleaned`]): the
+    /// records in the systems those governments hold, hidden ones
+    /// included, as the original cleans them (@0x9835e-0x9844d), and the
+    /// records with those governments (see [`legal`](crate::legal)).
     Clean {
         /// The government named: `gövt` index + 128.
         of: Option<GovtId>,
@@ -480,87 +478,125 @@ fn held(record: f64) -> i16 {
     record.trunc().clamp(-limit, limit) as i16
 }
 
-/// The records a mission's success sets, `legal` giving each one now
-/// (`_DoMissionSuccess` @0xa058e-0xa0672): with a `CompGovt`, its record
-/// plus `CompReward`; each other government an enemy of it, minus half,
-/// and each ally plus half, the record and the half summed and
-/// truncated. Each is held within [`RECORD_LIMIT`]; one unchanged is
-/// left out. The original walks the systems and changes each one's
-/// record by its government; here each qualifying catalog government
-/// stands in for its systems, so one that holds no system has a record
-/// changed that nothing reads (the [`legal`](crate::legal) module's
-/// stated divergence).
+/// The records a mission's success sets among `targets`, each a record's
+/// key (a system, or a government) with the government it is changed by
+/// (none for an independent system), `legal` giving each one now
+/// (`_DoMissionSuccess` @0xa058e-0xa0672): with a `CompGovt`, a target of
+/// it gets its record plus `CompReward`; one of an enemy of it, minus
+/// half, and one of an ally plus half, the record and the half summed
+/// and truncated. Each is held within [`RECORD_LIMIT`] (the original
+/// stores it with a bare 16-bit `movw`); one unchanged is left out, and
+/// one of no government is never changed. The original walks every
+/// system and changes each one's record by its government; the session
+/// does so for the records in each system, and with each government for
+/// the per-government records (see [`legal`](crate::legal)).
 #[must_use]
-pub fn success_records(
+pub fn success_records<K: Copy>(
     record: &MissionRecord,
     govts: &Governments,
-    legal: impl Fn(GovtId) -> i16,
-) -> Vec<(GovtId, i16)> {
+    targets: impl IntoIterator<Item = (K, Option<GovtId>)>,
+    legal: impl Fn(K) -> i16,
+) -> Vec<(K, i16)> {
     let Some(comp) = record.comp_govt else {
         return Vec::new();
     };
     let reward = f64::from(record.comp_reward);
-    let own = std::iter::once((comp, reward));
-    let others = govts.ids().filter(|&id| id != comp).filter_map(|id| {
-        if govts.enemies(Some(id), Some(comp)) {
-            Some((id, -0.5 * reward))
-        } else if govts.allies(Some(id), Some(comp)) {
-            Some((id, 0.5 * reward))
+    let changes = targets.into_iter().filter_map(|(key, govt)| {
+        let govt = govt?;
+        if govt == comp {
+            Some((key, reward))
+        } else if govts.enemies(Some(govt), Some(comp)) {
+            Some((key, -0.5 * reward))
+        } else if govts.allies(Some(govt), Some(comp)) {
+            Some((key, 0.5 * reward))
         } else {
             None
         }
     });
-    changed(own.chain(others), legal)
+    changed(changes, legal)
 }
 
-/// The records a mission's failure sets, `legal` giving each one now
-/// (`_DoMissionFailure` @0xa02f9-0xa033a): with a `CompGovt`, its record
-/// less half the `CompReward`, toward none, held within
+/// The records a mission's failure sets among `targets` (see
+/// [`success_records`]), `legal` giving each one now
+/// (`_DoMissionFailure` @0xa02f9-0xa033a): with a `CompGovt`, each
+/// target of it less half the `CompReward`, toward none, held within
 /// [`RECORD_LIMIT`]. The original lowers the record of each system the
-/// `CompGovt` holds; here its record with the government stands in for
-/// them, so a `CompGovt` that holds no system has a record changed that
-/// nothing reads (the [`legal`](crate::legal) module's stated
-/// divergence).
+/// `CompGovt` holds.
 #[must_use]
-pub fn failure_records(
+pub fn failure_records<K: Copy>(
     record: &MissionRecord,
-    legal: impl Fn(GovtId) -> i16,
-) -> Vec<(GovtId, i16)> {
-    let changes = record
-        .comp_govt
-        .map(|comp| (comp, -f64::from(record.comp_reward / 2)));
-    changed(changes, legal)
+    targets: impl IntoIterator<Item = (K, Option<GovtId>)>,
+    legal: impl Fn(K) -> i16,
+) -> Vec<(K, i16)> {
+    let change = -f64::from(record.comp_reward / 2);
+    changed(of_comp(record.comp_govt, targets, change), legal)
 }
 
-/// The records the player's abort sets, `legal` giving each one now
+/// The records the player's abort sets among `targets` (see
+/// [`success_records`]), `legal` giving each one now
 /// (`_DoMissionInfoDialog` @0x9e58d-0x9e5cf): with `Flags` 0x0040 and a
-/// `CompGovt`, its record less 5 × `CompReward`, held within
+/// `CompGovt`, each target of it less 5 × `CompReward`, held within
 /// [`RECORD_LIMIT`]. The original lowers the record of each system the
-/// `CompGovt` holds (@0x9e5a3-0x9e5cf); here its record with the
-/// government stands in for them, so a `CompGovt` that holds no system
-/// has a record changed that nothing reads (the [`legal`](crate::legal)
-/// module's stated divergence).
+/// `CompGovt` holds (@0x9e5a3-0x9e5cf).
 #[must_use]
-pub fn abort_penalty(record: &MissionRecord, legal: impl Fn(GovtId) -> i16) -> Vec<(GovtId, i16)> {
-    let changes = record
+pub fn abort_penalty<K: Copy>(
+    record: &MissionRecord,
+    targets: impl IntoIterator<Item = (K, Option<GovtId>)>,
+    legal: impl Fn(K) -> i16,
+) -> Vec<(K, i16)> {
+    let comp = record
         .comp_govt
-        .filter(|_| record.flags & ABORT_PENALTY != 0)
-        .map(|comp| (comp, -5.0 * f64::from(record.comp_reward)));
-    changed(changes, legal)
+        .filter(|_| record.flags & ABORT_PENALTY != 0);
+    let change = -5.0 * f64::from(record.comp_reward);
+    changed(of_comp(comp, targets, change), legal)
 }
 
-/// Each government's record, `legal` giving it now, with its change
-/// added and held: those it changes.
-fn changed(
-    changes: impl IntoIterator<Item = (GovtId, f64)>,
-    legal: impl Fn(GovtId) -> i16,
-) -> Vec<(GovtId, i16)> {
+/// Each of `targets` of `comp`'s government with `change`: none without
+/// a `comp`.
+fn of_comp<K>(
+    comp: Option<GovtId>,
+    targets: impl IntoIterator<Item = (K, Option<GovtId>)>,
+    change: f64,
+) -> impl Iterator<Item = (K, f64)> {
+    targets
+        .into_iter()
+        .filter(move |&(_, govt)| comp.is_some() && govt == comp)
+        .map(move |(key, _)| (key, change))
+}
+
+/// The records among `targets` (see [`success_records`]) that a cleaning
+/// pay ([`PayEffect::Clean`]) of `of`, `among` its governments, sets to
+/// none, `legal` giving each one now: each negative one of a government
+/// [`among`](Among::takes) those of `of` (@0x9835e-0x9844d).
+#[must_use]
+pub fn cleaned<K: Copy>(
+    targets: impl IntoIterator<Item = (K, Option<GovtId>)>,
+    legal: impl Fn(K) -> i16,
+    of: Option<GovtId>,
+    among: Among,
+    govts: &Governments,
+) -> Vec<K> {
+    targets
+        .into_iter()
+        .filter(|&(key, govt)| {
+            govt.is_some_and(|govt| among.takes(govt, of, govts)) && legal(key).is_negative()
+        })
+        .map(|(key, _)| key)
+        .collect()
+}
+
+/// Each record, `legal` giving it now, with its change added and held:
+/// those it changes.
+fn changed<K: Copy>(
+    changes: impl IntoIterator<Item = (K, f64)>,
+    legal: impl Fn(K) -> i16,
+) -> Vec<(K, i16)> {
     changes
         .into_iter()
-        .filter_map(|(govt, change)| {
-            let now = legal(govt);
+        .filter_map(|(key, change)| {
+            let now = legal(key);
             let then = held(f64::from(now) + change);
-            (then != now).then_some((govt, then))
+            (then != now).then_some((key, then))
         })
         .collect()
 }
@@ -1025,11 +1061,92 @@ mod tests {
         assert!(!takes(Among::SharedClass, None, 129));
     }
 
+    /// Each of `govts` as its own target: the records with each
+    /// government.
+    fn each_govt(govts: &Governments) -> Vec<(GovtId, Option<GovtId>)> {
+        govts.ids().map(|id| (id, Some(id))).collect()
+    }
+
+    /// The Federation alone as a target, the record with it.
+    const FED_ONLY: [(GovtId, Option<GovtId>); 1] = [(GovtId(128), Some(GovtId(128)))];
+
+    /// Systems 1 and 2 of the Federation, 3 of the pirates (its enemy), 4
+    /// independent, 5 of the neutral and 6 of the Civvies (its ally).
+    const SYSTEMS: [(SystemId, Option<GovtId>); 6] = [
+        (SystemId(1), Some(GovtId(128))),
+        (SystemId(2), Some(GovtId(128))),
+        (SystemId(3), Some(GovtId(130))),
+        (SystemId(4), None),
+        (SystemId(5), Some(GovtId(131))),
+        (SystemId(6), Some(GovtId(129))),
+    ];
+
+    /// The record in each of [`SYSTEMS`]: 0, 100, 10, -5, 0 and -30.
+    fn system_legal(system: SystemId) -> i16 {
+        [0, 100, 10, -5, 0, -30][usize::try_from(system.0 - 1).expect("a system")]
+    }
+
+    #[test]
+    fn success_changes_each_systems_own_record_by_its_government() {
+        assert_eq!(
+            success_records(&rewarding(20, 0), &govts(), SYSTEMS, system_legal),
+            [
+                (SystemId(1), 20),
+                (SystemId(2), 120),
+                (SystemId(3), 0),
+                (SystemId(6), -20)
+            ],
+            "each by its own record; the independent and the neutral left"
+        );
+    }
+
+    #[test]
+    fn failure_and_abort_change_every_system_of_the_comp_govt() {
+        assert_eq!(
+            failure_records(&rewarding(20, 0), SYSTEMS, system_legal),
+            [(SystemId(1), -10), (SystemId(2), 90)]
+        );
+        assert_eq!(
+            abort_penalty(&rewarding(20, ABORT_PENALTY), SYSTEMS, system_legal),
+            [(SystemId(1), -100), (SystemId(2), 0)]
+        );
+    }
+
+    #[test]
+    fn cleaning_zeroes_each_negative_record_of_a_qualifying_government() {
+        let govts = govts();
+        let fed = Some(GovtId(128));
+        let legal = |system: SystemId| match system.0 {
+            1 | 3 | 4 | 6 => -7,
+            _ => 4,
+        };
+        assert_eq!(
+            cleaned(SYSTEMS, legal, fed, Among::Allies, &govts),
+            [SystemId(1), SystemId(6)],
+            "the Federation's and its ally's negative ones; 2 positive kept, \
+             the enemy's 3 and the independent 4 untouched"
+        );
+        assert_eq!(
+            cleaned(SYSTEMS, legal, fed, Among::Govt, &govts),
+            [SystemId(1)]
+        );
+        assert_eq!(
+            cleaned(SYSTEMS, legal, None, Among::Allies, &govts),
+            [] as [SystemId; 0],
+            "an independent's pay cleans nothing"
+        );
+        assert_eq!(
+            cleaned(each_govt(&govts), |_| -1, fed, Among::SharedClass, &govts),
+            [GovtId(128)],
+            "by government"
+        );
+    }
+
     #[test]
     fn a_success_rewards_the_government_and_half_to_its_allies_and_enemies() {
         let govts = govts();
         let records = |legal: [i16; 4]| {
-            success_records(&rewarding(5, 0), &govts, |govt| {
+            success_records(&rewarding(5, 0), &govts, each_govt(&govts), |govt| {
                 legal[usize::try_from(govt.0 - 128).expect("a govt")]
             })
         };
@@ -1039,21 +1156,21 @@ mod tests {
             "-3 + 2.5 truncates to 0, 3 - 2.5 to 0, and the neutral is left"
         );
         assert_eq!(
-            success_records(&rewarding(1, 0), &govts, |govt| if govt.0 == 130 {
-                3
-            } else {
-                0
+            success_records(&rewarding(1, 0), &govts, each_govt(&govts), |govt| {
+                if govt.0 == 130 { 3 } else { 0 }
             }),
             [(GovtId(128), 1), (GovtId(130), 2)],
             "3 - 0.5 truncates to 2; 0 + 0.5 to 0, unchanged"
         );
         assert_eq!(
-            success_records(&rewarding(1, 0), &govts, |_| 32_000),
+            success_records(&rewarding(1, 0), &govts, each_govt(&govts), |_| 32_000),
             [(GovtId(130), 31_999)],
             "held at the limit"
         );
         assert_eq!(
-            success_records(&rewarding(i16::MAX, 0), &govts, |_| -32_000),
+            success_records(&rewarding(i16::MAX, 0), &govts, each_govt(&govts), |_| {
+                -32_000
+            }),
             [(GovtId(128), 767), (GovtId(129), -15_616)],
             "no 16-bit wrap; the enemy held at the limit, unchanged"
         );
@@ -1061,26 +1178,29 @@ mod tests {
             comp_govt: None,
             ..rewarding(5, 0)
         };
-        assert_eq!(success_records(&unrewarded, &govts, |_| 0), []);
+        assert_eq!(
+            success_records(&unrewarded, &govts, each_govt(&govts), |_| 0),
+            []
+        );
     }
 
     #[test]
     fn a_failure_takes_half_the_reward_toward_none() {
         assert_eq!(
-            failure_records(&rewarding(5, 0), |_| 10),
+            failure_records(&rewarding(5, 0), FED_ONLY, |_| 10),
             [(GovtId(128), 8)]
         );
         assert_eq!(
-            failure_records(&rewarding(-5, 0), |_| 10),
+            failure_records(&rewarding(-5, 0), FED_ONLY, |_| 10),
             [(GovtId(128), 12)]
         );
         assert_eq!(
-            failure_records(&rewarding(1, 0), |_| 10),
+            failure_records(&rewarding(1, 0), FED_ONLY, |_| 10),
             [],
             "nothing taken"
         );
         assert_eq!(
-            failure_records(&rewarding(i16::MAX, 0), |_| -20_000),
+            failure_records(&rewarding(i16::MAX, 0), FED_ONLY, |_| -20_000),
             [(GovtId(128), -32_000)],
             "held at the limit"
         );
@@ -1088,22 +1208,22 @@ mod tests {
             comp_govt: None,
             ..rewarding(5, 0)
         };
-        assert_eq!(failure_records(&unrewarded, |_| 10), []);
+        assert_eq!(failure_records(&unrewarded, FED_ONLY, |_| 10), []);
     }
 
     #[test]
     fn an_abort_with_flag_0x0040_takes_five_times_the_reward() {
         assert_eq!(
-            abort_penalty(&rewarding(5, ABORT_PENALTY), |_| 10),
+            abort_penalty(&rewarding(5, ABORT_PENALTY), FED_ONLY, |_| 10),
             [(GovtId(128), -15)]
         );
         assert_eq!(
-            abort_penalty(&rewarding(5, 0x0001), |_| 10),
+            abort_penalty(&rewarding(5, 0x0001), FED_ONLY, |_| 10),
             [],
             "no 0x0040"
         );
         assert_eq!(
-            abort_penalty(&rewarding(i16::MAX, ABORT_PENALTY), |_| 0),
+            abort_penalty(&rewarding(i16::MAX, ABORT_PENALTY), FED_ONLY, |_| 0),
             [(GovtId(128), -32_000)],
             "held at the limit"
         );
@@ -1111,6 +1231,6 @@ mod tests {
             comp_govt: None,
             ..rewarding(5, ABORT_PENALTY)
         };
-        assert_eq!(abort_penalty(&unrewarded, |_| 10), []);
+        assert_eq!(abort_penalty(&unrewarded, FED_ONLY, |_| 10), []);
     }
 }

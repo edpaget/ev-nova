@@ -71,7 +71,7 @@ use super::{Session, clamp_i16};
 use crate::catalog::{OutfitId, OutfitRecord, SystemId};
 use crate::exploration::map_reveals;
 use crate::grant::{GrantStock, held_to_max};
-use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records};
+use crate::outfit_effects::{GrantEffect, OutfitRules, clean_records, cleaned_records};
 use crate::outfitter::{self, resale, unit_mass, unit_price};
 use crate::pilot::Pilot;
 use crate::rulebook::RuleSource;
@@ -177,6 +177,19 @@ impl Session {
             self.pilot.paint = paint;
         }
         clean_records(&mut self.pilot.legal, &effect.clean);
+        // The original cleans the visible systems' records (@0x44f4e).
+        let visible = self
+            .galaxy
+            .governed()
+            .filter(|&(system, _)| self.galaxy.visible(system));
+        let cleaned = cleaned_records(
+            visible,
+            |system| self.pilot.system_record(system),
+            &effect.clean,
+        );
+        for system in cleaned {
+            self.pilot.set_system_record(system, 0);
+        }
         if effect.added {
             add_one(&mut self.pilot, outfit);
         }
@@ -405,6 +418,28 @@ mod tests {
         session.pilot.legal.insert(GovtId(140), 30);
         session.grant_outfit(CLEAN_140);
         assert_eq!(session.pilot().legal_record(GovtId(140)), 30);
+    }
+
+    #[test]
+    fn a_clean_record_outfit_cleans_the_records_in_its_governments_visible_systems() {
+        let mut catalog = mapped();
+        catalog.star_map[6].govt = Some(GovtId(140));
+        let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.galaxy.set_visible(SystemId(136), Some(false));
+        for (system, record) in [(134, -7), (135, -5), (136, -8), (137, -6)] {
+            pilot.set_system_record(SystemId(system), record);
+        }
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.grant_outfit(CLEAN_140);
+        let records: Vec<i16> = (134..=137)
+            .map(|system| session.pilot().system_record(SystemId(system)))
+            .collect();
+        assert_eq!(
+            records,
+            [-7, 0, -8, -6],
+            "140's visible 135 only: not its hidden 136, the independent 134 \
+             or 141's 137"
+        );
     }
 
     #[test]

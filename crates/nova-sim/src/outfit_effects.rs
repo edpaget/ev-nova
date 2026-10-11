@@ -41,13 +41,13 @@
 //! 4. **Otherwise** (@0x44fdf) one more is owned. The grant itself checks
 //!    neither the outfit's `Max`, nor the free mass, nor `Flags` 0x0010.
 //!
-//! **Stated divergence.** The original keeps the legal record per system
-//! and cleans the records of the systems the government holds (or of
-//! every system); here the record is per government (see
-//! [`legal`](crate::legal)), so the record with the government named is
-//! cleaned even when it holds no system, and -1 cleans every
-//! government's record but leaves independent systems, which have no
-//! record here.
+//! The original keeps the legal record per system and cleans the records
+//! of the visible systems the government holds, or of every visible
+//! system, independent ones included, for -1 (@0x44f4e-0x44f6d); the
+//! session does the same to the records in each system
+//! ([`cleaned_records`]), and cleans the records with the governments
+//! named, or with every government, beside them (see
+//! [`legal`](crate::legal)).
 
 use std::collections::BTreeMap;
 
@@ -189,11 +189,12 @@ impl CleanScope {
         }
     }
 
-    /// Whether it cleans the record with `govt`.
-    fn covers(self, govt: GovtId) -> bool {
+    /// Whether it cleans a record of `govt` (none for an independent
+    /// system).
+    fn covers(self, govt: Option<GovtId>) -> bool {
         match self {
             Self::All => true,
-            Self::Govt(id) => id == govt,
+            Self::Govt(id) => Some(id) == govt,
         }
     }
 }
@@ -253,11 +254,29 @@ impl GrantEffect {
 /// Raises each of `legal`'s records below none with a government one of
 /// `scopes` covers to none (@0x44f3c-0x44f84).
 pub fn clean_records(legal: &mut BTreeMap<GovtId, i16>, scopes: &[CleanScope]) {
-    for (&govt, record) in legal.iter_mut() {
-        if *record < 0 && scopes.iter().any(|scope| scope.covers(govt)) {
-            *record = 0;
-        }
+    let targets = legal.keys().map(|&govt| (govt, Some(govt)));
+    for govt in cleaned_records(targets, |govt| legal[&govt], scopes) {
+        legal.insert(govt, 0);
     }
+}
+
+/// The records among `targets`, each a record's key (a system, or a
+/// government) with the government it is cleaned by (none for an
+/// independent system), that `scopes` raise to none, `legal` giving each
+/// one now: each below none whose government one of them covers, any
+/// government, independent included, for [`CleanScope::All`]
+/// (@0x44f57-0x44f6d). The original walks only the visible systems
+/// (@0x44f4e), so the session passes those.
+pub fn cleaned_records<K: Copy>(
+    targets: impl IntoIterator<Item = (K, Option<GovtId>)>,
+    legal: impl Fn(K) -> i16,
+    scopes: &[CleanScope],
+) -> Vec<K> {
+    targets
+        .into_iter()
+        .filter(|&(key, govt)| legal(key) < 0 && scopes.iter().any(|scope| scope.covers(govt)))
+        .map(|(key, _)| key)
+        .collect()
 }
 
 #[cfg(test)]
@@ -489,6 +508,27 @@ mod tests {
             .iter()
             .map(|&(id, record)| (GovtId(id), record))
             .collect()
+    }
+
+    #[test]
+    fn cleaning_takes_each_negative_target_of_a_government_covered() {
+        let targets = [
+            (1, Some(GovtId(128))),
+            (2, Some(GovtId(128))),
+            (3, Some(GovtId(129))),
+            (4, None),
+        ];
+        let legal = |key: i32| [-5, 3, -2, -9][usize::try_from(key - 1).expect("a key")];
+        assert_eq!(
+            cleaned_records(targets, legal, &[CleanScope::Govt(GovtId(128))]),
+            [1]
+        );
+        assert_eq!(
+            cleaned_records(targets, legal, &[CleanScope::All]),
+            [1, 3, 4],
+            "every negative one, an independent system's too (@0x44f5f)"
+        );
+        assert_eq!(cleaned_records(targets, legal, &[]), [] as [i32; 0]);
     }
 
     #[test]

@@ -455,8 +455,9 @@ impl Driver {
 /// the gate. L, L opens the hypergate map, Tichel is clicked, and M brings
 /// the ship out of HG-Tichel at (-400, -500) in Tichel (129), on 24 June
 /// 1177, the take-off's day (`_PlayerLandOnStellar` @0x63440), saying
-/// so. Its record with the Hypergate government (183) is HG-Kania's
-/// `MinStatus`, 32767, which the original never lets a record pass (task
+/// so. Its record with the Hypergate government (183), and in Kania (128),
+/// whose record landing reads by the engine, is HG-Kania's `MinStatus`,
+/// 32767, which the original never lets a record pass (task
 /// `landing-minstatus-32767-never`).
 #[test]
 fn a_pilot_at_hg_kania_enters_it_for_tichel() {
@@ -472,6 +473,7 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
     let mut pilot = Pilot::new(data.as_ref(), "Gatekeeper").expect("the stock first chär starts");
     pilot.set_legal_record(GovtId(183), 32767);
+    pilot.set_system_record(SystemId(128), 32767);
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::json!(1404);

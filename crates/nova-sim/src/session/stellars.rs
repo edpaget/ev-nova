@@ -312,7 +312,7 @@ impl Session {
         if by == ShipRef::Player {
             let changes = law.penalties(Crime::Kill, site.govt, &self.govts);
             for _ in 0..STELLAR_KILLINGS {
-                legal::convict(&mut self.pilot, &changes);
+                legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
             }
         }
     }
@@ -1248,6 +1248,20 @@ mod tests {
             floor,
             "each held to the limit"
         );
+    }
+
+    #[test]
+    fn shooting_a_stellar_down_changes_the_record_in_each_system_of_a_changed_government() {
+        let mut catalog = shooting([life(128, 2)]);
+        catalog.star_map[0].govt = Some(GovtId(140));
+        let mut session = overlaid(&catalog);
+        fire_by(&mut session, 3, &Fine::default());
+        assert_eq!(
+            session.pilot().system_record(SystemId(130)),
+            -30,
+            "140's system, ten times"
+        );
+        assert_eq!(session.pilot().system_record(SystemId(131)), 0);
     }
 
     #[test]

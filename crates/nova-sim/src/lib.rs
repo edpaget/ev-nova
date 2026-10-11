@@ -114,9 +114,11 @@
 //!   whether the ship can land, [`check_landing`],
 //!   each [`LandingRefusal`] in the order it applies; and the
 //!   [`Service`]s a stellar's flags offer.
-//! - [`legal`]: the player's legal record: the [`LegalCode`] port that
-//!   says what a [`Crime`] against a ship does to it, Nova's
-//!   [`NovaLaw`], and [`legal::convict`], which applies it.
+//! - [`legal`]: the player's legal record, kept with each government and
+//!   in each system: the [`LegalCode`] port that says what a [`Crime`]
+//!   against a ship does to it, Nova's [`NovaLaw`], [`legal::convict`],
+//!   which applies it, and [`legal::systems_from_govts`], which derives
+//!   the records in each system.
 //! - [`market`]: the commodity exchange: what a stellar trades and at
 //!   what price ([`Market`]), cargo space, buying and selling
 //!   ([`Order`]), and the planetary events that move prices.

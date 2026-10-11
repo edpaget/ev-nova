@@ -56,11 +56,11 @@
 //!    a visible system dominated, destroyed or not (+0x44 and +0x46 over
 //!    every slot, @0x9b562-0x9b58b), both read through the
 //!    always-dominated bit until rdm task planet-domination builds more;
-//!    any value below them refuses (@0x9b567). The original reads
-//!    `_playerRecord` of the player's system, one record per system; the
-//!    record read here is the pilot's with that system's government, 0
-//!    in an independent system, the per-government store's stand-in (see
-//!    the [`legal`](crate::legal) module's stated divergence);
+//!    any value below them refuses (@0x9b567). The record is the one in
+//!    the player's system, as the original reads `_playerRecord`; by the
+//!    Bible's reading of [`RuleKey::LegalRecords`](crate::RuleKey::LegalRecords),
+//!    the pilot's with that system's government, 0 in an independent
+//!    system (see [`legal`](crate::legal));
 //! 10. `AvailRating`: 0 or below passes, else the combat rating that high
 //!     (@0x9b5d6-0x9b608);
 //! 11. `AvailRandom`: above 99 passes, else the visit's roll for the
@@ -380,8 +380,8 @@ use crate::wares;
 pub use self::active::{
     AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
     ActiveMissions, Among, FailedBy, PayEffect, SLOTS, abort_checks, abort_penalty, accept_charge,
-    accept_checks, auto_aborts_at_accept, failure_records, fined, goals_met_at_accept, pay_effect,
-    success_records,
+    accept_checks, auto_aborts_at_accept, cleaned, failure_records, fined, goals_met_at_accept,
+    pay_effect, success_records,
 };
 pub use self::cargo::{
     JettisonMessage, Jettisoned, PickupFacts, PickupRefusal, Room, ScanOutcome, drops_off,
@@ -508,9 +508,10 @@ pub enum Refusal {
 /// What the checks read about the player.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Player {
-    /// The legal record with the player's system's government, 0 in an
-    /// independent system: the stand-in for the original's record of the
-    /// player's system (@0x9b592-0x9b5c4).
+    /// The legal record in the player's system (@0x9b592-0x9b5c4), as
+    /// [`RuleKey::LegalRecords`](crate::RuleKey::LegalRecords) reads it:
+    /// by the Bible, the record with its government, 0 in an independent
+    /// system.
     pub record: i16,
     /// The combat rating.
     pub rating: i64,
