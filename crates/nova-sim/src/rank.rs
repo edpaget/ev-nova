@@ -185,7 +185,8 @@ pub fn salary_paid(rank: &RankRecord, cash: i64, cap: RuleSource) -> i64 {
     let capped = rank.salary_cap > 0;
     if capped && cash >= rank.salary_cap {
         0
-    } else if cap == RuleSource::Bible && capped && rank.salary > 0 {
+    } else if cap == RuleSource::Bible && capped {
+        // Below the cap, so a fee is less than the room left.
         rank.salary.min(rank.salary_cap - cash)
     } else {
         rank.salary
@@ -512,6 +513,13 @@ mod tests {
         let mut state = State::holding(&[201, 202]);
         state.k(&records, 200);
         assert_eq!(state.active(), [200, 201, 202], "not as it is activated");
+        let records = [
+            rank(200, Some(128), 3, SWEEP_GOVT_ON_ACTIVATE),
+            rank(201, Some(128), 2, 0),
+        ];
+        let mut state = State::holding(&[200, 201]);
+        state.l(&records, 200);
+        assert_eq!(state.active(), [201], "not without 0x20");
     }
 
     #[test]
@@ -1075,5 +1083,21 @@ mod tests {
         );
         assert_eq!(fee.salary, -50, "no floor");
         assert_eq!(fee.line, "", "no name");
+    }
+
+    #[test]
+    fn bits_two_ranks_give_are_held_once() {
+        let records = [
+            RankRecord {
+                contribute: 0x5,
+                ..testkit::rank(200)
+            },
+            RankRecord {
+                contribute: 0x6,
+                ..testkit::rank(201)
+            },
+        ];
+        assert_eq!(contributed(&records, &ids(&[200, 201])), 0x7);
+        assert_eq!(contributed(&records, &ids(&[201])), 0x6);
     }
 }

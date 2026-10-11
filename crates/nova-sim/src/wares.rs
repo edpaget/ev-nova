@@ -599,7 +599,7 @@ mod tests {
 
     /// What `pilot` holds with ranks `active`, from a ship of no bits,
     /// rank 200 of government 128 contributing 0x10 and rank 201,
-    /// unaffiliated, 0x20.
+    /// unaffiliated, 0x21, a bit the ship gives too.
     fn with_ranks(active: &[i16]) -> u64 {
         let ranks = [
             RankRecord {
@@ -608,7 +608,7 @@ mod tests {
                 ..rank(200)
             },
             RankRecord {
-                contribute: 0x20,
+                contribute: 0x21,
                 ..rank(201)
             },
         ];
@@ -626,7 +626,7 @@ mod tests {
     #[test]
     fn an_active_rank_contributes_its_bits_whatever_its_government() {
         assert_eq!(with_ranks(&[200]), 0x11);
-        assert_eq!(with_ranks(&[201]), 0x21);
+        assert_eq!(with_ranks(&[201]), 0x21, "the ship's bit held once");
         assert_eq!(with_ranks(&[200, 201]), 0x31);
     }
 
