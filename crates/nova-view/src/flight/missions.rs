@@ -457,6 +457,18 @@ mod tests {
     }
 
     #[test]
+    fn it_debugs_as_its_texts_and_info_screen() {
+        let mut dialogs = dialogs();
+        dialogs.show_texts(vec![brief(128, "Shown.")]);
+        let debugged = format!("{dialogs:?}");
+        assert!(
+            debugged.starts_with("FlightMissionDialogs { texts: ["),
+            "{debugged}"
+        );
+        assert!(debugged.contains("info: None"), "{debugged}");
+    }
+
+    #[test]
     fn without_a_text_template_texts_are_dropped() {
         let mut dialogs = FlightMissionDialogs::new(
             Err("no DLOG 3003".to_owned()),
