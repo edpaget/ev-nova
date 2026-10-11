@@ -843,6 +843,61 @@ mod tests {
         record.order
     }
 
+    /// A session of [`carrying`] with two Vipers aboard and no escort, by
+    /// the engine, the bay selected.
+    fn alone(catalog: &FakePilotCatalog) -> Session {
+        flying(catalog, pilot(catalog, 2, Vec::new()), RuleSource::Engine)
+    }
+
+    /// The order the one fighter launched from `session` takes, on its
+    /// record and its duty, which agree.
+    fn launched_order(session: &mut Session) -> Option<EscortOrder> {
+        launch(session);
+        assert_eq!(session.pilot().escorts().len(), 1, "one launched");
+        let fighter = fleet_npcs(session)[0].clone();
+        let record = session.pilot().escorts()[0];
+        assert_eq!(fighter.escort.and_then(|duty| duty.order), record.order);
+        record.order
+    }
+
+    #[test]
+    fn a_fighter_launched_takes_its_classs_mission_escorts_order() {
+        let catalog = carrying();
+        let mut session = alone(&catalog);
+        let record = &catalog.ship_records[1];
+        let class = EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass);
+        let mut escort = crate::testkit::npc(0, crate::stats::ShipStats::default());
+        escort.class = class;
+        escort.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            formation: Some(FormationSlot::default()),
+            order: Some(EscortOrder::Hold),
+        });
+        session.traffic.add_npc(escort);
+        assert_eq!(launched_order(&mut session), Some(EscortOrder::Hold));
+    }
+
+    #[test]
+    fn a_fighter_launched_takes_the_order_kept_for_its_class() {
+        let catalog = carrying();
+        let mut session = alone(&catalog);
+        assert_eq!(
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold),
+            None,
+            "no escort to change"
+        );
+        assert_eq!(launched_order(&mut session), Some(EscortOrder::Hold));
+    }
+
+    #[test]
+    fn a_fighter_launched_after_return_to_hangar_takes_no_order() {
+        let catalog = carrying();
+        let mut session = alone(&catalog);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        assert_eq!(launched_order(&mut session), None);
+    }
+
     #[test]
     fn by_the_engine_a_fighter_copies_its_classs_standing_order_but_return_to_hangar() {
         assert_eq!(
