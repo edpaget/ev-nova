@@ -399,3 +399,58 @@ fn a_stock_missions_aux_ships_come_in_on_their_countdown_as_ordinary_traffic() {
     );
     assert!(came.iter().all(|npc| npc.mission.is_none()), "unmarked");
 }
+
+/// The cloak gear stock ship `id` carries: its `Flags2` and its default
+/// items' cloak.
+fn cloak_gear(data: &GameData, id: i16) -> nova_sim::cloak::CloakGear {
+    let ship = data
+        .ships()
+        .into_iter()
+        .find(|ship| ship.id == ShipId(id))
+        .expect("the ship");
+    let items = ship.defaults.iter().copied().collect();
+    nova_sim::cloak::CloakGear::of(ship.fields.flags2, &items, &data.outfits())
+}
+
+#[test]
+fn the_zephyrs_of_603_and_604_carry_a_cloak_and_no_stock_outfit_scans_for_one() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    // Dudes 200 and 201 fly ships 375 and 376, the Zephyr, with the
+    // Cloaking Organ (outfit 268, `ModVal` 0x080b): it decloaks when hit
+    // and shows on the radar; `Flags2` 0x5282 cloaks it retreating,
+    // pressing an attack, and hit by a ship it is not attacking, fading
+    // at the slow rate.
+    for id in [375, 376] {
+        let gear = cloak_gear(&data, id);
+        assert_eq!(
+            gear,
+            nova_sim::cloak::CloakGear {
+                device: true,
+                decloaks_when_hit: true,
+                on_radar: true,
+                flags2: 0x5282,
+            },
+            "{id}"
+        );
+        assert!(!gear.fast(), "{id}");
+    }
+    assert!(!cloak_gear(&data, 128).device, "the shuttle has none");
+    let scanners: Vec<i16> = data
+        .outfits()
+        .iter()
+        .filter(|outfit| {
+            outfit
+                .mods
+                .iter()
+                .any(|&(kind, _)| kind == nova_sim::cloak::MOD_SCANNER)
+        })
+        .map(|outfit| outfit.id.0)
+        .collect();
+    assert!(
+        scanners.is_empty(),
+        "the stock player never sees a cloaked ship: {scanners:?}"
+    );
+}

@@ -669,7 +669,6 @@ mod tests {
         crate::traffic::npc::MissionMark {
             slot: 0,
             behav: crate::mission::ships::ShipBehav::EscortPlayer,
-            cloaked: false,
             formation,
         }
     }

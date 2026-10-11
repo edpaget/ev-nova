@@ -64,6 +64,7 @@
 use super::Session;
 use crate::ai::Goal;
 use crate::bay::{Carrier, dock_window};
+use crate::cloak::Cloak;
 use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
@@ -156,6 +157,8 @@ impl Session {
             person,
             mission: None,
             aux: None,
+            cloak: Cloak::default(),
+            cloak_gear: kind.cloak,
         };
         Some(self.traffic.add_npc(npc))
     }

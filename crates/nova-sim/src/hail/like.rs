@@ -313,7 +313,6 @@ mod tests {
         npc.mission = Some(MissionMark {
             slot: 0,
             behav,
-            cloaked: false,
             formation: joined.then(FormationSlot::default),
         });
         npc

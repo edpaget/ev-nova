@@ -224,26 +224,34 @@ impl Session {
     }
 
     /// Watches the NPC `ship`: the next flight tick of the traffic that
-    /// finds it in the system raises its first sighting,
-    /// [`Fate::Observed`], once, and forgets it. A ship no longer in the
-    /// system is forgotten, and populating the system or resetting its
-    /// traffic forgets every one, its ships replaced (see the `story`
-    /// module's findings).
+    /// finds it in the system and observed raises its first sighting,
+    /// [`Fate::Observed`], once, and forgets it. Observed is seen by the
+    /// player ([`Session::sees`]: not emerging from a gate, and uncloaked
+    /// or within a cloak scanner's sight) and, for a ship that can cloak,
+    /// on screen ([`Session::on_screen`]); until then it stays watched. A
+    /// ship no longer in the system is forgotten, and populating the
+    /// system or resetting its traffic forgets every one, its ships
+    /// replaced (see the `story` module's findings).
     pub fn watch_ship(&mut self, ship: NpcId) {
         self.story.watched.insert(ship);
     }
 
-    /// Raises the first sighting of each watched ship in the system, and
-    /// forgets every watched ship: seen, or no longer here. Every ship in
-    /// the system is visible, as the engine has no cloak and no ship
-    /// emerging from a gate (`_ShipVisibleToShip` @0x971c).
+    /// Raises the first sighting of each watched ship in the system that
+    /// the player observes (`_ShipVisibleToShip` @0x971c, and on screen
+    /// for one that can cloak, @0x9ea74-0x9eb09), forgetting it; keeps
+    /// watching one not yet observed, and forgets one no longer here.
     pub(super) fn observe_watched(&mut self) {
         for ship in std::mem::take(&mut self.story.watched) {
-            if self.traffic.npcs().iter().any(|npc| npc.id == ship) {
+            let Some(npc) = self.traffic.npcs().iter().find(|npc| npc.id == ship) else {
+                continue;
+            };
+            if self.observes(npc) {
                 self.raise(StoryEvent::ShipFate {
                     ship,
                     fate: Fate::Observed,
                 });
+            } else {
+                self.story.watched.insert(ship);
             }
         }
     }

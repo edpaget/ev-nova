@@ -339,6 +339,7 @@ pub(crate) fn hull(id: i16) -> HullRecord {
         mass: 0,
         weapons: Vec::new(),
         size: None,
+        height: None,
         strength: 0,
     }
 }
@@ -431,6 +432,8 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         person: None,
         mission: None,
         aux: None,
+        cloak: crate::cloak::Cloak::default(),
+        cloak_gear: crate::cloak::CloakGear::default(),
     }
 }
 

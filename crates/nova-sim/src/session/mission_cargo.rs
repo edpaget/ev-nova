@@ -1060,7 +1060,6 @@ mod tests {
                 police.mission = scanner_slot.map(|slot| crate::traffic::npc::MissionMark {
                     slot,
                     behav: crate::mission::ships::ShipBehav::Own,
-                    cloaked: false,
                     formation: None,
                 });
             }

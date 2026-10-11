@@ -55,8 +55,8 @@
 //! ([`select_ship_system`](crate::mission::ships::select_ship_system)),
 //! their name and subtitle, and, for a `ShipStart` above 0, their appear
 //! timer. Each ship carries its mission's mark ([`MissionMark`], the
-//! original's ship +0xc8d2: the slot, its `ShipBehav`, and whether it
-//! spawned cloaked). They come in three ways, each through
+//! original's ship +0xc8d2: the slot and its `ShipBehav`). They come in
+//! three ways, each through
 //! `_MissionDudeSpawn` (@0x3cd3b, [`mission_ships`],
 //! [`arriving_mission_ships`], [`swapped_mission_ship`]): a ship drawn from the mission's `düde`,
 //! its government, `Booty`, `InfoTypes` and AI, aimed at the player for
@@ -69,7 +69,9 @@
 //!   them. `ShipStart` 0 places them at random, as any ship at setup; -1
 //!   to -16 at that nav slot's stellar, or at random when the slot is
 //!   empty (@0x4300a-0x43091); 2 cloaked (`_DoShipCloak`
-//!   @0x43114-0x43121, recorded only: the engine has no cloak). An
+//!   @0x43114-0x43121, [`NewShip::cloaked`]): it starts fading in, and
+//!   its think uncloaks it once it reads cloaked unless one of its ship
+//!   type's AI-cloak conditions holds (see [`cloak`](crate::cloak)). An
 //!   escort goal's ship (`ShipGoal` 3), after its own draws, is moved to
 //!   `Rand(512) - 256` each way about the centre (@0x42ed8-0x42f33), and
 //!   then to its nav slot's stellar for -1 to -16. A rescue goal's ship
@@ -231,6 +233,9 @@ pub struct NewShip {
     /// cut just below where it is disabled, and disabled. A rescue
     /// mission's ship set up in the system starts so ([`mission_ships`]).
     pub derelict: bool,
+    /// Whether it starts cloaking (`_DoShipCloak`): a `ShipStart` 2
+    /// mission's ship set up in the system does ([`mission_ships`]).
+    pub cloaked: bool,
 }
 
 /// The persons' side of a system's spawning: their world, and the names
@@ -315,6 +320,7 @@ impl<'a> PersonDraw<'a> {
             person: Some(id),
             mission: None,
             derelict: false,
+            cloaked: false,
             aux: None,
         })
     }
@@ -371,6 +377,7 @@ pub fn initial(
                 person: None,
                 mission: None,
                 derelict: false,
+                cloaked: false,
                 aux: None,
             });
         }
@@ -500,6 +507,7 @@ fn hyper_ship(
             person: None,
             mission: None,
             derelict: false,
+            cloaked: false,
             aux: None,
         });
     }
@@ -558,7 +566,6 @@ fn mission_dude_ship(
         mission: Some(MissionMark {
             slot: spawn.slot,
             behav: spawn.behav,
-            cloaked: false,
             formation: None,
         }),
         ..ship
@@ -632,6 +639,7 @@ fn specific_dude_ship(
         person: None,
         mission: None,
         derelict: false,
+        cloaked: false,
         aux: None,
     })
 }
@@ -646,7 +654,8 @@ fn specific_dude_ship(
 /// ([`NewShip::derelict`]: shields 0, armour cut, @0x42f35-0x42fdc);
 /// with a `ShipStart` of -1 to -16 then moved to that nav slot's stellar,
 /// unless the slot is empty (@0x4300a-0x43091); with `ShipStart` 2,
-/// cloaked (`_DoShipCloak` @0x43114-0x43121). The original also zeroes a
+/// cloaking ([`NewShip::cloaked`], `_DoShipCloak` @0x43114-0x43121). The
+/// original also zeroes a
 /// rescue ship's +0x48, an inertialess ship's speed along its heading
 /// (`_AdjustInertialessShipVelocity` @0x334c9-0x334d9), which the engine
 /// does not keep: the zero velocity covers it.
@@ -681,9 +690,7 @@ pub fn mission_ships(
             if let Some(at) = nav {
                 ship.state.position = at;
             }
-            if let Some(mark) = &mut ship.mission {
-                mark.cloaked = spawn.start == ShipStart::Cloaked;
-            }
+            ship.cloaked = spawn.start == ShipStart::Cloaked;
             ship
         })
         .collect()
@@ -885,6 +892,7 @@ pub fn fleet(
         person: None,
         mission: None,
         derelict: false,
+        cloaked: false,
         aux: None,
     });
     for escort in &record.escorts {
@@ -911,6 +919,7 @@ pub fn fleet(
                 person: None,
                 mission: None,
                 derelict: false,
+                cloaked: false,
                 aux: None,
             });
         }
@@ -1202,6 +1211,7 @@ mod tests {
                 person: None,
                 mission: None,
                 derelict: false,
+                cloaked: false,
                 aux: None,
             }]
         );
@@ -1924,6 +1934,7 @@ mod tests {
                 person: Some(PersonId(510)),
                 mission: None,
                 derelict: false,
+                cloaked: false,
                 aux: None,
             }]
         );
@@ -2273,10 +2284,10 @@ mod tests {
                 mission: Some(MissionMark {
                     slot: 3,
                     behav: ShipBehav::AttackPlayer,
-                    cloaked: false,
                     formation: None,
                 }),
                 derelict: false,
+                cloaked: false,
                 aux: None,
             }]
         );
@@ -2403,11 +2414,7 @@ mod tests {
                 mission_gate(),
                 &mut crate::NeverFires,
             );
-            assert_eq!(
-                ships[0].mission.map(|mark| mark.cloaked),
-                Some(cloaked),
-                "{start}"
-            );
+            assert_eq!(ships[0].cloaked, cloaked, "{start}");
         }
     }
 
@@ -2612,7 +2619,7 @@ mod tests {
                 inward * (JUMP_IN_SPEED / inward.length())
             ));
             assert_eq!(ship.state.heading, heading_of(inward));
-            assert_eq!(ship.mission.map(|mark| mark.cloaked), Some(false));
+            assert!(!ship.cloaked);
         }
     }
 
@@ -2632,11 +2639,7 @@ mod tests {
             ships[0].state.position,
             entry + Vec2::new(255.0, 255.0)
         ));
-        assert_eq!(
-            ships[0].mission.map(|mark| mark.cloaked),
-            Some(false),
-            "a ShipStart of 2 comes in uncloaked"
-        );
+        assert!(!ships[0].cloaked, "a ShipStart of 2 comes in uncloaked");
         let mut chance = Draws::of(&[90]);
         let _ = arriving_mission_ships(
             &with_mission_dude(),
@@ -2824,10 +2827,10 @@ mod tests {
                 mission: Some(MissionMark {
                     slot: 3,
                     behav: ShipBehav::AttackPlayer,
-                    cloaked: false,
                     formation: None,
                 }),
                 derelict: false,
+                cloaked: false,
                 aux: None,
             })
         );
@@ -2859,11 +2862,10 @@ mod tests {
             Some(MissionMark {
                 slot: 3,
                 behav: ShipBehav::EscortPlayer,
-                cloaked: false,
                 formation: None,
             }),
-            "never cloaked"
         );
+        assert!(!ship.cloaked, "never cloaked");
         let mut inherent = with_mission_dude();
         inherent
             .dude_records

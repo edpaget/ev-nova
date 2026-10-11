@@ -1169,6 +1169,7 @@ pub(super) mod tests {
         ShipId, StellarId, SystemId, SystemTraffic,
     };
     use crate::chance::NeverFires;
+    use crate::cloak::Cloak;
     use crate::combat::ShipRef;
     use crate::combat::hull::Condition;
     use crate::control::SetExpr;
@@ -1578,7 +1579,7 @@ pub(super) mod tests {
             session
                 .npcs()
                 .iter()
-                .all(|npc| npc.mission.is_some_and(|mark| !mark.cloaked))
+                .all(|npc| npc.mission.is_some() && npc.cloak == Cloak::default())
         );
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
         settle(&mut session, &catalog);
@@ -1587,7 +1588,8 @@ pub(super) mod tests {
             session
                 .npcs()
                 .iter()
-                .all(|npc| npc.mission.is_some_and(|mark| mark.cloaked))
+                .all(|npc| npc.mission.is_some() && npc.cloak.direction == 1),
+            "fading in"
         );
     }
 
@@ -2006,7 +2008,6 @@ pub(super) mod tests {
         session.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
             slot: 5,
             behav: ShipBehav::Own,
-            cloaked: false,
             formation: None,
         });
         session.release_mission_ships(0);
@@ -2255,7 +2256,6 @@ pub(super) mod tests {
         session.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
             slot: 5,
             behav: ShipBehav::Own,
-            cloaked: false,
             formation: None,
         });
         disable(&mut session, 0);
@@ -2278,7 +2278,6 @@ pub(super) mod tests {
         crate::traffic::npc::MissionMark {
             slot,
             behav: ShipBehav::Own,
-            cloaked: false,
             formation: None,
         }
     }
@@ -2832,9 +2831,60 @@ pub(super) mod tests {
                 npc.mission = Some(crate::traffic::npc::MissionMark {
                     slot: 5,
                     behav: ShipBehav::Own,
-                    cloaked: false,
                     formation: None,
                 });
+            }
+        }));
+    }
+
+    #[test]
+    fn an_observe_goal_on_cloaked_ships_is_unmet_while_they_are_hidden_and_met_once_seen() {
+        let full = Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+        assert!(!observed_after(|session| {
+            for npc in session.traffic.npcs_mut() {
+                npc.cloak = full;
+            }
+        }));
+        let catalog = returning(4, 0);
+        let mut session = in_flight(&catalog);
+        settle(&mut session, &catalog);
+        for npc in session.traffic.npcs_mut() {
+            npc.cloak = full;
+        }
+        let mut ticks = 0;
+        while !goals_met(&session) {
+            assert!(
+                session.npcs().iter().all(|npc| npc.cloak.is_cloaked()),
+                "met only once seen"
+            );
+            tick(&mut session, &catalog);
+            settle(&mut session, &catalog);
+            ticks += 1;
+        }
+        assert_eq!(ticks, 32, "each uncloaks on its think, and fades out");
+    }
+
+    #[test]
+    fn an_observe_goal_on_ships_that_can_cloak_is_met_only_once_one_is_on_screen() {
+        let able = crate::cloak::CloakGear {
+            device: true,
+            ..crate::cloak::CloakGear::default()
+        };
+        assert!(!observed_after(|session| {
+            let far = session.player().position + Vec2::new(0.0, 5000.0);
+            for npc in session.traffic.npcs_mut() {
+                npc.cloak_gear = able;
+                npc.state.position = far;
+            }
+        }));
+        assert!(observed_after(|session| {
+            let near = session.player().position + Vec2::new(0.0, 100.0);
+            for npc in session.traffic.npcs_mut() {
+                npc.cloak_gear = able;
+                npc.state.position = near;
             }
         }));
     }
@@ -2848,7 +2898,6 @@ pub(super) mod tests {
             session.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
                 slot: 5,
                 behav: ShipBehav::Own,
-                cloaked: false,
                 formation: None,
             });
             session.story.watched.clear();
@@ -3552,7 +3601,6 @@ pub(super) mod tests {
             npc.mission = Some(crate::traffic::npc::MissionMark {
                 slot: 5,
                 behav: ShipBehav::Own,
-                cloaked: false,
                 formation: None,
             });
         }
@@ -3721,7 +3769,6 @@ pub(super) mod tests {
         session.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
             slot: 5,
             behav: ShipBehav::Own,
-            cloaked: false,
             formation: None,
         });
         full_armour(&mut session);

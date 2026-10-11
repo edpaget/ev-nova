@@ -473,6 +473,8 @@ fn fighter(
         person: None,
         mission: None,
         aux: None,
+        cloak: crate::cloak::Cloak::default(),
+        cloak_gear: kind.cloak,
     }
 }
 

@@ -420,7 +420,8 @@ pub fn threats<'a>(escort: &'a Npc, npcs: &'a [Npc]) -> impl Iterator<Item = &'a
 /// candidate must be within it, and its distance squared from the player
 /// is added. It is halved for a candidate of another class than the
 /// escort's, and halved again for a fighter against a warship escort.
-/// The original's visibility test (cloaks) is not modelled.
+/// The original's visibility test (`_ShipVisibleToShip` @0x8370e, the
+/// escort observing) is not modelled: NPCs see cloaked ships.
 #[must_use]
 pub fn threat_score(
     escort: &Npc,
@@ -849,7 +850,6 @@ mod tests {
         mission_escort.mission = Some(crate::traffic::npc::MissionMark {
             slot: 0,
             behav: crate::mission::ships::ShipBehav::EscortPlayer,
-            cloaked: false,
             formation: Some(FormationSlot::default()),
         });
         for candidate in [&escort, &fellow, &calm, &mission_escort] {

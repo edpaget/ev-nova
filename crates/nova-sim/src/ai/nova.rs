@@ -533,7 +533,6 @@ mod tests {
         npc.mission = Some(crate::traffic::npc::MissionMark {
             slot: 1,
             behav: ShipBehav::from_code(behav),
-            cloaked: false,
             formation: None,
         });
         npc

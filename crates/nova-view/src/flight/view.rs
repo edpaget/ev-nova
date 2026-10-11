@@ -7698,6 +7698,7 @@ mod tests {
                 ammo: 0,
             }],
             size: None,
+            height: None,
             strength: 0,
         };
         let (_, chance) = scripted(&placed(850, 650, 90));
@@ -7834,6 +7835,7 @@ mod tests {
                 })
                 .collect(),
             size: None,
+            height: None,
             strength: 0,
         }
     }

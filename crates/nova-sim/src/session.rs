@@ -329,6 +329,7 @@
 //! [`Session::take_diagnostics`].
 
 mod aux_ships;
+mod cloaks;
 mod control;
 mod edit;
 mod entry;
@@ -608,6 +609,9 @@ pub struct Session {
     combat: Combat,
     /// The NPC the player targets, if any.
     target: Option<NpcId>,
+    /// What the view shows of space about the player's ship (see the
+    /// `cloaks` module).
+    play_area: crate::cloak::Area,
     /// The secondary weapon the player has selected, if any: none to
     /// start with, set by the select key alone, and let go as the module
     /// docs say. By the engine it may name a weapon the ship no longer
@@ -927,6 +931,7 @@ impl Session {
             trigger: Trigger::default(),
             combat: Combat::default(),
             target: None,
+            play_area: crate::cloak::DEFAULT_PLAY_AREA,
             secondary: None,
             strikes: Vec::new(),
             aboard: None,
@@ -1579,6 +1584,7 @@ impl Session {
         self.hold_grudges(&strikes);
         self.punish(&strikes, &was, rules.law);
         self.credit_kills(&strikes, &was);
+        self.cloak_hits(&strikes);
         self.strikes.extend(strikes);
         let sorties = self.combat.take_sorties();
         self.launch_fighters(&sorties);
@@ -1722,10 +1728,15 @@ impl Session {
 
     /// Lets go of the target once it is no longer in the system (it was
     /// destroyed, landed or jumped out, or the system was populated
-    /// afresh) or no longer targetable (it is breaking up), as the
-    /// original does every frame.
+    /// afresh) or no longer targetable (it is breaking up, or cloaked and
+    /// the player cannot target cloaked ships), as the original does every
+    /// frame.
     fn clear_lost_target(&mut self) {
-        if self.target().is_none_or(|npc| !targeting::targetable(npc)) {
+        let cloaked_ok = self.scanner().targets;
+        if self
+            .target()
+            .is_none_or(|npc| !targeting::targetable(npc, cloaked_ok))
+        {
             self.target = None;
         }
     }
@@ -1736,18 +1747,20 @@ impl Session {
     /// next. While the ship is landed or jumping, nothing changes.
     pub fn select_target(&mut self, pick: TargetPick) -> Option<NpcId> {
         if self.landed.is_none() && self.jumping().is_none() {
+            let cloaked_ok = self.scanner().targets;
             let npcs = self.traffic.npcs();
             let from = self.player.position;
             match pick {
                 TargetPick::Nearest => {
-                    let nearest = targeting::nearest(npcs, from, |_| true);
+                    let nearest = targeting::nearest(npcs, from, cloaked_ok, |_| true);
                     self.target = nearest.or(self.target);
                 }
                 TargetPick::NearestThreat => {
-                    let nearest = targeting::nearest(npcs, from, Npc::threatens_player);
+                    let threat = Npc::threatens_player;
+                    let nearest = targeting::nearest(npcs, from, cloaked_ok, threat);
                     self.target = nearest.or(self.target);
                 }
-                TargetPick::Next => self.target = targeting::next(npcs, self.target),
+                TargetPick::Next => self.target = targeting::next(npcs, self.target, cloaked_ok),
                 TargetPick::NextEscort => {
                     self.target = targeting::next_escort(npcs, self.target);
                 }
@@ -12021,7 +12034,6 @@ mod tests {
         ship.mission = Some(crate::traffic::npc::MissionMark {
             slot: 0,
             behav: crate::mission::ships::ShipBehav::EscortPlayer,
-            cloaked: false,
             formation,
         });
         ship.trigger = FIRE;
@@ -12593,7 +12605,6 @@ mod tests {
         session.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
             slot,
             behav: crate::mission::ships::ShipBehav::Own,
-            cloaked: false,
             formation: None,
         });
     }
@@ -13064,6 +13075,290 @@ mod tests {
         }
         assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
         assert!(session.story.watched.is_empty(), "forgotten once seen");
+    }
+
+    /// A full cloak: fading out from 32, it reads cloaked for 32 more
+    /// ticks.
+    const CLOAKED: crate::cloak::Cloak = crate::cloak::Cloak {
+        fade: crate::cloak::FADE_FULL,
+        direction: 0,
+    };
+
+    /// A cloak and fuel: a ship of it can cloak, and none of its AI-cloak
+    /// conditions fire.
+    const CAN_CLOAK: crate::cloak::CloakGear = crate::cloak::CloakGear {
+        device: true,
+        decloaks_when_hit: false,
+        on_radar: false,
+        flags2: 0,
+    };
+
+    /// [`armed`], with outfit 260, a cloak scanner of `ModVal` `scan`, the
+    /// player owns.
+    fn scanning(scan: i16) -> FakePilotCatalog {
+        let mut catalog = armed();
+        catalog
+            .outfits
+            .push(outfit(260, &[(crate::cloak::MOD_SCANNER, scan)]));
+        catalog
+    }
+
+    /// `catalog`'s [`facing_an_npc`], the player owning outfit 260.
+    fn holding_260(catalog: &FakePilotCatalog) -> Session {
+        let mut session = facing_an_npc(catalog, 180);
+        session.pilot.outfits.insert(OutfitId(260), 1);
+        session
+    }
+
+    #[test]
+    fn a_watched_cloaked_ship_is_not_observed_and_stays_watched_until_it_decloaks() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        session.watch_ship(NpcId(0));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [], "cloaked, and no scanner");
+        assert_eq!(session.story.watched, BTreeSet::from([NpcId(0)]), "kept");
+        let mut ticks = 1;
+        while fates(&session).is_empty() {
+            assert!(
+                session.npcs()[0].cloak.is_cloaked(),
+                "seen at once uncloaked"
+            );
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            ticks += 1;
+        }
+        assert_eq!(
+            ticks, 32,
+            "fading out from 32 at 0.75 a tick, cloaked above 8"
+        );
+        assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
+        assert!(session.story.watched.is_empty(), "forgotten once seen");
+    }
+
+    #[test]
+    fn a_cloak_scanner_sees_a_watched_cloaked_ship_within_200_on_each_axis() {
+        let catalog = scanning(crate::cloak::SCAN_SCREEN);
+        let mut session = holding_260(&catalog);
+        assert!(session.scanner().on_screen);
+        let player = session.player().position;
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak = CLOAKED;
+        npc.state.position = player + Vec2::new(0.0, -250.0);
+        session.watch_ship(NpcId(0));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [], "beyond 200");
+        session.traffic.npcs_mut()[0].state.position = player + Vec2::new(150.0, -150.0);
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert!(session.npcs()[0].cloak.is_cloaked());
+        assert_eq!(fates(&session), [fate(0, Fate::Observed)], "within 200");
+        let other = scanning(crate::cloak::SCAN_RADAR | crate::cloak::SCAN_TARGET);
+        let mut session = holding_260(&other);
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        session.watch_ship(NpcId(0));
+        session.tick_traffic(&other, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [], "no on-screen bit");
+    }
+
+    #[test]
+    fn a_watched_ship_that_can_cloak_is_observed_only_once_it_is_also_on_screen() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let player = session.player().position;
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear = CAN_CLOAK;
+        npc.state.position = player + Vec2::new(0.0, -400.0);
+        session.watch_ship(NpcId(0));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert!(!session.npcs()[0].cloak.is_cloaked());
+        assert_eq!(fates(&session), [], "seen, but off screen");
+        assert_eq!(session.story.watched, BTreeSet::from([NpcId(0)]), "kept");
+        session.traffic.npcs_mut()[0].state.position = player + Vec2::new(0.0, -200.0);
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
+    }
+
+    #[test]
+    fn a_watched_ship_that_cannot_cloak_is_observed_off_screen() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let player = session.player().position;
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.state.position = player + Vec2::new(0.0, -2000.0);
+        session.watch_ship(NpcId(0));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
+        let mut disabled = facing_an_npc(&catalog, 180);
+        let npc = &mut disabled.traffic.npcs_mut()[0];
+        npc.cloak_gear = CAN_CLOAK;
+        npc.condition = Condition::Disabled;
+        npc.state.position = player + Vec2::new(0.0, -2000.0);
+        disabled.watch_ship(NpcId(0));
+        disabled.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(
+            fates(&disabled),
+            [fate(0, Fate::Observed)],
+            "disabled: cannot cloak"
+        );
+    }
+
+    #[test]
+    fn the_play_area_the_view_gives_decides_what_is_on_screen() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let player = session.player().position;
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear = CAN_CLOAK;
+        npc.state.position = player + Vec2::new(0.0, -400.0);
+        assert!(
+            !session.on_screen(&session.npcs()[0]),
+            "the default play area"
+        );
+        session.set_play_area(crate::cloak::Area::centred(Vec2::ZERO, 1024.0, 1024.0));
+        assert!(session.on_screen(&session.npcs()[0]));
+        session.set_play_area(crate::cloak::Area {
+            left: -100.0,
+            top: 0.0,
+            right: 100.0,
+            bottom: 500.0,
+        });
+        assert!(
+            !session.on_screen(&session.npcs()[0]),
+            "the area is below the player"
+        );
+        session.watch_ship(NpcId(0));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(fates(&session), []);
+    }
+
+    #[test]
+    fn a_ships_sprite_width_and_height_inset_the_play_area() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let player = session.player().position;
+        session.set_play_area(crate::cloak::Area::centred(Vec2::ZERO, 600.0, 600.0));
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.hull.sprite_size = Some(40.0);
+        npc.hull.sprite_height = Some(80.0);
+        // A quarter of the sprite inside: 10 across, 20 down.
+        npc.state.position = player + Vec2::new(289.0, 0.0);
+        assert!(session.on_screen(&session.npcs()[0]));
+        session.traffic.npcs_mut()[0].state.position = player + Vec2::new(290.0, 0.0);
+        assert!(!session.on_screen(&session.npcs()[0]));
+        session.traffic.npcs_mut()[0].state.position = player + Vec2::new(0.0, 279.0);
+        assert!(session.on_screen(&session.npcs()[0]));
+        session.traffic.npcs_mut()[0].state.position = player + Vec2::new(0.0, 280.0);
+        assert!(!session.on_screen(&session.npcs()[0]));
+    }
+
+    #[test]
+    fn the_player_sees_a_ship_uncloaked_and_not_emerging() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        assert!(session.sees(&session.npcs()[0]));
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        assert!(!session.sees(&session.npcs()[0]));
+        session.traffic.npcs_mut()[0].cloak = crate::cloak::Cloak::default();
+        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::Emerging { ticks_left: 5 };
+        assert!(!session.sees(&session.npcs()[0]));
+    }
+
+    #[test]
+    fn a_cloaked_ship_is_on_the_radar_only_when_its_cloak_shows_there_or_the_player_scans_for_it() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        assert!(session.on_radar(&session.npcs()[0]), "uncloaked");
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        assert!(!session.on_radar(&session.npcs()[0]));
+        session.traffic.npcs_mut()[0].cloak_gear.on_radar = true;
+        assert!(session.on_radar(&session.npcs()[0]), "its cloak shows");
+        let scans = scanning(crate::cloak::SCAN_RADAR);
+        let mut session = holding_260(&scans);
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        assert!(session.on_radar(&session.npcs()[0]), "the player scans");
+    }
+
+    #[test]
+    fn a_cloaked_target_is_let_go_unless_the_player_can_target_cloaked_ships() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.target = Some(NpcId(0));
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(session.target, None);
+        assert_eq!(session.select_target(TargetPick::Nearest), None, "unpicked");
+        let targets = scanning(crate::cloak::SCAN_TARGET);
+        let mut session = holding_260(&targets);
+        session.target = Some(NpcId(0));
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        session.tick_traffic(&targets, &Peaceful, &mut NeverFires);
+        assert_eq!(session.target, Some(NpcId(0)), "it can");
+        session.target = None;
+        assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
+    }
+
+    #[test]
+    fn a_hit_by_the_player_cloaks_a_ship_that_cloaks_when_hit_by_a_ship_it_is_not_attacking() {
+        let catalog = FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                mass_dmg: 1,
+                energy_dmg: 1,
+                ..blaster()
+            }],
+            ..armed()
+        };
+        let mut session = facing_an_npc(&catalog, 180);
+        session.traffic.npcs_mut()[0].cloak_gear = crate::cloak::CloakGear {
+            flags2: crate::cloak::CLOAK_WHEN_HIT,
+            ..CAN_CLOAK
+        };
+        session.hold_trigger(FIRE);
+        let shield = session.npcs()[0].reserves.shield.now;
+        for _ in 0..20 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if session.npcs()[0].reserves.shield.now < shield {
+                break;
+            }
+        }
+        assert!(session.npcs()[0].reserves.shield.now < shield, "hit");
+        assert_eq!(session.npcs()[0].cloak.direction, 1, "fading in");
+        let mut fighting = facing_an_npc(&catalog, 180);
+        let npc = &mut fighting.traffic.npcs_mut()[0];
+        npc.cloak_gear = crate::cloak::CloakGear {
+            flags2: crate::cloak::CLOAK_WHEN_HIT,
+            ..CAN_CLOAK
+        };
+        npc.goal = Goal::Attack(ShipRef::Player);
+        fighting.hold_trigger(FIRE);
+        for _ in 0..20 {
+            fighting.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert_eq!(
+            fighting.npcs()[0].cloak,
+            crate::cloak::Cloak::default(),
+            "it attacks the player"
+        );
+    }
+
+    #[test]
+    fn a_hit_uncloaks_a_cloaked_ship_whose_cloak_decloaks_when_hit() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear = crate::cloak::CloakGear {
+            decloaks_when_hit: true,
+            ..CAN_CLOAK
+        };
+        npc.cloak = CLOAKED;
+        session.hold_trigger(FIRE);
+        for _ in 0..20 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if session.npcs()[0].cloak.direction != 0 {
+                break;
+            }
+        }
+        assert_eq!(session.npcs()[0].cloak.direction, -1);
     }
 
     #[test]

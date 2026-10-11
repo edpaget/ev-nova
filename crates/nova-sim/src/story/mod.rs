@@ -246,9 +246,10 @@
 //! (@0x9e931-0x9e980), which fails an escort goal once one is destroyed
 //! or disabled, as one destroyed fails a disable goal; and whether an
 //! observed ship is visible to the player (`_ShipVisibleToShip`
-//! @0x9ea5c). Only a ship that can cloak must also be on screen
-//! (@0x9ea74-0x9eb09, mission-ships phase 16); with no cloak in the
-//! engine, a ship in the player's system is seen. The goals met now and
+//! @0x9ea5c: not emerging from a gate, and uncloaked or within a cloak
+//! scanner's sight, see [`cloak`](crate::cloak)). Only a ship that can
+//! cloak must also be on screen (@0x9ea74-0x9eb09,
+//! [`cloak::on_screen`](crate::cloak::on_screen)). The goals met now and
 //! not before, unfailed, show `ShipDone` (@0x9ed0f), run `OnShipDone`
 //! for a mission with a `ShipGoal` (@0x9ed70), and auto-abort a mission
 //! of `Flags` 0x0001 (@0x9ed87). A mission of no goal (`ShipGoal` -1)
@@ -1653,10 +1654,13 @@
 //! - `_ShipVisibleToShip` (@0x971c) holds a ship invisible while it is
 //!   emerging from a hypergate (`_AIShipIsEmergingFromHypergate`
 //!   @0x972d), and a cloaked one (its fade level, +0x64) visible only to
-//!   a cloaking ship of its own side (`_HasCloak` @0x979b) or one close
-//!   enough on both axes (@0x97ae-0x97f8); every other ship is visible.
-//!   The engine has neither a cloak nor a ship emerging from a gate, so a
-//!   watched ship in the system is visible.
+//!   an escort of it that has a cloak itself (its parent +0x9a the
+//!   target, `_HasCloak` @0x979b; never the player) or to an observer
+//!   with a cloak scanner (+0xc91c) within 200 on both axes
+//!   (@0x97a4-0x97f8); every other ship is visible. No stock outfit is a
+//!   cloak scanner, so the stock player sees a cloaked ship only once it
+//!   uncloaks (see [`cloak`](crate::cloak)). A watched ship not yet
+//!   visible stays watched.
 //! - `S` (`_DoMissionAccept` @0x15407), `A` (`_AbortMission` @0x1532e)
 //!   and `M` and `N` in flight (@0x159a3, @0x159a8) are handled inside
 //!   `_EvalSetExp`, before its next operator. `Q` only sets
@@ -1777,9 +1781,10 @@ pub enum Fate {
     Boarded,
     /// First seen by the player: visible to it, which the original polls
     /// each frame (`_ShipVisibleToShip` @0x9ea5c) and the flight tick
-    /// raises here. Only a ship that can cloak must also be on screen
-    /// (@0x9ea74-0x9eb09, mission-ships phase 16); with no cloak in the
-    /// engine, every ship in the system is visible.
+    /// raises here ([`Session::sees`](crate::Session::sees): not
+    /// emerging from a gate, and uncloaked or within a cloak scanner's
+    /// sight). Only a ship that can cloak must also be on screen
+    /// (@0x9ea74-0x9eb09, [`Session::on_screen`](crate::Session::on_screen)).
     Observed,
     /// Brought into the player's system, a mission's special ship set up
     /// with the system or come in on its timer: what the original's

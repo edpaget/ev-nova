@@ -26,6 +26,7 @@ use crate::catalog::{
     SystemId, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
+use crate::cloak::CloakGear;
 use crate::combat::armament::{Armament, Arsenal};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::control::Test;
@@ -195,6 +196,9 @@ pub struct ShipKind {
     /// Its `AppearOn`: while it does not hold, a `düde` or a fleet's
     /// escorts bring none of it (see [`spawn`](crate::traffic::spawn)).
     pub appear_on: Test,
+    /// What its default items and `Flags2` give its cloak (see
+    /// [`cloak`](crate::cloak)).
+    pub cloak: CloakGear,
 }
 
 /// A person as the traffic spawns it: its record, whether its `LinkSyst`
@@ -478,6 +482,7 @@ pub(crate) fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arse
         armament,
         rounds,
         appear_on: record.appear_on.clone(),
+        cloak: CloakGear::of(record.fields.flags2, &defaults, outfits),
     }
 }
 

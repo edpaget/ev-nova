@@ -725,9 +725,11 @@ impl CombatCatalog for GameData {
         self.records::<Ship>()
             .filter_map(|(id, ship)| {
                 let record = ship.ok()?.record;
-                let size = match self.get::<ShipAnim>(id) {
-                    Some(Ok(anim)) => Some(anim.record.base_x_size),
-                    _ => None,
+                let (size, height) = match self.get::<ShipAnim>(id) {
+                    Some(Ok(anim)) => {
+                        (Some(anim.record.base_x_size), Some(anim.record.base_y_size))
+                    }
+                    _ => (None, None),
                 };
                 Some(HullRecord {
                     id: ShipId(id),
@@ -738,6 +740,7 @@ impl CombatCatalog for GameData {
                     mass: record.mass,
                     weapons: stock_weapons(record),
                     size,
+                    height,
                     strength: record.strength,
                 })
             })
@@ -2715,23 +2718,24 @@ mod tests {
     }
 
     /// A `shän` whose `BaseXSize` is `size`.
-    fn anim(size: i16) -> Vec<u8> {
+    fn anim(width: i16, height: i16) -> Vec<u8> {
         let mut bytes = vec![0; ShipAnim::SIZE.expect("fixed")];
-        put_i16s(&mut bytes, 0x06, &[size]);
+        put_i16s(&mut bytes, 0x06, &[width, height]);
         bytes
     }
 
     #[test]
     fn each_readable_shïp_is_a_hull_record_by_id_with_its_shäns_size() {
+        // Ship 128's sprite is 24 x 40.
         let data = store(&[
             (Ship::TYPE, 130, armed()),
             (Ship::TYPE, 128, armed()),
             (Ship::TYPE, 129, short(armed())),
             (Ship::TYPE, 131, armed()),
-            (ShipAnim::TYPE, 128, anim(24)),
-            (ShipAnim::TYPE, 131, short(anim(30))),
+            (ShipAnim::TYPE, 128, anim(24, 40)),
+            (ShipAnim::TYPE, 131, short(anim(30, 30))),
         ]);
-        let record = |id, size| HullRecord {
+        let record = |id, size, height| HullRecord {
             id: ShipId(id),
             flags: 0x0130,
             death_delay: 60,
@@ -2756,11 +2760,16 @@ mod tests {
                 },
             ],
             size,
+            height,
             strength: 325,
         };
         assert_eq!(
             data.hulls(),
-            [record(128, Some(24)), record(130, None), record(131, None)],
+            [
+                record(128, Some(24), Some(40)),
+                record(130, None, None),
+                record(131, None, None)
+            ],
             "by ID, the undecodable shïp left out; without a shän that can be read, no size"
         );
         assert_eq!(store(&[]).hulls(), []);

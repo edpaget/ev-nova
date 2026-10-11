@@ -931,6 +931,9 @@ pub struct HullRecord {
     /// Its `shän`'s `BaseXSize`, in pixels, or `None` when it has no
     /// `shän` that can be read.
     pub size: Option<i16>,
+    /// Its `shän`'s `BaseYSize`, in pixels, or `None` when it has no
+    /// `shän` that can be read.
+    pub height: Option<i16>,
     /// Its `Strength`: how strong it counts in a fight.
     pub strength: i16,
 }

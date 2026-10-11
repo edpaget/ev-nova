@@ -36,10 +36,13 @@
 //!    its provocation, and one that stops inspecting a ship remembers it,
 //!    and, the player within its reach, has scanned the player
 //!    ([`Traffic::take_scans`]);
-//! 5. the autopilot and a flight step for every NPC, each flying towards
+//! 5. every NPC's cloak ([`cloak`]): a flying NPC's think
+//!    cloaks or uncloaks it, one cloaked that can no longer cloak
+//!    uncloaks, and its fade steps;
+//! 6. the autopilot and a flight step for every NPC, each flying towards
 //!    the ship its goal is about, the player's included (the one it
 //!    assists, or escorts in formation), a fighter docking its carrier;
-//! 6. and the removal of those that landed, jumped out or docked, each
+//! 7. and the removal of those that landed, jumped out or docked, each
 //!    in [`Traffic::departed`] with how it left, for its session to take
 //!    a fighter docked aboard.
 //!
@@ -63,6 +66,7 @@ use std::collections::BTreeSet;
 
 use crate::catalog::{GovtId, LandingSite, PersonId, ShipId};
 use crate::chance::Chance;
+use crate::cloak::{self, Cloak};
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
@@ -327,6 +331,7 @@ impl Traffic {
         let states: Vec<(NpcId, ShipState)> =
             self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
         let player = world.player.map(|player| player.state);
+        self.cloaks(player, &states);
         let outcomes: Vec<Outcome> = self
             .npcs
             .iter_mut()
@@ -357,6 +362,38 @@ impl Traffic {
         let mut flying = outcomes.iter().map(|outcome| *outcome == Outcome::Flying);
         self.npcs.retain(|_| flying.next().unwrap_or(false));
         self.ticks += 1;
+    }
+
+    /// Each NPC's cloak a tick on (see [`cloak`]): a flying NPC thinks
+    /// (`_AIHandleCloaking`), knowing whether it is disabled, retreats
+    /// (fleeing), and where the ship it attacks is, among `states` and the
+    /// `player`; one cloaked as the tick began that can no longer cloak
+    /// uncloaks (`_HandleShip` @0x3413d); and its fade steps.
+    fn cloaks(&mut self, player: Option<ShipState>, states: &[(NpcId, ShipState)]) {
+        for npc in &mut self.npcs {
+            let was = npc.cloak.is_cloaked();
+            let disabled = npc.condition == Condition::Disabled;
+            if npc.mode == Mode::Flying {
+                let attacking = npc.goal.attacking().and_then(|ship| match ship {
+                    ShipRef::Player => player,
+                    ShipRef::Npc(id) => states
+                        .iter()
+                        .find(|(other, _)| *other == id)
+                        .map(|(_, state)| *state),
+                });
+                let situation = cloak::Situation {
+                    disabled,
+                    retreating: matches!(npc.goal, Goal::Flee(_)),
+                    attacking: attacking.map(|state| state.position - npc.state.position),
+                };
+                cloak::think(&mut npc.cloak, npc.cloak_gear, situation);
+            }
+            if was {
+                let able = npc.cloak_gear.can_cloak(disabled, npc.reserves.fuel.now);
+                cloak::hold(&mut npc.cloak, able);
+            }
+            npc.cloak.step(npc.cloak_gear.fast());
+        }
     }
 
     /// Each flying, intact NPC answers each of `strikes` in `world`, as
@@ -550,6 +587,14 @@ impl Traffic {
                 person: traits,
                 mission: ship.mission,
                 aux: ship.aux,
+                cloak: if ship.cloaked {
+                    let mut cloak = Cloak::default();
+                    cloak.cloak();
+                    cloak
+                } else {
+                    Cloak::default()
+                },
+                cloak_gear: kind.cloak,
             });
         }
     }
@@ -565,6 +610,7 @@ mod tests {
     use crate::catalog::WeaponId;
     use crate::catalog::{DudeId, EscortRecord, FleetId, FleetRecord, GovtId, StellarId};
     use crate::catalog::{PersonId, PersonRecord};
+    use crate::cloak::{CloakGear, FADE_FULL};
     use crate::combat::ShipRef;
     use crate::combat::armament::Armament;
     use crate::combat::hull::HullSpec;
@@ -660,6 +706,7 @@ mod tests {
                     armament: Armament::new([(WeaponSpec::new(&weapon(128)), 2)]),
                     rounds: BTreeMap::from([(WeaponId(138), 7)]),
                     appear_on: Test::default(),
+                    cloak: CloakGear::default(),
                 },
             )]),
             ..SpawnTable::default()
@@ -1680,10 +1727,10 @@ mod tests {
             mission: Some(npc::MissionMark {
                 slot: 2,
                 behav: ShipBehav::from_code(behav),
-                cloaked: false,
                 formation: None,
             }),
             derelict: false,
+            cloaked: false,
             aux: None,
         }
     }
@@ -1760,5 +1807,175 @@ mod tests {
             assert_eq!(npcs[1].condition, Condition::Intact);
             assert_eq!(npcs[1].reserves, npcs[1].stats.full());
         }
+    }
+
+    // Cloaks.
+
+    /// A cloak of the stock Zephyr's: it cloaks retreating, keeps its cloak
+    /// pressing an attack, and decloaks when hit.
+    const ZEPHYR: CloakGear = CloakGear {
+        device: true,
+        decloaks_when_hit: true,
+        on_radar: true,
+        flags2: 0x5282,
+    };
+
+    /// [`table`] of `count` ships whose ship 200 carries `gear`.
+    fn cloaking(count: u32, gear: CloakGear) -> SpawnTable {
+        let mut table = table(count);
+        table.ships.get_mut(&ShipId(200)).expect("200").cloak = gear;
+        table
+    }
+
+    /// Traffic in a system with one mission ship of ship 200 carrying
+    /// `gear`, set up `cloaked` or not, at (`x`, 0).
+    fn with_mission_ship(gear: CloakGear, cloaked: bool, x: f32) -> Traffic {
+        let mut traffic = Traffic::new();
+        traffic.enter_with(
+            cloaking(0, gear),
+            World::new(&[]),
+            vec![NewShip {
+                cloaked,
+                ..mission_ship(-1, x)
+            }],
+            &mut Draws::of(&[]),
+        );
+        traffic
+    }
+
+    #[test]
+    fn a_ship_set_up_cloaked_starts_fading_in_carrying_its_ship_types_gear() {
+        let traffic = with_mission_ship(ZEPHYR, true, 0.0);
+        let npc = &traffic.npcs()[0];
+        assert_eq!(
+            npc.cloak,
+            Cloak {
+                fade: 0.0,
+                direction: 1
+            }
+        );
+        assert_eq!(npc.cloak_gear, ZEPHYR);
+        let plain = with_mission_ship(CloakGear::default(), false, 0.0);
+        assert_eq!(plain.npcs()[0].cloak, Cloak::default());
+        assert_eq!(plain.npcs()[0].cloak_gear, CloakGear::default());
+    }
+
+    #[test]
+    fn a_ship_set_up_cloaked_with_nothing_to_keep_it_uncloaks_on_its_first_think_that_finds_it_cloaked()
+     {
+        let mut traffic = with_mission_ship(ZEPHYR, true, 0.0);
+        for _ in 0..22 {
+            traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+        }
+        let cloak = traffic.npcs()[0].cloak;
+        assert_eq!(cloak.direction, 1, "an early uncloak does nothing");
+        assert!(cloak.is_cloaked(), "{cloak:?}");
+        traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].cloak.direction, -1);
+        let mut ticks = 1;
+        while traffic.npcs()[0].cloak.is_cloaked() {
+            traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+            ticks += 1;
+        }
+        assert_eq!(ticks, 12, "at 0.75 a tick, from 16.5 to 8");
+    }
+
+    #[test]
+    fn a_ship_without_a_cloak_set_up_cloaked_uncloaks_all_the_same() {
+        let mut traffic = with_mission_ship(CloakGear::default(), true, 0.0);
+        for _ in 0..23 {
+            traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+        }
+        assert_eq!(traffic.npcs()[0].cloak.direction, -1);
+    }
+
+    #[test]
+    fn a_mission_ship_come_in_uncloaked_cloaks_on_its_think_while_it_retreats_and_uncloaks_after() {
+        let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
+        let fleeing = Recording::deciding(Goal::Flee(ShipRef::Player));
+        traffic.tick_in(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(
+            traffic.npcs()[0].cloak,
+            Cloak {
+                fade: 0.75,
+                direction: 1
+            },
+            "thinks, then fades a step"
+        );
+        for _ in 0..21 {
+            traffic.tick_in(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
+        }
+        assert!(traffic.npcs()[0].cloak.is_cloaked());
+        let calm = Recording::deciding(Goal::Idle);
+        traffic.tick_in(&calm, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(
+            traffic.npcs()[0].cloak.direction,
+            -1,
+            "no longer retreating"
+        );
+        let mut plain = with_mission_ship(
+            CloakGear {
+                flags2: 0,
+                ..ZEPHYR
+            },
+            false,
+            0.0,
+        );
+        plain.tick_in(&fleeing, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(plain.npcs()[0].cloak, Cloak::default(), "no bit");
+    }
+
+    #[test]
+    fn a_cloaked_ship_keeps_its_cloak_attacking_the_player_from_afar_and_drops_it_close() {
+        let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
+        traffic.npcs[0].cloak = Cloak {
+            fade: FADE_FULL,
+            direction: 0,
+        };
+        let attacking = Recording::deciding(Goal::Attack(ShipRef::Player));
+        let far = World {
+            player: Some(player_at(0.0, 400.0)),
+            ..World::new(&[])
+        };
+        traffic.tick_in(&attacking, far, &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].cloak.direction, 0, "kept");
+        let npc_at = traffic.npcs()[0].state.position;
+        let near = World {
+            player: Some(player_at(npc_at.x + 100.0, npc_at.y - 100.0)),
+            ..World::new(&[])
+        };
+        traffic.tick_in(&attacking, near, &[], &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs()[0].cloak.direction, -1, "close in to fight");
+    }
+
+    #[test]
+    fn a_cloaked_ship_that_can_no_longer_cloak_uncloaks() {
+        for (disabled, fuel) in [(true, 100.0), (false, 0.0)] {
+            let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
+            let npc = &mut traffic.npcs[0];
+            npc.cloak = Cloak {
+                fade: FADE_FULL,
+                direction: 0,
+            };
+            npc.mode = Mode::JumpingIn { ticks_left: 9 };
+            npc.reserves.fuel.now = fuel;
+            if disabled {
+                npc.condition = Condition::Disabled;
+            }
+            traffic.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+            assert_eq!(
+                traffic.npcs()[0].cloak.direction,
+                -1,
+                "no think, still: disabled {disabled}, fuel {fuel}"
+            );
+        }
+        let mut able = with_mission_ship(ZEPHYR, false, 0.0);
+        able.npcs[0].cloak = Cloak {
+            fade: FADE_FULL,
+            direction: 0,
+        };
+        able.npcs[0].mode = Mode::JumpingIn { ticks_left: 9 };
+        able.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(able.npcs()[0].cloak.direction, 0, "jumping in, no think");
     }
 }

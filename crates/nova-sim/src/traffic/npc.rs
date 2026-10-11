@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use crate::ai::Goal;
 use crate::bay::Carrier;
 use crate::catalog::{GovtId, PersonId, ShipId, WeaponId};
+use crate::cloak::{Cloak, CloakGear};
 use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
@@ -188,6 +189,12 @@ pub struct Npc {
     /// system's ships are dropped (see the [`mission::aux`](crate::mission::aux)
     /// module); none for any other ship.
     pub aux: Option<u8>,
+    /// Its cloak: how far it has faded, and which way (see
+    /// [`cloak`](crate::cloak)). A mission's special ship set up cloaked
+    /// (`ShipStart` 2) starts fading in.
+    pub cloak: Cloak,
+    /// What its ship type gives its cloak.
+    pub cloak_gear: CloakGear,
 }
 
 /// What marks an NPC as an active mission's special ship (see the
@@ -198,9 +205,6 @@ pub struct MissionMark {
     pub slot: u8,
     /// The mission's `ShipBehav`.
     pub behav: ShipBehav,
-    /// Whether it spawned cloaked (`ShipStart` 2): only recorded, as the
-    /// engine has no cloak (rdm:phase/mission-ships/phase-16-cloaked-mission-ships).
-    pub cloaked: bool,
     /// Its place in the player's formation once it has joined it as a
     /// mission escort (the original's AI type 6 led by the player): none
     /// before (see the session's `mission_ships` module). It is never an
@@ -319,7 +323,6 @@ mod tests {
         MissionMark {
             slot: 1,
             behav,
-            cloaked: false,
             formation,
         }
     }

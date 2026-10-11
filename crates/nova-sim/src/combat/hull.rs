@@ -84,6 +84,10 @@ pub struct HullSpec {
     /// without a sprite. A formation is spaced by it (see
     /// [`escort::spacing`](crate::escort::spacing)).
     pub sprite_size: Option<f32>,
+    /// Its sprite's height, its `shän`'s `BaseYSize`, in pixels; none
+    /// without a sprite. Whether it is on screen reads it with the width
+    /// (see [`cloak::on_screen`](crate::cloak::on_screen)).
+    pub sprite_height: Option<f32>,
 }
 
 impl Default for HullSpec {
@@ -101,6 +105,7 @@ impl Default for HullSpec {
             strength: 0.0,
             board_reach: DEFAULT_BOARD_REACH,
             sprite_size: None,
+            sprite_height: None,
         }
     }
 }
@@ -123,6 +128,7 @@ impl HullSpec {
             strength: f32::from(record.strength.max(0)),
             board_reach,
             sprite_size: size,
+            sprite_height: record.height.filter(|&height| height > 0).map(f32::from),
         }
     }
 
@@ -266,6 +272,25 @@ mod tests {
             assert_eq!(placeholder.sprite_size, None, "{size:?}");
         }
         assert_eq!(HullSpec::default().sprite_size, None);
+    }
+
+    #[test]
+    fn the_sprite_height_is_the_shäns_height() {
+        let tall = HullSpec::new(&HullRecord {
+            size: Some(24),
+            height: Some(40),
+            ..hull(128)
+        });
+        assert_eq!(tall.sprite_height, Some(40.0));
+        assert_eq!(tall.sprite_size, Some(24.0));
+        for height in [None, Some(0), Some(-5)] {
+            let placeholder = HullSpec::new(&HullRecord {
+                height,
+                ..hull(128)
+            });
+            assert_eq!(placeholder.sprite_height, None, "{height:?}");
+        }
+        assert_eq!(HullSpec::default().sprite_height, None);
     }
 
     #[test]

@@ -857,7 +857,6 @@ mod tests {
         npc.mission = Some(crate::traffic::npc::MissionMark {
             slot: 0,
             behav: ShipBehav::EscortPlayer,
-            cloaked: false,
             formation: Some(crate::escort::FormationSlot::default()),
         });
         let request = RequestAssistance::default();
