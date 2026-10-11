@@ -274,6 +274,7 @@ pub mod outfitter;
 pub mod person;
 pub mod pilot;
 pub mod pre_jump;
+pub mod rank;
 pub mod rating;
 pub mod recharge;
 pub mod reserves;

@@ -390,8 +390,8 @@ use crate::board::{
 use crate::catalog::{
     CombatCatalog, CronRecord, DateAffixes, GateSite, GovtId, LandingSite, ListedStellar,
     MissionId, MissionRecord, MissionTexts, OutfitId, OutfitRecord, PersonId, PilotCatalog,
-    PlaceNames, ShipId, ShipRecord, StartError, StellarId, StellarLife, SystemId, TrafficCatalog,
-    WeaponId,
+    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError, StellarId, StellarLife,
+    SystemId, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -764,6 +764,14 @@ pub struct Session {
     /// Every `crön`, read when the session starts, shared so the daily
     /// pass holds them while their scripts run (see the `crons` module).
     crons: Rc<[CronRecord]>,
+    /// Every `ränk` 128-255, read when the session starts (see the
+    /// `ranks` module).
+    ranks: Rc<[RankRecord]>,
+    /// The rank last activated, which `<RRK>` reads, until `L` or a sweep
+    /// clears it. Never saved: `None` on every [`Session::fly`], as the
+    /// original's `ResetPlayer` (@0x1db44) and `ResetPlayerRecord`
+    /// (@0x1dbf1) reset it (see the `ranks` module).
+    recent_rank: Option<RankId>,
     /// What the screens show of each `mïsn`, read when the session
     /// starts (see the `mission_screens` module).
     mission_texts: BTreeMap<MissionId, MissionTexts>,
@@ -891,7 +899,7 @@ impl Session {
             .retain(|id, _| crons.iter().any(|record| record.id == *id));
         // So is a rank (`_LoadPilotData` @0x75e47-0x75eb6; see the
         // `ranks` module).
-        let ranks = catalog.ranks();
+        let ranks: Rc<[RankRecord]> = catalog.ranks().into();
         pilot
             .ranks
             .retain(|id| ranks.iter().any(|record| record.id == *id));
@@ -1000,6 +1008,8 @@ impl Session {
             fallback_frame: catalog.fallback_frame_size(),
             missions: catalog.missions(),
             crons,
+            ranks,
+            recent_rank: None,
             mission_texts: catalog
                 .mission_texts()
                 .into_iter()

@@ -153,7 +153,7 @@ mod tests {
     use super::*;
     use crate::board::{Assigned, Assignment, Take, Taken};
     use crate::catalog::{CharacterStart, OutfitId, OutfitRecord, StartError};
-    use crate::control::{Bit, ScriptNote, SetOp, SetOpKind};
+    use crate::control::{Bit, SetOp};
     use crate::outfit_effects::Rgb15;
     use crate::outfitter::{FIRST_OUTFIT, OutfitFlags, OutfitRefusal, Reselection};
     use crate::pilot::Pilot;
@@ -222,11 +222,14 @@ mod tests {
         let mut session = Session::start(&catalog()).expect("starts");
         session.run_script(&Script::parse("b7 K200"), &mut Scripted::default());
         assert!(session.control_bit(bit(7)));
-        assert!(session.take_save_due());
-        assert_eq!(
-            session.take_script_notes(),
-            [ScriptNote::Unhandled(SetOpKind::ActivateRank)]
+        assert!(
+            session
+                .pilot()
+                .ranks()
+                .contains(&crate::catalog::RankId(200))
         );
+        assert!(session.take_save_due());
+        assert_eq!(session.take_script_notes(), []);
     }
 
     #[test]

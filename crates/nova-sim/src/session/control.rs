@@ -25,7 +25,8 @@
 //! the sound `P` (see the `script_effects` module), the stellars
 //! destroyed and regenerated, `Y` and `U` (see the `stellars` module), and
 //! the missions started, aborted and failed, `S`, `A` and `F` (see the
-//! `missions` module).
+//! `missions` module), and the ranks activated and deactivated, `K` and
+//! `L` (see the `ranks` module).
 //! Any change to the pilot makes a save due. An operator nothing handles is skipped, and its kind told
 //! once a session as a [`ScriptNote`] ([`Session::take_script_notes`]);
 //! which kinds were told is never saved.
@@ -36,9 +37,9 @@
 //! where it settles the moves and dispatches the events raised before the
 //! next operator (see the [`story`](crate::story) module's "Dispatch").
 //! A script run inside another is one more run like it: an unhandled
-//! kind is told the first time it is met, outer or nested. The operators
-//! still unhandled are the ranks' (`K`, `L`), whose arms crons-news-ranks
-//! adds.
+//! kind is told the first time it is met, outer or nested. Every set
+//! operator now applies: the ranks' `K` and `L` too (see the `ranks`
+//! module).
 //!
 //! **Hooks.** The records' set-expression hooks (the `chär`'s `OnStart`,
 //! an outfit's `OnPurchase` and `OnSell`, a ship's `OnPurchase`,
@@ -193,15 +194,13 @@ impl Session {
             SetOp::AbortMission(mission) => self.script_abort(*mission, chance),
             SetOp::FailMission(mission) => self.script_fail(*mission),
             SetOp::StartMission(mission) => self.script_start(*mission, chance),
-            // Ranks: crons-news-ranks adds their arms here.
-            SetOp::ActivateRank(_)
-            | SetOp::DeactivateRank(_)
+            SetOp::ActivateRank(rank) => self.activate_rank(*rank),
+            SetOp::DeactivateRank(rank) => self.deactivate_rank(*rank),
             // `execute` writes the bits and draws `R(...)` itself, never
             // handing them here.
-            | SetOp::Set(_)
-            | SetOp::Clear(_)
-            | SetOp::Toggle(_)
-            | SetOp::Random(..) => return Err(op.kind()),
+            SetOp::Set(_) | SetOp::Clear(_) | SetOp::Toggle(_) | SetOp::Random(..) => {
+                return Err(op.kind());
+            }
         }
         Ok(())
     }
@@ -434,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_op_applies_novas_sixteen_and_gives_back_the_rest() {
+    fn apply_op_applies_novas_eighteen_and_gives_back_the_rest() {
         let mut session = session();
         let expr = set(
             "A128 F129 S130 G128 D128 C128 E128 H128 M130 N130 K128 L128 P128 Y128 U128 \
@@ -460,8 +459,6 @@ mod tests {
                 .map(|(kind, _)| kind)
                 .collect::<Vec<_>>(),
             [
-                SetOpKind::ActivateRank,
-                SetOpKind::DeactivateRank,
                 SetOpKind::Set,
                 SetOpKind::Clear,
                 SetOpKind::Toggle,
@@ -490,52 +487,6 @@ mod tests {
         session.run_set(&set("X131"), &mut Scripted::default());
         assert_eq!(*explored.0.borrow(), [false], "seen before X applied");
         assert!(session.pilot().has_explored(SystemId(131)), "then applied");
-    }
-
-    #[test]
-    fn an_unhandled_operator_is_noted_once_and_the_next_still_applies() {
-        let mut session = session();
-        session.run_set(&set("K200 b4"), &mut Scripted::default());
-        assert!(session.control_bit(bit(4)));
-        session.run_set(&set("K201 b5"), &mut Scripted::default());
-        assert!(session.control_bit(bit(5)));
-        assert_eq!(
-            session.take_script_notes(),
-            [ScriptNote::Unhandled(SetOpKind::ActivateRank)]
-        );
-        assert_eq!(session.take_script_notes(), [], "taken");
-        session.run_set(&set("L128"), &mut Scripted::default());
-        assert_eq!(
-            session.take_script_notes(),
-            [ScriptNote::Unhandled(SetOpKind::DeactivateRank)]
-        );
-    }
-
-    #[test]
-    fn an_unhandled_kind_met_in_a_nested_script_too_is_noted_once() {
-        let mut session = session();
-        let mut nested = false;
-        session.run_ops(
-            &set("L200 K128 b4"),
-            &mut Scripted::default(),
-            &mut |session, chance| {
-                if !std::mem::replace(&mut nested, true) {
-                    session.run_ops(&set("L201 K129 b5"), chance, &mut |_, _| {});
-                }
-            },
-        );
-        assert!(session.control_bit(bit(4)));
-        assert!(session.control_bit(bit(5)), "nested");
-        assert_eq!(
-            session.take_script_notes(),
-            [
-                ScriptNote::Unhandled(SetOpKind::DeactivateRank),
-                ScriptNote::Unhandled(SetOpKind::ActivateRank),
-            ],
-            "each once, in the order met"
-        );
-        session.run_set(&set("K131 L132"), &mut Scripted::default());
-        assert_eq!(session.take_script_notes(), [], "told already");
     }
 
     #[test]
@@ -578,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn the_operators_still_unhandled_are_those_of_other_roadmaps() {
+    fn every_set_operator_applies() {
         let catalog = catalog();
         let mut session = session().with_strings(Rc::new(Told));
         crate::testkit::land_now(&mut session).expect("lands");
@@ -590,10 +541,7 @@ mod tests {
             ),
             &mut Scripted::default(),
         );
-        assert_eq!(
-            session.take_script_notes(),
-            [SetOpKind::ActivateRank, SetOpKind::DeactivateRank].map(ScriptNote::Unhandled)
-        );
+        assert_eq!(session.take_script_notes(), []);
         assert!(session.pilot().has_explored(SystemId(131)), "X ran");
         let settled = session.settle_script(&catalog, &mut Scripted::default());
         assert_eq!(settled.moved, Some(SystemId(130)), "M and N queued");
