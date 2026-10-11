@@ -45,6 +45,9 @@
 //!   ([`control::execute`]), its operators beyond the bit writes handed to
 //!   the caller's dispatch (the session's: `Session::apply_op`, one match
 //!   over the set operators).
+//! - [`cron`]: the `crön`s the day's second participant runs: whether an
+//!   inactive one starts ([`cron::eligibility`], with its disputed
+//!   `Random` and date range).
 //! - [`combat`]: ships fighting: firing their [`Armament`] on a
 //!   [`Trigger`] at their target, shots and beams flying and hitting,
 //!   homing missiles steering, turrets aiming in their arcs, point defence
@@ -233,6 +236,7 @@ pub mod chance;
 pub mod clock;
 pub mod combat;
 pub mod control;
+pub mod cron;
 pub mod data;
 pub mod date;
 pub mod escort;

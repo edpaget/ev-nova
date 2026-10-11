@@ -47,10 +47,10 @@
 //!
 //! A drawing check may be disputed too ([`Check::disputed_drawing`]): the
 //! roll is drawn in check order whichever reading runs, and the rule set
-//! chooses how it is read, such as a crön's `Random`. Its descriptor both
-//! reads a key and draws, and
-//! `all_refusals` reports it as [`Verdict::Draws`] without running either
-//! reading.
+//! chooses how it is read, such as a crön's `Random`
+//! ([`cron`](crate::cron)). Its descriptor both reads a key and draws,
+//! and `all_refusals` reports it as [`Verdict::Draws`] without running
+//! either reading.
 //!
 //! A draw that the original makes while building what a shop shows, such
 //! as the outfitter's day rolls (`wares::DayRolls`),

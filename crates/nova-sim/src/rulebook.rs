@@ -103,6 +103,8 @@
 //! | [`MissionStellarDistance`](RuleKey::MissionStellarDistance) | `mission_stellar_distance` | a random stellar is distant from an origin in a visible system when its system is not at the origin's place, neither system's own Con links reach a system at the other's place, and every system at its system's place lists it; with no origin, as availability asks, only by that last test; from an origin of no visible system nothing is distant (`_StellarsAreDistant` @0x9cb9-0x9ef6, the co-located chain walk @0x9e60-0x9ee4; see [`mission`](crate::mission)) | it is in another system that the visible map does not link with the origin's either way, and nothing is tested with no origin or an origin of no visible system\* |
 //! | [`MissionStellarIdentity`](RuleKey::MissionStellarIdentity) | `mission_stellar_identity` | a mission's destination or return is the stellar docked at when their IDs match, or when both have the same `xPos` and `yPos` and the same name, in any system (`_StellarsAreIdentical` @0xab35-0xac90, called by `_MissionLandCargoCheck` @0x9edfd, @0x9f01d and `_MissionLandCheck` @0xa1a37; see [`mission`](crate::mission)) | only the stellar of that ID, as `TravelStel` and `ReturnStel` each name one stellar by ID |
 //! | [`LegalRecords`](RuleKey::LegalRecords) | `legal_records` | one record a system (`_playerRecord`), read in the player's system (`_HandlePlayerDockRequest` @0x67903, `_IsMissionAvailable` @0x9b59d, `_DoTradeDialog` @0x5dc17; see [`legal`](crate::legal)) | one record a government, read through the system's (landing: the stellar's) government |
+//! | [`CronRandomScale`](RuleKey::CronRandomScale) | `cron_random_scale` | `Rand(101) <= Random`, rolled for every inactive crön before its other checks (`_CronEventHandler` @0x38804-0x38818; see [`cron`](crate::cron)) | `Random` % (0 never, 100 or more always)§§§§§§ |
+//! | [`CronDateCompare`](RuleKey::CronDateCompare) | `cron_date_compare` | year on its own, month and day on their own; a range across a year end with month/day set never matches (`_CronDateInRange` @0x74d3-0x75bf; see [`cron`](crate::cron)) | compared as dates; a range may cross a year end¶¶¶¶¶¶ |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -258,6 +260,18 @@
 //! other is drawable), the original redraws `Rand(2048)` forever; the
 //! engine's reading stops there and gives the origin, drawing nothing,
 //! as the other reading does.
+//!
+//! §§§§§§ The Bible gives `Random` as a percent chance and says nothing
+//! of values below 0 or above 100. Its reading here never starts a crön
+//! of `Random` 0 or less and always starts one of 100 or more. Both
+//! readings draw one roll per inactive crön, so switching readings never
+//! shifts later draws.
+//!
+//! ¶¶¶¶¶¶ The Bible says only that a date field of 0 or -1 matches any,
+//! and nothing of how the range is compared. The other reading is the
+//! port's choice, not anything the Bible says: each end compared at the
+//! precision it gives, a yearless range allowed to cross the year end
+//! (see [`cron`](crate::cron)).
 //!
 //! # Adding a rule
 //!
@@ -1282,6 +1296,17 @@ rule_keys! {
     /// system's government, and at a landing through the stellar's (see
     /// [`legal`](crate::legal)). Both stores are always written.
     LegalRecords => "legal_records",
+    /// A crön's `Random`: by the engine, it starts when `_Rand(101)`
+    /// (0-100) is at most `Random`, so 0 still fires 1 day in 101 and
+    /// below 0 never; by the Bible, `Random` is a percent chance (see
+    /// [`cron`](crate::cron)).
+    CronRandomScale => "cron_random_scale",
+    /// A crön's date range: by the engine, the year is compared on its
+    /// own and the month and day on their own, so a range across a year
+    /// end with month/day set never matches; by the other reading the
+    /// range is compared as dates and may cross a year end (see
+    /// [`cron`](crate::cron)).
+    CronDateCompare => "cron_date_compare",
 }
 
 impl RuleKey {
@@ -1449,7 +1474,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1489,7 +1514,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1511,7 +1536,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1536,7 +1561,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1562,7 +1587,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(5),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1582,7 +1607,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1602,7 +1627,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1618,11 +1643,25 @@ mod tests {
             RuleKey::from_key("legal_records"),
             Some(RuleKey::LegalRecords)
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::LegalRecords));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(2),
+            Some(&RuleKey::LegalRecords)
+        );
         assert_eq!(
             Rulebook::default().source_for(RuleKey::LegalRecords),
             RuleSource::Engine
         );
+    }
+
+    #[test]
+    fn the_cron_rules_are_found_by_their_keys_and_read_the_engine() {
+        assert_eq!(RuleKey::CronRandomScale.key(), "cron_random_scale");
+        assert_eq!(RuleKey::CronDateCompare.key(), "cron_date_compare");
+        for rule in [RuleKey::CronRandomScale, RuleKey::CronDateCompare] {
+            assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
+            assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        }
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::CronDateCompare));
     }
 
     #[test]
@@ -1724,7 +1763,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -1867,7 +1906,9 @@ mod tests {
                 RuleKey::MissionStellarDraw,
                 RuleKey::MissionStellarDistance,
                 RuleKey::MissionStellarIdentity,
-                RuleKey::LegalRecords
+                RuleKey::LegalRecords,
+                RuleKey::CronRandomScale,
+                RuleKey::CronDateCompare
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
