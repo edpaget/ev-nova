@@ -3503,6 +3503,9 @@ mod tests {
         sites: Vec<LandingSite>,
         /// System 130's `NavDefs` slots on the map: none, by default.
         sol_navs: Vec<Option<(u32, u16)>>,
+        /// The stellars Sol lists after Earth and the Moon: none, by
+        /// default.
+        sol_more: Vec<StellarContents>,
         systems_read: RefCell<Vec<SystemId>>,
         /// The commodities: none, by default.
         commodities: CommodityStrings,
@@ -3644,6 +3647,7 @@ mod tests {
             fan: false,
             reborn: false,
             sol_navs: Vec::new(),
+            sol_more: Vec::new(),
             gates: Vec::new(),
             lives: Vec::new(),
             missions: Vec::new(),
@@ -3914,10 +3918,13 @@ mod tests {
             let (name, stellars) = match id.0 {
                 130 => (
                     "Sol",
-                    vec![
+                    [
                         dying(128, "Earth", (0, -600), 1),
                         stellar(129, "Moon", (300, -200), 4),
-                    ],
+                    ]
+                    .into_iter()
+                    .chain(self.sol_more.iter().cloned())
+                    .collect(),
                 ),
                 131 => ("Alpha Centauri", vec![dying(140, "Proxima", (0, 0), 1)]),
                 132 if self.onward => ("Barnard", Vec::new()),
@@ -5144,6 +5151,52 @@ mod tests {
         );
         // No system name in the nav area (the dev title still names it).
         assert!(!texts(&list).contains(&"Sol".to_owned()), "{list:?}");
+    }
+
+    #[test]
+    fn a_stellars_radar_shape_and_sprite_width_reach_the_radar() {
+        // `w` x `h` frames: the radar reads the width, never the height.
+        let sized = |id, at, (w, h): (u32, u32), square| StellarContents {
+            sprite: Ok(StellarSheet {
+                image_id: 1000 + id,
+                frames: NonZeroU16::MIN,
+                frame_width: w,
+                frame_height: h,
+            }),
+            radar_square: square,
+            ..stellar(id, "Extra", at, 1)
+        };
+        let view = FlightView::new(FakeCatalog {
+            sol_more: vec![
+                sized(150, (640, 0), (300, 300), true),
+                sized(151, (-640, 320), (120, 60), false),
+                sized(152, (0, 640), (250, 150), false),
+            ],
+            ..catalog()
+        });
+        let dim = RadarColor::Dim;
+        // A station is a 2×2 square whatever its size; past 89 pixels wide
+        // an oval grows 2 a side, past 199, 3.
+        assert_eq!(
+            radar_marks(&view),
+            [
+                small_oval(926, 77),
+                small_oval(935, 89),
+                RadarMark::Square {
+                    rect: IRect::around(946, 96, 1),
+                    color: dim,
+                },
+                RadarMark::Oval {
+                    rect: IRect::around(906, 106, 2),
+                    color: dim,
+                },
+                RadarMark::Oval {
+                    rect: IRect::around(926, 116, 3),
+                    color: dim,
+                },
+                PLAYER_PIXEL,
+            ]
+        );
     }
 
     /// The radar's player position: where it was when the radar last
