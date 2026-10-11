@@ -11,7 +11,8 @@
 //!   100, each becoming `trunc(p * 100.0 / sum)`; the fleets' are kept as
 //!   they are. A negative `% Prob` counts as none.
 //! - A fleet's `LinkSyst` ([`FleetLink`]) says which systems it may
-//!   appear in.
+//!   appear in. The escort-strength timer's fleets, `flët` 382 and 383,
+//!   may come into any system, so every table keeps them.
 //! - A weighted [`pick`] draws `Rand(sum) + 1` and takes the first entry
 //!   whose cumulative weight reaches it.
 //! - The persons ([`SpawnPerson`]) kept are those whose `LinkSyst`
@@ -37,6 +38,11 @@ use crate::person::{self, PersonLink, PersonRules};
 use crate::pilot::tally;
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
+use crate::traffic::strength::{STRONG_FLEET, STRONGER_FLEET};
+
+/// The fleets the escort-strength timer may bring into any system (see
+/// [`strength`](crate::traffic::strength)).
+const ESCORT_STRENGTH_FLEETS: [FleetId; 2] = [STRONG_FLEET, STRONGER_FLEET];
 
 /// The lowest `DudeTypes` value that is a `düde`.
 pub const FIRST_DUDE: i16 = 128;
@@ -237,7 +243,9 @@ pub struct SpawnTable {
     /// when one spawns (see [`spawn`](crate::traffic::spawn)), so a bit
     /// set in the system counts without resolving the table again.
     pub link_fleets: BTreeSet<FleetId>,
-    /// The fleets it can spawn, from either list.
+    /// The fleets it can spawn, from either list, and the escort-strength
+    /// timer's `flët` 382 and 383 wherever they exist (see
+    /// [`strength`](crate::traffic::strength)).
     pub fleets: BTreeMap<FleetId, FleetRecord>,
     /// Every ship type its `düde`s, fleets and persons name that has a
     /// record.
@@ -310,7 +318,7 @@ impl SpawnTable {
             if linked {
                 link_fleets.insert(fleet.id);
             }
-            if linked || named.contains(&fleet.id) {
+            if linked || named.contains(&fleet.id) || ESCORT_STRENGTH_FLEETS.contains(&fleet.id) {
                 fleets.insert(fleet.id, fleet);
             }
         }
@@ -1198,6 +1206,72 @@ mod tests {
         );
         assert_eq!(table, SpawnTable::default());
         assert!(catalog.dudes_asked.borrow().is_empty());
+    }
+
+    /// [`Traffic`] with fleets 382, led by ship 204, and 383, led by
+    /// ship 205 with ship 206 escorting, each linking to system 131 alone.
+    struct Strong(Traffic);
+
+    impl TrafficCatalog for Strong {
+        fn system_traffic(&self, id: SystemId) -> Option<SystemTraffic> {
+            self.0.system_traffic(id)
+        }
+
+        fn dude(&self, id: DudeId) -> Option<DudeRecord> {
+            self.0.dude(id)
+        }
+
+        fn fleets(&self) -> Vec<FleetRecord> {
+            let strong = |id, lead, escorts: Vec<EscortRecord>| FleetRecord {
+                id: FleetId(id),
+                lead: Some(ShipId(lead)),
+                escorts,
+                govt: Some(GovtId(131)),
+                link_syst: 131,
+                appear_on: Test::default(),
+            };
+            let escort = EscortRecord {
+                ship: ShipId(206),
+                min: 1,
+                max: 1,
+            };
+            let mut fleets = self.0.fleets();
+            fleets.push(strong(382, 204, Vec::new()));
+            fleets.push(strong(383, 205, vec![escort]));
+            fleets
+        }
+
+        fn persons(&self) -> Vec<PersonRecord> {
+            self.0.persons()
+        }
+    }
+
+    #[test]
+    fn a_table_keeps_the_escort_strength_fleets_and_their_ships_though_unnamed_and_unlinked() {
+        let mut ships = records();
+        ships.extend([ship(204, FAST), ship(205, FAST), ship(206, FAST)]);
+        let table = SpawnTable::resolve(
+            &Strong(Traffic::default()),
+            SystemId(130),
+            Some(GovtId(128)),
+            &relations(),
+            &ships,
+            &[],
+            &Arsenal::default(),
+            &NovaPersons::default(),
+            &BTreeSet::new(),
+        );
+        assert!(table.fleets.contains_key(&FleetId(382)));
+        assert!(table.fleets.contains_key(&FleetId(383)));
+        assert!(
+            !table.link_fleets.contains(&FleetId(382))
+                && !table.link_fleets.contains(&FleetId(383)),
+            "not linked here"
+        );
+        assert!(table.dude_fleets.iter().all(|&(id, _)| id.0 < 382));
+        for id in [204, 205, 206] {
+            assert!(table.ship_types().contains(&ShipId(id)), "ship {id}");
+        }
     }
 
     #[test]

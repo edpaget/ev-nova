@@ -23,11 +23,13 @@
 //! active (@0x43757); here that part reads the slot again and skips it
 //! once freed. No stock mission of `Flags` 0x0001 has auxiliary ships.
 //!
-//! **The restarts** are the enter-system hook's and the take-off's (see
-//! the `mission_ships` module): each restarts every active slot's
-//! auxiliary ships ([`AuxShips::restart`]), the hook after that slot's
-//! special ships' restart and the take-off before its held goal check,
-//! so its draws come before the take-off's setup's. On a hypergate's or
+//! **The restarts** are the enter-system hook's (see the
+//! `mission_ships` module) and the take-off's: each restarts every
+//! active slot's auxiliary ships ([`AuxShips::restart`]), the hook after
+//! that slot's special ships' restart, and [`Session::take_off`] in slot
+//! order after the stay's days (@0x634df-0x6353c), before it arms the
+//! escort-strength timer and sets the system up, so its draws come
+//! before the take-off's setup's. On a hypergate's or
 //! wormhole's exit a slot of `AuxShipSyst` -1 then loses its ships until
 //! the next restart, as [`RuleKey::AuxGate`] reads.
 //!
@@ -139,6 +141,15 @@ impl Session {
         let record = self.lifecycle_record(active.mission);
         if let Some(active) = self.pilot.missions.get_mut(slot) {
             active.aux.restart(&record.aux, record.flags, chance);
+        }
+    }
+
+    /// The take-off's restart of every active mission's auxiliary ships,
+    /// in slot order ([`Session::restart_aux`]), drawing on `chance`.
+    pub(super) fn restart_every_aux(&mut self, chance: &mut dyn Chance) {
+        let slots: Vec<u8> = self.pilot.missions.iter().map(|(slot, _)| slot).collect();
+        for slot in slots {
+            self.restart_aux(slot, chance);
         }
     }
 
@@ -264,7 +275,7 @@ mod tests {
         assert_eq!(
             aux_of(&session).countdown,
             139,
-            "restarted on take-off, the setup tick counting nothing"
+            "restarted on take-off, its setup counting nothing"
         );
         ticks(&mut session, &catalog, 139);
         assert_eq!(aux_of(&session).countdown, 0);
@@ -721,12 +732,16 @@ mod tests {
     #[test]
     fn the_take_offs_aux_draws_come_before_its_setup() {
         let (catalog, mut session) = two_slots();
-        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(128)));
-        assert!(session.traffic_due, "the setup is still to come");
+        let mut draws = Draws::of(&[]);
+        assert_eq!(session.take_off(&catalog, &mut draws), Some(StellarId(128)));
+        assert_eq!(
+            draws.asked[..3],
+            [70, 70, crate::traffic::strength::SEED_SPREAD],
+            "each slot's, in order, then the escort-strength timer, then the setup"
+        );
         let mut draws = Draws::of(&[]);
         let _ = session.settle_script(&catalog, &mut draws);
-        assert_eq!(draws.asked, [70, 70], "each slot's, in order");
-        assert!(session.traffic_due);
+        assert!(!draws.asked.contains(&70), "the hook restarts none");
     }
 
     // The gate exit.

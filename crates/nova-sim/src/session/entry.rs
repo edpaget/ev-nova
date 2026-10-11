@@ -277,7 +277,8 @@ pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets 
 /// (@0x6c040-0x6c066). It never clears the course, only drops the hops made; the
 /// jump's start already stopped the thrust, and every tick ends a gate's
 /// pending entry. Populating lets go of the strikes, the boarding, the
-/// hail and the target too.
+/// hail and the target too. The caller arms the escort-strength timer
+/// before entering, ahead of the jump's days ([`Session::arrive`]).
 fn jump(hops: usize) -> Resets {
     Resets::of(
         &[
@@ -306,7 +307,8 @@ fn jump(hops: usize) -> Resets {
 /// so a held sound is kept. The course is cleared and the thrust
 /// stopped; the system is populated even when it is the one gone in,
 /// and the arrival sounds but raises no message of its own (the caller
-/// raises the gate's).
+/// raises the gate's). The caller arms the escort-strength timer before
+/// entering, as a take-off does ([`Session::enter_wormhole`]).
 fn gate() -> Resets {
     Resets::of(
         &[

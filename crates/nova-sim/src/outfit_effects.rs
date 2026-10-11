@@ -34,10 +34,10 @@
 //!    with the government its `ModVal` names, or with every government
 //!    for -1, is raised to none, and records above none stay
 //!    ([`clean_records`]). The outfit is not added, even when its
-//!    `ModVal` names no government. `_LoadObjectData` (@0x78de3-0x78df7)
-//!    takes 128 off a `ModVal` above 127 for `ModType` 1, 3 and 21, so
-//!    the value is matched as a government's index: 128 and up is that
-//!    government's ID, and 0 to 127 the ID 128 above it.
+//!    `ModVal` names no government. The catalog hands over the `ModVal`
+//!    as the ID `_LoadObjectData` (@0x78de3-0x78df7) reads it as (see
+//!    [`loaded_mod_val`](crate::catalog::loaded_mod_val)): a raw 0 to 127
+//!    is already the government 128 above it.
 //! 4. **Otherwise** (@0x44fdf) one more is owned. The grant itself checks
 //!    neither the outfit's `Max`, nor the free mass, nor `Flags` 0x0010.
 //!
@@ -177,14 +177,13 @@ pub enum CleanScope {
 }
 
 impl CleanScope {
-    /// Whose record a `ModVal` of `value` cleans (see the module docs):
-    /// none for a value below 0 but -1.
+    /// Whose record a `ModVal` of `value`, as loaded, cleans (see the
+    /// module docs): none for a value below 128 but -1.
     #[must_use]
     pub fn of(value: i16) -> Option<Self> {
         match value {
             EVERY_GOVT => Some(Self::All),
             128.. => Some(Self::Govt(GovtId(value))),
-            0..128 => Some(Self::Govt(GovtId(value + 128))),
             _ => None,
         }
     }
@@ -423,13 +422,14 @@ mod tests {
             }
         );
         assert_eq!(
-            effect(&[(CLEAN_RECORD, 2), (5, 1), (CLEAN_RECORD, -1)]).clean,
+            effect(&[(CLEAN_RECORD, 130), (5, 1), (CLEAN_RECORD, -1)]).clean,
             [CleanScope::Govt(GovtId(130)), CleanScope::All]
         );
         for (value, scope) in [
             (128, Some(CleanScope::Govt(GovtId(128)))),
-            (127, Some(CleanScope::Govt(GovtId(255)))),
-            (0, Some(CleanScope::Govt(GovtId(128)))),
+            (383, Some(CleanScope::Govt(GovtId(383)))),
+            (127, None),
+            (0, None),
             (-1, Some(CleanScope::All)),
             (-2, None),
             (-7, None),

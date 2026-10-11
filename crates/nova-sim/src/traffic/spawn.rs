@@ -7,17 +7,54 @@
 //! "`below(n) < k` fires":
 //!
 //! - **Setup** ([`initial`]) makes `AvgShips` passes. Each first rolls
-//!   for a person ([`PersonRules::roll`](crate::person::PersonRules::roll),
+//!   for a person ([`PersonRules::roll`],
 //!   see [`person`](crate::person)): a person who may appear is placed as
 //!   a `düde` ship is, an empty roll brings nothing that pass, and no
 //!   person goes on to a `LinkSyst` fleet (`Rand(7) == 0`, [`link_fleet`]),
 //!   else one `düde` ship, placed in the system already: x and y each
-//!   `Rand(1500) - 750`, heading `Rand(360)`, at rest. Then each of the
-//!   system's Person slots naming a person alive whose `ActiveOn` holds is
-//!   rolled ([`PersonRules::listed`](crate::person::PersonRules::listed)),
-//!   and brings its person, placed so, unless one of its name is there.
+//!   `Rand(1500) - 750`, heading `Rand(360)`, at its top speed along its
+//!   heading ([`at_speed`]). Then each of the system's Person slots naming
+//!   a person alive whose `ActiveOn` holds is rolled
+//!   ([`PersonRules::listed`]), and
+//!   brings its person, placed so, unless one of its name is there.
+//!
+//! # Setup speed and stationary warships
+//!
+//! - **Speed.** `_SetupShipsInSystem` (@0x42b61) gives every pass's ship
+//!   (@0x432eb) and every slot's person (@0x433fe)
+//!   `_AdjustedAccel(heading, max, max, &vel)` (@0x2ae4b), which adds to
+//!   the velocity while it is short of the top speed: from rest, exactly
+//!   the top speed along the heading. The top speed is ship-class +0x40,
+//!   `shïp` `Speed` / 100 (`_LoadObjectData` @0x7a0db-0x7a0ef), here the
+//!   ship's [`Handling::max_speed`](crate::handling::Handling::max_speed)
+//!   with the outfits it flies with: a `düde` ship's default items, or a
+//!   person's fitted ship. The original reads the bare `Speed`; each ship
+//!   here still starts at exactly its own top speed. A `LinkSyst` fleet
+//!   gets none: it comes by hyperspace.
+//! - **Derelicts.** A person of a derelict government (`gövt` `Flags`
+//!   0x0800) brought by a pass has its velocity zeroed (@0x43245-0x4325b),
+//!   but the code jumps on to the pass's shared `_AdjustedAccel`
+//!   (@0x432b0), so it starts at its top speed. One brought by its slot is
+//!   zeroed after its `_AdjustedAccel` (@0x43418-0x43443), and starts at
+//!   rest. The other reading of
+//!   [`RuleKey::DerelictSetupSpeed`](crate::RuleKey::DerelictSetupSpeed)
+//!   starts both at rest.
+//! - **Stationary warships** ([`dude_setup_state`]). A `düde` ship flown
+//!   as a warship (AI type 3) whose ship has no speed starts, when the
+//!   system has a first stellar, at that stellar plus
+//!   [`STATIONARY_DISTANCE`] at angle `Rand(360)`, at rest, then heading
+//!   `Rand(360)` (`_RandomShipSpawn` @0x3c254-0x3c324, @0x3c410). The
+//!   stellar is the first the galaxy overlay shows for the system,
+//!   destroyed or not, as the original reads its first stellar slot with
+//!   no other check. Here that is the first readable `spöb` of its
+//!   `nav_def`s: where slot 0 is empty or unreadable, the original falls
+//!   back to the box and this takes the next stellar. A person never is:
+//!   `_SpawnPerson` places it through `_GenericRandomShipSpawn`'s box
+//!   alone (@0x3ccf0-0x3cd1a).
 //! - **Arrivals** ([`arrivals`]), every tick while the system holds fewer
-//!   NPCs than `AvgShips`, draw `Rand(500)`. On 1, when the system's
+//!   NPCs than `AvgShips`, draw `Rand(500)`. The count leaves out the
+//!   player's escorts and fighters but takes in an NPC carrier's fighters
+//!   (`_EnterMoreShips` @0x43b14-0x43b5c). On 1, when the system's
 //!   `DudeTypes` name fleets, `Rand(100) + 1` at or below the sum of their
 //!   `% Prob` brings one in, picked by `% Prob`; otherwise it falls
 //!   through to 0's case. On 0, when the system has a `düde`, the person
@@ -27,17 +64,34 @@
 //! - **A `LinkSyst` fleet** ([`link_fleet`]) draws `Rand(256)`, `flët`
 //!   `128 + slot`, and comes only when that fleet's `LinkSyst` matches.
 //! - **A fleet** ([`fleet`]) is its lead, with the fleet's government and
-//!   its ship's `InherentAI`, and `Min + Rand(Max - Min + 1)` of each
+//!   its ship's `InherentAI` (or the AI type its caller gives: the
+//!   escort-strength timer's fleet is led by an interceptor, see
+//!   [`strength`](crate::traffic::strength)), and `Min + Rand(Max - Min + 1)` of each
 //!   escort type, each at the lead's place plus `Rand(300) - 150` each way,
 //!   with its heading and velocity, its own ship's `InherentAI`, escorting
-//!   the lead. Fleets always come by hyperspace, at setup too.
+//!   the lead. Fleets always arrive, at setup too: by hyperspace, or out
+//!   of a gate.
 //! - **A `düde` ship** is a `düde` picked by weight, then a ship by its
 //!   `Probability`; its AI is the `düde`'s `AIType` when above 0, or else
 //!   its ship's `InherentAI`, and its government the `düde`'s.
 //! - **By hyperspace** ([`hyperspace_entry`]) a ship starts at angle
 //!   `Rand(360)`, [`jump_in_distance`] from the centre, heading in at
-//!   [`JUMP_IN_SPEED`]. A ship with no fuel capacity is not brought in by
-//!   hyperspace; nor is a fleet whose lead has none.
+//!   [`JUMP_IN_SPEED`]. A ship with no fuel capacity is not brought in,
+//!   by hyperspace or gate; nor is a fleet whose lead has none.
+//! - **By hypergate or wormhole** (see [`emerge`](crate::traffic::emerge)):
+//!   every arrival, a `düde` ship, a person or a fleet's lead, the
+//!   `LinkSyst` fleets at setup among them, may come out of one of the
+//!   system's [`Stellars`] instead ([`emerge_stellar`]). A lone ship draws
+//!   its jump-in angle first and then the pick (`_HyperShipSpawn` @0x42a26,
+//!   @0x42ac0); a fleet's lead draws the pick first and its jump-in angle
+//!   only when it jumps in (`_HyperSpawnFleet` @0x41f0b). Out of a gate,
+//!   it starts at the gate's centre, at rest, on the gate's
+//!   [`exit_heading`], waiting [`EMERGE_TICKS`]. Each escort of a lead
+//!   that came out of a gate draws its offsets still (@0x4234a, @0x42391),
+//!   then is placed at the gate's centre, at rest, on its lead's heading,
+//!   waiting [`EMERGE_TICKS`] + [`ESCORT_EMERGE_EXTRA`] +
+//!   `Rand(`[`ESCORT_EMERGE_SPREAD`]`)` (@0x42534-0x4255e). With no gate
+//!   to come out of, nothing more is drawn.
 //!
 //! - **Aggression** ([`aggression`]): every ship spawned draws
 //!   `Rand(3) ^ 2` last, after its place (@0x3c55b, @0x3cb04): 2, 3 or 0.
@@ -156,16 +210,22 @@
 
 use std::collections::BTreeSet;
 
-use crate::catalog::{DudeId, FleetId, GovtId, PersonId, ShipId};
+use crate::catalog::{DudeId, FleetId, GovtId, LandingSite, PersonId, ShipId};
 use crate::chance::Chance;
 use crate::control::Gate;
 use crate::flight::{ShipState, facing, heading_of};
+use crate::gate::exit_heading;
 use crate::geometry::Vec2;
+use crate::govt::Governments;
 use crate::mission::ShipGoal;
 use crate::mission::ships::{ShipBehav, ShipStart};
-use crate::person::{PersonRoll, PersonWorld, aggression_of};
+use crate::person::{PersonRoll, PersonRules, PersonWorld, aggression_of};
+use crate::rulebook::RuleSource;
+use crate::traffic::emerge::{
+    EMERGE_TICKS, ESCORT_EMERGE_EXTRA, ESCORT_EMERGE_SPREAD, emerge_stellar,
+};
 use crate::traffic::npc::{AiType, MissionMark};
-use crate::traffic::table::{ShipKind, SpawnDude, SpawnTable, pick};
+use crate::traffic::table::{ShipKind, SpawnDude, SpawnPerson, SpawnTable, pick};
 
 /// `Rand(7) == 0`: a person, rather than anything else, by the engine
 /// (see [`person`](crate::person)).
@@ -182,6 +242,9 @@ pub const FLEET_SLOTS: u32 = 256;
 pub const FIRST_FLEET_ID: i16 = 128;
 /// `Rand(1500) - 750`: where in the system a ship is placed at setup.
 pub const SPAWN_SPREAD: u32 = 1500;
+/// How far from the system's first stellar a stationary warship starts
+/// (100.0 @0x3c305).
+pub const STATIONARY_DISTANCE: f32 = 100.0;
 /// `Rand(300) - 150`: how far from its lead an escort starts.
 pub const ESCORT_SPREAD: u32 = 300;
 /// `Rand(360)`: a heading, or an angle round the centre.
@@ -200,6 +263,43 @@ pub const AGGRESSION_DRAW: u32 = 3;
 /// or.
 const AGGRESSION_XOR: u32 = 2;
 
+/// How a ship added to the system comes into it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entry {
+    /// Placed in the system already, flying.
+    Placed,
+    /// Gliding in from hyperspace.
+    JumpingIn,
+    /// Coming out of a hypergate or wormhole, after a wait of this many
+    /// ticks (see [`emerge`](crate::traffic::emerge)).
+    Emerging {
+        /// The ticks of the wait.
+        ticks_left: u32,
+    },
+}
+
+/// The system's stellars, which an arrival may come out of (see
+/// [`emerge`](crate::traffic::emerge)), and the governments that judge
+/// whether a ship may.
+#[derive(Clone, Copy, Debug)]
+pub struct Stellars<'a> {
+    /// The system's stellars, as the galaxy overlay shows them.
+    pub sites: &'a [LandingSite],
+    /// Every government and their relations.
+    pub govts: &'a Governments,
+}
+
+/// No governments at all.
+static NO_GOVERNMENTS: Governments = Governments::empty();
+
+impl Stellars<'static> {
+    /// No stellars: every arrival comes by hyperspace.
+    pub const NONE: Self = Self {
+        sites: &[],
+        govts: &NO_GOVERNMENTS,
+    };
+}
+
 /// A ship to add to the system.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NewShip {
@@ -213,8 +313,8 @@ pub struct NewShip {
     pub lead: Option<usize>,
     /// Where it starts.
     pub state: ShipState,
-    /// Whether it glides in from hyperspace.
-    pub jumping_in: bool,
+    /// How it comes into the system.
+    pub entry: Entry,
     /// How aggressive it is: 0, 2 or 3.
     pub aggression: u8,
     /// Its `düde`'s `Booty` flags; none for a fleet's ship, which has no
@@ -313,7 +413,7 @@ impl<'a> PersonDraw<'a> {
             ai_type: AiType::from_raw(record.ai_type),
             lead: None,
             state,
-            jumping_in: false,
+            entry: Entry::Placed,
             aggression: aggression_of(record.aggress),
             booty: 0,
             info_types: 0,
@@ -339,11 +439,15 @@ pub fn jump_in_distance() -> f32 {
     JUMP_IN_END + (0..JUMP_IN_TICKS).map(glide_speed).sum::<f32>()
 }
 
-/// A system's initial population, its persons drawn as `draw` says (see
-/// the module docs).
+/// A system's initial population, its persons drawn as `draw` says, its
+/// stationary warships placed by its `first_stellar`, when it has one,
+/// and its `LinkSyst` fleets coming out of its `stellars` or by
+/// hyperspace (see the module docs).
 pub fn initial(
     table: &SpawnTable,
     draw: &mut PersonDraw,
+    first_stellar: Option<Vec2>,
+    stellars: Stellars,
     chance: &mut (impl Chance + ?Sized),
 ) -> Vec<NewShip> {
     let gate = draw.world.gate();
@@ -352,25 +456,28 @@ pub fn initial(
         match draw.roll(table, false, chance) {
             PersonRoll::Person(id) => {
                 let state = in_system(chance);
-                out.extend(draw.spawn(table, id, state));
+                if let Some(person) = table.persons.get(&id) {
+                    let speed = person_setup_speed(person, true, draw.world.rules);
+                    out.extend(draw.spawn(table, id, at_speed(state, speed)));
+                }
                 continue;
             }
             PersonRoll::Empty => continue,
             PersonRoll::None => {}
         }
         if chance.below(FLEET_ODDS) < 1 {
-            link_fleet(table, gate, chance, &mut out);
+            link_fleet(table, gate, stellars, chance, &mut out);
             continue;
         }
-        if let Some((ship, dude, ai_type, _)) = dude_ship(table, gate, chance) {
-            let state = in_system(chance);
+        if let Some((ship, dude, ai_type, kind)) = dude_ship(table, gate, chance) {
+            let state = dude_setup_state(ai_type, kind, first_stellar, chance);
             out.push(NewShip {
                 ship,
                 govt: dude.govt,
                 ai_type,
                 lead: None,
                 state,
-                jumping_in: false,
+                entry: Entry::Placed,
                 aggression: aggression(chance),
                 booty: dude.booty,
                 info_types: dude.info_types,
@@ -394,19 +501,22 @@ pub fn initial(
         if world.rules.listed(prob, &mut &mut *chance)
             && !draw.named_here(table, &person.record.name)
         {
-            let state = in_system(chance);
-            out.extend(draw.spawn(table, id, state));
+            let speed = person_setup_speed(person, false, world.rules);
+            out.extend(draw.spawn(table, id, at_speed(in_system(chance), speed)));
         }
     }
     out
 }
 
-/// The ships that arrive this tick in a system holding `present` NPCs,
-/// its persons drawn as `draw` says (see the module docs).
+/// The ships that arrive this tick in a system holding `present` ships
+/// that count toward `AvgShips` (not the player's), its persons drawn as
+/// `draw` says, each coming out of one of its `stellars` or by
+/// hyperspace (see the module docs).
 pub fn arrivals(
     table: &SpawnTable,
     present: usize,
     draw: &mut PersonDraw,
+    stellars: Stellars,
     chance: &mut (impl Chance + ?Sized),
 ) -> Vec<NewShip> {
     let mut out = Vec::new();
@@ -414,8 +524,8 @@ pub fn arrivals(
         return out;
     }
     match chance.below(ARRIVAL_ODDS) {
-        1 if named_fleet(table, draw.world.gate(), chance, &mut out) => {}
-        0 | 1 => hyper_ship(table, draw, chance, &mut out),
+        1 if named_fleet(table, draw.world.gate(), stellars, chance, &mut out) => {}
+        0 | 1 => hyper_ship(table, draw, stellars, chance, &mut out),
         _ => {}
     }
     out
@@ -423,10 +533,11 @@ pub fn arrivals(
 
 /// Rolls for one of the fleets the system's `DudeTypes` name, picked
 /// among those with a record whose `AppearOn` holds by `gate`, and brings
-/// it in, added to `out`; whether a fleet was picked.
+/// it in among `stellars`, added to `out`; whether a fleet was picked.
 fn named_fleet(
     table: &SpawnTable,
     gate: Gate,
+    stellars: Stellars,
     chance: &mut (impl Chance + ?Sized),
     out: &mut Vec<NewShip>,
 ) -> bool {
@@ -451,16 +562,17 @@ fn named_fleet(
     let Some(id) = pick(&appearing, chance) else {
         return false;
     };
-    fleet(table, id, gate, chance, out);
+    fleet(table, id, gate, stellars, None, chance, out);
     true
 }
 
 /// `_HyperShipSpawn`: when the system has a `düde`, a person (drawn as
-/// `draw` says), a `LinkSyst` fleet or a `düde` ship jumps in, added to
-/// `out`.
+/// `draw` says), a `LinkSyst` fleet or a `düde` ship comes in, out of one
+/// of `stellars` or by hyperspace, added to `out`.
 fn hyper_ship(
     table: &SpawnTable,
     draw: &mut PersonDraw,
+    stellars: Stellars,
     chance: &mut (impl Chance + ?Sized),
     out: &mut Vec<NewShip>,
 ) {
@@ -469,16 +581,17 @@ fn hyper_ship(
     }
     match draw.roll(table, true, chance) {
         PersonRoll::Person(id) => {
-            if table
+            if let Some(person) = table
                 .persons
                 .get(&id)
-                .is_some_and(|person| can_jump(&person.kind))
+                .filter(|person| can_jump(&person.kind))
             {
-                let state = hyperspace_entry(chance);
-                out.extend(draw.spawn(table, id, state).map(|ship| NewShip {
-                    jumping_in: true,
-                    ..ship
-                }));
+                let jump_in = hyperspace_entry(chance);
+                let (state, entry) = arrival(person.record.govt, jump_in, stellars, chance);
+                out.extend(
+                    draw.spawn(table, id, state)
+                        .map(|ship| NewShip { entry, ..ship }),
+                );
             }
             return;
         }
@@ -487,20 +600,21 @@ fn hyper_ship(
     }
     let gate = draw.world.gate();
     if chance.below(FLEET_ODDS) < 1 {
-        link_fleet(table, gate, chance, out);
+        link_fleet(table, gate, stellars, chance, out);
         return;
     }
     if let Some((ship, dude, ai_type, kind)) = dude_ship(table, gate, chance)
         && can_jump(kind)
     {
-        let state = hyperspace_entry(chance);
+        let jump_in = hyperspace_entry(chance);
+        let (state, entry) = arrival(dude.govt, jump_in, stellars, chance);
         out.push(NewShip {
             ship,
             govt: dude.govt,
             ai_type,
             lead: None,
             state,
-            jumping_in: true,
+            entry,
             aggression: aggression(chance),
             booty: dude.booty,
             info_types: dude.info_types,
@@ -632,7 +746,7 @@ fn specific_dude_ship(
             velocity: Vec2::ZERO,
             heading: 0.0,
         },
-        jumping_in: false,
+        entry: Entry::Placed,
         aggression,
         booty: dude.booty,
         info_types: dude.info_types,
@@ -738,7 +852,7 @@ fn glide_in(ship: NewShip, entry: Vec2, chance: &mut (impl Chance + ?Sized)) -> 
             velocity: facing(heading) * JUMP_IN_SPEED,
             heading,
         },
-        jumping_in: true,
+        entry: Entry::JumpingIn,
         ..ship
     }
 }
@@ -841,23 +955,30 @@ fn dude_ship<'a>(
 pub fn link_fleet(
     table: &SpawnTable,
     gate: Gate,
+    stellars: Stellars,
     chance: &mut (impl Chance + ?Sized),
     out: &mut Vec<NewShip>,
 ) {
     let slot = chance.below(FLEET_SLOTS) as i16;
     let id = FleetId(FIRST_FLEET_ID + slot);
     if table.link_fleets.contains(&id) {
-        fleet(table, id, gate, chance, out);
+        fleet(table, id, gate, stellars, None, chance, out);
     }
 }
 
-/// Fleet `id` jumping in, added to `out`: its lead, then its escorts whose
-/// ship type's `AppearOn` holds by `gate`; nothing, and no draw, when the
-/// fleet's own `AppearOn` does not.
+/// Fleet `id` coming in, added to `out`: its lead, out of one of
+/// `stellars` or by hyperspace, then its escorts whose ship type's
+/// `AppearOn` holds by `gate`, each near the lead by hyperspace or at the
+/// lead's gate; nothing, and no draw, when the fleet's own `AppearOn`
+/// does not. The lead flies as `lead_ai` when given, in place of its
+/// ship's `InherentAI` (`_HyperSpawnFleet`'s third argument,
+/// @0x41d5d-0x41d69); its escorts always fly as their own.
 pub fn fleet(
     table: &SpawnTable,
     id: FleetId,
     gate: Gate,
+    stellars: Stellars,
+    lead_ai: Option<AiType>,
     chance: &mut (impl Chance + ?Sized),
     out: &mut Vec<NewShip>,
 ) {
@@ -878,14 +999,17 @@ pub fn fleet(
         return;
     }
     let lead = out.len();
-    let state = hyperspace_entry(chance);
+    let (state, entry) = match emerge_stellar(record.govt, stellars.sites, stellars.govts, chance) {
+        Some(site) => emerging(site, chance),
+        None => (hyperspace_entry(chance), Entry::JumpingIn),
+    };
     out.push(NewShip {
         ship: lead_ship,
         govt: record.govt,
-        ai_type: AiType::from_raw(kind.inherent_ai),
+        ai_type: lead_ai.unwrap_or_else(|| AiType::from_raw(kind.inherent_ai)),
         lead: None,
         state,
-        jumping_in: true,
+        entry,
         aggression: aggression(chance),
         booty: 0,
         info_types: 0,
@@ -906,13 +1030,24 @@ pub fn fleet(
         };
         for _ in 0..count {
             let placed = escort_offset(&state, chance);
+            let (placed, escort_entry) = match entry {
+                Entry::Emerging { .. } => (
+                    state,
+                    Entry::Emerging {
+                        ticks_left: EMERGE_TICKS
+                            + ESCORT_EMERGE_EXTRA
+                            + chance.below(ESCORT_EMERGE_SPREAD),
+                    },
+                ),
+                Entry::Placed | Entry::JumpingIn => (placed, entry),
+            };
             out.push(NewShip {
                 ship: escort.ship,
                 govt: record.govt,
                 ai_type: AiType::from_raw(kind.inherent_ai),
                 lead: Some(lead),
                 state: placed,
-                jumping_in: true,
+                entry: escort_entry,
                 aggression: aggression(chance),
                 booty: 0,
                 info_types: 0,
@@ -938,8 +1073,9 @@ pub fn escort_count(min: i16, max: i16, chance: &mut (impl Chance + ?Sized)) -> 
     min + chance.below(max - min + 1)
 }
 
-/// Where a ship placed at setup starts: somewhere within 750 pixels of
-/// the centre each way, at rest, facing anywhere.
+/// Where in the system a ship placed at setup starts: somewhere within
+/// 750 pixels of the centre each way, facing anywhere, still at rest
+/// until [`at_speed`] sets it moving.
 pub fn in_system(chance: &mut (impl Chance + ?Sized)) -> ShipState {
     let x = spread(SPAWN_SPREAD, chance);
     let y = spread(SPAWN_SPREAD, chance);
@@ -947,6 +1083,57 @@ pub fn in_system(chance: &mut (impl Chance + ?Sized)) -> ShipState {
         position: Vec2::new(x, y),
         velocity: Vec2::ZERO,
         heading: chance.below(DEGREES) as f32,
+    }
+}
+
+/// A ship placed at setup, `state`, moving at `max_speed` along its
+/// heading, as `_AdjustedAccel(heading, max, max, &vel)` sets it from rest
+/// (@0x2ae4b): at rest when `max_speed` is 0.
+#[must_use]
+pub fn at_speed(state: ShipState, max_speed: f32) -> ShipState {
+    ShipState {
+        velocity: facing(state.heading) * max_speed,
+        ..state
+    }
+}
+
+/// Where a `düde` ship of `kind`, flying as `ai_type`, starts at setup
+/// (`_RandomShipSpawn` @0x3c0f3): a warship of no speed, when the system
+/// has a `first_stellar`, [`STATIONARY_DISTANCE`] from it at an angle
+/// drawn, at rest, facing anywhere (@0x3c254-0x3c324); any other ship
+/// [`in_system`], at its top speed ([`at_speed`]).
+pub fn dude_setup_state(
+    ai_type: AiType,
+    kind: &ShipKind,
+    first_stellar: Option<Vec2>,
+    chance: &mut (impl Chance + ?Sized),
+) -> ShipState {
+    let max_speed = kind.stats.handling.max_speed;
+    if ai_type == AiType::Warship
+        && max_speed == 0.0
+        && let Some(stellar) = first_stellar
+    {
+        let position = stellar + facing(chance.below(DEGREES) as f32) * STATIONARY_DISTANCE;
+        return ShipState {
+            position,
+            velocity: Vec2::ZERO,
+            heading: chance.below(DEGREES) as f32,
+        };
+    }
+    at_speed(in_system(chance), max_speed)
+}
+
+/// How fast `person` starts when setup places it, brought by a setup pass
+/// (`by_pass`) or by its Person slot: its top speed, but at rest when it
+/// is derelict and comes by its slot, or by a pass when `rules` take the
+/// other reading of [`RuleKey::DerelictSetupSpeed`](crate::RuleKey::DerelictSetupSpeed).
+fn person_setup_speed(person: &SpawnPerson, by_pass: bool, rules: &dyn PersonRules) -> f32 {
+    let at_rest =
+        person.derelict && (!by_pass || rules.derelict_setup_speed() == RuleSource::Bible);
+    if at_rest {
+        0.0
+    } else {
+        person.kind.stats.handling.max_speed
     }
 }
 
@@ -961,6 +1148,39 @@ pub fn hyperspace_entry(chance: &mut (impl Chance + ?Sized)) -> ShipState {
         velocity: facing(heading) * JUMP_IN_SPEED,
         heading,
     }
+}
+
+/// Where and how a ship of `govt` arriving alone comes in, its jump-in
+/// place `jump_in` drawn already, as `_HyperShipSpawn` draws it before
+/// the pick (@0x42a26, @0x42ac0): out of the gate among `stellars` that
+/// [`emerge_stellar`] picks, after [`EMERGE_TICKS`], or else from
+/// hyperspace at `jump_in`.
+fn arrival(
+    govt: Option<GovtId>,
+    jump_in: ShipState,
+    stellars: Stellars,
+    chance: &mut (impl Chance + ?Sized),
+) -> (ShipState, Entry) {
+    match emerge_stellar(govt, stellars.sites, stellars.govts, chance) {
+        Some(site) => emerging(site, chance),
+        None => (jump_in, Entry::JumpingIn),
+    }
+}
+
+/// A ship coming out of `site`: at its centre, at rest (the callers of
+/// `_AIMakeShipEmergeFromHyperGate`, @0x42ae4-0x42b0a, @0x41f34-0x41f64),
+/// heading its [`exit_heading`] rolled on `chance`, waiting
+/// [`EMERGE_TICKS`].
+fn emerging(site: &LandingSite, chance: &mut (impl Chance + ?Sized)) -> (ShipState, Entry) {
+    let state = ShipState {
+        position: site.position,
+        velocity: Vec2::ZERO,
+        heading: exit_heading(site.exit_angle, chance),
+    };
+    let entry = Entry::Emerging {
+        ticks_left: EMERGE_TICKS,
+    };
+    (state, entry)
 }
 
 /// Where an escort of a lead at `lead` starts: within 150 pixels of it
@@ -1137,7 +1357,16 @@ mod tests {
     #[test]
     fn a_setup_pass_drawing_a_person_spawns_nothing() {
         let mut chance = Draws::of(&[0]);
-        assert_eq!(initial(&one_pass(), &mut nobody(), &mut chance), []);
+        assert_eq!(
+            initial(
+                &one_pass(),
+                &mut nobody(),
+                None,
+                Stellars::NONE,
+                &mut chance
+            ),
+            []
+        );
         assert_eq!(chance.asked, [7]);
     }
 
@@ -1147,12 +1376,18 @@ mod tests {
         // escorts at (-150, -150) and (149, 149) from the lead, each ship's
         // aggression drawn after its place.
         let mut chance = Draws::of(&[6, 0, 13, 0, 2, 0, 0, 2, 299, 299, 2]);
-        let ships = initial(&one_pass(), &mut nobody(), &mut chance);
+        let ships = initial(
+            &one_pass(),
+            &mut nobody(),
+            None,
+            Stellars::NONE,
+            &mut chance,
+        );
         assert_eq!(chance.asked, [7, 7, 256, 360, 3, 300, 300, 3, 300, 300, 3]);
         let lead = ships[0];
         assert_eq!(
-            (lead.ship, lead.lead, lead.jumping_in),
-            (ShipId(200), None, true)
+            (lead.ship, lead.lead, lead.entry),
+            (ShipId(200), None, Entry::JumpingIn)
         );
         assert!(near(
             lead.state.position,
@@ -1178,20 +1413,43 @@ mod tests {
     fn only_a_draw_of_0_in_7_is_a_person_or_a_fleet() {
         // 1 is neither: a düde ship.
         let mut chance = Draws::of(&[1, 1, 0, 0, 0, 0, 0]);
-        assert_eq!(initial(&one_pass(), &mut nobody(), &mut chance).len(), 1);
+        assert_eq!(
+            initial(
+                &one_pass(),
+                &mut nobody(),
+                None,
+                Stellars::NONE,
+                &mut chance
+            )
+            .len(),
+            1
+        );
         assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
         let mut chance = Draws::of(&[0, 1, 1, 0, 0, 0]);
-        assert_eq!(arrivals(&table(), 0, &mut nobody(), &mut chance).len(), 1);
+        assert_eq!(
+            arrivals(&table(), 0, &mut nobody(), Stellars::NONE, &mut chance).len(),
+            1
+        );
         assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 3]);
     }
 
     #[test]
-    fn a_setup_pass_drawing_a_dude_ship_places_it_in_the_system_at_rest() {
-        // Not a person, not a fleet: düde 128, ship 200, at (-750, 749)
-        // facing 90.
+    fn a_setup_pass_drawing_a_dude_ship_starts_it_at_its_max_speed_along_its_heading() {
+        // Not a person, not a fleet: düde 128, ship 200 (FAST: 6 pixels a
+        // tick), at (-750, 749) facing 90.
         let mut chance = Draws::of(&[6, 6, 0, 0, 0, 1499, 90]);
-        let ships = initial(&one_pass(), &mut nobody(), &mut chance);
+        let ships = initial(
+            &one_pass(),
+            &mut nobody(),
+            None,
+            Stellars::NONE,
+            &mut chance,
+        );
         assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
+        assert!(
+            near(ships[0].state.velocity, Vec2::new(6.0, 0.0)),
+            "{ships:?}"
+        );
         assert_eq!(
             ships,
             [NewShip {
@@ -1201,10 +1459,10 @@ mod tests {
                 lead: None,
                 state: ShipState {
                     position: Vec2::new(-750.0, 749.0),
-                    velocity: Vec2::ZERO,
+                    velocity: ships[0].state.velocity,
                     heading: 90.0,
                 },
-                jumping_in: false,
+                entry: Entry::Placed,
                 aggression: 0,
                 booty: 0x0041,
                 info_types: 0x4005,
@@ -1224,10 +1482,20 @@ mod tests {
             avg_ships: 3,
             ..table()
         };
-        assert_eq!(initial(&three, &mut nobody(), &mut persons), []);
+        assert_eq!(
+            initial(&three, &mut nobody(), None, Stellars::NONE, &mut persons),
+            []
+        );
         assert_eq!(persons.asked, [7, 7, 7]);
         assert_eq!(
-            initial(&three, &mut nobody(), &mut crate::NeverFires).len(),
+            initial(
+                &three,
+                &mut nobody(),
+                None,
+                Stellars::NONE,
+                &mut crate::NeverFires
+            )
+            .len(),
             3
         );
         let none = SpawnTable {
@@ -1235,7 +1503,10 @@ mod tests {
             ..table()
         };
         let mut nothing = Draws::of(&[]);
-        assert_eq!(initial(&none, &mut nobody(), &mut nothing), []);
+        assert_eq!(
+            initial(&none, &mut nobody(), None, Stellars::NONE, &mut nothing),
+            []
+        );
         assert!(nothing.asked.is_empty());
     }
 
@@ -1243,33 +1514,58 @@ mod tests {
     fn a_dude_with_an_ai_type_gives_it_and_one_without_gives_the_ships() {
         let mut table = one_pass();
         let ship_201 = [6, 6, 0, 99, 0, 0, 0];
-        let ships = initial(&table, &mut nobody(), &mut Draws::of(&ship_201));
+        let ships = initial(
+            &table,
+            &mut nobody(),
+            None,
+            Stellars::NONE,
+            &mut Draws::of(&ship_201),
+        );
         assert_eq!(ships[0].ai_type, AiType::Warship, "201's InherentAI");
         table
             .dude_records
             .get_mut(&DudeId(128))
             .expect("düde")
             .ai_type = 4;
-        let ships = initial(&table, &mut nobody(), &mut Draws::of(&ship_201));
+        let ships = initial(
+            &table,
+            &mut nobody(),
+            None,
+            Stellars::NONE,
+            &mut Draws::of(&ship_201),
+        );
         assert_eq!(ships[0].ai_type, AiType::Interceptor, "the düde's AIType");
         table
             .dude_records
             .get_mut(&DudeId(128))
             .expect("düde")
             .ai_type = 1;
-        let ships = initial(&table, &mut nobody(), &mut Draws::of(&ship_201));
+        let ships = initial(
+            &table,
+            &mut nobody(),
+            None,
+            Stellars::NONE,
+            &mut Draws::of(&ship_201),
+        );
         assert_eq!(ships[0].ai_type, AiType::WimpyTrader, "1 is above 0");
     }
 
     #[test]
     fn a_dude_ship_carries_its_dudes_booty() {
         let ship_201 = [6, 6, 0, 99, 0, 0, 0];
-        let ships = initial(&one_pass(), &mut nobody(), &mut Draws::of(&ship_201));
+        let ships = initial(
+            &one_pass(),
+            &mut nobody(),
+            None,
+            Stellars::NONE,
+            &mut Draws::of(&ship_201),
+        );
         assert_eq!(ships[0].booty, 0x0041);
         let arrived = arrivals(
             &table(),
             1,
             &mut nobody(),
+            Stellars::NONE,
             &mut Draws::of(&[0, 6, 6, 0, 99, 90]),
         );
         assert_eq!(arrived[0].booty, 0x0041, "a düde ship jumping in too");
@@ -1281,6 +1577,7 @@ mod tests {
             &table(),
             0,
             &mut nobody(),
+            Stellars::NONE,
             &mut Draws::of(&[1, 29, 0, 0, 0, 2]),
         );
         assert_eq!(ships.len(), 4);
@@ -1290,12 +1587,19 @@ mod tests {
     #[test]
     fn a_dude_ship_carries_its_dudes_info_types() {
         let ship_201 = [6, 6, 0, 99, 0, 0, 0];
-        let ships = initial(&one_pass(), &mut nobody(), &mut Draws::of(&ship_201));
+        let ships = initial(
+            &one_pass(),
+            &mut nobody(),
+            None,
+            Stellars::NONE,
+            &mut Draws::of(&ship_201),
+        );
         assert_eq!(ships[0].info_types, 0x4005);
         let arrived = arrivals(
             &table(),
             1,
             &mut nobody(),
+            Stellars::NONE,
             &mut Draws::of(&[0, 6, 6, 0, 99, 90]),
         );
         assert_eq!(arrived[0].info_types, 0x4005, "a düde ship jumping in too");
@@ -1307,6 +1611,7 @@ mod tests {
             &table(),
             0,
             &mut nobody(),
+            Stellars::NONE,
             &mut Draws::of(&[1, 29, 0, 0, 0, 2]),
         );
         assert_eq!(ships.len(), 4);
@@ -1318,11 +1623,17 @@ mod tests {
         let mut table = one_pass();
         table.ships.remove(&ShipId(200));
         let mut chance = Draws::of(&[6, 6, 0, 0]);
-        assert_eq!(initial(&table, &mut nobody(), &mut chance), []);
+        assert_eq!(
+            initial(&table, &mut nobody(), None, Stellars::NONE, &mut chance),
+            []
+        );
         assert_eq!(chance.asked, [7, 7, 100, 100], "no placement drawn");
         table.dude_records.clear();
         let mut chance = Draws::of(&[6, 6, 0]);
-        assert_eq!(initial(&table, &mut nobody(), &mut chance), []);
+        assert_eq!(
+            initial(&table, &mut nobody(), None, Stellars::NONE, &mut chance),
+            []
+        );
         assert_eq!(chance.asked, [7, 7, 100]);
     }
 
@@ -1331,37 +1642,49 @@ mod tests {
     #[test]
     fn no_ship_arrives_in_a_system_holding_avg_ships() {
         let mut chance = Draws::of(&[0]);
-        assert_eq!(arrivals(&table(), 2, &mut nobody(), &mut chance), []);
-        assert_eq!(arrivals(&table(), 3, &mut nobody(), &mut chance), []);
+        assert_eq!(
+            arrivals(&table(), 2, &mut nobody(), Stellars::NONE, &mut chance),
+            []
+        );
+        assert_eq!(
+            arrivals(&table(), 3, &mut nobody(), Stellars::NONE, &mut chance),
+            []
+        );
         assert!(chance.asked.is_empty(), "nothing drawn");
     }
 
     #[test]
     fn two_in_500_ticks_bring_an_arrival() {
         let mut chance = Draws::of(&[2]);
-        assert_eq!(arrivals(&table(), 1, &mut nobody(), &mut chance), []);
+        assert_eq!(
+            arrivals(&table(), 1, &mut nobody(), Stellars::NONE, &mut chance),
+            []
+        );
         assert_eq!(chance.asked, [500]);
         let mut chance = Draws::of(&[499]);
-        assert_eq!(arrivals(&table(), 0, &mut nobody(), &mut chance), []);
+        assert_eq!(
+            arrivals(&table(), 0, &mut nobody(), Stellars::NONE, &mut chance),
+            []
+        );
     }
 
     #[test]
     fn on_0_a_dude_ship_jumps_in() {
         // 0, not a person, not a fleet, düde 128, ship 201, at angle 90.
         let mut chance = Draws::of(&[0, 6, 6, 0, 99, 90]);
-        let ships = arrivals(&table(), 1, &mut nobody(), &mut chance);
+        let ships = arrivals(&table(), 1, &mut nobody(), Stellars::NONE, &mut chance);
         assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 3]);
         assert_eq!(ships.len(), 1);
         let ship = ships[0];
         assert_eq!(
+            (ship.ship, ship.govt, ship.ai_type, ship.lead, ship.entry),
             (
-                ship.ship,
-                ship.govt,
-                ship.ai_type,
-                ship.lead,
-                ship.jumping_in
-            ),
-            (ShipId(201), Some(GovtId(130)), AiType::Warship, None, true)
+                ShipId(201),
+                Some(GovtId(130)),
+                AiType::Warship,
+                None,
+                Entry::JumpingIn
+            )
         );
         assert!(near(
             ship.state.position,
@@ -1372,14 +1695,20 @@ mod tests {
     #[test]
     fn on_0_a_person_or_a_linksyst_fleet_may_come_instead() {
         let mut person = Draws::of(&[0, 0]);
-        assert_eq!(arrivals(&table(), 0, &mut nobody(), &mut person), []);
+        assert_eq!(
+            arrivals(&table(), 0, &mut nobody(), Stellars::NONE, &mut person),
+            []
+        );
         assert_eq!(person.asked, [500, 7]);
         let mut linked = Draws::of(&[0, 6, 0, 13]);
-        let ships = arrivals(&table(), 0, &mut nobody(), &mut linked);
+        let ships = arrivals(&table(), 0, &mut nobody(), Stellars::NONE, &mut linked);
         assert_eq!(&linked.asked[..4], [500, 7, 7, 256]);
         assert_eq!(ships.len(), 3, "fleet 141: its lead and two escorts");
         let mut missed = Draws::of(&[0, 6, 0, 14]);
-        assert_eq!(arrivals(&table(), 0, &mut nobody(), &mut missed), []);
+        assert_eq!(
+            arrivals(&table(), 0, &mut nobody(), Stellars::NONE, &mut missed),
+            []
+        );
         assert_eq!(missed.asked, [500, 7, 7, 256]);
     }
 
@@ -1389,7 +1718,7 @@ mod tests {
         // angle 0, its lead's aggression, then Rand(3) = 2, so three
         // escorts.
         let mut chance = Draws::of(&[1, 29, 0, 0, 0, 2]);
-        let ships = arrivals(&table(), 0, &mut nobody(), &mut chance);
+        let ships = arrivals(&table(), 0, &mut nobody(), Stellars::NONE, &mut chance);
         assert_eq!(&chance.asked[..6], [500, 100, 30, 360, 3, 3]);
         assert_eq!(
             chance.asked.len(),
@@ -1407,7 +1736,7 @@ mod tests {
                 (escort.ship, escort.govt, escort.ai_type, escort.lead),
                 (ShipId(202), Some(GovtId(131)), AiType::Interceptor, Some(0))
             );
-            assert!(escort.jumping_in);
+            assert_eq!(escort.entry, Entry::JumpingIn);
         }
     }
 
@@ -1415,11 +1744,14 @@ mod tests {
     fn on_1_a_percentage_roll_above_the_odds_falls_through_to_0s_case() {
         // Rand(100) + 1 = 31, above 30: falls through, and a person comes.
         let mut chance = Draws::of(&[1, 30, 0]);
-        assert_eq!(arrivals(&table(), 0, &mut nobody(), &mut chance), []);
+        assert_eq!(
+            arrivals(&table(), 0, &mut nobody(), Stellars::NONE, &mut chance),
+            []
+        );
         assert_eq!(chance.asked, [500, 100, 7]);
         // Through to a düde ship.
         let mut chance = Draws::of(&[1, 30, 6, 6, 0, 0, 0]);
-        let ships = arrivals(&table(), 0, &mut nobody(), &mut chance);
+        let ships = arrivals(&table(), 0, &mut nobody(), Stellars::NONE, &mut chance);
         assert_eq!(chance.asked, [500, 100, 7, 7, 100, 100, 360, 3]);
         assert_eq!(ships.len(), 1);
     }
@@ -1431,7 +1763,10 @@ mod tests {
             ..table()
         };
         let mut chance = Draws::of(&[1, 0]);
-        assert_eq!(arrivals(&table, 0, &mut nobody(), &mut chance), []);
+        assert_eq!(
+            arrivals(&table, 0, &mut nobody(), Stellars::NONE, &mut chance),
+            []
+        );
         assert_eq!(chance.asked, [500, 7]);
     }
 
@@ -1443,10 +1778,16 @@ mod tests {
             ..table()
         };
         let mut chance = Draws::of(&[0]);
-        assert_eq!(arrivals(&table, 0, &mut nobody(), &mut chance), []);
+        assert_eq!(
+            arrivals(&table, 0, &mut nobody(), Stellars::NONE, &mut chance),
+            []
+        );
         assert_eq!(chance.asked, [500]);
         let mut chance = Draws::of(&[1, 30]);
-        assert_eq!(arrivals(&table, 0, &mut nobody(), &mut chance), []);
+        assert_eq!(
+            arrivals(&table, 0, &mut nobody(), Stellars::NONE, &mut chance),
+            []
+        );
         assert_eq!(chance.asked, [500, 100]);
     }
 
@@ -1459,7 +1800,10 @@ mod tests {
             .expect("düde")
             .ships = vec![(ShipId(203), 1)];
         let mut chance = Draws::of(&[0, 6, 6, 0, 0]);
-        assert_eq!(arrivals(&table, 0, &mut nobody(), &mut chance), []);
+        assert_eq!(
+            arrivals(&table, 0, &mut nobody(), Stellars::NONE, &mut chance),
+            []
+        );
         assert_eq!(chance.asked, [500, 7, 7, 100, 1], "no placement drawn");
         // Nor a fleet it leads.
         table
@@ -1467,7 +1811,15 @@ mod tests {
             .insert(FleetId(141), fleet_record(141, 203, &[(202, 2, 2)]));
         let mut out = Vec::new();
         let mut chance = Draws::of(&[]);
-        fleet(&table, FleetId(141), Gate::FRESH, &mut chance, &mut out);
+        fleet(
+            &table,
+            FleetId(141),
+            Gate::FRESH,
+            Stellars::NONE,
+            None,
+            &mut chance,
+            &mut out,
+        );
         assert_eq!(out, []);
         assert!(chance.asked.is_empty());
         // Nor such an escort, though its lead comes.
@@ -1476,7 +1828,15 @@ mod tests {
             fleet_record(141, 200, &[(203, 2, 2), (999, 1, 1)]),
         );
         let mut chance = Draws::of(&[]);
-        fleet(&table, FleetId(141), Gate::FRESH, &mut chance, &mut out);
+        fleet(
+            &table,
+            FleetId(141),
+            Gate::FRESH,
+            Stellars::NONE,
+            None,
+            &mut chance,
+            &mut out,
+        );
         assert_eq!(out.len(), 1);
         assert_eq!(chance.asked, [360, 3]);
     }
@@ -1489,6 +1849,8 @@ mod tests {
             &table,
             FleetId(150),
             Gate::FRESH,
+            Stellars::NONE,
+            None,
             &mut Draws::of(&[]),
             &mut out,
         );
@@ -1499,6 +1861,8 @@ mod tests {
             &table,
             FleetId(141),
             Gate::FRESH,
+            Stellars::NONE,
+            None,
             &mut Draws::of(&[]),
             &mut out,
         );
@@ -1511,13 +1875,13 @@ mod tests {
     fn the_linksyst_roll_hits_one_slot_in_256() {
         let mut out = Vec::new();
         let mut hit = Draws::of(&[13]);
-        link_fleet(&table(), Gate::FRESH, &mut hit, &mut out);
+        link_fleet(&table(), Gate::FRESH, Stellars::NONE, &mut hit, &mut out);
         assert_eq!(out.len(), 3, "fleet 141");
         assert_eq!(hit.asked[0], 256);
         let mut out = Vec::new();
         for slot in [12, 0, 255] {
             let mut miss = Draws::of(&[slot]);
-            link_fleet(&table(), Gate::FRESH, &mut miss, &mut out);
+            link_fleet(&table(), Gate::FRESH, Stellars::NONE, &mut miss, &mut out);
             assert_eq!(miss.asked, [256], "{slot}");
         }
         assert_eq!(out, [], "fleet 140 is named, not linked");
@@ -1525,11 +1889,21 @@ mod tests {
 
     #[test]
     fn a_fleets_escorts_follow_the_index_of_their_lead_among_the_ships_added() {
-        let mut out = vec![initial(&one_pass(), &mut nobody(), &mut crate::NeverFires)[0]];
+        let mut out = vec![
+            initial(
+                &one_pass(),
+                &mut nobody(),
+                None,
+                Stellars::NONE,
+                &mut crate::NeverFires,
+            )[0],
+        ];
         fleet(
             &table(),
             FleetId(141),
             Gate::FRESH,
+            Stellars::NONE,
+            None,
             &mut crate::NeverFires,
             &mut out,
         );
@@ -1538,6 +1912,42 @@ mod tests {
             out.iter().map(|ship| ship.lead).collect::<Vec<_>>(),
             [None, None, Some(1), Some(1)]
         );
+    }
+
+    #[test]
+    fn a_lead_ai_given_flies_the_lead_so_and_leaves_its_escorts_their_own() {
+        let flown = |lead_ai| {
+            let mut out = Vec::new();
+            let mut chance = Draws::of(&[]);
+            fleet(
+                &table(),
+                FleetId(141),
+                Gate::FRESH,
+                Stellars::NONE,
+                lead_ai,
+                &mut chance,
+                &mut out,
+            );
+            (
+                out.iter().map(|ship| ship.ai_type).collect::<Vec<_>>(),
+                chance.asked,
+            )
+        };
+        let (own, own_draws) = flown(None);
+        assert_eq!(
+            own,
+            [
+                AiType::BraveTrader,
+                AiType::Interceptor,
+                AiType::Interceptor
+            ]
+        );
+        let (led, led_draws) = flown(Some(AiType::Warship));
+        assert_eq!(
+            led,
+            [AiType::Warship, AiType::Interceptor, AiType::Interceptor]
+        );
+        assert_eq!(led_draws, own_draws, "the same draws");
     }
 
     #[test]
@@ -1588,7 +1998,7 @@ mod tests {
         // AppearOn holds: Rand(50), and ship 200 (@0x662b, @0x66c7).
         let gated = appearing(one_pass(), 201, "b7");
         let mut chance = Draws::of(&[6, 6, 0, 49, 0, 0, 0]);
-        let ships = initial(&gated, &mut refusing_7(), &mut chance);
+        let ships = initial(&gated, &mut refusing_7(), None, Stellars::NONE, &mut chance);
         assert_eq!(chance.asked, [7, 7, 100, 50, 1500, 1500, 360, 3]);
         assert_eq!(
             ships.iter().map(|ship| ship.ship).collect::<Vec<_>>(),
@@ -1597,7 +2007,7 @@ mod tests {
         // On arrival too.
         let gated = appearing(table(), 201, "b7");
         let mut chance = Draws::of(&[0, 6, 6, 0, 49, 0, 0]);
-        let ships = arrivals(&gated, 0, &mut refusing_7(), &mut chance);
+        let ships = arrivals(&gated, 0, &mut refusing_7(), Stellars::NONE, &mut chance);
         assert_eq!(chance.asked, [500, 7, 7, 100, 50, 360, 3]);
         assert_eq!(
             ships.iter().map(|ship| ship.ship).collect::<Vec<_>>(),
@@ -1606,7 +2016,7 @@ mod tests {
         // Under a new pilot's bits, bit 7 is clear too.
         let gated = appearing(one_pass(), 201, "b7");
         let mut chance = Draws::of(&[6, 6, 0, 49, 0, 0, 0]);
-        initial(&gated, &mut nobody(), &mut chance);
+        initial(&gated, &mut nobody(), None, Stellars::NONE, &mut chance);
         assert_eq!(chance.asked[3], 50);
     }
 
@@ -1614,11 +2024,17 @@ mod tests {
     fn a_dude_whose_every_ship_type_is_refused_brings_nothing() {
         let gated = appearing(appearing(one_pass(), 200, "b7"), 201, "!b7");
         let mut chance = Draws::of(&[6, 6, 0]);
-        assert_eq!(initial(&gated, &mut refusing_7(), &mut chance), []);
+        assert_eq!(
+            initial(&gated, &mut refusing_7(), None, Stellars::NONE, &mut chance),
+            []
+        );
         assert_eq!(chance.asked, [7, 7, 100], "no ship drawn");
         let gated = appearing(appearing(table(), 200, "b7"), 201, "b7");
         let mut chance = Draws::of(&[0, 6, 6, 0]);
-        assert_eq!(arrivals(&gated, 0, &mut refusing_7(), &mut chance), []);
+        assert_eq!(
+            arrivals(&gated, 0, &mut refusing_7(), Stellars::NONE, &mut chance),
+            []
+        );
         assert_eq!(chance.asked, [500, 7, 7, 100]);
     }
 
@@ -1626,7 +2042,7 @@ mod tests {
     fn a_dude_ship_type_with_a_malformed_appear_on_never_comes() {
         let gated = appearing(one_pass(), 200, "b1 &");
         let mut chance = Draws::of(&[6, 6, 0, 0, 0, 0, 0]);
-        let ships = initial(&gated, &mut allowing(), &mut chance);
+        let ships = initial(&gated, &mut allowing(), None, Stellars::NONE, &mut chance);
         assert_eq!(chance.asked[3], 50);
         assert_eq!(ships[0].ship, ShipId(201));
     }
@@ -1637,7 +2053,15 @@ mod tests {
         let gated = appearing(table(), 200, "b7");
         let mut out = Vec::new();
         let gate = refusing_7().world.gate();
-        fleet(&gated, FleetId(141), gate, &mut crate::NeverFires, &mut out);
+        fleet(
+            &gated,
+            FleetId(141),
+            gate,
+            Stellars::NONE,
+            None,
+            &mut crate::NeverFires,
+            &mut out,
+        );
         assert_eq!(out.len(), 3, "the lead and its two escorts");
     }
 
@@ -1649,7 +2073,15 @@ mod tests {
         let gate = refusing_7().world.gate();
         let mut out = Vec::new();
         let mut chance = Draws::of(&[0, 0, 2]);
-        fleet(&gated, FleetId(140), gate, &mut chance, &mut out);
+        fleet(
+            &gated,
+            FleetId(140),
+            gate,
+            Stellars::NONE,
+            None,
+            &mut chance,
+            &mut out,
+        );
         assert_eq!(chance.asked, [360, 3, 3], "the lead, then the count");
         assert_eq!(
             out.iter().map(|ship| ship.ship).collect::<Vec<_>>(),
@@ -1661,6 +2093,8 @@ mod tests {
             &malformed,
             FleetId(140),
             allowing().world.gate(),
+            Stellars::NONE,
+            None,
             &mut crate::NeverFires,
             &mut out,
         );
@@ -1686,18 +2120,30 @@ mod tests {
             &gated,
             FleetId(141),
             refusing_7().world.gate(),
+            Stellars::NONE,
+            None,
             &mut chance,
             &mut out,
         );
         assert_eq!(out, []);
         assert!(chance.asked.is_empty());
-        fleet(&gated, FleetId(141), Gate::FRESH, &mut chance, &mut out);
+        fleet(
+            &gated,
+            FleetId(141),
+            Gate::FRESH,
+            Stellars::NONE,
+            None,
+            &mut chance,
+            &mut out,
+        );
         assert_eq!(out, [], "bit 7 is clear");
         let malformed = fleet_appearing(gated, 141, "b1 &");
         fleet(
             &malformed,
             FleetId(141),
             allowing().world.gate(),
+            Stellars::NONE,
+            None,
             &mut chance,
             &mut out,
         );
@@ -1710,7 +2156,13 @@ mod tests {
         let gated = fleet_appearing(table(), 141, "b7");
         let mut out = Vec::new();
         let mut hit = Draws::of(&[13]);
-        link_fleet(&gated, refusing_7().world.gate(), &mut hit, &mut out);
+        link_fleet(
+            &gated,
+            refusing_7().world.gate(),
+            Stellars::NONE,
+            &mut hit,
+            &mut out,
+        );
         assert_eq!(hit.asked, [256]);
         assert_eq!(out, []);
         // At setup, the pass brings nothing more.
@@ -1722,6 +2174,8 @@ mod tests {
                     ..gated
                 },
                 &mut refusing_7(),
+                None,
+                Stellars::NONE,
                 &mut chance
             ),
             []
@@ -1736,7 +2190,7 @@ mod tests {
         let mut gated = fleet_appearing(table(), 140, "b7");
         gated.dude_fleets.push((FleetId(141), 20));
         let mut chance = Draws::of(&[1, 49, 19, 0, 0]);
-        let ships = arrivals(&gated, 0, &mut refusing_7(), &mut chance);
+        let ships = arrivals(&gated, 0, &mut refusing_7(), Stellars::NONE, &mut chance);
         assert_eq!(&chance.asked[..4], [500, 100, 20, 360]);
         assert_eq!(ships[0].ship, ShipId(200), "fleet 141's lead");
     }
@@ -1746,12 +2200,15 @@ mod tests {
         // `_EnterMoreShips` goes on to a düde when no fleet is picked.
         let gated = fleet_appearing(table(), 140, "b7");
         let mut chance = Draws::of(&[1, 0, 6, 6, 0, 0, 0]);
-        let ships = arrivals(&gated, 0, &mut refusing_7(), &mut chance);
+        let ships = arrivals(&gated, 0, &mut refusing_7(), Stellars::NONE, &mut chance);
         assert_eq!(chance.asked, [500, 100, 7, 7, 100, 100, 360, 3]);
         assert_eq!(ships.len(), 1, "a düde ship");
         let malformed = fleet_appearing(gated, 140, "b1 &");
         let mut chance = Draws::of(&[1, 0, 0]);
-        assert_eq!(arrivals(&malformed, 0, &mut allowing(), &mut chance), []);
+        assert_eq!(
+            arrivals(&malformed, 0, &mut allowing(), Stellars::NONE, &mut chance),
+            []
+        );
         assert_eq!(chance.asked, [500, 100, 7]);
         // A named fleet with no record is not picked either.
         let unread = SpawnTable {
@@ -1759,7 +2216,10 @@ mod tests {
             ..table()
         };
         let mut chance = Draws::of(&[1, 0, 0]);
-        assert_eq!(arrivals(&unread, 0, &mut nobody(), &mut chance), []);
+        assert_eq!(
+            arrivals(&unread, 0, &mut nobody(), Stellars::NONE, &mut chance),
+            []
+        );
         assert_eq!(chance.asked, [500, 100, 7]);
     }
 
@@ -1770,12 +2230,18 @@ mod tests {
         for (draw, aggression) in [(0, 2), (1, 3), (2, 0)] {
             // A düde ship placed at setup.
             let mut chance = Draws::of(&[6, 6, 0, 0, 0, 0, 0, draw]);
-            let ships = initial(&one_pass(), &mut nobody(), &mut chance);
+            let ships = initial(
+                &one_pass(),
+                &mut nobody(),
+                None,
+                Stellars::NONE,
+                &mut chance,
+            );
             assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
             assert_eq!(ships[0].aggression, aggression, "{draw}");
             // One jumping in.
             let mut chance = Draws::of(&[0, 6, 6, 0, 0, 0, draw]);
-            let ships = arrivals(&table(), 0, &mut nobody(), &mut chance);
+            let ships = arrivals(&table(), 0, &mut nobody(), Stellars::NONE, &mut chance);
             assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 3]);
             assert_eq!(ships[0].aggression, aggression, "{draw}");
         }
@@ -1788,12 +2254,182 @@ mod tests {
         // escorts, each placed and then its aggression drawn (0, then 2).
         let mut out = Vec::new();
         let mut chance = Draws::of(&[0, 1, 150, 150, 2, 150, 150, 0]);
-        fleet(&table(), FleetId(141), Gate::FRESH, &mut chance, &mut out);
+        fleet(
+            &table(),
+            FleetId(141),
+            Gate::FRESH,
+            Stellars::NONE,
+            None,
+            &mut chance,
+            &mut out,
+        );
         assert_eq!(chance.asked, [360, 3, 300, 300, 3, 300, 300, 3]);
         assert_eq!(
             out.iter().map(|ship| ship.aggression).collect::<Vec<_>>(),
             [3, 0, 2]
         );
+    }
+
+    // Stationary warships.
+
+    /// The fields of a ship of no speed.
+    const STILL: ShipFields = ShipFields { speed: 0, ..FAST };
+
+    /// Where the system's first stellar is in these tests.
+    const FIRST_STELLAR: Vec2 = Vec2::new(300.0, -200.0);
+
+    /// [`one_pass`] with ship 201 (`InherentAI` 3, a warship) of no speed.
+    fn still_warship() -> SpawnTable {
+        let mut table = one_pass();
+        table.ships.insert(ShipId(201), kind(3, STILL));
+        table
+    }
+
+    #[test]
+    fn a_warship_of_no_speed_is_placed_100_from_the_first_stellar_at_rest() {
+        // Not a person, not a fleet: düde 128, ship 201, at angle 90 from
+        // the stellar, facing 45, of aggression 3.
+        let mut chance = Draws::of(&[6, 6, 0, 99, 90, 45, 1]);
+        let ships = initial(
+            &still_warship(),
+            &mut nobody(),
+            Some(FIRST_STELLAR),
+            Stellars::NONE,
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [7, 7, 100, 100, 360, 360, 3]);
+        let ship = ships[0];
+        assert_eq!(
+            (ship.ship, ship.ai_type, ship.aggression),
+            (ShipId(201), AiType::Warship, 3)
+        );
+        assert!(
+            near(ship.state.position, FIRST_STELLAR + Vec2::new(100.0, 0.0)),
+            "{ship:?}"
+        );
+        assert!(((ship.state.position - FIRST_STELLAR).length() - 100.0).abs() < 1e-3);
+        assert_eq!(
+            (ship.state.velocity, ship.state.heading),
+            (Vec2::ZERO, 45.0)
+        );
+        let mut chance = Draws::of(&[6, 6, 0, 99, 180, 0, 0]);
+        let ships = initial(
+            &still_warship(),
+            &mut nobody(),
+            Some(FIRST_STELLAR),
+            Stellars::NONE,
+            &mut chance,
+        );
+        assert!(
+            near(
+                ships[0].state.position,
+                FIRST_STELLAR + Vec2::new(0.0, 100.0)
+            ),
+            "{ships:?}"
+        );
+    }
+
+    #[test]
+    fn with_no_first_stellar_a_warship_of_no_speed_is_placed_in_the_box() {
+        let mut chance = Draws::of(&[6, 6, 0, 99, 0, 1499, 45, 0]);
+        let ships = initial(
+            &still_warship(),
+            &mut nobody(),
+            None,
+            Stellars::NONE,
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
+        assert_eq!(ships[0].state.position, Vec2::new(-750.0, 749.0));
+        assert_eq!(ships[0].state.velocity, Vec2::ZERO);
+    }
+
+    #[test]
+    fn a_moving_warship_or_a_still_trader_is_placed_in_the_box() {
+        // Ship 201 at its top speed, facing 90.
+        let mut chance = Draws::of(&[6, 6, 0, 99, 0, 1499, 90, 0]);
+        let ships = initial(
+            &one_pass(),
+            &mut nobody(),
+            Some(FIRST_STELLAR),
+            Stellars::NONE,
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
+        assert_eq!(ships[0].state.position, Vec2::new(-750.0, 749.0));
+        assert!(near(ships[0].state.velocity, Vec2::new(6.0, 0.0)));
+        // Ship 200, a brave trader (`InherentAI` 2) of no speed.
+        let mut table = one_pass();
+        table.ships.insert(ShipId(200), kind(2, STILL));
+        let mut chance = Draws::of(&[6, 6, 0, 0, 0, 1499, 90, 0]);
+        let ships = initial(
+            &table,
+            &mut nobody(),
+            Some(FIRST_STELLAR),
+            Stellars::NONE,
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
+        assert_eq!(ships[0].state.position, Vec2::new(-750.0, 749.0));
+    }
+
+    #[test]
+    fn a_dude_of_ai_type_3_makes_a_still_ship_a_stationary_warship() {
+        let mut table = one_pass();
+        table.ships.insert(ShipId(200), kind(2, STILL));
+        table
+            .dude_records
+            .get_mut(&DudeId(128))
+            .expect("there")
+            .ai_type = 3;
+        let mut chance = Draws::of(&[6, 6, 0, 0, 90, 45, 0]);
+        let ships = initial(
+            &table,
+            &mut nobody(),
+            Some(FIRST_STELLAR),
+            Stellars::NONE,
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [7, 7, 100, 100, 360, 360, 3]);
+        assert!(near(
+            ships[0].state.position,
+            FIRST_STELLAR + Vec2::new(100.0, 0.0)
+        ));
+    }
+
+    #[test]
+    fn a_person_is_never_placed_by_the_first_stellar() {
+        let mut table = peopled();
+        for person in table.persons.values_mut() {
+            person.kind = kind(3, STILL);
+        }
+        // Rolled in a pass.
+        let mut chance = Draws::of(&[0, 382, 0, 1499, 90, 99]);
+        let ships = initial(
+            &table,
+            &mut nobody(),
+            Some(FIRST_STELLAR),
+            Stellars::NONE,
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [7, 1022, 1500, 1500, 360, 100]);
+        assert_eq!(ships[0].ai_type, AiType::Warship);
+        assert_eq!(ships[0].state.position, Vec2::new(-750.0, 749.0));
+        // In its slot.
+        let slots = SpawnTable {
+            avg_ships: 0,
+            ..table
+        };
+        let mut chance = Draws::of(&[49, 0, 1499, 90]);
+        let ships = initial(
+            &slots,
+            &mut nobody(),
+            Some(FIRST_STELLAR),
+            Stellars::NONE,
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [100, 1500, 1500, 360]);
+        assert_eq!(ships[0].state.position, Vec2::new(-750.0, 749.0));
     }
 
     // Placement.
@@ -1806,6 +2442,24 @@ mod tests {
         let state = in_system(&mut Draws::of(&[1499, 750, 359]));
         assert_eq!(state.position, Vec2::new(749.0, 0.0));
         assert_eq!(state.heading, 359.0);
+    }
+
+    #[test]
+    fn a_setup_ship_moves_at_its_top_speed_along_its_heading() {
+        let placed = |heading| ShipState {
+            position: Vec2::new(10.0, -20.0),
+            velocity: Vec2::ZERO,
+            heading,
+        };
+        let east = at_speed(placed(90.0), 6.0);
+        assert!(near(east.velocity, Vec2::new(6.0, 0.0)), "{east:?}");
+        assert_eq!(
+            (east.position, east.heading),
+            (Vec2::new(10.0, -20.0), 90.0)
+        );
+        let south = at_speed(placed(180.0), 2.5);
+        assert!(near(south.velocity, Vec2::new(0.0, 2.5)), "{south:?}");
+        assert_eq!(at_speed(placed(37.0), 0.0).velocity, Vec2::ZERO);
     }
 
     #[test]
@@ -1896,7 +2550,13 @@ mod tests {
     /// bounds asked.
     fn set_up(table: &SpawnTable, world: PersonWorld, draws: &[u32]) -> (Vec<NewShip>, Vec<u32>) {
         let mut chance = Draws::of(draws);
-        let ships = initial(table, &mut PersonDraw::new(world), &mut chance);
+        let ships = initial(
+            table,
+            &mut PersonDraw::new(world),
+            None,
+            Stellars::NONE,
+            &mut chance,
+        );
         (ships, chance.asked)
     }
 
@@ -1915,6 +2575,10 @@ mod tests {
             [7, 1022, 1500, 1500, 360, 100],
             "no aggression drawn"
         );
+        assert!(
+            near(ships[0].state.velocity, Vec2::new(6.0, 0.0)),
+            "{ships:?}"
+        );
         assert_eq!(
             ships,
             [NewShip {
@@ -1924,10 +2588,10 @@ mod tests {
                 lead: None,
                 state: ShipState {
                     position: Vec2::new(-750.0, 749.0),
-                    velocity: Vec2::ZERO,
+                    velocity: ships[0].state.velocity,
                     heading: 90.0,
                 },
-                jumping_in: false,
+                entry: Entry::Placed,
                 aggression: 4,
                 booty: 0,
                 info_types: 0,
@@ -2026,9 +2690,75 @@ mod tests {
         assert_eq!(asked, [100, 1500, 1500, 360]);
         assert_eq!(persons_of(&ships), [Some(600)], "linked or not");
         assert_eq!(ships[0].aggression, 1);
-        assert!(!ships[0].jumping_in);
+        assert_eq!(ships[0].entry, Entry::Placed);
         let (ships, asked) = set_up(&none, PersonWorld::NONE, &[50]);
         assert_eq!((ships.len(), asked), (0, vec![100]));
+    }
+
+    #[test]
+    fn a_person_at_setup_starts_at_its_own_ships_top_speed_along_its_heading() {
+        let mut table = peopled();
+        for id in [510, 600] {
+            let slower = ShipFields { speed: 250, ..FAST };
+            table.persons.get_mut(&PersonId(id)).expect("there").kind = kind(3, slower);
+        }
+        // Rolled in a pass, facing 90.
+        let (ships, _) = set_up(&table, PersonWorld::NONE, &[0, 382, 0, 1499, 90, 99]);
+        assert_eq!(persons_of(&ships), [Some(510)]);
+        assert!(
+            near(ships[0].state.velocity, Vec2::new(2.5, 0.0)),
+            "{ships:?}"
+        );
+        // In its slot, facing 180.
+        let none = SpawnTable {
+            avg_ships: 0,
+            ..table
+        };
+        let (ships, _) = set_up(&none, PersonWorld::NONE, &[49, 0, 0, 180]);
+        assert_eq!(persons_of(&ships), [Some(600)]);
+        assert!(
+            near(ships[0].state.velocity, Vec2::new(0.0, 2.5)),
+            "{ships:?}"
+        );
+    }
+
+    /// The velocity [`peopled`]'s persons, derelict or not, start at in
+    /// `world`: 510 brought by a pass facing 90, and 600 by its slot
+    /// facing 180.
+    fn setup_velocities(derelict: bool, world: PersonWorld) -> (Vec2, Vec2) {
+        let mut table = peopled();
+        for person in table.persons.values_mut() {
+            person.derelict = derelict;
+        }
+        let (pass, _) = set_up(&table, world, &[0, 382, 0, 1499, 90, 99]);
+        assert_eq!(persons_of(&pass), [Some(510)]);
+        let slots = SpawnTable {
+            avg_ships: 0,
+            ..table
+        };
+        let (slot, _) = set_up(&slots, world, &[49, 0, 0, 180]);
+        assert_eq!(persons_of(&slot), [Some(600)]);
+        (pass[0].state.velocity, slot[0].state.velocity)
+    }
+
+    #[test]
+    fn by_the_engine_a_derelict_starts_at_speed_from_a_pass_and_at_rest_from_its_slot() {
+        let (pass, slot) = setup_velocities(true, PersonWorld::NONE);
+        assert!(near(pass, Vec2::new(6.0, 0.0)), "{pass:?}");
+        assert_eq!(slot, Vec2::ZERO);
+    }
+
+    #[test]
+    fn by_the_other_reading_a_derelict_starts_at_rest_either_way() {
+        let rules = by(RuleKey::DerelictSetupSpeed);
+        let world = PersonWorld {
+            rules: &rules,
+            ..PersonWorld::NONE
+        };
+        assert_eq!(setup_velocities(true, world), (Vec2::ZERO, Vec2::ZERO));
+        let (pass, slot) = setup_velocities(false, world);
+        assert!(near(pass, Vec2::new(6.0, 0.0)), "{pass:?}");
+        assert!(near(slot, Vec2::new(0.0, 6.0)), "not derelict: {slot:?}");
     }
 
     #[test]
@@ -2072,7 +2802,10 @@ mod tests {
         let mut draw = PersonDraw::new(PersonWorld::NONE);
         draw.here.insert("Person 600".to_owned());
         let mut chance = Draws::of(&[0]);
-        assert_eq!(initial(&none, &mut draw, &mut chance), []);
+        assert_eq!(
+            initial(&none, &mut draw, None, Stellars::NONE, &mut chance),
+            []
+        );
         assert_eq!(chance.asked, [100]);
     }
 
@@ -2080,10 +2813,10 @@ mod tests {
     fn a_person_arriving_jumps_in_from_hyperspace() {
         let mut draw = PersonDraw::new(PersonWorld::NONE);
         let mut chance = Draws::of(&[0, 0, 382, 90]);
-        let ships = arrivals(&peopled(), 0, &mut draw, &mut chance);
+        let ships = arrivals(&peopled(), 0, &mut draw, Stellars::NONE, &mut chance);
         assert_eq!(chance.asked, [500, 7, 1022, 360], "no aggression drawn");
         assert_eq!(persons_of(&ships), [Some(510)]);
-        assert!(ships[0].jumping_in);
+        assert_eq!(ships[0].entry, Entry::JumpingIn);
         assert_eq!(ships[0].aggression, 4);
         assert!(near(
             ships[0].state.position,
@@ -2091,7 +2824,10 @@ mod tests {
         ));
         assert!(draw.here.contains("Person 510"), "now here");
         let mut chance = Draws::of(&[0, 0, 381]);
-        assert_eq!(arrivals(&peopled(), 0, &mut nobody(), &mut chance), []);
+        assert_eq!(
+            arrivals(&peopled(), 0, &mut nobody(), Stellars::NONE, &mut chance),
+            []
+        );
         assert_eq!(chance.asked, [500, 7, 1022], "nothing arrives");
     }
 
@@ -2276,7 +3012,7 @@ mod tests {
                     velocity: Vec2::ZERO,
                     heading: 0.0,
                 },
-                jumping_in: false,
+                entry: Entry::Placed,
                 aggression: 2,
                 booty: 0x0002,
                 info_types: 0x0001,
@@ -2612,7 +3348,7 @@ mod tests {
         assert!(near(ships[1].state.position, entry));
         assert_eq!((ships[0].ship, ships[1].ship), (ShipId(202), ShipId(203)));
         for ship in &ships {
-            assert!(ship.jumping_in);
+            assert_eq!(ship.entry, Entry::JumpingIn);
             let inward = Vec2::ZERO - ship.state.position;
             assert!(near(
                 ship.state.velocity,
@@ -2700,7 +3436,7 @@ mod tests {
         assert!(near(ships[1].state.position, entry));
         assert_eq!((ships[0].ship, ships[1].ship), (ShipId(202), ShipId(203)));
         for ship in &ships {
-            assert!(ship.jumping_in);
+            assert_eq!(ship.entry, Entry::JumpingIn);
             let inward = Vec2::ZERO - ship.state.position;
             assert!(near(
                 ship.state.velocity,
@@ -2819,7 +3555,7 @@ mod tests {
                 ai_type: AiType::Interceptor,
                 lead: None,
                 state: PERSON_AT,
-                jumping_in: false,
+                entry: Entry::Placed,
                 aggression: 2,
                 booty: 0x0002,
                 info_types: 0x0001,
@@ -2856,7 +3592,7 @@ mod tests {
         .expect("a ship");
         assert_eq!(chance.asked, [3, 1500, 1500], "no pick, AppearOn unasked");
         assert_eq!(ship.ship, ShipId(202));
-        assert_eq!((ship.state, ship.jumping_in), (PERSON_AT, false));
+        assert_eq!((ship.state, ship.entry), (PERSON_AT, Entry::Placed));
         assert_eq!(
             ship.mission,
             Some(MissionMark {
@@ -2903,5 +3639,332 @@ mod tests {
             &mut chance,
         );
         assert_eq!((ship, chance.asked), (None, vec![3, 1500, 1500]));
+    }
+
+    /// A planet at the centre, then a hypergate at (300, -400) heading
+    /// ships out on `exit_angle`.
+    fn gated(exit_angle: i16) -> [LandingSite; 2] {
+        [
+            crate::testkit::planet(128, 0.0, 0.0),
+            LandingSite {
+                flags2: crate::gate::HYPERGATE,
+                exit_angle,
+                ..crate::testkit::planet(129, 300.0, -400.0)
+            },
+        ]
+    }
+
+    /// No government with a `Flags2` switch, and none at war.
+    static PLAIN: Governments = Governments::empty();
+
+    fn among(sites: &[LandingSite]) -> Stellars<'_> {
+        Stellars {
+            sites,
+            govts: &PLAIN,
+        }
+    }
+
+    /// At the hypergate of [`gated`], heading `heading`, at rest.
+    fn at_gate(heading: f32) -> ShipState {
+        ShipState {
+            position: Vec2::new(300.0, -400.0),
+            velocity: Vec2::ZERO,
+            heading,
+        }
+    }
+
+    #[test]
+    fn a_dude_ship_arriving_may_come_out_of_a_hypergate_at_rest_on_its_angle() {
+        // On 0, not a person, not a fleet, düde 128's ship 201, the
+        // jump-in angle drawn, then the gate (1 of the planet and the
+        // gate), and its aggression last.
+        let sites = gated(90);
+        let mut chance = Draws::of(&[0, 6, 6, 0, 99, 90, 1, 0]);
+        let ships = arrivals(&table(), 0, &mut nobody(), among(&sites), &mut chance);
+        assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 2, 3]);
+        assert_eq!(ships.len(), 1);
+        assert_eq!(ships[0].ship, ShipId(201));
+        assert_eq!(ships[0].state, at_gate(90.0));
+        assert_eq!(
+            ships[0].entry,
+            Entry::Emerging {
+                ticks_left: EMERGE_TICKS
+            }
+        );
+        assert_eq!(ships[0].aggression, 2);
+        // A gate with no angle rolls one after the pick.
+        let sites = gated(-1);
+        let mut chance = Draws::of(&[0, 6, 6, 0, 99, 90, 1, 45]);
+        let ships = arrivals(&table(), 0, &mut nobody(), among(&sites), &mut chance);
+        assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 2, 360, 3]);
+        assert_eq!(ships[0].state, at_gate(45.0));
+        // The planet drawn: it jumps in as before.
+        let mut chance = Draws::of(&[0, 6, 6, 0, 99, 90, 0]);
+        let ships = arrivals(&table(), 0, &mut nobody(), among(&gated(90)), &mut chance);
+        assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 2, 3]);
+        assert_eq!(ships[0].entry, Entry::JumpingIn);
+        assert!(near(
+            ships[0].state.position,
+            facing(90.0) * jump_in_distance()
+        ));
+    }
+
+    #[test]
+    fn a_ship_of_a_government_preferring_wormholes_comes_out_of_one() {
+        let govts = Governments::new([crate::catalog::GovtRecord {
+            flags2: crate::govt::PREFERS_WORMHOLES,
+            ..crate::testkit::govt(130)
+        }]);
+        let sites = [
+            crate::testkit::planet(128, 0.0, 0.0),
+            LandingSite {
+                flags2: crate::gate::WORMHOLE,
+                exit_angle: 180,
+                ..crate::testkit::planet(129, 300.0, -400.0)
+            },
+        ];
+        let stellars = Stellars {
+            sites: &sites,
+            govts: &govts,
+        };
+        let mut chance = Draws::of(&[0, 6, 6, 0, 99, 90, 0, 0]);
+        let ships = arrivals(&table(), 0, &mut nobody(), stellars, &mut chance);
+        assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 1, 3]);
+        assert_eq!(ships[0].state, at_gate(180.0));
+        assert_eq!(
+            ships[0].entry,
+            Entry::Emerging {
+                ticks_left: EMERGE_TICKS
+            }
+        );
+        // Any other ship never takes the wormhole, and draws no pick.
+        let mut chance = Draws::of(&[0, 6, 6, 0, 99, 90]);
+        let ships = arrivals(&table(), 0, &mut nobody(), among(&sites), &mut chance);
+        assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 3]);
+        assert_eq!(ships[0].entry, Entry::JumpingIn);
+    }
+
+    #[test]
+    fn a_person_arriving_may_come_out_of_a_hypergate() {
+        let mut draw = PersonDraw::new(PersonWorld::NONE);
+        let mut chance = Draws::of(&[0, 0, 382, 90, 1]);
+        let sites = gated(270);
+        let ships = arrivals(&peopled(), 0, &mut draw, among(&sites), &mut chance);
+        assert_eq!(chance.asked, [500, 7, 1022, 360, 2], "no aggression drawn");
+        assert_eq!(persons_of(&ships), [Some(510)]);
+        assert_eq!(ships[0].state, at_gate(270.0));
+        assert_eq!(
+            ships[0].entry,
+            Entry::Emerging {
+                ticks_left: EMERGE_TICKS
+            }
+        );
+    }
+
+    #[test]
+    fn a_fleet_whose_lead_comes_out_of_a_gate_brings_its_escorts_out_of_it_later() {
+        // The gate first, no jump-in angle; the lead's aggression; then
+        // each escort's offsets, its extra wait and its aggression.
+        let mut chance = Draws::of(&[1, 0, 0, 0, 7, 0, 299, 299, 14, 0]);
+        let mut out = Vec::new();
+        let sites = gated(90);
+        fleet(
+            &table(),
+            FleetId(141),
+            Gate::FRESH,
+            among(&sites),
+            None,
+            &mut chance,
+            &mut out,
+        );
+        assert_eq!(chance.asked, [2, 3, 300, 300, 15, 3, 300, 300, 15, 3]);
+        assert_eq!(out.len(), 3);
+        assert_eq!(
+            out.iter().map(|ship| ship.state).collect::<Vec<_>>(),
+            [at_gate(90.0); 3],
+            "every one at the gate's centre, on the lead's heading"
+        );
+        assert_eq!(
+            out.iter().map(|ship| ship.entry).collect::<Vec<_>>(),
+            [
+                Entry::Emerging { ticks_left: 60 },
+                Entry::Emerging { ticks_left: 72 },
+                Entry::Emerging { ticks_left: 79 },
+            ]
+        );
+        assert_eq!(
+            out.iter().map(|ship| ship.lead).collect::<Vec<_>>(),
+            [None, Some(0), Some(0)]
+        );
+        // A gate rolling its heading gives the escorts the lead's.
+        let mut chance = Draws::of(&[1, 200]);
+        let mut out = Vec::new();
+        let sites = gated(-1);
+        fleet(
+            &table(),
+            FleetId(141),
+            Gate::FRESH,
+            among(&sites),
+            None,
+            &mut chance,
+            &mut out,
+        );
+        assert_eq!(&chance.asked[..2], [2, 360]);
+        assert!(out.iter().all(|ship| ship.state == at_gate(200.0)));
+    }
+
+    #[test]
+    fn a_linksyst_fleet_at_setup_may_come_out_of_a_gate() {
+        // Not a person, a fleet, slot 13 (fleet 141), the gate.
+        let mut chance = Draws::of(&[6, 0, 13, 1, 2, 0, 0, 5, 2, 299, 299, 9, 2]);
+        let sites = gated(90);
+        let ships = initial(&one_pass(), &mut nobody(), None, among(&sites), &mut chance);
+        assert_eq!(
+            chance.asked,
+            [7, 7, 256, 2, 3, 300, 300, 15, 3, 300, 300, 15, 3]
+        );
+        assert_eq!(
+            ships.iter().map(|ship| ship.entry).collect::<Vec<_>>(),
+            [
+                Entry::Emerging { ticks_left: 60 },
+                Entry::Emerging { ticks_left: 70 },
+                Entry::Emerging { ticks_left: 74 },
+            ]
+        );
+        assert!(ships.iter().all(|ship| ship.state == at_gate(90.0)));
+    }
+
+    /// Ships brought in among some stellars, drawn from a source.
+    type Scenario = fn(Stellars, &mut Draws) -> Vec<NewShip>;
+
+    /// The scenarios of these tests, each with the draws it is drawn
+    /// from: a düde ship (govt 130) arriving, a person arriving, a setup
+    /// pass bringing `LinkSyst` fleet 141 (govt 131), a named fleet 140
+    /// arriving, fleet 141 itself, and a setup pass of last outcomes.
+    fn scenarios() -> [(Scenario, &'static [u32]); 6] {
+        [
+            (
+                |stellars, chance| arrivals(&table(), 0, &mut nobody(), stellars, chance),
+                &[0, 6, 6, 0, 99, 90],
+            ),
+            (
+                |stellars, chance| {
+                    let mut draw = PersonDraw::new(PersonWorld::NONE);
+                    arrivals(&peopled(), 0, &mut draw, stellars, chance)
+                },
+                &[0, 0, 382, 90],
+            ),
+            (
+                |stellars, chance| initial(&one_pass(), &mut nobody(), None, stellars, chance),
+                &[6, 0, 13, 0, 2, 0, 0, 2, 299, 299, 2],
+            ),
+            (
+                |stellars, chance| arrivals(&table(), 0, &mut nobody(), stellars, chance),
+                &[1, 29, 0, 0, 0, 2],
+            ),
+            (
+                |stellars, chance| {
+                    let mut out = Vec::new();
+                    fleet(
+                        &table(),
+                        FleetId(141),
+                        Gate::FRESH,
+                        stellars,
+                        None,
+                        chance,
+                        &mut out,
+                    );
+                    out
+                },
+                &[],
+            ),
+            (
+                |stellars, chance| initial(&one_pass(), &mut nobody(), None, stellars, chance),
+                &[],
+            ),
+        ]
+    }
+
+    /// `scenario` drawn from `draws` among `stellars`: the ships and the
+    /// bounds asked.
+    fn run(scenario: Scenario, stellars: Stellars, draws: &[u32]) -> (Vec<NewShip>, Vec<u32>) {
+        let mut chance = Draws::of(draws);
+        let ships = scenario(stellars, &mut chance);
+        (ships, chance.asked)
+    }
+
+    #[test]
+    fn with_no_gate_to_come_out_of_arrivals_are_as_they_were() {
+        let destroyed = {
+            let [planet, gate] = gated(90);
+            [
+                planet,
+                LandingSite {
+                    destroyed: true,
+                    ..gate
+                },
+            ]
+        };
+        let hostile = {
+            let [planet, gate] = gated(90);
+            [
+                planet,
+                LandingSite {
+                    govt: Some(GovtId(129)),
+                    ..gate
+                },
+            ]
+        };
+        let govts = Governments::new([
+            crate::catalog::GovtRecord {
+                classes: [1, -1, -1, -1],
+                enemies: [2, -1, -1, -1],
+                ..crate::testkit::govt(130)
+            },
+            crate::catalog::GovtRecord {
+                classes: [2, -1, -1, -1],
+                ..crate::testkit::govt(129)
+            },
+        ]);
+        let planets = [
+            crate::testkit::planet(128, 0.0, 0.0),
+            crate::testkit::planet(130, 500.0, 0.0),
+        ];
+        for (index, (scenario, draws)) in scenarios().into_iter().enumerate() {
+            let before = run(scenario, Stellars::NONE, draws);
+            assert!(!before.0.is_empty(), "{index}: something comes");
+            assert_eq!(run(scenario, among(&planets), draws), before, "{index}");
+            assert_eq!(
+                run(scenario, among(&destroyed), draws),
+                before,
+                "{index}: a destroyed gate"
+            );
+        }
+        let at_war = Stellars {
+            sites: &hostile,
+            govts: &govts,
+        };
+        let (dude_ship, draws) = scenarios()[0];
+        assert_eq!(
+            run(dude_ship, at_war, draws),
+            run(dude_ship, Stellars::NONE, draws),
+            "an enemy's gate, for the düde ship of govt 130"
+        );
+    }
+
+    #[test]
+    fn a_ship_arriving_skips_a_destroyed_gate_and_jumps_in() {
+        let [planet, gate] = gated(90);
+        let sites = [
+            planet,
+            LandingSite {
+                destroyed: true,
+                ..gate
+            },
+        ];
+        let mut chance = Draws::of(&[0, 6, 6, 0, 99, 90]);
+        let ships = arrivals(&table(), 0, &mut nobody(), among(&sites), &mut chance);
+        assert_eq!(chance.asked, [500, 7, 7, 100, 100, 360, 3]);
+        assert_eq!(ships[0].entry, Entry::JumpingIn);
     }
 }

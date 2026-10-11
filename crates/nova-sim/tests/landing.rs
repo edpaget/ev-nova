@@ -6,9 +6,10 @@
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
     CharacterStart, Clearance, CombatCatalog, CommodityStrings, Controls, DateAffixes,
-    DisasterRecord, GovtRecord, HullRecord, JunkRecord, LandOutcome, LandPress, LandingRefusal,
-    LandingSite, NeverFires, OutfitId, OutfitRecord, PilotCatalog, Session, ShipFields, ShipId,
-    StarSystem, StartDate, StartError, StellarId, SystemId, Vec2, WeaponRecord,
+    DisasterRecord, DudeId, DudeRecord, FleetRecord, GovtRecord, HullRecord, JunkRecord,
+    LandOutcome, LandPress, LandingRefusal, LandingSite, NeverFires, OutfitId, OutfitRecord,
+    PersonRecord, PilotCatalog, Session, ShipFields, ShipId, StarSystem, StartDate, StartError,
+    StellarId, SystemId, SystemTraffic, TrafficCatalog, Vec2, WeaponRecord,
 };
 
 /// One `chär` flying an average ship that turns 6° a tick from system
@@ -28,6 +29,27 @@ impl CombatCatalog for Pilot {
     }
 
     fn governments(&self) -> Vec<GovtRecord> {
+        Vec::new()
+    }
+}
+
+/// No traffic: the system takes off into is empty.
+struct NoTraffic;
+
+impl TrafficCatalog for NoTraffic {
+    fn system_traffic(&self, _id: SystemId) -> Option<SystemTraffic> {
+        None
+    }
+
+    fn dude(&self, _id: DudeId) -> Option<DudeRecord> {
+        None
+    }
+
+    fn fleets(&self) -> Vec<FleetRecord> {
+        Vec::new()
+    }
+
+    fn persons(&self) -> Vec<PersonRecord> {
         Vec::new()
     }
 }
@@ -147,6 +169,7 @@ fn at_centre(flags: u32, min_status: i16) -> LandingSite {
         dead_graphic: None,
         dead_frame_size: None,
         type_counts_frames: true,
+        exit_angle: -1,
     }
 }
 
@@ -267,6 +290,9 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
     );
     assert_eq!(session.player().velocity, Vec2::ZERO);
     assert_eq!(session.player().position, Vec2::ZERO);
-    assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(128)));
+    assert_eq!(
+        session.take_off(&NoTraffic, &mut NeverFires),
+        Some(StellarId(128))
+    );
     assert_eq!(session.landed(), None);
 }

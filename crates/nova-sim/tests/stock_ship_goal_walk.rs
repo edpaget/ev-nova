@@ -1357,7 +1357,7 @@ fn fly_until_aborted(
     let on_abort =
         Effects::primed(session, &record.on_abort).map_err(|why| format!("OnAbort: {why}"))?;
     let mut before = npc_ids(session);
-    session.take_off(&mut NeverFires).ok_or("takes off")?;
+    session.take_off(data, &mut NeverFires).ok_or("takes off")?;
     let _ = session.settle_script(data, &mut NeverFires);
     let ai = NovaAi::default();
     let mut ticks = 0;

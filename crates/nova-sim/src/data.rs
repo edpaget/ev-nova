@@ -34,7 +34,7 @@ use crate::catalog::{
     MissionShip, MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord,
     PersonWeapon, PilotCatalog, PlaceNames, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
     StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
-    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -149,7 +149,8 @@ impl PilotCatalog for GameData {
                         (record.mod_type2, record.mod_val2),
                         (record.mod_type3, record.mod_val3),
                         (record.mod_type4, record.mod_val4),
-                    ],
+                    ]
+                    .map(|(mod_type, mod_val)| (mod_type, loaded_mod_val(mod_type, mod_val))),
                     contribute: record.contribute.bits(),
                     require: record.require.bits(),
                     require_govt: record.require_govt,
@@ -209,6 +210,7 @@ impl PilotCatalog for GameData {
                     dead_graphic: dead_frame_size.map(|_| stellar.dead_type),
                     dead_frame_size,
                     type_counts_frames: counts_frames(self, stellar.graphic_type),
+                    exit_angle: stellar.cust_snd_id,
                 })
             })
             .collect()
@@ -1589,6 +1591,19 @@ mod tests {
     }
 
     #[test]
+    fn an_oütfs_low_weapon_and_government_mod_vals_load_as_ids_in_every_slot() {
+        let data = store(&[(
+            Outfit::TYPE,
+            128,
+            outfit([(1, 5), (3, 127), (21, 0), (16, 5)]),
+        )]);
+        assert_eq!(
+            data.outfits()[0].mods,
+            [(1, 133), (3, 255), (21, 128), (16, 5)]
+        );
+    }
+
+    #[test]
     fn an_oütfs_item_class_and_lower_case_names_are_read_raw() {
         let mut bytes = outfit([(0, 0); 4]);
         bytes[0x36B..0x36B + 11].copy_from_slice(b"spare part\0");
@@ -1858,6 +1873,7 @@ mod tests {
                     dead_graphic: Some(0),
                     dead_frame_size: Some((12, 30)),
                     type_counts_frames: true,
+                    exit_angle: 0,
                 },
                 LandingSite {
                     id: StellarId(128),
@@ -1875,6 +1891,7 @@ mod tests {
                     dead_graphic: Some(0),
                     dead_frame_size: Some((12, 30)),
                     type_counts_frames: false,
+                    exit_angle: 0,
                 },
             ]
         );
@@ -2132,6 +2149,28 @@ mod tests {
                 Some(SoundId(10_000)),
             ]
         );
+    }
+
+    #[test]
+    fn a_landing_sites_exit_angle_is_its_custom_sound_raw() {
+        // A gate keeps its exit heading in `CustSndID`; the value goes
+        // through raw, whatever it is, for the gate rules to read.
+        let angles = [120, -1, 0, 359, 360, 10_032];
+        let mut resources = vec![(
+            System::TYPE,
+            130,
+            system_with(&[128, 129, 130, 131, 132, 133]),
+        )];
+        for (id, angle) in (128..).zip(angles) {
+            resources.push((Stellar::TYPE, id, sounding(angle)));
+        }
+        let data = store(&resources);
+        let found: Vec<i16> = data
+            .landing_sites(SystemId(130))
+            .iter()
+            .map(|site| site.exit_angle)
+            .collect();
+        assert_eq!(found, angles);
     }
 
     #[test]

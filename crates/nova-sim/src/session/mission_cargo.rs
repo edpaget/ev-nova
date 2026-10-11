@@ -438,7 +438,9 @@ mod tests {
     /// `stellar` (one of 130's), lands there and settles.
     fn land_on(session: &mut Session, catalog: &FakePilotCatalog, stellar: i16) {
         if session.landed().is_some() {
-            session.take_off(&mut NeverFires).expect("takes off");
+            session
+                .take_off(catalog, &mut NeverFires)
+                .expect("takes off");
             let _ = session.settle_script(catalog, &mut NeverFires);
         }
         let site = *session
@@ -815,7 +817,9 @@ mod tests {
 
     /// Takes `session` off and settles, its messages taken.
     fn in_flight(session: &mut Session, catalog: &FakePilotCatalog) {
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(catalog, &mut NeverFires)
+            .expect("takes off");
         let _ = session.settle_script(catalog, &mut NeverFires);
         let _ = session.take_messages();
     }

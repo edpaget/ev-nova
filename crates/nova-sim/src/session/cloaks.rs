@@ -40,12 +40,20 @@ impl Session {
     /// Whether the player sees `npc` (see the module docs).
     #[must_use]
     pub fn sees(&self, npc: &Npc) -> bool {
+        !npc.emerging() && self.sees_past_cloak(npc)
+    }
+
+    /// Whether `npc`'s cloak lets the player see it, leaving aside a gate
+    /// it waits at, which [`Session::sees`] holds unseen: what the view
+    /// draws a ship fading in at its gate by.
+    #[must_use]
+    pub fn sees_past_cloak(&self, npc: &Npc) -> bool {
         let observer = Observer {
             at: self.player.position,
             scanner: self.scanner().on_screen,
             cloaked_escort: false,
         };
-        cloak::visible(npc.cloak, npc.state.position, npc.emerging(), observer)
+        cloak::visible(npc.cloak, npc.state.position, false, observer)
     }
 
     /// Whether `npc` shows on the player's radar: uncloaked, its cloak

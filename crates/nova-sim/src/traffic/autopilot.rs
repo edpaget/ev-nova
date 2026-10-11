@@ -47,10 +47,19 @@
 //!   cancels a disabled ship's jump out but lets its jump in run
 //!   (@0x8fccb-0x8fd08), so a rescue mission's ship held disabled as it
 //!   comes in ends its glide in the system.
-//! - While it emerges from a gate ([`Mode::Emerging`]) it holds where it
-//!   is, at rest, whatever its condition, as the original's goal 21 holds
-//!   it until its +0x4c runs out (`_HighLevelAIHandler`
-//!   @0x8dd61-0x8dd93); then it flies its goal.
+//! - While it waits at the gate it comes out of ([`Mode::Emerging`]) it
+//!   holds still where it was put, at rest, its wait counting down
+//!   whatever its condition, as `_HandleShip` counts the timer down for
+//!   every ship (@0x3501f-0x35048) and the original's goal 21 holds it
+//!   until its +0x4c runs out (`_HighLevelAIHandler` @0x8dd61-0x8dd93).
+//!   Then ([`Mode::LeavingGate`]) it bursts out along its heading at
+//!   [`exit_speed`], with no steering, and flies on at that speed once
+//!   the next tick's would be at or below its top speed (see
+//!   [`emerge`](crate::traffic::emerge)), then flies its goal. An
+//!   escort's burst is not capped at its lead's top speed, as the
+//!   original's is: the autopilot sees no lead while the escort has no
+//!   goal yet. A ship not intact by then drifts instead of bursting,
+//!   flying from there on.
 //! - Otherwise a ship that is not [`Condition::Intact`] (disabled,
 //!   breaking up or destroyed) drifts: it flies on with no controls, and
 //!   never lands or jumps.
@@ -68,6 +77,7 @@ use crate::hail::assist;
 use crate::handling::Handling;
 use crate::hyperspace::JUMP_FUEL;
 use crate::landing::{LANDING_SPEED, landing_radius};
+use crate::traffic::emerge::exit_speed;
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::spawn::{JUMP_IN_TICKS, glide_speed};
 
@@ -111,21 +121,7 @@ pub enum Outcome {
 /// goal is about (the lead it follows, the ship it fights or inspects)
 /// at `other`, when it is there.
 pub fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> Outcome {
-    if let Mode::Emerging { ticks_left } = npc.mode {
-        npc.state.velocity = Vec2::ZERO;
-        npc.mode = match ticks_left.saturating_sub(1) {
-            0 => Mode::Flying,
-            left => Mode::Emerging { ticks_left: left },
-        };
-        return Outcome::Flying;
-    }
-    let gliding = matches!(npc.condition, Condition::Intact | Condition::Disabled);
-    if let (Mode::JumpingIn { ticks_left }, true) = (npc.mode, gliding) {
-        glide(npc, ticks_left);
-        return Outcome::Flying;
-    }
-    if npc.condition != Condition::Intact {
-        flight::step(&mut npc.state, &npc.stats.handling, Controls::default());
+    if unsteered(npc) {
         return Outcome::Flying;
     }
     let handling = npc.stats.handling;
@@ -340,6 +336,53 @@ fn glide(npc: &mut Npc, ticks_left: u32) {
     };
 }
 
+/// Flies `npc` one tick when it has no say in its flight: waiting at a
+/// gate, drifting while not intact, gliding in from hyperspace (intact
+/// or disabled) or bursting out of a gate (see the module docs). Whether it did.
+fn unsteered(npc: &mut Npc) -> bool {
+    match (npc.mode, npc.condition == Condition::Intact) {
+        (Mode::Emerging { ticks_left }, _) => wait_at_gate(npc, ticks_left),
+        (Mode::JumpingIn { ticks_left }, false) if npc.condition == Condition::Disabled => {
+            glide(npc, ticks_left);
+        }
+        (mode, false) => {
+            if let Mode::LeavingGate { .. } = mode {
+                npc.mode = Mode::Flying;
+            }
+            flight::step(&mut npc.state, &npc.stats.handling, Controls::default());
+        }
+        (Mode::JumpingIn { ticks_left }, true) => glide(npc, ticks_left),
+        (Mode::LeavingGate { tick }, true) => leave_gate(npc, tick),
+        (Mode::Flying, true) => return false,
+    }
+    true
+}
+
+/// One tick of `npc`'s wait at the gate it comes out of, `ticks_left` of
+/// it left: still, and bursting out once it is over.
+fn wait_at_gate(npc: &mut Npc, ticks_left: u32) {
+    npc.state.velocity = Vec2::ZERO;
+    let left = ticks_left.saturating_sub(1);
+    npc.mode = if left == 0 {
+        Mode::LeavingGate { tick: 0 }
+    } else {
+        Mode::Emerging { ticks_left: left }
+    };
+}
+
+/// Tick `tick` of `npc`'s burst out of a gate: along its heading at
+/// [`exit_speed`], flying on at that speed once the next tick's would be
+/// at or below its top speed.
+fn leave_gate(npc: &mut Npc, tick: u32) {
+    npc.state.velocity = flight::facing(npc.state.heading) * exit_speed(tick);
+    npc.state.position = npc.state.position + npc.state.velocity;
+    npc.mode = if exit_speed(tick + 1) <= npc.stats.handling.max_speed {
+        Mode::Flying
+    } else {
+        Mode::LeavingGate { tick: tick + 1 }
+    };
+}
+
 /// Whether a ship at `state` can land on `site`: over it, and slow enough.
 fn over(state: &ShipState, site: &LandingSite) -> bool {
     (site.position - state.position).length() <= landing_radius(site)
@@ -492,6 +535,7 @@ mod tests {
     use crate::handling::ShipFields;
     use crate::stats::ShipStats;
     use crate::testkit::{FAST, planet};
+    use crate::traffic::emerge::EMERGE_TICKS;
     use crate::traffic::npc::NpcId;
     use crate::traffic::spawn::{hyperspace_entry, jump_in_distance};
 
@@ -805,6 +849,101 @@ mod tests {
         }
     }
 
+    /// A ship of `fields` coming out of a gate at (100, -200), heading 90°,
+    /// `ticks_left` of its wait to go, bent on landing.
+    fn emerging(fields: ShipFields, ticks_left: u32) -> Npc {
+        let mut ship = npc(
+            fields,
+            Goal::Land(StellarId(140)),
+            at(100.0, -200.0, 0.0, 0.0, 90.0),
+        );
+        ship.mode = Mode::Emerging { ticks_left };
+        ship
+    }
+
+    #[test]
+    fn a_ship_coming_out_of_a_gate_waits_there_still_then_leaves_it() {
+        let sites = [planet(140, 0.0, 0.0)];
+        let mut ship = emerging(AVERAGE, EMERGE_TICKS);
+        assert!(ship.emerging());
+        for left in (1..EMERGE_TICKS).rev() {
+            assert_eq!(fly(&mut ship, &sites, None), Outcome::Flying);
+            assert_eq!(ship.mode, Mode::Emerging { ticks_left: left });
+            assert_eq!(ship.state, at(100.0, -200.0, 0.0, 0.0, 90.0), "still");
+        }
+        fly(&mut ship, &sites, None);
+        assert_eq!(ship.mode, Mode::LeavingGate { tick: 0 });
+        assert!(!ship.emerging());
+        assert_eq!(
+            ship.state,
+            at(100.0, -200.0, 0.0, 0.0, 90.0),
+            "not yet moving"
+        );
+    }
+
+    #[test]
+    fn leaving_a_gate_it_bursts_out_on_its_heading_until_it_is_down_to_its_top_speed() {
+        let sites = [planet(140, 0.0, 0.0)];
+        // Top speed 3: 30, 27, ... 6, then on at 6 once 3 is next.
+        let mut ship = emerging(AVERAGE, 1);
+        fly(&mut ship, &sites, None);
+        let mut x = 100.0;
+        for (tick, speed) in (0..9).zip([30.0, 27.0, 24.0, 21.0, 18.0, 15.0, 12.0, 9.0, 6.0]) {
+            assert_eq!(ship.mode, Mode::LeavingGate { tick });
+            assert_eq!(fly(&mut ship, &sites, None), Outcome::Flying);
+            x += speed;
+            assert!(
+                (ship.state.velocity - Vec2::new(speed, 0.0)).length() < 1e-4,
+                "{tick}: {:?}",
+                ship.state
+            );
+            assert!((ship.state.position - Vec2::new(x, -200.0)).length() < 1e-3);
+            assert_eq!(ship.state.heading, 90.0, "no steering");
+        }
+        assert_eq!(ship.mode, Mode::Flying);
+        // A ship of top speed 30 or more is out after the first tick.
+        let mut fast = emerging(
+            ShipFields {
+                speed: 3000,
+                ..AVERAGE
+            },
+            1,
+        );
+        fly(&mut fast, &sites, None);
+        fly(&mut fast, &sites, None);
+        assert_eq!(fast.mode, Mode::Flying);
+        assert!((fast.state.velocity - Vec2::new(30.0, 0.0)).length() < 1e-4);
+        // One of no speed bursts out until its speed would reach 0.
+        let mut still = emerging(
+            ShipFields {
+                speed: 0,
+                ..AVERAGE
+            },
+            1,
+        );
+        fly(&mut still, &sites, None);
+        let ticks = (1..20)
+            .find(|_| {
+                fly(&mut still, &sites, None);
+                still.mode == Mode::Flying
+            })
+            .expect("out");
+        assert_eq!(ticks, 10, "30 down to 3");
+    }
+
+    #[test]
+    fn a_ship_not_intact_still_waits_out_its_gate_but_drifts_instead_of_bursting() {
+        let mut ship = emerging(AVERAGE, 2);
+        ship.condition = Condition::Disabled;
+        fly(&mut ship, &[], None);
+        assert_eq!(ship.mode, Mode::Emerging { ticks_left: 1 });
+        fly(&mut ship, &[], None);
+        assert_eq!(ship.mode, Mode::LeavingGate { tick: 0 });
+        fly(&mut ship, &[], None);
+        assert_eq!(ship.mode, Mode::Flying, "no burst");
+        assert_eq!(ship.state, at(100.0, -200.0, 0.0, 0.0, 90.0), "drifting");
+    }
+
     #[test]
     fn a_ship_emerging_from_a_gate_holds_at_rest_for_its_ticks_then_flies_its_goal() {
         let start = at(100.0, 200.0, 3.0, -4.0, 45.0);
@@ -815,11 +954,15 @@ mod tests {
             assert_eq!(fly(&mut ship, &[], Some(&player)), Outcome::Flying);
             assert_eq!(ship.state, at(100.0, 200.0, 0.0, 0.0, 45.0), "{left}");
             let mode = if left == 0 {
-                Mode::Flying
+                Mode::LeavingGate { tick: 0 }
             } else {
                 Mode::Emerging { ticks_left: left }
             };
             assert_eq!(ship.mode, mode);
+        }
+        while ship.mode != Mode::Flying {
+            fly(&mut ship, &[], Some(&player));
+            assert_eq!(ship.state.heading, 45.0, "bursting out, unsteered");
         }
         fly(&mut ship, &[], Some(&player));
         assert_ne!(ship.state.heading, 45.0, "turns on the player");

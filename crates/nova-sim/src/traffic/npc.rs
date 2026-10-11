@@ -61,7 +61,8 @@ impl AiType {
     }
 }
 
-/// Whether an NPC is still coming out of hyperspace.
+/// Whether an NPC is still coming out of hyperspace, or of a hypergate or
+/// wormhole (see [`emerge`](crate::traffic::emerge)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     /// Gliding in from hyperspace, for this many more ticks: no steering
@@ -70,16 +71,25 @@ pub enum Mode {
         /// The ticks of the glide left.
         ticks_left: u32,
     },
-    /// Flying under its own controls.
-    Flying,
-    /// Coming out of a hypergate or wormhole after the player, for this
-    /// many more ticks: at rest, seen by no one, untargetable and not
-    /// drawn, with no decisions (`_AIMakeShipEmergeFromHyperGate`, goal
-    /// 21; see the session's `gate_follow` module).
+    /// Waiting at the centre of the gate it comes out of, for this many
+    /// more ticks: hidden, still, seen by no ship, and no decisions. An
+    /// arrival out of a gate (see [`emerge`](crate::traffic::emerge)) and
+    /// a mission ship following the player through one
+    /// (`_AIMakeShipEmergeFromHyperGate`, goal 21; see the session's
+    /// `gate_follow` module) both wait so, untargetable and not drawn.
     Emerging {
         /// The ticks of the wait left.
         ticks_left: u32,
     },
+    /// Bursting out of the gate along its heading, on this tick of the
+    /// burst (from 0), at [`exit_speed`](crate::traffic::emerge::exit_speed):
+    /// no steering and no decisions.
+    LeavingGate {
+        /// The tick of the burst.
+        tick: u32,
+    },
+    /// Flying under its own controls.
+    Flying,
 }
 
 /// What an NPC flown by a person (`përs`) carries of it (see
@@ -213,6 +223,18 @@ pub struct MissionMark {
 }
 
 impl Npc {
+    /// Whether it is the player's: an escort hired or captured, or a
+    /// fighter the player launched. In the original its parent (+0x9a)
+    /// is the player (0), and `_EnterMoreShips` (@0x43b14) leaves it out
+    /// of the count it holds to `AvgShips`. An NPC carrier's fighters and
+    /// orphaned fighters are not the player's, and neither is a mission
+    /// escort ([`Npc::mission_escort`]), which carries no
+    /// [`EscortDuty`].
+    #[must_use]
+    pub fn is_players(&self) -> bool {
+        self.escort.is_some()
+    }
+
     /// Its fleet: the player, for the player's escort, hired or a mission
     /// escort; otherwise the lead it escorts, or itself. Ships of one fleet
     /// never hit each other (`_ShipsShareParent` @0x7926, which follows the
@@ -258,13 +280,6 @@ impl Npc {
             && self.goal.quarry() == Some(ship)
     }
 
-    /// Whether it is emerging from a hypergate or wormhole
-    /// ([`Mode::Emerging`]).
-    #[must_use]
-    pub fn emerging(&self) -> bool {
-        matches!(self.mode, Mode::Emerging { .. })
-    }
-
     /// Whether it can cloak now (`_ShipCanCloak` @0x553c): its
     /// [`CloakGear::can_cloak`], knowing whether it is disabled and how
     /// much fuel it has left.
@@ -282,6 +297,15 @@ impl Npc {
     #[must_use]
     pub fn threatens_player(&self) -> bool {
         self.threatens(ShipRef::Player)
+    }
+
+    /// Whether it is waiting at the gate it comes out of
+    /// ([`Mode::Emerging`]): `_AIShipIsEmergingFromHypergate` (@0x7e2e8),
+    /// which holds it invisible to every ship (`_ShipVisibleToShip`
+    /// @0x972d). Bursting out of the gate, it is no longer.
+    #[must_use]
+    pub fn emerging(&self) -> bool {
+        matches!(self.mode, Mode::Emerging { .. })
     }
 }
 
@@ -468,6 +492,39 @@ mod tests {
         npc.reserves.fuel.now = 1.0;
         npc.cloak_gear.device = false;
         assert!(!npc.can_cloak(), "no cloak");
+    }
+
+    #[test]
+    fn only_the_players_escorts_and_fighters_are_the_players() {
+        let traffic = crate::testkit::npc(3, ShipStats::default());
+        assert!(!traffic.is_players());
+        let carrier = crate::bay::Carrier {
+            ship: ShipRef::Npc(NpcId(3)),
+            window: 100.0,
+            reach: 30.0,
+        };
+        let npc_fighter = Npc {
+            leader: Some(NpcId(3)),
+            carrier: Some(carrier),
+            ..crate::testkit::npc(4, ShipStats::default())
+        };
+        assert!(!npc_fighter.is_players());
+        let players = Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot {
+                    slot: 2,
+                    ships: 2,
+                    spacing: 30.0,
+                },
+                order: None,
+            }),
+            carrier: Some(crate::bay::Carrier {
+                ship: ShipRef::Player,
+                ..carrier
+            }),
+            ..crate::testkit::npc(5, ShipStats::default())
+        };
+        assert!(players.is_players());
     }
 
     #[test]

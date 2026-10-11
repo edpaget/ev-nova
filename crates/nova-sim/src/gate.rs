@@ -59,12 +59,16 @@
 //! bits 0x0020-0x0080 and the odds say (the session's `gate_follow`
 //! module, [`RuleKey::GateFollow`](crate::RuleKey::GateFollow)).
 //!
+//! AI ships coming out of gates (`_AIMakeShipEmergeFromHyperGate`, the
+//! `gövt` `Flags2` 0x20-0x80) are modelled in the traffic
+//! ([`emerge`](crate::traffic::emerge)), on this module's
+//! [`exit_heading`].
+//!
 //! Not modelled: the `dësc` QuickTime movie a gate may play
-//! (`_PlayQTMovieFromDesc`), AI ships using gates, the player's escorts
-//! coming out of the exit gate after it (@0x674ef-0x675c8) and the emerge
-//! animation, the ship-spawn hooks on the shared arrival path
-//! (`_SpawnBountyHunter`), the `spöb` `Fee`, and the failure sound for a
-//! wormhole with no exit.
+//! (`_PlayQTMovieFromDesc`), AI ships entering gates, the player's escorts
+//! coming out of the exit gate after it (@0x674ef-0x675c8), the ship-spawn
+//! hooks on the shared arrival path (`_SpawnBountyHunter`), the `spöb`
+//! `Fee`, and the failure sound for a wormhole with no exit.
 
 use crate::catalog::{GateSite, StellarId, SystemId};
 use crate::chance::Chance;
@@ -297,16 +301,24 @@ fn pick<'c, T>(choices: &'c [T], chance: &mut (impl Chance + ?Sized)) -> Option<
     choices.get(usize::from(chance.roll(sides)))
 }
 
-/// A ship of top speed `max_speed` coming out of `site`: at its centre,
-/// heading its exit angle when that is 0 to 359 and otherwise one rolled on
-/// `chance`, moving along that heading at [`EXIT_SPEED_FRACTION`] of its
-/// top speed.
-pub fn emerge(site: &GateSite, max_speed: f32, chance: &mut (impl Chance + ?Sized)) -> ShipState {
-    let heading = match u16::try_from(site.exit_angle) {
+/// The heading a ship comes out of a gate whose `CustSndID` is
+/// `exit_angle` on: that angle when it is 0 to 359, and otherwise one
+/// rolled on `chance` (`Rand(360)`). The player's arrival (@0x63aab-0x63adb)
+/// and an NPC's (`_AIMakeShipEmergeFromHyperGate` @0x8957b-0x895a5) read it
+/// alike.
+pub fn exit_heading(exit_angle: i16, chance: &mut (impl Chance + ?Sized)) -> f32 {
+    let heading = match u16::try_from(exit_angle) {
         Ok(angle) if angle < 360 => angle,
         _ => chance.roll(360),
     };
-    let heading = f32::from(heading);
+    f32::from(heading)
+}
+
+/// A ship of top speed `max_speed` coming out of `site`: at its centre,
+/// heading its [`exit_heading`], moving along that heading at
+/// [`EXIT_SPEED_FRACTION`] of its top speed.
+pub fn emerge(site: &GateSite, max_speed: f32, chance: &mut (impl Chance + ?Sized)) -> ShipState {
+    let heading = exit_heading(site.exit_angle, chance);
     ShipState {
         position: site.position,
         velocity: facing(heading) * (EXIT_SPEED_FRACTION * max_speed),
@@ -613,6 +625,20 @@ mod tests {
             assert_eq!(ship.heading, 270.0, "{angle}");
             assert_eq!(asked, [360], "{angle}");
             assert!((ship.velocity - Vec2::new(-3.0, 0.0)).length() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn the_exit_heading_is_the_angle_from_0_to_359_and_rolled_otherwise() {
+        for angle in [0, 90, 359] {
+            let mut chance = Scripted::rolling(&[7]);
+            assert_eq!(exit_heading(angle, &mut chance), f32::from(angle));
+            assert!(chance.sides_asked.is_empty(), "{angle}: no roll");
+        }
+        for angle in [360, -1, i16::MIN, i16::MAX] {
+            let mut chance = Scripted::rolling(&[123]);
+            assert_eq!(exit_heading(angle, &mut chance), 123.0, "{angle}");
+            assert_eq!(chance.sides_asked, [360], "{angle}");
         }
     }
 }

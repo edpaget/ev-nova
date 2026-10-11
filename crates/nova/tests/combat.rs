@@ -222,6 +222,13 @@ fn ship(shield: i16, armor: i16, weapons: &[i16], items: &[(i16, i16)]) -> Vec<u
     bytes
 }
 
+/// `bytes`, a `shïp`, of no `Speed`: setup starts it at rest, and it
+/// never moves.
+fn still(mut bytes: Vec<u8>) -> Vec<u8> {
+    put_i16s(&mut bytes, 0x06, &[0]);
+    bytes
+}
+
 /// An unguided `wëap` firing every `reload` ticks, 20 pixels a tick for
 /// 30 ticks, doing `damage` mass damage, its shots `spïn` 3000 +
 /// `graphic`, sounding `snd ` 200 + `sound`, with `flags` and spending
@@ -359,7 +366,8 @@ const EXPLOSION: f32 = 5.0;
 /// The first `chär` flies the "Gunship" (ship 128: a 1 x 1 sheet, a
 /// blaster and a rocket launcher, and three rockets) from Alpha (128),
 /// whose one `düde` flies the "Trader" (ship 129: a 2 x 2 sheet, no
-/// shield and 10 armour). The blaster (`wëap` 128) fires every tick, 5
+/// shield, 10 armour and no speed, so it stays where setup places it).
+/// The blaster (`wëap` 128) fires every tick, 5
 /// mass damage a shot, its 3 x 3 shots sounding `snd ` 208; the rocket
 /// launcher (`wëap` 138, a secondary) fires its 4 x 4 rockets every 30
 /// ticks, each a round of its own. Explosion type 0 is 5 x 5 frames.
@@ -388,7 +396,7 @@ fn data_arming(player: &[i16], trader: &[i16]) -> Rc<GameData> {
             Ship::TYPE,
             129,
             Some(b"Trader;merchant"),
-            &ship(0, 10, trader, &[]),
+            &still(ship(0, 10, trader, &[])),
         )
         .resource(
             Weapon::TYPE,
@@ -971,8 +979,9 @@ fn red_lines(frame: &Frame) -> usize {
 
 #[test]
 fn attacking_a_trader_brings_the_police_costs_the_record_and_r_finds_the_threat() {
-    // The trader 100 above the player, facing it; the police 699 below.
-    let placing = [6, 6, 0, 0, 750, 650, 180, 0, 6, 6, 50, 0, 750, 1449, 0, 0];
+    // The trader 100 above the player, facing away, so it flies on up
+    // the line of fire; the police 699 below.
+    let placing = [6, 6, 0, 0, 750, 650, 0, 0, 6, 6, 50, 0, 750, 1449, 0, 0];
     let mut harness = Harness::flying_over(patrolled(), &placing, |screen| {
         screen.with_disable_rule(Rc::new(nova_sim::NovaDisable))
     });
@@ -1062,13 +1071,13 @@ impl nova_sim::LegalCode for Witness {
 fn the_routers_law_judges_the_flights_crimes() {
     let witness = Rc::new(Witness::default());
     let law: Rc<dyn nova_sim::LegalCode> = witness.clone();
-    let mut harness =
-        Harness::flying_over(patrolled(), &[6, 6, 0, 0, 750, 650, 180, 0], |screen| {
-            screen
-                .with_behaviour(Rc::new(Still))
-                .with_disable_rule(Rc::new(nova_sim::NovaDisable))
-                .with_law(law)
-        });
+    // The trader 100 above, facing away: it flies on up the line of fire.
+    let mut harness = Harness::flying_over(patrolled(), &[6, 6, 0, 0, 750, 650, 0, 0], |screen| {
+        screen
+            .with_behaviour(Rc::new(Still))
+            .with_disable_rule(Rc::new(nova_sim::NovaDisable))
+            .with_law(law)
+    });
     harness.key(Key::Space, true);
     for _ in 0..1200 {
         harness.frame();
@@ -1121,8 +1130,10 @@ fn the_saved_crime_gains_choose_whether_the_flights_crimes_please_a_neutral() {
         let path =
             nova::config::settings_path(nova::config::Os::current(), env).expect("a settings path");
         let law = saved_law(&path, text);
+        // The trader 100 above, facing away: it flies on up the line of
+        // fire.
         let mut harness =
-            Harness::flying_over(patrolled(), &[6, 6, 0, 0, 750, 650, 180, 0], |screen| {
+            Harness::flying_over(patrolled(), &[6, 6, 0, 0, 750, 650, 0, 0], |screen| {
                 screen
                     .with_behaviour(Rc::new(Still))
                     .with_disable_rule(Rc::new(nova_sim::NovaDisable))
@@ -1174,15 +1185,17 @@ fn pict(width: i16, height: i16, rgb: [u8; 3]) -> Vec<u8> {
 /// The first `chär` flies the "Boarder" (ship 128: a crew of 10, 30
 /// shield, 45 armour and a blaster firing every 10 ticks, 10 mass damage
 /// a shot) in Alpha (128), whose one `düde` flies the "Trader" (ship 129:
-/// a crew of 1, no shield, 40 armour, 20 holds and 300 fuel) for food and
-/// money (`Booty` 0x0041); food is commodity 0. The status bar, Nova's
-/// button pictures and the plunder and assignment dialogs' pictures
-/// (`PICT` 8515 and 8516) are there.
+/// a crew of 1, no shield, 40 armour, 20 holds, 300 fuel and a third of
+/// the Boarder's speed, which it starts at and, disabled, drifts on at)
+/// for food and money (`Booty` 0x0041); food is commodity 0. The status
+/// bar, Nova's button pictures and the plunder and assignment dialogs'
+/// pictures (`PICT` 8515 and 8516) are there.
 fn boarding_data() -> Rc<GameData> {
     let mut boarder = ship(30, 45, &[128], &[]);
     put_i16s(&mut boarder, 0x44, &[10]);
     let mut trader = ship(0, 40, &[], &[]);
     put_i16s(&mut trader, 0x00, &[20]);
+    put_i16s(&mut trader, 0x06, &[100]);
     put_i16s(&mut trader, 0x44, &[1]);
     let mut dude = dude();
     put_i16s(&mut dude, 0x04, &[0x0041]);
@@ -2199,8 +2212,8 @@ fn more_comm_strings() -> Vec<String> {
 /// [`boarding_data`]'s pilot (the "Boarder", ship 128, with a blaster) in
 /// Alpha (128, at the centre of the map), over a landing pad, linked to
 /// Beta (129), whose `düde`s are `alpha_dudes`: 128 the traders' "Trader"
-/// (ship 129, a freighter escort, `EscortType` 3, carrying food and
-/// money), and 129 the pirates' (`gövt` 137) "Raider" (ship 131: 30
+/// (ship 129, a freighter escort, `EscortType` 3, at a third of the
+/// Boarder's speed, carrying food and money), and 129 the pirates' (`gövt` 137) "Raider" (ship 131: 30
 /// shield, 45 armour, unarmed). Ship 130 is the "Warship", a warship
 /// escort (`EscortType` 2, `InherentAI` 3: 30 shield, 45 armour and a gun,
 /// `wëap` 129, firing every 10 ticks for 5 mass and 10 energy damage). `STR#` 3000 and 3001 hold the replies, with "What can I do
@@ -2211,6 +2224,7 @@ fn escort_data(alpha_dudes: &[i16]) -> Rc<GameData> {
     put_i16s(&mut boarder, 0x44, &[10]);
     let mut trader = ship(0, 40, &[], &[]);
     put_i16s(&mut trader, 0x00, &[20]);
+    put_i16s(&mut trader, 0x06, &[100]);
     put_i16s(&mut trader, 0x44, &[1]);
     put_i16s(&mut trader, 0x732, &[3]);
     let mut gun = weapon(10, 5, -1, 0, 8, 0);

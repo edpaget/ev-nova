@@ -643,7 +643,7 @@ mod tests {
         session.assert_docked_among_shown();
         assert_eq!(session.pilot().stellar, Some(StellarId(128)));
         assert_eq!(
-            session.take_off(&mut Scripted::default()),
+            session.take_off(&catalog, &mut Scripted::default()),
             Some(StellarId(128))
         );
         session.select_stellar(StellarPick::Slot(0));
@@ -694,7 +694,7 @@ mod tests {
         land_now(&mut session).expect("lands");
         run(&mut session, "Y129");
         session
-            .take_off(&mut Scripted::default())
+            .take_off(&catalog, &mut Scripted::default())
             .expect("takes off");
         assert_eq!(destroyed(&session, 129), Some(left(1)), "a day down");
         assert!(!session.control_bit(bit(7)));
@@ -703,7 +703,7 @@ mod tests {
         assert!(!session.control_bit(bit(8)), "not yet");
         session.take_events();
         session
-            .take_off(&mut Scripted::default())
+            .take_off(&catalog, &mut Scripted::default())
             .expect("takes off");
         assert_eq!(destroyed(&session, 129), None, "regenerated");
         assert!(!shown_destroyed(&session, 129));
@@ -897,7 +897,7 @@ mod tests {
         let mut session = moved_landed(&catalog, "Y140 M131");
         assert!(session.next_sites.as_deref().expect("waiting")[0].destroyed);
         assert_eq!(
-            session.take_off(&mut Scripted::default()),
+            session.take_off(&catalog, &mut Scripted::default()),
             Some(StellarId(128))
         );
         assert_eq!(
@@ -913,7 +913,7 @@ mod tests {
             "not while it is destroyed"
         );
         let mut session = moved_landed(&catalog, "M131");
-        session.take_off(&mut Scripted::default());
+        session.take_off(&catalog, &mut Scripted::default());
         session.select_stellar(StellarPick::Slot(0));
         assert!(session.land().is_ok(), "whole");
     }
@@ -925,7 +925,7 @@ mod tests {
         assert_eq!(catalog.sites[1].1[0].id, StellarId(140));
         for script in ["Y140 M131", "M131"] {
             let mut session = moved_landed(&catalog, script);
-            session.take_off(&mut Scripted::default());
+            session.take_off(&catalog, &mut Scripted::default());
             session.select_stellar(StellarPick::Slot(0));
             assert_eq!(
                 session.land().is_ok(),
@@ -1695,7 +1695,7 @@ mod tests {
         run(&mut session, "Y128 U129");
         assert_eq!(rebuilt(&session, &[128, 129]), [false, true], "no frame");
         session
-            .take_off(&mut Scripted::default())
+            .take_off(&catalog, &mut Scripted::default())
             .expect("takes off");
         assert_eq!(rebuilt(&session, &[128, 129]), [true, false], "taken off");
     }
@@ -1728,7 +1728,7 @@ mod tests {
         assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
         assert_eq!(rebuilt(&session, &[129, 140]), [false, false]);
         session
-            .take_off(&mut Scripted::default())
+            .take_off(&catalog, &mut Scripted::default())
             .expect("takes off");
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(rebuilt(&session, &[129, 140]), [false, true]);

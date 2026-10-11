@@ -947,6 +947,70 @@ fn the_strikers_stock_weapons_are_its_outfits_and_it_trades_in_as_the_original_l
     assert_eq!(shipyard.trade_in, 1_163_000);
 }
 
+/// `E143` makes a new stock pilot's ship the Fed Carrier (`shïp` 143),
+/// adding its stock weapons as outfits: its Viper Bay (`wëap` 149,
+/// `AmmoType` 144, load 4) and Anaconda Bay (150, `AmmoType` 145, load 2)
+/// as their bay outfits (157 and 159). By the engine each load goes to
+/// `wëap` 128 + its `AmmoType`, 272 and 273, which no `oütf` holds, so
+/// no Vipers (158) or Anacondas (160) come with them (`_EvalSetExp`
+/// @0x1551c-0x155de); by the other reading of `ship_change_bay_ammo` the
+/// bays carry their 4 Vipers and 2 Anacondas, as a purchase loads them.
+#[test]
+fn e_to_the_fed_carrier_loses_its_fighters_by_the_engine() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let changed = |rules: nova_sim::Rulebook| {
+        let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+        let mut session = Session::fly(&data, pilot).expect("flies").with_rules(rules);
+        let expr = nova_sim::SetExpr::parse("E143").expect("parses");
+        session.run_set(&expr, &mut NeverFires);
+        assert_eq!(session.ship(), ShipId(143), "the Fed Carrier");
+        let owned = |id| session.pilot().owned(OutfitId(id));
+        [owned(157), owned(158), owned(159), owned(160)]
+    };
+    assert_eq!(
+        changed(nova_sim::Rulebook::default()),
+        [1, 0, 1, 0],
+        "the bays, and no fighters"
+    );
+    let loaded = nova_sim::Rulebook::default().with_override(
+        nova_sim::RuleKey::ShipChangeBayAmmo,
+        nova_sim::RuleSource::Bible,
+    );
+    assert_eq!(changed(loaded), [1, 4, 1, 2], "4 Vipers and 2 Anacondas");
+}
+
+/// `E241` makes a new stock pilot's ship the Abomination (`shïp` 241),
+/// which stocks the Hail Chaingun (`wëap` 155) with a load of 60 and the
+/// Storm Chaingun (161) with a load of -1, both firing `wëap` 155's
+/// rounds (`AmmoType` 27). By the engine the loads add signed
+/// (`_EvalSetExp` @0x155c3), leaving 59 Chaingun Ammunition (`oütf`
+/// 170); by the other reading of `ship_change_negative_stock` the -1 adds
+/// nothing, leaving 60.
+#[test]
+fn e_to_the_abomination_nets_its_negative_load_by_the_engine() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let changed = |rules: nova_sim::Rulebook| {
+        let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+        let mut session = Session::fly(&data, pilot).expect("flies").with_rules(rules);
+        let expr = nova_sim::SetExpr::parse("E241").expect("parses");
+        session.run_set(&expr, &mut NeverFires);
+        assert_eq!(session.ship(), ShipId(241), "the Abomination");
+        session.pilot().owned(OutfitId(170))
+    };
+    assert_eq!(changed(nova_sim::Rulebook::default()), 59, "60 - 1");
+    let unsigned = nova_sim::Rulebook::default().with_override(
+        nova_sim::RuleKey::ShipChangeNegativeStock,
+        nova_sim::RuleSource::Bible,
+    );
+    assert_eq!(changed(unsigned), 60, "the -1 adds nothing");
+}
+
 /// A new stock pilot, docked at `stellar` in `system` with `fuel` units
 /// in its tank, through a save that says so.
 fn docked_with_fuel(data: &GameData, system: i16, stellar: i16, fuel: f32) -> Session {
@@ -3665,7 +3729,10 @@ fn over_hg_kania(data: &GameData) -> Session {
     save["stellar"] = serde_json::json!(1404);
     let parked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     let mut session = Session::fly(data, parked).expect("flies");
-    assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(1404)));
+    assert_eq!(
+        session.take_off(data, &mut NeverFires),
+        Some(StellarId(1404))
+    );
     assert_eq!(session.player().position, Vec2::new(-70.0, 250.0));
     session
 }
@@ -3748,4 +3815,54 @@ impl Chance for Fires {
     fn below(&mut self, _n: u32) -> u32 {
         0
     }
+}
+
+/// Every stock weapon, ammunition and cleaned-government `ModVal` is
+/// already an ID the loader leaves alone, in the fold's `wëap` 128 to 383
+/// (or -1, every government, for a clean): rebasing a low `ModVal` at load
+/// changes no stock outfit, which comes out of the catalog with its mods
+/// exactly as its `oütf` has them.
+#[test]
+fn stock_weapon_mod_vals_load_unchanged_inside_the_folded_weapons() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let records = data.outfits();
+    assert_eq!(records.len(), 242);
+    let mut counted = [0; 3];
+    for record in &records {
+        let raw = data
+            .get::<nova_data::records::outfit::Outfit>(record.id.0)
+            .expect("present")
+            .expect("decodes")
+            .record;
+        assert_eq!(
+            record.mods,
+            [
+                (raw.mod_type, raw.mod_val),
+                (raw.mod_type2, raw.mod_val2),
+                (raw.mod_type3, raw.mod_val3),
+                (raw.mod_type4, raw.mod_val4),
+            ],
+            "{:?}",
+            record.id
+        );
+        for (mod_type, mod_val) in record.mods {
+            let slot = match mod_type {
+                1 => 0,
+                3 => 1,
+                21 => 2,
+                _ => continue,
+            };
+            counted[slot] += 1;
+            assert!(
+                nova_sim::ship_change::FOLDED_WEAPONS.contains(&mod_val)
+                    || (mod_type == 21 && mod_val == -1),
+                "{:?}: ModType {mod_type}, ModVal {mod_val}",
+                record.id
+            );
+        }
+    }
+    assert_eq!(counted, [83, 43, 0], "weapon, ammunition and clean mods");
 }

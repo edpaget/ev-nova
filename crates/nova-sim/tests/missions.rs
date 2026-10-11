@@ -59,6 +59,7 @@ fn planet(id: i16, x: f32) -> LandingSite {
         dead_graphic: None,
         dead_frame_size: None,
         type_counts_frames: true,
+        exit_angle: -1,
     }
 }
 
@@ -270,7 +271,9 @@ fn land(session: &mut Session) -> StellarId {
 /// Takes `session` off from 128, jumps to 131 and lands on 140, settling
 /// each step on `courier`.
 fn fly_to_140(session: &mut Session, courier: &Courier) {
-    session.take_off(&mut NeverFires).expect("takes off");
+    session
+        .take_off(courier, &mut NeverFires)
+        .expect("takes off");
     let _ = session.settle_script(courier, &mut NeverFires);
     session.plot_course(SystemId(131)).expect("a route");
     session.begin_jump().expect("out past the no-jump zone");

@@ -725,7 +725,9 @@ mod tests {
         land_now(&mut session).expect("lands");
         assert!(session.pilot().escorts().is_empty());
         assert_eq!(session.stay.escorts_changed, 0, "none sold or upgraded");
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         assert!(session.fleet.is_empty(), "none waits in the record");
     }
 

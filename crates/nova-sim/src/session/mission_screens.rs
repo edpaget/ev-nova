@@ -590,7 +590,9 @@ mod tests {
     /// Takes `session` off, settles, puts it at rest over `stellar` (one
     /// of 130's), lands there and settles.
     fn land_on(session: &mut Session, catalog: &FakePilotCatalog, stellar: i16) {
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(catalog, &mut NeverFires)
+            .expect("takes off");
         settle(session, catalog);
         let site = *session
             .sites
@@ -966,7 +968,9 @@ mod tests {
         session
             .abort_mission(slot, &mut NeverFires)
             .expect("aborted");
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         settle(&mut session, &catalog);
         session.player.velocity = Vec2::ZERO;
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));

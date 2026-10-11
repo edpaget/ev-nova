@@ -832,16 +832,6 @@ fn first_named(
     named.into_iter()
 }
 
-/// Class `ship`'s stock weapons, each with its count and `AmmoLoad`: the
-/// last slot naming a weapon gives them (@0x7aa72, @0x7aa90).
-fn stock_by_weapon(ship: &ShipRecord, arsenal: &Arsenal) -> BTreeMap<WeaponId, (i16, i16)> {
-    arsenal
-        .stock_weapons(ship.id)
-        .iter()
-        .map(|stock| (stock.weapon, (stock.count, stock.ammo)))
-        .collect()
-}
-
 /// An outfit's name as the panel's list shows it: up to its last ';',
 /// with trailing spaces and ';'s dropped, or whole without a ';'
 /// (`_LoadObjectData` @0x78ce4-0x78d56).
@@ -873,7 +863,8 @@ pub(crate) fn stock_lines(
                 shown_outfit_name(&record.name).to_owned()
             })
     };
-    stock_by_weapon(ship, arsenal)
+    arsenal
+        .stock_slots(ship.id)
         .into_iter()
         .filter(|&(_, (count, _))| count > 0)
         .map(|(weapon, (count, ammo))| {
@@ -908,8 +899,8 @@ pub(crate) fn stock_lines(
 /// equipment (its default items and its stock weapons and ammunition as
 /// outfits), as the loader holds it (@0x7aaf7, @0x7ac61, @0x7ad8d). It
 /// then takes off, through [`floored_space`]: each stock weapon by
-/// ascending ID (the last slot naming it giving its count and
-/// `AmmoLoad`, @0x7aa72, @0x7aa90), its count of the lowest-ID outfit
+/// ascending ID (as [`Arsenal::stock_slots`] gives its count and
+/// `AmmoLoad`), its count of the lowest-ID outfit
 /// whose first mod is [`MOD_WEAPON`] naming it, then its `AmmoLoad` of
 /// the lowest-ID one whose first mod is [`MOD_AMMO`] naming the weapon
 /// itself, not its `AmmoType` (@0x501c5-0x501d0); then each default item
@@ -948,7 +939,8 @@ pub(crate) fn space(
         let holder = first_named(outfits, mod_type, weapon).find(sold)?;
         Some(weighed(holder, count))
     };
-    let weapons = stock_by_weapon(ship, arsenal)
+    let weapons = arsenal
+        .stock_slots(ship.id)
         .into_iter()
         .flat_map(|(weapon, (count, ammo))| {
             [
@@ -1521,7 +1513,8 @@ fn engine_carry(sale: &Sale) -> Carry {
                 mask: OutfitFlags::PERSISTENT,
             },
             &BTreeMap::new(),
-            false,
+            None,
+            None,
             sale.records,
         ),
         sold_back: BTreeMap::new(),

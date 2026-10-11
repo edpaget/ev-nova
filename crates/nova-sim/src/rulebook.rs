@@ -39,6 +39,7 @@
 //! | [`SystemPersons`](RuleKey::SystemPersons) | `system_persons` | a `sÿst` Person slot brings its person on `Rand(100) + 1` at most its chance ([`NovaPersons`](crate::NovaPersons)) | always |
 //! | [`LinkSystSlip`](RuleKey::LinkSystSlip) | `link_syst_slip` | a person's system `LinkSyst` also allows the system of ID `LinkSyst` + 128 ([`NovaPersons`](crate::NovaPersons)) | that system only |
 //! | [`ShieldMod`](RuleKey::ShieldMod) | `shield_mod` | a person's `ShieldMod` scales its shield and armour ([`NovaPersons`](crate::NovaPersons)) | its shield only |
+//! | [`DerelictSetupSpeed`](RuleKey::DerelictSetupSpeed) | `derelict_setup_speed` | a person of a derelict government (`Flags` 0x0800) brought by a setup pass starts at its top speed, as its zeroed velocity is accelerated again (`_SetupShipsInSystem` @0x43245, @0x432eb), and one brought by its Person slot at rest (@0x433fe, then @0x43438) ([`NovaPersons`](crate::NovaPersons)) | both start at rest\* |
 //! | [`PersonCoward`](RuleKey::PersonCoward) | `person_coward` | only a warship person of a government with `Flags` 0x0010 runs at `Coward` % ([`NovaAi`](crate::NovaAi)) | any warship or interceptor person |
 //! | [`PersonCredits`](RuleKey::PersonCredits) | `person_credits` | a person carries half its `Credits` in thousands, kept in 16 bits, and a draw of as many more ([`NovaBoarding`](crate::NovaBoarding)) | its `Credits`, ±25 % |
 //! | [`CommQuote`](RuleKey::CommQuote) | `comm_quote` | a person's comm quote is a friendly person's answer to Greetings ([`Session`](crate::Session)) | it opens the hail, in place of the opening line\* |
@@ -53,9 +54,12 @@
 //! | [`CaptureHookOrder`](RuleKey::CaptureHookOrder) | `capture_hook_order` | on Use As My Ship, `OnRetire` and `OnCapture` run before the outfit swap, which strips a non-persistent outfit either grants ([`HookRules`](crate::HookRules)) | they run after the swap, so it stays\* |
 //! | [`StartShipPurchase`](RuleKey::StartShipPurchase) | `start_ship_purchase` | a new pilot's starting ship runs no `OnPurchase` ([`HookRules`](crate::HookRules)) | it runs once, right before the `chär`'s `OnStart`\* |
 //! | [`ShipChangePersistence`](RuleKey::ShipChangePersistence) | `ship_change_persistence` | `H` keeps an outfit flagged 0x0004 or 0x0020 ([`ShipChangeRules`](crate::ShipChangeRules)) | only one flagged 0x0020 |
-//! | [`ShipChangeMax`](RuleKey::ShipChangeMax) | `ship_change_max` | `E` and `H` hold every outfit owned, old and new, to its `Max` after adding the new class's default items ([`ShipChangeRules`](crate::ShipChangeRules)) | nothing is held: every outfit is kept |
+//! | [`ShipChangeMax`](RuleKey::ShipChangeMax) | `ship_change_max` | `E` and `H` hold every outfit owned, old and new, to its limit (ammunition cap, raised `Max`, gun and turret slots) after adding the new class's default items ([`ShipChangeRules`](crate::ShipChangeRules)) | nothing is held: every outfit is kept |
 //! | [`ShipChangeCargo`](RuleKey::ShipChangeCargo) | `ship_change_cargo` | `C`, `E` and `H` keep all the cargo, even past the new hold ([`ShipChangeRules`](crate::ShipChangeRules)) | the cargo is trimmed to the new hold, as a purchase trims it\* |
 //! | [`ShipChangeReserves`](RuleKey::ShipChangeReserves) | `ship_change_reserves` | `C`, `E` and `H` keep a shield or armour above the new class's most until damage takes it ([`ShipChangeRules`](crate::ShipChangeRules)) | each is held to its new most\* |
+//! | [`ShipChangeBayAmmo`](RuleKey::ShipChangeBayAmmo) | `ship_change_bay_ammo` | `E` and `H` load a fighter bay's `AmmoLoad` onto the weapon its raw `AmmoType` names, so a bay of fighter `shïp` 128 to 255 loses its fighters ([`ShipChangeRules`](crate::ShipChangeRules)) | the bay's own fighters are loaded, as a purchase loads them\* |
+//! | [`ShipChangeDefaultWeapons`](RuleKey::ShipChangeDefaultWeapons) | `ship_change_default_weapons` | `E` and `H` add a default item that is a weapon or ammunition outfit to the outfits alone, so the fold pulls it back to the weapon and rounds arrays' count and it is lost unless the array has a surplus (`_EvalSetExp` @0x15609, `_ShipStatsToSystemInfo` @0xcaee called @0x15622; [`ShipChangeRules`](crate::ShipChangeRules)) | its first-mod weapons and rounds are added to the arrays too, so it is kept\* |
+//! | [`ShipChangeNegativeStock`](RuleKey::ShipChangeNegativeStock) | `ship_change_negative_stock` | `E` and `H` add a negative `WeapCount` or `AmmoLoad` signed, taking that many launchers or rounds away, floored at none (`_EvalSetExp` @0x15555, @0x155c3; [`ShipChangeRules`](crate::ShipChangeRules)) | it adds nothing, as a purchase reads it\* |
 //! | [`MoveStarless`](RuleKey::MoveStarless) | `move_starless` | `M` in flight into a system with no stellar keeps the ship's position and velocity ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the ship is put at rest at the system's centre |
 //! | [`MoveArrival`](RuleKey::MoveArrival) | `move_arrival` | `M` and `N` only change where the ship is: the course is kept, the system is explored by the next take-off, and in flight only the escorts and fighters out follow, the new system filling with arrivals over time ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the move is an arrival: explored, the course cleared, and in flight populated at once\* |
 //! | [`MoveKeepFlag`](RuleKey::MoveKeepFlag) | `move_keep_flag` | an `N` in flight leaves the next take-off keeping the ship where it landed ([`ScriptEffectRules`](crate::ScriptEffectRules)) | only a landed `N` keeps the landing position\* |
@@ -109,12 +113,15 @@
 //! `hire_fee`, `escort_wage`, `grant_max`, `person_join`, `invalid_map`,
 //! `remove_refund`, `refit_reserves`, `purchase_paint_order`,
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
-//! `ship_change_reserves`, `move_arrival`, `move_keep_flag`,
-//! `script_sound`, `ship_info_rounding`, `stale_secondary`,
+//! `ship_change_reserves`, `ship_change_bay_ammo`,
+//! `ship_change_default_weapons`, `ship_change_negative_stock`, `move_arrival`,
+//! `move_keep_flag`, `script_sound`, `ship_info_rounding`,
+//! `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
-//! `mission_stellar_draw`, `mission_stellar_distance`, `left_respawn`,
-//! `landed_leaves`, `gate_follow` or `comm_quote`
+//! `mission_stellar_draw`, `mission_stellar_distance`,
+//! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`
+//! or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -541,6 +548,15 @@ rule_keys! {
     /// much to increase/decrease the person's shield capacity"), its
     /// shield only (see [`person`](crate::person)).
     ShieldMod => "shield_mod",
+    /// How fast a person of a derelict government (`gövt` `Flags`
+    /// 0x0800) starts at system setup: by the engine, at its top speed
+    /// along its heading when a setup pass brings it, as the zeroing of
+    /// its velocity (`_SetupShipsInSystem` @0x43245-0x4325b) jumps on to
+    /// the pass's shared `_AdjustedAccel` (@0x432b0, @0x432eb), and at
+    /// rest when its Person slot brings it, the zeroing (@0x43418-0x43443)
+    /// coming after that slot's `_AdjustedAccel` (@0x433fe); by the other
+    /// reading, at rest either way (see [`spawn`](crate::traffic::spawn)).
+    DerelictSetupSpeed => "derelict_setup_speed",
     /// Which persons run below `Coward`% of their shields: by the engine,
     /// only a warship person of a government with `Flags` 0x0010 and no
     /// fleet lead (`_WarshipAI` @0x8be36); by the Bible ("At what percent
@@ -676,10 +692,12 @@ rule_keys! {
     /// [`ShipChangeRules`](crate::ShipChangeRules)).
     ShipChangePersistence => "ship_change_persistence",
     /// Whether the `E` and `H` set operators hold the outfits owned to
-    /// their `Max`: by the engine, every outfit, old and new, is clamped
-    /// to its limit once the new class's default items are added
-    /// (`_HasMaxOfItem` @0x4512, called @0x15648); by the Bible's "the
-    /// player will keep all of his previous outfit items", nothing is
+    /// their limits: by the engine, every outfit, old and new, is clamped
+    /// to its limit once the new class's default items and stock weapons
+    /// are added (`_HasMaxOfItem` @0x4512, called @0x15648): its
+    /// ammunition cap, its raised `Max`, or the new class's gun or turret
+    /// slots (see [`ship_change`](crate::ship_change)); by the Bible's
+    /// "the player will keep all of his previous outfit items", nothing is
     /// clamped (see [`ShipChangeRules`](crate::ShipChangeRules)).
     ShipChangeMax => "ship_change_max",
     /// What becomes of the cargo on a `C`, `E` or `H` change of ship: by
@@ -700,6 +718,41 @@ rule_keys! {
     /// reading is the obvious alternative, not anything the Bible says
     /// (see [`ShipChangeRules`](crate::ShipChangeRules)).
     ShipChangeReserves => "ship_change_reserves",
+    /// Where the `E` and `H` set operators put a fighter bay's
+    /// `AmmoLoad` when they add the new class's stock weapons: by the
+    /// engine, on the weapon its raw `AmmoType` names when that is 0 to
+    /// 255, whatever its guidance, as every weapon's load goes
+    /// (`_EvalSetExp` @0x1551c-0x155de), so a bay whose fighter's `shïp`
+    /// ID is 128 to 255 loads `wëap` 128 + that ID, which no outfit
+    /// holds, and its fighters are lost; otherwise on the bay's own
+    /// fighters, as a purchase loads them (`_DoShipyardDialog`
+    /// @0x5ef3e-0x5ef56). The Bible is silent here, so the other reading
+    /// is the obvious alternative, not anything the Bible says (see
+    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    ShipChangeBayAmmo => "ship_change_bay_ammo",
+    /// What becomes of a new class's default item that is a weapon or
+    /// ammunition outfit when the `E` and `H` set operators add it: by
+    /// the engine, the default items are added to the outfits alone and
+    /// not to the weapon and rounds arrays, so the fold that follows
+    /// (`_ShipStatsToSystemInfo` @0xcaee, called @0x15622) pulls the
+    /// outfits whose first mod names a weapon back to the arrays' count,
+    /// and the default is lost unless the array has a surplus left;
+    /// otherwise the default items' first-mod weapons and rounds are added
+    /// to the arrays too, so they are kept. The Bible is silent here, so
+    /// the other reading is the obvious alternative, not anything the
+    /// Bible says (see [`ship_change`](crate::ship_change) and
+    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    ShipChangeDefaultWeapons => "ship_change_default_weapons",
+    /// What a new class's negative `WeapCount` or `AmmoLoad` does when the
+    /// `E` and `H` set operators add its stock weapons: by the engine, it
+    /// is added signed (`_EvalSetExp` @0x15555, @0x155c3), so it takes
+    /// that many launchers or rounds away from the outfits holding them,
+    /// floored at none, through the fold (`_ShipStatsToSystemInfo`
+    /// @0xcaee); otherwise it adds nothing, as a purchase reads it. The
+    /// Bible is silent here, so the other reading is the obvious
+    /// alternative, not anything the Bible says (see
+    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    ShipChangeNegativeStock => "ship_change_negative_stock",
     /// Where the `M` set operator puts a ship in flight when the system
     /// moved to has no stellar: by the engine, nowhere new, its position
     /// and velocity kept, as `_EvalSetExp` places the ship only on a
@@ -1715,6 +1768,15 @@ mod tests {
         assert_eq!(RuleKey::ShipChangeMax.key(), "ship_change_max");
         assert_eq!(RuleKey::ShipChangeCargo.key(), "ship_change_cargo");
         assert_eq!(RuleKey::ShipChangeReserves.key(), "ship_change_reserves");
+        assert_eq!(RuleKey::ShipChangeBayAmmo.key(), "ship_change_bay_ammo");
+        assert_eq!(
+            RuleKey::ShipChangeDefaultWeapons.key(),
+            "ship_change_default_weapons"
+        );
+        assert_eq!(
+            RuleKey::ShipChangeNegativeStock.key(),
+            "ship_change_negative_stock"
+        );
         assert_eq!(RuleKey::PurchasePaintOrder.key(), "purchase_paint_order");
         assert_eq!(RuleKey::CaptureHookOrder.key(), "capture_hook_order");
         assert_eq!(RuleKey::StartShipPurchase.key(), "start_ship_purchase");
@@ -1841,6 +1903,7 @@ mod tests {
                 RuleKey::SystemPersons,
                 RuleKey::LinkSystSlip,
                 RuleKey::ShieldMod,
+                RuleKey::DerelictSetupSpeed,
                 RuleKey::PersonCoward,
                 RuleKey::PersonCredits,
                 RuleKey::CommQuote,
@@ -1858,6 +1921,9 @@ mod tests {
                 RuleKey::ShipChangeMax,
                 RuleKey::ShipChangeCargo,
                 RuleKey::ShipChangeReserves,
+                RuleKey::ShipChangeBayAmmo,
+                RuleKey::ShipChangeDefaultWeapons,
+                RuleKey::ShipChangeNegativeStock,
                 RuleKey::MoveStarless,
                 RuleKey::MoveArrival,
                 RuleKey::MoveKeepFlag,
@@ -1914,6 +1980,7 @@ mod tests {
         assert_eq!(RuleKey::SystemPersons.key(), "system_persons");
         assert_eq!(RuleKey::LinkSystSlip.key(), "link_syst_slip");
         assert_eq!(RuleKey::ShieldMod.key(), "shield_mod");
+        assert_eq!(RuleKey::DerelictSetupSpeed.key(), "derelict_setup_speed");
         assert_eq!(RuleKey::PersonCoward.key(), "person_coward");
         assert_eq!(RuleKey::PersonCredits.key(), "person_credits");
         assert_eq!(RuleKey::CommQuote.key(), "comm_quote");

@@ -453,7 +453,7 @@ use crate::targeting::{self, TargetPick};
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Npc, NpcId};
 use crate::traffic::table::SpawnTable;
-use crate::traffic::{Traffic, World};
+use crate::traffic::{Traffic, World, strength};
 use crate::wares::DayRolls;
 
 /// A jump, from J being accepted until the ship arrives.
@@ -583,7 +583,8 @@ pub struct Session {
     /// The NPCs in the system.
     traffic: Traffic,
     /// Whether the system is to be populated on the next traffic tick in
-    /// flight: from the session's start, and after each take-off.
+    /// flight: from the session's start, and after a relocation that
+    /// resets the traffic while landed. A take-off populates at once.
     traffic_due: bool,
     /// The system the player last jumped from (the original's player
     /// +0x94, set @0x6bd4f): the side mission ships coming in later enter
@@ -775,11 +776,6 @@ pub struct Session {
     /// checked once the settling that accepted them is done (see the
     /// `mission_ships` module); never saved.
     goal_checks_due: Vec<u8>,
-    /// The slots whose take-off goal check waits for the system the ship
-    /// took off into to be set up, as the original sets it up before the
-    /// take-off's first goal check (see the `mission_ships` module);
-    /// never saved.
-    take_off_checks: Vec<u8>,
     /// The person's NPC an accept on its hail swaps for the ship of the
     /// mission in the slot, once the settling that accepted it begins
     /// (see the `mission_ships` module); never saved.
@@ -987,7 +983,6 @@ impl Session {
             offers: Offers::default(),
             reoffer_due: false,
             goal_checks_due: Vec::new(),
-            take_off_checks: Vec::new(),
             swap_due: None,
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
@@ -1229,7 +1224,10 @@ impl Session {
 
     /// Fills the system with its initial NPC population, replacing any
     /// NPCs there (the target with them), its traffic read from `catalog`
-    /// and rolled on `chance`.
+    /// and rolled on `chance`, its stationary warships placed by the
+    /// first stellar shown, destroyed or not, and its `LinkSyst` fleets
+    /// coming out of a gate shown that the governments allow, or by
+    /// hyperspace.
     pub fn populate(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -1243,7 +1241,7 @@ impl Session {
     /// whose enter-system hook is still to run, if any (see the
     /// `mission_ships` module). Once the ships are in, each mission of
     /// `Flags` 0x0001 whose slot the setup took auto-aborts, in slot
-    /// order, then the goal checks a take-off held run.
+    /// order.
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -1259,6 +1257,7 @@ impl Session {
             armament: &self.armament,
         };
         let world = World {
+            govts: &self.govts,
             persons: PersonWorld {
                 rules: &*self.person_rules.0,
                 gone: &self.pilot.gone_persons,
@@ -1267,7 +1266,7 @@ impl Session {
                 pilot: &facts,
                 fleet: &self.pilot.escorts,
             },
-            ..World::new(&[])
+            ..World::new(&self.sites)
         };
         let last = self.last_npc();
         self.traffic.enter_with(table, world, missions, chance);
@@ -1276,7 +1275,6 @@ impl Session {
         self.story.watched.clear();
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
-        self.check_after_take_off(&mut &mut *chance);
         self.enter_escorts();
         if entering.is_none() {
             self.snap_mission_escorts();
@@ -1331,10 +1329,11 @@ impl Session {
 
     /// Advances the NPC traffic one tick, NPCs deciding as `behaviour`
     /// says, rolling on `chance`. While the ship is landed or jumping, it
-    /// stands still. The first tick in flight after the session starts,
-    /// and after each take-off, instead populates the system
-    /// ([`Session::populate`]) from `catalog`, as the original sets a
-    /// system up on arrival and on take-off; its NPCs move from the next.
+    /// stands still. The first tick in flight after the session starts
+    /// instead populates the system ([`Session::populate`]) from
+    /// `catalog`, as the original sets a system up on arrival; its NPCs
+    /// move from the next. A take-off populates the system itself
+    /// ([`Session::take_off`]).
     /// A target that landed or jumped out is let go. Each tick that moves
     /// the NPCs raises the first sighting of the ships watched
     /// ([`Session::watch_ship`]), and each mission ship that left the
@@ -1373,6 +1372,7 @@ impl Session {
                         pilot: &facts,
                         fleet: &self.pilot.escorts,
                     },
+                    escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
                 };
                 let strikes = std::mem::take(&mut self.strikes);
                 let last = self.last_npc();
@@ -1410,6 +1410,7 @@ impl Session {
                 pilot: self,
                 fleet: &self.pilot.escorts,
             },
+            escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
         }
     }
 
@@ -2044,6 +2045,10 @@ impl Session {
     /// Before its days it raises [`StoryEvent::Explored`] for each system
     /// passed and the one arrived in, as the original explores their
     /// nebulae first; [`StoryEvent::EnteredSystem`] follows the days.
+    ///
+    /// Its first draw on `chance` arms the escort-strength timer (see
+    /// [`strength`]), before the days, the roll
+    /// table and the population, as the original does (@0x6c013).
     pub fn arrive(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -2054,6 +2059,9 @@ impl Session {
         };
         self.jump = None;
         let mark = self.story_mark();
+        // The escort-strength timer armed before the roll table, the days
+        // and the setup (@0x6c013).
+        self.arm_strength_timer(chance);
         self.take_jump_cost(chance);
         let (mut from, mut at) = (self.pilot.system, first);
         let mut hops = 0;
@@ -2103,6 +2111,13 @@ impl Session {
         self.jumped_from = Some(from);
         self.enter_system(Entry::Jump { hops }, entered, catalog, catalog, chance);
         Some(self.pilot.system)
+    }
+
+    /// Arms the escort-strength timer on `chance`, as a take-off, a gate
+    /// exit and a hyperspace arrival do (see
+    /// [`strength`]).
+    fn arm_strength_timer(&mut self, chance: &mut (impl Chance + ?Sized)) {
+        self.traffic.arm_strength_timer(chance);
     }
 
     /// Uses a jump's fuel and lets its days go by ([`Session::pass_jump_days`]).
@@ -2407,10 +2422,14 @@ impl Session {
     /// [`SimMessage::ExitedHypergate`], and no [`SimMessage::Arrived`].
     /// The ship enters the system by the gate's row of the table in the
     /// `entry` module, which keeps a held `P` sound and lets go of the
-    /// strikes, the target, the boarding and the hail. The special ships
-    /// following the player are decided as [`RuleKey::GateFollow`] says
-    /// (see the `gate_follow` module): those that follow come out of the
-    /// exit gate after the player, or where it arrived like a jump.
+    /// strikes, the target, the boarding and the hail. Just before, after
+    /// the exit's roll or the days, the escort-strength timer is armed on
+    /// `chance` (see [`strength`]), as a gate's exit joins the take-off's
+    /// path in the original (`_HandlePlayerDockRequest` @0x66f40,
+    /// @0x6706f). The special ships following the player are decided
+    /// next, as [`RuleKey::GateFollow`] says (see the `gate_follow`
+    /// module): those that follow come out of the exit gate after the
+    /// player, or where it arrived like a jump.
     pub fn enter_wormhole(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -2454,6 +2473,9 @@ impl Session {
                 placed
             }
         };
+        // A gate's exit joins the take-off's path before its seed
+        // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f).
+        self.arm_strength_timer(chance);
         self.exit_gate_slots(kind, catalog, &mut &mut *chance);
         let entered = Arrival {
             system,
@@ -2518,8 +2540,14 @@ impl Session {
 
     /// Takes off from the stellar the ship is docked at, and gives it; the
     /// ship flies again from the stellar's centre, at rest, the system is
-    /// explored, and the next traffic tick populates the system afresh
-    /// ([`Session::tick_traffic`]). After a landed move the ship flies in
+    /// explored, and the system is populated afresh from `catalog`
+    /// ([`Session::populate`]), the pre-landing NPCs gone and the escorts
+    /// among the new ones, before `take_off` returns: after the stay's
+    /// days and the player's system are set, and before the take-off's
+    /// story events dispatch, as the original deletes its computer ships
+    /// and sets the system up before the first frame
+    /// (`_DeleteAllComputerShips` @0x67096, `_SetupShipsInSystem`
+    /// @0x674c2). After a landed move the ship flies in
     /// the system moved to, from where the move left it, and after an `N`
     /// from where it touched down (see the `script_effects` module): the
     /// take-off shows the stellars of the player's system that waited for
@@ -2540,8 +2568,15 @@ impl Session {
     /// or sold, four if a ship was bought, and the take-off's own day
     /// (`_DoEscortLand` @0x40849, `_DoPortDialog` @0x601fa-0x6020e,
     /// `_PlayerLandOnStellar` @0x63440). The wage is a day's whatever the
-    /// days.
-    pub fn take_off(&mut self, chance: &mut (impl Chance + ?Sized)) -> Option<StellarId> {
+    /// days. After every day each active mission's auxiliary ships are
+    /// restarted on `chance` (@0x634df-0x6353c; see the `aux_ships`
+    /// module), then the escort-strength timer is armed on it (see
+    /// [`strength`], @0x6706f), and the population rolls on it last.
+    pub fn take_off(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Option<StellarId> {
         let stellar = self.landed.take()?;
         let stay = std::mem::take(&mut self.stay);
         let stay_days = self.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
@@ -2567,9 +2602,16 @@ impl Session {
         self.raise(StoryEvent::Explored {
             system: self.pilot.system,
         });
-        self.traffic_due = true;
         self.restock_fleet();
-        self.fleet.clear();
+        // The escort-strength timer armed after every day of the stay
+        // (@0x6706f), then the old computer ships deleted and the system
+        // set up afresh before the first frame (`_DeleteAllComputerShips`
+        // @0x67096, `_SetupShipsInSystem` @0x674c2), the escorts among
+        // them. The take-off's restart of the auxiliary ships comes
+        // before both (@0x634df-0x6353c).
+        self.restart_every_aux(&mut &mut *chance);
+        self.arm_strength_timer(chance);
+        self.populate(catalog, chance);
         self.sounds.push(SimSound::TookOff);
         self.save_due = true;
         self.raise(StoryEvent::TookOff { stellar });
@@ -3922,7 +3964,8 @@ impl Session {
                 mask: OutfitFlags::PERSISTENT,
             },
             &defaults,
-            false,
+            None,
+            None,
             records,
         );
         let fits = self.arsenal.stock_fits(record.id, records);
@@ -4260,6 +4303,7 @@ mod tests {
         FAST, FakePilotCatalog, START, Scripted, begin_jump_now, catalog, edge_lander, fly_out,
         jump, jump_with, land_now, outfit, planet, star, starting,
     };
+    use entry::NoTraffic;
 
     #[test]
     fn a_session_flies_the_first_chärs_ship_with_its_handling() {
@@ -4432,7 +4476,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         assert_eq!(*catalog.sites_asked.borrow(), [SystemId(130)]);
         land_now(&mut session).expect("lands");
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         land_now(&mut session).expect("lands again");
         assert_eq!(*catalog.sites_asked.borrow(), [SystemId(130)]);
         let other = starting([Some(131), None, None, None]);
@@ -4494,7 +4538,10 @@ mod tests {
         });
         land_now(&mut session).expect("lands");
         let docked = *session.player();
-        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(128)));
+        assert_eq!(
+            session.take_off(&NoTraffic, &mut NeverFires),
+            Some(StellarId(128))
+        );
         assert_eq!(session.landed(), None);
         assert_eq!(*session.player(), docked);
         assert_eq!(docked.position, Vec2::new(30.0, -40.0));
@@ -4511,9 +4558,13 @@ mod tests {
         let mut session = Session::start(&catalog()).expect("starts");
         session.tick(THRUST);
         let flying = *session.player();
-        assert_eq!(session.take_off(&mut NeverFires), None);
+        assert_eq!(session.take_off(&NoTraffic, &mut NeverFires), None);
         assert_eq!(*session.player(), flying);
-        assert_eq!(session.take_off(&mut NeverFires), None, "nor twice");
+        assert_eq!(
+            session.take_off(&NoTraffic, &mut NeverFires),
+            None,
+            "nor twice"
+        );
     }
 
     #[test]
@@ -4592,7 +4643,7 @@ mod tests {
             }]
         );
         // Once off again, L requests clearance afresh.
-        session.take_off(&mut NeverFires);
+        session.take_off(&NoTraffic, &mut NeverFires);
         assert!(matches!(
             session.land(),
             Ok(LandPress::Outcome(LandOutcome::Selected { .. }))
@@ -4612,7 +4663,7 @@ mod tests {
             Ok(LandOutcome::Landed(StellarId(128)).into())
         );
         // Planet 129 is far away: L refuses and keeps it.
-        session.take_off(&mut NeverFires);
+        session.take_off(&NoTraffic, &mut NeverFires);
         assert_eq!(
             session.select_stellar(StellarPick::Slot(1)),
             Some(StellarId(129))
@@ -4696,7 +4747,10 @@ mod tests {
         let mut session = Session::fly(catalog, pilot)
             .expect("flies")
             .with_rules(bible_records());
-        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(stellar)));
+        assert_eq!(
+            session.take_off(&catalog, &mut NeverFires),
+            Some(StellarId(stellar))
+        );
         land_now(&mut session)
     }
 
@@ -5023,7 +5077,7 @@ mod tests {
         let catalog = edge_lander();
         let mut session = landed_at_the_edge(&catalog);
         assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.jump_readiness(), JumpReadiness::Clear, "once off");
     }
 
@@ -5650,7 +5704,7 @@ mod tests {
         let docked = session.clone();
         assert_eq!(session.begin_jump(), Err(JumpRefusal::Landed));
         assert_eq!(session, docked, "nothing changes");
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(132)), "once off");
         assert_eq!(
             session.arrive(&catalog, &mut NeverFires),
@@ -5663,7 +5717,7 @@ mod tests {
     fn landing_is_refused_while_jumping() {
         let catalog = edge_lander();
         let mut session = landed_at_the_edge(&catalog);
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         begin_jump_now(&mut session).expect("jumps from over planet 140");
         let jumping = session.clone();
         assert_eq!(land_now(&mut session), Err(LandingRefusal::Jumping));
@@ -5687,7 +5741,7 @@ mod tests {
             session.tick(Controls::default());
         }
         assert_eq!(session.reserves().fuel.now, 200.0);
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         session.tick(Controls::default());
         assert_eq!(session.reserves().fuel.now, 201.0);
 
@@ -5728,10 +5782,10 @@ mod tests {
         let mut session = Session::start(&catalog()).expect("starts");
         land_now(&mut session).expect("lands");
         session.take_save_due();
-        session.take_off(&mut NeverFires);
+        session.take_off(&NoTraffic, &mut NeverFires);
         assert_eq!(session.pilot().stellar(), Some(StellarId(128)));
         assert!(session.take_save_due());
-        session.take_off(&mut NeverFires);
+        session.take_off(&NoTraffic, &mut NeverFires);
         assert!(!session.take_save_due(), "not landed: nothing happens");
     }
 
@@ -5768,7 +5822,7 @@ mod tests {
             session.pilot().explored().collect::<Vec<_>>(),
             [SystemId(130), SystemId(131)]
         );
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         session.take_save_due();
         begin_jump_now(&mut session).expect("jumps from the edge");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
@@ -6048,7 +6102,7 @@ mod tests {
         );
         session.tick(THRUST);
         assert_eq!(session.take_sounds(), [], "docked, nothing thrusts");
-        session.take_off(&mut NeverFires);
+        session.take_off(&NoTraffic, &mut NeverFires);
         assert_eq!(session.take_sounds(), [SimSound::TookOff]);
         session.tick(THRUST);
         assert_eq!(
@@ -6061,13 +6115,13 @@ mod tests {
     #[test]
     fn taking_off_emits_took_off_and_not_taking_off_emits_nothing() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.take_off(&mut NeverFires);
+        session.take_off(&NoTraffic, &mut NeverFires);
         assert_eq!(session.take_sounds(), [], "not landed");
         land_now(&mut session).expect("lands");
         session.take_sounds();
-        session.take_off(&mut NeverFires);
+        session.take_off(&NoTraffic, &mut NeverFires);
         assert_eq!(session.take_sounds(), [SimSound::TookOff]);
-        session.take_off(&mut NeverFires);
+        session.take_off(&NoTraffic, &mut NeverFires);
         assert_eq!(session.take_sounds(), [], "nor twice");
     }
 
@@ -6202,7 +6256,7 @@ mod tests {
         assert_eq!(*catalog.goods_reads.borrow(), 4);
         land_now(&mut session).expect("lands");
         assert!(session.market().is_some());
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         jump(&mut session, &catalog, 131);
         assert_eq!(*catalog.goods_reads.borrow(), 4);
     }
@@ -6249,7 +6303,7 @@ mod tests {
         let prices: Vec<_> = market.rows.iter().map(|r| (r.good, r.price)).collect();
         assert_eq!(prices, [(FOOD, 75), (METAL, 160)]);
         assert_eq!((market.cash, market.capacity, market.free), (1000, 20, 20));
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         assert_eq!(session.market(), None, "taken off");
         let mut plain = Session::start(&self::catalog()).expect("starts");
         land_now(&mut plain).expect("lands");
@@ -6587,7 +6641,7 @@ mod tests {
             Err(TradeRefusal::NotTraded),
             "by the Bible, not bought here"
         );
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         jump(&mut session, &catalog, 131);
         assert_eq!(land_now(&mut session), Ok(StellarId(140)));
         assert_eq!(
@@ -7116,7 +7170,10 @@ mod tests {
     /// each good and takes off.
     fn take_off_with(session: &mut Session, tons: &[(Good, u32)]) {
         buy_goods(session, tons);
-        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(128)));
+        assert_eq!(
+            session.take_off(&NoTraffic, &mut NeverFires),
+            Some(StellarId(128))
+        );
     }
 
     /// A session of [`breeding`] that has bought `tons` of each good at
@@ -7500,7 +7557,7 @@ mod tests {
         assert_eq!(places(&session), [(DisasterId(128), Some(StellarId(140)))]);
         let market = session.market().expect("docked at the exchange");
         assert_eq!(market.events, ["An enormous food surplus"]);
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         let mut chance = Scripted::default();
         jump_with(&mut session, &catalog, 132, &mut chance);
         // The take-off's day ages it too (`_PlayerLandOnStellar` @0x63440).
@@ -8046,7 +8103,7 @@ mod tests {
         let reads = *catalog.outfit_reads.borrow();
         session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
         session.outfitter(&mut NeverFires).expect("an outfitter");
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         jump(&mut session, &catalog, 131);
         assert_eq!(*catalog.outfit_reads.borrow(), reads);
     }
@@ -8970,7 +9027,9 @@ mod tests {
     fn landing_opens_a_new_visit() {
         let mut session = outfitted(&limiting());
         dirty_the_visit(&mut session);
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&NoTraffic, &mut NeverFires)
+            .expect("takes off");
         land_now(&mut session).expect("lands");
         assert!(opened_anew(&session));
     }
@@ -9055,7 +9114,7 @@ mod tests {
     fn landing_takes_the_copy() {
         let mut session = outfitted(&outfitting());
         session.outfit(buy(SPEED), &mut NeverFires).expect("bought");
-        session.take_off(&mut NeverFires);
+        session.take_off(&NoTraffic, &mut NeverFires);
         land_now(&mut session).expect("lands");
         session.outfit(sell(SPEED), &mut NeverFires).expect("sold");
         assert_eq!(session.pilot().cash(), 24_000 + 500);
@@ -10441,7 +10500,7 @@ mod tests {
             .buy_ship(NEW, "Kestrel", &mut NeverFires)
             .expect("bought");
         session.shipyard(&mut NeverFires).expect("a shipyard");
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         jump(&mut session, &catalog, 131);
         assert_eq!(*catalog.ship_record_reads.borrow(), 2);
     }
@@ -11012,7 +11071,9 @@ mod tests {
         session
             .buy_ship(NEW, "Kestrel", &mut NeverFires)
             .expect("bought");
-        session.take_off(&mut NeverFires).expect("took off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("took off");
         let mut expected = *session.player();
         for _ in 0..200 {
             session.tick(THRUST);
@@ -11117,7 +11178,9 @@ mod tests {
 
     /// Takes off and lands on planet 128 again.
     fn relanded(session: &mut Session) {
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&NoTraffic, &mut NeverFires)
+            .expect("takes off");
         land_now(session).expect("lands again");
     }
 
@@ -11154,7 +11217,9 @@ mod tests {
         let mut firing = Scripted::answering(&[true, true]);
         assert!(!lists_speed(&mut session, &mut firing), "kept");
         assert!(firing.asked.is_empty());
-        session.take_off(&mut firing).expect("takes off");
+        session
+            .take_off(&NoTraffic, &mut firing)
+            .expect("takes off");
         assert_eq!(firing.asked, [50], "the take-off's day draws it");
         land_now(&mut session).expect("lands again");
         assert!(lists_speed(&mut session, &mut firing), "the day's roll");
@@ -11173,7 +11238,9 @@ mod tests {
         let mut firing = Scripted::answering(&[true, true]);
         assert!(!lists_new(&mut session, &mut firing), "kept");
         assert!(firing.asked.is_empty());
-        session.take_off(&mut firing).expect("takes off");
+        session
+            .take_off(&NoTraffic, &mut firing)
+            .expect("takes off");
         assert_eq!(firing.asked, [50], "the take-off's day draws it");
         land_now(&mut session).expect("lands again");
         assert!(lists_new(&mut session, &mut firing), "the day's roll");
@@ -11184,7 +11251,7 @@ mod tests {
     fn a_take_offs_day_draws_the_rolls_the_next_landing_reads() {
         let mut session = outfitted(&rolling(50, 50));
         let mut day = Scripted::answering(&[true, false]);
-        session.take_off(&mut day).expect("takes off");
+        session.take_off(&NoTraffic, &mut day).expect("takes off");
         assert_eq!(day.asked, [50, 50], "the ship class, then the outfit");
         land_now(&mut session).expect("lands again");
         let mut none = Scripted::default();
@@ -11244,7 +11311,9 @@ mod tests {
         let mut firing = Scripted::answering(&[true, true]);
         assert!(lists_new(&mut session, &mut firing));
         session.decline_ship(NEW);
-        session.take_off(&mut firing).expect("takes off");
+        session
+            .take_off(&NoTraffic, &mut firing)
+            .expect("takes off");
         land_now(&mut session).expect("lands again");
         assert!(lists_new(&mut session, &mut firing));
         assert_eq!(firing.asked, [50, 50], "the listing's draw, then the day's");
@@ -11442,7 +11511,7 @@ mod tests {
             let mut days = Cycle::default();
             let (mut speeds, mut news) = (0, 0);
             for _ in 0..100 {
-                session.take_off(&mut days).expect("takes off");
+                session.take_off(&NoTraffic, &mut days).expect("takes off");
                 land_now(&mut session).expect("lands again");
                 let mut none = Scripted::default();
                 speeds += u32::from(lists_speed(&mut session, &mut none));
@@ -11599,6 +11668,36 @@ mod tests {
     }
 
     #[test]
+    fn a_warship_of_no_speed_is_placed_by_the_first_stellar_shown_destroyed_or_not() {
+        // Ship 129 of no speed, flown as a warship; stellar 128, the
+        // system's first, at (30, -40).
+        let mut catalog = trafficked(130, 1, 3);
+        catalog.ship_records = vec![ship(129, ShipFields { speed: 0, ..FAST })];
+        let catalog = catalog.living([crate::testkit::life(128, 2)]);
+        for destroyed in [false, true] {
+            let mut session = Session::start(&catalog).expect("starts");
+            if destroyed {
+                session.run_set(
+                    &crate::control::SetExpr::parse("Y128").expect("parses"),
+                    &mut NeverFires,
+                );
+            }
+            assert_eq!(
+                (session.sites[0].id, session.sites[0].destroyed),
+                (StellarId(128), destroyed)
+            );
+            // At angle 90 from it, facing 45.
+            session.populate(&catalog, &mut Draws::of(&[6, 6, 0, 0, 90, 45, 0]));
+            let state = session.npcs()[0].state;
+            assert!(
+                (state.position - Vec2::new(130.0, -40.0)).length() < 1e-3,
+                "{destroyed}: {state:?}"
+            );
+            assert_eq!((state.velocity, state.heading), (Vec2::ZERO, 45.0));
+        }
+    }
+
+    #[test]
     fn arriving_populates_the_new_system_from_its_dudes() {
         let catalog = trafficked(131, 2, 1);
         let mut session = Session::start(&catalog).expect("starts");
@@ -11733,19 +11832,98 @@ mod tests {
     }
 
     #[test]
-    fn taking_off_repopulates_the_system_on_the_next_traffic_tick() {
+    fn taking_off_repopulates_the_system_before_any_tick() {
         let catalog = trafficked(130, 2, 1);
         let mut session = Session::start(&catalog).expect("starts");
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         land_now(&mut session).expect("lands on planet 128");
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(npc_ids(&session), [NpcId(0), NpcId(1)], "landed");
-        session.take_off(&mut NeverFires).expect("took off");
-        assert_eq!(npc_ids(&session), [NpcId(0), NpcId(1)], "until it ticks");
-        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
-        assert_eq!(npc_ids(&session), [NpcId(2), NpcId(3)]);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("took off");
+        assert_eq!(npc_ids(&session), [NpcId(2), NpcId(3)], "as it takes off");
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(npc_ids(&session), [NpcId(2), NpcId(3)], "populated once");
+    }
+
+    /// A draw a [`QueuedLog`] chance was asked for.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Asked {
+        Fires(u8),
+        Below(u32),
+    }
+
+    /// A [`Chance`] that takes every draw, percentages too, from one
+    /// queue (each `fires` a draw below 100), wrapped into range, the last
+    /// outcome once it runs out, and logs each draw asked in order.
+    #[derive(Debug, Default)]
+    struct QueuedLog {
+        queue: std::collections::VecDeque<u32>,
+        log: Vec<Asked>,
+    }
+
+    impl QueuedLog {
+        fn of(draws: &[u32]) -> Self {
+            Self {
+                queue: draws.iter().copied().collect(),
+                log: Vec::new(),
+            }
+        }
+
+        fn draw(&mut self, n: u32) -> u32 {
+            self.queue.pop_front().map_or(n - 1, |draw| draw % n)
+        }
+    }
+
+    impl Chance for QueuedLog {
+        fn fires(&mut self, percent: u8) -> bool {
+            self.log.push(Asked::Fires(percent));
+            self.draw(100) < u32::from(percent)
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            self.log.push(Asked::Below(n));
+            self.draw(n)
+        }
+    }
+
+    #[test]
+    fn taking_off_rolls_the_days_then_populates() {
+        let mut catalog = trafficked(130, 2, 1);
+        catalog.ship_records[0].hire_random = 30;
+        catalog.ship_records[0].buy_random = 40;
+        let spawns = [5, 11, 3, 17, 7, 23, 2, 13, 19, 29, 31, 37, 41];
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands on planet 128");
+        // The day's two rolls, the escort-strength seed, then the spawns.
+        let mut chance = QueuedLog::of(&[[99, 99, 0].as_slice(), &spawns].concat());
+        session.take_off(&catalog, &mut chance).expect("took off");
+        assert_eq!(
+            chance.log[..3],
+            [Asked::Fires(30), Asked::Fires(40), Asked::Below(30)],
+            "the day's hire then buy roll first, then the seed"
+        );
+        assert!(chance.log.len() > 2, "then the population draws");
+        assert!(
+            chance.log[2..]
+                .iter()
+                .all(|asked| matches!(asked, Asked::Below(_))),
+            "{:?}",
+            chance.log
+        );
+
+        let mut populated = Session::start(&catalog).expect("starts");
+        populated.populate(&catalog, &mut QueuedLog::of(&spawns));
+        let at = |session: &Session| {
+            session
+                .npcs()
+                .iter()
+                .map(|npc| npc.state.position)
+                .collect::<Vec<_>>()
+        };
+        assert!(!at(&session).is_empty());
+        assert_eq!(at(&session), at(&populated), "placed by the later draws");
     }
 
     #[test]
@@ -11755,9 +11933,12 @@ mod tests {
         land_now(&mut session).expect("lands on planet 128");
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         assert_eq!(npc_ids(&session), [], "landed");
-        session.take_off(&mut NeverFires).expect("took off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("took off");
+        assert_eq!(npc_ids(&session), [NpcId(0), NpcId(1)], "as it takes off");
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
-        assert_eq!(npc_ids(&session), [NpcId(0), NpcId(1)]);
+        assert_eq!(npc_ids(&session), [NpcId(0), NpcId(1)], "populated once");
     }
 
     #[test]
@@ -11874,12 +12055,11 @@ mod tests {
     fn arriving_brings_in_the_fleet_linked_to_the_new_systems_government() {
         let catalog = fleeted();
         let mut session = Session::start(&catalog).expect("starts");
-        jump_with(
-            &mut session,
-            &catalog,
-            131,
-            &mut Draws::arriving(&[1, 0, 3, 0, 2]),
-        );
+        // The escort-strength seed, then the roll table and the fleet.
+        let mut seeded: Vec<u32> = vec![0];
+        seeded.extend(std::iter::repeat_n(99, crate::mission::ROLLED));
+        seeded.extend([1, 0, 3, 0, 2]);
+        jump_with(&mut session, &catalog, 131, &mut Draws::of(&seeded));
         assert_eq!(fleet_of(&session), a_fleet_led_by(0));
         session.populate(&catalog, &mut linked_fleet_draws(2));
         assert_eq!(fleet_of(&session), [], "linked to another government");
@@ -11898,6 +12078,65 @@ mod tests {
         assert_eq!(fleet_of(&session), [], "31 is above its 30%");
         session.tick_traffic(&catalog, &Peaceful, &mut Draws::of(&[1, 29, 0, 0, 2]));
         assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+    }
+
+    /// `catalog` with a hypergate of `govt` at (300, -400) in system 130,
+    /// heading ships out on 90°, and govt 150 (class 1) at war with 160
+    /// (class 2).
+    fn with_hypergate(mut catalog: FakePilotCatalog, govt: Option<GovtId>) -> FakePilotCatalog {
+        catalog.sites[0].1.push(LandingSite {
+            flags2: crate::gate::HYPERGATE,
+            exit_angle: 90,
+            govt,
+            ..planet(141, 300.0, -400.0)
+        });
+        catalog.govts = vec![
+            crate::catalog::GovtRecord {
+                classes: [1, -1, -1, -1],
+                enemies: [2, -1, -1, -1],
+                ..crate::testkit::govt(150)
+            },
+            crate::catalog::GovtRecord {
+                classes: [2, -1, -1, -1],
+                ..crate::testkit::govt(160)
+            },
+        ];
+        catalog
+    }
+
+    #[test]
+    fn traffic_arriving_among_a_hypergate_may_come_out_of_it() {
+        let catalog = with_hypergate(trafficked(130, 1, 3), None);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut Draws::of(&[0]));
+        assert_eq!(session.npcs(), []);
+        // An arrival, then the gate: 1 of planet 128 and the gate, planet
+        // 129 being 2000 out.
+        let mut chance = Draws::of(&[0, 6, 6, 0, 0, 0, 1]);
+        session.tick_traffic(&catalog, &Peaceful, &mut chance);
+        assert_eq!(chance.asked, [500, 7, 7, 100, 1, 360, 2, 3]);
+        let npc = &session.npcs()[0];
+        assert!(npc.emerging(), "{:?}", npc.mode);
+        assert_eq!(npc.state.position, Vec2::new(300.0, -400.0));
+    }
+
+    #[test]
+    fn populating_judges_a_fleets_gate_by_the_sessions_governments() {
+        // Fleet 130 (govt 150) at setup: by a gate of independents it may
+        // come out of the gate; by govt 160's, at war with it, it never
+        // does, and nothing is drawn for the pick.
+        let catalog = with_hypergate(fleeted(), None);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut Draws::of(&[1, 0, 2, 1, 2]));
+        assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+        assert!(session.npcs().iter().all(Npc::emerging));
+        let catalog = with_hypergate(fleeted(), Some(GovtId(160)));
+        let mut session = Session::start(&catalog).expect("starts");
+        let mut chance = linked_fleet_draws(2);
+        session.populate(&catalog, &mut chance);
+        assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+        assert_eq!(&chance.asked[..4], [7, 7, 256, 360], "jumping in");
+        assert!(session.npcs().iter().all(|npc| !npc.emerging()));
     }
 
     // Combat.
@@ -11955,11 +12194,12 @@ mod tests {
     }
 
     /// `catalog`'s session with its one NPC placed 100 pixels above the
-    /// player (at the centre, facing up), facing `heading`.
+    /// player (at the centre, facing up), facing `heading`, at rest.
     fn facing_an_npc(catalog: &FakePilotCatalog, heading: u32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.populate(catalog, &mut Draws::of(&[6, 6, 0, 0, 750, 650, heading]));
         assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, -100.0));
+        stop_npcs(&mut session);
         session
     }
 
@@ -12398,7 +12638,7 @@ mod tests {
         assert!(hits > 3, "{hits}");
         session.tick_combat(Rules::default(), &mut NeverFires);
         land_now(&mut session).expect("lands");
-        session.take_off(&mut NeverFires);
+        session.take_off(&catalog, &mut NeverFires);
         session.tick_traffic(&catalog, &spy, &mut NeverFires);
         assert_eq!(spy.struck.take(), [], "gone with the system's traffic");
     }
@@ -13275,6 +13515,26 @@ mod tests {
     }
 
     #[test]
+    fn the_player_sees_past_a_ships_cloak_whether_or_not_it_waits_at_its_gate() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::Emerging { ticks_left: 5 };
+        assert!(session.sees_past_cloak(&session.npcs()[0]), "emerging");
+        session.traffic.npcs_mut()[0].cloak = CLOAKED;
+        assert!(!session.sees_past_cloak(&session.npcs()[0]), "cloaked");
+        let scans = scanning(crate::cloak::SCAN_SCREEN);
+        let mut session = holding_260(&scans);
+        let player = session.player().position;
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak = CLOAKED;
+        npc.state.position = player + Vec2::new(0.0, -150.0);
+        assert!(
+            session.sees_past_cloak(&session.npcs()[0]),
+            "a scanner within 200"
+        );
+    }
+
+    #[test]
     fn a_cloaked_ship_is_on_the_radar_only_when_its_cloak_shows_there_or_the_player_scans_for_it() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
@@ -13372,6 +13632,24 @@ mod tests {
     }
 
     #[test]
+    fn a_watched_ship_coming_out_of_a_gate_is_observed_once_it_is_out() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::Emerging { ticks_left: 3 };
+        session.watch_ship(NpcId(0));
+        for left in [2, 1] {
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            assert!(session.npcs()[0].emerging(), "{left} to go");
+            assert_eq!(fates(&session), [], "not seen while it waits");
+            assert_eq!(session.story.watched, BTreeSet::from([NpcId(0)]), "kept");
+        }
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert!(!session.npcs()[0].emerging(), "bursting out");
+        assert_eq!(fates(&session), [fate(0, Fate::Observed)]);
+        assert!(session.story.watched.is_empty(), "forgotten once seen");
+    }
+
+    #[test]
     fn a_watched_ship_is_not_observed_while_landed_or_jumping() {
         let catalog = armed();
         let mut session = facing_an_npc(&catalog, 180);
@@ -13434,11 +13712,13 @@ mod tests {
             ..lawful()
         };
         let mut session = Session::start(&catalog).expect("starts");
-        // NPC 0 at (0, -100) and NPC 1 at (100, -100), both facing right.
+        // NPC 0 at (0, -100) and NPC 1 at (100, -100), both facing right,
+        // at rest.
         session.populate(
             &catalog,
             &mut Draws::of(&[6, 6, 0, 0, 750, 650, 90, 2, 6, 6, 0, 0, 850, 650, 90, 2]),
         );
+        stop_npcs(&mut session);
         let witness = Witness::default();
         let rules = Rules {
             law: &witness,
@@ -13623,7 +13903,9 @@ mod tests {
         session
             .outfit(buy(OutfitId(305)), &mut NeverFires)
             .expect("bought");
-        session.take_off(&mut NeverFires).expect("took off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("took off");
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(
             fired_by_the_player(&session.take_combat_events()),
@@ -13698,7 +13980,9 @@ mod tests {
         session
             .buy_ship(NEW, "Kestrel", &mut NeverFires)
             .expect("bought");
-        session.take_off(&mut NeverFires).expect("took off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("took off");
         session.hold_trigger(FIRE);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(
@@ -14582,10 +14866,11 @@ mod tests {
     }
 
     /// `catalog`'s session with its one NPC at (`x`, `y`) from the player
-    /// (at the centre, facing up), facing `heading`.
+    /// (at the centre, facing up), facing `heading`, at rest.
     fn with_an_npc_at(catalog: &FakePilotCatalog, x: u32, y: u32, heading: u32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.populate(catalog, &mut Draws::of(&[6, 6, 0, 0, x, y, heading]));
+        stop_npcs(&mut session);
         session
     }
 
@@ -14863,6 +15148,14 @@ mod tests {
         catalog
     }
 
+    /// Brings every NPC of `session` to rest, for a scene that starts
+    /// with them still: setup starts each at its top speed.
+    fn stop_npcs(session: &mut Session) {
+        for npc in session.traffic.npcs_mut() {
+            npc.state.velocity = Vec2::ZERO;
+        }
+    }
+
     /// Setup draws placing, in order, düde `slot` of `of` at (`x`, `y`)
     /// facing `heading`, each of aggression 2.
     fn placing(of: usize, ships: &[(usize, i32, i32, u32)]) -> Draws {
@@ -15115,6 +15408,9 @@ mod tests {
         session.populate(catalog, &mut placing(2, &[(0, 0, 0, 0), (1, 0, 740, 0)]));
         let trader = &mut session.traffic.npcs_mut()[0];
         assert_eq!(trader.state.position, Vec2::ZERO);
+        // Setup starts it at its top speed: brought to rest under the
+        // player.
+        trader.state.velocity = Vec2::ZERO;
         trader.condition = Condition::Disabled;
         trader.reserves.armor.now = 10.0;
         session.target = Some(NpcId(0));
@@ -16938,6 +17234,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         session.populate(&catalog, &mut placing(2, &placed));
         assert_eq!(session.npcs().len(), others + 1);
+        stop_npcs(&mut session);
         let trader = &mut session.traffic.npcs_mut()[0];
         trader.condition = Condition::Disabled;
         session.target = Some(NpcId(0));
@@ -16993,7 +17290,7 @@ mod tests {
     #[test]
     fn no_fuel_is_sold_in_flight() {
         let mut session = half_empty_at_port();
-        session.take_off(&mut NeverFires);
+        session.take_off(&NoTraffic, &mut NeverFires);
         session.take_save_due();
         assert_refused(session, RechargeRefusal::NoFuel);
     }
@@ -18045,14 +18342,19 @@ mod tests {
         }
     }
 
+    /// The escort-strength timer's seed, `Rand(30)`.
+    const SEED: Draw = Draw::Below(30);
+
     #[test]
     fn a_jumps_days_draw_before_the_population_of_the_system_arrived_in() {
         let catalog = with_event(busy(catalog()));
         let mut session = Session::start(&catalog).expect("starts");
         let mut chance = Logged::default();
         jump_with(&mut session, &catalog, 131, &mut chance);
+        // The seed first (@0x6c013), then the days, the roll table and the
+        // population.
         let expected = [
-            vec![Draw::Fires(35)],
+            vec![SEED, Draw::Fires(35)],
             vec![Draw::Roll(100); crate::mission::ROLLED],
             population_draws(&catalog, 131),
         ]
@@ -18068,7 +18370,7 @@ mod tests {
         session
             .enter_hypergate(Some(SystemId(131)), &catalog, &mut chance)
             .expect("enters");
-        let expected = [vec![Draw::Fires(35)], population_draws(&catalog, 131)].concat();
+        let expected = [vec![Draw::Fires(35), SEED], population_draws(&catalog, 131)].concat();
         assert_eq!(chance.0, expected);
     }
 
@@ -18080,7 +18382,7 @@ mod tests {
         session
             .enter_hypergate(Some(SystemId(132)), &catalog, &mut chance)
             .expect("enters");
-        let expected = [vec![Draw::Roll(360)], population_draws(&catalog, 132)].concat();
+        let expected = [vec![Draw::Roll(360), SEED], population_draws(&catalog, 132)].concat();
         assert_eq!(chance.0, expected);
     }
 
@@ -18092,8 +18394,134 @@ mod tests {
         session
             .enter_wormhole(&catalog, &mut chance)
             .expect("enters");
-        let expected = [vec![Draw::Roll(2)], population_draws(&catalog, 131)].concat();
+        let expected = [vec![Draw::Roll(2), SEED], population_draws(&catalog, 131)].concat();
         assert_eq!(chance.0, expected);
+    }
+
+    #[test]
+    fn a_take_off_draws_the_seed_after_the_stays_days_and_before_the_population() {
+        let catalog = with_event(busy(catalog()));
+        let mut session = Session::start(&catalog).expect("starts");
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        // Two escorts changed (a day before the wage), an outfit traded
+        // and a ship bought (five days after it), and the take-off's day.
+        session.stay.escorts_changed = 2;
+        session.stay.outfit_traded = true;
+        session.stay.ship_bought = true;
+        let mut chance = Logged::default();
+        session.take_off(&catalog, &mut chance).expect("takes off");
+        let expected = [
+            vec![Draw::Fires(35); 7],
+            vec![SEED],
+            population_draws(&catalog, 130),
+        ]
+        .concat();
+        assert_eq!(chance.0, expected);
+    }
+
+    // The escort-strength timer.
+
+    /// [`busy`] [`catalog`] with escort classes 150 (a wimpy trader of 60
+    /// tons), 151 (a brave trader of 250) and 152 (a warship of 300), and
+    /// `flët` 382, led by ship 160, and 383, led by ship 161, which link
+    /// to no system.
+    fn strong() -> FakePilotCatalog {
+        let mut catalog = busy(catalog());
+        catalog.ship_records.extend([
+            holds_record(150, 60, 1),
+            holds_record(151, 250, 2),
+            holds_record(152, 300, 3),
+            ship(160, FAST),
+            ship(161, FAST),
+        ]);
+        let fleet = |id, lead| FleetRecord {
+            id: FleetId(id),
+            lead: Some(ShipId(lead)),
+            escorts: Vec::new(),
+            govt: None,
+            link_syst: 0,
+            appear_on: Test::default(),
+        };
+        catalog.fleets = vec![fleet(382, 160), fleet(383, 161)];
+        catalog
+    }
+
+    /// [`strong`]'s session with an escort of each of `classes`, landed on
+    /// planet 128 and taken off, the timer armed to 59 ([`NeverFires`]).
+    fn escorted_take_off(catalog: &FakePilotCatalog, classes: &[i16]) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.pilot.escorts = classes.iter().map(|&id| fleet_escort(id)).collect();
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        session
+            .take_off(catalog, &mut NeverFires)
+            .expect("takes off");
+        session
+    }
+
+    /// The AI types of `session`'s NPCs of ship `id`.
+    fn flying_as(session: &Session, id: i16) -> Vec<AiType> {
+        session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.ship == ShipId(id))
+            .map(|npc| npc.ai_type)
+            .collect()
+    }
+
+    #[test]
+    fn escorts_above_49_tons_bring_fleet_382_on_the_60th_tick_after_a_take_off() {
+        let catalog = strong();
+        let mut session = escorted_take_off(&catalog, &[150]);
+        assert_eq!(flying_as(&session, 150).len(), 1, "the escort is out");
+        for _ in 0..59 {
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        }
+        assert_eq!(flying_as(&session, 160), []);
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(flying_as(&session, 160), [AiType::Interceptor]);
+        assert_eq!(flying_as(&session, 161), []);
+    }
+
+    #[test]
+    fn escorts_above_199_tons_bring_fleet_383() {
+        let catalog = strong();
+        for classes in [&[151][..], &[150, 150, 150, 150]] {
+            let mut session = escorted_take_off(&catalog, classes);
+            for _ in 0..60 {
+                session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            }
+            assert_eq!(
+                flying_as(&session, 161),
+                [AiType::Interceptor],
+                "{classes:?}"
+            );
+            assert_eq!(flying_as(&session, 160), []);
+        }
+    }
+
+    #[test]
+    fn a_warship_escort_or_none_brings_nothing() {
+        let catalog = strong();
+        for classes in [&[152][..], &[]] {
+            let mut session = escorted_take_off(&catalog, classes);
+            for _ in 0..100 {
+                session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            }
+            assert_eq!(flying_as(&session, 160), [], "{classes:?}");
+            assert_eq!(flying_as(&session, 161), [], "{classes:?}");
+        }
+    }
+
+    #[test]
+    fn a_flight_never_taken_off_or_arrived_in_is_never_timed() {
+        let catalog = strong();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.pilot.escorts = vec![fleet_escort(151)];
+        session.populate(&catalog, &mut NeverFires);
+        for _ in 0..100 {
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        }
+        assert_eq!(flying_as(&session, 161), []);
     }
 
     // The galaxy overlay.
@@ -18241,7 +18669,9 @@ mod tests {
         let mut session = Session::fly(&catalog, pilot)
             .expect("flies")
             .with_rules(bible_records());
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         assert_eq!(session.system_record(), 9);
         assert_eq!(land_now(&mut session), denied(128));
         session.change_galaxy(&catalog, |overlay| {
@@ -18261,7 +18691,9 @@ mod tests {
         let mut pilot = on_record(&catalog);
         pilot.stellar = Some(StellarId(128));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         assert_eq!(session.system_record(), 9);
         session.change_galaxy(&catalog, |overlay| {
             overlay.set_govt(SystemId(130), Some(Some(LAWFUL)));
@@ -18282,7 +18714,9 @@ mod tests {
         let mut session = Session::fly(&catalog, pilot)
             .expect("flies")
             .with_rules(bible_records());
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         assert_eq!(land_now(&mut session), denied(128));
         session.change_galaxy(&catalog, |overlay| {
             overlay.set_stellar_govt(StellarId(128), Some(Some(LAWFUL)));
@@ -18290,7 +18724,9 @@ mod tests {
         assert_eq!(session.sites[0].govt, Some(LAWFUL));
         assert_eq!(session.sites[1].govt, None, "only that stellar");
         assert_eq!(land_now(&mut session), Ok(StellarId(128)));
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         session.change_galaxy(&catalog, |overlay| {
             overlay.set_stellar_govt(StellarId(128), Some(Some(WANTED)));
         });
@@ -18373,7 +18809,9 @@ mod tests {
         hide(&mut session, &catalog, &[131]);
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.sites.len(), 2, "130's, until the take-off");
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
     }
 
@@ -18400,7 +18838,9 @@ mod tests {
         session.assert_docked_among_shown();
         assert_eq!(session.sites[0].id, StellarId(128), "130's, still shown");
         assert_eq!(session.sites[0].govt, Some(LAWFUL));
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         assert_eq!(session.sites, [planet(140, 0.0, 0.0)], "131's own");
     }
 
@@ -18413,7 +18853,9 @@ mod tests {
             overlay.set_stellar_govt(StellarId(140), Some(Some(LAWFUL)));
         });
         assert_eq!(session.sites, shown, "130's, untouched");
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         assert_eq!(
             session.sites,
             [LandingSite {
@@ -18521,7 +18963,10 @@ mod tests {
     fn takes_off_into_134(session: &mut Session) {
         session.assert_docked_among_shown();
         session.take_events();
-        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(140)));
+        assert_eq!(
+            session.take_off(&NoTraffic, &mut NeverFires),
+            Some(StellarId(140))
+        );
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
         assert_eq!(session.take_events(), [SessionEvent::SystemChanged]);

@@ -19,7 +19,8 @@
 //! it brings. Drawing and input never read anything.
 //!
 //! The session populates the system's NPC traffic when it says to (see
-//! [`Session::tick_traffic`]), rolled on the screen's [`SharedChance`].
+//! [`Session::tick_traffic`]), and as the ship takes off
+//! ([`Session::take_off`]), rolled on the screen's [`SharedChance`].
 //! Each time, the sprite sheet of each ship type the traffic can spawn is
 //! read, once per type for the life of the screen. After each step of the
 //! player's ship, the traffic takes a step,
@@ -38,7 +39,9 @@
 //! drawn with its own ship's sprite, after the stellars and before the
 //! player, smoothed between its last two steps as the player's ship is
 //! (a crossed box when its sheet cannot be read), and as a dim blip on the
-//! radar.
+//! radar. One waiting at the hypergate or wormhole it comes out of is not
+//! drawn until its last 16 ticks there, over which it fades in; it is on
+//! the radar all along, as the original's radar does not ask.
 //!
 //! Each step's fight events are drained into the [`Effects`]: its
 //! explosions, debris and sounds, rolled on their own [`SharedChance`]
@@ -295,6 +298,8 @@ use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::offer_gap;
 use nova_sim::mission::screens::{NO_ACTIVE_MISSIONS, mac_ticks};
 use nova_sim::order_loop::{OrderRun, Stopped};
+use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
+use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
     HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText,
@@ -836,6 +841,27 @@ fn shown_position(from: &ShipState, to: &ShipState, alpha: f32) -> Point {
 /// round, from `from` to `to`.
 fn shown_heading(from: &ShipState, to: &ShipState, alpha: f32) -> f32 {
     normalized(shortest_turn(from.heading, to.heading).mul_add(alpha, from.heading))
+}
+
+/// How `npc`'s sprite is tinted: `None` while it waits hidden at the gate
+/// it comes out of; white with the alpha of its [`emerge_level`] over
+/// its last [`FADE_TICKS`](nova_sim::traffic::emerge::FADE_TICKS) there;
+/// plain white otherwise.
+///
+/// The original (`_HandleShipDisplay` @0x2c090-0x2c18e) fades the hull in
+/// at 16-bit depth by a destination factor of twice the ticks left and a
+/// bias of four times them, at most 32. That translucent blit was not
+/// traced; this draws the ship's alpha rising from none to full, as the
+/// cloak's fade does. An NPC gets no screen flash, as the player's own
+/// gate arrival does (see [`jump`](super::jump)).
+fn npc_tint(npc: &Npc) -> Option<Color> {
+    let Mode::Emerging { ticks_left } = npc.mode else {
+        return Some(Color::WHITE);
+    };
+    let level = u16::from(emerge_level(ticks_left)?);
+    let full = u16::from(FULL_LEVEL);
+    let alpha = u8::try_from((level * 255 + full / 2) / full).unwrap_or(u8::MAX);
+    Some(Color::rgba(255, 255, 255, alpha))
 }
 
 /// `STR#` 2002 #130: the target cannot be boarded.
@@ -1852,12 +1878,13 @@ impl<
     /// ([`SessionEvent`]); it shows no message
     /// from before the landing, but says how many hired escorts defected
     /// for want of the take-off's pay ([`defection_message`]); the
-    /// session populates the system's traffic afresh on its next tick
-    /// ([`Session::take_off`]). Leaving passes the stay's days, their
+    /// session has populated the system's traffic afresh
+    /// ([`Session::take_off`]), so no frame draws the ships from before
+    /// the landing. Leaving passes the stay's days, their
     /// events rolled on the flight's chance.
     pub fn take_off(&mut self) -> Option<StellarId> {
         let session = self.session.as_mut().ok()?;
-        let stellar = session.take_off(&mut self.chance)?;
+        let stellar = session.take_off(&self.catalog, &mut self.chance)?;
         let said = self.took_off();
         self.say_all(&said);
         Some(stellar)
@@ -1865,8 +1892,10 @@ impl<
 
     /// Catches the screen up with the session having taken off: the ship
     /// drawn where it is, in the system laid out afresh if the session
-    /// tells a move while landed changed it, no message from before kept;
-    /// gives what paying the escorts for the take-off has to say.
+    /// tells a move while landed changed it, the traffic populated afresh
+    /// drawn where it is with its ship types' sheets read, no message from
+    /// before kept; gives what paying the escorts for the take-off has to
+    /// say.
     fn took_off(&mut self) -> Vec<String> {
         let pay = self
             .session
@@ -1875,6 +1904,7 @@ impl<
             .unwrap_or_default();
         self.catch_up();
         self.place_ship();
+        self.read_npc_sheets();
         self.message = None;
         pay_notes_message(&pay)
     }
@@ -2579,8 +2609,9 @@ impl<C> FlightView<C> {
     }
 
     /// Draws each NPC with its own ship's sprite, or a crossed box when its
-    /// sheet cannot be read, but for one the player cannot see: emerging
-    /// from a gate, or cloaked ([`sprite_drawn`]).
+    /// sheet cannot be read, but for one the player cannot see for its
+    /// cloak ([`sprite_drawn`]). One waiting at the gate it comes out of
+    /// is hidden, then fades in over its last ticks there ([`npc_tint`]).
     fn draw_npcs(&self, list: &mut DrawList, camera: &Camera) {
         let Ok(session) = &self.session else {
             return;
@@ -2589,11 +2620,14 @@ impl<C> FlightView<C> {
             if !sprite_drawn(session, npc) {
                 continue;
             }
+            let Some(tint) = npc_tint(npc) else {
+                continue;
+            };
             let at = camera.world_to_screen(at);
             match self.npc_sheets.get(&npc.ship) {
                 Some(Ok(sheet)) => {
                     let frame = rotation_frame(heading, sheet.rotations);
-                    list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
+                    list.sprite(ImageKey::sprite(sheet.image_id, frame), at, tint);
                 }
                 _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
             }
@@ -3237,12 +3271,13 @@ fn dying(
     me.into_iter().chain(npcs).collect()
 }
 
-/// Whether `npc`'s sprite is drawn: not while it emerges from a hypergate
-/// or wormhole, as `_HandleShipDisplay` (@0x2c090) skips a ship
-/// `_AIShipIsEmergingFromHypergate` reads emerging. The radar still
-/// shows it, as `_DrawStatusRadar` does not ask.
+/// Whether `npc`'s sprite may be drawn for its cloak: not while the
+/// player cannot see past it ([`Session::sees_past_cloak`]). A ship
+/// waiting at the gate it comes out of is hidden, then faded in, by its
+/// tint ([`npc_tint`]), as `_HandleShipDisplay` (@0x2c090-0x2c18e) fades
+/// it. The radar still shows it, as `_DrawStatusRadar` does not ask.
 fn sprite_drawn(session: &Session, npc: &Npc) -> bool {
-    session.sees(npc)
+    session.sees_past_cloak(npc)
 }
 
 /// Where each of `shown` the radar shows is drawn: those
@@ -3485,6 +3520,7 @@ mod tests {
             dead_graphic: None,
             dead_frame_size: None,
             type_counts_frames: true,
+            exit_angle: -1,
         }
     }
 
@@ -7442,7 +7478,11 @@ mod tests {
         assert_eq!(npc_ids(&view), [NpcId(0)], "populated once");
         let npc = &view.session().expect("flying").npcs()[0];
         assert_eq!(npc.goal, Goal::Idle, "deciding as the behaviour given says");
-        assert_eq!(npc.state.position, Vec2::new(100.0, -100.0));
+        assert_eq!(
+            npc.state.position,
+            Vec2::new(118.0, -100.0),
+            "gliding right at its top speed, 6 a tick"
+        );
     }
 
     #[test]
@@ -7467,7 +7507,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_emerging_from_a_gate_is_not_drawn_but_one_jumping_in_is() {
+    fn a_ship_waiting_at_its_gate_is_drawn_by_its_tint_and_any_ship_by_its_cloak() {
         let (_, chance) = scripted(&placed(850, 650, 90));
         let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
             .with_chance(chance)
@@ -7479,7 +7519,13 @@ mod tests {
         npc.mode = nova_sim::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
         assert!(sprite_drawn(session, &npc), "jumping in");
         npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
-        assert!(!sprite_drawn(session, &npc), "emerging");
+        assert!(sprite_drawn(session, &npc), "fading in at its gate");
+        npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 30 };
+        assert!(sprite_drawn(session, &npc));
+        assert_eq!(npc_tint(&npc), None, "hidden at its gate");
+        npc.cloak = CLOAKED;
+        npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
+        assert!(!sprite_drawn(session, &npc), "cloaked at its gate");
     }
 
     /// A full cloak.
@@ -7563,6 +7609,62 @@ mod tests {
             })
             .collect();
         assert_eq!(dim, [blip]);
+    }
+
+    /// The tints the NPC sprite (ship 129's sheet, 2001) is drawn with.
+    fn npc_tints(list: &DrawList) -> Vec<Color> {
+        list.iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite { image, tint, .. } if image.id == 2001 => Some(*tint),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The dim radar dots drawn: one for each NPC.
+    fn dim_dots(list: &DrawList) -> usize {
+        list.iter()
+            .filter(|command| {
+                matches!(command, DrawCommand::Dot { color, .. } if *color == layout().dim_radar)
+            })
+            .count()
+    }
+
+    #[test]
+    fn an_npc_coming_out_of_a_gate_is_hidden_then_fades_in_but_always_on_the_radar() {
+        let mut catalog = trafficked(&[130], 1, 129, 3);
+        catalog.sites.push(LandingSite {
+            flags2: nova_sim::gate::HYPERGATE,
+            exit_angle: 90,
+            ..site(141, (200.0, 100.0), StellarFlags::CAN_LAND)
+        });
+        // Setup brings nobody (an empty person roll); then an arrival
+        // comes out of the gate, the third of the stellars.
+        let (script, chance) = scripted(&[0, 0, 6, 6, 0, 0, 0, 2]);
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        ticks(&mut view, 2);
+        assert_eq!(&script.borrow().asked[1..9], [500, 7, 7, 100, 1, 360, 3, 3]);
+        let mode = |view: &View| view.session().expect("flying").npcs()[0].mode;
+        assert_eq!(mode(&view), Mode::Emerging { ticks_left: 59 });
+        ticks(&mut view, 19);
+        assert_eq!(mode(&view), Mode::Emerging { ticks_left: 40 });
+        let list = drawn(&view);
+        assert_eq!(npc_tints(&list), [], "hidden");
+        assert_eq!(dim_dots(&list), 1, "on the radar all the same");
+        ticks(&mut view, 32);
+        assert_eq!(mode(&view), Mode::Emerging { ticks_left: 8 });
+        let list = drawn(&view);
+        assert_eq!(
+            npc_tints(&list),
+            [Color::rgba(255, 255, 255, 128)],
+            "half in"
+        );
+        assert_eq!(dim_dots(&list), 1);
+        ticks(&mut view, 8);
+        assert_eq!(mode(&view), Mode::LeavingGate { tick: 0 });
+        assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE]);
     }
 
     #[test]
@@ -7681,8 +7783,84 @@ mod tests {
         assert_eq!(npc_ids(&view), [NpcId(0), NpcId(1)]);
         land_now(&mut view);
         view.take_off().expect("took off");
+        assert_eq!(npc_ids(&view), [NpcId(2), NpcId(3)], "before any tick");
         view.tick(TICK);
-        assert_eq!(npc_ids(&view), [NpcId(2), NpcId(3)]);
+        assert_eq!(npc_ids(&view), [NpcId(2), NpcId(3)], "populated once");
+    }
+
+    /// [`trafficked`] with one ship 129 of AI 3 in 130, over planet 128
+    /// at the centre.
+    fn trafficked_over_128() -> FakeCatalog {
+        FakeCatalog {
+            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            ..trafficked(&[130], 1, 129, 3)
+        }
+    }
+
+    /// Whether `list` draws a sprite at world point `world`.
+    fn sprite_at(view: &View, list: &DrawList, world: Vec2) -> bool {
+        let screen = view.camera().world_to_screen(point(world));
+        sprites(list).iter().any(|&(_, center)| center == screen)
+    }
+
+    #[test]
+    fn the_first_frame_after_take_off_draws_none_of_the_ships_from_before_the_landing() {
+        let mut draws = placed(850, 650, 90).to_vec();
+        // The take-off's escort-strength seed, then its population.
+        draws.push(0);
+        draws.extend(placed(650, 850, 90));
+        let (_, chance) = scripted(&draws);
+        let mut view = FlightView::new(trafficked_over_128())
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let before = npc_states(&view)[0].position;
+        assert_eq!(before, Vec2::new(100.0, -100.0));
+        land_now(&mut view);
+        view.take_off().expect("took off");
+        let after = npc_states(&view)[0].position;
+        assert_eq!(after, Vec2::new(-100.0, 100.0));
+
+        let list = drawn(&view);
+        assert!(!sprite_at(&view, &list, before), "with no tick");
+        assert!(sprite_at(&view, &list, after), "with no tick");
+
+        let states = npc_states(&view);
+        view.tick(TICK / 4);
+        assert_eq!(npc_states(&view), states, "no step");
+        let list = drawn(&view);
+        assert!(!sprite_at(&view, &list, before), "after a frame of no step");
+        assert!(sprite_at(&view, &list, after), "after a frame of no step");
+    }
+
+    #[test]
+    fn a_ship_type_first_flown_at_take_off_is_drawn_with_its_sprite_at_once() {
+        // The take-off's escort-strength seed, then its population.
+        let mut draws = vec![0];
+        draws.extend(placed(650, 850, 90));
+        let (_, chance) = scripted(&draws);
+        let mut view = FlightView::new(trafficked_over_128())
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        land_now(&mut view);
+        assert!(view.take_landing().is_some(), "landed before any traffic");
+        view.take_off().expect("took off");
+        let after = npc_states(&view)[0].position;
+        let list = drawn(&view);
+        let mut boxed = DrawList::new();
+        crossed_box(
+            &mut boxed,
+            view.camera().world_to_screen(point(after)),
+            PLACEHOLDER_SIZE,
+            PLACEHOLDER,
+        );
+        let commands: Vec<_> = list.iter().cloned().collect();
+        let expected: Vec<_> = boxed.iter().cloned().collect();
+        assert!(
+            !commands.windows(expected.len()).any(|run| run == expected),
+            "no placeholder"
+        );
+        assert!(sprite_at(&view, &list, after), "its own sprite");
     }
 
     // Combat.
@@ -8466,7 +8644,8 @@ mod tests {
         catalog.weapons[0].explod_type = -1;
         catalog.hulls[1].death_delay = 30;
         catalog.hulls[1].explode1 = 0;
-        let mut view = fighting(catalog, &placed(750, 650, 180));
+        // 100 above, facing away: it flies on up the line of fire.
+        let mut view = fighting(catalog, &placed(750, 650, 0));
         view.input(&key(FIRE_KEY, true));
         view.tick(TICK);
         view.input(&key(FIRE_KEY, false));
@@ -8479,10 +8658,11 @@ mod tests {
                 && ticks_left < 19
                 && !view.effects().explosions().is_empty()
             {
-                breaking = Some(npc.state.position);
+                breaking = Some(npc.state.position - npc.state.velocity);
                 break;
             }
         }
+        // Where it was before the tick's flight step moved it on.
         let at = breaking.expect("an explosion as it breaks up");
         // Never firing, the effects' chance draws the last outcome: a
         // quarter of its 40-pixel sprite less one out, each way.
@@ -8992,8 +9172,9 @@ mod tests {
 
     #[test]
     fn by_default_npcs_fight_by_novas_ai_and_crimes_by_novas_law() {
-        // The warship 100 above, facing the player.
-        let (_, chance) = scripted(&placed(750, 650, 180));
+        // The warship 100 above, facing away: it flies on up the line of
+        // fire.
+        let (_, chance) = scripted(&placed(750, 650, 0));
         let mut view = FlightView::new(damaging()).with_chance(chance);
         view.tick(TICK);
         view.input(&key(FIRE_KEY, true));
@@ -9040,7 +9221,8 @@ mod tests {
     #[test]
     fn the_flight_convicts_by_the_law_it_is_given() {
         let witness = Rc::new(Witness::default());
-        let (_, chance) = scripted(&placed(750, 650, 180));
+        // 100 above, facing away: it flies on up the line of fire.
+        let (_, chance) = scripted(&placed(750, 650, 0));
         let mut view = FlightView::new(damaging())
             .with_chance(chance)
             .with_behaviour(Rc::new(Still))
@@ -9113,8 +9295,8 @@ mod tests {
     }
 
     /// [`trafficked`] with its ship 129 (of strength 5, a crew of 3 and a
-    /// `Cost` of 150,000) carrying money (`Booty` 0x0040), and the
-    /// player's ship 128 a crew of 10.
+    /// `Cost` of 150,000, and no speed, so it starts at rest) carrying
+    /// money (`Booty` 0x0040), and the player's ship 128 a crew of 10.
     fn boardable() -> FakeCatalog {
         let mut catalog = trafficked(&[130], 1, 129, 1);
         catalog.dudes[0].1.booty = 0x0040;
@@ -9127,6 +9309,7 @@ mod tests {
         let mut player = catalog.ships[0].clone();
         player.id = ShipId(128);
         player.crew = 10;
+        catalog.ships[0].fields.speed = 0;
         catalog.ships.push(player);
         catalog.hulls = vec![nova_sim::HullRecord {
             strength: 5,
@@ -11315,7 +11498,10 @@ mod tests {
         let mut view = landed_view();
         move_to(&mut view, 130, 129);
         let session = view.session.as_mut().expect("flying");
-        assert_eq!(session.take_off(&mut NeverFires), Some(StellarId(129)));
+        assert_eq!(
+            session.take_off(&view.catalog, &mut NeverFires),
+            Some(StellarId(129))
+        );
         run_set(&mut view, "M131");
         settle_session(&mut view);
         view.tick(TICK);

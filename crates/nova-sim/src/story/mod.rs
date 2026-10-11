@@ -1659,8 +1659,11 @@
 //!   with a cloak scanner (+0xc91c) within 200 on both axes
 //!   (@0x97a4-0x97f8); every other ship is visible. No stock outfit is a
 //!   cloak scanner, so the stock player sees a cloaked ship only once it
-//!   uncloaks (see [`cloak`](crate::cloak)). A watched ship not yet
-//!   visible stays watched.
+//!   uncloaks (see [`cloak`](crate::cloak)). `_MissionObjectivesCheck`
+//!   (@0x9ea5c) asks it, so a watched ship waiting at the hypergate or
+//!   wormhole it comes out of stays watched until it has emerged (see
+//!   [`emerge`](crate::traffic::emerge)). A watched ship not yet visible
+//!   stays watched.
 //! - `S` (`_DoMissionAccept` @0x15407), `A` (`_AbortMission` @0x1532e)
 //!   and `M` and `N` in flight (@0x159a3, @0x159a8) are handled inside
 //!   `_EvalSetExp`, before its next operator. `Q` only sets

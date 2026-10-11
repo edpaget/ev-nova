@@ -8,7 +8,7 @@
 //! ends. A mission's auxiliary ships are the
 //! [`aux_ships`](super::aux_ships) module's: their countdown is drawn at
 //! accept, first, before the special ships' appear timer; the
-//! enter-system hook and the take-off hook restart it; and each frame of
+//! enter-system hook and the take-off restart it; and each frame of
 //! the timers brings them in before the special ships of the same slot.
 //!
 //! **The hooks** are no loop of their own: each slot filled registers
@@ -49,10 +49,10 @@
 //! the slot's own ships counting as seen. An accept in flight queues its
 //! slot's check for the end of [`Session::settle_script`]'s settling, so
 //! a mission an `S` starts is checked after the script that started it.
-//! The take-off's check waits for the system it took off into to be set
+//! The take-off's check comes after the system it took off into is set
 //! up, as the original sets it up (@0x674c2) before its first flight
-//! frame: the hook holds it while the system's traffic is due, and the
-//! setup runs it once its ships are in and its auto-aborts are done.
+//! frame: [`Session::take_off`] sets it up, its ships in and its
+//! auto-aborts done, before the hook runs.
 //! The moment the goals are met shows `ShipDoneText`, runs `OnShipDone`
 //! and auto-aborts a mission of `Flags` 0x0001 ([`Session::auto_abort`]).
 //! A mission of no goal is met at its first check, unless its ships come
@@ -324,18 +324,8 @@ impl Session {
                     self.check_ship_goals(slot, false, chance);
                 }
             }
-            (LANDED, StoryEvent::Landed { .. }) => {
+            (LANDED, StoryEvent::Landed { .. }) | (TOOK_OFF, StoryEvent::TookOff { .. }) => {
                 self.check_ship_goals(slot, false, chance);
-            }
-            (TOOK_OFF, StoryEvent::TookOff { .. }) => {
-                self.restart_aux(slot, chance);
-                if self.traffic_due {
-                    if !self.take_off_checks.contains(&slot) {
-                        self.take_off_checks.push(slot);
-                    }
-                } else {
-                    self.check_ship_goals(slot, false, chance);
-                }
             }
             (SHIP_FATE, StoryEvent::ShipFate { ship, fate }) => {
                 let sighted = fate == Fate::Observed && self.marked_here(ship, slot);
@@ -462,15 +452,6 @@ impl Session {
         for &(slot, mission) in set_up {
             let record = self.lifecycle_record(mission);
             self.abort_on_spawn(slot, &record, chance);
-        }
-    }
-
-    /// Runs the goal checks a take-off held for the system's setup (see
-    /// the module docs), in the order the take-off raised them, drawing
-    /// on `chance`.
-    pub(super) fn check_after_take_off(&mut self, chance: &mut dyn Chance) {
-        for slot in std::mem::take(&mut self.take_off_checks) {
-            self.check_ship_goals(slot, false, chance);
         }
     }
 
@@ -1299,12 +1280,12 @@ pub(super) mod tests {
         session
     }
 
-    /// Takes off, settles, and runs the first traffic tick, which sets
-    /// the system up.
+    /// Takes off, which sets the system up, and settles.
     pub(in crate::session) fn take_off(session: &mut Session, catalog: &FakePilotCatalog) {
-        session.take_off(&mut NeverFires).expect("takes off");
+        session
+            .take_off(catalog, &mut NeverFires)
+            .expect("takes off");
         settle(session, catalog);
-        tick(session, catalog);
     }
 
     /// Jumps from the centre, where `fly_out` heads straight out, to `to`,
@@ -1482,7 +1463,7 @@ pub(super) mod tests {
         assert_eq!(
             ships_of(&session).appear,
             199,
-            "the setup tick counts nothing"
+            "the take-off's setup counts nothing"
         );
         ticks(&mut session, &catalog, 198);
         assert_eq!(ships_of(&session).appear, 1);
@@ -3092,14 +3073,14 @@ pub(super) mod tests {
     fn a_flag_0x0001_mission_aborts_once_its_ships_are_set_up_on_take_off() {
         let catalog = returning(0, 0x0001);
         let mut session = accepted(&catalog);
-        session.take_off(&mut NeverFires).expect("takes off");
-        settle(&mut session, &catalog);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         assert!(
-            session.pilot().missions().get(0).is_some(),
-            "not yet set up"
+            session.pilot().missions().get(0).is_none(),
+            "auto-aborted as the take-off sets the system up"
         );
-        tick(&mut session, &catalog);
-        assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
+        settle(&mut session, &catalog);
         assert_eq!(bits(&session), [7], "OnAbort once");
         assert_eq!(marked(&session), [0, 0], "until the AI next thinks");
         tick(&mut session, &catalog);
@@ -3189,10 +3170,10 @@ pub(super) mod tests {
     fn with_flag_0x0008_the_setups_auto_abort_takes_the_fuel() {
         let catalog = returning(0, 0x0009);
         let mut session = accepted(&catalog);
-        session.take_off(&mut NeverFires).expect("takes off");
-        settle(&mut session, &catalog);
         let fuel = session.reserves().fuel.now;
-        tick(&mut session, &catalog);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
         assert!((session.reserves().fuel.now - (fuel - 100.0)).abs() < f32::EPSILON);
     }
@@ -3217,17 +3198,18 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_take_offs_goal_check_waits_for_the_setup() {
+    fn the_take_offs_goal_check_follows_the_setup() {
         let none = MissionShip {
             count: -1,
             ..MissionShip::NONE
         };
         let catalog = shipless(none, 0x0001);
         let mut session = accepted(&catalog);
-        session.take_off(&mut NeverFires).expect("takes off");
-        settle(&mut session, &catalog);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
         assert!(session.pilot().missions().get(0).is_some(), "not yet");
-        tick(&mut session, &catalog);
+        settle(&mut session, &catalog);
         assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
         assert_eq!(shown(&mut session), [ship_done(" done.")]);
     }

@@ -5995,8 +5995,8 @@ pub(super) mod tests {
     /// The first `chär` flies ship 128 ("First": average, a crew of 10)
     /// in system 128 with `cash`, whose one `düde`, at 100 %, flies ship
     /// 129 ("Trader": a crew of 3, 100 armour, 20 holds, 300 fuel, `Cost`
-    /// 150,000) for food and money (`Booty` 0x0041), independent. Food is
-    /// commodity 0.
+    /// 150,000, and no speed, so it stays where setup places it) for food
+    /// and money (`Booty` 0x0041), independent. Food is commodity 0.
     fn boarding_data_with(cash: i32) -> Rc<GameData> {
         let put = |bytes: &mut [u8], at: usize, values: &[i16]| {
             for (i, value) in values.iter().enumerate() {
@@ -6014,6 +6014,7 @@ pub(super) mod tests {
             bytes
         };
         let mut trader = ship(20, 100, 3);
+        put(&mut trader, 0x06, &[0]);
         trader[0x30..0x34].copy_from_slice(&150_000_i32.to_be_bytes());
         let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
         put(&mut anim, 0x00, &[1000, 0, 1]);

@@ -10,7 +10,8 @@
 //! -6 slot alone on a gate's exit (see the `mission_ships` module), and
 //! the exit's setup takes a -6 slot of escorts at once. The follow rolls
 //! are drawn before the system is entered, as every caller of the entry
-//! draws first, where the original draws them after the hook's restarts.
+//! draws first, where the original draws them after the hook's restarts;
+//! they follow the escort-strength timer's arming (@0x6706f), as there.
 //!
 //! By the other reading the exit leaves the slots as a jump does.
 
@@ -91,8 +92,10 @@ impl Session {
     /// slots it is about to restart. Then each ship of a slot following
     /// the player, attacking it, its timer just stopped (loop B, @0x67346-0x67487) comes out after the player, in
     /// order: at rest at `exit`, or where the player arrived under
-    /// [`GateArrivalRule::LikeJump`], with the player's heading, emerging
-    /// for `Rand(50) + 100` ticks, drawn on `chance`. A mission that
+    /// [`GateArrivalRule::LikeJump`], with the player's heading, waiting
+    /// at the gate for `Rand(50) + 100` ticks, drawn on `chance`, then
+    /// bursting out of it as any ship coming out of a gate does (see the
+    /// traffic's [`emerge`](crate::traffic::emerge)). A mission that
     /// auto-aborted as they came in leaves its ships as they came.
     pub(super) fn emerge_followers(
         &mut self,
@@ -457,7 +460,11 @@ pub(super) mod tests {
             );
             tick(&mut session, &catalog);
             for ship in session.npcs() {
-                assert_eq!(ship.mode, Mode::Flying, "{kind:?}");
+                assert_eq!(
+                    ship.mode,
+                    Mode::LeavingGate { tick: 0 },
+                    "{kind:?}: bursting out of the gate"
+                );
                 assert_eq!(ship.goal.quarry(), Some(ShipRef::Player), "{kind:?}");
             }
             assert_eq!(marked(&session), [0, 0], "{kind:?}");
@@ -469,9 +476,13 @@ pub(super) mod tests {
         let catalog = gated(following(0, 0), 0);
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
-        let mut chance = Draws::of(&[0]);
+        let mut chance = Draws::of(&[0, 0]);
         exit_gate(&mut session, &catalog, GateKind::Hypergate, &mut chance);
-        assert_eq!(chance.asked.first(), Some(&2), "the follow roll first");
+        assert_eq!(
+            chance.asked[..2],
+            [crate::traffic::strength::SEED_SPREAD, 2],
+            "the escort-strength timer, then the follow roll"
+        );
         assert_eq!(&chance.asked[chance.asked.len() - 2..], [50, 50]);
         assert_eq!(specials(&session).len(), 2);
         assert!(session.npcs().iter().all(Npc::emerging));
@@ -482,7 +493,7 @@ pub(super) mod tests {
             &mut session,
             &catalog,
             GateKind::Hypergate,
-            &mut Draws::of(&[1]),
+            &mut Draws::of(&[0, 1]),
         );
         assert!(specials(&session).is_empty(), "lost");
         assert_eq!(timer(&session), (LOST_AT_GATE, 2));

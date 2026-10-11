@@ -14,11 +14,13 @@
 //!   mouse click @0x3810b-0x38130): the original asks the cloak itself,
 //!   not whether the player sees the ship. Untargetable ships are not
 //!   modelled. A
-//!   ship coming out of a hypergate or wormhole is not targetable
+//!   ship waiting at the hypergate or wormhole it comes out of
+//!   ([`Npc::emerging`]) is not targetable
 //!   (`_AIShipIsEmergingFromHypergate` @0x7e2e8, read by
 //!   `_FindNearestShipToPlayer` @0x9330 and the next and previous
-//!   searches @0xa42d-0xa918), and a target emerging is let go
-//!   (`_HandlePlayer` @0x686a4).
+//!   searches @0xa42d-0xa918, `_FindNextShipInSystem` @0xa801), and a
+//!   target emerging is let go (`_HandlePlayer` @0x686a4); once it bursts
+//!   out of the gate it is a candidate again.
 //! - Escort Select (Option-Tab here) walks the player's escorts alone,
 //!   in the same order, from the one after the target, and does not wrap
 //!   ([`next_escort`]).
@@ -214,6 +216,22 @@ mod tests {
         ];
         assert_eq!(nearest_(&npcs, Vec2::ZERO, |_| true), Some(NpcId(3)));
         assert_eq!(nearest_(&npcs[..2], Vec2::ZERO, |_| true), None);
+    }
+
+    #[test]
+    fn a_ship_waiting_at_its_gate_is_skipped_but_not_one_bursting_out() {
+        use crate::traffic::npc::Mode;
+        let mut waiting = intact(1, 10.0, 0.0);
+        waiting.mode = Mode::Emerging { ticks_left: 30 };
+        let mut leaving = intact(2, 20.0, 0.0);
+        leaving.mode = Mode::LeavingGate { tick: 1 };
+        let npcs = [waiting, leaving, intact(3, 30.0, 0.0)];
+        assert!(!candidate(&npcs[0], false));
+        assert!(candidate(&npcs[1], false));
+        assert_eq!(nearest_(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));
+        assert_eq!(nearest_(&npcs[..1], Vec2::ZERO, |_| true), None);
+        assert_eq!(next(&npcs, None, false), Some(NpcId(2)));
+        assert_eq!(next(&npcs[..1], None, false), None);
     }
 
     #[test]

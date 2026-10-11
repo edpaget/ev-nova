@@ -281,14 +281,12 @@ fn a_stock_avoid_mission_set_up_with_the_system_spawns_its_hunters_then_auto_abo
     let dude = record.ships.dude.expect("a düde");
     let count = usize::try_from(record.ships.count).expect("a count");
     let (mut session, slot) = started_docked(&data, AVOID_SET_UP);
-    session.take_off(&mut NeverFires).expect("takes off");
-    let _ = session.settle_script(&data, &mut NeverFires);
-    assert!(session.pilot().missions().get(slot).is_some(), "not yet");
-    session.tick_traffic(&data, &NovaAi::default(), &mut NeverFires);
+    session.take_off(&data, &mut NeverFires).expect("takes off");
     assert!(
         session.pilot().missions().get(slot).is_none(),
         "auto-aborted at the take-off's setup"
     );
+    let _ = session.settle_script(&data, &mut NeverFires);
     assert!(of_dude(&data, &session, dude) >= count, "its hunters came");
     session.tick_traffic(&data, &NovaAi::default(), &mut NeverFires);
     assert!(session.npcs().iter().all(|npc| npc.mission.is_none()));
@@ -308,11 +306,9 @@ fn a_stock_avoid_mission_whose_hunters_come_later_auto_aborts_as_they_come_in() 
     let dude = record.ships.dude.expect("a düde");
     let count = usize::try_from(record.ships.count).expect("a count");
     let (mut session, slot) = started_docked(&data, AVOID_LATER);
-    session.take_off(&mut NeverFires).expect("takes off");
+    session.take_off(&data, &mut NeverFires).expect("takes off");
     let _ = session.settle_script(&data, &mut NeverFires);
     let ai = NovaAi::default();
-    session.tick_traffic(&data, &ai, &mut NeverFires);
-    let _ = session.settle_script(&data, &mut NeverFires);
     let mut before = 0;
     while let Some(active) = session.pilot().missions().get(slot) {
         assert!(active.ships.appear > 0, "the timer runs until they come");

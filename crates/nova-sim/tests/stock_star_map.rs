@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use nova_data::GameData;
 use nova_data::records::system::System;
-use nova_sim::{HyperlinkRule, PilotCatalog, StarMap, StellarId, SystemId, Vec2};
+use nova_sim::landing::is_landable;
+use nova_sim::{GateKind, HyperlinkRule, PilotCatalog, StarMap, StellarId, SystemId, Vec2};
 
 /// The stock links that stay one-way after allowing for replacement
 /// systems: a copy of `ONE_WAY_LINKS` in `crates/nova-data/tests/stock.rs`,
@@ -92,4 +93,24 @@ fn stock_gate_sites_place_the_hypergates_and_wormholes() {
         sites.windows(2).all(|pair| pair[0].id < pair[1].id),
         "by ascending ID"
     );
+}
+
+/// HG-Kania is one of Kania's landing sites an arriving NPC may come out
+/// of: landable (`Flags` 0x01), within 999 of the centre, and heading
+/// ships out on its 120°.
+#[test]
+fn stock_hypergates_are_landing_sites_an_arrival_may_come_out_of() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let sites = data.landing_sites(SystemId(128));
+    let kania = sites
+        .iter()
+        .find(|site| site.id == StellarId(1404))
+        .expect("HG-Kania is one of Kania's stellars");
+    assert_eq!(GateKind::of(kania.flags2), Some(GateKind::Hypergate));
+    assert!(is_landable(kania), "{:#x}", kania.flags);
+    assert!(kania.position.x <= 999.0 && kania.position.y <= 999.0);
+    assert_eq!(kania.exit_angle, 120);
 }
