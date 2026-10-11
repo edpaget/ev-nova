@@ -104,11 +104,11 @@ impl Session {
     }
 
     /// Puts every mission escort on its slot beside the player, with the
-    /// player's heading and velocity.
+    /// player's heading and velocity: the ships the player leads
+    /// ([`Session::player_led`]) narrowed to the mission escorts.
     pub(super) fn snap_mission_escorts(&mut self) {
         let escorts: Vec<NpcId> = self
-            .npcs()
-            .iter()
+            .player_led()
             .filter(|npc| npc.mission_escort())
             .map(|npc| npc.id)
             .collect();
@@ -155,6 +155,7 @@ mod tests {
     use super::*;
     use crate::catalog::{MissionShip, ShipId, SystemId};
     use crate::chance::NeverFires;
+    use crate::control::SetExpr;
     use crate::escort::{self, KEEP_FORMATION};
     use crate::flight::ShipState;
     use crate::hail::nova::{RELEASE, REQUEST_ASSISTANCE};
@@ -164,7 +165,7 @@ mod tests {
     use crate::reserves::Reserves;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::mission_ships::tests::{
-        accepted, jump_to, shipping, ships_catalog, ships_of, take_off, tick, ticks,
+        accepted, jump_to, settle, shipping, ships_catalog, ships_of, take_off, tick, ticks,
     };
     use crate::targeting::TargetPick;
     use crate::testkit::FakePilotCatalog;
@@ -517,6 +518,22 @@ mod tests {
         tick(&mut session, &catalog);
         assert_released(&session, &ids);
         assert_eq!(hired_slot(&session), (2, 2));
+    }
+
+    #[test]
+    fn a_move_in_flight_carries_the_hired_escort_and_leaves_the_mission_escorts_behind() {
+        // The original's in-flight `M` carries every ship the player leads
+        // (`_EvalSetExp` @0x15820, @0x1591f), mission escorts too; here the
+        // retargeted traffic keeps the hired fleet alone
+        // (rdm:phase/player-led-ships/phase-7-in-flight-move-carries-escorts).
+        let catalog = ships_catalog(escorting(-1, 0));
+        let (mut session, ids) = flying_with_escorts(&catalog);
+        let hired = session.fleet[0].expect("placed");
+        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+        settle(&mut session, &catalog);
+        assert_eq!(session.system(), SystemId(131));
+        assert!(session.npc(hired).is_some(), "the hired escort comes");
+        assert!(of(&session, &ids).is_empty(), "the mission escorts stay");
     }
 
     #[test]

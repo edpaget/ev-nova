@@ -675,6 +675,11 @@ impl Session {
             TrafficStep::Populate => self.populate_entering(catalog, how, chance),
             TrafficStep::Retarget => {
                 let table = self.spawn_table(catalog);
+                // The hired fleet alone. The original carries every ship
+                // the player leads (`Session::player_led`, `_EvalSetExp`
+                // @0x15820), as rdm phase
+                // player-led-ships/phase-7-in-flight-move-carries-escorts
+                // will.
                 let fleet: BTreeSet<_> = self.fleet.iter().flatten().copied().collect();
                 self.give_back_aux_ships(&fleet);
                 self.traffic.retarget(table, &fleet);

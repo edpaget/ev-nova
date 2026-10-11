@@ -74,6 +74,12 @@ pub fn targetable(npc: &Npc, cloaked_ok: bool) -> bool {
 
 /// Whether `npc` is a candidate for Target Select and Closest Target:
 /// targetable, as `cloaked_ok` says, and not one of the player's escorts.
+/// A mission escort is a candidate, as Target Select's escort class
+/// leaves out an active `ShipBehav` 1 ship (`_FindNextShipInSystem`
+/// @0xa6c1-0xa72b). Closest Target skips every ship the player leads
+/// ([`Session::player_led`](crate::Session::player_led),
+/// `_FindNearestShipToPlayer` @0x92a6), which rdm phase
+/// player-led-ships/phase-6-closest-target-skips-mission-escorts takes.
 #[must_use]
 pub fn candidate(npc: &Npc, cloaked_ok: bool) -> bool {
     targetable(npc, cloaked_ok) && npc.escort.is_none()

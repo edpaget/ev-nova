@@ -518,15 +518,25 @@ impl Traffic {
         &mut self.npcs
     }
 
-    /// The NPCs that count toward the system's `AvgShips`: those not the
-    /// player's ([`Npc::is_players`]) nor its mission escorts
-    /// ([`Npc::escorts_player`]). `_EnterMoreShips` (@0x43b14-0x43b45)
-    /// counts the ships in the system whose parent (+0x9a) is not the
-    /// player, and rolls for an arrival only while that count is below
-    /// `AvgShips` (@0x43b5c); a mission escort's leader is the player
-    /// too (see the session's `mission_escorts` module).
+    /// The ships the player leads, in ship-table order (the order the
+    /// NPCs appeared): its hired and captured escorts, the fighters it
+    /// launched, and its mission escorts ([`Npc::escorts_player`]). In
+    /// the original each is a ship whose leader (+0x9a) is the player,
+    /// 0, hired or a mission's `ShipBehav` 1 escort alike. The original's
+    /// sites that ask this, and which of them narrow it to the hired
+    /// escorts or the fighters, are listed in the session's `player_led`
+    /// module.
+    pub fn player_led(&self) -> impl Iterator<Item = &Npc> + '_ {
+        self.npcs.iter().filter(|npc| npc.escorts_player())
+    }
+
+    /// The NPCs that count toward the system's `AvgShips`: those the
+    /// player does not lead ([`Traffic::player_led`]).
+    /// `_EnterMoreShips` (@0x43b14-0x43b45) counts the ships in the system
+    /// whose parent (+0x9a) is not the player, and rolls for an arrival
+    /// only while that count is below `AvgShips` (@0x43b5c).
     fn strangers(&self) -> usize {
-        self.npcs.iter().filter(|npc| !npc.escorts_player()).count()
+        self.npcs.len() - self.player_led().count()
     }
 
     /// Adds `npc` to the system, numbered as the next NPC, and gives its
@@ -1405,6 +1415,49 @@ mod tests {
         );
         traffic.remove(fighter);
         assert_eq!(tick_arrival(&mut traffic).first(), Some(&500), "rolled");
+    }
+
+    /// A mark of a `ShipBehav` 1 mission ship, joined to the player's
+    /// formation or not.
+    fn escorting(joined: bool) -> npc::MissionMark {
+        npc::MissionMark {
+            slot: 0,
+            behav: ShipBehav::EscortPlayer,
+            formation: joined.then(|| duty(2).formation),
+        }
+    }
+
+    #[test]
+    fn the_player_leads_its_escorts_fighters_and_joined_mission_escorts_in_ship_table_order() {
+        let mut traffic = Traffic::new();
+        let ship = |id| crate::testkit::npc(id, ShipStats::default());
+        traffic.add_npc(ship(0));
+        let mission = traffic.add_npc(Npc {
+            mission: Some(escorting(true)),
+            ..ship(0)
+        });
+        traffic.add_npc(Npc {
+            mission: Some(escorting(false)),
+            ..ship(0)
+        });
+        let hired = traffic.add_npc(Npc {
+            escort: Some(duty(2)),
+            ..ship(0)
+        });
+        let carrier = traffic.add_npc(ship(0));
+        traffic.add_npc(Npc {
+            leader: Some(carrier),
+            carrier: Some(launched_from(ShipRef::Npc(carrier))),
+            ..ship(0)
+        });
+        let fighter = traffic.add_npc(Npc {
+            escort: Some(duty(3)),
+            carrier: Some(launched_from(ShipRef::Player)),
+            ..ship(0)
+        });
+        let led: Vec<NpcId> = traffic.player_led().map(|npc| npc.id).collect();
+        assert_eq!(led, [mission, hired, fighter]);
+        assert_eq!(traffic.strangers(), 4, "the rest");
     }
 
     #[test]

@@ -167,11 +167,14 @@ impl Session {
     /// all and the player, spaced by the widest sprite among them
     /// ([`escort::spacing`]): the hired escorts 2, 3, … in fleet order,
     /// then the mission escorts in the order they came (see the
-    /// [`mission_escorts`](super::mission_escorts) module).
+    /// [`mission_escorts`](super::mission_escorts) module), the ships the
+    /// player leads ([`Session::player_led`]) narrowed to them. The
+    /// original numbers both together in ship-table order, which is
+    /// [`Session::player_led`]'s own order
+    /// (rdm:phase/player-led-ships/phase-4-formation-slot-order).
     pub(super) fn reform(&mut self) {
         let mission_escorts = self
-            .npcs()
-            .iter()
+            .player_led()
             .filter(|npc| npc.mission_escort())
             .map(|npc| npc.id);
         let placed: Vec<NpcId> = self
