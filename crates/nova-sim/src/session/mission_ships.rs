@@ -982,6 +982,26 @@ mod tests {
     }
 
     #[test]
+    fn only_a_counted_mission_ship_makes_a_save_due() {
+        let catalog = ships_catalog(shipping(-1, 0));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        let _ = session.take_save_due();
+        let (first, second) = (session.npcs()[0].id, session.npcs()[1].id);
+        session.traffic.npcs_mut()[1].mission = None;
+        session.count_lost_mission_ship(second);
+        assert!(!session.take_save_due(), "not a mission ship");
+        session.count_lost_mission_ship(first);
+        assert_eq!(ships_of(&session).left, 1);
+        assert!(session.take_save_due(), "counted");
+        session.count_lost_mission_ship(first);
+        assert_eq!(ships_of(&session).left, 0);
+        let _ = session.take_save_due();
+        session.count_lost_mission_ship(first);
+        assert!(!session.take_save_due(), "none left to count");
+    }
+
+    #[test]
     fn an_aborted_missions_ships_lose_their_mark_and_stay_as_ordinary_traffic() {
         let hunters = MissionShip {
             behav: 0,
