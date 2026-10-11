@@ -31,6 +31,11 @@
 //!   any other escort, holding it from an edited save, acts as with no
 //!   standing command.
 //!
+//! A mission escort (a `ShipBehav` 1 mission ship in the player's
+//! formation, [`Npc::mission_escort`]) flies here too, with no standing
+//! order: the original runs it through `_EscortAI` as AI type 6, and
+//! only the player's commands set an order, which it never takes here.
+//!
 //! An escort answers threats to the player, not the hits it takes: it has
 //! no reaction. It never launches the fighters it carries
 //! ([`Trigger::bays`]).
@@ -326,6 +331,58 @@ mod tests {
             decide(&npcs, (0.0, 0.0), &[1]),
             (Goal::Formation { guard: Some(n(4)) }, vec![2])
         );
+    }
+
+    /// The escort as a mission escort: marked by slot 0's `ShipBehav` 1
+    /// mission and in the player's formation, with no [`EscortDuty`].
+    fn mission_escort() -> Npc {
+        let mut npc = escort(None);
+        npc.escort = None;
+        npc.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            cloaked: false,
+            formation: Some(crate::escort::FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            }),
+        });
+        npc
+    }
+
+    #[test]
+    fn a_mission_escort_guards_against_a_pirate_by_the_engine_and_attacks_it_by_the_bible() {
+        let npcs = [mission_escort(), pirate(2, 100.0, 0.0)];
+        assert_eq!(
+            decide(&npcs, (0.0, 0.0), &[0]),
+            (Goal::Formation { guard: Some(n(2)) }, vec![1])
+        );
+        assert_eq!(
+            decide_with(BIBLE, &npcs, (0.0, 0.0), &[]),
+            (Goal::Attack(n(2)), vec![])
+        );
+    }
+
+    #[test]
+    fn no_escort_takes_a_fellow_hired_or_mission_escort_for_a_threat() {
+        let mut hired = escort(None);
+        hired.id = NpcId(3);
+        hired.goal = Goal::Attack(ShipRef::Player);
+        let mut fellow = mission_escort();
+        fellow.id = NpcId(4);
+        fellow.goal = Goal::Attack(ShipRef::Player);
+        for me in [escort(None), mission_escort()] {
+            let npcs = [me, hired.clone(), fellow.clone()];
+            assert_eq!(
+                decide(&npcs, (0.0, 0.0), &[]),
+                (Goal::Formation { guard: None }, vec![])
+            );
+            assert_eq!(
+                decide_with(BIBLE, &npcs, (0.0, 0.0), &[]),
+                (Goal::Formation { guard: None }, vec![])
+            );
+        }
     }
 
     #[test]

@@ -202,11 +202,18 @@ impl Npc {
     /// leader +0x9a), and count each other's missiles friendly.
     #[must_use]
     pub fn fleet(&self) -> ShipRef {
-        if self.escort.is_some() || self.mission_escort() {
+        if self.escorts_player() {
             ShipRef::Player
         } else {
             ShipRef::Npc(self.leader.unwrap_or(self.id))
         }
+    }
+
+    /// Whether it escorts the player: a hired escort (its fighters too) or
+    /// a mission escort.
+    #[must_use]
+    pub fn escorts_player(&self) -> bool {
+        self.escort.is_some() || self.mission_escort()
     }
 
     /// Whether it is a mission escort: a mission's special ship that has

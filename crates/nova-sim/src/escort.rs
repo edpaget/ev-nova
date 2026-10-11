@@ -420,10 +420,10 @@ pub const DEFEND_KEEP_SQ: f32 = 408_375.0;
 /// The ships among `npcs` that threaten the player, which `escort` may
 /// fight (`_AIFightThreatToParent` @0x81de6): any that threatens the
 /// player ([`Npc::threatens_player`]), but never `escort` itself or a
-/// fellow escort.
+/// fellow escort, hired or a mission escort ([`Npc::escorts_player`]).
 pub fn threats<'a>(escort: &'a Npc, npcs: &'a [Npc]) -> impl Iterator<Item = &'a Npc> + 'a {
     npcs.iter().filter(move |candidate| {
-        candidate.id != escort.id && candidate.escort.is_none() && candidate.threatens_player()
+        candidate.id != escort.id && !candidate.escorts_player() && candidate.threatens_player()
     })
 }
 
@@ -442,7 +442,7 @@ pub fn threat_score(
     player: &ShipState,
     radius: Option<f32>,
 ) -> Option<f32> {
-    if candidate.id == escort.id || candidate.escort.is_some() || !candidate.threatens_player() {
+    if candidate.id == escort.id || candidate.escorts_player() || !candidate.threatens_player() {
         return None;
     }
     let squared = |off: Vec2| off.x * off.x + off.y * off.y;
@@ -857,13 +857,21 @@ mod tests {
             order: None,
         });
         let calm = ship(3, MEDIUM, 10.0, 0.0, false);
-        for candidate in [&escort, &fellow, &calm] {
+        let mut mission_escort = ship(5, MEDIUM, 5.0, 0.0, true);
+        mission_escort.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            cloaked: false,
+            formation: Some(FormationSlot::default()),
+        });
+        for candidate in [&escort, &fellow, &calm, &mission_escort] {
             assert_eq!(threat_score(&escort, candidate, &player, None), None);
         }
         let npcs = [
             escort.clone(),
             fellow,
             calm,
+            mission_escort,
             ship(4, MEDIUM, 900.0, 0.0, true),
         ];
         assert_eq!(best_threat(&escort, &npcs, &player, None), Some(NpcId(4)));

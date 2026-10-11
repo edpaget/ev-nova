@@ -588,8 +588,9 @@ rule_keys! {
     /// of `Flags` 0x0040 whose mission has one ship left, whatever its
     /// goal, swaps it for that ship (@0x62421-0x6252f;
     /// [`swaps_for_mission_ship`](crate::person::swaps_for_mission_ship)),
-    /// which flies in formation with the player for `ShipGoal` 3
-    /// (@0x62509; rdm:phase/mission-ships/phase-7-mission-escorts). Otherwise, a person whose record allows
+    /// which flies in formation with the player as a mission escort when
+    /// the mission's `ShipBehav` is 1 (@0x62509, @0x8fc03-0x8fc22).
+    /// Otherwise, a person whose record allows
     /// it ([`offers_to_join`](crate::person::offers_to_join)), its
     /// `LinkMission` available, opens the comm dialog listing Use As
     /// Escort while the fleet has room, and joins the fleet as itself,

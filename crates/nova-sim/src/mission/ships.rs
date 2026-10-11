@@ -143,8 +143,11 @@ pub enum ShipBehav {
     /// 0: they attack the player (`_AIMakeShipAttackPlayer`
     /// @0x3d099-0x3d0bb, `_HighLevelAIHandler` @0x8d628-0x8d6ea).
     AttackPlayer,
-    /// 1: they escort the player. Until
-    /// rdm:phase/mission-ships/phase-7-mission-escorts, as [`Self::Own`].
+    /// 1: they escort the player. Each joins the player's formation as a
+    /// mission escort while it is intact (`_AIDispatch` @0x8fc03-0x8fc22
+    /// gives it AI type 6 and leader 0 on every think) and flies as the
+    /// player's escorts do, never one of the hired escorts; it leaves as
+    /// its mission ends (see the session's `mission_ships` module).
     EscortPlayer,
     /// 2: they attack stellars (`_DeathStarAI`). Until
     /// rdm:phase/mission-ships/phase-12-stellar-attackers, as

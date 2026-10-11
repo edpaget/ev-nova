@@ -5,7 +5,10 @@
 //! the rulebook's [`RuleKey::PiracyPolice`] entry says
 //! ([`NovaAi::from_rulebook`]). The player's escorts, whatever their AI
 //! type, go to [`EscortAi`] instead (the original's AI type 6, @0x90011),
-//! flying as the rulebook's [`RuleKey::EscortAi`] entry says; and an NPC
+//! flying as the rulebook's [`RuleKey::EscortAi`] entry says, and so does a
+//! mission escort, a `ShipBehav` 1 mission ship that has joined the
+//! player's formation (`_AIDispatch` @0x8fc03-0x8fc22 gives it AI type 6
+//! and leader 0 on every think), with no standing order; and an NPC
 //! carrier's fighters, whatever their AI type, to [`CarriedAi`] (the
 //! original's AI type 5 with an NPC parent), until their carrier is gone.
 //! `_PirateWarshipAI` (a warship of `Flags` 0x1000, which disables and
@@ -107,10 +110,11 @@ impl NovaAi {
     }
 
     /// The behaviour for `npc`: the escorts' for the player's escort (its
-    /// fighters too), the carried fighters' for one an NPC launched,
-    /// otherwise the one for its AI type.
+    /// fighters too) and for a mission escort ([`Npc::mission_escort`]),
+    /// the carried fighters' for one an NPC launched, otherwise the one for
+    /// its AI type.
     fn of(&self, npc: &Npc) -> &dyn Behaviour {
-        if npc.escort.is_some() {
+        if npc.escorts_player() {
             return &*self.escorts;
         }
         if npc.carrier.is_some() {
@@ -598,6 +602,35 @@ mod tests {
             );
             assert_eq!(ai.target(npc, &around), Some(mark.ship()));
         }
+    }
+
+    #[test]
+    fn a_mission_escort_goes_to_the_escort_behaviour_whatever_its_ai_type() {
+        let mark = Marked::new(7);
+        let escorts = Marked::new(9);
+        let ai = NovaAi::default()
+            .with(AiType::Warship, mark.clone())
+            .with_escorts(escorts.clone());
+        let mut joined = mission_ship(of(1, AiType::Warship), 1);
+        if let Some(mission) = &mut joined.mission {
+            mission.formation = Some(crate::escort::FormationSlot::default());
+        }
+        let npcs = [joined];
+        let around = with_player(&npcs, Condition::Intact);
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[])),
+            Goal::Attack(escorts.ship())
+        );
+        assert_eq!(ai.target(&npcs[0], &around), Some(escorts.ship()));
+        assert_eq!(ai.trigger(&npcs[0], &around).only, Some(WeaponId(9)));
+        let strike = Strike {
+            ship: ShipRef::Npc(NpcId(1)),
+            by: ShipRef::Player,
+            damage: 1.0,
+            downed: None,
+        };
+        assert_eq!(ai.react(&npcs[0], &strike, &around).provoked, 9.0);
+        assert!(mark.asked.borrow().is_empty(), "not its type's");
     }
 
     #[test]
