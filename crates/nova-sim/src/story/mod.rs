@@ -152,9 +152,9 @@
 //!    (@0xa1ada). After the last slot it refreshes the galaxy (@0xa1af2)
 //!    and, if any mission succeeded, re-offers (@0xa1b04): availability
 //!    and resolution again, the table kept.
-//! 4. The news is chosen as the bar opens (`_DoBarDialog` @0x48f15,
-//!    `_RandomizeNewsDialog` @0x48238): it has no trigger point of its
-//!    own.
+//! 4. The news is chosen as the bar opens: `_DoBarDialog` (0x48ef5)
+//!    calls `_RandomizeNewsDialog` (0x48238) as it opens (@0x48f15). It
+//!    has no trigger point of its own.
 //!
 //! ## One take-off
 //!
