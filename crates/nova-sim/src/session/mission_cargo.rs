@@ -1062,6 +1062,7 @@ mod tests {
             }
             if let Some(police) = session.traffic.npcs_mut().last_mut() {
                 police.mission = scanner_slot.map(|slot| crate::traffic::npc::MissionMark {
+                    order: None,
                     slot,
                     behav: crate::mission::ships::ShipBehav::Own,
                     formation: None,

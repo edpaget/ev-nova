@@ -711,6 +711,7 @@ mod tests {
     /// A mark of slot 0's escorting mission, holding `formation`.
     fn mark(formation: Option<FormationSlot>) -> crate::traffic::npc::MissionMark {
         crate::traffic::npc::MissionMark {
+            order: None,
             slot: 0,
             behav: crate::mission::ships::ShipBehav::EscortPlayer,
             formation,

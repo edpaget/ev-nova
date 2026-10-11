@@ -32,9 +32,10 @@
 //!   standing command.
 //!
 //! A mission escort (a `ShipBehav` 1 mission ship in the player's
-//! formation, [`Npc::mission_escort`]) flies here too, with no standing
-//! order: the original runs it through `_EscortAI` as AI type 6, and
-//! only the player's commands set an order, which it never takes here.
+//! formation, [`Npc::mission_escort`]) flies here too, by the standing
+//! order on its mark ([`Npc::escort_order`]): the original runs it
+//! through `_EscortAI` as AI type 6, and the player's commands reach it
+//! by class (`_IssueNewEscortCommand` @0x6614a-0x66176).
 //!
 //! An escort answers threats to the player, not the hits it takes: it has
 //! no reaction. It never launches the fighters it carries
@@ -79,7 +80,7 @@ impl EscortAi {
 
 impl Behaviour for EscortAi {
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
-        let order = npc.escort.and_then(|duty| duty.order);
+        let order = npc.escort_order();
         if order == Some(EscortOrder::Hold) {
             return Goal::Idle;
         }
@@ -341,6 +342,7 @@ mod tests {
         let mut npc = escort(None);
         npc.escort = None;
         npc.mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
             slot: 0,
             behav: crate::mission::ships::ShipBehav::EscortPlayer,
             formation: Some(crate::escort::FormationSlot {
@@ -350,6 +352,29 @@ mod tests {
             }),
         });
         npc
+    }
+
+    /// [`mission_escort`] with standing order `order`.
+    fn ordered_mission_escort(order: EscortOrder) -> Npc {
+        let mut npc = mission_escort();
+        if let Some(mark) = &mut npc.mission {
+            mark.order = Some(order);
+        }
+        npc
+    }
+
+    #[test]
+    fn a_mission_escort_takes_the_order_the_player_gave_it() {
+        let npcs = [
+            ordered_mission_escort(EscortOrder::Hold),
+            pirate(2, 100.0, 0.0),
+        ];
+        assert_eq!(decide(&npcs, (0.0, 0.0), &[0]), (Goal::Idle, vec![]));
+        let npcs = [
+            ordered_mission_escort(EscortOrder::Attack),
+            pirate(2, 100.0, 0.0),
+        ];
+        assert_eq!(decide(&npcs, (0.0, 0.0), &[0]).0, Goal::Attack(n(2)));
     }
 
     #[test]

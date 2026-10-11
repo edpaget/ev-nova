@@ -10,7 +10,7 @@ use crate::cloak::{Cloak, CloakGear};
 use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
-use crate::escort::{EscortClass, EscortDuty, FormationSlot};
+use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot};
 use crate::flight::ShipState;
 use crate::mission::ships::ShipBehav;
 use crate::reserves::Reserves;
@@ -220,6 +220,11 @@ pub struct MissionMark {
     /// before (see the session's `mission_ships` module). It is never an
     /// [`EscortDuty`], so every hired-escort path leaves it out.
     pub formation: Option<FormationSlot>,
+    /// Its standing order while a mission escort, given by the player's
+    /// escort commands (`_IssueNewEscortCommand` @0x6614a-0x66176), the
+    /// counterpart of [`EscortDuty::order`]. Never saved: mission escorts
+    /// are set up again in each system.
+    pub order: Option<EscortOrder>,
 }
 
 impl Npc {
@@ -260,6 +265,18 @@ impl Npc {
     #[must_use]
     pub fn mission_escort(&self) -> bool {
         self.mission.is_some_and(|mark| mark.formation.is_some())
+    }
+
+    /// Its standing order as one of the player's escorts: a hired
+    /// escort's ([`EscortDuty::order`]), else a mission escort's
+    /// ([`MissionMark::order`]); none for any other ship.
+    #[must_use]
+    pub fn escort_order(&self) -> Option<EscortOrder> {
+        match (self.escort, self.mission) {
+            (Some(duty), _) => duty.order,
+            (None, Some(mark)) if mark.formation.is_some() => mark.order,
+            _ => None,
+        }
     }
 
     /// Its place in the player's formation: a hired escort's
@@ -359,7 +376,40 @@ mod tests {
             slot: 1,
             behav,
             formation,
+            order: None,
         }
+    }
+
+    #[test]
+    fn a_ships_escort_order_is_its_dutys_else_its_marks_while_a_mission_escort() {
+        let slot = FormationSlot::default();
+        let ordered = |formation| MissionMark {
+            order: Some(EscortOrder::Hold),
+            ..mark(ShipBehav::EscortPlayer, formation)
+        };
+        let joined = Npc {
+            mission: Some(ordered(Some(slot))),
+            ..crate::testkit::npc(7, ShipStats::default())
+        };
+        assert_eq!(joined.escort_order(), Some(EscortOrder::Hold));
+        let unjoined = Npc {
+            mission: Some(ordered(None)),
+            ..joined.clone()
+        };
+        assert_eq!(unjoined.escort_order(), None);
+        let hired = Npc {
+            escort: Some(EscortDuty {
+                formation: slot,
+                order: Some(EscortOrder::Attack),
+            }),
+            ..joined.clone()
+        };
+        assert_eq!(hired.escort_order(), Some(EscortOrder::Attack));
+        let plain = Npc {
+            mission: None,
+            ..joined
+        };
+        assert_eq!(plain.escort_order(), None);
     }
 
     #[test]

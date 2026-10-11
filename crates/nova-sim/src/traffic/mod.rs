@@ -1337,6 +1337,7 @@ mod tests {
         traffic.enter(table(1), &mut Draws::of(&[0]));
         traffic.add_npc(Npc {
             mission: Some(npc::MissionMark {
+                order: None,
                 slot: 0,
                 behav: ShipBehav::EscortPlayer,
                 formation: Some(duty(2).formation),
@@ -1421,6 +1422,7 @@ mod tests {
     /// formation or not.
     fn escorting(joined: bool) -> npc::MissionMark {
         npc::MissionMark {
+            order: None,
             slot: 0,
             behav: ShipBehav::EscortPlayer,
             formation: joined.then(|| duty(2).formation),
@@ -2130,6 +2132,7 @@ mod tests {
             info_types: 1,
             person: None,
             mission: Some(npc::MissionMark {
+                order: None,
                 slot: 2,
                 behav: ShipBehav::from_code(behav),
                 formation: None,

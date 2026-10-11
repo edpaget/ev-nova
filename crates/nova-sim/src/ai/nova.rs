@@ -531,6 +531,7 @@ mod tests {
     /// `npc` as slot 1's special ship of `ShipBehav` `behav`.
     fn mission_ship(mut npc: Npc, behav: i16) -> Npc {
         npc.mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
             slot: 1,
             behav: ShipBehav::from_code(behav),
             formation: None,

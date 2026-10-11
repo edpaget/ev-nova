@@ -344,7 +344,7 @@ use crate::ui::PlunderShown;
 use crate::ui::comm::grouped;
 use crate::{
     Color, Diagnostic, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction,
-    Sound,
+    Sound, UiSound,
 };
 
 /// The overlay: the system's title and the help line.
@@ -1174,6 +1174,8 @@ pub struct FlightView<C> {
     metrics: Option<Metrics>,
     /// The escort menu, shut or open.
     escort_menu: EscortMenu,
+    /// The escort menu's beeps not yet taken ([`Screen::take_sounds`]).
+    ui_sounds: Vec<UiSound>,
     /// The escort menu's colours, read once.
     escort_colors: EscortMenuColors,
 }
@@ -1340,6 +1342,7 @@ impl<
             effects_chance: SharedChance::default(),
             metrics: None,
             escort_menu: EscortMenu::default(),
+            ui_sounds: Vec::new(),
             escort_colors,
         }
     }
@@ -2702,7 +2705,9 @@ impl<C> FlightView<C> {
         match (group, slot) {
             (Some(n), _) if self.escort_menu.is_open() => {
                 let rows = self.escort_rows();
-                self.escort_menu.select(n, self.elapsed, &rows);
+                if self.escort_menu.select(n, self.elapsed, &rows) {
+                    self.ui_sounds.push(UiSound::EscortGroupSelected);
+                }
             }
             (_, Some(slot)) => self.select_stellar(StellarPick::Slot(slot)),
             _ if key == NEAREST_STELLAR_KEY => self.select_stellar(StellarPick::Nearest),
@@ -2756,6 +2761,9 @@ impl<C> FlightView<C> {
         let rows = self.escort_rows();
         if self.escort_menu.toggle(self.elapsed, &rows) == Toggled::NoEscorts {
             self.say(NO_ESCORTS);
+            self.ui_sounds.push(UiSound::NoEscorts);
+        } else {
+            self.ui_sounds.push(UiSound::EscortMenuToggled);
         }
     }
 
@@ -3116,7 +3124,8 @@ impl<
         // The session may have populated its system afresh.
         self.read_npc_sheets();
         let rows = self.escort_rows();
-        self.escort_menu.update(self.elapsed, &rows);
+        let flying = self.session.as_ref().is_ok_and(Session::escorts_flying);
+        self.escort_menu.update(self.elapsed, &rows, flying);
         self.alpha = alpha;
         self.start_streak_if_jumping();
     }
@@ -3213,6 +3222,7 @@ impl<
             .as_mut()
             .map(|session| session.take_sounds().into_iter().map(Sound::Sim).collect())
             .unwrap_or_default();
+        sounds.extend(self.ui_sounds.drain(..).map(Sound::Ui));
         sounds.extend(self.effects.take_sounds().into_iter().map(Sound::Combat));
         sounds
     }
@@ -10009,6 +10019,61 @@ mod tests {
             ],
             ['f', 'd', 'v', 'c'].map(Key::Char)
         );
+    }
+
+    /// The interface sounds `view` holds, taken.
+    fn ui_sounds(view: &mut View) -> Vec<UiSound> {
+        view.take_sounds()
+            .into_iter()
+            .filter_map(|sound| match sound {
+                Sound::Ui(sound) => Some(sound),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_escort_menus_keys_beep_as_the_original_does() {
+        let mut view = escorted();
+        view.take_sounds();
+        tap(&mut view, MENU_KEY);
+        assert_eq!(ui_sounds(&mut view), [UiSound::EscortMenuToggled], "opened");
+        let rows = view.session().expect("flying").escort_menu();
+        let present = |n: usize| match EscortGroup::ALL[n] {
+            EscortGroup::All => true,
+            EscortGroup::Class(class) => rows.iter().any(|row| row.class == class && row.present),
+        };
+        let absent = (1..5).find(|&n| !present(n)).expect("an absent class");
+        let own = (1..5).find(|&n| present(n)).expect("the escort's class");
+        tap(&mut view, GROUP_KEYS[absent]);
+        assert_eq!(ui_sounds(&mut view), [], "an absent class is not selected");
+        tap(&mut view, GROUP_KEYS[own]);
+        assert_eq!(ui_sounds(&mut view), [UiSound::EscortGroupSelected]);
+        tap(&mut view, ESCORT_HOLD_KEY);
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::EscortsCommanded)],
+            "_beepSnd[1]"
+        );
+        tap(&mut view, MENU_KEY);
+        assert_eq!(ui_sounds(&mut view), [UiSound::EscortMenuToggled], "closed");
+        tap(&mut view, MENU_KEY);
+        view.take_sounds();
+        view.tick(super::super::escorts::MENU_TIMEOUT + TICK);
+        assert!(!view.escort_menu().is_open());
+        assert_eq!(ui_sounds(&mut view), [], "it fades silently");
+    }
+
+    #[test]
+    fn e_with_no_escorts_beeps_no_escorts() {
+        let catalog = boardable();
+        let pilot = Pilot::new(&catalog, "Alone").expect("starts");
+        let mut view = FlightView::with_pilot(catalog, pilot).with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        view.take_sounds();
+        tap(&mut view, MENU_KEY);
+        assert_eq!(view.message(), Some(NO_ESCORTS));
+        assert_eq!(ui_sounds(&mut view), [UiSound::NoEscorts]);
     }
 
     #[test]

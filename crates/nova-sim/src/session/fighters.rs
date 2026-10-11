@@ -43,7 +43,7 @@ use crate::catalog::{OutfitId, ShipId, WeaponId};
 use crate::combat::armament::{MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Sortie};
-use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot, NO_SPRITE};
+use crate::escort::{EscortDuty, EscortOrder, FormationSlot, NO_SPRITE};
 use crate::flight::ShipState;
 use crate::hyperspace::JUMP_FUEL;
 use crate::outfitter::Launcher;
@@ -142,15 +142,6 @@ impl Session {
         self.fleet.resize(self.pilot.escorts.len() - 1, None);
         self.fleet.push(Some(id));
         self.reform();
-    }
-
-    /// The standing order a fighter of `class` launched takes by the
-    /// engine: its class's first escort's, Return to Hangar excepted.
-    fn class_order(&self, class: EscortClass) -> Option<EscortOrder> {
-        (0..self.pilot.escorts.len())
-            .find(|&index| self.escort_class(index) == class)
-            .and_then(|index| self.pilot.escorts[index].order)
-            .filter(|&order| order != EscortOrder::Dock)
     }
 
     /// NPC `carrier`'s fighter `npc` joins its fleet, of its government,

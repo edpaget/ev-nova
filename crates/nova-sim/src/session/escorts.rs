@@ -40,14 +40,17 @@
 //! orders are kept.
 //!
 //! **Commands** ([`Session::command_escorts`], `_IssueNewEscortCommand`
-//! @0x660d5): a command goes to every escort of its group, each taking
-//! the command's order, and Attack copies the player's target to each,
-//! unless that is one of the player's own escorts. Return to Hangar
+//! @0x660d5): a command goes to every escort of its group, hired or a
+//! mission escort (the original takes every ship led by the player whose
+//! class matches, @0x6614a-0x66176), each taking the command's order,
+//! and Attack copies the player's target to each, unless that is a ship
+//! the player leads (`_AlliedWithPlayer` @0x6985-0x69d0). Return to Hangar
 //! ([`EscortCommand::Dock`]) sends the carried fighters home and any
 //! other escort back to formation; its report says Recall when some such
 //! escort had another order. It reports what it
 //! changed ([`Commanded`]) only when some escort's order or target
-//! changed. The escort menu's rows ([`Session::escort_menu`]) give each
+//! changed, and then beeps ([`SimSound::EscortsCommanded`](crate::SimSound),
+//! `_beepSnd[1]` @0x665be-0x665e1). The escort menu's rows ([`Session::escort_menu`]) give each
 //! class's presence and its first escort's order. A carried fighter is
 //! placed as any escort is, its carrier the player (see
 //! [`fighters`](super::fighters)).
@@ -69,7 +72,8 @@ use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::escort::{
-    self, ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, FormationSlot,
+    self, ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
+    FormationSlot,
 };
 use crate::flight::ShipState;
 use crate::reserves::Reserves;
@@ -85,6 +89,11 @@ impl Session {
         if self.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine {
             for escort in &mut self.pilot.escorts {
                 escort.order = None;
+            }
+            for npc in self.traffic.npcs_mut() {
+                if let Some(mark) = &mut npc.mission {
+                    mark.order = None;
+                }
             }
         }
         self.fleet = (0..self.pilot.escorts.len())
@@ -359,9 +368,10 @@ impl Session {
         if self.landed.is_some() || self.jumping().is_some() {
             return None;
         }
-        let target = self
-            .target
-            .filter(|&target| command == EscortCommand::Attack && !self.is_escort(target));
+        let target = self.target.filter(|&target| {
+            command == EscortCommand::Attack && !self.player_led().any(|npc| npc.id == target)
+        });
+        let target = target.map(ShipRef::Npc);
         let mut changed = false;
         let mut recalled = false;
         for index in 0..self.pilot.escorts.len() {
@@ -369,12 +379,8 @@ impl Session {
                 continue;
             }
             let escort = &mut self.pilot.escorts[index];
-            let order = if command == EscortCommand::Dock && !escort.carried {
-                recalled |= escort.order.is_some();
-                None
-            } else {
-                command.order()
-            };
+            let (order, recall) = order_for(command, escort.carried, escort.order);
+            recalled |= recall;
             changed |= escort.order != order;
             escort.order = order;
             let placed = self.fleet.get(index).copied().flatten();
@@ -384,12 +390,28 @@ impl Session {
             if let Some(duty) = &mut npc.escort {
                 duty.order = order;
             }
-            if let Some(target) = target.map(ShipRef::Npc)
-                && npc.target != Some(target)
-            {
-                npc.target = Some(target);
-                changed = true;
-            }
+            changed |= take_target(npc, target);
+        }
+        let mission_escorts: Vec<NpcId> = self
+            .player_led()
+            .filter(|npc| npc.mission_escort() && group.holds(npc.class))
+            .map(|npc| npc.id)
+            .collect();
+        for id in mission_escorts {
+            let Some(npc) = self.npc_mut(id) else {
+                continue;
+            };
+            let Some(mark) = &mut npc.mission else {
+                continue;
+            };
+            let (order, recall) = order_for(command, false, mark.order);
+            recalled |= recall;
+            changed |= mark.order != order;
+            mark.order = order;
+            changed |= take_target(npc, target);
+        }
+        if changed {
+            self.sounds.push(crate::SimSound::EscortsCommanded);
         }
         changed.then_some(Commanded {
             group,
@@ -402,20 +424,90 @@ impl Session {
         })
     }
 
-    /// The escort menu's class rows, in its order: whether the player has
-    /// an escort of each class, and its first escort's standing order.
+    /// The standing order of `class` that a ship joining it takes, as
+    /// the original's one order per class does (`_EscortAI`
+    /// @0x83ad8-0x83b2b): its first hired escort's, else its first
+    /// mission escort's, Return to Hangar excepted. A fighter the player
+    /// launches and a mission escort joining both take it.
+    pub(super) fn class_order(&self, class: EscortClass) -> Option<EscortOrder> {
+        let hired = (0..self.pilot.escorts.len())
+            .find(|&index| self.escort_class(index) == class)
+            .map(|index| self.pilot.escorts[index].order);
+        let mission = || {
+            self.player_led()
+                .find(|npc| npc.mission_escort() && npc.class == class)
+                .map(Npc::escort_order)
+        };
+        hired
+            .or_else(mission)
+            .flatten()
+            .filter(|&order| order != EscortOrder::Dock)
+    }
+
+    /// The escort menu's class rows, in its order: whether the player
+    /// leads a ship of each class, hired or a mission escort, disabled
+    /// included (`_DrawEscortMenuInFrame` @0x56392-0x563ca), and the
+    /// standing order of its first hired escort, else of its first
+    /// mission escort.
     #[must_use]
     pub fn escort_menu(&self) -> [ClassRow; 4] {
         EscortClass::ALL.map(|class| {
-            let first = (0..self.pilot.escorts.len())
+            let hired = (0..self.pilot.escorts.len())
                 .find(|&index| self.escort_class(index) == class)
-                .and_then(|index| self.pilot.escorts.get(index));
+                .and_then(|index| self.pilot.escorts.get(index))
+                .map(|escort| escort.order);
+            let mission = || {
+                self.player_led()
+                    .find(|npc| npc.mission_escort() && npc.class == class)
+                    .map(Npc::escort_order)
+            };
+            let first = hired.or_else(mission);
             ClassRow {
                 class,
                 present: first.is_some(),
-                order: first.and_then(|escort| escort.order),
+                order: first.flatten(),
             }
         })
+    }
+
+    /// Whether the player has an escort flying, for the escort menu to
+    /// stay open (`_HandlePlayer` @0x6df59-0x6dfd0): any hired escort, or
+    /// a mission escort neither disabled nor breaking up (@0x6df73).
+    #[must_use]
+    pub fn escorts_flying(&self) -> bool {
+        !self.pilot.escorts.is_empty()
+            || self
+                .player_led()
+                .any(|npc| npc.mission_escort() && npc.condition == Condition::Intact)
+    }
+}
+
+/// The order an escort holding `order`, carried or not, takes from
+/// `command`, and whether that is a recall: Return to Hangar sends any
+/// escort but a carried fighter back to formation (`_IssueNewEscortCommand`
+/// @0x661a5-0x661ed, the AI type 5 test), a recall when it had another
+/// order.
+fn order_for(
+    command: EscortCommand,
+    carried: bool,
+    order: Option<EscortOrder>,
+) -> (Option<EscortOrder>, bool) {
+    if command == EscortCommand::Dock && !carried {
+        (None, order.is_some())
+    } else {
+        (command.order(), false)
+    }
+}
+
+/// `npc` takes `target`, the player's to attack, when there is one;
+/// whether its target changed (`_IssueNewEscortCommand` @0x66233-0x66273).
+fn take_target(npc: &mut Npc, target: Option<ShipRef>) -> bool {
+    match target {
+        Some(target) if npc.target != Some(target) => {
+            npc.target = Some(target);
+            true
+        }
+        _ => false,
     }
 }
 

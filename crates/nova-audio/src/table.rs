@@ -30,6 +30,14 @@ pub struct SoundTable {
     pub alert: Option<SoundId>,
     /// Plays as a `Q` set operator's message is shown in flight.
     pub script_message: Option<SoundId>,
+    /// Plays as the escort menu opens or closes.
+    pub escort_menu: Option<SoundId>,
+    /// Plays as an escort command changes some escort's orders.
+    pub escorts_commanded: Option<SoundId>,
+    /// Plays as the escort menu selects a group.
+    pub escort_group: Option<SoundId>,
+    /// Plays as the player asks for the escort menu with no escorts.
+    pub no_escorts: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -59,6 +67,16 @@ impl SoundTable {
     ///   from `snd ` 150 to 154 into `_beepSnd` (@0x1c174), which
     ///   `_PlayGame` plays as it shows a `Q`'s message in flight
     ///   (`_beepSnd[4]`, @0x4657a).
+    /// - `escort_menu`: 150, `_beepSnd[0]`, which `_HandlePlayer` plays as
+    ///   E opens the escort menu (@0x6de8c-0x6deb4) and closes it
+    ///   (@0x6e02b-0x6e04d).
+    /// - `escorts_commanded`: 151, `_beepSnd[1]`, which
+    ///   `_IssueNewEscortCommand` plays after "New escort orders assigned:"
+    ///   (@0x665be-0x665e1).
+    /// - `escort_group`: 152, `_beepSnd[2]`, as keys 1-5 select a group
+    ///   (`_HandlePlayer` @0x6e126-0x6e149).
+    /// - `no_escorts`: 153, `_beepSnd[3]`, with "You don't have any
+    ///   escorts." (`_HandlePlayer` @0x6de08-0x6de87).
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -69,6 +87,10 @@ impl SoundTable {
         button_up: Some(SoundId(601)),
         alert: None,
         script_message: Some(SoundId(154)),
+        escort_menu: Some(SoundId(150)),
+        escorts_commanded: Some(SoundId(151)),
+        escort_group: Some(SoundId(152)),
+        no_escorts: Some(SoundId(153)),
     };
 }
 
@@ -88,5 +110,9 @@ mod tests {
         assert_eq!(table.button_up, Some(SoundId(601)), "Menu button up");
         assert_eq!(table.alert, None, "the system's alert");
         assert_eq!(table.script_message, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.escort_menu, Some(SoundId(150)), "_beepSnd[0]");
+        assert_eq!(table.escorts_commanded, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.escort_group, Some(SoundId(152)), "_beepSnd[2]");
+        assert_eq!(table.no_escorts, Some(SoundId(153)), "_beepSnd[3]");
     }
 }

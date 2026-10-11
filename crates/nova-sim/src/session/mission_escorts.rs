@@ -15,8 +15,10 @@
 //! comes by any of the three paths ([`Session::mission_ships_came`]) and
 //! on every traffic tick, keeping formation ([`Goal::Formation`]). It is
 //! a **mission escort** ([`Npc::mission_escort`]): of the player's fleet
-//! ([`Npc::fleet`]), flown by the escorts' AI with no standing order (see
-//! [`ai::escort`](crate::ai::escort)), and never one of the hired escorts:
+//! ([`Npc::fleet`]), flown by the escorts' AI by the standing order the
+//! player's escort commands give it, its class's order as it joins (see
+//! [`ai::escort`](crate::ai::escort) and [`Session::command_escorts`]),
+//! and never one of the hired escorts:
 //! it carries no [`EscortDuty`](crate::escort::EscortDuty), so saving,
 //! pay, the escort landing screen, the escort comm dialog, jettison,
 //! fighter recall and the hiring room, which read the pilot's escorts or
@@ -69,7 +71,7 @@
 use super::Session;
 use crate::ai::Goal;
 use crate::combat::hull::Condition;
-use crate::escort::FormationSlot;
+use crate::escort::{EscortClass, FormationSlot};
 use crate::mission::ships::ShipBehav;
 use crate::traffic::npc::{AiType, Npc, NpcId};
 
@@ -77,9 +79,11 @@ impl Session {
     /// Every mission's special ship that may join the player's formation
     /// joins it (see the module docs): of [`ShipBehav::EscortPlayer`],
     /// intact, not yet in it, its slot holding its mission. Each keeps
-    /// formation with no target. Whether any joined; the formation
+    /// formation with no target, taking its class's standing order
+    /// ([`Session::class_order`], `_EscortAI` @0x83ad8-0x83b2b). Whether any joined; the formation
     /// re-forms when one did.
     pub(super) fn join_mission_escorts(&mut self) -> bool {
+        let orders = EscortClass::ALL.map(|class| (class, self.class_order(class)));
         let missions = &self.pilot.missions;
         let mut joined = false;
         for npc in self.traffic.npcs_mut() {
@@ -92,6 +96,10 @@ impl Session {
                 && missions.get(mark.slot).is_some();
             if joins {
                 mark.formation = Some(FormationSlot::default());
+                mark.order = orders
+                    .iter()
+                    .find(|(class, _)| *class == npc.class)
+                    .and_then(|(_, order)| *order);
                 npc.goal = Goal::Formation { guard: None };
                 npc.target = None;
                 joined = true;
@@ -156,7 +164,9 @@ mod tests {
     use crate::catalog::{MissionShip, ShipId, SystemId};
     use crate::chance::NeverFires;
     use crate::control::SetExpr;
-    use crate::escort::{self, KEEP_FORMATION};
+    use crate::escort::{
+        self, Commanded, EscortClass, EscortCommand, EscortGroup, EscortOrder, KEEP_FORMATION,
+    };
     use crate::flight::ShipState;
     use crate::hail::nova::{RELEASE, REQUEST_ASSISTANCE};
     use crate::hail::reply::{ESCORT_OPENING, IN_YOUR_DREAMS, JUST_AN_ESCORT};
@@ -832,5 +842,283 @@ mod tests {
         // too; here only the hired escorts are skipped.
         assert!(session.select_target(TargetPick::Nearest).is_some());
         assert_eq!(session.pilot.system, SystemId(130));
+    }
+
+    // Escort commands (`_IssueNewEscortCommand` @0x660d5).
+
+    /// Each mission escort's standing order, in order.
+    fn orders(session: &Session) -> Vec<Option<EscortOrder>> {
+        mission_escorts(session)
+            .iter()
+            .map(|npc| npc.escort_order())
+            .collect()
+    }
+
+    /// A session in flight with only mission 140's two escorts.
+    fn flying(catalog: &FakePilotCatalog) -> Session {
+        let mut session = accepted(catalog);
+        take_off(&mut session, catalog);
+        assert_eq!(mission_escorts(&session).len(), 2);
+        session
+    }
+
+    #[test]
+    fn an_escort_command_reaches_a_mission_escort_as_the_original_does() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = flying(&catalog);
+        assert_eq!(
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold),
+            Some(Commanded {
+                group: EscortGroup::All,
+                command: EscortCommand::Hold,
+                targeted: false,
+            })
+        );
+        assert_eq!(orders(&session), [Some(EscortOrder::Hold); 2]);
+        tick(&mut session, &catalog);
+        for npc in mission_escorts(&session) {
+            assert_eq!(npc.goal, Goal::Idle);
+        }
+        assert_eq!(
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold),
+            None,
+            "nothing changed"
+        );
+    }
+
+    #[test]
+    fn a_class_command_reaches_a_mission_escort_of_its_class_only() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = flying(&catalog);
+        let class = mission_escorts(&session)[0].class;
+        let other = EscortClass::ALL
+            .into_iter()
+            .find(|&other| other != class)
+            .expect("another class");
+        assert_eq!(
+            session.command_escorts(EscortGroup::Class(other), EscortCommand::Defend),
+            None
+        );
+        assert_eq!(orders(&session), [None; 2]);
+        assert!(
+            session
+                .command_escorts(EscortGroup::Class(class), EscortCommand::Defend)
+                .is_some()
+        );
+        assert_eq!(orders(&session), [Some(EscortOrder::Defend); 2]);
+    }
+
+    #[test]
+    fn return_to_hangar_sends_a_mission_escort_to_formation() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = flying(&catalog);
+        assert_eq!(
+            session.command_escorts(EscortGroup::All, EscortCommand::Dock),
+            None,
+            "already in formation"
+        );
+        assert_eq!(orders(&session), [None; 2]);
+        session.command_escorts(EscortGroup::All, EscortCommand::Defend);
+        assert_eq!(
+            session
+                .command_escorts(EscortGroup::All, EscortCommand::Dock)
+                .map(|done| done.command),
+            Some(EscortCommand::Recall)
+        );
+        assert_eq!(orders(&session), [None; 2]);
+    }
+
+    #[test]
+    fn attack_never_copies_a_targeted_mission_escort_as_a_target() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let (mut session, ids) = flying_with_escorts(&catalog);
+        session.target = Some(ids[0]);
+        let done = session
+            .command_escorts(EscortGroup::All, EscortCommand::Attack)
+            .expect("the orders changed");
+        assert!(!done.targeted);
+        for npc in session.player_led() {
+            assert_eq!(npc.target, None, "{:?}", npc.id);
+            assert_eq!(npc.escort_order(), Some(EscortOrder::Attack));
+        }
+    }
+
+    #[test]
+    fn attack_copies_a_strangers_target_to_mission_escorts() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let (mut session, ids) = flying_with_escorts(&catalog);
+        let stranger = session.place_escort(0).expect("a ship");
+        session.npc_mut(stranger).expect("here").escort = None;
+        session.target = Some(stranger);
+        let done = session
+            .command_escorts(EscortGroup::All, EscortCommand::Attack)
+            .expect("changed");
+        assert!(done.targeted);
+        for npc in of(&session, &ids) {
+            assert_eq!(npc.target, Some(crate::combat::ShipRef::Npc(stranger)));
+        }
+        assert_eq!(
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack),
+            None,
+            "the same order and target again"
+        );
+    }
+
+    // The escort menu (`_HandlePlayer` @0x6dda9, `_DrawEscortMenuInFrame`
+    // @0x56392).
+
+    /// The menu row of `class`.
+    fn row(session: &Session, class: EscortClass) -> crate::escort::ClassRow {
+        session
+            .escort_menu()
+            .into_iter()
+            .find(|row| row.class == class)
+            .expect("every class has a row")
+    }
+
+    #[test]
+    fn the_escort_menu_counts_mission_escorts() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = flying(&catalog);
+        let class = mission_escorts(&session)[0].class;
+        for other in session.escort_menu() {
+            assert_eq!(other.present, other.class == class, "{:?}", other.class);
+            assert_eq!(other.order, None);
+        }
+        session.command_escorts(EscortGroup::All, EscortCommand::Hold);
+        assert_eq!(row(&session, class).order, Some(EscortOrder::Hold));
+        assert!(session.escorts_flying());
+    }
+
+    #[test]
+    fn a_hired_escorts_order_heads_its_class_row_over_a_mission_escorts() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let (mut session, ids) = flying_with_escorts(&catalog);
+        let class = session.npc(ids[0]).expect("here").class;
+        assert_eq!(session.escort_class(0), class, "one class");
+        session.pilot.escorts[0].order = Some(EscortOrder::Defend);
+        assert_eq!(row(&session, class).order, Some(EscortOrder::Defend));
+    }
+
+    #[test]
+    fn a_disabled_mission_escort_keeps_its_row_but_no_escort_is_flying() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = flying(&catalog);
+        let class = mission_escorts(&session)[0].class;
+        for npc in session.traffic.npcs_mut() {
+            npc.condition = Condition::Disabled;
+        }
+        assert!(row(&session, class).present);
+        assert!(!session.escorts_flying());
+        session.traffic.npcs_mut()[1].condition = Condition::Intact;
+        assert!(session.escorts_flying());
+    }
+
+    #[test]
+    fn a_hired_escort_alone_is_flying() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let (mut session, ids) = flying_with_escorts(&catalog);
+        for id in &ids {
+            session.npc_mut(*id).expect("here").condition = Condition::Disabled;
+        }
+        assert!(session.escorts_flying());
+        session.pilot.escorts.clear();
+        assert!(!session.escorts_flying());
+    }
+
+    #[test]
+    fn a_command_that_changes_something_beeps_and_one_that_changes_nothing_is_silent() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = flying(&catalog);
+        session.take_sounds();
+        session.command_escorts(EscortGroup::All, EscortCommand::Recall);
+        assert_eq!(session.take_sounds(), []);
+        session.command_escorts(EscortGroup::All, EscortCommand::Hold);
+        assert_eq!(
+            session.take_sounds(),
+            [crate::SimSound::EscortsCommanded],
+            "_beepSnd[1]"
+        );
+    }
+
+    // Joining with the class order (`_EscortAI` @0x83ad8-0x83b2b).
+
+    /// A session in flight with a hired escort of the mission escorts'
+    /// class given `command`, mission 140's escorts of `ships` yet to
+    /// come on their timer.
+    fn commanded_before_they_come(catalog: &FakePilotCatalog, command: EscortCommand) -> Session {
+        let mut session = accepted(catalog);
+        session.pilot.escorts.push(hired());
+        take_off(&mut session, catalog);
+        assert!(mission_escorts(&session).is_empty());
+        session.command_escorts(EscortGroup::All, command);
+        ticks(&mut session, catalog, 199);
+        assert_eq!(mission_escorts(&session).len(), 2);
+        session
+    }
+
+    #[test]
+    fn a_mission_escort_joining_takes_its_classs_order() {
+        let catalog = ships_catalog(escorting(-1, 1));
+        let session = commanded_before_they_come(&catalog, EscortCommand::Attack);
+        assert_eq!(orders(&session), [Some(EscortOrder::Attack); 2]);
+        let session = commanded_before_they_come(&catalog, EscortCommand::Defend);
+        assert_eq!(orders(&session), [Some(EscortOrder::Defend); 2]);
+    }
+
+    #[test]
+    fn a_mission_escort_joining_after_return_to_hangar_keeps_formation() {
+        let catalog = ships_catalog(escorting(-1, 1));
+        let mut session = accepted(&catalog);
+        session.pilot.escorts.push(Escort {
+            carried: true,
+            ..hired()
+        });
+        take_off(&mut session, &catalog);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        assert_eq!(session.pilot.escorts[0].order, Some(EscortOrder::Dock));
+        ticks(&mut session, &catalog, 199);
+        assert_eq!(orders(&session), [None; 2]);
+    }
+
+    #[test]
+    fn a_jump_resets_mission_escorts_orders_by_the_engine_and_keeps_the_classs_by_the_bible() {
+        for (source, kept) in [
+            (RuleSource::Engine, None),
+            (RuleSource::Bible, Some(EscortOrder::Attack)),
+        ] {
+            let catalog = ships_catalog(escorting(-6, 0));
+            let mut session = accepted(&catalog);
+            session.rules = Rulebook::default().with_override(RuleKey::EscortOrders, source);
+            session.pilot.escorts.push(hired());
+            take_off(&mut session, &catalog);
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack);
+            assert_eq!(orders(&session), [Some(EscortOrder::Attack); 2]);
+            jump_to(&mut session, &catalog, 131);
+            assert_eq!(orders(&session), [kept; 2], "{source:?}");
+            assert_eq!(session.pilot.escorts[0].order, kept, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn with_no_hired_escort_of_a_class_its_order_is_its_first_mission_escorts() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = flying(&catalog);
+        let ids: Vec<NpcId> = mission_escorts(&session).iter().map(|npc| npc.id).collect();
+        let class = session.npc(ids[1]).expect("here").class;
+        let other = EscortClass::ALL
+            .into_iter()
+            .find(|&other| other != class)
+            .expect("another class");
+        for (id, class, order) in [
+            (ids[0], other, EscortOrder::Attack),
+            (ids[1], class, EscortOrder::Hold),
+        ] {
+            let npc = session.npc_mut(id).expect("here");
+            npc.class = class;
+            npc.mission.as_mut().expect("marked").order = Some(order);
+        }
+        assert_eq!(session.class_order(class), Some(EscortOrder::Hold));
+        assert_eq!(session.class_order(other), Some(EscortOrder::Attack));
     }
 }

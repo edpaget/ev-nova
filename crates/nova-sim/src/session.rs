@@ -12273,6 +12273,7 @@ mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         let ship = &mut session.traffic.npcs_mut()[0];
         ship.mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
             slot: 0,
             behav: crate::mission::ships::ShipBehav::EscortPlayer,
             formation,
@@ -12844,6 +12845,7 @@ mod tests {
             Marked::Stale => 5,
         };
         session.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
             slot,
             behav: crate::mission::ships::ShipBehav::Own,
             formation: None,

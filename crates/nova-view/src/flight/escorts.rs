@@ -210,10 +210,13 @@ impl EscortMenu {
     }
 
     /// Closes the menu at `now` once [`MENU_TIMEOUT`] has passed since it
-    /// last took a selection or command, or when `rows` show no escort.
-    pub fn update(&mut self, now: Duration, rows: &[ClassRow; 4]) {
+    /// last took a selection or command, when `rows` show no escort, or
+    /// when no escort is `flying` (`_HandlePlayer` @0x6df59-0x6dfd0: a
+    /// row stays for a disabled ship, but the menu closes once none is
+    /// intact).
+    pub fn update(&mut self, now: Duration, rows: &[ClassRow; 4], flying: bool) {
         if let Some((_, since)) = self.open
-            && (now >= since + MENU_TIMEOUT || !any_escort(rows))
+            && (now >= since + MENU_TIMEOUT || !any_escort(rows) || !flying)
         {
             self.open = None;
         }
@@ -460,15 +463,19 @@ mod tests {
         let mut menu = EscortMenu::default();
         menu.toggle(AT, &rows());
         let just_before = AT + MENU_TIMEOUT.saturating_sub(Duration::from_millis(1));
-        menu.update(just_before, &rows());
+        menu.update(just_before, &rows(), true);
         assert!(menu.is_open());
         menu.select(3, just_before, &rows());
-        menu.update(AT + MENU_TIMEOUT, &rows());
+        menu.update(AT + MENU_TIMEOUT, &rows(), true);
         assert!(menu.is_open(), "the selection restarted it");
         menu.touch(just_before + Duration::from_secs(5));
-        menu.update(just_before + MENU_TIMEOUT, &rows());
+        menu.update(just_before + MENU_TIMEOUT, &rows(), true);
         assert!(menu.is_open(), "so did the command");
-        menu.update(just_before + Duration::from_secs(5) + MENU_TIMEOUT, &rows());
+        menu.update(
+            just_before + Duration::from_secs(5) + MENU_TIMEOUT,
+            &rows(),
+            true,
+        );
         assert!(!menu.is_open());
         assert_eq!(MENU_TIMEOUT, Duration::from_secs(8));
         let mut shut = EscortMenu::default();
@@ -481,15 +488,25 @@ mod tests {
         let mut menu = EscortMenu::default();
         menu.toggle(AT, &rows());
         assert!(!menu.select(1, AT, &rows()));
-        menu.update(AT, &rows());
+        menu.update(AT, &rows(), true);
         assert!(menu.is_open());
+    }
+
+    #[test]
+    fn it_closes_when_no_escort_is_flying_though_rows_remain() {
+        let mut menu = EscortMenu::default();
+        menu.toggle(AT, &rows());
+        menu.update(AT, &rows(), true);
+        assert!(menu.is_open());
+        menu.update(AT, &rows(), false);
+        assert!(!menu.is_open());
     }
 
     #[test]
     fn it_closes_when_the_fleet_empties() {
         let mut menu = EscortMenu::default();
         menu.toggle(AT, &rows());
-        menu.update(AT, &none());
+        menu.update(AT, &none(), true);
         assert!(!menu.is_open());
     }
 

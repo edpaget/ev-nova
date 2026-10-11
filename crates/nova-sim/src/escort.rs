@@ -848,6 +848,7 @@ mod tests {
         let calm = ship(3, MEDIUM, 10.0, 0.0, false);
         let mut mission_escort = ship(5, MEDIUM, 5.0, 0.0, true);
         mission_escort.mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
             slot: 0,
             behav: crate::mission::ships::ShipBehav::EscortPlayer,
             formation: Some(FormationSlot::default()),

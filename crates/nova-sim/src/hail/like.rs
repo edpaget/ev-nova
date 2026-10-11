@@ -311,6 +311,7 @@ mod tests {
     fn marked(govt: Option<GovtId>, behav: ShipBehav, joined: bool) -> Npc {
         let mut npc = ship(govt);
         npc.mission = Some(MissionMark {
+            order: None,
             slot: 0,
             behav,
             formation: joined.then(FormationSlot::default),
