@@ -54,6 +54,10 @@
 //! are crash-log lines (`_crashlog_print` @0x45305-0x45326,
 //! @0x45433-0x45454), which the engine leaves out.
 //!
+//! **Contribute** ([`contributed`]). Every active rank with a record
+//! adds its 64 `Contribute` bits to the player's, whatever its
+//! government (`_GetPlayerContributeBits` @0x76de-0x7701).
+//!
 //! **Salary** ([`pay_salaries`], `_IncrementGameTime` @0xb75b-0xb7c2,
 //! the day's eighth participant). In ID order, each active rank with a
 //! record and a nonzero `Salary` adds it to the cash unless the cash is
@@ -165,6 +169,16 @@ pub fn pay_salaries(
             *cash = (*cash).max(0);
         }
     }
+}
+
+/// The `Contribute` bits of the ranks of `records` in `active`, whatever
+/// their government (`_GetPlayerContributeBits` @0x76de-0x7701).
+#[must_use]
+pub fn contributed(records: &[RankRecord], active: &BTreeSet<RankId>) -> u64 {
+    records
+        .iter()
+        .filter(|rank| active.contains(&rank.id))
+        .fold(0, |bits, rank| bits | rank.contribute)
 }
 
 /// Whether ranks of `a` and `b` share a government for the sweeps.

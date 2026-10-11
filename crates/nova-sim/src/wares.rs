@@ -18,10 +18,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::catalog::{CronRecord, LandingSite, OutfitId, OutfitRecord, ShipId};
+use crate::catalog::{CronRecord, LandingSite, OutfitId, OutfitRecord, RankRecord, ShipId};
 use crate::chance::Chance;
 use crate::cron;
 use crate::pilot::Pilot;
+use crate::rank;
 
 /// The `BuyRandom` or `HireRandom` from which an item is always on offer:
 /// the original's loader clamps above it to it (`_LoadObjectData`).
@@ -223,7 +224,7 @@ pub fn ship_tech_allows(tech_level: i16, site: &LandingSite) -> bool {
 
 /// Everything whose `Contribute` bits the player may hold
 /// (`_GetPlayerContributeBits` @0x76b2): the ship class flown, the
-/// `oütf`s and the `crön`s.
+/// `oütf`s, the `crön`s and the `ränk`s.
 #[derive(Clone, Copy, Debug)]
 pub struct Contributors<'a> {
     /// The ship class's `Contribute` bits.
@@ -232,12 +233,16 @@ pub struct Contributors<'a> {
     pub outfits: &'a [OutfitRecord],
     /// Every `crön`.
     pub crons: &'a [CronRecord],
+    /// Every `ränk`.
+    pub ranks: &'a [RankRecord],
 }
 
 /// The `Contribute` bits `pilot` holds, `by` the ship flown and the
 /// records: the ship's, those of each outfit owned that has a record, and
 /// those of each crön running outside its holdoffs that has a record
-/// ([`cron::contributes`](crate::cron::contributes)).
+/// ([`cron::contributes`](crate::cron::contributes)), and those of each
+/// active rank that has a record, whatever its government
+/// ([`rank::contributed`](crate::rank::contributed)).
 #[must_use]
 pub fn contributed(by: &Contributors<'_>, pilot: &Pilot) -> u64 {
     let outfits = pilot
@@ -252,6 +257,7 @@ pub fn contributed(by: &Contributors<'_>, pilot: &Pilot) -> u64 {
         .filter_map(|(id, _)| by.crons.iter().find(|record| record.id == *id))
         .map(|record| record.contribute);
     outfits.chain(crons).fold(by.ship, |bits, more| bits | more)
+        | rank::contributed(by.ranks, &pilot.ranks)
 }
 
 /// Whether `require` is met by the bits `contributed`: each of its bits is
@@ -318,10 +324,10 @@ pub fn in_display_order<T>(rows: &mut [T], key: impl Fn(&T) -> (i16, i16)) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::CronId;
+    use crate::catalog::{CronId, RankId, RankRecord};
     use crate::chance::NeverFires;
     use crate::cron::CronState;
-    use crate::testkit::{Scripted, catalog, cron, outfit, planet};
+    use crate::testkit::{Scripted, catalog, cron, outfit, planet, rank};
 
     #[test]
     fn a_ton_count_takes_the_singular_unit_at_exactly_one() {
@@ -512,6 +518,7 @@ mod tests {
             ship,
             outfits: &records,
             crons: &[],
+            ranks: &[],
         };
         let mut pilot = owning(&[(128, 1), (999, 2)]);
         assert_eq!(contributed(&by(0x1), &pilot), 0x11);
@@ -538,6 +545,7 @@ mod tests {
             ship: 0,
             outfits: &[],
             crons: &crons,
+            ranks: &[],
         };
         let mut pilot = owning(&[]);
         pilot.crons = states
@@ -568,6 +576,7 @@ mod tests {
             ship: 0x3,
             outfits: &outfits,
             crons: &crons,
+            ranks: &[],
         };
         let mut pilot = owning(&[(128, 1)]);
         pilot.crons.insert(
@@ -586,6 +595,45 @@ mod tests {
         assert_eq!(with_crons(&[(128, 3, 1)]), 0, "a day of pre-holdoff");
         assert_eq!(with_crons(&[(129, -1, 3)]), 0, "in its post-holdoff");
         assert_eq!(with_crons(&[(128, 3, 2), (129, 1, 0)]), 0x8);
+    }
+
+    /// What `pilot` holds with ranks `active`, from a ship of no bits,
+    /// rank 200 of government 128 contributing 0x10 and rank 201,
+    /// unaffiliated, 0x20.
+    fn with_ranks(active: &[i16]) -> u64 {
+        let ranks = [
+            RankRecord {
+                contribute: 0x10,
+                affil_govt: Some(crate::catalog::GovtId(128)),
+                ..rank(200)
+            },
+            RankRecord {
+                contribute: 0x20,
+                ..rank(201)
+            },
+        ];
+        let by = Contributors {
+            ship: 0x1,
+            outfits: &[],
+            crons: &[],
+            ranks: &ranks,
+        };
+        let mut pilot = owning(&[]);
+        pilot.ranks = active.iter().copied().map(RankId).collect();
+        contributed(&by, &pilot)
+    }
+
+    #[test]
+    fn an_active_rank_contributes_its_bits_whatever_its_government() {
+        assert_eq!(with_ranks(&[200]), 0x11);
+        assert_eq!(with_ranks(&[201]), 0x21);
+        assert_eq!(with_ranks(&[200, 201]), 0x31);
+    }
+
+    #[test]
+    fn an_inactive_rank_or_one_with_no_record_contributes_nothing() {
+        assert_eq!(with_ranks(&[]), 0x1);
+        assert_eq!(with_ranks(&[250]), 0x1);
     }
 
     #[test]

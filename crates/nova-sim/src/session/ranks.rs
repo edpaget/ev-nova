@@ -67,15 +67,17 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    use crate::catalog::{RankId, RankRecord};
+    use crate::catalog::{OutfitId, OutfitRecord, RankId, RankRecord, ShipId, ShipRecord};
     use crate::chance::NeverFires;
     use crate::control::SetExpr;
+    use crate::outfitter::OutfitFlags;
     use crate::pilot::Pilot;
     use crate::rank::{SWEEP_GOVT_ON_ACTIVATE, SWEEP_GOVT_ON_DEACTIVATE};
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::save;
     use crate::session::Session;
-    use crate::testkit::{FakePilotCatalog, Scripted, catalog, rank};
+    use crate::shipyard::ShipFlags3;
+    use crate::testkit::{FakePilotCatalog, Scripted, catalog, outfit, rank, ship};
 
     fn set(text: &str) -> SetExpr {
         SetExpr::parse(text).expect("parses")
@@ -212,5 +214,51 @@ mod tests {
             session.let_days_pass(1, &mut NeverFires);
             assert_eq!(session.pilot().cash(), cash, "{source:?}");
         }
+    }
+
+    #[test]
+    fn granting_a_rank_adds_its_contribute_bits_to_the_players() {
+        let mut session = ranked(vec![RankRecord {
+            contribute: 0x0100_0000_0004,
+            ..rank(200)
+        }]);
+        assert_eq!(session.contributed() & 0x0100_0000_0004, 0);
+        session.run_set(&set("K200"), &mut Scripted::default());
+        assert_eq!(session.contributed() & 0x0100_0000_0004, 0x0100_0000_0004);
+        session.run_set(&set("L200"), &mut Scripted::default());
+        assert_eq!(session.contributed() & 0x0100_0000_0004, 0);
+    }
+
+    #[test]
+    fn an_active_ranks_contribute_lists_a_required_ship_and_outfit() {
+        let mut catalog = crate::session::tests::shipbuying();
+        catalog.ranks = vec![RankRecord {
+            contribute: 0x4,
+            ..rank(200)
+        }];
+        catalog.ship_records.push(ShipRecord {
+            require: 0x4,
+            flags3: ShipFlags3::HIDE_UNLESS_REQUIRED,
+            ..ship(130, catalog.ship_records[0].fields)
+        });
+        catalog.outfits.push(OutfitRecord {
+            flags: OutfitFlags::HIDE_UNLESS_REQUIRED,
+            require: 0x4,
+            require_govt: -1,
+            tech_level: 1,
+            ..outfit(310, &[])
+        });
+        let mut session = crate::session::tests::outfitted(&catalog);
+        let listed = |session: &mut Session| {
+            let yard = session.shipyard(&mut NeverFires).expect("a shipyard");
+            let shop = session.outfitter(&mut NeverFires).expect("an outfitter");
+            (
+                yard.row(ShipId(130)).is_some(),
+                shop.row(OutfitId(310)).is_some(),
+            )
+        };
+        assert_eq!(listed(&mut session), (false, false), "not held");
+        session.run_set(&set("K200"), &mut Scripted::default());
+        assert_eq!(listed(&mut session), (true, true), "held");
     }
 }

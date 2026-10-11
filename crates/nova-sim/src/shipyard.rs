@@ -237,7 +237,9 @@ use std::collections::BTreeMap;
 
 use crate::bay::FIGHTER_BAY;
 use crate::catalog::WeaponId;
-use crate::catalog::{CronRecord, LandingSite, OutfitId, OutfitRecord, ShipId, ShipRecord};
+use crate::catalog::{
+    CronRecord, LandingSite, OutfitId, OutfitRecord, RankRecord, ShipId, ShipRecord,
+};
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Arsenal, MOD_AMMO, MOD_WEAPON, StockFit, fit_stock, fitted};
 use crate::combat::weapon::Guidance;
@@ -964,6 +966,8 @@ pub(crate) struct Yard<'a> {
     pub(crate) outfits: &'a [OutfitRecord],
     /// Every `crön`, whose running ones contribute bits.
     pub(crate) crons: &'a [CronRecord],
+    /// Every `ränk`, whose active ones contribute bits.
+    pub(crate) ranks: &'a [RankRecord],
     /// Every ship class's stock weapons, which the Info's Space reads.
     pub(crate) arsenal: &'a Arsenal,
     /// The ship flown's fields.
@@ -1006,6 +1010,7 @@ impl Yard<'_> {
             ship: self.fields.contribute,
             outfits: self.outfits,
             crons: self.crons,
+            ranks: self.ranks,
         };
         let contributed = wares::contributed(&by, pilot);
         let trade_in = trade_in_value().of(&Flown { yard: self, pilot });
@@ -1758,6 +1763,7 @@ mod tests {
             ships,
             outfits,
             crons: &[],
+            ranks: &[],
             arsenal: &NO_STOCK,
             fields: FAST,
             site,

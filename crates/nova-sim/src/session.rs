@@ -2797,6 +2797,7 @@ impl Session {
         let outfitter = Shop {
             records: &self.outfits,
             crons: &self.crons,
+            ranks: &self.ranks,
             fields: self.fields,
             standard: &self.standard(),
             site,
@@ -3169,6 +3170,7 @@ impl Session {
             ships: &self.ships,
             outfits: &self.outfits,
             crons: &self.crons,
+            ranks: &self.ranks,
             arsenal: &self.arsenal,
             fields: self.fields,
             site,

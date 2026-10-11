@@ -19,7 +19,8 @@
 //! **Contribute.** Every reader of the `Contribute` bits the player
 //! holds sums them through one function, [`wares::contributed`]: the
 //! mission offers, the bar's hires ([`Session::contributed`]), the
-//! outfitter and the shipyard.
+//! outfitter and the shipyard. It reads the ship flown, the outfits
+//! owned, the crons running and the active ranks.
 
 use std::rc::Rc;
 
@@ -95,6 +96,7 @@ impl Session {
             ship: self.fields.contribute,
             outfits: &self.outfits,
             crons: &self.crons,
+            ranks: &self.ranks,
         };
         wares::contributed(&by, &self.pilot)
     }
