@@ -803,6 +803,9 @@ mod tests {
         assert!(session.pilot().escorts().is_empty());
         assert_eq!(session.pilot.escort_count(), 0, "the hiring room's count");
         assert_eq!(session.select_target(TargetPick::NextEscort), None);
+        // The original's Closest Target skips every ship led by the player
+        // (`_FindNearestShipToPlayer` @0x92a6-0x92ae), mission escorts
+        // too; here only the hired escorts are skipped.
         assert!(session.select_target(TargetPick::Nearest).is_some());
         assert_eq!(session.pilot.system, SystemId(130));
     }
