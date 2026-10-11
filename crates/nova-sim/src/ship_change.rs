@@ -801,6 +801,44 @@ mod tests {
         );
     }
 
+    /// Weapons 300 and 301 have a `MaxAmmo` of 10.
+    fn max_ammo_10_each(weapon: WeaponId) -> u32 {
+        if [WeaponId(300), WeaponId(301)].contains(&weapon) {
+            10
+        } else {
+            0
+        }
+    }
+
+    #[test]
+    fn a_negative_launcher_count_in_the_array_is_no_launcher_for_the_clamp() {
+        let capped = Limits {
+            max_ammo: &max_ammo_10_each,
+            ..limits(0, 0)
+        };
+        let stock = StockAdded {
+            weapons: BTreeMap::from([(WeaponId(300), -1), (WeaponId(301), 2)]),
+            rounds: BTreeMap::new(),
+        };
+        let fold = Fold {
+            stock: &stock,
+            default_weapons: RuleSource::Engine,
+        };
+        let unheld = &magazine()[1..];
+        assert_eq!(
+            carried_outfits(
+                &map(&[(422, 12), (424, 25)]),
+                OutfitCarry::KeepWithDefaults,
+                &map(&[]),
+                Some(&fold),
+                Some(&capped),
+                unheld,
+            ),
+            map(&[(422, 12), (424, 20)]),
+            "300 at -1: a cap of none, its Max of 5 never read; 301 at 2: capped at 20"
+        );
+    }
+
     #[test]
     fn a_clamp_reads_the_counts_held_before_it() {
         let records = [
