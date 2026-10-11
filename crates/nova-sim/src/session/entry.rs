@@ -531,7 +531,7 @@ impl Session {
         if resets.has(Reset::RedrawOffers) {
             self.offers.redraw(&mut &mut *chance);
         }
-        self.bring_in_traffic(resets.traffic, catalog, chance);
+        self.bring_in_traffic(resets.traffic, how.into(), catalog, chance);
         if resets.has(Reset::ShopRolls) {
             self.land_day_rolls();
             self.open_outfit_visit();
@@ -655,16 +655,22 @@ impl Session {
         }
     }
 
-    /// Does `step` to the traffic, reading `catalog` and drawing on
-    /// `chance` to populate: the only draw entering a system makes.
-    fn bring_in_traffic<C, R>(&mut self, step: TrafficStep, catalog: &C, chance: &mut R)
-    where
+    /// Does `step` to the traffic of a system entered `how`, reading
+    /// `catalog` and drawing on `chance` to populate: the only draw
+    /// entering a system makes.
+    fn bring_in_traffic<C, R>(
+        &mut self,
+        step: TrafficStep,
+        how: Entrance,
+        catalog: &C,
+        chance: &mut R,
+    ) where
         C: TrafficCatalog + ?Sized,
         R: Chance + ?Sized,
     {
         match step {
             TrafficStep::None => {}
-            TrafficStep::Populate => self.populate_entering(catalog, chance),
+            TrafficStep::Populate => self.populate_entering(catalog, how, chance),
             TrafficStep::Retarget => {
                 let table = self.spawn_table(catalog);
                 let fleet: BTreeSet<_> = self.fleet.iter().flatten().copied().collect();

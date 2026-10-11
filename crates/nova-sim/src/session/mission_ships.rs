@@ -267,13 +267,19 @@ impl Session {
         system.with_player(self.pilot.system, self.galaxy.map().places())
     }
 
-    /// Whether the enter-system hook restarts the appear timer of the
-    /// mission in `slot`, `active` of `record`: `ShipStart` 1, ships
-    /// left, and the player in their system (@0x99f5b-0x99f8a).
-    fn hook_restarts(&self, record: &MissionRecord, active: &ActiveMission) -> bool {
-        ShipStart::from_code(record.ships.start) == ShipStart::ComesLater
+    /// Whether the enter-system hook, on an entry `how`, restarts the
+    /// appear timer of `active`, a mission of `record`: an entry it runs
+    /// on, `ShipStart` 1, ships left, and the player in their system
+    /// (@0x99f5b-0x99f8a). Not on a gate's exit for ships following the
+    /// player while the exit decides for them
+    /// ([`Session::gate_decides`]), as the original's loop A overwrites
+    /// the restart.
+    fn hook_restarts(&self, record: &MissionRecord, active: &ActiveMission, how: Entrance) -> bool {
+        restarts_on(how)
+            && ShipStart::from_code(record.ships.start) == ShipStart::ComesLater
             && active.ships.left > 0
             && self.ships_here(active.ships.system)
+            && !self.gate_decides(how, active.ships.system)
     }
 
     /// Slot `id.record`'s hook `id.hook` on `event`, drawing on `chance`
@@ -324,7 +330,7 @@ impl Session {
             return;
         };
         let record = self.lifecycle_record(active.mission);
-        if !restarts_on(how) || !self.hook_restarts(&record, active) {
+        if !self.hook_restarts(&record, active, how) {
             return;
         }
         let appear = appear_timer(&record.ships, chance);
@@ -466,15 +472,15 @@ impl Session {
     /// @0x42dc4-0x43194): a slot whose ships are here, with ships left and
     /// its appear timer not running, brings ships left of them
     /// ([`spawn::mission_ships`]). `entering`
-    /// by an entry its enter-system hook runs on, a slot the hook is
-    /// about to restart brings none (see the module docs). With the ships,
+    /// by an entry whose enter-system hook is still to run, a slot the
+    /// hook is about to restart brings none (see the module docs). With the ships,
     /// the slots it took and their missions, in order, a slot of no
     /// `düde` among them: each is auto-aborted with `Flags` 0x0001
     /// ([`Session::abort_set_up`]).
     pub(super) fn setup_mission_ships(
         &self,
         table: &SpawnTable,
-        entering: bool,
+        entering: Option<Entrance>,
         chance: &mut (impl Chance + ?Sized),
     ) -> (Vec<NewShip>, Vec<(u8, MissionId)>) {
         let nav = self.nav_slots();
@@ -486,7 +492,7 @@ impl Session {
             if !self.ships_here(state.system)
                 || state.left <= 0
                 || state.appear >= 0
-                || (entering && self.hook_restarts(&record, active))
+                || entering.is_some_and(|how| self.hook_restarts(&record, active, how))
             {
                 continue;
             }

@@ -334,6 +334,7 @@ mod entry;
 mod escorts;
 mod events;
 mod fighters;
+mod gate_follow;
 mod hail;
 mod hire;
 mod hooks;
@@ -445,7 +446,7 @@ use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::story::day::Stay;
 use crate::story::rebuild::Rebuilt;
-use crate::story::{Fate, OverlaidGalaxy, StoryEvent};
+use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent};
 use crate::targeting::{self, TargetPick};
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Npc, NpcId};
@@ -1228,20 +1229,20 @@ impl Session {
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.populate_as(catalog, chance, false);
+        self.populate_as(catalog, chance, None);
     }
 
     /// Fills the system as [`Session::populate`] does, the active
     /// missions' special ships set up first, `entering` it by a way in
-    /// whose enter-system hook is still to run (see the `mission_ships`
-    /// module). Once the ships are in, each mission of `Flags` 0x0001
-    /// whose slot the setup took auto-aborts, in slot order, then the
-    /// goal checks a take-off held run.
+    /// whose enter-system hook is still to run, if any (see the
+    /// `mission_ships` module). Once the ships are in, each mission of
+    /// `Flags` 0x0001 whose slot the setup took auto-aborts, in slot
+    /// order, then the goal checks a take-off held run.
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
-        entering: bool,
+        entering: Option<Entrance>,
     ) {
         let table = self.spawn_table(catalog);
         let (missions, set_up) = self.setup_mission_ships(&table, entering, chance);
@@ -1270,7 +1271,7 @@ impl Session {
         self.abort_set_up(&set_up, &mut &mut *chance);
         self.check_after_take_off(&mut &mut *chance);
         self.enter_escorts();
-        if !entering {
+        if entering.is_none() {
             self.snap_mission_escorts();
         }
         self.strikes.clear();
@@ -1279,14 +1280,15 @@ impl Session {
         self.clear_lost_target();
     }
 
-    /// Fills the system as it is entered by a way in whose enter-system
-    /// hook is still to run (see [`Session::populate_as`]).
+    /// Fills the system as it is entered `how`, by a way in whose
+    /// enter-system hook is still to run (see [`Session::populate_as`]).
     pub(super) fn populate_entering(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
+        how: Entrance,
         chance: &mut (impl Chance + ?Sized),
     ) {
-        self.populate_as(catalog, chance, true);
+        self.populate_as(catalog, chance, Some(how));
     }
 
     /// What the system's traffic is drawn from, read from `catalog`: its
@@ -2357,7 +2359,7 @@ impl Session {
         };
         match exit {
             Ok((system, exit)) => {
-                self.come_out(system, &exit, catalog, chance);
+                self.come_out(system, &exit, GateKind::Hypergate, catalog, chance);
                 let system = self.pilot.system;
                 self.messages.push(SimMessage::ExitedHypergate(system));
                 Ok(system)
@@ -2402,18 +2404,21 @@ impl Session {
         let sites = catalog.gate_sites();
         let exit = *wormhole_exit(here, self.pilot.system, &sites, self.wormholes, chance)
             .ok_or(GateRefusal::NoExit)?;
-        self.come_out(exit.system, &exit, catalog, chance);
+        self.come_out(exit.system, &exit, GateKind::Wormhole, catalog, chance);
         let system = self.pilot.system;
         self.messages.push(SimMessage::PassedWormhole(system));
         Ok(system)
     }
 
-    /// Brings the ship out of `exit` in `system`: see
-    /// [`Session::enter_wormhole`].
+    /// Brings the ship out of `exit`, a gate of `kind`, in `system`: see
+    /// [`Session::enter_wormhole`]. Before it enters, the exit decides
+    /// what becomes of the special ships following the player
+    /// ([`Session::exit_gate_slots`]).
     fn come_out(
         &mut self,
         system: SystemId,
         exit: &GateSite,
+        kind: GateKind,
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut (impl Chance + ?Sized),
     ) {
@@ -2430,6 +2435,7 @@ impl Session {
                 placed
             }
         };
+        self.exit_gate_slots(kind, catalog, &mut &mut *chance);
         let entered = Arrival {
             system,
             sites: self.read_sites(catalog, system),
