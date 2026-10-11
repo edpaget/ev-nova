@@ -5,11 +5,11 @@ use std::cell::RefCell;
 
 use crate::ai::Goal;
 use crate::catalog::{
-    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterRecord,
-    DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord,
-    LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, OutfitId,
-    OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog, PlaceNames, ShipId, ShipRecord,
-    StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark, SystemId,
+    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
+    DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord,
+    JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts,
+    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog, PlaceNames, ShipId,
+    ShipRecord, StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark, SystemId,
     SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
@@ -99,6 +99,33 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) place_name_reads: RefCell<usize>,
     /// What `stellar_marks` returns: none unless a test sets them.
     pub(crate) marks: Vec<StellarMark>,
+    /// Every `crön`: none, by default.
+    pub(crate) crons: Vec<CronRecord>,
+}
+
+/// Cron `id`, open on every date, starting on any roll and asking
+/// nothing, running 0 days with no holdoffs, and with no scripts and no
+/// `Contribute`.
+pub(crate) fn cron(id: i16) -> CronRecord {
+    CronRecord {
+        id: CronId(id),
+        first_day: 0,
+        first_month: 0,
+        first_year: 0,
+        last_day: 0,
+        last_month: 0,
+        last_year: 0,
+        random: 100,
+        duration: 0,
+        pre_holdoff: 0,
+        post_holdoff: 0,
+        flags: 0,
+        enable_on: Test::default(),
+        on_start: Script::default(),
+        on_end: Script::default(),
+        contribute: 0,
+        require: 0,
+    }
 }
 
 /// Stellar `id` of `Strength` 100 and `dead_time`, starting the game
@@ -495,6 +522,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         place_names: PlaceNames::default(),
         place_name_reads: RefCell::default(),
         marks: Vec::new(),
+        crons: Vec::new(),
     }
 }
 
@@ -686,6 +714,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn stellar_marks(&self) -> Vec<StellarMark> {
         self.marks.clone()
+    }
+
+    fn crons(&self) -> Vec<CronRecord> {
+        self.crons.clone()
     }
 }
 

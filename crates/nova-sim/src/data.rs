@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use nova_data::records::character::Character;
+use nova_data::records::cron::Cron;
 use nova_data::records::desc::Desc;
 use nova_data::records::disaster::Disaster;
 use nova_data::records::dude::Dude;
@@ -28,12 +29,12 @@ use nova_data::{GameData, Record, stellar_spin_id};
 
 use crate::blink::Blink;
 use crate::catalog::{
-    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterId,
-    DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
-    GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord,
-    MissionShip, MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord,
-    PersonWeapon, PilotCatalog, PlaceNames, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
+    CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord, DateAffixes,
+    DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite,
+    GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId,
+    MissionRecord, MissionShip, MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId,
+    PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, ShipId, ShipRecord, SoundId, StarSystem,
+    StartDate, StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
     SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
@@ -504,6 +505,33 @@ impl PilotCatalog for GameData {
                         count: record.ship_count,
                         goal: record.ship_goal,
                     },
+                })
+            })
+            .collect()
+    }
+
+    fn crons(&self) -> Vec<CronRecord> {
+        self.records::<Cron>()
+            .filter_map(|(id, cron)| {
+                let record = cron.ok()?.record;
+                Some(CronRecord {
+                    id: CronId(id),
+                    first_day: record.first_day,
+                    first_month: record.first_month,
+                    first_year: record.first_year,
+                    last_day: record.last_day,
+                    last_month: record.last_month,
+                    last_year: record.last_year,
+                    random: record.random,
+                    duration: record.duration,
+                    pre_holdoff: record.pre_holdoff,
+                    post_holdoff: record.post_holdoff,
+                    flags: record.flags.bits(),
+                    enable_on: self.test_expr(record.enable_on.as_str()).into(),
+                    on_start: self.set_expr(record.on_start.as_str()).into(),
+                    on_end: self.set_expr(record.on_end.as_str()).into(),
+                    contribute: record.contribute.bits(),
+                    require: record.require.bits(),
                 })
             })
             .collect()
@@ -3272,6 +3300,78 @@ mod tests {
         let mut bytes = offered(b"\0");
         put_i16s(&mut bytes, 0x2E, &[govt]);
         bytes
+    }
+
+    /// A `crön` from 1 Sep 1177 to 30 Dec (any year), `Random` 100,
+    /// `Duration` 105, holdoffs 2 and 3, `Flags` 0x0002, these expressions,
+    /// and `Contribute` `0x4_0000_0001` and `Require` 8.
+    fn cron(enable_on: &[u8], on_start: &[u8], on_end: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![0; Cron::SIZE.expect("fixed")];
+        put_i16s(
+            &mut bytes,
+            0x00,
+            &[1, 9, 1177, 30, 12, -1, 100, 105, 2, 3, -1, 0x0002],
+        );
+        bytes[0x18..0x18 + enable_on.len()].copy_from_slice(enable_on);
+        bytes[0x117..0x117 + on_start.len()].copy_from_slice(on_start);
+        bytes[0x216..0x216 + on_end.len()].copy_from_slice(on_end);
+        bytes[0x316..0x31E].copy_from_slice(&0x0000_0004_0000_0001_u64.to_be_bytes());
+        bytes[0x31E..0x326].copy_from_slice(&8_u64.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn crons_read_each_crön_raw() {
+        let data = store_named(&[
+            (Cron::TYPE, 157, None, cron(b"\0", b"\0", b"\0")),
+            (Cron::TYPE, 156, None, cron(b"!b42\0", b"b42\0", b"!b42\0")),
+            (
+                Cron::TYPE,
+                158,
+                None,
+                cron(b"\0", b"\0", b"\0")[..800].to_vec(),
+            ),
+        ]);
+        let crons = data.crons();
+        assert_eq!(
+            crons.iter().map(|cron| cron.id).collect::<Vec<_>>(),
+            [CronId(156), CronId(157)],
+            "by ID, the undecodable one skipped"
+        );
+        assert_eq!(
+            crons[0],
+            CronRecord {
+                id: CronId(156),
+                first_day: 1,
+                first_month: 9,
+                first_year: 1177,
+                last_day: 30,
+                last_month: 12,
+                last_year: -1,
+                random: 100,
+                duration: 105,
+                pre_holdoff: 2,
+                post_holdoff: 3,
+                flags: 0x0002,
+                enable_on: Test::parse("!b42"),
+                on_start: Script::parse("b42"),
+                on_end: Script::parse("!b42"),
+                contribute: 0x0000_0004_0000_0001,
+                require: 8,
+            }
+        );
+        assert_eq!(crons[1].enable_on, Test::default(), "a blank EnableOn");
+        assert_eq!(
+            crons[1].enable_on.tree(),
+            Some(&crate::control::TestExpr::Always)
+        );
+        assert_eq!(crons[1].on_start, Script::default());
+        assert_eq!(store(&[]).crons(), []);
+        for (a, b) in data.crons().iter().zip(&data.crons()) {
+            assert!(shared(&a.enable_on, &b.enable_on), "parsed once");
+            assert!(shared_script(&a.on_start, &b.on_start), "parsed once");
+            assert!(shared_script(&a.on_end, &b.on_end), "parsed once");
+        }
     }
 
     #[test]

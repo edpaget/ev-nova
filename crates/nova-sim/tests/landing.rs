@@ -148,6 +148,10 @@ impl PilotCatalog for Pilot {
     fn stellar_marks(&self) -> Vec<nova_sim::catalog::StellarMark> {
         Vec::new()
     }
+
+    fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
+        Vec::new()
+    }
 }
 
 /// Stellar 128 at the centre, where the ship starts, 200 x 200, with

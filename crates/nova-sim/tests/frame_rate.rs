@@ -123,6 +123,10 @@ impl PilotCatalog for Pilot {
     fn stellar_marks(&self) -> Vec<nova_sim::catalog::StellarMark> {
         Vec::new()
     }
+
+    fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
+        Vec::new()
+    }
 }
 
 /// The script, by half-seconds: thrust for a second, turn right for half

@@ -208,6 +208,10 @@ impl PilotCatalog for Home {
     fn stellar_marks(&self) -> Vec<nova_sim::catalog::StellarMark> {
         Vec::new()
     }
+
+    fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
+        Vec::new()
+    }
 }
 
 /// No traffic anywhere.

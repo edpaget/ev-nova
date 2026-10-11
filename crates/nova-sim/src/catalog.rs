@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 pub use nova_data::{
-    BoomId, DudeId, FleetId, GovtId, JunkId, MissionId, NebulaId, OutfitId, PersonId, ShipId,
-    SoundId, StellarId, SystemId, WeaponId,
+    BoomId, CronId, DudeId, FleetId, GovtId, JunkId, MissionId, NebulaId, OutfitId, PersonId,
+    ShipId, SoundId, StellarId, SystemId, WeaponId,
 };
 
 use crate::combat::weapon::Explosion;
@@ -683,6 +683,47 @@ pub struct MissionRecord {
     pub ships: MissionShip,
 }
 
+/// A timed event, raw from its `crön`: the fields the daily cron pass
+/// reads, which decides what the values mean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CronRecord {
+    /// The `crön`'s ID.
+    pub id: CronId,
+    /// Its `FirstDay`, raw.
+    pub first_day: i16,
+    /// Its `FirstMonth`, raw.
+    pub first_month: i16,
+    /// Its `FirstYear`, raw.
+    pub first_year: i16,
+    /// Its `LastDay`, raw.
+    pub last_day: i16,
+    /// Its `LastMonth`, raw.
+    pub last_month: i16,
+    /// Its `LastYear`, raw.
+    pub last_year: i16,
+    /// Its `Random`, raw: the chance it starts on a day it may.
+    pub random: i16,
+    /// Its `Duration`, raw: the days it runs; below 0 disables it.
+    pub duration: i16,
+    /// Its `PreHoldoff`, raw: the days between starting and `OnStart`.
+    pub pre_holdoff: i16,
+    /// Its `PostHoldoff`, raw: the days after `OnEnd` before it may start
+    /// again.
+    pub post_holdoff: i16,
+    /// Its `Flags`.
+    pub flags: u16,
+    /// Its `EnableOn` control-bit test, parsed.
+    pub enable_on: Test,
+    /// Its `OnStart`, run as it starts.
+    pub on_start: Script,
+    /// Its `OnEnd`, run as it ends.
+    pub on_end: Script,
+    /// Its `Contribute` bits, given to the player while it runs.
+    pub contribute: u64,
+    /// Its `Require` bits, asked of the player before it starts.
+    pub require: u64,
+}
+
 /// What a mission's screens show of it, read from its `mïsn` and its
 /// `dësc`s (see the [`mission`](crate::mission) module's "Screens"): each
 /// text as written, its tags not yet filled, and `None` for an ID of -1
@@ -1102,6 +1143,8 @@ pub trait PilotCatalog {
     /// Every `spöb` that can be read, by ascending ID, with the place and
     /// name a mission's stop is matched by.
     fn stellar_marks(&self) -> Vec<StellarMark>;
+    /// Every `crön` that can be read, by ascending ID.
+    fn crons(&self) -> Vec<CronRecord>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -1188,6 +1231,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn stellar_marks(&self) -> Vec<StellarMark> {
         (**self).stellar_marks()
+    }
+
+    fn crons(&self) -> Vec<CronRecord> {
+        (**self).crons()
     }
 }
 
@@ -1276,6 +1323,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn stellar_marks(&self) -> Vec<StellarMark> {
         (**self).stellar_marks()
+    }
+
+    fn crons(&self) -> Vec<CronRecord> {
+        (**self).crons()
     }
 }
 
@@ -1544,6 +1595,14 @@ mod tests {
                 name: "Earth".to_owned(),
             }]
         }
+
+        /// Cron 156, running 105 days.
+        fn crons(&self) -> Vec<CronRecord> {
+            vec![CronRecord {
+                duration: 105,
+                ..crate::testkit::cron(156)
+            }]
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1576,6 +1635,7 @@ mod tests {
             format!("{:?}", catalog.listed_stellars()),
             format!("{:?}", catalog.place_names()),
             format!("{:?}", catalog.stellar_marks()),
+            format!("{:?}", catalog.crons()),
         ]
     }
 
@@ -1619,6 +1679,8 @@ mod tests {
         assert!(direct[23].contains("\"Earth\""), "{direct:?}");
         assert!(direct[23].contains("\"Sol\""), "{direct:?}");
         assert!(direct[24].contains("place: (30, -40)"), "{direct:?}");
+        assert!(direct[25].contains("CronId(156)"), "{direct:?}");
+        assert!(direct[25].contains("duration: 105"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }
