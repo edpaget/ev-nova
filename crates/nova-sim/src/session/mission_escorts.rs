@@ -157,11 +157,13 @@ mod tests {
     use crate::hail::{HailOptions, HailRefusal};
     use crate::pilot::Escort;
     use crate::reserves::Reserves;
+    use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::mission_ships::tests::{
         accepted, jump_to, shipping, ships_catalog, ships_of, take_off, tick, ticks,
     };
     use crate::targeting::TargetPick;
     use crate::testkit::FakePilotCatalog;
+    use crate::testkit::land_now;
 
     /// Two special ships of düde 150 escorting the player (`ShipBehav`
     /// 1), of `ShipSyst` `syst` and `ShipStart` `start`.
@@ -674,6 +676,117 @@ mod tests {
             .hail(&catalog, &HailOptions::default(), &mut NeverFires)
             .expect("the hired escort answers");
         assert!(labels(&view).contains(&RELEASE));
+    }
+
+    // Left out of the hired escorts' paths.
+
+    #[test]
+    fn a_save_holds_no_mission_escort() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert_eq!(mission_escorts(&session).len(), 2);
+        let saved = crate::save::encode(session.pilot());
+        let loaded = crate::save::decode(&saved).expect("loads");
+        assert!(loaded.escorts().is_empty());
+        assert!(
+            session.pilot().escorts().is_empty(),
+            "joining makes no record"
+        );
+    }
+
+    #[test]
+    fn a_jump_and_a_take_off_pay_mission_escorts_nothing_and_none_defects() {
+        let catalog = ships_catalog(escorting(-6, 0));
+        let mut session = accepted(&catalog);
+        session.pilot.cash = 0;
+        take_off(&mut session, &catalog);
+        jump_to(&mut session, &catalog, 131);
+        assert!(session.take_pay_notes().is_empty());
+        assert_eq!(slots(&session), [(2, 3), (3, 3)], "none defected");
+        session.player.position = session.sites[0].position;
+        land_now(&mut session).expect("lands");
+        take_off(&mut session, &catalog);
+        assert!(session.take_pay_notes().is_empty());
+        assert_eq!(session.pilot().cash, 0, "nothing paid");
+        assert_eq!(slots(&session), [(2, 3), (3, 3)]);
+    }
+
+    #[test]
+    fn landing_sells_upgrades_and_keeps_no_mission_escort() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        land_now(&mut session).expect("lands");
+        assert!(session.pilot().escorts().is_empty());
+        assert_eq!(session.stay.escorts_changed, 0, "none sold or upgraded");
+        session.take_off(&mut NeverFires).expect("takes off");
+        assert!(session.fleet.is_empty(), "none waits in the record");
+    }
+
+    #[test]
+    fn a_trader_mission_escort_adds_no_holds_and_a_jettison_spreads_over_none() {
+        let mut catalog = ships_catalog(escorting(-1, 0));
+        catalog.ship_records[1].inherent_ai = 1;
+        catalog.ship_records[1].escort_type = 3;
+        catalog.ship_records[1].fields.holds = 50;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert!(
+            mission_escorts(&session)
+                .iter()
+                .all(|npc| npc.class == crate::escort::EscortClass::Freighter)
+        );
+        assert_eq!(session.capacity(), session.stats().capacity);
+        session.jettison_cargo(true, &mut NeverFires);
+        assert!(session.pilot().escorts().is_empty());
+        assert_eq!(session.capacity(), session.stats().capacity);
+    }
+
+    #[test]
+    fn a_fighter_mission_escort_is_never_recalled_into_a_bay() {
+        for source in RuleSource::ALL {
+            let mut catalog = ships_catalog(escorting(-6, 0));
+            catalog.ship_records[1].escort_type = 0;
+            let mut session = accepted(&catalog);
+            session.rules = Rulebook::default().with_override(RuleKey::FighterRecall, source);
+            take_off(&mut session, &catalog);
+            assert!(
+                mission_escorts(&session)
+                    .iter()
+                    .all(|npc| npc.class == crate::escort::EscortClass::Fighter)
+            );
+            let outfits = session.pilot().outfits.clone();
+            jump_to(&mut session, &catalog, 131);
+            assert_eq!(session.pilot().outfits, outfits, "{source:?}");
+            assert!(session.take_fighter_notes().is_empty(), "{source:?}");
+            assert_eq!(slots(&session), [(2, 3), (3, 3)], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_mission_escort_destroyed_or_disabled_is_a_lost_mission_ship_not_a_lost_escort() {
+        // Its mission cannot be aborted, so it fails in its slot.
+        let mut catalog = ships_catalog(MissionShip {
+            goal: 3,
+            ..escorting(-1, 0)
+        });
+        catalog.missions[0].can_abort = 0;
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        session.traffic.npcs_mut()[1].condition = Condition::Disabled;
+        session.traffic.npcs_mut()[0].condition = Condition::Destroyed;
+        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        assert!(session.pilot().escorts().is_empty());
+        assert!(session.fleet.is_empty());
+        assert_eq!(ships_of(&session).destroyed, 1);
+        let failed = session
+            .pilot()
+            .missions()
+            .get(0)
+            .and_then(|active| active.failed);
+        assert!(failed.is_some(), "an escort goal fails");
+        assert!(session.npcs()[0].mission_escort(), "the disabled one stays");
     }
 
     // Not a hired escort.
