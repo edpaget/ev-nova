@@ -5,7 +5,11 @@
 
 use crate::catalog::{CommCatalog, GovtId, MissionShip, ShipId, SystemId};
 use crate::chance::Chance;
-use crate::govt::Governments;
+use crate::gate::GateKind;
+use crate::govt::{
+    ALWAYS_FOLLOWS_THROUGH_HYPERGATE, ALWAYS_FOLLOWS_THROUGH_WORMHOLE, Governments,
+    NEVER_FOLLOWS_THROUGH_HYPERGATE,
+};
 use crate::hyperspace::{Places, StarMap};
 
 use super::goals::ShipGoal;
@@ -185,6 +189,93 @@ pub fn appear_timer(ships: &MissionShip, chance: &mut dyn Chance) -> i16 {
         ESCORT_APPEAR
     } else {
         i16::try_from(chance.below(APPEAR_DRAW) + APPEAR_DRAW).unwrap_or(i16::MAX)
+    }
+}
+
+/// The appear timer of a slot whose ships a gate exit loses (0x7fff
+/// @0x671bd): above the 32000 the timer counts down from, and not below
+/// 0 as setup asks, so they come no more until the enter-system hook
+/// restarts it.
+pub const LOST_AT_GATE: i16 = 0x7fff;
+/// `Rand(2)`: the odds of following through a hypergate (@0x67225).
+const HYPERGATE_ODDS: u32 = 2;
+/// `Rand(4)`: the odds of following through a wormhole (@0x67272).
+const WORMHOLE_ODDS: u32 = 4;
+
+/// What a gate exit sees of one active slot's ships.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GateSlot {
+    /// Where they are (+0x10).
+    pub system: ShipSystem,
+    /// How they behave (+0xc).
+    pub behav: ShipBehav,
+    /// How many are left (+0x6).
+    pub left: i16,
+    /// Their `düde`'s government's `Flags2`: none for an independent
+    /// `düde`, or none.
+    pub flags2: Option<u16>,
+}
+
+/// A slot's appear timer and arrived count as a gate exit sets them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GateTimer {
+    /// The appear timer (+0x4e).
+    pub appear: i16,
+    /// The arrived count (+0x2e).
+    pub arrived: i16,
+}
+
+/// What the player's exit from a gate of `kind` makes of `slot`, drawing
+/// on `chance` (`_HandlePlayerDockRequest`'s loop A, @0x6716a-0x67294):
+/// none, drawing nothing, unless its ships follow the player
+/// ([`ShipSystem::FollowsPlayer`]) with some left. Then:
+///
+/// - Escorts of the player ([`ShipBehav::EscortPlayer`]): the timer stops
+///   and none have arrived, so the exit's setup sets them up at once.
+/// - Any other behaviour: lost ([`LOST_AT_GATE`], all arrived).
+/// - Attackers of the player ([`ShipBehav::AttackPlayer`]) of a
+///   government may follow instead: through a hypergate never with
+///   [`NEVER_FOLLOWS_THROUGH_HYPERGATE`], always with
+///   [`ALWAYS_FOLLOWS_THROUGH_HYPERGATE`], else on `Rand(2)` = 0;
+///   through a wormhole always with [`ALWAYS_FOLLOWS_THROUGH_WORMHOLE`],
+///   else on `Rand(4)` = 0. Followers' timer is 0 with none arrived, so
+///   they all come in on the next frame.
+pub fn through_gate(kind: GateKind, slot: &GateSlot, chance: &mut dyn Chance) -> Option<GateTimer> {
+    if slot.system != ShipSystem::FollowsPlayer || slot.left <= 0 {
+        return None;
+    }
+    if slot.behav == ShipBehav::EscortPlayer {
+        return Some(GateTimer {
+            appear: NOT_APPEARING,
+            arrived: 0,
+        });
+    }
+    let follows = slot.behav == ShipBehav::AttackPlayer
+        && slot
+            .flags2
+            .is_some_and(|flags2| follows_through(kind, flags2, chance));
+    Some(if follows {
+        GateTimer {
+            appear: 0,
+            arrived: 0,
+        }
+    } else {
+        GateTimer {
+            appear: LOST_AT_GATE,
+            arrived: slot.left,
+        }
+    })
+}
+
+/// Whether attackers of a government of `flags2` follow the player
+/// through a gate of `kind`, drawing on `chance` (@0x671fb-0x67281).
+fn follows_through(kind: GateKind, flags2: u16, chance: &mut dyn Chance) -> bool {
+    match kind {
+        GateKind::Hypergate if flags2 & NEVER_FOLLOWS_THROUGH_HYPERGATE != 0 => false,
+        GateKind::Hypergate if flags2 & ALWAYS_FOLLOWS_THROUGH_HYPERGATE != 0 => true,
+        GateKind::Hypergate => chance.below(HYPERGATE_ODDS) == 0,
+        GateKind::Wormhole if flags2 & ALWAYS_FOLLOWS_THROUGH_WORMHOLE != 0 => true,
+        GateKind::Wormhole => chance.below(WORMHOLE_ODDS) == 0,
     }
 }
 
@@ -841,6 +932,139 @@ mod tests {
             };
             assert_eq!(accepted(&none, &[0, 0]).0.left, count);
         }
+    }
+
+    // A gate exit.
+
+    /// What a gate exit of `kind` makes of a slot following the player of
+    /// `behav` with 2 ships left, its `düde`'s government of `flags2`,
+    /// drawing `draws`, and the bounds asked.
+    fn at_exit(
+        kind: GateKind,
+        behav: i16,
+        flags2: Option<u16>,
+        draws: &[u32],
+    ) -> (Option<GateTimer>, Vec<u32>) {
+        let slot = GateSlot {
+            system: ShipSystem::FollowsPlayer,
+            behav: ShipBehav::from_code(behav),
+            left: 2,
+            flags2,
+        };
+        let mut chance = Draws::of(draws);
+        let timer = through_gate(kind, &slot, &mut chance);
+        (timer, chance.asked)
+    }
+
+    const LOST: Option<GateTimer> = Some(GateTimer {
+        appear: LOST_AT_GATE,
+        arrived: 2,
+    });
+    const FOLLOWS: Option<GateTimer> = Some(GateTimer {
+        appear: 0,
+        arrived: 0,
+    });
+    const BOTH: [GateKind; 2] = [GateKind::Hypergate, GateKind::Wormhole];
+
+    #[test]
+    fn a_slot_not_following_the_player_or_with_none_left_is_untouched_drawing_nothing() {
+        for kind in BOTH {
+            for (system, left) in [
+                (ShipSystem::At(SystemId(130)), 2),
+                (ShipSystem::Nowhere, 2),
+                (ShipSystem::FollowsPlayer, 0),
+                (ShipSystem::FollowsPlayer, -1),
+            ] {
+                let slot = GateSlot {
+                    system,
+                    behav: ShipBehav::AttackPlayer,
+                    left,
+                    flags2: Some(0),
+                };
+                let mut chance = Draws::of(&[0]);
+                assert_eq!(
+                    through_gate(kind, &slot, &mut chance),
+                    None,
+                    "{system:?} {left}"
+                );
+                assert!(chance.asked.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn escorts_of_the_player_are_set_up_at_once_drawing_nothing() {
+        for kind in BOTH {
+            assert_eq!(
+                at_exit(kind, 1, Some(0), &[0]),
+                (
+                    Some(GateTimer {
+                        appear: NOT_APPEARING,
+                        arrived: 0
+                    }),
+                    vec![]
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn ships_of_another_behaviour_are_lost_drawing_nothing() {
+        assert_eq!(LOST_AT_GATE, 0x7fff, "above the 32000 counted down");
+        for kind in BOTH {
+            for behav in [-1, 2, 3] {
+                assert_eq!(
+                    at_exit(kind, behav, Some(0x00e0), &[0]),
+                    (LOST, vec![]),
+                    "{kind:?} {behav}"
+                );
+            }
+            assert_eq!(
+                at_exit(kind, 0, None, &[0]),
+                (LOST, vec![]),
+                "{kind:?}: an independent never follows"
+            );
+        }
+    }
+
+    #[test]
+    fn through_a_hypergate_attackers_follow_by_their_governments_flags_or_on_rand_2() {
+        let gate = GateKind::Hypergate;
+        assert_eq!(at_exit(gate, 0, Some(0x0020), &[0]), (LOST, vec![]));
+        assert_eq!(
+            at_exit(gate, 0, Some(0x00a0), &[0]),
+            (LOST, vec![]),
+            "the wormhole bit is not read"
+        );
+        assert_eq!(at_exit(gate, 0, Some(0x0040), &[1]), (FOLLOWS, vec![]));
+        assert_eq!(
+            at_exit(gate, 0, Some(0x0060), &[1]),
+            (LOST, vec![]),
+            "0x0020 first"
+        );
+        assert_eq!(at_exit(gate, 0, Some(0x0080), &[0]), (FOLLOWS, vec![2]));
+        assert_eq!(at_exit(gate, 0, Some(0), &[1]), (LOST, vec![2]));
+    }
+
+    #[test]
+    fn through_a_wormhole_attackers_follow_by_their_governments_flag_or_on_rand_4() {
+        let hole = GateKind::Wormhole;
+        assert_eq!(at_exit(hole, 0, Some(0x0080), &[3]), (FOLLOWS, vec![]));
+        assert_eq!(at_exit(hole, 0, Some(0x00a0), &[3]), (FOLLOWS, vec![]));
+        assert_eq!(at_exit(hole, 0, Some(0), &[0]), (FOLLOWS, vec![4]));
+        for draw in 1..4 {
+            assert_eq!(
+                at_exit(hole, 0, Some(0), &[draw]),
+                (LOST, vec![4]),
+                "{draw}"
+            );
+        }
+        assert_eq!(
+            at_exit(hole, 0, Some(0x0020), &[0]),
+            (FOLLOWS, vec![4]),
+            "0x0020 is still rolled"
+        );
+        assert_eq!(at_exit(hole, 0, Some(0x0040), &[1]), (LOST, vec![4]));
     }
 
     #[test]
