@@ -1767,6 +1767,24 @@ mod tests {
     }
 
     #[test]
+    fn only_a_check_that_changes_the_goals_makes_a_save_due() {
+        let catalog = returning(0, 0);
+        let mut session = in_flight(&catalog);
+        let _ = session.take_save_due();
+        session.check_ship_goals(0, false, &mut NeverFires);
+        assert!(!session.take_save_due(), "unmet, as it was");
+        if let Some(active) = session.pilot.missions.get_mut(0) {
+            active.ships.destroyed = 2;
+            active.ships.left = 0;
+        }
+        session.check_ship_goals(0, false, &mut NeverFires);
+        assert!(goals_met(&session));
+        assert!(session.take_save_due(), "met now");
+        session.check_ship_goals(0, false, &mut NeverFires);
+        assert!(!session.take_save_due(), "met, as it was");
+    }
+
+    #[test]
     fn a_disable_goal_is_met_by_disabling_them_all() {
         let catalog = returning(1, 0);
         let mut session = in_flight(&catalog);
@@ -1952,6 +1970,40 @@ mod tests {
                 });
             }
         }));
+    }
+
+    #[test]
+    fn only_a_sighting_of_one_of_its_own_ships_meets_an_observe_goal() {
+        // Ship 0 is another slot's, and the only one watched; ship 1 of
+        // this mission's is in the system, unseen.
+        assert!(!observed_after(|session| {
+            let first = session.npcs()[0].id;
+            session.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
+                slot: 5,
+                behav: ShipBehav::Own,
+                cloaked: false,
+            });
+            session.story.watched.clear();
+            session.watch_ship(first);
+        }));
+    }
+
+    #[test]
+    fn only_the_ships_numbered_after_the_last_before_are_taken_as_come() {
+        let catalog = returning(4, 0);
+        let mut session = in_flight(&catalog);
+        session.drop_raised();
+        session.story.watched.clear();
+        let (first, second) = (session.npcs()[0].id, session.npcs()[1].id);
+        session.mission_ships_came(Some(first));
+        assert_eq!(
+            session.story_raised(),
+            [StoryEvent::ShipFate {
+                ship: second,
+                fate: Fate::Arrived
+            }]
+        );
+        assert_eq!(session.story.watched, [second].into());
     }
 
     #[test]
@@ -2208,9 +2260,10 @@ mod tests {
     }
 
     #[test]
-    fn a_board_goals_ship_is_counted_on_the_assist_path_too() {
+    fn a_board_goal_is_met_on_the_assist_path_too() {
         let catalog = rescuing(2, 1, 0x0001);
         let mut session = in_flight_with(&catalog, 1);
+        let _ = shown(&mut session);
         let (boarding, _) = board_first(&mut session);
         assert_eq!(
             boarding,
@@ -2219,6 +2272,9 @@ mod tests {
             )))
         );
         assert_eq!(ships_of(&session).boarded, 1);
+        settle(&mut session, &catalog);
+        assert_eq!(shown(&mut session), [ship_done("Rover done.")]);
+        assert_eq!(bits(&session), [6, 7], "OnShipDone, then OnAbort");
     }
 
     #[test]

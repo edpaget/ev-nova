@@ -475,6 +475,20 @@ fn meeting_an_escort_goal_lands_at_the_return_and_brings_the_escorts_in_there() 
 }
 
 #[test]
+fn meeting_an_escort_goal_lands_at_an_unreached_destination_first() {
+    let mut catalog = hunt(3, 130);
+    catalog.missions[0].travel_stel = 129;
+    let mut session = docked(&catalog);
+    StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::Take(A), Step::MeetGoal(A)])
+        .expect("walks");
+    let active = session.pilot().missions().get(0).expect("held").clone();
+    assert!(active.reached, "landed at 129 on the way");
+    assert!(active.goals_met);
+    assert_eq!(session.landed(), Some(StellarId(140)), "then at the return");
+}
+
+#[test]
 fn meeting_the_goal_of_a_mission_not_held_or_of_no_ship_goal_fails() {
     let catalog = hunt(0, -1);
     let mut session = docked(&catalog);
