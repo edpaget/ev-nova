@@ -94,7 +94,8 @@
 //! system is not linked from the new one
 //! ([`JumpRefusal::NoDestination`](crate::JumpRefusal)); the system is
 //! explored by the next take-off; and in flight, in another system, only
-//! the player's escorts and fighters out follow, as they are, the new
+//! every ship the player leads (hired and mission escorts, fighters out)
+//! follows, as it is, the new
 //! system's ships coming only with its arrivals over time (see
 //! [`Traffic::retarget`](crate::Traffic::retarget)). By the other
 //! reading the move is an arrival: the system is explored and the course

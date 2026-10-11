@@ -521,17 +521,21 @@ mod tests {
         ids
     }
 
+    /// Under the original only a ship with leader 0 is carried
+    /// (`_EvalSetExp` @0x15807-0x1583e): an aux ship only once captured,
+    /// `_DoShipCapture` @0x41419 setting its leader 0, the capture
+    /// keeping `npc.aux`.
     #[test]
-    fn a_move_in_flight_to_another_system_gives_back_the_aux_ships_but_the_fleets() {
+    fn a_move_in_flight_to_another_system_gives_back_the_aux_ships_but_those_the_player_leads() {
         let catalog = aux_only(3, -1, 0);
         let mut session = accepted(&catalog);
         let ids = three_in(&mut session, &catalog);
-        session.fleet = vec![Some(ids[0])];
+        session.fleet_up(ids[0], None);
         session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
         settle(&mut session, &catalog);
         assert_eq!(session.system(), SystemId(131));
-        assert_eq!(aux_here(&session), 1, "retargeted: only the fleet's");
-        assert_eq!(aux_of(&session).left, 2, "the one in the fleet kept");
+        assert_eq!(aux_here(&session), 1, "the captured one comes");
+        assert_eq!(aux_of(&session).left, 2, "the one the player leads kept");
     }
 
     #[test]

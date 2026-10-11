@@ -65,6 +65,9 @@
 //! once, `ShipStart` 1 or not, as the engine reads
 //! [`RuleKey::GateFollow`](crate::RuleKey::GateFollow) (see the
 //! [`gate_follow`](super::gate_follow) module).
+//! An in-flight `M`/`N` carries them along as they are (`_EvalSetExp`
+//! @0x15807-0x1583e), and the next setup deletes them and sets them up
+//! again as usual.
 //!
 //! **Release.** A mission escort whose mark is cleared, its mission
 //! aborted in flight ([`Session::release_mission_ships`], `_AbortMission`
@@ -613,19 +616,49 @@ mod tests {
     }
 
     #[test]
-    fn a_move_in_flight_carries_the_hired_escort_and_leaves_the_mission_escorts_behind() {
-        // The original's in-flight `M` carries every ship the player leads
-        // (`_EvalSetExp` @0x15820, @0x1591f), mission escorts too; here the
-        // retargeted traffic keeps the hired fleet alone
-        // (rdm:phase/player-led-ships/phase-7-in-flight-move-carries-escorts).
-        let catalog = ships_catalog(escorting(-1, 0));
-        let (mut session, ids) = flying_with_escorts(&catalog);
-        let hired = session.fleet[0].expect("placed");
-        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
-        settle(&mut session, &catalog);
-        assert_eq!(session.system(), SystemId(131));
-        assert!(session.npc(hired).is_some(), "the hired escort comes");
-        assert!(of(&session, &ids).is_empty(), "the mission escorts stay");
+    fn a_move_in_flight_carries_the_hired_and_the_mission_escorts() {
+        // The original's in-flight `M`/`N` rewrites only the system (+0x74)
+        // of every active ship the player leads (`_EvalSetExp`
+        // @0x15807-0x1583e, @0x1590b-0x1593d): they come as they are, in
+        // the same formation and where they were.
+        for expr in ["M131", "N131"] {
+            let catalog = ships_catalog(escorting(-1, 0));
+            let (mut session, ids) = flying_with_escorts(&catalog);
+            let hired = session.fleet[0].expect("placed");
+            let at = |session: &Session| -> Vec<_> {
+                session
+                    .player_led()
+                    .map(|npc| (npc.id, npc.state.position))
+                    .collect()
+            };
+            let before = at(&session);
+            assert_eq!(hired_slot(&session), (2, 4));
+            assert_eq!(slots(&session), [(3, 4), (4, 4)]);
+            session.run_set(&SetExpr::parse(expr).expect("parses"), &mut NeverFires);
+            settle(&mut session, &catalog);
+            assert_eq!(session.system(), SystemId(131), "{expr}");
+            assert!(
+                session.npc(hired).is_some(),
+                "{expr}: the hired escort comes"
+            );
+            assert_eq!(
+                of(&session, &ids).len(),
+                2,
+                "{expr}: the mission escorts come"
+            );
+            for npc in of(&session, &ids) {
+                assert!(npc.mission_escort(), "{expr}: still escorting");
+            }
+            assert_eq!(session.player_led().count(), 3, "{expr}");
+            assert_eq!(hired_slot(&session), (2, 4), "{expr}: same formation");
+            assert_eq!(slots(&session), [(3, 4), (4, 4)], "{expr}: same formation");
+            assert_eq!(at(&session), before, "{expr}: where they were");
+            ticks(&mut session, &catalog, 5);
+            assert_eq!(of(&session, &ids).len(), 2, "{expr}: they stay");
+            for npc in of(&session, &ids) {
+                assert!(npc.mission_escort(), "{expr}: still escorting");
+            }
+        }
     }
 
     #[test]
