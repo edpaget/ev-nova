@@ -265,6 +265,17 @@ impl Npc {
         matches!(self.mode, Mode::Emerging { .. })
     }
 
+    /// Whether it can cloak now (`_ShipCanCloak` @0x553c): its
+    /// [`CloakGear::can_cloak`], knowing whether it is disabled and how
+    /// much fuel it has left.
+    #[must_use]
+    pub fn can_cloak(&self) -> bool {
+        self.cloak_gear.can_cloak(
+            self.condition == Condition::Disabled,
+            self.reserves.fuel.now,
+        )
+    }
+
     /// Whether it threatens the player (`_IsThreatToPlayer` @0x7f501):
     /// intact and attacking, sniping at or fleeing from the player. There
     /// is no legal or government test; inspecting is no threat.
@@ -441,6 +452,22 @@ mod tests {
         npc.mode = Mode::Emerging { ticks_left: 2 };
         assert!(npc.emerging());
         assert!(!npc.threatens_player(), "while it emerges");
+    }
+
+    #[test]
+    fn an_npc_can_cloak_with_a_cloak_and_fuel_while_not_disabled() {
+        let mut npc = crate::testkit::npc(1, ShipStats::default());
+        npc.cloak_gear.device = true;
+        npc.reserves.fuel.now = 1.0;
+        assert!(npc.can_cloak());
+        npc.condition = Condition::Disabled;
+        assert!(!npc.can_cloak(), "disabled");
+        npc.condition = Condition::Intact;
+        npc.reserves.fuel.now = 0.0;
+        assert!(!npc.can_cloak(), "no fuel");
+        npc.reserves.fuel.now = 1.0;
+        npc.cloak_gear.device = false;
+        assert!(!npc.can_cloak(), "no cloak");
     }
 
     #[test]

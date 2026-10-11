@@ -389,7 +389,7 @@ impl Traffic {
                 cloak::think(&mut npc.cloak, npc.cloak_gear, situation);
             }
             if was {
-                let able = npc.cloak_gear.can_cloak(disabled, npc.reserves.fuel.now);
+                let able = npc.can_cloak();
                 cloak::hold(&mut npc.cloak, able);
             }
             npc.cloak.step(npc.cloak_gear.fast());

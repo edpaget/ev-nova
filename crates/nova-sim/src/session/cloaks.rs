@@ -27,7 +27,6 @@
 
 use super::Session;
 use crate::cloak::{self, Area, Observer, Scanner};
-use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
 use crate::traffic::npc::Npc;
 
@@ -82,10 +81,7 @@ impl Session {
     /// Whether a watched `npc` is observed now: seen, and, when it can
     /// cloak, on screen (`_MissionObjectivesCheck` @0x9ea5c-0x9eb15).
     pub(super) fn observes(&self, npc: &Npc) -> bool {
-        let can_cloak = npc
-            .cloak_gear
-            .can_cloak(npc.condition == Condition::Disabled, npc.reserves.fuel.now);
-        self.sees(npc) && (!can_cloak || self.on_screen(npc))
+        self.sees(npc) && (!npc.can_cloak() || self.on_screen(npc))
     }
 
     /// Each of `strikes` on an NPC, as its cloak takes it (see the module
@@ -98,9 +94,7 @@ impl Session {
             let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
                 continue;
             };
-            let can_cloak = npc
-                .cloak_gear
-                .can_cloak(npc.condition == Condition::Disabled, npc.reserves.fuel.now);
+            let can_cloak = npc.can_cloak();
             let attacking = npc.goal.attacking() == Some(strike.by);
             cloak::hit(&mut npc.cloak, npc.cloak_gear, can_cloak, attacking);
         }
