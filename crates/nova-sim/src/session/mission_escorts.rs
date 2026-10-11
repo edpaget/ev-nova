@@ -938,6 +938,36 @@ mod tests {
         assert!(session.npcs()[0].mission_escort(), "the disabled one stays");
     }
 
+    #[test]
+    fn plain_r_picks_a_ship_attacking_a_mission_escort() {
+        let catalog = ships_catalog(escorting(-1, 0));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        let escort = mission_escorts(&session)[0].id;
+        let player = session.player.position;
+        let mut hunter = crate::testkit::npc(0, crate::stats::ShipStats::default());
+        hunter.state.position = player + crate::geometry::Vec2::new(0.0, 400.0);
+        hunter.goal = Goal::Attack(crate::combat::ShipRef::Npc(escort));
+        let attacker = session.traffic.add_npc(hunter);
+        assert_eq!(
+            session.select_target(TargetPick::NearestThreat),
+            Some(attacker)
+        );
+        let led = session.npc_mut(escort).expect("there");
+        led.goal = Goal::Attack(crate::combat::ShipRef::Player);
+        led.state.position = player + crate::geometry::Vec2::new(5.0, 0.0);
+        assert_eq!(
+            session.select_target(TargetPick::NearestThreat),
+            Some(attacker),
+            "the nearer escort attacking the player is passed over"
+        );
+        let unled = session.npc_mut(escort).expect("there");
+        unled.goal = Goal::Idle;
+        unled.mission = None;
+        session.target = None;
+        assert_eq!(session.select_target(TargetPick::NearestThreat), None);
+    }
+
     // Not a hired escort.
 
     #[test]

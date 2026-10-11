@@ -329,6 +329,37 @@ impl Npc {
         self.threatens(ShipRef::Player)
     }
 
+    /// Whether it threatens the player or a ship the player leads, as
+    /// `_IsThreatToPlayer` @0x7f501 asks it whole; `led` says whether an
+    /// NPC is led by the player ([`Traffic::player_led`](super::Traffic::player_led)).
+    ///
+    /// The original's test: the ship is active, its AI wait (+0x4c) is
+    /// not running (@0x7f518), it is not disabled, it has a target, its
+    /// AI state is none of 5, 7, 9, 10, 11, 12, 15, 18 (@0x7f536-0x7f56b),
+    /// and its target is the player (@0x7f56d) or a ship in slots 1-63
+    /// whose leader (+0x9a) is the player (@0x7f572-0x7f590). Here
+    /// [`Condition::Intact`] stands for the active and disabled tests,
+    /// [`Mode::Flying`] for the wait (a flying ship keeps none; a ship
+    /// coming out of a gate or jumping in has one), and
+    /// [`Goal::quarry`]'s attack, snipe and flee for the AI states.
+    ///
+    /// `_FindNearestThreatToPlayer` (@0x9529-0x956b) also takes a ship
+    /// that fails this test but targets an active ship the player leads
+    /// and is fighting it (`_IsShipFightingMe` @0x827fa: its target, in
+    /// AI state 4, attack). That adds only a state-4 ship whose AI wait
+    /// is still running, which the engine never has on a flying ship, so
+    /// this one test stands for both branches.
+    #[must_use]
+    pub fn threatens_player_or_led(&self, led: impl Fn(NpcId) -> bool) -> bool {
+        self.condition == Condition::Intact
+            && self.mode == Mode::Flying
+            && match self.goal.quarry() {
+                Some(ShipRef::Player) => true,
+                Some(ShipRef::Npc(id)) => led(id),
+                None => false,
+            }
+    }
+
     /// Whether it is waiting at the gate it comes out of
     /// ([`Mode::Emerging`]): `_AIShipIsEmergingFromHypergate` (@0x7e2e8),
     /// which holds it invisible to every ship (`_ShipVisibleToShip`
@@ -527,6 +558,57 @@ mod tests {
             ..crate::testkit::npc(1, ShipStats::default())
         };
         assert!(hunter.threatens(other));
+    }
+
+    #[test]
+    fn an_npc_attacking_a_ship_the_player_leads_threatens_the_player_whole() {
+        let led = |id: NpcId| id == NpcId(9);
+        let escort = ShipRef::Npc(NpcId(9));
+        let stranger = ShipRef::Npc(NpcId(8));
+        let with = |goal| Npc {
+            goal,
+            ..crate::testkit::npc(1, ShipStats::default())
+        };
+        for quarry in [escort, ShipRef::Player] {
+            for goal in [
+                Goal::Attack(quarry),
+                Goal::Snipe(quarry),
+                Goal::Flee(quarry),
+            ] {
+                assert!(with(goal).threatens_player_or_led(led), "{goal:?}");
+            }
+        }
+        for goal in [
+            Goal::Attack(stranger),
+            Goal::Snipe(stranger),
+            Goal::Flee(stranger),
+            Goal::Inspect(escort),
+            Goal::Idle,
+        ] {
+            assert!(!with(goal).threatens_player_or_led(led), "{goal:?}");
+        }
+        let hunter = with(Goal::Attack(escort));
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying { ticks_left: 1 },
+            Condition::Destroyed,
+        ] {
+            let downed = Npc {
+                condition,
+                ..hunter.clone()
+            };
+            assert!(!downed.threatens_player_or_led(led), "{condition:?}");
+        }
+        for mode in [
+            Mode::JumpingIn { ticks_left: 2 },
+            Mode::Emerging { ticks_left: 2 },
+        ] {
+            let arriving = Npc {
+                mode,
+                ..hunter.clone()
+            };
+            assert!(!arriving.threatens_player_or_led(led), "{mode:?}");
+        }
     }
 
     #[test]

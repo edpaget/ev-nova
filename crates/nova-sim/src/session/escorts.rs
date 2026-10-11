@@ -1513,6 +1513,36 @@ mod tests {
         assert_eq!(session.select_target(TargetPick::NextEscort), None);
     }
 
+    #[test]
+    fn plain_r_picks_a_ship_attacking_a_hired_escort_but_never_the_escort() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let warship = session.fleet[0].expect("a hired escort");
+        let attacker = pirate(
+            &mut session,
+            0.0,
+            -300.0,
+            Goal::Attack(ShipRef::Npc(warship)),
+        );
+        let bystander = pirate(&mut session, 0.0, -100.0, Goal::Idle);
+        assert_eq!(
+            session.select_target(TargetPick::NearestThreat),
+            Some(attacker)
+        );
+        let beside = session.player().position + Vec2::new(10.0, 0.0);
+        let escort = session.npc_mut(warship).expect("in the system");
+        escort.goal = Goal::Attack(ShipRef::Player);
+        escort.state.position = beside;
+        assert_eq!(
+            session.select_target(TargetPick::NearestThreat),
+            Some(attacker),
+            "the escort is passed over"
+        );
+        session.npc_mut(attacker).expect("there").goal = Goal::Attack(ShipRef::Npc(bystander));
+        session.target = None;
+        assert_eq!(session.select_target(TargetPick::NearestThreat), None);
+    }
+
     // Person escorts.
 
     /// [`fleeted`] with "Ace" (`përs` 700), who appears nowhere, flying the

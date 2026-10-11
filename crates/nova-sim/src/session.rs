@@ -1770,7 +1770,8 @@ impl Session {
                     self.target = nearest.or(self.target);
                 }
                 TargetPick::NearestThreat => {
-                    let threat = Npc::threatens_player;
+                    let led: Vec<NpcId> = self.player_led().map(|npc| npc.id).collect();
+                    let threat = |npc: &Npc| npc.threatens_player_or_led(|id| led.contains(&id));
                     let nearest = targeting::nearest(npcs, from, cloaked_ok, threat);
                     self.target = nearest.or(self.target);
                 }

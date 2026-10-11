@@ -39,8 +39,8 @@
 //!   Option-R takes any ship (`_FindNearestShipToPlayer` @0x923f) and plain
 //!   R only the threats (`_FindNearestThreatToPlayer` @0x93f9, with
 //!   `_IsThreatToPlayer` @0x7f501: an intact ship attacking, sniping at or
-//!   fleeing from the player, [`Npc::threatens_player`]), so [`nearest`]
-//!   takes the filter.
+//!   fleeing from the player or a ship he leads, @0x7f572-0x7f590,
+//!   [`Npc::threatens_player_or_led`]), so [`nearest`] takes the filter.
 
 use crate::combat::hull::Condition;
 use crate::geometry::Vec2;
@@ -53,8 +53,9 @@ use crate::traffic::npc::{Npc, NpcId};
 pub enum TargetPick {
     /// The candidate nearest the player.
     Nearest,
-    /// The candidate nearest the player that threatens it
-    /// ([`Npc::threatens_player`]).
+    /// The candidate nearest the player that threatens it or a ship it
+    /// leads (`_IsThreatToPlayer` @0x7f572-0x7f590,
+    /// [`Npc::threatens_player_or_led`]).
     NearestThreat,
     /// The next candidate after the target ([`next`]).
     Next,
