@@ -55,6 +55,16 @@ pub const NEVER_ATTACKS_PLAYER: u16 = 0x0040;
 pub const INTERCEPTORS_RETREAT: u16 = 0x0100;
 /// `Flags`: derelict: no relations at all, and no crime against it.
 pub const DERELICT: u16 = 0x0800;
+/// `Flags2`: its ships never take a hypergate for a stellar to come out
+/// of (`_SelectRandomStellarDest` @0x80625, see
+/// [`emerge`](crate::traffic::emerge)).
+pub const AVOIDS_HYPERGATES: u16 = 0x0020;
+/// `Flags2`: its ships come out of a hypergate whenever one will do
+/// (@0x80989).
+pub const PREFERS_HYPERGATES: u16 = 0x0040;
+/// `Flags2`: its ships may come out of wormholes, and do whenever one
+/// will do (@0x80947).
+pub const PREFERS_WORMHOLES: u16 = 0x0080;
 /// The least `MaxOdds` a government has, as a fraction.
 pub const MIN_ODDS: f32 = 0.01;
 /// What `MaxOdds` is out of.

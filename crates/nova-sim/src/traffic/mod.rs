@@ -54,6 +54,7 @@
 //! [`DECISION_INTERVAL`]. Steering and physics run every tick.
 
 pub mod autopilot;
+pub mod emerge;
 pub mod npc;
 pub mod spawn;
 pub mod table;
