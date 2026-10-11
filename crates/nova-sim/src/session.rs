@@ -12649,6 +12649,98 @@ mod tests {
         }
     }
 
+    /// What downing [`crimes_against_a_failing_escort`]'s ship did.
+    #[derive(Debug, PartialEq)]
+    struct EscortDowned {
+        /// The crimes a [`Witness`] heard.
+        crimes: Vec<(Crime, Option<GovtId>)>,
+        /// The records by the engine's law.
+        records: [i16; 4],
+        /// Whether slot 0 still holds the mission after the tick.
+        held: bool,
+        /// Whether the NPC is still marked after the tick.
+        marked: bool,
+    }
+
+    /// [`lawful`]'s NPC marked as an escort of mission 140 in slot 0,
+    /// abortable, so its first loss fails the mission at once and
+    /// releases the ship, shot at by `catalog`'s weapons until the tick
+    /// it is downed.
+    fn crimes_against_a_failing_escort(mut catalog: FakePilotCatalog) -> EscortDowned {
+        catalog.missions = vec![MissionRecord {
+            ships: crate::catalog::MissionShip {
+                goal: 3,
+                ..crate::catalog::MissionShip::NONE
+            },
+            ..crate::testkit::mission(140)
+        }];
+        let fight = |law: &dyn LegalCode| {
+            let mut session = facing_an_npc(&catalog, 180);
+            mark_the_npc(&mut session, Marked::Active);
+            session.hold_trigger(FIRE);
+            let rules = Rules {
+                law,
+                ..Rules::default()
+            };
+            for _ in 0..80 {
+                session.tick_combat(rules, &mut NeverFires);
+                if session.npcs()[0].condition != Condition::Intact {
+                    break;
+                }
+            }
+            assert_ne!(session.npcs()[0].condition, Condition::Intact, "downed");
+            (
+                records(&session),
+                session.pilot().missions().get(0).is_some(),
+                session.npcs()[0].mission.is_some(),
+            )
+        };
+        let witness = Witness::default();
+        let (_, held, marked) = fight(&witness);
+        let (records, ..) = fight(&crate::legal::NovaLaw::default());
+        EscortDowned {
+            crimes: witness.seen.take(),
+            records,
+            held,
+            marked,
+        }
+    }
+
+    /// A loss that fails the ship's mission clears its mark within the
+    /// tick (`raise_disabled` before `punish`), so `punish` must read the
+    /// mark from before the tick.
+    #[test]
+    fn downing_a_mission_ship_whose_loss_fails_its_mission_changes_no_record() {
+        assert_eq!(
+            crimes_against_a_failing_escort(lawful()),
+            EscortDowned {
+                crimes: vec![],
+                records: [0; 4],
+                held: false,
+                marked: false,
+            },
+            "disabled: the mission ended and the ship unmarked in the tick"
+        );
+        let at_once = FakePilotCatalog {
+            weapons: vec![WeaponRecord {
+                mass_dmg: 500,
+                energy_dmg: 500,
+                ..blaster()
+            }],
+            ..lawful()
+        };
+        assert_eq!(
+            crimes_against_a_failing_escort(at_once),
+            EscortDowned {
+                crimes: vec![],
+                records: [0; 4],
+                held: false,
+                marked: false,
+            },
+            "broken up at once: neither Disable nor Kill"
+        );
+    }
+
     // The combat rating.
 
     /// [`lawful`], its traffic's ship 129 of `strength`.
