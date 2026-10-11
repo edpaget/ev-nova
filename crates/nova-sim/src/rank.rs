@@ -70,6 +70,23 @@
 //! record or no name. Each falls back to `STR#` 2002 #341, "captain"
 //! (@0x9d0d6), only when no rank qualifies, or there is no recent rank.
 //!
+//! **Pilot info** ([`pilot_info`], `_SetupPlayerInfoText`
+//! @0x54bf9-0x54f29). The ranks line lists the active ranks with a
+//! non-empty full name, by `Weight` descending: passes of the highest
+//! `Weight` left, each placing those of it in index order, so a tie goes
+//! by ID (@0x54dbc-0x54f29). Let N be those ranks plus the Ranks-section
+//! items that follow them (oütf `Flags` 0x2000, counted @0x54c82-0x54d4b
+//! into the same count). After placing the k-th rank, counting from 1:
+//! below N-1 it appends ", " (@0x54e47, @0x54ead); at N-1 it appends ",
+//! ", `STR#` 2002 #392 ("and") and " " (@0x54e47, @0x54e7b-0x54ead); at
+//! N, nothing (@0x54e5f-0x54e65). So "and" goes before the last item of
+//! the whole list: "A, and B" and "A, B, and C" alone, but "A, B, and "
+//! with one item following and "A, B, " with two. The heading, the line
+//! breaks and the items are phase 17's; [`pilot_info`] takes how many
+//! items follow. The daily income adds each active rank's salary under
+//! the same cap test against today's cash (`_PlayerInfoDialogUpdate`
+//! @0x53585-0x535c1), with no floor.
+//!
 //! **Salary** ([`pay_salaries`], `_IncrementGameTime` @0xb75b-0xb7c2,
 //! the day's eighth participant). In ID order, each active rank with a
 //! record and a nonzero `Salary` adds it to the cash unless the cash is
@@ -90,6 +107,10 @@ use crate::rulebook::RuleSource;
 /// The index (1-based) in `STR#` 2002 of what a rank tag reads with no
 /// rank to name: stock "captain" (0x155 @0x9d0d6).
 pub const NO_RANK_STRING: usize = 341;
+
+/// The index (1-based) in `STR#` 2002 of the word before the pilot
+/// info's last rank: stock "and" (0x188 @0x54e81).
+pub const AND_STRING: usize = 392;
 
 /// `Flags` 0x0001: activating the rank clears the other active ranks of
 /// its government.
@@ -271,6 +292,50 @@ impl RankNames<'_> {
         }
         best.map_or(&self.fallback, |rank| name_of(rank))
     }
+}
+
+/// The pilot info's part for the ranks: the ranks line and the
+/// salaries' share of the daily income.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PilotInfoRanks {
+    /// The active ranks with a full name, joined (see the module docs);
+    /// empty with none.
+    pub line: String,
+    /// Today's salaries, each tested against today's cash, with no floor.
+    pub salary: i64,
+}
+
+/// The pilot info's ranks (see the module docs): the line of the ranks
+/// of `records` in `active` with a full name, by `Weight` and then ID,
+/// joined with `and` before the last of them and the `following`
+/// Ranks-section items after them; and the salaries [`salary_paid`] gives
+/// each on `cash` by `cap`, summed.
+#[must_use]
+pub fn pilot_info(
+    records: &[RankRecord],
+    active: &BTreeSet<RankId>,
+    cash: i64,
+    cap: RuleSource,
+    and: &str,
+    following: usize,
+) -> PilotInfoRanks {
+    let held = || records.iter().filter(|rank| active.contains(&rank.id));
+    let mut named: Vec<&RankRecord> = held().filter(|rank| !rank.name.is_empty()).collect();
+    named.sort_by_key(|rank| std::cmp::Reverse(rank.weight));
+    let last = (named.len() + following).saturating_sub(1);
+    let mut line = String::new();
+    for (placed, rank) in (1..).zip(&named) {
+        line.push_str(&rank.name);
+        if placed < last {
+            line.push_str(", ");
+        } else if placed == last {
+            line.push_str(", ");
+            line.push_str(and);
+            line.push(' ');
+        }
+    }
+    let salary = held().map(|rank| salary_paid(rank, cash, cap)).sum();
+    PilotInfoRanks { line, salary }
 }
 
 /// Whether ranks of `a` and `b` share a government for the sweeps.
@@ -889,5 +954,126 @@ mod tests {
         assert_eq!(names.short_of(GovtId(129)), "Adm");
         assert_eq!(names.short_of(GovtId(130)), "captain");
         assert_eq!(names.short_of(GovtId(127)), "captain", "never -1's");
+    }
+
+    /// Rank `id` of `weight` and full name `name`, unaffiliated.
+    fn titled(id: i16, weight: i16, name: &str) -> RankRecord {
+        RankRecord {
+            name: name.to_owned(),
+            ..rank(id, None, weight, 0)
+        }
+    }
+
+    /// The ranks line of `records` with `active` held and `following`
+    /// Ranks-section items after it.
+    fn line(records: &[RankRecord], active: &[i16], following: usize) -> String {
+        pilot_info(
+            records,
+            &ids(active),
+            0,
+            RuleSource::Engine,
+            "and",
+            following,
+        )
+        .line
+    }
+
+    #[test]
+    fn the_ranks_line_lists_named_active_ranks_by_weight_then_id() {
+        let records = [
+            titled(200, 1, "Low"),
+            titled(201, 9, "High"),
+            titled(202, 5, "Mid A"),
+            titled(203, 5, "Mid B"),
+            titled(204, 99, "Inactive"),
+            titled(205, -3, "Below"),
+        ];
+        assert_eq!(
+            line(&records, &[200, 201, 202, 203, 205], 0),
+            "High, Mid A, Mid B, Low, and Below"
+        );
+        assert_eq!(line(&records, &[], 0), "", "none held");
+    }
+
+    #[test]
+    fn a_rank_with_an_empty_full_name_is_left_out() {
+        let records = [
+            titled(200, 1, "Low"),
+            titled(201, 9, ""),
+            titled(202, 5, "Mid"),
+        ];
+        assert_eq!(line(&records, &[200, 201, 202], 0), "Mid, and Low");
+        assert_eq!(line(&records, &[201], 0), "");
+        assert_eq!(line(&records, &[250], 0), "", "no record");
+    }
+
+    #[test]
+    fn one_rank_stands_alone() {
+        assert_eq!(line(&[titled(200, 1, "Commander")], &[200], 0), "Commander");
+    }
+
+    #[test]
+    fn two_ranks_join_with_comma_and() {
+        let records = [titled(200, 1, "A"), titled(201, 1, "B")];
+        assert_eq!(line(&records, &[200, 201], 0), "A, and B");
+    }
+
+    #[test]
+    fn three_or_more_join_with_commas_and_a_final_comma_and() {
+        let records = [
+            titled(200, 1, "A"),
+            titled(201, 1, "B"),
+            titled(202, 1, "C"),
+            titled(203, 1, "D"),
+        ];
+        assert_eq!(line(&records, &[200, 201, 202], 0), "A, B, and C");
+        assert_eq!(line(&records, &[200, 201, 202, 203], 0), "A, B, C, and D");
+        let missing = pilot_info(&records, &ids(&[200, 201]), 0, RuleSource::Engine, "", 0);
+        assert_eq!(missing.line, "A,  B", "a missing \"and\" appends nothing");
+    }
+
+    #[test]
+    fn the_and_goes_before_the_last_item_counting_those_that_follow() {
+        let records = [titled(200, 1, "A"), titled(201, 1, "B")];
+        assert_eq!(line(&records, &[200], 1), "A, and ", "@0x54e5f-0x54ead");
+        assert_eq!(line(&records, &[200, 201], 1), "A, B, and ");
+        assert_eq!(line(&records, &[200], 2), "A, ");
+        assert_eq!(line(&records, &[200, 201], 2), "A, B, ");
+        assert_eq!(line(&records, &[200, 201], 5), "A, B, ");
+        assert_eq!(line(&records, &[], 3), "", "no rank, no line");
+    }
+
+    #[test]
+    fn the_salary_part_sums_the_active_salaries_under_the_cap_test_against_todays_cash() {
+        let records = [
+            paying(200, 200, 0),
+            paying(201, 300, 1100),
+            paying(202, -50, 0),
+            paying(203, 400, 900),
+            paying(204, 1000, 0),
+        ];
+        let active = ids(&[200, 201, 202, 203, 250]);
+        let salary = |cash, source| pilot_info(&records, &active, cash, source, "and", 0).salary;
+        assert_eq!(
+            salary(1000, RuleSource::Engine),
+            450,
+            "each against 1000; 203 at its cap; 204 inactive"
+        );
+        assert_eq!(
+            salary(1000, RuleSource::Bible),
+            250,
+            "201 pays up to its cap"
+        );
+        assert_eq!(salary(0, RuleSource::Engine), 850);
+        let fee = pilot_info(
+            &[paying(200, -50, 0)],
+            &ids(&[200]),
+            10,
+            RuleSource::Engine,
+            "and",
+            0,
+        );
+        assert_eq!(fee.salary, -50, "no floor");
+        assert_eq!(fee.line, "", "no name");
     }
 }

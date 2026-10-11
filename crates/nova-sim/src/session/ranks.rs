@@ -11,6 +11,10 @@
 //! [`Session::fly`](crate::Session::fly), as the original's `ResetPlayer`
 //! (@0x1db44) and `ResetPlayerRecord` (@0x1dbf1) reset it.
 //!
+//! [`Session::pilot_info_ranks`] gives the pilot info's ranks line and
+//! the salaries' share of the daily income, for the player info screen
+//! to show.
+//!
 //! The daily step's eighth participant pays the active ranks' salaries
 //! ([`rank::pay_salaries`]), reading the session's
 //! [`SalaryCap`](crate::rulebook::RuleKey::SalaryCap) rule; a change to
@@ -26,7 +30,7 @@ use std::borrow::Cow;
 use crate::catalog::RankId;
 use crate::news::MISC_STRINGS;
 use crate::person::NO_RANK;
-use crate::rank::{self, Held, NO_RANK_STRING, RankNames};
+use crate::rank::{self, AND_STRING, Held, NO_RANK_STRING, PilotInfoRanks, RankNames};
 use crate::rulebook::RuleKey;
 use crate::session::Session;
 
@@ -69,6 +73,27 @@ impl Session {
                 .nth_string(MISC_STRINGS, NO_RANK_STRING)
                 .map_or(Cow::Borrowed(NO_RANK), Cow::Owned),
         }
+    }
+
+    /// The pilot info's ranks line and the salaries' share of the daily
+    /// income (see [`rank::pilot_info`]), against the pilot's cash and the
+    /// session's `salary_cap` rule, joined with `STR#` 2002 #392 (nothing
+    /// when the lists lack it, as `_StrcatIndCString` appends nothing).
+    /// No Ranks-section item follows the ranks until the player info
+    /// screen lists them (crons-news-ranks phase 17).
+    #[must_use]
+    pub fn pilot_info_ranks(&self) -> PilotInfoRanks {
+        let and = self
+            .nth_string(MISC_STRINGS, AND_STRING)
+            .unwrap_or_default();
+        rank::pilot_info(
+            &self.ranks,
+            &self.pilot.ranks,
+            self.pilot.cash,
+            self.rules.source_for(RuleKey::SalaryCap),
+            &and,
+            0,
+        )
     }
 
     /// The day's eighth participant: the active ranks' salaries (see
@@ -338,5 +363,57 @@ mod tests {
             "skipper skipper skipper"
         );
         assert_eq!(session.plain_text("<PRK128>"), "skipper");
+    }
+
+    /// `STR#` 2002 with #392 `and`, as stock has it.
+    struct And(&'static str);
+
+    impl crate::catalog::CommCatalog for And {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            if id == crate::news::MISC_STRINGS {
+                let mut strings = vec![String::new(); 400];
+                strings[391] = self.0.to_owned();
+                strings
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    #[test]
+    fn the_pilot_info_reads_str_2002_392_and_the_cash() {
+        let ranks = vec![
+            RankRecord {
+                salary: 200,
+                ..commander()
+            },
+            RankRecord {
+                name: "Admiral".to_owned(),
+                weight: 3,
+                salary: 100,
+                salary_cap: 1000,
+                ..rank(129)
+            },
+        ];
+        let mut session = ranked(ranks.clone()).with_strings(std::rc::Rc::new(And("und")));
+        assert_eq!(session.pilot_info_ranks().line, "");
+        session.run_set(&set("K128 K129"), &mut Scripted::default());
+        session.pilot.cash = 999;
+        let info = session.pilot_info_ranks();
+        assert_eq!(info.line, "Admiral, und Commander");
+        assert_eq!(info.salary, 300);
+        session.pilot.cash = 1000;
+        assert_eq!(
+            session.pilot_info_ranks().salary,
+            200,
+            "against today's cash"
+        );
+        let mut bare = ranked(ranks)
+            .with_rules(Rulebook::default().with_override(RuleKey::SalaryCap, RuleSource::Bible));
+        bare.run_set(&set("K128 K129"), &mut Scripted::default());
+        bare.pilot.cash = 950;
+        let info = bare.pilot_info_ranks();
+        assert_eq!(info.line, "Admiral,  Commander", "no lists: no \"and\"");
+        assert_eq!(info.salary, 250, "the session's salary_cap");
     }
 }
