@@ -25,7 +25,7 @@
 //! (ships 1-63, active, parent the player, AI type 6, no mission ship,
 //! @0x43d2c-0x43d87) whose class's `InherentAI` is at most 2, a trader;
 //! the player's fighters fly as AI type 5 and never count
-//! ([`escort_holds`]). The class's `Holds` is the class record's (runtime
+//! ([`escort_tons_in_system`]). The class's `Holds` is the class record's (runtime
 //! +0, `shïp` field 0x00), made positive when it is negative
 //! (`_LoadObjectData` @0x7a6ad-0x7a6b8), not the cargo space fitted.
 //! Above 199 the fleet of slot 255 comes, else above 49 the fleet of slot
@@ -40,7 +40,7 @@
 
 use crate::catalog::{FleetId, ShipRecord};
 use crate::chance::Chance;
-use crate::escort::FREIGHTER_AI;
+use crate::market::{self, EscortHolds};
 use crate::traffic::npc::Npc;
 use crate::traffic::spawn::FIRST_FLEET_ID;
 
@@ -49,10 +49,10 @@ pub const SEED_BASE: u32 = 30;
 /// How many values above [`SEED_BASE`] the timer may be armed to.
 pub const SEED_SPREAD: u32 = 30;
 /// The most cargo the escorts may carry and bring nothing (`cmpw $0x31`).
-pub const STRONG_HOLDS: i32 = 49;
+pub const STRONG_HOLDS: i64 = 49;
 /// The most cargo the escorts may carry and bring only
 /// [`STRONG_FLEET`] (`cmpw $0xc7`).
-pub const STRONGER_HOLDS: i32 = 199;
+pub const STRONGER_HOLDS: i64 = 199;
 /// The fleet of slot 254, which escorts carrying above [`STRONG_HOLDS`]
 /// bring.
 pub const STRONG_FLEET: FleetId = FleetId(FIRST_FLEET_ID + 254);
@@ -67,7 +67,7 @@ pub fn seed(chance: &mut (impl Chance + ?Sized)) -> u32 {
 
 /// The fleet that escorts carrying `holds` tons bring, if any.
 #[must_use]
-pub fn fleet_for(holds: i32) -> Option<FleetId> {
+pub fn fleet_for(holds: i64) -> Option<FleetId> {
     if holds > STRONGER_HOLDS {
         Some(STRONGER_FLEET)
     } else if holds > STRONG_HOLDS {
@@ -77,18 +77,26 @@ pub fn fleet_for(holds: i32) -> Option<FleetId> {
     }
 }
 
-/// The tons the player's escorts that count carry: the class `Holds` of
-/// each of `npcs` that is the player's and no fighter, whose class, in
-/// `ships`, is a trader (`InherentAI` at most
-/// [`FREIGHTER_AI`]); one whose class has no record counts none.
+/// The tons the player's escorts in the system that count carry: the
+/// class `Holds` of each of `npcs` that is the player's and no fighter,
+/// whose class, in `ships`, is a trader (`InherentAI` at most
+/// [`FREIGHTER_AI`](crate::escort::FREIGHTER_AI)), summed as the fleet's
+/// cargo space sums them ([`market::escort_tons`]); one whose class has no
+/// record counts none.
 #[must_use]
-pub fn escort_holds(npcs: &[Npc], ships: &[ShipRecord]) -> i32 {
-    npcs.iter()
-        .filter(|npc| npc.is_players() && npc.carrier.is_none())
-        .filter_map(|npc| ships.iter().find(|record| record.id == npc.ship))
-        .filter(|record| record.inherent_ai <= FREIGHTER_AI)
-        .map(|record| i32::from(record.fields.holds).abs())
-        .sum()
+pub fn escort_tons_in_system(npcs: &[Npc], ships: &[ShipRecord]) -> i64 {
+    market::escort_tons(
+        npcs.iter()
+            .filter(|npc| npc.is_players())
+            .filter_map(|npc| {
+                let record = ships.iter().find(|record| record.id == npc.ship)?;
+                Some(EscortHolds {
+                    holds: record.fields.holds,
+                    inherent_ai: record.inherent_ai,
+                    carried: npc.carrier.is_some(),
+                })
+            }),
+    )
 }
 
 /// The countdown: disarmed, or the ticks left before it fires.
@@ -154,13 +162,13 @@ mod tests {
 
     #[test]
     fn above_49_tons_bring_382_and_above_199_bring_383() {
-        for holds in [i32::MIN, -1, 0, 1, 49] {
+        for holds in [i64::MIN, -1, 0, 1, 49] {
             assert_eq!(fleet_for(holds), None, "{holds}");
         }
         for holds in [50, 120, 199] {
             assert_eq!(fleet_for(holds), Some(FleetId(382)), "{holds}");
         }
-        for holds in [200, 5000, i32::MAX] {
+        for holds in [200, 5000, i64::MAX] {
             assert_eq!(fleet_for(holds), Some(FleetId(383)), "{holds}");
         }
     }
@@ -237,21 +245,21 @@ mod tests {
             class(131, 80, -1),
         ];
         let npcs: Vec<Npc> = (0..4).map(|n| flying(n, 128 + n as i16, true)).collect();
-        assert_eq!(escort_holds(&npcs, &ships), 150);
-        assert_eq!(escort_holds(&npcs[1..2], &ships), 20);
+        assert_eq!(escort_tons_in_system(&npcs, &ships), 150);
+        assert_eq!(escort_tons_in_system(&npcs[1..2], &ships), 20);
     }
 
     #[test]
     fn two_escorts_of_one_class_count_it_twice() {
         let ships = [class(128, 30, 1)];
         let npcs = [flying(0, 128, true), flying(1, 128, true)];
-        assert_eq!(escort_holds(&npcs, &ships), 60);
+        assert_eq!(escort_tons_in_system(&npcs, &ships), 60);
     }
 
     #[test]
     fn a_class_of_negative_holds_counts_them_made_positive() {
         let ships = [class(128, -70, 1)];
-        assert_eq!(escort_holds(&[flying(0, 128, true)], &ships), 70);
+        assert_eq!(escort_tons_in_system(&[flying(0, 128, true)], &ships), 70);
     }
 
     #[test]
@@ -272,6 +280,6 @@ mod tests {
             flying(3, 130, false),
             flying(4, 140, true),
         ];
-        assert_eq!(escort_holds(&npcs, &ships), 0);
+        assert_eq!(escort_tons_in_system(&npcs, &ships), 0);
     }
 }

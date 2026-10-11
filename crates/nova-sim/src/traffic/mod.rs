@@ -122,8 +122,8 @@ pub struct World<'a> {
     /// grudging, and the control bits.
     pub persons: PersonWorld<'a>,
     /// The tons the player's escorts that count toward the
-    /// escort-strength timer carry ([`strength::escort_holds`]).
-    pub escort_holds: i32,
+    /// escort-strength timer carry ([`strength::escort_tons_in_system`]).
+    pub escort_tons: i64,
 }
 
 impl<'a> World<'a> {
@@ -139,7 +139,7 @@ impl<'a> World<'a> {
             system_govt: None,
             record: 0,
             persons: PersonWorld::NONE,
-            escort_holds: 0,
+            escort_tons: 0,
         }
     }
 
@@ -387,7 +387,7 @@ impl Traffic {
         if !self.strength_timer.tick() {
             return;
         }
-        let Some(id) = strength::fleet_for(world.escort_holds) else {
+        let Some(id) = strength::fleet_for(world.escort_tons) else {
             return;
         };
         let mut fleet = Vec::new();
@@ -1961,9 +1961,9 @@ mod tests {
     }
 
     /// A world of no stellars whose player's escorts carry `holds` tons.
-    fn escorted(holds: i32) -> World<'static> {
+    fn escorted(holds: i64) -> World<'static> {
         World {
-            escort_holds: holds,
+            escort_tons: holds,
             ..World::new(&[])
         }
     }

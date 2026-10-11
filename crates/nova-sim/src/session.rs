@@ -1298,7 +1298,7 @@ impl Session {
                         pilot: &facts,
                         fleet: &self.pilot.escorts,
                     },
-                    escort_holds: strength::escort_holds(self.traffic.npcs(), &self.ships),
+                    escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
                 };
                 let strikes = std::mem::take(&mut self.strikes);
                 let last = self.last_npc();
@@ -1334,7 +1334,7 @@ impl Session {
                 pilot: self,
                 fleet: &self.pilot.escorts,
             },
-            escort_holds: strength::escort_holds(self.traffic.npcs(), &self.ships),
+            escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
         }
     }
 
