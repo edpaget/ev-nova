@@ -186,7 +186,7 @@ impl Session {
     }
 
     /// The stellar the ship is docked at, if it has a bar.
-    fn bar_site(&self) -> Option<LandingSite> {
+    pub(super) fn bar_site(&self) -> Option<LandingSite> {
         let stellar = self.landed?;
         self.sites
             .iter()

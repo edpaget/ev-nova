@@ -527,6 +527,7 @@ impl Session {
         }
         if resets.has(Reset::Dock) {
             self.landed = placement.stellar;
+            self.bar_news = None;
         }
         let scene_changed = self.set_player_system(system, sites, dock);
         self.leave_behind(&resets);

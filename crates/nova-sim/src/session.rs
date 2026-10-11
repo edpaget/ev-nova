@@ -346,6 +346,7 @@ mod mission_escorts;
 mod mission_screens;
 mod mission_ships;
 mod missions;
+mod news;
 mod outfits;
 mod person_offers;
 mod persons;
@@ -430,6 +431,7 @@ use crate::market::{
 use crate::message::SimMessage;
 use crate::mission::{Offers, StellarMarks};
 use crate::navigation::stellar_under;
+use crate::news::News;
 use crate::order_loop::{self, Onward, OrderRun, Pass};
 use crate::outfitter::{
     self, FIRST_OUTFIT, Hardpoints, LIST_SLOTS, OutfitFlags, OutfitOrder, OutfitRefusal, OutfitRun,
@@ -651,6 +653,10 @@ pub struct Session {
     /// else the first time the bar's list asks it (see
     /// [`RuleKey::DayRolls`]). Not saved.
     hire_rolls: DayRolls<ShipId>,
+    /// The news of the bar visit under way, drawn as the bar opened (see
+    /// the `news` module); forgotten as the docking changes, and never
+    /// saved.
+    bar_news: Option<News>,
     /// Each outfit's roll for sale today: drawn by the daily step, or else
     /// the first time the outfitter's list asks it (see
     /// [`RuleKey::DayRolls`]). Not saved.
@@ -952,6 +958,7 @@ impl Session {
             hire_terms: hire::Shared(Rc::new(NovaHire::default())),
             control_bits: hire::Shared(Rc::new(NovaBits)),
             hire_rolls: DayRolls::default(),
+            bar_news: None,
             outfit_rolls: DayRolls::default(),
             outfit_visit: OutfitVisit::default(),
             outfit_reselected: None,
@@ -2516,6 +2523,7 @@ impl Session {
         self.player.velocity = Vec2::ZERO;
         self.landed = Some(stellar);
         self.pilot.stellar = Some(stellar);
+        self.bar_news = None;
         self.combat.clear();
         self.target = None;
         self.talk = None;
@@ -2592,6 +2600,7 @@ impl Session {
     ) -> Option<StellarId> {
         let stellar = self.landed.take()?;
         let stay = std::mem::take(&mut self.stay);
+        self.bar_news = None;
         let stay_days = self.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
         if stay_days {
             self.pass_days(stay.escort_days(), chance);
