@@ -678,6 +678,9 @@ pub struct MissionRecord {
     pub on_failure: Script,
     /// Its `OnAbort`, run as it is aborted.
     pub on_abort: Script,
+    /// Its `OnShipDone`, run as its ship goals are met (see the
+    /// `mission_ships` module of the session).
+    pub on_ship_done: Script,
     /// Its `CanAbort`, raw: the player may abort it unless it is 0.
     pub can_abort: i16,
     /// Its `CompGovt`: the government whose record its end changes, none
@@ -719,6 +722,8 @@ pub struct MissionTexts {
     pub load_cargo: Option<String>,
     /// Its `DumpCargoText`, shown as its cargo is unloaded.
     pub dump_cargo: Option<String>,
+    /// Its `ShipDoneText`, shown as its ship goals are met.
+    pub ship_done: Option<String>,
     /// Its `AcceptButton`, raw.
     pub accept_button: String,
     /// Its `RefuseButton`, raw.
@@ -740,6 +745,7 @@ impl MissionTexts {
             refuse: None,
             load_cargo: None,
             dump_cargo: None,
+            ship_done: None,
             accept_button: String::new(),
             refuse_button: String::new(),
         }

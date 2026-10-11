@@ -188,6 +188,7 @@ impl PilotCatalog for Courier {
             on_success: Script::parse("b31"),
             on_failure: Script::default(),
             on_abort: Script::default(),
+            on_ship_done: Script::default(),
             can_abort: 1,
             comp_govt: None,
             comp_reward: 0,

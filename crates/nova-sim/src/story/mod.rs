@@ -1817,11 +1817,14 @@ impl EventFilter {
 }
 
 /// Who registered a subscription, in the order consumers run on one
-/// event: mission ships before missions, as a landing checks the goals
-/// before the missions, and every stock consumer before the plug-ins
-/// (see the module docs' "Dispatch").
+/// event: the offers first, as a landing rolls them before the land
+/// check; mission ships before missions, as the land check checks the
+/// goals before the missions; and every stock consumer before the
+/// plug-ins (see the module docs' "Dispatch").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Consumer {
+    /// The missions' offers (`mïsn` availability and resolution).
+    Offers,
     /// A mission's ships (`mïsn` `Ship*` fields).
     MissionShips,
     /// Missions (`mïsn`).
@@ -1952,11 +1955,13 @@ mod tests {
             on(Consumer::MissionShips, 5, 0, any),
             on(Consumer::Missions, 1, 4, any),
             on(Consumer::Nebulae, 130, 0, any),
+            on(Consumer::Offers, 0, 0, any),
         ]
     }
 
     fn sorted_ids() -> Vec<SubscriptionId> {
         vec![
+            id(Consumer::Offers, 0, 0),
             id(Consumer::MissionShips, 5, 0),
             id(Consumer::Missions, 1, 4),
             id(Consumer::Missions, 3, 0),
@@ -1991,6 +1996,22 @@ mod tests {
                 "rotated {turn}, reversed"
             );
         }
+    }
+
+    #[test]
+    fn a_landing_rolls_the_offers_before_it_checks_the_ship_goals() {
+        let landed = EventFilter::Any(StoryEventKind::Landed);
+        let subs = [
+            on(Consumer::MissionShips, i16::MIN, 0, landed),
+            on(Consumer::Offers, i16::MAX, 9, landed),
+        ];
+        assert_eq!(
+            ids(&dispatch_order(&subs, &LANDED)),
+            [
+                id(Consumer::Offers, i16::MAX, 9),
+                id(Consumer::MissionShips, i16::MIN, 0)
+            ]
+        );
     }
 
     #[test]

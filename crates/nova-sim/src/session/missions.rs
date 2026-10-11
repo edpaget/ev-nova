@@ -92,11 +92,12 @@ use crate::story::{
 use crate::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames};
 use crate::wares;
 
-/// The offer roll's subscription: the missions' first, before every
-/// mission slot's (slots 0-15) landing hooks.
+/// The offer roll's subscription: the offers', which run first on a
+/// landing, before the mission ships' goal checks and every mission
+/// slot's (slots 0-15) landing hooks.
 pub const ROLL: SubscriptionId = SubscriptionId {
-    consumer: Consumer::Missions,
-    record: -1,
+    consumer: Consumer::Offers,
+    record: 0,
     hook: 0,
 };
 
@@ -193,6 +194,7 @@ fn blank(id: MissionId) -> MissionRecord {
         on_success: Script::default(),
         on_failure: Script::default(),
         on_abort: Script::default(),
+        on_ship_done: Script::default(),
         can_abort: 1,
         comp_govt: None,
         comp_reward: 0,
@@ -1492,8 +1494,8 @@ mod tests {
             record,
             hook: 0,
         };
-        assert!(ROLL < slot(0));
-        assert!(ROLL > slot(-2));
+        assert!(ROLL < slot(i16::MIN));
+        assert!(ROLL < crate::session::mission_ships::ship_hook(0));
         assert!(
             session.unregister_story(ROLL),
             "registered as the session starts"

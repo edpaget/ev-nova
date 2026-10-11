@@ -102,12 +102,15 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
     /// are not set expressions (see the `story` module's "Dispatch").
     fn effect(&mut self, id: SubscriptionId, event: &StoryEvent) {
         match id.consumer {
-            // The offer roll, the re-offer, and each slot's landing hooks
-            // and deadline checks (see the `missions` module).
-            Consumer::Missions => match (id, event) {
-                (missions::ROLL, &StoryEvent::Landed { stellar }) => {
+            // The offer roll (see the `missions` module).
+            Consumer::Offers => {
+                if let (missions::ROLL, &StoryEvent::Landed { stellar }) = (id, event) {
                     self.session.roll_offers(stellar, &mut *self.chance);
                 }
+            }
+            // The re-offer, and each slot's landing hooks and deadline
+            // checks (see the `missions` module).
+            Consumer::Missions => match (id, event) {
                 (missions::REOFFER, StoryEvent::Landed { .. }) => {
                     self.session.reoffer_missions(&mut *self.chance);
                 }

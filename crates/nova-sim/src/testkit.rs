@@ -171,6 +171,7 @@ pub(crate) fn mission(id: i16) -> MissionRecord {
         on_success: Script::default(),
         on_failure: Script::default(),
         on_abort: Script::default(),
+        on_ship_done: Script::default(),
         can_abort: 1,
         comp_govt: None,
         comp_reward: 0,

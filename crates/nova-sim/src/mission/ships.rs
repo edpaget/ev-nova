@@ -62,6 +62,13 @@ pub struct SpecialShips {
     /// Their subtitle, drawn at accept (+0xb0), shown while it is not
     /// empty.
     pub subtitle: String,
+    /// How many have been destroyed (+0x28), whoever destroyed them.
+    pub destroyed: i16,
+    /// How many have been boarded on the paths that count a board
+    /// (+0x2a).
+    pub boarded: i16,
+    /// How many have been disabled (+0x2c).
+    pub disabled: i16,
 }
 
 impl Default for SpecialShips {
@@ -73,6 +80,9 @@ impl Default for SpecialShips {
             appear: NOT_APPEARING,
             name: String::new(),
             subtitle: String::new(),
+            destroyed: 0,
+            boarded: 0,
+            disabled: 0,
         }
     }
 }
@@ -194,7 +204,8 @@ impl SpecialShips {
     /// from their `ShipSubtitle`, each string `Rand(count) + 1` of its
     /// `STR#` in `strings`, or empty (@0xa1195-0xa1358). Ships left are
     /// their `ShipCount`, and they have all arrived but for a `ShipStart`
-    /// of 1 (@0xa0b39-0xa0b46, @0xa1468-0xa147d).
+    /// of 1 (@0xa0b39-0xa0b46, @0xa1468-0xa147d). None have been
+    /// destroyed, boarded or disabled (@0xa1c35-0xa1c59).
     pub fn at_accept(
         ships: &MissionShip,
         facts: &ShipFacts,
@@ -222,6 +233,9 @@ impl SpecialShips {
             appear,
             name,
             subtitle,
+            destroyed: 0,
+            boarded: 0,
+            disabled: 0,
         }
     }
 }
@@ -695,6 +709,9 @@ mod tests {
                     appear: 107,
                     name: "Trey".into(),
                     subtitle: "Hunter".into(),
+                    destroyed: 0,
+                    boarded: 0,
+                    disabled: 0,
                 },
                 "{start}"
             );
@@ -776,5 +793,6 @@ mod tests {
         assert_eq!(ships.system, ShipSystem::Nowhere);
         assert_eq!((ships.left, ships.arrived, ships.appear), (0, 0, -1));
         assert!(ships.name.is_empty() && ships.subtitle.is_empty());
+        assert_eq!((ships.destroyed, ships.boarded, ships.disabled), (0, 0, 0));
     }
 }

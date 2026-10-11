@@ -68,8 +68,9 @@
 //!   ([`Session::fly`](crate::Session::fly)).
 //! - Version 22: adds each active mission's special ships (`ships`). An
 //!   older save kept none of their state, so the upgrade gives each
-//!   mission none left, nowhere, with no timer and no name: an old save's
-//!   mission spawns no ship, and its `<SN>` reads empty.
+//!   mission none left, nowhere, with no timer and no name, and none
+//!   destroyed, boarded or disabled: an old save's mission spawns no
+//!   ship, and its `<SN>` reads empty.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -92,8 +93,8 @@
 //! `female`. The combat rating (`combat_rating`) is its number. The `paint` is `null` when unpainted, or its red, green and
 //! blue, each 0 to 31 (`{"r": 31, "g": 0, "b": 4}`). The once-only story
 //! subscriptions fired (`story_fired`) are each its consumer
-//! (`mission_ships`, `missions`, `crons`, `nebulae`, `plugins` or
-//! `fixture`), record and hook (`{"consumer": "missions", "record": 3,
+//! (`offers`, `mission_ships`, `missions`, `crons`, `nebulae`, `plugins`
+//! or `fixture`), record and hook (`{"consumer": "missions", "record": 3,
 //! "hook": 1}`), listed by consumer, record and hook. The galaxy overlay
 //! (`galaxy`) is three lists, each by ascending ID: `systems`, each its
 //! `sÿst` ID, whether it is `visible` and its `govt`; `stellars`, each its
@@ -116,7 +117,8 @@
 //! `operator` (by `F`), and its special `ships`: their `system` (`{"at":
 //! 130}`, `"follows_player"`, or `null` for nowhere), how many are `left`
 //! and have `arrived`, their `appear` timer (-1 when it does not run),
-//! and their drawn `name` and `subtitle`. A slot past 15 is unusable.
+//! their drawn `name` and `subtitle`, and how many have been
+//! `destroyed`, `boarded` and `disabled`. A slot past 15 is unusable.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -365,6 +367,7 @@ struct SavedEvent {
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum SavedConsumer {
+    Offers,
     MissionShips,
     Missions,
     Crons,
@@ -376,6 +379,7 @@ enum SavedConsumer {
 impl From<Consumer> for SavedConsumer {
     fn from(consumer: Consumer) -> Self {
         match consumer {
+            Consumer::Offers => Self::Offers,
             Consumer::MissionShips => Self::MissionShips,
             Consumer::Missions => Self::Missions,
             Consumer::Crons => Self::Crons,
@@ -389,6 +393,7 @@ impl From<Consumer> for SavedConsumer {
 impl From<SavedConsumer> for Consumer {
     fn from(saved: SavedConsumer) -> Self {
         match saved {
+            SavedConsumer::Offers => Self::Offers,
             SavedConsumer::MissionShips => Self::MissionShips,
             SavedConsumer::Missions => Self::Missions,
             SavedConsumer::Crons => Self::Crons,
@@ -622,6 +627,9 @@ struct SavedShips {
     appear: i16,
     name: String,
     subtitle: String,
+    destroyed: i16,
+    boarded: i16,
+    disabled: i16,
 }
 
 impl From<&SpecialShips> for SavedShips {
@@ -637,6 +645,9 @@ impl From<&SpecialShips> for SavedShips {
             appear: ships.appear,
             name: ships.name.clone(),
             subtitle: ships.subtitle.clone(),
+            destroyed: ships.destroyed,
+            boarded: ships.boarded,
+            disabled: ships.disabled,
         }
     }
 }
@@ -654,6 +665,9 @@ impl From<SavedShips> for SpecialShips {
             appear: saved.appear,
             name: saved.name,
             subtitle: saved.subtitle,
+            destroyed: saved.destroyed,
+            boarded: saved.boarded,
+            disabled: saved.disabled,
         }
     }
 }
@@ -1055,7 +1069,8 @@ fn system_records(save: &mut Value) {
 }
 
 /// Version 21 to 22: each active mission with no special ships left,
-/// nowhere, with no timer and no name.
+/// nowhere, with no timer and no name, none of them destroyed, boarded
+/// or disabled.
 fn mission_ships(save: &mut Value) {
     let none = serde_json::json!({
         "system": null,
@@ -1063,7 +1078,10 @@ fn mission_ships(save: &mut Value) {
         "arrived": 0,
         "appear": -1,
         "name": "",
-        "subtitle": ""
+        "subtitle": "",
+        "destroyed": 0,
+        "boarded": 0,
+        "disabled": 0
     });
     add_to_each(save, "missions", "ships", &none);
 }
@@ -1369,6 +1387,9 @@ mod tests {
                     appear: 57,
                     name: "Rover".to_owned(),
                     subtitle: "Hunter".to_owned(),
+                    destroyed: 2,
+                    boarded: 1,
+                    disabled: 4,
                 },
             },
         );
@@ -1400,6 +1421,7 @@ mod tests {
     fn all_fired() -> BTreeSet<SubscriptionId> {
         BTreeSet::from([
             fired(Consumer::Plugins, 128, 0),
+            fired(Consumer::Offers, 0, 0),
             fired(Consumer::Missions, 3, 1),
             fired(Consumer::MissionShips, 15, 2),
             fired(Consumer::Missions, 3, 0),
@@ -1493,19 +1515,6 @@ mod tests {
             "by ID"
         );
         assert_eq!(value["stock_weapons_fitted"], true);
-        assert_eq!(
-            value["story_fired"],
-            serde_json::json!([
-                {"consumer": "mission_ships", "record": 15, "hook": 2},
-                {"consumer": "missions", "record": 3, "hook": 0},
-                {"consumer": "missions", "record": 3, "hook": 1},
-                {"consumer": "crons", "record": -5, "hook": 9},
-                {"consumer": "nebulae", "record": 200, "hook": 0},
-                {"consumer": "plugins", "record": 128, "hook": 0},
-                {"consumer": "fixture", "record": 1, "hook": 255}
-            ]),
-            "by consumer, record and hook"
-        );
         assert_eq!(value["ship_name"], "Kestrel");
         assert_eq!(value["paint"], serde_json::json!({"r": 31, "g": 0, "b": 4}));
         assert_eq!(value["bits"], serde_json::json!([0, 512, 9999]));
@@ -1568,6 +1577,25 @@ mod tests {
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
         assert!(text.contains("\n  \"version\": 22"), "{text}");
+    }
+
+    #[test]
+    fn the_fired_subscriptions_are_saved_by_consumer_record_and_hook() {
+        let value: serde_json::Value = serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        assert_eq!(
+            value["story_fired"],
+            serde_json::json!([
+                {"consumer": "offers", "record": 0, "hook": 0},
+                {"consumer": "mission_ships", "record": 15, "hook": 2},
+                {"consumer": "missions", "record": 3, "hook": 0},
+                {"consumer": "missions", "record": 3, "hook": 1},
+                {"consumer": "crons", "record": -5, "hook": 9},
+                {"consumer": "nebulae", "record": 200, "hook": 0},
+                {"consumer": "plugins", "record": 128, "hook": 0},
+                {"consumer": "fixture", "record": 1, "hook": 255}
+            ]),
+            "by consumer, record and hook"
+        );
     }
 
     /// A version 1 save: before explored systems and legal records.
@@ -2790,7 +2818,10 @@ mod tests {
                         "arrived": 1,
                         "appear": 57,
                         "name": "Rover",
-                        "subtitle": "Hunter"
+                        "subtitle": "Hunter",
+                        "destroyed": 2,
+                        "boarded": 1,
+                        "disabled": 4
                     }
                 },
                 {
@@ -2813,7 +2844,10 @@ mod tests {
                         "arrived": 0,
                         "appear": -1,
                         "name": "",
-                        "subtitle": ""
+                        "subtitle": "",
+                        "destroyed": 0,
+                        "boarded": 0,
+                        "disabled": 0
                     }
                 }
             ])

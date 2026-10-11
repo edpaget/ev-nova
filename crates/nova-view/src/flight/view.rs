@@ -9878,6 +9878,7 @@ mod tests {
             on_success: SetScript::default(),
             on_failure: SetScript::default(),
             on_abort: SetScript::default(),
+            on_ship_done: SetScript::default(),
             can_abort: 1,
             comp_govt: None,
             comp_reward: 0,
@@ -10195,7 +10196,7 @@ mod tests {
             "goals_met": true,
             "aboard": true,
             "failed": null,
-            "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": ""},
+            "ships": {"system": null, "left": 0, "arrived": 0, "appear": -1, "name": "", "subtitle": "", "destroyed": 0, "boarded": 0, "disabled": 0},
         }]);
         let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
         let mut draws = placed(750, 750, 0).to_vec();
@@ -11565,6 +11566,7 @@ mod tests {
             on_success: nova_sim::Script::default(),
             on_failure: nova_sim::Script::default(),
             on_abort: nova_sim::Script::default(),
+            on_ship_done: nova_sim::Script::default(),
             can_abort: 1,
             comp_govt: None,
             comp_reward: 0,

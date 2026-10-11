@@ -501,6 +501,9 @@ mod tests {
                 appear: 199,
                 name: "Rover".into(),
                 subtitle: "Bounty Hunter".into(),
+                destroyed: 0,
+                boarded: 0,
+                disabled: 0,
             }
         );
         assert_eq!(

@@ -449,6 +449,7 @@ impl PilotCatalog for GameData {
                     refuse: raw(record.refuse_text),
                     load_cargo: raw(record.load_carg_text),
                     dump_cargo: raw(record.dump_cargo_text),
+                    ship_done: raw(record.ship_done_text),
                     accept_button: record.accept_button.as_str().to_owned(),
                     refuse_button: record.refuse_button.as_str().to_owned(),
                 })
@@ -490,6 +491,7 @@ impl PilotCatalog for GameData {
                     on_success: self.set_expr(record.on_success.as_str()).into(),
                     on_failure: self.set_expr(record.on_failure.as_str()).into(),
                     on_abort: self.set_expr(record.on_abort.as_str()).into(),
+                    on_ship_done: self.set_expr(record.on_ship_done.as_str()).into(),
                     can_abort: record.can_abort,
                     comp_govt,
                     comp_reward: if comp_govt.is_some() {
@@ -3226,6 +3228,7 @@ mod tests {
             (0x359, b"b12\0"),
             (0x458, b"b13\0"),
             (0x557, b"b14\0"),
+            (0x660, b"b15\0"),
         ] {
             bytes[offset..offset + script.len()].copy_from_slice(script);
         }
@@ -3288,6 +3291,7 @@ mod tests {
                 on_success: Script::parse("b12"),
                 on_failure: Script::parse("b13"),
                 on_abort: Script::parse("b14"),
+                on_ship_done: Script::parse("b15"),
                 can_abort: 0,
                 comp_govt: Some(GovtId(383)),
                 comp_reward: 7,
@@ -3328,14 +3332,15 @@ mod tests {
     }
 
     /// A `mïsn` whose `BriefText`, `QuickBrief`, `LoadCargText`,
-    /// `DumpCargoText`, `CompText`, `FailText` and `RefuseText` are
-    /// `texts`, in that order, with these button labels.
-    fn texted(texts: [i16; 7], accept: &[u8], refuse: &[u8]) -> Vec<u8> {
+    /// `DumpCargoText`, `CompText`, `FailText`, `RefuseText` and
+    /// `ShipDoneText` are `texts`, in that order, with these button
+    /// labels.
+    fn texted(texts: [i16; 8], accept: &[u8], refuse: &[u8]) -> Vec<u8> {
         use nova_data::records::mission::Mission;
         let mut bytes = vec![0; Mission::SIZE.expect("fixed")];
         put_i16s(&mut bytes, 0x34, &texts[..6]);
-        put_i16s(&mut bytes, 0x44, &[-1]);
-        put_i16s(&mut bytes, 0x58, &texts[6..]);
+        put_i16s(&mut bytes, 0x44, &texts[7..]);
+        put_i16s(&mut bytes, 0x58, &texts[6..7]);
         bytes[0x75F..0x75F + accept.len()].copy_from_slice(accept);
         bytes[0x77F..0x77F + refuse.len()].copy_from_slice(refuse);
         bytes
@@ -3350,7 +3355,7 @@ mod tests {
                 130,
                 Some("Delivery to <DST>; Vellos1 "),
                 texted(
-                    [200, 201, 206, 207, 202, 203, 204],
+                    [200, 201, 206, 207, 202, 203, 204, 209],
                     b"I'm in\0",
                     b"No way\0",
                 ),
@@ -3359,19 +3364,19 @@ mod tests {
                 Mission::TYPE,
                 131,
                 Some("Plain run  "),
-                texted([-1; 7], b"\0", b"\0"),
+                texted([-1; 8], b"\0", b"\0"),
             ),
             (
                 Mission::TYPE,
                 132,
                 None,
-                texted([205, 205, 205, 208, 205, 205, 205], b" ok\0", b"\0"),
+                texted([205, 205, 205, 208, 205, 205, 205, 0], b" ok\0", b"\0"),
             ),
             (
                 Mission::TYPE,
                 133,
                 Some("Short"),
-                short(texted([-1; 7], b"\0", b"\0")),
+                short(texted([-1; 8], b"\0", b"\0")),
             ),
             (Desc::TYPE, 4002, None, desc("Offer <DST>.")),
             (Desc::TYPE, 200, None, desc("Brief.")),
@@ -3381,6 +3386,7 @@ mod tests {
             (Desc::TYPE, 204, None, desc("Refuse.")),
             (Desc::TYPE, 206, None, desc("Load <CQ>.")),
             (Desc::TYPE, 207, None, desc("Dump.")),
+            (Desc::TYPE, 209, None, desc("Done <SN>.")),
         ]);
         let texts = data.mission_texts();
         assert_eq!(
@@ -3397,6 +3403,7 @@ mod tests {
                     refuse: Some("Refuse.".to_owned()),
                     load_cargo: Some("Load <CQ>.".to_owned()),
                     dump_cargo: Some("Dump.".to_owned()),
+                    ship_done: Some("Done <SN>.".to_owned()),
                     accept_button: "I'm in".to_owned(),
                     refuse_button: "No way".to_owned(),
                 },
@@ -3406,7 +3413,7 @@ mod tests {
                     ..MissionTexts::named(MissionId(132), "")
                 },
             ],
-            "-1 and a missing dësc are none; the undecodable mïsn is skipped"
+            "-1 and a missing dësc (0 among them) are none; the undecodable mïsn is skipped"
         );
         assert_eq!(store(&[]).mission_texts(), []);
     }
@@ -3418,7 +3425,7 @@ mod tests {
             Mission::TYPE,
             128,
             Some("Run"),
-            texted([-1; 7], b"\0", b"\0"),
+            texted([-1; 8], b"\0", b"\0"),
         )]));
         let texts = vec![MissionTexts::named(MissionId(128), "Run")];
         assert_eq!(PilotCatalog::mission_texts(&data), texts, "Rc");
