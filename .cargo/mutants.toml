@@ -27,6 +27,10 @@ exclude_re = [
     # or unsellable (0x0008): two distinct bits, so `|` and `^` combine them
     # the same.
     "replace \\| with \\^ in trade_in",
+    # The system catalog draws a stellar as a radar square for `Flags2`
+    # hypergate (0x1000) or wormhole (0x2000): two distinct bits, so `|`
+    # and `^` combine them the same.
+    "system/data.rs:.*replace \\| with \\^ in contents",
     # Compiled only on non-macOS targets, so on the macOS development host a
     # mutated body is never built into the tests and cannot be observed. It
     # is a one-line `Ok(None)`.
