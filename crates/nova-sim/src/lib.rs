@@ -141,6 +141,10 @@
 //! - [`navigation`]: how the player selects the stellar navigation
 //!   target: by its `NavDef` slot, the nearest, or a click
 //!   ([`stellar_under`]), as the original does.
+//! - [`news`]: the bar's news, a commercial line and a story ([`News`]),
+//!   and which running `crön`s have a story for the stellar docked at
+//!   ([`news::candidates`], with the disputed [`news::news_govt_match`]),
+//!   drawn by the session as the bar opens.
 //! - [`order_loop`]: an order of a count run one pass at a time: each
 //!   pass handed its [`order_loop::Pass`], the buy loop
 //!   ([`order_loop::run`]) stopping at the first refusal and the sell

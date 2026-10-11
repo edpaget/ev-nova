@@ -238,7 +238,7 @@ fn choose(facts: &NewsFacts) -> Candidates {
                     news_govt,
                     stellar_govt: facts.stellar_govt,
                     govts: facts.govts,
-                    rules: facts.rules,
+                    rules: facts.rulebook(),
                 })
             })
             .last()
