@@ -74,7 +74,7 @@ use crate::govt::Governments;
 use crate::person::PersonWorld;
 use autopilot::Outcome;
 use npc::{Mode, Npc, NpcId, NpcPerson};
-use spawn::{JUMP_IN_TICKS, NewShip, PersonDraw};
+use spawn::{Entry, JUMP_IN_TICKS, NewShip, PersonDraw};
 use table::{SpawnPerson, SpawnTable};
 
 /// How many ticks apart an NPC's decisions are: every tick, as the
@@ -487,12 +487,12 @@ impl Traffic {
                 stats: kind.stats,
                 reserves,
                 state: ship.state,
-                mode: if ship.jumping_in {
-                    Mode::JumpingIn {
+                mode: match ship.entry {
+                    Entry::Placed => Mode::Flying,
+                    Entry::JumpingIn => Mode::JumpingIn {
                         ticks_left: JUMP_IN_TICKS,
-                    }
-                } else {
-                    Mode::Flying
+                    },
+                    Entry::Emerging { ticks_left } => Mode::Emerging { ticks_left },
                 },
                 goal: Goal::Idle,
                 condition,

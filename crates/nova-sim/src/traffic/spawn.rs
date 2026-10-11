@@ -163,6 +163,21 @@ pub const AGGRESSION_DRAW: u32 = 3;
 /// or.
 const AGGRESSION_XOR: u32 = 2;
 
+/// How a ship added to the system comes into it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entry {
+    /// Placed in the system already, flying.
+    Placed,
+    /// Gliding in from hyperspace.
+    JumpingIn,
+    /// Coming out of a hypergate or wormhole, after a wait of this many
+    /// ticks (see [`emerge`](crate::traffic::emerge)).
+    Emerging {
+        /// The ticks of the wait.
+        ticks_left: u32,
+    },
+}
+
 /// A ship to add to the system.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NewShip {
@@ -176,8 +191,8 @@ pub struct NewShip {
     pub lead: Option<usize>,
     /// Where it starts.
     pub state: ShipState,
-    /// Whether it glides in from hyperspace.
-    pub jumping_in: bool,
+    /// How it comes into the system.
+    pub entry: Entry,
     /// How aggressive it is: 0, 2 or 3.
     pub aggression: u8,
     /// Its `düde`'s `Booty` flags; none for a fleet's ship, which has no
@@ -265,7 +280,7 @@ impl<'a> PersonDraw<'a> {
             ai_type: AiType::from_raw(record.ai_type),
             lead: None,
             state,
-            jumping_in: false,
+            entry: Entry::Placed,
             aggression: aggression_of(record.aggress),
             booty: 0,
             info_types: 0,
@@ -323,7 +338,7 @@ pub fn initial(
                 ai_type,
                 lead: None,
                 state,
-                jumping_in: false,
+                entry: Entry::Placed,
                 aggression: aggression(chance),
                 booty: dude.booty,
                 info_types: dude.info_types,
@@ -426,7 +441,7 @@ fn hyper_ship(
             {
                 let state = hyperspace_entry(chance);
                 out.extend(draw.spawn(table, id, state).map(|ship| NewShip {
-                    jumping_in: true,
+                    entry: Entry::JumpingIn,
                     ..ship
                 }));
             }
@@ -450,7 +465,7 @@ fn hyper_ship(
             ai_type,
             lead: None,
             state,
-            jumping_in: true,
+            entry: Entry::JumpingIn,
             aggression: aggression(chance),
             booty: dude.booty,
             info_types: dude.info_types,
@@ -535,7 +550,7 @@ pub fn fleet(
         ai_type: AiType::from_raw(kind.inherent_ai),
         lead: None,
         state,
-        jumping_in: true,
+        entry: Entry::JumpingIn,
         aggression: aggression(chance),
         booty: 0,
         info_types: 0,
@@ -558,7 +573,7 @@ pub fn fleet(
                 ai_type: AiType::from_raw(kind.inherent_ai),
                 lead: Some(lead),
                 state: placed,
-                jumping_in: true,
+                entry: Entry::JumpingIn,
                 aggression: aggression(chance),
                 booty: 0,
                 info_types: 0,
@@ -845,8 +860,8 @@ mod tests {
         assert_eq!(chance.asked, [7, 7, 256, 360, 3, 300, 300, 3, 300, 300, 3]);
         let lead = ships[0];
         assert_eq!(
-            (lead.ship, lead.lead, lead.jumping_in),
-            (ShipId(200), None, true)
+            (lead.ship, lead.lead, lead.entry),
+            (ShipId(200), None, Entry::JumpingIn)
         );
         assert!(near(
             lead.state.position,
@@ -905,7 +920,7 @@ mod tests {
                     velocity: ships[0].state.velocity,
                     heading: 90.0,
                 },
-                jumping_in: false,
+                entry: Entry::Placed,
                 aggression: 0,
                 booty: 0x0041,
                 info_types: 0x4005,
@@ -1051,14 +1066,14 @@ mod tests {
         assert_eq!(ships.len(), 1);
         let ship = ships[0];
         assert_eq!(
+            (ship.ship, ship.govt, ship.ai_type, ship.lead, ship.entry),
             (
-                ship.ship,
-                ship.govt,
-                ship.ai_type,
-                ship.lead,
-                ship.jumping_in
-            ),
-            (ShipId(201), Some(GovtId(130)), AiType::Warship, None, true)
+                ShipId(201),
+                Some(GovtId(130)),
+                AiType::Warship,
+                None,
+                Entry::JumpingIn
+            )
         );
         assert!(near(
             ship.state.position,
@@ -1104,7 +1119,7 @@ mod tests {
                 (escort.ship, escort.govt, escort.ai_type, escort.lead),
                 (ShipId(202), Some(GovtId(131)), AiType::Interceptor, Some(0))
             );
-            assert!(escort.jumping_in);
+            assert_eq!(escort.entry, Entry::JumpingIn);
         }
     }
 
@@ -1771,7 +1786,7 @@ mod tests {
                     velocity: ships[0].state.velocity,
                     heading: 90.0,
                 },
-                jumping_in: false,
+                entry: Entry::Placed,
                 aggression: 4,
                 booty: 0,
                 info_types: 0,
@@ -1866,7 +1881,7 @@ mod tests {
         assert_eq!(asked, [100, 1500, 1500, 360]);
         assert_eq!(persons_of(&ships), [Some(600)], "linked or not");
         assert_eq!(ships[0].aggression, 1);
-        assert!(!ships[0].jumping_in);
+        assert_eq!(ships[0].entry, Entry::Placed);
         let (ships, asked) = set_up(&none, PersonWorld::NONE, &[50]);
         assert_eq!((ships.len(), asked), (0, vec![100]));
     }
@@ -1989,7 +2004,7 @@ mod tests {
         let ships = arrivals(&peopled(), 0, &mut draw, &mut chance);
         assert_eq!(chance.asked, [500, 7, 1022, 360], "no aggression drawn");
         assert_eq!(persons_of(&ships), [Some(510)]);
-        assert!(ships[0].jumping_in);
+        assert_eq!(ships[0].entry, Entry::JumpingIn);
         assert_eq!(ships[0].aggression, 4);
         assert!(near(
             ships[0].state.position,
