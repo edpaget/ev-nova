@@ -444,8 +444,9 @@ pub const FINED: &str = "You have been fined";
 /// `_ScanPlayer` builds it (@0x7e7ce-0x7ea9b): "`scanner`:  `ship`, ...
 /// has been detected.", then with a fine " You have been fined `fine`
 /// credits." ("credit" for 1), the fine's thousands grouped. The
-/// scanner is named by its ship class; a mission's special ship by its
-/// own name is rdm:phase/mission-ships/phase-2-ship-goals'.
+/// scanner is named by the drawn ship name of the mission whose cargo
+/// the scan found, when it has one, whatever ship scanned, and otherwise
+/// by its ship class (@0x7e7ce-0x7e7ef; see [`SimMessage::Smuggling`]).
 #[must_use]
 pub fn smuggling_message(scanner: &str, ship: &str, fine: i64) -> String {
     let detected = format!("{scanner}:  {ship}, {SMUGGLING_DETECTED}.");
@@ -459,7 +460,7 @@ pub fn smuggling_message(scanner: &str, ship: &str, fine: i64) -> String {
 /// What the message line says of `message`, a session's message other
 /// than an arrival's, the names read from `session`: none for an
 /// arrival's, which [`arrival_lead`] leads the arrival message with.
-fn sim_message_text(message: SimMessage, session: &Session) -> Option<String> {
+fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
     let text = match message {
         SimMessage::Arrived(_) | SimMessage::ExitedHypergate(_) | SimMessage::PassedWormhole(_) => {
             return None;
@@ -469,11 +470,18 @@ fn sim_message_text(message: SimMessage, session: &Session) -> Option<String> {
         SimMessage::NonMissionCargoJettisoned => NON_MISSION_CARGO_JETTISONED,
         SimMessage::MissionScanned => MISSION_SCANNED,
         SimMessage::DeadlineMissed => TIME_LIMIT_EXCEEDED,
-        SimMessage::Smuggling { scanner, fine } => {
+        SimMessage::Smuggling {
+            scanner,
+            ship_name,
+            fine,
+        } => {
             return Some(smuggling_message(
-                session.ship_name(scanner).unwrap_or_default(),
+                ship_name
+                    .as_deref()
+                    .or_else(|| session.ship_name(*scanner))
+                    .unwrap_or_default(),
                 session.pilot().ship_name().unwrap_or_default(),
-                fine,
+                *fine,
             ));
         }
     };
@@ -657,7 +665,7 @@ pub fn arrival_message_with(lead: &str, system: &str, date: &str, stellars: bool
 
 /// The lead of the message line on the arrival `message` raises: none for
 /// a message of another kind.
-fn arrival_lead(message: SimMessage) -> Option<&'static str> {
+fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
     match message {
         SimMessage::Arrived(_) => Some(JUMPING_INTO),
         SimMessage::ExitedHypergate(_) => Some(EXITING_HYPERGATE),
@@ -1701,7 +1709,7 @@ impl<
         messages.extend(session.take_messages());
         let worded: Vec<String> = messages
             .iter()
-            .filter_map(|&message| sim_message_text(message, session))
+            .filter_map(|message| sim_message_text(message, session))
             .collect();
         self.message = None;
         let Some(scene) = &self.scene else {
@@ -1709,7 +1717,6 @@ impl<
         };
         let mut said: Vec<String> = messages
             .iter()
-            .copied()
             .filter_map(arrival_lead)
             .next_back()
             .map(|lead| {
@@ -2241,7 +2248,7 @@ impl<C> FlightView<C> {
         };
         let mut said = Vec::new();
         for message in session.take_messages() {
-            match sim_message_text(message, session) {
+            match sim_message_text(&message, session) {
                 Some(text) => said.push(text),
                 None => self.pending_leads.push(message),
             }
@@ -10179,7 +10186,7 @@ mod tests {
     fn each_jettison_message_is_worded_and_the_arrivals_are_not_among_them() {
         let view = flight();
         let session = view.session().expect("flying");
-        let text = |message| sim_message_text(message, session);
+        let text = |message| sim_message_text(&message, session);
         assert_eq!(
             text(SimMessage::MissionFailed).as_deref(),
             Some(MISSION_FAILED)
@@ -10202,10 +10209,11 @@ mod tests {
             SimMessage::MissionScanned,
             SimMessage::Smuggling {
                 scanner: ShipId(129),
+                ship_name: None,
                 fine: 0,
             },
         ] {
-            assert_eq!(arrival_lead(message), None, "{message:?}");
+            assert_eq!(arrival_lead(&message), None, "{message:?}");
         }
     }
 
@@ -10267,10 +10275,10 @@ mod tests {
         let view = flight();
         let session = view.session().expect("flying");
         assert_eq!(
-            sim_message_text(SimMessage::MissionShipLost, session).as_deref(),
+            sim_message_text(&SimMessage::MissionShipLost, session).as_deref(),
             Some(MISSION_FAILED)
         );
-        assert_eq!(arrival_lead(SimMessage::MissionShipLost), None);
+        assert_eq!(arrival_lead(&SimMessage::MissionShipLost), None);
     }
 
     #[test]
@@ -10278,10 +10286,10 @@ mod tests {
         let view = flight();
         let session = view.session().expect("flying");
         assert_eq!(
-            sim_message_text(SimMessage::DeadlineMissed, session).as_deref(),
+            sim_message_text(&SimMessage::DeadlineMissed, session).as_deref(),
             Some(TIME_LIMIT_EXCEEDED)
         );
-        assert_eq!(arrival_lead(SimMessage::DeadlineMissed), None);
+        assert_eq!(arrival_lead(&SimMessage::DeadlineMissed), None);
         assert_eq!(TIME_LIMIT_EXCEEDED, "Time limit exceeded - mission failed.");
     }
 
@@ -10422,6 +10430,37 @@ mod tests {
             smuggling_message("Viper", "Kestrel", 12_300),
             "Viper:  Kestrel, your attempt to smuggle illegal cargo through this system has \
              been detected. You have been fined 12,300 credits."
+        );
+    }
+
+    /// The found mission's drawn ship name names the scanner when it has
+    /// one (`_ScanPlayer` @0x7e7ce); otherwise its ship class does.
+    #[test]
+    fn the_smuggling_notice_names_the_scanner_by_the_found_missions_ship_name() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        let ship = session.pilot().ship_name().unwrap_or_default();
+        let text = |ship_name: Option<&str>| {
+            sim_message_text(
+                &SimMessage::Smuggling {
+                    scanner: ShipId(128),
+                    ship_name: ship_name.map(str::to_owned),
+                    fine: 500,
+                },
+                session,
+            )
+        };
+        assert_eq!(
+            text(Some("Rover")),
+            Some(smuggling_message("Rover", ship, 500))
+        );
+        assert_eq!(
+            text(None),
+            Some(smuggling_message(
+                session.ship_name(ShipId(128)).unwrap_or_default(),
+                ship,
+                500
+            ))
         );
     }
 

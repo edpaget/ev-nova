@@ -165,7 +165,9 @@ impl Session {
     /// gone, or of no government. A mission found with `Flags` 0x0020
     /// fails at once ([`Session::quick_failure`]), the player told unless
     /// it has `Flags` 0x0400; any other found costs the fine, the cash
-    /// floored at none, and the player is told of the smuggling. The
+    /// floored at none, and the player is told of the smuggling, the
+    /// scanner named by the found mission's drawn ship name when it has
+    /// one (@0x7e7ce), whatever ship scanned. The
     /// player is always visible to it (no cloak). Its jump-timing check
     /// (@0x7e562-0x7e633) and the scan of illegal `jünk` and outfits
     /// (@0x7eabd-0x7f3d7) are rdm:phase/missions/phase-21-illegal-cargo-scanning.
@@ -199,11 +201,18 @@ impl Session {
                 }
                 self.quick_failure(slot, &record, chance);
             }
-            ScanOutcome::Fined { credits, .. } => {
+            ScanOutcome::Fined { slot, credits } => {
                 self.pilot.cash = self.pilot.cash.saturating_sub(credits).max(0);
                 self.save_due = true;
+                let ship_name = self
+                    .pilot
+                    .missions
+                    .get(slot)
+                    .map(|active| active.ships.name.clone())
+                    .filter(|name| !name.is_empty());
                 self.messages.push(SimMessage::Smuggling {
                     scanner,
+                    ship_name,
                     fine: credits,
                 });
             }
@@ -1024,6 +1033,7 @@ mod tests {
             session.take_messages(),
             [SimMessage::Smuggling {
                 scanner: ShipId(129),
+                ship_name: None,
                 fine: 500
             }]
         );
@@ -1031,6 +1041,40 @@ mod tests {
         session.pilot.cash = 100;
         looked_over(&mut session, &catalog, 0);
         assert_eq!(session.pilot().cash(), 0, "floored at none");
+    }
+
+    /// `_ScanPlayer` @0x7e7ce reads the drawn ship name (+0x70) of the
+    /// slot whose cargo it found, `%edi`, the loop's slot pointer, never
+    /// the scanner's mark: that name, when not empty, names any scanner.
+    #[test]
+    fn a_scan_finding_a_mission_with_a_ship_name_names_the_scanner_by_it() {
+        let catalog = policed(vec![masked(140, 0x0004, 0), masked(141, 0x0001, 0)], 500);
+        for scanner_slot in [None, Some(1)] {
+            let mut session = inspected(&catalog, &[140, 141], Some(GovtId(128)));
+            for (slot, name) in [(0, "Rover"), (1, "Ace")] {
+                if let Some(active) = session.pilot.missions.get_mut(slot) {
+                    active.ships.name = name.to_owned();
+                }
+            }
+            if let Some(police) = session.traffic.npcs_mut().last_mut() {
+                police.mission = scanner_slot.map(|slot| crate::traffic::npc::MissionMark {
+                    slot,
+                    behav: crate::mission::ships::ShipBehav::Own,
+                    cloaked: false,
+                    formation: None,
+                });
+            }
+            looked_over(&mut session, &catalog, 0);
+            assert_eq!(
+                session.take_messages(),
+                [SimMessage::Smuggling {
+                    scanner: ShipId(129),
+                    ship_name: Some("Rover".to_owned()),
+                    fine: 500
+                }],
+                "{scanner_slot:?}"
+            );
+        }
     }
 
     #[test]
