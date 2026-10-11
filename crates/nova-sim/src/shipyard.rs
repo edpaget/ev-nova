@@ -1521,7 +1521,7 @@ fn engine_carry(sale: &Sale) -> Carry {
                 mask: OutfitFlags::PERSISTENT,
             },
             &BTreeMap::new(),
-            false,
+            None,
             sale.records,
         ),
         sold_back: BTreeMap::new(),

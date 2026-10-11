@@ -134,10 +134,10 @@ exclude_re = [
     # persistent bit (0x0020): two distinct bits, so `|` and `^` combine
     # them the same. (A constant, named by its line alone.)
     "nova-sim/src/ship_change\\.rs:\\d+:\\d+: replace \\| with \\^$",
-    # The ship-change clamp lowers a count to its `Max` when it is above
-    # it; with `<=` a count already at its `Max` is set to it again, which
+    # The ship-change clamp lowers a count to its limit when it is above
+    # it; with `<=` a count already at its limit is set to it again, which
     # changes nothing.
-    "replace < with <= in carried_outfits",
+    "replace < with <= in hold$",
     # The session's default string lists hold none: the body already
     # returns an empty list.
     "replace <impl CommCatalog for NoStrings>::string_list -> Vec<String> with vec!\\[\\]",

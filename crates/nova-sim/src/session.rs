@@ -3776,7 +3776,7 @@ impl Session {
                 mask: OutfitFlags::PERSISTENT,
             },
             &defaults,
-            false,
+            None,
             records,
         );
         let fits = self.arsenal.stock_fits(record.id, records);

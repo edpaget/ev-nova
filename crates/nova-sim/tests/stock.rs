@@ -947,6 +947,41 @@ fn the_strikers_stock_weapons_are_its_outfits_and_it_trades_in_as_the_original_l
     assert_eq!(shipyard.trade_in, 1_163_000);
 }
 
+/// `E143` makes a new stock pilot's ship the Fed Carrier (`shïp` 143),
+/// adding its stock weapons as outfits: its Viper Bay (`wëap` 149,
+/// `AmmoType` 144, load 4) and Anaconda Bay (150, `AmmoType` 145, load 2)
+/// as their bay outfits (157 and 159). By the engine each load goes to
+/// `wëap` 128 + its `AmmoType`, 272 and 273, which no `oütf` holds, so
+/// no Vipers (158) or Anacondas (160) come with them (`_EvalSetExp`
+/// @0x1551c-0x155de); by the other reading of `ship_change_bay_ammo` the
+/// bays carry their 4 Vipers and 2 Anacondas, as a purchase loads them.
+#[test]
+fn e_to_the_fed_carrier_loses_its_fighters_by_the_engine() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let changed = |rules: nova_sim::Rulebook| {
+        let pilot = Pilot::new(&data, "Stock").expect("the stock first chär starts");
+        let mut session = Session::fly(&data, pilot).expect("flies").with_rules(rules);
+        let expr = nova_sim::SetExpr::parse("E143").expect("parses");
+        session.run_set(&expr, &mut NeverFires);
+        assert_eq!(session.ship(), ShipId(143), "the Fed Carrier");
+        let owned = |id| session.pilot().owned(OutfitId(id));
+        [owned(157), owned(158), owned(159), owned(160)]
+    };
+    assert_eq!(
+        changed(nova_sim::Rulebook::default()),
+        [1, 0, 1, 0],
+        "the bays, and no fighters"
+    );
+    let loaded = nova_sim::Rulebook::default().with_override(
+        nova_sim::RuleKey::ShipChangeBayAmmo,
+        nova_sim::RuleSource::Bible,
+    );
+    assert_eq!(changed(loaded), [1, 4, 1, 2], "4 Vipers and 2 Anacondas");
+}
+
 /// A new stock pilot, docked at `stellar` in `system` with `fuel` units
 /// in its tank, through a save that says so.
 fn docked_with_fuel(data: &GameData, system: i16, stellar: i16, fuel: f32) -> Session {

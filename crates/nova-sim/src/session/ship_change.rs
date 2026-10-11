@@ -71,20 +71,45 @@
 //!
 //! - `Cxxx` keeps every outfit and adds no default.
 //! - `Exxx` keeps every outfit and adds the new class's default items; by
-//!   the engine every outfit is then held to its `Max`
-//!   ([`ShipChangeRules::max`]).
+//!   the engine every outfit is then held to its limit
+//!   ([`ShipChangeRules::max`]; see
+//!   [`ship_change`](crate::ship_change) for the limits).
 //! - `Hxxx` keeps only the persistent outfits, as
 //!   [`ShipChangeRules::persistence`] says, adds the default items, and
 //!   holds them as `E` does.
 //!
 //! The ship's stock weapons and their `AmmoLoad` are owned as the
-//! outfits that hold them ([`Arsenal::stock_fits`](crate::combat::armament::Arsenal::stock_fits)),
-//! so `C` keeps the old ones as any outfit and gives no new ones, and `E`
-//! and `H` add the new class's with its default items, a weapon no
-//! outfit holds being lost, as the original's fold does (steps 2 and 5).
-//! Not yet as the original: the limit held to is `Max` alone, without
-//! `ModType` 27, `MaxAmmo` times the launchers, or the gun and turret
-//! slots.
+//! outfits that hold them, so `C` keeps the old ones as any outfit and
+//! gives no new ones, and `E` and `H` add the new class's with its default
+//! items ([`Arsenal::stock_added`](crate::combat::armament::Arsenal::stock_added)),
+//! a weapon or a load no outfit holds being lost, as the original's fold
+//! does (steps 2 and 5). They add rather than top up: the loop
+//! (@0x1551c-0x155de) does `weapons[i] += WCount[i]` and
+//! `rounds[a] += AmmoLoad[i]` for each weapon index i, `a` being the raw
+//! `AmmoType` of `wëap` i when that is at most 0xff (unsigned
+//! `cmpw $0xff` @0x15573) and i itself otherwise, never reading the
+//! guidance. So owning one of a stock weapon and adding a class that
+//! stocks two leaves three, where a purchase or a capture tops up to two;
+//! two launchers sharing an ammunition add both their loads, where a
+//! purchase takes the larger; and a fighter bay, whose raw `AmmoType` is
+//! its fighter's `shïp` ID, loads `wëap` 128 + that ID when the ID is 128
+//! to 255, which no `oütf` holds, so its fighters are lost (the Fed
+//! Carrier's Viper and Anaconda bays, among others). A bay of fighter 256
+//! or above loads itself, as the shipyard does. By the other reading of
+//! [`RuleKey::ShipChangeBayAmmo`] a bay loads its own fighters always
+//! ([`ShipChangeRules::bay_ammo`]).
+//!
+//! The clamp's limits are the new class's (`MaxGun`, `MaxTur`), the
+//! weapons' `MaxAmmo` and the session's
+//! [`RuleKey::RaisedMax`](crate::RuleKey::RaisedMax) reading. Read from
+//! `_HasMaxOfItem` (@0x4512-0x4894) and `_ShipStatsToSystemInfo`
+//! (@0xcaee-0xcce7): the fold called @0x15622 reads the weapon array
+//! (`player` +0xc8 + i x 0xc8) and the rounds (+0xd0) into locals and
+//! writes only the outfit counts, so at the clamp the weapon array still
+//! holds the `+= WCount` of every stock weapon, held by an outfit or not,
+//! and only `_SystemInfoToShipStats` @0x1566a builds it again. The
+//! ammunition cap counts a stock launcher no outfit holds, and a
+//! launcher the clamp holds keeps its count for the cap.
 //!
 //! Each change of class decides its own carry and applies it through
 //! [`Session::become_class`], the one writer of the class, its fields,
@@ -118,14 +143,14 @@ use std::rc::Rc;
 
 use super::hire::Shared;
 use super::{ReservePolicy, Session, SessionEvent};
-use crate::catalog::{CommCatalog, OutfitId, ShipId, ShipRecord};
+use crate::catalog::{CommCatalog, OutfitId, ShipId, ShipRecord, WeaponId};
 use crate::chance::Chance;
 use crate::combat::armament;
 use crate::combat::hull::{DisableRule, NovaDisable};
-use crate::outfitter::OutfitFlags;
+use crate::outfitter::{Hardpoints, OutfitFlags};
 use crate::pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
-use crate::ship_change::{OutfitCarry, SET_OP_PERSISTENT, carried_outfits};
+use crate::ship_change::{Limits, OutfitCarry, SET_OP_PERSISTENT, carried_outfits};
 use crate::shipyard;
 
 /// What the armour gains a step while the ship is disabled after a
@@ -139,7 +164,7 @@ const ARMOR_BUMP: f32 = 1.0;
 pub struct ShipChangeRules {
     /// Which outfits `H` keeps ([`RuleKey::ShipChangePersistence`]).
     pub persistence: RuleSource,
-    /// Whether `E` and `H` hold the outfits to their `Max`
+    /// Whether `E` and `H` hold the outfits to their limits
     /// ([`RuleKey::ShipChangeMax`]).
     pub max: RuleSource,
     /// Whether `C`, `E` and `H` keep the cargo past the new hold
@@ -148,13 +173,16 @@ pub struct ShipChangeRules {
     /// Whether `C`, `E` and `H` keep a shield or armour above the new
     /// most ([`RuleKey::ShipChangeReserves`]).
     pub reserves: RuleSource,
+    /// Where `E` and `H` load a fighter bay's `AmmoLoad`
+    /// ([`RuleKey::ShipChangeBayAmmo`]).
+    pub bay_ammo: RuleSource,
 }
 
 impl ShipChangeRules {
     /// The rules `rulebook` chooses: its
     /// [`RuleKey::ShipChangePersistence`], [`RuleKey::ShipChangeMax`],
-    /// [`RuleKey::ShipChangeCargo`] and [`RuleKey::ShipChangeReserves`]
-    /// entries.
+    /// [`RuleKey::ShipChangeCargo`], [`RuleKey::ShipChangeReserves`] and
+    /// [`RuleKey::ShipChangeBayAmmo`] entries.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         Self {
@@ -162,6 +190,7 @@ impl ShipChangeRules {
             max: rulebook.source_for(RuleKey::ShipChangeMax),
             cargo: rulebook.source_for(RuleKey::ShipChangeCargo),
             reserves: rulebook.source_for(RuleKey::ShipChangeReserves),
+            bay_ammo: rulebook.source_for(RuleKey::ShipChangeBayAmmo),
         }
     }
 
@@ -173,7 +202,7 @@ impl ShipChangeRules {
         }
     }
 
-    /// Whether `E` and `H` hold the outfits to their `Max`.
+    /// Whether `E` and `H` hold the outfits to their limits.
     pub(super) fn clamps(self) -> bool {
         self.max == RuleSource::Engine
     }
@@ -304,24 +333,37 @@ impl Session {
     }
 
     /// Changes the player's ship to class `ship`, its outfits carried as
-    /// `carry` says and held to their `Max` when `clamp` (see the module
+    /// `carry` says and held to their limits when `clamp` (see the module
     /// docs); nothing changes when the session has no record of the
     /// class.
     pub(super) fn change_ship(&mut self, ship: ShipId, carry: OutfitCarry, clamp: bool) {
         let Some(record) = self.ship_record(ship).cloned() else {
             return;
         };
+        let rules = self.ship_change_rules();
         let defaults = pilot::tally(record.defaults.iter().copied());
-        let stock = armament::fitted(&self.arsenal.stock_fits(record.id, &self.outfits));
+        let stock = (self.arsenal).stock_added(record.id, &self.outfits, rules.bay_ammo);
         // `E` and `H` add the stock weapons and their `AmmoLoad` with the
         // default items (step 5), as the outfits that hold them.
-        let added = pilot::merged(&defaults, &stock);
+        let added = pilot::merged(&defaults, &armament::fitted(&stock));
+        let unheld = self.unheld_stock(record.id);
+        let max_ammo = |weapon| self.arsenal.weapon(weapon).map_or(0, |spec| spec.max_ammo);
+        let limits = Limits {
+            hardpoints: Hardpoints {
+                guns: record.max_gun,
+                turrets: record.max_tur,
+            },
+            max_ammo: &max_ammo,
+            unheld: &unheld,
+            raised_max: self.rules.source_for(RuleKey::RaisedMax),
+        };
+        let held = clamp.then_some(&limits);
         let change = ClassChange {
-            outfits: carried_outfits(&self.pilot.outfits, carry, &added, clamp, &self.outfits),
-            reserves: ReservePolicy::reading(self.ship_change_rules().reserves),
+            outfits: carried_outfits(&self.pilot.outfits, carry, &added, held, &self.outfits),
+            reserves: ReservePolicy::reading(rules.reserves),
         };
         self.become_class(&record, change, |_| {});
-        if self.ship_change_rules().cargo == RuleSource::Bible {
+        if rules.cargo == RuleSource::Bible {
             // To the new ship's own hold, goods in order: the purchase
             // rule's other reading, with no escorts' holds counted.
             shipyard::keep_cargo(
@@ -332,6 +374,20 @@ impl Session {
             );
         }
         self.bump_armor();
+    }
+
+    /// Ship class `ship`'s stock weapons that no outfit holds, each with
+    /// its `WeapCount`: the original's weapon array counts them until the
+    /// stats are worked out again (@0x1566a), so the clamp does.
+    fn unheld_stock(&self, ship: ShipId) -> BTreeMap<WeaponId, u32> {
+        let holders = armament::holders(&self.outfits, armament::MOD_WEAPON);
+        let mut slots = BTreeMap::new();
+        for stock in self.arsenal.stock_weapons(ship) {
+            slots.insert(stock.weapon, u32::try_from(stock.count).unwrap_or(0));
+        }
+        // A count of none or less counts no launcher either way.
+        slots.retain(|&weapon, _| armament::holder(&holders, weapon).is_none());
+        slots
     }
 
     /// Raises the player's armour [`ARMOR_BUMP`] at a time, never past
@@ -380,7 +436,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::catalog::{HullRecord, OutfitId, OutfitRecord, ShipRecord, StockWeapon, WeaponId};
+    use crate::catalog::{
+        HullRecord, OutfitId, OutfitRecord, ShipRecord, StockWeapon, WeaponId, WeaponRecord,
+    };
     use crate::combat::hull::{HullSpec, TOUGH};
     use crate::control::{Bit, Script, SetExpr, SetOp};
     use crate::flight::ShipState;
@@ -524,7 +582,7 @@ mod tests {
     // The rules.
 
     #[test]
-    fn the_ship_change_rules_follow_their_four_rulebook_keys() {
+    fn the_ship_change_rules_follow_their_five_rulebook_keys() {
         assert_eq!(
             ShipChangeRules::from_rulebook(&Rulebook::default()),
             ShipChangeRules::default()
@@ -536,6 +594,7 @@ mod tests {
                 max: RuleSource::Engine,
                 cargo: RuleSource::Engine,
                 reserves: RuleSource::Engine,
+                bay_ammo: RuleSource::Engine,
             }
         );
         let bible = |key| {
@@ -568,6 +627,13 @@ mod tests {
             bible(RuleKey::ShipChangeReserves),
             ShipChangeRules {
                 reserves: RuleSource::Bible,
+                ..ShipChangeRules::default()
+            }
+        );
+        assert_eq!(
+            bible(RuleKey::ShipChangeBayAmmo),
+            ShipChangeRules {
+                bay_ammo: RuleSource::Bible,
                 ..ShipChangeRules::default()
             }
         );
@@ -760,6 +826,248 @@ mod tests {
             assert_eq!(session.stock, owned(&[(held, 1)]), "{op}: its standard");
             assert_eq!(session.armament.mounts().len(), usize::from(added), "{op}");
         }
+    }
+
+    const STOCK_GUN: OutfitId = OutfitId(405);
+    const LAUNCHER: OutfitId = OutfitId(406);
+    const ROCKETS: OutfitId = OutfitId(407);
+    const BAY: OutfitId = OutfitId(408);
+    const FIGHTERS: OutfitId = OutfitId(409);
+    const KEPT_LAUNCHER: OutfitId = OutfitId(410);
+
+    /// [`changing_armed`], with ship 132 stocking two of weapon 200, one
+    /// each of launchers 201 (7 rounds) and 202 (12 rounds), both firing
+    /// weapon 138's rockets, and one of bay 203 (4 fighters of ship 144),
+    /// and ship 133 stocking one of weapon 200, of `MaxGun` 1. Outfits:
+    /// 406 holds 201, 407 the rockets (`Max` 50), 408 the bay, 409 its
+    /// fighters, 410 holds 202 and is persistent (0x0004).
+    fn stocked() -> FakePilotCatalog {
+        let mut catalog = changing_armed();
+        let slot = |weapon, count, ammo| StockWeapon {
+            weapon: WeaponId(weapon),
+            count,
+            ammo,
+        };
+        let launcher = |id| WeaponRecord {
+            ammo_type: 10,
+            ..weapon(id)
+        };
+        catalog.weapons.extend([
+            launcher(201),
+            launcher(202),
+            WeaponRecord {
+                guidance: 99,
+                ammo_type: 144,
+                ..weapon(203)
+            },
+        ]);
+        catalog.hulls.extend([
+            HullRecord {
+                weapons: vec![
+                    slot(200, 2, 0),
+                    slot(201, 1, 7),
+                    slot(202, 1, 12),
+                    slot(203, 1, 4),
+                ],
+                ..hull(132)
+            },
+            HullRecord {
+                weapons: vec![slot(200, 1, 0)],
+                ..hull(133)
+            },
+        ]);
+        catalog
+            .ships
+            .extend([(ShipId(132), Ok(FAST)), (ShipId(133), Ok(FAST))]);
+        catalog.ship_records.extend([
+            ship(132, FAST),
+            ShipRecord {
+                max_gun: 1,
+                ..ship(133, FAST)
+            },
+        ]);
+        catalog.outfits.extend([
+            outfit(406, &[(armament::MOD_WEAPON, 201)]),
+            OutfitRecord {
+                max: 50,
+                ..outfit(407, &[(armament::MOD_AMMO, 138)])
+            },
+            outfit(408, &[(armament::MOD_WEAPON, 203)]),
+            outfit(409, &[(armament::MOD_AMMO, 203)]),
+            OutfitRecord {
+                flags: OutfitFlags::PERSISTENT,
+                ..outfit(410, &[(armament::MOD_WEAPON, 202)])
+            },
+        ]);
+        catalog
+    }
+
+    /// The [`session`] of `catalog`, its old class's stock weapons owned
+    /// too: one of 405 (weapon 200), 406 (201) and 410 (202), and five
+    /// rockets.
+    fn armed_session(catalog: &FakePilotCatalog) -> Session {
+        let mut session = session(catalog);
+        session.pilot.outfits.extend([
+            (STOCK_GUN, 1),
+            (LAUNCHER, 1),
+            (KEPT_LAUNCHER, 1),
+            (ROCKETS, 5),
+        ]);
+        session.refit(false, ReservePolicy::Hold);
+        session
+    }
+
+    #[test]
+    fn c_keeps_the_old_stock_weapon_outfits_and_their_rounds_and_adds_none() {
+        let catalog = stocked();
+        let mut session = armed_session(&catalog);
+        let before = session.pilot.outfits.clone();
+        run(&mut session, "C132");
+        assert_eq!(session.ship(), ShipId(132));
+        assert_eq!(session.pilot.outfits, before);
+        assert_eq!(
+            session.armament,
+            session.arsenal.player(&before, &session.outfits)
+        );
+        let mounted: Vec<(WeaponId, u32)> = session
+            .armament
+            .mounts()
+            .iter()
+            .map(|mount| (mount.spec.id, mount.count))
+            .collect();
+        assert_eq!(
+            mounted,
+            [(WeaponId(200), 1), (WeaponId(201), 1), (WeaponId(202), 1)],
+            "the old ones still mounted"
+        );
+    }
+
+    #[test]
+    fn e_adds_the_new_stock_weapons_on_top_of_those_owned_and_sums_shared_loads() {
+        let catalog = stocked();
+        let mut session = armed_session(&catalog);
+        run(&mut session, "E132");
+        let own = |id| session.pilot.owned(id);
+        assert_eq!(own(STOCK_GUN), 3, "1 owned + 2, not topped up to 2");
+        assert_eq!(own(LAUNCHER), 2);
+        assert_eq!(own(KEPT_LAUNCHER), 2);
+        assert_eq!(own(ROCKETS), 24, "5 + 7 + 12, not the larger load");
+        assert_eq!(own(BAY), 1);
+        assert_eq!(own(FIGHTERS), 0, "by the engine the fighters are lost");
+        assert_eq!(
+            session.armament,
+            session
+                .arsenal
+                .player(&session.pilot.outfits, &session.outfits)
+        );
+    }
+
+    #[test]
+    fn h_drops_the_old_stock_weapons_unless_persistent_and_adds_the_new_on_top() {
+        let catalog = stocked();
+        let mut session = armed_session(&catalog);
+        run(&mut session, "H132");
+        assert_eq!(
+            session.pilot.outfits,
+            owned(&[
+                (LICENCE, 1),
+                (ABILITY, 1),
+                (BOTH, 1),
+                (STOCK_GUN, 2),
+                (LAUNCHER, 1),
+                (ROCKETS, 19),
+                (BAY, 1),
+                (KEPT_LAUNCHER, 2),
+            ]),
+            "405, 406 and the rockets dropped, 410 kept, the new stock added"
+        );
+    }
+
+    #[test]
+    fn e_and_h_load_a_bay_as_ship_change_bay_ammo_says() {
+        let catalog = stocked();
+        for op in ["E132", "H132"] {
+            let mut engine = armed_session(&catalog);
+            run(&mut engine, op);
+            assert_eq!(engine.pilot.owned(FIGHTERS), 0, "{op}: to weapon 272");
+            let mut other = armed_session(&catalog).with_rules(
+                Rulebook::default().with_override(RuleKey::ShipChangeBayAmmo, RuleSource::Bible),
+            );
+            run(&mut other, op);
+            assert_eq!(other.pilot.owned(FIGHTERS), 4, "{op}: the bay's own");
+            assert_eq!(other.pilot.owned(BAY), 1, "{op}");
+        }
+    }
+
+    #[test]
+    fn e_caps_ammunition_by_the_new_stock_launchers_held_or_not() {
+        // Ship 134 stocks two of weapon 204, which no outfit holds, and one
+        // of 205, which 412 holds, each of `MaxAmmo` 3; 411 and 413 are
+        // their ammunition.
+        let mut catalog = stocked();
+        let capped = |id| WeaponRecord {
+            max_ammo: 3,
+            ..weapon(id)
+        };
+        catalog.weapons.extend([capped(204), capped(205)]);
+        catalog.hulls.push(HullRecord {
+            weapons: vec![
+                StockWeapon {
+                    weapon: WeaponId(204),
+                    count: 2,
+                    ammo: 0,
+                },
+                StockWeapon {
+                    weapon: WeaponId(205),
+                    count: 1,
+                    ammo: 0,
+                },
+            ],
+            ..hull(134)
+        });
+        catalog.ships.push((ShipId(134), Ok(FAST)));
+        catalog.ship_records.push(ship(134, FAST));
+        let ammo = |id, weapon| OutfitRecord {
+            max: 50,
+            ..outfit(id, &[(armament::MOD_AMMO, weapon)])
+        };
+        catalog.outfits.extend([
+            ammo(411, 204),
+            outfit(412, &[(armament::MOD_WEAPON, 205)]),
+            ammo(413, 205),
+        ]);
+        let mut session = session(&catalog);
+        session
+            .pilot
+            .outfits
+            .extend([(OutfitId(411), 10), (OutfitId(413), 10)]);
+        run(&mut session, "E134");
+        let own = |id| session.pilot.owned(OutfitId(id));
+        assert_eq!(own(411), 6, "3 x the two launchers no outfit holds");
+        assert_eq!(own(412), 1, "the held launcher added");
+        assert_eq!(own(413), 3, "3 x the one held launcher, counted once");
+    }
+
+    #[test]
+    fn e_holds_the_guns_to_the_new_classs_gun_slots() {
+        let mut catalog = stocked();
+        for record in &mut catalog.outfits {
+            if record.id == STOCK_GUN {
+                record.flags = OutfitFlags::GUN;
+            }
+        }
+        let mut session = armed_session(&catalog);
+        run(&mut session, "E133");
+        assert_eq!(
+            session.pilot.owned(STOCK_GUN),
+            1,
+            "1 owned + 1 added, held to ship 133's MaxGun of 1, not ship 128's 2"
+        );
+        let mut session = armed_session(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::ShipChangeMax, RuleSource::Bible),
+        );
+        run(&mut session, "E133");
+        assert_eq!(session.pilot.owned(STOCK_GUN), 2, "nothing held");
     }
 
     #[test]

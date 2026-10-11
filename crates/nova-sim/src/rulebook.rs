@@ -53,9 +53,10 @@
 //! | [`CaptureHookOrder`](RuleKey::CaptureHookOrder) | `capture_hook_order` | on Use As My Ship, `OnRetire` and `OnCapture` run before the outfit swap, which strips a non-persistent outfit either grants ([`HookRules`](crate::HookRules)) | they run after the swap, so it stays\* |
 //! | [`StartShipPurchase`](RuleKey::StartShipPurchase) | `start_ship_purchase` | a new pilot's starting ship runs no `OnPurchase` ([`HookRules`](crate::HookRules)) | it runs once, right before the `chär`'s `OnStart`\* |
 //! | [`ShipChangePersistence`](RuleKey::ShipChangePersistence) | `ship_change_persistence` | `H` keeps an outfit flagged 0x0004 or 0x0020 ([`ShipChangeRules`](crate::ShipChangeRules)) | only one flagged 0x0020 |
-//! | [`ShipChangeMax`](RuleKey::ShipChangeMax) | `ship_change_max` | `E` and `H` hold every outfit owned, old and new, to its `Max` after adding the new class's default items ([`ShipChangeRules`](crate::ShipChangeRules)) | nothing is held: every outfit is kept |
+//! | [`ShipChangeMax`](RuleKey::ShipChangeMax) | `ship_change_max` | `E` and `H` hold every outfit owned, old and new, to its limit (ammunition cap, raised `Max`, gun and turret slots) after adding the new class's default items ([`ShipChangeRules`](crate::ShipChangeRules)) | nothing is held: every outfit is kept |
 //! | [`ShipChangeCargo`](RuleKey::ShipChangeCargo) | `ship_change_cargo` | `C`, `E` and `H` keep all the cargo, even past the new hold ([`ShipChangeRules`](crate::ShipChangeRules)) | the cargo is trimmed to the new hold, as a purchase trims it\* |
 //! | [`ShipChangeReserves`](RuleKey::ShipChangeReserves) | `ship_change_reserves` | `C`, `E` and `H` keep a shield or armour above the new class's most until damage takes it ([`ShipChangeRules`](crate::ShipChangeRules)) | each is held to its new most\* |
+//! | [`ShipChangeBayAmmo`](RuleKey::ShipChangeBayAmmo) | `ship_change_bay_ammo` | `E` and `H` load a fighter bay's `AmmoLoad` onto the weapon its raw `AmmoType` names, so a bay of fighter `shïp` 128 to 255 loses its fighters ([`ShipChangeRules`](crate::ShipChangeRules)) | the bay's own fighters are loaded, as a purchase loads them\* |
 //! | [`MoveStarless`](RuleKey::MoveStarless) | `move_starless` | `M` in flight into a system with no stellar keeps the ship's position and velocity ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the ship is put at rest at the system's centre |
 //! | [`MoveArrival`](RuleKey::MoveArrival) | `move_arrival` | `M` and `N` only change where the ship is: the course is kept, the system is explored by the next take-off, and in flight only the escorts and fighters out follow, the new system filling with arrivals over time ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the move is an arrival: explored, the course cleared, and in flight populated at once\* |
 //! | [`MoveKeepFlag`](RuleKey::MoveKeepFlag) | `move_keep_flag` | an `N` in flight leaves the next take-off keeping the ship where it landed ([`ScriptEffectRules`](crate::ScriptEffectRules)) | only a landed `N` keeps the landing position\* |
@@ -105,8 +106,9 @@
 //! `hire_fee`, `escort_wage`, `grant_max`, `person_join`, `invalid_map`,
 //! `remove_refund`, `refit_reserves`, `purchase_paint_order`,
 //! `capture_hook_order`, `start_ship_purchase`, `ship_change_cargo`,
-//! `ship_change_reserves`, `move_arrival`, `move_keep_flag`,
-//! `script_sound`, `ship_info_rounding`, `stale_secondary`,
+//! `ship_change_reserves`, `ship_change_bay_ammo`, `move_arrival`,
+//! `move_keep_flag`, `script_sound`, `ship_info_rounding`,
+//! `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance` or `comm_quote`
@@ -668,10 +670,12 @@ rule_keys! {
     /// [`ShipChangeRules`](crate::ShipChangeRules)).
     ShipChangePersistence => "ship_change_persistence",
     /// Whether the `E` and `H` set operators hold the outfits owned to
-    /// their `Max`: by the engine, every outfit, old and new, is clamped
-    /// to its limit once the new class's default items are added
-    /// (`_HasMaxOfItem` @0x4512, called @0x15648); by the Bible's "the
-    /// player will keep all of his previous outfit items", nothing is
+    /// their limits: by the engine, every outfit, old and new, is clamped
+    /// to its limit once the new class's default items and stock weapons
+    /// are added (`_HasMaxOfItem` @0x4512, called @0x15648): its
+    /// ammunition cap, its raised `Max`, or the new class's gun or turret
+    /// slots (see [`ship_change`](crate::ship_change)); by the Bible's
+    /// "the player will keep all of his previous outfit items", nothing is
     /// clamped (see [`ShipChangeRules`](crate::ShipChangeRules)).
     ShipChangeMax => "ship_change_max",
     /// What becomes of the cargo on a `C`, `E` or `H` change of ship: by
@@ -692,6 +696,18 @@ rule_keys! {
     /// reading is the obvious alternative, not anything the Bible says
     /// (see [`ShipChangeRules`](crate::ShipChangeRules)).
     ShipChangeReserves => "ship_change_reserves",
+    /// Where the `E` and `H` set operators put a fighter bay's
+    /// `AmmoLoad` when they add the new class's stock weapons: by the
+    /// engine, on the weapon its raw `AmmoType` names when that is 0 to
+    /// 255, whatever its guidance, as every weapon's load goes
+    /// (`_EvalSetExp` @0x1551c-0x155de), so a bay whose fighter's `shïp`
+    /// ID is 128 to 255 loads `wëap` 128 + that ID, which no outfit
+    /// holds, and its fighters are lost; otherwise on the bay's own
+    /// fighters, as a purchase loads them (`_DoShipyardDialog`
+    /// @0x5ef3e-0x5ef56). The Bible is silent here, so the other reading
+    /// is the obvious alternative, not anything the Bible says (see
+    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    ShipChangeBayAmmo => "ship_change_bay_ammo",
     /// Where the `M` set operator puts a ship in flight when the system
     /// moved to has no stellar: by the engine, nowhere new, its position
     /// and velocity kept, as `_EvalSetExp` places the ship only on a
@@ -1616,6 +1632,7 @@ mod tests {
         assert_eq!(RuleKey::ShipChangeMax.key(), "ship_change_max");
         assert_eq!(RuleKey::ShipChangeCargo.key(), "ship_change_cargo");
         assert_eq!(RuleKey::ShipChangeReserves.key(), "ship_change_reserves");
+        assert_eq!(RuleKey::ShipChangeBayAmmo.key(), "ship_change_bay_ammo");
         assert_eq!(RuleKey::PurchasePaintOrder.key(), "purchase_paint_order");
         assert_eq!(RuleKey::CaptureHookOrder.key(), "capture_hook_order");
         assert_eq!(RuleKey::StartShipPurchase.key(), "start_ship_purchase");
@@ -1759,6 +1776,7 @@ mod tests {
                 RuleKey::ShipChangeMax,
                 RuleKey::ShipChangeCargo,
                 RuleKey::ShipChangeReserves,
+                RuleKey::ShipChangeBayAmmo,
                 RuleKey::MoveStarless,
                 RuleKey::MoveArrival,
                 RuleKey::MoveKeepFlag,

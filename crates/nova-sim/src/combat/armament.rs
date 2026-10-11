@@ -58,7 +58,12 @@
 //! (`_DoShipyardDialog` @0x5ef3e-0x5ef56), the largest load where two
 //! weapons share one. A new pilot owns them before its default items
 //! (`_DoNewPilot` @0x18f48, @0x18f4d); a ship bought or captured tops
-//! them up after its default items (`fit_stock`).
+//! them up after its default items (`fit_stock`). The `E` and `H` set
+//! operators add them instead ([`Arsenal::stock_added`], `_EvalSetExp`
+//! @0x1551c-0x155de): the loads sharing an ammunition summed, and each
+//! load on its raw `AmmoType`'s weapon, so by the engine a fighter bay of
+//! a fighter `shïp` 128 to 255 loads `wëap` 128 + that ID, which no
+//! outfit holds.
 //!
 //! A launcher's [`Magazine`] ([`Arsenal::magazines`]) links a weapon
 //! outfit to its ammunition, as the outfitter's Sell reads it
@@ -79,7 +84,7 @@ use super::aim::Aim;
 use super::hull::{Condition, HullSpec};
 use super::projectile::ShotId;
 use super::report::{Reports, SimDiagnostic};
-use super::weapon::{Ammo, Guidance, WeaponSpec};
+use super::weapon::{Ammo, FIRST_AMMO_WEAPON, Guidance, LAST_AMMO_TYPE, WeaponSpec};
 use crate::catalog::{
     CombatCatalog, HullRecord, OutfitId, OutfitRecord, ShipId, StockWeapon, WeaponId, WeaponRecord,
 };
@@ -87,6 +92,7 @@ use crate::chance::Chance;
 use crate::flight::normalized;
 use crate::pilot::tally;
 use crate::reserves::Gauge;
+use crate::rulebook::RuleSource;
 
 /// The `oütf` `ModType` that is a weapon: its `ModVal` is the `wëap`.
 pub const MOD_WEAPON: i16 = 1;
@@ -712,6 +718,48 @@ impl Arsenal {
     /// ascending weapon ID, then the ammunition.
     #[must_use]
     pub fn stock_fits(&self, ship: ShipId, outfits: &[OutfitRecord]) -> Vec<StockFit> {
+        self.stock_loaded(ship, outfits, own_rounds, u16::max)
+    }
+
+    /// Ship class `ship`'s stock weapons and their ammunition as the `E`
+    /// and `H` set operators add them (`_EvalSetExp` @0x1551c-0x155de; see
+    /// the module docs): the weapons as [`Arsenal::stock_fits`] gives
+    /// them, and each `AmmoLoad` on the weapon its raw `AmmoType` names
+    /// (`wëap` 128 + `AmmoType`) when that is 0 to 255, whatever its
+    /// guidance, and on the weapon itself otherwise, the loads that share
+    /// an ammunition summed, saturating. A fighter bay's raw `AmmoType` is
+    /// its fighter's `shïp` ID: as `bays` says
+    /// ([`RuleKey::ShipChangeBayAmmo`](crate::RuleKey::ShipChangeBayAmmo)),
+    /// by the engine its load goes as any other's, and by the other
+    /// reading on the bay's own fighters, as [`Arsenal::stock_fits`] puts
+    /// it.
+    #[must_use]
+    pub fn stock_added(
+        &self,
+        ship: ShipId,
+        outfits: &[OutfitRecord],
+        bays: RuleSource,
+    ) -> Vec<StockFit> {
+        let route = |spec: &WeaponSpec| match (bays, spec.carried) {
+            (RuleSource::Engine, Some(fighter)) if (0..=LAST_AMMO_TYPE).contains(&fighter.0) => {
+                WeaponId(FIRST_AMMO_WEAPON + fighter.0)
+            }
+            _ => own_rounds(spec),
+        };
+        self.stock_loaded(ship, outfits, route, u16::saturating_add)
+    }
+
+    /// Ship class `ship`'s stock weapons and their ammunition, each as
+    /// the outfit among `outfits` that holds it, each weapon's load going
+    /// to the rounds `route` gives and the loads of one ammunition
+    /// combined by `combine`; none for a class that cannot be read.
+    fn stock_loaded(
+        &self,
+        ship: ShipId,
+        outfits: &[OutfitRecord],
+        route: impl Fn(&WeaponSpec) -> WeaponId,
+        combine: fn(u16, u16) -> u16,
+    ) -> Vec<StockFit> {
         let Some(hull) = self.hulls.get(&ship) else {
             return Vec::new();
         };
@@ -737,12 +785,8 @@ impl Arsenal {
             let (Ok(load @ 1..), Some(spec)) = (u16::try_from(load), self.weapon(weapon)) else {
                 continue;
             };
-            let ammo = match spec.ammo {
-                Ammo::Rounds(ammo) => ammo,
-                _ => weapon,
-            };
-            let most = loads.entry(ammo).or_default();
-            *most = (*most).max(load);
+            let loaded = loads.entry(route(spec)).or_default();
+            *loaded = combine(*loaded, load);
         }
         let ammo_holders = holders(outfits, MOD_AMMO);
         for (ammo, load) in loads {
@@ -764,6 +808,16 @@ impl Arsenal {
     #[must_use]
     pub fn stock_outfits(&self, ship: ShipId, outfits: &[OutfitRecord]) -> BTreeMap<OutfitId, u16> {
         fitted(&self.stock_fits(ship, outfits))
+    }
+}
+
+/// The rounds `spec` fires, as a purchase loads them: its `AmmoType`'s
+/// weapon, or its own for a fighter bay or any other `AmmoType`
+/// (`_DoShipyardDialog` @0x5ef3e-0x5ef56).
+fn own_rounds(spec: &WeaponSpec) -> WeaponId {
+    match spec.ammo {
+        Ammo::Rounds(ammo) => ammo,
+        _ => spec.id,
     }
 }
 
@@ -2018,6 +2072,151 @@ mod tests {
             two.stock_outfits(ShipId(130), &records),
             tallied(&[(213, 23)])
         );
+    }
+
+    // What `E` and `H` add.
+
+    /// Ship 130's stock weapons and rounds as `E` and `H` add them, with
+    /// bays loaded by `bays`, tallied.
+    fn added(
+        arsenal: &Arsenal,
+        records: &[OutfitRecord],
+        bays: RuleSource,
+    ) -> BTreeMap<OutfitId, u16> {
+        fitted(&arsenal.stock_added(ShipId(130), records, bays))
+    }
+
+    #[test]
+    fn e_and_h_add_the_stock_weapons_as_a_purchase_fits_them() {
+        let arsenal = arsenal();
+        for bays in RuleSource::ALL {
+            assert_eq!(
+                arsenal.stock_added(ShipId(128), &outfits(), bays),
+                arsenal.stock_fits(ShipId(128), &outfits()),
+                "{bays:?}: no shared ammunition and no bay"
+            );
+        }
+        let twice = stocking(&[], &[(128, 1, 0), (128, 3, 0), (138, 1, 20), (138, 1, 5)]);
+        assert_eq!(
+            added(&twice, &outfits(), RuleSource::Engine),
+            tallied(&[(201, 5), (205, 3), (207, 1)]),
+            "a later slot replaces an earlier one's count and load"
+        );
+        assert_eq!(
+            arsenal.stock_added(ShipId(129), &outfits(), RuleSource::Engine),
+            []
+        );
+    }
+
+    #[test]
+    fn e_and_h_sum_the_loads_that_share_an_ammunition() {
+        let launcher = |id| WeaponRecord {
+            ammo_type: 10,
+            ..blaster(id, 15)
+        };
+        let shared = stocking(
+            &[launcher(160), launcher(161)],
+            &[(160, 1, 7), (161, 1, 12), (138, 0, 3)],
+        );
+        for bays in RuleSource::ALL {
+            assert_eq!(
+                added(&shared, &outfits(), bays),
+                tallied(&[(201, 22)]),
+                "{bays:?}: 7 + 12 + 3, where a purchase takes the larger"
+            );
+        }
+        let full = stocking(
+            &[launcher(160), launcher(161)],
+            &[(160, 1, i16::MAX), (161, 1, i16::MAX), (138, 1, i16::MAX)],
+        );
+        assert_eq!(
+            added(&full, &outfits(), RuleSource::Engine),
+            tallied(&[(201, u16::MAX), (207, 1)]),
+            "saturating"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_bay_of_a_fighter_up_to_255_loads_the_weapon_its_ammo_type_names() {
+        // Bay 171 carries ship 144: by the engine its 4 load weapon 272
+        // (128 + 144).
+        let bays = stocking(&[bay(171, 144, 50)], &[(171, 1, 4)]);
+        let records = [
+            outfit(210, &[(MOD_AMMO, 171)]),
+            outfit(214, &[(MOD_WEAPON, 171)]),
+        ];
+        assert_eq!(
+            added(&bays, &records, RuleSource::Engine),
+            tallied(&[(214, 1)]),
+            "no outfit holds weapon 272: the fighters are lost"
+        );
+        assert_eq!(
+            added(&bays, &records, RuleSource::Bible),
+            tallied(&[(210, 4), (214, 1)]),
+            "the bay's own fighters, as a purchase loads them"
+        );
+        let held = [
+            outfit(215, &[(MOD_AMMO, 272)]),
+            outfit(210, &[(MOD_AMMO, 171)]),
+        ];
+        assert_eq!(
+            added(&bays, &held, RuleSource::Engine),
+            tallied(&[(215, 4)]),
+            "an outfit holding weapon 272 takes them"
+        );
+        let last = stocking(&[bay(171, 255, 50)], &[(171, 1, 4)]);
+        let top = [outfit(216, &[(MOD_AMMO, 383)])];
+        assert_eq!(
+            added(&last, &top, RuleSource::Engine),
+            tallied(&[(216, 4)]),
+            "255 is the last AmmoType that names a weapon"
+        );
+    }
+
+    #[test]
+    fn a_bay_of_a_fighter_from_256_loads_itself_by_either_reading() {
+        let bays = stocking(
+            &[bay(176, 275, 50), bay(177, 256, 50)],
+            &[(176, 1, 2), (177, 1, 3)],
+        );
+        let records = [
+            outfit(217, &[(MOD_AMMO, 176)]),
+            outfit(218, &[(MOD_AMMO, 177)]),
+            outfit(219, &[(MOD_AMMO, 384)]),
+            outfit(220, &[(MOD_AMMO, 403)]),
+        ];
+        for reading in RuleSource::ALL {
+            assert_eq!(
+                added(&bays, &records, reading),
+                tallied(&[(217, 2), (218, 3)]),
+                "{reading:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn e_and_h_load_an_unlimited_or_fuel_weapon_itself() {
+        let unlimited = WeaponRecord {
+            ammo_type: -1,
+            ..blaster(170, 15)
+        };
+        let fuelled = WeaponRecord {
+            ammo_type: -1005,
+            ..blaster(172, 15)
+        };
+        let weapons = stocking(&[unlimited, fuelled], &[(170, 1, 3), (172, 1, 6)]);
+        let records = [
+            outfit(209, &[(MOD_AMMO, 170)]),
+            outfit(211, &[(MOD_AMMO, 172)]),
+            outfit(212, &[(MOD_AMMO, 127)]),
+        ];
+        for reading in RuleSource::ALL {
+            assert_eq!(
+                added(&weapons, &records, reading),
+                tallied(&[(209, 3), (211, 6)]),
+                "{reading:?}"
+            );
+        }
     }
 
     fn counts(armament: &Armament) -> Vec<(i16, u32)> {
