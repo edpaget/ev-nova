@@ -3744,3 +3744,53 @@ impl Chance for Fires {
         0
     }
 }
+
+/// Every stock weapon, ammunition and cleaned-government `ModVal` is
+/// already an ID the loader leaves alone, in the fold's `wëap` 128 to 383
+/// (or -1, every government, for a clean): rebasing a low `ModVal` at load
+/// changes no stock outfit, which comes out of the catalog with its mods
+/// exactly as its `oütf` has them.
+#[test]
+fn stock_weapon_mod_vals_load_unchanged_inside_the_folded_weapons() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let records = data.outfits();
+    assert_eq!(records.len(), 242);
+    let mut counted = [0; 3];
+    for record in &records {
+        let raw = data
+            .get::<nova_data::records::outfit::Outfit>(record.id.0)
+            .expect("present")
+            .expect("decodes")
+            .record;
+        assert_eq!(
+            record.mods,
+            [
+                (raw.mod_type, raw.mod_val),
+                (raw.mod_type2, raw.mod_val2),
+                (raw.mod_type3, raw.mod_val3),
+                (raw.mod_type4, raw.mod_val4),
+            ],
+            "{:?}",
+            record.id
+        );
+        for (mod_type, mod_val) in record.mods {
+            let slot = match mod_type {
+                1 => 0,
+                3 => 1,
+                21 => 2,
+                _ => continue,
+            };
+            counted[slot] += 1;
+            assert!(
+                nova_sim::ship_change::FOLDED_WEAPONS.contains(&mod_val)
+                    || (mod_type == 21 && mod_val == -1),
+                "{:?}: ModType {mod_type}, ModVal {mod_val}",
+                record.id
+            );
+        }
+    }
+    assert_eq!(counted, [83, 43, 0], "weapon, ammunition and clean mods");
+}

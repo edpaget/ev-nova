@@ -34,7 +34,7 @@ use crate::catalog::{
     MissionShip, MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord,
     PersonWeapon, PilotCatalog, PlaceNames, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
     StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
-    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -149,7 +149,8 @@ impl PilotCatalog for GameData {
                         (record.mod_type2, record.mod_val2),
                         (record.mod_type3, record.mod_val3),
                         (record.mod_type4, record.mod_val4),
-                    ],
+                    ]
+                    .map(|(mod_type, mod_val)| (mod_type, loaded_mod_val(mod_type, mod_val))),
                     contribute: record.contribute.bits(),
                     require: record.require.bits(),
                     require_govt: record.require_govt,
@@ -1568,6 +1569,19 @@ mod tests {
             assert!(shared_script(&a.on_purchase, &b.on_purchase), "{:?}", a.id);
             assert!(shared_script(&a.on_sell, &b.on_sell), "{:?}", a.id);
         }
+    }
+
+    #[test]
+    fn an_oütfs_low_weapon_and_government_mod_vals_load_as_ids_in_every_slot() {
+        let data = store(&[(
+            Outfit::TYPE,
+            128,
+            outfit([(1, 5), (3, 127), (21, 0), (16, 5)]),
+        )]);
+        assert_eq!(
+            data.outfits()[0].mods,
+            [(1, 133), (3, 255), (21, 128), (16, 5)]
+        );
     }
 
     #[test]

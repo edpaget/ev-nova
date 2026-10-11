@@ -253,7 +253,9 @@ pub struct OutfitRecord {
     pub flags: u16,
     /// Its `Cost`.
     pub cost: i32,
-    /// Its `ModType` and `ModVal` pairs 1-4, in order.
+    /// Its `ModType` and `ModVal` pairs 1-4, in order: raw, except that a
+    /// weapon, ammunition or cleaned government (`ModType` 1, 3 or 21)
+    /// `ModVal` is the ID the loader reads it as (see [`loaded_mod_val`]).
     pub mods: [(i16, i16); 4],
     /// Its `Contribute` bits.
     pub contribute: u64,
@@ -278,6 +280,22 @@ pub struct OutfitRecord {
     pub lc_name: String,
     /// Its `LCPlural`, raw: its lower-case plural name.
     pub lc_plural: String,
+}
+
+/// An `oütf` `ModVal` as the original's loader reads it, as an ID.
+///
+/// For a weapon (`ModType` 1), ammunition (3) or the government a record
+/// is cleaned with (21), `_LoadObjectData` (@0x78dcc-0x78df7) turns a
+/// `ModVal` above 127 into an index by subtracting 128 and leaves 0..=127
+/// (and a negative value) as it is; index i names ID i + 128. So 0..=127
+/// names ID `mod_val + 128`, 128 and up names itself, and a negative value
+/// names no record and stays negative. Every other `ModType` is untouched.
+#[must_use]
+pub fn loaded_mod_val(mod_type: i16, mod_val: i16) -> i16 {
+    match (mod_type, mod_val) {
+        (1 | 3 | 21, 0..=127) => mod_val + 128,
+        _ => mod_val,
+    }
 }
 
 /// A ship class, raw from its `shïp`: the [`shipyard`](crate::shipyard)
@@ -1260,6 +1278,38 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_loader_rebases_a_low_weapon_or_government_mod_val_to_an_id() {
+        for (mod_type, raw, loaded) in [
+            (1, 0, 128),
+            (1, 5, 133),
+            (1, 127, 255),
+            (3, 5, 133),
+            (21, 0, 128),
+            (21, 127, 255),
+            (1, 128, 128),
+            (3, 128, 128),
+            (21, 128, 128),
+            (1, 383, 383),
+            (1, 400, 400),
+            (1, -1, -1),
+            (3, -1, -1),
+            (21, -1, -1),
+            (16, 5, 5),
+            (2, 5, 5),
+            (0, 0, 0),
+            (4, 127, 127),
+            (20, 0, 0),
+            (22, 0, 0),
+        ] {
+            assert_eq!(
+                loaded_mod_val(mod_type, raw),
+                loaded,
+                "ModType {mod_type}, ModVal {raw}"
+            );
+        }
+    }
 
     /// Ship 128 is average; system 130 alone exists.
     struct One;

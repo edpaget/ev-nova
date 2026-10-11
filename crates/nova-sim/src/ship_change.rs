@@ -22,13 +22,15 @@
 //! [`fold`] is:
 //!
 //! 1. For each outfit by ascending ID that is owned and whose first mod
-//!    is `ModType` 1 (or 3), the array's count a for its weapon: an
+//!    is `ModType` 1 (or 3) naming a weapon in [`FOLDED_WEAPONS`], the
+//!    array's count a for its weapon: an
 //!    outfit owning a or more becomes a and the array none; one owning
 //!    fewer keeps its count, taken from the array (@0xcb55-0xcbf0).
 //! 2. Every negative count becomes none (@0xcbf6-0xcc0c).
 //! 3. Whatever is left in the arrays goes to the first outfit, by
 //!    ascending ID, owned or not, whose first mod names the weapon; with
-//!    none it is lost (@0xcc28-0xccd7).
+//!    none, or for a weapon outside [`FOLDED_WEAPONS`], it is lost
+//!    (@0xcc28-0xccd7).
 //!
 //! So the stock weapons and loads land on the lowest-ID outfit whose
 //! first mod names them, a negative `WCount` or `AmmoLoad` takes that
@@ -40,8 +42,10 @@
 //! ([`RuleKey::ShipChangeDefaultWeapons`](crate::RuleKey::ShipChangeDefaultWeapons);
 //! by its other reading the defaults' first mods are added to the arrays
 //! too). An outfit naming a weapon only in a later mod is no holder and
-//! is left alone. The original's fold skips a first mod naming a weapon
-//! index past 255 (`wëap` 384 or above); that bound is not modelled.
+//! is left alone, and so is one whose first mod names a weapon outside
+//! the arrays, `wëap` 128 to 383 ([`FOLDED_WEAPONS`]): pass 1 and pass 3
+//! skip it (@0xcb6f-0xcb78, @0xcbb0-0xcbb9), so a default item naming
+//! `wëap` 384 or above, or a negative ID, keeps its count.
 //!
 //! **The clamp** (@0x15627-0x15668). For each outfit owned, by ascending
 //! ID, the original calls `_HasMaxOfItem(i, &lim, 0)` (@0x15648), reading
@@ -187,6 +191,13 @@ impl Arrays {
     }
 }
 
+/// The weapons the fold reads a first mod for: `wëap` 128 to 383, the
+/// original's index 0 to 255 (`testw; js` then `cmpw $0xff; jg`,
+/// @0xcb6f-0xcb78 for `ModType` 1 and @0xcbb0-0xcbb9 for 3, and pass 3's
+/// loop of 256 @0xcc28-0xccd7). An outfit whose first mod names another
+/// is neither held nor given anything.
+pub const FOLDED_WEAPONS: std::ops::RangeInclusive<i16> = 128..=383;
+
 /// Adds `count` to `weapon`'s entry of `array`, saturating.
 fn add(array: &mut BTreeMap<WeaponId, i64>, weapon: WeaponId, count: i64) {
     let entry = array.entry(weapon).or_default();
@@ -243,6 +254,7 @@ pub fn fold(outfits: &mut BTreeMap<OutfitId, u16>, arrays: &Arrays, records: &[O
     let mut left = arrays.clone();
     let mut sorted: Vec<&OutfitRecord> = records.iter().collect();
     sorted.sort_by_key(|record| record.id);
+    sorted.retain(|record| FOLDED_WEAPONS.contains(&record.mods[0].1));
     for record in &sorted {
         let (mod_type, weapon) = record.mods[0];
         let (Some(array), Some(count)) = (left.array(mod_type), outfits.get_mut(&record.id)) else {
@@ -1059,6 +1071,68 @@ mod tests {
             map(&[(440, 2)]),
             "two stock and one default: two"
         );
+    }
+
+    /// A lone outfit, 460, whose first mod is `first`, beside 461, a
+    /// launcher of `wëap` 130.
+    fn bounded(first: (i16, i16)) -> Vec<OutfitRecord> {
+        vec![outfit(460, &[first]), outfit(461, &[(MOD_WEAPON, 130)])]
+    }
+
+    #[test]
+    fn the_fold_leaves_a_default_naming_a_weapon_past_the_arrays_alone() {
+        let fold = Fold {
+            stock: &NO_STOCK,
+            default_weapons: RuleSource::Engine,
+        };
+        for (first, kept) in [
+            ((MOD_WEAPON, 400), true),
+            ((MOD_AMMO, 400), true),
+            ((MOD_WEAPON, 384), true),
+            ((MOD_AMMO, 384), true),
+            ((MOD_WEAPON, 127), true),
+            ((MOD_AMMO, 127), true),
+            ((MOD_WEAPON, -1), true),
+            ((MOD_AMMO, -1), true),
+            ((MOD_WEAPON, 383), false),
+            ((MOD_AMMO, 383), false),
+            ((MOD_WEAPON, 128), false),
+            ((MOD_AMMO, 128), false),
+        ] {
+            let outfits = carried_outfits(
+                &map(&[]),
+                OutfitCarry::KeepWithDefaults,
+                &map(&[(460, 2), (461, 1)]),
+                Some(&fold),
+                None,
+                &bounded(first),
+            );
+            let expected = if kept { map(&[(460, 2)]) } else { map(&[]) };
+            assert_eq!(outfits, expected, "{first:?}: 461 is always pulled back");
+        }
+    }
+
+    #[test]
+    fn the_fold_places_nothing_on_an_outfit_naming_a_weapon_past_the_arrays() {
+        for (first, placed) in [
+            ((MOD_WEAPON, 400), false),
+            ((MOD_AMMO, 400), false),
+            ((MOD_WEAPON, 384), false),
+            ((MOD_WEAPON, 127), false),
+            ((MOD_WEAPON, -1), false),
+            ((MOD_WEAPON, 383), true),
+            ((MOD_AMMO, 383), true),
+            ((MOD_WEAPON, 128), true),
+        ] {
+            let mut entries = Arrays::default();
+            for array in [&mut entries.weapons, &mut entries.rounds] {
+                array.insert(WeaponId(first.1), 2);
+            }
+            let mut outfits = map(&[]);
+            fold(&mut outfits, &entries, &bounded(first));
+            let expected = if placed { map(&[(460, 2)]) } else { map(&[]) };
+            assert_eq!(outfits, expected, "{first:?}");
+        }
     }
 
     #[test]
