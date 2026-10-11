@@ -189,6 +189,42 @@ mod tests {
     }
 
     #[test]
+    fn a_new_hired_escort_fills_the_gap_a_lost_one_left_in_the_ship_table() {
+        let catalog = ships_catalog(MissionShip {
+            behav: 1,
+            ..shipping(-6, 0)
+        });
+        let mut session = accepted(&catalog);
+        session.pilot.escorts.extend([hired(), hired(), hired()]);
+        take_off(&mut session, &catalog);
+        let placed: Vec<NpcId> = session.fleet.iter().flatten().copied().collect();
+        let [a, b, c] = [placed[0], placed[1], placed[2]];
+        assert_eq!([a, b, c].map(|id| berth(&session, id)), [1, 2, 3]);
+
+        // B is lost and D hired: D, with no ship yet, takes the gap B left,
+        // below the kept escorts' berths, never one of theirs.
+        session.dismiss(b);
+        session.pilot.escorts.push(hired());
+        jump_to(&mut session, &catalog, 131);
+        let fleet: Vec<NpcId> = session.fleet.iter().flatten().copied().collect();
+        let (a, c, d) = (fleet[0], fleet[1], fleet[2]);
+        let mission: Vec<NpcId> = session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.mission_escort())
+            .map(|npc| npc.id)
+            .collect();
+        assert_eq!(mission.len(), 2);
+        let order = [a, d, c, mission[0], mission[1]];
+        assert_eq!(order.map(|id| berth(&session, id)), [1, 2, 3, 4, 5]);
+        assert_eq!(led(&session), order);
+        assert_eq!(
+            order.map(|id| slot(&session, id)),
+            [Some(2), Some(3), Some(4), Some(5), Some(6)]
+        );
+    }
+
+    #[test]
     fn a_mission_ship_that_never_joins_is_not_led() {
         let (session, mission, hired) = flying(0);
         assert_eq!(mission.len(), 2);
