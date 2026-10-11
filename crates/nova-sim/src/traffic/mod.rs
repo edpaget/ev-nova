@@ -193,7 +193,8 @@ impl Traffic {
 
     /// Enters a system whose traffic is drawn from `table` in `world`: its
     /// NPCs are replaced with its initial population, rolled on `chance`,
-    /// its persons as the world's persons say.
+    /// its persons as the world's persons say, and its stationary
+    /// warships placed by the world's first stellar.
     pub fn enter_in(
         &mut self,
         table: SpawnTable,
@@ -204,7 +205,8 @@ impl Traffic {
         self.npcs.clear();
         self.departed.clear();
         let mut draw = PersonDraw::new(world.persons);
-        let ships = spawn::initial(&self.table, &mut draw, chance);
+        let first_stellar = world.sites.first().map(|site| site.position);
+        let ships = spawn::initial(&self.table, &mut draw, first_stellar, chance);
         self.add(ships, world.persons.grudges);
     }
 
@@ -631,6 +633,36 @@ mod tests {
             npc.state.velocity = Vec2::ZERO;
         }
         traffic
+    }
+
+    #[test]
+    fn entering_among_stellars_places_a_still_warship_100_from_the_first() {
+        // Ship 200 flown as a warship, of no speed.
+        let mut warships = table(1);
+        warships
+            .dude_records
+            .get_mut(&DudeId(128))
+            .expect("there")
+            .ai_type = 3;
+        warships.ships.get_mut(&ShipId(200)).expect("there").stats =
+            ShipStats::new(crate::handling::ShipFields { speed: 0, ..FAST }, &[]);
+        let sites = [planet(128, 400.0, -300.0), planet(129, -900.0, 0.0)];
+        let mut traffic = Traffic::new();
+        // At angle 90 from the first stellar, facing 45.
+        traffic.enter_in(
+            warships.clone(),
+            World::new(&sites),
+            &mut Draws::of(&[6, 6, 0, 0, 90, 45, 0]),
+        );
+        let state = traffic.npcs()[0].state;
+        assert!(
+            (state.position - Vec2::new(500.0, -300.0)).length() < 1e-3,
+            "{state:?}"
+        );
+        assert_eq!((state.velocity, state.heading), (Vec2::ZERO, 45.0));
+        // Entered knowing no stellar, it is placed in the box.
+        traffic.enter(warships, &mut Draws::of(&[6, 6, 0, 0, 0, 1499, 45, 0]));
+        assert_eq!(traffic.npcs()[0].state.position, Vec2::new(-750.0, 749.0));
     }
 
     #[test]

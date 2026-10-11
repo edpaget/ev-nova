@@ -105,6 +105,9 @@ pub const FLEET_SLOTS: u32 = 256;
 pub const FIRST_FLEET_ID: i16 = 128;
 /// `Rand(1500) - 750`: where in the system a ship is placed at setup.
 pub const SPAWN_SPREAD: u32 = 1500;
+/// How far from the system's first stellar a stationary warship starts
+/// (100.0 @0x3c305).
+pub const STATIONARY_DISTANCE: f32 = 100.0;
 /// `Rand(300) - 150`: how far from its lead an escort starts.
 pub const ESCORT_SPREAD: u32 = 300;
 /// `Rand(360)`: a heading, or an angle round the centre.
@@ -247,11 +250,13 @@ pub fn jump_in_distance() -> f32 {
     JUMP_IN_END + (0..JUMP_IN_TICKS).map(glide_speed).sum::<f32>()
 }
 
-/// A system's initial population, its persons drawn as `draw` says (see
-/// the module docs).
+/// A system's initial population, its persons drawn as `draw` says, its
+/// stationary warships placed by its `first_stellar`, when it has one
+/// (see the module docs).
 pub fn initial(
     table: &SpawnTable,
     draw: &mut PersonDraw,
+    first_stellar: Option<Vec2>,
     chance: &mut (impl Chance + ?Sized),
 ) -> Vec<NewShip> {
     let gate = draw.world.gate();
@@ -274,7 +279,7 @@ pub fn initial(
             continue;
         }
         if let Some((ship, dude, ai_type, kind)) = dude_ship(table, gate, chance) {
-            let state = at_speed(in_system(chance), kind.stats.handling.max_speed);
+            let state = dude_setup_state(ai_type, kind, first_stellar, chance);
             out.push(NewShip {
                 ship,
                 govt: dude.govt,
@@ -560,6 +565,32 @@ pub fn at_speed(state: ShipState, max_speed: f32) -> ShipState {
     }
 }
 
+/// Where a `düde` ship of `kind`, flying as `ai_type`, starts at setup
+/// (`_RandomShipSpawn` @0x3c0f3): a warship of no speed, when the system
+/// has a `first_stellar`, [`STATIONARY_DISTANCE`] from it at an angle
+/// drawn, at rest, facing anywhere (@0x3c254-0x3c324); any other ship
+/// [`in_system`], at its top speed ([`at_speed`]).
+pub fn dude_setup_state(
+    ai_type: AiType,
+    kind: &ShipKind,
+    first_stellar: Option<Vec2>,
+    chance: &mut (impl Chance + ?Sized),
+) -> ShipState {
+    let max_speed = kind.stats.handling.max_speed;
+    if ai_type == AiType::Warship
+        && max_speed == 0.0
+        && let Some(stellar) = first_stellar
+    {
+        let position = stellar + facing(chance.below(DEGREES) as f32) * STATIONARY_DISTANCE;
+        return ShipState {
+            position,
+            velocity: Vec2::ZERO,
+            heading: chance.below(DEGREES) as f32,
+        };
+    }
+    at_speed(in_system(chance), max_speed)
+}
+
 /// How fast `person` starts when setup places it, brought by a setup pass
 /// (`by_pass`) or by its Person slot: its top speed, but at rest when it
 /// is derelict and comes by its slot, or by a pass when `rules` take the
@@ -761,7 +792,7 @@ mod tests {
     #[test]
     fn a_setup_pass_drawing_a_person_spawns_nothing() {
         let mut chance = Draws::of(&[0]);
-        assert_eq!(initial(&one_pass(), &mut nobody(), &mut chance), []);
+        assert_eq!(initial(&one_pass(), &mut nobody(), None, &mut chance), []);
         assert_eq!(chance.asked, [7]);
     }
 
@@ -771,7 +802,7 @@ mod tests {
         // escorts at (-150, -150) and (149, 149) from the lead, each ship's
         // aggression drawn after its place.
         let mut chance = Draws::of(&[6, 0, 13, 0, 2, 0, 0, 2, 299, 299, 2]);
-        let ships = initial(&one_pass(), &mut nobody(), &mut chance);
+        let ships = initial(&one_pass(), &mut nobody(), None, &mut chance);
         assert_eq!(chance.asked, [7, 7, 256, 360, 3, 300, 300, 3, 300, 300, 3]);
         let lead = ships[0];
         assert_eq!(
@@ -802,7 +833,10 @@ mod tests {
     fn only_a_draw_of_0_in_7_is_a_person_or_a_fleet() {
         // 1 is neither: a düde ship.
         let mut chance = Draws::of(&[1, 1, 0, 0, 0, 0, 0]);
-        assert_eq!(initial(&one_pass(), &mut nobody(), &mut chance).len(), 1);
+        assert_eq!(
+            initial(&one_pass(), &mut nobody(), None, &mut chance).len(),
+            1
+        );
         assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
         let mut chance = Draws::of(&[0, 1, 1, 0, 0, 0]);
         assert_eq!(arrivals(&table(), 0, &mut nobody(), &mut chance).len(), 1);
@@ -814,7 +848,7 @@ mod tests {
         // Not a person, not a fleet: düde 128, ship 200 (FAST: 6 pixels a
         // tick), at (-750, 749) facing 90.
         let mut chance = Draws::of(&[6, 6, 0, 0, 0, 1499, 90]);
-        let ships = initial(&one_pass(), &mut nobody(), &mut chance);
+        let ships = initial(&one_pass(), &mut nobody(), None, &mut chance);
         assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
         assert!(
             near(ships[0].state.velocity, Vec2::new(6.0, 0.0)),
@@ -848,10 +882,10 @@ mod tests {
             avg_ships: 3,
             ..table()
         };
-        assert_eq!(initial(&three, &mut nobody(), &mut persons), []);
+        assert_eq!(initial(&three, &mut nobody(), None, &mut persons), []);
         assert_eq!(persons.asked, [7, 7, 7]);
         assert_eq!(
-            initial(&three, &mut nobody(), &mut crate::NeverFires).len(),
+            initial(&three, &mut nobody(), None, &mut crate::NeverFires).len(),
             3
         );
         let none = SpawnTable {
@@ -859,7 +893,7 @@ mod tests {
             ..table()
         };
         let mut nothing = Draws::of(&[]);
-        assert_eq!(initial(&none, &mut nobody(), &mut nothing), []);
+        assert_eq!(initial(&none, &mut nobody(), None, &mut nothing), []);
         assert!(nothing.asked.is_empty());
     }
 
@@ -867,28 +901,28 @@ mod tests {
     fn a_dude_with_an_ai_type_gives_it_and_one_without_gives_the_ships() {
         let mut table = one_pass();
         let ship_201 = [6, 6, 0, 99, 0, 0, 0];
-        let ships = initial(&table, &mut nobody(), &mut Draws::of(&ship_201));
+        let ships = initial(&table, &mut nobody(), None, &mut Draws::of(&ship_201));
         assert_eq!(ships[0].ai_type, AiType::Warship, "201's InherentAI");
         table
             .dude_records
             .get_mut(&DudeId(128))
             .expect("düde")
             .ai_type = 4;
-        let ships = initial(&table, &mut nobody(), &mut Draws::of(&ship_201));
+        let ships = initial(&table, &mut nobody(), None, &mut Draws::of(&ship_201));
         assert_eq!(ships[0].ai_type, AiType::Interceptor, "the düde's AIType");
         table
             .dude_records
             .get_mut(&DudeId(128))
             .expect("düde")
             .ai_type = 1;
-        let ships = initial(&table, &mut nobody(), &mut Draws::of(&ship_201));
+        let ships = initial(&table, &mut nobody(), None, &mut Draws::of(&ship_201));
         assert_eq!(ships[0].ai_type, AiType::WimpyTrader, "1 is above 0");
     }
 
     #[test]
     fn a_dude_ship_carries_its_dudes_booty() {
         let ship_201 = [6, 6, 0, 99, 0, 0, 0];
-        let ships = initial(&one_pass(), &mut nobody(), &mut Draws::of(&ship_201));
+        let ships = initial(&one_pass(), &mut nobody(), None, &mut Draws::of(&ship_201));
         assert_eq!(ships[0].booty, 0x0041);
         let arrived = arrivals(
             &table(),
@@ -914,7 +948,7 @@ mod tests {
     #[test]
     fn a_dude_ship_carries_its_dudes_info_types() {
         let ship_201 = [6, 6, 0, 99, 0, 0, 0];
-        let ships = initial(&one_pass(), &mut nobody(), &mut Draws::of(&ship_201));
+        let ships = initial(&one_pass(), &mut nobody(), None, &mut Draws::of(&ship_201));
         assert_eq!(ships[0].info_types, 0x4005);
         let arrived = arrivals(
             &table(),
@@ -942,11 +976,11 @@ mod tests {
         let mut table = one_pass();
         table.ships.remove(&ShipId(200));
         let mut chance = Draws::of(&[6, 6, 0, 0]);
-        assert_eq!(initial(&table, &mut nobody(), &mut chance), []);
+        assert_eq!(initial(&table, &mut nobody(), None, &mut chance), []);
         assert_eq!(chance.asked, [7, 7, 100, 100], "no placement drawn");
         table.dude_records.clear();
         let mut chance = Draws::of(&[6, 6, 0]);
-        assert_eq!(initial(&table, &mut nobody(), &mut chance), []);
+        assert_eq!(initial(&table, &mut nobody(), None, &mut chance), []);
         assert_eq!(chance.asked, [7, 7, 100]);
     }
 
@@ -1149,7 +1183,7 @@ mod tests {
 
     #[test]
     fn a_fleets_escorts_follow_the_index_of_their_lead_among_the_ships_added() {
-        let mut out = vec![initial(&one_pass(), &mut nobody(), &mut crate::NeverFires)[0]];
+        let mut out = vec![initial(&one_pass(), &mut nobody(), None, &mut crate::NeverFires)[0]];
         fleet(
             &table(),
             FleetId(141),
@@ -1212,7 +1246,7 @@ mod tests {
         // AppearOn holds: Rand(50), and ship 200 (@0x662b, @0x66c7).
         let gated = appearing(one_pass(), 201, "b7");
         let mut chance = Draws::of(&[6, 6, 0, 49, 0, 0, 0]);
-        let ships = initial(&gated, &mut refusing_7(), &mut chance);
+        let ships = initial(&gated, &mut refusing_7(), None, &mut chance);
         assert_eq!(chance.asked, [7, 7, 100, 50, 1500, 1500, 360, 3]);
         assert_eq!(
             ships.iter().map(|ship| ship.ship).collect::<Vec<_>>(),
@@ -1230,7 +1264,7 @@ mod tests {
         // Under a new pilot's bits, bit 7 is clear too.
         let gated = appearing(one_pass(), 201, "b7");
         let mut chance = Draws::of(&[6, 6, 0, 49, 0, 0, 0]);
-        initial(&gated, &mut nobody(), &mut chance);
+        initial(&gated, &mut nobody(), None, &mut chance);
         assert_eq!(chance.asked[3], 50);
     }
 
@@ -1238,7 +1272,7 @@ mod tests {
     fn a_dude_whose_every_ship_type_is_refused_brings_nothing() {
         let gated = appearing(appearing(one_pass(), 200, "b7"), 201, "!b7");
         let mut chance = Draws::of(&[6, 6, 0]);
-        assert_eq!(initial(&gated, &mut refusing_7(), &mut chance), []);
+        assert_eq!(initial(&gated, &mut refusing_7(), None, &mut chance), []);
         assert_eq!(chance.asked, [7, 7, 100], "no ship drawn");
         let gated = appearing(appearing(table(), 200, "b7"), 201, "b7");
         let mut chance = Draws::of(&[0, 6, 6, 0]);
@@ -1250,7 +1284,7 @@ mod tests {
     fn a_dude_ship_type_with_a_malformed_appear_on_never_comes() {
         let gated = appearing(one_pass(), 200, "b1 &");
         let mut chance = Draws::of(&[6, 6, 0, 0, 0, 0, 0]);
-        let ships = initial(&gated, &mut allowing(), &mut chance);
+        let ships = initial(&gated, &mut allowing(), None, &mut chance);
         assert_eq!(chance.asked[3], 50);
         assert_eq!(ships[0].ship, ShipId(201));
     }
@@ -1346,6 +1380,7 @@ mod tests {
                     ..gated
                 },
                 &mut refusing_7(),
+                None,
                 &mut chance
             ),
             []
@@ -1394,7 +1429,7 @@ mod tests {
         for (draw, aggression) in [(0, 2), (1, 3), (2, 0)] {
             // A düde ship placed at setup.
             let mut chance = Draws::of(&[6, 6, 0, 0, 0, 0, 0, draw]);
-            let ships = initial(&one_pass(), &mut nobody(), &mut chance);
+            let ships = initial(&one_pass(), &mut nobody(), None, &mut chance);
             assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
             assert_eq!(ships[0].aggression, aggression, "{draw}");
             // One jumping in.
@@ -1418,6 +1453,130 @@ mod tests {
             out.iter().map(|ship| ship.aggression).collect::<Vec<_>>(),
             [3, 0, 2]
         );
+    }
+
+    // Stationary warships.
+
+    /// The fields of a ship of no speed.
+    const STILL: ShipFields = ShipFields { speed: 0, ..FAST };
+
+    /// Where the system's first stellar is in these tests.
+    const FIRST_STELLAR: Vec2 = Vec2::new(300.0, -200.0);
+
+    /// [`one_pass`] with ship 201 (`InherentAI` 3, a warship) of no speed.
+    fn still_warship() -> SpawnTable {
+        let mut table = one_pass();
+        table.ships.insert(ShipId(201), kind(3, STILL));
+        table
+    }
+
+    #[test]
+    fn a_warship_of_no_speed_is_placed_100_from_the_first_stellar_at_rest() {
+        // Not a person, not a fleet: düde 128, ship 201, at angle 90 from
+        // the stellar, facing 45, of aggression 3.
+        let mut chance = Draws::of(&[6, 6, 0, 99, 90, 45, 1]);
+        let ships = initial(
+            &still_warship(),
+            &mut nobody(),
+            Some(FIRST_STELLAR),
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [7, 7, 100, 100, 360, 360, 3]);
+        let ship = ships[0];
+        assert_eq!(
+            (ship.ship, ship.ai_type, ship.aggression),
+            (ShipId(201), AiType::Warship, 3)
+        );
+        assert!(
+            near(ship.state.position, FIRST_STELLAR + Vec2::new(100.0, 0.0)),
+            "{ship:?}"
+        );
+        assert!(((ship.state.position - FIRST_STELLAR).length() - 100.0).abs() < 1e-3);
+        assert_eq!(
+            (ship.state.velocity, ship.state.heading),
+            (Vec2::ZERO, 45.0)
+        );
+        let mut chance = Draws::of(&[6, 6, 0, 99, 180, 0, 0]);
+        let ships = initial(
+            &still_warship(),
+            &mut nobody(),
+            Some(FIRST_STELLAR),
+            &mut chance,
+        );
+        assert!(
+            near(
+                ships[0].state.position,
+                FIRST_STELLAR + Vec2::new(0.0, 100.0)
+            ),
+            "{ships:?}"
+        );
+    }
+
+    #[test]
+    fn with_no_first_stellar_a_warship_of_no_speed_is_placed_in_the_box() {
+        let mut chance = Draws::of(&[6, 6, 0, 99, 0, 1499, 45, 0]);
+        let ships = initial(&still_warship(), &mut nobody(), None, &mut chance);
+        assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
+        assert_eq!(ships[0].state.position, Vec2::new(-750.0, 749.0));
+        assert_eq!(ships[0].state.velocity, Vec2::ZERO);
+    }
+
+    #[test]
+    fn a_moving_warship_or_a_still_trader_is_placed_in_the_box() {
+        // Ship 201 at its top speed, facing 90.
+        let mut chance = Draws::of(&[6, 6, 0, 99, 0, 1499, 90, 0]);
+        let ships = initial(&one_pass(), &mut nobody(), Some(FIRST_STELLAR), &mut chance);
+        assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
+        assert_eq!(ships[0].state.position, Vec2::new(-750.0, 749.0));
+        assert!(near(ships[0].state.velocity, Vec2::new(6.0, 0.0)));
+        // Ship 200, a brave trader (`InherentAI` 2) of no speed.
+        let mut table = one_pass();
+        table.ships.insert(ShipId(200), kind(2, STILL));
+        let mut chance = Draws::of(&[6, 6, 0, 0, 0, 1499, 90, 0]);
+        let ships = initial(&table, &mut nobody(), Some(FIRST_STELLAR), &mut chance);
+        assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
+        assert_eq!(ships[0].state.position, Vec2::new(-750.0, 749.0));
+    }
+
+    #[test]
+    fn a_dude_of_ai_type_3_makes_a_still_ship_a_stationary_warship() {
+        let mut table = one_pass();
+        table.ships.insert(ShipId(200), kind(2, STILL));
+        table
+            .dude_records
+            .get_mut(&DudeId(128))
+            .expect("there")
+            .ai_type = 3;
+        let mut chance = Draws::of(&[6, 6, 0, 0, 90, 45, 0]);
+        let ships = initial(&table, &mut nobody(), Some(FIRST_STELLAR), &mut chance);
+        assert_eq!(chance.asked, [7, 7, 100, 100, 360, 360, 3]);
+        assert!(near(
+            ships[0].state.position,
+            FIRST_STELLAR + Vec2::new(100.0, 0.0)
+        ));
+    }
+
+    #[test]
+    fn a_person_is_never_placed_by_the_first_stellar() {
+        let mut table = peopled();
+        for person in table.persons.values_mut() {
+            person.kind = kind(3, STILL);
+        }
+        // Rolled in a pass.
+        let mut chance = Draws::of(&[0, 382, 0, 1499, 90, 99]);
+        let ships = initial(&table, &mut nobody(), Some(FIRST_STELLAR), &mut chance);
+        assert_eq!(chance.asked, [7, 1022, 1500, 1500, 360, 100]);
+        assert_eq!(ships[0].ai_type, AiType::Warship);
+        assert_eq!(ships[0].state.position, Vec2::new(-750.0, 749.0));
+        // In its slot.
+        let slots = SpawnTable {
+            avg_ships: 0,
+            ..table
+        };
+        let mut chance = Draws::of(&[49, 0, 1499, 90]);
+        let ships = initial(&slots, &mut nobody(), Some(FIRST_STELLAR), &mut chance);
+        assert_eq!(chance.asked, [100, 1500, 1500, 360]);
+        assert_eq!(ships[0].state.position, Vec2::new(-750.0, 749.0));
     }
 
     // Placement.
@@ -1538,7 +1697,7 @@ mod tests {
     /// bounds asked.
     fn set_up(table: &SpawnTable, world: PersonWorld, draws: &[u32]) -> (Vec<NewShip>, Vec<u32>) {
         let mut chance = Draws::of(draws);
-        let ships = initial(table, &mut PersonDraw::new(world), &mut chance);
+        let ships = initial(table, &mut PersonDraw::new(world), None, &mut chance);
         (ships, chance.asked)
     }
 
@@ -1780,7 +1939,7 @@ mod tests {
         let mut draw = PersonDraw::new(PersonWorld::NONE);
         draw.here.insert("Person 600".to_owned());
         let mut chance = Draws::of(&[0]);
-        assert_eq!(initial(&none, &mut draw, &mut chance), []);
+        assert_eq!(initial(&none, &mut draw, None, &mut chance), []);
         assert_eq!(chance.asked, [100]);
     }
 
