@@ -662,6 +662,8 @@ mod tests {
     fn targeting(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.populate(catalog, &mut placed(0, -300));
+        // Setup starts it at its top speed: brought to rest.
+        npc(&mut session).state.velocity = Vec2::ZERO;
         session.target = Some(NpcId(0));
         session.pilot.cash = 100_000;
         session

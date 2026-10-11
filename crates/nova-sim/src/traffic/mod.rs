@@ -622,11 +622,14 @@ mod tests {
 
     /// Traffic deciding every `interval` ticks, entered into a system with
     /// `count` NPCs placed in it a pixel apart from the centre rightwards,
-    /// at rest.
+    /// brought to rest (setup starts them at their top speed).
     fn populated(count: u32, interval: u32) -> Traffic {
         let draws: Vec<u32> = (0..count).flat_map(|i| placed(750 + i, 750)).collect();
         let mut traffic = Traffic::with_interval(interval);
         traffic.enter(table(count), &mut Draws::of(&draws));
+        for npc in &mut traffic.npcs {
+            npc.state.velocity = Vec2::ZERO;
+        }
         traffic
     }
 

@@ -11908,11 +11908,12 @@ mod tests {
     }
 
     /// `catalog`'s session with its one NPC placed 100 pixels above the
-    /// player (at the centre, facing up), facing `heading`.
+    /// player (at the centre, facing up), facing `heading`, at rest.
     fn facing_an_npc(catalog: &FakePilotCatalog, heading: u32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.populate(catalog, &mut Draws::of(&[6, 6, 0, 0, 750, 650, heading]));
         assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, -100.0));
+        stop_npcs(&mut session);
         session
     }
 
@@ -12827,11 +12828,13 @@ mod tests {
             ..lawful()
         };
         let mut session = Session::start(&catalog).expect("starts");
-        // NPC 0 at (0, -100) and NPC 1 at (100, -100), both facing right.
+        // NPC 0 at (0, -100) and NPC 1 at (100, -100), both facing right,
+        // at rest.
         session.populate(
             &catalog,
             &mut Draws::of(&[6, 6, 0, 0, 750, 650, 90, 2, 6, 6, 0, 0, 850, 650, 90, 2]),
         );
+        stop_npcs(&mut session);
         let witness = Witness::default();
         let rules = Rules {
             law: &witness,
@@ -13979,10 +13982,11 @@ mod tests {
     }
 
     /// `catalog`'s session with its one NPC at (`x`, `y`) from the player
-    /// (at the centre, facing up), facing `heading`.
+    /// (at the centre, facing up), facing `heading`, at rest.
     fn with_an_npc_at(catalog: &FakePilotCatalog, x: u32, y: u32, heading: u32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.populate(catalog, &mut Draws::of(&[6, 6, 0, 0, x, y, heading]));
+        stop_npcs(&mut session);
         session
     }
 
@@ -14260,6 +14264,14 @@ mod tests {
         catalog
     }
 
+    /// Brings every NPC of `session` to rest, for a scene that starts
+    /// with them still: setup starts each at its top speed.
+    fn stop_npcs(session: &mut Session) {
+        for npc in session.traffic.npcs_mut() {
+            npc.state.velocity = Vec2::ZERO;
+        }
+    }
+
     /// Setup draws placing, in order, düde `slot` of `of` at (`x`, `y`)
     /// facing `heading`, each of aggression 2.
     fn placing(of: usize, ships: &[(usize, i32, i32, u32)]) -> Draws {
@@ -14512,6 +14524,9 @@ mod tests {
         session.populate(catalog, &mut placing(2, &[(0, 0, 0, 0), (1, 0, 740, 0)]));
         let trader = &mut session.traffic.npcs_mut()[0];
         assert_eq!(trader.state.position, Vec2::ZERO);
+        // Setup starts it at its top speed: brought to rest under the
+        // player.
+        trader.state.velocity = Vec2::ZERO;
         trader.condition = Condition::Disabled;
         trader.reserves.armor.now = 10.0;
         session.target = Some(NpcId(0));
@@ -16325,6 +16340,7 @@ mod tests {
         let mut session = Session::start(&catalog).expect("starts");
         session.populate(&catalog, &mut placing(2, &placed));
         assert_eq!(session.npcs().len(), others + 1);
+        stop_npcs(&mut session);
         let trader = &mut session.traffic.npcs_mut()[0];
         trader.condition = Condition::Disabled;
         session.target = Some(NpcId(0));

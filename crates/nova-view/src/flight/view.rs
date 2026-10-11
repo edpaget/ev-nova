@@ -7319,7 +7319,11 @@ mod tests {
         assert_eq!(npc_ids(&view), [NpcId(0)], "populated once");
         let npc = &view.session().expect("flying").npcs()[0];
         assert_eq!(npc.goal, Goal::Idle, "deciding as the behaviour given says");
-        assert_eq!(npc.state.position, Vec2::new(100.0, -100.0));
+        assert_eq!(
+            npc.state.position,
+            Vec2::new(118.0, -100.0),
+            "gliding right at its top speed, 6 a tick"
+        );
     }
 
     #[test]
@@ -8336,7 +8340,8 @@ mod tests {
         catalog.weapons[0].explod_type = -1;
         catalog.hulls[1].death_delay = 30;
         catalog.hulls[1].explode1 = 0;
-        let mut view = fighting(catalog, &placed(750, 650, 180));
+        // 100 above, facing away: it flies on up the line of fire.
+        let mut view = fighting(catalog, &placed(750, 650, 0));
         view.input(&key(FIRE_KEY, true));
         view.tick(TICK);
         view.input(&key(FIRE_KEY, false));
@@ -8349,10 +8354,11 @@ mod tests {
                 && ticks_left < 19
                 && !view.effects().explosions().is_empty()
             {
-                breaking = Some(npc.state.position);
+                breaking = Some(npc.state.position - npc.state.velocity);
                 break;
             }
         }
+        // Where it was before the tick's flight step moved it on.
         let at = breaking.expect("an explosion as it breaks up");
         // Never firing, the effects' chance draws the last outcome: a
         // quarter of its 40-pixel sprite less one out, each way.
@@ -8862,8 +8868,9 @@ mod tests {
 
     #[test]
     fn by_default_npcs_fight_by_novas_ai_and_crimes_by_novas_law() {
-        // The warship 100 above, facing the player.
-        let (_, chance) = scripted(&placed(750, 650, 180));
+        // The warship 100 above, facing away: it flies on up the line of
+        // fire.
+        let (_, chance) = scripted(&placed(750, 650, 0));
         let mut view = FlightView::new(damaging()).with_chance(chance);
         view.tick(TICK);
         view.input(&key(FIRE_KEY, true));
@@ -8910,7 +8917,8 @@ mod tests {
     #[test]
     fn the_flight_convicts_by_the_law_it_is_given() {
         let witness = Rc::new(Witness::default());
-        let (_, chance) = scripted(&placed(750, 650, 180));
+        // 100 above, facing away: it flies on up the line of fire.
+        let (_, chance) = scripted(&placed(750, 650, 0));
         let mut view = FlightView::new(damaging())
             .with_chance(chance)
             .with_behaviour(Rc::new(Still))
@@ -8983,8 +8991,8 @@ mod tests {
     }
 
     /// [`trafficked`] with its ship 129 (of strength 5, a crew of 3 and a
-    /// `Cost` of 150,000) carrying money (`Booty` 0x0040), and the
-    /// player's ship 128 a crew of 10.
+    /// `Cost` of 150,000, and no speed, so it starts at rest) carrying
+    /// money (`Booty` 0x0040), and the player's ship 128 a crew of 10.
     fn boardable() -> FakeCatalog {
         let mut catalog = trafficked(&[130], 1, 129, 1);
         catalog.dudes[0].1.booty = 0x0040;
@@ -8997,6 +9005,7 @@ mod tests {
         let mut player = catalog.ships[0].clone();
         player.id = ShipId(128);
         player.crew = 10;
+        catalog.ships[0].fields.speed = 0;
         catalog.ships.push(player);
         catalog.hulls = vec![nova_sim::HullRecord {
             strength: 5,

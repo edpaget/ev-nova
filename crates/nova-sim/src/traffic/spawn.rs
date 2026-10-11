@@ -269,8 +269,8 @@ pub fn initial(
             link_fleet(table, gate, chance, &mut out);
             continue;
         }
-        if let Some((ship, dude, ai_type, _)) = dude_ship(table, gate, chance) {
-            let state = in_system(chance);
+        if let Some((ship, dude, ai_type, kind)) = dude_ship(table, gate, chance) {
+            let state = at_speed(in_system(chance), kind.stats.handling.max_speed);
             out.push(NewShip {
                 ship,
                 govt: dude.govt,
@@ -545,6 +545,17 @@ pub fn in_system(chance: &mut (impl Chance + ?Sized)) -> ShipState {
     }
 }
 
+/// A ship placed at setup, `state`, moving at `max_speed` along its
+/// heading, as `_AdjustedAccel(heading, max, max, &vel)` sets it from rest
+/// (@0x2ae4b): at rest when `max_speed` is 0.
+#[must_use]
+pub fn at_speed(state: ShipState, max_speed: f32) -> ShipState {
+    ShipState {
+        velocity: facing(state.heading) * max_speed,
+        ..state
+    }
+}
+
 /// Where a ship jumping in starts: [`jump_in_distance`] from the centre
 /// at an angle drawn, facing the centre and moving in at
 /// [`JUMP_IN_SPEED`].
@@ -781,12 +792,16 @@ mod tests {
     }
 
     #[test]
-    fn a_setup_pass_drawing_a_dude_ship_places_it_in_the_system_at_rest() {
-        // Not a person, not a fleet: düde 128, ship 200, at (-750, 749)
-        // facing 90.
+    fn a_setup_pass_drawing_a_dude_ship_starts_it_at_its_max_speed_along_its_heading() {
+        // Not a person, not a fleet: düde 128, ship 200 (FAST: 6 pixels a
+        // tick), at (-750, 749) facing 90.
         let mut chance = Draws::of(&[6, 6, 0, 0, 0, 1499, 90]);
         let ships = initial(&one_pass(), &mut nobody(), &mut chance);
         assert_eq!(chance.asked, [7, 7, 100, 100, 1500, 1500, 360, 3]);
+        assert!(
+            near(ships[0].state.velocity, Vec2::new(6.0, 0.0)),
+            "{ships:?}"
+        );
         assert_eq!(
             ships,
             [NewShip {
@@ -796,7 +811,7 @@ mod tests {
                 lead: None,
                 state: ShipState {
                     position: Vec2::new(-750.0, 749.0),
-                    velocity: Vec2::ZERO,
+                    velocity: ships[0].state.velocity,
                     heading: 90.0,
                 },
                 jumping_in: false,
@@ -1397,6 +1412,24 @@ mod tests {
         let state = in_system(&mut Draws::of(&[1499, 750, 359]));
         assert_eq!(state.position, Vec2::new(749.0, 0.0));
         assert_eq!(state.heading, 359.0);
+    }
+
+    #[test]
+    fn a_setup_ship_moves_at_its_top_speed_along_its_heading() {
+        let placed = |heading| ShipState {
+            position: Vec2::new(10.0, -20.0),
+            velocity: Vec2::ZERO,
+            heading,
+        };
+        let east = at_speed(placed(90.0), 6.0);
+        assert!(near(east.velocity, Vec2::new(6.0, 0.0)), "{east:?}");
+        assert_eq!(
+            (east.position, east.heading),
+            (Vec2::new(10.0, -20.0), 90.0)
+        );
+        let south = at_speed(placed(180.0), 2.5);
+        assert!(near(south.velocity, Vec2::new(0.0, 2.5)), "{south:?}");
+        assert_eq!(at_speed(placed(37.0), 0.0).velocity, Vec2::ZERO);
     }
 
     #[test]
