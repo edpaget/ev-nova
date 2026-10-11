@@ -200,6 +200,7 @@ mod tests {
     use crate::catalog::{GovtId, MissionId, MissionShip, ShipId, StellarId, SystemId};
     use crate::chance::NeverFires;
     use crate::combat::hull::Condition;
+    use crate::control::SetExpr;
     use crate::gate::GateKind;
     use crate::mission::active::AUTO_ABORT;
     use crate::mission::aux::{AUX_EVERY_VISIT, AuxShips};
@@ -428,6 +429,63 @@ mod tests {
         assert_eq!(aux_here(&session), 2, "they stay as traffic");
         session.give_back_aux_ships(&BTreeSet::new());
         assert!(session.pilot().missions().get(0).is_none());
+    }
+
+    /// Mission 140's three auxiliary ships come into the system in
+    /// flight, none left to come; their ids, in order.
+    fn three_in(session: &mut Session, catalog: &FakePilotCatalog) -> Vec<NpcId> {
+        take_off(session, catalog);
+        ticks(session, catalog, 140);
+        let ids: Vec<NpcId> = session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.aux.is_some())
+            .map(|npc| npc.id)
+            .collect();
+        assert_eq!(ids.len(), 3);
+        assert_eq!(aux_of(session).left, 0);
+        ids
+    }
+
+    #[test]
+    fn a_move_in_flight_to_another_system_gives_back_the_aux_ships_but_the_fleets() {
+        let catalog = aux_only(3, -1, 0);
+        let mut session = accepted(&catalog);
+        let ids = three_in(&mut session, &catalog);
+        session.fleet = vec![Some(ids[0])];
+        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+        settle(&mut session, &catalog);
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(aux_here(&session), 1, "retargeted: only the fleet's");
+        assert_eq!(aux_of(&session).left, 2, "the one in the fleet kept");
+    }
+
+    #[test]
+    fn a_move_in_flight_to_another_system_gives_back_up_to_the_count() {
+        let catalog = aux_only(3, -1, 0);
+        let mut session = accepted(&catalog);
+        let _ = three_in(&mut session, &catalog);
+        let aux = aux_of(&session);
+        set_aux(&mut session, AuxShips { left: 2, ..aux });
+        session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
+        settle(&mut session, &catalog);
+        assert_eq!(aux_here(&session), 0, "retargeted");
+        assert_eq!(aux_of(&session).left, 3, "capped at the count");
+    }
+
+    #[test]
+    fn a_relocation_gives_back_the_aux_ships() {
+        let catalog = aux_only(3, -1, 0);
+        let mut session = accepted(&catalog);
+        let _ = three_in(&mut session, &catalog);
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, &catalog);
+        assert_eq!(aux_here(&session), 3, "still in the system, landed");
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("relocates");
+        assert_eq!(aux_here(&session), 0, "the traffic reset");
+        assert_eq!(aux_of(&session).left, 3);
     }
 
     // The auto-abort.
