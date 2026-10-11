@@ -38,6 +38,10 @@
 //! next visit brings those still alive, and those destroyed never come
 //! again. A ship that jumped out or landed is gone already, and gives
 //! nothing back.
+//!
+//! [`AuxShips::tick`]: crate::mission::aux::AuxShips::tick
+//! [`AuxShips::restart`]: crate::mission::aux::AuxShips::restart
+//! [`AuxShips::give_back`]: crate::mission::aux::AuxShips::give_back
 
 use std::collections::BTreeSet;
 

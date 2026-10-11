@@ -161,9 +161,12 @@
 //! and ship days (@0x601fa, @0x6020e). Then `_PlayerLandOnStellar` passes
 //! the take-off's day (@0x63440), runs the global price flux (@0x63445),
 //! explores the system (`_AutoSetExploration` @0x634c8) and its nebulae
-//! (@0x634da), restarts each mission's aux ships' countdown (+0x6c) and
-//! zeroes their arrived count (+0x6a) (@0x634df-0x6353c, mission-ships
-//! phase 13) and saves the pilot (@0x6354b). Back in
+//! (@0x634da), restarts each mission's aux ships (@0x634df-0x6353c:
+//! with `Flags` 0x0010 those left to come refilled, +0x6e; their
+//! countdown, +0x6c, drawn again; their arrived count, +0x6a, zeroed) and
+//! saves the pilot (@0x6354b). Here that restart is each slot's
+//! [`Consumer::MissionShips`] subscription on `TookOff`, before the
+//! system's setup and its draws (see the session's `aux_ships` module). Back in
 //! `_HandlePlayerDockRequest`, the system's ships are set up
 //! (`_SetupShipsInSystem` @0x674c2) and its stellars redrawn (@0x674c7).
 //! The enter-system hook does not run.
@@ -186,10 +189,13 @@
 //! mission, in slot order, it restarts the timers its ships appear by:
 //! with `ShipStart` 1, ships left (+0x6) and the player in their system
 //! (or `ShipSyst` -6), the special ships' appear timer (+0x4e), their
-//! arrived count (+0x2e) zeroed (@0x99f5b-0x99fae); and the aux ships'
-//! countdown (+0x6c), their arrived count (+0x6a) zeroed (@0x99fb5-0x99ff4,
-//! mission-ships phase 13). Here it is the [`Consumer::MissionShips`]
-//! subscription each slot registers on `EnteredSystem` (see the
+//! arrived count (+0x2e) zeroed (@0x99f5b-0x99fae); and its aux ships,
+//! as the take-off restarts them (@0x99fb5-0x99ff4). On a hypergate's or
+//! wormhole's exit, the aux ships of `AuxShipSyst` -1 are then lost until
+//! the next restart (@0x6729b-0x672ac, as
+//! [`RuleKey::AuxGate`](crate::RuleKey::AuxGate) reads). Here it is the
+//! [`Consumer::MissionShips`] subscription each slot registers on
+//! `EnteredSystem` (see the
 //! [`traffic::spawn`](crate::traffic::spawn) module's "Mission ships"). It
 //! runs on a jump's arrival (@0x6c15d), a gate's or wormhole's exit
 //! (@0x67159) and an `M` or `N` in flight (@0x159a8); not on a landed `M`

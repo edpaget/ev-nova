@@ -5,7 +5,11 @@
 //! timer, the timer and the ships it brings in, their goals (see the
 //! [`story`](crate::story) module's "Ship goals"), and what becomes of
 //! them as they are destroyed, disabled or boarded and as their mission
-//! ends.
+//! ends. A mission's auxiliary ships are the
+//! [`aux_ships`](super::aux_ships) module's: their countdown is drawn at
+//! accept, first, before the special ships' appear timer; the
+//! enter-system hook and the take-off hook restart it; and each frame of
+//! the timers brings them in before the special ships of the same slot.
 //!
 //! **The hooks** are no loop of their own: each slot filled registers
 //! [`ship_hook`]s, `{MissionShips, slot, hook}`, with a blank guard and
