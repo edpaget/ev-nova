@@ -10219,6 +10219,22 @@ mod tests {
         assert_eq!(view.answer(0), None);
     }
 
+    #[test]
+    fn hanging_up_a_hail_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
+        let mut view = hailable(true);
+        ticks(&mut view, 3);
+        tap(&mut view, HAIL_KEY);
+        view.take_hail().expect("hailed");
+        let stale = RadarScene::default();
+        assert_ne!(view.radar_now(), stale);
+        view.radar_scene = Some(stale);
+        let cadence = view.hud_cadence;
+        view.hang_up();
+        assert_eq!(view.hailing(), None);
+        assert_eq!(view.hud_cadence, cadence, "neither timed nor flipped");
+        assert_eq!(*view.radar_shown(), view.radar_now(), "as _RedrawStatus");
+    }
+
     /// An option that asks a price, saying nothing.
     #[derive(Debug)]
     struct Sell;
@@ -13630,6 +13646,49 @@ mod tests {
         assert_eq!(view.course_map().mode(), MapMode::Course);
         tap(&mut view, MAP);
         assert_eq!(view.message(), Some(HYPERGATE_CANCELLED), "nothing new");
+    }
+
+    #[test]
+    fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
+        // The course map, closed by its key or as Escape does; then the
+        // hypergate map, cancelled and entered (`_PlayerEnterHypergate`).
+        for (catalog, pick, by_key) in [
+            (catalog(), false, true),
+            (catalog(), false, false),
+            (gated(), false, true),
+            (gated(), true, true),
+        ] {
+            let gate = !catalog.gates.is_empty();
+            let mut view = FlightView::new(catalog);
+            ticks(&mut view, 3);
+            if gate {
+                land_now(&mut view);
+                assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+            } else {
+                tap(&mut view, MAP);
+            }
+            assert!(view.map_open());
+            if pick {
+                let alpha = on_map(&view, 131);
+                click(&mut view, alpha);
+            }
+            let stale = RadarScene::default();
+            assert_ne!(view.radar_now(), stale);
+            view.radar_scene = Some(stale);
+            let cadence = view.hud_cadence;
+            if by_key {
+                tap(&mut view, MAP);
+            } else {
+                view.close_map();
+            }
+            let case = format!("gate {gate}, pick {pick}, by key {by_key}");
+            assert!(!view.map_open(), "{case}");
+            assert_eq!(
+                view.hud_cadence, cadence,
+                "neither timed nor flipped: {case}"
+            );
+            assert_eq!(*view.radar_shown(), view.radar_now(), "{case}");
+        }
     }
 
     #[test]
