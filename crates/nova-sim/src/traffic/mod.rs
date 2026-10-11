@@ -74,7 +74,7 @@ use crate::govt::Governments;
 use crate::person::PersonWorld;
 use autopilot::Outcome;
 use npc::{Mode, Npc, NpcId, NpcPerson};
-use spawn::{Entry, JUMP_IN_TICKS, NewShip, PersonDraw};
+use spawn::{Entry, JUMP_IN_TICKS, NewShip, PersonDraw, Stellars};
 use table::{SpawnPerson, SpawnTable};
 
 /// How many ticks apart an NPC's decisions are: every tick, as the
@@ -208,7 +208,13 @@ impl Traffic {
         self.departed.clear();
         let mut draw = PersonDraw::new(world.persons);
         let first_stellar = world.sites.first().map(|site| site.position);
-        let ships = spawn::initial(&self.table, &mut draw, first_stellar, chance);
+        let ships = spawn::initial(
+            &self.table,
+            &mut draw,
+            first_stellar,
+            Stellars::NONE,
+            chance,
+        );
         self.add(ships, world.persons.grudges);
     }
 
@@ -248,7 +254,13 @@ impl Traffic {
             world: world.persons,
             here: self.person_names(),
         };
-        let arrivals = spawn::arrivals(&self.table, self.strangers(), &mut draw, chance);
+        let arrivals = spawn::arrivals(
+            &self.table,
+            self.strangers(),
+            &mut draw,
+            Stellars::NONE,
+            chance,
+        );
         self.add(arrivals, world.persons.grudges);
         self.react(behaviour, world, strikes);
         for npc in &mut self.npcs {
