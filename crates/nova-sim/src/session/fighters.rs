@@ -702,6 +702,26 @@ mod tests {
     // Launching.
 
     #[test]
+    fn a_fighter_carries_its_ship_types_cloak_gear() {
+        let gear = crate::cloak::CloakGear {
+            device: true,
+            flags2: 0x5282,
+            ..crate::cloak::CloakGear::default()
+        };
+        let kind = ShipKind {
+            cloak: gear,
+            ..ShipKind::default()
+        };
+        let carrier = Carrier {
+            ship: ShipRef::Player,
+            window: 0.0,
+            reach: 0.0,
+        };
+        let npc = fighter(&kind, ShipId(204), ShipState::default(), carrier);
+        assert_eq!(npc.cloak_gear, gear);
+    }
+
+    #[test]
     fn firing_the_bay_launches_a_fighter_into_the_fleet_beside_the_player() {
         let catalog = carrying();
         let mut session = flying(&catalog, pilot(&catalog, 2, Vec::new()), RuleSource::Engine);

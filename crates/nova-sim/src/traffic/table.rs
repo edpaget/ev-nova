@@ -1135,6 +1135,28 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_type_gets_its_cloak_gear_from_its_flags2_and_default_cloak() {
+        let zephyr = ShipRecord {
+            fields: ShipFields {
+                flags2: 0x5282,
+                ..FAST
+            },
+            defaults: vec![(OutfitId(300), 1)],
+            ..ship(204, FAST)
+        };
+        let outfits = [outfit(300, &[(crate::cloak::MOD_CLOAK, 0x080b)])];
+        assert_eq!(
+            kind(&zephyr, &outfits, &arsenal()).cloak,
+            CloakGear {
+                device: true,
+                decloaks_when_hit: true,
+                on_radar: true,
+                flags2: 0x5282,
+            }
+        );
+    }
+
+    #[test]
     fn each_ship_type_named_is_armed_from_the_arsenal() {
         let table = resolved();
         let armed = &table.ships[&ShipId(200)];
