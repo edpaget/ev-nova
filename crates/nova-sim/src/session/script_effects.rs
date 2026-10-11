@@ -254,7 +254,9 @@ impl Session {
     }
 
     /// Applies what the set expressions run since the last settling
-    /// queued (see the module docs): the moves in order, each read from
+    /// queued (see the module docs): first a person's swap for its
+    /// mission's ship that an accept on its hail made due (see the
+    /// `mission_ships` module), then the moves in order, each read from
     /// `catalog`, populating on `chance` where the rules say, then a `Q`'s
     /// leave. Before the leave, and after the moves and the leave, the
     /// story events raised dispatch, each running the subscriptions it
@@ -270,6 +272,9 @@ impl Session {
     ) -> Settled {
         let mut settled = Settled::default();
         loop {
+            if let Some((npc, slot)) = self.swap_due.take() {
+                self.swap_in_mission_ship(catalog, npc, slot, chance);
+            }
             self.settle_story(catalog, &mut &mut *chance, &mut settled);
             let due = std::mem::take(&mut self.goal_checks_due);
             if due.is_empty() {

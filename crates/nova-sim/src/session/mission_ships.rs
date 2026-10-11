@@ -46,16 +46,31 @@
 //! first loss that fails its mission fails it there, at once
 //! ([`SimMessage::MissionShipLost`] and the quick failure); the goal
 //! checks follow as the `ShipFate` the loss raised settles.
+//!
+//! **The swap** (`_HandlePlayerCommunication` @0x62421-0x6252f): a person
+//! of `Flags` 0x0040 whose mission is accepted on its hail, with one of
+//! the mission's ships left, is swapped for that ship at the start of the
+//! settling that follows ([`Session::settle_script`]), before any move
+//! `OnAccept` queued. The ship comes through `_MissionDudeSpawn`
+//! ([`spawn::swapped_mission_ship`]), marked with the slot, and takes the
+//! person's position, velocity and heading; it flies the person's type
+//! under mission `Flags` 0x0800 when the `düde` lists it. The person's
+//! NPC is taken out of the system (ship +0xb8 cleared), without being
+//! gone for good, and the player's target moves to the ship. The ship
+//! raises [`Fate::Arrived`] as the other paths' ships do. It joins no
+//! fleet, and no count of the slot changes: it is the slot's one ship
+//! left, so a later setup brings one, never a second beside it, and
+//! phase 1's lifetime rule releases it as it does any mission ship.
 
 use super::Session;
 use crate::board::{Boarding, MissionBoardLine};
-use crate::catalog::{DudeId, MissionId, MissionRecord, TrafficCatalog};
+use crate::catalog::{DudeId, MissionId, MissionRecord, ShipId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::Script;
 use crate::geometry::Vec2;
 use crate::message::SimMessage;
 use crate::mission::active::AUTO_ABORT;
-use crate::mission::ships::{ShipBehav, ShipFacts, ShipStart, appear_timer};
+use crate::mission::ships::{ShipBehav, ShipFacts, ShipStart, appear_timer, swapped_ship_type};
 use crate::mission::{
     ActiveMission, AssistLine, FailedBy, GoalFacts, LossFacts, ShipGoal, ShipSystem, SpecialShips,
     assists, check_goals, fails_on_destroyed, fails_on_disabled, goals_met_moment,
@@ -486,6 +501,80 @@ impl Session {
         self.traffic.bring_in(ships);
         self.mission_ships_came(last);
         count
+    }
+
+    /// Swaps the person's NPC `npc`, its mission just accepted on its hail
+    /// into `slot`, for that mission's one ship (see the module docs),
+    /// the `düde` read from `catalog`, drawing on `chance`
+    /// (`_HandlePlayerCommunication` @0x6244b-0x6252f): the ship, of the
+    /// person's type under mission `Flags` 0x0800 when the `düde` lists it
+    /// ([`swapped_ship_type`]), takes the person's place
+    /// ([`spawn::swapped_mission_ship`]); the person's NPC is taken out,
+    /// every other NPC letting it go; the ship raises [`Fate::Arrived`];
+    /// and it becomes the player's target when the person was. No count
+    /// of the slot changes. Nothing when the NPC is no longer here, the
+    /// slot no longer holds a mission of a `düde`, or the ship cannot be
+    /// spawned. Flying in formation for `ShipGoal` 3
+    /// (`_AIMakeEscortFlyInForm` @0x62509) is
+    /// rdm:phase/mission-ships/phase-7-mission-escorts: until then the
+    /// ship keeps its `düde`'s AI.
+    pub(super) fn swap_in_mission_ship(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        npc: NpcId,
+        slot: u8,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        let Some(person) = self.npcs().iter().find(|ship| ship.id == npc) else {
+            return;
+        };
+        let (state, person_ship) = (person.state, person.ship);
+        let Some(active) = self.pilot.missions.get(slot) else {
+            return;
+        };
+        let record = self.lifecycle_record(active.mission);
+        let Some(dude) = record.ships.dude else {
+            return;
+        };
+        let dude_ships: Vec<ShipId> = catalog
+            .dude(dude)
+            .map(|dude| dude.ships.iter().map(|&(ship, _)| ship).collect())
+            .unwrap_or_default();
+        let preset = swapped_ship_type(record.flags, &dude_ships, person_ship);
+        self.traffic.table_mut().add_mission_dudes(
+            catalog,
+            &[dude],
+            &self.ships,
+            &self.outfits,
+            &self.arsenal,
+        );
+        let spawn = MissionSpawn {
+            slot,
+            dude,
+            count: 1,
+            start: ShipStart::from_code(record.ships.start),
+            behav: ShipBehav::from_code(record.ships.behav),
+            nav: &[],
+        };
+        let Some(ship) = spawn::swapped_mission_ship(
+            self.traffic.table(),
+            &spawn,
+            state,
+            preset,
+            self.gate(),
+            chance,
+        ) else {
+            return;
+        };
+        let targeted = self.target == Some(npc);
+        self.drop_quarry(npc);
+        self.traffic.remove(npc);
+        let last = self.last_npc();
+        self.traffic.bring_in(vec![ship]);
+        if targeted {
+            self.target = self.last_npc();
+        }
+        self.mission_ships_came(last);
     }
 
     /// Leaves the special ships of the mission in `slot` as meeting its
@@ -2444,5 +2533,410 @@ mod tests {
             );
             assert_eq!(ships_of(&session).destroyed, 0, "{ships:?}");
         }
+    }
+    // The swap.
+
+    use crate::flight::ShipState;
+    use crate::hail::HailOptions;
+    use crate::person::{GONE_ON_ACCEPT, LEAVES_ON_ACCEPT, REPLACED_BY_MISSION_SHIP};
+    use crate::session::Hailed;
+
+    /// Where Ace flies when hailed: at (300, -200), moving (2, -1),
+    /// heading 135.
+    const ACE_AT: ShipState = ShipState {
+        position: Vec2::new(300.0, -200.0),
+        velocity: Vec2::new(2.0, -1.0),
+        heading: 135.0,
+    };
+
+    /// [`ships_catalog`] with mission 140 offered from a ship (`AvailLoc`
+    /// 2), of `Flags` 0x0800, its one escort ship (`ShipCount` 1,
+    /// `ShipGoal` 3, `ShipSyst` -6, `ShipStart` 0, `ShipBehav` -1) of düde
+    /// 150, which flies ships 129 and 200; and "Ace" (`përs` 600, of
+    /// `Flags` `flags`, flying ship 129) linked to it, whom system 130's
+    /// first Person slot names at 100 %.
+    fn swapping(flags: u16) -> FakePilotCatalog {
+        let mut catalog = ships_catalog(MissionShip {
+            count: 1,
+            goal: 3,
+            syst: -6,
+            ..shipping(-6, 0)
+        });
+        catalog.ship_records.push(ship(129, FAST));
+        catalog.dudes[0].1.ships = vec![(ShipId(129), 50), (ShipId(200), 50)];
+        catalog.missions[0].avail_loc = 2;
+        catalog.missions[0].flags = 0x0800;
+        catalog.persons = vec![PersonRecord {
+            name: "Ace".into(),
+            flags,
+            link_mission: Some(140),
+            ..crate::testkit::person(600, 129)
+        }];
+        let mut slots = [(None, 0); 8];
+        slots[0] = (Some(PersonId(600)), 100);
+        catalog.traffic = vec![(
+            SystemId(130),
+            SystemTraffic {
+                dude_types: [(-1, 0); 8],
+                avg_ships: 0,
+                persons: slots,
+            },
+        )];
+        catalog
+    }
+
+    /// A pilot flying in system 130 among `catalog`'s Ace (NPC 0), at
+    /// [`ACE_AT`] and targeted, hailed: Ace offers mission 140.
+    fn hailing_ace(catalog: &FakePilotCatalog) -> Session {
+        let pilot = crate::pilot::Pilot::new(catalog, "Stock").expect("a pilot");
+        let mut session = Session::fly(catalog, pilot)
+            .expect("flies")
+            .with_strings(Rc::new(Names));
+        session.populate(catalog, &mut NeverFires);
+        session.traffic.npcs_mut()[0].state = ACE_AT;
+        session.target = Some(NpcId(0));
+        let hailed = session.open_hail(catalog, &HailOptions::default(), &mut NeverFires);
+        assert!(matches!(hailed, Ok(Hailed::Offer(_))), "{hailed:?}");
+        session
+    }
+
+    /// [`hailing_ace`], mission 140 accepted into slot 0, and settled.
+    fn swapped(catalog: &FakePilotCatalog) -> Session {
+        let mut session = hailing_ace(catalog);
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        settle(&mut session, catalog);
+        session
+    }
+
+    fn person_here(session: &Session) -> bool {
+        session.npcs().iter().any(|npc| npc.person.is_some())
+    }
+
+    #[test]
+    fn accepted_on_its_hail_a_person_of_0x0040_is_replaced_by_its_missions_ship() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let session = swapped(&catalog);
+        assert!(!person_here(&session), "Ace is gone");
+        assert_eq!(marked(&session), [0]);
+        let ship = &session.npcs()[0];
+        assert_eq!(ship.state, ACE_AT, "in Ace's place");
+        assert_eq!(ship.ship, ShipId(129), "flying Ace's type");
+        assert_eq!(ship.govt, Some(GovtId(131)), "the düde's");
+        assert_eq!(session.target, Some(ship.id), "now the target");
+        assert!(!session.pilot().gone(PersonId(600)), "not gone for good");
+    }
+
+    #[test]
+    fn without_mission_flags_0x0800_the_swapped_ships_type_is_drawn_from_its_dude() {
+        let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        catalog.missions[0].flags = 0;
+        catalog.dudes[0].1.ships = vec![(ShipId(200), 100)];
+        let session = swapped(&catalog);
+        assert_eq!(marked(&session), [0]);
+        assert_eq!(session.npcs()[0].ship, ShipId(200));
+        assert_eq!(session.npcs()[0].state, ACE_AT);
+        let mut unlisted = swapping(REPLACED_BY_MISSION_SHIP);
+        unlisted.dudes[0].1.ships = vec![(ShipId(200), 100)];
+        let session = swapped(&unlisted);
+        assert_eq!(session.npcs()[0].ship, ShipId(200), "0x0800, not listed");
+    }
+    /// [`hailing_ace`], mission 140 refused or accepted as `accept` says,
+    /// and settled: whether Ace was swapped for a mission ship.
+    fn swaps(catalog: &FakePilotCatalog, accept: bool) -> bool {
+        let mut session = hailing_ace(catalog);
+        if accept {
+            assert_eq!(
+                session.accept_mission(MissionId(140), &mut NeverFires),
+                Ok(0)
+            );
+        } else {
+            assert_eq!(
+                session.refuse_mission(MissionId(140), &mut NeverFires),
+                Ok(())
+            );
+        }
+        settle(&mut session, catalog);
+        let swapped = !marked(&session).is_empty();
+        assert_eq!(person_here(&session), !swapped);
+        swapped
+    }
+
+    #[test]
+    fn no_swap_for_a_refusal_a_person_without_0x0040_or_other_than_one_ship_left() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        assert!(!swaps(&catalog, false), "refused");
+        assert!(!swaps(&swapping(0), true), "no 0x0040");
+        for count in [2, 0] {
+            let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
+            catalog.missions[0].ships.count = count;
+            assert!(!swaps(&catalog, true), "ShipCount {count}");
+        }
+    }
+
+    #[test]
+    fn no_swap_when_on_accept_ends_the_mission() {
+        let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        catalog.missions[0].on_accept = Script::parse("A140");
+        let mut session = hailing_ace(&catalog);
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        assert!(session.pilot().missions().get(0).is_none(), "ended");
+        settle(&mut session, &catalog);
+        assert!(person_here(&session));
+        assert!(marked(&session).is_empty());
+    }
+
+    #[test]
+    fn no_swap_when_the_person_or_its_missions_dude_is_gone_by_the_settling() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = hailing_ace(&catalog);
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        session.traffic.remove(NpcId(0));
+        settle(&mut session, &catalog);
+        assert!(session.npcs().is_empty(), "Ace left: nothing comes");
+        let mut dudeless = swapping(REPLACED_BY_MISSION_SHIP);
+        dudeless.dudes.clear();
+        assert!(!swaps(&dudeless, true), "no düde record");
+        let mut no_dude = swapping(REPLACED_BY_MISSION_SHIP);
+        no_dude.missions[0].ships.dude = None;
+        assert!(!swaps(&no_dude, true), "no ShipDude");
+    }
+
+    #[test]
+    fn a_boarding_offer_never_swaps() {
+        use crate::board::NovaBoarding;
+        use crate::legal::NovaLaw;
+        use crate::person::MISSION_ON_BOARD;
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP | MISSION_ON_BOARD);
+        let pilot = crate::pilot::Pilot::new(&catalog, "Stock").expect("a pilot");
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.populate(&catalog, &mut NeverFires);
+        let mut state = *session.player();
+        state.velocity = Vec2::ZERO;
+        session.player.velocity = Vec2::ZERO;
+        let ace = &mut session.traffic.npcs_mut()[0];
+        ace.state = state;
+        ace.condition = Condition::Disabled;
+        session.target = Some(NpcId(0));
+        let boarded = session.board(
+            &NovaLaw::default(),
+            &NovaBoarding::default(),
+            &mut NeverFires,
+        );
+        assert!(
+            matches!(boarded, Ok(crate::board::Boarding::Offered(_))),
+            "{boarded:?}"
+        );
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        settle(&mut session, &catalog);
+        assert!(person_here(&session));
+        assert!(marked(&session).is_empty());
+    }
+
+    #[test]
+    fn a_rescue_goal_swaps_too() {
+        let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        catalog.missions[0].ships.goal = 5;
+        assert!(swaps(&catalog, true));
+    }
+
+    #[test]
+    fn a_swapped_person_of_0x0100_is_gone_for_good_and_0x0800_changes_nothing() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP | GONE_ON_ACCEPT);
+        let session = swapped(&catalog);
+        assert!(session.pilot().gone(PersonId(600)));
+        assert_eq!(marked(&session), [0]);
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP | LEAVES_ON_ACCEPT);
+        let session = swapped(&catalog);
+        assert!(!person_here(&session), "it left by the swap");
+        assert_eq!(marked(&session), [0]);
+        assert_eq!(session.npcs()[0].state, ACE_AT);
+    }
+
+    #[test]
+    fn the_swap_moves_no_target_but_the_persons() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = hailing_ace(&catalog);
+        session.target = None;
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        settle(&mut session, &catalog);
+        assert_eq!(marked(&session), [0]);
+        assert_eq!(session.target, None);
+    }
+
+    #[test]
+    fn other_ships_let_the_swapped_person_go() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = hailing_ace(&catalog);
+        let mut hunter = crate::testkit::npc(9, session.npcs()[0].stats);
+        hunter.target = Some(ShipRef::Npc(NpcId(0)));
+        hunter.goal = Goal::Attack(ShipRef::Npc(NpcId(0)));
+        session.traffic.add_npc(hunter);
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        settle(&mut session, &catalog);
+        let hunter = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.mission.is_none())
+            .expect("the hunter");
+        assert_eq!(hunter.target, None);
+    }
+
+    // Not in the fleet; no second ship.
+
+    #[test]
+    fn the_swapped_ship_joins_no_fleet_and_counts_as_the_slots_one_ship() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = hailing_ace(&catalog);
+        let escorts = session.pilot().escorts.clone();
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        let before = ships_of(&session);
+        settle(&mut session, &catalog);
+        assert_eq!(session.pilot().escorts, escorts);
+        assert_eq!(session.npcs()[0].escort, None);
+        assert_eq!(ships_of(&session), before, "no count changes");
+        assert_eq!((before.left, before.arrived), (1, 1));
+        for _ in 0..3 {
+            tick(&mut session, &catalog);
+        }
+        assert_eq!(marked(&session), [0], "no second one comes");
+        assert_eq!(ships_of(&session), before);
+    }
+
+    #[test]
+    fn the_swapped_ship_meets_an_escort_goal_as_it_arrives() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let session = swapped(&catalog);
+        assert!(session.pilot().missions().get(0).expect("held").goals_met);
+        let mut observed = swapping(REPLACED_BY_MISSION_SHIP);
+        observed.missions[0].ships.goal = 4;
+        let session = swapped(&observed);
+        let ship = session.npcs()[0].id;
+        assert_eq!(session.story.watched, [ship].into(), "arrived: watched");
+    }
+
+    #[test]
+    fn ships_following_the_player_set_up_one_in_the_next_system() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = swapped(&catalog);
+        jump_to(&mut session, &catalog, 131);
+        assert_eq!(marked(&session), [0], "one, not two");
+        assert_eq!(ships_of(&session).left, 1);
+    }
+
+    #[test]
+    fn ships_of_the_accepting_system_set_up_one_as_the_ship_takes_off_again() {
+        let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        catalog.missions[0].ships.syst = -1;
+        let mut session = swapped(&catalog);
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, &catalog);
+        take_off(&mut session, &catalog);
+        assert_eq!(marked(&session), [0], "one, not two");
+        assert_eq!(ships_of(&session).left, 1);
+    }
+
+    // Released by the lifetime rule.
+
+    #[test]
+    fn an_aborted_swap_missions_ship_loses_its_mark_and_stays() {
+        let catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        let mut session = swapped(&catalog);
+        let id = session.npcs()[0].id;
+        assert_eq!(session.abort_mission(0, &mut NeverFires), Ok(()));
+        assert_eq!(session.npcs()[0].id, id, "it stays");
+        assert!(marked(&session).is_empty());
+    }
+
+    #[test]
+    fn a_completed_swap_missions_ship_is_released() {
+        let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        catalog.missions[0].avail_stel = 128;
+        catalog.missions[0].return_stel = 128;
+        let mut session = swapped(&catalog);
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, &catalog);
+        assert!(session.pilot().missions().get(0).is_none(), "completed");
+        take_off(&mut session, &catalog);
+        assert!(marked(&session).is_empty());
+    }
+
+    #[test]
+    fn destroying_the_swapped_ship_leaves_none_to_come() {
+        let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        catalog.missions[0].ships.goal = 0;
+        let mut session = swapped(&catalog);
+        let id = session.npcs()[0].id;
+        session.count_lost_mission_ship(id, &mut NeverFires);
+        assert_eq!(ships_of(&session).left, 0);
+    }
+
+    // Person escorts.
+
+    #[test]
+    fn under_the_join_reading_a_person_who_may_join_opens_the_comm_dialog_and_is_not_swapped() {
+        let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        catalog.persons[0].mission_ship = Some(catalog.missions[0].ships);
+        let bible = HailOptions::nova(&crate::rulebook::Rulebook::default().with_override(
+            crate::rulebook::RuleKey::PersonJoin,
+            crate::rulebook::RuleSource::Bible,
+        ));
+        let pilot = crate::pilot::Pilot::new(&catalog, "Stock").expect("a pilot");
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.populate(&catalog, &mut NeverFires);
+        session.target = Some(NpcId(0));
+        let hailed = session.open_hail(&catalog, &bible, &mut NeverFires);
+        let Ok(Hailed::Comm(view)) = hailed else {
+            panic!("the comm dialog: {hailed:?}");
+        };
+        assert!(
+            view.options
+                .iter()
+                .any(|button| button.label == "Use As Escort")
+        );
+        settle(&mut session, &catalog);
+        assert!(person_here(&session));
+        assert!(marked(&session).is_empty());
+    }
+
+    #[test]
+    fn the_swapped_ship_never_offers_to_join() {
+        let mut catalog = swapping(REPLACED_BY_MISSION_SHIP);
+        catalog.persons[0].mission_ship = Some(catalog.missions[0].ships);
+        let mut session = swapped(&catalog);
+        session.hang_up();
+        let bible = HailOptions::nova(&crate::rulebook::Rulebook::default().with_override(
+            crate::rulebook::RuleKey::PersonJoin,
+            crate::rulebook::RuleSource::Bible,
+        ));
+        let hailed = session.open_hail(&catalog, &bible, &mut NeverFires);
+        let Ok(Hailed::Comm(view)) = hailed else {
+            panic!("the comm dialog: {hailed:?}");
+        };
+        assert!(
+            view.options
+                .iter()
+                .all(|button| button.label != "Use As Escort")
+        );
     }
 }

@@ -765,6 +765,10 @@ pub struct Session {
     /// checked once the settling that accepted them is done (see the
     /// `mission_ships` module); never saved.
     goal_checks_due: Vec<u8>,
+    /// The person's NPC an accept on its hail swaps for the ship of the
+    /// mission in the slot, once the settling that accepted it begins
+    /// (see the `mission_ships` module); never saved.
+    swap_due: Option<(NpcId, u8)>,
     /// The slot whose mission's script is running, if any: what a `Q`
     /// fills its mission tags from (see the `missions` module); never
     /// saved.
@@ -967,6 +971,7 @@ impl Session {
             offers: Offers::default(),
             reoffer_due: false,
             goal_checks_due: Vec::new(),
+            swap_due: None,
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
             suppressed: BTreeSet::new(),

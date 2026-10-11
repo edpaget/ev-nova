@@ -15,6 +15,15 @@
 //! [`RuleKey::PersonMissionStellar`] says: by the engine the navigation
 //! target, or no stellar with none; by the other reading the first
 //! stellar the player's system lists.
+//!
+//! **The answer** (`_HandlePlayerCommunication` @0x622b6-0x62547,
+//! `_HandlePlayerBoardAttempt` @0x65982-0x65f6d; see
+//! [`Session::end_ship_offer`]): an accept on the hail makes a person of
+//! `Flags` 0x0100 gone for good and one of 0x0800 leave; then, for a
+//! person of 0x0040 whose mission the first slot holding it has one ship
+//! left of, after `OnAccept`, whatever the goal, the person is swapped
+//! for that ship as the settling begins (see the `mission_ships`
+//! module). Only the hail swaps: a boarding never does.
 
 use std::collections::BTreeMap;
 
@@ -25,7 +34,7 @@ use crate::chance::{Chance, NeverFires};
 use crate::hail::{Conversation, HailOptions, HailRefusal, HailView};
 use crate::mission::VenueOffer;
 use crate::mission::{self, Offer, Venue};
-use crate::person::{GONE_ON_ACCEPT, LEAVES_ON_ACCEPT, MISSION_ON_BOARD};
+use crate::person::{GONE_ON_ACCEPT, LEAVES_ON_ACCEPT, MISSION_ON_BOARD, swaps_for_mission_ship};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::npc::{Npc, NpcId};
 
@@ -213,8 +222,12 @@ impl Session {
     /// 0x0100 gone for good (@0x622f4-0x62300), and one of 0x0800 leave
     /// (`_AIMakeShipLeave` @0x6234d); on its boarding, an accept marks
     /// the ship boarded (@0x65f43-0x65f6d), and 0x0100 makes it gone for
-    /// good whatever the answer (@0x65982-0x65988). The swap of a person
-    /// of `Flags` 0x0040 for its mission's ship is rdm:roadmap/mission-ships.
+    /// good whatever the answer (@0x65982-0x65988). Then, on its hail, an accept of
+    /// a person of `Flags` 0x0040 whose mission the first slot holding it
+    /// has one ship left of (@0x6236d-0x62445,
+    /// [`swaps_for_mission_ship`]) makes its swap for that ship due, for
+    /// the settling to come ([`Session::settle_script`]; see the
+    /// `mission_ships` module).
     pub(super) fn end_ship_offer(&mut self, accepted: bool) {
         let Some(offering) = self.offering.take() else {
             return;
@@ -233,6 +246,13 @@ impl Session {
                     && let Some(npc) = self.npc_mut(offering.npc)
                 {
                     make_leave(npc);
+                }
+                let held = self.pilot.missions.holding(offering.mission);
+                if let Some(&slot) = held.first()
+                    && let Some(active) = self.pilot.missions.get(slot)
+                    && swaps_for_mission_ship(flags, active.ships.left)
+                {
+                    self.swap_due = Some((offering.npc, slot));
                 }
             }
             OfferedBy::Hail => {}

@@ -44,7 +44,7 @@
 //! | [`CommQuote`](RuleKey::CommQuote) | `comm_quote` | a person's comm quote is a friendly person's answer to Greetings ([`Session`](crate::Session)) | it opens the hail, in place of the opening line\* |
 //! | [`GrantCount`](RuleKey::GrantCount) | `grant_count` | boarding a person grants trunc((50 + `Rand(51)`) x `GrantCount` / 100) outfits, at least 1 ([`NovaBoarding`](crate::NovaBoarding)) | 1 + `Rand(GrantCount)`\* |
 //! | [`GrantMax`](RuleKey::GrantMax) | `grant_max` | a boarding grant may take the player past the outfit's `Max`, and `G` past its `Max` and the free mass ([`OutfitRules`](crate::OutfitRules), which the boarding grant reads too) | both are held to `Max` less the owned and to the free mass, weighed as the outfitter weighs it ([`held_to_max`](crate::grant::held_to_max))\* |
-//! | [`PersonJoin`](RuleKey::PersonJoin) | `person_join` | no person offers to join: one whose `LinkMission` is available offers that mission in place of the comm dialog (`_HandlePlayerCommunication` @0x6220d; [`JoinFleet`](crate::hail::nova::JoinFleet)) | a person whose record allows it, its `LinkMission` available, lists Use As Escort and joins the fleet as itself, for good\* |
+//! | [`PersonJoin`](RuleKey::PersonJoin) | `person_join` | no person offers to join: one whose `LinkMission` is available offers that mission in place of the comm dialog (`_HandlePlayerCommunication` @0x6220d; [`JoinFleet`](crate::hail::nova::JoinFleet)), and an accept with `Flags` 0x0040 and one ship left swaps it for its mission's ship | a person whose record allows it, its `LinkMission` available, lists Use As Escort and joins the fleet as itself, for good\* |
 //! | [`MapExplore`](RuleKey::MapExplore) | `map_explore` | a map of `ModVal` N explores depth first, so it may miss systems within N jumps, and "inhabited" reads a system's first four stellars ([`OutfitRules`](crate::OutfitRules)) | every system within N jumps, and any stellar |
 //! | [`InvalidMap`](RuleKey::InvalidMap) | `invalid_map` | a map whose `ModVal` explores nothing (0, -2 to -999) is used up ([`OutfitRules`](crate::OutfitRules)) | it is added to the outfits as a plain item\* |
 //! | [`RemoveRefund`](RuleKey::RemoveRefund) | `remove_refund` | `D` removes an outfit and pays nothing ([`OutfitRules`](crate::OutfitRules)) | it pays what selling the outfit would\* |
@@ -581,10 +581,12 @@ rule_keys! {
     /// engine, none does, as the original brings a person to fly with the
     /// player only through its `LinkMission`: a person whose mission is
     /// available offers it in place of the comm dialog
-    /// (`_HandlePlayerCommunication` @0x6220d), and only an accept with
-    /// `Flags` 0x0040, `ShipCount` 1 and `ShipGoal` 3 swaps it for a
-    /// mission ship that escorts the player (@0x62421-0x62509;
-    /// rdm:roadmap/mission-ships). Otherwise, a person whose record allows
+    /// (`_HandlePlayerCommunication` @0x6220d), and an accept of a person
+    /// of `Flags` 0x0040 whose mission has one ship left, whatever its
+    /// goal, swaps it for that ship (@0x62421-0x6252f;
+    /// [`swaps_for_mission_ship`](crate::person::swaps_for_mission_ship)),
+    /// which flies in formation with the player for `ShipGoal` 3
+    /// (@0x62509; rdm:phase/mission-ships/phase-7-mission-escorts). Otherwise, a person whose record allows
     /// it ([`offers_to_join`](crate::person::offers_to_join)), its
     /// `LinkMission` available, opens the comm dialog listing Use As
     /// Escort while the fleet has room, and joins the fleet as itself,

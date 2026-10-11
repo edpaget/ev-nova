@@ -132,8 +132,9 @@ pub const NOT_TO_BRAVE: u16 = 0x2000;
 pub const NOT_TO_WARSHIP: u16 = 0x4000;
 /// `Flags2`: it starts with no fuel (@0x40f1f-0x40f55).
 pub const ZERO_FUEL: u16 = 0x0001;
-/// `Flags`: accepting its one-ship mission swaps its ship for the
-/// mission's ship (@0x62421).
+/// `Flags`: accepting its mission on its hail, with one of the mission's
+/// ships left, swaps its ship for the mission's ship, whatever the
+/// mission's `ShipGoal` (@0x62421-0x62440; [`swaps_for_mission_ship`]).
 pub const REPLACED_BY_MISSION_SHIP: u16 = 0x0040;
 /// `Flags`: its mission is offered when it is boarded, not hailed
 /// (@0x621c3).
@@ -147,10 +148,23 @@ pub const GONE_ON_ACCEPT: u16 = 0x0100;
 /// bit as [`QUOTE_UNLESS_LEAVING`].
 pub const LEAVES_ON_ACCEPT: u16 = 0x0800;
 
+/// Whether a person of `Flags` `flags`, its mission just accepted on its
+/// hail, is swapped for the mission's ship, the mission's slot holding
+/// `ships_left` of its ships after `OnAccept`
+/// (`_HandlePlayerCommunication` @0x62421-0x62445): `Flags` has
+/// [`REPLACED_BY_MISSION_SHIP`], and exactly one ship is left. Neither
+/// `ShipGoal` nor `ShipCount` is asked.
+#[must_use]
+pub const fn swaps_for_mission_ship(flags: u16, ships_left: i16) -> bool {
+    flags & REPLACED_BY_MISSION_SHIP != 0 && ships_left == 1
+}
+
 /// Whether `record`'s person's record lets it join the player, under
-/// [`RuleKey::PersonJoin`]'s other reading: the engine's own gate for
-/// swapping a hailed person for its mission's escort ship
-/// (`_HandlePlayerCommunication` @0x621a9-0x62509). Its `Flags` has
+/// [`RuleKey::PersonJoin`]'s other reading, which reads the swap of a
+/// person of [`REPLACED_BY_MISSION_SHIP`] for its mission's escort ship
+/// (`_HandlePlayerCommunication` @0x621a9-0x62509) as an offer to join.
+/// This is that reading's gate, narrower than the swap's
+/// ([`swaps_for_mission_ship`]): its `Flags` has
 /// [`REPLACED_BY_MISSION_SHIP`] and not [`MISSION_ON_BOARD`], and its
 /// `LinkMission` has one special ship whose goal is [`ShipGoal::Escort`]. The
 /// session asks too that the mission be available from a ship
@@ -1443,6 +1457,29 @@ mod tests {
             (REPLACED_BY_MISSION_SHIP, MISSION_ON_BOARD),
             (0x0040, 0x0200)
         );
+    }
+
+    #[test]
+    fn a_person_of_0x0040_swaps_for_its_missions_one_ship_left_whatever_the_goal() {
+        assert!(swaps_for_mission_ship(0x0040, 1));
+        assert!(swaps_for_mission_ship(0x14ca, 1), "stock Terrapin");
+        assert!(
+            swaps_for_mission_ship(0x0409 | 0x0040, 1),
+            "a refuel trader"
+        );
+        assert!(
+            swaps_for_mission_ship(0x0240, 1),
+            "0x0200 is not the gate's"
+        );
+        for (flags, left) in [
+            (0x0000, 1),
+            (0x0bbf, 1),
+            (0x0040, 0),
+            (0x0040, 2),
+            (0x0040, -1),
+        ] {
+            assert!(!swaps_for_mission_ship(flags, left), "{flags:#x} {left}");
+        }
     }
 
     #[test]

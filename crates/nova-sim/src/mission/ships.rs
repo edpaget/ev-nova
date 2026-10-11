@@ -3,7 +3,7 @@
 //! state its slot keeps of them ([`SpecialShips`]). How they spawn is the
 //! [`traffic::spawn`](crate::traffic::spawn) module's "Mission ships".
 
-use crate::catalog::{CommCatalog, GovtId, MissionShip, SystemId};
+use crate::catalog::{CommCatalog, GovtId, MissionShip, ShipId, SystemId};
 use crate::chance::Chance;
 use crate::govt::Governments;
 use crate::hyperspace::{Places, StarMap};
@@ -178,6 +178,23 @@ pub fn appear_timer(ships: &MissionShip, chance: &mut dyn Chance) -> i16 {
     } else {
         i16::try_from(chance.below(APPEAR_DRAW) + APPEAR_DRAW).unwrap_or(i16::MAX)
     }
+}
+
+/// `Flags`: the mission's ships all fly one ship type
+/// (`_MissionDudeSpawn` @0x3cda7; the type kept for later setups is
+/// rdm:phase/mission-ships-fidelity/phase-1-uniform-ship-type). A person
+/// swapped for the mission's ship hands it its own type through it.
+pub const UNIFORM_SHIP_TYPE: u16 = 0x0800;
+
+/// The ship type a person flying `person_ship`, swapped for the ship of a
+/// mission of `Flags` `flags` whose `düde` lists `dude_ships`, gives that
+/// ship (`_MissionDudeSpawn` @0x3cd90-0x3cdd3): its own type under
+/// [`UNIFORM_SHIP_TYPE`] when the `düde` lists it; else none, and the
+/// type is drawn from the `düde` as for any mission ship. The swap's one
+/// ship left is the other half of the original's test (@0x3cdad).
+#[must_use]
+pub fn swapped_ship_type(flags: u16, dude_ships: &[ShipId], person_ship: ShipId) -> Option<ShipId> {
+    (flags & UNIFORM_SHIP_TYPE != 0 && dude_ships.contains(&person_ship)).then_some(person_ship)
 }
 
 /// String `Rand(count) + 1` of `STR#` `list` in `strings`, drawn; empty,
@@ -373,6 +390,31 @@ mod tests {
     use super::*;
     use crate::catalog::{GovtRecord, StarSystem, StellarId};
     use crate::testkit::{Draws, govt};
+
+    #[test]
+    fn with_flags_0x0800_a_swapped_ship_flies_the_persons_type_when_the_dude_lists_it() {
+        let dude = [ShipId(137), ShipId(136)];
+        assert_eq!(UNIFORM_SHIP_TYPE, 0x0800);
+        assert_eq!(
+            swapped_ship_type(0x0900, &dude, ShipId(136)),
+            Some(ShipId(136)),
+            "mission 132's Terrapin"
+        );
+        assert_eq!(
+            swapped_ship_type(0x0800, &dude, ShipId(137)),
+            Some(ShipId(137))
+        );
+        assert_eq!(
+            swapped_ship_type(0x0800, &dude, ShipId(135)),
+            None,
+            "not listed"
+        );
+        assert_eq!(
+            swapped_ship_type(0x07ff, &dude, ShipId(136)),
+            None,
+            "drawn without 0x0800"
+        );
+    }
 
     const FED: GovtId = GovtId(128);
     const CIVVIES: GovtId = GovtId(129);

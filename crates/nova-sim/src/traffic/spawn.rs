@@ -56,9 +56,9 @@
 //! their name and subtitle, and, for a `ShipStart` above 0, their appear
 //! timer. Each ship carries its mission's mark ([`MissionMark`], the
 //! original's ship +0xc8d2: the slot, its `ShipBehav`, and whether it
-//! spawned cloaked). They come in two ways, each through
+//! spawned cloaked). They come in three ways, each through
 //! `_MissionDudeSpawn` (@0x3cd3b, [`mission_ships`],
-//! [`arriving_mission_ships`]): a ship drawn from the mission's `düde`,
+//! [`arriving_mission_ships`], [`swapped_mission_ship`]): a ship drawn from the mission's `düde`,
 //! its government, `Booty`, `InfoTypes` and AI, aimed at the player for
 //! `ShipBehav` 0 (`_AIMakeShipAttackPlayer` @0x3d099-0x3d0bb).
 //!
@@ -79,6 +79,13 @@
 //!   The enter-system hook restarts the timer for `ShipStart` 1 (see the
 //!   session's `mission_ships` module and the [`story`](crate::story)
 //!   module's "One arrival").
+//! - **In a person's place** (`_HandlePlayerCommunication`
+//!   @0x62421-0x6252f): a person of `Flags` 0x0040 whose mission is
+//!   accepted on its hail, with one of its ships left, is swapped for that
+//!   one ship, which takes the person's position, velocity and heading.
+//!   With mission `Flags` 0x0800 it flies the person's own type when the
+//!   `düde` lists it, drawing no type. No count changes: it is the slot's
+//!   one ship left (see the session's `mission_ships` module).
 //!
 //! A ship destroyed lowers its slot's ships left, so it does not come again. An
 //! abort unmarks its ships, or takes them out while docked; a freed slot's
@@ -481,9 +488,10 @@ pub struct MissionSpawn<'a> {
 /// One of `spawn`'s ships as `_MissionDudeSpawn` (@0x3cd3b) brings it in:
 /// placed as any ship at setup, its aggression drawn first, then x and y
 /// (`_GenericRandomShipSpawn` @0x3c89f), with no heading drawn; then its
-/// ship type, drawn from the `düde` by `Probability` among the ship
-/// types whose `AppearOn` holds by `gate`, or, with none, among them all
-/// (`_SelectShipFieldFromDude` with 0, then 1, @0x3cdea-0x3ce36). It
+/// ship type: `preset` when given, drawing nothing (the slot's +0x56,
+/// @0x3cdea-0x3cdf3); else drawn from the `düde` by `Probability` among
+/// the ship types whose `AppearOn` holds by `gate`, or, with none, among
+/// them all (`_SelectShipFieldFromDude` with 0, then 1, @0x3cdf5-0x3ce36). It
 /// carries the `düde`'s government, `Booty` and `InfoTypes`, the `düde`'s
 /// `AIType` above 0 or else its ship's `InherentAI`, and the mission's
 /// mark. `None`, after the place's draws, when the `düde` has no record
@@ -491,6 +499,7 @@ pub struct MissionSpawn<'a> {
 fn mission_dude_ship(
     table: &SpawnTable,
     spawn: &MissionSpawn,
+    preset: Option<ShipId>,
     gate: Gate,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<NewShip> {
@@ -498,13 +507,17 @@ fn mission_dude_ship(
     let x = spread(SPAWN_SPREAD, chance);
     let y = spread(SPAWN_SPREAD, chance);
     let dude = table.dude_records.get(&spawn.dude)?;
-    let appearing: Vec<(ShipId, u32)> = dude
-        .ships
-        .iter()
-        .copied()
-        .filter(|(ship, _)| appears(table, *ship, gate))
-        .collect();
-    let ship = pick(&appearing, chance).or_else(|| pick(&dude.ships, chance))?;
+    let ship = if let Some(ship) = preset {
+        ship
+    } else {
+        let appearing: Vec<(ShipId, u32)> = dude
+            .ships
+            .iter()
+            .copied()
+            .filter(|(ship, _)| appears(table, *ship, gate))
+            .collect();
+        pick(&appearing, chance).or_else(|| pick(&dude.ships, chance))?
+    };
     let inherent_ai = table.ships.get(&ship).map_or(0, |kind| kind.inherent_ai);
     let ai_type = if dude.ai_type > 0 {
         dude.ai_type
@@ -551,7 +564,7 @@ pub fn mission_ships(
         _ => None,
     };
     (0..spawn.count.max(0))
-        .filter_map(|_| mission_dude_ship(table, spawn, gate, chance))
+        .filter_map(|_| mission_dude_ship(table, spawn, None, gate, chance))
         .map(|mut ship| {
             if let Some(at) = nav {
                 ship.state.position = at;
@@ -586,7 +599,7 @@ pub fn arriving_mission_ships(
     let entry = toward * jump_in_distance();
     (0..spawn.count.max(0))
         .filter_map(|_| {
-            let ship = mission_dude_ship(table, spawn, gate, chance)?;
+            let ship = mission_dude_ship(table, spawn, None, gate, chance)?;
             let x = spread(MISSION_ARRIVAL_SPREAD, chance);
             let y = spread(MISSION_ARRIVAL_SPREAD, chance);
             let position = entry + Vec2::new(x, y);
@@ -602,6 +615,26 @@ pub fn arriving_mission_ships(
             })
         })
         .collect()
+}
+
+/// `spawn`'s one ship swapped in for a person whose mission was just
+/// accepted on its hail (`_HandlePlayerCommunication` @0x6244b-0x624e5):
+/// brought in as `mission_dude_ship` brings it, its type `preset` when
+/// given ([`swapped_ship_type`](crate::mission::ships::swapped_ship_type)),
+/// then given the person's `state` (position +0x18, velocity +0x20,
+/// heading +0x44), not gliding in and never cloaked. `spawn`'s count and
+/// start are not read. `None`, after the place's draws, when the `düde`
+/// has no record or no ship.
+pub fn swapped_mission_ship(
+    table: &SpawnTable,
+    spawn: &MissionSpawn,
+    state: ShipState,
+    preset: Option<ShipId>,
+    gate: Gate,
+    chance: &mut (impl Chance + ?Sized),
+) -> Option<NewShip> {
+    let ship = mission_dude_ship(table, spawn, preset, gate, chance)?;
+    Some(NewShip { state, ..ship })
 }
 
 /// A `düde` ship: a `düde` by weight, a ship of it by `Probability`
@@ -2282,5 +2315,114 @@ mod tests {
             &mut chance,
         );
         assert_eq!(ships[0].ship, ShipId(203), "no fuel tank");
+    }
+    /// A person's place: at (40, -60), moving (1, 2), heading 90.
+    const PERSON_AT: ShipState = ShipState {
+        position: Vec2::new(40.0, -60.0),
+        velocity: Vec2::new(1.0, 2.0),
+        heading: 90.0,
+    };
+
+    #[test]
+    fn a_swapped_mission_ship_takes_the_persons_place_its_ship_drawn_from_its_dude() {
+        let mut chance = Draws::of(&[0, 0, 1499, 50]);
+        let ship = swapped_mission_ship(
+            &with_mission_dude(),
+            &mission_spawn(1, 0),
+            PERSON_AT,
+            None,
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!(chance.asked, [3, 1500, 1500, 100]);
+        assert_eq!(
+            ship,
+            Some(NewShip {
+                ship: ShipId(203),
+                govt: Some(GovtId(131)),
+                ai_type: AiType::Interceptor,
+                lead: None,
+                state: PERSON_AT,
+                jumping_in: false,
+                aggression: 2,
+                booty: 0x0002,
+                info_types: 0x0001,
+                person: None,
+                mission: Some(MissionMark {
+                    slot: 3,
+                    behav: ShipBehav::AttackPlayer,
+                    cloaked: false,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn a_swapped_mission_ship_of_a_preset_type_flies_it_drawing_no_pick() {
+        let gated = appearing(with_mission_dude(), 202, "b7");
+        let refusing = refusing_7();
+        let mut chance = Draws::of(&[]);
+        let ship = swapped_mission_ship(
+            &gated,
+            &MissionSpawn {
+                behav: ShipBehav::EscortPlayer,
+                start: ShipStart::from_code(2),
+                ..mission_spawn(1, 0)
+            },
+            PERSON_AT,
+            Some(ShipId(202)),
+            refusing.world.gate(),
+            &mut chance,
+        )
+        .expect("a ship");
+        assert_eq!(chance.asked, [3, 1500, 1500], "no pick, AppearOn unasked");
+        assert_eq!(ship.ship, ShipId(202));
+        assert_eq!((ship.state, ship.jumping_in), (PERSON_AT, false));
+        assert_eq!(
+            ship.mission,
+            Some(MissionMark {
+                slot: 3,
+                behav: ShipBehav::EscortPlayer,
+                cloaked: false,
+            }),
+            "never cloaked"
+        );
+        let mut inherent = with_mission_dude();
+        inherent
+            .dude_records
+            .get_mut(&DudeId(150))
+            .expect("150")
+            .ai_type = 0;
+        let ship = swapped_mission_ship(
+            &inherent,
+            &mission_spawn(1, 0),
+            PERSON_AT,
+            Some(ShipId(202)),
+            mission_gate(),
+            &mut crate::NeverFires,
+        );
+        assert_eq!(
+            ship.map(|ship| ship.ai_type),
+            Some(AiType::Interceptor),
+            "ship 202's InherentAI 4"
+        );
+    }
+
+    #[test]
+    fn a_swap_whose_dude_has_no_record_brings_no_ship() {
+        let unknown = MissionSpawn {
+            dude: DudeId(151),
+            ..mission_spawn(1, 0)
+        };
+        let mut chance = Draws::of(&[]);
+        let ship = swapped_mission_ship(
+            &with_mission_dude(),
+            &unknown,
+            PERSON_AT,
+            Some(ShipId(202)),
+            mission_gate(),
+            &mut chance,
+        );
+        assert_eq!((ship, chance.asked), (None, vec![3, 1500, 1500]));
     }
 }
