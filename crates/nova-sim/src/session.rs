@@ -400,7 +400,7 @@ use crate::combat::armament::{
 use crate::combat::beam::Beam;
 use crate::combat::hull::{Condition, DisableRule, HullSpec};
 use crate::combat::projectile::Shot;
-use crate::combat::report::SimDiagnostic;
+use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
 use crate::control::{ControlBits, NovaBits, ScriptNote};
@@ -613,6 +613,8 @@ pub struct Session {
     trigger: Trigger,
     /// The shots and beams in flight, and what the fight reports.
     combat: Combat,
+    /// What the session reports outside combat.
+    reports: Reports,
     /// The NPC the player targets, if any.
     target: Option<NpcId>,
     /// What the view shows of space about the player's ship (see the
@@ -970,6 +972,7 @@ impl Session {
             condition: Condition::Intact,
             trigger: Trigger::default(),
             combat: Combat::default(),
+            reports: Reports::default(),
             target: None,
             play_area: crate::cloak::DEFAULT_PLAY_AREA,
             secondary: None,
@@ -1867,7 +1870,9 @@ impl Session {
     /// each made once a session, since they were last taken; taking them
     /// empties the list.
     pub fn take_diagnostics(&mut self) -> Vec<SimDiagnostic> {
-        self.combat.take_diagnostics()
+        let mut diagnostics = self.combat.take_diagnostics();
+        diagnostics.extend(self.reports.take());
+        diagnostics
     }
 
     /// The NPCs in the system, in the order they appeared.

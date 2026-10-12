@@ -8,7 +8,11 @@
 //! stand and its `EnableOn` through the session's control bits; and each
 //! `OnStart` and `OnEnd` runs at once through `Session::run_script`, as
 //! a stellar's `OnRegen` does, its `M`, `N`, `Q` and `S` waiting for the
-//! next settling.
+//! next settling. An iterative script's test before each run
+//! (`cron::holds`) reads the bits contributed and the control bits as the
+//! last run left them, and a loop stopped at 10001 runs reports
+//! [`SimDiagnostic::CronRunsCapped`], once a session, through
+//! [`Session::take_diagnostics`].
 //!
 //! The pilot keeps each crön running or holding off, its `days` and
 //! `holdoff`, keyed by ID. A pilot flown from a save naming a crön the
@@ -26,8 +30,9 @@ use std::rc::Rc;
 
 use crate::catalog::{CronId, CronRecord};
 use crate::chance::Chance;
+use crate::combat::report::SimDiagnostic;
 use crate::control::Script;
-use crate::cron::{self, CronDay, CronFacts, CronState};
+use crate::cron::{self, CronDay, CronFacts, CronHook, CronState};
 use crate::session::Session;
 use crate::story::SubscriptionId;
 use crate::wares::{self, Contributors};
@@ -73,6 +78,18 @@ impl<C: Chance + ?Sized> CronDay for SessionCrons<'_, C> {
     fn run(&mut self, _id: SubscriptionId, script: &Script) {
         self.session.run_script(script, &mut *self.chance);
     }
+
+    fn holds(&mut self, record: &CronRecord) -> bool {
+        let session = &*self.session;
+        cron::holds(record, session.contributed(), session.gate())
+    }
+
+    /// Reports it, once a session.
+    fn capped(&mut self, cron: CronId, hook: CronHook) {
+        self.session
+            .reports
+            .report(SimDiagnostic::CronRunsCapped { cron, hook });
+    }
 }
 
 impl Session {
@@ -109,8 +126,9 @@ mod tests {
         StellarId, SystemId,
     };
     use crate::chance::NeverFires;
+    use crate::combat::report::SimDiagnostic;
     use crate::control::{Bit, Script, Test};
-    use crate::cron::CronState;
+    use crate::cron::{CronHook, CronState, ITERATE_END, ITERATE_START};
     use crate::date::GameDate;
     use crate::mission::Refusal;
     use crate::outfitter::OutfitFlags;
@@ -510,5 +528,129 @@ mod tests {
         );
         let saved = save::decode(&save::encode(session.pilot())).expect("loads");
         assert_eq!(saved.crons().keys().collect::<Vec<_>>(), [&CronId(128)]);
+    }
+
+    /// Crön 128 with `flags`, running `duration` days, its `OnStart`
+    /// `on_start`, its `OnEnd` `on_end` and its `EnableOn` `enable_on`.
+    fn flagged(
+        flags: u16,
+        duration: i16,
+        on_start: &str,
+        on_end: &str,
+        enable_on: &str,
+    ) -> CronRecord {
+        CronRecord {
+            flags,
+            enable_on: Test::parse(enable_on),
+            ..scripted(128, duration, on_start, on_end)
+        }
+    }
+
+    fn capped(hook: CronHook) -> SimDiagnostic {
+        SimDiagnostic::CronRunsCapped {
+            cron: CronId(128),
+            hook,
+        }
+    }
+
+    #[test]
+    fn an_iterative_on_start_runs_until_its_enable_on_fails() {
+        let catalog = timing(vec![flagged(
+            ITERATE_START,
+            3,
+            "b11 ^b10 ^b12",
+            "",
+            "!b11 | b10",
+        )]);
+        let mut session = quiet(&catalog);
+        session.let_days_pass(1, &mut NeverFires);
+        assert!(session.control_bit(bit(11)));
+        assert!(!session.control_bit(bit(10)), "an even number of runs");
+        assert!(!session.control_bit(bit(12)), "two runs, not three");
+        assert_eq!(session.take_diagnostics(), []);
+    }
+
+    #[test]
+    fn an_iterative_on_start_runs_zero_times_after_a_pre_holdoff_that_turned_its_enable_on_false() {
+        for (flags, runs) in [(ITERATE_START, false), (0, true)] {
+            let mut held = flagged(flags, 3, "b10", "", "!b5");
+            held.pre_holdoff = 1;
+            let catalog = timing(vec![held]);
+            let mut session = quiet(&catalog);
+            session.let_days_pass(1, &mut NeverFires);
+            assert_eq!(session.pilot().crons().len(), 1, "started");
+            session.set_control_bit(bit(5), true);
+            session.let_days_pass(1, &mut NeverFires);
+            assert_eq!(session.control_bit(bit(10)), runs, "flags {flags}");
+        }
+    }
+
+    #[test]
+    fn an_iterative_on_start_is_capped_at_10001_runs_with_a_diagnostic() {
+        let catalog = timing(vec![flagged(ITERATE_START, 3, "^b10", "", "")]);
+        let mut session = quiet(&catalog);
+        session.let_days_pass(1, &mut NeverFires);
+        assert!(session.control_bit(bit(10)), "10001 runs, an odd number");
+        assert_eq!(session.take_diagnostics(), [capped(CronHook::OnStart)]);
+        assert_eq!(session.take_diagnostics(), []);
+    }
+
+    #[test]
+    fn a_non_iterative_cron_runs_once() {
+        let catalog = timing(vec![flagged(0, 3, "^b10", "", "")]);
+        let mut session = quiet(&catalog);
+        session.let_days_pass(1, &mut NeverFires);
+        assert!(session.control_bit(bit(10)));
+        assert_eq!(session.take_diagnostics(), []);
+    }
+
+    #[test]
+    fn an_iterative_on_end_does_not_run_when_its_enable_on_is_false_at_the_end() {
+        for (flags, runs) in [(ITERATE_END, false), (0, true)] {
+            let catalog = timing(vec![flagged(flags, 1, "b20", "b21", "!b20")]);
+            let mut session = quiet(&catalog);
+            session.let_days_pass(2, &mut NeverFires);
+            assert_eq!(session.control_bit(bit(21)), runs, "flags {flags}");
+            assert!(session.pilot().crons().is_empty(), "ended");
+        }
+    }
+
+    /// Crön 128 requiring 0x4 with `flags`, its `OnStart` selling the
+    /// owned outfit 300 that contributes 0x4, then toggling b10; crön 128
+    /// contributing `contribute`.
+    fn selling(contribute: u64) -> Session {
+        let mut seller = flagged(ITERATE_START, 3, "D300 ^b10", "", "");
+        seller.require = 0x4;
+        seller.contribute = contribute;
+        let mut catalog = timing(vec![seller]);
+        catalog.outfits = vec![OutfitRecord {
+            contribute: 0x4,
+            ..outfit(300, &[])
+        }];
+        let mut session = quiet(&catalog);
+        session.pilot.outfits.insert(OutfitId(300), 1);
+        session.let_days_pass(1, &mut NeverFires);
+        session
+    }
+
+    #[test]
+    fn an_iterative_loop_stops_when_a_run_makes_require_fail() {
+        let mut session = selling(0);
+        assert!(session.control_bit(bit(10)), "one run");
+        assert!(
+            session
+                .pilot
+                .outfits
+                .get(&OutfitId(300))
+                .is_none_or(|n| *n == 0)
+        );
+        assert_eq!(session.take_diagnostics(), []);
+    }
+
+    #[test]
+    fn a_crons_own_contribute_keeps_its_own_require_met() {
+        let mut session = selling(0x4);
+        assert!(session.control_bit(bit(10)), "10001 runs");
+        assert_eq!(session.take_diagnostics(), [capped(CronHook::OnStart)]);
     }
 }

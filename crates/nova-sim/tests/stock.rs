@@ -2094,6 +2094,7 @@ fn every_stock_sub_munition_reports_its_unimplemented_flags_once_when_released()
             diagnostics.retain(|diagnostic| match diagnostic {
                 SimDiagnostic::UnimplementedWeaponFlag { weapon, .. }
                 | SimDiagnostic::UnimplementedGuidance { weapon, .. } => *weapon != parent.id,
+                SimDiagnostic::CronRunsCapped { .. } => true,
             });
             (parent.id.0, diagnostics)
         })

@@ -43,12 +43,26 @@
 //! into the holdoff rather than its `PostHoldoff` (@0x387f1 → 0x388c5),
 //! and a `Duration` 0 crön whose pre-holdoff ends runs `OnEnd` again the
 //! next day. The port runs `OnEnd` once and waits out the `PostHoldoff`.
-//! The `Flags` that run `OnStart` or `OnEnd` each day (0x1, 0x2) are
-//! crons-news-ranks phase 6's: here every crön runs each script once.
 //!
 //! The session runs each script as a participant's effect (its `M`, `N`,
 //! `Q` and `S` deferred to the next settling), named by [`cron_hook`]
 //! and never registered, so it keeps no once-fired entry.
+//!
+//! # Iterative scripts
+//!
+//! Two `Flags` bits make a crön's scripts iterative: 0x1 ([`ITERATE_START`])
+//! its `OnStart` (`_ActivateCron` @0x38602) and 0x2 ([`ITERATE_END`]) its
+//! `OnEnd` (`_TerminateCron` @0x3848e). Without its bit a script runs once,
+//! untested. With it, the script runs while [`holds`] passes, tested
+//! before each run: `Require` against the bits contributed now, then
+//! `EnableOn` (@0x38670-0x3869b, @0x384fc-0x38527). So it runs zero times
+//! when they already fail, as a pre-holdoff can leave them, and an
+//! iterative `OnEnd` does not run when `EnableOn` is false at the end; the
+//! crön still ends. Each run sees what the last one set. The 10001st run
+//! ([`RUN_CAP`]) stops the loop without testing again (@0x38655,
+//! @0x384e1), and the session reports it once as a diagnostic. A crön's
+//! own `Contribute` counts in its own loops, its state being written
+//! before `OnStart` and cleared only after `OnEnd`.
 //!
 //! # Contribute
 //!
@@ -123,6 +137,59 @@ pub const START: u8 = 0;
 /// A crön's `OnEnd` hook.
 pub const END: u8 = 1;
 
+/// The `Flags` bit that makes a crön's `OnStart` iterative (@0x38602).
+pub const ITERATE_START: u16 = 0x0001;
+/// The `Flags` bit that makes a crön's `OnEnd` iterative (@0x3848e).
+pub const ITERATE_END: u16 = 0x0002;
+/// The run at which an iterative script's loop stops (`cmpw $0x2711`
+/// @0x38655).
+pub const RUN_CAP: u32 = 10_001;
+
+/// Which of a crön's scripts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CronHook {
+    /// Its `OnStart`.
+    OnStart,
+    /// Its `OnEnd`.
+    OnEnd,
+}
+
+impl CronHook {
+    /// Its hook number ([`START`] or [`END`]).
+    #[must_use]
+    pub const fn hook(self) -> u8 {
+        match self {
+            Self::OnStart => START,
+            Self::OnEnd => END,
+        }
+    }
+
+    /// The `Flags` bit that makes it iterative.
+    const fn flag(self) -> u16 {
+        match self {
+            Self::OnStart => ITERATE_START,
+            Self::OnEnd => ITERATE_END,
+        }
+    }
+}
+
+impl std::fmt::Display for CronHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::OnStart => "OnStart",
+            Self::OnEnd => "OnEnd",
+        })
+    }
+}
+
+/// Whether an iterative script of `record` runs again: its `Require`
+/// among the bits `contributed`, then its `EnableOn` through `gate`
+/// (`_PlayerMeetsRequirements`, then `_EvalMissionBitTestString`).
+#[must_use]
+pub fn holds(record: &CronRecord, contributed: u64, gate: Gate) -> bool {
+    wares::requirement_met(record.require, contributed) && gate.allows(&record.enable_on)
+}
+
 /// The name of crön `cron`'s `hook` ([`START`] or [`END`]) as it runs:
 /// never registered, and never kept as fired, since a crön recurs.
 #[must_use]
@@ -148,6 +215,11 @@ pub(crate) trait CronDay {
     fn eligible(&mut self, record: &CronRecord) -> bool;
     /// Runs `script`, named `id` ([`cron_hook`]), at once.
     fn run(&mut self, id: SubscriptionId, script: &Script);
+    /// Whether an iterative script of `record` runs again ([`holds`]),
+    /// against the bits contributed now.
+    fn holds(&mut self, record: &CronRecord) -> bool;
+    /// Crön `cron`'s iterative `hook` stopped at [`RUN_CAP`] runs.
+    fn capped(&mut self, cron: CronId, hook: CronHook);
 }
 
 /// One day's pass over the crons, by ascending ID, as
@@ -211,7 +283,7 @@ pub(crate) fn pass(records: &[CronRecord], day: &mut (impl CronDay + ?Sized)) {
 /// Runs `record`'s `OnStart`, and with `days` 0 left its `OnEnd` and its
 /// end the same day (@0x388d4-0x388e6).
 fn start(record: &CronRecord, days: i16, day: &mut (impl CronDay + ?Sized)) {
-    day.run(cron_hook(record.id, START), &record.on_start);
+    run_hook(record, CronHook::OnStart, day);
     if days == 0 {
         end(record, day);
     }
@@ -220,12 +292,35 @@ fn start(record: &CronRecord, days: i16, day: &mut (impl CronDay + ?Sized)) {
 /// Runs `record`'s `OnEnd`, then its intended end: its post-holdoff when
 /// `PostHoldoff` is above 0, else inactive.
 fn end(record: &CronRecord, day: &mut (impl CronDay + ?Sized)) {
-    day.run(cron_hook(record.id, END), &record.on_end);
+    run_hook(record, CronHook::OnEnd, day);
     let after = (record.post_holdoff > 0).then_some(CronState {
         days: -1,
         holdoff: record.post_holdoff,
     });
     day.set_state(record.id, after);
+}
+
+/// Runs `record`'s `hook`: once, or under its `Flags` bit while
+/// [`holds`] passes, up to [`RUN_CAP`] runs (see the module docs).
+fn run_hook(record: &CronRecord, hook: CronHook, day: &mut (impl CronDay + ?Sized)) {
+    let id = cron_hook(record.id, hook.hook());
+    let script = match hook {
+        CronHook::OnStart => &record.on_start,
+        CronHook::OnEnd => &record.on_end,
+    };
+    if record.flags & hook.flag() == 0 {
+        day.run(id, script);
+        return;
+    }
+    let mut runs = 0;
+    while day.holds(record) {
+        day.run(id, script);
+        runs += 1;
+        if runs == RUN_CAP {
+            day.capped(record.id, hook);
+            break;
+        }
+    }
 }
 
 /// One crön's counters while it runs or holds off, as the original keeps
@@ -479,7 +574,7 @@ impl Bound {
 mod tests {
     use super::*;
     use std::cell::RefCell;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, VecDeque};
 
     use crate::control::{ControlBits, FreshPilot, PilotFacts, Test, TestExpr};
     use crate::rulebook::RuleSource;
@@ -987,6 +1082,46 @@ mod tests {
     }
 
     #[test]
+    fn holds_needs_require_and_enable_on() {
+        let record = CronRecord {
+            require: 0x6,
+            enable_on: Test::parse("b5"),
+            ..cron(128)
+        };
+        for (contributed, answer, expected) in [
+            (0x6, true, true),
+            (0x6, false, false),
+            (0x4, true, false),
+            (0x4, false, false),
+        ] {
+            let bits = MockBits::answering(answer);
+            let gate = Gate {
+                control_bits: &bits,
+                pilot: &FreshPilot,
+            };
+            assert_eq!(
+                holds(&record, contributed, gate),
+                expected,
+                "{contributed:#x} {answer}"
+            );
+            if contributed == 0x6 {
+                assert_eq!(
+                    *bits.asked.borrow(),
+                    [TestExpr::parse("b5").expect("parses")]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_hook_has_its_number_and_its_name() {
+        assert_eq!(CronHook::OnStart.hook(), START);
+        assert_eq!(CronHook::OnEnd.hook(), END);
+        assert_eq!(CronHook::OnStart.to_string(), "OnStart");
+        assert_eq!(CronHook::OnEnd.to_string(), "OnEnd");
+    }
+
+    #[test]
     fn a_crons_scripts_are_named_by_its_id_and_hook() {
         assert_eq!(
             cron_hook(CronId(156), START),
@@ -1009,6 +1144,8 @@ mod tests {
         Started(i16),
         /// Ran crön `.0`'s `OnEnd`.
         Ended(i16),
+        /// Tested whether crön `.0`'s iterative script runs again.
+        Held(i16),
     }
 
     /// A hand-written day: the crons' states in a map, each crön's
@@ -1018,6 +1155,9 @@ mod tests {
     struct MockDay {
         states: BTreeMap<CronId, CronState>,
         eligible: BTreeMap<i16, bool>,
+        /// The canned answers to `holds`, in order; yes once they run out.
+        holds: VecDeque<bool>,
+        capped: Vec<(CronId, CronHook)>,
         log: Vec<Did>,
     }
 
@@ -1050,6 +1190,15 @@ mod tests {
                 START => Did::Started(id.record),
                 _ => Did::Ended(id.record),
             });
+        }
+
+        fn holds(&mut self, record: &CronRecord) -> bool {
+            self.log.push(Did::Held(record.id.0));
+            self.holds.pop_front().unwrap_or(true)
+        }
+
+        fn capped(&mut self, cron: CronId, hook: CronHook) {
+            self.capped.push((cron, hook));
         }
     }
 
@@ -1089,7 +1238,7 @@ mod tests {
         }
     }
 
-    use Did::{Asked, Ended, Started};
+    use Did::{Asked, Ended, Held, Started};
 
     #[test]
     fn a_disabled_cron_is_skipped_running_or_not() {
@@ -1286,6 +1435,14 @@ mod tests {
             self.seen.push(self.day.of(id.record));
             self.day.run(id, script);
         }
+
+        fn holds(&mut self, record: &CronRecord) -> bool {
+            self.day.holds(record)
+        }
+
+        fn capped(&mut self, cron: CronId, hook: CronHook) {
+            self.day.capped(cron, hook);
+        }
     }
 
     #[test]
@@ -1315,5 +1472,157 @@ mod tests {
         );
         assert_eq!(day.day(&records), [Ended(128)]);
         assert_eq!(day.of(128), None);
+    }
+
+    /// Crön 128 of `Duration` `duration` with `flags`, eligible, its
+    /// `holds` answering `holds` and then yes.
+    fn iterative(flags: u16, duration: i16, holds: &[bool]) -> (CronRecord, MockDay) {
+        let record = CronRecord {
+            flags,
+            ..timed(128, duration, 0, 0)
+        };
+        let day = MockDay {
+            holds: holds.iter().copied().collect(),
+            ..MockDay::eligible(128)
+        };
+        (record, day)
+    }
+
+    fn count(log: &[Did], did: Did) -> usize {
+        log.iter().filter(|each| **each == did).count()
+    }
+
+    #[test]
+    fn an_iterative_on_start_runs_until_its_conditions_fail() {
+        let (record, mut day) = iterative(ITERATE_START, 3, &[true, true, false]);
+        assert_eq!(
+            day.day(&[record]),
+            [
+                Asked(128),
+                Held(128),
+                Started(128),
+                Held(128),
+                Started(128),
+                Held(128)
+            ]
+        );
+        assert_eq!(day.capped, []);
+    }
+
+    #[test]
+    fn an_iterative_on_start_runs_zero_times_when_its_conditions_already_fail() {
+        let (record, mut day) = iterative(ITERATE_START, 3, &[false]);
+        day.states.insert(
+            CronId(128),
+            CronState {
+                days: 3,
+                holdoff: 1,
+            },
+        );
+        assert_eq!(day.day(&[record]), [Held(128)]);
+        assert_eq!(day.of(128), Some((3, 0)), "still running");
+    }
+
+    #[test]
+    fn an_iterative_on_start_stops_at_10001_runs() {
+        let (record, mut day) = iterative(ITERATE_START, 3, &[]);
+        let log = day.day(&[record]);
+        assert_eq!(count(&log, Started(128)), 10_001);
+        assert_eq!(count(&log, Held(128)), 10_001, "no test after the last");
+        assert_eq!(log.last(), Some(&Started(128)));
+        assert_eq!(day.capped, [(CronId(128), CronHook::OnStart)]);
+    }
+
+    #[test]
+    fn a_crons_on_start_runs_once_without_its_flag_whatever_its_conditions() {
+        let (record, mut day) = iterative(ITERATE_END, 3, &[false]);
+        assert_eq!(day.day(&[record]), [Asked(128), Started(128)]);
+    }
+
+    #[test]
+    fn the_on_start_flag_leaves_on_end_running_once() {
+        let (record, mut day) = iterative(ITERATE_START, 0, &[true, false]);
+        assert_eq!(
+            day.day(&[record]),
+            [Asked(128), Held(128), Started(128), Held(128), Ended(128)]
+        );
+        assert_eq!(day.of(128), None);
+    }
+
+    /// Crön 128 running its last day, with `flags` and `post_holdoff`.
+    fn ending(flags: u16, post_holdoff: i16, holds: &[bool]) -> (CronRecord, MockDay) {
+        let (mut record, mut day) = iterative(flags, 3, holds);
+        record.post_holdoff = post_holdoff;
+        day.states.insert(
+            CronId(128),
+            CronState {
+                days: 1,
+                holdoff: 0,
+            },
+        );
+        (record, day)
+    }
+
+    #[test]
+    fn an_iterative_on_end_runs_until_its_conditions_fail() {
+        let (record, mut day) = ending(ITERATE_END, 0, &[true, true, false]);
+        assert_eq!(
+            day.day(&[record]),
+            [Held(128), Ended(128), Held(128), Ended(128), Held(128)]
+        );
+        assert_eq!(day.of(128), None);
+        assert_eq!(day.capped, []);
+    }
+
+    #[test]
+    fn an_iterative_on_end_does_not_run_when_its_conditions_fail_at_the_end() {
+        let (record, mut day) = ending(ITERATE_END, 0, &[false]);
+        assert_eq!(day.day(&[record]), [Held(128)]);
+        assert_eq!(day.of(128), None, "it still ends");
+        let (record, mut day) = ending(ITERATE_END, 2, &[false]);
+        assert_eq!(day.day(&[record]), [Held(128)]);
+        assert_eq!(day.of(128), Some((-1, 2)), "into its post-holdoff");
+    }
+
+    #[test]
+    fn an_iterative_on_end_stops_at_10001_runs() {
+        let (record, mut day) = ending(ITERATE_END, 0, &[]);
+        let log = day.day(&[record]);
+        assert_eq!(count(&log, Ended(128)), 10_001);
+        assert_eq!(count(&log, Held(128)), 10_001);
+        assert_eq!(day.capped, [(CronId(128), CronHook::OnEnd)]);
+        assert_eq!(day.of(128), None);
+    }
+
+    #[test]
+    fn the_on_end_flag_leaves_on_start_running_once() {
+        let (record, mut day) = iterative(ITERATE_END, 0, &[true, false]);
+        assert_eq!(
+            day.day(&[record]),
+            [Asked(128), Started(128), Held(128), Ended(128), Held(128)]
+        );
+    }
+
+    #[test]
+    fn a_duration_0_cron_with_both_flags_loops_each_script() {
+        let (record, mut day) = iterative(
+            ITERATE_START | ITERATE_END,
+            0,
+            &[true, false, true, true, false],
+        );
+        assert_eq!(
+            day.day(&[record]),
+            [
+                Asked(128),
+                Held(128),
+                Started(128),
+                Held(128),
+                Held(128),
+                Ended(128),
+                Held(128),
+                Ended(128),
+                Held(128)
+            ]
+        );
     }
 }
