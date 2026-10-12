@@ -13403,6 +13403,32 @@ mod tests {
     }
 
     #[test]
+    fn the_nav_area_is_centred_by_the_metrics_given() {
+        use crate::text::TextMetrics as _;
+        use crate::text::fixture::MonoMetrics;
+        let view = flight().with_metrics(Rc::new(MonoMetrics));
+        let origin = drawn(&view)
+            .iter()
+            .find_map(|c| match c {
+                DrawCommand::Text { text, origin, .. } if text == hud::NAV_OFF => Some(*origin),
+                _ => None,
+            })
+            .expect("Nav System Off");
+        let layout = layout();
+        let area = layout.nav.offset(at(830.0, 0.0));
+        let width = MonoMetrics.width(layout.font, layout.font_size, hud::NAV_OFF);
+        // The stock area's middle is 830 + (8 + 184) / 2 = 926.
+        assert_eq!(f32::midpoint(area.min.x, area.max.x), 926.0);
+        assert_eq!(
+            origin,
+            at(
+                926.0 - (width / 2.0).trunc(),
+                area.min.y + hud::NAV_OFF_BASELINE - layout.font_size
+            )
+        );
+    }
+
+    #[test]
     fn a_stellar_target_not_in_the_scene_is_stellar_navigation_over_no_destination() {
         let mut view = flight();
         tap(&mut view, LAND);
