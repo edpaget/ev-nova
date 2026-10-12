@@ -13545,6 +13545,11 @@ mod tests {
         assert_eq!(cloak_alpha(CloakShown::Opaque), Some(255));
         assert_eq!(cloak_alpha(CloakShown::Translucent(0x1e)), Some(135));
         assert_eq!(cloak_alpha(CloakShown::Translucent(0)), Some(255));
+        assert_eq!(
+            cloak_alpha(CloakShown::Translucent(0x20)),
+            Some(128),
+            "127.5, rounded to nearest"
+        );
         assert_eq!(cloak_alpha(CloakShown::Hidden), None);
     }
 

@@ -188,9 +188,9 @@ mod tests {
         let scans = scanning(SCAN_SCREEN);
         let mut session = holding_260(&scans);
         let player = session.player().position;
-        let npc = &mut session.traffic.npcs_mut()[0];
-        npc.cloak = CLOAKED;
-        npc.state.position = player + Vec2::new(1000.0, -1000.0);
+        let id = session.npcs()[0].id;
+        crate::fixture::cloak(&mut session, id, CLOAKED);
+        session.traffic.npcs_mut()[0].state.position = player + Vec2::new(1000.0, -1000.0);
         assert!(!session.sees_past_cloak(&session.npcs()[0]), "out of sight");
         assert_eq!(
             session.cloak_shown(&session.npcs()[0]),
