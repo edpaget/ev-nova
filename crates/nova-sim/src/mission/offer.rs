@@ -74,8 +74,11 @@ impl RollTable {
 pub struct Stop {
     /// The stellar.
     pub stellar: StellarId,
-    /// The lowest-ID visible system that lists it, `None` when none does
-    /// (a fixed stellar of a hidden system, or none at all).
+    /// The system that owns it: the lowest-ID visible system that lists it
+    /// and is not shadowed at its place
+    /// ([`OverlaidGalaxy::owner`](crate::story::OverlaidGalaxy::owner)),
+    /// `None` when none does (a fixed stellar of a hidden or shadowed
+    /// system, or none at all).
     pub system: Option<SystemId>,
 }
 

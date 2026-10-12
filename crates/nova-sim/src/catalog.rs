@@ -176,7 +176,9 @@ pub struct ListedStellar {
     /// The `spöb`'s ID.
     pub id: StellarId,
     /// Every `sÿst` that can be read and lists it, by ascending ID, each
-    /// once: the galaxy refresh gives it to the lowest visible one.
+    /// once: the galaxy refresh gives it to the lowest visible one not
+    /// shadowed at its place
+    /// ([`OverlaidGalaxy::owner`](crate::story::OverlaidGalaxy::owner)).
     pub systems: Vec<SystemId>,
     /// Its `Flags`.
     pub flags: u32,

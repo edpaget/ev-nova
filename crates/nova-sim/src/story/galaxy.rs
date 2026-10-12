@@ -32,8 +32,12 @@ use crate::hyperspace::{CoLocated, StarMap};
 /// What the overlay changes of one system. The default changes nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SystemOverride {
-    /// Whether it is visible; `None` leaves it visible, as the catalog has
-    /// it.
+    /// Whether it is visible: `Some(false)` hidden by the last refresh of
+    /// its `Visibility`, `Some(true)` a chain head the player's move made
+    /// visible ([`HiddenMove::make_visible`]), which owns no stellar
+    /// ([`OverlaidGalaxy::owner`]), and `None` visible, as the catalog has
+    /// it. The refresh never writes `Some(true)`, so it marks the move's
+    /// reveal exactly.
     pub visible: Option<bool>,
     /// Its government: `Some(None)` makes it independent, and `None` leaves
     /// the catalog's.
@@ -372,6 +376,35 @@ impl OverlaidGalaxy {
                 make_visible: true,
             },
         }
+    }
+
+    /// The system that owns a stellar `listers` list (its
+    /// [`ListedStellar::systems`](crate::catalog::ListedStellar::systems),
+    /// by ascending ID): the first that claims it, none when none does. A
+    /// system claims when it is in the catalog and visible, was not made
+    /// visible by the move (its overlay entry is not `Some(true)`), and
+    /// stands for itself at its place ([`OverlaidGalaxy::same_place`]).
+    ///
+    /// This is `_PropagateMissionBitEffects`' ownership (@0x996ed-0x997bd),
+    /// derived rather than stored: it visits the systems by ascending ID,
+    /// and a visible system not yet done claims each of its stellars still
+    /// unowned, then marks every higher system at its place done. So by
+    /// [`CoLocated::Lowest`] a visible system shadowed by a lower visible
+    /// one at its place claims nothing, and by [`CoLocated::Itself`] the
+    /// owner is the lowest-ID visible lister. The ownership runs before
+    /// the player's move out of a hidden system (@0x998f1-0x99a36), so a
+    /// chain head the move shows claims nothing; it never shadows anything
+    /// either, as the move shows it only at a place with no visible
+    /// system. A stellar listed only by hidden or shadowed systems has no
+    /// owner.
+    #[must_use]
+    pub fn owner(&self, listers: &[SystemId]) -> Option<SystemId> {
+        listers.iter().copied().find(|&system| {
+            self.exists(system)
+                && self.visible(system)
+                && self.overlay.system(system).visible != Some(true)
+                && self.same_place(system) == Some(system)
+        })
     }
 
     /// Where a player in `system` goes when it is hidden
@@ -809,6 +842,58 @@ mod tests {
             ],
             "1 by its override, 3 though hidden, 4 made independent"
         );
+    }
+
+    /// The owner `galaxy` gives a stellar listed by `listers`.
+    fn owner(galaxy: &OverlaidGalaxy, listers: &[i16]) -> Option<i16> {
+        galaxy.owner(&ids(listers)).map(|id| id.0)
+    }
+
+    #[test]
+    fn a_stellar_is_owned_by_the_lowest_visible_lister_standing_for_its_place() {
+        let galaxy = hiding(&[]);
+        assert_eq!(owner(&galaxy, &[1, 2]), Some(1));
+        assert_eq!(owner(&galaxy, &[2, 3]), Some(2), "the lowest");
+        assert_eq!(owner(&galaxy, &[3]), None, "3 is shadowed by 2");
+        assert_eq!(owner(&galaxy, &[3, 5]), None, "both shadowed");
+        assert_eq!(
+            owner(&galaxy, &[3, 4]),
+            Some(4),
+            "a later visible system elsewhere still claims it"
+        );
+        assert_eq!(owner(&galaxy, &[]), None, "no lister");
+        let galaxy = hiding(&[2]);
+        assert_eq!(owner(&galaxy, &[2]), None, "only a hidden lister");
+        assert_eq!(owner(&galaxy, &[2, 3]), Some(3));
+        assert_eq!(owner(&galaxy, &[5]), None, "3 shadows 5");
+        let galaxy = hiding(&[2, 3]);
+        assert_eq!(owner(&galaxy, &[5]), Some(5), "the lowest visible now");
+        assert_eq!(owner(&galaxy, &[99]), None, "not in the catalog");
+    }
+
+    #[test]
+    fn by_the_other_reading_each_visible_lister_claims_its_own() {
+        let galaxy = resolving(&[], CoLocated::Itself);
+        assert_eq!(owner(&galaxy, &[3]), Some(3));
+        assert_eq!(owner(&galaxy, &[3, 5]), Some(3), "the lowest visible");
+        assert_eq!(owner(&galaxy, &[2, 3]), Some(2));
+        assert_eq!(owner(&galaxy, &[5]), Some(5));
+        let galaxy = resolving(&[3], CoLocated::Itself);
+        assert_eq!(owner(&galaxy, &[3]), None, "only a hidden lister");
+        assert_eq!(owner(&galaxy, &[3, 5]), Some(5));
+    }
+
+    #[test]
+    fn a_chain_head_made_visible_by_the_move_claims_nothing() {
+        for colocated in [CoLocated::Lowest, CoLocated::Itself] {
+            let mut overlay = GalaxyOverlay::default();
+            overlay.set_visible(SystemId(4), Some(true));
+            let mut galaxy = OverlaidGalaxy::new(systems(), overlay);
+            galaxy.set_colocated(colocated);
+            assert!(galaxy.visible(SystemId(4)));
+            assert_eq!(owner(&galaxy, &[4]), None, "{colocated:?}");
+            assert_eq!(owner(&galaxy, &[1, 4]), Some(1), "{colocated:?}");
+        }
     }
 
     /// [`systems`] with 2 hidden and 1 governed by 7.

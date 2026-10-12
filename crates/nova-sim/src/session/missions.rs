@@ -1315,27 +1315,34 @@ mod tests {
     fn each_reading_of_the_mission_stellar_distance_reaches_the_world() {
         let mut catalog = offering();
         // 133 at 130's place, holding 160: distant only by the other
-        // reading.
+        // reading, and owned by 133 only while it stands for itself.
         catalog.star_map[3].position = Vec2::ZERO;
         catalog
             .sites
             .push((SystemId(133), vec![planet(160, 0.0, 0.0)]));
-        let rules = |distance| {
+        let rules = |distance, colocated| {
             Rulebook::default()
                 .with_override(RuleKey::MissionStellarDraw, RuleSource::Bible)
                 .with_override(RuleKey::MissionStellarDistance, distance)
+                .with_override(RuleKey::ColocatedResolution, colocated)
         };
-        for (distance, asked) in [(RuleSource::Engine, 1), (RuleSource::Bible, 2)] {
+        for (distance, colocated, asked) in [
+            (RuleSource::Engine, RuleSource::Bible, 1),
+            (RuleSource::Bible, RuleSource::Bible, 2),
+            (RuleSource::Engine, RuleSource::Engine, 1),
+            (RuleSource::Bible, RuleSource::Engine, 1),
+        ] {
             let mut session = Session::start(&catalog)
                 .expect("starts")
-                .with_rules(rules(distance));
+                .with_rules(rules(distance, colocated));
             assert_eq!(land_now(&mut session), Ok(StellarId(128)));
             let mut chance = Draws::arriving(&[0]);
             let _ = session.settle_script(&catalog, &mut chance);
             assert_eq!(
                 chance.asked,
                 table_then(&[asked]),
-                "{distance:?}: 150, and by the other reading 160 too"
+                "{distance:?}, {colocated:?}: 150, and by the other reading 160 \
+                 too while 133, shadowed by 130 by the engine, owns it"
             );
         }
     }

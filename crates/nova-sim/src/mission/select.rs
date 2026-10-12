@@ -29,7 +29,9 @@ use crate::story::OverlaidGalaxy;
 pub struct Stellar {
     /// The stellar.
     pub id: StellarId,
-    /// The lowest-ID visible system that lists it.
+    /// The system that owns it: the lowest-ID visible system that lists it
+    /// and is not shadowed at its place
+    /// ([`OverlaidGalaxy::owner`]).
     pub system: SystemId,
     /// Its `Flags`.
     pub flags: u32,
@@ -47,14 +49,15 @@ pub struct Stellar {
     pub listed_at_place: bool,
 }
 
-/// Every stellar of `listed` that a visible system of `galaxy` lists, by
-/// ascending ID, each in the lowest-ID visible system that lists it, as
-/// the galaxy refresh gives each stellar its system
-/// (`_PropagateMissionBitEffects` @0x9970d-0x997bd), with the overlay's
-/// government and destroyed state, and whether every system at its
-/// system's place lists it ([`Stellar::listed_at_place`]). A stellar no
-/// visible system lists is left out: the original's candidates are in a
-/// visible system (+0x1eb). So is a stellar that does not exist: every
+/// Every stellar of `listed` that has an owner in `galaxy`, by ascending
+/// ID, each in its owner ([`OverlaidGalaxy::owner`]: the lowest-ID visible
+/// system that lists it and is not shadowed at its place, by
+/// `colocated_resolution`), as the galaxy refresh gives each stellar its
+/// system (`_PropagateMissionBitEffects` @0x996ed-0x997bd), with the
+/// overlay's government and destroyed state, and whether every system at
+/// its system's place lists it ([`Stellar::listed_at_place`]). A stellar
+/// with no owner is left out: the original's candidates are in a visible
+/// system (+0x1eb). So is a stellar that does not exist: every
 /// scan of `_SelectMissionStellar` tests a stellar's +0x44 before its
 /// distance, set only for a stellar that exists (+0x45: loaded and listed
 /// by a system, `_LoadObjectData` @0x77584-0x7758b, @0x779bf-0x779c6,
@@ -69,11 +72,7 @@ pub fn stellars_of(galaxy: &OverlaidGalaxy, listed: &[ListedStellar]) -> Vec<Ste
         .iter()
         .filter_map(|stellar| {
             let id = stellar.id;
-            let system = stellar
-                .systems
-                .iter()
-                .copied()
-                .find(|&system| map.position(system).is_some())?;
+            let system = galaxy.owner(&stellar.systems)?;
             Some(Stellar {
                 id,
                 system,
@@ -1312,6 +1311,44 @@ mod tests {
             at_place,
             [(140, 131, true), (141, 131, false), (150, 132, true)],
             "the hidden 130 shares 131's place and lists 140 only: the chain takes in every system there (@0x78442-0x784e3)"
+        );
+    }
+
+    #[test]
+    fn each_stellar_is_in_its_owner_and_an_unowned_one_is_left_out() {
+        let systems: Vec<StarSystem> = vec![
+            star(130, (0.0, 0.0), &[]),
+            star(131, (0.0, 0.0), &[]),
+            star(132, (200.0, 0.0), &[]),
+        ];
+        let listed = |id, systems: &[i16]| ListedStellar {
+            id: StellarId(id),
+            systems: systems.iter().copied().map(SystemId).collect(),
+            flags: 0,
+            flags2: 0,
+            govt: None,
+        };
+        let listed = [
+            listed(140, &[130, 131]),
+            listed(141, &[131]),
+            listed(150, &[131, 132]),
+        ];
+        let placed = |colocated| {
+            let mut galaxy = OverlaidGalaxy::new(systems.clone(), GalaxyOverlay::default());
+            galaxy.set_colocated(colocated);
+            stellars_of(&galaxy, &listed)
+                .iter()
+                .map(|stellar| (stellar.id.0, stellar.system.0))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            placed(CoLocated::Lowest),
+            [(140, 130), (150, 132)],
+            "131 is shadowed by 130 and claims nothing: 141 has no owner"
+        );
+        assert_eq!(
+            placed(CoLocated::Itself),
+            [(140, 130), (141, 131), (150, 131)]
         );
     }
 
