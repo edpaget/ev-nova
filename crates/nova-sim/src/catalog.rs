@@ -188,6 +188,18 @@ pub struct ListedStellar {
     pub govt: Option<GovtId>,
 }
 
+/// A system's `Visibility`, raw from its `sÿst`: the galaxy refresh
+/// evaluates it into the overlay (see the [`story`](crate::story) module's
+/// "Visibility and governments").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SystemVisibility {
+    /// The `sÿst`'s ID.
+    pub id: SystemId,
+    /// Its `Visibility`, parsed: a blank one always holds, and one that did
+    /// not parse never does, so the system is hidden.
+    pub visibility: Test,
+}
+
 /// The stellars' and systems' names, by ID, that the text tags read
 /// (see [`text_tags`](crate::text_tags)): each `spöb` and `sÿst` that can
 /// be read, named as the game shows it.
@@ -1242,6 +1254,9 @@ pub trait PilotCatalog {
     /// Every stellar some system that can be read lists, that can be read
     /// itself, by ascending ID, with every system listing it.
     fn listed_stellars(&self) -> Vec<ListedStellar>;
+    /// Every system that can be read, by ascending ID, with its
+    /// `Visibility`.
+    fn system_visibility(&self) -> Vec<SystemVisibility>;
     /// Every stellar's and system's name that can be read.
     fn place_names(&self) -> PlaceNames;
     /// Every `spöb` that can be read, by ascending ID, with the place and
@@ -1329,6 +1344,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn listed_stellars(&self) -> Vec<ListedStellar> {
         (**self).listed_stellars()
+    }
+
+    fn system_visibility(&self) -> Vec<SystemVisibility> {
+        (**self).system_visibility()
     }
 
     fn place_names(&self) -> PlaceNames {
@@ -1425,6 +1444,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn listed_stellars(&self) -> Vec<ListedStellar> {
         (**self).listed_stellars()
+    }
+
+    fn system_visibility(&self) -> Vec<SystemVisibility> {
+        (**self).system_visibility()
     }
 
     fn place_names(&self) -> PlaceNames {
@@ -1693,6 +1716,14 @@ mod tests {
             }]
         }
 
+        /// System 130 visible by bit 5.
+        fn system_visibility(&self) -> Vec<SystemVisibility> {
+            vec![SystemVisibility {
+                id: SystemId(130),
+                visibility: Test::parse("b5"),
+            }]
+        }
+
         /// Stellar 128 Earth, in system 130 Sol.
         fn place_names(&self) -> PlaceNames {
             PlaceNames {
@@ -1759,6 +1790,7 @@ mod tests {
             format!("{:?}", catalog.stellar_marks()),
             format!("{:?}", catalog.crons()),
             format!("{:?}", catalog.ranks()),
+            format!("{:?}", catalog.system_visibility()),
         ]
     }
 
@@ -1806,6 +1838,8 @@ mod tests {
         assert!(direct[25].contains("duration: 105"), "{direct:?}");
         assert!(direct[26].contains("RankId(140)"), "{direct:?}");
         assert!(direct[26].contains("salary: 200"), "{direct:?}");
+        assert!(direct[27].contains("SystemId(130)"), "{direct:?}");
+        assert!(direct[27].contains("Bit(5)"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

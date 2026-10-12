@@ -25,7 +25,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::catalog::{GovtId, LandingSite, NebulaId, StarSystem, StellarId, SystemId};
+use crate::catalog::{
+    GovtId, LandingSite, NebulaId, StarSystem, StellarId, SystemId, SystemVisibility,
+};
+use crate::control::Gate;
 use crate::geometry::Vec2;
 use crate::hyperspace::{CoLocated, StarMap};
 
@@ -135,9 +138,45 @@ impl GalaxyOverlay {
     }
 
     /// Sets whether `system` is visible (`None` leaves it as the catalog
-    /// has it), and says whether that changed anything.
+    /// has it), and says whether that changed anything. A visibility
+    /// written here lasts only until the next refresh of the systems'
+    /// `Visibility` ([`GalaxyOverlay::refresh_visibility`]), which
+    /// overwrites every system's; `Some(true)` is the player's move's
+    /// alone (see [`SystemOverride::visible`]).
     pub fn set_visible(&mut self, system: SystemId, visible: Option<bool>) -> bool {
         edit(&mut self.systems, system, |change| change.visible = visible)
+    }
+
+    /// Hides exactly the systems of `hidden` and leaves every other one
+    /// visible as the catalog has it (`None`), clearing any `Some(true)`,
+    /// and says whether that changed anything.
+    pub fn set_hidden(&mut self, hidden: &BTreeSet<SystemId>) -> bool {
+        let held: Vec<SystemId> = self.systems.keys().copied().collect();
+        let mut changed = false;
+        for system in held.into_iter().filter(|system| !hidden.contains(system)) {
+            changed |= self.set_visible(system, None);
+        }
+        for &system in hidden {
+            changed |= self.set_visible(system, Some(false));
+        }
+        changed
+    }
+
+    /// Writes every system's visibility from its `Visibility`, as the
+    /// original's galaxy refresh does (`_PropagateMissionBitEffects`
+    /// @0x996a1-0x996eb): each of `systems` (the catalog's) hidden when its
+    /// test in `tests` fails for `gate` ([`hidden_by`]), and left visible
+    /// (`None`) otherwise, a `Some(true)` the player's move wrote included;
+    /// and any visibility held for a system outside them cleared. Says
+    /// whether that changed anything. The original hides an unused slot
+    /// too; the engine has only catalog systems.
+    pub fn refresh_visibility(
+        &mut self,
+        systems: impl IntoIterator<Item = SystemId>,
+        tests: &[SystemVisibility],
+        gate: &Gate,
+    ) -> bool {
+        self.set_hidden(&hidden_by(systems, tests, gate))
     }
 
     /// Sets `system`'s government (`Some(None)` independent, `None` the
@@ -173,12 +212,35 @@ impl GalaxyOverlay {
     }
 
     /// The systems it hides.
-    fn hidden(&self) -> BTreeSet<SystemId> {
+    pub(crate) fn hidden(&self) -> BTreeSet<SystemId> {
         self.systems()
             .filter(|(_, change)| change.visible == Some(false))
             .map(|(id, _)| id)
             .collect()
     }
+}
+
+/// The systems of `systems` whose `Visibility` in `tests` fails for
+/// `gate`: hidden by the galaxy refresh. A system with no entry in `tests`
+/// counts as a blank test, which holds (@0x995ad-0x995b4), and a test that
+/// did not parse never holds ([`Gate::allows`]). An entry for a system
+/// outside `systems` is never read.
+#[must_use]
+pub fn hidden_by(
+    systems: impl IntoIterator<Item = SystemId>,
+    tests: &[SystemVisibility],
+    gate: &Gate,
+) -> BTreeSet<SystemId> {
+    let tests: BTreeMap<SystemId, &SystemVisibility> =
+        tests.iter().map(|test| (test.id, test)).collect();
+    systems
+        .into_iter()
+        .filter(|system| {
+            tests
+                .get(system)
+                .is_some_and(|test| !gate.allows(&test.visibility))
+        })
+        .collect()
 }
 
 /// Where a player in, or arriving in, a system goes (see
@@ -418,7 +480,10 @@ impl OverlaidGalaxy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::OutfitId;
+    use crate::control::{Bit, NovaBits, PilotFacts, Test};
     use crate::hyperspace::CoLocated;
+    use crate::pilot::Gender;
     use crate::testkit::{planet, star};
 
     fn ids(list: &[i16]) -> Vec<SystemId> {
@@ -894,6 +959,130 @@ mod tests {
             assert_eq!(owner(&galaxy, &[4]), None, "{colocated:?}");
             assert_eq!(owner(&galaxy, &[1, 4]), Some(1), "{colocated:?}");
         }
+    }
+
+    /// A pilot with only `bits` set.
+    #[derive(Debug, Default)]
+    struct Bits(BTreeSet<u16>);
+
+    impl PilotFacts for Bits {
+        fn bit(&self, bit: Bit) -> bool {
+            self.0.contains(&bit.get())
+        }
+
+        fn gender(&self) -> Gender {
+            Gender::Male
+        }
+
+        fn paid(&self, _days: u16) -> bool {
+            true
+        }
+
+        fn has_outfit(&self, _outfit: OutfitId) -> bool {
+            false
+        }
+
+        fn explored(&self, _system: SystemId) -> bool {
+            false
+        }
+    }
+
+    /// `system`'s `Visibility`, `test`.
+    fn visibility(system: i16, test: &str) -> SystemVisibility {
+        SystemVisibility {
+            id: SystemId(system),
+            visibility: Test::parse(test),
+        }
+    }
+
+    /// Refreshes `overlay` over systems 1 to 5 by `tests` for a pilot with
+    /// `bits` set, tested by Nova's control bits: whether it changed.
+    fn refresh(overlay: &mut GalaxyOverlay, tests: &[SystemVisibility], bits: &[u16]) -> bool {
+        let pilot = Bits(bits.iter().copied().collect());
+        let gate = Gate {
+            control_bits: &NovaBits,
+            pilot: &pilot,
+        };
+        overlay.refresh_visibility(ids(&[1, 2, 3, 4, 5]), tests, &gate)
+    }
+
+    #[test]
+    fn a_refresh_hides_a_system_whose_visibility_fails_and_shows_it_once_it_holds() {
+        let tests = [visibility(2, "b10"), visibility(3, "!b10")];
+        let mut overlay = GalaxyOverlay::default();
+        assert!(refresh(&mut overlay, &tests, &[]));
+        assert_eq!(overlay.system(SystemId(2)).visible, Some(false));
+        assert_eq!(overlay.system(SystemId(3)).visible, None);
+        assert!(!refresh(&mut overlay, &tests, &[]), "nothing changed");
+        assert!(refresh(&mut overlay, &tests, &[10]));
+        assert_eq!(overlay.system(SystemId(2)).visible, None, "shown again");
+        assert_eq!(overlay.system(SystemId(3)).visible, Some(false));
+    }
+
+    #[test]
+    fn a_blank_test_or_no_test_leaves_a_system_visible_and_an_unparsed_one_hides_it() {
+        let tests = [visibility(1, ""), visibility(4, "b10 &")];
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(1), Some(false));
+        overlay.set_visible(SystemId(5), Some(false));
+        assert!(refresh(&mut overlay, &tests, &[10]));
+        assert_eq!(overlay.system(SystemId(1)).visible, None, "blank");
+        assert_eq!(overlay.system(SystemId(5)).visible, None, "no test");
+        assert_eq!(overlay.system(SystemId(4)).visible, Some(false), "unparsed");
+    }
+
+    #[test]
+    fn a_refresh_never_writes_a_system_shown_and_overwrites_the_moves_reveal() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(2), Some(true));
+        overlay.set_visible(SystemId(3), Some(true));
+        overlay.set_govt(SystemId(3), Some(None));
+        assert!(refresh(&mut overlay, &[visibility(3, "b10")], &[]));
+        assert_eq!(overlay.system(SystemId(2)).visible, None, "visible");
+        assert_eq!(overlay.system(SystemId(3)).visible, Some(false), "hidden");
+        assert_eq!(overlay.system(SystemId(3)).govt, Some(None), "kept");
+        assert!(
+            overlay
+                .systems()
+                .all(|(_, change)| change.visible != Some(true))
+        );
+    }
+
+    #[test]
+    fn a_refresh_clears_what_it_held_of_a_system_outside_the_catalog() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(99), Some(false));
+        overlay.set_visible(SystemId(98), Some(true));
+        overlay.set_nebula_active(NebulaId(128), Some(false));
+        assert!(refresh(&mut overlay, &[visibility(99, "b10")], &[]));
+        assert_eq!(overlay.system(SystemId(99)), SystemOverride::default());
+        assert_eq!(overlay.system(SystemId(98)), SystemOverride::default());
+        assert_eq!(overlay.nebula(NebulaId(128)), Some(false), "untouched");
+    }
+
+    #[test]
+    fn the_systems_hidden_are_those_whose_test_fails_for_the_pilot() {
+        let pilot = Bits([10].into_iter().collect());
+        let gate = Gate {
+            control_bits: &NovaBits,
+            pilot: &pilot,
+        };
+        let tests = [
+            visibility(1, "!b10"),
+            visibility(2, "b10"),
+            visibility(4, "b11"),
+            visibility(99, "b11"),
+        ];
+        assert_eq!(
+            hidden_by(ids(&[1, 2, 3, 4, 5]), &tests, &gate),
+            ids(&[1, 4]).into_iter().collect::<BTreeSet<_>>(),
+            "99 is outside the catalog"
+        );
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(2), Some(false));
+        assert!(overlay.set_hidden(&ids(&[1, 4]).into_iter().collect()));
+        assert_eq!(overlay.hidden(), ids(&[1, 4]).into_iter().collect());
+        assert!(!overlay.set_hidden(&ids(&[1, 4]).into_iter().collect()));
     }
 
     /// [`systems`] with 2 hidden and 1 governed by 7.

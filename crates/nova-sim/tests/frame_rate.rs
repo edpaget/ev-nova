@@ -116,6 +116,10 @@ impl PilotCatalog for Pilot {
         Vec::new()
     }
 
+    fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {
+        Vec::new()
+    }
+
     fn place_names(&self) -> nova_sim::catalog::PlaceNames {
         nova_sim::catalog::PlaceNames::default()
     }

@@ -10,8 +10,8 @@ use crate::catalog::{
     HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip,
     MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog,
     PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StellarMark, SystemId, SystemTraffic, TrafficCatalog, WeaponId,
-    WeaponRecord,
+    StellarId, StellarLife, StellarMark, SystemId, SystemTraffic, SystemVisibility, TrafficCatalog,
+    WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -100,6 +100,9 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) place_name_reads: RefCell<usize>,
     /// What `stellar_marks` returns: none unless a test sets them.
     pub(crate) marks: Vec<StellarMark>,
+    /// Each system's `Visibility`: none, by default, which leaves every
+    /// system visible.
+    pub(crate) visibility: Vec<SystemVisibility>,
     /// Every `crön`: none, by default.
     pub(crate) crons: Vec<CronRecord>,
     /// Every `ränk`: none, by default.
@@ -554,6 +557,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         place_names: PlaceNames::default(),
         place_name_reads: RefCell::default(),
         marks: Vec::new(),
+        visibility: Vec::new(),
         crons: Vec::new(),
         ranks: Vec::new(),
     }
@@ -738,6 +742,10 @@ impl PilotCatalog for FakePilotCatalog {
             }
         }
         listed.into_values().collect()
+    }
+
+    fn system_visibility(&self) -> Vec<SystemVisibility> {
+        self.visibility.clone()
     }
 
     fn place_names(&self) -> PlaceNames {

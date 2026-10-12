@@ -36,8 +36,8 @@ use crate::catalog::{
     MissionId, MissionRecord, MissionShip, MissionTexts, OutfitId, OutfitRecord, Penalties,
     PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId,
     ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark,
-    StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
-    loaded_mod_val,
+    StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId,
+    WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -356,6 +356,20 @@ impl PilotCatalog for GameData {
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         let sheet = self.spin_sheet(stellar_spin_id(0)?).ok()?.sheet;
         Some((sheet.frame_width(), sheet.frame_height()))
+    }
+
+    /// Each `Visibility` parsed once and shared
+    /// ([`GameData::test_expr`]); a blank one always holds.
+    fn system_visibility(&self) -> Vec<SystemVisibility> {
+        self.records::<System>()
+            .filter_map(|(id, system)| {
+                let system = system.ok()?.record;
+                Some(SystemVisibility {
+                    id: SystemId(id),
+                    visibility: self.test_expr(system.visibility.as_str()).into(),
+                })
+            })
+            .collect()
     }
 
     fn listed_stellars(&self) -> Vec<ListedStellar> {
@@ -1043,10 +1057,10 @@ mod tests {
     use super::*;
     use crate::catalog::{
         DisasterId, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties, StarSystem,
-        StartDate, StellarId, StockWeapon, WeaponId, WeaponRecord,
+        StartDate, StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
     };
     use crate::combat::weapon::Explosion;
-    use crate::control::{Script, Test};
+    use crate::control::{Script, Test, TestExpr};
 
     /// One data file, `/data/Nova Data`, holding a fork.
     struct OneFile(Vec<u8>);
@@ -1789,6 +1803,34 @@ mod tests {
             "unlisted 130, missing 999, and 133 listed only by an undecodable system left out"
         );
         assert_eq!(store(&[]).gate_sites(), []);
+    }
+
+    #[test]
+    fn each_readable_systems_visibility_is_its_test_parsed_a_blank_one_always() {
+        let mut gated = system();
+        gated[0x96..0x96 + 9].copy_from_slice(b"b5 & !b6\0");
+        let data = store(&[
+            (System::TYPE, 131, gated),
+            (System::TYPE, 130, system()),
+            (System::TYPE, 132, short(system())),
+        ]);
+        let tests = data.system_visibility();
+        assert_eq!(
+            tests,
+            [
+                SystemVisibility {
+                    id: SystemId(130),
+                    visibility: Test::default(),
+                },
+                SystemVisibility {
+                    id: SystemId(131),
+                    visibility: Test::parse("b5 & !b6"),
+                },
+            ],
+            "by ID, the undecodable 132 left out"
+        );
+        assert_eq!(tests[0].visibility.tree(), Some(&TestExpr::Always));
+        assert_eq!(store(&[]).system_visibility(), []);
     }
 
     #[test]
