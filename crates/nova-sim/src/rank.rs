@@ -1258,6 +1258,16 @@ mod tests {
     }
 
     #[test]
+    fn two_ranks_carrying_the_same_flag_still_give_it() {
+        let both = HELPS_IN_BATTLE | HELPS_FREE;
+        let records = [rank(130, Some(140), 0, both), rank(131, Some(141), 0, both)];
+        assert_eq!(
+            favour_of(&records, &[130, 131], Some(140), RuleSource::Engine),
+            BOTH
+        );
+    }
+
+    #[test]
     fn battle_help_and_free_help_are_separate_flags() {
         let records = [
             rank(130, Some(140), 0, HELPS_IN_BATTLE),
