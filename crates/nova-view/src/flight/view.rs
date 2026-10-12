@@ -10607,6 +10607,43 @@ mod tests {
         }
     }
 
+    /// Always repels boarders; never asked anything more.
+    #[derive(Debug)]
+    struct Repels;
+
+    impl BoardingRule for Repels {
+        fn repels(&self, _booty: u16) -> bool {
+            true
+        }
+
+        fn capture_odds(
+            &self,
+            _crew: &nova_sim::board::CaptureCrew,
+            _chance: &mut dyn Chance,
+        ) -> u8 {
+            unreachable!("repelled")
+        }
+
+        fn captures(&self, _odds: u8, _chance: &mut dyn Chance) -> bool {
+            unreachable!("repelled")
+        }
+
+        fn person_credits(&self, _credits: i32, _chance: &mut dyn Chance) -> i64 {
+            unreachable!("repelled")
+        }
+
+        fn grant(
+            &self,
+            _grant: &nova_sim::grant::PersonGrant,
+            _stock: &[nova_sim::grant::GrantStock],
+            _free_mass: i64,
+            _grant_max: nova_sim::RuleSource,
+            _chance: &mut dyn Chance,
+        ) -> Option<nova_sim::grant::Granted> {
+            unreachable!("repelled")
+        }
+    }
+
     /// [`trafficked`] with its ship 129 (of strength 5, a crew of 3 and a
     /// `Cost` of 150,000, and no speed, so it starts at rest) carrying
     /// money (`Booty` 0x0040), and the player's ship 128 a crew of 10.
@@ -10680,6 +10717,11 @@ mod tests {
         fast.input(&key(Key::Up, false));
         tap(&mut fast, BOARD_KEY);
         assert_eq!(fast.message(), Some(TOO_FAST_TO_BOARD));
+        let mut repelled = beside(750, 750, 0, false).with_boarding_rule(Rc::new(Repels));
+        tap(&mut repelled, BOARD_KEY);
+        assert_eq!(repelled.take_boarding(), None);
+        assert_lasts(&mut repelled, REPELLED, MESSAGE_TICKS);
+        assert_eq!(MESSAGE_TICKS, 240);
         assert_eq!(
             [CANT_BOARD, NOT_CLOSE_ENOUGH, TOO_FAST_TO_BOARD, REPELLED,],
             [
@@ -11188,6 +11230,41 @@ mod tests {
         );
     }
 
+    /// An option the ship answers by flying over to refuel the player.
+    #[derive(Debug)]
+    struct Refuel;
+
+    impl nova_sim::HailOption for Refuel {
+        fn label(&self) -> String {
+            "Refuel".to_owned()
+        }
+
+        fn applies(&self, _hail: &nova_sim::Hail) -> bool {
+            true
+        }
+
+        fn press(&self, _hail: &nova_sim::Hail, _chance: &mut dyn Chance) -> nova_sim::Answer {
+            nova_sim::Answer {
+                deed: Some(nova_sim::Deed::Help(Help::Refuel)),
+                ..nova_sim::Answer::default()
+            }
+        }
+    }
+
+    #[test]
+    fn a_helpers_note_shows_for_the_common_time() {
+        let mut view = hailable(true).with_hail_options(HailOptions::empty().with(Rc::new(Refuel)));
+        tap(&mut view, HAIL_KEY);
+        view.take_hail().expect("hailed");
+        view.answer(0).expect("open");
+        view.hang_up();
+        assert_eq!(view.message(), None);
+        view.tick(TICK);
+        let note = view.message().expect("refuelled").to_owned();
+        assert!(note.ends_with(":  Energy transfer complete."), "{note}");
+        assert_lasts(&mut view, &note, MESSAGE_TICKS);
+    }
+
     #[test]
     fn the_help_line_names_hail() {
         assert!(HELP.contains("Y: hail"), "{HELP}");
@@ -11395,8 +11472,11 @@ mod tests {
         tap(&mut view, ESCORT_RECALL_KEY);
         assert_eq!(view.message(), None, "already in formation");
         tap(&mut view, ESCORT_HOLD_KEY);
-        ticks(&mut view, u32::from(ESCORT_TICKS));
-        assert_eq!(view.message(), None, "gone in time");
+        assert_lasts(
+            &mut view,
+            "New escort orders assigned:  All ships holding position.",
+            ESCORT_TICKS,
+        );
         tap(&mut view, ESCORT_HOLD_KEY);
         assert_eq!(view.message(), None, "held already");
     }
