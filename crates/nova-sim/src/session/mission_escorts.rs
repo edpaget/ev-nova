@@ -76,10 +76,27 @@
 //! becomes its ship type's `InherentAI` (shïp +0x12), not its `düde`'s,
 //! and it leaves the system (`_AIMakeShipLeave`), jumping out with a
 //! jump's fuel. The rest re-form. A mission ship that never joined only
-//! loses its mark.
+//! loses its mark. A mission escort breaking up leaves the formation
+//! without losing its mark (see Death).
+//!
+//! **Death.** A mission escort that starts to break up (or is destroyed
+//! outright) leaves the formation on that tick, before its wreck is
+//! taken out ([`Session::lose_dying_mission_escorts`]), as
+//! `_HandleShip`'s dying branch (@0x350ab-0x3512b) clears its leader and
+//! sets its AI type to its ship type's `InherentAI`. Its mark stays, so
+//! it is still its mission's ship lost when it goes, and the rest
+//! re-form at once. A trader (`InherentAI` 2 or less) first takes its
+//! share of the fleet's cargo (`_DestroyPartialFleetCargo`,
+//! [`Session::lose_cargo_share`]): as its `Holds` are never in the
+//! fleet's, it takes its `Holds` over the player's ship's and the hired
+//! traders', at most all of it, by the engine, and over those with its
+//! own by the other reading of
+//! [`RuleKey::LostCargoShare`](crate::RuleKey::LostCargoShare). A
+//! disabled mission escort keeps its place and takes nothing.
 
 use super::Session;
 use crate::ai::Goal;
+use crate::catalog::ShipId;
 use crate::combat::hull::Condition;
 use crate::escort::{EscortClass, FormationSlot};
 use crate::mission::ships::ShipBehav;
@@ -155,6 +172,49 @@ impl Session {
         }
         escort
     }
+
+    /// Every mission escort breaking up or destroyed leaves the formation
+    /// at once, as `_HandleShip`'s dying branch (@0x350ab-0x3512b) clears
+    /// its leader and sets its AI type to its ship type's `InherentAI`
+    /// (@0x35118-0x3512b) on the first tick it is dying. Its mark stays,
+    /// so it is still counted as its mission's ship lost when it goes, and
+    /// it does not leave the system. A trader (`InherentAI` 2 or less)
+    /// first takes its share of the fleet's cargo
+    /// ([`Session::lose_cargo_share`], @0x350d9-0x350f4): the original
+    /// tests its AI type 6 and no mark, and its `Holds` are never in the
+    /// fleet's, a marked ship's never being (@0xced9). The rest re-form.
+    pub(super) fn lose_dying_mission_escorts(&mut self) {
+        let dying: Vec<(NpcId, ShipId)> = self
+            .traffic
+            .npcs()
+            .iter()
+            .filter(|npc| {
+                npc.mission_escort()
+                    && matches!(
+                        npc.condition,
+                        Condition::Dying { .. } | Condition::Destroyed
+                    )
+            })
+            .map(|npc| (npc.id, npc.ship))
+            .collect();
+        for &(id, ship) in &dying {
+            let inherent = self
+                .ship_record(ship)
+                .map(|record| AiType::from_raw(record.inherent_ai));
+            if let Some(npc) = self.npc_mut(id) {
+                if let Some(mark) = &mut npc.mission {
+                    mark.formation = None;
+                }
+                if let Some(ai_type) = inherent {
+                    npc.ai_type = ai_type;
+                }
+            }
+            self.lose_cargo_share(ship);
+        }
+        if !dying.is_empty() {
+            self.reform();
+        }
+    }
 }
 
 /// Mission escort `npc` leaves the formation and the system: its AI type
@@ -170,8 +230,10 @@ fn leave_formation(npc: &mut Npc, inherent: Option<AiType>) {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
-    use crate::catalog::{MissionShip, ShipId, SystemId};
+    use crate::catalog::{JunkId, MissionShip, ShipId, SystemId};
     use crate::chance::NeverFires;
     use crate::control::SetExpr;
     use crate::escort::{
@@ -181,6 +243,7 @@ mod tests {
     use crate::hail::nova::{RELEASE, REQUEST_ASSISTANCE};
     use crate::hail::reply::{ESCORT_OPENING, IN_YOUR_DREAMS, JUST_AN_ESCORT};
     use crate::hail::{HailOptions, HailRefusal};
+    use crate::market::Good;
     use crate::pilot::Escort;
     use crate::reserves::Reserves;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -532,6 +595,102 @@ mod tests {
         assert_eq!(session.npcs().len(), 1);
         assert_eq!(slots(&session), [(2, 2)]);
         assert_eq!(ships_of(&session).destroyed, 1, "a lost mission ship");
+    }
+
+    // Death.
+
+    /// Food, a commodity.
+    const FOOD: Good = Good::Commodity(0);
+    /// Opals, a `jünk`.
+    const OPALS: Good = Good::Junk(JunkId(146));
+
+    /// A session in flight with mission 140's two escorts of ship 200, of
+    /// `InherentAI` `inherent` and `Holds` 10 (the player's ship's are
+    /// 20), by `source` of `LostCargoShare`, holding 9 food and 3 opals.
+    fn laden(inherent: i16, source: RuleSource) -> Session {
+        let mut catalog = ships_catalog(escorting(-1, 0));
+        catalog.ship_records[1].inherent_ai = inherent;
+        catalog.ship_records[1].fields.holds = 10;
+        let mut session = accepted(&catalog);
+        session.rules = Rulebook::default().with_override(RuleKey::LostCargoShare, source);
+        take_off(&mut session, &catalog);
+        assert_eq!(mission_escorts(&session).len(), 2);
+        session.pilot.cargo = BTreeMap::from([(FOOD, 9), (OPALS, 3)]);
+        session
+    }
+
+    /// The first mission escort's armour goes to 0, and the fight ticks:
+    /// it starts to break up, for 5 ticks. Its NPC.
+    fn break_up(session: &mut Session) -> NpcId {
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.reserves.armor.now = 0.0;
+        npc.hull.death_delay = 5;
+        let id = npc.id;
+        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        let npc = session.npc(id).expect("breaking up");
+        assert!(matches!(npc.condition, Condition::Dying { .. }));
+        id
+    }
+
+    #[test]
+    fn a_trader_mission_escorts_death_destroys_its_share_of_the_cargo() {
+        let mut session = laden(1, RuleSource::Engine);
+        break_up(&mut session);
+        assert_eq!(
+            session.pilot.cargo,
+            BTreeMap::from([(FOOD, 5), (OPALS, 2)]),
+            "its 10 of the player's 20"
+        );
+        let mut session = laden(1, RuleSource::Bible);
+        break_up(&mut session);
+        assert_eq!(
+            session.pilot.cargo,
+            BTreeMap::from([(FOOD, 6), (OPALS, 2)]),
+            "its 10 of the player's 20 and its own 10"
+        );
+    }
+
+    #[test]
+    fn a_dying_mission_escort_leaves_the_formation_at_once() {
+        let mut session = laden(1, RuleSource::Engine);
+        let id = break_up(&mut session);
+        let npc = session.npc(id).expect("breaking up");
+        assert!(!npc.mission_escort());
+        assert!(npc.mission.is_some(), "still its mission's ship");
+        assert_eq!(npc.ai_type, AiType::WimpyTrader, "its ship's InherentAI");
+        assert_eq!(slots(&session), [(2, 2)], "the other re-forms");
+        for _ in 0..100 {
+            if session.npc(id).is_none() {
+                break;
+            }
+            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        }
+        assert_eq!(session.npc(id), None, "destroyed and gone");
+        assert_eq!(ships_of(&session).destroyed, 1, "a lost mission ship");
+        assert_eq!(
+            session.pilot.cargo,
+            BTreeMap::from([(FOOD, 5), (OPALS, 2)]),
+            "only once"
+        );
+    }
+
+    #[test]
+    fn a_warship_mission_escorts_death_destroys_no_cargo() {
+        let mut session = laden(3, RuleSource::Engine);
+        let id = break_up(&mut session);
+        assert_eq!(session.pilot.cargo, BTreeMap::from([(FOOD, 9), (OPALS, 3)]));
+        let npc = session.npc(id).expect("breaking up");
+        assert!(!npc.mission_escort(), "it still leaves the formation");
+        assert_eq!(npc.ai_type, AiType::Warship);
+    }
+
+    #[test]
+    fn a_disabled_mission_escort_destroys_no_cargo() {
+        let mut session = laden(1, RuleSource::Engine);
+        session.traffic.npcs_mut()[0].condition = Condition::Disabled;
+        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        assert_eq!(session.pilot.cargo, BTreeMap::from([(FOOD, 9), (OPALS, 3)]));
+        assert!(session.npcs()[0].mission_escort());
     }
 
     // Release.

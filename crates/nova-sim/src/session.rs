@@ -1604,6 +1604,7 @@ impl Session {
         self.launch_fighters(&sorties);
         self.sync_fleet();
         self.lose_escorts();
+        self.lose_dying_mission_escorts();
         self.take_out_the_destroyed(&mut &mut *chance);
         self.orphan_fighters();
         self.clear_lost_target();
@@ -1614,28 +1615,24 @@ impl Session {
     /// Takes each NPC destroyed out of the system, raising
     /// [`Fate::Destroyed`] for it and counting it lost when it is a
     /// mission's special ship, drawing on `chance` (see the
-    /// `mission_ships` module), as it goes. The formation re-forms when a
-    /// mission escort was among them.
+    /// `mission_ships` module), as it goes. A mission escort among them
+    /// has already left the formation, and the rest re-formed, as it
+    /// started to break up ([`Session::lose_dying_mission_escorts`]).
     fn take_out_the_destroyed(&mut self, chance: &mut dyn Chance) {
-        let destroyed: Vec<(NpcId, bool)> = self
+        let destroyed: Vec<NpcId> = self
             .traffic
             .npcs()
             .iter()
             .filter(|npc| npc.condition == Condition::Destroyed)
-            .map(|npc| (npc.id, npc.mission_escort()))
+            .map(|npc| npc.id)
             .collect();
-        let mut reform = false;
-        for (id, mission_escort) in destroyed {
+        for id in destroyed {
             self.raise(StoryEvent::ShipFate {
                 ship: id,
                 fate: Fate::Destroyed,
             });
             self.count_lost_mission_ship(id, chance);
             self.lose_destroyed(id);
-            reform |= mission_escort;
-        }
-        if reform {
-            self.reform();
         }
     }
 

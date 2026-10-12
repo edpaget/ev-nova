@@ -244,7 +244,7 @@ use crate::combat::weapon::Guidance;
 use crate::control::Gate;
 use crate::handling::ShipFields;
 use crate::landing::StellarFlags;
-use crate::market::{EscortHolds, Good, escort_tons, fleet_holds};
+use crate::market::{EscortHolds, Good, escort_tons, fleet_holds, trim_commodities};
 use crate::outfitter::{OutfitFlags, free_mass, outfit_mods, resale, unit_mass, unit_price};
 use crate::pilot::{Pilot, merged, tally};
 use crate::reserves::{Reserves, shield_points};
@@ -1313,7 +1313,8 @@ pub(crate) fn keep_cargo(
                     Good::Junk(_) => tons.saturating_sub(part),
                 };
             }
-            trim_to(cargo, fleet_holds(capacity, escorts.iter().copied()));
+            let goods: i64 = cargo.values().map(|&tons| i64::from(tons)).sum();
+            trim_commodities(cargo, fleet_holds(capacity, escorts.iter().copied()), goods);
         }
         RuleSource::Bible => {
             let mut room = capacity;
@@ -1348,22 +1349,6 @@ fn new_ships_share(capacity: u32, escorts: i64) -> f64 {
     }
     let own = f64::from(capacity);
     own / (own + escorts as f64)
-}
-
-/// Cuts each commodity in `cargo` by `holds` over everything held when
-/// that is more (`_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c), in single
-/// floats; a `jünk` is not cut.
-fn trim_to(cargo: &mut BTreeMap<Good, u32>, holds: u32) {
-    let total: u64 = cargo.values().map(|&tons| u64::from(tons)).sum();
-    if u64::from(holds) >= total {
-        return;
-    }
-    let ratio = holds as f32 / total as f32;
-    for (good, tons) in cargo.iter_mut() {
-        if let Good::Commodity(_) = good {
-            *tons = (*tons as f32 * ratio) as u32;
-        }
-    }
 }
 
 /// A ship purchase asked what it does: the pilot as it stands once the

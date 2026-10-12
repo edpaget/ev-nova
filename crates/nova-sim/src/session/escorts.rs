@@ -61,17 +61,28 @@
 //! **Losing escorts** (`_DamageShip` @0x3af8f): an escort disabled or
 //! destroyed leaves the fleet at once; a disabled one stays in the system
 //! as the ship it is, its AI type its `InherentAI`, and is left behind.
-//! A ship captured joins the fleet where it is, intact, its armour at
-//! half its most; and the player's old ship, swapped for one captured,
-//! joins beside the player. Released (see [`hail`](super::hail)), an
-//! escort leaves the fleet and the system. Each change of the fleet makes
-//! a save due.
+//! A trader escort lost (`InherentAI` 2 or less, not a carried fighter)
+//! takes its share of the fleet's cargo as it goes: every good loses the
+//! truncated part its `Holds` make of the fleet's holds without it (by
+//! the other reading of
+//! [`RuleKey::LostCargoShare`](crate::RuleKey::LostCargoShare), with
+//! it), at most all of it, and the cargo is then trimmed to the holds
+//! left (`_DamageShip` @0x3b013, `_DestroyPartialFleetCargo`
+//! @0xcd32-0xcff6; [`Session::lose_cargo_share`]). A warship escort lost
+//! takes nothing, and the mission cargo is never touched. A mission
+//! escort breaking up takes its share too (see
+//! [`mission_escorts`](super::mission_escorts)). A ship captured joins
+//! the fleet where it is, intact, its armour at half its most; and the
+//! player's old ship, swapped for one captured, joins beside the player.
+//! Released (see [`hail`](super::hail)), an escort leaves the fleet and
+//! the system. Each change of the fleet makes a save due.
 
 use std::collections::BTreeSet;
 
 use super::Session;
 use crate::ai::Goal;
 use crate::bay::{Carrier, dock_window};
+use crate::catalog::ShipId;
 use crate::cloak::Cloak;
 use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
@@ -81,6 +92,7 @@ use crate::escort::{
     FormationSlot,
 };
 use crate::flight::ShipState;
+use crate::market;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId, NpcPerson};
@@ -314,7 +326,17 @@ impl Session {
 
     /// Every escort disabled, breaking up or gone leaves the fleet: its
     /// record goes, and its NPC is no longer an escort. A save is due when
-    /// any did.
+    /// any did. Each that is not a carried fighter and whose ship is still
+    /// here, disabled, breaking up or destroyed, then takes its share of
+    /// the fleet's cargo ([`Session::lose_cargo_share`]), as `_DamageShip`
+    /// does after clearing its leader (@0x3afdd, call @0x3b013). One whose
+    /// ship is simply gone takes nothing: the original reaches
+    /// `_DestroyPartialFleetCargo` only from the disabled and dying paths.
+    ///
+    /// The original takes simultaneous losses in the order its hits land;
+    /// here they are taken in fleet order, each after the ones before it
+    /// have left the fleet's holds. No boundary the player can see is
+    /// crossed within the tick.
     pub(super) fn lose_escorts(&mut self) {
         let lost: Vec<NpcId> = self
             .fleet
@@ -327,8 +349,52 @@ impl Session {
             })
             .collect();
         for id in lost {
+            let index = self.fleet.iter().position(|&placed| placed == Some(id));
+            let record = index.and_then(|index| self.pilot.escorts.get(index));
+            let takes = record
+                .filter(|escort| !escort.carried)
+                .map(|escort| escort.ship);
+            let here = self.npc(id).is_some();
             self.dismiss(id);
+            if let Some(ship) = takes.filter(|_| here) {
+                self.lose_cargo_share(ship);
+            }
         }
+    }
+
+    /// A lost ship of class `ship` that the player led takes its share of
+    /// the fleet's cargo (`_DestroyPartialFleetCargo` @0xcd32-0xcff6),
+    /// when its class's `InherentAI` is a trader's
+    /// ([`FREIGHTER_AI`](escort::FREIGHTER_AI) or less); a warship or
+    /// interceptor takes nothing. Every good, commodity or `jünk`, loses
+    /// the truncated part [`market::lost_share`] gives, from the ship's
+    /// `Holds` over the fleet's holds as they stand, the ship already out
+    /// of them; by the other reading of [`RuleKey::LostCargoShare`] its
+    /// own `Holds` count too. The cargo is then trimmed to the fleet's
+    /// holds against everything carried, the mission cargo aboard
+    /// included, as the call's tail into `_ResetPlayerPrecalcedValues`
+    /// does (@0xc7d8-0xc82c). The mission cargo is never touched. The
+    /// tons destroyed go nowhere: the original writes them into the lost
+    /// ship's own slots (@0xcf76), which nothing the engine models reads.
+    pub(super) fn lose_cargo_share(&mut self, ship: ShipId) {
+        let Some(holds) = self
+            .ship_record(ship)
+            .filter(|record| record.inherent_ai <= escort::FREIGHTER_AI)
+            .map(|record| record.fields.holds)
+        else {
+            return;
+        };
+        let counted = self.rules.source_for(RuleKey::LostCargoShare) == RuleSource::Bible;
+        let share = market::lost_share(
+            holds,
+            self.stats.capacity,
+            market::escort_tons(self.escort_holds()),
+            counted,
+        );
+        market::destroy_share(&mut self.pilot.cargo, share);
+        let holds = self.capacity();
+        let total = self.pilot.total_cargo();
+        market::trim_commodities(&mut self.pilot.cargo, holds, total);
     }
 
     /// Escort NPC `id` leaves the fleet: its record goes, it is no longer
@@ -567,18 +633,21 @@ fn restock(reserves: &mut Reserves, kind: &ShipKind) {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::rc::Rc;
 
     use super::*;
     use crate::ai::{Behaviour, NovaAi, Peaceful, Surroundings};
     use crate::catalog::{
-        HullRecord, PersonId, ShipId, ShipRecord, StockWeapon, SystemId, WeaponId, WeaponRecord,
+        HullRecord, JunkId, PersonId, ShipId, ShipRecord, StockWeapon, SystemId, WeaponId,
+        WeaponRecord,
     };
     use crate::chance::{Chance, NeverFires};
     use crate::combat::Rules;
     use crate::escort::EscortOrder;
     use crate::flight::{Controls, Turn};
     use crate::geometry::Vec2;
+    use crate::market::Good;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::{Gauge, Reserves};
     use crate::rulebook::Rulebook;
@@ -1134,6 +1203,146 @@ mod tests {
         assert_eq!(session.npc(freighter), None, "destroyed and gone");
         assert_eq!(session.pilot().escorts()[0].ship, WARSHIP);
         assert!(!session.take_save_due(), "only once");
+    }
+
+    // The cargo a lost escort takes.
+
+    /// Food, a commodity.
+    const FOOD: Good = Good::Commodity(0);
+    /// Opals, a `jünk`.
+    const OPALS: Good = Good::Junk(JunkId(146));
+
+    /// A session of `fleet` by `source` of `LostCargoShare`, its first
+    /// traffic tick done, holding 9 food and 3 opals.
+    fn laden(catalog: &FakePilotCatalog, fleet: Vec<Escort>, source: RuleSource) -> Session {
+        let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
+        pilot.escorts = fleet;
+        let mut session = Session::fly(catalog, pilot)
+            .expect("flies")
+            .with_rules(Rulebook::default().with_override(RuleKey::LostCargoShare, source));
+        tick(&mut session, catalog);
+        session.pilot.cargo = BTreeMap::from([(FOOD, 9), (OPALS, 3)]);
+        session
+    }
+
+    /// The warship and two freighters, all full.
+    fn trader_fleet() -> Vec<Escort> {
+        let full = Reserves::full(30.0, 45.0, 300.0);
+        vec![
+            escort(WARSHIP, full, None),
+            escort(FREIGHTER, full, None),
+            escort(FREIGHTER, full, None),
+        ]
+    }
+
+    /// Escort `index`'s armour goes to `armor`, and the fight ticks.
+    fn hit(session: &mut Session, index: usize, armor: f32) {
+        let id = session.fleet[index].expect("placed");
+        session.npc_mut(id).expect("there").reserves.armor.now = armor;
+        session.tick_combat(Rules::default(), &mut NeverFires);
+    }
+
+    fn cargo(session: &Session) -> BTreeMap<Good, u32> {
+        session.pilot.cargo.clone()
+    }
+
+    #[test]
+    fn a_trader_escorts_death_destroys_its_share_of_the_cargo() {
+        let catalog = fleeted();
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        hit(&mut session, 1, 0.0);
+        assert_eq!(session.pilot().escorts().len(), 2, "it is lost");
+        assert_eq!(
+            cargo(&session),
+            BTreeMap::from([(FOOD, 5), (OPALS, 2)]),
+            "20 of the player's 20 and the other freighter's 20"
+        );
+    }
+
+    #[test]
+    fn a_lone_trader_escort_lost_takes_all_the_cargo_by_the_engine_and_half_by_the_other_reading() {
+        let catalog = fleeted();
+        let fleet = escorted(&catalog).escorts;
+        let mut session = laden(&catalog, fleet.clone(), RuleSource::Engine);
+        hit(&mut session, 1, 0.0);
+        assert_eq!(cargo(&session), BTreeMap::new(), "20 of the player's 20");
+        let mut session = laden(&catalog, fleet, RuleSource::Bible);
+        hit(&mut session, 1, 0.0);
+        assert_eq!(
+            cargo(&session),
+            BTreeMap::from([(FOOD, 5), (OPALS, 2)]),
+            "20 of the player's 20 and its own 20"
+        );
+    }
+
+    #[test]
+    fn a_trader_escort_disabled_destroys_its_share_as_it_leaves() {
+        let catalog = fleeted();
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        hit(&mut session, 1, 10.0);
+        let lost = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.ship == FREIGHTER && npc.escort.is_none());
+        assert_eq!(lost.map(|npc| npc.condition), Some(Condition::Disabled));
+        assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 5), (OPALS, 2)]));
+    }
+
+    #[test]
+    fn a_warship_escorts_death_destroys_no_cargo() {
+        let catalog = fleeted();
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        hit(&mut session, 0, 0.0);
+        assert_eq!(session.pilot().escorts().len(), 2, "it is lost");
+        assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 9), (OPALS, 3)]));
+    }
+
+    #[test]
+    fn a_carried_trader_fighter_lost_destroys_no_cargo() {
+        let catalog = fleeted();
+        let full = Reserves::full(30.0, 45.0, 300.0);
+        let fleet = vec![
+            Escort {
+                carried: true,
+                ..escort(FREIGHTER, full, None)
+            },
+            escort(FREIGHTER, full, None),
+        ];
+        let mut session = laden(&catalog, fleet, RuleSource::Engine);
+        hit(&mut session, 0, 0.0);
+        assert_eq!(session.pilot().escorts().len(), 1, "it is lost");
+        assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 9), (OPALS, 3)]));
+    }
+
+    #[test]
+    fn an_uncarried_trader_escort_whose_ship_is_gone_destroys_no_cargo() {
+        let catalog = fleeted();
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        let id = session.fleet[1].expect("placed");
+        session.traffic.remove(id);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.pilot().escorts().len(), 2, "it is lost");
+        assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 9), (OPALS, 3)]));
+    }
+
+    #[test]
+    fn a_lost_escort_trims_the_cargo_to_the_fleets_holds() {
+        let catalog = fleeted();
+        let full = Reserves::full(30.0, 45.0, 300.0);
+        let fleet = vec![escort(FREIGHTER, full, None), escort(FREIGHTER, full, None)];
+        let mut session = laden(&catalog, fleet, RuleSource::Engine);
+        session.pilot.cargo = BTreeMap::from([(FOOD, 10)]);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(130, 50));
+        hit(&mut session, 0, 0.0);
+        assert_eq!(
+            cargo(&session),
+            BTreeMap::from([(FOOD, 3)]),
+            "half of 10 is 5, then 5 x 40 / 55"
+        );
+        assert_eq!(session.pilot().total_cargo(), 53, "the mission cargo stays");
     }
 
     // Commands.

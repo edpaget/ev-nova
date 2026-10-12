@@ -32,7 +32,17 @@
 //! [`Npc::mission_escort`] for the mission escorts. A disabled mission
 //! escort that has joined stays led, as the original leaves a disabled
 //! ship's leader as it was (@0x8fc0c); a hired escort disabled or
-//! released leaves the fleet and is no longer led.
+//! released leaves the fleet and is no longer led. A ship the player
+//! leads that starts to break up is no longer led, as `_HandleShip`'s
+//! dying branch (@0x350ab-0x3512b) clears its leader, and a trader among
+//! them takes its share of the fleet's cargo as it goes (see
+//! [`escorts`](super::escorts) and
+//! [`mission_escorts`](super::mission_escorts)). `_HandleShip`'s other
+//! branches for led ships (its disabled branch @0x33950-0x33a36, its
+//! jump-out timing @0x347c1-0x348c2 and its self-repair rejoin
+//! @0x33a3b-0x33bd9) are not modelled; the step-1 findings of
+//! rdm:phase/player-led-ships/phase-10-escort-death-destroys-cargo-share
+//! say why.
 
 use super::Session;
 use crate::traffic::npc::Npc;

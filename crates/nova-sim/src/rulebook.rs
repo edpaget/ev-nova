@@ -108,6 +108,7 @@
 //! | [`AuxGate`](RuleKey::AuxGate) | `aux_gate` | at a hypergate or wormhole exit, the auxiliary ships of a mission of `AuxShipSyst` -1 come no more until their countdown next restarts (`_HandlePlayerDockRequest` @0x6729b-0x672ac; see [`mission::aux`](crate::mission::aux)) | the exit restarts them as a jump does: "-1: any system" |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //! | [`GateEscorts`](RuleKey::GateEscorts) | `gate_escorts` | at a hypergate or wormhole exit, every ship the player leads comes out of the exit gate after it, with its heading, waiting `Rand(20) + 15` ticks and bursting out at 15 (`_HandlePlayerDockRequest` @0x674ef-0x675c8, `_AIMakeShipEmergeFromHyperGate` @0x895aa-0x895bd) | each is snapped onto its slot beside the player\* |
+//! | [`LostCargoShare`](RuleKey::LostCargoShare) | `lost_cargo_share` | a lost trader escort's own `Holds` are never in the fleet's space it takes its share of, so it takes min(1, its `Holds` over the rest) of every good (`_DamageShip` @0x3afdd, @0x3b013; `_DestroyPartialFleetCargo` @0xce98-0xcf37; [`Session`](crate::Session)) | they are, so it takes the share of the space it added, mission escorts too\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -122,7 +123,7 @@
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance`,
 //! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
-//! `gate_escorts` or `comm_quote`
+//! `gate_escorts`, `lost_cargo_share` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -1350,6 +1351,20 @@ rule_keys! {
     /// waiting `Rand(20) + 15` ticks and bursting out at 15. By the other
     /// reading, each is snapped onto its slot beside the player.
     GateEscorts => "gate_escorts",
+    /// Whether a lost trader escort's own `Holds` count in the fleet's
+    /// cargo space it takes its share of (`_DestroyPartialFleetCargo`
+    /// @0xcd32-0xcff6; see [`Session`](crate::Session)). By the engine,
+    /// never: `_DamageShip` clears the leader of an escort a hit disables
+    /// (@0x3afdd) before its call (@0x3b013), and a hit that leaves armour
+    /// at 0 or less always disables, so the lost ship is out of its own
+    /// sum (@0xce98-0xcf0d) and takes min(1, its `Holds` over the rest):
+    /// a lone trader escort with more `Holds` than the player's ship takes
+    /// all the cargo. A mission escort is never in the sum, by its mission
+    /// mark (@0xced9). By the other reading, its `Holds` are in the sum,
+    /// as `_HandleShip`'s branches count the ship (@0x339eb then @0x33a00;
+    /// @0x350e6 then @0x35118), so it takes the share of the space it
+    /// added; this applies to mission escorts too.
+    LostCargoShare => "lost_cargo_share",
 }
 
 impl RuleKey {
@@ -1517,7 +1532,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(13),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1557,7 +1572,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1579,7 +1594,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1604,7 +1619,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1630,7 +1645,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1650,7 +1665,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1670,7 +1685,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1690,7 +1705,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -1703,7 +1718,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::GateFollow),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(2), Some(&RuleKey::GateFollow));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(3), Some(&RuleKey::GateFollow));
     }
 
     #[test]
@@ -1717,7 +1732,24 @@ mod tests {
             Rulebook::default().source_for(RuleKey::GateEscorts),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::GateEscorts));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::GateEscorts)
+        );
+    }
+
+    #[test]
+    fn the_lost_cargo_share_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::LostCargoShare.key(), "lost_cargo_share");
+        assert_eq!(
+            RuleKey::from_key("lost_cargo_share"),
+            Some(RuleKey::LostCargoShare)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::LostCargoShare),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::LostCargoShare));
     }
 
     #[test]
@@ -1728,7 +1760,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(1), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(2), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -1739,7 +1771,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -1847,7 +1879,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -1995,7 +2027,8 @@ mod tests {
                 RuleKey::LandedLeaves,
                 RuleKey::GateFollow,
                 RuleKey::AuxGate,
-                RuleKey::GateEscorts
+                RuleKey::GateEscorts,
+                RuleKey::LostCargoShare
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
