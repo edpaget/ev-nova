@@ -253,7 +253,13 @@
 //!   read when the screen is built. Option-Tab targets the next escort
 //!   ([`TargetPick::NextEscort`]), as for a hail. The escorts' standing
 //!   orders reset, or not, on entering a system as the session's rule
-//!   set says ([`FlightView::with_rules`]).
+//!   set says ([`FlightView::with_rules`]). While a jump is under way,
+//!   the ship braking and turning for it or the stars streaking, the
+//!   escort menu's keys are the only ones taken, as the original runs its
+//!   escort block on every frame of a jump but the arrival
+//!   (`_HandlePlayer` @0x6dd00-0x6e452): a command then says what the
+//!   escorts will do ("will hold position."), and the menu still times
+//!   out.
 //! - The player's fighters launch from its bays as its secondary weapon
 //!   (W selects a bay, Ctrl launches), and the fighter types every bay in
 //!   the system launches have their sheets read with the traffic's. What
@@ -2729,12 +2735,7 @@ impl<C> FlightView<C> {
             .iter()
             .position(|keys| keys.contains(&key));
         match (group, slot) {
-            (Some(n), _) if self.escort_menu.is_open() => {
-                let rows = self.escort_rows();
-                if self.escort_menu.select(n, self.elapsed, &rows) {
-                    self.ui_sounds.push(UiSound::EscortGroupSelected);
-                }
-            }
+            (Some(n), _) if self.escort_menu.is_open() => self.select_escort_group(n),
             (_, Some(slot)) => self.select_stellar(StellarPick::Slot(slot)),
             _ if key == NEAREST_STELLAR_KEY => self.select_stellar(StellarPick::Nearest),
             _ if key == NAV_OFF_KEY => {
@@ -2781,6 +2782,69 @@ impl<C> FlightView<C> {
         )
     }
 
+    /// Selects the escort menu's group `n` (keys 1-5), if the player has
+    /// an escort of it.
+    fn select_escort_group(&mut self, n: usize) {
+        let rows = self.escort_rows();
+        if self.escort_menu.select(n, self.elapsed, &rows) {
+            self.ui_sounds.push(UiSound::EscortGroupSelected);
+        }
+    }
+
+    /// A press of `key`, if it is one of the escort menu's: E, Return,
+    /// 1-5 while the menu is open, and F, D, V and C (Option-C Return to
+    /// Hangar). Whether it was one.
+    fn escort_key(&mut self, key: Key) -> bool {
+        let group = GROUP_KEYS.iter().position(|&group| group == key);
+        match key {
+            MENU_KEY => self.toggle_escort_menu(),
+            MENU_CLOSE_KEY => self.escort_menu.close(),
+            ESCORT_ATTACK_KEY => self.command_escorts(EscortCommand::Attack),
+            ESCORT_DEFEND_KEY => self.command_escorts(EscortCommand::Defend),
+            ESCORT_HOLD_KEY => self.command_escorts(EscortCommand::Hold),
+            ESCORT_RECALL_KEY => self.command_escorts(if self.held.contains(&Key::Alt) {
+                EscortCommand::Dock
+            } else {
+                EscortCommand::Recall
+            }),
+            _ => match group {
+                Some(n) if self.escort_menu.is_open() => self.select_escort_group(n),
+                _ => return false,
+            },
+        }
+        true
+    }
+
+    /// An input while a jump is under way, the pre-jump stage included:
+    /// only the escort menu's keys are taken ([`FlightView::escort_key`]),
+    /// as the original's `_HandlePlayer` runs its escort block on every
+    /// frame of a jump but the arrival (@0x6dd00-0x6e452), and Option is
+    /// tracked because it reads it live for Option-C (@0x6e207). Every
+    /// other key is dropped.
+    fn jump_input(&mut self, input: &Input) {
+        match *input {
+            Input::Key {
+                key: Key::Alt,
+                pressed,
+                ..
+            } => {
+                if pressed {
+                    self.held.insert(Key::Alt);
+                } else {
+                    self.held.remove(&Key::Alt);
+                }
+            }
+            Input::Key {
+                key,
+                pressed: true,
+                repeat: false,
+            } => {
+                self.escort_key(key);
+            }
+            _ => {}
+        }
+    }
+
     /// E: opens or closes the escort menu, or says the player has no
     /// escorts.
     fn toggle_escort_menu(&mut self) {
@@ -2803,6 +2867,15 @@ impl<C> FlightView<C> {
             self.escort_menu.touch(self.elapsed);
             self.say(escort_command_message(&commanded));
         }
+    }
+
+    /// Closes the escort menu once it has timed out or the fleet is empty
+    /// ([`EscortMenu::update`]), every frame, the streak's included, as
+    /// the original checks it on every frame of a jump (@0x6df59).
+    fn update_escort_menu(&mut self) {
+        let rows = self.escort_rows();
+        let flying = self.session.as_ref().is_ok_and(Session::escorts_flying);
+        self.escort_menu.update(self.elapsed, &rows, flying);
     }
 
     /// The escort menu, shut or open.
@@ -2966,9 +3039,12 @@ impl<
         + EscortMenuLooks,
 > Screen for FlightView<C>
 {
-    /// Never quits: Escape is the router's.
+    /// Never quits: Escape is the router's. While a jump is under way,
+    /// the pre-jump stage included, only the escort menu's keys, and
+    /// Option, are taken (see the module docs).
     fn input(&mut self, input: &Input) -> ScreenAction {
         if self.jump.is_some() || self.preparing_jump() {
+            self.jump_input(input);
             return ScreenAction::None;
         }
         let press = match *input {
@@ -3030,16 +3106,7 @@ impl<
             } else {
                 TargetPick::Next
             }),
-            Some(MENU_KEY) => self.toggle_escort_menu(),
-            Some(MENU_CLOSE_KEY) => self.escort_menu.close(),
-            Some(ESCORT_ATTACK_KEY) => self.command_escorts(EscortCommand::Attack),
-            Some(ESCORT_DEFEND_KEY) => self.command_escorts(EscortCommand::Defend),
-            Some(ESCORT_HOLD_KEY) => self.command_escorts(EscortCommand::Hold),
-            Some(ESCORT_RECALL_KEY) => self.command_escorts(if self.held.contains(&Key::Alt) {
-                EscortCommand::Dock
-            } else {
-                EscortCommand::Recall
-            }),
+            Some(key) if self.escort_key(key) => {}
             Some(NEAREST_KEY) => self.select_target(if self.held.contains(&Key::Alt) {
                 TargetPick::Nearest
             } else {
@@ -3076,7 +3143,9 @@ impl<
     /// jump's effect moves, and the ship arrives when the effect says.
     /// From then on the session flies again while the rest of the effect,
     /// the fade-in or the white flash, plays over it; that plays on with
-    /// the map open too, as the original's display fade does.
+    /// the map open too, as the original's display fade does. The escort
+    /// menu times out on every step the map is shut, the streak's
+    /// included.
     fn tick(&mut self, dt: Duration) {
         self.catch_up();
         if let Some(effect) = &mut self.fade_in {
@@ -3094,6 +3163,7 @@ impl<
                 self.arrive();
                 self.fade_in = self.jump.take().filter(|effect| !effect.done());
             }
+            self.update_escort_menu();
             return;
         }
         self.elapsed += dt;
@@ -3149,9 +3219,7 @@ impl<
         self.say_messages();
         // The session may have populated its system afresh.
         self.read_npc_sheets();
-        let rows = self.escort_rows();
-        let flying = self.session.as_ref().is_ok_and(Session::escorts_flying);
-        self.escort_menu.update(self.elapsed, &rows, flying);
+        self.update_escort_menu();
         self.alpha = alpha;
         self.start_streak_if_jumping();
     }
@@ -10184,6 +10252,122 @@ mod tests {
         tap(&mut view, MENU_KEY);
         assert!(!view.escort_menu().is_open(), "E again closes it");
         assert_eq!(MENU_CLOSE_KEY, Key::Enter);
+    }
+
+    /// [`escorted`], its course to Alpha Centauri plotted and the ship
+    /// flown out far enough to jump.
+    fn escorted_out() -> View {
+        let mut view = escorted();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view
+    }
+
+    #[test]
+    fn escort_keys_are_taken_while_the_jump_plays() {
+        let mut view = escorted_out();
+        jump_now(&mut view);
+        view.tick(ms(300));
+        view.take_sounds();
+        tap(&mut view, ESCORT_HOLD_KEY);
+        assert_eq!(orders(&view), [Some(EscortOrder::Hold)]);
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  All ships will hold position.")
+        );
+        assert!(
+            view.take_sounds()
+                .contains(&Sound::Sim(SimSound::EscortsCommanded)),
+            "_beepSnd[1]"
+        );
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        assert_eq!(ui_sounds(&mut view), [UiSound::EscortMenuToggled]);
+        tap(&mut view, GROUP_KEYS[3]);
+        assert_eq!(
+            view.escort_menu().group(),
+            EscortGroup::Class(EscortClass::Warship)
+        );
+        assert_eq!(ui_sounds(&mut view), [UiSound::EscortGroupSelected]);
+        tap(&mut view, ESCORT_DEFEND_KEY);
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  Warships will defend.")
+        );
+        tap(&mut view, MENU_CLOSE_KEY);
+        assert!(!view.escort_menu().is_open(), "Return closes it");
+        assert!(view.jump_effect().is_some(), "the streak plays on");
+        arrive_now(&mut view);
+        assert_eq!(view.session().expect("flying").system(), SystemId(131));
+    }
+
+    #[test]
+    fn escort_keys_are_taken_while_the_ship_brakes_to_jump() {
+        let mut view = escorted_out();
+        view.input(&key(JUMP, true));
+        assert!(view.preparing_jump(), "braking");
+        tap(&mut view, ESCORT_DEFEND_KEY);
+        assert_eq!(orders(&view), [Some(EscortOrder::Defend)]);
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  All ships will defend.")
+        );
+    }
+
+    #[test]
+    fn option_c_during_the_jump_is_return_to_hangar() {
+        let mut view = escorted_out();
+        tap(&mut view, ESCORT_HOLD_KEY);
+        jump_now(&mut view);
+        view.input(&key(Key::Alt, true));
+        view.tick(ms(300));
+        tap(&mut view, ESCORT_RECALL_KEY);
+        view.input(&key(Key::Alt, false));
+        assert_eq!(orders(&view), [None], "Return to Hangar: no fighter");
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  All ships will return to formation.")
+        );
+        tap(&mut view, ESCORT_HOLD_KEY);
+        tap(&mut view, ESCORT_RECALL_KEY);
+        assert_eq!(orders(&view), [None]);
+        let mut fighters = fighters_out();
+        plot(&mut fighters, 131);
+        fly_out(&mut fighters);
+        jump_now(&mut fighters);
+        option(&mut fighters, ESCORT_RECALL_KEY);
+        assert_eq!(orders(&fighters), [Some(EscortOrder::Dock); 2]);
+        assert_eq!(
+            fighters.message(),
+            Some("New escort orders assigned:  All ships will return to hangar.")
+        );
+    }
+
+    #[test]
+    fn the_escort_menu_times_out_during_the_streak() {
+        // How long the ship brakes and turns, timed on a twin.
+        let mut twin = escorted_out();
+        let mut braking = Duration::ZERO;
+        twin.input(&key(JUMP, true));
+        while twin.jump_effect().is_none() {
+            twin.tick(TICK);
+            braking += TICK;
+        }
+        // Opened so that it times out half a second into hyperspace.
+        let mut view = escorted_out();
+        tap(&mut view, MENU_KEY);
+        let wait = super::super::escorts::MENU_TIMEOUT
+            .checked_sub(braking + ms(500))
+            .expect("the braking is shorter than the menu's timeout");
+        view.tick(wait);
+        jump_now(&mut view);
+        assert!(view.escort_menu().is_open(), "open as the streak begins");
+        let in_hyperspace = |view: &View| view.session().expect("flying").jumping().is_some();
+        while view.escort_menu().is_open() {
+            assert!(in_hyperspace(&view), "shut before the ship arrives");
+            view.tick(TICK);
+        }
+        assert!(in_hyperspace(&view), "shut within the streak");
     }
 
     #[test]

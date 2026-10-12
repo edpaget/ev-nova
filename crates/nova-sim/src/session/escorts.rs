@@ -488,6 +488,13 @@ impl Session {
         if self.landed.is_some() {
             return None;
         }
+        // The original lets go of the escorts' targets earlier in every
+        // hyperspace frame (@0x6bb0a, before the escort keys @0x6e192).
+        // The flight does not tick the session while the stars streak,
+        // so each command there lets go first, as that frame would have.
+        if self.jumping().is_some() {
+            self.let_go_of_led_targets();
+        }
         // Reported, "attacking target.", for a target the player does not
         // lead (@0x6653f-0x66559); copied only when it is not allied with
         // the player either (@0x6625f).
@@ -1770,6 +1777,11 @@ mod tests {
             );
         }
         session.command_escorts(EscortGroup::All, EscortCommand::Attack);
+        assert_eq!(
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack),
+            attacked,
+            "the streak's frames run no session tick: each command lets go first"
+        );
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert!(
             escort_npcs(&session).iter().all(|npc| npc.target.is_none()),

@@ -17,7 +17,9 @@
 //!   menu is shut ([`EscortMenu::group`]), and the flight says what it
 //!   changed ([`escort_command_message`]): Return to Hangar
 //!   (Option-C) "returning to hangar.", or "returning to formation." when
-//!   an escort that is no fighter went back to formation.
+//!   an escort that is no fighter went back to formation. A command given
+//!   while a jump is under way says what the escorts will do instead
+//!   ("will hold position.", `STR#` 2002 #150-#154).
 //! - Fighters abandoned as the player jumps are told in brackets
 //!   ([`fighters_abandoned_message`]).
 //!
@@ -305,10 +307,14 @@ impl EscortMenu {
 /// What the flight says of a command that changed something
 /// (`_IssueNewEscortCommand` @0x660d5): "New escort orders assigned:  "
 /// (two spaces), the group's name, a space, and what its escorts now do;
-/// Attack with no target copied says "will attack.".
+/// Attack with no target to report says "will attack.". A command given
+/// while a jump is under way says what they will do instead
+/// ([`EscortCommand::will`], @0x66461-0x664e5).
 #[must_use]
 pub fn escort_command_message(commanded: &Commanded) -> String {
-    let doing = if commanded.command == EscortCommand::Attack && !commanded.targeted {
+    let doing = if commanded.underway {
+        commanded.command.will()
+    } else if commanded.command == EscortCommand::Attack && !commanded.targeted {
         WILL_ATTACK
     } else {
         commanded.command.doing()
@@ -671,6 +677,62 @@ mod tests {
             ),
             "New escort orders assigned:  Fighters returning to hangar."
         );
+    }
+
+    #[test]
+    fn a_command_under_way_is_told_with_the_will_strings() {
+        let under_way = |group, command, targeted| {
+            escort_command_message(&Commanded {
+                group,
+                command,
+                targeted,
+                underway: true,
+            })
+        };
+        let freighters = EscortGroup::Class(EscortClass::Freighter);
+        for (group, command, targeted, said) in [
+            (
+                EscortGroup::All,
+                EscortCommand::Hold,
+                false,
+                "All ships will hold position.",
+            ),
+            (
+                freighters,
+                EscortCommand::Recall,
+                false,
+                "Freighters will return to formation.",
+            ),
+            (
+                EscortGroup::All,
+                EscortCommand::Defend,
+                false,
+                "All ships will defend.",
+            ),
+            (
+                EscortGroup::All,
+                EscortCommand::Dock,
+                false,
+                "All ships will return to hangar.",
+            ),
+            (
+                EscortGroup::All,
+                EscortCommand::Attack,
+                false,
+                "All ships will attack.",
+            ),
+            (
+                EscortGroup::All,
+                EscortCommand::Attack,
+                true,
+                "All ships will attack.",
+            ),
+        ] {
+            assert_eq!(
+                under_way(group, command, targeted),
+                format!("New escort orders assigned:  {said}")
+            );
+        }
     }
 
     #[test]
