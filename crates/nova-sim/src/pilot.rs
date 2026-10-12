@@ -33,7 +33,9 @@
 //! (see [`control`](crate::control)), every one clear on a new pilot, and
 //! its [`Gender`], which the new-pilot dialog asks for and the `G` test
 //! reads; a new pilot is male unless the dialog says otherwise, as the
-//! stock dialog's Gender menu starts on Male.
+//! stock dialog's Gender menu starts on Male. It keeps whether the pilot
+//! plays Strict Play, the dialog's check box, which starts clear, as the
+//! original's does (`_DoNewPilot` @0x18b44).
 //!
 //! It keeps its ship's paint, which a paint outfit (`ModType` 43) gives
 //! (see [`outfit_effects`](crate::outfit_effects)): a new pilot's ship is
@@ -141,6 +143,10 @@ pub struct Pilot {
     pub(crate) bits: ControlBitSet,
     /// The player's gender.
     pub(crate) gender: Gender,
+    /// Whether the pilot plays Strict Play, the new-pilot dialog's check
+    /// box (the original's flag at 0x3b5158). A pilot that does not flies
+    /// half as fast again (see [`top_speed`](crate::top_speed)).
+    pub(crate) strict_play: bool,
     /// The ship's paint; `None` when unpainted.
     pub(crate) paint: Option<Rgb15>,
     /// The once-only story subscriptions that have fired, by their stable
@@ -254,6 +260,7 @@ impl Pilot {
             grudges: BTreeSet::new(),
             bits: ControlBitSet::new(),
             gender: Gender::default(),
+            strict_play: false,
             paint: None,
             story_fired: BTreeSet::new(),
             galaxy: GalaxyOverlay::default(),
@@ -271,6 +278,22 @@ impl Pilot {
     #[must_use]
     pub fn gender(&self) -> Gender {
         self.gender
+    }
+
+    /// The pilot with Strict Play `strict_play`, everything else
+    /// unchanged.
+    #[must_use]
+    pub fn with_strict_play(self, strict_play: bool) -> Self {
+        Self {
+            strict_play,
+            ..self
+        }
+    }
+
+    /// Whether the pilot plays Strict Play.
+    #[must_use]
+    pub fn strict_play(&self) -> bool {
+        self.strict_play
     }
 
     /// The missions accepted, in their slots.
@@ -855,6 +878,27 @@ mod tests {
             pilot
         );
         assert_eq!(female.with_gender(Gender::Male).gender(), Gender::Male);
+    }
+
+    #[test]
+    fn a_new_pilot_does_not_play_strict() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        assert!(!pilot.strict_play());
+    }
+
+    #[test]
+    fn a_pilot_with_strict_play_changes_only_that() {
+        let pilot = Pilot::new(&catalog(), "Ada").expect("starts");
+        let strict = pilot.clone().with_strict_play(true);
+        assert!(strict.strict_play());
+        assert_eq!(
+            Pilot {
+                strict_play: false,
+                ..strict.clone()
+            },
+            pilot
+        );
+        assert!(!strict.with_strict_play(false).strict_play());
     }
 
     #[test]
