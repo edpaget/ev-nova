@@ -4322,7 +4322,7 @@ fn fill_in(
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::{CharacterStart, GateSite, LandingSite, SoundId, StellarId};
     use crate::catalog::{CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord};
@@ -12282,7 +12282,7 @@ mod tests {
     /// [`trafficked`] with the player (ship 128) and its traffic (ship
     /// 129, a trader: 30 shield, 45 armour) each carrying a blaster, held
     /// by outfit 250.
-    fn armed() -> FakePilotCatalog {
+    pub(super) fn armed() -> FakePilotCatalog {
         FakePilotCatalog {
             weapons: vec![blaster()],
             hulls: vec![armed_hull(128, 128), armed_hull(129, 128)],
@@ -12293,7 +12293,7 @@ mod tests {
 
     /// `catalog`'s session with its one NPC placed 100 pixels above the
     /// player (at the centre, facing up), facing `heading`, at rest.
-    fn facing_an_npc(catalog: &FakePilotCatalog, heading: u32) -> Session {
+    pub(super) fn facing_an_npc(catalog: &FakePilotCatalog, heading: u32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.populate(catalog, &mut Draws::of(&[6, 6, 0, 0, 750, 650, heading]));
         assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, -100.0));
@@ -13419,7 +13419,7 @@ mod tests {
 
     /// A full cloak: fading out from 32, it reads cloaked for 32 more
     /// ticks.
-    const CLOAKED: crate::cloak::Cloak = crate::cloak::Cloak {
+    pub(super) const CLOAKED: crate::cloak::Cloak = crate::cloak::Cloak {
         fade: crate::cloak::FADE_FULL,
         direction: 0,
     };
@@ -13435,7 +13435,7 @@ mod tests {
 
     /// [`armed`], with outfit 260, a cloak scanner of `ModVal` `scan`, the
     /// player owns.
-    fn scanning(scan: i16) -> FakePilotCatalog {
+    pub(super) fn scanning(scan: i16) -> FakePilotCatalog {
         let mut catalog = armed();
         catalog
             .outfits
@@ -13444,7 +13444,7 @@ mod tests {
     }
 
     /// `catalog`'s [`facing_an_npc`], the player owning outfit 260.
-    fn holding_260(catalog: &FakePilotCatalog) -> Session {
+    pub(super) fn holding_260(catalog: &FakePilotCatalog) -> Session {
         let mut session = facing_an_npc(catalog, 180);
         session.pilot.outfits.insert(OutfitId(260), 1);
         session

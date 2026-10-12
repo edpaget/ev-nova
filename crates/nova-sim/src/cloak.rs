@@ -73,7 +73,12 @@
 //! shield usage forcing an uncloak (@0x83422-0x83452) and
 //! `_CloakZeroesShields`; a dying ship's fade out at twice the rate
 //! (direction -2, @0x2d17e); the player's own cloak; area cloaks; NPCs'
-//! own sight of cloaked ships; the visual fade and the cloak's sounds.
+//! own sight of cloaked ships; the visual fade below a full cloak (its
+//! jitter and levels, @0x2d2c0-0x2d648) and the cloak's sounds. A full
+//! cloak's level is modelled: faint for a ship the player leads or while
+//! it scans on screen, otherwise not drawn ([`full_fade_translucency`],
+//! [`CloakShown`]); the player's own at full fade (@0x2d199-0x2d1a1) is
+//! not, as the player has no cloak.
 //!
 //! # Seeing a cloaked ship
 //!
@@ -147,6 +152,40 @@ pub const CLOAK_PRESSING: u16 = 0x1000;
 /// The `Flags2` bit that cloaks a ship hit by a ship it is not
 /// attacking.
 pub const CLOAK_WHEN_HIT: u16 = 0x4000;
+
+/// The steps of a sprite's translucency: a level of this or more is not
+/// drawn (`_BlitPixieRLETranslucentDrawProc` @0xbb5b6-0xbb5d8 draws
+/// nothing above 0x3f).
+pub const TRANSLUCENCY_STEPS: u8 = 0x40;
+/// The translucency, in 64ths, of a fully cloaked ship the player still
+/// sees: one it leads, or any ship while it scans for cloaked ships on
+/// screen (`_HandleShipDisplay` @0x2d1a3-0x2d1cd).
+pub const SEEN_AT_FULL_FADE: u8 = 0x1e;
+
+/// How a ship's cloak lets the player's screen show it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloakShown {
+    /// Drawn as it is.
+    Opaque,
+    /// Drawn translucent, at this level in 64ths: 0 opaque, always below
+    /// [`TRANSLUCENCY_STEPS`].
+    Translucent(u8),
+    /// Not drawn.
+    Hidden,
+}
+
+/// A fully cloaked ship's translucency, in 64ths (`_HandleShipDisplay`
+/// @0x2d187-0x2d1cd): [`SEEN_AT_FULL_FADE`] when the player leads it
+/// (`led`) or scans for cloaked ships on screen (`scanner`), otherwise
+/// [`TRANSLUCENCY_STEPS`], not drawn.
+#[must_use]
+pub fn full_fade_translucency(led: bool, scanner: bool) -> u8 {
+    if led || scanner {
+        SEEN_AT_FULL_FADE
+    } else {
+        TRANSLUCENCY_STEPS
+    }
+}
 
 /// A ship's cloak: its fade level and the way it is fading.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -477,6 +516,15 @@ mod tests {
 
     fn at(fade: f32, direction: i8) -> Cloak {
         Cloak { fade, direction }
+    }
+
+    #[test]
+    fn the_full_fade_hides_only_ships_the_player_neither_leads_nor_scans() {
+        assert_eq!(full_fade_translucency(true, true), SEEN_AT_FULL_FADE);
+        assert_eq!(full_fade_translucency(true, false), SEEN_AT_FULL_FADE);
+        assert_eq!(full_fade_translucency(false, true), SEEN_AT_FULL_FADE);
+        assert_eq!(full_fade_translucency(false, false), TRANSLUCENCY_STEPS);
+        assert_eq!((SEEN_AT_FULL_FADE, TRANSLUCENCY_STEPS), (0x1e, 0x40));
     }
 
     #[test]

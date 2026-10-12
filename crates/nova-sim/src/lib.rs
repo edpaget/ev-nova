@@ -191,6 +191,9 @@
 //!   ([`Session::mission_offers`]).
 //! - [`ship_change`]: changing the player's ship outside the shipyard,
 //!   as the `C`, `E` and `H` set operators do: which outfits carry over.
+//! - [`ship_layer`]: the layers ships are drawn in ([`ShipLayer`]): the
+//!   disabled at the bottom, then the ships the player leads, then the
+//!   rest with the player.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
@@ -274,6 +277,7 @@ pub mod save;
 pub mod saves;
 pub mod session;
 pub mod ship_change;
+pub mod ship_layer;
 pub mod shipyard;
 pub mod sound;
 pub mod stats;
@@ -367,6 +371,7 @@ pub use session::{
     PersonQuote, RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled,
     ShipChangeRules, StellarPick, VenueOffer,
 };
+pub use ship_layer::ShipLayer;
 pub use shipyard::{
     Rating, ShipFacts, ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard,
     StockLine,

@@ -49,8 +49,21 @@
 //! @0x33a3b-0x33bd9) are not modelled; the step-1 findings of
 //! rdm:phase/player-led-ships/phase-10-escort-death-destroys-cargo-share
 //! say why.
+//!
+//! **Drawn.** `_HandleShipDisplay` treats a ship the player leads apart
+//! in three branches. It draws it in the escorts' layer, under the other
+//! ships and the player and over the disabled ones (@0x2bd24-0x2bd47,
+//! [`Session::draw_order`]; see [`ship_layer`](crate::ship_layer)). At a
+//! full cloak it draws it faint where a stranger is not drawn at all
+//! (@0x2d187-0x2d1cd, [`Session::cloak_shown`]). Its third branch, a
+//! trader escort's share of the fleet's cargo destroyed as its final
+//! explosion goes off (@0x2dbf5-0x2dc46), cannot run: a led ship's leader
+//! is cleared as it is disabled or starts to break up. None of them plays
+//! a sound.
 
 use super::Session;
+use crate::combat::ShipRef;
+use crate::ship_layer::{ShipLayer, disabled, in_draw_order};
 use crate::traffic::npc::Npc;
 
 impl Session {
@@ -58,6 +71,24 @@ impl Session {
     /// docs).
     pub fn player_led(&self) -> impl Iterator<Item = &Npc> + '_ {
         self.traffic.player_led()
+    }
+
+    /// The ships in the order they are drawn, bottom first: the disabled,
+    /// then the ships the player leads, then the rest with the player on
+    /// top (see [`ship_layer`](crate::ship_layer)).
+    #[must_use]
+    pub fn draw_order(&self) -> Vec<ShipRef> {
+        let npcs = self.npcs().iter().map(|npc| {
+            let layer = ShipLayer::of(disabled(npc.condition), npc.escorts_player());
+            (ShipRef::Npc(npc.id), layer)
+        });
+        // The player last, on top of its tier, as `_InitSprites`'s slot
+        // order leaves it.
+        let player = (
+            ShipRef::Player,
+            ShipLayer::of(disabled(self.player_condition()), false),
+        );
+        in_draw_order(npcs.chain([player]))
     }
 }
 
@@ -342,5 +373,73 @@ mod tests {
         session.traffic.npcs_mut()[0].condition = Condition::Disabled;
         ticks(&mut session, &catalog, 5);
         assert_eq!(led(&session), mission);
+    }
+
+    /// The draw order's NPCs as ids, `Player` as `None`.
+    fn drawn(session: &Session) -> Vec<Option<NpcId>> {
+        session
+            .draw_order()
+            .into_iter()
+            .map(|ship| match ship {
+                ShipRef::Npc(id) => Some(id),
+                ShipRef::Player => None,
+            })
+            .collect()
+    }
+
+    /// [`flying`] with mission escorts, plus a traffic ship the player
+    /// does not lead, first in NPC order: the session, the ships it leads
+    /// in NPC order and the traffic ship.
+    fn with_traffic() -> (Session, Vec<NpcId>, NpcId) {
+        let (mut session, _, hired) = flying(1);
+        let class = session.npc(hired).expect("there").clone();
+        let traffic = session.traffic.add_npc(Npc {
+            escort: None,
+            ..class
+        });
+        session.traffic.npcs_mut().rotate_right(1);
+        assert_eq!(session.npcs()[0].id, traffic);
+        let led: Vec<NpcId> = session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.escorts_player())
+            .map(|npc| npc.id)
+            .collect();
+        assert_eq!(led.len(), 3, "a hired escort and two mission escorts");
+        assert!(led.contains(&hired));
+        (session, led, traffic)
+    }
+
+    #[test]
+    fn the_ships_the_player_leads_draw_under_the_others_and_over_the_disabled() {
+        let (mut session, led, traffic) = with_traffic();
+        let order = |first: &[NpcId], then: &[NpcId]| -> Vec<Option<NpcId>> {
+            first
+                .iter()
+                .chain(then)
+                .copied()
+                .map(Some)
+                .chain([None])
+                .collect()
+        };
+        assert_eq!(
+            drawn(&session),
+            order(&led, &[traffic]),
+            "the escorts, then the traffic ship and the player"
+        );
+        crate::fixture::disable(&mut session, traffic);
+        let mut first = vec![traffic];
+        first.extend(&led);
+        assert_eq!(drawn(&session), order(&first, &[]), "the disabled first");
+    }
+
+    #[test]
+    fn a_disabled_player_draws_in_the_bottom_layer_last() {
+        let (mut session, led, traffic) = with_traffic();
+        crate::fixture::disable(&mut session, traffic);
+        session.condition = Condition::Disabled;
+        let mut expected = vec![Some(traffic), None];
+        expected.extend(led.iter().copied().map(Some));
+        assert_eq!(drawn(&session), expected);
     }
 }
