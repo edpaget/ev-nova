@@ -194,8 +194,9 @@
 //!   while held. W (a press) selects the next secondary weapon, and with
 //!   Alt (Option) the one before. Tab (a press) targets the next ship in
 //!   turn, R the nearest threat, and Alt-R (Option-R) the nearest ship
-//!   ([`TargetPick`]). The original's Shift-Tab, back through the ships,
-//!   is not bound: there is no Shift key yet.
+//!   ([`TargetPick`]). Shift-Tab targets back through the ships, and
+//!   Shift-Alt-Tab (Shift-Option-Tab) back through the escorts, as the
+//!   original's `_FindPrevShipInSystem` does.
 //! - B (a press) boards the target when the session allows it
 //!   ([`Session::board`]), by the screen's [`BoardingRule`]
 //!   ([`FlightView::with_boarding_rule`]; [`NovaBoarding`] by default),
@@ -251,7 +252,8 @@
 //!   its group (rather than a stellar) and Return closes it. The menu is drawn over the flight,
 //!   under the HUD, in the colours the [`EscortMenuLooks`] port gives,
 //!   read when the screen is built. Option-Tab targets the next escort
-//!   ([`TargetPick::NextEscort`]), as for a hail. The escorts' standing
+//!   ([`TargetPick::NextEscort`]), and Shift-Option-Tab the one before
+//!   ([`TargetPick::PreviousEscort`]), as for a hail. The escorts' standing
 //!   orders reset, or not, on entering a system as the session's rule
 //!   set says ([`FlightView::with_rules`]). While a jump is under way,
 //!   the ship braking and turning for it or the stars streaking, the
@@ -373,8 +375,9 @@ pub const MESSAGE_SHOWN_FOR: Duration = Duration::from_secs(4);
 pub const HAIL_QUOTE_SHOWN_FOR: Duration = Duration::from_secs(14);
 
 /// The keys flight holds: the original's defaults, Alt, which turns the
-/// weapon select key back, and Command, which the jettison key needs.
-const FLIGHT_KEYS: [Key; 8] = [
+/// weapon select key back, Shift, which turns the target select key back,
+/// and Command, which the jettison key needs.
+const FLIGHT_KEYS: [Key; 9] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -382,6 +385,7 @@ const FLIGHT_KEYS: [Key; 8] = [
     FIRE_KEY,
     SECONDARY_KEY,
     Key::Alt,
+    Key::Shift,
     Key::Command,
 ];
 
@@ -3099,11 +3103,17 @@ impl<
                 }
                 return ScreenAction::None;
             }
-            Some(TARGET_KEY) => self.select_target(if self.held.contains(&Key::Alt) {
-                TargetPick::NextEscort
-            } else {
-                TargetPick::Next
-            }),
+            Some(TARGET_KEY) => self.select_target(
+                match (
+                    self.held.contains(&Key::Shift),
+                    self.held.contains(&Key::Alt),
+                ) {
+                    (false, false) => TargetPick::Next,
+                    (false, true) => TargetPick::NextEscort,
+                    (true, false) => TargetPick::Previous,
+                    (true, true) => TargetPick::PreviousEscort,
+                },
+            ),
             Some(key) if self.escort_key(key) => {}
             Some(NEAREST_KEY) => self.select_target(if self.held.contains(&Key::Alt) {
                 TargetPick::Nearest
@@ -10422,6 +10432,52 @@ mod tests {
             view.session().expect("flying").target().map(|npc| npc.id),
             Some(NpcId(1))
         );
+    }
+
+    #[test]
+    fn shift_tab_targets_back_through_the_ships_and_with_alt_back_through_the_escorts() {
+        let mut catalog = boardable();
+        for record in &mut catalog.ships {
+            if record.id == ShipId(130) {
+                record.escort_type = 2;
+                record.inherent_ai = 3;
+            }
+        }
+        catalog.traffic[0].1.avg_ships = 2;
+        let pilot = with_escorts(
+            &Pilot::new(&catalog, "Escorted").expect("starts"),
+            &[130, 130],
+        );
+        let mut draws = placed(750, 650, 0).to_vec();
+        draws.extend(placed(850, 650, 0));
+        let (_, chance) = scripted(&draws);
+        let mut view = FlightView::with_pilot(catalog, pilot)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        let last = |escorts: bool| {
+            session
+                .npcs()
+                .iter()
+                .filter(|npc| session.is_escort(npc.id) == escorts)
+                .max_by_key(|npc| npc.berth)
+                .map(|npc| npc.id)
+        };
+        let (ship, escort) = (last(false), last(true));
+        let ships = session.npcs().len();
+        assert!(ships >= 4, "two of each: {:?}", session.npcs());
+        let target = |view: &View| view.session().expect("flying").target().map(|npc| npc.id);
+        view.input(&key(Key::Shift, true));
+        tap(&mut view, TARGET_KEY);
+        assert_eq!(target(&view), ship);
+        view.input(&key(Key::Alt, true));
+        tap(&mut view, TARGET_KEY);
+        assert_eq!(target(&view), escort);
+        view.input(&key(Key::Shift, false));
+        view.input(&key(Key::Alt, false));
+        tap(&mut view, TARGET_KEY);
+        assert_ne!(target(&view), ship, "Tab alone walks forward again");
     }
 
     #[test]

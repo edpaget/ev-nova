@@ -3528,8 +3528,7 @@ mod tests {
 
     #[test]
     fn with_shift_control_or_command_held_buy_records_one() {
-        // Shift and Command reach the screen as `Key::Other`.
-        for modifier in [Key::Control, Key::Other] {
+        for modifier in [Key::Shift, Key::Control, Key::Command] {
             let mut screen = counting_screen();
             press(&mut screen, modifier);
             click_item(&mut screen, BUY_ITEM);

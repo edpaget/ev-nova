@@ -28,6 +28,8 @@ pub enum Key {
     Alt,
     /// Control, either one.
     Control,
+    /// Shift, either one, held as a modifier.
+    Shift,
     /// Command (the Windows or Super key off a Mac), either one, held as a
     /// modifier.
     Command,

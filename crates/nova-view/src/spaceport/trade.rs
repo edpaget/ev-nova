@@ -1405,19 +1405,23 @@ mod tests {
     /// The original tests Option alone (`_DoTradeDialog` @0x5e211,
     /// @0x5e45c): any other modifier is a plain trade.
     #[test]
-    fn with_control_held_buy_and_sell_ask_for_a_plain_trade() {
-        let mut screen = screen();
-        screen.input(&key(Key::Control, true, false));
-        press(&mut screen, BUY_KEY);
-        assert_eq!(
-            screen.take_order(),
-            Some(order(0, FOOD, Direction::Buy, Lot::Click))
-        );
-        click_item(&mut screen, SELL_ITEM);
-        assert_eq!(
-            screen.take_order(),
-            Some(order(0, FOOD, Direction::Sell, Lot::Click))
-        );
+    fn with_shift_control_or_command_held_buy_and_sell_ask_for_a_plain_trade() {
+        for modifier in [Key::Shift, Key::Control, Key::Command] {
+            let mut screen = screen();
+            screen.input(&key(modifier, true, false));
+            press(&mut screen, BUY_KEY);
+            assert_eq!(
+                screen.take_order(),
+                Some(order(0, FOOD, Direction::Buy, Lot::Click)),
+                "{modifier:?}"
+            );
+            click_item(&mut screen, SELL_ITEM);
+            assert_eq!(
+                screen.take_order(),
+                Some(order(0, FOOD, Direction::Sell, Lot::Click)),
+                "{modifier:?}"
+            );
+        }
     }
 
     /// Whether Buy and Sell draw enabled.
