@@ -89,7 +89,11 @@
 //! comm dialog or a mission dialog); by the other, every frame. The nav
 //! area likewise holds its text and colours between refreshes every 15
 //! ticks, and when `_RedrawStatus` would redraw it, but shows a change of
-//! selection at once. Its target blinks bright on the
+//! selection at once. The target panel likewise holds what it showed
+//! between its redraws every 45 ticks, at the next radar refresh once the
+//! target's shield or ship type changes, and when `_RedrawStatus` would
+//! redraw it or the plunder dialog closes, but shows a change of target
+//! at once ([`retake_target`]). Its target blinks bright on the
 //! same 8 ticks either way, and it shows no stellars or ships while the
 //! ship is landed. The player's outfits give it IFF colours and a density
 //! scanner ([`Session::radar_gear`]); far from the system's centre an
@@ -329,11 +333,11 @@ use nova_sim::{
     PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey, RuleSource,
     Rulebook, Rules, Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState,
     Shipyard, SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken,
-    TargetPick, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized,
+    TargetPick, TargetTag, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized,
     flight::shortest_turn, glow_level, lights_level,
 };
 
-use super::cadence::HudCadence;
+use super::cadence::{Drawn, HudCadence, retake_target};
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
 use super::effects::{Dying, Effects, Scene};
 use super::escorts::{
@@ -344,7 +348,7 @@ use super::hud::{self, HudState, NavDestination, NavDisplay, STATUS_BAR_WIDTH, S
 use super::jump::{JumpEffect, JumpPhase};
 use super::radar::{self, RadarScene, RadarShip, RadarStellar};
 use super::sprite::rotation_frame;
-use super::target::{self, TargetShown};
+use super::target::{self, Tag, TargetPanel};
 use super::weapons::{self, BeamShown, ShotShown};
 use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
@@ -1203,6 +1207,10 @@ pub struct FlightView<C> {
     /// showed it for, which it shows until the next under
     /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
     nav_scene: Option<(NavMode, NavDisplay)>,
+    /// What the target panel showed at its last redraw, and what it drew
+    /// it for, which it shows until the next under
+    /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
+    target_scene: Option<(Option<Drawn>, Option<TargetPanel>)>,
     /// The radar's static this tick, a `ppat` ID, rolled on the effects'
     /// chance ([`radar::static_frame`]); `None` without.
     radar_static: Option<i16>,
@@ -1374,6 +1382,7 @@ impl<
             hud_cadence: HudCadence::default(),
             radar_scene: None,
             nav_scene: None,
+            target_scene: None,
             radar_static: None,
         }
     }
@@ -2200,6 +2209,64 @@ impl<C> FlightView<C> {
     fn redraw_status(&mut self) {
         self.radar_scene = Some(self.radar_now());
         self.retake_nav();
+        self.retake_target();
+    }
+
+    /// What the target panel is drawn for now: the target, its ship type
+    /// and its shield; none without a target.
+    fn target_drawn(&self) -> Option<Drawn> {
+        let npc = self.session.as_ref().ok()?.target()?;
+        Some(Drawn {
+            npc: npc.id,
+            ship: npc.ship,
+            shield: npc.reserves.shield.now,
+        })
+    }
+
+    /// What the target panel shows of the target now (see
+    /// [`TargetPanel`]); none without a target.
+    fn target_now(&self) -> Option<TargetPanel> {
+        let session = self.session.as_ref().ok()?;
+        let npc = session.target()?;
+        let card = self.cards.get(&npc.ship);
+        let tag = session.target_tag(npc).and_then(|tag| match tag {
+            TargetTag::Code(govt) => self.codes.get(&govt).cloned().flatten().map(Tag::Code),
+            TargetTag::Escort => Some(Tag::Escort),
+            TargetTag::Fighter => Some(Tag::Fighter),
+        });
+        Some(TargetPanel {
+            name: session.npc_name(npc).unwrap_or_default().to_owned(),
+            subtitle: session
+                .npc_subtitle(npc)
+                .map(str::to_owned)
+                .or_else(|| card.map(|card| card.subtitle.clone()))
+                .unwrap_or_default(),
+            picture: card.and_then(|card| card.picture),
+            status: session.target_status(npc),
+            tag,
+        })
+    }
+
+    /// Takes the target panel's snapshot afresh.
+    fn retake_target(&mut self) {
+        self.target_scene = Some((self.target_drawn(), self.target_now()));
+    }
+
+    /// What the target panel shows this frame: by
+    /// [`RuleKey::HudCadence`]'s engine reading, the snapshot taken at its
+    /// last redraw while it is of the target the player has now; by the
+    /// other, before the first redraw, or once the target has changed,
+    /// the panel as it is now ([`FlightView::target_now`]).
+    fn target_shown(&self) -> Cow<'_, Option<TargetPanel>> {
+        match &self.target_scene {
+            Some((drawn, shown))
+                if self.hud_waits()
+                    && drawn.map(|drawn| drawn.npc) == self.target_drawn().map(|now| now.npc) =>
+            {
+                Cow::Borrowed(shown)
+            }
+            _ => Cow::Owned(self.target_now()),
+        }
     }
 
     /// Takes the nav area's snapshot afresh.
@@ -2252,7 +2319,12 @@ impl<C> FlightView<C> {
     /// redrawing at once (`_statusRedraw[0]`, e.g. @0x69b39, @0x69efa,
     /// @0x6a919, @0xe34d, @0x1379b). This is settled before the frame is
     /// drawn, and [`FlightView::nav_shown`] shows a changed mode at once
-    /// anyway, so no boundary is crossed.
+    /// anyway, so no boundary is crossed. The target panel's is taken
+    /// afresh as [`retake_target`] says: on a change of target, on its
+    /// 45-tick redraw, and on a radar refresh once its shield or ship type
+    /// has changed. The crossing test may settle the 45-tick redraw a
+    /// frame after the original's exact `% 45` frame would, which the
+    /// player never sees.
     ///
     /// The original rolls the threshold in `_HandleStatus` and picks the
     /// pattern as `_DrawStatusRadar` draws; ours rolls both here, once a
@@ -2269,6 +2341,12 @@ impl<C> FlightView<C> {
         }
         if refresh.nav || !self.nav_mode_shown() {
             self.retake_nav();
+        }
+        let shown = self.target_scene.as_ref().and_then(|(drawn, _)| *drawn);
+        if self.target_scene.is_none()
+            || retake_target(shown.as_ref(), self.target_drawn().as_ref(), refresh)
+        {
+            self.retake_target();
         }
     }
 
@@ -2447,7 +2525,9 @@ impl<C> FlightView<C> {
     }
 
     /// Presses `take` in the plunder dialog, through the session
-    /// ([`Session::plunder`]), and says what it did.
+    /// ([`Session::plunder`]), and says what it did. The target panel is
+    /// taken afresh, as `_HandlePlayer` redraws it once the dialog closes
+    /// (@0x6eb97, @0x6eda6).
     pub fn plunder(&mut self, take: Take) -> Taken {
         let Ok(session) = &mut self.session else {
             return Taken::Nothing;
@@ -2461,6 +2541,7 @@ impl<C> FlightView<C> {
         if let Some(text) = plunder_message(taken, good, outfit) {
             self.say(text);
         }
+        self.retake_target();
         taken
     }
 
@@ -3072,28 +3153,22 @@ impl<C> FlightView<C> {
         target::draw_brackets(list, camera.world_to_screen(at), size, standing);
     }
 
-    /// Draws the status bar's target panel and secondary weapon line.
+    /// Draws the status bar's target panel ([`FlightView::target_shown`])
+    /// and secondary weapon line. The weapon line follows every frame: the
+    /// original redraws it (`_statusRedraw[3]`) on every event that
+    /// changes it, so drawing it each frame shows the same.
     fn draw_combat_hud(&self, list: &mut DrawList, bar: &StatusBar) {
         let Ok(session) = &self.session else {
             return;
         };
         let origin = hud::bar_origin(bar);
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        let unread = TargetCard::default();
-        let shown = session.target().map(|npc| TargetShown {
-            name: session.npc_name(npc).unwrap_or_default(),
-            subtitle: session.npc_subtitle(npc),
-            card: self.cards.get(&npc.ship).unwrap_or(&unread),
-            code: npc.govt.and_then(|govt| self.codes.get(&govt)?.as_deref()),
-            reserves: npc.reserves,
-            disabled: npc.condition == Condition::Disabled,
-        });
-        target::draw_target_panel(list, &bar.layout, origin, shown.as_ref(), metrics);
+        let shown = self.target_shown();
+        target::draw_target_panel(list, &bar.layout, origin, shown.as_ref().as_ref(), metrics);
         let line = session.secondary().map(|id| {
             let look = self.looks.weapon(id);
             let name = look.map_or_else(|| format!("wëap {}", id.0), |look| look.name.clone());
-            let flags2 = look.map_or(0, |look| look.flags2);
-            target::secondary_text(&name, session.secondary_rounds(), flags2)
+            target::secondary_text(&name, session.secondary_line_count())
         });
         target::draw_secondary(list, &bar.layout, origin, line.as_deref(), metrics);
     }
@@ -3599,7 +3674,7 @@ mod tests {
     use super::*;
     use crate::devtools::{PilotDesk, PilotEdit};
     use crate::draw::lights_tint;
-    use crate::flight::cadence::NAV_PERIOD_TICKS;
+    use crate::flight::cadence::{NAV_PERIOD_TICKS, TARGET_PERIOD_TICKS};
     use crate::flight::catalog::{
         Blink, BoomLook, GovtId, LayerSheet, StatusBarLayout, TargetCard, WeaponLook,
     };
@@ -9485,22 +9560,17 @@ mod tests {
             "{commands:?}"
         );
         let bar = view.status_bar().expect("a status bar");
-        let card = TargetCard {
-            subtitle: "Light Transport".to_owned(),
-            picture: Some(3001),
-        };
         let mut panel = DrawList::new();
         target::draw_target_panel(
             &mut panel,
             &bar.layout,
             hud::bar_origin(bar),
-            Some(&target::TargetShown {
-                name: "Ship 129",
-                subtitle: None,
-                card: &card,
-                code: Some("Fed."),
-                reserves: npc.reserves,
-                disabled: false,
+            Some(&TargetPanel {
+                name: "Ship 129".to_owned(),
+                subtitle: "Light Transport".to_owned(),
+                picture: Some(3001),
+                status: nova_sim::TargetStatus::Shield(100),
+                tag: Some(Tag::Code("Fed.".to_owned())),
             }),
             None,
         );
@@ -9524,6 +9594,134 @@ mod tests {
         assert!(list.iter().any(line_in(DISABLED_BRACKETS)));
         assert!(!list.iter().any(line_in(BRACKETS)));
         assert!(texts(&list).contains(&target::DISABLED.to_owned()));
+    }
+
+    /// What the target panel's status line shows this frame, if there is
+    /// a target.
+    fn status_shown(view: &View) -> Option<nova_sim::TargetStatus> {
+        view.target_shown()
+            .as_ref()
+            .as_ref()
+            .map(|panel| panel.status)
+    }
+
+    /// What the target panel's status line would show of the target now.
+    fn status_now(view: &View) -> Option<nova_sim::TargetStatus> {
+        view.target_now().map(|panel| panel.status)
+    }
+
+    /// An unarmed flight targeting its one NPC, intact, its panel drawn
+    /// two ticks after a timed redraw.
+    fn targeting_after_a_redraw(view: View) -> View {
+        let mut view = view;
+        while now_tick(&view) % TARGET_PERIOD_TICKS != 1 {
+            view.tick(TICK);
+        }
+        tap(&mut view, Key::Tab);
+        view.tick(TICK);
+        assert_eq!(status_shown(&view), status_now(&view));
+        assert!(
+            matches!(status_shown(&view), Some(nova_sim::TargetStatus::Shield(_))),
+            "{:?}",
+            status_shown(&view)
+        );
+        view
+    }
+
+    #[test]
+    fn the_target_panel_holds_a_disabling_until_its_next_timed_redraw() {
+        let view = fighting(armed(1, &[]), &placed(750, 650, 180));
+        let view = targeting_after_a_redraw(view);
+        let held = status_shown(&view);
+        let mut view = view.with_disable_rule(Rc::new(Disabling));
+        view.tick(TICK);
+        assert_eq!(status_now(&view), Some(nova_sim::TargetStatus::Disabled));
+        while !now_tick(&view).is_multiple_of(TARGET_PERIOD_TICKS) {
+            assert_eq!(status_shown(&view), held, "tick {}", now_tick(&view));
+            assert!(!texts(&drawn(&view)).contains(&target::DISABLED.to_owned()));
+            view.tick(TICK);
+        }
+        assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
+        assert!(texts(&drawn(&view)).contains(&target::DISABLED.to_owned()));
+    }
+
+    #[test]
+    fn read_the_bibles_way_the_target_panel_follows_every_frame() {
+        let view = every_frame(fighting(armed(1, &[]), &placed(750, 650, 180)));
+        let view = targeting_after_a_redraw(view);
+        let mut view = view.with_disable_rule(Rc::new(Disabling));
+        view.tick(TICK);
+        assert_ne!(now_tick(&view) % TARGET_PERIOD_TICKS, 0);
+        assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
+    }
+
+    #[test]
+    fn redrawing_the_status_retakes_the_target_panel() {
+        let view = fighting(armed(1, &[]), &placed(750, 650, 180));
+        let view = targeting_after_a_redraw(view);
+        let mut view = view.with_disable_rule(Rc::new(Disabling));
+        view.tick(TICK);
+        assert_ne!(status_shown(&view), status_now(&view), "held");
+        view.redraw_status();
+        assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
+    }
+
+    #[test]
+    fn a_change_of_target_shows_at_once() {
+        let mut view = fighting(armed(2, &[]), &two_npcs());
+        tap(&mut view, Key::Tab);
+        view.tick(TICK);
+        let drawn_for = |view: &View| {
+            view.target_scene
+                .as_ref()
+                .and_then(|(drawn, _)| drawn.map(|drawn| drawn.npc))
+        };
+        assert_eq!(drawn_for(&view), Some(NpcId(0)));
+        tap(&mut view, Key::Tab);
+        assert_eq!(target_of(&view), Some(NpcId(1)));
+        assert_eq!(drawn_for(&view), Some(NpcId(0)), "not yet retaken");
+        assert_eq!(*view.target_shown(), view.target_now(), "shown at once");
+        view.tick(TICK);
+        assert_eq!(drawn_for(&view), Some(NpcId(1)), "retaken");
+        tap(&mut view, Key::Tab);
+        assert_eq!(target_of(&view), None);
+        assert_eq!(*view.target_shown(), None, "lost at once");
+        let list = texts(&drawn(&view));
+        assert!(list.contains(&NO_TARGET.to_owned()), "{list:?}");
+    }
+
+    #[test]
+    fn a_falling_shield_shows_at_the_radar_refreshes_only() {
+        let mut catalog = armed(1, &[BLASTER]);
+        catalog.weapons[0].energy_dmg = 1;
+        let mut view = fighting(catalog, &placed(750, 650, 180));
+        tap(&mut view, Key::Tab);
+        view.input(&key(FIRE_KEY, true));
+        let mut shown = status_shown(&view);
+        let mut changes = 0;
+        let mut held = 0;
+        for _ in 0..240 {
+            let (blink, before) = (view.hud_cadence.blink_on(), now_tick(&view));
+            view.tick(TICK);
+            let radar = view.hud_cadence.blink_on() != blink;
+            let timed = now_tick(&view) / TARGET_PERIOD_TICKS > before / TARGET_PERIOD_TICKS;
+            let now = status_shown(&view);
+            if now != shown {
+                changes += 1;
+                assert!(radar || timed, "tick {}: {now:?}", now_tick(&view));
+                assert_eq!(now, status_now(&view), "tick {}", now_tick(&view));
+            }
+            if now != status_now(&view) {
+                held += 1;
+            }
+            shown = now;
+            if target_of(&view).is_none() {
+                break;
+            }
+        }
+        view.input(&key(FIRE_KEY, false));
+        assert!(changes > 1, "the shield fell: {changes}");
+        assert!(held > 0, "and was held between refreshes");
     }
 
     #[test]

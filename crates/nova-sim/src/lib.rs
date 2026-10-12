@@ -209,6 +209,8 @@
 //!   the [`GalaxyOverlay`](story::GalaxyOverlay) play changes over the
 //!   static galaxy, which every reader sees through the
 //!   [`OverlaidGalaxy`](story::OverlaidGalaxy).
+//! - [`target_panel`]: what the status bar's target panel says of the
+//!   target at its bottom: its [`TargetStatus`] and its [`TargetTag`].
 //! - [`targeting`]: which NPC the player's target command picks
 //!   ([`TargetPick`]): the nearest, the nearest threat, the next in turn,
 //!   or the next of the player's escorts.
@@ -276,6 +278,7 @@ pub mod shipyard;
 pub mod sound;
 pub mod stats;
 pub mod story;
+pub mod target_panel;
 pub mod targeting;
 #[cfg(test)]
 mod testkit;
@@ -371,6 +374,7 @@ pub use shipyard::{
 };
 pub use sound::SimSound;
 pub use stats::ShipStats;
+pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};
 pub use targeting::TargetPick;
 pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};

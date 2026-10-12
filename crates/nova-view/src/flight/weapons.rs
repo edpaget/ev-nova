@@ -37,8 +37,6 @@ pub const LOOPED_SOUND: u16 = 0x0010;
 pub const STILL_UNTIL_SAFE: u16 = 0x0001;
 /// `Flags2`: a spinning shot holds its last frame instead of wrapping.
 pub const HOLDS_LAST_FRAME: u16 = 0x0002;
-/// `Flags2`: the secondary weapon's line hides its ammunition count.
-pub const HIDES_AMMO: u16 = 0x0040;
 /// `Flags2`: the beam is drawn under the ships.
 pub const BEAM_UNDER_SHIPS: u16 = 0x2000;
 /// `Flags3`: the shot is translucent.

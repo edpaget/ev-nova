@@ -353,6 +353,7 @@ mod script_effects;
 mod ship_change;
 mod stellars;
 mod story;
+mod target_panel;
 
 pub use hooks::HookRules;
 pub use ship_change::ShipChangeRules;
@@ -1485,6 +1486,22 @@ impl Session {
             }
             _ => None,
         }
+    }
+
+    /// The count the status bar's secondary weapon line shows after the
+    /// selected secondary's name, if any: the rounds of the weapon its
+    /// [`line_count`](crate::combat::weapon::line_count) names, as
+    /// `_DrawStatusWeap` (@0x4c1ce-0x4c1f4) reads the player's rounds of
+    /// it; none when that names none, nothing is selected, or the
+    /// session has no record of the weapon.
+    #[must_use]
+    pub fn secondary_line_count(&self) -> Option<u32> {
+        let counted = self.arsenal.weapon(self.secondary?)?.line_count?;
+        Some(outfit_rounds(
+            &self.pilot.outfits,
+            &self.ammo_outfits,
+            counted,
+        ))
     }
 
     /// Advances the fight a tick among the player and the NPCs, each aimed
@@ -14413,6 +14430,27 @@ mod tests {
         assert_eq!(session.secondary_rounds(), None, "missiles: unlimited");
         session.select_secondary(false);
         assert_eq!(session.secondary_rounds(), None, "a torch burns fuel");
+    }
+
+    #[test]
+    fn the_secondary_lines_count_is_its_ammunitions_rounds_unless_hidden() {
+        let mut session = Session::start(&with_secondaries(catalog())).expect("starts");
+        assert_eq!(session.secondary_line_count(), None, "none selected");
+        session.select_secondary(false);
+        assert_eq!(session.secondary_line_count(), Some(3));
+        session.hold_fire(false, true);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.secondary_line_count(), Some(2));
+        session.select_secondary(false);
+        assert_eq!(session.secondary_line_count(), None, "unlimited");
+        session.select_secondary(false);
+        assert_eq!(session.secondary_line_count(), None, "a torch burns fuel");
+        let mut hidden = with_secondaries(catalog());
+        hidden.weapons[1].flags2 = crate::combat::weapon::HIDES_COUNT;
+        let mut session = Session::start(&hidden).expect("starts");
+        session.select_secondary(false);
+        assert_eq!(session.secondary(), Some(ROCKET));
+        assert_eq!(session.secondary_line_count(), None, "Flags2 0x0040");
     }
 
     #[test]

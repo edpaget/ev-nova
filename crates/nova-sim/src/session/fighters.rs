@@ -730,6 +730,7 @@ mod tests {
         launch(&mut session);
         assert_eq!(session.pilot().owned(VIPERS), 1, "a fighter launched");
         assert_eq!(session.secondary_rounds(), Some(1));
+        assert_eq!(session.secondary_line_count(), Some(1), "the bay's own");
         let fighters = fleet_npcs(&session);
         assert_eq!(fighters.len(), 1);
         let fighter = &fighters[0];
@@ -982,6 +983,24 @@ mod tests {
         session.select_secondary(false);
         session.tick_traffic(catalog, &NovaAi::default(), &mut NeverFires);
         session
+    }
+
+    #[test]
+    fn the_target_panel_labels_a_launched_fighter_a_fighter_and_an_escort_an_escort() {
+        let catalog = carrying();
+        let mut session = fleet(&catalog, 2, vec![warship(None)]);
+        launch(&mut session);
+        let labels: Vec<_> = fleet_npcs(&session)
+            .iter()
+            .map(|npc| (npc.ship, session.target_tag(npc)))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                (WARSHIP, Some(crate::TargetTag::Escort)),
+                (VIPER, Some(crate::TargetTag::Fighter))
+            ]
+        );
     }
 
     #[test]

@@ -33,22 +33,6 @@ impl Pen<'_, '_> {
     }
 
     /// Sets `text` centred between `left` and `right` on `baseline` at
-    /// `size` in `color`.
-    pub(super) fn centred(
-        &mut self,
-        text: &str,
-        left: f32,
-        right: f32,
-        baseline: f32,
-        size: f32,
-        color: Color,
-    ) {
-        let x = left + (right - left - self.width(text, size)) / 2.0;
-        let x = if self.metrics.is_some() { x } else { left };
-        self.at(text, x, baseline, size, color);
-    }
-
-    /// Sets `text` centred between `left` and `right` on `baseline` at
     /// `size` in `color`, as `_DrawCenteredText` (@0x263d) does:
     /// `MoveTo(trunc((left + right) / 2) − trunc(StringWidth / 2),
     /// baseline)`, each half truncated toward zero, then `DrawString`,

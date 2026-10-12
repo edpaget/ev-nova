@@ -115,6 +115,8 @@ fn interface() -> Vec<u8> {
     put_i16s(&mut bytes, 0x30, &[234, 35, 241, 184]);
     put_u32s(&mut bytes, 0x38, &[FUEL, 0x0080_8000]);
     put_i16s(&mut bytes, 0x40, &[254, 8, 286, 184]);
+    put_i16s(&mut bytes, 0x48, &[300, 8, 315, 184]);
+    put_i16s(&mut bytes, 0x50, &[330, 8, 442, 184]);
     bytes[0x60..0x66].copy_from_slice(b"Geneva");
     put_i16s(&mut bytes, 0xA0, &[12]);
     put_i16s(&mut bytes, 0xA4, &[700]);

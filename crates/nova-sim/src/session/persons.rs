@@ -114,13 +114,14 @@ impl Session {
         }
     }
 
-    /// `npc`'s subtitle: a mission ship's drawn subtitle while it is
-    /// marked and that is not empty (@0x4b81b-0x4b880), else its
-    /// person's, unless it has none or it is empty.
+    /// `npc`'s subtitle, in place of its ship type's: while it is a
+    /// marked mission ship, the mission's drawn subtitle unless that is
+    /// empty, its person's never (@0x4b80f-0x4b86f); otherwise its
+    /// person's, unless it has none or it is empty (@0x4b880).
     #[must_use]
     pub fn npc_subtitle(&self, npc: &Npc) -> Option<&str> {
-        if let Some(subtitle) = self.mission_ship_text(npc.mission, |ships| &ships.subtitle) {
-            return Some(subtitle);
+        if npc.mission.is_some() {
+            return self.mission_ship_text(npc.mission, |ships| &ships.subtitle);
         }
         let person = self.traffic.person(npc.person?.id)?;
         Some(person.record.subtitle.as_str()).filter(|subtitle| !subtitle.is_empty())

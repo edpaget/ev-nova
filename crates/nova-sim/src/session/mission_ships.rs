@@ -118,8 +118,9 @@
 //! intact, with no event. At setup a rescue ship also starts derelict
 //! (see the [`traffic::spawn`](crate::traffic::spawn) module's "Mission
 //! ships"), so it stays disabled by its armour once released. The target
-//! panel's "Waiting" for a held ship at or above the threshold
-//! (`_DrawStatusTarg` @0x4bab1-0x4bb87) is not shown.
+//! panel shows "Waiting" for a held ship whose armour is not below its
+//! threshold (`_DrawStatusTarg` @0x4bab1-0x4bb87;
+//! [`Session::target_status`]).
 //!
 //! **The swap** (`_HandlePlayerCommunication` @0x62421-0x6252f): a person
 //! of `Flags` 0x0040 whose mission is accepted on its hail, with one of
@@ -1842,6 +1843,46 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_marked_ship_with_no_subtitle_shows_its_types_not_its_persons() {
+        let mut catalog = ships_catalog(MissionShip {
+            name_id: None,
+            subtitle: None,
+            ..shipping(-1, 0)
+        });
+        catalog.persons = vec![PersonRecord {
+            name: "Ace".into(),
+            subtitle: "Top Gun".into(),
+            ..crate::testkit::person(600, 200)
+        }];
+        let mut slots = [(None, 0); 8];
+        slots[0] = (Some(PersonId(600)), 100);
+        catalog.traffic = vec![(
+            SystemId(130),
+            SystemTraffic {
+                dude_types: [(-1, 0); 8],
+                avg_ships: 0,
+                persons: slots,
+            },
+        )];
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        let person = session.npcs().iter().find_map(|npc| npc.person);
+        assert!(person.is_some(), "Ace came");
+        let marked = Npc {
+            person,
+            ..session.npcs()[0].clone()
+        };
+        assert!(marked.mission.is_some());
+        assert_eq!(session.npc_name(&marked), Some("Ace"), "the person's name");
+        assert_eq!(session.npc_subtitle(&marked), None, "the type's subtitle");
+        let unmarked = Npc {
+            mission: None,
+            ..marked
+        };
+        assert_eq!(session.npc_subtitle(&unmarked), Some("Top Gun"));
+    }
+
+    #[test]
     fn a_mission_ship_of_a_persons_name_does_not_keep_the_person_out() {
         // The mission's ships are named Rover, as is person 600, whom
         // system 130's first Person slot names at 100 %.
@@ -2041,7 +2082,7 @@ pub(super) mod tests {
     /// [`ships_catalog`] whose mission 140 has two ships of `goal` here
     /// (`ShipSyst` -1, `ShipStart` 0), `Flags` `flags`, `OnFailure` b5
     /// and `OnShipDone` b6.
-    fn goal_catalog(goal: i16, flags: u16) -> FakePilotCatalog {
+    pub(in crate::session) fn goal_catalog(goal: i16, flags: u16) -> FakePilotCatalog {
         let mut catalog = ships_catalog(MissionShip {
             goal,
             ..shipping(-1, 0)
@@ -2082,7 +2123,7 @@ pub(super) mod tests {
 
     /// A session of `catalog` with mission 140 accepted and its ships in
     /// the system around the player.
-    fn in_flight(catalog: &FakePilotCatalog) -> Session {
+    pub(in crate::session) fn in_flight(catalog: &FakePilotCatalog) -> Session {
         let mut session = accepted(catalog);
         take_off_unaborted(&mut session, catalog);
         assert_eq!(marked(&session), [0, 0]);
