@@ -114,3 +114,18 @@ fn a_stock_button_cap_resolves_masked() {
         );
     }
 }
+
+#[test]
+fn the_radar_static_patterns_decode_as_64_pixel_squares() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    for id in nova_view::flight::radar::STATIC_PATTERNS {
+        let frames = data
+            .frames(ImageKind::Pattern, id)
+            .unwrap_or_else(|error| panic!("ppat {id}: {error:?}"));
+        let sizes: Vec<(u32, u32)> = frames.iter().map(|f| (f.width(), f.height())).collect();
+        assert_eq!(sizes, [(64, 64)], "ppat {id}");
+    }
+}

@@ -37,9 +37,12 @@
 //!
 //! The radar draws the [`RadarMark`]s [`radar::marks`] works out for the
 //! [`RadarScene`] the view last took, as `_DrawStatusRadar` (@0x496e0)
-//! draws them without IFF: a pixel for each ship and the player, a filled
-//! 2×2 square for a station or gate (framing a rect that small fills it),
-//! and an oval framed as [`oval_frame_pixels`] rasterizes it.
+//! draws them: a pixel for each ship and the player, a filled 2×2 square
+//! for a station or gate or a heavy ship under a density scanner (framing
+//! a rect that small fills it), an oval framed as [`oval_frame_pixels`]
+//! rasterizes it, the IFF backdrop filled black, the static as its `ppat`
+//! tiled, and the centre arrow's lines as [`line_pixels`] rasterizes
+//! them.
 //!
 //! Every `ïntf` area is relative to the bar's top-left corner. The bar is
 //! as wide as its background picture (194 pixels in every stock bar) and
@@ -227,7 +230,7 @@ pub fn draw(list: &mut DrawList, bar: &StatusBar, state: &HudState) {
     }
     let radar = IRect::from_bounds(layout.radar.offset(origin));
     for mark in radar::marks(radar, state.radar, state.blink_on) {
-        draw_mark(list, layout, mark);
+        draw_mark(list, layout, radar, mark);
     }
     let reserves = &state.reserves;
     for (area, gauge, color) in [
@@ -245,23 +248,66 @@ pub fn draw(list: &mut DrawList, bar: &StatusBar, state: &HudState) {
     draw_date(list, layout, origin, state.date);
 }
 
-/// Draws one radar mark in the layout's radar colours: a pixel as a
-/// 1-pixel dot over it (a QuickDraw pixel at (x, y) covers [x, x + 1)),
-/// a square filled, and an oval as [`oval_frame_pixels`].
-fn draw_mark(list: &mut DrawList, layout: &StatusBarLayout, mark: RadarMark) {
-    let color = |color| match color {
+/// Draws one radar mark on `radar`: in the layout's radar colours, or a
+/// fixed one ([`RadarColor::fixed`]). A pixel is a 1-pixel dot over it (a
+/// QuickDraw pixel at (x, y) covers [x, x + 1)), a square and a fill are
+/// filled, an oval is [`oval_frame_pixels`], the static is its `ppat`
+/// tiled over its rect, and a line is [`line_pixels`], those inside the
+/// radar only (@0x49f33 copies only the radar's rect to the window).
+fn draw_mark(list: &mut DrawList, layout: &StatusBarLayout, radar: IRect, mark: RadarMark) {
+    let color = |color: RadarColor| match color {
         RadarColor::Dim => layout.dim_radar,
         RadarColor::Bright => layout.bright_radar,
+        fixed => fixed.fixed().unwrap_or(layout.dim_radar),
     };
     match mark {
         RadarMark::Pixel { x, y, color: c } => pixel(list, x, y, color(c)),
-        RadarMark::Square { rect, color: c } => fill_rect(list, rect.to_bounds(), color(c)),
+        RadarMark::Square { rect, color: c } | RadarMark::Fill { rect, color: c } => {
+            fill_rect(list, rect.to_bounds(), color(c));
+        }
         RadarMark::Oval { rect, color: c } => {
             for (x, y) in oval_frame_pixels(rect) {
                 pixel(list, x, y, color(c));
             }
         }
+        RadarMark::Pattern { rect, id } => {
+            list.tiled_picture(ImageKey::pattern(id), rect.to_bounds());
+        }
+        RadarMark::Line { from, to, color: c } => {
+            for (x, y) in line_pixels(from, to) {
+                if radar.holds(x, y) {
+                    pixel(list, x, y, color(c));
+                }
+            }
+        }
     }
+}
+
+/// The pixels of a 1-pixel line from `from` to `to`, both ends included,
+/// in order from `from`: Bresenham's. QuickDraw's own `LineTo` raster is
+/// in the Toolbox, not in the original's binary, so this is our
+/// approximation of it, exact for horizontal, vertical and diagonal
+/// lines.
+#[must_use]
+pub fn line_pixels(from: (i32, i32), to: (i32, i32)) -> Vec<(i32, i32)> {
+    let (dx, dy) = ((to.0 - from.0).abs(), -(to.1 - from.1).abs());
+    let (sx, sy) = ((to.0 - from.0).signum(), (to.1 - from.1).signum());
+    let (mut x, mut y) = from;
+    let mut error = dx + dy;
+    let mut pixels = vec![from];
+    while (x, y) != to {
+        let twice = 2 * error;
+        if twice >= dy {
+            error += dy;
+            x += sx;
+        }
+        if twice <= dx {
+            error += dx;
+            y += sy;
+        }
+        pixels.push((x, y));
+    }
+    pixels
 }
 
 /// Draws the pixel at (`x`, `y`) in `color`.
@@ -435,6 +481,7 @@ mod tests {
     use super::*;
     use crate::DrawCommand;
     use crate::flight::radar::{RadarShip, RadarStellar};
+    use nova_sim::{ShipIff, StellarIff};
 
     fn at(x: f32, y: f32) -> Point {
         Point::new(x, y)
@@ -873,6 +920,10 @@ mod tests {
         stellars: Vec::new(),
         ships: Vec::new(),
         blank: false,
+        iff: false,
+        density_scanner: false,
+        static_pattern: None,
+        route_shown: false,
     };
 
     fn state(reserves: Reserves) -> HudState<'static> {
@@ -1170,29 +1221,36 @@ mod tests {
                     position: at(0.0, -320.0),
                     square: true,
                     sprite_width: Some(300),
+                    iff: StellarIff::Cleared,
                 },
                 RadarStellar {
                     position: at(320.0, 0.0),
                     square: false,
                     sprite_width: Some(40),
+                    iff: StellarIff::Cleared,
                 },
                 RadarStellar {
                     position: at(-64.0, 0.0),
                     square: false,
                     sprite_width: Some(200),
+                    iff: StellarIff::Cleared,
                 },
             ],
             ships: vec![
                 RadarShip {
                     position: at(-160.0, 0.0),
                     targeted: false,
+                    iff: ShipIff::Other,
+                    heavy: false,
                 },
                 RadarShip {
                     position: at(0.0, 160.0),
                     targeted: true,
+                    iff: ShipIff::Other,
+                    heavy: false,
                 },
             ],
-            blank: false,
+            ..RadarScene::default()
         };
         let hud = HudState {
             radar: &scene,
@@ -1246,6 +1304,7 @@ mod tests {
                 position: at(2784.0, 0.0),
                 square: false,
                 sprite_width: Some(200),
+                iff: StellarIff::Cleared,
             }],
             ..NO_RADAR.clone()
         };
@@ -1278,6 +1337,8 @@ mod tests {
             ships: vec![RadarShip {
                 position: at(64.0, 0.0),
                 targeted: false,
+                iff: ShipIff::Other,
+                heavy: false,
             }],
             ..NO_RADAR.clone()
         };
@@ -1306,6 +1367,162 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    // IFF, static and the arrow.
+
+    fn radar_drawn(scene: &RadarScene, blink_on: bool) -> DrawList {
+        let hud = HudState {
+            radar: scene,
+            blink_on,
+            ..state(reserves(0.0, 0.0, 0.0))
+        };
+        drawn(&stock(), &hud)
+    }
+
+    /// The radar's commands: those after the background picture and before
+    /// the texts.
+    fn radar_commands(list: &DrawList) -> Vec<DrawCommand> {
+        list.iter()
+            .skip(1)
+            .take_while(|command| !matches!(command, DrawCommand::Text { .. }))
+            .cloned()
+            .collect()
+    }
+
+    const BLACK: Color = Color::rgba(0, 0, 0, 255);
+    const CYAN: Color = Color::rgba(0, 255, 255, 255);
+
+    #[test]
+    fn with_iff_the_radar_is_filled_black_then_drawn_in_fixed_colours() {
+        let scene = RadarScene {
+            iff: true,
+            ships: vec![RadarShip {
+                position: at(-160.0, 0.0),
+                targeted: false,
+                iff: ShipIff::Threat,
+                heavy: false,
+            }],
+            stellars: vec![RadarStellar {
+                position: at(0.0, -320.0),
+                square: true,
+                sprite_width: None,
+                iff: StellarIff::Unlandable,
+            }],
+            ..RadarScene::default()
+        };
+        let mut expected = DrawList::new();
+        fill_rect(&mut expected, rect(838.0, 8.0, 1014.0, 184.0), BLACK);
+        fill_rect(
+            &mut expected,
+            rect(925.0, 85.0, 927.0, 87.0),
+            Color::rgba(128, 128, 128, 255),
+        );
+        expected.dot(pixel_at(921, 96), 1.0, Color::rgba(255, 0, 0, 255));
+        expected.dot(pixel_at(926, 96), 1.0, CYAN);
+        assert_eq!(
+            radar_commands(&radar_drawn(&scene, false)),
+            expected.iter().cloned().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn the_layouts_colours_stay_dim_and_bright() {
+        let scene = RadarScene {
+            ships: vec![RadarShip {
+                position: at(-160.0, 0.0),
+                targeted: false,
+                iff: ShipIff::Threat,
+                heavy: false,
+            }],
+            ..RadarScene::default()
+        };
+        let list = radar_drawn(&scene, false);
+        assert_eq!(dots(&list, DIM_RADAR), [pixel_at(921, 96)]);
+        assert_eq!(dots(&list, RADAR), [pixel_at(926, 96)]);
+    }
+
+    #[test]
+    fn static_is_its_pattern_tiled_over_the_radar() {
+        let scene = RadarScene {
+            static_pattern: Some(133),
+            ..RadarScene::default()
+        };
+        let commands = radar_commands(&radar_drawn(&scene, false));
+        assert_eq!(
+            commands[0],
+            DrawCommand::TiledPicture {
+                image: ImageKey::pattern(133),
+                area: rect(838.0, 8.0, 1014.0, 184.0),
+            }
+        );
+        assert_eq!(commands.len(), 2, "then the player");
+    }
+
+    #[test]
+    fn a_line_is_every_pixel_from_end_to_end() {
+        assert_eq!(line_pixels((3, 4), (3, 4)), [(3, 4)]);
+        assert_eq!(
+            line_pixels((0, 0), (3, 0)),
+            [(0, 0), (1, 0), (2, 0), (3, 0)]
+        );
+        assert_eq!(
+            line_pixels((3, 0), (0, 0)),
+            [(3, 0), (2, 0), (1, 0), (0, 0)]
+        );
+        assert_eq!(
+            line_pixels((5, 2), (5, -1)),
+            [(5, 2), (5, 1), (5, 0), (5, -1)]
+        );
+        assert_eq!(
+            line_pixels((0, 0), (3, 3)),
+            [(0, 0), (1, 1), (2, 2), (3, 3)]
+        );
+        assert_eq!(line_pixels((0, 0), (-2, 2)), [(0, 0), (-1, 1), (-2, 2)]);
+        assert_eq!(
+            line_pixels((0, 0), (5, 2)),
+            [(0, 0), (1, 0), (2, 1), (3, 1), (4, 2), (5, 2)]
+        );
+        assert_eq!(
+            line_pixels((0, 0), (2, 5)),
+            [(0, 0), (0, 1), (1, 2), (1, 3), (2, 4), (2, 5)]
+        );
+        assert_eq!(
+            line_pixels((0, 0), (-5, -1)),
+            [(0, 0), (-1, 0), (-2, 0), (-3, -1), (-4, -1), (-5, -1)]
+        );
+    }
+
+    #[test]
+    fn the_arrows_pixels_outside_the_radar_are_dropped() {
+        // A 60 × 40 radar, (840, 30)-(900, 70) on the bar at (830, 0),
+        // centred on (870, 50): the arrow points left, its shaft from
+        // (845, 50) to (820, 50) and its heads past that, so only the
+        // shaft's first six pixels are inside it.
+        let mut bar = stock();
+        bar.layout.radar = rect(10.0, 30.0, 70.0, 70.0);
+        let scene = RadarScene {
+            player: at(3000.0, 0.0),
+            stellars: vec![RadarStellar {
+                position: at(0.0, 0.0),
+                square: false,
+                sprite_width: None,
+                iff: StellarIff::Cleared,
+            }],
+            ..RadarScene::default()
+        };
+        let hud = HudState {
+            radar: &scene,
+            blink_on: true,
+            ..state(reserves(0.0, 0.0, 0.0))
+        };
+        assert_eq!(
+            dots(&drawn(&bar, &hud), DIM_RADAR),
+            (840..=845)
+                .rev()
+                .map(|x| pixel_at(x, 50))
+                .collect::<Vec<_>>()
+        );
     }
 
     // The nav area.

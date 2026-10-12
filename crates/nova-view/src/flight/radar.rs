@@ -1,6 +1,7 @@
-//! The radar's view model: what `_DrawStatusRadar` (@0x496e0) draws on
-//! its path without IFF, worked out in whole pixels from a [`RadarScene`]
-//! snapshot. [`hud`](super::hud) draws the [`RadarMark`]s.
+//! The radar's view model: what `_DrawStatusRadar` (@0x496e0) draws,
+//! worked out in whole pixels from a [`RadarScene`] snapshot.
+//! [`hud`](super::hud) draws the [`RadarMark`]s. The colour decisions are
+//! the simulation's ([`nova_sim::iff`]); this maps them to colours.
 //!
 //! - **Rect and centre:** the `ïntf` `RadarArea`, placed with the bar. An
 //!   empty one (top ≥ bottom or left ≥ right, @0x496f6-0x4970b) draws
@@ -31,17 +32,54 @@
 //! - **The player** is one bright pixel at the centre, drawn last
 //!   (@0x49ca6-0x49cd9).
 //! - **Blank** (`_playerIsLanded`, @0x49711-0x49724): no stellars and no
-//!   ships (@0x49882 jumps to @0x49c85), but the player pixel still.
+//!   ships (@0x49882 jumps to @0x49c85), but the player pixel and the
+//!   arrow still.
+//! - **Static** (@0x49791-0x497d4): when not blank and the frame has
+//!   interference ([`static_frame`], `_HandleStatus` @0x494d7), the radar
+//!   is filled with one of `ppat` 128-137 ([`STATIC_PATTERNS`],
+//!   `_LoadSprites` @0x21824-0x21842), tiled from the screen's origin as
+//!   `FillCRect` tiles from the port's, and the backdrop, stellars and
+//!   ships are skipped (it jumps to @0x49c85). The player pixel and the
+//!   arrow still draw.
+//! - **IFF** ([`RadarScene::iff`], `_HasIFF` @0x4348): the radar is
+//!   painted black (`PaintRect` @0x497d9-0x497f6; `_RedrawStatus` paints
+//!   the same rect @0x4cbac-0x4cc2a), each stellar is in its
+//!   `_ColorCodeStellar` colour (@0x49948-0x49955, @0x499c2-0x499cf) and
+//!   each ship in its `_ColorCodeShip` colour (@0x49b8c-0x49bb0), the
+//!   target light grey while the blink is on (`_rgbLightGrey`,
+//!   @0x49b62-0x49b87), and the player cyan (`_ColorCodeShip` of slot 0,
+//!   @0x49c8b-0x49c9c). The colours are `_InitColors`'
+//!   ([`RadarColor::fixed`]).
+//! - **Density scanner** ([`RadarScene::density_scanner`],
+//!   `_HasDensityScanner` @0x42c0, @0x49bb8-0x49c2f): a ship whose class's
+//!   `Mass` is above 99 ([`RadarShip::heavy`]) is the 2×2 rect about its
+//!   point, clipped to the radar and framed in its dot's colour, skipped
+//!   when the clip is empty, so one at x == right is a 1-pixel-wide frame
+//!   at right − 1. It works the same with or without IFF.
+//! - **The centre arrow** (@0x49cde-0x49ec4, [`arrow`]): while the blink
+//!   is on (`_radarCount`), when no hyperspace route is shown (nav mode
+//!   ≠ 3, [`RadarScene::route_shown`]), the system has a stellar, and the
+//!   player is more than √7,000,000 from the system's centre
+//!   ([`ARROW_MIN_DISTANCE_SQUARED`], in `f32` as `_XYFloatSquaredDist`
+//!   works it). Three lines in the dim colour, with or without IFF
+//!   (@0x49dd3-0x49ddd), drawn last; only the part inside the radar
+//!   shows (@0x49f33).
 //!
-//! Left out here, for hud-fidelity phase 3: the IFF path (@0x497eb,
-//! `_ColorCodeStellar`, `_ColorCodeShip`, the IFF target colour), the
-//! density scanner's squares (@0x49bb8-0x49c2f), the interference static
-//! (@0x49797-0x497d4) and the centre arrow (@0x49cde-0x49eb3). Left out
-//! for good: the pixel the inclusive test writes just outside the radar
-//! into the original's persistent offscreen bar, which ours does not have;
+//! Left out for good: the pixel the inclusive test writes just outside
+//! the radar into the original's persistent offscreen bar, and the old
+//! radar image a missing static pattern (@0x497bd-0x497bf) leaves there,
+//! both of which ours, with no persistent bar, does not have;
 //! `_preventStatusCopy` and the final `CopyBits` (compositing only); the
-//! never-set `_onPlanet`; and the 16-bit coordinate stores.
+//! never-set `_onPlanet`; the 16-bit coordinate stores; and QuickDraw's
+//! own `LineTo` raster, which is in the Toolbox (ours is
+//! [`hud::line_pixels`](super::hud::line_pixels)). The same mass test in
+//! `_DrawStatusTarg` (@0x4be35) is hud-fidelity phase 5's.
 
+use std::ops::RangeInclusive;
+
+use nova_sim::{Chance, ShipIff, StellarIff};
+
+use crate::Color;
 use crate::geometry::{Bounds, Point};
 
 /// Radar pixels per world unit: the original's 0xdd888.
@@ -145,6 +183,8 @@ pub struct RadarStellar {
     pub square: bool,
     /// The width of its sprite's frames, or `None` without one.
     pub sprite_width: Option<u32>,
+    /// What IFF shows it as.
+    pub iff: StellarIff,
 }
 
 /// One ship as the radar sees it.
@@ -154,9 +194,16 @@ pub struct RadarShip {
     pub position: Point,
     /// Whether it is the player's target.
     pub targeted: bool,
+    /// What IFF shows it as.
+    pub iff: ShipIff,
+    /// Whether its class's `Mass` is above 99 (`shïp` +0x9ee, `cmpw
+    /// $0x63`): a density scanner shows it as a square.
+    pub heavy: bool,
 }
 
 /// What the radar shows, taken at a refresh.
+// Each flag is one of the original's own tests.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RadarScene {
     /// Where the player's ship is drawn, in world units.
@@ -168,15 +215,231 @@ pub struct RadarScene {
     /// Whether the stellars and ships are left out: while the player is
     /// landed.
     pub blank: bool,
+    /// Whether the player has IFF.
+    pub iff: bool,
+    /// Whether the player has a density scanner.
+    pub density_scanner: bool,
+    /// The static the radar shows this refresh, a `ppat` of
+    /// [`STATIC_PATTERNS`], or `None`.
+    pub static_pattern: Option<i16>,
+    /// Whether a hyperspace route is shown (the original's nav mode 3),
+    /// which hides the centre arrow.
+    pub route_shown: bool,
 }
 
-/// Which of the bar's two radar colours a mark is in.
+/// Which colour a mark is in: one of the bar's two radar colours, or one
+/// of the fixed colours IFF draws in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RadarColor {
     /// The `ïntf`'s `DimRadar`.
     Dim,
     /// The `ïntf`'s `BrightRadar`.
     Bright,
+    /// The IFF backdrop: QuickDraw's `blackColor` (33).
+    Black,
+    /// The player under IFF: (0, 0xFFFF, 0xFFFF) (@0x4afa-0x4b0f).
+    Cyan,
+    /// A disabled ship: `_rgbDarkGrey`, 0x4000 grey (@0x1bee4).
+    DarkGrey,
+    /// A threat, or a stellar hostile to the player: (0xFFFF, 0, 0)
+    /// (@0x4b27-0x4b44).
+    Red,
+    /// An escort, or a dominated stellar: `_brightGreen`, (0, 0xFFFF, 0)
+    /// (@0x1beb8).
+    Green,
+    /// Any other ship: (0, 0, 0xFFFF) (@0x4b91-0x4b9c).
+    Blue,
+    /// An unlandable stellar: `_rgbMedGrey`, 0x8000 grey (@0x1bf10).
+    MedGrey,
+    /// A wormhole: (0, 0x55F0, 0x55F0) (@0xaa71-0xaa87).
+    Teal,
+    /// A stellar the player may land on: (0xFFFF, 0xFFFF, 0).
+    Yellow,
+    /// A stellar that refuses the player: (0xFFFF, 0x6666, 0).
+    Orange,
+    /// The target under IFF: `_rgbLightGrey`, 0xC000 grey
+    /// (@0x1bf3c-0x1bf4d).
+    LightGrey,
+}
+
+impl RadarColor {
+    /// The colour, as `nova_data` reads an `RGBColor` (each channel's high
+    /// byte), for a fixed colour; `None` for [`Dim`](Self::Dim) and
+    /// [`Bright`](Self::Bright), which the bar's layout gives.
+    #[must_use]
+    pub const fn fixed(self) -> Option<Color> {
+        let (r, g, b) = match self {
+            Self::Dim | Self::Bright => return None,
+            Self::Black => (0, 0, 0),
+            Self::Cyan => (0, 0xFF, 0xFF),
+            Self::DarkGrey => (0x40, 0x40, 0x40),
+            Self::Red => (0xFF, 0, 0),
+            Self::Green => (0, 0xFF, 0),
+            Self::Blue => (0, 0, 0xFF),
+            Self::MedGrey => (0x80, 0x80, 0x80),
+            Self::Teal => (0, 0x55, 0x55),
+            Self::Yellow => (0xFF, 0xFF, 0),
+            Self::Orange => (0xFF, 0x66, 0),
+            Self::LightGrey => (0xC0, 0xC0, 0xC0),
+        };
+        Some(Color::rgba(r, g, b, 255))
+    }
+}
+
+/// The colour IFF shows a ship of `iff` in.
+#[must_use]
+pub const fn ship_color(iff: ShipIff) -> RadarColor {
+    match iff {
+        ShipIff::Disabled => RadarColor::DarkGrey,
+        ShipIff::Threat => RadarColor::Red,
+        ShipIff::Escort => RadarColor::Green,
+        ShipIff::Other => RadarColor::Blue,
+    }
+}
+
+/// The colour IFF shows a stellar of `iff` in.
+#[must_use]
+pub const fn stellar_color(iff: StellarIff) -> RadarColor {
+    match iff {
+        StellarIff::Unlandable => RadarColor::MedGrey,
+        StellarIff::Wormhole => RadarColor::Teal,
+        StellarIff::Dominated => RadarColor::Green,
+        StellarIff::Cleared => RadarColor::Yellow,
+        StellarIff::Denied => RadarColor::Orange,
+        StellarIff::Hostile => RadarColor::Red,
+    }
+}
+
+/// The `ppat`s the static is drawn from (`_staticPat`, loaded by
+/// `_LoadSprites` @0x21824-0x21842).
+pub const STATIC_PATTERNS: RangeInclusive<i16> = 128..=137;
+
+/// The static the radar shows this frame at interference `level`
+/// (0..=100), drawn on `chance`: `_HandleStatus` (@0x4951f-0x4954a) shows
+/// it when `Rand(100) + 1` ≤ the level, and `_DrawStatusRadar` then
+/// picks one of the ten patterns with `Rand(10)` (@0x49797-0x497b5).
+///
+/// At level 0 nothing can show, so nothing is drawn. The original draws
+/// the threshold every frame and the pattern as it draws; ours draws
+/// both together, which changes no decision the player can see.
+pub fn static_frame(level: u8, chance: &mut impl Chance) -> Option<i16> {
+    if level == 0 || chance.roll(100) + 1 > u16::from(level) {
+        return None;
+    }
+    let first = *STATIC_PATTERNS.start();
+    Some(first + i16::try_from(chance.roll(10)).unwrap_or_default())
+}
+
+/// The distance squared from the system's centre past which the arrow
+/// shows (0xdd890), strictly.
+pub const ARROW_MIN_DISTANCE_SQUARED: f32 = 7_000_000.0;
+/// How far from the radar's centre the arrow's shaft starts (0x41c80000).
+pub const ARROW_START: f32 = 25.0;
+/// How far from the radar's centre the arrow's shaft ends (0x42480000).
+pub const ARROW_END: f32 = 50.0;
+/// How long each of the arrow's heads is (0x40c00000).
+pub const ARROW_HEAD: f32 = 6.0;
+/// How far each head turns from the shaft, in degrees (`leal ±0x87`).
+pub const ARROW_HEAD_TURN: i16 = 135;
+
+/// The arctangent table's last index (`_BuildTrigTable` @0x258c1-0x25900
+/// builds 0x400 entries).
+const ARCTAN_LAST: i32 = 0x3FF;
+
+/// `_BuildTrigTable`'s arctangent entry `index`: `trunc(atan(index ×
+/// 0.01) × 57.2957795)`, in doubles (@0x258c9-0x258f4).
+fn arctan_entry(index: i32) -> i32 {
+    ((f64::from(index) * 0.01).atan() * 57.295_779_5) as i32
+}
+
+/// The heading, in whole degrees on Nova's compass (0 up, clockwise, y
+/// down), from (`x`, `y`) toward (0, 0), as `_TableArcTan` (@0x259a0)
+/// works it: the smaller of |x| and |y| over the larger, in `f32`, times
+/// 100 (0xdd060), truncated and clamped to the table, its entry turned
+/// into the octant and the quadrant, then taken 90 back and wrapped to
+/// 0..360. (0, 0) is 0 (@0x259b3-0x259c1). The table truncates, so a
+/// diagonal is a degree short: (1, 1) is 314, not 315.
+#[must_use]
+pub fn table_arctan(x: f32, y: f32) -> i16 {
+    if x == 0.0 && y == 0.0 {
+        return 0;
+    }
+    let (ax, ay) = (x.abs(), y.abs());
+    let steep = ay > ax;
+    let ratio = if steep { ax / ay } else { ay / ax };
+    let index = ((ratio * 100.0) as i32).clamp(0, ARCTAN_LAST);
+    let mut c = arctan_entry(index);
+    if steep {
+        c = 90 - c;
+    }
+    if x < 0.0 {
+        c = if y < 0.0 { 180 + c } else { 180 - c };
+    } else if y < 0.0 {
+        c = -c;
+    }
+    i16::try_from((c - 90).rem_euclid(360)).unwrap_or_default()
+}
+
+/// `_BuildTrigTable`'s angle for whole degree `degrees` normalized to
+/// 0..360 as `_TableSin` and `_TableCos` do (@0x25913-0x25926): `(float)i
+/// × 0.01745329`, in doubles, rounded to `f32` (@0x2583b-0x2584c).
+fn table_radians(degrees: i16) -> f64 {
+    let index = f32::from(degrees.rem_euclid(360));
+    f64::from((f64::from(index) * 0.017_453_29) as f32)
+}
+
+/// `_TableSin` (@0x2590a): the `f32` sine of whole degree `degrees`.
+#[must_use]
+pub fn table_sin(degrees: i16) -> f32 {
+    table_radians(degrees).sin() as f32
+}
+
+/// `_TableCos` (@0x2593c): the `f32` cosine of whole degree `degrees`.
+#[must_use]
+pub fn table_cos(degrees: i16) -> f32 {
+    table_radians(degrees).cos() as f32
+}
+
+/// `_Accel` (@0x2ade6): `point` moved `magnitude` along `angle`, x by
+/// `magnitude · sin` and y by `−magnitude · cos`, in `f32`.
+#[must_use]
+pub fn accel(angle: i16, magnitude: f32, point: (f32, f32)) -> (f32, f32) {
+    (
+        magnitude * table_sin(angle) + point.0,
+        point.1 - magnitude * table_cos(angle),
+    )
+}
+
+/// A line from one pixel to another, both ends drawn.
+pub type PixelLine = ((i32, i32), (i32, i32));
+
+/// The centre arrow on a radar centred on `center`, for the player at
+/// `player` (@0x49d7b-0x49eb3): along the heading toward the system's
+/// centre ([`table_arctan`]), the shaft from 25 to 50 out, then each head
+/// 6 long from the shaft's end at ±135°. Each end is truncated as it is
+/// drawn; each head starts again from the shaft's unrounded end.
+#[must_use]
+pub fn arrow(center: (i32, i32), player: Point) -> [PixelLine; 3] {
+    let heading = table_arctan(player.x, player.y);
+    let center = (center.0 as f32, center.1 as f32);
+    let start = accel(heading, ARROW_START, center);
+    let end = accel(heading, ARROW_END, center);
+    let pixel = |(x, y): (f32, f32)| (x as i32, y as i32);
+    let head = |turn: i16| (pixel(end), pixel(accel(heading + turn, ARROW_HEAD, end)));
+    [
+        (pixel(start), pixel(end)),
+        head(ARROW_HEAD_TURN),
+        head(-ARROW_HEAD_TURN),
+    ]
+}
+
+/// Whether the arrow shows for the player at `player` by its distance
+/// from the system's centre: the `f32` sum of each axis squared above
+/// [`ARROW_MIN_DISTANCE_SQUARED`] (`_XYFloatSquaredDist` @0x2afdb).
+#[must_use]
+pub fn far_from_centre(player: Point) -> bool {
+    let (dx, dy) = (player.x.abs(), player.y.abs());
+    dx * dx + dy * dy > ARROW_MIN_DISTANCE_SQUARED
 }
 
 /// One thing the radar draws, in whole screen pixels.
@@ -205,6 +468,31 @@ pub enum RadarMark {
         /// Its colour.
         color: RadarColor,
     },
+    /// A filled rect: the IFF backdrop.
+    Fill {
+        /// The rect.
+        rect: IRect,
+        /// Its colour.
+        color: RadarColor,
+    },
+    /// A rect filled with a `ppat`, tiled from the screen's origin: the
+    /// static.
+    Pattern {
+        /// The rect.
+        rect: IRect,
+        /// The `ppat`'s ID.
+        id: i16,
+    },
+    /// A 1-pixel line, both ends drawn: only its pixels inside the radar
+    /// show.
+    Line {
+        /// One end.
+        from: (i32, i32),
+        /// The other end.
+        to: (i32, i32),
+        /// Its colour.
+        color: RadarColor,
+    },
 }
 
 /// How far an oval stellar's point rect is grown on each side for a
@@ -230,13 +518,58 @@ pub fn radar_offset(world: f32, player: f32, center: i32) -> i32 {
 }
 
 /// What the radar `radar` draws for `scene` (see the module docs), in
-/// order: the stellars, the ships, then the player. `blink_on` is
-/// whether the target shows bright.
+/// order: the static, or the IFF backdrop, the stellars and the ships;
+/// then the player and the centre arrow. `blink_on` is whether the target
+/// shows bright, and the arrow shows.
 #[must_use]
 pub fn marks(radar: IRect, scene: &RadarScene, blink_on: bool) -> Vec<RadarMark> {
     if radar.is_empty() {
         return Vec::new();
     }
+    let (cx, cy) = radar.center();
+    let mut marks = Vec::new();
+    match scene.static_pattern {
+        Some(id) if !scene.blank => marks.push(RadarMark::Pattern { rect: radar, id }),
+        _ => {
+            if scene.iff {
+                marks.push(RadarMark::Fill {
+                    rect: radar,
+                    color: RadarColor::Black,
+                });
+            }
+            if !scene.blank {
+                contacts(&mut marks, radar, scene, blink_on);
+            }
+        }
+    }
+    let player = if scene.iff {
+        RadarColor::Cyan
+    } else {
+        RadarColor::Bright
+    };
+    marks.push(RadarMark::Pixel {
+        x: cx,
+        y: cy,
+        color: player,
+    });
+    let shows_arrow = blink_on
+        && !scene.route_shown
+        && !scene.stellars.is_empty()
+        && far_from_centre(scene.player);
+    if shows_arrow {
+        marks.extend(
+            arrow((cx, cy), scene.player).map(|(from, to)| RadarMark::Line {
+                from,
+                to,
+                color: RadarColor::Dim,
+            }),
+        );
+    }
+    marks
+}
+
+/// Pushes the marks of `scene`'s stellars, then its ships, on `radar`.
+fn contacts(marks: &mut Vec<RadarMark>, radar: IRect, scene: &RadarScene, blink_on: bool) {
     let (cx, cy) = radar.center();
     let at = |position: Point| {
         (
@@ -244,43 +577,43 @@ pub fn marks(radar: IRect, scene: &RadarScene, blink_on: bool) -> Vec<RadarMark>
             radar_offset(position.y, scene.player.y, cy),
         )
     };
-    let mut marks = Vec::new();
-    if !scene.blank {
-        for stellar in &scene.stellars {
-            let (x, y) = at(stellar.position);
-            let inset = if stellar.square {
-                1
-            } else {
-                inset_for_width(stellar.sprite_width)
-            };
-            let Some(rect) = IRect::around(x, y, inset).intersection(radar) else {
-                continue;
-            };
-            let color = RadarColor::Dim;
-            marks.push(if stellar.square {
-                RadarMark::Square { rect, color }
-            } else {
-                RadarMark::Oval { rect, color }
-            });
-        }
-        for ship in &scene.ships {
-            let (x, y) = at(ship.position);
-            if radar.holds(x, y) {
-                let color = if ship.targeted && blink_on {
-                    RadarColor::Bright
-                } else {
-                    RadarColor::Dim
-                };
-                marks.push(RadarMark::Pixel { x, y, color });
+    for stellar in &scene.stellars {
+        let (x, y) = at(stellar.position);
+        let inset = if stellar.square {
+            1
+        } else {
+            inset_for_width(stellar.sprite_width)
+        };
+        let Some(rect) = IRect::around(x, y, inset).intersection(radar) else {
+            continue;
+        };
+        let color = if scene.iff {
+            stellar_color(stellar.iff)
+        } else {
+            RadarColor::Dim
+        };
+        marks.push(if stellar.square {
+            RadarMark::Square { rect, color }
+        } else {
+            RadarMark::Oval { rect, color }
+        });
+    }
+    for ship in &scene.ships {
+        let (x, y) = at(ship.position);
+        let color = match (ship.targeted && blink_on, scene.iff) {
+            (true, true) => RadarColor::LightGrey,
+            (true, false) => RadarColor::Bright,
+            (false, true) => ship_color(ship.iff),
+            (false, false) => RadarColor::Dim,
+        };
+        if scene.density_scanner && ship.heavy {
+            if let Some(rect) = IRect::around(x, y, 1).intersection(radar) {
+                marks.push(RadarMark::Square { rect, color });
             }
+        } else if radar.holds(x, y) {
+            marks.push(RadarMark::Pixel { x, y, color });
         }
     }
-    marks.push(RadarMark::Pixel {
-        x: cx,
-        y: cy,
-        color: RadarColor::Bright,
-    });
-    marks
 }
 
 #[cfg(test)]
@@ -301,7 +634,7 @@ mod tests {
             player: at(0.0, 0.0),
             stellars,
             ships,
-            blank: false,
+            ..RadarScene::default()
         }
     }
 
@@ -310,6 +643,7 @@ mod tests {
             position: at(x, y),
             square: false,
             sprite_width,
+            iff: StellarIff::Cleared,
         }
     }
 
@@ -318,6 +652,7 @@ mod tests {
             position: at(x, y),
             square: true,
             sprite_width: Some(300),
+            iff: StellarIff::Wormhole,
         }
     }
 
@@ -325,6 +660,8 @@ mod tests {
         RadarShip {
             position: at(x, y),
             targeted: false,
+            iff: ShipIff::Other,
+            heavy: false,
         }
     }
 
@@ -601,8 +938,8 @@ mod tests {
     #[test]
     fn the_target_is_bright_only_while_the_blink_is_on() {
         let target = RadarShip {
-            position: at(32.0, 0.0),
             targeted: true,
+            ..ship(32.0, 0.0)
         };
         let shown = scene(vec![oval(0.0, 32.0, None)], vec![ship(-32.0, 0.0), target]);
         let ships = |blink_on| {
@@ -658,5 +995,516 @@ mod tests {
         ] {
             assert_eq!(marks(radar, &shown, true), [], "{radar:?}");
         }
+    }
+
+    // IFF.
+
+    fn with_iff(mut shown: RadarScene) -> RadarScene {
+        shown.iff = true;
+        shown
+    }
+
+    fn coded(x: f32, y: f32, iff: ShipIff) -> RadarShip {
+        RadarShip { iff, ..ship(x, y) }
+    }
+
+    const BLACK_BACKDROP: RadarMark = RadarMark::Fill {
+        rect: STOCK,
+        color: RadarColor::Black,
+    };
+
+    const CYAN_PLAYER: RadarMark = RadarMark::Pixel {
+        x: 926,
+        y: 96,
+        color: RadarColor::Cyan,
+    };
+
+    #[test]
+    fn with_iff_the_radar_is_black_and_each_contact_in_its_code_and_the_player_cyan() {
+        let shown = with_iff(scene(
+            vec![square(0.0, -320.0), oval(320.0, 0.0, None)],
+            vec![
+                coded(-320.0, 0.0, ShipIff::Other),
+                coded(0.0, 320.0, ShipIff::Threat),
+            ],
+        ));
+        assert_eq!(
+            marks(STOCK, &shown, false),
+            [
+                BLACK_BACKDROP,
+                RadarMark::Square {
+                    rect: IRect::new(925, 85, 927, 87),
+                    color: RadarColor::Teal
+                },
+                RadarMark::Oval {
+                    rect: IRect::new(935, 95, 937, 97),
+                    color: RadarColor::Yellow
+                },
+                pixel(916, 96, RadarColor::Blue),
+                pixel(926, 106, RadarColor::Red),
+                CYAN_PLAYER
+            ]
+        );
+    }
+
+    #[test]
+    fn each_iff_code_has_its_colour() {
+        assert_eq!(
+            [
+                ShipIff::Disabled,
+                ShipIff::Threat,
+                ShipIff::Escort,
+                ShipIff::Other
+            ]
+            .map(ship_color),
+            [
+                RadarColor::DarkGrey,
+                RadarColor::Red,
+                RadarColor::Green,
+                RadarColor::Blue
+            ]
+        );
+        assert_eq!(
+            [
+                StellarIff::Unlandable,
+                StellarIff::Wormhole,
+                StellarIff::Dominated,
+                StellarIff::Cleared,
+                StellarIff::Denied,
+                StellarIff::Hostile
+            ]
+            .map(stellar_color),
+            [
+                RadarColor::MedGrey,
+                RadarColor::Teal,
+                RadarColor::Green,
+                RadarColor::Yellow,
+                RadarColor::Orange,
+                RadarColor::Red
+            ]
+        );
+    }
+
+    #[test]
+    fn each_fixed_colour_is_the_high_byte_of_the_originals() {
+        let rgb = |color: RadarColor| color.fixed().map(|c| (c.r, c.g, c.b, c.a));
+        assert_eq!(rgb(RadarColor::Dim), None);
+        assert_eq!(rgb(RadarColor::Bright), None);
+        for (color, expected) in [
+            (RadarColor::Black, (0, 0, 0)),
+            (RadarColor::Cyan, (0, 255, 255)),
+            (RadarColor::DarkGrey, (64, 64, 64)),
+            (RadarColor::Red, (255, 0, 0)),
+            (RadarColor::Green, (0, 255, 0)),
+            (RadarColor::Blue, (0, 0, 255)),
+            (RadarColor::MedGrey, (128, 128, 128)),
+            (RadarColor::Teal, (0, 0x55, 0x55)),
+            (RadarColor::Yellow, (255, 255, 0)),
+            (RadarColor::Orange, (255, 0x66, 0)),
+            (RadarColor::LightGrey, (192, 192, 192)),
+        ] {
+            let (r, g, b) = expected;
+            assert_eq!(rgb(color), Some((r, g, b, 255)), "{color:?}");
+        }
+    }
+
+    #[test]
+    fn with_iff_the_target_is_light_grey_while_the_blink_is_on() {
+        let target = RadarShip {
+            targeted: true,
+            ..coded(32.0, 0.0, ShipIff::Escort)
+        };
+        let shown = with_iff(scene(Vec::new(), vec![target]));
+        assert_eq!(
+            marks(STOCK, &shown, true)[1],
+            pixel(927, 96, RadarColor::LightGrey)
+        );
+        assert_eq!(
+            marks(STOCK, &shown, false)[1],
+            pixel(927, 96, RadarColor::Green)
+        );
+    }
+
+    #[test]
+    fn with_iff_a_blank_radar_is_black_with_the_player_cyan() {
+        let mut shown = with_iff(scene(
+            vec![oval(0.0, 32.0, None)],
+            vec![coded(-32.0, 0.0, ShipIff::Threat)],
+        ));
+        shown.blank = true;
+        assert_eq!(marks(STOCK, &shown, false), [BLACK_BACKDROP, CYAN_PLAYER]);
+    }
+
+    #[test]
+    fn without_iff_there_is_no_backdrop_and_no_code() {
+        let shown = scene(
+            vec![square(0.0, -320.0)],
+            vec![coded(-320.0, 0.0, ShipIff::Threat)],
+        );
+        assert_eq!(
+            marks(STOCK, &shown, false),
+            [
+                RadarMark::Square {
+                    rect: IRect::new(925, 85, 927, 87),
+                    color: RadarColor::Dim
+                },
+                pixel(916, 96, RadarColor::Dim),
+                PLAYER
+            ]
+        );
+    }
+
+    // The density scanner.
+
+    fn heavy(x: f32, y: f32) -> RadarShip {
+        RadarShip {
+            heavy: true,
+            ..ship(x, y)
+        }
+    }
+
+    fn scanning(mut shown: RadarScene) -> RadarScene {
+        shown.density_scanner = true;
+        shown
+    }
+
+    #[test]
+    fn with_a_scanner_a_heavy_ship_is_a_square_in_its_dots_colour() {
+        let target = RadarShip {
+            targeted: true,
+            ..heavy(-32.0, 0.0)
+        };
+        let shown = scanning(scene(
+            Vec::new(),
+            vec![heavy(32.0, 0.0), target, ship(0.0, 32.0)],
+        ));
+        assert_eq!(
+            marks(STOCK, &shown, true),
+            [
+                RadarMark::Square {
+                    rect: IRect::new(926, 95, 928, 97),
+                    color: RadarColor::Dim
+                },
+                RadarMark::Square {
+                    rect: IRect::new(924, 95, 926, 97),
+                    color: RadarColor::Bright
+                },
+                pixel(926, 97, RadarColor::Dim),
+                PLAYER
+            ]
+        );
+        let coded = RadarShip {
+            iff: ShipIff::Threat,
+            ..heavy(32.0, 0.0)
+        };
+        let shown = with_iff(scanning(scene(Vec::new(), vec![coded])));
+        assert_eq!(
+            marks(STOCK, &shown, true)[1],
+            RadarMark::Square {
+                rect: IRect::new(926, 95, 928, 97),
+                color: RadarColor::Red
+            }
+        );
+    }
+
+    #[test]
+    fn without_a_scanner_a_heavy_ship_is_a_pixel() {
+        let shown = scene(Vec::new(), vec![heavy(32.0, 0.0)]);
+        assert_eq!(
+            marks(STOCK, &shown, true),
+            [pixel(927, 96, RadarColor::Dim), PLAYER]
+        );
+    }
+
+    #[test]
+    fn a_heavy_ships_square_is_clipped_to_the_radar() {
+        // x = 1014, the right edge: a 1-pixel-wide frame at 1013; x = 837,
+        // just past the left edge: nothing.
+        let shown = scanning(scene(
+            Vec::new(),
+            vec![heavy(2816.0, 0.0), heavy(-2848.0, 0.0)],
+        ));
+        assert_eq!(
+            marks(STOCK, &shown, true),
+            [
+                RadarMark::Square {
+                    rect: IRect::new(1013, 95, 1014, 97),
+                    color: RadarColor::Dim
+                },
+                PLAYER
+            ]
+        );
+    }
+
+    // The centre arrow's heading and geometry.
+
+    #[test]
+    fn the_heading_points_from_the_player_to_the_centre_on_novas_compass() {
+        assert_eq!(table_arctan(1.0, 0.0), 270);
+        assert_eq!(table_arctan(0.0, 1.0), 0);
+        assert_eq!(table_arctan(-1.0, 0.0), 90);
+        assert_eq!(table_arctan(0.0, -1.0), 180);
+        assert_eq!(table_arctan(0.0, 0.0), 0);
+    }
+
+    #[test]
+    fn a_diagonal_is_a_degree_short_as_the_table_truncates() {
+        assert_eq!(table_arctan(1.0, 1.0), 314);
+        assert_eq!(table_arctan(-1.0, -1.0), 134);
+        assert_eq!(table_arctan(1.0, -1.0), 226);
+        assert_eq!(table_arctan(-1.0, 1.0), 46);
+    }
+
+    #[test]
+    fn the_ratio_truncates_to_a_hundredth_and_the_entry_to_a_degree() {
+        // 0.555 is index 55, whose atan(0.55) is 28.81 degrees: 28.
+        assert_eq!(table_arctan(1000.0, 555.0), 298);
+        assert_eq!(table_arctan(555.0, 1000.0), 332);
+        assert_eq!(table_arctan(-1000.0, 555.0), 62);
+        assert_eq!(table_arctan(-1000.0, -555.0), 118);
+        assert_eq!(table_arctan(1000.0, -555.0), 242);
+        assert_eq!(table_arctan(-555.0, -1000.0), 152);
+    }
+
+    #[test]
+    fn sine_and_cosine_normalize_whole_degrees() {
+        for (a, b) in [(-45, 315), (405, 45), (360, 0), (-360, 0), (720, 0)] {
+            assert_eq!(table_sin(a), table_sin(b), "{a}");
+            assert_eq!(table_cos(a), table_cos(b), "{a}");
+        }
+        assert_eq!(table_sin(90), 1.0);
+        assert_eq!(table_cos(0), 1.0);
+        assert_eq!(table_sin(0), 0.0);
+        assert!(table_cos(90) > 0.0, "a float's 90 degrees is a hair short");
+        assert!(table_cos(90) < 1e-6);
+        assert!(table_sin(-90) < 0.0);
+    }
+
+    #[test]
+    fn accel_moves_along_the_angle_with_y_down() {
+        assert_eq!(accel(90, 10.0, (1.0, 2.0)).0, 11.0);
+        assert_eq!(accel(0, 10.0, (1.0, 2.0)), (1.0, -8.0));
+        assert_eq!(accel(180, 10.0, (1.0, 2.0)).1, 12.0);
+    }
+
+    const CENTRE: (i32, i32) = (926, 96);
+
+    #[test]
+    fn the_arrow_runs_from_25_to_50_out_with_heads_6_long_at_135_degrees() {
+        assert_eq!(
+            arrow(CENTRE, at(3000.0, 0.0)),
+            [
+                ((901, 96), (876, 96)),
+                ((876, 96), (880, 91)),
+                ((876, 96), (880, 100))
+            ]
+        );
+        assert_eq!(
+            arrow(CENTRE, at(0.0, -3000.0)),
+            [
+                ((926, 121), (926, 146)),
+                ((926, 146), (921, 141)),
+                ((926, 146), (930, 141))
+            ]
+        );
+    }
+
+    #[test]
+    fn the_arrows_ends_truncate_from_floats() {
+        // The f32 cosine of 90 degrees is a hair above 0, so 96 − 25 · cos
+        // truncates to 95.
+        assert_eq!(
+            arrow(CENTRE, at(-3000.0, 0.0)),
+            [
+                ((951, 95), (976, 95)),
+                ((976, 95), (971, 100)),
+                ((976, 95), (971, 91))
+            ]
+        );
+        assert_eq!(
+            arrow(CENTRE, at(3000.0, 3000.0)),
+            [
+                ((908, 78), (890, 61)),
+                ((890, 61), (896, 61)),
+                ((890, 61), (890, 67))
+            ]
+        );
+    }
+
+    // The centre arrow's conditions.
+
+    /// A scene far from the centre, at (3000, 0), with a stellar.
+    fn far() -> RadarScene {
+        RadarScene {
+            player: at(3000.0, 0.0),
+            ..scene(vec![oval(0.0, 0.0, None)], Vec::new())
+        }
+    }
+
+    fn arrow_marks(color: RadarColor) -> [RadarMark; 3] {
+        arrow(CENTRE, at(3000.0, 0.0)).map(|(from, to)| RadarMark::Line { from, to, color })
+    }
+
+    fn lines(shown: &RadarScene, blink_on: bool) -> Vec<RadarMark> {
+        marks(STOCK, shown, blink_on)
+            .into_iter()
+            .filter(|mark| matches!(mark, RadarMark::Line { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn the_arrow_is_dim_and_drawn_last_while_the_blink_is_on() {
+        let shown = far();
+        // The stellar at the centre is off the radar: only the player and
+        // the arrow, after it.
+        let drawn = marks(STOCK, &shown, true);
+        let mut expected = vec![PLAYER];
+        expected.extend(arrow_marks(RadarColor::Dim));
+        assert_eq!(drawn, expected);
+        assert_eq!(lines(&shown, false), [], "blinks with the target");
+        let iff = with_iff(far());
+        assert_eq!(
+            lines(&iff, true),
+            arrow_marks(RadarColor::Dim),
+            "dim with IFF"
+        );
+    }
+
+    #[test]
+    fn no_arrow_shows_with_a_route_or_without_a_stellar() {
+        let route = RadarScene {
+            route_shown: true,
+            ..far()
+        };
+        assert_eq!(lines(&route, true), []);
+        let empty = RadarScene {
+            stellars: Vec::new(),
+            ..far()
+        };
+        assert_eq!(lines(&empty, true), []);
+    }
+
+    #[test]
+    fn the_arrow_shows_only_past_the_distance_in_f32() {
+        assert_eq!(ARROW_MIN_DISTANCE_SQUARED, 7_000_000.0);
+        // 2000² + 1732.05078125² is exactly 7,000,000 in f32: not past it.
+        let at_limit = at(2000.0, 1_732.050_8);
+        assert_eq!(f64::from(at_limit.y), 1_732.050_781_25);
+        assert!(!far_from_centre(at_limit));
+        assert!(!far_from_centre(at(-2000.0, -1_732.050_8)));
+        let past = at(2000.0, 1_732.051_2);
+        assert!(far_from_centre(past));
+        assert!(far_from_centre(at(-2000.0, -1_732.051_2)));
+        let shown = |player| RadarScene { player, ..far() };
+        assert_eq!(lines(&shown(at_limit), true), []);
+        assert_eq!(lines(&shown(past), true).len(), 3);
+    }
+
+    #[test]
+    fn the_arrow_shows_while_blank_and_under_static() {
+        let blank = RadarScene {
+            blank: true,
+            ..far()
+        };
+        assert_eq!(lines(&blank, true), arrow_marks(RadarColor::Dim));
+        let noisy = RadarScene {
+            static_pattern: Some(130),
+            ..far()
+        };
+        assert_eq!(lines(&noisy, true), arrow_marks(RadarColor::Dim));
+    }
+
+    // Interference static.
+
+    /// Rolls these outcomes in order, recording each roll's sides.
+    struct Rolls {
+        outcomes: Vec<u16>,
+        sides: Vec<u16>,
+    }
+
+    impl Rolls {
+        fn of(outcomes: &[u16]) -> Self {
+            Self {
+                outcomes: outcomes.iter().rev().copied().collect(),
+                sides: Vec::new(),
+            }
+        }
+    }
+
+    impl Chance for Rolls {
+        fn fires(&mut self, _percent: u8) -> bool {
+            unreachable!("the static rolls")
+        }
+
+        fn below(&mut self, _n: u32) -> u32 {
+            unreachable!("the static rolls")
+        }
+
+        fn roll(&mut self, sides: u16) -> u16 {
+            self.sides.push(sides);
+            self.outcomes.pop().expect("scripted")
+        }
+    }
+
+    #[test]
+    fn static_shows_when_the_roll_plus_one_is_at_most_the_level() {
+        let mut chance = Rolls::of(&[29, 0]);
+        assert_eq!(static_frame(30, &mut chance), Some(128));
+        assert_eq!(chance.sides, [100, 10]);
+        let mut chance = Rolls::of(&[30]);
+        assert_eq!(static_frame(30, &mut chance), None);
+        assert_eq!(chance.sides, [100], "no pattern drawn");
+        let mut chance = Rolls::of(&[99, 9]);
+        assert_eq!(static_frame(100, &mut chance), Some(137));
+    }
+
+    #[test]
+    fn no_static_shows_at_level_0_and_nothing_is_drawn() {
+        let mut chance = Rolls::of(&[0, 0]);
+        assert_eq!(static_frame(0, &mut chance), None);
+        assert!(chance.sides.is_empty());
+    }
+
+    #[test]
+    fn the_static_is_one_of_ppat_128_to_137() {
+        assert_eq!(STATIC_PATTERNS, 128..=137);
+        for roll in 0..10 {
+            let mut chance = Rolls::of(&[0, roll]);
+            assert_eq!(
+                static_frame(1, &mut chance),
+                Some(128 + i16::try_from(roll).unwrap())
+            );
+        }
+    }
+
+    #[test]
+    fn static_hides_the_backdrop_stellars_and_ships_but_not_the_player() {
+        let shown = RadarScene {
+            static_pattern: Some(131),
+            ..with_iff(scene(
+                vec![oval(0.0, 32.0, None)],
+                vec![coded(-32.0, 0.0, ShipIff::Threat)],
+            ))
+        };
+        assert_eq!(
+            marks(STOCK, &shown, false),
+            [
+                RadarMark::Pattern {
+                    rect: STOCK,
+                    id: 131
+                },
+                CYAN_PLAYER
+            ]
+        );
+    }
+
+    #[test]
+    fn a_blank_radar_shows_no_static() {
+        let shown = RadarScene {
+            static_pattern: Some(131),
+            blank: true,
+            ..scene(vec![oval(0.0, 32.0, None)], Vec::new())
+        };
+        assert_eq!(marks(STOCK, &shown, false), [PLAYER]);
     }
 }

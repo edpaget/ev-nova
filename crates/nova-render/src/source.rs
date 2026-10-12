@@ -1,8 +1,10 @@
-//! Images from the game data: `PICT`s, masked `PICT`s and `rlëD` sprite
-//! sheets, decoded on request.
+//! Images from the game data: `PICT`s, masked `PICT`s, `rlëD` sprite
+//! sheets and `ppat` pixel patterns, decoded on request.
 
 use nova_data::GameData;
-use nova_data::graphics::{Image, PICT, RLED, apply_mask, decode_pict, decode_rled};
+use nova_data::graphics::{
+    Image, PICT, PPAT, RLED, apply_mask, decode_pict, decode_ppat, decode_rled,
+};
 use nova_view::ImageKind;
 
 use crate::images::{ImageError, ImageSource};
@@ -26,6 +28,7 @@ impl ImageSource for GameData {
                 let mask = decode_pict(bytes(PICT, mask)?)?;
                 vec![apply_mask(&picture, &mask)?]
             }
+            ImageKind::Pattern => vec![decode_ppat(bytes(PPAT, id)?)?],
         })
     }
 }
@@ -36,7 +39,7 @@ mod tests {
     use std::path::Path;
 
     use nova_data::graphics::GraphicsError;
-    use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
+    use nova_data::graphics::fixture::{Ctab, DirectBits, PictBuilder, Ppat, RledBuilder};
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader, ResType};
@@ -114,6 +117,35 @@ mod tests {
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].pixel(0, 0), Some([255, 0, 0, 255]));
         assert_eq!(frames[1].pixel(0, 0), Some([0, 0, 255, 255]));
+    }
+
+    /// A 2x2 pattern: red, green over blue, red.
+    fn pattern() -> Vec<u8> {
+        let ctab = Ctab {
+            device: false,
+            entries: vec![
+                (0, [0xFFFF, 0, 0]),
+                (1, [0, 0xFFFF, 0]),
+                (2, [0, 0, 0xFFFF]),
+            ],
+        };
+        Ppat::new(2, 2, 8, &ctab, &[0, 1, 2, 0]).bytes()
+    }
+
+    #[test]
+    fn a_pattern_is_one_frame_with_its_pixels() {
+        let data = store(&[(PPAT, 128, pattern())]);
+        let frames = data.frames(ImageKind::Pattern, 128).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!((frames[0].width(), frames[0].height()), (2, 2));
+        assert_eq!(frames[0].pixel(0, 0), Some([255, 0, 0, 255]));
+        assert_eq!(frames[0].pixel(1, 0), Some([0, 255, 0, 255]));
+        assert_eq!(frames[0].pixel(0, 1), Some([0, 0, 255, 255]));
+        assert_eq!(
+            data.frames(ImageKind::Pattern, 129),
+            Err(ImageError::Missing)
+        );
+        assert_eq!(data.frames(ImageKind::Pict, 128), Err(ImageError::Missing));
     }
 
     #[test]

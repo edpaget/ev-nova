@@ -88,7 +88,11 @@
 //! redraw it (a new system, landing, take-off, or closing the map, the
 //! comm dialog or a mission dialog); by the other, every frame. Its target blinks bright on the
 //! same 8 ticks either way, and it shows no stellars or ships while the
-//! ship is landed.
+//! ship is landed. The player's outfits give it IFF colours and a density
+//! scanner ([`Session::radar_gear`]); far from the system's centre an
+//! arrow points back to it; and each tick the interference in the system
+//! ([`Session::interference`]) may fill it with static, rolled on the
+//! effects' chance.
 //!
 //! Each [`Screen::tick`] runs the simulation's fixed-step clock: the
 //! frame's time becomes whole steps of 1/30 s, each flown with the keys
@@ -310,7 +314,7 @@ use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
     HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText,
-    NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, TagNames, VenueOffer,
+    NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, StellarIff, TagNames, VenueOffer,
 };
 use nova_sim::{
     Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
@@ -335,7 +339,7 @@ use super::escorts::{
 };
 use super::hud::{self, HudState, NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
-use super::radar::{RadarScene, RadarShip, RadarStellar};
+use super::radar::{self, RadarScene, RadarShip, RadarStellar};
 use super::sprite::rotation_frame;
 use super::target::{self, TargetShown};
 use super::weapons::{self, BeamShown, ShotShown};
@@ -1192,6 +1196,9 @@ pub struct FlightView<C> {
     /// next under [`RuleKey::HudCadence`]'s engine reading; `None` before
     /// the first.
     radar_scene: Option<RadarScene>,
+    /// The radar's static this tick, a `ppat` ID, rolled on the effects'
+    /// chance ([`radar::static_frame`]); `None` without.
+    radar_static: Option<i16>,
 }
 
 /// What [`FlightView::catch_up`] redrew, from the session's events.
@@ -1359,6 +1366,7 @@ impl<
             escort_colors,
             hud_cadence: HudCadence::default(),
             radar_scene: None,
+            radar_static: None,
         }
     }
 
@@ -1669,21 +1677,18 @@ impl<
             let name = scene.stellars().iter().find(|stellar| stellar.id == target);
             return NavDisplay::Stellar(name.map(|s| s.name.clone()).unwrap_or_default());
         }
-        session
-            .course_shown()
-            .first()
-            .map_or(NavDisplay::None, |&next| {
-                let name = session
-                    .pilot()
-                    .has_explored(next)
-                    .then(|| self.map.model().system(next))
-                    .flatten()
-                    .map(|system| system.entry.name.clone());
-                NavDisplay::Hyperspace {
-                    name,
-                    readiness: session.jump_readiness(),
-                }
-            })
+        route_shown(session).map_or(NavDisplay::None, |next| {
+            let name = session
+                .pilot()
+                .has_explored(next)
+                .then(|| self.map.model().system(next))
+                .flatten()
+                .map(|system| system.entry.name.clone());
+            NavDisplay::Hyperspace {
+                name,
+                readiness: session.jump_readiness(),
+            }
+        })
     }
 
     /// Begins a jump, or shows why not.
@@ -2158,8 +2163,12 @@ impl<C> FlightView<C> {
     /// What the radar shows now ([`RadarScene`]): the player's ship and
     /// the other ships where they are drawn, the scene's stellars in nav
     /// order with the shape and sprite width the radar reads, and blank
-    /// while the ship is landed (`_playerIsLanded`).
+    /// while the ship is landed (`_playerIsLanded`); each with its IFF
+    /// code, the player's IFF and density scanner, this tick's static
+    /// ([`FlightView::advance_hud`]), and whether a hyperspace route is
+    /// shown ([`route_shown`]).
     fn radar_now(&self) -> RadarScene {
+        let session = self.session.as_ref().ok();
         let stellars = self.scene.as_ref().map_or_else(Vec::new, |scene| {
             scene
                 .stellars()
@@ -2168,21 +2177,29 @@ impl<C> FlightView<C> {
                     position: stellar.position,
                     square: stellar.radar_square,
                     sprite_width: stellar.drawn().as_ref().ok().map(|sheet| sheet.frame_width),
+                    iff: session
+                        .and_then(|session| session.stellar_iff(stellar.id))
+                        .unwrap_or(StellarIff::Unlandable),
                 })
                 .collect()
         });
-        let (ships, blank) = match &self.session {
-            Ok(session) => (
-                radar_ships(session, &self.shown_npcs()),
-                session.landed().is_some(),
-            ),
-            Err(_) => (Vec::new(), false),
+        let Some(session) = session else {
+            return RadarScene {
+                player: self.shown_position(),
+                stellars,
+                ..RadarScene::default()
+            };
         };
+        let gear = session.radar_gear();
         RadarScene {
             player: self.shown_position(),
             stellars,
-            ships,
-            blank,
+            ships: radar_ships(session, &self.shown_npcs()),
+            blank: session.landed().is_some(),
+            iff: gear.iff,
+            density_scanner: gear.density_scanner,
+            static_pattern: self.radar_static,
+            route_shown: route_shown(session).is_some(),
         }
     }
 
@@ -2205,9 +2222,21 @@ impl<C> FlightView<C> {
         self.radar_scene = Some(self.radar_now());
     }
 
-    /// Moves the HUD's timer to the view's elapsed ticks, and takes the
-    /// radar's snapshot afresh when it refreshes ([`HudCadence::advance`]).
+    /// Rolls this tick's radar static against the interference in the
+    /// player's system ([`radar::static_frame`], on the effects' chance,
+    /// never the simulation's), as `_HandleStatus` (@0x494d7) does every
+    /// frame; then moves the HUD's timer to the view's elapsed ticks, and
+    /// takes the radar's snapshot afresh when it refreshes
+    /// ([`HudCadence::advance`]).
+    ///
+    /// The original rolls the threshold in `_HandleStatus` and picks the
+    /// pattern as `_DrawStatusRadar` draws; ours rolls both here, once a
+    /// tick, which changes no decision the player can see.
     fn advance_hud(&mut self) {
+        if let Ok(session) = &self.session {
+            self.radar_static =
+                radar::static_frame(session.interference(), &mut self.effects_chance);
+        }
         let now = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
         if self.hud_cadence.advance(now) {
             self.radar_scene = Some(self.radar_now());
@@ -3415,9 +3444,10 @@ fn sprite_drawn(session: &Session, npc: &Npc) -> bool {
     session.sees_past_cloak(npc)
 }
 
-/// Each of `shown` the radar shows, where it is drawn and whether it is
-/// the player's target: those [`Session::on_radar`] says, a cloaked ship
-/// only when its cloak shows there or the player scans for cloaked ships.
+/// Each of `shown` the radar shows, where it is drawn, whether it is the
+/// player's target, its IFF code and whether it is heavy: those
+/// [`Session::on_radar`] says, a cloaked ship only when its cloak shows
+/// there or the player scans for cloaked ships.
 fn radar_ships(session: &Session, shown: &[(&Npc, Point, f32)]) -> Vec<RadarShip> {
     let target = session.target().map(|npc| npc.id);
     shown
@@ -3426,8 +3456,25 @@ fn radar_ships(session: &Session, shown: &[(&Npc, Point, f32)]) -> Vec<RadarShip
         .map(|&(npc, at, _)| RadarShip {
             position: at,
             targeted: target == Some(npc.id),
+            iff: session.ship_iff(npc),
+            heavy: npc.hull.mass > HEAVY_MASS,
         })
         .collect()
+}
+
+/// The class `Mass` a ship must be above to show as a square under a
+/// density scanner (`cmpw $0x63` @0x49bb8-0x49c2f).
+const HEAVY_MASS: f32 = 99.0;
+
+/// The next system on the hyperspace route the nav area shows, if it
+/// shows one: no stellar is selected and a course is shown (the
+/// original's nav mode 3). The nav area ([`FlightView::nav_display`]) and
+/// the radar's centre arrow ([`RadarScene::route_shown`]) both read it.
+fn route_shown(session: &Session) -> Option<SystemId> {
+    if session.nav_target().is_some() {
+        return None;
+    }
+    session.course_shown().first().copied()
 }
 
 /// The play area about the ship, in world units: the screen left of the
@@ -3471,6 +3518,7 @@ mod tests {
     use crate::flight::radar::{self, IRect, RadarColor, RadarMark};
     use crate::galaxy::{Galaxy, MapMode, SystemEntry};
     use crate::sound::Sound;
+    use nova_sim::ShipIff;
 
     use crate::system::catalog::{
         AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
@@ -3503,6 +3551,8 @@ mod tests {
         sites: Vec<LandingSite>,
         /// System 130's `NavDefs` slots on the map: none, by default.
         sol_navs: Vec<Option<(u32, u16)>>,
+        /// System 130's `Interference`: none, by default.
+        sol_interference: i16,
         /// The stellars Sol lists after Earth and the Moon: none, by
         /// default.
         sol_more: Vec<StellarContents>,
@@ -3647,6 +3697,7 @@ mod tests {
             fan: false,
             reborn: false,
             sol_navs: Vec::new(),
+            sol_interference: 0,
             sol_more: Vec::new(),
             gates: Vec::new(),
             lives: Vec::new(),
@@ -3765,6 +3816,7 @@ mod tests {
             let mut systems = vec![
                 StarSystem {
                     stellars: self.sol_navs.clone(),
+                    interference: self.sol_interference,
                     ..star(130, (0.0, 0.0), sol)
                 },
                 star(131, (600.0, 0.0), onward),
@@ -4511,15 +4563,16 @@ mod tests {
                             position: at(0.0, -600.0),
                             square: false,
                             sprite_width: Some(20),
+                            iff: StellarIff::Unlandable,
                         },
                         RadarStellar {
                             position: at(300.0, -200.0),
                             square: false,
                             sprite_width: Some(20),
+                            iff: StellarIff::Unlandable,
                         },
                     ],
-                    ships: Vec::new(),
-                    blank: false,
+                    ..RadarScene::default()
                 },
                 blink_on: false,
                 reserves: ShipStats::new(FIELDS, &[]).full(),
@@ -8050,6 +8103,8 @@ mod tests {
         let blip = RadarShip {
             position: at(100.0, -100.0),
             targeted: false,
+            iff: ShipIff::Other,
+            heavy: false,
         };
         let at_blip = at(100.0, -100.0);
         assert_eq!(radar_ships(session, &[(&npc, at_blip, 0.0)]), [blip]);
@@ -13910,5 +13965,297 @@ mod tests {
             view.tick(TICK);
         }
         assert_eq!(ship_129_sprites(&drawn(&view)), 1, "drawn once out");
+    }
+
+    // The radar's IFF, density scanner, centre arrow and static.
+
+    /// IFF, a density scanner and anti-interference 30 as outfits 300-302.
+    fn radar_outfits() -> Vec<OutfitRecord> {
+        let outfit = |id: i16, mod_type: i16, mod_val: i16| {
+            let mut mods = [(0, 0); 4];
+            mods[1] = (mod_type, mod_val);
+            OutfitRecord {
+                id: OutfitId(id),
+                name: format!("Outfit {id}"),
+                short_name: String::new(),
+                disp_weight: 0,
+                mass: 0,
+                tech_level: 1,
+                max: 10,
+                flags: 0,
+                cost: 1,
+                mods,
+                contribute: 0,
+                require: 0,
+                require_govt: -1,
+                buy_random: 100,
+                availability: nova_sim::Test::default(),
+                on_purchase: nova_sim::Script::default(),
+                on_sell: nova_sim::Script::default(),
+                item_class: 0,
+                lc_name: String::new(),
+                lc_plural: String::new(),
+            }
+        };
+        vec![
+            outfit(300, nova_sim::iff::MOD_IFF, 0),
+            outfit(301, nova_sim::iff::MOD_DENSITY_SCANNER, 0),
+            outfit(302, nova_sim::iff::MOD_ANTI_INTERFERENCE, 30),
+        ]
+    }
+
+    /// `catalog`, its ship carrying `defaults` of [`radar_outfits`].
+    fn outfitted(catalog: FakeCatalog, defaults: &[(i16, u16)]) -> FakeCatalog {
+        FakeCatalog {
+            outfits: radar_outfits(),
+            defaults: defaults.iter().map(|&(id, n)| (OutfitId(id), n)).collect(),
+            ..catalog
+        }
+    }
+
+    #[test]
+    fn an_iff_outfit_turns_on_the_black_backdrop_and_the_cyan_player() {
+        let mut view = FlightView::new(outfitted(catalog(), &[(300, 1)]));
+        ticks(&mut view, 1);
+        assert!(view.radar_shown().iff);
+        let marks = radar_marks(&view);
+        assert_eq!(
+            marks[0],
+            RadarMark::Fill {
+                rect: STOCK_RADAR,
+                color: RadarColor::Black
+            }
+        );
+        assert!(marks.contains(&RadarMark::Pixel {
+            x: 926,
+            y: 96,
+            color: RadarColor::Cyan
+        }));
+        // Earth and the Moon, landable to a clean record: yellow.
+        let stellars: Vec<StellarIff> = view.radar_shown().stellars.iter().map(|s| s.iff).collect();
+        assert_eq!(stellars, [StellarIff::Cleared, StellarIff::Cleared]);
+        let list = drawn(&view);
+        let black = list.iter().any(|command| {
+            matches!(command, DrawCommand::Line { color, .. } if *color == Color::rgba(0, 0, 0, 255))
+        });
+        assert!(black, "the black fill is drawn");
+        for without in [outfitted(catalog(), &[]), outfitted(catalog(), &[(301, 1)])] {
+            let mut view = FlightView::new(without);
+            ticks(&mut view, 1);
+            assert!(!view.radar_shown().iff);
+            assert_eq!(radar_marks(&view).last(), Some(&PLAYER_PIXEL));
+            assert!(
+                !radar_marks(&view)
+                    .iter()
+                    .any(|m| matches!(m, RadarMark::Fill { .. }))
+            );
+        }
+    }
+
+    /// A trafficked flight with one idle NPC of ship 129, whose class
+    /// weighs `mass`, at (100, -100), radar pixel (929, 92); the player
+    /// carries `defaults`.
+    fn with_heavy_npc(mass: i16, defaults: &[(i16, u16)]) -> View {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let catalog = FakeCatalog {
+            hulls: vec![nova_sim::HullRecord {
+                mass,
+                ..hull_of(129, &[])
+            }],
+            ..outfitted(trafficked(&[130], 1, 129, 3), defaults)
+        };
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        view
+    }
+
+    #[test]
+    fn a_heavy_npc_shows_as_a_square_only_with_a_density_scanner() {
+        let square = RadarMark::Square {
+            rect: IRect::around(929, 92, 1),
+            color: RadarColor::Dim,
+        };
+        let dot = RadarMark::Pixel {
+            x: 929,
+            y: 92,
+            color: RadarColor::Dim,
+        };
+        // The ships' marks: squares and pixels but the player's, last.
+        let ships = |view: &View| {
+            let mut marks: Vec<RadarMark> = radar_marks(view)
+                .into_iter()
+                .filter(|mark| matches!(mark, RadarMark::Pixel { .. } | RadarMark::Square { .. }))
+                .collect();
+            assert_eq!(marks.pop(), Some(PLAYER_PIXEL));
+            marks
+        };
+        assert_eq!(ships(&with_heavy_npc(100, &[(301, 1)])), [square]);
+        assert_eq!(ships(&with_heavy_npc(100, &[])), [dot]);
+        assert_eq!(ships(&with_heavy_npc(99, &[(301, 1)])), [dot]);
+    }
+
+    #[test]
+    fn a_ships_iff_code_reaches_the_radar() {
+        let view = with_heavy_npc(0, &[(300, 1)]);
+        let ships = &view.radar_shown().ships;
+        assert_eq!(ships.len(), 1);
+        assert_eq!(ships[0].iff, ShipIff::Other);
+        assert!(!ships[0].heavy);
+        assert!(radar_marks(&view).contains(&RadarMark::Pixel {
+            x: 929,
+            y: 92,
+            color: RadarColor::Blue
+        }));
+    }
+
+    #[test]
+    fn a_plotted_course_hides_the_arrow_until_a_stellar_is_selected() {
+        let mut view = flight();
+        assert!(!view.radar_now().route_shown, "no course");
+        plot(&mut view, 131);
+        assert!(view.radar_now().route_shown);
+        assert!(view.radar_shown().route_shown, "redrawn as the map closes");
+        tap(&mut view, NEAREST_STELLAR_KEY);
+        assert!(view.session().expect("flying").nav_target().is_some());
+        assert!(!view.radar_now().route_shown, "a stellar selected");
+    }
+
+    /// Thrusts straight up until the ship is more than 2700 from the
+    /// centre, then lets go of Up.
+    fn fly_far(view: &mut View) {
+        view.input(&key(Key::Up, true));
+        for _ in 0..5000 {
+            if player(view).position.length() > 2700.0 {
+                break;
+            }
+            view.tick(TICK);
+        }
+        view.input(&key(Key::Up, false));
+        assert!(player(view).position.length() > 2700.0);
+    }
+
+    fn arrow_lines(view: &View) -> usize {
+        radar_marks(view)
+            .iter()
+            .filter(|mark| matches!(mark, RadarMark::Line { .. }))
+            .count()
+    }
+
+    #[test]
+    fn far_from_the_centre_the_arrow_blinks_with_the_target() {
+        let mut view = flight();
+        assert_eq!(arrow_lines(&view), 0, "near the centre");
+        fly_far(&mut view);
+        let mut shown = Vec::new();
+        for _ in 0..32 {
+            ticks(&mut view, 1);
+            shown.push((view.hud_cadence.blink_on(), arrow_lines(&view)));
+        }
+        for &(blink_on, lines) in &shown {
+            assert_eq!(lines, if blink_on { 3 } else { 0 }, "{shown:?}");
+        }
+        let flips = shown
+            .windows(2)
+            .filter(|pair| pair[0].0 != pair[1].0)
+            .count();
+        assert_eq!(flips, 4, "every 8 ticks: {shown:?}");
+    }
+
+    /// `catalog` with Sol's `Interference` at `level`, its effects rolled
+    /// on `draws`.
+    fn interfered(level: i16, draws: &[u32]) -> (Rc<RefCell<Script>>, View) {
+        let (script, chance) = scripted(draws);
+        let catalog = FakeCatalog {
+            sol_interference: level,
+            ..catalog()
+        };
+        (script, FlightView::new(catalog).with_effects_chance(chance))
+    }
+
+    #[test]
+    fn interference_shows_static_at_the_next_refresh() {
+        // The threshold roll 0 (1 ≤ 100), then pattern 3.
+        let (script, mut view) = interfered(100, &[0, 3]);
+        assert_eq!(view.radar_shown().static_pattern, None, "before a tick");
+        ticks(&mut view, 1);
+        assert_eq!(script.borrow().asked, [100, 10]);
+        assert_eq!(view.radar_shown().static_pattern, Some(131));
+        assert_eq!(
+            radar_marks(&view)[0],
+            RadarMark::Pattern {
+                rect: STOCK_RADAR,
+                id: 131
+            }
+        );
+        let list = drawn(&view);
+        assert!(list.iter().any(|command| *command
+            == DrawCommand::TiledPicture {
+                image: ImageKey::pattern(131),
+                area: STOCK_RADAR.to_bounds(),
+            }));
+    }
+
+    #[test]
+    fn without_interference_no_static_shows_and_nothing_is_rolled() {
+        let (script, mut view) = interfered(0, &[]);
+        for _ in 0..20 {
+            ticks(&mut view, 1);
+            assert_eq!(view.radar_shown().static_pattern, None);
+        }
+        assert!(script.borrow().asked.is_empty());
+    }
+
+    #[test]
+    fn anti_interference_lowers_the_level_static_is_rolled_against() {
+        // 100 less 30: a roll of 70 (71 > 70) shows none.
+        let (script, chance) = scripted(&[70]);
+        let catalog = FakeCatalog {
+            sol_interference: 100,
+            ..outfitted(catalog(), &[(302, 1)])
+        };
+        let mut view = FlightView::new(catalog).with_effects_chance(chance);
+        ticks(&mut view, 1);
+        assert_eq!(script.borrow().asked, [100]);
+        assert_eq!(view.radar_shown().static_pattern, None);
+    }
+
+    #[test]
+    fn the_hud_cadence_and_blink_advance_through_a_jumps_streak() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let streaking = |view: &View| {
+            matches!(
+                view.jump_effect().map(JumpEffect::phase),
+                Some(JumpPhase::Streak(_))
+            )
+        };
+        assert!(streaking(&view));
+        // Mark the snapshot, then tick through the streak: the radar is
+        // taken afresh, and the blink flips, every 8 ticks.
+        let marker = RadarScene {
+            player: at(-1.0, -1.0),
+            ..RadarScene::default()
+        };
+        let mut refreshes = Vec::new();
+        let mut tick = 0;
+        while streaking(&view) {
+            view.radar_scene = Some(marker.clone());
+            let blink = view.hud_cadence.blink_on();
+            view.tick(TICK);
+            tick += 1;
+            let retaken = view.radar_scene.as_ref() != Some(&marker);
+            assert_eq!(retaken, view.hud_cadence.blink_on() != blink, "tick {tick}");
+            if retaken {
+                refreshes.push(tick);
+            }
+        }
+        assert!(tick >= 24, "the streak lasts a second: {tick}");
+        assert!(refreshes.len() >= 3, "{refreshes:?}");
+        let gaps: Vec<u32> = refreshes.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        assert!(gaps.iter().all(|&gap| gap == 8), "{refreshes:?}");
     }
 }

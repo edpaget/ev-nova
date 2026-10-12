@@ -3,10 +3,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+use nova_view::geometry::Bounds;
 use nova_view::text::LINE_HEIGHT;
 use nova_view::{Blend, Color, DrawCommand, DrawList, ImageKey, ImageKind, Point};
 
-use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE};
+use crate::atlas::{Atlas, AtlasEntry, PAGE_SIZE, Uv};
 use crate::gpu::{Batch, Frame, Gpu, QuadInstance, Rect, SolidQuad, TextRun};
 use crate::images::{ImageError, ImageSource};
 use crate::viewport::Viewport;
@@ -67,8 +68,8 @@ impl<S: ImageSource> Renderer<S> {
     /// Draws `list` into `viewport` through `gpu`: uploads images seen for
     /// the first time, then submits one frame. A zero-area viewport draws
     /// nothing. Text that is empty, or whose size is not a positive, finite
-    /// number of pixels, is skipped, as is a stretched picture whose width
-    /// or height is not a positive, finite number.
+    /// number of pixels, is skipped, as is a stretched or tiled picture
+    /// whose width or height is not a positive, finite number.
     pub fn render(
         &mut self,
         list: &DrawList,
@@ -111,10 +112,19 @@ impl<S: ImageSource> Renderer<S> {
                 } => {
                     // A rectangle with no drawable size draws nothing, so
                     // its picture is not even loaded.
-                    let drawable = |side: f32| side.is_finite() && side > 0.0;
                     if drawable(width) && drawable(height) {
                         let picture = (image, top_left, Some((width, height)));
                         self.push_picture(&mut batches, picture, gpu, &mut report);
+                    }
+                }
+                DrawCommand::TiledPicture { image, area } => {
+                    // An area with no drawable size draws nothing, so its
+                    // picture is not even loaded.
+                    if drawable(area.width())
+                        && drawable(area.height())
+                        && let Some(entry) = self.entry(image, gpu, &mut report)
+                    {
+                        push_tiles(&mut batches, &entry, area);
                     }
                 }
                 DrawCommand::Text {
@@ -248,6 +258,50 @@ impl<S: ImageSource> Renderer<S> {
                     .collect(),
             ),
         }
+    }
+}
+
+/// Whether a side `side` long can be drawn: a positive, finite number.
+fn drawable(side: f32) -> bool {
+    side.is_finite() && side > 0.0
+}
+
+/// Appends the quads tiling `area` with `entry`'s picture: copies of it
+/// edge to edge from the origin, (0, 0), each cut to `area` with its
+/// texture coordinates cut to match. A picture with no size draws
+/// nothing.
+fn push_tiles(batches: &mut Vec<Batch>, entry: &AtlasEntry, area: Bounds) {
+    let (w, h) = (entry.rect.w as f32, entry.rect.h as f32);
+    if !(drawable(w) && drawable(h)) {
+        return;
+    }
+    let uv = entry.uv;
+    let (du, dv) = (uv.u1 - uv.u0, uv.v1 - uv.v0);
+    let mut top = (area.min.y / h).floor() * h;
+    while top < area.max.y {
+        let (y0, y1) = (top.max(area.min.y), (top + h).min(area.max.y));
+        let mut left = (area.min.x / w).floor() * w;
+        while left < area.max.x {
+            let (x0, x1) = (left.max(area.min.x), (left + w).min(area.max.x));
+            let cut = AtlasEntry {
+                uv: Uv {
+                    u0: (x0 - left) / w * du + uv.u0,
+                    v0: (y0 - top) / h * dv + uv.v0,
+                    u1: (x1 - left) / w * du + uv.u0,
+                    v1: (y1 - top) / h * dv + uv.v0,
+                },
+                ..*entry
+            };
+            let dest = Rect {
+                x: x0,
+                y: y0,
+                w: x1 - x0,
+                h: y1 - y0,
+            };
+            push_quad(batches, &cut, dest, Color::WHITE, Blend::Normal);
+            left += w;
+        }
+        top += h;
     }
 }
 
@@ -601,6 +655,161 @@ mod tests {
         assert_eq!(report, RenderReport::default());
         assert_eq!(only_submit(&gpu.calls).batches, vec![]);
         assert_eq!(renderer.images().calls(), []);
+    }
+
+    /// A 16x16 `ppat` 130, placed at the page's top-left.
+    fn tiles() -> FakeImages {
+        images().with(ImageKind::Pattern, 130, vec![solid(16, 16, [7, 7, 7, 255])])
+    }
+
+    fn area(left: f32, top: f32, right: f32, bottom: f32) -> Bounds {
+        Bounds {
+            min: at(left, top),
+            max: at(right, bottom),
+        }
+    }
+
+    fn tiled_quads(area: Bounds) -> Vec<QuadInstance> {
+        let mut list = DrawList::new();
+        list.tiled_picture(ImageKey::pattern(130), area);
+        let frame = render_one_with(tiles(), &list);
+        match frame.batches.as_slice() {
+            [Batch::Sprites { quads, blend, .. }] => {
+                assert_eq!(*blend, Blend::Normal);
+                quads.clone()
+            }
+            other => panic!("one sprite batch: {other:?}"),
+        }
+    }
+
+    fn render_one_with(images: FakeImages, list: &DrawList) -> Frame {
+        let mut renderer = renderer(images);
+        let mut gpu = RecordingGpu::new();
+        let report = renderer.render(list, &viewport(), &mut gpu);
+        assert_eq!(report, RenderReport::default());
+        gpu.submits()[0].clone()
+    }
+
+    /// The quad showing the part of the tile at `tile` (its top-left) from
+    /// `(x0, y0)` to `(x1, y1)`, the tile 16 square at the page's
+    /// top-left, of 64.
+    fn tile_quad(tile: (f32, f32), (x0, y0): (f32, f32), (x1, y1): (f32, f32)) -> QuadInstance {
+        let to_uv = |offset: f32| offset / 16.0 * 0.25;
+        QuadInstance {
+            dest: Rect {
+                x: x0,
+                y: y0,
+                w: x1 - x0,
+                h: y1 - y0,
+            },
+            uv: Uv {
+                u0: to_uv(x0 - tile.0),
+                v0: to_uv(y0 - tile.1),
+                u1: to_uv(x1 - tile.0),
+                v1: to_uv(y1 - tile.1),
+            },
+            tint: WHITE,
+        }
+    }
+
+    #[test]
+    fn a_tiled_picture_repeats_from_the_origin_cut_to_its_area() {
+        // Columns cut at 16, 32 and 48; rows at 16 and 32.
+        let columns = [
+            (0.0, 10.0, 16.0),
+            (16.0, 16.0, 32.0),
+            (32.0, 32.0, 48.0),
+            (48.0, 48.0, 50.0),
+        ];
+        let rows = [(0.0, 5.0, 16.0), (16.0, 16.0, 32.0), (32.0, 32.0, 45.0)];
+        let mut expected = Vec::new();
+        for (tile_y, y0, y1) in rows {
+            for (tile_x, x0, x1) in columns {
+                expected.push(tile_quad((tile_x, tile_y), (x0, y0), (x1, y1)));
+            }
+        }
+        assert_eq!(tiled_quads(area(10.0, 5.0, 50.0, 45.0)), expected);
+    }
+
+    #[test]
+    fn tiles_left_of_and_above_the_origin_line_up_with_it() {
+        assert_eq!(
+            tiled_quads(area(-10.0, -10.0, 5.0, 5.0)),
+            [
+                tile_quad((-16.0, -16.0), (-10.0, -10.0), (0.0, 0.0)),
+                tile_quad((0.0, -16.0), (0.0, -10.0), (5.0, 0.0)),
+                tile_quad((-16.0, 0.0), (-10.0, 0.0), (0.0, 5.0)),
+                tile_quad((0.0, 0.0), (0.0, 0.0), (5.0, 5.0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_area_on_tile_edges_takes_whole_tiles_and_no_more() {
+        assert_eq!(
+            tiled_quads(area(16.0, 32.0, 32.0, 48.0)),
+            [tile_quad((16.0, 32.0), (16.0, 32.0), (32.0, 48.0))]
+        );
+    }
+
+    #[test]
+    fn a_tiled_picture_with_no_drawable_size_draws_and_loads_nothing() {
+        let mut list = DrawList::new();
+        for (w, h) in [
+            (0.0, 4.0),
+            (4.0, 0.0),
+            (-1.0, 4.0),
+            (4.0, -1.0),
+            (f32::NAN, 4.0),
+            (4.0, f32::NAN),
+            (f32::INFINITY, 4.0),
+            (4.0, f32::INFINITY),
+        ] {
+            list.tiled_picture(ImageKey::pattern(130), Bounds::at(at(0.0, 0.0), w, h));
+        }
+        let mut renderer = renderer(tiles());
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(report, RenderReport::default());
+        assert_eq!(only_submit(&gpu.calls).batches, vec![]);
+        assert_eq!(renderer.images().calls(), []);
+    }
+
+    #[test]
+    fn a_missing_pattern_draws_nothing_and_is_reported_once() {
+        let mut list = DrawList::new();
+        list.tiled_picture(ImageKey::pattern(131), area(0.0, 0.0, 20.0, 20.0))
+            .tiled_picture(ImageKey::pattern(131), area(0.0, 0.0, 20.0, 20.0));
+        let mut renderer = renderer(tiles());
+        let mut gpu = RecordingGpu::new();
+
+        let report = renderer.render(&list, &viewport(), &mut gpu);
+
+        assert_eq!(
+            report.new_failures,
+            [(ImageKey::pattern(131), ImageError::Missing)]
+        );
+        assert_eq!(only_submit(&gpu.calls).batches, vec![]);
+    }
+
+    #[test]
+    fn a_pattern_with_no_size_tiles_nothing() {
+        let mut batches = Vec::new();
+        let entry = AtlasEntry {
+            page: PageId(0),
+            rect: rect(0, 0, 0, 16),
+            uv: uv(0, 0, 0, 16),
+            opened: false,
+        };
+        push_tiles(&mut batches, &entry, area(0.0, 0.0, 20.0, 20.0));
+        let entry = AtlasEntry {
+            rect: rect(0, 0, 16, 0),
+            ..entry
+        };
+        push_tiles(&mut batches, &entry, area(0.0, 0.0, 20.0, 20.0));
+        assert_eq!(batches, vec![]);
     }
 
     #[test]

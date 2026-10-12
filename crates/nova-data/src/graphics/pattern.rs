@@ -6,12 +6,17 @@
 //! colour table sits at the `PixMap`'s `pmTable` offset. Only full-colour
 //! patterns (`patType` 1) with indexed, unpacked pixels are decoded.
 
+use nova_rsrc::ResType;
+
 use super::GraphicsError;
 use super::color::ColorTable;
 use super::icon::{checked_indexed_size, indexed_image};
 use super::image::Image;
 use super::pixmap::PixMap;
 use super::reader::Reader;
+
+/// The `ppat` resource type.
+pub const PPAT: ResType = ResType::new(*b"ppat");
 
 /// `patType` of a full-colour pixel pattern.
 const FULL_COLOUR: u16 = 1;
@@ -52,6 +57,12 @@ mod tests {
             .chunks(4)
             .map(|p| p.try_into().unwrap())
             .collect()
+    }
+
+    #[test]
+    fn the_resource_type_is_ppat_in_mac_roman() {
+        let mac_roman = ResType::from_mac_roman("ppat").expect("Mac Roman type");
+        assert_eq!(PPAT, mac_roman);
     }
 
     /// A 2x2 8-bit pattern, written out by hand, with its colour table
