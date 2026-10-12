@@ -1276,6 +1276,19 @@ mod tests {
     }
 
     #[test]
+    fn a_trader_escort_of_inherent_ai_2_lost_destroys_its_share_of_the_cargo() {
+        let mut catalog = fleeted();
+        catalog.ship_records[2].inherent_ai = 2;
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        hit(&mut session, 1, 0.0);
+        assert_eq!(
+            cargo(&session),
+            BTreeMap::from([(FOOD, 5), (OPALS, 2)]),
+            "InherentAI 2 is a trader's"
+        );
+    }
+
+    #[test]
     fn a_trader_escort_disabled_destroys_its_share_as_it_leaves() {
         let catalog = fleeted();
         let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);

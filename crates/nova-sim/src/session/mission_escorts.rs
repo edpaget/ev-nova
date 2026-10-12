@@ -651,6 +651,17 @@ mod tests {
     }
 
     #[test]
+    fn a_mission_escort_of_inherent_ai_2_dying_destroys_its_share_of_the_cargo() {
+        let mut session = laden(2, RuleSource::Engine);
+        break_up(&mut session);
+        assert_eq!(
+            session.pilot.cargo,
+            BTreeMap::from([(FOOD, 5), (OPALS, 2)]),
+            "InherentAI 2 is a trader's"
+        );
+    }
+
+    #[test]
     fn a_dying_mission_escort_leaves_the_formation_at_once() {
         let mut session = laden(1, RuleSource::Engine);
         let id = break_up(&mut session);
