@@ -389,12 +389,6 @@ impl Places {
         }
     }
 
-    /// Which visible system stands for a place two share.
-    #[must_use]
-    pub fn colocated(&self) -> CoLocated {
-        self.colocated
-    }
-
     /// Whether `system` is among them.
     #[must_use]
     pub fn contains(&self, system: SystemId) -> bool {
