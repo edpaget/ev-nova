@@ -141,8 +141,8 @@
 //! one, and those that reach none end; then every `öops` that had no
 //! days left that morning (an event that ends today is rolled first
 //! tomorrow, as `_DisasterHandler` @0x41add-0x41ae7 has it), has a
-//! stellar to start at, a `Freq` above 0, a `Duration` above 0, a
-//! standard commodity and an `ActivateOn` that holds, starts with
+//! stellar to start at, a `Freq` above 0, a `Duration` above 0 and an
+//! `ActivateOn` that holds, starts with
 //! `Duration` days left if a `Freq` % [`Chance`] fires. So an event is
 //! active for `Duration` days. `ActivateOn` is asked through the
 //! [`ControlBits`](crate::ControlBits) port for the player's pilot (a
@@ -151,7 +151,15 @@
 //! @0x41b2c); either order starts an event with the same chance, and
 //! here an event that cannot start asks no draw, whatever stops it. An
 //! event already active runs out its days when its `ActivateOn` stops
-//! holding.
+//! holding. Its commodity is not asked (`_DisasterHandler` never tests
+//! it, 0x41ab9-0x41bc4): the loader reads one above 5 as 5, equipment,
+//! and a negative one as -1 (`_LoadObjectData` @0x7cd56-0x7cd6f), and
+//! [`event_commodity`] reads them so. A negative-commodity event is active
+//! but prices nothing and is not shown; the original writes
+//! `_commodityPrice[-1]`, out of bounds (`_DoTradeDialog` @0x5dd19).
+//! The handler's other branch, which puts days at 2 for a slot with a
+//! negative `Duration` and its +0x20d flag set (@0x41ae9-0x41afd), is
+//! dead: nothing ever sets that flag, and it is not ported.
 //!
 //! An active event moves its commodity's price at its stellar as
 //! [`RuleKey::EventPrice`](crate::RuleKey::EventPrice) says. By the
@@ -173,7 +181,8 @@
 //! [`Chance`], once the `Freq` roll fires, among [`event_stellars`] by
 //! ID: the stellars 128 to 2175 that are not uninhabited, whether or not
 //! they trade. It stays there for its run, and is saved with it. A
-//! `Stellar` of -2 (news only) or 0 to 127 is never rolled. With no
+//! `Stellar` of -2 (news only) or 0 to 127 is never rolled, nor started
+//! (`_DisasterHandler` @0x41b57-0x41b59). With no
 //! candidate a -1 event never starts either; here we leave the original,
 //! whose draw never ends and hangs the game.
 //!
@@ -1243,7 +1252,7 @@ pub(crate) fn market(exchange: &Exchange) -> Option<Market> {
         .iter()
         .filter_map(|(id, active)| {
             let event = goods.disasters.iter().find(|event| event.id == *id)?;
-            (place(*active, event) == Some(stellar) && standard(event.commodity).is_some())
+            (place(*active, event) == Some(stellar) && event_commodity(event.commodity).is_some())
                 .then_some(event)
         })
         .collect();
@@ -1254,7 +1263,7 @@ pub(crate) fn market(exchange: &Exchange) -> Option<Market> {
             // By ascending ID, as `pilot.events` is ordered.
             let deltas: Vec<i64> = here
                 .iter()
-                .filter(|event| standard(event.commodity) == Some(*n))
+                .filter(|event| event_commodity(event.commodity) == Some(*n))
                 .map(|event| i64::from(event.price_delta))
                 .collect();
             let quote = CommodityQuote {
@@ -1510,9 +1519,12 @@ fn traded_by_side(quote: &JunkQuote) -> (bool, bool) {
     }
 }
 
-/// `commodity` as a standard commodity's number, if it is one.
-fn standard(commodity: i16) -> Option<u8> {
-    u8::try_from(commodity).ok().filter(|&n| n < COMMODITIES)
+/// The standard commodity an event's raw `commodity` moves, as the loader
+/// reads it (`_LoadObjectData` @0x7cd56-0x7cd6f): one above 5 is 5
+/// (equipment), and a negative one is none, an event that prices nothing
+/// (the original writes `_commodityPrice[-1]`, @0x5dd19-0x5dd40).
+pub(crate) fn event_commodity(raw: i16) -> Option<u8> {
+    u8::try_from(raw.min(i16::from(COMMODITIES) - 1)).ok()
 }
 
 /// A row for `good`, priced at `price`, traded these ways (sold here,
@@ -1596,7 +1608,7 @@ pub(crate) struct ActiveEvent {
 
 /// The stellar `active`, an event of `event`'s, is at: the one it
 /// stored, or else its record's.
-fn place(active: ActiveEvent, event: &DisasterRecord) -> Option<StellarId> {
+pub(crate) fn place(active: ActiveEvent, event: &DisasterRecord) -> Option<StellarId> {
     active.stellar.or_else(|| fixed_stellar(event.stellar))
 }
 
@@ -1629,7 +1641,6 @@ pub(crate) fn step_day(
             && !aging.contains(&event.id)
             && event.freq > 0
             && event.duration > 0
-            && standard(event.commodity).is_some()
             && gate.allows(&event.activate_on);
         if !can_start {
             continue;
@@ -3766,8 +3777,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_event_on_a_commodity_that_is_not_standard_moves_nothing_and_is_not_shown() {
+    /// The exchange at Earth with one event, `commodity` (-10), active.
+    fn odd_event(commodity: i16) -> Market {
         let goods = Goods::new(
             &stock(),
             Vec::new(),
@@ -3775,7 +3786,7 @@ mod tests {
                 id: DisasterId(140),
                 name: "Odd".to_owned(),
                 stellar: 140,
-                commodity: 6,
+                commodity,
                 price_delta: -10,
                 ..DisasterRecord::default()
             }],
@@ -3788,11 +3799,27 @@ mod tests {
                 stellar: Some(EARTH),
             },
         )]);
-        let found = market(&Exchange {
+        market(&Exchange {
             rules: rules(RuleSource::Engine),
             ..exchange(&goods, EARTH, PORT_KANE, &pilot)
         })
-        .expect("trades");
+        .expect("trades")
+    }
+
+    #[test]
+    fn an_event_beyond_the_standard_commodities_moves_equipment() {
+        let found = odd_event(6);
+        assert_eq!(found.events, ["Odd".to_owned()]);
+        assert_eq!(
+            price(&found, Good::Commodity(5)),
+            540,
+            "clamped to 5: its BasePrice 550, less 10"
+        );
+    }
+
+    #[test]
+    fn an_event_on_a_negative_commodity_moves_nothing_and_is_not_shown() {
+        let found = odd_event(-1);
         assert_eq!(found.events, Vec::<String>::new());
         assert_eq!(price(&found, Good::Commodity(5)), 440);
     }
@@ -5361,8 +5388,6 @@ mod tests {
                 event(131, 140, 0, 10, -5),
                 event(132, 140, 0, 0, 50),
                 event(133, 140, 0, -3, 50),
-                event(134, 140, -1, 10, 50),
-                event(135, 140, 6, 10, 50),
                 event(136, 140, 5, 10, 250),
                 event(137, 0, 0, 10, 50),
             ],
@@ -5373,6 +5398,46 @@ mod tests {
         step_day(&goods, &mut events, Gate::FRESH, &mut chance);
         assert_eq!(chance.asked, [100], "only 136, its Freq clamped");
         assert_eq!(days(&events), [(136, 10)]);
+    }
+
+    #[test]
+    fn event_commodity_is_the_loaders_reading() {
+        // _LoadObjectData @0x7cd56-0x7cd6f.
+        for (raw, read) in [
+            (-7, None),
+            (-1, None),
+            (0, Some(0)),
+            (3, Some(3)),
+            (5, Some(5)),
+            (6, Some(5)),
+            (300, Some(5)),
+        ] {
+            assert_eq!(event_commodity(raw), read, "{raw}");
+        }
+    }
+
+    #[test]
+    fn an_event_on_any_commodity_starts() {
+        let event = |id, commodity| DisasterRecord {
+            id: DisasterId(id),
+            stellar: 140,
+            commodity,
+            duration: 7,
+            freq: 100,
+            price_delta: 10,
+            ..DisasterRecord::default()
+        };
+        let goods = Goods::new(&stock(), Vec::new(), vec![event(128, -1), event(129, 9)])
+            .with_stellars(&[(StellarId(140), TRADE)]);
+        let mut events = BTreeMap::new();
+        let mut chance = Scripted::answering(&[true, true]);
+        step_day(&goods, &mut events, Gate::FRESH, &mut chance);
+        assert_eq!(
+            chance.asked,
+            [100, 100],
+            "_DisasterHandler never tests the commodity"
+        );
+        assert_eq!(days(&events), [(128, 7), (129, 7)]);
     }
 
     /// A food event 128 at any stellar (Freq 50, Duration 10), with
