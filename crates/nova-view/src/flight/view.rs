@@ -3758,6 +3758,7 @@ mod tests {
                 links: links.iter().copied().map(SystemId).collect(),
                 govt: None,
                 stellars: Vec::new(),
+                interference: 0,
             };
             let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
             let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };

@@ -250,6 +250,7 @@ pub mod hail;
 pub mod handling;
 pub mod hire;
 pub mod hyperspace;
+pub mod iff;
 pub mod landing;
 pub mod legal;
 pub mod market;
@@ -333,6 +334,7 @@ pub use hyperspace::{
     HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, JumpZoneRule, MultiJumpRule,
     Places, RouteError, StarMap, check_jump, hops_per_jump, jump_zone, next_hyper_destination,
 };
+pub use iff::{RadarGear, ShipIff, Standing, StellarIff};
 pub use landing::{
     Clearance, LandOutcome, LandingReach, LandingRefusal, NO_FRAME_REACH, OUT_OF_RANGE_FRAME_WIDTH,
     REACH_PER_WIDTH, Service, StellarShown, TypeWidth, UNLOADED_TYPE_WIDTH, check_landing,

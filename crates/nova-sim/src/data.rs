@@ -225,6 +225,7 @@ impl PilotCatalog for GameData {
                     position: Vec2::new(f32::from(system.x_pos), f32::from(system.y_pos)),
                     links: system.con.into_iter().flatten().collect(),
                     govt: system.govt,
+                    interference: system.interference,
                     stellars: system
                         .nav_def
                         .iter()
@@ -2080,12 +2081,12 @@ mod tests {
     }
 
     #[test]
-    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_and_govt() {
+    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_govt_and_interference() {
         let data = store(&[
             (
                 System::TYPE,
                 131,
-                governed(linked(600, -75, &[130, 999, 131]), 140),
+                interfering(governed(linked(600, -75, &[130, 999, 131]), 140), 45),
             ),
             (System::TYPE, 129, short(linked(0, 0, &[130]))),
             (System::TYPE, 130, linked(-20, 40, &[])),
@@ -2099,6 +2100,7 @@ mod tests {
                     links: Vec::new(),
                     govt: None,
                     stellars: vec![None; 16],
+                    interference: 0,
                 },
                 StarSystem {
                     id: SystemId(131),
@@ -2106,10 +2108,17 @@ mod tests {
                     links: vec![SystemId(130), SystemId(999), SystemId(131)],
                     govt: Some(GovtId(140)),
                     stellars: vec![None; 16],
+                    interference: 45,
                 },
             ]
         );
         assert_eq!(store(&[]).star_map(), []);
+    }
+
+    /// `bytes`, a `sÿst`, with this `Interference` (offset 0x6C).
+    fn interfering(mut bytes: Vec<u8>, interference: i16) -> Vec<u8> {
+        put_i16s(&mut bytes, 0x6C, &[interference]);
+        bytes
     }
 
     /// A landable `spöb` at the centre with this `CustSndID`.

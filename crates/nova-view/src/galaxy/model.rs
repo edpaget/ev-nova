@@ -105,7 +105,8 @@ impl MapSystem {
 }
 
 /// `entry` as the star map takes it: its links stay raw, for the star map
-/// to normalise.
+/// to normalise. The map reads neither its stellars nor its
+/// `Interference`.
 pub(super) fn star_system(entry: &SystemEntry) -> StarSystem {
     StarSystem {
         id: entry.id,
@@ -113,6 +114,7 @@ pub(super) fn star_system(entry: &SystemEntry) -> StarSystem {
         links: entry.links.clone(),
         govt: entry.govt,
         stellars: Vec::new(),
+        interference: 0,
     }
 }
 

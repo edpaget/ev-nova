@@ -81,6 +81,9 @@ pub struct StarSystem {
     /// cannot be read. The [`exploration`](crate::exploration) rules read
     /// whether the system is inhabited from them.
     pub stellars: Vec<Option<(u32, u16)>>,
+    /// Its `Interference`, raw: the radar's static
+    /// ([`iff::interference`](crate::iff::interference)).
+    pub interference: i16,
 }
 
 /// A stellar the player might land on, raw from its `spöb`; the
@@ -1503,6 +1506,7 @@ mod tests {
                 links: vec![SystemId(131)],
                 govt: None,
                 stellars: Vec::new(),
+                interference: 0,
             }]
         }
 

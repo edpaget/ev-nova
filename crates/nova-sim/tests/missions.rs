@@ -125,6 +125,7 @@ impl PilotCatalog for Courier {
             links: vec![SystemId(link)],
             govt: None,
             stellars: Vec::new(),
+            interference: 0,
         };
         vec![star(130, 0.0, 131), star(131, 600.0, 130)]
     }

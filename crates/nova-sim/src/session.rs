@@ -348,6 +348,7 @@ mod missions;
 mod outfits;
 mod person_offers;
 mod persons;
+mod radar;
 mod script_effects;
 mod ship_change;
 mod stellars;

@@ -553,6 +553,7 @@ pub(crate) fn star(id: i16, (x, y): (f32, f32), links: &[i16]) -> StarSystem {
         links: links.iter().copied().map(SystemId).collect(),
         govt: None,
         stellars: Vec::new(),
+        interference: 0,
     }
 }
 
