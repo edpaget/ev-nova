@@ -28,7 +28,7 @@
 //!    [`RuleKey::NonStrictSpeed`]. The session flies the player at
 //!    [`Session::top_speed`](crate::Session::top_speed), and traffic flies
 //!    each ship the player leads at
-//!    [`Npc::top_speed`](crate::traffic::Npc::top_speed).
+//!    [`Npc::top_speed`](crate::traffic::npc::Npc::top_speed).
 //! 8. **At least 0** (@0x3857): the engine's handling is never negative.
 //!
 //! Nothing in `_ShipMaxSpeed` plays a sound.

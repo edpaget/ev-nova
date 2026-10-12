@@ -273,6 +273,21 @@ impl Npc {
         self.escort.is_some() || self.mission_escort()
     }
 
+    /// Its top speed in flight, its `_ShipMaxSpeed`: its own handling's
+    /// × `led_speed`, the factor for the player and the ships it leads
+    /// (see [`top_speed`](crate::top_speed)), while it
+    /// [escorts the player](Npc::escorts_player), whose leader (+0x9a) is
+    /// then the player; otherwise its own.
+    #[must_use]
+    pub fn top_speed(&self, led_speed: f32) -> f32 {
+        let own = self.stats.handling.max_speed;
+        if self.escorts_player() {
+            own * led_speed
+        } else {
+            own
+        }
+    }
+
     /// Whether it is a mission escort: a mission's special ship that has
     /// joined the player's formation ([`MissionMark::formation`]).
     #[must_use]
@@ -371,6 +386,7 @@ impl Npc {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -412,6 +428,44 @@ mod tests {
             ..crate::testkit::npc(6, ShipStats::default())
         };
         assert_eq!(players.fleet(), ShipRef::Player);
+    }
+
+    #[test]
+    fn a_ship_the_player_leads_has_its_top_speed_times_the_led_speed_and_any_other_its_own() {
+        let fields = crate::handling::ShipFields {
+            speed: 300,
+            ..crate::testkit::FAST
+        };
+        let ship = |id| crate::testkit::npc(id, ShipStats::new(fields, &[]));
+        assert_eq!(ship(1).stats.handling.max_speed, 3.0);
+        let hired = Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: FormationSlot::default(),
+                order: None,
+            }),
+            ..ship(1)
+        };
+        let mission = Npc {
+            mission: Some(mark(
+                ShipBehav::EscortPlayer,
+                Some(FormationSlot::default()),
+            )),
+            ..ship(2)
+        };
+        let not_joined = Npc {
+            mission: Some(mark(ShipBehav::EscortPlayer, None)),
+            ..ship(3)
+        };
+        let fleet_escort = Npc {
+            leader: Some(NpcId(9)),
+            ..ship(4)
+        };
+        assert_eq!(hired.top_speed(1.5), 4.5, "a hired escort");
+        assert_eq!(mission.top_speed(1.5), 4.5, "a mission escort");
+        assert_eq!(not_joined.top_speed(1.5), 3.0, "not yet joined");
+        assert_eq!(fleet_escort.top_speed(1.5), 3.0, "a fleet escort");
+        assert_eq!(ship(5).top_speed(1.5), 3.0, "a lone NPC");
+        assert_eq!(hired.top_speed(1.0), 3.0, "Strict Play");
     }
 
     /// A mark of slot 1 of `behav`, holding `formation`.

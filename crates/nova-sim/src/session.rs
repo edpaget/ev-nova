@@ -1388,6 +1388,7 @@ impl Session {
                         fleet: &self.pilot.escorts,
                     },
                     escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
+                    led_speed: self.led_speed(),
                 };
                 let strikes = std::mem::take(&mut self.strikes);
                 let last = self.last_npc();
@@ -1426,6 +1427,7 @@ impl Session {
                 fleet: &self.pilot.escorts,
             },
             escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
+            led_speed: self.led_speed(),
         }
     }
 
@@ -3401,7 +3403,7 @@ impl Session {
     /// The player's top speed in flight, its `_ShipMaxSpeed`: the ship's
     /// own ([`Session::handling`]) × the led speed, 1.5 for a pilot
     /// without Strict Play by the engine (see
-    /// [`top_speed`](crate::top_speed)).
+    /// [`top_speed`]).
     #[must_use]
     pub fn top_speed(&self) -> f32 {
         self.stats.handling.max_speed * self.led_speed()

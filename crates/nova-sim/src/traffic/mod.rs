@@ -90,7 +90,7 @@ use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::mission::ships::ShipBehav;
 use crate::person::{PersonWorld, derelict_armor};
-use autopilot::Outcome;
+use autopilot::{Outcome, TopSpeeds};
 use npc::{AiType, Mode, Npc, NpcId, NpcPerson};
 use spawn::{Entry, JUMP_IN_TICKS, NewShip, PersonDraw, Stellars};
 use strength::StrengthTimer;
@@ -129,11 +129,16 @@ pub struct World<'a> {
     /// The tons the player's escorts that count toward the
     /// escort-strength timer carry ([`strength::escort_tons_in_system`]).
     pub escort_tons: i64,
+    /// The factor on the top speed of the player and of every ship it
+    /// leads: 1.5 for a pilot without Strict Play by the engine (see
+    /// [`top_speed`](crate::top_speed)).
+    pub led_speed: f32,
 }
 
 impl<'a> World<'a> {
     /// `sites` alone: no player, no governments, no record, no person
-    /// gone or grudging ([`PersonWorld::NONE`]), and no escorts' tons.
+    /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, and no
+    /// factor on the led ships' top speed.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -145,6 +150,7 @@ impl<'a> World<'a> {
             record: 0,
             persons: PersonWorld::NONE,
             escort_tons: 0,
+            led_speed: 1.0,
         }
     }
 
@@ -390,10 +396,12 @@ impl Traffic {
             self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
         let player = world.player.map(|player| player.state);
         self.cloaks(player, &states);
+        let speeds = self.top_speeds(world);
         let outcomes: Vec<Outcome> = self
             .npcs
             .iter_mut()
-            .map(|npc| {
+            .zip(speeds)
+            .map(|(npc, speeds)| {
                 let other = match npc.goal {
                     Goal::Follow(lead) => Some(ShipRef::Npc(lead)),
                     Goal::Assist(_) | Goal::Formation { .. } => Some(ShipRef::Player),
@@ -407,7 +415,7 @@ impl Traffic {
                         .find(|(other, _)| *other == id)
                         .map(|(_, state)| *state),
                 });
-                autopilot::fly(npc, world.sites, other.as_ref())
+                autopilot::fly(npc, world.sites, other.as_ref(), speeds)
             })
             .collect();
         self.departed = self
@@ -420,6 +428,40 @@ impl Traffic {
         let mut flying = outcomes.iter().map(|outcome| *outcome == Outcome::Flying);
         self.npcs.retain(|_| flying.next().unwrap_or(false));
         self.ticks += 1;
+    }
+
+    /// Each NPC's top speeds this tick, in ship-table order, as
+    /// `_ShipMaxSpeed` gives them
+    /// (see [`top_speed`](crate::top_speed)): its own
+    /// ([`Npc::top_speed`]), and its lead's. A ship the player leads has
+    /// the player's ([`PlayerSide::handling`] × [`World::led_speed`]);
+    /// a fleet escort its lead's; one whose lead is not in the system, as
+    /// `_AICheckParentExists` clears it (@0x8946b, @0x894b4), or with
+    /// none, no lead's.
+    fn top_speeds(&self, world: World) -> Vec<TopSpeeds> {
+        let tops: Vec<(NpcId, f32)> = self
+            .npcs
+            .iter()
+            .map(|npc| (npc.id, npc.top_speed(world.led_speed)))
+            .collect();
+        let player_top = world
+            .player
+            .map(|player| player.handling.max_speed * world.led_speed);
+        tops.iter()
+            .zip(&self.npcs)
+            .map(|(&(_, own), npc)| {
+                let lead = if npc.escorts_player() {
+                    player_top
+                } else {
+                    npc.leader.and_then(|leader| {
+                        tops.iter()
+                            .find(|(other, _)| *other == leader)
+                            .map(|&(_, top)| top)
+                    })
+                };
+                TopSpeeds { own, lead }
+            })
+            .collect()
     }
 
     /// Each NPC's cloak a tick on (see [`cloak`]): a flying NPC thinks
@@ -2032,6 +2074,129 @@ mod tests {
             rating: 0,
             yardstick: 0,
         }
+    }
+
+    /// A ship of top speed `speed` (in pixels a tick), as quick to turn
+    /// and thrust as [`FAST`].
+    fn of_speed(id: u32, speed: f32) -> Npc {
+        let fields = crate::handling::ShipFields {
+            speed: (speed * 100.0) as i16,
+            ..FAST
+        };
+        crate::testkit::npc(id, ShipStats::new(fields, &[]))
+    }
+
+    /// `npc` bursting out of a gate along +x, from its first tick.
+    fn bursting(npc: Npc) -> Npc {
+        Npc {
+            mode: Mode::LeavingGate { tick: 0 },
+            state: ShipState {
+                heading: 90.0,
+                ..ShipState::default()
+            },
+            ..npc
+        }
+    }
+
+    /// Ticks `traffic` in `world` until NPC `id`'s burst ends, and gives
+    /// the speed it flies on at.
+    fn burst_speed(traffic: &mut Traffic, world: World, id: NpcId) -> f32 {
+        for _ in 0..20 {
+            traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
+            let npc = traffic
+                .npcs()
+                .iter()
+                .find(|npc| npc.id == id)
+                .expect("there");
+            if npc.mode == Mode::Flying {
+                return npc.state.velocity.length();
+            }
+        }
+        panic!("never ended")
+    }
+
+    #[test]
+    fn the_ships_the_player_leads_fly_at_the_led_speed_and_others_at_their_own() {
+        let mut traffic = Traffic::new();
+        let formation = Goal::Formation { guard: None };
+        let hired = traffic.add_npc(Npc {
+            escort: Some(duty(1)),
+            goal: formation,
+            ..of_speed(0, 3.0)
+        });
+        let mission = traffic.add_npc(Npc {
+            mission: Some(escorting(true)),
+            goal: formation,
+            ..of_speed(0, 3.0)
+        });
+        let unled = traffic.add_npc(Npc {
+            goal: Goal::Attack(ShipRef::Player),
+            ..of_speed(0, 3.0)
+        });
+        let world = World {
+            player: Some(player_at(5000.0, 0.0)),
+            led_speed: 1.5,
+            ..World::new(&[])
+        };
+        let mut fastest = BTreeMap::new();
+        for _ in 0..300 {
+            traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
+            for npc in traffic.npcs() {
+                let speed = npc.state.velocity.length();
+                let top = fastest.entry(npc.id).or_insert(0.0_f32);
+                *top = top.max(speed);
+            }
+        }
+        assert!((fastest[&hired] - 4.5).abs() < 1e-3, "{fastest:?}");
+        assert!((fastest[&mission] - 4.5).abs() < 1e-3, "{fastest:?}");
+        assert!(fastest[&unled] <= 3.0 + 1e-4, "{fastest:?}");
+        assert!(fastest[&unled] > 2.9, "it flew flat out: {fastest:?}");
+    }
+
+    #[test]
+    fn a_fleet_escort_ends_its_burst_at_its_slower_leads_top_speed() {
+        // Its own 6 would end the burst at 9 (30 - 3t, ending once the
+        // next tick's is at or below the cap); its lead's 3 ends it at 6.
+        let mut traffic = Traffic::new();
+        let lead = traffic.add_npc(of_speed(0, 3.0));
+        let escort = traffic.add_npc(bursting(Npc {
+            leader: Some(lead),
+            ..of_speed(0, 6.0)
+        }));
+        let speed = burst_speed(&mut traffic, World::new(&[]), escort);
+        assert!((speed - 6.0).abs() < 1e-4, "{speed}");
+    }
+
+    #[test]
+    fn an_escort_whose_lead_is_gone_ends_its_burst_at_its_own_top_speed() {
+        let mut traffic = Traffic::new();
+        let escort = traffic.add_npc(bursting(Npc {
+            leader: Some(NpcId(99)),
+            ..of_speed(0, 6.0)
+        }));
+        let speed = burst_speed(&mut traffic, World::new(&[]), escort);
+        assert!((speed - 9.0).abs() < 1e-4, "{speed}");
+    }
+
+    #[test]
+    fn a_led_ship_ends_its_burst_at_the_players_top_speed_times_the_led_speed() {
+        // The player's 4 x 1.5 = 6 ends the burst at 9; its own 10 x 1.5
+        // would end it at 18, its bare 10 at 12, and the player's bare 4
+        // at 6.
+        let mut traffic = Traffic::new();
+        let escort = traffic.add_npc(bursting(Npc {
+            escort: Some(duty(1)),
+            ..of_speed(0, 10.0)
+        }));
+        let mut player = player_at(0.0, 0.0);
+        player.handling.max_speed = 4.0;
+        let world = World {
+            player: Some(player),
+            led_speed: 1.5,
+            ..World::new(&[])
+        };
+        let speed = burst_speed(&mut traffic, world, escort);
+        assert!((speed - 9.0).abs() < 1e-4, "{speed}");
     }
 
     #[test]

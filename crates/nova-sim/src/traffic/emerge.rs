@@ -55,7 +55,13 @@
 //! - **Leaving the gate.** Once the timer is out the ship bursts out along
 //!   its heading at [`EXIT_SPEED`] pixels a tick, [`EXIT_SLOWING`] slower
 //!   each tick ([`exit_speed`], @0x34bc0-0x34c63), until it would be at or
-//!   below its top speed (`_AIMakeShipStopJumping` @0x34cee). A ship the
+//!   below its cap (`_AIMakeShipStopJumping` @0x34cee): its top speed, or,
+//!   while it has a lead in the system, the lower of its own and its
+//!   lead's (`_HandleShip` @0x34c68-0x34ce6;
+//!   [`TopSpeeds::burst_cap`](crate::traffic::autopilot::TopSpeeds::burst_cap)).
+//!   The lead of a ship the player leads is the player, at its
+//!   `_ShipMaxSpeed` (see [`top_speed`](crate::top_speed)); a fleet
+//!   escort's is its fleet lead. A ship the
 //!   player leads, made to come out of the exit gate after the player
 //!   (see [`session::gate_escorts`](crate::session)), starts at
 //!   [`LED_EXIT_SPEED`] instead: `_AIMakeShipEmergeFromHyperGate` sets
@@ -68,9 +74,7 @@
 //! ship shows on the radar at its gate and can be hit.
 //!
 //! Not modelled: the `Rand(30) + 30` pause a leaderless ship takes after
-//! its burst (@0x34d5c-0x34d8b); a led ship's burst (a fleet escort's or
-//! one the player leads) capped at its lead's top speed
-//! (@0x34c68-0x34ce6), which here is its own (player-led-ships phase 14); the
+//! its burst (@0x34d5c-0x34d8b); the
 //! stellar the ship remembers (+0x92); a hypergate animating while a ship
 //! comes out of it (`_HandleStellarSprites` @0x2e8bd).
 

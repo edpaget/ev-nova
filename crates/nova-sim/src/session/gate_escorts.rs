@@ -234,6 +234,43 @@ mod tests {
     }
 
     #[test]
+    fn a_led_ship_ends_its_burst_at_the_lower_of_its_own_and_the_players_top_speed() {
+        // Every led ship is of ship 200, here 8 a tick to the player's 6.
+        // From 15, 3 slower a tick, its burst ends once the next tick's is
+        // at or below its cap: the player's 6 x 1.5 = 9 ends it at 12; its
+        // own 8 x 1.5 would at 15, its bare 8 or the player's bare 6 at 9.
+        let mut catalog = catalog();
+        catalog.ship_records[1] = crate::testkit::ship(
+            200,
+            crate::handling::ShipFields {
+                speed: 800,
+                ..crate::testkit::FAST
+            },
+        );
+        let mut session = flying(&catalog, Rulebook::default());
+        assert!((session.top_speed() - 9.0).abs() < 1e-4);
+        exit_gate_raising(&mut session, &catalog, GateKind::Wormhole, &mut NeverFires);
+        let ids: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
+        assert_eq!(ids.len(), 3);
+        let mut ended = std::collections::BTreeMap::new();
+        for _ in 0..60 {
+            tick(&mut session, &catalog);
+            for &id in &ids {
+                let npc = session.npc(id).expect("here");
+                if npc.mode == Mode::Flying {
+                    ended.entry(id).or_insert(npc.state.velocity.length());
+                }
+            }
+        }
+        assert_eq!(ended.len(), 3, "{ended:?}");
+        for (id, speed) in ended {
+            let own = session.npc(id).expect("here").stats.handling.max_speed;
+            assert!((own - 8.0).abs() < 1e-4, "{id:?}: {own}");
+            assert!((speed - 12.0).abs() < 1e-3, "{id:?}: {speed}");
+        }
+    }
+
+    #[test]
     fn the_other_gate_escorts_reading_snaps_every_led_ship_onto_its_slot() {
         let catalog = catalog();
         let rules = Rulebook::default().with_override(RuleKey::GateEscorts, RuleSource::Bible);

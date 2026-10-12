@@ -37,7 +37,13 @@
 //! dying branch (@0x350ab-0x3512b) clears its leader, and a trader among
 //! them takes its share of the fleet's cargo as it goes (see
 //! [`escorts`](super::escorts) and
-//! [`mission_escorts`](super::mission_escorts)). `_HandleShip`'s other
+//! [`mission_escorts`](super::mission_escorts)). Every ship the player
+//! leads flies at its top speed × the led speed, as the player does: 1.5
+//! for a pilot without Strict Play by the engine (`_ShipMaxSpeed`
+//! @0x382e-0x384f; see [`top_speed`](crate::top_speed) and
+//! [`Npc::top_speed`]), and its burst out of a gate ends at the lower of
+//! its own top speed and the player's (`_HandleShip` @0x34c68-0x34ce6).
+//! `_HandleShip`'s other
 //! branches for led ships (its disabled branch @0x33950-0x33a36, its
 //! jump-out timing @0x347c1-0x348c2 and its self-repair rejoin
 //! @0x33a3b-0x33bd9) are not modelled; the step-1 findings of
@@ -109,6 +115,83 @@ mod tests {
             .collect();
         let hired = session.fleet[0].expect("placed");
         (session, marked, hired)
+    }
+
+    /// Thrusts the player and ticks the traffic `n` times, each NPC 5000
+    /// pixels behind the player at the start, and gives the fastest each
+    /// ship went: the player's, then each NPC's by id.
+    fn fastest_under_thrust(
+        session: &mut Session,
+        catalog: &crate::testkit::FakePilotCatalog,
+        n: usize,
+    ) -> (f32, std::collections::BTreeMap<NpcId, f32>) {
+        let behind = session.player().position - crate::geometry::Vec2::new(0.0, 5000.0);
+        for npc in session.traffic.npcs_mut() {
+            npc.state.position = behind;
+            npc.state.velocity = crate::geometry::Vec2::ZERO;
+        }
+        let thrust = crate::flight::Controls {
+            thrust: true,
+            turn: crate::flight::Turn::None,
+            reverse: false,
+        };
+        let mut player: f32 = 0.0;
+        let mut npcs = std::collections::BTreeMap::new();
+        for _ in 0..n {
+            session.tick(thrust);
+            ticks(session, catalog, 1);
+            player = player.max(session.player().velocity.length());
+            for npc in session.npcs() {
+                let top = npcs.entry(npc.id).or_insert(0.0_f32);
+                *top = top.max(npc.state.velocity.length());
+            }
+        }
+        (player, npcs)
+    }
+
+    #[test]
+    fn the_player_and_the_ships_it_leads_fly_half_as_fast_again_and_an_unled_ship_at_its_own() {
+        for strict_play in [false, true] {
+            let catalog = ships_catalog(ships(1));
+            let mut session = accepted(&catalog);
+            session.pilot.escorts.push(hired());
+            session.pilot.strict_play = strict_play;
+            take_off(&mut session, &catalog);
+            let mission: Vec<NpcId> = session
+                .npcs()
+                .iter()
+                .filter(|npc| npc.mission.is_some())
+                .map(|npc| npc.id)
+                .collect();
+            let hired = session.fleet[0].expect("placed");
+            let class = session.npc(hired).expect("there").clone();
+            let unled = session.traffic.add_npc(Npc {
+                escort: None,
+                ..class
+            });
+            assert_eq!(led(&session), [hired, mission[0], mission[1]]);
+            let factor = if strict_play { 1.0 } else { 1.5 };
+            let own = session.handling().max_speed;
+            let (player, npcs) = fastest_under_thrust(&mut session, &catalog, 300);
+            assert!(
+                (player - own * factor).abs() < 1e-3,
+                "{strict_play}: the player at {player}"
+            );
+            for id in [hired, mission[0], mission[1]] {
+                let top = session.npc(id).expect("there").stats.handling.max_speed;
+                assert!(
+                    (npcs[&id] - top * factor).abs() < 0.01,
+                    "{strict_play}: {id:?} at {}",
+                    npcs[&id]
+                );
+            }
+            let top = session.npc(unled).expect("there").stats.handling.max_speed;
+            assert!(
+                npcs[&unled] <= top + 1e-4 && npcs[&unled] > top - 0.01,
+                "{strict_play}: the unled ship, flat out at {}",
+                npcs[&unled]
+            );
+        }
     }
 
     /// NPC `id`'s formation slot, if it has one.

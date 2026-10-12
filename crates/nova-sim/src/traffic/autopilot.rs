@@ -1,6 +1,7 @@
 //! The NPC autopilot: each tick it turns an NPC's goal into [`Controls`]
 //! and flies them with the player's [`flight::step`], on the NPC's own
-//! handling. It decides nothing (the [`ai`](crate::ai) does); it only
+//! handling at its top speed [`TopSpeeds::own`], its `_ShipMaxSpeed`
+//! ([`Npc::top_speed`]). It decides nothing (the [`ai`](crate::ai) does); it only
 //! flies the goal it is given.
 //!
 //! - [`Goal::Land`]: it heads for the stellar at full speed, steering out
@@ -56,12 +57,11 @@
 //!   [`exit_speed`] (from [`LED_BURST_TICK`] for a ship
 //!   [`led_out`](Npc::led_out) of the gate by the player, so from 15),
 //!   with no steering, and flies on at that speed once
-//!   the next tick's would be at or below its top speed (see
-//!   [`emerge`](crate::traffic::emerge)), then flies its goal. An
-//!   escort's burst is not capped at its lead's top speed, as the
-//!   original's is: the autopilot sees no lead while the escort has no
-//!   goal yet. A ship not intact by then drifts instead of bursting,
-//!   flying from there on.
+//!   the next tick's would be at or below its cap
+//!   ([`TopSpeeds::burst_cap`]: the lower of its own top speed and its
+//!   lead's, the player's for a ship the player leads; see
+//!   [`emerge`](crate::traffic::emerge)), then flies its goal. A ship not
+//!   intact by then drifts instead of bursting, flying from there on.
 //! - Otherwise a ship that is not [`Condition::Intact`] (disabled,
 //!   breaking up or destroyed) drifts: it flies on with no controls, and
 //!   never lands or jumps.
@@ -119,14 +119,57 @@ pub enum Outcome {
     },
 }
 
+/// The top speeds a ship flies by this tick: its own `_ShipMaxSpeed`
+/// ([`Npc::top_speed`]), and its lead's, while it has a lead in the
+/// system, which caps its burst out of a gate (`_HandleShip`
+/// @0x34c68-0x34ce6).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TopSpeeds {
+    /// Its own top speed.
+    pub own: f32,
+    /// Its lead's top speed: the player's for a ship the player leads, the
+    /// fleet lead's for a fleet escort; `None` without a lead, or with
+    /// one gone from the system, as `_AICheckParentExists` clears it.
+    pub lead: Option<f32>,
+}
+
+impl TopSpeeds {
+    /// `npc`'s own handling's top speed, with no lead.
+    #[must_use]
+    pub fn own_of(npc: &Npc) -> Self {
+        Self {
+            own: npc.stats.handling.max_speed,
+            lead: None,
+        }
+    }
+
+    /// The speed its burst out of a gate ends at: the lower of its own top
+    /// speed and its lead's, the lead's on a tie (@0x34c68-0x34ce6), or its
+    /// own without a lead. `_HandleShip` raises a cap below -1.0 to -1.0
+    /// (@0x34cf3-0x34d0d), which never binds, as no top speed is negative.
+    #[must_use]
+    pub fn burst_cap(self) -> f32 {
+        self.lead.map_or(self.own, |lead| lead.min(self.own))
+    }
+}
+
 /// Flies `npc` one tick towards its goal, among `sites`, the ship its
 /// goal is about (the lead it follows, the ship it fights or inspects)
-/// at `other`, when it is there.
-pub fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> Outcome {
-    if unsteered(npc) {
+/// at `other`, when it is there, at its top speed `speeds.own`, its burst
+/// out of a gate capped at [`TopSpeeds::burst_cap`].
+pub fn fly(
+    npc: &mut Npc,
+    sites: &[LandingSite],
+    other: Option<&ShipState>,
+    speeds: TopSpeeds,
+) -> Outcome {
+    let handling = Handling {
+        max_speed: speeds.own,
+        ..npc.stats.handling
+    };
+    if unsteered(npc, &handling, speeds.burst_cap()) {
         return Outcome::Flying;
     }
-    let handling = npc.stats.handling;
     let state = npc.state;
     let controls = match npc.goal {
         Goal::Land(stellar) => match sites.iter().find(|site| site.id == stellar) {
@@ -145,7 +188,7 @@ pub fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> O
             None => brake(&state, &handling),
         },
         Goal::Attack(_) => match other {
-            Some(target) => attack(npc, target),
+            Some(target) => attack(npc, target, &handling),
             None => brake(&state, &handling),
         },
         Goal::Snipe(_) => match other {
@@ -197,7 +240,7 @@ pub fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> O
             }
             _ => brake(&state, &handling),
         },
-        Goal::Dock(_) => match dock(npc, other) {
+        Goal::Dock(_) => match dock(npc, other, &handling) {
             Ok(controls) => controls,
             Err(outcome) => return outcome,
         },
@@ -210,16 +253,20 @@ pub fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> O
 /// How `npc` flies back to its carrier at `carrier` (see the module
 /// docs): the controls to fly outside its dock window, or braking with
 /// no carrier there; or, inside it, what became of it, having flown.
-fn dock(npc: &mut Npc, carrier: Option<&ShipState>) -> Result<Controls, Outcome> {
+fn dock(
+    npc: &mut Npc,
+    carrier: Option<&ShipState>,
+    handling: &Handling,
+) -> Result<Controls, Outcome> {
     let (Some(carrier), Some(dock)) = (carrier, npc.carrier) else {
-        return Ok(brake(&npc.state, &npc.stats.handling));
+        return Ok(brake(&npc.state, handling));
     };
     let off = carrier.position - npc.state.position;
     let within = |reach: f32| off.x.abs() <= reach && off.y.abs() <= reach;
     if !within(dock.window) {
         return Ok(rejoin(
             &npc.state,
-            &npc.stats.handling,
+            handling,
             carrier.position,
             carrier.velocity,
         ));
@@ -230,7 +277,7 @@ fn dock(npc: &mut Npc, carrier: Option<&ShipState>) -> Result<Controls, Outcome>
             ship: npc.ship,
         });
     }
-    dock_in(npc, carrier);
+    dock_in(npc, carrier, handling);
     Err(Outcome::Flying)
 }
 
@@ -252,16 +299,15 @@ fn rejoin(state: &ShipState, handling: &Handling, to: Vec2, velocity: Vec2) -> C
 /// within its turn rate and [`DOCK_TURN_SLACK`] of it, flies, and is
 /// pulled towards it on each axis farther off than
 /// [`FORMATION_NUDGE`] ticks' acceleration.
-fn dock_in(npc: &mut Npc, carrier: &ShipState) {
-    let handling = npc.stats.handling;
+fn dock_in(npc: &mut Npc, carrier: &ShipState, handling: &Handling) {
     let wanted = bearing(npc.state.position, carrier.position);
     let controls = Controls {
         thrust: shortest_turn(npc.state.heading, wanted).abs()
             <= handling.turn_rate + DOCK_TURN_SLACK,
-        turn: steer(npc.state.heading, wanted, &handling),
+        turn: steer(npc.state.heading, wanted, handling),
         reverse: false,
     };
-    flight::step(&mut npc.state, &handling, controls);
+    flight::step(&mut npc.state, handling, controls);
     let pull = handling.accel * FORMATION_NUDGE;
     let towards = |at: f32, to: f32| {
         let off = to - at;
@@ -307,8 +353,7 @@ fn steer(heading: f32, wanted: f32, handling: &Handling) -> Turn {
 /// ([`fire::wanted_heading`]), thrusting within [`APPROACH_THRUST`] turns
 /// of it approaching from beyond the dogfight box, and within a turn and
 /// [`DOGFIGHT_THRUST`] dogfighting inside it.
-fn attack(npc: &Npc, target: &ShipState) -> Controls {
-    let handling = npc.stats.handling;
+fn attack(npc: &Npc, target: &ShipState, handling: &Handling) -> Controls {
     let wanted = fire::wanted_heading(npc, target);
     let window = match fire::manoeuvre(npc.goal, &npc.state, target) {
         Some(fire::Manoeuvre::Dogfight) => handling.turn_rate + DOGFIGHT_THRUST,
@@ -316,22 +361,22 @@ fn attack(npc: &Npc, target: &ShipState) -> Controls {
     };
     Controls {
         thrust: shortest_turn(npc.state.heading, wanted).abs() <= window,
-        turn: steer(npc.state.heading, wanted, &handling),
+        turn: steer(npc.state.heading, wanted, handling),
         reverse: false,
     }
 }
 
 /// One tick of `npc`'s glide in from hyperspace, `ticks_left` of it left:
-/// along its heading at the glide's speed, and on at its top speed once
-/// the glide is over.
-fn glide(npc: &mut Npc, ticks_left: u32) {
+/// along its heading at the glide's speed, and on at its top speed
+/// `top_speed` once the glide is over.
+fn glide(npc: &mut Npc, ticks_left: u32, top_speed: f32) {
     let inward = flight::facing(npc.state.heading);
     let tick = JUMP_IN_TICKS.saturating_sub(ticks_left);
     npc.state.velocity = inward * glide_speed(tick);
     npc.state.position = npc.state.position + npc.state.velocity;
     let left = ticks_left.saturating_sub(1);
     npc.mode = if left == 0 {
-        npc.state.velocity = inward * npc.stats.handling.max_speed;
+        npc.state.velocity = inward * top_speed;
         Mode::Flying
     } else {
         Mode::JumpingIn { ticks_left: left }
@@ -340,21 +385,22 @@ fn glide(npc: &mut Npc, ticks_left: u32) {
 
 /// Flies `npc` one tick when it has no say in its flight: waiting at a
 /// gate, drifting while not intact, gliding in from hyperspace (intact
-/// or disabled) or bursting out of a gate (see the module docs). Whether it did.
-fn unsteered(npc: &mut Npc) -> bool {
+/// or disabled) or bursting out of a gate (see the module docs), on
+/// `handling`, its burst ending at `burst_cap`. Whether it did.
+fn unsteered(npc: &mut Npc, handling: &Handling, burst_cap: f32) -> bool {
     match (npc.mode, npc.condition == Condition::Intact) {
         (Mode::Emerging { ticks_left }, _) => wait_at_gate(npc, ticks_left),
         (Mode::JumpingIn { ticks_left }, false) if npc.condition == Condition::Disabled => {
-            glide(npc, ticks_left);
+            glide(npc, ticks_left, handling.max_speed);
         }
         (mode, false) => {
             if let Mode::LeavingGate { .. } = mode {
                 npc.mode = Mode::Flying;
             }
-            flight::step(&mut npc.state, &npc.stats.handling, Controls::default());
+            flight::step(&mut npc.state, handling, Controls::default());
         }
-        (Mode::JumpingIn { ticks_left }, true) => glide(npc, ticks_left),
-        (Mode::LeavingGate { tick }, true) => leave_gate(npc, tick),
+        (Mode::JumpingIn { ticks_left }, true) => glide(npc, ticks_left, handling.max_speed),
+        (Mode::LeavingGate { tick }, true) => leave_gate(npc, tick, burst_cap),
         (Mode::Flying, true) => return false,
     }
     true
@@ -376,11 +422,11 @@ fn wait_at_gate(npc: &mut Npc, ticks_left: u32) {
 
 /// Tick `tick` of `npc`'s burst out of a gate: along its heading at
 /// [`exit_speed`], flying on at that speed once the next tick's would be
-/// at or below its top speed.
-fn leave_gate(npc: &mut Npc, tick: u32) {
+/// at or below `cap` ([`TopSpeeds::burst_cap`]).
+fn leave_gate(npc: &mut Npc, tick: u32, cap: f32) {
     npc.state.velocity = flight::facing(npc.state.heading) * exit_speed(tick);
     npc.state.position = npc.state.position + npc.state.velocity;
-    npc.mode = if exit_speed(tick + 1) <= npc.stats.handling.max_speed {
+    npc.mode = if exit_speed(tick + 1) <= cap {
         Mode::Flying
     } else {
         Mode::LeavingGate { tick: tick + 1 }
@@ -542,6 +588,12 @@ mod tests {
     use crate::traffic::emerge::{EMERGE_TICKS, LED_BURST_TICK};
     use crate::traffic::npc::NpcId;
     use crate::traffic::spawn::{hyperspace_entry, jump_in_distance};
+
+    /// Flies `npc` at its own top speed, with no lead: the autopilot as
+    /// most tests see it.
+    fn fly(npc: &mut Npc, sites: &[LandingSite], other: Option<&ShipState>) -> Outcome {
+        super::fly(npc, sites, other, TopSpeeds::own_of(npc))
+    }
 
     /// An average ship: 3 pixels a tick at most, 0.1 more a tick, 1° a
     /// tick.
@@ -884,6 +936,68 @@ mod tests {
             at(100.0, -200.0, 0.0, 0.0, 90.0),
             "not yet moving"
         );
+    }
+
+    /// The last tick of a burst out of a gate, flown at `speeds`.
+    fn burst_ends(speeds: TopSpeeds) -> u32 {
+        let sites = [planet(140, 0.0, 0.0)];
+        let mut ship = emerging(AVERAGE, 1);
+        fly(&mut ship, &sites, None);
+        for _ in 0..20 {
+            let Mode::LeavingGate { tick } = ship.mode else {
+                panic!("not bursting: {:?}", ship.mode);
+            };
+            super::fly(&mut ship, &sites, None, speeds);
+            if ship.mode == Mode::Flying {
+                return tick;
+            }
+        }
+        panic!("never ended")
+    }
+
+    #[test]
+    fn a_burst_ends_at_the_lower_of_its_own_and_its_leads_top_speed() {
+        let speeds = |own, lead| TopSpeeds { own, lead };
+        // 30 - 3t: the burst ends once the next tick's is at or below the
+        // cap.
+        assert_eq!(exit_speed(9), 3.0);
+        assert_eq!(burst_ends(speeds(6.0, Some(3.0))), 8, "the lead's 3");
+        assert_eq!(burst_ends(speeds(6.0, Some(9.0))), 7, "its own 6");
+        assert_eq!(burst_ends(speeds(6.0, Some(6.0))), 7, "a tie: 6");
+        assert_eq!(burst_ends(speeds(6.0, None)), 7, "no lead: its own");
+        assert_eq!(burst_ends(speeds(3.0, None)), 8);
+        assert_eq!(speeds(6.0, Some(3.0)).burst_cap(), 3.0);
+        assert_eq!(speeds(3.0, Some(6.0)).burst_cap(), 3.0);
+        assert_eq!(speeds(6.0, None).burst_cap(), 6.0);
+    }
+
+    #[test]
+    fn flying_at_a_raised_top_speed_it_reaches_it_and_drifting_never_passes_it() {
+        let raised = TopSpeeds {
+            own: 4.5,
+            lead: None,
+        };
+        let leader = at(20_000.0, 0.0, 0.0, 0.0, 90.0);
+        let mut ship = escort(AVERAGE, at(0.0, 0.0, 0.0, 0.0, 90.0));
+        let mut fastest: f32 = 0.0;
+        for _ in 0..300 {
+            super::fly(&mut ship, &[], Some(&leader), raised);
+            fastest = fastest.max(ship.state.velocity.length());
+        }
+        assert!((fastest - 4.5).abs() < 1e-3, "{fastest}");
+        let mut own = escort(AVERAGE, at(0.0, 0.0, 0.0, 0.0, 90.0));
+        for _ in 0..300 {
+            fly(&mut own, &[], Some(&leader));
+        }
+        assert!(own.state.velocity.length() <= 3.0 + 1e-4);
+        let drifting = |speed: f32| {
+            let mut wreck = npc(AVERAGE, Goal::Idle, at(0.0, 0.0, speed, 0.0, 90.0));
+            wreck.condition = Condition::Disabled;
+            super::fly(&mut wreck, &[], None, raised);
+            wreck.state.velocity.length()
+        };
+        assert!((drifting(4.0) - 4.0).abs() < 1e-4, "under 4.5: kept");
+        assert!((drifting(10.0) - 4.5).abs() < 1e-4, "capped at 4.5");
     }
 
     #[test]
