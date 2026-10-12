@@ -778,6 +778,10 @@ pub struct Session {
     /// Every system's `Visibility`, read when the session starts: what the
     /// galaxy refresh evaluates (see the `story` module).
     visibility: Rc<[SystemVisibility]>,
+    /// Whether a set expression has changed the pilot since the last
+    /// settling: by the other reading of [`RuleKey::VisibilityRefresh`]
+    /// the settling refreshes the galaxy then.
+    galaxy_stale: bool,
     /// Every stellar's and system's name, read when the session starts:
     /// what the text tags read (see the `missions` module).
     place_names: PlaceNames,
@@ -1022,6 +1026,7 @@ impl Session {
                 .collect(),
             listed_stellars: catalog.listed_stellars(),
             visibility: catalog.system_visibility().into(),
+            galaxy_stale: false,
             place_names: catalog.place_names(),
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
             offers: Offers::default(),

@@ -220,6 +220,9 @@ impl Session {
         execute(expr, self, &mut apply, chance, &mut BTreeSet::new());
         if self.pilot != before {
             self.save_due = true;
+            // What a `Visibility` test reads is the pilot's: one left as
+            // it was cannot change the galaxy.
+            self.galaxy_stale = true;
         }
     }
 

@@ -620,6 +620,8 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use super::*;
     use crate::catalog::{DisasterId, OutfitId, ShipId, StellarId, SystemId};
     use crate::chance::NeverFires;
@@ -1889,5 +1891,68 @@ mod tests {
             session.pilot().galaxy.system(SystemId(131)).visible,
             Some(false)
         );
+    }
+
+    /// Nova's control bits, counting the tests asked.
+    #[derive(Debug, Default)]
+    struct Counting(std::cell::Cell<usize>);
+
+    impl crate::control::ControlBits for Counting {
+        fn allows(
+            &self,
+            test: &crate::control::TestExpr,
+            pilot: &dyn crate::control::PilotFacts,
+        ) -> bool {
+            self.0.set(self.0.get() + 1);
+            crate::control::holds(test, pilot)
+        }
+    }
+
+    /// A session of `catalog` with `visibility_refresh` reading `source`,
+    /// its control bits counting the tests asked.
+    fn refreshing(catalog: &FakePilotCatalog, source: RuleSource) -> (Session, Rc<Counting>) {
+        let counting = Rc::new(Counting::default());
+        let session = Session::start(catalog)
+            .expect("starts")
+            .with_rules(Rulebook::default().with_override(RuleKey::VisibilityRefresh, source))
+            .with_control_bits(counting.clone());
+        (session, counting)
+    }
+
+    #[test]
+    fn by_the_other_refresh_reading_a_bit_shows_once_its_script_settles() {
+        let catalog = gated(&[(132, "b50")]);
+        let (mut session, _) = refreshing(&catalog, RuleSource::Bible);
+        session.take_events();
+        set(&mut session, &catalog, "b50");
+        assert!(visible(&session, 132), "right after settling");
+        assert_eq!(session.take_events(), [SessionEvent::GalaxyChanged]);
+        set(&mut session, &catalog, "!b50");
+        assert!(!visible(&session, 132));
+    }
+
+    #[test]
+    fn by_the_engine_refresh_reading_a_bit_waits_for_the_next_refresh_point() {
+        let catalog = gated(&[(132, "b50")]);
+        let (mut session, _) = refreshing(&catalog, RuleSource::Engine);
+        set(&mut session, &catalog, "b50");
+        assert!(!visible(&session, 132), "not after settling");
+        land_now(&mut session).expect("lands");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(visible(&session, 132), "at the landing");
+    }
+
+    #[test]
+    fn by_the_other_refresh_reading_an_idle_settling_evaluates_nothing() {
+        let catalog = gated(&[(132, "b50"), (133, "!b50")]);
+        let (mut session, counting) = refreshing(&catalog, RuleSource::Bible);
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        let asked = counting.0.get();
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(counting.0.get(), asked, "no script ran");
+        set(&mut session, &catalog, "b1");
+        assert_eq!(counting.0.get(), asked + 2, "both tests, once");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(counting.0.get(), asked + 2, "and not again");
     }
 }
