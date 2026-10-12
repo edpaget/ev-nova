@@ -97,8 +97,10 @@ impl Session {
     /// [`cron`](crate::cron)), drawing on `chance`.
     pub(super) fn crons_day(&mut self, chance: &mut (impl Chance + ?Sized)) {
         let crons = Rc::clone(&self.crons);
+        let rules = self.rules;
         cron::pass(
             &crons,
+            &rules,
             &mut SessionCrons {
                 session: self,
                 chance,

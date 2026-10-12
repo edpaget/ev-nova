@@ -127,7 +127,7 @@ use crate::catalog::{CronId, CronRecord};
 use crate::chance::Chance;
 use crate::control::{Gate, Script};
 use crate::date::GameDate;
-use crate::rulebook::{RuleKey, Rulebook};
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context};
 use crate::story::{Consumer, SubscriptionId};
 use crate::wares;
@@ -227,7 +227,7 @@ pub(crate) trait CronDay {
 /// the module docs). Each state is written before the crön's scripts
 /// run, and each script runs at once, so a later crön in the pass sees
 /// what an earlier one set.
-pub(crate) fn pass(records: &[CronRecord], day: &mut (impl CronDay + ?Sized)) {
+pub(crate) fn pass(records: &[CronRecord], rules: &Rulebook, day: &mut (impl CronDay + ?Sized)) {
     let mut sorted: Vec<&CronRecord> = records.iter().collect();
     sorted.sort_by_key(|record| record.id);
     for record in sorted {
@@ -243,7 +243,7 @@ pub(crate) fn pass(records: &[CronRecord], day: &mut (impl CronDay + ?Sized)) {
                     day.set_state(id, Some(state));
                 } else if state.days >= 0 {
                     day.set_state(id, Some(state));
-                    start(record, state.days, day);
+                    start(record, state.days, true, rules, day);
                 } else {
                     day.set_state(id, None);
                 }
@@ -273,18 +273,33 @@ pub(crate) fn pass(records: &[CronRecord], day: &mut (impl CronDay + ?Sized)) {
                         holdoff: 0,
                     };
                     day.set_state(id, Some(state));
-                    start(record, record.duration, day);
+                    start(record, record.duration, false, rules, day);
                 }
             }
         }
     }
 }
 
-/// Runs `record`'s `OnStart`, and with `days` 0 left its `OnEnd` and its
-/// end the same day (@0x388d4-0x388e6).
-fn start(record: &CronRecord, days: i16, day: &mut (impl CronDay + ?Sized)) {
+/// Runs `record`'s `OnStart`, and with `days` 0 left its `OnEnd` the same
+/// day. From the inactive branch (@0x388d4-0x388e6) that is its end. At
+/// the end of a pre-holdoff (`after_holdoff`) it is too by default; under
+/// [`RuleKey::CronZeroDurationHoldoff`]'s engine reading only `OnEnd`
+/// runs, as @0x387a8-0x387c1 writes nothing more, leaving the crön
+/// running with `days` 0 so the next day's pass ends it again.
+fn start(
+    record: &CronRecord,
+    days: i16,
+    after_holdoff: bool,
+    rules: &Rulebook,
+    day: &mut (impl CronDay + ?Sized),
+) {
     run_hook(record, CronHook::OnStart, day);
-    if days == 0 {
+    if days != 0 {
+        return;
+    }
+    if after_holdoff && rules.source_for(RuleKey::CronZeroDurationHoldoff) == RuleSource::Engine {
+        run_hook(record, CronHook::OnEnd, day);
+    } else {
         end(record, day);
     }
 }
@@ -577,7 +592,6 @@ mod tests {
     use std::collections::{BTreeMap, VecDeque};
 
     use crate::control::{ControlBits, FreshPilot, PilotFacts, Test, TestExpr};
-    use crate::rulebook::RuleSource;
     use crate::rules::Descriptor;
     use crate::testkit::{Scripted, cron};
 
@@ -1159,6 +1173,8 @@ mod tests {
         holds: VecDeque<bool>,
         capped: Vec<(CronId, CronHook)>,
         log: Vec<Did>,
+        /// The rule set the pass reads.
+        rules: Rulebook,
     }
 
     impl CronDay for MockDay {
@@ -1211,9 +1227,15 @@ mod tests {
             }
         }
 
+        /// This day, its pass reading `rules`.
+        fn with_rules(self, rules: Rulebook) -> Self {
+            Self { rules, ..self }
+        }
+
         /// Runs a day's pass over `records`, and what it did.
         fn day(&mut self, records: &[CronRecord]) -> Vec<Did> {
-            pass(records, self);
+            let rules = self.rules;
+            pass(records, &rules, self);
             std::mem::take(&mut self.log)
         }
 
@@ -1355,10 +1377,19 @@ mod tests {
         assert_eq!(day.day(&records), [Asked(128), Started(128)]);
     }
 
+    /// The rule set with `cron_zero_duration_holdoff` following `zero`
+    /// and `cron_post_holdoff` following `post`.
+    fn holdoffs(zero: RuleSource, post: RuleSource) -> Rulebook {
+        Rulebook::default()
+            .with_override(RuleKey::CronZeroDurationHoldoff, zero)
+            .with_override(RuleKey::CronPostHoldoff, post)
+    }
+
     #[test]
-    fn a_duration_0_cron_after_a_pre_holdoff_ends_once() {
+    fn bug_a_a_duration_0_crons_pre_holdoff_end_by_each_reading() {
         let records = [timed(128, 0, 2, 0)];
-        let mut day = MockDay::eligible(128);
+        let mut day =
+            MockDay::eligible(128).with_rules(holdoffs(RuleSource::Bible, RuleSource::Bible));
         assert_eq!(day.day(&records), [Asked(128)]);
         assert_eq!(day.of(128), Some((0, 2)));
         assert_eq!(day.day(&records), []);
@@ -1366,6 +1397,42 @@ mod tests {
         assert_eq!(day.of(128), None);
         day.eligible.clear();
         assert_eq!(day.day(&records), [Asked(128)], "no second OnEnd");
+
+        let mut day =
+            MockDay::eligible(128).with_rules(holdoffs(RuleSource::Engine, RuleSource::Bible));
+        assert_eq!(day.day(&records), [Asked(128)]);
+        assert_eq!(day.day(&records), []);
+        assert_eq!(day.day(&records), [Started(128), Ended(128)]);
+        assert_eq!(day.of(128), Some((0, 0)), "nothing more written");
+        day.eligible.clear();
+        assert_eq!(day.day(&records), [Ended(128)], "OnEnd again, not asked");
+        assert_eq!(day.of(128), None);
+        assert_eq!(day.day(&records), [Asked(128)]);
+    }
+
+    #[test]
+    fn bug_a_an_iterative_second_on_end_is_tested_again() {
+        let records = [CronRecord {
+            flags: ITERATE_END,
+            ..timed(128, 0, 1, 0)
+        }];
+        for (second, log) in [
+            (true, vec![Held(128), Ended(128), Held(128)]),
+            (false, vec![Held(128)]),
+        ] {
+            let mut day = MockDay {
+                holds: VecDeque::from([true, false, second, false]),
+                ..MockDay::eligible(128)
+            }
+            .with_rules(holdoffs(RuleSource::Engine, RuleSource::Bible));
+            assert_eq!(day.day(&records), [Asked(128)]);
+            assert_eq!(
+                day.day(&records),
+                [Started(128), Held(128), Ended(128), Held(128)]
+            );
+            assert_eq!(day.day(&records), log, "holds {second}");
+            assert_eq!(day.of(128), None, "it still ends");
+        }
     }
 
     #[test]
@@ -1455,7 +1522,7 @@ mod tests {
             },
             seen: Vec::new(),
         };
-        pass(&records, &mut watching);
+        pass(&records, &Rulebook::default(), &mut watching);
         assert_eq!(watching.seen, [Some((0, 0)), Some((0, 0)), Some((2, 0))]);
     }
 
