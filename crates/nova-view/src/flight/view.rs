@@ -2168,7 +2168,10 @@ impl<C> FlightView<C> {
     /// ([`FlightView::advance_hud`]), and whether a hyperspace route is
     /// shown ([`route_shown`]).
     fn radar_now(&self) -> RadarScene {
-        let session = self.session.as_ref().ok();
+        // Without a session flight shows only why, never the radar.
+        let Ok(session) = &self.session else {
+            return RadarScene::default();
+        };
         let stellars = self.scene.as_ref().map_or_else(Vec::new, |scene| {
             scene
                 .stellars()
@@ -2178,18 +2181,11 @@ impl<C> FlightView<C> {
                     square: stellar.radar_square,
                     sprite_width: stellar.drawn().as_ref().ok().map(|sheet| sheet.frame_width),
                     iff: session
-                        .and_then(|session| session.stellar_iff(stellar.id))
+                        .stellar_iff(stellar.id)
                         .unwrap_or(StellarIff::Unlandable),
                 })
                 .collect()
         });
-        let Some(session) = session else {
-            return RadarScene {
-                player: self.shown_position(),
-                stellars,
-                ..RadarScene::default()
-            };
-        };
         let gear = session.radar_gear();
         RadarScene {
             player: self.shown_position(),

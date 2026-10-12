@@ -269,12 +269,10 @@ fn drawable(side: f32) -> bool {
 /// Appends the quads tiling `area` with `entry`'s picture: copies of it
 /// edge to edge from the origin, (0, 0), each cut to `area` with its
 /// texture coordinates cut to match. A picture with no size draws
-/// nothing.
+/// nothing: its first edge, a division by 0 times 0, is NaN, which no
+/// loop runs past.
 fn push_tiles(batches: &mut Vec<Batch>, entry: &AtlasEntry, area: Bounds) {
     let (w, h) = (entry.rect.w as f32, entry.rect.h as f32);
-    if !(drawable(w) && drawable(h)) {
-        return;
-    }
     let uv = entry.uv;
     let (du, dv) = (uv.u1 - uv.u0, uv.v1 - uv.v0);
     let mut top = (area.min.y / h).floor() * h;
@@ -792,6 +790,45 @@ mod tests {
             [(ImageKey::pattern(131), ImageError::Missing)]
         );
         assert_eq!(only_submit(&gpu.calls).batches, vec![]);
+    }
+
+    #[test]
+    fn a_tiles_texture_coordinates_are_cut_from_its_place_on_the_page() {
+        // A 60x5 picture fills the first shelf and a 10x16 sprite starts
+        // the second, so the pattern lands away from the page's edges.
+        let images = tiles()
+            .with(ImageKind::Pict, 1, vec![solid(60, 5, [1, 1, 1, 255])])
+            .with(ImageKind::Rled, 2, vec![solid(10, 16, [2, 2, 2, 255])]);
+        let mut list = DrawList::new();
+        list.picture(ImageKey::picture(1), at(0.0, 0.0))
+            .sprite(ImageKey::sprite(2, 0), at(0.0, 0.0), Color::WHITE)
+            .tiled_picture(ImageKey::pattern(130), area(4.0, 8.0, 20.0, 16.0));
+        let mut renderer = renderer(images);
+        let mut gpu = RecordingGpu::new();
+        renderer.render(&list, &viewport(), &mut gpu);
+        let placed = gpu
+            .calls
+            .iter()
+            .filter_map(|call| match call {
+                GpuCall::Upload { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .next_back()
+            .expect("the pattern uploaded");
+        assert!(placed.x > 0 && placed.y > 0, "{placed:?}");
+        let quads = match gpu.submits()[0].batches.as_slice() {
+            [Batch::Sprites { quads, .. }] => quads.clone(),
+            other => panic!("one sprite batch: {other:?}"),
+        };
+        let page = |texel: u32, offset: f32| (texel as f32 + offset) / 64.0;
+        let cut = |x0: f32, x1: f32| Uv {
+            u0: page(placed.x, x0),
+            v0: page(placed.y, 8.0),
+            u1: page(placed.x, x1),
+            v1: page(placed.y, 16.0),
+        };
+        let uvs: Vec<Uv> = quads[2..].iter().map(|quad| quad.uv).collect();
+        assert_eq!(uvs, [cut(4.0, 16.0), cut(0.0, 4.0)]);
     }
 
     #[test]
