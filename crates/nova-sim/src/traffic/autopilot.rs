@@ -369,6 +369,12 @@ fn attack(npc: &Npc, target: &ShipState, handling: &Handling) -> Controls {
 /// One tick of `npc`'s glide in from hyperspace, `ticks_left` of it left:
 /// along its heading at the glide's speed, and on at its top speed
 /// `top_speed` once the glide is over.
+///
+/// `top_speed` is the ship's own `_ShipMaxSpeed`, raised for a ship the
+/// player leads ([`TopSpeeds::own`]), as in the original: `_HandleShip`
+/// runs the glide (+0x34 set to -50.0 and +0x30 to -1.165 by low mode 10,
+/// @0x88114-0x88136) through the same negative-speed path as the burst out
+/// of a gate, and ends it against `_ShipMaxSpeed` (@0x34c68-0x34cee).
 fn glide(npc: &mut Npc, ticks_left: u32, top_speed: f32) {
     let inward = flight::facing(npc.state.heading);
     let tick = JUMP_IN_TICKS.saturating_sub(ticks_left);
@@ -1126,6 +1132,27 @@ mod tests {
         }
         assert_eq!(disabled.mode, Mode::Flying);
         assert_eq!(disabled.condition, Condition::Disabled);
+    }
+
+    #[test]
+    fn a_glide_in_ends_at_the_raised_top_speed_intact_or_disabled() {
+        let raised = TopSpeeds {
+            own: 4.5,
+            lead: None,
+        };
+        for condition in [Condition::Intact, Condition::Disabled] {
+            let mut ship = npc(AVERAGE, Goal::Idle, at(0.0, -2000.0, 0.0, 0.0, 180.0));
+            ship.condition = condition;
+            ship.mode = Mode::JumpingIn { ticks_left: 1 };
+            super::fly(&mut ship, &[], None, raised);
+            assert_eq!(ship.mode, Mode::Flying, "{condition:?}");
+            let along = flight::facing(180.0) * 4.5;
+            assert!(
+                (ship.state.velocity - along).length() < 1e-4,
+                "{condition:?}: {:?}",
+                ship.state.velocity
+            );
+        }
     }
 
     #[test]
