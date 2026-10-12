@@ -50,4 +50,4 @@ pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};
 pub use missions::FlightMissionDialogs;
 pub use sprite::rotation_frame;
-pub use view::{FlightView, SharedChance};
+pub use view::{FlightOverlays, FlightView, SharedChance};

@@ -139,8 +139,9 @@
 //!   target it selects the nearest landable stellar and shows the reply
 //!   ([`clearance_message`]); with one it lands there. The router takes
 //!   the landing ([`FlightView::take_landing`]) and shows the spaceport.
-//!   The reply, or why a landing was refused, shows above the help line
-//!   in the original's words (`STR#` 2002), for [`MESSAGE_SHOWN_FOR`].
+//!   The reply, or why a landing was refused, shows on the message line
+//!   in the original's words (`STR#` 2002), for [`LANDING_TICKS`] or
+//!   [`landing_refusal_ticks`].
 //!   Over a hypergate or wormhole, the second L enters it instead
 //!   ([`nova_sim::gate`]): a hypergate opens the course map as the
 //!   hypergate map ([`MapMode::Hypergate`]), offering its linked
@@ -227,7 +228,7 @@
 //!   the old one, and the session tells the change of ship, so the new
 //!   ship's sprite sheet is read, once. Boarding a
 //!   person that grants outfits says what it retrieved
-//!   ([`grant_message`]) for [`GRANT_SHOWN_FOR`]. A person of `Flags`
+//!   ([`grant_message`]) for [`GRANT_TICKS`]. A person of `Flags`
 //!   0x0200 whose mission is available offers it in place of the plunder
 //!   ([`Boarding::Offered`]), held for the router as a hail's offer is.
 //! - Y (a press) hails the target ([`Session::open_hail`]): a person
@@ -302,9 +303,28 @@
 //!   each step a person may
 //!   say its hail quote ([`Session::tick_quotes`], right after the
 //!   traffic's tick), shown in the message line for
-//!   [`HAIL_QUOTE_SHOWN_FOR`], the last one said winning.
+//!   [`HAIL_QUOTE_TICKS`], the last one said winning.
+//! - Return ([`MENU_CLOSE_KEY`], the original's `ackComm`) clears the
+//!   message line and closes the escort menu.
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
+//!
+//! The message line is drawn as `_DisplayComm` (@0x90201) draws it: one
+//! slot, a new message replacing the old and its time, in the rect
+//! `_InitSprites` sets up ([`hud::message_box`]), wrapped, in the system
+//! font at 12 pt in white ([`hud::draw_message`]). It is drawn over the
+//! starfield and under everything else, as the original draws it on the
+//! sprite world's background. Each message stays for as many ticks of
+//! flight as its original caller asks ([`MESSAGE_TICKS`] and the
+//! constants after it, [`SimMessage::ticks`]). The dialogs drawn over
+//! flight (the comm, offer and plunder dialogs, the map) leave it as it
+//! is, and it shows again afterwards for the ticks it had left, as
+//! `_RedrawComm` (@0x903a0) redraws it. Starting a jump clears it only
+//! when it says [`TOO_CLOSE`] (`_HandlePlayer` @0x6b231-0x6b2a7), and
+//! opening the escort menu only when it says [`NO_ESCORTS`]
+//! (@0x6dedb-0x6df29). The system's title and the [`HELP`] line are the
+//! port's own, drawn only when turned on ([`FlightOverlays`],
+//! [`FlightView::with_overlays`]).
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -367,7 +387,7 @@ use crate::{
     Sound,
 };
 
-/// The overlay: the system's title and the help line.
+/// The developer overlays: the system's title and the help line.
 const TITLE: Point = Point::new(16.0, 32.0);
 const TITLE_SIZE: f32 = 20.0;
 const HELP_AT: Point = Point::new(16.0, 744.0);
@@ -376,14 +396,102 @@ const OVERLAY_SIZE: f32 = 14.0;
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
 pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave";
-/// Where a message, such as why a landing was refused, goes: above the
-/// help line.
-pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
-/// How long a message stays on screen.
-pub const MESSAGE_SHOWN_FOR: Duration = Duration::from_secs(4);
-/// How long a person's hail quote stays on screen: 420 frames at 30 a
-/// second (0x1a4 @0x4464d).
-pub const HAIL_QUOTE_SHOWN_FOR: Duration = Duration::from_secs(14);
+/// The port's own overlays on the flight screen, which the original does
+/// not draw: developer settings, both off by default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FlightOverlays {
+    /// The system's name and `sÿst` ID at the top left.
+    pub title: bool,
+    /// The [`HELP`] line of keys at the bottom.
+    pub help: bool,
+}
+
+/// How many ticks each message stays on the message line: the frames its
+/// caller passes `_DisplayComm` (@0x90201), which counts them down once
+/// a frame in `_HandleComm` (@0x301b9). The original's callers and their
+/// times are recorded in rdm phase hud-fidelity/phase-6-message-line;
+/// those the engine does not raise yet are rdm phase
+/// hud-fidelity/phase-12-flight-messages-the-original-raises's. The
+/// session's own messages carry their time ([`SimMessage::ticks`]).
+///
+/// [`MESSAGE_TICKS`], 240, is the original's common time: "No
+/// response." (`_HandlePlayerCommunication` @0x626c8), "You have no
+/// active missions." (`_HandlePlayer` @0x705a8), the ships' comm notes
+/// (`_HighLevelAIHandler` @0x8f6a1, `_LowLevelAIHandler` @0x86ef4),
+/// the plunder dialog's lines (`_DoPlunderDialog` @0x936df-0x9498d) and
+/// the abandoned fighters on arrival (@0x6c46d). It is also the time of
+/// the messages the original does not have ([`TAKE_OFF_FIRST`],
+/// [`JUMP_DISABLED`], [`IN_HYPERSPACE`], [`LAND_DISABLED`], [`REPELLED`],
+/// [`NO_STELLARS`] on L) and of the defection notice, which the original
+/// shows in a dialog (`_DoEscortPayment` @0x40301).
+pub const MESSAGE_TICKS: u16 = 240;
+/// A person's hail quote: 420 (0x1a4, `_ShowPersonHailQuote` @0x4464d).
+pub const HAIL_QUOTE_TICKS: u16 = 420;
+/// A grant's message: 240 (0xf0, `_DoPlunderDialog` @0x9342c).
+pub const GRANT_TICKS: u16 = 240;
+/// A mission ship boarded on the assist path, refuelled, or its cargo
+/// retrieved: 250 (0xfa, `_HandlePlayerBoardAttempt` @0x65538, @0x656be).
+pub const BOARD_LINE_TICKS: u16 = 250;
+/// Why a boarding was refused: 360 (`_HandlePlayerBoardAttempt`
+/// @0x6604a).
+pub const BOARD_REFUSAL_TICKS: u16 = 360;
+/// An escort command, and "You don't have any escorts.": 250
+/// (`_IssueNewEscortCommand` @0x665b9, `_HandlePlayer` @0x6de5a).
+pub const ESCORT_TICKS: u16 = 250;
+/// A `Q` operator's message, in flight or at take-off: 500
+/// (`_PlayGame` @0x465a8, `_PlayerLandOnStellar` @0x635c4).
+pub const SCRIPT_MESSAGE_TICKS: u16 = 500;
+/// Clearance's reply, and a landing denied or not possible: 250
+/// (`_HandlePlayerDockRequest` @0x67c46, @0x67cbc, @0x67e67).
+pub const LANDING_TICKS: u16 = 250;
+/// A landing refused as too far or too fast: 360
+/// (`_HandlePlayerDockRequest` @0x6787f).
+pub const TOO_FAR_TICKS: u16 = 360;
+/// A hypergate jump cancelled, or a wormhole leading nowhere: 250
+/// (`_PlayerEnterHypergate` @0x6397e, `_PlayerEnterWormhole` @0x646a3).
+pub const GATE_REFUSAL_TICKS: u16 = 250;
+/// A jump refused as too close or with no destination: 360
+/// (`_HandlePlayer` @0x6b931, @0x6ba00).
+pub const JUMP_REFUSAL_TICKS: u16 = 360;
+/// The capture's old ship retained or lost: 360 (`_DoShipCapture`
+/// @0x41aa1).
+pub const OLD_SHIP_TICKS: u16 = 360;
+
+/// How long the message for `refusal` stays: [`JUMP_REFUSAL_TICKS`] too
+/// close or with no destination, 240 short of fuel (`_HandlePlayer`
+/// @0x6baac), and [`MESSAGE_TICKS`] for the engine's own refusals.
+#[must_use]
+pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
+    match refusal {
+        JumpRefusal::TooClose { .. } | JumpRefusal::NoDestination => JUMP_REFUSAL_TICKS,
+        JumpRefusal::NoFuel { .. } | JumpRefusal::Landed | JumpRefusal::Disabled => MESSAGE_TICKS,
+    }
+}
+
+/// How long the message for `refusal` stays: [`TOO_FAR_TICKS`] too far
+/// or too fast, [`LANDING_TICKS`] denied or not landable, and
+/// [`MESSAGE_TICKS`] for the engine's own refusals.
+#[must_use]
+pub fn landing_refusal_ticks(refusal: &LandingRefusal) -> u16 {
+    match refusal {
+        LandingRefusal::TooFar { .. } | LandingRefusal::TooFast { .. } => TOO_FAR_TICKS,
+        LandingRefusal::Denied { .. } | LandingRefusal::NotLandable { .. } => LANDING_TICKS,
+        LandingRefusal::Jumping | LandingRefusal::Disabled | LandingRefusal::NoStellars => {
+            MESSAGE_TICKS
+        }
+    }
+}
+
+/// How long the message for `assigned` stays: [`MESSAGE_TICKS`] for a
+/// capture made an escort (`_DoPlunderDialog` @0x9482a), and
+/// [`OLD_SHIP_TICKS`] for the old ship after "Use As My Ship".
+#[must_use]
+pub fn assigned_ticks(assigned: Assigned) -> u16 {
+    match assigned {
+        Assigned::Escort => MESSAGE_TICKS,
+        Assigned::MyShip | Assigned::Abandoned => OLD_SHIP_TICKS,
+    }
+}
 
 /// The keys flight holds: the original's defaults, Alt, which turns the
 /// weapon select key back, and Command, which the jettison key needs.
@@ -549,9 +657,6 @@ pub fn refuelled_message(ship: &str, player_ship: &str) -> String {
 /// `STR#` 2002 #107: the article before a cargo's name as a boarding
 /// picks it up.
 pub const THE: &str = "the";
-/// How long a boarding pickup's line stays on screen: 250 frames at 30 a
-/// second (0xfa @0x65538).
-pub const RETRIEVED_SHOWN_FOR: Duration = Duration::from_millis(250 * 1000 / 30);
 
 /// What the comm line says as a `PickupMode` 2 mission's cargo, its
 /// `STR#` 4001 name `cargo`, is picked up by boarding its special ship,
@@ -581,15 +686,6 @@ fn mission_board_message(line: MissionBoardLine, session: &Session) -> String {
                 .and_then(|cargo| session.cargo_name(cargo))
                 .unwrap_or_default(),
         ),
-    }
-}
-
-/// How long the comm line of `line` stays on screen: a pickup's for
-/// [`RETRIEVED_SHOWN_FOR`], the assist path's for [`MESSAGE_SHOWN_FOR`].
-fn mission_board_shown_for(line: MissionBoardLine) -> Duration {
-    match line {
-        MissionBoardLine::Retrieved { .. } => RETRIEVED_SHOWN_FOR,
-        MissionBoardLine::Boarded | MissionBoardLine::Refuelled { .. } => MESSAGE_SHOWN_FOR,
     }
 }
 
@@ -972,9 +1068,6 @@ pub const ARTICLE_A: &str = "a";
 pub const ARTICLE_AN: &str = "an";
 /// `STR#` 2002 #108: a grant's message ends so.
 pub const FROM_THIS_SHIP: &str = "from this ship.";
-/// How long a grant's message stays on screen: 240 frames at 30 a
-/// second (0xf0 @0x9342c).
-pub const GRANT_SHOWN_FOR: Duration = Duration::from_secs(8);
 
 /// What the player is told of a grant of `count` outfits named
 /// `lc_name`, or `lc_plural` for more than one, as `_DoPlunderDialog`
@@ -1042,6 +1135,15 @@ pub fn pay_notes_message(notes: &[PayNote]) -> Vec<String> {
     notes
         .iter()
         .map(|&PayNote::Defected(count)| defection_message(count).to_owned())
+        .collect()
+}
+
+/// What the player is told of each of `notes`, in order, each for
+/// [`MESSAGE_TICKS`].
+fn pay_said(notes: &[PayNote]) -> Vec<(String, u16)> {
+    pay_notes_message(notes)
+        .into_iter()
+        .map(|text| (text, MESSAGE_TICKS))
         .collect()
 }
 
@@ -1127,9 +1229,16 @@ pub struct FlightView<C> {
     held: HashSet<Key>,
     /// The stellar landed on, until the router takes it.
     pending_landing: Option<StellarId>,
-    /// The message shown, `elapsed` when it was shown, and how long it
-    /// stays.
-    message: Option<(String, Duration, Duration)>,
+    /// The message line's one slot (`_DisplayComm`'s 0x3b565c): a new
+    /// message replaces the old and its time. Its ticks count the
+    /// flight's, so they stop while the map is open and while the router
+    /// holds flight under a dialog, as `_HandleComm` (@0x301b9) counts
+    /// only in the flight loop. The original's `_HandlePlayerDockRequest`
+    /// counts one tick more just before landing (@0x66da5), which no
+    /// player sees.
+    message: Option<Message>,
+    /// The port's own overlays drawn.
+    overlays: FlightOverlays,
     /// Whether a boarding has opened that the router has not taken.
     pending_boarding: bool,
     /// The hail just answered, for the router.
@@ -1214,6 +1323,17 @@ pub struct FlightView<C> {
     /// The radar's static this tick, a `ppat` ID, rolled on the effects'
     /// chance ([`radar::static_frame`]); `None` without.
     radar_static: Option<i16>,
+}
+
+/// A message on the message line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Message {
+    /// What it says.
+    text: String,
+    /// The flight's tick it was said on.
+    said_at: u128,
+    /// How many ticks it stays.
+    ticks: u16,
 }
 
 /// What [`FlightView::catch_up`] redrew, from the session's events.
@@ -1350,6 +1470,7 @@ impl<
             held: HashSet::new(),
             pending_landing,
             message: None,
+            overlays: FlightOverlays::default(),
             pending_boarding: false,
             pending_hail: None,
             pending_mission_info: None,
@@ -1506,6 +1627,19 @@ impl<
         }
     }
 
+    /// The flight drawing the port's own `overlays`, the title and the
+    /// help line, which are off by default.
+    #[must_use]
+    pub fn with_overlays(self, overlays: FlightOverlays) -> Self {
+        Self { overlays, ..self }
+    }
+
+    /// The port's own overlays the flight draws.
+    #[must_use]
+    pub fn overlays(&self) -> FlightOverlays {
+        self.overlays
+    }
+
     /// The flight with the comm dialog listing `hail_options`.
     #[must_use]
     pub fn with_hail_options(self, hail_options: HailOptions) -> Self {
@@ -1527,13 +1661,12 @@ impl<
         match session.open_hail(&self.catalog, &self.hail_options, &mut self.chance) {
             Ok(Hailed::Comm(view)) => {
                 self.pending_hail = Some(view);
-                self.message = None;
                 self.held.clear();
             }
             Ok(Hailed::Offer(offer)) => self.hold_offer(offer),
             Err(refusal) => {
                 if let Some(text) = hail_refusal_message(refusal) {
-                    self.say(text);
+                    self.say_for(text, MESSAGE_TICKS);
                 }
             }
         }
@@ -1559,7 +1692,7 @@ impl<
     fn ask_mission_info(&mut self) {
         let info = self.mission_info();
         if info.rows.is_empty() {
-            self.say(NO_ACTIVE_MISSIONS);
+            self.say_for(NO_ACTIVE_MISSIONS, MESSAGE_TICKS);
         } else {
             self.pending_mission_info = Some(info);
             self.held.clear();
@@ -1683,7 +1816,9 @@ impl<
         }
     }
 
-    /// Begins a jump, or shows why not.
+    /// Begins a jump, or shows why not. Starting it clears the message
+    /// line only when it says [`TOO_CLOSE`] (`_HandlePlayer`
+    /// @0x6b231-0x6b2a7, @0x6d601-0x6d67f).
     fn jump(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
@@ -1691,10 +1826,12 @@ impl<
         match session.begin_jump() {
             Ok(_) => {
                 self.held.clear();
-                self.message = None;
+                self.clear_message(TOO_CLOSE);
                 self.start_streak_if_jumping();
             }
-            Err(refusal) => self.show(jump_refusal_message(&refusal).to_owned()),
+            Err(refusal) => {
+                self.say_for(jump_refusal_message(&refusal), jump_refusal_ticks(&refusal));
+            }
         }
     }
 
@@ -1748,34 +1885,31 @@ impl<
         let date = session.date_text();
         let mut messages = std::mem::take(&mut self.pending_leads);
         messages.extend(session.take_messages());
-        let worded: Vec<String> = messages
+        let worded: Vec<(String, u16)> = messages
             .iter()
-            .filter_map(|message| sim_message_text(message, session))
+            .filter_map(|message| Some((sim_message_text(message, session)?, message.ticks())))
             .collect();
         self.message = None;
         let Some(scene) = &self.scene else {
             return;
         };
-        let mut said: Vec<String> = messages
+        let mut said: Vec<(String, u16)> = messages
             .iter()
-            .filter_map(arrival_lead)
+            .filter_map(|message| Some((arrival_lead(message)?, message.ticks())))
             .next_back()
-            .map(|lead| {
+            .map(|(lead, ticks)| {
                 let stellars = !scene.stellars().is_empty();
-                arrival_message_with(lead, scene.name(), &date, stellars)
+                let text = arrival_message_with(lead, scene.name(), &date, stellars);
+                (text, ticks)
             })
             .into_iter()
             .collect();
         said.extend(worded);
-        said.extend(
-            notes
-                .into_iter()
-                .map(|FighterNote::Abandoned(count)| fighters_abandoned_message(count)),
-        );
-        said.extend(pay_notes_message(&pay));
-        if !said.is_empty() {
-            self.show(said.join("  "));
-        }
+        said.extend(notes.into_iter().map(|FighterNote::Abandoned(count)| {
+            (fighters_abandoned_message(count), MESSAGE_TICKS)
+        }));
+        said.extend(pay_said(&pay));
+        self.say_all(&said);
     }
 
     /// Catches the screen up with what the session has told since this
@@ -1913,8 +2047,15 @@ impl<
     /// tells a move while landed changed it, the traffic populated afresh
     /// drawn where it is with its ship types' sheets read, no message from
     /// before kept; gives what paying the escorts for the take-off has to
-    /// say.
-    fn took_off(&mut self) -> Vec<String> {
+    /// say, each with its ticks.
+    ///
+    /// The original keeps the slot and replaces it with its take-off
+    /// greeting (`_PlayerLandOnStellar` @0x63732), which the engine does
+    /// not raise yet (rdm phase
+    /// hud-fidelity/phase-12-flight-messages-the-original-raises); a
+    /// message from before the landing would be further from what the
+    /// player sees than none.
+    fn took_off(&mut self) -> Vec<(String, u16)> {
         let pay = self
             .session
             .as_mut()
@@ -1925,14 +2066,19 @@ impl<
         self.read_npc_sheets();
         self.message = None;
         self.redraw_status();
-        pay_notes_message(&pay)
+        pay_said(&pay)
     }
 
-    /// Shows `said`, joined by two spaces, when there is anything.
-    fn say_all(&mut self, said: &[String]) {
-        if !said.is_empty() {
-            self.say(said.join("  "));
-        }
+    /// Shows the texts of `said`, joined by two spaces, when there is
+    /// anything, for the ticks of the first: the others are appended to
+    /// it, as `_HandlePlayer` appends the abandoned fighters to the
+    /// arrival line (@0x6c3c4).
+    fn say_all(&mut self, said: &[(String, u16)]) {
+        let Some(&(_, ticks)) = said.first() else {
+            return;
+        };
+        let texts: Vec<&str> = said.iter().map(|(text, _)| text.as_str()).collect();
+        self.say_for(texts.join("  "), ticks);
     }
 
     /// Settles what the set expressions run since queued, as
@@ -1954,7 +2100,11 @@ impl<
         let session = self.session.as_mut().ok()?;
         let settled = session.settle_script(&self.catalog, &mut self.chance);
         let flying = session.landed().is_none();
-        let mut said: Vec<String> = settled.message.into_iter().collect();
+        let mut said: Vec<(String, u16)> = settled
+            .message
+            .into_iter()
+            .map(|text| (text, SCRIPT_MESSAGE_TICKS))
+            .collect();
         if settled.took_off.is_some() {
             said.extend(self.took_off());
         } else if self.catch_up().system && flying {
@@ -1963,11 +2113,9 @@ impl<
                 .as_mut()
                 .map(Session::take_fighter_notes)
                 .unwrap_or_default();
-            said.extend(
-                notes
-                    .into_iter()
-                    .map(|FighterNote::Abandoned(count)| fighters_abandoned_message(count)),
-            );
+            said.extend(notes.into_iter().map(|FighterNote::Abandoned(count)| {
+                (fighters_abandoned_message(count), MESSAGE_TICKS)
+            }));
         }
         self.say_all(&said);
         self.say_messages();
@@ -2010,7 +2158,7 @@ impl<
                         clearance_message(name.unwrap_or_default(), station, clearance)
                     }
                 };
-                self.show(text);
+                self.say_for(text, LANDING_TICKS);
             }
             Ok(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
                 self.pending_landing = Some(stellar);
@@ -2044,7 +2192,7 @@ impl<
                     || refusal_message(&refusal).to_owned(),
                     gate_refusal_message,
                 );
-                self.show(text);
+                self.say_for(text, landing_refusal_ticks(&refusal));
             }
         }
     }
@@ -2054,8 +2202,10 @@ impl<
     /// nowhere. A hypergate without links says nothing.
     fn gate_refused(&mut self, refusal: Option<GateRefusal>) {
         match refusal {
-            Some(GateRefusal::Cancelled) => self.show(HYPERGATE_CANCELLED.to_owned()),
-            Some(GateRefusal::NoExit) => self.show(gate_refusal_message(GateKind::Wormhole)),
+            Some(GateRefusal::Cancelled) => self.say_for(HYPERGATE_CANCELLED, GATE_REFUSAL_TICKS),
+            Some(GateRefusal::NoExit) => {
+                self.say_for(gate_refusal_message(GateKind::Wormhole), GATE_REFUSAL_TICKS);
+            }
             Some(GateRefusal::NoLinks | GateRefusal::NotAtGate) | None => {}
         }
     }
@@ -2115,7 +2265,7 @@ impl<
             self.alpha = 0.0;
         }
         self.catch_up();
-        self.say(assigned_message(assigned));
+        self.say_for(assigned_message(assigned), assigned_ticks(assigned));
         Some(assigned)
     }
 
@@ -2416,21 +2566,37 @@ impl<C> FlightView<C> {
         self.pending_landing.take()
     }
 
-    /// The message on screen, if any.
+    /// The message on screen, if any: the slot's until its ticks have
+    /// passed.
     #[must_use]
     pub fn message(&self) -> Option<&str> {
-        let (text, shown_at, lasting) = self.message.as_ref()?;
-        (self.elapsed < *shown_at + *lasting).then_some(text.as_str())
+        let message = self.message.as_ref()?;
+        let shown = ticks(self.elapsed) - message.said_at;
+        (shown < u128::from(message.ticks)).then_some(message.text.as_str())
     }
 
-    /// Shows `text` as the message, from now, for [`MESSAGE_SHOWN_FOR`].
-    fn say(&mut self, text: impl Into<String>) {
-        self.say_for(text, MESSAGE_SHOWN_FOR);
+    /// Shows `text` as the message, from now, for `ticks` of flight,
+    /// replacing whatever was shown, as `_DisplayComm` does
+    /// (@0x9024b-0x90256).
+    fn say_for(&mut self, text: impl Into<String>, ticks: u16) {
+        self.message = Some(Message {
+            text: text.into(),
+            said_at: crate::time::ticks(self.elapsed),
+            ticks,
+        });
     }
 
-    /// Shows `text` as the message, from now, for `lasting`.
-    fn say_for(&mut self, text: impl Into<String>, lasting: Duration) {
-        self.message = Some((text.into(), self.elapsed, lasting));
+    /// Clears the message line when it holds `text`, as the original
+    /// clears one message by name (`_HandlePlayer` @0x6b231-0x6b2a7,
+    /// @0x6dedb-0x6df29).
+    fn clear_message(&mut self, text: &str) {
+        if self
+            .message
+            .as_ref()
+            .is_some_and(|message| message.text == text)
+        {
+            self.message = None;
+        }
     }
 
     /// Holds `offer`'s prompt for the router, letting go of the flight
@@ -2439,7 +2605,6 @@ impl<C> FlightView<C> {
     fn hold_offer(&mut self, offer: VenueOffer) {
         if let VenueOffer::Prompt(prompt) = offer {
             self.pending_offer = Some(prompt);
-            self.message = None;
             self.held.clear();
         }
     }
@@ -2455,25 +2620,24 @@ impl<C> FlightView<C> {
         match session.board(&*self.law, &*self.boarding_rule, &mut self.chance) {
             Ok(Boarding::Opened(_)) => {
                 self.pending_boarding = true;
-                self.message = None;
                 self.held.clear();
                 if let Some(granted) = session.take_grant() {
                     let (name, plural) = session.outfit_names(granted.outfit).unwrap_or_default();
                     let said = grant_message(granted.count, name, plural);
-                    self.say_for(said, GRANT_SHOWN_FOR);
+                    self.say_for(said, GRANT_TICKS);
                 }
             }
-            Ok(Boarding::Repelled) => self.say(REPELLED),
+            Ok(Boarding::Repelled) => self.say_for(REPELLED, MESSAGE_TICKS),
             Ok(Boarding::Offered(offer)) => self.hold_offer(offer),
             Ok(Boarding::MissionShip(line)) => {
                 if let Some(line) = line {
                     let said = mission_board_message(line, session);
-                    self.say_for(said, mission_board_shown_for(line));
+                    self.say_for(said, BOARD_LINE_TICKS);
                 }
             }
             Err(refusal) => {
                 if let Some(text) = board_refusal_message(refusal) {
-                    self.say(text);
+                    self.say_for(text, BOARD_REFUSAL_TICKS);
                 }
             }
         }
@@ -2539,15 +2703,10 @@ impl<C> FlightView<C> {
             _ => (None, None),
         };
         if let Some(text) = plunder_message(taken, good, outfit) {
-            self.say(text);
+            self.say_for(text, MESSAGE_TICKS);
         }
         self.retake_target();
         taken
-    }
-
-    /// Shows `text` from now, for [`MESSAGE_SHOWN_FOR`].
-    fn show(&mut self, text: String) {
-        self.say(text);
     }
 
     /// Shows the session's messages since they were last taken, each in
@@ -2560,12 +2719,12 @@ impl<C> FlightView<C> {
         let mut said = Vec::new();
         for message in session.take_messages() {
             match sim_message_text(&message, session) {
-                Some(text) => said.push(text),
+                Some(text) => said.push((text, message.ticks())),
                 None => self.pending_leads.push(message),
             }
         }
-        for text in said {
-            self.say(text);
+        for (text, ticks) in said {
+            self.say_for(text, ticks);
         }
     }
 
@@ -3046,12 +3205,23 @@ impl<C> FlightView<C> {
     }
 
     /// E: opens or closes the escort menu, or says the player has no
-    /// escorts.
+    /// escorts. Opening it clears [`NO_ESCORTS`] from the message line,
+    /// and only that (`_HandlePlayer` @0x6dedb-0x6df29).
     fn toggle_escort_menu(&mut self) {
         let rows = self.escort_rows();
-        if self.escort_menu.toggle(self.elapsed, &rows) == Toggled::NoEscorts {
-            self.say(NO_ESCORTS);
+        match self.escort_menu.toggle(self.elapsed, &rows) {
+            Toggled::NoEscorts => self.say_for(NO_ESCORTS, ESCORT_TICKS),
+            Toggled::Opened => self.clear_message(NO_ESCORTS),
+            Toggled::Closed => {}
         }
+    }
+
+    /// Return (`ackComm`, `_keyPrefs` +0xc): clears the message line,
+    /// whatever it shows, and closes the escort menu (`_HandlePlayer`
+    /// @0x6dd00-0x6dd6a).
+    fn acknowledge(&mut self) {
+        self.message = None;
+        self.escort_menu.close();
     }
 
     /// Gives the escorts `command`, through the session, as the menu says
@@ -3062,7 +3232,7 @@ impl<C> FlightView<C> {
         };
         if let Some(commanded) = session.command_escorts(self.escort_menu.group(), command) {
             self.escort_menu.touch(self.elapsed);
-            self.say(escort_command_message(&commanded));
+            self.say_for(escort_command_message(&commanded), ESCORT_TICKS);
         }
     }
 
@@ -3206,6 +3376,13 @@ impl<C> FlightView<C> {
             }
         }
     }
+
+    /// Draws the [`HELP`] line when its overlay is on.
+    fn draw_help(&self, list: &mut DrawList) {
+        if self.overlays.help {
+            list.text(HELP, HELP_AT, OVERLAY_SIZE, None, Color::DIM);
+        }
+    }
 }
 
 impl<
@@ -3286,7 +3463,7 @@ impl<
                 TargetPick::Next
             }),
             Some(MENU_KEY) => self.toggle_escort_menu(),
-            Some(MENU_CLOSE_KEY) => self.escort_menu.close(),
+            Some(MENU_CLOSE_KEY) => self.acknowledge(),
             Some(ESCORT_ATTACK_KEY) => self.command_escorts(EscortCommand::Attack),
             Some(ESCORT_DEFEND_KEY) => self.command_escorts(EscortCommand::Defend),
             Some(ESCORT_HOLD_KEY) => self.command_escorts(EscortCommand::Hold),
@@ -3401,10 +3578,10 @@ impl<
             }
         }
         for note in &notes {
-            self.say(comm_message(note));
+            self.say_for(comm_message(note), MESSAGE_TICKS);
         }
         for quote in quotes {
-            self.say_for(quote.text, HAIL_QUOTE_SHOWN_FOR);
+            self.say_for(quote.text, HAIL_QUOTE_TICKS);
         }
         self.say_messages();
         // The session may have populated its system afresh.
@@ -3431,7 +3608,7 @@ impl<
                 None,
                 Color::ERROR,
             );
-            list.text(HELP, HELP_AT, OVERLAY_SIZE, None, Color::DIM);
+            self.draw_help(list);
             return;
         };
         let camera = self.camera();
@@ -3440,6 +3617,10 @@ impl<
                 starfield::draw_streaked(list, &camera, effect.direction(), effect.streak_length());
             }
             _ => starfield::draw(list, &camera),
+        }
+        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+        if let Some(message) = self.message() {
+            hud::draw_message(list, message, metrics);
         }
         scene::draw_stellars(list, scene, &camera, self.elapsed);
         let beams = self.shown_beams(&camera);
@@ -3450,20 +3631,18 @@ impl<
         weapons::draw_beams(list, &beams, &self.looks, false);
         self.effects.draw(list, &camera, &self.looks);
         self.draw_brackets(list, &camera);
-        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
         self.escort_menu
             .draw(list, &self.escort_rows(), self.escort_colors, metrics);
-        list.text(
-            format!("{} (sÿst {})", scene.name(), scene.id().0),
-            TITLE,
-            TITLE_SIZE,
-            None,
-            Color::WHITE,
-        );
-        list.text(HELP, HELP_AT, OVERLAY_SIZE, None, Color::DIM);
-        if let Some(message) = self.message() {
-            list.text(message, MESSAGE_AT, OVERLAY_SIZE, None, Color::WHITE);
+        if self.overlays.title {
+            list.text(
+                format!("{} (sÿst {})", scene.name(), scene.id().0),
+                TITLE,
+                TITLE_SIZE,
+                None,
+                Color::WHITE,
+            );
         }
+        self.draw_help(list);
         match &self.status_bar {
             Ok(bar) => {
                 let radar = self.radar_shown();
@@ -4389,18 +4568,31 @@ mod tests {
         ticks(&mut view, 3);
         assert_eq!(
             drawn(&view).iter().cloned().collect::<Vec<_>>(),
-            [
-                DrawCommand::Text {
-                    text: "Cannot start flight: no chär to start from".to_owned(),
-                    font: Font::Geneva,
-                    origin: TITLE,
-                    size: TITLE_SIZE,
-                    wrap_width: None,
-                    color: Color::ERROR,
-                },
-                overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM),
-            ]
+            [DrawCommand::Text {
+                text: "Cannot start flight: no chär to start from".to_owned(),
+                font: Font::Geneva,
+                origin: TITLE,
+                size: TITLE_SIZE,
+                wrap_width: None,
+                color: Color::ERROR,
+            },]
         );
+    }
+
+    #[test]
+    fn the_unstarted_flight_shows_help_only_when_turned_on() {
+        let failed = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        };
+        let view = FlightView::new(failed).with_overlays(FlightOverlays {
+            title: false,
+            help: true,
+        });
+        let list = drawn(&view);
+        let help = overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM);
+        assert_eq!(list.iter().last(), Some(&help));
+        assert_eq!(list.iter().count(), 2, "the error line and the help");
     }
 
     // Flying.
@@ -4701,8 +4893,81 @@ mod tests {
             .collect()
     }
 
+    /// The port's title, and its help line, on.
+    const TITLED: FlightOverlays = FlightOverlays {
+        title: true,
+        help: true,
+    };
+
     #[test]
-    fn it_draws_the_stars_the_stellars_the_ship_the_overlay_then_the_hud() {
+    fn the_title_and_help_are_not_drawn_by_default() {
+        assert_eq!(
+            FlightOverlays::default(),
+            FlightOverlays {
+                title: false,
+                help: false
+            }
+        );
+        assert_eq!(flight().overlays(), FlightOverlays::default());
+        assert_eq!(flight().with_overlays(TITLED).overlays(), TITLED);
+        let texts = texts(&drawn(&flight()));
+        assert!(!texts.contains(&"Sol (sÿst 130)".to_owned()), "{texts:?}");
+        assert!(!texts.contains(&HELP.to_owned()), "{texts:?}");
+    }
+
+    /// The flight's draw list's commands up to the HUD's first, whose
+    /// status bar background is the first picture.
+    fn before_the_hud(list: &DrawList) -> Vec<DrawCommand> {
+        list.iter()
+            .take_while(|c| !matches!(c, DrawCommand::Picture { .. }))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn the_title_draws_when_turned_on() {
+        let titled = FlightOverlays {
+            title: true,
+            help: false,
+        };
+        let list = drawn(&flight().with_overlays(titled));
+        let before = before_the_hud(&list);
+        assert_eq!(
+            before.last(),
+            Some(&overlay("Sol (sÿst 130)", TITLE, TITLE_SIZE, Color::WHITE)),
+            "over the flight, under the HUD"
+        );
+        assert!(!texts(&list).contains(&HELP.to_owned()));
+    }
+
+    #[test]
+    fn the_help_line_draws_when_turned_on() {
+        let helped = FlightOverlays {
+            title: false,
+            help: true,
+        };
+        let list = drawn(&flight().with_overlays(helped));
+        let before = before_the_hud(&list);
+        assert_eq!(
+            before.last(),
+            Some(&overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM)),
+            "over the flight, under the HUD"
+        );
+        assert!(!texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
+        let both = drawn(&flight().with_overlays(TITLED));
+        let before = before_the_hud(&both);
+        assert_eq!(
+            before[before.len() - 2..],
+            [
+                overlay("Sol (sÿst 130)", TITLE, TITLE_SIZE, Color::WHITE),
+                overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM),
+            ],
+            "the title, then the help"
+        );
+    }
+
+    #[test]
+    fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
         let view = flight();
         let list = drawn(&view);
         let mut expected = DrawList::new();
@@ -4714,8 +4979,6 @@ mod tests {
             Duration::ZERO,
         );
         expected.sprite(ImageKey::sprite(2000, 0), VIEW_CENTER, Color::WHITE);
-        expected.push(overlay("Sol (sÿst 130)", TITLE, TITLE_SIZE, Color::WHITE));
-        expected.push(overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM));
         hud::draw(
             &mut expected,
             view.status_bar().expect("a status bar"),
@@ -4836,7 +5099,7 @@ mod tests {
                 Color::ERROR
             ))
         );
-        assert!(texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
+        assert!(matches!(list.iter().next(), Some(DrawCommand::Dot { .. })));
     }
 
     // The engine glow and running lights.
@@ -5746,8 +6009,42 @@ mod tests {
     fn message(view: &View) -> Option<DrawCommand> {
         drawn(view)
             .iter()
-            .find(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == MESSAGE_AT))
+            .find(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == message_at()))
             .cloned()
+    }
+
+    /// Where the message's first line is drawn: the message box's
+    /// top-left.
+    fn message_at() -> Point {
+        hud::message_box(VIEW_SIZE).min
+    }
+
+    /// The message `text` as a flight without metrics draws it.
+    fn message_drawn(text: &str) -> DrawCommand {
+        DrawCommand::Text {
+            text: text.to_owned(),
+            font: hud::MESSAGE_FONT,
+            origin: at(25.0, 724.0),
+            size: 12.0,
+            wrap_width: Some(755.0),
+            color: Color::WHITE,
+        }
+    }
+
+    /// Asserts the message line says `text` now, for `n` ticks of flight
+    /// in all, and not after.
+    #[track_caller]
+    fn assert_lasts(view: &mut View, text: &str, n: u16) {
+        assert_eq!(view.message(), Some(text));
+        ticks(view, u32::from(n) - 1);
+        assert_eq!(
+            view.message(),
+            Some(text),
+            "still shown after {} ticks",
+            n - 1
+        );
+        ticks(view, 1);
+        assert_eq!(view.message(), None, "gone after {n} ticks");
     }
 
     /// L pressed twice: clearance, then landing.
@@ -5767,10 +6064,7 @@ mod tests {
         assert_eq!(nav_target(&view), Some(StellarId(129)));
         let cleared = "Moon traffic control reads you, you're cleared to land.";
         assert_eq!(view.message(), Some(cleared));
-        assert_eq!(
-            message(&view),
-            Some(overlay(cleared, MESSAGE_AT, OVERLAY_SIZE, Color::WHITE))
-        );
+        assert_eq!(message(&view), Some(message_drawn(cleared)));
         assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"], "the HUD shows it");
         assert_eq!(view.take_sounds(), [], "no sound for clearance");
 
@@ -5838,7 +6132,7 @@ mod tests {
         let uninhabited = StellarFlags::CAN_LAND | StellarFlags::UNINHABITED;
         let mut view = flight_among(vec![site(128, (0.0, 0.0), uninhabited)]);
         tap(&mut view, LAND);
-        assert_eq!(view.message(), Some("You are cleared to land."));
+        assert_lasts(&mut view, "You are cleared to land.", 250);
         let strict = LandingSite {
             min_status: 1,
             ..site(
@@ -5849,14 +6143,19 @@ mod tests {
         };
         let mut view = flight_among(vec![strict]);
         tap(&mut view, LAND);
-        assert_eq!(view.message(), Some("Docking request denied."));
         assert_eq!(nav_target(&view), Some(StellarId(129)), "selected anyway");
+        assert_lasts(&mut view, "Docking request denied.", 250);
         let mut view = flight();
         tap(&mut view, LAND);
         assert_eq!(
             view.message(),
             Some("Moon traffic control reads you, you're cleared to land."),
             "the nearer of Sol's two"
+        );
+        assert_lasts(
+            &mut view,
+            "Moon traffic control reads you, you're cleared to land.",
+            LANDING_TICKS,
         );
     }
 
@@ -5938,6 +6237,122 @@ mod tests {
             assert_eq!(view.message(), Some(expected));
             assert_eq!(nav_target(&view), Some(StellarId(140)), "kept: try again");
         }
+    }
+
+    #[test]
+    fn each_refusal_and_assignment_lasts_its_callers_ticks() {
+        let stellar = StellarId(128);
+        let landing = [
+            (LandingRefusal::Jumping, 240),
+            (LandingRefusal::Disabled, 240),
+            (LandingRefusal::NoStellars, 240),
+            (
+                LandingRefusal::TooFar {
+                    stellar,
+                    station: false,
+                },
+                360,
+            ),
+            (
+                LandingRefusal::TooFast {
+                    stellar,
+                    station: true,
+                    speed: 2.0,
+                },
+                360,
+            ),
+            (
+                LandingRefusal::Denied {
+                    stellar,
+                    station: false,
+                    min_status: 1,
+                },
+                250,
+            ),
+            (
+                LandingRefusal::NotLandable {
+                    stellar,
+                    station: false,
+                },
+                250,
+            ),
+        ];
+        for (refusal, ticks) in landing {
+            assert_eq!(landing_refusal_ticks(&refusal), ticks, "{refusal:?}");
+        }
+        let jump = [
+            (JumpRefusal::NoDestination, 360),
+            (JumpRefusal::TooClose { distance: 1.0 }, 360),
+            (JumpRefusal::NoFuel { fuel: 1.0 }, 240),
+            (JumpRefusal::Landed, 240),
+            (JumpRefusal::Disabled, 240),
+        ];
+        for (refusal, ticks) in jump {
+            assert_eq!(jump_refusal_ticks(&refusal), ticks, "{refusal:?}");
+        }
+        assert_eq!(assigned_ticks(Assigned::Escort), 240);
+        assert_eq!(assigned_ticks(Assigned::MyShip), 360);
+        assert_eq!(assigned_ticks(Assigned::Abandoned), 360);
+        assert_eq!(
+            [
+                MESSAGE_TICKS,
+                HAIL_QUOTE_TICKS,
+                GRANT_TICKS,
+                BOARD_LINE_TICKS,
+                BOARD_REFUSAL_TICKS,
+                ESCORT_TICKS,
+                SCRIPT_MESSAGE_TICKS,
+                LANDING_TICKS,
+                TOO_FAR_TICKS,
+                GATE_REFUSAL_TICKS,
+                JUMP_REFUSAL_TICKS,
+                OLD_SHIP_TICKS,
+            ],
+            [240, 420, 240, 250, 360, 250, 500, 250, 360, 250, 360, 360]
+        );
+    }
+
+    #[test]
+    fn a_new_message_replaces_the_old_and_its_time() {
+        let mut view = flight();
+        view.say_for("A", 420);
+        ticks(&mut view, 10);
+        view.say_for("B", 240);
+        assert_lasts(&mut view, "B", 240);
+    }
+
+    #[test]
+    fn a_message_waits_out_the_map() {
+        let mut view = flight();
+        view.say_for("A", 240);
+        ticks(&mut view, 40);
+        tap(&mut view, MAP_KEY);
+        assert!(view.map_open());
+        ticks(&mut view, 300);
+        tap(&mut view, MAP_KEY);
+        assert!(!view.map_open());
+        assert_lasts(&mut view, "A", 200);
+    }
+
+    #[test]
+    fn starting_a_jump_clears_only_too_close() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        tap(&mut view, JUMP);
+        assert_eq!(view.message(), Some(TOO_CLOSE));
+        fly_out(&mut view);
+        assert_eq!(view.message(), Some(TOO_CLOSE), "still shown");
+        tap(&mut view, JUMP);
+        assert!(view.preparing_jump(), "accepted");
+        assert_eq!(view.message(), None, "#42 cleared");
+
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.say_for(MISSION_FAILED, 240);
+        tap(&mut view, JUMP);
+        assert!(view.preparing_jump(), "accepted");
+        assert_eq!(view.message(), Some(MISSION_FAILED), "kept");
     }
 
     #[test]
@@ -6040,33 +6455,65 @@ mod tests {
     }
 
     #[test]
-    fn the_refusal_is_drawn_above_the_help_line_until_it_has_been_shown_long_enough() {
+    fn the_refusal_is_drawn_until_its_ticks_have_passed() {
         let mut view = flight();
         ticks(&mut view, 3);
         land_now(&mut view);
-        let shown = Some(overlay(
-            TOO_FAR_PLANET,
-            MESSAGE_AT,
-            OVERLAY_SIZE,
-            Color::WHITE,
-        ));
+        let shown = Some(message_drawn(TOO_FAR_PLANET));
         assert_eq!(message(&view), shown);
-        // After the help line.
-        let list = drawn(&view);
-        let commands: Vec<&DrawCommand> = list.iter().collect();
-        let help = commands
-            .iter()
-            .position(|c| **c == overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM))
-            .expect("the help line");
-        assert_eq!(Some(commands[help + 1]), shown.as_ref());
-        view.tick(Duration::from_millis(3999));
+        ticks(&mut view, 359);
         assert_eq!(message(&view), shown);
         assert_eq!(view.message(), Some(TOO_FAR_PLANET));
-        view.tick(Duration::from_millis(1));
+        ticks(&mut view, 1);
         assert_eq!(message(&view), None);
         assert_eq!(view.message(), None);
-        assert_eq!(MESSAGE_SHOWN_FOR, Duration::from_secs(4));
-        assert_eq!(MESSAGE_AT, at(16.0, 720.0));
+        assert_eq!(TOO_FAR_TICKS, 360);
+    }
+
+    #[test]
+    fn the_message_draws_over_the_starfield_and_under_the_ships() {
+        let mut view = flight();
+        land_now(&mut view);
+        let list = drawn(&view);
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        let mut stars = DrawList::new();
+        starfield::draw(&mut stars, &view.camera());
+        let stars: Vec<&DrawCommand> = stars.iter().collect();
+        assert!(!stars.is_empty());
+        assert_eq!(commands[..stars.len()], stars[..], "the starfield first");
+        assert_eq!(
+            commands[stars.len()],
+            &message_drawn(TOO_FAR_PLANET),
+            "then the message"
+        );
+        let sprite = commands
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Sprite { .. }))
+            .expect("the player's sprite");
+        assert!(stars.len() < sprite, "the ship over it");
+    }
+
+    #[test]
+    fn a_long_message_wraps_in_the_box_by_the_metrics() {
+        let mut view = flight().with_metrics(Rc::new(crate::text::fixture::MonoMetrics));
+        land_now(&mut view);
+        let text = vec!["abcd"; 60].join(" ");
+        view.say_for(text.clone(), MESSAGE_TICKS);
+        let mut expected = DrawList::new();
+        hud::draw_message(
+            &mut expected,
+            &text,
+            Some(&crate::text::fixture::MonoMetrics),
+        );
+        let list = drawn(&view);
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        let first = commands
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == message_at()))
+            .expect("the message");
+        let expected: Vec<&DrawCommand> = expected.iter().collect();
+        assert_eq!(expected.len(), 2);
+        assert_eq!(commands[first..first + 2], expected[..]);
     }
 
     #[test]
@@ -6075,11 +6522,15 @@ mod tests {
         land_now(&mut view);
         assert_eq!(view.message(), Some(TOO_FAR_PLANET));
         view.input(&key(LAND, true));
-        view.tick(Duration::from_secs(3));
+        ticks(&mut view, 300);
         view.input(&key(LAND, false));
         view.input(&key(LAND, true));
-        view.tick(Duration::from_secs(2));
-        assert_eq!(view.message(), Some(TOO_FAR_PLANET));
+        ticks(&mut view, 100);
+        assert_eq!(
+            view.message(),
+            Some(TOO_FAR_PLANET),
+            "360 ticks from the second"
+        );
     }
 
     #[test]
@@ -6116,7 +6567,7 @@ mod tests {
             ticks(&mut view, 1);
         }
         assert!(player(&view).position.y <= -6.0, "{:?}", player(&view));
-        assert!(view.elapsed < MESSAGE_SHOWN_FOR, "still on screen");
+        assert_eq!(view.message(), Some(TOO_FAR_PLANET), "still on screen");
         view.input(&key(LAND, true));
         assert_eq!(view.take_landing(), Some(StellarId(140)));
         assert_eq!(view.message(), None);
@@ -6341,19 +6792,12 @@ mod tests {
         let mut view = flight();
         view.input(&key(JUMP, true));
         assert_eq!(view.message(), Some(NO_DESTINATION));
-        assert_eq!(
-            message(&view),
-            Some(overlay(
-                NO_DESTINATION,
-                MESSAGE_AT,
-                OVERLAY_SIZE,
-                Color::WHITE
-            ))
-        );
+        assert_eq!(message(&view), Some(message_drawn(NO_DESTINATION)));
+        assert_lasts(&mut view, NO_DESTINATION, 360);
         plot(&mut view, 131);
         view.input(&key(JUMP, true));
-        assert_eq!(view.message(), Some(TOO_CLOSE));
         assert_eq!(view.jump_effect(), None);
+        assert_lasts(&mut view, TOO_CLOSE, 360);
 
         let mut dry = FlightView::new(FakeCatalog {
             fields: ShipFields { fuel: 50, ..FIELDS },
@@ -6362,8 +6806,8 @@ mod tests {
         plot(&mut dry, 131);
         fly_out(&mut dry);
         dry.input(&key(JUMP, true));
-        assert_eq!(dry.message(), Some(NO_FUEL));
         assert_eq!(dry.jump_effect(), None);
+        assert_lasts(&mut dry, NO_FUEL, 240);
     }
 
     #[test]
@@ -6452,7 +6896,7 @@ mod tests {
 
     #[test]
     fn a_jump_streaks_the_stars_then_fades_out_arrives_and_fades_in() {
-        let mut view = flight();
+        let mut view = flight().with_overlays(TITLED);
         plot(&mut view, 131);
         fly_out(&mut view);
         jump_now(&mut view);
@@ -6671,7 +7115,7 @@ mod tests {
 
     #[test]
     fn a_multi_jump_plays_one_effect_and_loads_only_the_final_system() {
-        let mut view = FlightView::new(multi_jumping());
+        let mut view = FlightView::new(multi_jumping()).with_overlays(TITLED);
         plot(&mut view, 132);
         assert_eq!(
             view.session().expect("flying").course(),
@@ -6909,8 +7353,9 @@ mod tests {
     #[test]
     fn j_during_the_arrival_fade_in_begins_the_next_jump() {
         let mut view = fading_in_on_course_to_barnard();
+        let arrival = view.message().expect("the arrival message").to_owned();
         view.input(&key(JUMP, true));
-        assert_eq!(view.message(), None, "not refused");
+        assert_eq!(view.message(), Some(arrival.as_str()), "not refused");
         let session = view.session().expect("flying");
         assert!(
             session.preparing_jump() == Some(SystemId(132))
@@ -7017,17 +7462,13 @@ mod tests {
         let text = arrival_message(&name, &date, true);
         assert!(text.contains("Alpha Centauri"), "{text}");
         assert_eq!(view.message(), Some(text.as_str()));
-        assert_eq!(
-            message(&view),
-            Some(overlay(&text, MESSAGE_AT, OVERLAY_SIZE, Color::WHITE))
-        );
-        view.tick(MESSAGE_SHOWN_FOR);
-        assert_eq!(view.message(), None);
+        assert_eq!(message(&view), Some(message_drawn(&text)));
+        assert_lasts(&mut view, &text, 240);
         assert_eq!(message(&view), None);
     }
 
     #[test]
-    fn a_refusal_shown_before_the_jump_is_gone_after_it() {
+    fn a_refusal_shown_before_the_jump_is_replaced_by_the_arrival() {
         let mut view = flight();
         fly_out(&mut view);
         view.input(&key(JUMP, true));
@@ -7036,7 +7477,11 @@ mod tests {
         plot(&mut view, 131);
         assert_eq!(view.message(), Some(NO_DESTINATION), "still on screen");
         view.input(&key(JUMP, true));
-        assert_eq!(view.message(), None);
+        assert_eq!(
+            view.message(),
+            Some(NO_DESTINATION),
+            "starting the jump clears only #42"
+        );
         jump_now(&mut view);
         arrive_now(&mut view);
         let shown = view.message().expect("the arrival message");
@@ -9203,7 +9648,7 @@ mod tests {
 
     #[test]
     fn the_fight_is_drawn_between_the_stellars_and_the_hud_in_order() {
-        let view = firing_at_an_npc();
+        let view = firing_at_an_npc().with_overlays(TITLED);
         let list = drawn(&view);
         let stellar = first(&list, sprite_of(1128));
         let under = first(&list, line_in(Color::rgba(0, 0, 255, 255)));
@@ -10224,8 +10669,8 @@ mod tests {
     fn each_refused_boarding_says_why_in_the_originals_words() {
         let mut intact = beside(750, 750, 0, true);
         tap(&mut intact, BOARD_KEY);
-        assert_eq!(intact.message(), Some(CANT_BOARD));
         assert_eq!(intact.take_boarding(), None);
+        assert_lasts(&mut intact, CANT_BOARD, 360);
         let mut far = beside(800, 750, 0, false);
         tap(&mut far, BOARD_KEY);
         assert_eq!(far.message(), Some(NOT_CLOSE_ENOUGH));
@@ -10260,6 +10705,17 @@ mod tests {
     }
 
     #[test]
+    fn boarding_keeps_the_message() {
+        let mut view = beside(750, 750, 0, false);
+        view.say_for(MISSION_FAILED, 240);
+        tap(&mut view, BOARD_KEY);
+        view.take_boarding().expect("boarded");
+        assert_eq!(view.message(), Some(MISSION_FAILED), "under the dialog");
+        assert_eq!(view.plunder(Take::Abort), Taken::Aborted);
+        assert_lasts(&mut view, MISSION_FAILED, 240);
+    }
+
+    #[test]
     fn plundering_goes_through_the_session_and_says_what_it_took() {
         let mut view = beside(750, 750, 0, false);
         tap(&mut view, BOARD_KEY);
@@ -10277,8 +10733,8 @@ mod tests {
             "You stole all the {} credits from this ship.",
             boarding.credits
         );
-        assert_eq!(view.message(), Some(said.as_str()));
         assert_eq!(view.boarding().map(|now| now.credits), Some(0));
+        assert_lasts(&mut view, &said, 240);
         assert_eq!(view.plunder(Take::Abort), Taken::Aborted);
         assert_eq!(view.boarding(), None);
     }
@@ -10425,10 +10881,10 @@ mod tests {
         assert!(alpha > 0.0, "between steps");
         assert_eq!(view.assign(Assignment::Escort), Some(Assigned::Escort));
         assert_eq!(view.alpha(), alpha, "the old ship flies on");
-        assert_eq!(view.message(), Some(ASSIGNED_ESCORT));
         let pilot = view.pilot().expect("a pilot");
         assert_eq!(pilot.escorts().len(), 1);
         assert!(view.take_save_due());
+        assert_lasts(&mut view, ASSIGNED_ESCORT, 240);
     }
 
     #[test]
@@ -10460,6 +10916,7 @@ mod tests {
             "ship 129's sheet, and its lights"
         );
         assert_eq!(view.assign(Assignment::MyShip), None, "nothing awaits");
+        assert_lasts(&mut view, RETAINED_OLD_SHIP, 360);
     }
 
     #[test]
@@ -10613,7 +11070,7 @@ mod tests {
         let mut view = hailable(false);
         tap(&mut view, HAIL_KEY);
         assert_eq!(view.take_hail(), None);
-        assert_eq!(view.message(), Some(NO_RESPONSE));
+        assert_lasts(&mut view, NO_RESPONSE, 240);
         assert_eq!(
             hail_refusal_message(HailRefusal::NoResponse),
             Some("No response.")
@@ -10627,6 +11084,17 @@ mod tests {
         tap(&mut alone, HAIL_KEY);
         assert_eq!(alone.take_hail(), None);
         assert_eq!(alone.message(), None, "no target: nothing said");
+    }
+
+    #[test]
+    fn a_hail_dialog_keeps_the_message() {
+        let mut view = hailable(true);
+        view.say_for(MISSION_FAILED, 240);
+        tap(&mut view, HAIL_KEY);
+        view.take_hail().expect("hailed");
+        assert_eq!(view.message(), Some(MISSION_FAILED), "under the dialog");
+        view.hang_up();
+        assert_lasts(&mut view, MISSION_FAILED, 240);
     }
 
     #[test]
@@ -10927,7 +11395,7 @@ mod tests {
         tap(&mut view, ESCORT_RECALL_KEY);
         assert_eq!(view.message(), None, "already in formation");
         tap(&mut view, ESCORT_HOLD_KEY);
-        view.tick(MESSAGE_SHOWN_FOR);
+        ticks(&mut view, u32::from(ESCORT_TICKS));
         assert_eq!(view.message(), None, "gone in time");
         tap(&mut view, ESCORT_HOLD_KEY);
         assert_eq!(view.message(), None, "held already");
@@ -10957,6 +11425,39 @@ mod tests {
         tap(&mut view, Key::Char('1'));
         assert_eq!(nav_target(&view), Some(StellarId(128)), "shut: a stellar");
         assert_eq!(view.escort_menu().group(), EscortGroup::All);
+    }
+
+    #[test]
+    fn return_clears_the_message_and_closes_the_menu() {
+        let mut view = escorted();
+        view.say_for(MISSION_FAILED, 240);
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        assert_eq!(view.message(), Some(MISSION_FAILED), "kept by the menu");
+        tap(&mut view, MENU_CLOSE_KEY);
+        assert!(!view.escort_menu().is_open());
+        assert_eq!(view.message(), None, "acknowledged");
+        let mut view = flight();
+        view.say_for(MISSION_FAILED, 240);
+        tap(&mut view, MENU_CLOSE_KEY);
+        assert_eq!(view.message(), None, "with the menu shut too");
+    }
+
+    #[test]
+    fn opening_the_escort_menu_clears_no_escorts_only() {
+        let mut view = escorted();
+        view.say_for(NO_ESCORTS, ESCORT_TICKS);
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        assert_eq!(view.message(), None, "#51 cleared");
+        view.say_for(NO_ESCORTS, ESCORT_TICKS);
+        tap(&mut view, MENU_KEY);
+        assert!(!view.escort_menu().is_open());
+        assert_eq!(view.message(), Some(NO_ESCORTS), "closing does not clear");
+        view.say_for(MISSION_FAILED, 240);
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        assert_eq!(view.message(), Some(MISSION_FAILED), "kept");
     }
 
     #[test]
@@ -11011,6 +11512,7 @@ mod tests {
             Some("You don't have any escorts."),
             "no command"
         );
+        assert_lasts(&mut view, NO_ESCORTS, 250);
     }
 
     #[test]
@@ -11034,7 +11536,7 @@ mod tests {
 
     #[test]
     fn the_open_menu_is_drawn_over_the_flight_under_the_hud() {
-        let mut view = escorted();
+        let mut view = escorted().with_overlays(TITLED);
         let mut shut = DrawList::new();
         view.draw(&mut shut);
         tap(&mut view, MENU_KEY);
@@ -11468,11 +11970,7 @@ mod tests {
             retrieved_message("*Medical Supplies"),
             "You retrieved  Medical Supplies from this ship."
         );
-        assert_eq!(
-            RETRIEVED_SHOWN_FOR,
-            Duration::from_millis(250 * 1000 / 30),
-            "0xfa frames @0x65538"
-        );
+        assert_eq!(BOARD_LINE_TICKS, 250, "0xfa frames @0x65538");
     }
 
     #[test]
@@ -11611,7 +12109,7 @@ mod tests {
         }
         let pilot = view.pilot().expect("flying");
         assert_eq!(pilot.missions().iter().count(), 0, "failed at once");
-        assert_eq!(view.message(), Some(MISSION_SCANNED));
+        assert_lasts(&mut view, MISSION_SCANNED, 400);
         assert_eq!(
             MISSION_SCANNED,
             "Your ship has been scanned - mission failed."
@@ -12034,15 +12532,7 @@ mod tests {
         assert_eq!(view.message(), Some(said));
         assert_eq!(view.take_boarding(), None, "no plunder");
         assert_eq!(view.take_mission_texts(), [], "no dialog");
-        let at = view.elapsed;
-        while view.elapsed + TICK < at + RETRIEVED_SHOWN_FOR {
-            view.tick(TICK);
-        }
-        assert_eq!(view.message(), Some(said));
-        while view.elapsed < at + RETRIEVED_SHOWN_FOR {
-            view.tick(TICK);
-        }
-        assert_eq!(view.message(), None);
+        assert_lasts(&mut view, said, BOARD_LINE_TICKS);
     }
 
     /// The refused pickup's dialog (`_DoMissionCargoPickup` @0x982ff) is
@@ -12131,7 +12621,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hail_quote_shows_in_the_message_line_for_14_seconds() {
+    fn a_hail_quote_shows_in_the_message_line_for_420_ticks() {
         let (_, chance) = scripted(&ACE);
         let mut view = FlightView::new(peopled())
             .with_chance(chance)
@@ -12142,16 +12632,8 @@ mod tests {
             Some("Ace: Prepare to die, !"),
             "an unnamed pilot"
         );
-        let said = view.elapsed;
-        while view.elapsed + TICK < said + HAIL_QUOTE_SHOWN_FOR {
-            view.tick(TICK);
-        }
-        assert_eq!(view.message(), Some("Ace: Prepare to die, !"));
-        while view.elapsed < said + HAIL_QUOTE_SHOWN_FOR {
-            view.tick(TICK);
-        }
-        assert_eq!(view.message(), None);
-        assert_eq!(HAIL_QUOTE_SHOWN_FOR, Duration::from_secs(14));
+        assert_lasts(&mut view, "Ace: Prepare to die, !", 420);
+        assert_eq!(HAIL_QUOTE_TICKS, 420);
     }
 
     #[test]
@@ -12282,8 +12764,8 @@ mod tests {
         let mut view = told(flight());
         run_set(&mut view, "Q25048");
         assert_eq!(view.settle_script(), None);
-        assert_eq!(view.message(), Some("Off you go, <PSN>."));
         assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::ScriptMessage)]);
+        assert_lasts(&mut view, "Off you go, <PSN>.", SCRIPT_MESSAGE_TICKS);
     }
 
     #[test]
@@ -12295,8 +12777,8 @@ mod tests {
         assert_eq!(session.landed(), None);
         assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
         assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
-        assert_eq!(view.message(), Some("Off you go, <PSN>."));
         assert_eq!(view.settle_script(), None, "settled");
+        assert_lasts(&mut view, "Off you go, <PSN>.", 500);
     }
 
     #[test]
@@ -12306,7 +12788,7 @@ mod tests {
         run_set(&mut view, "Q25048");
         assert_eq!(view.settle_script(), Some(StellarId(128)));
         let said = format!("Off you go, <PSN>.  {DEFECTED_ONE}");
-        assert_eq!(view.message(), Some(said.as_str()));
+        assert_lasts(&mut view, &said, 500);
     }
 
     #[test]
@@ -13042,7 +13524,7 @@ mod tests {
             [RETRIEVED, ARTICLE_A, ARTICLE_AN, FROM_THIS_SHIP],
             ["You retrieved ", "a", "an", "from this ship."]
         );
-        assert_eq!(GRANT_SHOWN_FOR, Duration::from_secs(8));
+        assert_eq!(GRANT_TICKS, 240, "0xf0 @0x9342c");
     }
 
     /// Grants a person's `GrantCount` of the first outfit it may.
@@ -13159,20 +13641,12 @@ mod tests {
     }
 
     #[test]
-    fn boarding_a_granting_person_says_what_it_retrieved_for_8_seconds() {
+    fn boarding_a_granting_person_says_what_it_retrieved_for_240_ticks() {
         let mut view = boarded_ace(2, Rc::new(Grants));
         let said = "You retrieved two spare parts from this ship.";
         assert_eq!(view.message(), Some(said));
         assert_eq!(view.pilot().expect("a pilot").owned(OutfitId(200)), 2);
-        let at = view.elapsed;
-        while view.elapsed + TICK < at + GRANT_SHOWN_FOR {
-            view.tick(TICK);
-        }
-        assert_eq!(view.message(), Some(said));
-        while view.elapsed < at + GRANT_SHOWN_FOR {
-            view.tick(TICK);
-        }
-        assert_eq!(view.message(), None);
+        assert_lasts(&mut view, said, GRANT_TICKS);
         let view = boarded_ace(1, Rc::new(Grants));
         assert_eq!(
             view.message(),
@@ -13277,8 +13751,8 @@ mod tests {
     fn i_with_no_mission_says_you_have_no_active_missions() {
         let mut view = flight();
         tap(&mut view, MISSION_INFO_KEY);
-        assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS));
         assert_eq!(view.take_mission_info_request(), None);
+        assert_lasts(&mut view, NO_ACTIVE_MISSIONS, 240);
     }
 
     #[test]
@@ -13309,6 +13783,15 @@ mod tests {
         tap(&mut view, MISSION_INFO_KEY);
         assert_eq!(view.message(), None);
         assert_eq!(view.take_mission_info_request(), None);
+    }
+
+    #[test]
+    fn an_offer_keeps_the_message() {
+        let mut view = targeting_ace(offering(0, Some("Help?"), false));
+        view.say_for(MISSION_FAILED, 240);
+        tap(&mut view, HAIL_KEY);
+        view.take_offer().expect("offered");
+        assert_eq!(view.message(), Some(MISSION_FAILED), "under the dialog");
     }
 
     #[test]
@@ -14096,6 +14579,11 @@ mod tests {
             Some("Hypergate is online. Begin initial approach."),
             "the second outcome"
         );
+        assert_lasts(
+            &mut view,
+            "Hypergate is online. Begin initial approach.",
+            250,
+        );
     }
 
     #[test]
@@ -14104,7 +14592,7 @@ mod tests {
         catalog.sites[0].min_status = 100;
         let mut view = FlightView::new(catalog);
         tap(&mut view, LAND);
-        assert_eq!(view.message(), Some(HYPERGATE_DENIED));
+        assert_lasts(&mut view, HYPERGATE_DENIED, 250);
     }
 
     #[test]
@@ -14116,11 +14604,12 @@ mod tests {
             }]);
             tap(&mut view, LAND);
             let refusal = gate_refusal_message(kind);
-            assert_eq!(view.message(), Some(refusal.as_str()), "{kind:?}");
+            assert_lasts(&mut view, &refusal, 250);
         }
         let mut planet = flight_among(vec![site(300, (0.0, 0.0), 0)]);
         tap(&mut planet, LAND);
         assert_eq!(planet.message(), Some(HOSTILE_PLANET), "not a gate");
+        assert_lasts(&mut planet, HOSTILE_PLANET, 250);
     }
 
     #[test]
@@ -14228,6 +14717,7 @@ mod tests {
         assert_eq!(view.course_map().mode(), MapMode::Course);
         tap(&mut view, MAP);
         assert_eq!(view.message(), Some(HYPERGATE_CANCELLED), "nothing new");
+        assert_lasts(&mut view, HYPERGATE_CANCELLED, GATE_REFUSAL_TICKS);
     }
 
     #[test]
@@ -14341,6 +14831,20 @@ mod tests {
             Some(JumpPhase::Flash(0.0)),
             "whatever the preference"
         );
+        let passed =
+            "Passing through a wormhole into the Alpha Centauri system on June 23, 1177 NC.";
+        assert_lasts(&mut plain, passed, 240);
+    }
+
+    #[test]
+    fn coming_out_of_a_hypergate_says_so_for_360_ticks() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        tap(&mut view, MAP);
+        let exited = "Exiting hypergate in the Alpha Centauri system on June 23, 1177 NC.";
+        assert_lasts(&mut view, exited, 360);
     }
 
     #[test]
@@ -14350,13 +14854,10 @@ mod tests {
         let mut view = FlightView::new(catalog);
         land_now(&mut view);
         assert_eq!(system_of(&view), SystemId(130));
-        assert_eq!(
-            view.message(),
-            Some(
-                "Your ship is unable to enter this wormhole - the radiation levels are too extreme."
-            )
-        );
         assert_eq!(view.jump_effect(), None);
+        let why =
+            "Your ship is unable to enter this wormhole - the radiation levels are too extreme.";
+        assert_lasts(&mut view, why, GATE_REFUSAL_TICKS);
     }
 
     /// The sprites of ship 129's sheet (`rlëD` 2001) drawn.

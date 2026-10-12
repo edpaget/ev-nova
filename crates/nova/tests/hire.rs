@@ -880,8 +880,8 @@ fn an_escort_left_unpaid_by_a_jump_defects_and_the_flight_says_so() {
     );
     let frame = game.frame();
     assert!(
-        texts(&frame).iter().any(|text| text.contains(DEFECTED_ONE)),
-        "{:?}",
+        texts(&frame).join(" ").contains(DEFECTED_ONE),
+        "wrapped in the message box: {:?}",
         texts(&frame)
     );
     assert_eq!(sprites_of(&frame, HIRELING_SIZE), []);

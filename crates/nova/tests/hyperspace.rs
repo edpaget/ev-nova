@@ -59,7 +59,7 @@ use nova_sim::{
 use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_UNEXPLORED};
 use nova_view::flight::jump::{ARRIVAL_FLASH_FOR, STREAK_FOR};
 use nova_view::flight::view::TOO_CLOSE;
-use nova_view::flight::{FlightView, SharedChance};
+use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::MapMode;
 use nova_view::galaxy::map::{COURSE_HELP, ENTER_LABEL, ROUTE};
 use nova_view::menu::MenuChoice;
@@ -287,9 +287,15 @@ impl Harness {
     }
 
     /// The app over `data`, rolling chances on `chance`, in flight, entered
-    /// from the ship browser with F.
+    /// from the ship browser with F, drawing the developer's title, which
+    /// these tests read the system shown by.
     fn flying_over(data: Rc<GameData>, chance: SharedChance) -> Self {
-        let screen = start_screen(Rc::clone(&data)).with_chance(chance);
+        let screen = start_screen(Rc::clone(&data))
+            .with_chance(chance)
+            .with_flight_overlays(FlightOverlays {
+                title: true,
+                help: true,
+            });
         let mut harness = Self {
             app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),

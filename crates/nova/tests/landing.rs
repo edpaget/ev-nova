@@ -41,6 +41,7 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
 use nova_sim::{ShipState, StellarId, Vec2};
 use nova_view::MouseButton;
+use nova_view::flight::FlightOverlays;
 use nova_view::geometry::{Bounds, Point};
 use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::layout::{LANDSCAPE_ITEM, LEAVE_ITEM};
@@ -319,13 +320,19 @@ struct Harness {
 
 impl Harness {
     /// The app on the ship browser over a planet at (0, `y`), before any
-    /// frame.
+    /// frame, its flights drawing the developer's help line, which tells
+    /// these tests flight is drawn.
     fn browsing(y: i16) -> Self {
         let data = game_data(y);
-        let screen = start_screen(Rc::clone(&data)).with_dialogs(
-            Rc::new(interface()),
-            Rc::new(GlyphonMetrics::new(&FontFaces::bundled())),
-        );
+        let screen = start_screen(Rc::clone(&data))
+            .with_dialogs(
+                Rc::new(interface()),
+                Rc::new(GlyphonMetrics::new(&FontFaces::bundled())),
+            )
+            .with_flight_overlays(FlightOverlays {
+                title: true,
+                help: true,
+            });
         Self {
             app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),

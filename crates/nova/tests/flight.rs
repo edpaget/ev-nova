@@ -25,9 +25,9 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::flight::{heading_of, shortest_turn};
 use nova_sim::{ShipId, ShipState, SystemId, Vec2};
-use nova_view::flight::FlightView;
 use nova_view::flight::hud::NAV_OFF;
 use nova_view::flight::radar::radar_offset;
+use nova_view::flight::{FlightOverlays, FlightView};
 use nova_view::{Blend, Key, Point};
 
 /// A 1024x768 window at scale 1: window pixels are logical units.
@@ -253,10 +253,16 @@ impl Harness {
         Self::over(fps, data(with_character))
     }
 
-    /// The app on the ship browser over `data`, before any frame.
+    /// The app on the ship browser over `data`, before any frame, its
+    /// flights drawing the developer's title and help line, which these
+    /// tests read the frame's shape and the system shown by.
     fn over(fps: u64, data: Rc<GameData>) -> Self {
+        let screen = start_screen(Rc::clone(&data)).with_flight_overlays(FlightOverlays {
+            title: true,
+            help: true,
+        });
         Self {
-            app: App::new(&FakeWindow, Rc::clone(&data), start_screen(data)),
+            app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),
             fps,
             frames: 0,

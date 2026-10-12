@@ -388,6 +388,77 @@ pub fn oval_frame_pixels(rect: IRect) -> Vec<(i32, i32)> {
     pixels
 }
 
+/// The face flight messages are drawn in. `_DisplayComm` (@0x90201) is
+/// passed font 0, the system font, by every flight caller but the FPS
+/// readout; the game bundles `Fonts/Charcoal.ttf` to stand in for the
+/// classic Mac OS system font, and the renderer has no Lucida Grande, so
+/// Charcoal it is.
+pub const MESSAGE_FONT: Font = Font::Charcoal;
+/// The size flight messages are drawn at: 12 pt, as every flight caller
+/// passes `_DisplayComm`.
+pub const MESSAGE_TEXT_SIZE: f32 = 12.0;
+
+/// The `_DisplayComm` rect for a window of `view` (width, height), as
+/// `_InitSprites` sets it up (@0x20496-0x20526), in whole pixels: left
+/// 25, right 244 short of the right edge, bottom 5 above the bottom edge,
+/// and as tall as 29470 divided by its width, truncated. In the 1024 x
+/// 768 window it is (25, 724)-(780, 763).
+#[must_use]
+pub fn message_box(view: (f32, f32)) -> Bounds {
+    // Window sizes are whole pixels.
+    #[allow(clippy::cast_possible_truncation)]
+    let (width, height) = (view.0 as i32, view.1 as i32);
+    let (left, right, bottom) = (25, width - 244, height - 5);
+    let top = bottom - 29470 / (right - left);
+    #[allow(clippy::cast_precision_loss)]
+    let point = |x: i32, y: i32| Point::new(x as f32, y as f32);
+    Bounds {
+        min: point(left, top),
+        max: point(right, bottom),
+    }
+}
+
+/// Draws the flight message `text` in [`message_box`] of the screen, as
+/// `_DisplayComm` (@0x90294-0x902f5) draws it with `TETextBox`:
+/// left-justified and wrapped to the box, in [`MESSAGE_FONT`] at
+/// [`MESSAGE_TEXT_SIZE`], white (`InitColors` @0x1bece sets the colour
+/// it is passed to 0xffff, 0xffff, 0xffff). See [`draw_message_in`].
+pub fn draw_message(list: &mut DrawList, text: &str, metrics: Option<&dyn TextMetrics>) {
+    draw_message_in(list, text, message_box(VIEW_SIZE), metrics);
+}
+
+/// Draws the flight message `text` in `area`: with `metrics`, each line
+/// it wraps to as a text of its own down from the area's top-left, up to
+/// the last whose bottom is inside the area; without, one text wrapped by
+/// the renderer at the area's width.
+///
+/// `TETextBox` clips to the rect, so a line partly inside shows its top.
+/// A draw list cannot clip, so such a line is left out whole: in the
+/// stock window the box holds two lines, and a third shows none of its
+/// top 10 pixels.
+pub fn draw_message_in(
+    list: &mut DrawList,
+    text: &str,
+    area: Bounds,
+    metrics: Option<&dyn TextMetrics>,
+) {
+    let (font, size, width) = (MESSAGE_FONT, MESSAGE_TEXT_SIZE, area.width());
+    let Some(metrics) = metrics else {
+        list.text_in(font, text, area.min, size, Some(width), Color::WHITE);
+        return;
+    };
+    let line_height = metrics.line_height(font, size);
+    let mut top = area.min.y;
+    for line in crate::text::wrap(&metrics, font, size, text, width) {
+        if top + line_height > area.max.y {
+            break;
+        }
+        let origin = Point::new(area.min.x, top);
+        list.text_in(font, line, origin, size, None, Color::WHITE);
+        top += line_height;
+    }
+}
+
 /// Draws `date` on the last line of the layout's cargo area, at the bar's
 /// `origin`, in the bright text colour and the bar's font.
 fn draw_date(list: &mut DrawList, layout: &StatusBarLayout, origin: Point, date: &str) {
@@ -1949,5 +2020,102 @@ mod tests {
         );
         assert_eq!(list, expected);
         assert_eq!(MESSAGE_SIZE, 12.0);
+    }
+
+    #[test]
+    fn message_box_is_the_rect_init_sprites_sets() {
+        assert_eq!(message_box(VIEW_SIZE), rect(25.0, 724.0, 780.0, 763.0));
+        // 800 x 600: right 556, width 531, height 29470 / 531 = 55.
+        assert_eq!(message_box((800.0, 600.0)), rect(25.0, 540.0, 556.0, 595.0));
+    }
+
+    fn message_text(text: &str, origin: Point, wrap_width: Option<f32>) -> DrawCommand {
+        DrawCommand::Text {
+            text: text.to_owned(),
+            font: MESSAGE_FONT,
+            origin,
+            size: MESSAGE_TEXT_SIZE,
+            wrap_width,
+            color: Color::WHITE,
+        }
+    }
+
+    #[test]
+    fn a_message_is_drawn_in_the_box_at_12_pt_in_white() {
+        let mut list = DrawList::new();
+        draw_message(&mut list, "Mission failed.", Some(&MonoMetrics));
+        let drawn: Vec<&DrawCommand> = list.iter().collect();
+        assert_eq!(
+            drawn,
+            [&message_text("Mission failed.", at(25.0, 724.0), None)]
+        );
+        assert_eq!(MESSAGE_FONT, Font::Charcoal);
+        assert_eq!(MESSAGE_TEXT_SIZE, 12.0);
+    }
+
+    #[test]
+    fn a_long_message_wraps_inside_the_box() {
+        // 60 words of 4: 299 characters at 7.2 each, 104 to a 755-wide line.
+        let text = vec!["abcd"; 60].join(" ");
+        let mut list = DrawList::new();
+        draw_message(&mut list, &text, Some(&MonoMetrics));
+        let lines: Vec<(String, Point)> = list
+            .iter()
+            .map(|c| match c {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    font,
+                    size,
+                    color,
+                    wrap_width,
+                } => {
+                    assert_eq!(
+                        (*font, *size, *color, *wrap_width),
+                        (MESSAGE_FONT, 12.0, Color::WHITE, None)
+                    );
+                    (text.clone(), *origin)
+                }
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        let all = crate::text::wrap(&MonoMetrics, Font::Charcoal, 12.0, &text, 755.0);
+        assert_eq!(all.len(), 3, "a third line to clip");
+        assert_eq!(
+            lines,
+            [
+                (all[0].clone(), at(25.0, 724.0)),
+                (all[1].clone(), at(25.0, 724.0 + 14.4)),
+            ],
+            "the third line's bottom, 767.2, passes 763"
+        );
+        for (line, _) in &lines {
+            assert!(MonoMetrics.width(Font::Charcoal, 12.0, line) <= 755.0);
+        }
+    }
+
+    #[test]
+    fn a_line_ending_on_the_box_bottom_is_drawn() {
+        let line = MonoMetrics.line_height(MESSAGE_FONT, MESSAGE_TEXT_SIZE);
+        let area = Bounds::at(at(0.0, 0.0), 755.0, 2.0 * line);
+        let text = vec!["abcd"; 60].join(" ");
+        let mut list = DrawList::new();
+        draw_message_in(&mut list, &text, area, Some(&MonoMetrics));
+        assert_eq!(list.iter().count(), 2, "the second line ends on the bottom");
+    }
+
+    #[test]
+    fn without_metrics_the_message_wraps_at_the_box_width() {
+        let mut list = DrawList::new();
+        draw_message(&mut list, "Mission failed.", None);
+        let drawn: Vec<&DrawCommand> = list.iter().collect();
+        assert_eq!(
+            drawn,
+            [&message_text(
+                "Mission failed.",
+                at(25.0, 724.0),
+                Some(755.0)
+            )]
+        );
     }
 }

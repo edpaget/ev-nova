@@ -46,3 +46,68 @@ pub enum SimMessage {
         fine: i64,
     },
 }
+
+impl SimMessage {
+    /// How many ticks the message line shows this message for: the
+    /// frames its caller passes `_DisplayComm` (@0x90201).
+    ///
+    /// - [`Arrived`](Self::Arrived): 240 (`_HandlePlayer` @0x6c46d).
+    /// - [`ExitedHypergate`](Self::ExitedHypergate): 360
+    ///   (`_PlayerEnterHypergate` @0x63f1d).
+    /// - [`PassedWormhole`](Self::PassedWormhole): 240
+    ///   (`_PlayerEnterWormhole` @0x645be).
+    /// - [`MissionFailed`](Self::MissionFailed),
+    ///   [`CargoJettisoned`](Self::CargoJettisoned) and
+    ///   [`NonMissionCargoJettisoned`](Self::NonMissionCargoJettisoned):
+    ///   240 (`_JettisonCargo` @0x3e17d, @0x3e3b0).
+    /// - [`MissionShipLost`](Self::MissionShipLost): 240
+    ///   (`_HandleShipDisplay` @0x2dbab, `_DamageShip` @0x3af62).
+    /// - [`DeadlineMissed`](Self::DeadlineMissed): 240
+    ///   (`_MissionObjectivesCheck` @0x9ec53).
+    /// - [`MissionScanned`](Self::MissionScanned) and
+    ///   [`Smuggling`](Self::Smuggling): 400 (`_ScanPlayer` @0x7e79d,
+    ///   @0x7ea96).
+    #[must_use]
+    pub fn ticks(&self) -> u16 {
+        match self {
+            Self::ExitedHypergate(_) => 360,
+            Self::MissionScanned | Self::Smuggling { .. } => 400,
+            Self::Arrived(_)
+            | Self::PassedWormhole(_)
+            | Self::MissionFailed
+            | Self::DeadlineMissed
+            | Self::MissionShipLost
+            | Self::CargoJettisoned
+            | Self::NonMissionCargoJettisoned => 240,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_sim_message_lasts_its_callers_ticks() {
+        let smuggling = SimMessage::Smuggling {
+            scanner: ShipId(128),
+            ship_name: None,
+            fine: 0,
+        };
+        let cases = [
+            (SimMessage::Arrived(SystemId(128)), 240),
+            (SimMessage::ExitedHypergate(SystemId(128)), 360),
+            (SimMessage::PassedWormhole(SystemId(128)), 240),
+            (SimMessage::MissionFailed, 240),
+            (SimMessage::DeadlineMissed, 240),
+            (SimMessage::MissionShipLost, 240),
+            (SimMessage::CargoJettisoned, 240),
+            (SimMessage::NonMissionCargoJettisoned, 240),
+            (SimMessage::MissionScanned, 400),
+            (smuggling, 400),
+        ];
+        for (message, ticks) in cases {
+            assert_eq!(message.ticks(), ticks, "{message:?}");
+        }
+    }
+}
