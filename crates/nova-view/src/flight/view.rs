@@ -3429,6 +3429,9 @@ mod tests {
         missions: Vec<nova_sim::catalog::MissionRecord>,
         /// What the mission screens show of each: none, by default.
         mission_texts: Vec<nova_sim::catalog::MissionTexts>,
+        /// Each system's `Visibility`: none, by default, so every system
+        /// is visible.
+        visibility: Vec<nova_sim::catalog::SystemVisibility>,
     }
 
     /// No strings unless a test sets them.
@@ -3517,6 +3520,7 @@ mod tests {
             lives: Vec::new(),
             missions: Vec::new(),
             mission_texts: Vec::new(),
+            visibility: Vec::new(),
         }
     }
 
@@ -3689,7 +3693,7 @@ mod tests {
         }
 
         fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {
-            Vec::new()
+            self.visibility.clone()
         }
 
         fn place_names(&self) -> nova_sim::catalog::PlaceNames {
@@ -11597,9 +11601,16 @@ mod tests {
 
     #[test]
     fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
-        let catalog = catalog();
-        let mut session = Session::start(&catalog).expect("starts");
-        session.change_galaxy(&catalog, hiding(132));
+        // 132 hidden by its `Visibility`, as the load evaluates it.
+        let catalog = FakeCatalog {
+            visibility: vec![nova_sim::catalog::SystemVisibility {
+                id: SystemId(132),
+                visibility: nova_sim::Test::parse("b50"),
+            }],
+            ..catalog()
+        };
+        let session = Session::start(&catalog).expect("starts");
+        assert!(!session.galaxy().visible(SystemId(132)));
         let view = FlightView::with_pilot(catalog, session.pilot().clone());
         assert!(!on_the_course_map(&view, 132));
         assert!(on_the_course_map(&view, 131));

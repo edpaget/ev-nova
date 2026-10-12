@@ -612,6 +612,30 @@ pub(crate) fn star(id: i16, (x, y): (f32, f32), links: &[i16]) -> StarSystem {
     }
 }
 
+/// The control bit that hides `system` in a [`hideable`] catalog: 9000
+/// past its ID.
+pub(crate) fn hiding_bit(system: i16) -> crate::control::Bit {
+    u16::try_from(system)
+        .ok()
+        .and_then(|id| crate::control::Bit::new(9000 + id))
+        .expect("a system of a hideable catalog has a hiding bit")
+}
+
+/// Makes `catalog` hideable: each system on its map that has no
+/// `Visibility` yet is visible unless its [`hiding_bit`] is set. A test
+/// hides it by setting the bit and refreshing the galaxy, as play does, so
+/// every later refresh keeps it hidden.
+pub(crate) fn hideable(catalog: &mut FakePilotCatalog) {
+    for system in &catalog.star_map {
+        if !catalog.visibility.iter().any(|test| test.id == system.id) {
+            catalog.visibility.push(SystemVisibility {
+                id: system.id,
+                visibility: Test::parse(&format!("!b{}", hiding_bit(system.id.0).get())),
+            });
+        }
+    }
+}
+
 pub(crate) fn starting(systems: [Option<i16>; 4]) -> FakePilotCatalog {
     FakePilotCatalog {
         character: Ok(CharacterStart {

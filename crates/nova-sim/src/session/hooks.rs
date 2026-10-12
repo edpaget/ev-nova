@@ -39,7 +39,7 @@
 //! calls `_EvalMissionBitSetString`; see the `ship_change` module).
 
 use super::Session;
-use crate::catalog::{PilotCatalog, ShipId};
+use crate::catalog::{PilotCatalog, ShipId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::Script;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -126,11 +126,16 @@ impl Session {
     /// Begins a new pilot's game: destroys the stellars that start the
     /// game destroyed (see the `stellars` module), then runs the first
     /// `chär`'s `OnStart` once, drawing on `chance` (see the module docs),
-    /// and nothing when the `chär` cannot be read, and last rebuilds the
-    /// stellars shown (see the `stellars` module). For a pilot just
-    /// created and flown, before its first save; never for one opened from
-    /// a save.
-    pub fn begin(&mut self, catalog: &impl PilotCatalog, chance: &mut dyn Chance) {
+    /// and nothing when the `chär` cannot be read, then refreshes the
+    /// galaxy, so the systems its bits show are visible (`_PlayGame`
+    /// @0x457e9; see the `story` module), and last rebuilds the stellars
+    /// shown (see the `stellars` module). For a pilot just created and
+    /// flown, before its first save; never for one opened from a save.
+    pub fn begin(
+        &mut self,
+        catalog: &(impl PilotCatalog + TrafficCatalog),
+        chance: &mut dyn Chance,
+    ) {
         self.destroy_from_the_start();
         if let Ok(start) = catalog.first_character() {
             if self.hook_rules().start_ship_purchase == RuleSource::Bible {
@@ -138,6 +143,9 @@ impl Session {
             }
             self.run_script(&start.on_start, chance);
         }
+        // `_PlayGame`'s refresh, before its rebuild (@0x457e9, @0x457ee):
+        // `_DoNewPilot`'s, before the `OnStart`, was the flight's.
+        self.refresh_galaxy(catalog);
         // `_DoNewPilot`'s rebuild point, after its `OnStart` (@0x1937f).
         self.rebuild_stellars();
     }

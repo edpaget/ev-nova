@@ -335,4 +335,13 @@ impl Offers {
     pub fn rolled_at(&self) -> Option<StellarId> {
         self.rolled_at
     }
+
+    /// Whether a landing at `stellar` rolls the offers afresh
+    /// ([`Offers::roll`]): unless they were last rolled there
+    /// (@0x66d2b-0x66d3d), when the original calls `_RandomizeMissionData`
+    /// and so refreshes the galaxy (@0xa175f).
+    #[must_use]
+    pub fn due_at(&self, stellar: StellarId) -> bool {
+        self.rolled_at != Some(stellar)
+    }
 }

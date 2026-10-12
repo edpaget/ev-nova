@@ -376,15 +376,14 @@ mod tests {
         catalog
             .star_map
             .push(crate::testkit::star(134, (0.0, 0.0), &[]));
+        crate::testkit::hideable(&mut catalog);
         let mut session = accepted(&catalog).with_rules(
             Rulebook::default().with_override(RuleKey::ColocatedResolution, RuleSource::Bible),
         );
         take_off(&mut session, &catalog);
         ticks(&mut session, &catalog, 140);
         assert_eq!(aux_here(&session), 0, "134 visible stands for itself");
-        assert!(session.change_galaxy(&catalog, |galaxy| {
-            galaxy.set_visible(SystemId(134), Some(false));
-        }));
+        assert!(crate::session::tests::hide(&mut session, &catalog, &[134]));
         assert_eq!(session.system(), SystemId(130));
         jump_to(&mut session, &catalog, 131);
         jump_to(&mut session, &catalog, 130);

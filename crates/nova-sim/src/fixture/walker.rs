@@ -13,7 +13,8 @@
 //!   itself.
 //! - **`deliver <mission>`** ([`Step::Deliver`]) lands at the active
 //!   mission's destination, when it is not reached and is not its return
-//!   (where a `PickupMode` 1 cargo is picked up), then at its return, and
+//!   (where a `PickupMode` 1 cargo is picked up), then at its return (a
+//!   stop of no system at the first system listing its stellar), and
 //!   checks that the mission completed, unfailed, paid what its `PayVal`
 //!   pays ([`expected_pay`]) and set the bits its `OnSuccess` sets
 //!   ([`expected_bits`]). The pay of another mission completed at the
@@ -529,9 +530,20 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
         Ok(Done::MetGoal { mission, others })
     }
 
-    /// Lands at `stop` and settles.
+    /// Lands at `stop` and settles. A stop with no system, its stellar
+    /// owned by none when the mission's stops were resolved (a system its
+    /// scripts show only at the next galaxy refresh), is landed at in the
+    /// first system listing it, as `take` lands, and the landing resolves
+    /// that system by place.
     fn land(&self, session: &mut Session, stop: Stop) -> Result<(), Failed> {
-        let landed = match stop.system {
+        let system = stop.system.or_else(|| {
+            self.catalog
+                .listed_stellars()
+                .into_iter()
+                .find(|listed| listed.id == stop.stellar)
+                .and_then(|listed| listed.systems.first().copied())
+        });
+        let landed = match system {
             Some(system) => session.land_at(self.catalog, system, stop.stellar),
             None => Err(RelocateRefusal::NoSystem),
         };

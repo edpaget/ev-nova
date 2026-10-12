@@ -455,7 +455,11 @@ mod tests {
     fn a_clean_record_outfit_cleans_the_records_in_its_governments_visible_systems() {
         let mut catalog = mapped();
         catalog.star_map[6].govt = Some(GovtId(140));
+        crate::testkit::hideable(&mut catalog);
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        // Saved while 136 is hidden by its `Visibility`: the load's refresh
+        // keeps it hidden.
+        pilot.bits_mut().set(crate::testkit::hiding_bit(136));
         pilot.galaxy.set_visible(SystemId(136), Some(false));
         for (system, record) in [(134, -7), (135, -5), (136, -8), (137, -6)] {
             pilot.set_system_record(SystemId(system), record);

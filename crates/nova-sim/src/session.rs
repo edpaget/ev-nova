@@ -391,7 +391,7 @@ use crate::catalog::{
     CombatCatalog, CronRecord, DateAffixes, GateSite, GovtId, LandingSite, ListedStellar,
     MissionId, MissionRecord, MissionTexts, OutfitId, OutfitRecord, PersonId, PilotCatalog,
     PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError, StellarId, StellarLife,
-    SystemId, TrafficCatalog, WeaponId,
+    SystemId, SystemVisibility, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -775,6 +775,9 @@ pub struct Session {
     /// Every stellar some system lists, read when the session starts:
     /// what a mission's stellars are chosen from, with the galaxy overlay.
     listed_stellars: Vec<ListedStellar>,
+    /// Every system's `Visibility`, read when the session starts: what the
+    /// galaxy refresh evaluates (see the `story` module).
+    visibility: Rc<[SystemVisibility]>,
     /// Every stellar's and system's name, read when the session starts:
     /// what the text tags read (see the `missions` module).
     place_names: PlaceNames,
@@ -848,6 +851,12 @@ impl Session {
     /// selected, as the original's `_ResetPlayer` leaves it before
     /// `_LoadPilotData` (@0x76502,
     /// @0x7673e), which never sets one.
+    ///
+    /// Every system's visibility is evaluated from its `Visibility` against
+    /// the pilot's bits, the saved flags never trusted, quietly: the load's
+    /// galaxy refresh, which moves a pilot whose system it hides as any
+    /// refresh does (see the [`story`](crate::story) module's "Visibility
+    /// and governments").
     ///
     /// A pilot last landed on a stellar of its system resumes docked there,
     /// silently, as the original resumes a pilot at its last planet; so
@@ -1012,6 +1021,7 @@ impl Session {
                 .map(|texts| (texts.id, texts))
                 .collect(),
             listed_stellars: catalog.listed_stellars(),
+            visibility: catalog.system_visibility().into(),
             place_names: catalog.place_names(),
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
             offers: Offers::default(),
@@ -1037,6 +1047,10 @@ impl Session {
         session.open_outfit_visit();
         session.refit(false, ReservePolicy::Hold);
         session.restock_fleet();
+        // A load's galaxy refresh (`_LoadPilotData` @0x751ca, @0x7531f),
+        // with the facts complete; a new pilot's is `_DoNewPilot`'s, before
+        // its `OnStart` (@0x1925e).
+        session.refresh_galaxy_quietly(catalog);
         // A new pilot's and a load's nebulae (@0x19118, @0x765bc).
         let system = session.pilot.system;
         session.raise(StoryEvent::Explored { system });
@@ -2083,6 +2097,13 @@ impl Session {
     /// passed and the one arrived in, as the original explores their
     /// nebulae first; [`StoryEvent::EnteredSystem`] follows the days.
     ///
+    /// It refreshes the galaxy (`_PropagateMissionBitEffects` @0x6bf3f):
+    /// every system's `Visibility` evaluated before the days, so a bit
+    /// their scripts set shows only at the next refresh, and written once
+    /// the hops and the systems explored are resolved by the flags as they
+    /// stood, before the system is entered, telling
+    /// [`SessionEvent::GalaxyChanged`] when it changed anything.
+    ///
     /// Its first draw on `chance` arms the escort-strength timer (see
     /// [`strength`]), before the days, the roll
     /// table and the population, as the original does (@0x6c013).
@@ -2096,6 +2117,10 @@ impl Session {
         };
         self.jump = None;
         let mark = self.story_mark();
+        // The galaxy refresh evaluated before the days, so a bit their
+        // scripts set waits for the next refresh (@0x6bf3f, days
+        // @0x6c144).
+        let hidden = self.hidden_now();
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.arm_strength_timer(chance);
@@ -2145,6 +2170,18 @@ impl Session {
                 hold: false,
             },
         };
+        // The refresh written, with the hops and the systems explored
+        // resolved by the flags as they stood (@0x6bd67-0x6bdd4,
+        // @0x6be0b). The player is between systems: its entry resolves the
+        // arrival by the same rule as any move out of a hidden system.
+        if self
+            .write_galaxy(|overlay| {
+                overlay.set_hidden(&hidden);
+            })
+            .is_some()
+        {
+            self.emit(SessionEvent::GalaxyChanged);
+        }
         self.jumped_from = Some(from);
         self.enter_system(Entry::Jump { hops }, entered, catalog, catalog, chance);
         Some(self.pilot.system)
@@ -4344,7 +4381,7 @@ mod tests {
     };
     use crate::testkit::{
         FAST, FakePilotCatalog, START, Scripted, begin_jump_now, catalog, edge_lander, fly_out,
-        jump, jump_with, land_now, outfit, planet, star, starting,
+        hideable, hiding_bit, jump, jump_with, land_now, outfit, planet, star, starting,
     };
     use entry::NoTraffic;
 
@@ -18577,23 +18614,54 @@ mod tests {
         catalog
     }
 
-    /// Adds [`alternates`]' 134 to `catalog`.
+    /// Adds [`alternates`]' 134 to `catalog`, and makes every system on
+    /// its map [`hideable`].
     fn with_alternate(catalog: &mut FakePilotCatalog) {
         catalog.star_map.push(star(134, (600.0, 0.0), &[130, 132]));
         catalog.systems.push(SystemId(134));
         catalog
             .sites
             .push((SystemId(134), vec![planet(141, 0.0, 0.0)]));
+        hideable(catalog);
     }
 
-    /// Hides each of `systems` through the one writer, in one change:
-    /// whether it changed anything.
-    fn hide(session: &mut Session, catalog: &FakePilotCatalog, systems: &[i16]) -> bool {
-        session.change_galaxy(catalog, |overlay| {
-            for &id in systems {
-                overlay.set_visible(SystemId(id), Some(false));
+    /// Hides each of `systems` of a [`hideable`] `catalog` as play does: its
+    /// hiding bit set, then the galaxy refreshed, as at a refresh point, so
+    /// every later refresh keeps it hidden. Whether that changed anything.
+    pub(super) fn hide(session: &mut Session, catalog: &FakePilotCatalog, systems: &[i16]) -> bool {
+        set_hiding(session, catalog, systems, true)
+    }
+
+    /// Shows each of `systems` of a [`hideable`] `catalog` again, as
+    /// [`hide`] hides it.
+    fn unhide(session: &mut Session, catalog: &FakePilotCatalog, systems: &[i16]) -> bool {
+        set_hiding(session, catalog, systems, false)
+    }
+
+    /// Sets or clears each of `systems`' hiding bit, then refreshes the
+    /// galaxy: whether that changed anything.
+    fn set_hiding(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        systems: &[i16],
+        hidden: bool,
+    ) -> bool {
+        for &id in systems {
+            assert!(
+                catalog
+                    .visibility
+                    .iter()
+                    .any(|test| test.id == SystemId(id)),
+                "sÿst {id} is hideable"
+            );
+            let bits = session.pilot.bits_mut();
+            if hidden {
+                bits.set(hiding_bit(id));
+            } else {
+                bits.clear(hiding_bit(id));
             }
-        })
+        }
+        session.refresh_galaxy(catalog)
     }
 
     /// Whether the player is in a system on the overlaid map.
@@ -18749,9 +18817,7 @@ mod tests {
         fly_out(&mut session);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
         assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
-        session.change_galaxy(&catalog, |overlay| {
-            overlay.set_visible(SystemId(131), None);
-        });
+        unhide(&mut session, &catalog, &[131]);
         assert_eq!(session.course_shown(), ids(&[131, 132]), "followed again");
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
     }
@@ -19128,8 +19194,12 @@ mod tests {
     fn a_pilot_flown_landed_in_a_hidden_system_stays_landed_until_the_take_off() {
         let catalog = alternates();
         let mut pilot = landed_at_140();
+        // Saved while 131 is hidden by its `Visibility`: the load's refresh
+        // keeps it hidden.
+        pilot.bits_mut().set(hiding_bit(131));
         pilot.galaxy.set_visible(SystemId(131), Some(false));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert!(!session.galaxy().visible(SystemId(131)));
         session.assert_docked_among_shown();
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.landed(), Some(StellarId(140)));
@@ -19197,8 +19267,12 @@ mod tests {
         let catalog = alternates();
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.system = SystemId(131);
+        // Saved while 131 is hidden by its `Visibility`: the load's refresh
+        // keeps it hidden.
+        pilot.bits_mut().set(hiding_bit(131));
         pilot.galaxy.set_visible(SystemId(131), Some(false));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert!(!session.galaxy().visible(SystemId(131)));
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
         assert_eq!(session.take_events(), [], "silently");
@@ -19258,10 +19332,12 @@ mod tests {
             .collect()
     }
 
-    /// [`chained`] of `mod_val` with 135 at 131's place, listing 132.
+    /// [`chained`] of `mod_val` with 135 at 131's place, listing 132,
+    /// every system [`hideable`].
     fn chained_alternates(mod_val: i16) -> FakePilotCatalog {
         let mut catalog = chained(catalog(), mod_val);
         catalog.star_map.push(star(135, (600.0, 0.0), &[132]));
+        hideable(&mut catalog);
         catalog
     }
 

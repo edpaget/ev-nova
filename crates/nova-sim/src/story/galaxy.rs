@@ -379,6 +379,12 @@ impl OverlaidGalaxy {
         self.overlay.system(system).govt.unwrap_or(catalog)
     }
 
+    /// Every system in the catalog, visible or not, by ascending ID: the
+    /// systems the galaxy refresh evaluates.
+    pub fn catalog_systems(&self) -> impl Iterator<Item = SystemId> + '_ {
+        self.govts.keys().copied()
+    }
+
     /// Every system in the catalog, visible or not, by ascending ID, with
     /// its government ([`OverlaidGalaxy::govt`]): what the original's
     /// loops over every `_systemData` slot read (@0xa05a3-0xa0672).
@@ -887,6 +893,15 @@ mod tests {
         assert!(!galaxy.set_overlay(overlay));
         assert!(galaxy.set_overlay(GalaxyOverlay::default()));
         assert_eq!(*galaxy.map(), StarMap::new(systems()), "back");
+    }
+
+    #[test]
+    fn the_catalog_systems_are_every_one_hidden_or_not_by_ascending_id() {
+        let galaxy = hiding(&[3]);
+        assert_eq!(
+            galaxy.catalog_systems().collect::<Vec<_>>(),
+            ids(&[1, 2, 3, 4, 5])
+        );
     }
 
     #[test]
