@@ -1323,13 +1323,13 @@ mod tests {
 
     #[test]
     fn the_players_fighter_launches_against_its_led_top_speed() {
-        // The carrier moves at 7 along the fighter's heading: past the
-        // Viper's own top speed of 6, but below 1.5 x 6.
+        // The carrier moves at 8 along the fighter's heading: past the
+        // Viper's own top speed of 6, and past 6 + 1.5, but below 1.5 x 6.
         let catalog = carrying();
         let (mut session, raider, _) = raided(&catalog);
         let from = ShipState {
             position: Vec2::ZERO,
-            velocity: Vec2::new(0.0, -7.0),
+            velocity: Vec2::new(0.0, -8.0),
             heading: 0.0,
         };
         let sortie = |carrier| Sortie {
