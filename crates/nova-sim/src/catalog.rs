@@ -465,8 +465,9 @@ pub struct DisasterId(pub i16);
 pub struct DisasterRecord {
     /// The `öops`'s ID.
     pub id: DisasterId,
-    /// Its resource name, which the commodity exchange shows while it is
-    /// active.
+    /// Its resource name up to its last ';', trailing spaces and ';'s
+    /// dropped, as the loader keeps it (`_LoadObjectData` @0x7cdd3). The
+    /// commodity exchange and the news show it while it is active.
     pub name: String,
     /// Its `Stellar`, raw: a `spöb` ID, -1 for any stellar or -2 for none
     /// (news only).

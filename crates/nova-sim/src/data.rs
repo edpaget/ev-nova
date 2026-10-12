@@ -317,7 +317,9 @@ impl PilotCatalog for GameData {
                 let record = disaster.record;
                 Some(DisasterRecord {
                     id: DisasterId(id),
-                    name: disaster.name.unwrap_or_default().to_owned(),
+                    // The loader keeps it up to its last ';'
+                    // (_LoadObjectData @0x7cdd3-0x7ce4d).
+                    name: shown_resource_name(disaster.name.unwrap_or_default()).to_owned(),
                     // The decoder reads -1 (any stellar) as none.
                     stellar: record.stellar.map_or(-1, |stellar| stellar.0),
                     commodity: record.commodity,
@@ -2625,6 +2627,30 @@ mod tests {
             &[stellar, commodity, delta, duration, freq],
         );
         bytes
+    }
+
+    #[test]
+    fn a_disasters_name_is_its_resources_up_to_its_last_semicolon() {
+        let data = store_named(&[
+            (
+                Disaster::TYPE,
+                128,
+                Some("A glut;  ;extra"),
+                disaster(137, 0, -15, 30, 35),
+            ),
+            (
+                Disaster::TYPE,
+                129,
+                Some(";only a note"),
+                disaster(137, 0, -15, 30, 35),
+            ),
+        ]);
+        let names: Vec<_> = data.disasters().into_iter().map(|d| d.name).collect();
+        assert_eq!(
+            names,
+            ["A glut", ""],
+            "cut at the last ';', trailing spaces and ';'s dropped (_LoadObjectData @0x7cdd3)"
+        );
     }
 
     #[test]
