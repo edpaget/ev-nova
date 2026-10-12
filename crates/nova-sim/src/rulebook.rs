@@ -3,9 +3,10 @@
 //!
 //! The project's strategy is that wherever the Bible says one thing and
 //! the engine does another, the rule is written both ways and the player
-//! chooses. A [`Rulebook`] holds a default [`RuleSource`] for every such
-//! rule (the engine's, unless chosen otherwise) and an override for any
-//! single rule, named by its [`RuleKey`]. A rule asks the rulebook
+//! chooses. A [`Rulebook`] holds a [`RuleSource`] for every such rule
+//! (each key's own default, [`RuleKey::default_source`]: the engine's but
+//! for the two cron holdoff keys, unless chosen otherwise) and an
+//! override for any single rule, named by its [`RuleKey`]. A rule asks the rulebook
 //! [`Rulebook::source_for`] its key, and the rule's implementation makes
 //! the decision. The settings file names the default `"rules"` and the
 //! overrides `"rule_overrides"`, by each key's [`RuleKey::key`].
@@ -115,6 +116,8 @@
 //! | [`RankGovtReach`](RuleKey::RankGovtReach) | `rank_govt_reach` | a rank's flags reach ships of its government and of every government `_GovtAllies` finds allied with it (`_DoCommDialog` @0x95dbf; see [`rank`](crate::rank)) | only ships of the rank's own government§§§§§§§ |
 //! | [`ColocatedResolution`](RuleKey::ColocatedResolution) | `colocated_resolution` | the lowest-ID visible system at a place stands for every system there, a visible one too; links reach only it; a visible system it shadows claims no stellar (`_FindActiveCoLocatedSystem` @0x4c02-0x4c40, `_PropagateMissionBitEffects` @0x996ed-0x997bd; see [`story`](crate::story)) | a visible system stands for itself, links reach every visible system at the place, and each stellar goes to the lowest-ID visible system listing it¶¶¶¶¶¶¶ |
 //! | [`VisibilityRefresh`](RuleKey::VisibilityRefresh) | `visibility_refresh` | `Visibility` is evaluated at a landing (@0xa175f, @0xa1af2), a jump's arrival before its days (@0x6bf3f), a new pilot after its `OnStart`, and a load (see [`story`](crate::story)) | after every settled script as well\*\*\*\*\*\*\*\* |
+//! | [`CronZeroDurationHoldoff`](RuleKey::CronZeroDurationHoldoff) | `cron_zero_duration_holdoff` | a `Duration` 0 crön's pre-holdoff end runs `OnStart` and `OnEnd` and writes nothing more (`_CronEventHandler` @0x387a8-0x387c1), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and ends as `cron_post_holdoff` says (see [`cron`](crate::cron)) | `OnEnd` once, then the `PostHoldoff`: **the default — a deliberate departure from the original**†††††††† |
+//! | [`CronPostHoldoff`](RuleKey::CronPostHoldoff) | `cron_post_holdoff` | a running crön's end, with `PostHoldoff` above 0, loads its `PreHoldoff` into the holdoff and leaves its days (@0x387f1-0x387f6 → 0x388c5): it re-runs, or with `PreHoldoff` 0 its `OnEnd` runs every day for good and its news stays (see [`cron`](crate::cron)) | `PostHoldoff` days with the days at -1, then inactive: **the default — a deliberate departure from the original**†††††††† |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -315,6 +318,15 @@
 //! anything the Bible says. Crons-news-ranks phase 16's nebula `ActiveOn`
 //! follows the same key (see [`story`](crate::story)).
 //!
+//! †††††††† `cron_zero_duration_holdoff` and `cron_post_holdoff` are the
+//! only keys whose default is the other reading, not the engine's
+//! ([`RuleKey::default_source`]): the user decided so on 2026-10-11, so
+//! that the rare border-change storylines of stock crons 184, 185 and
+//! 192 re-arm after their `PostHoldoff` and their news comes down. The
+//! Bible gives `PostHoldoff` as the days after the end before the crön
+//! can fire again, and says nothing of the rest; the other reading is
+//! the intended end the cron pass builds (see [`cron`](crate::cron)).
+//!
 //! # Adding a rule
 //!
 //! 1. Add the variant, its doc comment and its settings key to the
@@ -322,6 +334,9 @@
 //!    to this module's key-list test. That is the only list:
 //!    [`RuleKey::ALL`], [`RuleKey::key`] and [`RuleKey::from_key`] come
 //!    from it, and the settings file reads the key with no further change.
+//!    A new key defaults to the engine's reading. A recorded exception
+//!    goes in [`RuleKey::default_source`] and in the default test's list
+//!    of exceptions.
 //! 2. Where the rule decides, read `rules.source_for(RuleKey::X)`
 //!    ([`Rulebook::source_for`]) from the rule set the code already holds:
 //!    the one the session or a shop builder holds, or the rulebook a
@@ -1440,6 +1455,22 @@ rule_keys! {
     /// reading, after every settled script as well (see the
     /// [`story`](crate::story) module's "Visibility and governments").
     VisibilityRefresh => "visibility_refresh",
+    /// What a `Duration` 0 crön does on the day its `PreHoldoff` ends: by
+    /// the engine, `OnStart` and `OnEnd` run but nothing more is written
+    /// (`_CronEventHandler` @0x387a8-0x387c1), so the next day the
+    /// running branch runs `OnEnd` again (@0x387d3-0x387e8) and takes
+    /// the end [`CronPostHoldoff`](RuleKey::CronPostHoldoff) gives; by the
+    /// other reading, the intended end: `OnEnd` once, then the
+    /// `PostHoldoff`. The other reading is the default (see
+    /// [`cron`](crate::cron)).
+    CronZeroDurationHoldoff => "cron_zero_duration_holdoff",
+    /// What a running crön's end loads: by the engine, its `PreHoldoff`
+    /// into the holdoff when `PostHoldoff` is above 0, with its days left
+    /// as they are (@0x387f1-0x387f6 → 0x388c5), so it re-runs, or with
+    /// `PreHoldoff` 0 never ends; by the other reading, the intended
+    /// end: `PostHoldoff` days with the days at -1. The other reading is
+    /// the default (see [`cron`](crate::cron)).
+    CronPostHoldoff => "cron_post_holdoff",
 }
 
 impl RuleKey {
@@ -1455,52 +1486,73 @@ impl RuleKey {
     const fn index(self) -> usize {
         self as usize
     }
+
+    /// The source this rule follows when the settings choose none: the
+    /// engine's, but for the two cron holdoff keys, which follow the
+    /// intended reading as a recorded departure from the original (see
+    /// the module docs).
+    #[must_use]
+    pub const fn default_source(self) -> RuleSource {
+        match self {
+            Self::CronZeroDurationHoldoff | Self::CronPostHoldoff => RuleSource::Bible,
+            _ => RuleSource::Engine,
+        }
+    }
 }
 
-/// Which source each disputed rule follows: a default for all, and an
-/// override for any one.
+/// Which source each disputed rule follows: a global source for all, or
+/// each rule's own default ([`RuleKey::default_source`]) when none is
+/// chosen, and an override for any one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rulebook {
-    default: RuleSource,
+    global: Option<RuleSource>,
     overrides: [Option<RuleSource>; RuleKey::ALL.len()],
 }
 
-/// Every rule following the engine, overriding none. (Written out, as
-/// `Default` derives only for arrays of up to 32 rules.)
+/// Every rule following its own default, overriding none: the engine's,
+/// but for the two cron holdoff keys. (Written out, as `Default` derives
+/// only for arrays of up to 32 rules.)
 impl Default for Rulebook {
     fn default() -> Self {
-        Self::new(RuleSource::default())
+        Self {
+            global: None,
+            overrides: [None; RuleKey::ALL.len()],
+        }
     }
 }
 
 impl Rulebook {
-    /// Every rule following `default`.
+    /// Every rule following `global`, overriding none.
     #[must_use]
-    pub const fn new(default: RuleSource) -> Self {
+    pub const fn new(global: RuleSource) -> Self {
         Self {
-            default,
+            global: Some(global),
             overrides: [None; RuleKey::ALL.len()],
         }
     }
 
-    /// This rulebook, with `rule` following `source` whatever the
-    /// default.
+    /// The rulebook with `rule` following `source`, whatever the global
+    /// source.
     #[must_use]
     pub fn with_override(mut self, rule: RuleKey, source: RuleSource) -> Self {
         self.overrides[rule.index()] = Some(source);
         self
     }
 
-    /// The source every rule without an override follows.
+    /// The source chosen for every rule, if one was; `None` when each
+    /// rule follows its own default.
     #[must_use]
-    pub fn default_source(&self) -> RuleSource {
-        self.default
+    pub fn global_source(&self) -> Option<RuleSource> {
+        self.global
     }
 
-    /// The source `rule` follows: its override, else the default.
+    /// The source `rule` follows: its override, else the global source,
+    /// else its own default.
     #[must_use]
     pub fn source_for(&self, rule: RuleKey) -> RuleSource {
-        self.overrides[rule.index()].unwrap_or(self.default)
+        self.overrides[rule.index()]
+            .or(self.global)
+            .unwrap_or(rule.default_source())
     }
 }
 
@@ -1509,22 +1561,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_rule_follows_the_engine_by_default() {
+    fn every_rule_follows_its_default_the_engines_but_the_two_cron_holdoffs() {
         assert_eq!(RuleSource::default(), RuleSource::Engine);
         let rulebook = Rulebook::default();
-        assert_eq!(rulebook, Rulebook::new(RuleSource::Engine));
-        assert_eq!(rulebook.default_source(), RuleSource::Engine);
+        assert_eq!(rulebook.global_source(), None);
+        assert_ne!(rulebook, Rulebook::new(RuleSource::Engine));
         for rule in RuleKey::ALL {
-            assert_eq!(rulebook.source_for(rule), RuleSource::Engine, "{rule:?}");
+            assert_eq!(rulebook.source_for(rule), rule.default_source(), "{rule:?}");
         }
+        let bible: Vec<RuleKey> = RuleKey::ALL
+            .into_iter()
+            .filter(|rule| rule.default_source() == RuleSource::Bible)
+            .collect();
+        assert_eq!(
+            bible,
+            [RuleKey::CronZeroDurationHoldoff, RuleKey::CronPostHoldoff]
+        );
     }
 
     #[test]
     fn the_default_source_sets_every_rule() {
-        let rulebook = Rulebook::new(RuleSource::Bible);
-        assert_eq!(rulebook.default_source(), RuleSource::Bible);
-        for rule in RuleKey::ALL {
-            assert_eq!(rulebook.source_for(rule), RuleSource::Bible, "{rule:?}");
+        for source in RuleSource::ALL {
+            let rulebook = Rulebook::new(source);
+            assert_eq!(rulebook.global_source(), Some(source));
+            for rule in RuleKey::ALL {
+                assert_eq!(rulebook.source_for(rule), source, "{source:?}: {rule:?}");
+            }
         }
     }
 
@@ -1536,7 +1598,7 @@ mod tests {
         ] {
             let rulebook = Rulebook::new(default).with_override(RuleKey::CrimeGains, other);
             assert_eq!(rulebook.source_for(RuleKey::CrimeGains), other);
-            assert_eq!(rulebook.default_source(), default, "unchanged");
+            assert_eq!(rulebook.global_source(), Some(default), "unchanged");
             let again = rulebook.with_override(RuleKey::CrimeGains, default);
             assert_eq!(
                 again.source_for(RuleKey::CrimeGains),
@@ -1544,17 +1606,34 @@ mod tests {
                 "the last wins"
             );
         }
+        let rulebook =
+            Rulebook::default().with_override(RuleKey::CronPostHoldoff, RuleSource::Engine);
+        assert_eq!(
+            rulebook.source_for(RuleKey::CronPostHoldoff),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            rulebook.source_for(RuleKey::CronZeroDurationHoldoff),
+            RuleSource::Bible
+        );
+        assert_eq!(rulebook.source_for(RuleKey::CrimeGains), RuleSource::Engine);
+        assert_eq!(rulebook.global_source(), None);
     }
 
     #[test]
     fn an_override_on_one_rule_leaves_the_others_on_the_default() {
+        let opposite = |source| match source {
+            RuleSource::Engine => RuleSource::Bible,
+            RuleSource::Bible => RuleSource::Engine,
+        };
         for rule in RuleKey::ALL {
-            let rulebook = Rulebook::default().with_override(rule, RuleSource::Bible);
+            let overridden = opposite(rule.default_source());
+            let rulebook = Rulebook::default().with_override(rule, overridden);
             for other in RuleKey::ALL {
                 let expected = if other == rule {
-                    RuleSource::Bible
+                    overridden
                 } else {
-                    RuleSource::Engine
+                    other.default_source()
                 };
                 assert_eq!(rulebook.source_for(other), expected, "{rule:?}: {other:?}");
             }
@@ -1607,7 +1686,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(19),
+            RuleKey::ALL.iter().rev().nth(21),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1647,7 +1726,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(18),
+            RuleKey::ALL.iter().rev().nth(20),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1669,7 +1748,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(17),
+            RuleKey::ALL.iter().rev().nth(19),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1694,7 +1773,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(16),
+            RuleKey::ALL.iter().rev().nth(18),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1720,7 +1799,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(17),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1740,7 +1819,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(16),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1760,7 +1839,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1780,7 +1859,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -1793,7 +1872,10 @@ mod tests {
             Rulebook::default().source_for(RuleKey::GateFollow),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(9), Some(&RuleKey::GateFollow));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(11),
+            Some(&RuleKey::GateFollow)
+        );
     }
 
     #[test]
@@ -1804,7 +1886,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(8), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(10), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -1815,7 +1897,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -1833,7 +1915,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -1850,7 +1932,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -1867,10 +1949,10 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(3), Some(&RuleKey::SalaryCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(5), Some(&RuleKey::SalaryCap));
     }
 
     #[test]
@@ -1885,7 +1967,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -1899,10 +1981,35 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::ColocatedResolution)
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::VisibilityRefresh));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(2),
+            Some(&RuleKey::VisibilityRefresh)
+        );
+    }
+
+    #[test]
+    fn the_cron_holdoff_rules_are_found_by_their_keys_and_read_the_bible_by_default() {
+        assert_eq!(
+            RuleKey::CronZeroDurationHoldoff.key(),
+            "cron_zero_duration_holdoff"
+        );
+        assert_eq!(RuleKey::CronPostHoldoff.key(), "cron_post_holdoff");
+        for rule in [RuleKey::CronZeroDurationHoldoff, RuleKey::CronPostHoldoff] {
+            assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
+            assert_eq!(Rulebook::default().source_for(rule), RuleSource::Bible);
+            assert_eq!(
+                Rulebook::new(RuleSource::Engine).source_for(rule),
+                RuleSource::Engine
+            );
+        }
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::CronZeroDurationHoldoff)
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::CronPostHoldoff));
     }
 
     #[test]
@@ -2004,7 +2111,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(21),
+            RuleKey::ALL.iter().rev().nth(23),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -2159,7 +2266,9 @@ mod tests {
                 RuleKey::SalaryCap,
                 RuleKey::RankGovtReach,
                 RuleKey::ColocatedResolution,
-                RuleKey::VisibilityRefresh
+                RuleKey::VisibilityRefresh,
+                RuleKey::CronZeroDurationHoldoff,
+                RuleKey::CronPostHoldoff
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
