@@ -474,8 +474,11 @@ pub fn selectable(code: i16, world: &World) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+
     use crate::catalog::{GovtRecord, StarSystem};
     use crate::govt::DERELICT;
+    use crate::hyperspace::CoLocated;
     use crate::story::{Countdown, GalaxyOverlay};
     use crate::testkit::{Draws, govt, star};
 
@@ -515,7 +518,12 @@ mod tests {
     /// place and 136 at 131's, neither linked; 134, at 132's place, lists
     /// 130; 137, far, lists 135.
     fn map() -> StarMap {
-        StarMap::new(vec![
+        StarMap::new(map_systems())
+    }
+
+    /// [`map`]'s systems.
+    fn map_systems() -> Vec<StarSystem> {
+        vec![
             star(130, (0.0, 0.0), &[131]),
             star(131, (100.0, 0.0), &[]),
             star(132, (200.0, 0.0), &[]),
@@ -524,7 +532,7 @@ mod tests {
             star(135, (0.0, 0.0), &[]),
             star(136, (100.0, 0.0), &[]),
             star(137, (400.0, 0.0), &[135]),
-        ])
+        ]
     }
 
     /// Stellar `id` in `system`, whole, with these `Flags` beside landing,
@@ -552,10 +560,21 @@ mod tests {
     /// The candidates of `kind` from `origin` among `stellars`, distance
     /// told by `reading`.
     fn far(reading: RuleSource, kind: Kind, origin: Option<i16>, stellars: &[Stellar]) -> Vec<i16> {
-        let (map, govts) = (map(), govts());
+        far_on(&map(), reading, kind, origin, stellars)
+    }
+
+    /// [`far`] over `map`.
+    fn far_on(
+        map: &StarMap,
+        reading: RuleSource,
+        kind: Kind,
+        origin: Option<i16>,
+        stellars: &[Stellar],
+    ) -> Vec<i16> {
+        let govts = govts();
         let world = World {
             stellars,
-            map: &map,
+            map,
             govts: &govts,
             draw: RuleSource::Engine,
             distance: reading,
@@ -569,7 +588,12 @@ mod tests {
     /// The -2 candidates from 128 among `stellars` by the engine's reading
     /// of distance, then by the other.
     fn both(stellars: &[Stellar]) -> (Vec<i16>, Vec<i16>) {
-        let by = |reading| far(reading, Kind::Inhabited, Some(128), stellars);
+        both_on(&map(), stellars)
+    }
+
+    /// [`both`] over `map`.
+    fn both_on(map: &StarMap, stellars: &[Stellar]) -> (Vec<i16>, Vec<i16>) {
+        let by = |reading| far_on(map, reading, Kind::Inhabited, Some(128), stellars);
         (by(RuleSource::Engine), by(RuleSource::Bible))
     }
 
@@ -793,10 +817,17 @@ mod tests {
     #[test]
     fn by_the_engine_a_link_from_the_stellars_system_to_the_origins_place_is_not_distant() {
         let stellars = with_origin(&[at(137, 160, 0, None), at(133, 170, 0, None)]);
+        let itself = StarMap::with_hidden(map_systems(), &BTreeSet::new(), CoLocated::Itself);
         assert_eq!(
-            both(&stellars),
+            both_on(&itself, &stellars),
             (vec![170], vec![160, 170]),
             "137 lists 135, at 130's place (@0x9de4-0x9e0e)"
+        );
+        assert_eq!(
+            both(&stellars),
+            (vec![170], vec![170]),
+            "by the original's resolution 137's link names 130, which 135 \
+             shares a place with: a neighbour by the other distance reading too"
         );
     }
 

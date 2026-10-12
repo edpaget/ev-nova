@@ -420,7 +420,7 @@ use crate::hail::CommNote;
 use crate::handling::{Handling, ShipFields};
 use crate::hire::{HireTerms, NovaHire, PayNote};
 use crate::hyperspace::{
-    HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, JumpZoneRule,
+    CoLocated, HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, JumpZoneRule,
     MultiJumpRule, RouteError, StarMap, arrival, check_jump, hops_per_jump, jump_bearing,
     jump_zone, next_hyper_destination,
 };
@@ -1063,6 +1063,9 @@ impl Session {
     /// Setting such a rule here alone changes nothing.
     #[must_use]
     pub fn with_rules(mut self, rules: Rulebook) -> Self {
+        self.galaxy.set_colocated(CoLocated::from(
+            rules.source_for(RuleKey::ColocatedResolution),
+        ));
         self.rules = rules;
         self
     }
@@ -18607,10 +18610,86 @@ mod tests {
         assert_eq!(session.course_shown(), []);
     }
 
+    /// The session over `catalog` with `colocated_resolution` reading
+    /// `source`.
+    fn resolving(catalog: &FakePilotCatalog, source: RuleSource) -> Session {
+        Session::start(catalog)
+            .expect("starts")
+            .with_rules(Rulebook::default().with_override(RuleKey::ColocatedResolution, source))
+    }
+
+    #[test]
+    fn by_the_engine_a_place_of_two_visible_systems_is_the_lowest_one() {
+        let catalog = alternates();
+        let mut session = resolving(&catalog, RuleSource::Engine);
+        assert_eq!(
+            session
+                .star_map()
+                .jumps(SystemId(130), HyperlinkRule::Engine),
+            ids(&[131])
+        );
+        assert_eq!(
+            session.plot_course(SystemId(134)),
+            Err(RouteError::Unreachable),
+            "134 is shadowed by 131"
+        );
+        land_now(&mut session).expect("lands");
+        session
+            .relocate(&catalog, SystemId(134), StellarId(141))
+            .expect("relocates");
+        assert_eq!(session.system(), SystemId(131), "resolved to the lowest");
+        assert!(session.galaxy().visible(SystemId(134)), "still visible");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_visible_system_at_a_shared_place_stands_for_itself() {
+        let catalog = alternates();
+        let mut session = resolving(&catalog, RuleSource::Bible);
+        assert_eq!(
+            session
+                .star_map()
+                .jumps(SystemId(130), HyperlinkRule::Engine),
+            ids(&[131, 134])
+        );
+        assert_eq!(jump(&mut session, &catalog, 134), Some(SystemId(134)));
+        assert_eq!(session.system(), SystemId(134), "and stays");
+        let mut session = resolving(&catalog, RuleSource::Bible);
+        land_now(&mut session).expect("lands");
+        session
+            .relocate(&catalog, SystemId(134), StellarId(141))
+            .expect("relocates");
+        assert_eq!(session.system(), SystemId(134));
+    }
+
     #[test]
     fn a_hidden_system_leaves_the_hyperlinks_for_the_one_at_its_place() {
         let catalog = alternates();
-        let mut session = Session::start(&catalog).expect("starts");
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = resolving(&catalog, source);
+            let jumps = session
+                .star_map()
+                .jumps(SystemId(130), HyperlinkRule::Engine);
+            let both = ids(&[131, 134]);
+            let lowest = ids(&[131]);
+            assert_eq!(
+                jumps,
+                if source == RuleSource::Engine {
+                    lowest
+                } else {
+                    both
+                },
+                "{source:?}"
+            );
+            assert!(hide(&mut session, &catalog, &[131]));
+            assert_eq!(
+                session
+                    .star_map()
+                    .jumps(SystemId(130), HyperlinkRule::Engine),
+                ids(&[134]),
+                "{source:?}"
+            );
+        }
+        let mut session = resolving(&catalog, RuleSource::Bible);
         let jumps = |session: &Session| {
             session
                 .star_map()
@@ -19063,7 +19142,7 @@ mod tests {
     #[test]
     fn with_no_system_visible_at_its_place_the_player_goes_to_the_head_made_visible() {
         let catalog = alternates();
-        let mut session = Session::start(&catalog).expect("starts");
+        let mut session = resolving(&catalog, RuleSource::Bible);
         jump(&mut session, &catalog, 134);
         session.take_events();
         assert!(hide(&mut session, &catalog, &[131, 134]));
@@ -19079,6 +19158,26 @@ mod tests {
             [SessionEvent::SystemChanged, SessionEvent::GalaxyChanged]
         );
         assert!(on_the_map(&session));
+    }
+
+    #[test]
+    fn by_the_engine_a_player_in_a_shadowed_system_goes_to_the_head_made_visible_once_both_hide() {
+        let catalog = alternates();
+        let mut pilot = Pilot::new(&catalog, "").expect("starts");
+        pilot.system = SystemId(134);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.system(), SystemId(134), "shadowed, not hidden");
+        session.take_events();
+        assert!(hide(&mut session, &catalog, &[131, 134]));
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(
+            session.pilot().galaxy.system(SystemId(131)).visible,
+            Some(true)
+        );
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::SystemChanged, SessionEvent::GalaxyChanged]
+        );
     }
 
     #[test]

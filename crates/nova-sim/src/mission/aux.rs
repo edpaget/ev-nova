@@ -166,6 +166,7 @@ pub fn aux_system_allows(
 mod tests {
     use super::*;
     use crate::catalog::StellarId;
+    use crate::hyperspace::CoLocated;
     use crate::testkit::{Draws, star};
     use std::collections::BTreeSet;
 
@@ -334,7 +335,11 @@ mod tests {
             star(131, (0.0, 0.0), &[]),
             star(132, (5.0, 0.0), &[]),
         ];
-        Places::new(&systems, &BTreeSet::from([SystemId(131)]))
+        Places::new(
+            &systems,
+            &BTreeSet::from([SystemId(131)]),
+            CoLocated::Lowest,
+        )
     }
 
     #[test]

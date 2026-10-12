@@ -1430,7 +1430,8 @@ rule_keys! {
     /// reach only it and a visible system it shadows claims no stellar; by
     /// the other reading, each visible system stands for itself, links
     /// reach every visible system at the place, and each stellar goes to
-    /// the lowest-ID visible system listing it (see the
+    /// the lowest-ID visible system listing it (see
+    /// [`CoLocated`](crate::hyperspace::CoLocated) and the
     /// [`story`](crate::story) module's "Visibility and governments").
     ColocatedResolution => "colocated_resolution",
     /// When each `sÿst` `Visibility` is evaluated: by the engine, at the
