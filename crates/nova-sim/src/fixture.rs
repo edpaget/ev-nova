@@ -3,8 +3,8 @@
 //! storyline walker, [`StoryWalker`], which drives a session through a
 //! mission chain from a script of [`Step`]s (see the `walker` module); and
 //! [`bits_allowing`], the control bits that make a test hold, for setting
-//! a pilot up directly; and [`disable`], for disabling a ship
-//! directly.
+//! a pilot up directly; [`disable`], for disabling a ship directly; and
+//! [`cloak`], for setting a ship's cloak directly.
 
 mod bits;
 mod walker;
@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::rc::Rc;
 
+use crate::cloak::Cloak;
 use crate::combat::hull::Condition;
 use crate::saves::PilotStore;
 use crate::session::Session;
@@ -33,6 +34,14 @@ pub fn disable(session: &mut Session, id: NpcId) {
         npc.reserves.shield.now = 0.0;
         npc.reserves.armor.now = 1.0;
         npc.condition = Condition::Disabled;
+    }
+}
+
+/// Sets NPC `id`'s cloak in `session` to `to`, if it is in the system:
+/// for a test that draws a ship cloaked.
+pub fn cloak(session: &mut Session, id: NpcId, to: Cloak) {
+    if let Some(npc) = session.npc_mut(id) {
+        npc.cloak = to;
     }
 }
 

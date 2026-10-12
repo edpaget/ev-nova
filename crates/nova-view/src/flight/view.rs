@@ -294,6 +294,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::cloak::{CloakShown, TRANSLUCENCY_STEPS};
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::offer_gap;
 use nova_sim::mission::screens::{NO_ACTIVE_MISSIONS, mac_ticks};
@@ -2611,29 +2612,54 @@ impl<C> FlightView<C> {
             .collect()
     }
 
-    /// Draws each NPC with its own ship's sprite, or a crossed box when its
-    /// sheet cannot be read, but for one the player cannot see for its
-    /// cloak ([`sprite_drawn`]). One waiting at the gate it comes out of
-    /// is hidden, then fades in over its last ticks there ([`npc_tint`]).
-    fn draw_npcs(&self, list: &mut DrawList, camera: &Camera) {
+    /// Draws the ships, bottom first, in their layers as
+    /// [`Session::draw_order`] gives them (see [`nova_sim::ship_layer`]):
+    /// the disabled, then the ships the player leads, then the rest with
+    /// the player on top. Without a session it draws the player alone.
+    /// The order and each cloak's level are read from the session as the
+    /// frame is drawn, so nothing waits past it.
+    fn draw_ships(&self, list: &mut DrawList, camera: &Camera) {
+        let player = camera.world_to_screen(self.shown_position());
         let Ok(session) = &self.session else {
+            self.draw_ship(list, player);
             return;
         };
-        for (npc, at, heading) in self.shown_npcs() {
-            if !sprite_drawn(session, npc) {
-                continue;
-            }
-            let Some(tint) = npc_tint(npc) else {
-                continue;
-            };
-            let at = camera.world_to_screen(at);
-            match self.npc_sheets.get(&npc.ship) {
-                Some(Ok(sheet)) => {
-                    let frame = rotation_frame(heading, sheet.rotations);
-                    list.sprite(ImageKey::sprite(sheet.image_id, frame), at, tint);
+        let npcs = self.shown_npcs();
+        for ship in session.draw_order() {
+            match ship {
+                ShipRef::Player => self.draw_ship(list, player),
+                ShipRef::Npc(id) => {
+                    if let Some(&(npc, at, heading)) = npcs.iter().find(|(npc, ..)| npc.id == id) {
+                        self.draw_npc(list, session, npc, camera.world_to_screen(at), heading);
+                    }
                 }
-                _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
             }
+        }
+    }
+
+    /// Draws `npc` at `at` facing `heading` with its own ship's sprite, or a
+    /// crossed box when its sheet cannot be read, at the alpha its cloak
+    /// leaves ([`cloak_alpha`]); not at all when its cloak hides it. One
+    /// waiting at the gate it comes out of is hidden, then fades in over
+    /// its last ticks there ([`npc_tint`]).
+    fn draw_npc(&self, list: &mut DrawList, session: &Session, npc: &Npc, at: Point, heading: f32) {
+        let Some(cloak) = cloak_alpha(session.cloak_shown(npc)) else {
+            return;
+        };
+        let Some(tint) = npc_tint(npc) else {
+            return;
+        };
+        let alpha = (u16::from(tint.a) * u16::from(cloak) + 127) / 255;
+        let tint = Color {
+            a: u8::try_from(alpha).unwrap_or(u8::MAX),
+            ..tint
+        };
+        match self.npc_sheets.get(&npc.ship) {
+            Some(Ok(sheet)) => {
+                let frame = rotation_frame(heading, sheet.rotations);
+                list.sprite(ImageKey::sprite(sheet.image_id, frame), at, tint);
+            }
+            _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
         }
     }
 
@@ -3158,8 +3184,7 @@ impl<
         scene::draw_stellars(list, scene, &camera, self.elapsed);
         let beams = self.shown_beams(&camera);
         weapons::draw_beams(list, &beams, &self.looks, true);
-        self.draw_npcs(list, &camera);
-        self.draw_ship(list, camera.world_to_screen(self.shown_position()));
+        self.draw_ships(list, &camera);
         weapons::draw_shots(list, &self.shown_shots(&camera), &self.looks);
         weapons::draw_beams(list, &beams, &self.looks, false);
         self.effects.draw(list, &camera, &self.looks);
@@ -3281,13 +3306,23 @@ fn dying(
     me.into_iter().chain(npcs).collect()
 }
 
-/// Whether `npc`'s sprite may be drawn for its cloak: not while the
-/// player cannot see past it ([`Session::sees_past_cloak`]). A ship
-/// waiting at the gate it comes out of is hidden, then faded in, by its
-/// tint ([`npc_tint`]), as `_HandleShipDisplay` (@0x2c090-0x2c18e) fades
-/// it. The radar still shows it, as `_DrawStatusRadar` does not ask.
-fn sprite_drawn(session: &Session, npc: &Npc) -> bool {
-    session.sees_past_cloak(npc)
+/// The alpha a ship's sprite is drawn with for how its cloak shows it
+/// ([`Session::cloak_shown`]), or `None` when it is not drawn: full when
+/// opaque, and a translucency of n 64ths leaving (64 - n) 64ths of full
+/// alpha, rounded to nearest. A ship waiting at the gate it comes out of
+/// is hidden, then faded in, by its tint ([`npc_tint`]), as
+/// `_HandleShipDisplay` (@0x2c090-0x2c18e) fades it. The radar still shows
+/// a cloaked ship, as `_DrawStatusRadar` does not ask.
+fn cloak_alpha(shown: CloakShown) -> Option<u8> {
+    match shown {
+        CloakShown::Opaque => Some(u8::MAX),
+        CloakShown::Translucent(level) => {
+            let steps = u16::from(TRANSLUCENCY_STEPS);
+            let left = steps - u16::from(level.min(TRANSLUCENCY_STEPS));
+            u8::try_from((left * 255 + steps / 2) / steps).ok()
+        }
+        CloakShown::Hidden => None,
+    }
 }
 
 /// Where each of `shown` the radar shows is drawn: those
@@ -7525,17 +7560,22 @@ mod tests {
         view.tick(TICK);
         let session = view.session().expect("flying");
         let mut npc = session.npcs()[0].clone();
-        assert!(sprite_drawn(session, &npc), "flying");
+        let opaque = CloakShown::Opaque;
+        assert_eq!(session.cloak_shown(&npc), opaque, "flying");
         npc.mode = nova_sim::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
-        assert!(sprite_drawn(session, &npc), "jumping in");
+        assert_eq!(session.cloak_shown(&npc), opaque, "jumping in");
         npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
-        assert!(sprite_drawn(session, &npc), "fading in at its gate");
+        assert_eq!(session.cloak_shown(&npc), opaque, "fading in at its gate");
         npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 30 };
-        assert!(sprite_drawn(session, &npc));
+        assert_eq!(session.cloak_shown(&npc), opaque);
         assert_eq!(npc_tint(&npc), None, "hidden at its gate");
         npc.cloak = CLOAKED;
         npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
-        assert!(!sprite_drawn(session, &npc), "cloaked at its gate");
+        assert_eq!(
+            session.cloak_shown(&npc),
+            CloakShown::Hidden,
+            "cloaked at its gate"
+        );
     }
 
     /// A full cloak.
@@ -7554,10 +7594,14 @@ mod tests {
         let session = view.session().expect("flying");
         let mut npc = session.npcs()[0].clone();
         npc.cloak = CLOAKED;
-        assert!(!sprite_drawn(session, &npc), "cloaked");
+        assert_eq!(session.cloak_shown(&npc), CloakShown::Hidden, "cloaked");
         npc.cloak.direction = -1;
         npc.cloak.fade = 8.0;
-        assert!(sprite_drawn(session, &npc), "faded out enough to be seen");
+        assert_eq!(
+            session.cloak_shown(&npc),
+            CloakShown::Opaque,
+            "faded out enough to be seen"
+        );
     }
 
     #[test]
@@ -13346,5 +13390,180 @@ mod tests {
             "its row stays"
         );
         assert!(!view.escort_menu().is_open(), "no escort is flying");
+    }
+
+    /// The NPCs of [`escorted_on_a_mission`].
+    #[derive(Clone, Copy)]
+    struct Ships {
+        /// The traffic ship, ship 129.
+        traffic: NpcId,
+        /// The hired escort, ship 130, drawn as a crossed box.
+        hired: NpcId,
+        /// The mission escort, ship 129.
+        mission: NpcId,
+    }
+
+    /// [`escorted`]'s flight with mission 140's one ship of düde 128
+    /// (ship 129, whose sheet is 2001) escorting the player too, as
+    /// `ShipBehav` 1, set up with the system, and room for a traffic ship
+    /// beside it: in NPC order the mission escort, the traffic ship and
+    /// the hired escort.
+    fn escorted_on_a_mission() -> (View, Ships) {
+        let mut catalog = boardable();
+        for record in &mut catalog.ships {
+            if record.id == ShipId(130) {
+                record.escort_type = 2;
+                record.inherent_ai = 3;
+            }
+        }
+        // Room for a traffic ship beside the mission's.
+        for (_, traffic) in &mut catalog.traffic {
+            traffic.avg_ships = 2;
+        }
+        catalog.missions = vec![MissionRecord {
+            ships: MissionShip {
+                count: 1,
+                syst: -1,
+                dude: Some(nova_sim::DudeId(128)),
+                behav: 1,
+                start: 0,
+                ..MissionShip::NONE
+            },
+            ..errand(140)
+        }];
+        let pilot = with_escorts(&Pilot::new(&catalog, "Escorted").expect("starts"), &[130]);
+        let (_, chance) = scripted(&placed(750, 650, 0));
+        let mut view = FlightView::with_pilot(catalog, pilot)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        run_set(&mut view, "S140");
+        settle_session(&mut view);
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        let find = |is: fn(&Npc) -> bool| {
+            let found: Vec<NpcId> = session
+                .npcs()
+                .iter()
+                .filter(|npc| is(npc))
+                .map(|npc| npc.id)
+                .collect();
+            assert_eq!(found.len(), 1, "{:?}", session.npcs());
+            found[0]
+        };
+        let ships = Ships {
+            traffic: find(|npc| !npc.escorts_player()),
+            hired: find(|npc| npc.escort.is_some()),
+            mission: find(Npc::mission_escort),
+        };
+        assert_eq!(session.npcs().len(), 3);
+        let order: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(
+            order,
+            [ships.mission, ships.traffic, ships.hired],
+            "the traffic ship between the escorts in NPC order"
+        );
+        (view, ships)
+    }
+
+    /// Where on screen `view` draws NPC `id`.
+    fn npc_on_screen(view: &View, id: NpcId) -> Point {
+        let session = view.session().expect("flying");
+        let npc = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .expect("in the system");
+        view.camera().world_to_screen(view.shown_npc(npc).0)
+    }
+
+    /// The index in `list` of the first sprite centred on `at`, or of a
+    /// crossed box's diagonal centred on it.
+    fn drawn_at(list: &DrawList, at: Point) -> usize {
+        let near = |p: Point| (p.x - at.x).abs() < 0.01 && (p.y - at.y).abs() < 0.01;
+        list.iter()
+            .position(|command| match *command {
+                DrawCommand::Sprite { center, .. } => near(center),
+                DrawCommand::Line { from, to, .. } => near(Point::new(
+                    f32::midpoint(from.x, to.x),
+                    f32::midpoint(from.y, to.y),
+                )),
+                _ => false,
+            })
+            .unwrap_or_else(|| panic!("nothing drawn at {at:?}"))
+    }
+
+    /// The index in `list` of the player's sprite (sheet 2000).
+    fn player_drawn(list: &DrawList) -> usize {
+        list.iter()
+            .position(
+                |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 2000),
+            )
+            .expect("the player drawn")
+    }
+
+    /// Where `view` draws its traffic ship, its hired escort, its mission
+    /// escort and the player, as indices into what it draws.
+    fn ship_indices(view: &View, ships: Ships) -> [usize; 4] {
+        let list = drawn(view);
+        let at = |id| drawn_at(&list, npc_on_screen(view, id));
+        let ats = [ships.traffic, ships.hired, ships.mission].map(|id| npc_on_screen(view, id));
+        assert!(
+            ats.iter().enumerate().all(|(i, a)| ats[i + 1..]
+                .iter()
+                .all(|b| (a.x - b.x).abs() > 1.0 || (a.y - b.y).abs() > 1.0)),
+            "each ship apart: {ats:?}"
+        );
+        [
+            at(ships.traffic),
+            at(ships.hired),
+            at(ships.mission),
+            player_drawn(&list),
+        ]
+    }
+
+    #[test]
+    fn a_hired_and_a_mission_escort_draw_in_the_escorts_layer() {
+        let (view, ships) = escorted_on_a_mission();
+        let [traffic, hired, led, player] = ship_indices(&view, ships);
+        assert!(led < hired, "the escorts in NPC order: {led} {hired}");
+        assert!(hired < traffic, "under the other ships: {hired} {traffic}");
+        assert!(traffic < player, "the player on top: {traffic} {player}");
+    }
+
+    #[test]
+    fn a_disabled_ship_draws_under_the_escorts() {
+        let (mut view, ships) = escorted_on_a_mission();
+        let session = view.session.as_mut().expect("flying");
+        nova_sim::fixture::disable(session, ships.traffic);
+        let [traffic, hired, led, player] = ship_indices(&view, ships);
+        assert!(traffic < led, "{traffic} {led}");
+        assert!(led < hired && hired < player, "{led} {hired} {player}");
+    }
+
+    #[test]
+    fn cloak_alpha_maps_each_shown_state_to_a_tint_alpha() {
+        assert_eq!(cloak_alpha(CloakShown::Opaque), Some(255));
+        assert_eq!(cloak_alpha(CloakShown::Translucent(0x1e)), Some(135));
+        assert_eq!(cloak_alpha(CloakShown::Translucent(0)), Some(255));
+        assert_eq!(cloak_alpha(CloakShown::Hidden), None);
+    }
+
+    #[test]
+    fn a_fully_cloaked_escort_is_drawn_at_its_translucent_alpha() {
+        let (mut view, ships) = escorted_on_a_mission();
+        let session = view.session.as_mut().expect("flying");
+        nova_sim::fixture::cloak(session, ships.mission, CLOAKED);
+        let list = drawn(&view);
+        let at = npc_on_screen(&view, ships.mission);
+        let tint = list.iter().find_map(|command| match *command {
+            DrawCommand::Sprite {
+                image,
+                center,
+                tint,
+                ..
+            } if image.id == 2001 && center == at => Some(tint),
+            _ => None,
+        });
+        assert_eq!(tint.map(|tint| tint.a), Some(135));
     }
 }
