@@ -22,10 +22,13 @@ impl Session {
         RadarGear::of(&self.pilot.outfits, &self.outfits)
     }
 
-    /// What IFF shows `npc` as ([`iff::ship_iff`]).
+    /// What IFF shows `npc` as ([`iff::ship_iff`]), led by its
+    /// [`leader`](Npc::leader) if that is still in the system: green too
+    /// for a fighter of the player's escort, whose parent's parent is the
+    /// player.
     #[must_use]
     pub fn ship_iff(&self, npc: &Npc) -> ShipIff {
-        iff::ship_iff(npc)
+        iff::ship_iff(npc, npc.leader.and_then(|id| self.npc(id)))
     }
 
     /// What IFF shows `stellar` as, one of the stellars shown, as its
@@ -152,6 +155,85 @@ mod tests {
             session.ship_iff(&npc(1, ShipStats::default())),
             ShipIff::Other
         );
+    }
+
+    fn hired(id: u32) -> Npc {
+        Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: None,
+            }),
+            ..npc(id, ShipStats::default())
+        }
+    }
+
+    /// A fighter `carrier` launched, as `Session::join_carrier` builds
+    /// it: led by the carrier (one with no lead of its own), with no
+    /// escort duty and no mission.
+    fn fighter_of(session: &mut Session, carrier: Npc) -> Npc {
+        let carrier = session.traffic.add_npc(carrier);
+        Npc {
+            leader: Some(carrier),
+            carrier: Some(crate::bay::Carrier {
+                ship: crate::ShipRef::Npc(carrier),
+                window: 100.0,
+                reach: 30.0,
+            }),
+            ..npc(9, ShipStats::default())
+        }
+    }
+
+    #[test]
+    fn a_fighter_of_the_players_escort_is_an_escort() {
+        // `_ColorCodeShip` @0x4b80-0x4b8f: its parent's parent is the
+        // player.
+        let mut session = session(&radar_catalog());
+        let fighter = fighter_of(&mut session, hired(1));
+        assert_eq!(fighter.escort, None);
+        assert_eq!(session.ship_iff(&fighter), ShipIff::Escort);
+        let mission = Npc {
+            mission: Some(crate::traffic::npc::MissionMark {
+                slot: 0,
+                behav: crate::mission::ships::ShipBehav::EscortPlayer,
+                formation: Some(crate::escort::FormationSlot::default()),
+            }),
+            ..npc(2, ShipStats::default())
+        };
+        let fighter = fighter_of(&mut session, mission);
+        assert_eq!(
+            session.ship_iff(&fighter),
+            ShipIff::Escort,
+            "a mission escort's"
+        );
+    }
+
+    #[test]
+    fn a_fighter_of_another_ship_is_other() {
+        let mut session = session(&radar_catalog());
+        let fighter = fighter_of(&mut session, npc(1, ShipStats::default()));
+        assert_eq!(session.ship_iff(&fighter), ShipIff::Other);
+        let orphan = Npc {
+            leader: Some(crate::NpcId(40)),
+            ..fighter
+        };
+        assert_eq!(session.ship_iff(&orphan), ShipIff::Other, "its lead gone");
+    }
+
+    #[test]
+    fn the_players_own_fighter_is_an_escort() {
+        // `_ColorCodeShip` @0x4b46-0x4b7e: its parent is the player. The
+        // player's fighter joins the fleet with an escort's duty
+        // (`Session::join_as_fighter`).
+        let session = session(&radar_catalog());
+        let fighter = Npc {
+            carrier: Some(crate::bay::Carrier {
+                ship: crate::ShipRef::Player,
+                window: 100.0,
+                reach: 30.0,
+            }),
+            ..hired(1)
+        };
+        assert_eq!(session.ship_iff(&fighter), ShipIff::Escort);
     }
 
     #[test]

@@ -34,10 +34,14 @@
 //! ever is; disabled (`_IsDisabled` @0x2ce6, whose armour test also holds
 //! for a ship breaking up) dark grey (@0x4b14-0x4b25); a threat
 //! (`_IsThreatToPlayer` @0x7f501, ours [`Npc::threatens_player`]) red
-//! (@0x4b27-0x4b44); an escort (its parent the player and defending no
-//! stellar, or its parent's parent the player; ours
-//! [`Npc::escorts_player`]) green (@0x4b46-0x4b8f); anything else blue
-//! (@0x4b91-0x4b9c).
+//! (@0x4b27-0x4b44); an escort green (@0x4b46-0x4b8f); anything else
+//! blue (@0x4b91-0x4b9c). An escort is a ship whose parent (+0x9a) is the
+//! player and that defends no stellar, or whose parent's parent is the
+//! player (@0x4b80-0x4b8f): ours, a ship that
+//! [escorts the player](Npc::escorts_player) (a hired or captured escort,
+//! the player's own fighter, a mission escort), or one whose leader does
+//! (an escort's fighter, which `Session::join_carrier` leads by the
+//! escort and gives no escort duty).
 //!
 //! Left out: the escort test's defender case (@0x4b52-0x4b7c), a ship
 //! led by the player that defends a stellar. Ours has no such ship.
@@ -140,15 +144,16 @@ pub enum ShipIff {
     Other,
 }
 
-/// What IFF shows `npc` as, tested in `_ColorCodeShip`'s order (see the
-/// module docs).
+/// What IFF shows `npc` as, led by `leader` (the ship its
+/// [`leader`](Npc::leader) names, if it is in the system), tested in
+/// `_ColorCodeShip`'s order (see the module docs).
 #[must_use]
-pub fn ship_iff(npc: &Npc) -> ShipIff {
+pub fn ship_iff(npc: &Npc, leader: Option<&Npc>) -> ShipIff {
     if matches!(npc.condition, Condition::Disabled | Condition::Dying { .. }) {
         ShipIff::Disabled
     } else if npc.threatens_player() {
         ShipIff::Threat
-    } else if npc.escorts_player() {
+    } else if npc.escorts_player() || leader.is_some_and(Npc::escorts_player) {
         ShipIff::Escort
     } else {
         ShipIff::Other
@@ -364,24 +369,24 @@ mod tests {
                 condition,
                 ..attacking(hired())
             };
-            assert_eq!(ship_iff(&npc), ShipIff::Disabled, "{condition:?}");
+            assert_eq!(ship_iff(&npc, None), ShipIff::Disabled, "{condition:?}");
         }
     }
 
     #[test]
     fn a_ship_attacking_the_player_is_a_threat_even_an_escort() {
-        assert_eq!(ship_iff(&attacking(ship())), ShipIff::Threat);
-        assert_eq!(ship_iff(&attacking(hired())), ShipIff::Threat);
+        assert_eq!(ship_iff(&attacking(ship()), None), ShipIff::Threat);
+        assert_eq!(ship_iff(&attacking(hired()), None), ShipIff::Threat);
         let elsewhere = Npc {
             goal: Goal::Attack(ShipRef::Npc(NpcId(9))),
             ..ship()
         };
-        assert_eq!(ship_iff(&elsewhere), ShipIff::Other);
+        assert_eq!(ship_iff(&elsewhere, None), ShipIff::Other);
     }
 
     #[test]
     fn a_hired_or_mission_escort_is_an_escort() {
-        assert_eq!(ship_iff(&hired()), ShipIff::Escort);
+        assert_eq!(ship_iff(&hired(), None), ShipIff::Escort);
         let mission = Npc {
             mission: Some(MissionMark {
                 slot: 0,
@@ -390,17 +395,42 @@ mod tests {
             }),
             ..ship()
         };
-        assert_eq!(ship_iff(&mission), ShipIff::Escort);
+        assert_eq!(ship_iff(&mission, None), ShipIff::Escort);
     }
 
     #[test]
     fn any_other_ship_is_other_led_by_an_npc_too() {
-        assert_eq!(ship_iff(&ship()), ShipIff::Other);
+        assert_eq!(ship_iff(&ship(), None), ShipIff::Other);
         let led = Npc {
             leader: Some(NpcId(7)),
             ..ship()
         };
-        assert_eq!(ship_iff(&led), ShipIff::Other);
+        assert_eq!(ship_iff(&led, Some(&ship())), ShipIff::Other);
+    }
+
+    #[test]
+    fn a_ship_led_by_the_players_escort_is_an_escort() {
+        // Its parent's parent is the player (@0x4b80-0x4b8f): an
+        // escort's fighter, which has no escort duty of its own.
+        let fighter = Npc {
+            leader: Some(NpcId(1)),
+            ..npc(2, ShipStats::default())
+        };
+        assert_eq!(ship_iff(&fighter, Some(&hired())), ShipIff::Escort);
+        assert_eq!(
+            ship_iff(&attacking(fighter.clone()), Some(&hired())),
+            ShipIff::Threat,
+            "a threat first"
+        );
+        let disabled = Npc {
+            condition: Condition::Disabled,
+            ..fighter
+        };
+        assert_eq!(
+            ship_iff(&disabled, Some(&hired())),
+            ShipIff::Disabled,
+            "disabled first"
+        );
     }
 
     // Stellars.
