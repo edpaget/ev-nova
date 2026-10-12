@@ -509,6 +509,41 @@ mod tests {
     }
 
     #[test]
+    fn a_crons_end_reads_the_sessions_rules() {
+        let ending = CronRecord {
+            post_holdoff: 5,
+            ..scripted(128, 1, "b10", "!b10")
+        };
+        let catalog = timing(vec![ending]);
+        let engine =
+            Rulebook::default().with_override(RuleKey::CronPostHoldoff, RuleSource::Engine);
+        let mut session = quiet(&catalog).with_rules(engine);
+        session.let_days_pass(2, &mut NeverFires);
+        assert!(!session.control_bit(bit(10)), "its OnEnd");
+        session.set_control_bit(bit(10), true);
+        session.let_days_pass(1, &mut NeverFires);
+        assert!(!session.control_bit(bit(10)), "its OnEnd again");
+        let held = CronState {
+            days: -1,
+            holdoff: 0,
+        };
+        assert_eq!(session.pilot().crons().get(&CronId(128)), Some(&held));
+        let pilot = save::decode(&save::encode(session.pilot())).expect("loads");
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(
+            session.pilot().crons().get(&CronId(128)),
+            Some(&held),
+            "kept through a save"
+        );
+
+        let mut session = quiet(&catalog);
+        session.let_days_pass(2, &mut NeverFires);
+        session.set_control_bit(bit(10), true);
+        session.let_days_pass(1, &mut NeverFires);
+        assert!(session.control_bit(bit(10)), "in its post-holdoff");
+    }
+
+    #[test]
     fn a_save_naming_a_missing_cron_flies_with_it_inactive() {
         let catalog = FakePilotCatalog {
             crons: vec![cron(128)],
