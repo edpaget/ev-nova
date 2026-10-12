@@ -5,8 +5,9 @@
 //!
 //! - A ship is targetable ([`targetable`]) while it is intact or
 //!   disabled: a ship breaking up or destroyed is not (`_IsDying`). Target
-//!   Select skips the player's hired escorts ([`candidate`]), and Closest
-//!   Target every ship the player leads, mission escorts too ([`nearest`]).
+//!   Select skips the escort class (the player's hired escorts and the
+//!   ships they lead, see below), and Closest Target every ship the
+//!   player leads, mission escorts too ([`nearest`]).
 //!   A cloaked ship ([`Cloak::is_cloaked`](crate::cloak::Cloak::is_cloaked))
 //!   other than the player's escort is not targetable, and a target that
 //!   cloaks is let go, unless the player can target cloaked ships (a cloak
@@ -23,16 +24,26 @@
 //!   searches @0xa42d-0xa918, `_FindNextShipInSystem` @0xa801), and a
 //!   target emerging is let go (`_HandlePlayer` @0x686a4); once it bursts
 //!   out of the gate it is a candidate again.
-//! - Escort Select (Option-Tab here) walks the player's escorts alone,
-//!   in the same order, from the one after the target, and does not wrap
-//!   ([`next_escort`]).
 //! - Target Select (Tab, `_FindNextShipInSystem` @0xa5b1, its caller
-//!   @0x69f1c-0x69ff5) walks the ship slots in order, from the one after
-//!   the target, or from the first with none, and does not wrap: past the
-//!   last it gives none. Here the slots are the NPCs in the order they
-//!   appeared, whose [`NpcId`]s only grow and are never reused, so
-//!   [`next`] is the first candidate numbered after the target, or the
-//!   first with none, even when the target itself has gone.
+//!   `_HandlePlayer` @0x69f1c-0x69ffb) walks the ship table up, in
+//!   [`Npc::berth`] order (a tie, which the original's table cannot
+//!   have, going to the NPC that appeared first), from the one after the
+//!   target, or from the first with none ([`next`]). Shift-Tab
+//!   (`_FindPrevShipInSystem` @0xa1dd, `_QuickKeyCheck(0x38)` @0x69f74)
+//!   walks it down, from the one before the target, or from the last with
+//!   none ([`previous`]). Neither wraps: past the end the target becomes
+//!   none, and the next press starts again from the other end. A target
+//!   no longer in the system counts as none.
+//! - Escort Select (Option-Tab, Shift-Option-Tab back; `_KeyCheck(0x3a)`
+//!   @0xa5c8) walks the escort class alone, the same way ([`next_escort`],
+//!   [`previous_escort`]), and Target Select every other ship
+//!   (@0xa755-0xa854). The escort class (the original's `E`,
+//!   @0xa6c1-0xa728) is the player's hired escorts and the ships with no
+//!   mission mark that one leads, such as a hired escort's fighter
+//!   (`_LaunchFighter` @0x3d866-0x3d870); a mission escort, and a fighter
+//!   it launched, are Target Select's. A cloaked ship is skipped unless
+//!   the player can target cloaked ships, or the search is Escort Select,
+//!   which takes a cloaked ship of the escort class.
 //! - Closest Target (R, @0x6a9ab-0x6aadb) picks the candidate nearest the
 //!   player by squared distance (@0x9368-0x93ba), with no limit; only a
 //!   strictly nearer ship replaces the best, so a tie goes to the earlier.
@@ -57,11 +68,16 @@ pub enum TargetPick {
     /// leads (`_IsThreatToPlayer` @0x7f572-0x7f590,
     /// [`Npc::threatens_player_or_led`]).
     NearestThreat,
-    /// The next candidate after the target ([`next`]).
+    /// The next candidate after the target ([`next`]): Tab.
     Next,
     /// The next of the player's escorts after the target
-    /// ([`next_escort`]).
+    /// ([`next_escort`]): Option-Tab.
     NextEscort,
+    /// The candidate before the target ([`previous`]): Shift-Tab.
+    Previous,
+    /// The escort before the target ([`previous_escort`]):
+    /// Shift-Option-Tab.
+    PreviousEscort,
 }
 
 /// Whether `npc` can be targeted by a player that can target cloaked
@@ -75,14 +91,31 @@ pub fn targetable(npc: &Npc, cloaked_ok: bool) -> bool {
         && (cloaked_ok || npc.escorts_player() || !npc.cloak.is_cloaked())
 }
 
-/// Whether `npc` is a candidate for Target Select: targetable, as
-/// `cloaked_ok` says, and not one of the player's hired escorts. A
-/// mission escort is a candidate, as Target Select's escort class leaves
-/// out an active `ShipBehav` 1 ship (`_FindNextShipInSystem`
-/// @0xa6c1-0xa72b).
-#[must_use]
-pub fn candidate(npc: &Npc, cloaked_ok: bool) -> bool {
-    targetable(npc, cloaked_ok) && npc.escort.is_none()
+/// Whether `npc` is a candidate for Target Select (`escorts` false) or
+/// Escort Select (`escorts` true) among `npcs`: intact or disabled, not
+/// emerging from a gate ([`Mode::Emerging`]), not cloaked unless
+/// `cloaked_ok` or the search is Escort Select, and in the escort class
+/// ([`escort_class`]) just when the search is Escort Select
+/// (`_FindNextShipInSystem` @0xa755-0xa854).
+fn cycles(npc: &Npc, npcs: &[Npc], cloaked_ok: bool, escorts: bool) -> bool {
+    matches!(npc.condition, Condition::Intact | Condition::Disabled)
+        && !npc.emerging()
+        && (cloaked_ok || escorts || !npc.cloak.is_cloaked())
+        && escort_class(npc, npcs) == escorts
+}
+
+/// Whether `npc` is in the escort class among `npcs` (the original's
+/// `E`, `_FindNextShipInSystem` @0xa6c1-0xa728): one of the player's hired
+/// escorts, or a ship with no mission mark led by one, such as a hired
+/// escort's fighter. A mission escort is not, nor a ship it leads: a
+/// mission escort never carries an [`EscortDuty`](crate::escort::EscortDuty).
+fn escort_class(npc: &Npc, npcs: &[Npc]) -> bool {
+    npc.escort.is_some()
+        || (npc.mission.is_none()
+            && npc.leader.is_some_and(|leader| {
+                npcs.iter()
+                    .any(|ship| ship.id == leader && ship.escort.is_some())
+            }))
 }
 
 /// The ship among `npcs` that passes `filter` nearest `from`, by squared
@@ -120,34 +153,85 @@ fn nearest_candidate(npc: &Npc, cloaked_ok: bool) -> bool {
     targetable(npc, cloaked_ok) && !npc.escorts_player()
 }
 
-/// The first candidate among `npcs` numbered after `current`, or the
-/// first candidate when there is no target; none past the last. Cloaked
-/// ships are candidates when `cloaked_ok`.
+/// The first candidate among `npcs` after `current` in ship-table order,
+/// or the first candidate when there is no target; none past the last.
+/// Cloaked ships are candidates when `cloaked_ok`.
 #[must_use]
 pub fn next(npcs: &[Npc], current: Option<NpcId>, cloaked_ok: bool) -> Option<NpcId> {
-    first_after(npcs, current, |npc| candidate(npc, cloaked_ok))
-}
-
-/// The first of the player's escorts among `npcs` numbered after
-/// `current`, or the first when there is no target; none past the last.
-#[must_use]
-pub fn next_escort(npcs: &[Npc], current: Option<NpcId>) -> Option<NpcId> {
-    first_after(npcs, current, |npc| {
-        targetable(npc, false) && npc.escort.is_some()
+    walk(npcs, current, Walk::Up, |npc| {
+        cycles(npc, npcs, cloaked_ok, false)
     })
 }
 
-/// The first NPC among `npcs` passing `filter` numbered after `current`,
-/// or the first passing it when there is no target.
-fn first_after(
+/// The last candidate among `npcs` before `current` in ship-table order,
+/// or the last candidate when there is no target; none past the first.
+/// Cloaked ships are candidates when `cloaked_ok`.
+#[must_use]
+pub fn previous(npcs: &[Npc], current: Option<NpcId>, cloaked_ok: bool) -> Option<NpcId> {
+    walk(npcs, current, Walk::Down, |npc| {
+        cycles(npc, npcs, cloaked_ok, false)
+    })
+}
+
+/// The first of the player's escorts among `npcs` after `current` in
+/// ship-table order, or the first when there is no target; none past the
+/// last.
+#[must_use]
+pub fn next_escort(npcs: &[Npc], current: Option<NpcId>) -> Option<NpcId> {
+    walk(npcs, current, Walk::Up, |npc| {
+        cycles(npc, npcs, false, true)
+    })
+}
+
+/// The last of the player's escorts among `npcs` before `current` in
+/// ship-table order, or the last when there is no target; none past the
+/// first.
+#[must_use]
+pub fn previous_escort(npcs: &[Npc], current: Option<NpcId>) -> Option<NpcId> {
+    walk(npcs, current, Walk::Down, |npc| {
+        cycles(npc, npcs, false, true)
+    })
+}
+
+/// Which way a search walks the ship table.
+#[derive(Clone, Copy)]
+enum Walk {
+    /// Up the table, as `_FindNextShipInSystem` does.
+    Up,
+    /// Down the table, as `_FindPrevShipInSystem` does.
+    Down,
+}
+
+/// The nearest NPC among `npcs` passing `filter` beyond `current` in
+/// ship-table order (its [`Npc::berth`], a tie going to the one that
+/// appeared first), the way `way` goes; or the nearest the end it starts
+/// from when there is no target or the target is no longer among `npcs`.
+fn walk(
     npcs: &[Npc],
     current: Option<NpcId>,
+    way: Walk,
     filter: impl Fn(&Npc) -> bool,
 ) -> Option<NpcId> {
-    npcs.iter()
-        .filter(|npc| filter(npc))
-        .map(|npc| npc.id)
-        .find(|&id| current.is_none_or(|current| id > current))
+    let from = current
+        .and_then(|current| npcs.iter().find(|npc| npc.id == current))
+        .map(table_order);
+    let beyond = |npc: &&Npc| {
+        from.is_none_or(|from| match way {
+            Walk::Up => table_order(npc) > from,
+            Walk::Down => table_order(npc) < from,
+        })
+    };
+    let ahead = npcs.iter().filter(|npc| filter(npc)).filter(beyond);
+    match way {
+        Walk::Up => ahead.min_by_key(|npc| table_order(npc)),
+        Walk::Down => ahead.max_by_key(|npc| table_order(npc)),
+    }
+    .map(|npc| npc.id)
+}
+
+/// Where `npc` stands in the ship table: by its berth, then by its number.
+fn table_order(npc: &Npc) -> (u32, NpcId) {
+    (npc.berth, npc.id)
 }
 
 #[cfg(test)]
@@ -243,8 +327,8 @@ mod tests {
         let mut leaving = intact(2, 20.0, 0.0);
         leaving.mode = Mode::LeavingGate { tick: 1 };
         let npcs = [waiting, leaving, intact(3, 30.0, 0.0)];
-        assert!(!candidate(&npcs[0], false));
-        assert!(candidate(&npcs[1], false));
+        assert!(!cycles(&npcs[0], &npcs, false, false));
+        assert!(cycles(&npcs[1], &npcs, false, false));
         assert_eq!(nearest_(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));
         assert_eq!(nearest_(&npcs[..1], Vec2::ZERO, |_| true), None);
         assert_eq!(next(&npcs, None, false), Some(NpcId(2)));
@@ -289,11 +373,69 @@ mod tests {
     }
 
     #[test]
-    fn next_after_a_target_that_has_gone_is_the_next_number_after_it() {
+    fn a_target_no_longer_in_the_system_walks_from_the_end() {
         let npcs = [intact(2, 0.0, 0.0), intact(9, 0.0, 0.0)];
-        assert_eq!(next(&npcs, Some(NpcId(5)), false), Some(NpcId(9)));
-        assert_eq!(next(&npcs, Some(NpcId(1)), false), Some(NpcId(2)));
-        assert_eq!(next(&npcs, Some(NpcId(10)), false), None);
+        assert_eq!(next(&npcs, Some(NpcId(5)), false), Some(NpcId(2)));
+        assert_eq!(previous(&npcs, Some(NpcId(5)), false), Some(NpcId(9)));
+        assert_eq!(next(&npcs, Some(NpcId(10)), false), Some(NpcId(2)));
+    }
+
+    #[test]
+    fn previous_walks_the_berths_down_from_the_last_then_gives_none() {
+        let npcs = [berthed(1, 2), berthed(2, 3), berthed(3, 1)];
+        let mut walked = Vec::new();
+        let mut current = None;
+        for _ in 0..5 {
+            current = previous(&npcs, current, false);
+            walked.push(current);
+        }
+        assert_eq!(
+            walked,
+            [
+                Some(NpcId(2)),
+                Some(NpcId(1)),
+                Some(NpcId(3)),
+                None,
+                Some(NpcId(2))
+            ]
+        );
+        assert_eq!(previous(&[], None, false), None);
+        let tied = [berthed(4, 1), berthed(6, 1)];
+        assert_eq!(previous(&tied, None, false), Some(NpcId(6)));
+        assert_eq!(previous(&tied, Some(NpcId(6)), false), Some(NpcId(4)));
+    }
+
+    #[test]
+    fn previous_escort_walks_the_escorts_down() {
+        let npcs = [
+            berthed_escort(1, 1),
+            berthed(2, 2),
+            berthed_escort(4, 3),
+            berthed(5, 4),
+            berthed_escort(7, 5),
+        ];
+        let mut walked = Vec::new();
+        let mut current = None;
+        for _ in 0..5 {
+            current = previous_escort(&npcs, current);
+            walked.push(current);
+        }
+        assert_eq!(
+            walked,
+            [
+                Some(NpcId(7)),
+                Some(NpcId(4)),
+                Some(NpcId(1)),
+                None,
+                Some(NpcId(7))
+            ]
+        );
+        assert_eq!(
+            previous_escort(&npcs, Some(NpcId(5))),
+            Some(NpcId(4)),
+            "before a non-escort"
+        );
+        assert_eq!(previous_escort(&npcs[1..2], None), None);
     }
 
     #[test]
@@ -408,6 +550,96 @@ mod tests {
             "after a non-escort"
         );
         assert_eq!(next_escort(&npcs[1..2], None), None);
+    }
+
+    /// NPC `id` at ship-table `berth`, intact.
+    fn berthed(id: u32, berth: u32) -> Npc {
+        let mut npc = intact(id, 0.0, 0.0);
+        npc.berth = berth;
+        npc
+    }
+
+    /// NPC `id` at ship-table `berth`, the player's escort.
+    fn berthed_escort(id: u32, berth: u32) -> Npc {
+        let mut npc = escort(id, 0.0, 0.0);
+        npc.berth = berth;
+        npc
+    }
+
+    #[test]
+    fn next_and_next_escort_reach_a_lower_berth_before_a_lower_id() {
+        let npcs = [berthed(2, 3), berthed(5, 1)];
+        assert_eq!(next(&npcs, None, false), Some(NpcId(5)));
+        assert_eq!(next(&npcs, Some(NpcId(5)), false), Some(NpcId(2)));
+        assert_eq!(next(&npcs, Some(NpcId(2)), false), None);
+        let escorts = [berthed_escort(2, 3), berthed_escort(5, 1)];
+        assert_eq!(next_escort(&escorts, None), Some(NpcId(5)));
+        assert_eq!(next_escort(&escorts, Some(NpcId(5))), Some(NpcId(2)));
+        assert_eq!(next_escort(&escorts, Some(NpcId(2))), None);
+    }
+
+    /// NPC `id` at ship-table `berth`, a fighter `leader` launched: led
+    /// by it, with no duty of its own (as `join_carrier` makes one).
+    fn fighter_of(id: u32, berth: u32, leader: u32) -> Npc {
+        let mut npc = berthed(id, berth);
+        npc.leader = Some(NpcId(leader));
+        npc
+    }
+
+    #[test]
+    fn a_hired_escorts_fighter_is_option_tabs_and_not_tabs() {
+        let npcs = [berthed_escort(1, 1), fighter_of(2, 2, 1), berthed(3, 3)];
+        assert_eq!(next(&npcs, None, false), Some(NpcId(3)));
+        assert_eq!(next(&npcs, Some(NpcId(3)), false), None);
+        assert_eq!(previous(&npcs, None, false), Some(NpcId(3)));
+        assert_eq!(previous(&npcs, Some(NpcId(3)), false), None);
+        assert_eq!(next_escort(&npcs, Some(NpcId(1))), Some(NpcId(2)));
+        assert_eq!(previous_escort(&npcs, None), Some(NpcId(2)));
+    }
+
+    #[test]
+    fn a_fighter_led_by_a_mission_escort_and_a_mission_ship_led_by_an_escort_are_tabs() {
+        let mut ours = mission_escort(1, 0.0, 0.0);
+        ours.berth = 1;
+        let mut aboard = fighter_of(4, 4, 3);
+        aboard.mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::Own,
+            formation: None,
+        });
+        let npcs = [ours, fighter_of(2, 2, 1), berthed_escort(3, 3), aboard];
+        let mut walked = Vec::new();
+        let mut current = None;
+        for _ in 0..4 {
+            current = next(&npcs, current, false);
+            walked.push(current);
+        }
+        assert_eq!(
+            walked,
+            [Some(NpcId(1)), Some(NpcId(2)), Some(NpcId(4)), None]
+        );
+        assert_eq!(next_escort(&npcs, None), Some(NpcId(3)));
+        assert_eq!(next_escort(&npcs, Some(NpcId(3))), None);
+        let led_by_traffic = [berthed(5, 1), fighter_of(6, 2, 5)];
+        assert_eq!(next(&led_by_traffic, Some(NpcId(5)), false), Some(NpcId(6)));
+        assert_eq!(next_escort(&led_by_traffic, None), None);
+    }
+
+    #[test]
+    fn tab_passes_over_a_cloaked_mission_escort_without_the_scanner_and_option_tab_takes_a_cloaked_escorts_fighter()
+     {
+        let mut ours = mission_escort(1, 0.0, 0.0);
+        ours.cloak = cloaked(1, 0.0, 0.0).cloak;
+        let npcs = [ours, berthed(2, 2)];
+        assert_eq!(next(&npcs, None, false), Some(NpcId(2)));
+        assert_eq!(previous(&npcs, Some(NpcId(2)), false), None);
+        assert_eq!(next(&npcs, None, true), Some(NpcId(1)));
+        let mut hidden = fighter_of(4, 2, 3);
+        hidden.cloak = cloaked(4, 0.0, 0.0).cloak;
+        let escorts = [berthed_escort(3, 1), hidden];
+        assert_eq!(next_escort(&escorts, Some(NpcId(3))), Some(NpcId(4)));
+        assert_eq!(next(&escorts, None, false), None);
     }
 
     /// [`intact`], cloaked.

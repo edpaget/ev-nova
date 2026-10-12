@@ -1765,7 +1765,8 @@ impl Session {
     /// Picks the player's target as `pick` says (see
     /// [`targeting`](crate::targeting)), and gives it: the nearest NPC, or
     /// the nearest threat, the target unchanged when there is none; or the
-    /// next. While the ship is landed or jumping, nothing changes.
+    /// next or the previous. While the ship is landed or jumping, nothing
+    /// changes.
     pub fn select_target(&mut self, pick: TargetPick) -> Option<NpcId> {
         if self.landed.is_none() && self.jumping().is_none() {
             let cloaked_ok = self.scanner().targets;
@@ -1785,6 +1786,12 @@ impl Session {
                 TargetPick::Next => self.target = targeting::next(npcs, self.target, cloaked_ok),
                 TargetPick::NextEscort => {
                     self.target = targeting::next_escort(npcs, self.target);
+                }
+                TargetPick::Previous => {
+                    self.target = targeting::previous(npcs, self.target, cloaked_ok);
+                }
+                TargetPick::PreviousEscort => {
+                    self.target = targeting::previous_escort(npcs, self.target);
                 }
             }
         }
@@ -14233,11 +14240,42 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn target_select_reaches_a_ship_that_filled_a_freed_berth_first() {
+        let catalog = trafficked(130, 2, 3);
+        let mut session = Session::start(&catalog).expect("starts");
+        let ship = || crate::testkit::npc(0, crate::stats::ShipStats::default());
+        for _ in 0..3 {
+            session.traffic.add_npc(ship());
+        }
+        session.traffic.remove(NpcId(0));
+        assert_eq!(session.traffic.add_npc(ship()), NpcId(3));
+        assert_eq!(session.npc(NpcId(3)).map(|npc| npc.berth), Some(1));
+        let walk = |session: &mut Session, pick| -> Vec<Option<NpcId>> {
+            session.target = None;
+            (0..4).map(|_| session.select_target(pick)).collect()
+        };
+        let up = [Some(NpcId(3)), Some(NpcId(1)), Some(NpcId(2)), None];
+        let down = [Some(NpcId(2)), Some(NpcId(1)), Some(NpcId(3)), None];
+        assert_eq!(walk(&mut session, TargetPick::Next), up);
+        assert_eq!(walk(&mut session, TargetPick::Previous), down);
+        for npc in session.traffic.npcs_mut() {
+            npc.escort = Some(EscortDuty {
+                formation: FormationSlot::default(),
+                order: None,
+            });
+        }
+        assert_eq!(walk(&mut session, TargetPick::Next), [None; 4]);
+        assert_eq!(walk(&mut session, TargetPick::NextEscort), up);
+        assert_eq!(walk(&mut session, TargetPick::PreviousEscort), down);
+    }
+
+    #[test]
     fn nothing_is_targeted_while_landed() {
         let catalog = trafficked(130, 2, 3);
         let mut session = two_npcs(&catalog);
         land_now(&mut session).expect("lands on planet 128");
         assert_eq!(session.select_target(TargetPick::Next), None);
+        assert_eq!(session.select_target(TargetPick::Previous), None);
         assert_eq!(session.select_target(TargetPick::Nearest), None);
         assert_eq!(target_id(&session), None);
     }
