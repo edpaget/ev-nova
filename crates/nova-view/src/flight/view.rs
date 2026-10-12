@@ -10342,6 +10342,24 @@ mod tests {
     }
 
     #[test]
+    fn option_released_during_the_jump_lets_c_recall() {
+        let mut view = fighters_out();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        tap(&mut view, ESCORT_HOLD_KEY);
+        jump_now(&mut view);
+        view.input(&key(Key::Alt, true));
+        view.tick(ms(300));
+        view.input(&key(Key::Alt, false));
+        tap(&mut view, ESCORT_RECALL_KEY);
+        assert_eq!(orders(&view), [None; 2], "C alone: formation, not Dock");
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  All ships will return to formation.")
+        );
+    }
+
+    #[test]
     fn the_escort_menu_times_out_during_the_streak() {
         // How long the ship brakes and turns, timed on a twin.
         let mut twin = escorted_out();
