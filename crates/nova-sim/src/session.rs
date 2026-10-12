@@ -19215,6 +19215,27 @@ mod tests {
     }
 
     #[test]
+    fn a_pilot_saved_landed_in_a_system_its_load_hides_stays_landed_until_the_take_off() {
+        let catalog = alternates();
+        let mut pilot = landed_at_140();
+        // Saved while 131 was shown: only the load's refresh hides it, so
+        // the refresh, not the load's first look at the saved flags, moves
+        // the player.
+        pilot.bits_mut().set(hiding_bit(131));
+        assert_eq!(pilot.galaxy.system(SystemId(131)).visible, None);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert!(!session.galaxy().visible(SystemId(131)));
+        session.assert_docked_among_shown();
+        assert_eq!(session.system(), SystemId(134), "the one at its place");
+        assert_eq!(session.landed(), Some(StellarId(140)), "still landed");
+        assert_eq!(session.pilot().stellar, Some(StellarId(140)));
+        assert_eq!(session.sites, [planet(140, 0.0, 0.0)], "its spaceport's");
+        assert_eq!(session.take_events(), [], "silently");
+        assert!(!session.take_save_due(), "nothing to save");
+        takes_off_into_134(&mut session);
+    }
+
+    #[test]
     fn with_no_system_visible_at_its_place_the_player_goes_to_the_head_made_visible() {
         let catalog = alternates();
         let mut session = resolving(&catalog, RuleSource::Bible);
