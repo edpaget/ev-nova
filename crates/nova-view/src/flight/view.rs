@@ -2723,20 +2723,18 @@ impl<C> FlightView<C> {
         }
     }
 
-    /// A press of `key`, if it picks an escort group or works the stellar
-    /// navigation target. While the escort menu is open, 1-5 pick its
-    /// groups ([`GROUP_KEYS`]); otherwise 1-4, like F1-F4 always, select
-    /// the stellar in their slot ([`STELLAR_SLOT_KEYS`]). F5 selects the
-    /// nearest ([`NEAREST_STELLAR_KEY`]) and Nav Off clears it
-    /// ([`NAV_OFF_KEY`]).
+    /// A press of `key`, if it works the stellar navigation target. 1-4,
+    /// like F1-F4, select the stellar in their slot
+    /// ([`STELLAR_SLOT_KEYS`]); while the escort menu is open, 1-5 pick
+    /// its groups instead and never reach here ([`FlightView::escort_key`]).
+    /// F5 selects the nearest ([`NEAREST_STELLAR_KEY`]) and Nav Off
+    /// clears it ([`NAV_OFF_KEY`]).
     fn nav_key(&mut self, key: Key) {
-        let group = GROUP_KEYS.iter().position(|&group| group == key);
         let slot = STELLAR_SLOT_KEYS
             .iter()
             .position(|keys| keys.contains(&key));
-        match (group, slot) {
-            (Some(n), _) if self.escort_menu.is_open() => self.select_escort_group(n),
-            (_, Some(slot)) => self.select_stellar(StellarPick::Slot(slot)),
+        match slot {
+            Some(slot) => self.select_stellar(StellarPick::Slot(slot)),
             _ if key == NEAREST_STELLAR_KEY => self.select_stellar(StellarPick::Nearest),
             _ if key == NAV_OFF_KEY => {
                 if let Ok(session) = &mut self.session {
