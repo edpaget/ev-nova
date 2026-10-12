@@ -729,7 +729,6 @@ mod tests {
         session.take_combat_events();
         launch(&mut session);
         assert_eq!(session.pilot().owned(VIPERS), 1, "a fighter launched");
-        assert_eq!(session.secondary_rounds(), Some(1));
         assert_eq!(session.secondary_line_count(), Some(1), "the bay's own");
         let fighters = fleet_npcs(&session);
         assert_eq!(fighters.len(), 1);
@@ -1103,7 +1102,7 @@ mod tests {
             npc.state.position = npc.state.position + Vec2::new(300.0, 0.0);
         }
         session.take_save_due();
-        assert_eq!(session.secondary_rounds(), Some(0));
+        assert_eq!(session.secondary_line_count(), Some(0));
         session.command_escorts(EscortGroup::All, EscortCommand::Dock);
         let ticks = until_docked(&mut session, &catalog, 600);
         assert!(ticks.is_some(), "{:?}", fleet_npcs(&session));
@@ -1117,7 +1116,7 @@ mod tests {
             "the rest re-form"
         );
         assert_eq!(session.pilot().owned(VIPERS), 2, "aboard again");
-        assert_eq!(session.secondary_rounds(), Some(2));
+        assert_eq!(session.secondary_line_count(), Some(2));
         assert!(!session.take_save_due(), "as rounds are");
     }
 

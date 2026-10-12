@@ -1474,20 +1474,6 @@ impl Session {
         self.secondary
     }
 
-    /// The rounds the selected secondary has left, for one that fires
-    /// rounds of ammunition; none for one that fires without, or burns
-    /// fuel.
-    #[must_use]
-    pub fn secondary_rounds(&self) -> Option<u32> {
-        let spec = self.arsenal.weapon(self.secondary?)?;
-        match spec.ammo {
-            Ammo::Rounds(ammo) => {
-                Some(outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, ammo))
-            }
-            _ => None,
-        }
-    }
-
     /// The count the status bar's secondary weapon line shows after the
     /// selected secondary's name, if any: the rounds of the weapon its
     /// [`line_count`](crate::combat::weapon::line_count) names, as
@@ -10990,7 +10976,7 @@ mod tests {
         assert_eq!(session.secondary(), None);
         session.select_secondary(false);
         assert_eq!(session.secondary(), Some(WeaponId(138)));
-        assert_eq!(session.secondary_rounds(), Some(20));
+        assert_eq!(session.secondary_line_count(), Some(20));
         let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
         assert_eq!(
             outfitter.free_mass,
@@ -14349,15 +14335,15 @@ mod tests {
         let armed = with_secondaries(catalog());
         let mut session = Session::start(&armed).expect("starts");
         assert_eq!(session.secondary(), None, "as _ResetPlayer leaves it");
-        assert_eq!(session.secondary_rounds(), None);
+        assert_eq!(session.secondary_line_count(), None);
         session.select_secondary(false);
         assert_eq!(session.secondary(), Some(ROCKET));
         let reloaded = Session::fly(&armed, session.pilot().clone()).expect("flies");
         assert_eq!(reloaded.secondary(), None, "not saved");
-        assert_eq!(reloaded.secondary_rounds(), None);
+        assert_eq!(reloaded.secondary_line_count(), None);
         let unarmed = Session::start(&catalog()).expect("starts");
         assert_eq!(unarmed.secondary(), None);
-        assert_eq!(unarmed.secondary_rounds(), None);
+        assert_eq!(unarmed.secondary_line_count(), None);
     }
 
     #[test]
@@ -14416,20 +14402,6 @@ mod tests {
             [],
             "none selected"
         );
-    }
-
-    #[test]
-    fn the_secondarys_rounds_follow_its_ammunition() {
-        let mut session = Session::start(&with_secondaries(catalog())).expect("starts");
-        session.select_secondary(false);
-        assert_eq!(session.secondary_rounds(), Some(3));
-        session.hold_fire(false, true);
-        session.tick_combat(Rules::default(), &mut NeverFires);
-        assert_eq!(session.secondary_rounds(), Some(2));
-        session.select_secondary(false);
-        assert_eq!(session.secondary_rounds(), None, "missiles: unlimited");
-        session.select_secondary(false);
-        assert_eq!(session.secondary_rounds(), None, "a torch burns fuel");
     }
 
     #[test]
@@ -16035,7 +16007,7 @@ mod tests {
         let session = ammo_session(&ammo_aboard(1, 20));
         let mut by_rounds = session.clone();
         by_rounds.select_secondary(false);
-        assert_eq!(by_rounds.secondary_rounds(), Some(0));
+        assert_eq!(by_rounds.secondary_line_count(), Some(0));
         assert_eq!(
             take(&mut by_rounds, Take::Ammo, &[]).0,
             Taken::Ammo {
@@ -16044,7 +16016,7 @@ mod tests {
             }
         );
         assert_eq!(by_rounds.pilot().owned(OutfitId(310)), 9);
-        assert_eq!(by_rounds.secondary_rounds(), Some(9), "refitted");
+        assert_eq!(by_rounds.secondary_line_count(), Some(9), "refitted");
         assert_eq!(by_rounds.boarding().map(|view| view.ammo), Some(None));
         // 30 tons free: seven of 4 tons, not eight.
         let mut by_mass = ammo_session(&ammo_aboard(4, 20));
