@@ -9,10 +9,20 @@
 //! runs at 30 frames a second, about 2 Mac ticks a frame, so the test
 //! passes on the 8th frame after the last refresh: [`RADAR_PERIOD_TICKS`].
 //!
-//! The nav area (`TickCount() % 30 == 0`, @0x4c899-0x4c8b6) and the target
-//! panel (`TickCount() % 45 == 0`, @0x4c8c2-0x4c8eb, with its shield and
-//! type check inside the radar's block, @0x4c963-0x4c9b5) are timed here
-//! by hud-fidelity phases 4 and 5.
+//! The nav area is redrawn when `TickCount() % 30 == 0`
+//! (@0x4c899-0x4c8b6): at 2 Mac ticks a frame, on every 15th engine tick,
+//! [`NAV_PERIOD_TICKS`]. Ours refreshes it on the first frame whose tick
+//! passes a multiple of 15 since the last frame (`(last, now]` holds
+//! one), not on `now % 15 == 0`: the original's fixed 2-tick frame lands
+//! on every multiple, and the crossing test keeps that when our frames
+//! skip ticks, without refreshing twice when a frame repeats a tick. The
+//! original skips this redraw while the nav system is off (+0x6a == −1,
+//! @0x4c892), which changes nothing seen: "Nav System Off" cannot change
+//! without a selection change, which redraws the area at once.
+//!
+//! The target panel (`TickCount() % 45 == 0`, @0x4c8c2-0x4c8eb, with its
+//! shield and type check inside the radar's block, @0x4c963-0x4c9b5) is
+//! timed here by hud-fidelity phase 5.
 //!
 //! `_RedrawStatus` (@0x4cac0) redraws everything at once but leaves the
 //! time and the blink as they are; the view does the same by taking a
@@ -28,29 +38,50 @@
 /// (0.25 s) is 7.5 frames, and the `>=` test passes on the 8th (≈0.267 s).
 pub const RADAR_PERIOD_TICKS: u64 = 8;
 
+/// Engine ticks between nav area refreshes: `TickCount() % 30 == 0`
+/// (@0x4c899-0x4c8b6) at 2 Mac ticks an engine tick, 0.5 s.
+pub const NAV_PERIOD_TICKS: u64 = 15;
+
+/// Which parts of the HUD a [`HudCadence::advance`] refreshes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HudRefresh {
+    /// The radar, which flips the blink.
+    pub radar: bool,
+    /// The nav area.
+    pub nav: bool,
+}
+
 /// The HUD's refresh timer and the target's blink.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HudCadence {
     /// The engine tick of the last radar refresh, `None` before the first.
     last_radar: Option<u64>,
+    /// The engine tick of the last advance, `None` before the first.
+    last_tick: Option<u64>,
     /// Whether the target shows bright: `_radarCount` ≠ 0. Off at first,
     /// as `_InitStatus` (@0x49470) zeroes it.
     blink: bool,
 }
 
 impl HudCadence {
-    /// Moves the timer to engine tick `now`, and says whether the radar
-    /// refreshes: on the first call, then once [`RADAR_PERIOD_TICKS`] have
-    /// passed since the last refresh. A refresh flips the blink.
-    pub fn advance(&mut self, now: u64) -> bool {
-        let due = self
+    /// Moves the timer to engine tick `now`, and says what refreshes. The
+    /// radar: on the first call, then once [`RADAR_PERIOD_TICKS`] have
+    /// passed since its last refresh, flipping the blink. The nav area: on
+    /// the first call, then when a multiple of [`NAV_PERIOD_TICKS`] lies
+    /// after the last call's tick and up to `now` (see the module docs).
+    pub fn advance(&mut self, now: u64) -> HudRefresh {
+        let radar = self
             .last_radar
             .is_none_or(|last| now >= last.saturating_add(RADAR_PERIOD_TICKS));
-        if due {
+        if radar {
             self.last_radar = Some(now);
             self.blink = !self.blink;
         }
-        due
+        let nav = self
+            .last_tick
+            .is_none_or(|last| now / NAV_PERIOD_TICKS > last / NAV_PERIOD_TICKS);
+        self.last_tick = Some(now);
+        HudRefresh { radar, nav }
     }
 
     /// Whether the target shows bright.
@@ -71,7 +102,7 @@ mod tests {
         ticks
             .into_iter()
             .map(|now| {
-                let refreshed = cadence.advance(now);
+                let refreshed = cadence.advance(now).radar;
                 (now, refreshed, cadence.blink_on())
             })
             .collect()
@@ -125,7 +156,59 @@ mod tests {
     #[test]
     fn the_end_of_time_does_not_overflow() {
         let mut cadence = HudCadence::default();
-        assert!(cadence.advance(u64::MAX - 1));
-        assert!(cadence.advance(u64::MAX), "the due time saturates");
+        assert!(cadence.advance(u64::MAX - 1).radar);
+        assert!(cadence.advance(u64::MAX).radar, "the due time saturates");
+        assert!(!cadence.advance(u64::MAX).nav, "the tick repeated");
+    }
+
+    /// The ticks among `ticks` on which the nav area refreshes.
+    fn nav_refreshes(ticks: impl IntoIterator<Item = u64>) -> Vec<u64> {
+        let mut cadence = HudCadence::default();
+        ticks
+            .into_iter()
+            .filter(|&now| cadence.advance(now).nav)
+            .collect()
+    }
+
+    #[test]
+    fn the_nav_refreshes_on_every_fifteenth_tick() {
+        assert_eq!(NAV_PERIOD_TICKS, 15);
+        assert_eq!(nav_refreshes(0..=45), [0, 15, 30, 45]);
+    }
+
+    #[test]
+    fn the_nav_refreshes_first_whatever_the_tick() {
+        assert_eq!(nav_refreshes([7, 8, 14, 15, 16]), [7, 15]);
+    }
+
+    #[test]
+    fn a_frame_that_skips_past_a_multiple_still_refreshes_the_nav() {
+        assert_eq!(nav_refreshes([0, 14, 16, 29, 31, 100]), [0, 16, 31, 100]);
+    }
+
+    #[test]
+    fn a_repeated_tick_refreshes_the_nav_once() {
+        assert_eq!(nav_refreshes([0, 15, 15, 15, 30, 30]), [0, 15, 30]);
+    }
+
+    #[test]
+    fn the_nav_and_the_radar_keep_their_own_times() {
+        let mut cadence = HudCadence::default();
+        let seen: Vec<_> = [0, 8, 15, 16, 23, 30]
+            .into_iter()
+            .map(|now| cadence.advance(now))
+            .collect();
+        let refresh = |radar, nav| HudRefresh { radar, nav };
+        assert_eq!(
+            seen,
+            [
+                refresh(true, true),
+                refresh(true, false),
+                refresh(false, true),
+                refresh(true, false),
+                refresh(false, false),
+                refresh(true, true)
+            ]
+        );
     }
 }

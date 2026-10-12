@@ -86,7 +86,10 @@
 //! reading the radar shows what it held at its last refresh, every 8
 //! ticks ([`HudCadence`]) or when the original's `_RedrawStatus` would
 //! redraw it (a new system, landing, take-off, or closing the map, the
-//! comm dialog or a mission dialog); by the other, every frame. Its target blinks bright on the
+//! comm dialog or a mission dialog); by the other, every frame. The nav
+//! area likewise holds its text and colours between refreshes every 15
+//! ticks, and when `_RedrawStatus` would redraw it, but shows a change of
+//! selection at once. Its target blinks bright on the
 //! same 8 ticks either way, and it shows no stellars or ships while the
 //! ship is landed. The player's outfits give it IFF colours and a density
 //! scanner ([`Session::radar_gear`]); far from the system's centre an
@@ -337,7 +340,7 @@ use super::escorts::{
     EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, NUMBER_WORDS,
     Toggled, escort_command_message, fighters_abandoned_message,
 };
-use super::hud::{self, HudState, NavDisplay, STATUS_BAR_WIDTH, StatusBar};
+use super::hud::{self, HudState, NavDestination, NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
 use super::radar::{self, RadarScene, RadarShip, RadarStellar};
 use super::sprite::rotation_frame;
@@ -1196,6 +1199,10 @@ pub struct FlightView<C> {
     /// next under [`RuleKey::HudCadence`]'s engine reading; `None` before
     /// the first.
     radar_scene: Option<RadarScene>,
+    /// What the nav area showed at its last refresh, and the nav mode it
+    /// showed it for, which it shows until the next under
+    /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
+    nav_scene: Option<(NavMode, NavDisplay)>,
     /// The radar's static this tick, a `ppat` ID, rolled on the effects'
     /// chance ([`radar::static_frame`]); `None` without.
     radar_static: Option<i16>,
@@ -1366,6 +1373,7 @@ impl<
             escort_colors,
             hud_cadence: HudCadence::default(),
             radar_scene: None,
+            nav_scene: None,
             radar_static: None,
         }
     }
@@ -1664,31 +1672,6 @@ impl<
             self.map
                 .show_course(session.system(), &session.course_shown());
         }
-    }
-
-    /// What the HUD's nav area shows: the selected stellar, by its name in
-    /// `scene`; otherwise the next system on the course, by its name on the
-    /// map if the pilot has explored it; otherwise nothing.
-    fn nav_display(&self, scene: &SystemScene) -> NavDisplay {
-        let Ok(session) = &self.session else {
-            return NavDisplay::None;
-        };
-        if let Some(target) = session.nav_target() {
-            let name = scene.stellars().iter().find(|stellar| stellar.id == target);
-            return NavDisplay::Stellar(name.map(|s| s.name.clone()).unwrap_or_default());
-        }
-        route_shown(session).map_or(NavDisplay::None, |next| {
-            let name = session
-                .pilot()
-                .has_explored(next)
-                .then(|| self.map.model().system(next))
-                .flatten()
-                .map(|system| system.entry.name.clone());
-            NavDisplay::Hyperspace {
-                name,
-                readiness: session.jump_readiness(),
-            }
-        })
     }
 
     /// Begins a jump, or shows why not.
@@ -2216,14 +2199,60 @@ impl<C> FlightView<C> {
     /// redraws it.
     fn redraw_status(&mut self) {
         self.radar_scene = Some(self.radar_now());
+        self.retake_nav();
+    }
+
+    /// Takes the nav area's snapshot afresh.
+    fn retake_nav(&mut self) {
+        let mode = self.session.as_ref().map_or(NavMode::Off, nav_mode);
+        self.nav_scene = Some((mode, self.nav_now()));
+    }
+
+    /// What the HUD's nav area shows now, for the [`nav_mode`] (see
+    /// [`NavDisplay`]): the selected stellar, by its name in the scene
+    /// ("No Destination" for one not in it); otherwise the next system on
+    /// the course, by its name on the map if the pilot has explored it,
+    /// with whether the ship can jump there; otherwise "Nav System Off".
+    fn nav_now(&self) -> NavDisplay {
+        let Ok(session) = &self.session else {
+            return NavDisplay::Off;
+        };
+        match nav_mode(session) {
+            NavMode::Off => NavDisplay::Off,
+            NavMode::Stellar(target) => NavDisplay::Stellar(
+                self.scene
+                    .as_ref()
+                    .and_then(|scene| scene.stellars().iter().find(|s| s.id == target))
+                    .map(|stellar| stellar.name.clone()),
+            ),
+            NavMode::Hyperspace(next) => NavDisplay::Hyperspace {
+                destination: next.map_or(NavDestination::None, |next| {
+                    session
+                        .pilot()
+                        .has_explored(next)
+                        .then(|| self.map.model().system(next))
+                        .flatten()
+                        .map_or(NavDestination::Unexplored, |system| {
+                            NavDestination::Named(system.entry.name.clone())
+                        })
+                }),
+                readiness: session.jump_readiness(),
+            },
+        }
     }
 
     /// Rolls this tick's radar static against the interference in the
     /// player's system ([`radar::static_frame`], on the effects' chance,
     /// never the simulation's), as `_HandleStatus` (@0x494d7) does every
     /// frame; then moves the HUD's timer to the view's elapsed ticks, and
-    /// takes the radar's snapshot afresh when it refreshes
-    /// ([`HudCadence::advance`]).
+    /// takes the radar's and the nav area's snapshots afresh when each
+    /// refreshes ([`HudCadence::advance`]). The nav area's is also taken
+    /// afresh whenever the nav mode has changed since it was taken, as
+    /// each of the original's selection changes marks the area for
+    /// redrawing at once (`_statusRedraw[0]`, e.g. @0x69b39, @0x69efa,
+    /// @0x6a919, @0xe34d, @0x1379b). This is settled before the frame is
+    /// drawn, and [`FlightView::nav_shown`] shows a changed mode at once
+    /// anyway, so no boundary is crossed.
     ///
     /// The original rolls the threshold in `_HandleStatus` and picks the
     /// pattern as `_DrawStatusRadar` draws; ours rolls both here, once a
@@ -2234,9 +2263,42 @@ impl<C> FlightView<C> {
                 radar::static_frame(session.interference(), &mut self.effects_chance);
         }
         let now = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
-        if self.hud_cadence.advance(now) {
+        let refresh = self.hud_cadence.advance(now);
+        if refresh.radar {
             self.radar_scene = Some(self.radar_now());
         }
+        if refresh.nav || !self.nav_mode_shown() {
+            self.retake_nav();
+        }
+    }
+
+    /// Whether the nav area's snapshot was taken for the nav mode the
+    /// player is in now.
+    fn nav_mode_shown(&self) -> bool {
+        let mode = self.session.as_ref().map_or(NavMode::Off, nav_mode);
+        self.nav_scene
+            .as_ref()
+            .is_some_and(|(shown, _)| *shown == mode)
+    }
+
+    /// What the nav area shows this frame: by [`RuleKey::HudCadence`]'s
+    /// engine reading, the snapshot taken at its last refresh, text and
+    /// colours both; by the other, before the first refresh, or once the
+    /// nav mode has changed since, the nav area as it is now
+    /// ([`FlightView::nav_now`]).
+    fn nav_shown(&self) -> NavDisplay {
+        match &self.nav_scene {
+            Some((_, shown)) if self.hud_waits() && self.nav_mode_shown() => shown.clone(),
+            _ => self.nav_now(),
+        }
+    }
+
+    /// Whether the HUD's content waits for its refreshes: the engine's
+    /// reading of [`RuleKey::HudCadence`].
+    fn hud_waits(&self) -> bool {
+        self.session.as_ref().map_or(RuleSource::Engine, |session| {
+            session.rules().source_for(RuleKey::HudCadence)
+        }) == RuleSource::Engine
     }
 
     /// What the radar shows this frame: by [`RuleKey::HudCadence`]'s
@@ -2244,11 +2306,8 @@ impl<C> FlightView<C> {
     /// other, or before the first refresh, the radar as it is now
     /// ([`FlightView::radar_now`]).
     fn radar_shown(&self) -> Cow<'_, RadarScene> {
-        let waits = self.session.as_ref().map_or(RuleSource::Engine, |session| {
-            session.rules().source_for(RuleKey::HudCadence)
-        }) == RuleSource::Engine;
         match &self.radar_scene {
-            Some(shown) if waits => Cow::Borrowed(shown),
+            Some(shown) if self.hud_waits() => Cow::Borrowed(shown),
             _ => Cow::Owned(self.radar_now()),
         }
     }
@@ -3338,14 +3397,14 @@ impl<
                     radar: &radar,
                     blink_on: self.hud_cadence.blink_on(),
                     reserves: self.reserves(),
-                    nav: self.nav_display(scene),
+                    nav: self.nav_shown(),
                     date: &date,
                     disabled: self
                         .session
                         .as_ref()
                         .is_ok_and(|session| session.player_condition() == Condition::Disabled),
                 };
-                hud::draw(list, bar, &state);
+                hud::draw(list, bar, &state, metrics);
                 self.draw_combat_hud(list, bar);
             }
             Err(reason) => hud::draw_unavailable(list, reason),
@@ -3462,9 +3521,42 @@ fn radar_ships(session: &Session, shown: &[(&Npc, Point, f32)]) -> Vec<RadarShip
 /// density scanner (`cmpw $0x63` @0x49bb8-0x49c2f).
 const HEAVY_MASS: f32 = 99.0;
 
+/// The player's nav mode, the original's player +0x6a, as the engine
+/// derives it: a selected stellar is mode 2, else a plotted course mode 3,
+/// else mode −1, the nav system off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NavMode {
+    /// Mode −1: nothing selected, no course.
+    Off,
+    /// Mode 2: the selected stellar.
+    Stellar(StellarId),
+    /// Mode 3: the next hop shown ([`route_shown`]), `None` when the first
+    /// hop has no visible system at its place.
+    Hyperspace(Option<SystemId>),
+}
+
+/// The player's [`NavMode`] in `session`.
+///
+/// A course whose first hop has no system shown at its place is mode 3
+/// with no destination ("No Destination", the original's +0x6c == −1).
+/// The original keeps the hop's stale link index there and names the
+/// hidden system; ours does not reveal a hidden system. Its other mode
+/// changes that the engine has no state for (Nav Off keeping the route,
+/// Hyper Select with nothing to cue) are rdm phase
+/// hud-fidelity/phase-11-track-nav-mode's.
+fn nav_mode(session: &Session) -> NavMode {
+    if let Some(target) = session.nav_target() {
+        NavMode::Stellar(target)
+    } else if session.course().is_empty() {
+        NavMode::Off
+    } else {
+        NavMode::Hyperspace(route_shown(session))
+    }
+}
+
 /// The next system on the hyperspace route the nav area shows, if it
 /// shows one: no stellar is selected and a course is shown (the
-/// original's nav mode 3). The nav area ([`FlightView::nav_display`]) and
+/// original's nav mode 3). The nav area ([`FlightView::nav_now`]) and
 /// the radar's centre arrow ([`RadarScene::route_shown`]) both read it.
 fn route_shown(session: &Session) -> Option<SystemId> {
     if session.nav_target().is_some() {
@@ -3507,6 +3599,7 @@ mod tests {
     use super::*;
     use crate::devtools::{PilotDesk, PilotEdit};
     use crate::draw::lights_tint;
+    use crate::flight::cadence::NAV_PERIOD_TICKS;
     use crate::flight::catalog::{
         Blink, BoomLook, GovtId, LayerSheet, StatusBarLayout, TargetCard, WeaponLook,
     };
@@ -4572,10 +4665,11 @@ mod tests {
                 },
                 blink_on: false,
                 reserves: ShipStats::new(FIELDS, &[]).full(),
-                nav: NavDisplay::None,
+                nav: NavDisplay::Off,
                 date: DATE,
                 disabled: false,
             },
+            None,
         );
         let bar = view.status_bar().expect("a status bar");
         let origin = hud::bar_origin(bar);
@@ -5362,7 +5456,10 @@ mod tests {
             let cadence = view.hud_cadence;
             view.tick(TICK);
             if view.session().expect("flying").system() != leaving {
-                assert_eq!(view.hud_cadence, cadence, "not a refresh tick");
+                let now = u64::try_from(crate::time::ticks(view.elapsed)).expect("in range");
+                let mut probe = cadence;
+                assert!(!probe.advance(now).radar, "not a refresh tick");
+                assert_eq!(view.hud_cadence.blink_on(), cadence.blink_on());
                 break;
             }
         }
@@ -5422,10 +5519,11 @@ mod tests {
                 radar: &RadarScene::default(),
                 blink_on: false,
                 reserves,
-                nav: NavDisplay::None,
+                nav: NavDisplay::Off,
                 date: DATE,
                 disabled: false,
             },
+            None,
         );
         assert_eq!(lines(&drawn(&view)), lines(&expected));
     }
@@ -6345,10 +6443,11 @@ mod tests {
                 radar: &view.radar_shown(),
                 blink_on: view.hud_cadence.blink_on(),
                 reserves: reserves(&view),
-                nav: NavDisplay::None,
+                nav: NavDisplay::Off,
                 date: "June 24, 1177 NC",
                 disabled: false,
             },
+            None,
         );
         assert!(
             list.iter()
@@ -12275,7 +12374,7 @@ mod tests {
             overlay.set_visible(SystemId(133), Some(false));
         });
         view.tick(TICK);
-        assert_eq!(nav(&view), [hud::NAV_NO_DESTINATION]);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_NO_DESTINATION]);
         let session = view.session().expect("flying");
         assert_eq!(session.course(), [SystemId(131)], "kept");
     }
@@ -13298,8 +13397,18 @@ mod tests {
     }
 
     #[test]
-    fn with_nothing_selected_and_no_course_the_hud_says_no_destination() {
-        assert_eq!(nav(&flight()), [hud::NAV_NO_DESTINATION]);
+    fn with_nothing_selected_and_no_course_the_hud_says_nav_system_off() {
+        assert_eq!(nav(&flight()), [hud::NAV_OFF]);
+        assert_eq!(nav(&every_frame(flight())), [hud::NAV_OFF]);
+    }
+
+    #[test]
+    fn a_stellar_target_not_in_the_scene_is_stellar_navigation_over_no_destination() {
+        let mut view = flight();
+        tap(&mut view, LAND);
+        assert!(nav_target(&view).is_some());
+        view.scene = None;
+        assert_eq!(view.nav_now(), NavDisplay::Stellar(None));
     }
 
     #[test]
@@ -13315,14 +13424,15 @@ mod tests {
         plot(&mut view, 131);
         assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
         jump_to_alpha(&mut view);
-        assert_eq!(nav(&view), [hud::NAV_NO_DESTINATION], "arrived");
+        assert_eq!(nav(&view), [hud::NAV_OFF], "arrived");
         plot(&mut view, 130);
         assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Sol"]);
     }
 
     #[test]
     fn the_destination_is_dim_until_the_ship_is_out_far_enough_to_jump() {
-        let mut view = flight();
+        // Read the Bible's way, the nav area follows every frame.
+        let mut view = every_frame(flight());
         plot(&mut view, 131);
         let hyperspace = |value: Color| {
             vec![
@@ -13378,7 +13488,7 @@ mod tests {
 
     #[test]
     fn once_j_is_accepted_the_hyperspace_label_turns_bright_too() {
-        let mut view = flight();
+        let mut view = every_frame(flight());
         plot(&mut view, 131);
         fly_out(&mut view);
         tap(&mut view, JUMP);
@@ -13389,6 +13499,128 @@ mod tests {
                 (hud::NAV_UNEXPLORED.to_owned(), Color::WHITE),
             ]
         );
+    }
+
+    /// The engine tick `view` has reached.
+    fn now_tick(view: &View) -> u64 {
+        u64::try_from(crate::time::ticks(view.elapsed)).expect("in range")
+    }
+
+    #[test]
+    fn the_nav_area_holds_its_colours_until_its_next_refresh() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        assert_eq!(nav_value_color(&view), Color::DIM, "inside, at once");
+        view.input(&key(Key::Up, true));
+        let mut expected = Color::DIM;
+        let mut held = 0;
+        for _ in 0..2000 {
+            let before = now_tick(&view);
+            view.tick(TICK);
+            let now = now_tick(&view);
+            let out = player(&view).position.length() >= MIN_JUMP_DISTANCE;
+            if now / NAV_PERIOD_TICKS > before / NAV_PERIOD_TICKS {
+                expected = if out { Color::WHITE } else { Color::DIM };
+            }
+            assert_eq!(nav_value_color(&view), expected, "tick {now}");
+            if out && expected == Color::DIM {
+                held += 1;
+            }
+            if expected == Color::WHITE {
+                break;
+            }
+        }
+        view.release_keys();
+        assert_eq!(expected, Color::WHITE, "it got out");
+        assert!(
+            (1..u32::try_from(NAV_PERIOD_TICKS).expect("small")).contains(&held),
+            "held dim {held} ticks after the ship got clear"
+        );
+    }
+
+    #[test]
+    fn the_nav_area_holds_its_text_until_its_next_refresh() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        // Move to just past a refresh.
+        while now_tick(&view) % NAV_PERIOD_TICKS != 1 {
+            view.tick(TICK);
+        }
+        run_set(&mut view, "X131");
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+        for _ in 1..NAV_PERIOD_TICKS - 1 {
+            view.tick(TICK);
+            assert_eq!(
+                nav(&view),
+                [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED],
+                "tick {}",
+                now_tick(&view)
+            );
+        }
+        view.tick(TICK);
+        assert_eq!(now_tick(&view) % NAV_PERIOD_TICKS, 0);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Alpha Centauri"]);
+    }
+
+    #[test]
+    fn read_the_bibles_way_the_nav_area_follows_every_frame() {
+        let mut view = every_frame(flight());
+        plot(&mut view, 131);
+        while now_tick(&view) % NAV_PERIOD_TICKS != 1 {
+            view.tick(TICK);
+        }
+        run_set(&mut view, "X131");
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Alpha Centauri"]);
+    }
+
+    #[test]
+    fn a_selection_change_shows_at_once() {
+        let mut view = flight();
+        while now_tick(&view) % NAV_PERIOD_TICKS != 1 {
+            view.tick(TICK);
+        }
+        tap(&mut view, LAND);
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"], "drawn at once");
+        view.tick(TICK);
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"], "and kept");
+        tap(&mut view, HYPER_SELECT);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+        view.tick(TICK);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+        assert_ne!(now_tick(&view) % NAV_PERIOD_TICKS, 0, "between refreshes");
+    }
+
+    #[test]
+    fn redrawing_the_status_retakes_the_nav_area() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        while now_tick(&view) % NAV_PERIOD_TICKS != 1 {
+            view.tick(TICK);
+        }
+        run_set(&mut view, "X131");
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+        view.redraw_status();
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Alpha Centauri"]);
+    }
+
+    #[test]
+    fn once_j_is_accepted_the_label_turns_bright_at_the_next_refresh() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        while now_tick(&view) % NAV_PERIOD_TICKS != 1 {
+            view.tick(TICK);
+        }
+        let label = |view: &View| nav_colored(view)[0].1;
+        assert_eq!(label(&view), Color::DIM);
+        tap(&mut view, JUMP);
+        assert_eq!(label(&view), Color::DIM, "held");
+        for _ in 1..NAV_PERIOD_TICKS - 1 {
+            view.tick(TICK);
+            assert_eq!(label(&view), Color::DIM, "tick {}", now_tick(&view));
+        }
+        view.tick(TICK);
+        assert_eq!(label(&view), Color::WHITE, "tick {}", now_tick(&view));
     }
 
     #[test]
@@ -13410,7 +13642,7 @@ mod tests {
         tap(&mut view, LAND);
         jump_to_alpha(&mut view);
         assert_eq!(nav_target(&view), None);
-        assert_eq!(nav(&view), [hud::NAV_NO_DESTINATION]);
+        assert_eq!(nav(&view), [hud::NAV_OFF]);
         tap(&mut view, LAND);
         assert_eq!(nav(&view), [hud::NAV_STELLAR, "Proxima"]);
     }

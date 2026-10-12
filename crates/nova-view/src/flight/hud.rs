@@ -2,13 +2,20 @@
 //! out by an `ïntf`, with the radar and the shield, armour and fuel bars.
 //! The `ïntf`'s nav area is the navigation display (Nova Bible, "The ïntf
 //! resource": `NavArea`; STR# 2002 342-349), never the system's name: a
-//! [`NavDisplay`], drawn as a dim label ("Stellar Navigation" or
-//! "Hyperspace") over the bright name of the selected stellar or of the
-//! next system on the course ("Unexplored System" for one not explored),
-//! or the dim "No Destination" alone, in the bar's `StatusFont` at its
-//! `StatFontSize`. As in the original's `_DrawStatusNav`, the next
-//! system's name is dim until the ship is clear to jump, and "Hyperspace"
-//! turns bright too once a jump is under way.
+//! [`NavDisplay`], drawn as `_DrawStatusNav` (@0x49f43-0x4a451) draws it,
+//! in the bar's `StatusFont` at its `StatFontSize`, each line centred
+//! between the area's sides by `_DrawCenteredText` (@0x263d) on a
+//! baseline below its top: the dim "Nav System Off" alone on
+//! [`NAV_OFF_BASELINE`], or a label ("Stellar Navigation" or
+//! "Hyperspace") on [`NAV_LABEL_BASELINE`] over the selected stellar's
+//! name, the next system's ("Unexplored System" for one not explored) or
+//! the dim "No Destination", on [`NAV_VALUE_BASELINE`]. The next system's
+//! name is dim until the ship is clear to jump, and "Hyperspace" turns
+//! bright too once a jump is under way. An empty or inverted nav area
+//! draws nothing (@0x49f55-0x49f6b). Lines are never wrapped, as
+//! `DrawString` never wraps; the original's clip to the area (it copies
+//! only the area's rect to the window, @0x4a442) is left out, as a draw
+//! list has no clipping and stock names fit the stock area.
 //!
 //! The date is shown on the last line of the `ïntf`'s `CargoArea`, bright,
 //! in the same font. The original shows it only on the player info screen
@@ -54,11 +61,12 @@ use nova_sim::{JumpReadiness, Reserves};
 use nova_sim::Gauge;
 
 use super::catalog::{GovtId, StatusBarLayout, StatusBars};
+use super::pen::Pen;
 use super::radar::{self, IRect, RadarColor, RadarMark, RadarScene};
 use crate::draw::fill_rect;
 use crate::geometry::{Bounds, Point};
 use crate::system::camera::VIEW_SIZE;
-use crate::text::LINE_HEIGHT;
+use crate::text::{LINE_HEIGHT, TextMetrics};
 use crate::{Color, DrawList, Font, ImageKey};
 
 /// The `ïntf` shown by a pilot with no government, and the ID any ID
@@ -174,31 +182,57 @@ pub fn bar_origin(bar: &StatusBar) -> Point {
     Point::new(VIEW_SIZE.0 - width, 0.0)
 }
 
+/// `STR#` 2002 #342: the nav area with the nav system off (nav mode −1).
+pub const NAV_OFF: &str = "Nav System Off";
 /// `STR#` 2002 #343: the nav area's label over a selected stellar.
 pub const NAV_STELLAR: &str = "Stellar Navigation";
-/// `STR#` 2002 #344: the nav area with nothing to show.
+/// `STR#` 2002 #344: the nav area's value with no destination.
 pub const NAV_NO_DESTINATION: &str = "No Destination";
 /// `STR#` 2002 #345: the nav area's label over a plotted jump.
 pub const NAV_HYPERSPACE: &str = "Hyperspace";
 /// `STR#` 2002 #346: the nav area's name for a system not yet explored.
 pub const NAV_UNEXPLORED: &str = "Unexplored System";
+/// The label's baseline below the nav area's top (@0x4a0de, @0x4a1f5).
+pub const NAV_LABEL_BASELINE: f32 = 12.0;
+/// "Nav System Off"'s baseline below the nav area's top (@0x4a07f).
+pub const NAV_OFF_BASELINE: f32 = 22.0;
+/// The value's baseline below the nav area's top (@0x4a11d, @0x4a174,
+/// @0x4a34c, @0x4a3b0).
+pub const NAV_VALUE_BASELINE: f32 = 29.0;
 
-/// What the nav area shows.
+/// What the nav area shows: one variant for each of the original's nav
+/// modes (player +0x6a) the engine reaches. Modes 0 and 1 are never set
+/// on the player, and mode 4 (the hypergate map) is reset to −1
+/// (@0x63fa2) before any status draw; `_DrawStatusNav` has no branch for
+/// them, so they would show the bare background.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum NavDisplay {
-    /// Nothing selected and no course: "No Destination".
+    /// Mode −1, nothing selected and no course: "Nav System Off"
+    /// (@0x4a044-0x4a097).
     #[default]
-    None,
-    /// The stellar selected as the navigation target, by name.
-    Stellar(String),
-    /// The next system on the course, and whether the ship can jump to
-    /// it, which picks the colours (`_DrawStatusNav`).
+    Off,
+    /// Mode 2, a stellar selected (@0x4a09e-0x4a18c): its name, or `None`
+    /// for "No Destination".
+    Stellar(Option<String>),
+    /// Mode 3, a jump plotted (@0x4a198-0x4a3cb): the next system, and
+    /// whether the ship can jump there, which picks the colours.
     Hyperspace {
-        /// Its name, or `None` when the pilot has not explored it.
-        name: Option<String>,
+        /// What the value line shows.
+        destination: NavDestination,
         /// Whether the ship can jump there.
         readiness: JumpReadiness,
     },
+}
+
+/// The value line of [`NavDisplay::Hyperspace`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NavDestination {
+    /// An explored system, by name (its +0x90 > 0, @0x4a311-0x4a330).
+    Named(String),
+    /// A system not yet explored: "Unexplored System".
+    Unexplored,
+    /// No hop to name (+0x6c == −1, @0x4a21d): "No Destination", dim.
+    None,
 }
 
 /// What the HUD shows.
@@ -221,8 +255,14 @@ pub struct HudState<'a> {
 }
 
 /// Draws `bar` showing `state`: its background, the radar (see the
-/// module docs), then the shield, armour and fuel bars.
-pub fn draw(list: &mut DrawList, bar: &StatusBar, state: &HudState) {
+/// module docs), then the shield, armour and fuel bars, the nav area,
+/// its lines centred as `metrics` measures them, and the date.
+pub fn draw(
+    list: &mut DrawList,
+    bar: &StatusBar,
+    state: &HudState,
+    metrics: Option<&dyn TextMetrics>,
+) {
     let origin = bar_origin(bar);
     let layout = &bar.layout;
     if let Some(background) = bar.background {
@@ -244,7 +284,7 @@ pub fn draw(list: &mut DrawList, bar: &StatusBar, state: &HudState) {
     if !state.disabled {
         draw_fuel(list, layout, layout.fuel.offset(origin), reserves.fuel);
     }
-    draw_nav(list, layout, origin, &state.nav);
+    draw_nav(list, layout, origin, &state.nav, metrics);
     draw_date(list, layout, origin, state.date);
 }
 
@@ -365,35 +405,69 @@ fn draw_date(list: &mut DrawList, layout: &StatusBarLayout, origin: Point, date:
     );
 }
 
-/// Draws `nav` in the layout's nav area, at the bar's `origin`: a label
-/// over a value, both in the bar's font, or the dim "No Destination"
-/// alone. The label is dim and the value bright, except as the original's
-/// `_DrawStatusNav` (@0x49f43-0x4a451) draws a jump: its destination is
-/// dim while the ship is blocked, and "Hyperspace" is bright once the jump
-/// is under way.
-fn draw_nav(list: &mut DrawList, layout: &StatusBarLayout, origin: Point, nav: &NavDisplay) {
+/// Draws `nav` in the layout's nav area, at the bar's `origin`, as
+/// `_DrawStatusNav` (@0x49f43-0x4a451) does (see the module docs): nothing
+/// in an empty or inverted area, otherwise each line centred between the
+/// area's sides on its baseline, measured by `metrics`. A jump's label is
+/// bright once it is under way, and its destination once the ship is
+/// clear (@0x4a272-0x4a2f9); "No Destination" is always dim.
+fn draw_nav(
+    list: &mut DrawList,
+    layout: &StatusBarLayout,
+    origin: Point,
+    nav: &NavDisplay,
+    metrics: Option<&dyn TextMetrics>,
+) {
     let area = layout.nav.offset(origin);
+    if area.min.x >= area.max.x || area.min.y >= area.max.y {
+        return;
+    }
     let (dim, bright) = (layout.dim_text, layout.bright_text);
-    let (label, value) = match nav {
-        NavDisplay::None => ((NAV_NO_DESTINATION, dim), None),
-        NavDisplay::Stellar(name) => ((NAV_STELLAR, dim), Some((name.as_str(), bright))),
-        NavDisplay::Hyperspace { name, readiness } => {
+    let lines: [Option<(&str, f32, Color)>; 2] = match nav {
+        NavDisplay::Off => [Some((NAV_OFF, NAV_OFF_BASELINE, dim)), None],
+        NavDisplay::Stellar(name) => [
+            Some((NAV_STELLAR, NAV_LABEL_BASELINE, dim)),
+            Some(
+                name.as_deref()
+                    .map_or((NAV_NO_DESTINATION, NAV_VALUE_BASELINE, dim), |name| {
+                        (name, NAV_VALUE_BASELINE, bright)
+                    }),
+            ),
+        ],
+        NavDisplay::Hyperspace {
+            destination,
+            readiness,
+        } => {
             let (label, value) = match readiness {
                 JumpReadiness::Blocked => (dim, dim),
                 JumpReadiness::Clear => (dim, bright),
                 JumpReadiness::Underway => (bright, bright),
             };
-            let name = name.as_deref().unwrap_or(NAV_UNEXPLORED);
-            ((NAV_HYPERSPACE, label), Some((name, value)))
+            let value = match destination {
+                NavDestination::Named(name) => (name.as_str(), value),
+                NavDestination::Unexplored => (NAV_UNEXPLORED, value),
+                NavDestination::None => (NAV_NO_DESTINATION, dim),
+            };
+            [
+                Some((NAV_HYPERSPACE, NAV_LABEL_BASELINE, label)),
+                Some((value.0, NAV_VALUE_BASELINE, value.1)),
+            ]
         }
     };
-    let size = layout.font_size;
-    let width = Some(area.width());
-    let (label, color) = label;
-    list.text_in(layout.font, label, area.min, size, width, color);
-    if let Some((value, color)) = value {
-        let below = Point::new(area.min.x, LINE_HEIGHT.mul_add(size, area.min.y));
-        list.text_in(layout.font, value, below, size, width, color);
+    let mut pen = Pen {
+        list,
+        font: layout.font,
+        metrics,
+    };
+    for (text, baseline, color) in lines.into_iter().flatten() {
+        pen.centred_text(
+            text,
+            area.min.x,
+            area.max.x,
+            area.min.y + baseline,
+            layout.font_size,
+            color,
+        );
     }
 }
 
@@ -481,6 +555,7 @@ mod tests {
     use super::*;
     use crate::DrawCommand;
     use crate::flight::radar::{RadarShip, RadarStellar};
+    use crate::text::fixture::MonoMetrics;
     use nova_sim::{ShipIff, StellarIff};
 
     fn at(x: f32, y: f32) -> Point {
@@ -903,7 +978,7 @@ mod tests {
 
     fn drawn(bar: &StatusBar, state: &HudState) -> DrawList {
         let mut list = DrawList::new();
-        draw(&mut list, bar, state);
+        draw(&mut list, bar, state, Some(&MonoMetrics));
         list
     }
 
@@ -931,7 +1006,7 @@ mod tests {
             radar: &NO_RADAR,
             blink_on: false,
             reserves,
-            nav: NavDisplay::None,
+            nav: NavDisplay::Off,
             date: DATE,
             disabled: false,
         }
@@ -1256,7 +1331,7 @@ mod tests {
             radar: &scene,
             blink_on: true,
             reserves: reserves(30.0, 60.0, 300.0),
-            nav: NavDisplay::Stellar("Earth".to_owned()),
+            nav: NavDisplay::Stellar(Some("Earth".to_owned())),
             date: DATE,
             disabled: false,
         };
@@ -1276,8 +1351,8 @@ mod tests {
         expected.line(at(865.0, 202.5), at(1014.0, 202.5), 7.0, SHIELD);
         expected.line(at(865.0, 219.5), at(1014.0, 219.5), 7.0, ARMOR);
         expected.line(at(865.0, 237.5), at(1014.0, 237.5), 7.0, FUEL_FULL);
-        expected.push(nav_text(NAV_STELLAR, 0, Color::DIM));
-        expected.push(nav_text("Earth", 1, TEXT));
+        expected.push(nav_text(NAV_STELLAR, NAV_LABEL_BASELINE, Color::DIM));
+        expected.push(nav_text("Earth", NAV_VALUE_BASELINE, TEXT));
         expected.push(date_text(DATE));
         assert_eq!(list, expected);
         let blink_off = HudState {
@@ -1542,16 +1617,18 @@ mod tests {
             .collect()
     }
 
-    /// `text` on line `line` (0 or 1) of the stock bar's nav area, at
-    /// (830, 0): its (8, 254)-(184, 286) is (838, 254), 176 wide, in the
-    /// layout's Charcoal 11, one line height (1.2 x 11) a line.
-    fn nav_text(text: &str, line: u8, color: Color) -> DrawCommand {
+    /// `text` centred in the stock bar's nav area on `baseline` below its
+    /// top: at (830, 0) its (8, 254)-(184, 286) is (838, 254)-(1014, 286),
+    /// centred on 926, in the layout's Charcoal 11, 6.6 a character in
+    /// [`MonoMetrics`], its top 11 above its baseline.
+    fn nav_text(text: &str, baseline: f32, color: Color) -> DrawCommand {
+        let half = (MonoMetrics.width(Font::Charcoal, 11.0, text) / 2.0).trunc();
         DrawCommand::Text {
             text: text.to_owned(),
             font: Font::Charcoal,
-            origin: at(838.0, 254.0 + f32::from(line) * 13.2),
+            origin: at(926.0 - half, 254.0 + baseline - 11.0),
             size: 11.0,
-            wrap_width: Some(176.0),
+            wrap_width: None,
             color,
         }
     }
@@ -1568,93 +1645,108 @@ mod tests {
     fn the_nav_strings_are_the_originals() {
         assert_eq!(
             [
+                NAV_OFF,
                 NAV_STELLAR,
                 NAV_NO_DESTINATION,
                 NAV_HYPERSPACE,
                 NAV_UNEXPLORED
             ],
             [
+                "Nav System Off",
                 "Stellar Navigation",
                 "No Destination",
                 "Hyperspace",
                 "Unexplored System"
             ]
         );
-        assert_eq!(NavDisplay::default(), NavDisplay::None);
+        assert_eq!(
+            [NAV_LABEL_BASELINE, NAV_OFF_BASELINE, NAV_VALUE_BASELINE],
+            [12.0, 22.0, 29.0]
+        );
+        assert_eq!(NavDisplay::default(), NavDisplay::Off);
     }
 
     #[test]
-    fn with_nothing_to_show_the_nav_area_says_no_destination_dim() {
+    fn nothing_selected_is_nav_system_off_dim() {
         assert_eq!(
-            nav_drawn(NavDisplay::None),
-            [nav_text(NAV_NO_DESTINATION, 0, Color::DIM)]
+            nav_drawn(NavDisplay::Off),
+            [nav_text(NAV_OFF, NAV_OFF_BASELINE, Color::DIM)]
         );
     }
 
     #[test]
-    fn a_selected_stellar_is_stellar_navigation_over_its_name() {
+    fn a_selected_stellar_is_stellar_navigation_over_its_bright_name() {
         assert_eq!(
-            nav_drawn(NavDisplay::Stellar("Earth".to_owned())),
+            nav_drawn(NavDisplay::Stellar(Some("Earth".to_owned()))),
             [
-                nav_text(NAV_STELLAR, 0, Color::DIM),
-                nav_text("Earth", 1, TEXT)
+                nav_text(NAV_STELLAR, NAV_LABEL_BASELINE, Color::DIM),
+                nav_text("Earth", NAV_VALUE_BASELINE, TEXT)
             ]
         );
     }
 
-    fn hyperspace(name: Option<&str>, readiness: JumpReadiness) -> NavDisplay {
+    #[test]
+    fn a_stellar_target_with_no_stellar_is_stellar_navigation_over_no_destination_dim() {
+        assert_eq!(
+            nav_drawn(NavDisplay::Stellar(None)),
+            [
+                nav_text(NAV_STELLAR, NAV_LABEL_BASELINE, Color::DIM),
+                nav_text(NAV_NO_DESTINATION, NAV_VALUE_BASELINE, Color::DIM)
+            ]
+        );
+    }
+
+    fn hyperspace(destination: NavDestination, readiness: JumpReadiness) -> NavDisplay {
         NavDisplay::Hyperspace {
-            name: name.map(str::to_owned),
+            destination,
             readiness,
         }
     }
 
     #[test]
-    fn a_blocked_jump_draws_hyperspace_and_the_destination_dim() {
-        assert_eq!(
-            nav_drawn(hyperspace(Some("Sol"), JumpReadiness::Blocked)),
-            [
-                nav_text(NAV_HYPERSPACE, 0, Color::DIM),
-                nav_text("Sol", 1, Color::DIM)
-            ]
-        );
-        assert_eq!(
-            nav_drawn(hyperspace(None, JumpReadiness::Blocked)),
-            [
-                nav_text(NAV_HYPERSPACE, 0, Color::DIM),
-                nav_text(NAV_UNEXPLORED, 1, Color::DIM)
-            ]
-        );
+    fn a_jumps_label_is_bright_once_underway_and_its_destination_once_clear() {
+        use JumpReadiness::{Blocked, Clear, Underway};
+        let sol = || NavDestination::Named("Sol".to_owned());
+        for (destination, value) in [(sol(), "Sol"), (NavDestination::Unexplored, NAV_UNEXPLORED)] {
+            for (readiness, label_color, value_color) in [
+                (Blocked, Color::DIM, Color::DIM),
+                (Clear, Color::DIM, TEXT),
+                (Underway, TEXT, TEXT),
+            ] {
+                assert_eq!(
+                    nav_drawn(hyperspace(destination.clone(), readiness)),
+                    [
+                        nav_text(NAV_HYPERSPACE, NAV_LABEL_BASELINE, label_color),
+                        nav_text(value, NAV_VALUE_BASELINE, value_color)
+                    ],
+                    "{destination:?} {readiness:?}"
+                );
+            }
+        }
     }
 
     #[test]
-    fn a_clear_jump_draws_the_destination_bright() {
-        assert_eq!(
-            nav_drawn(hyperspace(Some("Sol"), JumpReadiness::Clear)),
-            [
-                nav_text(NAV_HYPERSPACE, 0, Color::DIM),
-                nav_text("Sol", 1, TEXT)
-            ]
-        );
-        assert_eq!(
-            nav_drawn(hyperspace(None, JumpReadiness::Clear)),
-            [
-                nav_text(NAV_HYPERSPACE, 0, Color::DIM),
-                nav_text(NAV_UNEXPLORED, 1, TEXT)
-            ]
-        );
+    fn hyperspace_with_no_destination_is_no_destination_dim() {
+        use JumpReadiness::{Blocked, Clear, Underway};
+        for (readiness, label_color) in
+            [(Blocked, Color::DIM), (Clear, Color::DIM), (Underway, TEXT)]
+        {
+            assert_eq!(
+                nav_drawn(hyperspace(NavDestination::None, readiness)),
+                [
+                    nav_text(NAV_HYPERSPACE, NAV_LABEL_BASELINE, label_color),
+                    nav_text(NAV_NO_DESTINATION, NAV_VALUE_BASELINE, Color::DIM)
+                ],
+                "{readiness:?}"
+            );
+        }
     }
 
-    #[test]
-    fn an_underway_jump_draws_both_bright() {
-        assert_eq!(
-            nav_drawn(hyperspace(Some("Sol"), JumpReadiness::Underway)),
-            [nav_text(NAV_HYPERSPACE, 0, TEXT), nav_text("Sol", 1, TEXT)]
-        );
-    }
-
-    #[test]
-    fn the_nav_area_moves_with_the_bar_and_reads_its_layout() {
+    /// The stock bar with a 200-wide background, Geneva 12 (6 a character
+    /// in [`MonoMetrics`]) and a nav area of (10, 300)-(111, 340): at
+    /// (824, 0) that is (834, 300)-(935, 340), centred on
+    /// trunc(1769 / 2) = 884.
+    fn odd_bar() -> StatusBar {
         let mut bar = stock();
         bar.background = Some(Background {
             id: 700,
@@ -1663,27 +1755,100 @@ mod tests {
         });
         bar.layout.font = Font::Geneva;
         bar.layout.font_size = 12.0;
-        bar.layout.nav = rect(10.0, 300.0, 110.0, 340.0);
+        bar.layout.nav = rect(10.0, 300.0, 111.0, 340.0);
         bar.layout.dim_text = FUEL_PARTIAL;
         bar.layout.bright_text = SHIELD;
-        let hud = HudState {
-            nav: NavDisplay::Stellar("Earth".to_owned()),
-            ..state(reserves(30.0, 60.0, 300.0))
-        };
-        let text = |text: &str, y: f32, color| DrawCommand::Text {
+        bar
+    }
+
+    fn geneva(text: &str, x: f32, top: f32, color: Color) -> DrawCommand {
+        DrawCommand::Text {
             text: text.to_owned(),
             font: Font::Geneva,
-            origin: at(834.0, y),
+            origin: at(x, top),
             size: 12.0,
-            wrap_width: Some(100.0),
+            wrap_width: None,
             color,
+        }
+    }
+
+    #[test]
+    fn the_nav_lines_are_centred_on_their_baselines_in_a_non_stock_area() {
+        let bar = odd_bar();
+        let shown = |nav| {
+            let hud = HudState {
+                nav,
+                ..state(reserves(30.0, 60.0, 300.0))
+            };
+            nav_texts(&drawn(&bar, &hud))
         };
+        // "Stellar Navigation" is 18 × 6 = 108: 884 − 54 = 830, top
+        // 300 + 12 − 12. "Earth" (odd) is 30: 884 − 15 = 869, top
+        // 300 + 29 − 12. "Nav System Off" is 84: 884 − 42 = 842, top
+        // 300 + 22 − 12.
         assert_eq!(
-            nav_texts(&drawn(&bar, &hud)),
+            shown(NavDisplay::Stellar(Some("Earth".to_owned()))),
             [
-                text(NAV_STELLAR, 300.0, FUEL_PARTIAL),
-                text("Earth", 314.4, SHIELD)
+                geneva(NAV_STELLAR, 830.0, 300.0, FUEL_PARTIAL),
+                geneva("Earth", 869.0, 317.0, SHIELD)
             ]
+        );
+        assert_eq!(
+            shown(NavDisplay::Off),
+            [geneva(NAV_OFF, 842.0, 310.0, FUEL_PARTIAL)]
+        );
+        // "Sol" is 18: 884 − 9 = 875; "Hyperspace" is 60: 884 − 30.
+        assert_eq!(
+            shown(hyperspace(
+                NavDestination::Named("Sol".to_owned()),
+                JumpReadiness::Underway
+            )),
+            [
+                geneva(NAV_HYPERSPACE, 854.0, 300.0, SHIELD),
+                geneva("Sol", 875.0, 317.0, SHIELD)
+            ]
+        );
+    }
+
+    #[test]
+    fn without_metrics_the_nav_lines_start_at_the_areas_left() {
+        let hud = HudState {
+            nav: NavDisplay::Stellar(Some("Earth".to_owned())),
+            ..state(reserves(30.0, 60.0, 300.0))
+        };
+        let mut list = DrawList::new();
+        draw(&mut list, &odd_bar(), &hud, None);
+        assert_eq!(
+            nav_texts(&list),
+            [
+                geneva(NAV_STELLAR, 834.0, 300.0, FUEL_PARTIAL),
+                geneva("Earth", 834.0, 317.0, SHIELD)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_nav_area_draws_nothing() {
+        let hud = HudState {
+            nav: NavDisplay::Stellar(Some("Earth".to_owned())),
+            ..state(reserves(30.0, 60.0, 300.0))
+        };
+        for nav in [
+            rect(10.0, 300.0, 10.0, 340.0),
+            rect(10.0, 300.0, 111.0, 300.0),
+            rect(111.0, 300.0, 10.0, 340.0),
+            rect(10.0, 340.0, 111.0, 300.0),
+        ] {
+            let mut bar = odd_bar();
+            bar.layout.nav = nav;
+            assert_eq!(nav_texts(&drawn(&bar, &hud)), [], "{nav:?}");
+        }
+        let mut bar = odd_bar();
+        bar.layout.nav = rect(10.0, 300.0, 11.0, 301.0);
+        assert_eq!(
+            nav_texts(&drawn(&bar, &hud)).len(),
+            2,
+            "one pixel is enough"
         );
     }
 

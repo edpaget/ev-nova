@@ -15,6 +15,8 @@
 //!   the mission info screen shown over flight.
 //! - [`hud`]: the HUD, the `ïntf` status bar with its radar, shield,
 //!   armour and fuel bars and the system's name.
+//! - `pen`: the `Pen` the HUD's panels set their text with, and
+//!   `_DrawCenteredText`'s centring.
 //! - [`radar`]: the radar's view model, the marks `_DrawStatusRadar`
 //!   draws for a [`RadarScene`](radar::RadarScene) snapshot.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
@@ -33,6 +35,7 @@ pub mod escorts;
 pub mod hud;
 pub mod jump;
 pub mod missions;
+mod pen;
 pub mod radar;
 pub mod sprite;
 pub mod target;

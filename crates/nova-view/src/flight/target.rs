@@ -49,9 +49,10 @@ use nova_sim::reserves::Gauge;
 use nova_sim::{Condition, Npc, Reserves};
 
 use super::catalog::{StatusBarLayout, TargetCard};
+use super::pen::Pen;
 use super::weapons::HIDES_AMMO;
 use crate::text::TextMetrics;
-use crate::{Color, DrawList, Font, ImageKey, Point};
+use crate::{Color, DrawList, ImageKey, Point};
 
 /// `STR#` 2002 #349.
 pub const NO_TARGET: &str = "No Target";
@@ -92,47 +93,6 @@ pub const BRACKETS: Color = Color::from_rgb24(0x0040_80FF);
 pub const HOSTILE_BRACKETS: Color = Color::from_rgb24(0x00FF_0000);
 /// The brackets round a disabled target: grey.
 pub const DISABLED_BRACKETS: Color = Color::from_rgb24(0x0088_8888);
-
-/// Sets lines of text in one font into a draw list, measured by the
-/// metrics, if any.
-struct Pen<'a, 'b> {
-    list: &'a mut DrawList,
-    font: Font,
-    metrics: Option<&'b dyn TextMetrics>,
-}
-
-impl Pen<'_, '_> {
-    /// How wide `text` is at `size`: nothing without metrics.
-    fn width(&self, text: &str, size: f32) -> f32 {
-        self.metrics
-            .map_or(0.0, |metrics| metrics.width(self.font, size, text))
-    }
-
-    /// Sets `text` from `x` on `baseline` at `size` in `color`, and gives
-    /// where it ends.
-    fn at(&mut self, text: &str, x: f32, baseline: f32, size: f32, color: Color) -> f32 {
-        let top = baseline - size;
-        self.list
-            .text_in(self.font, text, Point::new(x, top), size, None, color);
-        x + self.width(text, size)
-    }
-
-    /// Sets `text` centred between `left` and `right` on `baseline` at
-    /// `size` in `color`.
-    fn centred(
-        &mut self,
-        text: &str,
-        left: f32,
-        right: f32,
-        baseline: f32,
-        size: f32,
-        color: Color,
-    ) {
-        let x = left + (right - left - self.width(text, size)) / 2.0;
-        let x = if self.metrics.is_some() { x } else { left };
-        self.at(text, x, baseline, size, color);
-    }
-}
 
 /// What the panel shows of the target.
 #[derive(Clone, Copy, Debug, PartialEq)]

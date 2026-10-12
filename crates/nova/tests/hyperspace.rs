@@ -1029,14 +1029,22 @@ fn the_hyperspace_destination_brightens_once_the_ship_is_out_far_enough_to_jump(
     let mut game = Harness::flying();
     game.plot(129);
     assert_eq!(game.destination_color(), DIM, "plotted at the centre");
+    // The nav area refreshes every 15 engine ticks (0.5 s), so the
+    // colour may lag the ship by up to that.
     let mut dim_frames = 0;
+    let mut late_frames = 0;
     loop {
         game.steer(true);
         let color = game.destination_color();
         let out = game.ship().position.length() >= MIN_JUMP_DISTANCE;
-        assert_eq!(color, if out { BRIGHT } else { DIM }, "{:?}", game.ship());
-        if out {
+        if color == BRIGHT {
+            assert!(out, "bright only once out: {:?}", game.ship());
             break;
+        }
+        assert_eq!(color, DIM);
+        if out {
+            late_frames += 1;
+            assert!(late_frames < 60, "never brightened: {:?}", game.ship());
         }
         dim_frames += 1;
         assert!(dim_frames < 600, "never got out: {:?}", game.ship());
@@ -1045,7 +1053,15 @@ fn the_hyperspace_destination_brightens_once_the_ship_is_out_far_enough_to_jump(
     game.hold(&[]);
     assert_eq!(game.destination_color(), BRIGHT, "still out");
     game.fly_in();
-    assert_eq!(game.destination_color(), DIM, "back inside");
+    let mut late_frames = 0;
+    while game.destination_color() != DIM {
+        late_frames += 1;
+        assert!(late_frames < 60, "never dimmed: {:?}", game.ship());
+    }
+    assert!(
+        game.ship().position.length() < MIN_JUMP_DISTANCE,
+        "back inside"
+    );
 }
 
 #[test]

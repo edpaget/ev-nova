@@ -26,7 +26,7 @@ use nova_rsrc::{Fork, ForkReader};
 use nova_sim::flight::{heading_of, shortest_turn};
 use nova_sim::{ShipId, ShipState, SystemId, Vec2};
 use nova_view::flight::FlightView;
-use nova_view::flight::hud::NAV_NO_DESTINATION;
+use nova_view::flight::hud::NAV_OFF;
 use nova_view::flight::radar::radar_offset;
 use nova_view::{Blend, Key, Point};
 
@@ -437,7 +437,7 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
     // The stars; the two stellars, then their names; the ship; the title
     // and help lines; then the HUD: the status bar's picture, the radar's
     // two small ovals (4 pixels each) and the player's pixel, and three
-    // bars, then the nav area's "No Destination" (never the
+    // bars, then the nav area's "Nav System Off" (never the
     // system's name), the date, and the target and secondary weapon lines.
     let shape = shape(&first);
     assert_eq!(shape[0].0, "solid");
@@ -583,7 +583,7 @@ fn the_hud_is_drawn_while_flying() {
     );
 
     // The nav area comes last but for the target and secondary weapon
-    // lines, with nothing selected and no course: "No Destination", not
+    // lines, with nothing selected and no course: "Nav System Off", not
     // the system's name; then the date, the `chär`'s unset start (1
     // January of year 0) without affixes.
     let Some(Batch::Text(runs)) = first.batches.last() else {
@@ -592,14 +592,12 @@ fn the_hud_is_drawn_while_flying() {
     let lines: Vec<&str> = runs.iter().map(|run| run.text.as_str()).collect();
     assert_eq!(
         lines,
-        [
-            NAV_NO_DESTINATION,
-            "January 1, 0",
-            "No Target",
-            "No Secondary Weapon"
-        ]
+        [NAV_OFF, "January 1, 0", "No Target", "No Secondary Weapon"]
     );
-    assert_eq!(runs[0].origin_px, (838.0, 254.0));
+    // "Nav System Off" on its baseline 22 below the nav area's top
+    // (254), its top 12 (the bar's font size) above that; at the area's
+    // left, as this harness measures no text.
+    assert_eq!(runs[0].origin_px, (838.0, 264.0));
     assert!(!lines.contains(&"Alpha"), "{lines:?}");
 
     // Flying up moves the ovals down the radar, with the ship as drawn

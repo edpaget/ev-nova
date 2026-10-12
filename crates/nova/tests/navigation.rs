@@ -4,7 +4,7 @@
 //! of a physical key.
 //!
 //! Alpha's navigation defaults are Alpha Minor, then Alpha Prime. With
-//! nothing selected and no course the nav area says "No Destination". A
+//! nothing selected and no course the nav area says "Nav System Off". A
 //! course plotted on flight's map to Beta, not yet explored, shows
 //! "Hyperspace" over "Unexplored System". Tab, the original's Target
 //! Select for ships, selects no stellar and leaves the course shown.
@@ -40,7 +40,7 @@ use nova_sim::flight::{heading_of, shortest_turn};
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
 use nova_sim::{Session, ShipState, SystemId};
 use nova_view::flight::FlightView;
-use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_NO_DESTINATION, NAV_UNEXPLORED};
+use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_OFF, NAV_UNEXPLORED};
 use nova_view::{MouseButton, Point};
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -411,7 +411,7 @@ impl Harness {
 #[test]
 fn the_course_map_sets_what_the_hud_navigation_area_shows() {
     let mut game = Harness::flying();
-    assert_eq!(game.nav(), [NAV_NO_DESTINATION]);
+    assert_eq!(game.nav(), [NAV_OFF]);
 
     game.plot(129);
     assert_eq!(game.nav(), [NAV_HYPERSPACE, NAV_UNEXPLORED]);
@@ -432,7 +432,7 @@ fn the_course_map_sets_what_the_hud_navigation_area_shows() {
     game.fly_out();
     game.jump_into(129);
     assert_eq!(game.session().system(), SystemId(129));
-    assert_eq!(game.nav(), [NAV_NO_DESTINATION]);
+    assert_eq!(game.nav(), [NAV_OFF]);
 
     // A course back to Alpha, explored, names it.
     game.plot(128);

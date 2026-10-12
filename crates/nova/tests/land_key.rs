@@ -39,7 +39,7 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::{Session, ShipState, StellarId};
 use nova_view::flight::FlightView;
-use nova_view::flight::hud::{NAV_NO_DESTINATION, NAV_STELLAR};
+use nova_view::flight::hud::{NAV_OFF, NAV_STELLAR};
 use nova_view::spaceport::SpaceportView;
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -337,7 +337,7 @@ impl Harness {
 #[test]
 fn with_no_target_l_requests_clearance_at_the_nearest_and_a_second_l_lands_there() {
     let mut game = Harness::flying();
-    assert_eq!(game.nav(), [NAV_NO_DESTINATION]);
+    assert_eq!(game.nav(), [NAV_OFF]);
 
     game.press(KeyCode::KeyL);
     assert_eq!(game.showing(), Showing::Flight, "cleared, not landed");
