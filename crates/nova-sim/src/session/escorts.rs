@@ -112,11 +112,12 @@ impl Session {
     /// takes as the system is set up, by its index. As
     /// `_DeleteAllComputerShips` (@0x3bf5f) keeps the player's ships in
     /// the table across every setup, an escort whose NPC is in the system
-    /// keeps its berth. Every other (a loaded pilot's, one just hired, the
-    /// old ship kept after a capture) takes the lowest berth not already
-    /// chosen, in fleet order, before anything else is set up, as
-    /// `_LoadPilotData` spawns a loaded pilot's escorts first
-    /// (@0x759a4-0x75b2b).
+    /// keeps its berth. Every other (a loaded pilot's, or one whose ship
+    /// type has no record) takes the lowest berth not already chosen, in
+    /// fleet order, before anything else is set up, as `_LoadPilotData`
+    /// spawns a loaded pilot's escorts first (@0x759a4-0x75b2b). The old
+    /// ship kept after a capture and a ship hired are placed at once, so
+    /// they keep theirs.
     pub(super) fn fleet_berths(&self) -> Vec<u32> {
         let kept: Vec<Option<u32>> = (0..self.pilot.escorts.len())
             .map(|index| {

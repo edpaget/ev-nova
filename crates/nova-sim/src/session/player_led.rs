@@ -24,7 +24,8 @@
 //! is the original's relation over both: the NPCs whose
 //! [`Npc::escorts_player`] holds, in ship-table order: by
 //! [`Npc::berth`], the slot each takes in the ship table. A new ship takes
-//! the first free berth (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b), and
+//! the first free berth (`_GenericRandomShipSpawn` @0x3c8b1-0x3c90b), a
+//! hired escort as it is hired, in the bar (`_SpawnEscort` @0x3fe8f), and
 //! the hired escorts keep theirs across each setup, as
 //! `_DeleteAllComputerShips` (@0x3bf5f) keeps them in the table.
 //! The sites that ask it narrow it as the original does:
@@ -313,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_hired_escort_fills_the_gap_a_lost_one_left_in_the_ship_table() {
+    fn an_escort_with_no_ship_yet_fills_the_gap_a_lost_one_left_in_the_ship_table() {
         let catalog = ships_catalog(MissionShip {
             behav: 1,
             ..shipping(-6, 0)
@@ -325,8 +326,9 @@ mod tests {
         let [a, b, c] = [placed[0], placed[1], placed[2]];
         assert_eq!([a, b, c].map(|id| berth(&session, id)), [1, 2, 3]);
 
-        // B is lost and D hired: D, with no ship yet, takes the gap B left,
-        // below the kept escorts' berths, never one of theirs.
+        // B is lost, and D, an escort with no ship yet (as a loaded
+        // pilot's), takes the gap B left, below the kept escorts' berths,
+        // never one of theirs.
         session.dismiss(b);
         session.pilot.escorts.push(hired());
         jump_to(&mut session, &catalog, 131);
@@ -345,6 +347,53 @@ mod tests {
         assert_eq!(
             order.map(|id| slot(&session, id)),
             [Some(2), Some(3), Some(4), Some(5), Some(6)]
+        );
+    }
+
+    #[test]
+    fn a_mission_escort_set_up_at_take_off_comes_before_an_escort_hired_at_a_busy_spaceport() {
+        let mut catalog = ships_catalog(ships(1));
+        for (_, sites) in &mut catalog.sites {
+            for site in sites.iter_mut().filter(|site| site.id.0 == 128) {
+                site.flags |= crate::landing::StellarFlags::BAR;
+                site.tech_level = 7;
+            }
+        }
+        for record in &mut catalog.ship_records {
+            if record.id == ShipId(200) {
+                record.hire_random = 100;
+            }
+        }
+        let mut session = accepted(&catalog);
+        session.pilot.cash = 1_000_000;
+        let ship = || crate::testkit::npc(0, crate::stats::ShipStats::default());
+        let crowd = [
+            session.traffic.add_npc(ship()),
+            session.traffic.add_npc(ship()),
+        ];
+        assert_eq!(crowd.map(|id| berth(&session, id)), [1, 2]);
+        session
+            .hire(ShipId(200), &mut crate::chance::NeverFires)
+            .expect("hired");
+        // `_SpawnEscort` puts it in the table at once, at the first free
+        // slot among the landed system's ships (@0x3fe8f).
+        let hired = session.fleet[0].expect("placed while landed");
+        assert_eq!(berth(&session, hired), 3);
+        take_off(&mut session, &catalog);
+        let hired = session.fleet[0].expect("placed again");
+        let mission: Vec<NpcId> = session
+            .npcs()
+            .iter()
+            .filter(|npc| npc.mission_escort())
+            .map(|npc| npc.id)
+            .collect();
+        assert_eq!(mission.len(), 2);
+        let order = [mission[0], mission[1], hired];
+        assert_eq!(order.map(|id| berth(&session, id)), [1, 2, 3]);
+        assert_eq!(led(&session), order);
+        assert_eq!(
+            order.map(|id| slot(&session, id)),
+            [Some(2), Some(3), Some(4)]
         );
     }
 

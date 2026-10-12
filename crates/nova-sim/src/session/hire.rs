@@ -24,7 +24,13 @@
 //! (see [`escorts`](super::escorts)), its reserves full as its class holds
 //! them, no standing order, and the daily wage it was hired at
 //! ([`Escort::wage`]): a change made in the spaceport, so a save is due.
-//! A refused hire changes nothing.
+//! Its NPC is put in the system at once, at the first free berth among the
+//! landed system's ships, as `_SpawnEscort` (called from the bar
+//! @0x5f1f1) takes the first free ship-table slot (@0x3fe8f) while the
+//! system's ships stay in the table until take-off; a loaded pilot's
+//! escorts not placed yet keep the berths they will take. So it keeps
+//! that berth at take-off, and a mission escort set up then can come
+//! before it in the formation. A refused hire changes nothing.
 //!
 //! **Paying.** Each hired escort is paid its wage for each day of a jump,
 //! once the date has moved on, and for one day at each take-off, whatever
@@ -44,6 +50,7 @@
 //! [`BoardingRule`](crate::BoardingRule) and
 //! [`Behaviour`](crate::Behaviour): see [`hire`](crate::hire).
 
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use super::Session;
@@ -231,6 +238,17 @@ impl Session {
             });
         });
         self.hire_rolls.redraw(&ship);
+        let index = self.pilot.escorts.len() - 1;
+        self.fleet.resize(index, None);
+        let berths = self.fleet_berths();
+        let unplaced: BTreeSet<u32> = (0..index)
+            .filter(|&earlier| self.fleet[earlier].is_none())
+            .map(|earlier| berths[earlier])
+            .collect();
+        let berth = self.traffic.next_berth_skipping(&unplaced);
+        let placed = self.place_escort_at(index, Some(berth));
+        self.fleet.push(placed);
+        self.reform();
         Ok(Hired { ship, fee, wage })
     }
 }
@@ -1054,6 +1072,30 @@ mod tests {
             .expect("takes off");
         assert_eq!(ships(&session), [(129, None, false), (129, None, true)]);
         assert_eq!(session.take_pay_notes(), [PayNote::Defected(2)]);
+    }
+
+    #[test]
+    fn a_hire_after_loading_takes_the_berth_after_the_loaded_escorts() {
+        let catalog = paying();
+        let mut pilot = crate::Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.cash = 1_000_000;
+        pilot.escorts = vec![paid(129, None, false), paid(130, None, false)];
+        pilot.stellar = Some(BAR_AT);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.fleet, [], "none placed yet");
+        session.hire(ShipId(129), &mut NeverFires).expect("hired");
+        assert_eq!(session.fleet.len(), 3);
+        let hired = session.fleet[2].expect("placed while landed");
+        assert_eq!(session.npc(hired).map(|npc| npc.berth), Some(3));
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        let berths: Vec<Option<u32>> = session
+            .fleet
+            .iter()
+            .map(|id| id.and_then(|id| session.npc(id)).map(|npc| npc.berth))
+            .collect();
+        assert_eq!(berths, [Some(1), Some(2), Some(3)]);
     }
 
     #[test]

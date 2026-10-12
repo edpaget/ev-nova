@@ -618,9 +618,17 @@ impl Traffic {
     /// reserved for: the slot `_GenericRandomShipSpawn` (@0x3c8b1-0x3c90b)
     /// gives a new ship.
     fn next_berth(&self) -> u32 {
+        self.next_berth_skipping(&BTreeSet::new())
+    }
+
+    /// The first berth from 1 that no NPC in the system holds, none is
+    /// reserved for, and `skip` does not hold.
+    pub(crate) fn next_berth_skipping(&self, skip: &BTreeSet<u32>) -> u32 {
         (1..=u32::MAX)
             .find(|berth| {
-                !self.reserved.contains(berth) && self.npcs.iter().all(|npc| npc.berth != *berth)
+                !self.reserved.contains(berth)
+                    && !skip.contains(berth)
+                    && self.npcs.iter().all(|npc| npc.berth != *berth)
             })
             .unwrap_or(u32::MAX)
     }
