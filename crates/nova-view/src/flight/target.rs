@@ -132,8 +132,9 @@ pub struct TargetPanel {
     /// Its name: a marked mission ship's drawn name (`_DrawStatusTarg`
     /// @0x4b6c8), else a person's own, else its ship type's.
     pub name: String,
-    /// Its subtitle: a marked mission ship's drawn subtitle, else a
-    /// person's, else its ship type's (@0x4b80f-0x4b8de).
+    /// Its subtitle: while it is a marked mission ship, the mission's
+    /// drawn subtitle unless that is empty, never a person's; otherwise a
+    /// person's; else its ship type's (@0x4b80f-0x4b8de).
     pub subtitle: String,
     /// Its ship type's picture, if any.
     pub picture: Option<i16>,
