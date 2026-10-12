@@ -87,6 +87,7 @@ use crate::mission::{
     World, abort_checks, abort_penalty, accept_charge, accept_checks, auto_aborts_at_accept,
     cleaned, failure_records, fined, pay_effect, stellars_of, success_records,
 };
+use crate::news::CARGO_NAMES;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::rules::Verdict;
 use crate::story::{
@@ -131,10 +132,6 @@ pub const DEADLINE_TOOK_OFF: u8 = 4;
 
 /// Every hook a slot can register, in order.
 const HOOKS: [u8; 5] = [ARRIVAL, FAILURE, SUCCESS, DEADLINE, DEADLINE_TOOK_OFF];
-
-/// The cargo names `<CT>` reads, lower case (`_lcCargoName`, from
-/// `_LoadStrings` @0x71ba4).
-const CARGO_NAMES: i16 = 4001;
 
 /// Slot `slot`'s subscription for `hook`.
 #[must_use]

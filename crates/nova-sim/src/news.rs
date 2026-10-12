@@ -65,7 +65,7 @@
 //! What the session draws, in order (see [`Session::open_bar`](crate::session::Session::open_bar)):
 //! the commercial, a string of `STR#` [`COMMERCIALS`] (@0x4826a), else
 //! `STR#` [`MISC_STRINGS`] #[`TOP_NEWS`] (@0x48294); the `öops` story
-//! (crons-news-ranks phase 8); then, with any government candidates, one
+//! (below); then, with any government candidates, one
 //! of them, else one of the independent candidates, each equally likely
 //! (@0x486e2, @0x48704), whose `STR#` string **replaces** the story,
 //! empty when that list is missing or empty (`_GetRandomIndString`
@@ -75,20 +75,47 @@
 //! (`Rand(count)+1` @0x72f6e) and kept raw: no tag is filled
 //! (`_NewsDialogUpdate` 0x47c57).
 //!
+//! # The `öops` story
+//!
+//! Before the cron news, `_RandomizeNewsDialog` builds a story from an
+//! active `öops` price event (@0x482a4-0x48586). An event counts while it
+//! has a record and more than one day left, so its last day is never
+//! reported (@0x482b5-0x482c3). It is local when it is at the docked
+//! stellar (@0x482ca), or when its record's `Stellar` is -2 (@0x482d0);
+//! `_DisasterHandler` never starts such an event (@0x41b57-0x41b59), so
+//! that test is defensive. The pool (`oops_pool`) is the local events,
+//! if there are any (@0x482ff), else every active event, anywhere
+//! (@0x4833a); the session draws one, each equally likely. An empty pool
+//! gives no story and no draw (@0x482e8).
+//!
+//! [`oops_story`] tells it from `STR#` [`MISC_STRINGS`] ([`StoryWords`]):
+//! #[`TOP_NEWS`] + " " + its name (cut at its last `;` as loaded) + " " +
+//! #[`HAS`] + " " + #[`RAISED`] for a `PriceDelta` above 0, else
+//! #[`LOWERED`] (zero included) + " " + #[`PRICE_OF`] + " " + the
+//! commodity's lower-case name (`STR#` [`CARGO_NAMES`]) + " " + #[`ON`] +
+//! " " + the stellar's name + "." (@0x483a4-0x48586). An event with no
+//! stellar (@0x4838c) or an empty name (@0x48397) has no story. Nor has
+//! one of a negative commodity, which the original names
+//! `_lcCargoName[-1]`, out of bounds (@0x484b4-0x484bf); one above 5 is
+//! named as equipment, as the loader clamps it. There is no sound in
+//! this range. Cron news then replaces the story.
+//!
 //! # Left out
 //!
-//! - The `öops` story branch (@0x482a4-0x48586) is crons-news-ranks
-//!   phase 8's; its slot is kept, empty.
 //! - The bit loop at the top of `_RandomizeNewsDialog` (@0x48244-0x48257)
 //!   has no effect and is not ported.
 
 use std::collections::BTreeMap;
 
-use crate::catalog::{CronId, CronRecord, GovtId};
+use crate::catalog::{
+    CommCatalog, CronId, CronRecord, DisasterId, DisasterRecord, GovtId, StellarId,
+};
 use crate::cron::CronState;
 use crate::govt::Governments;
+use crate::market::{self, ActiveEvent};
 use crate::rulebook::{RuleKey, Rulebook};
 use crate::rules::{Context, Value};
+use crate::text_tags::TagNames;
 
 /// The lowest `NewsGovt` that names a government; below it a slot is
 /// unused (@0x7d8dd).
@@ -105,6 +132,19 @@ pub const TOP_NEWS: usize = 190;
 /// `STR#` 2002 #191 (1-based) "No news is good news": the story when
 /// `STR#` 8101 is empty (@0x4878d).
 pub const NO_NEWS: usize = 191;
+/// `STR#` 2002 #192 (1-based) "has", in the `öops` story (@0x483d4).
+pub const HAS: usize = 192;
+/// `STR#` 2002 #193 (1-based) "raised": a `PriceDelta` above 0.
+pub const RAISED: usize = 193;
+/// `STR#` 2002 #194 (1-based) "lowered": a `PriceDelta` of 0 or below.
+pub const LOWERED: usize = 194;
+/// `STR#` 2002 #181 (1-based) "the price of".
+pub const PRICE_OF: usize = 181;
+/// `STR#` 2002 #60 (1-based) "on".
+pub const ON: usize = 60;
+/// `STR#` 4001: the cargo names, lower case (`_lcCargoName`, from
+/// `_LoadStrings` @0x71ba4), which the `öops` story and `<CT>` read.
+pub const CARGO_NAMES: i16 = 4001;
 
 /// A bar visit's news: the commercial line and the story, raw, their
 /// tags not filled.
@@ -256,10 +296,136 @@ fn choose(facts: &NewsFacts) -> Candidates {
     found
 }
 
+/// What the `öops` story's pool reads: the active events, their
+/// records, the docked stellar and the rule set.
+pub(crate) struct OopsFacts<'a> {
+    /// The events under way, by ID.
+    pub(crate) events: &'a BTreeMap<DisasterId, ActiveEvent>,
+    /// Every `öops`.
+    pub(crate) disasters: &'a [DisasterRecord],
+    /// The stellar docked at.
+    pub(crate) docked: StellarId,
+    /// The rule set in force.
+    pub(crate) rules: &'a Rulebook,
+}
+
+impl Context for OopsFacts<'_> {
+    fn rulebook(&self) -> &Rulebook {
+        self.rules
+    }
+}
+
+/// The events the `öops` story is drawn among, by ascending ID (see the
+/// module docs).
+#[must_use]
+pub(crate) fn oops_pool<'a>() -> Value<OopsFacts<'a>, Vec<DisasterId>> {
+    Value::plain(
+        "news price events",
+        "_RandomizeNewsDialog @0x482b5-0x48364",
+        oops_candidates,
+    )
+}
+
+/// The pool of [`oops_pool`].
+fn oops_candidates(facts: &OopsFacts) -> Vec<DisasterId> {
+    let active: Vec<(DisasterId, bool)> = facts
+        .events
+        .iter()
+        .filter(|(_, active)| active.days > 1)
+        .filter_map(|(&id, &active)| {
+            let record = facts.disasters.iter().find(|record| record.id == id)?;
+            let local =
+                market::place(active, record) == Some(facts.docked) || record.stellar == NEWS_ONLY;
+            Some((id, local))
+        })
+        .collect();
+    let any_local = active.iter().any(|&(_, local)| local);
+    active
+        .into_iter()
+        .filter(|&(_, local)| local || !any_local)
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// An `öops` `Stellar` of -2, "news only", which counts as local
+/// wherever the player is docked (@0x482d0).
+const NEWS_ONLY: i16 = -2;
+
+/// The `STR#` [`MISC_STRINGS`] pieces the `öops` story is built from,
+/// each empty when missing (`StrcatIndCString` appends nothing).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StoryWords {
+    /// #[`TOP_NEWS`] "Today's top news:".
+    pub top_news: String,
+    /// #[`HAS`] "has".
+    pub has: String,
+    /// #[`RAISED`] "raised".
+    pub raised: String,
+    /// #[`LOWERED`] "lowered".
+    pub lowered: String,
+    /// #[`PRICE_OF`] "the price of".
+    pub price_of: String,
+    /// #[`ON`] "on".
+    pub on: String,
+}
+
+impl StoryWords {
+    /// The pieces, read from `strings`'s `STR#` [`MISC_STRINGS`].
+    #[must_use]
+    pub fn read(strings: &dyn CommCatalog) -> Self {
+        let misc = strings.string_list(MISC_STRINGS);
+        let word = |n: usize| misc.get(n - 1).cloned().unwrap_or_default();
+        Self {
+            top_news: word(TOP_NEWS),
+            has: word(HAS),
+            raised: word(RAISED),
+            lowered: word(LOWERED),
+            price_of: word(PRICE_OF),
+            on: word(ON),
+        }
+    }
+}
+
+/// The `öops` story for `event`, at `place` (the stellar it is at):
+/// `Today's top news: NAME has raised|lowered the price of CARGO on
+/// STELLAR.` (@0x483a4-0x48586). None when it has no place (@0x4838c),
+/// an empty name (@0x48397), or a negative commodity, which the original
+/// names out of bounds (`_lcCargoName[-1]`, @0x484b4). A missing cargo or
+/// stellar name reads empty.
+#[must_use]
+pub fn oops_story(
+    event: &DisasterRecord,
+    place: Option<StellarId>,
+    words: &StoryWords,
+    names: &dyn TagNames,
+) -> Option<String> {
+    let place = place?;
+    if event.name.is_empty() {
+        return None;
+    }
+    let cargo = market::event_commodity(event.commodity)?;
+    let moved = if event.price_delta > 0 {
+        &words.raised
+    } else {
+        &words.lowered
+    };
+    Some(format!(
+        "{} {} {} {} {} {} {} {}.",
+        words.top_news,
+        event.name,
+        words.has,
+        moved,
+        words.price_of,
+        names.cargo_name(cargo).unwrap_or_default(),
+        words.on,
+        names.stellar_name(place).unwrap_or_default(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::GovtRecord;
+    use crate::catalog::{GovtRecord, SystemId};
     use crate::rulebook::RuleSource;
     use crate::testkit::{cron, govt};
 
@@ -585,8 +751,259 @@ mod tests {
         let about = *candidates().about();
         assert_eq!(about.reads(), None);
         assert!(!about.draws());
+        let about = *oops_pool().about();
+        assert_eq!(about.reads(), None);
+        assert!(!about.draws());
         let about = *news_govt_match().about();
         assert_eq!(about.reads(), Some(RuleKey::NewsGovtMatch));
         assert!(!about.draws());
+    }
+
+    const DOCKED: StellarId = StellarId(128);
+    const ELSEWHERE: StellarId = StellarId(140);
+
+    /// A food event `id` whose record is at `stellar`, `PriceDelta` -15.
+    fn oops(id: i16, stellar: i16) -> DisasterRecord {
+        DisasterRecord {
+            id: DisasterId(id),
+            name: format!("Event {id}"),
+            stellar,
+            price_delta: -15,
+            ..DisasterRecord::default()
+        }
+    }
+
+    /// Event `id` active at `at` with `days` left.
+    fn active(id: i16, at: StellarId, days: u16) -> (DisasterId, ActiveEvent) {
+        (
+            DisasterId(id),
+            ActiveEvent {
+                days,
+                stellar: Some(at),
+            },
+        )
+    }
+
+    /// The pool of `events` (records `disasters`) docked at [`DOCKED`].
+    fn pool(events: &[(DisasterId, ActiveEvent)], disasters: &[DisasterRecord]) -> Vec<DisasterId> {
+        let events: BTreeMap<_, _> = events.iter().copied().collect();
+        let rules = Rulebook::default();
+        oops_pool().of(&OopsFacts {
+            events: &events,
+            disasters,
+            docked: DOCKED,
+            rules: &rules,
+        })
+    }
+
+    fn ids(ids: &[i16]) -> Vec<DisasterId> {
+        ids.iter().copied().map(DisasterId).collect()
+    }
+
+    #[test]
+    fn an_events_last_day_is_not_reported() {
+        let records = [oops(130, 128)];
+        assert_eq!(pool(&[active(130, DOCKED, 1)], &records), []);
+        assert_eq!(pool(&[active(130, DOCKED, 0)], &records), []);
+        assert_eq!(pool(&[active(130, DOCKED, 2)], &records), ids(&[130]));
+    }
+
+    #[test]
+    fn local_events_beat_galaxy_wide_ones() {
+        let records = [oops(129, 140), oops(130, 128), oops(131, 128)];
+        assert_eq!(
+            pool(
+                &[
+                    active(129, ELSEWHERE, 5),
+                    active(130, DOCKED, 5),
+                    active(131, DOCKED, 3),
+                ],
+                &records
+            ),
+            ids(&[130, 131])
+        );
+        assert_eq!(
+            pool(
+                &[active(129, ELSEWHERE, 5), active(130, DOCKED, 1)],
+                &records
+            ),
+            ids(&[129]),
+            "with no local event, any active one anywhere"
+        );
+    }
+
+    #[test]
+    fn with_no_active_event_the_pool_is_empty() {
+        assert_eq!(pool(&[], &[oops(130, 128)]), []);
+        assert_eq!(
+            pool(&[active(130, DOCKED, 5)], &[oops(131, 128)]),
+            [],
+            "an event with no record"
+        );
+    }
+
+    /// Defensive: `_DisasterHandler` never starts an event whose
+    /// `Stellar` is -2 (@0x41b57-0x41b59), so the engine never reaches
+    /// this; the news's test for it (@0x482d0) is ported with the rest.
+    #[test]
+    fn a_stellar_minus_two_event_counts_as_local_anywhere() {
+        let records = [oops(129, 140), oops(130, -2)];
+        assert_eq!(
+            pool(
+                &[active(129, ELSEWHERE, 5), active(130, ELSEWHERE, 5)],
+                &records
+            ),
+            ids(&[130])
+        );
+    }
+
+    /// Stellar and cargo names: 128 Earth, cargo 0 food, 5 equipment.
+    struct Names;
+
+    impl TagNames for Names {
+        fn stellar_name(&self, stellar: StellarId) -> Option<String> {
+            (stellar == DOCKED).then(|| "Earth".to_owned())
+        }
+
+        fn system_name(&self, _system: SystemId) -> Option<String> {
+            None
+        }
+
+        fn cargo_name(&self, cargo: u8) -> Option<String> {
+            match cargo {
+                0 => Some("food".to_owned()),
+                5 => Some("equipment".to_owned()),
+                _ => None,
+            }
+        }
+    }
+
+    fn words() -> StoryWords {
+        StoryWords {
+            top_news: "Today's top news:".to_owned(),
+            has: "has".to_owned(),
+            raised: "raised".to_owned(),
+            lowered: "lowered".to_owned(),
+            price_of: "the price of".to_owned(),
+            on: "on".to_owned(),
+        }
+    }
+
+    fn story(event: &DisasterRecord, place: Option<StellarId>) -> Option<String> {
+        oops_story(event, place, &words(), &Names)
+    }
+
+    fn drought(price_delta: i16) -> DisasterRecord {
+        DisasterRecord {
+            name: "A drought".to_owned(),
+            price_delta,
+            ..oops(130, 128)
+        }
+    }
+
+    #[test]
+    fn the_story_reads_raised_for_a_rise_and_lowered_otherwise() {
+        assert_eq!(
+            story(&drought(15), Some(DOCKED)).as_deref(),
+            Some("Today's top news: A drought has raised the price of food on Earth.")
+        );
+        for delta in [-15, 0] {
+            assert_eq!(
+                story(&drought(delta), Some(DOCKED)).as_deref(),
+                Some("Today's top news: A drought has lowered the price of food on Earth."),
+                "{delta}"
+            );
+        }
+        assert_eq!(
+            story(&drought(1), Some(DOCKED)).as_deref(),
+            Some("Today's top news: A drought has raised the price of food on Earth.")
+        );
+    }
+
+    #[test]
+    fn no_story_for_an_event_with_no_place_or_an_empty_name() {
+        assert_eq!(story(&drought(15), None), None, "@0x4838c");
+        let unnamed = DisasterRecord {
+            name: String::new(),
+            ..drought(15)
+        };
+        assert_eq!(story(&unnamed, Some(DOCKED)), None, "@0x48397");
+    }
+
+    #[test]
+    fn a_missing_name_reads_empty() {
+        assert_eq!(
+            story(&drought(15), Some(ELSEWHERE)).as_deref(),
+            Some("Today's top news: A drought has raised the price of food on .")
+        );
+        let unknown = DisasterRecord {
+            commodity: 2,
+            ..drought(15)
+        };
+        assert_eq!(
+            story(&unknown, Some(DOCKED)).as_deref(),
+            Some("Today's top news: A drought has raised the price of  on Earth.")
+        );
+    }
+
+    #[test]
+    fn no_story_for_a_negative_commodity() {
+        let negative = DisasterRecord {
+            commodity: -1,
+            ..drought(15)
+        };
+        assert_eq!(story(&negative, Some(DOCKED)), None);
+    }
+
+    #[test]
+    fn a_commodity_beyond_five_is_named_as_equipment() {
+        let beyond = DisasterRecord {
+            commodity: 9,
+            ..drought(-5)
+        };
+        assert_eq!(
+            story(&beyond, Some(DOCKED)).as_deref(),
+            Some("Today's top news: A drought has lowered the price of equipment on Earth.")
+        );
+    }
+
+    /// `STR#` lists by ID.
+    struct Lists(Vec<(i16, Vec<&'static str>)>);
+
+    impl CommCatalog for Lists {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            self.0
+                .iter()
+                .find(|(list, _)| *list == id)
+                .map(|(_, strings)| strings.iter().map(|&s| s.to_owned()).collect())
+                .unwrap_or_default()
+        }
+    }
+
+    #[test]
+    fn story_words_read_str_2002_and_missing_ones_are_empty() {
+        let mut misc = vec![""; 194];
+        misc[59] = "on";
+        misc[180] = "the price of";
+        misc[189] = "Today's top news:";
+        misc[191] = "has";
+        misc[192] = "raised";
+        misc[193] = "lowered";
+        assert_eq!(StoryWords::read(&Lists(vec![(2002, misc)])), words());
+        let mut short = vec!["x"; 193];
+        short[189] = "Top:";
+        assert_eq!(
+            StoryWords::read(&Lists(vec![(2002, short)])),
+            StoryWords {
+                top_news: "Top:".to_owned(),
+                has: "x".to_owned(),
+                raised: "x".to_owned(),
+                lowered: String::new(),
+                price_of: "x".to_owned(),
+                on: "x".to_owned(),
+            },
+            "#194 past the end"
+        );
+        assert_eq!(StoryWords::read(&Lists(vec![])), StoryWords::default());
     }
 }

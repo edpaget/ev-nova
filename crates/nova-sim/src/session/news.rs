@@ -8,8 +8,11 @@
 //! 1. The commercial line: a string of `STR#`
 //!    [`COMMERCIALS`] (@0x4826a), else, with none or an empty one
 //!    drawn (@0x4826f), `STR#` 2002 #190 (@0x48294), else nothing.
-//! 2. The story starts as the `öops` story, empty until crons-news-ranks
-//!    phase 8 fills it.
+//! 2. The story starts as the `öops` story: with any price event in
+//!    [`oops_pool`] (the local ones, else every active one), one of them,
+//!    each equally likely (@0x482ff, @0x4833a), told by [`oops_story`]
+//!    from `STR#` 2002's pieces ([`StoryWords`]) and the names; with
+//!    none, empty and nothing drawn.
 //! 3. With any government candidates ([`candidates`]), one of them, else
 //!    with any independent candidates one of those, each equally likely
 //!    (@0x486e2, @0x48704); that cron's `STR#` string **replaces** the
@@ -33,9 +36,12 @@
 //! own.
 
 use super::Session;
+use crate::catalog::StellarId;
 use crate::chance::Chance;
+use crate::market;
 use crate::news::{
-    COMMERCIALS, GENERIC_NEWS, MISC_STRINGS, NO_NEWS, News, NewsFacts, TOP_NEWS, candidates,
+    COMMERCIALS, GENERIC_NEWS, MISC_STRINGS, NO_NEWS, News, NewsFacts, OopsFacts, StoryWords,
+    TOP_NEWS, candidates, oops_pool, oops_story,
 };
 
 impl Session {
@@ -51,7 +57,7 @@ impl Session {
             .pick_string(COMMERCIALS, chance)
             .or_else(|| self.nth_string(MISC_STRINGS, TOP_NEWS))
             .unwrap_or_default();
-        let mut story = self.disaster_story(chance);
+        let mut story = self.disaster_story(site.id, chance);
         let found = candidates().of(&NewsFacts {
             crons: &self.crons,
             states: &self.pilot.crons,
@@ -85,12 +91,30 @@ impl Session {
         self.bar_news.as_ref()
     }
 
-    /// The `öops` story: the story the cron news replaces. Empty until
-    /// crons-news-ranks phase 8 fills it (`_RandomizeNewsDialog`
-    /// @0x482a4-0x48586).
-    #[allow(clippy::unused_self)]
-    fn disaster_story(&self, _chance: &mut dyn Chance) -> String {
-        String::new()
+    /// The `öops` story at `docked`, the story the cron news replaces
+    /// (`_RandomizeNewsDialog` @0x482a4-0x48586): one of the
+    /// [`oops_pool`], drawn on `chance`, told by [`oops_story`]. Empty,
+    /// and nothing drawn, with no event active; empty when the event
+    /// drawn has no story.
+    fn disaster_story(&self, docked: StellarId, chance: &mut dyn Chance) -> String {
+        let pool = oops_pool().of(&OopsFacts {
+            events: &self.pilot.events,
+            disasters: &self.goods.disasters,
+            docked,
+            rules: &self.rules,
+        });
+        if pool.is_empty() {
+            return String::new();
+        }
+        let id = pool[pick(pool.len(), chance)];
+        let (Some(&active), Some(record)) = (
+            self.pilot.events.get(&id),
+            self.goods.disasters.iter().find(|record| record.id == id),
+        ) else {
+            return String::new();
+        };
+        let words = StoryWords::read(&*self.strings.0);
+        oops_story(record, market::place(active, record), &words, self).unwrap_or_default()
     }
 }
 
@@ -107,11 +131,14 @@ mod tests {
 
     use super::*;
     use crate::catalog::{
-        CommCatalog, CronId, CronRecord, GovtId, GovtRecord, LandingSite, StellarId, SystemId,
+        CommCatalog, CronId, CronRecord, DisasterId, DisasterRecord, GovtId, GovtRecord,
+        LandingSite, StellarId, SystemId,
     };
     use crate::chance::NeverFires;
     use crate::cron::CronState;
     use crate::landing::StellarFlags;
+    use crate::market::ActiveEvent;
+    use crate::news::CARGO_NAMES;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::entry::NoTraffic;
     use crate::testkit::{FakePilotCatalog, Scripted, catalog, cron, govt, land_now, planet};
@@ -142,21 +169,28 @@ mod tests {
         }
     }
 
-    /// `STR#` 2002 with its #190 and #191 and nothing else of note.
+    /// `STR#` 2002 with its #190 and #191, and the price story's #60,
+    /// #181 and #192-#194.
     fn misc() -> Vec<&'static str> {
-        let mut strings = vec!["-"; 191];
+        let mut strings = vec!["-"; 194];
+        strings[59] = "on";
+        strings[180] = "the price of";
         strings[189] = "Today's top news:";
         strings[190] = "No news is good news";
+        strings[191] = "has";
+        strings[192] = "raised";
+        strings[193] = "lowered";
         strings
     }
 
-    /// The usual lists: one commercial, one generic story, and `STR#`
-    /// 2002.
+    /// The usual lists: one commercial, one generic story, `STR#` 2002
+    /// and the cargo names.
     fn lists() -> Lists {
         Lists::default()
             .with(COMMERCIALS, &["Buy Bibble"])
             .with(GENERIC_NEWS, &["Nothing happened"])
             .with(MISC_STRINGS, &misc())
+            .with(CARGO_NAMES, &["food", "industrial"])
     }
 
     /// Govt 130 (class 1, allied with class 2) and 131 (class 2).
@@ -496,6 +530,141 @@ mod tests {
                 holdoff: 2,
             },
         );
+        assert_eq!(
+            opened(&mut session, &mut NeverFires).story,
+            "Nothing happened"
+        );
+    }
+
+    /// A food event `id` named `name`, its record at `stellar`.
+    fn oops(id: i16, name: &str, stellar: i16) -> DisasterRecord {
+        DisasterRecord {
+            id: DisasterId(id),
+            name: name.to_owned(),
+            stellar,
+            price_delta: 15,
+            duration: 10,
+            ..DisasterRecord::default()
+        }
+    }
+
+    /// [`barred`] with these crons and `öops`, stellar 128 "Earth" and
+    /// 140 "Mars".
+    fn priced(crons: Vec<CronRecord>, disasters: Vec<DisasterRecord>) -> FakePilotCatalog {
+        let mut catalog = barred(Some(130), crons);
+        catalog.disasters = disasters;
+        catalog.place_names.stellars = BTreeMap::from([
+            (StellarId(128), "Earth".to_owned()),
+            (StellarId(140), "Mars".to_owned()),
+        ]);
+        catalog
+    }
+
+    /// [`landed`], with these events active (ID, stellar, days left).
+    fn eventful(catalog: &FakePilotCatalog, lists: Lists, events: &[(i16, i16, u16)]) -> Session {
+        let mut session = landed(catalog, lists);
+        session.pilot.events = events
+            .iter()
+            .map(|&(id, stellar, days)| {
+                let stellar = Some(StellarId(stellar));
+                (DisasterId(id), ActiveEvent { days, stellar })
+            })
+            .collect();
+        session
+    }
+
+    #[test]
+    fn the_bar_tells_an_active_local_price_event() {
+        let catalog = priced(vec![], vec![oops(130, "A drought", 128)]);
+        let mut session = eventful(&catalog, lists(), &[(130, 128, 5)]);
+        let mut chance = Scripted::rolling(&[]);
+        assert_eq!(
+            opened(&mut session, &mut chance).story,
+            "Today's top news: A drought has raised the price of food on Earth."
+        );
+        assert_eq!(
+            chance.sides_asked,
+            [1, 1],
+            "commercial, the event; no generic story"
+        );
+    }
+
+    #[test]
+    fn a_local_event_is_chosen_over_one_elsewhere() {
+        let catalog = priced(
+            vec![],
+            vec![oops(129, "A flood", 140), oops(130, "A drought", 128)],
+        );
+        let mut session = eventful(&catalog, lists(), &[(129, 140, 5), (130, 128, 5)]);
+        for roll in [0, 1] {
+            let news = opened(&mut session, &mut Scripted::rolling(&[0, roll]));
+            assert_eq!(
+                news.story, "Today's top news: A drought has raised the price of food on Earth.",
+                "roll {roll}"
+            );
+        }
+        let mut session = eventful(&catalog, lists(), &[(129, 140, 5)]);
+        assert_eq!(
+            opened(&mut session, &mut NeverFires).story,
+            "Today's top news: A flood has raised the price of food on Mars.",
+            "with none local, one elsewhere"
+        );
+    }
+
+    #[test]
+    fn among_several_local_events_the_roll_picks() {
+        let catalog = priced(
+            vec![],
+            vec![oops(130, "A drought", 128), oops(131, "A glut", 128)],
+        );
+        let mut session = eventful(&catalog, lists(), &[(130, 128, 5), (131, 128, 5)]);
+        let mut chance = Scripted::rolling(&[0, 1]);
+        assert_eq!(
+            opened(&mut session, &mut chance).story,
+            "Today's top news: A glut has raised the price of food on Earth."
+        );
+        assert_eq!(chance.sides_asked, [1, 2], "commercial, the event");
+        let mut chance = Scripted::rolling(&[0, 0]);
+        assert_eq!(
+            opened(&mut session, &mut chance).story,
+            "Today's top news: A drought has raised the price of food on Earth."
+        );
+    }
+
+    #[test]
+    fn with_no_active_event_no_draw_is_made_for_the_story() {
+        let catalog = priced(vec![], vec![oops(130, "A drought", 128)]);
+        let mut session = eventful(&catalog, lists(), &[(130, 128, 1)]);
+        let mut chance = Scripted::rolling(&[]);
+        assert_eq!(opened(&mut session, &mut chance).story, "Nothing happened");
+        assert_eq!(chance.sides_asked, [1, 1], "commercial, generic story");
+    }
+
+    #[test]
+    fn cron_news_replaces_the_price_story() {
+        let catalog = priced(
+            vec![newsy(128, &[], 15_100)],
+            vec![oops(130, "A drought", 128)],
+        );
+        let lists = lists().with(15_100, &["Pirates lose"]);
+        let mut session = eventful(&catalog, lists, &[(130, 128, 5)]);
+        let mut chance = Scripted::rolling(&[]);
+        assert_eq!(opened(&mut session, &mut chance).story, "Pirates lose");
+        assert_eq!(
+            chance.sides_asked,
+            [1, 1, 1, 1],
+            "commercial, event, cron, string"
+        );
+    }
+
+    #[test]
+    fn an_event_with_no_story_falls_through_to_generic_news() {
+        let negative = DisasterRecord {
+            commodity: -1,
+            ..oops(130, "A drought", 128)
+        };
+        let catalog = priced(vec![], vec![negative]);
+        let mut session = eventful(&catalog, lists(), &[(130, 128, 5)]);
         assert_eq!(
             opened(&mut session, &mut NeverFires).story,
             "Nothing happened"

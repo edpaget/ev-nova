@@ -639,7 +639,7 @@ fn base_price_string(strings: &CommodityStrings, n: usize) -> &str {
 pub struct Goods {
     commodities: Vec<(u8, Commodity)>,
     junk: Vec<JunkRecord>,
-    disasters: Vec<DisasterRecord>,
+    pub(crate) disasters: Vec<DisasterRecord>,
     /// The stellars a `Stellar` -1 event may be placed at, by ascending ID.
     stellars: Vec<StellarId>,
 }

@@ -12,6 +12,9 @@
 //!   are allied both ways and neither is derelict. By the other reading
 //!   of `news_govt_match` only Polaris's stellars show it, and Merrol
 //!   shows `STR#` 8101's generic news.
+//! - `öops` 128 "An enormous food surplus" (`Stellar` 137 Port Kane,
+//!   commodity 0, `PriceDelta` -15) tells its story from `STR#` 2002's
+//!   pieces and `STR#` 4001's "food".
 
 mod common;
 
@@ -19,10 +22,10 @@ use std::rc::Rc;
 
 use nova_data::GameData;
 use nova_data::records::cron::Cron;
-use nova_sim::news::{self, COMMERCIALS, GENERIC_NEWS};
+use nova_sim::news::{self, CARGO_NAMES, COMMERCIALS, GENERIC_NEWS, StoryWords};
 use nova_sim::{
-    Bit, Chance, CommCatalog, CronId, GameDate, GovtId, PilotCatalog, RuleKey, RuleSource,
-    Rulebook, Session, StellarId, SystemId,
+    Bit, Chance, CommCatalog, CronId, DisasterId, GameDate, GovtId, PilotCatalog, PlaceNames,
+    RuleKey, RuleSource, Rulebook, Session, StellarId, SystemId, TagNames,
 };
 
 fn bit(n: u16) -> Bit {
@@ -137,5 +140,56 @@ fn a_running_stock_crons_news_shows_at_an_allied_governments_spaceport() {
         session.news().map(|news| &news.story),
         generic.last(),
         "only Polaris's stellars show crön 231's news"
+    );
+}
+
+/// The stock names: the stellars' and systems' from their resources, the
+/// cargo names from `STR#` 4001.
+struct StockNames {
+    places: PlaceNames,
+    cargo: Vec<String>,
+}
+
+impl TagNames for StockNames {
+    fn stellar_name(&self, stellar: StellarId) -> Option<String> {
+        self.places.stellars.get(&stellar).cloned()
+    }
+
+    fn system_name(&self, system: SystemId) -> Option<String> {
+        self.places.systems.get(&system).cloned()
+    }
+
+    fn cargo_name(&self, cargo: u8) -> Option<String> {
+        self.cargo.get(usize::from(cargo)).cloned()
+    }
+}
+
+#[test]
+fn the_food_surplus_makes_the_news_at_port_kane() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let surplus = data
+        .disasters()
+        .into_iter()
+        .find(|event| event.id == DisasterId(128))
+        .expect("öops 128");
+    assert_eq!((surplus.stellar, surplus.commodity), (137, 0));
+    let names = StockNames {
+        places: data.place_names(),
+        cargo: data.string_list(CARGO_NAMES),
+    };
+    assert_eq!(
+        news::oops_story(
+            &surplus,
+            Some(StellarId(137)),
+            &StoryWords::read(&data),
+            &names
+        )
+        .as_deref(),
+        Some(
+            "Today's top news: An enormous food surplus has lowered the price of food on Port Kane."
+        )
     );
 }
