@@ -50,7 +50,10 @@
 //! [`ai::escort`](crate::ai::escort)).
 //!
 //! The strings are `STR#` 2002's: #51, #133, #134 and #154 the constants
-//! below, and the labels each type gives.
+//! below, the labels each type gives, #155-#159 what a command's message
+//! says the escorts are doing ([`EscortCommand::doing`]) and #150-#154
+//! what they will do, said of a command given while a jump is under way
+//! ([`EscortCommand::will`], `_IssueNewEscortCommand` @0x66461-0x664e5).
 
 use crate::flight::{ShipState, facing};
 use crate::geometry::Vec2;
@@ -200,6 +203,21 @@ impl EscortCommand {
             Self::Dock => "returning to hangar.",
         }
     }
+
+    /// What its message says the escorts will do when it is given while
+    /// a jump is under way (`STR#` 2002 #150-#154,
+    /// `_IssueNewEscortCommand` @0x66461-0x664e0). Attack says
+    /// [`WILL_ATTACK`] whether or not the escorts took a target.
+    #[must_use]
+    pub const fn will(self) -> &'static str {
+        match self {
+            Self::Attack => WILL_ATTACK,
+            Self::Defend => "will defend.",
+            Self::Hold => "will hold position.",
+            Self::Recall => "will return to formation.",
+            Self::Dock => "will return to hangar.",
+        }
+    }
 }
 
 /// The escorts a command goes to: every one, or one class.
@@ -250,16 +268,21 @@ impl EscortGroup {
 }
 
 /// What a command to the escorts changed, for its message: the group
-/// it went to, the command, and whether Attack copied the player's
-/// target.
+/// it went to, the command, whether Attack had a target to report, and
+/// whether a jump was under way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Commanded {
     /// The escorts it went to.
     pub group: EscortGroup,
     /// The command.
     pub command: EscortCommand,
-    /// Whether the escorts took the player's target to attack.
+    /// Whether Attack had the player's target to report ("attacking
+    /// target.").
     pub targeted: bool,
+    /// Whether it was given while a jump was under way, the pre-jump
+    /// stage included (the original's ship +0x50 > 0, @0x66466): its
+    /// message then says what the escorts will do ([`EscortCommand::will`]).
+    pub underway: bool,
 }
 
 /// One class's row in the escort menu.
@@ -573,6 +596,27 @@ mod tests {
         assert_eq!(WILL_ATTACK, "will attack.");
         assert_eq!(ESCORT_COMMANDS, "Escort Commands");
         assert_eq!(NO_ESCORTS, "You don't have any escorts.");
+    }
+
+    #[test]
+    fn the_will_strings_are_str_2002s_150_to_154() {
+        assert_eq!(
+            [
+                EscortCommand::Dock,
+                EscortCommand::Recall,
+                EscortCommand::Hold,
+                EscortCommand::Defend,
+                EscortCommand::Attack
+            ]
+            .map(EscortCommand::will),
+            [
+                "will return to hangar.",
+                "will return to formation.",
+                "will hold position.",
+                "will defend.",
+                WILL_ATTACK
+            ]
+        );
     }
 
     #[test]

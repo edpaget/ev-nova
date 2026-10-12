@@ -1063,7 +1063,8 @@ mod tests {
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Recall,
-                targeted: false
+                targeted: false,
+                underway: false
             }),
             "the warship went back to formation"
         );
@@ -1087,7 +1088,8 @@ mod tests {
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Dock,
-                targeted: false
+                targeted: false,
+                underway: false
             }),
             "no escort's order changed to formation"
         );

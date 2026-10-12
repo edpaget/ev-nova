@@ -1161,7 +1161,10 @@ impl Session {
     /// pre-jump stage the controls are ignored: the ship flies the stage
     /// ([`pre_jump::fly`]) instead, and the jump begins on the tick it is
     /// ready. A landed ship, or one in hyperspace, does not move, glows not
-    /// at all, and gains no fuel. In flight, a mission sound a `P` holds
+    /// at all, and gains no fuel. As the jump begins and on every tick in
+    /// hyperspace, the ships the player leads let go of their targets
+    /// (`_MakeEscortsHyperWithParent` @0x3fdc0-0x3fdc2; see the `escorts`
+    /// module). In flight, a mission sound a `P` holds
     /// sounds (see the `script_effects` module). Any tick ends a gate's pending entry: the
     /// original's hypergate map is modal, so nothing ticks between the
     /// land key and the pick. A ship that is not intact ignores the
@@ -1216,7 +1219,10 @@ impl Session {
                 self.thrust(thrust);
                 self.start_jump_if_ready(to, bearing);
             }
-            Some(Jump::Hyperspace(_)) => return,
+            Some(Jump::Hyperspace(_)) => {
+                self.let_go_of_led_targets();
+                return;
+            }
         }
         regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
     }
@@ -2004,6 +2010,7 @@ impl Session {
             self.jump = Some(Jump::Hyperspace(to));
             self.stop_thrust();
             self.sounds.push(SimSound::JumpBegan);
+            self.let_go_of_led_targets();
         }
     }
 

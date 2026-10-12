@@ -1212,6 +1212,7 @@ mod tests {
                 group: EscortGroup::All,
                 command: EscortCommand::Hold,
                 targeted: false,
+                underway: false,
             })
         );
         assert_eq!(orders(&session), [Some(EscortOrder::Hold); 2]);

@@ -46,14 +46,23 @@
 //! @0x660d5): a command goes to every escort of its group, hired or a
 //! mission escort (the original takes every ship led by the player whose
 //! class matches, @0x6614a-0x66176), each taking the command's order,
-//! and Attack copies the player's target to each, unless that is a ship
-//! the player leads (`_AlliedWithPlayer` @0x6985-0x69d0). Return to Hangar
+//! and Attack copies the player's target to each, unless the player
+//! leads it or it is led by a ship the player leads (`_AlliedWithPlayer`
+//! @0x6985-0x69d0); its report says it attacks the target unless the
+//! player leads it (@0x6653f-0x66559). Return to Hangar
 //! ([`EscortCommand::Dock`]) sends the carried fighters home and any
 //! other escort back to formation; its report says Recall when some such
 //! escort had another order. It reports what it
 //! changed ([`Commanded`]) only when some escort's order or target
 //! changed, and then beeps ([`SimSound::EscortsCommanded`](crate::SimSound),
-//! `_beepSnd[1]` @0x665be-0x665e1). The escort menu's rows ([`Session::escort_menu`]) give each
+//! `_beepSnd[1]` @0x665be-0x665e1). A command is taken while a jump is
+//! under way, the pre-jump stage included, and reported as under way, its
+//! message saying what the escorts will do (`_IssueNewEscortCommand`
+//! @0x66461-0x664e5; see [`EscortCommand::will`](crate::escort::EscortCommand::will)).
+//! In hyperspace the escorts let go of their targets every tick
+//! (`_MakeEscortsHyperWithParent` @0x3fdc0-0x3fdc2), so an Attack there
+//! always copies the target afresh; on arrival an order given during the
+//! jump is reset or kept as any other is. The escort menu's rows ([`Session::escort_menu`]) give each
 //! class's presence and its first escort's order. A carried fighter is
 //! placed as any escort is, its carrier the player (see
 //! [`fighters`](super::fighters)).
@@ -464,20 +473,30 @@ impl Session {
 
     /// Gives every escort of `group` `command` (see the module docs), and
     /// what it changed: none when it changed no escort's order or
-    /// target, when the player has no escort of `group`, and while landed
-    /// or jumping.
+    /// target, when the player has no escort of `group`, and while
+    /// landed. A command given while a jump is under way, the pre-jump
+    /// stage included, reaches the escorts as any other does and is
+    /// reported as under way ([`Commanded::underway`]), as the original
+    /// takes the escort keys on every frame of a jump but its arrival
+    /// (`_HandlePlayer` @0x6dd00-0x6e452, `_IssueNewEscortCommand`
+    /// @0x66461).
     pub fn command_escorts(
         &mut self,
         group: EscortGroup,
         command: EscortCommand,
     ) -> Option<Commanded> {
-        if self.landed.is_some() || self.jumping().is_some() {
+        if self.landed.is_some() {
             return None;
         }
-        let target = self.target.filter(|&target| {
+        // Reported, "attacking target.", for a target the player does not
+        // lead (@0x6653f-0x66559); copied only when it is not allied with
+        // the player either (@0x6625f).
+        let reported = self.target.filter(|&target| {
             command == EscortCommand::Attack && !self.player_led().any(|npc| npc.id == target)
         });
-        let target = target.map(ShipRef::Npc);
+        let target = reported
+            .filter(|&target| !self.allied_with_player(target))
+            .map(ShipRef::Npc);
         let mut changed = false;
         let mut recalled = false;
         for index in 0..self.pilot.escorts.len() {
@@ -531,8 +550,31 @@ impl Session {
             } else {
                 command
             },
-            targeted: target.is_some(),
+            targeted: reported.is_some(),
+            underway: self.jump.is_some(),
         })
+    }
+
+    /// Whether NPC `id` is allied with the player, as `_AlliedWithPlayer`
+    /// (@0x6985-0x69d0) has it: a ship the player leads, or one led by a
+    /// ship the player leads, such as a fighter an escort launched.
+    fn allied_with_player(&self, id: NpcId) -> bool {
+        let led = |id| self.player_led().any(|npc| npc.id == id);
+        led(id) || self.npc(id).and_then(|npc| npc.leader).is_some_and(led)
+    }
+
+    /// Lets go of every target of the ships the player leads, as
+    /// `_MakeEscortsHyperWithParent` does on every frame of the
+    /// hyperspace stage (@0x3fdc0-0x3fdc2): an Attack given in hyperspace
+    /// then always copies the player's target afresh, and the escorts
+    /// arrive holding none.
+    pub(super) fn let_go_of_led_targets(&mut self) {
+        let led: Vec<NpcId> = self.player_led().map(|npc| npc.id).collect();
+        for id in led {
+            if let Some(npc) = self.npc_mut(id) {
+                npc.target = None;
+            }
+        }
     }
 
     /// `class`'s row in the escort menu: whether the player leads a ship
@@ -1408,7 +1450,8 @@ mod tests {
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Attack,
-                targeted: true
+                targeted: true,
+                underway: false
             })
         );
         for npc in escort_npcs(&session) {
@@ -1450,7 +1493,8 @@ mod tests {
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Attack,
-                targeted: false
+                targeted: false,
+                underway: false
             })
         );
         let mut session = flying(&catalog, RuleSource::Engine);
@@ -1497,7 +1541,8 @@ mod tests {
             Some(Commanded {
                 group: warships,
                 command: EscortCommand::Hold,
-                targeted: false
+                targeted: false,
+                underway: false
             })
         );
         let orders = |session: &Session| {
@@ -1585,27 +1630,174 @@ mod tests {
     }
 
     #[test]
-    fn no_command_is_given_while_jumping() {
+    fn a_command_given_in_hyperspace_reaches_the_escorts_under_way() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Bible);
         session.plot_course(SystemId(131)).expect("a route");
         crate::testkit::fly_out(&mut session);
         begin_jump_now(&mut session).expect("jumps");
-        let before = session.pilot().clone();
-        let npcs: Vec<Npc> = escort_npcs(&session).into_iter().cloned().collect();
+        session.take_sounds();
         assert_eq!(
             session.command_escorts(EscortGroup::All, EscortCommand::Hold),
-            None
+            Some(Commanded {
+                group: EscortGroup::All,
+                command: EscortCommand::Hold,
+                targeted: false,
+                underway: true
+            })
         );
-        assert_eq!(session.pilot(), &before, "the records' orders unchanged");
-        assert_eq!(orders(&session), [Some(EscortOrder::Defend), None]);
-        assert_eq!(
+        assert_eq!(orders(&session), [Some(EscortOrder::Hold); 2]);
+        assert!(
             escort_npcs(&session)
-                .into_iter()
-                .cloned()
-                .collect::<Vec<_>>(),
-            npcs,
-            "the NPCs' orders unchanged"
+                .iter()
+                .all(|npc| npc.escort.and_then(|duty| duty.order) == Some(EscortOrder::Hold)),
+            "the NPCs' orders"
+        );
+        assert_eq!(session.class_orders, [Some(EscortOrder::Hold); 4]);
+        assert!(
+            session
+                .take_sounds()
+                .contains(&crate::SimSound::EscortsCommanded)
+        );
+    }
+
+    #[test]
+    fn a_command_given_while_braking_for_a_jump_is_under_way() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Bible);
+        session.plot_course(SystemId(131)).expect("a route");
+        crate::testkit::fly_out(&mut session);
+        session.begin_jump().expect("pre-jump");
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)), "braking");
+        assert_eq!(
+            session.command_escorts(EscortGroup::All, EscortCommand::Defend),
+            Some(Commanded {
+                group: EscortGroup::All,
+                command: EscortCommand::Defend,
+                targeted: false,
+                underway: true
+            })
+        );
+        assert_eq!(orders(&session), [Some(EscortOrder::Defend); 2]);
+    }
+
+    #[test]
+    fn an_order_given_in_hyperspace_is_reset_on_arrival_by_the_engine_and_kept_by_the_bible() {
+        for (source, kept) in [
+            (RuleSource::Engine, None),
+            (RuleSource::Bible, Some(EscortOrder::Hold)),
+        ] {
+            let catalog = fleeted();
+            let mut session = flying(&catalog, source);
+            session.plot_course(SystemId(131)).expect("a route");
+            crate::testkit::fly_out(&mut session);
+            begin_jump_now(&mut session).expect("jumps");
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold);
+            assert_eq!(orders(&session), [Some(EscortOrder::Hold); 2]);
+            session.arrive(&catalog, &mut NeverFires).expect("arrives");
+            tick(&mut session, &catalog);
+            assert_eq!(orders(&session), [kept; 2], "{source:?}");
+            assert!(
+                escort_npcs(&session)
+                    .iter()
+                    .all(|npc| npc.escort.and_then(|duty| duty.order) == kept),
+                "{source:?}"
+            );
+        }
+    }
+
+    /// A session by the Bible in hyperspace, the escorts having taken
+    /// pirate `quarry` before the jump: the player's target.
+    fn attacking_into_hyperspace(catalog: &FakePilotCatalog) -> (Session, NpcId) {
+        let mut session = flying(catalog, RuleSource::Bible);
+        let quarry = pirate(&mut session, 0.0, -400.0, Goal::Idle);
+        session.target = Some(quarry);
+        assert_eq!(
+            session
+                .command_escorts(EscortGroup::All, EscortCommand::Attack)
+                .map(|commanded| commanded.targeted),
+            Some(true)
+        );
+        assert!(
+            escort_npcs(&session)
+                .iter()
+                .all(|npc| npc.target == Some(ShipRef::Npc(quarry)))
+        );
+        session.plot_course(SystemId(131)).expect("a route");
+        crate::testkit::fly_out(&mut session);
+        session.target = Some(quarry);
+        begin_jump_now(&mut session).expect("jumps");
+        (session, quarry)
+    }
+
+    #[test]
+    fn attack_in_hyperspace_copies_the_target_onto_escorts_that_let_theirs_go() {
+        let catalog = fleeted();
+        let (mut session, quarry) = attacking_into_hyperspace(&catalog);
+        assert!(
+            escort_npcs(&session).iter().all(|npc| npc.target.is_none()),
+            "let go as the jump begins"
+        );
+        let attacked = Some(Commanded {
+            group: EscortGroup::All,
+            command: EscortCommand::Attack,
+            targeted: true,
+            underway: true,
+        });
+        for streak in 0..2 {
+            session.take_sounds();
+            assert_eq!(
+                session.command_escorts(EscortGroup::All, EscortCommand::Attack),
+                attacked,
+                "attack {streak}"
+            );
+            assert!(
+                session
+                    .take_sounds()
+                    .contains(&crate::SimSound::EscortsCommanded),
+                "attack {streak}"
+            );
+            assert!(
+                escort_npcs(&session)
+                    .iter()
+                    .all(|npc| npc.target == Some(ShipRef::Npc(quarry))),
+                "attack {streak}"
+            );
+            session.tick(Controls::default());
+            assert!(
+                escort_npcs(&session).iter().all(|npc| npc.target.is_none()),
+                "let go every tick of the streak"
+            );
+        }
+        session.command_escorts(EscortGroup::All, EscortCommand::Attack);
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert!(
+            escort_npcs(&session).iter().all(|npc| npc.target.is_none()),
+            "none held on arrival"
+        );
+    }
+
+    #[test]
+    fn attack_does_not_copy_a_target_led_by_an_escort_but_reports_it() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let freighter = session.fleet[1].expect("placed");
+        let launched = pirate(&mut session, 0.0, -400.0, Goal::Idle);
+        session.npc_mut(launched).expect("here").leader = Some(freighter);
+        session.target = Some(launched);
+        assert_eq!(
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack),
+            Some(Commanded {
+                group: EscortGroup::All,
+                command: EscortCommand::Attack,
+                targeted: true,
+                underway: false
+            }),
+            "attacking target."
+        );
+        assert!(
+            escort_npcs(&session).iter().all(|npc| npc.target.is_none()),
+            "allied with the player: not copied"
         );
     }
 

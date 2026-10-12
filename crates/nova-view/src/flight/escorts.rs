@@ -621,6 +621,7 @@ mod tests {
             group,
             command,
             targeted,
+            underway: false,
         })
     }
 
