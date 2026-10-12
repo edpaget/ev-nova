@@ -93,8 +93,8 @@
 //!   ([`JoinFleet`]) for a person who may join, which answer each
 //!   press with an [`Answer`]: a reply, a [`Deed`] and a price asked
 //!   ([`Ask`]); the [`Help`] a ship gives the player once asked; and what
-//!   the comm dialog shows of the player's own escort ([`EscortStatus`]),
-//!   a hired one's daily pay among it.
+//!   the comm dialog shows of a ship the player leads ([`EscortStatus`]),
+//!   a hired escort's daily pay among it.
 //! - [`glow`]: how bright a ship's engine glow is: its base level, which
 //!   thrust ramps up and coasting down ([`ramp_glow`]), and the level
 //!   drawn at a tick, flickering on the [`BlinkChance`] port

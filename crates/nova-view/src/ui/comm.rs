@@ -8,8 +8,8 @@
 //! **The comm dialog** shows a [`HailView`]: the ship's reply in item 10,
 //! its picture (`PICT` 5000 + its ID - 128) in item 11, and in item 12
 //! "Class: <ship> (<government>)" (`STR#` 2002 #195), with "Status:
-//! Hostile" (#196, #174) in red below for a hostile ship, and for the
-//! player's own escort "Status: Hired Escort" (#166) and its daily pay,
+//! Hostile" (#196, #174) in red below for a hostile ship, and for a
+//! ship the player leads "Status: Hired Escort" (#166) and its daily pay,
 //! "Pay: <wage> credits per day" (#297, #267), or "Status: Escort"
 //! (#168), in bright green (`_CommDialogUpdate` @0x90688-0x90704; the
 //! pay line is the original's escort dialog's, shown here, as the help
@@ -179,7 +179,7 @@ pub fn pay_text(wage: i64) -> String {
 }
 
 /// The status lines item 12 shows below the class for `view`, each with
-/// its colour: for the player's escort "Status: Hired Escort" (`STR#`
+/// its colour: for a ship the player leads "Status: Hired Escort" (`STR#`
 /// 2002 #166) and its pay, or "Status: Escort" (#168), in bright green;
 /// for a hostile ship "Status: Hostile", in red; otherwise none.
 #[must_use]

@@ -769,7 +769,11 @@ mod tests {
         let (mut session, view) = hailed(&catalog);
         assert!(labels(&view).contains(&REQUEST_ASSISTANCE));
         assert!(!labels(&view).contains(&RELEASE), "{:?}", labels(&view));
-        assert_eq!(view.escort, None, "not the hired escort's dialog");
+        assert_eq!(
+            view.escort,
+            Some(crate::hail::EscortStatus { wage: None }),
+            "\"Status: Escort\" with no pay, as _CommDialogUpdate shows any ship the player leads"
+        );
         assert!(!view.hostile);
         assert_eq!(
             request_assistance(&mut session, &catalog, &view),
