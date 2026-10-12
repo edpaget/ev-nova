@@ -216,6 +216,9 @@
 //!   original's `_MungeBriefing`: a [`TagContext`] of the pilot, the
 //!   person and the mission's resolved [`MissionValues`], its names read
 //!   through the [`TagNames`] port ([`text_tags::expand`]).
+//! - [`top_speed`]: a ship's top speed in flight, the original's
+//!   `_ShipMaxSpeed` branch by branch: the 1.5 the player and the ships it
+//!   leads fly at without Strict Play ([`top_speed::led_speed`]).
 //! - [`traffic`]: NPC [`Traffic`]: the ships spawned from a system's
 //!   `düde`s and fleets on arrival and over time, each [`Npc`] flown by an
 //!   autopilot with the player's flight physics and stats.
@@ -279,6 +282,7 @@ pub mod targeting;
 #[cfg(test)]
 mod testkit;
 pub mod text_tags;
+pub mod top_speed;
 pub mod traffic;
 pub mod wares;
 
