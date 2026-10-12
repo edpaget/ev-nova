@@ -1590,6 +1590,21 @@ mod tests {
     }
 
     #[test]
+    fn bug_b_needs_a_post_holdoff_without_one_the_cron_ends_by_each_reading() {
+        let records = [timed(128, 1, 2, 0)];
+        for post in RuleSource::ALL {
+            let mut day = MockDay::eligible(128).with_rules(holdoffs(RuleSource::Bible, post));
+            assert_eq!(day.day(&records), [Asked(128)]);
+            assert_eq!(day.day(&records), []);
+            assert_eq!(day.day(&records), [Started(128)]);
+            day.eligible.clear();
+            assert_eq!(day.day(&records), [Ended(128)]);
+            assert_eq!(day.of(128), None, "{post:?}: inactive");
+            assert_eq!(day.day(&records), [Asked(128)], "{post:?}");
+        }
+    }
+
+    #[test]
     fn bug_b_a_negative_pre_holdoff_holds_off_nothing() {
         let records = [timed(128, 1, -1, 2)];
         let mut day =
