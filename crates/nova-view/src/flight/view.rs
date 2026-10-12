@@ -10397,6 +10397,27 @@ mod tests {
     }
 
     #[test]
+    fn the_target_panel_is_redrawn_once_the_plunder_dialog_closes() {
+        let mut view = beside(750, 750, 0, true);
+        view.tick(TICK);
+        while now_tick(&view) % TARGET_PERIOD_TICKS != 1 {
+            view.tick(TICK);
+        }
+        let mut view = view.with_disable_rule(Rc::new(DisablesTheStrong));
+        view.tick(TICK);
+        assert_eq!(status_now(&view), Some(nova_sim::TargetStatus::Disabled));
+        assert_ne!(status_shown(&view), status_now(&view), "held");
+        tap(&mut view, BOARD_KEY);
+        let boarding = view.take_boarding().expect("boarded").view;
+        assert_eq!(
+            view.plunder(Take::Credits),
+            Taken::Credits(boarding.credits)
+        );
+        assert_eq!(*view.target_shown(), view.target_now(), "redrawn at once");
+        assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
+    }
+
+    #[test]
     fn use_as_escort_says_so() {
         let mut view = captured();
         view.tick(TICK / 2);
