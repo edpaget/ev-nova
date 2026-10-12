@@ -109,7 +109,11 @@
 //! `nëbu` ID and whether it is `active`. A `visible` or `govt` of `null`
 //! changes nothing; a `govt` override is `{"govt": id}`, or `{"govt":
 //! null}` for independent (`{"system": 131, "visible": false, "govt":
-//! {"govt": 128}}`).
+//! {"govt": 128}}`). A system's `visible` is written as the overlay holds
+//! it (`false` hidden by the last refresh of its `Visibility`, `true` a
+//! chain head the player's move showed), but never trusted: a load
+//! recomputes it from the bits before anything reads it (crons-news-ranks
+//! phase 5), as the original saves no visibility.
 //!
 //! The active missions (`missions`) are listed by slot, the free slots
 //! left out: each its `slot` (0 to 15), its `mïsn` ID (`mission`), its

@@ -25,7 +25,8 @@
 //! follow it, the section names the [`Rulebook`](crate::Rulebook) key the
 //! building phase adds and its readings. Phase 2 adds `stay_days`, phase 3
 //! `story_reentry`, phase 5 `destroy_invincible`, phase 8 `y_on_destroy`,
-//! phase 9 `dead_type_fallback`.
+//! phase 9 `dead_type_fallback`; crons-news-ranks phase 5 adds
+//! `colocated_resolution` and `visibility_refresh`.
 //!
 //! # Findings
 //!
@@ -307,19 +308,51 @@
 //! ## Visibility and governments
 //!
 //! `_PropagateMissionBitEffects` (@0x99676) is the one place the bits
-//! reach the galaxy. It evaluates every system's `Visibility`
-//! (@0x996a1-0x996eb); gives each stellar to the lowest-ID visible system
-//! that lists it (@0x9970d-0x997bd); evaluates `shïp` `Availability`,
-//! `përs` and `flët` `ActiveOn`, `mïsn` `AvailBits` and `nëbu` `ActiveOn`
-//! (@0x997c3-0x998ef); and, if the player's system is now hidden, moves
-//! the player and every ship in the system to the visible system at the
-//! same place or, with none, makes the first system at that place (the
-//! chain head) visible and moves them there (@0x998f1-0x99a36; see
-//! "Checked for phase 4"). It runs
-//! at a landing (with the offers @0xa175f, in the land check @0xa1af2), on
-//! a jump's arrival before its days (@0x6bf3f), and for a new pilot, the
-//! main screen and a load; never right after a script. So a bit a cron
-//! sets on a jump's days shows at the next landing or arrival.
+//! reach the galaxy. It clears every stellar's owner (@0x99684-0x9969f);
+//! evaluates every system's `Visibility` (@0x996a1-0x996eb), an empty test
+//! true (@0x995ad-0x995b4); gives each stellar its owner by the
+//! chain-shadow rule (@0x996ed-0x997bd): visiting the systems by
+//! ascending ID, a visible system not yet done claims each of its
+//! stellars still unowned, then marks every higher system at its place
+//! done, so the owner is the lowest-ID visible system that lists the
+//! stellar and is not shadowed by a lower visible system at its place,
+//! and a stellar listed only by hidden or shadowed systems has none;
+//! evaluates the `shïp` `AppearOn` (read by `_SelectShipFieldFromDude`
+//! and `_HyperSpawnFleet`), the `përs` and `flët` `ActiveOn`, the `mïsn`
+//! `AvailBits` and the `nëbu` `ActiveOn` (@0x997c3-0x998ef); and, if the
+//! player's system is now hidden, moves the player and every ship in the
+//! system to the visible system at the same place or, with none, makes
+//! the first system at that place (the chain head) visible and moves them
+//! there (@0x998f1-0x99a36; see "Checked for phase 4"). The move comes
+//! after the ownership, so a chain head it shows owns nothing, and stays
+//! visible only until the next refresh hides it again. It plays no sound.
+//! It runs at a landing (with the offers @0xa175f, only when they roll,
+//! and after the land check @0xa1af2), on a jump's arrival before its
+//! days (@0x6bf3f), for a new pilot (`_DoNewPilot` @0x1925e, before the
+//! chär `OnStart` @0x19345, so `OnStart`'s bits show at `_PlayGame`'s call
+//! @0x457e9), at a load (`_LoadPilotData` @0x751ca, @0x7531f), from the
+//! main screen (`_EnterGameFromMainScreen` @0x19f81, `_MainScreenChoice`
+//! @0x1a8aa, `_DoMainScreen` @0x1afcf) and at start-up (`_InitEVNova`
+//! @0x472ba, @0x4740c, before any pilot exists); never right after a
+//! script. So a bit a cron sets on a jump's days shows at the next landing
+//! or arrival.
+//!
+//! Crons-news-ranks phase 5 builds it: `GalaxyOverlay::refresh_visibility`
+//! writes each system's visibility from its `Visibility`, and
+//! [`OverlaidGalaxy::owner`] derives each stellar's owner from the overlay,
+//! never stored, as [`RuleKey::ColocatedResolution`](crate::RuleKey::ColocatedResolution)
+//! reads: by the engine the chain-shadow rule above; by the other reading,
+//! with every visible system standing for itself, the lowest-ID visible
+//! system listing it. The session refreshes at a landing, a jump's arrival
+//! (evaluated before its days, written once the hops and the systems
+//! explored are resolved by the flags as they stood), after a new pilot's
+//! `OnStart` and, quietly, at a load, which covers the main screen's calls
+//! since the engine's menu round trip saves and flies again. By the other
+//! reading of [`RuleKey::VisibilityRefresh`](crate::RuleKey::VisibilityRefresh)
+//! it also refreshes after every settled script that changed the pilot.
+//! The availability tests stay live reads at each spawn, where the
+//! original caches them until the next refresh (left to rdm
+//! roadmap/crons-news-ranks-fidelity).
 //!
 //! Between refreshes every reader reads the visible flags it left
 //! (`_FindActiveCoLocatedSystem` @0x4be0; `_SystemVisible` @0x98207 has
@@ -630,9 +663,8 @@
 //!
 //! - per system: whether it is visible, and its government;
 //! - per stellar: whether the player dominates it, whether it is
-//!   destroyed or regenerated, and the system it belongs to (the
-//!   lowest-ID visible system that lists it, which follows from
-//!   visibility);
+//!   destroyed or regenerated, and the system it belongs to: its owner as
+//!   derived from visibility ([`OverlaidGalaxy::owner`]), never stored;
 //! - per nebula: whether it is active (`nëbu` `ActiveOn`), so that the
 //!   map reads nebulae as it reads systems.
 //!
@@ -649,7 +681,12 @@
 //! after the land check; on a jump's arrival, before its days; and for a
 //! new pilot and a load. Crons-news-ranks phase 5 adds the Rulebook key
 //! `visibility_refresh` for the other reading, after every settled
-//! script. Each change to the overlay raises one `SessionEvent`, on which
+//! script, and `colocated_resolution` for which visible system stands for
+//! a place two share. A system's visibility is `Some(false)` hidden by the
+//! last refresh, `Some(true)` a chain head the player's move showed (the
+//! refresh never writes it, so it marks the move's reveal exactly, and
+//! such a system owns no stellar), and `None` visible. Each change to the
+//! overlay raises one `SessionEvent`, on which
 //! the view rebuilds the galaxy map. A player whose system becomes hidden
 //! goes to the visible system at the same place, with every ship in the
 //! system, or, with none, to the first system at that place, made
@@ -719,13 +756,20 @@
 //! is the engine's own too, with no Rulebook key: the original changes a
 //! government only by showing another system at the same place.
 //!
-//! Two of the original's readings are kept the engine's way, both only
-//! where more than one system at a place is visible at once, which stock
-//! data never has: `_FindActiveCoLocatedSystem` gives the lowest-ID
-//! visible system at a place even for a visible system (@0x4c02-0x4c40),
-//! where the engine keeps a visible system itself; and a link reaches
-//! every visible system at its target's place, as the engine's
-//! [`HyperlinkRule`](crate::HyperlinkRule) has always read it.
+//! Two of the original's readings were kept the engine's way here: that
+//! a visible system stands for itself, where `_FindActiveCoLocatedSystem`
+//! gives the lowest-ID visible system at a place even for a visible system
+//! (@0x4c02-0x4c40), and that a link reaches every visible system at its
+//! target's place. This phase took them to differ only where more than
+//! one system at a place is visible at once, which it took stock data
+//! never to have. Stock data does reach that: Aldebaran 141 (`!(b147|b305)
+//! | !b148`) and 532 (`(b147|b305)|b148`) are both visible from Polaris
+//! mission 183, which sets b305, until mission 887, which sets b148.
+//! Crons-news-ranks phase 5's `colocated_resolution` now follows the
+//! original by default: the lowest-ID visible system stands for the place
+//! and links reach only it, so the shadowed 532 owns no stellar of its own
+//! (430 and 433 have no owner), with phase 4's reading kept as the other
+//! reading.
 //!
 //! ## Built by phase 5
 //!

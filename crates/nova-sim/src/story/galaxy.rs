@@ -12,6 +12,14 @@
 //!   record's ([`OverlaidGalaxy::site`]). A destroyed stellar holds its
 //!   regeneration [`Countdown`], saved.
 //! - A nebula is active unless the overlay says otherwise.
+//! - A system's visibility is written from its `Visibility` at each
+//!   galaxy refresh ([`GalaxyOverlay::refresh_visibility`]), overwriting
+//!   every system's; `Some(true)` is the player's move's reveal alone.
+//! - Each stellar's owner is derived from the overlay, never stored
+//!   ([`OverlaidGalaxy::owner`]): the chain-shadow rule of
+//!   `_PropagateMissionBitEffects` (@0x996ed-0x997bd), as
+//!   [`RuleKey::ColocatedResolution`](crate::RuleKey::ColocatedResolution)
+//!   reads.
 //! - A system at the same place as a hidden one stands in for it
 //!   ([`OverlaidGalaxy::same_place`]): the lowest-ID visible system at its
 //!   exact map position, as the original's `_FindActiveCoLocatedSystem`
