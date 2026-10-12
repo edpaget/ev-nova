@@ -76,14 +76,16 @@ impl Session {
         };
         let push = self.arsenal.weapon(sortie.bay).map_or(0.0, |bay| bay.speed);
         let kind = table::kind(&record, &self.outfits, &self.arsenal);
+        // `_LaunchFighter` sets the fighter's leader before it reads its
+        // `_ShipMaxSpeed` (@0x3d866-0x3d870, @0x3dc70), so the player's
+        // fighter is pushed against its led top speed.
+        let top_speed = match sortie.carrier {
+            ShipRef::Player => kind.stats.handling.max_speed * self.led_speed(),
+            ShipRef::Npc(_) => kind.stats.handling.max_speed,
+        };
         let state = ShipState {
             position: sortie.from.position,
-            velocity: launch_velocity(
-                sortie.from.velocity,
-                sortie.heading,
-                push,
-                kind.stats.handling.max_speed,
-            ),
+            velocity: launch_velocity(sortie.from.velocity, sortie.heading, push, top_speed),
             heading: sortie.heading,
         };
         let carrier = Carrier {
@@ -1316,6 +1318,42 @@ mod tests {
             vipers(&session)
                 .iter()
                 .all(|npc| npc.reserves.shield.now == 30.0)
+        );
+    }
+
+    #[test]
+    fn the_players_fighter_launches_against_its_led_top_speed() {
+        // The carrier moves at 7 along the fighter's heading: past the
+        // Viper's own top speed of 6, but below 1.5 x 6.
+        let catalog = carrying();
+        let (mut session, raider, _) = raided(&catalog);
+        let from = ShipState {
+            position: Vec2::ZERO,
+            velocity: Vec2::new(0.0, -7.0),
+            heading: 0.0,
+        };
+        let sortie = |carrier| Sortie {
+            carrier,
+            bay: BAY,
+            ship: VIPER,
+            from,
+            heading: 0.0,
+            target: None,
+        };
+        let launched = |session: &mut Session, carrier| {
+            assert!(session.launch_fighter(&sortie(carrier)));
+            session.npcs().last().expect("launched").state.velocity
+        };
+        assert_eq!(
+            launched(&mut session, ShipRef::Player),
+            launch_velocity(from.velocity, 0.0, 4.0, 9.0),
+            "pushed: below the led top speed"
+        );
+        assert_ne!(launch_velocity(from.velocity, 0.0, 4.0, 9.0), from.velocity);
+        assert_eq!(
+            launched(&mut session, ShipRef::Npc(raider)),
+            from.velocity,
+            "at or past its own top speed: no gain"
         );
     }
 

@@ -3782,10 +3782,7 @@ fn hg_kania_leads_to_hg_tichel() {
         player.heading
     );
     let speed = player.velocity.length();
-    assert!(
-        (speed - session.handling().max_speed / 2.0).abs() < 1e-4,
-        "{speed}"
-    );
+    assert!((speed - session.top_speed() / 2.0).abs() < 1e-4, "{speed}");
     assert_eq!(session.date_text(), "June 24, 1177 NC");
     assert_eq!(session.reserves().fuel, full);
     assert_eq!(full, Gauge::full(300.0));

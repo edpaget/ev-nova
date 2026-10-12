@@ -452,6 +452,7 @@ use crate::story::day::Stay;
 use crate::story::rebuild::Rebuilt;
 use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent};
 use crate::targeting::{self, TargetPick};
+use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Npc, NpcId};
 use crate::traffic::table::SpawnTable;
@@ -1205,12 +1206,13 @@ impl Session {
         match self.jump {
             None => {
                 self.thrust(controls.thrust);
-                step(&mut self.player, &self.stats.handling, controls);
+                let handling = self.flying_handling();
+                step(&mut self.player, &handling, controls);
             }
             Some(Jump::PreJump { to, bearing }) => {
-                let handling = &self.stats.handling;
+                let handling = self.flying_handling();
                 let thrust =
-                    pre_jump::fly(&mut self.player, handling, bearing, !self.stats.fast_jump);
+                    pre_jump::fly(&mut self.player, &handling, bearing, !self.stats.fast_jump);
                 self.thrust(thrust);
                 self.start_jump_if_ready(to, bearing);
             }
@@ -1993,8 +1995,9 @@ impl Session {
     /// towards `bearing` and slow no more: the thrust stops and the glow
     /// goes out.
     fn start_jump_if_ready(&mut self, to: SystemId, bearing: Option<f32>) {
-        let handling = &self.stats.handling;
-        if pre_jump::stage(&self.player, handling, bearing, !self.stats.fast_jump) == PreJump::Ready
+        let handling = self.flying_handling();
+        if pre_jump::stage(&self.player, &handling, bearing, !self.stats.fast_jump)
+            == PreJump::Ready
         {
             self.jump = Some(Jump::Hyperspace(to));
             self.stop_thrust();
@@ -2475,7 +2478,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         let ship = match self.gate_arrival {
-            GateArrivalRule::Engine => emerge(exit, self.stats.handling.max_speed, chance),
+            GateArrivalRule::Engine => emerge(exit, self.top_speed(), chance),
             GateArrivalRule::LikeJump => {
                 let map = |id| self.galaxy.position(id).unwrap_or_default();
                 let placed = arrival(
@@ -3386,10 +3389,38 @@ impl Session {
         self.pilot.ship
     }
 
-    /// How the player's ship flies.
+    /// How the player's ship flies, before `_ShipMaxSpeed`'s factor for a
+    /// pilot without Strict Play: the ship's own top speed, which the
+    /// outfitter and the shipyard show. The player flies at
+    /// [`Session::top_speed`].
     #[must_use]
     pub fn handling(&self) -> Handling {
         self.stats.handling
+    }
+
+    /// The player's top speed in flight, its `_ShipMaxSpeed`: the ship's
+    /// own ([`Session::handling`]) × the led speed, 1.5 for a pilot
+    /// without Strict Play by the engine (see
+    /// [`top_speed`](crate::top_speed)).
+    #[must_use]
+    pub fn top_speed(&self) -> f32 {
+        self.stats.handling.max_speed * self.led_speed()
+    }
+
+    /// The factor on the top speed of the player and of every ship it
+    /// leads (see [`top_speed::led_speed`]), read from the rules and the
+    /// pilot at each use, so nothing is deferred.
+    pub(crate) fn led_speed(&self) -> f32 {
+        top_speed::led_speed(&self.rules, self.pilot.strict_play())
+    }
+
+    /// How the player's ship flies in flight: its own handling, at
+    /// [`Session::top_speed`].
+    fn flying_handling(&self) -> Handling {
+        Handling {
+            max_speed: self.top_speed(),
+            ..self.stats.handling
+        }
     }
 
     /// The government the player belongs to, if any. Always `None`: a new
@@ -4458,6 +4489,52 @@ mod tests {
             Session::start(&catalog),
             Err(StartError::Ship(ShipId(128), "no shïp 128".to_owned()))
         );
+    }
+
+    /// The player's speed after `ticks` of thrust from rest.
+    fn speed_after_thrust(session: &mut Session, ticks: usize) -> f32 {
+        for _ in 0..ticks {
+            session.tick(Controls {
+                thrust: true,
+                turn: Turn::None,
+                reverse: false,
+            });
+        }
+        session.player().velocity.length()
+    }
+
+    #[test]
+    fn a_pilot_without_strict_play_tops_out_half_as_fast_again() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let own = session.handling().max_speed;
+        assert!(own > 0.0);
+        assert!((session.top_speed() - own * 1.5).abs() < 1e-4);
+        let speed = speed_after_thrust(&mut session, 300);
+        assert!((speed - own * 1.5).abs() < 1e-3, "{speed} vs {own}");
+    }
+
+    #[test]
+    fn a_strict_play_pilot_tops_out_at_its_ships_top_speed() {
+        let catalog = catalog();
+        let pilot = Pilot::new(&catalog, "Ada")
+            .expect("starts")
+            .with_strict_play(true);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        let own = session.handling().max_speed;
+        assert_eq!(session.top_speed().to_bits(), own.to_bits());
+        let speed = speed_after_thrust(&mut session, 300);
+        assert!((speed - own).abs() < 1e-3, "{speed} vs {own}");
+    }
+
+    #[test]
+    fn the_other_non_strict_speed_reading_tops_out_at_the_ships_top_speed() {
+        let mut session = Session::start(&catalog()).expect("starts").with_rules(
+            Rulebook::default().with_override(RuleKey::NonStrictSpeed, RuleSource::Bible),
+        );
+        let own = session.handling().max_speed;
+        assert_eq!(session.top_speed().to_bits(), own.to_bits());
+        let speed = speed_after_thrust(&mut session, 300);
+        assert!((speed - own).abs() < 1e-3, "{speed} vs {own}");
     }
 
     #[test]
@@ -11090,12 +11167,16 @@ mod tests {
             .take_off(&catalog, &mut NeverFires)
             .expect("took off");
         let mut expected = *session.player();
+        let handling = Handling {
+            max_speed: 9.0 * top_speed::NON_STRICT_SPEED,
+            ..ShipStats::new(HEAVY, &[]).handling
+        };
         for _ in 0..200 {
             session.tick(THRUST);
-            step(&mut expected, &ShipStats::new(HEAVY, &[]).handling, THRUST);
+            step(&mut expected, &handling, THRUST);
         }
         assert_eq!(*session.player(), expected);
-        assert!((session.player().velocity.length() - 9.0).abs() < 1e-3);
+        assert!((session.player().velocity.length() - 13.5).abs() < 1e-3);
     }
 
     #[test]
@@ -17788,7 +17869,7 @@ mod tests {
         let player = *session.player();
         assert_eq!(player.position, Vec2::new(100.0, 200.0));
         assert_eq!(player.heading, 90.0);
-        let half = session.handling().max_speed / 2.0;
+        let half = session.top_speed() / 2.0;
         assert!((player.velocity - Vec2::new(half, 0.0)).length() < 1e-4);
         assert!(session.pilot().has_explored(SystemId(131)));
         assert_eq!(session.pilot().stellar(), None);

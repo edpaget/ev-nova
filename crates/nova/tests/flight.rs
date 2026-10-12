@@ -342,12 +342,7 @@ impl Harness {
     /// speed, and returns the last frame.
     fn run(&mut self, seconds: f64) -> Frame {
         let count = (seconds * self.fps as f64).round() as u64;
-        let max_speed = self
-            .flight()
-            .session()
-            .expect("flying")
-            .handling()
-            .max_speed;
+        let max_speed = self.flight().session().expect("flying").top_speed();
         let mut last = None;
         for _ in 0..count {
             last = Some(self.frame());
