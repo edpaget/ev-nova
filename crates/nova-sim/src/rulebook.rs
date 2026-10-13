@@ -111,6 +111,7 @@
 //! | [`LostCargoShare`](RuleKey::LostCargoShare) | `lost_cargo_share` | a lost trader escort's own `Holds` are never in the fleet's space it takes its share of, so it takes min(1, its `Holds` over the rest) of every good (`_DamageShip` @0x3afdd, @0x3b013; `_DestroyPartialFleetCargo` @0xce98-0xcf37; [`Session`](crate::Session)) | they are, so it takes the share of the space it added, mission escorts too\* |
 //! | [`NonStrictSpeed`](RuleKey::NonStrictSpeed) | `non_strict_speed` | the player and every ship it leads fly at 1.5 × their top speed when the pilot does not play Strict Play (`_ShipMaxSpeed` @0x382e-0x384f, @0xdd078; see [`top_speed`](crate::top_speed)) | every ship flies at its own top speed, Strict Play or not\* |
 //! | [`HunterBribe`](RuleKey::HunterBribe) | `hunter_bribe` | a `ShipBehav` 0 mission ship the player paid off attacks the player again on its next think, as no site reads the bribe (`_HighLevelAIHandler` @0x8d628-0x8d6e9, `_AIMakeShipLeave` @0x7e2b0; see [`mission_hunt`](crate::ai::target::mission_hunt)) | the bribe holds: it decides as its type, a wimpy trader, does\* |
+//! | [`ShipOverlap`](RuleKey::ShipOverlap) | `ship_overlap` | ships overlap within each draw layer in the order they last entered it, the player starting on top and a ship entering a layer going over every ship in it (`_PutSpriteInLayer` @0x766c, `_InitSprites` @0x1f0eb-0x1f88b, `_DoPlayGameWork` @0x43e29, @0x444ad; see [`Session::draw_order`](crate::Session::draw_order)) | each layer in the session's NPC order, the player on top of its own\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -125,8 +126,8 @@
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance`,
 //! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
-//! `gate_escorts`, `lost_cargo_share`, `non_strict_speed`, `hunter_bribe` or
-//! `comm_quote`
+//! `gate_escorts`, `lost_cargo_share`, `non_strict_speed`, `hunter_bribe`,
+//! `ship_overlap` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -1388,6 +1389,19 @@ rule_keys! {
     /// says nothing of it, so the other reading is the intended behaviour,
     /// not anything the Bible says.
     HunterBribe => "hunter_bribe",
+    /// The order ships overlap in within each of their three draw layers
+    /// (see [`ship_layer`](crate::ship_layer)). By the engine, the order
+    /// they last entered the layer, as `_PutSpriteInLayer` (@0x766c)
+    /// leaves `SpriteWorld`'s layers from `_InitSprites`' start
+    /// (@0x1f0eb-0x1f88b) and each tick's laying out of the player, then
+    /// each slot in turn (`_DoPlayGameWork` @0x43e29, @0x444ad): a ship
+    /// that enters a layer goes on top of it, so an escort released or a
+    /// ship repaired is drawn over the player until history moves it. By
+    /// the other reading, each layer in the session's NPC order with the
+    /// player on top of its own. The Bible says nothing of it, so the
+    /// other reading is the intended behaviour, not anything the Bible
+    /// says (see [`Session::draw_order`](crate::Session::draw_order)).
+    ShipOverlap => "ship_overlap",
 }
 
 impl RuleKey {
@@ -1555,7 +1569,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(16),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1595,7 +1609,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1617,7 +1631,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1642,7 +1656,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(13),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1668,7 +1682,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1688,7 +1702,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1708,7 +1722,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1728,7 +1742,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -1741,7 +1755,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::GateFollow),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(5), Some(&RuleKey::GateFollow));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(6), Some(&RuleKey::GateFollow));
     }
 
     #[test]
@@ -1756,7 +1770,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::GateEscorts)
         );
     }
@@ -1773,7 +1787,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::LostCargoShare)
         );
     }
@@ -1790,7 +1804,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(2),
             Some(&RuleKey::NonStrictSpeed)
         );
     }
@@ -1806,7 +1820,24 @@ mod tests {
             Rulebook::default().source_for(RuleKey::HunterBribe),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::HunterBribe));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::HunterBribe)
+        );
+    }
+
+    #[test]
+    fn the_ship_overlap_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::ShipOverlap.key(), "ship_overlap");
+        assert_eq!(
+            RuleKey::from_key("ship_overlap"),
+            Some(RuleKey::ShipOverlap)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::ShipOverlap),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::ShipOverlap));
     }
 
     #[test]
@@ -1817,7 +1848,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(4), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(5), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -1828,7 +1859,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -1936,7 +1967,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(17),
+            RuleKey::ALL.iter().rev().nth(18),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -2087,7 +2118,8 @@ mod tests {
                 RuleKey::GateEscorts,
                 RuleKey::LostCargoShare,
                 RuleKey::NonStrictSpeed,
-                RuleKey::HunterBribe
+                RuleKey::HunterBribe,
+                RuleKey::ShipOverlap
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
