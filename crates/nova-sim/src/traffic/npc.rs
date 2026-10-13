@@ -336,9 +336,15 @@ impl Npc {
         )
     }
 
-    /// Whether it threatens the player (`_IsThreatToPlayer` @0x7f501):
-    /// intact and attacking, sniping at or fleeing from the player. There
-    /// is no legal or government test; inspecting is no threat.
+    /// Whether it threatens the player itself: intact and attacking,
+    /// sniping at or fleeing from the player. There is no legal or
+    /// government test; inspecting is no threat.
+    ///
+    /// This is only part of `_IsThreatToPlayer` @0x7f501, which also counts
+    /// a ship attacking one the player leads; every caller on this roadmap
+    /// asks [`Npc::threatens_player_among`]. It is kept for roadmap
+    /// hud-fidelity's radar IFF and Red Alert, which build on it; that
+    /// roadmap's phase 14 moves them and retires it.
     #[must_use]
     pub fn threatens_player(&self) -> bool {
         self.threatens(ShipRef::Player)
@@ -373,6 +379,21 @@ impl Npc {
                 Some(ShipRef::Npc(id)) => led(id),
                 None => false,
             }
+    }
+
+    /// Whether it threatens the player, as `_IsThreatToPlayer` @0x7f501
+    /// asks it whole ([`Npc::threatens_player_or_led`]), reading which
+    /// ships the player leads from `npcs`: those that
+    /// [escort the player](Npc::escorts_player), as
+    /// [`Traffic::player_led`](super::Traffic::player_led) does. A ship
+    /// whose quarry isn't in `npcs` is led by nobody.
+    ///
+    /// Every modelled caller of `_IsThreatToPlayer` asks this, and so do
+    /// the readers of `_ExtendedIsThreatToPlayer` @0x81b70, whose target
+    /// test has the same led clause (@0x81c2e-0x81c4a).
+    #[must_use]
+    pub fn threatens_player_among(&self, npcs: &[Npc]) -> bool {
+        self.threatens_player_or_led(|id| npcs.iter().any(|n| n.id == id && n.escorts_player()))
     }
 
     /// Whether it is waiting at the gate it comes out of
@@ -662,6 +683,67 @@ mod tests {
                 ..hunter.clone()
             };
             assert!(!arriving.threatens_player_or_led(led), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn threatens_player_among_counts_the_player_and_any_ship_the_player_leads() {
+        let ship = |id| crate::testkit::npc(id, ShipStats::default());
+        let hired = Npc {
+            escort: Some(EscortDuty {
+                formation: FormationSlot::default(),
+                order: None,
+            }),
+            ..ship(1)
+        };
+        let mission = Npc {
+            mission: Some(mark(
+                ShipBehav::EscortPlayer,
+                Some(FormationSlot::default()),
+            )),
+            ..ship(2)
+        };
+        let unjoined = Npc {
+            mission: Some(mark(ShipBehav::EscortPlayer, None)),
+            ..ship(3)
+        };
+        let stranger = ship(4);
+        let npcs = [hired, mission, unjoined, stranger];
+        let attacking = |quarry| Npc {
+            goal: Goal::Attack(quarry),
+            ..ship(9)
+        };
+        for quarry in [
+            ShipRef::Player,
+            ShipRef::Npc(NpcId(1)),
+            ShipRef::Npc(NpcId(2)),
+        ] {
+            assert!(
+                attacking(quarry).threatens_player_among(&npcs),
+                "{quarry:?}"
+            );
+            for condition in [
+                Condition::Disabled,
+                Condition::Dying { ticks_left: 1 },
+                Condition::Destroyed,
+            ] {
+                let downed = Npc {
+                    condition,
+                    ..attacking(quarry)
+                };
+                assert!(!downed.threatens_player_among(&npcs), "{condition:?}");
+            }
+            let emerging = Npc {
+                mode: Mode::Emerging { ticks_left: 2 },
+                ..attacking(quarry)
+            };
+            assert!(!emerging.threatens_player_among(&npcs), "{quarry:?}");
+        }
+        for quarry in [3, 4, 5].map(|id| ShipRef::Npc(NpcId(id))) {
+            assert!(
+                !attacking(quarry).threatens_player_among(&npcs),
+                "{quarry:?}"
+            );
         }
     }
 

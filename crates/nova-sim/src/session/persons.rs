@@ -162,7 +162,7 @@ impl Session {
                         mission_available: linked
                             .is_some_and(|mission| self.ship_mission_available(MissionId(mission))),
                     };
-                    Some((npc.id, quote_eligible(npc, &person, &view)))
+                    Some((npc.id, quote_eligible(npc, &person, &view, self.npcs())))
                 })
                 .collect()
         };

@@ -154,7 +154,9 @@ pub struct Hail<'a> {
     pub busy: bool,
     /// Whether it is already assisting the player.
     pub assisting_player: bool,
-    /// Whether any NPC threatens the player.
+    /// Whether any NPC threatens the player, or a ship the player leads
+    /// ([`Npc::threatens_player_among`]): `_IsPlayerThreatened` @0x8245c,
+    /// read by Request Assistance (`_DoCommDialog` @0x96310).
     pub player_threatened: bool,
     /// The help the player needs, if any.
     pub need: Option<Help>,
@@ -234,7 +236,10 @@ impl<'a> Hail<'a> {
                 || matches!(npc.goal, Goal::Formation { .. })
                 || attacked,
             assisting_player,
-            player_threatened: around.npcs.iter().any(Npc::threatens_player),
+            player_threatened: around
+                .npcs
+                .iter()
+                .any(|other| other.threatens_player_among(around.npcs)),
             need,
             quote: None,
             joins: false,
@@ -730,6 +735,24 @@ mod tests {
         assert!(hail.player_threatened);
         let hunting = [flying(1, Goal::Attack(ShipRef::Player))];
         assert!(hailing(&hunting, 0, &talk()).player_threatened, "itself");
+        let mut escort = flying(1, Goal::Idle);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let npcs = [escort, flying(2, Goal::Attack(ShipRef::Npc(NpcId(1))))];
+        assert!(
+            hailing(&npcs, 0, &talk()).player_threatened,
+            "a ship attacking one the player leads"
+        );
+        let npcs = [
+            flying(1, Goal::Idle),
+            flying(2, Goal::Attack(ShipRef::Npc(NpcId(1)))),
+        ];
+        assert!(
+            !hailing(&npcs, 0, &talk()).player_threatened,
+            "a ship attacking one nobody leads"
+        );
     }
 
     #[test]

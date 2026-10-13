@@ -2955,7 +2955,10 @@ impl<C> FlightView<C> {
 
     /// Draws the brackets round the target, where it is drawn.
     fn draw_brackets(&self, list: &mut DrawList, camera: &Camera) {
-        let Some(npc) = self.session.as_ref().ok().and_then(Session::target) else {
+        let Ok(session) = self.session.as_ref() else {
+            return;
+        };
+        let Some(npc) = session.target() else {
             return;
         };
         let (at, _) = self.shown_npc(npc);
@@ -2963,7 +2966,7 @@ impl<C> FlightView<C> {
             Some(Ok(sheet)) => sheet.frame_width.max(sheet.frame_height) as f32,
             _ => PLACEHOLDER_SIZE,
         };
-        let standing = target::standing(npc);
+        let standing = target::standing(npc, session.npcs());
         target::draw_brackets(list, camera.world_to_screen(at), size, standing);
     }
 

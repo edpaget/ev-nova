@@ -38,9 +38,10 @@
 //! The brackets in space are four corners, each two
 //! [`BRACKET_LENGTH`]-pixel lines, half the target's sprite out from its
 //! centre, coloured by the target's [`Standing`]: red for a target that
-//! threatens the player (the original's hostile brackets, `cicn`
-//! 10008-10011, and its colour-coded threat red, `_ColorCodeShip`
-//! @0x4ae8), grey for a disabled one (`plunder.html`), and blue otherwise.
+//! threatens the player or a ship the player leads (the original's
+//! hostile brackets, `cicn` 10008-10011, the threat frame
+//! `_HandleWeapTargetSprites` picks when `_IsThreatToPlayer` holds,
+//! @0x2ffe2), grey for a disabled one (`plunder.html`), and blue otherwise.
 //! The original's corners are `cicn`s, which the renderer does not have
 //! (the colours are placeholders for them), and zoom in as the target is
 //! picked, which is left out.
@@ -290,18 +291,20 @@ pub fn draw_secondary(
 pub enum Standing {
     /// Neither threatening the player nor disabled.
     Neutral,
-    /// Threatening the player ([`Npc::threatens_player`]).
+    /// Threatening the player or a ship the player leads.
     Hostile,
     /// Disabled.
     Disabled,
 }
 
-/// How `npc` stands towards the player.
+/// How `npc` stands towards the player, among `npcs`: hostile while it
+/// threatens the player or a ship the player leads
+/// ([`Npc::threatens_player_among`]; `_HandleWeapTargetSprites` @0x2ffe2).
 #[must_use]
-pub fn standing(npc: &Npc) -> Standing {
+pub fn standing(npc: &Npc, npcs: &[Npc]) -> Standing {
     if npc.condition == Condition::Disabled {
         Standing::Disabled
-    } else if npc.threatens_player() {
+    } else if npc.threatens_player_among(npcs) {
         Standing::Hostile
     } else {
         Standing::Neutral
@@ -766,12 +769,12 @@ mod tests {
             Goal::Flee(player),
         ] {
             assert_eq!(
-                standing(&npc(goal, Condition::Intact)),
+                standing(&npc(goal, Condition::Intact), &[]),
                 Standing::Hostile,
                 "{goal:?}"
             );
             assert_eq!(
-                standing(&npc(goal, Condition::Disabled)),
+                standing(&npc(goal, Condition::Disabled), &[]),
                 Standing::Disabled,
                 "{goal:?}"
             );
@@ -779,10 +782,26 @@ mod tests {
         let other = ShipRef::Npc(NpcId(5));
         for goal in [Goal::Idle, Goal::Attack(other), Goal::Inspect(player)] {
             assert_eq!(
-                standing(&npc(goal, Condition::Intact)),
+                standing(&npc(goal, Condition::Intact), &[]),
                 Standing::Neutral,
                 "{goal:?}"
             );
         }
+        let escort = Npc {
+            id: NpcId(5),
+            escort: Some(nova_sim::escort::EscortDuty {
+                formation: nova_sim::escort::FormationSlot::default(),
+                order: None,
+            }),
+            ..npc(Goal::Idle, Condition::Intact)
+        };
+        assert_eq!(
+            standing(
+                &npc(Goal::Attack(other), Condition::Intact),
+                std::slice::from_ref(&escort)
+            ),
+            Standing::Hostile,
+            "attacking a ship the player leads"
+        );
     }
 }

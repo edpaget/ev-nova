@@ -5,8 +5,12 @@
 //! the player's legal record in the system (its record with S; none in an
 //! independent system), and tol a government's `CrimeTol`. In order:
 //!
-//! 1. A ship that threatens the player ([`Npc::threatens_player`]) does
-//!    not like it.
+//! 1. A ship that threatens the player or a ship the player leads does
+//!    not like it: `_ExtendedIsThreatToPlayer` @0x81b70 (called @0x8218c),
+//!    whose target test counts a ship led by the player (@0x81c2e-0x81c4a),
+//!    as [`Npc::threatens_player_among`] does. The rest of that test
+//!    (visibility, +0x8c, the ship's own escorts' threats) is
+//!    crons-news-ranks-fidelity phase 5's.
 //! 2. The player's escorts do, hired or mission escorts (leader 0,
 //!    @0x82199). (So do the governments that bless the player, which
 //!    does not happen yet.)
@@ -31,7 +35,8 @@
 //! The government byte +0x83 the original falls back to (an IFF or a
 //! blessing) is never set here.
 //!
-//! The [`Attitude`] is hostile while the ship threatens the player,
+//! The [`Attitude`] (the comm status, `_CommDialogUpdate` @0x90625) is
+//! hostile while the ship threatens the player as in rule 1,
 //! friendly while it likes it, and unfriendly otherwise.
 
 use crate::ai::Surroundings;
@@ -59,7 +64,7 @@ pub enum Attitude {
 /// behaviour), none otherwise.
 #[must_use]
 pub fn likes_player(npc: &Npc, around: &Surroundings, mission: Option<MissionHail>) -> bool {
-    if npc.threatens_player() {
+    if npc.threatens_player_among(around.npcs) {
         return false;
     }
     if npc.escorts_player() {
@@ -98,7 +103,7 @@ pub fn likes_player(npc: &Npc, around: &Surroundings, mission: Option<MissionHai
 /// [`likes_player`] and the module docs).
 #[must_use]
 pub fn attitude(npc: &Npc, around: &Surroundings, mission: Option<MissionHail>) -> Attitude {
-    if npc.threatens_player() {
+    if npc.threatens_player_among(around.npcs) {
         Attitude::Hostile
     } else if likes_player(npc, around, mission) {
         Attitude::Friendly
@@ -302,6 +307,32 @@ mod tests {
         let mut hunting = npc.clone();
         hunting.goal = Goal::Snipe(ShipRef::Player);
         assert_eq!(attitude(&hunting, &around(0), None), Attitude::Hostile);
+        let escort = Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: FormationSlot::default(),
+                order: None,
+            }),
+            ..crate::testkit::npc(5, ShipStats::new(FAST, &[]))
+        };
+        let npcs = [escort];
+        let led = Surroundings {
+            govts: &govts,
+            system_govt: Some(ME),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let mut raider = npc.clone();
+        raider.goal = Goal::Attack(ShipRef::Npc(crate::traffic::npc::NpcId(5)));
+        assert_eq!(
+            attitude(&raider, &led, None),
+            Attitude::Hostile,
+            "attacking a ship the player leads"
+        );
+        assert!(!likes_player(&raider, &led, None));
+        assert_eq!(
+            attitude(&raider, &around(0), None),
+            Attitude::Friendly,
+            "attacking a ship nobody leads"
+        );
     }
 
     // Mission ships.

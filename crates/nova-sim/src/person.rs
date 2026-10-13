@@ -272,10 +272,12 @@ pub enum Eligible {
 }
 
 /// Whether `npc`'s hail quote, flown by `person`, may be said this tick
-/// as `view` sees the player (`_HandleShip` @0x33bea-0x33f21; see the
-/// module docs).
+/// as `view` sees the player, among `npcs` (`_HandleShip` @0x33bea-0x33f21;
+/// see the module docs). A quote on attack is due once the ship threatens
+/// the player or a ship the player leads among `npcs`
+/// ([`Npc::threatens_player_among`]; `_IsThreatToPlayer` asked @0x33d38).
 #[must_use]
-pub fn quote_eligible(npc: &Npc, person: &NpcPerson, view: &QuoteView) -> Eligible {
+pub fn quote_eligible(npc: &Npc, person: &NpcPerson, view: &QuoteView, npcs: &[Npc]) -> Eligible {
     let flying = npc.mode == Mode::Flying
         && !matches!(
             npc.condition,
@@ -293,7 +295,7 @@ pub fn quote_eligible(npc: &Npc, person: &NpcPerson, view: &QuoteView) -> Eligib
     };
     let mut now = false;
     if flag(QUOTE_ON_ATTACK) && !disabled {
-        now = !person.quoted && npc.threatens_player();
+        now = !person.quoted && npc.threatens_player_among(npcs);
         eligible = now;
     }
     let held_back = (flag(QUOTE_IF_GRUDGE) && !person.grudge)
@@ -1305,7 +1307,7 @@ mod tests {
     }
 
     fn eligible(npc: &Npc, person: NpcPerson, view: QuoteView) -> Eligible {
-        quote_eligible(npc, &person, &view)
+        quote_eligible(npc, &person, &view, &[])
     }
 
     use crate::ai::Goal;
@@ -1349,6 +1351,27 @@ mod tests {
         assert_eq!(
             eligible(&npc_of(Condition::Disabled, IDLE), on_attack, VIEW),
             Eligible::No
+        );
+        let raider = npc_of(
+            Condition::Intact,
+            Goal::Attack(ShipRef::Npc(crate::traffic::npc::NpcId(5))),
+        );
+        let escort = Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: None,
+            }),
+            ..crate::testkit::npc(5, crate::stats::ShipStats::new(FAST, &[]))
+        };
+        assert_eq!(
+            quote_eligible(&raider, &on_attack, &VIEW, std::slice::from_ref(&escort)),
+            Eligible::Now,
+            "attacking a ship the player leads"
+        );
+        assert_eq!(
+            eligible(&raider, on_attack, VIEW),
+            Eligible::No,
+            "attacking a ship nobody leads"
         );
     }
 

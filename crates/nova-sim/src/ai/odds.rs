@@ -20,7 +20,10 @@
 //!   itself and every other intact ship allied with it; its enemies every
 //!   other intact ship, not allied, of a government at war with its own
 //!   or attacking it, and the player when the ship threatens the player
-//!   (`_ExtendedIsThreatToShip` asks `_IsThreatToPlayer` of the ship).
+//!   or a ship the player leads ([`Npc::threatens_player_among`]:
+//!   `_ExtendedIsThreatToShip` @0x81a9c asks `_IsThreatToPlayer` of the
+//!   ship when the other ship is the player; the blessing that excuses
+//!   the player, @0x81a89, is crons-news-ranks phase 12's).
 //!   The player's strength is multiplied by its [`rating_factor`]: its
 //!   combat rating over 6400 times the raw `Strength` of `shïp` 128 (its
 //!   `yardstick`, @0x84a7e), in whole numbers (`idivl` @0x84a91), held
@@ -123,7 +126,7 @@ pub fn odds_against(npc: &Npc, around: &Surroundings) -> f32 {
     let me = ShipRef::Npc(npc.id);
     let mut friends = npc.hull.strength;
     let mut enemies = match around.player {
-        Some(player) if npc.threatens_player() => {
+        Some(player) if npc.threatens_player_among(around.npcs) => {
             player.hull.strength * rating_factor(player.rating, player.yardstick)
         }
         _ => 0.0,
@@ -434,6 +437,37 @@ mod tests {
             100.0,
             "the rating weighs only in the odds"
         );
+    }
+
+    #[test]
+    fn the_odds_count_the_player_against_a_ship_attacking_one_the_player_leads() {
+        let govts = govts();
+        let mut raider = ship(1, 143, 50.0);
+        raider.goal = Goal::Attack(n(2));
+        let mut escort = ship(2, 143, 0.0);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let odds = |escort: &Npc| {
+            let npcs = [raider.clone(), escort.clone()];
+            let around = Surroundings {
+                govts: &govts,
+                player: Some(PlayerSide {
+                    rating: 128_000,
+                    yardstick: 10,
+                    ..player(100.0)
+                }),
+                ..Surroundings::new(&[], &npcs)
+            };
+            odds_against(&npcs[0], &around)
+        };
+        assert_eq!(odds(&escort), 4.0, "the player, at its rating, against 50");
+        let stranger = Npc {
+            escort: None,
+            ..escort
+        };
+        assert_eq!(odds(&stranger), 0.0, "a ship nobody leads");
     }
 
     /// A heavy chaser (100 tons) of top speed 6 at the centre, chasing the
