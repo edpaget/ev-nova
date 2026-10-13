@@ -10156,6 +10156,59 @@ mod tests {
         assert!(texts(&list).contains(&target::DISABLED.to_owned()));
     }
 
+    /// The ship bracket `cïcn`s drawn (10008-10023), and where.
+    fn ship_bracket_corners(view: &View) -> Vec<(i16, Point)> {
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Picture { image, top_left } if icon_in(10008..=10023)(command) => {
+                    Some((image.id, *top_left))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Where `view` draws its target's sprite.
+    fn target_on_screen(view: &View) -> Point {
+        let session = view.session().expect("flying");
+        let npc = session.target().expect("a target");
+        view.camera().world_to_screen(view.shown_npc(npc).0)
+    }
+
+    #[test]
+    fn targeting_a_ship_on_screen_flies_its_brackets_in_then_settles_them() {
+        let mut view = fighting(armed(1, &[]), &placed(750, 650, 180));
+        assert_eq!(ship_bracket_corners(&view), []);
+        tap(&mut view, Key::Tab);
+        // Ship 129, 40 x 40: half 20; neutral, from 10012.
+        assert_eq!(
+            ship_bracket_corners(&view),
+            corners_at(10012, target_on_screen(&view), 20.0 + 196.0),
+            "a frame drawn before the next tick"
+        );
+        for expand in [196.0, 136.0, 76.0, 16.0, 0.0, 0.0] {
+            view.tick(TICK);
+            assert_eq!(
+                ship_bracket_corners(&view),
+                corners_at(10012, target_on_screen(&view), 20.0 + expand),
+                "{expand}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_target_whose_sheet_cannot_be_read_is_bracketed_round_its_crossed_box() {
+        let mut view = fighting(trafficked(&[130], 1, 130, 3), &placed(850, 650, 90));
+        tap(&mut view, Key::Tab);
+        ticks(&mut view, 5);
+        // Its 64 x 64 box: half 32.
+        assert_eq!(
+            ship_bracket_corners(&view),
+            corners_at(10012, target_on_screen(&view), PLACEHOLDER_SIZE / 2.0)
+        );
+    }
+
     /// What the target panel's status line shows this frame, if there is
     /// a target.
     fn status_shown(view: &View) -> Option<nova_sim::TargetStatus> {
