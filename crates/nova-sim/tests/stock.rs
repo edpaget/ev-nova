@@ -741,9 +741,10 @@ fn vikings_shipyard_sells_what_its_tech_levels_and_buy_random_allow() {
         assert!(shipyard.row(id).is_none(), "{id:?}");
     }
     assert_eq!(
-        shipyard.trade_in,
-        2500 + 2500,
-        "a quarter of the Shuttle and half its Light Blaster"
+        shipyard.trade_in, 4700,
+        "a quarter of the Shuttle and half its Light Blaster, 5000, through the \
+         flux twice at the Shuttle's tech 3 against Viking's 4: 3 % off to 4850, \
+         then to 4704, rounded down to 4700"
     );
     assert_eq!(shipyard.cash, 25_000);
     assert_eq!(shipyard.current, ShipId(128));
@@ -838,8 +839,10 @@ fn stock_ships_are_named_without_their_designer_notes() {
     assert!(noted.is_empty(), "{noted:?}");
 }
 
-/// Buying the Heavy Shuttle (17,500 credits) trades the Shuttle and its
-/// Light Blaster in for 5,000 and leaves 12,500 credits, 15 tons of cargo
+/// Buying the Heavy Shuttle (17,500 credits, tech 4 at Viking's tech 4,
+/// so no discount) trades the Shuttle and its Light Blaster in for 4,700
+/// (5,000 through the flux twice at the Shuttle's tech 3) and leaves
+/// 25,000 + 4,700 - 17,500 = 12,200 credits, 15 tons of cargo
 /// space and 12 free, the Heavy Shuttle's own Light Blaster (`oütf` 128,
 /// 3 tons) owned and its mass on top of its `FreeMass`.
 #[test]
@@ -852,9 +855,9 @@ fn a_heavy_shuttle_trades_in_the_shuttle() {
     let bought = session
         .buy_ship(ShipId(129), "Kestrel", &mut Fires)
         .expect("bought");
-    assert_eq!((bought.price, bought.trade_in), (17_500, 5000));
+    assert_eq!((bought.price, bought.trade_in), (17_500, 4700));
     assert_eq!(session.ship(), ShipId(129));
-    assert_eq!(session.pilot().cash(), 12_500);
+    assert_eq!(session.pilot().cash(), 12_200);
     assert_eq!(session.capacity(), 15);
     assert_eq!(session.outfitter(&mut Fires).map(|o| o.free_mass), Some(12));
     let fields = data.ship_fields(ShipId(129)).expect("decodes");
@@ -886,7 +889,8 @@ fn a_new_stock_pilot_owns_its_shuttles_light_blaster() {
 /// 125,000) and the Cloaking Organ (269, 1,000,000). A Striker from a
 /// version 13 save owns its stock weapons once flown, and trades in for
 /// a quarter of its 1,000,000 and half of its 1,855,000 in outfits,
-/// 1,177,500. With 29 Wraithii fired it trades in for exactly the
+/// 1,177,500, shown 1,177,000 after the shipyard flux's rounding to a
+/// thousand. With 29 Wraithii fired it trades in for exactly the
 /// original's logged 1,163,000 ("Striker (262) has a trade-in value of
 /// 1163000"), the figure its loader's check reaches by counting a
 /// Wraithii for each Wraith Cannon (`_LoadObjectData` @0x7aca2).
@@ -927,8 +931,10 @@ fn the_strikers_stock_weapons_are_its_outfits_and_it_trades_in_as_the_original_l
         ids(&[(151, 1), (152, 30), (154, 2), (245, 1), (269, 1)])
     );
     let shipyard = session.shipyard(&mut Fires).expect("a shipyard");
-    assert_eq!(shipyard.trade_in, 250_000 + 1_855_000 / 2);
-    assert_eq!(shipyard.trade_in, 1_177_500);
+    // 250,000 + 1,855,000 / 2 = 1,177,500, which the flux rounds down
+    // to a thousand (the Striker is tech 19, so no discount, and the
+    // second pass changes nothing).
+    assert_eq!(shipyard.trade_in, 1_177_000);
 
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(session.pilot())).expect("JSON");

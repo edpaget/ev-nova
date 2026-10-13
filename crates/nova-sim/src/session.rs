@@ -3224,6 +3224,7 @@ impl Session {
             arsenal: &self.arsenal,
             fields: self.fields,
             site,
+            mults: crate::rank::PriceMults::NONE,
             rules: self.rules,
             gate: self.gate(),
         }
@@ -10469,17 +10470,23 @@ mod tests {
 
     /// [`outfitting`], where planet 128 is a shipyard too, selling ship
     /// 128 (FAST, 10,000 credits) and ship 129 ([`HEAVY`], 17,500
-    /// credits, carrying a fuel tank).
+    /// credits, carrying a fuel tank). Both are of tech level 5, the
+    /// planet's, so the shipyard's flux takes no low-tech discount from
+    /// their prices.
     pub(super) fn shipbuying() -> FakePilotCatalog {
         FakePilotCatalog {
             sites: vec![(SystemId(130), vec![shipyard_site()])],
             ships: vec![(ShipId(128), Ok(FAST)), (ShipId(129), Ok(HEAVY))],
             defaults: vec![(ShipId(129), vec![(TANK, 1)])],
             ship_records: vec![
-                ship(128, FAST),
+                ShipRecord {
+                    tech_level: 5,
+                    ..ship(128, FAST)
+                },
                 ShipRecord {
                     cost: 17_500,
                     defaults: vec![(TANK, 1)],
+                    tech_level: 5,
                     ..ship(129, HEAVY)
                 },
             ],
@@ -10647,17 +10654,8 @@ mod tests {
         );
         assert_eq!(poor, before);
         assert!(!poor.take_save_due());
-        let cheap = FakePilotCatalog {
-            ship_records: vec![
-                ship(128, FAST),
-                ShipRecord {
-                    cost: 1000,
-                    defaults: vec![(TANK, 1)],
-                    ..ship(129, HEAVY)
-                },
-            ],
-            ..shipbuying()
-        };
+        let mut cheap = shipbuying();
+        cheap.ship_records[1].cost = 1000;
         let mut indebted = outfitted(&cheap);
         indebted.pilot.cash = -1;
         let unchanged = indebted.clone();
@@ -10891,7 +10889,10 @@ mod tests {
         assert_eq!(outfitter.free_mass, 12, "its tank is fitted on top");
         let shipyard = session.shipyard(&mut NeverFires).expect("a shipyard");
         assert_eq!(shipyard.current, NEW);
-        assert_eq!(shipyard.trade_in, 17_500 / 4 + 500, "the hull and its tank");
+        assert_eq!(
+            shipyard.trade_in, 4870,
+            "the hull and its tank, 4375 + 500, rounded down to ten by the flux"
+        );
     }
 
     // Stock weapons.
@@ -11076,9 +11077,9 @@ mod tests {
             .expect("bought");
         let shipyard = session.shipyard(&mut NeverFires).expect("a shipyard");
         assert_eq!(
-            shipyard.trade_in,
-            17_500 / 4 + 500 + 500 + 1000 + 20 * 10,
-            "a quarter of the hull, and half its tank, gun, launcher and rockets"
+            shipyard.trade_in, 6570,
+            "a quarter of the hull, and half its tank, gun, launcher and rockets, \
+             4375 + 500 + 500 + 1000 + 200 = 6575, rounded down to ten by the flux"
         );
     }
 

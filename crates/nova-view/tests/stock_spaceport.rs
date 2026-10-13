@@ -265,8 +265,9 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
             })
             .collect();
         // The trade-in is a quarter of the Shuttle and half its Light
-        // Blaster, the stock weapon it owns.
-        assert_eq!(screen.shipyard().trade_in, 5000);
+        // Blaster, the stock weapon it owns: 5000, through the flux twice
+        // at the Shuttle's tech 3 against Viking's 4, 4850 then 4700.
+        assert_eq!(screen.shipyard().trade_in, 4700);
         // The Shuttle selected is the class flown, so the info box shows
         // no price lines.
         let selected = screen.selected().expect("a ship selected");
