@@ -851,6 +851,7 @@ impl CombatCatalog for GameData {
                     comm_name: record.comm_name.as_str().to_owned(),
                     scan_mask: record.scan_mask.bits(),
                     scan_fine: record.scan_fine,
+                    news_pic: record.news_pic,
                 })
             })
             .collect()
@@ -2957,6 +2958,7 @@ mod tests {
         put_i16s(&mut bytes, 0x28, &[2, 10, 16, 9]);
         bytes[0x32..0x34].copy_from_slice(&0x8004_u16.to_be_bytes());
         bytes[0x34..0x3F].copy_from_slice(b"Federation\0");
+        put_i16s(&mut bytes, 0xAE, &[9001]);
         bytes
     }
 
@@ -2987,6 +2989,7 @@ mod tests {
             comm_name: "Federation".to_owned(),
             scan_mask: 0x8004,
             scan_fine: -5,
+            news_pic: 9001,
         };
         assert_eq!(
             data.governments(),

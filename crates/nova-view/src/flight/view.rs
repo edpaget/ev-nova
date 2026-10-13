@@ -9199,6 +9199,7 @@ mod tests {
                 comm_name: String::new(),
                 scan_mask: 0,
                 scan_fine: 0,
+                news_pic: -1,
             }],
             ..catalog
         }
@@ -10692,6 +10693,7 @@ mod tests {
             comm_name: String::new(),
             scan_mask: 0x0004,
             scan_fine: fine,
+            news_pic: -1,
         }];
         catalog.missions = vec![MissionRecord {
             cargo_type: 0,
@@ -12189,6 +12191,7 @@ mod tests {
             comm_name: String::new(),
             scan_mask: 0,
             scan_fine: 0,
+            news_pic: -1,
         }];
         for record in &mut catalog.ships {
             record.crew = 3;
@@ -13272,6 +13275,7 @@ mod tests {
             comm_name: String::new(),
             scan_mask: 0,
             scan_fine: 0,
+            news_pic: -1,
         }];
         // One ship of düde 128 (ship 129) attacking the player and
         // following it (`ShipSyst` -6).

@@ -416,6 +416,7 @@ pub(crate) fn govt(id: i16) -> GovtRecord {
         comm_name: format!("Govt {id}"),
         scan_mask: 0,
         scan_fine: 0,
+        news_pic: -1,
     }
 }
 

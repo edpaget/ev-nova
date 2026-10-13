@@ -1104,6 +1104,10 @@ pub struct GovtRecord {
     /// Its `ScanFine`: the credits a smuggler is fined, or below 0 that
     /// percent of the cash.
     pub scan_fine: i16,
+    /// Its `NewsPic`: the `PICT` the news is drawn over at a stellar it
+    /// governs (`gövt` +0xAE, kept raw; `_DoNewsDialog` reads it at
+    /// runtime +0x44).
+    pub news_pic: i16,
 }
 
 /// The game data a session's ships fight with: the `wëap`s, each
