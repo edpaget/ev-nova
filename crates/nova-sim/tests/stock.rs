@@ -696,15 +696,7 @@ fn the_viper_bays_magazine_is_its_vipers() {
 /// A new stock pilot, docked at Viking (`spöb` 157 in Tichel, `sÿst`
 /// 129, a jump from Kania), through a save that says so.
 fn at_viking(data: &GameData) -> Session {
-    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
-    let mut save: serde_json::Value =
-        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
-    save["system"] = serde_json::json!(129);
-    save["stellar"] = serde_json::json!(157);
-    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let session = Session::fly(data, docked).expect("flies");
-    assert_eq!(session.landed(), Some(StellarId(157)), "docked at Viking");
-    session
+    at_viking_holding(data, &[])
 }
 
 /// Viking (tech level 4, special tech 81, 16, 12 and 10) sells the
@@ -2994,6 +2986,94 @@ fn the_shuttles_fee_and_wage_are_nova_hires() {
         .expect("Viking has a bar");
     let row = list.row(ShipId(128)).expect("the Shuttle is for hire");
     assert_eq!((row.fee, row.wage), (970, 100));
+}
+
+/// A stock pilot docked at Viking holding `ranks`.
+fn at_viking_holding(data: &GameData, ranks: &[i16]) -> Session {
+    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["system"] = serde_json::json!(129);
+    save["stellar"] = serde_json::json!(157);
+    save["ranks"] = serde_json::json!(ranks);
+    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let session = Session::fly(data, docked).expect("flies");
+    assert_eq!(session.landed(), Some(StellarId(157)), "docked at Viking");
+    session
+}
+
+/// The Viper's price, the Heavy Shuttle's, the trade-in and the
+/// Shuttle's hire fee at `session`'s Viking.
+fn viking_prices(session: &mut Session) -> (i64, i64, i64, i64) {
+    let shipyard = session.shipyard(&mut Always).expect("a shipyard");
+    let price = |id| shipyard.row(ShipId(id)).expect("for sale").price;
+    let fee = session
+        .escorts_for_hire(&mut Always)
+        .expect("Viking has a bar")
+        .row(ShipId(128))
+        .expect("the Shuttle is for hire")
+        .fee;
+    (price(167), price(129), shipyard.trade_in, fee)
+}
+
+/// `ränk` 128, the Federation Naval Rank of Commander, has a `PriceMod`
+/// of 85 and the Federation's government (128), Viking's. A pilot docked
+/// at Viking (tech level 4) holding it pays 85 % in the shipyard: the
+/// Viper (80,000, tech 4) 68,000; the Heavy Shuttle (17,500, tech 4)
+/// 14,875, rounded down to 14,800. The Shuttle (tech 3) trades in raw for
+/// 5000, through the flux twice: 3 % off to 4850, × 0.85 to 4122, rounded
+/// to 4120; then 3 % off to 3996, × 0.85 to 3396, rounded to 3390. The
+/// Shuttle's hire fee is a tenth of 10,000 less 3 % (9700), × 0.85 to
+/// 8245, rounded to 8240: 824. By the engine's `rank_price_scope` the
+/// outfitter's prices are unchanged.
+#[test]
+fn a_federation_commander_pays_85_percent_at_viking() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let commander = PilotCatalog::ranks(&data)
+        .into_iter()
+        .find(|rank| rank.id == nova_sim::RankId(128))
+        .expect("ränk 128");
+    assert_eq!(commander.name, "Federation Naval Rank of Commander");
+    assert_eq!(commander.price_mod, 85);
+    assert_eq!(commander.affil_govt, Some(nova_sim::GovtId(128)));
+    let viking = stellar_site(&data, 157);
+    assert_eq!(
+        (viking.govt, viking.tech_level),
+        (Some(nova_sim::GovtId(128)), 4)
+    );
+    let viper = PilotCatalog::ships(&data)
+        .into_iter()
+        .find(|ship| ship.id == ShipId(167))
+        .expect("the Viper");
+    assert_eq!(
+        (viper.cost, viper.tech_level, viper.buy_random),
+        (80_000, 4, 100)
+    );
+
+    let mut unranked = at_viking_holding(&data, &[]);
+    assert_eq!(viking_prices(&mut unranked), (80_000, 17_500, 4700, 970));
+    let mut ranked = at_viking_holding(&data, &[128]);
+    assert_eq!(viking_prices(&mut ranked), (68_000, 14_800, 3390, 824));
+
+    let outfit_prices = |session: &mut Session| {
+        session
+            .outfitter(&mut Always)
+            .expect("Viking has an outfitter")
+            .rows
+            .iter()
+            .map(|row| (row.id, row.price, row.buy_price))
+            .collect::<Vec<_>>()
+    };
+    let unranked_outfits = outfit_prices(&mut unranked);
+    assert!(!unranked_outfits.is_empty());
+    assert_eq!(
+        outfit_prices(&mut ranked),
+        unranked_outfits,
+        "the engine's scope"
+    );
 }
 
 /// The bar's and the hire dialog's descriptions and strings are where
