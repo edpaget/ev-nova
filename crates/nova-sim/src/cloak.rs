@@ -272,6 +272,13 @@ impl Cloak {
     }
 }
 
+/// Whether a ship type of `flags2` is untargetable ([`UNTARGETABLE`]):
+/// only a searcher whose scanner has [`SCAN_UNTARGETABLE`] targets it.
+#[must_use]
+pub fn untargetable(flags2: u16) -> bool {
+    flags2 & UNTARGETABLE != 0
+}
+
 /// What a ship type gives its cloak, and its sight of other ships': from
 /// its default items and `Flags2`.
 // Each flag is its own, read on its own.
@@ -319,11 +326,10 @@ impl CloakGear {
         self.flags2 & FAST_FADE != 0
     }
 
-    /// Whether a ship of it is untargetable ([`UNTARGETABLE`]): only a
-    /// searcher whose scanner has [`SCAN_UNTARGETABLE`] targets it.
+    /// Whether a ship of it is untargetable ([`untargetable`]).
     #[must_use]
     pub fn untargetable(self) -> bool {
-        self.has(UNTARGETABLE)
+        untargetable(self.flags2)
     }
 
     /// Whether its `Flags2` has the `bit`.

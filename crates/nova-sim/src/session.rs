@@ -1449,7 +1449,7 @@ impl Session {
             yardstick: self.arsenal.strength(ShipId(128)),
             untargetable: self
                 .ship_record(self.pilot.ship)
-                .is_some_and(|record| record.fields.flags2 & crate::cloak::UNTARGETABLE != 0),
+                .is_some_and(|record| crate::cloak::untargetable(record.fields.flags2)),
         }
     }
 
