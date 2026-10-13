@@ -163,6 +163,11 @@ pub struct PlayerSide {
     /// The raw `Strength` of `shïp` 128, the yardstick the odds measure
     /// the rating by ([`odds`](crate::ai::odds)).
     pub yardstick: i16,
+    /// Whether its ship type is untargetable (`shïp` `Flags2` 0x0004,
+    /// [`UNTARGETABLE`](crate::cloak::UNTARGETABLE)): an NPC's missile
+    /// flies at it only with the scanner bit, and its turrets never (see
+    /// [`fire`]).
+    pub untargetable: bool,
 }
 
 /// No governments at all.
@@ -713,6 +718,7 @@ mod tests {
             handling: Handling::default(),
             rating: 0,
             yardstick: 0,
+            untargetable: false,
         };
         around.player = Some(player);
         assert!(around.live(P));

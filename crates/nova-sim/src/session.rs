@@ -1447,6 +1447,9 @@ impl Session {
             handling: self.stats.handling,
             rating: self.pilot.combat_rating,
             yardstick: self.arsenal.strength(ShipId(128)),
+            untargetable: self
+                .ship_record(self.pilot.ship)
+                .is_some_and(|record| record.fields.flags2 & crate::cloak::UNTARGETABLE != 0),
         }
     }
 
@@ -13220,6 +13223,20 @@ pub(super) mod tests {
         assert_eq!((seen.rating, seen.yardstick), (320_000, 25));
         session.arsenal = crate::combat::armament::Arsenal::new(&[], Vec::new());
         assert_eq!(session.player_side().yardstick, 0, "no shïp 128");
+    }
+
+    #[test]
+    fn an_npc_sees_whether_the_players_ship_type_is_untargetable() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let flags2 = |session: &mut Session, flags2: u16| {
+            session.ships = vec![ship(session.pilot.ship.0, ShipFields { flags2, ..FAST })];
+            session.player_side().untargetable
+        };
+        assert!(!flags2(&mut session, 0x0003), "other bits");
+        assert!(flags2(&mut session, crate::cloak::UNTARGETABLE | 0x0001));
+        session.ships.clear();
+        assert!(!session.player_side().untargetable, "no record");
     }
 
     #[test]

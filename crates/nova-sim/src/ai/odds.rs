@@ -254,6 +254,7 @@ mod tests {
             handling: ShipStats::new(FAST, &[]).handling,
             rating: 0,
             yardstick: 0,
+            untargetable: false,
         }
     }
 

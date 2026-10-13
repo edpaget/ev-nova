@@ -25,10 +25,21 @@
 //!   earlier mount. Guidance 5 is never chosen.
 //! - **A turret** (3, 4, 7 and 8): reloaded, affordable, in range, not in
 //!   a blind spot, and 7 and 8 only with the target within [`FRONT_ARC`]
-//!   of the nose and of the tail. Chosen by the same shield rule.
-//! - **A missile** (1): the first homing weapon whose range squared is at
-//!   least [`MISSILE_RANGE`] of the distance squared, reloaded and
-//!   affordable.
+//!   of the nose and of the tail. Chosen by the same shield rule. None
+//!   at a target whose ship type is untargetable (`shïp` `Flags2` 0x0004,
+//!   [`UNTARGETABLE`](crate::cloak::UNTARGETABLE), `_AIFireTurret`
+//!   @0x80b51), whatever the shooter's scanner.
+//! - **A missile** (1, `_AIFireMissile` @0x8115d): none at a target whose
+//!   ship type is untargetable unless the shooter's ship type carries a
+//!   scanner with `ModVal` bit 0x0004 (@0x811a7-0x811cd,
+//!   [`CloakGear::scanner`](crate::cloak::CloakGear::scanner)), nor at a
+//!   cloaked target unless it carries one with bit 0x0008
+//!   (`_ShipCanTargetCloakedShips` @0x811e7-0x811fd); the player counts
+//!   its own ship type's bit ([`PlayerSide::untargetable`]) and never
+//!   cloaks. Then the first homing weapon that has its ammunition and
+//!   whose range squared is at least [`MISSILE_RANGE`] of the distance
+//!   squared (@0x8126b-0x8132b), fired only if it has reloaded
+//!   (@0x81349-0x8135d): one reloading does not give way to a later one.
 //! - **By manoeuvre**, a later pick overriding an earlier: approaching,
 //!   a gun, then a turret (each while facing within [`GUN_FACING`] times
 //!   the turn rate of the heading it wants), then a missile (within
@@ -39,14 +50,34 @@
 //! - **Destroying weapons** ([`destroys`]): a weapon that does mass damage,
 //!   is not `Flags2` 0x1000, is guided -1, 0, 3, 4, 6, 7 or 8, and has its
 //!   ammunition. A ship with none leaves a disabled target alone.
-//! - There is no friendly-fire check, as in the original. The difficulty
-//!   reload multiplier against the player, `_SufficentTargetedDamage` and
-//!   `_SuitableMissileType` are not modelled yet.
+//! - There is no friendly-fire check, as in the original. Guns
+//!   (`_AIFireGun`) never read the untargetable bit.
+//!
+//! # Not modelled
+//!
+//! The difficulty reload multiplier against the player. In
+//! `_AIFireMissile`: `_SufficentTargetedDamage` (@0x81215), the
+//! weapon's `_SuitableMissileType` (@0x812ab), the match of the weapon's
+//! flag 0x0400 (wëap +0x22) against the target's ship type's `Flags`
+//! 0x0400 (@0x812b4-0x812fb), the rest of `_WeaponHasAmmo` beyond
+//! ammunition and fuel (@0x81307), and its walk in weapon-table order
+//! rather than mount order. In `_AIFireTurret`'s preamble,
+//! `_ShipVisibleToShip` (@0x80b69), which keeps a turret off a target its
+//! shooter does not see, and the call of `_HandleShipPointDefense`
+//! (@0x80b0d) from there rather than every tick (point defence itself is
+//! [`defence`](crate::combat::defence); a disabled shooter, `_IsDisabled`
+//! @0x80afa, fires nothing in [`Armament::fire`]). rdm phases
+//! player-led-ships/phase-23-ai-fire-missile-rest and
+//! player-led-ships/phase-24-ai-fire-turret-sight take them.
 
+#[cfg(doc)]
+use crate::ai::PlayerSide;
 use crate::ai::{Goal, Surroundings};
 use crate::catalog::WeaponId;
 use crate::combat::ShipRef;
 use crate::combat::aim::{FRONT_ARC, angle_off, bearing, blind, lead};
+#[cfg(doc)]
+use crate::combat::armament::Armament;
 use crate::combat::armament::{Mount, Trigger};
 use crate::combat::projectile::Target;
 use crate::combat::weapon::{Ammo, Guidance, WeaponSpec};
@@ -243,6 +274,16 @@ fn pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
         ShipRef::Npc(id) => around.npc(id).map(|other| other.reserves),
     }
     .is_some_and(|reserves| reserves.shield.now > 0.0);
+    // The player has no cloak.
+    let (untargetable, cloaked) = match ship {
+        ShipRef::Player => (
+            around.player.is_some_and(|player| player.untargetable),
+            false,
+        ),
+        ShipRef::Npc(id) => around.npc(id).map_or((false, false), |other| {
+            (other.cloak_gear.untargetable(), other.cloak.is_cloaked())
+        }),
+    };
     let manoeuvre = manoeuvre(npc.goal, &npc.state, &at)?;
     let off = angle_off(npc.state.heading, wanted_heading(npc, &at));
     let facing = |turns: f32| off <= turns * npc.stats.handling.turn_rate;
@@ -250,6 +291,8 @@ fn pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
         npc,
         at: &at,
         shields_up,
+        untargetable,
+        cloaked,
     };
     let gun = || facing(GUN_FACING).then(|| sight.gun()).flatten();
     let turret = || sight.turret();
@@ -265,10 +308,16 @@ fn pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
 }
 
 /// An NPC sizing up its target at `at`.
+// Each flag is its own, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 struct Sight<'a> {
     npc: &'a Npc,
     at: &'a ShipState,
     shields_up: bool,
+    /// Whether the target's ship type is untargetable.
+    untargetable: bool,
+    /// Whether the target is cloaked.
+    cloaked: bool,
 }
 
 impl Sight<'_> {
@@ -344,6 +393,9 @@ impl Sight<'_> {
 
     /// The turret it fires, if any (see the module docs).
     fn turret(&self) -> Option<WeaponId> {
+        if self.untargetable {
+            return None;
+        }
         let bearing_off = angle_off(
             self.npc.state.heading,
             bearing(self.npc.state.position, self.at.position),
@@ -365,16 +417,23 @@ impl Sight<'_> {
 
     /// The missile it fires, if any (see the module docs).
     fn missile(&self) -> Option<WeaponId> {
+        let scanner = self.npc.cloak_gear.scanner;
+        if (self.untargetable && !scanner.untargetable) || (self.cloaked && !scanner.targets) {
+            return None;
+        }
         let distance = self.distance_squared();
+        let (rounds, fuel) = (&self.npc.rounds, self.npc.reserves.fuel);
         self.npc
             .armament
             .mounts()
             .iter()
             .find(|mount| {
                 let range = mount.spec.range();
-                mount.spec.guidance == Guidance::Homing && range * range >= MISSILE_RANGE * distance
+                mount.spec.guidance == Guidance::Homing
+                    && mount.affords(rounds, fuel)
+                    && range * range >= MISSILE_RANGE * distance
             })
-            .filter(|mount| self.ready(mount))
+            .filter(|mount| mount.reload <= 0.0)
             .map(|mount| mount.spec.id)
     }
 }
@@ -459,6 +518,7 @@ mod tests {
             handling: ShipStats::new(FAST, &[]).handling,
             rating: 0,
             yardstick: 0,
+            untargetable: false,
         }
     }
 
@@ -473,6 +533,145 @@ mod tests {
             ..Surroundings::new(&[], &npcs)
         };
         trigger(npc, &around).only
+    }
+
+    /// What `npc` fires at the player (`x`, `y`) from [`SHOOTER`], its
+    /// shields up and its ship type untargetable.
+    fn fired_at_untargetable(npc: &Npc, x: f32, y: f32) -> Option<WeaponId> {
+        let npcs = [npc.clone()];
+        let around = Surroundings {
+            player: Some(PlayerSide {
+                untargetable: true,
+                ..player_at(SHOOTER.x + x, SHOOTER.y + y, 50.0)
+            }),
+            ..Surroundings::new(&[], &npcs)
+        };
+        trigger(npc, &around).only
+    }
+
+    /// What `npc`, attacking NPC 2, fires at it as `target` makes it,
+    /// (`x`, `y`) from [`SHOOTER`].
+    fn fired_at_npc(npc: &Npc, x: f32, y: f32, target: impl Fn(&mut Npc)) -> Option<WeaponId> {
+        let mut npc = npc.clone();
+        npc.goal = Goal::Attack(ShipRef::Npc(NpcId(2)));
+        let mut other = crate::testkit::npc(2, ShipStats::new(FAST, &[]));
+        other.state.position = SHOOTER + Vec2::new(x, y);
+        target(&mut other);
+        let npcs = [npc.clone(), other];
+        trigger(&npc, &Surroundings::new(&[], &npcs)).only
+    }
+
+    /// `npc` with a scanner of these bits among its ship type's items.
+    fn scanning(mut npc: Npc, scanner: crate::cloak::Scanner) -> Npc {
+        npc.cloak_gear.scanner = scanner;
+        npc
+    }
+
+    const SEES_UNTARGETABLE: crate::cloak::Scanner = crate::cloak::Scanner {
+        untargetable: true,
+        ..crate::cloak::Scanner::NONE
+    };
+
+    const SEES_CLOAKED: crate::cloak::Scanner = crate::cloak::Scanner {
+        targets: true,
+        ..crate::cloak::Scanner::NONE
+    };
+
+    #[test]
+    fn a_missile_flies_at_an_untargetable_player_only_with_the_shooters_scanner() {
+        // A short gun keeps the missile from being a gun.
+        let npc = shooter(&[short(128), missile(131)], ATTACK);
+        assert_eq!(fired(&npc, 0.0, -300.0, 50.0), id(131));
+        assert_eq!(fired_at_untargetable(&npc, 0.0, -300.0), None);
+        let cloak_only = scanning(npc.clone(), SEES_CLOAKED);
+        assert_eq!(fired_at_untargetable(&cloak_only, 0.0, -300.0), None);
+        let sees = scanning(npc, SEES_UNTARGETABLE);
+        assert_eq!(fired_at_untargetable(&sees, 0.0, -300.0), id(131));
+    }
+
+    #[test]
+    fn a_missile_flies_at_an_untargetable_npc_only_with_the_shooters_scanner() {
+        let npc = shooter(&[short(128), missile(131)], ATTACK);
+        let plain = |_: &mut Npc| {};
+        let untargetable = |other: &mut Npc| other.cloak_gear.flags2 = crate::cloak::UNTARGETABLE;
+        assert_eq!(fired_at_npc(&npc, 0.0, -300.0, plain), id(131));
+        assert_eq!(fired_at_npc(&npc, 0.0, -300.0, untargetable), None);
+        let sees = scanning(npc, SEES_UNTARGETABLE);
+        assert_eq!(fired_at_npc(&sees, 0.0, -300.0, untargetable), id(131));
+    }
+
+    #[test]
+    fn a_missile_flies_at_a_cloaked_npc_only_with_the_shooters_cloak_bit() {
+        let npc = shooter(&[short(128), missile(131)], ATTACK);
+        let cloaked = |other: &mut Npc| {
+            other.cloak = crate::cloak::Cloak {
+                fade: crate::cloak::FADE_FULL,
+                direction: 0,
+            };
+        };
+        assert_eq!(fired_at_npc(&npc, 0.0, -300.0, cloaked), None);
+        let untargetable_bit = scanning(npc.clone(), SEES_UNTARGETABLE);
+        assert_eq!(fired_at_npc(&untargetable_bit, 0.0, -300.0, cloaked), None);
+        let sees = scanning(npc, SEES_CLOAKED);
+        assert_eq!(fired_at_npc(&sees, 0.0, -300.0, cloaked), id(131));
+    }
+
+    #[test]
+    fn a_turret_never_fires_at_an_untargetable_ship_and_a_gun_still_does() {
+        let turret = shooter(&[guided(130, 4)], Goal::Flee(ShipRef::Player));
+        assert_eq!(fired(&turret, 0.0, 200.0, 50.0), id(130));
+        assert_eq!(fired_at_untargetable(&turret, 0.0, 200.0), None);
+        let sees = scanning(turret, SEES_UNTARGETABLE);
+        assert_eq!(
+            fired_at_untargetable(&sees, 0.0, 200.0),
+            None,
+            "whatever the scanner"
+        );
+        let mut at_npc = shooter(&[guided(130, 4)], ATTACK);
+        at_npc.state.heading = 180.0;
+        let untargetable = |other: &mut Npc| other.cloak_gear.flags2 = crate::cloak::UNTARGETABLE;
+        assert_eq!(fired_at_npc(&at_npc, 0.0, 100.0, |_| {}), id(130));
+        assert_eq!(fired_at_npc(&at_npc, 0.0, 100.0, untargetable), None);
+        let gun = shooter(&[gun(128, 1, 1)], ATTACK);
+        assert_eq!(fired_at_untargetable(&gun, 0.0, -100.0), id(128));
+    }
+
+    #[test]
+    fn a_missile_out_of_ammunition_gives_way_to_a_later_one_in_range() {
+        let empty = WeaponRecord {
+            ammo_type: 10,
+            ..missile(131)
+        };
+        let npc = shooter(&[short(128), empty, missile(132)], ATTACK);
+        assert_eq!(fired(&npc, 0.0, -300.0, 50.0), id(132));
+        let slow = WeaponRecord {
+            reload: 10,
+            ..missile(131)
+        };
+        let mut reloading = shooter(&[short(128), slow, missile(132)], ATTACK);
+        let mut fuel = reloading.reserves.fuel;
+        reloading.armament.fire(
+            Trigger {
+                only: Some(WeaponId(131)),
+                ..Trigger::default()
+            },
+            Condition::Intact,
+            &mut BTreeMap::new(),
+            &mut fuel,
+            &mut crate::chance::NeverFires,
+            &mut crate::combat::report::Reports::default(),
+            &mut |_| {
+                Some(crate::combat::aim::Aim {
+                    heading: 0.0,
+                    target: None,
+                })
+            },
+        );
+        assert_eq!(
+            fired(&reloading, 0.0, -300.0, 50.0),
+            None,
+            "a reload does not give way"
+        );
     }
 
     #[allow(clippy::unnecessary_wraps)]

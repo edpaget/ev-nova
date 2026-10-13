@@ -80,6 +80,7 @@ pub(crate) fn player(x: f32, y: f32) -> PlayerSide {
         handling: ShipStats::new(FAST, &[]).handling,
         rating: 0,
         yardstick: 0,
+        untargetable: false,
     }
 }
 
