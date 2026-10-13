@@ -2608,6 +2608,31 @@ mod tests {
     }
 
     #[test]
+    fn a_trade_in_beyond_i32_is_fluxed_at_its_most_under_both_readings() {
+        // Three outfits at i32::MAX, half each, push the raw trade-in far
+        // past i32::MAX. The clamp takes i32::MAX, which goes through an
+        // f32 to 2,147,483,648 and rounds down to a thousand; the second
+        // pass keeps 2,147,483,000 (f32 2,147,483,008, down to a thousand).
+        let records = [OutfitRecord {
+            cost: i32::MAX,
+            ..outfit(128, &[])
+        }];
+        let site = port();
+        let pilot = owning(&[(128, 3)]);
+        let traded = |source| {
+            Yard {
+                rules: trading_in(source),
+                ..yard(&[costing(128, 20_000, 4)], &records, &site)
+            }
+            .shipyard(&pilot, &mut DayRolls::default(), &mut NeverFires)
+            .expect("a shipyard")
+            .trade_in
+        };
+        assert_eq!(traded(RuleSource::Engine), 2_147_483_000, "twice");
+        assert_eq!(traded(RuleSource::Bible), 2_147_483_000, "once");
+    }
+
+    #[test]
     fn the_trade_in_reads_the_flown_classs_tech_not_the_bought_ones() {
         let ships = [costing(128, 20_000, 3), costing(129, 10_000, 4)];
         let shipyard = priced(&ships, PriceMults::NONE, Rulebook::default());
