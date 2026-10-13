@@ -530,9 +530,10 @@ impl Session {
             self.bar_news = None;
         }
         let scene_changed = self.set_player_system(system, sites, dock);
-        if resets.has(Reset::Dock) && self.landed.is_some() {
+        if resets.has(Reset::Dock) {
             // A relocation docks, opening the spaceport (see the `ranks`
-            // module).
+            // module); undocked, it takes no government, so no rank's
+            // price.
             self.open_port_prices();
         }
         self.leave_behind(&resets);
