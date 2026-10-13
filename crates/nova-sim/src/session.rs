@@ -1751,7 +1751,8 @@ impl Session {
     /// destroyed, landed or jumped out, or the system was populated
     /// afresh) or no longer targetable (it is breaking up, or cloaked and
     /// the player cannot target cloaked ships), as the original does every
-    /// frame.
+    /// frame. A target of an untargetable type is kept: the original's
+    /// check (`_HandlePlayer` @0x686a4-0x686ee) never reads the bit.
     fn clear_lost_target(&mut self) {
         let cloaked_ok = self.scanner().targets;
         if self
@@ -1769,28 +1770,28 @@ impl Session {
     /// changes.
     pub fn select_target(&mut self, pick: TargetPick) -> Option<NpcId> {
         if self.landed.is_none() && self.jumping().is_none() {
-            let cloaked_ok = self.scanner().targets;
+            let scanner = self.scanner();
             let npcs = self.traffic.npcs();
             let from = self.player.position;
             match pick {
                 TargetPick::Nearest => {
-                    let nearest = targeting::nearest(npcs, from, cloaked_ok, |_| true);
+                    let nearest = targeting::nearest(npcs, from, scanner, |_| true);
                     self.target = nearest.or(self.target);
                 }
                 TargetPick::NearestThreat => {
                     let threat = |npc: &Npc| npc.threatens_player_among(npcs);
-                    let nearest = targeting::nearest(npcs, from, cloaked_ok, threat);
+                    let nearest = targeting::nearest(npcs, from, scanner, threat);
                     self.target = nearest.or(self.target);
                 }
-                TargetPick::Next => self.target = targeting::next(npcs, self.target, cloaked_ok),
+                TargetPick::Next => self.target = targeting::next(npcs, self.target, scanner),
                 TargetPick::NextEscort => {
-                    self.target = targeting::next_escort(npcs, self.target);
+                    self.target = targeting::next_escort(npcs, self.target, scanner);
                 }
                 TargetPick::Previous => {
-                    self.target = targeting::previous(npcs, self.target, cloaked_ok);
+                    self.target = targeting::previous(npcs, self.target, scanner);
                 }
                 TargetPick::PreviousEscort => {
-                    self.target = targeting::previous_escort(npcs, self.target);
+                    self.target = targeting::previous_escort(npcs, self.target, scanner);
                 }
             }
         }
@@ -13680,6 +13681,50 @@ pub(super) mod tests {
         assert_eq!(session.target, Some(NpcId(0)), "it can");
         session.target = None;
         assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
+    }
+
+    /// `session`'s NPC 0 made of an untargetable type, attacking the
+    /// player.
+    fn untargetable_attacker(session: &mut Session) {
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear.flags2 = crate::cloak::UNTARGETABLE;
+        npc.goal = Goal::Attack(ShipRef::Player);
+    }
+
+    #[test]
+    fn the_target_keys_pass_over_an_untargetable_ship_until_the_player_owns_the_scanner() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        untargetable_attacker(&mut session);
+        for pick in [
+            TargetPick::Nearest,
+            TargetPick::NearestThreat,
+            TargetPick::Next,
+        ] {
+            session.target = None;
+            assert_eq!(session.select_target(pick), None, "{pick:?}");
+        }
+        let scans = scanning(crate::cloak::SCAN_UNTARGETABLE);
+        let mut session = holding_260(&scans);
+        untargetable_attacker(&mut session);
+        for pick in [
+            TargetPick::Nearest,
+            TargetPick::NearestThreat,
+            TargetPick::Next,
+        ] {
+            session.target = None;
+            assert_eq!(session.select_target(pick), Some(NpcId(0)), "{pick:?}");
+        }
+    }
+
+    #[test]
+    fn a_held_target_of_an_untargetable_type_is_not_let_go() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.target = Some(NpcId(0));
+        untargetable_attacker(&mut session);
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(session.target, Some(NpcId(0)));
     }
 
     #[test]
