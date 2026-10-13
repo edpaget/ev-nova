@@ -102,6 +102,7 @@ use crate::escort::{
 };
 use crate::flight::ShipState;
 use crate::market;
+use crate::pilot::Escort;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::self_repair::FormerEscort;
@@ -194,11 +195,7 @@ impl Session {
             restock(&mut escort.reserves, &kind);
             self.pilot.escorts[index].reserves = escort.reserves;
         }
-        let carrier = escort.carried.then(|| Carrier {
-            ship: ShipRef::Player,
-            window: dock_window(maneuver),
-            reach: self.reach_of(ShipRef::Player),
-        });
+        let carrier = escort.carried.then(|| self.player_carrier(maneuver));
         let npc = Npc {
             id: NpcId::default(),
             berth: 0,
@@ -244,6 +241,55 @@ impl Session {
             Some(berth) => self.traffic.add_npc_at(npc, berth),
             None => self.traffic.add_npc(npc),
         })
+    }
+
+    /// The player as the carrier of its fighter of `maneuver`.
+    pub(super) fn player_carrier(&self, maneuver: i16) -> Carrier {
+        Carrier {
+            ship: ShipRef::Player,
+            window: dock_window(maneuver),
+            reach: self.reach_of(ShipRef::Player),
+        }
+    }
+
+    /// NPC `id` joins the fleet where it is as the escort of `record`
+    /// (`_AIMakeEscortFlyInForm` @0x89b8e, and a former escort's rejoin,
+    /// see [`self_repair`](super::self_repair)): of no government, its AI
+    /// type its ship type's `InherentAI`, led by the player alone,
+    /// keeping formation by `record`'s standing order with no target of
+    /// its own, carried by the player when `record` is a carried
+    /// fighter, and no longer a former escort. Its record joins the
+    /// pilot's, the formation re-forms, and a save is due.
+    pub(super) fn enlist(&mut self, id: NpcId, record: Escort) {
+        let ship = self
+            .ship_record(record.ship)
+            .map(|ship| (ship.inherent_ai, ship.fields.maneuver));
+        let carrier = ship
+            .filter(|_| record.carried)
+            .map(|(_, maneuver)| self.player_carrier(maneuver));
+        let Some(npc) = self.npc_mut(id) else {
+            return;
+        };
+        npc.govt = None;
+        if let Some((inherent_ai, _)) = ship {
+            npc.ai_type = AiType::from_raw(inherent_ai);
+        }
+        npc.former = None;
+        npc.leader = None;
+        npc.goal = Goal::Formation { guard: None };
+        npc.target = None;
+        npc.escort = Some(EscortDuty {
+            formation: FormationSlot::default(),
+            order: record.order,
+        });
+        if carrier.is_some() {
+            npc.carrier = carrier;
+        }
+        self.pilot.escorts.push(record);
+        self.fleet.resize(self.pilot.escorts.len() - 1, None);
+        self.fleet.push(Some(id));
+        self.reform();
+        self.save_due = true;
     }
 
     /// Gives each ship the player leads ([`Session::player_led`]) its slot

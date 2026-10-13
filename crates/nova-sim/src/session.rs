@@ -351,6 +351,7 @@ mod person_offers;
 mod persons;
 mod player_led;
 mod script_effects;
+mod self_repair;
 mod ship_change;
 mod stellars;
 mod story;
@@ -403,7 +404,6 @@ use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
 use crate::control::{ControlBits, NovaBits, ScriptNote, SetOpKind};
 use crate::date::{self, GameDate};
-use crate::escort::{EscortDuty, FormationSlot};
 use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
 use crate::gate::{
@@ -454,7 +454,7 @@ use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent};
 use crate::targeting::{self, TargetPick};
 use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
-use crate::traffic::npc::{AiType, Npc, NpcId};
+use crate::traffic::npc::{Npc, NpcId};
 use crate::traffic::table::SpawnTable;
 use crate::traffic::{Traffic, World, strength};
 use crate::wares::DayRolls;
@@ -1618,6 +1618,7 @@ impl Session {
         self.sync_fleet();
         self.lose_escorts();
         self.lose_dying_mission_escorts();
+        self.self_repair(rules, &mut *chance);
         self.take_out_the_destroyed(&mut &mut *chance);
         self.orphan_fighters();
         self.clear_lost_target();
@@ -3922,30 +3923,12 @@ impl Session {
     /// own escorts leave it, and so does the player's target; a save is
     /// due.
     fn fleet_up(&mut self, id: NpcId, person: Option<PersonId>) {
-        let inherent_ai = self
-            .npcs()
-            .iter()
-            .find(|npc| npc.id == id)
-            .and_then(|npc| self.ship_record(npc.ship))
-            .map(|record| record.inherent_ai);
         let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
             return;
         };
-        npc.govt = None;
-        if let Some(inherent_ai) = inherent_ai {
-            npc.ai_type = AiType::from_raw(inherent_ai);
-        }
-        npc.former = None;
-        npc.leader = None;
-        npc.goal = Goal::Formation { guard: None };
-        npc.target = None;
         npc.trigger = Trigger::default();
         npc.provoked = 0.0;
-        npc.escort = Some(EscortDuty {
-            formation: FormationSlot::default(),
-            order: None,
-        });
-        let escort = Escort {
+        let record = Escort {
             ship: npc.ship,
             reserves: npc.reserves,
             order: None,
@@ -3962,11 +3945,7 @@ impl Session {
         if self.target == Some(id) {
             self.target = None;
         }
-        self.pilot.escorts.push(escort);
-        self.fleet.resize(self.pilot.escorts.len() - 1, None);
-        self.fleet.push(Some(id));
-        self.reform();
-        self.save_due = true;
+        self.enlist(id, record);
     }
 
     /// NPC `id` leaves the system: every other NPC after it lets it go,
@@ -4352,6 +4331,7 @@ pub(super) mod tests {
     use crate::chance::NeverFires;
     use crate::clock::TICKS_PER_SECOND;
     use crate::control::{SetExpr, Test};
+    use crate::escort::{EscortDuty, FormationSlot};
     use crate::flight::Turn;
     use crate::fuel::FUEL_SCOOP;
     use crate::gate::{GateArrivalRule, GateKind, GateRefusal, HYPERGATE, WORMHOLE, WormholeRule};

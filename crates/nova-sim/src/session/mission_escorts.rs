@@ -715,6 +715,35 @@ mod tests {
         assert_eq!(session.npc(id).expect("breaking up").former, None);
     }
 
+    #[test]
+    fn a_disabled_mission_escort_that_repairs_itself_resumes_and_never_joins_the_fleet() {
+        let mut session = laden(1, RuleSource::Engine);
+        let _ = (session.take_messages(), session.take_sounds());
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.self_repair = true;
+        npc.reserves.armor.now = 1.0;
+        let id = npc.id;
+        session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+        assert_eq!(
+            session.npc(id).expect("here").condition,
+            Condition::Disabled
+        );
+        let mut chance = crate::testkit::Draws::of(&[0]);
+        session.tick_combat(crate::combat::Rules::default(), &mut chance);
+        assert_eq!(chance.asked, [crate::self_repair::REPAIR_ODDS]);
+        let npc = session.npc(id).expect("here");
+        assert_eq!(npc.condition, Condition::Intact);
+        let max = npc.reserves.armor.max;
+        assert!(
+            (npc.reserves.armor.now - crate::self_repair::repaired_armor(max, false)).abs() < 1e-4
+        );
+        assert!(npc.mission_escort(), "resumes as a mission escort");
+        assert_eq!(npc.escort, None);
+        assert!(session.pilot().escorts().is_empty(), "never a hired escort");
+        assert_eq!(session.take_messages(), []);
+        assert_eq!(session.take_sounds(), []);
+    }
+
     // Release.
 
     /// [`ships_catalog`] of `ships`, its ship 200 of `InherentAI` 1, a

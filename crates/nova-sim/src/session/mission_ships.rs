@@ -3766,6 +3766,24 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_held_rescue_ship_that_repairs_itself_gets_its_armour_back_and_stays_disabled() {
+        let catalog = goal_catalog(5, 0);
+        let mut session = in_flight(&catalog);
+        for npc in session.traffic.npcs_mut() {
+            npc.self_repair = true;
+        }
+        let mut chance = crate::testkit::Draws::of(&[0, 0]);
+        session.self_repair(crate::combat::Rules::default(), &mut chance);
+        assert_eq!(chance.asked, [crate::self_repair::REPAIR_ODDS; 2]);
+        assert_eq!(conditions(&session), [Condition::Disabled; 2], "held");
+        for npc in session.npcs() {
+            let repaired =
+                crate::self_repair::repaired_armor(npc.reserves.armor.max, npc.hull.tough);
+            assert!((npc.reserves.armor.now - repaired).abs() < 1e-4);
+        }
+    }
+
+    #[test]
     fn a_rescue_ship_held_at_low_armour_stays_disabled_once_released() {
         let catalog = goal_catalog(5, 0);
         let mut session = in_flight(&catalog);
