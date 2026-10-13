@@ -138,7 +138,7 @@ pub(crate) fn cron(id: i16) -> CronRecord {
 }
 
 /// Rank `id`: unaffiliated, of `Weight` 0, paying nothing, with no cap,
-/// no `Contribute`, no flags and every name empty.
+/// no `Contribute`, no flags, every name empty and a `PriceMod` of 100.
 pub(crate) fn rank(id: i16) -> RankRecord {
     RankRecord {
         id: RankId(id),
@@ -151,6 +151,7 @@ pub(crate) fn rank(id: i16) -> RankRecord {
         flags: 0,
         conv_name: String::new(),
         short_name: String::new(),
+        price_mod: 100,
     }
 }
 

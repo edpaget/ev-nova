@@ -833,6 +833,9 @@ pub struct RankRecord {
     pub conv_name: String,
     /// Its `ShortName`, read by `<SRK>`.
     pub short_name: String,
+    /// Its `PriceMod`, a percentage of the shipyard's prices at its
+    /// government's stellars; 0 or below loads as 100 (@0x7db33-0x7db3a).
+    pub price_mod: i16,
 }
 
 /// What a mission's screens show of it, read from its `mïsn` and its

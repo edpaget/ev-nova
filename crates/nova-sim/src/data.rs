@@ -563,7 +563,8 @@ impl PilotCatalog for GameData {
     }
 
     /// Only IDs 128-255 have a slot (@0x7da37); `AffilGovt` up to 127
-    /// loads as -1 (@0x7dab0-0x7dac3).
+    /// loads as -1 (@0x7dab0-0x7dac3), and a `PriceMod` of 0 or below as
+    /// 100 (@0x7db33-0x7db3a).
     fn ranks(&self) -> Vec<RankRecord> {
         self.records::<Rank>()
             .filter(|(id, _)| (FIRST_RANK..=LAST_RANK).contains(id))
@@ -581,6 +582,11 @@ impl PilotCatalog for GameData {
                     flags: record.flags.bits(),
                     conv_name: record.conv_name.as_str().to_owned(),
                     short_name: record.short_name.as_str().to_owned(),
+                    price_mod: if record.price_mod <= 0 {
+                        100
+                    } else {
+                        record.price_mod
+                    },
                 })
             })
             .collect()
@@ -3566,12 +3572,36 @@ mod tests {
                 flags: 0x0018,
                 conv_name: "Commander".to_owned(),
                 short_name: "Cmdr".to_owned(),
+                price_mod: 85,
             }
         );
         assert_eq!(ranks[1].name, "", "no resource name");
         assert_eq!(ranks[2].name, "", "nothing before the last ';'");
         assert_eq!(ranks[2].affil_govt, Some(GovtId(130)));
         assert_eq!(store(&[]).ranks(), []);
+    }
+
+    #[test]
+    fn a_rank_price_mod_of_0_or_below_loads_as_100() {
+        use nova_data::records::rank::Rank;
+        let price_mod = |raw: i16| {
+            let mut bytes = rank(128);
+            put_i16s(&mut bytes, 0x04, &[raw]);
+            bytes
+        };
+        let data = store(&[
+            (Rank::TYPE, 128, price_mod(0)),
+            (Rank::TYPE, 129, price_mod(-5)),
+            (Rank::TYPE, 130, price_mod(1)),
+        ]);
+        assert_eq!(
+            data.ranks()
+                .iter()
+                .map(|rank| rank.price_mod)
+                .collect::<Vec<_>>(),
+            [100, 100, 1],
+            "@0x7db33-0x7db3a"
+        );
     }
 
     #[test]
