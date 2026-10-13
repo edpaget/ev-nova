@@ -425,7 +425,7 @@ use crate::hyperspace::{
     MultiJumpRule, RouteError, StarMap, arrival, check_jump, hops_per_jump, jump_bearing,
     jump_zone, next_hyper_destination,
 };
-use crate::landing::{LandOutcome, LandingRefusal, land_or_select, nearest_landable};
+use crate::landing::{LandOutcome, LandingRefusal, Standing, land_or_select, nearest_landable};
 use crate::legal::{self, Crime, LegalCode};
 use crate::market::{
     self, Direction, EscortHolds, Good, Goods, Market, Markup, Order, TradeRefusal,
@@ -2382,8 +2382,11 @@ impl Session {
     /// Presses the land key, unless a jump is under way, its pre-jump stage
     /// included: as the
     /// [`landing`](crate::landing) rules say, with the navigation target
-    /// and the pilot's legal record with the stellar's government, or the
-    /// system's on the star map when the stellar has none. A press that
+    /// and traffic control's clearance
+    /// ([`landing::cleared`](crate::landing::cleared)) of the pilot's
+    /// standing: its legal record, the `Require` its ranks meet, its
+    /// missions' stellars and the blessing table (see the `ranks` module),
+    /// read as the session's `blessing_landing` rule says. A press that
     /// selects a stellar makes it the navigation target and lands on
     /// nothing. A press that lands docks the ship at the stellar's centre,
     /// at rest, its heading and reserves unchanged, and clears the target,
@@ -2402,11 +2405,13 @@ impl Session {
         if self.condition != Condition::Intact {
             return Err(LandingRefusal::Disabled);
         }
+        let blessing = self.blessing();
+        let reading = self.rules.source_for(RuleKey::BlessingLanding);
         let outcome = land_or_select(
             self.nav_target,
             &self.player,
             &self.sites,
-            |site| self.landing_record(site) >= site.min_status,
+            |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
             |site| self.landing_reach(site),
         )?;
         match outcome {
@@ -2811,6 +2816,30 @@ impl Session {
                 .galaxy
                 .govt(self.pilot.system)
                 .map_or(0, |govt| self.pilot.legal_record(govt)),
+        }
+    }
+
+    /// What traffic control weighs of the pilot at `site` (see
+    /// [`landing::cleared`](crate::landing::cleared)), its government
+    /// blessing as `blessing` says: the legal record
+    /// ([`Session::landing_record`]), whether the pilot's ranks contribute
+    /// every `Require` bit of `site`'s government, whether `site` is an
+    /// active mission's travel or return stellar, compared as raw IDs over
+    /// every slot, failed ones included (@0x67996-0x679b4), and whether its
+    /// government blesses landing.
+    fn standing(&self, site: &LandingSite, blessing: &crate::rank::Blessing) -> Standing {
+        let require = self.govts.require(site.govt);
+        let mission_stellar = self.pilot.missions().iter().any(|(_, active)| {
+            [active.destination, active.return_to]
+                .into_iter()
+                .flatten()
+                .any(|stop| stop.stellar == site.id)
+        });
+        Standing {
+            record: self.landing_record(site),
+            meets_require: self.contributed() & require == require,
+            mission_stellar,
+            blessed: blessing.blesses(site.govt, crate::rank::Blessed::Landing),
         }
     }
 

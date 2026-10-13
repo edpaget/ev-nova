@@ -3810,19 +3810,16 @@ fn the_bounty_hunter_gone_for_good_never_appears_again() {
 
 /// A new stock pilot in Kania, at rest over HG-Kania (`spöb` 1404, at
 /// (-70, 250)): docked there through a save that says so, then taken off,
-/// which leaves the ship at the gate's centre. Its record with the
-/// Hypergate government (183), and in Kania (`sÿst` 128, governed by 128,
-/// whose record landing reads by the engine), is 32767, HG-Kania's
-/// `MinStatus`: the original never lets a record pass 32767 (task
-/// `landing-minstatus-32767-never`), which `check_landing` does not model
-/// yet.
+/// which leaves the ship at the gate's centre. It holds rank 147, "Have
+/// Access to Hypergate System", which blesses landing at the Hypergate
+/// government's (183) stellars: no record clears HG-Kania's `MinStatus`
+/// of 32767 (`_HandlePlayerDockRequest` @0x67915).
 fn over_hg_kania(data: &GameData) -> Session {
-    let mut pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
-    pilot.set_legal_record(GovtId(183), 32767);
-    pilot.set_system_record(SystemId(128), 32767);
+    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::json!(1404);
+    save["ranks"] = serde_json::json!([147]);
     let parked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     let mut session = Session::fly(data, parked).expect("flies");
     assert_eq!(

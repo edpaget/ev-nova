@@ -458,14 +458,13 @@ impl Driver {
 /// the ship out of HG-Tichel at (-400, -500) in Tichel (129), flying on
 /// from there under the fade-in, on 24 June
 /// 1177, the take-off's day (`_PlayerLandOnStellar` @0x63440), saying
-/// so. Its record with the Hypergate government (183), and in Kania (128),
-/// whose record landing reads by the engine, is HG-Kania's `MinStatus`,
-/// 32767, which the original never lets a record pass (task
-/// `landing-minstatus-32767-never`).
+/// so. It holds rank 147, "Have Access to Hypergate System", which
+/// blesses landing at the Hypergate government's (183) stellars: its
+/// record could never clear HG-Kania's `MinStatus` of 32767.
 #[test]
 fn a_pilot_at_hg_kania_enters_it_for_tichel() {
     use nova_sim::fixture::MemoryPilots;
-    use nova_sim::{GovtId, Pilot, PilotKeeper, PilotStore, Vec2};
+    use nova_sim::{Pilot, PilotKeeper, PilotStore, Vec2};
     use nova_view::galaxy::MapMode;
     use nova_view::menu::MenuChoice;
     use nova_view::text::fixture::MonoMetrics;
@@ -474,12 +473,11 @@ fn a_pilot_at_hg_kania_enters_it_for_tichel() {
         return;
     };
     let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
-    let mut pilot = Pilot::new(data.as_ref(), "Gatekeeper").expect("the stock first chär starts");
-    pilot.set_legal_record(GovtId(183), 32767);
-    pilot.set_system_record(SystemId(128), 32767);
+    let pilot = Pilot::new(data.as_ref(), "Gatekeeper").expect("the stock first chär starts");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::json!(1404);
+    save["ranks"] = serde_json::json!([147]);
     let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     let store = MemoryPilots::new();
     let keeper = PilotKeeper::new(Box::new(store) as Box<dyn PilotStore>);

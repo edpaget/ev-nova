@@ -1129,4 +1129,189 @@ pub(super) mod tests {
         );
         assert!(blessed(&session), "@0x94a0b");
     }
+
+    // Landing.
+
+    use crate::landing::{Clearance, LandOutcome, LandingRefusal};
+    use crate::session::LandPress;
+
+    /// [`blessing_catalog`] whose planet 128 is of government 140,
+    /// requiring `require`, with `MinStatus` 32767 and these `Flags2`.
+    fn guarded(require: u64, flags2: u16) -> FakePilotCatalog {
+        let mut catalog = blessing_catalog();
+        catalog.govts = vec![crate::catalog::GovtRecord {
+            require,
+            ..crate::testkit::govt(140)
+        }];
+        for (_, sites) in &mut catalog.sites {
+            for site in sites.iter_mut().filter(|site| site.id.0 == 128) {
+                site.govt = Some(GovtId(140));
+                site.min_status = 32767;
+                site.flags2 = flags2;
+            }
+        }
+        catalog
+    }
+
+    /// A new pilot of `catalog` under `rules`, holding `ranks`, flown.
+    fn holding(catalog: &FakePilotCatalog, rules: Rulebook, ranks: &[i16]) -> Session {
+        let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
+        pilot.ranks.extend(ranks.iter().copied().map(RankId));
+        Session::fly(catalog, pilot)
+            .expect("flies")
+            .with_rules(rules)
+    }
+
+    /// L's selection of planet 128 with `clearance`.
+    fn selected(clearance: Clearance) -> LandPress {
+        LandOutcome::Selected {
+            stellar: crate::catalog::StellarId(128),
+            station: false,
+            clearance,
+        }
+        .into()
+    }
+
+    const LANDED: Result<LandPress, LandingRefusal> = Ok(LandPress::Outcome(LandOutcome::Landed(
+        crate::catalog::StellarId(128),
+    )));
+
+    const DENIED: Result<LandPress, LandingRefusal> = Err(LandingRefusal::Denied {
+        stellar: crate::catalog::StellarId(128),
+        station: false,
+        min_status: 32767,
+    });
+
+    /// L twice over planet 128.
+    fn press_twice(session: &mut Session) -> [Result<LandPress, LandingRefusal>; 2] {
+        [session.land(), session.land()]
+    }
+
+    #[test]
+    fn a_pilot_blessed_with_landing_lands_where_its_record_is_denied() {
+        let catalog = guarded(0, 0);
+        let mut unblessed = holding(&catalog, Rulebook::default(), &[]);
+        assert_eq!(
+            press_twice(&mut unblessed),
+            [Ok(selected(Clearance::Denied)), DENIED],
+            "MinStatus 32767"
+        );
+        for source in RuleSource::ALL {
+            let rules = reading(RuleKey::BlessingLanding, source);
+            let mut session = holding(&catalog, rules, &[200]);
+            assert_eq!(
+                press_twice(&mut session),
+                [Ok(selected(Clearance::Granted)), LANDED],
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_bible_the_blessing_does_not_get_past_require() {
+        let catalog = guarded(0x4, 0);
+        let mut engine = holding(&catalog, Rulebook::default(), &[200]);
+        assert_eq!(
+            press_twice(&mut engine),
+            [Ok(selected(Clearance::Granted)), LANDED],
+            "@0x679cd"
+        );
+        let rules = reading(RuleKey::BlessingLanding, RuleSource::Bible);
+        let mut bible = holding(&catalog, rules, &[200]);
+        assert_eq!(
+            press_twice(&mut bible),
+            [Ok(selected(Clearance::Denied)), DENIED]
+        );
+    }
+
+    #[test]
+    fn a_contributed_require_lets_the_pilot_land() {
+        let mut catalog = guarded(0x4, 0);
+        catalog.ranks.push(RankRecord {
+            contribute: 0x0100_0000_0004,
+            ..rank(201)
+        });
+        for site in &mut catalog.sites[0].1 {
+            site.min_status = 0;
+        }
+        let mut lacking = holding(&catalog, Rulebook::default(), &[]);
+        assert_eq!(
+            press_twice(&mut lacking),
+            [
+                Ok(selected(Clearance::Denied)),
+                Err(LandingRefusal::Denied {
+                    stellar: crate::catalog::StellarId(128),
+                    station: false,
+                    min_status: 0,
+                })
+            ],
+            "the record passes, Require does not (@0x67940)"
+        );
+        let mut contributing = holding(&catalog, Rulebook::default(), &[201]);
+        assert_eq!(
+            press_twice(&mut contributing),
+            [Ok(selected(Clearance::Granted)), LANDED]
+        );
+    }
+
+    #[test]
+    fn a_pilot_is_cleared_at_its_missions_stellar_whatever_its_record() {
+        let mut catalog = guarded(0x4, 0);
+        catalog.missions = vec![crate::catalog::MissionRecord {
+            avail_stel: 129,
+            travel_stel: 128,
+            ..crate::testkit::mission(140)
+        }];
+        let mut session = holding(&catalog, Rulebook::default(), &[]);
+        let at = |session: &mut Session, stellar: usize| {
+            let site = session.sites[stellar];
+            session.player.position = site.position;
+            session.player.velocity = crate::geometry::Vec2::ZERO;
+            session.nav_target = None;
+        };
+        at(&mut session, 1);
+        land_now(&mut session).expect("lands at 129");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        session
+            .accept_mission(crate::catalog::MissionId(140), &mut NeverFires)
+            .expect("accepted");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        at(&mut session, 0);
+        assert_eq!(
+            press_twice(&mut session),
+            [Ok(selected(Clearance::Granted)), LANDED],
+            "@0x67977"
+        );
+    }
+
+    #[test]
+    fn a_dominated_stellar_clears_the_pilot() {
+        let catalog = guarded(0, crate::market::DOMINATED);
+        let mut session = holding(&catalog, Rulebook::default(), &[]);
+        assert_eq!(
+            press_twice(&mut session),
+            [Ok(selected(Clearance::Granted)), LANDED],
+            "@0x6792d"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_rank_granted_in_space_opens_its_stellars_only_from_the_next_refresh() {
+        let catalog = guarded(0, 0);
+        let mut engine = holding(&catalog, Rulebook::default(), &[]);
+        run(&mut engine, "K200");
+        assert_eq!(engine.land(), Ok(selected(Clearance::Denied)));
+        assert_eq!(engine.land(), DENIED);
+        engine.jettison_cargo(false, &mut NeverFires);
+        assert_eq!(engine.land(), LANDED);
+        let mut live = holding(&catalog, live(), &[]);
+        run(&mut live, "K200");
+        assert_eq!(
+            press_twice(&mut live),
+            [Ok(selected(Clearance::Granted)), LANDED]
+        );
+    }
 }

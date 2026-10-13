@@ -10,16 +10,20 @@
 //! The protection ranks, rank 148 "; Rebel 1" (govt 141, `Flags` 0x0144)
 //! and 153-158, the "Duel protector" ranks (govts 129-135, 0x0140), are
 //! lost to a crime against their government.
+//!
+//! Rank 147, "Have Access to Hypergate System" (govt 183, `Flags`
+//! 0x0208), blesses landing at the 19 hypergates (`spöb` 1400-1418, govt
+//! 183, `MinStatus` 32767), which no record clears.
 
 mod common;
 
 use std::rc::Rc;
 
 use nova_data::GameData;
-use nova_sim::rank::{self, Held, LOST_TO_CRIME, LOST_TO_VIOLENCE};
+use nova_sim::rank::{self, Blessed, Held, LOST_TO_CRIME, LOST_TO_VIOLENCE};
 use nova_sim::{
     Crime, Governments, GovtId, NeverFires, PilotCatalog, RankId, RuleSource, Session, SetExpr,
-    SetOp,
+    SetOp, Standing, StellarId, cleared,
 };
 
 #[test]
@@ -120,4 +124,63 @@ fn stock_protection_ranks_are_lost_to_crimes_against_their_government() {
         !takes(&data, 148, Crime::Kill, Some(GovtId(128))),
         "a Federation ship's killing"
     );
+}
+
+#[test]
+fn the_hypergate_access_rank_clears_every_hypergate() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let records = PilotCatalog::ranks(&data);
+    let govts = Governments::read(&data);
+    let blessing = |id: i16| {
+        rank::blessing(
+            &records,
+            &std::collections::BTreeSet::from([RankId(id)]),
+            &govts,
+            RuleSource::Engine,
+        )
+    };
+    let hypergate_access = blessing(147);
+    let hypergate_govt = Some(GovtId(183));
+    assert!(hypergate_access.blesses(hypergate_govt, Blessed::Landing));
+    assert!(!hypergate_access.blesses(hypergate_govt, Blessed::Peace));
+    let mut gates: Vec<_> = data
+        .star_map()
+        .into_iter()
+        .flat_map(|system| data.landing_sites(system.id))
+        .filter(|site| site.govt == hypergate_govt)
+        .collect();
+    gates.sort_by_key(|site| site.id);
+    gates.dedup_by_key(|site| site.id);
+    assert_eq!(
+        gates.iter().map(|site| site.id).collect::<Vec<_>>(),
+        (1400..=1418).map(StellarId).collect::<Vec<_>>()
+    );
+    for gate in &gates {
+        assert_eq!(gate.min_status, 32767, "{:?}", gate.id);
+        let standing = |blessed| Standing {
+            record: 32767,
+            meets_require: true,
+            mission_stellar: false,
+            blessed,
+        };
+        for source in RuleSource::ALL {
+            assert!(
+                !cleared(gate, standing(false), source),
+                "{:?} {source:?}",
+                gate.id
+            );
+            assert!(
+                cleared(gate, standing(true), source),
+                "{:?} {source:?}",
+                gate.id
+            );
+        }
+    }
+    let commander = blessing(128);
+    for which in [Blessed::Peace, Blessed::Landing] {
+        assert!(commander.blesses(Some(GovtId(128)), which), "{which:?}");
+    }
 }
