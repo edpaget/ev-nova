@@ -892,4 +892,98 @@ mod tests {
             "0x0004 comes first"
         );
     }
+
+    // The word, then the retreat and the hopeless chase (`_WarshipAI`
+    // @0x8bcd9-0x8bf35 sets state 3 on whatever target it holds;
+    // `_HighLevelAIHandler` asks `_AIEvalHopelessChase` @0x8e5fe, @0x8eace
+    // of it too).
+
+    /// The decision of `npcs[0]`, a warship of the police with `flags`,
+    /// the player 100 above moving up at `speed`.
+    fn worded_moving(flags: u16, npcs: &[Npc], speed: f32) -> Goal {
+        let govts = govts(0, flags);
+        let sites = sites();
+        let mut seen = around(&sites, npcs, &govts, (0.0, -100.0), 0);
+        if let Some(player) = seen.player.as_mut() {
+            player.state.velocity = Vec2::new(0.0, -speed);
+        }
+        Warship::default().decide(&npcs[0], &seen, &mut Draws::of(&[0]))
+    }
+
+    /// A police warship at `shield` of its 30, of `aggression`, with
+    /// `goal`.
+    fn worn(shield: f32, aggression: u8, goal: Goal) -> Npc {
+        let mut hunter = police();
+        hunter.reserves.shield.now = shield;
+        hunter.aggression = aggression;
+        hunter.goal = goal;
+        hunter
+    }
+
+    #[test]
+    fn a_warship_its_government_turns_on_the_player_still_retreats_and_keeps_fleeing() {
+        let flags = ALWAYS | WARSHIPS_RETREAT;
+        // Shields low at aggression 2 (below 15 %).
+        let npcs = [worn(4.4, 2, Goal::Attack(n(2))), pirate()];
+        assert_eq!(worded(flags, &npcs, INTACT), Goal::Flee(P), "shields");
+        // Outnumbered (101 against 100) below half its shields.
+        let mut strong = Npc {
+            goal: Goal::Attack(n(1)),
+            ..pirate()
+        };
+        strong.hull.strength = 101.0;
+        let npcs = [worn(14.9, 3, Goal::Attack(n(2))), strong.clone()];
+        assert_eq!(worded(flags, &npcs, INTACT), Goal::Flee(P), "odds");
+        // Fleeing the player is a threat to it (state 3 is none
+        // `_IsThreatToPlayer` excludes), so the word passes it by.
+        let fled = [worn(14.9, 3, Goal::Flee(P)), strong];
+        assert_eq!(
+            worded(flags, &fled, INTACT),
+            Goal::Flee(P),
+            "it keeps fleeing"
+        );
+        let rested = [worn(30.0, 3, Goal::Flee(P)), pirate()];
+        assert_eq!(
+            worded(flags, &rested, INTACT),
+            Goal::Flee(P),
+            "while the player is live, whatever its shields"
+        );
+        let npcs = [worn(30.0, 2, Goal::Attack(n(2))), pirate()];
+        assert_eq!(worded(flags, &npcs, INTACT), Goal::Attack(P), "fresh");
+    }
+
+    #[test]
+    fn a_warship_its_government_turns_on_the_player_snipes_at_one_out_of_reach() {
+        let mut heavy = attacking(n(2));
+        heavy.hull.mass = 100.0;
+        let npcs = [heavy, pirate()];
+        assert_eq!(worded_moving(ALWAYS, &npcs, 1.0), Goal::Snipe(P));
+        assert_eq!(
+            worded_moving(ALWAYS, &npcs, 0.3),
+            Goal::Attack(P),
+            "the gap opens too slowly"
+        );
+    }
+
+    #[test]
+    fn a_warship_that_drops_a_led_target_flees_from_or_snipes_at_the_one_it_picks_afresh() {
+        let mut strong = Npc {
+            goal: Goal::Attack(n(1)),
+            ..pirate()
+        };
+        strong.hull.strength = 101.0;
+        let npcs = [worn(14.9, 3, Goal::Attack(n(3))), hired(), strong];
+        assert_eq!(
+            worded(NEVER | WARSHIPS_RETREAT, &npcs, INTACT),
+            Goal::Flee(n(2)),
+            "outnumbered"
+        );
+        let mut heavy = attacking(n(3));
+        heavy.hull.mass = 100.0;
+        let mut runner = ship(2, PIRATES, AiType::WimpyTrader, 0.0, -300.0);
+        runner.goal = Goal::Flee(n(1));
+        runner.state.velocity = Vec2::new(0.0, -1.0);
+        let npcs = [heavy, hired(), runner];
+        assert_eq!(worded(NEVER, &npcs, INTACT), Goal::Snipe(n(2)), "hopeless");
+    }
 }
