@@ -114,6 +114,9 @@
 //! | [`RankUnaffiliatedGroup`](RuleKey::RankUnaffiliatedGroup) | `rank_unaffiliated_group` | the sweeps take every rank of `AffilGovt` -1 (or 127 and below) as one government, by raw equality (`_ActivateRank` @0x4535f-0x45367, `_DeactivateRank` @0x45487-0x4548f; see [`rank`](crate::rank)) | an unaffiliated rank shares no government: it is never swept, and its own sweeps clear nothing††††††† |
 //! | [`SalaryCap`](RuleKey::SalaryCap) | `salary_cap` | the cap is tested before paying, so one payment can overshoot it; a cap of 0 or less is none (`_IncrementGameTime` @0xb779-0xb794; see [`rank`](crate::rank)) | the cash never goes past the cap‡‡‡‡‡‡‡ |
 //! | [`RankGovtReach`](RuleKey::RankGovtReach) | `rank_govt_reach` | a rank's flags reach ships of its government and of every government `_GovtAllies` finds allied with it (`_DoCommDialog` @0x95dbf; see [`rank`](crate::rank)) | only ships of the rank's own government§§§§§§§ |
+//! | [`RankPriceScope`](RuleKey::RankPriceScope) | `rank_price_scope` | a rank's `PriceMod` reaches only the shipyard: a ship's price, the hire fee and the trade-in (`_ApplyPriceAndTechnologyFlux` @0x4e6cd, read only by `_CalcShipCanBuy`, `_ShipyardDialogUpdate` and `_DoShipyardDialog`; see [`rank`](crate::rank)) | the outfitter's buy price too‡‡‡‡‡‡‡‡ |
+//! | [`RankTradeIn`](RuleKey::RankTradeIn) | `rank_trade_in` | the trade-in goes through the flux twice, `_priceFluxMult[0]` then `[1]` (@0x4f769-0x4f7d3, @0x59433-0x5949a, @0x5ec13-0x5ec96), so the rank's factor is squared and the low-tech discount and rounding apply twice (see [`shipyard`](crate::shipyard)) | once, with `[1]`§§§§§§§§ |
+//! | [`RankPriceTiming`](RuleKey::RankPriceTiming) | `rank_price_timing` | the multipliers are taken as the spaceport opens (`_DoPortDialog` @0x5f970-0x5fa04, before the landing's mission check @0x5fbeb), so a rank gained while landed changes no price until the next landing (see [`rank`](crate::rank)) | live: the ranks and the stellar's government as they are when a price is asked¶¶¶¶¶¶¶¶ |
 //! | [`ColocatedResolution`](RuleKey::ColocatedResolution) | `colocated_resolution` | the lowest-ID visible system at a place stands for every system there, a visible one too; links reach only it; a visible system it shadows claims no stellar (`_FindActiveCoLocatedSystem` @0x4c02-0x4c40, `_PropagateMissionBitEffects` @0x996ed-0x997bd; see [`story`](crate::story)) | a visible system stands for itself, links reach every visible system at the place, and each stellar goes to the lowest-ID visible system listing it¶¶¶¶¶¶¶ |
 //! | [`VisibilityRefresh`](RuleKey::VisibilityRefresh) | `visibility_refresh` | `Visibility` is evaluated at a landing (@0xa175f, @0xa1af2), a jump's arrival before its days (@0x6bf3f), a new pilot after its `OnStart`, and a load (see [`story`](crate::story)) | after every settled script as well\*\*\*\*\*\*\*\* |
 //! | [`CronZeroDurationHoldoff`](RuleKey::CronZeroDurationHoldoff) | `cron_zero_duration_holdoff` | a `Duration` 0 crön's pre-holdoff end runs `OnStart` and `OnEnd` and writes nothing more (`_CronEventHandler` @0x387a8-0x387c1), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and ends as `cron_post_holdoff` says (see [`cron`](crate::cron)) | `OnEnd` once, then the `PostHoldoff`: **the default — a deliberate departure from the original**†††††††† |
@@ -317,6 +320,19 @@
 //! say when it is evaluated. The other reading is the port's choice, not
 //! anything the Bible says. Crons-news-ranks phase 16's nebula `ActiveOn`
 //! follows the same key (see [`story`](crate::story)).
+//!
+//! ‡‡‡‡‡‡‡‡ The Bible gives `PriceMod` as the percentage the rank's
+//! government charges for "items and ships". The other reading takes that
+//! wording, so the outfitter's buy price takes the factor too; an outfit's
+//! resale is unchanged (see [`outfitter`](crate::outfitter)).
+//!
+//! §§§§§§§§ The Bible says nothing of the trade-in under a rank. The other
+//! reading, the factor once, is the port's choice, not anything the Bible
+//! says (see [`shipyard`](crate::shipyard)).
+//!
+//! ¶¶¶¶¶¶¶¶ The Bible says nothing of when a rank's `PriceMod` takes
+//! effect. The other reading, live prices, is the port's choice, not
+//! anything the Bible says (see [`rank`](crate::rank)).
 //!
 //! †††††††† `cron_zero_duration_holdoff` and `cron_post_holdoff` are the
 //! only keys whose default is the other reading, not the engine's
@@ -1440,6 +1456,24 @@ rule_keys! {
     /// own government, so an unaffiliated rank reaches none (see
     /// [`rank`](crate::rank)).
     RankGovtReach => "rank_govt_reach",
+    /// What a rank's `PriceMod` reaches: by the engine, only the
+    /// shipyard (a ship's price, the hire fee and the trade-in), as only
+    /// the shipyard reads `_priceFluxMult`; by the other reading, the
+    /// outfitter's buy price too, the Bible's "items and ships" (see
+    /// [`rank`](crate::rank)).
+    RankPriceScope => "rank_price_scope",
+    /// How the ranks' factor reaches the trade-in: by the engine, through
+    /// the flux twice, `_priceFluxMult[0]` then `[1]`, so the factor is
+    /// squared and the low-tech discount and rounding apply twice; by the
+    /// other reading, once, with `[1]` (see
+    /// [`shipyard`](crate::shipyard)).
+    RankTradeIn => "rank_trade_in",
+    /// When the ranks' price factor is taken: by the engine, as the
+    /// spaceport opens (`_DoPortDialog`), so a rank gained or lost while
+    /// landed changes no price until the next landing; by the other
+    /// reading, live, from the ranks and the stellar's government as they
+    /// are when a price is asked (see [`rank`](crate::rank)).
+    RankPriceTiming => "rank_price_timing",
     /// Which visible system stands for a place two visible systems share:
     /// by the engine, the lowest-ID one, for a visible system too, so links
     /// reach only it and a visible system it shadows claims no stellar; by
@@ -1686,7 +1720,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(21),
+            RuleKey::ALL.iter().rev().nth(24),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1726,7 +1760,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(20),
+            RuleKey::ALL.iter().rev().nth(23),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1748,7 +1782,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(19),
+            RuleKey::ALL.iter().rev().nth(22),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1773,7 +1807,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(18),
+            RuleKey::ALL.iter().rev().nth(21),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1799,7 +1833,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(17),
+            RuleKey::ALL.iter().rev().nth(20),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1819,7 +1853,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(16),
+            RuleKey::ALL.iter().rev().nth(19),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1839,7 +1873,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(18),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1859,7 +1893,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -1873,7 +1907,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -1886,7 +1920,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(10), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(13), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -1897,7 +1931,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(17),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -1915,7 +1949,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -1932,7 +1966,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -1949,10 +1983,10 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(5), Some(&RuleKey::SalaryCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(8), Some(&RuleKey::SalaryCap));
     }
 
     #[test]
@@ -1967,8 +2001,35 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::RankGovtReach)
+        );
+    }
+
+    #[test]
+    fn the_rank_price_rules_are_found_by_their_keys_and_read_the_engine() {
+        assert_eq!(RuleKey::RankPriceScope.key(), "rank_price_scope");
+        assert_eq!(RuleKey::RankTradeIn.key(), "rank_trade_in");
+        assert_eq!(RuleKey::RankPriceTiming.key(), "rank_price_timing");
+        for rule in [
+            RuleKey::RankPriceScope,
+            RuleKey::RankTradeIn,
+            RuleKey::RankPriceTiming,
+        ] {
+            assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
+            assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        }
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(6),
+            Some(&RuleKey::RankPriceScope)
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(5),
+            Some(&RuleKey::RankTradeIn)
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(4),
+            Some(&RuleKey::RankPriceTiming)
         );
     }
 
@@ -2111,7 +2172,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(23),
+            RuleKey::ALL.iter().rev().nth(26),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -2265,6 +2326,9 @@ mod tests {
                 RuleKey::RankUnaffiliatedGroup,
                 RuleKey::SalaryCap,
                 RuleKey::RankGovtReach,
+                RuleKey::RankPriceScope,
+                RuleKey::RankTradeIn,
+                RuleKey::RankPriceTiming,
                 RuleKey::ColocatedResolution,
                 RuleKey::VisibilityRefresh,
                 RuleKey::CronZeroDurationHoldoff,
