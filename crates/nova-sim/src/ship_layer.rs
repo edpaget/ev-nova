@@ -73,6 +73,76 @@ pub fn in_draw_order(ships: impl IntoIterator<Item = (ShipRef, ShipLayer)>) -> V
     ships.into_iter().map(|(ship, _)| ship).collect()
 }
 
+/// A ship's sprite slot: the player's, slot 0, or an NPC's
+/// [`Npc::berth`](crate::traffic::npc::Npc::berth), its slot in the ship
+/// table. The slot, not the ship, keeps a place in a layer: a new ship at
+/// a berth takes the place its last ship left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Slot {
+    /// The player's slot, 0.
+    Player,
+    /// An NPC's berth.
+    Berth(u32),
+}
+
+/// Each slot's layer and when it entered it, as `SpriteWorld`'s layers
+/// keep them (see the module docs): the history the original's order
+/// within a layer comes from.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LayerEntries {
+    /// The slots put in a layer other than their first, each with its
+    /// layer and its entry, counted from 1.
+    moved: std::collections::BTreeMap<Slot, (ShipLayer, i64)>,
+    /// The last entry given.
+    last: i64,
+}
+
+impl LayerEntries {
+    /// The order `_InitSprites` leaves (@0x1f0eb-0x1f88b): every slot in
+    /// [`ShipLayer::Ships`], added from slot 63 down to slot 0, so a lower
+    /// berth over a higher and the player over every berth. Berths past
+    /// 63 go on below.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `slot`'s layer and entry: ranks compare as the slots are drawn,
+    /// bottom first.
+    #[must_use]
+    pub fn rank(&self, slot: Slot) -> (ShipLayer, i64) {
+        self.moved.get(&slot).copied().unwrap_or_else(|| {
+            let first = match slot {
+                Slot::Player => 0,
+                Slot::Berth(berth) => -1 - i64::from(berth),
+            };
+            (ShipLayer::Ships, first)
+        })
+    }
+
+    /// Puts `slot` in `layer`, as `_PutSpriteInLayer` (@0x766c-0x76b1)
+    /// does: nothing when it is there already (@0x768c); otherwise it
+    /// leaves its layer (`_SWRemoveSprite` @0x7693) and enters `layer` on
+    /// top of every slot there (`_SWAddSprite` @0x76a5). Its null-sprite
+    /// and null-layer guard (@0x767e-0x768a) has no counterpart: every
+    /// slot and layer here exists.
+    pub fn put(&mut self, slot: Slot, layer: ShipLayer) {
+        if self.rank(slot).0 != layer {
+            self.last += 1;
+            self.moved.insert(slot, (layer, self.last));
+        }
+    }
+
+    /// `ships`, each at its slot, in the order they are drawn, bottom
+    /// first: by layer, and in each layer by entry.
+    #[must_use]
+    pub fn in_entry_order(&self, ships: impl IntoIterator<Item = (ShipRef, Slot)>) -> Vec<ShipRef> {
+        let mut ships: Vec<(ShipRef, Slot)> = ships.into_iter().collect();
+        ships.sort_by_key(|&(_, slot)| self.rank(slot));
+        ships.into_iter().map(|(ship, _)| ship).collect()
+    }
+}
+
 /// Whether a ship in `condition` is disabled for its layer, as
 /// `_IsDisabled` is at armour 0 or less: anything but intact.
 #[must_use]
@@ -119,6 +189,87 @@ mod tests {
                 ShipRef::Player
             ]
         );
+    }
+
+    /// `ships` (NPC id = berth, `None` for the player) in `entries`'
+    /// order, as their ids.
+    fn ordered(entries: &LayerEntries, ships: &[Option<u32>]) -> Vec<Option<u32>> {
+        let ships = ships.iter().map(|&ship| match ship {
+            Some(berth) => (ShipRef::Npc(NpcId(berth)), Slot::Berth(berth)),
+            None => (ShipRef::Player, Slot::Player),
+        });
+        entries
+            .in_entry_order(ships)
+            .into_iter()
+            .map(|ship| match ship {
+                ShipRef::Npc(NpcId(id)) => Some(id),
+                ShipRef::Player => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn at_first_lower_berths_are_drawn_over_higher_and_the_player_over_all() {
+        let entries = LayerEntries::new();
+        assert_eq!(
+            ordered(&entries, &[None, Some(1), Some(5), Some(70)]),
+            [Some(70), Some(5), Some(1), None]
+        );
+        assert_eq!(entries.rank(Slot::Player).0, ShipLayer::Ships);
+        assert_eq!(entries.rank(Slot::Berth(9)).0, ShipLayer::Ships);
+        assert!(entries.rank(Slot::Berth(0)) < entries.rank(Slot::Player));
+        assert_eq!(LayerEntries::default(), entries);
+    }
+
+    #[test]
+    fn a_put_in_the_layer_a_slot_is_in_changes_nothing() {
+        let mut entries = LayerEntries::new();
+        entries.put(Slot::Berth(5), ShipLayer::Ships);
+        entries.put(Slot::Player, ShipLayer::Ships);
+        assert_eq!(entries, LayerEntries::new());
+        entries.put(Slot::Berth(2), ShipLayer::Led);
+        entries.put(Slot::Berth(3), ShipLayer::Led);
+        let before = entries.clone();
+        entries.put(Slot::Berth(2), ShipLayer::Led);
+        assert_eq!(entries, before, "berth 2 keeps its place under berth 3");
+        assert_eq!(ordered(&entries, &[Some(3), Some(2)]), [Some(2), Some(3)]);
+    }
+
+    #[test]
+    fn a_slot_back_in_a_layer_enters_it_on_top() {
+        let mut entries = LayerEntries::new();
+        entries.put(Slot::Berth(4), ShipLayer::Led);
+        assert_eq!(
+            ordered(&entries, &[None, Some(1), Some(4)]),
+            [Some(4), Some(1), None]
+        );
+        entries.put(Slot::Berth(4), ShipLayer::Ships);
+        assert_eq!(
+            ordered(&entries, &[None, Some(1), Some(4)]),
+            [Some(1), None, Some(4)],
+            "above the player"
+        );
+        entries.put(Slot::Player, ShipLayer::Disabled);
+        entries.put(Slot::Player, ShipLayer::Ships);
+        assert_eq!(
+            ordered(&entries, &[None, Some(1), Some(4)]),
+            [Some(1), Some(4), None]
+        );
+    }
+
+    #[test]
+    fn slots_put_in_a_layer_one_after_another_stack_in_that_order() {
+        let mut entries = LayerEntries::new();
+        entries.put(Slot::Berth(6), ShipLayer::Disabled);
+        entries.put(Slot::Berth(2), ShipLayer::Disabled);
+        entries.put(Slot::Berth(9), ShipLayer::Led);
+        entries.put(Slot::Berth(3), ShipLayer::Led);
+        assert_eq!(
+            ordered(&entries, &[Some(2), Some(3), Some(6), Some(9), None]),
+            [Some(6), Some(2), Some(9), Some(3), None]
+        );
+        assert_eq!(entries.rank(Slot::Berth(9)).0, ShipLayer::Led);
+        assert!(entries.rank(Slot::Berth(9)) < entries.rank(Slot::Berth(3)));
     }
 
     #[test]
