@@ -2634,8 +2634,9 @@ impl<C> FlightView<C> {
 
     /// Draws the ships, bottom first, in their layers as
     /// [`Session::draw_order`] gives them (see [`nova_sim::ship_layer`]):
-    /// the disabled, then the ships the player leads, then the rest with
-    /// the player on top. Without a session it draws the player alone.
+    /// the disabled, then the ships the player leads, then the rest, each
+    /// layer in the order the session's rules overlap them. Without a
+    /// session it draws the player alone.
     /// The order and each cloak's level are read from the session as the
     /// frame is drawn, so nothing waits past it.
     fn draw_ships(&self, list: &mut DrawList, camera: &Camera) {
@@ -13826,9 +13827,18 @@ mod tests {
     #[test]
     fn a_hired_and_a_mission_escort_draw_in_the_escorts_layer() {
         let (view, ships) = escorted_on_a_mission();
+        let session = view.session().expect("flying");
+        let berth = |id| {
+            let npc = session.npcs().iter().find(|npc| npc.id == id);
+            npc.expect("here").berth
+        };
+        assert!(berth(ships.hired) < berth(ships.mission));
         let [traffic, hired, led, player] = ship_indices(&view, ships);
-        assert!(led < hired, "the escorts in NPC order: {led} {hired}");
-        assert!(hired < traffic, "under the other ships: {hired} {traffic}");
+        assert!(
+            hired < led,
+            "the escorts in the order they entered their layer, by berth: {hired} {led}"
+        );
+        assert!(led < traffic, "under the other ships: {led} {traffic}");
         assert!(traffic < player, "the player on top: {traffic} {player}");
     }
 
@@ -13838,8 +13848,8 @@ mod tests {
         let session = view.session.as_mut().expect("flying");
         nova_sim::fixture::disable(session, ships.traffic);
         let [traffic, hired, led, player] = ship_indices(&view, ships);
-        assert!(traffic < led, "{traffic} {led}");
-        assert!(led < hired && hired < player, "{led} {hired} {player}");
+        assert!(traffic < hired, "{traffic} {hired}");
+        assert!(hired < led && led < player, "{hired} {led} {player}");
     }
 
     #[test]

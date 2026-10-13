@@ -59,7 +59,10 @@
 //! **Drawn.** `_HandleShipDisplay` treats a ship the player leads apart
 //! in three branches. It draws it in the escorts' layer, under the other
 //! ships and the player and over the disabled ones (@0x2bd24-0x2bd47,
-//! [`Session::draw_order`]; see [`ship_layer`](crate::ship_layer)). At a
+//! [`Session::draw_order`]; see [`ship_layer`](crate::ship_layer)), in
+//! the order each ship entered it, so a ship that stops being led goes
+//! on top of the other ships and the player, as `_PutSpriteInLayer`
+//! leaves it (@0x766c; [`RuleKey::ShipOverlap`] chooses). At a
 //! full cloak it draws it faint where a stranger is not drawn at all
 //! (@0x2d187-0x2d1cd, [`Session::cloak_shown`]). Its third branch, a
 //! trader escort's share of the fleet's cargo destroyed as its final
@@ -69,7 +72,8 @@
 
 use super::Session;
 use crate::combat::ShipRef;
-use crate::ship_layer::{ShipLayer, disabled, in_draw_order};
+use crate::rulebook::{RuleKey, RuleSource};
+use crate::ship_layer::{ShipLayer, Slot, disabled, in_draw_order};
 use crate::traffic::npc::Npc;
 
 impl Session {
@@ -80,21 +84,74 @@ impl Session {
     }
 
     /// The ships in the order they are drawn, bottom first: the disabled,
-    /// then the ships the player leads, then the rest with the player on
-    /// top (see [`ship_layer`](crate::ship_layer)).
+    /// then the ships the player leads, then the rest (see
+    /// [`ship_layer`](crate::ship_layer)). Within each layer, by
+    /// [`RuleKey::ShipOverlap`]: by the engine, in the order each ship's
+    /// slot last entered it, with the ships laid out as they stand now
+    /// ([`Session::lay_out_ships`]); by the other reading, in the
+    /// session's NPC order with the player on top.
     #[must_use]
     pub fn draw_order(&self) -> Vec<ShipRef> {
-        let npcs = self.npcs().iter().map(|npc| {
+        match self.rules.source_for(RuleKey::ShipOverlap) {
+            RuleSource::Engine => {
+                let mut layers = self.layers.clone();
+                let ships = self.ship_layers();
+                for &(_, slot, layer) in &ships {
+                    layers.put(slot, layer);
+                }
+                layers.in_entry_order(ships.into_iter().map(|(ship, slot, _)| (ship, slot)))
+            }
+            RuleSource::Bible => {
+                let npcs = self.npcs().iter().map(|npc| {
+                    let layer = ShipLayer::of(disabled(npc.condition), npc.escorts_player());
+                    (ShipRef::Npc(npc.id), layer)
+                });
+                let player = (ShipRef::Player, self.player_layer());
+                in_draw_order(npcs.chain([player]))
+            }
+        }
+    }
+
+    /// Puts the player, then each NPC in berth order, in the layer it
+    /// stands in, as `_DoPlayGameWork` runs `_HandleShipDisplay` for slot
+    /// 0 (@0x43e29) and then for each slot in turn (@0x444ad), and
+    /// `_PrepareAllSprites` for all 64 (@0x3a75a-0x3a78e): see
+    /// [`LayerEntries::put`](crate::ship_layer::LayerEntries::put). Run at the end of each flight tick
+    /// ([`Session::tick_combat`]); landed or in hyperspace nothing is laid
+    /// out, and [`Session::draw_order`] lays the ships out as they stand
+    /// whenever it is asked, so a ship that changed layer since is drawn
+    /// as the next tick will keep it.
+    ///
+    /// The original lays each ship out right after its own `_HandleShip`
+    /// (@0x44483); here every ship is laid out after the whole tick. The
+    /// two differ only when one ship's handling changes the layer of a
+    /// ship in a lower slot in the same tick: here that ship enters its
+    /// new layer a tick early beside its neighbours. The tick ends before
+    /// a frame is drawn, so the player never sees the difference.
+    pub(super) fn lay_out_ships(&mut self) {
+        for (_, slot, layer) in self.ship_layers() {
+            self.layers.put(slot, layer);
+        }
+    }
+
+    /// The player, then each NPC in berth order (ships at one berth in
+    /// NPC order), with its slot and the layer it stands in.
+    fn ship_layers(&self) -> Vec<(ShipRef, Slot, ShipLayer)> {
+        let mut npcs: Vec<&Npc> = self.npcs().iter().collect();
+        npcs.sort_by_key(|npc| npc.berth);
+        let npcs = npcs.into_iter().map(|npc| {
             let layer = ShipLayer::of(disabled(npc.condition), npc.escorts_player());
-            (ShipRef::Npc(npc.id), layer)
+            (ShipRef::Npc(npc.id), Slot::Berth(npc.berth), layer)
         });
-        // The player last, on top of its tier, as `_InitSprites`'s slot
-        // order leaves it.
-        let player = (
-            ShipRef::Player,
-            ShipLayer::of(disabled(self.player_condition()), false),
-        );
-        in_draw_order(npcs.chain([player]))
+        [(ShipRef::Player, Slot::Player, self.player_layer())]
+            .into_iter()
+            .chain(npcs)
+            .collect()
+    }
+
+    /// The layer the player stands in: never led.
+    fn player_layer(&self) -> ShipLayer {
+        ShipLayer::of(disabled(self.player_condition()), false)
     }
 }
 
@@ -105,6 +162,7 @@ mod tests {
     use crate::combat::hull::Condition;
     use crate::pilot::Escort;
     use crate::reserves::Reserves;
+    use crate::rulebook::Rulebook;
     use crate::session::mission_ships::tests::{
         accepted, jump_to, shipping, ships_catalog, take_off, ticks,
     };
@@ -464,9 +522,17 @@ mod tests {
         (session, led, traffic)
     }
 
+    /// `session` with its ships overlapping in NPC order, the player on
+    /// top of its layer: [`RuleKey::ShipOverlap`]'s other reading.
+    fn in_npc_order(session: Session) -> Session {
+        session
+            .with_rules(Rulebook::default().with_override(RuleKey::ShipOverlap, RuleSource::Bible))
+    }
+
     #[test]
     fn the_ships_the_player_leads_draw_under_the_others_and_over_the_disabled() {
-        let (mut session, led, traffic) = with_traffic();
+        let (session, led, traffic) = with_traffic();
+        let mut session = in_npc_order(session);
         let order = |first: &[NpcId], then: &[NpcId]| -> Vec<Option<NpcId>> {
             first
                 .iter()
@@ -489,11 +555,184 @@ mod tests {
 
     #[test]
     fn a_disabled_player_draws_in_the_bottom_layer_last() {
-        let (mut session, led, traffic) = with_traffic();
+        let (session, led, traffic) = with_traffic();
+        let mut session = in_npc_order(session);
         crate::fixture::disable(&mut session, traffic);
         session.condition = Condition::Disabled;
         let mut expected = vec![Some(traffic), None];
         expected.extend(led.iter().copied().map(Some));
         assert_eq!(drawn(&session), expected);
+    }
+
+    /// Advances the fight a tick, with nothing firing: the ships are laid
+    /// out in their layers at its end.
+    fn combat_tick(session: &mut Session) {
+        session.tick_combat(crate::Rules::default(), &mut crate::chance::NeverFires);
+    }
+
+    /// [`with_traffic`] with the ships laid out once: the session, the
+    /// hired escort, the two mission escorts and the traffic ship.
+    fn laid_out() -> (Session, NpcId, [NpcId; 2], NpcId) {
+        let (mut session, led, traffic) = with_traffic();
+        let hired = session.fleet[0].expect("placed");
+        let mission: Vec<NpcId> = led.iter().copied().filter(|&id| id != hired).collect();
+        assert_eq!(berth(&session, hired), 1);
+        assert_eq!(
+            mission
+                .iter()
+                .map(|&id| berth(&session, id))
+                .collect::<Vec<_>>(),
+            [2, 3]
+        );
+        assert_eq!(berth(&session, traffic), 4);
+        combat_tick(&mut session);
+        (session, hired, [mission[0], mission[1]], traffic)
+    }
+
+    /// Makes NPC `id` whole again, its armour and shield full.
+    fn repair(session: &mut Session, id: NpcId) {
+        let npc = session.npc_mut(id).expect("here");
+        npc.reserves.armor.now = npc.reserves.armor.max;
+        npc.reserves.shield.now = npc.reserves.shield.max;
+        npc.condition = Condition::Intact;
+    }
+
+    #[test]
+    fn a_released_escort_is_drawn_over_the_player() {
+        let (mut session, hired, [m0, m1], traffic) = laid_out();
+        assert_eq!(
+            drawn(&session),
+            [Some(hired), Some(m0), Some(m1), Some(traffic), None],
+            "the escorts in the order they entered, and the traffic ship under the player"
+        );
+        session.release(hired);
+        combat_tick(&mut session);
+        assert_eq!(
+            drawn(&session),
+            [Some(m0), Some(m1), Some(traffic), None, Some(hired)]
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_released_escort_is_drawn_under_the_player() {
+        let (session, hired, [m0, m1], traffic) = laid_out();
+        let mut session = in_npc_order(session);
+        session.release(hired);
+        combat_tick(&mut session);
+        assert_eq!(
+            drawn(&session),
+            [Some(m0), Some(m1), Some(traffic), Some(hired), None],
+            "the session's NPC order, the player on top"
+        );
+    }
+
+    #[test]
+    fn a_ship_entering_a_layer_is_drawn_over_the_ships_in_it() {
+        let (mut session, hired, [m0, m1], traffic) = laid_out();
+        // A mission escort disabled stays led, but is drawn with the
+        // disabled; repaired, it enters the escorts' layer on top.
+        crate::fixture::disable(&mut session, m0);
+        combat_tick(&mut session);
+        assert_eq!(drawn(&session)[0], Some(m0));
+        repair(&mut session, m0);
+        assert_eq!(
+            drawn(&session),
+            [Some(hired), Some(m1), Some(m0), Some(traffic), None]
+        );
+        // The traffic ship, then the hired escort, disabled: the later
+        // over the earlier, whatever their berths.
+        crate::fixture::disable(&mut session, traffic);
+        combat_tick(&mut session);
+        crate::fixture::disable(&mut session, hired);
+        combat_tick(&mut session);
+        assert_eq!(&drawn(&session)[..2], [Some(traffic), Some(hired)]);
+    }
+
+    #[test]
+    fn ships_entering_a_layer_in_one_tick_stack_in_berth_order() {
+        let (mut session, hired, _, traffic) = laid_out();
+        assert_eq!(session.npcs()[0].id, traffic, "first in NPC order");
+        crate::fixture::disable(&mut session, traffic);
+        crate::fixture::disable(&mut session, hired);
+        combat_tick(&mut session);
+        assert_eq!(&drawn(&session)[..2], [Some(hired), Some(traffic)]);
+    }
+
+    #[test]
+    fn a_ship_that_was_disabled_and_is_whole_again_is_drawn_over_the_player() {
+        let (mut session, _, _, traffic) = laid_out();
+        crate::fixture::disable(&mut session, traffic);
+        combat_tick(&mut session);
+        repair(&mut session, traffic);
+        let order = drawn(&session);
+        assert_eq!(&order[order.len() - 2..], [None, Some(traffic)]);
+    }
+
+    #[test]
+    fn a_player_disabled_and_whole_again_goes_back_on_top_of_its_layer() {
+        let (mut session, hired, _, traffic) = laid_out();
+        session.release(hired);
+        combat_tick(&mut session);
+        session.pilot.reserves.shield.now = 0.0;
+        session.pilot.reserves.armor.now = 1.0;
+        session.condition = Condition::Disabled;
+        combat_tick(&mut session);
+        assert_eq!(drawn(&session)[0], None);
+        session.pilot.reserves.armor.now = session.pilot.reserves.armor.max;
+        session.condition = Condition::Intact;
+        let order = drawn(&session);
+        assert_eq!(
+            &order[order.len() - 3..],
+            [Some(traffic), Some(hired), None]
+        );
+    }
+
+    #[test]
+    fn a_new_ship_at_a_berth_takes_the_place_its_last_ship_left() {
+        let (mut session, hired, [m0, m1], traffic) = laid_out();
+        session.release(hired);
+        combat_tick(&mut session);
+        let class = session.npc(traffic).expect("there").clone();
+        // Berth 1's ship last stood over the player: the next ship there
+        // takes that place.
+        session.traffic.remove(hired);
+        let first = session.traffic.add_npc(class.clone());
+        assert_eq!(berth(&session, first), 1);
+        // Berth 2's ship last stood in the escorts' layer: the next ship
+        // there enters the top layer on top.
+        session.traffic.remove(m0);
+        let second = session.traffic.add_npc(class);
+        assert_eq!(berth(&session, second), 2);
+        assert_eq!(
+            drawn(&session),
+            [Some(m1), Some(traffic), None, Some(first), Some(second)]
+        );
+    }
+
+    #[test]
+    fn the_layers_are_kept_across_a_jump() {
+        let catalog = ships_catalog(ships(1));
+        let mut session = accepted(&catalog);
+        session.pilot.escorts.push(hired());
+        take_off(&mut session, &catalog);
+        combat_tick(&mut session);
+        let hired = session.fleet[0].expect("placed");
+        session.release(hired);
+        combat_tick(&mut session);
+        let class = session.npc(hired).expect("there").clone();
+        jump_to(&mut session, &catalog, 131);
+        let stranger = session.traffic.add_npc_at(
+            Npc {
+                escort: None,
+                ..class
+            },
+            1,
+        );
+        let order = drawn(&session);
+        assert_eq!(
+            order.last(),
+            Some(&Some(stranger)),
+            "berth 1 still over the player"
+        );
     }
 }

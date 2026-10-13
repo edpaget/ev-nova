@@ -25,15 +25,28 @@
 //! exception (+0x8c not -1) never applies, as the engine has no defence
 //! ships. None of these branches plays a sound.
 //!
-//! **Within a layer** `_PutSpriteInLayer` (@0x766c) moves a sprite only
-//! when its layer changes, appending it at the tail (`_SWAddSprite`
-//! @0xac620-0xac63b), and `_InitSprites` fills `0x3b541c` from slot 63 down
-//! to slot 0 (@0x1f0eb-0x1f88b), so the order within a layer is the
-//! history of entries, the player starting on top. Here
-//! [`in_draw_order`] keeps each tier in the order it is given: the
-//! session's NPC order, the player last
-//! ([`Session::draw_order`](crate::Session::draw_order)). The history is
-//! left to rdm:phase/player-led-ships/phase-21-ships-overlap-in-layer-entry-order.
+//! **Within a layer** the order is history, not a sort. `_InitSprites`,
+//! run once at launch (`_InitEVNova` @0x47382), adds every slot's sprites
+//! to `0x3b541c` from slot 63 down to slot 0 (@0x1f0eb-0x1f88b), so the
+//! player (slot 0) starts on top. `_PutSpriteInLayer` (@0x766c-0x76b1)
+//! moves a sprite only when its layer changes, and then appends it at the
+//! layer's tail (`_SWAddSprite` @0xac620-0xac63b), drawn last. Nothing
+//! else re-lays a ship slot's sprites, not a system entry, a new pilot or
+//! a new ship in the slot, so a slot keeps its place until it changes
+//! layer: an escort the player releases, or a ship repaired, is drawn
+//! over the player until history moves it. [`LayerEntries`] keeps that
+//! history by [`Slot`] for the session's life (the original keeps it
+//! across pilots in one run:
+//! rdm:phase/player-led-ships/phase-29-layer-history-across-pilots), and
+//! [`Session::draw_order`](crate::Session::draw_order) draws each layer
+//! in it. A ship whose type has no sprite, which the original hides and
+//! never moves (@0x2b7f3), is laid out here as any other:
+//! rdm:phase/player-led-ships/phase-30-unsprited-ship-hidden. By by [`RuleKey::ShipOverlap`](crate::rulebook::RuleKey::ShipOverlap)'s
+//! other reading, [`in_draw_order`] keeps each layer in the order it is
+//! given, the session's NPC order with the player on top. The step-1
+//! findings of
+//! rdm:phase/player-led-ships/phase-21-ships-overlap-in-layer-entry-order
+//! list every site with its address.
 
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;

@@ -738,6 +738,10 @@ pub struct Session {
     /// How each disputed rule the session acts on reads (see
     /// [`Session::with_rules`]); never saved.
     rules: Rulebook,
+    /// Each ship slot's draw layer and when it entered it (see
+    /// [`Session::draw_order`]): kept from the session's start, across
+    /// every system entry and every ship leaving; never saved.
+    layers: crate::ship_layer::LayerEntries,
     /// The story runtime: the events raised and the ships watched (see the
     /// [`story`](crate::story) module); never saved.
     story: story::StoryRuntime,
@@ -973,6 +977,7 @@ impl Session {
             hold_position: false,
             touchdown: player.position,
             rules: Rulebook::default(),
+            layers: crate::ship_layer::LayerEntries::new(),
             story: story::StoryRuntime::default(),
             lives: catalog
                 .stellar_lives()
@@ -1624,6 +1629,7 @@ impl Session {
         self.clear_lost_target();
         self.strike_stellars(&stellars, rules.law, chance);
         self.see_stellars();
+        self.lay_out_ships();
     }
 
     /// Takes each NPC destroyed out of the system, raising
