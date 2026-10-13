@@ -30,11 +30,46 @@
 //!   visible ([`OverlaidGalaxy::arrival`], @0x998f1-0x99a36). A player in
 //!   a visible system shadowed at its place stays: the original's move
 //!   tests only the player's own system's visible flag (@0x99918).
+//! - A stellar with no owner that the player's system lists is held by
+//!   the player's system ([`OverlaidGalaxy::holder`]), as
+//!   `_HandleStellarSystemVisibility`'s rescue writes it (@0x32c58-0x32cb3)
+//!   until the next refresh clears every owner. The player's system shows
+//!   exactly the stellars it holds, while it is visible
+//!   ([`OverlaidGalaxy::shows`], [`OverlaidGalaxy::shown`]): the
+//!   original's active stellars owned by the player's system
+//!   (@0x32cbe-0x32d4c).
+//! - `_FindSystemFromStellar` (0x7ec1-0x7f64) gives the lowest visible
+//!   lister, shadowed or not, else the lowest lister
+//!   ([`OverlaidGalaxy::find_system_from_stellar`]); the owner-first
+//!   readers take the holder, else that ([`OverlaidGalaxy::system_of`]).
+//!   A reader finds a stellar's listers with [`listers_of`].
+//!
+//! Of `_HandleStellarSystemVisibility` (0x32aa5-0x33331), this module
+//! models the rescue, the active test and the shown set. The rest is left
+//! to others:
+//!
+//! - the course rewrite and cut (@0x32ab3-0x32b0f): crons-news-ranks
+//!   phase 15;
+//! - the explored level shared to the chain head (@0x32b0f-0x32b8f) and
+//!   the known flag +0x1ec (@0x32b91-0x32c10): crons-news-ranks phase 14;
+//! - the dominated byte +0x46, set for an active stellar with `Flags2`
+//!   0x0020 (@0x32ce5-0x32ceb): the engine reads the bit directly
+//!   (`landing::cleared`, `mission::dominated`, `Session::markup`), and
+//!   the stored byte is task planet-domination's;
+//! - +0x47, the defence fleet launched, cleared for every stellar
+//!   (@0x32d5d): task planet-domination;
+//! - unloading the master sprites no longer needed (@0x32d74-0x32e4e):
+//!   nothing observable, not modelled;
+//! - the sprite slots and their fallback frames (@0x32e54-0x33331): the
+//!   story module's `rebuild`. The slots' ascending-ID order is left to
+//!   the fidelity work.
+//!
+//! The function plays no sound.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{
-    GovtId, LandingSite, NebulaId, StarSystem, StellarId, SystemId, SystemVisibility,
+    GovtId, LandingSite, ListedStellar, NebulaId, StarSystem, StellarId, SystemId, SystemVisibility,
 };
 use crate::control::Gate;
 use crate::geometry::Vec2;
@@ -483,12 +518,99 @@ impl OverlaidGalaxy {
         })
     }
 
+    /// The system the original's `_FindSystemFromStellar` (0x7ec1-0x7f64)
+    /// gives a stellar `listers` list (by ascending ID): the first that is
+    /// in the catalog and visible, else the first of them, else none.
+    ///
+    /// Its first loop visits the slots whose visible byte (+0x1eb) is set,
+    /// a chain head the player's move showed among them, as the move sets
+    /// that byte; unlike [`owner`](Self::owner), it never asks whether a
+    /// system is shadowed at its place. Its second loop visits every slot,
+    /// with no visible or in-use test. It is the fallback of the
+    /// owner-first readers ([`system_of`](Self::system_of)).
+    #[must_use]
+    pub fn find_system_from_stellar(&self, listers: &[SystemId]) -> Option<SystemId> {
+        listers
+            .iter()
+            .copied()
+            .find(|&system| self.exists(system) && self.visible(system))
+            .or_else(|| listers.first().copied())
+    }
+
+    /// The system that holds a stellar `listers` list, with the player in
+    /// `player`: its [`owner`](Self::owner), else `player` when it lists
+    /// the stellar, else none.
+    ///
+    /// This is `_HandleStellarSystemVisibility`'s rescue
+    /// (@0x32c58-0x32cb3): a stellar with no owner (+0x14 above 0x7ff) is
+    /// given to the player's system (player +0x74) when that system's
+    /// `NavDefs` list it. The rescue writes the owner, so it lasts until
+    /// the next galaxy refresh clears every owner
+    /// (`_PropagateMissionBitEffects` @0x9968c); this gives it as the
+    /// original holds it after a rebuild point.
+    #[must_use]
+    pub fn holder(&self, listers: &[SystemId], player: SystemId) -> Option<SystemId> {
+        self.owner(listers)
+            .or_else(|| listers.contains(&player).then_some(player))
+    }
+
+    /// The system a stellar `listers` list is in, with the player in
+    /// `player`, as the original's owner-first readers resolve it: its
+    /// [`holder`](Self::holder), else
+    /// [`find_system_from_stellar`](Self::find_system_from_stellar). The
+    /// hypergate's readers resolve a link so (`_DrawMap` @0xf1f8-0xf21a,
+    /// `_DoSystemMap` @0x12ff2-0x13011, `_PlayerEnterHypergate`
+    /// @0x638cd-0x638ff), each then by place.
+    #[must_use]
+    pub fn system_of(&self, listers: &[SystemId], player: SystemId) -> Option<SystemId> {
+        self.holder(listers, player)
+            .or_else(|| self.find_system_from_stellar(listers))
+    }
+
+    /// Whether `system`, the player's, shows a stellar `listers` list: it
+    /// is visible and holds the stellar ([`holder`](Self::holder)).
+    ///
+    /// `_HandleStellarSystemVisibility` sets a stellar active (+0x44) when
+    /// its owner's visible byte is set (@0x32cbe-0x32cdf), and its sprite
+    /// pass shows each active stellar whose owner is the player's system
+    /// (@0x32cef-0x32d4c, @0x32ec1-0x33229). So a stellar another visible
+    /// system owns is never shown, though `system` lists it.
+    #[must_use]
+    pub fn shows(&self, listers: &[SystemId], system: SystemId) -> bool {
+        self.visible(system) && self.holder(listers, system) == Some(system)
+    }
+
+    /// The stellars of `listed` that `system`, the player's, shows
+    /// ([`shows`](Self::shows)). The original takes them in ascending ID
+    /// into at most 16 sprite slots; the cap never bites, as a system lists
+    /// at most 16 stellars.
+    #[must_use]
+    pub fn shown(&self, listed: &[ListedStellar], system: SystemId) -> BTreeSet<StellarId> {
+        listed
+            .iter()
+            .filter(|stellar| self.shows(&stellar.systems, system))
+            .map(|stellar| stellar.id)
+            .collect()
+    }
+
     /// Where a player in `system` goes when it is hidden
     /// ([`OverlaidGalaxy::arrival`]); `None` while it is visible.
     #[must_use]
     pub fn hidden_move(&self, system: SystemId) -> Option<HiddenMove> {
         (!self.visible(system)).then(|| self.arrival(system))
     }
+}
+
+/// Every system listing `stellar`, by ascending ID, from `listed` (by
+/// ascending stellar ID, as [`PilotCatalog::listed_stellars`] gives it):
+/// none when no system lists it.
+///
+/// [`PilotCatalog::listed_stellars`]: crate::catalog::PilotCatalog::listed_stellars
+#[must_use]
+pub fn listers_of(listed: &[ListedStellar], stellar: StellarId) -> &[SystemId] {
+    listed
+        .binary_search_by_key(&stellar, |listed| listed.id)
+        .map_or(&[], |at| &listed[at].systems)
 }
 
 #[cfg(test)]
@@ -982,6 +1104,148 @@ mod tests {
             assert_eq!(owner(&galaxy, &[4]), None, "{colocated:?}");
             assert_eq!(owner(&galaxy, &[1, 4]), Some(1), "{colocated:?}");
         }
+    }
+
+    /// The system `galaxy`'s `_FindSystemFromStellar` gives a stellar
+    /// listed by `listers`.
+    fn found(galaxy: &OverlaidGalaxy, listers: &[i16]) -> Option<i16> {
+        galaxy
+            .find_system_from_stellar(&ids(listers))
+            .map(|id| id.0)
+    }
+
+    #[test]
+    fn find_system_from_stellar_takes_the_lowest_visible_lister() {
+        let galaxy = hiding(&[2]);
+        assert_eq!(found(&galaxy, &[2, 4]), Some(4), "2 is hidden");
+        assert_eq!(found(&galaxy, &[1, 4]), Some(1), "the lowest");
+        assert_eq!(
+            found(&galaxy, &[99, 4]),
+            Some(4),
+            "a system outside the catalog is never visible"
+        );
+    }
+
+    #[test]
+    fn find_system_from_stellar_counts_a_visible_lister_shadowed_at_its_place() {
+        let galaxy = hiding(&[]);
+        assert_eq!(owner(&galaxy, &[3]), None, "2 shadows 3");
+        assert_eq!(found(&galaxy, &[3]), Some(3));
+        assert_eq!(found(&galaxy, &[3, 4]), Some(3), "the lowest visible");
+    }
+
+    #[test]
+    fn find_system_from_stellar_falls_back_to_the_lowest_lister() {
+        let galaxy = hiding(&[2, 3]);
+        assert_eq!(found(&galaxy, &[2, 3]), Some(2), "both hidden");
+        assert_eq!(found(&galaxy, &[99]), Some(99), "with no in-use test");
+        assert_eq!(found(&galaxy, &[]), None);
+    }
+
+    #[test]
+    fn find_system_from_stellar_counts_a_chain_head_the_move_showed() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(4), Some(true));
+        overlay.set_visible(SystemId(2), Some(false));
+        let galaxy = OverlaidGalaxy::new(systems(), overlay);
+        assert_eq!(owner(&galaxy, &[2, 4]), None);
+        assert_eq!(found(&galaxy, &[2, 4]), Some(4));
+    }
+
+    /// The system `galaxy` holds a stellar listed by `listers` for, with
+    /// the player in `player`.
+    fn holder(galaxy: &OverlaidGalaxy, listers: &[i16], player: i16) -> Option<i16> {
+        galaxy
+            .holder(&ids(listers), SystemId(player))
+            .map(|id| id.0)
+    }
+
+    #[test]
+    fn holder_is_the_owner_else_the_players_system_when_it_lists_the_stellar() {
+        let galaxy = hiding(&[2]);
+        assert_eq!(holder(&galaxy, &[1, 4], 4), Some(1), "the owner wins");
+        assert_eq!(holder(&galaxy, &[2, 5], 5), Some(5), "3 shadows 5: rescued");
+        assert_eq!(holder(&galaxy, &[2, 5], 4), None, "4 does not list it");
+        assert_eq!(holder(&galaxy, &[], 4), None);
+    }
+
+    #[test]
+    fn system_of_is_the_holder_else_find_system_from_stellar() {
+        let galaxy = hiding(&[2]);
+        let system_of = |listers: &[i16], player| {
+            galaxy
+                .system_of(&ids(listers), SystemId(player))
+                .map(|id| id.0)
+        };
+        assert_eq!(system_of(&[1, 4], 4), Some(1), "the owner");
+        assert_eq!(system_of(&[2, 5], 5), Some(5), "the rescue");
+        assert_eq!(system_of(&[2, 5], 4), Some(5), "the lowest visible lister");
+        assert_eq!(system_of(&[2], 4), Some(2), "the lowest lister");
+        assert_eq!(system_of(&[], 4), None);
+    }
+
+    #[test]
+    fn shows_owned_and_rescued_stellars_and_nothing_owned_elsewhere() {
+        let galaxy = hiding(&[]);
+        let shows = |listers: &[i16], system| galaxy.shows(&ids(listers), SystemId(system));
+        assert!(shows(&[1], 1));
+        assert!(!shows(&[2, 3], 3), "2 owns it");
+        assert!(shows(&[2, 3], 2));
+        assert!(
+            shows(&[3], 3),
+            "shadowed by 2, and no one owns it: the rescue"
+        );
+        assert!(!shows(&[3], 2), "2 does not list it");
+        assert!(!shows(&[], 1));
+        let galaxy = hiding(&[1]);
+        assert!(!galaxy.shows(&ids(&[1]), SystemId(1)), "1 is hidden");
+    }
+
+    #[test]
+    fn shown_collects_the_stellars_a_system_shows() {
+        let galaxy = hiding(&[]);
+        let listed = |id, systems: &[i16]| ListedStellar {
+            id: StellarId(id),
+            systems: ids(systems),
+            flags: 0,
+            flags2: 0,
+            govt: None,
+        };
+        let listed = [
+            listed(128, &[1]),
+            listed(129, &[2, 3]),
+            listed(130, &[3]),
+            listed(131, &[3, 4]),
+        ];
+        let shown = |system| {
+            galaxy
+                .shown(&listed, SystemId(system))
+                .into_iter()
+                .map(|id| id.0)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shown(3), [130], "129 is 2's and 131 is 4's");
+        assert_eq!(shown(2), [129]);
+        assert_eq!(shown(4), [131]);
+        assert_eq!(shown(1), [128]);
+        assert_eq!(shown(5), [] as [i16; 0]);
+    }
+
+    #[test]
+    fn the_listers_of_a_stellar_are_its_listings_and_none_when_unlisted() {
+        let listed = |id, systems: &[i16]| ListedStellar {
+            id: StellarId(id),
+            systems: ids(systems),
+            flags: 0,
+            flags2: 0,
+            govt: None,
+        };
+        let listed = [listed(128, &[1]), listed(130, &[2, 3]), listed(140, &[4])];
+        assert_eq!(listers_of(&listed, StellarId(130)), ids(&[2, 3]));
+        assert_eq!(listers_of(&listed, StellarId(128)), ids(&[1]));
+        assert_eq!(listers_of(&listed, StellarId(140)), ids(&[4]));
+        assert_eq!(listers_of(&listed, StellarId(129)), [] as [SystemId; 0]);
+        assert_eq!(listers_of(&[], StellarId(129)), [] as [SystemId; 0]);
     }
 
     /// A pilot with only `bits` set.
