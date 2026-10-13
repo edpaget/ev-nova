@@ -89,7 +89,8 @@ mod tests {
     use crate::reserves::Reserves;
     use crate::session::tests::{at_gate, gated};
     use crate::testkit::{
-        FAST, FakePilotCatalog, Scripted, begin_jump_now, catalog, fly_out, hull, land_now, ship,
+        FAST, FakePilotCatalog, Scripted, begin_jump_now, carrying, catalog, fly_out, hull,
+        land_now, mission, ship,
     };
 
     /// The warship escort's ship type: `InherentAI` 3, 60 tons of holds.
@@ -251,6 +252,37 @@ mod tests {
                 .count(),
             6
         );
+    }
+
+    #[test]
+    fn a_trader_escorts_share_is_of_the_goods_not_the_mission_cargo() {
+        let mut catalog = boxed();
+        catalog.missions = vec![mission(140)];
+        let mut session = escorted(&catalog, 20);
+        // 30 tons of an abortable mission's cargo go with the 20 of food.
+        session.pilot.missions.fill(carrying(140, 30));
+        let freighter = session
+            .fleet
+            .get(1)
+            .copied()
+            .flatten()
+            .and_then(|id| session.npc(id))
+            .expect("the freighter flies")
+            .state;
+        session.jettison_cargo(true, &mut NeverFires);
+        let behind_freighter = freighter.position
+            + crate::flight::facing((freighter.heading.trunc() + 180.0).rem_euclid(360.0)) * 15.0;
+        let boxes = session.cargo_boxes();
+        // The player's 50 tons drop 10; the freighter's 30 of the fleet's
+        // 50 of the 20 tons of goods, 12 tons, 2 (of the total, 6).
+        assert_eq!(
+            boxes
+                .iter()
+                .filter(|made| (made.position - behind_freighter).length() < 1e-3)
+                .count(),
+            2
+        );
+        assert_eq!(boxes.len(), 12);
     }
 
     #[test]
