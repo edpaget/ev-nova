@@ -301,7 +301,19 @@ mod tests {
         let mut session = flying(&catalog);
         let captured = placed(&session)[1];
         disable(&mut session, captured);
+        // A carrier of its own, unlike the one the player would give it.
+        let elsewhere = Some(Carrier {
+            ship: ShipRef::Player,
+            window: 7.0,
+            reach: 9.0,
+        });
+        session.npc_mut(captured).expect("here").carrier = elsewhere;
         assert_eq!(fight(&mut session, &[0]), [REPAIR_ODDS]);
+        assert_eq!(
+            session.npc(captured).expect("here").carrier,
+            elsewhere,
+            "an escort not carried keeps whatever carrier it had"
+        );
         let record = session.pilot().escorts().last().expect("rejoined");
         assert_eq!(
             (record.ship, record.wage, record.carried),
@@ -322,6 +334,7 @@ mod tests {
         let mut session = flying(&catalog);
         let fighter = placed(&session)[2];
         disable(&mut session, fighter);
+        session.npc_mut(fighter).expect("here").carrier = None;
         assert_eq!(fight(&mut session, &[0]), [REPAIR_ODDS]);
         let record = session.pilot().escorts().last().expect("rejoined");
         assert!(record.carried);
