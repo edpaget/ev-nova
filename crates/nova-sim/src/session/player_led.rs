@@ -45,11 +45,16 @@
 //! [`Npc::top_speed`]), and its burst out of a gate ends at the lower of
 //! its own top speed and the player's (`_HandleShip` @0x34c68-0x34ce6).
 //! `_HandleShip`'s other
-//! branches for led ships (its disabled branch @0x33950-0x33a36, its
-//! jump-out timing @0x347c1-0x348c2 and its self-repair rejoin
-//! @0x33a3b-0x33bd9) are not modelled; the step-1 findings of
-//! rdm:phase/player-led-ships/phase-10-escort-death-destroys-cargo-share
-//! say why.
+//! branches for led ships: its "disabled, leaving" branch
+//! (@0x339a6-0x33a36) cannot run, as phase 10's step-1 findings say; a
+//! disabled former escort that repairs itself rejoins the fleet as what
+//! it was (@0x33a3b-0x33bd9, see [`self_repair`](super::self_repair));
+//! and a led ship times its warp-out by the player's clock
+//! (@0x347c1-0x348bd), which holds here by construction: the player, the
+//! traffic and the fight all stand still through the hyperspace stage, so
+//! every led ship keeps its place beside the player and arrives with it
+//! (see [`escorts`](super::escorts)). No ship has a warp-out motion, nor a
+//! disabled ship its drag (@0x34752-0x349c1, @0x3395d-0x339a1): rdm:phase/player-led-ships/phase-26-warp-out-motion-and-disabled-drag.
 //!
 //! **Drawn.** `_HandleShipDisplay` treats a ship the player leads apart
 //! in three branches. It draws it in the escorts' layer, under the other

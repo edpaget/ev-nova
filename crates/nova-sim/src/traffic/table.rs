@@ -208,7 +208,7 @@ pub struct ShipKind {
     pub cloak: CloakGear,
     /// Whether a repair system is among its default items, so that,
     /// disabled, it can repair itself (see
-    /// [`self_repair`](crate::self_repair)). A person flies its ship
+    /// [`self_repair`]). A person flies its ship
     /// class's: the original reads the class's items (+0x76,
     /// `_ShipCanSelfRepair` @0x91e5-0x922d).
     pub self_repair: bool,

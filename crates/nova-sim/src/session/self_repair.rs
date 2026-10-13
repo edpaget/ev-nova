@@ -28,7 +28,13 @@
 //! "Escort repaired." ([`SimMessage::FighterRepaired`],
 //! [`SimMessage::EscortRepaired`]) with `_beepSnd[4]`
 //! ([`SimSound::EscortRepaired`]). As in the original, the fleet's size
-//! ([`MAX_ESCORTS`](crate::board::MAX_ESCORTS)) is not checked.
+//! ([`MAX_ESCORTS`](crate::board::MAX_ESCORTS)) is not checked. A ship
+//! the rule still disables once repaired (a class that is not tough
+//! holding more than 33,333 armour) rejoins all the same, as the
+//! original's does, but [`Session::lose_escorts`] loses it again at the
+//! next fight tick where the original keeps it led and disabled: a
+//! divergence filed with
+//! rdm:phase/player-led-ships/phase-26-warp-out-motion-and-disabled-drag.
 //!
 //! A repaired ship that remembers nothing (traffic carrying the gear, or
 //! a disabled mission escort, which never left its formation) only gets

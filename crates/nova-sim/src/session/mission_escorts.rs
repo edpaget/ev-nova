@@ -27,7 +27,9 @@
 //! until it is intact again; one disabled once joined keeps its place, as
 //! the original leaves a disabled ship's leader as it was (@0x8fc0c), and
 //! its `_HandleShip` releases only an unmarked disabled escort
-//! (@0x339a6). A person swapped for a ship of a `ShipGoal` 3 mission of
+//! (@0x339a6). One that repairs itself (see
+//! [`self_repair`](super::self_repair)) resumes as a mission escort: it
+//! never left, so it never rejoins as a hired one. A person swapped for a ship of a `ShipGoal` 3 mission of
 //! another `ShipBehav` never joins: the swap's `_AIMakeEscortFlyInForm`
 //! (@0x62509) follows its leader, which `_GenericRandomShipSpawn` left at
 //! -1 (@0x3c9cd), so it never forms on the player.
@@ -583,6 +585,60 @@ mod tests {
         }
         session.dismiss(hired_id);
         assert_eq!(slots(&session), [(2, 3), (3, 3)], "the rest re-form");
+    }
+
+    /// Each ship the player leads, by its id, and where it is from the
+    /// player.
+    fn led_offsets(session: &Session) -> Vec<(NpcId, crate::geometry::Vec2)> {
+        let player = session.player().position;
+        session
+            .player_led()
+            .map(|npc| (npc.id, npc.state.position - player))
+            .collect()
+    }
+
+    #[test]
+    fn every_ship_the_player_leads_leaves_on_the_players_clock_and_arrives_with_it() {
+        let catalog = ships_catalog(escorting(-6, 0));
+        let mut session = accepted(&catalog);
+        session.pilot.escorts.push(hired());
+        take_off(&mut session, &catalog);
+        session.plot_course(SystemId(131)).expect("a route");
+        session.player.position = crate::geometry::Vec2::new(5000.0, 0.0);
+        let led: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
+        assert_eq!(led.len(), 3, "the hired escort and both mission escorts");
+        for &id in &led {
+            session.snap(id);
+        }
+        session.begin_jump().expect("jumps");
+        let ai = crate::ai::NovaAi::default();
+        let mut braking = 0;
+        while session.jumping().is_none() {
+            session.tick(crate::flight::Controls::default());
+            session.tick_traffic(&catalog, &ai, &mut NeverFires);
+            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            assert!(session.traffic.departed().is_empty(), "none leaves alone");
+            braking += 1;
+            assert!(braking < 1000, "the jump never began");
+        }
+        let frozen = led_offsets(&session);
+        assert_eq!(frozen.len(), 3, "all still led");
+        for _ in 0..30 {
+            session.tick(crate::flight::Controls::default());
+            session.tick_traffic(&catalog, &ai, &mut NeverFires);
+            session.tick_combat(crate::combat::Rules::default(), &mut NeverFires);
+            assert_eq!(led_offsets(&session), frozen, "held beside the player");
+            assert!(session.traffic.departed().is_empty());
+        }
+        assert_eq!(
+            session.arrive(&catalog, &mut NeverFires),
+            Some(SystemId(131))
+        );
+        settle(&mut session, &catalog);
+        assert_eq!(session.pilot().escorts().len(), 1);
+        assert!(session.fleet[0].is_some_and(|id| session.npc(id).is_some()));
+        assert_eq!(slots(&session).len(), 2, "both mission escorts came");
+        assert_eq!(session.player_led().count(), 3);
     }
 
     #[test]

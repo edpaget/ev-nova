@@ -70,6 +70,10 @@
 //! **Losing escorts** (`_DamageShip` @0x3af8f): an escort disabled or
 //! destroyed leaves the fleet at once; a disabled one stays in the system
 //! as the ship it is, its AI type its `InherentAI`, and is left behind.
+//! One disabled or breaking up remembers the record it left with
+//! ([`Npc::former`], the original's +0xc8de @0x3afab-0x3afce): repairing
+//! itself, it rejoins as that fighter, hired or captured escort (see
+//! [`self_repair`](super::self_repair)).
 //! A trader escort lost (`InherentAI` 2 or less, not a carried fighter)
 //! takes its share of the fleet's cargo as it goes: every good loses the
 //! truncated part its `Holds` make of the fleet's holds without it (by

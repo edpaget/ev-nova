@@ -3863,3 +3863,36 @@ fn stock_weapon_mod_vals_load_unchanged_inside_the_folded_weapons() {
     }
     assert_eq!(counted, [83, 43, 0], "weapon, ammunition and clean mods");
 }
+
+#[test]
+fn stock_repair_droids_are_the_only_repair_system_and_no_ship_class_carries_them() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let outfits = data.outfits();
+    let repairing: Vec<OutfitId> = outfits
+        .iter()
+        .filter(|record| {
+            record
+                .mods
+                .iter()
+                .any(|&(kind, _)| kind == nova_sim::self_repair::MOD_REPAIR)
+        })
+        .map(|record| record.id)
+        .collect();
+    assert_eq!(repairing, [OutfitId(437)], "Repair Droids");
+    let ships = data.ships();
+    assert!(ships.len() > 200);
+    for ship in &ships {
+        let defaults: std::collections::BTreeMap<OutfitId, u16> =
+            ship.defaults.iter().copied().collect();
+        assert!(
+            !nova_sim::self_repair::has_gear(&defaults, &outfits),
+            "{:?} would repair itself",
+            ship.id
+        );
+    }
+    let droids = std::collections::BTreeMap::from([(OutfitId(437), 1)]);
+    assert!(nova_sim::self_repair::has_gear(&droids, &outfits));
+}
