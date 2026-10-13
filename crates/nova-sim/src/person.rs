@@ -1220,6 +1220,17 @@ mod tests {
     }
 
     #[test]
+    fn a_person_repairs_itself_as_its_ship_class_does() {
+        for self_repair in [false, true] {
+            let kind = ShipKind {
+                self_repair,
+                ..armed()
+            };
+            assert_eq!(fitted(&kind, &[]).self_repair, self_repair);
+        }
+    }
+
+    #[test]
     fn the_flag_bits_are_the_bibles() {
         assert_eq!(
             [

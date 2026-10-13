@@ -37,6 +37,7 @@ use crate::outfitter::outfit_mods;
 use crate::person::{self, PersonLink, PersonRules};
 use crate::pilot::tally;
 use crate::reserves::Reserves;
+use crate::self_repair;
 use crate::stats::ShipStats;
 use crate::traffic::strength::{STRONG_FLEET, STRONGER_FLEET};
 
@@ -205,6 +206,12 @@ pub struct ShipKind {
     /// What its default items and `Flags2` give its cloak (see
     /// [`cloak`](crate::cloak)).
     pub cloak: CloakGear,
+    /// Whether a repair system is among its default items, so that,
+    /// disabled, it can repair itself (see
+    /// [`self_repair`](crate::self_repair)). A person flies its ship
+    /// class's: the original reads the class's items (+0x76,
+    /// `_ShipCanSelfRepair` @0x91e5-0x922d).
+    pub self_repair: bool,
 }
 
 /// A person as the traffic spawns it: its record, whether its `LinkSyst`
@@ -491,6 +498,7 @@ pub(crate) fn kind(record: &ShipRecord, outfits: &[OutfitRecord], arsenal: &Arse
         rounds,
         appear_on: record.appear_on.clone(),
         cloak: CloakGear::of(record.fields.flags2, &defaults, outfits),
+        self_repair: self_repair::has_gear(&defaults, outfits),
     }
 }
 
@@ -1177,6 +1185,28 @@ mod tests {
                 .scanner
                 .untargetable
         );
+    }
+
+    #[test]
+    fn a_ship_type_repairs_itself_with_a_repair_system_among_its_default_items() {
+        let outfits = [
+            outfit(300, &[(4, 10)]),
+            outfit(437, &[(1, 0), (crate::self_repair::MOD_REPAIR, 0)]),
+        ];
+        let carrying = |defaults: Vec<(OutfitId, u16)>| ShipRecord {
+            defaults,
+            ..ship(206, FAST)
+        };
+        let repairs = |record: &ShipRecord| kind(record, &outfits, &arsenal()).self_repair;
+        assert!(repairs(&carrying(vec![(OutfitId(437), 1)])));
+        assert!(repairs(&carrying(vec![
+            (OutfitId(300), 2),
+            (OutfitId(437), 1)
+        ])));
+        assert!(!repairs(&carrying(vec![(OutfitId(437), 0)])), "none of it");
+        assert!(!repairs(&carrying(vec![(OutfitId(300), 1)])));
+        assert!(!repairs(&carrying(Vec::new())));
+        assert!(!ShipKind::default().self_repair);
     }
 
     #[test]

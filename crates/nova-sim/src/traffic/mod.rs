@@ -894,6 +894,7 @@ mod tests {
                     rounds: BTreeMap::from([(WeaponId(138), 7)]),
                     appear_on: Test::default(),
                     cloak: CloakGear::default(),
+                    self_repair: false,
                 },
             )]),
             ..SpawnTable::default()
