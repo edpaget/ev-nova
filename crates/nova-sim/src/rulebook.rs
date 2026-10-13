@@ -108,6 +108,7 @@
 //! | [`AuxGate`](RuleKey::AuxGate) | `aux_gate` | at a hypergate or wormhole exit, the auxiliary ships of a mission of `AuxShipSyst` -1 come no more until their countdown next restarts (`_HandlePlayerDockRequest` @0x6729b-0x672ac; see [`mission::aux`](crate::mission::aux)) | the exit restarts them as a jump does: "-1: any system" |
 //! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
+//! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see [`red_alert`](crate::red_alert)) | the icon blinks with every alert\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -122,7 +123,7 @@
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance`,
 //! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
-//! `hud_cadence` or `comm_quote`
+//! `hud_cadence`, `alert_blink` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -1357,6 +1358,15 @@ rule_keys! {
     /// of it, so the other reading is the obvious alternative, not
     /// anything the Bible says (see `nova_view::flight::cadence`).
     HudCadence => "hud_cadence",
+    /// When a Red Alert blinks its icon. By the engine, only while the
+    /// player's sound is quiet: the original starts the blink only when
+    /// its `Volume` preference is 1 or less (`_HandlePlayer`
+    /// @0x68d04-0x68d15), which here is sound off or an effects level of
+    /// 1 or less; louder, the alert is `snd ` 370 alone. By the other
+    /// reading, with every alert. The Bible says nothing of it, so the
+    /// other reading is the obvious alternative, not anything the Bible
+    /// says (see [`red_alert`](crate::red_alert)).
+    AlertBlink => "alert_blink",
 }
 
 impl RuleKey {
@@ -1524,7 +1534,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(13),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1564,7 +1574,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1586,7 +1596,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1611,7 +1621,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1637,7 +1647,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1657,7 +1667,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1677,7 +1687,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1697,7 +1707,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -1710,7 +1720,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::GateFollow),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(2), Some(&RuleKey::GateFollow));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(3), Some(&RuleKey::GateFollow));
     }
 
     #[test]
@@ -1721,7 +1731,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(1), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(2), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -1732,7 +1742,18 @@ mod tests {
             Rulebook::default().source_for(RuleKey::HudCadence),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::HudCadence));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(1), Some(&RuleKey::HudCadence));
+    }
+
+    #[test]
+    fn the_alert_blink_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::AlertBlink.key(), "alert_blink");
+        assert_eq!(RuleKey::from_key("alert_blink"), Some(RuleKey::AlertBlink));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::AlertBlink),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::AlertBlink));
     }
 
     #[test]
@@ -1743,7 +1764,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -1851,7 +1872,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -1999,7 +2020,8 @@ mod tests {
                 RuleKey::LandedLeaves,
                 RuleKey::GateFollow,
                 RuleKey::AuxGate,
-                RuleKey::HudCadence
+                RuleKey::HudCadence,
+                RuleKey::AlertBlink
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");

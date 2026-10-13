@@ -6,7 +6,7 @@
 
 use std::num::NonZeroU16;
 
-use nova_data::graphics::{PICT, decode_pict};
+use nova_data::graphics::{CICN, PICT, decode_cicn, decode_pict};
 use nova_data::records::boom::Boom;
 use nova_data::records::colors::Colors;
 use nova_data::records::govt::Govt;
@@ -114,6 +114,12 @@ impl StatusBars for GameData {
         let found = self.resource(PICT, id)?;
         let picture = decode_pict(found.resource.data()).ok()?;
         Some((picture.width(), picture.height()))
+    }
+
+    fn icon_size(&self, id: i16) -> Option<(u32, u32)> {
+        let found = self.resource(CICN, id)?;
+        let icon = decode_cicn(found.resource.data()).ok()?;
+        Some((icon.width(), icon.height()))
     }
 }
 
@@ -262,7 +268,7 @@ mod tests {
 
     use nova_data::Record;
     use nova_data::graphics::RLED;
-    use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
+    use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
@@ -588,6 +594,23 @@ mod tests {
             panic!("an error")
         };
         assert!(message.contains("131"), "{message}");
+    }
+
+    fn icon(width: u16, height: u16) -> Vec<u8> {
+        let ctab = Ctab {
+            device: false,
+            entries: vec![(0, [0, 0, 0])],
+        };
+        let count = usize::from(width) * usize::from(height);
+        Cicn::new(width, height, 8, &ctab, &vec![0; count], &vec![true; count]).bytes()
+    }
+
+    #[test]
+    fn an_icons_size_is_its_decoded_width_and_height() {
+        let data = store(&[(CICN, 18000, icon(24, 20)), (CICN, 18001, vec![0; 4])]);
+        assert_eq!(data.icon_size(18000), Some((24, 20)));
+        assert_eq!(data.icon_size(18001), None, "undecodable");
+        assert_eq!(data.icon_size(18002), None, "missing");
     }
 
     #[test]

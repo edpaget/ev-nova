@@ -640,7 +640,8 @@ impl AppScreen {
             .with_control_bits(Rc::clone(&self.control_bits))
             .with_person_rules(Rc::clone(&self.person_rules))
             .with_strings(Rc::clone(&self.data) as Rc<dyn CommCatalog>)
-            .with_hyperspace_effects(self.prefs.hyperspace_effects);
+            .with_hyperspace_effects(self.prefs.hyperspace_effects)
+            .with_sound_prefs(self.prefs.sound);
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
@@ -962,6 +963,7 @@ impl AppScreen {
                 self.prefs_change = Some(prefs);
                 if let Some(flight) = &mut self.flight {
                     flight.set_hyperspace_effects(prefs.hyperspace_effects);
+                    flight.set_sound_prefs(prefs.sound);
                 }
             }
             if dialog.closed() {
@@ -4071,6 +4073,38 @@ pub(super) mod tests {
         screen.input(&key(Key::Enter, true));
         assert_eq!(screen.showing(), Showing::Flight);
         assert!(flight_effects(&screen));
+    }
+
+    fn alert_quiet(screen: &AppScreen) -> bool {
+        screen.flight_view().expect("flying").alert_quiet()
+    }
+
+    #[test]
+    fn flight_is_built_with_the_routers_sound_prefs() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        assert!(!alert_quiet(&screen), "loud by default");
+        let mut screen = with_dialogs(data()).with_prefs(Prefs {
+            sound: nova_view::SoundPrefs {
+                effects_level: 1,
+                ..quiet().sound
+            },
+            ..quiet()
+        });
+        fly(&mut screen);
+        assert!(alert_quiet(&screen));
+    }
+
+    #[test]
+    fn a_sound_change_in_the_dialog_reaches_flight_already_built() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        open_prefs(&mut screen);
+        let point = prefs_dialog(&screen).sound().rect().center();
+        click_at(&mut screen, point);
+        assert!(alert_quiet(&screen), "sound off");
+        click_at(&mut screen, point);
+        assert!(!alert_quiet(&screen), "back on");
     }
 
     #[test]

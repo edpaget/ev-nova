@@ -66,6 +66,17 @@ pub struct SoundPrefs {
     pub music_level: u8,
 }
 
+impl SoundPrefs {
+    /// Whether the effects are quiet enough for the Red Alert to blink its
+    /// icon: off, or at level 1 or less. The original's one `Volume` level
+    /// (0-7) blinks it at 1 or less (`_HandlePlayer` @0x68d04-0x68d15);
+    /// here sound off stands for its 0.
+    #[must_use]
+    pub fn alert_quiet(self) -> bool {
+        !self.sound || self.effects_level <= 1
+    }
+}
+
 impl Default for SoundPrefs {
     /// Sound and music on, both at the loudest level.
     fn default() -> Self {
@@ -81,6 +92,21 @@ impl Default for SoundPrefs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_alert_is_quiet_with_sound_off_or_at_level_1_or_less() {
+        let at = |sound, effects_level| SoundPrefs {
+            sound,
+            effects_level,
+            ..SoundPrefs::default()
+        };
+        assert!(at(false, 7).alert_quiet(), "sound off");
+        assert!(at(true, 0).alert_quiet());
+        assert!(at(true, 1).alert_quiet());
+        assert!(!at(true, 2).alert_quiet());
+        assert!(!at(true, 7).alert_quiet());
+        assert!(!SoundPrefs::default().alert_quiet());
+    }
 
     #[test]
     fn a_combat_sound_is_its_snd_heard_from_where_it_happened() {

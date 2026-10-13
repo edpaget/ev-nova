@@ -165,6 +165,9 @@
 //! - [`recharge`]: recharging in the spaceport: which stellars sell
 //!   fuel ([`sells_fuel`]), what filling the tank costs, and each
 //!   [`RechargeRefusal`].
+//! - [`red_alert`]: the Red Alert: when a threat to the player sounds it
+//!   ([`RedAlert::check`], every [`ALERT_CHECK_FRAMES`]) and the icon's
+//!   blink ([`AlertIcon`]).
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
 //!   [`Gauge`]s, full when it starts.
 //! - [`rulebook`]: the rules where the Nova Bible and the original engine
@@ -267,6 +270,7 @@ pub mod pilot;
 pub mod pre_jump;
 pub mod rating;
 pub mod recharge;
+pub mod red_alert;
 pub mod reserves;
 pub mod rulebook;
 pub mod rules;
@@ -358,6 +362,10 @@ pub use person::{
 };
 pub use pilot::{Escort, Gender, Pilot};
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
+pub use red_alert::{
+    ALERT_CHECK_FRAMES, ALERT_CICN, ALERT_STEP_FRAMES, ALERT_STEPS, AlertIcon, RedAlert,
+    alert_check_due, alert_step_due,
+};
 pub use reserves::{Gauge, Reserve, Reserves};
 pub use rulebook::{RuleKey, RuleSource, Rulebook};
 pub use save::SaveError;

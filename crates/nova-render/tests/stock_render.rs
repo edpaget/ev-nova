@@ -129,3 +129,25 @@ fn the_radar_static_patterns_decode_as_64_pixel_squares() {
         assert_eq!(sizes, [(64, 64)], "ppat {id}");
     }
 }
+
+#[test]
+fn the_status_icons_decode_and_the_red_alerts_two_frames_match() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let size = |id| {
+        let frames = data
+            .frames(ImageKind::Icon, id)
+            .unwrap_or_else(|error| panic!("cicn {id}: {error:?}"));
+        let [frame] = frames.as_slice() else {
+            panic!("cicn {id} is one frame");
+        };
+        (frame.width(), frame.height())
+    };
+    let red = size(18000);
+    assert!(red.0 > 0 && red.1 > 0, "cicn 18000 is {red:?}");
+    assert_eq!(size(18001), red, "cicn 18001");
+    let double_time = size(20000);
+    assert!(double_time.0 > 0, "cicn 20000 is {double_time:?}");
+}

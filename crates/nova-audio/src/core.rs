@@ -110,6 +110,7 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::JumpBegan) => self.play(self.table.jump),
                 Sound::Sim(SimSound::Arrived) => self.play(self.table.arrival),
                 Sound::Sim(SimSound::ScriptMessage) => self.play(self.table.script_message),
+                Sound::Sim(SimSound::RedAlert) => self.play(self.table.red_alert),
                 Sound::Sim(SimSound::Script {
                     sound,
                     exclusive: false,
@@ -424,6 +425,24 @@ mod tests {
         core.set_sound(false);
         drain(&log);
         core.update(None, &[Sound::Sim(SimSound::ScriptMessage)]);
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_red_alert_plays_370_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::RedAlert)],
+        );
+        assert_eq!(drain(&log), [play(370, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::RedAlert)],
+        );
         assert_eq!(drain(&log), [], "sound off");
     }
 

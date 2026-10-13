@@ -1,5 +1,6 @@
 //! The flight screen: the player's ship flying in its starting system.
 //!
+//! - [`alert`]: the Red Alert icon, drawn at the playfield's top-right.
 //! - [`cadence`]: when the HUD refreshes, [`HudCadence`](cadence::HudCadence),
 //!   and the target's blink on the radar.
 //! - [`catalog`]: the [`ShipSprites`] port, the player ship's sprite
@@ -27,6 +28,7 @@
 //!   it.
 //! - [`weapons`]: drawing shots and beams.
 
+pub mod alert;
 pub mod cadence;
 pub mod catalog;
 pub mod data;

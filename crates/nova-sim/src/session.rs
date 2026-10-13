@@ -349,6 +349,7 @@ mod outfits;
 mod person_offers;
 mod persons;
 mod radar;
+mod red_alert;
 mod script_effects;
 mod ship_change;
 mod stellars;
@@ -440,6 +441,7 @@ use crate::pilot::{self, Escort, Pilot};
 use crate::pre_jump::{self, PreJump};
 use crate::rating;
 use crate::recharge::{self, RechargeRefusal};
+use crate::red_alert::RedAlert;
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::ship_change::{OutfitCarry, carried_outfits};
@@ -691,6 +693,13 @@ pub struct Session {
     /// is a choice; a take-off sets it anyway. Not saved, as the
     /// original's pilot file does not keep it.
     frame: i16,
+    /// The Red Alert's state (see the `red_alert` module); not saved, as
+    /// the original's pilot file does not keep it.
+    red_alert: RedAlert,
+    /// Whether the player's sound effects are quiet, which by
+    /// [`RuleKey::AlertBlink`]'s engine reading blinks the Red Alert's
+    /// icon; set by the view from the player's preferences, never saved.
+    sound_quiet: bool,
     /// What paying the escorts did since this was last taken.
     pay_notes: Vec<PayNote>,
     /// What sees each set operator `run_set` hands to `apply_op`: none
@@ -949,6 +958,8 @@ impl Session {
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
             frame: 0,
+            red_alert: RedAlert::default(),
+            sound_quiet: false,
             pay_notes: Vec::new(),
             op_observer: None,
             unhandled_ops: BTreeSet::new(),
@@ -1160,8 +1171,9 @@ impl Session {
     ///
     /// Each tick in flight, a jump's included, moves the frame counter on,
     /// and on a due frame ([`market::junk_step_due`]) steps the held
-    /// tribbles and perishables, unless the player is destroyed. A landed
-    /// tick moves neither.
+    /// tribbles and perishables, unless the player is destroyed. It then
+    /// runs the Red Alert on that frame (see the `red_alert` module). A
+    /// landed tick moves neither.
     pub fn tick(&mut self, controls: Controls) {
         self.gate = None;
         if self.landed.is_some() {
@@ -1179,6 +1191,7 @@ impl Session {
                 self.rules.source_for(RuleKey::JunkFlags),
             );
         }
+        self.red_alert_tick(frame);
         let controls = match self.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
@@ -2066,6 +2079,8 @@ impl Session {
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.arm_strength_timer(chance);
+        // The Red Alert's icon hidden, its threat kept (@0x6c024-0x6c046).
+        self.red_alert.clear_icon();
         self.take_jump_cost(chance);
         let (mut from, mut at) = (self.pilot.system, first);
         let mut hops = 0;
@@ -2516,6 +2531,8 @@ impl Session {
         self.stay = Stay::default();
         self.save_due = true;
         self.stop_thrust();
+        // The Red Alert's icon hidden, its threat kept (@0x66d84-0x66da0).
+        self.red_alert.clear_icon();
         self.sounds.push(SimSound::Landed { stellar_sound });
         self.raise(StoryEvent::Landed { stellar });
         // The port dialog's rebuild point (@0x5fbf0).

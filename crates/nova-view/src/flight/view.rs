@@ -339,24 +339,25 @@ use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
 use nova_sim::traffic::npc::Mode;
 use nova_sim::{
+    ALERT_CICN, Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule,
+    Chance, ClassRow, Clearance, CombatCatalog, CommCatalog, CommNote, Condition, Controls,
+    DisableRule, EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal, Good, GovtId,
+    Haggle, HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome,
+    LandPress, LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable,
+    NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot,
+    PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey,
+    RuleSource, Rulebook, Rules, Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal,
+    ShipState, Shipyard, SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take,
+    Taken, TargetPick, TargetTag, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized,
+    flight::shortest_turn, glow_level, lights_level,
+};
+use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
     HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText,
     NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, StellarIff, TagNames, VenueOffer,
 };
-use nova_sim::{
-    Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
-    ClassRow, Clearance, CombatCatalog, CommCatalog, CommNote, Condition, Controls, DisableRule,
-    EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal, Good, GovtId, Haggle,
-    HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome, LandPress,
-    LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
-    NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot, PilotCatalog,
-    PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey, RuleSource,
-    Rulebook, Rules, Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState,
-    Shipyard, SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken,
-    TargetPick, TargetTag, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized,
-    flight::shortest_turn, glow_level, lights_level,
-};
 
+use super::alert;
 use super::cadence::{Drawn, HudCadence, retake_target};
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
 use super::effects::{Dying, Effects, Scene};
@@ -384,7 +385,7 @@ use crate::ui::PlunderShown;
 use crate::ui::comm::grouped;
 use crate::{
     Color, Diagnostic, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction,
-    Sound,
+    Sound, SoundPrefs,
 };
 
 /// The developer overlays: the system's title and the help line.
@@ -1269,6 +1270,13 @@ pub struct FlightView<C> {
     /// Whether jumps play their white fades, as the Hyperspace Effects
     /// preference says.
     hyperspace_effects: bool,
+    /// The player's sound preferences, which say whether the Red Alert
+    /// blinks its icon ([`SoundPrefs::alert_quiet`]), as the session is
+    /// told.
+    sound_prefs: SoundPrefs,
+    /// `cïcn` 18000's width, which places the Red Alert icon, or `None`
+    /// when it cannot be read, and the icon is not drawn.
+    alert_width: Option<u32>,
     /// What each day's events and the traffic are rolled on.
     chance: SharedChance,
     /// What random running lights roll on.
@@ -1451,6 +1459,17 @@ impl<
             Err(_) => Looks::default(),
         };
         let escort_colors = catalog.escort_menu_colors();
+        let alert_width = catalog.icon_size(ALERT_CICN).map(|(width, _)| width);
+        let mut unread_looks: Vec<_> = looks
+            .problems()
+            .into_iter()
+            .map(Diagnostic::Unreadable)
+            .collect();
+        if session.is_ok() && alert_width.is_none() {
+            unread_looks.push(Diagnostic::Unreadable(format!(
+                "no cïcn {ALERT_CICN}: the Red Alert icon is not drawn"
+            )));
+        }
         Self {
             catalog,
             map,
@@ -1458,6 +1477,8 @@ impl<
             jump: None,
             fade_in: None,
             hyperspace_effects: true,
+            sound_prefs: SoundPrefs::default(),
+            alert_width,
             session,
             scene,
             sheet,
@@ -1487,11 +1508,7 @@ impl<
             law: Rc::new(NovaLaw::default()),
             npc_sheets: BTreeMap::new(),
             npc_previous: BTreeMap::new(),
-            unread_looks: looks
-                .problems()
-                .into_iter()
-                .map(Diagnostic::Unreadable)
-                .collect(),
+            unread_looks,
             looks,
             cards: BTreeMap::new(),
             codes: BTreeMap::new(),
@@ -1779,6 +1796,31 @@ impl<
     #[must_use]
     pub fn hyperspace_effects(&self) -> bool {
         self.hyperspace_effects
+    }
+
+    /// The flight with the player's sound preferences `prefs`, which say
+    /// whether the Red Alert blinks its icon ([`SoundPrefs::alert_quiet`],
+    /// [`Session::set_sound_quiet`]).
+    #[must_use]
+    pub fn with_sound_prefs(mut self, prefs: SoundPrefs) -> Self {
+        self.set_sound_prefs(prefs);
+        self
+    }
+
+    /// Sets the player's sound preferences, as
+    /// [`FlightView::with_sound_prefs`] does.
+    pub fn set_sound_prefs(&mut self, prefs: SoundPrefs) {
+        self.sound_prefs = prefs;
+        if let Ok(session) = &mut self.session {
+            session.set_sound_quiet(prefs.alert_quiet());
+        }
+    }
+
+    /// Whether the player's sound is quiet enough for the Red Alert to
+    /// blink its icon, as the sound preferences last said.
+    #[must_use]
+    pub fn alert_quiet(&self) -> bool {
+        self.sound_prefs.alert_quiet()
     }
 
     /// The catalog the screen reads.
@@ -3323,6 +3365,15 @@ impl<C> FlightView<C> {
         target::draw_brackets(list, camera.world_to_screen(at), size, standing);
     }
 
+    /// Draws the Red Alert icon the session shows, if any, over the
+    /// brackets on the interface layer (see the `alert` module).
+    fn draw_red_alert(&self, list: &mut DrawList) {
+        let icon = self.session.as_ref().ok().and_then(Session::red_alert_icon);
+        if let (Some(icon), Some(width)) = (icon, self.alert_width) {
+            alert::draw_red_alert(list, icon, width);
+        }
+    }
+
     /// Draws the status bar's target panel ([`FlightView::target_shown`])
     /// and secondary weapon line. The weapon line follows every frame: the
     /// original redraws it (`_statusRedraw[3]`) on every event that
@@ -3631,6 +3682,7 @@ impl<
         weapons::draw_beams(list, &beams, &self.looks, false);
         self.effects.draw(list, &camera, &self.looks);
         self.draw_brackets(list, &camera);
+        self.draw_red_alert(list);
         self.escort_menu
             .draw(list, &self.escort_rows(), self.escort_colors, metrics);
         if self.overlays.title {
@@ -3884,6 +3936,8 @@ mod tests {
         sheet: Result<ShipSheet, String>,
         /// `ïntf` 128: stock-like, or why it cannot be read.
         bar: Result<StatusBarLayout, String>,
+        /// `cicn` 18000's size: 24 x 24, by default.
+        alert_icon: Option<(u32, u32)>,
         /// Each `gövt`'s `Interface`: none, by default.
         interfaces: Vec<(i16, i16)>,
         /// The `ïntf`s past 128: none, by default.
@@ -4011,6 +4065,7 @@ mod tests {
             fields: FIELDS,
             sheet: Ok(sheet()),
             bar: Ok(layout()),
+            alert_icon: Some((24, 24)),
             interfaces: Vec::new(),
             other_bars: Vec::new(),
             bars_asked: RefCell::default(),
@@ -4468,6 +4523,10 @@ mod tests {
 
         fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
             [700, 705, 128].contains(&id).then_some((194, 767))
+        }
+
+        fn icon_size(&self, id: i16) -> Option<(u32, u32)> {
+            (id == ALERT_CICN).then_some(self.alert_icon).flatten()
         }
     }
 
@@ -15311,5 +15370,151 @@ mod tests {
         assert!(refreshes.len() >= 3, "{refreshes:?}");
         let gaps: Vec<u32> = refreshes.windows(2).map(|pair| pair[1] - pair[0]).collect();
         assert!(gaps.iter().all(|&gap| gap == 8), "{refreshes:?}");
+    }
+
+    // The Red Alert.
+
+    /// Quiet sound preferences: effects at level 1.
+    const QUIET: SoundPrefs = SoundPrefs {
+        sound: true,
+        music: true,
+        effects_level: 1,
+        music_level: 7,
+    };
+
+    /// Two NPCs, NPC 0 turning on the player at the first tick after the
+    /// flight's first (frame 0), sound `prefs`: the Red Alert's check at
+    /// frame 60 is the 60th tick from here.
+    fn threatened(prefs: SoundPrefs) -> View {
+        fighting(armed(2, &[]), &two_npcs())
+            .with_behaviour(Rc::new(Threatening))
+            .with_sound_prefs(prefs)
+    }
+
+    /// The `cïcn`s drawn, and where.
+    fn icons_drawn(view: &View) -> Vec<(i16, Point)> {
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Picture { image, top_left }
+                    if image.kind == crate::ImageKind::Icon =>
+                {
+                    Some((image.id, *top_left))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_red_alert_draws_cicn_18000_then_18001_at_the_playfields_top_right() {
+        let mut view = threatened(QUIET);
+        for tick in 1..60 {
+            view.tick(TICK);
+            assert_eq!(icons_drawn(&view), [], "tick {tick}: before the check");
+        }
+        let corner = Point::new(1024.0 - 194.0 - 24.0, 0.0);
+        for tick in 0..160_usize {
+            view.tick(TICK);
+            let expected = match tick {
+                146.. => vec![],
+                1.. if ((tick - 1) / 5).is_multiple_of(2) => vec![(18001, corner)],
+                _ => vec![(18000, corner)],
+            };
+            assert_eq!(icons_drawn(&view), expected, "tick {tick} of the blink");
+        }
+    }
+
+    #[test]
+    fn no_alert_icon_is_drawn_for_a_loud_player() {
+        let mut view = threatened(SoundPrefs::default());
+        for tick in 0..300 {
+            view.tick(TICK);
+            assert_eq!(icons_drawn(&view), [], "tick {tick}");
+        }
+        assert!(!view.alert_quiet());
+    }
+
+    #[test]
+    fn the_sound_prefs_reach_the_session_when_set() {
+        let mut view = threatened(SoundPrefs::default());
+        view.set_sound_prefs(QUIET);
+        assert!(view.alert_quiet());
+        ticks(&mut view, 60);
+        assert_eq!(icons_drawn(&view).len(), 1);
+        view.set_sound_prefs(SoundPrefs {
+            sound: false,
+            ..SoundPrefs::default()
+        });
+        assert!(view.alert_quiet(), "sound off is quiet");
+        view.set_sound_prefs(SoundPrefs::default());
+        assert!(!view.alert_quiet());
+    }
+
+    #[test]
+    fn the_red_alert_sounds_once_through_the_view() {
+        let mut view = threatened(QUIET);
+        view.take_sounds();
+        let mut alerts = 0;
+        for _ in 0..300 {
+            view.tick(TICK);
+            alerts += view
+                .take_sounds()
+                .iter()
+                .filter(|&&sound| sound == Sound::Sim(SimSound::RedAlert))
+                .count();
+        }
+        assert_eq!(alerts, 1);
+    }
+
+    #[test]
+    fn the_alert_icon_is_drawn_over_the_brackets() {
+        let mut view = threatened(QUIET);
+        ticks(&mut view, 1);
+        tap(&mut view, NEAREST_KEY);
+        assert_eq!(target_of(&view), Some(NpcId(0)));
+        ticks(&mut view, 59);
+        let list = drawn(&view);
+        let commands: Vec<_> = list.iter().collect();
+        let icon = commands
+            .iter()
+            .position(|command| {
+                matches!(command, DrawCommand::Picture { image, .. } if image.kind == crate::ImageKind::Icon)
+            })
+            .expect("the icon is drawn");
+        assert!(
+            line_in(HOSTILE_BRACKETS)(commands[icon - 1]),
+            "the brackets' last line just before it: {:?}",
+            commands[icon - 1]
+        );
+    }
+
+    #[test]
+    fn a_missing_alert_icon_draws_nothing_and_says_so_once() {
+        let catalog = FakeCatalog {
+            alert_icon: None,
+            ..armed(2, &[])
+        };
+        let (_, chance) = scripted(&two_npcs());
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Threatening))
+            .with_sound_prefs(QUIET);
+        let missing =
+            Diagnostic::Unreadable("no cïcn 18000: the Red Alert icon is not drawn".to_owned());
+        let told = |view: &mut View| {
+            let diagnostics = view.take_diagnostics();
+            diagnostics.iter().filter(|&d| *d == missing).count()
+        };
+        assert_eq!(told(&mut view), 1);
+        let mut blinked = false;
+        for _ in 0..200 {
+            view.tick(TICK);
+            blinked |= view.session().expect("flying").red_alert_icon().is_some();
+            assert_eq!(icons_drawn(&view), []);
+        }
+        assert!(blinked, "the session blinked it");
+        assert_eq!(told(&mut view), 0, "once");
+        assert_eq!(told(&mut flight()), 0, "the default catalog has it");
     }
 }

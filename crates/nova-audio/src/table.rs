@@ -30,6 +30,8 @@ pub struct SoundTable {
     pub alert: Option<SoundId>,
     /// Plays as a `Q` set operator's message is shown in flight.
     pub script_message: Option<SoundId>,
+    /// Plays as the player becomes threatened: the Red Alert.
+    pub red_alert: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -59,6 +61,10 @@ impl SoundTable {
     ///   from `snd ` 150 to 154 into `_beepSnd` (@0x1c174), which
     ///   `_PlayGame` plays as it shows a `Q`'s message in flight
     ///   (`_beepSnd[4]`, @0x4657a).
+    /// - `red_alert`: 370, "Red Alert", which `_LoadSounds` loads into
+    ///   `_redAlertSnd` (@0x1c218-0x1c22a) and `_HandlePlayer` plays
+    ///   (@0x68cff). The original plays it at priority 5; the audio port
+    ///   has no channel priorities, so that is not modelled.
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -69,6 +75,7 @@ impl SoundTable {
         button_up: Some(SoundId(601)),
         alert: None,
         script_message: Some(SoundId(154)),
+        red_alert: Some(SoundId(370)),
     };
 }
 
@@ -88,5 +95,6 @@ mod tests {
         assert_eq!(table.button_up, Some(SoundId(601)), "Menu button up");
         assert_eq!(table.alert, None, "the system's alert");
         assert_eq!(table.script_message, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.red_alert, Some(SoundId(370)), "Red Alert");
     }
 }

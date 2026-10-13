@@ -707,6 +707,11 @@ mod tests {
                 .find(|(pict, _)| *pict == id)
                 .map(|(_, size)| *size)
         }
+
+        fn icon_size(&self, id: i16) -> Option<(u32, u32)> {
+            self.asked.borrow_mut().push(format!("cicn {id}"));
+            None
+        }
     }
 
     /// `ïntf` 128 (background 700), 129 (background 701) and 130

@@ -131,6 +131,9 @@ pub trait StatusBars {
     /// `PICT` `id`'s width and height in pixels, or `None` when it is
     /// missing or does not decode.
     fn picture_size(&self, id: i16) -> Option<(u32, u32)>;
+    /// `cicn` `id`'s width and height in pixels, or `None` when it is
+    /// missing or does not decode.
+    fn icon_size(&self, id: i16) -> Option<(u32, u32)>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -146,6 +149,10 @@ impl<T: StatusBars + ?Sized> StatusBars for &T {
     fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
         (**self).picture_size(id)
     }
+
+    fn icon_size(&self, id: i16) -> Option<(u32, u32)> {
+        (**self).icon_size(id)
+    }
 }
 
 /// A shared catalog is a catalog.
@@ -160,6 +167,10 @@ impl<T: StatusBars + ?Sized> StatusBars for Rc<T> {
 
     fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
         (**self).picture_size(id)
+    }
+
+    fn icon_size(&self, id: i16) -> Option<(u32, u32)> {
+        (**self).icon_size(id)
     }
 }
 
@@ -414,21 +425,27 @@ mod tests {
         fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
             Some((u32::try_from(id).ok()?, 1))
         }
+
+        fn icon_size(&self, id: i16) -> Option<(u32, u32)> {
+            Some((1, u32::try_from(id).ok()?))
+        }
     }
 
-    /// Everything `catalog` says about govt 130, `ïntf` 131 and `PICT` 194.
+    /// Everything `catalog` says about govt 130, `ïntf` 131, `PICT` 194
+    /// and `cicn` 18.
     fn bar(catalog: impl StatusBars) -> String {
         format!(
-            "{:?} {:?} {:?}",
+            "{:?} {:?} {:?} {:?}",
             catalog.government_interface(GovtId(130)),
             catalog.status_bar(131).map(|bar| bar.status_bkgnd),
             catalog.picture_size(194),
+            catalog.icon_size(18),
         )
     }
 
     #[test]
     fn borrowed_and_shared_status_bars_are_status_bars() {
-        let direct = "Ok(Some(130)) Ok(131) Some((194, 1))";
+        let direct = "Ok(Some(130)) Ok(131) Some((194, 1)) Some((1, 18))";
         assert_eq!(bar(Bars), direct);
         assert_eq!(bar(&Bars), direct);
         assert_eq!(bar(Rc::new(Bars)), direct);

@@ -1,9 +1,10 @@
 //! Images from the game data: `PICT`s, masked `PICT`s, `rlëD` sprite
-//! sheets and `ppat` pixel patterns, decoded on request.
+//! sheets, `ppat` pixel patterns and `cicn` colour icons, decoded on
+//! request.
 
 use nova_data::GameData;
 use nova_data::graphics::{
-    Image, PICT, PPAT, RLED, apply_mask, decode_pict, decode_ppat, decode_rled,
+    CICN, Image, PICT, PPAT, RLED, apply_mask, decode_cicn, decode_pict, decode_ppat, decode_rled,
 };
 use nova_view::ImageKind;
 
@@ -29,6 +30,7 @@ impl ImageSource for GameData {
                 vec![apply_mask(&picture, &mask)?]
             }
             ImageKind::Pattern => vec![decode_ppat(bytes(PPAT, id)?)?],
+            ImageKind::Icon => vec![decode_cicn(bytes(CICN, id)?)?],
         })
     }
 }
@@ -39,7 +41,7 @@ mod tests {
     use std::path::Path;
 
     use nova_data::graphics::GraphicsError;
-    use nova_data::graphics::fixture::{Ctab, DirectBits, PictBuilder, Ppat, RledBuilder};
+    use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, Ppat, RledBuilder};
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
     use nova_rsrc::fixture::ForkBuilder;
     use nova_rsrc::{Fork, ForkReader, ResType};
@@ -146,6 +148,33 @@ mod tests {
             Err(ImageError::Missing)
         );
         assert_eq!(data.frames(ImageKind::Pict, 128), Err(ImageError::Missing));
+    }
+
+    /// A 2x1 icon: red, then green masked out.
+    fn icon() -> Vec<u8> {
+        let ctab = Ctab {
+            device: false,
+            entries: vec![(0, [0xFFFF, 0, 0]), (1, [0, 0xFFFF, 0])],
+        };
+        Cicn::new(2, 1, 8, &ctab, &[0, 1], &[true, false]).bytes()
+    }
+
+    #[test]
+    fn an_icon_is_one_frame_with_its_mask_as_alpha() {
+        let data = store(&[(CICN, 18000, icon())]);
+        let frames = data.frames(ImageKind::Icon, 18000).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!((frames[0].width(), frames[0].height()), (2, 1));
+        assert_eq!(frames[0].pixel(0, 0), Some([255, 0, 0, 255]));
+        assert_eq!(frames[0].pixel(1, 0), Some([0, 0, 0, 0]));
+        assert_eq!(
+            data.frames(ImageKind::Icon, 18001),
+            Err(ImageError::Missing)
+        );
+        assert_eq!(
+            data.frames(ImageKind::Pict, 18000),
+            Err(ImageError::Missing)
+        );
     }
 
     #[test]

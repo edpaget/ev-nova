@@ -22,8 +22,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
-use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
-use nova_data::graphics::{PICT, RLED};
+use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
+use nova_data::graphics::{CICN, PICT, RLED};
 use nova_data::records::character::Character;
 use nova_data::records::dude::Dude;
 use nova_data::records::interface::Interface;
@@ -181,6 +181,15 @@ fn status_picture() -> Vec<u8> {
         .build()
 }
 
+/// A black 8 x 8 `cicn`: the Red Alert icon's first frame.
+fn alert_icon() -> Vec<u8> {
+    let ctab = Ctab {
+        device: false,
+        entries: vec![(0, [0, 0, 0])],
+    };
+    Cicn::new(8, 8, 8, &ctab, &[0; 64], &[true; 64]).bytes()
+}
+
 /// An independent `sÿst` holding stellar 128, with `düde` 128 at 100 % and
 /// one ship on average.
 fn system() -> Vec<u8> {
@@ -248,7 +257,8 @@ fn data() -> Rc<GameData> {
             Some(b"Default status bar"),
             &interface(),
         )
-        .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture())
+        .resource(CICN, 18000, Some(b"Red Alert"), &alert_icon());
     let file = OneFile(fork.build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }

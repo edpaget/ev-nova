@@ -22,6 +22,10 @@ pub enum SimSound {
     JumpBegan,
     /// A jump ended in the next system.
     Arrived,
+    /// The player became threatened: the Red Alert, `snd ` 370
+    /// (`_HandlePlayer` @0x68cdd-0x68cff; see
+    /// [`red_alert`](crate::red_alert)).
+    RedAlert,
     /// A `Q` set operator's message is shown in flight.
     ScriptMessage,
     /// A `P` set operator's sound plays: `exclusive`ly, as the one mission

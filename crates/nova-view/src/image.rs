@@ -17,6 +17,8 @@ pub enum ImageKind {
     },
     /// A `ppat` pixel pattern: one frame, drawn tiled.
     Pattern,
+    /// A `cicn` colour icon: one frame, its mask as alpha.
+    Icon,
 }
 
 /// One frame of one image resource: (resource type, ID, frame).
@@ -56,6 +58,16 @@ impl ImageKey {
     pub const fn pattern(id: i16) -> Self {
         Self {
             kind: ImageKind::Pattern,
+            id,
+            frame: 0,
+        }
+    }
+
+    /// `cicn` `id`.
+    #[must_use]
+    pub const fn icon(id: i16) -> Self {
+        Self {
+            kind: ImageKind::Icon,
             id,
             frame: 0,
         }
@@ -115,6 +127,19 @@ mod tests {
             }
         );
         assert_ne!(ImageKey::pattern(128), ImageKey::picture(128));
+    }
+
+    #[test]
+    fn an_icon_is_frame_zero_of_a_cicn() {
+        assert_eq!(
+            ImageKey::icon(18000),
+            ImageKey {
+                kind: ImageKind::Icon,
+                id: 18000,
+                frame: 0
+            }
+        );
+        assert_ne!(ImageKey::icon(18000), ImageKey::picture(18000));
     }
 
     #[test]
