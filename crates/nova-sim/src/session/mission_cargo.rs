@@ -138,6 +138,9 @@ impl Session {
         }
         self.pilot.cargo.clear();
         self.save_due = true;
+        // `_JettisonCargo`'s refresh of the blessing (@0x3e3b5; see the
+        // `ranks` module).
+        self.refresh_blessing();
         if self.landed.is_some() {
             return;
         }
@@ -221,7 +224,8 @@ impl Session {
 
     /// Whether the pickup's checks pass for the cargo of `mission` in
     /// `slot` (`_DoMissionCargoPickup` @0x98292): the ship's holds, then
-    /// the free space, for its tons. A refusal is shown.
+    /// the free space, for its tons. A refusal is shown; a pass refreshes
+    /// the blessing table.
     fn pickup_passes(&mut self, slot: u8, mission: MissionId) -> bool {
         let tons = self
             .pilot
@@ -233,7 +237,12 @@ impl Session {
             rules: &self.rules,
         };
         match pickup_checks().first_refusal(&facts, &mut NeverFires) {
-            Ok(()) => true,
+            Ok(()) => {
+                // `_DoMissionCargoPickup`'s refresh of the blessing, for a
+                // pickup that fits (@0x98316; see the `ranks` module).
+                self.refresh_blessing();
+                true
+            }
             Err(refusal) => {
                 self.show_text(
                     MissionTextKind::NoRoom,
@@ -584,6 +593,54 @@ mod tests {
         let mut session = accepted(&catalog);
         assert!(!session.pick_up_boarded_cargo(0), "PickupMode 1");
         assert!(!aboard(&session, 0));
+    }
+
+    /// Runs `K200`.
+    fn grant_blessing_rank(session: &mut Session) {
+        session.run_set(
+            &crate::control::SetExpr::parse("K200").expect("parses"),
+            &mut NeverFires,
+        );
+    }
+
+    #[test]
+    fn a_boarded_cargo_pickup_refreshes_the_blessing() {
+        use crate::session::ranks::tests::{blessed, blessing_rank};
+        let mut catalog = cargo_catalog(vec![round_trip(140, 2, 1)], vec![]);
+        catalog.ranks = vec![blessing_rank()];
+        let mut session = accepted(&catalog);
+        session.pilot.missions.get_mut(0).expect("held").cargo_tons = 21;
+        grant_blessing_rank(&mut session);
+        assert!(!session.pick_up_boarded_cargo(0), "no room");
+        assert!(!blessed(&session), "only a pickup that fits (@0x98316)");
+        session.pilot.missions.get_mut(0).expect("held").cargo_tons = 5;
+        assert!(session.pick_up_boarded_cargo(0));
+        assert!(blessed(&session));
+    }
+
+    #[test]
+    fn a_landing_cargo_pickup_refreshes_the_blessing() {
+        use crate::session::ranks::tests::{blessed, blessing_rank};
+        let mut catalog = cargo_catalog(vec![round_trip(140, 1, 1)], vec![]);
+        catalog.ranks = vec![blessing_rank()];
+        let mut session = accepted(&catalog);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        grant_blessing_rank(&mut session);
+        assert!(!blessed(&session));
+        let site = *session
+            .sites
+            .iter()
+            .find(|site| site.id == StellarId(129))
+            .expect("shown");
+        session.player.position = site.position;
+        session.player.velocity = Vec2::ZERO;
+        assert_eq!(land_now(&mut session), Ok(StellarId(129)));
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(aboard(&session, 0));
+        assert!(blessed(&session), "the pickup's, shared with boarding");
     }
 
     #[test]

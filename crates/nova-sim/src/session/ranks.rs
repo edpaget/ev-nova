@@ -50,6 +50,50 @@
 //! and [`RankUnaffiliatedGroup`](crate::rulebook::RuleKey::RankUnaffiliatedGroup)
 //! rules, makes no save due and plays no sound.
 //!
+//! **Blessing.** [`Session::blessing`] gives the ranks' blessing table
+//! ([`rank::blessing`], see [`rank`]'s **Blessing**), the ranks reaching
+//! governments as [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach)
+//! says, read when the table is asked. By the engine's reading of
+//! [`BlessingRefresh`](crate::rulebook::RuleKey::BlessingRefresh) it is
+//! built from the active ranks as the last refresh took them, never
+//! saved, at the original's calls of `_ResetPlayerPrecalcedValues`:
+//!
+//! - game entry (`_EnterGameFromMainScreen` @0x19ffb): [`Session::fly`],
+//!   for a load or a new pilot, and [`Session::begin`] after the first
+//!   `chär`'s `OnStart`, which the original runs before it (@0x1925e);
+//! - leaving a stellar (`_HandlePlayerDockRequest` @0x6709b): a take-off
+//!   after the stay's days and before the setup, and a gate exit before
+//!   the exit's setup;
+//! - a jump's arrival, after the days, the enter-system hook and the
+//!   setup (`_HandlePlayer` @0x6c51f);
+//! - a jettison (`_JettisonCargo` @0x3e3b5, and the jettison key's
+//!   @0x6fdaf after it);
+//! - the plunder dialog closing (`_DoPlunderDialog` @0x94a0b): an abort,
+//!   a failed capture, a self-destruct, a capture into the fleet and an
+//!   assignment, but not a boarding the system's change or setup ends;
+//! - a mission cargo pickup that fits (`_DoMissionCargoPickup` @0x98316),
+//!   whether a boarding or a landing makes it.
+//!
+//! *Ordering against the original.* The engine runs a take-off's, a gate
+//! exit's and an arrival's story subscriptions (the days', the
+//! explorations' and the take-off's) when the script next settles, after
+//! the refresh, where the original ran them before it. So each of those
+//! three also makes the refresh due again, and the first idle settling
+//! after it refreshes once more, before any frame is drawn. The hooks the
+//! original runs after its refresh never `K`: the enter-system hook,
+//! `_MissionHandlePlayerEnteredNewSystem`, only redraws mission-ship
+//! timers (@0x99f9a, @0x99fe0).
+//!
+//! The landing cargo refreshes (`_DoMissionCargoPickup` reached from a
+//! landing @0x9ee32, and `_MissionLandCargoCheck` @0x9eff9 after a
+//! `DumpCargoText`) need nothing of their own: while docked nothing reads
+//! the blessing, and the take-off refreshes before any reader. The
+//! pickup's refresh runs from a landing too, as boarding shares it. The
+//! onboard bomb's refresh (@0x69a05) is for whoever builds the bomb, and
+//! the debug keys' (@0x6dc6f, @0x6f08a) are left out with the keys. By
+//! the other reading the table is built from the active ranks as they
+//! are when it is asked.
+//!
 //! The pilot keeps its active ranks by ID. A pilot flown from a save
 //! naming a rank the data no longer has forgets it, so the next save
 //! leaves it out, as the original's `_LoadPilotData` drops an active flag
@@ -62,7 +106,9 @@ use crate::catalog::{GovtId, RankId};
 use crate::legal::Crime;
 use crate::news::MISC_STRINGS;
 use crate::person::NO_RANK;
-use crate::rank::{self, AND_STRING, Held, NO_RANK_STRING, PilotInfoRanks, PriceMults, RankNames};
+use crate::rank::{
+    self, AND_STRING, Blessing, Held, NO_RANK_STRING, PilotInfoRanks, PriceMults, RankNames,
+};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::session::Session;
 
@@ -119,6 +165,45 @@ impl Session {
             RuleSource::Engine => 1.0,
             RuleSource::Bible => self.price_mults().second,
         }
+    }
+
+    /// Takes the active ranks the blessing table is built from, as
+    /// `_ResetPlayerPrecalcedValues` builds it (see the module docs'
+    /// **Blessing**).
+    pub(super) fn refresh_blessing(&mut self) {
+        self.blessing_ranks.clone_from(&self.pilot.ranks);
+    }
+
+    /// The refresh of a take-off, a gate exit or a jump's arrival: now,
+    /// and again at the next idle settling (see the module docs'
+    /// **Blessing**).
+    pub(super) fn refresh_blessing_at_entry(&mut self) {
+        self.refresh_blessing();
+        self.blessing_due = true;
+    }
+
+    /// The second refresh of a take-off, a gate exit or a jump's arrival,
+    /// at the first idle settling after it (see the module docs'
+    /// **Blessing**).
+    pub(super) fn settle_blessing(&mut self) {
+        if std::mem::take(&mut self.blessing_due) {
+            self.refresh_blessing();
+        }
+    }
+
+    /// The ranks' blessing table (see [`rank::blessing`]), the ranks
+    /// reaching governments as the session's `rank_govt_reach` rule reads.
+    /// By the engine's reading of `blessing_refresh` it is built from the
+    /// ranks the last refresh took; by the other, from the active ranks
+    /// now.
+    #[must_use]
+    pub fn blessing(&self) -> Blessing {
+        let reach = self.rules.source_for(RuleKey::RankGovtReach);
+        let active = match self.rules.source_for(RuleKey::BlessingRefresh) {
+            RuleSource::Engine => &self.blessing_ranks,
+            RuleSource::Bible => &self.pilot.ranks,
+        };
+        rank::blessing(&self.ranks, active, &self.govts, reach)
     }
 
     /// The pilot's ranks and the recent rank, as `K` and `L` change them.
@@ -220,18 +305,18 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::catalog::{OutfitId, OutfitRecord, RankId, RankRecord, ShipId, ShipRecord};
+pub(super) mod tests {
+    use crate::catalog::{GovtId, OutfitId, OutfitRecord, RankId, RankRecord, ShipId, ShipRecord};
     use crate::chance::NeverFires;
     use crate::control::SetExpr;
     use crate::outfitter::OutfitFlags;
     use crate::pilot::Pilot;
-    use crate::rank::{SWEEP_GOVT_ON_ACTIVATE, SWEEP_GOVT_ON_DEACTIVATE};
+    use crate::rank::{BLESSES_LANDING, Blessed, SWEEP_GOVT_ON_ACTIVATE, SWEEP_GOVT_ON_DEACTIVATE};
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::save;
     use crate::session::Session;
     use crate::shipyard::ShipFlags3;
-    use crate::testkit::{FakePilotCatalog, Scripted, catalog, land_now, outfit, rank, ship};
+    use crate::testkit::{FakePilotCatalog, Scripted, catalog, jump, land_now, outfit, rank, ship};
 
     fn set(text: &str) -> SetExpr {
         SetExpr::parse(text).expect("parses")
@@ -422,7 +507,7 @@ mod tests {
             name: "Commander".to_owned(),
             conv_name: "Cmdr".to_owned(),
             short_name: "Cdr".to_owned(),
-            affil_govt: Some(crate::catalog::GovtId(128)),
+            affil_govt: Some(GovtId(128)),
             ..rank(128)
         }
     }
@@ -851,5 +936,197 @@ mod tests {
             land_again(&mut session, &catalog);
             assert_eq!(prices(&mut session), UNRANKED, "{timing:?}");
         }
+    }
+
+    // Blessing.
+
+    /// Rank 200 of government 140, blessing landing.
+    pub(in crate::session) fn blessing_rank() -> RankRecord {
+        RankRecord {
+            affil_govt: Some(GovtId(140)),
+            flags: BLESSES_LANDING,
+            ..rank(200)
+        }
+    }
+
+    /// Whether `session`'s blessing has government 140 bless landing.
+    pub(in crate::session) fn blessed(session: &Session) -> bool {
+        session
+            .blessing()
+            .blesses(Some(GovtId(140)), Blessed::Landing)
+    }
+
+    /// [`catalog`] with [`blessing_rank`].
+    fn blessing_catalog() -> FakePilotCatalog {
+        FakePilotCatalog {
+            ranks: vec![blessing_rank()],
+            ..catalog()
+        }
+    }
+
+    /// Runs `text` as a set expression.
+    fn run(session: &mut Session, text: &str) {
+        session.run_set(&set(text), &mut Scripted::default());
+    }
+
+    /// The default rule set with `blessing_refresh` read live.
+    fn live() -> Rulebook {
+        reading(RuleKey::BlessingRefresh, RuleSource::Bible)
+    }
+
+    #[test]
+    fn by_the_engine_a_rank_granted_in_space_blesses_only_from_the_next_refresh() {
+        let catalog = blessing_catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        assert!(!blessed(&session));
+        run(&mut session, "K200");
+        assert!(!blessed(&session), "taken at the last refresh");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(!blessed(&session), "a settling is no refresh");
+        session.jettison_cargo(false, &mut NeverFires);
+        assert!(blessed(&session), "@0x3e3b5");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_rank_granted_in_space_blesses_at_once() {
+        let mut session = Session::start(&blessing_catalog())
+            .expect("starts")
+            .with_rules(live());
+        run(&mut session, "K200");
+        assert!(blessed(&session));
+        run(&mut session, "L200");
+        assert!(!blessed(&session));
+    }
+
+    #[test]
+    fn by_the_engine_a_rank_lost_in_space_still_blesses_until_the_next_refresh() {
+        let catalog = blessing_catalog();
+        let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.ranks.insert(RankId(200));
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert!(blessed(&session), "flying refreshes (@0x19ffb)");
+        run(&mut session, "L200");
+        assert!(blessed(&session));
+        session.jettison_cargo(true, &mut NeverFires);
+        assert!(!blessed(&session));
+    }
+
+    #[test]
+    fn the_blessing_reads_the_sessions_rank_govt_reach() {
+        let mut catalog = blessing_catalog();
+        catalog.govts = price_govts()
+            .into_iter()
+            .map(|record| crate::catalog::GovtRecord {
+                id: GovtId(record.id.0 + 12),
+                ..record
+            })
+            .collect();
+        let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.ranks.insert(RankId(200));
+        let ally = |session: &Session| {
+            session
+                .blessing()
+                .blesses(Some(GovtId(141)), Blessed::Landing)
+        };
+        let session = Session::fly(&catalog, pilot.clone()).expect("flies");
+        assert!(ally(&session), "141 is 140's ally");
+        let own = Session::fly(&catalog, pilot)
+            .expect("flies")
+            .with_rules(reading(RuleKey::RankGovtReach, RuleSource::Bible));
+        assert!(!ally(&own));
+        assert!(blessed(&own));
+    }
+
+    #[test]
+    fn a_take_off_refreshes_the_blessing() {
+        let catalog = blessing_catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        run(&mut session, "K200");
+        assert!(!blessed(&session), "landing is no refresh");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert!(blessed(&session), "@0x6709b");
+    }
+
+    #[test]
+    fn a_rank_granted_before_the_settling_after_a_take_off_counts() {
+        let catalog = blessing_catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        land_now(&mut session).expect("lands");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        run(&mut session, "K200");
+        assert!(!blessed(&session));
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(
+            blessed(&session),
+            "as the take-off's subscriptions ran first"
+        );
+        run(&mut session, "L200");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(blessed(&session), "only the first settling refreshes");
+    }
+
+    #[test]
+    fn a_jump_arrival_refreshes_the_blessing() {
+        let catalog = blessing_catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        run(&mut session, "K200");
+        assert!(!blessed(&session));
+        jump(&mut session, &catalog, 131).expect("arrives");
+        assert!(blessed(&session), "@0x6c51f");
+    }
+
+    #[test]
+    fn a_gate_exit_refreshes_the_blessing() {
+        use crate::gate::GateKind;
+        use crate::session::gate_follow::tests::{exit_gate, following, gated};
+        for kind in [GateKind::Hypergate, GateKind::Wormhole] {
+            let mut catalog = gated(following(0, 0), 0);
+            catalog.ranks = vec![blessing_rank()];
+            let mut session = Session::start(&catalog).expect("starts");
+            run(&mut session, "K200");
+            assert!(!blessed(&session), "{kind:?}");
+            exit_gate(&mut session, &catalog, kind, &mut NeverFires);
+            assert!(blessed(&session), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn flying_a_pilot_refreshes_the_blessing_and_begin_counts_on_starts_rank() {
+        let catalog = blessing_catalog();
+        let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.ranks.insert(RankId(200));
+        let pilot = save::decode(&save::encode(&pilot)).expect("loads");
+        assert!(blessed(&Session::fly(&catalog, pilot).expect("flies")));
+        let starting = FakePilotCatalog {
+            character: Ok(crate::catalog::CharacterStart {
+                on_start: crate::control::Script::parse("K200"),
+                ..catalog.character.clone().expect("a chär")
+            }),
+            ..blessing_catalog()
+        };
+        let mut session = Session::start(&starting).expect("starts");
+        assert!(!blessed(&session));
+        session.begin(&starting, &mut Scripted::default());
+        assert!(blessed(&session), "OnStart runs before @0x19ffb");
+    }
+
+    #[test]
+    fn closing_the_plunder_dialog_refreshes_the_blessing() {
+        use crate::board::{Take, Taken};
+        let mut catalog = crate::session::tests::boardable();
+        catalog.ranks = vec![blessing_rank()];
+        let mut session = crate::session::tests::aboard(&catalog);
+        run(&mut session, "K200");
+        assert!(!blessed(&session));
+        assert_eq!(
+            crate::session::tests::take(&mut session, Take::Abort, &[]).0,
+            Taken::Aborted
+        );
+        assert!(blessed(&session), "@0x94a0b");
     }
 }

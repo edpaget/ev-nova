@@ -146,6 +146,9 @@ impl Session {
         // `_PlayGame`'s refresh, before its rebuild (@0x457e9, @0x457ee):
         // `_DoNewPilot`'s, before the `OnStart`, was the flight's.
         self.refresh_galaxy(catalog);
+        // Game entry's refresh of the blessing comes after `_DoNewPilot`'s
+        // `OnStart` (@0x1925e, @0x19ffb; see the `ranks` module).
+        self.refresh_blessing();
         // `_DoNewPilot`'s rebuild point, after its `OnStart` (@0x1937f).
         self.rebuild_stellars();
     }

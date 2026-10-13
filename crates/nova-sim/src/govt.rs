@@ -179,6 +179,13 @@ impl Governments {
         })
     }
 
+    /// `govt`'s `Require`: none for an independent or a government the
+    /// table does not hold.
+    #[must_use]
+    pub fn require(&self, govt: Option<GovtId>) -> u64 {
+        self.record(govt).map_or(0, |record| record.require)
+    }
+
     /// The odds `govt`'s ships still take on, as a fraction (see the
     /// module docs).
     #[must_use]
@@ -637,6 +644,17 @@ mod tests {
         );
         assert_eq!(govts.penalty(None, Crime::Kill), 0);
         assert_eq!(govts.penalty(UNKNOWN, Crime::Kill), 0);
+    }
+
+    #[test]
+    fn require_is_none_for_an_independent_or_unknown_government() {
+        let govts = Governments::new([GovtRecord {
+            require: 0x0100_0000_0004,
+            ..govt(128)
+        }]);
+        assert_eq!(govts.require(FED), 0x0100_0000_0004);
+        assert_eq!(govts.require(None), 0, "independent");
+        assert_eq!(govts.require(UNKNOWN), 0);
     }
 
     #[test]

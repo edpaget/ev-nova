@@ -858,6 +858,7 @@ impl CombatCatalog for GameData {
                     scan_mask: record.scan_mask.bits(),
                     scan_fine: record.scan_fine,
                     news_pic: record.news_pic,
+                    require: record.require.bits(),
                 })
             })
             .collect()
@@ -2965,7 +2966,20 @@ mod tests {
         bytes[0x32..0x34].copy_from_slice(&0x8004_u16.to_be_bytes());
         bytes[0x34..0x3F].copy_from_slice(b"Federation\0");
         put_i16s(&mut bytes, 0xAE, &[9001]);
+        bytes[0x54..0x5C].copy_from_slice(&0x8000_0000_0000_0021_u64.to_be_bytes());
         bytes
+    }
+
+    #[test]
+    fn a_govt_record_carries_its_require() {
+        let data = store(&[(Govt::TYPE, 128, govt_bytes())]);
+        assert_eq!(
+            data.governments()
+                .iter()
+                .map(|record| record.require)
+                .collect::<Vec<_>>(),
+            [0x8000_0000_0000_0021]
+        );
     }
 
     #[test]
@@ -2996,6 +3010,7 @@ mod tests {
             scan_mask: 0x8004,
             scan_fine: -5,
             news_pic: 9001,
+            require: 0x8000_0000_0000_0021,
         };
         assert_eq!(
             data.governments(),

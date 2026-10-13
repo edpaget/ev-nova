@@ -1111,6 +1111,10 @@ pub struct GovtRecord {
     /// governs (`gövt` +0xAE, kept raw; `_DoNewsDialog` reads it at
     /// runtime +0x44).
     pub news_pic: i16,
+    /// Its `Require`: the 64 bits a pilot must contribute to land at a
+    /// stellar it governs (`gövt` +0x54; `_PlayerMeetsRequirements`
+    /// @0x776f, read by `_HandlePlayerDockRequest` @0x67940-0x6796b).
+    pub require: u64,
 }
 
 /// The game data a session's ships fight with: the `wëap`s, each

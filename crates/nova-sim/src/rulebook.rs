@@ -122,6 +122,8 @@
 //! | [`VisibilityRefresh`](RuleKey::VisibilityRefresh) | `visibility_refresh` | `Visibility` is evaluated at a landing (@0xa175f, @0xa1af2), a jump's arrival before its days (@0x6bf3f), a new pilot after its `OnStart`, and a load (see [`story`](crate::story)) | after every settled script as well\*\*\*\*\*\*\*\* |
 //! | [`CronZeroDurationHoldoff`](RuleKey::CronZeroDurationHoldoff) | `cron_zero_duration_holdoff` | a `Duration` 0 crön's pre-holdoff end runs `OnStart` and `OnEnd` and writes nothing more (`_CronEventHandler` @0x387a8-0x387c1), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and ends as `cron_post_holdoff` says (see [`cron`](crate::cron)) | `OnEnd` once, then the `PostHoldoff`: **the default — a deliberate departure from the original**†††††††† |
 //! | [`CronPostHoldoff`](RuleKey::CronPostHoldoff) | `cron_post_holdoff` | a running crön's end, with `PostHoldoff` above 0, loads its `PreHoldoff` into the holdoff and leaves its days (@0x387f1-0x387f6 → 0x388c5): it re-runs, or with `PreHoldoff` 0 its `OnEnd` runs every day for good and its news stays (see [`cron`](crate::cron)) | `PostHoldoff` days with the days at -1, then inactive: **the default — a deliberate departure from the original**†††††††† |
+//! | [`BlessingRefresh`](RuleKey::BlessingRefresh) | `blessing_refresh` | the blessing table is taken at the original's refresh points (`_ResetPlayerPrecalcedValues` @0xc8be-0xc981): game entry, take-off and the gate exits, a jump's arrival, a mission cargo pickup, a jettison and the plunder dialog closing, so a `K` or `L` in space blesses or stops blessing only from the next one (see [`rank`](crate::rank)) | live, from the active ranks\* |
+//! | [`BlessingLanding`](RuleKey::BlessingLanding) | `blessing_landing` | `Flags` 0x0200 clears a governed stellar past both its `MinStatus` and its government's `Require` (`_HandlePlayerDockRequest` @0x67940-0x67a05; see [`landing`](crate::landing)) | past `MinStatus` only, so `Require` still refuses |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -135,8 +137,8 @@
 //! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance`,
-//! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`
-//! or `comm_quote`
+//! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
+//! `blessing_refresh` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -1521,6 +1523,20 @@ rule_keys! {
     /// end: `PostHoldoff` days with the days at -1. The other reading is
     /// the default (see [`cron`](crate::cron)).
     CronPostHoldoff => "cron_post_holdoff",
+    /// When the ranks' blessing table is taken: by the engine, at the
+    /// original's refresh points (`_ResetPlayerPrecalcedValues`): game
+    /// entry, take-off and the gate exits, a jump's arrival, a mission
+    /// cargo pickup, a jettison and the plunder dialog closing, so a `K`
+    /// or `L` in space blesses, or stops blessing, only from the next one;
+    /// by the other reading, live, from the active ranks (see
+    /// [`rank`](crate::rank) and the session's `ranks` module).
+    BlessingRefresh => "blessing_refresh",
+    /// What a rank's `Flags` 0x0200 clears a governed stellar past: by the
+    /// engine, both its `MinStatus` and its government's `Require`
+    /// (`_HandlePlayerDockRequest` @0x67940-0x67a05); by the other
+    /// reading, the Bible's, its `MinStatus` only, so an unmet `Require`
+    /// still refuses (see [`landing`](crate::landing)).
+    BlessingLanding => "blessing_landing",
 }
 
 impl RuleKey {
@@ -1736,7 +1752,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(25),
+            RuleKey::ALL.iter().rev().nth(27),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1776,7 +1792,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(24),
+            RuleKey::ALL.iter().rev().nth(26),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1798,7 +1814,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(23),
+            RuleKey::ALL.iter().rev().nth(25),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1823,7 +1839,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(22),
+            RuleKey::ALL.iter().rev().nth(24),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1849,7 +1865,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(21),
+            RuleKey::ALL.iter().rev().nth(23),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1869,7 +1885,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(20),
+            RuleKey::ALL.iter().rev().nth(22),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1889,7 +1905,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(19),
+            RuleKey::ALL.iter().rev().nth(21),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1909,7 +1925,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(16),
+            RuleKey::ALL.iter().rev().nth(18),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -1923,7 +1939,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(17),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -1936,7 +1952,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(14), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(16), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -1947,7 +1963,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(18),
+            RuleKey::ALL.iter().rev().nth(20),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -1965,7 +1981,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -1982,7 +1998,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(13),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -1999,10 +2015,10 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(9), Some(&RuleKey::SalaryCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(11), Some(&RuleKey::SalaryCap));
     }
 
     #[test]
@@ -2017,7 +2033,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -2036,15 +2052,15 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::RankPriceScope)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::RankTradeIn)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::RankPriceTiming)
         );
     }
@@ -2061,7 +2077,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::RankCrimeReach)
         );
     }
@@ -2075,11 +2091,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(5),
             Some(&RuleKey::ColocatedResolution)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::VisibilityRefresh)
         );
     }
@@ -2100,10 +2116,28 @@ mod tests {
             );
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::CronZeroDurationHoldoff)
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::CronPostHoldoff));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(2),
+            Some(&RuleKey::CronPostHoldoff)
+        );
+    }
+
+    #[test]
+    fn the_blessing_rules_are_found_by_their_keys_and_read_the_engine() {
+        assert_eq!(RuleKey::BlessingRefresh.key(), "blessing_refresh");
+        assert_eq!(RuleKey::BlessingLanding.key(), "blessing_landing");
+        for rule in [RuleKey::BlessingRefresh, RuleKey::BlessingLanding] {
+            assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
+            assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        }
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::BlessingRefresh)
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::BlessingLanding));
     }
 
     #[test]
@@ -2205,7 +2239,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(27),
+            RuleKey::ALL.iter().rev().nth(29),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -2366,7 +2400,9 @@ mod tests {
                 RuleKey::ColocatedResolution,
                 RuleKey::VisibilityRefresh,
                 RuleKey::CronZeroDurationHoldoff,
-                RuleKey::CronPostHoldoff
+                RuleKey::CronPostHoldoff,
+                RuleKey::BlessingRefresh,
+                RuleKey::BlessingLanding
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");

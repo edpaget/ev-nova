@@ -118,7 +118,8 @@
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
 //! - [`landing`]: what the land key does, [`land_or_select`]: request
 //!   clearance, then land (or, over a hypergate or wormhole, enter it);
-//!   whether the ship can land, [`check_landing`],
+//!   whether traffic control clears the pilot, [`cleared`]; whether the ship
+//!   can land, [`check_landing`],
 //!   each [`LandingRefusal`] in the order it applies; and the
 //!   [`Service`]s a stellar's flags offer.
 //! - [`legal`]: the player's legal record, kept with each government and
@@ -354,8 +355,9 @@ pub use hyperspace::{
 };
 pub use landing::{
     Clearance, LandOutcome, LandingReach, LandingRefusal, NO_FRAME_REACH, OUT_OF_RANGE_FRAME_WIDTH,
-    REACH_PER_WIDTH, Service, StellarShown, TypeWidth, UNLOADED_TYPE_WIDTH, check_landing,
-    is_landable, land_or_select, landing_radius, landing_reach, nearest_landable, services,
+    REACH_PER_WIDTH, Service, Standing, StellarShown, TypeWidth, UNLOADED_TYPE_WIDTH,
+    check_landing, cleared, is_landable, land_or_select, landing_radius, landing_reach,
+    nearest_landable, services,
 };
 pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};

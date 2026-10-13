@@ -776,6 +776,14 @@ pub struct Session {
     /// opens, `_DoPortDialog`'s inputs (see the `ranks` module). Never
     /// saved, as `_priceFluxMult` lives in memory only.
     port_ranks: ranks::PortRanks,
+    /// The active ranks as the last refresh of the blessing table took
+    /// them (see the `ranks` module). Never saved, as the original's
+    /// table lives in memory only.
+    blessing_ranks: BTreeSet<RankId>,
+    /// Whether the next idle settling refreshes the blessing table again:
+    /// set by a take-off, a gate exit and a jump's arrival (see the
+    /// `ranks` module).
+    blessing_due: bool,
     /// What the screens show of each `mïsn`, read when the session
     /// starts (see the `mission_screens` module).
     mission_texts: BTreeMap<MissionId, MissionTexts>,
@@ -1030,6 +1038,8 @@ impl Session {
             ranks,
             recent_rank: None,
             port_ranks: ranks::PortRanks::default(),
+            blessing_ranks: BTreeSet::new(),
+            blessing_due: false,
             mission_texts: catalog
                 .mission_texts()
                 .into_iter()
@@ -1078,6 +1088,9 @@ impl Session {
             session.open_port_prices();
             session.raise(StoryEvent::Landed { stellar });
         }
+        // Game entry's refresh of the blessing (`_EnterGameFromMainScreen`
+        // @0x19ffb; see the `ranks` module).
+        session.refresh_blessing();
         Ok(session)
     }
 
@@ -2207,6 +2220,10 @@ impl Session {
         }
         self.jumped_from = Some(from);
         self.enter_system(Entry::Jump { hops }, entered, catalog, catalog, chance);
+        // The arrival's refresh of the blessing, after the days, the
+        // enter-system hook and the setup (@0x6c51f; see the `ranks`
+        // module).
+        self.refresh_blessing_at_entry();
         Some(self.pilot.system)
     }
 
@@ -2389,7 +2406,7 @@ impl Session {
             self.nav_target,
             &self.player,
             &self.sites,
-            |site| self.landing_record(site),
+            |site| self.landing_record(site) >= site.min_status,
             |site| self.landing_reach(site),
         )?;
         match outcome {
@@ -2571,8 +2588,10 @@ impl Session {
             }
         };
         // A gate's exit joins the take-off's path before its seed
-        // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f).
+        // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f), and its refresh
+        // of the blessing (@0x6709b; see the `ranks` module).
         self.arm_strength_timer(chance);
+        self.refresh_blessing_at_entry();
         self.exit_gate_slots(kind, catalog, &mut &mut *chance);
         let entered = Arrival {
             system,
@@ -2715,6 +2734,9 @@ impl Session {
         // before both (@0x634df-0x6353c).
         self.restart_every_aux(&mut &mut *chance);
         self.arm_strength_timer(chance);
+        // The dock request's refresh of the blessing, after the stay's
+        // days and before the setup (@0x6709b; see the `ranks` module).
+        self.refresh_blessing_at_entry();
         self.populate(catalog, chance);
         self.sounds.push(SimSound::TookOff);
         self.save_due = true;
@@ -3778,7 +3800,7 @@ impl Session {
             return Taken::Nothing;
         };
         if take == Take::Abort || !self.npcs().iter().any(|npc| npc.id == aboard.npc) {
-            self.aboard = None;
+            self.close_plunder();
             return Taken::Aborted;
         }
         if !aboard.view().offers(take) {
@@ -3901,7 +3923,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Taken {
         if !rule.captures(aboard.plunder.odds, chance) {
-            self.aboard = None;
+            self.close_plunder();
             return Taken::CaptureFailed;
         }
         if chance.below(CAPTURE_TRIP) == 0 {
@@ -3917,7 +3939,7 @@ impl Session {
             self.aboard = Some(aboard);
             return Taken::Captured;
         }
-        self.aboard = None;
+        self.close_plunder();
         self.ship_hook(aboard.ship, ShipHook::Capture, chance);
         self.join_fleet(aboard.npc);
         Taken::Escorted
@@ -3932,7 +3954,15 @@ impl Session {
                 npc.reserves.armor.now = 0.0;
             }
         }
+        self.close_plunder();
+    }
+
+    /// Closes the plunder dialog: the boarding is over, and the blessing
+    /// table is refreshed, as `_DoPlunderDialog`'s only exit does
+    /// (@0x94a0b; see the `ranks` module).
+    fn close_plunder(&mut self) {
         self.aboard = None;
+        self.refresh_blessing();
     }
 
     /// NPC `id`, captured, joins the fleet where it is: no longer its
@@ -4038,7 +4068,7 @@ impl Session {
     /// "Use As Escort" leaves it as it is.
     pub fn assign(&mut self, choice: Assignment, chance: &mut dyn Chance) -> Option<Assigned> {
         let aboard = self.aboard.filter(|aboard| aboard.captured)?;
-        self.aboard = None;
+        self.close_plunder();
         let npc = self
             .npcs()
             .iter()
@@ -4694,7 +4724,7 @@ mod tests {
             crate::landing::check_landing(
                 &flying,
                 &planet(128, 30.0, -40.0),
-                |_| 0,
+                |_| true,
                 crate::landing::LandingReach::Box(175.0)
             )
             .map(|_| StellarId(128))
