@@ -1130,6 +1130,49 @@ pub(super) mod tests {
         assert!(blessed(&session), "@0x94a0b");
     }
 
+    #[test]
+    fn every_other_exit_of_the_plunder_dialog_refreshes_the_blessing() {
+        use crate::board::{Assigned, Assignment, Take, Taken};
+        use crate::session::tests::{aboard, boardable, take};
+        use crate::testkit::Draws;
+        /// An exit's name, and how the test takes it.
+        type Exit = (&'static str, fn(&mut Session));
+        let mut catalog = boardable();
+        catalog.ranks = vec![blessing_rank()];
+        let exits: [Exit; 4] = [
+            ("a failed capture", |session| {
+                assert_eq!(take(session, Take::Capture, &[44]).0, Taken::CaptureFailed);
+            }),
+            ("a tripped self-destruct", |session| {
+                assert_eq!(take(session, Take::Capture, &[43, 0]).0, Taken::Tripped);
+            }),
+            ("a capture straight into the fleet", |session| {
+                for record in &mut session.ships {
+                    if record.id == ShipId(128) {
+                        record.crew = 0;
+                    }
+                }
+                assert_eq!(take(session, Take::Capture, &[43, 1]).0, Taken::Escorted);
+            }),
+            ("an assignment", |session| {
+                assert_eq!(take(session, Take::Capture, &[43, 1]).0, Taken::Captured);
+                assert!(!blessed(session), "a capture awaiting assignment");
+                assert_eq!(
+                    session.assign(Assignment::Escort, &mut Draws::of(&[])),
+                    Some(Assigned::Escort)
+                );
+            }),
+        ];
+        for (exit, close) in exits {
+            let mut session = aboard(&catalog);
+            run(&mut session, "K200");
+            assert!(!blessed(&session), "{exit}");
+            close(&mut session);
+            assert_eq!(session.boarding(), None, "{exit}");
+            assert!(blessed(&session), "{exit}: @0x94a0b");
+        }
+    }
+
     // Landing.
 
     use crate::landing::{Clearance, LandOutcome, LandingRefusal};
@@ -1254,12 +1297,19 @@ pub(super) mod tests {
         );
     }
 
-    #[test]
-    fn a_pilot_is_cleared_at_its_missions_stellar_whatever_its_record() {
+    /// A new pilot under [`guarded`]`(0x4, 0)` who took mission 140, of
+    /// these `TravelStel` and `ReturnStel`, at planet 129, its slot then
+    /// failed as `failed` says, flown back over planet 128.
+    fn on_mission(
+        travel_stel: i16,
+        return_stel: i16,
+        failed: Option<crate::mission::FailedBy>,
+    ) -> Session {
         let mut catalog = guarded(0x4, 0);
         catalog.missions = vec![crate::catalog::MissionRecord {
             avail_stel: 129,
-            travel_stel: 128,
+            travel_stel,
+            return_stel,
             ..crate::testkit::mission(140)
         }];
         let mut session = holding(&catalog, Rulebook::default(), &[]);
@@ -1279,11 +1329,72 @@ pub(super) mod tests {
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
         let _ = session.settle_script(&catalog, &mut NeverFires);
+        let missions = &mut session.pilot.missions;
+        for slot in missions.holding(crate::catalog::MissionId(140)) {
+            missions.get_mut(slot).expect("held").failed = failed;
+        }
         at(&mut session, 0);
+        session
+    }
+
+    /// The travel and return stellars of `session`'s missions.
+    fn stops(session: &Session) -> Vec<[Option<i16>; 2]> {
+        session
+            .pilot()
+            .missions()
+            .iter()
+            .map(|(_, active)| {
+                [active.destination, active.return_to].map(|stop| stop.map(|stop| stop.stellar.0))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_pilot_is_cleared_at_its_missions_stellar_whatever_its_record() {
+        for (travel, back, why) in [
+            (128, 129, "travel stellar, @0x679aa"),
+            (129, 128, "return stellar, @0x679b0"),
+        ] {
+            let mut session = on_mission(travel, back, None);
+            assert_eq!(stops(&session), [[Some(travel), Some(back)]], "{why}");
+            assert_eq!(
+                press_twice(&mut session),
+                [Ok(selected(Clearance::Granted)), LANDED],
+                "{why}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_missions_stellar_still_clears_the_pilot() {
+        use crate::mission::FailedBy;
+        for failed in [FailedBy::Quick, FailedBy::Marked] {
+            for (travel, back) in [(128, 129), (129, 128)] {
+                let mut session = on_mission(travel, back, Some(failed));
+                assert_eq!(stops(&session), [[Some(travel), Some(back)]]);
+                assert_eq!(
+                    press_twice(&mut session),
+                    [Ok(selected(Clearance::Granted)), LANDED],
+                    "{failed:?} ({travel}, {back}): no failure test in @0x67996-0x679c5"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_mission_elsewhere_does_not_clear_the_pilot() {
+        let mut session = on_mission(129, 129, None);
+        assert_eq!(stops(&session), [[Some(129), Some(129)]]);
         assert_eq!(
             press_twice(&mut session),
-            [Ok(selected(Clearance::Granted)), LANDED],
-            "@0x67977"
+            [
+                Ok(selected(Clearance::Denied)),
+                Err(LandingRefusal::Denied {
+                    stellar: crate::catalog::StellarId(128),
+                    station: false,
+                    min_status: 32767,
+                })
+            ]
         );
     }
 
