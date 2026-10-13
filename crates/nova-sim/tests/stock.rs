@@ -2973,8 +2973,8 @@ fn the_shuttles_fee_and_wage_are_nova_hires() {
     let earth = stellar_site(&data, 128);
     assert_eq!((viking.tech_level, earth.tech_level), (4, 7));
     let nova = NovaHire::default();
-    assert_eq!(nova.fee(shuttle, &viking), 970);
-    assert_eq!(nova.fee(shuttle, &earth), 1000);
+    assert_eq!(nova.fee(shuttle, &viking, 1.0), 970);
+    assert_eq!(nova.fee(shuttle, &earth, 1.0), 1000);
     assert_eq!(nova.wage(shuttle), 100);
     let heavy = ships
         .iter()

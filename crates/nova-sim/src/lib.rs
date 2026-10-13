@@ -109,8 +109,9 @@
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`hire`]: hiring escorts in the bar: which ships are for hire today
 //!   ([`HireList`], [`HireRow`], [`HireRefusal`]), the [`HireTerms`] port
-//!   with Nova's [`NovaHire`] fee and daily wage ([`price_flux`]), the
-//!   [`ControlBits`] port a ship's `Availability` goes through, what a
+//!   with Nova's [`NovaHire`] fee and daily wage, [`price_flux`] (the
+//!   original's price flux under the ranks' multiplier, which the
+//!   shipyard shares), the [`ControlBits`] port a ship's `Availability` goes through, what a
 //!   hire did
 //!   ([`Hired`]), and the escorts who defect unpaid ([`PayNote`]).
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along

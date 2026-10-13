@@ -934,7 +934,7 @@ fn a_take_off_pays_a_days_wages_unless_the_settings_choose_the_other_reading() {
 struct Sevens;
 
 impl nova_sim::HireTerms for Sevens {
-    fn fee(&self, _ship: &nova_sim::ShipRecord, _site: &nova_sim::LandingSite) -> i64 {
+    fn fee(&self, _ship: &nova_sim::ShipRecord, _site: &nova_sim::LandingSite, _mult: f32) -> i64 {
         7
     }
 
@@ -942,6 +942,7 @@ impl nova_sim::HireTerms for Sevens {
         &self,
         _ship: &nova_sim::ShipRecord,
         _site: &nova_sim::LandingSite,
+        _mult: f32,
         _cash: i64,
     ) -> i64 {
         7

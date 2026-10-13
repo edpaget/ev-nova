@@ -11005,11 +11005,11 @@ mod tests {
     struct Sevens;
 
     impl HireTerms for Sevens {
-        fn fee(&self, _ship: &ShipRecord, _site: &LandingSite) -> i64 {
+        fn fee(&self, _ship: &ShipRecord, _site: &LandingSite, _mult: f32) -> i64 {
             7
         }
 
-        fn charge(&self, _ship: &ShipRecord, _site: &LandingSite, _cash: i64) -> i64 {
+        fn charge(&self, _ship: &ShipRecord, _site: &LandingSite, _mult: f32, _cash: i64) -> i64 {
             7
         }
 
