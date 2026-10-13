@@ -151,3 +151,19 @@ fn the_status_icons_decode_and_the_red_alerts_two_frames_match() {
     let double_time = size(20000);
     assert!(double_time.0 > 0, "cicn 20000 is {double_time:?}");
 }
+
+#[test]
+fn the_target_bracket_icons_decode_as_16_pixel_squares() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let first = nova_view::flight::brackets::NAV_CICN;
+    for id in first..first + 24 {
+        let frames = data
+            .frames(ImageKind::Icon, id)
+            .unwrap_or_else(|error| panic!("cicn {id}: {error:?}"));
+        let sizes: Vec<(u32, u32)> = frames.iter().map(|f| (f.width(), f.height())).collect();
+        assert_eq!(sizes, [(16, 16)], "cicn {id}");
+    }
+}

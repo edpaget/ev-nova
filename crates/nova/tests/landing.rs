@@ -12,6 +12,8 @@
 //! port, landing and Leave play their sounds and the music follows the
 //! screen.
 
+mod bracket_art;
+
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -213,10 +215,8 @@ fn game_data(y: i16) -> Rc<GameData> {
         .iter()
         .fold(ForkBuilder::new(), |fork, (ty, id, name, data)| {
             fork.resource(*ty, *id, *name, data)
-        })
-        .build()
-        .bytes;
-    let file = OneFile(fork);
+        });
+    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 

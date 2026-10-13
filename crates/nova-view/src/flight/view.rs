@@ -358,6 +358,7 @@ use nova_sim::{
 };
 
 use super::alert;
+use super::brackets;
 use super::cadence::{Drawn, HudCadence, retake_target};
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
 use super::effects::{Dying, Effects, Scene};
@@ -3351,18 +3352,35 @@ impl<C> FlightView<C> {
         (shown.x - now.x, shown.y - now.y)
     }
 
-    /// Draws the brackets round the target, where it is drawn.
-    fn draw_brackets(&self, list: &mut DrawList, camera: &Camera) {
-        let Some(npc) = self.session.as_ref().ok().and_then(Session::target) else {
+    /// Draws the brackets round the nav target, then those round the
+    /// ship target, the session's ([`Session::nav_brackets`],
+    /// [`Session::target_brackets`]), each centred where its sprite is
+    /// drawn (see the `brackets` module). A stellar whose sheet can't be
+    /// read is bracketed as one with no sprite; a ship's as its crossed
+    /// box.
+    fn draw_brackets(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
+        let Ok(session) = &self.session else {
             return;
         };
-        let (at, _) = self.shown_npc(npc);
-        let size = match self.npc_sheets.get(&npc.ship) {
-            Some(Ok(sheet)) => sheet.frame_width.max(sheet.frame_height) as f32,
-            _ => PLACEHOLDER_SIZE,
-        };
-        let standing = target::standing(npc);
-        target::draw_brackets(list, camera.world_to_screen(at), size, standing);
+        if let Some(nav) = session.nav_brackets()
+            && let Some(stellar) = scene.stellars().iter().find(|s| s.id == nav.stellar)
+        {
+            let sprite = stellar.drawn().as_ref().ok();
+            let sprite = sprite.map(|sheet| (sheet.frame_width, sheet.frame_height));
+            let at = camera.world_to_screen(stellar.position);
+            brackets::draw_nav(list, at, sprite, nav.expand, nav.dominated);
+        }
+        if let Some(target) = session.target_brackets()
+            && let Some(npc) = session.target()
+        {
+            let (at, _) = self.shown_npc(npc);
+            let sprite = match self.npc_sheets.get(&npc.ship) {
+                Some(Ok(sheet)) => (sheet.frame_width, sheet.frame_height),
+                _ => (PLACEHOLDER_SIZE as u32, PLACEHOLDER_SIZE as u32),
+            };
+            let at = camera.world_to_screen(at);
+            brackets::draw_ship(list, at, Some(sprite), target.expand, target.standing);
+        }
     }
 
     /// Draws the Red Alert icon the session shows, if any, over the
@@ -3681,7 +3699,7 @@ impl<
         weapons::draw_shots(list, &self.shown_shots(&camera), &self.looks);
         weapons::draw_beams(list, &beams, &self.looks, false);
         self.effects.draw(list, &camera, &self.looks);
-        self.draw_brackets(list, &camera);
+        self.draw_brackets(list, scene, &camera);
         self.draw_red_alert(list);
         self.escort_menu
             .draw(list, &self.escort_rows(), self.escort_colors, metrics);
@@ -9253,11 +9271,10 @@ mod tests {
 
     use nova_sim::{BoomId, Condition, WeaponId};
 
+    use crate::flight::brackets::{self, Standing};
     use crate::flight::catalog::EffectSheet;
     use crate::flight::effects::{DEBRIS_COLOR, Effects};
-    use crate::flight::target::{
-        self, BRACKETS, DISABLED_BRACKETS, HOSTILE_BRACKETS, NO_SECONDARY, NO_TARGET,
-    };
+    use crate::flight::target::{self, NO_SECONDARY, NO_TARGET};
     use crate::flight::weapons::{BEAM_UNDER_SHIPS, translucent};
     use crate::sound::CombatSound;
 
@@ -9524,12 +9541,11 @@ mod tests {
             "the threat, though farther"
         );
         let list = drawn(&view);
-        assert!(list.iter().any(line_in(HOSTILE_BRACKETS)), "{list:?}");
-        assert!(!list.iter().any(line_in(BRACKETS)));
+        assert_eq!(bracket_icons(&list), [10008, 10009, 10010, 10011], "red");
         alt_tap(&mut view, NEAREST_KEY);
         assert_eq!(target_of(&view), Some(NpcId(1)), "Alt-R: the nearer");
         let list = drawn(&view);
-        assert!(list.iter().any(line_in(BRACKETS)));
+        assert_eq!(bracket_icons(&list), [10012, 10013, 10014, 10015], "yellow");
     }
 
     /// How many of the shots in flight are of `weapon`.
@@ -9693,6 +9709,28 @@ mod tests {
         move |command| matches!(command, DrawCommand::Line { color: c, .. } if *c == color)
     }
 
+    /// Whether a command draws a `cïcn` in `ids`.
+    fn icon_in(ids: std::ops::RangeInclusive<i16>) -> impl Fn(&DrawCommand) -> bool {
+        move |command| {
+            matches!(
+                command,
+                DrawCommand::Picture { image, .. }
+                    if image.kind == crate::ImageKind::Icon && ids.contains(&image.id)
+            )
+        }
+    }
+
+    /// The bracket `cïcn`s drawn (10000-10023), in order.
+    fn bracket_icons(list: &DrawList) -> Vec<i16> {
+        list.iter()
+            .filter(|command| icon_in(10000..=10023)(command))
+            .map(|command| match command {
+                DrawCommand::Picture { image, .. } => image.id,
+                _ => unreachable!("a picture"),
+            })
+            .collect()
+    }
+
     /// The flight with an NPC 100 pixels above the player, the player
     /// firing its blaster (which explodes where it hits) and two beams, one
     /// drawn under the ships and one over them, at it.
@@ -9716,7 +9754,7 @@ mod tests {
         let shot = first(&list, sprite_of(3500));
         let over = first(&list, line_in(Color::rgba(0, 255, 0, 255)));
         let explosion = first(&list, sprite_of(400));
-        let brackets = first(&list, line_in(BRACKETS));
+        let brackets = first(&list, icon_in(10008..=10023));
         let title = first(
             &list,
             |c| matches!(c, DrawCommand::Text { origin, .. } if *origin == TITLE),
@@ -10050,17 +10088,21 @@ mod tests {
         let npc = &session.npcs()[0];
         let list = drawn(&view);
         let (shown, _) = view.shown_npc(npc);
-        let mut brackets = DrawList::new();
-        target::draw_brackets(
-            &mut brackets,
+        let Some(Ok(sheet)) = view.npc_sheets.get(&npc.ship) else {
+            panic!("a sheet");
+        };
+        let mut expected = DrawList::new();
+        brackets::draw_ship(
+            &mut expected,
             view.camera().world_to_screen(shown),
-            40.0,
-            target::Standing::Neutral,
+            Some((sheet.frame_width, sheet.frame_height)),
+            0.0,
+            Standing::Neutral,
         );
         let commands: Vec<_> = list.iter().cloned().collect();
-        let expected: Vec<_> = brackets.iter().cloned().collect();
+        let expected: Vec<_> = expected.iter().cloned().collect();
         assert!(
-            commands.windows(8).any(|run| run == expected),
+            commands.windows(4).any(|run| run == expected),
             "{commands:?}"
         );
         let bar = view.status_bar().expect("a status bar");
@@ -10086,6 +10128,21 @@ mod tests {
     }
 
     #[test]
+    fn the_nav_brackets_draw_under_the_ship_brackets() {
+        let mut view = firing_at_an_npc();
+        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        let list = drawn(&view);
+        let nav = first(&list, icon_in(10000..=10007));
+        let ship = first(&list, icon_in(10008..=10023));
+        let npc = first(&list, sprite_of(2001));
+        assert!(npc < nav && nav + 4 == ship, "{npc} {nav} {ship}");
+        assert_eq!(
+            bracket_icons(&list),
+            [10000, 10001, 10002, 10003, 10012, 10013, 10014, 10015]
+        );
+    }
+
+    #[test]
     fn a_disabled_targets_brackets_are_grey() {
         let catalog = armed(1, &[]);
         let mut view =
@@ -10095,8 +10152,7 @@ mod tests {
         let session = view.session().expect("flying");
         assert_eq!(session.npcs()[0].condition, Condition::Disabled);
         let list = drawn(&view);
-        assert!(list.iter().any(line_in(DISABLED_BRACKETS)));
-        assert!(!list.iter().any(line_in(BRACKETS)));
+        assert_eq!(bracket_icons(&list), [10020, 10021, 10022, 10023]);
         assert!(texts(&list).contains(&target::DISABLED.to_owned()));
     }
 
@@ -11472,6 +11528,96 @@ mod tests {
         let session = view.session().expect("flying");
         assert!(session.is_escort(NpcId(1)), "{:?}", session.npcs());
         view
+    }
+
+    #[test]
+    fn the_players_escort_is_bracketed_green() {
+        let mut view = escorted();
+        option(&mut view, TARGET_KEY);
+        assert_eq!(target_of(&view), Some(NpcId(1)));
+        assert_eq!(bracket_icons(&drawn(&view)), [10016, 10017, 10018, 10019]);
+    }
+
+    #[test]
+    fn the_players_fighter_is_bracketed_green() {
+        let mut view = fighters_out();
+        option(&mut view, TARGET_KEY);
+        assert_eq!(target_of(&view), Some(NpcId(1)));
+        assert_eq!(bracket_icons(&drawn(&view)), [10016, 10017, 10018, 10019]);
+    }
+
+    /// Where the target panel's label `label` is drawn, if it is: its
+    /// top-left.
+    fn label_drawn(view: &View, label: &str) -> Option<Point> {
+        drawn(view).iter().find_map(|command| match command {
+            DrawCommand::Text { text, origin, .. } if text == label => Some(*origin),
+            _ => None,
+        })
+    }
+
+    /// Where `view` sets a label `label` against the target panel's
+    /// bottom right, measured by `MonoMetrics`: 7 in from the right,
+    /// on the baseline 6 above the bottom.
+    fn label_place(view: &View, label: &str) -> Point {
+        let bar = view.status_bar().expect("a status bar");
+        let layout = &bar.layout;
+        let area = layout.targ.offset(hud::bar_origin(bar));
+        let width = crate::text::TextMetrics::width(
+            &crate::text::fixture::MonoMetrics,
+            layout.font,
+            layout.font_size,
+            label,
+        );
+        at(
+            area.max.x - 7.0 - width,
+            area.max.y - 6.0 - layout.font_size,
+        )
+    }
+
+    #[test]
+    fn the_target_panel_labels_the_players_escort_and_fighter_and_omits_a_missing_code() {
+        let mono = || Rc::new(crate::text::fixture::MonoMetrics);
+        let mut view = escorted().with_metrics(mono());
+        option(&mut view, TARGET_KEY);
+        assert_eq!(target_of(&view), Some(NpcId(1)));
+        assert_eq!(
+            label_drawn(&view, target::ESCORT),
+            Some(label_place(&view, target::ESCORT)),
+            "Escort"
+        );
+        let mut view = fighters_out().with_metrics(mono());
+        option(&mut view, TARGET_KEY);
+        assert_eq!(target_of(&view), Some(NpcId(1)));
+        assert_eq!(
+            label_drawn(&view, target::FIGHTER),
+            Some(label_place(&view, target::FIGHTER)),
+            "Fighter"
+        );
+        assert_eq!(label_drawn(&view, target::ESCORT), None);
+        // The traffic ship's government, 140, has the code "Fed.".
+        let mut view = fighting(armed(1, &[]), &placed(750, 650, 180)).with_metrics(mono());
+        tap(&mut view, TARGET_KEY);
+        assert_eq!(
+            label_drawn(&view, "Fed."),
+            Some(label_place(&view, "Fed.")),
+            "with a code"
+        );
+        let uncoded = FakeCatalog {
+            codes: Vec::new(),
+            ..armed(1, &[])
+        };
+        let mut view = fighting(uncoded, &placed(750, 650, 180)).with_metrics(mono());
+        tap(&mut view, TARGET_KEY);
+        assert!(target_of(&view).is_some());
+        let bottom = label_place(&view, "").y;
+        let at_bottom: Vec<String> = drawn(&view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, origin, .. } if origin.y == bottom => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(at_bottom, ["Shield: ", "100%"], "no code drawn");
     }
 
     fn orders(view: &View) -> Vec<Option<EscortOrder>> {
@@ -14146,6 +14292,107 @@ mod tests {
         assert_eq!(NAV_OFF_KEY, Key::Char('`'));
     }
 
+    // The nav target's brackets.
+
+    /// The nav bracket `cïcn`s drawn (10000-10007), and where.
+    fn nav_icons(view: &View) -> Vec<(i16, Point)> {
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Picture { image, top_left } if icon_in(10000..=10007)(command) => {
+                    Some((image.id, *top_left))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The four corners from `cïcn` `first` round `centre`, half-size
+    /// `half`: top-left, top-right, bottom-right, bottom-left.
+    fn corners_at(first: i16, centre: Point, half: f32) -> Vec<(i16, Point)> {
+        let (near, far) = (-half - 16.0, half);
+        vec![
+            (first, at(centre.x + near, centre.y + near)),
+            (first + 1, at(centre.x + far, centre.y + near)),
+            (first + 2, at(centre.x + far, centre.y + far)),
+            (first + 3, at(centre.x + near, centre.y + far)),
+        ]
+    }
+
+    #[test]
+    fn selecting_a_stellar_draws_cicn_10000_to_10003_flying_in_then_settled() {
+        let mut view = flight();
+        assert_eq!(nav_icons(&view), []);
+        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        // Earth (128), 20 x 20: half 10.
+        let earth = on_screen(&view, (0.0, -600.0));
+        assert_eq!(
+            nav_icons(&view),
+            corners_at(10000, earth, 10.0 + 196.0),
+            "a frame drawn before the next tick"
+        );
+        for expand in [196.0, 136.0, 76.0, 16.0, 0.0, 0.0] {
+            view.tick(TICK);
+            let earth = on_screen(&view, (0.0, -600.0));
+            assert_eq!(
+                nav_icons(&view),
+                corners_at(10000, earth, 10.0 + expand),
+                "{expand}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_nav_brackets_without_a_nav_target_or_after_hyper_select() {
+        let mut view = flight();
+        tap(&mut view, STELLAR_SLOT_KEYS[1][0]);
+        assert_eq!(nav_icons(&view).len(), 4);
+        tap(&mut view, NAV_OFF_KEY);
+        assert_eq!(nav_icons(&view), [], "Nav Off");
+        view.tick(TICK);
+        assert_eq!(nav_icons(&view), []);
+        tap(&mut view, STELLAR_SLOT_KEYS[1][0]);
+        let moon = on_screen(&view, (300.0, -200.0));
+        assert_eq!(
+            nav_icons(&view),
+            corners_at(10000, moon, 10.0 + 196.0),
+            "flies in again"
+        );
+        tap(&mut view, HYPER_SELECT_KEY);
+        assert_eq!(view.session().expect("flying").nav_target(), None);
+        assert_eq!(nav_icons(&view), [], "Hyper Select");
+    }
+
+    #[test]
+    fn a_stellar_whose_sprite_cannot_be_read_is_bracketed_at_half_64() {
+        let unreadable = StellarContents {
+            sprite: Err("no rlëD".to_owned()),
+            ..stellar(131, "Broken", (100, 0), 1)
+        };
+        let mut sites = catalog().sites;
+        sites.push(site(131, (100.0, 0.0), StellarFlags::CAN_LAND));
+        let mut view = FlightView::new(FakeCatalog {
+            sites,
+            sol_more: vec![unreadable],
+            ..catalog()
+        });
+        tap(&mut view, STELLAR_SLOT_KEYS[2][0]);
+        ticks(&mut view, 5);
+        let broken = on_screen(&view, (100.0, 0.0));
+        assert_eq!(nav_icons(&view), corners_at(10000, broken, 64.0));
+    }
+
+    #[test]
+    fn an_always_dominated_stellar_is_bracketed_green() {
+        let mut sites = catalog().sites;
+        sites[0].flags2 = nova_sim::market::DOMINATED;
+        let mut view = flight_among(sites);
+        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        ticks(&mut view, 5);
+        let earth = on_screen(&view, (0.0, -600.0));
+        assert_eq!(nav_icons(&view), corners_at(10004, earth, 10.0));
+    }
+
     #[test]
     fn with_the_map_open_a_click_goes_to_the_map_not_the_stellars() {
         let mut view = a_and_b();
@@ -15391,14 +15638,12 @@ mod tests {
             .with_sound_prefs(prefs)
     }
 
-    /// The `cïcn`s drawn, and where.
+    /// The Red Alert `cïcn`s drawn, and where.
     fn icons_drawn(view: &View) -> Vec<(i16, Point)> {
         drawn(view)
             .iter()
             .filter_map(|command| match command {
-                DrawCommand::Picture { image, top_left }
-                    if image.kind == crate::ImageKind::Icon =>
-                {
+                DrawCommand::Picture { image, top_left } if icon_in(18000..=18001)(command) => {
                     Some((image.id, *top_left))
                 }
                 _ => None,
@@ -15478,13 +15723,11 @@ mod tests {
         let commands: Vec<_> = list.iter().collect();
         let icon = commands
             .iter()
-            .position(|command| {
-                matches!(command, DrawCommand::Picture { image, .. } if image.kind == crate::ImageKind::Icon)
-            })
+            .position(|command| icon_in(18000..=18001)(command))
             .expect("the icon is drawn");
         assert!(
-            line_in(HOSTILE_BRACKETS)(commands[icon - 1]),
-            "the brackets' last line just before it: {:?}",
+            icon_in(10011..=10011)(commands[icon - 1]),
+            "the brackets' bottom-left corner just before it: {:?}",
             commands[icon - 1]
         );
     }

@@ -1,6 +1,8 @@
 //! The flight screen: the player's ship flying in its starting system.
 //!
 //! - [`alert`]: the Red Alert icon, drawn at the playfield's top-right.
+//! - [`brackets`]: the corner brackets round the nav target and the ship
+//!   target, from the original's `cïcn` art.
 //! - [`cadence`]: when the HUD refreshes, [`HudCadence`](cadence::HudCadence),
 //!   and the target's blink on the radar.
 //! - [`catalog`]: the [`ShipSprites`] port, the player ship's sprite
@@ -22,13 +24,13 @@
 //!   draws for a [`RadarScene`](radar::RadarScene) snapshot.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
 //!   its heading.
-//! - [`target`]: the target panel, the secondary weapon's line and the
-//!   brackets round the target.
+//! - [`target`]: the target panel and the secondary weapon's line.
 //! - [`view`]: the [`FlightView`] screen, which runs the flight and draws
 //!   it.
 //! - [`weapons`]: drawing shots and beams.
 
 pub mod alert;
+pub mod brackets;
 pub mod cadence;
 pub mod catalog;
 pub mod data;

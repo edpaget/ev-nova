@@ -15,6 +15,8 @@
 //! - Moving too fast, or far from every stellar, the second L says so in
 //!   the original's words (`STR#` 2002 #72, #68) and the ship flies on.
 
+mod bracket_art;
+
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -197,10 +199,8 @@ fn data() -> Rc<GameData> {
             Some(b"Default status bar"),
             &interface(),
         )
-        .resource(PICT, 700, Some(b"Status Bar"), &status_picture())
-        .build()
-        .bytes;
-    let file = OneFile(fork);
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
+    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 

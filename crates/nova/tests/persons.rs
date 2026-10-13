@@ -22,6 +22,8 @@
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
 
+mod bracket_art;
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io;
@@ -362,7 +364,7 @@ fn game_data() -> Rc<GameData> {
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    let file = OneFile(fork.build().bytes);
+    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 
