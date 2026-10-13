@@ -826,7 +826,36 @@ mod tests {
     }
 
     #[test]
-    fn a_government_that_never_attacks_the_player_makes_an_unprovoked_warship_drop_a_led_target() {
+    fn a_government_that_never_attacks_the_player_makes_an_unprovoked_warship_drop_the_player_or_a_led_target()
+     {
+        // `_IsThreatToPlayer` holds at once of a target of 0, the player
+        // (@0x7f56d-0x7f570), so @0x8b7f7-0x8b806 drops it (-1, state 0).
+        let hunting = [attacking(P), pirate()];
+        assert_eq!(
+            worded(NEVER, &hunting, INTACT),
+            IDLE,
+            "nothing else to fight"
+        );
+        assert_eq!(worded(0, &hunting, INTACT), Goal::Attack(P), "no word");
+        let raider = Npc {
+            goal: Goal::Attack(n(1)),
+            ..pirate()
+        };
+        assert_eq!(
+            worded(NEVER, &[attacking(P), raider], INTACT),
+            Goal::Attack(n(2)),
+            "it picks afresh"
+        );
+        // Fleeing is none of the states `_IsThreatToPlayer` excludes.
+        let fleeing = [
+            Npc {
+                goal: Goal::Flee(n(3)),
+                ..police()
+            },
+            hired(),
+        ];
+        assert_eq!(worded(NEVER, &fleeing, INTACT), IDLE, "it stops fleeing");
+        assert_eq!(worded(0, &fleeing, INTACT), Goal::Flee(n(3)), "no word");
         let npcs = [attacking(n(3)), hired()];
         assert_eq!(worded(NEVER, &npcs, INTACT), IDLE);
         assert_eq!(worded(0, &npcs, INTACT), Goal::Attack(n(3)), "no word");
