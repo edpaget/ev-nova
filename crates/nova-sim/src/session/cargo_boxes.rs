@@ -17,9 +17,10 @@ impl Session {
     /// Drops the boxes of a jettison of `total` tons, `goods` of them
     /// goods, drawing on `chance` (`_JettisonCargo` @0x3e1c2-0x3e2e7): the
     /// player's share is the whole total; each escort the fleet's holds
-    /// count ([`Session::capacity`]: not a carried fighter, `InherentAI`
-    /// 2 or less) whose NPC is in the system drops the goods times its
-    /// `Holds` over the fleet's ([`escort_share`]), behind its NPC.
+    /// count ([`Session::capacity`],
+    /// [`EscortHolds::adds_holds`](crate::market::EscortHolds::adds_holds))
+    /// whose NPC is in the system drops the goods times its `Holds` over
+    /// the fleet's ([`escort_share`]), behind its NPC.
     pub(super) fn drop_cargo_boxes(
         &mut self,
         total: i64,
@@ -38,17 +39,14 @@ impl Session {
             .escorts
             .iter()
             .zip(&self.fleet)
-            .filter(|(escort, _)| !escort.carried)
             .filter_map(|(escort, &placed)| {
-                let record = self.ship_record(escort.ship)?;
+                let holds = self.holds_of(escort).filter(|holds| holds.adds_holds())?;
                 let npc = self.npc(placed?)?;
-                (record.inherent_ai <= crate::escort::FREIGHTER_AI).then(|| {
-                    (
-                        npc.state,
-                        npc.hull.sprite_size,
-                        escort_share(goods, record.fields.holds, fleet_holds),
-                    )
-                })
+                Some((
+                    npc.state,
+                    npc.hull.sprite_size,
+                    escort_share(goods, holds.holds, fleet_holds),
+                ))
             })
             .collect();
         for (state, width, share) in droppers {

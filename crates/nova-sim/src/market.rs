@@ -506,16 +506,26 @@ pub struct EscortHolds {
     pub carried: bool,
 }
 
-/// The summed `Holds` of the escorts [`fleet_holds`] counts: each that is
-/// not a launched fighter and whose `InherentAI` is
-/// [`FREIGHTER_AI`](crate::escort::FREIGHTER_AI) or less, each a negative
-/// one's size (@0x7a6a5-0x7a6d3), with no cap. A ship purchase divides the cargo by it
-/// uncapped ([`shipyard`](crate::shipyard)).
+impl EscortHolds {
+    /// Whether its `Holds` add to the fleet's cargo space
+    /// (`_TotalFleetHolds`): it is not a launched fighter and its
+    /// `InherentAI` is [`FREIGHTER_AI`](crate::escort::FREIGHTER_AI) or
+    /// less. A jettison drops boxes behind each such escort too.
+    #[must_use]
+    pub fn adds_holds(self) -> bool {
+        !self.carried && self.inherent_ai <= crate::escort::FREIGHTER_AI
+    }
+}
+
+/// The summed `Holds` of the escorts [`fleet_holds`] counts
+/// ([`EscortHolds::adds_holds`]), each a negative one's size
+/// (@0x7a6a5-0x7a6d3), with no cap. A ship purchase divides the cargo by
+/// it uncapped ([`shipyard`](crate::shipyard)).
 #[must_use]
 pub fn escort_tons(escorts: impl IntoIterator<Item = EscortHolds>) -> i64 {
     escorts
         .into_iter()
-        .filter(|escort| !escort.carried && escort.inherent_ai <= crate::escort::FREIGHTER_AI)
+        .filter(|escort| escort.adds_holds())
         .map(|escort| i64::from(hold_tons(escort.holds)))
         .sum()
 }
@@ -1981,6 +1991,18 @@ mod tests {
             inherent_ai,
             carried: false,
         }
+    }
+
+    #[test]
+    fn a_trader_out_of_no_bay_adds_its_holds() {
+        assert!(escort(15, 2).adds_holds());
+        assert!(escort(15, -1).adds_holds());
+        assert!(!escort(15, 3).adds_holds(), "a warship");
+        let fighter = EscortHolds {
+            carried: true,
+            ..escort(15, 1)
+        };
+        assert!(!fighter.adds_holds());
     }
 
     #[test]

@@ -3349,13 +3349,20 @@ impl Session {
     /// What the fleet's cargo space needs of each escort whose ship class
     /// has a record.
     fn escort_holds(&self) -> impl Iterator<Item = EscortHolds> + '_ {
-        self.pilot.escorts.iter().filter_map(|escort| {
-            let record = self.ship_record(escort.ship)?;
-            Some(EscortHolds {
-                holds: record.fields.holds,
-                inherent_ai: record.inherent_ai,
-                carried: escort.carried,
-            })
+        self.pilot
+            .escorts
+            .iter()
+            .filter_map(|escort| self.holds_of(escort))
+    }
+
+    /// What the fleet's cargo space needs of `escort`: none when its ship
+    /// class has no record.
+    fn holds_of(&self, escort: &crate::pilot::Escort) -> Option<EscortHolds> {
+        let record = self.ship_record(escort.ship)?;
+        Some(EscortHolds {
+            holds: record.fields.holds,
+            inherent_ai: record.inherent_ai,
+            carried: escort.carried,
         })
     }
 
