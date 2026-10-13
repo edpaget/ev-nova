@@ -1,9 +1,12 @@
 //! Nova's interceptor (AI type 4, `_InterceptorAI` @0x8c896 in the `EV
 //! Nova` executable): police.
 //!
-//! - It hunts as a warship does ([`hunt`]), but with no shield retreat
-//!   (a person's at its `Coward` only by the Bible's
-//!   [`RuleKey::PersonCoward`](crate::RuleKey::PersonCoward)), and its odds retreat is gated on its government's `Flags` 0x0100
+//! - It hunts as a warship does ([`hunt`]), its government's word on the
+//!   player first (`_InterceptorAI` @0x8cb0d-0x8cbf3, the same as
+//!   `_WarshipAI`'s; see [`warship`](super::warship)), but with no
+//!   shield retreat (a person's at its `Coward` only by the Bible's
+//!   [`RuleKey::PersonCoward`](crate::RuleKey::PersonCoward)), and its
+//!   odds retreat is gated on its government's `Flags` 0x0100
 //!   rather than 0x0010 (@0x8d180, likely a slip in the original, kept as
 //!   the default).
 //! - Idle with nothing to fight, it inspects (@0x8ce34): it flies up to a
