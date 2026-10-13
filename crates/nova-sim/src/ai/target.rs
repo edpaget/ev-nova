@@ -92,6 +92,8 @@ use crate::combat::hull::Condition;
 use crate::govt::{ALWAYS_ATTACKS_PLAYER, NEVER_ATTACKS_PLAYER, NOSY};
 use crate::mission::ships::ShipBehav;
 use crate::person::GRUDGE;
+#[cfg(doc)]
+use crate::rulebook::RuleKey;
 use crate::traffic::npc::Npc;
 
 /// How far, in pixels on either axis per point of aggression, a warship
@@ -194,8 +196,11 @@ fn nearest(
 /// player paid off is no exception: neither site reads the bribe, whose
 /// leave (`_AIMakeShipLeave`, state 2, @0x961eb) is no state the handler
 /// skips (8, 11 and 21), so the ship takes the player again on its next
-/// think. A cloaked or gate-emerging player is no matter: the engine has
-/// neither, so the player is always visible to it.
+/// think. That is the engine's default; [`RuleKey::HunterBribe`] can
+/// honour the bribe instead, and only `NovaAi`'s dispatch reads it: a
+/// paid-off ship is a wimpy trader, which never asks [`select_target`],
+/// so this rule needs no key. A cloaked or gate-emerging player is no
+/// matter: the engine has neither, so the player is always visible to it.
 #[must_use]
 pub fn mission_hunt(npc: &Npc, around: &Surroundings) -> Option<bool> {
     npc.mission

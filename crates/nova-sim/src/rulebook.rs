@@ -110,6 +110,7 @@
 //! | [`GateEscorts`](RuleKey::GateEscorts) | `gate_escorts` | at a hypergate or wormhole exit, every ship the player leads comes out of the exit gate after it, with its heading, waiting `Rand(20) + 15` ticks and bursting out at 15 (`_HandlePlayerDockRequest` @0x674ef-0x675c8, `_AIMakeShipEmergeFromHyperGate` @0x895aa-0x895bd) | each is snapped onto its slot beside the player\* |
 //! | [`LostCargoShare`](RuleKey::LostCargoShare) | `lost_cargo_share` | a lost trader escort's own `Holds` are never in the fleet's space it takes its share of, so it takes min(1, its `Holds` over the rest) of every good (`_DamageShip` @0x3afdd, @0x3b013; `_DestroyPartialFleetCargo` @0xce98-0xcf37; [`Session`](crate::Session)) | they are, so it takes the share of the space it added, mission escorts too\* |
 //! | [`NonStrictSpeed`](RuleKey::NonStrictSpeed) | `non_strict_speed` | the player and every ship it leads fly at 1.5 × their top speed when the pilot does not play Strict Play (`_ShipMaxSpeed` @0x382e-0x384f, @0xdd078; see [`top_speed`](crate::top_speed)) | every ship flies at its own top speed, Strict Play or not\* |
+//! | [`HunterBribe`](RuleKey::HunterBribe) | `hunter_bribe` | a `ShipBehav` 0 mission ship the player paid off attacks the player again on its next think, as no site reads the bribe (`_HighLevelAIHandler` @0x8d628-0x8d6e9, `_AIMakeShipLeave` @0x7e2b0; see [`mission_hunt`](crate::ai::target::mission_hunt)) | the bribe holds: it decides as its type, a wimpy trader, does\* |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -124,7 +125,8 @@
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance`,
 //! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
-//! `gate_escorts`, `lost_cargo_share`, `non_strict_speed` or `comm_quote`
+//! `gate_escorts`, `lost_cargo_share`, `non_strict_speed`, `hunter_bribe` or
+//! `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -1374,6 +1376,18 @@ rule_keys! {
     /// while the pilot's Strict Play flag is clear. By the other reading,
     /// no factor: every ship flies at its own top speed.
     NonStrictSpeed => "non_strict_speed",
+    /// Whether a `ShipBehav` 0 mission ship the player has paid off
+    /// attacks the player again (see
+    /// [`mission_hunt`](crate::ai::target::mission_hunt)). By the engine,
+    /// yes: neither `_SelectWarshipTarget` @0x89f25-0x89f84 nor
+    /// `_HighLevelAIHandler` @0x8d628-0x8d6e9 reads the bribe, whose leave
+    /// (`_AIMakeShipLeave` @0x7e2b0, called @0x961eb-0x961f8) sets state
+    /// 2, which the handler does not skip, so the hunter takes the player
+    /// again on its next think. By the other reading, the bribe holds: the
+    /// paid-off ship decides as its type, a wimpy trader, does. The Bible
+    /// says nothing of it, so the other reading is the intended behaviour,
+    /// not anything the Bible says.
+    HunterBribe => "hunter_bribe",
 }
 
 impl RuleKey {
@@ -1541,7 +1555,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1581,7 +1595,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1603,7 +1617,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(13),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1628,7 +1642,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1654,7 +1668,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1674,7 +1688,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1694,7 +1708,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1714,7 +1728,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -1727,7 +1741,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::GateFollow),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(4), Some(&RuleKey::GateFollow));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(5), Some(&RuleKey::GateFollow));
     }
 
     #[test]
@@ -1742,7 +1756,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::GateEscorts)
         );
     }
@@ -1759,7 +1773,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(2),
             Some(&RuleKey::LostCargoShare)
         );
     }
@@ -1775,7 +1789,24 @@ mod tests {
             Rulebook::default().source_for(RuleKey::NonStrictSpeed),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::NonStrictSpeed));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::NonStrictSpeed)
+        );
+    }
+
+    #[test]
+    fn the_hunter_bribe_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::HunterBribe.key(), "hunter_bribe");
+        assert_eq!(
+            RuleKey::from_key("hunter_bribe"),
+            Some(RuleKey::HunterBribe)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::HunterBribe),
+            RuleSource::Engine
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::HunterBribe));
     }
 
     #[test]
@@ -1786,7 +1817,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(3), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(4), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -1797,7 +1828,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -1905,7 +1936,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(16),
+            RuleKey::ALL.iter().rev().nth(17),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -2055,7 +2086,8 @@ mod tests {
                 RuleKey::AuxGate,
                 RuleKey::GateEscorts,
                 RuleKey::LostCargoShare,
-                RuleKey::NonStrictSpeed
+                RuleKey::NonStrictSpeed,
+                RuleKey::HunterBribe
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");
