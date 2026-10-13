@@ -1096,6 +1096,36 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_rank_granted_before_the_settling_after_a_jump_arrival_counts() {
+        let catalog = blessing_catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        jump(&mut session, &catalog, 131).expect("arrives");
+        run(&mut session, "K200");
+        assert!(!blessed(&session));
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(blessed(&session), "the arrival's refresh is due again");
+    }
+
+    #[test]
+    fn a_rank_granted_before_the_settling_after_a_gate_exit_counts() {
+        use crate::gate::GateKind;
+        use crate::session::gate_follow::tests::{following, gated, pass_gate};
+        for kind in [GateKind::Hypergate, GateKind::Wormhole] {
+            let mut catalog = gated(following(0, 0), 0);
+            catalog.ranks = vec![blessing_rank()];
+            let mut session = Session::start(&catalog).expect("starts");
+            pass_gate(&mut session, &catalog, kind, &mut NeverFires);
+            run(&mut session, "K200");
+            assert!(!blessed(&session), "{kind:?}");
+            let _ = session.settle_script(&catalog, &mut NeverFires);
+            assert!(
+                blessed(&session),
+                "{kind:?}: the exit's refresh is due again"
+            );
+        }
+    }
+
+    #[test]
     fn flying_a_pilot_refreshes_the_blessing_and_begin_counts_on_starts_rank() {
         let catalog = blessing_catalog();
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");

@@ -238,6 +238,18 @@ pub(super) mod tests {
         kind: GateKind,
         chance: &mut dyn Chance,
     ) {
+        pass_gate(session, catalog, kind, chance);
+        settle(session, catalog);
+    }
+
+    /// Flies from the gate of `kind` in 130 into 131, drawing on
+    /// `chance`, without settling.
+    pub(in crate::session) fn pass_gate(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        kind: GateKind,
+        chance: &mut dyn Chance,
+    ) {
         session.player.position = match kind {
             GateKind::Hypergate => HYPERGATE_AT,
             GateKind::Wormhole => WORMHOLE_AT,
@@ -251,7 +263,6 @@ pub(super) mod tests {
             GateKind::Wormhole => session.enter_wormhole(catalog, chance),
         };
         assert_eq!(out, Ok(SystemId(131)));
-        settle(session, catalog);
     }
 
     /// The rules with [`RuleKey::GateFollow`] read as `source`.
