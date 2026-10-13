@@ -670,6 +670,16 @@ impl Goods {
         self
     }
 
+    /// `jünk` `id`'s `Abbrev`, as the status bar's cargo area names it;
+    /// none for a `jünk` with no record.
+    #[must_use]
+    pub fn abbrev(&self, id: JunkId) -> Option<&str> {
+        self.junk
+            .iter()
+            .find(|junk| junk.id == id)
+            .map(|junk| junk.abbrev.as_str())
+    }
+
     /// `good`'s name, as the exchange names it, empty for a standard
     /// commodity with no name; none for a `jünk` with no record or a
     /// commodity numbered 6 or up, which is not traded.
@@ -2412,6 +2422,7 @@ mod tests {
         JunkRecord {
             id: JunkId(0),
             name: String::new(),
+            abbrev: String::new(),
             base_price: 0,
             sold_at: Vec::new(),
             bought_at: Vec::new(),
@@ -2427,6 +2438,7 @@ mod tests {
             JunkRecord {
                 id: JunkId(146),
                 name: "Opals".to_owned(),
+                abbrev: "Opl".to_owned(),
                 base_price: 1200,
                 sold_at: vec![StellarId(189), EARTH],
                 bought_at: vec![MARS],
@@ -2466,6 +2478,14 @@ mod tests {
 
     fn goods() -> Goods {
         Goods::new(&stock(), junk(), disasters())
+    }
+
+    #[test]
+    fn a_junks_abbrev_is_read_by_id() {
+        let goods = goods();
+        assert_eq!(goods.abbrev(JunkId(146)), Some("Opl"));
+        assert_eq!(goods.abbrev(JunkId(134)), Some(""));
+        assert_eq!(goods.abbrev(JunkId(999)), None);
     }
 
     fn pilot(cash: i64) -> Pilot {
@@ -2976,6 +2996,7 @@ mod tests {
         let gold = JunkRecord {
             id: JunkId(200),
             name: "Gold".to_owned(),
+            abbrev: String::new(),
             base_price: 400,
             sold_at: if sold_here { vec![EARTH] } else { Vec::new() },
             bought_at: if bought_here { vec![EARTH] } else { Vec::new() },

@@ -285,6 +285,7 @@ pub mod ship_change;
 pub mod shipyard;
 pub mod sound;
 pub mod stats;
+pub mod status_cargo;
 pub mod story;
 pub mod target_panel;
 pub mod targeting;
@@ -386,6 +387,7 @@ pub use shipyard::{
 };
 pub use sound::SimSound;
 pub use stats::ShipStats;
+pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCargo};
 pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};
 pub use targeting::TargetPick;
 pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};

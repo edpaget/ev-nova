@@ -259,6 +259,7 @@ impl PilotCatalog for GameData {
                     name: junk
                         .name
                         .map_or_else(|| record.lc_name.as_str().to_owned(), str::to_owned),
+                    abbrev: record.abbrev.as_str().to_owned(),
                     base_price: record.base_price,
                     sold_at: stellars(&record.sold_at),
                     bought_at: stellars(&record.bought_at),
@@ -1577,7 +1578,7 @@ mod tests {
                 record(200, "Big Gun", [(1, 128), (0, 0), (0, 0), (0, 0)]),
                 record(201, "big gun", [(2, 5), (9, -2), (0, 0), (18, 4)]),
             ],
-            "a resource without a name goes by its LCName; an undecodable one is skipped"
+            "a resource without a name goes by its LCName; its Abbrev is kept; an undecodable one is skipped"
         );
         assert_eq!(store(&[]).outfits(), []);
         for (a, b) in data.outfits().iter().zip(&data.outfits()) {
@@ -2471,6 +2472,7 @@ mod tests {
     #[test]
     fn each_readable_jünk_is_a_special_good_by_id() {
         let mut opals = junk(&[189, 165], &[185, -1, 199], 1200, "opals");
+        opals[0x66..0x69].copy_from_slice(b"Opl");
         opals[0xA6..0xA9].copy_from_slice(b"b43");
         opals[0x1A5..0x1A9].copy_from_slice(b"!b80");
         put_i16s(&mut opals, 0x22, &[0x0003]);
@@ -2490,6 +2492,7 @@ mod tests {
                 JunkRecord {
                     id: JunkId(134),
                     name: "water".to_owned(),
+                    abbrev: String::new(),
                     base_price: 300,
                     sold_at: vec![StellarId(160)],
                     bought_at: Vec::new(),
@@ -2500,6 +2503,7 @@ mod tests {
                 JunkRecord {
                     id: JunkId(146),
                     name: "Opals".to_owned(),
+                    abbrev: "Opl".to_owned(),
                     base_price: 1200,
                     sold_at: vec![StellarId(189), StellarId(165)],
                     bought_at: vec![StellarId(185), StellarId(199)],

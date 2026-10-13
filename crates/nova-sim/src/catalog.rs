@@ -429,6 +429,9 @@ pub struct JunkRecord {
     /// Its name: the resource's name, or its `LCName` when the resource
     /// has none.
     pub name: String,
+    /// Its `Abbrev`: the name the status bar's cargo area shows of it
+    /// (`_DrawStatusCargo` @0x4c69a-0x4c6dd).
+    pub abbrev: String,
     /// Its `BasePrice`.
     pub base_price: i16,
     /// Its `SoldAt` stellars, the unused (-1) slots left out.
@@ -1525,6 +1528,7 @@ mod tests {
             vec![JunkRecord {
                 id: JunkId(146),
                 name: "Opals".to_owned(),
+                abbrev: String::new(),
                 base_price: 1200,
                 sold_at: vec![StellarId(128)],
                 bought_at: Vec::new(),

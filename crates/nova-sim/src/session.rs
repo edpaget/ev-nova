@@ -353,6 +353,7 @@ mod radar;
 mod red_alert;
 mod script_effects;
 mod ship_change;
+mod status_cargo;
 mod stellars;
 mod story;
 mod target_panel;
@@ -6665,6 +6666,7 @@ mod tests {
         let opals = JunkRecord {
             id: JunkId(146),
             name: "Opals".to_owned(),
+            abbrev: String::new(),
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: vec![StellarId(140)],
@@ -6724,6 +6726,7 @@ mod tests {
         let both = JunkRecord {
             id: JunkId(146),
             name: "Opals".to_owned(),
+            abbrev: String::new(),
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: vec![StellarId(128)],
@@ -6768,6 +6771,7 @@ mod tests {
         let both = JunkRecord {
             id: JunkId(146),
             name: "Opals".to_owned(),
+            abbrev: String::new(),
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: vec![StellarId(128)],
@@ -6816,6 +6820,7 @@ mod tests {
         let opals = JunkRecord {
             id: JunkId(146),
             name: "Opals".to_owned(),
+            abbrev: String::new(),
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: Vec::new(),
@@ -6861,6 +6866,7 @@ mod tests {
             junk: vec![JunkRecord {
                 id: JunkId(146),
                 name: "Waste".to_owned(),
+                abbrev: String::new(),
                 base_price: base,
                 sold_at: Vec::new(),
                 bought_at: vec![StellarId(128)],
@@ -7132,6 +7138,7 @@ mod tests {
             junk: vec![JunkRecord {
                 id: JunkId(146),
                 name: "Waste".to_owned(),
+                abbrev: String::new(),
                 base_price: -100,
                 sold_at: vec![StellarId(128)],
                 bought_at: Vec::new(),
@@ -7202,6 +7209,7 @@ mod tests {
         let sold = |id, flags| JunkRecord {
             id: JunkId(id),
             name: format!("Junk {id}"),
+            abbrev: String::new(),
             base_price: 10,
             sold_at: vec![StellarId(128)],
             bought_at: Vec::new(),
@@ -7405,6 +7413,7 @@ mod tests {
         let opals = JunkRecord {
             id: JunkId(146),
             name: "Opals".to_owned(),
+            abbrev: String::new(),
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: Vec::new(),
@@ -15972,6 +15981,7 @@ mod tests {
         catalog.junk = vec![JunkRecord {
             id: JunkId(146),
             name: "Ice".to_owned(),
+            abbrev: String::new(),
             base_price: 10,
             sold_at: Vec::new(),
             bought_at: Vec::new(),
