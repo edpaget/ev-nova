@@ -182,10 +182,10 @@ impl CargoBoxes {
         #[allow(clippy::cast_possible_truncation)]
         let heading = ship.heading.trunc() as i32;
         let behind = (sprite_width.unwrap_or(NO_SPRITE_WIDTH) * 0.5).trunc();
-        let position = ship.position + accel(heading + 180, behind);
+        let position = ship.position + accel(reversed(heading), behind);
         let speed = f32::from(chance.roll(40) + 30) / 100.0;
         let off = i32::from(chance.roll(30)) - i32::from(chance.roll(15));
-        let velocity = ship.velocity + accel(heading + off + 180, speed);
+        let velocity = ship.velocity + accel(reversed(heading + off), speed);
         self.boxes.push(CargoBox {
             position,
             velocity,
@@ -212,6 +212,12 @@ impl CargoBoxes {
     pub fn clear(&mut self) {
         self.boxes.clear();
     }
+}
+
+/// The heading `angle` turned straight round: `angle + 180`, which
+/// [`accel`] takes mod 360.
+fn reversed(angle: i32) -> i32 {
+    angle + 180
 }
 
 /// `_Accel`'s push (@0x2ade6): `magnitude` along `angle` whole degrees,

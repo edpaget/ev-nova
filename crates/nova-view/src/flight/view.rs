@@ -12284,14 +12284,24 @@ mod tests {
     #[test]
     fn command_k_drops_cargo_boxes_drawn_under_the_ship_where_they_drift() {
         let mut view = carrying(0, true);
+        // Turned off straight up, so the boxes drift on both axes.
+        view.input(&key(Key::Right, true));
+        ticks(&mut view, 10);
+        view.input(&key(Key::Right, false));
         assert!(box_sprites(&drawn(&view)).is_empty());
         let _ = view.take_sounds();
         command_tap(&mut view, JETTISON_KEY, false);
         let session = view.session().expect("flying");
         let boxes = session.cargo_boxes().to_vec();
         assert_eq!(boxes.len(), 2, "10 tons");
+        assert!(
+            boxes[0].velocity.x.abs() > 0.1 && boxes[0].velocity.y.abs() > 0.1,
+            "{boxes:?}"
+        );
+        // A quarter of the way from the last step to this one.
+        view.alpha = 0.25;
         let camera = view.camera();
-        let behind = 1.0 - view.alpha;
+        let behind = 0.75;
         let expected: Vec<_> = boxes
             .iter()
             .map(|made| {

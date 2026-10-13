@@ -15,6 +15,10 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `_SpawnBox` turns a box round with `(heading + 180) mod 360`, and
+    # `accel` takes every angle mod 360 (`rem_euclid`): `- 180` lands on
+    # the same heading as `+ 180`, so no push can tell them apart.
+    "cargo_box.rs:.*replace \\+ with - in reversed",
     # `_TableArcTan`'s quadrant tests are strict (`x < 0`, `y < 0`). At
     # x == 0 the entry is always 90 (the ratio is 0, then 90 − 0), and
     # 180 − 90, 180 + 90 and −90 land on the same heading as 90 once taken

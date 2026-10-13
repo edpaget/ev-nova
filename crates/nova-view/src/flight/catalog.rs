@@ -531,17 +531,18 @@ mod tests {
         }
     }
 
-    /// Everything `catalog` says about weapon 128, `bööm` 129, ship 130
-    /// and govt 131.
+    /// Everything `catalog` says about weapon 128, `bööm` 129, ship 130,
+    /// govt 131 and cargo box graphic 2.
     fn looks(catalog: impl CombatLooks) -> String {
         format!(
-            "{:?} {:?} {:?} {:?}",
+            "{:?} {:?} {:?} {:?} {:?}",
             catalog.weapon_look(WeaponId(128)).map(|look| look.name),
             catalog
                 .boom_look(BoomId(129))
                 .map(|look| look.map(|look| look.sheet.map(|sheet| sheet.image_id))),
             catalog.target_card(ShipId(130)).subtitle,
             catalog.target_code(GovtId(131)),
+            catalog.box_sheet(2).map(|sheet| sheet.image_id),
         )
     }
 
@@ -591,7 +592,7 @@ mod tests {
 
     #[test]
     fn borrowed_and_shared_combat_looks_are_combat_looks() {
-        let direct = r#"Ok("w128") Some(Ok(Ok(129))) "s130" Some("g131")"#;
+        let direct = r#"Ok("w128") Some(Ok(Ok(129))) "s130" Some("g131") Ok(502)"#;
         assert_eq!(looks(Named), direct);
         assert_eq!(looks(&Named), direct);
         assert_eq!(looks(Rc::new(Named)), direct);
