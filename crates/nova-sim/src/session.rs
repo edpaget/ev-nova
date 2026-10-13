@@ -1185,7 +1185,8 @@ impl Session {
     ///
     /// Each tick in flight, a jump's included, moves the frame counter on,
     /// and on a due frame ([`market::junk_step_due`]) steps the held
-    /// tribbles and perishables, unless the player is destroyed. It then
+    /// tribbles and perishables in the space the goods and the mission
+    /// cargo aboard leave, unless the player is destroyed. It then
     /// runs the Red Alert on that frame (see the `red_alert` module) and
     /// flies the target brackets in (see the `brackets` module). A
     /// landed tick moves none of them.
@@ -1203,6 +1204,7 @@ impl Session {
                 &self.goods,
                 &mut self.pilot.cargo,
                 capacity,
+                self.pilot.missions.tons_aboard(),
                 self.rules.source_for(RuleKey::JunkFlags),
             );
         }
@@ -7356,6 +7358,23 @@ mod tests {
     }
 
     #[test]
+    fn the_mission_cargo_aboard_takes_the_tribbles_space() {
+        let mut session = taken_off_with(&[(FURBALLS, 2), (FRUIT, 3)]);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 15));
+        assert_eq!(steps_in(&mut session, 300), Vec::<u32>::new());
+        assert_eq!(furballs_and_fruit(&session), (2, 3), "20 tons of 20");
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 14));
+        assert_eq!(steps_in(&mut session, 250), [250 - 35]);
+        assert_eq!(furballs_and_fruit(&session), (3, 2), "a ton free");
+    }
+
+    #[test]
     fn by_the_bible_tribbles_grow_only_into_the_fleets_free_space() {
         let mut session = furballs_in_a_full_ship(RuleSource::Bible, Some(2));
         assert_eq!(steps_in(&mut session, 600), [15, 265]);
@@ -10785,6 +10804,39 @@ mod tests {
                 "{source:?}: the launched fighter takes no share"
             );
             assert_eq!(bought.left_behind, left_behind, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn buying_a_ship_counts_the_mission_cargo_aboard_and_never_leaves_it() {
+        // The new ship's 15 tons: by the engine 14 x 15/20, by the other
+        // reading the 9 tons the mission cargo leaves.
+        for (source, kept, left_behind) in [(RuleSource::Engine, 10, 4), (RuleSource::Bible, 9, 5)]
+        {
+            let mut session = outfitted(&shipbuying())
+                .with_rules(Rulebook::default().with_override(RuleKey::PurchaseCargo, source));
+            session.pilot.cargo = BTreeMap::from([(FOOD, 14)]);
+            session
+                .pilot
+                .missions
+                .put(0, crate::testkit::carrying(140, 6));
+            let bought = session
+                .buy_ship(NEW, "Kestrel", &mut NeverFires)
+                .expect("bought");
+            assert_eq!(session.capacity(), 15, "{source:?}");
+            assert_eq!(
+                session.pilot().cargo().collect::<Vec<_>>(),
+                [(FOOD, kept)],
+                "{source:?}"
+            );
+            assert_eq!(
+                bought.left_behind,
+                BTreeMap::from([(FOOD, left_behind)]),
+                "{source:?}"
+            );
+            let held = session.pilot().missions.get(0).expect("still held");
+            assert_eq!((held.cargo_tons, held.aboard), (6, true), "{source:?}");
+            assert_eq!(session.pilot().total_cargo(), i64::from(kept) + 6);
         }
     }
 

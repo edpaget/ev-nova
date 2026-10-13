@@ -55,7 +55,7 @@
 //! | [`StartShipPurchase`](RuleKey::StartShipPurchase) | `start_ship_purchase` | a new pilot's starting ship runs no `OnPurchase` ([`HookRules`](crate::HookRules)) | it runs once, right before the `chär`'s `OnStart`\* |
 //! | [`ShipChangePersistence`](RuleKey::ShipChangePersistence) | `ship_change_persistence` | `H` keeps an outfit flagged 0x0004 or 0x0020 ([`ShipChangeRules`](crate::ShipChangeRules)) | only one flagged 0x0020 |
 //! | [`ShipChangeMax`](RuleKey::ShipChangeMax) | `ship_change_max` | `E` and `H` hold every outfit owned, old and new, to its limit (ammunition cap, raised `Max`, gun and turret slots) after adding the new class's default items ([`ShipChangeRules`](crate::ShipChangeRules)) | nothing is held: every outfit is kept |
-//! | [`ShipChangeCargo`](RuleKey::ShipChangeCargo) | `ship_change_cargo` | `C`, `E` and `H` keep all the cargo, even past the new hold ([`ShipChangeRules`](crate::ShipChangeRules)) | the cargo is trimmed to the new hold, as a purchase trims it\* |
+//! | [`ShipChangeCargo`](RuleKey::ShipChangeCargo) | `ship_change_cargo` | `C`, `E` and `H` keep all the cargo, mission cargo too, even past the new hold ([`ShipChangeRules`](crate::ShipChangeRules)) | the goods are trimmed to the new hold, as a purchase trims them: the mission cargo aboard takes its room first and always stays\* |
 //! | [`ShipChangeReserves`](RuleKey::ShipChangeReserves) | `ship_change_reserves` | `C`, `E` and `H` keep a shield or armour above the new class's most until damage takes it ([`ShipChangeRules`](crate::ShipChangeRules)) | each is held to its new most\* |
 //! | [`ShipChangeBayAmmo`](RuleKey::ShipChangeBayAmmo) | `ship_change_bay_ammo` | `E` and `H` load a fighter bay's `AmmoLoad` onto the weapon its raw `AmmoType` names, so a bay of fighter `shïp` 128 to 255 loses its fighters ([`ShipChangeRules`](crate::ShipChangeRules)) | the bay's own fighters are loaded, as a purchase loads them\* |
 //! | [`ShipChangeDefaultWeapons`](RuleKey::ShipChangeDefaultWeapons) | `ship_change_default_weapons` | `E` and `H` add a default item that is a weapon or ammunition outfit to the outfits alone, so the fold pulls it back to the weapon and rounds arrays' count and it is lost unless the array has a surplus (`_EvalSetExp` @0x15609, `_ShipStatsToSystemInfo` @0xcaee called @0x15622; [`ShipChangeRules`](crate::ShipChangeRules)) | its first-mod weapons and rounds are added to the arrays too, so it is kept\* |
@@ -66,11 +66,11 @@
 //! | [`BlankLeave`](RuleKey::BlankLeave) | `blank_leave` | a `Q` with no message to show does nothing, and cancels an earlier one ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the player leaves all the same, with no message |
 //! | [`ScriptSound`](RuleKey::ScriptSound) | `script_sound` | one mission sound at a time: `P` sounds on the next flight tick, the last one before it counting, and not while the last is still playing ([`ScriptEffectRules`](crate::ScriptEffectRules)) | every `P` sounds at once, landed or not\* |
 //! | [`BuyRandom`](RuleKey::BuyRandom) | `buy_random` | an outfit's `BuyRandom` below 1 is never for sale and a ship's below 0 always (`_LoadObjectData` @0x78b8d, @0x7a340; [`Session`](crate::Session)) | an outfit's below 1 or above 100 always, and a ship's 0 or below never† |
-//! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b; [`Session`](crate::Session)) | tribbles goods grow only into free space, and perishable goods always decay‡ |
+//! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, the fleet's holds less the goods and the mission cargo aboard (`_TotalCargo` @0x4a0b), measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b, @0x70863-0x70888; [`Session`](crate::Session)) | tribbles goods grow only into that free space, and perishable goods always decay‡ |
 //! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; [`Session`](crate::Session)); in a counted sale, (n - 1) is as `counted_sale` says | a launcher cannot be sold while any of its ammunition is held§ |
 //! | [`RaisedMax`](RuleKey::RaisedMax) | `raised_max` | a `ModType` 27 outfit multiplies its target's `Max` by the outfits owned times their mods naming it, at least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), and one of n cannot be sold while the target owned exceeds its raw `Max` x (n - 1) (`_DoOutfitDialog` @0x5c7be-0x5ca6f; [`Session`](crate::Session)); in a counted sale, (n - 1) is as `counted_sale` says | the multiplier is the items owned with such a mod, at least 1, and a sale is refused only while the target owned exceeds that maximum after it¶ |
 //! | [`EventPrice`](RuleKey::EventPrice) | `event_price` | an active event prices its commodity at `BasePrice` + `PriceDelta`, whatever the level, the highest ID winning, and lists a commodity not traded there (`_DoTradeDialog` @0x5dcf8-0x5dd58; [`Session`](crate::Session)) | the level price plus every event's `PriceDelta`\*\* |
-//! | [`PurchaseCargo`](RuleKey::PurchaseCargo) | `purchase_cargo` | a ship purchase keeps each commodity's share A/B (the new ship's cargo space over that plus the trader escorts' `Holds`, uncapped) and loses that share of each `jünk`, then trims the commodities to the fleet's holds (`_DestroyPartialFleetCargo` @0xcd32-0xcff6, `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c; [`Session`](crate::Session)) | it keeps what fits the new ship's own cargo space, goods in order†† |
+//! | [`PurchaseCargo`](RuleKey::PurchaseCargo) | `purchase_cargo` | a ship purchase keeps each commodity's share A/B (the new ship's cargo space over that plus the trader escorts' `Holds`, uncapped) and loses that share of each `jünk`, then trims the commodities to the fleet's holds, counting the mission cargo aboard but never cutting it (`_DestroyPartialFleetCargo` @0xcd32-0xcff6, `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c, `_TotalCargo` @0x4a0b called @0xc7ea; [`Session`](crate::Session)) | the mission cargo aboard takes the new ship's own cargo space first and always stays, and the goods that fit in the rest are kept, in order†† |
 //! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; [`Session`](crate::Session)) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
 //! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; [`Session`](crate::Session)) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
 //! | [`OutfitLimit`](RuleKey::OutfitLimit) | `outfit_limit` | a map (`ModType` 16) or clean-record (`ModType` 21) outfit is refused while the last outfit bought since the outfitter opened was of its kind; any other buy, or opening the outfitter again, lifts it (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, `_GrantOutfitItem` @0x44d67-0x44f8b, `_DoOutfitDialog` @0x5bb37-0x5bb44; [`Session`](crate::Session)) | no limit§§ |
@@ -137,7 +137,9 @@
 //! ‡ The Bible says only that a tribbles good "multiplies like tribbles"
 //! and a perishable one "gradually decays away", and gives no rates: both
 //! readings take the engine's ton every due frame in flight, and only
-//! the conditions differ.
+//! the conditions differ. Both count the mission cargo aboard against the
+//! free space, as the engine does; it only matters to the other reading's
+//! growth, since its decay ignores the space.
 //!
 //! § The Bible says nothing of selling a launcher before its ammunition.
 //! The other reading is the phase's first wording of the rule (refuse
@@ -156,7 +158,8 @@
 //!
 //! †† The Bible says nothing of cargo on a ship purchase. The other
 //! reading is the phase's first wording of the rule (keep the cargo that
-//! fits the new ship), not anything the Bible says.
+//! fits the new ship), not anything the Bible says. Mission cargo is
+//! never left behind under either reading, as the engine never cuts it.
 //!
 //! ‡‡ The Bible says nothing of a `jünk` of negative or zero price. The
 //! other reading is the port's own floor of 0, which it had before the
@@ -703,10 +706,11 @@ rule_keys! {
     /// clamped (see [`ShipChangeRules`](crate::ShipChangeRules)).
     ShipChangeMax => "ship_change_max",
     /// What becomes of the cargo on a `C`, `E` or `H` change of ship: by
-    /// the engine, it is all kept, even past the new hold, as the change
-    /// never calls `_DestroyPartialFleetCargo` (`_EvalSetExp`
-    /// @0x15493-0x156da); otherwise it is trimmed to the new hold as a
-    /// purchase trims it. The Bible is silent here, so the other reading
+    /// the engine, it is all kept, mission cargo too, even past the new
+    /// hold, as the change never calls `_DestroyPartialFleetCargo`
+    /// (`_EvalSetExp` @0x15493-0x156da); otherwise the goods are trimmed
+    /// to the new hold as the purchase's other reading trims them, the
+    /// mission cargo aboard taking its room first and always staying. The Bible is silent here, so the other reading
     /// is the obvious alternative, not anything the Bible says (see
     /// [`ShipChangeRules`](crate::ShipChangeRules)).
     ShipChangeCargo => "ship_change_cargo",
@@ -821,7 +825,8 @@ rule_keys! {
     /// tribbles goods can fill the hold past full, perishable goods decay
     /// only while there is space, and a good with both flags decays only
     /// beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b);
-    /// by the Bible, which says only that tribbles goods multiply and
+    /// the free space is the fleet's holds less the goods and the mission
+    /// cargo aboard, as `_TotalCargo` (@0x4a0b) counts them; by the Bible, which says only that tribbles goods multiply and
     /// perishable goods "gradually decay away", tribbles goods grow only
     /// into free space and perishable goods always decay. The Bible gives
     /// no rates, so both readings take the engine's ton every due frame
@@ -871,10 +876,13 @@ rule_keys! {
     /// escorts, uncapped, each commodity becomes trunc(held x A/B) and
     /// each `jünk` loses trunc(held x A/B), so without such escorts every
     /// `jünk` goes; then, when the fleet's holds are below everything
-    /// held, each commodity is cut by their ratio in single floats
+    /// held, the mission cargo aboard counted (`_TotalCargo` @0x4a0b,
+    /// called @0xc7ea), each commodity is cut by their ratio in single
+    /// floats, and the mission cargo is not cut
     /// (`_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c). By the other
-    /// reading, the cargo that fits the new ship's own cargo space is
-    /// kept, goods in order. The Bible says nothing of it, so the other
+    /// reading, the mission cargo aboard takes the new ship's own cargo
+    /// space first and always stays, and the goods that fit in the rest
+    /// are kept, in order. The Bible says nothing of it, so the other
     /// reading is the phase's first wording of the rule, not anything the
     /// Bible says (see [`shipyard`](crate::shipyard)).
     PurchaseCargo => "purchase_cargo",

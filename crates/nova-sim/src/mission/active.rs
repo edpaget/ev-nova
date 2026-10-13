@@ -223,6 +223,13 @@ impl ActiveMissions {
             .sum()
     }
 
+    /// [`cargo_aboard`](Self::cargo_aboard) as the tons a hold counts,
+    /// held at [`u32::MAX`] rather than wrapped.
+    #[must_use]
+    pub fn tons_aboard(&self) -> u32 {
+        u32::try_from(self.cargo_aboard()).unwrap_or(u32::MAX)
+    }
+
     /// The missions held, in slot order, a mission held twice listed
     /// twice.
     #[must_use]
@@ -769,6 +776,23 @@ mod tests {
             "7 typed, 4 untyped, none for the one not aboard nor below none; \
              wider than 16 bits"
         );
+    }
+
+    #[test]
+    fn the_tons_aboard_are_the_cargo_aboard_held_at_the_widest_hold() {
+        let mut active = ActiveMissions::default();
+        let with = |cargo_tons| ActiveMission {
+            cargo_tons,
+            aboard: true,
+            ..accepted(140)
+        };
+        assert_eq!(active.tons_aboard(), 0, "none held");
+        active.put(0, with(7));
+        assert_eq!(active.tons_aboard(), 7);
+        active.put(1, with(i64::from(u32::MAX) - 7));
+        assert_eq!(active.tons_aboard(), u32::MAX, "exactly the widest");
+        active.put(2, with(1));
+        assert_eq!(active.tons_aboard(), u32::MAX, "held there, not wrapped");
     }
 
     #[test]

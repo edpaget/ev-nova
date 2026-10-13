@@ -133,7 +133,9 @@
 //! flags decays only beside a perishable-only good; by the Bible,
 //! tribbles goods grow only into free space and perishable goods always
 //! decay. The free space is the fleet's cargo space ([`fleet_holds`],
-//! below) less everything held.
+//! below) less every good held and the mission cargo aboard, as
+//! `_TotalCargo` (@0x4a0b) counts them (@0x70863-0x70888), so mission
+//! cargo filling the hold stops the growth and, by the engine, the decay.
 //!
 //! # Events
 //!
@@ -1715,13 +1717,14 @@ pub fn junk_step_due(frame: i16) -> bool {
 }
 
 /// One tribbles and perishables step on `cargo`, in a hold of `capacity`
-/// tons, read as `source` says
-/// ([`RuleKey::JunkFlags`](crate::RuleKey::JunkFlags)); whether it
-/// changed anything. Only held `jünk` whose record has a flag changes,
-/// a ton at a time, and a good decayed to none is gone.
+/// tons that also carries `mission` tons of mission cargo, read as
+/// `source` says ([`RuleKey::JunkFlags`](crate::RuleKey::JunkFlags));
+/// whether it changed anything. Only held `jünk` whose record has a flag
+/// changes, a ton at a time, and a good decayed to none is gone.
 ///
-/// The free space is the capacity less everything held, never below
-/// none, measured once.
+/// The free space is the capacity less every good held and the mission
+/// cargo aboard, as `_TotalCargo` (@0x4a0b) counts them and the step
+/// subtracts them (@0x70863-0x70888), never below none, measured once.
 ///
 /// - By the engine (`_ResetPlayerPrecalcedValues` @0xc52e-0xc55b,
 ///   `_HandlePlayer` @0x70827-0x7093b), while that space is above none,
@@ -1742,6 +1745,7 @@ pub(crate) fn step_junk(
     goods: &Goods,
     cargo: &mut BTreeMap<Good, u32>,
     capacity: u32,
+    mission: u32,
     source: RuleSource,
 ) -> bool {
     let flags = |good: Good| match good {
@@ -1765,7 +1769,7 @@ pub(crate) fn step_junk(
     };
     let total = cargo
         .values()
-        .fold(0_u32, |sum, &tons| sum.saturating_add(tons));
+        .fold(mission, |sum, &tons| sum.saturating_add(tons));
     let free = capacity.saturating_sub(total);
     let (grow, decay) = match source {
         RuleSource::Engine => {
@@ -5600,8 +5604,20 @@ mod tests {
         source: RuleSource,
         held: &[(Good, u32)],
     ) -> (Vec<(Good, u32)>, bool) {
+        stepped_beside(capacity, 0, source, held)
+    }
+
+    /// `held` after one step in a hold of `capacity` tons that also
+    /// carries `mission` tons of mission cargo, by `source`, and whether
+    /// the step changed it.
+    fn stepped_beside(
+        capacity: u32,
+        mission: u32,
+        source: RuleSource,
+        held: &[(Good, u32)],
+    ) -> (Vec<(Good, u32)>, bool) {
         let mut cargo: BTreeMap<Good, u32> = held.iter().copied().collect();
-        let changed = step_junk(&flagged(), &mut cargo, capacity, source);
+        let changed = step_junk(&flagged(), &mut cargo, capacity, mission, source);
         (cargo.into_iter().collect(), changed)
     }
 
@@ -5624,6 +5640,52 @@ mod tests {
             stepped(ENGINE, &[(FOOD, 8), (BREEDING, 3)]),
             (vec![(FOOD, 8), (BREEDING, 3)], false),
             "the hold over"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_the_mission_cargo_aboard_takes_the_tribbles_space() {
+        assert_eq!(
+            stepped_beside(10, 6, ENGINE, &[(BREEDING, 4)]),
+            (vec![(BREEDING, 4)], false),
+            "the mission cargo fills the hold"
+        );
+        assert_eq!(
+            stepped_beside(10, 5, ENGINE, &[(BREEDING, 4)]),
+            (vec![(BREEDING, 5)], true),
+            "a ton left"
+        );
+        assert_eq!(
+            stepped_beside(10, 20, ENGINE, &[(BREEDING, 4)]),
+            (vec![(BREEDING, 4)], false),
+            "the mission cargo past the hold"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_the_mission_cargo_aboard_filling_the_hold_stops_the_decay() {
+        assert_eq!(
+            stepped_beside(10, 3, ENGINE, &[(BREEDING, 4), (ROTTING, 3)]),
+            (vec![(BREEDING, 4), (ROTTING, 3)], false)
+        );
+        assert_eq!(
+            stepped_beside(10, 2, ENGINE, &[(BREEDING, 4), (ROTTING, 3)]),
+            (vec![(BREEDING, 5), (ROTTING, 2)], true),
+            "a ton left"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_the_mission_cargo_aboard_takes_the_tribbles_space_but_not_the_decay() {
+        assert_eq!(
+            stepped_beside(10, 3, BIBLE, &[(BREEDING, 3), (BREEDING_TOO, 3)]),
+            (vec![(BREEDING, 4), (BREEDING_TOO, 3)], true),
+            "only the lower ID"
+        );
+        assert_eq!(
+            stepped_beside(10, 7, BIBLE, &[(ROTTING, 3)]),
+            (vec![(ROTTING, 2)], true),
+            "the mission cargo fills the hold"
         );
     }
 

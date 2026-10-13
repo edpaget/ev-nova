@@ -400,10 +400,12 @@ impl Session {
         self.become_class(&record, change, |_| {});
         if rules.cargo == RuleSource::Bible {
             // To the new ship's own hold, goods in order: the purchase
-            // rule's other reading, with no escorts' holds counted.
+            // rule's other reading, with no escorts' holds counted. The
+            // mission cargo aboard takes its room first and always stays.
             shipyard::keep_cargo(
                 &mut self.pilot.cargo,
                 self.stats.capacity,
+                self.pilot.missions.tons_aboard(),
                 &[],
                 RuleSource::Bible,
             );
@@ -1619,6 +1621,54 @@ mod tests {
             [(Good::Commodity(0), 3), (Good::Commodity(2), 2)],
             "trimmed in Good order"
         );
+    }
+
+    #[test]
+    fn the_mission_cargo_aboard_takes_the_new_hold_first_when_trimmed_and_always_stays() {
+        let catalog = changing();
+        let loaded = |rules| {
+            let mut session = session(&catalog).with_rules(rules);
+            session.pilot.cargo = [(Good::Commodity(0), 2), (Good::Commodity(2), 9)]
+                .into_iter()
+                .collect();
+            session
+                .pilot
+                .missions
+                .put(0, crate::testkit::carrying(140, 3));
+            run(&mut session, "C130");
+            session
+        };
+        let mission_cargo = |session: &Session| {
+            let held = session.pilot.missions.get(0).expect("still held");
+            (held.cargo_tons, held.aboard)
+        };
+        let session = loaded(Rulebook::default());
+        assert_eq!(
+            session.pilot().cargo().collect::<Vec<_>>(),
+            [(Good::Commodity(0), 2), (Good::Commodity(2), 9)],
+            "by the engine every ton kept"
+        );
+        assert_eq!(mission_cargo(&session), (3, true));
+        let session =
+            loaded(Rulebook::default().with_override(RuleKey::ShipChangeCargo, RuleSource::Bible));
+        assert_eq!(
+            session.pilot().cargo().collect::<Vec<_>>(),
+            [(Good::Commodity(0), 2)],
+            "2 tons of the 5 left by the mission cargo"
+        );
+        assert_eq!(mission_cargo(&session), (3, true));
+        assert_eq!(session.pilot().total_cargo(), 5);
+        let mut session = self::session(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::ShipChangeCargo, RuleSource::Bible),
+        );
+        session.pilot.cargo = std::iter::once((Good::Commodity(0), 4)).collect();
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 7));
+        run(&mut session, "C130");
+        assert_eq!(session.pilot().cargo().count(), 0, "no room left");
+        assert_eq!(mission_cargo(&session), (7, true), "kept past the hold");
     }
 
     // The armour bump.

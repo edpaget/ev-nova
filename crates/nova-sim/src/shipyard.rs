@@ -140,15 +140,20 @@
 //! when A is none (the engine's 0/0 NaN acts so). Each commodity becomes
 //! trunc(held x f) (for the player's slot the second write, @0xcf6c,
 //! wins), and each `jünk` loses trunc(held x f), so with no such escorts
-//! every `jünk` goes (@0xcf94-0xcfe4). Then `_ResetPlayerPrecalcedValues`
-//! trims (@0xc7d8-0xc82c): when the fleet's holds ([`fleet_holds`]) are
-//! below everything held, each commodity becomes trunc(held x holds /
-//! held in all), worked in single floats; `jünk` is not cut. Mission
-//! cargo, which the engine leaves alone, does not exist yet. By the other
-//! reading, the phase's first wording (the Bible and the forums are
-//! silent), the cargo that fits in the new ship's own cargo space is
-//! kept, goods in [`Good`] order (commodities by number, then `jünk` by
-//! ID) until the hold is full. The new
+//! every `jünk` goes (@0xcf94-0xcfe4); the share never reads the mission
+//! cargo. Then `_DestroyPartialFleetCargo` jumps on to
+//! `_ResetPlayerPrecalcedValues` (@0xcff6), which trims (@0xc7d8-0xc82c):
+//! when the fleet's holds ([`fleet_holds`]) are below everything held as
+//! `_TotalCargo` (@0x4a0b) counts it for the player, every good and the
+//! mission cargo aboard (@0xc7ea), each commodity becomes trunc(held x
+//! holds / held in all), worked in single floats; `jünk` and the mission
+//! cargo are not cut, so the mission cargo makes the trim harder and
+//! stays aboard even past the holds. By the other reading, the phase's
+//! first wording (the Bible and the forums are silent), the mission cargo
+//! aboard takes the new ship's own cargo space first and always stays,
+//! and the goods that fit in what it leaves are kept, in [`Good`] order
+//! (commodities by number, then `jünk` by ID) until the hold is full. The
+//! new
 //! ship comes with its shield, armour and fuel full, as a new hull (the
 //! Bible is silent here too), once its `OnPurchase` has run: each is filled
 //! to the most of the class and outfits `OnPurchase` leaves
@@ -1292,12 +1297,14 @@ pub(crate) struct Quote {
 }
 
 /// Cuts `cargo` down to what a purchase keeps on a new ship of `capacity`
-/// tons of its own with `escorts`, read as `source` says, and gives what
-/// it left behind, each good with its tons (see the module's Buying a
-/// ship).
+/// tons of its own with `escorts` and `mission` tons of mission cargo
+/// aboard, read as `source` says, and gives what it left behind, each
+/// good with its tons (see the module's Buying a ship). The mission
+/// cargo itself is never cut.
 pub(crate) fn keep_cargo(
     cargo: &mut BTreeMap<Good, u32>,
     capacity: u32,
+    mission: u32,
     escorts: &[EscortHolds],
     source: RuleSource,
 ) -> BTreeMap<Good, u32> {
@@ -1313,10 +1320,14 @@ pub(crate) fn keep_cargo(
                     Good::Junk(_) => tons.saturating_sub(part),
                 };
             }
-            trim_to(cargo, fleet_holds(capacity, escorts.iter().copied()));
+            trim_to(
+                cargo,
+                fleet_holds(capacity, escorts.iter().copied()),
+                mission,
+            );
         }
         RuleSource::Bible => {
-            let mut room = capacity;
+            let mut room = capacity.saturating_sub(mission);
             for tons in cargo.values_mut() {
                 let kept = (*tons).min(room);
                 room -= kept;
@@ -1352,9 +1363,12 @@ fn new_ships_share(capacity: u32, escorts: i64) -> f64 {
 
 /// Cuts each commodity in `cargo` by `holds` over everything held when
 /// that is more (`_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c), in single
-/// floats; a `jünk` is not cut.
-fn trim_to(cargo: &mut BTreeMap<Good, u32>, holds: u32) {
-    let total: u64 = cargo.values().map(|&tons| u64::from(tons)).sum();
+/// floats; a `jünk` is not cut. Everything held is every good and the
+/// `mission` tons of mission cargo aboard, as `_TotalCargo` (@0x4a0b)
+/// counts them (@0xc7ea); the mission cargo is not cut either, so it can
+/// stay past the holds.
+fn trim_to(cargo: &mut BTreeMap<Good, u32>, holds: u32, mission: u32) {
+    let total: u64 = cargo.values().map(|&tons| u64::from(tons)).sum::<u64>() + u64::from(mission);
     if u64::from(holds) >= total {
         return;
     }
@@ -1622,6 +1636,7 @@ fn cargo_kept_by(refitted: &Refitted, source: RuleSource) -> CargoKept {
     let left_behind = keep_cargo(
         &mut cargo,
         refitted.stats.capacity,
+        refitted.sale.pilot.missions.tons_aboard(),
         refitted.sale.escorts,
         source,
     );
@@ -3764,9 +3779,85 @@ mod tests {
         escorts: &[EscortHolds],
         source: RuleSource,
     ) -> (Vec<(Good, u32)>, BTreeMap<Good, u32>) {
+        kept_beside(held, capacity, 0, escorts, source)
+    }
+
+    /// The cargo `held` keeps on a new ship of `capacity` tons with
+    /// `escorts` and `mission` tons of mission cargo aboard, read as
+    /// `source` says, and what it leaves behind.
+    fn kept_beside(
+        held: &[(Good, u32)],
+        capacity: u32,
+        mission: u32,
+        escorts: &[EscortHolds],
+        source: RuleSource,
+    ) -> (Vec<(Good, u32)>, BTreeMap<Good, u32>) {
         let mut cargo: BTreeMap<Good, u32> = held.iter().copied().collect();
-        let left_behind = keep_cargo(&mut cargo, capacity, escorts, source);
+        let left_behind = keep_cargo(&mut cargo, capacity, mission, escorts, source);
         (cargo.into_iter().collect(), left_behind)
+    }
+
+    #[test]
+    fn by_the_engine_the_mission_cargo_aboard_counts_in_the_trim() {
+        // 8 x 10/12: the goods alone fit.
+        assert_eq!(
+            kept_beside(&[(FOOD, 8)], 10, 4, &[], RuleSource::Engine),
+            (vec![(FOOD, 6)], BTreeMap::from([(FOOD, 2)]))
+        );
+        assert_eq!(
+            kept_beside(&[(FOOD, 8)], 10, 2, &[], RuleSource::Engine),
+            (vec![(FOOD, 8)], BTreeMap::new()),
+            "exactly full"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_the_mission_cargo_aboard_takes_no_share_and_the_junk_is_not_trimmed() {
+        // A = 10, B = 20: f = 0.5, leaving 10 food and 2 opals in a fleet
+        // of 20 tons; then 10 x 20/22, the opals uncut.
+        assert_eq!(
+            kept_beside(
+                &[(FOOD, 20), (OPALS, 4)],
+                10,
+                10,
+                &[trader(10)],
+                RuleSource::Engine
+            ),
+            (
+                vec![(FOOD, 9), (OPALS, 2)],
+                BTreeMap::from([(FOOD, 11), (OPALS, 2)])
+            )
+        );
+    }
+
+    #[test]
+    fn by_the_engine_mission_cargo_alone_past_the_holds_trims_the_commodities() {
+        // 4 x 10/16.
+        assert_eq!(
+            kept_beside(&[(FOOD, 4), (METAL, 1)], 10, 12, &[], RuleSource::Engine),
+            (vec![(FOOD, 2)], BTreeMap::from([(FOOD, 2), (METAL, 1)]))
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_the_mission_cargo_takes_the_new_hold_first() {
+        assert_eq!(
+            kept_beside(&[(FOOD, 5), (METAL, 5)], 10, 4, &[], RuleSource::Bible),
+            (vec![(FOOD, 5), (METAL, 1)], BTreeMap::from([(METAL, 4)]))
+        );
+        for mission in [10, 12] {
+            assert_eq!(
+                kept_beside(
+                    &[(FOOD, 5), (OPALS, 1)],
+                    10,
+                    mission,
+                    &[],
+                    RuleSource::Bible
+                ),
+                (Vec::new(), BTreeMap::from([(FOOD, 5), (OPALS, 1)])),
+                "{mission} tons"
+            );
+        }
     }
 
     #[test]
