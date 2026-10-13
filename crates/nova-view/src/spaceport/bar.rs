@@ -57,7 +57,7 @@ use nova_sim::{HireList, MissionId, News, OfferPrompt, ShipId};
 use super::catalog::StellarId;
 use super::hire::HireScreen;
 use super::layout::LEAVE_LABEL;
-use super::news::{NEWS_DIALOG, NewsScreen};
+use super::news::{NEWS_DIALOG, NewsScreen, shown_news_picture};
 use super::offer::{OfferChoice, OfferDialog, VenueOffers};
 use super::shipyard::{InfoTemplates, ShipyardCatalog};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
@@ -285,8 +285,10 @@ impl BarScreen {
         std::mem::take(&mut self.asks.news)
     }
 
-    /// Opens the news dialog over the bar on `news`.
-    pub fn open_news(&mut self, news: &News) {
+    /// Opens the news dialog over the bar on `news`, drawn over picture
+    /// `picture`, else 9000, else none, by which exist
+    /// ([`shown_news_picture`]).
+    pub fn open_news(&mut self, news: &News, picture: i16) {
         let Ok(laid) = &self.laid else {
             return;
         };
@@ -294,7 +296,8 @@ impl BarScreen {
             .news_template
             .clone()
             .map(|template| (template, Rc::clone(&laid.metrics.0)));
-        let mut screen = NewsScreen::new(layout, news);
+        let shown = shown_news_picture(picture, |id| self.hiring.catalog.picture_exists(id));
+        let mut screen = NewsScreen::new(layout, news, shown);
         self.sounds.extend(screen.take_sounds());
         self.news = Some(screen);
     }
@@ -603,6 +606,7 @@ impl Screen for BarScreen {
 #[allow(clippy::float_cmp)]
 mod tests {
     use std::cell::RefCell;
+    use std::collections::BTreeSet;
 
     use nova_sim::{HireRefusal, HireRow, ShipFields, ShipSpecs};
 
@@ -658,9 +662,11 @@ mod tests {
     /// floored.
     const ORIGIN: Point = Point::new(380.0, 291.0);
 
-    /// Every description is "dësc n."; records what it is asked.
+    /// Every description is "dësc n."; records what it is asked. Only
+    /// `pictures` exist.
     struct FakeArt {
         asked: RefCell<Vec<String>>,
+        pictures: BTreeSet<i16>,
     }
 
     impl SpaceportCatalog for FakeArt {
@@ -668,8 +674,8 @@ mod tests {
             panic!("asked for spöb {}", id.0)
         }
 
-        fn picture_exists(&self, _id: i16) -> bool {
-            false
+        fn picture_exists(&self, id: i16) -> bool {
+            self.pictures.contains(&id)
         }
     }
 
@@ -722,6 +728,7 @@ mod tests {
         bar_of(
             &Rc::new(FakeArt {
                 asked: RefCell::default(),
+                pictures: BTreeSet::new(),
             }),
             true,
         )
@@ -820,6 +827,7 @@ mod tests {
     fn it_draws_its_picture_then_its_dialog_with_the_bar_text() {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
+            pictures: BTreeSet::new(),
         });
         let screen = bar_of(&art, true);
         assert_eq!(*art.asked.borrow(), ["dësc 10029"]);
@@ -893,6 +901,7 @@ mod tests {
     fn with_a_full_fleet_hire_escort_is_greyed_and_asks_nothing() {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
+            pictures: BTreeSet::new(),
         });
         let mut screen = bar_of(&art, false);
         assert!(!enabled(&screen, HIRE_ESCORT));
@@ -945,6 +954,7 @@ mod tests {
     fn a_hire_asked_for_is_taken_through_the_bar_and_closes_the_hire_screen() {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
+            pictures: BTreeSet::new(),
         });
         let mut screen = BarScreen::new(
             Ok((template(), Rc::new(MonoMetrics))),
@@ -998,6 +1008,7 @@ mod tests {
     fn without_its_dialog_the_bar_says_why_and_return_leaves() {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
+            pictures: BTreeSet::new(),
         });
         let mut screen = BarScreen::new(
             Err("no DLOG 1013".to_owned()),
@@ -1052,6 +1063,7 @@ mod tests {
     fn the_hire_screens_sounds_and_pointer_go_through_the_bar() {
         let art = Rc::new(FakeArt {
             asked: RefCell::default(),
+            pictures: BTreeSet::new(),
         });
         let mut screen = BarScreen::new(
             Ok((template(), Rc::new(MonoMetrics))),
@@ -1289,6 +1301,34 @@ mod tests {
         bar().with_news(Ok(news_template()))
     }
 
+    /// The pictures `screen` draws stretched.
+    fn stretched(screen: &BarScreen) -> Vec<ImageKey> {
+        drawn(screen)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::StretchedPicture { image, .. } => Some(image),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_news_is_drawn_over_its_picture_else_9000() {
+        let art = Rc::new(FakeArt {
+            asked: RefCell::default(),
+            pictures: BTreeSet::from([9000, 9001]),
+        });
+        let mut screen = bar_of(&art, true).with_news(Ok(news_template()));
+        screen.open_news(&news(), 9001);
+        assert_eq!(stretched(&screen), [ImageKey::picture(9001)]);
+        screen.input(&key(Key::Escape, false));
+        screen.open_news(&news(), 9003);
+        assert_eq!(stretched(&screen), [ImageKey::picture(9000)], "missing");
+        let mut screen = newsy();
+        screen.open_news(&news(), 9001);
+        assert_eq!(stretched(&screen), [], "no pictures at all");
+    }
+
     #[test]
     fn news_n_and_w_ask_for_the_news_on_a_press_only() {
         let mut screen = newsy();
@@ -1312,7 +1352,7 @@ mod tests {
     fn the_news_opens_over_the_bar_and_takes_every_input_until_it_closes() {
         let mut screen = newsy();
         screen.take_sounds();
-        screen.open_news(&news());
+        screen.open_news(&news(), 9000);
         let open = screen.news_screen().expect("open");
         assert_eq!(open.problem(), None, "its own template");
         assert_eq!(
@@ -1342,13 +1382,13 @@ mod tests {
     #[test]
     fn without_the_news_dialog_given_the_news_says_so() {
         let mut screen = bar();
-        screen.open_news(&news());
+        screen.open_news(&news(), 9000);
         let open = screen.news_screen().expect("open");
         assert!(open.problem().is_some_and(|why| why.contains("1014")));
         screen.input(&key(Key::Enter, false));
         assert!(screen.news_screen().is_none());
         let mut screen = bar().with_news(Err("no DLOG 1014 here".to_owned()));
-        screen.open_news(&news());
+        screen.open_news(&news(), 9000);
         assert_eq!(
             screen.news_screen().and_then(NewsScreen::problem),
             Some("no DLOG 1014 here")
@@ -1362,19 +1402,20 @@ mod tests {
             StellarId(157),
             hiring(&Rc::new(FakeArt {
                 asked: RefCell::default(),
+                pictures: BTreeSet::new(),
             })),
             ButtonStyle::STOCK,
             true,
         )
         .with_news(Ok(news_template()));
-        screen.open_news(&news());
+        screen.open_news(&news(), 9000);
         assert!(screen.news_screen().is_none());
     }
 
     #[test]
     fn no_offer_is_asked_for_while_the_news_is_open() {
         let mut screen = offering().with_news(Ok(news_template()));
-        screen.open_news(&news());
+        screen.open_news(&news(), 9000);
         screen.tick(ms(10_000));
         assert!(!screen.take_offer_request());
         screen.input(&key(Key::Escape, false));

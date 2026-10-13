@@ -1760,10 +1760,11 @@ impl AppScreen {
         if spaceport.take_bar_opened() {
             self.flight.as_mut().expect(ENTERED).open_bar();
         }
-        if spaceport.take_news_request()
-            && let Some(news) = self.flight.as_ref().expect(ENTERED).news()
-        {
-            spaceport.open_news(news);
+        if spaceport.take_news_request() {
+            let flight = self.flight.as_ref().expect(ENTERED);
+            if let (Some(news), Some(picture)) = (flight.news(), flight.news_picture()) {
+                spaceport.open_news(news, picture);
+            }
         }
         if spaceport.take_hire_request()
             && let Some(list) = self.flight.as_mut().expect(ENTERED).escorts_for_hire()

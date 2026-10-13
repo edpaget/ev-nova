@@ -2430,6 +2430,13 @@ impl<C> FlightView<C> {
         self.session.as_ref().ok()?.news()
     }
 
+    /// The picture the bar's news is drawn over, as
+    /// [`Session::news_picture`] gives it; none for a session that failed.
+    #[must_use]
+    pub fn news_picture(&self) -> Option<i16> {
+        self.session.as_ref().ok()?.news_picture()
+    }
+
     /// Hires a ship as [`Session::hire`] does, on the flight's chance; a
     /// session that failed has no bar.
     pub fn hire(&mut self, ship: ShipId) -> Result<Hired, HireRefusal> {
@@ -10282,7 +10289,9 @@ mod tests {
             .with_strings(Rc::new(strings));
         assert!(!view.open_bar(), "in flight");
         assert_eq!(view.news(), None);
+        assert_eq!(view.news_picture(), None, "in flight");
         land_now(&mut view);
+        assert_eq!(view.news_picture(), Some(9000), "no NewsPic");
         assert!(view.open_bar());
         assert_eq!(
             view.news(),
@@ -10298,6 +10307,7 @@ mod tests {
         });
         assert!(!broken.open_bar());
         assert_eq!(broken.news(), None);
+        assert_eq!(broken.news_picture(), None);
     }
 
     // The mission screens.

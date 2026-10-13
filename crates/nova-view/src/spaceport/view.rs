@@ -722,10 +722,11 @@ impl SpaceportView {
         }
     }
 
-    /// Opens the news dialog over the bar open on `news`.
-    pub fn open_news(&mut self, news: &News) {
+    /// Opens the news dialog over the bar open on `news`, drawn over
+    /// `picture` ([`BarScreen::open_news`]).
+    pub fn open_news(&mut self, news: &News, picture: i16) {
         if let Some(Open::Bar(screen)) = &mut self.open {
-            screen.open_news(news);
+            screen.open_news(news, picture);
             self.sounds.extend(screen.take_sounds());
         }
     }
@@ -2983,7 +2984,7 @@ mod tests {
     fn the_bars_news_asks_through_the_spaceport_and_opens_over_the_bar() {
         let mut view = drinking(true);
         assert!(!view.take_news_request(), "nothing open");
-        view.open_news(&the_news());
+        view.open_news(&the_news(), 9000);
         click_item(&mut view, 10);
         assert!(
             view.open_bar().and_then(BarScreen::news_screen).is_none(),
@@ -2994,7 +2995,7 @@ mod tests {
         assert!(view.take_news_request());
         assert!(!view.take_news_request(), "once");
         view.take_sounds();
-        view.open_news(&the_news());
+        view.open_news(&the_news(), 9000);
         let news = view
             .open_bar()
             .and_then(BarScreen::news_screen)

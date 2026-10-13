@@ -3,12 +3,19 @@
 //! (`DLOG` 1014; `_DoNewsDialog` @0x47f0a in the `EV Nova` executable).
 //!
 //! The stock dialog is 300 x 230, centred, and its `DITL` has no items:
-//! `_NewsDialogUpdate` (0x47c57) draws everything. Here the commercial
-//! and the story are two plain Geneva text boxes, each wrapped to the
-//! dialog's width less a margin, the commercial above the story, both as
-//! written, their tags not filled (`TETextBox` @0x47d7b, @0x47e2c).
-//! crons-news-ranks phase 9 places them in the original's bands over the
-//! government's picture.
+//! `_NewsDialogUpdate` (0x47c57) draws everything, in this order:
+//!
+//! 1. Black over the whole dialog (`PaintRect` @0x47caf).
+//! 2. The docked stellar's government's news picture, stretched to the
+//!    dialog (`DrawPicHandle` @0x47cd2): the one asked for, else 9000,
+//!    else none ([`shown_news_picture`], `_DoNewsDialog` @0x47f68-0x47f9d).
+//! 3. The commercial in the band from 140 to 180 px below the dialog's
+//!    top, 10 px in from each side (@0x47ce2-0x47d55), then the story
+//!    from 170 px to 4 px above the bottom (@0x47d93-0x47e06). Each is a
+//!    `TETextBox` (@0x47d7b, @0x47e2c) inverted (@0x47d83, @0x47e34):
+//!    white Geneva text on an opaque black box, flush left, as written,
+//!    its tags not filled. The story's box covers the commercial's last
+//!    10 px, as it is drawn second.
 //!
 //! The screen beeps as it opens and as it closes (`_beepSnd[1]` @0x47f36
 //! and `_beepSnd[2]` @0x4814e, raised as [`UiSound::NewsOpened`] and
@@ -22,12 +29,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::News;
+use nova_sim::news::DEFAULT_NEWS_PICTURE;
 
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
-use crate::draw::DrawList;
+use crate::draw::{DrawList, fill_rect};
 use crate::font::Font;
 use crate::geometry::{Bounds, Point};
+use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::{Sound, UiSound};
@@ -39,16 +48,34 @@ use crate::ui::scroll_text::ScrollText;
 /// The news dialog's `DLOG` ID.
 pub const NEWS_DIALOG: i16 = 1014;
 
-/// The gap between the dialog's edge and its text boxes, and between
-/// the two boxes.
-const MARGIN: f32 = 10.0;
-/// The commercial line's box height: three lines of the body text.
-const COMMERCIAL_HEIGHT: f32 = 40.0;
+/// The text boxes' inset from the dialog's left and right (@0x47ce2,
+/// @0x47d93).
+const SIDE_INSET: f32 = 10.0;
+/// The commercial's box top, below the dialog's top (`+0x8C` @0x47cf6).
+const COMMERCIAL_TOP: f32 = 140.0;
+/// The commercial's box bottom, below the dialog's top (`+0xB4`
+/// @0x47d1e).
+const COMMERCIAL_BOTTOM: f32 = 180.0;
+/// The story's box top, below the dialog's top (`+0xAA` @0x47dd8).
+const STORY_TOP: f32 = 170.0;
+/// The story's box bottom's inset above the dialog's bottom (@0x47e06).
+const STORY_BOTTOM_INSET: f32 = 4.0;
+
+/// The picture the news is drawn over, given the one `asked` for and
+/// which pictures `exists`: `asked` if it exists, else
+/// [`DEFAULT_NEWS_PICTURE`] if that does, else none, and the dialog
+/// stays black (`_DoNewsDialog` @0x47f68-0x47f9d).
+pub fn shown_news_picture(asked: i16, exists: impl Fn(i16) -> bool) -> Option<i16> {
+    [asked, DEFAULT_NEWS_PICTURE]
+        .into_iter()
+        .find(|&id| exists(id))
+}
 
 /// The news, laid out.
 #[derive(Clone, Debug)]
 struct Laid {
     bounds: Bounds,
+    picture: Option<i16>,
     commercial: ScrollText,
     story: ScrollText,
 }
@@ -64,34 +91,46 @@ pub struct NewsScreen {
 
 impl NewsScreen {
     /// `news`, laid out by `layout`: the news dialog's template and the
-    /// metrics its text is measured by, or why there are none. It beeps
-    /// as it opens.
+    /// metrics its text is measured by, or why there are none; drawn
+    /// over `picture`, if any. It beeps as it opens.
     #[must_use]
-    pub fn new(layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>, news: &News) -> Self {
+    pub fn new(
+        layout: Result<(DialogTemplate, Rc<dyn TextMetrics>), String>,
+        news: &News,
+        picture: Option<i16>,
+    ) -> Self {
         let laid = layout.map(|(template, metrics)| {
             let origin = template.placement.origin(template.bounds);
             let bounds = Bounds::at(origin, template.bounds.width(), template.bounds.height());
-            let width = (bounds.width() - 2.0 * MARGIN).max(0.0);
-            let commercial_at = Point::new(origin.x + MARGIN, origin.y + MARGIN);
-            let story_at = Point::new(
-                commercial_at.x,
-                commercial_at.y + COMMERCIAL_HEIGHT + MARGIN,
-            );
-            let story_height = (bounds.max.y - MARGIN - story_at.y).max(0.0);
-            let boxed = |text: &str, at: Point, height: f32| {
+            let left = bounds.min.x + SIDE_INSET;
+            let right = bounds.max.x - SIDE_INSET;
+            let boxed = |text: &str, top: f32, bottom: f32| {
                 ScrollText::new(
                     text,
                     Font::Geneva,
                     BODY_SIZE,
                     BODY_COLOR,
-                    Bounds::at(at, width, height),
+                    Bounds::at(
+                        Point::new(left, top),
+                        (right - left).max(0.0),
+                        (bottom - top).max(0.0),
+                    ),
                     &metrics,
                 )
             };
             Laid {
                 bounds,
-                commercial: boxed(&news.commercial, commercial_at, COMMERCIAL_HEIGHT),
-                story: boxed(&news.story, story_at, story_height),
+                picture,
+                commercial: boxed(
+                    &news.commercial,
+                    bounds.min.y + COMMERCIAL_TOP,
+                    bounds.min.y + COMMERCIAL_BOTTOM,
+                ),
+                story: boxed(
+                    &news.story,
+                    bounds.min.y + STORY_TOP,
+                    bounds.max.y - STORY_BOTTOM_INSET,
+                ),
             }
         });
         Self {
@@ -163,8 +202,19 @@ impl Screen for NewsScreen {
     fn draw(&self, list: &mut DrawList) {
         match &self.laid {
             Ok(laid) => {
-                laid.commercial.draw(list);
-                laid.story.draw(list);
+                fill_rect(list, laid.bounds, Color::BLACK);
+                if let Some(id) = laid.picture {
+                    list.stretched_picture(
+                        ImageKey::picture(id),
+                        laid.bounds.min,
+                        laid.bounds.width(),
+                        laid.bounds.height(),
+                    );
+                }
+                for text in [&laid.commercial, &laid.story] {
+                    fill_rect(list, text.rect(), Color::BLACK);
+                    text.draw(list);
+                }
             }
             Err(reason) => {
                 list.text(
@@ -212,7 +262,7 @@ mod tests {
     }
 
     fn open() -> NewsScreen {
-        NewsScreen::new(Ok((template(), Rc::new(MonoMetrics))), &news())
+        NewsScreen::new(Ok((template(), Rc::new(MonoMetrics))), &news(), None)
     }
 
     fn texts(screen: &NewsScreen) -> Vec<String> {
@@ -248,7 +298,32 @@ mod tests {
     }
 
     #[test]
-    fn it_shows_the_commercial_above_the_story_as_written() {
+    fn the_governments_picture_is_shown_when_it_exists() {
+        let exists = |id| id == 9001 || id == 9000;
+        assert_eq!(shown_news_picture(9001, exists), Some(9001));
+    }
+
+    #[test]
+    fn a_missing_picture_falls_back_to_9000() {
+        let only_9000 = |id| id == 9000;
+        assert_eq!(shown_news_picture(0, only_9000), Some(9000));
+        assert_eq!(shown_news_picture(9003, only_9000), Some(9000));
+        assert_eq!(shown_news_picture(9000, only_9000), Some(9000));
+    }
+
+    #[test]
+    fn with_9000_missing_too_there_is_no_picture() {
+        assert_eq!(shown_news_picture(9001, |_| false), None);
+        assert_eq!(shown_news_picture(9000, |_| false), None);
+        assert_eq!(
+            shown_news_picture(9001, |id| id == 9001),
+            Some(9001),
+            "9000 is not needed"
+        );
+    }
+
+    #[test]
+    fn the_commercial_and_story_sit_in_the_originals_bands() {
         let screen = open();
         assert_eq!(
             screen.bounds(),
@@ -261,20 +336,84 @@ mod tests {
         assert_eq!(story.lines().join(" "), "<PN> wins the race", "tag kept");
         assert_eq!(
             commercial.rect(),
-            Bounds::at(Point::new(ORIGIN.x + 10.0, ORIGIN.y + 10.0), 280.0, 40.0)
+            Bounds::at(Point::new(ORIGIN.x + 10.0, ORIGIN.y + 140.0), 280.0, 40.0),
+            "(10,140)-(290,180)"
         );
         assert_eq!(
             story.rect(),
-            Bounds::at(Point::new(ORIGIN.x + 10.0, ORIGIN.y + 60.0), 280.0, 160.0)
-        );
-        let shown = texts(&screen).join(" ");
-        assert!(shown.contains("Buy Bibble"), "{shown}");
-        assert!(shown.contains("<PN> wins"), "{shown}");
-        assert!(
-            shown.find("Buy").expect("commercial") < shown.find("<PN>").expect("story"),
-            "the commercial first"
+            Bounds::at(Point::new(ORIGIN.x + 10.0, ORIGIN.y + 170.0), 280.0, 56.0),
+            "(10,170)-(290,226), over the commercial's last 10 px"
         );
         assert_eq!(screen.problem(), None);
+    }
+
+    #[test]
+    fn the_bands_follow_the_dialogs_right_and_bottom() {
+        let template = DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 400.0, 300.0),
+            placement: Placement::Center,
+            items: Vec::new(),
+        };
+        let screen = NewsScreen::new(Ok((template, Rc::new(MonoMetrics))), &news(), None);
+        let origin = Point::new(312.0, 234.0);
+        assert_eq!(screen.bounds(), Some(Bounds::at(origin, 400.0, 300.0)));
+        assert_eq!(
+            screen.commercial().expect("laid out").rect(),
+            Bounds::at(Point::new(origin.x + 10.0, origin.y + 140.0), 380.0, 40.0)
+        );
+        assert_eq!(
+            screen.story().expect("laid out").rect(),
+            Bounds::at(Point::new(origin.x + 10.0, origin.y + 170.0), 380.0, 126.0)
+        );
+    }
+
+    /// What `screen` should draw: black over its frame, `picture`
+    /// stretched to it, then each band blacked out under its text.
+    fn expected(screen: &NewsScreen, picture: Option<i16>) -> DrawList {
+        let bounds = Bounds::at(ORIGIN, 300.0, 230.0);
+        let mut list = DrawList::new();
+        fill_rect(&mut list, bounds, Color::BLACK);
+        if let Some(id) = picture {
+            list.stretched_picture(ImageKey::picture(id), ORIGIN, 300.0, 230.0);
+        }
+        let commercial = screen.commercial().expect("laid out");
+        fill_rect(&mut list, commercial.rect(), Color::BLACK);
+        commercial.draw(&mut list);
+        let story = screen.story().expect("laid out");
+        fill_rect(&mut list, story.rect(), Color::BLACK);
+        story.draw(&mut list);
+        list
+    }
+
+    #[test]
+    fn it_draws_the_picture_then_each_band_in_white_on_black() {
+        let screen = NewsScreen::new(Ok((template(), Rc::new(MonoMetrics))), &news(), Some(9001));
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list, expected(&screen, Some(9001)));
+        let first_text = list
+            .iter()
+            .find_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    origin,
+                    color,
+                    ..
+                } => Some((text.clone(), *origin, *color)),
+                _ => None,
+            })
+            .expect("text");
+        assert_eq!(first_text.0, "Buy Bibble");
+        assert_eq!(first_text.2, Color::WHITE);
+        assert_eq!(first_text.1, Point::new(ORIGIN.x + 10.0, ORIGIN.y + 140.0));
+    }
+
+    #[test]
+    fn with_no_picture_it_draws_only_black_under_the_text() {
+        let screen = open();
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert_eq!(list, expected(&screen, None));
     }
 
     #[test]
@@ -335,7 +474,7 @@ mod tests {
 
     #[test]
     fn without_its_dialog_it_says_why_and_escape_still_closes_it() {
-        let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news());
+        let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), Some(9000));
         assert_eq!(screen.problem(), Some("no DLOG 1014"));
         assert_eq!(screen.bounds(), None);
         assert!(screen.commercial().is_none() && screen.story().is_none());
@@ -346,7 +485,7 @@ mod tests {
         assert!(!screen.closed(), "no frame to press in");
         screen.input(&key(Key::Escape, false));
         assert!(screen.closed());
-        let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news());
+        let mut screen = NewsScreen::new(Err("no DLOG 1014".to_owned()), &news(), Some(9000));
         screen.input(&key(Key::Enter, false));
         assert!(screen.closed());
     }
