@@ -146,11 +146,7 @@ pub fn standing(npc: &Npc, leader: Option<&Npc>) -> Standing {
 /// sprite only touching an edge is not.
 #[must_use]
 pub fn sprite_in_area(area: Area, at: Vec2, width: f32, height: f32) -> bool {
-    let sprite = Area::centred(at, width, height);
-    sprite.top < area.bottom
-        && sprite.bottom > area.top
-        && sprite.left < area.right
-        && sprite.right > area.left
+    Area::centred(at, width, height).overlaps(area)
 }
 
 /// The brackets round the nav target.

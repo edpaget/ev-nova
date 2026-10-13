@@ -68,12 +68,7 @@ impl Session {
     /// ([`brackets::sprite_in_area`]); a ship with no sprite counts as a
     /// point.
     fn sprite_on_screen(&self, npc: &Npc) -> bool {
-        brackets::sprite_in_area(
-            self.play_area.offset(self.player.position),
-            npc.state.position,
-            npc.hull.sprite_size.unwrap_or(0.0),
-            npc.hull.sprite_height.unwrap_or(0.0),
-        )
+        self.npc_in_play_area(npc, brackets::sprite_in_area)
     }
 
     /// The brackets' part of a flight tick (see the module docs).
