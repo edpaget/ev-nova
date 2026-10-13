@@ -38,6 +38,18 @@
 //! shipyard's prices and trade-in and the bar's hire fee read them (see
 //! [`rank`]'s **Prices**).
 //!
+//! **Crimes.** A crime the player commits takes the ranks it reaches
+//! ([`rank::lose_to_crime`], see [`rank`]'s **Crimes**), in the same call
+//! as its conviction and right after it, as `_SlapWithPenalty` walks the
+//! penalties first: disabling and breaking up an NPC
+//! ([`Session::punish`]), boarding one ([`Session::board`]) and shooting
+//! a stellar down ([`Session::shoot_down`], one pass for the ten
+//! convictions, as the nine after the first find no matching rank still
+//! active). A mission's special ship is no victim. The pass reads the
+//! session's [`RankCrimeReach`](crate::rulebook::RuleKey::RankCrimeReach)
+//! and [`RankUnaffiliatedGroup`](crate::rulebook::RuleKey::RankUnaffiliatedGroup)
+//! rules, makes no save due and plays no sound.
+//!
 //! The pilot keeps its active ranks by ID. A pilot flown from a save
 //! naming a rank the data no longer has forgets it, so the next save
 //! leaves it out, as the original's `_LoadPilotData` drops an active flag
@@ -47,6 +59,7 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use crate::catalog::{GovtId, RankId};
+use crate::legal::Crime;
 use crate::news::MISC_STRINGS;
 use crate::person::NO_RANK;
 use crate::rank::{self, AND_STRING, Held, NO_RANK_STRING, PilotInfoRanks, PriceMults, RankNames};
@@ -131,6 +144,30 @@ impl Session {
         let unaffiliated = self.rules.source_for(RuleKey::RankUnaffiliatedGroup);
         let records = std::rc::Rc::clone(&self.ranks);
         rank::deactivate(&records, self.held_ranks(), rank, unaffiliated);
+    }
+
+    /// `_SlapWithPenalty`'s rank pass (see [`rank::lose_to_crime`]) for
+    /// `crime` the player commits against a ship of `victim`, reaching
+    /// the ranks by the session's `rank_crime_reach` rule and sweeping
+    /// them by its `rank_unaffiliated_group` rule. The callers skip a
+    /// mission's special ship, as the original passes its mark
+    /// (@0x9c10). No save is due, as a conviction makes none in flight,
+    /// and no sound plays.
+    pub(super) fn lose_ranks_to(&mut self, crime: Crime, victim: Option<GovtId>) {
+        let reach = self.rules.source_for(RuleKey::RankCrimeReach);
+        let unaffiliated = self.rules.source_for(RuleKey::RankUnaffiliatedGroup);
+        rank::lose_to_crime(
+            &self.ranks,
+            Held {
+                active: &mut self.pilot.ranks,
+                recent: &mut self.recent_rank,
+            },
+            crime,
+            victim,
+            &self.govts,
+            reach,
+            unaffiliated,
+        );
     }
 
     /// What the rank tags read: the pilot's active ranks, the recent

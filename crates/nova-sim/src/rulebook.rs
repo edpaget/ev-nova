@@ -117,6 +117,7 @@
 //! | [`RankPriceScope`](RuleKey::RankPriceScope) | `rank_price_scope` | a rank's `PriceMod` reaches only the shipyard: a ship's price, the hire fee and the trade-in (`_ApplyPriceAndTechnologyFlux` @0x4e6cd, read only by `_CalcShipCanBuy`, `_ShipyardDialogUpdate` and `_DoShipyardDialog`; see [`rank`](crate::rank)) | the outfitter's buy price too‡‡‡‡‡‡‡‡ |
 //! | [`RankTradeIn`](RuleKey::RankTradeIn) | `rank_trade_in` | the trade-in goes through the flux twice, `_priceFluxMult[0]` then `[1]` (@0x4f769-0x4f7d3, @0x59433-0x5949a, @0x5ec13-0x5ec96), so the rank's factor is squared and the low-tech discount and rounding apply twice (see [`shipyard`](crate::shipyard)) | once, with `[1]`§§§§§§§§ |
 //! | [`RankPriceTiming`](RuleKey::RankPriceTiming) | `rank_price_timing` | the multipliers are taken as the spaceport opens (`_DoPortDialog` @0x5f970-0x5fa04, before the landing's mission check @0x5fbeb), so a rank gained while landed changes no price until the next landing (see [`rank`](crate::rank)) | live: the ranks and the stellar's government as they are when a price is asked¶¶¶¶¶¶¶¶ |
+//! | [`RankCrimeReach`](RuleKey::RankCrimeReach) | `rank_crime_reach` | a crime takes a rank of `Flags` 0x0004 or 0x0040 when `_GovtAllies` finds the victim's government allied with the rank's, an equal one included, so a crime against an independent ship takes an unaffiliated rank (`_SlapWithPenalty` @0x9c70; see [`rank`](crate::rank)) | 0x0040 only for a crime against the rank's own government, 0x0004 for its own or its allies, an unaffiliated rank never\*\*\*\*\*\*\*\*\* |
 //! | [`ColocatedResolution`](RuleKey::ColocatedResolution) | `colocated_resolution` | the lowest-ID visible system at a place stands for every system there, a visible one too; links reach only it; a visible system it shadows claims no stellar (`_FindActiveCoLocatedSystem` @0x4c02-0x4c40, `_PropagateMissionBitEffects` @0x996ed-0x997bd; see [`story`](crate::story)) | a visible system stands for itself, links reach every visible system at the place, and each stellar goes to the lowest-ID visible system listing it¶¶¶¶¶¶¶ |
 //! | [`VisibilityRefresh`](RuleKey::VisibilityRefresh) | `visibility_refresh` | `Visibility` is evaluated at a landing (@0xa175f, @0xa1af2), a jump's arrival before its days (@0x6bf3f), a new pilot after its `OnStart`, and a load (see [`story`](crate::story)) | after every settled script as well\*\*\*\*\*\*\*\* |
 //! | [`CronZeroDurationHoldoff`](RuleKey::CronZeroDurationHoldoff) | `cron_zero_duration_holdoff` | a `Duration` 0 crön's pre-holdoff end runs `OnStart` and `OnEnd` and writes nothing more (`_CronEventHandler` @0x387a8-0x387c1), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and ends as `cron_post_holdoff` says (see [`cron`](crate::cron)) | `OnEnd` once, then the `PostHoldoff`: **the default — a deliberate departure from the original**†††††††† |
@@ -333,6 +334,13 @@
 //! ¶¶¶¶¶¶¶¶ The Bible says nothing of when a rank's `PriceMod` takes
 //! effect. The other reading, live prices, is the port's choice, not
 //! anything the Bible says (see [`rank`](crate::rank)).
+//!
+//! \*\*\*\*\*\*\*\*\* The Bible says 0x0040 takes the rank on "any
+//! crime against the affiliated government", and 0x0004 on disabling or
+//! destroying "a ship of the affiliated government or its allies". The
+//! other reading takes that wording; that an unaffiliated rank is never
+//! taken is the port's choice, not anything the Bible says (see
+//! [`rank`](crate::rank)).
 //!
 //! †††††††† `cron_zero_duration_holdoff` and `cron_post_holdoff` are the
 //! only keys whose default is the other reading, not the engine's
@@ -1474,6 +1482,14 @@ rule_keys! {
     /// reading, live, from the ranks and the stellar's government as they
     /// are when a price is asked (see [`rank`](crate::rank)).
     RankPriceTiming => "rank_price_timing",
+    /// Which governments a crime reaches to take a rank of `Flags` 0x0004
+    /// or 0x0040: by the engine, both reach every government
+    /// `_GovtAllies` finds allied with the rank's, an equal one included,
+    /// so a crime against an independent ship takes an unaffiliated rank;
+    /// by the other reading, 0x0040 only the rank's own government,
+    /// 0x0004 its own or its allies, and an unaffiliated rank none (see
+    /// [`rank`](crate::rank)).
+    RankCrimeReach => "rank_crime_reach",
     /// Which visible system stands for a place two visible systems share:
     /// by the engine, the lowest-ID one, for a visible system too, so links
     /// reach only it and a visible system it shadows claims no stellar; by
@@ -1720,7 +1736,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(24),
+            RuleKey::ALL.iter().rev().nth(25),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1760,7 +1776,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(23),
+            RuleKey::ALL.iter().rev().nth(24),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1782,7 +1798,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(22),
+            RuleKey::ALL.iter().rev().nth(23),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1807,7 +1823,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(21),
+            RuleKey::ALL.iter().rev().nth(22),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1833,7 +1849,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(20),
+            RuleKey::ALL.iter().rev().nth(21),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1853,7 +1869,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(19),
+            RuleKey::ALL.iter().rev().nth(20),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1873,7 +1889,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(18),
+            RuleKey::ALL.iter().rev().nth(19),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1893,7 +1909,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(16),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -1907,7 +1923,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -1920,7 +1936,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(13), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(14), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -1931,7 +1947,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(17),
+            RuleKey::ALL.iter().rev().nth(18),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -1949,7 +1965,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -1966,7 +1982,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -1983,10 +1999,10 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(8), Some(&RuleKey::SalaryCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(9), Some(&RuleKey::SalaryCap));
     }
 
     #[test]
@@ -2001,7 +2017,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -2020,16 +2036,33 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::RankPriceScope)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::RankTradeIn)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(5),
             Some(&RuleKey::RankPriceTiming)
+        );
+    }
+
+    #[test]
+    fn the_rank_crime_reach_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::RankCrimeReach.key(), "rank_crime_reach");
+        assert_eq!(
+            RuleKey::from_key("rank_crime_reach"),
+            Some(RuleKey::RankCrimeReach)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::RankCrimeReach),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(4),
+            Some(&RuleKey::RankCrimeReach)
         );
     }
 
@@ -2172,7 +2205,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(26),
+            RuleKey::ALL.iter().rev().nth(27),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -2329,6 +2362,7 @@ mod tests {
                 RuleKey::RankPriceScope,
                 RuleKey::RankTradeIn,
                 RuleKey::RankPriceTiming,
+                RuleKey::RankCrimeReach,
                 RuleKey::ColocatedResolution,
                 RuleKey::VisibilityRefresh,
                 RuleKey::CronZeroDurationHoldoff,

@@ -131,12 +131,53 @@
 //! `_ApplyPriceAndTechnologyFlux` ([`price_flux`](crate::hire::price_flux)):
 //! a ship's price and the hire fee with `[1]`, the trade-in with `[0]`
 //! then `[1]` (see [`shipyard`](crate::shipyard)).
+//!
+//! **Crimes** ([`lose_to_crime`], `_SlapWithPenalty` @0x9c47-0x9caf).
+//! After the penalty walk (see [`legal`](crate::legal)), a crime the
+//! player commits against a ship of government V takes ranks, but only
+//! when V is not derelict (byte +0x21 bit 0x08, @0x9bd5-0x9bf7; the
+//! test is skipped for an independent V) and the crime's mission slot is
+//! -1 (@0x9c10), so never for a mission ship. The pass goes through the
+//! 128 slots in ID order (stride 0x120). A slot that is active (+0) at
+//! its turn, has a record (+1), lacks [`SHIELDED`] (+0x1c) and whose
+//! `AffilGovt` (+6) `_GovtAllies` finds allied with V (@0x9c70) goes
+//! through `_DeactivateRank` (@0x9c9e), so its 0x0002 and 0x0020 sweeps
+//! run as for `L`, when:
+//!
+//! - it has [`LOST_TO_CRIME`] (0x0040), on any crime; or
+//! - it has [`LOST_TO_VIOLENCE`] (0x0004), on crime type 1 or 3
+//!   (@0x9c89-0x9c97).
+//!
+//! The original's crime types map onto [`Crime`]: 1 (`_DamageShip`
+//! @0x3addf) is [`Crime::Disable`], 2 (`_HandlePlayerBoardAttempt`
+//! @0x6582b) [`Crime::Board`], 3 (`_DamageShip` @0x3ae34, and a stellar
+//! shot down, `_CheckShotProximities` @0x37518) [`Crime::Kill`]. No
+//! caller slaps for a hit, so [`Crime::Shoot`] takes nothing. A rank an
+//! earlier rank's sweep cleared is skipped at its turn, so its own flags
+//! do nothing. `_GovtAllies` holds at once for equal IDs (@0x4e4e), so a
+//! crime against an independent ship takes an unaffiliated rank; no
+//! stock rank with these flags is unaffiliated. The stellar kill slaps
+//! ten times, but after the first pass no matching rank is still active,
+//! so the session runs the pass once. The
+//! [`RankCrimeReach`](crate::rulebook::RuleKey::RankCrimeReach) rule's
+//! other reading, the Bible's, lets 0x0040 reach only the rank's own
+//! government, 0x0004 its own or its allies, and an unaffiliated rank
+//! none. Neither function plays a sound.
+//!
+//! Left out: type 0, contraband a scan finds (`_ScanPlayer` @0x7ebcc,
+//! @0x7f01f), until a scan convicts
+//! (rdm:phase/cargo-and-scanning/phase-4-illegal-cargo-scanning);
+//! Demand Tribute's type-3 slaps (`_DoPlanetCommDialog` @0x975d0,
+//! @0x9773d, @0x9785f), with tribute (rdm:task/planet-domination); and
+//! the debug "destroy target" key (`_HandlePlayer` @0x6ecfe), which the
+//! engine does not model.
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use crate::catalog::{GovtId, RankId, RankRecord};
 use crate::govt::Governments;
+use crate::legal::Crime;
 use crate::rulebook::RuleSource;
 
 /// The index (1-based) in `STR#` 2002 of what a rank tag reads with no
@@ -153,7 +194,10 @@ pub const SWEEP_GOVT_ON_ACTIVATE: u16 = 0x0001;
 /// `Flags` 0x0002: deactivating the rank clears the active ranks of its
 /// government.
 pub const SWEEP_GOVT_ON_DEACTIVATE: u16 = 0x0002;
-/// `Flags` 0x0008: no sweep clears the rank.
+/// `Flags` 0x0004: disabling or destroying a ship the rank reaches
+/// takes it (`_SlapWithPenalty` @0x9c89-0x9c97).
+pub const LOST_TO_VIOLENCE: u16 = 0x0004;
+/// `Flags` 0x0008: no sweep clears the rank, and no crime takes it.
 pub const SHIELDED: u16 = 0x0008;
 /// `Flags` 0x0010: activating the rank clears the active ranks of its
 /// government of strictly lower `Weight`.
@@ -161,6 +205,9 @@ pub const SWEEP_LOWER_ON_ACTIVATE: u16 = 0x0010;
 /// `Flags` 0x0020: deactivating the rank clears the active ranks of its
 /// government of strictly lower `Weight`.
 pub const SWEEP_LOWER_ON_DEACTIVATE: u16 = 0x0020;
+/// `Flags` 0x0040: any crime against a ship the rank reaches takes it
+/// (`_SlapWithPenalty` @0x9c47-0x9caf).
+pub const LOST_TO_CRIME: u16 = 0x0040;
 /// `Flags` 0x0400: ships the rank reaches fight a threat to the player
 /// when hailed, for nothing (`_DoCommDialog` @0x95ddb).
 pub const HELPS_IN_BATTLE: u16 = 0x0400;
@@ -224,6 +271,80 @@ pub fn deactivate(records: &[RankRecord], mut held: Held, id: RankId, unaffiliat
     }
     if *held.recent == Some(id) {
         *held.recent = None;
+    }
+}
+
+/// `_SlapWithPenalty`'s rank pass (see the module docs' **Crimes**) for
+/// `crime` against a ship of `victim`: unless `victim`'s government is
+/// derelict, each rank of `records` in ID order that is active at its
+/// turn, not [`SHIELDED`], whose flags `crime` takes and that reaches
+/// `victim` by `reach`'s reading of
+/// [`RankCrimeReach`](crate::rulebook::RuleKey::RankCrimeReach) goes
+/// through [`deactivate`], sweeps included, unaffiliated ranks one
+/// government or none by `unaffiliated`.
+pub fn lose_to_crime(
+    records: &[RankRecord],
+    Held { active, recent }: Held,
+    crime: Crime,
+    victim: Option<GovtId>,
+    govts: &Governments,
+    reach: RuleSource,
+    unaffiliated: RuleSource,
+) {
+    if govts.derelict(victim) {
+        return;
+    }
+    for rank in records {
+        if active.contains(&rank.id)
+            && rank.flags & SHIELDED == 0
+            && crime_reaches(rank, crime, victim, govts, reach)
+        {
+            deactivate(
+                records,
+                Held {
+                    active: &mut *active,
+                    recent: &mut *recent,
+                },
+                rank.id,
+                unaffiliated,
+            );
+        }
+    }
+}
+
+/// The crime flags of `flags` that `crime` takes: 0x0040 on any crime
+/// the original slaps, 0x0004 on disabling and destroying (types 1 and 3,
+/// @0x9c89-0x9c97). The original never slaps for a hit.
+fn takes(flags: u16, crime: Crime) -> u16 {
+    match crime {
+        Crime::Disable | Crime::Kill => flags & (LOST_TO_CRIME | LOST_TO_VIOLENCE),
+        Crime::Board => flags & LOST_TO_CRIME,
+        Crime::Shoot => 0,
+    }
+}
+
+/// Whether `crime` against a ship of `victim` takes `rank`, by `reach`'s
+/// reading of [`RankCrimeReach`](crate::rulebook::RuleKey::RankCrimeReach):
+/// by the engine, when `crime` takes one of its flags and `_GovtAllies`
+/// finds the governments allied, -1 and -1 included (@0x9c70); by the
+/// other reading, when it takes 0x0040 of a rank of `victim`'s own
+/// government, or 0x0004 of one of that government or its allies, and
+/// never an unaffiliated rank.
+fn crime_reaches(
+    rank: &RankRecord,
+    crime: Crime,
+    victim: Option<GovtId>,
+    govts: &Governments,
+    reach: RuleSource,
+) -> bool {
+    let taken = takes(rank.flags, crime);
+    match reach {
+        RuleSource::Engine => taken != 0 && govts.allies(victim, rank.affil_govt),
+        RuleSource::Bible => {
+            let own = rank.affil_govt.is_some() && rank.affil_govt == victim;
+            let allied = rank.affil_govt.is_some() && govts.allies(victim, rank.affil_govt);
+            (taken & LOST_TO_CRIME != 0 && own) || (taken & LOST_TO_VIOLENCE != 0 && allied)
+        }
     }
 }
 
@@ -1567,6 +1688,276 @@ mod tests {
                 mults_of(&records, &[130], Some(140), reach),
                 PriceMults::NONE
             );
+        }
+    }
+
+    /// [`favour_govts`] and govt 143, derelict.
+    fn crime_govts() -> Governments {
+        Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                allies: [2, -1, -1, -1],
+                ..testkit::govt(140)
+            },
+            GovtRecord {
+                classes: [2, -1, -1, -1],
+                ..testkit::govt(141)
+            },
+            GovtRecord {
+                classes: [3, -1, -1, -1],
+                ..testkit::govt(142)
+            },
+            GovtRecord {
+                flags: crate::govt::DERELICT,
+                ..testkit::govt(143)
+            },
+        ])
+    }
+
+    impl State {
+        /// The ranks `crime` against a ship of `victim` takes, by `reach`
+        /// and the engine's grouping, among [`crime_govts`].
+        fn lose(
+            &mut self,
+            records: &[RankRecord],
+            crime: Crime,
+            victim: Option<i16>,
+            reach: RuleSource,
+        ) -> &mut Self {
+            lose_to_crime(
+                records,
+                self.held(),
+                crime,
+                victim.map(GovtId),
+                &crime_govts(),
+                reach,
+                RuleSource::Engine,
+            );
+            self
+        }
+    }
+
+    /// Whether a lone active rank `record` survives `crime` against a ship
+    /// of `victim` by `reach`.
+    fn kept(record: RankRecord, crime: Crime, victim: Option<i16>, reach: RuleSource) -> bool {
+        let id = record.id.0;
+        let mut state = State::holding(&[id]);
+        state.lose(&[record], crime, victim, reach);
+        state.active() == [id]
+    }
+
+    const ENGINE: RuleSource = RuleSource::Engine;
+
+    #[test]
+    fn the_crime_flags_are_0x04_and_0x40() {
+        assert_eq!(LOST_TO_VIOLENCE, 0x0004);
+        assert_eq!(LOST_TO_CRIME, 0x0040);
+    }
+
+    #[test]
+    fn flag_0x40_takes_a_rank_on_disabling_boarding_and_destroying() {
+        for crime in [Crime::Disable, Crime::Board, Crime::Kill] {
+            let mut state = State::holding(&[130]);
+            state.recent = Some(RankId(130));
+            state.lose(
+                &[rank(130, Some(140), 0, LOST_TO_CRIME)],
+                crime,
+                Some(140),
+                ENGINE,
+            );
+            assert_eq!(state, State::default(), "{crime:?}");
+        }
+    }
+
+    #[test]
+    fn shooting_takes_no_rank() {
+        let flags = LOST_TO_CRIME | LOST_TO_VIOLENCE;
+        assert!(kept(
+            rank(130, Some(140), 0, flags),
+            Crime::Shoot,
+            Some(140),
+            ENGINE
+        ));
+        assert!(kept(
+            rank(130, Some(140), 0, flags),
+            Crime::Shoot,
+            Some(140),
+            RuleSource::Bible
+        ));
+    }
+
+    #[test]
+    fn flag_0x04_takes_a_rank_only_on_disabling_and_destroying() {
+        let violence = rank(130, Some(140), 0, LOST_TO_VIOLENCE);
+        assert!(kept(violence.clone(), Crime::Board, Some(140), ENGINE));
+        assert!(!kept(violence.clone(), Crime::Disable, Some(140), ENGINE));
+        assert!(!kept(violence, Crime::Kill, Some(140), ENGINE));
+    }
+
+    #[test]
+    fn a_rank_with_neither_flag_is_not_lost_to_a_crime() {
+        let others = !(LOST_TO_CRIME | LOST_TO_VIOLENCE);
+        for crime in [Crime::Disable, Crime::Board, Crime::Kill] {
+            assert!(kept(
+                rank(130, Some(140), 0, others),
+                crime,
+                Some(140),
+                ENGINE
+            ));
+        }
+    }
+
+    #[test]
+    fn flag_0x08_shields_a_rank_from_crimes() {
+        let flags = LOST_TO_CRIME | LOST_TO_VIOLENCE | SHIELDED;
+        for reach in [ENGINE, RuleSource::Bible] {
+            assert!(kept(
+                rank(130, Some(140), 0, flags),
+                Crime::Kill,
+                Some(140),
+                reach
+            ));
+        }
+    }
+
+    #[test]
+    fn by_the_engine_a_crime_reaches_ranks_allied_with_the_victims_government() {
+        for flags in [LOST_TO_CRIME, LOST_TO_VIOLENCE] {
+            assert!(!kept(
+                rank(130, Some(140), 0, flags),
+                Crime::Kill,
+                Some(141),
+                ENGINE
+            ));
+            assert!(!kept(
+                rank(131, Some(141), 0, flags),
+                Crime::Kill,
+                Some(140),
+                ENGINE
+            ));
+            assert!(kept(
+                rank(132, Some(142), 0, flags),
+                Crime::Kill,
+                Some(140),
+                ENGINE
+            ));
+            assert!(kept(
+                rank(130, Some(140), 0, flags),
+                Crime::Kill,
+                Some(142),
+                ENGINE
+            ));
+        }
+    }
+
+    #[test]
+    fn an_independent_victim_takes_only_an_unaffiliated_rank_by_the_engine() {
+        for flags in [LOST_TO_CRIME, LOST_TO_VIOLENCE] {
+            assert!(kept(
+                rank(130, Some(140), 0, flags),
+                Crime::Kill,
+                None,
+                ENGINE
+            ));
+            assert!(
+                !kept(rank(130, None, 0, flags), Crime::Kill, None, ENGINE),
+                "@0x4e4e"
+            );
+            assert!(kept(
+                rank(130, None, 0, flags),
+                Crime::Kill,
+                Some(140),
+                ENGINE
+            ));
+        }
+    }
+
+    #[test]
+    fn a_derelict_victim_takes_no_rank() {
+        for reach in [ENGINE, RuleSource::Bible] {
+            assert!(
+                kept(
+                    rank(130, Some(143), 0, LOST_TO_CRIME),
+                    Crime::Kill,
+                    Some(143),
+                    reach
+                ),
+                "@0x9bf2"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lost_rank_sweeps_as_l_does() {
+        let records = [
+            rank(130, Some(140), 0, LOST_TO_CRIME | SWEEP_GOVT_ON_DEACTIVATE),
+            rank(131, Some(140), 9, 0),
+            rank(132, Some(140), 9, SHIELDED),
+            rank(133, Some(142), 9, 0),
+        ];
+        let mut state = State::holding(&[130, 131, 132, 133]);
+        state.recent = Some(RankId(131));
+        state.lose(&records, Crime::Board, Some(140), ENGINE);
+        assert_eq!(state.active(), [132, 133]);
+        assert_eq!(state.recent, None);
+    }
+
+    #[test]
+    fn ranks_are_lost_in_id_order_and_a_swept_rank_sweeps_nothing() {
+        let records = [
+            rank(130, Some(140), 5, LOST_TO_CRIME | SWEEP_LOWER_ON_DEACTIVATE),
+            rank(140, Some(140), 3, LOST_TO_CRIME | SWEEP_GOVT_ON_DEACTIVATE),
+            rank(145, Some(140), 9, 0),
+        ];
+        let mut state = State::holding(&[130, 140, 145]);
+        state.lose(&records, Crime::Kill, Some(140), ENGINE);
+        assert_eq!(state.active(), [145]);
+    }
+
+    #[test]
+    fn an_active_rank_with_no_record_is_untouched() {
+        let mut state = State::holding(&[130]);
+        state.recent = Some(RankId(130));
+        state.lose(
+            &[rank(131, None, 0, LOST_TO_CRIME)],
+            Crime::Kill,
+            None,
+            ENGINE,
+        );
+        assert_eq!(state.active(), [130]);
+        assert_eq!(state.recent, Some(RankId(130)));
+    }
+
+    #[test]
+    fn an_inactive_rank_is_not_lost_and_leaves_the_recent_rank() {
+        let mut state = State::holding(&[131]);
+        state.recent = Some(RankId(130));
+        state.lose(
+            &[rank(130, Some(140), 0, LOST_TO_CRIME)],
+            Crime::Kill,
+            Some(140),
+            ENGINE,
+        );
+        assert_eq!(state.active(), [131]);
+        assert_eq!(state.recent, Some(RankId(130)), "@0x9c56");
+    }
+
+    #[test]
+    fn by_the_other_reading_0x40_takes_only_its_own_government_and_0x04_its_allies_too() {
+        let bible = RuleSource::Bible;
+        let crime = rank(130, Some(140), 0, LOST_TO_CRIME);
+        assert!(!kept(crime.clone(), Crime::Board, Some(140), bible));
+        assert!(kept(crime.clone(), Crime::Kill, Some(141), bible));
+        let violence = rank(130, Some(140), 0, LOST_TO_VIOLENCE);
+        assert!(!kept(violence.clone(), Crime::Kill, Some(140), bible));
+        assert!(!kept(violence.clone(), Crime::Disable, Some(141), bible));
+        assert!(kept(violence, Crime::Kill, Some(142), bible));
+        let both = rank(130, Some(140), 0, LOST_TO_CRIME | LOST_TO_VIOLENCE);
+        assert!(!kept(both.clone(), Crime::Disable, Some(141), bible));
+        assert!(kept(both.clone(), Crime::Board, Some(141), bible));
+        assert!(!kept(both, Crime::Board, Some(140), bible));
+        for flags in [LOST_TO_CRIME, LOST_TO_VIOLENCE] {
+            assert!(kept(rank(130, None, 0, flags), Crime::Kill, None, bible));
         }
     }
 }

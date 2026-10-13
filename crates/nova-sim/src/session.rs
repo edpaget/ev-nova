@@ -179,9 +179,10 @@
 //! disabling it too when it was intact), each against the NPC's
 //! government, the record with each government changed and, by that
 //! government's change, the record in each of its systems
-//! ([`legal::convict`]). A mere hit is no crime, as in the original,
-//! and a mission's special ship, of any mark, is no victim of any of
-//! them (see the [`legal`] module's "Crimes").
+//! ([`legal::convict`]). Each conviction then takes the ranks its crime
+//! reaches (see [`rank`](crate::rank)'s **Crimes**). A mere hit is no
+//! crime, as in the original, and a mission's special ship, of any mark,
+//! is no victim of any of them (see the [`legal`] module's "Crimes").
 //!
 //! The player boards its target once it is disabled
 //! ([`Session::board`]), as the [`board`](crate::board) rules say: the
@@ -1729,7 +1730,9 @@ impl Session {
     /// before the fight's tick. A mission's special ship, of any mark,
     /// is convicted of neither: `_DamageShip` passes the ship's mark
     /// (@0x3adb3, @0x3ae08), and `_SlapWithPenalty` slaps only for none
-    /// (@0x9c10; see the [`legal`] module's "Crimes").
+    /// (@0x9c10; see the [`legal`] module's "Crimes"). Each conviction
+    /// then takes the ranks its crime reaches (see [`rank`](crate::rank)'s
+    /// **Crimes**).
     fn punish(&mut self, strikes: &[Strike], was: &[NpcBefore], law: &dyn LegalCode) {
         for strike in strikes.iter().filter(|strike| strike.by == ShipRef::Player) {
             let ShipRef::Npc(id) = strike.ship else {
@@ -1753,6 +1756,7 @@ impl Session {
             for &crime in crimes {
                 let changes = law.penalties(crime, govt, &self.govts);
                 legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+                self.lose_ranks_to(crime, govt);
             }
         }
     }
@@ -3528,10 +3532,12 @@ impl Session {
     /// Boards the player's target, if it is not landed or jumping and the
     /// [`board`](crate::board) checks allow it, and gives what is on
     /// board: the player matches the target's velocity, `law` convicts it
-    /// of the [`Crime::Board`] against the target's government (but for
-    /// a mission's special ship, here one of a failed mission: the
-    /// original passes its mark, `_HandlePlayerBoardAttempt` @0x6582b,
-    /// and `_SlapWithPenalty` slaps only for none, @0x9c10), the
+    /// of the [`Crime::Board`] against the target's government and the
+    /// boarding takes the ranks it reaches (see [`rank`](crate::rank)'s
+    /// **Crimes**; but for a mission's special ship, here one of a
+    /// failed mission: the original passes its mark,
+    /// `_HandlePlayerBoardAttempt` @0x6582b, and `_SlapWithPenalty`
+    /// slaps only for none, @0x9c10), the
     /// NPCs come to the target's help as for a hit by the player (a
     /// strike of no damage, answered on the next traffic tick), the
     /// target is marked boarded, and every other NPC after it lets it go
@@ -3586,6 +3592,7 @@ impl Session {
         if npc.mission.is_none() {
             let changes = law.penalties(Crime::Board, npc.govt, &self.govts);
             legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+            self.lose_ranks_to(Crime::Board, npc.govt);
         }
         self.strikes.push(Strike {
             ship: ShipRef::Npc(npc.id),
@@ -13037,6 +13044,100 @@ mod tests {
         }
     }
 
+    /// [`lawful`] with ranks 200 (of 141, allied with the NPC's 140) and
+    /// 201 (of 143, neutral), each lost to disabling or destroying, and
+    /// 202 (of 141), lost to any crime.
+    fn ranked_lawful() -> FakePilotCatalog {
+        let lost = |id, govt, flags| RankRecord {
+            affil_govt: Some(GovtId(govt)),
+            flags,
+            ..crate::testkit::rank(id)
+        };
+        FakePilotCatalog {
+            ranks: vec![
+                lost(200, 141, crate::rank::LOST_TO_VIOLENCE),
+                lost(201, 143, crate::rank::LOST_TO_VIOLENCE),
+                lost(202, 141, crate::rank::LOST_TO_CRIME),
+            ],
+            ..lawful()
+        }
+    }
+
+    /// The session's active ranks.
+    fn ranks_held(session: &Session) -> Vec<i16> {
+        session.pilot().ranks().iter().map(|id| id.0).collect()
+    }
+
+    /// [`ranked_lawful`]'s session by `rules`, holding all its ranks,
+    /// its NPC marked as `marked` says, the player firing at it.
+    fn fighting_ranked(marked: Option<Marked>, rules: Rulebook) -> Session {
+        let catalog = ranked_lawful();
+        let mut session = facing_an_npc(&catalog, 180).with_rules(rules);
+        if let Some(marked) = marked {
+            mark_the_npc(&mut session, marked);
+        }
+        session
+            .pilot
+            .ranks
+            .extend([RankId(200), RankId(201), RankId(202)]);
+        session.hold_trigger(FIRE);
+        session
+    }
+
+    /// Fights until NPC 0 is disabled, at most 80 ticks.
+    fn fight_until_disabled(session: &mut Session) {
+        for _ in 0..80 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if session.npcs().first().map(|npc| npc.condition) == Some(Condition::Disabled) {
+                return;
+            }
+        }
+        panic!("never disabled");
+    }
+
+    #[test]
+    fn disabling_and_destroying_an_npc_takes_the_ranks_they_reach() {
+        let mut session = fighting_ranked(None, Rulebook::default());
+        fight_until_disabled(&mut session);
+        assert_eq!(
+            ranks_held(&session),
+            [201],
+            "a disabling reaches its ally's ranks, not a neutral's"
+        );
+        session.pilot.ranks.insert(RankId(200));
+        for _ in 0..80 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert_eq!(session.npcs(), [], "destroyed");
+        assert_eq!(ranks_held(&session), [201], "and so does a killing");
+    }
+
+    #[test]
+    fn downing_a_mission_ship_takes_no_rank() {
+        for marked in MARKS {
+            let mut session = fighting_ranked(Some(marked), Rulebook::default());
+            for _ in 0..80 {
+                session.tick_combat(Rules::default(), &mut NeverFires);
+            }
+            assert_eq!(session.npcs(), [], "{marked:?}: destroyed");
+            assert_eq!(ranks_held(&session), [200, 201, 202], "{marked:?}: @0x9c10");
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_of_rank_crime_reach_an_allied_victim_keeps_a_0x40_rank() {
+        let mut session = fighting_ranked(
+            None,
+            Rulebook::default().with_override(RuleKey::RankCrimeReach, RuleSource::Bible),
+        );
+        fight_until_disabled(&mut session);
+        assert_eq!(
+            ranks_held(&session),
+            [201, 202],
+            "0x0004 reaches the allies, 0x0040 only its own government"
+        );
+    }
+
     /// What downing [`crimes_against_a_failing_escort`]'s ship did.
     #[derive(Debug, PartialEq)]
     struct EscortDowned {
@@ -15586,6 +15687,45 @@ mod tests {
         board_by(&mut session, &NovaLaw::default()).expect("boards");
         assert_eq!(session.pilot().system_record(SystemId(130)), -5);
         assert_eq!(session.pilot().legal_record(GovtId(140)), -5);
+    }
+
+    /// [`boardable`] with ranks 200 (of the traders, 140), lost to any
+    /// crime, and 201 (of 140), lost to disabling or destroying.
+    fn boardable_ranked() -> FakePilotCatalog {
+        let lost = |id, flags| RankRecord {
+            affil_govt: Some(GovtId(140)),
+            flags,
+            ..crate::testkit::rank(id)
+        };
+        FakePilotCatalog {
+            ranks: vec![
+                lost(200, crate::rank::LOST_TO_CRIME),
+                lost(201, crate::rank::LOST_TO_VIOLENCE),
+            ],
+            ..boardable()
+        }
+    }
+
+    #[test]
+    fn boarding_takes_a_0x40_rank_but_not_a_0x04_rank() {
+        let catalog = boardable_ranked();
+        let mut session = alongside(&catalog);
+        session.pilot.ranks.extend([RankId(200), RankId(201)]);
+        board_by(&mut session, &NovaLaw::default()).expect("boards");
+        assert_eq!(ranks_held(&session), [201]);
+    }
+
+    #[test]
+    fn boarding_a_mission_ship_takes_no_rank() {
+        let catalog = boardable_ranked();
+        for marked in MARKS {
+            let mut session = alongside(&catalog);
+            mark_the_npc(&mut session, marked);
+            session.pilot.ranks.extend([RankId(200), RankId(201)]);
+            board_by(&mut session, &NovaLaw::default()).expect("boards");
+            assert!(session.npcs()[0].boarded, "{marked:?}");
+            assert_eq!(ranks_held(&session), [200, 201], "{marked:?}: @0x9c10");
+        }
     }
 
     #[test]
