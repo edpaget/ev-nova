@@ -48,13 +48,14 @@
 //! ([`FlightView::with_effects_chance`]), never on the simulation's. The
 //! beams live before the fight's step are passed along, so a looped
 //! weapon is heard once a beam. The fight is drawn over the stellars:
-//! beams that go under the ships, then the ships, then the shots (each
-//! smoothed as the ships are) and the other beams, then the explosions and
-//! debris, then the brackets round the target ([`weapons`],
-//! [`effects`](super::effects), [`target`]). The HUD shows the target
-//! panel and the secondary weapon's line, its text laid out by the
-//! screen's [`TextMetrics`] ([`FlightView::with_metrics`]). Landing and
-//! arriving clear the effects.
+//! the cargo boxes a jettison left ([`boxes`], smoothed as the shots
+//! are), beams that go under the ships, then the ships, then the shots
+//! (each smoothed as the ships are) and the other beams, then the
+//! explosions and debris, then the brackets round the target
+//! ([`weapons`], [`effects`](super::effects), [`target`]). The HUD shows
+//! the target panel and the secondary weapon's line, its text laid out
+//! by the screen's [`TextMetrics`] ([`FlightView::with_metrics`]).
+//! Landing and arriving clear the effects.
 //!
 //! Each day a jump takes rolls the planetary events on the screen's
 //! [`SharedChance`] ([`FlightView::with_chance`]); without one, nothing
@@ -358,6 +359,7 @@ use nova_sim::{
 };
 
 use super::alert;
+use super::boxes::{self, BoxShown};
 use super::brackets;
 use super::cadence::{Drawn, HudCadence, retake_target};
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
@@ -3320,6 +3322,28 @@ impl<C> FlightView<C> {
             .collect()
     }
 
+    /// The cargo boxes in space, each where it is drawn: `alpha` of the
+    /// way from where it was a step ago, as the shots are.
+    fn shown_boxes(&self, camera: &Camera) -> Vec<BoxShown> {
+        let Ok(session) = &self.session else {
+            return Vec::new();
+        };
+        let behind = 1.0 - self.alpha;
+        session
+            .cargo_boxes()
+            .iter()
+            .map(|cargo_box| BoxShown {
+                at: camera.world_to_screen(Point::new(
+                    cargo_box.velocity.x.mul_add(-behind, cargo_box.position.x),
+                    cargo_box.velocity.y.mul_add(-behind, cargo_box.position.y),
+                )),
+                frame: cargo_box.frame,
+                fade: cargo_box.fade(),
+                graphic: cargo_box.graphic,
+            })
+            .collect()
+    }
+
     /// The beams being fired, each moved with its firer as it is drawn.
     fn shown_beams(&self, camera: &Camera) -> Vec<BeamShown> {
         let Ok(session) = &self.session else {
@@ -3692,6 +3716,7 @@ impl<
             hud::draw_message(list, message, metrics);
         }
         scene::draw_stellars(list, scene, &camera, self.elapsed);
+        boxes::draw_boxes(list, &self.shown_boxes(&camera), &self.looks);
         let beams = self.shown_beams(&camera);
         weapons::draw_beams(list, &beams, &self.looks, true);
         self.draw_npcs(list, &camera);
@@ -4002,6 +4027,9 @@ mod tests {
         cards: Vec<(i16, TargetCard)>,
         /// The governments' target codes: none, by default.
         codes: Vec<(i16, String)>,
+        /// The jettisoned cargo box's sheet: `rlëD` 500 of 36 frames, by
+        /// default.
+        box_sheet: Result<EffectSheet, String>,
         /// The string lists: none, by default.
         strings: Vec<(i16, Vec<String>)>,
         /// The persons: none, by default.
@@ -4108,6 +4136,10 @@ mod tests {
             booms: Vec::new(),
             cards: Vec::new(),
             codes: Vec::new(),
+            box_sheet: Ok(EffectSheet {
+                image_id: 500,
+                frames: NonZeroU16::new(36).expect("non-zero"),
+            }),
             strings: Vec::new(),
             persons: Vec::new(),
             defaults: Vec::new(),
@@ -4502,6 +4534,13 @@ mod tests {
                 .iter()
                 .find(|(id, _)| *id == govt.0)
                 .map(|(_, code)| code.clone())
+        }
+
+        fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
+            match graphic {
+                0 => self.box_sheet.clone(),
+                other => Err(format!("no spïn {}", 500 + other)),
+            }
         }
     }
 
@@ -12232,6 +12271,75 @@ mod tests {
         assert_eq!(cargo_aboard(&view), 0);
         assert_eq!(view.message(), Some(CARGO_JETTISONED));
         assert_eq!(CARGO_JETTISONED, "Cargo jettisoned.");
+    }
+
+    /// The cargo boxes' sprites drawn, `rlëD` 500's, in the order drawn.
+    fn box_sprites(list: &DrawList) -> Vec<(ImageKey, Point)> {
+        sprites(list)
+            .into_iter()
+            .filter(|(image, _)| image.id == 500)
+            .collect()
+    }
+
+    #[test]
+    fn command_k_drops_cargo_boxes_drawn_under_the_ship_where_they_drift() {
+        let mut view = carrying(0, true);
+        assert!(box_sprites(&drawn(&view)).is_empty());
+        let _ = view.take_sounds();
+        command_tap(&mut view, JETTISON_KEY, false);
+        let session = view.session().expect("flying");
+        let boxes = session.cargo_boxes().to_vec();
+        assert_eq!(boxes.len(), 2, "10 tons");
+        let camera = view.camera();
+        let behind = 1.0 - view.alpha;
+        let expected: Vec<_> = boxes
+            .iter()
+            .map(|made| {
+                (
+                    ImageKey::sprite(500, made.frame),
+                    camera.world_to_screen(Point::new(
+                        made.velocity.x.mul_add(-behind, made.position.x),
+                        made.velocity.y.mul_add(-behind, made.position.y),
+                    )),
+                )
+            })
+            .collect();
+        let list = drawn(&view);
+        assert_eq!(box_sprites(&list), expected);
+        let all = sprites(&list);
+        let first_box = all.iter().position(|(image, _)| image.id == 500);
+        let ship = all.iter().position(|(image, _)| image.id == 2000);
+        assert!(first_box < ship, "under the ship: {all:?}");
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::CargoJettisoned)],
+            "snd 154"
+        );
+    }
+
+    #[test]
+    fn a_landing_clears_the_cargo_boxes() {
+        let mut view = carrying(0, true);
+        command_tap(&mut view, JETTISON_KEY, false);
+        assert_eq!(box_sprites(&drawn(&view)).len(), 2);
+        land_now(&mut view);
+        assert!(view.session().expect("flying").landed().is_some());
+        assert!(view.session().expect("flying").cargo_boxes().is_empty());
+        assert!(box_sprites(&drawn(&view)).is_empty());
+    }
+
+    #[test]
+    fn a_jump_clears_the_cargo_boxes() {
+        let mut view = carrying(0, true);
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        if let Ok(session) = &mut view.session {
+            session.jettison_cargo(true, &mut nova_sim::NeverFires);
+        }
+        assert_eq!(view.session().expect("flying").cargo_boxes().len(), 2);
+        arrive_now(&mut view);
+        assert!(box_sprites(&drawn(&view)).is_empty());
     }
 
     #[test]

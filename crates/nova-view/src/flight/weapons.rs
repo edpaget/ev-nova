@@ -406,6 +406,7 @@ mod tests {
                 .map(|(id, look)| (WeaponId(*id), Ok(look.clone())))
                 .collect(),
             booms: BTreeMap::new(),
+            boxes: BTreeMap::new(),
         }
     }
 

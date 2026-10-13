@@ -252,6 +252,9 @@ pub trait CombatLooks {
     fn target_card(&self, ship: ShipId) -> TargetCard;
     /// Govt `govt`'s `TargetCode`, if it has one.
     fn target_code(&self, govt: GovtId) -> Option<String>;
+    /// The sheet of cargo box graphic `graphic`, `spïn` 500 + `graphic`,
+    /// or why it cannot be read.
+    fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -270,6 +273,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for &T {
 
     fn target_code(&self, govt: GovtId) -> Option<String> {
         (**self).target_code(govt)
+    }
+
+    fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
+        (**self).box_sheet(graphic)
     }
 }
 
@@ -290,6 +297,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for Rc<T> {
     fn target_code(&self, govt: GovtId) -> Option<String> {
         (**self).target_code(govt)
     }
+
+    fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
+        (**self).box_sheet(graphic)
+    }
 }
 
 /// The first explosion type, `bööm` 128.
@@ -297,13 +308,21 @@ pub const FIRST_BOOM: i16 = 128;
 /// The last explosion type, `bööm` 191: 64 in all.
 pub const LAST_BOOM: i16 = 191;
 
-/// The weapons' and explosions' looks, read once.
+/// The cargo box graphics read: only a jettisoned box's, 0. Graphics 1-4
+/// are only an asteroid's scoopable boxes'
+/// (rdm:phase/cargo-and-scanning/phase-5-scoopable-cargo-boxes).
+pub const BOX_GRAPHICS: [u16; 1] = [0];
+
+/// The weapons', explosions' and cargo boxes' looks, read once.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Looks {
     /// Each weapon's look, or why it cannot be read.
     pub weapons: BTreeMap<WeaponId, Result<WeaponLook, String>>,
     /// Each explosion type there is: its look, or why it cannot be read.
     pub booms: BTreeMap<BoomId, Result<BoomLook, String>>,
+    /// Each cargo box graphic a box can have: its sheet, or why it cannot
+    /// be read.
+    pub boxes: BTreeMap<u16, Result<EffectSheet, String>>,
 }
 
 impl Looks {
@@ -318,7 +337,17 @@ impl Looks {
             booms: (FIRST_BOOM..=LAST_BOOM)
                 .filter_map(|id| Some((BoomId(id), catalog.boom_look(BoomId(id))?)))
                 .collect(),
+            boxes: BOX_GRAPHICS
+                .into_iter()
+                .map(|graphic| (graphic, catalog.box_sheet(graphic)))
+                .collect(),
         }
+    }
+
+    /// Cargo box graphic `graphic`'s sheet, if it was read.
+    #[must_use]
+    pub fn box_sheet(&self, graphic: u16) -> Option<&EffectSheet> {
+        self.boxes.get(&graphic)?.as_ref().ok()
     }
 
     /// Weapon `id`'s look, if it was read.
@@ -335,8 +364,8 @@ impl Looks {
 
     /// What could not be read, a line each: a look that could not be read
     /// at all, as the catalog says, and a sheet that could not, after its
-    /// `wëap` or `bööm` ("wëap 140: no spïn 3005"); the weapons' by ID,
-    /// then the explosions'.
+    /// `wëap`, `bööm` or cargo box graphic ("wëap 140: no spïn 3005");
+    /// the weapons' by ID, then the explosions', then the boxes'.
     #[must_use]
     pub fn problems(&self) -> Vec<String> {
         let weapons = self.weapons.iter().filter_map(|(id, look)| match look {
@@ -353,7 +382,13 @@ impl Looks {
                 Ok(_) => None,
             },
         });
-        weapons.chain(booms).collect()
+        let boxes = self.boxes.iter().filter_map(|(graphic, sheet)| {
+            sheet
+                .as_ref()
+                .err()
+                .map(|reason| format!("cargo box {graphic}: {reason}"))
+        });
+        weapons.chain(booms).chain(boxes).collect()
     }
 }
 
@@ -487,6 +522,13 @@ mod tests {
         fn target_code(&self, govt: GovtId) -> Option<String> {
             Some(format!("g{}", govt.0))
         }
+
+        fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
+            Ok(EffectSheet {
+                image_id: 500 + graphic.cast_signed(),
+                frames: NonZeroU16::MIN,
+            })
+        }
     }
 
     /// Everything `catalog` says about weapon 128, `bööm` 129, ship 130
@@ -523,13 +565,28 @@ mod tests {
             }))
         );
         assert_eq!(looks.boom(BoomId(151)), None);
+        assert_eq!(
+            looks.box_sheet(0),
+            Some(&EffectSheet {
+                image_id: 500,
+                frames: NonZeroU16::MIN
+            }),
+            "a jettisoned box's"
+        );
+        assert_eq!(
+            looks.box_sheet(1),
+            None,
+            "only the jettisoned box's is read"
+        );
         assert_eq!(looks.problems(), Vec::<String>::new());
         let unread = Looks {
             weapons: BTreeMap::from([(WeaponId(1), Err("no".to_owned()))]),
             booms: BTreeMap::from([(BoomId(1), Err("no".to_owned()))]),
+            boxes: BTreeMap::from([(0, Err("no".to_owned()))]),
         };
         assert_eq!(unread.weapon(WeaponId(1)), None);
         assert_eq!(unread.boom(BoomId(1)), None);
+        assert_eq!(unread.box_sheet(0), None);
     }
 
     #[test]
@@ -578,6 +635,10 @@ mod tests {
         fn target_code(&self, _govt: GovtId) -> Option<String> {
             None
         }
+
+        fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
+            Err(format!("no spïn {}", 500 + graphic))
+        }
     }
 
     #[test]
@@ -599,6 +660,7 @@ mod tests {
                 "no wëap 141",
                 "bööm 128: no spïn 400",
                 "bööm 129: too short",
+                "cargo box 0: no spïn 500",
             ]
         );
     }

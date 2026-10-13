@@ -129,6 +129,9 @@ pub const FIRST_SHOT_SPIN: i16 = 3000;
 pub const FIRST_WEAPON_SOUND: i16 = 200;
 /// The first `spïn` of the explosions' graphics (`_LoadObjectData`).
 pub const FIRST_BOOM_SPIN: i16 = 400;
+/// The first `spïn` of the cargo boxes' graphics, the box masters
+/// `_InitSprites` loads (500-504).
+pub const FIRST_BOX_SPIN: i16 = 500;
 /// The first `snd ` of the explosions' sounds (`_LoadSounds`: 300-363).
 pub const FIRST_BOOM_SOUND: i16 = 300;
 /// The first target picture, `PICT` 3000 for `shïp` 128
@@ -198,6 +201,11 @@ impl CombatLooks for GameData {
         };
         let code = entry.record.target_code.as_str();
         (!code.is_empty()).then(|| code.to_owned())
+    }
+
+    fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
+        let graphic = i16::try_from(graphic).unwrap_or(i16::MAX);
+        effect_sheet(self, FIRST_BOX_SPIN.saturating_add(graphic))
     }
 }
 
@@ -814,6 +822,19 @@ mod tests {
             data.weapon_look(WeaponId(130)),
             Err("no wëap 130".to_owned())
         );
+    }
+
+    #[test]
+    fn a_cargo_boxs_sheet_is_spin_500_and_its_graphic() {
+        let data = named_store(&[
+            (Spin::TYPE, 500, None, spin(600)),
+            (RLED, 600, None, sheet(36)),
+            (Spin::TYPE, 502, None, spin(602)),
+            (RLED, 602, None, sheet(12)),
+        ]);
+        assert_eq!(data.box_sheet(0), Ok(sheet_of(600, 36)));
+        assert_eq!(data.box_sheet(2), Ok(sheet_of(602, 12)));
+        assert_eq!(data.box_sheet(1), Err("no spïn 501".to_owned()));
     }
 
     #[test]

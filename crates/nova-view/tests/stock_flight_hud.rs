@@ -3,9 +3,9 @@
 //! 767 background against the right edge, a Fed Destroyer shows the
 //! Federation's `ïntf` 130, and every stock `ïntf` reads; and
 //! the combat looks: every weapon the simulation flies, every explosion
-//! type and a ship's target card read, and every looped weapon sound's
-//! length; a boarding grant's message reads the strings it is built
-//! from; the cargo area's strings and area read; and the radar draws the
+//! type, every cargo box graphic and a ship's target card read, and
+//! every looped weapon sound's length; a boarding grant's message reads
+//! the strings it is built from; the cargo area's strings and area read; and the radar draws the
 //! stock stations, hypergates and wormholes as squares. Skips, passing,
 //! when `NOVA_DATA` is unset.
 
@@ -177,6 +177,20 @@ fn every_explosion_type_reads_with_its_sound_and_sprite() {
         assert_eq!(look.sound, Some(SoundId(sound)), "bööm {boom}");
     }
     assert_eq!(data.boom_look(BoomId(143)), None, "past the last");
+}
+
+#[test]
+fn every_cargo_box_graphic_reads_its_spin() {
+    let Some(data) = open() else {
+        return;
+    };
+    for graphic in 0..5 {
+        let sheet = data
+            .box_sheet(graphic)
+            .unwrap_or_else(|err| panic!("box {graphic}: {err}"));
+        let spin = data.spin_sheet(500 + graphic.cast_signed()).expect("reads");
+        assert_eq!(sheet.image_id, spin.image_id, "box {graphic}");
+    }
 }
 
 #[test]
