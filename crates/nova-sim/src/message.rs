@@ -45,4 +45,10 @@ pub enum SimMessage {
         /// The credits fined: none for no fine.
         fine: i64,
     },
+    /// A disabled former escort repaired itself and rejoined the fleet
+    /// (`_HandleShip` @0x33b45-0x33bac, `STR#` 2002 #127).
+    EscortRepaired,
+    /// A disabled former fighter repaired itself and rejoined the fleet
+    /// (`_HandleShip` @0x33b32-0x33bac, `STR#` 2002 #128).
+    FighterRepaired,
 }

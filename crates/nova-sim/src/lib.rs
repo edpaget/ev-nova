@@ -275,6 +275,7 @@ pub mod rulebook;
 pub mod rules;
 pub mod save;
 pub mod saves;
+pub mod self_repair;
 pub mod session;
 pub mod ship_change;
 pub mod ship_layer;

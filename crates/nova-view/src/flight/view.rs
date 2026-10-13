@@ -444,6 +444,12 @@ pub const MISSION_FAILED: &str = "Mission failed.";
 pub const CARGO_JETTISONED: &str = "Cargo jettisoned.";
 /// `STR#` 2002 #290: all but the mission cargo was jettisoned.
 pub const NON_MISSION_CARGO_JETTISONED: &str = "Non-mission cargo jettisoned.";
+/// `STR#` 2002 #127: a disabled former escort repaired itself and
+/// rejoined the fleet (`_HandleShip` @0x33b5a).
+pub const ESCORT_REPAIRED: &str = "Escort repaired.";
+/// `STR#` 2002 #128: a disabled former fighter did (`_HandleShip`
+/// @0x33b3b).
+pub const FIGHTER_REPAIRED: &str = "Fighter repaired.";
 
 /// `STR#` 2002 #286: a scan found a mission's cargo and failed it.
 pub const MISSION_SCANNED: &str = "Your ship has been scanned - mission failed.";
@@ -486,6 +492,8 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
         SimMessage::NonMissionCargoJettisoned => NON_MISSION_CARGO_JETTISONED,
         SimMessage::MissionScanned => MISSION_SCANNED,
         SimMessage::DeadlineMissed => TIME_LIMIT_EXCEEDED,
+        SimMessage::EscortRepaired => ESCORT_REPAIRED,
+        SimMessage::FighterRepaired => FIGHTER_REPAIRED,
         SimMessage::Smuggling {
             scanner,
             ship_name,
@@ -692,6 +700,8 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::NonMissionCargoJettisoned
         | SimMessage::MissionScanned
         | SimMessage::DeadlineMissed
+        | SimMessage::EscortRepaired
+        | SimMessage::FighterRepaired
         | SimMessage::Smuggling { .. } => None,
     }
 }
@@ -10875,6 +10885,26 @@ mod tests {
                 fine: 0,
             },
         ] {
+            assert_eq!(arrival_lead(&message), None, "{message:?}");
+        }
+    }
+
+    #[test]
+    fn a_former_escort_rejoining_says_escort_or_fighter_repaired() {
+        assert_eq!(ESCORT_REPAIRED, "Escort repaired.");
+        assert_eq!(FIGHTER_REPAIRED, "Fighter repaired.");
+        let view = flight();
+        let session = view.session().expect("flying");
+        let text = |message| sim_message_text(&message, session);
+        assert_eq!(
+            text(SimMessage::EscortRepaired).as_deref(),
+            Some(ESCORT_REPAIRED)
+        );
+        assert_eq!(
+            text(SimMessage::FighterRepaired).as_deref(),
+            Some(FIGHTER_REPAIRED)
+        );
+        for message in [SimMessage::EscortRepaired, SimMessage::FighterRepaired] {
             assert_eq!(arrival_lead(&message), None, "{message:?}");
         }
     }
