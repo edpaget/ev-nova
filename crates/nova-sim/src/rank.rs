@@ -111,6 +111,26 @@
 //! not. The [`SalaryCap`](crate::rulebook::RuleKey::SalaryCap) rule's
 //! other reading pays only up to the cap ([`salary_paid`]). The loop plays
 //! no sound.
+//!
+//! **Prices** ([`price_mults`], `_DoPortDialog` @0x5f970-0x5fa04). As
+//! the spaceport opens, both of `_priceFluxMult`'s slots (0x3166d4) are
+//! set to 1.0. Unless the stellar is independent (its government -1,
+//! @0x5f98b-0x5f990), each of the 128 rank slots in ID order that is
+//! active (+0), has a record (+1) and whose `AffilGovt` (+6) `_GovtAllies`
+//! finds allied with the stellar's government (@0x5f9bb) multiplies both
+//! by its `PriceMod` (+8) as a fraction: `m = (float)((double)m *
+//! ((double)PriceMod * 0.01))` (@0x5f9c4-0x5f9f6), so ranks stack, each
+//! product worked in double precision and rounded to single (two ranks of
+//! 90 give exactly 0.81f, where a single-precision product gives
+//! 0.80999994). The two slots always hold the same factor ([`PriceMults`]).
+//! An unaffiliated rank counts nowhere: at an independent stellar nothing
+//! counts, and at a governed one `_GovtAllies` never finds -1 allied. The
+//! [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach) rule's
+//! other reading counts only a rank of the stellar's own government. The
+//! block plays no sound. Only the shipyard reads the slots, through
+//! `_ApplyPriceAndTechnologyFlux` ([`price_flux`](crate::hire::price_flux)):
+//! a ship's price and the hire fee with `[1]`, the trade-in with `[0]`
+//! then `[1]` (see [`shipyard`](crate::shipyard)).
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -263,17 +283,84 @@ pub fn favour(
     govts: &Governments,
     reach: RuleSource,
 ) -> Favour {
-    let reaches = |rank: &RankRecord| match reach {
-        RuleSource::Engine => govts.allies(govt, rank.affil_govt),
-        RuleSource::Bible => rank.affil_govt.is_some() && rank.affil_govt == govt,
-    };
     let flags = records
         .iter()
-        .filter(|rank| active.contains(&rank.id) && reaches(rank))
+        .filter(|rank| active.contains(&rank.id) && reaches(rank, govt, govts, reach))
         .fold(0, |flags, rank| flags | rank.flags);
     Favour {
         battle_help: flags & HELPS_IN_BATTLE != 0,
         free_help: flags & HELPS_FREE != 0,
+    }
+}
+
+/// Whether `rank` reaches `govt` by `reach`'s reading of
+/// [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach): by the
+/// engine, when `_GovtAllies` finds them allied; by the other reading,
+/// only a rank of `govt` itself.
+fn reaches(
+    rank: &RankRecord,
+    govt: Option<GovtId>,
+    govts: &Governments,
+    reach: RuleSource,
+) -> bool {
+    match reach {
+        RuleSource::Engine => govts.allies(govt, rank.affil_govt),
+        RuleSource::Bible => rank.affil_govt.is_some() && rank.affil_govt == govt,
+    }
+}
+
+/// The two price multipliers the shipyard reads, `_priceFluxMult[0]` and
+/// `[1]` (see the module docs' **Prices**).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PriceMults {
+    /// `_priceFluxMult[0]`: the trade-in's first pass.
+    pub first: f32,
+    /// `_priceFluxMult[1]`: a ship's price, the hire fee and the
+    /// trade-in's second pass.
+    pub second: f32,
+}
+
+impl PriceMults {
+    /// No rank's factor: both 1.0.
+    pub const NONE: Self = Self {
+        first: 1.0,
+        second: 1.0,
+    };
+}
+
+impl Default for PriceMults {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+/// The price multipliers the ranks of `records` in `active` give at a
+/// stellar of `stellar_govt` (see the module docs' **Prices**): none at
+/// an independent stellar; otherwise each rank, in the records' order (by
+/// ID, as the catalog gives them), that reaches
+/// the stellar's government by `reach`'s reading of
+/// [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach) multiplies
+/// both by its `PriceMod` %, in double precision rounded to single.
+#[must_use]
+pub fn price_mults(
+    records: &[RankRecord],
+    active: &BTreeSet<RankId>,
+    stellar_govt: Option<GovtId>,
+    govts: &Governments,
+    reach: RuleSource,
+) -> PriceMults {
+    if stellar_govt.is_none() {
+        return PriceMults::NONE;
+    }
+    let mult = records
+        .iter()
+        .filter(|rank| active.contains(&rank.id) && reaches(rank, stellar_govt, govts, reach))
+        .fold(1.0_f32, |mult, rank| {
+            (f64::from(mult) * (f64::from(rank.price_mod) * 0.01)) as f32
+        });
+    PriceMults {
+        first: mult,
+        second: mult,
     }
 }
 
@@ -1309,5 +1396,151 @@ mod tests {
         ];
         assert_eq!(contributed(&records, &ids(&[200, 201])), 0x7);
         assert_eq!(contributed(&records, &ids(&[201])), 0x6);
+    }
+
+    /// Rank `id` of government `govt` (`None` unaffiliated) and
+    /// `PriceMod` `price_mod`.
+    fn pricing(id: i16, govt: Option<i16>, price_mod: i16) -> RankRecord {
+        RankRecord {
+            price_mod,
+            ..rank(id, govt, 0, 0)
+        }
+    }
+
+    /// The multipliers of active ranks `active` among `records` at a
+    /// stellar of `govt`, by `reach`, among [`favour_govts`].
+    fn mults_of(
+        records: &[RankRecord],
+        active: &[i16],
+        govt: Option<i16>,
+        reach: RuleSource,
+    ) -> PriceMults {
+        price_mults(
+            records,
+            &ids(active),
+            govt.map(GovtId),
+            &favour_govts(),
+            reach,
+        )
+    }
+
+    /// Both multipliers at `mult`.
+    fn both(mult: f32) -> PriceMults {
+        PriceMults {
+            first: mult,
+            second: mult,
+        }
+    }
+
+    #[test]
+    fn no_rank_leaves_both_prices_at_1() {
+        assert_eq!(PriceMults::NONE, both(1.0));
+        assert_eq!(PriceMults::default(), PriceMults::NONE);
+        let records = [pricing(130, Some(140), 85)];
+        for reach in [RuleSource::Engine, RuleSource::Bible] {
+            assert_eq!(mults_of(&records, &[], Some(140), reach), PriceMults::NONE);
+        }
+    }
+
+    #[test]
+    fn a_rank_of_the_stellars_government_multiplies_both_by_its_price_mod() {
+        let records = [pricing(130, Some(140), 85)];
+        for reach in [RuleSource::Engine, RuleSource::Bible] {
+            assert_eq!(mults_of(&records, &[130], Some(140), reach), both(0.85));
+        }
+        let dearer = [pricing(130, Some(140), 150)];
+        assert_eq!(
+            mults_of(&dearer, &[130], Some(140), RuleSource::Engine),
+            both(1.5)
+        );
+    }
+
+    #[test]
+    fn ranks_stack_as_the_original_multiplies_in_double_and_rounds_to_single() {
+        let records = [
+            pricing(130, Some(140), 90),
+            pricing(131, Some(140), 90),
+            pricing(132, Some(140), 60),
+            pricing(133, Some(140), 85),
+        ];
+        let engine = RuleSource::Engine;
+        let two_nineties = mults_of(&records, &[130, 131], Some(140), engine);
+        assert_eq!(two_nineties, both(0.81), "@0x5f9c4-0x5f9f6");
+        assert_ne!(
+            (0.9_f32 * 0.9_f32).to_bits(),
+            0.81_f32.to_bits(),
+            "not in single precision"
+        );
+        let mixed = mults_of(&records, &[132, 133], Some(140), engine);
+        assert_eq!(mixed, both(0.51));
+        assert_ne!(
+            (0.6_f32 * 0.85_f32).to_bits(),
+            0.51_f32.to_bits(),
+            "not in single precision"
+        );
+    }
+
+    #[test]
+    fn only_active_ranks_with_a_record_count() {
+        let records = [pricing(130, Some(140), 90), pricing(131, Some(140), 80)];
+        for reach in [RuleSource::Engine, RuleSource::Bible] {
+            assert_eq!(mults_of(&records, &[131], Some(140), reach), both(0.8));
+            assert_eq!(
+                mults_of(&records, &[150], Some(140), reach),
+                PriceMults::NONE,
+                "no record"
+            );
+        }
+    }
+
+    #[test]
+    fn by_the_engine_a_rank_of_an_allied_government_counts_and_by_the_other_reading_only_its_own() {
+        let records = [pricing(130, Some(141), 90), pricing(131, Some(142), 80)];
+        assert_eq!(
+            mults_of(&records, &[130, 131], Some(140), RuleSource::Engine),
+            both(0.9),
+            "141 is allied with 140; 142 is not"
+        );
+        assert_eq!(
+            mults_of(&records, &[130, 131], Some(140), RuleSource::Bible),
+            PriceMults::NONE
+        );
+        assert_eq!(
+            mults_of(&records, &[130, 131], Some(141), RuleSource::Bible),
+            both(0.9)
+        );
+    }
+
+    #[test]
+    fn an_independent_stellar_takes_no_rank() {
+        let records = [pricing(130, None, 90), pricing(131, Some(140), 80)];
+        for reach in [RuleSource::Engine, RuleSource::Bible] {
+            assert_eq!(
+                mults_of(&records, &[130, 131], None, reach),
+                PriceMults::NONE,
+                "@0x5f98b-0x5f990"
+            );
+        }
+        assert!(
+            favour_of(
+                &[rank(130, None, 0, HELPS_FREE)],
+                &[130],
+                None,
+                RuleSource::Engine
+            )
+            .free_help,
+            "where the hail's favour reaches"
+        );
+    }
+
+    #[test]
+    fn an_unaffiliated_rank_does_not_count_at_a_governed_stellar() {
+        let records = [pricing(130, None, 90)];
+        for reach in [RuleSource::Engine, RuleSource::Bible] {
+            assert_eq!(
+                mults_of(&records, &[130], Some(140), reach),
+                PriceMults::NONE
+            );
+        }
     }
 }
