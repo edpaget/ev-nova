@@ -757,6 +757,8 @@ mod tests {
             cloak: nova_sim::cloak::Cloak::default(),
             cloak_gear: nova_sim::cloak::CloakGear::default(),
             led_out: false,
+            self_repair: false,
+            former: None,
         }
     }
 

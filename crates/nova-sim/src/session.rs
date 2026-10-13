@@ -3574,10 +3574,15 @@ impl Session {
 
     /// NPC `id` is marked boarded, raising [`Fate::Boarded`], and every
     /// other NPC after it lets it go and decides again
-    /// (`_AIShipBoardedByPlayer`).
+    /// (`_AIShipBoardedByPlayer`). A former escort forgets what it was
+    /// ([`Npc::former`]), as each of the original's ways of boarding one's
+    /// own former escort ends (`_HandlePlayerBoardAttempt` @0x65b2f,
+    /// @0x65be8, @0x65e62; that boarding repair is the boarding
+    /// follow-up's).
     fn mark_boarded(&mut self, id: NpcId) {
         if let Some(npc) = self.npc_mut(id) {
             npc.boarded = true;
+            npc.former = None;
         }
         self.raise(StoryEvent::ShipFate {
             ship: id,
@@ -3930,6 +3935,7 @@ impl Session {
         if let Some(inherent_ai) = inherent_ai {
             npc.ai_type = AiType::from_raw(inherent_ai);
         }
+        npc.former = None;
         npc.leader = None;
         npc.goal = Goal::Formation { guard: None };
         npc.target = None;
@@ -16663,6 +16669,46 @@ pub(super) mod tests {
         );
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
         assert_eq!(&saved, session.pilot());
+    }
+
+    /// A former escort's memory: the trader, hired at 30 a day.
+    fn former_trader() -> crate::self_repair::FormerEscort {
+        crate::self_repair::FormerEscort {
+            record: Escort {
+                wage: Some(30),
+                ..trader_escort()
+            },
+        }
+    }
+
+    #[test]
+    fn a_former_escort_boarded_forgets_what_it_was() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        session.traffic.npcs_mut()[0].former = Some(former_trader());
+        session.traffic.npcs_mut()[1].former = Some(former_trader());
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Ok(Boarding::Opened(ON_BOARD))
+        );
+        assert_eq!(session.npcs()[0].former, None);
+        assert_eq!(
+            session.npcs()[1].former,
+            Some(former_trader()),
+            "not boarded"
+        );
+    }
+
+    #[test]
+    fn a_former_escort_taken_into_the_fleet_forgets_what_it_was() {
+        let catalog = boardable();
+        let mut session = captured(&catalog);
+        session.traffic.npcs_mut()[0].former = Some(former_trader());
+        assert_eq!(
+            session.assign(Assignment::Escort, &mut Draws::of(&[])),
+            Some(Assigned::Escort)
+        );
+        assert_eq!(session.npcs()[0].former, None);
     }
 
     /// [`boardable`] with outfits: 400 persistent, 401 not, and 402 the

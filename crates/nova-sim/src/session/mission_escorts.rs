@@ -704,6 +704,17 @@ mod tests {
         assert!(session.npcs()[0].mission_escort());
     }
 
+    #[test]
+    fn a_mission_escort_disabled_or_breaking_up_remembers_no_former_escort() {
+        let mut session = laden(1, RuleSource::Engine);
+        session.traffic.npcs_mut()[1].reserves.armor.now = 5.0;
+        let id = break_up(&mut session);
+        let disabled = &session.npcs()[1];
+        assert_eq!(disabled.condition, Condition::Disabled);
+        assert_eq!(disabled.former, None);
+        assert_eq!(session.npc(id).expect("breaking up").former, None);
+    }
+
     // Release.
 
     /// [`ships_catalog`] of `ships`, its ship 200 of `InherentAI` 1, a

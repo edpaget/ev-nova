@@ -104,6 +104,7 @@ use crate::flight::ShipState;
 use crate::market;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource};
+use crate::self_repair::FormerEscort;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId, NpcPerson};
 use crate::traffic::table::{self, ShipKind};
 
@@ -236,6 +237,8 @@ impl Session {
             cloak: Cloak::default(),
             cloak_gear: kind.cloak,
             led_out: false,
+            self_repair: kind.self_repair,
+            former: None,
         };
         Some(match berth {
             Some(berth) => self.traffic.add_npc_at(npc, berth),
@@ -360,11 +363,16 @@ impl Session {
             .collect();
         for id in lost {
             let index = self.fleet.iter().position(|&placed| placed == Some(id));
-            let record = index.and_then(|index| self.pilot.escorts.get(index));
+            let record = index
+                .and_then(|index| self.pilot.escorts.get(index))
+                .copied();
             let takes = record
                 .filter(|escort| !escort.carried)
                 .map(|escort| escort.ship);
             let here = self.npc(id).is_some();
+            if let (Some(npc), Some(record)) = (self.npc_mut(id), record) {
+                npc.former = Some(FormerEscort { record });
+            }
             self.dismiss(id);
             if let Some(ship) = takes.filter(|_| here) {
                 self.lose_cargo_share(ship);
@@ -701,6 +709,7 @@ mod tests {
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::{Gauge, Reserves};
     use crate::rulebook::Rulebook;
+    use crate::self_repair::FormerKind;
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
     use crate::testkit::{
@@ -1253,6 +1262,97 @@ mod tests {
         assert_eq!(session.npc(freighter), None, "destroyed and gone");
         assert_eq!(session.pilot().escorts()[0].ship, WARSHIP);
         assert!(!session.take_save_due(), "only once");
+    }
+
+    // What a lost escort remembers.
+
+    /// The warship hired at 50 a day, a captured freighter, and a
+    /// carried warship fighter, each worn, flying by the engine.
+    fn mixed(catalog: &FakePilotCatalog) -> Session {
+        let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
+        pilot.escorts = vec![
+            Escort {
+                wage: Some(50),
+                ..escort(WARSHIP, worn(), Some(EscortOrder::Defend))
+            },
+            escort(FREIGHTER, worn(), None),
+            Escort {
+                carried: true,
+                ..escort(WARSHIP, worn(), None)
+            },
+        ];
+        let mut session = Session::fly(catalog, pilot).expect("flies");
+        tick(&mut session, catalog);
+        session
+    }
+
+    #[test]
+    fn a_disabled_escort_remembers_what_it_was_with_its_record() {
+        let catalog = fleeted();
+        let mut session = mixed(&catalog);
+        let records = session.pilot().escorts().to_vec();
+        let ids: Vec<NpcId> = session.fleet.iter().flatten().copied().collect();
+        assert_eq!(ids.len(), 3);
+        for &id in &ids {
+            assert_eq!(session.npc(id).expect("there").former, None);
+            session.npc_mut(id).expect("there").reserves.armor.now = 10.0;
+        }
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert!(session.pilot().escorts().is_empty(), "all lost");
+        for ((id, record), kind) in ids.into_iter().zip(&records).zip([
+            FormerKind::Hired,
+            FormerKind::Captured,
+            FormerKind::Fighter,
+        ]) {
+            let npc = session.npc(id).expect("left behind");
+            assert_eq!(npc.condition, Condition::Disabled);
+            let former = npc.former.expect("remembers");
+            assert_eq!(former.kind(), kind);
+            assert_eq!(
+                former.record,
+                Escort {
+                    reserves: Reserves {
+                        armor: Gauge {
+                            now: 10.0,
+                            max: 45.0,
+                        },
+                        ..record.reserves
+                    },
+                    ..*record
+                },
+                "its record as it was lost"
+            );
+        }
+    }
+
+    #[test]
+    fn an_escort_breaking_up_remembers_too_and_one_gone_leaves_nothing() {
+        let catalog = fleeted();
+        let mut session = mixed(&catalog);
+        let hired = session.fleet[0].expect("placed");
+        let npc = session.npc_mut(hired).expect("there");
+        npc.hull.death_delay = 10;
+        npc.reserves.armor.now = 0.0;
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        let npc = session.npc(hired).expect("breaking up");
+        assert!(matches!(npc.condition, Condition::Dying { .. }));
+        assert_eq!(
+            npc.former.map(|former| former.kind()),
+            Some(FormerKind::Hired)
+        );
+        let captured = session.fleet[0].expect("placed");
+        session.traffic.remove(captured);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.pilot().escorts().len(), 1, "the gone one is lost");
+    }
+
+    #[test]
+    fn an_intact_escort_remembers_nothing() {
+        let catalog = fleeted();
+        let mut session = mixed(&catalog);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.pilot().escorts().len(), 3);
+        assert!(session.npcs().iter().all(|npc| npc.former.is_none()));
     }
 
     // The cargo a lost escort takes.

@@ -14,6 +14,7 @@ use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot};
 use crate::flight::ShipState;
 use crate::mission::ships::ShipBehav;
 use crate::reserves::Reserves;
+use crate::self_repair::FormerEscort;
 use crate::stats::ShipStats;
 
 /// An NPC's number in its system, unique while the player stays there:
@@ -125,6 +126,8 @@ pub struct NpcPerson {
 }
 
 /// An NPC ship in the player's system.
+// Each flag is its own, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Npc {
     /// Its number.
@@ -218,6 +221,15 @@ pub struct Npc {
     /// its wait runs out: decided at the emerge, as the original decides
     /// by the leader then.
     pub led_out: bool,
+    /// Whether its ship class carries a repair system among its default
+    /// items, so that, disabled, it can repair itself
+    /// ([`ShipKind::self_repair`](crate::traffic::table::ShipKind)).
+    pub self_repair: bool,
+    /// What it was, while it is a former escort of the player's: disabled
+    /// or breaking up as one, it left the fleet with this record (the
+    /// original's +0xc8de). It forgets once intact, boarded or taken into
+    /// the fleet again (see [`self_repair`](crate::self_repair)).
+    pub former: Option<FormerEscort>,
 }
 
 /// What marks an NPC as an active mission's special ship (see the
