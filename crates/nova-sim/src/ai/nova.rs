@@ -642,8 +642,10 @@ mod tests {
         let dying = with_player(&npcs, Condition::Dying { ticks_left: 3 });
         assert_eq!(
             ai.decide(&npcs[0], &dying, &mut Draws::of(&[])),
-            Goal::Attack(ShipRef::Player)
+            Goal::Attack(mark.ship()),
+            "a breaking-up player is disabled to _IsDisabled"
         );
+        assert_eq!(ai.target(&npcs[0], &dying), Some(mark.ship()));
         let gone = Surroundings::new(&[], &npcs);
         assert_eq!(
             ai.decide(&npcs[0], &gone, &mut Draws::of(&[])),
@@ -667,6 +669,13 @@ mod tests {
             Goal::Attack(ShipRef::Player),
             "with destroying weapons it goes on"
         );
+        let dying = with_player(&armed, Condition::Dying { ticks_left: 3 });
+        assert_eq!(
+            ai.decide(&armed[0], &dying, &mut Draws::of(&[])),
+            Goal::Attack(ShipRef::Player),
+            "with destroying weapons it goes on while the player breaks up"
+        );
+        assert_eq!(ai.target(&armed[0], &dying), Some(ShipRef::Player));
     }
 
     #[test]

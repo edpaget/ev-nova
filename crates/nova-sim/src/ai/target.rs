@@ -39,8 +39,8 @@
 //!    the system and not breaking up, unless it spares it.
 //! 3. **A mission ship of `ShipBehav` 0** (@0x89f25-0x89f84, see
 //!    [`mission_hunt`]): while the player is in the system, the player,
-//!    or none when it is disabled and the ship has no destroying weapons
-//!    (as `_WarshipAI` drops such a target in the same think,
+//!    or none when it is disabled or breaking up and the ship has no
+//!    destroying weapons (as `_WarshipAI` drops such a target in the same think,
 //!    @0x8bc8b-0x8bca9); no later step runs, so such a hunter never turns
 //!    on another ship while the player is here, and a paid-off one takes
 //!    the player again. The `ShipBehav` 1 branch (@0x89f86-0x89fef) never
@@ -176,7 +176,17 @@ fn nearest(
 /// Whether `npc`, a mission's special ship of `ShipBehav` 0, attacks the
 /// player among `around`: none when it is no such ship or the player is
 /// not in the system; else whether it attacks, which it does unless the
-/// player is disabled and it has no destroying weapons ([`fire::destroys`]).
+/// player is disabled or breaking up and it has no destroying weapons
+/// ([`fire::destroys`]).
+///
+/// The handler gives up (state 2, target -1, @0x8d6be-0x8d6e9) when
+/// `_IsDisabled(player)` holds and `_AIHasDestroyingWeapons` @0x8d693
+/// does not. `_IsDisabled` @0x2ce6 compares the player's armour with a
+/// share of its capacity (@0x2d79-0x2dcc), so it holds of a breaking-up
+/// player too, whose armour is gone. With destroying weapons it goes on
+/// attacking a breaking-up player: `_ShipVisibleToShip` @0x971c has no
+/// dying test, and `_AIMakeShipAttackPlayer` @0x89c3e reads `_IsDying`
+/// only for a person's attack quote (@0x89ca7).
 ///
 /// The one rule behind both `_SelectWarshipTarget` @0x89f25-0x89f84 and
 /// `_HighLevelAIHandler` @0x8d628-0x8d6ea, which the AI's dispatch reads
@@ -191,7 +201,12 @@ pub fn mission_hunt(npc: &Npc, around: &Surroundings) -> Option<bool> {
     npc.mission
         .filter(|mark| mark.behav == ShipBehav::AttackPlayer)?;
     let player = around.player.as_ref()?;
-    Some(player.condition != Condition::Disabled || fire::destroys(npc))
+    Some(
+        !matches!(
+            player.condition,
+            Condition::Disabled | Condition::Dying { .. }
+        ) || fire::destroys(npc),
+    )
 }
 
 /// The ship `npc` attacks among `around`, keeping `current` while it is
@@ -1196,6 +1211,17 @@ mod tests {
         assert_eq!(hunter_target(false, false, true, Condition::Disabled), None);
         assert_eq!(
             hunter_target(true, false, true, Condition::Disabled),
+            Some(P),
+            "it can destroy the player"
+        );
+    }
+
+    #[test]
+    fn a_ship_behav_0_ship_without_destroying_weapons_takes_nothing_while_the_player_breaks_up() {
+        let dying = Condition::Dying { ticks_left: 3 };
+        assert_eq!(hunter_target(false, false, true, dying), None);
+        assert_eq!(
+            hunter_target(true, false, true, dying),
             Some(P),
             "it can destroy the player"
         );
