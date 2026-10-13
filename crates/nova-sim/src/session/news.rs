@@ -26,6 +26,15 @@
 //! The text is kept raw, its tags not filled, as `_NewsDialogUpdate`
 //! draws it.
 //!
+//! **Its picture.** The news is drawn over the `PICT` of the docked
+//! stellar's government ([`Session::news_picture`]), read when News is
+//! pressed, as `_DoNewsDialog` does (@0x47f3b-0x47f98): the stellar's
+//! current (overlaid) government, so a change of owner since the bar
+//! opened shows. That government's `NewsPic`, else 9000 for an
+//! independent stellar or a `NewsPic` of -1 ([`news_picture`]); the
+//! fallback for a missing picture is the view's, which knows the
+//! pictures.
+//!
 //! **Keeping it.** The visit's news ([`Session::news`]) is shown again
 //! each time News is pressed, unchanged, until the bar opens again,
 //! which draws afresh. It is forgotten as the ship's docking changes (a
@@ -41,7 +50,7 @@ use crate::chance::Chance;
 use crate::market;
 use crate::news::{
     COMMERCIALS, GENERIC_NEWS, MISC_STRINGS, NO_NEWS, News, NewsFacts, OopsFacts, StoryWords,
-    TOP_NEWS, candidates, oops_pool, oops_story,
+    TOP_NEWS, candidates, news_picture, oops_pool, oops_story,
 };
 
 impl Session {
@@ -82,6 +91,14 @@ impl Session {
         }
         self.bar_news = Some(News { commercial, story });
         true
+    }
+
+    /// The `PICT` the news is drawn over (see the module docs): `None`
+    /// unless the ship is docked at a stellar with a bar.
+    #[must_use]
+    pub fn news_picture(&self) -> Option<i16> {
+        let site = self.bar_site()?;
+        Some(news_picture(site.govt.and_then(|id| self.govts.get(id))))
     }
 
     /// The news of the bar visit under way, as it was drawn: `None`
@@ -193,16 +210,19 @@ mod tests {
             .with(CARGO_NAMES, &["food", "industrial"])
     }
 
-    /// Govt 130 (class 1, allied with class 2) and 131 (class 2).
+    /// Govt 130 (class 1, allied with class 2, news picture 9002) and
+    /// 131 (class 2, no news picture).
     fn govts() -> Vec<GovtRecord> {
         vec![
             GovtRecord {
                 classes: [1, -1, -1, -1],
                 allies: [2, -1, -1, -1],
+                news_pic: 9002,
                 ..govt(130)
             },
             GovtRecord {
                 classes: [2, -1, -1, -1],
+                news_pic: -1,
                 ..govt(131)
             },
         ]
@@ -669,5 +689,36 @@ mod tests {
             opened(&mut session, &mut NeverFires).story,
             "Nothing happened"
         );
+    }
+
+    #[test]
+    fn the_news_picture_is_the_bars_governments() {
+        let catalog = barred(Some(130), vec![]);
+        let session = landed(&catalog, lists());
+        assert_eq!(session.news_picture(), Some(9002));
+        let catalog = barred(None, vec![]);
+        let session = landed(&catalog, lists());
+        assert_eq!(session.news_picture(), Some(9000), "independent");
+    }
+
+    #[test]
+    fn there_is_no_news_picture_away_from_a_bar() {
+        let catalog = barred(Some(130), vec![]);
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.news_picture(), None, "not landed");
+        let mut session = landed(&catalog, lists());
+        session.landed = Some(StellarId(140));
+        assert_eq!(session.news_picture(), None, "no bar");
+    }
+
+    #[test]
+    fn the_news_picture_follows_the_stellars_owner_when_news_is_pressed() {
+        let catalog = barred(Some(130), vec![]);
+        let mut session = landed(&catalog, lists());
+        assert!(session.open_bar(&mut NeverFires));
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_stellar_govt(StellarId(128), Some(Some(GovtId(131))));
+        });
+        assert_eq!(session.news_picture(), Some(9000), "131's NewsPic is -1");
     }
 }

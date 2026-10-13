@@ -108,7 +108,7 @@
 use std::collections::BTreeMap;
 
 use crate::catalog::{
-    CommCatalog, CronId, CronRecord, DisasterId, DisasterRecord, GovtId, StellarId,
+    CommCatalog, CronId, CronRecord, DisasterId, DisasterRecord, GovtId, GovtRecord, StellarId,
 };
 use crate::cron::CronState;
 use crate::govt::Governments;
@@ -145,6 +145,11 @@ pub const ON: usize = 60;
 /// `STR#` 4001: the cargo names, lower case (`_lcCargoName`, from
 /// `_LoadStrings` @0x71ba4), which the `öops` story and `<CT>` read.
 pub const CARGO_NAMES: i16 = 4001;
+
+/// The `PICT` the news is drawn over at an independent stellar, under a
+/// government whose `NewsPic` is -1, or when the picture asked for is
+/// missing (`_DoNewsDialog` @0x47f4a, @0x47f66, @0x47f98).
+pub const DEFAULT_NEWS_PICTURE: i16 = 9000;
 
 /// A bar visit's news: the commercial line and the story, raw, their
 /// tags not filled.
@@ -422,6 +427,23 @@ pub fn oops_story(
     ))
 }
 
+/// The `PICT` the news is drawn over at a stellar of government `govt`:
+/// its `NewsPic`, or [`DEFAULT_NEWS_PICTURE`] at an independent stellar
+/// (`None`) or when the `NewsPic` is -1 (`_DoNewsDialog` @0x47f3b-0x47f66).
+///
+/// Only -1 is tested: the Bible's "below 128 ignored" is not in the code,
+/// so any other value, 0 included, is asked for, and a missing picture
+/// falls back to 9000 where the pictures are known (the view's port).
+/// A government ID with no `gövt` record has nothing to read, so it is
+/// treated as -1.
+#[must_use]
+pub fn news_picture(govt: Option<&GovtRecord>) -> i16 {
+    match govt {
+        Some(record) if record.news_pic != -1 => record.news_pic,
+        _ => DEFAULT_NEWS_PICTURE,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +455,39 @@ mod tests {
         days: 5,
         holdoff: 0,
     };
+
+    #[test]
+    fn the_news_is_drawn_over_the_governments_news_picture() {
+        let pictured = |news_pic| GovtRecord {
+            news_pic,
+            ..govt(130)
+        };
+        assert_eq!(news_picture(Some(&pictured(9001))), 9001);
+        assert_eq!(news_picture(Some(&pictured(9000))), 9000);
+    }
+
+    #[test]
+    fn an_independent_stellar_or_a_news_pic_of_minus_one_shows_picture_9000() {
+        assert_eq!(news_picture(None), DEFAULT_NEWS_PICTURE);
+        let unpictured = GovtRecord {
+            news_pic: -1,
+            ..govt(130)
+        };
+        assert_eq!(news_picture(Some(&unpictured)), 9000);
+    }
+
+    #[test]
+    fn only_minus_one_is_tested_not_the_bibles_below_128() {
+        let zero = GovtRecord {
+            news_pic: 0,
+            ..govt(130)
+        };
+        assert_eq!(
+            news_picture(Some(&zero)),
+            0,
+            "left to the missing-picture fallback"
+        );
+    }
 
     /// Govt 130 (class 1, allied with class 2), 131 (class 2), 132
     /// (class 3, no allies), and 133 (class 2, derelict).
