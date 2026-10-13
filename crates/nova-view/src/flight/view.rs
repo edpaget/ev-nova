@@ -10465,6 +10465,19 @@ mod tests {
                 .map(|npc| npc.id)
         };
         let (ship, escort) = (last(false), last(true));
+        let escort_berth = session
+            .npcs()
+            .iter()
+            .find(|npc| Some(npc.id) == escort)
+            .map(|npc| npc.berth);
+        // Tab from the last escort: the first ship above its berth.
+        let after_escort = session
+            .npcs()
+            .iter()
+            .filter(|npc| !session.is_escort(npc.id) && Some(npc.berth) > escort_berth)
+            .min_by_key(|npc| npc.berth)
+            .map(|npc| npc.id);
+        assert!(after_escort.is_some(), "{:?}", session.npcs());
         let ships = session.npcs().len();
         assert!(ships >= 4, "two of each: {:?}", session.npcs());
         let target = |view: &View| view.session().expect("flying").target().map(|npc| npc.id);
@@ -10477,7 +10490,7 @@ mod tests {
         view.input(&key(Key::Shift, false));
         view.input(&key(Key::Alt, false));
         tap(&mut view, TARGET_KEY);
-        assert_ne!(target(&view), ship, "Tab alone walks forward again");
+        assert_eq!(target(&view), after_escort, "Tab alone walks forward again");
     }
 
     #[test]
