@@ -24,6 +24,9 @@
 //! - [`blink`]: how bright a ship's running lights are at a tick,
 //!   [`lights_level`], from its `shän`'s [`Blink`] fields, with random
 //!   mode rolling on the [`BlinkChance`] port.
+//! - [`brackets`]: the corner brackets round the nav target and the ship
+//!   target: their [`FlyIn`](brackets::FlyIn) from a selection and a ship
+//!   target's [`Standing`](brackets::Standing).
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's fields and default items, the
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
@@ -232,6 +235,7 @@ pub mod ai;
 pub mod bay;
 pub mod blink;
 pub mod board;
+pub mod brackets;
 pub mod catalog;
 pub mod chance;
 pub mod cloak;

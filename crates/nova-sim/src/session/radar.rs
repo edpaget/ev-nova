@@ -57,7 +57,7 @@ impl Session {
     /// - **Blessed:** never. The port has no ranks yet:
     ///   rdm:phase/crons-news-ranks/phase-12-rank-blessing feeds the
     ///   government's "may land" blessing (`gövt` +0x85) in here.
-    fn standing(site: &LandingSite) -> Standing {
+    pub(super) fn standing(site: &LandingSite) -> Standing {
         Standing {
             dominated: site.flags2 & market::DOMINATED != 0,
             blessed: false,

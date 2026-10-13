@@ -329,6 +329,7 @@
 //! [`Session::take_diagnostics`].
 
 mod aux_ships;
+mod brackets;
 mod cloaks;
 mod control;
 mod edit;
@@ -696,6 +697,11 @@ pub struct Session {
     /// The Red Alert's state (see the `red_alert` module); not saved, as
     /// the original's pilot file does not keep it.
     red_alert: RedAlert,
+    /// How far out the nav target's brackets are (see the `brackets`
+    /// module); not saved, as the original's pilot file does not keep it.
+    nav_fly_in: crate::brackets::FlyIn,
+    /// How far out the ship target's brackets are; not saved either.
+    target_fly_in: crate::brackets::FlyIn,
     /// Whether the player's sound effects are quiet, which by
     /// [`RuleKey::AlertBlink`]'s engine reading blinks the Red Alert's
     /// icon; set by the view from the player's preferences, never saved.
@@ -959,6 +965,8 @@ impl Session {
             ship_redraws: BTreeSet::new(),
             frame: 0,
             red_alert: RedAlert::default(),
+            nav_fly_in: crate::brackets::FlyIn::default(),
+            target_fly_in: crate::brackets::FlyIn::default(),
             sound_quiet: false,
             pay_notes: Vec::new(),
             op_observer: None,
@@ -1172,8 +1180,9 @@ impl Session {
     /// Each tick in flight, a jump's included, moves the frame counter on,
     /// and on a due frame ([`market::junk_step_due`]) steps the held
     /// tribbles and perishables, unless the player is destroyed. It then
-    /// runs the Red Alert on that frame (see the `red_alert` module). A
-    /// landed tick moves neither.
+    /// runs the Red Alert on that frame (see the `red_alert` module) and
+    /// flies the target brackets in (see the `brackets` module). A
+    /// landed tick moves none of them.
     pub fn tick(&mut self, controls: Controls) {
         self.gate = None;
         if self.landed.is_some() {
@@ -1192,6 +1201,7 @@ impl Session {
             );
         }
         self.red_alert_tick(frame);
+        self.brackets_tick();
         let controls = match self.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
@@ -1762,8 +1772,11 @@ impl Session {
     /// Picks the player's target as `pick` says (see
     /// [`targeting`](crate::targeting)), and gives it: the nearest NPC, or
     /// the nearest threat, the target unchanged when there is none; or the
-    /// next. While the ship is landed or jumping, nothing changes.
+    /// next. While the ship is landed or jumping, nothing changes. A pick
+    /// that changes the target starts its brackets' fly-in
+    /// ([`Session::target_brackets`]).
     pub fn select_target(&mut self, pick: TargetPick) -> Option<NpcId> {
+        let before = self.target;
         if self.landed.is_none() && self.jumping().is_none() {
             let cloaked_ok = self.scanner().targets;
             let npcs = self.traffic.npcs();
@@ -1784,6 +1797,7 @@ impl Session {
                 }
             }
         }
+        self.retargeted(before);
         self.target
     }
 
@@ -2159,7 +2173,10 @@ impl Session {
     /// and only moves its selection. `None`, and nothing changes, during
     /// a jump (pre-jump stage too, as the original skips its nav inputs
     /// while jumping) or when `pick` finds nothing: an empty slot, no
-    /// landable stellar, or a click on none.
+    /// landable stellar, or a click on none. Picking a stellar other than
+    /// the target starts its brackets' fly-in ([`Session::nav_brackets`]);
+    /// picking the target again doesn't (@0x69ec4-0x69ed6,
+    /// @0x6a68f-0x6a69d).
     pub fn select_stellar(&mut self, pick: StellarPick) -> Option<StellarId> {
         if self.jump.is_some() {
             return None;
@@ -2171,6 +2188,9 @@ impl Session {
                 stellar_under(&self.sites, at, |site| self.drawn_frame_size(site))
             }
         }?;
+        if self.nav_target != Some(picked) {
+            self.nav_fly_in.start();
+        }
         self.nav_target = Some(picked);
         Some(picked)
     }
@@ -2289,11 +2309,12 @@ impl Session {
     /// [`landing`](crate::landing) rules say, with the navigation target
     /// and the pilot's legal record with the stellar's government, or the
     /// system's on the star map when the stellar has none. A press that
-    /// selects a stellar makes it the navigation target and lands on
-    /// nothing. A press that lands docks the ship at the stellar's centre,
-    /// at rest, its heading and reserves unchanged, and clears the target,
-    /// so that once it takes off L requests clearance again. Otherwise the
-    /// ship flies on, its target kept, and the refusal says why.
+    /// selects a stellar makes it the navigation target, starting its
+    /// brackets' fly-in (@0x6a932), and lands on nothing. A press that
+    /// lands docks the ship at the stellar's centre, at rest, its heading
+    /// and reserves unchanged, and clears the target, so that once it
+    /// takes off L requests clearance again. Otherwise the ship flies on,
+    /// its target kept, and the refusal says why.
     ///
     /// A press that would land on a hypergate or wormhole
     /// ([`GateKind::of`] its `Flags2`) enters it instead: it does not dock
@@ -2315,7 +2336,10 @@ impl Session {
             |site| self.landing_reach(site),
         )?;
         match outcome {
-            LandOutcome::Selected { stellar, .. } => self.nav_target = Some(stellar),
+            LandOutcome::Selected { stellar, .. } => {
+                self.nav_target = Some(stellar);
+                self.nav_fly_in.start();
+            }
             LandOutcome::Landed(stellar) => {
                 if let Some(kind) = self.gate_kind(stellar) {
                     self.gate = Some(stellar);
@@ -17351,7 +17375,7 @@ mod tests {
     /// [`catalog`] with system 130 holding three planets whose navigation
     /// order, 131, 128, 129, is not their order by distance from the
     /// centre, where the ship starts: 128 is nearest, then 131, then 129.
-    fn three_stellars() -> FakePilotCatalog {
+    pub(super) fn three_stellars() -> FakePilotCatalog {
         let mut catalog = catalog();
         catalog.sites[0].1 = vec![
             planet(131, 900.0, 0.0),
@@ -17545,7 +17569,7 @@ mod tests {
     /// [`three_stellars`] with 130 a hub: it lists 134, 131 (twice),
     /// itself, a missing 999 and 135, in that Con order; 136 lists 130
     /// one way; 131 lists 132; 133 lists nothing and exists too.
-    fn hub() -> FakePilotCatalog {
+    pub(super) fn hub() -> FakePilotCatalog {
         let mut catalog = three_stellars();
         catalog.star_map = vec![
             star(130, (0.0, 0.0), &[134, 131, 131, 130, 999, 135]),
