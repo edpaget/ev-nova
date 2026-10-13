@@ -3832,10 +3832,16 @@ mod tests {
 
     #[test]
     fn by_the_engine_mission_cargo_alone_past_the_holds_trims_the_commodities() {
-        // 4 x 10/16.
+        // 11 tons of mission cargo in 10 holds; everything held is
+        // 20 + 9 + 11 = 40, so 20 x 10/40 and 9 x 10/40. Leaving the other
+        // commodity out of the total would keep 20 x 10/31 = 6 food and
+        // 9 x 10/20 = 4 metal.
         assert_eq!(
-            kept_beside(&[(FOOD, 4), (METAL, 1)], 10, 12, &[], RuleSource::Engine),
-            (vec![(FOOD, 2)], BTreeMap::from([(FOOD, 2), (METAL, 1)]))
+            kept_beside(&[(FOOD, 20), (METAL, 9)], 10, 11, &[], RuleSource::Engine),
+            (
+                vec![(FOOD, 5), (METAL, 2)],
+                BTreeMap::from([(FOOD, 15), (METAL, 7)])
+            )
         );
     }
 
