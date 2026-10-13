@@ -87,8 +87,9 @@ impl Session {
     /// then the ships the player leads, then the rest (see
     /// [`ship_layer`](crate::ship_layer)). Within each layer, by
     /// [`RuleKey::ShipOverlap`]: by the engine, in the order each ship's
-    /// slot last entered it, with the ships laid out as they stand now
-    /// ([`Session::lay_out_ships`]); by the other reading, in the
+    /// slot last entered it, with the ships laid out as they stand now,
+    /// as each flight tick lays them out at its end
+    /// ([`Session::tick_combat`]); by the other reading, in the
     /// session's NPC order with the player on top.
     #[must_use]
     pub fn draw_order(&self) -> Vec<ShipRef> {

@@ -41,7 +41,8 @@
 //! [`Session::draw_order`](crate::Session::draw_order) draws each layer
 //! in it. A ship whose type has no sprite, which the original hides and
 //! never moves (@0x2b7f3), is laid out here as any other:
-//! rdm:phase/player-led-ships/phase-30-unsprited-ship-hidden. By by [`RuleKey::ShipOverlap`](crate::rulebook::RuleKey::ShipOverlap)'s
+//! rdm:phase/player-led-ships/phase-30-unsprited-ship-hidden. By
+//! [`RuleKey::ShipOverlap`](crate::rulebook::RuleKey::ShipOverlap)'s
 //! other reading, [`in_draw_order`] keeps each layer in the order it is
 //! given, the session's NPC order with the player on top. The step-1
 //! findings of
