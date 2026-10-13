@@ -771,4 +771,48 @@ mod tests {
             assert_eq!(cash - session.pilot().cash(), paid, "{scope:?}");
         }
     }
+
+    #[test]
+    fn the_scope_key_changes_nothing_on_the_ship_side() {
+        // Ship 128's hull trades in at 2020 under the default rank_trade_in.
+        let catalog = port(Vec::new());
+        for scope in [RuleSource::Engine, RuleSource::Bible] {
+            let rules = reading(RuleKey::RankPriceScope, scope);
+            let mut session = landed_holding(&catalog, rules, &[200]);
+            assert_eq!(prices(&mut session), ONE_RANK, "{scope:?}");
+            session.pilot.cash = 25_000;
+            let bought = session
+                .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
+                .expect("bought");
+            assert_eq!(bought.price, ONE_RANK.0, "{scope:?}");
+            assert_eq!(
+                session.pilot().cash(),
+                25_000 + 2020 - ONE_RANK.0,
+                "{scope:?}"
+            );
+            let mut hiring = landed_holding(&catalog, rules, &[200]);
+            let cash = hiring.pilot().cash();
+            let hired = hiring.hire(ShipId(129), &mut NeverFires).expect("hired");
+            assert_eq!(hired.fee, ONE_RANK.1, "{scope:?}");
+            assert_eq!(cash - hiring.pilot().cash(), ONE_RANK.1, "{scope:?}");
+        }
+    }
+
+    #[test]
+    fn a_government_change_while_landed_follows_the_timing_rule() {
+        let catalog = port(Vec::new());
+        for (timing, while_landed) in [
+            (RuleSource::Engine, ONE_RANK),
+            (RuleSource::Bible, UNRANKED),
+        ] {
+            let rules = reading(RuleKey::RankPriceTiming, timing);
+            let mut session = landed_holding(&catalog, rules, &[200]);
+            assert_eq!(prices(&mut session), ONE_RANK, "{timing:?}");
+            // Government 130 is no ally of the rank's government 128.
+            session.sites[0].govt = Some(crate::catalog::GovtId(130));
+            assert_eq!(prices(&mut session), while_landed, "{timing:?}");
+            land_again(&mut session, &catalog);
+            assert_eq!(prices(&mut session), UNRANKED, "{timing:?}");
+        }
+    }
 }
