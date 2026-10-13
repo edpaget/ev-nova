@@ -2546,6 +2546,7 @@ mod tests {
         decloaks_when_hit: true,
         on_radar: true,
         flags2: 0x5282,
+        scanner: crate::cloak::Scanner::NONE,
     };
 
     /// [`table`] of `count` ships whose ship 200 carries `gear`.

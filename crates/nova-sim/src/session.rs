@@ -13444,6 +13444,7 @@ pub(super) mod tests {
         decloaks_when_hit: false,
         on_radar: false,
         flags2: 0,
+        scanner: crate::cloak::Scanner::NONE,
     };
 
     /// [`armed`], with outfit 260, a cloak scanner of `ModVal` `scan`, the

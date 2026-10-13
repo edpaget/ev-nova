@@ -139,11 +139,17 @@ pub const SCAN_RADAR: i16 = 0x0001;
 /// A scanner's `ModVal` bit: cloaked ships show on screen, within
 /// [`SIGHT_RANGE`].
 pub const SCAN_SCREEN: i16 = 0x0002;
+/// A scanner's `ModVal` bit: ships of an [`UNTARGETABLE`] type can be
+/// targeted (`_ShipCanTargetUntargetableShips` @0x238f).
+pub const SCAN_UNTARGETABLE: i16 = 0x0004;
 /// A scanner's `ModVal` bit: cloaked ships can be targeted.
 pub const SCAN_TARGET: i16 = 0x0008;
 
 /// The `Flags2` bit that fades a ship type's cloak at [`FAST_FADE_RATE`].
 pub const FAST_FADE: u16 = 0x0001;
+/// The `Flags2` bit that makes a ship type untargetable without a
+/// scanner's [`SCAN_UNTARGETABLE`] (see [`CloakGear::untargetable`]).
+pub const UNTARGETABLE: u16 = 0x0004;
 /// The `Flags2` bit that cloaks a ship while it retreats.
 pub const CLOAK_RETREATING: u16 = 0x0200;
 /// The `Flags2` bit that keeps a ship cloaked while it presses an attack
@@ -266,7 +272,8 @@ impl Cloak {
     }
 }
 
-/// What a ship type gives its cloak: from its default items and `Flags2`.
+/// What a ship type gives its cloak, and its sight of other ships': from
+/// its default items and `Flags2`.
 // Each flag is its own, read on its own.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -277,8 +284,14 @@ pub struct CloakGear {
     pub decloaks_when_hit: bool,
     /// Whether it shows on the radar while cloaked ([`CLOAK_ON_RADAR`]).
     pub on_radar: bool,
-    /// Its `Flags2`, whose AI-cloak bits and [`FAST_FADE`] it reads.
+    /// Its `Flags2`, whose AI-cloak bits, [`FAST_FADE`] and
+    /// [`UNTARGETABLE`] it reads.
     pub flags2: u16,
+    /// What the cloak scanners among its default items give: an NPC's
+    /// own scanner (`_ShipCanTargetUntargetableShips` @0x2402 and
+    /// `_ShipCanTargetCloakedShips` @0x24d9 read its ship type's default
+    /// items, where the player's read the outfits it owns).
+    pub scanner: Scanner,
 }
 
 impl CloakGear {
@@ -289,6 +302,7 @@ impl CloakGear {
     pub fn of(flags2: u16, items: &BTreeMap<OutfitId, u16>, outfits: &[OutfitRecord]) -> Self {
         let mut gear = Self {
             flags2,
+            scanner: Scanner::of(items, outfits),
             ..Self::default()
         };
         for mod_val in mods(items, outfits, MOD_CLOAK) {
@@ -305,7 +319,14 @@ impl CloakGear {
         self.flags2 & FAST_FADE != 0
     }
 
-    /// Whether its `Flags2` has the AI-cloak `bit`.
+    /// Whether a ship of it is untargetable ([`UNTARGETABLE`]): only a
+    /// searcher whose scanner has [`SCAN_UNTARGETABLE`] targets it.
+    #[must_use]
+    pub fn untargetable(self) -> bool {
+        self.has(UNTARGETABLE)
+    }
+
+    /// Whether its `Flags2` has the `bit`.
     fn has(self, bit: u16) -> bool {
         self.flags2 & bit != 0
     }
@@ -318,8 +339,11 @@ impl CloakGear {
     }
 }
 
-/// What the player's cloak scanners give: a `ModType` 30 mod's `ModVal`
-/// bits, over every outfit it owns.
+/// What a ship's cloak scanners give: a `ModType` 30 mod's `ModVal`
+/// bits, over every outfit the player owns or every default item of an
+/// NPC's ship type ([`CloakGear::scanner`]).
+// Each bit is its own, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Scanner {
     /// Cloaked ships within [`SIGHT_RANGE`] are seen ([`SCAN_SCREEN`]).
@@ -328,9 +352,20 @@ pub struct Scanner {
     pub on_radar: bool,
     /// Cloaked ships can be targeted ([`SCAN_TARGET`]).
     pub targets: bool,
+    /// Ships of an [`UNTARGETABLE`] type can be targeted
+    /// ([`SCAN_UNTARGETABLE`]).
+    pub untargetable: bool,
 }
 
 impl Scanner {
+    /// No scanner at all: [`Scanner::default`], for a `const`.
+    pub const NONE: Self = Self {
+        on_screen: false,
+        on_radar: false,
+        targets: false,
+        untargetable: false,
+    };
+
     /// What `owned` of `outfits` give.
     #[must_use]
     pub fn of(owned: &BTreeMap<OutfitId, u16>, outfits: &[OutfitRecord]) -> Self {
@@ -339,6 +374,7 @@ impl Scanner {
             scanner.on_screen |= mod_val & SCAN_SCREEN != 0;
             scanner.on_radar |= mod_val & SCAN_RADAR != 0;
             scanner.targets |= mod_val & SCAN_TARGET != 0;
+            scanner.untargetable |= mod_val & SCAN_UNTARGETABLE != 0;
         }
         scanner
     }
@@ -664,6 +700,7 @@ mod tests {
                 decloaks_when_hit: true,
                 on_radar: true,
                 flags2: 0x5282,
+                scanner: Scanner::default(),
             }
         );
         assert!(!zephyr.fast());
@@ -704,7 +741,7 @@ mod tests {
         let outfits = [
             outfit(310, &[(MOD_SCANNER, SCAN_RADAR)]),
             outfit(311, &[(1, 1), (MOD_SCANNER, SCAN_SCREEN | SCAN_TARGET)]),
-            outfit(312, &[(MOD_SCANNER, 0x0004)]),
+            outfit(312, &[(MOD_SCANNER, SCAN_UNTARGETABLE)]),
         ];
         assert_eq!(Scanner::of(&BTreeMap::new(), &outfits), Scanner::default());
         assert_eq!(
@@ -721,19 +758,65 @@ mod tests {
                 on_screen: true,
                 on_radar: true,
                 targets: true,
+                untargetable: false,
             }
         );
-        assert_eq!(Scanner::of(&one(312), &outfits), Scanner::default());
-        let twice = outfit(313, &[(MOD_SCANNER, 0x000b), (MOD_SCANNER, 0x000b)]);
+        assert_eq!(
+            Scanner::of(&one(312), &outfits),
+            Scanner {
+                untargetable: true,
+                ..Scanner::default()
+            }
+        );
+        let twice = outfit(313, &[(MOD_SCANNER, 0x000f), (MOD_SCANNER, 0x000f)]);
         assert_eq!(
             Scanner::of(&one(313), &[twice]),
             Scanner {
                 on_screen: true,
                 on_radar: true,
                 targets: true,
+                untargetable: true,
             },
             "a bit set twice is set"
         );
+    }
+
+    #[test]
+    fn a_ship_types_scanner_is_its_default_items_scanner_bits_and_no_other_mod() {
+        let outfits = [
+            outfit(320, &[(MOD_SCANNER, SCAN_UNTARGETABLE | SCAN_TARGET)]),
+            outfit(321, &[(MOD_CLOAK, 0x000f), (1, 0x000f)]),
+        ];
+        assert_eq!(
+            CloakGear::of(0, &one(320), &outfits).scanner,
+            Scanner {
+                targets: true,
+                untargetable: true,
+                ..Scanner::default()
+            }
+        );
+        assert_eq!(
+            CloakGear::of(0, &one(321), &outfits).scanner,
+            Scanner::default(),
+            "a cloak's bits are not a scanner's"
+        );
+        let none_held: BTreeMap<OutfitId, u16> = [(OutfitId(320), 0)].into();
+        assert_eq!(
+            CloakGear::of(0, &none_held, &outfits).scanner,
+            Scanner::default()
+        );
+    }
+
+    #[test]
+    fn a_ship_type_is_untargetable_by_its_flags2_bit_0x0004() {
+        let gear = |flags2| CloakGear {
+            flags2,
+            ..CloakGear::default()
+        };
+        assert!(gear(UNTARGETABLE).untargetable());
+        assert!(gear(0x5286).untargetable());
+        assert!(!gear(0x5282).untargetable());
+        assert!(!gear(0).untargetable());
     }
 
     const CLOAKED: Cloak = Cloak {
@@ -821,6 +904,7 @@ mod tests {
         decloaks_when_hit: true,
         on_radar: true,
         flags2: 0x5282,
+        scanner: Scanner::NONE,
     };
 
     #[test]

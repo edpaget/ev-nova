@@ -1160,7 +1160,22 @@ mod tests {
                 decloaks_when_hit: true,
                 on_radar: true,
                 flags2: 0x5282,
+                scanner: crate::cloak::Scanner::default(),
             }
+        );
+        let scanning = ShipRecord {
+            defaults: vec![(OutfitId(301), 1)],
+            ..ship(205, FAST)
+        };
+        let scanner = [outfit(
+            301,
+            &[(crate::cloak::MOD_SCANNER, crate::cloak::SCAN_UNTARGETABLE)],
+        )];
+        assert!(
+            kind(&scanning, &scanner, &arsenal())
+                .cloak
+                .scanner
+                .untargetable
         );
     }
 
