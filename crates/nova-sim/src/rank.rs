@@ -623,7 +623,9 @@ pub fn blessing(
         let Some(own) = rank.affil_govt else {
             continue;
         };
-        if !active.contains(&rank.id) || rank.flags & (BLESSES_PEACE | BLESSES_LANDING) == 0 {
+        // A rank with neither flag goes through the loop blessing nothing,
+        // as the original skips it (@0xc90a).
+        if !active.contains(&rank.id) {
             continue;
         }
         // `_GovtAllies` holds at once for equal IDs, so the rank's own
