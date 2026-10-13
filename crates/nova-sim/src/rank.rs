@@ -315,7 +315,7 @@ pub fn lose_to_crime(
 /// The crime flags of `flags` that `crime` takes: 0x0040 on any crime
 /// the original slaps, 0x0004 on disabling and destroying (types 1 and 3,
 /// @0x9c89-0x9c97). The original never slaps for a hit.
-fn takes(flags: u16, crime: Crime) -> u16 {
+fn flags_taken(flags: u16, crime: Crime) -> u16 {
     match crime {
         Crime::Disable | Crime::Kill => flags & (LOST_TO_CRIME | LOST_TO_VIOLENCE),
         Crime::Board => flags & LOST_TO_CRIME,
@@ -337,7 +337,7 @@ fn crime_reaches(
     govts: &Governments,
     reach: RuleSource,
 ) -> bool {
-    let taken = takes(rank.flags, crime);
+    let taken = flags_taken(rank.flags, crime);
     match reach {
         RuleSource::Engine => taken != 0 && govts.allies(victim, rank.affil_govt),
         RuleSource::Bible => {

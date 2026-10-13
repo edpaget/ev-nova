@@ -31,6 +31,9 @@ exclude_re = [
     # or unsellable (0x0008): two distinct bits, so `|` and `^` combine them
     # the same.
     "replace \\| with \\^ in trade_in",
+    # A crime of violence takes a rank of `Flags` 0x0040 or 0x0004: two
+    # distinct bits, so `|` and `^` combine them the same.
+    "replace \\| with \\^ in flags_taken",
     # Compiled only on non-macOS targets, so on the macOS development host a
     # mutated body is never built into the tests and cannot be observed. It
     # is a one-line `Ok(None)`.
