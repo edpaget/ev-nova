@@ -175,7 +175,7 @@ impl Session {
             cash: self.pilot.cash,
             room: self.pilot.escort_count() < MAX_ESCORTS,
             terms: &*self.hire_terms.0,
-            rank_mult: 1.0,
+            rank_mult: self.price_mults().second,
             control_bits: &*self.control_bits.0,
             pilot: &facts,
             rules: self.rules,
@@ -211,10 +211,10 @@ impl Session {
             .cloned()
             .ok_or(HireRefusal::NotListed)?;
         let site = self.bar_site().ok_or(HireRefusal::NoBar)?;
-        let fee = self
-            .hire_terms
-            .0
-            .charge(&record, &site, 1.0, self.pilot.cash);
+        let fee =
+            self.hire_terms
+                .0
+                .charge(&record, &site, self.price_mults().second, self.pilot.cash);
         let wage = self.hire_terms.0.wage(&record);
         let reserves = table::kind(&record, &self.outfits, &self.arsenal)
             .stats

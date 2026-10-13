@@ -771,6 +771,10 @@ pub struct Session {
     /// original's `ResetPlayer` (@0x1db44) and `ResetPlayerRecord`
     /// (@0x1dbf1) reset it (see the `ranks` module).
     recent_rank: Option<RankId>,
+    /// What the ranks' price multipliers are taken from as the spaceport
+    /// opens, `_DoPortDialog`'s inputs (see the `ranks` module). Never
+    /// saved, as `_priceFluxMult` lives in memory only.
+    port_ranks: ranks::PortRanks,
     /// What the screens show of each `mïsn`, read when the session
     /// starts (see the `mission_screens` module).
     mission_texts: BTreeMap<MissionId, MissionTexts>,
@@ -865,7 +869,9 @@ impl Session {
     /// and governments").
     ///
     /// A pilot last landed on a stellar of its system resumes docked there,
-    /// silently, as the original resumes a pilot at its last planet; so
+    /// silently, as the original resumes a pilot at its last planet, the
+    /// spaceport opening with its ranks' price multipliers (see the
+    /// `ranks` module); so
     /// does one whose stellar is another system's at its place that the
     /// galaxy overlay hid, its own system's stellars waiting for the
     /// take-off.
@@ -1022,6 +1028,7 @@ impl Session {
             crons,
             ranks,
             recent_rank: None,
+            port_ranks: ranks::PortRanks::default(),
             mission_texts: catalog
                 .mission_texts()
                 .into_iter()
@@ -1064,8 +1071,10 @@ impl Session {
         session.raise(StoryEvent::Explored { system });
         // A load forgets the stellar the offers were rolled at (@0x75ef5)
         // and opens the spaceport, so a pilot resumed docked has them
-        // rolled afresh (see the `missions` module).
+        // rolled afresh (see the `missions` module), and its prices taken
+        // as `_DoPortDialog` takes them (see the `ranks` module).
         if let Some(stellar) = session.landed {
+            session.open_port_prices();
             session.raise(StoryEvent::Landed { stellar });
         }
         Ok(session)
@@ -2574,8 +2583,9 @@ impl Session {
         self.emerge_followers(exit.position, catalog, chance);
     }
 
-    /// Docks the ship at `stellar`, one of the system's, and last raises
-    /// [`StoryEvent::Landed`].
+    /// Docks the ship at `stellar`, one of the system's, takes the ranks'
+    /// price multipliers as the spaceport opens (see the `ranks` module),
+    /// and last raises [`StoryEvent::Landed`].
     fn dock(&mut self, stellar: StellarId) {
         self.nav_target = None;
         self.touchdown = self.player.position;
@@ -2598,6 +2608,10 @@ impl Session {
         self.save_due = true;
         self.stop_thrust();
         self.sounds.push(SimSound::Landed { stellar_sound });
+        // `_DoPortDialog` takes the price multipliers before its mission
+        // land check (@0x5fbeb) and its rebuild point (see the `ranks`
+        // module).
+        self.open_port_prices();
         self.raise(StoryEvent::Landed { stellar });
         // The port dialog's rebuild point (@0x5fbf0).
         self.rebuild_stellars();
@@ -3224,7 +3238,7 @@ impl Session {
             arsenal: &self.arsenal,
             fields: self.fields,
             site,
-            mults: crate::rank::PriceMults::NONE,
+            mults: self.price_mults(),
             rules: self.rules,
             gate: self.gate(),
         }

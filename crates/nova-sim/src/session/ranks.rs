@@ -20,21 +20,83 @@
 //! [`SalaryCap`](crate::rulebook::RuleKey::SalaryCap) rule; a change to
 //! the cash makes a save due.
 //!
+//! **Prices.** As the spaceport opens (a landing, a relocation that
+//! docks, and a load that resumes docked, which opens the port too), the
+//! session takes the active ranks and the docked stellar's government,
+//! never saved, as `_DoPortDialog` takes `_priceFluxMult`
+//! (@0x5f970-0x5fa04). It does so before the landing's mission land check
+//! (@0x5fbeb) and its rebuild point (@0x5fbf0), so a rank a mission
+//! completed on this landing grants, and a change of the stellar's
+//! government at the rebuild, count only from the next landing.
+//! [`Session::price_mults`] works the multipliers out from them by the
+//! engine's reading of
+//! [`RankPriceTiming`](crate::rulebook::RuleKey::RankPriceTiming); by the
+//! other reading, from the ranks and the government as they are when a
+//! price is asked. Either way the ranks reach the stellar's government as
+//! [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach) says, read
+//! when the price is asked, so the session's rules always apply. The
+//! shipyard's prices and trade-in and the bar's hire fee read them (see
+//! [`rank`]'s **Prices**).
+//!
 //! The pilot keeps its active ranks by ID. A pilot flown from a save
 //! naming a rank the data no longer has forgets it, so the next save
 //! leaves it out, as the original's `_LoadPilotData` drops an active flag
 //! whose `ränk` is gone (@0x75e47-0x75eb6).
 
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 
-use crate::catalog::RankId;
+use crate::catalog::{GovtId, RankId};
 use crate::news::MISC_STRINGS;
 use crate::person::NO_RANK;
-use crate::rank::{self, AND_STRING, Held, NO_RANK_STRING, PilotInfoRanks, RankNames};
-use crate::rulebook::RuleKey;
+use crate::rank::{self, AND_STRING, Held, NO_RANK_STRING, PilotInfoRanks, PriceMults, RankNames};
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::session::Session;
 
+/// What `_DoPortDialog` takes the price multipliers from as the
+/// spaceport opens: the active ranks and the stellar's government.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct PortRanks {
+    /// The ranks active as the port opened.
+    active: BTreeSet<RankId>,
+    /// The docked stellar's government as the port opened.
+    govt: Option<GovtId>,
+}
+
 impl Session {
+    /// The docked stellar's government now: none in flight or at an
+    /// independent stellar.
+    fn docked_govt(&self) -> Option<GovtId> {
+        let landed = self.landed?;
+        self.sites.iter().find(|site| site.id == landed)?.govt
+    }
+
+    /// Takes what the price multipliers read as the spaceport opens
+    /// (`_DoPortDialog` @0x5f970-0x5fa04): the active ranks and the docked
+    /// stellar's government.
+    pub(super) fn open_port_prices(&mut self) {
+        self.port_ranks = PortRanks {
+            active: self.pilot.ranks.clone(),
+            govt: self.docked_govt(),
+        };
+    }
+
+    /// The ranks' price multipliers, `_priceFluxMult` (see
+    /// [`rank::price_mults`]), the ranks reaching the stellar's government
+    /// as the session's `rank_govt_reach` rule reads. By the engine's
+    /// reading of `rank_price_timing` they are those the spaceport opened
+    /// with; by the other, those of the ranks and the docked stellar's
+    /// government now.
+    #[must_use]
+    pub fn price_mults(&self) -> PriceMults {
+        let reach = self.rules.source_for(RuleKey::RankGovtReach);
+        let (active, govt) = match self.rules.source_for(RuleKey::RankPriceTiming) {
+            RuleSource::Engine => (&self.port_ranks.active, self.port_ranks.govt),
+            RuleSource::Bible => (&self.pilot.ranks, self.docked_govt()),
+        };
+        rank::price_mults(&self.ranks, active, govt, &self.govts, reach)
+    }
+
     /// The pilot's ranks and the recent rank, as `K` and `L` change them.
     fn held_ranks(&mut self) -> Held<'_> {
         Held {
@@ -121,7 +183,7 @@ mod tests {
     use crate::save;
     use crate::session::Session;
     use crate::shipyard::ShipFlags3;
-    use crate::testkit::{FakePilotCatalog, Scripted, catalog, outfit, rank, ship};
+    use crate::testkit::{FakePilotCatalog, Scripted, catalog, land_now, outfit, rank, ship};
 
     fn set(text: &str) -> SetExpr {
         SetExpr::parse(text).expect("parses")
@@ -415,5 +477,263 @@ mod tests {
         let info = bare.pilot_info_ranks();
         assert_eq!(info.line, "Admiral,  Commander", "no lists: no \"and\"");
         assert_eq!(info.salary, 250, "the session's salary_cap");
+    }
+
+    // Prices.
+
+    /// Government 128 (class 1, allied with class 2), 129 (class 2) and
+    /// 130 (class 3, allied with nobody).
+    fn price_govts() -> Vec<crate::catalog::GovtRecord> {
+        vec![
+            crate::catalog::GovtRecord {
+                classes: [1, -1, -1, -1],
+                allies: [2, -1, -1, -1],
+                ..crate::testkit::govt(128)
+            },
+            crate::catalog::GovtRecord {
+                classes: [2, -1, -1, -1],
+                ..crate::testkit::govt(129)
+            },
+            crate::catalog::GovtRecord {
+                classes: [3, -1, -1, -1],
+                ..crate::testkit::govt(130)
+            },
+        ]
+    }
+
+    /// Rank `id` of government `govt` and `PriceMod` 90.
+    fn ninety(id: i16, govt: i16) -> RankRecord {
+        RankRecord {
+            affil_govt: Some(crate::catalog::GovtId(govt)),
+            price_mod: 90,
+            ..rank(id)
+        }
+    }
+
+    /// [`shipbuying`](crate::session::tests::shipbuying)'s planet 128 of
+    /// government 128 with a bar too, where ship 129 (17,500 credits, tech
+    /// 5 as the planet) is always for hire; ranks 200 and 201 of 128 and
+    /// 202 of its ally 129, each of `PriceMod` 90; and `missions`.
+    ///
+    /// Ship 129 is priced 17,500 with no rank, 15,700 under one (15,750,
+    /// rounded down to a hundred) and 14,100 under two (14,175); its hire
+    /// fee is a tenth.
+    fn port(missions: Vec<crate::catalog::MissionRecord>) -> FakePilotCatalog {
+        let mut catalog = crate::session::tests::shipbuying();
+        for (_, sites) in &mut catalog.sites {
+            for site in sites {
+                site.flags |= crate::landing::StellarFlags::BAR;
+            }
+        }
+        catalog.ship_records[1].hire_random = 100;
+        catalog.govts = price_govts();
+        catalog.ranks = vec![ninety(200, 128), ninety(201, 128), ninety(202, 129)];
+        catalog.missions = missions;
+        catalog
+    }
+
+    /// Ship 129's price in the shipyard and its hire fee in the bar.
+    fn prices(session: &mut Session) -> (i64, i64) {
+        let price = session
+            .shipyard(&mut NeverFires)
+            .expect("a shipyard")
+            .row(ShipId(129))
+            .expect("listed")
+            .price;
+        let fee = session
+            .escorts_for_hire(&mut NeverFires)
+            .expect("a bar")
+            .row(ShipId(129))
+            .expect("for hire")
+            .fee;
+        (price, fee)
+    }
+
+    /// A session of `catalog` under `rules`, holding `ranks`, landed at
+    /// planet 128 and settled.
+    fn landed_holding(catalog: &FakePilotCatalog, rules: Rulebook, ranks: &[i16]) -> Session {
+        let mut session = Session::start(catalog).expect("starts").with_rules(rules);
+        session
+            .pilot
+            .ranks
+            .extend(ranks.iter().copied().map(RankId));
+        land_now(&mut session).expect("lands");
+        let _ = session.settle_script(catalog, &mut NeverFires);
+        session
+    }
+
+    /// Takes `session` off, settles, and lands it again at planet 128.
+    fn land_again(session: &mut Session, catalog: &FakePilotCatalog) {
+        session
+            .take_off(catalog, &mut NeverFires)
+            .expect("takes off");
+        let _ = session.settle_script(catalog, &mut NeverFires);
+        let site = session.sites[0];
+        session.player.position = site.position;
+        session.player.velocity = crate::geometry::Vec2::ZERO;
+        land_now(session).expect("lands again");
+        let _ = session.settle_script(catalog, &mut NeverFires);
+    }
+
+    /// The default rule set with `key` read by `source`.
+    fn reading(key: RuleKey, source: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(key, source)
+    }
+
+    const UNRANKED: (i64, i64) = (17_500, 1750);
+    const ONE_RANK: (i64, i64) = (15_700, 1570);
+    const TWO_RANKS: (i64, i64) = (14_100, 1410);
+
+    #[test]
+    fn a_landing_takes_the_ranks_into_the_shipyards_prices() {
+        let catalog = port(Vec::new());
+        let rules = Rulebook::default();
+        assert_eq!(prices(&mut landed_holding(&catalog, rules, &[])), UNRANKED);
+        let mut one = landed_holding(&catalog, rules, &[200]);
+        assert_eq!(one.price_mults().second.to_bits(), 0.9_f32.to_bits());
+        assert_eq!(prices(&mut one), ONE_RANK);
+        assert_eq!(
+            prices(&mut landed_holding(&catalog, rules, &[200, 201])),
+            TWO_RANKS
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_rank_gained_while_landed_changes_no_price_until_the_next_landing() {
+        let catalog = port(Vec::new());
+        let mut session = landed_holding(&catalog, Rulebook::default(), &[200]);
+        session.run_set(&set("K201"), &mut Scripted::default());
+        assert_eq!(active(&session), [200, 201]);
+        assert_eq!(prices(&mut session), ONE_RANK, "taken as the port opened");
+        land_again(&mut session, &catalog);
+        assert_eq!(prices(&mut session), TWO_RANKS);
+        session.run_set(&set("L201 L200"), &mut Scripted::default());
+        assert_eq!(prices(&mut session), TWO_RANKS, "a rank lost, the same");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_rank_gained_while_landed_changes_prices_at_once() {
+        let catalog = port(Vec::new());
+        let rules = reading(RuleKey::RankPriceTiming, RuleSource::Bible);
+        let mut session = landed_holding(&catalog, rules, &[200]);
+        assert_eq!(prices(&mut session), ONE_RANK);
+        session.run_set(&set("K201"), &mut Scripted::default());
+        assert_eq!(prices(&mut session), TWO_RANKS);
+        session.run_set(&set("L201"), &mut Scripted::default());
+        assert_eq!(prices(&mut session), ONE_RANK);
+    }
+
+    #[test]
+    fn a_rank_a_landing_mission_grants_counts_from_the_next_landing() {
+        let catalog = port(vec![crate::catalog::MissionRecord {
+            avail_stel: 128,
+            return_stel: 128,
+            on_success: crate::control::Script::parse("K201"),
+            ..crate::testkit::mission(140)
+        }]);
+        for (timing, after_landing) in [
+            (RuleSource::Engine, ONE_RANK),
+            (RuleSource::Bible, TWO_RANKS),
+        ] {
+            let rules = reading(RuleKey::RankPriceTiming, timing);
+            let mut session = landed_holding(&catalog, rules, &[200]);
+            session
+                .accept_mission(crate::catalog::MissionId(140), &mut NeverFires)
+                .expect("accepted");
+            land_again(&mut session, &catalog);
+            assert_eq!(active(&session), [200, 201], "completed: {timing:?}");
+            assert_eq!(prices(&mut session), after_landing, "{timing:?}");
+            land_again(&mut session, &catalog);
+            assert_eq!(prices(&mut session), TWO_RANKS, "{timing:?}");
+        }
+    }
+
+    #[test]
+    fn a_pilot_resumed_docked_has_its_ranks_in_the_prices() {
+        let catalog = port(Vec::new());
+        let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.ranks.insert(RankId(202));
+        pilot.stellar = Some(crate::catalog::StellarId(128));
+        let pilot = save::decode(&save::encode(&pilot)).expect("loads");
+        let mut session = Session::fly(&catalog, pilot.clone()).expect("flies");
+        assert!(session.landed().is_some(), "resumed docked");
+        assert_eq!(
+            prices(&mut session),
+            ONE_RANK,
+            "202's government is an ally"
+        );
+        let mut own_only = Session::fly(&catalog, pilot)
+            .expect("flies")
+            .with_rules(reading(RuleKey::RankGovtReach, RuleSource::Bible));
+        assert_eq!(
+            prices(&mut own_only),
+            UNRANKED,
+            "the rules given after the load still choose the reach"
+        );
+    }
+
+    #[test]
+    fn a_relocation_opens_the_port_it_docks_at() {
+        let mut catalog = port(Vec::new());
+        let mut other = catalog.sites[0].1[0];
+        other.id = crate::catalog::StellarId(129);
+        other.govt = Some(crate::catalog::GovtId(130));
+        catalog.sites[0].1.push(other);
+        let mut session = landed_holding(&catalog, Rulebook::default(), &[200]);
+        assert_eq!(prices(&mut session), ONE_RANK);
+        session
+            .relocate(
+                &catalog,
+                crate::catalog::SystemId(130),
+                crate::catalog::StellarId(129),
+            )
+            .expect("relocates");
+        assert_eq!(prices(&mut session), UNRANKED, "government 130 is no ally");
+    }
+
+    #[test]
+    fn rank_govt_reach_reaches_the_shipyard() {
+        let catalog = port(Vec::new());
+        for timing in [RuleSource::Engine, RuleSource::Bible] {
+            let engine = reading(RuleKey::RankPriceTiming, timing);
+            let bible = engine.with_override(RuleKey::RankGovtReach, RuleSource::Bible);
+            let mut allied = landed_holding(&catalog, engine, &[202]);
+            assert_eq!(prices(&mut allied), ONE_RANK, "{timing:?}");
+            let mut own = landed_holding(&catalog, bible, &[202]);
+            assert_eq!(prices(&mut own), UNRANKED, "{timing:?}");
+            let mut both = landed_holding(&catalog, bible, &[200, 202]);
+            assert_eq!(prices(&mut both), ONE_RANK, "{timing:?}");
+        }
+    }
+
+    #[test]
+    fn a_hire_charges_the_ranked_fee() {
+        let catalog = port(Vec::new());
+        let mut session = landed_holding(&catalog, Rulebook::default(), &[200]);
+        let cash = session.pilot().cash();
+        let hired = session.hire(ShipId(129), &mut NeverFires).expect("hired");
+        assert_eq!(hired.fee, 1570);
+        assert_eq!(session.pilot().cash(), cash - 1570);
+    }
+
+    #[test]
+    fn a_purchase_pays_the_ranked_price_and_takes_the_ranked_trade_in() {
+        // Ship 128's hull of 10,000 trades in raw for 2500: 2250, then
+        // 2025, rounded down to 2020 by the engine; 2250 by the other
+        // reading of rank_trade_in.
+        let catalog = port(Vec::new());
+        for (trade_in, cash) in [
+            (RuleSource::Engine, 25_000 + 2020 - 15_700),
+            (RuleSource::Bible, 25_000 + 2250 - 15_700),
+        ] {
+            let rules = reading(RuleKey::RankTradeIn, trade_in);
+            let mut session = landed_holding(&catalog, rules, &[200]);
+            session.pilot.cash = 25_000;
+            let bought = session
+                .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
+                .expect("bought");
+            assert_eq!(bought.price, 15_700, "{trade_in:?}");
+            assert_eq!(session.pilot().cash(), cash, "{trade_in:?}");
+        }
     }
 }

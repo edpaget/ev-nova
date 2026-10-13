@@ -530,6 +530,11 @@ impl Session {
             self.bar_news = None;
         }
         let scene_changed = self.set_player_system(system, sites, dock);
+        if resets.has(Reset::Dock) && self.landed.is_some() {
+            // A relocation docks, opening the spaceport (see the `ranks`
+            // module).
+            self.open_port_prices();
+        }
         self.leave_behind(&resets);
         if resets.has(Reset::RedrawOffers) {
             self.offers.redraw(&mut &mut *chance);
