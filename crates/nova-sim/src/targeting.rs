@@ -70,25 +70,31 @@ pub enum TargetPick {
     NearestThreat,
     /// The next candidate after the target ([`next`]): Tab.
     Next,
-    /// The next of the player's escorts after the target
-    /// ([`next_escort`]): Option-Tab.
+    /// The next ship of the escort class after the target (the player's
+    /// hired escorts and the unmarked ships they lead, such as their
+    /// fighters; [`next_escort`]), cloaked or not: Option-Tab.
     NextEscort,
     /// The candidate before the target ([`previous`]): Shift-Tab.
     Previous,
-    /// The escort before the target ([`previous_escort`]):
-    /// Shift-Option-Tab.
+    /// The ship of the escort class before the target
+    /// ([`previous_escort`]), cloaked or not: Shift-Option-Tab.
     PreviousEscort,
 }
 
+/// Whether `npc` is there to be targeted at all, whatever its cloak: it
+/// is intact or disabled, and not emerging from a gate
+/// ([`Mode::Emerging`]). Every search and the lost-target check start
+/// from this, each adding its own cloak exception.
+fn alive_and_present(npc: &Npc) -> bool {
+    matches!(npc.condition, Condition::Intact | Condition::Disabled) && !npc.emerging()
+}
+
 /// Whether `npc` can be targeted by a player that can target cloaked
-/// ships (`cloaked_ok`) or not: it is intact or disabled, not emerging
-/// from a gate ([`Mode::Emerging`]), and not cloaked unless `cloaked_ok`
-/// or it escorts the player.
+/// ships (`cloaked_ok`) or not: it is alive and present (`alive_and_present`),
+/// and not cloaked unless `cloaked_ok` or it escorts the player.
 #[must_use]
 pub fn targetable(npc: &Npc, cloaked_ok: bool) -> bool {
-    matches!(npc.condition, Condition::Intact | Condition::Disabled)
-        && !npc.emerging()
-        && (cloaked_ok || npc.escorts_player() || !npc.cloak.is_cloaked())
+    alive_and_present(npc) && (cloaked_ok || npc.escorts_player() || !npc.cloak.is_cloaked())
 }
 
 /// Whether `npc` is a candidate for Target Select (`escorts` false) or
@@ -98,8 +104,7 @@ pub fn targetable(npc: &Npc, cloaked_ok: bool) -> bool {
 /// ([`escort_class`]) just when the search is Escort Select
 /// (`_FindNextShipInSystem` @0xa755-0xa854).
 fn cycles(npc: &Npc, npcs: &[Npc], cloaked_ok: bool, escorts: bool) -> bool {
-    matches!(npc.condition, Condition::Intact | Condition::Disabled)
-        && !npc.emerging()
+    alive_and_present(npc)
         && (cloaked_ok || escorts || !npc.cloak.is_cloaked())
         && escort_class(npc, npcs) == escorts
 }
@@ -173,9 +178,12 @@ pub fn previous(npcs: &[Npc], current: Option<NpcId>, cloaked_ok: bool) -> Optio
     })
 }
 
-/// The first of the player's escorts among `npcs` after `current` in
-/// ship-table order, or the first when there is no target; none past the
-/// last.
+/// The first ship of the escort class among `npcs` after `current` in
+/// ship-table order: the player's hired escorts and the ships with no
+/// mission mark they lead, such as their fighters (`escort_class`); the
+/// first when there is no target, none past the last. A cloaked ship of
+/// the class is a candidate whether or not the player can target cloaked
+/// ships.
 #[must_use]
 pub fn next_escort(npcs: &[Npc], current: Option<NpcId>) -> Option<NpcId> {
     walk(npcs, current, Walk::Up, |npc| {
@@ -183,9 +191,12 @@ pub fn next_escort(npcs: &[Npc], current: Option<NpcId>) -> Option<NpcId> {
     })
 }
 
-/// The last of the player's escorts among `npcs` before `current` in
-/// ship-table order, or the last when there is no target; none past the
-/// first.
+/// The last ship of the escort class among `npcs` before `current` in
+/// ship-table order: the player's hired escorts and the ships with no
+/// mission mark they lead, such as their fighters (`escort_class`); the
+/// last when there is no target, none past the first. A cloaked ship of
+/// the class is a candidate whether or not the player can target cloaked
+/// ships.
 #[must_use]
 pub fn previous_escort(npcs: &[Npc], current: Option<NpcId>) -> Option<NpcId> {
     walk(npcs, current, Walk::Down, |npc| {
