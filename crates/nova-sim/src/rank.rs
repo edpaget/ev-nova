@@ -171,6 +171,30 @@
 //! @0x9773d, @0x9785f), with tribute (rdm:task/planet-domination); and
 //! the debug "destroy target" key (`_HandlePlayer` @0x6ecfe), which the
 //! engine does not model.
+//!
+//! **Blessing** ([`blessing`], [`Blessing`]). `_PlayerBlessedByGovt(g,
+//! which)` (@0x2732-0x276b) returns the byte `govt[g]+0x84+which` (stride
+//! 0x88, base 0x3b5164), and 0 for `g` above 0xff unsigned (so -1) or
+//! `which` above 1. `which` 0 is [`BLESSES_PEACE`] (0x0100, "won't
+//! attack"), 1 is [`BLESSES_LANDING`] (0x0200, "may land").
+//! `_ResetPlayerPrecalcedValues` (@0xc8be-0xc981) builds the table: it
+//! clears both bytes of all 256 governments, then for each of the 128
+//! rank slots (stride 0x120) that is active (+0), has a record (+1), has
+//! `Flags` (+0x1c) & 0x0300 and an `AffilGovt` (+6) other than -1
+//! (@0xc90a), it tests every `g` 0-255 with `_GovtAllies(g, AffilGovt)`
+//! (@0xc925): 0x0100 sets `[g][0]` (@0xc936-0xc945), 0x0200 `[g][1]`
+//! (@0xc94f-0xc95e). `_GovtAllies` holds at once for equal IDs (@0x4e4e)
+//! and never for a derelict government otherwise (@0x4e91, @0x4ea9). The
+//! [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach) rule's
+//! other reading blesses only the rank's own government. Only the
+//! governments the data holds are tested, and the rank's own: a reader
+//! asks of a ship's or a stellar's government, which the data holds. The
+//! rest of the function resets the player's other cached values (derived
+//! stats, cargo totals and one `Rand`), which the engine works out live.
+//! It plays no sound, and the table is not saved. When the session takes
+//! it is the session's (see its `ranks` module); landing reads `[1]` (see
+//! [`landing`](crate::landing)), and the AI's readers of `[0]` are
+//! rdm:phase/crons-news-ranks/phase-18-rank-blessing-in-the-ai.
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -208,6 +232,12 @@ pub const SWEEP_LOWER_ON_DEACTIVATE: u16 = 0x0020;
 /// `Flags` 0x0040: any crime against a ship the rank reaches takes it
 /// (`_SlapWithPenalty` @0x9c47-0x9caf).
 pub const LOST_TO_CRIME: u16 = 0x0040;
+/// `Flags` 0x0100: ships of the governments the rank reaches won't attack
+/// the player (`_PlayerBlessedByGovt` which 0; see [`Blessed::Peace`]).
+pub const BLESSES_PEACE: u16 = 0x0100;
+/// `Flags` 0x0200: stellars of the governments the rank reaches clear the
+/// player to land (which 1; see [`Blessed::Landing`]).
+pub const BLESSES_LANDING: u16 = 0x0200;
 /// `Flags` 0x0400: ships the rank reaches fight a threat to the player
 /// when hailed, for nothing (`_DoCommDialog` @0x95ddb).
 pub const HELPS_IN_BATTLE: u16 = 0x0400;
@@ -499,6 +529,118 @@ pub fn scaled(price: i64, mult: f32) -> i64 {
         return 0;
     }
     ((price as f32 * mult) as i64).max(1)
+}
+
+/// Which of the two blessings a rank's `Flags` give (see the module docs'
+/// **Blessing**): `_PlayerBlessedByGovt`'s `which`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Blessed {
+    /// [`BLESSES_PEACE`], `which` 0: the government's ships won't attack
+    /// the player.
+    Peace,
+    /// [`BLESSES_LANDING`], `which` 1: the government's stellars clear the
+    /// player to land.
+    Landing,
+}
+
+/// The lowest government ID the blessing table holds: the original's
+/// slot 0.
+const FIRST_BLESSED: i32 = 128;
+
+/// How many governments the blessing table holds, as the original's 256
+/// slots.
+const BLESSED_SLOTS: usize = 256;
+
+/// The blessing table `_ResetPlayerPrecalcedValues` builds (see the
+/// module docs' **Blessing**): for each government 128-383, whether it
+/// blesses [`Blessed::Peace`] and whether [`Blessed::Landing`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Blessing {
+    /// Bit n: government 128 + n blesses peace.
+    peace: [u64; 4],
+    /// Bit n: government 128 + n blesses landing.
+    landing: [u64; 4],
+}
+
+impl Blessing {
+    /// No government blesses anything.
+    pub const NONE: Self = Self {
+        peace: [0; 4],
+        landing: [0; 4],
+    };
+
+    /// Whether `govt` blesses `which` (`_PlayerBlessedByGovt`
+    /// @0x2732-0x276b): never for an independent, or an ID outside
+    /// 128-383, as the original's `> 0xff` test gives 0.
+    #[must_use]
+    pub fn blesses(&self, govt: Option<GovtId>, which: Blessed) -> bool {
+        govt.and_then(blessed_slot)
+            .is_some_and(|slot| self.set(which)[slot / 64] & (1 << (slot % 64)) != 0)
+    }
+
+    /// The set of `which`.
+    fn set(&self, which: Blessed) -> &[u64; 4] {
+        match which {
+            Blessed::Peace => &self.peace,
+            Blessed::Landing => &self.landing,
+        }
+    }
+
+    /// Makes `govt` bless `which`; nothing for an ID outside 128-383.
+    fn bless(&mut self, govt: GovtId, which: Blessed) {
+        if let Some(slot) = blessed_slot(govt) {
+            let set = match which {
+                Blessed::Peace => &mut self.peace,
+                Blessed::Landing => &mut self.landing,
+            };
+            set[slot / 64] |= 1 << (slot % 64);
+        }
+    }
+}
+
+/// `govt`'s slot in the blessing table, if it has one.
+fn blessed_slot(govt: GovtId) -> Option<usize> {
+    usize::try_from(i32::from(govt.0) - FIRST_BLESSED)
+        .ok()
+        .filter(|&slot| slot < BLESSED_SLOTS)
+}
+
+/// `_ResetPlayerPrecalcedValues`' blessing pass (see the module docs'
+/// **Blessing**): each rank of `records` in `active` that has
+/// [`BLESSES_PEACE`] or [`BLESSES_LANDING`] and a government blesses
+/// every government it reaches by `reach`'s reading of
+/// [`RankGovtReach`](crate::rulebook::RuleKey::RankGovtReach) with its
+/// flags. An unaffiliated rank blesses none.
+#[must_use]
+pub fn blessing(
+    records: &[RankRecord],
+    active: &BTreeSet<RankId>,
+    govts: &Governments,
+    reach: RuleSource,
+) -> Blessing {
+    let mut blessed = Blessing::NONE;
+    for rank in records {
+        let Some(own) = rank.affil_govt else {
+            continue;
+        };
+        if !active.contains(&rank.id) || rank.flags & (BLESSES_PEACE | BLESSES_LANDING) == 0 {
+            continue;
+        }
+        // `_GovtAllies` holds at once for equal IDs, so the rank's own
+        // government is blessed even where the table lacks it.
+        for govt in govts.ids().chain([own]) {
+            if !reaches(rank, Some(govt), govts, reach) {
+                continue;
+            }
+            if rank.flags & BLESSES_PEACE != 0 {
+                blessed.bless(govt, Blessed::Peace);
+            }
+            if rank.flags & BLESSES_LANDING != 0 {
+                blessed.bless(govt, Blessed::Landing);
+            }
+        }
+    }
+    blessed
 }
 
 /// The names the rank tags read (see the module docs): the records, the
@@ -1958,6 +2100,147 @@ mod tests {
         assert!(!kept(both, Crime::Board, Some(140), bible));
         for flags in [LOST_TO_CRIME, LOST_TO_VIOLENCE] {
             assert!(kept(rank(130, None, 0, flags), Crime::Kill, None, bible));
+        }
+    }
+
+    // Blessing.
+
+    /// The blessing of active ranks `active` among `records`, by `reach`,
+    /// among [`crime_govts`].
+    fn blessing_of(records: &[RankRecord], active: &[i16], reach: RuleSource) -> Blessing {
+        blessing(records, &ids(active), &crime_govts(), reach)
+    }
+
+    /// Which of 140-143 `blessed` blesses `which`.
+    fn blessed_of(blessed: Blessing, which: Blessed) -> Vec<i16> {
+        (140..=143)
+            .filter(|&id| blessed.blesses(Some(GovtId(id)), which))
+            .collect()
+    }
+
+    #[test]
+    fn the_blessing_flags_are_0x0100_and_0x0200() {
+        assert_eq!(BLESSES_PEACE, 0x0100);
+        assert_eq!(BLESSES_LANDING, 0x0200);
+    }
+
+    #[test]
+    fn a_rank_of_flags_0x0200_blesses_landing_at_its_government_and_its_allies() {
+        let records = [rank(130, Some(140), 0, BLESSES_LANDING)];
+        let blessed = blessing_of(&records, &[130], ENGINE);
+        assert_eq!(blessed_of(blessed, Blessed::Landing), [140, 141], "@0xc94f");
+        assert_eq!(blessed_of(blessed, Blessed::Peace), [] as [i16; 0]);
+        let ally = [rank(130, Some(141), 0, BLESSES_LANDING)];
+        assert_eq!(
+            blessed_of(blessing_of(&ally, &[130], ENGINE), Blessed::Landing),
+            [140, 141],
+            "either way round"
+        );
+    }
+
+    #[test]
+    fn a_rank_of_flags_0x0100_blesses_peace_only() {
+        let records = [rank(130, Some(140), 0, BLESSES_PEACE)];
+        let blessed = blessing_of(&records, &[130], ENGINE);
+        assert_eq!(blessed_of(blessed, Blessed::Peace), [140, 141], "@0xc936");
+        assert_eq!(blessed_of(blessed, Blessed::Landing), [] as [i16; 0]);
+        let both = [rank(130, Some(142), 0, BLESSES_PEACE | BLESSES_LANDING)];
+        let blessed = blessing_of(&both, &[130], ENGINE);
+        assert_eq!(blessed_of(blessed, Blessed::Peace), [142]);
+        assert_eq!(blessed_of(blessed, Blessed::Landing), [142]);
+    }
+
+    #[test]
+    fn ranks_add_their_blessings_together() {
+        let records = [
+            rank(130, Some(140), 0, BLESSES_PEACE),
+            rank(131, Some(142), 0, BLESSES_LANDING),
+            rank(132, Some(142), 0, HELPS_FREE | SHIELDED),
+        ];
+        let blessed = blessing_of(&records, &[130, 131, 132], ENGINE);
+        assert_eq!(blessed_of(blessed, Blessed::Peace), [140, 141]);
+        assert_eq!(blessed_of(blessed, Blessed::Landing), [142]);
+    }
+
+    #[test]
+    fn an_unaffiliated_rank_blesses_no_government() {
+        let records = [rank(130, None, 0, BLESSES_PEACE | BLESSES_LANDING)];
+        for reach in [ENGINE, RuleSource::Bible] {
+            let blessed = blessing_of(&records, &[130], reach);
+            assert_eq!(blessed, Blessing::NONE, "@0xc90a {reach:?}");
+            for which in [Blessed::Peace, Blessed::Landing] {
+                assert!(!blessed.blesses(None, which), "{reach:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_inactive_rank_or_one_without_a_record_blesses_nothing() {
+        let records = [rank(130, Some(140), 0, BLESSES_PEACE | BLESSES_LANDING)];
+        assert_eq!(blessing_of(&records, &[], ENGINE), Blessing::NONE);
+        assert_eq!(blessing_of(&records, &[131], ENGINE), Blessing::NONE);
+        assert_eq!(Blessing::default(), Blessing::NONE);
+    }
+
+    #[test]
+    fn a_derelict_government_is_blessed_only_by_its_own_rank() {
+        let records = [rank(130, Some(143), 0, BLESSES_LANDING)];
+        assert_eq!(
+            blessed_of(blessing_of(&records, &[130], ENGINE), Blessed::Landing),
+            [143],
+            "@0x4e4e"
+        );
+        let govts = Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                allies: [5, -1, -1, -1],
+                ..testkit::govt(140)
+            },
+            GovtRecord {
+                flags: crate::govt::DERELICT,
+                classes: [5, -1, -1, -1],
+                ..testkit::govt(143)
+            },
+        ]);
+        let of_140 = [rank(130, Some(140), 0, BLESSES_LANDING)];
+        let blessed = blessing(&of_140, &ids(&[130]), &govts, ENGINE);
+        assert!(blessed.blesses(Some(GovtId(140)), Blessed::Landing));
+        assert!(
+            !blessed.blesses(Some(GovtId(143)), Blessed::Landing),
+            "@0x4e91"
+        );
+    }
+
+    #[test]
+    fn a_rank_blesses_its_own_government_even_where_the_table_lacks_it() {
+        let records = [rank(130, Some(200), 0, BLESSES_PEACE)];
+        let blessed = blessing_of(&records, &[130], ENGINE);
+        assert!(blessed.blesses(Some(GovtId(200)), Blessed::Peace));
+        assert!(!blessed.blesses(Some(GovtId(201)), Blessed::Peace));
+    }
+
+    #[test]
+    fn by_the_other_reading_of_rank_govt_reach_only_the_ranks_own_government_is_blessed() {
+        let records = [rank(130, Some(140), 0, BLESSES_PEACE | BLESSES_LANDING)];
+        let blessed = blessing_of(&records, &[130], RuleSource::Bible);
+        assert_eq!(blessed_of(blessed, Blessed::Landing), [140]);
+        assert_eq!(blessed_of(blessed, Blessed::Peace), [140]);
+    }
+
+    #[test]
+    fn a_government_outside_128_to_383_is_never_blessed() {
+        let govts = Governments::new([127, 128, 383, 384].map(testkit::govt));
+        let records: Vec<RankRecord> = [127, 128, 383, 384]
+            .into_iter()
+            .map(|govt| rank(govt, Some(govt), 0, BLESSES_PEACE | BLESSES_LANDING))
+            .collect();
+        let blessed = blessing(&records, &ids(&[127, 128, 383, 384]), &govts, ENGINE);
+        for which in [Blessed::Peace, Blessed::Landing] {
+            let held: Vec<i16> = [127, 128, 255, 256, 383, 384, -1, i16::MAX, i16::MIN]
+                .into_iter()
+                .filter(|&id| blessed.blesses(Some(GovtId(id)), which))
+                .collect();
+            assert_eq!(held, [128, 383], "{which:?}");
         }
     }
 }
