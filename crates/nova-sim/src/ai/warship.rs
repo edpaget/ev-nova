@@ -58,6 +58,8 @@
 //!   anything else is attacked.
 //! - With no target it goes about its business ([`idle`](super::idle)).
 
+use std::borrow::Cow;
+
 use crate::ai::odds::{hopeless_chase, odds_against};
 use crate::ai::target::{dropped, select_target};
 use crate::ai::{Behaviour, Goal, Reaction, Surroundings, fire, idle, react};
@@ -97,9 +99,25 @@ pub struct Retreat {
 /// What a hunter (a warship or interceptor) does, retreating as `retreat`
 /// says: its goal, or none when it has nothing to fight (see the module
 /// docs).
+///
+/// After a word, the retreat judges the ship by the goal the word has
+/// just given it, an attack on its new target: the original sets the
+/// target and state 4 at once (@0x8b7da-0x8b7e5; @0x8b800 then
+/// @0x8b875-0x8b881), so its odds later in the same think
+/// (`_ExtendedIsThreatToShip` asking `_IsThreatToPlayer`) count the player
+/// against a ship the word turns on it, and not against one the word
+/// turns off a ship the player leads.
+///
+/// Without a word, the retreat judges the ship by the goal it held, so
+/// the odds retreat waits for a ship that was not attacking to attack.
+/// The original's gate is state 4, which a ship has as soon as it takes
+/// a target (@0x8b857, @0x8b881), so a ship outnumbered as it picks a
+/// target retreats one think later here than in the original: a
+/// one-think lag the player can't see, noted here and not filed.
 #[must_use]
 pub fn hunt(npc: &Npc, around: &Surroundings, retreat: Retreat) -> Option<Goal> {
-    let target = match government_word(npc, around) {
+    let word = government_word(npc, around);
+    let target = match word {
         Some(Word::TakePlayer) => {
             if dropped(npc, ShipRef::Player, around) {
                 return None;
@@ -119,7 +137,15 @@ pub fn hunt(npc: &Npc, around: &Surroundings, retreat: Retreat) -> Option<Goal> 
             provoker.or_else(|| select_target(npc, current, around))?
         }
     };
-    if retreats(npc, around, retreat) {
+    let judged = if word.is_some() {
+        Cow::Owned(Npc {
+            goal: Goal::Attack(target),
+            ..npc.clone()
+        })
+    } else {
+        Cow::Borrowed(npc)
+    };
+    if retreats(&judged, around, retreat) {
         return Some(Goal::Flee(target));
     }
     Some(if hopeless_chase(npc, target, around) {
@@ -985,5 +1011,47 @@ mod tests {
         runner.state.velocity = Vec2::new(0.0, -1.0);
         let npcs = [heavy, hired(), runner];
         assert_eq!(worded(NEVER, &npcs, INTACT), Goal::Snipe(n(2)), "hopeless");
+    }
+
+    // The retreat judges the goal the word has just chosen: the original
+    // sets the target and state 4 at once (@0x8b7da-0x8b7e5, @0x8b800 and
+    // @0x8b875-0x8b881), so the odds later in the same think
+    // (`_ExtendedIsThreatToShip` asking `_IsThreatToPlayer`) see it.
+
+    #[test]
+    fn a_warship_that_drops_a_led_target_weighs_its_odds_without_the_player() {
+        // A raider of 100 against it; the player (100) would make it 2.
+        let raider = Npc {
+            goal: Goal::Attack(n(1)),
+            ..pirate()
+        };
+        let npcs = [worn(14.9, 3, Goal::Attack(n(3))), hired(), raider];
+        assert_eq!(
+            worded(NEVER | WARSHIPS_RETREAT, &npcs, INTACT),
+            Goal::Attack(n(2)),
+            "even odds: it fights the ship it picked afresh"
+        );
+    }
+
+    #[test]
+    fn a_warship_its_government_turns_on_the_player_weighs_the_player_in_its_odds_at_once() {
+        // A raider of 1 against it, and the player (100) it now attacks.
+        let mut raider = Npc {
+            goal: Goal::Attack(n(1)),
+            ..pirate()
+        };
+        raider.hull.strength = 1.0;
+        let npcs = [worn(14.9, 3, Goal::Attack(n(2))), raider];
+        assert_eq!(
+            worded(ALWAYS | WARSHIPS_RETREAT, &npcs, INTACT),
+            Goal::Flee(P),
+            "101 against 100"
+        );
+        let idle = [worn(14.9, 3, Goal::Idle), npcs[1].clone()];
+        assert_eq!(
+            worded(ALWAYS | WARSHIPS_RETREAT, &idle, INTACT),
+            Goal::Flee(P),
+            "state 4 at once, from no fight"
+        );
     }
 }
