@@ -364,6 +364,22 @@ pub fn price_mults(
     }
 }
 
+/// `price` scaled by the ranks' factor `mult` alone, as the outfitter's
+/// buy price takes it by the other reading of
+/// [`RankPriceScope`](crate::rulebook::RuleKey::RankPriceScope): none for
+/// a price of none or less; otherwise the product in single precision, as
+/// the shipyard's flux takes it, cut down to whole credits and never
+/// below 1. The original's outfitter never reads the multipliers, so it
+/// has no tech discount or rounding to take with them; this is the port's
+/// choice.
+#[must_use]
+pub fn scaled(price: i64, mult: f32) -> i64 {
+    if price <= 0 {
+        return 0;
+    }
+    ((price as f32 * mult) as i64).max(1)
+}
+
 /// The names the rank tags read (see the module docs): the records, the
 /// active ranks, the recent rank and the fallback.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1531,6 +1547,16 @@ mod tests {
             .free_help,
             "where the hail's favour reaches"
         );
+    }
+
+    #[test]
+    fn a_price_scaled_by_the_rank_factor_is_none_for_none_and_at_least_1() {
+        assert_eq!(scaled(0, 0.9), 0);
+        assert_eq!(scaled(-5, 0.9), 0);
+        assert_eq!(scaled(1, 0.5), 1);
+        assert_eq!(scaled(10_000, 0.9), 9000, "in single precision");
+        assert_eq!(scaled(1500, 0.85), 1275);
+        assert_eq!(scaled(1500, 1.0), 1500);
     }
 
     #[test]

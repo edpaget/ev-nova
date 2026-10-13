@@ -97,6 +97,17 @@ impl Session {
         rank::price_mults(&self.ranks, active, govt, &self.govts, reach)
     }
 
+    /// The ranks' factor the outfitter's buy price takes, as the
+    /// session's `rank_price_scope` rule reads: none (1.0) by the engine,
+    /// as the original's outfitter never reads `_priceFluxMult`; by the
+    /// other reading, `[1]`, as the shipyard's ship price takes it.
+    pub(super) fn outfit_price_mult(&self) -> f32 {
+        match self.rules.source_for(RuleKey::RankPriceScope) {
+            RuleSource::Engine => 1.0,
+            RuleSource::Bible => self.price_mults().second,
+        }
+    }
+
     /// The pilot's ranks and the recent rank, as `K` and `L` change them.
     fn held_ranks(&mut self) -> Held<'_> {
         Held {
@@ -734,6 +745,30 @@ mod tests {
                 .expect("bought");
             assert_eq!(bought.price, 15_700, "{trade_in:?}");
             assert_eq!(session.pilot().cash(), cash, "{trade_in:?}");
+        }
+    }
+
+    #[test]
+    fn an_outfit_bought_under_the_other_scope_pays_the_rank_price() {
+        // Speed booster 300 costs 1000; 900 under one rank of 90.
+        let catalog = port(Vec::new());
+        let order = crate::OutfitOrder {
+            outfit: OutfitId(300),
+            direction: crate::Direction::Buy,
+        };
+        for (scope, paid) in [(RuleSource::Engine, 1000), (RuleSource::Bible, 900)] {
+            let rules = reading(RuleKey::RankPriceScope, scope);
+            let mut session = landed_holding(&catalog, rules, &[200]);
+            let cash = session.pilot().cash();
+            let shop = session.outfitter(&mut NeverFires).expect("an outfitter");
+            assert_eq!(
+                shop.row(OutfitId(300))
+                    .map(|row| (row.price, row.buy_price)),
+                Some((1000, paid)),
+                "{scope:?}"
+            );
+            session.outfit(order, &mut NeverFires).expect("bought");
+            assert_eq!(cash - session.pilot().cash(), paid, "{scope:?}");
         }
     }
 }

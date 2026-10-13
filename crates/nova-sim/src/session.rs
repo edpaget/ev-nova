@@ -2871,6 +2871,7 @@ impl Session {
             free_cargo: self.free_cargo(),
             launchers: &self.launchers(),
             visit: &self.outfit_visit,
+            price_mult: self.outfit_price_mult(),
             rules: self.rules,
             gate: self.gate(),
         }
@@ -3127,7 +3128,7 @@ impl Session {
             }
             return Err(refusal);
         }
-        let price = outfitter.row(order.outfit).map_or(0, |row| row.price);
+        let price = outfitter.row(order.outfit).map_or(0, |row| row.buy_price);
         let record = self
             .outfits
             .iter()

@@ -2353,6 +2353,7 @@ mod tests {
                 name: "Fuel Tank".to_owned(),
                 short_name: "Fuel Tank".to_owned(),
                 price: 1000,
+                buy_price: 1000,
                 mass: 1,
                 owned,
                 max: 10,
