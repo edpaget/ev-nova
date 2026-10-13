@@ -297,8 +297,9 @@
 //!   key does. In flight the player is told "Mission failed." unless the
 //!   mission has `Flags` 0x0400, else "Cargo jettisoned." or "Non-mission
 //!   cargo jettisoned."; landed, nothing. `Flags` 0x0080 is never read,
-//!   as the Bible says. The jettison's sound (@0x3e31a-0x3e33d) is not
-//!   played.
+//!   as the Bible says. In flight it also sounds `snd ` 154
+//!   (@0x3e31a-0x3e33d) and drops cargo boxes behind the player and its
+//!   trader escorts (see [`cargo_box`](crate::cargo_box)).
 //! - **Scan** ([`scan`], `_ScanPlayer` @0x7e46e): an interceptor that has
 //!   looked the player over scans it, when its government has a
 //!   `SmugPenalty`, on a draw of `Rand(100)` no higher than 75. The first
@@ -311,8 +312,7 @@
 //!   original's warships may scan too.
 //!
 //! Not built here: the status bar's cargo display
-//! (rdm:phase/missions/phase-18-status-bar-cargo), the jettison's boxes
-//! (rdm:phase/missions/phase-19-jettison-boxes), mission cargo in the jünk
+//! (rdm:phase/missions/phase-18-status-bar-cargo), mission cargo in the jünk
 //! step and the ship-change trim
 //! (rdm:phase/missions/phase-20-mission-cargo-in-junk-and-trim), the scan
 //! of illegal `jünk` and outfits and its jump-timing check

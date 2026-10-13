@@ -330,6 +330,7 @@
 
 mod aux_ships;
 mod brackets;
+mod cargo_boxes;
 mod cloaks;
 mod control;
 mod edit;
@@ -614,6 +615,9 @@ pub struct Session {
     trigger: Trigger,
     /// The shots and beams in flight, and what the fight reports.
     combat: Combat,
+    /// The cargo boxes jettisons left in space (see the `cargo_boxes`
+    /// module); never saved, as the original saves none.
+    boxes: crate::cargo_box::CargoBoxes,
     /// The NPC the player targets, if any.
     target: Option<NpcId>,
     /// What the view shows of space about the player's ship (see the
@@ -944,6 +948,7 @@ impl Session {
             condition: Condition::Intact,
             trigger: Trigger::default(),
             combat: Combat::default(),
+            boxes: crate::cargo_box::CargoBoxes::default(),
             target: None,
             play_area: crate::cloak::DEFAULT_PLAY_AREA,
             secondary: None,
@@ -1203,6 +1208,7 @@ impl Session {
         }
         self.red_alert_tick(frame);
         self.brackets_tick();
+        self.boxes_tick();
         let controls = match self.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
@@ -2548,6 +2554,8 @@ impl Session {
         self.landed = Some(stellar);
         self.pilot.stellar = Some(stellar);
         self.combat.clear();
+        // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40).
+        self.clear_boxes();
         self.target = None;
         self.talk = None;
         self.leave_with_fighters(true);

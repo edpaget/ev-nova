@@ -28,6 +28,10 @@ pub enum SimSound {
     RedAlert,
     /// A `Q` set operator's message is shown in flight.
     ScriptMessage,
+    /// Cargo was jettisoned in flight: `_beepSnd[4]`, `snd ` 154
+    /// (`_JettisonCargo` @0x3e31a-0x3e33d), whether or not a mission
+    /// failed with it (see [`cargo_box`](crate::cargo_box)).
+    CargoJettisoned,
     /// A `P` set operator's sound plays: `exclusive`ly, as the one mission
     /// sound, dropped while the last is still playing; or over whatever
     /// plays.

@@ -16,6 +16,7 @@ use crate::mission::cargo::{
     JettisonMessage, PICKUP_BOARDING, PickupFacts, ScanOutcome, drops_off, jettison,
     loads_at_accept, picks_up_at_destination, pickup_checks, scan,
 };
+use crate::sound::SimSound;
 use crate::traffic::npc::NpcId;
 
 impl Session {
@@ -114,14 +115,18 @@ impl Session {
     /// once, as a missed deadline does, in slot order; then the
     /// commodities go. In flight the player is told: "Mission failed.",
     /// or else "Cargo jettisoned." or "Non-mission cargo jettisoned."
-    /// when anything went ([`SimMessage`]); landed, nothing. The cargo
-    /// boxes it leaves are rdm:phase/missions/phase-19-jettison-boxes.
+    /// when anything went ([`SimMessage`]); landed, nothing. In flight,
+    /// when anything went, it sounds [`SimSound::CargoJettisoned`]
+    /// (@0x3e2fe-0x3e33d), a mission failed or not, and drops the cargo
+    /// boxes behind the player and its trader escorts, drawing on
+    /// `chance` (see the `cargo_boxes` module); landed, neither.
     pub fn jettison_cargo(&mut self, all: bool, chance: &mut dyn Chance) {
+        let goods = self.pilot.goods_held();
         let decided = jettison(
             &self.pilot.missions,
             |id| self.lifecycle_record(id),
             all,
-            self.pilot.goods_held(),
+            goods,
         );
         self.pilot
             .cargo
@@ -140,6 +145,10 @@ impl Session {
         self.save_due = true;
         if self.landed.is_some() {
             return;
+        }
+        self.drop_cargo_boxes(decided.total, goods, chance);
+        if decided.total > 0 {
+            self.sounds.push(SimSound::CargoJettisoned);
         }
         if let Some(message) = decided.message {
             self.messages.push(match message {
@@ -915,6 +924,56 @@ mod tests {
         assert_eq!(session.take_messages(), []);
         let kept = session.pilot().missions().get(0).expect("held");
         assert_eq!((kept.aboard, kept.failed), (true, None));
+    }
+
+    // The jettison's boxes and sound.
+
+    use crate::SimSound;
+
+    #[test]
+    fn the_boxes_dropped_count_the_mission_cargo_unless_option_keeps_it() {
+        for (all, boxes) in [(true, 4), (false, 3)] {
+            let catalog = cargo_missions();
+            let mut session = loaded(&catalog, &[140, 141]);
+            // 16 tons of goods, and mission 140's 4 with them.
+            session.pilot.cargo.insert(Good::Commodity(0), 14);
+            in_flight(&mut session, &catalog);
+            session.jettison_cargo(all, &mut NeverFires);
+            assert_eq!(session.cargo_boxes().len(), boxes, "{all}");
+        }
+    }
+
+    #[test]
+    fn a_jettison_of_mission_cargo_alone_drops_a_box_and_sounds() {
+        let catalog = cargo_missions();
+        let mut session = docked(&catalog);
+        session
+            .accept_mission(MissionId(140), &mut NeverFires)
+            .expect("accepted");
+        in_flight(&mut session, &catalog);
+        let _ = session.take_sounds();
+        session.jettison_cargo(true, &mut NeverFires);
+        assert_eq!(session.cargo_boxes().len(), 1, "its 4 tons");
+        assert_eq!(session.take_messages(), [SimMessage::MissionFailed]);
+        assert_eq!(
+            session.take_sounds(),
+            [SimSound::CargoJettisoned],
+            "a mission failed or not"
+        );
+    }
+
+    #[test]
+    fn an_unabortable_missions_cargo_kept_alone_drops_nothing_and_sounds_nothing() {
+        let catalog = cargo_missions();
+        let mut session = docked(&catalog);
+        session
+            .accept_mission(MissionId(141), &mut NeverFires)
+            .expect("accepted");
+        in_flight(&mut session, &catalog);
+        let _ = session.take_sounds();
+        session.jettison_cargo(true, &mut NeverFires);
+        assert!(session.cargo_boxes().is_empty());
+        assert_eq!(session.take_sounds(), []);
     }
 
     // The scan.

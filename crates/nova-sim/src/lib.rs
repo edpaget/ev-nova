@@ -27,6 +27,10 @@
 //! - [`brackets`]: the corner brackets round the nav target and the ship
 //!   target: their [`FlyIn`](brackets::FlyIn) from a selection and a ship
 //!   target's [`Standing`](brackets::Standing).
+//! - [`cargo_box`]: the cargo boxes a jettison drops behind the player
+//!   and its trader escorts: how many ([`box_count`](cargo_box::box_count)),
+//!   where each starts, and how it drifts, spins and fades
+//!   ([`CargoBoxes`](cargo_box::CargoBoxes)).
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's fields and default items, the
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
@@ -236,6 +240,7 @@ pub mod bay;
 pub mod blink;
 pub mod board;
 pub mod brackets;
+pub mod cargo_box;
 pub mod catalog;
 pub mod chance;
 pub mod cloak;

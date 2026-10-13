@@ -1695,7 +1695,9 @@
 //!   `_DeleteAllComputerShips` and a ship's leaving clear it; the shots
 //!   in flight (the 128 records of 0x48 bytes at 0x3b5474, which
 //!   `_SpawnShot` fills, @0x999e2-0x99a0d); and the cargo boxes (the 64
-//!   of 0x28 at 0x3b52c0, which `_SpawnBox` fills, @0x99a0f-0x99a36). It
+//!   of 0x28 at 0x3b52c0, which `_SpawnBox` fills, @0x99a0f-0x99a36:
+//!   here [`cargo_box`](crate::cargo_box)'s boxes, which keep no system
+//!   and so stay with the player as they are). It
 //!   sets up no ships, runs no hook, explores nothing and redraws no
 //!   stellars. So every NPC stays with the player, not the escorts alone,
 //!   and no `galaxy_escorts` key is needed. It leaves the stellar the

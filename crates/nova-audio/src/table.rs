@@ -32,6 +32,8 @@ pub struct SoundTable {
     pub script_message: Option<SoundId>,
     /// Plays as the player becomes threatened: the Red Alert.
     pub red_alert: Option<SoundId>,
+    /// Plays as cargo is jettisoned in flight.
+    pub jettison: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -65,6 +67,9 @@ impl SoundTable {
     ///   `_redAlertSnd` (@0x1c218-0x1c22a) and `_HandlePlayer` plays
     ///   (@0x68cff). The original plays it at priority 5; the audio port
     ///   has no channel priorities, so that is not modelled.
+    /// - `jettison`: 154, `_beepSnd[4]` again, which `_JettisonCargo`
+    ///   plays when anything went in flight (@0x3e31a-0x3e33d), at
+    ///   priority 1, not modelled either.
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -76,6 +81,7 @@ impl SoundTable {
         alert: None,
         script_message: Some(SoundId(154)),
         red_alert: Some(SoundId(370)),
+        jettison: Some(SoundId(154)),
     };
 }
 
@@ -96,5 +102,6 @@ mod tests {
         assert_eq!(table.alert, None, "the system's alert");
         assert_eq!(table.script_message, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.red_alert, Some(SoundId(370)), "Red Alert");
+        assert_eq!(table.jettison, Some(SoundId(154)), "_beepSnd[4]");
     }
 }
