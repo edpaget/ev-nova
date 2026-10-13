@@ -446,7 +446,8 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
     // and help lines; then the HUD: the status bar's picture, the radar's
     // two small ovals (4 pixels each) and the player's pixel, and three
     // bars, then the nav area's "Nav System Off" (never the
-    // system's name), the date, and the target and secondary weapon lines.
+    // system's name), and the target and secondary weapon lines. This
+    // `ïntf` has no `CargoArea`, so neither the cargo lines nor the date.
     let shape = shape(&first);
     assert_eq!(shape[0].0, "solid");
     assert!(shape[0].1 > 0, "stars");
@@ -459,7 +460,7 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
             ("text", 2),
             ("sprites", 1),
             ("solid", 12),
-            ("text", 4)
+            ("text", 3)
         ]
     );
     let start = quads(&first);
@@ -592,16 +593,13 @@ fn the_hud_is_drawn_while_flying() {
 
     // The nav area comes last but for the target and secondary weapon
     // lines, with nothing selected and no course: "Nav System Off", not
-    // the system's name; then the date, the `chär`'s unset start (1
-    // January of year 0) without affixes.
+    // the system's name. With no `CargoArea` there is no room for the
+    // date.
     let Some(Batch::Text(runs)) = first.batches.last() else {
         panic!("text last: {:?}", shape(&first))
     };
     let lines: Vec<&str> = runs.iter().map(|run| run.text.as_str()).collect();
-    assert_eq!(
-        lines,
-        [NAV_OFF, "January 1, 0", "No Target", "No Secondary Weapon"]
-    );
+    assert_eq!(lines, [NAV_OFF, "No Target", "No Secondary Weapon"]);
     // "Nav System Off" on its baseline 22 below the nav area's top
     // (254), its top 12 (the bar's font size) above that; at the area's
     // left, as this harness measures no text.

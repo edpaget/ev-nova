@@ -381,9 +381,9 @@ impl Harness {
         self.texts_on_bar(254.0..=286.0)
     }
 
-    /// The texts the next frame draws in the cargo area, where the date
-    /// goes: stock `ïntf` 128's (8, 458)-(184, 552), on the bar.
-    fn date(&mut self) -> Vec<String> {
+    /// The texts the next frame draws in the cargo area: stock `ïntf`
+    /// 128's (8, 458)-(184, 552), on the bar.
+    fn cargo_area(&mut self) -> Vec<String> {
         self.texts_on_bar(458.0..=552.0)
     }
 
@@ -439,20 +439,30 @@ fn the_course_map_sets_what_the_hud_navigation_area_shows() {
     assert_eq!(game.nav(), [NAV_HYPERSPACE, "Alpha"]);
 }
 
+/// The date the session shows.
+fn date(game: &Harness) -> String {
+    game.session().date_text()
+}
+
 #[test]
-fn the_hud_date_moves_on_a_day_with_each_jump() {
+fn the_date_moves_on_a_day_with_each_jump_and_the_stock_cargo_area_lists_the_hold_not_it() {
     let mut game = Harness::flying();
-    assert_eq!(game.date(), ["June 23, 1177 NC"]);
+    assert_eq!(
+        game.cargo_area(),
+        ["Free:", "0", "Credits:", "0"],
+        "no room for the date under the cargo lines"
+    );
+    assert_eq!(date(&game), "June 23, 1177 NC");
 
     game.plot(129);
     game.fly_out();
     game.jump_into(129);
     assert_eq!(game.session().system(), SystemId(129));
-    assert_eq!(game.date(), ["June 24, 1177 NC"]);
+    assert_eq!(date(&game), "June 24, 1177 NC");
 
     game.plot(128);
     game.fly_out();
     game.jump_into(128);
     assert_eq!(game.session().system(), SystemId(128));
-    assert_eq!(game.date(), ["June 25, 1177 NC"]);
+    assert_eq!(date(&game), "June 25, 1177 NC");
 }

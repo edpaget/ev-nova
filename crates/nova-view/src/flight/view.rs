@@ -3717,11 +3717,13 @@ impl<
             Ok(bar) => {
                 let radar = self.radar_shown();
                 let date = self.date_text();
+                let cargo = self.session.as_ref().ok().map(Session::status_cargo);
                 let state = HudState {
                     radar: &radar,
                     blink_on: self.hud_cadence.blink_on(),
                     reserves: self.reserves(),
                     nav: self.nav_shown(),
+                    cargo: cargo.as_ref(),
                     date: &date,
                     disabled: self
                         .session
@@ -5081,6 +5083,7 @@ mod tests {
                 blink_on: false,
                 reserves: ShipStats::new(FIELDS, &[]).full(),
                 nav: NavDisplay::Off,
+                cargo: Some(&view.session().expect("flying").status_cargo()),
                 date: DATE,
                 disabled: false,
             },
@@ -5935,6 +5938,7 @@ mod tests {
                 blink_on: false,
                 reserves,
                 nav: NavDisplay::Off,
+                cargo: None,
                 date: DATE,
                 disabled: false,
             },
@@ -7040,6 +7044,7 @@ mod tests {
                 blink_on: view.hud_cadence.blink_on(),
                 reserves: reserves(&view),
                 nav: NavDisplay::Off,
+                cargo: Some(&view.session().expect("flying").status_cargo()),
                 date: "June 24, 1177 NC",
                 disabled: false,
             },
@@ -14513,14 +14518,46 @@ mod tests {
             .collect()
     }
 
-    /// The last line of the cargo area, (8, 458)-(184, 552) at (830, 0):
-    /// one line of Geneva 12 (1.2 x 12) above its bottom.
-    fn last_cargo_line() -> Point {
-        at(838.0, 552.0 - 1.2 * 12.0)
+    /// `text` from `x` right of the stock cargo area's left, (8, 458) at
+    /// (830, 0), on `baseline` below its top, in Geneva 12.
+    fn cargo_line(text: &str, x: f32, baseline: f32) -> (String, Point) {
+        (text.to_owned(), at(838.0 + x, 458.0 + baseline - 12.0))
     }
 
     #[test]
-    fn the_hud_shows_the_date_on_the_cargo_areas_last_line() {
+    fn the_hud_lists_the_goods_bought_the_free_space_and_the_cash() {
+        let labels = FakeCatalog {
+            strings: vec![(4003, vec!["Food:".to_owned(), "Ind:".to_owned()])],
+            ..catalog()
+        };
+        let mut view = FlightView::new(trading()).with_strings(Rc::new(labels));
+        assert_eq!(
+            cargo(&view),
+            [
+                cargo_line(hud::CARGO_FREE, 77.0, 12.0),
+                cargo_line("10", 110.0, 12.0),
+                cargo_line("Credits:", 77.0, 66.0),
+                cargo_line("1,000", 87.0, 82.0),
+            ],
+            "an empty 10-ton hold, and no room for the date"
+        );
+        land_now(&mut view);
+        assert_eq!(view.trade(BUY_FOOD), Ok(10));
+        assert_eq!(
+            cargo(&view),
+            [
+                cargo_line("Food:", 3.0, 12.0),
+                cargo_line("10", 41.0, 12.0),
+                cargo_line(hud::CARGO_FREE, 77.0, 12.0),
+                cargo_line("0", 110.0, 12.0),
+                cargo_line("Credits:", 77.0, 66.0),
+                cargo_line("250", 87.0, 82.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cargo_area_with_room_shows_the_date_on_its_last_line() {
         assert_eq!(
             layout().cargo,
             crate::geometry::Bounds {
@@ -14528,13 +14565,28 @@ mod tests {
                 max: at(184.0, 552.0),
             }
         );
-        let mut view = flight();
-        assert_eq!(cargo(&view), [(DATE.to_owned(), last_cargo_line())]);
+        let taller = FakeCatalog {
+            bar: Ok(StatusBarLayout {
+                cargo: crate::geometry::Bounds {
+                    min: at(8.0, 440.0),
+                    max: at(184.0, 552.0),
+                },
+                ..layout()
+            }),
+            ..catalog()
+        };
+        let mut view = FlightView::new(taller);
+        // One line of Geneva 12 (1.2 x 12) above the area's bottom.
+        let last_line = at(838.0, 552.0 - 1.2 * 12.0);
+        let date = |view: &View| {
+            cargo(view)
+                .into_iter()
+                .filter(|(text, _)| text.ends_with("NC"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(date(&view), [(DATE.to_owned(), last_line)]);
         jump_to_alpha(&mut view);
-        assert_eq!(
-            cargo(&view),
-            [("June 24, 1177 NC".to_owned(), last_cargo_line())]
-        );
+        assert_eq!(date(&view), [("June 24, 1177 NC".to_owned(), last_line)]);
     }
 
     #[test]

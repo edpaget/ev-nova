@@ -5,8 +5,9 @@
 //! the combat looks: every weapon the simulation flies, every explosion
 //! type and a ship's target card read, and every looped weapon sound's
 //! length; a boarding grant's message reads the strings it is built
-//! from; and the radar draws the stock stations, hypergates and wormholes
-//! as squares. Skips, passing, when `NOVA_DATA` is unset.
+//! from; the cargo area's strings and area read; and the radar draws the
+//! stock stations, hypergates and wormholes as squares. Skips, passing,
+//! when `NOVA_DATA` is unset.
 
 // The stock areas are small whole numbers, exact in floating point.
 #![allow(clippy::float_cmp)]
@@ -218,6 +219,46 @@ fn a_grants_message_reads_its_stock_strings() {
         ],
         [RETRIEVED, THE, FROM_THIS_SHIP, ARTICLE_A, ARTICLE_AN]
     );
+}
+
+/// The cargo area's labels are `STR#` 2002 #19-#21 and #33, its rows'
+/// `STR#` 4003, and a mission's cargo names `STR#` 4002, as the stock
+/// strings read; the default bar's `CargoArea` has no room for the date
+/// under the cargo lines.
+#[test]
+fn the_cargo_area_reads_its_stock_strings_and_area() {
+    use nova_view::flight::hud::{
+        CARGO_CREDITS, CARGO_FREE, CARGO_MULTIPLE, CARGO_SPECIAL, credits_label, date_line,
+    };
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(
+        [&strings[18], &strings[19], &strings[20], &strings[32]],
+        [CARGO_FREE, CARGO_SPECIAL, CARGO_MULTIPLE, CARGO_CREDITS]
+    );
+    assert_eq!(credits_label(&strings[32]), "Credits:");
+    assert_eq!(
+        nova_sim::CommCatalog::string_list(&data, 4003),
+        ["Food:", "Ind:", "Med:", "LuxG:", "Met:", "Equ:"]
+    );
+    assert_eq!(
+        nova_sim::CommCatalog::string_list(&data, 4002)[..7],
+        [
+            "Food",
+            "IndGds",
+            "MedGds",
+            "LuxGds",
+            "Metal",
+            "Equpt",
+            "Passengers"
+        ]
+    );
+    let view = FlightView::new(&data);
+    let bar = view.status_bar().expect("the stock status bar reads");
+    assert_eq!(bar.layout.cargo, rect(8.0, 458.0, 184.0, 552.0));
+    assert_eq!(date_line(bar.layout.cargo, bar.layout.font_size), None);
 }
 
 #[test]

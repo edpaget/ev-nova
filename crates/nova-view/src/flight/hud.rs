@@ -17,14 +17,22 @@
 //! only the area's rect to the window, @0x4a442) is left out, as a draw
 //! list has no clipping and stock names fit the stock area.
 //!
-//! The date is shown on the last line of the `ïntf`'s `CargoArea`, bright,
-//! in the same font. The original shows it only on the player info screen
-//! (`STR#` 2002 #252 "Current Date:"), and no `ïntf` area is for it, so
-//! this is our choice of where it goes in flight: the cargo area is the
-//! stock bar's largest empty panel ((8, 458)-(184, 552), room for about
-//! six lines), the nav area is full with its two lines, and the weapon
-//! and target areas have their own texts. A cargo display would fill the
-//! area from the top and leave its last line to the date.
+//! The `ïntf`'s `CargoArea` lists the hold as `_DrawStatusCargo`
+//! (@0x4c313-0x4c7ad) does, from the [`StatusCargo`] the session decides
+//! (see `nova_sim::status_cargo`): each held commodity on its own row, "Free:"
+//! and the tons free, "Special:" naming the mission cargo or `jünk` when
+//! there is any, and the credits, each line from a fixed pen position on
+//! a fixed baseline (the `CARGO_*` consts), labels dim and values bright,
+//! in the bar's font. An empty or inverted area draws nothing
+//! (@0x4c325-0x4c33b); the original's clear to the background and its
+//! blit to the window are left out, as a draw list needs neither.
+//!
+//! The date is shown on the last line of the `CargoArea`, bright, in the
+//! same font, when that line clears the cargo lines ([`date_line`]); the
+//! stock area ((8, 458)-(184, 552)) has no room for it. The original
+//! shows it only on the player info screen (`STR#` 2002 #252 "Current
+//! Date:"), and no `ïntf` area is for it, so this is our choice of where
+//! it goes in flight until `hud-fidelity` phase 9 places it.
 //!
 //! Which `ïntf`: as `_LoadIntfResource` (@0x735f2) picks it, the player's
 //! ship type does, not the pilot. Its `InherentGovt` names a government
@@ -56,7 +64,7 @@
 //! sits against the right edge of the screen, at the top.
 
 use nova_sim::hyperspace::max_jumps;
-use nova_sim::{JumpReadiness, Reserves};
+use nova_sim::{JumpReadiness, Reserves, Special, StatusCargo};
 
 use nova_sim::Gauge;
 
@@ -65,6 +73,7 @@ use super::pen::Pen;
 use super::radar::{self, IRect, RadarColor, RadarMark, RadarScene};
 use crate::draw::fill_rect;
 use crate::geometry::{Bounds, Point};
+use crate::spaceport::credits::comma_number;
 use crate::system::camera::VIEW_SIZE;
 use crate::text::{LINE_HEIGHT, TextMetrics};
 use crate::{Color, DrawList, Font, ImageKey};
@@ -200,6 +209,59 @@ pub const NAV_OFF_BASELINE: f32 = 22.0;
 /// @0x4a34c, @0x4a3b0).
 pub const NAV_VALUE_BASELINE: f32 = 29.0;
 
+/// `STR#` 2002 #19: the cargo area's free space label.
+pub const CARGO_FREE: &str = "Free:";
+/// `STR#` 2002 #20: the cargo area's mission cargo and `jünk` label.
+pub const CARGO_SPECIAL: &str = "Special:";
+/// `STR#` 2002 #21: "Special:"'s value for more than one.
+pub const CARGO_MULTIPLE: &str = "Multiple";
+/// `STR#` 2002 #33, which the credits line's label is made from
+/// ([`credits_label`]).
+pub const CARGO_CREDITS: &str = "credits";
+/// The first commodity row's baseline below the cargo area's top
+/// (@0x4c44b, @0x4c480); "Free:" shares it (@0x4c4dc, @0x4c51b).
+pub const CARGO_ROW_BASELINE: f32 = 12.0;
+/// How far each commodity row's baseline is below the one before
+/// (@0x4c4c6).
+pub const CARGO_ROW_STEP: f32 = 14.0;
+/// A commodity row's label, right of the cargo area's left (@0x4c457).
+pub const CARGO_LABEL_LEFT: f32 = 3.0;
+/// A commodity row's tons, right of the cargo area's left (@0x4c48c).
+pub const CARGO_TONS_LEFT: f32 = 41.0;
+/// The "Free:", "Special:" and credits labels, right of the cargo area's
+/// left (@0x4c4e8, @0x4c627, @0x4c708).
+pub const CARGO_SIDE_LEFT: f32 = 77.0;
+/// The free tons, right of the cargo area's left (@0x4c527).
+pub const CARGO_FREE_VALUE_LEFT: f32 = 110.0;
+/// "Special:"'s and the credits line's values, right of the cargo area's
+/// left (@0x4c666, @0x4c782).
+pub const CARGO_VALUE_LEFT: f32 = 87.0;
+/// "Special:"'s baseline below the cargo area's top (@0x4c61b).
+pub const CARGO_SPECIAL_BASELINE: f32 = 30.0;
+/// "Special:"'s value's baseline below the cargo area's top (@0x4c65a).
+pub const CARGO_SPECIAL_VALUE_BASELINE: f32 = 46.0;
+/// The credits label's baseline below the cargo area's top (@0x4c6fc).
+pub const CARGO_CREDITS_BASELINE: f32 = 66.0;
+/// The credits value's baseline below the cargo area's top (@0x4c776),
+/// the lowest the area draws: the sixth commodity row's is the same.
+pub const CARGO_CREDITS_VALUE_BASELINE: f32 = 82.0;
+
+/// The credits line's label made from `word` (`STR#` 2002 #33) as
+/// `_DrawStatusCargo` makes it: its first character upper-cased
+/// (@0x4c73a-0x4c752, nothing for an empty word), then ":" (the Pascal
+/// string at 0xd97b2).
+#[must_use]
+pub fn credits_label(word: &str) -> String {
+    let mut chars = word.chars();
+    let first = chars.next().map(char::to_uppercase);
+    first
+        .into_iter()
+        .flatten()
+        .chain(chars)
+        .chain([':'])
+        .collect()
+}
+
 /// What the nav area shows: one variant for each of the original's nav
 /// modes (player +0x6a) the engine reaches. Modes 0 and 1 are never set
 /// on the player, and mode 4 (the hypergate map) is reset to −1
@@ -247,6 +309,8 @@ pub struct HudState<'a> {
     pub reserves: Reserves,
     /// What the nav area shows.
     pub nav: NavDisplay,
+    /// What the cargo area lists, or `None` with no session to list.
+    pub cargo: Option<&'a StatusCargo>,
     /// Today's date, as it is displayed.
     pub date: &'a str,
     /// Whether the player's ship is disabled (`_IsDisabled`), which hides
@@ -285,6 +349,9 @@ pub fn draw(
         draw_fuel(list, layout, layout.fuel.offset(origin), reserves.fuel);
     }
     draw_nav(list, layout, origin, &state.nav, metrics);
+    if let Some(cargo) = state.cargo {
+        draw_cargo(list, layout, origin, cargo, metrics);
+    }
     draw_date(list, layout, origin, state.date);
 }
 
@@ -460,11 +527,14 @@ pub fn draw_message_in(
 }
 
 /// Draws `date` on the last line of the layout's cargo area, at the bar's
-/// `origin`, in the bright text colour and the bar's font.
+/// `origin`, in the bright text colour and the bar's font, when
+/// [`date_line`] finds room for it.
 fn draw_date(list: &mut DrawList, layout: &StatusBarLayout, origin: Point, date: &str) {
     let area = layout.cargo.offset(origin);
     let size = layout.font_size;
-    let last_line = Point::new(area.min.x, area.max.y - LINE_HEIGHT * size);
+    let Some(last_line) = date_line(area, size) else {
+        return;
+    };
     let width = Some(area.width());
     list.text_in(
         layout.font,
@@ -473,6 +543,86 @@ fn draw_date(list: &mut DrawList, layout: &StatusBarLayout, origin: Point, date:
         size,
         width,
         layout.bright_text,
+    );
+}
+
+/// Where the date goes in the cargo `area` at `size`: the top-left of
+/// the area's last line, or `None` when that line would overlap the
+/// lowest line `_DrawStatusCargo` draws ([`CARGO_CREDITS_VALUE_BASELINE`],
+/// whose box reaches [`LINE_HEIGHT`] × `size` below its top, `size`
+/// above its baseline). The stock area, 94 pixels tall, has no room.
+///
+/// The original shows no date in flight; this placement stands until
+/// `hud-fidelity` phase 9 (`hud-date-overlaps-status-bar`) replaces it
+/// with its opt-in setting and its own placement.
+#[must_use]
+pub fn date_line(area: Bounds, size: f32) -> Option<Point> {
+    let line = LINE_HEIGHT * size;
+    let lowest_bottom = area.min.y + CARGO_CREDITS_VALUE_BASELINE - size + line;
+    let top = area.max.y - line;
+    (top >= lowest_bottom).then_some(Point::new(area.min.x, top))
+}
+
+/// Draws `cargo` in the layout's cargo area, at the bar's `origin`, as
+/// `_DrawStatusCargo` (@0x4c313-0x4c7ad) does: nothing in an empty or
+/// inverted area (@0x4c325-0x4c33b); otherwise each held commodity's
+/// row, "Free:", "Special:" when there is any, and the credits line,
+/// labels in the dim text colour and values in the bright, each from
+/// its pen position on its baseline. The cash is written as
+/// `_DrawCommaNumber` writes it ([`comma_number`]).
+fn draw_cargo(
+    list: &mut DrawList,
+    layout: &StatusBarLayout,
+    origin: Point,
+    cargo: &StatusCargo,
+    metrics: Option<&dyn TextMetrics>,
+) {
+    let area = layout.cargo.offset(origin);
+    if area.min.x >= area.max.x || area.min.y >= area.max.y {
+        return;
+    }
+    let (dim, bright) = (layout.dim_text, layout.bright_text);
+    let size = layout.font_size;
+    let mut pen = Pen {
+        list,
+        font: layout.font,
+        metrics,
+    };
+    let mut line = |text: &str, x: f32, baseline: f32, color: Color| {
+        pen.at(text, area.min.x + x, area.min.y + baseline, size, color);
+    };
+    let mut baseline = CARGO_ROW_BASELINE;
+    for row in &cargo.rows {
+        if let Some(row) = row {
+            line(&row.label, CARGO_LABEL_LEFT, baseline, dim);
+            line(&row.tons.to_string(), CARGO_TONS_LEFT, baseline, bright);
+        }
+        baseline += CARGO_ROW_STEP;
+    }
+    line(CARGO_FREE, CARGO_SIDE_LEFT, CARGO_ROW_BASELINE, dim);
+    let free = cargo.free.to_string();
+    line(&free, CARGO_FREE_VALUE_LEFT, CARGO_ROW_BASELINE, bright);
+    if let Some(special) = &cargo.special {
+        line(CARGO_SPECIAL, CARGO_SIDE_LEFT, CARGO_SPECIAL_BASELINE, dim);
+        let value = match special {
+            Special::Named(name) => name.as_str(),
+            Special::Multiple => CARGO_MULTIPLE,
+        };
+        line(
+            value,
+            CARGO_VALUE_LEFT,
+            CARGO_SPECIAL_VALUE_BASELINE,
+            bright,
+        );
+    }
+    let label = credits_label(CARGO_CREDITS);
+    line(&label, CARGO_SIDE_LEFT, CARGO_CREDITS_BASELINE, dim);
+    let cash = comma_number(cargo.cash);
+    line(
+        &cash,
+        CARGO_VALUE_LEFT,
+        CARGO_CREDITS_VALUE_BASELINE,
+        bright,
     );
 }
 
@@ -1083,6 +1233,7 @@ mod tests {
             blink_on: false,
             reserves,
             nav: NavDisplay::Off,
+            cargo: None,
             date: DATE,
             disabled: false,
         }
@@ -1403,11 +1554,13 @@ mod tests {
             ],
             ..RadarScene::default()
         };
+        let cargo = full_cargo();
         let hud = HudState {
             radar: &scene,
             blink_on: true,
             reserves: reserves(30.0, 60.0, 300.0),
             nav: NavDisplay::Stellar(Some("Earth".to_owned())),
+            cargo: Some(&cargo),
             date: DATE,
             disabled: false,
         };
@@ -1429,8 +1582,13 @@ mod tests {
         expected.line(at(865.0, 237.5), at(1014.0, 237.5), 7.0, FUEL_FULL);
         expected.push(nav_text(NAV_STELLAR, NAV_LABEL_BASELINE, Color::DIM));
         expected.push(nav_text("Earth", NAV_VALUE_BASELINE, TEXT));
-        expected.push(date_text(DATE));
-        assert_eq!(list, expected);
+        for line in cargo_drawn(&stock(), &cargo) {
+            expected.push(line);
+        }
+        assert_eq!(
+            list, expected,
+            "the cargo area last, with no room for the date"
+        );
         let blink_off = HudState {
             blink_on: false,
             ..hud
@@ -1928,23 +2086,231 @@ mod tests {
         );
     }
 
-    // The date.
+    // The cargo area.
 
-    const DATE: &str = "June 23, 1177 NC";
+    use nova_sim::CommodityRow;
 
-    /// `text` on the last line of the stock bar's cargo area, at (830, 0):
-    /// its (8, 458)-(184, 552) is (838, 458)-(1014, 552), and the last
-    /// line of Charcoal 11 starts one line height (13.2) above its bottom.
-    fn date_text(text: &str) -> DrawCommand {
+    fn row(label: &str, tons: i64) -> CommodityRow {
+        CommodityRow {
+            label: label.to_owned(),
+            tons,
+        }
+    }
+
+    /// 12 tons of food and 3 of equipment, 25 tons free, one mission's
+    /// passengers, and 1,234 credits.
+    fn full_cargo() -> StatusCargo {
+        StatusCargo {
+            rows: [
+                Some(row("Food:", 12)),
+                None,
+                None,
+                None,
+                None,
+                Some(row("Equ:", 3)),
+            ],
+            free: 25,
+            special: Some(Special::Named("Passengers".to_owned())),
+            cash: 1234,
+        }
+    }
+
+    /// The texts drawn for `cargo` on `bar`, the nav area's and the
+    /// date's left out.
+    fn cargo_drawn(bar: &StatusBar, cargo: &StatusCargo) -> Vec<DrawCommand> {
+        let hud = HudState {
+            cargo: Some(cargo),
+            ..state(reserves(30.0, 60.0, 300.0))
+        };
+        texts(&drawn(bar, &hud))
+            .into_iter()
+            .filter(|command| {
+                !matches!(command, DrawCommand::Text { text, .. } if text == DATE || text == NAV_OFF)
+            })
+            .collect()
+    }
+
+    /// `text` from `x` right of the stock bar's cargo area's left, on
+    /// `baseline` below its top: at (830, 0) its (8, 458)-(184, 552) is
+    /// (838, 458)-(1014, 552), in Charcoal 11, its top 11 above its
+    /// baseline.
+    fn cargo_text(text: &str, x: f32, baseline: f32, color: Color) -> DrawCommand {
         DrawCommand::Text {
             text: text.to_owned(),
             font: Font::Charcoal,
-            origin: at(838.0, 552.0 - 13.2),
+            origin: at(838.0 + x, 458.0 + baseline - 11.0),
             size: 11.0,
-            wrap_width: Some(176.0),
-            color: TEXT,
+            wrap_width: None,
+            color,
         }
     }
+
+    #[test]
+    fn the_cargo_areas_positions_are_draw_status_cargos() {
+        assert_eq!(CARGO_FREE, "Free:");
+        assert_eq!(CARGO_SPECIAL, "Special:");
+        assert_eq!(CARGO_MULTIPLE, "Multiple");
+        assert_eq!(CARGO_CREDITS, "credits");
+        assert_eq!(
+            [
+                CARGO_ROW_BASELINE,
+                CARGO_ROW_STEP,
+                CARGO_LABEL_LEFT,
+                CARGO_TONS_LEFT
+            ],
+            [12.0, 14.0, 3.0, 41.0]
+        );
+        assert_eq!(
+            [CARGO_SIDE_LEFT, CARGO_FREE_VALUE_LEFT, CARGO_VALUE_LEFT],
+            [77.0, 110.0, 87.0]
+        );
+        assert_eq!(
+            [
+                CARGO_SPECIAL_BASELINE,
+                CARGO_SPECIAL_VALUE_BASELINE,
+                CARGO_CREDITS_BASELINE,
+                CARGO_CREDITS_VALUE_BASELINE
+            ],
+            [30.0, 46.0, 66.0, 82.0]
+        );
+    }
+
+    #[test]
+    fn the_credits_label_is_its_word_upper_cased_and_a_colon() {
+        assert_eq!(credits_label(CARGO_CREDITS), "Credits:");
+        assert_eq!(credits_label("cr\u{e9}dits"), "Cr\u{e9}dits:");
+        assert_eq!(credits_label("Money"), "Money:");
+        assert_eq!(credits_label(""), ":");
+    }
+
+    #[test]
+    fn the_cargo_area_draws_each_line_where_draw_status_cargo_does() {
+        let dim = Color::DIM;
+        assert_eq!(
+            cargo_drawn(&stock(), &full_cargo()),
+            [
+                cargo_text("Food:", 3.0, 12.0, dim),
+                cargo_text("12", 41.0, 12.0, TEXT),
+                cargo_text("Equ:", 3.0, 82.0, dim),
+                cargo_text("3", 41.0, 82.0, TEXT),
+                cargo_text("Free:", 77.0, 12.0, dim),
+                cargo_text("25", 110.0, 12.0, TEXT),
+                cargo_text("Special:", 77.0, 30.0, dim),
+                cargo_text("Passengers", 87.0, 46.0, TEXT),
+                cargo_text("Credits:", 77.0, 66.0, dim),
+                cargo_text("1,234", 87.0, 82.0, TEXT),
+            ]
+        );
+    }
+
+    #[test]
+    fn each_commodity_row_is_its_own_line_down_the_area() {
+        let cargo = StatusCargo {
+            rows: std::array::from_fn(|n| Some(row(&format!("C{n}:"), n as i64 + 1))),
+            ..StatusCargo::default()
+        };
+        let drawn = cargo_drawn(&stock(), &cargo);
+        for n in 0..6 {
+            let baseline = 12.0 + 14.0 * n as f32;
+            assert_eq!(
+                drawn[2 * n],
+                cargo_text(&format!("C{n}:"), 3.0, baseline, Color::DIM)
+            );
+            assert_eq!(
+                drawn[2 * n + 1],
+                cargo_text(&(n + 1).to_string(), 41.0, baseline, TEXT)
+            );
+        }
+    }
+
+    #[test]
+    fn several_specials_are_multiple_and_none_draws_no_special_line() {
+        let multiple = StatusCargo {
+            special: Some(Special::Multiple),
+            ..StatusCargo::default()
+        };
+        let drawn = cargo_drawn(&stock(), &multiple);
+        assert!(
+            drawn.contains(&cargo_text("Special:", 77.0, 30.0, Color::DIM)),
+            "{drawn:?}"
+        );
+        assert!(drawn.contains(&cargo_text("Multiple", 87.0, 46.0, TEXT)));
+        let none = cargo_drawn(&stock(), &StatusCargo::default());
+        assert_eq!(
+            none,
+            [
+                cargo_text("Free:", 77.0, 12.0, Color::DIM),
+                cargo_text("0", 110.0, 12.0, TEXT),
+                cargo_text("Credits:", 77.0, 66.0, Color::DIM),
+                cargo_text("0", 87.0, 82.0, TEXT),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_credits_value_is_written_as_draw_comma_number_writes_it() {
+        let rich = StatusCargo {
+            cash: 12_345_678,
+            ..StatusCargo::default()
+        };
+        assert_eq!(
+            cargo_drawn(&stock(), &rich).last(),
+            Some(&cargo_text("12.34M", 87.0, 82.0, TEXT))
+        );
+    }
+
+    #[test]
+    fn the_cargo_area_moves_with_the_bar_and_reads_its_layout() {
+        let mut bar = odd_bar();
+        bar.layout.cargo = rect(20.0, 400.0, 150.0, 520.0);
+        let cargo = StatusCargo {
+            rows: [Some(row("Food:", 12)), None, None, None, None, None],
+            ..StatusCargo::default()
+        };
+        // The odd bar is 200 wide, so at (824, 0); the area's top-left
+        // is (844, 400), and Geneva 12's top is 12 above its baseline.
+        assert_eq!(
+            cargo_drawn(&bar, &cargo)[..3],
+            [
+                geneva("Food:", 847.0, 400.0, FUEL_PARTIAL),
+                geneva("12", 885.0, 400.0, SHIELD),
+                geneva("Free:", 921.0, 400.0, FUEL_PARTIAL),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_or_inverted_cargo_area_draws_nothing() {
+        for cargo in [
+            rect(8.0, 458.0, 8.0, 552.0),
+            rect(8.0, 458.0, 184.0, 458.0),
+            rect(184.0, 458.0, 8.0, 552.0),
+            rect(8.0, 552.0, 184.0, 458.0),
+        ] {
+            let mut bar = stock();
+            bar.layout.cargo = cargo;
+            assert_eq!(cargo_drawn(&bar, &full_cargo()), [], "{cargo:?}");
+        }
+        let mut bar = stock();
+        bar.layout.cargo = rect(8.0, 458.0, 9.0, 459.0);
+        assert_eq!(
+            cargo_drawn(&bar, &full_cargo()).len(),
+            10,
+            "one pixel is enough"
+        );
+    }
+
+    #[test]
+    fn with_no_cargo_to_list_the_area_draws_no_cargo_lines() {
+        assert_eq!(
+            nav_texts(&drawn(&stock(), &state(reserves(30.0, 60.0, 300.0)))),
+            [nav_text(NAV_OFF, NAV_OFF_BASELINE, Color::DIM)]
+        );
+    }
+
+    // The date.
+
+    const DATE: &str = "June 23, 1177 NC";
 
     fn dates(list: &DrawList) -> Vec<DrawCommand> {
         texts(list)
@@ -1953,13 +2319,99 @@ mod tests {
             .collect()
     }
 
+    /// The box a line drawn from `origin` (its top-left) at `size` covers,
+    /// `width` wide: [`LINE_HEIGHT`] × `size` tall.
+    fn line_box(origin: Point, width: f32, size: f32) -> Bounds {
+        Bounds::at(origin, width, LINE_HEIGHT * size)
+    }
+
+    fn overlap(a: Bounds, b: Bounds) -> bool {
+        a.min.x < b.max.x && b.min.x < a.max.x && a.min.y < b.max.y && b.min.y < a.max.y
+    }
+
+    /// The boxes of every text drawn but the date, measured by
+    /// [`MonoMetrics`].
+    fn cargo_boxes(list: &DrawList) -> Vec<Bounds> {
+        texts(list)
+            .into_iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text {
+                    text,
+                    font,
+                    origin,
+                    size,
+                    ..
+                } if text != DATE => {
+                    Some(line_box(origin, MonoMetrics.width(font, size, &text), size))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
-    fn the_date_is_on_the_cargo_areas_last_line_bright() {
-        let list = drawn(&stock(), &state(reserves(30.0, 60.0, 300.0)));
-        assert_eq!(dates(&list), [date_text(DATE)]);
-        let mut expected = nav_texts(&list);
-        expected.push(date_text(DATE));
-        assert_eq!(texts(&list), expected, "after the nav area");
+    fn the_stock_cargo_area_has_no_room_for_the_date() {
+        let hud = HudState {
+            cargo: Some(&StatusCargo::default()),
+            ..state(reserves(30.0, 60.0, 300.0))
+        };
+        let list = drawn(&stock(), &hud);
+        assert_eq!(dates(&list), [], "no date");
+        // At (830, 0) the area is (838, 458)-(1014, 552); its last line of
+        // Charcoal 11 would start 13.2 above its bottom.
+        let would_be = line_box(at(838.0, 552.0 - 13.2), 176.0, 11.0);
+        let credits_value = cargo_text("0", 87.0, 82.0, TEXT);
+        assert!(texts(&list).contains(&credits_value));
+        assert!(
+            cargo_boxes(&list)
+                .into_iter()
+                .any(|line| overlap(line, would_be)),
+            "the date's line would overlap the credits line"
+        );
+        assert_eq!(date_line(rect(838.0, 458.0, 1014.0, 552.0), 11.0), None);
+    }
+
+    #[test]
+    fn a_taller_cargo_area_shows_the_date_on_its_last_line_clear_of_the_cargo() {
+        let mut bar = stock();
+        bar.layout.cargo = rect(8.0, 440.0, 184.0, 552.0);
+        let full = StatusCargo {
+            rows: std::array::from_fn(|n| Some(row("Food:", n as i64 + 1))),
+            special: Some(Special::Multiple),
+            ..full_cargo()
+        };
+        let hud = HudState {
+            cargo: Some(&full),
+            ..state(reserves(30.0, 60.0, 300.0))
+        };
+        let list = drawn(&bar, &hud);
+        let date = DrawCommand::Text {
+            text: DATE.to_owned(),
+            font: Font::Charcoal,
+            origin: at(838.0, 552.0 - 13.2),
+            size: 11.0,
+            wrap_width: Some(176.0),
+            color: TEXT,
+        };
+        assert_eq!(dates(&list), [date]);
+        assert_eq!(texts(&list).last(), Some(&dates(&list)[0]), "drawn last");
+        let date_box = line_box(at(838.0, 552.0 - 13.2), 176.0, 11.0);
+        let boxes = cargo_boxes(&list);
+        assert_eq!(boxes.len(), 19, "the nav line and every cargo line");
+        for line in boxes {
+            assert!(!overlap(line, date_box), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn the_date_needs_its_whole_line_below_the_lowest_cargo_lines_box() {
+        // The credits value's box: its top 82 - 10 below the area's top,
+        // 1.2 x 10 tall, so to 84; the date's line is 12 tall.
+        let area = |bottom| rect(10.0, 400.0, 110.0, bottom);
+        assert_eq!(date_line(area(496.0), 10.0), Some(at(10.0, 484.0)));
+        assert_eq!(date_line(area(500.0), 10.0), Some(at(10.0, 488.0)));
+        assert_eq!(date_line(area(495.9), 10.0), None);
+        assert_eq!(date_line(area(552.0), 10.0), Some(at(10.0, 540.0)));
     }
 
     #[test]
