@@ -27,6 +27,7 @@ use nova_data::records::character::Character;
 use nova_data::records::desc::Desc;
 use nova_data::records::dialog::Dlog;
 use nova_data::records::dialog_items::Ditl;
+use nova_data::records::govt::Govt;
 use nova_data::records::interface::Interface;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
@@ -36,7 +37,7 @@ use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::store::fs::{DirLister, EntryKind, Listing};
 use nova_data::{GameData, InterfaceData, Record};
-use nova_render::recording::RecordingGpu;
+use nova_render::recording::{GpuCall, RecordingGpu};
 use nova_render::{Batch, Frame};
 use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader, ResType};
@@ -173,13 +174,14 @@ fn system() -> Vec<u8> {
 }
 
 /// The pad: a `spöb` at the centre that can be landed on, with a bar
-/// (`Flags` 0x41), drawn from `spïn` 1004.
-fn pad() -> Vec<u8> {
+/// (`Flags` 0x41), drawn from `spïn` 1004, held by `gövt` `govt` (-1 for
+/// independent).
+fn pad(govt: i16) -> Vec<u8> {
     let mut bytes = vec![0; Stellar::SIZE.expect("fixed")];
     put_i16s(&mut bytes, 0x00, &[0, 0, 4]);
     bytes[0x06..0x0A].copy_from_slice(&0x41_u32.to_be_bytes());
     put_i16s(&mut bytes, 0x0C, &[7]);
-    put_i16s(&mut bytes, 0x14, &[-1]);
+    put_i16s(&mut bytes, 0x14, &[govt]);
     put_i16s(&mut bytes, 0x18, &[-1, -1]);
     bytes
 }
@@ -226,15 +228,33 @@ fn status_bar() -> Vec<u8> {
     bytes
 }
 
-/// The game data (see the module docs).
-fn game_data() -> Rc<GameData> {
+/// A `gövt` with no classes, allies or enemies, whose news shows over
+/// `PICT` `news_pic`.
+fn govt(news_pic: i16) -> Vec<u8> {
+    let mut bytes = vec![0; Govt::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x18, &[-1; 12]);
+    put_i16s(&mut bytes, 0xAE, &[news_pic]);
+    bytes
+}
+
+/// The news pictures' sizes, which tell them apart once uploaded: `PICT`
+/// 9000, the default, and 9001, the Federation's.
+const DEFAULT_NEWS: (u32, u32) = (9, 3);
+const FEDERATION_NEWS: (u32, u32) = (11, 7);
+
+/// The game data (see the module docs), the pad held by `gövt` `govt`
+/// (-1 for independent).
+fn game_data(govt_id: i16) -> Rc<GameData> {
     let mut fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Boarder"), &ship())
         .resource(ShipAnim::TYPE, 128, None, &ship_anim(2000))
         .resource(RLED, 2000, None, &sheet(36, 1))
         .resource(System::TYPE, 128, Some(b"Alpha"), &system())
-        .resource(Stellar::TYPE, 128, Some(b"Pad"), &pad())
+        .resource(Stellar::TYPE, 128, Some(b"Pad"), &pad(govt_id))
+        .resource(Govt::TYPE, 128, Some(b"Federation"), &govt(9001))
+        .resource(PICT, 9000, None, &pict(9, 3, [10, 20, 30]))
+        .resource(PICT, 9001, None, &pict(11, 7, [30, 20, 10]))
         .resource(Spin::TYPE, 1004, None, &spin(1000))
         .resource(RLED, 1000, None, &sheet(1, 40))
         .resource(Desc::TYPE, 10_000, None, &desc("Smoke and quiet talk."))
@@ -376,7 +396,12 @@ impl Game {
     /// The app with a new pilot saved in a fresh store and opened from
     /// the main menu, in flight at Alpha's centre.
     fn flying() -> Self {
-        let data = game_data();
+        Self::flying_at(-1)
+    }
+
+    /// As [`Game::flying`], the pad held by `gövt` `govt`.
+    fn flying_at(govt: i16) -> Self {
+        let data = game_data(govt);
         let store = MemoryPilots::new();
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
         keeper
@@ -608,4 +633,49 @@ fn opening_the_bar_again_draws_the_news_afresh() {
         "a new visit: {:?}",
         texts(&frame)
     );
+}
+
+/// The size of the picture stretched over the 300 x 230 news dialog in
+/// `frame`, told apart by the uploads `game` has made.
+fn news_backdrop(game: &Game, frame: &Frame) -> Option<(u32, u32)> {
+    let stretched = frame.batches.iter().any(|batch| match batch {
+        Batch::Sprites { quads, .. } => quads
+            .iter()
+            .any(|quad| (quad.dest.w, quad.dest.h) == (300.0, 230.0)),
+        _ => false,
+    });
+    let uploaded: Vec<(u32, u32)> = game
+        .gpu
+        .calls
+        .iter()
+        .filter_map(|call| match call {
+            GpuCall::Upload { width, height, .. } => Some((*width, *height)),
+            _ => None,
+        })
+        .filter(|size| [DEFAULT_NEWS, FEDERATION_NEWS].contains(size))
+        .collect();
+    match uploaded.as_slice() {
+        [size] if stretched => Some(*size),
+        _ => None,
+    }
+}
+
+#[test]
+fn the_news_shows_over_the_stellar_governments_picture() {
+    let mut game = Game::flying_at(128);
+    game.land();
+    game.open_bar();
+    game.tap(Key::Char('n'));
+    let frame = game.frame();
+    assert_eq!(news_backdrop(&game, &frame), Some(FEDERATION_NEWS));
+}
+
+#[test]
+fn an_independent_stellars_news_shows_over_the_default_picture() {
+    let mut game = Game::flying();
+    game.land();
+    game.open_bar();
+    game.tap(Key::Char('n'));
+    let frame = game.frame();
+    assert_eq!(news_backdrop(&game, &frame), Some(DEFAULT_NEWS));
 }
