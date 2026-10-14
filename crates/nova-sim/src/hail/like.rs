@@ -12,8 +12,13 @@
 //!    (visibility, +0x8c, the ship's own escorts' threats) is
 //!    crons-news-ranks-fidelity phase 5's.
 //! 2. The player's escorts do, hired or mission escorts (leader 0,
-//!    @0x82199). (So do the governments that bless the player, which
-//!    does not happen yet.)
+//!    @0x82199). So does a ship whose government blesses the player with
+//!    peace (rank `Flags` 0x0100, `_PlayerBlessedByGovt(G, 0)` @0x821b9,
+//!    [`Surroundings::blessed`]), before the mission and legal tests
+//!    below: under either reading of `rank_govt_reach` and
+//!    `blessing_refresh`, as [`Session::blessing`](crate::Session::blessing)
+//!    takes them. Rule 1 still comes first, so a blessing excuses no ship
+//!    that threatens the player.
 //! 3. Any other mission's special ship (@0x821c6-0x8221e) likes it when
 //!    its slot's `ShipGoal` is 3 or 4 and its `ShipBehav` is 1, and
 //!    otherwise does not, with no government test; one whose slot no
@@ -32,8 +37,9 @@
 //!    (`Flags` 0x0002) does while L is at least -tol(S), and any other G
 //!    does.
 //!
-//! The government byte +0x83 the original falls back to (an IFF or a
-//! blessing) is never set here.
+//! The government byte +0x83 the original falls back to is the IFF
+//! byte, which the engine never sets. It is not the blessing, which is the
+//! government's byte +0x84 (see [`rank`](crate::rank)), read in rule 2.
 //!
 //! The [`Attitude`] (the comm status, `_CommDialogUpdate` @0x90625) is
 //! hostile while the ship threatens the player as in rule 1,
@@ -67,7 +73,7 @@ pub fn likes_player(npc: &Npc, around: &Surroundings, mission: Option<MissionHai
     if npc.threatens_player_among(around.npcs) {
         return false;
     }
-    if npc.escorts_player() {
+    if npc.escorts_player() || around.blessed(npc.govt) {
         return true;
     }
     if npc.mission.is_some() {
@@ -432,6 +438,70 @@ mod tests {
         assert!(!likes_player(&npc, &around, None));
         let free = Some(of(ShipGoal::None, ShipBehav::Own));
         assert!(!likes_player(&npc, &around, free));
+    }
+
+    // The blessing.
+
+    /// `around` with the player in the system, blessed by `blessed` alone
+    /// when it is some.
+    fn with_blessing(around: Surroundings<'_>, blessed: Option<GovtId>) -> Surroundings<'_> {
+        Surroundings {
+            player: Some(crate::ai::PlayerSide {
+                blessing: blessed
+                    .map_or(crate::rank::Blessing::NONE, crate::ai::fixture::blessing_of),
+                ..crate::ai::fixture::player(0.0, 0.0)
+            }),
+            ..around
+        }
+    }
+
+    #[test]
+    fn a_blessing_government_likes_the_player_whatever_its_mission_or_laws() {
+        let unmarked = |govt| (ship(Some(govt)), None);
+        let free = (
+            marked(Some(ME), ShipBehav::EscortPlayer, false),
+            Some(of(ShipGoal::None, ShipBehav::Own)),
+        );
+        for (flags, (npc, mission), system, record, case) in [
+            (
+                0,
+                unmarked(ME),
+                ENEMY,
+                30,
+                "in an enemy's system, above its tolerance",
+            ),
+            (0, unmarked(XENO), ALLY, 7, "a xenophobe away from home"),
+            (
+                0x0002,
+                unmarked(ME),
+                NEUTRAL,
+                -7,
+                "nosy, below minus the tolerance",
+            ),
+            (0, free, ME, 0, "a mission ship of no goal"),
+        ] {
+            let govts = govts(flags);
+            let around = among(&govts, Some(system), record);
+            let govt = npc.govt;
+            assert!(
+                !likes_player(&npc, &with_blessing(around, None), mission),
+                "{case}: unblessed"
+            );
+            let blessed = with_blessing(around, govt);
+            assert!(likes_player(&npc, &blessed, mission), "{case}");
+            assert_eq!(attitude(&npc, &blessed, mission), Attitude::Friendly);
+        }
+    }
+
+    #[test]
+    fn a_blessing_excuses_no_ship_that_threatens_the_player() {
+        let govts = govts(0);
+        let around = with_blessing(among(&govts, Some(ME), 0), Some(ME));
+        let mut npc = ship(Some(ME));
+        assert!(likes_player(&npc, &around, None));
+        npc.goal = Goal::Attack(ShipRef::Player);
+        assert!(!likes_player(&npc, &around, None));
+        assert_eq!(attitude(&npc, &around, None), Attitude::Hostile);
     }
 
     #[test]

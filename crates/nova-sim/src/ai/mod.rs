@@ -28,7 +28,7 @@ pub mod carried;
 pub mod escort;
 pub mod fire;
 #[cfg(test)]
-mod fixture;
+pub(crate) mod fixture;
 pub mod interceptor;
 pub mod nova;
 pub mod odds;
