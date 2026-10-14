@@ -150,12 +150,13 @@ pub enum Done {
         /// the accept, in order.
         others: Vec<(MissionId, Became)>,
     },
-    /// The mission completed at its return, `stellar`, its cash pay
-    /// `pay`.
+    /// The mission completed at its return, landed at `stellar`, its
+    /// cash pay `pay`.
     Delivered {
         /// The mission.
         mission: MissionId,
-        /// Its return.
+        /// The stellar landed at for its return: the return, or its
+        /// visible variant when the return is hidden.
         stellar: StellarId,
         /// How much the cash rose at its return, less the pay of the
         /// other missions completed there.
