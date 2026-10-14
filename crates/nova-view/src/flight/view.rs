@@ -317,6 +317,14 @@
 //!   [`HAIL_QUOTE_TICKS`], the last one said winning.
 //! - Return ([`MENU_CLOSE_KEY`], the original's `ackComm`) clears the
 //!   message line and closes the escort menu.
+//! - While the player's ship breaks up, M, L and I do nothing, saying
+//!   nothing, as `_HandlePlayer`'s breakup-timer gates refuse them
+//!   (0x6a7b3, 0x6a8cb, 0x7044b); every other key is taken, and the
+//!   session's own refusals (a hail, a boarding, a jump) answer as they
+//!   do for a disabled ship. Once it has exploded no key is taken, as the
+//!   original's dead branch (0x6870d-0x6888c) skips every handler. The
+//!   screen asks the session which commands it takes
+//!   ([`Session::takes`]).
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
 //!
@@ -344,6 +352,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::Drawn as ShipDrawn;
+use nova_sim::PlayerCommand;
 use nova_sim::cloak::{CloakShown, TRANSLUCENCY_STEPS};
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::offer_gap;
@@ -3370,6 +3379,39 @@ impl<C> FlightView<C> {
         }
     }
 
+    /// Whether the session takes `command` now ([`Session::takes`]); a
+    /// screen whose session failed to start takes every one, as it has
+    /// nothing to refuse them with.
+    fn takes(&self, command: PlayerCommand) -> bool {
+        self.session
+            .as_ref()
+            .map_or(true, |session| session.takes(command))
+    }
+
+    /// The [`PlayerCommand`] a press of `key` sends, as [`Screen::input`]
+    /// dispatches it; `None` for a key that is no command.
+    fn command_of(&self, key: Key) -> Option<PlayerCommand> {
+        let command = match key {
+            LAND_KEY => PlayerCommand::Land,
+            BOARD_KEY => PlayerCommand::Board,
+            HAIL_KEY => PlayerCommand::Hail,
+            MAP_KEY => PlayerCommand::Map,
+            JUMP_KEY => PlayerCommand::Jump,
+            JETTISON_KEY => PlayerCommand::Jettison,
+            MISSION_INFO_KEY => PlayerCommand::MissionInfo,
+            HYPER_SELECT_KEY => PlayerCommand::SelectSystem,
+            TARGET_KEY | NEAREST_KEY => PlayerCommand::Target,
+            MENU_KEY | MENU_CLOSE_KEY | ESCORT_ATTACK_KEY | ESCORT_DEFEND_KEY | ESCORT_HOLD_KEY
+            | ESCORT_RECALL_KEY => PlayerCommand::Escort,
+            _ if self.escort_menu.is_open() && GROUP_KEYS.contains(&key) => PlayerCommand::Escort,
+            SELECT_KEY => PlayerCommand::SelectWeapon,
+            NEAREST_STELLAR_KEY | NAV_OFF_KEY => PlayerCommand::Nav,
+            _ if STELLAR_SLOT_KEYS.iter().any(|keys| keys.contains(&key)) => PlayerCommand::Nav,
+            _ => return None,
+        };
+        Some(command)
+    }
+
     /// A press of `key`, if it works the stellar navigation target. 1-4,
     /// like F1-F4, select the stellar in their slot
     /// ([`STELLAR_SLOT_KEYS`]); while the escort menu is open, 1-5 pick
@@ -3760,7 +3802,13 @@ impl<
 {
     /// Never quits: Escape is the router's. While a jump is under way,
     /// the pre-jump stage included, only the escort menu's keys, and
-    /// Option, are taken (see the module docs).
+    /// Option, are taken (see the module docs). Otherwise each key's
+    /// [`PlayerCommand`] is asked of the session ([`Session::takes`]) and
+    /// a refused one does nothing, saying nothing: while the player's ship
+    /// breaks up the map, landing and mission info (`_HandlePlayer`'s
+    /// breakup-timer gates at 0x6a7b3, 0x6a8cb and 0x7044b), and once it
+    /// has exploded every command (the dead branch, 0x6870d-0x6888c). The
+    /// held flight keys are still tracked; the session ignores them.
     fn input(&mut self, input: &Input) -> ScreenAction {
         if self.jump.is_some() || self.preparing_jump() {
             self.jump_input(input);
@@ -3787,9 +3835,14 @@ impl<
             pressed: true,
             at,
         } = *input
+            && self.takes(PlayerCommand::Nav)
         {
             self.click_in_space(at);
         }
+        let press = press.filter(|&key| {
+            self.command_of(key)
+                .is_none_or(|command| self.takes(command))
+        });
         match press {
             Some(LAND_KEY) => self.land(),
             Some(BOARD_KEY) => {
@@ -10451,6 +10504,115 @@ mod tests {
             }
         }
         panic!("the player's ship never exploded");
+    }
+
+    /// A flight under fire from [`killed_in`]`(30)`'s NPC, stepped until
+    /// the player's ship breaks up: a breakup of 90 ticks, so it is still
+    /// breaking up for the test.
+    fn breaking_up() -> View {
+        let mut view =
+            fighting(killed_in(30), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        for _ in 0..60 {
+            view.tick(TICK);
+            if matches!(fate_of(&view), PlayerFate::BreakingUp { .. }) {
+                return view;
+            }
+        }
+        panic!("the player's ship never broke up");
+    }
+
+    fn fate_of(view: &View) -> PlayerFate {
+        view.session().expect("flying").player_fate()
+    }
+
+    fn breakup_ticks_left(view: &View) -> u32 {
+        match fate_of(view) {
+            PlayerFate::BreakingUp { ticks_left, .. } => ticks_left,
+            fate => panic!("not breaking up: {fate:?}"),
+        }
+    }
+
+    #[test]
+    fn the_map_does_not_open_while_the_player_breaks_up() {
+        let mut view = breaking_up();
+        let before = breakup_ticks_left(&view);
+        tap(&mut view, MAP_KEY);
+        assert!(!view.map_open());
+        view.tick(TICK);
+        assert!(
+            breakup_ticks_left(&view) < before,
+            "the flight goes on, unpaused"
+        );
+    }
+
+    #[test]
+    fn mission_info_and_landing_do_nothing_while_the_player_breaks_up() {
+        let mut view = breaking_up();
+        let nav = nav_target(&view);
+        tap(&mut view, MISSION_INFO_KEY);
+        tap(&mut view, LAND_KEY);
+        assert!(view.take_mission_info_request().is_none());
+        assert_eq!(view.take_landing(), None);
+        assert_ne!(view.message(), Some(NO_ACTIVE_MISSIONS));
+        assert_ne!(view.message(), Some(LAND_DISABLED));
+        assert_eq!(nav_target(&view), nav);
+    }
+
+    #[test]
+    fn targeting_and_escort_keys_still_work_while_the_player_breaks_up() {
+        let mut view = breaking_up();
+        assert_eq!(target_of(&view), None);
+        tap(&mut view, TARGET_KEY);
+        assert_eq!(target_of(&view), Some(NpcId(0)));
+        tap(&mut view, MENU_KEY);
+        assert_eq!(
+            view.message(),
+            Some(NO_ESCORTS),
+            "the escort menu's key is taken"
+        );
+    }
+
+    /// A flight under fire from [`killed_in`]`(1)`'s NPC, stepped to the
+    /// player's explosion and one tick past it.
+    fn exploded() -> View {
+        let mut view =
+            fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        until_the_player_explodes(&mut view, |_| {});
+        view.tick(TICK);
+        view
+    }
+
+    #[test]
+    fn an_exploded_player_takes_no_command() {
+        let mut view = exploded();
+        let target = target_of(&view);
+        let nav = nav_target(&view);
+        for k in [MAP_KEY, TARGET_KEY, LAND_KEY, MISSION_INFO_KEY, MENU_KEY] {
+            tap(&mut view, k);
+        }
+        assert!(!view.map_open());
+        assert_eq!(target_of(&view), target);
+        assert_eq!(nav_target(&view), nav);
+        assert!(view.take_mission_info_request().is_none());
+        assert_eq!(view.take_landing(), None);
+        assert_ne!(view.message(), Some(NO_ACTIVE_MISSIONS));
+        assert_ne!(view.message(), Some(LAND_DISABLED));
+        assert_ne!(view.message(), Some(NO_ESCORTS));
+    }
+
+    #[test]
+    fn home_does_nothing_once_the_player_has_exploded() {
+        // The platform has no Home key: it arrives as `Key::Other`.
+        let mut view = exploded();
+        let pilot = view.pilot().cloned();
+        assert_eq!(view.input(&key(Key::Other, true)), ScreenAction::None);
+        assert_eq!(view.input(&key(Key::Other, false)), ScreenAction::None);
+        assert!(matches!(fate_of(&view), PlayerFate::Exploded { .. }));
+        assert!(view.take_mission_info_request().is_none());
+        assert_eq!(view.take_landing(), None);
+        assert!(view.take_hail().is_none());
+        assert!(view.take_boarding().is_none());
+        assert_eq!(view.pilot().cloned(), pilot);
     }
 
     /// Whether `list` draws `run` as one unbroken run of commands.

@@ -410,7 +410,7 @@ pub use person::{
     PersonWorld, QuoteTags, expand_tags,
 };
 pub use pilot::{Escort, Gender, Pilot};
-pub use player_fate::{Drawn, FateRow, PlayerFate};
+pub use player_fate::{Drawn, FateRow, PlayerCommand, PlayerFate, Takes};
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
 pub use red_alert::{
     ALERT_CHECK_FRAMES, ALERT_CICN, ALERT_STEP_FRAMES, ALERT_STEPS, AlertIcon, RedAlert,

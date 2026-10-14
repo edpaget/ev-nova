@@ -449,7 +449,7 @@ use crate::outfitter::{
 };
 use crate::person::{NovaPersons, PersonRules, PersonWorld};
 use crate::pilot::{self, Escort, Pilot};
-use crate::player_fate::PlayerFate;
+use crate::player_fate::{PlayerCommand, PlayerFate};
 use crate::pre_jump::{self, PreJump};
 use crate::rating;
 use crate::recharge::{self, RechargeRefusal};
@@ -2036,6 +2036,14 @@ impl Session {
     #[must_use]
     pub fn player_fate(&self) -> PlayerFate {
         PlayerFate::of(self.condition, self.player_exploded_this_tick)
+    }
+
+    /// Whether the session takes the player's `command` now: its
+    /// [`PlayerFate`]'s row decides ([`crate::FateRow::input`]). The flight
+    /// view asks before it acts on a key, and does nothing when refused.
+    #[must_use]
+    pub fn takes(&self, command: PlayerCommand) -> bool {
+        self.player_fate().row().input.takes(command)
     }
 
     /// The shots in flight.
@@ -14663,6 +14671,25 @@ pub(super) mod tests {
                 PlayerFate::Exploded { first_tick: false }
             );
         }
+    }
+
+    #[test]
+    fn the_session_takes_the_commands_of_the_players_fate() {
+        let catalog = deadly_in(2);
+        let mut session = facing_an_npc(&catalog, 180);
+        assert!(session.takes(PlayerCommand::Map));
+        from_the_breakup(&mut session, &catalog, 1);
+        assert!(matches!(
+            session.player_fate(),
+            PlayerFate::BreakingUp { .. }
+        ));
+        assert!(!session.takes(PlayerCommand::Map));
+        assert!(session.takes(PlayerCommand::Target));
+        while session.player_condition() != Condition::Destroyed {
+            session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert!(!session.takes(PlayerCommand::Target));
     }
 
     #[test]
