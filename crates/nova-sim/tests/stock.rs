@@ -3897,3 +3897,135 @@ fn stock_repair_droids_are_the_only_repair_system_and_no_ship_class_carries_them
     let droids = std::collections::BTreeMap::from([(OutfitId(437), 1)]);
     assert!(nova_sim::self_repair::has_gear(&droids, &outfits));
 }
+
+// Which missile an NPC fires (`_AIFireMissile`), over the stock arsenal.
+
+/// What a stock NPC of class `ship`, armed as the traffic arms it, fires
+/// at the player 1000 pixels ahead flying stock class `target` at rest,
+/// its reserves too strong for any damage aimed to suffice. The NPC is a
+/// stock one of Fomalhaut's traffic made over into the class.
+fn stock_missile_at(data: &GameData, ship: ShipId, target: ShipId) -> Option<nova_sim::WeaponId> {
+    let mut session = destroyer_in_fomalhaut(data);
+    let mut chance = NeverFires;
+    session.tick_traffic(data, &NovaAi::default(), &mut chance);
+    let mut npc = session
+        .npcs()
+        .first()
+        .expect("Fomalhaut has traffic")
+        .clone();
+    let arsenal = Arsenal::read(data);
+    let outfits = data.outfits();
+    let mut defaults = std::collections::BTreeMap::new();
+    for (outfit, count) in data.default_outfits(ship) {
+        *defaults.entry(outfit).or_insert(0_u16) += count;
+    }
+    let (armament, rounds) = arsenal.npc(ship, &defaults, &outfits);
+    let fields = data.ship_fields(ship).expect("the shïp reads");
+    npc.ship = ship;
+    npc.stats = ShipStats::new(fields, &[]);
+    npc.reserves = npc.stats.full();
+    npc.hull = arsenal.hull(ship);
+    npc.armament = armament;
+    npc.rounds = rounds;
+    npc.cloak = nova_sim::cloak::Cloak::default();
+    npc.goal = Goal::Attack(ShipRef::Player);
+    npc.state = ShipState::default();
+    let quarry = data.ship_fields(target).expect("the target reads");
+    let strong = nova_sim::Reserves::full(1_000_000.0, 1_000_000.0, 100.0);
+    let player = nova_sim::ai::PlayerSide {
+        state: ShipState {
+            position: Vec2::new(0.0, -1000.0),
+            ..ShipState::default()
+        },
+        condition: Condition::Intact,
+        reserves: strong,
+        hull: arsenal.hull(target),
+        handling: ShipStats::new(quarry, &[]).handling,
+        rating: 0,
+        yardstick: 0,
+        untargetable: false,
+    };
+    let npcs = [npc.clone()];
+    let around = nova_sim::ai::Surroundings {
+        player: Some(player),
+        ..nova_sim::ai::Surroundings::new(&[], &npcs)
+    };
+    nova_sim::ai::fire::trigger(&npc, &around).only
+}
+
+/// The Manticore (`shïp` 146) carries the EMP Torpedo (`wëap` 160) in
+/// slot 2 and the IR Missile (134) in slot 3, both reaching 1350 pixels.
+/// At a slow Cargo Drone (130, `Maneuver` 20) it fires the IR Missile,
+/// the lower weapon ID, as the original's walk by weapon index does. At
+/// the Shuttle (128, `Maneuver` 40), turning 4 degrees a tick, the EMP
+/// Torpedo (`GuidedTurn` 20, 2 degrees) would be unsuitable, and the IR
+/// Missile still flies.
+#[test]
+fn a_stock_manticore_fires_its_ir_missile_before_its_emp_torpedo() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let manticore = ShipId(146);
+    let arsenal = Arsenal::read(&data);
+    let mounted: Vec<i16> = arsenal
+        .of_class(
+            manticore,
+            &std::collections::BTreeMap::new(),
+            &data.outfits(),
+        )
+        .mounts()
+        .iter()
+        .map(|mount| mount.spec.id.0)
+        .collect();
+    let emp = mounted.iter().position(|&id| id == 160).expect("the EMP");
+    let ir = mounted.iter().position(|&id| id == 134).expect("the IR");
+    assert!(emp < ir, "mounted EMP first: {mounted:?}");
+    let ir_missile = Some(nova_sim::WeaponId(134));
+    assert_eq!(stock_missile_at(&data, manticore, ShipId(130)), ir_missile);
+    assert_eq!(stock_missile_at(&data, manticore, ShipId(128)), ir_missile);
+}
+
+/// An NPC carrying the EMP Torpedo alone of its missiles never fires it
+/// at a stock ship of `Maneuver` 40 or more (a long gun may fire
+/// instead), and does at a slower one.
+#[test]
+fn a_stock_emp_torpedo_is_never_fired_at_an_agile_ship() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    // The first stock class whose homing weapons are the EMP Torpedo alone.
+    let carrier = data
+        .ships()
+        .iter()
+        .map(|ship| ship.id)
+        .find(|&ship| {
+            let homing: Vec<i16> = arsenal
+                .of_class(ship, &std::collections::BTreeMap::new(), &data.outfits())
+                .mounts()
+                .iter()
+                .filter(|mount| mount.spec.guidance == Guidance::Homing)
+                .map(|mount| mount.spec.id.0)
+                .collect();
+            homing == [160]
+        })
+        .expect("a class carries the EMP Torpedo alone");
+    let agile: Vec<ShipId> = data
+        .ships()
+        .iter()
+        .filter(|ship| ship.fields.maneuver >= 40)
+        .map(|ship| ship.id)
+        .collect();
+    assert!(agile.len() > 100, "{}", agile.len());
+    let emp = Some(nova_sim::WeaponId(160));
+    for &target in &agile {
+        assert_ne!(stock_missile_at(&data, carrier, target), emp, "{target:?}");
+    }
+    assert_eq!(
+        stock_missile_at(&data, carrier, ShipId(130)),
+        emp,
+        "at the Cargo Drone"
+    );
+}
