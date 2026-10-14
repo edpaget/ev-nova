@@ -174,7 +174,11 @@ pub struct ListedStellar {
     /// Every `sÿst` that can be read and lists it, by ascending ID, each
     /// once: the galaxy refresh gives it to the lowest visible one not
     /// shadowed at its place
-    /// ([`OverlaidGalaxy::owner`](crate::story::OverlaidGalaxy::owner)).
+    /// ([`OverlaidGalaxy::owner`](crate::story::OverlaidGalaxy::owner)),
+    /// the player's system holds it when none does
+    /// ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)),
+    /// and `_FindSystemFromStellar` finds it in the lowest visible one
+    /// ([`OverlaidGalaxy::find_system_from_stellar`](crate::story::OverlaidGalaxy::find_system_from_stellar)).
     pub systems: Vec<SystemId>,
     /// Its `Flags`.
     pub flags: u32,

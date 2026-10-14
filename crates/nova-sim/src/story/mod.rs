@@ -668,6 +668,22 @@
 //! - per nebula: whether it is active (`nëbu` `ActiveOn`), so that the
 //!   map reads nebulae as it reads systems.
 //!
+//! A system shows the stellars it holds, not every stellar its `NavDefs`
+//! list: those it owns, and, for the player's system, any it lists that
+//! no system owns, the rescue `_HandleStellarSystemVisibility` writes
+//! (@0x32c58-0x32cb3) and that lasts until the next refresh
+//! ([`OverlaidGalaxy::holder`], [`OverlaidGalaxy::shown`]). The session
+//! derives the stellars shown at the original's rebuild points, and the
+//! flight view draws only those. A reader that turns a stellar into a
+//! system goes owner-first, as the original's do: the holder, else
+//! `_FindSystemFromStellar`, the lowest visible lister, shadowed or not,
+//! else the lowest lister ([`OverlaidGalaxy::system_of`],
+//! [`OverlaidGalaxy::find_system_from_stellar`]); the hypergate's links
+//! read so, and a wormhole reads the holder alone (see the
+//! [`gate`](crate::gate) module). The galaxy map's stellar list stays the
+//! selected system's `NavDefs`, as `_MapDialogUpdate` lists them
+//! (@0x10373-0x104fd).
+//!
 //! Readers see these facts only through the overlay: hyperspace links and
 //! navigation, traffic, landing, legal records, AI targeting, exploration,
 //! and every `StarMap::govt` call. The galaxy map keeps its static
