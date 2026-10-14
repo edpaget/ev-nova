@@ -209,25 +209,22 @@ impl Session {
     /// [`SimSound::Smuggling`], and clears its latch. The player is always
     /// visible to the scanner (no cloak).
     fn scanned_by(&mut self, id: NpcId, law: &dyn LegalCode, chance: &mut dyn Chance) {
-        let Some((scanner, person, govt_id, govt, goes)) = self
-            .traffic
-            .npcs()
-            .iter()
-            .find(|npc| npc.id == id)
-            .and_then(|npc| {
-                let govt_id = npc.govt?;
-                let govt = self.govts.get(govt_id)?.clone();
-                let person = npc
-                    .person
-                    .and_then(|person| self.traffic.person(person.id))
-                    .map(|person| person.record.name.clone());
-                let off = self.player.position - npc.state.position;
-                Some((npc.ship, person, govt_id, govt, (npc.ai_type, off)))
-            })
-        else {
+        let Some(npc) = self.traffic.npcs().iter().find(|npc| npc.id == id) else {
             return;
         };
-        if !scan::goes_on(goes.0, &govt, goes.1, chance) {
+        let (scanner, ai_type) = (npc.ship, npc.ai_type);
+        let off = self.player.position - npc.state.position;
+        let person = npc
+            .person
+            .and_then(|person| self.traffic.person(person.id))
+            .map(|person| person.record.name.clone());
+        let Some(govt_id) = npc.govt else {
+            return;
+        };
+        let Some(govt) = self.govts.get(govt_id).cloned() else {
+            return;
+        };
+        if !scan::goes_on(ai_type, &govt, off, chance) {
             return;
         }
         self.scan_mission_cargo(id, scanner, &govt, chance);
@@ -1413,6 +1410,19 @@ mod tests {
             one,
             fine,
         }
+    }
+
+    #[test]
+    fn the_session_names_a_junk_and_an_outfit_by_their_records() {
+        let catalog = contraband_catalog(0);
+        let session = Session::start(&catalog).expect("starts");
+        assert_eq!(session.junk_lc_name(BIO_WEAPONS), Some("bio-weapons"));
+        assert_eq!(session.junk_lc_name(JunkId(151)), None);
+        assert_eq!(
+            session.outfit_lc_names(BLASTER),
+            Some(("blaster", "blasters"))
+        );
+        assert_eq!(session.outfit_lc_names(OutfitId(151)), None);
     }
 
     #[test]
