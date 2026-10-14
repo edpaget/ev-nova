@@ -113,7 +113,7 @@ pub fn targetable(npc: &Npc, cloaked_ok: bool) -> bool {
 /// Whether a player of `scanner` may pick `npc` for its type: unless
 /// `scanner` targets untargetable ships, `npc`'s type must not be
 /// untargetable (see the module docs).
-fn type_targetable(npc: &Npc, scanner: Scanner) -> bool {
+pub(crate) fn type_targetable(npc: &Npc, scanner: Scanner) -> bool {
     scanner.untargetable || !npc.cloak_gear.untargetable()
 }
 

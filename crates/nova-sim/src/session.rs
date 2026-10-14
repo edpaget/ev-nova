@@ -345,6 +345,7 @@ mod gate_follow;
 mod hail;
 mod hire;
 mod hooks;
+mod hover;
 mod mission_cargo;
 mod mission_escorts;
 mod mission_screens;
