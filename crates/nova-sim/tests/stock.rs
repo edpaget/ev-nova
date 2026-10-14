@@ -1928,7 +1928,12 @@ fn every_stock_point_defence_turret_engages_an_ir_missile_in_range() {
         let id = spec.id.0;
         let range = engagement_range(&spec);
         let mut defender = shooter(&spec);
-        defender.trigger = Trigger::default();
+        // The player's point defence runs every tick (`_HandlePlayer`
+        // @0x68c74), whatever it holds.
+        defender.trigger = Trigger {
+            point_defence: true,
+            ..Trigger::default()
+        };
         let mut attacker = Combatant {
             id: QUARRY,
             target: Some(ShipRef::Player),
