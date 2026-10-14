@@ -135,10 +135,9 @@ pub fn shove(
 /// `velocity` with each axis clamped to `top_speed` either way
 /// (`_SpeedLimit` @0x2af91).
 fn speed_limit(velocity: Vec2, top_speed: f32) -> Vec2 {
-    let clamp = |axis: f32| {
-        let axis = if axis > top_speed { top_speed } else { axis };
-        if axis < -top_speed { -top_speed } else { axis }
-    };
+    // Down to the top speed first, then up to its negative, as the
+    // original tests them; `f32::clamp` would panic on a negative one.
+    let clamp = |axis: f32| axis.min(top_speed).max(-top_speed);
     Vec2::new(clamp(velocity.x), clamp(velocity.y))
 }
 
@@ -290,10 +289,26 @@ mod tests {
 
     #[test]
     fn a_ship_that_holds_no_armour_is_neither_floored_nor_disabled() {
+        /// Calls every ship disabled.
+        #[derive(Debug)]
+        struct AlwaysDisabled;
+
+        impl DisableRule for AlwaysDisabled {
+            fn disabled(&self, _armor: Gauge, _hull: &HullSpec) -> bool {
+                true
+            }
+        }
+
         let hull = HullSpec::default();
-        assert_eq!(
-            after(reserves(0.0, 0.0, 0.0, 0.0), Condition::Intact, &hull, 32.0),
-            (0.0, 0.0)
+        let mut none = reserves(0.0, 0.0, 0.0, 0.0);
+        hit(&mut none, Condition::Intact, &hull, &AlwaysDisabled, 32.0);
+        assert_eq!((none.shield.now, none.armor.now), (0.0, 0.0));
+        let mut some = reserves(0.0, 0.0, 250.0, 300.0);
+        hit(&mut some, Condition::Intact, &hull, &AlwaysDisabled, 32.0);
+        assert!(
+            (some.armor.now - 100.99).abs() < 1e-4,
+            "the rule decides for one that holds some: {:?}",
+            some.armor
         );
     }
 

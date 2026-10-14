@@ -14540,6 +14540,22 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_ship_drifting_away_is_pushed_short_of_its_class_speed_and_not_past_it() {
+        let catalog = shockwave_catalog();
+        for (drift, after) in [(-2.0, -5.75), (-6.0, -6.0)] {
+            let mut session = beside_a_heavy_npc(&catalog);
+            session.traffic.npcs_mut()[0].state.velocity = Vec2::new(0.0, drift);
+            on_its_last_tick(&mut session.pilot.reserves, &mut session.condition);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let velocity = session.npcs()[0].state.velocity;
+            assert!(
+                near(velocity, Vec2::new(0.0, after)),
+                "class speed 6, from {drift}: {velocity:?}"
+            );
+        }
+    }
+
+    #[test]
     fn an_exploding_heavy_npc_damages_and_pushes_the_player() {
         let catalog = shockwave_catalog();
         let mut session = beside_a_heavy_npc(&catalog);
