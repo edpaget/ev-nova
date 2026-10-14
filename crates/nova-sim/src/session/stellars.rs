@@ -80,7 +80,15 @@
 //!   main screen, @0x1a354, @0x1a8ca, @0x1b003 and @0x457ee), which tells
 //!   nothing, the view reading the state as it builds.
 //!
-//! In flight, each rebuild point first derives which stellars are shown
+//! Each rebuild point first shares exploration by place, docked or not: by
+//! the engine reading of
+//! [`RuleKey::ExploredByPlace`](crate::RuleKey::ExploredByPlace), every
+//! system at an explored head's place is explored, hidden or not
+//! (@0x32b13-0x32b8f; see the `explored` module), so a system the bits
+//! swap in is shown explored from the next rebuild point. That share
+//! raises no event and tells nothing.
+//!
+//! In flight, each rebuild point then derives which stellars are shown
 //! afresh, as `_HandleStellarSystemVisibility` sets them active and owned
 //! (see the `entry` module), and tells `StellarsRebuilt` when that
 //! changed them too. Docked, it derives nothing: the take-off's point does.
@@ -133,10 +141,14 @@ impl Session {
         }
     }
 
-    /// A rebuild point that tells nothing: in flight, the stellars shown
-    /// derived afresh (`Session::reshow`), then which of them are dead
-    /// since it. Whether it changed either.
+    /// A rebuild point that tells nothing: first, docked or not, the
+    /// exploration shared by place (`Session::share_explored`, as
+    /// `_HandleStellarSystemVisibility` raises each system to its head's
+    /// level @0x32b13-0x32b8f before its stellars); then, in flight, the
+    /// stellars shown derived afresh (`Session::reshow`), then which of
+    /// them are dead since it. Whether it changed the stellars.
     pub(super) fn rebuild_quietly(&mut self) -> bool {
+        self.share_explored();
         let reshown = self.reshow();
         let galaxy = &self.galaxy;
         let rebuilt = self.rebuilt.rebuild(
@@ -2445,6 +2457,80 @@ mod tests {
             shown(&session),
             [140, 200],
             "the load's rebuild follows its refresh (@0x751ca, @0x751cf)"
+        );
+    }
+
+    /// [`catalog`] with 136 at 133's place, 133 its head, each
+    /// [`hideable`](crate::testkit::hideable).
+    fn placed() -> FakePilotCatalog {
+        let mut catalog = catalog();
+        catalog
+            .star_map
+            .push(crate::testkit::star(136, (-600.0, 0.0), &[]));
+        crate::testkit::hideable(&mut catalog);
+        catalog
+    }
+
+    #[test]
+    fn a_swapped_in_system_is_shown_explored_from_the_next_rebuild_point() {
+        let catalog = placed();
+        for source in RuleSource::ALL {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(Rulebook::default().with_override(RuleKey::ExploredByPlace, source));
+            session.change_galaxy(&catalog, |overlay| {
+                overlay.set_visible(SystemId(136), Some(false));
+            });
+            session.pilot.explore(SystemId(133));
+            session.change_galaxy(&catalog, |overlay| {
+                overlay.set_visible(SystemId(133), Some(false));
+                overlay.set_visible(SystemId(136), Some(true));
+            });
+            assert!(
+                !session.pilot().has_explored(SystemId(136)),
+                "a galaxy change is no rebuild point"
+            );
+            land_now(&mut session).expect("lands");
+            assert_eq!(
+                session.pilot().has_explored(SystemId(136)),
+                source == RuleSource::Engine,
+                "{source:?}: the landing's rebuild point, docked"
+            );
+        }
+    }
+
+    #[test]
+    fn a_take_off_shares_the_place_at_its_rebuild_point() {
+        let catalog = placed();
+        for source in RuleSource::ALL {
+            let mut session = Session::start(&catalog)
+                .expect("starts")
+                .with_rules(Rulebook::default().with_override(RuleKey::ExploredByPlace, source));
+            land_now(&mut session).expect("lands");
+            session.pilot.explore(SystemId(133));
+            session
+                .take_off(&catalog, &mut Scripted::default())
+                .expect("takes off");
+            assert_eq!(
+                session.pilot().has_explored(SystemId(136)),
+                source == RuleSource::Engine,
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_load_shares_the_place() {
+        let catalog = placed();
+        let mut pilot = crate::pilot::Pilot::new(&catalog, "").expect("starts");
+        pilot.explore(SystemId(133));
+        pilot.bits_mut().set(crate::testkit::hiding_bit(133));
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert!(!session.galaxy().visible(SystemId(133)), "the refresh");
+        assert!(session.galaxy().visible(SystemId(136)));
+        assert!(
+            session.pilot().has_explored(SystemId(136)),
+            "the load's rebuild shares, under the default reading"
         );
     }
 

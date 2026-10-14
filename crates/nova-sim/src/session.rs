@@ -337,6 +337,7 @@ mod edit;
 mod entry;
 mod escorts;
 mod events;
+mod explored;
 mod fighters;
 mod gate_follow;
 mod hail;
@@ -2750,7 +2751,9 @@ impl Session {
         if std::mem::take(&mut self.hold_position) {
             self.player.position = self.touchdown;
         }
-        self.pilot.explore(self.pilot.system);
+        // With its place's head, by the engine (`_PlayerLandOnStellar`
+        // @0x63457-0x634a7; see the `explored` module).
+        self.explore_place(self.pilot.system);
         self.raise(StoryEvent::Explored {
             system: self.pilot.system,
         });
@@ -19386,6 +19389,11 @@ mod tests {
             session.pilot().escorts().to_vec(),
             session.date(),
         );
+        // The load's rebuild shared 131's exploration with 134, its place's
+        // other system, by the engine (see the `explored` module); forgotten
+        // here, so the move is seen to explore nothing.
+        assert!(session.pilot.explored.remove(&SystemId(134)));
+        let explored: Vec<SystemId> = session.pilot().explored().collect();
         session.take_events();
         session.drop_raised();
         session.take_messages();
@@ -19399,7 +19407,7 @@ mod tests {
         assert_eq!(session.pilot().escorts(), escorts);
         assert_eq!(session.date(), date, "no day");
         assert!(
-            !session.pilot().has_explored(SystemId(134)),
+            session.pilot().explored().eq(explored.iter().copied()),
             "explores nothing"
         );
         assert_eq!(session.sites, [planet(140, 0.0, 0.0)], "its spaceport's");
@@ -19614,9 +19622,12 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(explored, [SystemId(134)]);
+        assert_eq!(explored, [SystemId(134)], "no event for the head");
         assert!(session.pilot().has_explored(SystemId(134)));
-        assert!(!session.pilot().has_explored(SystemId(131)));
+        assert!(
+            session.pilot().has_explored(SystemId(131)),
+            "131, its place's head, by the engine (see the `explored` module)"
+        );
     }
 
     /// The `Explored` events raised and not yet settled.

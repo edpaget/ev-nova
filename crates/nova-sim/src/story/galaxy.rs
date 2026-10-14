@@ -50,8 +50,12 @@
 //!
 //! - the course rewrite and cut (@0x32ab3-0x32b0f): crons-news-ranks
 //!   phase 15;
-//! - the explored level shared to the chain head (@0x32b0f-0x32b8f) and
-//!   the known flag +0x1ec (@0x32b91-0x32c10): crons-news-ranks phase 14;
+//! - the explored level shared to the chain head (@0x32b0f-0x32b8f):
+//!   crons-news-ranks phase 14 models it, as one explored set, in the
+//!   session's rebuild points (the session's `explored` module);
+//! - the known flag +0x1ec (@0x32b91-0x32c10): deferred to
+//!   crons-news-ranks-fidelity phase 20, as no reader in the engine uses
+//!   it yet (the galaxy map draws every visible system);
 //! - the dominated byte +0x46, set for an active stellar with `Flags2`
 //!   0x0020 (@0x32ce5-0x32ceb): the engine reads the bit directly
 //!   (`landing::cleared`, `mission::dominated`, `Session::markup`), and
@@ -428,6 +432,19 @@ impl OverlaidGalaxy {
         self.govts.keys().copied()
     }
 
+    /// `system`'s Con slots as the catalog reads them, unresolved, visible
+    /// or not: they may repeat, name itself or a system that does not
+    /// exist, as `_DoNewPilot` reads them (@0x18f97). None for a system
+    /// not in the catalog; the last of a repeated ID wins.
+    #[must_use]
+    pub fn con_slots(&self, system: SystemId) -> &[SystemId] {
+        self.systems
+            .iter()
+            .rev()
+            .find(|record| record.id == system)
+            .map_or(&[], |record| &record.links)
+    }
+
     /// Every system in the catalog, visible or not, by ascending ID, with
     /// its government ([`OverlaidGalaxy::govt`]): what the original's
     /// loops over every `_systemData` slot read (@0xa05a3-0xa0672).
@@ -624,6 +641,20 @@ mod tests {
 
     fn ids(list: &[i16]) -> Vec<SystemId> {
         list.iter().copied().map(SystemId).collect()
+    }
+
+    #[test]
+    fn con_slots_are_the_catalogs_links_unresolved_hidden_or_not() {
+        let mut systems = systems();
+        systems.push(star(6, (9.0, 9.0), &[6, 2, 2, 999]));
+        systems.push(star(6, (9.0, 9.0), &[3, 999]));
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(3), Some(false));
+        let galaxy = OverlaidGalaxy::new(systems, overlay);
+        assert_eq!(galaxy.con_slots(SystemId(1)), ids(&[2]));
+        assert_eq!(galaxy.con_slots(SystemId(3)), ids(&[1]), "hidden");
+        assert_eq!(galaxy.con_slots(SystemId(6)), ids(&[3, 999]), "the last");
+        assert_eq!(galaxy.con_slots(SystemId(7)), ids(&[]));
     }
 
     /// 1 at (0, 0) lists 2; 2, 3 and 5 share (50, 50), 3 governed by 140;

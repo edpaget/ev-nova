@@ -523,7 +523,9 @@ impl Session {
             self.pilot.stellar = placement.stellar;
         }
         if resets.has(Reset::Explore) {
-            self.pilot.explore(system);
+            // With its place's head, by the engine (see the `explored`
+            // module).
+            self.explore_place(system);
         }
         match resets.course {
             CourseStep::Keep => {}
