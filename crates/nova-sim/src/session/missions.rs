@@ -91,7 +91,7 @@ use crate::news::CARGO_NAMES;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::rules::Verdict;
 use crate::story::{
-    Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId, listers_of,
+    Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
 use crate::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames};
 
@@ -266,12 +266,12 @@ impl Session {
     pub(crate) fn stop_landing(&self, stop: Stop) -> Result<(SystemId, StellarId), StopRefusal> {
         let refresh = self.refresh_now();
         let visible_listers = |stellar: StellarId| {
-            listers_of(&self.listed_stellars, stellar)
+            crate::story::listers_of(&self.listed_stellars, stellar)
                 .iter()
                 .copied()
                 .filter(|&system| self.galaxy.exists(system) && !refresh.hides(system))
         };
-        if listers_of(&self.listed_stellars, stop.stellar).is_empty() {
+        if crate::story::listers_of(&self.listed_stellars, stop.stellar).is_empty() {
             return Err(StopRefusal::NoSystem);
         }
         if let Some(first) = visible_listers(stop.stellar).next() {
