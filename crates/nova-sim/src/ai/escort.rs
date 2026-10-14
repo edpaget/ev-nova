@@ -521,10 +521,17 @@ mod tests {
             );
         }
         assert_eq!(
-            command(ENGINE, &[guarding]).0,
+            command(ENGINE, std::slice::from_ref(&guarding)).0,
             Trigger::default(),
             "its guard gone"
         );
+        // Measured from the escort, wherever it is.
+        let mut away = guarding.clone();
+        away.state.position = crate::geometry::Vec2::new(1000.0, 1000.0);
+        let npcs = [away.clone(), pirate(2, 1100.0, 900.0)];
+        assert_eq!(command(ENGINE, &npcs).0, TURRETS);
+        let npcs = [away, pirate(2, 100.0, 100.0)];
+        assert_eq!(command(ENGINE, &npcs).0, Trigger::default());
     }
 
     #[test]

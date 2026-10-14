@@ -1306,6 +1306,10 @@ mod tests {
         assert_eq!(fired_bearing(&rear, 10.0, engine), None);
         assert_eq!(fired_bearing(&rear, 10.0, bible), id(130));
         assert_eq!(fired_bearing(&rear, 340.0, engine), id(130), "10 off");
+        // (270 + 180) mod 360 = 90: the reference wraps past 360.
+        let rear_west = turret(8, 270.0);
+        assert_eq!(fired_bearing(&rear_west, 100.0, engine), id(130));
+        assert_eq!(fired_bearing(&rear_west, 100.0, bible), id(130));
         // Off the seam, both fire, up to 45 either side.
         let east = turret(7, 90.0);
         for rules in [engine, bible] {
