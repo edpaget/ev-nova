@@ -308,6 +308,7 @@ fn a_stellar_shot_down_runs_its_on_destroy_whose_bit_a_later_dispatch_sees() {
         only: None,
         turrets_only: false,
         bays: false,
+        point_defence: false,
     });
     for _ in 0..2 {
         session.tick_combat(Rules::default(), &mut NeverFires);

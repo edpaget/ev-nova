@@ -60,7 +60,7 @@ impl Session {
         Some(TargetBrackets {
             npc: npc.id,
             expand: self.target_fly_in.expand(),
-            standing: brackets::standing(npc, leader),
+            standing: brackets::standing(npc, leader, self.npcs()),
         })
     }
 

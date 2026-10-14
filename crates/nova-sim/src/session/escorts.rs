@@ -16,7 +16,10 @@
 //! (`_MakeEscortsHyperWithParent` @0x3fd54) and arrives with its shield
 //! and armour as they were; taking off, and flying a pilot, restock them
 //! full (`_RespawnEscort` @0x3d4b8, restock 1 @0x674c2), the fuel as
-//! recorded. Landed, the escorts wait in the record. A trader escort's
+//! recorded. At a hypergate or wormhole exit each is placed on its slot
+//! and then comes out of the exit gate after the player (see
+//! [`gate_escorts`](super::gate_escorts)). Landed, the escorts wait in
+//! the record. A trader escort's
 //! `Holds` count in the fleet's cargo space, in flight and landed (see
 //! [`market`](crate::market)).
 //!
@@ -40,14 +43,26 @@
 //! orders are kept.
 //!
 //! **Commands** ([`Session::command_escorts`], `_IssueNewEscortCommand`
-//! @0x660d5): a command goes to every escort of its group, each taking
-//! the command's order, and Attack copies the player's target to each,
-//! unless that is one of the player's own escorts. Return to Hangar
+//! @0x660d5): a command goes to every escort of its group, hired or a
+//! mission escort (the original takes every ship led by the player whose
+//! class matches, @0x6614a-0x66176), each taking the command's order,
+//! and Attack copies the player's target to each, unless the player
+//! leads it or it is led by a ship the player leads (`_AlliedWithPlayer`
+//! @0x6985-0x69d0); its report says it attacks the target unless the
+//! player leads it (@0x6653f-0x66559). Return to Hangar
 //! ([`EscortCommand::Dock`]) sends the carried fighters home and any
 //! other escort back to formation; its report says Recall when some such
 //! escort had another order. It reports what it
 //! changed ([`Commanded`]) only when some escort's order or target
-//! changed. The escort menu's rows ([`Session::escort_menu`]) give each
+//! changed, and then beeps ([`SimSound::EscortsCommanded`](crate::SimSound),
+//! `_beepSnd[1]` @0x665be-0x665e1). A command is taken while a jump is
+//! under way, the pre-jump stage included, and reported as under way, its
+//! message saying what the escorts will do (`_IssueNewEscortCommand`
+//! @0x66461-0x664e5; see [`EscortCommand::will`](crate::escort::EscortCommand::will)).
+//! In hyperspace the escorts let go of their targets every tick
+//! (`_MakeEscortsHyperWithParent` @0x3fdc0-0x3fdc2), so an Attack there
+//! always copies the target afresh; on arrival an order given during the
+//! jump is reset or kept as any other is. The escort menu's rows ([`Session::escort_menu`]) give each
 //! class's presence and its first escort's order. A carried fighter is
 //! placed as any escort is, its carrier the player (see
 //! [`fighters`](super::fighters)).
@@ -55,41 +70,100 @@
 //! **Losing escorts** (`_DamageShip` @0x3af8f): an escort disabled or
 //! destroyed leaves the fleet at once; a disabled one stays in the system
 //! as the ship it is, its AI type its `InherentAI`, and is left behind.
-//! A ship captured joins the fleet where it is, intact, its armour at
-//! half its most; and the player's old ship, swapped for one captured,
-//! joins beside the player. Released (see [`hail`](super::hail)), an
-//! escort leaves the fleet and the system. Each change of the fleet makes
-//! a save due.
+//! One disabled or breaking up remembers the record it left with
+//! ([`Npc::former`], the original's +0xc8de @0x3afab-0x3afce): repairing
+//! itself, it rejoins as that fighter, hired or captured escort (see
+//! [`self_repair`](super::self_repair)).
+//! A trader escort lost (`InherentAI` 2 or less, not a carried fighter)
+//! takes its share of the fleet's cargo as it goes: every good loses the
+//! truncated part its `Holds` make of the fleet's holds without it (by
+//! the other reading of
+//! [`RuleKey::LostCargoShare`](crate::RuleKey::LostCargoShare), with
+//! it), at most all of it, and the cargo is then trimmed to the holds
+//! left (`_DamageShip` @0x3b013, `_DestroyPartialFleetCargo`
+//! @0xcd32-0xcff6; [`Session::lose_cargo_share`]). A warship escort lost
+//! takes nothing, and the mission cargo is never touched. A mission
+//! escort breaking up takes its share too (see
+//! [`mission_escorts`](super::mission_escorts)). A ship captured joins
+//! the fleet where it is, intact, its armour at half its most; and the
+//! player's old ship, swapped for one captured, joins beside the player.
+//! Released (see [`hail`](super::hail)), an escort leaves the fleet and
+//! the system. Each change of the fleet makes a save due.
+
+use std::collections::BTreeSet;
 
 use super::Session;
 use crate::ai::Goal;
 use crate::bay::{Carrier, dock_window};
+use crate::catalog::ShipId;
 use crate::cloak::Cloak;
 use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::escort::{
-    self, ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, FormationSlot,
+    self, ClassRow, Commanded, EscortClass, EscortCommand, EscortDuty, EscortGroup, EscortOrder,
+    FormationSlot,
 };
 use crate::flight::ShipState;
+use crate::market;
+use crate::pilot::Escort;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource};
+use crate::self_repair::FormerEscort;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId, NpcPerson};
 use crate::traffic::table::{self, ShipKind};
 
 impl Session {
+    /// The ship-table slot ([`Npc::berth`]) each of the fleet's escorts
+    /// takes as the system is set up, by its index. As
+    /// `_DeleteAllComputerShips` (@0x3bf5f) keeps the player's ships in
+    /// the table across every setup, an escort whose NPC is in the system
+    /// keeps its berth. Every other (a loaded pilot's, or one whose ship
+    /// type has no record) takes the lowest berth not already chosen, in
+    /// fleet order, before anything else is set up, as `_LoadPilotData`
+    /// spawns a loaded pilot's escorts first (@0x759a4-0x75b2b). The old
+    /// ship kept after a capture and a ship hired are placed at once, so
+    /// they keep theirs.
+    pub(super) fn fleet_berths(&self) -> Vec<u32> {
+        let kept: Vec<Option<u32>> = (0..self.pilot.escorts.len())
+            .map(|index| {
+                let id = self.fleet.get(index).copied().flatten()?;
+                self.npc(id).map(|npc| npc.berth)
+            })
+            .collect();
+        let mut taken: BTreeSet<u32> = kept.iter().flatten().copied().collect();
+        kept.into_iter()
+            .map(|berth| {
+                berth.unwrap_or_else(|| {
+                    let free = (1..=u32::MAX)
+                        .find(|b| !taken.contains(b))
+                        .unwrap_or(u32::MAX);
+                    taken.insert(free);
+                    free
+                })
+            })
+            .collect()
+    }
+
     /// The escorts enter the system (see the module docs): by the
     /// engine their standing orders are reset, and each is placed on its
-    /// slot.
-    pub(super) fn enter_escorts(&mut self) {
+    /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`]).
+    pub(super) fn enter_escorts(&mut self, berths: &[u32]) {
         if self.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine {
             for escort in &mut self.pilot.escorts {
                 escort.order = None;
             }
+            for npc in self.traffic.npcs_mut() {
+                if let Some(mark) = &mut npc.mission {
+                    mark.order = None;
+                }
+            }
+            self.class_orders = [None; 4];
         }
         self.fleet = (0..self.pilot.escorts.len())
-            .map(|index| self.place_escort(index))
+            .map(|index| self.place_escort_at(index, berths.get(index).copied()))
             .collect();
+        self.traffic.reserve(BTreeSet::new());
         self.restock_persons = false;
         self.reform();
         for id in self.fleet.clone().into_iter().flatten() {
@@ -97,9 +171,16 @@ impl Session {
         }
     }
 
-    /// Escort `index` as an NPC in the system, beside the player until it
-    /// is snapped to its slot; none when its ship type has no record.
+    /// Escort `index` as an NPC in the system at the first free berth (see
+    /// [`Session::place_escort_at`]).
     pub(super) fn place_escort(&mut self, index: usize) -> Option<NpcId> {
+        self.place_escort_at(index, None)
+    }
+
+    /// Escort `index` as an NPC in the system, at `berth` or else the
+    /// first free one, beside the player until it is snapped to its slot;
+    /// none when its ship type has no record.
+    pub(super) fn place_escort_at(&mut self, index: usize, berth: Option<u32>) -> Option<NpcId> {
         let mut escort = *self.pilot.escorts.get(index)?;
         let record = self.ship_record(escort.ship)?;
         let maneuver = record.fields.maneuver;
@@ -118,13 +199,10 @@ impl Session {
             restock(&mut escort.reserves, &kind);
             self.pilot.escorts[index].reserves = escort.reserves;
         }
-        let carrier = escort.carried.then(|| Carrier {
-            ship: ShipRef::Player,
-            window: dock_window(maneuver),
-            reach: self.reach_of(ShipRef::Player),
-        });
+        let carrier = escort.carried.then(|| self.player_carrier(maneuver));
         let npc = Npc {
             id: NpcId::default(),
+            berth: 0,
             ship: escort.ship,
             govt: None,
             ai_type: AiType::from_raw(kind.inherent_ai),
@@ -159,28 +237,77 @@ impl Session {
             aux: None,
             cloak: Cloak::default(),
             cloak_gear: kind.cloak,
+            led_out: false,
+            self_repair: kind.self_repair,
+            former: None,
         };
-        Some(self.traffic.add_npc(npc))
+        Some(match berth {
+            Some(berth) => self.traffic.add_npc_at(npc, berth),
+            None => self.traffic.add_npc(npc),
+        })
     }
 
-    /// Gives each escort in the system its slot in one formation of them
-    /// all and the player, spaced by the widest sprite among them
-    /// ([`escort::spacing`]): the hired escorts 2, 3, … in fleet order,
-    /// then the mission escorts in the order they came (see the
-    /// [`mission_escorts`](super::mission_escorts) module).
+    /// The player as the carrier of its fighter of `maneuver`.
+    pub(super) fn player_carrier(&self, maneuver: i16) -> Carrier {
+        Carrier {
+            ship: ShipRef::Player,
+            window: dock_window(maneuver),
+            reach: self.reach_of(ShipRef::Player),
+        }
+    }
+
+    /// NPC `id` joins the fleet where it is as the escort of `record`
+    /// (`_AIMakeEscortFlyInForm` @0x89b8e, and a former escort's rejoin,
+    /// see [`self_repair`](super::self_repair)): of no government, its AI
+    /// type its ship type's `InherentAI`, led by the player alone,
+    /// keeping formation by `record`'s standing order with no target of
+    /// its own, carried by the player when `record` is a carried
+    /// fighter, and no longer a former escort. Its record joins the
+    /// pilot's, the formation re-forms, and a save is due.
+    pub(super) fn enlist(&mut self, id: NpcId, record: Escort) {
+        let ship = self
+            .ship_record(record.ship)
+            .map(|ship| (ship.inherent_ai, ship.fields.maneuver));
+        let carrier = ship
+            .filter(|_| record.carried)
+            .map(|(_, maneuver)| self.player_carrier(maneuver));
+        let Some(npc) = self.npc_mut(id) else {
+            return;
+        };
+        npc.govt = None;
+        if let Some((inherent_ai, _)) = ship {
+            npc.ai_type = AiType::from_raw(inherent_ai);
+        }
+        npc.former = None;
+        npc.leader = None;
+        npc.goal = Goal::Formation { guard: None };
+        npc.target = None;
+        npc.escort = Some(EscortDuty {
+            formation: FormationSlot::default(),
+            order: record.order,
+        });
+        if carrier.is_some() {
+            npc.carrier = carrier;
+        }
+        self.pilot.escorts.push(record);
+        self.fleet.resize(self.pilot.escorts.len() - 1, None);
+        self.fleet.push(Some(id));
+        self.reform();
+        self.save_due = true;
+    }
+
+    /// Gives each ship the player leads ([`Session::player_led`]) its slot
+    /// in one formation of them all and the player, spaced by the widest
+    /// sprite among them ([`escort::spacing`]): 2, 3, … in ship-table
+    /// order, by berth, hired and mission escorts alike, as
+    /// `_AICalcFormationPositions` numbers every ship whose formation
+    /// parent is the player in table-slot order (@0x85137-0x851cc). That
+    /// parent is the player for each ship it leads (`_DoPlayGameWork`
+    /// @0x44160-0x441c0). The original recomputes the formation every
+    /// frame (the parent's +0xc2 flag); the engine re-forms on each change
+    /// to the led set, which gives the same slots at every frame.
     pub(super) fn reform(&mut self) {
-        let mission_escorts = self
-            .npcs()
-            .iter()
-            .filter(|npc| npc.mission_escort())
-            .map(|npc| npc.id);
-        let placed: Vec<NpcId> = self
-            .fleet
-            .iter()
-            .flatten()
-            .copied()
-            .chain(mission_escorts)
-            .collect();
+        let placed: Vec<NpcId> = self.player_led().map(|npc| npc.id).collect();
         let ships = u8::try_from(placed.len() + 1).unwrap_or(u8::MAX);
         let widths: Vec<Option<f32>> = placed
             .iter()
@@ -228,7 +355,7 @@ impl Session {
     }
 
     /// NPC `id`, if it is in the system, to change.
-    pub(super) fn npc_mut(&mut self, id: NpcId) -> Option<&mut Npc> {
+    pub(crate) fn npc_mut(&mut self, id: NpcId) -> Option<&mut Npc> {
         self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id)
     }
 
@@ -262,7 +389,17 @@ impl Session {
 
     /// Every escort disabled, breaking up or gone leaves the fleet: its
     /// record goes, and its NPC is no longer an escort. A save is due when
-    /// any did.
+    /// any did. Each that is not a carried fighter and whose ship is still
+    /// here, disabled, breaking up or destroyed, then takes its share of
+    /// the fleet's cargo ([`Session::lose_cargo_share`]), as `_DamageShip`
+    /// does after clearing its leader (@0x3afdd, call @0x3b013). One whose
+    /// ship is simply gone takes nothing: the original reaches
+    /// `_DestroyPartialFleetCargo` only from the disabled and dying paths.
+    ///
+    /// The original takes simultaneous losses in the order its hits land;
+    /// here they are taken in fleet order, each after the ones before it
+    /// have left the fleet's holds. No boundary the player can see is
+    /// crossed within the tick.
     pub(super) fn lose_escorts(&mut self) {
         let lost: Vec<NpcId> = self
             .fleet
@@ -275,8 +412,57 @@ impl Session {
             })
             .collect();
         for id in lost {
+            let index = self.fleet.iter().position(|&placed| placed == Some(id));
+            let record = index
+                .and_then(|index| self.pilot.escorts.get(index))
+                .copied();
+            let takes = record
+                .filter(|escort| !escort.carried)
+                .map(|escort| escort.ship);
+            let here = self.npc(id).is_some();
+            if let (Some(npc), Some(record)) = (self.npc_mut(id), record) {
+                npc.former = Some(FormerEscort { record });
+            }
             self.dismiss(id);
+            if let Some(ship) = takes.filter(|_| here) {
+                self.lose_cargo_share(ship);
+            }
         }
+    }
+
+    /// A lost ship of class `ship` that the player led takes its share of
+    /// the fleet's cargo (`_DestroyPartialFleetCargo` @0xcd32-0xcff6),
+    /// when its class's `InherentAI` is a trader's
+    /// ([`FREIGHTER_AI`](escort::FREIGHTER_AI) or less); a warship or
+    /// interceptor takes nothing. Every good, commodity or `jünk`, loses
+    /// the truncated part [`market::lost_share`] gives, from the ship's
+    /// `Holds` over the fleet's holds as they stand, the ship already out
+    /// of them; by the other reading of [`RuleKey::LostCargoShare`] its
+    /// own `Holds` count too. The cargo is then trimmed to the fleet's
+    /// holds against everything carried, the mission cargo aboard
+    /// included, as the call's tail into `_ResetPlayerPrecalcedValues`
+    /// does (@0xc7d8-0xc82c). The mission cargo is never touched. The
+    /// tons destroyed go nowhere: the original writes them into the lost
+    /// ship's own slots (@0xcf76), which nothing the engine models reads.
+    pub(super) fn lose_cargo_share(&mut self, ship: ShipId) {
+        let Some(holds) = self
+            .ship_record(ship)
+            .filter(|record| record.inherent_ai <= escort::FREIGHTER_AI)
+            .map(|record| record.fields.holds)
+        else {
+            return;
+        };
+        let counted = self.rules.source_for(RuleKey::LostCargoShare) == RuleSource::Bible;
+        let share = market::lost_share(
+            holds,
+            self.stats.capacity,
+            market::escort_tons(self.escort_holds()),
+            counted,
+        );
+        market::destroy_share(&mut self.pilot.cargo, share);
+        let holds = self.capacity();
+        let total = self.pilot.total_cargo();
+        market::trim_commodities(&mut self.pilot.cargo, holds, total);
     }
 
     /// Escort NPC `id` leaves the fleet: its record goes, it is no longer
@@ -346,19 +532,37 @@ impl Session {
 
     /// Gives every escort of `group` `command` (see the module docs), and
     /// what it changed: none when it changed no escort's order or
-    /// target, when the player has no escort of `group`, and while landed
-    /// or jumping.
+    /// target, when the player has no escort of `group`, and while
+    /// landed. A command given while a jump is under way, the pre-jump
+    /// stage included, reaches the escorts as any other does and is
+    /// reported as under way ([`Commanded::underway`]), as the original
+    /// takes the escort keys on every frame of a jump but its arrival
+    /// (`_HandlePlayer` @0x6dd00-0x6e452, `_IssueNewEscortCommand`
+    /// @0x66461).
     pub fn command_escorts(
         &mut self,
         group: EscortGroup,
         command: EscortCommand,
     ) -> Option<Commanded> {
-        if self.landed.is_some() || self.jumping().is_some() {
+        if self.landed.is_some() {
             return None;
         }
-        let target = self
-            .target
-            .filter(|&target| command == EscortCommand::Attack && !self.is_escort(target));
+        // The original lets go of the escorts' targets earlier in every
+        // hyperspace frame (@0x6bb0a, before the escort keys @0x6e192).
+        // The flight does not tick the session while the stars streak,
+        // so each command there lets go first, as that frame would have.
+        if self.jumping().is_some() {
+            self.let_go_of_led_targets();
+        }
+        // Reported, "attacking target.", for a target the player does not
+        // lead (@0x6653f-0x66559); copied only when it is not allied with
+        // the player either (@0x6625f).
+        let reported = self.target.filter(|&target| {
+            command == EscortCommand::Attack && !self.player_led().any(|npc| npc.id == target)
+        });
+        let target = reported
+            .filter(|&target| !self.allied_with_player(target))
+            .map(ShipRef::Npc);
         let mut changed = false;
         let mut recalled = false;
         for index in 0..self.pilot.escorts.len() {
@@ -366,12 +570,8 @@ impl Session {
                 continue;
             }
             let escort = &mut self.pilot.escorts[index];
-            let order = if command == EscortCommand::Dock && !escort.carried {
-                recalled |= escort.order.is_some();
-                None
-            } else {
-                command.order()
-            };
+            let (order, recall) = order_for(command, escort.carried, escort.order);
+            recalled |= recall;
             changed |= escort.order != order;
             escort.order = order;
             let placed = self.fleet.get(index).copied().flatten();
@@ -381,12 +581,33 @@ impl Session {
             if let Some(duty) = &mut npc.escort {
                 duty.order = order;
             }
-            if let Some(target) = target.map(ShipRef::Npc)
-                && npc.target != Some(target)
-            {
-                npc.target = Some(target);
-                changed = true;
+            changed |= take_target(npc, target);
+        }
+        for (class, kept) in EscortClass::ALL.into_iter().zip(&mut self.class_orders) {
+            if group.holds(class) {
+                *kept = command.order();
             }
+        }
+        let mission_escorts: Vec<NpcId> = self
+            .player_led()
+            .filter(|npc| npc.mission_escort() && group.holds(npc.class))
+            .map(|npc| npc.id)
+            .collect();
+        for id in mission_escorts {
+            let Some(npc) = self.npc_mut(id) else {
+                continue;
+            };
+            let Some(mark) = &mut npc.mission else {
+                continue;
+            };
+            let (order, recall) = order_for(command, false, mark.order);
+            recalled |= recall;
+            changed |= mark.order != order;
+            mark.order = order;
+            changed |= take_target(npc, target);
+        }
+        if changed {
+            self.sounds.push(crate::SimSound::EscortsCommanded);
         }
         changed.then_some(Commanded {
             group,
@@ -395,24 +616,115 @@ impl Session {
             } else {
                 command
             },
-            targeted: target.is_some(),
+            targeted: reported.is_some(),
+            underway: self.jump.is_some(),
         })
     }
 
-    /// The escort menu's class rows, in its order: whether the player has
-    /// an escort of each class, and its first escort's standing order.
+    /// Whether NPC `id` is allied with the player, as `_AlliedWithPlayer`
+    /// (@0x6985-0x69d0) has it: a ship the player leads, or one led by a
+    /// ship the player leads, such as a fighter an escort launched.
+    fn allied_with_player(&self, id: NpcId) -> bool {
+        let led = |id| self.player_led().any(|npc| npc.id == id);
+        led(id) || self.npc(id).and_then(|npc| npc.leader).is_some_and(led)
+    }
+
+    /// Lets go of every target of the ships the player leads, as
+    /// `_MakeEscortsHyperWithParent` does on every frame of the
+    /// hyperspace stage (@0x3fdc0-0x3fdc2): an Attack given in hyperspace
+    /// then always copies the player's target afresh, and the escorts
+    /// arrive holding none.
+    pub(super) fn let_go_of_led_targets(&mut self) {
+        let led: Vec<NpcId> = self.player_led().map(|npc| npc.id).collect();
+        for id in led {
+            if let Some(npc) = self.npc_mut(id) {
+                npc.target = None;
+            }
+        }
+    }
+
+    /// `class`'s row in the escort menu: whether the player leads a ship
+    /// of it, hired or a mission escort, and the standing order of its
+    /// first hired escort, else of its first mission escort.
+    fn class_row(&self, class: EscortClass) -> ClassRow {
+        let hired = (0..self.pilot.escorts.len())
+            .find(|&index| self.escort_class(index) == class)
+            .map(|index| self.pilot.escorts[index].order);
+        let first = hired.or_else(|| {
+            self.player_led()
+                .find(|npc| npc.mission_escort() && npc.class == class)
+                .map(Npc::escort_order)
+        });
+        ClassRow {
+            class,
+            present: first.is_some(),
+            order: first.flatten(),
+        }
+    }
+
+    /// The standing order of `class` that a ship joining it takes, as
+    /// the original's one order per class does (`_EscortAI`
+    /// @0x83ad8-0x83b2b): its first escort's (`class_row`),
+    /// else the last order given the class (kept across a jump or a
+    /// landing unless the engine's [`RuleKey::EscortOrders`] reset it),
+    /// Return to Hangar excepted. A fighter the player launches and a
+    /// mission escort joining both take it.
+    pub(super) fn class_order(&self, class: EscortClass) -> Option<EscortOrder> {
+        let kept = EscortClass::ALL
+            .iter()
+            .position(|&each| each == class)
+            .and_then(|index| self.class_orders[index]);
+        let row = self.class_row(class);
+        if row.present { row.order } else { kept }.filter(|&order| order != EscortOrder::Dock)
+    }
+
+    /// The escort menu's class rows, in its order: whether the player
+    /// leads a ship of each class, hired or a mission escort, disabled
+    /// included (`_DrawEscortMenuInFrame` @0x56392-0x563ca), and the
+    /// standing order of its first escort (`class_row`).
     #[must_use]
     pub fn escort_menu(&self) -> [ClassRow; 4] {
-        EscortClass::ALL.map(|class| {
-            let first = (0..self.pilot.escorts.len())
-                .find(|&index| self.escort_class(index) == class)
-                .and_then(|index| self.pilot.escorts.get(index));
-            ClassRow {
-                class,
-                present: first.is_some(),
-                order: first.and_then(|escort| escort.order),
-            }
-        })
+        EscortClass::ALL.map(|class| self.class_row(class))
+    }
+
+    /// Whether the player has an escort flying, for the escort menu to
+    /// stay open (`_HandlePlayer` @0x6df59-0x6dfd0): any hired escort, or
+    /// a mission escort neither disabled nor breaking up (@0x6df73).
+    #[must_use]
+    pub fn escorts_flying(&self) -> bool {
+        !self.pilot.escorts.is_empty()
+            || self
+                .player_led()
+                .any(|npc| npc.mission_escort() && npc.condition == Condition::Intact)
+    }
+}
+
+/// The order an escort holding `order`, carried or not, takes from
+/// `command`, and whether that is a recall: Return to Hangar sends any
+/// escort but a carried fighter back to formation (`_IssueNewEscortCommand`
+/// @0x661a5-0x661ed, the AI type 5 test), a recall when it had another
+/// order.
+fn order_for(
+    command: EscortCommand,
+    carried: bool,
+    order: Option<EscortOrder>,
+) -> (Option<EscortOrder>, bool) {
+    if command == EscortCommand::Dock && !carried {
+        (None, order.is_some())
+    } else {
+        (command.order(), false)
+    }
+}
+
+/// `npc` takes `target`, the player's to attack, when there is one;
+/// whether its target changed (`_IssueNewEscortCommand` @0x66233-0x66273).
+fn take_target(npc: &mut Npc, target: Option<ShipRef>) -> bool {
+    match target {
+        Some(target) if npc.target != Some(target) => {
+            npc.target = Some(target);
+            true
+        }
+        _ => false,
     }
 }
 
@@ -429,21 +741,25 @@ fn restock(reserves: &mut Reserves, kind: &ShipKind) {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::rc::Rc;
 
     use super::*;
     use crate::ai::{Behaviour, NovaAi, Peaceful, Surroundings};
     use crate::catalog::{
-        HullRecord, PersonId, ShipId, ShipRecord, StockWeapon, SystemId, WeaponId, WeaponRecord,
+        HullRecord, JunkId, PersonId, ShipId, ShipRecord, StockWeapon, SystemId, WeaponId,
+        WeaponRecord,
     };
     use crate::chance::{Chance, NeverFires};
     use crate::combat::Rules;
     use crate::escort::EscortOrder;
     use crate::flight::{Controls, Turn};
     use crate::geometry::Vec2;
+    use crate::market::Good;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::{Gauge, Reserves};
     use crate::rulebook::Rulebook;
+    use crate::self_repair::FormerKind;
     use crate::stats::ShipStats;
     use crate::targeting::TargetPick;
     use crate::testkit::{
@@ -998,6 +1314,250 @@ mod tests {
         assert!(!session.take_save_due(), "only once");
     }
 
+    // What a lost escort remembers.
+
+    /// The warship hired at 50 a day, a captured freighter, and a
+    /// carried warship fighter, each worn, flying by the engine.
+    fn mixed(catalog: &FakePilotCatalog) -> Session {
+        let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
+        pilot.escorts = vec![
+            Escort {
+                wage: Some(50),
+                ..escort(WARSHIP, worn(), Some(EscortOrder::Defend))
+            },
+            escort(FREIGHTER, worn(), None),
+            Escort {
+                carried: true,
+                ..escort(WARSHIP, worn(), None)
+            },
+        ];
+        let mut session = Session::fly(catalog, pilot).expect("flies");
+        tick(&mut session, catalog);
+        session
+    }
+
+    #[test]
+    fn a_disabled_escort_remembers_what_it_was_with_its_record() {
+        let catalog = fleeted();
+        let mut session = mixed(&catalog);
+        let records = session.pilot().escorts().to_vec();
+        let ids: Vec<NpcId> = session.fleet.iter().flatten().copied().collect();
+        assert_eq!(ids.len(), 3);
+        for &id in &ids {
+            assert_eq!(session.npc(id).expect("there").former, None);
+            session.npc_mut(id).expect("there").reserves.armor.now = 10.0;
+        }
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert!(session.pilot().escorts().is_empty(), "all lost");
+        for ((id, record), kind) in ids.into_iter().zip(&records).zip([
+            FormerKind::Hired,
+            FormerKind::Captured,
+            FormerKind::Fighter,
+        ]) {
+            let npc = session.npc(id).expect("left behind");
+            assert_eq!(npc.condition, Condition::Disabled);
+            let former = npc.former.expect("remembers");
+            assert_eq!(former.kind(), kind);
+            assert_eq!(
+                former.record,
+                Escort {
+                    reserves: Reserves {
+                        armor: Gauge {
+                            now: 10.0,
+                            max: 45.0,
+                        },
+                        ..record.reserves
+                    },
+                    ..*record
+                },
+                "its record as it was lost"
+            );
+        }
+    }
+
+    #[test]
+    fn an_escort_breaking_up_remembers_too_and_one_gone_leaves_nothing() {
+        let catalog = fleeted();
+        let mut session = mixed(&catalog);
+        let hired = session.fleet[0].expect("placed");
+        let npc = session.npc_mut(hired).expect("there");
+        npc.hull.death_delay = 10;
+        npc.reserves.armor.now = 0.0;
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        let npc = session.npc(hired).expect("breaking up");
+        assert!(matches!(npc.condition, Condition::Dying { .. }));
+        assert_eq!(
+            npc.former.map(|former| former.kind()),
+            Some(FormerKind::Hired)
+        );
+        let captured = session.fleet[0].expect("placed");
+        session.traffic.remove(captured);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.pilot().escorts().len(), 1, "the gone one is lost");
+    }
+
+    #[test]
+    fn an_intact_escort_remembers_nothing() {
+        let catalog = fleeted();
+        let mut session = mixed(&catalog);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.pilot().escorts().len(), 3);
+        assert!(session.npcs().iter().all(|npc| npc.former.is_none()));
+    }
+
+    // The cargo a lost escort takes.
+
+    /// Food, a commodity.
+    const FOOD: Good = Good::Commodity(0);
+    /// Opals, a `jünk`.
+    const OPALS: Good = Good::Junk(JunkId(146));
+
+    /// A session of `fleet` by `source` of `LostCargoShare`, its first
+    /// traffic tick done, holding 9 food and 3 opals.
+    fn laden(catalog: &FakePilotCatalog, fleet: Vec<Escort>, source: RuleSource) -> Session {
+        let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
+        pilot.escorts = fleet;
+        let mut session = Session::fly(catalog, pilot)
+            .expect("flies")
+            .with_rules(Rulebook::default().with_override(RuleKey::LostCargoShare, source));
+        tick(&mut session, catalog);
+        session.pilot.cargo = BTreeMap::from([(FOOD, 9), (OPALS, 3)]);
+        session
+    }
+
+    /// The warship and two freighters, all full.
+    fn trader_fleet() -> Vec<Escort> {
+        let full = Reserves::full(30.0, 45.0, 300.0);
+        vec![
+            escort(WARSHIP, full, None),
+            escort(FREIGHTER, full, None),
+            escort(FREIGHTER, full, None),
+        ]
+    }
+
+    /// Escort `index`'s armour goes to `armor`, and the fight ticks.
+    fn hit(session: &mut Session, index: usize, armor: f32) {
+        let id = session.fleet[index].expect("placed");
+        session.npc_mut(id).expect("there").reserves.armor.now = armor;
+        session.tick_combat(Rules::default(), &mut NeverFires);
+    }
+
+    fn cargo(session: &Session) -> BTreeMap<Good, u32> {
+        session.pilot.cargo.clone()
+    }
+
+    #[test]
+    fn a_trader_escorts_death_destroys_its_share_of_the_cargo() {
+        let catalog = fleeted();
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        hit(&mut session, 1, 0.0);
+        assert_eq!(session.pilot().escorts().len(), 2, "it is lost");
+        assert_eq!(
+            cargo(&session),
+            BTreeMap::from([(FOOD, 5), (OPALS, 2)]),
+            "20 of the player's 20 and the other freighter's 20"
+        );
+    }
+
+    #[test]
+    fn a_lone_trader_escort_lost_takes_all_the_cargo_by_the_engine_and_half_by_the_other_reading() {
+        let catalog = fleeted();
+        let fleet = escorted(&catalog).escorts;
+        let mut session = laden(&catalog, fleet.clone(), RuleSource::Engine);
+        hit(&mut session, 1, 0.0);
+        assert_eq!(cargo(&session), BTreeMap::new(), "20 of the player's 20");
+        let mut session = laden(&catalog, fleet, RuleSource::Bible);
+        hit(&mut session, 1, 0.0);
+        assert_eq!(
+            cargo(&session),
+            BTreeMap::from([(FOOD, 5), (OPALS, 2)]),
+            "20 of the player's 20 and its own 20"
+        );
+    }
+
+    #[test]
+    fn a_trader_escort_of_inherent_ai_2_lost_destroys_its_share_of_the_cargo() {
+        let mut catalog = fleeted();
+        catalog.ship_records[2].inherent_ai = 2;
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        hit(&mut session, 1, 0.0);
+        assert_eq!(
+            cargo(&session),
+            BTreeMap::from([(FOOD, 5), (OPALS, 2)]),
+            "InherentAI 2 is a trader's"
+        );
+    }
+
+    #[test]
+    fn a_trader_escort_disabled_destroys_its_share_as_it_leaves() {
+        let catalog = fleeted();
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        hit(&mut session, 1, 10.0);
+        let lost = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.ship == FREIGHTER && npc.escort.is_none());
+        assert_eq!(lost.map(|npc| npc.condition), Some(Condition::Disabled));
+        assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 5), (OPALS, 2)]));
+    }
+
+    #[test]
+    fn a_warship_escorts_death_destroys_no_cargo() {
+        let catalog = fleeted();
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        hit(&mut session, 0, 0.0);
+        assert_eq!(session.pilot().escorts().len(), 2, "it is lost");
+        assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 9), (OPALS, 3)]));
+    }
+
+    #[test]
+    fn a_carried_trader_fighter_lost_destroys_no_cargo() {
+        let catalog = fleeted();
+        let full = Reserves::full(30.0, 45.0, 300.0);
+        let fleet = vec![
+            Escort {
+                carried: true,
+                ..escort(FREIGHTER, full, None)
+            },
+            escort(FREIGHTER, full, None),
+        ];
+        let mut session = laden(&catalog, fleet, RuleSource::Engine);
+        hit(&mut session, 0, 0.0);
+        assert_eq!(session.pilot().escorts().len(), 1, "it is lost");
+        assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 9), (OPALS, 3)]));
+    }
+
+    #[test]
+    fn an_uncarried_trader_escort_whose_ship_is_gone_destroys_no_cargo() {
+        let catalog = fleeted();
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        let id = session.fleet[1].expect("placed");
+        session.traffic.remove(id);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.pilot().escorts().len(), 2, "it is lost");
+        assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 9), (OPALS, 3)]));
+    }
+
+    #[test]
+    fn a_lost_escort_trims_the_cargo_to_the_fleets_holds() {
+        let catalog = fleeted();
+        let full = Reserves::full(30.0, 45.0, 300.0);
+        let fleet = vec![escort(FREIGHTER, full, None), escort(FREIGHTER, full, None)];
+        let mut session = laden(&catalog, fleet, RuleSource::Engine);
+        session.pilot.cargo = BTreeMap::from([(FOOD, 10)]);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(130, 50));
+        hit(&mut session, 0, 0.0);
+        assert_eq!(
+            cargo(&session),
+            BTreeMap::from([(FOOD, 3)]),
+            "half of 10 is 5, then 5 x 40 / 55"
+        );
+        assert_eq!(session.pilot().total_cargo(), 53, "the mission cargo stays");
+    }
+
     // Commands.
 
     /// Thinks nothing and does nothing: a ship that stays put.
@@ -1048,7 +1608,8 @@ mod tests {
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Attack,
-                targeted: true
+                targeted: true,
+                underway: false
             })
         );
         for npc in escort_npcs(&session) {
@@ -1090,7 +1651,8 @@ mod tests {
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Attack,
-                targeted: false
+                targeted: false,
+                underway: false
             })
         );
         let mut session = flying(&catalog, RuleSource::Engine);
@@ -1137,7 +1699,8 @@ mod tests {
             Some(Commanded {
                 group: warships,
                 command: EscortCommand::Hold,
-                targeted: false
+                targeted: false,
+                underway: false
             })
         );
         let orders = |session: &Session| {
@@ -1225,27 +1788,179 @@ mod tests {
     }
 
     #[test]
-    fn no_command_is_given_while_jumping() {
+    fn a_command_given_in_hyperspace_reaches_the_escorts_under_way() {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Bible);
         session.plot_course(SystemId(131)).expect("a route");
         crate::testkit::fly_out(&mut session);
         begin_jump_now(&mut session).expect("jumps");
-        let before = session.pilot().clone();
-        let npcs: Vec<Npc> = escort_npcs(&session).into_iter().cloned().collect();
+        session.take_sounds();
         assert_eq!(
             session.command_escorts(EscortGroup::All, EscortCommand::Hold),
-            None
+            Some(Commanded {
+                group: EscortGroup::All,
+                command: EscortCommand::Hold,
+                targeted: false,
+                underway: true
+            })
         );
-        assert_eq!(session.pilot(), &before, "the records' orders unchanged");
-        assert_eq!(orders(&session), [Some(EscortOrder::Defend), None]);
-        assert_eq!(
+        assert_eq!(orders(&session), [Some(EscortOrder::Hold); 2]);
+        assert!(
             escort_npcs(&session)
-                .into_iter()
-                .cloned()
-                .collect::<Vec<_>>(),
-            npcs,
-            "the NPCs' orders unchanged"
+                .iter()
+                .all(|npc| npc.escort.and_then(|duty| duty.order) == Some(EscortOrder::Hold)),
+            "the NPCs' orders"
+        );
+        assert_eq!(session.class_orders, [Some(EscortOrder::Hold); 4]);
+        assert!(
+            session
+                .take_sounds()
+                .contains(&crate::SimSound::EscortsCommanded)
+        );
+    }
+
+    #[test]
+    fn a_command_given_while_braking_for_a_jump_is_under_way() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Bible);
+        session.plot_course(SystemId(131)).expect("a route");
+        crate::testkit::fly_out(&mut session);
+        session.begin_jump().expect("pre-jump");
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)), "braking");
+        assert_eq!(
+            session.command_escorts(EscortGroup::All, EscortCommand::Defend),
+            Some(Commanded {
+                group: EscortGroup::All,
+                command: EscortCommand::Defend,
+                targeted: false,
+                underway: true
+            })
+        );
+        assert_eq!(orders(&session), [Some(EscortOrder::Defend); 2]);
+    }
+
+    #[test]
+    fn an_order_given_in_hyperspace_is_reset_on_arrival_by_the_engine_and_kept_by_the_bible() {
+        for (source, kept) in [
+            (RuleSource::Engine, None),
+            (RuleSource::Bible, Some(EscortOrder::Hold)),
+        ] {
+            let catalog = fleeted();
+            let mut session = flying(&catalog, source);
+            session.plot_course(SystemId(131)).expect("a route");
+            crate::testkit::fly_out(&mut session);
+            begin_jump_now(&mut session).expect("jumps");
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold);
+            assert_eq!(orders(&session), [Some(EscortOrder::Hold); 2]);
+            session.arrive(&catalog, &mut NeverFires).expect("arrives");
+            tick(&mut session, &catalog);
+            assert_eq!(orders(&session), [kept; 2], "{source:?}");
+            assert!(
+                escort_npcs(&session)
+                    .iter()
+                    .all(|npc| npc.escort.and_then(|duty| duty.order) == kept),
+                "{source:?}"
+            );
+        }
+    }
+
+    /// A session by the Bible in hyperspace, the escorts having taken
+    /// pirate `quarry` before the jump: the player's target.
+    fn attacking_into_hyperspace(catalog: &FakePilotCatalog) -> (Session, NpcId) {
+        let mut session = flying(catalog, RuleSource::Bible);
+        let quarry = pirate(&mut session, 0.0, -400.0, Goal::Idle);
+        session.target = Some(quarry);
+        assert_eq!(
+            session
+                .command_escorts(EscortGroup::All, EscortCommand::Attack)
+                .map(|commanded| commanded.targeted),
+            Some(true)
+        );
+        assert!(
+            escort_npcs(&session)
+                .iter()
+                .all(|npc| npc.target == Some(ShipRef::Npc(quarry)))
+        );
+        session.plot_course(SystemId(131)).expect("a route");
+        crate::testkit::fly_out(&mut session);
+        session.target = Some(quarry);
+        begin_jump_now(&mut session).expect("jumps");
+        (session, quarry)
+    }
+
+    #[test]
+    fn attack_in_hyperspace_copies_the_target_onto_escorts_that_let_theirs_go() {
+        let catalog = fleeted();
+        let (mut session, quarry) = attacking_into_hyperspace(&catalog);
+        assert!(
+            escort_npcs(&session).iter().all(|npc| npc.target.is_none()),
+            "let go as the jump begins"
+        );
+        let attacked = Some(Commanded {
+            group: EscortGroup::All,
+            command: EscortCommand::Attack,
+            targeted: true,
+            underway: true,
+        });
+        for streak in 0..2 {
+            session.take_sounds();
+            assert_eq!(
+                session.command_escorts(EscortGroup::All, EscortCommand::Attack),
+                attacked,
+                "attack {streak}"
+            );
+            assert!(
+                session
+                    .take_sounds()
+                    .contains(&crate::SimSound::EscortsCommanded),
+                "attack {streak}"
+            );
+            assert!(
+                escort_npcs(&session)
+                    .iter()
+                    .all(|npc| npc.target == Some(ShipRef::Npc(quarry))),
+                "attack {streak}"
+            );
+            session.tick(Controls::default());
+            assert!(
+                escort_npcs(&session).iter().all(|npc| npc.target.is_none()),
+                "let go every tick of the streak"
+            );
+        }
+        session.command_escorts(EscortGroup::All, EscortCommand::Attack);
+        assert_eq!(
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack),
+            attacked,
+            "the streak's frames run no session tick: each command lets go first"
+        );
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert!(
+            escort_npcs(&session).iter().all(|npc| npc.target.is_none()),
+            "none held on arrival"
+        );
+    }
+
+    #[test]
+    fn attack_does_not_copy_a_target_led_by_an_escort_but_reports_it() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let freighter = session.fleet[1].expect("placed");
+        let launched = pirate(&mut session, 0.0, -400.0, Goal::Idle);
+        session.npc_mut(launched).expect("here").leader = Some(freighter);
+        session.target = Some(launched);
+        assert_eq!(
+            session.command_escorts(EscortGroup::All, EscortCommand::Attack),
+            Some(Commanded {
+                group: EscortGroup::All,
+                command: EscortCommand::Attack,
+                targeted: true,
+                underway: false
+            }),
+            "attacking target."
+        );
+        assert!(
+            escort_npcs(&session).iter().all(|npc| npc.target.is_none()),
+            "allied with the player: not copied"
         );
     }
 
@@ -1316,7 +2031,9 @@ mod tests {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
         session.command_escorts(EscortGroup::All, EscortCommand::Recall);
-        let raider = pirate(&mut session, 0.0, -200.0, Goal::Attack(ShipRef::Player));
+        // Within the 164-pixel box of the escort's slot, where its turret
+        // fires (@0x86666-0x86689).
+        let raider = pirate(&mut session, 0.0, -120.0, Goal::Attack(ShipRef::Player));
         let ai = sitting_ai();
         fight(&mut session, &catalog, &ai);
         let warship = escort_npcs(&session)[0];
@@ -1373,6 +2090,36 @@ mod tests {
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.target().map(|npc| npc.id), freighter, "kept");
         assert_eq!(session.select_target(TargetPick::NextEscort), None);
+    }
+
+    #[test]
+    fn plain_r_picks_a_ship_attacking_a_hired_escort_but_never_the_escort() {
+        let catalog = fleeted();
+        let mut session = flying(&catalog, RuleSource::Engine);
+        let warship = session.fleet[0].expect("a hired escort");
+        let attacker = pirate(
+            &mut session,
+            0.0,
+            -300.0,
+            Goal::Attack(ShipRef::Npc(warship)),
+        );
+        let bystander = pirate(&mut session, 0.0, -100.0, Goal::Idle);
+        assert_eq!(
+            session.select_target(TargetPick::NearestThreat),
+            Some(attacker)
+        );
+        let beside = session.player().position + Vec2::new(10.0, 0.0);
+        let escort = session.npc_mut(warship).expect("in the system");
+        escort.goal = Goal::Attack(ShipRef::Player);
+        escort.state.position = beside;
+        assert_eq!(
+            session.select_target(TargetPick::NearestThreat),
+            Some(attacker),
+            "the escort is passed over"
+        );
+        session.npc_mut(attacker).expect("there").goal = Goal::Attack(ShipRef::Npc(bystander));
+        session.target = None;
+        assert_eq!(session.select_target(TargetPick::NearestThreat), None);
     }
 
     // Person escorts.

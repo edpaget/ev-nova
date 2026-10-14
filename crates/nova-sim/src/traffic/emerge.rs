@@ -55,7 +55,18 @@
 //! - **Leaving the gate.** Once the timer is out the ship bursts out along
 //!   its heading at [`EXIT_SPEED`] pixels a tick, [`EXIT_SLOWING`] slower
 //!   each tick ([`exit_speed`], @0x34bc0-0x34c63), until it would be at or
-//!   below its top speed (`_AIMakeShipStopJumping` @0x34cee).
+//!   below its cap (`_AIMakeShipStopJumping` @0x34cee): its top speed, or,
+//!   while it has a lead in the system, the lower of its own and its
+//!   lead's (`_HandleShip` @0x34c68-0x34ce6;
+//!   [`TopSpeeds::burst_cap`](crate::traffic::autopilot::TopSpeeds::burst_cap)).
+//!   The lead of a ship the player leads is the player, at its
+//!   `_ShipMaxSpeed` (see [`top_speed`](crate::top_speed)); a fleet
+//!   escort's is its fleet lead. A ship the
+//!   player leads, made to come out of the exit gate after the player
+//!   (see [`session::gate_escorts`](crate::session)), starts at
+//!   [`LED_EXIT_SPEED`] instead: `_AIMakeShipEmergeFromHyperGate` sets
+//!   -15.0 for leader 0 and -30.0 otherwise (@0x895aa-0x895bd), so its
+//!   burst is the generic one from [`LED_BURST_TICK`].
 //! - **Drawn** (`_HandleShipDisplay` @0x2c090-0x2c18e): hidden while its
 //!   timer is above [`FADE_TICKS`], then fading in ([`emerge_level`]).
 //!
@@ -63,8 +74,7 @@
 //! ship shows on the radar at its gate and can be hit.
 //!
 //! Not modelled: the `Rand(30) + 30` pause a leaderless ship takes after
-//! its burst (@0x34d5c-0x34d8b); a fleet escort's burst capped at its
-//! lead's top speed (@0x34c68-0x34ce6), which here is its own; the
+//! its burst (@0x34d5c-0x34d8b); the
 //! stellar the ship remembers (+0x92); a hypergate animating while a ship
 //! comes out of it (`_HandleStellarSprites` @0x2e8bd).
 
@@ -88,6 +98,12 @@ pub const FADE_TICKS: u32 = 16;
 /// A ship's speed, in pixels a tick, on the first tick it leaves a gate
 /// (-30.0, @0x895aa).
 pub const EXIT_SPEED: f32 = 30.0;
+/// A ship the player leads starts its burst at 15.0 rather than 30.0
+/// (`_AIMakeShipEmergeFromHyperGate` @0x895aa-0x895bd, leader 0).
+pub const LED_EXIT_SPEED: f32 = 15.0;
+/// The tick of the generic burst at which a led ship's burst starts:
+/// [`exit_speed`]`(5)` is [`LED_EXIT_SPEED`] (@0x895aa-0x895bd).
+pub const LED_BURST_TICK: u32 = 5;
 /// How much slower each tick of leaving a gate is than the last (-3.0,
 /// @0x895c4).
 pub const EXIT_SLOWING: f32 = 3.0;
@@ -192,6 +208,15 @@ mod tests {
     use crate::catalog::GovtRecord;
     use crate::gate::{HYPERGATE, WORMHOLE};
     use crate::testkit::{Draws, govt, planet};
+
+    #[test]
+    fn a_led_burst_is_the_generic_burst_from_its_fifth_tick() {
+        assert_eq!(exit_speed(LED_BURST_TICK), LED_EXIT_SPEED);
+        assert_eq!(
+            exit_speed(LED_BURST_TICK - 1),
+            LED_EXIT_SPEED + EXIT_SLOWING
+        );
+    }
 
     const SHIP: Option<GovtId> = Some(GovtId(128));
     const FOE: Option<GovtId> = Some(GovtId(129));

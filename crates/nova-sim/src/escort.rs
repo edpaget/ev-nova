@@ -31,10 +31,11 @@
 //!
 //! **Formation** ([`spacing`], [`slot_offset`], [`slot_position`];
 //! `_AICalcFormationPositions` @0x85040, `_AICalcShipFormPos` @0x84cb8):
-//! the player leads, in slot 1, and its escorts take slots 2, 3, … in
-//! fleet order, then its mission escorts (a `ShipBehav` 1 mission's ships,
-//! which hold a [`FormationSlot`] of their own and no [`EscortDuty`]; see
-//! the session's `mission_escorts` module), each a number of spacings
+//! the player leads, in slot 1, and the ships it leads take slots 2, 3, …
+//! in ship-table order (their berths): its hired escorts and its mission
+//! escorts together (a `ShipBehav` 1 mission's ships, which hold a
+//! [`FormationSlot`] of their own and no [`EscortDuty`]; see the
+//! session's `mission_escorts` module), each a number of spacings
 //! behind and beside the player along its heading. The spacing is six tenths of the widest sprite,
 //! held between 24 and 60 pixels. An escort within [`KEEP_FORMATION`] of
 //! its slot moves with the player, nudged back towards the slot
@@ -42,14 +43,18 @@
 //!
 //! **Threats** ([`threats`], [`threat_score`], [`best_threat`];
 //! `_IsShipANearbyThreatToParent` @0x836a4): an escort fights the ships
-//! threatening the player, scored by distance, a ship of another class
-//! counting half, and a fighter against a warship escort a quarter; a
+//! threatening the player or a ship the player leads, scored by distance,
+//! a ship of another class counting half, and a fighter against a warship
+//! escort a quarter; a
 //! defending one looks within [`DEFEND_RADIUS`] of the player and keeps
 //! its target within [`DEFEND_KEEP_SQ`] (see
 //! [`ai::escort`](crate::ai::escort)).
 //!
 //! The strings are `STR#` 2002's: #51, #133, #134 and #154 the constants
-//! below, and the labels each type gives.
+//! below, the labels each type gives, #155-#159 what a command's message
+//! says the escorts are doing ([`EscortCommand::doing`]) and #150-#154
+//! what they will do, said of a command given while a jump is under way
+//! ([`EscortCommand::will`], `_IssueNewEscortCommand` @0x66461-0x664e5).
 
 use crate::flight::{ShipState, facing};
 use crate::geometry::Vec2;
@@ -199,6 +204,21 @@ impl EscortCommand {
             Self::Dock => "returning to hangar.",
         }
     }
+
+    /// What its message says the escorts will do when it is given while
+    /// a jump is under way (`STR#` 2002 #150-#154,
+    /// `_IssueNewEscortCommand` @0x66461-0x664e0). Attack says
+    /// [`WILL_ATTACK`] whether or not the escorts took a target.
+    #[must_use]
+    pub const fn will(self) -> &'static str {
+        match self {
+            Self::Attack => WILL_ATTACK,
+            Self::Defend => "will defend.",
+            Self::Hold => "will hold position.",
+            Self::Recall => "will return to formation.",
+            Self::Dock => "will return to hangar.",
+        }
+    }
 }
 
 /// The escorts a command goes to: every one, or one class.
@@ -249,16 +269,21 @@ impl EscortGroup {
 }
 
 /// What a command to the escorts changed, for its message: the group
-/// it went to, the command, and whether Attack copied the player's
-/// target.
+/// it went to, the command, whether Attack had a target to report, and
+/// whether a jump was under way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Commanded {
     /// The escorts it went to.
     pub group: EscortGroup,
     /// The command.
     pub command: EscortCommand,
-    /// Whether the escorts took the player's target to attack.
+    /// Whether Attack had the player's target to report ("attacking
+    /// target.").
     pub targeted: bool,
+    /// Whether it was given while a jump was under way, the pre-jump
+    /// stage included (the original's ship +0x50 > 0, @0x66466): its
+    /// message then says what the escorts will do ([`EscortCommand::will`]).
+    pub underway: bool,
 }
 
 /// One class's row in the escort menu.
@@ -405,17 +430,25 @@ pub const DEFEND_KEEP_SQ: f32 = 408_375.0;
 
 /// The ships among `npcs` that threaten the player, which `escort` may
 /// fight (`_AIFightThreatToParent` @0x81de6): any that threatens the
-/// player ([`Npc::threatens_player`]), but never `escort` itself or a
-/// fellow escort, hired or a mission escort ([`Npc::escorts_player`]).
+/// player or a ship the player leads ([`Npc::threatens_player_among`]),
+/// but never `escort` itself or a fellow escort, hired or a mission
+/// escort ([`Npc::escorts_player`]). With the player the parent, the
+/// original asks `_ExtendedIsThreatToPlayer` @0x81b70, whose target test
+/// counts a ship led by the player (@0x81c2e-0x81c4a); the rest of that
+/// test (visibility, +0x8c, the ship's own escorts' threats) is
+/// crons-news-ranks-fidelity phase 5's.
 pub fn threats<'a>(escort: &'a Npc, npcs: &'a [Npc]) -> impl Iterator<Item = &'a Npc> + 'a {
     npcs.iter().filter(move |candidate| {
-        candidate.id != escort.id && !candidate.escorts_player() && candidate.threatens_player()
+        candidate.id != escort.id
+            && !candidate.escorts_player()
+            && candidate.threatens_player_among(npcs)
     })
 }
 
 /// How strongly `escort` takes `candidate` for a threat to the player at
-/// `player` (`_IsShipANearbyThreatToParent` @0x836a4); the lowest wins,
-/// and none is no threat (see [`threats`]). The score is the distance
+/// `player`, among `npcs` (`_IsShipANearbyThreatToParent` @0x836a4); the
+/// lowest wins, and none is no threat (see [`threats`]: the same
+/// `_ExtendedIsThreatToPlayer` test). The score is the distance
 /// squared from the escort; with a `radius` around the player, the
 /// candidate must be within it, and its distance squared from the player
 /// is added. It is halved for a candidate of another class than the
@@ -426,10 +459,14 @@ pub fn threats<'a>(escort: &'a Npc, npcs: &'a [Npc]) -> impl Iterator<Item = &'a
 pub fn threat_score(
     escort: &Npc,
     candidate: &Npc,
+    npcs: &[Npc],
     player: &ShipState,
     radius: Option<f32>,
 ) -> Option<f32> {
-    if candidate.id == escort.id || candidate.escorts_player() || !candidate.threatens_player() {
+    if candidate.id == escort.id
+        || candidate.escorts_player()
+        || !candidate.threatens_player_among(npcs)
+    {
         return None;
     }
     let squared = |off: Vec2| off.x * off.x + off.y * off.y;
@@ -461,7 +498,7 @@ pub fn best_threat(
 ) -> Option<NpcId> {
     let mut best: Option<(NpcId, f32)> = None;
     for candidate in npcs {
-        let Some(score) = threat_score(escort, candidate, player, radius) else {
+        let Some(score) = threat_score(escort, candidate, npcs, player, radius) else {
             continue;
         };
         if best.is_none_or(|(_, lowest)| score < lowest) {
@@ -572,6 +609,27 @@ mod tests {
         assert_eq!(WILL_ATTACK, "will attack.");
         assert_eq!(ESCORT_COMMANDS, "Escort Commands");
         assert_eq!(NO_ESCORTS, "You don't have any escorts.");
+    }
+
+    #[test]
+    fn the_will_strings_are_str_2002s_150_to_154() {
+        assert_eq!(
+            [
+                EscortCommand::Dock,
+                EscortCommand::Recall,
+                EscortCommand::Hold,
+                EscortCommand::Defend,
+                EscortCommand::Attack
+            ]
+            .map(EscortCommand::will),
+            [
+                "will return to hangar.",
+                "will return to formation.",
+                "will hold position.",
+                "will defend.",
+                WILL_ATTACK
+            ]
+        );
     }
 
     #[test]
@@ -697,11 +755,11 @@ mod tests {
             ship(4, MEDIUM, 0.0, 100.0, false),
         ];
         assert_eq!(
-            threat_score(&escort, &npcs[0], &player, None),
+            threat_score(&escort, &npcs[0], &[], &player, None),
             Some(90_000.0)
         );
         assert_eq!(
-            threat_score(&escort, &npcs[1], &player, None),
+            threat_score(&escort, &npcs[1], &[], &player, None),
             Some(40_000.0)
         );
         assert_eq!(best_threat(&escort, &npcs, &player, None), Some(NpcId(3)));
@@ -725,12 +783,12 @@ mod tests {
         let escort = ship(1, MEDIUM, 0.0, 0.0, false);
         let inside = ship(2, MEDIUM, 650.0, 0.0, true);
         assert_eq!(
-            threat_score(&escort, &inside, &player, Some(DEFEND_RADIUS)),
+            threat_score(&escort, &inside, &[], &player, Some(DEFEND_RADIUS)),
             Some(650.0 * 650.0 + 550.0 * 550.0)
         );
         let outside = ship(3, MEDIUM, 651.0, 0.0, true);
         assert_eq!(
-            threat_score(&escort, &outside, &player, Some(DEFEND_RADIUS)),
+            threat_score(&escort, &outside, &[], &player, Some(DEFEND_RADIUS)),
             None
         );
         assert_eq!(
@@ -755,7 +813,10 @@ mod tests {
         let medium = ship(1, MEDIUM, 0.0, 0.0, false);
         let same = ship(2, MEDIUM, 100.0, 0.0, true);
         let other = ship(3, EscortClass::Freighter, 140.0, 0.0, true);
-        assert_eq!(threat_score(&medium, &other, &player, None), Some(9800.0));
+        assert_eq!(
+            threat_score(&medium, &other, &[], &player, None),
+            Some(9800.0)
+        );
         assert_eq!(
             best_threat(&medium, &[same.clone(), other], &player, None),
             Some(NpcId(3))
@@ -770,7 +831,7 @@ mod tests {
         let medium_threat = ship(5, MEDIUM, 141.0, 0.0, true);
         let warship_threat = ship(6, EscortClass::Warship, 100.0, 0.0, true);
         assert_eq!(
-            threat_score(&warship, &fighter, &player, None),
+            threat_score(&warship, &fighter, &[], &player, None),
             Some(199.0 * 199.0 / 4.0)
         );
         assert_eq!(
@@ -791,7 +852,7 @@ mod tests {
         let fighter_escort = ship(1, EscortClass::Fighter, 0.0, 0.0, false);
         let warship_threat = ship(6, EscortClass::Warship, 100.0, 0.0, true);
         assert_eq!(
-            threat_score(&fighter_escort, &warship_threat, &player, None),
+            threat_score(&fighter_escort, &warship_threat, &[], &player, None),
             Some(5000.0),
             "not the other way round"
         );
@@ -806,16 +867,16 @@ mod tests {
         let escort = ship(1, MEDIUM, 100.0, -40.0, false);
         let candidate = ship(2, MEDIUM, 130.0, 0.0, true);
         assert_eq!(
-            threat_score(&escort, &candidate, &player, None),
+            threat_score(&escort, &candidate, &[], &player, None),
             Some(2500.0)
         );
         assert_eq!(
-            threat_score(&escort, &candidate, &player, Some(DEFEND_RADIUS)),
+            threat_score(&escort, &candidate, &[], &player, Some(DEFEND_RADIUS)),
             Some(2500.0 + 180.0 * 180.0 + 30.0 * 30.0)
         );
         let warship = ship(1, EscortClass::Warship, 100.0, -40.0, false);
         assert_eq!(
-            threat_score(&warship, &candidate, &player, None),
+            threat_score(&warship, &candidate, &[], &player, None),
             Some(1250.0),
             "a medium ship against a warship: half"
         );
@@ -848,12 +909,13 @@ mod tests {
         let calm = ship(3, MEDIUM, 10.0, 0.0, false);
         let mut mission_escort = ship(5, MEDIUM, 5.0, 0.0, true);
         mission_escort.mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
             slot: 0,
             behav: crate::mission::ships::ShipBehav::EscortPlayer,
             formation: Some(FormationSlot::default()),
         });
         for candidate in [&escort, &fellow, &calm, &mission_escort] {
-            assert_eq!(threat_score(&escort, candidate, &player, None), None);
+            assert_eq!(threat_score(&escort, candidate, &[], &player, None), None);
         }
         let npcs = [
             escort.clone(),
@@ -869,6 +931,38 @@ mod tests {
                 .collect::<Vec<_>>(),
             [NpcId(4)]
         );
+    }
+
+    #[test]
+    fn a_ship_attacking_a_fellow_escort_is_a_threat_to_defend_against() {
+        let player = ShipState::default();
+        let escort = ship(1, MEDIUM, 0.0, 0.0, false);
+        let mut fellow = ship(2, MEDIUM, 10.0, 0.0, false);
+        fellow.escort = Some(EscortDuty {
+            formation: FormationSlot::default(),
+            order: None,
+        });
+        let mut raider = ship(3, MEDIUM, 20.0, 0.0, false);
+        raider.goal = crate::ai::Goal::Attack(crate::combat::ShipRef::Npc(NpcId(2)));
+        let mut turncoat = fellow.clone();
+        turncoat.id = NpcId(4);
+        turncoat.goal = raider.goal;
+        let npcs = [escort.clone(), fellow, raider, turncoat];
+        assert_eq!(best_threat(&escort, &npcs, &player, None), Some(NpcId(3)));
+        assert_eq!(
+            threats(&escort, &npcs)
+                .map(|npc| npc.id)
+                .collect::<Vec<_>>(),
+            [NpcId(3)],
+            "never a fellow escort, whatever it attacks"
+        );
+        let unled = [
+            escort.clone(),
+            ship(2, MEDIUM, 10.0, 0.0, false),
+            npcs[2].clone(),
+        ];
+        assert_eq!(best_threat(&escort, &unled, &player, None), None);
+        assert_eq!(threats(&escort, &unled).count(), 0);
     }
 
     #[test]

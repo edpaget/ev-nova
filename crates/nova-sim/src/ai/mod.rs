@@ -37,6 +37,7 @@ pub mod target;
 pub mod warship;
 pub mod wimpy;
 
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
@@ -163,10 +164,18 @@ pub struct PlayerSide {
     /// The raw `Strength` of `shïp` 128, the yardstick the odds measure
     /// the rating by ([`odds`](crate::ai::odds)).
     pub yardstick: i16,
+    /// Whether its ship type is untargetable (`shïp` `Flags2` 0x0004,
+    /// [`UNTARGETABLE`](crate::cloak::UNTARGETABLE)): an NPC's missile
+    /// flies at it only with the scanner bit, and its turrets never (see
+    /// [`fire`]).
+    pub untargetable: bool,
 }
 
 /// No governments at all.
 static NO_GOVERNMENTS: Governments = Governments::empty();
+
+/// No damage aimed at any ship.
+pub(crate) static NO_AIMED_DAMAGE: BTreeMap<ShipRef, i32> = BTreeMap::new();
 
 /// What an NPC deciding can see.
 #[derive(Clone, Copy, Debug)]
@@ -184,10 +193,15 @@ pub struct Surroundings<'a> {
     /// The player's legal record in the system: its record with the
     /// system's government, none in an independent system.
     pub record: i16,
+    /// The damage the shots in flight aim at each ship
+    /// ([`Combat::targeted_damage`](crate::combat::Combat::targeted_damage)):
+    /// an NPC holds its missile while it suffices (see [`fire`]).
+    pub targeted: &'a BTreeMap<ShipRef, i32>,
 }
 
 impl<'a> Surroundings<'a> {
-    /// `npcs` among `sites`, with no player, no governments and no record.
+    /// `npcs` among `sites`, with no player, no governments, no record and
+    /// no damage aimed.
     #[must_use]
     pub fn new(sites: &'a [LandingSite], npcs: &'a [Npc]) -> Self {
         Self {
@@ -197,7 +211,14 @@ impl<'a> Surroundings<'a> {
             govts: &NO_GOVERNMENTS,
             system_govt: None,
             record: 0,
+            targeted: &NO_AIMED_DAMAGE,
         }
+    }
+
+    /// The damage the shots in flight aim at `ship`; none when none is.
+    #[must_use]
+    pub fn aimed_at(&self, ship: ShipRef) -> i32 {
+        self.targeted.get(&ship).copied().unwrap_or(0)
     }
 
     /// NPC `id`, if it is in the system.
@@ -713,6 +734,7 @@ mod tests {
             handling: Handling::default(),
             rating: 0,
             yardstick: 0,
+            untargetable: false,
         };
         around.player = Some(player);
         assert!(around.live(P));

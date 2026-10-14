@@ -19,7 +19,7 @@ use nova_view::text::fixture::MonoMetrics;
 use nova_view::ui::desc::{DESC_DIALOG, DONE_ITEM, FRAME, TEXT_ITEM};
 use nova_view::ui::new_pilot::{
     CANCEL_ITEM, GENDER_ITEM, NAME_ITEM, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome,
-    OK_ITEM as NEW_PILOT_OK_ITEM,
+    OK_ITEM as NEW_PILOT_OK_ITEM, STRICT_PLAY_ITEM,
 };
 use nova_view::ui::prefs::{
     HYPERSPACE_EFFECTS_ITEM, HYPERSPACE_EFFECTS_LABEL, KEY_SETTINGS_ITEM, MUSIC_ITEM, OK_ITEM,
@@ -465,8 +465,53 @@ fn the_new_pilot_dialog_takes_a_name_in_its_full_name_field() {
             Some(NewPilotOutcome::Create {
                 name: "Ada".to_owned(),
                 gender: nova_sim::Gender::Female,
+                strict_play: false,
             }),
             "{name}"
+        );
+    }
+}
+
+/// The stock dialog's Strict Play check box (item 4) is live: a click
+/// ticks it, and OK creates a pilot that plays Strict Play.
+#[test]
+fn the_new_pilot_dialogs_strict_play_box_is_live() {
+    for (_, path) in builds() {
+        let template = interface(&path)
+            .dialog_template(NEW_PILOT_DIALOG)
+            .expect("converts");
+        let name = path.display();
+        assert_eq!(
+            template.items[STRICT_PLAY_ITEM - 1].kind,
+            ItemSpec::CheckBox("Strict Play".to_owned()),
+            "{name}"
+        );
+        let mut dialog = NewPilotDialog::new(&template, ButtonStyle::STOCK, Rc::new(MonoMetrics))
+            .expect("builds");
+        let strict_play = dialog
+            .dialog()
+            .item_bounds(STRICT_PLAY_ITEM)
+            .expect("an item")
+            .center();
+        for pressed in [true, false] {
+            dialog.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at: strict_play,
+            });
+        }
+        for c in "Ada".chars() {
+            dialog.input(&Input::Text(c));
+        }
+        dialog.input(&key(Key::Enter));
+        assert_eq!(
+            dialog.take_outcome(),
+            Some(NewPilotOutcome::Create {
+                name: "Ada".to_owned(),
+                gender: nova_sim::Gender::Male,
+                strict_play: true,
+            }),
+            "{name}: the stock box is live"
         );
     }
 }

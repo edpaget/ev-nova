@@ -196,6 +196,7 @@ mod tests {
                 slot: 0,
                 behav: crate::mission::ships::ShipBehav::EscortPlayer,
                 formation: Some(crate::escort::FormationSlot::default()),
+                order: None,
             }),
             ..npc(2, ShipStats::default())
         };

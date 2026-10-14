@@ -129,14 +129,14 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // Either Alt (Option on a Mac), which makes a trade the most
         // possible, and flight's weapon select go back, while held.
         PhysicalKey::Code(KeyCode::AltLeft | KeyCode::AltRight) => Key::Alt,
+        // Either Shift, which turns flight's target select key back while
+        // held, and the player info's Tab to the previous tab.
+        PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight) => Key::Shift,
         // Either Control: flight's secondary fire key.
         PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) => Key::Control,
         // Either Command (Super, the Windows key, off a Mac): what flight's
         // jettison key needs held.
         PhysicalKey::Code(KeyCode::SuperLeft | KeyCode::SuperRight) => Key::Command,
-        // Either Shift: the player info's Tab goes to the previous tab
-        // while it is held.
-        PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight) => Key::Shift,
         // Flight's jettison key, by position: K on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyK) => Key::Char('k'),
         // The developer tools' toggle, by position: the key under Escape on
@@ -224,6 +224,8 @@ mod tests {
             (KeyCode::AltRight, Key::Alt),
             (KeyCode::ControlLeft, Key::Control),
             (KeyCode::ControlRight, Key::Control),
+            (KeyCode::ShiftLeft, Key::Shift),
+            (KeyCode::ShiftRight, Key::Shift),
             (KeyCode::KeyR, Key::Char('r')),
             (KeyCode::KeyK, Key::Char('k')),
             (KeyCode::SuperLeft, Key::Command),

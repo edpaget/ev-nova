@@ -3,8 +3,10 @@
 //! storyline walker, [`StoryWalker`], which drives a session through a
 //! mission chain from a script of [`Step`]s (see the `walker` module); and
 //! [`bits_allowing`], the control bits that make a test hold, for setting
-//! a pilot up directly; and [`listed_stellars`], a fake catalog's listed
-//! stellars derived from its landing sites.
+//! a pilot up directly; [`disable`], for disabling a ship directly;
+//! [`cloak`], for setting a ship's cloak directly; and
+//! [`listed_stellars`], a fake catalog's listed stellars derived from its
+//! landing sites.
 
 mod bits;
 mod walker;
@@ -21,7 +23,30 @@ use std::io;
 use std::rc::Rc;
 
 use crate::catalog::{LandingSite, ListedStellar, StellarId, SystemId};
+use crate::cloak::Cloak;
+use crate::combat::hull::Condition;
 use crate::saves::PilotStore;
+use crate::session::Session;
+use crate::traffic::npc::NpcId;
+
+/// Disables NPC `id` in `session`, if it is in the system, its armour
+/// down to 1 and its shield to 0: for a test that needs a ship the
+/// player cannot shoot, such as one of its escorts, disabled.
+pub fn disable(session: &mut Session, id: NpcId) {
+    if let Some(npc) = session.npc_mut(id) {
+        npc.reserves.shield.now = 0.0;
+        npc.reserves.armor.now = 1.0;
+        npc.condition = Condition::Disabled;
+    }
+}
+
+/// Sets NPC `id`'s cloak in `session` to `to`, if it is in the system:
+/// for a test that draws a ship cloaked.
+pub fn cloak(session: &mut Session, id: NpcId, to: Cloak) {
+    if let Some(npc) = session.npc_mut(id) {
+        npc.cloak = to;
+    }
+}
 
 /// Every stellar of `sites` (each system's landing sites, as a fake
 /// `PilotCatalog::landing_sites` gives them), by ascending ID, with every

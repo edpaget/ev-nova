@@ -17,7 +17,9 @@
 //!   menu is shut ([`EscortMenu::group`]), and the flight says what it
 //!   changed ([`escort_command_message`]): Return to Hangar
 //!   (Option-C) "returning to hangar.", or "returning to formation." when
-//!   an escort that is no fighter went back to formation.
+//!   an escort that is no fighter went back to formation. A command given
+//!   while a jump is under way says what the escorts will do instead
+//!   ("will hold position.", `STR#` 2002 #150-#154).
 //! - Fighters abandoned as the player jumps are told in brackets
 //!   ([`fighters_abandoned_message`]).
 //!
@@ -210,10 +212,13 @@ impl EscortMenu {
     }
 
     /// Closes the menu at `now` once [`MENU_TIMEOUT`] has passed since it
-    /// last took a selection or command, or when `rows` show no escort.
-    pub fn update(&mut self, now: Duration, rows: &[ClassRow; 4]) {
+    /// last took a selection or command, when `rows` show no escort, or
+    /// when no escort is `flying` (`_HandlePlayer` @0x6df59-0x6dfd0: a
+    /// row stays for a disabled ship, but the menu closes once none is
+    /// intact).
+    pub fn update(&mut self, now: Duration, rows: &[ClassRow; 4], flying: bool) {
         if let Some((_, since)) = self.open
-            && (now >= since + MENU_TIMEOUT || !any_escort(rows))
+            && (now >= since + MENU_TIMEOUT || !any_escort(rows) || !flying)
         {
             self.open = None;
         }
@@ -302,10 +307,14 @@ impl EscortMenu {
 /// What the flight says of a command that changed something
 /// (`_IssueNewEscortCommand` @0x660d5): "New escort orders assigned:  "
 /// (two spaces), the group's name, a space, and what its escorts now do;
-/// Attack with no target copied says "will attack.".
+/// Attack with no target to report says "will attack.". A command given
+/// while a jump is under way says what they will do instead
+/// ([`EscortCommand::will`], @0x66461-0x664e5).
 #[must_use]
 pub fn escort_command_message(commanded: &Commanded) -> String {
-    let doing = if commanded.command == EscortCommand::Attack && !commanded.targeted {
+    let doing = if commanded.underway {
+        commanded.command.will()
+    } else if commanded.command == EscortCommand::Attack && !commanded.targeted {
         WILL_ATTACK
     } else {
         commanded.command.doing()
@@ -458,15 +467,19 @@ mod tests {
         let mut menu = EscortMenu::default();
         menu.toggle(AT, &rows());
         let just_before = AT + MENU_TIMEOUT.saturating_sub(Duration::from_millis(1));
-        menu.update(just_before, &rows());
+        menu.update(just_before, &rows(), true);
         assert!(menu.is_open());
         menu.select(3, just_before, &rows());
-        menu.update(AT + MENU_TIMEOUT, &rows());
+        menu.update(AT + MENU_TIMEOUT, &rows(), true);
         assert!(menu.is_open(), "the selection restarted it");
         menu.touch(just_before + Duration::from_secs(5));
-        menu.update(just_before + MENU_TIMEOUT, &rows());
+        menu.update(just_before + MENU_TIMEOUT, &rows(), true);
         assert!(menu.is_open(), "so did the command");
-        menu.update(just_before + Duration::from_secs(5) + MENU_TIMEOUT, &rows());
+        menu.update(
+            just_before + Duration::from_secs(5) + MENU_TIMEOUT,
+            &rows(),
+            true,
+        );
         assert!(!menu.is_open());
         assert_eq!(MENU_TIMEOUT, Duration::from_secs(8));
         let mut shut = EscortMenu::default();
@@ -479,15 +492,25 @@ mod tests {
         let mut menu = EscortMenu::default();
         menu.toggle(AT, &rows());
         assert!(!menu.select(1, AT, &rows()));
-        menu.update(AT, &rows());
+        menu.update(AT, &rows(), true);
         assert!(menu.is_open());
+    }
+
+    #[test]
+    fn it_closes_when_no_escort_is_flying_though_rows_remain() {
+        let mut menu = EscortMenu::default();
+        menu.toggle(AT, &rows());
+        menu.update(AT, &rows(), true);
+        assert!(menu.is_open());
+        menu.update(AT, &rows(), false);
+        assert!(!menu.is_open());
     }
 
     #[test]
     fn it_closes_when_the_fleet_empties() {
         let mut menu = EscortMenu::default();
         menu.toggle(AT, &rows());
-        menu.update(AT, &none());
+        menu.update(AT, &none(), true);
         assert!(!menu.is_open());
     }
 
@@ -602,6 +625,7 @@ mod tests {
             group,
             command,
             targeted,
+            underway: false,
         })
     }
 
@@ -651,6 +675,62 @@ mod tests {
             ),
             "New escort orders assigned:  Fighters returning to hangar."
         );
+    }
+
+    #[test]
+    fn a_command_under_way_is_told_with_the_will_strings() {
+        let under_way = |group, command, targeted| {
+            escort_command_message(&Commanded {
+                group,
+                command,
+                targeted,
+                underway: true,
+            })
+        };
+        let freighters = EscortGroup::Class(EscortClass::Freighter);
+        for (group, command, targeted, said) in [
+            (
+                EscortGroup::All,
+                EscortCommand::Hold,
+                false,
+                "All ships will hold position.",
+            ),
+            (
+                freighters,
+                EscortCommand::Recall,
+                false,
+                "Freighters will return to formation.",
+            ),
+            (
+                EscortGroup::All,
+                EscortCommand::Defend,
+                false,
+                "All ships will defend.",
+            ),
+            (
+                EscortGroup::All,
+                EscortCommand::Dock,
+                false,
+                "All ships will return to hangar.",
+            ),
+            (
+                EscortGroup::All,
+                EscortCommand::Attack,
+                false,
+                "All ships will attack.",
+            ),
+            (
+                EscortGroup::All,
+                EscortCommand::Attack,
+                true,
+                "All ships will attack.",
+            ),
+        ] {
+            assert_eq!(
+                under_way(group, command, targeted),
+                format!("New escort orders assigned:  {said}")
+            );
+        }
     }
 
     #[test]

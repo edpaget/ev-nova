@@ -50,4 +50,10 @@ pub enum SimSound {
         /// Whether it plays only when the last mission sound is over.
         exclusive: bool,
     },
+    /// The player's escort command changed some escort's order or target
+    /// (`_IssueNewEscortCommand` @0x665be-0x665e1, `_beepSnd[1]`).
+    EscortsCommanded,
+    /// A disabled former escort or fighter repaired itself and rejoined
+    /// the fleet (`_HandleShip` @0x33bb1-0x33bd4, `_beepSnd[4]`).
+    EscortRepaired,
 }

@@ -18,6 +18,15 @@
 //!   store, or its fuel, and does not fire without it. A weapon that uses
 //!   ammo only at the end of a burst (`Flags3` 0x0001) spends it each
 //!   time the shots in the burst reach a multiple of its `BurstCount`.
+//! - Whether a ship has the ammunition for a weapon is `_WeaponHasAmmo`'s
+//!   test ([`Armament::has_ammo`]), asked by every caller the original
+//!   asks it from (firing, point defence, and the AI's picks in
+//!   [`fire`](crate::ai::fire) and [`odds`](crate::ai::odds)): an NPC
+//!   never uses a weapon of `Flags2` 0x0100, a cloaked ship only a weapon
+//!   of `Flags2` 0x4000, and a weapon of `Flags2` 0x0080 needs its ship's
+//!   `KeyCarried` aboard; then its rounds or fuel. An NPC's bay launch
+//!   with [`Trigger::bays`] reads its bay's rounds alone
+//!   (`_AILaunchFighter`).
 //! - Its guidance aims it ([`aim`](super::aim)): a weapon that does not
 //!   fire (a turret with no target, or one in a blind spot or out of its
 //!   arc, and point defence on the trigger) spends nothing and does not
@@ -87,7 +96,10 @@ use super::aim::Aim;
 use super::hull::{Condition, HullSpec};
 use super::projectile::ShotId;
 use super::report::{Reports, SimDiagnostic};
-use super::weapon::{Ammo, FIRST_AMMO_WEAPON, Guidance, LAST_AMMO_TYPE, WeaponSpec};
+use super::weapon::{
+    AI_WONT_USE, Ammo, FIRES_CLOAKED, FIRST_AMMO_WEAPON, Guidance, LAST_AMMO_TYPE, NEEDS_KEY_SHIP,
+    WeaponSpec,
+};
 use crate::catalog::{
     CombatCatalog, HullRecord, OutfitId, OutfitRecord, ShipId, StockWeapon, WeaponId, WeaponRecord,
 };
@@ -106,6 +118,8 @@ pub const MOD_AMMO: i16 = 3;
 
 /// The fire command a ship holds: the player's keys, or an NPC's
 /// [`Behaviour`](crate::ai::Behaviour).
+// Each flag is its own, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Trigger {
     /// The primary trigger: every weapon that is not a secondary.
@@ -122,6 +136,10 @@ pub struct Trigger {
     /// launches its fighters (see the module docs). The player's trigger
     /// never sets it.
     pub bays: bool,
+    /// This tick the ship's point defence runs: the player's every tick,
+    /// an NPC's when its AI asks for a turret (`_AIFireTurret` @0x80b0d).
+    /// [`Trigger::fires`] ignores it.
+    pub point_defence: bool,
 }
 
 impl Trigger {
@@ -147,6 +165,29 @@ impl Trigger {
             self.primary
         }
     }
+}
+
+/// The ship paying for a shot, as `_WeaponHasAmmo` asks of it (see
+/// [`Armament::has_ammo`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Shooter {
+    /// Whether it is an NPC (its slot not 0, @0xb96a).
+    pub npc: bool,
+    /// Whether it is cloaked ([`Cloak::is_cloaked`](crate::cloak::Cloak::is_cloaked),
+    /// `_ShipIsCloaked` inlined @0xb9a2-0xb9ef).
+    pub cloaked: bool,
+    /// Its class's `KeyCarried` ([`HullSpec::key_carried`]).
+    pub key_carried: Option<ShipId>,
+}
+
+impl Shooter {
+    /// The player's ship of a class with no `KeyCarried`: no NPC, and
+    /// never cloaked.
+    pub const PLAYER: Self = Self {
+        npc: false,
+        cloaked: false,
+        key_carried: None,
+    };
 }
 
 /// Where a ship's rounds of ammunition are kept.
@@ -355,17 +396,69 @@ impl Armament {
         secondaries(&self.mounts)
     }
 
-    /// Fires every weapon `trigger` picks that is ready and that `aim`
+    /// Whether `shooter` has the ammunition for a shot of `mount`, one of
+    /// its own, with `rounds` and `fuel`: `_WeaponHasAmmo` (@0xb95a-0xbafc),
+    /// in its order.
+    ///
+    /// 1. An NPC never has it for a weapon of `Flags2` [`AI_WONT_USE`].
+    /// 2. A cloaked shooter has it only for a weapon of `Flags2`
+    ///    [`FIRES_CLOAKED`].
+    /// 3. A weapon of `Flags2` [`NEEDS_KEY_SHIP`] needs the shooter's
+    ///    class to have a `KeyCarried`, and a fighter bay among its mounts
+    ///    launching that ship that holds rounds (@0xba46-0xba7f).
+    /// 4. Then it pays its own way ([`Mount::affords`]): a fighter bay
+    ///    from its own rounds, a launcher from its ammunition's, a fuel
+    ///    weapon from the fuel, and any other always.
+    ///
+    /// An NPC's rounds are kept by ammunition here, where the original
+    /// keeps them on each launcher (@0xbab4-0xbac2): rdm phase
+    /// player-led-ships/phase-33 takes that.
+    #[must_use]
+    pub fn has_ammo(
+        &self,
+        mount: &Mount,
+        rounds: &dyn Rounds,
+        fuel: Gauge,
+        shooter: Shooter,
+    ) -> bool {
+        let flags2 = mount.spec.flags2;
+        if shooter.npc && flags2 & AI_WONT_USE != 0 {
+            return false;
+        }
+        if shooter.cloaked && flags2 & FIRES_CLOAKED == 0 {
+            return false;
+        }
+        if flags2 & NEEDS_KEY_SHIP != 0 && !self.key_aboard(shooter.key_carried, rounds, fuel) {
+            return false;
+        }
+        mount.affords(rounds, fuel)
+    }
+
+    /// Whether a fighter bay launching `key` holds rounds, with `rounds`
+    /// and `fuel`; never without a `key`.
+    fn key_aboard(&self, key: Option<ShipId>, rounds: &dyn Rounds, fuel: Gauge) -> bool {
+        key.is_some_and(|key| {
+            self.mounts
+                .iter()
+                .any(|mount| mount.spec.carried == Some(key) && mount.affords(rounds, fuel))
+        })
+    }
+
+    /// Fires every weapon `trigger` picks that is ready, that `shooter`
+    /// has the ammunition for ([`Armament::has_ammo`]) and that `aim`
     /// aims, on a ship in `condition`, paying from `rounds` and `fuel`, the
     /// inaccuracy drawn on `chance`, and gives what it launched; what it
-    /// reports goes to `reports` (see the module docs).
+    /// reports goes to `reports` (see the module docs). A bay launching
+    /// with [`Trigger::bays`] reads its own rounds alone, as
+    /// `_AILaunchFighter` (@0x813cc-0x813e8) never asks `_WeaponHasAmmo`.
     // Each is a separate borrow the fight holds: the ship's command, its
-    // condition and stores, the dice, the reports and its aim.
+    // condition, who it is, its stores, the dice, the reports and its aim.
     #[allow(clippy::too_many_arguments)]
     pub fn fire(
         &mut self,
         trigger: Trigger,
         condition: Condition,
+        shooter: Shooter,
         rounds: &mut dyn Rounds,
         fuel: &mut Gauge,
         chance: &mut dyn Chance,
@@ -377,13 +470,21 @@ impl Armament {
             return launches;
         }
         let launching = self.launching_bay(trigger, rounds, *fuel);
-        for mount in &mut self.mounts {
+        for index in 0..self.mounts.len() {
+            let mount = &self.mounts[index];
             if !trigger.fires(&mount.spec) || mount.reload > 0.0 {
                 continue;
             }
-            if mount.spec.is_bay() && trigger.bays && launching != Some(mount.spec.id) {
+            let bay_launch = mount.spec.is_bay() && trigger.bays;
+            if bay_launch && launching != Some(mount.spec.id) {
                 continue;
             }
+            let paid = if bay_launch {
+                mount.affords(rounds, *fuel)
+            } else {
+                self.has_ammo(mount, rounds, *fuel, shooter)
+            };
+            let mount = &mut self.mounts[index];
             if let Guidance::Other(guidance) = mount.spec.guidance {
                 reports.report(SimDiagnostic::UnimplementedGuidance {
                     weapon: mount.spec.id,
@@ -394,7 +495,7 @@ impl Armament {
             let Some(aimed) = aim(&mount.spec) else {
                 continue;
             };
-            if !mount.affords(rounds, *fuel) {
+            if !paid {
                 continue;
             }
             let offset = inaccuracy(mount.spec.inaccuracy, chance);
@@ -410,13 +511,17 @@ impl Armament {
 
     /// Fires the point defence of a ship in `condition`, paying from
     /// `rounds` and `fuel`, the inaccuracy drawn on `chance`: the ready
-    /// point-defence weapon it can pay for with the lowest ID, at the
-    /// heading and missile `pick` gives it, if any. Nothing fires, and
-    /// nothing is spent, when `pick` gives none. What it reports goes to
-    /// `reports`.
+    /// point-defence weapon `shooter` has the ammunition for
+    /// ([`Armament::has_ammo`], `_HandleShipPointDefense` @0x3933b) with
+    /// the lowest ID, at the heading and missile `pick` gives it, if any.
+    /// Nothing fires, and nothing is spent, when `pick` gives none. What it
+    /// reports goes to `reports`.
+    // Each is a separate borrow the fight holds, as for `fire`.
+    #[allow(clippy::too_many_arguments)]
     pub fn fire_point_defence(
         &mut self,
         condition: Condition,
+        shooter: Shooter,
         rounds: &mut dyn Rounds,
         fuel: &mut Gauge,
         chance: &mut dyn Chance,
@@ -426,17 +531,20 @@ impl Armament {
         if condition != Condition::Intact {
             return None;
         }
-        let mount = self
+        let index = self
             .mounts
-            .iter_mut()
-            .filter(|mount| {
+            .iter()
+            .enumerate()
+            .filter(|(_, mount)| {
                 matches!(
                     mount.spec.guidance,
                     Guidance::PointDefence | Guidance::PointDefenceBeam
                 ) && mount.reload <= 0.0
-                    && mount.affords(rounds, *fuel)
+                    && self.has_ammo(mount, rounds, *fuel, shooter)
             })
-            .min_by_key(|mount| mount.spec.id)?;
+            .min_by_key(|(_, mount)| mount.spec.id)?
+            .0;
+        let mount = &mut self.mounts[index];
         let (bearing, missile) = pick(&mount.spec)?;
         let offset = if mount.spec.guidance == Guidance::PointDefenceBeam {
             0.0
@@ -949,7 +1057,7 @@ fn mods(
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use super::super::weapon::HIDE_WHEN_EMPTY;
+    use super::super::weapon::{AI_WONT_USE, FIRES_CLOAKED, HIDE_WHEN_EMPTY, NEEDS_KEY_SHIP};
     use super::*;
     use crate::catalog::StockWeapon;
     use crate::chance::NeverFires;
@@ -977,13 +1085,15 @@ mod tests {
         only: None,
         turrets_only: false,
         bays: false,
+        point_defence: false,
     };
 
-    /// What `armament` has to fire with.
+    /// What `armament` has to fire with, and who fires it.
     struct Supplies {
         rounds: BTreeMap<WeaponId, u32>,
         fuel: Gauge,
         reports: Reports,
+        shooter: Shooter,
     }
 
     impl Supplies {
@@ -992,6 +1102,7 @@ mod tests {
                 rounds: BTreeMap::new(),
                 fuel: Gauge::full(0.0),
                 reports: Reports::default(),
+                shooter: Shooter::PLAYER,
             }
         }
 
@@ -1000,6 +1111,7 @@ mod tests {
             let launches = armament.fire(
                 trigger,
                 Condition::Intact,
+                self.shooter,
                 &mut self.rounds,
                 &mut self.fuel,
                 &mut NeverFires,
@@ -1312,6 +1424,7 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            point_defence: false,
         };
         assert_eq!(fired(&mut armament, second), [140]);
         let both = Trigger {
@@ -1320,6 +1433,7 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            point_defence: false,
         };
         assert_eq!(fired(&mut armament, both), [128, 138, 129]);
         let primary_as_secondary = Trigger {
@@ -1328,6 +1442,7 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            point_defence: false,
         };
         assert_eq!(
             fired(&mut armament, primary_as_secondary),
@@ -1425,6 +1540,7 @@ mod tests {
             let launches = armament.fire(
                 PRIMARY,
                 Condition::Intact,
+                Shooter::PLAYER,
                 &mut BTreeMap::new(),
                 &mut Gauge::default(),
                 &mut chance,
@@ -1440,6 +1556,7 @@ mod tests {
         let launches = accurate.fire(
             PRIMARY,
             Condition::Intact,
+            Shooter::PLAYER,
             &mut BTreeMap::new(),
             &mut Gauge::default(),
             &mut chance,
@@ -1452,6 +1569,7 @@ mod tests {
         let launches = wrapping.fire(
             PRIMARY,
             Condition::Intact,
+            Shooter::PLAYER,
             &mut BTreeMap::new(),
             &mut Gauge::default(),
             &mut Draws::of(&[0]),
@@ -1480,6 +1598,7 @@ mod tests {
         let launches = armament.fire(
             PRIMARY,
             Condition::Intact,
+            Shooter::PLAYER,
             &mut rounds,
             &mut Gauge::default(),
             &mut NeverFires,
@@ -1493,6 +1612,7 @@ mod tests {
         let launches = armament.fire(
             PRIMARY,
             Condition::Intact,
+            Shooter::PLAYER,
             &mut rounds,
             &mut Gauge::default(),
             &mut NeverFires,
@@ -1515,6 +1635,7 @@ mod tests {
             let launches = armament.fire(
                 PRIMARY,
                 condition,
+                Shooter::PLAYER,
                 &mut BTreeMap::new(),
                 &mut Gauge::default(),
                 &mut NeverFires,
@@ -1619,6 +1740,7 @@ mod tests {
     ) -> Option<(Launch, ShotId)> {
         armament.fire_point_defence(
             Condition::Intact,
+            supplies.shooter,
             &mut supplies.rounds,
             &mut supplies.fuel,
             chance,
@@ -1773,6 +1895,7 @@ mod tests {
         for condition in [Condition::Disabled, Condition::Dying { ticks_left: 3 }] {
             let fired = armament.fire_point_defence(
                 condition,
+                supplies.shooter,
                 &mut supplies.rounds,
                 &mut supplies.fuel,
                 &mut NeverFires,
@@ -1833,6 +1956,7 @@ mod tests {
             let launches = armament.fire(
                 PRIMARY,
                 Condition::Intact,
+                supplies.shooter,
                 &mut supplies.rounds,
                 &mut supplies.fuel,
                 &mut NeverFires,
@@ -1845,6 +1969,235 @@ mod tests {
             assert_eq!(launches, [], "{guidance}");
             assert_eq!(armament.mounts()[0].reload, 0.0, "{guidance}");
         }
+    }
+
+    // `_WeaponHasAmmo`.
+
+    /// An NPC, uncloaked, of a class with no `KeyCarried`.
+    const NPC: Shooter = Shooter {
+        npc: true,
+        cloaked: false,
+        key_carried: None,
+    };
+
+    /// Whether `armament`'s first mount has its ammunition for `shooter`,
+    /// with `rounds` and 10 fuel.
+    fn has(armament: &Armament, shooter: Shooter, rounds: &[(i16, u32)]) -> bool {
+        let rounds: BTreeMap<WeaponId, u32> = rounds
+            .iter()
+            .map(|&(id, count)| (WeaponId(id), count))
+            .collect();
+        armament.has_ammo(&armament.mounts()[0], &rounds, Gauge::full(10.0), shooter)
+    }
+
+    fn flagged(flags2: u16) -> WeaponRecord {
+        WeaponRecord {
+            flags2,
+            ..blaster(128, 0)
+        }
+    }
+
+    #[test]
+    fn an_npc_never_has_ammunition_for_a_weapon_ai_ships_wont_use() {
+        let wont = mounted(flagged(AI_WONT_USE), 1);
+        assert!(!has(&wont, NPC, &[]));
+        assert!(has(&wont, Shooter::PLAYER, &[]), "the player uses it");
+        assert!(has(
+            &mounted(flagged(!(AI_WONT_USE | NEEDS_KEY_SHIP)), 1),
+            NPC,
+            &[]
+        ));
+        assert_eq!(AI_WONT_USE, 0x0100);
+    }
+
+    #[test]
+    fn a_cloaked_shooter_has_ammunition_only_for_a_weapon_that_fires_cloaked() {
+        let cloaked = |shooter: Shooter| Shooter {
+            cloaked: true,
+            ..shooter
+        };
+        for shooter in [NPC, Shooter::PLAYER] {
+            let plain = mounted(flagged(0), 1);
+            assert!(has(&plain, shooter, &[]));
+            assert!(!has(&plain, cloaked(shooter), &[]), "{shooter:?}");
+            let fires = mounted(flagged(FIRES_CLOAKED), 1);
+            assert!(has(&fires, cloaked(shooter), &[]), "{shooter:?}");
+        }
+        assert_eq!(FIRES_CLOAKED, 0x4000);
+    }
+
+    #[test]
+    fn a_weapon_needing_its_key_ship_has_ammunition_only_with_one_aboard() {
+        // The weapon, then a bay of ship 200 and one of ship 201.
+        let armament = Armament::new([
+            (WeaponSpec::new(&flagged(NEEDS_KEY_SHIP)), 1),
+            (WeaponSpec::new(&bay(150, 200, 0)), 1),
+            (WeaponSpec::new(&bay(151, 201, 0)), 1),
+        ]);
+        let keyed = |key| Shooter {
+            key_carried: Some(ShipId(key)),
+            ..NPC
+        };
+        assert!(has(&armament, keyed(200), &[(150, 1)]));
+        assert!(has(&armament, keyed(201), &[(151, 3)]));
+        assert!(
+            has(
+                &armament,
+                Shooter {
+                    key_carried: Some(ShipId(200)),
+                    ..Shooter::PLAYER
+                },
+                &[(150, 1)]
+            ),
+            "the player's too"
+        );
+        assert!(!has(&armament, NPC, &[(150, 1)]), "no KeyCarried");
+        assert!(!has(&armament, keyed(200), &[]), "the bay empty");
+        assert!(
+            !has(&armament, keyed(200), &[(151, 1)]),
+            "another ship's bay"
+        );
+        assert!(!has(&armament, keyed(202), &[(150, 1), (151, 1)]));
+        let unflagged = Armament::new([(WeaponSpec::new(&flagged(0)), 1)]);
+        assert!(has(&unflagged, NPC, &[]), "no key needed");
+        assert_eq!(NEEDS_KEY_SHIP, 0x0080);
+    }
+
+    #[test]
+    fn a_weapon_needing_its_key_ship_still_pays_its_own_way() {
+        let launcher = WeaponRecord {
+            ammo_type: 10,
+            ..flagged(NEEDS_KEY_SHIP)
+        };
+        let armament = Armament::new([
+            (WeaponSpec::new(&launcher), 1),
+            (WeaponSpec::new(&bay(150, 200, 0)), 1),
+        ]);
+        let keyed = Shooter {
+            key_carried: Some(ShipId(200)),
+            ..NPC
+        };
+        assert!(!has(&armament, keyed, &[(150, 1)]), "no rounds of its own");
+        assert!(has(&armament, keyed, &[(150, 1), (138, 1)]));
+    }
+
+    #[test]
+    fn rounds_and_fuel_still_decide_for_any_shooter() {
+        let launcher = mounted(
+            WeaponRecord {
+                ammo_type: 10,
+                ..blaster(128, 0)
+            },
+            1,
+        );
+        assert!(!has(&launcher, NPC, &[]));
+        assert!(has(&launcher, NPC, &[(138, 1)]));
+        let thirsty = mounted(
+            WeaponRecord {
+                ammo_type: -1200,
+                ..blaster(128, 0)
+            },
+            1,
+        );
+        assert!(!has(&thirsty, NPC, &[]), "20 fuel a shot, 10 held");
+        let sipping = mounted(
+            WeaponRecord {
+                ammo_type: -1100,
+                ..blaster(128, 0)
+            },
+            1,
+        );
+        assert!(has(&sipping, Shooter::PLAYER, &[]), "10 a shot");
+    }
+
+    #[test]
+    fn an_npc_picking_a_weapon_ai_ships_wont_use_fires_nothing() {
+        let only = Trigger {
+            only: Some(WeaponId(128)),
+            ..Trigger::default()
+        };
+        let mut armament = mounted(flagged(AI_WONT_USE), 1);
+        let mut supplies = Supplies::none();
+        supplies.shooter = NPC;
+        assert!(supplies.tick(&mut armament, only).is_empty());
+        supplies.shooter = Shooter::PLAYER;
+        assert_eq!(launched(&supplies.tick(&mut armament, PRIMARY)), [128]);
+    }
+
+    #[test]
+    fn a_cloaked_ships_point_defence_fires_only_if_it_fires_cloaked() {
+        let pick = Some((0.0, ShotId(1)));
+        let cloaked = Shooter {
+            cloaked: true,
+            ..NPC
+        };
+        let mut plain = mounted(defence(133, 9, 0, 0), 1);
+        let mut supplies = Supplies::none();
+        supplies.shooter = cloaked;
+        let fired = defend(
+            &mut plain,
+            &mut supplies,
+            &mut NeverFires,
+            pick,
+            &mut Vec::new(),
+        );
+        assert_eq!(fired, None);
+        let mut fires_cloaked = mounted(
+            WeaponRecord {
+                flags2: FIRES_CLOAKED,
+                ..defence(134, 9, 0, 0)
+            },
+            1,
+        );
+        let fired = defend(
+            &mut fires_cloaked,
+            &mut supplies,
+            &mut NeverFires,
+            pick,
+            &mut Vec::new(),
+        );
+        assert_eq!(
+            fired.map(|(launch, _)| launch.weapon.id),
+            Some(WeaponId(134))
+        );
+        supplies.shooter = NPC;
+        let fired = defend(
+            &mut plain,
+            &mut supplies,
+            &mut NeverFires,
+            pick,
+            &mut Vec::new(),
+        );
+        assert!(fired.is_some(), "uncloaked");
+    }
+
+    #[test]
+    fn a_bay_launching_with_bays_reads_its_rounds_alone() {
+        // `_AILaunchFighter` never asks `_WeaponHasAmmo`: a cloaked NPC
+        // launches from a bay AI ships won't use.
+        let (mut armament, mut supplies) = two_bays([2, 2]);
+        supplies.shooter = Shooter {
+            cloaked: true,
+            ..NPC
+        };
+        armament.mounts[1].spec.flags2 = AI_WONT_USE;
+        assert_eq!(launched(&supplies.tick(&mut armament, BAYS)), [149]);
+        let mut armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                flags2: AI_WONT_USE,
+                ..bay(149, 144, 0)
+            }),
+            1,
+        )]);
+        supplies.shooter = NPC;
+        let only = Trigger {
+            only: Some(WeaponId(149)),
+            ..Trigger::default()
+        };
+        assert!(
+            supplies.tick(&mut armament, only).is_empty(),
+            "picked alone, it asks"
+        );
     }
 
     #[test]
@@ -2639,6 +2992,7 @@ mod tests {
         only: None,
         turrets_only: false,
         bays: true,
+        point_defence: false,
     };
 
     fn launched(launches: &[Launch]) -> Vec<i16> {

@@ -240,7 +240,8 @@ pub(super) enum TrafficStep {
     None,
     /// The system is populated afresh ([`Session::populate`]).
     Populate,
-    /// It goes on in the new system with the fleet's NPCs only, the new
+    /// It goes on in the new system with the NPCs the player leads only
+    /// (`Session::player_led`), the new
     /// system's ships coming with its arrivals over time
     /// ([`Traffic::retarget`]).
     Retarget,
@@ -376,7 +377,8 @@ fn script_move_landed(arrival: bool) -> Resets {
 /// an `arrival` the system is explored, the course cleared, the fighters
 /// out dealt with and the system populated, even within the same
 /// system; otherwise only into another system does the traffic go on,
-/// with the fleet's NPCs alone.
+/// with the ships the player leads alone (`_EvalSetExp` @0x15807,
+/// @0x1590b).
 fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
     let mut set = vec![
         Reset::Jump,
@@ -753,9 +755,11 @@ impl Session {
             TrafficStep::Populate => self.populate_entering(catalog, how, chance),
             TrafficStep::Retarget => {
                 let table = self.spawn_table(catalog);
-                let fleet: BTreeSet<_> = self.fleet.iter().flatten().copied().collect();
-                self.give_back_aux_ships(&fleet);
-                self.traffic.retarget(table, &fleet);
+                // Every ship the player leads, as `_EvalSetExp`
+                // (@0x15807-0x1583e, @0x1590b-0x1593d) carries.
+                let led: BTreeSet<_> = self.player_led().map(|npc| npc.id).collect();
+                self.give_back_aux_ships(&led);
+                self.traffic.retarget(table, &led);
             }
             TrafficStep::Reset => {
                 self.give_back_aux_ships(&BTreeSet::new());

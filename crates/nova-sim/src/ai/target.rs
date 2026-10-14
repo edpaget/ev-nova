@@ -37,22 +37,40 @@
 //!    whose `Flags` has 0x0001 and who holds a grudge against the player
 //!    (see [`person`](crate::person)) picks the player, while it is in
 //!    the system and not breaking up, unless it spares it.
-//! 3. **A xenophobe**: the nearest of the player (unless `Flags` 0x0040,
+//! 3. **A mission ship of `ShipBehav` 0** (@0x89f25-0x89f84, see
+//!    [`mission_hunt`]): while the player is in the system, the player,
+//!    or none when it is disabled or breaking up and the ship has no
+//!    destroying weapons (as `_WarshipAI` drops such a target in the same think,
+//!    @0x8bc8b-0x8bca9); no later step runs, so such a hunter never turns
+//!    on another ship while the player is here, and a paid-off one takes
+//!    the player again. The `ShipBehav` 1 branch (@0x89f86-0x89fef) never
+//!    runs (see the session's `mission_escorts` module).
+//! 4. **Out of ammunition** (@0x89ff4-0x8a006): a ship with no weapon,
+//!    or every weapon out of rounds or fuel
+//!    ([`AmmoLeft::Dry`](crate::ai::fire::AmmoLeft::Dry)), takes no new
+//!    target.
+//! 5. **A xenophobe**: the nearest of the player (unless `Flags` 0x0040,
 //!    or S is G and L is above none; always with 0x0004) and every NPC
 //!    enemy not allied with it and not of its own fleet.
-//! 4. **Help allies** (@0x8a418): the ship T that the first other ship of
+//! 6. **Help allies** (@0x8a418): the ship T that the first other ship of
 //!    a government allied with its own (its own included) attacks or
 //!    flees from, when its own friend strength times its government's
 //!    `MaxOdds` is no less than T's. T may be the player, but never a
 //!    ship it spares (below). This is how police come to a trader's
 //!    defence.
-//! 5. **The player** when it is hostile, and **every NPC enemy**: the
+//! 7. **The player** when it is hostile, and **every NPC enemy**: the
 //!    nearest of them, each dropped when its friend strength is above the
 //!    ship's own times its `MaxOdds`, and a disabled NPC skipped unless
 //!    the ship has destroying weapons. The original's heaviest candidate
 //!    for a ship with escorts is a placeholder: nearest always.
-//! 6. **Threats**: the nearest NPC attacking, sniping at or fleeing from
-//!    it, other than one it spares.
+//! 8. **Threats** (`_ExtendedIsThreatToShip` asked @0x8adb6): the
+//!    nearest NPC attacking, sniping at or fleeing from it or a ship it
+//!    leads ([`Npc::threatens_npc_among`]), other than one it spares. The
+//!    player is never one here: the original asks of it while the ship
+//!    has no target (@0x8ad3c), so `_IsThreatToPlayer` of the ship is
+//!    false. The original's second threat search, for a ship of AI type
+//!    6 (@0x8ae70, @0x8af1d), never runs: only AI types 3 and 4 reach
+//!    this function (`_AIDispatch` @0x8ffc2-0x9000a).
 //!
 //! **A target is dropped** ([`dropped`], @0x8bc73, @0x8e3ef) when it is
 //! gone or breaking up; disabled while the ship has no destroying
@@ -61,22 +79,28 @@
 //!
 //! **A ship the player paid off** ([`Npc::spared`], see
 //! [`hail`](crate::hail)) spares the player too: no step gives the
-//! player, it keeps no player target, and drops one. The original makes
+//! player (a `ShipBehav` 0 mission ship aside, step 3), it keeps no
+//! player target, and drops one. The original makes
 //! such a ship a wimpy trader that leaves, which never targets the
 //! player unprovoked; this holds for any behaviour that asks here.
 //!
-//! Steps 4 and 6 never give a ship it spares. The original checks
-//! neither there (nor does `_ExtendedIsThreatToShip` @0x81a27), so its
+//! Steps 6 and 8 never give a ship it spares. The original checks
+//! neither there, and `_ExtendedIsThreatToShip` @0x81a27 excludes only a
+//! ship the asker leads (@0x81a5a), not an ally, so its
 //! police, seeing an allied trader that a stray police shot provoked,
 //! turn on their own kind until the drop at @0x8e2af clears the goal a
 //! frame later, and then take it up again. Here they never do.
 
+use crate::ai::fire::AmmoLeft;
 use crate::ai::odds::friend_strength;
 use crate::ai::{Surroundings, fire};
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 use crate::govt::{ALWAYS_ATTACKS_PLAYER, NEVER_ATTACKS_PLAYER, NOSY};
+use crate::mission::ships::ShipBehav;
 use crate::person::GRUDGE;
+#[cfg(doc)]
+use crate::rulebook::RuleKey;
 use crate::traffic::npc::Npc;
 
 /// How far, in pixels on either axis per point of aggression, a warship
@@ -158,6 +182,45 @@ fn nearest(
     best.map(|(_, ship)| ship)
 }
 
+/// Whether `npc`, a mission's special ship of `ShipBehav` 0, attacks the
+/// player among `around`: none when it is no such ship or the player is
+/// not in the system; else whether it attacks, which it does unless the
+/// player is disabled or breaking up and it has no destroying weapons
+/// ([`fire::destroys`]).
+///
+/// The handler gives up (state 2, target -1, @0x8d6be-0x8d6e9) when
+/// `_IsDisabled(player)` holds and `_AIHasDestroyingWeapons` @0x8d693
+/// does not. `_IsDisabled` @0x2ce6 compares the player's armour with a
+/// share of its capacity (@0x2d79-0x2dcc), so it holds of a breaking-up
+/// player too, whose armour is gone. With destroying weapons it goes on
+/// attacking a breaking-up player: `_ShipVisibleToShip` @0x971c has no
+/// dying test, and `_AIMakeShipAttackPlayer` @0x89c3e reads `_IsDying`
+/// only for a person's attack quote (@0x89ca7).
+///
+/// The one rule behind both `_SelectWarshipTarget` @0x89f25-0x89f84 and
+/// `_HighLevelAIHandler` @0x8d628-0x8d6ea, which the AI's dispatch reads
+/// on every think and [`select_target`] reads as its step 3. A ship the
+/// player paid off is no exception: neither site reads the bribe, whose
+/// leave (`_AIMakeShipLeave`, state 2, @0x961eb) is no state the handler
+/// skips (8, 11 and 21), so the ship takes the player again on its next
+/// think. That is the engine's default; [`RuleKey::HunterBribe`] can
+/// honour the bribe instead, and only `NovaAi`'s dispatch reads it: a
+/// paid-off ship is a wimpy trader, which never asks [`select_target`],
+/// so this rule needs no key. A cloaked or gate-emerging player is no
+/// matter: the engine has neither, so the player is always visible to it.
+#[must_use]
+pub fn mission_hunt(npc: &Npc, around: &Surroundings) -> Option<bool> {
+    npc.mission
+        .filter(|mark| mark.behav == ShipBehav::AttackPlayer)?;
+    let player = around.player.as_ref()?;
+    Some(
+        !matches!(
+            player.condition,
+            Condition::Disabled | Condition::Dying { .. }
+        ) || fire::destroys(npc),
+    )
+}
+
 /// The ship `npc` attacks among `around`, keeping `current` while it is
 /// live (see the module docs).
 #[must_use]
@@ -175,6 +238,12 @@ pub fn select_target(
         .is_some_and(|person| person.grudge && person.flags & GRUDGE != 0);
     if grudging && !npc.spared && around.live(ShipRef::Player) {
         return Some(ShipRef::Player);
+    }
+    if let Some(attacks) = mission_hunt(npc, around) {
+        return attacks.then_some(ShipRef::Player);
+    }
+    if fire::ammo_left(npc) == AmmoLeft::Dry {
+        return None;
     }
     let govts = around.govts;
     let me = ShipRef::Npc(npc.id);
@@ -232,7 +301,7 @@ pub fn select_target(
         return Some(target);
     }
     let threats = others()
-        .filter(|other| other.threatens(me))
+        .filter(|other| other.threatens_npc_among(npc.id, around.npcs))
         .map(|other| ShipRef::Npc(other.id))
         .filter(|&ship| !spares(npc, ship, around));
     nearest(npc, threats, around)
@@ -325,9 +394,12 @@ mod tests {
         ])
     }
 
-    /// NPC `id` of `govt` at (`x`, `y`), of strength 100, aggression 2.
+    /// NPC `id` of `govt` at (`x`, `y`), of strength 100, aggression 2,
+    /// armed with a harmless gun of unlimited ammunition (so it is not
+    /// dry, and holds no destroying weapon).
     fn ship(id: u32, govt: GovtId, x: f32, y: f32) -> Npc {
         let mut npc = crate::testkit::npc(id, ShipStats::new(FAST, &[]));
+        npc.armament = Armament::new([(WeaponSpec::new(&weapon(127)), 1)]);
         npc.govt = Some(govt);
         npc.state.position = Vec2::new(x, y);
         npc.hull.strength = 100.0;
@@ -351,6 +423,7 @@ mod tests {
             handling: ShipStats::new(FAST, &[]).handling,
             rating: 0,
             yardstick: 0,
+            untargetable: false,
         }
     }
 
@@ -926,6 +999,24 @@ mod tests {
     }
 
     #[test]
+    fn a_fleet_leader_turns_on_a_ship_attacking_one_it_leads() {
+        let mut escort = ship(2, NEUTRAL, 50.0, 0.0);
+        escort.leader = Some(NpcId(1));
+        let mut raider = ship(3, NEUTRAL, 600.0, 0.0);
+        raider.goal = Goal::Attack(n(2));
+        let mut sniper = ship(4, NEUTRAL, 300.0, 0.0);
+        sniper.goal = Goal::Snipe(n(2));
+        let npcs = [me(), escort, raider, sniper];
+        assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(4)), "the nearest");
+        let mut unled = npcs.clone();
+        unled[1].leader = None;
+        assert_eq!(chosen(0, &unled, None, 0, NEAR), None, "led by nobody");
+        let mut others = npcs.clone();
+        others[1].leader = Some(NpcId(9));
+        assert_eq!(chosen(0, &others, None, 0, NEAR), None, "led by another");
+    }
+
+    #[test]
     fn a_target_is_dropped_once_gone_downed_harmlessly_allied_or_of_the_fleet() {
         fn around<'a>(npcs: &'a [Npc], govts: &'a Governments) -> Surroundings<'a> {
             Surroundings {
@@ -1042,5 +1133,164 @@ mod tests {
             Some(n(2)),
             "no player in the system"
         );
+    }
+
+    // Out of ammunition.
+
+    /// [`me`] with no weapon.
+    fn dry() -> Npc {
+        Npc {
+            armament: Armament::default(),
+            ..me()
+        }
+    }
+
+    #[test]
+    fn a_ship_out_of_ammunition_takes_no_new_target() {
+        let npcs = [dry(), ship(2, ENEMY, 100.0, 0.0)];
+        assert_eq!(chosen(0, &npcs, None, -7, NEAR), None);
+        let armed = [me(), ship(2, ENEMY, 100.0, 0.0)];
+        assert_eq!(chosen(0, &armed, None, -7, NEAR), Some(P));
+    }
+
+    #[test]
+    fn a_ship_out_of_ammunition_keeps_the_ship_it_fights() {
+        let npcs = [dry(), ship(2, ENEMY, 100.0, 0.0)];
+        assert_eq!(chosen(0, &npcs, Some(n(2)), 0, NEAR), Some(n(2)));
+    }
+
+    #[test]
+    fn a_person_out_of_ammunition_still_hunts_the_player_it_holds_a_grudge_against() {
+        let govts = govts(0);
+        let mut grudger = dry();
+        grudger.person = Some(crate::traffic::npc::NpcPerson {
+            id: crate::catalog::PersonId(510),
+            flags: crate::person::GRUDGE,
+            coward: 0,
+            comm_quote: -1,
+            hail_quote: -1,
+            mission: false,
+            portrait: None,
+            invincible: false,
+            grudge: true,
+            quoted: false,
+            quoted_at: None,
+        });
+        let npcs = [grudger];
+        let around = Surroundings {
+            player: Some(player(0.0, -1000.0)),
+            govts: &govts,
+            system_govt: Some(ME),
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(select_target(&npcs[0], None, &around), Some(P));
+    }
+
+    // Mission ships.
+
+    /// The target of ship 1 of govt 140, with `ShipBehav` 0, destroying
+    /// weapons or not, spared or not, with an enemy (NPC 2) 50 below it
+    /// and, when it is in the system, the player far off in good standing
+    /// at home, in `condition`.
+    fn hunter_target(
+        destroying: bool,
+        spared: bool,
+        player_here: bool,
+        condition: Condition,
+    ) -> Option<ShipRef> {
+        let govts = govts(0);
+        let mut hunter = me();
+        hunter.spared = spared;
+        hunter.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::AttackPlayer,
+            formation: None,
+            order: None,
+        });
+        if destroying {
+            hunter.armament = Armament::new([(
+                WeaponSpec::new(&WeaponRecord {
+                    mass_dmg: 1,
+                    ..weapon(128)
+                }),
+                1,
+            )]);
+        }
+        let npcs = [hunter, ship(2, ENEMY, 0.0, 50.0)];
+        let mut at = player(0.0, -1000.0);
+        at.condition = condition;
+        let around = Surroundings {
+            player: player_here.then_some(at),
+            govts: &govts,
+            system_govt: Some(ME),
+            record: 30,
+            ..Surroundings::new(&[], &npcs)
+        };
+        select_target(&npcs[0], None, &around)
+    }
+
+    #[test]
+    fn a_ship_behav_0_ship_takes_the_player_before_a_nearer_enemy() {
+        assert_eq!(
+            hunter_target(false, false, true, Condition::Intact),
+            Some(P)
+        );
+    }
+
+    #[test]
+    fn a_ship_behav_0_ship_without_destroying_weapons_takes_nothing_while_the_player_is_disabled() {
+        assert_eq!(hunter_target(false, false, true, Condition::Disabled), None);
+        assert_eq!(
+            hunter_target(true, false, true, Condition::Disabled),
+            Some(P),
+            "it can destroy the player"
+        );
+    }
+
+    #[test]
+    fn a_ship_behav_0_ship_without_destroying_weapons_takes_nothing_while_the_player_breaks_up() {
+        let dying = Condition::Dying { ticks_left: 3 };
+        assert_eq!(hunter_target(false, false, true, dying), None);
+        assert_eq!(
+            hunter_target(true, false, true, dying),
+            Some(P),
+            "it can destroy the player"
+        );
+    }
+
+    #[test]
+    fn a_ship_behav_0_ship_falls_through_with_no_player_in_the_system() {
+        assert_eq!(
+            hunter_target(false, false, false, Condition::Intact),
+            Some(n(2))
+        );
+    }
+
+    #[test]
+    fn a_paid_off_ship_behav_0_ship_still_takes_the_player() {
+        // Neither @0x89f25 nor `_HighLevelAIHandler` @0x8d628 reads the
+        // bribe; the bribe's leave (state 2, @0x961eb) is no state it skips.
+        assert_eq!(hunter_target(false, true, true, Condition::Intact), Some(P));
+    }
+
+    #[test]
+    fn a_ship_behav_0_ship_out_of_ammunition_still_takes_the_player() {
+        let govts = govts(0);
+        let mut hunter = dry();
+        hunter.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::AttackPlayer,
+            formation: None,
+            order: None,
+        });
+        let npcs = [hunter, ship(2, ENEMY, 0.0, 50.0)];
+        let around = Surroundings {
+            player: Some(player(0.0, -1000.0)),
+            govts: &govts,
+            system_govt: Some(ME),
+            record: 30,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(select_target(&npcs[0], None, &around), Some(P));
     }
 }

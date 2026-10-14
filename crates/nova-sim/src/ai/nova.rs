@@ -18,17 +18,15 @@
 
 use std::rc::Rc;
 
-use crate::ai::fire;
+use crate::ai::fire::FireRules;
 use crate::ai::{
     Behaviour, BraveTrader, CarriedAi, EscortAi, Goal, Interceptor, Reaction, Surroundings,
     Warship, WimpyTrader,
 };
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
-use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
-use crate::mission::ships::ShipBehav;
-use crate::rulebook::{RuleKey, Rulebook};
+use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::traffic::npc::{AiType, Npc};
 
 /// Nova's combat AI (see the module docs).
@@ -40,6 +38,9 @@ pub struct NovaAi {
     interceptor: Rc<dyn Behaviour>,
     escorts: Rc<dyn Behaviour>,
     carried: Rc<dyn Behaviour>,
+    /// The source of [`RuleKey::HunterBribe`]: whether a paid-off
+    /// `ShipBehav` 0 hunter attacks the player again.
+    hunter_bribe: RuleSource,
 }
 
 impl Default for NovaAi {
@@ -54,27 +55,44 @@ impl NovaAi {
     /// the four answers the player's attack or boarding as its
     /// [`RuleKey::PiracyPolice`] entry says, the warship and interceptor
     /// persons run at their `Coward` as its [`RuleKey::PersonCoward`]
-    /// entry says, and the escorts fly as its [`RuleKey::EscortAi`] entry
+    /// entry says, the escorts fly as its [`RuleKey::EscortAi`] entry
+    /// says, a paid-off `ShipBehav` 0 hunter attacks the player again
+    /// or honours the bribe as its [`RuleKey::HunterBribe`] entry says,
+    /// and every one of them, the escorts and the carried fighters aim
+    /// their quadrant turrets as its [`RuleKey::QuadrantTurretArc`] entry
     /// says.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         let piracy_police = rulebook.source_for(RuleKey::PiracyPolice);
         let person_coward = rulebook.source_for(RuleKey::PersonCoward);
+        let fire = FireRules {
+            quadrant_arc: rulebook.source_for(RuleKey::QuadrantTurretArc),
+        };
         Self {
-            wimpy: Rc::new(WimpyTrader { piracy_police }),
-            brave: Rc::new(BraveTrader { piracy_police }),
+            wimpy: Rc::new(WimpyTrader {
+                piracy_police,
+                fire,
+            }),
+            brave: Rc::new(BraveTrader {
+                piracy_police,
+                fire,
+            }),
             warship: Rc::new(Warship {
                 piracy_police,
                 person_coward,
+                fire,
             }),
             interceptor: Rc::new(Interceptor {
                 piracy_police,
                 person_coward,
+                fire,
             }),
             escorts: Rc::new(EscortAi {
                 escort_ai: rulebook.source_for(RuleKey::EscortAi),
+                fire,
             }),
-            carried: Rc::new(CarriedAi),
+            carried: Rc::new(CarriedAi { fire }),
+            hunter_bribe: rulebook.source_for(RuleKey::HunterBribe),
         }
     }
 
@@ -129,26 +147,29 @@ impl NovaAi {
     }
 }
 
-/// Whether `npc` is a mission's special ship of `ShipBehav` 0 that
-/// attacks the player now, among `around`: on every think
-/// (`_HighLevelAIHandler` @0x8d628-0x8d6ea), while the player is in the
-/// system, unless the player is disabled and the ship has no destroying
-/// weapons ([`fire::destroys`]), when it gives up and decides as its type
-/// does. A cloaked or gate-emerging player is no matter: the engine has
-/// neither, so the player is always visible to it.
-fn hunts_player(npc: &Npc, around: &Surroundings) -> bool {
-    npc.mission
-        .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer)
-        && around
-            .player
-            .is_some_and(|player| player.condition != Condition::Disabled || fire::destroys(npc))
+impl NovaAi {
+    /// Whether `npc` is a mission's special ship of `ShipBehav` 0 that
+    /// attacks the player now, among `around`, on every think (see
+    /// [`mission_hunt`](crate::ai::target::mission_hunt)); one that does
+    /// not decides as its type does. A ship the player paid off hunts
+    /// again by the engine, and not under [`RuleSource::Bible`] for
+    /// [`RuleKey::HunterBribe`] (`_HighLevelAIHandler` @0x8d628 never reads
+    /// the bribe). Only this site reads the key: a paid-off ship is a
+    /// wimpy trader, which never asks
+    /// [`select_target`](crate::ai::target::select_target).
+    fn hunts_player(&self, npc: &Npc, around: &Surroundings) -> bool {
+        if npc.spared && self.hunter_bribe == RuleSource::Bible {
+            return false;
+        }
+        crate::ai::target::mission_hunt(npc, around) == Some(true)
+    }
 }
 
 impl Behaviour for NovaAi {
     /// A mission ship of `ShipBehav` 0 attacks the player
     /// (`hunts_player`); every other NPC decides as its behaviour does.
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
-        if hunts_player(npc, around) {
+        if self.hunts_player(npc, around) {
             return Goal::Attack(ShipRef::Player);
         }
         self.of(npc).decide(npc, around, chance)
@@ -161,7 +182,7 @@ impl Behaviour for NovaAi {
     /// A mission ship of `ShipBehav` 0 targets the player
     /// (`hunts_player`).
     fn target(&self, npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
-        if hunts_player(npc, around) {
+        if self.hunts_player(npc, around) {
             return Some(ShipRef::Player);
         }
         self.of(npc).target(npc, around)
@@ -178,7 +199,10 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
+    use crate::ai::fire;
     use crate::catalog::WeaponId;
+    use crate::combat::hull::Condition;
+    use crate::mission::ships::ShipBehav;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::ShipStats;
     use crate::testkit::{Draws, FAST};
@@ -456,6 +480,71 @@ mod tests {
         );
     }
 
+    /// What `npc`, carrying a front quadrant turret and heading 350,
+    /// fires by `ai` at the player 100 away bearing 10: across the seam.
+    fn fired_across_the_seam(ai: &NovaAi, mut npc: Npc) -> Option<WeaponId> {
+        npc.armament = crate::combat::armament::Armament::new([(
+            crate::combat::weapon::WeaponSpec::new(&crate::catalog::WeaponRecord {
+                guidance: 7,
+                speed: 1000,
+                count: 20,
+                ..crate::testkit::weapon(130)
+            }),
+            1,
+        )]);
+        npc.state.heading = 350.0;
+        npc.goal = Goal::Attack(ShipRef::Player);
+        let (sin, cos) = 10f32.to_radians().sin_cos();
+        let at = npc.state.position + crate::geometry::Vec2::new(100.0 * sin, -100.0 * cos);
+        let npcs = [npc];
+        let around = Surroundings {
+            player: Some(crate::ai::fixture::player(at.x, at.y)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        ai.trigger(&npcs[0], &around).only
+    }
+
+    #[test]
+    fn nova_ai_aims_quadrant_turrets_as_its_rulebook_says() {
+        let carried = Npc {
+            carrier: Some(crate::bay::Carrier {
+                ship: ShipRef::Npc(NpcId(9)),
+                window: 100.0,
+                reach: 40.0,
+            }),
+            ..of(1, AiType::Warship)
+        };
+        let ships: Vec<Npc> = TYPES
+            .into_iter()
+            .map(|ai_type| of(1, ai_type))
+            .chain([escorting(of(1, AiType::Warship)), carried])
+            .collect();
+        let engine = NovaAi::from_rulebook(&Rulebook::default());
+        let bible = NovaAi::from_rulebook(
+            &Rulebook::default().with_override(RuleKey::QuadrantTurretArc, RuleSource::Bible),
+        );
+        for npc in ships {
+            let kind = format!("{:?} {:?}", npc.ai_type, npc.escort.is_some());
+            assert_eq!(fired_across_the_seam(&engine, npc.clone()), None, "{kind}");
+            assert_eq!(
+                fired_across_the_seam(&NovaAi::default(), npc.clone()),
+                None,
+                "{kind}"
+            );
+            assert_eq!(
+                fired_across_the_seam(&bible, npc),
+                Some(WeaponId(130)),
+                "{kind}"
+            );
+        }
+        for source in RuleSource::ALL {
+            let rulebook = Rulebook::default().with_override(RuleKey::QuadrantTurretArc, source);
+            let ai = format!("{:?}", NovaAi::from_rulebook(&rulebook));
+            let expected = format!("quadrant_arc: {source:?}");
+            assert_eq!(ai.matches(&expected).count(), 6, "all six: {ai}");
+        }
+    }
+
     /// How each of a police warship and a police interceptor answers the
     /// player's hit on a trader allied with the police, by `ai`.
     fn police_answers(ai: &NovaAi) -> [Option<Goal>; 2] {
@@ -531,6 +620,7 @@ mod tests {
     /// `npc` as slot 1's special ship of `ShipBehav` `behav`.
     fn mission_ship(mut npc: Npc, behav: i16) -> Npc {
         npc.mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
             slot: 1,
             behav: ShipBehav::from_code(behav),
             formation: None,
@@ -648,8 +738,10 @@ mod tests {
         let dying = with_player(&npcs, Condition::Dying { ticks_left: 3 });
         assert_eq!(
             ai.decide(&npcs[0], &dying, &mut Draws::of(&[])),
-            Goal::Attack(ShipRef::Player)
+            Goal::Attack(mark.ship()),
+            "a breaking-up player is disabled to _IsDisabled"
         );
+        assert_eq!(ai.target(&npcs[0], &dying), Some(mark.ship()));
         let gone = Surroundings::new(&[], &npcs);
         assert_eq!(
             ai.decide(&npcs[0], &gone, &mut Draws::of(&[])),
@@ -672,6 +764,89 @@ mod tests {
             ai.decide(&armed[0], &disabled, &mut Draws::of(&[])),
             Goal::Attack(ShipRef::Player),
             "with destroying weapons it goes on"
+        );
+        let dying = with_player(&armed, Condition::Dying { ticks_left: 3 });
+        assert_eq!(
+            ai.decide(&armed[0], &dying, &mut Draws::of(&[])),
+            Goal::Attack(ShipRef::Player),
+            "with destroying weapons it goes on while the player breaks up"
+        );
+        assert_eq!(ai.target(&armed[0], &dying), Some(ShipRef::Player));
+    }
+
+    #[test]
+    fn a_ship_behav_0_warship_that_gives_up_on_a_disabled_player_turns_on_no_other_ship() {
+        use crate::ai::fixture::{PIRATES, TRADERS, govts, ship};
+        let govts = govts(0, 0);
+        let npcs = [
+            mission_ship(ship(1, TRADERS, AiType::Warship, 0.0, 0.0), 0),
+            ship(2, PIRATES, AiType::Warship, 0.0, 50.0),
+        ];
+        let mut player = crate::ai::fixture::player(0.0, -100.0);
+        player.condition = Condition::Disabled;
+        let around = Surroundings {
+            player: Some(player),
+            govts: &govts,
+            system_govt: Some(TRADERS),
+            record: 30,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert!(!fire::destroys(&npcs[0]));
+        let ai = NovaAi::default();
+        let goal = ai.decide(&npcs[0], &around, &mut Draws::of(&[0; 16]));
+        assert_ne!(goal, Goal::Attack(ShipRef::Npc(NpcId(2))));
+        assert_eq!(goal.quarry(), None, "{goal:?}");
+        let free = [ship(1, TRADERS, AiType::Warship, 0.0, 0.0), npcs[1].clone()];
+        let around = Surroundings {
+            npcs: &free,
+            ..around
+        };
+        assert_eq!(
+            ai.decide(&free[0], &around, &mut Draws::of(&[0; 16])),
+            Goal::Attack(ShipRef::Npc(NpcId(2))),
+            "without the mark it fights the pirate"
+        );
+    }
+
+    #[test]
+    fn a_paid_off_ship_behav_0_ship_attacks_the_player_again_unless_the_rulebook_honours_the_bribe()
+    {
+        let mut hunter = mission_ship(of(1, AiType::WimpyTrader), 0);
+        hunter.spared = true;
+        let npcs = [hunter];
+        let around = with_player(&npcs, Condition::Intact);
+        let ai = NovaAi::from_rulebook(&Rulebook::default());
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[0; 16])),
+            Goal::Attack(ShipRef::Player),
+            "the engine: it attacks again"
+        );
+        assert_eq!(ai.target(&npcs[0], &around), Some(ShipRef::Player));
+        let mark = Marked::new(7);
+        let honoured = Rulebook::default().with_override(RuleKey::HunterBribe, RuleSource::Bible);
+        let ai = NovaAi::from_rulebook(&honoured).with(AiType::WimpyTrader, mark.clone());
+        assert_eq!(
+            ai.decide(&npcs[0], &around, &mut Draws::of(&[0; 16])),
+            Goal::Attack(mark.ship()),
+            "the bribe holds: it decides as its type does"
+        );
+        assert_eq!(ai.target(&npcs[0], &around), Some(mark.ship()));
+        let unspared = [Npc {
+            spared: false,
+            ..npcs[0].clone()
+        }];
+        assert_eq!(
+            ai.decide(
+                &unspared[0],
+                &with_player(&unspared, Condition::Intact),
+                &mut Draws::of(&[0; 16])
+            ),
+            Goal::Attack(ShipRef::Player),
+            "an unspared hunter still hunts"
+        );
+        assert_eq!(
+            ai.target(&unspared[0], &with_player(&unspared, Condition::Intact)),
+            Some(ShipRef::Player)
         );
     }
 }

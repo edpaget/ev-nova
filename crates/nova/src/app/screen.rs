@@ -1719,7 +1719,7 @@ impl AppScreen {
 
     /// The New Pilot dialog's input. A name already saved, or one no file
     /// can be saved under, is refused; any other creates the pilot with the
-    /// gender chosen and flies it, begins its game (the `chär`'s `OnStart`,
+    /// gender and Strict Play chosen and flies it, begins its game (the `chär`'s `OnStart`,
     /// [`FlightView::begin`]) and saves it at once, with what that did (so
     /// Open Pilot lists it before it lands), as `_DoNewPilot` runs
     /// `OnStart` before the first save.
@@ -1729,7 +1729,11 @@ impl AppScreen {
         let outcome = dialog.take_outcome();
         match outcome {
             Some(NewPilotOutcome::Cancel) => self.close_new_pilot(),
-            Some(NewPilotOutcome::Create { name, gender }) => {
+            Some(NewPilotOutcome::Create {
+                name,
+                gender,
+                strict_play,
+            }) => {
                 let keeper = self.keeper();
                 let refusal = if pilot_key(&name).is_none() {
                     Some(UNUSABLE_NAME.to_owned())
@@ -1745,7 +1749,7 @@ impl AppScreen {
                 match Pilot::new(self.data.as_ref(), &name) {
                     Ok(pilot) => {
                         self.close_new_pilot();
-                        self.start_flight(pilot.with_gender(gender));
+                        self.start_flight(pilot.with_gender(gender).with_strict_play(strict_play));
                         if let Some(flight) = &mut self.flight {
                             flight.begin();
                             flight.take_save_due();
@@ -4858,6 +4862,35 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_new_pilot_made_with_strict_play_ticked_plays_strict() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        choose(&mut screen, MenuChoice::NewPilot);
+        let at = screen
+            .new_pilot()
+            .expect("open")
+            .dialog()
+            .item_bounds(nova_view::ui::new_pilot::STRICT_PLAY_ITEM)
+            .expect("the Strict Play box")
+            .center();
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+        type_text(&mut screen, "Ada");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(pilot(&screen).strict_play());
+        assert!(saved(&store, "Ada").strict_play());
+        let mut screen = menu_with_dialogs(&store);
+        create(&mut screen, "Bob");
+        assert!(!pilot(&screen).strict_play());
+    }
+
+    #[test]
     fn the_router_passes_the_overlays_to_each_flight() {
         let on = FlightOverlays {
             title: true,
@@ -5224,7 +5257,8 @@ pub(super) mod tests {
     }
 
     /// "Create a new pilot:", smaller: 326 x 213 at (0, 0), with OK (1),
-    /// Cancel (2) and the Full Name field (8); the rest parked.
+    /// Cancel (2), Strict Play (4) and the Full Name field (8); the rest
+    /// parked.
     fn new_pilot_template() -> DialogTemplate {
         let item = |x, y, w, h, kind| ItemTemplate {
             bounds: Bounds::at(Point::new(x, y), w, h),
@@ -5236,6 +5270,13 @@ pub(super) mod tests {
             .collect();
         items[0] = item(238.0, 183.0, 70.0, 20.0, ItemSpec::Button("OK".into()));
         items[1] = item(156.0, 183.0, 70.0, 20.0, ItemSpec::Button("Cancel".into()));
+        items[3] = item(
+            59.0,
+            122.0,
+            95.0,
+            17.0,
+            ItemSpec::CheckBox("Strict Play".into()),
+        );
         items[7] = item(
             140.0,
             30.0,

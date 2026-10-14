@@ -238,6 +238,7 @@ mod tests {
             slot: 0,
             behav: ShipBehav::EscortPlayer,
             formation: Some(FormationSlot::default()),
+            order: None,
         });
         assert_eq!(tags(&session), [Some(TargetTag::Escort); 2]);
     }

@@ -3,6 +3,33 @@
 //!
 //! Each decision, in order:
 //!
+//! - **The government's word on the player** (`_WarshipAI`
+//!   @0x8b76c-0x8b80f, `_InterceptorAI` @0x8cb0d-0x8cbf3, identical),
+//!   before anything else, for a ship with a government that is not
+//!   provoked, while the player is in the system, by its government's
+//!   `Flags`, 0x0004 first:
+//!   - **0x0004**: unless it already threatens the player or a ship the
+//!     player leads ([`Npc::threatens_player_among`], the original's
+//!     `_IsThreatToPlayer` @0x8b7b7, @0x8cb66), it turns on the player
+//!     (`_AIMakeShipAttackPlayer`). When [`dropped`] would let the player
+//!     go (disabled while the ship has no destroying weapons, or breaking
+//!     up: `_WarshipAI` drops such a target later in the same think,
+//!     @0x8bc58-0x8bca9), it has no target instead. The retreat and the
+//!     hopeless chase below still apply.
+//!   - **0x0040**: when it threatens the player or a ship the player
+//!     leads (@0x8b7f7, @0x8cbb2), it drops its target (-1, state 0) and
+//!     picks afresh ([`select_target`] with none kept, as
+//!     `_SelectWarshipTarget` does in the same think, @0x8b835-0x8b875).
+//!
+//!   So a 0x0004 ship attacking a ship the player leads goes on fighting
+//!   it, and a 0x0040 ship attacking one drops it. The original also sets
+//!   +0x96 = 1, which keeps a ship with a target in state 4
+//!   (@0x8bb0c-0x8bb44); here a hunt always attacks the target it holds.
+//!   Its provocation gate is (-900, 0] (0xdda4c, 0xdd054), the -900 bound
+//!   marking a ship still jumping in (@0x8fcf5); the engine's
+//!   provocation is never below 0, so the gate here is 0 or less. The
+//!   player is always visible to NPCs here (its cloak is
+//!   cloaking-fidelity's). The word plays no sound.
 //! - **Fleeing**, it keeps fleeing while its attacker is live; then it
 //!   decides again.
 //! - **Its target**: provoked, the attacker it took on being hit;
@@ -31,13 +58,16 @@
 //!   anything else is attacked.
 //! - With no target it goes about its business ([`idle`](super::idle)).
 
+use std::borrow::Cow;
+
+use crate::ai::fire::FireRules;
 use crate::ai::odds::{hopeless_chase, odds_against};
 use crate::ai::target::{dropped, select_target};
 use crate::ai::{Behaviour, Goal, Reaction, Surroundings, fire, idle, react};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
-use crate::govt::WARSHIPS_RETREAT;
+use crate::govt::{ALWAYS_ATTACKS_PLAYER, NEVER_ATTACKS_PLAYER, WARSHIPS_RETREAT};
 use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 
@@ -70,18 +100,53 @@ pub struct Retreat {
 /// What a hunter (a warship or interceptor) does, retreating as `retreat`
 /// says: its goal, or none when it has nothing to fight (see the module
 /// docs).
+///
+/// After a word, the retreat judges the ship by the goal the word has
+/// just given it, an attack on its new target: the original sets the
+/// target and state 4 at once (@0x8b7da-0x8b7e5; @0x8b800 then
+/// @0x8b875-0x8b881), so its odds later in the same think
+/// (`_ExtendedIsThreatToShip` asking `_IsThreatToPlayer`) count the player
+/// against a ship the word turns on it, and not against one the word
+/// turns off a ship the player leads.
+///
+/// Without a word, the retreat judges the ship by the goal it held, so
+/// the odds retreat waits for a ship that was not attacking to attack.
+/// The original's gate is state 4, which a ship has as soon as it takes
+/// a target (@0x8b857, @0x8b881), so a ship outnumbered as it picks a
+/// target retreats one think later here than in the original: a
+/// one-think lag the player can't see, noted here and not filed.
 #[must_use]
 pub fn hunt(npc: &Npc, around: &Surroundings, retreat: Retreat) -> Option<Goal> {
-    if let Goal::Flee(attacker) = npc.goal
-        && around.live(attacker)
-    {
-        return Some(Goal::Flee(attacker));
-    }
-    let keep = |ship: ShipRef| !dropped(npc, ship, around);
-    let provoker = npc.target.filter(|&ship| npc.provoked > 0.0 && keep(ship));
-    let current = npc.goal.attacking().filter(|&ship| keep(ship));
-    let target = provoker.or_else(|| select_target(npc, current, around))?;
-    if retreats(npc, around, retreat) {
+    let word = government_word(npc, around);
+    let target = match word {
+        Some(Word::TakePlayer) => {
+            if dropped(npc, ShipRef::Player, around) {
+                return None;
+            }
+            ShipRef::Player
+        }
+        Some(Word::DropTarget) => select_target(npc, None, around)?,
+        None => {
+            if let Goal::Flee(attacker) = npc.goal
+                && around.live(attacker)
+            {
+                return Some(Goal::Flee(attacker));
+            }
+            let keep = |ship: ShipRef| !dropped(npc, ship, around);
+            let provoker = npc.target.filter(|&ship| npc.provoked > 0.0 && keep(ship));
+            let current = npc.goal.attacking().filter(|&ship| keep(ship));
+            provoker.or_else(|| select_target(npc, current, around))?
+        }
+    };
+    let judged = if word.is_some() {
+        Cow::Owned(Npc {
+            goal: Goal::Attack(target),
+            ..npc.clone()
+        })
+    } else {
+        Cow::Borrowed(npc)
+    };
+    if retreats(&judged, around, retreat) {
         return Some(Goal::Flee(target));
     }
     Some(if hopeless_chase(npc, target, around) {
@@ -89,6 +154,35 @@ pub fn hunt(npc: &Npc, around: &Surroundings, retreat: Retreat) -> Option<Goal> 
     } else {
         Goal::Attack(target)
     })
+}
+
+/// What a hunter's government says of the player before anything else
+/// in its think (see the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Word {
+    /// `Flags` 0x0004: turn on the player.
+    TakePlayer,
+    /// `Flags` 0x0040: drop a target that makes it a threat to the player.
+    DropTarget,
+}
+
+/// The word `npc`'s government has on the player among `around`, if any
+/// (`_WarshipAI` @0x8b76c-0x8b80f, `_InterceptorAI` @0x8cb0d-0x8cbf3; see
+/// the module docs): none without a government, provoked, or with no
+/// player in the system.
+fn government_word(npc: &Npc, around: &Surroundings) -> Option<Word> {
+    if npc.govt.is_none() || npc.provoked > 0.0 || around.player.is_none() {
+        return None;
+    }
+    let govts = around.govts;
+    let threat = npc.threatens_player_among(around.npcs);
+    if govts.flag(npc.govt, ALWAYS_ATTACKS_PLAYER) {
+        (!threat).then_some(Word::TakePlayer)
+    } else if govts.flag(npc.govt, NEVER_ATTACKS_PLAYER) {
+        threat.then_some(Word::DropTarget)
+    } else {
+        None
+    }
 }
 
 /// Whether `npc` retreats as `retreat` says (see the module docs).
@@ -129,6 +223,8 @@ pub struct Warship {
     pub piracy_police: RuleSource,
     /// Which persons retreat at their `Coward`.
     pub person_coward: RuleSource,
+    /// The rulebook's entries its weapon pick follows.
+    pub fire: FireRules,
 }
 
 /// A warship's retreat: when outnumbered or its shields run low, both by
@@ -149,7 +245,7 @@ impl Behaviour for Warship {
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
-        fire::trigger(npc, around)
+        fire::trigger(npc, around, self.fire)
     }
 
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
@@ -375,6 +471,19 @@ mod tests {
         let pirate = ship(2, PIRATES, AiType::Warship, 0.0, 300.0);
         assert_eq!(decided(&[runner.clone(), pirate], 0), Goal::Flee(n(2)));
         assert_eq!(decided(&[runner], 0), Goal::Land(StellarId(128)));
+    }
+
+    #[test]
+    fn a_fleet_leader_turns_on_the_ship_attacking_its_escort() {
+        let mut escort = ship(2, NEUTRAL, AiType::Warship, 0.0, 100.0);
+        escort.leader = Some(NpcId(1));
+        let mut raider = ship(3, NEUTRAL, AiType::Warship, 0.0, 400.0);
+        raider.goal = Goal::Attack(n(2));
+        let npcs = [police(), escort, raider];
+        assert_eq!(decided(&npcs, 0), Goal::Attack(n(3)));
+        let mut unled = npcs.clone();
+        unled[1].leader = None;
+        assert_eq!(decided(&unled, 0), Goal::Land(StellarId(128)));
     }
 
     #[test]
@@ -617,5 +726,348 @@ mod tests {
                 "{ai_type:?}"
             );
         }
+    }
+
+    // The government's word on the player (`_WarshipAI` @0x8b76c-0x8b80f,
+    // `_InterceptorAI` @0x8cb0d-0x8cbf3).
+
+    /// The pirate warship NPC 2, 300 below.
+    fn pirate() -> Npc {
+        ship(2, PIRATES, AiType::Warship, 0.0, 300.0)
+    }
+
+    /// NPC 3, a neutral hired escort of the player's, 500 below.
+    fn hired() -> Npc {
+        let mut escort = ship(3, NEUTRAL, AiType::Warship, 0.0, 500.0);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        escort
+    }
+
+    /// The police (of `Flags` `flags`) attacking `quarry`.
+    fn attacking(quarry: ShipRef) -> Npc {
+        let mut hunter = police();
+        hunter.goal = Goal::Attack(quarry);
+        hunter
+    }
+
+    /// The decision of `npcs[0]`, a warship of the police with `flags`, the
+    /// player 100 above in `condition`, or not in the system without one.
+    fn worded(flags: u16, npcs: &[Npc], condition: Option<Condition>) -> Goal {
+        let govts = govts(0, flags);
+        let sites = sites();
+        let mut seen = around(&sites, npcs, &govts, (0.0, -100.0), 0);
+        match condition {
+            Some(condition) => {
+                if let Some(player) = seen.player.as_mut() {
+                    player.condition = condition;
+                }
+            }
+            None => seen.player = None,
+        }
+        Warship::default().decide(&npcs[0], &seen, &mut Draws::of(&[0]))
+    }
+
+    const ALWAYS: u16 = crate::govt::ALWAYS_ATTACKS_PLAYER;
+    const NEVER: u16 = crate::govt::NEVER_ATTACKS_PLAYER;
+    const INTACT: Option<Condition> = Some(Condition::Intact);
+    const IDLE: Goal = Goal::Land(StellarId(128));
+
+    #[test]
+    fn a_government_that_always_attacks_the_player_turns_an_unprovoked_warship_on_it() {
+        let npcs = [attacking(n(2)), pirate()];
+        assert_eq!(worded(ALWAYS, &npcs, INTACT), Goal::Attack(P));
+        assert_eq!(worded(0, &npcs, INTACT), Goal::Attack(n(2)), "no word");
+        let govts = govts(0, ALWAYS);
+        let sites = sites();
+        let mut interceptor = npcs.clone();
+        interceptor[0].ai_type = AiType::Interceptor;
+        let seen = around(&sites, &interceptor, &govts, (0.0, -100.0), 0);
+        assert_eq!(
+            crate::ai::Interceptor::default().decide(&interceptor[0], &seen, &mut Draws::of(&[0])),
+            Goal::Attack(P),
+            "an interceptor too"
+        );
+    }
+
+    #[test]
+    fn a_government_that_always_attacks_the_player_turns_an_unprovoked_warship_on_it_unless_it_already_fights_a_ship_the_player_leads()
+     {
+        let npcs = [attacking(n(3)), hired()];
+        assert_eq!(worded(ALWAYS, &npcs, INTACT), Goal::Attack(n(3)));
+        let fleeing = [
+            Npc {
+                goal: Goal::Flee(n(2)),
+                ..police()
+            },
+            pirate(),
+        ];
+        assert_eq!(
+            worded(ALWAYS, &fleeing, INTACT),
+            Goal::Attack(P),
+            "the word comes before the flight"
+        );
+    }
+
+    #[test]
+    fn a_government_that_always_attacks_the_player_turns_an_unprovoked_warship_on_it_but_not_when_provoked()
+     {
+        let mut provoked = attacking(n(2));
+        provoked.provoked = 5.0;
+        provoked.target = Some(n(2));
+        assert_eq!(
+            worded(ALWAYS, &[provoked.clone(), pirate()], INTACT),
+            Goal::Attack(n(2))
+        );
+        provoked.provoked = 0.0;
+        assert_eq!(
+            worded(ALWAYS, &[provoked, pirate()], INTACT),
+            Goal::Attack(P),
+            "provocation at 0 is none"
+        );
+    }
+
+    #[test]
+    fn a_government_that_always_attacks_the_player_turns_an_unprovoked_warship_on_it_and_lets_a_disabled_player_go_without_destroying_weapons()
+     {
+        let npcs = [attacking(n(2)), pirate()];
+        for condition in [Condition::Disabled, Condition::Dying { ticks_left: 3 }] {
+            assert_eq!(
+                worded(ALWAYS, &npcs, Some(condition)),
+                IDLE,
+                "{condition:?}"
+            );
+        }
+        let mut armed = npcs.clone();
+        armed[0].armament = Armament::new([(
+            WeaponSpec::new(&WeaponRecord {
+                mass_dmg: 1,
+                ..weapon(128)
+            }),
+            1,
+        )]);
+        assert_eq!(
+            worded(ALWAYS, &armed, Some(Condition::Disabled)),
+            Goal::Attack(P),
+            "it finishes the player off"
+        );
+        assert_eq!(
+            worded(ALWAYS, &armed, Some(Condition::Dying { ticks_left: 3 })),
+            IDLE,
+            "breaking up, the player is gone"
+        );
+    }
+
+    #[test]
+    fn a_government_that_always_attacks_the_player_turns_an_unprovoked_warship_on_it_with_no_player_here_nothing_changes()
+     {
+        let npcs = [attacking(n(2)), pirate()];
+        assert_eq!(worded(ALWAYS, &npcs, None), Goal::Attack(n(2)));
+    }
+
+    #[test]
+    fn a_government_that_never_attacks_the_player_makes_an_unprovoked_warship_drop_the_player_or_a_led_target()
+     {
+        // `_IsThreatToPlayer` holds at once of a target of 0, the player
+        // (@0x7f56d-0x7f570), so @0x8b7f7-0x8b806 drops it (-1, state 0).
+        let hunting = [attacking(P), pirate()];
+        assert_eq!(
+            worded(NEVER, &hunting, INTACT),
+            IDLE,
+            "nothing else to fight"
+        );
+        assert_eq!(worded(0, &hunting, INTACT), Goal::Attack(P), "no word");
+        let raider = Npc {
+            goal: Goal::Attack(n(1)),
+            ..pirate()
+        };
+        assert_eq!(
+            worded(NEVER, &[attacking(P), raider], INTACT),
+            Goal::Attack(n(2)),
+            "it picks afresh"
+        );
+        // Fleeing is none of the states `_IsThreatToPlayer` excludes.
+        let fleeing = [
+            Npc {
+                goal: Goal::Flee(n(3)),
+                ..police()
+            },
+            hired(),
+        ];
+        assert_eq!(worded(NEVER, &fleeing, INTACT), IDLE, "it stops fleeing");
+        assert_eq!(worded(0, &fleeing, INTACT), Goal::Flee(n(3)), "no word");
+        let npcs = [attacking(n(3)), hired()];
+        assert_eq!(worded(NEVER, &npcs, INTACT), IDLE);
+        assert_eq!(worded(0, &npcs, INTACT), Goal::Attack(n(3)), "no word");
+        let raider = Npc {
+            goal: Goal::Attack(n(1)),
+            ..pirate()
+        };
+        let with_raider = [attacking(n(3)), hired(), raider];
+        assert_eq!(
+            worded(NEVER, &with_raider, INTACT),
+            Goal::Attack(n(2)),
+            "it picks afresh"
+        );
+        let mut provoked = attacking(n(3));
+        provoked.provoked = 5.0;
+        provoked.target = Some(n(3));
+        assert_eq!(
+            worded(NEVER, &[provoked, hired()], INTACT),
+            Goal::Attack(n(3)),
+            "provoked"
+        );
+        let unled = [
+            attacking(n(3)),
+            ship(3, NEUTRAL, AiType::Warship, 0.0, 500.0),
+        ];
+        assert_eq!(
+            worded(NEVER, &unled, INTACT),
+            Goal::Attack(n(3)),
+            "a ship nobody leads"
+        );
+        assert_eq!(
+            worded(NEVER | ALWAYS, &npcs, INTACT),
+            Goal::Attack(n(3)),
+            "0x0004 comes first"
+        );
+    }
+
+    // The word, then the retreat and the hopeless chase (`_WarshipAI`
+    // @0x8bcd9-0x8bf35 sets state 3 on whatever target it holds;
+    // `_HighLevelAIHandler` asks `_AIEvalHopelessChase` @0x8e5fe, @0x8eace
+    // of it too).
+
+    /// The decision of `npcs[0]`, a warship of the police with `flags`,
+    /// the player 100 above moving up at `speed`.
+    fn worded_moving(flags: u16, npcs: &[Npc], speed: f32) -> Goal {
+        let govts = govts(0, flags);
+        let sites = sites();
+        let mut seen = around(&sites, npcs, &govts, (0.0, -100.0), 0);
+        if let Some(player) = seen.player.as_mut() {
+            player.state.velocity = Vec2::new(0.0, -speed);
+        }
+        Warship::default().decide(&npcs[0], &seen, &mut Draws::of(&[0]))
+    }
+
+    /// A police warship at `shield` of its 30, of `aggression`, with
+    /// `goal`.
+    fn worn(shield: f32, aggression: u8, goal: Goal) -> Npc {
+        let mut hunter = police();
+        hunter.reserves.shield.now = shield;
+        hunter.aggression = aggression;
+        hunter.goal = goal;
+        hunter
+    }
+
+    #[test]
+    fn a_warship_its_government_turns_on_the_player_still_retreats_and_keeps_fleeing() {
+        let flags = ALWAYS | WARSHIPS_RETREAT;
+        // Shields low at aggression 2 (below 15 %).
+        let npcs = [worn(4.4, 2, Goal::Attack(n(2))), pirate()];
+        assert_eq!(worded(flags, &npcs, INTACT), Goal::Flee(P), "shields");
+        // Outnumbered (101 against 100) below half its shields.
+        let mut strong = Npc {
+            goal: Goal::Attack(n(1)),
+            ..pirate()
+        };
+        strong.hull.strength = 101.0;
+        let npcs = [worn(14.9, 3, Goal::Attack(n(2))), strong.clone()];
+        assert_eq!(worded(flags, &npcs, INTACT), Goal::Flee(P), "odds");
+        // Fleeing the player is a threat to it (state 3 is none
+        // `_IsThreatToPlayer` excludes), so the word passes it by.
+        let fled = [worn(14.9, 3, Goal::Flee(P)), strong];
+        assert_eq!(
+            worded(flags, &fled, INTACT),
+            Goal::Flee(P),
+            "it keeps fleeing"
+        );
+        let rested = [worn(30.0, 3, Goal::Flee(P)), pirate()];
+        assert_eq!(
+            worded(flags, &rested, INTACT),
+            Goal::Flee(P),
+            "while the player is live, whatever its shields"
+        );
+        let npcs = [worn(30.0, 2, Goal::Attack(n(2))), pirate()];
+        assert_eq!(worded(flags, &npcs, INTACT), Goal::Attack(P), "fresh");
+    }
+
+    #[test]
+    fn a_warship_its_government_turns_on_the_player_snipes_at_one_out_of_reach() {
+        let mut heavy = attacking(n(2));
+        heavy.hull.mass = 100.0;
+        let npcs = [heavy, pirate()];
+        assert_eq!(worded_moving(ALWAYS, &npcs, 1.0), Goal::Snipe(P));
+        assert_eq!(
+            worded_moving(ALWAYS, &npcs, 0.3),
+            Goal::Attack(P),
+            "the gap opens too slowly"
+        );
+    }
+
+    #[test]
+    fn a_warship_that_drops_a_led_target_flees_from_or_snipes_at_the_one_it_picks_afresh() {
+        let mut strong = Npc {
+            goal: Goal::Attack(n(1)),
+            ..pirate()
+        };
+        strong.hull.strength = 101.0;
+        let npcs = [worn(14.9, 3, Goal::Attack(n(3))), hired(), strong];
+        assert_eq!(
+            worded(NEVER | WARSHIPS_RETREAT, &npcs, INTACT),
+            Goal::Flee(n(2)),
+            "outnumbered"
+        );
+        let mut heavy = attacking(n(3));
+        heavy.hull.mass = 100.0;
+        let mut runner = ship(2, PIRATES, AiType::WimpyTrader, 0.0, -300.0);
+        runner.goal = Goal::Flee(n(1));
+        runner.state.velocity = Vec2::new(0.0, -1.0);
+        let npcs = [heavy, hired(), runner];
+        assert_eq!(worded(NEVER, &npcs, INTACT), Goal::Snipe(n(2)), "hopeless");
+    }
+
+    // The retreat judges the goal the word has just chosen: the original
+    // sets the target and state 4 at once (@0x8b7da-0x8b7e5, @0x8b800 and
+    // @0x8b875-0x8b881), so the odds later in the same think
+    // (`_ExtendedIsThreatToShip` asking `_IsThreatToPlayer`) see it.
+
+    #[test]
+    fn a_warship_that_drops_a_led_target_weighs_its_odds_without_the_player() {
+        // A raider of 100 against it; the player (100) would make it 2.
+        let raider = Npc {
+            goal: Goal::Attack(n(1)),
+            ..pirate()
+        };
+        let npcs = [worn(14.9, 3, Goal::Attack(n(3))), hired(), raider];
+        assert_eq!(
+            worded(NEVER | WARSHIPS_RETREAT, &npcs, INTACT),
+            Goal::Attack(n(2)),
+            "even odds: it fights the ship it picked afresh"
+        );
+    }
+
+    #[test]
+    fn a_warship_its_government_turns_on_the_player_weighs_the_player_in_its_odds_at_once() {
+        // A raider of 1 against it, and the player (100) it now attacks.
+        let mut raider = Npc {
+            goal: Goal::Attack(n(1)),
+            ..pirate()
+        };
+        raider.hull.strength = 1.0;
+        let npcs = [worn(14.9, 3, Goal::Attack(n(2))), raider];
+        assert_eq!(
+            worded(ALWAYS | WARSHIPS_RETREAT, &npcs, INTACT),
+            Goal::Flee(P),
+            "101 against 100"
+        );
+        let idle = [worn(14.9, 3, Goal::Idle), npcs[1].clone()];
+        assert_eq!(
+            worded(ALWAYS | WARSHIPS_RETREAT, &idle, INTACT),
+            Goal::Flee(P),
+            "state 4 at once, from no fight"
+        );
     }
 }

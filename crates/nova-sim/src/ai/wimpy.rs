@@ -3,6 +3,7 @@
 //! once provoked it flees from its attacker (@0x8b1ac), never fighting
 //! back by choice; with the attacker gone it decides again.
 
+use crate::ai::fire::FireRules;
 use crate::ai::{Behaviour, Goal, Reaction, Surroundings, fire, idle, provoked_by, react};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
@@ -15,6 +16,8 @@ use crate::traffic::npc::Npc;
 pub struct WimpyTrader {
     /// Who comes to a ship's help ([`react::answer`]).
     pub piracy_police: RuleSource,
+    /// The rulebook's entries its weapon pick follows.
+    pub fire: FireRules,
 }
 
 impl Behaviour for WimpyTrader {
@@ -23,7 +26,7 @@ impl Behaviour for WimpyTrader {
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
-        fire::trigger(npc, around)
+        fire::trigger(npc, around, self.fire)
     }
 
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {

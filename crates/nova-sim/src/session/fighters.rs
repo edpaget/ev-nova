@@ -43,7 +43,7 @@ use crate::catalog::{OutfitId, ShipId, WeaponId};
 use crate::combat::armament::{MOD_AMMO, OutfitRounds, Rounds, Trigger, outfit_rounds};
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Sortie};
-use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot, NO_SPRITE};
+use crate::escort::{EscortDuty, EscortOrder, FormationSlot, NO_SPRITE};
 use crate::flight::ShipState;
 use crate::hyperspace::JUMP_FUEL;
 use crate::outfitter::Launcher;
@@ -76,14 +76,16 @@ impl Session {
         };
         let push = self.arsenal.weapon(sortie.bay).map_or(0.0, |bay| bay.speed);
         let kind = table::kind(&record, &self.outfits, &self.arsenal);
+        // `_LaunchFighter` sets the fighter's leader before it reads its
+        // `_ShipMaxSpeed` (@0x3d866-0x3d870, @0x3dc70), so the player's
+        // fighter is pushed against its led top speed.
+        let top_speed = match sortie.carrier {
+            ShipRef::Player => kind.stats.handling.max_speed * self.led_speed(),
+            ShipRef::Npc(_) => kind.stats.handling.max_speed,
+        };
         let state = ShipState {
             position: sortie.from.position,
-            velocity: launch_velocity(
-                sortie.from.velocity,
-                sortie.heading,
-                push,
-                kind.stats.handling.max_speed,
-            ),
+            velocity: launch_velocity(sortie.from.velocity, sortie.heading, push, top_speed),
             heading: sortie.heading,
         };
         let carrier = Carrier {
@@ -142,15 +144,6 @@ impl Session {
         self.fleet.resize(self.pilot.escorts.len() - 1, None);
         self.fleet.push(Some(id));
         self.reform();
-    }
-
-    /// The standing order a fighter of `class` launched takes by the
-    /// engine: its class's first escort's, Return to Hangar excepted.
-    fn class_order(&self, class: EscortClass) -> Option<EscortOrder> {
-        (0..self.pilot.escorts.len())
-            .find(|&index| self.escort_class(index) == class)
-            .and_then(|index| self.pilot.escorts[index].order)
-            .filter(|&order| order != EscortOrder::Dock)
     }
 
     /// NPC `carrier`'s fighter `npc` joins its fleet, of its government,
@@ -444,6 +437,7 @@ fn fighter(
 ) -> Npc {
     Npc {
         id: NpcId::default(),
+        berth: 0,
         ship,
         govt: None,
         ai_type: AiType::from_raw(kind.inherent_ai),
@@ -475,6 +469,9 @@ fn fighter(
         aux: None,
         cloak: crate::cloak::Cloak::default(),
         cloak_gear: kind.cloak,
+        led_out: false,
+        self_repair: kind.self_repair,
+        former: None,
     }
 }
 
@@ -852,6 +849,61 @@ mod tests {
         record.order
     }
 
+    /// A session of [`carrying`] with two Vipers aboard and no escort, by
+    /// the engine, the bay selected.
+    fn alone(catalog: &FakePilotCatalog) -> Session {
+        flying(catalog, pilot(catalog, 2, Vec::new()), RuleSource::Engine)
+    }
+
+    /// The order the one fighter launched from `session` takes, on its
+    /// record and its duty, which agree.
+    fn launched_order(session: &mut Session) -> Option<EscortOrder> {
+        launch(session);
+        assert_eq!(session.pilot().escorts().len(), 1, "one launched");
+        let fighter = fleet_npcs(session)[0].clone();
+        let record = session.pilot().escorts()[0];
+        assert_eq!(fighter.escort.and_then(|duty| duty.order), record.order);
+        record.order
+    }
+
+    #[test]
+    fn a_fighter_launched_takes_its_classs_mission_escorts_order() {
+        let catalog = carrying();
+        let mut session = alone(&catalog);
+        let record = &catalog.ship_records[1];
+        let class = EscortClass::of(record.escort_type, record.inherent_ai, record.fields.mass);
+        let mut escort = crate::testkit::npc(0, crate::stats::ShipStats::default());
+        escort.class = class;
+        escort.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            formation: Some(FormationSlot::default()),
+            order: Some(EscortOrder::Hold),
+        });
+        session.traffic.add_npc(escort);
+        assert_eq!(launched_order(&mut session), Some(EscortOrder::Hold));
+    }
+
+    #[test]
+    fn a_fighter_launched_takes_the_order_kept_for_its_class() {
+        let catalog = carrying();
+        let mut session = alone(&catalog);
+        assert_eq!(
+            session.command_escorts(EscortGroup::All, EscortCommand::Hold),
+            None,
+            "no escort to change"
+        );
+        assert_eq!(launched_order(&mut session), Some(EscortOrder::Hold));
+    }
+
+    #[test]
+    fn a_fighter_launched_after_return_to_hangar_takes_no_order() {
+        let catalog = carrying();
+        let mut session = alone(&catalog);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        assert_eq!(launched_order(&mut session), None);
+    }
+
     #[test]
     fn by_the_engine_a_fighter_copies_its_classs_standing_order_but_return_to_hangar() {
         assert_eq!(
@@ -1031,7 +1083,8 @@ mod tests {
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Recall,
-                targeted: false
+                targeted: false,
+                underway: false
             }),
             "the warship went back to formation"
         );
@@ -1055,7 +1108,8 @@ mod tests {
             Some(Commanded {
                 group: EscortGroup::All,
                 command: EscortCommand::Dock,
-                targeted: false
+                targeted: false,
+                underway: false
             }),
             "no escort's order changed to formation"
         );
@@ -1175,7 +1229,7 @@ mod tests {
         }
 
         fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
-            crate::ai::fire::trigger(npc, around)
+            crate::ai::fire::trigger(npc, around, crate::ai::fire::FireRules::default())
         }
 
         fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
@@ -1286,6 +1340,42 @@ mod tests {
             vipers(&session)
                 .iter()
                 .all(|npc| npc.reserves.shield.now == 30.0)
+        );
+    }
+
+    #[test]
+    fn the_players_fighter_launches_against_its_led_top_speed() {
+        // The carrier moves at 8 along the fighter's heading: past the
+        // Viper's own top speed of 6, and past 6 + 1.5, but below 1.5 x 6.
+        let catalog = carrying();
+        let (mut session, raider, _) = raided(&catalog);
+        let from = ShipState {
+            position: Vec2::ZERO,
+            velocity: Vec2::new(0.0, -8.0),
+            heading: 0.0,
+        };
+        let sortie = |carrier| Sortie {
+            carrier,
+            bay: BAY,
+            ship: VIPER,
+            from,
+            heading: 0.0,
+            target: None,
+        };
+        let launched = |session: &mut Session, carrier| {
+            assert!(session.launch_fighter(&sortie(carrier)));
+            session.npcs().last().expect("launched").state.velocity
+        };
+        assert_eq!(
+            launched(&mut session, ShipRef::Player),
+            launch_velocity(from.velocity, 0.0, 4.0, 9.0),
+            "pushed: below the led top speed"
+        );
+        assert_ne!(launch_velocity(from.velocity, 0.0, 4.0, 9.0), from.velocity);
+        assert_eq!(
+            launched(&mut session, ShipRef::Npc(raider)),
+            from.velocity,
+            "at or past its own top speed: no gain"
         );
     }
 

@@ -19,8 +19,22 @@
 //!   over its friends' (no less than 1), in raw strength. Its friends are
 //!   itself and every other intact ship allied with it; its enemies every
 //!   other intact ship, not allied, of a government at war with its own
-//!   or attacking it, and the player when the ship threatens the player
-//!   (`_ExtendedIsThreatToShip` asks `_IsThreatToPlayer` of the ship).
+//!   or attacking it, and the player, while intact, when the ship
+//!   threatens the player or a ship the player leads
+//!   ([`Npc::threatens_player_among`]: `_ExtendedIsThreatToShip` @0x81a63
+//!   asks of the player only while it is active and not disabled,
+//!   @0x81a33-0x81a4a, and then asks `_IsThreatToPlayer` of the ship,
+//!   @0x81a9c; the blessing that excuses the player, @0x81a89, is
+//!   crons-news-ranks phase 12's).
+//!   The NPC loop (@0x84af9-0x84bfd) never asks `_ExtendedIsThreatToShip`:
+//!   an NPC is an enemy by its government or while it attacks or snipes
+//!   at the ship (AI state 4, @0x84bc3, which a warship's hopeless
+//!   chase keeps, setting only the sub-state, @0x8e614), so a ship
+//!   attacking one the ship leads is no enemy in the odds (that clause
+//!   reaches only [`select_target`](crate::ai::target::select_target)'s
+//!   threat step).
+//!   The original sums strengths in 16 bits (`cvttss2si` @0x84af1,
+//!   `addw` @0x84b7e, @0x84bee); here they are not truncated.
 //!   The player's strength is multiplied by its [`rating_factor`]: its
 //!   combat rating over 6400 times the raw `Strength` of `shïp` 128 (its
 //!   `yardstick`, @0x84a7e), in whole numbers (`idivl` @0x84a91), held
@@ -41,8 +55,10 @@
 //!   short way round.
 
 use crate::ai::Surroundings;
+use crate::ai::fire::{has_ammo, suitable_missile};
 use crate::combat::ShipRef;
 use crate::combat::aim::{angle_off, bearing};
+use crate::combat::hull::Condition;
 use crate::combat::weapon::Guidance;
 use crate::flight::heading_of;
 use crate::reserves::Reserves;
@@ -123,14 +139,18 @@ pub fn odds_against(npc: &Npc, around: &Surroundings) -> f32 {
     let me = ShipRef::Npc(npc.id);
     let mut friends = npc.hull.strength;
     let mut enemies = match around.player {
-        Some(player) if npc.threatens_player() => {
+        Some(player)
+            if player.condition == Condition::Intact && npc.threatens_player_among(around.npcs) =>
+        {
             player.hull.strength * rating_factor(player.rating, player.yardstick)
         }
         _ => 0.0,
     };
-    for other in around.npcs.iter().filter(|other| {
-        other.id != npc.id && other.condition == crate::combat::hull::Condition::Intact
-    }) {
+    for other in around
+        .npcs
+        .iter()
+        .filter(|other| other.id != npc.id && other.condition == Condition::Intact)
+    {
         if around.govts.allies(npc.govt, other.govt) {
             friends += other.hull.strength;
         } else if around.govts.enemies(npc.govt, other.govt) || other.goal.attacking() == Some(me) {
@@ -144,18 +164,19 @@ pub fn odds_against(npc: &Npc, around: &Surroundings) -> f32 {
 /// module docs).
 #[must_use]
 pub fn hopeless_chase(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
-    let (quarry, top_speed) = match target {
+    let (quarry, handling) = match target {
         ShipRef::Player => match around.player {
-            Some(player) => (player.state, player.handling.max_speed),
+            Some(player) => (player.state, player.handling),
             None => return false,
         },
         ShipRef::Npc(id) => match around.npc(id) {
             Some(other) if matches!(other.goal, crate::ai::Goal::Flee(_)) => {
-                (other.state, other.stats.handling.max_speed)
+                (other.state, other.stats.handling)
             }
             _ => return false,
         },
     };
+    let top_speed = handling.max_speed;
     if npc.hull.mass <= HEAVY {
         return false;
     }
@@ -175,7 +196,8 @@ pub fn hopeless_chase(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool
     let in_reach = npc.armament.mounts().iter().any(|mount| {
         let range = mount.spec.range();
         mount.spec.guidance == Guidance::Homing
-            && mount.affords(&npc.rounds, npc.reserves.fuel)
+            && suitable_missile(&mount.spec, handling.turn_rate)
+            && has_ammo(npc, mount)
             && range * range >= MISSILE_REACH * distance
     });
     let speed = npc.stats.handling.max_speed;
@@ -251,6 +273,7 @@ mod tests {
             handling: ShipStats::new(FAST, &[]).handling,
             rating: 0,
             yardstick: 0,
+            untargetable: false,
         }
     }
 
@@ -436,6 +459,64 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_odds_count_the_player_against_a_ship_attacking_one_the_player_leads() {
+        let govts = govts();
+        let mut raider = ship(1, 143, 50.0);
+        raider.goal = Goal::Attack(n(2));
+        let mut escort = ship(2, 143, 0.0);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let odds = |escort: &Npc| {
+            let npcs = [raider.clone(), escort.clone()];
+            let around = Surroundings {
+                govts: &govts,
+                player: Some(PlayerSide {
+                    rating: 128_000,
+                    yardstick: 10,
+                    ..player(100.0)
+                }),
+                ..Surroundings::new(&[], &npcs)
+            };
+            odds_against(&npcs[0], &around)
+        };
+        assert_eq!(odds(&escort), 4.0, "the player, at its rating, against 50");
+        let stranger = Npc {
+            escort: None,
+            ..escort
+        };
+        assert_eq!(odds(&stranger), 0.0, "a ship nobody leads");
+    }
+
+    #[test]
+    fn a_disabled_or_breaking_up_player_is_no_enemy_in_the_odds() {
+        let govts = govts();
+        let mut hunting = ship(1, 140, 50.0);
+        hunting.goal = Goal::Attack(ShipRef::Player);
+        let npcs = [hunting];
+        let odds = |condition| {
+            let around = Surroundings {
+                govts: &govts,
+                player: Some(PlayerSide {
+                    condition,
+                    ..player(100.0)
+                }),
+                ..Surroundings::new(&[], &npcs)
+            };
+            odds_against(&npcs[0], &around)
+        };
+        assert_eq!(odds(Condition::Intact), 2.0);
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying { ticks_left: 1 },
+            Condition::Destroyed,
+        ] {
+            assert_eq!(odds(condition), 0.0, "{condition:?}");
+        }
+    }
+
     /// A heavy chaser (100 tons) of top speed 6 at the centre, chasing the
     /// player 300 pixels above, which opens the gap upwards at `speed`.
     fn chase(speed: f32) -> (Npc, PlayerSide) {
@@ -551,6 +632,37 @@ mod tests {
         chaser.rounds.clear();
         assert!(hopeless(&chaser, target), "no rounds");
         assert_eq!(MISSILE_REACH, 0.8);
+    }
+
+    #[test]
+    fn a_missile_unsuitable_for_an_agile_target_is_out_of_reach() {
+        let (mut chaser, mut target) = chase(1.0);
+        let (armament, rounds) = missile();
+        chaser.armament = armament;
+        chaser.rounds = rounds;
+        target.state.position = Vec2::new(0.0, -100.0);
+        target.handling.turn_rate = 3.99;
+        assert!(!hopeless(&chaser, target), "slow enough");
+        target.handling.turn_rate = 4.0;
+        assert!(hopeless(&chaser, target), "its 0 turn is too slow");
+        let mut agile = chaser.armament.mounts()[0].spec;
+        agile.turn = 2.1;
+        chaser.armament = Armament::new([(agile, 1)]);
+        assert!(!hopeless(&chaser, target), "it turns enough");
+    }
+
+    #[test]
+    fn a_missile_ai_ships_wont_use_is_out_of_reach() {
+        let (mut chaser, mut target) = chase(1.0);
+        let (armament, rounds) = missile();
+        chaser.armament = armament;
+        chaser.rounds = rounds;
+        target.state.position = Vec2::new(0.0, -100.0);
+        assert!(!hopeless(&chaser, target));
+        let mut wont = chaser.armament.mounts()[0].spec;
+        wont.flags2 = crate::combat::weapon::AI_WONT_USE;
+        chaser.armament = Armament::new([(wont, 1)]);
+        assert!(hopeless(&chaser, target));
     }
 
     #[test]

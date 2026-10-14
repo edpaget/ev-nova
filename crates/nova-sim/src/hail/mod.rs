@@ -13,9 +13,11 @@
 //! price it asks ([`Ask`]), which the player may haggle over. The session
 //! turns replies into words and does the deeds, so an option needs no
 //! catalog and no session code; adding one means registering it in
-//! [`HailOptions`] at the edge. Hailing the player's own escort, the
-//! dialog also shows its status ([`EscortStatus`]): a hired escort's
-//! daily pay, as the original's comm dialog does for its "Hired Escort".
+//! [`HailOptions`] at the edge. Hailing a ship the player leads (a hired
+//! or captured escort, a launched fighter, or a mission escort), the
+//! dialog also shows its status ([`EscortStatus`]), a hired escort's
+//! daily pay among it, as the original's comm dialog does for its
+//! "Hired Escort", until Release is pressed.
 //!
 //! **What a ship's government and type make of hails** ([`Dispositions`],
 //! `_HandlePlayerCommunication` @0x61f48 and `_DoCommDialog`
@@ -168,8 +170,9 @@ pub struct Hail<'a> {
     pub busy: bool,
     /// Whether it is already assisting the player.
     pub assisting_player: bool,
-    /// Whether any NPC threatens the player (`_IsPlayerThreatened`
-    /// @0x82442).
+    /// Whether any NPC threatens the player, or a ship the player leads
+    /// ([`Npc::threatens_player_among`]): `_IsPlayerThreatened` @0x8245c,
+    /// read by Request Assistance (`_DoCommDialog` @0x96310).
     pub player_threatened: bool,
     /// Whether an NPC other than the ship hailed threatens the player and
     /// is of a government [`Governments::npc_enemies`] finds an enemy of
@@ -286,7 +289,10 @@ impl<'a> Hail<'a> {
                 || matches!(npc.goal, Goal::Formation { .. })
                 || attacked,
             assisting_player,
-            player_threatened: around.npcs.iter().any(Npc::threatens_player),
+            player_threatened: around
+                .npcs
+                .iter()
+                .any(|other| other.threatens_player_among(around.npcs)),
             threatened_by_enemy: around.npcs.iter().any(|other| {
                 other.id != npc.id
                     && other.threatens_player()
@@ -411,8 +417,9 @@ pub struct HailView {
     /// Whether the haggle dialog says "Pay me" (a ship), rather than "Pay
     /// us" (a planet, which is not hailed here).
     pub pay_me: bool,
-    /// What it is as the player's escort, carried fighters included; none
-    /// for a ship that is not.
+    /// What it is as a ship the player leads (its escorts, carried
+    /// fighters and mission escorts); none for a ship it does not lead,
+    /// and none once Release is pressed in this hail.
     pub escort: Option<EscortStatus>,
     /// The `PICT` shown in place of its ship type's picture: a person's
     /// `HailPict` (`_DoCommDialog` @0x95a77-0x95aa5); none for any other
@@ -420,9 +427,10 @@ pub struct HailView {
     pub portrait: Option<i16>,
 }
 
-/// What the comm dialog shows of the player's own escort hailed
+/// What the comm dialog shows of a ship the player leads hailed
 /// (`_CommDialogUpdate` @0x90688-0x90704): "Hired Escort" with its daily
-/// pay, or "Escort".
+/// pay for a hired escort, or "Escort" for any other (a captured escort,
+/// a launched fighter, a mission escort).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EscortStatus {
     /// The wage a hired escort is paid a day, as
@@ -920,6 +928,24 @@ mod tests {
         assert!(
             hailing(&hunting, &plain, 0, &talk()).player_threatened,
             "itself"
+        );
+        let mut escort = flying(1, Goal::Idle);
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot::default(),
+            order: None,
+        });
+        let npcs = [escort, flying(2, Goal::Attack(ShipRef::Npc(NpcId(1))))];
+        assert!(
+            hailing(&npcs, &plain, 0, &talk()).player_threatened,
+            "a ship attacking one the player leads"
+        );
+        let npcs = [
+            flying(1, Goal::Idle),
+            flying(2, Goal::Attack(ShipRef::Npc(NpcId(1)))),
+        ];
+        assert!(
+            !hailing(&npcs, &plain, 0, &talk()).player_threatened,
+            "a ship attacking one nobody leads"
         );
     }
 

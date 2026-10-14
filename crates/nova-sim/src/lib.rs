@@ -106,8 +106,8 @@
 //!   ([`JoinFleet`]) for a person who may join, which answer each
 //!   press with an [`Answer`]: a reply, a [`Deed`] and a price asked
 //!   ([`Ask`]); the [`Help`] a ship gives the player once asked; and what
-//!   the comm dialog shows of the player's own escort ([`EscortStatus`]),
-//!   a hired one's daily pay among it.
+//!   the comm dialog shows of a ship the player leads ([`EscortStatus`]),
+//!   a hired escort's daily pay among it.
 //! - [`glow`]: how bright a ship's engine glow is: its base level, which
 //!   thrust ramps up and coasting down ([`ramp_glow`]), and the level
 //!   drawn at a tick, flickering on the [`BlinkChance`] port
@@ -219,6 +219,9 @@
 //!   ([`Session::mission_offers`]).
 //! - [`ship_change`]: changing the player's ship outside the shipyard,
 //!   as the `C`, `E` and `H` set operators do: which outfits carry over.
+//! - [`ship_layer`]: the layers ships are drawn in ([`ShipLayer`]): the
+//!   disabled at the bottom, then the ships the player leads, then the
+//!   rest with the player.
 //! - [`shipyard`]: the shipyard: which ships a stellar lists and sells
 //!   ([`Shipyard`]), their price, what the ship flown trades in for, and
 //!   buying a new one ([`ShipPurchase`]): which outfits carry over, the
@@ -246,6 +249,9 @@
 //!   original's `_MungeBriefing`: a [`TagContext`] of the pilot, the
 //!   person, the ranks and the mission's resolved [`MissionValues`], its
 //!   names read through the [`TagNames`] port ([`text_tags::expand`]).
+//! - [`top_speed`]: a ship's top speed in flight, the original's
+//!   `_ShipMaxSpeed` branch by branch: the 1.5 the player and the ships it
+//!   leads fly at without Strict Play ([`top_speed::led_speed`]).
 //! - [`traffic`]: NPC [`Traffic`]: the ships spawned from a system's
 //!   `düde`s and fleets on arrival and over time, each [`Npc`] flown by an
 //!   autopilot with the player's flight physics and stats.
@@ -310,8 +316,10 @@ pub mod rules;
 pub mod save;
 pub mod saves;
 pub mod scan;
+pub mod self_repair;
 pub mod session;
 pub mod ship_change;
+pub mod ship_layer;
 pub mod shipyard;
 pub mod sound;
 pub mod stats;
@@ -322,6 +330,7 @@ pub mod targeting;
 #[cfg(test)]
 mod testkit;
 pub mod text_tags;
+pub mod top_speed;
 pub mod traffic;
 pub mod wares;
 
@@ -416,6 +425,7 @@ pub use session::{
     PersonQuote, RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled,
     ShipChangeRules, StellarPick, VenueOffer,
 };
+pub use ship_layer::ShipLayer;
 pub use shipyard::{
     Rating, ShipFacts, ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard,
     StockLine,

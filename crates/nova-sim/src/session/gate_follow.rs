@@ -369,7 +369,13 @@ pub(super) mod tests {
                     .all(crate::traffic::npc::Npc::mission_escort),
                 "{kind:?}: in formation"
             );
-            assert!(!session.npcs().iter().any(Npc::emerging), "{kind:?}");
+            assert!(
+                session
+                    .npcs()
+                    .iter()
+                    .all(|npc| npc.emerging() && npc.led_out),
+                "{kind:?}: then led out of the exit gate (see gate_escorts)"
+            );
             assert_eq!(timer(&session), (-1, 0), "{kind:?}: not restarted");
         }
         let catalog = gated(following(1, 1), 0);
@@ -384,7 +390,7 @@ pub(super) mod tests {
     }
 
     /// [`exit_gate`] without the settling: the events raised stay raised.
-    fn exit_gate_raising(
+    pub(in crate::session) fn exit_gate_raising(
         session: &mut Session,
         catalog: &FakePilotCatalog,
         kind: GateKind,
@@ -406,7 +412,7 @@ pub(super) mod tests {
     }
 
     /// Where the exit gate of `kind` is in 131.
-    fn exit_of(kind: GateKind) -> Vec2 {
+    pub(in crate::session) fn exit_of(kind: GateKind) -> Vec2 {
         match kind {
             GateKind::Hypergate => Vec2::new(100.0, 200.0),
             GateKind::Wormhole => Vec2::new(-300.0, 40.0),

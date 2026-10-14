@@ -25,6 +25,12 @@ pub enum UiSound {
     /// The interface refused what was asked of it: the original's
     /// `SysBeep`.
     Alert,
+    /// E opened or closed the escort menu (`_beepSnd[0]`).
+    EscortMenuToggled,
+    /// E found no escort to command (`_beepSnd[3]`).
+    NoEscorts,
+    /// The escort menu selected a group (`_beepSnd[2]`).
+    EscortGroupSelected,
     /// The bar's news dialog opened: `_DoNewsDialog` plays `_beepSnd[1]`
     /// as it opens (`PlaySound` @0x47f36).
     NewsOpened,

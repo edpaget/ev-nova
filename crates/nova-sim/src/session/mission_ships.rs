@@ -2030,6 +2030,7 @@ pub(super) mod tests {
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         session.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
             slot: 5,
             behav: ShipBehav::Own,
             formation: None,
@@ -2278,6 +2279,7 @@ pub(super) mod tests {
         let _ = session.take_messages();
         session.traffic.npcs_mut()[0].mission = None;
         session.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
             slot: 5,
             behav: ShipBehav::Own,
             formation: None,
@@ -2300,6 +2302,7 @@ pub(super) mod tests {
     /// A mark of slot `slot`'s ships.
     fn mark(slot: u8) -> crate::traffic::npc::MissionMark {
         crate::traffic::npc::MissionMark {
+            order: None,
             slot,
             behav: ShipBehav::Own,
             formation: None,
@@ -2853,6 +2856,7 @@ pub(super) mod tests {
         assert!(!observed_after(|session| {
             for npc in session.traffic.npcs_mut() {
                 npc.mission = Some(crate::traffic::npc::MissionMark {
+                    order: None,
                     slot: 5,
                     behav: ShipBehav::Own,
                     formation: None,
@@ -2920,6 +2924,7 @@ pub(super) mod tests {
         assert!(!observed_after(|session| {
             let first = session.npcs()[0].id;
             session.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
+                order: None,
                 slot: 5,
                 behav: ShipBehav::Own,
                 formation: None,
@@ -3624,6 +3629,7 @@ pub(super) mod tests {
         let mut session = in_flight_with(&catalog, 1);
         if let Some(npc) = session.traffic.npcs_mut().first_mut() {
             npc.mission = Some(crate::traffic::npc::MissionMark {
+                order: None,
                 slot: 5,
                 behav: ShipBehav::Own,
                 formation: None,
@@ -3792,6 +3798,7 @@ pub(super) mod tests {
         let mut session = in_flight(&catalog);
         session.traffic.npcs_mut()[0].mission = None;
         session.traffic.npcs_mut()[1].mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
             slot: 5,
             behav: ShipBehav::Own,
             formation: None,
@@ -3799,6 +3806,24 @@ pub(super) mod tests {
         full_armour(&mut session);
         fight(&mut session, 1);
         assert_eq!(conditions(&session), [Condition::Intact; 2]);
+    }
+
+    #[test]
+    fn a_held_rescue_ship_that_repairs_itself_gets_its_armour_back_and_stays_disabled() {
+        let catalog = goal_catalog(5, 0);
+        let mut session = in_flight(&catalog);
+        for npc in session.traffic.npcs_mut() {
+            npc.self_repair = true;
+        }
+        let mut chance = crate::testkit::Draws::of(&[0, 0]);
+        session.self_repair(crate::combat::Rules::default(), &mut chance);
+        assert_eq!(chance.asked, [crate::self_repair::REPAIR_ODDS; 2]);
+        assert_eq!(conditions(&session), [Condition::Disabled; 2], "held");
+        for npc in session.npcs() {
+            let repaired =
+                crate::self_repair::repaired_armor(npc.reserves.armor.max, npc.hull.tough);
+            assert!((npc.reserves.armor.now - repaired).abs() < 1e-4);
+        }
     }
 
     #[test]

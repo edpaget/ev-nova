@@ -193,14 +193,26 @@ impl Session {
         Ok(npc)
     }
 
-    /// What NPC `id` is as the player's escort: its wage paid a day when
-    /// hired; none for an NPC not of the fleet.
-    fn escort_status(&self, id: NpcId) -> Option<EscortStatus> {
-        let index = self.fleet.iter().position(|&placed| placed == Some(id))?;
-        let escort = self.pilot.escorts.get(index)?;
-        Some(EscortStatus {
-            wage: escort.hired().then(|| self.paid_wage(escort)),
-        })
+    /// What `npc` is as a ship the player leads, as `_CommDialogUpdate`'s
+    /// status block reads it (@0x90688-0x906ff): none for a ship it does
+    /// not lead (+0x9a not 0) or once Release is pressed in this hail
+    /// (`releasing`, the flag at 0xdef2c); else "Escort", or "Hired
+    /// Escort" with its wage for a hired fleet escort (+0xbb). Whether it
+    /// is led is [`Npc::escorts_player`], the relation
+    /// [`Session::player_led`] filters on, asked of the ship in hand; a
+    /// mission escort is not of the fleet, so it has no wage.
+    fn escort_status(&self, npc: &Npc, releasing: bool) -> Option<EscortStatus> {
+        if releasing || !npc.escorts_player() {
+            return None;
+        }
+        let wage = self
+            .fleet
+            .iter()
+            .position(|&placed| placed == Some(npc.id))
+            .and_then(|index| self.pilot.escorts.get(index))
+            .filter(|escort| escort.hired())
+            .map(|escort| self.paid_wage(escort));
+        Some(EscortStatus { wage })
     }
 
     /// The mission of `npc`, when it is a mission ship: its slot's
@@ -321,7 +333,7 @@ impl Session {
             options: buttons,
             asking: talk.conversation.asking(),
             pay_me: true,
-            escort: self.escort_status(npc.id),
+            escort: self.escort_status(npc, talk.release),
             portrait: npc.person.and_then(|person| person.portrait),
         })
     }
@@ -1060,10 +1072,16 @@ mod tests {
     // Answers and haggling.
 
     /// The pirates' warship (NPC 0, AI 3), 300 above the player at the
-    /// centre and attacking it after a tick of Nova's AI, targeted.
+    /// centre and attacking it after a tick of Nova's AI, targeted. It
+    /// carries a harmless gun of unlimited ammunition, as a warship out
+    /// of ammunition takes no target (@0x89ff4).
     fn pirate(catalog: &FakePilotCatalog, govt: GovtId) -> Session {
         let mut session = targeting(catalog);
         npc(&mut session).govt = Some(govt);
+        npc(&mut session).armament = crate::combat::armament::Armament::new([(
+            crate::combat::weapon::WeaponSpec::new(&crate::testkit::weapon(127)),
+            1,
+        )]);
         session.tick_traffic(catalog, &NovaAi::default(), &mut crate::NeverFires);
         assert_eq!(session.npcs()[0].goal, Goal::Attack(ShipRef::Player));
         session
@@ -1804,6 +1822,60 @@ mod tests {
         let catalog = hailable();
         let mut session = targeting(&catalog);
         assert_eq!(hail(&mut session, &catalog).escort, None);
+    }
+
+    /// [`targeting`]'s ship marked as a ship of the mission in slot 0
+    /// that escorts the player, in the player's formation when
+    /// `formation` holds one.
+    fn mission_escort(
+        catalog: &FakePilotCatalog,
+        formation: Option<crate::escort::FormationSlot>,
+    ) -> Session {
+        let mut session = targeting(catalog);
+        npc(&mut session).mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: ShipBehav::EscortPlayer,
+            formation,
+            order: None,
+        });
+        session
+    }
+
+    #[test]
+    fn hailing_a_mission_escort_shows_it_is_an_escort_with_no_pay() {
+        let catalog = hailable();
+        let mut session = mission_escort(&catalog, Some(crate::escort::FormationSlot::default()));
+        assert_eq!(npc(&mut session).escort, None, "not of the fleet");
+        assert!(session.player_led().any(|led| led.id == NpcId(0)));
+        let view = hail(&mut session, &catalog);
+        assert_eq!(view.escort, Some(crate::hail::EscortStatus { wage: None }));
+    }
+
+    #[test]
+    fn a_mission_ship_not_in_the_formation_shows_no_escort_status() {
+        let catalog = hailable();
+        let mut session = mission_escort(&catalog, None);
+        assert!(!session.player_led().any(|led| led.id == NpcId(0)));
+        assert_eq!(hail(&mut session, &catalog).escort, None);
+    }
+
+    #[test]
+    fn once_release_is_pressed_the_escort_shows_no_status() {
+        let catalog = hailable();
+        let mut session = escorting(&catalog);
+        hail(&mut session, &catalog);
+        let view = session
+            .answer(0, &catalog, &HailOptions::default(), &mut Draws::of(&[]))
+            .expect("answered");
+        assert_eq!(view.escort, None, "release pending (0xdef2c)");
+        assert!(!view.hostile);
+        assert!(session.is_escort(NpcId(0)), "not yet released");
+        let view = hail(&mut session, &catalog);
+        assert_eq!(
+            view.escort,
+            Some(crate::hail::EscortStatus { wage: None }),
+            "the flag is cleared as the dialog opens"
+        );
     }
 
     #[test]

@@ -123,6 +123,12 @@ pub struct Shot {
     pub id: ShotId,
     /// The ship it was fired at, if any: a homing shot's quarry.
     pub target: Option<ShipRef>,
+    /// The ship its damage counts as aimed at (the original's shot +0x2a,
+    /// `_SpawnShot`'s second argument): its firer's target, whatever its
+    /// guidance; none for a front-quadrant turret firing ahead or for
+    /// point defence, and a sub-munition's own target. See
+    /// [`Combat::targeted_damage`](super::Combat::targeted_damage).
+    pub aimed_at: Option<ShipRef>,
     /// Whether a homing shot has lost its target: it flies straight on
     /// and hits nothing.
     pub lost: bool,
@@ -163,6 +169,7 @@ impl Shot {
             age: 0,
             id: ShotId::default(),
             target: None,
+            aimed_at: None,
             lost: false,
             durability: weapon.durability,
             generation: 0,
