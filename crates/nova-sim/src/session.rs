@@ -358,6 +358,7 @@ mod player_led;
 mod radar;
 mod ranks;
 mod red_alert;
+mod sabotage;
 mod script_effects;
 mod self_repair;
 mod ship_change;
@@ -1487,7 +1488,8 @@ impl Session {
 
     /// Whether the hold ran out since this was last asked: the seam at the
     /// countdown's expiry, before the original's `gPause = 1` (0x68838),
-    /// where the sabotage dialogs (phase 8) show over the flight scene.
+    /// where the sabotage dialogs show over the flight scene
+    /// ([`Session::sabotage_death_descs`]).
     /// True once.
     pub fn take_hold_expired(&mut self) -> bool {
         std::mem::take(&mut self.hold_expiry_due)

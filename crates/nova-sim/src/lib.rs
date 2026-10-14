@@ -314,6 +314,7 @@ pub mod red_alert;
 pub mod reserves;
 pub mod rulebook;
 pub mod rules;
+pub mod sabotage;
 pub mod save;
 pub mod saves;
 pub mod scan;
@@ -418,6 +419,7 @@ pub use red_alert::{
 };
 pub use reserves::{Gauge, Reserve, Reserves};
 pub use rulebook::{RuleKey, RuleSource, Rulebook};
+pub use sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL, Sabotage, death_descs, sabotage_flag};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{

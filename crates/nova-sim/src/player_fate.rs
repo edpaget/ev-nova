@@ -86,7 +86,7 @@ pub enum Ending {
         ticks_left: u32,
     },
     /// The hold has run out, and the fade has not begun: the seam where
-    /// the sabotage dialogs (phase 8) show over the flight scene. It reads
+    /// the sabotage dialogs show over the flight scene. It reads
     /// as [`PlayerFate::Holding`] with no ticks left.
     Expired,
     /// [`PlayerFate::Fading`].
