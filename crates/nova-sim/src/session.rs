@@ -4514,7 +4514,11 @@ impl Session {
     /// "Use As Escort" leaves it as it is. By the engine reading of
     /// [`RuleKey::CaptureCargo`], "Use As My Ship" leaves the commodities
     /// with the old ship, the `jünk` and the mission cargo staying with the
-    /// player; by the other, the player keeps them. The session then resets
+    /// player; by the other, the player keeps them. The commodities go,
+    /// and the old ship joins the fleet, before the hooks run, as the
+    /// original sets both up first (@0x412e6-0x412fe, @0x41188-0x4156f),
+    /// so the hooks' resets count its holds when it is a trader; its NPC
+    /// is placed once the player has left it. The session then resets
     /// twice with the old ship in the fleet (@0x419fd, @0x41a3e) and once
     /// more as the plunder dialog closes (@0x94a0b), each trim cutting the
     /// commodities to the new fleet's holds while they are past them;
@@ -4539,9 +4543,6 @@ impl Session {
             return Some(Assigned::Abandoned);
         };
         let hooks_first = self.hook_rules().capture_hook_order == RuleSource::Engine;
-        if hooks_first {
-            self.retire_for_capture(record.id, chance);
-        }
         let stock = ShipStats::new(self.fields, &outfit_mods(&self.defaults, &self.outfits));
         let old = Escort {
             ship: self.pilot.ship,
@@ -4551,6 +4552,25 @@ impl Session {
             wage: None,
             person: None,
         };
+        // The commodities stay with the old ship, the player taking the
+        // captured ship's, which the engine's ships carry none of
+        // (@0x412e6-0x412fe, @0x41762-0x41779), as `capture_cargo` reads:
+        // before the hooks, as the original swaps them.
+        if self.rules.source_for(RuleKey::CaptureCargo) == RuleSource::Engine {
+            self.pilot
+                .cargo
+                .retain(|good, _| !matches!(good, Good::Commodity(_)));
+        }
+        // The old ship joins the fleet before the hooks run
+        // (@0x41188-0x4156f), so their resets count its holds when it is a
+        // trader (@0x41662, @0x416c9); its NPC is placed once the player
+        // has left it, below.
+        self.pilot.escorts.push(old);
+        let old_slot = self.pilot.escorts.len() - 1;
+        self.fleet.resize(self.pilot.escorts.len(), None);
+        if hooks_first {
+            self.retire_for_capture(record.id, chance);
+        }
         let defaults = pilot::tally(record.defaults.iter().copied());
         let records = &self.outfits;
         // Capture keeps by 0x0004 alone and holds nothing to its `Max`,
@@ -4586,14 +4606,6 @@ impl Session {
         // No secondary is selected on the captured ship (`_DoShipCapture`
         // @0x4173e).
         self.secondary = None;
-        // The commodities stay with the old ship, the player taking the
-        // captured ship's, which the engine's ships carry none of
-        // (@0x412e6-0x412fe, @0x41762-0x41779), as `capture_cargo` reads.
-        if self.rules.source_for(RuleKey::CaptureCargo) == RuleSource::Engine {
-            self.pilot
-                .cargo
-                .retain(|good, _| !matches!(good, Good::Commodity(_)));
-        }
         self.player = npc.state;
         for other in self.traffic.npcs_mut() {
             if other.leader == Some(npc.id) {
@@ -4602,10 +4614,10 @@ impl Session {
         }
         self.lose_captured(npc.id);
         self.leave(npc.id);
-        self.pilot.escorts.push(old);
-        self.fleet.resize(self.pilot.escorts.len() - 1, None);
-        let placed = self.place_escort(self.pilot.escorts.len() - 1);
-        self.fleet.push(placed);
+        let placed = self.place_escort(old_slot);
+        if let Some(slot) = self.fleet.get_mut(old_slot) {
+            *slot = placed;
+        }
         self.reform();
         if let Some(id) = placed {
             self.snap(id);
@@ -18052,6 +18064,61 @@ pub(super) mod tests {
                 Some(3)
             );
             assert_eq!(session.scan_latches, Latches::ARMED, "{source:?}");
+        }
+    }
+
+    /// Use As My Ship's `OnRetire` (`b9`, of the flown class 128) resets
+    /// with the old ship already in the fleet (`_DoShipCapture` @0x41662,
+    /// the escort set up @0x41188-0x4156f), by the other reading of
+    /// [`RuleKey::CaptureCargo`], with 50 tons of a commodity, 20 of
+    /// `jünk` and 3 of mission cargo, in either hook order. A trader, its
+    /// 20 tons count, so `OnRetire`'s trim has 40: 50 x 40/73, 27, then
+    /// 27 x 40/50, 21, 21 x 40/44, 19, and 19 x 40/42, 18 (@0x419fd,
+    /// @0x41a3e, @0x94a0b). Without the old ship, 50 x 20/73 would leave
+    /// 13, which the 40 tons after never cut. A class of `InherentAI` 4
+    /// is no trader, and its holds never count: 13, then 13 x 20/36, 7,
+    /// 7 x 20/30, 4, and 4 x 20/27, 2.
+    #[test]
+    fn use_as_my_ships_on_retire_reset_counts_the_old_ships_holds() {
+        use crate::session::precalced::tests::JUNK;
+        for (inherent_ai, holds, kept) in [(1, 40, 18), (4, 20, 2)] {
+            for order in [RuleSource::Engine, RuleSource::Bible] {
+                let mut catalog = kitted();
+                for record in &mut catalog.ship_records {
+                    if record.id == ShipId(128) {
+                        record.on_retire = crate::control::Script::parse("b9");
+                        record.inherent_ai = inherent_ai;
+                    }
+                }
+                let rules = Rulebook::default()
+                    .with_override(RuleKey::CaptureCargo, RuleSource::Bible)
+                    .with_override(RuleKey::CaptureHookOrder, order);
+                let mut session = alongside(&catalog).with_rules(rules);
+                board_by(&mut session, &NovaLaw::default()).expect("boards");
+                assert_eq!(
+                    take(&mut session, Take::Capture, &[0, 1]).0,
+                    Taken::Captured
+                );
+                session.pilot.cargo = BTreeMap::from([(Good::Commodity(2), 50), (JUNK, 20)]);
+                session
+                    .pilot
+                    .missions
+                    .put(0, crate::testkit::carrying(140, 3));
+                assert_eq!(
+                    session.assign(Assignment::MyShip, &mut Draws::of(&[0])),
+                    Some(Assigned::MyShip)
+                );
+                assert!(
+                    session.control_bit(crate::control::Bit::new(9).expect("a bit")),
+                    "OnRetire ran"
+                );
+                assert_eq!(session.capacity(), holds, "AI {inherent_ai}");
+                assert_eq!(
+                    session.pilot().cargo().collect::<BTreeMap<_, _>>(),
+                    BTreeMap::from([(Good::Commodity(2), kept), (JUNK, 20)]),
+                    "AI {inherent_ai}, {order:?}"
+                );
+            }
         }
     }
 

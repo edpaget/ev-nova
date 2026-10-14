@@ -950,7 +950,10 @@ mod tests {
                 Some(&1),
                 "before the swap"
             );
-            assert_eq!(snap.escorts, 0, "the old ship not yet an escort");
+            assert_eq!(
+                snap.escorts, 1,
+                "the old ship already an escort (@0x41188-0x4156f)"
+            );
         }
         assert_eq!(session.ship(), ShipId(129));
     }
