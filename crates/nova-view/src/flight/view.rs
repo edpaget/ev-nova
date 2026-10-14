@@ -10600,6 +10600,37 @@ mod tests {
         assert_ne!(view.message(), Some(NO_ESCORTS));
     }
 
+    /// Where `view` draws [`catalog`]'s stellar 129, checked to be in the
+    /// space a click picks from, clear of the status panel.
+    fn stellar_129_on_screen(view: &View) -> Point {
+        let drawn = on_screen(view, (300.0, -200.0));
+        assert!(
+            (0.0..VIEW_SIZE.0 - STATUS_BAR_WIDTH).contains(&drawn.x)
+                && (0.0..VIEW_SIZE.1).contains(&drawn.y),
+            "{drawn:?} is in space"
+        );
+        drawn
+    }
+
+    #[test]
+    fn a_click_still_picks_a_stellar_while_the_player_breaks_up() {
+        let mut view = breaking_up();
+        assert_eq!(nav_target(&view), None);
+        let stellar = stellar_129_on_screen(&view);
+        click(&mut view, stellar);
+        assert_eq!(nav_target(&view), Some(StellarId(129)));
+    }
+
+    #[test]
+    fn a_click_picks_no_stellar_once_the_player_has_exploded() {
+        let mut view = exploded();
+        let nav = nav_target(&view);
+        assert_ne!(nav, Some(StellarId(129)));
+        let stellar = stellar_129_on_screen(&view);
+        click(&mut view, stellar);
+        assert_eq!(nav_target(&view), nav);
+    }
+
     #[test]
     fn home_does_nothing_once_the_player_has_exploded() {
         // The platform has no Home key: it arrives as `Key::Other`.
