@@ -131,6 +131,14 @@ impl Behaviour for EscortAi {
                 turrets_only: true,
                 ..Trigger::default()
             },
+            // Holding Position: `_EscortAI` tail-calls `_AIFireTurret` with
+            // no target (@0x83e59-0x83e74, @0x83f4e), which runs its point
+            // defence and fires nothing.
+            Goal::Idle => Trigger {
+                point_defence: true,
+                ..Trigger::default()
+            },
+            // Return to Hangar calls no turret (@0x83e79-0x83ea3).
             _ => Trigger::default(),
         }
     }
@@ -582,7 +590,9 @@ mod tests {
     }
 
     #[test]
-    fn holding_it_idles_targets_nothing_and_fires_nothing() {
+    fn holding_it_runs_its_point_defence_and_fires_nothing() {
+        // `_EscortAI`'s hold tail-calls `_AIFireTurret` with no target
+        // (@0x83e59-0x83e74, @0x83f4e): point defence, then nothing.
         let hold = Some(EscortOrder::Hold);
         let npcs = [
             having(escort(hold), Goal::Attack(n(2)), Some(n(2))),
@@ -592,7 +602,35 @@ mod tests {
         let holding = having(escort(hold), Goal::Idle, Some(n(2)));
         assert_eq!(
             command(ENGINE, &[holding, pirate(2, 10.0, 0.0)]),
-            (Trigger::default(), None)
+            (
+                Trigger {
+                    point_defence: true,
+                    ..Trigger::default()
+                },
+                None
+            )
+        );
+    }
+
+    #[test]
+    fn attacking_and_defending_escorts_ask_for_point_defence_as_their_fight_does() {
+        for order in [EscortOrder::Attack, EscortOrder::Defend] {
+            let fighting = having(escort(Some(order)), Goal::Attack(n(2)), Some(n(2)));
+            let close = [fighting.clone(), pirate(2, 0.0, -100.0)];
+            assert!(command(ENGINE, &close).0.point_defence, "{order:?}");
+            // Approaching 300 to the right, facing up: off by 90.
+            let far = [fighting, pirate(2, 300.0, 0.0)];
+            assert!(!command(ENGINE, &far).0.point_defence, "{order:?}");
+        }
+        // Return to Hangar calls no turret (@0x83e79-0x83ea3).
+        let docking = having(
+            fighter(Some(EscortOrder::Dock)),
+            Goal::Dock(ShipRef::Player),
+            None,
+        );
+        assert_eq!(
+            command(ENGINE, &[docking, pirate(2, 0.0, -100.0)]).0,
+            Trigger::default()
         );
     }
 

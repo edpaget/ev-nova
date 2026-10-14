@@ -15708,6 +15708,65 @@ pub(super) mod tests {
         assert!(session.npcs()[1].reserves.shield.now < 30.0, "it hit");
     }
 
+    /// `catalog`'s session with a xenophobe's missile boat (NPC 0) 600
+    /// above the player facing down, and NPC 1, 300 above, made the
+    /// player's escort on standing order `order`; and Nova's AI with the
+    /// boat firing its missile at the escort.
+    fn missile_at_an_escort(
+        catalog: &FakePilotCatalog,
+        order: Option<crate::escort::EscortOrder>,
+    ) -> (Session, crate::ai::NovaAi) {
+        let mut session = Session::start(catalog).expect("starts");
+        session.populate(
+            catalog,
+            &mut placing(2, &[(0, 0, -600, 180), (1, 0, -300, 0)]),
+        );
+        stop_npcs(&mut session);
+        let escort = &mut session.traffic.npcs_mut()[1];
+        escort.govt = None;
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
+            order,
+        });
+        let ai = crate::ai::NovaAi::default().with(
+            crate::traffic::npc::AiType::WimpyTrader,
+            Rc::new(Volley {
+                at: ShipRef::Npc(NpcId(1)),
+            }),
+        );
+        (session, ai)
+    }
+
+    /// Whether point defence shot a missile down over 60 ticks of
+    /// `session` under `ai`.
+    fn shot_down_by(session: &mut Session, catalog: &FakePilotCatalog, ai: &dyn Behaviour) -> bool {
+        let mut downed = false;
+        for _ in 0..60 {
+            session.tick_traffic(catalog, ai, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            downed |= session
+                .take_combat_events()
+                .iter()
+                .any(|event| matches!(event, CombatEvent::ShotDown { .. }));
+        }
+        downed
+    }
+
+    #[test]
+    fn a_holding_escort_shoots_down_a_missile_fired_at_it() {
+        // The escort flies ship 135, which carries point defence alone.
+        let catalog = skirmish(&[(1, 142, 133), (4, 140, 135)], Some(140));
+        let (mut session, ai) =
+            missile_at_an_escort(&catalog, Some(crate::escort::EscortOrder::Hold));
+        assert!(session.npcs()[1].escorts_player());
+        assert!(shot_down_by(&mut session, &catalog, &ai));
+        assert_eq!(session.npcs()[1].goal, Goal::Idle, "holding");
+    }
+
     // Boarding and capture.
 
     use crate::board::{
