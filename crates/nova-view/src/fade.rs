@@ -142,6 +142,15 @@ mod tests {
     }
 
     #[test]
+    fn a_fade_runs_at_the_pace_of_its_duration() {
+        let to = ScreenFade::to_black(ms(2000));
+        assert_eq!(after(to, ms(500)).alpha(), 64, "a quarter of the way");
+        assert_eq!(after(to, ms(1500)).alpha(), 191);
+        let from = ScreenFade::from_black(ms(400));
+        assert_eq!(after(from, ms(100)).alpha(), 191);
+    }
+
+    #[test]
     fn a_fade_is_done_once_its_duration_has_passed() {
         for fade in [
             ScreenFade::to_black(ms(1000)),
