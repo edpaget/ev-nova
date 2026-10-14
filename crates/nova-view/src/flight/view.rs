@@ -1538,6 +1538,13 @@ fn show_destroyed(scene: &mut SystemScene, session: &Session) {
     );
 }
 
+/// Draws each hypergate of `scene` on the frame `session` gives it
+/// (`Session::gate_frame`), opening while an NPC comes out of it: after
+/// each tick of the traffic, and as the system is laid out.
+fn show_gate_frames(scene: &mut SystemScene, session: &Session) {
+    scene.set_gate_frames(|id| session.gate_frame(id));
+}
+
 /// The system `session`'s player is in, read from `catalog`, with only the
 /// stellars the session shows ([`Session::stellars_shown`]), in navigation
 /// order.
@@ -1603,6 +1610,7 @@ impl<
                 Some({
                     let mut scene = shown_scene(&catalog, session);
                     show_destroyed(&mut scene, session);
+                    show_gate_frames(&mut scene, session);
                     scene
                 }),
                 catalog.ship_sheet(session.ship()),
@@ -2292,7 +2300,11 @@ impl<
         let Ok(session) = &self.session else {
             return;
         };
-        self.scene = Some(shown_scene(&self.catalog, session));
+        self.scene = Some({
+            let mut scene = shown_scene(&self.catalog, session);
+            show_gate_frames(&mut scene, session);
+            scene
+        });
         self.map.show_course(system, &session.course_shown());
         self.map.show_explored(session.pilot().explored());
         self.previous = *session.player();
@@ -4039,7 +4051,8 @@ impl<
     /// First catches the screen up with what the session has told since
     /// (see the module docs), map open or not. Then runs the simulation's
     /// steps for `dt` with the keys held, and advances the stellars'
-    /// animations. While the map is open nothing moves. During
+    /// animations, each hypergate drawing the frame the session stepped it
+    /// to ([`show_gate_frames`]). While the map is open nothing moves. During
     /// the pre-jump stage the session flies on, and the streak starts on
     /// the step the session begins the jump, which is the last step run.
     /// While the stars streak and the old system fades out only the
@@ -4116,6 +4129,9 @@ impl<
                 if session.jumping().is_some() {
                     break;
                 }
+            }
+            if let Some(scene) = &mut self.scene {
+                show_gate_frames(scene, session);
             }
         }
         for note in &notes {
@@ -9589,6 +9605,61 @@ mod tests {
         ticks(&mut view, 8);
         assert_eq!(mode(&view), Mode::LeavingGate { tick: 0 });
         assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE]);
+    }
+
+    /// `catalog` with hypergate 141 at (200, 100) in Sol, of 6 frames
+    /// stepping every tick (`AnimDelay` 0, as stock's), drawing `rlëD` 1141.
+    fn with_hypergate(mut catalog: FakeCatalog) -> FakeCatalog {
+        catalog.sites.push(LandingSite {
+            flags2: nova_sim::gate::HYPERGATE,
+            exit_angle: 90,
+            animation: nova_sim::catalog::SiteAnimation {
+                type_frames: 6,
+                ..nova_sim::catalog::SiteAnimation::default()
+            },
+            ..site(141, (200.0, 100.0), StellarFlags::CAN_LAND)
+        });
+        catalog.sol_more.push(stellar(141, "Gate", (200, 100), 6));
+        catalog
+    }
+
+    /// The frames hypergate 141's sheet is drawn on.
+    fn gate_frames(list: &DrawList) -> Vec<u16> {
+        list.iter()
+            .filter_map(|command| match command {
+                DrawCommand::Sprite { image, .. } if image.id == 1141 => Some(image.frame),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_hypergate_animates_while_an_npc_waits_in_it_and_rests_otherwise() {
+        let busy = with_hypergate(trafficked(&[130], 1, 129, 3));
+        // As in the test above: an arrival comes out of the gate.
+        let (_, chance) = scripted(&[0, 0, 6, 6, 0, 0, 0, 2]);
+        let mut view = FlightView::new(busy)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        assert_eq!(gate_frames(&drawn(&view)), [0], "closed at first");
+        ticks(&mut view, 2);
+        let mode = |view: &View| view.session().expect("flying").npcs()[0].mode;
+        assert_eq!(mode(&view), Mode::Emerging { ticks_left: 59 });
+        let mut frames = Vec::new();
+        while matches!(mode(&view), Mode::Emerging { .. }) {
+            frames.extend(gate_frames(&drawn(&view)));
+            ticks(&mut view, 1);
+        }
+        assert_eq!(frames[..3], [1, 2, 3], "opening a frame a tick");
+        assert!(frames.iter().all(|&frame| frame > 0), "{frames:?}");
+        assert!(frames[3..].iter().all(|&frame| frame >= 3), "{frames:?}");
+        assert!(frames.contains(&5), "its loop plays: {frames:?}");
+
+        let mut quiet = FlightView::new(with_hypergate(catalog()));
+        for _ in 0..60 {
+            ticks(&mut quiet, 1);
+            assert_eq!(gate_frames(&drawn(&quiet)), [0], "no ship in it");
+        }
     }
 
     #[test]

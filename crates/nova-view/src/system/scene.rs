@@ -60,6 +60,10 @@ pub struct SceneStellar {
     /// When each frame of the sheet drawn shows; a stellar with no sheet
     /// stays on frame 0.
     pub animation: Animation,
+    /// The frame a hypergate draws, as its session steps it
+    /// (`Session::gate_frame`), in place of [`animation`](Self::animation)'s;
+    /// `None` for every other stellar, and in a viewer with no session.
+    pub gate_frame: Option<u16>,
 }
 
 /// How a stellar looks, for [`SystemScene::set_destroyed`]: whether it is
@@ -88,6 +92,7 @@ impl SceneStellar {
             type_zero: false,
             type_zero_sprite: type_zero,
             animation: Animation::new(NonZeroU16::MIN, stellar.animation, false),
+            gate_frame: None,
         };
         placed.animation = placed.animation_for_drawn();
         placed
@@ -240,6 +245,14 @@ impl SystemScene {
         }
     }
 
+    /// Sets the frame each stellar draws as `frame` gives it: `Some` for a
+    /// hypergate, drawn in place of its animation's.
+    pub fn set_gate_frames(&mut self, frame: impl Fn(StellarId) -> Option<u16>) {
+        for stellar in &mut self.stellars {
+            stellar.gate_frame = frame(stellar.id);
+        }
+    }
+
     /// Where the camera may go: the box round the system's centre and every
     /// stellar, grown by [`CAMERA_MARGIN`].
     #[must_use]
@@ -252,7 +265,8 @@ impl SystemScene {
 }
 
 /// Draws every stellar of `scene` where `camera` puts it, `elapsed` into
-/// its animation: each sprite (or, without a sheet, a placeholder box and
+/// its animation, or a hypergate on the frame its session gave it
+/// ([`SystemScene::set_gate_frames`]), modulo its sheet's frames: each sprite (or, without a sheet, a placeholder box and
 /// the reason), then every name under its stellar, so no sprite covers a
 /// name.
 pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera, elapsed: Duration) {
@@ -261,7 +275,10 @@ pub fn draw_stellars(list: &mut DrawList, scene: &SystemScene, camera: &Camera, 
         let at = camera.world_to_screen(stellar.position);
         let (width, height) = match stellar.drawn() {
             Ok(sheet) => {
-                let frame = stellar.animation.frame(ticks(elapsed));
+                let frame = stellar.gate_frame.map_or_else(
+                    || stellar.animation.frame(ticks(elapsed)),
+                    |frame| frame % sheet.frames.get(),
+                );
                 list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
                 (sheet.frame_width as f32, sheet.frame_height as f32)
             }
@@ -406,6 +423,7 @@ mod tests {
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     radar_square: true,
                     animation: Animation::new(frames(4), WORMHOLE, false),
+                    gate_frame: None,
                 },
                 SceneStellar {
                     id: StellarId(128),
@@ -419,6 +437,7 @@ mod tests {
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     radar_square: false,
                     animation: Animation::new(frames(1), WORMHOLE, false),
+                    gate_frame: None,
                 },
                 SceneStellar {
                     id: StellarId(140),
@@ -432,6 +451,7 @@ mod tests {
                     type_zero_sprite: Ok(sheet(TYPE_ZERO, 2)),
                     radar_square: false,
                     animation: Animation::new(frames(1), WORMHOLE, false),
+                    gate_frame: None,
                 },
             ]
         );
@@ -563,6 +583,28 @@ mod tests {
                 _ => None,
             })
             .expect("the name is drawn")
+    }
+
+    #[test]
+    fn a_hypergate_draws_the_frame_its_session_gives_modulo_its_sheet() {
+        let mut scene = SystemScene::load(&catalog(), SystemId(130));
+        let elapsed = Duration::from_millis(100);
+        let before = drawn(&scene, elapsed);
+        assert_eq!(before[0], ImageKey::sprite(1001, 1), "its own animation");
+        let gate = |frame| move |id: StellarId| (id == StellarId(129)).then_some(frame);
+        scene.set_gate_frames(gate(3));
+        assert_eq!(scene.stellars()[0].gate_frame, Some(3));
+        assert_eq!(scene.stellars()[1].gate_frame, None);
+        let shown = drawn(&scene, elapsed);
+        assert_eq!(shown[0], ImageKey::sprite(1001, 3));
+        assert_eq!(shown[1..], before[1..], "the rest as they were");
+        scene.set_gate_frames(gate(0));
+        assert_eq!(drawn(&scene, elapsed)[0], ImageKey::sprite(1001, 0));
+        // A frame past the sheet drawn wraps round its 4 frames.
+        scene.set_gate_frames(gate(6));
+        assert_eq!(drawn(&scene, elapsed)[0], ImageKey::sprite(1001, 2));
+        scene.set_gate_frames(|_| None);
+        assert_eq!(drawn(&scene, elapsed), before);
     }
 
     #[test]
