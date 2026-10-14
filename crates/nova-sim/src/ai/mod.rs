@@ -6,9 +6,9 @@
 //! targets, and answers the hits ships take ([`Behaviour::react`]). The
 //! [`traffic`](crate::traffic) autopilot then flies each goal, every tick.
 //!
-//! - [`Peaceful`]: traffic that never fights: it lands, or leaves, and
-//!   escorts follow their lead. Its decisions are the idle block the four
-//!   AI types share ([`idle`]).
+//! - [`Peaceful`]: traffic that never fights: it lands, enters a gate, or
+//!   leaves, and escorts follow their lead. Its decisions are the idle
+//!   block the four AI types share ([`idle`]).
 //! - [`odds`]: how strong a ship and its friends are, the odds against it,
 //!   and whether a chase is hopeless.
 //! - [`target`]: whom a warship or interceptor attacks: the player, by its
@@ -47,6 +47,7 @@ use crate::combat::Strike;
 use crate::combat::armament::Trigger;
 use crate::combat::hull::{Condition, HullSpec};
 use crate::flight::ShipState;
+use crate::gate::GateKind;
 use crate::govt::Governments;
 use crate::handling::Handling;
 use crate::hyperspace::JUMP_FUEL;
@@ -72,8 +73,14 @@ pub enum Goal {
     /// Nothing: it comes to a stop where it is.
     #[default]
     Idle,
-    /// Land on this stellar, and leave the system that way.
+    /// Land on this stellar, and leave the system that way. A stellar
+    /// that is a hypergate or wormhole is entered instead, as
+    /// [`Goal::EnterGate`] (`_HighLevelAIHandler` state 1, @0x8d8b8-0x8d8fe).
     Land(StellarId),
+    /// Enter this hypergate or wormhole, and leave the system through it:
+    /// the original's goal 0x14 (`_HighLevelAIHandler` state 20, see
+    /// [`gate_entry`](crate::traffic::gate_entry)).
+    EnterGate(StellarId),
     /// Fly out past its jump distance and jump out.
     JumpOut,
     /// Keep with this NPC, its fleet's lead.
@@ -349,7 +356,8 @@ pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
 /// - An escort follows its lead while the lead is in the system; once it
 ///   is gone, the escort decides as below.
 /// - A goal it can still fly is kept: a stellar that is still there and
-///   landable, or a jump it still has the fuel for.
+///   landable, a gate it enters that is still there, or a jump it still
+///   has the fuel for.
 /// - Otherwise it heads for a stellar picked at random among
 ///   `_SelectRandomStellarDest`'s candidates (@0x805de): landable, within
 ///   999 of the centre on each axis, not uninhabited unless a gate, not
@@ -360,7 +368,9 @@ pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
 ///   system, so none has, and every ship, of any AI type, heads for a
 ///   stellar (as `_HyperShipSpawn` makes every arrival do). The pick is
 ///   one `below(candidates)` draw in the system's stellar order: what the
-///   original's `Rand(16)` loop decides, a uniform pick among them.
+///   original's `Rand(16)` loop decides, a uniform pick among them. A
+///   hypergate or wormhole picked is entered ([`Goal::EnterGate`]), the
+///   ship leaving the system through it.
 /// - A ship that would jump without a jump's fuel stays idle.
 pub fn idle_admitting(
     npc: &Npc,
@@ -387,9 +397,13 @@ pub fn idle_admitting(
     }
     let len = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
     let pick = chance.below(len) as usize;
-    candidates
-        .get(pick)
-        .map_or(leave, |site| Goal::Land(site.id))
+    candidates.get(pick).map_or(leave, |site| {
+        if GateKind::of(site.flags2).is_some() {
+            Goal::EnterGate(site.id)
+        } else {
+            Goal::Land(site.id)
+        }
+    })
 }
 
 /// The ship that provoked `npc`, its target since the hit, while it is
@@ -401,7 +415,8 @@ pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
 }
 
 /// Whether `npc` can still fly its goal among `around`: a stellar still
-/// there and landable, or a jump it has the fuel for. Idling, following
+/// there and landable, a gate still there (state 20 tests no landability
+/// again), or a jump it has the fuel for. Idling, following
 /// once the lead is gone, fighting and inspecting are no goals to keep.
 fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
     match npc.goal {
@@ -409,6 +424,7 @@ fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
             .sites
             .iter()
             .any(|site| site.id == stellar && landable(site)),
+        Goal::EnterGate(gate) => around.sites.iter().any(|site| site.id == gate),
         Goal::JumpOut => npc.reserves.fuel.now >= JUMP_FUEL,
         _ => false,
     }
@@ -626,10 +642,61 @@ mod tests {
         let mut chance = Draws::of(&[0]);
         assert_eq!(
             idle(&npc(1, AiType::Interceptor), &around, &mut chance),
-            Goal::Land(StellarId(129)),
+            Goal::EnterGate(StellarId(129)),
             "the idle blocks admit the gate"
         );
         assert_eq!(chance.asked, [2]);
+    }
+
+    #[test]
+    fn an_idle_pick_of_a_gate_enters_it_and_keeps_to_it_while_it_is_shown() {
+        let wormhole = LandingSite {
+            flags2: crate::gate::WORMHOLE,
+            ..planet(130, 0.0, 0.0)
+        };
+        let govts = Governments::new([GovtRecord {
+            flags2: crate::govt::PREFERS_WORMHOLES,
+            ..crate::testkit::govt(141)
+        }]);
+        let sites = [planet(128, 0.0, 0.0), wormhole];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&sites, &[])
+        };
+        let mut ship = npc(1, AiType::WimpyTrader);
+        ship.govt = Some(GovtId(141));
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&ship, &around, &mut chance),
+            Goal::EnterGate(StellarId(130))
+        );
+        assert_eq!(chance.asked, [1], "the wormhole alone");
+        ship.goal = Goal::EnterGate(StellarId(130));
+        let mut chance = Draws::of(&[]);
+        assert_eq!(idle(&ship, &around, &mut chance), ship.goal, "kept");
+        assert!(chance.asked.is_empty());
+        let unlandable = LandingSite {
+            flags: 0,
+            ..sites[1]
+        };
+        let still_there = [sites[0], unlandable];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&still_there, &[])
+        };
+        assert_eq!(
+            idle(&ship, &around, &mut Draws::of(&[])),
+            ship.goal,
+            "state 20 tests no landability again"
+        );
+        let gone = [sites[0]];
+        let around = Surroundings::new(&gone, &[]);
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&ship, &around, &mut chance),
+            Goal::Land(StellarId(128)),
+            "decided again"
+        );
     }
 
     #[test]
@@ -794,6 +861,7 @@ mod tests {
         for idle in [
             Goal::Idle,
             Goal::Land(StellarId(128)),
+            Goal::EnterGate(StellarId(128)),
             Goal::JumpOut,
             Goal::Follow(NpcId(1)),
             Goal::Inspect(n),

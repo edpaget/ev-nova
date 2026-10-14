@@ -9,10 +9,25 @@
 //!   distance reaches the distance left. It lands within the stellar's
 //!   [`landing_radius`] at or below [`LANDING_SPEED`]. That circle is not
 //!   the player's landing distance
-//!   ([`RuleKey::LandingDistance`](crate::RuleKey::LandingDistance)):
-//!   the original lands an NPC within a quarter of the `Type` width on
-//!   each axis, inclusive, with no speed gate (`_HighLevelAIHandler`
-//!   @0x8dbdf-0x8dc5a), story-runtime phase 16 (npc-landing-reach).
+//!   ([`RuleKey::LandingDistance`](crate::RuleKey::LandingDistance)).
+//!   The original's NPC landing is `_HighLevelAIHandler` state 1, its box
+//!   by the ship's turn rate
+//!   (`phase/stellar-fidelity/phase-5-npc-landing-reach`); the quarter of
+//!   the `Type` width at @0x8dbdf is state 20's gate entry, below. A
+//!   landing goal whose stellar is a hypergate or wormhole becomes
+//!   [`Goal::EnterGate`] and is flown so the same tick (state 1's
+//!   hand-off, @0x8d8b8-0x8d8fe).
+//! - [`Goal::EnterGate`]: outside the gate's box
+//!   ([`gate_entry::inside`], a quarter of its `Type` width on each axis,
+//!   inclusive) it heads for the gate as for a landing, with no wait.
+//!   Inside it stops dead and starts entering the gate
+//!   ([`Mode::EnteringGate`], its wait at [`ENTRY_TICKS`], counted down
+//!   that tick); a gate not shown, it brakes (see
+//!   [`gate_entry`](crate::traffic::gate_entry)).
+//! - While it enters a gate ([`Mode::EnteringGate`]) it holds still,
+//!   whatever its condition and goal, its wait counting down, and leaves
+//!   the system ([`Outcome::EnteredGate`]) as it runs out: on the 16th
+//!   tick, counting the one it reached the box.
 //! - [`Goal::JumpOut`]: it heads straight out from the centre at full
 //!   speed, and jumps once it is its stats' jump distance out.
 //! - [`Goal::Follow`]: it keeps within [`FOLLOW_DISTANCE`] of its lead,
@@ -91,14 +106,18 @@ use crate::combat::armament::Trigger;
 use crate::combat::hull::Condition;
 use crate::escort::{APPROACH_FORMATION, FORMATION_NUDGE, FORMATION_SLACK, KEEP_FORMATION};
 use crate::flight::{self, AT_REST_SPEED, Controls, ShipState, Turn, heading_of, shortest_turn};
+use crate::gate::GateKind;
 use crate::geometry::Vec2;
 use crate::hail::assist;
 use crate::handling::Handling;
 use crate::hyperspace::JUMP_FUEL;
+use crate::landing::TypeWidth;
 use crate::landing::{LANDING_SPEED, landing_radius};
 use crate::traffic::emerge::{LED_BURST_TICK, exit_speed};
+use crate::traffic::gate_entry::{self, ENTRY_TICKS};
 use crate::traffic::npc::{Mode, Npc};
 use crate::traffic::spawn::glide_speed;
+use std::collections::BTreeMap;
 
 /// How far from its lead, in pixels, an escort keeps.
 pub const FOLLOW_DISTANCE: f32 = 100.0;
@@ -135,6 +154,9 @@ pub enum Outcome {
     Landed(StellarId),
     /// It jumped out of the system.
     JumpedOut,
+    /// It entered this hypergate or wormhole, and leaves the system
+    /// through it (see [`gate_entry`](crate::traffic::gate_entry)).
+    EnteredGate(StellarId),
     /// A fighter of ship type `ship` docked with `carrier`, and leaves
     /// the system for its bay.
     Docked {
@@ -179,14 +201,17 @@ impl TopSpeeds {
     }
 }
 
-/// Flies `npc` one tick towards its goal, among `sites`, the ship its
-/// goal is about (the lead it follows, the ship it fights or inspects)
-/// at `other`, when it is there, at its top speed `speeds.own`, its burst
-/// out of a gate or glide in capped at [`TopSpeeds::burst_cap`], the wait
-/// a leaderless ship takes after it rolled on `chance`.
+/// Flies `npc` one tick towards its goal, among `sites`, the gates among
+/// them as wide as `type_widths` says ([`gate_entry::gate_reach`]), the
+/// ship its goal is about (the lead it follows, the ship it fights or
+/// inspects) at `other`, when it is there, at its top speed
+/// `speeds.own`, its burst out of a gate or glide in capped at
+/// [`TopSpeeds::burst_cap`], the wait a leaderless ship takes after it
+/// rolled on `chance`.
 pub fn fly(
     npc: &mut Npc,
     sites: &[LandingSite],
+    type_widths: &BTreeMap<StellarId, TypeWidth>,
     other: Option<&ShipState>,
     speeds: TopSpeeds,
     chance: &mut (impl Chance + ?Sized),
@@ -195,15 +220,20 @@ pub fn fly(
         max_speed: speeds.own,
         ..npc.stats.handling
     };
-    if unsteered(npc, &handling, speeds, chance) {
-        return Outcome::Flying;
+    if let Some(outcome) = unsteered(npc, &handling, speeds, chance) {
+        return outcome;
     }
+    hand_off(npc, sites);
     let state = npc.state;
     let controls = match npc.goal {
         Goal::Land(stellar) => match sites.iter().find(|site| site.id == stellar) {
             Some(site) if over(&state, site) => return Outcome::Landed(stellar),
             Some(site) => approach(&state, &handling, site.position),
             None => brake(&state, &handling),
+        },
+        Goal::EnterGate(gate) => match enter_box(npc, sites, type_widths, gate, &handling) {
+            Ok(controls) => controls,
+            Err(outcome) => return outcome,
         },
         Goal::JumpOut => {
             if state.position.length() >= npc.stats.jump_distance {
@@ -276,6 +306,44 @@ pub fn fly(
     };
     flight::step(&mut npc.state, &handling, controls);
     Outcome::Flying
+}
+
+/// State 1's hand-off (@0x8d8b8-0x8d8fe): a landing goal whose stellar
+/// among `sites` is a hypergate or wormhole becomes [`Goal::EnterGate`].
+fn hand_off(npc: &mut Npc, sites: &[LandingSite]) {
+    if let Goal::Land(stellar) = npc.goal
+        && sites
+            .iter()
+            .any(|site| site.id == stellar && GateKind::of(site.flags2).is_some())
+    {
+        npc.goal = Goal::EnterGate(stellar);
+    }
+}
+
+/// How `npc` flies into `gate` among `sites`, of the widths
+/// `type_widths` gives (see the module docs): outside its box, the
+/// controls of the approach, or braking with no gate there; inside it,
+/// stopped and entering it.
+fn enter_box(
+    npc: &mut Npc,
+    sites: &[LandingSite],
+    type_widths: &BTreeMap<StellarId, TypeWidth>,
+    gate: StellarId,
+    handling: &Handling,
+) -> Result<Controls, Outcome> {
+    let Some(site) = sites.iter().find(|site| site.id == gate) else {
+        return Ok(brake(&npc.state, handling));
+    };
+    let reach = gate_entry::gate_reach(site, type_widths);
+    if !gate_entry::inside(site.position, npc.state.position, reach) {
+        return Ok(approach(&npc.state, handling, site.position));
+    }
+    npc.state.velocity = Vec2::ZERO;
+    npc.mode = Mode::EnteringGate {
+        gate,
+        ticks_left: ENTRY_TICKS - 1,
+    };
+    Err(Outcome::Flying)
 }
 
 /// How `npc` flies back to its carrier at `carrier` (see the module
@@ -415,19 +483,22 @@ fn glide(npc: &mut Npc, tick: u32, speeds: TopSpeeds, chance: &mut (impl Chance 
     }
 }
 
-/// Flies `npc` one tick when it has no say in its flight: waiting at a
-/// gate, drifting while not intact, gliding in from hyperspace (intact
-/// or disabled), bursting out of a gate, or holding its course after
-/// either (see the module docs), on `handling`, its burst ending at
-/// `speeds`' [`burst_cap`](TopSpeeds::burst_cap) and its wait rolled on
-/// `chance`. Whether it did.
+/// Flies `npc` one tick when it has no say in its flight: entering a
+/// gate or waiting at one, drifting while not intact, gliding in from
+/// hyperspace (intact or disabled), bursting out of a gate, or holding
+/// its course after either (see the module docs), on `handling`, its
+/// burst ending at `speeds`' [`burst_cap`](TopSpeeds::burst_cap) and its
+/// wait rolled on `chance`. What became of it, if it did.
 fn unsteered(
     npc: &mut Npc,
     handling: &Handling,
     speeds: TopSpeeds,
     chance: &mut (impl Chance + ?Sized),
-) -> bool {
+) -> Option<Outcome> {
     match (npc.mode, npc.condition == Condition::Intact) {
+        (Mode::EnteringGate { gate, ticks_left }, _) => {
+            return Some(enter_gate(npc, gate, ticks_left));
+        }
         (Mode::Emerging { ticks_left }, _) => wait_at_gate(npc, ticks_left),
         (Mode::JumpingIn { tick }, false) if npc.condition == Condition::Disabled => {
             glide(npc, tick, speeds, chance);
@@ -442,9 +513,26 @@ fn unsteered(
         (Mode::JumpingIn { tick }, true) => glide(npc, tick, speeds, chance),
         (Mode::LeavingGate { tick }, true) => leave_gate(npc, tick, speeds, chance),
         (Mode::Coasting { ticks_left }, true) => coast(npc, ticks_left),
-        (Mode::Flying, true) => return false,
+        (Mode::Flying, true) => return None,
     }
-    true
+    Some(Outcome::Flying)
+}
+
+/// One tick of `npc` entering `gate`, `ticks_left` of its wait left
+/// (see [`gate_entry`]): still, whatever its condition and goal, as
+/// `_HandleShip` counts +0x4c down for every ship and the fade reads only
+/// the sub-goal; and gone once the wait is out.
+fn enter_gate(npc: &mut Npc, gate: StellarId, ticks_left: u32) -> Outcome {
+    npc.state.velocity = Vec2::ZERO;
+    let left = ticks_left.saturating_sub(1);
+    if left == 0 {
+        return Outcome::EnteredGate(gate);
+    }
+    npc.mode = Mode::EnteringGate {
+        gate,
+        ticks_left: left,
+    };
+    Outcome::Flying
 }
 
 /// One tick of `npc`'s wait at the gate it comes out of, `ticks_left` of
@@ -683,8 +771,10 @@ mod tests {
     use crate::stats::ShipStats;
     use crate::testkit::{Draws, FAST, planet};
     use crate::traffic::emerge::{EMERGE_TICKS, LED_BURST_TICK};
+    use crate::traffic::gate_entry::ENTRY_TICKS;
     use crate::traffic::npc::NpcId;
     use crate::traffic::spawn::{hyperspace_entry, jump_in_distance};
+    use std::collections::BTreeMap;
 
     /// Flies `npc` at its own top speed, with no lead: the autopilot as
     /// most tests see it.
@@ -699,7 +789,14 @@ mod tests {
         other: Option<&ShipState>,
         speeds: TopSpeeds,
     ) -> Outcome {
-        super::fly(npc, sites, other, speeds, &mut Draws::of(&[]))
+        super::fly(
+            npc,
+            sites,
+            &BTreeMap::new(),
+            other,
+            speeds,
+            &mut Draws::of(&[]),
+        )
     }
 
     /// An average ship: 3 pixels a tick at most, 0.1 more a tick, 1° a
@@ -1348,9 +1445,9 @@ mod tests {
             primary: true,
             ..Trigger::default()
         };
-        super::fly(&mut ship, &sites, None, speeds, draws);
+        super::fly(&mut ship, &sites, &BTreeMap::new(), None, speeds, draws);
         while let Mode::LeavingGate { .. } = ship.mode {
-            super::fly(&mut ship, &sites, None, speeds, draws);
+            super::fly(&mut ship, &sites, &BTreeMap::new(), None, speeds, draws);
         }
         ship
     }
@@ -1375,7 +1472,14 @@ mod tests {
             for left in (0..wait).rev() {
                 let before = ship.state;
                 assert_eq!(
-                    super::fly(&mut ship, &sites, None, speeds, &mut draws),
+                    super::fly(
+                        &mut ship,
+                        &sites,
+                        &BTreeMap::new(),
+                        None,
+                        speeds,
+                        &mut draws
+                    ),
                     Outcome::Flying
                 );
                 assert_eq!(ship.state.velocity, velocity, "{left}: not slowed");
@@ -1389,7 +1493,14 @@ mod tests {
                 assert_eq!(ship.mode, mode);
             }
             assert_eq!(draws.asked, [30], "no draw while it waits");
-            super::fly(&mut ship, &sites, None, speeds, &mut draws);
+            super::fly(
+                &mut ship,
+                &sites,
+                &BTreeMap::new(),
+                None,
+                speeds,
+                &mut draws,
+            );
             assert_ne!(ship.state.heading, 90.0, "turns for the planet");
             assert!(
                 ship.state.velocity.length() <= 3.0 + 1e-4,
@@ -1427,14 +1538,14 @@ mod tests {
             let mut ship = jumping_in(AVERAGE);
             let mut draws = Draws::of(&[draw]);
             while let Mode::JumpingIn { .. } = ship.mode {
-                super::fly(&mut ship, &[], None, speeds, &mut draws);
+                super::fly(&mut ship, &[], &BTreeMap::new(), None, speeds, &mut draws);
             }
             assert_eq!(ship.mode, Mode::Coasting { ticks_left: wait });
             assert_eq!(draws.asked, [30]);
             let along = flight::facing(180.0) * glide_speed(37);
             assert!((ship.state.velocity - along).length() < 1e-4);
             let before = ship.state;
-            super::fly(&mut ship, &[], None, speeds, &mut draws);
+            super::fly(&mut ship, &[], &BTreeMap::new(), None, speeds, &mut draws);
             assert_eq!(ship.state.velocity, before.velocity, "coasting at 6.895");
             assert_eq!(ship.state.position, before.position + before.velocity);
         }
@@ -1476,6 +1587,201 @@ mod tests {
             assert!(farthest >= ship.stats.jump_distance, "{farthest}");
             assert!(farthest < ship.stats.jump_distance + 10.0, "{farthest}");
         }
+    }
+
+    // Entering a gate.
+
+    /// Hypergate 300 at (500, 0), 100 wide: a reach of 25.
+    fn hypergate() -> LandingSite {
+        LandingSite {
+            flags2: crate::gate::HYPERGATE,
+            ..planet(300, 500.0, 0.0)
+        }
+    }
+
+    const GATE: StellarId = StellarId(300);
+
+    /// Flies `npc` among `sites`, its gates as wide as `widths` says.
+    fn fly_widths(
+        npc: &mut Npc,
+        sites: &[LandingSite],
+        widths: &BTreeMap<StellarId, TypeWidth>,
+    ) -> Outcome {
+        let speeds = TopSpeeds::own_of(npc);
+        super::fly(npc, sites, widths, None, speeds, &mut Draws::of(&[]))
+    }
+
+    #[test]
+    fn outside_the_box_a_ship_entering_a_gate_flies_to_it_with_no_wait() {
+        let sites = [hypergate()];
+        let mut ship = npc(FAST, Goal::EnterGate(GATE), at(0.0, 0.0, 0.0, 0.0, 90.0));
+        for _ in 0..20 {
+            assert_eq!(fly(&mut ship, &sites, None), Outcome::Flying);
+            assert_eq!(ship.mode, Mode::Flying, "no countdown (+0x4c -1)");
+        }
+        assert!(ship.state.position.x > 10.0, "{:?}", ship.state);
+        assert_eq!(ship.goal, Goal::EnterGate(GATE));
+    }
+
+    #[test]
+    fn inside_the_box_it_stops_and_leaves_on_the_16th_tick() {
+        let sites = [hypergate()];
+        let start = at(525.9, -25.9, 1.0, -0.5, 90.0);
+        let mut ship = npc(FAST, Goal::EnterGate(GATE), start);
+        assert_eq!(fly(&mut ship, &sites, None), Outcome::Flying);
+        assert_eq!(ship.state.velocity, Vec2::ZERO, "stopped");
+        assert_eq!(ship.state.position, start.position, "where it was");
+        assert_eq!(
+            ship.mode,
+            Mode::EnteringGate {
+                gate: GATE,
+                ticks_left: ENTRY_TICKS - 1
+            },
+            "16, counted down this tick"
+        );
+        for tick in 2..ENTRY_TICKS {
+            assert_eq!(fly(&mut ship, &sites, None), Outcome::Flying, "{tick}");
+            assert_eq!(ship.state.position, start.position);
+            assert_eq!(
+                ship.mode,
+                Mode::EnteringGate {
+                    gate: GATE,
+                    ticks_left: ENTRY_TICKS - tick
+                }
+            );
+        }
+        assert_eq!(fly(&mut ship, &sites, None), Outcome::EnteredGate(GATE));
+        let mut beyond = npc(FAST, Goal::EnterGate(GATE), at(526.0, 0.0, 0.0, 0.0, 90.0));
+        fly(&mut beyond, &sites, None);
+        assert_eq!(beyond.mode, Mode::Flying, "26 out: outside");
+        let mut below = npc(FAST, Goal::EnterGate(GATE), at(500.0, 26.0, 0.0, 0.0, 90.0));
+        fly(&mut below, &sites, None);
+        assert_eq!(below.mode, Mode::Flying, "26 out on y: outside");
+    }
+
+    #[test]
+    fn the_box_goes_by_the_gates_type_width() {
+        let start = at(530.0, 0.0, 0.0, 0.0, 90.0);
+        let entering = |site: LandingSite, widths: &BTreeMap<StellarId, TypeWidth>| {
+            let mut ship = npc(FAST, Goal::EnterGate(GATE), start);
+            fly_widths(&mut ship, &[site], widths);
+            matches!(ship.mode, Mode::EnteringGate { .. })
+        };
+        let none = BTreeMap::new();
+        assert!(!entering(hypergate(), &none), "100 wide: 25");
+        let unloaded = BTreeMap::from([(GATE, TypeWidth::Unloaded)]);
+        assert!(entering(hypergate(), &unloaded), "150 wide: 37");
+        let near = at(508.0, 0.0, 0.0, 0.0, 90.0);
+        let out_of_range = LandingSite {
+            type_counts_frames: false,
+            ..hypergate()
+        };
+        let mut ship = npc(FAST, Goal::EnterGate(GATE), near);
+        fly_widths(&mut ship, &[out_of_range], &none);
+        assert!(matches!(ship.mode, Mode::EnteringGate { .. }), "32 wide: 8");
+        let mut ship = npc(FAST, Goal::EnterGate(GATE), at(509.0, 0.0, 0.0, 0.0, 90.0));
+        fly_widths(&mut ship, &[out_of_range], &none);
+        assert_eq!(ship.mode, Mode::Flying, "9 out of 8");
+    }
+
+    #[test]
+    fn a_landing_goal_at_a_gate_is_gate_entry_from_its_first_tick() {
+        let wormhole = LandingSite {
+            flags2: crate::gate::WORMHOLE,
+            ..planet(301, -500.0, 0.0)
+        };
+        let sites = [hypergate(), wormhole, planet(302, 0.0, 500.0)];
+        let mut far = npc(FAST, Goal::Land(GATE), at(0.0, 0.0, 0.0, 0.0, 90.0));
+        fly(&mut far, &sites, None);
+        assert_eq!(far.goal, Goal::EnterGate(GATE));
+        for (gate, x) in [(300, 500.0), (301, -500.0)] {
+            let mut ship = npc(
+                FAST,
+                Goal::Land(StellarId(gate)),
+                at(x, 0.0, 0.0, 0.0, 90.0),
+            );
+            assert_eq!(fly(&mut ship, &sites, None), Outcome::Flying, "not landed");
+            assert_eq!(ship.goal, Goal::EnterGate(StellarId(gate)));
+            assert_eq!(
+                ship.mode,
+                Mode::EnteringGate {
+                    gate: StellarId(gate),
+                    ticks_left: 15
+                }
+            );
+            let (outcome, _) = until_gone(&mut ship, &sites, 100);
+            assert_eq!(outcome, Outcome::EnteredGate(StellarId(gate)));
+        }
+        let mut lander = npc(
+            FAST,
+            Goal::Land(StellarId(302)),
+            at(0.0, 500.0, 0.0, 0.0, 90.0),
+        );
+        assert_eq!(
+            fly(&mut lander, &sites, None),
+            Outcome::Landed(StellarId(302))
+        );
+        let mut lost = npc(
+            FAST,
+            Goal::Land(StellarId(999)),
+            at(0.0, 0.0, 0.0, 0.0, 90.0),
+        );
+        fly(&mut lost, &sites, None);
+        assert_eq!(
+            lost.goal,
+            Goal::Land(StellarId(999)),
+            "no stellar: no hand-off"
+        );
+    }
+
+    #[test]
+    fn a_ship_disabled_or_set_on_another_goal_as_it_enters_still_leaves() {
+        let sites = [hypergate()];
+        for (condition, goal) in [
+            (Condition::Disabled, Goal::EnterGate(GATE)),
+            (Condition::Intact, Goal::Attack(ShipRef::Player)),
+        ] {
+            let mut ship = npc(FAST, goal, at(500.0, 0.0, 0.0, 0.0, 90.0));
+            ship.mode = Mode::EnteringGate {
+                gate: GATE,
+                ticks_left: 3,
+            };
+            ship.condition = condition;
+            ship.state.velocity = Vec2::new(2.0, 0.0);
+            let player = at(0.0, 0.0, 0.0, 0.0, 0.0);
+            assert_eq!(fly(&mut ship, &sites, Some(&player)), Outcome::Flying);
+            assert_eq!(ship.state.position, Vec2::new(500.0, 0.0), "held still");
+            assert_eq!(fly(&mut ship, &sites, Some(&player)), Outcome::Flying);
+            assert_eq!(
+                fly(&mut ship, &sites, Some(&player)),
+                Outcome::EnteredGate(GATE),
+                "{condition:?} {goal:?}"
+            );
+        }
+        let mut gone = npc(FAST, Goal::Idle, at(0.0, 0.0, 0.0, 0.0, 90.0));
+        gone.mode = Mode::EnteringGate {
+            gate: GATE,
+            ticks_left: 1,
+        };
+        assert_eq!(
+            fly(&mut gone, &[], None),
+            Outcome::EnteredGate(GATE),
+            "the gate need not be shown"
+        );
+    }
+
+    #[test]
+    fn a_ship_entering_a_gate_not_shown_brakes() {
+        let mut ship = npc(
+            FAST,
+            Goal::EnterGate(StellarId(999)),
+            at(0.0, 0.0, 4.0, -3.0, 10.0),
+        );
+        for _ in 0..200 {
+            assert_eq!(fly(&mut ship, &[], None), Outcome::Flying);
+        }
+        assert!(ship.state.velocity.length() < 0.5, "{:?}", ship.state);
+        assert_eq!(ship.mode, Mode::Flying);
     }
 
     #[test]

@@ -63,7 +63,8 @@ impl AiType {
 }
 
 /// Whether an NPC is still coming out of hyperspace, or of a hypergate or
-/// wormhole (see [`emerge`](crate::traffic::emerge)).
+/// wormhole (see [`emerge`](crate::traffic::emerge)), or entering one to
+/// leave (see [`gate_entry`](crate::traffic::gate_entry)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     /// Gliding in from hyperspace, on this tick of the glide (from 0), at
@@ -98,6 +99,18 @@ pub enum Mode {
     /// flying ship is: its goal is 0, not 21, so `_ShipVisibleToShip`
     /// (@0x972d) sees it and it is drawn. See [`Npc::arrived`].
     Coasting {
+        /// The ticks of the wait left.
+        ticks_left: u32,
+    },
+    /// Entering `gate`, the hypergate or wormhole it leaves the system
+    /// through, for this many more ticks: the original's sub-goal 0x17,
+    /// its wait +0x4c counting down (see
+    /// [`gate_entry`](crate::traffic::gate_entry)). It holds still and
+    /// fades out, and decides nothing, but is seen, targeted, fought and
+    /// hailed as a flying ship is ([`Npc::arrived`]).
+    EnteringGate {
+        /// The gate it enters.
+        gate: StellarId,
         /// The ticks of the wait left.
         ticks_left: u32,
     },
@@ -498,14 +511,27 @@ impl Npc {
             && self.condition == Condition::Intact
     }
 
+    /// Whether it is entering a gate to leave ([`Mode::EnteringGate`]):
+    /// `_AIShipIsEnteringHypergate` (@0x89502), which tests the sub-goal
+    /// 0x17 alone.
+    #[must_use]
+    pub fn entering_gate(&self) -> bool {
+        matches!(self.mode, Mode::EnteringGate { .. })
+    }
+
     /// Whether it is done coming into the system, there to be fought and
-    /// hailed: [`Mode::Flying`], or holding its course after its glide or
+    /// hailed: [`Mode::Flying`], holding its course after its glide or
     /// burst ([`Mode::Coasting`]), which the original's +0x4c wait marks
     /// and its hyperspace state (+0x50, zeroed by `_AIMakeShipStopJumping`
-    /// @0x82e77) and goal 21 do not.
+    /// @0x82e77) and goal 21 do not, or entering a gate
+    /// ([`Mode::EnteringGate`]): `_ShipVisibleToShip` tests goal 0x15
+    /// alone, and state 20 zeroes +0x50 (@0x8db8f).
     #[must_use]
     pub fn arrived(&self) -> bool {
-        matches!(self.mode, Mode::Flying | Mode::Coasting { .. })
+        matches!(
+            self.mode,
+            Mode::Flying | Mode::Coasting { .. } | Mode::EnteringGate { .. }
+        )
     }
 }
 

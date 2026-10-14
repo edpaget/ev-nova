@@ -10,6 +10,8 @@
 //!   for the idle pick and the emerge pick.
 //! - [`emerge`]: the hypergate or wormhole an arrival comes out of, and
 //!   how long it waits there.
+//! - [`gate_entry`]: an NPC entering a hypergate or wormhole to leave the
+//!   system, and the release of the ships it leads.
 //! - [`strength`]: the escort-strength timer, and the fleet it brings
 //!   for a player whose escorts carry a lot of cargo.
 //! - [`npc`]: an [`Npc`]: its ship, government, AI type, escort class
@@ -43,7 +45,8 @@
 //! 3. an NPC not intact loses its provocation;
 //! 4. the decisions due on the AI timer, never for a ship still jumping
 //!    in or emerging from a gate (waiting there or bursting out of it),
-//!    one that is not intact, or one assisting the player while
+//!    one entering a gate to leave, one that is not intact, or one
+//!    assisting the player while
 //!    unprovoked (until it is done, or provoked): first every goal, then, each NPC
 //!    seeing the new goals, the fire command it holds and the ship it
 //!    targets. An NPC that goes back to an idle goal (not fighting) loses
@@ -56,9 +59,11 @@
 //! 6. the autopilot and a flight step for every NPC, each flying towards
 //!    the ship its goal is about, the player's included (the one it
 //!    assists, or escorts in formation), a fighter docking its carrier;
-//! 7. and the removal of those that landed, jumped out or docked, each
-//!    in [`Traffic::departed`] with how it left, for its session to take
-//!    a fighter docked aboard.
+//!    then each NPC that reached its gate's box this tick releases the
+//!    ships it leads to enter the gate on their own ([`gate_entry`]);
+//! 7. and the removal of those that landed, jumped out, entered a gate or
+//!    docked, each in [`Traffic::departed`] with how it left, for its
+//!    session to take a fighter docked aboard.
 //!
 //! The fight ([`combat`](crate::combat)) damages them, and its session
 //! takes out each one destroyed ([`Traffic::remove`]).
@@ -72,6 +77,7 @@
 pub mod autopilot;
 pub mod destination;
 pub mod emerge;
+pub mod gate_entry;
 pub mod npc;
 pub mod spawn;
 pub mod strength;
@@ -81,7 +87,7 @@ use crate::ai::interceptor::within_reach;
 use crate::ai::{Behaviour, Goal, PlayerSide, Reaction, Surroundings};
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::catalog::{GovtId, LandingSite, PersonId, ShipId};
+use crate::catalog::{GovtId, LandingSite, PersonId, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::cloak::{self, Cloak};
 use crate::combat::armament::Trigger;
@@ -91,6 +97,7 @@ use crate::control::Gate;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
+use crate::landing::TypeWidth;
 use crate::mission::ships::ShipBehav;
 use crate::person::{PersonWorld, derelict_armor};
 use autopilot::{Outcome, TopSpeeds};
@@ -139,12 +146,20 @@ pub struct World<'a> {
     /// The damage the shots in flight aim at each ship
     /// ([`Surroundings::targeted`]).
     pub targeted: &'a BTreeMap<ShipRef, i32>,
+    /// The width each gate's `Type` master gives, which its entry box
+    /// goes by ([`gate_entry::gate_reach`]); a gate it holds none for reads
+    /// as a loaded master does.
+    pub type_widths: &'a BTreeMap<StellarId, TypeWidth>,
 }
+
+/// No gate's width known: each reads as a loaded master does.
+pub(crate) static NO_TYPE_WIDTHS: BTreeMap<StellarId, TypeWidth> = BTreeMap::new();
 
 impl<'a> World<'a> {
     /// `sites` alone: no player, no governments, no record, no person
     /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, no
-    /// factor on the led ships' top speed, and no damage aimed.
+    /// factor on the led ships' top speed, no damage aimed, and no gate's
+    /// width known.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -158,6 +173,7 @@ impl<'a> World<'a> {
             escort_tons: 0,
             led_speed: 1.0,
             targeted: bare.targeted,
+            type_widths: &NO_TYPE_WIDTHS,
         }
     }
 
@@ -409,9 +425,33 @@ impl Traffic {
             self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
         let player = world.player.map(|player| player.state);
         self.cloaks(player, &states);
-        let speeds = self.top_speeds(&world);
-        let outcomes: Vec<Outcome> = self
+        let entering: Vec<bool> = self.npcs.iter().map(Npc::entering_gate).collect();
+        let outcomes = self.fly_all(&world, player, &states, chance);
+        self.release_followers(&entering);
+        self.departed = self
             .npcs
+            .iter()
+            .zip(&outcomes)
+            .filter(|(_, outcome)| **outcome != Outcome::Flying)
+            .map(|(npc, outcome)| (npc.id, *outcome))
+            .collect();
+        let mut flying = outcomes.iter().map(|outcome| *outcome == Outcome::Flying);
+        self.npcs.retain(|_| flying.next().unwrap_or(false));
+        self.ticks += 1;
+    }
+
+    /// Flies every NPC a tick in `world` ([`autopilot::fly`]), each towards
+    /// the ship its goal is about among the `player` and `states`, at its
+    /// top speeds, rolling on `chance`: what became of each, in order.
+    fn fly_all(
+        &mut self,
+        world: &World,
+        player: Option<ShipState>,
+        states: &[(NpcId, ShipState)],
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Vec<Outcome> {
+        let speeds = self.top_speeds(world);
+        self.npcs
             .iter_mut()
             .zip(speeds)
             .map(|(npc, speeds)| {
@@ -428,19 +468,51 @@ impl Traffic {
                         .find(|(other, _)| *other == id)
                         .map(|(_, state)| *state),
                 });
-                autopilot::fly(npc, world.sites, other.as_ref(), speeds, &mut *chance)
+                autopilot::fly(
+                    npc,
+                    world.sites,
+                    world.type_widths,
+                    other.as_ref(),
+                    speeds,
+                    &mut *chance,
+                )
             })
-            .collect();
-        self.departed = self
+            .collect()
+    }
+
+    /// Releases the followers of each NPC that reached its gate's box this
+    /// tick, not `entering` one as the tick began (see
+    /// [`gate_entry`](crate::traffic::gate_entry)): each ship it leads
+    /// loses its lead, its carrier, its target and its provocation, takes
+    /// the lead's AI type capped at 3 ([`gate_entry::released_ai_type`]),
+    /// and heads into the same gate on its own, its mode as it was. A
+    /// fighter so freed decides by its own AI type, as the original's AI
+    /// type 5 becomes at most 3.
+    ///
+    /// The original releases them in the same pass as the lead's think, so
+    /// its later slots start for the gate that tick; here they start on
+    /// the next. That one-tick lag settles before anything the player sees
+    /// is drawn, so it is not filed.
+    fn release_followers(&mut self, entering: &[bool]) {
+        let released: Vec<(NpcId, StellarId, AiType)> = self
             .npcs
             .iter()
-            .zip(&outcomes)
-            .filter(|(_, outcome)| **outcome != Outcome::Flying)
-            .map(|(npc, outcome)| (npc.id, *outcome))
+            .zip(entering)
+            .filter_map(|(npc, &was)| match npc.mode {
+                Mode::EnteringGate { gate, .. } if !was => Some((npc.id, gate, npc.ai_type)),
+                _ => None,
+            })
             .collect();
-        let mut flying = outcomes.iter().map(|outcome| *outcome == Outcome::Flying);
-        self.npcs.retain(|_| flying.next().unwrap_or(false));
-        self.ticks += 1;
+        for (lead, gate, ai_type) in released {
+            for follower in self.npcs.iter_mut().filter(|npc| npc.leader == Some(lead)) {
+                follower.leader = None;
+                follower.carrier = None;
+                follower.ai_type = gate_entry::released_ai_type(ai_type);
+                follower.target = None;
+                follower.provoked = 0.0;
+                follower.goal = Goal::EnterGate(gate);
+            }
+        }
     }
 
     /// Each NPC's top speeds this tick, in ship-table order, as
@@ -1938,6 +2010,141 @@ mod tests {
         traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
         let escort = &traffic.npcs()[0];
         assert_eq!(escort.state.velocity, player.state.velocity, "in formation");
+    }
+
+    /// Hypergate 300 at the centre, 100 wide: a reach of 25.
+    fn gate_at_centre() -> LandingSite {
+        LandingSite {
+            flags2: crate::gate::HYPERGATE,
+            ..planet(300, 0.0, 0.0)
+        }
+    }
+
+    const GATE: StellarId = StellarId(300);
+
+    #[test]
+    fn a_lead_reaching_its_gates_box_releases_its_followers_to_enter_on_their_own() {
+        // NPC 0, an interceptor, leads 1 and its fighter 2; NPC 3 is led
+        // by another ship.
+        let mut traffic = populated(4, 1);
+        let lead = NpcId(0);
+        traffic.npcs[0].ai_type = AiType::Interceptor;
+        traffic.npcs[0].goal = Goal::EnterGate(GATE);
+        for follower in &mut traffic.npcs[1..3] {
+            follower.leader = Some(lead);
+            follower.goal = Goal::Follow(lead);
+            follower.target = Some(ShipRef::Player);
+            follower.provoked = 5.0;
+        }
+        traffic.npcs[2].carrier = Some(crate::bay::Carrier {
+            ship: ShipRef::Npc(lead),
+            window: 100.0,
+            reach: 30.0,
+        });
+        traffic.npcs[3].leader = Some(NpcId(9));
+        traffic.npcs[3].goal = Goal::Follow(NpcId(9));
+        let untouched = traffic.npcs[3].clone();
+        let sites = [gate_at_centre()];
+        traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
+        assert!(matches!(traffic.npcs[0].mode, Mode::EnteringGate { .. }));
+        for follower in &traffic.npcs[1..3] {
+            assert_eq!(
+                (follower.leader, follower.carrier, follower.target),
+                (None, None, None),
+                "{:?}",
+                follower.id
+            );
+            assert_eq!(follower.provoked, 0.0);
+            assert_eq!(follower.goal, Goal::EnterGate(GATE));
+            assert_eq!(follower.ai_type, AiType::Warship, "an interceptor's");
+            assert_eq!(follower.mode, Mode::Flying, "it enters on its own");
+        }
+        assert_eq!(traffic.npcs[3].goal, untouched.goal);
+        assert_eq!(traffic.npcs[3].leader, untouched.leader);
+        let mut left = Vec::new();
+        for _ in 0..40 {
+            traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
+            left.extend(traffic.departed().iter().copied());
+        }
+        assert_eq!(
+            left,
+            [
+                (NpcId(0), Outcome::EnteredGate(GATE)),
+                (NpcId(1), Outcome::EnteredGate(GATE)),
+                (NpcId(2), Outcome::EnteredGate(GATE))
+            ]
+        );
+        assert_eq!(traffic.npcs().len(), 1, "the other lead's");
+    }
+
+    #[test]
+    fn a_trader_leads_followers_that_keep_its_type_and_a_lead_already_entering_releases_none() {
+        let mut traffic = populated(2, 1);
+        traffic.npcs[0].ai_type = AiType::BraveTrader;
+        traffic.npcs[0].goal = Goal::EnterGate(GATE);
+        traffic.npcs[1].leader = Some(NpcId(0));
+        let sites = [gate_at_centre()];
+        traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs[1].ai_type, AiType::BraveTrader);
+        assert_eq!(traffic.npcs[1].leader, None);
+        // A ship that joins its lead once the lead is entering is not
+        // released: the release runs on the tick the lead reaches the box.
+        traffic.npcs[1].leader = Some(NpcId(0));
+        traffic.npcs[1].goal = Goal::Follow(NpcId(0));
+        traffic.tick(&Keep, &sites, &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs[1].leader, Some(NpcId(0)));
+        assert_eq!(traffic.npcs[1].goal, Goal::Follow(NpcId(0)));
+    }
+
+    /// Answers every hit on itself by attacking the player.
+    #[derive(Debug)]
+    struct Turning;
+
+    impl Behaviour for Turning {
+        fn decide(&self, npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            npc.goal
+        }
+
+        fn react(&self, npc: &Npc, strike: &Strike, _around: &Surroundings) -> Reaction {
+            if strike.ship == ShipRef::Npc(npc.id) {
+                Reaction {
+                    target: Some(strike.by),
+                    provoked: strike.damage,
+                    goal: Some(Goal::Attack(ShipRef::Player)),
+                }
+            } else {
+                Reaction::default()
+            }
+        }
+    }
+
+    #[test]
+    fn a_ship_entering_a_gate_decides_nothing_but_is_live_and_answers_a_hit() {
+        let mut traffic = populated(1, 1);
+        traffic.npcs[0].goal = Goal::EnterGate(GATE);
+        traffic.npcs[0].mode = Mode::EnteringGate {
+            gate: GATE,
+            ticks_left: 4,
+        };
+        let sites = [gate_at_centre()];
+        let recording = Recording::deciding(Goal::JumpOut);
+        traffic.tick(&recording, &sites, &mut Draws::of(&[]));
+        assert_eq!(recording.take(), [], "never asked to decide");
+        let around = World::new(&sites).around(traffic.npcs());
+        assert!(around.live(ShipRef::Npc(NpcId(0))));
+        traffic.tick_in(
+            &Turning,
+            World::new(&sites),
+            &[struck(0, 3.0)],
+            &mut Draws::of(&[]),
+        );
+        let npc = &traffic.npcs()[0];
+        assert_eq!(npc.target, Some(ShipRef::Player));
+        assert_eq!(npc.provoked, 3.0);
+        assert_eq!(npc.goal, Goal::Attack(ShipRef::Player));
+        traffic.tick(&Turning, &sites, &mut Draws::of(&[]));
+        traffic.tick(&Turning, &sites, &mut Draws::of(&[]));
+        assert_eq!(traffic.departed(), [(NpcId(0), Outcome::EnteredGate(GATE))]);
     }
 
     #[test]

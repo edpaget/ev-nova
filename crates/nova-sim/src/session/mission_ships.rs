@@ -81,7 +81,8 @@
 //! one that leaves the system as the traffic's tick takes it out
 //! ([`Fate::Departed`]), chased off and its ships left lowered as the
 //! ships-left rule says ([`RuleKey::LeftRespawn`]; a landing leaves only
-//! as [`RuleKey::LandedLeaves`] says). The
+//! as [`RuleKey::LandedLeaves`] says, and a ship that leaves through a
+//! gate departs but counts only as [`RuleKey::GateExitCounts`] says). The
 //! first loss that fails its mission fails it there, at once
 //! ([`SimMessage::MissionShipLost`] and the quick failure); the goal
 //! checks follow as the `ShipFate` the loss raised settles.
@@ -969,29 +970,41 @@ impl Session {
     /// The special ships among those the traffic's last tick took out,
     /// marked as `marks` had them before it, in the order they left: each
     /// that left the system raises [`Fate::Departed`], then its slot
-    /// counts it ([`Session::count_left_mission_ship`]). One that jumped
-    /// out left; one that landed left only under
-    /// [`RuleKey::LandedLeaves`]'s other reading, as the original's waits
-    /// at the stellar; a docked fighter never did.
+    /// counts it ([`Session::count_left_mission_ship`]) when it counts.
+    /// One that jumped out left and counts; one that landed left and
+    /// counts only under [`RuleKey::LandedLeaves`]'s other reading, as the
+    /// original's waits at the stellar; one that entered a gate left, as
+    /// the original frees its slot, but counts only under
+    /// [`RuleKey::GateExitCounts`]'s other reading; a docked fighter never
+    /// left.
     pub(super) fn mission_ships_left(&mut self, marks: &[(NpcId, MissionMark)]) {
         let landed_leaves = self.rules.source_for(RuleKey::LandedLeaves) == RuleSource::Bible;
-        let left: Vec<(NpcId, MissionMark)> = self
+        let gate_exit_counts = self.rules.source_for(RuleKey::GateExitCounts) == RuleSource::Bible;
+        let left: Vec<(NpcId, MissionMark, bool)> = self
             .traffic
             .departed()
             .iter()
-            .filter(|(_, outcome)| match outcome {
-                Outcome::JumpedOut => true,
-                Outcome::Landed(_) => landed_leaves,
-                Outcome::Docked { .. } | Outcome::Flying => false,
+            .filter_map(|&(id, outcome)| {
+                let counts = match outcome {
+                    Outcome::JumpedOut => true,
+                    Outcome::Landed(_) if landed_leaves => true,
+                    Outcome::EnteredGate(_) => gate_exit_counts,
+                    Outcome::Landed(_) | Outcome::Docked { .. } | Outcome::Flying => {
+                        return None;
+                    }
+                };
+                let (_, mark) = marks.iter().find(|(ship, _)| *ship == id)?;
+                Some((id, *mark, counts))
             })
-            .filter_map(|&(id, _)| marks.iter().find(|(ship, _)| *ship == id).copied())
             .collect();
-        for (ship, mark) in left {
+        for (ship, mark, counts) in left {
             self.raise(StoryEvent::ShipFate {
                 ship,
                 fate: Fate::Departed,
             });
-            self.count_left_mission_ship(mark);
+            if counts {
+                self.count_left_mission_ship(mark);
+            }
         }
     }
 
@@ -2509,6 +2522,18 @@ pub(super) mod tests {
         session.tick_traffic(catalog, &Keeping, &mut NeverFires);
     }
 
+    /// Takes the NPC at `index` out of the system through gate 300, its
+    /// entry's wait running out on one traffic tick.
+    fn gate_out(session: &mut Session, catalog: &FakePilotCatalog, index: usize) {
+        let npc = &mut session.traffic.npcs_mut()[index];
+        npc.goal = Goal::EnterGate(StellarId(300));
+        npc.mode = Mode::EnteringGate {
+            gate: StellarId(300),
+            ticks_left: 1,
+        };
+        session.tick_traffic(catalog, &Keeping, &mut NeverFires);
+    }
+
     /// Whether a [`Fate::Departed`] is raised for `ship`, not yet settled.
     fn departed(session: &Session, ship: NpcId) -> bool {
         session.story_raised().contains(&StoryEvent::ShipFate {
@@ -2602,6 +2627,36 @@ pub(super) mod tests {
         );
         let id = session.npcs()[0].id;
         land_ship(&mut session, &catalog, 0);
+        assert!(departed(&session, id));
+        assert_eq!(chased_and_left(&session), (1, 1));
+    }
+
+    #[test]
+    fn a_chase_off_ship_leaving_through_a_gate_departs_but_counts_nothing_by_the_engine() {
+        let catalog = goal_catalog(CHASE_OFF, 0);
+        let mut session = in_flight(&catalog);
+        let id = session.npcs()[0].id;
+        gate_out(&mut session, &catalog, 0);
+        assert!(session.npcs().iter().all(|npc| npc.id != id), "gone");
+        assert!(departed(&session, id), "the poll sees it gone");
+        assert_eq!(chased_and_left(&session), (0, 2));
+        settle(&mut session, &catalog);
+        assert_eq!(
+            set_up_again(&mut session, &catalog),
+            [0, 0],
+            "it comes back"
+        );
+    }
+
+    #[test]
+    fn by_the_other_reading_a_chase_off_ship_leaving_through_a_gate_is_counted() {
+        let catalog = goal_catalog(CHASE_OFF, 0);
+        let mut session = in_flight(&catalog).with_rules(
+            crate::Rulebook::default()
+                .with_override(crate::RuleKey::GateExitCounts, crate::RuleSource::Bible),
+        );
+        let id = session.npcs()[0].id;
+        gate_out(&mut session, &catalog, 0);
         assert!(departed(&session, id));
         assert_eq!(chased_and_left(&session), (1, 1));
     }

@@ -1554,6 +1554,7 @@ impl Session {
                     armament: &self.armament,
                 };
                 let targeted = self.combat.targeted_damage();
+                let type_widths = self.gate_type_widths();
                 let world = World {
                     sites: &self.sites,
                     player: Some(self.player_side()),
@@ -1571,6 +1572,7 @@ impl Session {
                     escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
                     led_speed: self.led_speed(),
                     targeted: &targeted,
+                    type_widths: &type_widths,
                 };
                 let strikes = std::mem::take(&mut self.strikes);
                 let last = self.last_npc();
@@ -1593,9 +1595,9 @@ impl Session {
     /// player, the governments, the system's government and the player's
     /// legal record with it (none in an independent system), and the
     /// persons' world: the session's rules and control bits, and the
-    /// pilot's persons gone and grudges. No damage is aimed in it: only
-    /// the traffic's tick fires, and it reads the fight's
-    /// ([`Session::tick_traffic`]).
+    /// pilot's persons gone and grudges. No damage is aimed in it, and no
+    /// gate's width is known: only the traffic's tick fires and flies, and
+    /// it reads the fight's and the gates' ([`Session::tick_traffic`]).
     fn world(&self) -> World<'_> {
         let system_govt = self.galaxy.govt(self.pilot.system);
         World {
@@ -1615,6 +1617,7 @@ impl Session {
             escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
             led_speed: self.led_speed(),
             targeted: &crate::ai::NO_AIMED_DAMAGE,
+            type_widths: &crate::traffic::NO_TYPE_WIDTHS,
         }
     }
 
@@ -12703,6 +12706,55 @@ pub(super) mod tests {
         let npc = &session.npcs()[0];
         assert!(npc.emerging(), "{:?}", npc.mode);
         assert_eq!(npc.state.position, Vec2::new(300.0, -400.0));
+    }
+
+    /// A session of `catalog` populated, its one NPC flying from the
+    /// centre at rest with `goal`.
+    fn flying_for(catalog: &FakePilotCatalog, goal: Goal) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.populate(catalog, &mut NeverFires);
+        assert_eq!(session.npcs().len(), 1);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.mode = crate::traffic::npc::Mode::Flying;
+        npc.emerges_from = None;
+        npc.state = ShipState::default();
+        npc.goal = goal;
+        session
+    }
+
+    #[test]
+    fn an_npc_set_on_a_hypergate_flies_to_it_and_leaves_the_system_through_it() {
+        let catalog = with_hypergate(trafficked(130, 1, 3), None);
+        for goal in [Goal::Land(StellarId(141)), Goal::EnterGate(StellarId(141))] {
+            let mut session = flying_for(&catalog, goal);
+            assert_eq!(
+                first_departure(&mut session, &catalog),
+                Outcome::EnteredGate(StellarId(141)),
+                "{goal:?}"
+            );
+            assert_eq!(session.npcs(), []);
+        }
+    }
+
+    #[test]
+    fn a_ship_of_a_government_preferring_wormholes_leaves_through_one() {
+        let mut catalog = trafficked(130, 1, 3);
+        catalog.sites[0].1.push(LandingSite {
+            flags2: crate::gate::WORMHOLE,
+            ..planet(142, -300.0, 400.0)
+        });
+        catalog.govts = vec![crate::catalog::GovtRecord {
+            flags2: crate::govt::PREFERS_WORMHOLES,
+            ..crate::testkit::govt(140)
+        }];
+        for goal in [Goal::Land(StellarId(142)), Goal::Idle] {
+            let mut session = flying_for(&catalog, goal);
+            assert_eq!(
+                first_departure(&mut session, &catalog),
+                Outcome::EnteredGate(StellarId(142)),
+                "{goal:?}: set on it, or picking it idle over planet 128"
+            );
+        }
     }
 
     #[test]

@@ -123,9 +123,13 @@
 //! [`landing_radius`] of the centre.
 //!
 //! NPCs land by their own rule, which stays on the [`landing_radius`]
-//! circle under either reading: the original's is a quarter of the same
-//! width, inclusive (story-runtime phase 16, npc-landing-reach). The
-//! original's speed gate is per axis (story-runtime phase 17,
+//! circle under either reading: the original's NPC landing is
+//! `_HighLevelAIHandler` state 1, whose box goes by the ship's turn rate
+//! (`phase/stellar-fidelity/phase-5-npc-landing-reach`). The quarter of
+//! the width, inclusive (@0x8dbdf), is state 20's box for entering a
+//! hypergate or wormhole, not a landing ([`stellar_width`], see
+//! [`gate_entry`](crate::traffic::gate_entry)).
+//! The original's speed gate is per axis (story-runtime phase 17,
 //! per-axis-landing-speed).
 
 use crate::catalog::{GovtId, LandingSite, StellarId};
@@ -288,6 +292,19 @@ impl LandingReach {
     }
 }
 
+/// `site`'s width as `_GetStellarSpriteXSize` gives it (@0xac91-0xad2d),
+/// its `Type` master giving `type_width`: the `Type` frame's width,
+/// [`OUT_OF_RANGE_FRAME_WIDTH`], or [`UNLOADED_TYPE_WIDTH`] (also for a
+/// frame of no size known).
+#[must_use]
+pub fn stellar_width(site: &LandingSite, type_width: TypeWidth) -> u32 {
+    match (type_width, site.frame_size) {
+        (TypeWidth::Frame, Some((width, _))) => width,
+        (TypeWidth::OutOfRange, _) => OUT_OF_RANGE_FRAME_WIDTH,
+        (TypeWidth::Frame | TypeWidth::Unloaded, _) => UNLOADED_TYPE_WIDTH,
+    }
+}
+
 /// `site`'s landing reach under `source`, given what it shows: see the
 /// module docs.
 #[must_use]
@@ -298,11 +315,7 @@ pub fn landing_reach(site: &LandingSite, shown: StellarShown, source: RuleSource
     if !shown.frame {
         return LandingReach::Box(NO_FRAME_REACH);
     }
-    let width = match (shown.type_width, site.frame_size) {
-        (TypeWidth::Frame, Some((width, _))) => width,
-        (TypeWidth::OutOfRange, _) => OUT_OF_RANGE_FRAME_WIDTH,
-        (TypeWidth::Frame | TypeWidth::Unloaded, _) => UNLOADED_TYPE_WIDTH,
-    };
+    let width = stellar_width(site, shown.type_width);
     // Truncated, as `cvttsd2si` does: rounding, not a word wrap.
     #[allow(clippy::cast_possible_truncation)]
     let reach = (f64::from(width) * REACH_PER_WIDTH).trunc() as f32;
@@ -1068,6 +1081,19 @@ mod tests {
             engine(&unknown, shown(true, TypeWidth::OutOfRange)),
             box_of(56.0)
         );
+    }
+
+    #[test]
+    fn a_stellars_width_is_its_type_frames_or_150_unloaded_or_32_out_of_range() {
+        assert_eq!(stellar_width(&sized(140, 85), TypeWidth::Frame), 140);
+        assert_eq!(stellar_width(&sized(140, 85), TypeWidth::Unloaded), 150);
+        assert_eq!(stellar_width(&sized(140, 85), TypeWidth::OutOfRange), 32);
+        let unknown = LandingSite {
+            frame_size: None,
+            ..site(128, 0.0, 0.0)
+        };
+        assert_eq!(stellar_width(&unknown, TypeWidth::Frame), 150);
+        assert_eq!(stellar_width(&unknown, TypeWidth::OutOfRange), 32);
     }
 
     #[test]

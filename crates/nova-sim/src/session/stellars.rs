@@ -115,11 +115,13 @@ use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::stellar::StellarTarget;
 use crate::control::{Script, ScriptNote};
-use crate::landing::{LandingReach, StellarShown, landing_radius, landing_reach};
+use crate::gate::GateKind;
+use crate::landing::{LandingReach, StellarShown, TypeWidth, landing_radius, landing_reach};
 use crate::legal::{self, Crime, LegalCode};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::Countdown;
 use crate::story::wreck::{self, Tick};
+use std::collections::BTreeMap;
 
 /// How many killings the player is convicted of for shooting a stellar
 /// down: `_SlapWithPenalty` runs ten times (@0x374e1-0x3751f).
@@ -207,6 +209,17 @@ impl Session {
             type_width: self.rebuilt.type_width(site),
         };
         landing_reach(site, shown, self.rules.source_for(RuleKey::LandingDistance))
+    }
+
+    /// The width each hypergate and wormhole shown takes its entry box
+    /// by: the one `_GetStellarSpriteXSize` reads of its `Type` master
+    /// (see [`gate_entry`](crate::traffic::gate_entry)).
+    pub(super) fn gate_type_widths(&self) -> BTreeMap<StellarId, TypeWidth> {
+        self.sites
+            .iter()
+            .filter(|site| GateKind::of(site.flags2).is_some())
+            .map(|site| (site.id, self.rebuilt.type_width(site)))
+            .collect()
     }
 
     /// `Y`: destroys `stellar` (see the module docs), drawing on `chance`
@@ -2180,6 +2193,31 @@ mod tests {
         let whole = |_: &mut Session| {};
         assert!(reaches(&catalog, &engine(), &whole, 55.0, 56.0));
         assert!(reaches(&catalog, &other_reading(), &whole, 50.0, 50.5));
+    }
+
+    #[test]
+    fn an_npc_enters_a_gate_by_the_width_its_type_master_gives() {
+        // 128, destroyed, a hypergate 100 wide: a reach of 25, and of 37
+        // once a rebuild point has unloaded its master (150 wide).
+        let mut catalog = ruin(100, false);
+        catalog.sites[0].1[0].flags2 = crate::gate::HYPERGATE;
+        let entering = |rebuilt: bool| {
+            let mut session = quiet(&catalog);
+            run(&mut session, "Y128");
+            if rebuilt {
+                rebuild(&mut session, &catalog);
+            }
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            let mut npc =
+                crate::testkit::npc(0, crate::stats::ShipStats::new(crate::testkit::FAST, &[]));
+            npc.goal = Goal::EnterGate(StellarId(128));
+            npc.state.position = Vec2::new(30.0, 0.0);
+            let id = session.traffic.add_npc(npc);
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            session.npc(id).expect("there").entering_gate()
+        };
+        assert!(!entering(false), "30 out of 25");
+        assert!(entering(true), "30 within 37");
     }
 
     #[test]
