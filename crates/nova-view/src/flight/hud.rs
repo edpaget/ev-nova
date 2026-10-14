@@ -121,7 +121,7 @@ pub fn choose_status_bar(
     catalog: &impl StatusBars,
     government: Option<GovtId>,
 ) -> Result<StatusBar, String> {
-    let layout = catalog.status_bar(chosen_interface(catalog, government)?)?;
+    let layout = catalog.status_bar(interface_for(catalog, government)?)?;
     let background = background(catalog, interface_id(layout.status_bkgnd));
     Ok(StatusBar { layout, background })
 }
@@ -146,7 +146,7 @@ pub fn rechoose_status_bar(
     let Some(previous) = previous else {
         return choose_status_bar(catalog, government);
     };
-    let id = chosen_interface(catalog, government)?;
+    let id = interface_for(catalog, government)?;
     Ok(match catalog.status_bar(id) {
         Ok(layout) => StatusBar {
             background: background(catalog, interface_id(layout.status_bkgnd)),
@@ -161,8 +161,13 @@ pub fn rechoose_status_bar(
 
 /// The `ïntf` ID a ship type of `government` shows: its `gövt`'s
 /// `Interface` (@0x73648), 128 for none or one with no record, and any
-/// below 128 meaning 128 (@0x7364d-0x7365a).
-fn chosen_interface(catalog: &impl StatusBars, government: Option<GovtId>) -> Result<i16, String> {
+/// below 128 meaning 128 (@0x7364d-0x7365a). The original keeps the ID
+/// it loaded (`_currentIntf`) and loads the bar again only for another
+/// (@0x73663-0x73672).
+pub(crate) fn interface_for(
+    catalog: &impl StatusBars,
+    government: Option<GovtId>,
+) -> Result<i16, String> {
     Ok(match government {
         None => DEFAULT_INTERFACE,
         Some(govt) => catalog

@@ -2753,10 +2753,19 @@ impl<
     /// one its hooks changed it to) is read, once, so the new hull is
     /// drawn once it takes off; a refused purchase tells nothing and
     /// reads nothing, and a session that failed has no shipyard.
+    ///
+    /// A purchase redraws the radar, the nav area and the target panel,
+    /// as the original's does inside the purchase (`_DrawStatus`
+    /// @0x5f0b1, after marking nav and the target @0x5f03a-0x5f04a), so a
+    /// ship whose default outfits carry IFF shows it at once. A refused
+    /// purchase redraws nothing.
     pub fn buy_ship(&mut self, ship: ShipId, name: &str) -> Result<ShipPurchase, ShipRefusal> {
         let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
         let bought = session.buy_ship(ship, name, &mut self.chance)?;
         self.catch_up();
+        self.retake_radar();
+        self.retake_nav();
+        self.retake_target();
         Ok(bought)
     }
 
@@ -9811,6 +9820,58 @@ mod tests {
             "a failed read is not tried again"
         );
         assert_eq!(view.frame(), None, "no sheet for 130");
+    }
+
+    /// [`shipbuying`], ship 129 carrying IFF ([`radar_outfits`]' 300)
+    /// among its default outfits, landed.
+    fn landed_shipyard_with_iff() -> View {
+        let mut catalog = shipbuying();
+        catalog.outfits.extend(radar_outfits());
+        catalog.ships[0].defaults.push((OutfitId(300), 1));
+        let mut view = FlightView::new(catalog);
+        land_now(&mut view);
+        view
+    }
+
+    #[test]
+    fn a_ship_bought_with_iff_shows_it_at_once() {
+        let mut view = landed_shipyard_with_iff();
+        assert!(view.hud_waits(), "the engine's reading");
+        assert!(!view.radar_shown().iff, "landing's");
+        assert_eq!(
+            view.buy_ship(ShipId(999), "Kestrel"),
+            Err(ShipRefusal::NotListed)
+        );
+        assert!(!view.radar_shown().iff, "refused");
+        view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+        assert!(view.radar_shown().iff, "its default IFF");
+        assert!(radar_filled(&view));
+    }
+
+    #[test]
+    fn a_ship_bought_redraws_the_nav_area_and_the_target_panel() {
+        let mut view = landed_shipyard_with_iff();
+        let stale_nav = NavDisplay::Stellar(Some("Stale".to_owned()));
+        let stale_target = TargetPanel {
+            name: "Stale".to_owned(),
+            subtitle: String::new(),
+            picture: None,
+            status: nova_sim::TargetStatus::Hidden,
+            tag: None,
+        };
+        let stale = |view: &mut View| {
+            view.nav_scene = Some((view.nav_mode(), stale_nav.clone()));
+            view.target_scene = Some((None, Some(stale_target.clone())));
+        };
+        stale(&mut view);
+        assert_eq!(view.nav_shown(), stale_nav, "held");
+        assert_eq!(*view.target_shown(), Some(stale_target.clone()), "held");
+        assert!(view.buy_ship(ShipId(999), "Kestrel").is_err());
+        assert_eq!(view.nav_shown(), stale_nav, "a refusal redraws nothing");
+        view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+        assert_eq!(view.nav_shown(), view.nav_now(), "redrawn");
+        assert_ne!(view.nav_shown(), stale_nav);
+        assert_eq!(*view.target_shown(), None, "redrawn");
     }
 
     /// The first `chär`'s `OnStart` is `on_start`.

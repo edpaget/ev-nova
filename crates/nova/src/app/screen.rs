@@ -7924,6 +7924,19 @@ pub(super) mod tests {
     /// (`ModType` 14), and `oütf` 133, a fuel tank (`ModType` 12) of 100,
     /// each 100 credits and weighing nothing.
     fn barred_outfitting_data() -> Rc<GameData> {
+        barred_data(false)
+    }
+
+    /// [`barred_outfitting_data`], where the planet is also a shipyard
+    /// ([`shipbuying_data`]) whose ship 129 carries IFF (`oütf` 132)
+    /// beside its booster.
+    fn barred_shipbuying_data() -> Rc<GameData> {
+        barred_data(true)
+    }
+
+    /// [`barred_outfitting_data`], or [`barred_shipbuying_data`] when
+    /// `shipbuying`.
+    fn barred_data(shipbuying: bool) -> Rc<GameData> {
         let sold = |mod_type: i16, mod_val: i16| {
             let mut outfit = booster_record(b"");
             put_i16s(&mut outfit, 0x02, &[0]);
@@ -7931,12 +7944,17 @@ pub(super) mod tests {
             outfit[0x0E..0x12].copy_from_slice(&100_i32.to_be_bytes());
             outfit
         };
-        let fork = barred(game_data_fork(true, true, false, 100, b"", b"", None))
+        let fork = barred(game_data_fork(true, true, shipbuying, 100, b"", b"", None))
             .resource(Outfit::TYPE, 132, Some(b"IFF"), &sold(14, 0))
             .resource(Outfit::TYPE, 133, Some(b"Tank"), &sold(12, 100));
         let mut built = fork.build();
         let first = built.layout.data_entry(Ship::TYPE, 128) + 4;
         built.put_u16(first + 0x0A, 300);
+        if shipbuying {
+            let second = built.layout.data_entry(Ship::TYPE, 129) + 4;
+            built.put_u16(second + 0x50, 132);
+            built.put_u16(second + 0x58, 1);
+        }
         loaded_bytes(built.bytes)
     }
 
@@ -8123,5 +8141,21 @@ pub(super) mod tests {
         assert!(!radar_black(&list), "sold");
         assert!(!player_cyan(&list), "sold");
         assert!(spaceport(&screen).open_outfitter().is_some(), "still open");
+    }
+
+    #[test]
+    fn a_ship_bought_carrying_iff_turns_the_bars_radar_black_at_once() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_shipyard_of(barred_shipbuying_data(), &store);
+        click_port_item(&mut screen, 9);
+        assert!(!radar_black(&drawn(&screen)), "without IFF");
+        press_b(&mut screen);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(pilot(&screen).ship(), ShipId(129));
+        assert_eq!(pilot(&screen).owned(IFF), 1, "its default IFF");
+        assert!(spaceport(&screen).open_shipyard().is_some(), "still open");
+        let list = drawn(&screen);
+        assert!(radar_black(&list));
+        assert!(player_cyan(&list));
     }
 }
