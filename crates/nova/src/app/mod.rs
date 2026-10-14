@@ -63,7 +63,7 @@ use std::time::Duration;
 use nova_audio::{Audio, AudioCore};
 use nova_render::{Gpu, ImageError, ImageSource, LOGICAL, Renderer, Viewport};
 use nova_view::devtools::{DevOverlay, PilotDesk, Routing};
-use nova_view::{DrawList, ImageKey, Input, Key, MouseButton, Screen, ScreenAction};
+use nova_view::{DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction};
 
 pub mod screen;
 
@@ -391,12 +391,18 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 game(self.route(Input::Text(c)))
             }
             WindowEvent::PointerMoved { px } => {
+                let was_in_view = self.pointer_at().is_some();
                 self.pointer = Some(px);
                 if self.pointer_routing() == Routing::Overlay {
                     return overlay;
                 }
+                // The original hides its arrow only inside the game rect
+                // (`_PtInRect` @0x38007-0x38017): leaving the viewport for
+                // a letterbox bar leaves the screen, as leaving the window
+                // does, and `show_pointer` shows the system pointer there.
                 game(match self.viewport.window_to_logical(px) {
                     Some(at) => self.route(Input::PointerMoved(at)),
+                    None if was_in_view => self.route(Input::PointerLeft),
                     None => Control::Continue,
                 })
             }
@@ -411,10 +417,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 if self.pointer_routing() == Routing::Overlay {
                     return overlay;
                 }
-                let at = self
-                    .pointer
-                    .and_then(|px| self.viewport.window_to_logical(px));
-                game(match at {
+                game(match self.pointer_at() {
                     Some(at) => self.route(Input::PointerButton {
                         button,
                         pressed,
@@ -459,14 +462,22 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// Hides the system's pointer over the window while the screen draws
     /// its own ([`Screen::hides_pointer`]) and the developer overlay is
     /// not showing, and shows it otherwise, telling `window` only when
-    /// that changes.
+    /// that changes. Over the letterbox bars, outside the game, it is
+    /// always shown.
     fn show_pointer(&mut self, window: &mut impl WindowPort) {
         let overlay = self.overlay.as_ref().is_some_and(DevOverlay::visible);
-        let hide = self.screen.hides_pointer() && !overlay;
+        let in_bars = self.pointer.is_some() && self.pointer_at().is_none();
+        let hide = self.screen.hides_pointer() && !overlay && !in_bars;
         if hide != self.pointer_hidden {
             window.set_pointer_visible(!hide);
             self.pointer_hidden = hide;
         }
+    }
+
+    /// The pointer's logical position, when it is over the game.
+    fn pointer_at(&self) -> Option<Point> {
+        self.pointer
+            .and_then(|px| self.viewport.window_to_logical(px))
     }
 
     fn pointer_routing(&self) -> Routing {
@@ -1207,6 +1218,40 @@ mod tests {
         app.screen.hides_pointer = false;
         redraw(&mut app, &mut window);
         assert_eq!(window.pointer_shown, [false, true, false, true]);
+    }
+
+    #[test]
+    fn the_pointer_moving_into_the_bars_leaves_the_screen_and_shows_the_system_pointer() {
+        // Pillarboxed: content x 256..2304 at scale 2.
+        let mut window = FakeWindow::new((2560, 1536), 2.0);
+        let mut app = app(&window);
+        app.screen.hides_pointer = true;
+        let into_view = WindowEvent::PointerMoved { px: (456.0, 100.0) };
+        let into_bar = WindowEvent::PointerMoved { px: (10.0, 10.0) };
+        handle(&mut app, &mut window, into_view);
+        redraw_plain(&mut app, &mut window);
+        assert_eq!(window.pointer_shown, [false], "hidden over the game");
+        handle(&mut app, &mut window, into_bar);
+        handle(&mut app, &mut window, into_bar);
+        redraw_plain(&mut app, &mut window);
+        assert_eq!(window.pointer_shown, [false, true], "shown over a bar");
+        handle(&mut app, &mut window, into_view);
+        redraw_plain(&mut app, &mut window);
+        assert_eq!(window.pointer_shown, [false, true, false], "hidden again");
+        assert_eq!(
+            app.screen().inputs,
+            [
+                Input::PointerMoved(Point::new(100.0, 50.0)),
+                Input::PointerLeft,
+                Input::PointerMoved(Point::new(100.0, 50.0)),
+            ],
+            "one leave on the way out"
+        );
+    }
+
+    fn redraw_plain(app: &mut TestApp, window: &mut FakeWindow) {
+        let elapsed = Duration::from_millis(16);
+        handle(app, window, WindowEvent::Redraw { elapsed });
     }
 
     #[test]
