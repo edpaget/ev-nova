@@ -822,7 +822,10 @@ mod tests {
         let mut landed = Box::new(targeting(&catalog));
         landed.landed = Some(StellarId(128));
         let mut jumping = Box::new(targeting(&catalog));
-        jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
+        jumping.jump = Some(crate::session::Jump::Hyperspace {
+            to: SystemId(131),
+            warp: 0,
+        });
         let mut dying = Box::new(targeting(&catalog));
         dying.condition = Condition::Dying { ticks_left: 3 };
         let mut destroyed = Box::new(targeting(&catalog));
@@ -1739,7 +1742,10 @@ mod tests {
         let mut landed = helped(&catalog, Help::Refuel, 0.0);
         landed.landed = Some(StellarId(128));
         let mut jumping = helped(&catalog, Help::Refuel, 0.0);
-        jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
+        jumping.jump = Some(crate::session::Jump::Hyperspace {
+            to: SystemId(131),
+            warp: 0,
+        });
         let mut disabled = helped(&catalog, Help::Refuel, 0.0);
         npc(&mut disabled).condition = Condition::Disabled;
         // One at a time: three sessions make too large an array.

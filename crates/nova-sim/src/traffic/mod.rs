@@ -345,6 +345,20 @@ impl Traffic {
         strikes: &[Strike],
         chance: &mut (impl Chance + ?Sized),
     ) {
+        self.tick_holding(behaviour, world, strikes, &BTreeSet::new(), chance);
+    }
+
+    /// Advances the traffic one tick as [`Traffic::tick_in`] does, but for
+    /// the NPCs in `still`, which decide, aim and cloak as the others do
+    /// and keep their place: none of them moves, lands or jumps out.
+    pub fn tick_holding(
+        &mut self,
+        behaviour: &(impl Behaviour + ?Sized),
+        world: World,
+        strikes: &[Strike],
+        still: &BTreeSet<NpcId>,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
         let mut draw = PersonDraw {
             world: world.persons,
             here: self.person_names(),
@@ -425,6 +439,9 @@ impl Traffic {
                         .find(|(other, _)| *other == id)
                         .map(|(_, state)| *state),
                 });
+                if still.contains(&npc.id) {
+                    return Outcome::Flying;
+                }
                 autopilot::fly(npc, world.sites, other.as_ref(), speeds)
             })
             .collect();
@@ -1113,6 +1130,44 @@ mod tests {
             traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
             assert_eq!(behaviour.take(), [NpcId(0), NpcId(1), NpcId(2)]);
         }
+    }
+
+    #[test]
+    fn the_npcs_held_still_decide_and_keep_their_place_while_the_rest_fly() {
+        let mut traffic = populated(3, 1);
+        for npc in &mut traffic.npcs {
+            npc.state.velocity = Vec2::new(1.0, 0.0);
+            npc.goal = Goal::JumpOut;
+        }
+        let before: Vec<ShipState> = traffic.npcs().iter().map(|npc| npc.state).collect();
+        let behaviour = Recording::deciding(Goal::JumpOut);
+        let still = BTreeSet::from([NpcId(0), NpcId(2)]);
+        let sites = [];
+        for _ in 0..3 {
+            traffic.tick_holding(
+                &behaviour,
+                World::new(&sites),
+                &[],
+                &still,
+                &mut Draws::of(&[]),
+            );
+            assert_eq!(
+                behaviour.take(),
+                [NpcId(0), NpcId(1), NpcId(2)],
+                "all decide"
+            );
+        }
+        let after: Vec<ShipState> = traffic.npcs().iter().map(|npc| npc.state).collect();
+        assert_eq!((after[0], after[2]), (before[0], before[2]), "held still");
+        assert_ne!(after[1], before[1], "flies");
+        traffic.tick_holding(
+            &behaviour,
+            World::new(&sites),
+            &[],
+            &BTreeSet::new(),
+            &mut Draws::of(&[]),
+        );
+        assert_ne!(traffic.npcs()[0].state, before[0], "let go");
     }
 
     #[test]

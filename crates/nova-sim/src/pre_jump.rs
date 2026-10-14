@@ -11,7 +11,17 @@
 //!    rate plus one, if wider) of the way it faces.
 //! 2. **Turn** (@0x6b03c-0x6b0d3) to the map bearing of the next system,
 //!    coasting on what drift is left.
-//! 3. Then the jump begins (@0x6b5e9).
+//! 3. Then the jump begins.
+//!
+//! The original's warp stage starts as the brake ends, not after the
+//! turn: on the first frame the ship is slow enough, or at once when it
+//! can expedite its jumps (@0x6b56a-0x6b596), `_HandlePlayer` sets +0x50
+//! to 2.0 (@0x6b5e9), stamps +0xa4 once (@0x6b5f0-0x6b5f5) and starts the
+//! warp-up sound (@0x6b60d-0x6b690); while the ship brakes it sets +0x50
+//! to 1.0 and restamps +0xa4 every frame (@0x6b6a2-0x6b6b1). The turn
+//! needs +0x50 above 0 and a slow ship, so it runs inside the warp stage.
+//! The session's warp clock starts on the first tick whose stage is not
+//! [`PreJump::Brake`] (see the [`warp`](crate::warp) module).
 //!
 //! The ship is slow enough when each component of its velocity is under
 //! [`JUMP_SPEED`] (@0x6b045, @0x6b579): it slows below a speed, and does
