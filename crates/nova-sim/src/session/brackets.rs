@@ -37,7 +37,7 @@ impl Session {
     /// [`Session::stellar_iff`]'s standing models.
     #[must_use]
     pub fn nav_brackets(&self) -> Option<NavBrackets> {
-        let stellar = self.nav_target?;
+        let stellar = self.nav_target()?;
         let dominated = self
             .sites
             .iter()
@@ -73,7 +73,7 @@ impl Session {
 
     /// The brackets' part of a flight tick (see the module docs).
     pub(super) fn brackets_tick(&mut self) {
-        if self.nav_target.is_some() {
+        if self.nav_target().is_some() {
             self.nav_fly_in.step();
         } else {
             self.nav_fly_in.settle();

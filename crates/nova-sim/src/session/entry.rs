@@ -709,7 +709,7 @@ impl Session {
             self.stop_thrust();
         }
         if resets.has(Reset::NavTarget) {
-            self.nav_target = None;
+            self.nav = crate::navigation::NavMode::Off;
         }
         if resets.has(Reset::GateEntry) {
             self.gate = None;

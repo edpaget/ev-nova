@@ -1832,7 +1832,7 @@ pub(super) mod tests {
     fn land_and_take_off_in_131(session: &mut Session, catalog: &FakePilotCatalog) {
         session.player.position = Vec2::ZERO;
         session.player.velocity = Vec2::ZERO;
-        session.nav_target = None;
+        session.nav = crate::navigation::NavMode::Off;
         assert_eq!(land_now(session), Ok(StellarId(140)));
         settle(session, catalog);
         take_off(session, catalog);

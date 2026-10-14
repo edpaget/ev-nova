@@ -258,7 +258,7 @@ pub(super) mod tests {
             GateKind::Wormhole => WORMHOLE_AT,
         };
         session.player.velocity = Vec2::ZERO;
-        session.nav_target = None;
+        session.nav = crate::navigation::NavMode::Off;
         session.land().expect("selects");
         assert!(matches!(session.land(), Ok(LandPress::AtGate { kind: at, .. }) if at == kind));
         let out = match kind {
@@ -401,7 +401,7 @@ pub(super) mod tests {
             GateKind::Wormhole => WORMHOLE_AT,
         };
         session.player.velocity = Vec2::ZERO;
-        session.nav_target = None;
+        session.nav = crate::navigation::NavMode::Off;
         session.land().expect("selects");
         session.land().expect("at the gate");
         let out = match kind {

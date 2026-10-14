@@ -1,19 +1,19 @@
-//! Navigation: the stellar the player has selected as the navigation
-//! target.
+//! Navigation: the player's nav mode and its selection, and how a
+//! stellar is picked.
 //!
 //! The stellars that can be selected are the system's navigation
 //! defaults, its `sÿst`'s `NavDef`s, in their order (the Nova Bible: "if
 //! you don't set a planet as a nav default ... you can't select it").
 //!
 //! The original (`_HandlePlayer` @0x68390 in `EV Nova.app`, read with
-//! `otool -tV -arch i386`) keeps the selection in one slot of the
-//! player's ship record (+0x6a its kind, 2 for a stellar and 3 for
-//! hyperspace; +0x6c its index), and every input below is skipped while
-//! the ship is jumping. It changes the selection by:
+//! `otool -tV -arch i386`) keeps the player's nav mode in two words of the
+//! player's ship record ([`NavMode`]): +0x6a the mode (−1 off, 2 a
+//! stellar, 3 hyperspace) and +0x6c its selection. Every input below is
+//! skipped while the ship is jumping. The keys that set it:
 //!
 //! - **keys 1-4 and F1-F4** (@0x69cf6-0x69f17; `_loadKeys` @0xce6c8
 //!   hard-codes F1-F4 as 0x7a, 0x78, 0x63, 0x76): the stellar in that
-//!   slot of the `NavDef`s, when there is one;
+//!   slot of the `NavDef`s, when there is one, in mode 2;
 //! - **F5** (or Cmd-5): the nearest, through `_FindNearestStellar`
 //!   (@0x276c), as the land key with no stellar selected;
 //! - **a click in space** (@0x6a000-0x6a717): outside the 194-pixel status
@@ -23,18 +23,63 @@
 //!   grown by 16 pixels a side for a sprite no taller than 47
 //!   ([`stellar_under`]). A click on empty space changes nothing;
 //! - **Nav Off**, the backquote key (`_loadKeys` @0xcd5f8 `navOff` 0x32,
-//!   handled @0x69a17-0x69b63): clears it, the only key that does;
-//! - **Hyper Select** (`\`, @0x69bb2): moves it to hyperspace.
+//!   handled @0x69a94-0x69b63): the mode off, the course kept;
+//! - **Hyperspace Mode**, H (`hyperMode` 0x04, @0x69b76-0x69b89): mode 3,
+//!   the course's next hop cued;
+//! - **Hyper Select** (`\`, @0x69bb2-0x69cec): mode 3, the next of the
+//!   system's links.
 //!
 //! The land key (@0x6a8ac-0x6a95b) selects the nearest only when no
 //! stellar is selected, and otherwise asks to dock at the selected one,
 //! so it never cycles. `_FindNextStellarInSystem` (@0x25a2) has no caller:
 //! the original has no stellar cycle key. [`next_after`] is the cycle
-//! Hyper Select runs over the systems it offers.
+//! Hyper Select runs over the systems it offers. The session's
+//! `nav` module has every setter.
 
-use crate::catalog::{LandingSite, StellarId};
+use crate::catalog::{LandingSite, StellarId, SystemId};
 use crate::geometry::Vec2;
 use crate::landing::UNKNOWN_STELLAR_RADIUS;
+
+/// The player's nav mode and its selection: the original's player +0x6a
+/// and +0x6c. Mode 4, the hypergate map's, is not modelled: the
+/// hypergate resets it to −1 (@0x63fa2) before any status draw. The
+/// mode is not saved: `_ResetPlayer` sets −1 / −1 (@0x1d4cd-0x1d4d5).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NavMode {
+    /// Mode −1: the nav system off, nothing selected.
+    #[default]
+    Off,
+    /// Mode 2: the stellar selected, `None` for none (+0x6c −1).
+    Stellar(Option<StellarId>),
+    /// Mode 3: the system selected, `None` for none (+0x6c −1). The
+    /// original keeps a slot of the current system's links, resolved by
+    /// place whenever it is read (`_FindActiveCoLocatedSystem` @0x4be0);
+    /// here it is the system, resolved by place as it is read.
+    Hyperspace(Option<SystemId>),
+}
+
+impl NavMode {
+    /// The mode kept and its selection let go (+0x6c −1), as a take-off,
+    /// a gate's exit or an in-flight `M` writes it.
+    #[must_use]
+    pub fn deselected(self) -> Self {
+        match self {
+            Self::Off => Self::Off,
+            Self::Stellar(_) => Self::Stellar(None),
+            Self::Hyperspace(_) => Self::Hyperspace(None),
+        }
+    }
+
+    /// The stellar selected in mode 2, the one every reader of the
+    /// stellar selection asks for: `None` in any other mode.
+    #[must_use]
+    pub fn stellar(self) -> Option<StellarId> {
+        match self {
+            Self::Stellar(stellar) => stellar,
+            _ => None,
+        }
+    }
+}
 
 /// How far a click may land outside a small sprite and still hit it, in
 /// pixels on each side: the original grows the sprite's rect by 16 on
@@ -108,8 +153,48 @@ fn half_box(frame_size: Option<(u32, u32)>) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::SystemId;
     use crate::testkit::planet;
+
+    #[test]
+    fn the_nav_mode_starts_off() {
+        assert_eq!(NavMode::default(), NavMode::Off);
+    }
+
+    #[test]
+    fn deselecting_keeps_the_mode_and_lets_go_of_the_selection() {
+        let cases = [
+            (NavMode::Off, NavMode::Off),
+            (
+                NavMode::Stellar(Some(StellarId(128))),
+                NavMode::Stellar(None),
+            ),
+            (NavMode::Stellar(None), NavMode::Stellar(None)),
+            (
+                NavMode::Hyperspace(Some(SystemId(131))),
+                NavMode::Hyperspace(None),
+            ),
+            (NavMode::Hyperspace(None), NavMode::Hyperspace(None)),
+        ];
+        for (mode, deselected) in cases {
+            assert_eq!(mode.deselected(), deselected, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn only_mode_2_with_a_stellar_names_a_stellar() {
+        assert_eq!(
+            NavMode::Stellar(Some(StellarId(128))).stellar(),
+            Some(StellarId(128))
+        );
+        for mode in [
+            NavMode::Off,
+            NavMode::Stellar(None),
+            NavMode::Hyperspace(Some(SystemId(128))),
+            NavMode::Hyperspace(None),
+        ] {
+            assert_eq!(mode.stellar(), None, "{mode:?}");
+        }
+    }
 
     #[test]
     fn next_after_cycles_any_list_and_restarts_from_a_missing_current() {

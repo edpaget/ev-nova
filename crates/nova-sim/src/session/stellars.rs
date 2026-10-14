@@ -2039,7 +2039,7 @@ mod tests {
             position: offset,
             ..ShipState::default()
         };
-        session.nav_target = Some(StellarId(128));
+        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(128)));
         match session.land()? {
             LandPress::Outcome(LandOutcome::Landed(stellar)) => Ok(stellar),
             other => panic!("not a landing: {other:?}"),

@@ -397,7 +397,7 @@ pub use landing::{
 pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use message::SimMessage;
-pub use navigation::{next_after, stellar_under};
+pub use navigation::{NavMode, next_after, stellar_under};
 pub use news::News;
 pub use outfit_effects::{OutfitRules, Rgb15};
 pub use outfitter::{

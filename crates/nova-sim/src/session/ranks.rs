@@ -1379,7 +1379,7 @@ pub(super) mod tests {
             let site = session.sites[stellar];
             session.player.position = site.position;
             session.player.velocity = crate::geometry::Vec2::ZERO;
-            session.nav_target = None;
+            session.nav = crate::navigation::NavMode::Off;
         };
         at(&mut session, 1);
         land_now(&mut session).expect("lands at 129");

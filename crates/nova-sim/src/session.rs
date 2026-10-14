@@ -449,7 +449,7 @@ use crate::market::{
 };
 use crate::message::SimMessage;
 use crate::mission::{Offers, StellarMarks};
-use crate::navigation::stellar_under;
+use crate::navigation::{NavMode, stellar_under};
 use crate::nebula;
 use crate::news::News;
 use crate::order_loop::{self, Onward, OrderRun, Pass};
@@ -568,8 +568,9 @@ pub struct Session {
     shown: SystemId,
     /// The stellar the ship is docked at, if it has landed.
     landed: Option<StellarId>,
-    /// The stellar selected as the navigation target, one of `sites`.
-    nav_target: Option<StellarId>,
+    /// The player's nav mode and its selection (see the `nav` module): a
+    /// stellar selected is one of `sites`.
+    nav: NavMode,
     /// The galaxy every reader sees: the catalog's systems, read when the
     /// session starts, with the pilot's overlay (see the
     /// [`story`](crate::story) module's "Galaxy overlay").
@@ -1031,7 +1032,7 @@ impl Session {
             listed: Vec::new(),
             shown: system,
             landed,
-            nav_target: None,
+            nav: NavMode::Off,
             galaxy,
             jump: None,
             multi_jump: MultiJumpRule::default(),
@@ -2412,10 +2413,10 @@ impl Session {
                 stellar_under(&self.sites, at, |site| self.drawn_frame_size(site))
             }
         }?;
-        if self.nav_target != Some(picked) {
+        if self.nav_target() != Some(picked) {
             self.nav_fly_in.start();
         }
-        self.nav_target = Some(picked);
+        self.nav = NavMode::Stellar(Some(picked));
         Some(picked)
     }
 
@@ -2426,7 +2427,9 @@ impl Session {
         if self.jump.is_some() {
             return false;
         }
-        self.nav_target.take().is_some()
+        let had = self.nav_target().is_some();
+        self.nav = NavMode::Off;
+        had
     }
 
     /// Presses Hyper Select (the original's `\` key): plots a one-jump
@@ -2448,19 +2451,19 @@ impl Session {
             self.galaxy.map(),
             self.pilot.system,
             &self.course_shown(),
-            self.nav_target.is_some(),
+            self.nav_target().is_some(),
             self.hyper_select,
             self.hyperlinks,
         )?;
         self.pilot.course = vec![next];
-        self.nav_target = None;
+        self.nav = NavMode::Off;
         Some(next)
     }
 
     /// The stellar selected as the navigation target, if any.
     #[must_use]
     pub fn nav_target(&self) -> Option<StellarId> {
-        self.nav_target
+        self.nav.stellar()
     }
 
     /// The sounds emitted since they were last taken, in order; taking
@@ -2558,7 +2561,7 @@ impl Session {
         let blessing = self.blessing();
         let reading = self.rules.source_for(RuleKey::BlessingLanding);
         let outcome = land_or_select(
-            self.nav_target,
+            self.nav_target(),
             &self.player,
             &self.sites,
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
@@ -2566,7 +2569,7 @@ impl Session {
         )?;
         match outcome {
             LandOutcome::Selected { stellar, .. } => {
-                self.nav_target = Some(stellar);
+                self.nav = NavMode::Stellar(Some(stellar));
                 self.nav_fly_in.start();
             }
             LandOutcome::Landed(stellar) => {
@@ -2649,7 +2652,7 @@ impl Session {
             ))
         } else {
             self.gate = None;
-            self.nav_target = None;
+            self.nav = NavMode::Off;
             Err(GateRefusal::NoLinks)
         }
     }
@@ -2690,7 +2693,7 @@ impl Session {
                 Ok(system)
             }
             Err(refusal) => {
-                self.nav_target = None;
+                self.nav = NavMode::Off;
                 Err(refusal)
             }
         }
@@ -2798,7 +2801,7 @@ impl Session {
     /// price multipliers as the spaceport opens (see the `ranks` module),
     /// and last raises [`StoryEvent::Landed`].
     fn dock(&mut self, stellar: StellarId) {
-        self.nav_target = None;
+        self.nav = NavMode::Off;
         self.touchdown = self.player.position;
         let site = self.sites.iter().find(|site| site.id == stellar);
         if let Some(site) = site {

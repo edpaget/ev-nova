@@ -990,7 +990,7 @@ mod tests {
         assert_eq!(combat.shots().len(), 1);
         land_now(&mut session).expect("lands");
         session.combat = combat;
-        session.nav_target = Some(StellarId(129));
+        session.nav = crate::navigation::NavMode::Stellar(Some(StellarId(129)));
         session.gate = Some(StellarId(129));
         session.stage_scene(session.npcs()[0].id);
         assert_eq!(session.fleet.len(), 2);
