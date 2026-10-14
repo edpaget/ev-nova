@@ -10404,12 +10404,14 @@ mod tests {
                     breaking_up(view);
                     broke_up = true;
                 }
-                PlayerFate::Exploded { first_tick } => {
-                    assert!(first_tick, "seen on the tick it explodes");
+                PlayerFate::Exploded => {
                     assert!(broke_up, "it broke up first");
                     return;
                 }
                 PlayerFate::Flying | PlayerFate::Disabled => {}
+                fate @ (PlayerFate::Holding { .. } | PlayerFate::Fading | PlayerFate::GameOver) => {
+                    panic!("past the explosion's tick unseen: {fate:?}")
+                }
             }
         }
         panic!("the player's ship never exploded");
@@ -10464,9 +10466,10 @@ mod tests {
                 );
             }
             view.tick(TICK);
-            assert_eq!(
-                view.session().expect("flying").player_fate(),
-                PlayerFate::Exploded { first_tick: false }
+            assert!(
+                matches!(fate_of(&view), PlayerFate::Holding { .. }),
+                "{:?}",
+                fate_of(&view)
             );
             assert_eq!(player_layers(&view), [0_i16; 0], "nothing of it after");
         }
@@ -10487,7 +10490,7 @@ mod tests {
                 PlayerFate::BreakingUp { .. } => {
                     breaking_up.push(sounds.iter().filter(|&&sound| sound == klaxon).count());
                 }
-                PlayerFate::Exploded { .. } => {
+                PlayerFate::Exploded => {
                     assert_eq!(breaking_up, [0, 1, 1, 1], "none as it starts");
                     let first_combat = sounds
                         .iter()
@@ -10501,6 +10504,9 @@ mod tests {
                     return;
                 }
                 PlayerFate::Flying | PlayerFate::Disabled => {}
+                fate @ (PlayerFate::Holding { .. } | PlayerFate::Fading | PlayerFate::GameOver) => {
+                    panic!("past the explosion's tick unseen: {fate:?}")
+                }
             }
         }
         panic!("the player's ship never exploded");
@@ -10648,7 +10654,7 @@ mod tests {
         let pilot = view.pilot().cloned();
         assert_eq!(view.input(&key(Key::Other, true)), ScreenAction::None);
         assert_eq!(view.input(&key(Key::Other, false)), ScreenAction::None);
-        assert!(matches!(fate_of(&view), PlayerFate::Exploded { .. }));
+        assert!(matches!(fate_of(&view), PlayerFate::Holding { .. }));
         assert!(view.take_mission_info_request().is_none());
         assert_eq!(view.take_landing(), None);
         assert!(view.take_hail().is_none());

@@ -9,7 +9,8 @@
 //!
 //! - [`PlayerFate::Flying`], [`PlayerFate::Disabled`],
 //!   [`PlayerFate::BreakingUp`] and [`PlayerFate::Exploded`]: phase 1.
-//! - `Holding`, `Fading` and `GameOver`: phase 6.
+//! - [`PlayerFate::Holding`], [`PlayerFate::Fading`] and
+//!   [`PlayerFate::GameOver`]: phase 6.
 //! - `Ejected`: phase 9.
 //!
 //! The columns of [`FateRow`], and their phases:
@@ -18,12 +19,15 @@
 //! - [`FateRow::drag`] (a disabled hull's 0.995 slowdown): phase 3.
 //! - [`FateRow::input`] ([`Takes`], which [`PlayerCommand`]s a state
 //!   accepts): phase 4.
+//! - [`FateRow::saves`] (whether the pilot may be saved): phase 6.
 //!
 //! Condition changes stay where they are, in the fight's
 //! `update_condition`; a fate is only read off them, so it adds no
 //! second transition path. [`PlayerFate::BreakingUp`]'s timer is the
 //! original's countdown there (phase 2): 3 x the `DeathDelay` for the
-//! player, set on the breakup's first tick.
+//! player, set on the breakup's first tick. After the explosion tick the
+//! session keeps how far the game's end has got, an [`Ending`], which the
+//! fate of a destroyed player reads.
 
 use crate::combat::hull::Condition;
 
@@ -43,12 +47,60 @@ pub enum PlayerFate {
         /// timer not yet set" frame; phase 9's eject reads it.
         starting: bool,
     },
-    /// It has made its final explosion ([`Condition::Destroyed`]).
-    Exploded {
-        /// Whether this is the tick it exploded on: the tick the fight
-        /// raised its `CombatEvent::Destroyed`.
-        first_tick: bool,
+    /// It has made its final explosion ([`Condition::Destroyed`]), on
+    /// this tick: the tick the fight raised its `CombatEvent::Destroyed`.
+    Exploded,
+    /// The hold after the explosion: the scene runs on without the ship.
+    /// It starts as the ship goes inactive (`_HandleShipDisplay` 0x68700)
+    /// and counts down in `_HandlePlayer`'s dead branch (0x6871e-0x68734)
+    /// once a tick; `ticks_left` is the hold ticks still to run, from
+    /// [`HOLD_TICKS`]. An expired hold still reads `ticks_left: 0`, until
+    /// the fade begins: [`Ending::expired`] tells the two apart.
+    Holding {
+        /// The hold ticks still to run.
+        ticks_left: u32,
     },
+    /// The fade to black, from the hold's expiry: the original sets
+    /// `gPause = 1` (0x68838), `_PlayGame` exits (0x465eb) and
+    /// `_FadeScreenOut` (0x465f7) fades the display out.
+    Fading,
+    /// The fade has ended and the main screen returns: the window painted
+    /// black (0x4664a) and `_EnterGameFromMainScreen` (0x1a471).
+    GameOver,
+}
+
+/// The hold after the explosion, in ticks: the dead branch takes 1.0
+/// (0xdd068) off the death timer while it is above -240.0 (0xdd958),
+/// starting from the 2.0 the ship explodes at, so it decrements on
+/// 2.0 - (-240.0) = 242 ticks and expires on the 243rd.
+pub const HOLD_TICKS: u32 = 242;
+
+/// How far a destroyed player's game has got after its explosion tick:
+/// the stage the session keeps, which [`PlayerFate::of`] reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ending {
+    /// The hold, with `ticks_left` still to count down.
+    Holding {
+        /// The hold ticks still to run.
+        ticks_left: u32,
+    },
+    /// The hold has run out, and the fade has not begun: the seam where
+    /// the sabotage dialogs (phase 8) show over the flight scene. It reads
+    /// as [`PlayerFate::Holding`] with no ticks left.
+    Expired,
+    /// [`PlayerFate::Fading`].
+    Fading,
+    /// [`PlayerFate::GameOver`].
+    GameOver,
+}
+
+impl Ending {
+    /// Whether the hold has run out: [`Ending::Expired`] and every stage
+    /// after it.
+    #[must_use]
+    pub fn expired(self) -> bool {
+        !matches!(self, Self::Holding { .. })
+    }
 }
 
 /// How much of the player's ship is drawn.
@@ -90,7 +142,16 @@ pub struct FateRow {
     ///   `_HandlePlayerBoardAttempt` 0x650c9, `_IsDisabled` at 0x6b0f5).
     /// - Exploded: none. The dead branch (0x6870d-0x6888c) skips every
     ///   key handler.
+    /// - Holding, fading and game over: none, the same dead branch.
     pub input: Takes,
+    /// Whether the pilot may be saved: only while the player is not dying
+    /// or dead, as `_IsDying` (@0x253d: the breakup timer above 0, or the
+    /// armour at 0 or below) reads it. The original's saves can't come
+    /// while dying (`_SavePilotFile` @0x76876 is called only on creation,
+    /// landing and pod rescue), and nothing saves after the death, so no
+    /// route here saves a dying or dead pilot either. Phase 7's strict-play
+    /// delete reads the same answer.
+    pub saves: bool,
 }
 
 /// A command the flight view sends the session for one of the player's
@@ -175,9 +236,11 @@ impl Takes {
 impl PlayerFate {
     /// The fate of a player whose ship is in `condition`;
     /// `exploded_this_tick` says whether the ship was destroyed on the
-    /// latest tick, and matters only to a destroyed ship.
+    /// latest tick, and `ending` how far the game's end has got since.
+    /// Both matter only to a destroyed ship; one with no ending recorded
+    /// is at the hold's start.
     #[must_use]
-    pub fn of(condition: Condition, exploded_this_tick: bool) -> Self {
+    pub fn of(condition: Condition, exploded_this_tick: bool, ending: Option<Ending>) -> Self {
         match condition {
             Condition::Intact => Self::Flying,
             Condition::Disabled => Self::Disabled,
@@ -188,8 +251,15 @@ impl PlayerFate {
                 ticks_left,
                 starting,
             },
-            Condition::Destroyed => Self::Exploded {
-                first_tick: exploded_this_tick,
+            Condition::Destroyed if exploded_this_tick => Self::Exploded,
+            Condition::Destroyed => match ending {
+                None => Self::Holding {
+                    ticks_left: HOLD_TICKS,
+                },
+                Some(Ending::Holding { ticks_left }) => Self::Holding { ticks_left },
+                Some(Ending::Expired) => Self::Holding { ticks_left: 0 },
+                Some(Ending::Fading) => Self::Fading,
+                Some(Ending::GameOver) => Self::GameOver,
             },
         }
     }
@@ -202,11 +272,13 @@ impl PlayerFate {
                 drawn: Drawn::Full,
                 drag: false,
                 input: Takes::Every,
+                saves: true,
             },
             Self::Disabled => FateRow {
                 drawn: Drawn::Full,
                 drag: true,
                 input: Takes::Every,
+                saves: true,
             },
             Self::BreakingUp { .. } => FateRow {
                 drawn: Drawn::Full,
@@ -216,16 +288,19 @@ impl PlayerFate {
                     PlayerCommand::Land,
                     PlayerCommand::MissionInfo,
                 ]),
+                saves: false,
             },
-            Self::Exploded { first_tick: true } => FateRow {
+            Self::Exploded => FateRow {
                 drawn: Drawn::SpriteHidden,
                 drag: false,
                 input: Takes::Nothing,
+                saves: false,
             },
-            Self::Exploded { first_tick: false } => FateRow {
+            Self::Holding { .. } | Self::Fading | Self::GameOver => FateRow {
                 drawn: Drawn::Hidden,
                 drag: false,
                 input: Takes::Nothing,
+                saves: false,
             },
         }
     }
@@ -238,38 +313,108 @@ mod tests {
     #[test]
     fn each_condition_maps_to_its_fate() {
         for exploded in [false, true] {
-            assert_eq!(
-                PlayerFate::of(Condition::Intact, exploded),
-                PlayerFate::Flying
-            );
-            assert_eq!(
-                PlayerFate::of(Condition::Disabled, exploded),
-                PlayerFate::Disabled
-            );
-            for starting in [false, true] {
+            for ending in [None, Some(Ending::Fading)] {
                 assert_eq!(
-                    PlayerFate::of(
-                        Condition::Dying {
+                    PlayerFate::of(Condition::Intact, exploded, ending),
+                    PlayerFate::Flying
+                );
+                assert_eq!(
+                    PlayerFate::of(Condition::Disabled, exploded, ending),
+                    PlayerFate::Disabled
+                );
+                for starting in [false, true] {
+                    assert_eq!(
+                        PlayerFate::of(
+                            Condition::Dying {
+                                ticks_left: 7,
+                                starting
+                            },
+                            exploded,
+                            ending
+                        ),
+                        PlayerFate::BreakingUp {
                             ticks_left: 7,
                             starting
-                        },
-                        exploded
-                    ),
-                    PlayerFate::BreakingUp {
-                        ticks_left: 7,
-                        starting
-                    }
-                );
+                        }
+                    );
+                }
             }
         }
+        for ending in [None, Some(Ending::Holding { ticks_left: 9 })] {
+            assert_eq!(
+                PlayerFate::of(Condition::Destroyed, true, ending),
+                PlayerFate::Exploded
+            );
+        }
+    }
+
+    #[test]
+    fn a_destroyed_player_after_its_explosion_tick_reads_its_ending() {
+        let after = |ending| PlayerFate::of(Condition::Destroyed, false, ending);
         assert_eq!(
-            PlayerFate::of(Condition::Destroyed, true),
-            PlayerFate::Exploded { first_tick: true }
+            after(Some(Ending::Holding { ticks_left: 9 })),
+            PlayerFate::Holding { ticks_left: 9 }
         );
         assert_eq!(
-            PlayerFate::of(Condition::Destroyed, false),
-            PlayerFate::Exploded { first_tick: false }
+            after(Some(Ending::Expired)),
+            PlayerFate::Holding { ticks_left: 0 }
         );
+        assert_eq!(after(Some(Ending::Fading)), PlayerFate::Fading);
+        assert_eq!(after(Some(Ending::GameOver)), PlayerFate::GameOver);
+        assert_eq!(
+            after(None),
+            PlayerFate::Holding {
+                ticks_left: HOLD_TICKS
+            },
+            "no ending recorded: the hold's start"
+        );
+    }
+
+    #[test]
+    fn the_hold_is_242_ticks() {
+        assert_eq!(HOLD_TICKS, 242);
+    }
+
+    #[test]
+    fn only_an_expired_or_later_ending_has_expired() {
+        assert!(!Ending::Holding { ticks_left: 0 }.expired());
+        assert!(!Ending::Holding { ticks_left: 5 }.expired());
+        for ending in [Ending::Expired, Ending::Fading, Ending::GameOver] {
+            assert!(ending.expired(), "{ending:?}");
+        }
+    }
+
+    const AFTER_THE_EXPLOSION: [PlayerFate; 4] = [
+        PlayerFate::Holding { ticks_left: 0 },
+        PlayerFate::Holding { ticks_left: 100 },
+        PlayerFate::Fading,
+        PlayerFate::GameOver,
+    ];
+
+    #[test]
+    fn holding_fading_and_game_over_hide_the_ship_take_no_command_and_do_not_drag() {
+        for fate in AFTER_THE_EXPLOSION {
+            let row = fate.row();
+            assert_eq!(row.drawn, Drawn::Hidden, "{fate:?}");
+            assert!(!row.drag, "{fate:?}");
+            for command in PlayerCommand::ALL {
+                assert!(!row.input.takes(command), "{fate:?} {command:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn only_flying_and_disabled_players_may_be_saved() {
+        for fate in [PlayerFate::Flying, PlayerFate::Disabled] {
+            assert!(fate.row().saves, "{fate:?}");
+        }
+        for fate in BREAKING_UP
+            .into_iter()
+            .chain([PlayerFate::Exploded])
+            .chain(AFTER_THE_EXPLOSION)
+        {
+            assert!(!fate.row().saves, "{fate:?}");
+        }
     }
 
     #[test]
@@ -309,27 +454,24 @@ mod tests {
 
     #[test]
     fn flying_and_exploded_players_do_not_drag() {
-        for fate in [
-            PlayerFate::Flying,
-            PlayerFate::Exploded { first_tick: true },
-            PlayerFate::Exploded { first_tick: false },
-        ] {
+        for fate in [PlayerFate::Flying, PlayerFate::Exploded] {
             assert!(!fate.row().drag, "{fate:?}");
         }
     }
 
     #[test]
     fn an_exploded_player_hides_its_sprite_on_its_first_tick() {
-        assert_eq!(
-            PlayerFate::Exploded { first_tick: true }.row().drawn,
-            Drawn::SpriteHidden
-        );
+        assert_eq!(PlayerFate::Exploded.row().drawn, Drawn::SpriteHidden);
     }
 
     #[test]
-    fn an_exploded_player_is_hidden_from_the_tick_after() {
+    fn a_holding_player_is_hidden() {
         assert_eq!(
-            PlayerFate::Exploded { first_tick: false }.row().drawn,
+            PlayerFate::Holding {
+                ticks_left: HOLD_TICKS
+            }
+            .row()
+            .drawn,
             Drawn::Hidden
         );
     }
@@ -383,11 +525,9 @@ mod tests {
 
     #[test]
     fn exploded_players_take_no_command() {
-        for first_tick in [false, true] {
-            let fate = PlayerFate::Exploded { first_tick };
-            for command in PlayerCommand::ALL {
-                assert!(!fate.row().input.takes(command), "{fate:?} {command:?}");
-            }
+        let fate = PlayerFate::Exploded;
+        for command in PlayerCommand::ALL {
+            assert!(!fate.row().input.takes(command), "{fate:?} {command:?}");
         }
     }
 

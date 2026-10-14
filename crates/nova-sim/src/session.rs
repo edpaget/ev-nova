@@ -683,7 +683,7 @@ pub struct Session {
     /// [`Session::tick_combat`], the tick the fight raised its
     /// `CombatEvent::Destroyed`; read by [`Session::player_fate`]. It stays
     /// set until the next `tick_combat`, so every interpolated view frame
-    /// drawn after that tick sees `first_tick: true`: the original hides
+    /// drawn after that tick sees [`PlayerFate::Exploded`]: the original hides
     /// on its own frame boundary, so this crosses no boundary the player
     /// can see.
     player_exploded_this_tick: bool,
@@ -2110,7 +2110,7 @@ impl Session {
     /// whether it exploded on the latest fight tick.
     #[must_use]
     pub fn player_fate(&self) -> PlayerFate {
-        PlayerFate::of(self.condition, self.player_exploded_this_tick)
+        PlayerFate::of(self.condition, self.player_exploded_this_tick, None)
     }
 
     /// Whether the session takes the player's `command` now: its
@@ -14934,7 +14934,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_players_fate_is_exploded_first_tick_only_on_the_tick_it_is_destroyed() {
+    fn the_players_fate_is_exploded_only_on_the_tick_it_is_destroyed_then_holding() {
         let catalog = deadly();
         let mut session = facing_an_npc(&catalog, 180);
         let mut broke_up = false;
@@ -14953,10 +14953,7 @@ pub(super) mod tests {
                 )
             });
             if destroyed {
-                assert_eq!(
-                    session.player_fate(),
-                    PlayerFate::Exploded { first_tick: true }
-                );
+                assert_eq!(session.player_fate(), PlayerFate::Exploded);
                 exploded = true;
                 break;
             }
@@ -14976,9 +14973,10 @@ pub(super) mod tests {
         for _ in 0..3 {
             session.tick_traffic(&catalog, &Firing, &mut NeverFires);
             session.tick_combat(Rules::default(), &mut NeverFires);
-            assert_eq!(
-                session.player_fate(),
-                PlayerFate::Exploded { first_tick: false }
+            assert!(
+                matches!(session.player_fate(), PlayerFate::Holding { .. }),
+                "{:?}",
+                session.player_fate()
             );
         }
     }
