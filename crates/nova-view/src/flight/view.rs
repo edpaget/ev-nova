@@ -148,7 +148,7 @@
 //!   it. The map shows the systems the pilot has explored, and the rest
 //!   unexplored. It draws the session's galaxy ([`Session::galaxy`]):
 //!   the catalog's geometry with only the visible systems, links and
-//!   active nebulae, each system coloured by its government there, rebuilt
+//!   nebulae active and explored, each system coloured by its government there, rebuilt
 //!   on the frame after each change to it; and the course as it is flown
 //!   ([`Session::course_shown`]), each hop the visible system standing
 //!   for it.

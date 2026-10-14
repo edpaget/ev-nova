@@ -6,8 +6,10 @@
 //! galaxy overlay ([`GalaxyModel::apply`]; see `nova_sim`'s `story` module,
 //! "Galaxy overlay"): which systems are drawn and hit, each one's
 //! government and so its colour, the hyperlinks, and which nebulae are
-//! active. The override rules are the session's; the model only reads
-//! them. Until one is applied, the catalog's galaxy is drawn as it is.
+//! shown: those active and explored. The override rules are the
+//! session's; the model only reads them. Until one is applied, the
+//! catalog's galaxy is drawn as it is, every nebula included (the browse
+//! map, with no session).
 //!
 //! - Each system's colour comes from its own government's map colour;
 //!   independent systems, and systems whose government is missing, are
@@ -129,7 +131,8 @@ pub struct GalaxyModel {
     govt_colors: BTreeMap<GovtId, u32>,
     /// Every nebula the catalog has that can be drawn.
     catalog_nebulae: Vec<NebulaEntry>,
-    /// Every nebula drawn: the active ones.
+    /// Every nebula drawn: the catalog's until a session's galaxy is
+    /// applied, then those it shows.
     nebulae: Vec<NebulaEntry>,
     /// The catalog's problems, then the model's.
     problems: Vec<String>,
@@ -200,8 +203,9 @@ impl GalaxyModel {
 
     /// Draws the session's `galaxy` over the catalog's geometry: only its
     /// visible systems, each coloured by its government there, its
-    /// hyperlinks, and only its active nebulae. The problems are the
-    /// catalog's, as built.
+    /// hyperlinks, and only the nebulae it shows, each active and
+    /// explored, as `_MapDialogUpdate` draws them (@0xf951-0xf95f). The
+    /// problems are the catalog's, as built.
     pub fn apply(&mut self, galaxy: &OverlaidGalaxy) {
         self.systems = self
             .catalog
@@ -216,7 +220,7 @@ impl GalaxyModel {
         self.nebulae = self
             .catalog_nebulae
             .iter()
-            .filter(|nebula| galaxy.nebula_active(nebula.id))
+            .filter(|nebula| galaxy.nebula_shown(nebula.id))
             .cloned()
             .collect();
     }
@@ -243,8 +247,9 @@ impl GalaxyModel {
         &self.links
     }
 
-    /// Every nebula drawn, by ascending ID: every active one that can be
-    /// drawn.
+    /// Every nebula drawn, by ascending ID: every one that can be drawn,
+    /// or, once a session's galaxy is applied, every one it shows, active
+    /// and explored.
     #[must_use]
     pub fn nebulae(&self) -> &[NebulaEntry] {
         &self.nebulae
@@ -829,13 +834,37 @@ mod tests {
             .collect()
     }
 
+    fn nebula_ids(model: &GalaxyModel) -> Vec<NebulaId> {
+        model.nebulae().iter().map(|nebula| nebula.id).collect()
+    }
+
     #[test]
-    fn with_no_override_the_sessions_galaxy_changes_nothing() {
+    fn with_nothing_explored_the_sessions_galaxy_draws_the_catalogs_systems_and_no_nebula() {
         let galaxy = session_galaxy();
         let mut model = GalaxyModel::new(galaxy.clone());
         let fresh = model.clone();
+        assert_eq!(nebula_ids(&fresh), [NebulaId(140), NebulaId(141)]);
         model.apply(&overlaid(&galaxy, |_| {}));
-        assert_eq!(model, fresh);
+        assert_eq!(model.systems(), fresh.systems());
+        assert_eq!(model.links(), fresh.links());
+        assert_eq!(model.problems(), fresh.problems());
+        assert_eq!(nebula_ids(&model), [] as [NebulaId; 0], "none explored");
+    }
+
+    #[test]
+    fn a_nebula_is_drawn_only_while_active_and_explored() {
+        let galaxy = session_galaxy();
+        let mut model = GalaxyModel::new(galaxy.clone());
+        model.apply(&overlaid(&galaxy, |overlay| {
+            overlay.set_nebula_explored(NebulaId(140), true);
+        }));
+        assert_eq!(nebula_ids(&model), [NebulaId(140)], "141 unexplored");
+        model.apply(&overlaid(&galaxy, |overlay| {
+            overlay.set_nebula_explored(NebulaId(140), true);
+            overlay.set_nebula_active(NebulaId(140), Some(false));
+            overlay.set_nebula_explored(NebulaId(141), true);
+        }));
+        assert_eq!(nebula_ids(&model), [NebulaId(141)], "140 inactive");
     }
 
     #[test]
@@ -882,12 +911,20 @@ mod tests {
     fn an_inactive_nebula_is_not_drawn_and_shows_again_once_active() {
         let galaxy = session_galaxy();
         let mut model = GalaxyModel::new(galaxy.clone());
+        let explored = |overlay: &mut GalaxyOverlay| {
+            overlay.set_nebula_explored(NebulaId(140), true);
+            overlay.set_nebula_explored(NebulaId(141), true);
+        };
         model.apply(&overlaid(&galaxy, |overlay| {
+            explored(overlay);
             overlay.set_nebula_active(NebulaId(140), Some(false));
         }));
-        let nebulae: Vec<NebulaId> = model.nebulae().iter().map(|nebula| nebula.id).collect();
-        assert_eq!(nebulae, [NebulaId(141)]);
-        model.apply(&overlaid(&galaxy, |_| {}));
-        assert_eq!(model, GalaxyModel::new(galaxy), "back to the catalog's");
+        assert_eq!(nebula_ids(&model), [NebulaId(141)]);
+        model.apply(&overlaid(&galaxy, explored));
+        assert_eq!(
+            nebula_ids(&model),
+            [NebulaId(140), NebulaId(141)],
+            "both again"
+        );
     }
 }

@@ -278,7 +278,8 @@ impl GalaxyMap {
 
     /// Draws the session's `galaxy` over the catalog's geometry
     /// ([`GalaxyModel::apply`]): its visible systems, governments, links
-    /// and active nebulae. A selected system it hides is let go of.
+    /// and the nebulae it shows, active and explored. A selected system it
+    /// hides is let go of.
     pub fn show_galaxy(&mut self, galaxy: &OverlaidGalaxy) {
         self.model.apply(galaxy);
         self.selected = self.selected.filter(|&id| self.model.system(id).is_some());
@@ -2190,6 +2191,7 @@ mod tests {
         map.show_galaxy(&session_galaxy(|overlay| {
             overlay.set_visible(SystemId(129), Some(false));
             overlay.set_govt(SystemId(130), Some(None));
+            overlay.set_nebula_explored(NebulaId(128), true);
             overlay.set_nebula_active(NebulaId(128), Some(false));
         }));
         let list = drawn(&map);
