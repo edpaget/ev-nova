@@ -364,6 +364,7 @@ use nova_sim::mission::offer_gap;
 use nova_sim::mission::screens::{NO_ACTIVE_MISSIONS, mac_ticks};
 use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
+use nova_sim::traffic::gate_entry::enter_level;
 use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     ALERT_CICN, Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule,
@@ -1106,19 +1107,23 @@ fn shown_heading(from: &ShipState, to: &ShipState, alpha: f32) -> f32 {
 /// How `npc`'s sprite is tinted: `None` while it waits hidden at the gate
 /// it comes out of; white with the alpha of its [`emerge_level`] over
 /// its last [`FADE_TICKS`](nova_sim::traffic::emerge::FADE_TICKS) there;
-/// plain white otherwise.
+/// white with the alpha of its [`enter_level`] while it enters a gate to
+/// leave, fading out; plain white otherwise.
 ///
 /// The original (`_HandleShipDisplay` @0x2c090-0x2c18e) fades the hull in
 /// at 16-bit depth by a destination factor of twice the ticks left and a
-/// bias of four times them, at most 32. That translucent blit was not
-/// traced; this draws the ship's alpha rising from none to full, as the
+/// bias of four times them, at most 32, and out again entering a gate
+/// (@0x2bf94-0x2c088). Those translucent blits were not traced; this
+/// draws the ship's alpha rising from none to full, or falling, as the
 /// cloak's fade does. An NPC gets no screen flash, as the player's own
 /// gate arrival does (see [`jump`](super::jump)).
 fn npc_tint(npc: &Npc) -> Option<Color> {
-    let Mode::Emerging { ticks_left } = npc.mode else {
-        return Some(Color::WHITE);
+    let level = match npc.mode {
+        Mode::Emerging { ticks_left } => emerge_level(ticks_left)?,
+        Mode::EnteringGate { ticks_left, .. } => enter_level(ticks_left),
+        _ => return Some(Color::WHITE),
     };
-    let level = u16::from(emerge_level(ticks_left)?);
+    let level = u16::from(level);
     let full = u16::from(FULL_LEVEL);
     let alpha = u8::try_from((level * 255 + full / 2) / full).unwrap_or(u8::MAX);
     Some(Color::rgba(255, 255, 255, alpha))
@@ -9631,6 +9636,86 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Sends every NPC into hypergate 141.
+    #[derive(Debug)]
+    struct Entering;
+
+    impl Behaviour for Entering {
+        fn decide(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            Goal::EnterGate(nova_sim::catalog::StellarId(141))
+        }
+    }
+
+    #[test]
+    fn a_ship_entering_a_gate_fades_out_by_two_32nds_a_tick() {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(trafficked(&[130], 1, 129, 3))
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let mut npc = view.session().expect("flying").npcs()[0].clone();
+        let gate = nova_sim::catalog::StellarId(141);
+        let entering = |ticks_left| Mode::EnteringGate { gate, ticks_left };
+        npc.mode = entering(15);
+        assert_eq!(
+            npc_tint(&npc),
+            Some(Color::rgba(255, 255, 255, 239)),
+            "30/32"
+        );
+        npc.mode = entering(8);
+        assert_eq!(
+            npc_tint(&npc),
+            Some(Color::rgba(255, 255, 255, 128)),
+            "half"
+        );
+        npc.mode = entering(1);
+        assert_eq!(npc_tint(&npc), Some(Color::rgba(255, 255, 255, 16)), "2/32");
+        npc.mode = entering(16);
+        assert_eq!(npc_tint(&npc), Some(Color::WHITE));
+    }
+
+    #[test]
+    fn a_hypergate_animates_while_an_npc_heads_in_to_enter_it_and_the_npc_fades_into_it() {
+        let busy = with_hypergate(trafficked(&[130], 1, 129, 3));
+        // Setup places the ship at (700, 700), far from the gate.
+        let (_, chance) = scripted(&placed(1450, 1450, 90));
+        let mut view = FlightView::new(busy)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Entering));
+        assert_eq!(gate_frames(&drawn(&view)), [0], "closed at first");
+        let mut heading_in = Vec::new();
+        let mut tints = Vec::new();
+        let mut after = Vec::new();
+        for _ in 0..2000 {
+            ticks(&mut view, 1);
+            let list = drawn(&view);
+            let frames = gate_frames(&list);
+            match view
+                .session()
+                .expect("flying")
+                .npcs()
+                .first()
+                .map(|npc| npc.mode)
+            {
+                Some(Mode::Flying) => heading_in.extend(frames),
+                Some(Mode::EnteringGate { .. }) => tints.extend(npc_tints(&list)),
+                Some(_) => {}
+                None => after.extend(frames),
+            }
+        }
+        assert_eq!(heading_in.first(), Some(&0), "closed while it is far");
+        assert!(heading_in.iter().any(|&frame| frame > 0), "{heading_in:?}");
+        assert_eq!(tints.len(), 15, "drawn for 15 frames: {tints:?}");
+        assert_eq!(tints.first(), Some(&Color::rgba(255, 255, 255, 239)));
+        assert_eq!(tints.last(), Some(&Color::rgba(255, 255, 255, 16)));
+        assert_eq!(after.last(), Some(&0), "closed once it is gone");
     }
 
     #[test]
