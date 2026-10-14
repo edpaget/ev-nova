@@ -402,7 +402,9 @@ pub use self::offer::{Offer, Offers, ROLLED, RollTable, Stop, resolve};
 pub use self::screens::{
     OfferLabels, OfferPrompt, VenueOffer, display_order, offer_gap, offer_labels,
 };
-pub use self::select::{Kind, Stellar, StellarCode, World, select_stellar, stellars_of};
+pub use self::select::{
+    Kind, Placed, Stellar, StellarCode, World, placements, select_stellar, stellars_of,
+};
 pub use self::ships::{ShipSystem, SpecialShips};
 
 /// Where a mission is offered.

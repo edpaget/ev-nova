@@ -10,9 +10,9 @@
 //! and their own Con links, and asks that every system at the stellar's
 //! place list it, the last alone with no origin, as availability asks.
 //!
-//! The galaxy it chooses from is a [`World`]: every stellar of a visible
-//! system, overlaid ([`stellars_of`]), the overlaid map and the
-//! governments.
+//! The galaxy it chooses from is a [`World`]: every active stellar,
+//! overlaid ([`stellars_of`]), where every listed stellar is
+//! ([`placements`]), the overlaid map and the governments.
 
 use crate::catalog::{GovtId, ListedStellar, StellarId, SystemId};
 use crate::chance::Chance;
@@ -21,7 +21,7 @@ use crate::govt::Governments;
 use crate::hyperspace::StarMap;
 use crate::landing::{StellarFlags, landable};
 use crate::rulebook::RuleSource;
-use crate::story::OverlaidGalaxy;
+use crate::story::{OverlaidGalaxy, Whereabouts};
 
 /// A stellar of a visible system, overlaid, with the system it belongs
 /// to: what choosing it reads.
@@ -29,9 +29,10 @@ use crate::story::OverlaidGalaxy;
 pub struct Stellar {
     /// The stellar.
     pub id: StellarId,
-    /// The system that owns it: the lowest-ID visible system that lists it
-    /// and is not shadowed at its place
-    /// ([`OverlaidGalaxy::owner`]).
+    /// The system that holds it ([`OverlaidGalaxy::holder`]): its owner,
+    /// the lowest-ID visible system that lists it and is not shadowed at
+    /// its place, else the player's system when that lists it. This is
+    /// the system `_StellarsAreDistant` reads (+0x14).
     pub system: SystemId,
     /// Its `Flags`.
     pub flags: u32,
@@ -49,30 +50,40 @@ pub struct Stellar {
     pub listed_at_place: bool,
 }
 
-/// Every stellar of `listed` that has an owner in `galaxy`, by ascending
-/// ID, each in its owner ([`OverlaidGalaxy::owner`]: the lowest-ID visible
-/// system that lists it and is not shadowed at its place, by
-/// `colocated_resolution`), as the galaxy refresh gives each stellar its
-/// system (`_PropagateMissionBitEffects` @0x996ed-0x997bd), with the
-/// overlay's government and destroyed state, and whether every system at
-/// its system's place lists it ([`Stellar::listed_at_place`]). A stellar
-/// with no owner is left out: the original's candidates are in a visible
-/// system (+0x1eb). So is a stellar that does not exist: every
-/// scan of `_SelectMissionStellar` tests a stellar's +0x44 before its
-/// distance, set only for a stellar that exists (+0x45: loaded and listed
-/// by a system, `_LoadObjectData` @0x77584-0x7758b, @0x779bf-0x779c6,
-/// @0x789ad-0x789c6) in a visible system
-/// (`_HandleStellarSystemVisibility` @0x32c42-0x32cdf), and
+/// Every stellar of `listed` that is active in `galaxy` with the player in
+/// `player`, by ascending ID, each in the system that holds it
+/// ([`OverlaidGalaxy::holder`]: its owner, the lowest-ID visible system
+/// that lists it and is not shadowed at its place, by
+/// `colocated_resolution`, else the player's system when that lists it),
+/// with the overlay's government and destroyed state, and whether every
+/// system at its system's place lists it ([`Stellar::listed_at_place`]).
+///
+/// These are `_SelectMissionStellar`'s candidates: every scan of it tests
+/// a stellar's active byte (+0x44) before its distance, which
+/// `_HandleStellarSystemVisibility` sets for a stellar that exists (+0x45:
+/// loaded and listed by a system, `_LoadObjectData` @0x77584-0x7758b,
+/// @0x779bf-0x779c6, @0x789ad-0x789c6) whose owner is visible
+/// (@0x32c42-0x32cdf), after its rescue gives a stellar with no owner to
+/// the player's system when that lists it (@0x32c58-0x32cb3). So a
+/// stellar rescued into the player's system is a candidate while that
+/// system is visible, and its system for `_StellarsAreDistant` is the
+/// rescued holder; a stellar no visible system holds is left out, and
 /// `_StellarsAreDistant`'s refusal of a stellar that does not exist
 /// (@0x9cea-0x9cee) is never reached.
 #[must_use]
-pub fn stellars_of(galaxy: &OverlaidGalaxy, listed: &[ListedStellar]) -> Vec<Stellar> {
+pub fn stellars_of(
+    galaxy: &OverlaidGalaxy,
+    listed: &[ListedStellar],
+    player: SystemId,
+) -> Vec<Stellar> {
     let map = galaxy.map();
     listed
         .iter()
         .filter_map(|stellar| {
             let id = stellar.id;
-            let system = galaxy.owner(&stellar.systems)?;
+            let system = galaxy
+                .holder(&stellar.systems, player)
+                .filter(|&system| galaxy.visible(system))?;
             Some(Stellar {
                 id,
                 system,
@@ -89,11 +100,41 @@ pub fn stellars_of(galaxy: &OverlaidGalaxy, listed: &[ListedStellar]) -> Vec<Ste
         .collect()
 }
 
+/// Where a listed stellar is, held or not: what a mission's stops, its
+/// availability and its aux and mission ships read of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Placed {
+    /// The stellar.
+    pub id: StellarId,
+    /// Where it is.
+    pub at: Whereabouts,
+}
+
+/// Where each stellar of `listed` is in `galaxy`, with the player in
+/// `player` ([`OverlaidGalaxy::whereabouts`]), by ascending ID: every one,
+/// held or not.
+#[must_use]
+pub fn placements(
+    galaxy: &OverlaidGalaxy,
+    listed: &[ListedStellar],
+    player: SystemId,
+) -> Vec<Placed> {
+    listed
+        .iter()
+        .map(|stellar| Placed {
+            id: stellar.id,
+            at: galaxy.whereabouts(&stellar.systems, player),
+        })
+        .collect()
+}
+
 /// The galaxy a mission's stellars are chosen from.
 #[derive(Clone, Copy, Debug)]
 pub struct World<'a> {
-    /// Every stellar of a visible system, by ascending ID ([`stellars_of`]).
+    /// Every active stellar, by ascending ID ([`stellars_of`]).
     pub stellars: &'a [Stellar],
+    /// Where every listed stellar is, by ascending ID ([`placements`]).
+    pub placed: &'a [Placed],
     /// The overlaid map: the visible systems and their links.
     pub map: &'a StarMap,
     /// The governments and their relations.
@@ -118,10 +159,20 @@ impl World<'_> {
             .and_then(|at| self.stellars.get(at))
     }
 
-    /// The system stellar `id` belongs to, when a visible system lists it.
+    /// The system that holds stellar `id`, when it is active
+    /// ([`Stellar::system`]).
     #[must_use]
     pub fn system_of(&self, id: StellarId) -> Option<SystemId> {
         self.stellar(id).map(|stellar| stellar.system)
+    }
+
+    /// Where stellar `id` is ([`placements`]): nowhere, the default, when
+    /// no system lists it.
+    #[must_use]
+    pub fn whereabouts(&self, id: StellarId) -> Whereabouts {
+        self.placed
+            .binary_search_by_key(&id, |placed| placed.id)
+            .map_or_else(|_| Whereabouts::default(), |at| self.placed[at].at)
     }
 
     /// Whether `stellar` is distant from `origin`, none as availability
@@ -573,6 +624,7 @@ mod tests {
         let govts = govts();
         let world = World {
             stellars,
+            placed: &[],
             map,
             govts: &govts,
             draw: RuleSource::Engine,
@@ -780,6 +832,7 @@ mod tests {
         for reading in [RuleSource::Engine, RuleSource::Bible] {
             let world = World {
                 stellars: &stellars,
+                placed: &[],
                 map: &map,
                 govts: &govts,
                 draw: RuleSource::Engine,
@@ -893,6 +946,7 @@ mod tests {
         let stellars = with_origin(&[at(131, 140, 0, None), at(132, 150, 0, None)]);
         let world = World {
             stellars: &stellars,
+            placed: &[],
             map: &map,
             govts: &govts,
             draw: RuleSource::Engine,
@@ -915,6 +969,7 @@ mod tests {
         let stellars = [at(130, 129, 0, None), at(132, 150, 0, None)];
         let world = World {
             stellars: &stellars,
+            placed: &[],
             map: &map,
             govts: &govts,
             draw: RuleSource::Engine,
@@ -949,6 +1004,7 @@ mod tests {
         let (map, govts) = (map(), govts());
         f(&World {
             stellars,
+            placed: &[],
             map: &map,
             govts: &govts,
             draw,
@@ -1302,6 +1358,7 @@ mod tests {
                 listed(141, &[131]),
                 listed(150, &[132]),
             ],
+            SystemId(132),
         );
         let at_place: Vec<(i16, i16, bool)> = stellars
             .iter()
@@ -1336,7 +1393,7 @@ mod tests {
         let placed = |colocated| {
             let mut galaxy = OverlaidGalaxy::new(systems.clone(), GalaxyOverlay::default());
             galaxy.set_colocated(colocated);
-            stellars_of(&galaxy, &listed)
+            stellars_of(&galaxy, &listed, SystemId(132))
                 .iter()
                 .map(|stellar| (stellar.id.0, stellar.system.0))
                 .collect::<Vec<_>>()
@@ -1381,6 +1438,7 @@ mod tests {
                 listed(160, &[132, 134]),
                 listed(170, &[134]),
             ],
+            SystemId(132),
         );
         let stellar = |id, system, govt, destroyed| Stellar {
             id: StellarId(id),
@@ -1403,6 +1461,7 @@ mod tests {
         let (map, govts) = (galaxy.map().clone(), Governments::empty());
         let world = World {
             stellars: &stellars,
+            placed: &[],
             map: &map,
             govts: &govts,
             draw: RuleSource::Engine,
@@ -1410,5 +1469,113 @@ mod tests {
         };
         assert_eq!(world.system_of(StellarId(160)), Some(SystemId(132)));
         assert_eq!(world.system_of(StellarId(128)), None, "in a hidden system");
+    }
+
+    /// Stellar `id`, of no government, listed by `systems`.
+    fn listed(id: i16, systems: &[i16]) -> ListedStellar {
+        ListedStellar {
+            id: StellarId(id),
+            systems: systems.iter().copied().map(SystemId).collect(),
+            flags: 0,
+            flags2: 0,
+            govt: None,
+        }
+    }
+
+    /// Systems 130 and 131 at one place, 131 hidden when `hidden`, and
+    /// 132 elsewhere.
+    fn sharing_a_place(hidden: bool) -> OverlaidGalaxy {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(131), hidden.then_some(false));
+        OverlaidGalaxy::new(
+            vec![
+                star(130, (0.0, 0.0), &[]),
+                star(131, (0.0, 0.0), &[]),
+                star(132, (200.0, 0.0), &[]),
+            ],
+            overlay,
+        )
+    }
+
+    #[test]
+    fn a_stellar_rescued_into_the_players_system_is_a_candidate_there() {
+        let galaxy = sharing_a_place(false);
+        let listed = [listed(141, &[131])];
+        let systems = |player| {
+            stellars_of(&galaxy, &listed, SystemId(player))
+                .iter()
+                .map(|stellar| (stellar.id.0, stellar.system.0))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            systems(131),
+            [(141, 131)],
+            "130 shadows 131, so 141 has no owner, and the player's 131 holds it"
+        );
+        assert_eq!(systems(132), [], "the player elsewhere");
+    }
+
+    #[test]
+    fn a_stellar_rescued_into_a_hidden_players_system_is_no_candidate() {
+        let galaxy = sharing_a_place(true);
+        let listed = [listed(141, &[131])];
+        assert_eq!(
+            stellars_of(&galaxy, &listed, SystemId(131)),
+            [],
+            "the hidden 131 holds 141, but a stellar is active only while its holder is visible (@0x32cbe-0x32cdf)"
+        );
+    }
+
+    #[test]
+    fn placements_cover_every_listed_stellar_held_or_not() {
+        let galaxy = sharing_a_place(false);
+        let listed = [
+            listed(140, &[130, 131]),
+            listed(141, &[131]),
+            listed(142, &[131]),
+            listed(160, &[134]),
+        ];
+        let placed = placements(&galaxy, &listed, SystemId(132));
+        let whereabouts = |holder: Option<i16>, found: Option<i16>| Whereabouts {
+            holder: holder.map(SystemId),
+            found: found.map(SystemId),
+        };
+        let place = |id, at| Placed {
+            id: StellarId(id),
+            at,
+        };
+        assert_eq!(
+            placed,
+            [
+                place(140, whereabouts(Some(130), Some(130))),
+                place(141, whereabouts(None, Some(131))),
+                place(142, whereabouts(None, Some(131))),
+                place(160, whereabouts(None, Some(134))),
+            ]
+        );
+        let held = placements(&galaxy, &listed, SystemId(131));
+        assert_eq!(
+            held[1],
+            place(141, whereabouts(Some(131), Some(131))),
+            "rescued"
+        );
+
+        let (map, govts) = (galaxy.map().clone(), Governments::empty());
+        let world = World {
+            stellars: &[],
+            placed: &placed,
+            map: &map,
+            govts: &govts,
+            draw: RuleSource::Engine,
+            distance: RuleSource::Engine,
+        };
+        for (at, id) in placed.iter().map(|placed| (placed.at, placed.id)) {
+            assert_eq!(world.whereabouts(id), at, "{id:?}");
+        }
+        assert_eq!(
+            world.whereabouts(StellarId(150)),
+            Whereabouts::default(),
+            "listed by no system"
+        );
     }
 }

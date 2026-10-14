@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 
 use super::*;
 use crate::catalog::{GovtRecord, MissionRecord};
@@ -10,6 +10,7 @@ use crate::landing::StellarFlags;
 use crate::market::DOMINATED;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::rules::Verdict;
+use crate::story::Whereabouts;
 use crate::testkit::{Draws, Scripted, govt, mission, planet, star};
 
 const FED: GovtId = GovtId(128);
@@ -50,6 +51,23 @@ fn at(system: i16, id: i16, govt: Option<GovtId>) -> Stellar {
     }
 }
 
+/// Each of `stellars` placed as it is held: its system both holds it and
+/// is what `_FindSystemFromStellar` gives it.
+fn held_where_they_are(stellars: &[Stellar]) -> Vec<Placed> {
+    let mut placed: Vec<Placed> = stellars
+        .iter()
+        .map(|stellar| Placed {
+            id: stellar.id,
+            at: Whereabouts {
+                holder: Some(stellar.system),
+                found: Some(stellar.system),
+            },
+        })
+        .collect();
+    placed.sort_by_key(|placed| placed.id);
+    placed
+}
+
 /// The landing site of stellar `id`, the Federation's.
 fn docked_at(id: i16) -> LandingSite {
     LandingSite {
@@ -64,6 +82,9 @@ fn docked_at(id: i16) -> LandingSite {
 /// 151 (the Civvies') and 152 (uninhabited) are in 132; 160 is in 134.
 struct Galaxy {
     stellars: Vec<Stellar>,
+    /// Where every listed stellar is: set by a test, else each of
+    /// `stellars` held by its system and found there, at the first visit.
+    placed: OnceCell<Vec<Placed>>,
     map: StarMap,
     govts: Governments,
     rules: Rulebook,
@@ -83,6 +104,7 @@ impl Galaxy {
                 uninhabited,
                 at(134, 160, None),
             ],
+            placed: OnceCell::new(),
             map: StarMap::new(vec![
                 star(130, (0.0, 0.0), &[131, 135]),
                 star(131, (100.0, 0.0), &[]),
@@ -117,6 +139,9 @@ impl Galaxy {
             system: SystemId(130),
             world: World {
                 stellars: &self.stellars,
+                placed: self
+                    .placed
+                    .get_or_init(|| held_where_they_are(&self.stellars)),
                 map: &self.map,
                 govts: &self.govts,
                 draw: self.rules.source_for(RuleKey::MissionStellarDraw),

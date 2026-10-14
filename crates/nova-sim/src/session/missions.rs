@@ -85,7 +85,7 @@ use crate::mission::{
     self, AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
     AvailFacts, FailedBy, Offer, PayEffect, Player, Refusal, Room, SLOTS, Stop, Venue, Visit,
     World, abort_checks, abort_penalty, accept_charge, accept_checks, auto_aborts_at_accept,
-    cleaned, failure_records, fined, pay_effect, stellars_of, success_records,
+    cleaned, failure_records, fined, pay_effect, placements, stellars_of, success_records,
 };
 use crate::news::CARGO_NAMES;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -999,9 +999,12 @@ impl Session {
 
     /// `f` of the galaxy a mission's stellars are chosen from.
     pub(super) fn in_world<T>(&self, f: impl FnOnce(&World) -> T) -> T {
-        let stellars = stellars_of(&self.galaxy, &self.listed_stellars);
+        let player = self.pilot.system;
+        let stellars = stellars_of(&self.galaxy, &self.listed_stellars, player);
+        let placed = placements(&self.galaxy, &self.listed_stellars, player);
         f(&World {
             stellars: &stellars,
+            placed: &placed,
             map: self.galaxy.map(),
             govts: &self.govts,
             draw: self.rules.source_for(RuleKey::MissionStellarDraw),
