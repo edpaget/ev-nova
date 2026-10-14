@@ -10,6 +10,8 @@ use nova_data::graphics::SpriteSheet;
 use nova_data::records::stellar::Stellar;
 use nova_data::records::system::System;
 use nova_data::{GameData, Record, StoreEntry, stellar_spin_id};
+use nova_sim::gate::{HYPERGATE, WORMHOLE};
+use nova_sim::landing::StellarFlags;
 
 use super::catalog::{
     AnimationData, StellarContents, StellarId, StellarSheet, SystemCatalog, SystemContents,
@@ -104,6 +106,8 @@ fn contents(data: &GameData, id: StellarId, stellar: &StoreEntry<'_, Stellar>) -
             frame0_bias: record.frame0_bias,
             only_when_destroyed: record.flags2.bits() & ONLY_WHEN_DESTROYED != 0,
         },
+        radar_square: record.flags.bits() & StellarFlags::STATION != 0
+            || record.flags2.bits() & (HYPERGATE | WORMHOLE) != 0,
     }
 }
 
@@ -273,6 +277,7 @@ mod tests {
             sprite: Ok(sheet_of(1000, 1, 8)),
             dead_sprite: None,
             animation: AnimationData::default(),
+            radar_square: false,
         }
     }
 
@@ -297,6 +302,7 @@ mod tests {
                             frame0_bias: -1,
                             only_when_destroyed: false,
                         },
+                        radar_square: true,
                     },
                     earth(),
                 ],
@@ -404,6 +410,36 @@ mod tests {
             only_when_destroyed,
         };
         assert_eq!(flags, [data(true), data(false), data(false)]);
+    }
+
+    /// `stellar` at (0, 0), type 0, with its `Flags` and `Flags2` set.
+    fn flagged(flags: u32, flags2: u16) -> Vec<u8> {
+        let mut bytes = stellar(0, 0, 0);
+        bytes[0x06..0x0A].copy_from_slice(&flags.to_be_bytes());
+        bytes[0x20..0x22].copy_from_slice(&flags2.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn a_station_hypergate_or_wormhole_is_a_square_on_the_radar() {
+        let mut resources = sol();
+        let shapes = [
+            (0x0000_0000, 0x0000, false),
+            (0x0000_0010, 0x0000, true),
+            (0x0000_0000, 0x1000, true),
+            (0x0000_0000, 0x2000, true),
+            (0x0000_0010, 0x3000, true),
+            (0xFFFF_FFEF, 0xCFFF, false),
+        ];
+        let ids: Vec<i16> = (140..).take(shapes.len()).collect();
+        resources.push((System::TYPE, 131, None, system(&ids)));
+        for (&id, &(flags, flags2, _)) in ids.iter().zip(&shapes) {
+            resources.push((Stellar::TYPE, id, None, flagged(flags, flags2)));
+        }
+        let contents = store(&resources).system(SystemId(131));
+        let squares: Vec<bool> = contents.stellars.iter().map(|s| s.radar_square).collect();
+        let expected: Vec<bool> = shapes.iter().map(|&(_, _, square)| square).collect();
+        assert_eq!(squares, expected);
     }
 
     #[test]

@@ -1243,6 +1243,7 @@ mod tests {
             DrawCommand::Sprite { .. } => "sprite",
             DrawCommand::Picture { .. } => "picture",
             DrawCommand::StretchedPicture { .. } => "stretched",
+            DrawCommand::TiledPicture { .. } => "tiled",
             DrawCommand::Text { .. } => "text",
             DrawCommand::Line { .. } => "line",
             DrawCommand::Dot { .. } => "dot",

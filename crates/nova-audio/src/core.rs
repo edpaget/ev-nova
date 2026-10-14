@@ -110,6 +110,10 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::JumpBegan) => self.play(self.table.jump),
                 Sound::Sim(SimSound::Arrived) => self.play(self.table.arrival),
                 Sound::Sim(SimSound::ScriptMessage) => self.play(self.table.script_message),
+                Sound::Sim(SimSound::RedAlert) => self.play(self.table.red_alert),
+                Sound::Sim(SimSound::CargoJettisoned) => self.play(self.table.jettison),
+                Sound::Sim(SimSound::ScanFailedMission) => self.play(self.table.scan_failed),
+                Sound::Sim(SimSound::Smuggling) => self.play(self.table.smuggling),
                 Sound::Sim(SimSound::Script {
                     sound,
                     exclusive: false,
@@ -426,6 +430,66 @@ mod tests {
         core.set_sound(false);
         drain(&log);
         core.update(None, &[Sound::Sim(SimSound::ScriptMessage)]);
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_scan_beeps_151_for_a_failed_mission_and_154_for_smuggling() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::ScanFailedMission),
+                Sound::Sim(SimSound::Smuggling),
+            ],
+        );
+        assert_eq!(drain(&log), [play(151, 0.5), play(154, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::ScanFailedMission),
+                Sound::Sim(SimSound::Smuggling),
+            ],
+        );
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_jettison_in_flight_beeps_154_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::CargoJettisoned)],
+        );
+        assert_eq!(drain(&log), [play(154, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::CargoJettisoned)],
+        );
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_red_alert_plays_370_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::RedAlert)],
+        );
+        assert_eq!(drain(&log), [play(370, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::RedAlert)],
+        );
         assert_eq!(drain(&log), [], "sound off");
     }
 

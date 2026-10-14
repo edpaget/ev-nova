@@ -166,6 +166,7 @@ impl PilotCatalog for GameData {
                     item_class: record.item_class,
                     lc_name: record.lc_name.as_str().to_owned(),
                     lc_plural: record.lc_plural.as_str().to_owned(),
+                    scan_mask: record.scan_mask.bits(),
                 })
             })
             .collect()
@@ -230,6 +231,7 @@ impl PilotCatalog for GameData {
                     position: Vec2::new(f32::from(system.x_pos), f32::from(system.y_pos)),
                     links: system.con.into_iter().flatten().collect(),
                     govt: system.govt,
+                    interference: system.interference,
                     stellars: system
                         .nav_def
                         .iter()
@@ -263,12 +265,15 @@ impl PilotCatalog for GameData {
                     name: junk
                         .name
                         .map_or_else(|| record.lc_name.as_str().to_owned(), str::to_owned),
+                    abbrev: record.abbrev.as_str().to_owned(),
                     base_price: record.base_price,
                     sold_at: stellars(&record.sold_at),
                     bought_at: stellars(&record.bought_at),
                     buy_on: self.test_expr(record.buy_on.as_str()).into(),
                     sell_on: self.test_expr(record.sell_on.as_str()).into(),
                     flags: record.flags.bits(),
+                    scan_mask: record.scan_mask.bits(),
+                    lc_name: record.lc_name.as_str().to_owned(),
                 })
             })
             .collect()
@@ -1670,6 +1675,7 @@ mod tests {
             item_class: 0,
             lc_name: "big gun".to_owned(),
             lc_plural: String::new(),
+            scan_mask: 0,
             on_purchase: Script::parse("b400"),
             on_sell: Script::parse("!b400"),
         };
@@ -1679,7 +1685,7 @@ mod tests {
                 record(200, "Big Gun", [(1, 128), (0, 0), (0, 0), (0, 0)]),
                 record(201, "big gun", [(2, 5), (9, -2), (0, 0), (18, 4)]),
             ],
-            "a resource without a name goes by its LCName; an undecodable one is skipped"
+            "a resource without a name goes by its LCName; its Abbrev is kept; an undecodable one is skipped"
         );
         assert_eq!(store(&[]).outfits(), []);
         for (a, b) in data.outfits().iter().zip(&data.outfits()) {
@@ -1717,6 +1723,14 @@ mod tests {
         assert_eq!(record.item_class, 7);
         assert_eq!(record.lc_name, "spare part");
         assert_eq!(record.lc_plural, "spare parts");
+    }
+
+    #[test]
+    fn an_oütfs_scan_mask_is_read_raw() {
+        let mut bytes = outfit([(0, 0); 4]);
+        put_i16s(&mut bytes, 0x3EE, &[0x8004_u16.cast_signed()]);
+        let data = store(&[(Outfit::TYPE, 128, bytes)]);
+        assert_eq!(data.outfits()[0].scan_mask, 0x8004);
     }
 
     #[test]
@@ -2209,12 +2223,12 @@ mod tests {
     }
 
     #[test]
-    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_and_govt() {
+    fn the_star_map_is_every_readable_system_by_id_with_its_position_links_govt_and_interference() {
         let data = store(&[
             (
                 System::TYPE,
                 131,
-                governed(linked(600, -75, &[130, 999, 131]), 140),
+                interfering(governed(linked(600, -75, &[130, 999, 131]), 140), 45),
             ),
             (System::TYPE, 129, short(linked(0, 0, &[130]))),
             (System::TYPE, 130, linked(-20, 40, &[])),
@@ -2228,6 +2242,7 @@ mod tests {
                     links: Vec::new(),
                     govt: None,
                     stellars: vec![None; 16],
+                    interference: 0,
                 },
                 StarSystem {
                     id: SystemId(131),
@@ -2235,10 +2250,17 @@ mod tests {
                     links: vec![SystemId(130), SystemId(999), SystemId(131)],
                     govt: Some(GovtId(140)),
                     stellars: vec![None; 16],
+                    interference: 45,
                 },
             ]
         );
         assert_eq!(store(&[]).star_map(), []);
+    }
+
+    /// `bytes`, a `sÿst`, with this `Interference` (offset 0x6C).
+    fn interfering(mut bytes: Vec<u8>, interference: i16) -> Vec<u8> {
+        put_i16s(&mut bytes, 0x6C, &[interference]);
+        bytes
     }
 
     /// A landable `spöb` at the centre with this `CustSndID`.
@@ -2591,9 +2613,10 @@ mod tests {
     #[test]
     fn each_readable_jünk_is_a_special_good_by_id() {
         let mut opals = junk(&[189, 165], &[185, -1, 199], 1200, "opals");
+        opals[0x66..0x69].copy_from_slice(b"Opl");
         opals[0xA6..0xA9].copy_from_slice(b"b43");
         opals[0x1A5..0x1A9].copy_from_slice(b"!b80");
-        put_i16s(&mut opals, 0x22, &[0x0003]);
+        put_i16s(&mut opals, 0x22, &[0x0003, 0x8004_u16.cast_signed()]);
         let data = store_named(&[
             (Junk::TYPE, 146, Some("Opals"), opals),
             (Junk::TYPE, 134, None, junk(&[160], &[], 300, "water")),
@@ -2610,22 +2633,28 @@ mod tests {
                 JunkRecord {
                     id: JunkId(134),
                     name: "water".to_owned(),
+                    abbrev: String::new(),
                     base_price: 300,
                     sold_at: vec![StellarId(160)],
                     bought_at: Vec::new(),
                     buy_on: Test::default(),
                     sell_on: Test::default(),
                     flags: 0,
+                    scan_mask: 0,
+                    lc_name: "water".to_owned(),
                 },
                 JunkRecord {
                     id: JunkId(146),
                     name: "Opals".to_owned(),
+                    abbrev: "Opl".to_owned(),
                     base_price: 1200,
                     sold_at: vec![StellarId(189), StellarId(165)],
                     bought_at: vec![StellarId(185), StellarId(199)],
                     buy_on: Test::parse("b43"),
                     sell_on: Test::parse("!b80"),
                     flags: 0x0003,
+                    scan_mask: 0x8004,
+                    lc_name: "opals".to_owned(),
                 },
             ],
             "a resource without a name goes by its LCName; an undecodable one is skipped"

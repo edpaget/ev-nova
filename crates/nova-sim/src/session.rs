@@ -335,6 +335,8 @@
 //! [`Session::take_diagnostics`].
 
 mod aux_ships;
+mod brackets;
+mod cargo_boxes;
 mod cloaks;
 mod control;
 mod course;
@@ -359,11 +361,15 @@ mod news;
 mod outfits;
 mod person_offers;
 mod persons;
+mod radar;
 mod ranks;
+mod red_alert;
 mod script_effects;
 mod ship_change;
+mod status_cargo;
 mod stellars;
 mod story;
+mod target_panel;
 
 pub use hooks::HookRules;
 pub use ship_change::ShipChangeRules;
@@ -397,7 +403,7 @@ use crate::board::{
     Take, Taken, check_board,
 };
 use crate::catalog::{
-    CombatCatalog, CronRecord, DateAffixes, GateSite, GovtId, LandingSite, ListedStellar,
+    CombatCatalog, CronRecord, DateAffixes, GateSite, GovtId, JunkId, LandingSite, ListedStellar,
     MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord, PersonId,
     PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError, StellarId,
     StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
@@ -453,6 +459,7 @@ use crate::pilot::{self, Escort, Pilot};
 use crate::pre_jump::{self, PreJump};
 use crate::rating;
 use crate::recharge::{self, RechargeRefusal};
+use crate::red_alert::RedAlert;
 use crate::reserves::{Gauge, Reserves};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::ship_change::{OutfitCarry, carried_outfits};
@@ -627,6 +634,9 @@ pub struct Session {
     trigger: Trigger,
     /// The shots and beams in flight, and what the fight reports.
     combat: Combat,
+    /// The cargo boxes jettisons left in space (see the `cargo_boxes`
+    /// module); never saved, as the original saves none.
+    boxes: crate::cargo_box::CargoBoxes,
     /// What the session reports outside combat.
     reports: Reports,
     /// The NPC the player targets, if any.
@@ -714,6 +724,18 @@ pub struct Session {
     /// is a choice; a take-off sets it anyway. Not saved, as the
     /// original's pilot file does not keep it.
     frame: i16,
+    /// The Red Alert's state (see the `red_alert` module); not saved, as
+    /// the original's pilot file does not keep it.
+    red_alert: RedAlert,
+    /// How far out the nav target's brackets are (see the `brackets`
+    /// module); not saved, as the original's pilot file does not keep it.
+    nav_fly_in: crate::brackets::FlyIn,
+    /// How far out the ship target's brackets are; not saved either.
+    target_fly_in: crate::brackets::FlyIn,
+    /// Whether the player's sound effects are quiet, which by
+    /// [`RuleKey::AlertBlink`]'s engine reading blinks the Red Alert's
+    /// icon; set by the view from the player's preferences, never saved.
+    sound_quiet: bool,
     /// What paying the escorts did since this was last taken.
     pay_notes: Vec<PayNote>,
     /// What sees each set operator `run_set` hands to `apply_op`: none
@@ -797,6 +819,12 @@ pub struct Session {
     /// set by a take-off, a gate exit and a jump's arrival (see the
     /// `ranks` module).
     blessing_due: bool,
+    /// `_ScanPlayer`'s contraband latches, armed at each refresh of the
+    /// blessing table, the session's stand-in for
+    /// `_ResetPlayerPrecalcedValues`, and cleared by a conviction (see
+    /// [`scan::Latches`](crate::scan::Latches)). Never saved, as the
+    /// original's are globals.
+    scan_latches: crate::scan::Latches,
     /// What the screens show of each `mïsn`, read when the session
     /// starts (see the `mission_screens` module).
     mission_texts: BTreeMap<MissionId, MissionTexts>,
@@ -1016,6 +1044,7 @@ impl Session {
             condition: Condition::Intact,
             trigger: Trigger::default(),
             combat: Combat::default(),
+            boxes: crate::cargo_box::CargoBoxes::default(),
             reports: Reports::default(),
             target: None,
             play_area: crate::cloak::DEFAULT_PLAY_AREA,
@@ -1039,6 +1068,10 @@ impl Session {
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
             frame: 0,
+            red_alert: RedAlert::default(),
+            nav_fly_in: crate::brackets::FlyIn::default(),
+            target_fly_in: crate::brackets::FlyIn::default(),
+            sound_quiet: false,
             pay_notes: Vec::new(),
             op_observer: None,
             script_notes: Vec::new(),
@@ -1069,6 +1102,10 @@ impl Session {
             port_ranks: ranks::PortRanks::default(),
             blessing_ranks: BTreeSet::new(),
             blessing_due: false,
+            scan_latches: crate::scan::Latches {
+                junk: false,
+                outfits: false,
+            },
             mission_texts: catalog
                 .mission_texts()
                 .into_iter()
@@ -1272,8 +1309,11 @@ impl Session {
     ///
     /// Each tick in flight, a jump's included, moves the frame counter on,
     /// and on a due frame ([`market::junk_step_due`]) steps the held
-    /// tribbles and perishables, unless the player is destroyed. A landed
-    /// tick moves neither.
+    /// tribbles and perishables in the space the goods and the mission
+    /// cargo aboard leave, unless the player is destroyed. It then
+    /// runs the Red Alert on that frame (see the `red_alert` module) and
+    /// flies the target brackets in (see the `brackets` module). A
+    /// landed tick moves none of them.
     pub fn tick(&mut self, controls: Controls) {
         self.gate = None;
         if self.landed.is_some() {
@@ -1288,9 +1328,13 @@ impl Session {
                 &self.goods,
                 &mut self.pilot.cargo,
                 capacity,
+                self.pilot.missions.tons_aboard(),
                 self.rules.source_for(RuleKey::JunkFlags),
             );
         }
+        self.red_alert_tick(frame);
+        self.brackets_tick();
+        self.boxes_tick();
         let controls = match self.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
@@ -1497,7 +1541,6 @@ impl Session {
                 self.dock_fighters();
                 self.orphan_fighters();
                 self.observe_watched();
-                self.take_scans(&mut &mut *chance);
             }
         }
         self.clear_lost_target();
@@ -1586,18 +1629,20 @@ impl Session {
         self.secondary
     }
 
-    /// The rounds the selected secondary has left, for one that fires
-    /// rounds of ammunition; none for one that fires without, or burns
-    /// fuel.
+    /// The count the status bar's secondary weapon line shows after the
+    /// selected secondary's name, if any: the rounds of the weapon its
+    /// [`line_count`](crate::combat::weapon::line_count) names, as
+    /// `_DrawStatusWeap` (@0x4c1ce-0x4c1f4) reads the player's rounds of
+    /// it; none when that names none, nothing is selected, or the
+    /// session has no record of the weapon.
     #[must_use]
-    pub fn secondary_rounds(&self) -> Option<u32> {
-        let spec = self.arsenal.weapon(self.secondary?)?;
-        match spec.ammo {
-            Ammo::Rounds(ammo) => {
-                Some(outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, ammo))
-            }
-            _ => None,
-        }
+    pub fn secondary_line_count(&self) -> Option<u32> {
+        let counted = self.arsenal.weapon(self.secondary?)?.line_count?;
+        Some(outfit_rounds(
+            &self.pilot.outfits,
+            &self.ammo_outfits,
+            counted,
+        ))
     }
 
     /// Advances the fight a tick among the player and the NPCs, each aimed
@@ -1612,7 +1657,10 @@ impl Session {
     /// mission's ship not yet boarded fights held disabled
     /// ([`Session::mission_ship_held`]; see the `mission_ships` module).
     /// The player is convicted of disabling and destroying an NPC, but
-    /// not a mission's special ship (see `punish`). The stellars
+    /// not a mission's special ship (see `punish`). First, each NPC that
+    /// looked the player over in the traffic tick scans it, convicting by
+    /// `rules`' law (see the `mission_cargo` module): the return while
+    /// jumping holds every scan back once the warp has begun. The stellars
     /// shown that shots can hit take their damage, and each shot
     /// down is destroyed and runs its `OnDestroy` (see the `stellars`
     /// module).
@@ -1620,6 +1668,7 @@ impl Session {
         if self.landed.is_some() || self.jumping().is_some() {
             return;
         }
+        self.take_scans(rules.law, &mut &mut *chance);
         let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
         let held: Vec<bool> = self
             .traffic
@@ -1862,8 +1911,11 @@ impl Session {
     /// Picks the player's target as `pick` says (see
     /// [`targeting`](crate::targeting)), and gives it: the nearest NPC, or
     /// the nearest threat, the target unchanged when there is none; or the
-    /// next. While the ship is landed or jumping, nothing changes.
+    /// next. While the ship is landed or jumping, nothing changes. A pick
+    /// that changes the target starts its brackets' fly-in
+    /// ([`Session::target_brackets`]).
     pub fn select_target(&mut self, pick: TargetPick) -> Option<NpcId> {
+        let before = self.target;
         if self.landed.is_none() && self.jumping().is_none() {
             let cloaked_ok = self.scanner().targets;
             let npcs = self.traffic.npcs();
@@ -1884,6 +1936,7 @@ impl Session {
                 }
             }
         }
+        self.retargeted(before);
         self.target
     }
 
@@ -1978,6 +2031,14 @@ impl Session {
     pub fn ship_name(&self, ship: ShipId) -> Option<&str> {
         let record = self.ships.iter().find(|record| record.id == ship)?;
         Some(&record.name)
+    }
+
+    /// `jünk` `id`'s `LCName`, raw, if the session has its record: what a
+    /// scan that finds it calls it.
+    #[must_use]
+    pub fn junk_lc_name(&self, id: JunkId) -> Option<&str> {
+        let record = self.goods.junk().iter().find(|record| record.id == id)?;
+        Some(&record.lc_name)
     }
 
     /// Stops the thrust, if the ship was thrusting, and puts the engine
@@ -2193,6 +2254,8 @@ impl Session {
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.arm_strength_timer(chance);
+        // The Red Alert's icon hidden, its threat kept (@0x6c024-0x6c046).
+        self.red_alert.clear_icon();
         self.take_jump_cost(chance);
         let (mut from, mut at) = (self.pilot.system, first);
         let mut hops = 0;
@@ -2287,7 +2350,10 @@ impl Session {
     /// and only moves its selection. `None`, and nothing changes, during
     /// a jump (pre-jump stage too, as the original skips its nav inputs
     /// while jumping) or when `pick` finds nothing: an empty slot, no
-    /// landable stellar, or a click on none.
+    /// landable stellar, or a click on none. Picking a stellar other than
+    /// the target starts its brackets' fly-in ([`Session::nav_brackets`]);
+    /// picking the target again doesn't (@0x69ec4-0x69ed6,
+    /// @0x6a68f-0x6a69d).
     pub fn select_stellar(&mut self, pick: StellarPick) -> Option<StellarId> {
         if self.jump.is_some() {
             return None;
@@ -2299,6 +2365,9 @@ impl Session {
                 stellar_under(&self.sites, at, |site| self.drawn_frame_size(site))
             }
         }?;
+        if self.nav_target != Some(picked) {
+            self.nav_fly_in.start();
+        }
         self.nav_target = Some(picked);
         Some(picked)
     }
@@ -2420,11 +2489,12 @@ impl Session {
     /// standing: its legal record, the `Require` its ranks meet, its
     /// missions' stellars and the blessing table (see the `ranks` module),
     /// read as the session's `blessing_landing` rule says. A press that
-    /// selects a stellar makes it the navigation target and lands on
-    /// nothing. A press that lands docks the ship at the stellar's centre,
-    /// at rest, its heading and reserves unchanged, and clears the target,
-    /// so that once it takes off L requests clearance again. Otherwise the
-    /// ship flies on, its target kept, and the refusal says why.
+    /// selects a stellar makes it the navigation target, starting its
+    /// brackets' fly-in (@0x6a932), and lands on nothing. A press that
+    /// lands docks the ship at the stellar's centre, at rest, its heading
+    /// and reserves unchanged, and clears the target, so that once it
+    /// takes off L requests clearance again. Otherwise the ship flies on,
+    /// its target kept, and the refusal says why.
     ///
     /// A press that would land on a hypergate or wormhole
     /// ([`GateKind::of`] its `Flags2`) enters it instead: it does not dock
@@ -2448,7 +2518,10 @@ impl Session {
             |site| self.landing_reach(site),
         )?;
         match outcome {
-            LandOutcome::Selected { stellar, .. } => self.nav_target = Some(stellar),
+            LandOutcome::Selected { stellar, .. } => {
+                self.nav_target = Some(stellar);
+                self.nav_fly_in.start();
+            }
             LandOutcome::Landed(stellar) => {
                 if let Some(kind) = self.gate_kind(stellar) {
                     self.gate = Some(stellar);
@@ -2679,6 +2752,8 @@ impl Session {
         self.pilot.stellar = Some(stellar);
         self.bar_news = None;
         self.combat.clear();
+        // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40).
+        self.clear_boxes();
         self.target = None;
         self.talk = None;
         self.leave_with_fighters(true);
@@ -2687,6 +2762,8 @@ impl Session {
         self.stay = Stay::default();
         self.save_due = true;
         self.stop_thrust();
+        // The Red Alert's icon hidden, its threat kept (@0x66d84-0x66da0).
+        self.red_alert.clear_icon();
         self.sounds.push(SimSound::Landed { stellar_sound });
         // `_DoPortDialog` takes the price multipliers before its mission
         // land check (@0x5fbeb) and its rebuild point (see the `ranks`
@@ -3510,13 +3587,20 @@ impl Session {
     /// What the fleet's cargo space needs of each escort whose ship class
     /// has a record.
     fn escort_holds(&self) -> impl Iterator<Item = EscortHolds> + '_ {
-        self.pilot.escorts.iter().filter_map(|escort| {
-            let record = self.ship_record(escort.ship)?;
-            Some(EscortHolds {
-                holds: record.fields.holds,
-                inherent_ai: record.inherent_ai,
-                carried: escort.carried,
-            })
+        self.pilot
+            .escorts
+            .iter()
+            .filter_map(|escort| self.holds_of(escort))
+    }
+
+    /// What the fleet's cargo space needs of `escort`: none when its ship
+    /// class has no record.
+    fn holds_of(&self, escort: &crate::pilot::Escort) -> Option<EscortHolds> {
+        let record = self.ship_record(escort.ship)?;
+        Some(EscortHolds {
+            holds: record.fields.holds,
+            inherent_ai: record.inherent_ai,
+            carried: escort.carried,
         })
     }
 
@@ -3592,13 +3676,19 @@ impl Session {
         self.stats.handling
     }
 
-    /// The government the player belongs to, if any. Always `None`: a new
-    /// pilot belongs to no government. Nova grants membership later, through
-    /// storyline play, and the first `chär` names none (its `Govt1-4` set
-    /// starting legal records, not membership).
+    /// The government whose `Interface` picks the status bar, as
+    /// `_LoadIntfResource` (@0x735f2) reads it from the player's ship type:
+    /// its attributes government (runtime +0x9f6, our
+    /// [`ShipRecord::inherent_govt`]), or its combat government (+0x9f4,
+    /// [`ShipRecord::combat_govt`]) when that is none (@0x7361d-0x73635),
+    /// which is so only for a combat-only `InherentGovt` (2128-2383; the
+    /// `shïp` loader @0x7a261-0x7a330). `None` when it has neither, or the
+    /// ship type has no record (the original's type range check @0x73609);
+    /// either way the bar is `ïntf` 128.
     #[must_use]
-    pub fn government(&self) -> Option<GovtId> {
-        None
+    pub fn interface_government(&self) -> Option<GovtId> {
+        let record = self.ship_record(self.ship())?;
+        record.inherent_govt.or(record.combat_govt)
     }
 
     /// `good`'s name, as the exchange names it, if it is traded
@@ -4593,9 +4683,26 @@ mod tests {
     }
 
     #[test]
-    fn a_new_pilot_belongs_to_no_government() {
+    fn the_interface_government_is_the_ship_types_then_its_combat_one() {
+        let interface = |inherent: Option<i16>, combat: Option<i16>| {
+            let mut record = crate::testkit::ship(128, FAST);
+            record.inherent_govt = inherent.map(GovtId);
+            record.combat_govt = combat.map(GovtId);
+            let catalog = FakePilotCatalog {
+                ship_records: vec![record],
+                ..catalog()
+            };
+            Session::start(&catalog)
+                .expect("starts")
+                .interface_government()
+        };
+        assert_eq!(interface(Some(130), Some(131)), Some(GovtId(130)));
+        assert_eq!(interface(Some(130), None), Some(GovtId(130)));
+        assert_eq!(interface(None, Some(131)), Some(GovtId(131)));
+        assert_eq!(interface(None, None), None);
+        // No record for the ship type: no government.
         let session = Session::start(&catalog()).expect("starts");
-        assert_eq!(session.government(), None);
+        assert_eq!(session.interface_government(), None);
     }
 
     #[test]
@@ -6846,12 +6953,15 @@ mod tests {
         let opals = JunkRecord {
             id: JunkId(146),
             name: "Opals".to_owned(),
+            abbrev: String::new(),
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: vec![StellarId(140)],
             buy_on: Test::default(),
             sell_on: Test::default(),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         };
         let catalog = edge_lander();
         let catalog = FakePilotCatalog {
@@ -6905,12 +7015,15 @@ mod tests {
         let both = JunkRecord {
             id: JunkId(146),
             name: "Opals".to_owned(),
+            abbrev: String::new(),
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: vec![StellarId(128)],
             buy_on: Test::default(),
             sell_on: Test::default(),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         };
         let catalog = FakePilotCatalog {
             junk: vec![both],
@@ -6949,12 +7062,15 @@ mod tests {
         let both = JunkRecord {
             id: JunkId(146),
             name: "Opals".to_owned(),
+            abbrev: String::new(),
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: vec![StellarId(128)],
             buy_on: Test::default(),
             sell_on: Test::default(),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         };
         let catalog = FakePilotCatalog {
             junk: vec![both],
@@ -6997,12 +7113,15 @@ mod tests {
         let opals = JunkRecord {
             id: JunkId(146),
             name: "Opals".to_owned(),
+            abbrev: String::new(),
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: Vec::new(),
             buy_on: Test::default(),
             sell_on: Test::default(),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         };
         let catalog = FakePilotCatalog {
             junk: vec![opals],
@@ -7042,12 +7161,15 @@ mod tests {
             junk: vec![JunkRecord {
                 id: JunkId(146),
                 name: "Waste".to_owned(),
+                abbrev: String::new(),
                 base_price: base,
                 sold_at: Vec::new(),
                 bought_at: vec![StellarId(128)],
                 buy_on: Test::default(),
                 sell_on: Test::default(),
                 flags: 0,
+                scan_mask: 0,
+                lc_name: String::new(),
             }],
             ..exchange()
         };
@@ -7313,12 +7435,15 @@ mod tests {
             junk: vec![JunkRecord {
                 id: JunkId(146),
                 name: "Waste".to_owned(),
+                abbrev: String::new(),
                 base_price: -100,
                 sold_at: vec![StellarId(128)],
                 bought_at: Vec::new(),
                 buy_on: Test::default(),
                 sell_on: Test::default(),
                 flags: 0,
+                scan_mask: 0,
+                lc_name: String::new(),
             }],
             ..exchange()
         };
@@ -7383,12 +7508,15 @@ mod tests {
         let sold = |id, flags| JunkRecord {
             id: JunkId(id),
             name: format!("Junk {id}"),
+            abbrev: String::new(),
             base_price: 10,
             sold_at: vec![StellarId(128)],
             bought_at: Vec::new(),
             buy_on: Test::default(),
             sell_on: Test::default(),
             flags,
+            scan_mask: 0,
+            lc_name: String::new(),
         };
         FakePilotCatalog {
             junk: vec![
@@ -7514,6 +7642,23 @@ mod tests {
     }
 
     #[test]
+    fn the_mission_cargo_aboard_takes_the_tribbles_space() {
+        let mut session = taken_off_with(&[(FURBALLS, 2), (FRUIT, 3)]);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 15));
+        assert_eq!(steps_in(&mut session, 300), Vec::<u32>::new());
+        assert_eq!(furballs_and_fruit(&session), (2, 3), "20 tons of 20");
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 14));
+        assert_eq!(steps_in(&mut session, 250), [250 - 35]);
+        assert_eq!(furballs_and_fruit(&session), (3, 2), "a ton free");
+    }
+
+    #[test]
     fn by_the_bible_tribbles_grow_only_into_the_fleets_free_space() {
         let mut session = furballs_in_a_full_ship(RuleSource::Bible, Some(2));
         assert_eq!(steps_in(&mut session, 600), [15, 265]);
@@ -7586,12 +7731,15 @@ mod tests {
         let opals = JunkRecord {
             id: JunkId(146),
             name: "Opals".to_owned(),
+            abbrev: String::new(),
             base_price: 100,
             sold_at: vec![StellarId(128)],
             bought_at: Vec::new(),
             buy_on: Test::default(),
             sell_on: Test::parse("b7"),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         };
         let catalog = FakePilotCatalog {
             character: exchange().character,
@@ -10952,6 +11100,39 @@ mod tests {
     }
 
     #[test]
+    fn buying_a_ship_counts_the_mission_cargo_aboard_and_never_leaves_it() {
+        // The new ship's 15 tons: by the engine 14 x 15/20, by the other
+        // reading the 9 tons the mission cargo leaves.
+        for (source, kept, left_behind) in [(RuleSource::Engine, 10, 4), (RuleSource::Bible, 9, 5)]
+        {
+            let mut session = outfitted(&shipbuying())
+                .with_rules(Rulebook::default().with_override(RuleKey::PurchaseCargo, source));
+            session.pilot.cargo = BTreeMap::from([(FOOD, 14)]);
+            session
+                .pilot
+                .missions
+                .put(0, crate::testkit::carrying(140, 6));
+            let bought = session
+                .buy_ship(NEW, "Kestrel", &mut NeverFires)
+                .expect("bought");
+            assert_eq!(session.capacity(), 15, "{source:?}");
+            assert_eq!(
+                session.pilot().cargo().collect::<Vec<_>>(),
+                [(FOOD, kept)],
+                "{source:?}"
+            );
+            assert_eq!(
+                bought.left_behind,
+                BTreeMap::from([(FOOD, left_behind)]),
+                "{source:?}"
+            );
+            let held = session.pilot().missions.get(0).expect("still held");
+            assert_eq!((held.cargo_tons, held.aboard), (6, true), "{source:?}");
+            assert_eq!(session.pilot().total_cargo(), i64::from(kept) + 6);
+        }
+    }
+
+    #[test]
     fn flying_an_unnamed_ship_names_it_after_its_class() {
         let catalog = shipbuying();
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
@@ -11207,7 +11388,7 @@ mod tests {
         assert_eq!(session.secondary(), None);
         session.select_secondary(false);
         assert_eq!(session.secondary(), Some(WeaponId(138)));
-        assert_eq!(session.secondary_rounds(), Some(20));
+        assert_eq!(session.secondary_line_count(), Some(20));
         let outfitter = session.outfitter(&mut NeverFires).expect("an outfitter");
         assert_eq!(
             outfitter.free_mass,
@@ -14660,15 +14841,15 @@ mod tests {
         let armed = with_secondaries(catalog());
         let mut session = Session::start(&armed).expect("starts");
         assert_eq!(session.secondary(), None, "as _ResetPlayer leaves it");
-        assert_eq!(session.secondary_rounds(), None);
+        assert_eq!(session.secondary_line_count(), None);
         session.select_secondary(false);
         assert_eq!(session.secondary(), Some(ROCKET));
         let reloaded = Session::fly(&armed, session.pilot().clone()).expect("flies");
         assert_eq!(reloaded.secondary(), None, "not saved");
-        assert_eq!(reloaded.secondary_rounds(), None);
+        assert_eq!(reloaded.secondary_line_count(), None);
         let unarmed = Session::start(&catalog()).expect("starts");
         assert_eq!(unarmed.secondary(), None);
-        assert_eq!(unarmed.secondary_rounds(), None);
+        assert_eq!(unarmed.secondary_line_count(), None);
     }
 
     #[test]
@@ -14730,17 +14911,24 @@ mod tests {
     }
 
     #[test]
-    fn the_secondarys_rounds_follow_its_ammunition() {
+    fn the_secondary_lines_count_is_its_ammunitions_rounds_unless_hidden() {
         let mut session = Session::start(&with_secondaries(catalog())).expect("starts");
+        assert_eq!(session.secondary_line_count(), None, "none selected");
         session.select_secondary(false);
-        assert_eq!(session.secondary_rounds(), Some(3));
+        assert_eq!(session.secondary_line_count(), Some(3));
         session.hold_fire(false, true);
         session.tick_combat(Rules::default(), &mut NeverFires);
-        assert_eq!(session.secondary_rounds(), Some(2));
+        assert_eq!(session.secondary_line_count(), Some(2));
         session.select_secondary(false);
-        assert_eq!(session.secondary_rounds(), None, "missiles: unlimited");
+        assert_eq!(session.secondary_line_count(), None, "unlimited");
         session.select_secondary(false);
-        assert_eq!(session.secondary_rounds(), None, "a torch burns fuel");
+        assert_eq!(session.secondary_line_count(), None, "a torch burns fuel");
+        let mut hidden = with_secondaries(catalog());
+        hidden.weapons[1].flags2 = crate::combat::weapon::HIDES_COUNT;
+        let mut session = Session::start(&hidden).expect("starts");
+        session.select_secondary(false);
+        assert_eq!(session.secondary(), Some(ROCKET));
+        assert_eq!(session.secondary_line_count(), None, "Flags2 0x0040");
     }
 
     #[test]
@@ -16288,12 +16476,15 @@ mod tests {
         catalog.junk = vec![JunkRecord {
             id: JunkId(146),
             name: "Ice".to_owned(),
+            abbrev: String::new(),
             base_price: 10,
             sold_at: Vec::new(),
             bought_at: Vec::new(),
             buy_on: Test::default(),
             sell_on: Test::default(),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         }];
         catalog.outfits.push(outfit(310, &[]));
         let session = Session::start(&catalog).expect("starts");
@@ -16364,7 +16555,7 @@ mod tests {
         let session = ammo_session(&ammo_aboard(1, 20));
         let mut by_rounds = session.clone();
         by_rounds.select_secondary(false);
-        assert_eq!(by_rounds.secondary_rounds(), Some(0));
+        assert_eq!(by_rounds.secondary_line_count(), Some(0));
         assert_eq!(
             take(&mut by_rounds, Take::Ammo, &[]).0,
             Taken::Ammo {
@@ -16373,7 +16564,7 @@ mod tests {
             }
         );
         assert_eq!(by_rounds.pilot().owned(OutfitId(310)), 9);
-        assert_eq!(by_rounds.secondary_rounds(), Some(9), "refitted");
+        assert_eq!(by_rounds.secondary_line_count(), Some(9), "refitted");
         assert_eq!(by_rounds.boarding().map(|view| view.ammo), Some(None));
         // 30 tons free: seven of 4 tons, not eight.
         let mut by_mass = ammo_session(&ammo_aboard(4, 20));
@@ -17691,7 +17882,7 @@ mod tests {
     /// [`catalog`] with system 130 holding three planets whose navigation
     /// order, 131, 128, 129, is not their order by distance from the
     /// centre, where the ship starts: 128 is nearest, then 131, then 129.
-    fn three_stellars() -> FakePilotCatalog {
+    pub(super) fn three_stellars() -> FakePilotCatalog {
         let mut catalog = catalog();
         catalog.sites[0].1 = vec![
             planet(131, 900.0, 0.0),
@@ -17885,7 +18076,7 @@ mod tests {
     /// [`three_stellars`] with 130 a hub: it lists 134, 131 (twice),
     /// itself, a missing 999 and 135, in that Con order; 136 lists 130
     /// one way; 131 lists 132; 133 lists nothing and exists too.
-    fn hub() -> FakePilotCatalog {
+    pub(super) fn hub() -> FakePilotCatalog {
         let mut catalog = three_stellars();
         catalog.star_map = vec![
             star(130, (0.0, 0.0), &[134, 131, 131, 130, 999, 135]),

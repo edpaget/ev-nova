@@ -56,7 +56,7 @@
 //! | [`StartShipPurchase`](RuleKey::StartShipPurchase) | `start_ship_purchase` | a new pilot's starting ship runs no `OnPurchase` ([`HookRules`](crate::HookRules)) | it runs once, right before the `chär`'s `OnStart`\* |
 //! | [`ShipChangePersistence`](RuleKey::ShipChangePersistence) | `ship_change_persistence` | `H` keeps an outfit flagged 0x0004 or 0x0020 ([`ShipChangeRules`](crate::ShipChangeRules)) | only one flagged 0x0020 |
 //! | [`ShipChangeMax`](RuleKey::ShipChangeMax) | `ship_change_max` | `E` and `H` hold every outfit owned, old and new, to its limit (ammunition cap, raised `Max`, gun and turret slots) after adding the new class's default items ([`ShipChangeRules`](crate::ShipChangeRules)) | nothing is held: every outfit is kept |
-//! | [`ShipChangeCargo`](RuleKey::ShipChangeCargo) | `ship_change_cargo` | `C`, `E` and `H` keep all the cargo, even past the new hold ([`ShipChangeRules`](crate::ShipChangeRules)) | the cargo is trimmed to the new hold, as a purchase trims it\* |
+//! | [`ShipChangeCargo`](RuleKey::ShipChangeCargo) | `ship_change_cargo` | `C`, `E` and `H` keep all the cargo, mission cargo too, even past the new hold ([`ShipChangeRules`](crate::ShipChangeRules)) | the goods are trimmed to the new hold, as a purchase trims them: the mission cargo aboard takes its room first and always stays\* |
 //! | [`ShipChangeReserves`](RuleKey::ShipChangeReserves) | `ship_change_reserves` | `C`, `E` and `H` keep a shield or armour above the new class's most until damage takes it ([`ShipChangeRules`](crate::ShipChangeRules)) | each is held to its new most\* |
 //! | [`ShipChangeBayAmmo`](RuleKey::ShipChangeBayAmmo) | `ship_change_bay_ammo` | `E` and `H` load a fighter bay's `AmmoLoad` onto the weapon its raw `AmmoType` names, so a bay of fighter `shïp` 128 to 255 loses its fighters ([`ShipChangeRules`](crate::ShipChangeRules)) | the bay's own fighters are loaded, as a purchase loads them\* |
 //! | [`ShipChangeDefaultWeapons`](RuleKey::ShipChangeDefaultWeapons) | `ship_change_default_weapons` | `E` and `H` add a default item that is a weapon or ammunition outfit to the outfits alone, so the fold pulls it back to the weapon and rounds arrays' count and it is lost unless the array has a surplus (`_EvalSetExp` @0x15609, `_ShipStatsToSystemInfo` @0xcaee called @0x15622; [`ShipChangeRules`](crate::ShipChangeRules)) | its first-mod weapons and rounds are added to the arrays too, so it is kept\* |
@@ -67,11 +67,11 @@
 //! | [`BlankLeave`](RuleKey::BlankLeave) | `blank_leave` | a `Q` with no message to show does nothing, and cancels an earlier one ([`ScriptEffectRules`](crate::ScriptEffectRules)) | the player leaves all the same, with no message |
 //! | [`ScriptSound`](RuleKey::ScriptSound) | `script_sound` | one mission sound at a time: `P` sounds on the next flight tick, the last one before it counting, and not while the last is still playing ([`ScriptEffectRules`](crate::ScriptEffectRules)) | every `P` sounds at once, landed or not\* |
 //! | [`BuyRandom`](RuleKey::BuyRandom) | `buy_random` | an outfit's `BuyRandom` below 1 is never for sale and a ship's below 0 always (`_LoadObjectData` @0x78b8d, @0x7a340; [`Session`](crate::Session)) | an outfit's below 1 or above 100 always, and a ship's 0 or below never† |
-//! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b; [`Session`](crate::Session)) | tribbles goods grow only into free space, and perishable goods always decay‡ |
+//! | [`JunkFlags`](RuleKey::JunkFlags) | `junk_flags` | the free space, the fleet's holds less the goods and the mission cargo aboard (`_TotalCargo` @0x4a0b), measured once, lets tribbles goods overfill the hold; perishable goods decay only while there is space; a good with both flags decays only beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b, @0x70863-0x70888; [`Session`](crate::Session)) | tribbles goods grow only into that free space, and perishable goods always decay‡ |
 //! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; [`Session`](crate::Session)); in a counted sale, (n - 1) is as `counted_sale` says | a launcher cannot be sold while any of its ammunition is held§ |
 //! | [`RaisedMax`](RuleKey::RaisedMax) | `raised_max` | a `ModType` 27 outfit multiplies its target's `Max` by the outfits owned times their mods naming it, at least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), and one of n cannot be sold while the target owned exceeds its raw `Max` x (n - 1) (`_DoOutfitDialog` @0x5c7be-0x5ca6f; [`Session`](crate::Session)); in a counted sale, (n - 1) is as `counted_sale` says | the multiplier is the items owned with such a mod, at least 1, and a sale is refused only while the target owned exceeds that maximum after it¶ |
 //! | [`EventPrice`](RuleKey::EventPrice) | `event_price` | an active event prices its commodity at `BasePrice` + `PriceDelta`, whatever the level, the highest ID winning, and lists a commodity not traded there (`_DoTradeDialog` @0x5dcf8-0x5dd58; [`Session`](crate::Session)) | the level price plus every event's `PriceDelta`\*\* |
-//! | [`PurchaseCargo`](RuleKey::PurchaseCargo) | `purchase_cargo` | a ship purchase keeps each commodity's share A/B (the new ship's cargo space over that plus the trader escorts' `Holds`, uncapped) and loses that share of each `jünk`, then trims the commodities to the fleet's holds (`_DestroyPartialFleetCargo` @0xcd32-0xcff6, `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c; [`Session`](crate::Session)) | it keeps what fits the new ship's own cargo space, goods in order†† |
+//! | [`PurchaseCargo`](RuleKey::PurchaseCargo) | `purchase_cargo` | a ship purchase keeps each commodity's share A/B (the new ship's cargo space over that plus the trader escorts' `Holds`, uncapped) and loses that share of each `jünk`, then trims the commodities to the fleet's holds, counting the mission cargo aboard but never cutting it (`_DestroyPartialFleetCargo` @0xcd32-0xcff6, `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c, `_TotalCargo` @0x4a0b called @0xc7ea; [`Session`](crate::Session)) | the mission cargo aboard takes the new ship's own cargo space first and always stays, and the goods that fit in the rest are kept, in order†† |
 //! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; [`Session`](crate::Session)) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
 //! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; [`Session`](crate::Session)) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
 //! | [`OutfitLimit`](RuleKey::OutfitLimit) | `outfit_limit` | a map (`ModType` 16) or clean-record (`ModType` 21) outfit is refused while the last outfit bought since the outfitter opened was of its kind; any other buy, or opening the outfitter again, lifts it (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, `_GrantOutfitItem` @0x44d67-0x44f8b, `_DoOutfitDialog` @0x5bb37-0x5bb44; [`Session`](crate::Session)) | no limit§§ |
@@ -107,7 +107,9 @@
 //! | [`LeftRespawn`](RuleKey::LeftRespawn) | `left_respawn` | only a chase-off goal's ship (`ShipGoal` 6) that leaves the system lowers its mission's ships left, so a ship of another goal comes back at the next setup (`_LowLevelAIHandler` @0x85983-0x859aa; see [`mission::goals`](crate::mission::goals)) | any departed mission ship not of `ShipSyst` -6 lowers its ships left, and is not brought back\* |
 //! | [`LandedLeaves`](RuleKey::LandedLeaves) | `landed_leaves` | a mission ship that lands does not leave the system, as the original's waits at the stellar (`_HighLevelAIHandler` @0x8dadc-0x8db5a), so the engine taking it out counts nothing and it comes back at the next setup (see [`story`](crate::story)) | it leaves the system, counted as one that jumped out\* |
 //! | [`AuxGate`](RuleKey::AuxGate) | `aux_gate` | at a hypergate or wormhole exit, the auxiliary ships of a mission of `AuxShipSyst` -1 come no more until their countdown next restarts (`_HandlePlayerDockRequest` @0x6729b-0x672ac; see [`mission::aux`](crate::mission::aux)) | the exit restarts them as a jump does: "-1: any system" |
+//! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
+//! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see [`red_alert`](crate::red_alert)) | the icon blinks with every alert\* |
 //! | [`CronRandomScale`](RuleKey::CronRandomScale) | `cron_random_scale` | `Rand(101) <= Random`, rolled for every inactive crön before its other checks (`_CronEventHandler` @0x38804-0x38818; see [`cron`](crate::cron)) | `Random` % (0 never, 100 or more always)§§§§§§ |
 //! | [`CronDateCompare`](RuleKey::CronDateCompare) | `cron_date_compare` | year on its own, month and day on their own; a range across a year end with month/day set never matches (`_CronDateInRange` @0x74d3-0x75bf; see [`cron`](crate::cron)) | compared as dates; a range may cross a year end¶¶¶¶¶¶ |
 //! | [`NewsGovtMatch`](RuleKey::NewsGovtMatch) | `news_govt_match` | a cron's news shows at a stellar whose government is allied with its `NewsGovt` (`_GovtAllies` @0x4e3d, called @0x48640; see [`news`](crate::news)) | only at a stellar of that government\*\*\*\*\*\*\* |
@@ -128,6 +130,8 @@
 //! | [`RouteRewrite`](RuleKey::RouteRewrite) | `route_rewrite` | each rebuild point rewrites every hidden hop of the course to the system at its place and cuts the course at the first hop with none (`_HandleStellarSystemVisibility` @0x32ab3-0x32b0d), and an arrival that made no hop clears the course when its next hop stands elsewhere, or drops that hop when it stands at the arrival (@0x6c472-0x6c4c6; see [`course`](crate::course)) | hops resolved only when used, and an arrival drops only the hops made\* |
 //! | [`NebulaExploreOnce`](RuleKey::NebulaExploreOnce) | `nebula_explore_once` | whether a nebula is explored is never saved, so a load's sweep over the visible explored systems runs its `OnExplore` again (`_ResetPlayer` @0x1da86, `_OpenLastPilotFile` @0x765a2-0x765ce; see [`nebula`](crate::nebula)) | `OnExplore` runs once a pilot, through the once-fired record\* |
 //! | [`NebulaNewPilot`](RuleKey::NebulaNewPilot) | `nebula_new_pilot` | a new pilot explores no nebula until its first exploration, a take-off, a jump or a map (`_DoNewPilot` @0x18de5, @0x1df4b, @0x19118, before its first refresh @0x1925e; see [`nebula`](crate::nebula)) | the start system's nebulae are explored as the game begins††††††††† |
+//! | [`ScanOutfitsPastJunk`](RuleKey::ScanOutfitsPastJunk) | `scan_outfits_past_junk` | while the player carries any `jünk` with a `ScanMask`, a scan that finds no illegal `jünk` ends without scanning the outfits (`_ScanPlayer` @0x7eabd-0x7eefa; see [`scan`](crate::scan)) | the outfits are scanned when no illegal `jünk` is found\* |
+//! | [`OutfitScanFine`](RuleKey::OutfitScanFine) | `outfit_scan_fine` | only a `ScanFine` above 0 fines an illegal outfit, as it is; a negative one fines nothing (`_ScanPlayer` `jle` @0x7f222; see [`scan`](crate::scan)) | a negative `ScanFine` takes that percent of the cash in hundreds, at least 1, as for `jünk` and mission cargo (the Bible's `ScanFine`) |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -142,7 +146,8 @@
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance`,
 //! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
-//! `blessing_refresh`, `explored_by_place`, `route_rewrite` or `comm_quote`
+//! `hud_cadence`, `alert_blink`, `blessing_refresh`, `explored_by_place`,
+//! `route_rewrite`, `scan_outfits_past_junk` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count` and `nebula_explore_once`
 //! ("the explored state of the nebulae isn't saved from game to game ...
@@ -158,7 +163,9 @@
 //! ‡ The Bible says only that a tribbles good "multiplies like tribbles"
 //! and a perishable one "gradually decays away", and gives no rates: both
 //! readings take the engine's ton every due frame in flight, and only
-//! the conditions differ.
+//! the conditions differ. Both count the mission cargo aboard against the
+//! free space, as the engine does; it only matters to the other reading's
+//! growth, since its decay ignores the space.
 //!
 //! § The Bible says nothing of selling a launcher before its ammunition.
 //! The other reading is the phase's first wording of the rule (refuse
@@ -177,7 +184,8 @@
 //!
 //! †† The Bible says nothing of cargo on a ship purchase. The other
 //! reading is the phase's first wording of the rule (keep the cargo that
-//! fits the new ship), not anything the Bible says.
+//! fits the new ship), not anything the Bible says. Mission cargo is
+//! never left behind under either reading, as the engine never cuts it.
 //!
 //! ‡‡ The Bible says nothing of a `jünk` of negative or zero price. The
 //! other reading is the port's own floor of 0, which it had before the
@@ -804,10 +812,11 @@ rule_keys! {
     /// clamped (see [`ShipChangeRules`](crate::ShipChangeRules)).
     ShipChangeMax => "ship_change_max",
     /// What becomes of the cargo on a `C`, `E` or `H` change of ship: by
-    /// the engine, it is all kept, even past the new hold, as the change
-    /// never calls `_DestroyPartialFleetCargo` (`_EvalSetExp`
-    /// @0x15493-0x156da); otherwise it is trimmed to the new hold as a
-    /// purchase trims it. The Bible is silent here, so the other reading
+    /// the engine, it is all kept, mission cargo too, even past the new
+    /// hold, as the change never calls `_DestroyPartialFleetCargo`
+    /// (`_EvalSetExp` @0x15493-0x156da); otherwise the goods are trimmed
+    /// to the new hold as the purchase's other reading trims them, the
+    /// mission cargo aboard taking its room first and always staying. The Bible is silent here, so the other reading
     /// is the obvious alternative, not anything the Bible says (see
     /// [`ShipChangeRules`](crate::ShipChangeRules)).
     ShipChangeCargo => "ship_change_cargo",
@@ -922,7 +931,8 @@ rule_keys! {
     /// tribbles goods can fill the hold past full, perishable goods decay
     /// only while there is space, and a good with both flags decays only
     /// beside a perishable-only good (`_HandlePlayer` @0x70827-0x7093b);
-    /// by the Bible, which says only that tribbles goods multiply and
+    /// the free space is the fleet's holds less the goods and the mission
+    /// cargo aboard, as `_TotalCargo` (@0x4a0b) counts them; by the Bible, which says only that tribbles goods multiply and
     /// perishable goods "gradually decay away", tribbles goods grow only
     /// into free space and perishable goods always decay. The Bible gives
     /// no rates, so both readings take the engine's ton every due frame
@@ -972,10 +982,13 @@ rule_keys! {
     /// escorts, uncapped, each commodity becomes trunc(held x A/B) and
     /// each `jünk` loses trunc(held x A/B), so without such escorts every
     /// `jünk` goes; then, when the fleet's holds are below everything
-    /// held, each commodity is cut by their ratio in single floats
+    /// held, the mission cargo aboard counted (`_TotalCargo` @0x4a0b,
+    /// called @0xc7ea), each commodity is cut by their ratio in single
+    /// floats, and the mission cargo is not cut
     /// (`_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c). By the other
-    /// reading, the cargo that fits the new ship's own cargo space is
-    /// kept, goods in order. The Bible says nothing of it, so the other
+    /// reading, the mission cargo aboard takes the new ship's own cargo
+    /// space first and always stays, and the goods that fit in the rest
+    /// are kept, in order. The Bible says nothing of it, so the other
     /// reading is the phase's first wording of the rule, not anything the
     /// Bible says (see [`shipyard`](crate::shipyard)).
     PurchaseCargo => "purchase_cargo",
@@ -1443,6 +1456,31 @@ rule_keys! {
     /// "-1: any system": the exit restarts them as a jump does (see
     /// [`mission::aux`](crate::mission::aux)).
     AuxGate => "aux_gate",
+    /// When the flight HUD's content refreshes. By the engine, on the
+    /// original's timing, which `_DrawStatus` (@0x4c85d) keeps in 60 Hz
+    /// `TickCount` units: the radar's blips every 15 Mac ticks
+    /// (@0x4c911-0x4c94f), which is every 8 engine ticks (≈0.267 s), so
+    /// they step a few times a second; the nav area's text and colours
+    /// when `TickCount() % 30 == 0` (@0x4c899-0x4c8b6), every 15 engine
+    /// ticks (0.5 s), or at once when the selection changes; and the
+    /// target panel when `TickCount() % 45 == 0` (@0x4c8b9-0x4c8eb),
+    /// every 45 engine ticks (90 Mac ticks, 1.5 s), at the next radar
+    /// refresh once the target's whole shield or its ship type has
+    /// changed (@0x4c963-0x4c994), or at once on a change of target. By
+    /// the other reading, every frame. The target's blink keeps the engine's timing under both,
+    /// as it is a feature, not a redraw artefact. The Bible says nothing
+    /// of it, so the other reading is the obvious alternative, not
+    /// anything the Bible says (see `nova_view::flight::cadence`).
+    HudCadence => "hud_cadence",
+    /// When a Red Alert blinks its icon. By the engine, only while the
+    /// player's sound is quiet: the original starts the blink only when
+    /// its `Volume` preference is 1 or less (`_HandlePlayer`
+    /// @0x68d04-0x68d15), which here is sound off or an effects level of
+    /// 1 or less; louder, the alert is `snd ` 370 alone. By the other
+    /// reading, with every alert. The Bible says nothing of it, so the
+    /// other reading is the obvious alternative, not anything the Bible
+    /// says (see [`red_alert`](crate::red_alert)).
+    AlertBlink => "alert_blink",
     /// A crön's `Random`: by the engine, it starts when `_Rand(101)`
     /// (0-100) is at most `Random`, so 0 still fires 1 day in 101 and
     /// below 0 never; by the Bible, `Random` is a percent chance (see
@@ -1582,6 +1620,18 @@ rule_keys! {
     /// refresh @0x1925e); by the other reading, as the game begins (see
     /// [`nebula`](crate::nebula)).
     NebulaNewPilot => "nebula_new_pilot",
+    /// Whether a scan's set `jünk` latch shadows the outfits: by the
+    /// engine, a scan that finds no illegal `jünk` while the player
+    /// carries any `jünk` with a `ScanMask` ends there, outfits unscanned
+    /// (`_ScanPlayer` @0x7eefa); by the other reading, the outfits are
+    /// scanned then (see [`scan`](crate::scan)).
+    ScanOutfitsPastJunk => "scan_outfits_past_junk",
+    /// What a negative `ScanFine` fines an illegal outfit: by the engine,
+    /// nothing, as only a `ScanFine` above 0 fines an outfit (`jle`
+    /// @0x7f222); by the other reading, the Bible's, the percent of the
+    /// cash in hundreds, as for `jünk` and mission cargo (see
+    /// [`scan`](crate::scan)).
+    OutfitScanFine => "outfit_scan_fine",
 }
 
 impl RuleKey {
@@ -1797,7 +1847,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(31),
+            RuleKey::ALL.iter().rev().nth(35),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1837,7 +1887,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(30),
+            RuleKey::ALL.iter().rev().nth(34),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1859,7 +1909,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(29),
+            RuleKey::ALL.iter().rev().nth(33),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1884,7 +1934,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(28),
+            RuleKey::ALL.iter().rev().nth(32),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1910,7 +1960,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(27),
+            RuleKey::ALL.iter().rev().nth(31),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1930,7 +1980,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(26),
+            RuleKey::ALL.iter().rev().nth(30),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1950,7 +2000,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(25),
+            RuleKey::ALL.iter().rev().nth(29),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1970,7 +2020,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(22),
+            RuleKey::ALL.iter().rev().nth(26),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -1984,7 +2034,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(21),
+            RuleKey::ALL.iter().rev().nth(25),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -1997,7 +2047,35 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(20), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(24), Some(&RuleKey::AuxGate));
+    }
+
+    #[test]
+    fn the_hud_cadence_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::HudCadence.key(), "hud_cadence");
+        assert_eq!(RuleKey::from_key("hud_cadence"), Some(RuleKey::HudCadence));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::HudCadence),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(23),
+            Some(&RuleKey::HudCadence)
+        );
+    }
+
+    #[test]
+    fn the_alert_blink_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::AlertBlink.key(), "alert_blink");
+        assert_eq!(RuleKey::from_key("alert_blink"), Some(RuleKey::AlertBlink));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::AlertBlink),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(22),
+            Some(&RuleKey::AlertBlink)
+        );
     }
 
     #[test]
@@ -2008,7 +2086,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(24),
+            RuleKey::ALL.iter().rev().nth(28),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -2026,7 +2104,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(18),
+            RuleKey::ALL.iter().rev().nth(20),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -2043,7 +2121,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(17),
+            RuleKey::ALL.iter().rev().nth(19),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -2060,10 +2138,10 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(16),
+            RuleKey::ALL.iter().rev().nth(18),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(15), Some(&RuleKey::SalaryCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(17), Some(&RuleKey::SalaryCap));
     }
 
     #[test]
@@ -2078,7 +2156,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(16),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -2097,15 +2175,15 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::RankPriceScope)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::RankTradeIn)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(13),
             Some(&RuleKey::RankPriceTiming)
         );
     }
@@ -2122,7 +2200,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::RankCrimeReach)
         );
     }
@@ -2136,11 +2214,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::ColocatedResolution)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::VisibilityRefresh)
         );
     }
@@ -2161,11 +2239,11 @@ mod tests {
             );
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::CronZeroDurationHoldoff)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::CronPostHoldoff)
         );
     }
@@ -2179,11 +2257,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::BlessingRefresh)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::BlessingLanding)
         );
     }
@@ -2200,7 +2278,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(5),
             Some(&RuleKey::ExploredByPlace)
         );
     }
@@ -2217,7 +2295,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::RouteRewrite)
         );
     }
@@ -2234,7 +2312,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::NebulaExploreOnce)
         );
     }
@@ -2250,7 +2328,25 @@ mod tests {
             Rulebook::default().source_for(RuleKey::NebulaNewPilot),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::NebulaNewPilot));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(2),
+            Some(&RuleKey::NebulaNewPilot)
+        );
+    }
+
+    #[test]
+    fn the_scan_rules_are_found_by_their_keys_and_read_the_engine() {
+        assert_eq!(RuleKey::ScanOutfitsPastJunk.key(), "scan_outfits_past_junk");
+        assert_eq!(RuleKey::OutfitScanFine.key(), "outfit_scan_fine");
+        for rule in [RuleKey::ScanOutfitsPastJunk, RuleKey::OutfitScanFine] {
+            assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
+            assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        }
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::ScanOutfitsPastJunk)
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::OutfitScanFine));
     }
 
     #[test]
@@ -2352,7 +2448,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(33),
+            RuleKey::ALL.iter().rev().nth(37),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -2500,6 +2596,8 @@ mod tests {
                 RuleKey::LandedLeaves,
                 RuleKey::GateFollow,
                 RuleKey::AuxGate,
+                RuleKey::HudCadence,
+                RuleKey::AlertBlink,
                 RuleKey::CronRandomScale,
                 RuleKey::CronDateCompare,
                 RuleKey::NewsGovtMatch,
@@ -2519,7 +2617,9 @@ mod tests {
                 RuleKey::ExploredByPlace,
                 RuleKey::RouteRewrite,
                 RuleKey::NebulaExploreOnce,
-                RuleKey::NebulaNewPilot
+                RuleKey::NebulaNewPilot,
+                RuleKey::ScanOutfitsPastJunk,
+                RuleKey::OutfitScanFine
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");

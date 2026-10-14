@@ -81,6 +81,9 @@ pub struct StarSystem {
     /// cannot be read. The [`exploration`](crate::exploration) rules read
     /// whether the system is inhabited from them.
     pub stellars: Vec<Option<(u32, u16)>>,
+    /// Its `Interference`, raw: the radar's static
+    /// ([`iff::interference`](crate::iff::interference)).
+    pub interference: i16,
 }
 
 /// A stellar the player might land on, raw from its `spöb`; the
@@ -298,6 +301,9 @@ pub struct OutfitRecord {
     pub lc_name: String,
     /// Its `LCPlural`, raw: its lower-case plural name.
     pub lc_plural: String,
+    /// Its `ScanMask`, raw: a scan finds it owned when this shares a bit
+    /// with the scanner's government's (see [`scan`](crate::scan)).
+    pub scan_mask: u16,
 }
 
 /// An `oütf` `ModVal` as the original's loader reads it, as an ID.
@@ -440,6 +446,9 @@ pub struct JunkRecord {
     /// Its name: the resource's name, or its `LCName` when the resource
     /// has none.
     pub name: String,
+    /// Its `Abbrev`: the name the status bar's cargo area shows of it
+    /// (`_DrawStatusCargo` @0x4c69a-0x4c6dd).
+    pub abbrev: String,
     /// Its `BasePrice`.
     pub base_price: i16,
     /// Its `SoldAt` stellars, the unused (-1) slots left out.
@@ -453,6 +462,11 @@ pub struct JunkRecord {
     /// Its `Flags`, raw: [`TRIBBLES`](crate::market::TRIBBLES) and
     /// [`PERISHABLE`](crate::market::PERISHABLE) are read.
     pub flags: u16,
+    /// Its `ScanMask`, raw: a scan finds it held when this shares a bit
+    /// with the scanner's government's (see [`scan`](crate::scan)).
+    pub scan_mask: u16,
+    /// Its `LCName`, raw: what a scan that finds it calls it.
+    pub lc_name: String,
 }
 
 /// An `öops` resource's ID: a planetary event.
@@ -1605,6 +1619,7 @@ mod tests {
                 item_class: 0,
                 lc_name: "scoop".to_owned(),
                 lc_plural: "scoops".to_owned(),
+                scan_mask: 0,
                 on_purchase: crate::control::Script::default(),
                 on_sell: crate::control::Script::default(),
             }]
@@ -1671,6 +1686,7 @@ mod tests {
                 links: vec![SystemId(131)],
                 govt: None,
                 stellars: Vec::new(),
+                interference: 0,
             }]
         }
 
@@ -1689,12 +1705,15 @@ mod tests {
             vec![JunkRecord {
                 id: JunkId(146),
                 name: "Opals".to_owned(),
+                abbrev: String::new(),
                 base_price: 1200,
                 sold_at: vec![StellarId(128)],
                 bought_at: Vec::new(),
                 buy_on: Test::default(),
                 sell_on: Test::default(),
                 flags: 0,
+                scan_mask: 0,
+                lc_name: String::new(),
             }]
         }
 

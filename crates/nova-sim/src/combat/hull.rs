@@ -44,6 +44,13 @@ pub const BOARD_REACH_PER_SIZE: f32 = 0.5;
 /// The `shïp` `Flags` bit that disables it at [`TOUGH_DISABLE_PERCENT`]
 /// of its armour instead of [`DISABLE_PERCENT`].
 pub const TOUGH: u16 = 0x0010;
+/// The `shïp` `Flags` bit that shows its armour on the target panel
+/// while its shields are down (`_DrawStatusTarg` @0x4bbaa; see
+/// [`target_panel`](crate::target_panel)).
+pub const SHOWS_ARMOR: u16 = 0x0100;
+/// The `shïp` `Flags` bit that hides the target panel's status line
+/// (`_DrawStatusTarg` @0x4b941).
+pub const HIDES_STATUS: u16 = 0x0200;
 /// The percentage of its armour below which a ship is disabled.
 pub const DISABLE_PERCENT: f64 = 33.333;
 /// The percentage for a ship type with [`TOUGH`] set.
@@ -64,6 +71,12 @@ pub struct HullSpec {
     pub hit_radius: f32,
     /// Whether it is disabled at [`TOUGH_DISABLE_PERCENT`].
     pub tough: bool,
+    /// Whether the target panel shows its armour while its shields are
+    /// down: its `Flags` [`SHOWS_ARMOR`].
+    pub shows_armor: bool,
+    /// Whether the target panel hides its status line: its `Flags`
+    /// [`HIDES_STATUS`].
+    pub hides_status: bool,
     /// Ticks it breaks up for before it is destroyed.
     pub death_delay: u32,
     /// The explosion as it breaks up, its `Explode1`.
@@ -97,6 +110,8 @@ impl Default for HullSpec {
         Self {
             hit_radius: DEFAULT_HIT_RADIUS,
             tough: false,
+            shows_armor: false,
+            hides_status: false,
             death_delay: 0,
             breakup: None,
             explosion: None,
@@ -120,6 +135,8 @@ impl HullSpec {
         Self {
             hit_radius,
             tough: record.flags & TOUGH != 0,
+            shows_armor: record.flags & SHOWS_ARMOR != 0,
+            hides_status: record.flags & HIDES_STATUS != 0,
             death_delay: u32::try_from(record.death_delay).unwrap_or(0),
             breakup: Explosion::decode(record.explode1),
             explosion: Explosion::decode(record.explode2),
@@ -368,6 +385,31 @@ mod tests {
         assert_eq!(HullSpec::new(&hull(128)).blind_spots, 0);
         assert_eq!(HullSpec::default().blind_spots, 0);
         assert_eq!(BLIND_SPOTS, 0x7000);
+    }
+
+    #[test]
+    fn a_hulls_target_panel_flags_are_its_flags_0x0100_and_0x0200() {
+        let armour = HullSpec::new(&HullRecord {
+            flags: 0x0100,
+            ..hull(128)
+        });
+        assert!(armour.shows_armor);
+        assert!(!armour.hides_status);
+        let hidden = HullSpec::new(&HullRecord {
+            flags: 0x0200,
+            ..hull(129)
+        });
+        assert!(!hidden.shows_armor);
+        assert!(hidden.hides_status);
+        let neither = HullSpec::new(&HullRecord {
+            flags: !0x0300,
+            ..hull(130)
+        });
+        assert!(!neither.shows_armor);
+        assert!(!neither.hides_status);
+        assert!(!HullSpec::default().shows_armor);
+        assert!(!HullSpec::default().hides_status);
+        assert_eq!((SHOWS_ARMOR, HIDES_STATUS), (0x0100, 0x0200));
     }
 
     #[test]

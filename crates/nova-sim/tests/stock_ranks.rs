@@ -109,6 +109,10 @@ fn stock_protection_ranks_are_lost_to_crimes_against_their_government() {
         assert!(govt.is_some(), "{id}: affiliated");
         assert!(!takes(&data, id, Crime::Shoot, govt), "{id}: a hit");
         assert!(takes(&data, id, Crime::Board, govt), "{id}: a boarding");
+        assert!(
+            takes(&data, id, Crime::Smuggle, govt),
+            "{id}: contraband its government's scan finds"
+        );
     }
     let rebel = records
         .iter()

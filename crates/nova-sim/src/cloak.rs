@@ -431,6 +431,17 @@ impl Area {
             bottom: self.bottom + by.y,
         }
     }
+
+    /// Whether this area and `other` strictly overlap, so two that only
+    /// touch along an edge do not. A zero-size area (a point or a line)
+    /// overlaps one it lies strictly inside.
+    #[must_use]
+    pub fn overlaps(self, other: Self) -> bool {
+        self.left < other.right
+            && self.right > other.left
+            && self.top < other.bottom
+            && self.bottom > other.top
+    }
 }
 
 /// The play area the session assumes when no view has said what it
@@ -460,13 +471,9 @@ pub fn on_screen(view: Area, at: Vec2, width: f32, height: f32) -> bool {
         bottom: view.bottom - dy,
     };
     // `_InsetRect` empties a rect it turns inside out.
-    let sprite = Area::centred(at, width, height);
     inset.left < inset.right
         && inset.top < inset.bottom
-        && sprite.left < inset.right
-        && sprite.right > inset.left
-        && sprite.top < inset.bottom
-        && sprite.bottom > inset.top
+        && Area::centred(at, width, height).overlaps(inset)
 }
 
 #[cfg(test)]

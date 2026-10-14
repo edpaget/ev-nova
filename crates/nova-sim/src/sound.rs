@@ -22,8 +22,25 @@ pub enum SimSound {
     JumpBegan,
     /// A jump ended in the next system.
     Arrived,
+    /// The player became threatened: the Red Alert, `snd ` 370
+    /// (`_HandlePlayer` @0x68cdd-0x68cff; see
+    /// [`red_alert`](crate::red_alert)).
+    RedAlert,
     /// A `Q` set operator's message is shown in flight.
     ScriptMessage,
+    /// Cargo was jettisoned in flight: `_beepSnd[4]`, `snd ` 154
+    /// (`_JettisonCargo` @0x3e31a-0x3e33d), whether or not a mission
+    /// failed with it (see [`cargo_box`](crate::cargo_box)).
+    CargoJettisoned,
+    /// A scan found a mission's cargo and failed the mission, the player
+    /// told: `_beepSnd[1]`, `snd ` 151 (`_ScanPlayer` @0x7e721-0x7e740).
+    /// A hidden mission (`Flags` 0x0400) fails in silence.
+    ScanFailedMission,
+    /// A scan caught the player smuggling a mission's cargo, a `jünk` or
+    /// an outfit: `_beepSnd[4]`, `snd ` 154 (`_ScanPlayer`
+    /// @0x7ea3e-0x7ea5d, @0x7ee76-0x7ee95, @0x7f337-0x7f356), with no fine
+    /// too.
+    Smuggling,
     /// A `P` set operator's sound plays: `exclusive`ly, as the one mission
     /// sound, dropped while the last is still playing; or over whatever
     /// plays.

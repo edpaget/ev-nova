@@ -11,6 +11,8 @@
 //! - [`cli`]: where the game data is, from the arguments or `NOVA_DATA`.
 //! - [`config`]: where the player's settings and pilots are saved, for
 //!   each operating system.
+//! - [`developer`]: the developer settings, the port's own flight
+//!   overlays, as the settings file turns them on.
 //! - [`exit`]: how the program ends: its exit code and message when the
 //!   window could not be opened.
 //! - [`fonts`]: the fonts text is drawn in, from the result of loading the
@@ -33,6 +35,7 @@ pub mod audio;
 pub mod chance;
 pub mod cli;
 pub mod config;
+pub mod developer;
 #[cfg(feature = "dev-tools")]
 pub mod devtools;
 pub mod exit;

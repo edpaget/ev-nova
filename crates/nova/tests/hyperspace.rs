@@ -59,7 +59,7 @@ use nova_sim::{
 use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_UNEXPLORED};
 use nova_view::flight::jump::{ARRIVAL_FLASH_FOR, STREAK_FOR};
 use nova_view::flight::view::TOO_CLOSE;
-use nova_view::flight::{FlightView, SharedChance};
+use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::MapMode;
 use nova_view::galaxy::map::{COURSE_HELP, ENTER_LABEL, ROUTE};
 use nova_view::menu::MenuChoice;
@@ -287,9 +287,15 @@ impl Harness {
     }
 
     /// The app over `data`, rolling chances on `chance`, in flight, entered
-    /// from the ship browser with F.
+    /// from the ship browser with F, drawing the developer's title, which
+    /// these tests read the system shown by.
     fn flying_over(data: Rc<GameData>, chance: SharedChance) -> Self {
-        let screen = start_screen(Rc::clone(&data)).with_chance(chance);
+        let screen = start_screen(Rc::clone(&data))
+            .with_chance(chance)
+            .with_flight_overlays(FlightOverlays {
+                title: true,
+                help: true,
+            });
         let mut harness = Self {
             app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),
@@ -949,7 +955,11 @@ fn a_jump_takes_a_jumps_fuel_off_the_gauge_and_the_hud_bar_and_it_stays_off() {
     let after = before.now - JUMP_FUEL;
     assert_eq!(harness.session().reserves().fuel.now, after);
     let bar = fuel_bar(&arrived);
-    assert!(close(bar, bar_before * after / before.max), "{bar}");
+    // Its right edge truncated, as `_DrawStatusFuel` draws it.
+    assert!(
+        close(bar, (bar_before * after / before.max).trunc()),
+        "{bar}"
+    );
 
     let later = harness.run(5);
     assert_eq!(harness.session().reserves().fuel.now, after);
@@ -1012,7 +1022,7 @@ fn an_opened_pilot_resumes_with_the_fuel_its_saved_jump_left() {
     assert_eq!(session.system(), SystemId(129));
     assert_eq!(session.reserves().fuel.now, 300.0 - JUMP_FUEL);
     let bar = fuel_bar(&harness.frame());
-    assert!(close(bar, 149.0 * 2.0 / 3.0), "{bar}");
+    assert!(close(bar, (149.0_f32 * 2.0 / 3.0).trunc()), "{bar}");
 }
 
 /// `ïntf` 128's bright text colour.
@@ -1025,14 +1035,22 @@ fn the_hyperspace_destination_brightens_once_the_ship_is_out_far_enough_to_jump(
     let mut game = Harness::flying();
     game.plot(129);
     assert_eq!(game.destination_color(), DIM, "plotted at the centre");
+    // The nav area refreshes every 15 engine ticks (0.5 s), so the
+    // colour may lag the ship by up to that.
     let mut dim_frames = 0;
+    let mut late_frames = 0;
     loop {
         game.steer(true);
         let color = game.destination_color();
         let out = game.ship().position.length() >= MIN_JUMP_DISTANCE;
-        assert_eq!(color, if out { BRIGHT } else { DIM }, "{:?}", game.ship());
-        if out {
+        if color == BRIGHT {
+            assert!(out, "bright only once out: {:?}", game.ship());
             break;
+        }
+        assert_eq!(color, DIM);
+        if out {
+            late_frames += 1;
+            assert!(late_frames < 60, "never brightened: {:?}", game.ship());
         }
         dim_frames += 1;
         assert!(dim_frames < 600, "never got out: {:?}", game.ship());
@@ -1041,7 +1059,15 @@ fn the_hyperspace_destination_brightens_once_the_ship_is_out_far_enough_to_jump(
     game.hold(&[]);
     assert_eq!(game.destination_color(), BRIGHT, "still out");
     game.fly_in();
-    assert_eq!(game.destination_color(), DIM, "back inside");
+    let mut late_frames = 0;
+    while game.destination_color() != DIM {
+        late_frames += 1;
+        assert!(late_frames < 60, "never dimmed: {:?}", game.ship());
+    }
+    assert!(
+        game.ship().position.length() < MIN_JUMP_DISTANCE,
+        "back inside"
+    );
 }
 
 #[test]

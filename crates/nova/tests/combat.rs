@@ -20,7 +20,8 @@
 //! puts it to flight and brings the police, allied with the traders, down
 //! on the player, whose shield drops; once the trader is disabled the
 //! player's record with its government is lower, and R targets the
-//! police, a threat, in red brackets, not the nearer disabled trader.
+//! police, a threat, in red brackets (four 16 x 16 corners), not the
+//! nearer disabled trader.
 //! The law follows the rulebook the settings file at the platform's
 //! settings path chooses: by the engine's crime gains, the default,
 //! disabling the trader pleases a neutral government; by the Bible's, it
@@ -72,6 +73,8 @@
 
 // Positions here are compared after the same arithmetic on both sides.
 #![allow(clippy::float_cmp)]
+
+mod bracket_art;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -450,7 +453,7 @@ fn data_arming(player: &[i16], trader: &[i16]) -> Rc<GameData> {
             &interface(),
         )
         .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
-    let file = OneFile(fork.build().bytes);
+    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 
@@ -951,30 +954,8 @@ fn patrolled() -> Rc<GameData> {
             &interface(),
         )
         .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
-    let file = OneFile(fork.build().bytes);
+    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
-}
-
-/// The red solid quads at most 17 units across each way: the hostile
-/// brackets' lines.
-fn red_lines(frame: &Frame) -> usize {
-    frame
-        .batches
-        .iter()
-        .flat_map(|batch| match batch {
-            Batch::Solid(quads) => quads.clone(),
-            _ => Vec::new(),
-        })
-        .filter(|quad| {
-            let xs = quad.corners.map(|corner| corner.x);
-            let ys = quad.corners.map(|corner| corner.y);
-            let span = |values: [f32; 4]| {
-                values.iter().copied().fold(f32::MIN, f32::max)
-                    - values.iter().copied().fold(f32::MAX, f32::min)
-            };
-            quad.color == [1.0, 0.0, 0.0, 1.0] && span(xs) <= 17.0 && span(ys) <= 17.0
-        })
-        .count()
 }
 
 #[test]
@@ -1045,8 +1026,16 @@ fn attacking_a_trader_brings_the_police_costs_the_record_and_r_finds_the_threat(
         Some(police),
         "the threat, not the disabled trader"
     );
+    assert_eq!(
+        harness
+            .session()
+            .target_brackets()
+            .map(|brackets| brackets.standing),
+        Some(nova_sim::brackets::Standing::Hostile),
+        "red brackets"
+    );
     let frame = harness.frame();
-    assert_eq!(red_lines(&frame), 8, "the hostile brackets");
+    assert_eq!(sprites_of(&frame, 16.0).len(), 4, "the brackets' corners");
 }
 
 /// Records each crime, and changes nothing.
@@ -1246,7 +1235,7 @@ fn boarding_data() -> Rc<GameData> {
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    let file = OneFile(fork.build().bytes);
+    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 
@@ -1869,7 +1858,11 @@ fn hailing_data(ai_type: i16, govt: i16, ship: i16) -> Rc<GameData> {
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    let file = OneFile(hailing_strings(fork).build().bytes);
+    let file = OneFile(
+        bracket_art::with_bracket_art(hailing_strings(fork))
+            .build()
+            .bytes,
+    );
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 
@@ -2299,7 +2292,7 @@ fn escort_data(alpha_dudes: &[i16]) -> Rc<GameData> {
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    let file = OneFile(fork.build().bytes);
+    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 
@@ -2821,7 +2814,7 @@ fn fighter_data(alpha_dudes: &[i16]) -> Rc<GameData> {
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    let file = OneFile(fork.build().bytes);
+    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 

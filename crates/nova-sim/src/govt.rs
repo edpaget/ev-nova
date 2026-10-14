@@ -171,6 +171,7 @@ impl Governments {
         self.record(govt).map_or(0, |record| {
             let penalties = record.penalties;
             match crime {
+                Crime::Smuggle => penalties.smuggle,
                 Crime::Disable => penalties.disable,
                 Crime::Board => penalties.board,
                 Crime::Kill => penalties.kill,
@@ -638,9 +639,15 @@ mod tests {
             ..govt(128)
         }]);
         assert_eq!(
-            [Crime::Disable, Crime::Board, Crime::Kill, Crime::Shoot]
-                .map(|crime| govts.penalty(FED, crime)),
-            [3, 5, 7, 2]
+            [
+                Crime::Smuggle,
+                Crime::Disable,
+                Crime::Board,
+                Crime::Kill,
+                Crime::Shoot
+            ]
+            .map(|crime| govts.penalty(FED, crime)),
+            [1, 3, 5, 7, 2]
         );
         assert_eq!(govts.penalty(None, Crime::Kill), 0);
         assert_eq!(govts.penalty(UNKNOWN, Crime::Kill), 0);

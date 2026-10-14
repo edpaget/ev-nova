@@ -45,9 +45,10 @@
 //! @0x980a in the `EV Nova` executable) changes, for a crime against a
 //! ship of government V, the record of every system reached from the
 //! crime's, along the hyperlinks, by a factor of 0.65 a jump. Here a
-//! crime against V, with P the crime's penalty field (`DisabPenalty`,
-//! `BoardPenalty`, `KillPenalty`), changes the record with each
-//! government S in the catalog by:
+//! crime against V, with P the crime's penalty field (`SmugPenalty`,
+//! `DisabPenalty`, `BoardPenalty`, `KillPenalty`: types 0 to 3,
+//! `_RecursivePenaltySlap` reading gövt +0x48 + 2×type @0x9954),
+//! changes the record with each government S in the catalog by:
 //!
 //! - **-V.P** when S is V, or allied with V and not its enemy (@0x998d,
 //!   @0x9a23);
@@ -102,6 +103,10 @@ pub const ENEMY_SHARE: f32 = 0.5;
 /// A crime against a ship.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Crime {
+    /// Carrying contraband its scan finds (`SmugPenalty`): the original's
+    /// type 0 (`_ScanPlayer` @0x7ebcc, @0x7f01f; see the
+    /// [`scan`](crate::scan) module).
+    Smuggle,
     /// Disabling it (`DisabPenalty`).
     Disable,
     /// Boarding it (`BoardPenalty`).
@@ -320,6 +325,20 @@ mod tests {
         );
     }
 
+    /// `_RecursivePenaltySlap` reads `SmugPenalty` for type 0, gövt +0x48
+    /// (@0x9954): the scan's contraband, every government's 99 here.
+    #[test]
+    fn smuggling_costs_the_smuggling_penalty_as_the_other_crimes_cost_theirs() {
+        assert_eq!(
+            ENGINE.penalties(Crime::Smuggle, Some(VICTIM), &four()),
+            [(VICTIM, -99), (ALLY, -99), (ENEMY, 49), (NEUTRAL, 49)]
+        );
+        assert_eq!(
+            BIBLE.penalties(Crime::Smuggle, Some(VICTIM), &four()),
+            [(VICTIM, -99), (ALLY, -99), (ENEMY, 49)]
+        );
+    }
+
     #[test]
     fn by_the_bible_disabling_pleases_only_the_victims_enemies() {
         let changes = BIBLE.penalties(Crime::Disable, Some(VICTIM), &four());
@@ -449,7 +468,7 @@ mod tests {
                 ..penalised(130, [3, 3, 3, 3])
             },
         ]);
-        for crime in [Crime::Disable, Crime::Board, Crime::Kill] {
+        for crime in [Crime::Smuggle, Crime::Disable, Crime::Board, Crime::Kill] {
             for law in [ENGINE, BIBLE] {
                 assert_eq!(
                     law.penalties(crime, Some(WRECKS), &govts),

@@ -33,6 +33,8 @@
 //! `Flags` 0x0200, linked to mission 128, offers it on boarding in place
 //! of the plunder dialog.
 
+mod bracket_art;
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io;
@@ -414,7 +416,7 @@ fn game_data(knobs: Knobs) -> Rc<GameData> {
             .resource(PICT, state + 100, None, &pict(13, 25, [0, 0, 0]))
             .resource(PICT, state + 102, None, &pict(13, 25, [0, 0, 0]));
     }
-    let file = OneFile(fork.build().bytes);
+    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 

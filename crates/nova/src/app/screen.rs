@@ -205,7 +205,7 @@ use nova_sim::{
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
-use nova_view::flight::{FlightMissionDialogs, FlightView, SharedChance};
+use nova_view::flight::{FlightMissionDialogs, FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
 use nova_view::ships::ShipBrowser;
@@ -335,6 +335,8 @@ pub struct AppScreen {
     hail_options: HailOptions,
     /// How each disputed rule reads in each flight.
     rules: Rulebook,
+    /// The port's own overlays each flight draws.
+    flight_overlays: FlightOverlays,
     /// The fee and wage of a hire in each flight.
     hire_terms: Rc<dyn HireTerms>,
     /// How persons appear in each flight.
@@ -421,6 +423,7 @@ impl AppScreen {
             assignment: None,
             hail_options: HailOptions::default(),
             rules: Rulebook::default(),
+            flight_overlays: FlightOverlays::default(),
             hire_terms: Rc::new(NovaHire::default()),
             control_bits: Rc::new(NovaBits),
             person_rules: Rc::new(NovaPersons::default()),
@@ -539,6 +542,17 @@ impl AppScreen {
         Self { rules, ..self }
     }
 
+    /// The router with each flight drawing the port's own `overlays`, the
+    /// title and the help line ([`FlightView::with_overlays`]): both off
+    /// until others are given. They are developer settings, not rules.
+    #[must_use]
+    pub fn with_flight_overlays(self, flight_overlays: FlightOverlays) -> Self {
+        Self {
+            flight_overlays,
+            ..self
+        }
+    }
+
     /// The router with Nova's rules, each disputed one as `rulebook`
     /// chooses: the strategies each flight decides by (the NPCs'
     /// behaviour, disabling, point defence, the law, boarding, hailing,
@@ -622,11 +636,13 @@ impl AppScreen {
             .with_boarding_rule(Rc::clone(&self.boarding_rule))
             .with_hail_options(self.hail_options.clone())
             .with_rules(self.rules)
+            .with_overlays(self.flight_overlays)
             .with_hire_terms(Rc::clone(&self.hire_terms))
             .with_control_bits(Rc::clone(&self.control_bits))
             .with_person_rules(Rc::clone(&self.person_rules))
             .with_strings(Rc::clone(&self.data) as Rc<dyn CommCatalog>)
-            .with_hyperspace_effects(self.prefs.hyperspace_effects);
+            .with_hyperspace_effects(self.prefs.hyperspace_effects)
+            .with_sound_prefs(self.prefs.sound);
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
@@ -948,6 +964,7 @@ impl AppScreen {
                 self.prefs_change = Some(prefs);
                 if let Some(flight) = &mut self.flight {
                     flight.set_hyperspace_effects(prefs.hyperspace_effects);
+                    flight.set_sound_prefs(prefs.sound);
                 }
             }
             if dialog.closed() {
@@ -4072,6 +4089,38 @@ pub(super) mod tests {
         assert!(flight_effects(&screen));
     }
 
+    fn alert_quiet(screen: &AppScreen) -> bool {
+        screen.flight_view().expect("flying").alert_quiet()
+    }
+
+    #[test]
+    fn flight_is_built_with_the_routers_sound_prefs() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        assert!(!alert_quiet(&screen), "loud by default");
+        let mut screen = with_dialogs(data()).with_prefs(Prefs {
+            sound: nova_view::SoundPrefs {
+                effects_level: 1,
+                ..quiet().sound
+            },
+            ..quiet()
+        });
+        fly(&mut screen);
+        assert!(alert_quiet(&screen));
+    }
+
+    #[test]
+    fn a_sound_change_in_the_dialog_reaches_flight_already_built() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        open_prefs(&mut screen);
+        let point = prefs_dialog(&screen).sound().rect().center();
+        click_at(&mut screen, point);
+        assert!(alert_quiet(&screen), "sound off");
+        click_at(&mut screen, point);
+        assert!(!alert_quiet(&screen), "back on");
+    }
+
     #[test]
     fn a_change_before_flight_is_built_reaches_it_when_it_is() {
         let mut screen = with_dialogs(data());
@@ -4435,6 +4484,32 @@ pub(super) mod tests {
         let mut screen = menu(&store);
         create(&mut screen, "Bob");
         assert_eq!(pilot(&screen).gender(), nova_sim::Gender::Male);
+    }
+
+    #[test]
+    fn the_router_passes_the_overlays_to_each_flight() {
+        let on = FlightOverlays {
+            title: true,
+            help: true,
+        };
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        assert_eq!(
+            screen.flight_view().expect("flying").overlays(),
+            FlightOverlays::default(),
+            "off by default"
+        );
+        let mut screen = with_dialogs(data()).with_flight_overlays(on);
+        fly(&mut screen);
+        assert_eq!(screen.flight_view().expect("flying").overlays(), on);
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store).with_flight_overlays(on);
+        create(&mut screen, "Ada");
+        assert_eq!(
+            screen.flight_view().expect("flying").overlays(),
+            on,
+            "a new pilot's flight"
+        );
     }
 
     #[test]

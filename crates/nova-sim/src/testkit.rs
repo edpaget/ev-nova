@@ -329,6 +329,7 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
         item_class: 0,
         lc_name: format!("outfit {id}"),
         lc_plural: format!("outfits {id}"),
+        scan_mask: 0,
         on_purchase: crate::control::Script::default(),
         on_sell: crate::control::Script::default(),
     }
@@ -639,6 +640,7 @@ pub(crate) fn star(id: i16, (x, y): (f32, f32), links: &[i16]) -> StarSystem {
         links: links.iter().copied().map(SystemId).collect(),
         govt: None,
         stellars: Vec::new(),
+        interference: 0,
     }
 }
 

@@ -24,6 +24,13 @@
 //! - [`blink`]: how bright a ship's running lights are at a tick,
 //!   [`lights_level`], from its `shän`'s [`Blink`] fields, with random
 //!   mode rolling on the [`BlinkChance`] port.
+//! - [`brackets`]: the corner brackets round the nav target and the ship
+//!   target: their [`FlyIn`](brackets::FlyIn) from a selection and a ship
+//!   target's [`Standing`](brackets::Standing).
+//! - [`cargo_box`]: the cargo boxes a jettison drops behind the player
+//!   and its trader escorts: how many ([`box_count`](cargo_box::box_count)),
+//!   where each starts, and how it drifts, spins and fades
+//!   ([`CargoBoxes`](cargo_box::CargoBoxes)).
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's fields and default items, the
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
@@ -180,6 +187,9 @@
 //! - [`recharge`]: recharging in the spaceport: which stellars sell
 //!   fuel ([`sells_fuel`]), what filling the tank costs, and each
 //!   [`RechargeRefusal`].
+//! - [`red_alert`]: the Red Alert: when a threat to the player sounds it
+//!   ([`RedAlert::check`], every [`ALERT_CHECK_FRAMES`]) and the icon's
+//!   blink ([`AlertIcon`]).
 //! - [`reserves`]: a ship's [`Reserves`], its shield, armour and fuel
 //!   [`Gauge`]s, full when it starts.
 //! - [`rulebook`]: the rules where the Nova Bible and the original engine
@@ -196,6 +206,9 @@
 //! - [`saves`]: the [`PilotStore`] port pilots are saved through, the key
 //!   each is saved under, and the [`PilotKeeper`] that saves, lists and
 //!   opens them.
+//! - [`scan`]: a warship's or an interceptor's scan of the player: whether
+//!   it goes on ([`scan::goes_on`]) and the illegal `jünk` or outfit it
+//!   finds after the mission cargo ([`scan::contraband`]).
 //! - [`session`]: a flight [`Session`], a pilot's ship flying
 //!   from its starting system, landing, jumping along a plotted course,
 //!   fighting, boarding and capturing ships, hailing them
@@ -224,6 +237,8 @@
 //!   the [`GalaxyOverlay`](story::GalaxyOverlay) play changes over the
 //!   static galaxy, which every reader sees through the
 //!   [`OverlaidGalaxy`](story::OverlaidGalaxy).
+//! - [`target_panel`]: what the status bar's target panel says of the
+//!   target at its bottom: its [`TargetStatus`] and its [`TargetTag`].
 //! - [`targeting`]: which NPC the player's target command picks
 //!   ([`TargetPick`]): the nearest, the nearest threat, the next in turn,
 //!   or the next of the player's escorts.
@@ -242,6 +257,8 @@ pub mod ai;
 pub mod bay;
 pub mod blink;
 pub mod board;
+pub mod brackets;
+pub mod cargo_box;
 pub mod catalog;
 pub mod chance;
 pub mod cloak;
@@ -267,6 +284,7 @@ pub mod hail;
 pub mod handling;
 pub mod hire;
 pub mod hyperspace;
+pub mod iff;
 pub mod landing;
 pub mod legal;
 pub mod market;
@@ -284,17 +302,21 @@ pub mod pre_jump;
 pub mod rank;
 pub mod rating;
 pub mod recharge;
+pub mod red_alert;
 pub mod reserves;
 pub mod rulebook;
 pub mod rules;
 pub mod save;
 pub mod saves;
+pub mod scan;
 pub mod session;
 pub mod ship_change;
 pub mod shipyard;
 pub mod sound;
 pub mod stats;
+pub mod status_cargo;
 pub mod story;
+pub mod target_panel;
 pub mod targeting;
 #[cfg(test)]
 mod testkit;
@@ -355,6 +377,7 @@ pub use hyperspace::{
     MultiJumpRule, Places, RouteError, StarMap, check_jump, hops_per_jump, jump_zone,
     next_hyper_destination,
 };
+pub use iff::{RadarGear, ShipIff, StellarIff};
 pub use landing::{
     Clearance, LandOutcome, LandingReach, LandingRefusal, NO_FRAME_REACH, OUT_OF_RANGE_FRAME_WIDTH,
     REACH_PER_WIDTH, Service, Standing, StellarShown, TypeWidth, UNLOADED_TYPE_WIDTH,
@@ -377,6 +400,10 @@ pub use person::{
 };
 pub use pilot::{Escort, Gender, Pilot};
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
+pub use red_alert::{
+    ALERT_CHECK_FRAMES, ALERT_CICN, ALERT_STEP_FRAMES, ALERT_STEPS, AlertIcon, RedAlert,
+    alert_check_due, alert_step_due,
+};
 pub use reserves::{Gauge, Reserve, Reserves};
 pub use rulebook::{RuleKey, RuleSource, Rulebook};
 pub use save::SaveError;
@@ -393,6 +420,8 @@ pub use shipyard::{
 };
 pub use sound::SimSound;
 pub use stats::ShipStats;
+pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCargo};
+pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};
 pub use targeting::TargetPick;
 pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};

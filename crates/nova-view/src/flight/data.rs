@@ -6,7 +6,7 @@
 
 use std::num::NonZeroU16;
 
-use nova_data::graphics::{PICT, decode_pict};
+use nova_data::graphics::{CICN, PICT, decode_cicn, decode_pict};
 use nova_data::records::boom::Boom;
 use nova_data::records::colors::Colors;
 use nova_data::records::govt::Govt;
@@ -72,11 +72,11 @@ fn layer_sheet(layer: Result<LayerSprite<'_>, LayerError>) -> Option<LayerSheet>
 
 /// Decodes on every call; the flight screen asks once, when it opens.
 impl StatusBars for GameData {
-    fn government_interface(&self, id: GovtId) -> Result<i16, String> {
+    fn government_interface(&self, id: GovtId) -> Result<Option<i16>, String> {
         match self.get::<Govt>(id.0) {
-            Some(Ok(govt)) => Ok(govt.record.interface),
+            Some(Ok(govt)) => Ok(Some(govt.record.interface)),
             Some(Err(err)) => Err(err.to_string()),
-            None => Err(format!("no gövt {}", id.0)),
+            None => Ok(None),
         }
     }
 
@@ -115,6 +115,12 @@ impl StatusBars for GameData {
         let picture = decode_pict(found.resource.data()).ok()?;
         Some((picture.width(), picture.height()))
     }
+
+    fn icon_size(&self, id: i16) -> Option<(u32, u32)> {
+        let found = self.resource(CICN, id)?;
+        let icon = decode_cicn(found.resource.data()).ok()?;
+        Some((icon.width(), icon.height()))
+    }
 }
 
 /// The first `spïn` of the shots' graphics (the Bible: 3000-3255).
@@ -123,6 +129,9 @@ pub const FIRST_SHOT_SPIN: i16 = 3000;
 pub const FIRST_WEAPON_SOUND: i16 = 200;
 /// The first `spïn` of the explosions' graphics (`_LoadObjectData`).
 pub const FIRST_BOOM_SPIN: i16 = 400;
+/// The first `spïn` of the cargo boxes' graphics, the box masters
+/// `_InitSprites` loads (500-504).
+pub const FIRST_BOX_SPIN: i16 = 500;
 /// The first `snd ` of the explosions' sounds (`_LoadSounds`: 300-363).
 pub const FIRST_BOOM_SOUND: i16 = 300;
 /// The first target picture, `PICT` 3000 for `shïp` 128
@@ -193,6 +202,11 @@ impl CombatLooks for GameData {
         let code = entry.record.target_code.as_str();
         (!code.is_empty()).then(|| code.to_owned())
     }
+
+    fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
+        let graphic = i16::try_from(graphic).unwrap_or(i16::MAX);
+        effect_sheet(self, FIRST_BOX_SPIN.saturating_add(graphic))
+    }
 }
 
 /// `spïn` `id`'s sheet in `data`, as an effect's, or why it cannot be
@@ -262,7 +276,7 @@ mod tests {
 
     use nova_data::Record;
     use nova_data::graphics::RLED;
-    use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
+    use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
     use nova_data::records::ship::Ship;
     use nova_data::records::ship_anim::ShipAnim;
     use nova_data::store::fs::{DirLister, EntryKind, Listing};
@@ -581,16 +595,30 @@ mod tests {
             (Govt::TYPE, 129, govt(-1)),
             (Govt::TYPE, 131, short),
         ]);
-        assert_eq!(data.government_interface(GovtId(128)), Ok(130));
-        assert_eq!(data.government_interface(GovtId(129)), Ok(-1));
-        assert_eq!(
-            data.government_interface(GovtId(130)),
-            Err("no gövt 130".to_owned())
-        );
+        assert_eq!(data.government_interface(GovtId(128)), Ok(Some(130)));
+        assert_eq!(data.government_interface(GovtId(129)), Ok(Some(-1)));
+        assert_eq!(data.government_interface(GovtId(130)), Ok(None), "none");
         let Err(message) = data.government_interface(GovtId(131)) else {
             panic!("an error")
         };
         assert!(message.contains("131"), "{message}");
+    }
+
+    fn icon(width: u16, height: u16) -> Vec<u8> {
+        let ctab = Ctab {
+            device: false,
+            entries: vec![(0, [0, 0, 0])],
+        };
+        let count = usize::from(width) * usize::from(height);
+        Cicn::new(width, height, 8, &ctab, &vec![0; count], &vec![true; count]).bytes()
+    }
+
+    #[test]
+    fn an_icons_size_is_its_decoded_width_and_height() {
+        let data = store(&[(CICN, 18000, icon(24, 20)), (CICN, 18001, vec![0; 4])]);
+        assert_eq!(data.icon_size(18000), Some((24, 20)));
+        assert_eq!(data.icon_size(18001), None, "undecodable");
+        assert_eq!(data.icon_size(18002), None, "missing");
     }
 
     #[test]
@@ -794,6 +822,19 @@ mod tests {
             data.weapon_look(WeaponId(130)),
             Err("no wëap 130".to_owned())
         );
+    }
+
+    #[test]
+    fn a_cargo_boxs_sheet_is_spin_500_and_its_graphic() {
+        let data = named_store(&[
+            (Spin::TYPE, 500, None, spin(600)),
+            (RLED, 600, None, sheet(36)),
+            (Spin::TYPE, 502, None, spin(602)),
+            (RLED, 602, None, sheet(12)),
+        ]);
+        assert_eq!(data.box_sheet(0), Ok(sheet_of(600, 36)));
+        assert_eq!(data.box_sheet(2), Ok(sheet_of(602, 12)));
+        assert_eq!(data.box_sheet(1), Err("no spïn 501".to_owned()));
     }
 
     #[test]

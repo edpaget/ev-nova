@@ -5,9 +5,9 @@
 //! the [module docs](super)' "Cargo" for the original's rules.
 
 use crate::catalog::{GovtRecord, MissionId, MissionRecord};
-use crate::chance::Chance;
 use crate::rulebook::Rulebook;
 use crate::rules::{Check, Checks, Context};
+use crate::scan::scan_fine;
 
 use super::active::{ActiveMission, ActiveMissions};
 use super::goals::ShipGoal;
@@ -152,17 +152,11 @@ pub fn jettison(
 
 /// `Flags`: the mission fails if its cargo is found by a scan.
 pub const FAILS_IF_SCANNED: u16 = 0x0020;
-/// The highest draw of `Rand(100)` with which a scan goes on
-/// (`_ScanPlayer` @0x7e54c-0x7e55c).
-pub const SCAN_ROLL: u32 = 75;
-/// What a `ScanFine` below none takes of the cash, times its negation
-/// (0.0001 @0xdda58), before it is counted in hundreds.
-const SCAN_FINE_SHARE: f64 = 0.0001;
 
 /// What a scan of the player's mission cargo comes to ([`scan`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScanOutcome {
-    /// Nothing is found, or nothing scanned.
+    /// Nothing is found.
     Nothing,
     /// The cargo of the mission in `slot` is found and it fails at once,
     /// the player told unless `announce` is false (its `Flags` 0x0400).
@@ -183,28 +177,21 @@ pub enum ScanOutcome {
 }
 
 /// What a ship of government `govt` finds scanning the player's mission
-/// cargo (`_ScanPlayer` @0x7e46e), the missions in `missions`, `record_of`
-/// giving each one's record, with `cash`, drawing on `chance`.
+/// cargo (`_ScanPlayer` @0x7e639-0x7ea9b), once the scan goes on (see
+/// [`scan::goes_on`](crate::scan::goes_on)): the missions in `missions`,
+/// `record_of` giving each one's record, with `cash`.
 ///
-/// Nothing without a `SmugPenalty`, and then nothing is drawn
-/// (@0x7e497-0x7e4bf); nothing on a draw of `Rand(100)` above 75
-/// (@0x7e54c-0x7e55c). Otherwise the first slot in order whose cargo is
-/// aboard and typed, and whose mission's `ScanMask` shares a bit with the
-/// government's (@0x7e6a7-0x7e6c7), decides: a mission with `Flags`
-/// 0x0020 not failed already fails (@0x7e6e2-0x7e7c9); any other is fined
-/// (@0x7e7ce-0x7ea9b) its `ScanFine` above none, or below none
-/// max(1, trunc(−`ScanFine` × 0.0001 × cash) × 100): that percent of the
-/// cash in hundreds, at least 1. A `ScanFine` of none fines nothing.
+/// The first slot in order whose cargo is aboard and typed, and whose
+/// mission's `ScanMask` shares a bit with the government's
+/// (@0x7e6a7-0x7e6c7), decides: a mission with `Flags` 0x0020 not failed
+/// already fails (@0x7e6e2-0x7e7c9); any other is fined
+/// (@0x7e7ce-0x7ea9b) [`scan_fine`] of the government's `ScanFine`.
 pub fn scan(
     govt: &GovtRecord,
     missions: &ActiveMissions,
     record_of: impl Fn(MissionId) -> MissionRecord,
     cash: i64,
-    chance: &mut dyn Chance,
 ) -> ScanOutcome {
-    if govt.penalties.smuggle == 0 || chance.below(100) > SCAN_ROLL {
-        return ScanOutcome::Nothing;
-    }
     let found = missions.iter().find_map(|(slot, active)| {
         let record = record_of(active.mission);
         (active.aboard && active.cargo_type.is_some() && record.scan_mask & govt.scan_mask != 0)
@@ -223,18 +210,6 @@ pub fn scan(
         slot,
         credits: scan_fine(govt.scan_fine, cash),
     }
-}
-
-/// The credits a `ScanFine` of `fine` takes of `cash` (`_ScanPlayer`
-/// @0x7e982-0x7e9c1): above none as it is; below none
-/// max(1, trunc(−`fine` × 0.0001 × cash) × 100), worked in doubles.
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-fn scan_fine(fine: i16, cash: i64) -> i64 {
-    if fine >= 0 {
-        return i64::from(fine);
-    }
-    let share = (-f64::from(fine) * SCAN_FINE_SHARE * cash as f64).trunc() as i64;
-    (share * 100).max(1)
 }
 
 /// What the pickup checks read: the room for the cargo, and the rule
@@ -629,7 +604,7 @@ mod tests {
     // The scan.
 
     use crate::catalog::{GovtRecord, Penalties};
-    use crate::testkit::{Draws, govt};
+    use crate::testkit::govt;
 
     /// A government scanning for bit 0x0004, with a `SmugPenalty` of 5
     /// and a `ScanFine` of `fine`.
@@ -664,48 +639,15 @@ mod tests {
         missions: &ActiveMissions,
         record: &MissionRecord,
         cash: i64,
-        draw: u32,
-    ) -> (ScanOutcome, Vec<u32>) {
-        let mut chance = Draws::of(&[draw]);
-        let outcome = scan(govt, missions, |_| record.clone(), cash, &mut chance);
-        (outcome, chance.asked)
-    }
-
-    #[test]
-    fn a_government_with_no_smuggling_penalty_scans_nothing_and_draws_nothing() {
-        let (missions, record) = smuggled(0, 0x0004, 0x0020);
-        let lax = GovtRecord {
-            penalties: Penalties::default(),
-            ..scanning(500)
-        };
-        assert_eq!(
-            scanned(&lax, &missions, &record, 1000, 0),
-            (ScanOutcome::Nothing, vec![])
-        );
-    }
-
-    #[test]
-    fn a_draw_above_75_scans_nothing() {
-        let (missions, record) = smuggled(0, 0x0004, 0x0020);
-        assert_eq!(
-            scanned(&scanning(500), &missions, &record, 1000, 76),
-            (ScanOutcome::Nothing, vec![100])
-        );
-        assert_eq!(
-            scanned(&scanning(500), &missions, &record, 1000, 75).0,
-            ScanOutcome::Fail {
-                slot: 0,
-                announce: true
-            },
-            "75 scans"
-        );
+    ) -> ScanOutcome {
+        scan(govt, missions, |_| record.clone(), cash)
     }
 
     #[test]
     fn masked_cargo_of_a_mission_with_flag_0x0020_fails_it() {
         let (missions, record) = smuggled(3, 0x0006, 0x0020);
         assert_eq!(
-            scanned(&scanning(500), &missions, &record, 1000, 0).0,
+            scanned(&scanning(500), &missions, &record, 1000),
             ScanOutcome::Fail {
                 slot: 3,
                 announce: true
@@ -713,7 +655,7 @@ mod tests {
         );
         let (missions, hidden) = smuggled(3, 0x0004, 0x0420);
         assert_eq!(
-            scanned(&scanning(500), &missions, &hidden, 1000, 0).0,
+            scanned(&scanning(500), &missions, &hidden, 1000),
             ScanOutcome::Fail {
                 slot: 3,
                 announce: false
@@ -726,7 +668,7 @@ mod tests {
     fn a_mask_sharing_no_bit_scans_nothing() {
         let (missions, record) = smuggled(0, 0x0003, 0x0020);
         assert_eq!(
-            scanned(&scanning(500), &missions, &record, 1000, 0).0,
+            scanned(&scanning(500), &missions, &record, 1000),
             ScanOutcome::Nothing
         );
     }
@@ -736,13 +678,13 @@ mod tests {
         let (mut missions, record) = smuggled(0, 0x0004, 0x0020);
         missions.get_mut(0).expect("held").aboard = false;
         assert_eq!(
-            scanned(&scanning(500), &missions, &record, 1000, 0).0,
+            scanned(&scanning(500), &missions, &record, 1000),
             ScanOutcome::Nothing
         );
         let (mut missions, record) = smuggled(0, 0x0004, 0x0020);
         missions.get_mut(0).expect("held").cargo_type = None;
         assert_eq!(
-            scanned(&scanning(500), &missions, &record, 1000, 0).0,
+            scanned(&scanning(500), &missions, &record, 1000),
             ScanOutcome::Nothing
         );
     }
@@ -751,14 +693,14 @@ mod tests {
     fn masked_cargo_of_any_other_mission_is_fined() {
         let (missions, record) = smuggled(2, 0x0004, 0);
         assert_eq!(
-            scanned(&scanning(500), &missions, &record, 1000, 0).0,
+            scanned(&scanning(500), &missions, &record, 1000),
             ScanOutcome::Fined {
                 slot: 2,
                 credits: 500
             }
         );
         assert_eq!(
-            scanned(&scanning(0), &missions, &record, 1000, 0).0,
+            scanned(&scanning(0), &missions, &record, 1000),
             ScanOutcome::Fined {
                 slot: 2,
                 credits: 0
@@ -768,7 +710,7 @@ mod tests {
         let (mut failed, record) = smuggled(2, 0x0004, 0x0020);
         failed.get_mut(2).expect("held").failed = Some(super::super::FailedBy::Quick);
         assert_eq!(
-            scanned(&scanning(500), &failed, &record, 1000, 0).0,
+            scanned(&scanning(500), &failed, &record, 1000),
             ScanOutcome::Fined {
                 slot: 2,
                 credits: 500
@@ -780,11 +722,10 @@ mod tests {
     #[test]
     fn a_fine_below_none_is_that_percent_of_the_cash_in_hundreds_at_least_1() {
         let (missions, record) = smuggled(0, 0x0004, 0);
-        let fine =
-            |scan_fine, cash| match scanned(&scanning(scan_fine), &missions, &record, cash, 0).0 {
-                ScanOutcome::Fined { credits, .. } => credits,
-                other => panic!("{other:?}"),
-            };
+        let fine = |scan_fine, cash| match scanned(&scanning(scan_fine), &missions, &record, cash) {
+            ScanOutcome::Fined { credits, .. } => credits,
+            other => panic!("{other:?}"),
+        };
         assert_eq!(fine(-5, 123_456), 6100, "5% of 123,456 is 6,172.8");
         assert_eq!(fine(-10, 1000), 100);
         assert_eq!(fine(-10, 999), 1, "9.99 in hundreds is none: 1");
@@ -803,13 +744,7 @@ mod tests {
             flags: if id.0 == 140 { 0 } else { 0x0020 },
             ..mission(id.0)
         };
-        let outcome = scan(
-            &scanning(500),
-            &missions,
-            record_of,
-            1000,
-            &mut Draws::of(&[0]),
-        );
+        let outcome = scan(&scanning(500), &missions, record_of, 1000);
         assert_eq!(
             outcome,
             ScanOutcome::Fined {

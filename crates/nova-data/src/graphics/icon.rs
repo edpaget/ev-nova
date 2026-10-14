@@ -6,12 +6,17 @@
 //! handle, then the mask bits, the icon bits, the colour table and the
 //! unpacked pixel rows.
 
+use nova_rsrc::ResType;
+
 use super::GraphicsError;
 use super::budget::check_budget;
 use super::color::{ColorTable, indices};
 use super::image::Image;
 use super::pixmap::{PixMap, QdRect};
 use super::reader::Reader;
+
+/// The `cicn` resource type.
+pub const CICN: ResType = ResType::new(*b"cicn");
 
 /// Decodes a `cicn` to an image the size of its `PixMap` bounds, with the
 /// mask as alpha: masked-out pixels are fully transparent black.

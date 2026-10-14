@@ -179,6 +179,9 @@ pub(super) enum Reset {
     GateEntry,
     /// The shots and beams in flight are left behind.
     Combat,
+    /// The cargo boxes are cleared, as `_killBoxes` kills them
+    /// (see the `cargo_boxes` module).
+    Boxes,
     /// The fight's strikes are forgotten.
     Strikes,
     /// The player's target is let go.
@@ -304,6 +307,7 @@ fn jump(hops: usize) -> Resets {
             Reset::HeldSound,
             Reset::NavTarget,
             Reset::Combat,
+            Reset::Boxes,
             Reset::Strikes,
             Reset::Target,
             Reset::Boarding,
@@ -333,6 +337,7 @@ fn gate() -> Resets {
             Reset::Thrust,
             Reset::NavTarget,
             Reset::Combat,
+            Reset::Boxes,
             Reset::Strikes,
             Reset::Target,
             Reset::Boarding,
@@ -378,6 +383,7 @@ fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
         Reset::NavTarget,
         Reset::GateEntry,
         Reset::Combat,
+        Reset::Boxes,
         Reset::Strikes,
         Reset::Target,
         Reset::Boarding,
@@ -421,6 +427,7 @@ fn relocate() -> Resets {
             Reset::NavTarget,
             Reset::GateEntry,
             Reset::Combat,
+            Reset::Boxes,
             Reset::Strikes,
             Reset::Target,
             Reset::Boarding,
@@ -708,6 +715,9 @@ impl Session {
         if resets.has(Reset::Combat) {
             self.combat.clear();
         }
+        if resets.has(Reset::Boxes) {
+            self.clear_boxes();
+        }
         if resets.has(Reset::Strikes) {
             self.strikes.clear();
         }
@@ -807,9 +817,10 @@ mod tests {
 
     /// The scene every way in but a landed move lets go of, a gate's
     /// pending entry aside, and its stellars rebuilt.
-    const SCENE: [Reset; 7] = [
+    const SCENE: [Reset; 8] = [
         Reset::NavTarget,
         Reset::Combat,
+        Reset::Boxes,
         Reset::Strikes,
         Reset::Target,
         Reset::Boarding,

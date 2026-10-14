@@ -297,6 +297,8 @@ struct Node {
     ordered_jumps: Vec<SystemId>,
     /// Each of its `NavDefs` slots' `Flags` and `Flags2`, raw.
     stellars: Vec<Option<(u32, u16)>>,
+    /// Its `Interference`, raw.
+    interference: i16,
 }
 
 impl Node {
@@ -515,6 +517,7 @@ impl StarMap {
                 jumps: BTreeSet::new(),
                 ordered_jumps: Vec::new(),
                 stellars: system.stellars,
+                interference: system.interference,
             };
             nodes.insert(from, node);
         }
@@ -649,6 +652,12 @@ impl StarMap {
     #[must_use]
     pub fn stellars(&self, id: SystemId) -> &[Option<(u32, u16)>] {
         self.nodes.get(&id).map_or(&[], |node| &node.stellars)
+    }
+
+    /// System `id`'s `Interference`, raw: 0 when it is not on the map.
+    #[must_use]
+    pub fn interference(&self, id: SystemId) -> i16 {
+        self.nodes.get(&id).map_or(0, |node| node.interference)
     }
 
     /// System `id`'s controlling government: `None` when it is
@@ -827,6 +836,7 @@ mod tests {
             links: links.iter().copied().map(SystemId).collect(),
             govt: None,
             stellars: Vec::new(),
+            interference: 0,
         }
     }
 
@@ -1435,6 +1445,7 @@ mod tests {
             links: Vec::new(),
             govt: None,
             stellars: Vec::new(),
+            interference: 0,
         }]);
         assert_eq!(map.position(SystemId(128)), Some(Vec2::new(-150.0, 75.0)));
         assert_eq!(map.position(SystemId(129)), None);
@@ -1506,6 +1517,23 @@ mod tests {
         assert_eq!(map.stellars(SystemId(128)), flags.as_slice());
         assert_eq!(map.stellars(SystemId(129)), []);
         assert_eq!(map.stellars(SystemId(130)), [], "not on the map");
+    }
+
+    #[test]
+    fn a_systems_interference_is_its_records_and_0_off_the_map() {
+        let map = StarMap::new(vec![
+            StarSystem {
+                interference: 60,
+                ..system(128, &[])
+            },
+            StarSystem {
+                interference: -5,
+                ..system(129, &[])
+            },
+        ]);
+        assert_eq!(map.interference(SystemId(128)), 60);
+        assert_eq!(map.interference(SystemId(129)), -5);
+        assert_eq!(map.interference(SystemId(130)), 0, "not on the map");
     }
 
     // Jumping.

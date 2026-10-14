@@ -1,5 +1,11 @@
 //! The flight screen: the player's ship flying in its starting system.
 //!
+//! - [`alert`]: the Red Alert icon, drawn at the playfield's top-right.
+//! - [`boxes`]: drawing the cargo boxes a jettison leaves.
+//! - [`brackets`]: the corner brackets round the nav target and the ship
+//!   target, from the original's `cïcn` art.
+//! - [`cadence`]: when the HUD refreshes, [`HudCadence`](cadence::HudCadence),
+//!   and the target's blink on the radar.
 //! - [`catalog`]: the [`ShipSprites`] port, the player ship's sprite
 //!   sheet, and the [`StatusBars`] port, the `ïntf` status bar layouts.
 //! - [`data`]: the ports' adapters over `nova_data`'s `GameData`.
@@ -13,14 +19,21 @@
 //!   the mission info screen shown over flight.
 //! - [`hud`]: the HUD, the `ïntf` status bar with its radar, shield,
 //!   armour and fuel bars and the system's name.
+//! - `pen`: the `Pen` the HUD's panels set their text with, and
+//!   `_DrawCenteredText`'s centring.
+//! - [`radar`]: the radar's view model, the marks `_DrawStatusRadar`
+//!   draws for a [`RadarScene`](radar::RadarScene) snapshot.
 //! - [`sprite`]: [`rotation_frame`], which frame of the ship's sheet shows
 //!   its heading.
-//! - [`target`]: the target panel, the secondary weapon's line and the
-//!   brackets round the target.
+//! - [`target`]: the target panel and the secondary weapon's line.
 //! - [`view`]: the [`FlightView`] screen, which runs the flight and draws
 //!   it.
 //! - [`weapons`]: drawing shots and beams.
 
+pub mod alert;
+pub mod boxes;
+pub mod brackets;
+pub mod cadence;
 pub mod catalog;
 pub mod data;
 pub mod effects;
@@ -28,6 +41,8 @@ pub mod escorts;
 pub mod hud;
 pub mod jump;
 pub mod missions;
+mod pen;
+pub mod radar;
 pub mod sprite;
 pub mod target;
 pub mod view;
@@ -41,4 +56,4 @@ pub use escorts::{EscortMenu, EscortMenuColors, EscortMenuLooks};
 pub use jump::{JumpEffect, JumpPhase};
 pub use missions::FlightMissionDialogs;
 pub use sprite::rotation_frame;
-pub use view::{FlightView, SharedChance};
+pub use view::{FlightOverlays, FlightView, SharedChance};

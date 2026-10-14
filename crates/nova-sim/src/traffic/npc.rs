@@ -248,8 +248,11 @@ impl Npc {
         }
     }
 
-    /// Whether it escorts the player: a hired escort (its fighters too) or
-    /// a mission escort.
+    /// Whether it escorts the player: an escort hired or captured, a
+    /// fighter the player launched (both [`Npc::is_players`]), or a mission
+    /// escort. Not a fighter one of those launched, which an escort leads
+    /// with no [`EscortDuty`] of its own (the IFF radar counts it through
+    /// its leader: `iff::ship_iff`).
     #[must_use]
     pub fn escorts_player(&self) -> bool {
         self.escort.is_some() || self.mission_escort()

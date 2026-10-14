@@ -4,7 +4,7 @@
 //! of a physical key.
 //!
 //! Alpha's navigation defaults are Alpha Minor, then Alpha Prime. With
-//! nothing selected and no course the nav area says "No Destination". A
+//! nothing selected and no course the nav area says "Nav System Off". A
 //! course plotted on flight's map to Beta, not yet explored, shows
 //! "Hyperspace" over "Unexplored System". Tab, the original's Target
 //! Select for ships, selects no stellar and leaves the course shown.
@@ -40,7 +40,7 @@ use nova_sim::flight::{heading_of, shortest_turn};
 use nova_sim::hyperspace::MIN_JUMP_DISTANCE;
 use nova_sim::{Session, ShipState, SystemId};
 use nova_view::flight::FlightView;
-use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_NO_DESTINATION, NAV_UNEXPLORED};
+use nova_view::flight::hud::{NAV_HYPERSPACE, NAV_OFF, NAV_UNEXPLORED};
 use nova_view::{MouseButton, Point};
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -381,9 +381,9 @@ impl Harness {
         self.texts_on_bar(254.0..=286.0)
     }
 
-    /// The texts the next frame draws in the cargo area, where the date
-    /// goes: stock `ïntf` 128's (8, 458)-(184, 552), on the bar.
-    fn date(&mut self) -> Vec<String> {
+    /// The texts the next frame draws in the cargo area: stock `ïntf`
+    /// 128's (8, 458)-(184, 552), on the bar.
+    fn cargo_area(&mut self) -> Vec<String> {
         self.texts_on_bar(458.0..=552.0)
     }
 
@@ -411,7 +411,7 @@ impl Harness {
 #[test]
 fn the_course_map_sets_what_the_hud_navigation_area_shows() {
     let mut game = Harness::flying();
-    assert_eq!(game.nav(), [NAV_NO_DESTINATION]);
+    assert_eq!(game.nav(), [NAV_OFF]);
 
     game.plot(129);
     assert_eq!(game.nav(), [NAV_HYPERSPACE, NAV_UNEXPLORED]);
@@ -432,27 +432,37 @@ fn the_course_map_sets_what_the_hud_navigation_area_shows() {
     game.fly_out();
     game.jump_into(129);
     assert_eq!(game.session().system(), SystemId(129));
-    assert_eq!(game.nav(), [NAV_NO_DESTINATION]);
+    assert_eq!(game.nav(), [NAV_OFF]);
 
     // A course back to Alpha, explored, names it.
     game.plot(128);
     assert_eq!(game.nav(), [NAV_HYPERSPACE, "Alpha"]);
 }
 
+/// The date the session shows.
+fn date(game: &Harness) -> String {
+    game.session().date_text()
+}
+
 #[test]
-fn the_hud_date_moves_on_a_day_with_each_jump() {
+fn the_date_moves_on_a_day_with_each_jump_and_the_stock_cargo_area_lists_the_hold_not_it() {
     let mut game = Harness::flying();
-    assert_eq!(game.date(), ["June 23, 1177 NC"]);
+    assert_eq!(
+        game.cargo_area(),
+        ["Free:", "0", "Credits:", "0"],
+        "no room for the date under the cargo lines"
+    );
+    assert_eq!(date(&game), "June 23, 1177 NC");
 
     game.plot(129);
     game.fly_out();
     game.jump_into(129);
     assert_eq!(game.session().system(), SystemId(129));
-    assert_eq!(game.date(), ["June 24, 1177 NC"]);
+    assert_eq!(date(&game), "June 24, 1177 NC");
 
     game.plot(128);
     game.fly_out();
     game.jump_into(128);
     assert_eq!(game.session().system(), SystemId(128));
-    assert_eq!(game.date(), ["June 25, 1177 NC"]);
+    assert_eq!(date(&game), "June 25, 1177 NC");
 }
