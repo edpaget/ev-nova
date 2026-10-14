@@ -1351,7 +1351,14 @@ mod tests {
         assert_eq!(behaviour.take(), [], "no decisions");
         assert_eq!(traffic.departed(), []);
         assert_eq!(traffic.npcs().len(), 2);
-        assert_eq!(traffic.npcs()[0].state.position, Vec2::new(1.0, 0.0));
+        // Each tick slows the drift by the drag before it moves.
+        let mut expected = Vec2::ZERO;
+        let mut velocity = Vec2::new(0.25, 0.0);
+        for _ in 0..4 {
+            velocity = velocity * crate::flight::DISABLED_DRAG;
+            expected = expected + velocity;
+        }
+        assert_eq!(traffic.npcs()[0].state.position, expected);
         assert_eq!(traffic.npcs()[1].goal, Goal::JumpOut);
         traffic.npcs_mut()[0].condition = Condition::Dying {
             ticks_left: 2,
@@ -2016,6 +2023,19 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(reacted, ["react 0 Npc(NpcId(0))"]);
+    }
+
+    #[test]
+    fn a_disabled_npc_drags_once_per_traffic_tick() {
+        let mut traffic = populated(2, 1);
+        traffic.npcs[1].condition = Condition::Disabled;
+        traffic.npcs[1].state.velocity = Vec2::new(1.0, -2.0);
+        let idle = Fighting::deciding(Goal::Idle);
+        traffic.tick_in(&idle, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(
+            traffic.npcs()[1].state.velocity,
+            Vec2::new(1.0, -2.0) * crate::flight::DISABLED_DRAG
+        );
     }
 
     #[test]

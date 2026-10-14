@@ -172,7 +172,7 @@
 //! player is landed or jumping, and its shots and beams are gone once the
 //! player lands or arrives elsewhere. An NPC destroyed is taken out of the
 //! system. The player's ship, once it is not intact, ignores the controls
-//! and drifts, cannot land or jump, and once destroyed stays where it is.
+//! and drifts, slowing a little each tick, cannot land or jump, and once destroyed stays where it is.
 //!
 //! The player's crimes change its legal records as the fight's
 //! [`LegalCode`] says: disabling an NPC, and breaking one up (which is
@@ -1304,7 +1304,8 @@ impl Session {
     /// sounds (see the `script_effects` module). Any tick ends a gate's pending entry: the
     /// original's hypergate map is modal, so nothing ticks between the
     /// land key and the pick. A ship that is not intact ignores the
-    /// controls and drifts, giving up a jump it was turning and braking
+    /// controls and drifts, slowing by [`crate::flight::DISABLED_DRAG`] a
+    /// tick before it moves, giving up a jump it was turning and braking
     /// for, and a destroyed one stays where it is.
     ///
     /// Each tick in flight, a jump's included, moves the frame counter on,
@@ -1353,6 +1354,9 @@ impl Session {
             None => {
                 self.thrust(controls.thrust);
                 let handling = self.flying_handling();
+                if self.player_fate().row().drag {
+                    crate::flight::drag(&mut self.player);
+                }
                 step(&mut self.player, &handling, controls);
             }
             Some(Jump::PreJump { to, bearing }) => {
@@ -14462,13 +14466,89 @@ pub(super) mod tests {
             reverse: false,
         });
         let drifted = *session.player();
-        assert_eq!(drifted.velocity, moving.velocity, "no thrust");
+        assert_eq!(
+            drifted.velocity,
+            moving.velocity * crate::flight::DISABLED_DRAG,
+            "no thrust, only drag"
+        );
         assert_eq!(drifted.heading, moving.heading, "no turn");
-        assert_eq!(drifted.position, moving.position + moving.velocity);
+        assert_eq!(
+            drifted.position,
+            moving.position + moving.velocity * crate::flight::DISABLED_DRAG,
+            "moved by the damped velocity"
+        );
         assert_eq!(session.take_sounds(), [SimSound::ThrustStopped]);
         session.hold_trigger(FIRE);
         session.tick_combat(DISABLING, &mut NeverFires);
         assert_eq!(session.shots(), [], "nor fires");
+    }
+
+    /// A session whose player has thrust once and is then disabled.
+    fn disabled_moving_player(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.tick(Controls {
+            thrust: true,
+            ..Controls::default()
+        });
+        session.tick_combat(DISABLING, &mut NeverFires);
+        assert_eq!(session.player_condition(), Condition::Disabled);
+        session
+    }
+
+    #[test]
+    fn a_disabled_player_slows_by_0_995_a_tick() {
+        let catalog = armed();
+        let mut session = disabled_moving_player(&catalog);
+        let start = session.player().velocity;
+        let mut expected = start;
+        for _ in 0..10 {
+            session.tick(Controls::default());
+            expected = expected * crate::flight::DISABLED_DRAG;
+        }
+        assert_eq!(session.player().velocity, expected);
+        assert!(expected.length() < start.length() * 0.96);
+    }
+
+    #[test]
+    fn a_breaking_up_player_slows_by_0_995_a_tick() {
+        let catalog = armed();
+        let mut session = disabled_moving_player(&catalog);
+        session.condition = Condition::Dying {
+            ticks_left: 10,
+            starting: false,
+        };
+        let before = *session.player();
+        session.tick(Controls::default());
+        let damped = before.velocity * crate::flight::DISABLED_DRAG;
+        assert_eq!(session.player().velocity, damped);
+        assert_eq!(session.player().position, before.position + damped);
+    }
+
+    #[test]
+    fn an_intact_player_coasting_keeps_its_velocity() {
+        let catalog = armed();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.tick(Controls {
+            thrust: true,
+            ..Controls::default()
+        });
+        let moving = *session.player();
+        session.tick(Controls::default());
+        assert_eq!(session.player().velocity, moving.velocity);
+    }
+
+    #[test]
+    fn a_disabled_player_drags_once_a_tick_across_a_full_session_tick() {
+        let catalog = armed();
+        let mut session = disabled_moving_player(&catalog);
+        let start = session.player().velocity;
+        session.tick(Controls::default());
+        session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(
+            session.player().velocity,
+            start * crate::flight::DISABLED_DRAG
+        );
     }
 
     #[test]

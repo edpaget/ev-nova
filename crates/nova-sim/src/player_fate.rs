@@ -15,7 +15,7 @@
 //! The columns of [`FateRow`], and their phases:
 //!
 //! - [`FateRow::drawn`] ([`Drawn`]): phase 1.
-//! - drift (a disabled hull's 0.995 slowdown): phase 3.
+//! - [`FateRow::drag`] (a disabled hull's 0.995 slowdown): phase 3.
 //! - input (which keys a state accepts): phase 4.
 //!
 //! Condition changes stay where they are, in the fight's
@@ -70,6 +70,11 @@ pub enum Drawn {
 pub struct FateRow {
     /// How much of the ship is drawn.
     pub drawn: Drawn,
+    /// Whether the hull slows by [`crate::flight::DISABLED_DRAG`] each tick
+    /// (`_HandlePlayer` @0x68abf-0x68af8, gated only by the `_IsDisabled`
+    /// flag -0x2cb, which holds for a breaking-up ship through its armour
+    /// test). A destroyed player is stopped dead instead.
+    pub drag: bool,
 }
 
 impl PlayerFate {
@@ -98,14 +103,21 @@ impl PlayerFate {
     #[must_use]
     pub fn row(self) -> FateRow {
         match self {
-            Self::Flying | Self::Disabled | Self::BreakingUp { .. } => {
-                FateRow { drawn: Drawn::Full }
-            }
+            Self::Flying => FateRow {
+                drawn: Drawn::Full,
+                drag: false,
+            },
+            Self::Disabled | Self::BreakingUp { .. } => FateRow {
+                drawn: Drawn::Full,
+                drag: true,
+            },
             Self::Exploded { first_tick: true } => FateRow {
                 drawn: Drawn::SpriteHidden,
+                drag: false,
             },
             Self::Exploded { first_tick: false } => FateRow {
                 drawn: Drawn::Hidden,
+                drag: false,
             },
         }
     }
@@ -167,6 +179,34 @@ mod tests {
             },
         ] {
             assert_eq!(fate.row().drawn, Drawn::Full, "{fate:?}");
+        }
+    }
+
+    #[test]
+    fn disabled_and_breaking_up_players_drag() {
+        for fate in [
+            PlayerFate::Disabled,
+            PlayerFate::BreakingUp {
+                ticks_left: 3,
+                starting: false,
+            },
+            PlayerFate::BreakingUp {
+                ticks_left: 15,
+                starting: true,
+            },
+        ] {
+            assert!(fate.row().drag, "{fate:?}");
+        }
+    }
+
+    #[test]
+    fn flying_and_exploded_players_do_not_drag() {
+        for fate in [
+            PlayerFate::Flying,
+            PlayerFate::Exploded { first_tick: true },
+            PlayerFate::Exploded { first_tick: false },
+        ] {
+            assert!(!fate.row().drag, "{fate:?}");
         }
     }
 

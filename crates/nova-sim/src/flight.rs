@@ -9,8 +9,12 @@
 //!    one slower than [`AT_REST_SPEED`] counts as at rest.
 //! 2. Thrusts: thrust adds the ship's acceleration along its new heading to
 //!    its velocity.
-//! 3. Caps the speed at the ship's top speed, keeping the direction. There
-//!    is no drag: a ship coasts for ever.
+//! 3. Caps the speed at the ship's top speed, keeping the direction.
+//!    `step` adds no drag, so an intact ship coasts for ever. A disabled or
+//!    breaking-up ship is slowed by [`drag`] before its step, by its caller
+//!    (the session for the player, traffic for NPCs), as the original slows
+//!    a hull `_IsDisabled` reports (0x68abf-0x68af8, 0x33950-0x339a1) before
+//!    that frame's position step.
 //! 4. Moves the ship by its new velocity (semi-implicit Euler).
 //!
 //! A heading is in degrees: 0 faces up the screen (-y), and it grows
@@ -25,6 +29,17 @@ use crate::handling::{ACCEL_PER_PIXEL_PER_TICK_SQUARED, Handling};
 /// Thrust never changes a speed by less than that, so anything slower is the
 /// rounding left over from braking, whose direction is meaningless.
 pub const AT_REST_SPEED: f32 = 0.5 / ACCEL_PER_PIXEL_PER_TICK_SQUARED;
+
+/// The factor a disabled or breaking-up hull's velocity is multiplied by each
+/// tick: the double at 0xdd5f0 (bytes `d7 a3 70 3d 0a d7 ef 3f`), whose only
+/// two loads are `_HandlePlayer` @0x68ad1 and `_HandleShip` @0x33960.
+pub const DISABLED_DRAG: f32 = 0.995;
+
+/// Slows `state` by one tick of [`DISABLED_DRAG`], leaving its position and
+/// heading. Callers decide whether the ship is disabled.
+pub fn drag(state: &mut ShipState) {
+    state.velocity = state.velocity * DISABLED_DRAG;
+}
 
 /// Which way the turn keys turn the ship.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -306,6 +321,19 @@ mod tests {
             assert!(near(state.velocity, way), "{h}: {state:?}");
             assert_eq!(state.heading, h);
         }
+    }
+
+    #[test]
+    fn drag_scales_the_velocity_by_0_995_and_leaves_position_and_heading() {
+        let mut state = ShipState {
+            position: Vec2::new(10.0, 20.0),
+            velocity: Vec2::new(1.0, -2.0),
+            heading: 45.0,
+        };
+        drag(&mut state);
+        assert_eq!(state.velocity, Vec2::new(0.995, -1.99));
+        assert_eq!(state.position, Vec2::new(10.0, 20.0));
+        assert_eq!(state.heading, 45.0);
     }
 
     #[test]
