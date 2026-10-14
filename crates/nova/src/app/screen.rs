@@ -1974,6 +1974,7 @@ impl AppScreen {
             // outfits: so all three go back.
             refresh_spaceport(spaceport, flight);
         }
+        redraw_after_shop(spaceport, self.flight.as_mut().expect(ENTERED));
         if spaceport.left() {
             self.close_spaceport();
             self.flight.as_mut().expect(ENTERED).take_off();
@@ -2163,6 +2164,16 @@ impl AppScreen {
             return ScreenAction::None;
         }
         self.shown_mut().input(input)
+    }
+}
+
+/// Redraws `flight`'s status bar when an exchange, outfitter or shipyard
+/// of `spaceport` has closed ([`FlightView::shop_closed`]), as each of the
+/// original's shops ends in `_RefreshSAT`: after the input's last order,
+/// and before any frame is drawn.
+fn redraw_after_shop(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if spaceport.take_shop_closed() {
+        flight.shop_closed();
     }
 }
 
@@ -8083,15 +8094,19 @@ pub(super) mod tests {
     /// Selects `outfit`'s cell in the outfitter open, then clicks its
     /// item `item`.
     fn click_for_outfit(screen: &mut AppScreen, outfit: OutfitId, item: usize) {
-        let open = spaceport(screen).open_outfitter().expect("outfitting");
-        let index = open
+        let rows = spaceport(screen)
+            .open_outfitter()
+            .expect("outfitting")
             .outfitter()
             .rows
-            .iter()
-            .position(|row| row.id == outfit)
-            .expect("listed");
-        let cell = open.cell_bounds(index).expect("a cell").center();
-        click_on(screen, cell);
+            .len();
+        for _ in 0..rows {
+            let open = spaceport(screen).open_outfitter().expect("outfitting");
+            if open.selected_outfit() == Some(outfit) {
+                break;
+            }
+            screen.input(&key(Key::Right, true));
+        }
         let open = spaceport(screen).open_outfitter().expect("outfitting");
         assert_eq!(open.selected_outfit(), Some(outfit));
         let at = open
@@ -8157,5 +8172,49 @@ pub(super) mod tests {
         let list = drawn(&screen);
         assert!(radar_black(&list));
         assert!(player_cyan(&list));
+    }
+
+    const TANK: OutfitId = OutfitId(133);
+
+    /// How wide the fuel gauge's full colour is painted, at y 234 to 241
+    /// in [`bar_interface`]'s yellow.
+    fn fuel_width(list: &DrawList) -> Option<f32> {
+        list.iter().find_map(|command| match *command {
+            DrawCommand::Line {
+                from, to, color, ..
+            } if color == Color::from_rgb24(BAR_FUEL) && (234.0..241.0).contains(&from.y) => {
+                Some(to.x - from.x)
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_fuel_tank_bought_in_port_leaves_the_bars_fuel_gauge_until_the_outfitter_closes() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, barred_outfitting_data());
+        edit(
+            &mut screen,
+            PilotEdit::Reserve(nova_sim::Reserve::Fuel, 150.0),
+        );
+        assert_eq!(fuel_width(&drawn(&screen)), Some(149.0), "landing's");
+        click_port_item(&mut screen, 8);
+        click_for_outfit(&mut screen, TANK, OUTFIT_BUY_ITEM);
+        assert_eq!(pilot(&screen).owned(TANK), 1);
+        assert_eq!(
+            fuel_width(&drawn(&screen)),
+            Some(149.0),
+            "held while the outfitter is open"
+        );
+        let done = spaceport(&screen)
+            .open_outfitter()
+            .and_then(|open| open.dialog())
+            .and_then(|dialog| dialog.item_bounds(1))
+            .expect("Done")
+            .center();
+        click_on(&mut screen, done);
+        assert!(spaceport(&screen).open_outfitter().is_none(), "closed");
+        let width = fuel_width(&drawn(&screen)).expect("some fuel");
+        assert!(width < 149.0, "redrawn as it closes: {width}");
     }
 }

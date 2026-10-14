@@ -1657,6 +1657,10 @@ pub struct FlightView<C> {
     /// it for, which it shows until the next under
     /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
     target_scene: Option<(Option<Drawn>, Option<TargetPanel>)>,
+    /// The shield, armour and fuel gauges at their last redraw, which
+    /// they show while docked until the next under
+    /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
+    reserves_scene: Option<Reserves>,
     /// The radar's static this tick, a `ppat` ID, rolled on the effects'
     /// chance ([`radar::static_frame`]); `None` without.
     radar_static: Option<i16>,
@@ -1766,7 +1770,21 @@ impl<
         }
     }
 
+    /// The flight of `session`, or why it could not start. A pilot
+    /// resumed docked starts with the bar redrawn, as `_PlayGame`'s
+    /// `_RedrawStatus` (@0x457d8) does before `_DoPortDialog`; flight's
+    /// first frame redraws it otherwise.
     fn flying(catalog: C, session: Result<Session, StartError>) -> Self {
+        let mut view = Self::read(catalog, session);
+        if view.pending_landing.is_some() {
+            view.redraw_status();
+        }
+        view
+    }
+
+    /// The flight of `session` as [`FlightView::flying`] reads it, before
+    /// any redraw.
+    fn read(catalog: C, session: Result<Session, StartError>) -> Self {
         let session = session.map_err(|err| err.to_string());
         let (scene, sheet, sheet_ship, status_bar) = match &session {
             Ok(session) => (
@@ -1862,6 +1880,7 @@ impl<
             radar_scene: None,
             nav_scene: None,
             target_scene: None,
+            reserves_scene: None,
             radar_static: None,
         }
     }
@@ -2757,15 +2776,25 @@ impl<
     /// A purchase redraws the radar, the nav area and the target panel,
     /// as the original's does inside the purchase (`_DrawStatus`
     /// @0x5f0b1, after marking nav and the target @0x5f03a-0x5f04a), so a
-    /// ship whose default outfits carry IFF shows it at once. A refused
-    /// purchase redraws nothing.
+    /// ship whose default outfits carry IFF shows it at once. The gauges
+    /// are redrawn too only when the new ship asks for another `ïntf`
+    /// than the old ([`hud::interface_for`]), as `_LoadIntfResource`'s
+    /// whole-bar `_RedrawStatus` (@0x739bd) runs only for an ID other
+    /// than the one loaded (`_currentIntf`, @0x73663-0x73672); otherwise
+    /// they wait for the shipyard to close ([`FlightView::shop_closed`]).
+    /// A refused purchase redraws nothing.
     pub fn buy_ship(&mut self, ship: ShipId, name: &str) -> Result<ShipPurchase, ShipRefusal> {
         let session = self.session.as_mut().map_err(|_| ShipRefusal::NoShipyard)?;
+        let before = hud::interface_for(&self.catalog, session.interface_government());
         let bought = session.buy_ship(ship, name, &mut self.chance)?;
+        let after = hud::interface_for(&self.catalog, session.interface_government());
         self.catch_up();
         self.retake_radar();
         self.retake_nav();
         self.retake_target();
+        if after != before {
+            self.retake_reserves();
+        }
         Ok(bought)
     }
 
@@ -2859,32 +2888,49 @@ impl<C> FlightView<C> {
         }
     }
 
+    /// Redraws the whole status bar as an exchange, outfitter or shipyard
+    /// closes ([`FlightView::redraw_status`]), as each of the original's
+    /// shops ends in `_RefreshSAT` (the outfitter @0x5dba4, the exchange
+    /// @0x5e642, the shipyard @0x5f8d4, after its `_RedrawStatus` @0x5f87c
+    /// and @0x5f8c5). The gauges an order left held show the order then.
+    pub fn shop_closed(&mut self) {
+        self.redraw_status();
+    }
+
     /// Redraws the HUD at once, as the original's `_RedrawStatus`
-    /// (@0x4cac0) does: the radar's snapshot is taken afresh, but the
-    /// refresh timer and the target's blink are left as they are.
+    /// (@0x4cac0) does: the radar's, nav area's, target panel's and
+    /// gauges' snapshots are taken afresh, but the refresh timer and the
+    /// target's blink are left as they are.
     ///
     /// The original calls it at flight start (`_PlayGame` @0x457d8, ours
-    /// the first frame, which shows the radar as it is), on landing and
-    /// take-off (`_PlayerLandOnStellar`), on arrival in a system
-    /// (`_HandlePlayer`; ours whenever a system is laid out), on closing
-    /// the map (`_DoSystemMap`), on entering a hypergate
-    /// (`_PlayerEnterHypergate`, ours as the map closes) and on closing
-    /// the comm dialog ([`FlightView::hang_up`]), the mission dialog
+    /// the first frame, which shows the radar as it is, or as a pilot
+    /// resumed docked starts), on landing and take-off
+    /// (`_PlayerLandOnStellar`), on arrival in a system (`_HandlePlayer`;
+    /// ours whenever a system is laid out), on closing the map
+    /// (`_DoSystemMap`), on entering a hypergate (`_PlayerEnterHypergate`,
+    /// ours as the map closes) and on closing the comm dialog
+    /// ([`FlightView::hang_up`]), the mission dialog
     /// ([`FlightView::accept_mission`], [`FlightView::refuse_mission`]) and
     /// the text dialog ([`FlightView::take_mission_texts`]), which ours
-    /// also runs in port. The original also redraws the bar after each
-    /// outfitter order (`_DrawStatus` @0x5c5a1 buy, @0x5d328 sell) and as
-    /// the shipyard closes (`_RedrawStatus` @0x5f87c, @0x5f8c5). Ours
-    /// doesn't retake the snapshot after an outfitter order or a ship
-    /// purchase while docked, but it draws no status bar in port, and
-    /// take-off retakes it before any flight frame, so per CLAUDE.md's
-    /// ordering rule this is noted, not fixed. Those retakes belong with
-    /// the port's status bar:
-    /// rdm:phase/hud-fidelity/phase-15-port-status-bar.
+    /// also runs in port.
+    ///
+    /// In port the original redraws the bar at other points too, each
+    /// taken here in part: the radar alone after an outfitter order
+    /// ([`FlightView::outfit`]), the radar, nav and target on a ship
+    /// purchase and everything on one under another `ïntf`
+    /// ([`FlightView::buy_ship`]), the fuel gauge on a recharge
+    /// ([`FlightView::recharge`]), and everything as a shop closes
+    /// ([`FlightView::shop_closed`]).
     fn redraw_status(&mut self) {
         self.retake_radar();
         self.retake_nav();
         self.retake_target();
+        self.retake_reserves();
+    }
+
+    /// Takes the gauges' snapshot afresh.
+    fn retake_reserves(&mut self) {
+        self.reserves_scene = Some(self.reserves());
     }
 
     /// Takes the radar's snapshot afresh, and nothing else: what the
@@ -3410,12 +3456,20 @@ impl<C> FlightView<C> {
     }
 
     /// Recharges as [`Session::recharge`] does; a session that failed
-    /// sells no fuel.
+    /// sells no fuel. A recharge redraws the fuel gauge alone, as the
+    /// original's marks only fuel and cargo (`_statusRedraw[4]` @0x5fdf6)
+    /// before its `_DrawStatus` (@0x5fe05); the shield and armour stay as
+    /// they were drawn.
     pub fn recharge(&mut self) -> Result<i64, RechargeRefusal> {
-        match &mut self.session {
-            Ok(session) => session.recharge(),
-            Err(_) => Err(RechargeRefusal::NoFuel),
+        let paid = match &mut self.session {
+            Ok(session) => session.recharge()?,
+            Err(_) => return Err(RechargeRefusal::NoFuel),
+        };
+        let fuel = self.reserves().fuel;
+        if let Some(held) = &mut self.reserves_scene {
+            held.fuel = fuel;
         }
+        Ok(paid)
     }
 
     /// The ships for hire in the bar of the stellar landed on, as
@@ -3724,6 +3778,26 @@ impl<C> FlightView<C> {
     pub fn frame(&self) -> Option<u16> {
         let sheet = self.sheet.as_ref().ok()?;
         Some(rotation_frame(self.shown_heading(), sheet.rotations))
+    }
+
+    /// What the shield, armour and fuel gauges show this frame: while
+    /// docked, by [`RuleKey::HudCadence`]'s engine reading, the snapshot
+    /// taken at their last redraw, as the original's port draws them
+    /// only at its redraws (`_statusRedraw[1]` and `[4]`): an outfitter
+    /// order or a ship purchase under the same `ïntf` leaves them as they
+    /// were (@0x5c59d, @0x5d324). In flight, by the other reading, or
+    /// before the first redraw, the gauges as they are now
+    /// ([`FlightView::reserves`]): flight's every frame marks them as
+    /// they change.
+    fn reserves_shown(&self) -> Reserves {
+        let docked = self
+            .session
+            .as_ref()
+            .is_ok_and(|session| session.landed().is_some());
+        match self.reserves_scene {
+            Some(held) if docked && self.hud_waits() => held,
+            _ => self.reserves(),
+        }
     }
 
     /// The ship's shield, armour and fuel, or none for a session that
@@ -4153,7 +4227,7 @@ impl<C> FlightView<C> {
     }
 
     /// Draws `bar` showing the HUD: the radar, gauges and nav area as
-    /// shown ([`FlightView::radar_shown`], [`FlightView::reserves`],
+    /// shown ([`FlightView::radar_shown`], [`FlightView::reserves_shown`],
     /// [`FlightView::nav_shown`]), the cargo area, then the target panel
     /// and the secondary weapon's line.
     fn draw_bar(&self, list: &mut DrawList, bar: &StatusBar) {
@@ -4163,7 +4237,7 @@ impl<C> FlightView<C> {
         let state = HudState {
             radar: &radar,
             blink_on: self.hud_cadence.blink_on(),
-            reserves: self.reserves(),
+            reserves: self.reserves_shown(),
             nav: self.nav_shown(),
             cargo: cargo.as_ref(),
             disabled: self
@@ -9874,6 +9948,130 @@ mod tests {
         assert_eq!(*view.target_shown(), None, "redrawn");
     }
 
+    // The gauges while docked.
+
+    /// Sets `reserve` through the pilot desk, which is no redraw point.
+    fn desk_reserve(view: &mut View, reserve: nova_sim::Reserve, value: f32) {
+        let mut desk = view.pilot_desk().expect("flying");
+        desk.edit(PilotEdit::Reserve(reserve, value)).expect("set");
+    }
+
+    /// The fuel gauge's full-colour fill the HUD draws, if any.
+    fn fuel_drawn(view: &View) -> Option<DrawCommand> {
+        drawn(view)
+            .iter()
+            .find(|c| matches!(c, DrawCommand::Line { color, .. } if *color == layout().fuel_full))
+            .cloned()
+    }
+
+    #[test]
+    fn by_the_engine_the_gauges_hold_while_docked_until_a_shop_closes() {
+        let mut view = FlightView::new(outfitting());
+        land_now(&mut view);
+        let landed = fuel_drawn(&view);
+        assert!(landed.is_some());
+        let held = view.reserves();
+        desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
+        assert_eq!(view.outfit(BUY_TANK), Ok(()));
+        assert_eq!(view.reserves().fuel.max, 350.0, "the tank");
+        assert_eq!(view.reserves_shown(), held, "landing's");
+        assert_eq!(fuel_drawn(&view), landed, "drawn held");
+        view.shop_closed();
+        assert_eq!(view.reserves_shown(), view.reserves(), "the shop closed");
+        assert_ne!(fuel_drawn(&view), landed);
+    }
+
+    #[test]
+    fn by_the_other_reading_the_gauges_follow_at_once_while_docked() {
+        let rules = Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Bible);
+        let mut view = FlightView::new(outfitting()).with_rules(rules);
+        land_now(&mut view);
+        let landed = fuel_drawn(&view);
+        desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
+        assert_eq!(view.outfit(BUY_TANK), Ok(()));
+        assert_eq!(view.reserves_shown(), view.reserves(), "at once");
+        assert_ne!(fuel_drawn(&view), landed);
+    }
+
+    #[test]
+    fn a_recharge_redraws_the_fuel_gauge_alone() {
+        use nova_sim::Reserve;
+        let mut view = FlightView::new(outfitting());
+        land_now(&mut view);
+        desk_reserve(&mut view, Reserve::Fuel, 100.0);
+        view.shop_closed();
+        assert_eq!(view.reserves_shown().fuel.now, 100.0, "held at 100");
+        desk_reserve(&mut view, Reserve::Shield, 10.0);
+        assert_eq!(view.reserves_shown().shield.now, 40.0, "held full");
+        assert!(view.recharge().is_ok());
+        assert_eq!(view.reserves().fuel.now, 250.0);
+        assert_eq!(view.reserves_shown().fuel.now, 250.0, "redrawn at once");
+        assert_eq!(view.reserves_shown().shield.now, 40.0, "still held");
+        desk_reserve(&mut view, Reserve::Fuel, 100.0);
+        let mut desk = view.pilot_desk().expect("flying");
+        desk.edit(PilotEdit::Credits(0)).expect("set");
+        assert!(view.recharge().is_err(), "nothing to pay with");
+        assert_eq!(
+            view.reserves_shown().fuel.now,
+            250.0,
+            "a refusal redraws nothing"
+        );
+    }
+
+    #[test]
+    fn a_ship_bought_under_the_same_bar_keeps_the_gauges_until_the_shipyard_closes() {
+        let mut view = FlightView::new(shipbuying());
+        land_now(&mut view);
+        view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+        assert_eq!(view.reserves().fuel.max, 350.0, "its tank");
+        assert_eq!(view.reserves_shown().fuel.max, 250.0, "the old ship's");
+        view.shop_closed();
+        assert_eq!(view.reserves_shown().fuel.max, 350.0, "the shipyard closed");
+    }
+
+    #[test]
+    fn a_ship_bought_under_another_bar_shows_its_gauges_at_once() {
+        let mut view = FlightView::new(governed(shipbuying(), 129, 129));
+        land_now(&mut view);
+        view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+        assert_eq!(bar_shown(&view), Some(705), "ïntf 129");
+        assert_eq!(view.reserves_shown().fuel.max, 350.0, "at once");
+    }
+
+    #[test]
+    fn a_pilot_resumed_docked_holds_the_gauges_from_its_start() {
+        let pilot = {
+            let mut view = FlightView::new(outfitting());
+            land_now(&mut view);
+            view.pilot().expect("flying").clone()
+        };
+        let mut view = FlightView::with_pilot(outfitting(), pilot);
+        assert!(view.take_landing().is_some(), "docked");
+        assert_eq!(view.outfit(BUY_TANK), Ok(()));
+        assert_eq!(view.reserves().fuel.max, 350.0, "the tank");
+        assert_eq!(view.reserves_shown().fuel.max, 250.0, "the start's");
+    }
+
+    #[test]
+    fn landing_redraws_the_held_gauges() {
+        let mut view = FlightView::new(outfitting());
+        view.redraw_status();
+        desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
+        land_now(&mut view);
+        assert_eq!(view.reserves_shown().fuel.now, 100.0, "landing's");
+    }
+
+    #[test]
+    fn in_flight_the_gauges_stay_live_by_the_engine() {
+        let mut view = flight();
+        assert!(view.hud_waits());
+        view.redraw_status();
+        let before = fuel_drawn(&view);
+        desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
+        assert_eq!(view.reserves_shown().fuel.now, 100.0, "at once");
+        assert_ne!(fuel_drawn(&view), before);
+    }
+
     /// The first `chär`'s `OnStart` is `on_start`.
     fn starting_with(on_start: &str) -> FakeCatalog {
         let base = catalog();
@@ -13748,7 +13946,7 @@ mod tests {
     fn closing_a_mission_dialog_or_showing_its_texts_redraws_the_hud() {
         let mut errands = catalog();
         errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
-        errands.missions = vec![errand(130)];
+        errands.missions = vec![errand(130), errand(131)];
         errands.mission_texts = vec![MissionTexts {
             brief: Some("Go.".to_owned()),
             ..MissionTexts::named(MissionId(130), "Run")
@@ -13768,10 +13966,21 @@ mod tests {
         assert_eq!(view.radar_scene.as_ref(), Some(&stale), "nothing shown");
         land_now(&mut view);
         view.settle_script();
+        // Docked, the held gauges are redrawn too.
+        let held = Reserves::default();
+        assert_ne!(view.reserves(), held);
+        view.reserves_scene = Some(held);
+        assert_eq!(view.reserves_shown(), held, "held");
+        assert_eq!(view.refuse_mission(MissionId(131)), Ok(()));
+        assert_eq!(view.reserves_shown(), view.reserves(), "refused docked");
+        view.reserves_scene = Some(held);
         assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
+        assert_eq!(view.reserves_shown(), view.reserves(), "accepted docked");
         view.radar_scene = Some(stale.clone());
+        view.reserves_scene = Some(held);
         assert_eq!(view.take_mission_texts().len(), 1);
         assert_eq!(view.radar_scene, Some(view.radar_now()), "the brief shown");
+        assert_eq!(view.reserves_shown(), view.reserves(), "the brief shown");
     }
 
     #[test]

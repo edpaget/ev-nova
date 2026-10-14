@@ -223,6 +223,16 @@ impl Open {
         }
     }
 
+    /// Whether it is one of the shops that redraw the status bar as they
+    /// close (`_RefreshSAT`): the exchange (@0x5e642), the outfitter
+    /// (@0x5dba4) or the shipyard (@0x5f8d4).
+    fn is_shop(&self) -> bool {
+        matches!(
+            self,
+            Self::Trade(_) | Self::Outfitter(_) | Self::Shipyard(_)
+        )
+    }
+
     fn closed(&self) -> bool {
         match self {
             Self::Service(screen) => screen.closed(),
@@ -363,6 +373,8 @@ pub struct SpaceportView {
     recharge: bool,
     /// Whether the outfitter has opened since this was last taken.
     outfitter_opened: bool,
+    /// Whether a shop has closed since this was last taken.
+    shop_closed: bool,
     /// The sounds made since they were last taken, kept here so a service
     /// that closes keeps its sounds.
     sounds: Vec<Sound>,
@@ -447,7 +459,25 @@ impl SpaceportView {
             left: false,
             recharge: false,
             outfitter_opened: false,
+            shop_closed: false,
             sounds: Vec::new(),
+        }
+    }
+
+    /// Whether the exchange, the outfitter or the shipyard has closed
+    /// since this was last asked, once each time one closes: whoever flies
+    /// the ship redraws the status bar, as each of the original's shops
+    /// ends in `_RefreshSAT` (the outfitter @0x5dba4, the exchange
+    /// @0x5e642, the shipyard @0x5f8d4).
+    pub fn take_shop_closed(&mut self) -> bool {
+        std::mem::take(&mut self.shop_closed)
+    }
+
+    /// Closes the screen open, noting a shop's close
+    /// ([`SpaceportView::take_shop_closed`]).
+    fn close_open(&mut self) {
+        if self.open.take().is_some_and(|open| open.is_shop()) {
+            self.shop_closed = true;
         }
     }
 
@@ -590,7 +620,7 @@ impl SpaceportView {
         if let Some(Open::Outfitter(screen)) = &mut self.open {
             screen.reselect(after);
             if screen.closed() {
-                self.open = None;
+                self.close_open();
             }
         }
     }
@@ -1336,7 +1366,7 @@ impl Screen for SpaceportView {
             screen.input(input);
             self.sounds.extend(screen.take_sounds());
             if open.closed() {
-                self.open = None;
+                self.close_open();
             }
             return ScreenAction::None;
         }
@@ -2734,6 +2764,57 @@ mod tests {
         view.input(&key(Key::Escape));
         assert!(view.open_outfitter().is_none(), "closed with its alert");
         assert!(!view.left());
+    }
+
+    #[test]
+    fn a_shop_closing_is_told_once() {
+        // The outfitter, by Done, then by an order leaving nothing listed.
+        let mut view = outfitting(Ok(outfit_template()));
+        assert!(!view.take_shop_closed(), "nothing open");
+        click_item(&mut view, 8);
+        assert!(!view.take_shop_closed(), "opening");
+        view.outfit_ordered(Reselection::Kept);
+        assert!(!view.take_shop_closed(), "still open");
+        let done = outfit_item(&view, 1);
+        click(&mut view, done);
+        assert!(view.open_outfitter().is_none(), "Done");
+        assert!(view.take_shop_closed(), "the outfitter closed");
+        assert!(!view.take_shop_closed(), "once");
+        click_item(&mut view, 8);
+        view.outfit_ordered(Reselection::Leave);
+        assert!(view.open_outfitter().is_none());
+        assert!(view.take_shop_closed(), "closed by its order");
+        assert!(!view.take_shop_closed(), "once");
+        // The shipyard and the exchange.
+        let mut view = shipbuying(Ok(shipyard_template()));
+        click_item(&mut view, 9);
+        view.input(&key(Key::Down));
+        assert!(!view.take_shop_closed(), "still open");
+        view.input(&key(Key::Escape));
+        assert!(view.open_shipyard().is_none());
+        assert!(view.take_shop_closed(), "the shipyard closed");
+        let mut view = trading(Ok(trade_template()));
+        click_item(&mut view, 7);
+        view.input(&key(Key::Escape));
+        assert!(view.open_trade().is_none());
+        assert!(view.take_shop_closed(), "the exchange closed");
+        // The bar, the mission computer and a placeholder are no shops.
+        let mut view = drinking(true);
+        click_item(&mut view, 10);
+        view.input(&key(Key::Escape));
+        assert!(view.open_bar().is_none());
+        assert!(!view.take_shop_closed(), "the bar");
+        let mut view = missioned();
+        click_item(&mut view, 11);
+        view.open_mission_computer(Ok(offers()));
+        view.input(&key(Key::Escape));
+        assert!(view.mission_computer().is_none());
+        assert!(!view.take_shop_closed(), "the mission computer");
+        let mut view = earth();
+        click_item(&mut view, 7);
+        view.input(&key(Key::Escape));
+        assert!(view.open_service().is_none());
+        assert!(!view.take_shop_closed(), "a placeholder");
     }
 
     #[test]
