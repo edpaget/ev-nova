@@ -461,6 +461,7 @@ fn fighter(
         booty: 0,
         boarded: false,
         info_types: 0,
+        cargo: None,
         spared: false,
         assisting: 0,
         carrier: Some(carrier),

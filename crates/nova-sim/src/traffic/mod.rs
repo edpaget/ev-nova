@@ -878,6 +878,7 @@ impl Traffic {
                 booty: ship.booty,
                 boarded: false,
                 info_types: ship.info_types,
+                cargo: ship.cargo,
                 spared: false,
                 assisting: 0,
                 carrier: None,
@@ -1012,6 +1013,7 @@ mod tests {
                     appear_on: Test::default(),
                     cloak: CloakGear::default(),
                     self_repair: false,
+                    holds: 0,
                 },
             )]),
             ..SpawnTable::default()
@@ -1149,6 +1151,7 @@ mod tests {
                 link_syst: -1,
                 appear_on: Test::default(),
                 quote: None,
+                flags: 0,
             },
         );
         // An NPC numbered first, so the fleet's lead is NPC 1.
@@ -1187,6 +1190,7 @@ mod tests {
                 link_syst: -1,
                 appear_on: Test::default(),
                 quote: None,
+                flags: 0,
             },
         );
         let mut traffic = populated(1, 1);
@@ -1347,6 +1351,7 @@ mod tests {
                 link_syst: -1,
                 appear_on: Test::default(),
                 quote: None,
+                flags: 0,
             },
         );
         let sites = gated();
@@ -2885,6 +2890,7 @@ mod tests {
             cloaked: false,
             aux: None,
             quote: None,
+            cargo: None,
         }
     }
 
@@ -3176,6 +3182,7 @@ mod tests {
                     link_syst: -1,
                     appear_on: Test::default(),
                     quote: None,
+                    flags: 0,
                 },
             );
         }
@@ -3374,6 +3381,27 @@ mod tests {
         assert_eq!(traffic.npcs().len(), 1);
         assert_eq!(traffic.take_quotes(), [7600], "announced");
         assert!(traffic.take_quotes().is_empty(), "taken");
+    }
+
+    #[test]
+    fn an_npc_carries_the_cargo_its_ship_comes_with() {
+        let mut traffic = Traffic::new();
+        traffic.enter(table(0), &mut Draws::of(&[]));
+        traffic.bring_in(vec![
+            NewShip {
+                cargo: Some((crate::market::Good::Commodity(2), 9)),
+                ..mission_ship(0, 0.0)
+            },
+            mission_ship(0, 0.0),
+        ]);
+        assert_eq!(
+            traffic
+                .npcs()
+                .iter()
+                .map(|npc| npc.cargo)
+                .collect::<Vec<_>>(),
+            [Some((crate::market::Good::Commodity(2), 9)), None]
+        );
     }
 
     #[test]

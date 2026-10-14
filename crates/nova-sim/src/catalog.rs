@@ -589,6 +589,9 @@ pub struct FleetRecord {
     /// of, when above 0 (+0x1e > 0, `_HyperSpawnFleet` @0x42621-0x42629;
     /// see [`quote`](crate::traffic::quote)).
     pub quote: Option<i16>,
+    /// Its `Flags`, raw: 0x0001 gives its trader ships random cargo (see
+    /// [`spawn::fleet`](crate::traffic::spawn::fleet)).
+    pub flags: u16,
 }
 
 /// One of a person's weapon slots that names a weapon, raw from its
@@ -2005,6 +2008,7 @@ mod tests {
                 link_syst: -1,
                 appear_on: Test::default(),
                 quote: None,
+                flags: 0,
             }]
         }
 

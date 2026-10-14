@@ -12586,6 +12586,7 @@ pub(super) mod tests {
             link_syst,
             appear_on: Test::default(),
             quote: None,
+            flags: 0,
         }
     }
 
@@ -16565,6 +16566,31 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn boarding_a_fleet_ship_offers_none_of_the_cargo_in_its_hold() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        let trader = &mut session.traffic.npcs_mut()[0];
+        // A `Flags` 0x0001 fleet's trader: no düde, so no booty, and its
+        // random cargo in its hold.
+        trader.booty = 0;
+        trader.cargo = Some((Good::Commodity(3), 7));
+        let boarding = session.board(
+            &NovaLaw::default(),
+            &NovaBoarding::default(),
+            &mut Draws::of(&[]),
+        );
+        let Ok(Boarding::Opened(view)) = boarding else {
+            panic!("boards: {boarding:?}");
+        };
+        assert_eq!(view.cargo, None, "_SetPlunderValues reads the Booty alone");
+        assert_eq!(
+            session.npcs()[0].cargo,
+            Some((Good::Commodity(3), 7)),
+            "still in its hold"
+        );
+    }
+
+    #[test]
     fn boarding_changes_the_record_in_each_system_of_the_victims_government() {
         let catalog = boardable();
         let mut session = alongside(&catalog);
@@ -19623,6 +19649,7 @@ pub(super) mod tests {
             link_syst: 0,
             appear_on: Test::default(),
             quote: None,
+            flags: 0,
         };
         catalog.fleets = vec![fleet(382, 160), fleet(383, 161)];
         catalog

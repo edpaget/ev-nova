@@ -73,7 +73,11 @@
 //!   of a gate. An announced fleet's lead carries its `flët`'s `Quote`
 //!   ([`NewShip::quote`], see [`quote`](crate::traffic::quote)): every
 //!   arriving fleet is announced, setup's fleets never
-//!   ([`FleetCall::announced`]).
+//!   ([`FleetCall::announced`]). A `flët` with `Flags` 0x0001
+//!   ([`RANDOM_CARGO`]) gives each of its ships whose class's
+//!   `InherentAI` is at most 2, the lead and each escort as it is placed,
+//!   one commodity `Rand(6)` of `Rand(holds) + 1` tons in its own hold
+//!   ([`NewShip::cargo`]).
 //! - **A `düde` ship** is a `düde` picked by weight, then a ship by its
 //!   `Probability`; its AI is the `düde`'s `AIType` when above 0, or else
 //!   its ship's `InherentAI`, and its government the `düde`'s.
@@ -220,6 +224,7 @@ use crate::flight::{ShipState, facing, heading_of};
 use crate::gate::exit_heading;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
+use crate::market::Good;
 use crate::mission::ShipGoal;
 use crate::mission::ships::{ShipBehav, ShipStart};
 use crate::person::{PersonRoll, PersonRules, PersonWorld, aggression_of};
@@ -264,6 +269,15 @@ pub const JUMP_IN_SLOWING: f32 = 1.165;
 /// How far from the centre a glide of [`JUMP_IN_TICKS`] would end, the
 /// distance a ship's start is reckoned from.
 pub const JUMP_IN_END: f32 = 1000.0;
+/// The `flët` `Flags` bit that gives its trader ships random cargo
+/// (@0x41e56-0x41e5e).
+pub const RANDOM_CARGO: u16 = 0x0001;
+/// The most `InherentAI` a ship class may have, as a signed comparison,
+/// for a [`RANDOM_CARGO`] fleet to give it cargo: the traders'
+/// (@0x41e7b-0x41e81).
+const CARGO_AI_MAX: i16 = 2;
+/// `Rand(6)`: which of the six standard commodities its cargo is.
+const CARGO_COMMODITIES: u32 = 6;
 /// `Rand(3)`: the draw a ship's aggression is made from.
 pub const AGGRESSION_DRAW: u32 = 3;
 /// What the aggression draw is combined with, bit by bit, by exclusive
@@ -349,6 +363,14 @@ pub struct NewShip {
     /// lead has one, and only when its `flët` has a `Quote`
     /// ([`FleetCall::announced`], see [`quote`](crate::traffic::quote)).
     pub quote: Option<i16>,
+    /// The commodity in its own hold and its tons, if any: the original's
+    /// six commodity words at ship +0x7a, all cleared as it spawns
+    /// (`_GenericRandomShipSpawn` @0x3ccce-0x3cce5), of which a `flët`
+    /// with `Flags` 0x0001 fills one for its trader ships
+    /// ([`fleet`]). The plunder never
+    /// offers it: boarding reads the `düde`'s `Booty` alone
+    /// (`_SetPlunderValues` @0x92222-0x92256).
+    pub cargo: Option<(Good, u32)>,
 }
 
 /// What a caller of [`fleet`] asks of the fleet: `_HyperSpawnFleet`'s
@@ -452,6 +474,7 @@ impl<'a> PersonDraw<'a> {
             cloaked: false,
             aux: None,
             quote: None,
+            cargo: None,
         })
     }
 }
@@ -517,6 +540,7 @@ pub fn initial(
                 cloaked: false,
                 aux: None,
                 quote: None,
+                cargo: None,
             });
         }
     }
@@ -659,6 +683,7 @@ fn hyper_ship(
             cloaked: false,
             aux: None,
             quote: None,
+            cargo: None,
         });
     }
 }
@@ -793,6 +818,7 @@ fn specific_dude_ship(
         cloaked: false,
         aux: None,
         quote: None,
+        cargo: None,
     })
 }
 
@@ -1064,6 +1090,7 @@ pub fn fleet(
         cloaked: false,
         aux: None,
         quote: record.quote.filter(|_| call.announced),
+        cargo: random_cargo(record.flags, kind, chance),
     });
     for escort in &record.escorts {
         let count = escort_count(escort.min, escort.max, chance);
@@ -1104,9 +1131,32 @@ pub fn fleet(
                 cloaked: false,
                 aux: None,
                 quote: None,
+                cargo: random_cargo(record.flags, kind, chance),
             });
         }
     }
+}
+
+/// The random cargo a ship of `kind` in a fleet of `flags` starts with
+/// (`_HyperSpawnFleet` @0x41e49-0x41ec1 for the lead, @0x42430-0x424a5
+/// for each escort): with [`RANDOM_CARGO`], when its class's own
+/// `InherentAI` (not the AI type it flies as) is at most 2, a trader's,
+/// one commodity `Rand(6)` of `Rand(holds) + 1` tons; otherwise none, and
+/// no draw. A class of no holds gets none: the original would draw
+/// `Rand(0)`, which reseeds its generator and returns the new seed's low
+/// 16 bits (@0xa4c82-0xa4ca2), an arbitrary tonnage. Data that broken
+/// is not worth copying, so no rule chooses it.
+fn random_cargo(
+    flags: u16,
+    kind: &ShipKind,
+    chance: &mut (impl Chance + ?Sized),
+) -> Option<(Good, u32)> {
+    if flags & RANDOM_CARGO == 0 || kind.inherent_ai > CARGO_AI_MAX || kind.holds == 0 {
+        return None;
+    }
+    let commodity = u8::try_from(chance.below(CARGO_COMMODITIES)).unwrap_or(0);
+    let tons = chance.below(u32::from(kind.holds)) + 1;
+    Some((Good::Commodity(commodity), tons))
 }
 
 /// How many of an escort type with `min` and `max` come:
@@ -1279,6 +1329,7 @@ mod tests {
     use crate::control::{ControlBits, PilotFacts};
     use crate::control::{Test, TestExpr};
     use crate::handling::ShipFields;
+    use crate::market::Good;
     use crate::person::{NovaPersons, PersonWorld};
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::stats::ShipStats;
@@ -1315,6 +1366,7 @@ mod tests {
             link_syst: -1,
             appear_on: Test::default(),
             quote: None,
+            flags: 0,
         }
     }
 
@@ -1535,6 +1587,7 @@ mod tests {
                 cloaked: false,
                 aux: None,
                 quote: None,
+                cargo: None,
             }]
         );
     }
@@ -2091,6 +2144,148 @@ mod tests {
             quotes(named),
             [Some(7600), None],
             "_EnterMoreShips passes 1"
+        );
+    }
+
+    // Random cargo.
+
+    /// A ship kind of `inherent_ai` and `holds` tons.
+    fn holding(inherent_ai: i16, holds: u16) -> ShipKind {
+        ShipKind {
+            holds,
+            ..kind(inherent_ai, FAST)
+        }
+    }
+
+    /// `flët` 150 of `flags`, led by ship 210 (`InherentAI` `lead_ai`, 20
+    /// tons), with one ship 211 (`InherentAI` 2, 10 tons) and one ship 212
+    /// (`InherentAI` 3, 30 tons).
+    fn cargo_table(flags: u16, lead_ai: i16) -> SpawnTable {
+        SpawnTable {
+            fleets: BTreeMap::from([(
+                FleetId(150),
+                FleetRecord {
+                    flags,
+                    ..fleet_record(150, 210, &[(211, 1, 1), (212, 1, 1)])
+                },
+            )]),
+            ships: BTreeMap::from([
+                (ShipId(210), holding(lead_ai, 20)),
+                (ShipId(211), holding(2, 10)),
+                (ShipId(212), holding(3, 30)),
+            ]),
+            ..SpawnTable::default()
+        }
+    }
+
+    /// The cargo of each ship fleet 150 of `table` brings, called as
+    /// `call`, drawn on `chance`.
+    fn cargoes(
+        table: &SpawnTable,
+        call: FleetCall,
+        chance: &mut Draws,
+    ) -> Vec<Option<(Good, u32)>> {
+        let mut out = Vec::new();
+        fleet(
+            table,
+            FleetId(150),
+            Gate::FRESH,
+            Stellars::NONE,
+            call,
+            chance,
+            &mut out,
+        );
+        out.iter().map(|ship| ship.cargo).collect()
+    }
+
+    #[test]
+    fn a_random_cargo_fleets_trader_ships_each_carry_one_commodity() {
+        let table = cargo_table(RANDOM_CARGO, 1);
+        let mut last = Draws::of(&[]);
+        assert_eq!(
+            cargoes(&table, FleetCall::default(), &mut last),
+            [
+                Some((Good::Commodity(5), 20)),
+                Some((Good::Commodity(5), 10)),
+                None
+            ],
+            "Rand(6) and Rand(holds) + 1, for InherentAI 1 and 2, not 3"
+        );
+        assert_eq!(last.asked.iter().filter(|&&n| n == 6).count(), 2);
+        assert!(last.asked.contains(&20) && last.asked.contains(&10));
+        assert!(!last.asked.contains(&30), "the warship draws no tons");
+        let mut first = Draws::of(&[0; 32]);
+        assert_eq!(
+            cargoes(&table, FleetCall::default(), &mut first),
+            [
+                Some((Good::Commodity(0), 1)),
+                Some((Good::Commodity(0), 1)),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn a_class_of_inherent_ai_0_or_below_carries_cargo() {
+        for lead_ai in [0, -1] {
+            let cargo = cargoes(
+                &cargo_table(RANDOM_CARGO, lead_ai),
+                FleetCall::default(),
+                &mut Draws::of(&[]),
+            );
+            assert_eq!(cargo[0], Some((Good::Commodity(5), 20)), "{lead_ai}");
+        }
+    }
+
+    #[test]
+    fn a_lead_carries_cargo_by_its_classs_inherent_ai_not_the_ai_it_flies_as() {
+        let flown = |lead_ai: i16, flies: AiType| {
+            let call = FleetCall {
+                lead_ai: Some(flies),
+                announced: false,
+            };
+            cargoes(
+                &cargo_table(RANDOM_CARGO, lead_ai),
+                call,
+                &mut Draws::of(&[]),
+            )[0]
+        };
+        assert_eq!(
+            flown(1, AiType::Interceptor),
+            Some((Good::Commodity(5), 20))
+        );
+        assert_eq!(flown(3, AiType::WimpyTrader), None);
+    }
+
+    #[test]
+    fn a_class_without_holds_carries_none() {
+        let mut table = cargo_table(RANDOM_CARGO, 1);
+        table.ships.insert(ShipId(210), holding(1, 0));
+        let mut chance = Draws::of(&[]);
+        assert_eq!(cargoes(&table, FleetCall::default(), &mut chance)[0], None);
+        assert_eq!(
+            chance.asked.iter().filter(|&&n| n == 6).count(),
+            1,
+            "only the escort's"
+        );
+    }
+
+    #[test]
+    fn without_the_flag_nobody_carries_cargo_and_no_cargo_is_drawn() {
+        let mut chance = Draws::of(&[]);
+        assert_eq!(
+            cargoes(&cargo_table(0, 1), FleetCall::default(), &mut chance),
+            [None; 3]
+        );
+        assert!(!chance.asked.contains(&6));
+        let mut other_flags = Draws::of(&[]);
+        assert_eq!(
+            cargoes(
+                &cargo_table(0xFFFE, 1),
+                FleetCall::default(),
+                &mut other_flags
+            ),
+            [None; 3]
         );
     }
 
@@ -2746,6 +2941,7 @@ mod tests {
                 cloaked: false,
                 aux: None,
                 quote: None,
+                cargo: None,
             }]
         );
     }
@@ -3173,6 +3369,7 @@ mod tests {
                 cloaked: false,
                 aux: None,
                 quote: None,
+                cargo: None,
             }]
         );
     }
@@ -3718,6 +3915,7 @@ mod tests {
                 cloaked: false,
                 aux: None,
                 quote: None,
+                cargo: None,
             })
         );
     }

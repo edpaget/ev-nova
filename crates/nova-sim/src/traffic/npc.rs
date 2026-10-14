@@ -13,6 +13,7 @@ use crate::combat::hull::{Condition, HullSpec};
 use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot};
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
+use crate::market::Good;
 use crate::mission::ships::ShipBehav;
 use crate::reserves::Reserves;
 use crate::self_repair::FormerEscort;
@@ -216,6 +217,14 @@ pub struct Npc {
     /// Its `düde`'s `InfoTypes` flags, what it says when hailed (see
     /// [`hail`](crate::hail)); none for a fleet's ship.
     pub info_types: u16,
+    /// The commodity in its own hold and its tons, if any: the original's
+    /// six commodity words at ship +0x7a, all cleared as it spawns
+    /// (`_GenericRandomShipSpawn` @0x3ccce-0x3cce5), of which a `flët`
+    /// with `Flags` 0x0001 fills one for its trader ships
+    /// ([`spawn::fleet`](crate::traffic::spawn::fleet)). The plunder never
+    /// offers it: boarding reads the `düde`'s `Booty` alone
+    /// (`_SetPlunderValues` @0x92222-0x92256).
+    pub cargo: Option<(Good, u32)>,
     /// Whether the player has paid it to spare it: it never targets the
     /// player again.
     pub spared: bool,

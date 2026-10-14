@@ -25,7 +25,11 @@
 //! accepted (@0x65f43-0x65f6d), so a refusal leaves it boardable.
 //!
 //! **What is on board** ([`Plunder::roll`]), rolled once a boarding, from
-//! its `düde`'s `Booty` (none for a fleet's ship) and its `shïp`: credits
+//! its `düde`'s `Booty` (none for a fleet's ship) and its `shïp`. A fleet
+//! ship's random cargo (`flët` `Flags` 0x0001,
+//! [`Npc::cargo`](crate::traffic::npc::Npc::cargo)) is in its hold, not
+//! its booty, and the plunder never offers it: `_SetPlunderValues` reads
+//! the `düde`'s `Booty` alone (@0x92222-0x92256). On board are credits
 //! with [`MONEY`], about 2.5-5 % of its `Cost` and at least
 //! [`MIN_CREDITS`]; a commodity its booty names, half its holds (a
 //! negative `Holds` read as its size, as `_LoadObjectData` negates it,

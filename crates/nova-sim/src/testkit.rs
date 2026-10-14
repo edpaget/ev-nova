@@ -514,6 +514,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         booty: 0,
         boarded: false,
         info_types: 0,
+        cargo: None,
         spared: false,
         assisting: 0,
         carrier: None,
