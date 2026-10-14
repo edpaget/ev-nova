@@ -2792,8 +2792,8 @@ impl Session {
             },
         };
         self.enter_system(Entry::Gate, entered, catalog, catalog, chance);
-        self.emerge_followers(exit.position, catalog, chance);
-        self.lead_out_of_gate(exit.position, chance);
+        self.emerge_followers(exit.id, exit.position, catalog, chance);
+        self.lead_out_of_gate(exit.id, exit.position, chance);
     }
 
     /// Docks the ship at `stellar`, one of the system's, takes the ranks'

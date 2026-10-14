@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use crate::ai::Goal;
 use crate::bay::Carrier;
-use crate::catalog::{GovtId, PersonId, ShipId, WeaponId};
+use crate::catalog::{GovtId, PersonId, ShipId, StellarId, WeaponId};
 use crate::cloak::{Cloak, CloakGear};
 use crate::combat::ShipRef;
 use crate::combat::armament::{Armament, Trigger};
@@ -233,6 +233,12 @@ pub struct Npc {
     /// its wait runs out: decided at the emerge, as the original decides
     /// by the leader then.
     pub led_out: bool,
+    /// The gate it is coming out of, from its emerge until its burst is
+    /// over: the original's travel stellar (+0x6c), which
+    /// `_AIMakeShipEmergeFromHyperGate` sets to the gate (@0x8954a) and
+    /// `_AIMakeShipStopJumping` sets to -1 (@0x82e9f). The gate's sprite
+    /// opens while it waits and bursts ([`Npc::holds_gate_open`]).
+    pub emerges_from: Option<StellarId>,
     /// Whether its ship class carries a repair system among its default
     /// items, so that, disabled, it can repair itself
     /// ([`ShipKind::self_repair`](crate::traffic::table::ShipKind)).
@@ -477,6 +483,19 @@ impl Npc {
     #[must_use]
     pub fn emerging(&self) -> bool {
         matches!(self.mode, Mode::Emerging { .. })
+    }
+
+    /// Whether it holds `gate`'s sprite open (`_HandleStellarSprites`
+    /// @0x2e884-0x2e8d7): coming out of it, waiting or bursting
+    /// (`_AIShipIsEmergingFromHypergate` @0x7e2e8, goal 0x15, with its
+    /// travel stellar +0x6c the gate), and neither disabled nor breaking
+    /// up (`_IsDisabled` @0x2e8a3). Holding its course after the burst its
+    /// goal is 0, so it no longer does.
+    #[must_use]
+    pub fn holds_gate_open(&self, gate: StellarId) -> bool {
+        self.emerges_from == Some(gate)
+            && matches!(self.mode, Mode::Emerging { .. } | Mode::LeavingGate { .. })
+            && self.condition == Condition::Intact
     }
 
     /// Whether it is done coming into the system, there to be fought and
@@ -976,6 +995,55 @@ mod tests {
             ..crate::testkit::npc(5, ShipStats::default())
         };
         assert!(players.is_players());
+    }
+
+    #[test]
+    fn a_ship_holds_the_gate_it_comes_out_of_open_while_it_waits_and_bursts_intact() {
+        let gate = StellarId(128);
+        let ship = |mode, condition| Npc {
+            mode,
+            condition,
+            emerges_from: Some(gate),
+            ..crate::testkit::npc(1, ShipStats::default())
+        };
+        for mode in [
+            Mode::Emerging { ticks_left: 3 },
+            Mode::LeavingGate { tick: 2 },
+        ] {
+            assert!(
+                ship(mode, Condition::Intact).holds_gate_open(gate),
+                "{mode:?}"
+            );
+            assert!(
+                !ship(mode, Condition::Intact).holds_gate_open(StellarId(129)),
+                "{mode:?}"
+            );
+            for condition in [
+                Condition::Disabled,
+                Condition::Dying { ticks_left: 3 },
+                Condition::Destroyed,
+            ] {
+                assert!(
+                    !ship(mode, condition).holds_gate_open(gate),
+                    "{mode:?} {condition:?}"
+                );
+            }
+        }
+        for mode in [
+            Mode::Coasting { ticks_left: 30 },
+            Mode::Flying,
+            Mode::JumpingIn { tick: 0 },
+        ] {
+            assert!(
+                !ship(mode, Condition::Intact).holds_gate_open(gate),
+                "{mode:?}"
+            );
+        }
+        let unmarked = Npc {
+            emerges_from: None,
+            ..ship(Mode::Emerging { ticks_left: 3 }, Condition::Intact)
+        };
+        assert!(!unmarked.holds_gate_open(gate));
     }
 
     #[test]

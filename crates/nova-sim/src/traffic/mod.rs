@@ -763,7 +763,7 @@ impl Traffic {
                 mode: match ship.entry {
                     Entry::Placed => Mode::Flying,
                     Entry::JumpingIn => Mode::JumpingIn { tick: 0 },
-                    Entry::Emerging { ticks_left } => Mode::Emerging { ticks_left },
+                    Entry::Emerging { ticks_left, .. } => Mode::Emerging { ticks_left },
                 },
                 goal: if hunts {
                     Goal::Attack(ShipRef::Player)
@@ -797,6 +797,10 @@ impl Traffic {
                 },
                 cloak_gear: kind.cloak,
                 led_out: false,
+                emerges_from: match ship.entry {
+                    Entry::Emerging { gate, .. } => Some(gate),
+                    Entry::Placed | Entry::JumpingIn => None,
+                },
                 self_repair: kind.self_repair,
                 former: None,
             });
@@ -1205,6 +1209,7 @@ mod tests {
         traffic.tick(&Keep, &sites, &mut Draws::of(&[0, 6, 6, 0, 0, 0, 1]));
         let arrived = &traffic.npcs()[1];
         assert_eq!(arrived.mode, Mode::Emerging { ticks_left: 59 });
+        assert_eq!(arrived.emerges_from, Some(StellarId(129)));
         assert_eq!(arrived.state.position, Vec2::new(300.0, -400.0));
         assert_eq!(arrived.state.heading, 90.0);
         for _ in 1..emerge::EMERGE_TICKS {
@@ -1212,6 +1217,7 @@ mod tests {
         }
         assert_eq!(traffic.npcs()[1].mode, Mode::LeavingGate { tick: 0 });
         assert_eq!(traffic.npcs()[1].state.position, Vec2::new(300.0, -400.0));
+        assert_eq!(traffic.npcs()[1].emerges_from, Some(StellarId(129)));
         for _ in 0..8 {
             traffic.tick(&Keep, &sites, &mut Draws::of(&[2]));
         }
@@ -1221,6 +1227,7 @@ mod tests {
             Mode::Coasting { ticks_left: 32 },
             "top speed 6: 30 down to 9, then with no lead 30 + Rand(30), the draw 2"
         );
+        assert_eq!(out.emerges_from, None, "the burst over");
         assert!((out.state.position - Vec2::new(456.0, -400.0)).length() < 1e-3);
     }
 
@@ -1262,6 +1269,12 @@ mod tests {
                 Mode::Emerging { ticks_left: 60 },
                 Mode::Emerging { ticks_left: 68 }
             ]
+        );
+        assert!(
+            traffic
+                .npcs()
+                .iter()
+                .all(|npc| npc.emerges_from == Some(StellarId(129)))
         );
     }
 

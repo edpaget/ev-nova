@@ -14,8 +14,8 @@
 //!   @0x2e83c-0x2e864) is its `CustPicID`, or frames / 2 when that is 0
 //!   or less or at least frames - 1. Frames 0 to `o` - 1 are the opening,
 //!   `o` to frames - 1 the open loop.
-//! - **Held open** (`held_open`, @0x2e867-0x2e9b0): by an NPC coming out
-//!   of it (`Npc::holds_gate_open`).
+//! - **Held open** ([`held_open`], @0x2e867-0x2e9b0): by an NPC coming out
+//!   of it ([`Npc::holds_gate_open`]).
 //! - **While held** (@0x2e9f8-0x2ebf1) it steps once its timer reaches
 //!   `AnimDelay`, or `Frame0Bias` × `AnimDelay` on frame `o` when the bias
 //!   is above 1, the timer then starting again. Below `o` it opens a frame.
@@ -50,7 +50,7 @@
 //! - **The player's trigger** (@0x2e867-0x2e87e): the gate is the player's
 //!   dock stellar (0x3b505c) with `_dockPermission` (0x3b544c) above 0.
 //!   The engine has neither: L at a gate enters it at once. Its clause
-//!   joins `held_open` with the request counter
+//!   joins [`held_open`] with the request counter
 //!   (`phase/hud-fidelity/phase-19-clearance-request-and-dock-approach`).
 //! - **Approaching to enter** (@0x2e8dd-0x2e9a2): an NPC whose goal is 1
 //!   or 0x14 with its travel stellar this one (`_AIShipIsShipGoingToStellar`
@@ -66,7 +66,9 @@
 //!   stellar drawing does; `_HandleSpriteMurkiness` (@0x2eea4) is left
 //!   out for every sprite.
 
+use crate::catalog::StellarId;
 use crate::chance::Chance;
+use crate::traffic::npc::Npc;
 
 /// `Flags2` 0x0001: show the open frame between every other frame.
 pub const ALTERNATE: u16 = 0x0001;
@@ -265,6 +267,15 @@ impl GateSprite {
     pub fn is_open(&self, anim: &GateAnimation) -> bool {
         self.current >= anim.open_frame()
     }
+}
+
+/// Whether `gate` is held open this tick: by any of `npcs` coming out of
+/// it ([`Npc::holds_gate_open`]; `_HandleStellarSprites`
+/// @0x2e884-0x2e8d7). The original tests the player's trigger first and
+/// each ship's approach beside its emerge; see the module docs.
+#[must_use]
+pub fn held_open(gate: StellarId, npcs: &[Npc]) -> bool {
+    npcs.iter().any(|npc| npc.holds_gate_open(gate))
 }
 
 #[cfg(test)]
@@ -561,6 +572,23 @@ mod tests {
         let two = gate(2, 0);
         let mut sprite = GateSprite::new();
         assert_eq!(run(&mut sprite, &two, 1, true, &mut NeverFires), [1]);
+    }
+
+    #[test]
+    fn a_gate_is_held_open_by_any_ship_coming_out_of_it() {
+        use crate::stats::ShipStats;
+        use crate::traffic::npc::Mode;
+        let gate_id = StellarId(130);
+        let flying = crate::testkit::npc(1, ShipStats::default());
+        let emerging = Npc {
+            mode: Mode::Emerging { ticks_left: 9 },
+            emerges_from: Some(gate_id),
+            ..crate::testkit::npc(2, ShipStats::default())
+        };
+        assert!(!held_open(gate_id, &[]));
+        assert!(!held_open(gate_id, std::slice::from_ref(&flying)));
+        assert!(held_open(gate_id, &[flying.clone(), emerging.clone()]));
+        assert!(!held_open(StellarId(131), &[flying, emerging]));
     }
 
     #[test]

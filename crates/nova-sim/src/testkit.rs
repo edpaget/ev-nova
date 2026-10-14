@@ -522,6 +522,7 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         cloak: crate::cloak::Cloak::default(),
         cloak_gear: crate::cloak::CloakGear::default(),
         led_out: false,
+        emerges_from: None,
         self_repair: false,
         former: None,
     }

@@ -21,13 +21,15 @@
 //!
 //! The goal is left as it is: [`Goal::Formation`](crate::ai::Goal)
 //! resumes after the burst, as `_EscortAI` does once goal 21 ends;
-//! [`Mode::Emerging`] stands in for goal 21. The remembered stellar
-//! (+0x92) is not modelled, as for any emerging ship.
+//! [`Mode::Emerging`] stands in for goal 21, its travel stellar (+0x6c)
+//! the exit gate. The remembered stellar (+0x92) is not modelled, as for
+//! any emerging ship.
 //!
 //! By the other reading each led ship is snapped onto its slot beside the
 //! player.
 
 use super::Session;
+use crate::catalog::StellarId;
 use crate::chance::Chance;
 use crate::flight::ShipState;
 use crate::gate::GateArrivalRule;
@@ -42,16 +44,23 @@ const LEAD_OUT_LEAST: u32 = 15;
 
 impl Session {
     /// Loop C (`_HandlePlayerDockRequest` @0x674ef-0x675c8): at a gate
-    /// exit at `exit`, every ship the player leads, in ship-table order,
-    /// comes out of the exit gate after it: there at rest with the
+    /// exit, `gate` at `exit`, every ship the player leads, in ship-table
+    /// order, comes out of the exit gate after it: there at rest with the
     /// player's heading, no target, waiting `Rand(20) + 15` ticks drawn on
-    /// `chance`, then bursting at 15 ([`Npc::led_out`](crate::traffic::npc::Npc::led_out)).
+    /// `chance`, then bursting at 15 ([`Npc::led_out`](crate::traffic::npc::Npc::led_out)),
+    /// coming out of `gate` ([`Npc::emerges_from`](crate::traffic::npc::Npc::emerges_from),
+    /// @0x8954a).
     ///
     /// Under [`GateArrivalRule::LikeJump`] the player did not come out of
     /// a gate, so there is no gate for them to come out of: they are left
     /// as a jump's arrival leaves them. By the other reading of
     /// [`RuleKey::GateEscorts`] each is snapped onto its slot.
-    pub(super) fn lead_out_of_gate(&mut self, exit: Vec2, chance: &mut (impl Chance + ?Sized)) {
+    pub(super) fn lead_out_of_gate(
+        &mut self,
+        gate: StellarId,
+        exit: Vec2,
+        chance: &mut (impl Chance + ?Sized),
+    ) {
         if self.gate_arrival == GateArrivalRule::LikeJump {
             return;
         }
@@ -77,6 +86,7 @@ impl Session {
                 npc.target = None;
                 npc.mode = Mode::Emerging { ticks_left: wait };
                 npc.led_out = true;
+                npc.emerges_from = Some(gate);
             }
         }
     }
@@ -91,7 +101,9 @@ mod tests {
     use crate::pilot::Escort;
     use crate::reserves::Reserves;
     use crate::rulebook::Rulebook;
-    use crate::session::gate_follow::tests::{exit_gate_raising, exit_of, following, gated};
+    use crate::session::gate_follow::tests::{
+        exit_gate_of, exit_gate_raising, exit_of, following, gated,
+    };
     use crate::session::mission_ships::tests::{accepted, jump_to, take_off, tick, ticks};
     use crate::testkit::{Draws, FakePilotCatalog};
     use crate::traffic::emerge::LED_BURST_TICK;
@@ -159,6 +171,7 @@ mod tests {
                 assert_eq!(npc.mode, Mode::Emerging { ticks_left: 34 }, "{kind:?}");
                 assert_eq!(npc.target, None, "{kind:?}");
                 assert!(npc.led_out, "{kind:?}");
+                assert_eq!(npc.emerges_from, Some(exit_gate_of(kind)), "{kind:?}");
             }
         }
     }
@@ -174,7 +187,11 @@ mod tests {
         }
         assert!(session.player_led().any(Npc::is_players));
         assert!(session.player_led().any(Npc::mission_escort));
-        session.lead_out_of_gate(exit_of(GateKind::Hypergate), &mut NeverFires);
+        session.lead_out_of_gate(
+            exit_gate_of(GateKind::Hypergate),
+            exit_of(GateKind::Hypergate),
+            &mut NeverFires,
+        );
         for &id in &ids {
             assert_eq!(session.npc(id).expect("here").target, None);
         }
@@ -187,7 +204,11 @@ mod tests {
         exit_gate_raising(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
         let ids: Vec<NpcId> = session.player_led().map(|npc| npc.id).collect();
         let mut draws = Draws::of(&[0, 19, 7]);
-        session.lead_out_of_gate(exit_of(GateKind::Hypergate), &mut draws);
+        session.lead_out_of_gate(
+            exit_gate_of(GateKind::Hypergate),
+            exit_of(GateKind::Hypergate),
+            &mut draws,
+        );
         assert_eq!(draws.asked, [LEAD_OUT_DRAW; 3], "one Rand(20) a ship");
         let mut waits: Vec<u32> = ids
             .iter()

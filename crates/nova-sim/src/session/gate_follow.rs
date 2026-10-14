@@ -16,7 +16,7 @@
 //! By the other reading the exit leaves the slots as a jump does.
 
 use super::Session;
-use crate::catalog::TrafficCatalog;
+use crate::catalog::{StellarId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::flight::ShipState;
 use crate::gate::{GateArrivalRule, GateKind};
@@ -84,7 +84,7 @@ impl Session {
         }
     }
 
-    /// The player just out of a gate at `exit`, the system entered: under
+    /// The player just out of `gate` at `exit`, the system entered: under
     /// the engine's reading of [`RuleKey::GateFollow`], one frame of the
     /// appear timers (`_EnterMoreShips` @0x672f2,
     /// [`Session::mission_ship_arrivals`]) brings the followers in, their
@@ -95,10 +95,13 @@ impl Session {
     /// [`GateArrivalRule::LikeJump`], with the player's heading, waiting
     /// at the gate for `Rand(50) + 100` ticks, drawn on `chance`, then
     /// bursting out of it as any ship coming out of a gate does (see the
-    /// traffic's [`emerge`](crate::traffic::emerge)). A mission that
-    /// auto-aborted as they came in leaves its ships as they came.
+    /// traffic's [`emerge`](crate::traffic::emerge)), coming out of
+    /// `gate` ([`Npc::emerges_from`](crate::traffic::npc::Npc::emerges_from),
+    /// @0x8954a) wherever it waits. A mission that auto-aborted as they
+    /// came in leaves its ships as they came.
     pub(super) fn emerge_followers(
         &mut self,
+        gate: StellarId,
         exit: Vec2,
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
@@ -141,6 +144,7 @@ impl Session {
             };
             let wait = chance.below(EMERGE_DRAW) + EMERGE_LEAST;
             npc.mode = Mode::Emerging { ticks_left: wait };
+            npc.emerges_from = Some(gate);
         }
     }
 }
@@ -419,6 +423,14 @@ pub(super) mod tests {
         }
     }
 
+    /// The exit gate of `kind` in 131.
+    pub(in crate::session) fn exit_gate_of(kind: GateKind) -> StellarId {
+        match kind {
+            GateKind::Hypergate => StellarId(310),
+            GateKind::Wormhole => StellarId(410),
+        }
+    }
+
     /// The special ships in the system.
     fn specials(session: &Session) -> Vec<Npc> {
         session
@@ -455,6 +467,7 @@ pub(super) mod tests {
                     "{kind:?}"
                 );
                 assert_eq!(ship.mode, Mode::Emerging { ticks_left: 149 }, "{kind:?}");
+                assert_eq!(ship.emerges_from, Some(exit_gate_of(kind)), "{kind:?}");
             }
             let arrived: Vec<StoryEvent> = ships
                 .iter()
@@ -554,6 +567,11 @@ pub(super) mod tests {
             assert_eq!(ship.state.heading, player.heading);
             assert_eq!(ship.state.velocity, Vec2::ZERO);
             assert!(ship.emerging());
+            assert_eq!(
+                ship.emerges_from,
+                Some(exit_gate_of(GateKind::Hypergate)),
+                "still the exit gate, as +0x6c is"
+            );
         }
         assert_eq!(specials(&session).len(), 2);
     }

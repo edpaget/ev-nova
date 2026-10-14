@@ -210,7 +210,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::catalog::{DudeId, FleetId, GovtId, LandingSite, PersonId, ShipId};
+use crate::catalog::{DudeId, FleetId, GovtId, LandingSite, PersonId, ShipId, StellarId};
 use crate::chance::Chance;
 use crate::control::Gate;
 use crate::flight::{ShipState, facing, heading_of};
@@ -279,6 +279,8 @@ pub enum Entry {
     Emerging {
         /// The ticks of the wait.
         ticks_left: u32,
+        /// The gate it comes out of.
+        gate: StellarId,
     },
 }
 
@@ -1036,12 +1038,13 @@ pub fn fleet(
         for _ in 0..count {
             let placed = escort_offset(&state, chance);
             let (placed, escort_entry) = match entry {
-                Entry::Emerging { .. } => (
+                Entry::Emerging { gate, .. } => (
                     state,
                     Entry::Emerging {
                         ticks_left: EMERGE_TICKS
                             + ESCORT_EMERGE_EXTRA
                             + chance.below(ESCORT_EMERGE_SPREAD),
+                        gate,
                     },
                 ),
                 Entry::Placed | Entry::JumpingIn => (placed, entry),
@@ -1175,7 +1178,7 @@ fn arrival(
 /// A ship coming out of `site`: at its centre, at rest (the callers of
 /// `_AIMakeShipEmergeFromHyperGate`, @0x42ae4-0x42b0a, @0x41f34-0x41f64),
 /// heading its [`exit_heading`] rolled on `chance`, waiting
-/// [`EMERGE_TICKS`].
+/// [`EMERGE_TICKS`], with `site` its travel stellar (+0x6c, @0x8954a).
 fn emerging(site: &LandingSite, chance: &mut (impl Chance + ?Sized)) -> (ShipState, Entry) {
     let state = ShipState {
         position: site.position,
@@ -1184,6 +1187,7 @@ fn emerging(site: &LandingSite, chance: &mut (impl Chance + ?Sized)) -> (ShipSta
     };
     let entry = Entry::Emerging {
         ticks_left: EMERGE_TICKS,
+        gate: site.id,
     };
     (state, entry)
 }
@@ -3696,7 +3700,8 @@ mod tests {
         assert_eq!(
             ships[0].entry,
             Entry::Emerging {
-                ticks_left: EMERGE_TICKS
+                ticks_left: EMERGE_TICKS,
+                gate: StellarId(129),
             }
         );
         assert_eq!(ships[0].aggression, 2);
@@ -3742,7 +3747,8 @@ mod tests {
         assert_eq!(
             ships[0].entry,
             Entry::Emerging {
-                ticks_left: EMERGE_TICKS
+                ticks_left: EMERGE_TICKS,
+                gate: StellarId(129),
             }
         );
         // Any other ship never takes the wormhole, and draws no pick.
@@ -3764,7 +3770,8 @@ mod tests {
         assert_eq!(
             ships[0].entry,
             Entry::Emerging {
-                ticks_left: EMERGE_TICKS
+                ticks_left: EMERGE_TICKS,
+                gate: StellarId(129),
             }
         );
     }
@@ -3795,9 +3802,18 @@ mod tests {
         assert_eq!(
             out.iter().map(|ship| ship.entry).collect::<Vec<_>>(),
             [
-                Entry::Emerging { ticks_left: 60 },
-                Entry::Emerging { ticks_left: 72 },
-                Entry::Emerging { ticks_left: 79 },
+                Entry::Emerging {
+                    ticks_left: 60,
+                    gate: StellarId(129)
+                },
+                Entry::Emerging {
+                    ticks_left: 72,
+                    gate: StellarId(129)
+                },
+                Entry::Emerging {
+                    ticks_left: 79,
+                    gate: StellarId(129)
+                },
             ]
         );
         assert_eq!(
@@ -3834,9 +3850,18 @@ mod tests {
         assert_eq!(
             ships.iter().map(|ship| ship.entry).collect::<Vec<_>>(),
             [
-                Entry::Emerging { ticks_left: 60 },
-                Entry::Emerging { ticks_left: 70 },
-                Entry::Emerging { ticks_left: 74 },
+                Entry::Emerging {
+                    ticks_left: 60,
+                    gate: StellarId(129)
+                },
+                Entry::Emerging {
+                    ticks_left: 70,
+                    gate: StellarId(129)
+                },
+                Entry::Emerging {
+                    ticks_left: 74,
+                    gate: StellarId(129)
+                },
             ]
         );
         assert!(ships.iter().all(|ship| ship.state == at_gate(90.0)));

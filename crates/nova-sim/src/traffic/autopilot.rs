@@ -63,6 +63,10 @@
 //!   lead's, the player's for a ship the player leads; see
 //!   [`emerge`](crate::traffic::emerge)), then flies its goal. A ship not
 //!   intact by then drifts instead of bursting, flying from there on.
+//!   Either way it is out of its gate ([`Npc::emerges_from`] cleared), as
+//!   `_AIMakeShipStopJumping` sets its travel stellar (+0x6c) to -1
+//!   (@0x82e9f); while it waits and bursts it holds the gate's sprite
+//!   open ([`gate_sprite`](crate::gate_sprite)).
 //! - A ship with no lead, its glide or burst over, holds its course
 //!   ([`Mode::Coasting`]) for [`POST_BURST_WAIT`] +
 //!   `Rand(`[`POST_BURST_SPREAD`]`)` ticks (`_HandleShip`
@@ -431,6 +435,7 @@ fn unsteered(
         (mode, false) => {
             if let Mode::LeavingGate { .. } | Mode::Coasting { .. } = mode {
                 npc.mode = Mode::Flying;
+                npc.emerges_from = None;
             }
             flight::step(&mut npc.state, handling, Controls::default());
         }
@@ -469,7 +474,8 @@ fn leave_gate(npc: &mut Npc, tick: u32, speeds: TopSpeeds, chance: &mut (impl Ch
 /// `next` tick's speed would be at or below its cap
 /// ([`TopSpeeds::burst_cap`]) the burst is over, and whether it is, the
 /// caller stepping the mode on while it is not. It keeps this tick's
-/// speed. With a lead (`speeds.lead`: a fleet escort's, or the player
+/// speed, and is out of its gate ([`Npc::emerges_from`]), as
+/// `_AIMakeShipStopJumping` sets its travel stellar to -1 (@0x82e9f). With a lead (`speeds.lead`: a fleet escort's, or the player
 /// for a ship the player leads) it flies on; with none it holds its
 /// course for [`POST_BURST_WAIT`] + `Rand(`[`POST_BURST_SPREAD`]`)`
 /// ticks first ([`Mode::Coasting`], @0x34d5c-0x34d8b), its trigger
@@ -486,6 +492,7 @@ fn burst(
     if next > speeds.burst_cap() {
         return false;
     }
+    npc.emerges_from = None;
     npc.mode = if speeds.lead.is_some() {
         Mode::Flying
     } else {
@@ -1177,12 +1184,15 @@ mod tests {
     fn a_ship_not_intact_still_waits_out_its_gate_but_drifts_instead_of_bursting() {
         let mut ship = emerging(AVERAGE, 2);
         ship.condition = Condition::Disabled;
+        ship.emerges_from = Some(StellarId(129));
         fly(&mut ship, &[], None);
         assert_eq!(ship.mode, Mode::Emerging { ticks_left: 1 });
         fly(&mut ship, &[], None);
         assert_eq!(ship.mode, Mode::LeavingGate { tick: 0 });
+        assert_eq!(ship.emerges_from, Some(StellarId(129)));
         fly(&mut ship, &[], None);
         assert_eq!(ship.mode, Mode::Flying, "no burst");
+        assert_eq!(ship.emerges_from, None, "out of the gate");
         assert_eq!(ship.state, at(100.0, -200.0, 0.0, 0.0, 90.0), "drifting");
     }
 

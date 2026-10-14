@@ -238,6 +238,7 @@ impl Session {
             cloak: Cloak::default(),
             cloak_gear: kind.cloak,
             led_out: false,
+            emerges_from: None,
             self_repair: kind.self_repair,
             former: None,
         };
