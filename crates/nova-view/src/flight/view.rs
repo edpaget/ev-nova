@@ -2743,6 +2743,12 @@ impl<C> FlightView<C> {
         }
     }
 
+    /// Where the hover cursor is drawn, or `None` while it isn't.
+    #[must_use]
+    pub fn cursor_at(&self) -> Option<Point> {
+        self.cursor.shown_at()
+    }
+
     /// Whether the course map is shown.
     #[must_use]
     pub fn map_open(&self) -> bool {
@@ -4096,9 +4102,14 @@ impl<
         self.draw_fades(list);
     }
 
-    /// Abandons any gesture on the course map.
+    /// Abandons any gesture on the course map, and forgets where the
+    /// pointer was: flight stops getting pointer moves while it is hidden
+    /// or covered, so the cursor sprite is not drawn (and nothing is
+    /// hovered) at that stale point until the next move, which the app
+    /// sends when flight shows again.
     fn cancel_pointer(&mut self) {
         self.map.cancel_pointer();
+        self.cursor.left();
     }
 
     /// Lets go of every flight key: the ship stops thrusting and turning,
@@ -17280,6 +17291,21 @@ mod tests {
         })
         .with_layer_entries(layers);
         assert_eq!(failed.layer_entries(), None);
+    }
+
+    #[test]
+    fn cancelling_the_pointer_forgets_the_cursor_until_the_next_move() {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
+        assert_eq!(view.cursor_at(), Some(NOWHERE));
+        view.cancel_pointer();
+        assert_eq!(cursor_sprites(&drawn(&view)), [], "not at the old point");
+        assert_eq!(view.cursor_at(), None);
+        let other = Point::new(60.0, 420.0);
+        view.input(&Input::PointerMoved(other));
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, other)]);
+        assert_eq!(view.cursor_at(), Some(other));
     }
 
     #[test]

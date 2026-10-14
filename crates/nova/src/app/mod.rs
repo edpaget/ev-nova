@@ -169,6 +169,9 @@ pub struct App<S, C = AppScreen> {
     /// Whether the system's pointer is hidden over the window, as the app
     /// last told the window.
     pointer_hidden: bool,
+    /// Whether the screen has been told where the pointer is since it
+    /// last started drawing its own ([`App::draws_pointer`]).
+    cursor_synced: bool,
     failures: Vec<(ImageKey, ImageError)>,
     overlay: Option<DevOverlay>,
     audio: Option<AudioCore<Box<dyn Audio>>>,
@@ -187,6 +190,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             last_redraw: Duration::ZERO,
             pointer: None,
             pointer_hidden: false,
+            cursor_synced: false,
             failures: Vec::new(),
             overlay: None,
             audio: None,
@@ -431,16 +435,18 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                     overlay.frame(elapsed);
                 }
                 self.screen.tick(elapsed.saturating_sub(self.last_redraw));
+                self.forget_sync_unless_drawing();
                 self.feed_audio();
                 self.take_screen_warnings();
                 self.last_redraw = self.last_redraw.max(elapsed);
+                let resync = self.resync_pointer();
                 let mut list = DrawList::new();
                 self.screen.draw(&mut list);
                 let report = self.renderer.render(&list, &self.viewport, gpu);
                 self.failures.extend(report.new_failures);
                 self.show_pointer(window);
                 window.request_redraw();
-                game(Control::Continue)
+                game(resync)
             }
         }
     }
@@ -465,13 +471,52 @@ impl<S: ImageSource, C: Screen> App<S, C> {
     /// that changes. Over the letterbox bars, outside the game, it is
     /// always shown.
     fn show_pointer(&mut self, window: &mut impl WindowPort) {
-        let overlay = self.overlay.as_ref().is_some_and(DevOverlay::visible);
         let in_bars = self.pointer.is_some() && self.pointer_at().is_none();
-        let hide = self.screen.hides_pointer() && !overlay && !in_bars;
+        let hide = self.draws_pointer() && !in_bars;
         if hide != self.pointer_hidden {
             window.set_pointer_visible(!hide);
             self.pointer_hidden = hide;
         }
+    }
+
+    /// Whether the screen draws its own pointer: it says it does
+    /// ([`Screen::hides_pointer`]) and the developer overlay is not over
+    /// it. Over the letterbox bars the screen has already been told the
+    /// pointer left, so the bars don't count here.
+    fn draws_pointer(&self) -> bool {
+        self.screen.hides_pointer() && !self.overlay.as_ref().is_some_and(DevOverlay::visible)
+    }
+
+    /// Clears [`App::cursor_synced`] when the screen isn't drawing its own
+    /// pointer, so that it is resynced when it starts again.
+    fn forget_sync_unless_drawing(&mut self) {
+        if !self.draws_pointer() {
+            self.cursor_synced = false;
+        }
+    }
+
+    /// Tells a screen that has started drawing its own pointer again (say
+    /// flight, after a dialog over it or the spaceport) where the real
+    /// pointer is: a move to it, or a leave when it is outside the game.
+    /// It runs before the frame is drawn, so the first frame that shows
+    /// the screen uncovered already draws its cursor under the pointer.
+    ///
+    /// This stands in for `_HandleMouse`'s `GetMouse` each frame
+    /// (@0x3801c). A pointer that moved while flight was covered reads as
+    /// a move there too, since its point differs from the last one read,
+    /// so the cursor shows whole. One edge differs: the original would not
+    /// restamp the cursor's fade had the pointer come back to the very
+    /// point it last read.
+    fn resync_pointer(&mut self) -> Control {
+        if !self.draws_pointer() || self.cursor_synced {
+            return Control::Continue;
+        }
+        let input = self
+            .pointer_at()
+            .map_or(Input::PointerLeft, Input::PointerMoved);
+        let control = self.route(input);
+        self.cursor_synced = true;
+        control
     }
 
     /// The pointer's logical position, when it is over the game.
@@ -491,8 +536,16 @@ impl<S: ImageSource, C: Screen> App<S, C> {
         std::mem::take(&mut self.failures)
     }
 
+    /// Gives `input` to the screen. A pointer input given while the
+    /// screen draws its own pointer keeps it in sync; any route that ends
+    /// with the screen not drawing its pointer forgets that.
     fn route(&mut self, input: Input) -> Control {
+        let pointer = matches!(input, Input::PointerMoved(_) | Input::PointerLeft);
+        if pointer && self.draws_pointer() {
+            self.cursor_synced = true;
+        }
         let action = self.screen.input(&input);
+        self.forget_sync_unless_drawing();
         self.feed_audio();
         self.take_screen_warnings();
         match action {
@@ -621,6 +674,8 @@ mod tests {
         warnings: Vec<String>,
         diagnostics: Vec<Diagnostic>,
         hides_pointer: bool,
+        /// How many inputs had arrived at each draw.
+        drawn_after: std::cell::RefCell<Vec<usize>>,
     }
 
     impl Screen for RecordingScreen {
@@ -637,6 +692,7 @@ mod tests {
         }
 
         fn draw(&self, list: &mut DrawList) {
+            self.drawn_after.borrow_mut().push(self.inputs.len());
             list.sprite(ImageKey::sprite(1, 0), Point::new(0.0, 0.0), Color::WHITE);
         }
 
@@ -1246,6 +1302,146 @@ mod tests {
                 Input::PointerMoved(Point::new(100.0, 50.0)),
             ],
             "one leave on the way out"
+        );
+    }
+
+    fn moved(x: f64, y: f64) -> WindowEvent {
+        WindowEvent::PointerMoved { px: (x, y) }
+    }
+
+    #[test]
+    fn a_screen_drawing_its_pointer_again_is_told_where_the_pointer_is_before_the_frame() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window);
+        app.screen.hides_pointer = true;
+        handle(&mut app, &mut window, moved(100.0, 50.0));
+        redraw_plain(&mut app, &mut window);
+        assert_eq!(
+            app.screen().inputs,
+            [Input::PointerMoved(Point::new(100.0, 50.0))]
+        );
+        app.screen.hides_pointer = false;
+        handle(&mut app, &mut window, moved(300.0, 200.0));
+        redraw_plain(&mut app, &mut window);
+        assert_eq!(app.screen().inputs.len(), 2, "the cover had the move");
+        app.screen.hides_pointer = true;
+        redraw_plain(&mut app, &mut window);
+        assert_eq!(
+            app.screen().inputs[2..],
+            [Input::PointerMoved(Point::new(300.0, 200.0))],
+            "exactly one resync"
+        );
+        assert_eq!(
+            app.screen().drawn_after.borrow().last(),
+            Some(&3),
+            "before the frame"
+        );
+    }
+
+    #[test]
+    fn with_the_pointer_outside_the_game_the_resync_is_a_leave() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window);
+        app.screen.hides_pointer = true;
+        handle(&mut app, &mut window, moved(100.0, 50.0));
+        redraw_plain(&mut app, &mut window);
+        app.screen.hides_pointer = false;
+        handle(&mut app, &mut window, WindowEvent::PointerLeft);
+        redraw_plain(&mut app, &mut window);
+        app.screen.hides_pointer = true;
+        redraw_plain(&mut app, &mut window);
+        assert_eq!(
+            app.screen().inputs,
+            [
+                Input::PointerMoved(Point::new(100.0, 50.0)),
+                Input::PointerLeft,
+                Input::PointerLeft,
+            ],
+            "outside the window"
+        );
+
+        // Pillarboxed: content x 256..2304 at scale 2.
+        let mut window = FakeWindow::new((2560, 1536), 2.0);
+        let mut app: TestApp = App::new(&window, NoImages, RecordingScreen::default());
+        app.screen.hides_pointer = true;
+        handle(&mut app, &mut window, moved(456.0, 100.0));
+        redraw_plain(&mut app, &mut window);
+        app.screen.hides_pointer = false;
+        handle(&mut app, &mut window, moved(10.0, 10.0));
+        redraw_plain(&mut app, &mut window);
+        app.screen.hides_pointer = true;
+        redraw_plain(&mut app, &mut window);
+        assert_eq!(
+            app.screen().inputs,
+            [
+                Input::PointerMoved(Point::new(100.0, 50.0)),
+                Input::PointerLeft,
+                Input::PointerLeft,
+            ],
+            "over a bar"
+        );
+    }
+
+    /// A cover and uncover between two frames resyncs only when a route or
+    /// a tick ended with the cover up. One that opens and closes inside a
+    /// single route is not resynced, which is harmless: flight's openers
+    /// call `cancel_pointer`, which already hid the cursor until the next
+    /// move.
+    #[test]
+    fn no_resync_while_the_screen_keeps_its_pointer() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window);
+        app.screen.hides_pointer = true;
+        handle(&mut app, &mut window, moved(100.0, 50.0));
+        for _ in 0..3 {
+            redraw_plain(&mut app, &mut window);
+        }
+        assert_eq!(app.screen().inputs.len(), 1, "no resync");
+        app.screen.hides_pointer = false;
+        handle(&mut app, &mut window, key(Key::Up, true));
+        app.screen.hides_pointer = true;
+        redraw_plain(&mut app, &mut window);
+        redraw_plain(&mut app, &mut window);
+        assert_eq!(
+            app.screen().inputs[1..],
+            [
+                Input::Key {
+                    key: Key::Up,
+                    pressed: true,
+                    repeat: false,
+                },
+                Input::PointerMoved(Point::new(100.0, 50.0)),
+            ],
+            "one resync after a route that ended covered"
+        );
+    }
+
+    #[test]
+    fn a_screen_that_does_not_draw_its_pointer_gets_no_resync() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window);
+        handle(&mut app, &mut window, moved(100.0, 50.0));
+        redraw_plain(&mut app, &mut window);
+        redraw_plain(&mut app, &mut window);
+        assert_eq!(app.screen().inputs.len(), 1);
+    }
+
+    #[test]
+    fn closing_the_overlay_resyncs_the_pointer() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = overlay_app(&window);
+        app.screen.hides_pointer = true;
+        handle(&mut app, &mut window, moved(100.0, 50.0));
+        redraw(&mut app, &mut window);
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        redraw(&mut app, &mut window);
+        handle(&mut app, &mut window, moved(300.0, 200.0));
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        assert_eq!(app.screen().inputs.len(), 1, "the overlay had the move");
+        redraw(&mut app, &mut window);
+        assert_eq!(
+            app.screen().inputs[1..],
+            [Input::PointerMoved(Point::new(300.0, 200.0))]
         );
     }
 

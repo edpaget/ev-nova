@@ -168,6 +168,13 @@ fn spin() -> Vec<u8> {
     bytes
 }
 
+/// The hover cursor's `spïn` 650, naming `rlëD` 651, eight frames across.
+fn cursor_spin() -> Vec<u8> {
+    let mut bytes = vec![0; Spin::SIZE.expect("fixed")];
+    put_i16s(&mut bytes, 0x00, &[651, -1, 1, 1, 8, 1]);
+    bytes
+}
+
 /// The planet's description.
 const DESCRIPTION: &str = "A quiet world of farms.";
 
@@ -184,8 +191,8 @@ type Resource = (ResType, i16, Option<&'static [u8]>, Vec<u8>);
 
 /// The pilot flies ship 128 from Alpha (128), whose one stellar, Alpha
 /// Prime (128), is at (0, `y`), an 8 x 8 sprite; with its landscape, its
-/// description, the spaceport and bar backgrounds and the button
-/// pictures.
+/// description, the spaceport and bar backgrounds, the button pictures
+/// and the hover cursor.
 fn game_data(y: i16) -> Rc<GameData> {
     let mut resources: Vec<Resource> = vec![
         (Character::TYPE, 128, None, character()),
@@ -196,6 +203,8 @@ fn game_data(y: i16) -> Rc<GameData> {
         (Stellar::TYPE, 128, Some(b"Alpha Prime"), stellar(y)),
         (Spin::TYPE, 1004, None, spin()),
         (RLED, 1000, None, sheet(1, 8)),
+        (Spin::TYPE, 650, None, cursor_spin()),
+        (RLED, 651, None, sheet(8, 1)),
         (Desc::TYPE, 128, None, description()),
         (PICT, 8500, Some(b"Spaceport"), pict(6, 5, [40, 40, 40])),
         (PICT, 8503, Some(b"Bar"), pict(6, 5, [60, 30, 10])),
@@ -672,4 +681,34 @@ fn landing_and_leaving_play_their_sounds_and_the_music_follows_the_screen() {
     harness.press_physical(KeyCode::Escape);
     assert_eq!(harness.showing(), Showing::ShipBrowser);
     assert_eq!(drain(&log), [AudioCommand::StopMusic]);
+}
+
+/// Where flight draws its hover cursor.
+fn cursor(harness: &Harness) -> Option<Point> {
+    harness
+        .app
+        .screen()
+        .flight_view()
+        .expect("flying")
+        .cursor_at()
+}
+
+#[test]
+fn the_cursor_comes_back_under_the_pointer_after_take_off() {
+    let mut harness = Harness::flying(OFF_START);
+    let a = Point::new(100.0, 600.0);
+    harness.send(WindowEvent::PointerMoved {
+        px: (f64::from(a.x), f64::from(a.y)),
+    });
+    harness.frame();
+    assert_eq!(cursor(&harness), Some(a));
+    harness.land();
+    assert_eq!(harness.showing(), Showing::Spaceport);
+    harness.frame();
+    let leave = harness.item(LEAVE_ITEM).center();
+    harness.click(leave);
+    assert_eq!(harness.showing(), Showing::Flight);
+    assert_eq!(cursor(&harness), None, "forgotten while landed");
+    harness.frame();
+    assert_eq!(cursor(&harness), Some(leave), "under the pointer");
 }
