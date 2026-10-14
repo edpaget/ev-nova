@@ -60,8 +60,9 @@
 //! (see the `precalced` module for every site): game entry, leaving a
 //! stellar, a jump's arrival, a landing, the end of every set expression
 //! that is not empty, an outfit bought or sold, a ship bought, a
-//! jettison, the plunder dialog closing, and a mission cargo pickup or
-//! drop-off. So a `K` or `L` blesses, or stops blessing, as its set
+//! jettison, the plunder dialog closing, a mission cargo pickup or
+//! drop-off, and an escort's share of the cargo destroyed. So a `K` or
+//! `L` blesses, or stops blessing, as its set
 //! expression ends, and a crime's rank loss (`Session::lose_ranks_to`,
 //! `_SlapWithPenalty`'s pass, which reaches no reset) only at the next
 //! reset. By the other reading the table is built

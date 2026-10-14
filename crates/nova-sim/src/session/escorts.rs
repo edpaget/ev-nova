@@ -80,15 +80,19 @@
 //! the other reading of
 //! [`RuleKey::LostCargoShare`](crate::RuleKey::LostCargoShare), with
 //! it), at most all of it, and the cargo is then trimmed to the holds
-//! left (`_DamageShip` @0x3b013, `_DestroyPartialFleetCargo`
-//! @0xcd32-0xcff6; [`Session::lose_cargo_share`]). A warship escort lost
-//! takes nothing, and the mission cargo is never touched. A mission
+//! left by the reset its tail runs (`_DamageShip` @0x3b013,
+//! `_DestroyPartialFleetCargo` @0xcd32-0xcff6; [`Session::lose_cargo_share`],
+//! see the `precalced` module). A warship escort lost takes nothing and
+//! runs no reset, and the mission cargo is never touched. A mission
 //! escort breaking up takes its share too (see
 //! [`mission_escorts`](super::mission_escorts)). A ship captured joins
 //! the fleet where it is, intact, its armour at half its most; and the
 //! player's old ship, swapped for one captured, joins beside the player.
-//! Released (see [`hail`](super::hail)), an escort leaves the fleet and
-//! the system. Each change of the fleet makes a save due.
+//! Released (see [`hail`](super::hail)), an escort takes its share of the
+//! cargo while still in the fleet, of any ship type by the engine reading
+//! of [`RuleKey::ReleaseCargoShare`](crate::RuleKey::ReleaseCargoShare),
+//! and the session resets; then it leaves the fleet and the system. Each
+//! change of the fleet makes a save due.
 
 use std::collections::BTreeSet;
 
@@ -430,29 +434,42 @@ impl Session {
         }
     }
 
-    /// A lost ship of class `ship` that the player led takes its share of
-    /// the fleet's cargo (`_DestroyPartialFleetCargo` @0xcd32-0xcff6),
-    /// when its class's `InherentAI` is a trader's
-    /// ([`FREIGHTER_AI`](escort::FREIGHTER_AI) or less); a warship or
-    /// interceptor takes nothing. Every good, commodity or `jünk`, loses
-    /// the truncated part [`market::lost_share`] gives, from the ship's
-    /// `Holds` over the fleet's holds as they stand, the ship already out
-    /// of them; by the other reading of [`RuleKey::LostCargoShare`] its
-    /// own `Holds` count too. The cargo is then trimmed to the fleet's
-    /// holds against everything carried, the mission cargo aboard
-    /// included, as the call's tail into `_ResetPlayerPrecalcedValues`
-    /// does (@0xc7d8-0xc82c). The mission cargo is never touched. The
-    /// tons destroyed go nowhere: the original writes them into the lost
-    /// ship's own slots (@0xcf76), which nothing the engine models reads.
+    /// A lost ship of class `ship` that the player led, already out of
+    /// the fleet, takes its share of the fleet's cargo
+    /// ([`Session::destroy_cargo_share`]), when its class's `InherentAI`
+    /// is a trader's ([`FREIGHTER_AI`](escort::FREIGHTER_AI) or less), as
+    /// each caller tests (@0x3affd, @0x350d1); a warship or interceptor
+    /// takes nothing, and no reset runs. The ship's own `Holds` are not in
+    /// the fleet's holds it takes its share of; by the other reading of
+    /// [`RuleKey::LostCargoShare`] they count too.
     pub(super) fn lose_cargo_share(&mut self, ship: ShipId) {
-        let Some(holds) = self
-            .ship_record(ship)
-            .filter(|record| record.inherent_ai <= escort::FREIGHTER_AI)
-            .map(|record| record.fields.holds)
-        else {
+        let Some(holds) = self.trader_holds(ship) else {
             return;
         };
         let counted = self.rules.source_for(RuleKey::LostCargoShare) == RuleSource::Bible;
+        self.destroy_cargo_share(holds, counted);
+    }
+
+    /// The `Holds` of ship class `ship` when its `InherentAI` is a
+    /// trader's ([`FREIGHTER_AI`](escort::FREIGHTER_AI) or less).
+    pub(super) fn trader_holds(&self, ship: ShipId) -> Option<i16> {
+        self.ship_record(ship)
+            .filter(|record| record.inherent_ai <= escort::FREIGHTER_AI)
+            .map(|record| record.fields.holds)
+    }
+
+    /// `_DestroyPartialFleetCargo` (@0xcd32-0xcff6) for a ship other than
+    /// the player's, of `holds` `Holds`: every good, commodity or `jünk`,
+    /// loses the truncated part [`market::lost_share`] gives, from those
+    /// `Holds` over the fleet's holds as they stand, and `holds` once more
+    /// when `counted`; then the session resets, as the call's tail does
+    /// (@0xcff6; [`Session::reset_precalced`]), its trim cutting the
+    /// commodities to the fleet's holds against everything carried, the
+    /// mission cargo aboard included. The mission cargo is never touched.
+    /// The tons destroyed go nowhere: the original writes them into the
+    /// lost ship's own slots (@0xcf76), which nothing the engine models
+    /// reads.
+    pub(super) fn destroy_cargo_share(&mut self, holds: i16, counted: bool) {
         let share = market::lost_share(
             holds,
             self.stats.capacity,
@@ -460,9 +477,7 @@ impl Session {
             counted,
         );
         market::destroy_share(&mut self.pilot.cargo, share);
-        let holds = self.capacity();
-        let total = self.pilot.total_cargo();
-        market::trim_commodities(&mut self.pilot.cargo, holds, total);
+        self.reset_precalced();
     }
 
     /// Escort NPC `id` leaves the fleet: its record goes, it is no longer
@@ -490,16 +505,37 @@ impl Session {
         true
     }
 
-    /// Escort NPC `id` is released (see [`hail`](super::hail)): it leaves
-    /// the fleet and the system (`_AIMakeShipLeave`), jumping out with a
-    /// jump's fuel, or else deciding as its idle block does.
+    /// Escort NPC `id` is released (see [`hail`](super::hail)): it takes
+    /// its share of the fleet's cargo while still in the fleet, its own
+    /// `Holds` among the fleet's when it is a trader
+    /// ([`Session::destroy_cargo_share`], `_DoCommDialog` @0x96864), any
+    /// ship type by the engine reading of [`RuleKey::ReleaseCargoShare`]
+    /// and only a trader by the other; then it leaves the fleet and the
+    /// system (`_AIMakeShipLeave`), jumping out with a jump's fuel, or
+    /// else deciding as its idle block does.
     pub(super) fn release(&mut self, id: NpcId) {
         if !self.is_escort(id) {
             return;
         }
+        if let Some(holds) = self.released_holds(id) {
+            self.destroy_cargo_share(holds, false);
+        }
         self.dismiss(id);
         if let Some(npc) = self.npc_mut(id) {
             super::hail::make_leave(npc);
+        }
+    }
+
+    /// The `Holds` escort NPC `id` takes its share of the cargo by as it
+    /// is released, as [`RuleKey::ReleaseCargoShare`] reads: none when
+    /// its ship class has no record, or by the other reading when it is
+    /// not a trader.
+    fn released_holds(&self, id: NpcId) -> Option<i16> {
+        let index = self.fleet.iter().position(|&placed| placed == Some(id))?;
+        let ship = self.pilot.escorts.get(index)?.ship;
+        match self.rules.source_for(RuleKey::ReleaseCargoShare) {
+            RuleSource::Engine => self.ship_record(ship).map(|record| record.fields.holds),
+            RuleSource::Bible => self.trader_holds(ship),
         }
     }
 
@@ -1499,6 +1535,31 @@ mod tests {
             .find(|npc| npc.ship == FREIGHTER && npc.escort.is_none());
         assert_eq!(lost.map(|npc| npc.condition), Some(Condition::Disabled));
         assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 5), (OPALS, 2)]));
+    }
+
+    #[test]
+    fn a_trader_escort_lost_takes_its_share_then_resets_and_a_warship_does_neither() {
+        use crate::scan::Latches;
+        use crate::session::precalced::tests::convicted;
+        let catalog = fleeted();
+        let mut session = laden(&catalog, trader_fleet(), RuleSource::Engine);
+        // 9 food, 3 opals and 50 tons of mission cargo, past the fleet's
+        // 60 tons of holds.
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 50));
+        convicted(&mut session);
+        hit(&mut session, 0, 0.0);
+        assert_ne!(session.scan_latches, Latches::ARMED, "a warship: no call");
+        assert_eq!(cargo(&session), BTreeMap::from([(FOOD, 9), (OPALS, 3)]));
+        hit(&mut session, 0, 0.0);
+        assert_eq!(session.scan_latches, Latches::ARMED, "@0xcff6");
+        assert_eq!(
+            cargo(&session),
+            BTreeMap::from([(FOOD, 3), (OPALS, 2)]),
+            "half of each good, then 5 x 40/57 as the reset trims"
+        );
     }
 
     #[test]

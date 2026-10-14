@@ -707,6 +707,16 @@ mod tests {
     }
 
     #[test]
+    fn a_dying_trader_mission_escort_resets_as_it_takes_its_share() {
+        use crate::scan::Latches;
+        use crate::session::precalced::tests::convicted;
+        let mut session = laden(1, RuleSource::Engine);
+        convicted(&mut session);
+        break_up(&mut session);
+        assert_eq!(session.scan_latches, Latches::ARMED, "@0x350e6, @0xcff6");
+    }
+
+    #[test]
     fn a_mission_escort_of_inherent_ai_2_dying_destroys_its_share_of_the_cargo() {
         let mut session = laden(2, RuleSource::Engine);
         break_up(&mut session);

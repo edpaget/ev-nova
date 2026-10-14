@@ -26,6 +26,9 @@
 //! | `_PlayerLandOnStellar`'s `_ShipStatsToSystemInfo` @0x63211 | a landing, before the port takes its prices |
 //! | `_DoOutfitDialog`'s `_SystemInfoToShipStats` @0x5c305, @0x5cffb | an outfit bought or sold ([`Session::outfit`]), after the refit, each pass |
 //! | `_DoShipyardDialog`'s `_SystemInfoToShipStats` @0x5ee99, `_DestroyPartialFleetCargo` @0x5ef9f | a ship bought ([`Session::buy_ship`]), once its cargo is settled; both trims are the purchase rule's ([`RuleKey::PurchaseCargo`]), so this reset trims nothing more |
+//! | `_DestroyPartialFleetCargo`'s tail @0xcff6, from `_DamageShip` @0x3b013 and `_HandleShip` @0x350e6 | a trader escort lost, or a trader mission escort breaking up, once out of the fleet (`Session::lose_cargo_share`) |
+//! | the same, from `_DoEscortPayment` @0x40240 | a trader defecting on pay day, still in the fleet |
+//! | the same, from `_DoCommDialog` @0x96864 (and `_DoEscortDialog` @0x9549d, @0x9561d) | an escort released by hail, still in the fleet, of any ship type as [`RuleKey::ReleaseCargoShare`] reads |
 //! | `_EvalCurrentMissionBitSetString` @0x99a85, `_EvalMissionBitSetString` @0x99dea | the end of every set expression whose text is not empty, one of only spaces or one that did not parse included (`Session::run_ops`): a hook, a mission's script, a crön, an `OnExplore`, a story subscription's |
 //!
 //! *Ordering against the original.* The original runs a take-off's, a
