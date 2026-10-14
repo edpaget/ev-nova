@@ -72,6 +72,11 @@ pub enum SimSound {
     Halt(&'static [SoundId]),
 }
 
+/// The sounds the player's eject halts, in order, after its
+/// [`SimSound::Ejected`]: the warp-up sounds `_warpUpSnd[0]` and `[1]`,
+/// `snd ` 128 and 129 (`_HandlePlayer` @0x6f925-0x6f95a).
+pub const EJECT_HALTS: [SoundId; 2] = [SoundId(128), SoundId(129)];
+
 /// The sounds the player's final explosion halts, in order:
 /// `_HandleShipDisplay`, for the player only (`cmpw $0x0,0x86(%edi)`
 /// @0x2d86d), halts the klaxon `_klaxxonSnd`, `snd ` 371 (@0x2d891), the

@@ -114,6 +114,7 @@ impl PilotCatalog for GameData {
                     on_purchase: self.set_expr(record.on_purchase.as_str()).into(),
                     on_capture: self.set_expr(record.on_capture.as_str()).into(),
                     on_retire: self.set_expr(record.on_retire.as_str()).into(),
+                    flags: record.flags.bits(),
                     flags3: record.flags3.bits(),
                     disp_weight: record.disp_weight,
                     max_gun: record.max_gun,
@@ -1442,6 +1443,7 @@ mod tests {
         bytes[0x5CE..0x5DD].copy_from_slice(b"Heavy\\nShuttle!");
         bytes[0x62E..0x63D].copy_from_slice(b"A Heavy Shuttle");
         bytes[0x726..0x728].copy_from_slice(&0x4100_u16.to_be_bytes());
+        bytes[0x4A..0x4C].copy_from_slice(&0x8010_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x48, &[1129]);
         bytes[0x60E..0x61D].copy_from_slice(b"heavy shuttle\0\0");
         put_i16s(&mut bytes, 0x732, &[2]);
@@ -1481,6 +1483,7 @@ mod tests {
             require: 0x0000_0002_0000_0001,
             availability: Test::parse("b422"),
             appear_on: Test::parse("!b17"),
+            flags: 0x8010,
             flags3: 0x4100,
             disp_weight: 25,
             max_gun: 4,

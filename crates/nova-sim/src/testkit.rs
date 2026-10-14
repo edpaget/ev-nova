@@ -330,6 +330,7 @@ pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         require: 0,
         availability: Test::default(),
         appear_on: Test::default(),
+        flags: 0,
         flags3: 0,
         disp_weight: 0,
         max_gun: 2,

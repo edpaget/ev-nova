@@ -368,6 +368,9 @@ pub struct ShipRecord {
     /// Its `OnRetire` set expression, parsed: run when the player trades
     /// one in or leaves it for a captured ship.
     pub on_retire: Script,
+    /// Its `Flags`, raw: 0x8000 marks a fighter the player can escape in
+    /// (see [`escape`](crate::escape)).
+    pub flags: u16,
     /// Its `Flags3`.
     pub flags3: u16,
     /// Its `DispWeight`: higher shows nearer the top.

@@ -75,6 +75,9 @@
 //! - [`date`]: the in-game [`GameDate`], a Gregorian day that advances
 //!   a day for each day a jump takes, and [`date::date_text`], how it is
 //!   displayed.
+//! - [`escape`]: the player's escape: the escape pod and auto-eject
+//!   outfits, the escape ship a fighter bay offers, when auto-eject arms,
+//!   and where the escape pod is taken.
 //! - [`escort`]: the player's escorts: their [`EscortClass`], the
 //!   [`EscortOrder`] each follows, the [`EscortCommand`]s the player gives
 //!   an [`EscortGroup`] and what one changed ([`Commanded`]), the escort
@@ -277,6 +280,7 @@ pub mod control;
 pub mod cron;
 pub mod data;
 pub mod date;
+pub mod escape;
 pub mod escort;
 pub mod exploration;
 #[cfg(any(test, feature = "fixture"))]
