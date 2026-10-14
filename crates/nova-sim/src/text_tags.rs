@@ -37,9 +37,14 @@
 //! hail quote ([`expand_tags`](crate::person::expand_tags)), the mission
 //! tags are left as written. Where the engine reads otherwise:
 //!
-//! - `<DSY>` and `<RSY>` read the system the stop resolved to
-//!   ([`Stop::system`]), the lowest visible one listing it, rather than
-//!   the original's co-located search.
+//! - `<DSY>` and `<RSY>` read the stop's stellar's system live, through
+//!   the port ([`TagNames::stellar_system`]), not the system the offer
+//!   stored ([`Stop::system`]): the stellar's holder's stand-in
+//!   (`_FindActiveCoLocatedSystem`), else the holder's chain head
+//!   (`_FindFirstCoLocatedSystem`), else, with no holder, the system
+//!   `_FindSystemFromStellar` gives, unresolved by place (@0x9c8de-0x9c937,
+//!   @0x9c9f9-0x9ca5c). So the name follows a galaxy change after the
+//!   offer, as the original's does.
 //! - There is no nickname, so `<PNN>` is the pilot's name; and no
 //!   licence, so `<REG>` is empty.
 //! - `<SN>` reads a slot's ship name, which stays empty until
@@ -131,6 +136,11 @@ pub trait TagNames {
     fn stellar_name(&self, stellar: StellarId) -> Option<String>;
     /// System `system`'s name, if there is one.
     fn system_name(&self, system: SystemId) -> Option<String>;
+    /// The system a mission tag names stellar `stellar` in, as
+    /// `_MungeBriefing` resolves it when the text is drawn
+    /// ([`Whereabouts::named`](crate::story::Whereabouts::named)): `None`
+    /// when no system lists it.
+    fn stellar_system(&self, stellar: StellarId) -> Option<SystemId>;
     /// Cargo type `cargo`'s name, raw: `STR#` 4001's string `cargo` + 1
     /// (`_lcCargoName`, 0x1b8de0), `None` past the list's end.
     fn cargo_name(&self, cargo: u8) -> Option<String>;
@@ -146,6 +156,10 @@ impl TagNames for NoNames {
     }
 
     fn system_name(&self, _system: SystemId) -> Option<String> {
+        None
+    }
+
+    fn stellar_system(&self, _stellar: StellarId) -> Option<SystemId> {
         None
     }
 
@@ -247,7 +261,7 @@ pub struct TagContext<'a> {
 fn stop_names(stop: Option<Stop>, names: &(impl TagNames + ?Sized)) -> (String, String) {
     let stellar = stop.and_then(|stop| names.stellar_name(stop.stellar));
     let system = stop
-        .and_then(|stop| stop.system)
+        .and_then(|stop| names.stellar_system(stop.stellar))
         .and_then(|system| names.system_name(system));
     let unset = |name: Option<String>| name.unwrap_or_else(|| UNSET.to_owned());
     (unset(stellar), unset(system))
@@ -461,6 +475,8 @@ mod tests {
     struct Names {
         stellars: BTreeMap<i16, &'static str>,
         systems: BTreeMap<i16, &'static str>,
+        /// The system each stellar is named in.
+        placed: BTreeMap<i16, i16>,
         cargo: Vec<&'static str>,
     }
 
@@ -473,6 +489,10 @@ mod tests {
             self.systems.get(&system.0).map(|&name| name.to_owned())
         }
 
+        fn stellar_system(&self, stellar: StellarId) -> Option<SystemId> {
+            self.placed.get(&stellar.0).copied().map(SystemId)
+        }
+
         fn cargo_name(&self, cargo: u8) -> Option<String> {
             self.cargo
                 .get(usize::from(cargo))
@@ -480,12 +500,13 @@ mod tests {
         }
     }
 
-    /// Stellars 128 Earth and 129 Luna and 140 Mars, systems 130 Sol and
-    /// 131 Alpha; cargo food, "*passengers", industrial.
+    /// Stellars 128 Earth in 130 Sol, 129 Luna placed nowhere and 140
+    /// Mars in 131 Alpha; cargo food, "*passengers", industrial.
     fn names() -> Names {
         Names {
             stellars: BTreeMap::from([(128, "Earth"), (129, "Luna"), (140, "Mars")]),
             systems: BTreeMap::from([(130, "Sol"), (131, "Alpha")]),
+            placed: BTreeMap::from([(128, 130), (140, 131)]),
             cargo: vec!["food", "*passengers", "industrial"],
         }
     }
@@ -558,13 +579,40 @@ mod tests {
     #[test]
     fn a_stop_with_no_system_or_no_name_reads_unset() {
         let values = MissionValues {
-            destination: Some(stop(140, None)),
+            destination: Some(stop(129, Some(130))),
             return_to: Some(stop(999, Some(999))),
             ..values()
         };
         assert_eq!(
             with(values, "<DST> <DSY> <RST> <RSY>"),
-            "Mars [Error] [Error] [Error]"
+            "Luna [Error] [Error] [Error]"
+        );
+    }
+
+    #[test]
+    fn dsy_and_rsy_name_the_system_the_port_gives_the_stellar_not_the_stops() {
+        let values = MissionValues {
+            destination: Some(stop(140, Some(130))),
+            return_to: Some(stop(128, None)),
+            ..values()
+        };
+        assert_eq!(
+            with(values, "<DST> in <DSY>, <RST> in <RSY>"),
+            "Mars in Alpha, Earth in Sol",
+            "_MungeBriefing reads the stellar's owner when the text is drawn (@0x9c8de, @0x9c9f9)"
+        );
+    }
+
+    #[test]
+    fn a_stellar_the_port_places_nowhere_reads_unset() {
+        let values = MissionValues {
+            return_to: Some(stop(129, Some(130))),
+            ..values()
+        };
+        assert_eq!(
+            with(values, "<RST> in <RSY>"),
+            "Luna in [Error]",
+            "@0x9ca4b: _FindSystemFromStellar gives -1"
         );
     }
 
@@ -580,10 +628,10 @@ mod tests {
     #[test]
     fn dsy_reads_rsy_on_its_own_when_only_it_is_unset() {
         let values = MissionValues {
-            destination: Some(stop(140, None)),
+            destination: Some(stop(129, None)),
             ..values()
         };
-        assert_eq!(with(values, "<DST> in <DSY>"), "Mars in Sol");
+        assert_eq!(with(values, "<DST> in <DSY>"), "Luna in Sol");
     }
 
     #[test]

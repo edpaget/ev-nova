@@ -1174,6 +1174,12 @@ impl TagNames for Session {
         self.place_names.systems.get(&system).cloned()
     }
 
+    fn stellar_system(&self, stellar: StellarId) -> Option<SystemId> {
+        self.galaxy
+            .whereabouts(self.listers(stellar), self.pilot.system)
+            .named(self.galaxy.map().places())
+    }
+
     fn cargo_name(&self, cargo: u8) -> Option<String> {
         self.strings
             .0
@@ -3734,6 +3740,45 @@ mod tests {
             *catalog.place_name_reads.borrow(),
             1,
             "read once, at the start"
+        );
+    }
+
+    #[test]
+    fn a_missions_dsy_follows_its_stellars_holder_after_the_galaxy_changes() {
+        let mut catalog = briefed();
+        // 140 is listed by 132 as well as 131.
+        catalog
+            .sites
+            .iter_mut()
+            .find(|(system, _)| *system == SystemId(132))
+            .expect("132's stellars")
+            .1
+            .push(planet(140, 0.0, 0.0));
+        let mut session = stocks(&catalog);
+        let slot = accept(&mut session, 131);
+        assert_eq!(
+            session.mission_text(slot, "<DST> in <DSY>"),
+            "Mars in Alpha"
+        );
+        assert!(session.change_galaxy(&catalog, |overlay| {
+            overlay.set_visible(SystemId(131), Some(false));
+        }));
+        assert_eq!(
+            session
+                .pilot()
+                .missions()
+                .get(slot)
+                .and_then(|active| active.destination),
+            Some(Stop {
+                stellar: StellarId(140),
+                system: Some(SystemId(131)),
+            }),
+            "stored as offered"
+        );
+        assert_eq!(
+            session.mission_text(slot, "<DST> in <DSY>"),
+            "Mars in Vega",
+            "132 owns 140 now (@0x9c8de)"
         );
     }
 
