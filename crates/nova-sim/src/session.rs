@@ -6540,6 +6540,22 @@ pub(super) mod tests {
         assert!(!session.take_save_due(), "a jump alone saves nothing");
     }
 
+    #[test]
+    fn a_strict_play_pilots_jump_makes_no_save_due() {
+        let catalog = edge_lander();
+        let mut session = landed_at_the_edge(&catalog);
+        session.pilot = session.pilot.clone().with_strict_play(true);
+        session.take_off(&catalog, &mut NeverFires);
+        session.take_save_due();
+        begin_jump_now(&mut session).expect("jumps from the edge");
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        assert_eq!(session.pilot().system(), SystemId(132));
+        assert!(
+            !session.take_save_due(),
+            "the original saves on no jump arrival, strict or not"
+        );
+    }
+
     /// A pilot landed on planet 128 in system 130, with 7 credits and a
     /// day gone by, taken from a session.
     fn landed_pilot(catalog: &FakePilotCatalog) -> Pilot {
