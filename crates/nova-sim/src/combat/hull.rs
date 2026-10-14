@@ -25,12 +25,18 @@
 //!   ship of [`DEATH_SIZE_MASS`] tons or more dies in an explosion sized
 //!   by its mass ([`HullSpec::death_size`], `_HandleShipDisplay`
 //!   @0x2d7ef-0x2dee7), which scatters the `Explode2`'s extra explosions
-//!   when it has them; the Bible's huge explosion for a `DeathDelay` of 60
-//!   or more is not what the executable does.
+//!   when it has them and reaches as far as its shockwave (see
+//!   [`shockwave`](super::shockwave)); the Bible's huge explosion for a
+//!   `DeathDelay` of 60 or more is not what the executable does.
 //! - Its `Flags` 0x0400 ([`PLANET_TYPE`]) makes it a planet-type ship: an
 //!   NPC's missile flies at it only from a planet-type weapon, and at any
 //!   other ship only from any other weapon (`_AIFireMissile`
-//!   @0x812b4-0x812fb, see [`fire`](crate::ai::fire)).
+//!   @0x812b4-0x812fb, see [`fire`](crate::ai::fire)). It dies in an
+//!   explosion of no size and makes no shockwave (`_HandleShipDisplay`
+//!   tests the flag @0x2d90d), and no shockwave pushes it (`_DamageShip`
+//!   @0x3aacb). The original's explosion size for one is a stale stack
+//!   value (copied @0x2d900 from a local only 0x2d968 writes); the engine
+//!   reads it as none.
 //! - Its `KeyCarried` ([`HullSpec::key_carried`]) is the ship a weapon of
 //!   `Flags2` 0x0080 needs aboard (`_WeaponHasAmmo` @0xba07-0xba85, see
 //!   [`Armament::has_ammo`](super::armament::Armament::has_ammo)); none
@@ -118,7 +124,8 @@ pub struct HullSpec {
     /// without a sprite. Whether it is on screen reads it with the width
     /// (see [`cloak::on_screen`](crate::cloak::on_screen)).
     pub sprite_height: Option<f32>,
-    /// Whether it is a planet-type ship, its `Flags` [`PLANET_TYPE`].
+    /// Whether it is a planet-type ship, its `Flags` [`PLANET_TYPE`]: it
+    /// dies with no shockwave and no shockwave pushes it.
     pub planet_type: bool,
     /// The ship a weapon of `Flags2` 0x0080 needs aboard, its
     /// `KeyCarried`; none below a `shïp` ID.
@@ -177,10 +184,12 @@ impl HullSpec {
 
     /// The size of the explosion it dies in: `trunc(mass x 0.075 + 50)`
     /// for a ship of [`DEATH_SIZE_MASS`] tons or more, and none for a
-    /// lighter one.
+    /// lighter one or a planet-type one ([`HullSpec::planet_type`]). It is
+    /// also the reach of the shockwave the explosion makes (see
+    /// [`shockwave`](super::shockwave)).
     #[must_use]
     pub fn death_size(&self) -> f32 {
-        if self.mass >= DEATH_SIZE_MASS {
+        if self.mass >= DEATH_SIZE_MASS && !self.planet_type {
             self.mass
                 .mul_add(DEATH_SIZE_PER_TON, DEATH_SIZE_BASE)
                 .trunc()
@@ -542,6 +551,21 @@ mod tests {
             (DEATH_SIZE_MASS, DEATH_SIZE_PER_TON, DEATH_SIZE_BASE),
             (100.0, 0.075, 50.0)
         );
+    }
+
+    #[test]
+    fn a_planet_type_ship_dies_in_an_explosion_of_no_size() {
+        let planet = HullSpec {
+            mass: 400.0,
+            planet_type: true,
+            ..HullSpec::default()
+        };
+        assert_eq!(planet.death_size(), 0.0);
+        let ordinary = HullSpec {
+            planet_type: false,
+            ..planet
+        };
+        assert_eq!(ordinary.death_size(), 80.0);
     }
 
     #[test]

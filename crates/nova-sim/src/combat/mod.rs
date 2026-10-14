@@ -25,6 +25,8 @@
 //!   may hit.
 //! - [`report`]: the [`SimDiagnostic`](report::SimDiagnostic)s a session
 //!   reports once each about game data it does not handle yet.
+//! - [`shockwave`]: what the shockwave of a heavy ship's final explosion
+//!   does to each ship it reaches, and how it pushes it.
 //! - [`stellar`]: which shots hit a destroyable stellar, and what they
 //!   take off it.
 //! - [`submunition`]: the shots a shot releases on a hit and at the end
@@ -109,6 +111,7 @@ pub mod flags;
 pub mod hull;
 pub mod projectile;
 pub mod report;
+pub mod shockwave;
 pub mod stellar;
 pub mod submunition;
 pub mod weapon;
