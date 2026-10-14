@@ -17130,17 +17130,25 @@ mod tests {
 
     #[test]
     fn the_cursor_draws_over_the_hud_and_under_the_jump_fade() {
+        let cursor_at = |list: &DrawList| {
+            list.iter()
+                .position(
+                    |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 651),
+                )
+                .expect("drawn")
+        };
         let mut view = flight();
         view.input(&Input::PointerMoved(NOWHERE));
         let list = drawn(&view);
-        let cursor = list
-            .iter()
-            .position(
-                |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 651),
-            )
-            .expect("drawn");
+        let cursor = cursor_at(&list);
         assert!(cursor > hud_at(&list), "over the HUD");
         assert_eq!(cursor, list.len() - 1, "last, with no fade");
+
+        let mut view = fading_in_on_course_to_barnard();
+        view.input(&Input::PointerMoved(NOWHERE));
+        let list = drawn(&view);
+        let (at_fade, _) = fade(&list).expect("fading in");
+        assert!(cursor_at(&list) < at_fade, "under the fade");
     }
 
     #[test]
