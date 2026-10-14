@@ -10532,7 +10532,10 @@ mod tests {
                     return;
                 }
                 PlayerFate::Flying | PlayerFate::Disabled => {}
-                fate @ (PlayerFate::Holding { .. } | PlayerFate::Fading | PlayerFate::GameOver) => {
+                fate @ (PlayerFate::Holding { .. }
+                | PlayerFate::Fading
+                | PlayerFate::GameOver
+                | PlayerFate::Ejected { .. }) => {
                     panic!("past the explosion's tick unseen: {fate:?}")
                 }
             }
@@ -10631,7 +10634,10 @@ mod tests {
                     return;
                 }
                 PlayerFate::Flying | PlayerFate::Disabled => {}
-                fate @ (PlayerFate::Holding { .. } | PlayerFate::Fading | PlayerFate::GameOver) => {
+                fate @ (PlayerFate::Holding { .. }
+                | PlayerFate::Fading
+                | PlayerFate::GameOver
+                | PlayerFate::Ejected { .. }) => {
                     panic!("past the explosion's tick unseen: {fate:?}")
                 }
             }

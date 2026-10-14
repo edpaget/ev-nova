@@ -411,7 +411,9 @@ pub use person::{
     PersonWorld, QuoteTags, expand_tags,
 };
 pub use pilot::{Escort, Gender, Pilot};
-pub use player_fate::{Drawn, Ending, FateRow, HOLD_TICKS, PlayerCommand, PlayerFate, Takes};
+pub use player_fate::{
+    Drawn, Ending, FateRow, HOLD_TICKS, POD_TICKS, PlayerCommand, PlayerFate, Takes,
+};
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
 pub use red_alert::{
     ALERT_CHECK_FRAMES, ALERT_CICN, ALERT_STEP_FRAMES, ALERT_STEPS, AlertIcon, RedAlert,

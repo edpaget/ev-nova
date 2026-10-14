@@ -11,7 +11,7 @@
 //!   [`PlayerFate::BreakingUp`] and [`PlayerFate::Exploded`]: phase 1.
 //! - [`PlayerFate::Holding`], [`PlayerFate::Fading`] and
 //!   [`PlayerFate::GameOver`]: phase 6.
-//! - `Ejected`: phase 9.
+//! - [`PlayerFate::Ejected`]: phase 9.
 //!
 //! The columns of [`FateRow`], and their phases:
 //!
@@ -68,7 +68,21 @@ pub enum PlayerFate {
     /// The fade has ended and the main screen returns: the window painted
     /// black (0x4664a) and `_EnterGameFromMainScreen` (0x1a471).
     GameOver,
+    /// In the escape pod after an eject, counting down to the rescue: the
+    /// original's pod countdown +0xc908 while it is above 0, set to
+    /// [`POD_TICKS`] by the eject (@0x6f669) and taken down a tick by the
+    /// pod's flight (@0x68d95-0x68dcd). A running pod wins over the
+    /// condition: the pod's frames return (@0x68ddd) before anything else
+    /// `_HandlePlayer` does.
+    Ejected {
+        /// The pod ticks still to run before the rescue.
+        ticks_left: u32,
+    },
 }
+
+/// The escape pod's countdown, in ticks: the eject sets +0xc908 to 350
+/// (0x15e, @0x6f669).
+pub const POD_TICKS: u32 = 350;
 
 /// The hold after the explosion, in ticks: the dead branch takes 1.0
 /// (0xdd068) off the death timer while it is above -240.0 (0xdd958),
@@ -144,6 +158,10 @@ pub struct FateRow {
     /// - Exploded: none. The dead branch (0x6870d-0x6888c) skips every
     ///   key handler.
     /// - Holding, fading and game over: none, the same dead branch.
+    /// - Ejected: none. The pod's frames return (@0x68ddd) before any key
+    ///   handler, and `_PlayGame`'s pause gate refuses pause in the pod
+    ///   (class 0x2ff @0x45ee3, +0xc908 > 0 @0x45ef5): a pause key, when
+    ///   one is built, asks this row and is refused too.
     pub input: Takes,
     /// Whether the pilot may be saved: only while the player is not dying
     /// or dead, as `_IsDying` (@0x253d: the breakup timer above 0, or the
@@ -153,6 +171,13 @@ pub struct FateRow {
     /// route here saves a dying or dead pilot either. The strict-play
     /// delete (`Session::deletes_pilot_on_ending_play`, phase 7) reads the
     /// same answer as `_IsDying`: a pilot that may not be saved is dying.
+    ///
+    /// Nor may a pilot in the escape pod be saved: the original saves only
+    /// on landing, creation and the pod's arrival, and the pod countdown
+    /// is never saved, so a save from the pod would reload a pilot stuck
+    /// in `shïp` 895 with no rescue to come. The strict-play delete still
+    /// spares the pod, by its own test of the class (`_EnterGameFromMainScreen`
+    /// @0x1a4c5; `Session::deletes_pilot_on_ending_play`).
     pub saves: bool,
 }
 
@@ -161,7 +186,7 @@ pub struct FateRow {
 ///
 /// Player info (slot 0x32), pause (slot 0x2e), cloak (slot 0x52) and
 /// self-destruct (slot 0x24) have no variant: each joins when its key is
-/// built. Their refusals while breaking up are recorded in the
+/// built. The eject (slot 0x22) has one. Their refusals while breaking up are recorded in the
 /// `player-death` roadmap's phase 4: pause at 0x45ef0, player info at
 /// 0x7031d, cloak at 0x705d6.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,11 +217,16 @@ pub enum PlayerCommand {
     /// The escort menu, its acknowledgement and group keys, and the escort
     /// commands (slots 0x54, 0x60-0x66).
     Escort,
+    /// The eject: Command + `ejectKey` (slot 0x22), held together
+    /// (`_HandlePlayer` @0x6f29e-0x6f2c1). Flying players take it, and the
+    /// session refuses it silently unless the ship is disabled or dying
+    /// (@0x6f22c).
+    Eject,
 }
 
 impl PlayerCommand {
     /// Every command, for tests that go over them all.
-    pub const ALL: [PlayerCommand; 12] = [
+    pub const ALL: [PlayerCommand; 13] = [
         Self::Map,
         Self::Land,
         Self::Jump,
@@ -209,6 +239,7 @@ impl PlayerCommand {
         Self::SelectSystem,
         Self::SelectWeapon,
         Self::Escort,
+        Self::Eject,
     ];
 }
 
@@ -240,9 +271,18 @@ impl PlayerFate {
     /// `exploded_this_tick` says whether the ship was destroyed on the
     /// latest tick, and `ending` how far the game's end has got since.
     /// Both matter only to a destroyed ship; one with no ending recorded
-    /// is at the hold's start.
+    /// is at the hold's start. A running `pod` countdown wins over all of
+    /// them: the player is [`PlayerFate::Ejected`].
     #[must_use]
-    pub fn of(condition: Condition, exploded_this_tick: bool, ending: Option<Ending>) -> Self {
+    pub fn of(
+        condition: Condition,
+        exploded_this_tick: bool,
+        ending: Option<Ending>,
+        pod: Option<u32>,
+    ) -> Self {
+        if let Some(ticks_left) = pod {
+            return Self::Ejected { ticks_left };
+        }
         match condition {
             Condition::Intact => Self::Flying,
             Condition::Disabled => Self::Disabled,
@@ -304,6 +344,12 @@ impl PlayerFate {
                 input: Takes::Nothing,
                 saves: false,
             },
+            Self::Ejected { .. } => FateRow {
+                drawn: Drawn::Full,
+                drag: false,
+                input: Takes::Nothing,
+                saves: false,
+            },
         }
     }
 }
@@ -317,11 +363,11 @@ mod tests {
         for exploded in [false, true] {
             for ending in [None, Some(Ending::Fading)] {
                 assert_eq!(
-                    PlayerFate::of(Condition::Intact, exploded, ending),
+                    PlayerFate::of(Condition::Intact, exploded, ending, None),
                     PlayerFate::Flying
                 );
                 assert_eq!(
-                    PlayerFate::of(Condition::Disabled, exploded, ending),
+                    PlayerFate::of(Condition::Disabled, exploded, ending, None),
                     PlayerFate::Disabled
                 );
                 for starting in [false, true] {
@@ -332,7 +378,8 @@ mod tests {
                                 starting
                             },
                             exploded,
-                            ending
+                            ending,
+                            None
                         ),
                         PlayerFate::BreakingUp {
                             ticks_left: 7,
@@ -344,7 +391,7 @@ mod tests {
         }
         for ending in [None, Some(Ending::Holding { ticks_left: 9 })] {
             assert_eq!(
-                PlayerFate::of(Condition::Destroyed, true, ending),
+                PlayerFate::of(Condition::Destroyed, true, ending, None),
                 PlayerFate::Exploded
             );
         }
@@ -352,7 +399,7 @@ mod tests {
 
     #[test]
     fn a_destroyed_player_after_its_explosion_tick_reads_its_ending() {
-        let after = |ending| PlayerFate::of(Condition::Destroyed, false, ending);
+        let after = |ending| PlayerFate::of(Condition::Destroyed, false, ending, None);
         assert_eq!(
             after(Some(Ending::Holding { ticks_left: 9 })),
             PlayerFate::Holding { ticks_left: 9 }
@@ -548,5 +595,64 @@ mod tests {
             let listed = matches!(command, PlayerCommand::Board | PlayerCommand::Hail);
             assert_eq!(takes.takes(command), !listed, "{command:?}");
         }
+    }
+    #[test]
+    fn a_running_pod_is_ejected_whatever_the_condition() {
+        let conditions = [
+            Condition::Intact,
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 7,
+                starting: false,
+            },
+            Condition::Dying {
+                ticks_left: 0,
+                starting: true,
+            },
+        ];
+        for condition in conditions {
+            for ticks_left in [0, 1, POD_TICKS] {
+                assert_eq!(
+                    PlayerFate::of(condition, false, None, Some(ticks_left)),
+                    PlayerFate::Ejected { ticks_left },
+                    "{condition:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ejected_is_drawn_in_full_takes_no_command_does_not_drag_and_may_not_be_saved() {
+        let row = PlayerFate::Ejected {
+            ticks_left: POD_TICKS,
+        }
+        .row();
+        assert_eq!(row.drawn, Drawn::Full);
+        assert!(!row.drag);
+        assert!(!row.saves);
+        for command in PlayerCommand::ALL {
+            assert!(!row.input.takes(command), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn only_flying_disabled_and_breaking_up_players_take_the_eject_command() {
+        for fate in [PlayerFate::Flying, PlayerFate::Disabled]
+            .into_iter()
+            .chain(BREAKING_UP)
+        {
+            assert!(fate.row().input.takes(PlayerCommand::Eject), "{fate:?}");
+        }
+        for fate in [PlayerFate::Exploded, PlayerFate::Ejected { ticks_left: 9 }]
+            .into_iter()
+            .chain(AFTER_THE_EXPLOSION)
+        {
+            assert!(!fate.row().input.takes(PlayerCommand::Eject), "{fate:?}");
+        }
+    }
+
+    #[test]
+    fn the_pod_counts_350_ticks() {
+        assert_eq!(POD_TICKS, 350);
     }
 }

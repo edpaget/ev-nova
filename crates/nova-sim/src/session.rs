@@ -704,6 +704,13 @@ pub struct Session {
     /// Whether the hold ran out on a tick since
     /// [`Session::take_hold_expired`] was last asked.
     hold_expiry_due: bool,
+    /// The escape pod's countdown, the ticks still to run before the
+    /// rescue, while the player is in the pod: the original's +0xc908
+    /// while it is above 0, set to [`POD_TICKS`](crate::POD_TICKS) by the
+    /// eject (@0x6f669) and counted down by the pod's flight
+    /// (@0x68d95-0x68dcd). Never saved: the pilot may not be saved while
+    /// it runs ([`crate::FateRow::saves`]).
+    pod: Option<u32>,
     /// The fire command the player holds.
     trigger: Trigger,
     /// The shots and beams in flight, and what the fight reports.
@@ -1115,6 +1122,7 @@ impl Session {
             player_exploded_this_tick: false,
             player_end: None,
             hold_expiry_due: false,
+            pod: None,
             trigger: Trigger::default(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),
@@ -2221,14 +2229,15 @@ impl Session {
     }
 
     /// Where the player's ship is in its lifecycle: its condition, whether
-    /// it exploded on the latest fight tick, and how far the game's end has
-    /// got since.
+    /// it exploded on the latest fight tick, how far the game's end has
+    /// got since, and the escape pod's countdown.
     #[must_use]
     pub fn player_fate(&self) -> PlayerFate {
         PlayerFate::of(
             self.condition,
             self.player_exploded_this_tick,
             self.player_end,
+            self.pod,
         )
     }
 
@@ -15386,6 +15395,22 @@ pub(super) mod tests {
     #[test]
     fn the_escape_pod_is_ship_895() {
         assert_eq!(ESCAPE_POD_SHIP, ShipId(895));
+    }
+
+    #[test]
+    fn a_strict_pilot_ending_play_in_the_pod_is_not_deleted_nor_saved() {
+        let mut session = Session::start(&armed()).expect("starts");
+        session.pilot.strict_play = true;
+        session.pilot.ship = ESCAPE_POD_SHIP;
+        session.pod = Some(crate::POD_TICKS);
+        assert_eq!(
+            session.player_fate(),
+            PlayerFate::Ejected {
+                ticks_left: crate::POD_TICKS
+            }
+        );
+        assert!(!session.may_save());
+        assert!(!session.deletes_pilot_on_ending_play());
     }
 
     #[test]
