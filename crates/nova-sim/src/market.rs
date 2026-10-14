@@ -122,9 +122,10 @@
 //! next 25 frames later: 5 steps every 1025 ticks, about 34 s. Each tick
 //! in flight moves it on, a jump's too, but not a landed one; a take-off
 //! sets it to [`AFTER_TAKE_OFF_FRAME`], so the first step comes on the
-//! 15th tick of flight, and a destroyed player's ticks do not step. The
-//! original's double time, which steps a due frame twice, is not
-//! modelled.
+//! 15th tick of flight, and a destroyed player's ticks do not step. In
+//! double time a due frame steps twice, once on each pass, as the
+//! original's `_HandlePlayer` runs the step on both (@0x70827; see the
+//! session's `double_time` module).
 //!
 //! The conditions follow
 //! [`RuleKey::JunkFlags`](crate::RuleKey::JunkFlags): by the engine, on

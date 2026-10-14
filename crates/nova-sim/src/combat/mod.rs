@@ -83,6 +83,10 @@
 //! 10. Shields regenerate on an intact or disabled ship, armour only on an
 //!     intact one, each up to what it holds.
 //!
+//! A tick runs on a [`GamePass`] ([`Combat::tick_on`]): double time's second
+//! pass runs every step but the beams', which only age on it, and the
+//! advance pass in double time doubles the beams' damage.
+//!
 //! Each hit on a ship (a shot's, a beam's, a blast's) is kept as a
 //! [`Strike`] by the ship whose it was, with the shield and armour it
 //! took; the last on a ship disabled or breaking up that tick says so
@@ -311,6 +315,44 @@ impl Default for Rules<'static> {
 /// its ship (0.5 @0xdd128, `_CalculateTargetedDamage`).
 pub const AIMED_DAMAGE_SHARE: f64 = 0.5;
 
+/// Which of the original's game-work passes a fight's tick is
+/// (`_DoPlayGameWork`'s argument, @0x43dee-0x43df2; see the session's
+/// `double_time` module).
+///
+/// Every step runs on both passes but the beams' (`_HandleBeams`
+/// @0x30295): on the second pass a beam only ages, and an expired one
+/// goes (@0x30358-0x30388); it is neither moved onto its firer nor hits
+/// (@0x303a8-0x303af). On the advance pass in double time, a beam's
+/// damage to a ship (@0x31191-0x311a3) and a point-defence beam's to a
+/// missile (@0x30a70-0x30a7f) are doubled, both damage fields, to make
+/// up for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GamePass {
+    /// The frame's own pass (`_DoPlayGameWork(1)`), double time on or
+    /// not.
+    Advance {
+        /// Whether double time is on (`_doubleTime`).
+        double_time: bool,
+    },
+    /// Double time's second pass (`_DoPlayGameWork(0)`).
+    Again,
+}
+
+impl GamePass {
+    /// Whether the beams follow their firers and hit on this pass.
+    fn beams_act(self) -> bool {
+        matches!(self, Self::Advance { .. })
+    }
+
+    /// What a beam's damage is multiplied by on this pass.
+    fn beam_damage(self) -> f32 {
+        match self {
+            Self::Advance { double_time: true } => 2.0,
+            _ => 1.0,
+        }
+    }
+}
+
 /// The shots and beams in flight, and what the fight has reported.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Combat {
@@ -330,9 +372,27 @@ impl Combat {
     /// module docs), by `rules`, with the relations between governments in
     /// `govts`, each sub-munition's weapon read from `arsenal` and each
     /// shot's inaccuracy and spread drawn on `chance`. Each stellar's
-    /// strength is left as the shots left it.
+    /// strength is left as the shots left it. It is the advance pass at
+    /// single speed ([`Combat::tick_on`]).
     pub fn tick(
         &mut self,
+        fighters: &mut [Fighter],
+        arsenal: &Arsenal,
+        govts: &Governments,
+        rules: Rules,
+        stellars: &mut [StellarTarget],
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        let pass = GamePass::Advance { double_time: false };
+        self.tick_on(pass, fighters, arsenal, govts, rules, stellars, chance);
+    }
+
+    /// Advances the fight a tick as [`Combat::tick`] does, on `pass`,
+    /// which the beams' step reads (see [`GamePass`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn tick_on(
+        &mut self,
+        pass: GamePass,
         fighters: &mut [Fighter],
         arsenal: &Arsenal,
         govts: &Governments,
@@ -355,12 +415,14 @@ impl Combat {
             .map(|shot| shot.step(&targets))
             .collect();
         let shots = &self.shots;
-        self.beams.retain_mut(|beam| {
-            let firer = fighters.iter().find(|fighter| {
-                fighter.ship == beam.firer && *fighter.condition == Condition::Intact
+        if pass.beams_act() {
+            self.beams.retain_mut(|beam| {
+                let firer = fighters.iter().find(|fighter| {
+                    fighter.ship == beam.firer && *fighter.condition == Condition::Intact
+                });
+                firer.is_some_and(|firer| beam.follow(&firer.state, &targets, shots))
             });
-            firer.is_some_and(|firer| beam.follow(&firer.state, &targets, shots))
-        });
+        }
         // Where each shot started the tick, by its number: `resolve`
         // rebuilds the shots.
         let from: Vec<(ShotId, Vec2)> = self
@@ -371,9 +433,11 @@ impl Combat {
             .collect();
         let mut gone = vec![false; self.shots.len()];
         self.intercept(&was, &mut gone, rules.defence, govts);
-        self.hold_on_missiles(&mut gone);
+        if pass.beams_act() {
+            self.hold_on_missiles(&mut gone, pass.beam_damage());
+        }
         let first_strike = self.strikes.len();
-        self.resolve(fighters, &targets, &was, &gone, arsenal, chance);
+        self.resolve(fighters, &targets, &was, &gone, arsenal, chance, pass);
         self.strike_stellars(stellars, &from);
         for fighter in fighters.iter_mut() {
             let downed = self.update_condition(fighter, rules.disable);
@@ -589,10 +653,10 @@ impl Combat {
         }
     }
 
-    /// Step 6: each point-defence beam hits the missile it is held on; a
-    /// missile destroyed is shot down and marked `gone`, and the beam goes
-    /// with it.
-    fn hold_on_missiles(&mut self, gone: &mut [bool]) {
+    /// Step 6: each point-defence beam hits the missile it is held on, its
+    /// damage multiplied by `factor` ([`GamePass`]); a missile destroyed is
+    /// shot down and marked `gone`, and the beam goes with it.
+    fn hold_on_missiles(&mut self, gone: &mut [bool], factor: f32) {
         for beam in &self.beams {
             let Aiming::Shot(id) = beam.aiming else {
                 continue;
@@ -600,7 +664,8 @@ impl Combat {
             let Some(missile) = self.shots.iter().position(|shot| shot.id == id) else {
                 continue;
             };
-            if !gone[missile] && self.shots[missile].take_pd_hit(defence::pd_damage(&beam.weapon)) {
+            let damage = defence::pd_damage(&beam.weapon) * factor;
+            if !gone[missile] && self.shots[missile].take_pd_hit(damage) {
                 gone[missile] = true;
                 self.events.push(CombatEvent::ShotDown {
                     at: self.shots[missile].position,
@@ -619,7 +684,9 @@ impl Combat {
 
     /// Step 7: hits, blasts, expiries and sub-munitions, the shots having
     /// flown from `was`, those `gone` taken out first; each sub-munition's
-    /// weapon is read from `arsenal`, its spread drawn on `chance`.
+    /// weapon is read from `arsenal`, its spread drawn on `chance`. The
+    /// beams hit as `pass` says ([`GamePass`]).
+    #[allow(clippy::too_many_arguments)]
     fn resolve(
         &mut self,
         fighters: &mut [Fighter],
@@ -628,6 +695,7 @@ impl Combat {
         gone: &[bool],
         arsenal: &Arsenal,
         chance: &mut dyn Chance,
+        pass: GamePass,
     ) {
         // Each ship hit, by whom, and the hit.
         let mut hits: Vec<(ShipRef, ShipRef, Hit)> = Vec::new();
@@ -672,8 +740,17 @@ impl Combat {
             self.release(&parent, target, targets, arsenal, chance);
         }
         for beam in &mut self.beams {
-            if let Some((ship, at)) = beam.hit(targets) {
-                hits.push((ship, beam.firer, Hit::of(&beam.weapon)));
+            if pass.beams_act()
+                && let Some((ship, at)) = beam.hit(targets)
+            {
+                let factor = pass.beam_damage();
+                let hit = Hit::of(&beam.weapon);
+                let hit = Hit {
+                    mass: hit.mass * factor,
+                    energy: hit.energy * factor,
+                    ..hit
+                };
+                hits.push((ship, beam.firer, hit));
                 if let Some(explosion) = beam.weapon.explosion {
                     self.events.push(CombatEvent::Exploded { at, explosion });
                 }
@@ -1109,6 +1186,20 @@ mod tests {
             arsenal,
             govts,
             rules,
+            &mut [],
+            &mut NeverFires,
+        );
+    }
+
+    /// A tick among `ships` on `pass`, by the default rules.
+    fn tick_on(combat: &mut Combat, ships: &mut [Ship], pass: GamePass) {
+        let mut fighters: Vec<Fighter> = ships.iter_mut().map(Ship::fighter).collect();
+        combat.tick_on(
+            pass,
+            &mut fighters,
+            &Arsenal::default(),
+            &Governments::default(),
+            Rules::default(),
             &mut [],
             &mut NeverFires,
         );
@@ -1839,6 +1930,119 @@ mod tests {
         assert_eq!(combat.beams(), [], "its firer gone");
     }
 
+    const DOUBLE_TIME: GamePass = GamePass::Advance { double_time: true };
+
+    /// The laser's firer and a ship 100 pixels ahead of it holding 100
+    /// shield.
+    fn laser_and_target() -> [Ship; 2] {
+        let mut target = Ship::at(2, 100.0, 0.0);
+        target.reserves.shield = Gauge::full(100.0);
+        [Ship::at(1, 0.0, 0.0).armed(laser()), target]
+    }
+
+    #[test]
+    fn on_the_second_pass_a_beam_ages_but_neither_follows_nor_hits() {
+        let mut combat = Combat::default();
+        let mut ships = laser_and_target();
+        tick_on(&mut combat, &mut ships, DOUBLE_TIME);
+        assert_eq!(ships[1].reserves.shield.now, 90.0);
+        ships[0].state.position = Vec2::new(5.0, 6.0);
+        combat.take_strikes();
+        tick_on(&mut combat, &mut ships, GamePass::Again);
+        let beam = combat.beams()[0];
+        assert_eq!(beam.start, Vec2::ZERO, "not moved onto its firer");
+        assert_eq!(beam.age, 2, "aged");
+        assert_eq!(ships[1].reserves.shield.now, 90.0, "no hit");
+        assert_eq!(combat.take_strikes(), []);
+        tick_on(&mut combat, &mut ships, DOUBLE_TIME);
+        assert_eq!(ships[1].reserves.shield.now, 80.0, "its last hit");
+        assert_eq!(combat.beams(), [], "over after its third tick");
+    }
+
+    #[test]
+    fn a_beam_fired_on_the_second_pass_hits_only_on_the_advance_pass() {
+        let mut combat = Combat::default();
+        let mut ships = laser_and_target();
+        tick_on(&mut combat, &mut ships, GamePass::Again);
+        assert_eq!(combat.beams().len(), 1, "fired");
+        assert_eq!(ships[1].reserves.shield.now, 100.0, "no hit yet");
+        tick_on(&mut combat, &mut ships, DOUBLE_TIME);
+        assert_eq!(ships[1].reserves.shield.now, 90.0);
+        tick_on(&mut combat, &mut ships, GamePass::Again);
+        assert_eq!(combat.beams(), [], "its third tick, on the second pass");
+        assert_eq!(ships[1].reserves.shield.now, 90.0);
+    }
+
+    #[test]
+    fn in_double_time_a_beam_does_double_damage_on_the_advance_pass() {
+        let mut combat = Combat::default();
+        let mut ships = laser_and_target();
+        tick_on(&mut combat, &mut ships, DOUBLE_TIME);
+        assert_eq!(ships[1].reserves.shield.now, 90.0, "twice its 5 energy");
+        let cutter = WeaponRecord {
+            mass_dmg: 3,
+            ..laser()
+        };
+        let mut combat = Combat::default();
+        let mut bare = Ship::at(2, 100.0, 0.0);
+        bare.reserves.shield = Gauge::full(0.0);
+        let mut ships = [Ship::at(1, 0.0, 0.0).armed(cutter), bare];
+        tick_on(&mut combat, &mut ships, DOUBLE_TIME);
+        assert_eq!(ships[1].reserves.armor.now, 24.0, "twice its 3 mass");
+    }
+
+    #[test]
+    fn without_double_time_beam_damage_is_unchanged() {
+        let mut combat = Combat::default();
+        let mut ships = laser_and_target();
+        tick_on(
+            &mut combat,
+            &mut ships,
+            GamePass::Advance { double_time: false },
+        );
+        assert_eq!(ships[1].reserves.shield.now, 95.0);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(
+            ships[1].reserves.shield.now, 90.0,
+            "a plain tick is the same"
+        );
+    }
+
+    /// `rounds` ticks of a blaster duel on `pass`: each ship's reserves
+    /// after each, and the events.
+    fn duel(pass: GamePass, rounds: usize) -> (Vec<[Reserves; 2]>, Vec<CombatEvent>) {
+        let mut combat = Combat::default();
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(blaster()).targeting(B),
+            Ship::at(2, 60.0, 0.0)
+                .armed(blaster())
+                .facing(270.0)
+                .targeting(A),
+        ];
+        ships[1].shield_regen = 0.5;
+        let mut seen = Vec::new();
+        let mut events = Vec::new();
+        for _ in 0..rounds {
+            tick_on(&mut combat, &mut ships, pass);
+            seen.push([ships[0].reserves, ships[1].reserves]);
+            events.extend(combat.take_events());
+        }
+        (seen, events)
+    }
+
+    #[test]
+    fn the_second_pass_fires_flies_and_hits_with_shots_as_the_advance_pass_does() {
+        let (advance, events) = duel(GamePass::Advance { double_time: false }, 12);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, CombatEvent::Fired { .. })),
+            "{events:?}"
+        );
+        assert!(advance.last().unwrap()[1].shield.now < 10.0, "{advance:?}");
+        assert_eq!(duel(GamePass::Again, 12), (advance, events));
+    }
+
     #[test]
     fn a_hit_explodes_and_blasts_the_ships_around_it() {
         let shell = WeaponRecord {
@@ -2534,6 +2738,44 @@ mod tests {
         };
         assert_eq!(durability(C), Some(4.0), "flown through: {events:?}");
         assert_eq!(durability(B), Some(1.0), "met: {events:?}");
+    }
+
+    /// A point-defence beam lasting 5 ticks, doing 1 mass and 4 energy
+    /// damage: 3 to a missile.
+    fn pd_beam() -> WeaponRecord {
+        WeaponRecord {
+            guidance: 10,
+            reload: 30,
+            count: 5,
+            beam_length: 300,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            ..weapon(150)
+        }
+    }
+
+    #[test]
+    fn in_double_time_a_point_defence_beam_does_double_damage_to_a_missile() {
+        let mut combat = Combat::default();
+        let mut ships = missile_attack(pd_beam());
+        let mut seen = Vec::new();
+        for _ in 0..2 {
+            tick_on(&mut combat, &mut ships, DOUBLE_TIME);
+            ships[1].trigger = QUIET;
+            seen.push(missile_durability(&combat));
+        }
+        assert_eq!(seen, [Some(-2.0), None], "6 a hit, from 4");
+    }
+
+    #[test]
+    fn on_the_second_pass_a_point_defence_beam_does_no_damage() {
+        let mut combat = Combat::default();
+        let mut ships = missile_attack(pd_beam());
+        tick_on(&mut combat, &mut ships, DOUBLE_TIME);
+        ships[1].trigger = QUIET;
+        tick_on(&mut combat, &mut ships, GamePass::Again);
+        assert_eq!(missile_durability(&combat), Some(-2.0));
+        assert_eq!(combat.beams().len(), 1);
     }
 
     #[test]

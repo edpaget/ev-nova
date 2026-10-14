@@ -81,7 +81,8 @@ impl SoundTable {
     ///   (github.com/SirStig/NovaSwift, `Game/GameScene.swift`) notes that
     ///   "lifting off a planet is silent in the original".
     /// - `jump`: 128, "Warp up" (the guide: "128 Warp up"). 129 "Warp up
-    ///   x2" is for the double-speed mode, which is not modelled.
+    ///   x2" is for a warp begun in double time, which the warp does not
+    ///   model yet (rdm:phase/hud-fidelity/phase-20-audio-double-speed-warp).
     /// - `arrival`: 130, "Warp out" (the guide: "130 Warp out").
     /// - `button_down`: 600, "Menu button down" (the resource's name, and
     ///   the guide's).

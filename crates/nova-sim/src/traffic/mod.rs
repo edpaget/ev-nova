@@ -61,6 +61,9 @@
 //! The fight ([`combat`](crate::combat)) damages them, and its session
 //! takes out each one destroyed ([`Traffic::remove`]).
 //!
+//! Double time's second pass moves the traffic again
+//! ([`Traffic::move_in`]): steps 5 to 7 alone, with no cloak thinks.
+//!
 //! The AI timer is the original's (`_AIDispatch`): an NPC decides on the
 //! ticks where `tick % interval == id % interval`, so decisions are
 //! staggered across NPCs. The original's interval is 1 at full speed and
@@ -402,11 +405,30 @@ impl Traffic {
                 npc.target = target;
             }
         }
+        self.fly(&world, true);
+        self.ticks += 1;
+    }
+
+    /// Moves the traffic again in `world`, as double time's second pass
+    /// does (`_DoPlayGameWork(0)`; see the session's `double_time`
+    /// module): steps 5 to 7 of a tick (see the module docs), but no
+    /// cloak thinks, as `_AIHandleCloaking` is the AI's. Nothing else
+    /// runs, as the arrivals (`_EnterMoreShips`), the escort-strength
+    /// timer, the answers to strikes and the decisions (`_AIDispatch`)
+    /// are the advance pass's alone, and the AI timer does not move.
+    pub fn move_in(&mut self, world: World) {
+        self.fly(&world, false);
+    }
+
+    /// Steps 5 to 7 of a tick in `world` (see the module docs): every
+    /// NPC's cloak, thinking when `think`, then the autopilot, a flight
+    /// step and the departures.
+    fn fly(&mut self, world: &World, think: bool) {
         let states: Vec<(NpcId, ShipState)> =
             self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
         let player = world.player.map(|player| player.state);
-        self.cloaks(player, &states);
-        let speeds = self.top_speeds(&world);
+        self.cloaks(player, &states, think);
+        let speeds = self.top_speeds(world);
         let outcomes: Vec<Outcome> = self
             .npcs
             .iter_mut()
@@ -437,7 +459,6 @@ impl Traffic {
             .collect();
         let mut flying = outcomes.iter().map(|outcome| *outcome == Outcome::Flying);
         self.npcs.retain(|_| flying.next().unwrap_or(false));
-        self.ticks += 1;
     }
 
     /// Each NPC's top speeds this tick, in ship-table order, as
@@ -474,16 +495,17 @@ impl Traffic {
             .collect()
     }
 
-    /// Each NPC's cloak a tick on (see [`cloak`]): a flying NPC thinks
-    /// (`_AIHandleCloaking`), knowing whether it is disabled, retreats
-    /// (fleeing), and where the ship it attacks is, among `states` and the
-    /// `player`; one cloaked as the tick began that can no longer cloak
-    /// uncloaks (`_HandleShip` @0x3413d); and its fade steps.
-    fn cloaks(&mut self, player: Option<ShipState>, states: &[(NpcId, ShipState)]) {
+    /// Each NPC's cloak a tick on (see [`cloak`]): when `think`, a flying
+    /// NPC thinks (`_AIHandleCloaking`), knowing whether it is disabled,
+    /// retreats (fleeing), and where the ship it attacks is, among
+    /// `states` and the `player`; one cloaked as the tick began that can
+    /// no longer cloak uncloaks (`_HandleShip` @0x3413d); and its fade
+    /// steps.
+    fn cloaks(&mut self, player: Option<ShipState>, states: &[(NpcId, ShipState)], think: bool) {
         for npc in &mut self.npcs {
             let was = npc.cloak.is_cloaked();
             let disabled = npc.condition == Condition::Disabled;
-            if npc.mode == Mode::Flying {
+            if think && npc.mode == Mode::Flying {
                 let attacking = npc.goal.attacking().and_then(|ship| match ship {
                     ShipRef::Player => player,
                     ShipRef::Npc(id) => states
@@ -1135,6 +1157,67 @@ mod tests {
                 vec![NpcId(0), NpcId(4)],
             ]
         );
+    }
+
+    #[test]
+    fn moving_again_neither_decides_nor_moves_the_ai_timer() {
+        let mut traffic = populated(5, 4);
+        traffic.arm_strength_timer(&mut Draws::of(&[]));
+        let timer = traffic.strength_timer;
+        traffic.move_in(World::new(&[]));
+        assert_eq!(traffic.strength_timer, timer, "no escort-strength tick");
+        let behaviour = Recording::deciding(Goal::Idle);
+        let decided: Vec<Vec<NpcId>> = (0..5)
+            .map(|_| {
+                traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
+                let decided = behaviour.take();
+                traffic.move_in(World::new(&[]));
+                assert_eq!(behaviour.take(), [], "no decision moving again");
+                decided
+            })
+            .collect();
+        assert_eq!(
+            decided,
+            [
+                vec![NpcId(0), NpcId(4)],
+                vec![NpcId(1)],
+                vec![NpcId(2)],
+                vec![NpcId(3)],
+                vec![NpcId(0), NpcId(4)],
+            ]
+        );
+    }
+
+    #[test]
+    fn moving_again_flies_the_npcs_a_step() {
+        let mut traffic = populated(1, 1);
+        traffic.npcs[0].state.velocity = Vec2::new(2.0, 0.0);
+        let from = traffic.npcs()[0].state.position;
+        traffic.move_in(World::new(&[]));
+        let moved = traffic.npcs()[0].state.position - from;
+        assert!(moved.x > 0.0, "{moved:?}");
+    }
+
+    #[test]
+    fn moving_again_steps_and_holds_cloaks_but_does_not_think() {
+        let mut traffic = with_mission_ship(ZEPHYR, false, 0.0);
+        traffic.npcs[0].goal = Goal::Flee(ShipRef::Player);
+        traffic.move_in(World::new(&[]));
+        assert_eq!(traffic.npcs()[0].cloak, Cloak::default(), "no think");
+        traffic.npcs[0].cloak = Cloak {
+            fade: 0.75,
+            direction: 1,
+        };
+        traffic.move_in(World::new(&[]));
+        assert_eq!(traffic.npcs()[0].cloak.fade, 1.5, "its fade steps");
+        let npc = &mut traffic.npcs[0];
+        npc.cloak = Cloak {
+            fade: FADE_FULL,
+            direction: 0,
+        };
+        npc.condition = Condition::Disabled;
+        traffic.move_in(World::new(&[]));
+        assert_eq!(traffic.npcs()[0].cloak.direction, -1, "can no longer");
     }
 
     #[test]

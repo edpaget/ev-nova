@@ -1267,6 +1267,23 @@ mod tests {
     }
 
     #[test]
+    fn by_the_engine_p_waits_for_the_advance_pass_in_double_time() {
+        let catalog = moving();
+        let mut session = flying(&catalog);
+        session.tick(crate::flight::Controls::default());
+        session.take_sounds();
+        run(&mut session, "P300");
+        session.tick_again(
+            crate::flight::Controls::default(),
+            crate::Rules::default(),
+            &mut NeverFires,
+        );
+        assert_eq!(session.take_sounds(), [], "the second pass plays none");
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.take_sounds(), [mission_sound(300, true)]);
+    }
+
+    #[test]
     fn by_the_engine_only_the_last_p_before_the_tick_sounds() {
         let catalog = moving();
         let mut session = flying(&catalog);

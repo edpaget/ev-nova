@@ -344,6 +344,7 @@ mod cloaks;
 mod control;
 mod course;
 mod crons;
+mod double_time;
 mod edit;
 mod entry;
 mod escorts;
@@ -426,7 +427,7 @@ use crate::combat::hull::{Condition, DisableRule, HullSpec};
 use crate::combat::projectile::Shot;
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::weapon::Ammo;
-use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
+use crate::combat::{Combat, CombatEvent, Downed, Fighter, GamePass, Rules, ShipRef, Strike};
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
 use crate::flight::{Controls, ShipState, step};
@@ -742,6 +743,13 @@ pub struct Session {
     /// is a choice; a take-off sets it anyway. Not saved, as the
     /// original's pilot file does not keep it.
     frame: i16,
+    /// The frame counter's value the last advance pass ran on, which the
+    /// second pass runs on too (see the `double_time` module).
+    pass_frame: i16,
+    /// Whether double time is on, as the key last said (see the
+    /// `double_time` module); not saved, as the original's `_doubleTime`
+    /// is a global, not a pilot field.
+    double_time: bool,
     /// The Red Alert's state (see the `red_alert` module); not saved, as
     /// the original's pilot file does not keep it.
     red_alert: RedAlert,
@@ -1096,6 +1104,8 @@ impl Session {
             ship_rolls: DayRolls::default(),
             ship_redraws: BTreeSet::new(),
             frame: 0,
+            pass_frame: 0,
+            double_time: false,
             red_alert: RedAlert::default(),
             // `_ResetPlayer` @0x1d7cf, at every flight start.
             tutorial: crate::tutorial::Tutorial::SEASONED,
@@ -1349,6 +1359,9 @@ impl Session {
     /// the tutorial's hint block (see the `tutorial` module), and flies
     /// the target brackets in (see the `brackets` module). A
     /// landed tick moves none of them.
+    ///
+    /// This is the player's part of the advance pass; double time's
+    /// second pass runs it again ([`Session::tick_again`]).
     pub fn tick(&mut self, controls: Controls) {
         self.gate = None;
         if self.landed.is_some() {
@@ -1356,7 +1369,23 @@ impl Session {
         }
         self.sound_script();
         let frame = self.frame;
+        self.pass_frame = frame;
         self.frame = market::next_frame(frame);
+        self.fly_player(
+            frame,
+            controls,
+            GamePass::Advance {
+                double_time: self.double_time,
+            },
+        );
+    }
+
+    /// The player's part of a game-work pass on `frame` under `controls`
+    /// (`_HandlePlayer`, which runs on both passes; see the
+    /// `double_time` module): everything [`Session::tick`] does after the
+    /// frame counter moves on. Only the advance pass steps the Red
+    /// Alert's blink, as `_HandleAlertSprite` runs on it alone.
+    fn fly_player(&mut self, frame: i16, controls: Controls, pass: GamePass) {
         if market::junk_step_due(frame) && self.condition != Condition::Destroyed {
             let capacity = self.capacity();
             market::step_junk(
@@ -1367,7 +1396,10 @@ impl Session {
                 self.rules.source_for(RuleKey::JunkFlags),
             );
         }
-        self.red_alert_tick(frame);
+        self.red_alert_check(frame);
+        if pass != GamePass::Again {
+            self.red_alert.step(frame);
+        }
         self.tutorial_tick(frame);
         self.brackets_tick();
         self.boxes_tick();
@@ -1720,6 +1752,17 @@ impl Session {
             return;
         }
         self.take_scans(rules.law, &mut &mut *chance);
+        let pass = GamePass::Advance {
+            double_time: self.double_time,
+        };
+        self.fight(pass, rules, chance);
+    }
+
+    /// The fight's part of a game-work pass on `pass` (see
+    /// [`Session::tick_combat`] after the scans, and the `double_time`
+    /// module): the fight's tick ([`Combat::tick_on`]) and everything that
+    /// follows from it.
+    fn fight(&mut self, pass: GamePass, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
         let held: Vec<bool> = self
             .traffic
@@ -1788,7 +1831,8 @@ impl Session {
                 rounds,
             });
         }
-        self.combat.tick(
+        self.combat.tick_on(
+            pass,
             &mut fighters,
             &self.arsenal,
             &self.govts,
@@ -7723,6 +7767,26 @@ pub(super) mod tests {
             "four 250 ticks apart, then the next 25 ticks later"
         );
         assert_eq!(furballs_and_fruit(&session), (8, 4));
+    }
+
+    #[test]
+    fn in_double_time_a_due_frame_steps_tribbles_twice() {
+        let mut session = taken_off_with(&[(FURBALLS, 2), (FRUIT, 10)]);
+        let again = |session: &mut Session| {
+            session.tick_again(Controls::default(), Rules::default(), &mut NeverFires);
+        };
+        for _ in 0..14 {
+            session.tick(Controls::default());
+            again(&mut session);
+        }
+        assert_eq!(furballs_and_fruit(&session), (2, 10));
+        session.tick(Controls::default());
+        assert_eq!(furballs_and_fruit(&session), (3, 9), "the 15th tick");
+        again(&mut session);
+        assert_eq!(furballs_and_fruit(&session), (4, 8), "and again on it");
+        session.tick(Controls::default());
+        again(&mut session);
+        assert_eq!(furballs_and_fruit(&session), (4, 8), "not the 16th");
     }
 
     #[test]
