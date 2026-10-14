@@ -157,7 +157,12 @@
 //! is given; [`AppScreen::with_rulebook`] sets the rule set from one
 //! rulebook and builds each of the strategies above from it. Each time
 //! the spaceport's outfitter opens, the flight is told
-//! ([`FlightView::open_outfitter`]) and the outfitter shown afresh.
+//! ([`FlightView::open_outfitter`]) and the outfitter shown afresh; each
+//! time it closes, or the bar's hire screen closes, the flight is told
+//! ([`FlightView::close_outfitter`], [`FlightView::close_hire`]) and the
+//! shops shown afresh, as each resets the session. The player info screen
+//! opens on what [`FlightView::open_player_info`] gives, which resets the
+//! session first.
 //! The flight's diagnostics about game
 //! data it could not read or the simulation does not handle yet come
 //! through [`Screen::take_diagnostics`].
@@ -1162,7 +1167,9 @@ impl AppScreen {
     }
 
     /// Opens the player info screen over flight, which pauses, and over
-    /// any offer dialog open there, on flight's player info: laid out by
+    /// any offer dialog open there, on what flight gives as the dialog
+    /// opens ([`FlightView::open_player_info`], which resets the session
+    /// first; nothing opens in a jump or while the ship breaks up): laid out by
     /// the interface file's `DLOG` 1017 and its Yes/No dialog, 3002, or
     /// saying why not. The screen below lets go of its keys. With no
     /// dialogs, nothing opens, as the mission info does not.
@@ -1170,7 +1177,7 @@ impl AppScreen {
         let Some(dialogs) = &self.dialogs else {
             return;
         };
-        let Some(info) = self.flight.as_ref().and_then(FlightView::player_info) else {
+        let Some(info) = self.flight.as_mut().and_then(FlightView::open_player_info) else {
             return;
         };
         let layout = dialogs
@@ -1965,6 +1972,8 @@ impl AppScreen {
             // outfits: so all three go back.
             refresh_spaceport(spaceport, flight);
         }
+        self.serve_closings();
+        let spaceport = self.spaceport.as_mut().expect(LANDED);
         if spaceport.left() {
             self.close_spaceport();
             self.flight.as_mut().expect(ENTERED).take_off();
@@ -1975,18 +1984,45 @@ impl AppScreen {
         ScreenAction::None
     }
 
-    /// The spaceport's player info screen: asked for, it opens on
-    /// flight's player info; its Jettison drops everything through
-    /// flight, which changes the exchange, so the shops are handed back,
-    /// and the session makes a save due.
+    /// The outfitter and the hire screen closing, however they closed this
+    /// input (an outfitter's Done or Escape, an order that left nothing
+    /// listed, or the input that closed that order's alert; a hire screen
+    /// after its hire, on Cancel, or a bar with nothing for hire), each
+    /// read once its order or hire went through: flight is told
+    /// ([`FlightView::close_outfitter`], [`FlightView::close_hire`]), whose
+    /// reset can trim the cargo, and the shops are handed back.
+    fn serve_closings(&mut self) {
+        let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
+            return;
+        };
+        let outfitter = spaceport.take_outfitter_closed();
+        let hire = spaceport.take_hire_closed();
+        if outfitter {
+            flight.close_outfitter();
+        }
+        if hire {
+            flight.close_hire();
+        }
+        if outfitter || hire {
+            refresh_spaceport(spaceport, flight);
+        }
+    }
+
+    /// The spaceport's player info screen: asked for, it opens on what
+    /// flight gives as the dialog opens ([`FlightView::open_player_info`]),
+    /// whose reset can trim the cargo, so the shops are handed back; its
+    /// Jettison drops everything through flight, which changes the
+    /// exchange, so the shops are handed back, and the session makes a
+    /// save due.
     fn serve_player_info(&mut self) {
         let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
             return;
         };
         if spaceport.take_player_info_request()
-            && let Some(info) = flight.player_info()
+            && let Some(info) = flight.open_player_info()
         {
             spaceport.open_player_info(info);
+            refresh_spaceport(spaceport, flight);
         }
         if spaceport.take_player_info_jettison() {
             flight.jettison_all();
@@ -5793,6 +5829,76 @@ pub(super) mod tests {
         assert!(spaceport(&screen).open_outfitter().is_none(), "closed");
         assert_eq!(screen.showing(), Showing::Spaceport);
         assert!(!spaceport(&screen).left());
+    }
+
+    /// [`outfitting_data`], the booster made a cargo pod: 10 tons more
+    /// cargo space (`ModType` 2) for 100 credits.
+    fn cargo_pod_data() -> Rc<GameData> {
+        let mut built = game_data_fork(true, true, false, 100, b"", b"", None).build();
+        let pod = built.layout.data_entry(Outfit::TYPE, 128) + 4;
+        built.put_u16(pod + 0x06, 2);
+        built.put_u16(pod + 0x08, 10);
+        built.bytes[pod + 0x0E..pod + 0x12].copy_from_slice(&100_i32.to_be_bytes());
+        loaded_bytes(built.bytes)
+    }
+
+    /// The trade and outfit dialogs.
+    struct ShopDialogs;
+
+    impl DialogResources for ShopDialogs {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            match id {
+                TRADE_DIALOG => Ok(trade_template()),
+                OUTFIT_DIALOG => Ok(outfit_template()),
+                _ => Dialogs.dialog_template(id),
+            }
+        }
+    }
+
+    /// The router over [`cargo_pod_data`], landed, by the other reading of
+    /// [`RuleKey::OutfitSaleCargo`]: Ada buys the pod (20 tons), then 12
+    /// tons of food with the 900 credits left, a lot of 10 and then 2,
+    /// and sells the pod in the
+    /// outfitter, which stays open, keeping the 12 tons in her 10.
+    fn twelve_tons_in_ten(store: &MemoryPilots) -> AppScreen {
+        let rulebook =
+            Rulebook::default().with_override(RuleKey::OutfitSaleCargo, RuleSource::Bible);
+        let mut screen = AppScreen::new(cargo_pod_data())
+            .with_rulebook(&rulebook)
+            .with_dialogs(Rc::new(ShopDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        click_port_item(&mut screen, 8);
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1, "the pod bought");
+        click_port_item(&mut screen, 7);
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(pilot(&screen).held(FOOD), 12);
+        click_port_item(&mut screen, 8);
+        screen.input(&key(Key::Char('s'), true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 0, "the pod sold");
+        assert!(spaceport(&screen).open_outfitter().is_some());
+        assert_eq!(pilot(&screen).held(FOOD), 12, "kept past the holds");
+        screen
+    }
+
+    #[test]
+    fn closing_the_outfitter_trims_the_cargo_past_the_holds() {
+        let mut screen = twelve_tons_in_ten(&MemoryPilots::new());
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).open_outfitter().is_none());
+        assert_eq!(pilot(&screen).held(FOOD), 10, "@0x5db10");
+        click_port_item(&mut screen, 7);
+        let open = spaceport(&screen).open_trade().expect("trading");
+        assert_eq!(
+            open.market().row(FOOD).map(|row| row.held),
+            Some(10),
+            "the shops shown afresh"
+        );
     }
 
     #[test]

@@ -1897,12 +1897,23 @@ impl<
     }
 
     /// What the player info screen shows, as [`Session::player_info`]
-    /// gives it from the screen's catalog; `None` for a session that
-    /// failed.
+    /// gives it from the screen's catalog, changing nothing; `None` for a
+    /// session that failed. An opening of the screen is
+    /// [`FlightView::open_player_info`].
     #[must_use]
     pub fn player_info(&self) -> Option<PlayerInfo> {
         let session = self.session.as_ref().ok()?;
         Some(session.player_info(&self.catalog))
+    }
+
+    /// The player info dialog opens, as [`Session::open_player_info`] has
+    /// it: the session resets first, so the screen it gives shows the
+    /// cargo trimmed; none in a jump or while the ship breaks up, when
+    /// nothing opens, or for a session that failed. The router opens the
+    /// screen on it, from flight and from the spaceport alike.
+    pub fn open_player_info(&mut self) -> Option<PlayerInfo> {
+        let session = self.session.as_mut().ok()?;
+        session.open_player_info(&self.catalog)
     }
 
     /// Presses [`PLAYER_INFO_KEY`] outside a jump: asks the router for the
@@ -3167,6 +3178,22 @@ impl<C> FlightView<C> {
     pub fn open_outfitter(&mut self) {
         if let Ok(session) = &mut self.session {
             session.open_outfitter();
+        }
+    }
+
+    /// The outfitter closes, as [`Session::close_outfitter`] has it; a
+    /// session that failed has none.
+    pub fn close_outfitter(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.close_outfitter();
+        }
+    }
+
+    /// The bar's hire screen closes, as [`Session::close_hire`] has it; a
+    /// session that failed has no bar.
+    pub fn close_hire(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.close_hire();
         }
     }
 
@@ -15575,6 +15602,19 @@ mod tests {
             [Sound::Ui(UiSound::PlayerInfoRefused)],
             "streaking"
         );
+    }
+
+    #[test]
+    fn opening_the_player_info_gives_the_screen_unless_in_a_jump() {
+        let mut view = flight();
+        assert_eq!(view.open_player_info(), view.player_info(), "flying");
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.session().expect("flying").preparing_jump().is_some());
+        assert!(view.player_info().is_some(), "the getter reads it");
+        assert_eq!(view.open_player_info(), None, "no opening (@0x5a02a)");
     }
 
     #[test]
