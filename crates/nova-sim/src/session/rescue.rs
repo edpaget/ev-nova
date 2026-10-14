@@ -90,21 +90,17 @@
 
 use std::collections::BTreeMap;
 
+use super::Session;
 use super::entry::{Arrival, Entry, Placement, ShipPlacement};
 use super::hooks::ShipHook;
-use super::ship_change::ClassChange;
-use super::{ReservePolicy, Session};
 use crate::catalog::{PilotCatalog, ShipId, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
-use crate::combat::armament::fit_stock;
 use crate::combat::hull::Condition;
 use crate::escape::{EscapeMap, RESCUE_DESC, escape_stellar, qualifies};
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
-use crate::outfitter::OutfitFlags;
 use crate::red_alert::RedAlert;
 use crate::rulebook::{RuleKey, RuleSource};
-use crate::ship_change::{OutfitCarry, carried_outfits};
 
 /// The system the rescue takes the pod to when the search finds no
 /// stellar: `sÿst` 128, the original's system 0 (@0x68f7c-0x68f7f).
@@ -229,23 +225,7 @@ impl Session {
         let Some(record) = self.ship_record(RESCUE_SHIP).cloned() else {
             return;
         };
-        let mut outfits = carried_outfits(
-            &self.pilot.outfits,
-            OutfitCarry::Persistent {
-                mask: OutfitFlags::PERSISTENT,
-            },
-            &BTreeMap::new(),
-            None,
-            None,
-            &self.outfits,
-        );
-        let fits = self.arsenal.stock_fits(RESCUE_SHIP, &self.outfits);
-        fit_stock(&mut outfits, &fits, &self.outfits);
-        let change = ClassChange {
-            outfits,
-            reserves: ReservePolicy::Hold,
-        };
-        self.become_class(&record, change, |_| {});
+        self.board_class(&record, &BTreeMap::new());
         self.condition = Condition::Intact;
         self.pod = None;
         self.target = None;

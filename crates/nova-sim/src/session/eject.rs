@@ -123,7 +123,9 @@ use super::ship_change::ClassChange;
 use crate::ai::Goal;
 use crate::bay::launch_velocity;
 use crate::board::MAX_SHIPS_IN_SYSTEM;
-use crate::catalog::{ShipId, ShipRecord};
+use std::collections::BTreeMap;
+
+use crate::catalog::{OutfitId, ShipId, ShipRecord};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::armament::{Trigger, fit_stock, outfit_rounds};
@@ -238,7 +240,8 @@ impl Session {
         }
         self.walk_the_threats(hulk, escape.is_none());
         if let Some(record) = &record {
-            self.board_class(record);
+            let defaults = crate::pilot::tally(record.defaults.iter().copied());
+            self.board_class(record, &defaults);
             let fields = record.fields;
             let shield = shield_points(fields.shield);
             let reserves = &mut self.pilot.reserves;
@@ -423,17 +426,19 @@ impl Session {
         self.reform();
     }
 
-    /// The player's ship becomes class `record`, its outfits as an eject
-    /// leaves them (see the module docs), holding its reserves to the new
-    /// most until the eject sets them.
-    fn board_class(&mut self, record: &ShipRecord) {
-        let defaults = crate::pilot::tally(record.defaults.iter().copied());
+    /// The player's ship becomes class `record`, keeping only its
+    /// persistent outfits, with `defaults` added and the class's stock
+    /// weapons and ammunition fitted (see the module docs), holding its
+    /// reserves to the new most until the caller sets them. The eject
+    /// passes the class's defaults; the rescue, which adds none, passes
+    /// none.
+    pub(super) fn board_class(&mut self, record: &ShipRecord, defaults: &BTreeMap<OutfitId, u16>) {
         let mut outfits = carried_outfits(
             &self.pilot.outfits,
             OutfitCarry::Persistent {
                 mask: OutfitFlags::PERSISTENT,
             },
-            &defaults,
+            defaults,
             None,
             None,
             &self.outfits,
