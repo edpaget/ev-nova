@@ -576,7 +576,7 @@ impl Session {
     /// hooks unregistered; and the offers' stellar is forgotten. Nothing
     /// when the slot holds another mission, or is ending already, so an
     /// `A` of the mission inside its own `OnAbort` does not end it twice.
-    fn end_mission(
+    pub(super) fn end_mission(
         &mut self,
         slot: u8,
         record: &MissionRecord,

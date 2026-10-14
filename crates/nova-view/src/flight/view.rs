@@ -2028,6 +2028,15 @@ impl<
         self.session.as_mut().is_ok_and(Session::take_hold_expired)
     }
 
+    /// The escape pod's rescue's `dësc`, once, after the rescue
+    /// ([`Session::take_rescue_desc`]): the router shows it over flight.
+    pub fn take_rescue_desc(&mut self) -> Option<i16> {
+        self.session
+            .as_mut()
+            .ok()
+            .and_then(Session::take_rescue_desc)
+    }
+
     /// Whether any flight key is held down.
     #[must_use]
     pub fn holds_keys(&self) -> bool {
@@ -4080,6 +4089,7 @@ impl<
             && self.held.contains(&EJECT_KEY);
         let mut notes = Vec::new();
         let mut quotes = Vec::new();
+        let mut rescued = false;
         if let Ok(session) = &mut self.session {
             session.set_play_area(play_area());
             session.hold_fire(fire.0, fire.1);
@@ -4092,6 +4102,15 @@ impl<
                     .map(|npc| (npc.id, npc.state))
                     .collect();
                 session.tick(controls);
+                // The rescue settles on the tick the pod's countdown runs
+                // out, and stops the stepping so its dësc opens before the
+                // next: the original's `_HandlePlayer` runs it in place of
+                // the rest of that frame's player handling (@0x68ddd).
+                if session.rescue_if_due(&self.catalog, &mut self.chance) {
+                    self.previous = *session.player();
+                    rescued = true;
+                    break;
+                }
                 session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
                 session.tick_quotes(&self.catalog, &mut self.chance);
                 quotes.extend(session.take_quotes());
@@ -4121,6 +4140,11 @@ impl<
         }
         for quote in quotes {
             self.say_for(quote.text, HAIL_QUOTE_TICKS);
+        }
+        if rescued {
+            // Laid out in the system the rescue took the pod to, from where
+            // it put the ship, before the frame is drawn.
+            self.catch_up();
         }
         self.say_messages();
         // The session may have populated its system afresh.
@@ -4434,6 +4458,8 @@ mod tests {
     /// Centauri (131) at (600, 0), which holds Proxima at its centre;
     /// Barnard (132) at (0, 600) is linked to nothing, unless `onward`.
     /// Records the systems read.
+    // Each flag adds a system or a link of its own, read on its own.
+    #[allow(clippy::struct_excessive_bools)]
     struct FakeCatalog {
         character: Result<CharacterStart, StartError>,
         fields: ShipFields,
@@ -4509,6 +4535,9 @@ mod tests {
         /// with no links and Proxima Reborn (141) at its centre: not by
         /// default.
         reborn: bool,
+        /// Whether system 128 exists, the escape pod's rescue's fallback,
+        /// with no links and no stellars: not by default.
+        home: bool,
         /// The stellars that can be destroyed and regenerated: none, by
         /// default.
         lives: Vec<nova_sim::StellarLife>,
@@ -4611,6 +4640,7 @@ mod tests {
             onward: false,
             fan: false,
             reborn: false,
+            home: false,
             sol_navs: Vec::new(),
             sol_interference: 0,
             sol_more: Vec::new(),
@@ -4706,6 +4736,7 @@ mod tests {
             matches!(id.0, 130 | 131)
                 || (id.0 == 132 && self.onward)
                 || (id.0 == 133 && self.reborn)
+                || (id.0 == 128 && self.home)
         }
 
         fn landing_sites(&self, system: SystemId) -> Vec<LandingSite> {
@@ -4714,6 +4745,7 @@ mod tests {
                 131 => vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)],
                 132 if self.onward => Vec::new(),
                 133 if self.reborn => vec![site(141, (0.0, 0.0), StellarFlags::CAN_LAND)],
+                128 if self.home => Vec::new(),
                 other => panic!("asked for sÿst {other}'s sites"),
             }
         }
@@ -4740,6 +4772,9 @@ mod tests {
             ];
             if self.reborn {
                 systems.push(star(133, (600.0, 0.0), &[]));
+            }
+            if self.home {
+                systems.push(star(128, (-600.0, 0.0), &[]));
             }
             systems
         }
@@ -4913,6 +4948,7 @@ mod tests {
                     "Alpha Reborn",
                     vec![stellar(141, "Proxima Reborn", (0, 0), 1)],
                 ),
+                128 if self.home => ("Home", Vec::new()),
                 other => panic!("asked for sÿst {other}"),
             };
             SystemContents {
@@ -4961,11 +4997,13 @@ mod tests {
     impl ShipSprites for FakeCatalog {
         /// Ship 128's sheet is [`FakeCatalog::sheet`]; ship 129's is
         /// `rlëD` 2001's, with 72 rotations, glow `rlëD` 2101 and lights
-        /// `rlëD` 2201; ship 130's cannot be read.
+        /// `rlëD` 2201; ship 130's cannot be read, nor can the escape
+        /// pod's, 895.
         fn ship_sheet(&self, id: ShipId) -> Result<ShipSheet, String> {
             self.sheets_asked.borrow_mut().push(id);
             match id.0 {
                 128 => self.sheet.clone(),
+                895 => Err("no shän 895".to_owned()),
                 129 => Ok(ShipSheet {
                     image_id: 2001,
                     rotations: NonZeroU16::new(72).expect("non-zero"),
@@ -10643,6 +10681,36 @@ mod tests {
         let session = view.session().expect("flying");
         assert_eq!(session.nav_target(), None, "no landing request");
         assert!(!session.takes(PlayerCommand::Land));
+    }
+
+    #[test]
+    fn the_pod_is_rescued_after_350_ticks_and_the_rescue_stops_stepping_with_its_desc() {
+        let mut catalog = ejecting_in(100, &[188, 187]);
+        catalog.home = true;
+        let mut view = ejecting_view(catalog, &[]);
+        assert!(until_ejected(&mut view).0);
+        assert_eq!(view.take_rescue_desc(), None);
+        let mut ticks = 0;
+        let desc = loop {
+            ticks += 1;
+            view.tick(TICK);
+            if let Some(desc) = view.take_rescue_desc() {
+                break desc;
+            }
+            assert!(ticks <= nova_sim::POD_TICKS, "no rescue");
+        };
+        assert_eq!(desc, 13999);
+        assert_eq!(ticks, nova_sim::POD_TICKS);
+        assert_eq!(view.take_rescue_desc(), None, "once");
+        let session = view.session().expect("flying");
+        assert_eq!(session.ship(), ShipId(128));
+        assert_eq!(session.system(), SystemId(128));
+        assert_eq!(session.player().position, Vec2::new(50.0, 50.0));
+        assert_eq!(
+            view.previous.position,
+            Vec2::new(50.0, 50.0),
+            "laid out where the rescue put it: nothing else stepped"
+        );
     }
 
     #[test]

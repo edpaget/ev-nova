@@ -359,6 +359,7 @@ mod player_led;
 mod radar;
 mod ranks;
 mod red_alert;
+mod rescue;
 mod sabotage;
 mod script_effects;
 mod self_repair;
@@ -711,6 +712,9 @@ pub struct Session {
     /// Whether the pod countdown has run out and the rescue is due (see
     /// the `rescue` module); never saved.
     rescue_due: bool,
+    /// Whether the rescue's dësc is still to show (see the `rescue`
+    /// module); never saved.
+    rescue_desc_due: bool,
     /// Whether the player holds the eject chord, Command and the eject
     /// key together (see the `eject` module); never saved.
     eject_held: bool,
@@ -1127,6 +1131,7 @@ impl Session {
             hold_expiry_due: false,
             pod: None,
             rescue_due: false,
+            rescue_desc_due: false,
             eject_held: false,
             trigger: Trigger::default(),
             combat: Combat::default(),
@@ -1629,17 +1634,6 @@ impl Session {
         self.aboard = None;
         self.talk = None;
         self.clear_lost_target();
-    }
-
-    /// Fills the system as it is entered `how`, by a way in whose
-    /// enter-system hook is still to run (see [`Session::populate_as`]).
-    pub(super) fn populate_entering(
-        &mut self,
-        catalog: &(impl TrafficCatalog + ?Sized),
-        how: Entrance,
-        chance: &mut (impl Chance + ?Sized),
-    ) {
-        self.populate_as(catalog, chance, Some(how));
     }
 
     /// What the system's traffic is drawn from, read from `catalog`: its

@@ -72,17 +72,22 @@ pub(super) enum Entry {
     /// The developer tools' move, landed, or a walker's landing
     /// ([`Session::land_at`]), landed or in flight.
     Relocate,
+    /// The escape pod's rescue (see the `rescue` module).
+    Rescue,
 }
 
-/// The way in a [`StoryEvent::EnteredSystem`](crate::story::StoryEvent)
-/// names: a jump's hops left out.
-impl From<Entry> for Entrance {
-    fn from(how: Entry) -> Self {
-        match how {
-            Entry::Jump { .. } => Self::Jump,
-            Entry::Gate => Self::Gate,
-            Entry::ScriptMove { landed } => Self::ScriptMove { landed },
-            Entry::Relocate => Self::Relocate,
+impl Entry {
+    /// The way in a [`StoryEvent::EnteredSystem`](crate::story::StoryEvent)
+    /// names, a jump's hops left out: none for the escape pod's rescue,
+    /// which calls no `_MissionHandlePlayerEnteredNewSystem` and so raises
+    /// no enter-system event and runs no enter-system hook.
+    fn entrance(self) -> Option<Entrance> {
+        match self {
+            Self::Jump { .. } => Some(Entrance::Jump),
+            Self::Gate => Some(Entrance::Gate),
+            Self::ScriptMove { landed } => Some(Entrance::ScriptMove { landed }),
+            Self::Relocate => Some(Entrance::Relocate),
+            Self::Rescue => None,
         }
     }
 }
@@ -269,7 +274,41 @@ pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets 
         Entry::ScriptMove { landed: true } => script_move_landed(arrival),
         Entry::ScriptMove { landed: false } => script_move_in_flight(arrival, facts),
         Entry::Relocate => relocate(),
+        Entry::Rescue => rescue(),
     }
+}
+
+/// The escape pod's rescue (`_HandlePlayer` 0x68f24-0x69135): every way
+/// `_ResetPlayer(0)` and the rescue let go of the scene, a held `P`
+/// sound (`_missionSoundID` = -1) and a jump; the offers' stellar is
+/// forgotten (`_lastMissionStellar` = -1) and their roll table drawn
+/// afresh (`_missionRandom`, @0x1d7e3, @0x1d940); the system is explored
+/// (`_AutoSetExploration(system, 0, 1)` @0x690cb) and set up afresh
+/// (`_DeleteAllComputerShips` @0x68f69, `_SetupShipsInSystem` @0x69114);
+/// the course is cleared (`_hyperRoute` @0x1d6bb-0x1d6cd). It sounds and
+/// says nothing, and its stellars are rebuilt by the rescue itself, after
+/// its days (`_HandleStellarSystemVisibility` @0x69135).
+fn rescue() -> Resets {
+    Resets::of(
+        &[
+            Reset::RedrawOffers,
+            Reset::Stellar,
+            Reset::Explore,
+            Reset::HeldSound,
+            Reset::Jump,
+            Reset::Thrust,
+            Reset::NavTarget,
+            Reset::GateEntry,
+            Reset::Combat,
+            Reset::Boxes,
+            Reset::Strikes,
+            Reset::Target,
+            Reset::Boarding,
+            Reset::Hail,
+        ],
+        CourseStep::Clear,
+        TrafficStep::Populate,
+    )
 }
 
 /// A jump's arrival, after its `hops`: as `_HandlePlayer`'s hyperspace
@@ -437,7 +476,7 @@ fn relocate() -> Resets {
 /// [`SessionEvent::StellarChanged`].
 pub(super) fn scene_event(how: Entry, scene_changed: bool) -> Option<SessionEvent> {
     match how {
-        Entry::Jump { .. } | Entry::Gate | Entry::ScriptMove { landed: false } => {
+        Entry::Jump { .. } | Entry::Gate | Entry::ScriptMove { landed: false } | Entry::Rescue => {
             Some(SessionEvent::SystemChanged)
         }
         Entry::ScriptMove { landed: true } => None,
@@ -549,7 +588,7 @@ impl Session {
         if resets.has(Reset::RedrawOffers) {
             self.offers.redraw(&mut &mut *chance);
         }
-        self.bring_in_traffic(resets.traffic, how.into(), catalog, chance);
+        self.bring_in_traffic(resets.traffic, how.entrance(), catalog, chance);
         if resets.has(Reset::ShopRolls) {
             self.land_day_rolls();
             self.open_outfit_visit();
@@ -676,13 +715,14 @@ impl Session {
         }
     }
 
-    /// Does `step` to the traffic of a system entered `how`, reading
-    /// `catalog` and drawing on `chance` to populate: the only draw
-    /// entering a system makes.
+    /// Does `step` to the traffic of a system entered `how`, by a way in
+    /// whose enter-system hook is still to run, if any, reading `catalog`
+    /// and drawing on `chance` to populate: the only draw entering a
+    /// system makes.
     fn bring_in_traffic<C, R>(
         &mut self,
         step: TrafficStep,
-        how: Entrance,
+        how: Option<Entrance>,
         catalog: &C,
         chance: &mut R,
     ) where
@@ -691,7 +731,7 @@ impl Session {
     {
         match step {
             TrafficStep::None => {}
-            TrafficStep::Populate => self.populate_entering(catalog, how, chance),
+            TrafficStep::Populate => self.populate_as(catalog, chance, how),
             TrafficStep::Retarget => {
                 let table = self.spawn_table(catalog);
                 // Every ship the player leads, as `_EvalSetExp`
@@ -712,7 +752,8 @@ impl Session {
 
     /// Sounds and raises the arrival in `system`, as `resets` says, tells
     /// `event`, if any ([`scene_event`]), and raises
-    /// [`StoryEvent::EnteredSystem`], entered `how`.
+    /// [`StoryEvent::EnteredSystem`], entered `how`, for a way in that
+    /// names an entrance ([`Entry::entrance`]).
     fn announce(
         &mut self,
         how: Entry,
@@ -729,10 +770,9 @@ impl Session {
         if let Some(event) = event {
             self.emit(event);
         }
-        self.raise(StoryEvent::EnteredSystem {
-            system,
-            how: how.into(),
-        });
+        if let Some(how) = how.entrance() {
+            self.raise(StoryEvent::EnteredSystem { system, how });
+        }
     }
 }
 
@@ -962,8 +1002,9 @@ mod tests {
             ),
             (Entry::Relocate, Entrance::Relocate),
         ] {
-            assert_eq!(Entrance::from(how), entrance, "{how:?}");
+            assert_eq!(how.entrance(), Some(entrance), "{how:?}");
         }
+        assert_eq!(Entry::Rescue.entrance(), None, "the rescue names none");
     }
 
     #[test]

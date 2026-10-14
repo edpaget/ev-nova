@@ -1547,6 +1547,19 @@ impl AppScreen {
         self.fade_once_dialogs_close();
     }
 
+    /// Shows the escape pod's rescue's `dësc` `id` over flight, as
+    /// `_HandlePlayer`'s `_ShowTextDialog` does (@0x68e80-0x68eac); one that
+    /// cannot be read is a warning. The rescue settled before it, and
+    /// flight goes on once it closes: no fade follows, unlike the death's.
+    fn show_rescue_desc(&mut self, id: i16) {
+        match self.data.description(id) {
+            Ok(text) => self.show_over_flight(vec![text]),
+            Err(reason) => self
+                .warnings
+                .push(format!("nova: cannot show the rescue dësc {id}: {reason}")),
+        }
+    }
+
     /// Begins the death's fade once no dialog is open over flight: at
     /// the hold's expiry with none to show, or as the last closes.
     /// Before the hold has expired [`FlightView::begin_fade`] does
@@ -1570,6 +1583,9 @@ impl AppScreen {
             .is_some_and(FlightView::take_hold_expired)
         {
             self.at_hold_expiry();
+        }
+        if let Some(id) = self.flight.as_mut().and_then(FlightView::take_rescue_desc) {
+            self.show_rescue_desc(id);
         }
         if self.flight.as_ref().is_some_and(FlightView::game_over) {
             let side = if self.menu.is_some() {
@@ -7591,6 +7607,24 @@ pub(super) mod tests {
     /// [`deadly_data`], the player's ship carrying one of each of
     /// `saboteurs` as its default items.
     fn deadly_data_with(saboteurs: &[Saboteur]) -> Rc<GameData> {
+        let items: Vec<(i16, [i16; 3])> = saboteurs
+            .iter()
+            .map(|&(outfit, desc, _)| (outfit, [nova_sim::SABOTAGE_KILL, desc, 1]))
+            .collect();
+        let fork =
+            saboteurs
+                .iter()
+                .fold(deadly_fork(&items), |fork, &(_, desc, text)| match text {
+                    Some(text) => fork.resource(Desc::TYPE, desc, None, &desc_of(text)),
+                    None => fork,
+                });
+        loaded(&fork)
+    }
+
+    /// [`deadly_data`]'s fork, the player's ship carrying one of each of
+    /// `items` as its default items: each an `oütf` ID with its first
+    /// `ModType`, `ModVal` and the field after them.
+    fn deadly_fork(items: &[(i16, [i16; 3])]) -> ForkBuilder {
         let put = |bytes: &mut [u8], at: usize, values: &[i16]| {
             for (i, value) in values.iter().enumerate() {
                 bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
@@ -7609,7 +7643,7 @@ pub(super) mod tests {
         };
         let mut player = ship(10, -1);
         put(&mut player, 0x34, &[30]);
-        for (slot, &(outfit, _, _)) in saboteurs.iter().enumerate() {
+        for (slot, &(outfit, _)) in items.iter().enumerate() {
             put(&mut player, 0x4E + 2 * slot, &[outfit]);
             put(&mut player, 0x56 + 2 * slot, &[1]);
         }
@@ -7641,31 +7675,106 @@ pub(super) mod tests {
         put(&mut dude, 0x28, &[100]);
         let mut spin = vec![0; Spin::SIZE.expect("fixed")];
         spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
-        let fork = saboteurs
+        let fork = items
             .iter()
-            .fold(ForkBuilder::new(), |fork, &(outfit, desc, text)| {
+            .fold(ForkBuilder::new(), |fork, &(outfit, mods)| {
                 let mut record = vec![0; Outfit::SIZE.expect("fixed")];
-                put(&mut record, 0x06, &[nova_sim::SABOTAGE_KILL, desc, 1]);
-                let fork = fork.resource(Outfit::TYPE, outfit, Some(b"Bomb"), &record);
-                match text {
-                    Some(text) => fork.resource(Desc::TYPE, desc, None, &desc_of(text)),
-                    None => fork,
-                }
+                put(&mut record, 0x06, &mods);
+                fork.resource(Outfit::TYPE, outfit, Some(b"Bomb"), &record)
             });
-        loaded(
-            &fork
-                .resource(Ship::TYPE, 128, Some(b"First"), &player)
-                .resource(Ship::TYPE, 129, Some(b"Killer"), &killer)
-                .resource(Weapon::TYPE, 128, Some(b"Blaster"), &weapon)
-                .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
-                .resource(ShipAnim::TYPE, 128, None, &anim)
-                .resource(ShipAnim::TYPE, 129, None, &anim)
-                .resource(RLED, 1000, None, &sheet)
-                .resource(System::TYPE, 128, Some(b"Alpha"), &system)
-                .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &landable())
-                .resource(Spin::TYPE, 1000, None, &spin)
-                .resource(Dude::TYPE, 128, Some(b"Killers"), &dude),
-        )
+        fork.resource(Ship::TYPE, 128, Some(b"First"), &player)
+            .resource(Ship::TYPE, 129, Some(b"Killer"), &killer)
+            .resource(Weapon::TYPE, 128, Some(b"Blaster"), &weapon)
+            .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
+            .resource(ShipAnim::TYPE, 128, None, &anim)
+            .resource(ShipAnim::TYPE, 129, None, &anim)
+            .resource(RLED, 1000, None, &sheet)
+            .resource(System::TYPE, 128, Some(b"Alpha"), &system)
+            .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &landable())
+            .resource(Spin::TYPE, 1000, None, &spin)
+            .resource(Dude::TYPE, 128, Some(b"Killers"), &dude)
+    }
+
+    /// The rescue's `dësc` text in [`pod_data`].
+    const RESCUE_TEXT: &str = "After several weeks of sensory deprivation";
+
+    /// [`deadly_data`] where the player's ship carries an escape pod
+    /// (`oütf` 200, `ModType` 11) and auto-eject (201, `ModType` 20), with
+    /// the pod's class (`shïp` 895) and, when `desc` says, the rescue's
+    /// `dësc` 13999.
+    fn escape_pod_data(desc: bool) -> Rc<GameData> {
+        let put = |bytes: &mut [u8], at: usize, values: &[i16]| {
+            for (i, value) in values.iter().enumerate() {
+                bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
+            }
+        };
+        let mut pod = vec![0; Ship::SIZE.expect("fixed")];
+        put(&mut pod, 0x00, &[0, 0, 300, 300, 10, 300, 0, 10]);
+        put(&mut pod, 0x12, &[-1; 4]);
+        put(&mut pod, 0x4E, &[-1; 4]);
+        put(&mut pod, 0x370, &[-1; 4]);
+        put(&mut pod, 0x6CE, &[-1; 4]);
+        let fork = deadly_fork(&[(200, [11, 0, 1]), (201, [20, 0, 1])]).resource(
+            Ship::TYPE,
+            895,
+            Some(b"Escape Pod"),
+            &pod,
+        );
+        if desc {
+            loaded(&fork.resource(Desc::TYPE, 13999, None, &desc_of(RESCUE_TEXT)))
+        } else {
+            loaded(&fork)
+        }
+    }
+
+    /// The router over [`escape_pod_data`] (with its `dësc` when `desc`
+    /// says), flying with the killer above the player, until the player is
+    /// in the escape pod.
+    fn ejected(store: &MemoryPilots, desc: bool) -> AppScreen {
+        let mut screen = with_dialogs(escape_pod_data(desc))
+            .with_chance(above_the_player())
+            .with_behaviour(Rc::new(Firing))
+            .with_disable_rule(Rc::new(Never))
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        screen.input(&key(Key::Escape, true));
+        tick_until(&mut screen, 240, |screen| {
+            matches!(fate(screen), nova_sim::PlayerFate::Ejected { .. })
+        });
+        screen
+    }
+
+    #[test]
+    fn a_rescue_desc_that_cannot_be_read_is_skipped_with_a_warning() {
+        let store = MemoryPilots::new();
+        let mut screen = ejected(&store, false);
+        tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
+            fate(screen) == nova_sim::PlayerFate::Flying
+        });
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(
+            screen.take_warnings(),
+            ["nova: cannot show the rescue dësc 13999: no dësc 13999"]
+        );
+    }
+
+    #[test]
+    fn the_rescue_shows_its_desc_over_flight_and_stops_stepping() {
+        let store = MemoryPilots::new();
+        let mut screen = ejected(&store, true);
+        let ticks = tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
+            screen.showing() == Showing::MissionText
+        });
+        assert_eq!(ticks, nova_sim::POD_TICKS, "on the countdown's last tick");
+        assert_eq!(shown_text(&screen).as_deref(), Some(RESCUE_TEXT));
+        assert_eq!(fate(&screen), nova_sim::PlayerFate::Flying);
+        let at = ship(&screen);
+        screen.tick(Duration::from_secs(2));
+        assert_eq!(ship(&screen), at, "nothing moves under the dialog");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight, "flying on");
+        assert_eq!(screen.take_warnings(), Vec::<String>::new());
     }
 
     /// Draws the last outcome of every roll but the traffic's placement:

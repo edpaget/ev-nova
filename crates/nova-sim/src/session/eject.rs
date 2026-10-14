@@ -1257,4 +1257,31 @@ mod tests {
         assert!(session.rescue_due);
         assert_eq!(session.player_fate(), PlayerFate::Ejected { ticks_left: 0 });
     }
+
+    #[test]
+    fn a_pod_at_zero_armour_is_rescued_when_the_countdown_ends() {
+        let catalog = ejecting(100);
+        let mut session = in_a_pod(&catalog, 0.0);
+        session.pilot.reserves.armor.now = 0.0;
+        for _ in 0..POD_TICKS {
+            assert!(!session.rescue_due);
+            session.tick(crate::flight::Controls::default());
+            let (_, events) = fight(&mut session, false);
+            assert_eq!(session.condition, Condition::Intact, "no breakup");
+            assert!(!events.iter().any(|event| matches!(
+                event,
+                CombatEvent::BreakingUp {
+                    ship: ShipRef::Player,
+                    ..
+                } | CombatEvent::Destroyed {
+                    ship: ShipRef::Player,
+                    ..
+                }
+            )));
+        }
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!(session.pilot.ship, ShipId(128));
+        assert!(session.pilot.reserves.armor.now > 0.0);
+        assert_eq!(session.player_fate(), PlayerFate::Flying);
+    }
 }
