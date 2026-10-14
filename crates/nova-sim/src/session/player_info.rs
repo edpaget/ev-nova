@@ -125,11 +125,12 @@ impl Session {
             extras,
             honors,
             jettisonable: player_info::has_jettisonable_cargo(&cargo),
+            words,
         }
     }
 
-    /// The `STR#` 2002 strings the player info's texts read, from the
-    /// session's string lists; a missing one reads empty.
+    /// The `STR#` 2002 strings the player info shows, from the session's
+    /// string lists; a missing one reads empty.
     fn player_info_words(&self) -> Words {
         Words::from_list(&self.strings().string_list(MISC_STRINGS))
     }
@@ -506,6 +507,7 @@ mod tests {
                 extras: None,
                 honors: None,
                 jettisonable: false,
+                words: Words::from_list(&[]),
             }
         );
         assert!(!info.date.is_empty());
@@ -809,16 +811,14 @@ mod tests {
             .expect("starts")
             .with_strings(Rc::new(Lists));
         assert_eq!(legal(&session, &catalog), "N/A", "the fifth does not count");
-        let words_na = |session: Session| {
-            session
-                .with_strings(Rc::new(NotAvailable))
-                .player_info(&catalog)
-                .legal_status
-        };
+        let info = Session::start(&catalog)
+            .expect("starts")
+            .with_strings(Rc::new(NotAvailable))
+            .player_info(&catalog);
+        assert_eq!(info.legal_status, "n/a", "#396 from the lists");
         assert_eq!(
-            words_na(Session::start(&catalog).expect("starts")),
-            "n/a",
-            "#396 from the lists"
+            &*info.words.not_available, "n/a",
+            "the same #396 for the screen's other rows"
         );
     }
 

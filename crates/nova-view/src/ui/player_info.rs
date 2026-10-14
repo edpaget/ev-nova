@@ -14,7 +14,10 @@
 //! height where this stretches it, as [`DialogFrame`](super::DialogFrame)
 //! does (crons-news-ranks-fidelity phase 28). Every text is Geneva 9
 //! ([`TEXT_SIZE`]), the labels light grey ([`LABEL_COLOR`]) and the values
-//! white.
+//! white. Every `STR#` 2002 string it draws, the labels, words and
+//! messages, is the info's [`Words`], read with the texts, so a plug-in
+//! or translation that changes an entry changes it everywhere at once;
+//! the button labels are `STR#` 150's.
 //!
 //! - **General** ([`general_texts`]): each row a label at h +5 or +0xcd
 //!   and a value at +0x50 or +0x118 from the content box's top-left, on
@@ -63,7 +66,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::PlayerInfo;
-use nova_sim::player_info::{EnergyShown, IncomeLine, Reach};
+use nova_sim::player_info::{EnergyShown, IncomeLine, Reach, Words};
 
 use super::button::{Button, ButtonSkin, ButtonStyle, ButtonTracker};
 use super::desc::DONE_LABEL;
@@ -133,76 +136,6 @@ pub fn is_player_info_press(input: &Input) -> bool {
 pub const TAB_LABELS: [&str; 4] = ["General", "Cargo", "Extras", "Honors"];
 /// Jettison's label, `STR#` 150 #61.
 pub const JETTISON_LABEL: &str = "Jettison Cargo";
-
-/// `STR#` 2002 #251.
-pub const PILOT_NAME_LABEL: &str = "Pilot Name:";
-/// `STR#` 2002 #252.
-pub const DATE_LABEL: &str = "Current Date:";
-/// `STR#` 2002 #253.
-pub const SYSTEM_LABEL: &str = "System:";
-/// `STR#` 2002 #254.
-pub const COMBAT_RATING_LABEL: &str = "Combat Rating:";
-/// `STR#` 2002 #255.
-pub const SHIP_NAME_LABEL: &str = "Ship Name:";
-/// `STR#` 2002 #256.
-pub const SHIP_CLASS_LABEL: &str = "Ship Class:";
-/// `STR#` 2002 #257.
-pub const TURN_RATE_LABEL: &str = "Turn Rate:";
-/// `STR#` 2002 #259.
-pub const ACCEL_LABEL: &str = "Accel Rate:";
-/// `STR#` 2002 #260.
-pub const MAX_SPEED_LABEL: &str = "Max Speed:";
-/// `STR#` 2002 #326.
-pub const LEGAL_STATUS_LABEL: &str = "Legal Status:";
-/// `STR#` 2002 #12 (`_shieldString[1]`).
-pub const SHIELD_LABEL: &str = "Shield Status:";
-/// `STR#` 2002 #17 (`_armorString[1]`).
-pub const ARMOR_LABEL: &str = "Armor Status:";
-/// `STR#` 2002 #8 (`_fuelString[5]`).
-pub const ENERGY_LABEL: &str = "Energy Status:";
-/// `_creditsString` (`STR#` 2002 #33) capitalised, then ":".
-pub const CREDITS_LABEL: &str = "Credits:";
-
-/// `STR#` 2002 #258, after the turn rate.
-pub const DEGREES_PER_SECOND: &str = "°/sec";
-/// `STR#` 2002 #239.
-pub const JUMP: &str = "jump";
-/// `STR#` 2002 #240.
-pub const JUMPS: &str = "jumps";
-/// `STR#` 2002 #262.
-pub const PLUS: &str = "plus";
-/// `STR#` 2002 #263.
-pub const ONLY: &str = "only";
-/// `STR#` 2002 #9.
-pub const MANEUVERING: &str = "maneuvering energy";
-/// `STR#` 2002 #261, the armour of a dying ship, which the engine never
-/// shows: it has no dying state (rdm:phase/player-death/phase-1-hide-destroyed-player-ship).
-pub const FAILED: &str = "Failed";
-/// `STR#` 2002 #264.
-pub const EXPENSES: &str = "Expenses:";
-/// `STR#` 2002 #265.
-pub const INCOME: &str = "Income:";
-/// `STR#` 2002 #266.
-pub const NET: &str = "Net";
-/// `STR#` 2002 #267.
-pub const PER_DAY: &str = "per day";
-/// `STR#` 2002 #33 (`_creditsString`).
-pub const CREDITS: &str = "credits";
-/// `STR#` 2002 #335, the energy with no capacity.
-pub const NONE: &str = "None";
-/// `STR#` 2002 #396.
-pub const NOT_AVAILABLE: &str = "N/A";
-
-/// `STR#` 2002 #268.
-pub const NO_FLEET_CARGO: &str = "You don't have any cargo aboard your fleet's ships";
-/// `STR#` 2002 #269.
-pub const NO_CARGO: &str = "You don't have any cargo aboard your ship";
-/// `STR#` 2002 #270.
-pub const NO_EXTRAS: &str = "You don't have any extras on your ship";
-/// `STR#` 2002 #271.
-pub const NO_HONORS: &str = "You don't have any ranks or honors";
-/// `STR#` 2002 #291, Jettison's question.
-pub const JETTISON_QUESTION: &str = "Are you sure you want to jettison your cargo?";
 
 /// The labels' colour, `_rgbLightGrey` (0xc000 a channel, @0x1bf41).
 pub const LABEL_COLOR: Color = Color::rgba(192, 192, 192, 255);
@@ -351,86 +284,97 @@ impl PlacedText {
     }
 }
 
-/// A percentage, or "N/A".
-fn percent(shown: Option<i64>) -> String {
-    shown.map_or_else(|| NOT_AVAILABLE.to_owned(), |percent| format!("{percent}%"))
+/// A percentage, or #396 "N/A".
+fn percent(shown: Option<i64>, words: &Words) -> String {
+    shown.map_or_else(
+        || words.not_available.to_string(),
+        |percent| format!("{percent}%"),
+    )
 }
 
-/// The Energy row's value (@0x5327a-0x53451).
+/// The Energy row's value (@0x5327a-0x53451), in `words`.
 #[must_use]
-pub fn energy_text(energy: Option<EnergyShown>) -> String {
+pub fn energy_text(energy: Option<EnergyShown>, words: &Words) -> String {
     let Some(energy) = energy else {
-        return NONE.to_owned();
+        return words.no_energy.to_string();
     };
     let reach = match energy.reach {
         Reach::Jumps { jumps, spare } => format!(
             "  ({jumps} {}{})",
-            if jumps == 1 { JUMP } else { JUMPS },
+            if jumps == 1 {
+                &words.jump
+            } else {
+                &words.jumps
+            },
             if spare {
-                format!(" {PLUS} {MANEUVERING}")
+                format!(" {} {}", words.plus, words.maneuvering)
             } else {
                 String::new()
             }
         ),
-        Reach::ManeuveringOnly => format!("  ({MANEUVERING} {ONLY})"),
+        Reach::ManeuveringOnly => format!("  ({} {})", words.maneuvering, words.only),
         Reach::Nothing => String::new(),
     };
     format!("{}%{reach}", energy.percent)
 }
 
 /// The daily income line's pieces, in order, each with its colour
-/// (@0x535cf-0x53731): the label, then the amount and "credits", then
-/// "per day".
+/// (@0x535cf-0x53731), in `words`: the label, then the amount and
+/// "credits", then "per day".
 #[must_use]
-pub fn income_texts(line: IncomeLine) -> [(String, Color); 3] {
+pub fn income_texts(line: IncomeLine, words: &Words) -> [(String, Color); 3] {
     let (label, amount) = match line {
-        IncomeLine::Expenses(amount) => (EXPENSES.to_owned(), amount),
-        IncomeLine::NetIncome(amount) => (format!("{NET} {INCOME}"), amount),
-        IncomeLine::Income(amount) => (INCOME.to_owned(), amount),
+        IncomeLine::Expenses(amount) => (words.expenses.to_string(), amount),
+        IncomeLine::NetIncome(amount) => (format!("{} {}", words.net, words.income), amount),
+        IncomeLine::Income(amount) => (words.income.to_string(), amount),
     };
     [
         (format!("{label}  "), LABEL_COLOR),
-        (format!("{} {CREDITS}", comma_number(amount)), VALUE_COLOR),
-        (format!(" {PER_DAY}"), LABEL_COLOR),
+        (
+            format!("{} {}", comma_number(amount), words.credits),
+            VALUE_COLOR,
+        ),
+        (format!(" {}", words.per_day), LABEL_COLOR),
     ]
 }
 
-/// The General tab's texts for `info`, the content box's top-left at
-/// `origin`, the income line's pieces set one after another as
-/// `metrics` measures them.
+/// The General tab's texts for `info`, in its words, the content box's
+/// top-left at `origin`, the income line's pieces set one after another
+/// as `metrics` measures them.
 #[must_use]
 pub fn general_texts(
     info: &PlayerInfo,
     origin: Point,
     metrics: &dyn TextMetrics,
 ) -> Vec<PlacedText> {
+    let words = &info.words;
     let rows: [[(&str, String); 2]; 6] = [
         [
-            (PILOT_NAME_LABEL, info.pilot_name.clone()),
-            (SHIP_NAME_LABEL, info.ship_name.clone()),
+            (&words.pilot_name_label, info.pilot_name.clone()),
+            (&words.ship_name_label, info.ship_name.clone()),
         ],
         [
-            (DATE_LABEL, info.date.clone()),
-            (SHIP_CLASS_LABEL, info.ship_class.clone()),
+            (&words.date_label, info.date.clone()),
+            (&words.ship_class_label, info.ship_class.clone()),
         ],
         [
-            (SYSTEM_LABEL, info.system.clone()),
+            (&words.system_label, info.system.clone()),
             (
-                TURN_RATE_LABEL,
-                format!("{}{DEGREES_PER_SECOND}", info.turn_rate),
+                &words.turn_rate_label,
+                format!("{}{}", info.turn_rate, words.degrees_per_second),
             ),
         ],
         [
-            (LEGAL_STATUS_LABEL, info.legal_status.clone()),
-            (ACCEL_LABEL, info.accel.to_string()),
+            (&words.legal_status_label, info.legal_status.clone()),
+            (&words.accel_label, info.accel.to_string()),
         ],
         [
-            (COMBAT_RATING_LABEL, PLACEHOLDER.to_owned()),
-            (MAX_SPEED_LABEL, info.max_speed.to_string()),
+            (&words.combat_rating_label, PLACEHOLDER.to_owned()),
+            (&words.max_speed_label, info.max_speed.to_string()),
         ],
         [
-            (SHIELD_LABEL, percent(info.shield)),
-            (CREDITS_LABEL, comma_number(info.credits)),
+            (&words.shield_label, percent(info.shield, words)),
+            (&words.credits_label(), comma_number(info.credits)),
         ],
     ];
     let baseline = |row: usize| origin.y + FIRST_ROW + ROW_STEP * row as f32;
@@ -446,11 +390,11 @@ pub fn general_texts(
             place(row, column, label, value);
         }
     }
-    place(6, 0, ARMOR_LABEL, percent(info.armor));
-    place(7, 0, ENERGY_LABEL, energy_text(info.energy));
+    place(6, 0, &words.armor_label, percent(info.armor, words));
+    place(7, 0, &words.energy_label, energy_text(info.energy, words));
     if let Some(line) = info.income {
         let mut x = origin.x + COLUMNS[0];
-        for (text, color) in income_texts(line) {
+        for (text, color) in income_texts(line, words) {
             let width = metrics.width(Font::Geneva, TEXT_SIZE, &text);
             texts.push(PlacedText::new(text, x, baseline(8), color));
             x += width;
@@ -632,7 +576,7 @@ impl PlayerInfoScreen {
             .with_buttons(ButtonSkin::NOVA, self.style)
             .with_default(Some(YES_ITEM))
             .with_cancel(None);
-        dialog.set_text(QUESTION_ITEM, JETTISON_QUESTION);
+        dialog.set_text(QUESTION_ITEM, &self.info.words.jettison_question);
         self.confirm = Some(dialog);
     }
 
@@ -872,6 +816,7 @@ impl PlayerInfoScreen {
     /// in its box, or the message saying there is nothing to show.
     fn draw_content(&self, laid: &Laid, list: &mut DrawList) {
         let content = laid.content;
+        let words = &self.info.words;
         let (text, message) = match self.tab {
             Tab::General => {
                 for text in general_texts(&self.info, content.min, &*laid.metrics.0) {
@@ -879,10 +824,10 @@ impl PlayerInfoScreen {
                 }
                 return;
             }
-            Tab::Cargo if self.info.fleet => (&laid.texts[0], NO_FLEET_CARGO),
-            Tab::Cargo => (&laid.texts[0], NO_CARGO),
-            Tab::Extras => (&laid.texts[1], NO_EXTRAS),
-            Tab::Honors => (&laid.texts[2], NO_HONORS),
+            Tab::Cargo if self.info.fleet => (&laid.texts[0], &words.no_fleet_cargo),
+            Tab::Cargo => (&laid.texts[0], &words.no_cargo),
+            Tab::Extras => (&laid.texts[1], &words.no_extras),
+            Tab::Honors => (&laid.texts[2], &words.no_honors),
         };
         if let Some(text) = text {
             fill_rect(list, text.rect(), Color::BLACK);
@@ -890,7 +835,8 @@ impl PlayerInfoScreen {
         } else {
             let width = laid.metrics.0.width(Font::Geneva, TEXT_SIZE, message);
             let x = f32::midpoint(content.min.x, content.max.x).trunc() - (width / 2.0).trunc();
-            PlacedText::new(message, x, content.min.y + MESSAGE_BASELINE, LABEL_COLOR).draw(list);
+            PlacedText::new(&**message, x, content.min.y + MESSAGE_BASELINE, LABEL_COLOR)
+                .draw(list);
         }
     }
 }
@@ -1007,6 +953,7 @@ mod tests {
             extras: None,
             honors: None,
             jettisonable: true,
+            words: Words::STOCK,
         }
     }
 
@@ -1102,7 +1049,11 @@ mod tests {
     fn the_placeholder_fields_and_inert_buttons_are_listed() {
         assert_eq!(PLACEHOLDER_FIELDS, ["Combat Rating"]);
         assert!(INERT_BUTTONS.is_empty());
-        assert!(COMBAT_RATING_LABEL.starts_with(PLACEHOLDER_FIELDS[0]));
+        assert!(
+            Words::STOCK
+                .combat_rating_label
+                .starts_with(PLACEHOLDER_FIELDS[0])
+        );
     }
 
     #[test]
@@ -1115,6 +1066,70 @@ mod tests {
         assert_eq!(Tab::Honors.previous(), Tab::Extras);
         assert_eq!(Tab::Extras.previous(), Tab::Cargo);
         assert_eq!(Tab::Cargo.previous(), Tab::General);
+    }
+
+    /// Stock words but for the few a translation changes.
+    fn translated() -> Words {
+        Words {
+            not_available: "n/a".into(),
+            shield_label: "Schild:".into(),
+            credits: "crédits".into(),
+            no_energy: "Keine".into(),
+            maneuvering: "Manöver".into(),
+            per_day: "pro Tag".into(),
+            no_cargo: "Keine Fracht".into(),
+            jettison_question: "Abwerfen?".into(),
+            ..Words::STOCK
+        }
+    }
+
+    #[test]
+    fn every_str_2002_string_drawn_is_the_sessions() {
+        let shown = PlayerInfo {
+            shield: None,
+            energy: None,
+            income: Some(IncomeLine::Income(300)),
+            cargo: None,
+            words: translated(),
+            ..info()
+        };
+        let general = general(&shown);
+        let has = |text: &str, x: f32| {
+            general
+                .iter()
+                .any(|placed| placed.0 == text && placed.1 == x)
+        };
+        assert!(has("Schild:", 5.0) && has("n/a", 80.0), "{general:?}");
+        assert!(has("Crédits:", 205.0), "{general:?}");
+        assert!(has("Keine", 80.0), "{general:?}");
+        assert!(has("300 crédits", 5.0 + 9.0 * 4.5), "{general:?}");
+        assert!(has(" pro Tag", 5.0 + 20.0 * 4.5), "{general:?}");
+        assert_eq!(
+            energy_text(
+                Some(EnergyShown {
+                    percent: 10,
+                    reach: Reach::ManeuveringOnly
+                }),
+                &shown.words
+            ),
+            "10%  (Manöver only)"
+        );
+        let mut screen = screen_of(shown);
+        click_button(&mut screen, PlayerInfoButton::Tab(Tab::Cargo));
+        assert!(texts(&screen).contains(&"Keine Fracht".to_owned()));
+        let mut screen = screen_of(PlayerInfo {
+            words: translated(),
+            ..info()
+        });
+        screen.input(&press(Key::Tab));
+        click_button(&mut screen, PlayerInfoButton::Jettison);
+        assert_eq!(
+            screen
+                .confirm()
+                .and_then(|dialog| dialog.text(QUESTION_ITEM))
+                .map(|text| text.lines().join(" ")),
+            Some("Abwerfen?".to_owned())
+        );
     }
 
     #[test]
@@ -1168,8 +1183,9 @@ mod tests {
 
     #[test]
     fn the_energy_says_how_far_it_reaches() {
-        let energy = |percent, reach| energy_text(Some(EnergyShown { percent, reach }));
-        assert_eq!(energy_text(None), "None");
+        let energy =
+            |percent, reach| energy_text(Some(EnergyShown { percent, reach }), &Words::STOCK);
+        assert_eq!(energy_text(None, &Words::STOCK), "None");
         assert_eq!(
             energy(
                 33,
@@ -1200,19 +1216,19 @@ mod tests {
     #[test]
     fn the_income_line_is_a_grey_label_a_white_amount_and_a_grey_per_day() {
         assert_eq!(
-            income_texts(IncomeLine::Expenses(1500)).map(|(text, _)| text),
+            income_texts(IncomeLine::Expenses(1500), &Words::STOCK).map(|(text, _)| text),
             ["Expenses:  ", "1,500 credits", " per day"]
         );
         assert_eq!(
-            income_texts(IncomeLine::NetIncome(200)).map(|(text, _)| text),
+            income_texts(IncomeLine::NetIncome(200), &Words::STOCK).map(|(text, _)| text),
             ["Net Income:  ", "200 credits", " per day"]
         );
         assert_eq!(
-            income_texts(IncomeLine::Income(1)).map(|(_, color)| color),
+            income_texts(IncomeLine::Income(1), &Words::STOCK).map(|(_, color)| color),
             [LABEL_COLOR, VALUE_COLOR, LABEL_COLOR]
         );
         assert_eq!(
-            income_texts(IncomeLine::Income(1))[0].0,
+            income_texts(IncomeLine::Income(1), &Words::STOCK)[0].0,
             "Income:  ",
             "credits always plural"
         );
@@ -1304,7 +1320,10 @@ mod tests {
         assert_eq!(screen.tab(), Tab::Extras);
         assert!(!screen.closed());
         let shown = texts(&screen);
-        assert!(shown.contains(&NO_EXTRAS.to_owned()), "{shown:?}");
+        assert!(
+            shown.contains(&"You don't have any extras on your ship".to_owned()),
+            "{shown:?}"
+        );
         click_button(&mut screen, PlayerInfoButton::Tab(Tab::General));
         assert_eq!(screen.tab(), Tab::General);
     }
@@ -1439,7 +1458,7 @@ mod tests {
             .expect("the question")
             .lines()
             .join(" ");
-        assert_eq!(question, JETTISON_QUESTION);
+        assert_eq!(question, "Are you sure you want to jettison your cargo?");
         assert!(texts(&screen).contains(&"OK".to_owned()), "drawn over it");
         let cancel = screen
             .confirm()
@@ -1605,10 +1624,11 @@ mod tests {
                 310.0 + 55.0 - 9.0,
             )
         };
-        let (x, top) = centred(NO_CARGO);
+        let no_cargo = "You don't have any cargo aboard your ship";
+        let (x, top) = centred(no_cargo);
         assert_eq!(
             message_at(empty.clone(), Tab::Cargo),
-            Some((NO_CARGO.to_owned(), Point::new(x, top)))
+            Some((no_cargo.to_owned(), Point::new(x, top)))
         );
         let fleet = PlayerInfo {
             fleet: true,
@@ -1616,11 +1636,11 @@ mod tests {
         };
         assert_eq!(
             message_at(fleet, Tab::Cargo).map(|(text, _)| text),
-            Some(NO_FLEET_CARGO.to_owned())
+            Some("You don't have any cargo aboard your fleet's ships".to_owned())
         );
         assert_eq!(
             message_at(info(), Tab::Honors).map(|(text, _)| text),
-            Some(NO_HONORS.to_owned())
+            Some("You don't have any ranks or honors".to_owned())
         );
         let honored = PlayerInfo {
             honors: Some(String::new()),

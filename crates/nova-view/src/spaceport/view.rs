@@ -3972,6 +3972,7 @@ mod tests {
             extras: None,
             honors: None,
             jettisonable: true,
+            words: nova_sim::player_info::Words::STOCK,
         }
     }
 

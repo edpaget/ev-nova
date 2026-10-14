@@ -113,8 +113,10 @@
 //! aboard that can be aborted ([`has_jettisonable_cargo`],
 //! `_PlayerHasJettisonableCargo` 0x825a).
 //!
-//! The strings the texts read are `STR#` 2002's ([`Words`]); a missing
-//! one reads empty, as `_StrcatIndCString` appends nothing. The original
+//! The strings the texts read, and the General tab's labels, words and
+//! messages, are `STR#` 2002's ([`Words`]), carried in the
+//! [`PlayerInfo`] so the screen draws the same entries; a missing one
+//! reads empty, as `_StrcatIndCString` appends nothing. The original
 //! keeps its counts and tons in 16 bits; they are kept wider here. Nothing
 //! here plays a sound.
 
@@ -170,23 +172,85 @@ fn capitalise_at(text: &mut String, at: usize) {
     }
 }
 
-/// The `STR#` 2002 strings the texts read.
+/// The `STR#` 2002 strings the player info screen shows: the texts'
+/// words and the General tab's labels, words and messages, read once so
+/// that every place on the screen shows the same entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Words {
     /// #1 "ton".
     pub ton: Cow<'static, str>,
     /// #2 "tons".
     pub tons: Cow<'static, str>,
+    /// #8 "Energy Status:", `_fuelString[5]`, the Energy row's label.
+    pub energy_label: Cow<'static, str>,
+    /// #9 "maneuvering energy".
+    pub maneuvering: Cow<'static, str>,
+    /// #12 "Shield Status:", `_shieldString[1]`, the Shield row's label.
+    pub shield_label: Cow<'static, str>,
+    /// #17 "Armor Status:", `_armorString[1]`, the Armor row's label.
+    pub armor_label: Cow<'static, str>,
     /// #32 "credit".
     pub credit: Cow<'static, str>,
-    /// #33 "credits".
+    /// #33 "credits", `_creditsString`.
     pub credits: Cow<'static, str>,
+    /// #239 "jump".
+    pub jump: Cow<'static, str>,
+    /// #240 "jumps".
+    pub jumps: Cow<'static, str>,
+    /// #251 "Pilot Name:".
+    pub pilot_name_label: Cow<'static, str>,
+    /// #252 "Current Date:".
+    pub date_label: Cow<'static, str>,
+    /// #253 "System:".
+    pub system_label: Cow<'static, str>,
+    /// #254 "Combat Rating:".
+    pub combat_rating_label: Cow<'static, str>,
+    /// #255 "Ship Name:".
+    pub ship_name_label: Cow<'static, str>,
+    /// #256 "Ship Class:".
+    pub ship_class_label: Cow<'static, str>,
+    /// #257 "Turn Rate:".
+    pub turn_rate_label: Cow<'static, str>,
+    /// #258 "°/sec", after the turn rate.
+    pub degrees_per_second: Cow<'static, str>,
+    /// #259 "Accel Rate:".
+    pub accel_label: Cow<'static, str>,
+    /// #260 "Max Speed:".
+    pub max_speed_label: Cow<'static, str>,
+    /// #261 "Failed", the armour of a dying ship, which the engine never shows: it has no dying state (rdm:phase/player-death/phase-1-hide-destroyed-player-ship).
+    pub failed: Cow<'static, str>,
+    /// #262 "plus".
+    pub plus: Cow<'static, str>,
+    /// #263 "only".
+    pub only: Cow<'static, str>,
+    /// #264 "Expenses:".
+    pub expenses: Cow<'static, str>,
+    /// #265 "Income:".
+    pub income: Cow<'static, str>,
+    /// #266 "Net".
+    pub net: Cow<'static, str>,
+    /// #267 "per day".
+    pub per_day: Cow<'static, str>,
+    /// #268 "You don't have any cargo aboard your fleet's ships".
+    pub no_fleet_cargo: Cow<'static, str>,
+    /// #269 "You don't have any cargo aboard your ship".
+    pub no_cargo: Cow<'static, str>,
+    /// #270 "You don't have any extras on your ship".
+    pub no_extras: Cow<'static, str>,
+    /// #271 "You don't have any ranks or honors".
+    pub no_honors: Cow<'static, str>,
     /// #272 "Current extras for your ship:".
     pub extras_heading: Cow<'static, str>,
     /// #273 "Ship trade-in value:".
     pub trade_in: Cow<'static, str>,
     /// #274 "Your ranks and honors:".
     pub honors_heading: Cow<'static, str>,
+    /// #291 "Are you sure you want to jettison your cargo?", Jettison's question.
+    pub jettison_question: Cow<'static, str>,
+    /// #326 "Legal Status:".
+    pub legal_status_label: Cow<'static, str>,
+    /// #335 "None", the energy with no capacity.
+    pub no_energy: Cow<'static, str>,
     /// #336 "none".
     pub none: Cow<'static, str>,
     /// #362 "Current cargo".
@@ -212,20 +276,45 @@ pub struct Words {
 }
 
 impl Words {
-    /// Each field's string number in `STR#` 2002, in field order.
-    pub const NUMBERS: [usize; 18] = [
-        1, 2, 32, 33, 272, 273, 274, 336, 362, 364, 365, 366, 369, 391, 392, 393, 394, 396,
-    ];
-
     /// The stock strings.
     pub const STOCK: Self = Self {
         ton: Cow::Borrowed("ton"),
         tons: Cow::Borrowed("tons"),
+        energy_label: Cow::Borrowed("Energy Status:"),
+        maneuvering: Cow::Borrowed("maneuvering energy"),
+        shield_label: Cow::Borrowed("Shield Status:"),
+        armor_label: Cow::Borrowed("Armor Status:"),
         credit: Cow::Borrowed("credit"),
         credits: Cow::Borrowed("credits"),
+        jump: Cow::Borrowed("jump"),
+        jumps: Cow::Borrowed("jumps"),
+        pilot_name_label: Cow::Borrowed("Pilot Name:"),
+        date_label: Cow::Borrowed("Current Date:"),
+        system_label: Cow::Borrowed("System:"),
+        combat_rating_label: Cow::Borrowed("Combat Rating:"),
+        ship_name_label: Cow::Borrowed("Ship Name:"),
+        ship_class_label: Cow::Borrowed("Ship Class:"),
+        turn_rate_label: Cow::Borrowed("Turn Rate:"),
+        degrees_per_second: Cow::Borrowed("°/sec"),
+        accel_label: Cow::Borrowed("Accel Rate:"),
+        max_speed_label: Cow::Borrowed("Max Speed:"),
+        failed: Cow::Borrowed("Failed"),
+        plus: Cow::Borrowed("plus"),
+        only: Cow::Borrowed("only"),
+        expenses: Cow::Borrowed("Expenses:"),
+        income: Cow::Borrowed("Income:"),
+        net: Cow::Borrowed("Net"),
+        per_day: Cow::Borrowed("per day"),
+        no_fleet_cargo: Cow::Borrowed("You don't have any cargo aboard your fleet's ships"),
+        no_cargo: Cow::Borrowed("You don't have any cargo aboard your ship"),
+        no_extras: Cow::Borrowed("You don't have any extras on your ship"),
+        no_honors: Cow::Borrowed("You don't have any ranks or honors"),
         extras_heading: Cow::Borrowed("Current extras for your ship:"),
         trade_in: Cow::Borrowed("Ship trade-in value:"),
         honors_heading: Cow::Borrowed("Your ranks and honors:"),
+        jettison_question: Cow::Borrowed("Are you sure you want to jettison your cargo?"),
+        legal_status_label: Cow::Borrowed("Legal Status:"),
+        no_energy: Cow::Borrowed("None"),
         none: Cow::Borrowed("none"),
         current_cargo: Cow::Borrowed("Current cargo"),
         free_cargo_space: Cow::Borrowed("Free cargo space"),
@@ -239,39 +328,71 @@ impl Words {
         not_available: Cow::Borrowed("N/A"),
     };
 
-    /// The words `STR#` 2002 `list` holds, each string [`Self::NUMBERS`]
-    /// names read from it (1-based), empty when it lacks one.
+    /// The words `STR#` 2002 `list` holds, each read by its string
+    /// number (1-based), empty when the list lacks it.
     #[must_use]
     pub fn from_list(list: &[String]) -> Self {
-        let mut read = Self::NUMBERS.map(|n| {
-            Cow::Owned(
-                n.checked_sub(1)
-                    .and_then(|at| list.get(at))
-                    .cloned()
-                    .unwrap_or_default(),
-            )
-        });
-        let mut take = |at: usize| std::mem::take(&mut read[at]);
+        let at = |n: usize| Cow::Owned(list.get(n - 1).cloned().unwrap_or_default());
         Self {
-            ton: take(0),
-            tons: take(1),
-            credit: take(2),
-            credits: take(3),
-            extras_heading: take(4),
-            trade_in: take(5),
-            honors_heading: take(6),
-            none: take(7),
-            current_cargo: take(8),
-            free_cargo_space: take(9),
-            in_your_ship: take(10),
-            in_your_fleet: take(11),
-            free_in_your_ship: take(12),
-            of: take(13),
-            and: take(14),
-            a: take(15),
-            an: take(16),
-            not_available: take(17),
+            ton: at(1),
+            tons: at(2),
+            energy_label: at(8),
+            maneuvering: at(9),
+            shield_label: at(12),
+            armor_label: at(17),
+            credit: at(32),
+            credits: at(33),
+            jump: at(239),
+            jumps: at(240),
+            pilot_name_label: at(251),
+            date_label: at(252),
+            system_label: at(253),
+            combat_rating_label: at(254),
+            ship_name_label: at(255),
+            ship_class_label: at(256),
+            turn_rate_label: at(257),
+            degrees_per_second: at(258),
+            accel_label: at(259),
+            max_speed_label: at(260),
+            failed: at(261),
+            plus: at(262),
+            only: at(263),
+            expenses: at(264),
+            income: at(265),
+            net: at(266),
+            per_day: at(267),
+            no_fleet_cargo: at(268),
+            no_cargo: at(269),
+            no_extras: at(270),
+            no_honors: at(271),
+            extras_heading: at(272),
+            trade_in: at(273),
+            honors_heading: at(274),
+            jettison_question: at(291),
+            legal_status_label: at(326),
+            no_energy: at(335),
+            none: at(336),
+            current_cargo: at(362),
+            free_cargo_space: at(364),
+            in_your_ship: at(365),
+            in_your_fleet: at(366),
+            free_in_your_ship: at(369),
+            of: at(391),
+            and: at(392),
+            a: at(393),
+            an: at(394),
+            not_available: at(396),
         }
+    }
+
+    /// The Credits row's label: #33 (`_creditsString`) with its first
+    /// letter capitalised, then ":".
+    #[must_use]
+    pub fn credits_label(&self) -> String {
+        let mut label = self.credits.to_string();
+        capitalise_at(&mut label, 0);
+        label.push(':');
+        label
     }
 
     /// "ton" for 1, else "tons".
@@ -989,6 +1110,9 @@ pub struct PlayerInfo {
     pub honors: Option<String>,
     /// Whether Jettison is offered on the Cargo tab.
     pub jettisonable: bool,
+    /// The `STR#` 2002 strings the screen shows, the same the texts and
+    /// the legal status were written with.
+    pub words: Words,
 }
 
 #[cfg(test)]
@@ -1053,51 +1177,81 @@ mod tests {
 
     #[test]
     fn the_words_are_read_by_number_and_a_missing_one_is_empty() {
-        let mut list = vec![String::new(); 400];
-        for (n, word) in Words::NUMBERS.iter().zip([
-            "ton", "tons", "credit", "credits", "x", "t", "h", "none", "cc", "fcs", "iys", "iyf",
-            "fiys", "of", "and", "a", "an", "na",
-        ]) {
-            list[n - 1] = word.to_owned();
-        }
+        let list: Vec<String> = (1..=400).map(|n| format!("#{n}")).collect();
         let words = Words::from_list(&list);
-        assert_eq!(
-            (&*words.ton, &*words.tons, &*words.credit, &*words.credits),
-            ("ton", "tons", "credit", "credits")
-        );
-        assert_eq!(
-            (
-                &*words.extras_heading,
-                &*words.trade_in,
-                &*words.honors_heading,
-                &*words.none
-            ),
-            ("x", "t", "h", "none")
-        );
-        assert_eq!(
-            (
-                &*words.current_cargo,
-                &*words.free_cargo_space,
-                &*words.in_your_ship,
-                &*words.in_your_fleet,
-                &*words.free_in_your_ship
-            ),
-            ("cc", "fcs", "iys", "iyf", "fiys")
-        );
-        assert_eq!(
-            (
-                &*words.of,
-                &*words.and,
-                &*words.a,
-                &*words.an,
-                &*words.not_available
-            ),
-            ("of", "and", "a", "an", "na")
-        );
+        let read = [
+            (&words.ton, 1),
+            (&words.tons, 2),
+            (&words.energy_label, 8),
+            (&words.maneuvering, 9),
+            (&words.shield_label, 12),
+            (&words.armor_label, 17),
+            (&words.credit, 32),
+            (&words.credits, 33),
+            (&words.jump, 239),
+            (&words.jumps, 240),
+            (&words.pilot_name_label, 251),
+            (&words.date_label, 252),
+            (&words.system_label, 253),
+            (&words.combat_rating_label, 254),
+            (&words.ship_name_label, 255),
+            (&words.ship_class_label, 256),
+            (&words.turn_rate_label, 257),
+            (&words.degrees_per_second, 258),
+            (&words.accel_label, 259),
+            (&words.max_speed_label, 260),
+            (&words.failed, 261),
+            (&words.plus, 262),
+            (&words.only, 263),
+            (&words.expenses, 264),
+            (&words.income, 265),
+            (&words.net, 266),
+            (&words.per_day, 267),
+            (&words.no_fleet_cargo, 268),
+            (&words.no_cargo, 269),
+            (&words.no_extras, 270),
+            (&words.no_honors, 271),
+            (&words.extras_heading, 272),
+            (&words.trade_in, 273),
+            (&words.honors_heading, 274),
+            (&words.jettison_question, 291),
+            (&words.legal_status_label, 326),
+            (&words.no_energy, 335),
+            (&words.none, 336),
+            (&words.current_cargo, 362),
+            (&words.free_cargo_space, 364),
+            (&words.in_your_ship, 365),
+            (&words.in_your_fleet, 366),
+            (&words.free_in_your_ship, 369),
+            (&words.of, 391),
+            (&words.and, 392),
+            (&words.a, 393),
+            (&words.an, 394),
+            (&words.not_available, 396),
+        ];
+        for (word, n) in read {
+            assert_eq!(**word, format!("#{n}"), "STR# 2002 #{n}");
+        }
         let short = Words::from_list(&names(&["ton"]));
         assert_eq!(&*short.ton, "ton");
         assert_eq!(&*short.tons, "", "past the list's end");
         assert_eq!(&*Words::from_list(&[]).ton, "");
+        assert_eq!(&*Words::from_list(&[]).not_available, "");
+    }
+
+    #[test]
+    fn the_credits_label_is_33_capitalised_with_a_colon() {
+        assert_eq!(Words::STOCK.credits_label(), "Credits:");
+        let words = Words {
+            credits: Cow::Borrowed("crédits"),
+            ..Words::STOCK
+        };
+        assert_eq!(words.credits_label(), "Crédits:");
+        let words = Words {
+            credits: Cow::Borrowed(""),
+            ..Words::STOCK
+        };
+        assert_eq!(words.credits_label(), ":");
     }
 
     #[test]

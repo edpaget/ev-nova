@@ -20,10 +20,12 @@ mod common;
 use std::rc::Rc;
 
 use nova_data::GameData;
+use nova_sim::news;
+use nova_sim::player_info::Words;
 use nova_sim::rank::{self, Blessed, Held, LOST_TO_CRIME, LOST_TO_VIOLENCE};
 use nova_sim::{
-    Crime, Governments, GovtId, NeverFires, PilotCatalog, RankId, RuleSource, Session, SetExpr,
-    SetOp, Standing, StellarId, cleared,
+    CommCatalog, Crime, Governments, GovtId, NeverFires, PilotCatalog, RankId, RuleSource, Session,
+    SetExpr, SetOp, Standing, StellarId, cleared,
 };
 
 #[test]
@@ -90,6 +92,18 @@ fn a_stock_rank_granted_by_a_set_expression_shows_on_the_player_infos_honors() {
     assert_eq!(
         session.player_info(&*data).honors.as_deref(),
         Some("Your ranks and honors:\r\rFederation Naval Rank of Commander\r")
+    );
+}
+
+#[test]
+fn the_player_infos_stock_words_are_str_2002s() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    assert_eq!(
+        Words::from_list(&data.string_list(news::MISC_STRINGS)),
+        Words::STOCK
     );
 }
 

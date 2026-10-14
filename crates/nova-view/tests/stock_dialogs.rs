@@ -690,6 +690,7 @@ fn player_info_lays_out_its_seven_items_where_recorded_over_its_pictures() {
             extras: None,
             honors: None,
             jettisonable: false,
+            words: nova_sim::player_info::Words::STOCK,
         };
         let screen =
             PlayerInfoScreen::new(Ok((template, mono())), confirm, info, ButtonStyle::STOCK);
