@@ -856,11 +856,6 @@ mod tests {
         assert_eq!(session.layer_entries(), &layers);
     }
 
-    /// Makes NPC `id`'s type one whose `Cost` is -1.
-    fn hide(session: &mut Session, id: NpcId) {
-        session.npc_mut(id).expect("here").hull.hidden = true;
-    }
-
     /// `session` with hidden ships shown: [`RuleKey::HiddenShips`]'s other
     /// reading.
     fn showing_hidden(session: Session) -> Session {
@@ -872,7 +867,7 @@ mod tests {
     fn a_ship_of_a_cost_minus_one_type_is_left_out_of_the_draw_order_and_the_layer_history() {
         let (mut session, _, hired) = flying(1);
         let berth = berth(&session, hired);
-        hide(&mut session, hired);
+        crate::fixture::hide(&mut session, hired);
         assert!(session.is_hidden(ShipRef::Npc(hired)));
         combat_tick(&mut session);
         combat_tick(&mut session);
