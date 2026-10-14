@@ -45,8 +45,18 @@
 //!    its government's `InitialRec`, and none when independent
 //!    (@0x69257-0x69290); so is the record with each government, as every
 //!    writer of the one changes the other.
-//! 10. **No save** is made due here: the Strict Play save (@0x69292-0x692e3)
-//!     is phase 10's.
+//! 10. **The Strict Play save** (@0x69292-0x692e3), only with Strict Play
+//!     set: the pilot resumes at the first stellar of the system it ends
+//!     up in (+0x74), walking its nav slots in order (@0x692b5-0x692da),
+//!     or at stellar 128 when it has none (the original's 0, @0x692dc),
+//!     and a save is due, as `_SavePilotFile` (@0x692c4) saves before
+//!     `_FadeScreenIn` (@0x692c9). The session stays unlanded. Without
+//!     Strict Play the rescue makes no save due: the missions ended, the
+//!     story's events and the days inside it make none. On load the
+//!     original also moves the pilot to its saved stellar's own system
+//!     (@0x7525b-0x75291), which
+//!     rdm:phase/player-death/phase-13-resume-at-saved-stellar-system
+//!     owns.
 //! 11. **The dësc**, 13999 ([`RESCUE_DESC`]), is due once
 //!     ([`Session::take_rescue_desc`]); the original shows it before the
 //!     missions end (@0x68e80-0x68eac), over a black screen, which comes to
@@ -105,6 +115,11 @@ use crate::rulebook::{RuleKey, RuleSource};
 /// The system the rescue takes the pod to when the search finds no
 /// stellar: `sÿst` 128, the original's system 0 (@0x68f7c-0x68f7f).
 pub const RESCUE_FALLBACK: SystemId = SystemId(128);
+
+/// The stellar a Strict Play rescue saves when the rescue system has no
+/// stellars: the original's 0 (@0x692dc), a 0-based stellar index, so
+/// `spöb` 128.
+pub const STRICT_SAVE_FALLBACK: StellarId = StellarId(128);
 
 /// The ship the rescued player flies: `shïp` 128, class index 0, which
 /// `_ResetPlayer` gives (@0x1d43d).
@@ -195,8 +210,31 @@ impl Session {
         self.rename_for_rescue(&mut &mut *chance);
         self.reset_records_for_rescue();
         self.save_due = save_due;
+        self.strict_play_save(catalog);
         self.rescue_desc_due = true;
         true
+    }
+
+    /// The Strict Play save that ends the rescue (@0x69292-0x692e3): with
+    /// Strict Play set, the pilot resumes at the first stellar of the
+    /// system it was taken to, in nav order, or [`STRICT_SAVE_FALLBACK`]
+    /// when it has none, and a save is due; without it, nothing. It comes
+    /// after the rescue's own `save_due` is put back, so this is the one
+    /// save the rescue makes.
+    ///
+    /// The session stays unlanded. A later save (the menu, quitting)
+    /// still carries this stellar until a jump or a script's move resets
+    /// it, as the original's file does after the rescue.
+    fn strict_play_save(&mut self, catalog: &(impl PilotCatalog + ?Sized)) {
+        if !self.pilot.strict_play() {
+            return;
+        }
+        let first = self
+            .read_sites(catalog, self.pilot.system)
+            .first()
+            .map_or(STRICT_SAVE_FALLBACK, |site| site.id);
+        self.pilot.stellar = Some(first);
+        self.save_due = true;
     }
 
     /// The rescue's dësc, once: [`RESCUE_DESC`] after a rescue, then none.
@@ -920,11 +958,79 @@ mod tests {
     }
 
     #[test]
-    fn the_rescue_makes_no_save_due() {
+    fn a_rescue_without_strict_play_makes_no_save_due() {
         let catalog = rescuing();
         let mut session = due(&catalog);
         session.take_save_due();
         assert!(session.rescue_if_due(&catalog, &mut NeverFires));
         assert!(!session.take_save_due());
+        assert_eq!(session.pilot().stellar, None, "no resume stellar");
+    }
+
+    /// `session` with its pilot playing strictly.
+    fn strict(mut session: Session) -> Session {
+        session.pilot = session.pilot.clone().with_strict_play(true);
+        session
+    }
+
+    #[test]
+    fn a_strict_rescue_makes_a_save_due_at_the_systems_first_stellar() {
+        let catalog = rescuing();
+        let mut session = strict(due(&catalog));
+        for system in [130, 131, 133] {
+            session.pilot.set_system_record(SystemId(system), 99);
+        }
+        session.pilot.set_legal_record(GovtId(140), 99);
+        session.pilot.set_legal_record(GovtId(141), 99);
+        let mut expected = session.date();
+        for _ in 0..RESCUE_DAYS {
+            expected = expected.next_day();
+        }
+        session.take_save_due();
+        assert!(session.rescue_if_due(&catalog, &mut Scripted::default()));
+        assert!(session.take_save_due(), "a save is due");
+        let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("decodes");
+        assert_eq!(saved.system, SystemId(131));
+        assert_eq!(
+            saved.stellar(),
+            Some(StellarId(140)),
+            "the first in nav order, not the shipyard found"
+        );
+        assert_eq!(saved.date, expected);
+        let records: Vec<i16> = [130, 131, 133]
+            .map(|system| saved.system_record(SystemId(system)))
+            .to_vec();
+        assert_eq!(records, [7, 3, 3]);
+        assert_eq!(saved.legal_record(GovtId(140)), 7);
+        assert_eq!(saved.legal_record(GovtId(141)), 3);
+    }
+
+    #[test]
+    fn a_strict_rescue_leaves_the_session_unlanded() {
+        let catalog = rescuing();
+        let mut session = strict(due(&catalog));
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!(session.landed(), None);
+        assert_eq!(
+            *session.player(),
+            ShipState {
+                position: RESCUE_AT,
+                velocity: Vec2::ZERO,
+                heading: 0.0,
+            }
+        );
+    }
+
+    #[test]
+    fn a_strict_rescue_into_a_system_without_stellars_saves_stellar_128() {
+        let catalog = rescuing();
+        let mut session = strict(explored(&catalog, &[]));
+        session.pod = Some(0);
+        session.rescue_due = true;
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!(session.system(), RESCUE_FALLBACK);
+        assert!(session.take_save_due());
+        assert_eq!(session.pilot().stellar, Some(StellarId(128)));
+        assert_eq!(STRICT_SAVE_FALLBACK, StellarId(128));
     }
 }

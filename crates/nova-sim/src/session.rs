@@ -9,9 +9,11 @@
 //! it as the rules below say; the session itself keeps only what a flight
 //! needs on top.
 //!
-//! Landing, taking off and each change made in the spaceport
-//! ([`Session::transact`]) make a save due ([`Session::take_save_due`]):
-//! whoever saves the pilot takes it after each input and saves then.
+//! Landing, taking off, each change made in the spaceport
+//! ([`Session::transact`]) and a Strict Play pilot's rescue from the
+//! escape pod ([`Session::rescue_if_due`]) make a save due
+//! ([`Session::take_save_due`]): whoever saves the pilot takes it after
+//! each input and saves then.
 //! Arriving in a system explores it.
 //!
 //! The ship lands on a stellar of its system, on the land key's second
@@ -3907,9 +3909,9 @@ impl Session {
         self.stats
     }
 
-    /// Whether the pilot should be saved: it has landed, taken off or
-    /// changed in the spaceport since this was last taken. Taking it clears
-    /// it.
+    /// Whether the pilot should be saved: it has landed, taken off,
+    /// changed in the spaceport or, playing strictly, been rescued from the
+    /// escape pod since this was last taken. Taking it clears it.
     pub fn take_save_due(&mut self) -> bool {
         std::mem::take(&mut self.save_due)
     }
