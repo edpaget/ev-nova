@@ -14,6 +14,10 @@
 //! Rank 147, "Have Access to Hypergate System" (govt 183, `Flags`
 //! 0x0208), blesses landing at the 19 hypergates (`spöb` 1400-1418, govt
 //! 183, `MinStatus` 32767), which no record clears.
+//!
+//! Rank 128 (govt 128, `Flags` 0x0b08) blesses the Federation's allies
+//! with peace, Bureau 164 (`Flags` 0x4214, class 0) among them, whose word
+//! still attacks the player by the engine (`blessing_always_attacks`).
 
 mod common;
 
@@ -223,4 +227,29 @@ fn the_hypergate_access_rank_clears_every_hypergate() {
     for which in [Blessed::Peace, Blessed::Landing] {
         assert!(commander.blesses(Some(GovtId(128)), which), "{which:?}");
     }
+}
+
+#[test]
+fn the_federation_commander_blesses_the_bureau_whose_word_still_attacks() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let records = PilotCatalog::ranks(&data);
+    let govts = Governments::read(&data);
+    let blessing = |reach| {
+        rank::blessing(
+            &records,
+            &std::collections::BTreeSet::from([RankId(128)]),
+            &govts,
+            reach,
+        )
+    };
+    let bureau = Some(GovtId(164));
+    assert!(blessing(RuleSource::Engine).blesses(bureau, Blessed::Peace));
+    assert!(govts.flag(bureau, nova_sim::govt::ALWAYS_ATTACKS_PLAYER));
+    assert!(
+        !blessing(RuleSource::Bible).blesses(bureau, Blessed::Peace),
+        "the rank's own government only"
+    );
 }
