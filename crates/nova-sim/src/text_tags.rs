@@ -24,7 +24,7 @@
 //! | `<PN>`, `<PNN>` | the pilot's name; its nickname, or the name with none (@0x9cf2d-0x9cfb6) |
 //! | `<PSN>`, `<PST>` | the player's ship's name and its class's (@0x9cfbb-0x9d034) |
 //! | `<OSN>` | the name of the person offering (@0x9cebe-0x9cf28) |
-//! | `<PRK>`, `<SRK>`, `<RRK>` | the ranks' names, "captain" with none (@0x9d039-0x9d3b3) |
+//! | `<PRK>`, `<SRK>`, `<RRK>` | the ranks' names, `STR#` 2002 #341 ("captain") with none (@0x9d039-0x9d3b3; see [`rank`](crate::rank)) |
 //! | `<PAY>` | the amount [`pay_shown`] gives, written by [`comma_number`]; below 0 `"[Error]"` (@0x9c7a0-0x9c835, @0x9cd2a-0x9cdb6) |
 //! | `<REG>` | the registration's licence name (`_RT3_GetDisplayName` @0xd1517) |
 //! | `<PRKnnn>`, `<SRKnnn>` | government nnn's highest active rank's `ShortName` (@0x9d1aa-0x9d35a) |
@@ -44,9 +44,13 @@
 //!   licence, so `<REG>` is empty.
 //! - `<SN>` reads a slot's ship name, which stays empty until
 //!   rdm:phase/mission-ships/phase-1-spawn-mission-ships draws one.
-//! - The rank tags read "captain" ([`NO_RANK`]) until
-//!   rdm:roadmap/crons-news-ranks: `<PRKnnn>` and `<SRKnnn>` for nnn
-//!   128-383, any other nnn left as written.
+//! - The rank tags read the context's [`RankNames`]: `<PRKnnn>` and
+//!   `<SRKnnn>` for nnn 128-383, any other nnn left as written, each
+//!   read uncrossed, as government nnn's highest active rank's
+//!   `ShortName`. The original crosses the two governments, which
+//!   rdm:phase/missions-fidelity/phase-2-text-substitution-quirks
+//!   ports. A context with no ranks wired ([`RankNames::none`]) reads
+//!   "captain" ([`NO_RANK`](crate::person::NO_RANK)) for each.
 //! - `<PAY>` of a million or more follows [`RuleKey::PayMillions`](crate::RuleKey::PayMillions).
 //!
 //! The original's quirks not reproduced here (a slot's `<PAY>` reading
@@ -55,10 +59,10 @@
 //! `"[Error]"` for the mission tags with no mission) are
 //! rdm:phase/missions/phase-13-text-substitution-quirks.
 
-use crate::catalog::{DateAffixes, StellarId, SystemId};
+use crate::catalog::{DateAffixes, GovtId, StellarId, SystemId};
 use crate::date::{GameDate, long_date_text};
 use crate::mission::{ActiveMission, Offer, Stop};
-use crate::person::NO_RANK;
+use crate::rank::RankNames;
 use crate::rulebook::RuleSource;
 
 /// What a tag reads that has no value: every value's start
@@ -232,6 +236,8 @@ pub struct TagContext<'a> {
     pub ship_name: &'a str,
     /// The person speaking, if any: `<OSN>`, [`UNSET`] with none.
     pub person: Option<&'a str>,
+    /// The ranks: `<PRK>`, `<SRK>`, `<RRK>`, `<PRKnnn>` and `<SRKnnn>`.
+    pub ranks: RankNames<'a>,
     /// The mission, if the text has one; with none its tags are left as
     /// written.
     pub mission: Option<MissionTags<'a>>,
@@ -299,8 +305,8 @@ fn mission_values(
 const RANKED_GOVTS: std::ops::RangeInclusive<u32> = 128..=383;
 
 /// `text` with each `{prefix}nnn>` of a government in [`RANKED_GOVTS`]
-/// read as `rank`; any other left as written.
-fn fill_ranked(text: &str, prefix: &str, rank: &str) -> String {
+/// read as `rank` gives for government nnn; any other left as written.
+fn fill_ranked<'a>(text: &str, prefix: &str, rank: impl Fn(GovtId) -> &'a str) -> String {
     let mut filled = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find(prefix) {
@@ -308,9 +314,12 @@ fn fill_ranked(text: &str, prefix: &str, rank: &str) -> String {
         let after = &rest[at + prefix.len()..];
         let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
         let govt = after[..digits].parse::<u32>().ok();
-        match govt.filter(|govt| RANKED_GOVTS.contains(govt)) {
-            Some(_) if after[digits..].starts_with('>') => {
-                filled.push_str(rank);
+        let govt = govt
+            .filter(|govt| RANKED_GOVTS.contains(govt))
+            .and_then(|govt| i16::try_from(govt).ok());
+        match govt {
+            Some(govt) if after[digits..].starts_with('>') => {
+                filled.push_str(rank(GovtId(govt)));
                 rest = &after[digits + 1..];
             }
             _ => {
@@ -344,9 +353,9 @@ pub fn expand(text: &str, context: &TagContext, names: &(impl TagNames + ?Sized)
         ("<PSN>", context.ship_name),
         ("<PST>", context.ship_type),
         ("<OSN>", context.person.unwrap_or(UNSET)),
-        ("<PRK>", NO_RANK),
-        ("<SRK>", NO_RANK),
-        ("<RRK>", NO_RANK),
+        ("<PRK>", context.ranks.conversation()),
+        ("<SRK>", context.ranks.short()),
+        ("<RRK>", context.ranks.recent()),
     ];
     let tags = early
         .iter()
@@ -357,8 +366,9 @@ pub fn expand(text: &str, context: &TagContext, names: &(impl TagNames + ?Sized)
     let filled = tags.fold(text.to_owned(), |text, (tag, value)| {
         text.replace(tag, value)
     });
-    let filled = fill_ranked(&filled, "<PRK", NO_RANK);
-    fill_ranked(&filled, "<SRK", NO_RANK)
+    let short_of = |govt| context.ranks.short_of(govt);
+    let filled = fill_ranked(&filled, "<PRK", short_of);
+    fill_ranked(&filled, "<SRK", short_of)
 }
 
 #[cfg(test)]
@@ -442,9 +452,9 @@ mod tests {
 
     // The tags.
 
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
-    use crate::catalog::MissionId;
+    use crate::catalog::{GovtId, MissionId, RankId, RankRecord};
 
     /// Names by ID, and the cargo names in a list.
     #[derive(Default)]
@@ -519,6 +529,7 @@ mod tests {
             ship_type: "Shuttle",
             ship_name: "Kestrel",
             person: Some("Bounty Hunter"),
+            ranks: RankNames::none(),
             mission: mission.map(|values| MissionTags {
                 values,
                 cash: 12_345,
@@ -739,6 +750,77 @@ mod tests {
         assert_eq!(
             with(values(), "<PRK> <SRK> <RRK> <PRK128> <SRK383> <PRK200>"),
             "captain captain captain captain captain captain"
+        );
+    }
+
+    /// Rank 200 of government 128, "Commander" ("Cmdr", "Cdr"), and
+    /// rank 201 of government 129, "Admiral" ("Adm", "Ad"), of greater
+    /// `Weight`.
+    fn ranks() -> Vec<RankRecord> {
+        let rank = |id, govt, weight, [name, conv, short]: [&str; 3]| RankRecord {
+            name: name.to_owned(),
+            conv_name: conv.to_owned(),
+            short_name: short.to_owned(),
+            affil_govt: Some(GovtId(govt)),
+            weight,
+            ..crate::testkit::rank(id)
+        };
+        vec![
+            rank(200, 128, 1, ["Commander", "Cmdr", "Cdr"]),
+            rank(201, 129, 5, ["Admiral", "Adm", "Ad"]),
+        ]
+    }
+
+    #[test]
+    fn the_rank_tags_read_the_contexts_ranks() {
+        let records = ranks();
+        let active = BTreeSet::from([RankId(200), RankId(201)]);
+        let tags = TagContext {
+            ranks: RankNames {
+                records: &records,
+                active: &active,
+                recent: Some(RankId(200)),
+                fallback: "sir".into(),
+            },
+            ..context(Some(values()))
+        };
+        assert_eq!(
+            expand("<PRK> <SRK> <RRK>", &tags, &names()),
+            "Adm Ad Commander"
+        );
+        let held = BTreeSet::new();
+        let none = TagContext {
+            ranks: RankNames {
+                active: &held,
+                recent: None,
+                ..tags.ranks.clone()
+            },
+            ..tags.clone()
+        };
+        assert_eq!(expand("<PRK> <SRK> <RRK>", &none, &names()), "sir sir sir");
+    }
+
+    #[test]
+    fn prk_nnn_and_srk_nnn_read_government_nnns_short_name() {
+        let records = ranks();
+        let active = BTreeSet::from([RankId(200), RankId(201)]);
+        let tags = TagContext {
+            ranks: RankNames {
+                records: &records,
+                active: &active,
+                recent: None,
+                fallback: "sir".into(),
+            },
+            ..context(Some(values()))
+        };
+        assert_eq!(
+            expand(
+                "<PRK128> <SRK128> <PRK129> <SRK129> <PRK130> <SRK383>",
+                &tags,
+                &names()
+            ),
+            "Cdr Cdr Ad Ad sir sir",
+            "uncrossed, each its own government's"
         );
     }
 

@@ -168,9 +168,6 @@ impl PilotFacts for FreshPilot {
 /// What running a set expression has to tell the player's side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScriptNote {
-    /// An operator of this kind was skipped: nothing handles it yet. Each
-    /// kind is told once a session.
-    Unhandled(SetOpKind),
     /// One settling raised more story events than it dispatches (see the
     /// [`story`](crate::story) module's "Dispatch"): this many were
     /// dropped.

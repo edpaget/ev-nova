@@ -479,11 +479,13 @@ mod tests {
 
     #[test]
     fn one_way_duplicate_and_self_links_are_kept_once_or_dropped() {
+        // Each at its own place: a link names the system standing for its
+        // target's place.
         let model = model(vec![
             system(128, 0, 0, &[130, 128]),
-            system(129, 0, 0, &[]),
-            system(130, 0, 0, &[129, 129, 128]),
-            system(131, 0, 0, &[128]),
+            system(129, 10, 0, &[]),
+            system(130, 20, 0, &[129, 129, 128]),
+            system(131, 30, 0, &[128]),
         ]);
         assert_eq!(
             model.links(),
@@ -500,7 +502,7 @@ mod tests {
     fn a_link_to_a_missing_system_is_dropped_with_a_problem() {
         let model = model(vec![
             system(128, 0, 0, &[4000, 129]),
-            system(129, 0, 0, &[]),
+            system(129, 10, 0, &[]),
         ]);
         assert_eq!(model.links(), [(SystemId(128), SystemId(129))]);
         assert_eq!(

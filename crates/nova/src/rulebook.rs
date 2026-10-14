@@ -12,7 +12,9 @@
 //! ```
 //!
 //! - [`RULES`], `"engine"` or `"bible"`: the source every disputed rule
-//!   follows. Without it, the engine's.
+//!   follows. Without it, each rule's own default: the engine's, but for
+//!   `cron_zero_duration_holdoff` and `cron_post_holdoff`, which default
+//!   to the fix (see [`nova_sim::rulebook`]).
 //! - [`RULE_OVERRIDES`], an object: for any rule named by its
 //!   [`RuleKey::key`], the source it follows whatever `"rules"` says.
 //!
@@ -33,12 +35,13 @@ pub const RULE_OVERRIDES: &str = "rule_overrides";
 /// print.
 ///
 /// With no store, nothing saved, or settings that cannot be read or are
-/// not a JSON object, the rulebook is the default (every rule the
-/// engine's), silently: the sound settings' keeper warns about settings
-/// it cannot use. A source other than `"engine"` or `"bible"` is the
-/// engine's, with a warning naming its key; a `"rule_overrides"` that is
-/// not an object, and an override naming no rule, are ignored with a
-/// warning.
+/// not a JSON object, the rulebook is the default (each rule its own
+/// default), silently: the sound settings' keeper warns about settings
+/// it cannot use. A source other than `"engine"` or `"bible"` is ignored,
+/// as if it were absent, with a warning naming its key, so a typo never
+/// brings back the engine's reading of a rule that defaults to the other;
+/// a `"rule_overrides"` that is not an object, and an override naming no
+/// rule, are ignored with a warning too.
 pub fn game_rulebook(store: Option<&mut (dyn SettingsStore + '_)>) -> (Rulebook, Vec<String>) {
     let Some(store) = store else {
         return (Rulebook::default(), Vec::new());
@@ -52,20 +55,19 @@ pub fn game_rulebook(store: Option<&mut (dyn SettingsStore + '_)>) -> (Rulebook,
     let location = store.location();
     let mut warnings = Vec::new();
     let mut source = |value: &Value, key: &str| {
-        value
-            .as_str()
-            .and_then(RuleSource::from_name)
-            .unwrap_or_else(|| {
-                warnings.push(format!(
-                    "nova: the saved {key} in {location} is not \"engine\" or \"bible\"; \
-                 following the engine's"
-                ));
-                RuleSource::Engine
-            })
+        let source = value.as_str().and_then(RuleSource::from_name);
+        if source.is_none() {
+            warnings.push(format!(
+                "nova: the saved {key} in {location} is not \"engine\" or \"bible\"; \
+                 ignoring it"
+            ));
+        }
+        source
     };
-    let mut rulebook = settings.get(RULES).map_or_else(Rulebook::default, |value| {
-        Rulebook::new(source(value, &format!("\"{RULES}\"")))
-    });
+    let mut rulebook = settings
+        .get(RULES)
+        .and_then(|value| source(value, &format!("\"{RULES}\"")))
+        .map_or_else(Rulebook::default, Rulebook::new);
     let mut unknown = Vec::new();
     match settings.get(RULE_OVERRIDES) {
         None => {}
@@ -74,7 +76,9 @@ pub fn game_rulebook(store: Option<&mut (dyn SettingsStore + '_)>) -> (Rulebook,
                 match RuleKey::from_key(key) {
                     Some(rule) => {
                         let named = format!("\"{RULE_OVERRIDES}\".\"{key}\"");
-                        rulebook = rulebook.with_override(rule, source(value, &named));
+                        if let Some(source) = source(value, &named) {
+                            rulebook = rulebook.with_override(rule, source);
+                        }
                     }
                     None => unknown.push(format!(
                         "nova: the saved \"{RULE_OVERRIDES}\" in {location} name no rule \
@@ -112,35 +116,64 @@ mod tests {
         Rulebook::new(RuleSource::Engine)
     }
 
+    fn by_default() -> Rulebook {
+        Rulebook::default()
+    }
+
     fn bible() -> Rulebook {
         Rulebook::new(RuleSource::Bible)
     }
 
     #[test]
-    fn without_a_choice_every_rule_is_the_engines() {
-        assert_eq!(game_rulebook(None), (engine(), vec![]), "no store");
+    fn without_a_choice_each_rule_follows_its_default() {
+        assert_eq!(game_rulebook(None), (by_default(), vec![]), "no store");
         assert_eq!(
             game_rulebook(Some(&mut MemorySettings::new())),
-            (engine(), vec![]),
+            (by_default(), vec![]),
             "nothing saved"
         );
-        assert_eq!(rulebook_of("{}"), (engine(), vec![]));
-        assert_eq!(rulebook_of(r#"{"sound": false}"#), (engine(), vec![]));
-        assert_eq!(
-            rulebook_of(r#"{"rules": "engine", "rule_overrides": {}}"#),
-            (engine(), vec![])
-        );
+        assert_eq!(rulebook_of("{}"), (by_default(), vec![]));
+        assert_eq!(rulebook_of(r#"{"sound": false}"#), (by_default(), vec![]));
         assert_eq!((RULES, RULE_OVERRIDES), ("rules", "rule_overrides"));
     }
 
     #[test]
-    fn settings_that_cannot_be_used_are_the_engines_leaving_the_warning_to_the_sound() {
+    fn an_explicit_engine_rules_sets_every_rule_the_cron_holdoffs_too() {
+        let (rulebook, warnings) = rulebook_of(r#"{"rules": "engine", "rule_overrides": {}}"#);
+        assert_eq!((rulebook, warnings), (engine(), vec![]));
+        assert_eq!(
+            rulebook.source_for(RuleKey::CronPostHoldoff),
+            RuleSource::Engine
+        );
+        assert_ne!(rulebook, by_default());
+    }
+
+    #[test]
+    fn an_override_sets_one_cron_holdoff_rule() {
+        let (rulebook, warnings) =
+            rulebook_of(r#"{"rule_overrides": {"cron_post_holdoff": "engine"}}"#);
+        assert_eq!(
+            (rulebook, warnings),
+            (
+                by_default().with_override(RuleKey::CronPostHoldoff, RuleSource::Engine),
+                vec![]
+            )
+        );
+        assert_eq!(
+            rulebook.source_for(RuleKey::CronZeroDurationHoldoff),
+            RuleSource::Bible
+        );
+        assert_eq!(rulebook.source_for(RuleKey::CrimeGains), RuleSource::Engine);
+    }
+
+    #[test]
+    fn settings_that_cannot_be_used_are_the_defaults_leaving_the_warning_to_the_sound() {
         for text in ["not json", "", "[1, 2]", r#""bible""#] {
-            assert_eq!(rulebook_of(text), (engine(), vec![]), "{text}");
+            assert_eq!(rulebook_of(text), (by_default(), vec![]), "{text}");
         }
         let mut store = MemorySettings::holding(r#"{"rules": "bible"}"#);
         store.fail_reads(true);
-        assert_eq!(game_rulebook(Some(&mut store)), (engine(), vec![]));
+        assert_eq!(game_rulebook(Some(&mut store)), (by_default(), vec![]));
     }
 
     #[test]
@@ -162,7 +195,7 @@ mod tests {
         assert_eq!(rulebook.source_for(RuleKey::CrimeGains), RuleSource::Engine);
         let (rulebook, warnings) = rulebook_of(r#"{"rule_overrides": {"crime_gains": "bible"}}"#);
         assert_eq!(warnings, Vec::<String>::new());
-        assert_eq!(rulebook.default_source(), RuleSource::Engine);
+        assert_eq!(rulebook.global_source(), None);
         assert_eq!(rulebook.source_for(RuleKey::CrimeGains), RuleSource::Bible);
     }
 
@@ -173,7 +206,7 @@ mod tests {
             let text = format!(r#"{{"rule_overrides": {{"{name}": "bible"}}}}"#);
             assert_eq!(
                 rulebook_of(&text),
-                (engine().with_override(key, RuleSource::Bible), vec![]),
+                (by_default().with_override(key, RuleSource::Bible), vec![]),
                 "{name}"
             );
             let text = format!(r#"{{"rules": "bible", "rule_overrides": {{"{name}": "engine"}}}}"#);
@@ -188,24 +221,24 @@ mod tests {
             .map(|key| (key.key().to_owned(), Value::from("bible")))
             .collect();
         let text = serde_json::json!({ "rule_overrides": overrides }).to_string();
-        let every = RuleKey::ALL.into_iter().fold(engine(), |book, key| {
+        let every = RuleKey::ALL.into_iter().fold(by_default(), |book, key| {
             book.with_override(key, RuleSource::Bible)
         });
         assert_eq!(rulebook_of(&text), (every, vec![]));
     }
 
     #[test]
-    fn a_source_that_is_neither_is_the_engines_with_a_warning_naming_its_key() {
+    fn a_source_that_is_neither_is_ignored_with_a_warning_naming_its_key() {
         for value in [r#""Bible""#, r#""both""#, "1", "null", r#"{"bible": true}"#] {
             let text =
                 format!(r#"{{"rules": {value}, "rule_overrides": {{"crime_gains": "bible"}}}}"#);
             assert_eq!(
                 rulebook_of(&text),
                 (
-                    engine().with_override(RuleKey::CrimeGains, RuleSource::Bible),
+                    by_default().with_override(RuleKey::CrimeGains, RuleSource::Bible),
                     vec![
                         "nova: the saved \"rules\" in memory is not \"engine\" or \"bible\"; \
-                         following the engine's"
+                         ignoring it"
                             .to_owned()
                     ]
                 ),
@@ -216,10 +249,10 @@ mod tests {
             assert_eq!(
                 rulebook_of(&text),
                 (
-                    bible().with_override(RuleKey::CrimeGains, RuleSource::Engine),
+                    bible(),
                     vec![
                         "nova: the saved \"rule_overrides\".\"crime_gains\" in memory is not \
-                         \"engine\" or \"bible\"; following the engine's"
+                         \"engine\" or \"bible\"; ignoring it"
                             .to_owned()
                     ]
                 ),

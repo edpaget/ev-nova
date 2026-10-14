@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 pub use nova_data::{
-    BoomId, DudeId, FleetId, GovtId, JunkId, MissionId, NebulaId, OutfitId, PersonId, ShipId,
-    SoundId, StellarId, SystemId, WeaponId,
+    BoomId, CronId, DudeId, FleetId, GovtId, JunkId, MissionId, NebulaId, OutfitId, PersonId,
+    RankId, ShipId, SoundId, StellarId, SystemId, WeaponId,
 };
 
 use crate::combat::weapon::Explosion;
@@ -179,7 +179,9 @@ pub struct ListedStellar {
     /// The `spöb`'s ID.
     pub id: StellarId,
     /// Every `sÿst` that can be read and lists it, by ascending ID, each
-    /// once: the galaxy refresh gives it to the lowest visible one.
+    /// once: the galaxy refresh gives it to the lowest visible one not
+    /// shadowed at its place
+    /// ([`OverlaidGalaxy::owner`](crate::story::OverlaidGalaxy::owner)).
     pub systems: Vec<SystemId>,
     /// Its `Flags`.
     pub flags: u32,
@@ -187,6 +189,18 @@ pub struct ListedStellar {
     pub flags2: u16,
     /// Its `Govt`, or `None` when it is independent.
     pub govt: Option<GovtId>,
+}
+
+/// A system's `Visibility`, raw from its `sÿst`: the galaxy refresh
+/// evaluates it into the overlay (see the [`story`](crate::story) module's
+/// "Visibility and governments").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SystemVisibility {
+    /// The `sÿst`'s ID.
+    pub id: SystemId,
+    /// Its `Visibility`, parsed: a blank one always holds, and one that did
+    /// not parse never does, so the system is hidden.
+    pub visibility: Test,
 }
 
 /// The stellars' and systems' names, by ID, that the text tags read
@@ -457,8 +471,9 @@ pub struct DisasterId(pub i16);
 pub struct DisasterRecord {
     /// The `öops`'s ID.
     pub id: DisasterId,
-    /// Its resource name, which the commodity exchange shows while it is
-    /// active.
+    /// Its resource name up to its last ';', trailing spaces and ';'s
+    /// dropped, as the loader keeps it (`_LoadObjectData` @0x7cdd3). The
+    /// commodity exchange and the news show it while it is active.
     pub name: String,
     /// Its `Stellar`, raw: a `spöb` ID, -1 for any stellar or -2 for none
     /// (news only).
@@ -747,6 +762,88 @@ impl AuxShip {
     };
 }
 
+/// A timed event, raw from its `crön`: the fields the daily cron pass
+/// reads, which decides what the values mean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CronRecord {
+    /// The `crön`'s ID.
+    pub id: CronId,
+    /// Its `FirstDay`, raw.
+    pub first_day: i16,
+    /// Its `FirstMonth`, raw.
+    pub first_month: i16,
+    /// Its `FirstYear`, raw.
+    pub first_year: i16,
+    /// Its `LastDay`, raw.
+    pub last_day: i16,
+    /// Its `LastMonth`, raw.
+    pub last_month: i16,
+    /// Its `LastYear`, raw.
+    pub last_year: i16,
+    /// Its `Random`, raw: the chance it starts on a day it may.
+    pub random: i16,
+    /// Its `Duration`, raw: the days it runs; below 0 disables it.
+    pub duration: i16,
+    /// Its `PreHoldoff`, raw: the days between starting and `OnStart`.
+    pub pre_holdoff: i16,
+    /// Its `PostHoldoff`, raw: the days after `OnEnd` before it may start
+    /// again.
+    pub post_holdoff: i16,
+    /// Its `Flags`.
+    pub flags: u16,
+    /// Its `EnableOn` control-bit test, parsed.
+    pub enable_on: Test,
+    /// Its `OnStart`, run as it starts.
+    pub on_start: Script,
+    /// Its `OnEnd`, run as it ends.
+    pub on_end: Script,
+    /// Its `Contribute` bits, given to the player while it runs.
+    pub contribute: u64,
+    /// Its `Require` bits, asked of the player before it starts.
+    pub require: u64,
+    /// Its `NewsGovt1-4`, raw: -1 or, in stock data, 0 for unused; the
+    /// [`news`](crate::news) module reads it.
+    pub news_govt: [i16; 4],
+    /// Its `GovtNewsStr1-4`, raw: -1 or, in stock data, 0 for unused; the
+    /// [`news`](crate::news) module reads it.
+    pub govt_news: [i16; 4],
+    /// Its `IndNewsStr`, raw: -1 or, in stock data, 0 for unused; the
+    /// [`news`](crate::news) module reads it.
+    pub ind_news: i16,
+}
+
+/// A rank, from its `ränk` as `_LoadObjectData` keeps it
+/// (@0x7da37-0x7dc4d): the fields the [`rank`](crate::rank) module
+/// reads, which decides what the values mean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RankRecord {
+    /// The `ränk`'s ID.
+    pub id: RankId,
+    /// Its full name: the resource name up to its last ';', trailing
+    /// spaces and ';'s dropped (@0x7db7d-0x7dbc0), empty when it has none.
+    pub name: String,
+    /// Its `Weight`, raw.
+    pub weight: i16,
+    /// Its `AffilGovt`: `None` for -1 or any ID up to 127, which the
+    /// original loads as -1 (@0x7dab0-0x7dac3).
+    pub affil_govt: Option<GovtId>,
+    /// Its `Salary`, raw: credits a day, a fee when negative.
+    pub salary: i64,
+    /// Its `SalaryCap`, raw: 0 or less is no cap.
+    pub salary_cap: i64,
+    /// Its `Contribute` bits, given to the player while it is active.
+    pub contribute: u64,
+    /// Its `Flags`.
+    pub flags: u16,
+    /// Its `ConvName`, read by `<PRK>`.
+    pub conv_name: String,
+    /// Its `ShortName`, read by `<SRK>`.
+    pub short_name: String,
+    /// Its `PriceMod`, a percentage of the shipyard's prices at its
+    /// government's stellars; 0 or below loads as 100 (@0x7db33-0x7db3a).
+    pub price_mod: i16,
+}
+
 /// What a mission's screens show of it, read from its `mïsn` and its
 /// `dësc`s (see the [`mission`](crate::mission) module's "Screens"): each
 /// text as written, its tags not yet filled, and `None` for an ID of -1
@@ -1016,6 +1113,14 @@ pub struct GovtRecord {
     /// Its `ScanFine`: the credits a smuggler is fined, or below 0 that
     /// percent of the cash.
     pub scan_fine: i16,
+    /// Its `NewsPic`: the `PICT` the news is drawn over at a stellar it
+    /// governs (`gövt` +0xAE, kept raw; `_DoNewsDialog` reads it at
+    /// runtime +0x44).
+    pub news_pic: i16,
+    /// Its `Require`: the 64 bits a pilot must contribute to land at a
+    /// stellar it governs (`gövt` +0x54; `_PlayerMeetsRequirements`
+    /// @0x776f, read by `_HandlePlayerDockRequest` @0x67940-0x6796b).
+    pub require: u64,
 }
 
 /// The game data a session's ships fight with: the `wëap`s, each
@@ -1167,11 +1272,18 @@ pub trait PilotCatalog {
     /// Every stellar some system that can be read lists, that can be read
     /// itself, by ascending ID, with every system listing it.
     fn listed_stellars(&self) -> Vec<ListedStellar>;
+    /// Every system that can be read, by ascending ID, with its
+    /// `Visibility`.
+    fn system_visibility(&self) -> Vec<SystemVisibility>;
     /// Every stellar's and system's name that can be read.
     fn place_names(&self) -> PlaceNames;
     /// Every `spöb` that can be read, by ascending ID, with the place and
     /// name a mission's stop is matched by.
     fn stellar_marks(&self) -> Vec<StellarMark>;
+    /// Every `crön` that can be read, by ascending ID.
+    fn crons(&self) -> Vec<CronRecord>;
+    /// Every `ränk` 128-255 that can be read, by ascending ID.
+    fn ranks(&self) -> Vec<RankRecord>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -1252,12 +1364,24 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
         (**self).listed_stellars()
     }
 
+    fn system_visibility(&self) -> Vec<SystemVisibility> {
+        (**self).system_visibility()
+    }
+
     fn place_names(&self) -> PlaceNames {
         (**self).place_names()
     }
 
     fn stellar_marks(&self) -> Vec<StellarMark> {
         (**self).stellar_marks()
+    }
+
+    fn crons(&self) -> Vec<CronRecord> {
+        (**self).crons()
+    }
+
+    fn ranks(&self) -> Vec<RankRecord> {
+        (**self).ranks()
     }
 }
 
@@ -1340,12 +1464,24 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
         (**self).listed_stellars()
     }
 
+    fn system_visibility(&self) -> Vec<SystemVisibility> {
+        (**self).system_visibility()
+    }
+
     fn place_names(&self) -> PlaceNames {
         (**self).place_names()
     }
 
     fn stellar_marks(&self) -> Vec<StellarMark> {
         (**self).stellar_marks()
+    }
+
+    fn crons(&self) -> Vec<CronRecord> {
+        (**self).crons()
+    }
+
+    fn ranks(&self) -> Vec<RankRecord> {
+        (**self).ranks()
     }
 }
 
@@ -1600,6 +1736,14 @@ mod tests {
             }]
         }
 
+        /// System 130 visible by bit 5.
+        fn system_visibility(&self) -> Vec<SystemVisibility> {
+            vec![SystemVisibility {
+                id: SystemId(130),
+                visibility: Test::parse("b5"),
+            }]
+        }
+
         /// Stellar 128 Earth, in system 130 Sol.
         fn place_names(&self) -> PlaceNames {
             PlaceNames {
@@ -1614,6 +1758,22 @@ mod tests {
                 id: StellarId(128),
                 place: (30, -40),
                 name: "Earth".to_owned(),
+            }]
+        }
+
+        /// Cron 156, running 105 days.
+        fn crons(&self) -> Vec<CronRecord> {
+            vec![CronRecord {
+                duration: 105,
+                ..crate::testkit::cron(156)
+            }]
+        }
+
+        /// Rank 140, paying 200.
+        fn ranks(&self) -> Vec<RankRecord> {
+            vec![RankRecord {
+                salary: 200,
+                ..crate::testkit::rank(140)
             }]
         }
     }
@@ -1648,6 +1808,9 @@ mod tests {
             format!("{:?}", catalog.listed_stellars()),
             format!("{:?}", catalog.place_names()),
             format!("{:?}", catalog.stellar_marks()),
+            format!("{:?}", catalog.crons()),
+            format!("{:?}", catalog.ranks()),
+            format!("{:?}", catalog.system_visibility()),
         ]
     }
 
@@ -1691,6 +1854,12 @@ mod tests {
         assert!(direct[23].contains("\"Earth\""), "{direct:?}");
         assert!(direct[23].contains("\"Sol\""), "{direct:?}");
         assert!(direct[24].contains("place: (30, -40)"), "{direct:?}");
+        assert!(direct[25].contains("CronId(156)"), "{direct:?}");
+        assert!(direct[25].contains("duration: 105"), "{direct:?}");
+        assert!(direct[26].contains("RankId(140)"), "{direct:?}");
+        assert!(direct[26].contains("salary: 200"), "{direct:?}");
+        assert!(direct[27].contains("SystemId(130)"), "{direct:?}");
+        assert!(direct[27].contains("Bit(5)"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

@@ -99,6 +99,7 @@ use crate::control::{ControlBits, FreshPilot, Gate, NovaBits, PilotFacts, Test};
 use crate::govt::Governments;
 use crate::mission::ShipGoal;
 use crate::pilot::Escort;
+use crate::rank::RankNames;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::text_tags::{self, NoNames, TagContext};
@@ -201,8 +202,8 @@ pub const COMM_QUOTES: i16 = 7100;
 /// The hail quotes, `STR#` 7101 (0x1bbd @0x445d6).
 pub const HAIL_QUOTES: i16 = 7101;
 
-/// What a person's quote tags read for a rank, which the player does
-/// not have yet (the Bible's word).
+/// What a rank tag reads with no rank to name and no string lists wired:
+/// stock `STR#` 2002 #341 (the Bible's word; see [`rank`](crate::rank)).
 pub const NO_RANK: &str = "captain";
 /// `Rand(140)` (0x8c @0x33f31): a hail quote said now and then.
 pub const QUOTE_ODDS: u32 = 140;
@@ -214,7 +215,7 @@ pub const QUOTE_SHOWN_TICKS: u64 = 420;
 pub const QUOTE_GAP_TICKS: u64 = 1350;
 
 /// The names a quote's text tags read (`_MungeBriefing`, tags @0xdb198).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuoteTags<'a> {
     /// The person's name: `<OSN>`.
     pub person: &'a str,
@@ -224,11 +225,13 @@ pub struct QuoteTags<'a> {
     pub ship_type: &'a str,
     /// The player's ship's name, as the player named it: `<PSN>`.
     pub ship_name: &'a str,
+    /// The player's ranks: the rank tags.
+    pub ranks: RankNames<'a>,
 }
 
 /// `text` with its tags read as `tags` say, through the one substitution
 /// path ([`text_tags::expand`]) with no mission: `<OSN>`, `<PN>`,
-/// `<PNN>`, `<PST>` and `<PSN>`, the rank tags as [`NO_RANK`] and `<REG>`
+/// `<PNN>`, `<PST>` and `<PSN>`, the rank tags from the ranks and `<REG>`
 /// as empty; the mission tags, and any other tag, stay as written.
 #[must_use]
 pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
@@ -237,6 +240,7 @@ pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
         ship_type: tags.ship_type,
         ship_name: tags.ship_name,
         person: Some(tags.person),
+        ranks: tags.ranks.clone(),
         mission: None,
     };
     text_tags::expand(text, &context, &NoNames)
@@ -710,10 +714,10 @@ impl PersonWorld<'static> {
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
-    use crate::catalog::{GovtRecord, PersonWeapon, WeaponRecord};
+    use crate::catalog::{GovtRecord, PersonWeapon, RankId, RankRecord, WeaponRecord};
     use crate::combat::hull::HullSpec;
     use crate::stats::ShipStats;
     use crate::testkit::{Draws, FAST, govt, person, weapon};
@@ -1250,6 +1254,7 @@ mod tests {
             pilot: "Stock",
             ship_type: "Shuttle",
             ship_name: "Kestrel",
+            ranks: RankNames::none(),
         };
         assert_eq!(
             expand_tags("<OSN>: Prepare to die, <PN>!", &tags),
@@ -1269,6 +1274,34 @@ mod tests {
             "the mission tags kept"
         );
         assert_eq!(NO_RANK, "captain");
+    }
+
+    #[test]
+    fn quote_tags_fill_the_rank_tags() {
+        let records = [RankRecord {
+            name: "Commander".to_owned(),
+            conv_name: "Cmdr".to_owned(),
+            short_name: "Cdr".to_owned(),
+            affil_govt: Some(GovtId(128)),
+            ..crate::testkit::rank(200)
+        }];
+        let active = BTreeSet::from([RankId(200)]);
+        let tags = QuoteTags {
+            person: "Bounty Hunter",
+            pilot: "Stock",
+            ship_type: "Shuttle",
+            ship_name: "Kestrel",
+            ranks: RankNames {
+                records: &records,
+                active: &active,
+                recent: Some(RankId(200)),
+                fallback: "captain".into(),
+            },
+        };
+        assert_eq!(
+            expand_tags("<PRK>, <SRK>, <RRK>, <PRK128>.", &tags),
+            "Cmdr, Cdr, Commander, Cdr."
+        );
     }
 
     fn quoting(flags: u16) -> NpcPerson {

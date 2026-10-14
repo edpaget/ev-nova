@@ -38,13 +38,58 @@
 //! 2. [`LandingRefusal::NotLandable`]: the stellar lacks the can-land flag,
 //!    or it is destroyed, or it can be landed on only once destroyed and
 //!    is not ([`is_landable`]).
-//! 3. [`LandingRefusal::Denied`]: the pilot's legal record the caller
-//!    gives (by the engine the one in the player's system; by the Bible
-//!    the one with the stellar's government, or its system's when it has
-//!    none, [`landing_record`]) is below the stellar's `MinStatus`, which
-//!    the Bible says uninhabited stellars ignore.
+//! 3. [`LandingRefusal::Denied`]: traffic control does not clear the
+//!    pilot ([`cleared`]). An uninhabited stellar has no traffic control,
+//!    as the Bible says, so it is not asked.
 //! 4. [`LandingRefusal::TooFast`]: the ship is moving faster than
 //!    [`LANDING_SPEED`].
+//!
+//! **Clearance** ([`cleared`]) is `_HandlePlayerDockRequest`'s clearance
+//! block (@0x67903-0x67a05), whole but for the request counter. Its
+//! checks run in this order, the pilot's [`Standing`] giving what they
+//! read of the pilot:
+//!
+//! 1. The record: the legal record (by the engine the one in the
+//!    player's system; by the Bible the one with the stellar's
+//!    government, or its system's when it has none, [`landing_record`])
+//!    is at least `MinStatus`, or `MinStatus` is [`ANY_RECORD`]; never
+//!    when `MinStatus` is [`NEVER_BY_RECORD`] (@0x67903-0x67921).
+//! 2. Domination: the stellar is dominated (@0x6792d). The original's
+//!    byte (+0x46) is set by Demand Tribute; the engine knows only the
+//!    always-dominated `Flags2` [`DOMINATED`](crate::market::DOMINATED).
+//! 3. A request already granted (@0x67934): left out, below.
+//! 4. `Require`: at a governed stellar, a pilot who does not contribute
+//!    every `Require` bit of its government is cleared by none of 1-3
+//!    (@0x67940-0x6796b, `_PlayerMeetsRequirements` @0x776f).
+//! 5. Mission stellars: otherwise the stellar is an active mission's
+//!    travel or return stellar, compared as raw IDs over every slot,
+//!    failed ones included (@0x67977-0x679cb).
+//! 6. The blessing: otherwise a governed stellar's government blesses the
+//!    pilot with landing (`_PlayerBlessedByGovt` which 1, @0x679cd-0x67a05;
+//!    see [`rank`](crate::rank)'s **Blessing**).
+//!
+//! None of them refuses (@0x67ea3), the same refusal for `Require` as for
+//! the record. So by the engine the blessing gets the pilot past both
+//! `MinStatus` and `Require`, as a mission stellar does; by the other
+//! reading of [`BlessingLanding`](crate::RuleKey::BlessingLanding), the
+//! Bible's, past `MinStatus` only. The clearance block plays no sound.
+//!
+//! Left out of the clearance:
+//!
+//! - The request counter (@0x67934-0x6793d): a landing request at 0x2ee
+//!   or more clears the pilot, `Require` permitting. The approach sets it
+//!   (@0x64970), and so does an accepted planet bribe (`_DoPlanetCommDialog`
+//!   @0x97117). The engine has no pending request: the approach is
+//!   rdm:phase/hud-fidelity/phase-12-flight-messages-the-original-raises
+//!   and the bribe rdm:task/planet-domination, each to feed this check
+//!   through [`Standing`].
+//! - `_HandlePlayerDockApproach` (@0x647a6-0x64fff), its blessing
+//!   (@0x648af) and its `PlaySound`s (@0x649a9, @0x64f77): the engine has
+//!   no approach (hud-fidelity phase 12). Its clearance has no `Require`
+//!   test, so it is not [`cleared`].
+//! - Domination by Demand Tribute (+0x46 written @0x978fa, cleared
+//!   @0x9740f), and `_DoPlanetCommDialog`'s blessing (@0x96c15):
+//!   rdm:task/planet-domination.
 //!
 //! Each refusal says whether the stellar is a station, which picks the
 //! original's "dock at this station" or "land on this planet" wording.
@@ -295,14 +340,14 @@ pub enum LandOutcome {
 
 /// What the land key does with the navigation target `target`, for the
 /// ship `player` among the system's stellars `sites` (in navigation
-/// order), where `record` gives the pilot's legal record that a stellar's
-/// `MinStatus` is checked against and `reach` a stellar's
-/// [`LandingReach`]: see the module docs.
+/// order), where `cleared` says whether traffic control clears the pilot
+/// to land at an inhabited stellar ([`cleared`]) and `reach` gives a
+/// stellar's [`LandingReach`]: see the module docs.
 pub fn land_or_select(
     target: Option<StellarId>,
     player: &ShipState,
     sites: &[LandingSite],
-    record: impl Fn(&LandingSite) -> i16,
+    cleared: impl Fn(&LandingSite) -> bool,
     reach: impl Fn(&LandingSite) -> LandingReach,
 ) -> Result<LandOutcome, LandingRefusal> {
     let target = target.and_then(|id| sites.iter().find(|site| site.id == id));
@@ -310,7 +355,7 @@ pub fn land_or_select(
         if !is_landable(site) {
             return Err(not_landable(site));
         }
-        return check_landing(player, site, record, reach(site)).map(LandOutcome::Landed);
+        return check_landing(player, site, cleared, reach(site)).map(LandOutcome::Landed);
     }
     let Some(site) = nearest_landable_site(player.position, sites) else {
         return Err(
@@ -319,7 +364,7 @@ pub fn land_or_select(
     };
     let clearance = if has(site, StellarFlags::UNINHABITED) {
         Clearance::NoTrafficControl
-    } else if record(site) < site.min_status {
+    } else if !cleared(site) {
         Clearance::Denied
     } else {
         Clearance::Granted
@@ -403,15 +448,13 @@ fn has(site: &LandingSite, flag: u32) -> bool {
 }
 
 /// Whether `player` lands on `site`, over it within `reach`: the stellar,
-/// or the first refusal that applies (see the module docs). `record` gives
-/// the pilot's legal record that `site`'s `MinStatus` is checked against:
-/// by the engine the record in the player's system, whatever the
-/// stellar's government (`_HandlePlayerDockRequest` @0x67903), and by the
-/// Bible [`landing_record`].
+/// or the first refusal that applies (see the module docs). `cleared`
+/// says whether traffic control clears the pilot to land at an inhabited
+/// stellar ([`cleared`]); an uninhabited one is not asked.
 pub fn check_landing(
     player: &ShipState,
     site: &LandingSite,
-    record: impl Fn(&LandingSite) -> i16,
+    cleared: impl Fn(&LandingSite) -> bool,
     reach: LandingReach,
 ) -> Result<StellarId, LandingRefusal> {
     let (stellar, station) = (site.id, is_station(site));
@@ -421,7 +464,7 @@ pub fn check_landing(
     if !is_landable(site) {
         return Err(not_landable(site));
     }
-    if !has(site, StellarFlags::UNINHABITED) && record(site) < site.min_status {
+    if !has(site, StellarFlags::UNINHABITED) && !cleared(site) {
         return Err(LandingRefusal::Denied {
             stellar,
             station,
@@ -437,6 +480,58 @@ pub fn check_landing(
         });
     }
     Ok(stellar)
+}
+
+/// The `MinStatus` that never clears by record (@0x67915).
+pub const NEVER_BY_RECORD: i16 = 32767;
+
+/// The `MinStatus` that clears any record (@0x67909).
+pub const ANY_RECORD: i16 = -32767;
+
+/// What traffic control weighs of the pilot at a stellar, besides the
+/// stellar itself (`_HandlePlayerDockRequest` @0x67903-0x67a05).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Standing {
+    /// The legal record `MinStatus` is checked against.
+    pub record: i16,
+    /// Whether the pilot contributes every `Require` bit of the stellar's
+    /// government (`_PlayerMeetsRequirements` @0x776f).
+    pub meets_require: bool,
+    /// Whether the stellar is an active mission's travel or return
+    /// stellar (@0x67977-0x679cb).
+    pub mission_stellar: bool,
+    /// Whether the stellar's government blesses the pilot with landing
+    /// (`_PlayerBlessedByGovt` which 1, @0x679cd-0x67a05; see
+    /// [`rank`](crate::rank)'s **Blessing**).
+    pub blessed: bool,
+}
+
+/// Whether traffic control clears the pilot of `standing` to land at
+/// `site`, an inhabited stellar, as `_HandlePlayerDockRequest`'s
+/// clearance block decides (@0x67903-0x67a05), by `blessing`'s reading of
+/// [`BlessingLanding`](crate::RuleKey::BlessingLanding): see the module
+/// docs.
+///
+/// The record passes when it is at least `MinStatus` or `MinStatus` is
+/// [`ANY_RECORD`], and never when `MinStatus` is [`NEVER_BY_RECORD`]. The
+/// Bible's plain comparison differs from these sentinels only for a
+/// record of exactly 32767 or -32768, so they have no rule of their own.
+#[must_use]
+pub fn cleared(site: &LandingSite, standing: Standing, blessing: RuleSource) -> bool {
+    let by_record = (standing.record >= site.min_status || site.min_status == ANY_RECORD)
+        && site.min_status != NEVER_BY_RECORD;
+    let dominated = site.flags2 & crate::market::DOMINATED != 0;
+    let governed = site.govt.is_some();
+    let require_ok = !governed || standing.meets_require;
+    let blessed = governed && standing.blessed;
+    match blessing {
+        RuleSource::Engine => {
+            ((by_record || dominated) && require_ok) || standing.mission_stellar || blessed
+        }
+        RuleSource::Bible => {
+            ((by_record || dominated || blessed) && require_ok) || standing.mission_stellar
+        }
+    }
 }
 
 /// The legal record that `site`'s `MinStatus` is checked against by the
@@ -461,8 +556,7 @@ pub fn check_landing(
 ///   Bible's "independent counts as govt 128" rule scales the displayed
 ///   status label, not a record, so it does not apply here.
 ///
-/// Out of scope here: `chär` status spreading to allies and enemies, and
-/// the rank flag that grants landing regardless of `MinStatus`.
+/// Out of scope here: `chär` status spreading to allies and enemies.
 pub fn landing_record(
     site: &LandingSite,
     system_govt: Option<GovtId>,
@@ -589,9 +683,14 @@ mod tests {
         check_landing(
             player,
             site,
-            |site| landing_record(site, system_govt, &record),
+            |site| landing_record(site, system_govt, &record) >= site.min_status,
             engine_reach(site),
         )
+    }
+
+    /// A clearance by `record` alone, against `MinStatus` plainly.
+    fn by_record(record: i16) -> impl Fn(&LandingSite) -> bool {
+        move |site| record >= site.min_status
     }
 
     #[test]
@@ -845,7 +944,7 @@ mod tests {
     fn exactly_at_the_radius_is_over_it_and_just_beyond_is_not() {
         let target = site(128, 0.0, 0.0);
         let circle = LandingReach::Circle(landing_radius(&target));
-        let at = |x, y| check_landing(&ship(x, y, 0.0, 0.0), &target, |_| 0, circle);
+        let at = |x, y| check_landing(&ship(x, y, 0.0, 0.0), &target, by_record(0), circle);
         assert_eq!(at(30.0, 40.0), Ok(StellarId(128)));
         assert!(matches!(
             at(30.0, 40.01),
@@ -880,14 +979,14 @@ mod tests {
     fn the_same_reach_decides_too_fast_and_too_far() {
         let target = site(128, 0.0, 0.0);
         let reach = LandingReach::Box(175.0);
-        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, |_| 0, reach);
+        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, by_record(0), reach);
         assert!(matches!(fast(174.0), Err(LandingRefusal::TooFast { .. })));
         assert!(matches!(fast(175.0), Err(LandingRefusal::TooFar { .. })));
         // Outside today's 50 circle but inside the box: too fast, not too
         // far.
         assert!(matches!(fast(60.0), Err(LandingRefusal::TooFast { .. })));
         let circle = LandingReach::Circle(50.0);
-        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, |_| 0, circle);
+        let fast = |y| check_landing(&ship(0.0, y, 3.0, 0.0), &target, by_record(0), circle);
         assert!(matches!(fast(50.0), Err(LandingRefusal::TooFast { .. })));
         assert!(matches!(fast(60.0), Err(LandingRefusal::TooFar { .. })));
     }
@@ -1238,7 +1337,13 @@ mod tests {
         player: &ShipState,
         sites: &[LandingSite],
     ) -> Result<LandOutcome, LandingRefusal> {
-        land_or_select(target.map(StellarId), player, sites, |_| 0, engine_reach)
+        land_or_select(
+            target.map(StellarId),
+            player,
+            sites,
+            by_record(0),
+            engine_reach,
+        )
     }
 
     fn selected(stellar: i16, station: bool, clearance: Clearance) -> LandOutcome {
@@ -1302,7 +1407,7 @@ mod tests {
                 Some(StellarId(128)),
                 &parked(),
                 &strict,
-                |_| 4,
+                by_record(4),
                 engine_reach
             ),
             Err(LandingRefusal::Denied {
@@ -1378,7 +1483,7 @@ mod tests {
     fn the_clearance_given_follows_the_record_and_traffic_control() {
         let strict = [needing(5, StellarFlags::CAN_LAND)];
         let select =
-            |record| land_or_select(None, &parked(), &strict, move |_| record, engine_reach);
+            |record| land_or_select(None, &parked(), &strict, by_record(record), engine_reach);
         assert_eq!(select(4), Ok(selected(128, false, Clearance::Denied)));
         assert_eq!(select(5), Ok(selected(128, false, Clearance::Granted)));
         let uninhabited = [needing(
@@ -1386,7 +1491,13 @@ mod tests {
             StellarFlags::CAN_LAND | StellarFlags::UNINHABITED | StellarFlags::STATION,
         )];
         assert_eq!(
-            land_or_select(None, &parked(), &uninhabited, |_| -32768, engine_reach),
+            land_or_select(
+                None,
+                &parked(),
+                &uninhabited,
+                by_record(-32768),
+                engine_reach
+            ),
             Ok(selected(128, true, Clearance::NoTrafficControl))
         );
         // The record read is the stellar's government's.
@@ -1399,10 +1510,218 @@ mod tests {
                 None,
                 &parked(),
                 &governed,
-                |site| landing_record(site, Some(A), record),
+                |site| landing_record(site, Some(A), record) >= site.min_status,
                 engine_reach
             ),
             Ok(selected(128, false, Clearance::Denied))
+        );
+    }
+
+    // Clearance.
+
+    /// A planet of government 140 needing `min_status`.
+    fn governed(min_status: i16) -> LandingSite {
+        LandingSite {
+            govt: Some(A),
+            ..needing(min_status, StellarFlags::CAN_LAND)
+        }
+    }
+
+    /// A pilot whose record is `record`, who meets `Require`, of no
+    /// mission there and unblessed.
+    fn standing(record: i16) -> Standing {
+        Standing {
+            record,
+            meets_require: true,
+            ..Standing::default()
+        }
+    }
+
+    const ENGINE: RuleSource = RuleSource::Engine;
+    const BIBLE: RuleSource = RuleSource::Bible;
+
+    #[test]
+    fn a_record_at_or_above_min_status_is_cleared() {
+        for source in RuleSource::ALL {
+            assert!(cleared(&governed(5), standing(5), source));
+            assert!(cleared(&governed(5), standing(6), source));
+            assert!(!cleared(&governed(5), standing(4), source));
+            assert!(cleared(&governed(-3), standing(-3), source));
+        }
+        assert_eq!(Standing::default().record, 0);
+        assert!(!Standing::default().meets_require);
+    }
+
+    #[test]
+    fn a_min_status_of_32767_never_clears_by_record() {
+        for source in RuleSource::ALL {
+            assert!(
+                !cleared(&governed(32767), standing(32767), source),
+                "@0x67915 {source:?}"
+            );
+            assert!(cleared(&governed(32766), standing(32767), source));
+        }
+    }
+
+    #[test]
+    fn a_min_status_of_minus_32767_clears_any_record() {
+        for source in RuleSource::ALL {
+            assert!(
+                cleared(&governed(-32767), standing(-32768), source),
+                "@0x67909 {source:?}"
+            );
+            assert!(!cleared(&governed(-32766), standing(-32768), source));
+        }
+    }
+
+    #[test]
+    fn a_dominated_stellar_is_cleared_whatever_the_record() {
+        let dominated = LandingSite {
+            flags2: crate::market::DOMINATED,
+            ..governed(32767)
+        };
+        for source in RuleSource::ALL {
+            assert!(cleared(&dominated, standing(-32768), source), "@0x6792d");
+        }
+    }
+
+    #[test]
+    fn an_unmet_require_refuses_a_governed_stellar_even_with_the_record_or_dominated() {
+        let unmet = Standing {
+            meets_require: false,
+            ..standing(10)
+        };
+        let dominated = LandingSite {
+            flags2: crate::market::DOMINATED,
+            ..governed(0)
+        };
+        for source in RuleSource::ALL {
+            assert!(!cleared(&governed(0), unmet, source), "@0x67940");
+            assert!(!cleared(&dominated, unmet, source));
+        }
+    }
+
+    #[test]
+    fn an_independent_stellar_ignores_require() {
+        let unmet = Standing {
+            meets_require: false,
+            ..standing(10)
+        };
+        for source in RuleSource::ALL {
+            assert!(cleared(&needing(0, StellarFlags::CAN_LAND), unmet, source));
+            assert!(!cleared(
+                &needing(11, StellarFlags::CAN_LAND),
+                unmet,
+                source
+            ));
+        }
+    }
+
+    #[test]
+    fn a_mission_stellar_is_cleared_past_min_status_and_require() {
+        let mission = Standing {
+            record: -32768,
+            meets_require: false,
+            mission_stellar: true,
+            blessed: false,
+        };
+        for source in RuleSource::ALL {
+            assert!(cleared(&governed(32767), mission, source), "@0x67977");
+            assert!(cleared(
+                &needing(32767, StellarFlags::CAN_LAND),
+                mission,
+                source
+            ));
+        }
+    }
+
+    /// A pilot whose record is `record`, blessed with landing, meeting
+    /// `Require` or not.
+    fn blessed(record: i16, meets_require: bool) -> Standing {
+        Standing {
+            record,
+            meets_require,
+            mission_stellar: false,
+            blessed: true,
+        }
+    }
+
+    #[test]
+    fn by_the_engine_a_blessing_clears_past_min_status_and_require() {
+        assert!(cleared(&governed(32767), blessed(0, true), ENGINE));
+        assert!(
+            cleared(&governed(32767), blessed(0, false), ENGINE),
+            "@0x679cd"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_blessing_clears_past_min_status_but_not_require() {
+        assert!(cleared(&governed(32767), blessed(0, true), BIBLE));
+        assert!(!cleared(&governed(32767), blessed(0, false), BIBLE));
+        assert!(!cleared(&governed(0), blessed(0, false), BIBLE));
+    }
+
+    #[test]
+    fn an_independent_stellar_is_never_cleared_by_a_blessing() {
+        for source in RuleSource::ALL {
+            assert!(
+                !cleared(
+                    &needing(32767, StellarFlags::CAN_LAND),
+                    blessed(0, true),
+                    source
+                ),
+                "{source:?}"
+            );
+        }
+    }
+
+    /// L pressed for a ship parked at the centre, with `target` selected,
+    /// over `sites`, cleared by `clear`.
+    fn press_cleared(
+        target: Option<i16>,
+        sites: &[LandingSite],
+        clear: impl Fn(&LandingSite) -> bool,
+    ) -> Result<LandOutcome, LandingRefusal> {
+        land_or_select(target.map(StellarId), &parked(), sites, clear, engine_reach)
+    }
+
+    #[test]
+    fn the_selection_and_the_landing_read_the_same_clearance() {
+        let sites = [governed(10)];
+        for (clear, clearance, landing) in [
+            (
+                true,
+                Clearance::Granted,
+                Ok(LandOutcome::Landed(StellarId(128))),
+            ),
+            (
+                false,
+                Clearance::Denied,
+                Err(LandingRefusal::Denied {
+                    stellar: StellarId(128),
+                    station: false,
+                    min_status: 10,
+                }),
+            ),
+        ] {
+            assert_eq!(
+                press_cleared(None, &sites, |_| clear),
+                Ok(selected(128, false, clearance))
+            );
+            assert_eq!(press_cleared(Some(128), &sites, |_| clear), landing);
+        }
+        let uninhabited = [LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+            ..governed(10)
+        }];
+        assert_eq!(
+            press_cleared(None, &uninhabited, |_| false),
+            Ok(selected(128, false, Clearance::NoTrafficControl))
+        );
+        assert_eq!(
+            press_cleared(Some(128), &uninhabited, |_| false),
+            Ok(LandOutcome::Landed(StellarId(128)))
         );
     }
 

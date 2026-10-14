@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use nova_data::records::character::Character;
+use nova_data::records::cron::Cron;
 use nova_data::records::desc::Desc;
 use nova_data::records::disaster::Disaster;
 use nova_data::records::dude::Dude;
@@ -16,6 +17,7 @@ use nova_data::records::junk::Junk;
 use nova_data::records::mission::Mission;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::person::Person;
+use nova_data::records::rank::Rank;
 use nova_data::records::ship::Ship;
 use nova_data::records::ship_anim::ShipAnim;
 use nova_data::records::spin::Spin;
@@ -28,13 +30,14 @@ use nova_data::{GameData, Record, stellar_spin_id};
 
 use crate::blink::Blink;
 use crate::catalog::{
-    AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterId,
-    DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
-    GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord,
-    MissionShip, MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord,
-    PersonWeapon, PilotCatalog, PlaceNames, ShipId, ShipRecord, SoundId, StarSystem, StartDate,
-    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
-    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
+    DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
+    FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar,
+    MissionId, MissionRecord, MissionShip, MissionTexts, OutfitId, OutfitRecord, Penalties,
+    PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId,
+    ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark,
+    StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId,
+    WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -316,7 +319,9 @@ impl PilotCatalog for GameData {
                 let record = disaster.record;
                 Some(DisasterRecord {
                     id: DisasterId(id),
-                    name: disaster.name.unwrap_or_default().to_owned(),
+                    // The loader keeps it up to its last ';'
+                    // (_LoadObjectData @0x7cdd3-0x7ce4d).
+                    name: shown_resource_name(disaster.name.unwrap_or_default()).to_owned(),
                     // The decoder reads -1 (any stellar) as none.
                     stellar: record.stellar.map_or(-1, |stellar| stellar.0),
                     commodity: record.commodity,
@@ -355,6 +360,20 @@ impl PilotCatalog for GameData {
     fn fallback_frame_size(&self) -> Option<(u32, u32)> {
         let sheet = self.spin_sheet(stellar_spin_id(0)?).ok()?.sheet;
         Some((sheet.frame_width(), sheet.frame_height()))
+    }
+
+    /// Each `Visibility` parsed once and shared
+    /// ([`GameData::test_expr`]); a blank one always holds.
+    fn system_visibility(&self) -> Vec<SystemVisibility> {
+        self.records::<System>()
+            .filter_map(|(id, system)| {
+                let system = system.ok()?.record;
+                Some(SystemVisibility {
+                    id: SystemId(id),
+                    visibility: self.test_expr(system.visibility.as_str()).into(),
+                })
+            })
+            .collect()
     }
 
     fn listed_stellars(&self) -> Vec<ListedStellar> {
@@ -514,7 +533,72 @@ impl PilotCatalog for GameData {
             })
             .collect()
     }
+
+    fn crons(&self) -> Vec<CronRecord> {
+        self.records::<Cron>()
+            .filter_map(|(id, cron)| {
+                let record = cron.ok()?.record;
+                Some(CronRecord {
+                    id: CronId(id),
+                    first_day: record.first_day,
+                    first_month: record.first_month,
+                    first_year: record.first_year,
+                    last_day: record.last_day,
+                    last_month: record.last_month,
+                    last_year: record.last_year,
+                    random: record.random,
+                    duration: record.duration,
+                    pre_holdoff: record.pre_holdoff,
+                    post_holdoff: record.post_holdoff,
+                    flags: record.flags.bits(),
+                    enable_on: self.test_expr(record.enable_on.as_str()).into(),
+                    on_start: self.set_expr(record.on_start.as_str()).into(),
+                    on_end: self.set_expr(record.on_end.as_str()).into(),
+                    contribute: record.contribute.bits(),
+                    require: record.require.bits(),
+                    news_govt: record.news_govt.map(|id| id.map_or(-1, |id| id.0)),
+                    govt_news: record.govt_news_str.map(|id| id.map_or(-1, |id| id.0)),
+                    ind_news: record.ind_news_str.map_or(-1, |id| id.0),
+                })
+            })
+            .collect()
+    }
+
+    /// Only IDs 128-255 have a slot (@0x7da37); `AffilGovt` up to 127
+    /// loads as -1 (@0x7dab0-0x7dac3), and a `PriceMod` of 0 or below as
+    /// 100 (@0x7db33-0x7db3a).
+    fn ranks(&self) -> Vec<RankRecord> {
+        self.records::<Rank>()
+            .filter(|(id, _)| (FIRST_RANK..=LAST_RANK).contains(id))
+            .filter_map(|(id, rank)| {
+                let rank = rank.ok()?;
+                let record = rank.record;
+                Some(RankRecord {
+                    id: RankId(id),
+                    name: shown_resource_name(rank.name.unwrap_or_default()).to_owned(),
+                    weight: record.weight,
+                    affil_govt: record.affil_govt.filter(|govt| govt.0 > 127),
+                    salary: record.salary.into(),
+                    salary_cap: record.salary_cap.into(),
+                    contribute: record.contribute.bits(),
+                    flags: record.flags.bits(),
+                    conv_name: record.conv_name.as_str().to_owned(),
+                    short_name: record.short_name.as_str().to_owned(),
+                    price_mod: if record.price_mod <= 0 {
+                        100
+                    } else {
+                        record.price_mod
+                    },
+                })
+            })
+            .collect()
+    }
 }
+
+/// The first `ränk` ID the original's table holds.
+const FIRST_RANK: i16 = 128;
+/// The last: the table holds 128 slots.
+const LAST_RANK: i16 = 255;
 
 /// Whether graphic type `graphic`'s `spïn` in `data` reads and gives a
 /// frame count above 0, its `xTiles` × `yTiles` in 32 bits, as the
@@ -775,6 +859,8 @@ impl CombatCatalog for GameData {
                     comm_name: record.comm_name.as_str().to_owned(),
                     scan_mask: record.scan_mask.bits(),
                     scan_fine: record.scan_fine,
+                    news_pic: record.news_pic,
+                    require: record.require.bits(),
                 })
             })
             .collect()
@@ -983,10 +1069,10 @@ mod tests {
     use super::*;
     use crate::catalog::{
         DisasterId, GateSite, GovtId, GovtRecord, HullRecord, JunkId, Penalties, StarSystem,
-        StartDate, StellarId, StockWeapon, WeaponId, WeaponRecord,
+        StartDate, StellarId, StockWeapon, SystemVisibility, WeaponId, WeaponRecord,
     };
     use crate::combat::weapon::Explosion;
-    use crate::control::{Script, Test};
+    use crate::control::{Script, Test, TestExpr};
 
     /// One data file, `/data/Nova Data`, holding a fork.
     struct OneFile(Vec<u8>);
@@ -1729,6 +1815,34 @@ mod tests {
             "unlisted 130, missing 999, and 133 listed only by an undecodable system left out"
         );
         assert_eq!(store(&[]).gate_sites(), []);
+    }
+
+    #[test]
+    fn each_readable_systems_visibility_is_its_test_parsed_a_blank_one_always() {
+        let mut gated = system();
+        gated[0x96..0x96 + 9].copy_from_slice(b"b5 & !b6\0");
+        let data = store(&[
+            (System::TYPE, 131, gated),
+            (System::TYPE, 130, system()),
+            (System::TYPE, 132, short(system())),
+        ]);
+        let tests = data.system_visibility();
+        assert_eq!(
+            tests,
+            [
+                SystemVisibility {
+                    id: SystemId(130),
+                    visibility: Test::default(),
+                },
+                SystemVisibility {
+                    id: SystemId(131),
+                    visibility: Test::parse("b5 & !b6"),
+                },
+            ],
+            "by ID, the undecodable 132 left out"
+        );
+        assert_eq!(tests[0].visibility.tree(), Some(&TestExpr::Always));
+        assert_eq!(store(&[]).system_visibility(), []);
     }
 
     #[test]
@@ -2537,6 +2651,30 @@ mod tests {
     }
 
     #[test]
+    fn a_disasters_name_is_its_resources_up_to_its_last_semicolon() {
+        let data = store_named(&[
+            (
+                Disaster::TYPE,
+                128,
+                Some("A glut;  ;extra"),
+                disaster(137, 0, -15, 30, 35),
+            ),
+            (
+                Disaster::TYPE,
+                129,
+                Some(";only a note"),
+                disaster(137, 0, -15, 30, 35),
+            ),
+        ]);
+        let names: Vec<_> = data.disasters().into_iter().map(|d| d.name).collect();
+        assert_eq!(
+            names,
+            ["A glut", ""],
+            "cut at the last ';', trailing spaces and ';'s dropped (_LoadObjectData @0x7cdd3)"
+        );
+    }
+
+    #[test]
     fn each_readable_öops_is_an_event_by_id() {
         let mut gated = disaster(-2, 3, 40, 100, 25);
         gated[0x0A..0x0E].copy_from_slice(b"!b80");
@@ -2840,7 +2978,21 @@ mod tests {
         put_i16s(&mut bytes, 0x28, &[2, 10, 16, 9]);
         bytes[0x32..0x34].copy_from_slice(&0x8004_u16.to_be_bytes());
         bytes[0x34..0x3F].copy_from_slice(b"Federation\0");
+        put_i16s(&mut bytes, 0xAE, &[9001]);
+        bytes[0x54..0x5C].copy_from_slice(&0x8000_0000_0000_0021_u64.to_be_bytes());
         bytes
+    }
+
+    #[test]
+    fn a_govt_record_carries_its_require() {
+        let data = store(&[(Govt::TYPE, 128, govt_bytes())]);
+        assert_eq!(
+            data.governments()
+                .iter()
+                .map(|record| record.require)
+                .collect::<Vec<_>>(),
+            [0x8000_0000_0000_0021]
+        );
     }
 
     #[test]
@@ -2870,6 +3022,8 @@ mod tests {
             comm_name: "Federation".to_owned(),
             scan_mask: 0x8004,
             scan_fine: -5,
+            news_pic: 9001,
+            require: 0x8000_0000_0000_0021,
         };
         assert_eq!(
             data.governments(),
@@ -3310,6 +3464,205 @@ mod tests {
         let mut bytes = offered(b"\0");
         put_i16s(&mut bytes, 0x2E, &[govt]);
         bytes
+    }
+
+    /// A `crön` from 1 Sep 1177 to 30 Dec (any year), `Random` 100,
+    /// `Duration` 105, holdoffs 2 and 3, `Flags` 0x0002, these expressions,
+    /// and `Contribute` `0x4_0000_0001` and `Require` 8.
+    fn cron(enable_on: &[u8], on_start: &[u8], on_end: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![0; Cron::SIZE.expect("fixed")];
+        put_i16s(
+            &mut bytes,
+            0x00,
+            &[1, 9, 1177, 30, 12, -1, 100, 105, 2, 3, -1, 0x0002],
+        );
+        bytes[0x18..0x18 + enable_on.len()].copy_from_slice(enable_on);
+        bytes[0x117..0x117 + on_start.len()].copy_from_slice(on_start);
+        bytes[0x216..0x216 + on_end.len()].copy_from_slice(on_end);
+        bytes[0x316..0x31E].copy_from_slice(&0x0000_0004_0000_0001_u64.to_be_bytes());
+        bytes[0x31E..0x326].copy_from_slice(&8_u64.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn crons_read_each_crön_raw() {
+        let data = store_named(&[
+            (Cron::TYPE, 157, None, cron(b"\0", b"\0", b"\0")),
+            (Cron::TYPE, 156, None, cron(b"!b42\0", b"b42\0", b"!b42\0")),
+            (
+                Cron::TYPE,
+                158,
+                None,
+                cron(b"\0", b"\0", b"\0")[..800].to_vec(),
+            ),
+        ]);
+        let crons = data.crons();
+        assert_eq!(
+            crons.iter().map(|cron| cron.id).collect::<Vec<_>>(),
+            [CronId(156), CronId(157)],
+            "by ID, the undecodable one skipped"
+        );
+        assert_eq!(
+            crons[0],
+            CronRecord {
+                id: CronId(156),
+                first_day: 1,
+                first_month: 9,
+                first_year: 1177,
+                last_day: 30,
+                last_month: 12,
+                last_year: -1,
+                random: 100,
+                duration: 105,
+                pre_holdoff: 2,
+                post_holdoff: 3,
+                flags: 0x0002,
+                enable_on: Test::parse("!b42"),
+                on_start: Script::parse("b42"),
+                on_end: Script::parse("!b42"),
+                contribute: 0x0000_0004_0000_0001,
+                require: 8,
+                news_govt: [0; 4],
+                govt_news: [0; 4],
+                ind_news: -1,
+            }
+        );
+        assert_eq!(crons[1].enable_on, Test::default(), "a blank EnableOn");
+        assert_eq!(
+            crons[1].enable_on.tree(),
+            Some(&crate::control::TestExpr::Always)
+        );
+        assert_eq!(crons[1].on_start, Script::default());
+        assert_eq!(store(&[]).crons(), []);
+        for (a, b) in data.crons().iter().zip(&data.crons()) {
+            assert!(shared(&a.enable_on, &b.enable_on), "parsed once");
+            assert!(shared_script(&a.on_start, &b.on_start), "parsed once");
+            assert!(shared_script(&a.on_end, &b.on_end), "parsed once");
+        }
+    }
+
+    #[test]
+    fn crons_carry_their_news_fields_raw() {
+        let mut bytes = cron(b"\0", b"\0", b"\0");
+        put_i16s(&mut bytes, 0x14, &[0]);
+        put_i16s(&mut bytes, 0x326, &[130, 0, -1, 0, 15_000, 0, -1, 0]);
+        let data = store_named(&[(Cron::TYPE, 156, None, bytes)]);
+        let record = &data.crons()[0];
+        assert_eq!(record.news_govt, [130, 0, -1, 0], "-1 and 0 both kept");
+        assert_eq!(record.govt_news, [15_000, 0, -1, 0]);
+        assert_eq!(record.ind_news, 0);
+        let crons = store_named(&[(Cron::TYPE, 157, None, cron(b"\0", b"\0", b"\0"))]).crons();
+        assert_eq!(crons[0].ind_news, -1, "an IndNews of -1 stays -1");
+    }
+
+    /// A `ränk` of `Weight` -3 affiliated with `affil_govt`, `PriceMod`
+    /// 85, `Salary` -200, `SalaryCap` 350000, `Contribute`
+    /// `0x4_0000_0001`, `Flags` 0x0018, `ConvName` "Commander" and
+    /// `ShortName` "Cmdr".
+    fn rank(affil_govt: i16) -> Vec<u8> {
+        use nova_data::records::rank::Rank;
+        let mut bytes = vec![0; Rank::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x00, &[-3, affil_govt, 85]);
+        bytes[0x06..0x0A].copy_from_slice(&(-200_i32).to_be_bytes());
+        bytes[0x0A..0x0E].copy_from_slice(&350_000_i32.to_be_bytes());
+        bytes[0x0E..0x16].copy_from_slice(&0x0000_0004_0000_0001_u64.to_be_bytes());
+        put_i16s(&mut bytes, 0x16, &[0x0018]);
+        bytes[0x18..0x18 + 9].copy_from_slice(b"Commander");
+        bytes[0x58..0x58 + 4].copy_from_slice(b"Cmdr");
+        bytes
+    }
+
+    #[test]
+    fn ranks_read_each_rank_raw_with_its_name_up_to_its_last_semicolon() {
+        use nova_data::records::rank::Rank;
+        let data = store_named(&[
+            (Rank::TYPE, 140, Some("; Rebel 1"), rank(130)),
+            (Rank::TYPE, 128, Some("T5; Vell-os 1"), rank(129)),
+            (Rank::TYPE, 129, None, rank(129)),
+            (Rank::TYPE, 141, Some("Broken"), rank(129)[..100].to_vec()),
+        ]);
+        let ranks = data.ranks();
+        assert_eq!(
+            ranks.iter().map(|rank| rank.id).collect::<Vec<_>>(),
+            [RankId(128), RankId(129), RankId(140)],
+            "by ID, the undecodable one skipped"
+        );
+        assert_eq!(
+            ranks[0],
+            RankRecord {
+                id: RankId(128),
+                name: "T5".to_owned(),
+                weight: -3,
+                affil_govt: Some(GovtId(129)),
+                salary: -200,
+                salary_cap: 350_000,
+                contribute: 0x0000_0004_0000_0001,
+                flags: 0x0018,
+                conv_name: "Commander".to_owned(),
+                short_name: "Cmdr".to_owned(),
+                price_mod: 85,
+            }
+        );
+        assert_eq!(ranks[1].name, "", "no resource name");
+        assert_eq!(ranks[2].name, "", "nothing before the last ';'");
+        assert_eq!(ranks[2].affil_govt, Some(GovtId(130)));
+        assert_eq!(store(&[]).ranks(), []);
+    }
+
+    #[test]
+    fn a_rank_price_mod_of_0_or_below_loads_as_100() {
+        use nova_data::records::rank::Rank;
+        let price_mod = |raw: i16| {
+            let mut bytes = rank(128);
+            put_i16s(&mut bytes, 0x04, &[raw]);
+            bytes
+        };
+        let data = store(&[
+            (Rank::TYPE, 128, price_mod(0)),
+            (Rank::TYPE, 129, price_mod(-5)),
+            (Rank::TYPE, 130, price_mod(1)),
+        ]);
+        assert_eq!(
+            data.ranks()
+                .iter()
+                .map(|rank| rank.price_mod)
+                .collect::<Vec<_>>(),
+            [100, 100, 1],
+            "@0x7db33-0x7db3a"
+        );
+    }
+
+    #[test]
+    fn a_rank_affiliated_at_127_or_below_is_unaffiliated() {
+        use nova_data::records::rank::Rank;
+        let data = store(&[
+            (Rank::TYPE, 128, rank(127)),
+            (Rank::TYPE, 129, rank(-1)),
+            (Rank::TYPE, 130, rank(128)),
+            (Rank::TYPE, 131, rank(0)),
+        ]);
+        assert_eq!(
+            data.ranks()
+                .iter()
+                .map(|rank| rank.affil_govt)
+                .collect::<Vec<_>>(),
+            [None, None, Some(GovtId(128)), None]
+        );
+    }
+
+    #[test]
+    fn only_ranks_128_to_255_are_read() {
+        use nova_data::records::rank::Rank;
+        let data = store(&[
+            (Rank::TYPE, 127, rank(128)),
+            (Rank::TYPE, 128, rank(128)),
+            (Rank::TYPE, 255, rank(128)),
+            (Rank::TYPE, 256, rank(128)),
+        ]);
+        assert_eq!(
+            data.ranks().iter().map(|rank| rank.id).collect::<Vec<_>>(),
+            [RankId(128), RankId(255)]
+        );
     }
 
     #[test]

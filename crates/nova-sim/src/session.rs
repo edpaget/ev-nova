@@ -179,9 +179,10 @@
 //! disabling it too when it was intact), each against the NPC's
 //! government, the record with each government changed and, by that
 //! government's change, the record in each of its systems
-//! ([`legal::convict`]). A mere hit is no crime, as in the original,
-//! and a mission's special ship, of any mark, is no victim of any of
-//! them (see the [`legal`] module's "Crimes").
+//! ([`legal::convict`]). Each conviction then takes the ranks its crime
+//! reaches (see [`rank`](crate::rank)'s **Crimes**). A mere hit is no
+//! crime, as in the original, and a mission's special ship, of any mark,
+//! is no victim of any of them (see the [`legal`] module's "Crimes").
 //!
 //! The player boards its target once it is disabled
 //! ([`Session::board`]), as the [`board`](crate::board) rules say: the
@@ -333,6 +334,7 @@ mod brackets;
 mod cargo_boxes;
 mod cloaks;
 mod control;
+mod crons;
 mod edit;
 mod entry;
 mod escorts;
@@ -347,10 +349,12 @@ mod mission_escorts;
 mod mission_screens;
 mod mission_ships;
 mod missions;
+mod news;
 mod outfits;
 mod person_offers;
 mod persons;
 mod radar;
+mod ranks;
 mod red_alert;
 mod script_effects;
 mod ship_change;
@@ -391,9 +395,10 @@ use crate::board::{
     Take, Taken, check_board,
 };
 use crate::catalog::{
-    CombatCatalog, DateAffixes, GateSite, GovtId, LandingSite, ListedStellar, MissionId,
-    MissionRecord, MissionTexts, OutfitId, OutfitRecord, PersonId, PilotCatalog, PlaceNames,
-    ShipId, ShipRecord, StartError, StellarId, StellarLife, SystemId, TrafficCatalog, WeaponId,
+    CombatCatalog, CronRecord, DateAffixes, GateSite, GovtId, LandingSite, ListedStellar,
+    MissionId, MissionRecord, MissionTexts, OutfitId, OutfitRecord, PersonId, PilotCatalog,
+    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError, StellarId, StellarLife,
+    SystemId, SystemVisibility, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -402,10 +407,10 @@ use crate::combat::armament::{
 use crate::combat::beam::Beam;
 use crate::combat::hull::{Condition, DisableRule, HullSpec};
 use crate::combat::projectile::Shot;
-use crate::combat::report::SimDiagnostic;
+use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
-use crate::control::{ControlBits, NovaBits, ScriptNote, SetOpKind};
+use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
 use crate::escort::{EscortDuty, FormationSlot};
 use crate::flight::{Controls, ShipState, step};
@@ -422,11 +427,11 @@ use crate::hail::CommNote;
 use crate::handling::{Handling, ShipFields};
 use crate::hire::{HireTerms, NovaHire, PayNote};
 use crate::hyperspace::{
-    HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, JumpZoneRule,
+    CoLocated, HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, JumpZoneRule,
     MultiJumpRule, RouteError, StarMap, arrival, check_jump, hops_per_jump, jump_bearing,
     jump_zone, next_hyper_destination,
 };
-use crate::landing::{LandOutcome, LandingRefusal, land_or_select, nearest_landable};
+use crate::landing::{LandOutcome, LandingRefusal, Standing, land_or_select, nearest_landable};
 use crate::legal::{self, Crime, LegalCode};
 use crate::market::{
     self, Direction, EscortHolds, Good, Goods, Market, Markup, Order, TradeRefusal,
@@ -434,6 +439,7 @@ use crate::market::{
 use crate::message::SimMessage;
 use crate::mission::{Offers, StellarMarks};
 use crate::navigation::stellar_under;
+use crate::news::News;
 use crate::order_loop::{self, Onward, OrderRun, Pass};
 use crate::outfitter::{
     self, FIRST_OUTFIT, Hardpoints, LIST_SLOTS, OutfitFlags, OutfitOrder, OutfitRefusal, OutfitRun,
@@ -618,6 +624,8 @@ pub struct Session {
     /// The cargo boxes jettisons left in space (see the `cargo_boxes`
     /// module); never saved, as the original saves none.
     boxes: crate::cargo_box::CargoBoxes,
+    /// What the session reports outside combat.
+    reports: Reports,
     /// The NPC the player targets, if any.
     target: Option<NpcId>,
     /// What the view shows of space about the player's ship (see the
@@ -659,6 +667,10 @@ pub struct Session {
     /// else the first time the bar's list asks it (see
     /// [`RuleKey::DayRolls`]). Not saved.
     hire_rolls: DayRolls<ShipId>,
+    /// The news of the bar visit under way, drawn as the bar opened (see
+    /// the `news` module); forgotten as the docking changes, and never
+    /// saved.
+    bar_news: Option<News>,
     /// Each outfit's roll for sale today: drawn by the daily step, or else
     /// the first time the outfitter's list asks it (see
     /// [`RuleKey::DayRolls`]). Not saved.
@@ -716,9 +728,6 @@ pub struct Session {
     /// What sees each set operator `run_set` hands to `apply_op`: none
     /// outside tests (see `control::SetOpObserver`).
     op_observer: Option<hire::Shared<dyn control::SetOpObserver>>,
-    /// The set operator kinds skipped for want of a handler and told
-    /// already; never saved.
-    unhandled_ops: BTreeSet<SetOpKind>,
     /// What running set expressions had to tell since this was last taken.
     script_notes: Vec<ScriptNote>,
     /// How persons appear (see [`Session::with_person_rules`]).
@@ -774,12 +783,42 @@ pub struct Session {
     fallback_frame: Option<(u32, u32)>,
     /// Every `mïsn`, read when the session starts.
     missions: Vec<MissionRecord>,
+    /// Every `crön`, read when the session starts, shared so the daily
+    /// pass holds them while their scripts run (see the `crons` module).
+    crons: Rc<[CronRecord]>,
+    /// Every `ränk` 128-255, read when the session starts (see the
+    /// `ranks` module).
+    ranks: Rc<[RankRecord]>,
+    /// The rank last activated, which `<RRK>` reads, until `L` or a sweep
+    /// clears it. Never saved: `None` on every [`Session::fly`], as the
+    /// original's `ResetPlayer` (@0x1db44) and `ResetPlayerRecord`
+    /// (@0x1dbf1) reset it (see the `ranks` module).
+    recent_rank: Option<RankId>,
+    /// What the ranks' price multipliers are taken from as the spaceport
+    /// opens, `_DoPortDialog`'s inputs (see the `ranks` module). Never
+    /// saved, as `_priceFluxMult` lives in memory only.
+    port_ranks: ranks::PortRanks,
+    /// The active ranks as the last refresh of the blessing table took
+    /// them (see the `ranks` module). Never saved, as the original's
+    /// table lives in memory only.
+    blessing_ranks: BTreeSet<RankId>,
+    /// Whether the next idle settling refreshes the blessing table again:
+    /// set by a take-off, a gate exit and a jump's arrival (see the
+    /// `ranks` module).
+    blessing_due: bool,
     /// What the screens show of each `mïsn`, read when the session
     /// starts (see the `mission_screens` module).
     mission_texts: BTreeMap<MissionId, MissionTexts>,
     /// Every stellar some system lists, read when the session starts:
     /// what a mission's stellars are chosen from, with the galaxy overlay.
     listed_stellars: Vec<ListedStellar>,
+    /// Every system's `Visibility`, read when the session starts: what the
+    /// galaxy refresh evaluates (see the `story` module).
+    visibility: Rc<[SystemVisibility]>,
+    /// Whether a set expression has changed the pilot since the last
+    /// settling: by the other reading of [`RuleKey::VisibilityRefresh`]
+    /// the settling refreshes the galaxy then.
+    galaxy_stale: bool,
     /// Every stellar's and system's name, read when the session starts:
     /// what the text tags read (see the `missions` module).
     place_names: PlaceNames,
@@ -847,13 +886,23 @@ impl Session {
     /// record); one whose legal records in each system are not yet
     /// derived, a new pilot or a save from before they were kept, derives
     /// them from its records with each government
-    /// ([`legal::systems_from_govts`]); and the reserves hold no more than
-    /// the stats allow. No secondary is selected, as the original's
-    /// `_ResetPlayer` leaves it before `_LoadPilotData` (@0x76502,
+    /// ([`legal::systems_from_govts`]); one saved with a crön running
+    /// or a rank active that the data no longer has forgets it; and the
+    /// reserves hold no more than the stats allow. No secondary is
+    /// selected, as the original's `_ResetPlayer` leaves it before
+    /// `_LoadPilotData` (@0x76502,
     /// @0x7673e), which never sets one.
     ///
+    /// Every system's visibility is evaluated from its `Visibility` against
+    /// the pilot's bits, the saved flags never trusted, quietly: the load's
+    /// galaxy refresh, which moves a pilot whose system it hides as any
+    /// refresh does (see the [`story`](crate::story) module's "Visibility
+    /// and governments").
+    ///
     /// A pilot last landed on a stellar of its system resumes docked there,
-    /// silently, as the original resumes a pilot at its last planet; so
+    /// silently, as the original resumes a pilot at its last planet, the
+    /// spaceport opening with its ranks' price multipliers (see the
+    /// `ranks` module); so
     /// does one whose stellar is another system's at its place that the
     /// galaxy overlay hid, its own system's stellars waiting for the
     /// take-off.
@@ -891,6 +940,18 @@ impl Session {
                 &govts,
             ));
         }
+        // A crön the data no longer has is inactive (`_LoadPilotData`
+        // @0x75fbc-0x76025; see the `crons` module).
+        let crons: Rc<[CronRecord]> = catalog.crons().into();
+        pilot
+            .crons
+            .retain(|id, _| crons.iter().any(|record| record.id == *id));
+        // So is a rank (`_LoadPilotData` @0x75e47-0x75eb6; see the
+        // `ranks` module).
+        let ranks: Rc<[RankRecord]> = catalog.ranks().into();
+        pilot
+            .ranks
+            .retain(|id| ranks.iter().any(|record| record.id == *id));
         let system = pilot.system;
         let here = overlaid_sites(&galaxy, catalog, system);
         let (docked, dock) = docking(&galaxy, catalog, &pilot, &here);
@@ -949,6 +1010,7 @@ impl Session {
             trigger: Trigger::default(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),
+            reports: Reports::default(),
             target: None,
             play_area: crate::cloak::DEFAULT_PLAY_AREA,
             secondary: None,
@@ -963,6 +1025,7 @@ impl Session {
             hire_terms: hire::Shared(Rc::new(NovaHire::default())),
             control_bits: hire::Shared(Rc::new(NovaBits)),
             hire_rolls: DayRolls::default(),
+            bar_news: None,
             outfit_rolls: DayRolls::default(),
             outfit_visit: OutfitVisit::default(),
             outfit_reselected: None,
@@ -976,7 +1039,6 @@ impl Session {
             sound_quiet: false,
             pay_notes: Vec::new(),
             op_observer: None,
-            unhandled_ops: BTreeSet::new(),
             script_notes: Vec::new(),
             person_rules: hire::Shared(Rc::new(NovaPersons::default())),
             quote_clock: persons::QuoteClock::default(),
@@ -999,12 +1061,20 @@ impl Session {
             rebuilt: Rebuilt::default(),
             fallback_frame: catalog.fallback_frame_size(),
             missions: catalog.missions(),
+            crons,
+            ranks,
+            recent_rank: None,
+            port_ranks: ranks::PortRanks::default(),
+            blessing_ranks: BTreeSet::new(),
+            blessing_due: false,
             mission_texts: catalog
                 .mission_texts()
                 .into_iter()
                 .map(|texts| (texts.id, texts))
                 .collect(),
             listed_stellars: catalog.listed_stellars(),
+            visibility: catalog.system_visibility().into(),
+            galaxy_stale: false,
             place_names: catalog.place_names(),
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
             offers: Offers::default(),
@@ -1030,15 +1100,24 @@ impl Session {
         session.open_outfit_visit();
         session.refit(false, ReservePolicy::Hold);
         session.restock_fleet();
+        // A load's galaxy refresh (`_LoadPilotData` @0x751ca, @0x7531f),
+        // with the facts complete; a new pilot's is `_DoNewPilot`'s, before
+        // its `OnStart` (@0x1925e).
+        session.refresh_galaxy_quietly(catalog);
         // A new pilot's and a load's nebulae (@0x19118, @0x765bc).
         let system = session.pilot.system;
         session.raise(StoryEvent::Explored { system });
         // A load forgets the stellar the offers were rolled at (@0x75ef5)
         // and opens the spaceport, so a pilot resumed docked has them
-        // rolled afresh (see the `missions` module).
+        // rolled afresh (see the `missions` module), and its prices taken
+        // as `_DoPortDialog` takes them (see the `ranks` module).
         if let Some(stellar) = session.landed {
+            session.open_port_prices();
             session.raise(StoryEvent::Landed { stellar });
         }
+        // Game entry's refresh of the blessing (`_EnterGameFromMainScreen`
+        // @0x19ffb; see the `ranks` module).
+        session.refresh_blessing();
         Ok(session)
     }
 
@@ -1056,6 +1135,9 @@ impl Session {
     /// Setting such a rule here alone changes nothing.
     #[must_use]
     pub fn with_rules(mut self, rules: Rulebook) -> Self {
+        self.galaxy.set_colocated(CoLocated::from(
+            rules.source_for(RuleKey::ColocatedResolution),
+        ));
         self.rules = rules;
         self
     }
@@ -1697,7 +1779,9 @@ impl Session {
     /// before the fight's tick. A mission's special ship, of any mark,
     /// is convicted of neither: `_DamageShip` passes the ship's mark
     /// (@0x3adb3, @0x3ae08), and `_SlapWithPenalty` slaps only for none
-    /// (@0x9c10; see the [`legal`] module's "Crimes").
+    /// (@0x9c10; see the [`legal`] module's "Crimes"). Each conviction
+    /// then takes the ranks its crime reaches (see [`rank`](crate::rank)'s
+    /// **Crimes**).
     fn punish(&mut self, strikes: &[Strike], was: &[NpcBefore], law: &dyn LegalCode) {
         for strike in strikes.iter().filter(|strike| strike.by == ShipRef::Player) {
             let ShipRef::Npc(id) = strike.ship else {
@@ -1721,6 +1805,7 @@ impl Session {
             for &crime in crimes {
                 let changes = law.penalties(crime, govt, &self.govts);
                 legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+                self.lose_ranks_to(crime, govt);
             }
         }
     }
@@ -1851,7 +1936,9 @@ impl Session {
     /// each made once a session, since they were last taken; taking them
     /// empties the list.
     pub fn take_diagnostics(&mut self) -> Vec<SimDiagnostic> {
-        self.combat.take_diagnostics()
+        let mut diagnostics = self.combat.take_diagnostics();
+        diagnostics.extend(self.reports.take());
+        diagnostics
     }
 
     /// The NPCs in the system, in the order they appeared.
@@ -2086,6 +2173,13 @@ impl Session {
     /// passed and the one arrived in, as the original explores their
     /// nebulae first; [`StoryEvent::EnteredSystem`] follows the days.
     ///
+    /// It refreshes the galaxy (`_PropagateMissionBitEffects` @0x6bf3f):
+    /// every system's `Visibility` evaluated before the days, so a bit
+    /// their scripts set shows only at the next refresh, and written once
+    /// the hops and the systems explored are resolved by the flags as they
+    /// stood, before the system is entered, telling
+    /// [`SessionEvent::GalaxyChanged`] when it changed anything.
+    ///
     /// Its first draw on `chance` arms the escort-strength timer (see
     /// [`strength`]), before the days, the roll
     /// table and the population, as the original does (@0x6c013).
@@ -2099,6 +2193,10 @@ impl Session {
         };
         self.jump = None;
         let mark = self.story_mark();
+        // The galaxy refresh evaluated before the days, so a bit their
+        // scripts set waits for the next refresh (@0x6bf3f, days
+        // @0x6c144).
+        let hidden = self.hidden_now();
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.arm_strength_timer(chance);
@@ -2150,8 +2248,24 @@ impl Session {
                 hold: false,
             },
         };
+        // The refresh written, with the hops and the systems explored
+        // resolved by the flags as they stood (@0x6bd67-0x6bdd4,
+        // @0x6be0b). The player is between systems: its entry resolves the
+        // arrival by the same rule as any move out of a hidden system.
+        if self
+            .write_galaxy(|overlay| {
+                overlay.set_hidden(&hidden);
+            })
+            .is_some()
+        {
+            self.emit(SessionEvent::GalaxyChanged);
+        }
         self.jumped_from = Some(from);
         self.enter_system(Entry::Jump { hops }, entered, catalog, catalog, chance);
+        // The arrival's refresh of the blessing, after the days, the
+        // enter-system hook and the setup (@0x6c51f; see the `ranks`
+        // module).
+        self.refresh_blessing_at_entry();
         Some(self.pilot.system)
     }
 
@@ -2316,8 +2430,11 @@ impl Session {
     /// Presses the land key, unless a jump is under way, its pre-jump stage
     /// included: as the
     /// [`landing`](crate::landing) rules say, with the navigation target
-    /// and the pilot's legal record with the stellar's government, or the
-    /// system's on the star map when the stellar has none. A press that
+    /// and traffic control's clearance
+    /// ([`landing::cleared`](crate::landing::cleared)) of the pilot's
+    /// standing: its legal record, the `Require` its ranks meet, its
+    /// missions' stellars and the blessing table (see the `ranks` module),
+    /// read as the session's `blessing_landing` rule says. A press that
     /// selects a stellar makes it the navigation target, starting its
     /// brackets' fly-in (@0x6a932), and lands on nothing. A press that
     /// lands docks the ship at the stellar's centre, at rest, its heading
@@ -2337,11 +2454,13 @@ impl Session {
         if self.condition != Condition::Intact {
             return Err(LandingRefusal::Disabled);
         }
+        let blessing = self.blessing();
+        let reading = self.rules.source_for(RuleKey::BlessingLanding);
         let outcome = land_or_select(
             self.nav_target,
             &self.player,
             &self.sites,
-            |site| self.landing_record(site),
+            |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
             |site| self.landing_reach(site),
         )?;
         match outcome {
@@ -2526,8 +2645,10 @@ impl Session {
             }
         };
         // A gate's exit joins the take-off's path before its seed
-        // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f).
+        // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f), and its refresh
+        // of the blessing (@0x6709b; see the `ranks` module).
         self.arm_strength_timer(chance);
+        self.refresh_blessing_at_entry();
         self.exit_gate_slots(kind, catalog, &mut &mut *chance);
         let entered = Arrival {
             system,
@@ -2542,8 +2663,9 @@ impl Session {
         self.emerge_followers(exit.position, catalog, chance);
     }
 
-    /// Docks the ship at `stellar`, one of the system's, and last raises
-    /// [`StoryEvent::Landed`].
+    /// Docks the ship at `stellar`, one of the system's, takes the ranks'
+    /// price multipliers as the spaceport opens (see the `ranks` module),
+    /// and last raises [`StoryEvent::Landed`].
     fn dock(&mut self, stellar: StellarId) {
         self.nav_target = None;
         self.touchdown = self.player.position;
@@ -2555,6 +2677,7 @@ impl Session {
         self.player.velocity = Vec2::ZERO;
         self.landed = Some(stellar);
         self.pilot.stellar = Some(stellar);
+        self.bar_news = None;
         self.combat.clear();
         // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40).
         self.clear_boxes();
@@ -2569,6 +2692,10 @@ impl Session {
         // The Red Alert's icon hidden, its threat kept (@0x66d84-0x66da0).
         self.red_alert.clear_icon();
         self.sounds.push(SimSound::Landed { stellar_sound });
+        // `_DoPortDialog` takes the price multipliers before its mission
+        // land check (@0x5fbeb) and its rebuild point (see the `ranks`
+        // module).
+        self.open_port_prices();
         self.raise(StoryEvent::Landed { stellar });
         // The port dialog's rebuild point (@0x5fbf0).
         self.rebuild_stellars();
@@ -2635,6 +2762,7 @@ impl Session {
     ) -> Option<StellarId> {
         let stellar = self.landed.take()?;
         let stay = std::mem::take(&mut self.stay);
+        self.bar_news = None;
         let stay_days = self.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
         if stay_days {
             self.pass_days(stay.escort_days(), chance);
@@ -2667,6 +2795,9 @@ impl Session {
         // before both (@0x634df-0x6353c).
         self.restart_every_aux(&mut &mut *chance);
         self.arm_strength_timer(chance);
+        // The dock request's refresh of the blessing, after the stay's
+        // days and before the setup (@0x6709b; see the `ranks` module).
+        self.refresh_blessing_at_entry();
         self.populate(catalog, chance);
         self.sounds.push(SimSound::TookOff);
         self.save_due = true;
@@ -2744,6 +2875,30 @@ impl Session {
         }
     }
 
+    /// What traffic control weighs of the pilot at `site` (see
+    /// [`landing::cleared`](crate::landing::cleared)), its government
+    /// blessing as `blessing` says: the legal record
+    /// ([`Session::landing_record`]), whether the pilot's ranks contribute
+    /// every `Require` bit of `site`'s government, whether `site` is an
+    /// active mission's travel or return stellar, compared as raw IDs over
+    /// every slot, failed ones included (@0x67996-0x679b4), and whether its
+    /// government blesses landing.
+    fn standing(&self, site: &LandingSite, blessing: &crate::rank::Blessing) -> Standing {
+        let require = self.govts.require(site.govt);
+        let mission_stellar = self.pilot.missions().iter().any(|(_, active)| {
+            [active.destination, active.return_to]
+                .into_iter()
+                .flatten()
+                .any(|stop| stop.stellar == site.id)
+        });
+        Standing {
+            record: self.landing_record(site),
+            meets_require: self.contributed() & require == require,
+            mission_stellar,
+            blessed: blessing.blesses(site.govt, crate::rank::Blessed::Landing),
+        }
+    }
+
     /// The player's legal record that `site`'s `MinStatus` is checked
     /// against: by the engine the record in the current system, whatever
     /// the stellar's government (`_HandlePlayerDockRequest` @0x67903); by
@@ -2816,6 +2971,8 @@ impl Session {
         let mut rolls = std::mem::take(&mut self.outfit_rolls);
         let outfitter = Shop {
             records: &self.outfits,
+            crons: &self.crons,
+            ranks: &self.ranks,
             fields: self.fields,
             standard: &self.standard(),
             site,
@@ -2825,6 +2982,7 @@ impl Session {
             free_cargo: self.free_cargo(),
             launchers: &self.launchers(),
             visit: &self.outfit_visit,
+            price_mult: self.outfit_price_mult(),
             rules: self.rules,
             gate: self.gate(),
         }
@@ -3081,7 +3239,7 @@ impl Session {
             }
             return Err(refusal);
         }
-        let price = outfitter.row(order.outfit).map_or(0, |row| row.price);
+        let price = outfitter.row(order.outfit).map_or(0, |row| row.buy_price);
         let record = self
             .outfits
             .iter()
@@ -3187,9 +3345,12 @@ impl Session {
         let shipyard = Yard {
             ships: &self.ships,
             outfits: &self.outfits,
+            crons: &self.crons,
+            ranks: &self.ranks,
             arsenal: &self.arsenal,
             fields: self.fields,
             site,
+            mults: self.price_mults(),
             rules: self.rules,
             gate: self.gate(),
         }
@@ -3491,10 +3652,12 @@ impl Session {
     /// Boards the player's target, if it is not landed or jumping and the
     /// [`board`](crate::board) checks allow it, and gives what is on
     /// board: the player matches the target's velocity, `law` convicts it
-    /// of the [`Crime::Board`] against the target's government (but for
-    /// a mission's special ship, here one of a failed mission: the
-    /// original passes its mark, `_HandlePlayerBoardAttempt` @0x6582b,
-    /// and `_SlapWithPenalty` slaps only for none, @0x9c10), the
+    /// of the [`Crime::Board`] against the target's government and the
+    /// boarding takes the ranks it reaches (see [`rank`](crate::rank)'s
+    /// **Crimes**; but for a mission's special ship, here one of a
+    /// failed mission: the original passes its mark,
+    /// `_HandlePlayerBoardAttempt` @0x6582b, and `_SlapWithPenalty`
+    /// slaps only for none, @0x9c10), the
     /// NPCs come to the target's help as for a hit by the player (a
     /// strike of no damage, answered on the next traffic tick), the
     /// target is marked boarded, and every other NPC after it lets it go
@@ -3549,6 +3712,7 @@ impl Session {
         if npc.mission.is_none() {
             let changes = law.penalties(Crime::Board, npc.govt, &self.govts);
             legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
+            self.lose_ranks_to(Crime::Board, npc.govt);
         }
         self.strikes.push(Strike {
             ship: ShipRef::Npc(npc.id),
@@ -3734,7 +3898,7 @@ impl Session {
             return Taken::Nothing;
         };
         if take == Take::Abort || !self.npcs().iter().any(|npc| npc.id == aboard.npc) {
-            self.aboard = None;
+            self.close_plunder();
             return Taken::Aborted;
         }
         if !aboard.view().offers(take) {
@@ -3857,7 +4021,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Taken {
         if !rule.captures(aboard.plunder.odds, chance) {
-            self.aboard = None;
+            self.close_plunder();
             return Taken::CaptureFailed;
         }
         if chance.below(CAPTURE_TRIP) == 0 {
@@ -3873,7 +4037,7 @@ impl Session {
             self.aboard = Some(aboard);
             return Taken::Captured;
         }
-        self.aboard = None;
+        self.close_plunder();
         self.ship_hook(aboard.ship, ShipHook::Capture, chance);
         self.join_fleet(aboard.npc);
         Taken::Escorted
@@ -3888,7 +4052,15 @@ impl Session {
                 npc.reserves.armor.now = 0.0;
             }
         }
+        self.close_plunder();
+    }
+
+    /// Closes the plunder dialog: the boarding is over, and the blessing
+    /// table is refreshed, as `_DoPlunderDialog`'s only exit does
+    /// (@0x94a0b; see the `ranks` module).
+    fn close_plunder(&mut self) {
         self.aboard = None;
+        self.refresh_blessing();
     }
 
     /// NPC `id`, captured, joins the fleet where it is: no longer its
@@ -3994,7 +4166,7 @@ impl Session {
     /// "Use As Escort" leaves it as it is.
     pub fn assign(&mut self, choice: Assignment, chance: &mut dyn Chance) -> Option<Assigned> {
         let aboard = self.aboard.filter(|aboard| aboard.captured)?;
-        self.aboard = None;
+        self.close_plunder();
         let npc = self
             .npcs()
             .iter()
@@ -4370,7 +4542,7 @@ mod tests {
     };
     use crate::testkit::{
         FAST, FakePilotCatalog, START, Scripted, begin_jump_now, catalog, edge_lander, fly_out,
-        jump, jump_with, land_now, outfit, planet, star, starting,
+        hideable, hiding_bit, jump, jump_with, land_now, outfit, planet, star, starting,
     };
     use entry::NoTraffic;
 
@@ -4667,7 +4839,7 @@ mod tests {
             crate::landing::check_landing(
                 &flying,
                 &planet(128, 30.0, -40.0),
-                |_| 0,
+                |_| true,
                 crate::landing::LandingReach::Box(175.0)
             )
             .map(|_| StellarId(128))
@@ -10490,17 +10662,23 @@ mod tests {
 
     /// [`outfitting`], where planet 128 is a shipyard too, selling ship
     /// 128 (FAST, 10,000 credits) and ship 129 ([`HEAVY`], 17,500
-    /// credits, carrying a fuel tank).
+    /// credits, carrying a fuel tank). Both are of tech level 5, the
+    /// planet's, so the shipyard's flux takes no low-tech discount from
+    /// their prices.
     pub(super) fn shipbuying() -> FakePilotCatalog {
         FakePilotCatalog {
             sites: vec![(SystemId(130), vec![shipyard_site()])],
             ships: vec![(ShipId(128), Ok(FAST)), (ShipId(129), Ok(HEAVY))],
             defaults: vec![(ShipId(129), vec![(TANK, 1)])],
             ship_records: vec![
-                ship(128, FAST),
+                ShipRecord {
+                    tech_level: 5,
+                    ..ship(128, FAST)
+                },
                 ShipRecord {
                     cost: 17_500,
                     defaults: vec![(TANK, 1)],
+                    tech_level: 5,
                     ..ship(129, HEAVY)
                 },
             ],
@@ -10668,17 +10846,8 @@ mod tests {
         );
         assert_eq!(poor, before);
         assert!(!poor.take_save_due());
-        let cheap = FakePilotCatalog {
-            ship_records: vec![
-                ship(128, FAST),
-                ShipRecord {
-                    cost: 1000,
-                    defaults: vec![(TANK, 1)],
-                    ..ship(129, HEAVY)
-                },
-            ],
-            ..shipbuying()
-        };
+        let mut cheap = shipbuying();
+        cheap.ship_records[1].cost = 1000;
         let mut indebted = outfitted(&cheap);
         indebted.pilot.cash = -1;
         let unchanged = indebted.clone();
@@ -10945,7 +11114,10 @@ mod tests {
         assert_eq!(outfitter.free_mass, 12, "its tank is fitted on top");
         let shipyard = session.shipyard(&mut NeverFires).expect("a shipyard");
         assert_eq!(shipyard.current, NEW);
-        assert_eq!(shipyard.trade_in, 17_500 / 4 + 500, "the hull and its tank");
+        assert_eq!(
+            shipyard.trade_in, 4870,
+            "the hull and its tank, 4375 + 500, rounded down to ten by the flux"
+        );
     }
 
     // Stock weapons.
@@ -11130,9 +11302,9 @@ mod tests {
             .expect("bought");
         let shipyard = session.shipyard(&mut NeverFires).expect("a shipyard");
         assert_eq!(
-            shipyard.trade_in,
-            17_500 / 4 + 500 + 500 + 1000 + 20 * 10,
-            "a quarter of the hull, and half its tank, gun, launcher and rockets"
+            shipyard.trade_in, 6570,
+            "a quarter of the hull, and half its tank, gun, launcher and rockets, \
+             4375 + 500 + 500 + 1000 + 200 = 6575, rounded down to ten by the flux"
         );
     }
 
@@ -13073,6 +13245,100 @@ mod tests {
                 "{marked:?}"
             );
         }
+    }
+
+    /// [`lawful`] with ranks 200 (of 141, allied with the NPC's 140) and
+    /// 201 (of 143, neutral), each lost to disabling or destroying, and
+    /// 202 (of 141), lost to any crime.
+    fn ranked_lawful() -> FakePilotCatalog {
+        let lost = |id, govt, flags| RankRecord {
+            affil_govt: Some(GovtId(govt)),
+            flags,
+            ..crate::testkit::rank(id)
+        };
+        FakePilotCatalog {
+            ranks: vec![
+                lost(200, 141, crate::rank::LOST_TO_VIOLENCE),
+                lost(201, 143, crate::rank::LOST_TO_VIOLENCE),
+                lost(202, 141, crate::rank::LOST_TO_CRIME),
+            ],
+            ..lawful()
+        }
+    }
+
+    /// The session's active ranks.
+    fn ranks_held(session: &Session) -> Vec<i16> {
+        session.pilot().ranks().iter().map(|id| id.0).collect()
+    }
+
+    /// [`ranked_lawful`]'s session by `rules`, holding all its ranks,
+    /// its NPC marked as `marked` says, the player firing at it.
+    fn fighting_ranked(marked: Option<Marked>, rules: Rulebook) -> Session {
+        let catalog = ranked_lawful();
+        let mut session = facing_an_npc(&catalog, 180).with_rules(rules);
+        if let Some(marked) = marked {
+            mark_the_npc(&mut session, marked);
+        }
+        session
+            .pilot
+            .ranks
+            .extend([RankId(200), RankId(201), RankId(202)]);
+        session.hold_trigger(FIRE);
+        session
+    }
+
+    /// Fights until NPC 0 is disabled, at most 80 ticks.
+    fn fight_until_disabled(session: &mut Session) {
+        for _ in 0..80 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            if session.npcs().first().map(|npc| npc.condition) == Some(Condition::Disabled) {
+                return;
+            }
+        }
+        panic!("never disabled");
+    }
+
+    #[test]
+    fn disabling_and_destroying_an_npc_takes_the_ranks_they_reach() {
+        let mut session = fighting_ranked(None, Rulebook::default());
+        fight_until_disabled(&mut session);
+        assert_eq!(
+            ranks_held(&session),
+            [201],
+            "a disabling reaches its ally's ranks, not a neutral's"
+        );
+        session.pilot.ranks.insert(RankId(200));
+        for _ in 0..80 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert_eq!(session.npcs(), [], "destroyed");
+        assert_eq!(ranks_held(&session), [201], "and so does a killing");
+    }
+
+    #[test]
+    fn downing_a_mission_ship_takes_no_rank() {
+        for marked in MARKS {
+            let mut session = fighting_ranked(Some(marked), Rulebook::default());
+            for _ in 0..80 {
+                session.tick_combat(Rules::default(), &mut NeverFires);
+            }
+            assert_eq!(session.npcs(), [], "{marked:?}: destroyed");
+            assert_eq!(ranks_held(&session), [200, 201, 202], "{marked:?}: @0x9c10");
+        }
+    }
+
+    #[test]
+    fn by_the_other_reading_of_rank_crime_reach_an_allied_victim_keeps_a_0x40_rank() {
+        let mut session = fighting_ranked(
+            None,
+            Rulebook::default().with_override(RuleKey::RankCrimeReach, RuleSource::Bible),
+        );
+        fight_until_disabled(&mut session);
+        assert_eq!(
+            ranks_held(&session),
+            [201, 202],
+            "0x0004 reaches the allies, 0x0040 only its own government"
+        );
     }
 
     /// What downing [`crimes_against_a_failing_escort`]'s ship did.
@@ -15631,6 +15897,45 @@ mod tests {
         board_by(&mut session, &NovaLaw::default()).expect("boards");
         assert_eq!(session.pilot().system_record(SystemId(130)), -5);
         assert_eq!(session.pilot().legal_record(GovtId(140)), -5);
+    }
+
+    /// [`boardable`] with ranks 200 (of the traders, 140), lost to any
+    /// crime, and 201 (of 140), lost to disabling or destroying.
+    fn boardable_ranked() -> FakePilotCatalog {
+        let lost = |id, flags| RankRecord {
+            affil_govt: Some(GovtId(140)),
+            flags,
+            ..crate::testkit::rank(id)
+        };
+        FakePilotCatalog {
+            ranks: vec![
+                lost(200, crate::rank::LOST_TO_CRIME),
+                lost(201, crate::rank::LOST_TO_VIOLENCE),
+            ],
+            ..boardable()
+        }
+    }
+
+    #[test]
+    fn boarding_takes_a_0x40_rank_but_not_a_0x04_rank() {
+        let catalog = boardable_ranked();
+        let mut session = alongside(&catalog);
+        session.pilot.ranks.extend([RankId(200), RankId(201)]);
+        board_by(&mut session, &NovaLaw::default()).expect("boards");
+        assert_eq!(ranks_held(&session), [201]);
+    }
+
+    #[test]
+    fn boarding_a_mission_ship_takes_no_rank() {
+        let catalog = boardable_ranked();
+        for marked in MARKS {
+            let mut session = alongside(&catalog);
+            mark_the_npc(&mut session, marked);
+            session.pilot.ranks.extend([RankId(200), RankId(201)]);
+            board_by(&mut session, &NovaLaw::default()).expect("boards");
+            assert!(session.npcs()[0].boarded, "{marked:?}");
+            assert_eq!(ranks_held(&session), [200, 201], "{marked:?}: @0x9c10");
+        }
     }
 
     #[test]
@@ -18686,23 +18991,54 @@ mod tests {
         catalog
     }
 
-    /// Adds [`alternates`]' 134 to `catalog`.
+    /// Adds [`alternates`]' 134 to `catalog`, and makes every system on
+    /// its map [`hideable`].
     fn with_alternate(catalog: &mut FakePilotCatalog) {
         catalog.star_map.push(star(134, (600.0, 0.0), &[130, 132]));
         catalog.systems.push(SystemId(134));
         catalog
             .sites
             .push((SystemId(134), vec![planet(141, 0.0, 0.0)]));
+        hideable(catalog);
     }
 
-    /// Hides each of `systems` through the one writer, in one change:
-    /// whether it changed anything.
-    fn hide(session: &mut Session, catalog: &FakePilotCatalog, systems: &[i16]) -> bool {
-        session.change_galaxy(catalog, |overlay| {
-            for &id in systems {
-                overlay.set_visible(SystemId(id), Some(false));
+    /// Hides each of `systems` of a [`hideable`] `catalog` as play does: its
+    /// hiding bit set, then the galaxy refreshed, as at a refresh point, so
+    /// every later refresh keeps it hidden. Whether that changed anything.
+    pub(super) fn hide(session: &mut Session, catalog: &FakePilotCatalog, systems: &[i16]) -> bool {
+        set_hiding(session, catalog, systems, true)
+    }
+
+    /// Shows each of `systems` of a [`hideable`] `catalog` again, as
+    /// [`hide`] hides it.
+    fn unhide(session: &mut Session, catalog: &FakePilotCatalog, systems: &[i16]) -> bool {
+        set_hiding(session, catalog, systems, false)
+    }
+
+    /// Sets or clears each of `systems`' hiding bit, then refreshes the
+    /// galaxy: whether that changed anything.
+    fn set_hiding(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        systems: &[i16],
+        hidden: bool,
+    ) -> bool {
+        for &id in systems {
+            assert!(
+                catalog
+                    .visibility
+                    .iter()
+                    .any(|test| test.id == SystemId(id)),
+                "sÿst {id} is hideable"
+            );
+            let bits = session.pilot.bits_mut();
+            if hidden {
+                bits.set(hiding_bit(id));
+            } else {
+                bits.clear(hiding_bit(id));
             }
-        })
+        }
+        session.refresh_galaxy(catalog)
     }
 
     /// Whether the player is in a system on the overlaid map.
@@ -18719,10 +19055,86 @@ mod tests {
         assert_eq!(session.course_shown(), []);
     }
 
+    /// The session over `catalog` with `colocated_resolution` reading
+    /// `source`.
+    fn resolving(catalog: &FakePilotCatalog, source: RuleSource) -> Session {
+        Session::start(catalog)
+            .expect("starts")
+            .with_rules(Rulebook::default().with_override(RuleKey::ColocatedResolution, source))
+    }
+
+    #[test]
+    fn by_the_engine_a_place_of_two_visible_systems_is_the_lowest_one() {
+        let catalog = alternates();
+        let mut session = resolving(&catalog, RuleSource::Engine);
+        assert_eq!(
+            session
+                .star_map()
+                .jumps(SystemId(130), HyperlinkRule::Engine),
+            ids(&[131])
+        );
+        assert_eq!(
+            session.plot_course(SystemId(134)),
+            Err(RouteError::Unreachable),
+            "134 is shadowed by 131"
+        );
+        land_now(&mut session).expect("lands");
+        session
+            .relocate(&catalog, SystemId(134), StellarId(141))
+            .expect("relocates");
+        assert_eq!(session.system(), SystemId(131), "resolved to the lowest");
+        assert!(session.galaxy().visible(SystemId(134)), "still visible");
+    }
+
+    #[test]
+    fn by_the_other_reading_a_visible_system_at_a_shared_place_stands_for_itself() {
+        let catalog = alternates();
+        let mut session = resolving(&catalog, RuleSource::Bible);
+        assert_eq!(
+            session
+                .star_map()
+                .jumps(SystemId(130), HyperlinkRule::Engine),
+            ids(&[131, 134])
+        );
+        assert_eq!(jump(&mut session, &catalog, 134), Some(SystemId(134)));
+        assert_eq!(session.system(), SystemId(134), "and stays");
+        let mut session = resolving(&catalog, RuleSource::Bible);
+        land_now(&mut session).expect("lands");
+        session
+            .relocate(&catalog, SystemId(134), StellarId(141))
+            .expect("relocates");
+        assert_eq!(session.system(), SystemId(134));
+    }
+
     #[test]
     fn a_hidden_system_leaves_the_hyperlinks_for_the_one_at_its_place() {
         let catalog = alternates();
-        let mut session = Session::start(&catalog).expect("starts");
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = resolving(&catalog, source);
+            let jumps = session
+                .star_map()
+                .jumps(SystemId(130), HyperlinkRule::Engine);
+            let both = ids(&[131, 134]);
+            let lowest = ids(&[131]);
+            assert_eq!(
+                jumps,
+                if source == RuleSource::Engine {
+                    lowest
+                } else {
+                    both
+                },
+                "{source:?}"
+            );
+            assert!(hide(&mut session, &catalog, &[131]));
+            assert_eq!(
+                session
+                    .star_map()
+                    .jumps(SystemId(130), HyperlinkRule::Engine),
+                ids(&[134]),
+                "{source:?}"
+            );
+        }
+        let mut session = resolving(&catalog, RuleSource::Bible);
         let jumps = |session: &Session| {
             session
                 .star_map()
@@ -18782,9 +19194,7 @@ mod tests {
         fly_out(&mut session);
         assert_eq!(session.begin_jump(), Err(JumpRefusal::NoDestination));
         assert_eq!(session.jump_readiness(), JumpReadiness::Blocked);
-        session.change_galaxy(&catalog, |overlay| {
-            overlay.set_visible(SystemId(131), None);
-        });
+        unhide(&mut session, &catalog, &[131]);
         assert_eq!(session.course_shown(), ids(&[131, 132]), "followed again");
         assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
     }
@@ -19161,8 +19571,12 @@ mod tests {
     fn a_pilot_flown_landed_in_a_hidden_system_stays_landed_until_the_take_off() {
         let catalog = alternates();
         let mut pilot = landed_at_140();
+        // Saved while 131 is hidden by its `Visibility`: the load's refresh
+        // keeps it hidden.
+        pilot.bits_mut().set(hiding_bit(131));
         pilot.galaxy.set_visible(SystemId(131), Some(false));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert!(!session.galaxy().visible(SystemId(131)));
         session.assert_docked_among_shown();
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.landed(), Some(StellarId(140)));
@@ -19173,9 +19587,30 @@ mod tests {
     }
 
     #[test]
+    fn a_pilot_saved_landed_in_a_system_its_load_hides_stays_landed_until_the_take_off() {
+        let catalog = alternates();
+        let mut pilot = landed_at_140();
+        // Saved while 131 was shown: only the load's refresh hides it, so
+        // the refresh, not the load's first look at the saved flags, moves
+        // the player.
+        pilot.bits_mut().set(hiding_bit(131));
+        assert_eq!(pilot.galaxy.system(SystemId(131)).visible, None);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert!(!session.galaxy().visible(SystemId(131)));
+        session.assert_docked_among_shown();
+        assert_eq!(session.system(), SystemId(134), "the one at its place");
+        assert_eq!(session.landed(), Some(StellarId(140)), "still landed");
+        assert_eq!(session.pilot().stellar, Some(StellarId(140)));
+        assert_eq!(session.sites, [planet(140, 0.0, 0.0)], "its spaceport's");
+        assert_eq!(session.take_events(), [], "silently");
+        assert!(!session.take_save_due(), "nothing to save");
+        takes_off_into_134(&mut session);
+    }
+
+    #[test]
     fn with_no_system_visible_at_its_place_the_player_goes_to_the_head_made_visible() {
         let catalog = alternates();
-        let mut session = Session::start(&catalog).expect("starts");
+        let mut session = resolving(&catalog, RuleSource::Bible);
         jump(&mut session, &catalog, 134);
         session.take_events();
         assert!(hide(&mut session, &catalog, &[131, 134]));
@@ -19191,6 +19626,26 @@ mod tests {
             [SessionEvent::SystemChanged, SessionEvent::GalaxyChanged]
         );
         assert!(on_the_map(&session));
+    }
+
+    #[test]
+    fn by_the_engine_a_player_in_a_shadowed_system_goes_to_the_head_made_visible_once_both_hide() {
+        let catalog = alternates();
+        let mut pilot = Pilot::new(&catalog, "").expect("starts");
+        pilot.system = SystemId(134);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.system(), SystemId(134), "shadowed, not hidden");
+        session.take_events();
+        assert!(hide(&mut session, &catalog, &[131, 134]));
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(
+            session.pilot().galaxy.system(SystemId(131)).visible,
+            Some(true)
+        );
+        assert_eq!(
+            session.take_events(),
+            [SessionEvent::SystemChanged, SessionEvent::GalaxyChanged]
+        );
     }
 
     #[test]
@@ -19210,8 +19665,12 @@ mod tests {
         let catalog = alternates();
         let mut pilot = Pilot::new(&catalog, "Ada").expect("starts");
         pilot.system = SystemId(131);
+        // Saved while 131 is hidden by its `Visibility`: the load's refresh
+        // keeps it hidden.
+        pilot.bits_mut().set(hiding_bit(131));
         pilot.galaxy.set_visible(SystemId(131), Some(false));
         let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert!(!session.galaxy().visible(SystemId(131)));
         assert_eq!(session.system(), SystemId(134));
         assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
         assert_eq!(session.take_events(), [], "silently");
@@ -19271,10 +19730,12 @@ mod tests {
             .collect()
     }
 
-    /// [`chained`] of `mod_val` with 135 at 131's place, listing 132.
+    /// [`chained`] of `mod_val` with 135 at 131's place, listing 132,
+    /// every system [`hideable`].
     fn chained_alternates(mod_val: i16) -> FakePilotCatalog {
         let mut catalog = chained(catalog(), mod_val);
         catalog.star_map.push(star(135, (600.0, 0.0), &[132]));
+        hideable(&mut catalog);
         catalog
     }
 

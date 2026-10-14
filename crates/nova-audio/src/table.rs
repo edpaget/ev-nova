@@ -34,6 +34,10 @@ pub struct SoundTable {
     pub red_alert: Option<SoundId>,
     /// Plays as cargo is jettisoned in flight.
     pub jettison: Option<SoundId>,
+    /// Plays as the bar's news dialog opens.
+    pub news_open: Option<SoundId>,
+    /// Plays as the bar's news dialog closes.
+    pub news_close: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -70,6 +74,10 @@ impl SoundTable {
     /// - `jettison`: 154, `_beepSnd[4]` again, which `_JettisonCargo`
     ///   plays when anything went in flight (@0x3e31a-0x3e33d), at
     ///   priority 1, not modelled either.
+    /// - `news_open`: 151, `_beepSnd[1]`, which `_DoNewsDialog` plays as
+    ///   it opens (`PlaySound` @0x47f36).
+    /// - `news_close`: 152, `_beepSnd[2]`, which `_DoNewsDialog` plays as
+    ///   it closes (@0x4814e).
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -82,6 +90,8 @@ impl SoundTable {
         script_message: Some(SoundId(154)),
         red_alert: Some(SoundId(370)),
         jettison: Some(SoundId(154)),
+        news_open: Some(SoundId(151)),
+        news_close: Some(SoundId(152)),
     };
 }
 
@@ -103,5 +113,7 @@ mod tests {
         assert_eq!(table.script_message, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.red_alert, Some(SoundId(370)), "Red Alert");
         assert_eq!(table.jettison, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.news_open, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.news_close, Some(SoundId(152)), "_beepSnd[2]");
     }
 }

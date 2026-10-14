@@ -45,6 +45,13 @@
 //! [`Verdict::Draws`] without running it. (A caller wanting the outcome
 //! runs `first_refusal` on a chance of its own.)
 //!
+//! A drawing check may be disputed too ([`Check::disputed_drawing`]): the
+//! roll is drawn in check order whichever reading runs, and the rule set
+//! chooses how it is read, such as a crön's `Random`
+//! ([`cron`](crate::cron)). Its descriptor both reads a key and draws,
+//! and `all_refusals` reports it as [`Verdict::Draws`] without running
+//! either reading.
+//!
 //! A draw that the original makes while building what a shop shows, such
 //! as the outfitter's day rolls (`wares::DayRolls`),
 //! belongs in the facts: the caller draws it, keeps it, and hands it in.
@@ -145,6 +152,13 @@ enum CheckHow<C, R> {
     },
     /// One reading, drawing on the chance it is handed.
     Draws(fn(&C, &mut dyn Chance) -> Result<(), R>),
+    /// The engine's reading and the other, chosen by the rule set's
+    /// source for `key`, each drawing on the chance it is handed.
+    DisputedDraws {
+        key: RuleKey,
+        engine: fn(&C, &mut dyn Chance) -> Result<(), R>,
+        other: fn(&C, &mut dyn Chance) -> Result<(), R>,
+    },
 }
 
 impl<C, R> Check<C, R> {
@@ -206,6 +220,29 @@ impl<C, R> Check<C, R> {
         }
     }
 
+    /// A check with the engine's reading, `engine`, and the other,
+    /// `other`, following the rule set's source for `key`, each drawing on
+    /// the chance it is handed. [`Checks::all_refusals`] reports it without
+    /// running either reading.
+    #[must_use]
+    pub const fn disputed_drawing(
+        name: &'static str,
+        reproduces: &'static str,
+        key: RuleKey,
+        engine: fn(&C, &mut dyn Chance) -> Result<(), R>,
+        other: fn(&C, &mut dyn Chance) -> Result<(), R>,
+    ) -> Self {
+        Self {
+            about: Descriptor {
+                name,
+                reproduces,
+                reads: Some(key),
+                draws: true,
+            },
+            how: CheckHow::DisputedDraws { key, engine, other },
+        }
+    }
+
     /// What the check is.
     #[must_use]
     pub fn about(&self) -> &Descriptor {
@@ -223,6 +260,9 @@ impl<C: Context, R> Check<C, R> {
                 reading(facts.rulebook(), key, engine, other)(facts)
             }
             CheckHow::Draws(f) => f(facts, chance),
+            CheckHow::DisputedDraws { key, engine, other } => {
+                reading(facts.rulebook(), key, engine, other)(facts, chance)
+            }
         }
     }
 
@@ -235,7 +275,7 @@ impl<C: Context, R> Check<C, R> {
             CheckHow::Disputed { key, engine, other } => {
                 reading(facts.rulebook(), key, engine, other)(facts)
             }
-            CheckHow::Draws(_) => return Some(Verdict::Draws),
+            CheckHow::Draws(_) | CheckHow::DisputedDraws { .. } => return Some(Verdict::Draws),
         };
         decided.err().map(Verdict::Refuses)
     }
@@ -991,6 +1031,173 @@ mod tests {
         assert_eq!(pay.about().name(), "pay");
         assert_eq!(pay.about().reproduces(), "toy: the offer's pay");
         assert_eq!(pay.about().reads(), Some(RuleKey::CrimeGains));
+    }
+
+    /// Why the toy event does not start.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum EventRefusal {
+        Disabled,
+        LostTheRoll,
+    }
+
+    /// A toy daily event: whether it is disabled, the highest roll that
+    /// starts it, and the rule set.
+    struct Event {
+        disabled: bool,
+        random: u16,
+        rules: Rulebook,
+    }
+
+    impl Context for Event {
+        fn rulebook(&self) -> &Rulebook {
+            &self.rules
+        }
+    }
+
+    impl Event {
+        fn new(random: u16, source: RuleSource) -> Self {
+            Self {
+                disabled: false,
+                random,
+                rules: Rulebook::default().with_override(RuleKey::TradeDebt, source),
+            }
+        }
+    }
+
+    /// The toy event's checks: not disabled, then a roll whose reading is
+    /// disputed (`TradeDebt` is only a convenient key). The engine rolls a
+    /// 101-sided die and passes at or below `random`; the other reading
+    /// rolls a 100-sided die and passes below it, so the sides asked tell
+    /// which reading drew.
+    fn event_checks() -> Checks<Event, EventRefusal> {
+        [
+            Check::plain("enabled", "toy: the event's switch", |facts: &Event| {
+                if facts.disabled {
+                    Err(EventRefusal::Disabled)
+                } else {
+                    Ok(())
+                }
+            }),
+            Check::disputed_drawing(
+                "roll",
+                "toy: the event's Rand draw",
+                RuleKey::TradeDebt,
+                |facts: &Event, chance: &mut dyn Chance| {
+                    if chance.roll(101) <= facts.random {
+                        Ok(())
+                    } else {
+                        Err(EventRefusal::LostTheRoll)
+                    }
+                },
+                |facts: &Event, chance: &mut dyn Chance| {
+                    if chance.roll(100) < facts.random {
+                        Ok(())
+                    } else {
+                        Err(EventRefusal::LostTheRoll)
+                    }
+                },
+            ),
+        ]
+        .into()
+    }
+
+    #[test]
+    fn a_disputed_drawing_checks_descriptor_reads_its_key_and_draws() {
+        let checks = event_checks();
+        let listed: Vec<_> = checks
+            .descriptors()
+            .map(|about| {
+                (
+                    about.name(),
+                    about.reproduces(),
+                    about.reads(),
+                    about.draws(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("enabled", "toy: the event's switch", None, false),
+                (
+                    "roll",
+                    "toy: the event's Rand draw",
+                    Some(RuleKey::TradeDebt),
+                    true
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_disputed_drawing_check_draws_in_the_reading_the_rule_set_gives() {
+        let checks = event_checks();
+        let mut engine = Scripted::rolling(&[0]);
+        assert_eq!(
+            checks.first_refusal(&Event::new(0, RuleSource::Engine), &mut engine),
+            Ok(())
+        );
+        assert_eq!(engine.sides_asked, [101]);
+        let mut bible = Scripted::rolling(&[0]);
+        assert_eq!(
+            checks.first_refusal(&Event::new(0, RuleSource::Bible), &mut bible),
+            Err(EventRefusal::LostTheRoll)
+        );
+        assert_eq!(bible.sides_asked, [100]);
+        let default = Event {
+            rules: Rulebook::default(),
+            ..Event::new(0, RuleSource::Bible)
+        };
+        let mut chance = Scripted::rolling(&[0]);
+        assert_eq!(checks.first_refusal(&default, &mut chance), Ok(()));
+        assert_eq!(chance.sides_asked, [101], "the engine's by default");
+    }
+
+    #[test]
+    fn all_refusals_reports_a_disputed_drawing_check_without_running_it() {
+        let checks = event_checks();
+        for source in RuleSource::ALL {
+            let all: Vec<_> = checks
+                .all_refusals(&Event::new(0, source))
+                .into_iter()
+                .map(|(about, verdict)| (about.name(), verdict))
+                .collect();
+            assert_eq!(all, [("roll", Verdict::Draws)], "{source:?}");
+        }
+        let panics: Checks<Event, EventRefusal> = [Check::disputed_drawing(
+            "roll",
+            "@0x4000",
+            RuleKey::TradeDebt,
+            |_: &Event, _: &mut dyn Chance| panic!("the engine reading ran"),
+            |_: &Event, _: &mut dyn Chance| panic!("the other reading ran"),
+        )]
+        .into();
+        for source in RuleSource::ALL {
+            let all: Vec<_> = panics
+                .all_refusals(&Event::new(0, source))
+                .into_iter()
+                .map(|(about, verdict)| (about.name(), verdict))
+                .collect();
+            assert_eq!(all, [("roll", Verdict::Draws)], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_refusal_before_a_disputed_drawing_check_stops_its_draw() {
+        let checks = event_checks();
+        for source in RuleSource::ALL {
+            let facts = Event {
+                disabled: true,
+                ..Event::new(100, source)
+            };
+            let mut chance = Scripted::rolling(&[0]);
+            assert_eq!(
+                checks.first_refusal(&facts, &mut chance),
+                Err(EventRefusal::Disabled),
+                "{source:?}"
+            );
+            assert!(chance.sides_asked.is_empty(), "{source:?}");
+        }
     }
 
     /// A context no facts can be built for, whose every rule panics if

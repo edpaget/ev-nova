@@ -438,16 +438,32 @@ impl Session {
     /// One of `STR#` `list`'s strings, from the session's string lists,
     /// picked evenly on `chance` as `_GetRandomIndString` (@0x72ef7) picks
     /// it: a roll of as many sides as the list holds. `None`, with no roll,
-    /// for a missing or empty list, and `None` for an empty pick.
-    pub(super) fn pick_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
+    /// for a missing or empty list; an empty string picked is given as
+    /// it is. The session's one port of that routine: the bar's news and
+    /// [`pick_string`](Self::pick_string) both draw through it.
+    pub(super) fn random_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
         let strings = self.strings.0.string_list(list);
         if strings.is_empty() {
             return None;
         }
         let sides = u16::try_from(strings.len()).unwrap_or(u16::MAX);
-        strings
-            .into_iter()
-            .nth(usize::from(chance.roll(sides)))
+        strings.into_iter().nth(usize::from(chance.roll(sides)))
+    }
+
+    /// String `index` (1-based) of `STR#` `list`, from the session's
+    /// string lists, if it has one: what the bar's news and the rank tags
+    /// read through.
+    pub(super) fn nth_string(&self, list: i16, index: usize) -> Option<String> {
+        let mut strings = self.strings.0.string_list(list);
+        let at = index.checked_sub(1)?;
+        (at < strings.len()).then(|| strings.swap_remove(at))
+    }
+
+    /// [`random_string`](Self::random_string), with an empty pick read as
+    /// none, as the `T` rename, the `Q` leave message, and the bar's commercial
+    /// and generic story read it.
+    pub(super) fn pick_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
+        self.random_string(list, chance)
             .filter(|pick| !pick.is_empty())
     }
 }

@@ -265,8 +265,9 @@ fn vikings_shipyard_lists_its_ships_in_the_shipyard_dialog() {
             })
             .collect();
         // The trade-in is a quarter of the Shuttle and half its Light
-        // Blaster, the stock weapon it owns.
-        assert_eq!(screen.shipyard().trade_in, 5000);
+        // Blaster, the stock weapon it owns: 5000, through the flux twice
+        // at the Shuttle's tech 3 against Viking's 4, 4850 then 4700.
+        assert_eq!(screen.shipyard().trade_in, 4700);
         // The Shuttle selected is the class flown, so the info box shows
         // no price lines.
         let selected = screen.selected().expect("a ship selected");
@@ -489,6 +490,61 @@ fn the_shuttles_name_is_asked_in_the_stock_text_input_dialog() {
         assert_eq!(
             dialog.take_outcome(),
             Some(TextInputOutcome::Confirm("Shuttle 999".to_owned()))
+        );
+    }
+}
+
+/// The news at Viking (Federation, govt 128) is drawn over the
+/// Federation's `NewsPic` 9001, stretched to the 300 x 230 "News"
+/// dialog, the commercial in its band from 140 px; the Vell-os's
+/// `NewsPic` 0 is no picture, so theirs falls back to 9000.
+#[test]
+fn the_news_is_drawn_over_the_stock_governments_picture() {
+    use nova_sim::CombatCatalog;
+    use nova_sim::news::news_picture;
+    use nova_view::image::ImageKey;
+    use nova_view::spaceport::SpaceportCatalog;
+    use nova_view::spaceport::news::{NEWS_DIALOG, shown_news_picture};
+
+    for (dir, ui) in builds() {
+        let data = GameData::open(&dir, None).expect("the stock data opens");
+        let ui = InterfaceData::open(&ui).expect("the interface file opens");
+        let mut session = at_viking(&data);
+        assert!(session.open_bar(&mut Fires), "Viking has a bar");
+        assert_eq!(session.news_picture(), Some(9001), "the Federation's");
+        let exists = |id| data.picture_exists(id);
+        assert_eq!(shown_news_picture(9001, exists), Some(9001));
+
+        let govts = data.governments();
+        let vell_os = govts
+            .iter()
+            .find(|govt| govt.id == nova_sim::GovtId(136))
+            .expect("the Vell-os");
+        assert_eq!(vell_os.news_pic, 0);
+        assert_eq!(news_picture(Some(vell_os)), 0);
+        assert_eq!(shown_news_picture(0, exists), Some(9000), "no PICT 0");
+
+        let template = ui.dialog_template(NEWS_DIALOG).expect("News");
+        let news = session.news().expect("drawn").clone();
+        let screen = nova_view::spaceport::NewsScreen::new(
+            Ok((template, Rc::new(MonoMetrics))),
+            &news,
+            Some(9001),
+        );
+        let frame = screen.bounds().expect("laid out");
+        assert_eq!((frame.width(), frame.height()), (300.0, 230.0));
+        let mut list = DrawList::new();
+        screen.draw(&mut list);
+        assert!(list.iter().any(|command| *command
+            == DrawCommand::StretchedPicture {
+                image: ImageKey::picture(9001),
+                top_left: frame.min,
+                width: 300.0,
+                height: 230.0,
+            }));
+        assert_eq!(
+            screen.commercial().expect("laid out").rect().min,
+            Point::new(frame.min.x + 10.0, frame.min.y + 140.0)
         );
     }
 }

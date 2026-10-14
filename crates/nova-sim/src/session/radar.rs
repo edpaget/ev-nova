@@ -43,7 +43,7 @@ impl Session {
         Some(iff::stellar_iff(
             site,
             self.landing_record(site),
-            Self::standing(site),
+            Self::iff_standing(site),
         ))
     }
 
@@ -54,10 +54,10 @@ impl Session {
     ///   it. Domination by tribute (`_DoPlanetCommDialog` @0x978fa, cleared
     ///   @0x9740f) has no state yet: rdm:task/planet-domination feeds it in
     ///   here.
-    /// - **Blessed:** never. The port has no ranks yet:
-    ///   rdm:phase/crons-news-ranks/phase-12-rank-blessing feeds the
-    ///   government's "may land" blessing (`gövt` +0x85) in here.
-    pub(super) fn standing(site: &LandingSite) -> Standing {
+    /// - **Blessed:** never yet. The government's "may land" blessing
+    ///   (`gövt` +0x85) that landing reads ([`Session::blessing`]) is not
+    ///   fed in here.
+    pub(super) fn iff_standing(site: &LandingSite) -> Standing {
         Standing {
             dominated: site.flags2 & market::DOMINATED != 0,
             blessed: false,

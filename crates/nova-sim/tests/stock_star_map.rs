@@ -11,7 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use nova_data::GameData;
 use nova_data::records::system::System;
 use nova_sim::landing::is_landable;
-use nova_sim::{GateKind, HyperlinkRule, PilotCatalog, StarMap, StellarId, SystemId, Vec2};
+use nova_sim::{
+    CoLocated, GateKind, HyperlinkRule, PilotCatalog, StarMap, StellarId, SystemId, Vec2,
+};
 
 /// The stock links that stay one-way after allowing for replacement
 /// systems: a copy of `ONE_WAY_LINKS` in `crates/nova-data/tests/stock.rs`,
@@ -28,7 +30,10 @@ fn stock_links_listed_by_one_system_route_one_way_unless_listed_back_by_position
         .records::<System>()
         .map(|(id, record)| (id, record.expect("every sÿst decodes").record.clone()))
         .collect();
-    let map = StarMap::new(data.star_map());
+    // Every system read visible at once, the replacement systems beside
+    // their originals: each visible system stands for itself, so a link
+    // reaches the very system it names and its direction alone is read.
+    let map = StarMap::with_hidden(data.star_map(), &BTreeSet::new(), CoLocated::Itself);
     let position = |id: i16| (raw[&id].x_pos, raw[&id].y_pos);
     let directed: BTreeSet<(i16, i16)> = raw
         .iter()

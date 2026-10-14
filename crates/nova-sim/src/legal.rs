@@ -82,9 +82,9 @@
 //! slot is freed with the mark not yet cleared, escapes it. Disabling,
 //! destroying and boarding pass the mark (`_DamageShip` @0x3adb3,
 //! @0x3ae08; `_HandlePlayerBoardAttempt` @0x6582b); a stellar's kill,
-//! the scans and the planet hails pass -1. The same return skips rank
-//! loss (`_DeactivateRank` @0x9c9e), which goes with ranks in
-//! rdm:roadmap/crons-news-ranks.
+//! the scans and the planet hails pass -1. The same return skips the
+//! ranks the crime would take (`_DeactivateRank` @0x9c9e; see
+//! [`rank`](crate::rank)'s **Crimes**).
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;

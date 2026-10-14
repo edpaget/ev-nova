@@ -237,14 +237,15 @@ pub const REFUSAL_ROW: f32 = 93.0;
 
 /// The info box's amounts for `row`, in the order `_OutfitDialogUpdate`
 /// draws them, each as its baseline below the box's top, its label and
-/// its amount: "Item Price:" with its price (@0x57b42-0x57bea) and "You
+/// its amount: "Item Price:" with what buying one costs, its
+/// [`buy_price`](OutfitRow::buy_price) (@0x57b42-0x57bea), and "You
 /// Have:" with the player's cash (@0x57bef-0x57c62), each in credits,
 /// then, for an outfit of `Mass` above 0 (@0x57c72-0x57c78), "Item
 /// Mass:" (@0x57c7e-0x57d19) and "Available:" (@0x57d1e-0x57d9d).
 #[must_use]
 pub fn amount_lines(outfitter: &Outfitter, row: &OutfitRow) -> Vec<(f32, &'static str, String)> {
     let mut lines = vec![
-        (INFO_ROWS[0], PRICE_LABEL, credits_text(row.price)),
+        (INFO_ROWS[0], PRICE_LABEL, credits_text(row.buy_price)),
         (
             INFO_ROWS[1],
             credits::YOU_HAVE,
@@ -1277,6 +1278,7 @@ mod tests {
             name: format!("Outfit {id}"),
             short_name: short_name.to_owned(),
             price,
+            buy_price: price,
             mass,
             owned,
             max: 10,
@@ -2497,6 +2499,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_item_price_is_what_buying_one_costs() {
+        let shown = info_lines(OutfitRow {
+            price: 1500,
+            buy_price: 1275,
+            ..widget(0)
+        });
+        assert!(follows(&shown, PRICE_LABEL, "1,275 cr"), "{shown:?}");
+    }
+
     /// Widget 128, 100 credits and a ton, `owned` owned.
     fn widget(owned: u16) -> OutfitRow {
         row(128, "Widget", 100, 1, owned)
@@ -2626,6 +2638,7 @@ mod tests {
         // Refused for the cash: 6000 credits.
         let fits = info_lines(OutfitRow {
             price: 6000,
+            buy_price: 6000,
             ..widget(0)
         });
         assert_eq!(said_why(&fits), None, "buy alone gets no words: {fits:?}");

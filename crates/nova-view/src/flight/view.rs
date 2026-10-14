@@ -291,7 +291,9 @@
 //!   ([`FlightView::with_rules`]).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
-//!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance;
+//!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance,
+//!   and has it draw the visit's news as the bar opens
+//!   ([`FlightView::open_bar`], [`FlightView::news`]);
 //!   the session's hire terms and control bits are set on the screen
 //!   ([`FlightView::with_hire_terms`], [`FlightView::with_control_bits`]),
 //!   and its disputed hiring rules come from its rule set
@@ -354,7 +356,7 @@ use nova_sim::{
 };
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
-    HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText,
+    HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText, News,
     NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, StellarIff, TagNames, VenueOffer,
 };
 
@@ -2897,6 +2899,29 @@ impl<C> FlightView<C> {
             .escorts_for_hire(&mut self.chance)
     }
 
+    /// Opens the bar of the stellar landed on as [`Session::open_bar`]
+    /// does, drawing the visit's news on the flight's chance; false for a
+    /// session that failed, or not landed at a bar.
+    pub fn open_bar(&mut self) -> bool {
+        self.session
+            .as_mut()
+            .is_ok_and(|session| session.open_bar(&mut self.chance))
+    }
+
+    /// The news of the bar visit under way, as [`Session::news`] gives
+    /// it; none for a session that failed.
+    #[must_use]
+    pub fn news(&self) -> Option<&News> {
+        self.session.as_ref().ok()?.news()
+    }
+
+    /// The picture the bar's news is drawn over, as
+    /// [`Session::news_picture`] gives it; none for a session that failed.
+    #[must_use]
+    pub fn news_picture(&self) -> Option<i16> {
+        self.session.as_ref().ok()?.news_picture()
+    }
+
     /// Hires a ship as [`Session::hire`] does, on the flight's chance; a
     /// session that failed has no bar.
     pub fn hire(&mut self, ship: ShipId) -> Result<Hired, HireRefusal> {
@@ -4055,6 +4080,9 @@ mod tests {
         missions: Vec<nova_sim::catalog::MissionRecord>,
         /// What the mission screens show of each: none, by default.
         mission_texts: Vec<nova_sim::catalog::MissionTexts>,
+        /// Each system's `Visibility`: none, by default, so every system
+        /// is visible.
+        visibility: Vec<nova_sim::catalog::SystemVisibility>,
     }
 
     /// No strings unless a test sets them.
@@ -4153,6 +4181,7 @@ mod tests {
             lives: Vec::new(),
             missions: Vec::new(),
             mission_texts: Vec::new(),
+            visibility: Vec::new(),
         }
     }
 
@@ -4326,11 +4355,23 @@ mod tests {
             Vec::new()
         }
 
+        fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {
+            self.visibility.clone()
+        }
+
         fn place_names(&self) -> nova_sim::catalog::PlaceNames {
             nova_sim::catalog::PlaceNames::default()
         }
 
         fn stellar_marks(&self) -> Vec<nova_sim::catalog::StellarMark> {
+            Vec::new()
+        }
+
+        fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
+            Vec::new()
+        }
+
+        fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
             Vec::new()
         }
     }
@@ -10690,6 +10731,8 @@ mod tests {
                 comm_name: String::new(),
                 scan_mask: 0,
                 scan_fine: 0,
+                news_pic: -1,
+                require: 0,
             }],
             ..catalog
         }
@@ -12025,6 +12068,43 @@ mod tests {
         assert_eq!(broken.hire(ShipId(129)), Err(HireRefusal::NoBar));
     }
 
+    #[test]
+    fn the_bars_news_is_drawn_through_the_session_on_the_flights_chance() {
+        let always = Rc::new(RefCell::new(Always::default()));
+        let shared: Rc<RefCell<dyn Chance>> = always.clone();
+        let strings = FakeCatalog {
+            strings: vec![
+                (8100, vec!["C1".to_owned(), "C2".to_owned()]),
+                (8101, vec!["G1".to_owned(), "G2".to_owned()]),
+            ],
+            ..catalog()
+        };
+        let mut view = FlightView::new(hiring())
+            .with_chance(SharedChance::new(shared))
+            .with_strings(Rc::new(strings));
+        assert!(!view.open_bar(), "in flight");
+        assert_eq!(view.news(), None);
+        assert_eq!(view.news_picture(), None, "in flight");
+        land_now(&mut view);
+        assert_eq!(view.news_picture(), Some(9000), "no NewsPic");
+        assert!(view.open_bar());
+        assert_eq!(
+            view.news(),
+            Some(&nova_sim::News {
+                commercial: "C2".to_owned(),
+                story: "G2".to_owned(),
+            }),
+            "each the last string, as the flight's chance rolls"
+        );
+        let mut broken = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..hiring()
+        });
+        assert!(!broken.open_bar());
+        assert_eq!(broken.news(), None);
+        assert_eq!(broken.news_picture(), None);
+    }
+
     // The mission screens.
 
     use nova_sim::MissionTextKind;
@@ -12523,6 +12603,8 @@ mod tests {
             comm_name: String::new(),
             scan_mask: 0x0004,
             scan_fine: fine,
+            news_pic: -1,
+            require: 0,
         }];
         catalog.missions = vec![MissionRecord {
             cargo_type: 0,
@@ -12824,11 +12906,11 @@ mod tests {
     struct Sevens;
 
     impl HireTerms for Sevens {
-        fn fee(&self, _ship: &ShipRecord, _site: &LandingSite) -> i64 {
+        fn fee(&self, _ship: &ShipRecord, _site: &LandingSite, _mult: f32) -> i64 {
             7
         }
 
-        fn charge(&self, _ship: &ShipRecord, _site: &LandingSite, _cash: i64) -> i64 {
+        fn charge(&self, _ship: &ShipRecord, _site: &LandingSite, _mult: f32, _cash: i64) -> i64 {
             7
         }
 
@@ -13475,9 +13557,16 @@ mod tests {
 
     #[test]
     fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
-        let catalog = catalog();
-        let mut session = Session::start(&catalog).expect("starts");
-        session.change_galaxy(&catalog, hiding(132));
+        // 132 hidden by its `Visibility`, as the load evaluates it.
+        let catalog = FakeCatalog {
+            visibility: vec![nova_sim::catalog::SystemVisibility {
+                id: SystemId(132),
+                visibility: nova_sim::Test::parse("b50"),
+            }],
+            ..catalog()
+        };
+        let session = Session::start(&catalog).expect("starts");
+        assert!(!session.galaxy().visible(SystemId(132)));
         let view = FlightView::with_pilot(catalog, session.pilot().clone());
         assert!(!on_the_course_map(&view, 132));
         assert!(on_the_course_map(&view, 131));
@@ -14056,6 +14145,8 @@ mod tests {
             comm_name: String::new(),
             scan_mask: 0,
             scan_fine: 0,
+            news_pic: -1,
+            require: 0,
         }];
         for record in &mut catalog.ships {
             record.crew = 3;
@@ -15499,6 +15590,8 @@ mod tests {
             comm_name: String::new(),
             scan_mask: 0,
             scan_fine: 0,
+            news_pic: -1,
+            require: 0,
         }];
         // One ship of düde 128 (ship 129) attacking the player and
         // following it (`ShipSyst` -6).

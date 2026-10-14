@@ -491,6 +491,7 @@ fn drawn(systems: &[SystemId], chance: &mut dyn Chance) -> ShipSystem {
 mod tests {
     use super::*;
     use crate::catalog::{GovtRecord, StarSystem, StellarId};
+    use crate::hyperspace::CoLocated;
     use crate::testkit::{Draws, govt};
 
     #[test]
@@ -561,6 +562,12 @@ mod tests {
     /// neutral's, 135 the Federation's but at 130's place, 136 the
     /// Federation's elsewhere, and 137 the pirates' but hidden.
     fn map() -> StarMap {
+        map_resolving(CoLocated::Lowest)
+    }
+
+    /// [`map`], a place two visible systems share resolved as `colocated`
+    /// says.
+    fn map_resolving(colocated: CoLocated) -> StarMap {
         StarMap::with_hidden(
             vec![
                 system(130, (0.0, 0.0), &[131, 133], Some(FED)),
@@ -573,6 +580,7 @@ mod tests {
                 system(137, (600.0, 0.0), &[], Some(PIRATES)),
             ],
             &[SystemId(137)].into(),
+            colocated,
         )
     }
 
@@ -780,7 +788,12 @@ mod tests {
         assert!(at(130).with_player(SystemId(130), places));
         assert!(!at(130).with_player(SystemId(131), places));
         assert!(
-            !at(135).with_player(SystemId(130), places),
+            at(135).with_player(SystemId(130), places),
+            "by the original's resolution 130 stands for 135, though visible"
+        );
+        let itself = map_resolving(CoLocated::Itself);
+        assert!(
+            !at(135).with_player(SystemId(130), itself.places()),
             "135 is visible: it stands for itself, not 130 at its place"
         );
         assert!(ShipSystem::FollowsPlayer.with_player(SystemId(131), places));
@@ -797,6 +810,7 @@ mod tests {
                 system(139, (100.0, 0.0), &[], None),
             ],
             &[SystemId(138), SystemId(139)].into(),
+            CoLocated::Lowest,
         );
         let places = map.places();
         assert!(at(138).with_player(SystemId(130), places));

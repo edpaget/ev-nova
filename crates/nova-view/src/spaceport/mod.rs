@@ -25,6 +25,8 @@
 //!   BBS, and the [`MissionInfoScreen`], the active missions, read and
 //!   aborted.
 //! - [`offer`]: the [`OfferDialog`], a mission offered at the bar.
+//! - [`news`]: the bar's [`NewsScreen`], the visit's commercial line and
+//!   story.
 //! - [`grid`]: the parts the Outfitter and the Shipyard share: the grid
 //!   of cells, a `ShortName`'s lines, and the selected item's picture and
 //!   description.
@@ -42,6 +44,7 @@ pub mod hire;
 pub mod layout;
 pub mod missions;
 pub mod modal;
+pub mod news;
 pub mod offer;
 pub mod outfitter;
 pub mod quantity_ask;
@@ -54,6 +57,7 @@ pub use bar::{BarScreen, Hiring};
 pub use catalog::{PortRecord, SpaceportCatalog, StellarId};
 pub use hire::HireScreen;
 pub use missions::{MissionComputerScreen, MissionInfoScreen};
+pub use news::NewsScreen;
 pub use offer::{OfferChoice, OfferDialog};
 pub use outfitter::{OutfitterCatalog, OutfitterScreen};
 pub use service::ServiceScreen;

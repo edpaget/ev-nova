@@ -12,24 +12,43 @@
 //!   record's ([`OverlaidGalaxy::site`]). A destroyed stellar holds its
 //!   regeneration [`Countdown`], saved.
 //! - A nebula is active unless the overlay says otherwise.
+//! - A system's visibility is written from its `Visibility` at each
+//!   galaxy refresh ([`GalaxyOverlay::refresh_visibility`]), overwriting
+//!   every system's; `Some(true)` is the player's move's reveal alone.
+//! - Each stellar's owner is derived from the overlay, never stored
+//!   ([`OverlaidGalaxy::owner`]): the chain-shadow rule of
+//!   `_PropagateMissionBitEffects` (@0x996ed-0x997bd), as
+//!   [`RuleKey::ColocatedResolution`](crate::RuleKey::ColocatedResolution)
+//!   reads.
 //! - A system at the same place as a hidden one stands in for it
 //!   ([`OverlaidGalaxy::same_place`]): the lowest-ID visible system at its
-//!   exact map position, the engine's reading of the original's
-//!   `_FindActiveCoLocatedSystem` (@0x4be0). A player in, or arriving in,
-//!   a hidden system goes there or, with none, to the chain head made
-//!   visible ([`OverlaidGalaxy::arrival`], @0x998f1-0x99a36).
+//!   exact map position, as the original's `_FindActiveCoLocatedSystem`
+//!   (@0x4be0) gives it, for a visible system too unless
+//!   [`RuleKey::ColocatedResolution`](crate::RuleKey::ColocatedResolution)
+//!   reads the other way ([`CoLocated`]). A player in, or arriving in, a
+//!   hidden system goes there or, with none, to the chain head made
+//!   visible ([`OverlaidGalaxy::arrival`], @0x998f1-0x99a36). A player in
+//!   a visible system shadowed at its place stays: the original's move
+//!   tests only the player's own system's visible flag (@0x99918).
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::catalog::{GovtId, LandingSite, NebulaId, StarSystem, StellarId, SystemId};
+use crate::catalog::{
+    GovtId, LandingSite, NebulaId, StarSystem, StellarId, SystemId, SystemVisibility,
+};
+use crate::control::Gate;
 use crate::geometry::Vec2;
-use crate::hyperspace::StarMap;
+use crate::hyperspace::{CoLocated, StarMap};
 
 /// What the overlay changes of one system. The default changes nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SystemOverride {
-    /// Whether it is visible; `None` leaves it visible, as the catalog has
-    /// it.
+    /// Whether it is visible: `Some(false)` hidden by the last refresh of
+    /// its `Visibility`, `Some(true)` a chain head the player's move made
+    /// visible ([`HiddenMove::make_visible`]), which owns no stellar
+    /// ([`OverlaidGalaxy::owner`]), and `None` visible, as the catalog has
+    /// it. The refresh never writes `Some(true)`, so it marks the move's
+    /// reveal exactly.
     pub visible: Option<bool>,
     /// Its government: `Some(None)` makes it independent, and `None` leaves
     /// the catalog's.
@@ -127,9 +146,45 @@ impl GalaxyOverlay {
     }
 
     /// Sets whether `system` is visible (`None` leaves it as the catalog
-    /// has it), and says whether that changed anything.
+    /// has it), and says whether that changed anything. A visibility
+    /// written here lasts only until the next refresh of the systems'
+    /// `Visibility` ([`GalaxyOverlay::refresh_visibility`]), which
+    /// overwrites every system's; `Some(true)` is the player's move's
+    /// alone (see [`SystemOverride::visible`]).
     pub fn set_visible(&mut self, system: SystemId, visible: Option<bool>) -> bool {
         edit(&mut self.systems, system, |change| change.visible = visible)
+    }
+
+    /// Hides exactly the systems of `hidden` and leaves every other one
+    /// visible as the catalog has it (`None`), clearing any `Some(true)`,
+    /// and says whether that changed anything.
+    pub fn set_hidden(&mut self, hidden: &BTreeSet<SystemId>) -> bool {
+        let held: Vec<SystemId> = self.systems.keys().copied().collect();
+        let mut changed = false;
+        for system in held.into_iter().filter(|system| !hidden.contains(system)) {
+            changed |= self.set_visible(system, None);
+        }
+        for &system in hidden {
+            changed |= self.set_visible(system, Some(false));
+        }
+        changed
+    }
+
+    /// Writes every system's visibility from its `Visibility`, as the
+    /// original's galaxy refresh does (`_PropagateMissionBitEffects`
+    /// @0x996a1-0x996eb): each of `systems` (the catalog's) hidden when its
+    /// test in `tests` fails for `gate` ([`hidden_by`]), and left visible
+    /// (`None`) otherwise, a `Some(true)` the player's move wrote included;
+    /// and any visibility held for a system outside them cleared. Says
+    /// whether that changed anything. The original hides an unused slot
+    /// too; the engine has only catalog systems.
+    pub fn refresh_visibility(
+        &mut self,
+        systems: impl IntoIterator<Item = SystemId>,
+        tests: &[SystemVisibility],
+        gate: &Gate,
+    ) -> bool {
+        self.set_hidden(&hidden_by(systems, tests, gate))
     }
 
     /// Sets `system`'s government (`Some(None)` independent, `None` the
@@ -165,12 +220,35 @@ impl GalaxyOverlay {
     }
 
     /// The systems it hides.
-    fn hidden(&self) -> BTreeSet<SystemId> {
+    pub(crate) fn hidden(&self) -> BTreeSet<SystemId> {
         self.systems()
             .filter(|(_, change)| change.visible == Some(false))
             .map(|(id, _)| id)
             .collect()
     }
+}
+
+/// The systems of `systems` whose `Visibility` in `tests` fails for
+/// `gate`: hidden by the galaxy refresh. A system with no entry in `tests`
+/// counts as a blank test, which holds (@0x995ad-0x995b4), and a test that
+/// did not parse never holds ([`Gate::allows`]). An entry for a system
+/// outside `systems` is never read.
+#[must_use]
+pub fn hidden_by(
+    systems: impl IntoIterator<Item = SystemId>,
+    tests: &[SystemVisibility],
+    gate: &Gate,
+) -> BTreeSet<SystemId> {
+    let tests: BTreeMap<SystemId, &SystemVisibility> =
+        tests.iter().map(|test| (test.id, test)).collect();
+    systems
+        .into_iter()
+        .filter(|system| {
+            tests
+                .get(system)
+                .is_some_and(|test| !gate.allows(&test.visibility))
+        })
+        .collect()
 }
 
 /// Where a player in, or arriving in, a system goes (see
@@ -197,29 +275,35 @@ pub struct OverlaidGalaxy {
     govts: BTreeMap<SystemId, Option<GovtId>>,
     /// What play has changed.
     overlay: GalaxyOverlay,
+    /// Which visible system stands for a place two share.
+    colocated: CoLocated,
     /// The overlaid map.
     map: StarMap,
 }
 
 impl OverlaidGalaxy {
-    /// The catalog's `systems` with `overlay` applied.
+    /// The catalog's `systems` with `overlay` applied, a place two visible
+    /// systems share resolved by the original's reading,
+    /// [`CoLocated::Lowest`] ([`OverlaidGalaxy::set_colocated`]).
     #[must_use]
     pub fn new(systems: Vec<StarSystem>, overlay: GalaxyOverlay) -> Self {
         let govts = systems
             .iter()
             .map(|system| (system.id, system.govt))
             .collect();
-        let map = Self::build(&systems, &overlay);
+        let colocated = CoLocated::default();
+        let map = Self::build(&systems, &overlay, colocated);
         Self {
             systems,
             govts,
             overlay,
+            colocated,
             map,
         }
     }
 
-    /// The map of `systems` under `overlay`.
-    fn build(systems: &[StarSystem], overlay: &GalaxyOverlay) -> StarMap {
+    /// The map of `systems` under `overlay`, resolved as `colocated` says.
+    fn build(systems: &[StarSystem], overlay: &GalaxyOverlay, colocated: CoLocated) -> StarMap {
         let overlaid = systems
             .iter()
             .cloned()
@@ -230,7 +314,26 @@ impl OverlaidGalaxy {
                 system
             })
             .collect();
-        StarMap::with_hidden(overlaid, &overlay.hidden())
+        StarMap::with_hidden(overlaid, &overlay.hidden(), colocated)
+    }
+
+    /// Which visible system stands for a place two share
+    /// ([`RuleKey::ColocatedResolution`](crate::RuleKey::ColocatedResolution)).
+    #[must_use]
+    pub fn colocated(&self) -> CoLocated {
+        self.colocated
+    }
+
+    /// Resolves a place two visible systems share as `colocated` says
+    /// instead, rebuilding the map when it differs, and says whether it
+    /// did.
+    pub fn set_colocated(&mut self, colocated: CoLocated) -> bool {
+        if colocated == self.colocated {
+            return false;
+        }
+        self.map = Self::build(&self.systems, &self.overlay, colocated);
+        self.colocated = colocated;
+        true
     }
 
     /// The overlay applied.
@@ -245,7 +348,7 @@ impl OverlaidGalaxy {
         if overlay == self.overlay {
             return false;
         }
-        self.map = Self::build(&self.systems, &overlay);
+        self.map = Self::build(&self.systems, &overlay, self.colocated);
         self.overlay = overlay;
         true
     }
@@ -284,6 +387,12 @@ impl OverlaidGalaxy {
         self.overlay.system(system).govt.unwrap_or(catalog)
     }
 
+    /// Every system in the catalog, visible or not, by ascending ID: the
+    /// systems the galaxy refresh evaluates.
+    pub fn catalog_systems(&self) -> impl Iterator<Item = SystemId> + '_ {
+        self.govts.keys().copied()
+    }
+
     /// Every system in the catalog, visible or not, by ascending ID, with
     /// its government ([`OverlaidGalaxy::govt`]): what the original's
     /// loops over every `_systemData` slot read (@0xa05a3-0xa0672).
@@ -316,9 +425,9 @@ impl OverlaidGalaxy {
         self.overlay.nebula(nebula).unwrap_or(true)
     }
 
-    /// The visible system that stands for `system`: itself when it is
-    /// visible, else the lowest-ID visible system at its exact map
-    /// position, if any
+    /// The visible system that stands for `system`: the lowest-ID visible
+    /// system at its exact map position, if any, or by
+    /// [`CoLocated::Itself`] itself when it is visible
     /// ([`Places::stand_in`](crate::hyperspace::Places::stand_in), the one
     /// resolver).
     #[must_use]
@@ -326,9 +435,8 @@ impl OverlaidGalaxy {
         self.map.places().stand_in(system)
     }
 
-    /// Where a player arriving in `system` goes: itself when it is
-    /// visible, else the visible system at the same place
-    /// ([`OverlaidGalaxy::same_place`]), else the chain head, the lowest-ID
+    /// Where a player arriving in `system` goes: the visible system that
+    /// stands for it ([`OverlaidGalaxy::same_place`]), else the chain head, the lowest-ID
     /// system at that place (itself when it is not in the catalog), made
     /// visible, as the original moves a player whose system is hidden
     /// (@0x998f1-0x99a36).
@@ -346,6 +454,35 @@ impl OverlaidGalaxy {
         }
     }
 
+    /// The system that owns a stellar `listers` list (its
+    /// [`ListedStellar::systems`](crate::catalog::ListedStellar::systems),
+    /// by ascending ID): the first that claims it, none when none does. A
+    /// system claims when it is in the catalog and visible, was not made
+    /// visible by the move (its overlay entry is not `Some(true)`), and
+    /// stands for itself at its place ([`OverlaidGalaxy::same_place`]).
+    ///
+    /// This is `_PropagateMissionBitEffects`' ownership (@0x996ed-0x997bd),
+    /// derived rather than stored: it visits the systems by ascending ID,
+    /// and a visible system not yet done claims each of its stellars still
+    /// unowned, then marks every higher system at its place done. So by
+    /// [`CoLocated::Lowest`] a visible system shadowed by a lower visible
+    /// one at its place claims nothing, and by [`CoLocated::Itself`] the
+    /// owner is the lowest-ID visible lister. The ownership runs before
+    /// the player's move out of a hidden system (@0x998f1-0x99a36), so a
+    /// chain head the move shows claims nothing; it never shadows anything
+    /// either, as the move shows it only at a place with no visible
+    /// system. A stellar listed only by hidden or shadowed systems has no
+    /// owner.
+    #[must_use]
+    pub fn owner(&self, listers: &[SystemId]) -> Option<SystemId> {
+        listers.iter().copied().find(|&system| {
+            self.exists(system)
+                && self.visible(system)
+                && self.overlay.system(system).visible != Some(true)
+                && self.same_place(system) == Some(system)
+        })
+    }
+
     /// Where a player in `system` goes when it is hidden
     /// ([`OverlaidGalaxy::arrival`]); `None` while it is visible.
     #[must_use]
@@ -357,6 +494,10 @@ impl OverlaidGalaxy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::OutfitId;
+    use crate::control::{Bit, NovaBits, PilotFacts, Test};
+    use crate::hyperspace::CoLocated;
+    use crate::pilot::Gender;
     use crate::testkit::{planet, star};
 
     fn ids(list: &[i16]) -> Vec<SystemId> {
@@ -386,6 +527,13 @@ mod tests {
             overlay.set_visible(SystemId(id), Some(false));
         }
         OverlaidGalaxy::new(systems(), overlay)
+    }
+
+    /// [`hiding`], resolved as `colocated` says.
+    fn resolving(hidden: &[i16], colocated: CoLocated) -> OverlaidGalaxy {
+        let mut galaxy = hiding(hidden);
+        galaxy.set_colocated(colocated);
+        galaxy
     }
 
     #[test]
@@ -478,10 +626,10 @@ mod tests {
         let galaxy = OverlaidGalaxy::new(systems(), GalaxyOverlay::default());
         assert_eq!(*galaxy.map(), StarMap::new(systems()));
         assert!(galaxy.overlay().is_empty());
-        for id in 1..=5 {
+        for (id, place) in [(1, 1), (2, 2), (3, 2), (4, 4), (5, 2)] {
             assert!(galaxy.visible(SystemId(id)));
             assert!(galaxy.exists(SystemId(id)));
-            assert_eq!(galaxy.same_place(SystemId(id)), Some(SystemId(id)));
+            assert_eq!(galaxy.same_place(SystemId(id)), Some(SystemId(place)));
             assert_eq!(galaxy.hidden_move(SystemId(id)), None);
         }
         assert_eq!(galaxy.govt(SystemId(3)), Some(GovtId(140)));
@@ -595,9 +743,31 @@ mod tests {
 
     #[test]
     fn the_same_place_is_itself_when_visible_else_the_lowest_visible_one_there() {
-        let galaxy = hiding(&[2]);
+        let itself = |hidden: &[i16]| resolving(hidden, CoLocated::Itself);
+        let galaxy = itself(&[2]);
         assert_eq!(galaxy.same_place(SystemId(2)), Some(SystemId(3)));
         assert_eq!(galaxy.same_place(SystemId(5)), Some(SystemId(5)), "visible");
+        let galaxy = itself(&[2, 3]);
+        assert_eq!(galaxy.same_place(SystemId(2)), Some(SystemId(5)));
+        assert_eq!(galaxy.same_place(SystemId(3)), Some(SystemId(5)));
+        let galaxy = itself(&[2, 3, 5]);
+        assert_eq!(galaxy.same_place(SystemId(2)), None, "none there");
+        let galaxy = itself(&[4]);
+        assert_eq!(galaxy.same_place(SystemId(4)), None, "alone at its place");
+        let galaxy = itself(&[99]);
+        assert_eq!(galaxy.same_place(SystemId(99)), None, "nowhere");
+    }
+
+    #[test]
+    fn by_the_engine_the_same_place_is_the_lowest_visible_one_there_visible_or_not() {
+        let galaxy = hiding(&[2]);
+        assert_eq!(galaxy.same_place(SystemId(2)), Some(SystemId(3)));
+        assert_eq!(
+            galaxy.same_place(SystemId(5)),
+            Some(SystemId(3)),
+            "shadowed"
+        );
+        assert_eq!(galaxy.same_place(SystemId(3)), Some(SystemId(3)));
         let galaxy = hiding(&[2, 3]);
         assert_eq!(galaxy.same_place(SystemId(2)), Some(SystemId(5)));
         assert_eq!(galaxy.same_place(SystemId(3)), Some(SystemId(5)));
@@ -619,17 +789,73 @@ mod tests {
             to: SystemId(to),
             make_visible: true,
         };
-        assert_eq!(hiding(&[]).arrival(SystemId(3)), stay(3));
-        assert_eq!(hiding(&[3]).arrival(SystemId(3)), stay(2));
-        assert_eq!(hiding(&[2, 3]).arrival(SystemId(3)), stay(5));
+        let itself = |hidden: &[i16]| resolving(hidden, CoLocated::Itself);
+        assert_eq!(itself(&[]).arrival(SystemId(3)), stay(3));
+        assert_eq!(itself(&[3]).arrival(SystemId(3)), stay(2));
+        assert_eq!(itself(&[2, 3]).arrival(SystemId(3)), stay(5));
         assert_eq!(
-            hiding(&[2, 3, 5]).arrival(SystemId(3)),
+            itself(&[2, 3, 5]).arrival(SystemId(3)),
             shown(2),
             "the head"
         );
-        assert_eq!(hiding(&[2, 3, 5]).arrival(SystemId(2)), shown(2), "itself");
+        assert_eq!(itself(&[2, 3, 5]).arrival(SystemId(2)), shown(2), "itself");
+        assert_eq!(itself(&[4]).arrival(SystemId(4)), shown(4), "alone");
+        assert_eq!(itself(&[99]).arrival(SystemId(99)), shown(99), "nowhere");
+    }
+
+    #[test]
+    fn by_the_engine_an_arrival_is_the_lowest_visible_one_there_or_the_chain_head_made_visible() {
+        let stay = |to| HiddenMove {
+            to: SystemId(to),
+            make_visible: false,
+        };
+        let shown = |to| HiddenMove {
+            to: SystemId(to),
+            make_visible: true,
+        };
+        assert_eq!(hiding(&[]).arrival(SystemId(3)), stay(2), "shadowed");
+        assert_eq!(hiding(&[]).arrival(SystemId(2)), stay(2));
+        assert_eq!(hiding(&[2]).arrival(SystemId(5)), stay(3));
+        assert_eq!(hiding(&[3]).arrival(SystemId(3)), stay(2));
+        assert_eq!(hiding(&[2, 3]).arrival(SystemId(3)), stay(5));
+        assert_eq!(hiding(&[2, 3, 5]).arrival(SystemId(3)), shown(2));
         assert_eq!(hiding(&[4]).arrival(SystemId(4)), shown(4), "alone");
         assert_eq!(hiding(&[99]).arrival(SystemId(99)), shown(99), "nowhere");
+    }
+
+    #[test]
+    fn a_visible_system_shadowed_at_its_place_never_moves_its_player() {
+        for colocated in [CoLocated::Lowest, CoLocated::Itself] {
+            let galaxy = resolving(&[], colocated);
+            assert_eq!(galaxy.hidden_move(SystemId(5)), None, "{colocated:?}");
+            assert_eq!(galaxy.hidden_move(SystemId(3)), None, "{colocated:?}");
+        }
+    }
+
+    #[test]
+    fn a_new_resolution_rebuilds_the_map_only_when_it_differs() {
+        let mut galaxy = hiding(&[]);
+        assert_eq!(galaxy.colocated(), CoLocated::Lowest, "the default");
+        assert!(!galaxy.set_colocated(CoLocated::Lowest));
+        assert_eq!(*galaxy.map(), StarMap::new(systems()));
+        assert!(galaxy.set_colocated(CoLocated::Itself));
+        assert_eq!(galaxy.colocated(), CoLocated::Itself);
+        assert_eq!(
+            *galaxy.map(),
+            StarMap::with_hidden(systems(), &BTreeSet::new(), CoLocated::Itself)
+        );
+        assert_eq!(galaxy.same_place(SystemId(5)), Some(SystemId(5)));
+        assert!(!galaxy.set_colocated(CoLocated::Itself));
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(2), Some(false));
+        galaxy.set_overlay(overlay);
+        assert_eq!(
+            galaxy.same_place(SystemId(5)),
+            Some(SystemId(5)),
+            "a new overlay keeps the resolution"
+        );
+        assert!(galaxy.set_colocated(CoLocated::Lowest));
+        assert_eq!(galaxy.same_place(SystemId(5)), Some(SystemId(3)));
     }
 
     #[test]
@@ -678,6 +904,15 @@ mod tests {
     }
 
     #[test]
+    fn the_catalog_systems_are_every_one_hidden_or_not_by_ascending_id() {
+        let galaxy = hiding(&[3]);
+        assert_eq!(
+            galaxy.catalog_systems().collect::<Vec<_>>(),
+            ids(&[1, 2, 3, 4, 5])
+        );
+    }
+
+    #[test]
     fn every_system_is_governed_as_overlaid_hidden_or_not_by_ascending_id() {
         let mut overlay = GalaxyOverlay::default();
         overlay.set_visible(SystemId(3), Some(false));
@@ -695,6 +930,182 @@ mod tests {
             ],
             "1 by its override, 3 though hidden, 4 made independent"
         );
+    }
+
+    /// The owner `galaxy` gives a stellar listed by `listers`.
+    fn owner(galaxy: &OverlaidGalaxy, listers: &[i16]) -> Option<i16> {
+        galaxy.owner(&ids(listers)).map(|id| id.0)
+    }
+
+    #[test]
+    fn a_stellar_is_owned_by_the_lowest_visible_lister_standing_for_its_place() {
+        let galaxy = hiding(&[]);
+        assert_eq!(owner(&galaxy, &[1, 2]), Some(1));
+        assert_eq!(owner(&galaxy, &[2, 3]), Some(2), "the lowest");
+        assert_eq!(owner(&galaxy, &[3]), None, "3 is shadowed by 2");
+        assert_eq!(owner(&galaxy, &[3, 5]), None, "both shadowed");
+        assert_eq!(
+            owner(&galaxy, &[3, 4]),
+            Some(4),
+            "a later visible system elsewhere still claims it"
+        );
+        assert_eq!(owner(&galaxy, &[]), None, "no lister");
+        let galaxy = hiding(&[2]);
+        assert_eq!(owner(&galaxy, &[2]), None, "only a hidden lister");
+        assert_eq!(owner(&galaxy, &[2, 3]), Some(3));
+        assert_eq!(owner(&galaxy, &[5]), None, "3 shadows 5");
+        let galaxy = hiding(&[2, 3]);
+        assert_eq!(owner(&galaxy, &[5]), Some(5), "the lowest visible now");
+        assert_eq!(owner(&galaxy, &[99]), None, "not in the catalog");
+    }
+
+    #[test]
+    fn by_the_other_reading_each_visible_lister_claims_its_own() {
+        let galaxy = resolving(&[], CoLocated::Itself);
+        assert_eq!(owner(&galaxy, &[3]), Some(3));
+        assert_eq!(owner(&galaxy, &[3, 5]), Some(3), "the lowest visible");
+        assert_eq!(owner(&galaxy, &[2, 3]), Some(2));
+        assert_eq!(owner(&galaxy, &[5]), Some(5));
+        let galaxy = resolving(&[3], CoLocated::Itself);
+        assert_eq!(owner(&galaxy, &[3]), None, "only a hidden lister");
+        assert_eq!(owner(&galaxy, &[3, 5]), Some(5));
+    }
+
+    #[test]
+    fn a_chain_head_made_visible_by_the_move_claims_nothing() {
+        for colocated in [CoLocated::Lowest, CoLocated::Itself] {
+            let mut overlay = GalaxyOverlay::default();
+            overlay.set_visible(SystemId(4), Some(true));
+            let mut galaxy = OverlaidGalaxy::new(systems(), overlay);
+            galaxy.set_colocated(colocated);
+            assert!(galaxy.visible(SystemId(4)));
+            assert_eq!(owner(&galaxy, &[4]), None, "{colocated:?}");
+            assert_eq!(owner(&galaxy, &[1, 4]), Some(1), "{colocated:?}");
+        }
+    }
+
+    /// A pilot with only `bits` set.
+    #[derive(Debug, Default)]
+    struct Bits(BTreeSet<u16>);
+
+    impl PilotFacts for Bits {
+        fn bit(&self, bit: Bit) -> bool {
+            self.0.contains(&bit.get())
+        }
+
+        fn gender(&self) -> Gender {
+            Gender::Male
+        }
+
+        fn paid(&self, _days: u16) -> bool {
+            true
+        }
+
+        fn has_outfit(&self, _outfit: OutfitId) -> bool {
+            false
+        }
+
+        fn explored(&self, _system: SystemId) -> bool {
+            false
+        }
+    }
+
+    /// `system`'s `Visibility`, `test`.
+    fn visibility(system: i16, test: &str) -> SystemVisibility {
+        SystemVisibility {
+            id: SystemId(system),
+            visibility: Test::parse(test),
+        }
+    }
+
+    /// Refreshes `overlay` over systems 1 to 5 by `tests` for a pilot with
+    /// `bits` set, tested by Nova's control bits: whether it changed.
+    fn refresh(overlay: &mut GalaxyOverlay, tests: &[SystemVisibility], bits: &[u16]) -> bool {
+        let pilot = Bits(bits.iter().copied().collect());
+        let gate = Gate {
+            control_bits: &NovaBits,
+            pilot: &pilot,
+        };
+        overlay.refresh_visibility(ids(&[1, 2, 3, 4, 5]), tests, &gate)
+    }
+
+    #[test]
+    fn a_refresh_hides_a_system_whose_visibility_fails_and_shows_it_once_it_holds() {
+        let tests = [visibility(2, "b10"), visibility(3, "!b10")];
+        let mut overlay = GalaxyOverlay::default();
+        assert!(refresh(&mut overlay, &tests, &[]));
+        assert_eq!(overlay.system(SystemId(2)).visible, Some(false));
+        assert_eq!(overlay.system(SystemId(3)).visible, None);
+        assert!(!refresh(&mut overlay, &tests, &[]), "nothing changed");
+        assert!(refresh(&mut overlay, &tests, &[10]));
+        assert_eq!(overlay.system(SystemId(2)).visible, None, "shown again");
+        assert_eq!(overlay.system(SystemId(3)).visible, Some(false));
+    }
+
+    #[test]
+    fn a_blank_test_or_no_test_leaves_a_system_visible_and_an_unparsed_one_hides_it() {
+        let tests = [visibility(1, ""), visibility(4, "b10 &")];
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(1), Some(false));
+        overlay.set_visible(SystemId(5), Some(false));
+        assert!(refresh(&mut overlay, &tests, &[10]));
+        assert_eq!(overlay.system(SystemId(1)).visible, None, "blank");
+        assert_eq!(overlay.system(SystemId(5)).visible, None, "no test");
+        assert_eq!(overlay.system(SystemId(4)).visible, Some(false), "unparsed");
+    }
+
+    #[test]
+    fn a_refresh_never_writes_a_system_shown_and_overwrites_the_moves_reveal() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(2), Some(true));
+        overlay.set_visible(SystemId(3), Some(true));
+        overlay.set_govt(SystemId(3), Some(None));
+        assert!(refresh(&mut overlay, &[visibility(3, "b10")], &[]));
+        assert_eq!(overlay.system(SystemId(2)).visible, None, "visible");
+        assert_eq!(overlay.system(SystemId(3)).visible, Some(false), "hidden");
+        assert_eq!(overlay.system(SystemId(3)).govt, Some(None), "kept");
+        assert!(
+            overlay
+                .systems()
+                .all(|(_, change)| change.visible != Some(true))
+        );
+    }
+
+    #[test]
+    fn a_refresh_clears_what_it_held_of_a_system_outside_the_catalog() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(99), Some(false));
+        overlay.set_visible(SystemId(98), Some(true));
+        overlay.set_nebula_active(NebulaId(128), Some(false));
+        assert!(refresh(&mut overlay, &[visibility(99, "b10")], &[]));
+        assert_eq!(overlay.system(SystemId(99)), SystemOverride::default());
+        assert_eq!(overlay.system(SystemId(98)), SystemOverride::default());
+        assert_eq!(overlay.nebula(NebulaId(128)), Some(false), "untouched");
+    }
+
+    #[test]
+    fn the_systems_hidden_are_those_whose_test_fails_for_the_pilot() {
+        let pilot = Bits([10].into_iter().collect());
+        let gate = Gate {
+            control_bits: &NovaBits,
+            pilot: &pilot,
+        };
+        let tests = [
+            visibility(1, "!b10"),
+            visibility(2, "b10"),
+            visibility(4, "b11"),
+            visibility(99, "b11"),
+        ];
+        assert_eq!(
+            hidden_by(ids(&[1, 2, 3, 4, 5]), &tests, &gate),
+            ids(&[1, 4]).into_iter().collect::<BTreeSet<_>>(),
+            "99 is outside the catalog"
+        );
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_visible(SystemId(2), Some(false));
+        assert!(overlay.set_hidden(&ids(&[1, 4]).into_iter().collect()));
+        assert_eq!(overlay.hidden(), ids(&[1, 4]).into_iter().collect());
+        assert!(!overlay.set_hidden(&ids(&[1, 4]).into_iter().collect()));
     }
 
     /// [`systems`] with 2 hidden and 1 governed by 7.

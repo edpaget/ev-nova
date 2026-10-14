@@ -641,6 +641,7 @@ mod tests {
             },
             scan_mask: 0x0004,
             scan_fine: fine,
+            news_pic: -1,
             ..govt(128)
         }
     }

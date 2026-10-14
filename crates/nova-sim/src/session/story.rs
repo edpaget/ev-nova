@@ -14,7 +14,7 @@ use super::entry::Dock;
 use super::missions;
 use super::script_effects::Settled;
 use super::{ScriptNote, Session, SessionEvent};
-use crate::catalog::{LandingSite, PilotCatalog, StellarId, SystemId, TrafficCatalog};
+use crate::catalog::{GovtId, LandingSite, PilotCatalog, StellarId, SystemId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::{Script, Test};
 use crate::market;
@@ -22,6 +22,7 @@ use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::day::{self, Day, Participant};
 use crate::story::dispatch::{self, DuplicateSubscription, Reentry, Registry, Stage};
+use crate::story::galaxy::hidden_by;
 use crate::story::{
     Consumer, Countdown, Fate, GalaxyOverlay, HiddenMove, OverlaidGalaxy, StoryEvent, Subscription,
     SubscriptionId,
@@ -103,15 +104,23 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
     fn effect(&mut self, id: SubscriptionId, event: &StoryEvent) {
         match id.consumer {
             // The offer roll (see the `missions` module).
+            // The offer roll, the galaxy refreshed first when it rolls
+            // (`_RandomizeMissionData` @0xa175f; see the `missions`
+            // module).
             Consumer::Offers => {
                 if let (missions::ROLL, &StoryEvent::Landed { stellar }) = (id, event) {
+                    if self.session.offers.due_at(stellar) {
+                        self.session.refresh_galaxy(self.catalog);
+                    }
                     self.session.roll_offers(stellar, &mut *self.chance);
                 }
             }
-            // The re-offer, and each slot's landing hooks and deadline
-            // checks (see the `missions` module).
+            // The galaxy refresh after the land check (@0xa1af2) and the
+            // re-offer, and each slot's landing hooks and deadline checks
+            // (see the `missions` module).
             Consumer::Missions => match (id, event) {
                 (missions::REOFFER, StoryEvent::Landed { .. }) => {
+                    self.session.refresh_galaxy(self.catalog);
                     self.session.reoffer_missions(&mut *self.chance);
                 }
                 _ => self.session.mission_effect(id, event, &mut *self.chance),
@@ -174,6 +183,9 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
         let session = &mut *self.session;
         match participant {
             Participant::Date => session.pilot.date = session.pilot.date.next_day(),
+            // One pass over the crons, each script run at once (see the
+            // `crons` module).
+            Participant::Crons => session.crons_day(&mut *self.chance),
             Participant::Events => {
                 // The events step out of the pilot, so that their
                 // `ActivateOn` can read the pilot through the session's
@@ -192,14 +204,12 @@ impl<C: Chance + ?Sized> Day for SessionDay<'_, C> {
             // The active missions' days left; their deadlines fail on the
             // missions' `DayPassed` subscriptions.
             Participant::MissionDays => session.pilot.missions.count_down(),
-            // Each slot is filled by its own phase: the crons by
-            // crons-news-ranks phase 1, the tribute by rdm task
-            // planet-domination, the reinforcements once they are built,
-            // and the ranks by crons-news-ranks phase 3.
-            Participant::Crons
-            | Participant::Tribute
-            | Participant::Reinforcements
-            | Participant::Ranks => {}
+            // The active ranks' salaries (see the `ranks` module).
+            Participant::Ranks => session.ranks_day(),
+            // Each slot is filled by its own phase: the tribute by rdm
+            // task planet-domination, and the reinforcements once they
+            // are built.
+            Participant::Tribute | Participant::Reinforcements => {}
         }
     }
 }
@@ -349,6 +359,11 @@ impl Session {
     /// new table ([`Traffic::retarget`](crate::Traffic::retarget)). A save
     /// is due, and [`SessionEvent::GalaxyChanged`] is told once. Whether
     /// it changed anything.
+    ///
+    /// A visibility written here lasts only until the next refresh of the
+    /// systems' `Visibility` ([`GalaxyOverlay::refresh_visibility`]), at
+    /// a landing, a jump's arrival, a new pilot's start or a load, which
+    /// overwrites every system's.
     pub fn change_galaxy<C>(&mut self, catalog: &C, change: impl FnOnce(&mut GalaxyOverlay)) -> bool
     where
         C: PilotCatalog + TrafficCatalog + ?Sized,
@@ -357,7 +372,68 @@ impl Session {
         let Some(before) = self.write_galaxy(change) else {
             return false;
         };
-        self.refresh_sites(catalog, &before);
+        self.galaxy_changed(catalog, &before, govt);
+        true
+    }
+
+    /// The systems the galaxy refresh hides now: each catalog system whose
+    /// `Visibility` fails for the pilot ([`hidden_by`]).
+    pub(super) fn hidden_now(&self) -> BTreeSet<SystemId> {
+        hidden_by(
+            self.galaxy.catalog_systems(),
+            &self.visibility,
+            &self.gate(),
+        )
+    }
+
+    /// The galaxy refresh at a landing or a new pilot's start
+    /// (`_PropagateMissionBitEffects` @0x99676): every system's visibility
+    /// written from its `Visibility` through the one writer, then, when
+    /// that changed anything, what any change does
+    /// ([`Session::change_galaxy`]): the player moved out of a system now
+    /// hidden, the traffic retargeted, [`SessionEvent::GalaxyChanged`]
+    /// told and a save due. Stellar ownership follows from the overlay
+    /// ([`OverlaidGalaxy::owner`]), derived before the move. Whether it
+    /// changed anything.
+    pub(super) fn refresh_galaxy<C>(&mut self, catalog: &C) -> bool
+    where
+        C: PilotCatalog + TrafficCatalog + ?Sized,
+    {
+        let hidden = self.hidden_now();
+        self.change_galaxy(catalog, |overlay| {
+            overlay.set_hidden(&hidden);
+        })
+    }
+
+    /// A load's galaxy refresh (`_LoadPilotData` @0x751ca, @0x7531f): every
+    /// system's visibility written from its `Visibility`, the saved flags
+    /// never trusted, telling nothing and making no save due, as the
+    /// load's rebuild tells nothing and the original's load saves nothing.
+    /// A player whose system is now hidden moves as the original moves it
+    /// ([`leave_hidden`]), docked or not, and the stellars are rebuilt
+    /// quietly.
+    pub(super) fn refresh_galaxy_quietly(&mut self, catalog: &(impl PilotCatalog + ?Sized)) {
+        let hidden = self.hidden_now();
+        if !self.pilot.galaxy.set_hidden(&hidden) {
+            return;
+        }
+        self.galaxy.set_overlay(self.pilot.galaxy.clone());
+        if leave_hidden(&mut self.pilot, &mut self.galaxy) {
+            let system = self.pilot.system;
+            let sites = self.read_sites(catalog, system);
+            self.set_player_system(system, sites, Dock::AsItWas);
+            self.rebuild_quietly();
+        }
+    }
+
+    /// What any change to the overlay from `before` does once written, the
+    /// player's system governed by `govt` before it (see
+    /// [`Session::change_galaxy`]).
+    fn galaxy_changed<C>(&mut self, catalog: &C, before: &GalaxyOverlay, govt: Option<GovtId>)
+    where
+        C: PilotCatalog + TrafficCatalog + ?Sized,
+    {
+        self.refresh_sites(catalog, before);
         let moved = leave_hidden(&mut self.pilot, &mut self.galaxy);
         // The original rewrites only the system numbers (@0x998f1-0x99a36):
         // docked, the spaceport open stays the stellar's.
@@ -374,7 +450,6 @@ impl Session {
             self.traffic.retarget(table, &every);
         }
         self.emit(SessionEvent::GalaxyChanged);
-        true
     }
 
     /// The writer's one core, for both its entries: changes the pilot's
@@ -382,7 +457,10 @@ impl Session {
     /// galaxy's, rebuilding the overlaid map, and makes a save due. It
     /// tells nothing: each entry tells what its change calls for. The
     /// overlay as it was, when it changed.
-    fn write_galaxy(&mut self, change: impl FnOnce(&mut GalaxyOverlay)) -> Option<GalaxyOverlay> {
+    pub(super) fn write_galaxy(
+        &mut self,
+        change: impl FnOnce(&mut GalaxyOverlay),
+    ) -> Option<GalaxyOverlay> {
         let before = self.pilot.galaxy.clone();
         change(&mut self.pilot.galaxy);
         if self.pilot.galaxy == before {
@@ -542,6 +620,8 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use super::*;
     use crate::catalog::{DisasterId, OutfitId, ShipId, StellarId, SystemId};
     use crate::chance::NeverFires;
@@ -1612,5 +1692,267 @@ mod tests {
                 .pilot()
                 .control_bit(crate::control::Bit::new(40).expect("a bit"))
         );
+    }
+
+    // The galaxy refresh.
+
+    /// `system`'s `Visibility`, `test`.
+    fn visibility(system: i16, test: &str) -> crate::catalog::SystemVisibility {
+        crate::catalog::SystemVisibility {
+            id: SystemId(system),
+            visibility: Test::parse(test),
+        }
+    }
+
+    /// [`testkit::catalog`], 131 also linked back to 130, with these
+    /// `Visibility` tests.
+    fn gated(tests: &[(i16, &str)]) -> FakePilotCatalog {
+        let mut catalog = testkit::catalog();
+        catalog.star_map[1].links.push(SystemId(130));
+        catalog.visibility = tests
+            .iter()
+            .map(|&(system, test)| visibility(system, test))
+            .collect();
+        catalog
+    }
+
+    /// [`gated`], with 134 at 131's place, (600, 0), listing 130 and
+    /// holding planet 141.
+    fn gated_alternates(tests: &[(i16, &str)]) -> FakePilotCatalog {
+        let mut catalog = gated(tests);
+        catalog
+            .star_map
+            .push(testkit::star(134, (600.0, 0.0), &[130]));
+        catalog.systems.push(SystemId(134));
+        catalog
+            .sites
+            .push((SystemId(134), vec![testkit::planet(141, 0.0, 0.0)]));
+        catalog
+    }
+
+    fn visible(session: &Session, system: i16) -> bool {
+        session.galaxy().visible(SystemId(system))
+    }
+
+    /// Puts the ship at rest over 140, at 131's centre, and lands there.
+    fn land_on_140(session: &mut Session) -> Result<StellarId, crate::landing::LandingRefusal> {
+        session.player.position = crate::geometry::Vec2::ZERO;
+        session.player.velocity = crate::geometry::Vec2::ZERO;
+        land_now(session)
+    }
+
+    /// Runs `script` and settles it.
+    fn set(session: &mut Session, catalog: &FakePilotCatalog, script: &str) {
+        session.run_set(&SetExpr::parse(script).expect("parses"), &mut NeverFires);
+        let _ = session.settle_script(catalog, &mut NeverFires);
+    }
+
+    #[test]
+    fn a_new_pilot_flies_with_its_systems_visibility_evaluated() {
+        let catalog = gated(&[(132, "b50"), (131, "!b50")]);
+        let session = Session::start(&catalog).expect("starts");
+        assert!(!visible(&session, 132));
+        assert!(visible(&session, 131));
+        assert_eq!(
+            session.pilot().galaxy.system(SystemId(132)).visible,
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn by_the_engine_a_bit_a_settled_script_sets_shows_only_at_the_next_refresh() {
+        let catalog = gated(&[(132, "b50")]);
+        let mut session = Session::start(&catalog).expect("starts");
+        session.take_events();
+        set(&mut session, &catalog, "b50");
+        assert!(!visible(&session, 132), "not yet");
+        assert_eq!(session.take_events(), []);
+        land_now(&mut session).expect("lands");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(visible(&session, 132), "at the landing");
+        assert!(session.take_events().contains(&SessionEvent::GalaxyChanged));
+    }
+
+    #[test]
+    fn a_jumps_arrival_refreshes_before_its_days_so_a_crons_bit_waits_for_the_landing() {
+        let mut catalog = gated(&[(132, "b50")]);
+        catalog.crons = vec![crate::catalog::CronRecord {
+            on_start: Script::parse("b50"),
+            ..testkit::cron(150)
+        }];
+        let mut session = Session::start(&catalog).expect("starts");
+        jump(&mut session, &catalog, 131).expect("arrives");
+        assert!(
+            session.control_bit(crate::control::Bit::new(50).expect("a bit")),
+            "set on the jump's day"
+        );
+        assert!(!visible(&session, 132), "refreshed before the days");
+        assert_eq!(land_on_140(&mut session), Ok(StellarId(140)));
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(visible(&session, 132), "at the next landing");
+    }
+
+    #[test]
+    fn a_jumps_arrival_shows_a_bit_set_before_it_and_resolves_by_the_flags_as_they_stood() {
+        let catalog = gated_alternates(&[(131, "!b50"), (134, "b50")]);
+        let mut session = quiet(Session::start(&catalog).expect("starts"));
+        assert!(visible(&session, 131) && !visible(&session, 134));
+        set(&mut session, &catalog, "b50");
+        session.take_events();
+        assert_eq!(jump(&mut session, &catalog, 131), Some(SystemId(134)));
+        assert!(!visible(&session, 131) && visible(&session, 134));
+        assert_eq!(
+            session.story_raised().first(),
+            Some(&explored(131)),
+            "explored as 131 stood before the refresh"
+        );
+        assert!(session.take_events().contains(&SessionEvent::GalaxyChanged));
+    }
+
+    #[test]
+    fn a_new_pilots_on_start_shows_its_bits_after_begin() {
+        let mut catalog = gated(&[(132, "b50")]);
+        if let Ok(start) = &mut catalog.character {
+            start.on_start = Script::parse("b50");
+        }
+        let mut session = Session::start(&catalog).expect("starts");
+        assert!(
+            !visible(&session, 132),
+            "the flight's refresh, before OnStart"
+        );
+        session.begin(&catalog, &mut NeverFires);
+        assert!(visible(&session, 132), "_PlayGame's refresh, after it");
+    }
+
+    #[test]
+    fn a_load_recomputes_the_saved_visibility_quietly() {
+        let catalog = gated(&[(132, "b50"), (133, "!b50")]);
+        let mut pilot = crate::pilot::Pilot::new(&catalog, "Ada").expect("starts");
+        pilot
+            .bits_mut()
+            .set(crate::control::Bit::new(50).expect("a bit"));
+        pilot.galaxy.set_visible(SystemId(132), Some(false));
+        pilot.galaxy.set_visible(SystemId(133), Some(true));
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert!(visible(&session, 132), "saved hidden, its test holds");
+        assert!(!visible(&session, 133), "saved shown, its test fails");
+        assert!(!session.take_events().contains(&SessionEvent::GalaxyChanged));
+        assert!(!session.take_save_due(), "nothing to save");
+    }
+
+    #[test]
+    fn a_load_whose_refresh_hides_the_players_system_moves_it_to_the_one_at_its_place() {
+        let catalog = gated_alternates(&[(131, "b50")]);
+        let mut pilot = crate::pilot::Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.system = SystemId(131);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.system(), SystemId(134));
+        assert_eq!(session.sites[0].id, StellarId(141), "134's stellars");
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn a_chain_head_the_move_shows_owns_nothing_and_hides_again_at_the_next_refresh() {
+        let catalog = gated(&[(131, "!b50")]);
+        let mut session = Session::start(&catalog).expect("starts");
+        jump(&mut session, &catalog, 131).expect("arrives");
+        let owner = |session: &Session| session.galaxy().owner(&[SystemId(131)]);
+        assert_eq!(owner(&session), Some(SystemId(131)));
+        set(&mut session, &catalog, "b50");
+        assert_eq!(land_on_140(&mut session), Ok(StellarId(140)));
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(session.system(), SystemId(131), "alone at its place");
+        assert!(visible(&session, 131));
+        assert_eq!(
+            session.pilot().galaxy.system(SystemId(131)).visible,
+            Some(true),
+            "shown by the move"
+        );
+        assert_eq!(owner(&session), None, "it owns no stellar");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(land_on_140(&mut session), Ok(StellarId(140)));
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(
+            session.pilot().galaxy.system(SystemId(131)).visible,
+            Some(true),
+            "hidden by the refresh and shown again by the move"
+        );
+        assert_eq!(owner(&session), None, "still owning nothing");
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        jump(&mut session, &catalog, 130).expect("arrives");
+        assert!(!visible(&session, 131), "the arrival's refresh hides it");
+        assert_eq!(
+            session.pilot().galaxy.system(SystemId(131)).visible,
+            Some(false)
+        );
+    }
+
+    /// Nova's control bits, counting the tests asked.
+    #[derive(Debug, Default)]
+    struct Counting(std::cell::Cell<usize>);
+
+    impl crate::control::ControlBits for Counting {
+        fn allows(
+            &self,
+            test: &crate::control::TestExpr,
+            pilot: &dyn crate::control::PilotFacts,
+        ) -> bool {
+            self.0.set(self.0.get() + 1);
+            crate::control::holds(test, pilot)
+        }
+    }
+
+    /// A session of `catalog` with `visibility_refresh` reading `source`,
+    /// its control bits counting the tests asked.
+    fn refreshing(catalog: &FakePilotCatalog, source: RuleSource) -> (Session, Rc<Counting>) {
+        let counting = Rc::new(Counting::default());
+        let session = Session::start(catalog)
+            .expect("starts")
+            .with_rules(Rulebook::default().with_override(RuleKey::VisibilityRefresh, source))
+            .with_control_bits(counting.clone());
+        (session, counting)
+    }
+
+    #[test]
+    fn by_the_other_refresh_reading_a_bit_shows_once_its_script_settles() {
+        let catalog = gated(&[(132, "b50")]);
+        let (mut session, _) = refreshing(&catalog, RuleSource::Bible);
+        session.take_events();
+        set(&mut session, &catalog, "b50");
+        assert!(visible(&session, 132), "right after settling");
+        assert_eq!(session.take_events(), [SessionEvent::GalaxyChanged]);
+        set(&mut session, &catalog, "!b50");
+        assert!(!visible(&session, 132));
+    }
+
+    #[test]
+    fn by_the_engine_refresh_reading_a_bit_waits_for_the_next_refresh_point() {
+        let catalog = gated(&[(132, "b50")]);
+        let (mut session, _) = refreshing(&catalog, RuleSource::Engine);
+        set(&mut session, &catalog, "b50");
+        assert!(!visible(&session, 132), "not after settling");
+        land_now(&mut session).expect("lands");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert!(visible(&session, 132), "at the landing");
+    }
+
+    #[test]
+    fn by_the_other_refresh_reading_an_idle_settling_evaluates_nothing() {
+        let catalog = gated(&[(132, "b50"), (133, "!b50")]);
+        let (mut session, counting) = refreshing(&catalog, RuleSource::Bible);
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        let asked = counting.0.get();
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(counting.0.get(), asked, "no script ran");
+        set(&mut session, &catalog, "b1");
+        assert_eq!(counting.0.get(), asked + 2, "both tests, once");
+        let _ = session.settle_script(&catalog, &mut NeverFires);
+        assert_eq!(counting.0.get(), asked + 2, "and not again");
     }
 }
