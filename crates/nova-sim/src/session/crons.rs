@@ -32,7 +32,8 @@ use crate::catalog::{CronId, CronRecord};
 use crate::chance::Chance;
 use crate::combat::report::SimDiagnostic;
 use crate::control::Script;
-use crate::cron::{self, CronDay, CronFacts, CronHook, CronState};
+use crate::cron::{self, CronDay, CronFacts, CronHook, CronRefusal, CronState};
+use crate::rules::Verdict;
 use crate::session::Session;
 use crate::story::SubscriptionId;
 use crate::wares::{self, Contributors};
@@ -60,14 +61,7 @@ impl<C: Chance + ?Sized> CronDay for SessionCrons<'_, C> {
     }
 
     fn eligible(&mut self, record: &CronRecord) -> bool {
-        let session = &*self.session;
-        let facts = CronFacts {
-            record,
-            today: session.pilot.date,
-            contributed: session.contributed(),
-            gate: session.gate(),
-            rules: &session.rules,
-        };
+        let facts = self.session.cron_facts(record);
         cron::eligibility()
             .first_refusal(&facts, &mut &mut *self.chance)
             .is_ok()
@@ -108,6 +102,40 @@ impl Session {
         );
     }
 
+    /// Why crön `cron` would not start today, as the daily pass asks an
+    /// inactive crön: every check of [`cron::eligibility`] that refuses,
+    /// by name, in its order. Nothing is drawn ([`Checks::all_refusals`]),
+    /// so the `Random` roll is always reported as [`Verdict::Draws`]; a
+    /// crön would start when no check reports [`Verdict::Refuses`]. The
+    /// crön's state is not read: this answers whether the pass would start
+    /// it today were it inactive. `None` when the data has no such crön.
+    ///
+    /// [`Checks::all_refusals`]: crate::rules::Checks::all_refusals
+    #[must_use]
+    pub fn cron_refusals(&self, cron: CronId) -> Option<Vec<(&'static str, Verdict<CronRefusal>)>> {
+        let record = self.crons.iter().find(|record| record.id == cron)?;
+        let facts = self.cron_facts(record);
+        Some(
+            cron::eligibility()
+                .all_refusals(&facts)
+                .into_iter()
+                .map(|(descriptor, verdict)| (descriptor.name(), verdict))
+                .collect(),
+        )
+    }
+
+    /// What crön `record`'s eligibility reads, as the session stands:
+    /// today, the `Contribute` bits held, the control bits and the rules.
+    fn cron_facts<'a>(&'a self, record: &'a CronRecord) -> CronFacts<'a> {
+        CronFacts {
+            record,
+            today: self.pilot.date,
+            contributed: self.contributed(),
+            gate: self.gate(),
+            rules: &self.rules,
+        }
+    }
+
     /// The `Contribute` bits the player holds, as they stand
     /// (`_GetPlayerContributeBits` @0x76b2; see [`wares::contributed`]).
     pub(super) fn contributed(&self) -> u64 {
@@ -130,7 +158,7 @@ mod tests {
     use crate::chance::NeverFires;
     use crate::combat::report::SimDiagnostic;
     use crate::control::{Bit, Script, Test};
-    use crate::cron::{CronHook, CronState, ITERATE_END, ITERATE_START};
+    use crate::cron::{CronHook, CronRefusal, CronState, ITERATE_END, ITERATE_START};
     use crate::date::GameDate;
     use crate::mission::Refusal;
     use crate::outfitter::OutfitFlags;
@@ -176,6 +204,77 @@ mod tests {
             .offer_refusals(MissionId(130))
             .expect("docked")
             .contains(&("Require", Verdict::Refuses(Refusal::Require)))
+    }
+
+    /// Why the session would not start crön 128 today.
+    fn cron_refusals(session: &Session) -> Vec<(&'static str, Verdict<CronRefusal>)> {
+        session.cron_refusals(CronId(128)).expect("a crön")
+    }
+
+    #[test]
+    fn the_refusals_of_an_unknown_cron_are_none() {
+        let catalog = timing(vec![cron(128)]);
+        let session = quiet(&catalog);
+        assert_eq!(session.cron_refusals(CronId(129)), None);
+    }
+
+    #[test]
+    fn a_crons_refusals_name_each_check_that_refuses_its_random_drawing() {
+        let mut gated = scripted(128, 2, "", "");
+        gated.enable_on = Test::parse("b20");
+        let catalog = timing(vec![gated]);
+        let mut session = quiet(&catalog);
+        assert_eq!(
+            cron_refusals(&session),
+            [
+                ("Random", Verdict::Draws),
+                ("EnableOn", Verdict::Refuses(CronRefusal::EnableOn)),
+            ]
+        );
+        session.set_control_bit(bit(20), true);
+        assert_eq!(cron_refusals(&session), [("Random", Verdict::Draws)]);
+    }
+
+    #[test]
+    fn a_crons_refusals_list_its_duration_dates_and_require_in_order() {
+        let mut shut = scripted(128, -1, "", "");
+        shut.require = 0x4;
+        shut.enable_on = Test::parse("b20");
+        shut.first_month = 9;
+        shut.first_day = 1;
+        let catalog = timing(vec![shut]);
+        let mut session = quiet(&catalog);
+        let year = session.date().year();
+        session.set_date(GameDate::new(year, 8, 30).expect("a date"));
+        assert_eq!(
+            cron_refusals(&session),
+            [
+                ("Duration", Verdict::Refuses(CronRefusal::Disabled)),
+                ("Random", Verdict::Draws),
+                ("date range", Verdict::Refuses(CronRefusal::Dates)),
+                ("Require", Verdict::Refuses(CronRefusal::Require)),
+                ("EnableOn", Verdict::Refuses(CronRefusal::EnableOn)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_crons_require_is_met_in_its_refusals_by_a_running_crons_contribute() {
+        let catalog = requiring(vec![CronRecord {
+            contribute: 0x4,
+            ..scripted(128, 5, "", "")
+        }]);
+        let mut session = quiet(&catalog);
+        let refusals = |session: &Session| session.cron_refusals(CronId(129)).expect("a crön");
+        assert!(refusals(&session).contains(&("Require", Verdict::Refuses(CronRefusal::Require))));
+        session.pilot.crons.insert(
+            CronId(128),
+            CronState {
+                days: 5,
+                holdoff: 0,
+            },
+        );
+        assert_eq!(refusals(&session), [("Random", Verdict::Draws)]);
     }
 
     #[test]
