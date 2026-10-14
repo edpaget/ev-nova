@@ -471,6 +471,19 @@ mod tests {
     }
 
     #[test]
+    fn a_fleet_leader_turns_on_the_ship_attacking_its_escort() {
+        let mut escort = ship(2, NEUTRAL, AiType::Warship, 0.0, 100.0);
+        escort.leader = Some(NpcId(1));
+        let mut raider = ship(3, NEUTRAL, AiType::Warship, 0.0, 400.0);
+        raider.goal = Goal::Attack(n(2));
+        let npcs = [police(), escort, raider];
+        assert_eq!(decided(&npcs, 0), Goal::Attack(n(3)));
+        let mut unled = npcs.clone();
+        unled[1].leader = None;
+        assert_eq!(decided(&unled, 0), Goal::Land(StellarId(128)));
+    }
+
+    #[test]
     fn a_hopeless_chase_stands_off_and_snipes() {
         let mut hunter = police();
         hunter.hull.mass = 100.0;

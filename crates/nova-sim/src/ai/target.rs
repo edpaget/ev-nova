@@ -63,8 +63,14 @@
 //!    ship's own times its `MaxOdds`, and a disabled NPC skipped unless
 //!    the ship has destroying weapons. The original's heaviest candidate
 //!    for a ship with escorts is a placeholder: nearest always.
-//! 8. **Threats**: the nearest NPC attacking, sniping at or fleeing from
-//!    it, other than one it spares.
+//! 8. **Threats** (`_ExtendedIsThreatToShip` asked @0x8adb6): the
+//!    nearest NPC attacking, sniping at or fleeing from it or a ship it
+//!    leads ([`Npc::threatens_npc_among`]), other than one it spares. The
+//!    player is never one here: the original asks of it while the ship
+//!    has no target (@0x8ad3c), so `_IsThreatToPlayer` of the ship is
+//!    false. The original's second threat search, for a ship of AI type
+//!    6 (@0x8ae70, @0x8af1d), never runs: only AI types 3 and 4 reach
+//!    this function (`_AIDispatch` @0x8ffc2-0x9000a).
 //!
 //! **A target is dropped** ([`dropped`], @0x8bc73, @0x8e3ef) when it is
 //! gone or breaking up; disabled while the ship has no destroying
@@ -79,7 +85,8 @@
 //! player unprovoked; this holds for any behaviour that asks here.
 //!
 //! Steps 6 and 8 never give a ship it spares. The original checks
-//! neither there (nor does `_ExtendedIsThreatToShip` @0x81a27), so its
+//! neither there, and `_ExtendedIsThreatToShip` @0x81a27 excludes only a
+//! ship the asker leads (@0x81a5a), not an ally, so its
 //! police, seeing an allied trader that a stray police shot provoked,
 //! turn on their own kind until the drop at @0x8e2af clears the goal a
 //! frame later, and then take it up again. Here they never do.
@@ -294,7 +301,7 @@ pub fn select_target(
         return Some(target);
     }
     let threats = others()
-        .filter(|other| other.threatens(me))
+        .filter(|other| other.threatens_npc_among(npc.id, around.npcs))
         .map(|other| ShipRef::Npc(other.id))
         .filter(|&ship| !spares(npc, ship, around));
     nearest(npc, threats, around)
@@ -989,6 +996,24 @@ mod tests {
         idle[1].goal = Goal::Idle;
         idle[2].goal = Goal::Idle;
         assert_eq!(chosen(0, &idle, None, 0, NEAR), None);
+    }
+
+    #[test]
+    fn a_fleet_leader_turns_on_a_ship_attacking_one_it_leads() {
+        let mut escort = ship(2, NEUTRAL, 50.0, 0.0);
+        escort.leader = Some(NpcId(1));
+        let mut raider = ship(3, NEUTRAL, 600.0, 0.0);
+        raider.goal = Goal::Attack(n(2));
+        let mut sniper = ship(4, NEUTRAL, 300.0, 0.0);
+        sniper.goal = Goal::Snipe(n(2));
+        let npcs = [me(), escort, raider, sniper];
+        assert_eq!(chosen(0, &npcs, None, 0, NEAR), Some(n(4)), "the nearest");
+        let mut unled = npcs.clone();
+        unled[1].leader = None;
+        assert_eq!(chosen(0, &unled, None, 0, NEAR), None, "led by nobody");
+        let mut others = npcs.clone();
+        others[1].leader = Some(NpcId(9));
+        assert_eq!(chosen(0, &others, None, 0, NEAR), None, "led by another");
     }
 
     #[test]

@@ -328,13 +328,56 @@ impl Npc {
             .or_else(|| self.mission.and_then(|mark| mark.formation))
     }
 
-    /// Whether it threatens `ship` (`_ExtendedIsThreatToShip`): it is
-    /// intact, flying, and attacking, sniping at or fleeing from it.
+    /// Whether it fights `ship` directly: it is intact, flying, and
+    /// attacking, sniping at or fleeing from it.
+    ///
+    /// This is only the direct-target part of the original's threat
+    /// tests: `_ExtendedIsThreatToShip` @0x81a27 also counts a ship
+    /// attacking one the asker leads ([`Npc::threatens_npc_among`]), and
+    /// `_IsThreatToPlayer` one the player leads
+    /// ([`Npc::threatens_player_among`]).
     #[must_use]
     pub fn threatens(&self, ship: ShipRef) -> bool {
         self.condition == Condition::Intact
             && self.mode == Mode::Flying
             && self.goal.quarry() == Some(ship)
+    }
+
+    /// Whether it threatens the NPC `ship`, as `_ExtendedIsThreatToShip`
+    /// @0x81a27 asks it of a ship other than the player, reading which
+    /// ships `ship` leads from `npcs`. A ship whose quarry isn't in
+    /// `npcs` is led by nobody.
+    ///
+    /// The original's test, `ship` its arg 0 and this ship its arg 1:
+    /// this ship is active and not disabled (@0x81a33-0x81a4a); its
+    /// leader (+0x9a) is not `ship` (@0x81a5a), so a ship's own escort
+    /// never threatens it; its AI state is none of 5, 7, 9, 10, 11, 12,
+    /// 15, 18; and its target (+0x70) is `ship` (@0x81aa9-0x81b03) or an
+    /// active ship in slots 1-63, other than itself, whose leader is
+    /// `ship` (@0x81ab2-0x81b59). Here [`Condition::Intact`] stands for
+    /// the active and disabled tests and [`Goal::quarry`]'s attack, snipe
+    /// and flee for the AI states. Unlike `_IsThreatToPlayer`, there is
+    /// no AI-wait (+0x4c) test; [`Mode::Flying`] is kept as
+    /// [`Npc::threatens`] keeps it, since its one modelled reader
+    /// (`_SelectWarshipTarget` @0x8adb6, [`select_target`](crate::ai::target::select_target))
+    /// sees only flying ships. The "other than itself" test can't
+    /// change the answer: a ship led by `ship` is excluded by the leader
+    /// test first.
+    ///
+    /// When the other ship is the player, `_ExtendedIsThreatToShip` asks
+    /// `_IsThreatToPlayer` of `ship` instead
+    /// ([`Npc::threatens_player_among`]).
+    #[must_use]
+    pub fn threatens_npc_among(&self, ship: NpcId, npcs: &[Npc]) -> bool {
+        self.condition == Condition::Intact
+            && self.mode == Mode::Flying
+            && self.leader != Some(ship)
+            && match self.goal.quarry() {
+                Some(ShipRef::Npc(id)) => {
+                    id == ship || npcs.iter().any(|n| n.id == id && n.leader == Some(ship))
+                }
+                Some(ShipRef::Player) | None => false,
+            }
     }
 
     /// Whether it can cloak now (`_ShipCanCloak` @0x553c): its
@@ -757,6 +800,85 @@ mod tests {
                 "{quarry:?}"
             );
         }
+    }
+
+    #[test]
+    fn threatens_npc_among_counts_a_ship_attacking_the_asker_or_one_it_leads() {
+        let asker = NpcId(1);
+        let ship = |id| crate::testkit::npc(id, ShipStats::default());
+        let led = Npc {
+            leader: Some(asker),
+            ..ship(2)
+        };
+        let other_led = Npc {
+            leader: Some(NpcId(5)),
+            ..ship(3)
+        };
+        let stranger = ship(4);
+        let npcs = [ship(1), led, other_led, stranger];
+        let with = |goal| Npc { goal, ..ship(9) };
+        for quarry in [asker, NpcId(2)].map(ShipRef::Npc) {
+            for goal in [
+                Goal::Attack(quarry),
+                Goal::Snipe(quarry),
+                Goal::Flee(quarry),
+            ] {
+                assert!(with(goal).threatens_npc_among(asker, &npcs), "{goal:?}");
+            }
+            assert!(
+                !with(Goal::Inspect(quarry)).threatens_npc_among(asker, &npcs),
+                "inspecting {quarry:?}"
+            );
+            for condition in [
+                Condition::Disabled,
+                Condition::Dying { ticks_left: 1 },
+                Condition::Destroyed,
+            ] {
+                let downed = Npc {
+                    condition,
+                    ..with(Goal::Attack(quarry))
+                };
+                assert!(!downed.threatens_npc_among(asker, &npcs), "{condition:?}");
+            }
+            for mode in [
+                Mode::JumpingIn { ticks_left: 2 },
+                Mode::Emerging { ticks_left: 2 },
+            ] {
+                let arriving = Npc {
+                    mode,
+                    ..with(Goal::Attack(quarry))
+                };
+                assert!(!arriving.threatens_npc_among(asker, &npcs), "{mode:?}");
+            }
+            let own_escort = Npc {
+                leader: Some(asker),
+                ..with(Goal::Attack(quarry))
+            };
+            assert!(
+                !own_escort.threatens_npc_among(asker, &npcs),
+                "its own escort, at {quarry:?}"
+            );
+            let led_elsewhere = Npc {
+                leader: Some(NpcId(5)),
+                ..with(Goal::Attack(quarry))
+            };
+            assert!(
+                led_elsewhere.threatens_npc_among(asker, &npcs),
+                "another's escort, at {quarry:?}"
+            );
+        }
+        for quarry in [
+            ShipRef::Player,
+            ShipRef::Npc(NpcId(3)),
+            ShipRef::Npc(NpcId(4)),
+            ShipRef::Npc(NpcId(6)),
+        ] {
+            assert!(
+                !with(Goal::Attack(quarry)).threatens_npc_among(asker, &npcs),
+                "{quarry:?}"
+            );
+        }
+        assert!(!with(Goal::Idle).threatens_npc_among(asker, &npcs));
     }
 
     #[test]
