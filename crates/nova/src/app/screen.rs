@@ -5901,6 +5901,186 @@ pub(super) mod tests {
         );
     }
 
+    // The resets past the holds: the player info opening and the hire
+    // screen closing.
+
+    use nova_view::spaceport::bar::BarScreen;
+
+    /// The mission cargo [`past_the_holds`] carries: 9 tons, never cut.
+    const MISSION_TONS: u32 = 9;
+
+    /// [`cargo_pod_data`] whose outfitter offers mission 130 (see
+    /// [`venue_mission`]) carrying [`MISSION_TONS`] of cargo aboard from
+    /// its accept, and whose first ship class is for hire in the bar
+    /// every day (`HireRandom` 100).
+    fn past_the_holds_data() -> Rc<GameData> {
+        let mut mission = venue_mission(OUTFITTER);
+        let tons = i16::try_from(MISSION_TONS).expect("a few tons");
+        mission[0x10..0x12].copy_from_slice(&0_i16.to_be_bytes());
+        mission[0x12..0x14].copy_from_slice(&tons.to_be_bytes());
+        let fork = game_data_fork(true, true, false, 100, b"", b"", None)
+            .resource(Mission::TYPE, 130, Some(b"Cargo job"), &mission)
+            .resource(Desc::TYPE, 130 + 3872, Some(b"Offer"), &desc_of("Job 130."));
+        let mut built = fork.build();
+        let pod = built.layout.data_entry(Outfit::TYPE, 128) + 4;
+        built.put_u16(pod + 0x06, 2);
+        built.put_u16(pod + 0x08, 10);
+        built.bytes[pod + 0x0E..pod + 0x12].copy_from_slice(&100_i32.to_be_bytes());
+        let first = built.layout.data_entry(Ship::TYPE, 128) + 4;
+        built.put_u16(first + 0x38A, 100);
+        loaded_bytes(built.bytes)
+    }
+
+    /// The shop dialogs, the offer, the bar and its hire screen.
+    struct PastTheHoldsDialogs;
+
+    impl DialogResources for PastTheHoldsDialogs {
+        fn dialog_template(&self, id: i16) -> Result<DialogTemplate, String> {
+            match id {
+                OFFER_DIALOG => Ok(offer_template()),
+                BAR_DIALOG => Ok(bar_template()),
+                SHIPYARD_DIALOG => Ok(shipyard_template()),
+                _ => ShopDialogs.dialog_template(id),
+            }
+        }
+    }
+
+    /// "Bar", smaller: 263 x 185 at (0, 0), with Leave (1), Hire Escort
+    /// (5) and the text (7).
+    fn bar_template() -> DialogTemplate {
+        let item = |x: f32, y: f32, w: f32, h: f32| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: false,
+            kind: ItemSpec::User,
+        };
+        let mut items: Vec<ItemTemplate> = (0..10).map(|_| item(0.0, 300.0, 1.0, 1.0)).collect();
+        items[0] = item(156.0, 154.0, 99.0, 26.0);
+        items[4] = item(6.0, 125.0, 146.0, 26.0);
+        items[6] = item(16.0, 10.0, 230.0, 106.0);
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 263.0, 185.0),
+            placement: Placement::Fixed,
+            items,
+        }
+    }
+
+    /// The router over [`past_the_holds_data`], landed, by the other
+    /// reading of [`RuleKey::OutfitSaleCargo`]: Ada accepts the
+    /// outfitter's mission ([`MISSION_TONS`] aboard), buys the pod (20
+    /// tons), then 10 tons of food, and sells the pod, keeping 19 tons in
+    /// her 10. The outfitter's close trims the food to trunc(10 x 10 /
+    /// 19) = 5, leaving 14 tons in 10, as the mission cargo is never cut:
+    /// each reset after it trims the food again.
+    fn past_the_holds(store: &MemoryPilots) -> AppScreen {
+        let rulebook =
+            Rulebook::default().with_override(RuleKey::OutfitSaleCargo, RuleSource::Bible);
+        let mut screen = AppScreen::new(past_the_holds_data())
+            .with_rulebook(&rulebook)
+            .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        click_port_item(&mut screen, 8);
+        let open = spaceport(&screen).open_outfitter().expect("outfitting");
+        assert_eq!(offered_mission(open.offer_dialog()), Some(MissionId(130)));
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(active(&screen), [MissionId(130)]);
+        assert_eq!(pilot(&screen).total_cargo(), i64::from(MISSION_TONS));
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 1, "the pod bought");
+        click_port_item(&mut screen, 7);
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(pilot(&screen).held(FOOD), 10);
+        click_port_item(&mut screen, 8);
+        assert!(
+            spaceport(&screen)
+                .open_outfitter()
+                .is_some_and(|open| open.offer_dialog().is_none()),
+            "no offer over the sale"
+        );
+        screen.input(&key(Key::Char('s'), true));
+        assert_eq!(pilot(&screen).owned(BOOSTER), 0, "the pod sold");
+        assert_eq!(pilot(&screen).held(FOOD), 10, "kept past the holds");
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).open_outfitter().is_none());
+        assert_eq!(pilot(&screen).held(FOOD), 5, "the close's trim");
+        screen
+    }
+
+    /// The trade center's food row as the spaceport shows it.
+    fn food_shown(screen: &AppScreen) -> Option<u32> {
+        spaceport(screen)
+            .open_trade()
+            .and_then(|open| open.market().row(FOOD))
+            .map(|row| row.held)
+    }
+
+    #[test]
+    fn p_over_the_trade_center_resets_and_shows_the_cargo_trimmed() {
+        let mut screen = past_the_holds(&MemoryPilots::new());
+        click_port_item(&mut screen, 7);
+        assert_eq!(food_shown(&screen), Some(5));
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        assert!(spaceport(&screen).player_info().is_some(), "open");
+        assert_eq!(pilot(&screen).held(FOOD), 3, "trunc(5 x 10 / 14) @0x5a06a");
+        assert_eq!(food_shown(&screen), Some(3), "the shops shown afresh");
+        let shown = spaceport(&screen)
+            .player_info()
+            .and_then(|open| open.info().cargo.clone())
+            .expect("cargo shown");
+        // The cargo line counts every ton aboard: 3 of food and the
+        // mission's 9, not the 14 before the reset.
+        assert!(shown.contains("12"), "the info built after: {shown}");
+    }
+
+    #[test]
+    fn cancelling_the_hire_screen_resets_and_the_shops_show_it() {
+        let mut screen = past_the_holds(&MemoryPilots::new());
+        click_port_item(&mut screen, 10);
+        assert!(spaceport(&screen).open_bar().is_some(), "in the bar");
+        screen.input(&key(Key::Char('h'), true));
+        assert!(
+            spaceport(&screen)
+                .open_bar()
+                .and_then(BarScreen::hire_screen)
+                .is_some(),
+            "for hire"
+        );
+        assert_eq!(pilot(&screen).held(FOOD), 5, "opening resets nothing");
+        screen.input(&key(Key::Escape, true));
+        assert!(
+            spaceport(&screen)
+                .open_bar()
+                .is_some_and(|bar| bar.hire_screen().is_none()),
+            "cancelled back to the bar"
+        );
+        assert_eq!(pilot(&screen).held(FOOD), 3, "trunc(5 x 10 / 14) @0x49235");
+        screen.input(&key(Key::Escape, true));
+        assert!(spaceport(&screen).open_bar().is_none(), "left the bar");
+        click_port_item(&mut screen, 7);
+        assert_eq!(food_shown(&screen), Some(3), "the shops shown afresh");
+    }
+
+    #[test]
+    fn p_in_flight_resets_before_the_info_is_built() {
+        let mut screen = past_the_holds(&MemoryPilots::new());
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight, "taken off");
+        let held = pilot(&screen).held(FOOD);
+        let trimmed = held * 10 / (held + MISSION_TONS);
+        assert!(trimmed < held, "{held} still past the holds");
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        let shown = screen
+            .flight_player_info()
+            .and_then(|open| open.info().cargo.clone())
+            .expect("open, showing the cargo");
+        assert_eq!(pilot(&screen).held(FOOD), trimmed, "@0x5a06a");
+        let total = (trimmed + MISSION_TONS).to_string();
+        assert!(shown.contains(&total), "the info built after: {shown}");
+    }
+
     #[test]
     fn an_outfit_order_changes_the_pilot_refreshes_the_outfitter_and_saves() {
         let store = MemoryPilots::new();
