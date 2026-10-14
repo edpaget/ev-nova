@@ -28,7 +28,7 @@ impl Session {
     /// player.
     #[must_use]
     pub fn ship_iff(&self, npc: &Npc) -> ShipIff {
-        iff::ship_iff(npc, npc.leader.and_then(|id| self.npc(id)))
+        iff::ship_iff(npc, npc.leader.and_then(|id| self.npc(id)), self.npcs())
     }
 
     /// What IFF shows `stellar` as, one of the stellars shown, as its

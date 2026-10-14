@@ -23,15 +23,19 @@ use crate::combat::hull::Condition;
 use crate::red_alert::{AlertIcon, alert_check_due};
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
-use crate::traffic::npc::Npc;
 
 impl Session {
     /// Whether any ship in the system threatens the player
     /// (`_IsPlayerThreatened` @0x82442-0x82482): any NPC for which
-    /// [`Npc::threatens_player`] holds, nothing else.
+    /// [`Npc::threatens_player_among`] the system's NPCs holds, so a ship
+    /// attacking one the player leads counts (@0x7f572-0x7f590), nothing
+    /// else.
+    ///
+    /// [`Npc::threatens_player_among`]: crate::traffic::npc::Npc::threatens_player_among
     #[must_use]
     pub fn player_threatened(&self) -> bool {
-        self.npcs().iter().any(Npc::threatens_player)
+        let npcs = self.npcs();
+        npcs.iter().any(|n| n.threatens_player_among(npcs))
     }
 
     /// The Red Alert icon frame shown, if any.
@@ -153,6 +157,36 @@ mod tests {
         assert!(!session.player_threatened());
         attacker(&mut session);
         assert!(session.player_threatened());
+    }
+
+    #[test]
+    fn a_ship_attacking_one_the_player_leads_sounds_the_red_alert() {
+        // `_IsThreatToPlayer`'s led clause (@0x7f572-0x7f590).
+        let mut session = session(&catalog());
+        session.set_sound_quiet(true);
+        let escort = session.traffic.add_npc(crate::traffic::npc::Npc {
+            escort: Some(crate::escort::EscortDuty {
+                formation: crate::escort::FormationSlot::default(),
+                order: None,
+            }),
+            ..npc(0, ShipStats::default())
+        });
+        let stranger = session.traffic.add_npc(npc(0, ShipStats::default()));
+        let hunter = session.traffic.add_npc(crate::traffic::npc::Npc {
+            goal: Goal::Attack(ShipRef::Npc(stranger)),
+            ..npc(0, ShipStats::default())
+        });
+        assert!(!session.player_threatened(), "a stranger's foe");
+        let foe = session
+            .traffic
+            .npcs_mut()
+            .iter_mut()
+            .find(|npc| npc.id == hunter)
+            .expect("there");
+        foe.goal = Goal::Attack(ShipRef::Npc(escort));
+        assert!(session.player_threatened());
+        session.frame = 1;
+        assert_eq!(alerts_over(&mut session, 60), 1);
     }
 
     #[test]

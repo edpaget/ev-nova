@@ -399,14 +399,12 @@ impl Npc {
     /// government test; inspecting is no threat.
     ///
     /// This is only part of `_IsThreatToPlayer` @0x7f501, which also counts
-    /// a ship attacking one the player leads; every caller roadmap
-    /// player-led-ships ported asks [`Npc::threatens_player_among`]. It is
-    /// kept for roadmap hud-fidelity's radar IFF
-    /// ([`iff::ship_iff`](crate::iff::ship_iff)) and Red Alert, which build
-    /// on it, and that roadmap's phase 14 moves them and retires it. The
-    /// hail's [`threatened_by_enemy`](crate::hail::Hail::threatened_by_enemy)
-    /// and [`threats_to_player`](crate::hail::Hail::threats_to_player)
-    /// read it too.
+    /// a ship attacking one the player leads; every other caller, the
+    /// radar IFF and the Red Alert among them, asks
+    /// [`Npc::threatens_player_among`]. It is kept only for the hail's
+    /// [`threatened_by_enemy`](crate::hail::Hail::threatened_by_enemy)
+    /// and [`threats_to_player`](crate::hail::Hail::threats_to_player),
+    /// which still read it.
     #[must_use]
     pub fn threatens_player(&self) -> bool {
         self.threatens(ShipRef::Player)
