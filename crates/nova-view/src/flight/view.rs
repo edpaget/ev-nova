@@ -112,6 +112,19 @@
 //! ([`Session::interference`]) may fill it with static, rolled on the
 //! effects' chance.
 //!
+//! In port the app draws the status bar alone under the spaceport
+//! ([`FlightView::draw_status_bar`]), its radar blank. Flight doesn't
+//! advance there, so by the engine's reading the bar shows what the
+//! port's redraws last took: landing and a docked start take everything,
+//! as do the mission dialogs and texts and a shop closing
+//! ([`FlightView::shop_closed`]); an outfitter order takes the radar
+//! alone; a ship purchase the radar, nav and target, and the gauges too
+//! under another `ïntf`; and a recharge the fuel gauge alone. The shield,
+//! armour and fuel gauges, live in flight, hold while docked between
+//! those points (`FlightView::reserves_shown`), as the original's port
+//! draws them only at its redraws. By the other reading, everything
+//! follows every frame.
+//!
 //! Each [`Screen::tick`] runs the simulation's fixed-step clock: the
 //! frame's time becomes whole steps of 1/30 s, each flown with the keys
 //! held, and what is left over is how far the display is between the last
@@ -2778,7 +2791,7 @@ impl<
     /// @0x5f0b1, after marking nav and the target @0x5f03a-0x5f04a), so a
     /// ship whose default outfits carry IFF shows it at once. The gauges
     /// are redrawn too only when the new ship asks for another `ïntf`
-    /// than the old ([`hud::interface_for`]), as `_LoadIntfResource`'s
+    /// than the old (`hud::interface_for`), as `_LoadIntfResource`'s
     /// whole-bar `_RedrawStatus` (@0x739bd) runs only for an ID other
     /// than the one loaded (`_currentIntf`, @0x73663-0x73672); otherwise
     /// they wait for the shipyard to close ([`FlightView::shop_closed`]).
@@ -2889,7 +2902,7 @@ impl<C> FlightView<C> {
     }
 
     /// Redraws the whole status bar as an exchange, outfitter or shipyard
-    /// closes ([`FlightView::redraw_status`]), as each of the original's
+    /// closes (`FlightView::redraw_status`), as each of the original's
     /// shops ends in `_RefreshSAT` (the outfitter @0x5dba4, the exchange
     /// @0x5e642, the shipyard @0x5f8d4, after its `_RedrawStatus` @0x5f87c
     /// and @0x5f8c5). The gauges an order left held show the order then.
@@ -3123,11 +3136,13 @@ impl<C> FlightView<C> {
     /// other, or before the first refresh, the radar as it is now
     /// ([`FlightView::radar_now`]).
     ///
-    /// While docked the snapshot isn't retaken after an outfitter order
-    /// or a ship purchase, which the original retakes as the outfitter
-    /// and shipyard change the ship ([`FlightView::redraw_status`]). No
-    /// status bar is drawn in port, and take-off retakes it before the
-    /// bar can be seen.
+    /// While docked, where flight doesn't advance, it is retaken at the
+    /// port's redraws ([`FlightView::redraw_status`]): after each
+    /// outfitter order, on a ship purchase and as a shop closes, so an
+    /// IFF bought or sold shows on the port's bar at once. The original's
+    /// port `_DrawStatus` skips the radar within 15 Mac ticks of its last
+    /// redraw (@0x4c911-0x4c923); ours, with no tick clock in port,
+    /// always retakes it.
     fn radar_shown(&self) -> Cow<'_, RadarScene> {
         match &self.radar_scene {
             Some(shown) if self.hud_waits() => Cow::Borrowed(shown),
@@ -3403,7 +3418,7 @@ impl<C> FlightView<C> {
     /// Buys or sells an outfit as [`Session::outfit`] does, it and its
     /// hook drawing on the flight's chance; a session that failed has no
     /// outfitter. The radar is redrawn after it
-    /// ([`FlightView::retake_radar`]).
+    /// (`FlightView::retake_radar`).
     pub fn outfit(&mut self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
         let done = match &mut self.session {
             Ok(session) => session.outfit(order, &mut self.chance),
@@ -3416,7 +3431,7 @@ impl<C> FlightView<C> {
     /// Buys or sells up to `count` of an outfit as
     /// [`Session::outfit_counted`] does, on the flight's chance, giving
     /// how many went through; a session that failed has no outfitter.
-    /// The radar is redrawn after it ([`FlightView::retake_radar`]).
+    /// The radar is redrawn after it (`FlightView::retake_radar`).
     pub fn outfit_counted(&mut self, order: OutfitOrder, count: u32) -> Result<u32, OutfitRefusal> {
         let done = match &mut self.session {
             Ok(session) => session.outfit_counted(order, count, &mut self.chance),
@@ -3430,7 +3445,7 @@ impl<C> FlightView<C> {
     /// [`Session::outfit_order`] does, on the flight's chance, giving the
     /// whole run and its alert; a session that failed has no outfitter,
     /// refused at the first pass with no alert. The radar is redrawn after
-    /// it ([`FlightView::retake_radar`]).
+    /// it (`FlightView::retake_radar`).
     pub fn outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
         let run = self.run_outfit_order(order, count);
         self.retake_radar();

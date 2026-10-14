@@ -46,9 +46,16 @@
 //! selection and the dialogs among them), so drawing it every frame
 //! shows the same: it has no timer here.
 //!
-//! `_RedrawStatus` (@0x4cac0) redraws everything at once but leaves the
-//! time and the blink as they are; the view does the same by taking a
-//! fresh snapshot without advancing a [`HudCadence`].
+//! `_RedrawStatus` (@0x4cac0) redraws everything at once, then calls
+//! `_DrawStatus` (@0x4cc74), whose radar timer can record the time and
+//! flip the blink when 15 Mac ticks have passed. The view takes a fresh
+//! snapshot without advancing a [`HudCadence`], leaving the time and the
+//! blink to the next advance: in flight that shows the same, as the
+//! frame's own `_DrawStatus` would flip it in the same frame. In port,
+//! where flight doesn't advance, the blink stays as landing left it
+//! through the port's redraws too; the original's flips there show only
+//! in the blank radar's centre arrow, which no landable stock stellar is
+//! far enough out to draw.
 //!
 //! The reading of
 //! [`RuleKey::HudCadence`](nova_sim::RuleKey::HudCadence) says whether the
