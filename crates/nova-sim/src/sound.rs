@@ -56,4 +56,16 @@ pub enum SimSound {
     /// A disabled former escort or fighter repaired itself and rejoined
     /// the fleet (`_HandleShip` @0x33bb1-0x33bd4, `_beepSnd[4]`).
     EscortRepaired,
+    /// A nav key was taken: Nav Off and Hyperspace Mode on every press
+    /// (`_HandlePlayer` @0x69b19), a stellar key that found a stellar,
+    /// even the one selected (@0x69ebc), and a click on a stellar not
+    /// selected (@0x6a6c1): `_beepSnd[0]`, `snd ` 150.
+    NavSelected,
+    /// Hyper Select moved the selection through the system's links
+    /// (`_HandlePlayer` @0x69c89): `_beepSnd[2]`, `snd ` 152. With no
+    /// links it is silent.
+    HyperSelected,
+    /// Option-backquote let go of the ship target (`_HandlePlayer`
+    /// @0x69a7d): `_beepSnd[0]`, `snd ` 150. With no target it is silent.
+    TargetCleared,
 }

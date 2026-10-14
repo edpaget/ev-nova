@@ -136,6 +136,9 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
                 Sound::Sim(SimSound::EscortsCommanded) => self.play(self.table.escorts_commanded),
                 Sound::Sim(SimSound::EscortRepaired) => self.play(self.table.escort_repaired),
+                Sound::Sim(SimSound::NavSelected) => self.play(self.table.nav_selected),
+                Sound::Sim(SimSound::HyperSelected) => self.play(self.table.hyper_selected),
+                Sound::Sim(SimSound::TargetCleared) => self.play(self.table.target_cleared),
                 Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
                 Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
                 Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
@@ -451,6 +454,23 @@ mod tests {
                 play(152, 1.0),
                 play(153, 1.0)
             ]
+        );
+    }
+
+    #[test]
+    fn the_nav_keys_beep_as_the_original_does() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::NavSelected),
+                Sound::Sim(SimSound::HyperSelected),
+                Sound::Sim(SimSound::TargetCleared),
+            ],
+        );
+        assert_eq!(
+            drain(&log),
+            [play(150, 1.0), play(152, 1.0), play(150, 1.0)]
         );
     }
 

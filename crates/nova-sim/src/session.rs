@@ -79,22 +79,25 @@
 //! pilot owns. A pilot from a save made
 //! before outfits were kept owns its ship's default items.
 //!
-//! The player selects one of the system's stellars as the navigation
-//! target ([`Session::select_stellar`]) by its slot in the system's
-//! navigation defaults, as the nearest landable one, or by clicking it,
-//! as the [`navigation`](crate::navigation) rules say, and clears it with
-//! Nav Off ([`Session::clear_nav_target`]); or with the land key
+//! The player's nav mode and its selection ([`Session::nav_mode`], the
+//! original's +0x6a and +0x6c; see the session's `nav` module) say what
+//! the nav area shows and where J jumps. The player selects one of the
+//! system's stellars ([`Session::select_stellar`]) by its slot in the
+//! system's navigation defaults, as the nearest landable one, or by
+//! clicking it, as the [`navigation`](crate::navigation) rules say;
+//! turns the nav system off with Nav Off ([`Session::nav_off`]), the
+//! course kept; selects the course's next hop with Hyperspace Mode
+//! ([`Session::hyperspace_mode`]); or presses the land key
 //! ([`Session::land`]), which selects the nearest landable stellar when
-//! there is no target and lands on the target when there is one. Landing
-//! clears it. The target is not part of the pilot, so it is not saved,
-//! and it is independent of the course.
-//! Arriving in another system clears it.
+//! none is selected and lands on the one selected when there is one.
+//! Landing keeps the selection, and the take-off lets go of it. The mode
+//! is not part of the pilot, so it is not saved.
 //!
 //! Hyper Select ([`Session::select_next_system`], the original's `\`
-//! key) cycles the course through the systems linked with the one the
+//! key) cycles the selection through the systems linked with the one the
 //! ship is in, as the session's [`HyperSelectRule`] says (the engine's
 //! unless [`Session::with_hyper_select`] says otherwise), each press
-//! leaving a one-jump course and clearing the navigation target.
+//! leaving a one-jump course.
 //!
 //! Each day that goes by steps the planetary events (see
 //! [`market`](crate::market)), rolling whether each can start on the
@@ -357,6 +360,7 @@ mod mission_escorts;
 mod mission_screens;
 mod mission_ships;
 mod missions;
+mod nav;
 mod nebulae;
 mod news;
 mod outfits;
@@ -440,16 +444,16 @@ use crate::hire::{HireTerms, NovaHire, PayNote};
 use crate::hyperspace::{
     CoLocated, HyperSelectRule, HyperlinkRule, JUMP_FUEL, JumpReadiness, JumpRefusal, JumpZoneRule,
     MultiJumpRule, RouteError, StarMap, arrival, check_jump, hops_per_jump, jump_bearing,
-    jump_zone, next_hyper_destination,
+    jump_zone,
 };
-use crate::landing::{LandOutcome, LandingRefusal, Standing, land_or_select, nearest_landable};
+use crate::landing::{LandOutcome, LandingRefusal, Standing, land_or_select};
 use crate::legal::{self, Crime, LegalCode};
 use crate::market::{
     self, Direction, EscortHolds, Good, Goods, Market, Markup, Order, TradeRefusal,
 };
 use crate::message::SimMessage;
 use crate::mission::{Offers, StellarMarks};
-use crate::navigation::{NavMode, stellar_under};
+use crate::navigation::NavMode;
 use crate::nebula;
 use crate::news::News;
 use crate::order_loop::{self, Onward, OrderRun, Pass};
@@ -2100,7 +2104,16 @@ impl Session {
 
     /// Plots a course from the system the ship is in to `to`, replacing any
     /// course, and gives it: the session's [`HyperlinkRule`] decides which
-    /// links it follows. When there is no route the course is cleared.
+    /// links it follows. A route cues its first hop
+    /// ([`Session::cue_course`]), selecting it in nav mode 3. When there is
+    /// no route the course is cleared, and the nav selection let go with
+    /// the mode kept (`_DoSystemMap` @0x13788-0x13790).
+    ///
+    /// The original selects at the click only a system the current one
+    /// lists (@0x137b3-0x137bb), and cues a longer route as its map closes
+    /// (@0x13c16); here the cue comes at the click. The map covers the
+    /// whole screen and hides the HUD, so the difference crosses no
+    /// boundary the player sees.
     pub fn plot_course(&mut self, to: SystemId) -> Result<&[SystemId], RouteError> {
         match self
             .galaxy
@@ -2109,10 +2122,12 @@ impl Session {
         {
             Ok(route) => {
                 self.pilot.course = route;
+                self.cue_course();
                 Ok(&self.pilot.course)
             }
             Err(error) => {
                 self.pilot.course.clear();
+                self.deselect();
                 Err(error)
             }
         }
@@ -2125,10 +2140,12 @@ impl Session {
         &self.pilot.course
     }
 
-    /// Presses the jump key: accepts a jump to the next system on the
-    /// course, if the ship has not landed and the
+    /// Presses the jump key: accepts a jump to the system selected in nav
+    /// mode 3 ([`Session::nav_mode`]), if the ship has not landed and the
     /// [`hyperspace`](crate::hyperspace) rules allow it, and gives that
-    /// system; otherwise the refusal says why.
+    /// system; otherwise the refusal says why. In any other mode, or with
+    /// nothing selected, it is [`JumpRefusal::NoDestination`]
+    /// (@0x6b11e-0x6b131), whatever the course.
     ///
     /// An accepted jump starts the pre-jump stage: the ship brakes and
     /// turns to the map bearing of that system as [`pre_jump`] says, and
@@ -2159,9 +2176,10 @@ impl Session {
         Ok(next)
     }
 
-    /// The next system on the course, if J would jump there now, or the
+    /// The system selected in nav mode 3, if J would jump there now, or the
     /// first [`JumpRefusal`] that applies: the ship has landed, or
-    /// [`check_jump`]'s refusals, with the no-jump zone the session's
+    /// [`check_jump`]'s refusals, the selection none unless the ship can
+    /// jump to it from here, with the no-jump zone the session's
     /// [`JumpZoneRule`] gives the system's stellars ([`jump_zone`]). J and
     /// [`Session::jump_readiness`] both ask this, so the rule lives in one
     /// place.
@@ -2169,27 +2187,15 @@ impl Session {
         if self.landed.is_some() {
             return Err(JumpRefusal::Landed);
         }
-        let system = self.pilot.system;
-        let next = self
-            .pilot
-            .course
-            .first()
-            .and_then(|&hop| self.galaxy.same_place(hop))
-            .filter(|next| {
-                self.galaxy
-                    .map()
-                    .jumps(system, self.hyperlinks)
-                    .contains(next)
-            });
         check_jump(
             &self.player,
             self.pilot.reserves.fuel.now,
-            next,
+            self.jump_selection(),
             jump_zone(&self.sites, self.stats.jump_distance, self.jump_zone),
         )
     }
 
-    /// Whether the ship can jump to the next system on its course: under
+    /// Whether the ship can jump to the system selected: under
     /// way once J has been accepted, until the ship arrives; otherwise
     /// clear when J would be accepted now, and blocked when it would be
     /// refused. The nav area draws the destination by this.
@@ -2257,10 +2263,11 @@ impl Session {
     ///
     /// The systems hopped are taken off the course. Those passed through
     /// on the way are not entered; only the last is: explored, its
-    /// stellars read from `catalog`, the navigation target cleared, and
-    /// the ship placed just outside its no-jump zone, at rest on the side
-    /// facing the system it last left (see [`arrival`]), with its reserves
-    /// as they were, so it can jump on at once. It raises
+    /// stellars read from `catalog`, the nav system off and then the
+    /// course's next hop cued, and the ship placed just outside its
+    /// no-jump zone, at rest on the side facing the system it last left
+    /// (see [`arrival`]), with its reserves as they were, so it can jump
+    /// on at once. It raises
     /// [`SimMessage::Arrived`] for that last system. The system arrived in
     /// is populated with its traffic ([`Session::populate`]), the last
     /// system's gone, and so are the shots and beams in flight; the
@@ -2392,80 +2399,6 @@ impl Session {
         self.pay_escorts(self.stats.jump_days);
     }
 
-    /// Makes the stellar `pick` finds the navigation target, as the
-    /// original's stellar slot keys, F5 and a click in space do, and
-    /// gives it. The course is left alone: the original keeps its route
-    /// and only moves its selection. `None`, and nothing changes, during
-    /// a jump (pre-jump stage too, as the original skips its nav inputs
-    /// while jumping) or when `pick` finds nothing: an empty slot, no
-    /// landable stellar, or a click on none. Picking a stellar other than
-    /// the target starts its brackets' fly-in ([`Session::nav_brackets`]);
-    /// picking the target again doesn't (@0x69ec4-0x69ed6,
-    /// @0x6a68f-0x6a69d).
-    pub fn select_stellar(&mut self, pick: StellarPick) -> Option<StellarId> {
-        if self.jump.is_some() {
-            return None;
-        }
-        let picked = match pick {
-            StellarPick::Slot(slot) => self.sites.get(slot).map(|site| site.id),
-            StellarPick::Nearest => nearest_landable(self.player.position, &self.sites),
-            StellarPick::At(at) => {
-                stellar_under(&self.sites, at, |site| self.drawn_frame_size(site))
-            }
-        }?;
-        if self.nav_target() != Some(picked) {
-            self.nav_fly_in.start();
-        }
-        self.nav = NavMode::Stellar(Some(picked));
-        Some(picked)
-    }
-
-    /// Clears the navigation target, as the original's Nav Off key does
-    /// (`_HandlePlayer` @0x69a17-0x69b63), and says whether there was one
-    /// to clear. Nothing changes during a jump (pre-jump stage too).
-    pub fn clear_nav_target(&mut self) -> bool {
-        if self.jump.is_some() {
-            return false;
-        }
-        let had = self.nav_target().is_some();
-        self.nav = NavMode::Off;
-        had
-    }
-
-    /// Presses Hyper Select (the original's `\` key): plots a one-jump
-    /// course to the next system the session's [`HyperSelectRule`] cycles
-    /// to ([`next_hyper_destination`]) and gives it, clearing the stellar
-    /// navigation target, as the original switches its nav selection to
-    /// hyperspace. `None`, and nothing changes, during a jump (pre-jump
-    /// stage too) or when the system has no links to offer.
-    ///
-    /// The original keeps the plotted route and only moves its selection,
-    /// so cycling back to the route's first hop there keeps the whole
-    /// route; here the course is the jump target, so a press always
-    /// leaves a one-jump course.
-    pub fn select_next_system(&mut self) -> Option<SystemId> {
-        if self.jump.is_some() {
-            return None;
-        }
-        let next = next_hyper_destination(
-            self.galaxy.map(),
-            self.pilot.system,
-            &self.course_shown(),
-            self.nav_target().is_some(),
-            self.hyper_select,
-            self.hyperlinks,
-        )?;
-        self.pilot.course = vec![next];
-        self.nav = NavMode::Off;
-        Some(next)
-    }
-
-    /// The stellar selected as the navigation target, if any.
-    #[must_use]
-    pub fn nav_target(&self) -> Option<StellarId> {
-        self.nav.stellar()
-    }
-
     /// The sounds emitted since they were last taken, in order; taking
     /// them empties the list.
     pub fn take_sounds(&mut self) -> Vec<SimSound> {
@@ -2533,18 +2466,20 @@ impl Session {
 
     /// Presses the land key, unless a jump is under way, its pre-jump stage
     /// included: as the
-    /// [`landing`](crate::landing) rules say, with the navigation target
+    /// [`landing`](crate::landing) rules say, with the stellar selected
     /// and traffic control's clearance
     /// ([`landing::cleared`](crate::landing::cleared)) of the pilot's
     /// standing: its legal record, the `Require` its ranks meet, its
     /// missions' stellars and the blessing table (see the `ranks` module),
-    /// read as the session's `blessing_landing` rule says. A press that
-    /// selects a stellar makes it the navigation target, starting its
-    /// brackets' fly-in (@0x6a932), and lands on nothing. A press that
-    /// lands docks the ship at the stellar's centre, at rest, its heading
-    /// and reserves unchanged, and clears the target, so that once it
-    /// takes off L requests clearance again. Otherwise the ship flies on,
-    /// its target kept, and the refusal says why.
+    /// read as the session's `blessing_landing` rule says. With no stellar
+    /// selected in nav mode 2, a press selects one there, in silence,
+    /// starting its brackets' fly-in (@0x6a8ed-0x6a932), and lands on
+    /// nothing. A press that lands docks the ship at the stellar's centre,
+    /// at rest, its heading and reserves unchanged, the selection kept, as
+    /// the original's landing writes neither word; the take-off lets go
+    /// of it, so that once it takes off L requests clearance again.
+    /// Otherwise the ship flies on, its selection kept, and the refusal
+    /// says why.
     ///
     /// A press that would land on a hypergate or wormhole
     /// ([`GateKind::of`] its `Flags2`) enters it instead: it does not dock
@@ -2629,7 +2564,7 @@ impl Session {
     /// [`Session::enter_hypergate`]: even when none leads anywhere, the
     /// map opens with nothing to pick, and closing it cancels. One without
     /// links is refused ([`GateRefusal::NoLinks`]), which ends the entry
-    /// and clears the navigation target, as [`Session::enter_hypergate`]
+    /// and turns the nav system off, as [`Session::enter_hypergate`]
     /// refuses. [`GateRefusal::NotAtGate`] when no hypergate entry is
     /// pending.
     pub fn open_hypergate(
@@ -2661,9 +2596,10 @@ impl Session {
     /// the player picked on the map (`None` for no pick), and gives the
     /// system the ship comes out in: through the first of its links that
     /// leads there ([`hypergate_exit`]), read from `catalog`. Any outcome
-    /// ends the entry; a refusal also clears the navigation target, as the
-    /// original's does, and otherwise changes nothing. See
-    /// [`Session::enter_wormhole`] for the arrival.
+    /// ends the entry and turns the nav system off, as the original's
+    /// `_PlayerEnterHypergate` does as it ends (@0x63fa2-0x63faa); a
+    /// refusal otherwise changes nothing. See [`Session::enter_wormhole`]
+    /// for the arrival.
     pub fn enter_hypergate(
         &mut self,
         to: Option<SystemId>,
@@ -2685,25 +2621,23 @@ impl Session {
         } else {
             Err(GateRefusal::NoLinks)
         };
-        match exit {
-            Ok((system, exit)) => {
-                self.come_out(system, &exit, GateKind::Hypergate, catalog, chance);
-                let system = self.pilot.system;
-                self.messages.push(SimMessage::ExitedHypergate(system));
-                Ok(system)
-            }
-            Err(refusal) => {
-                self.nav = NavMode::Off;
-                Err(refusal)
-            }
-        }
+        let entered = exit.map(|(system, exit)| {
+            self.come_out(system, &exit, GateKind::Hypergate, catalog, chance);
+            let system = self.pilot.system;
+            self.messages.push(SimMessage::ExitedHypergate(system));
+            system
+        });
+        self.nav = NavMode::Off;
+        entered
     }
 
     /// Enters the wormhole whose entry is pending and gives the system the
     /// ship comes out in: through the wormhole [`wormhole_exit`] rolls on
     /// `chance`, under the session's [`WormholeRule`] (the engine's unless
     /// [`Session::with_wormholes`] says otherwise), read from `catalog`.
-    /// Any outcome ends the entry; a refusal changes nothing else.
+    /// Any outcome ends the entry and lets go of the nav selection, the
+    /// mode kept, as the take-off's tail the original's wormhole joins
+    /// does (@0x66edb-0x66f40, @0x674d2); a refusal changes nothing else.
     ///
     /// Out of a hypergate or wormhole the ship comes out as the session's
     /// [`GateArrivalRule`] says (the engine's unless
@@ -2713,7 +2647,7 @@ impl Session {
     /// passing, each stepping the planetary events on `chance`. Either way
     /// no fuel is used, the minimum jump distance does not count, and the
     /// ship is in the new system, explored, its stellars read, with the
-    /// course and the navigation target cleared, its thrust stopped,
+    /// course cleared and the nav selection let go, its thrust stopped,
     /// populated with its traffic ([`Session::populate`]), even when it is
     /// the system gone in, the fight left behind and
     /// [`SimSound::Arrived`]. It raises [`SimMessage::PassedWormhole`] or
@@ -2741,8 +2675,11 @@ impl Session {
         let sites = catalog.gate_sites();
         let player = self.pilot.system;
         let owner_of = |id| self.galaxy.holder(self.listers(id), player);
-        let exit = wormhole_exit(here, player, &sites, owner_of, self.wormholes, chance)
-            .ok_or(GateRefusal::NoExit)?;
+        let Some(exit) = wormhole_exit(here, player, &sites, owner_of, self.wormholes, chance)
+        else {
+            self.deselect();
+            return Err(GateRefusal::NoExit);
+        };
         let (site, system) = (*exit.site, exit.system);
         self.come_out(system, &site, GateKind::Wormhole, catalog, chance);
         let system = self.pilot.system;
@@ -2801,7 +2738,6 @@ impl Session {
     /// price multipliers as the spaceport opens (see the `ranks` module),
     /// and last raises [`StoryEvent::Landed`].
     fn dock(&mut self, stellar: StellarId) {
-        self.nav = NavMode::Off;
         self.touchdown = self.player.position;
         let site = self.sites.iter().find(|site| site.id == stellar);
         if let Some(site) = site {
@@ -2940,6 +2876,10 @@ impl Session {
         self.raise(StoryEvent::TookOff { stellar });
         // The dock request's rebuild point (@0x674c7, @0x67653).
         self.rebuild_stellars();
+        // Its tail: the nav selection let go, the mode kept, then the
+        // course cued (@0x674d2-0x674d8; see the `nav` module).
+        self.deselect();
+        self.cue_course();
         Some(stellar)
     }
 
@@ -5113,7 +5053,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_second_l_lands_on_the_target_and_clears_it() {
+    fn the_second_l_lands_on_the_target_and_keeps_it_selected() {
         let mut session = Session::start(&catalog()).expect("starts");
         session.land().expect("selects");
         assert_eq!(
@@ -5121,7 +5061,11 @@ pub(super) mod tests {
             Ok(LandOutcome::Landed(StellarId(128)).into())
         );
         assert_eq!(session.landed(), Some(StellarId(128)));
-        assert_eq!(session.nav_target(), None, "cleared on landing");
+        assert_eq!(
+            session.nav_target(),
+            Some(StellarId(128)),
+            "landing writes neither nav word"
+        );
         assert!(session.take_save_due());
         assert_eq!(
             session.take_sounds(),
@@ -18407,31 +18351,31 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_target_and_the_course_are_independent() {
+    fn plotting_a_course_selects_its_first_hop_and_picking_a_stellar_keeps_the_course() {
         let mut session = Session::start(&three_stellars()).expect("starts");
         session.select_stellar(StellarPick::Slot(0));
         session.plot_course(SystemId(132)).expect("a route");
-        assert_eq!(session.nav_target(), Some(StellarId(131)));
+        assert_eq!(session.nav_target(), None);
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(Some(SystemId(131))));
         session.select_stellar(StellarPick::Slot(1));
         assert_eq!(session.course(), ids(&[131, 132]));
         assert_eq!(session.nav_target(), Some(StellarId(128)));
     }
 
     #[test]
-    fn arriving_in_another_system_clears_the_target() {
+    fn arriving_at_the_end_of_the_course_turns_the_nav_off() {
         let catalog = three_stellars();
         let mut session = Session::start(&catalog).expect("starts");
-        session.select_stellar(StellarPick::Slot(0));
         session.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut session);
         begin_jump_now(&mut session).expect("jumps");
         assert_eq!(
-            session.nav_target(),
-            Some(StellarId(131)),
+            session.nav_mode(),
+            NavMode::Hyperspace(Some(SystemId(131))),
             "kept while jumping"
         );
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
-        assert_eq!(session.nav_target(), None);
+        assert_eq!(session.nav_mode(), NavMode::Off);
         assert_eq!(
             session.select_stellar(StellarPick::Slot(0)),
             Some(StellarId(140))
@@ -18542,15 +18486,14 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn clearing_the_target_leaves_none() {
+    fn nav_off_lets_go_of_a_stellar_and_keeps_the_course() {
         let mut session = Session::start(&three_stellars()).expect("starts");
         session.plot_course(SystemId(132)).expect("a route");
         session.select_stellar(StellarPick::Slot(0));
-        assert!(session.clear_nav_target());
+        assert!(session.nav_off());
         assert_eq!(session.nav_target(), None);
+        assert_eq!(session.nav_mode(), NavMode::Off);
         assert_eq!(session.course(), ids(&[131, 132]), "course kept");
-        assert!(!session.clear_nav_target(), "nothing to clear");
-        assert_eq!(session.nav_target(), None);
         assert!(!session.take_save_due());
     }
 
@@ -18558,7 +18501,6 @@ pub(super) mod tests {
     fn no_stellar_is_picked_or_cleared_during_a_jump() {
         let mut session = Session::start(&hub()).expect("starts");
         session.select_next_system();
-        session.select_stellar(StellarPick::Slot(0));
         fly_out(&mut session);
         session.player.heading = 90.0;
         assert_eq!(session.begin_jump(), Ok(SystemId(134)));
@@ -18570,8 +18512,12 @@ pub(super) mod tests {
             ] {
                 assert_eq!(session.select_stellar(pick), None, "{stage} {pick:?}");
             }
-            assert!(!session.clear_nav_target(), "{stage}");
-            assert_eq!(session.nav_target(), Some(StellarId(131)), "{stage}");
+            assert!(!session.nav_off(), "{stage}");
+            assert_eq!(
+                session.nav_mode(),
+                NavMode::Hyperspace(Some(SystemId(134))),
+                "{stage}"
+            );
             if session.jumping().is_none() {
                 begin_jump_now(&mut session).expect("jumps");
             }

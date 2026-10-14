@@ -54,6 +54,13 @@ pub struct SoundTable {
     pub news_close: Option<SoundId>,
     /// Plays as the player info is refused in flight.
     pub player_info_refused: Option<SoundId>,
+    /// Plays as a nav key is taken: Nav Off, Hyperspace Mode, a stellar
+    /// key or a click on a stellar.
+    pub nav_selected: Option<SoundId>,
+    /// Plays as Hyper Select moves through the system's links.
+    pub hyper_selected: Option<SoundId>,
+    /// Plays as Option-backquote lets go of the ship target.
+    pub target_cleared: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -118,6 +125,14 @@ impl SoundTable {
     /// - `player_info_refused`: 153, "Beep4", `_beepSnd[3]`, which
     ///   `_HandlePlayer` plays as it refuses the player info key during a
     ///   jump (`PlaySound` @0x7039a-0x703bd).
+    /// - `nav_selected`: 150, `_beepSnd[0]`, which `_HandlePlayer` plays
+    ///   on every press of Nav Off and Hyperspace Mode (@0x69b19), as a
+    ///   stellar key finds a stellar (@0x69ebc), and as a click selects one
+    ///   (@0x6a6c1).
+    /// - `hyper_selected`: 152, `_beepSnd[2]`, as Hyper Select moves
+    ///   through the system's links (@0x69c89).
+    /// - `target_cleared`: 150, `_beepSnd[0]`, as Option-backquote lets go
+    ///   of the ship target (@0x69a7d).
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -140,6 +155,9 @@ impl SoundTable {
         news_open: Some(SoundId(151)),
         news_close: Some(SoundId(152)),
         player_info_refused: Some(SoundId(153)),
+        nav_selected: Some(SoundId(150)),
+        hyper_selected: Some(SoundId(152)),
+        target_cleared: Some(SoundId(150)),
     };
 }
 
@@ -171,5 +189,8 @@ mod tests {
         assert_eq!(table.news_open, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.news_close, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.player_info_refused, Some(SoundId(153)), "_beepSnd[3]");
+        assert_eq!(table.nav_selected, Some(SoundId(150)), "_beepSnd[0]");
+        assert_eq!(table.hyper_selected, Some(SoundId(152)), "_beepSnd[2]");
+        assert_eq!(table.target_cleared, Some(SoundId(150)), "_beepSnd[0]");
     }
 }

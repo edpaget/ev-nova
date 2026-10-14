@@ -223,7 +223,7 @@ fn the_first_l_requests_clearance_and_the_second_lands() {
         Ok(LandOutcome::Landed(StellarId(128)).into())
     );
     assert_eq!(session.landed(), Some(StellarId(128)));
-    assert_eq!(session.nav_target(), None);
+    assert_eq!(session.nav_target(), Some(StellarId(128)), "kept");
 }
 
 #[test]

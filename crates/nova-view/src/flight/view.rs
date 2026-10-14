@@ -3486,7 +3486,7 @@ impl<C> FlightView<C> {
             _ if key == NEAREST_STELLAR_KEY => self.select_stellar(StellarPick::Nearest),
             _ if key == NAV_OFF_KEY => {
                 if let Ok(session) = &mut self.session {
-                    session.clear_nav_target();
+                    session.nav_off();
                 }
             }
             _ => {}

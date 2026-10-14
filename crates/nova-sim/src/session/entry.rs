@@ -63,6 +63,7 @@ use crate::chance::Chance;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::message::SimMessage;
+use crate::navigation::NavMode;
 use crate::rulebook::{RuleSource, Rulebook};
 use crate::sound::SimSound;
 #[cfg(doc)]
@@ -173,8 +174,6 @@ pub(super) enum Reset {
     Jump,
     /// The thrust stops and the engine glow goes out.
     Thrust,
-    /// The navigation target is let go.
-    NavTarget,
     /// A gate's pending entry ends.
     GateEntry,
     /// The shots and beams in flight are left behind.
@@ -233,6 +232,19 @@ pub(super) enum CourseStep {
     Clear,
 }
 
+/// What becomes of the player's nav mode and its selection (see the
+/// `nav` module), after the course's step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NavStep {
+    /// Neither is written.
+    Keep,
+    /// The selection is let go and the mode kept.
+    Deselect,
+    /// The nav system is turned off, then the course's next hop cued: a
+    /// hyperspace arrival (@0x6be25-0x6be2b, @0x6c4cd).
+    OffThenCue,
+}
+
 /// What becomes of the traffic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TrafficStep {
@@ -255,14 +267,16 @@ pub(super) enum TrafficStep {
 pub(super) struct Resets {
     set: BTreeSet<Reset>,
     course: CourseStep,
+    nav: NavStep,
     traffic: TrafficStep,
 }
 
 impl Resets {
-    fn of(set: &[Reset], course: CourseStep, traffic: TrafficStep) -> Self {
+    fn of(set: &[Reset], course: CourseStep, nav: NavStep, traffic: TrafficStep) -> Self {
         Self {
             set: set.iter().copied().collect(),
             course,
+            nav,
             traffic,
         }
     }
@@ -295,8 +309,11 @@ pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets 
 /// (@0x6c040-0x6c066). It drops the hops made, and an arrival that made
 /// none clears the course or drops its first hop as
 /// [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says
-/// (@0x6c472-0x6c4c6; see the `course` module); the jump's start already stopped the thrust, and every tick ends a gate's
-/// pending entry. Populating lets go of the strikes, the boarding, the
+/// (@0x6c472-0x6c4c6; see the `course` module); the jump's start
+/// already stopped the thrust, and every tick ends a gate's pending
+/// entry. The nav system is turned off as the arrival begins
+/// (@0x6be25-0x6be2b) and the course's next hop cued after its step
+/// (@0x6c4cd), so mode 3 comes back while hops remain. Populating lets go of the strikes, the boarding, the
 /// hail and the target too. The caller arms the escort-strength timer
 /// before entering, ahead of the jump's days ([`Session::arrive`]).
 fn jump(hops: usize) -> Resets {
@@ -306,7 +323,6 @@ fn jump(hops: usize) -> Resets {
             Reset::Stellar,
             Reset::Explore,
             Reset::HeldSound,
-            Reset::NavTarget,
             Reset::Combat,
             Reset::Boxes,
             Reset::Strikes,
@@ -319,6 +335,7 @@ fn jump(hops: usize) -> Resets {
             Reset::Rebuild,
         ],
         CourseStep::Arrival { hops },
+        NavStep::OffThenCue,
         TrafficStep::Populate,
     )
 }
@@ -329,14 +346,16 @@ fn jump(hops: usize) -> Resets {
 /// stopped; the system is populated even when it is the one gone in,
 /// and the arrival sounds but raises no message of its own (the caller
 /// raises the gate's). The caller arms the escort-strength timer before
-/// entering, as a take-off does ([`Session::enter_wormhole`]).
+/// entering, as a take-off does ([`Session::enter_wormhole`]). The nav
+/// selection is let go and the mode kept, the take-off's tail that the
+/// gates join (@0x66edb-0x66f40, @0x674d2); the hypergate then turns the
+/// nav system off itself ([`Session::enter_hypergate`]).
 fn gate() -> Resets {
     Resets::of(
         &[
             Reset::Stellar,
             Reset::Explore,
             Reset::Thrust,
-            Reset::NavTarget,
             Reset::Combat,
             Reset::Boxes,
             Reset::Strikes,
@@ -348,6 +367,7 @@ fn gate() -> Resets {
             Reset::Rebuild,
         ],
         CourseStep::Clear,
+        NavStep::Deselect,
         TrafficStep::Populate,
     )
 }
@@ -358,7 +378,10 @@ fn gate() -> Resets {
 /// system and stellar change, the offers are emptied (the stellar they
 /// were rolled at kept) and the stellars wait for the take-off. As an
 /// `arrival` (the Bible's reading of `MoveArrival`) the system is
-/// explored and the course cleared at once.
+/// explored and the course cleared at once. The nav mode is left as it
+/// is: the original sets the selection to the stellar docked at
+/// (@0x156f2-0x15709), which nothing shows while docked and the take-off
+/// lets go of.
 fn script_move_landed(arrival: bool) -> Resets {
     let mut set = vec![Reset::Stellar, Reset::SaveDue, Reset::EmptyOffers];
     let course = if arrival {
@@ -367,7 +390,7 @@ fn script_move_landed(arrival: bool) -> Resets {
     } else {
         CourseStep::Keep
     };
-    Resets::of(&set, course, TrafficStep::None)
+    Resets::of(&set, course, NavStep::Keep, TrafficStep::None)
 }
 
 /// An `M` or `N` in flight (`_EvalSetExp` @0x158a4): the shots are
@@ -378,11 +401,11 @@ fn script_move_landed(arrival: bool) -> Resets {
 /// out dealt with and the system populated, even within the same
 /// system; otherwise only into another system does the traffic go on,
 /// with the ships the player leads alone (`_EvalSetExp` @0x15807,
-/// @0x1590b).
+/// @0x1590b). The nav selection is let go and the mode kept (@0x157e3,
+/// @0x158fd).
 fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
     let mut set = vec![
         Reset::Jump,
-        Reset::NavTarget,
         Reset::GateEntry,
         Reset::Combat,
         Reset::Boxes,
@@ -407,7 +430,7 @@ fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
     } else {
         (CourseStep::Keep, TrafficStep::None)
     };
-    Resets::of(&set, course, traffic)
+    Resets::of(&set, course, NavStep::Deselect, traffic)
 }
 
 /// The developer tools' move of a landed pilot, and the walker's landing
@@ -416,7 +439,8 @@ fn script_move_in_flight(arrival: bool, facts: EntryFacts) -> Resets {
 /// the shops' rolls drawn afresh, and leaves the last system's traffic
 /// and scene behind; it keeps a held sound and the fighters out, and
 /// sounds nothing. The offers are emptied and their stellar forgotten, so
-/// the next landing rolls them.
+/// the next landing rolls them, and the nav selection is let go, the mode
+/// kept, as the other ways in let go of it.
 fn relocate() -> Resets {
     Resets::of(
         &[
@@ -426,7 +450,6 @@ fn relocate() -> Resets {
             Reset::Explore,
             Reset::Touchdown,
             Reset::Dock,
-            Reset::NavTarget,
             Reset::GateEntry,
             Reset::Combat,
             Reset::Boxes,
@@ -439,6 +462,7 @@ fn relocate() -> Resets {
             Reset::Rebuild,
         ],
         CourseStep::Clear,
+        NavStep::Deselect,
         TrafficStep::Reset,
     )
 }
@@ -697,7 +721,9 @@ impl Session {
     }
 
     /// Lets go of what `resets` says of the system left: the held sound,
-    /// a jump, the thrust, the scene, and the fighters out.
+    /// a jump, the thrust, the nav selection (after the course's step and
+    /// in the system entered, which the cue reads), the scene, and the
+    /// fighters out.
     fn leave_behind(&mut self, resets: &Resets) {
         if resets.has(Reset::HeldSound) {
             self.queued.sound = None;
@@ -708,8 +734,13 @@ impl Session {
         if resets.has(Reset::Thrust) {
             self.stop_thrust();
         }
-        if resets.has(Reset::NavTarget) {
-            self.nav = crate::navigation::NavMode::Off;
+        match resets.nav {
+            NavStep::Keep => {}
+            NavStep::Deselect => self.deselect(),
+            NavStep::OffThenCue => {
+                self.nav = NavMode::Off;
+                self.cue_course();
+            }
         }
         if resets.has(Reset::GateEntry) {
             self.gate = None;
@@ -821,8 +852,7 @@ mod tests {
 
     /// The scene every way in but a landed move lets go of, a gate's
     /// pending entry aside, and its stellars rebuilt.
-    const SCENE: [Reset; 8] = [
-        Reset::NavTarget,
+    const SCENE: [Reset; 7] = [
         Reset::Combat,
         Reset::Boxes,
         Reset::Strikes,
@@ -853,6 +883,7 @@ mod tests {
                     ],
                 ),
                 CourseStep::Arrival { hops },
+                NavStep::OffThenCue,
                 TrafficStep::Populate,
             );
             for f in [facts(true, false), facts(false, true)] {
@@ -880,6 +911,7 @@ mod tests {
                 ],
             ),
             CourseStep::Clear,
+            NavStep::Deselect,
             TrafficStep::Populate,
         );
         for changed in [true, false] {
@@ -911,6 +943,7 @@ mod tests {
                     ],
                 ),
                 CourseStep::Clear,
+                NavStep::Deselect,
                 TrafficStep::Reset,
             )
         );
@@ -924,6 +957,7 @@ mod tests {
             Resets::of(
                 &[Reset::Stellar, Reset::SaveDue, Reset::EmptyOffers],
                 CourseStep::Keep,
+                NavStep::Keep,
                 TrafficStep::None,
             ),
             "by the engine"
@@ -938,6 +972,7 @@ mod tests {
                     Reset::EmptyOffers,
                 ],
                 CourseStep::Clear,
+                NavStep::Keep,
                 TrafficStep::None,
             ),
             "as an arrival"
@@ -968,7 +1003,7 @@ mod tests {
                     };
                     assert_eq!(
                         resets(in_flight, &arrival(reading), facts(changed, pending)),
-                        Resets::of(&set, course, traffic),
+                        Resets::of(&set, course, NavStep::Deselect, traffic),
                         "{reading:?} changed {changed} pending {pending}"
                     );
                 }
