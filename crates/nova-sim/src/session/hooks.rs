@@ -8,8 +8,10 @@
 //! drawn on the caller's [`Chance`], the other operators applied by
 //! `Session::apply_op` (`G`, `D`, `X`, `C`, `E`, `H`, `T`, `M`, `N`, `Q`
 //! and `P`; any other is skipped and told once a session as a
-//! [`ScriptNote`](crate::ScriptNote)). A blank script, or one that did
-//! not parse, does nothing at all: no save is due and nothing is told.
+//! [`ScriptNote`](crate::ScriptNote)). A blank script does nothing at
+//! all: no save is due and nothing is told. One that did not parse runs
+//! no operator, but resets as it ends, as any script of text that is not
+//! empty does (see the `precalced` module).
 //!
 //! **Where each runs**, in the original's order:
 //!
@@ -93,12 +95,11 @@ impl Session {
     }
 
     /// Runs `script` on the session (see the module docs), drawing
-    /// `R(...)` on `chance`: nothing at all when it is blank or did not
-    /// parse.
+    /// `R(...)` on `chance`: nothing at all when its text was empty, and
+    /// no operator but the reset its end runs when it did not parse
+    /// ([`Script::runs`]).
     pub fn run_script(&mut self, script: &Script, chance: &mut (impl Chance + ?Sized)) {
-        if let Some(expr) = script.tree().filter(|expr| !expr.ops.is_empty()) {
-            self.run_set(expr, chance);
-        }
+        self.run_set(script.runs(), chance);
     }
 
     /// Runs ship class `ship`'s `hook`, drawing on `chance`: nothing when
@@ -159,9 +160,9 @@ impl Session {
         // `_PlayGame`'s refresh, before its rebuild (@0x457e9, @0x457ee):
         // `_DoNewPilot`'s, before the `OnStart`, was the flight's.
         self.refresh_galaxy(catalog);
-        // Game entry's refresh of the blessing comes after `_DoNewPilot`'s
+        // Game entry's reset comes after `_DoNewPilot`'s
         // `OnStart` (@0x1925e, @0x19ffb; see the `ranks` module).
-        self.refresh_blessing();
+        self.reset_precalced();
         // `_DoNewPilot`'s rebuild point, after its `OnStart` (@0x1937f).
         self.rebuild_stellars();
     }
@@ -257,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn a_blank_or_broken_script_does_nothing_at_all() {
+    fn a_blank_or_broken_script_runs_no_operator() {
         for script in [Script::default(), Script::parse("S300&")] {
             let (mut session, probe) = probed(Session::start(&catalog()).expect("starts"));
             session.run_script(&script, &mut Scripted::default());

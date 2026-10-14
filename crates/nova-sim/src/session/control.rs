@@ -44,6 +44,7 @@
 use std::collections::BTreeSet;
 
 use super::Session;
+use super::precalced::ResetCause;
 use super::script_effects::ScriptMove;
 use crate::catalog::{OutfitId, ShipId, SystemId, WeaponId};
 use crate::chance::Chance;
@@ -200,7 +201,10 @@ impl Session {
     /// Runs `expr` as [`Session::run_set`] does, calling `between` after
     /// each operator handed to `apply_op`, with that operator applied:
     /// where the story dispatcher nests. A script run inside `between`
-    /// runs as any other.
+    /// runs as any other. Unless `expr` came from empty text
+    /// ([`SetExpr::is_empty_text`]), the session then resets
+    /// ([`Session::reset_precalced`]), as each of the original's
+    /// set-string wrappers does once `_EvalSetExp` returns.
     pub(super) fn run_ops(
         &mut self,
         expr: &SetExpr,
@@ -218,6 +222,17 @@ impl Session {
             Ok(())
         };
         execute(expr, self, &mut apply, chance, &mut BTreeSet::new());
+        // The set-string wrappers' tail into the reset, skipped only for
+        // empty text (`_EvalCurrentMissionBitSetString` @0x99a58, @0x99a85;
+        // `_EvalMissionBitSetString` @0x99dd1, @0x99dea; see the
+        // `precalced` module). The original also resets inside `G`, `D`,
+        // `C`, `E` and `H`, each through `_SystemInfoToShipStats`
+        // (@0x15489, @0x154ef, @0x1566a); the engine resets once, here.
+        // No frame is drawn, no dialog opens and nothing is saved between
+        // the two, so the difference crosses no boundary the player sees.
+        if !expr.is_empty_text() {
+            self.reset_precalced_for(ResetCause::SetExpr);
+        }
         if self.pilot != before {
             self.save_due = true;
             // What a `Visibility` test reads is the pilot's: one left as

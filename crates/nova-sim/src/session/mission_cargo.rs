@@ -150,9 +150,9 @@ impl Session {
         }
         self.pilot.cargo.clear();
         self.save_due = true;
-        // `_JettisonCargo`'s refresh of the blessing (@0x3e3b5; see the
-        // `ranks` module).
-        self.refresh_blessing();
+        // `_JettisonCargo`'s reset (@0x3e3b5; see the `precalced` module):
+        // every good is gone, so its trim never cuts.
+        self.reset_precalced();
         if self.landed.is_some() {
             return;
         }
@@ -343,8 +343,8 @@ impl Session {
 
     /// Whether the pickup's checks pass for the cargo of `mission` in
     /// `slot` (`_DoMissionCargoPickup` @0x98292): the ship's holds, then
-    /// the free space, for its tons. A refusal is shown; a pass refreshes
-    /// the blessing table.
+    /// the free space, for its tons. A refusal is shown; a pass resets
+    /// ([`Session::reset_precalced`]), before the cargo is aboard.
     fn pickup_passes(&mut self, slot: u8, mission: MissionId) -> bool {
         let tons = self
             .pilot
@@ -357,9 +357,10 @@ impl Session {
         };
         match pickup_checks().first_refusal(&facts, &mut NeverFires) {
             Ok(()) => {
-                // `_DoMissionCargoPickup`'s refresh of the blessing, for a
-                // pickup that fits (@0x98316; see the `ranks` module).
-                self.refresh_blessing();
+                // `_DoMissionCargoPickup`'s reset, for a pickup that fits,
+                // before the cargo is aboard (@0x98316, then the caller's
+                // @0x9ee41; see the `precalced` module).
+                self.reset_precalced();
                 true
             }
             Err(refusal) => {
@@ -714,12 +715,10 @@ mod tests {
         assert!(!aboard(&session, 0));
     }
 
-    /// Runs `K200`.
+    /// Makes rank 200 active outside any reset, as no set expression can,
+    /// each resetting as it ends.
     fn grant_blessing_rank(session: &mut Session) {
-        session.run_set(
-            &crate::control::SetExpr::parse("K200").expect("parses"),
-            &mut NeverFires,
-        );
+        session.pilot.ranks.insert(crate::catalog::RankId(200));
     }
 
     #[test]
@@ -1102,9 +1101,10 @@ mod tests {
         for (all, boxes) in [(true, 4), (false, 3)] {
             let catalog = cargo_missions();
             let mut session = loaded(&catalog, &[140, 141]);
-            // 16 tons of goods, and mission 140's 4 with them.
-            session.pilot.cargo.insert(Good::Commodity(0), 14);
             in_flight(&mut session, &catalog);
+            // 16 tons of goods, and mission 140's 4 with them: past the
+            // holds, which the take-off's reset would have trimmed.
+            session.pilot.cargo.insert(Good::Commodity(0), 14);
             session.jettison_cargo(all, &mut NeverFires);
             assert_eq!(session.cargo_boxes().len(), boxes, "{all}");
         }
@@ -1479,6 +1479,23 @@ mod tests {
         inspect_again(&mut session);
         looked_over(&mut session, &catalog, 0);
         assert_eq!(session.take_messages(), [illegal_outfit(true, 500)]);
+    }
+
+    #[test]
+    fn any_set_expression_rearms_the_latches_a_conviction_cleared() {
+        let catalog = contraband_catalog(500);
+        let mut session = smuggler(&catalog, 2, 0, 100_000);
+        looked_over(&mut session, &catalog, 0);
+        assert_eq!(session.take_messages(), [illegal_junk(500)]);
+        assert!(!session.scan_latches.junk);
+        session.run_set(
+            &crate::control::SetExpr::parse("b1").expect("parses"),
+            &mut NeverFires,
+        );
+        assert_eq!(session.scan_latches, Latches::ARMED, "@0x99a85");
+        inspect_again(&mut session);
+        looked_over(&mut session, &catalog, 0);
+        assert_eq!(session.take_messages(), [illegal_junk(500)], "found again");
     }
 
     #[test]

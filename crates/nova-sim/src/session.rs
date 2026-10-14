@@ -365,6 +365,7 @@ mod person_offers;
 mod persons;
 mod player_info;
 mod player_led;
+mod precalced;
 mod radar;
 mod ranks;
 mod red_alert;
@@ -831,17 +832,13 @@ pub struct Session {
     /// opens, `_DoPortDialog`'s inputs (see the `ranks` module). Never
     /// saved, as `_priceFluxMult` lives in memory only.
     port_ranks: ranks::PortRanks,
-    /// The active ranks as the last refresh of the blessing table took
-    /// them (see the `ranks` module). Never saved, as the original's
-    /// table lives in memory only.
+    /// The active ranks as the last reset took them, which the blessing
+    /// table is built from (see the `ranks` and `precalced` modules).
+    /// Never saved, as the original's table lives in memory only.
     blessing_ranks: BTreeSet<RankId>,
-    /// Whether the next idle settling refreshes the blessing table again:
-    /// set by a take-off, a gate exit and a jump's arrival (see the
-    /// `ranks` module).
-    blessing_due: bool,
-    /// `_ScanPlayer`'s contraband latches, armed at each refresh of the
-    /// blessing table, the session's stand-in for
-    /// `_ResetPlayerPrecalcedValues`, and cleared by a conviction (see
+    /// `_ScanPlayer`'s contraband latches, armed at each reset
+    /// ([`Session::reset_precalced`], the session's stand-in for
+    /// `_ResetPlayerPrecalcedValues`), and cleared by a conviction (see
     /// [`scan::Latches`](crate::scan::Latches)). Never saved, as the
     /// original's are globals.
     scan_latches: crate::scan::Latches,
@@ -1123,7 +1120,6 @@ impl Session {
             recent_rank: None,
             port_ranks: ranks::PortRanks::default(),
             blessing_ranks: BTreeSet::new(),
-            blessing_due: false,
             scan_latches: crate::scan::Latches {
                 junk: false,
                 outfits: false,
@@ -1179,9 +1175,9 @@ impl Session {
             session.open_port_prices();
             session.raise(StoryEvent::Landed { stellar });
         }
-        // Game entry's refresh of the blessing (`_EnterGameFromMainScreen`
-        // @0x19ffb; see the `ranks` module).
-        session.refresh_blessing();
+        // Game entry's reset (`_EnterGameFromMainScreen` @0x19ffb; see the
+        // `precalced` module).
+        session.reset_precalced();
         Ok(session)
     }
 
@@ -2367,10 +2363,9 @@ impl Session {
         }
         self.jumped_from = Some(from);
         self.enter_system(Entry::Jump { hops }, entered, catalog, catalog, chance);
-        // The arrival's refresh of the blessing, after the days, the
-        // enter-system hook and the setup (@0x6c51f; see the `ranks`
-        // module).
-        self.refresh_blessing_at_entry();
+        // The arrival's reset, after the days, the enter-system hook and
+        // the setup (@0x6c51f; see the `precalced` module).
+        self.reset_precalced();
         Some(self.pilot.system)
     }
 
@@ -2779,10 +2774,10 @@ impl Session {
             }
         };
         // A gate's exit joins the take-off's path before its seed
-        // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f), and its refresh
-        // of the blessing (@0x6709b; see the `ranks` module).
+        // (`_HandlePlayerDockRequest` @0x66f40, @0x6706f), and its reset
+        // (@0x6709b; see the `precalced` module).
         self.arm_strength_timer(chance);
-        self.refresh_blessing_at_entry();
+        self.reset_precalced();
         self.exit_gate_slots(kind, catalog, &mut &mut *chance);
         let entered = Arrival {
             system,
@@ -2932,9 +2927,9 @@ impl Session {
         // before both (@0x634df-0x6353c).
         self.restart_every_aux(&mut &mut *chance);
         self.arm_strength_timer(chance);
-        // The dock request's refresh of the blessing, after the stay's
-        // days and before the setup (@0x6709b; see the `ranks` module).
-        self.refresh_blessing_at_entry();
+        // The dock request's reset, after the stay's days and before the
+        // setup (@0x6709b; see the `precalced` module).
+        self.reset_precalced();
         self.populate(catalog, chance);
         self.sounds.push(SimSound::TookOff);
         self.save_due = true;
@@ -4225,12 +4220,12 @@ impl Session {
         self.close_plunder();
     }
 
-    /// Closes the plunder dialog: the boarding is over, and the blessing
-    /// table is refreshed, as `_DoPlunderDialog`'s only exit does
-    /// (@0x94a0b; see the `ranks` module).
+    /// Closes the plunder dialog: the boarding is over, and the session
+    /// resets, as `_DoPlunderDialog`'s only exit does (@0x94a0b; see the
+    /// `precalced` module).
     fn close_plunder(&mut self) {
         self.aboard = None;
-        self.refresh_blessing();
+        self.reset_precalced();
     }
 
     /// NPC `id`, captured, joins the fleet where it is: no longer its

@@ -184,9 +184,7 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
     }
 
     fn run(&mut self, script: &Script, between: &mut dyn FnMut(&mut dyn Stage)) {
-        let Some(expr) = script.tree() else {
-            return;
-        };
+        let expr = script.runs();
         let SessionStage {
             session,
             catalog,

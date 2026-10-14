@@ -56,7 +56,7 @@
 //! | [`StartShipPurchase`](RuleKey::StartShipPurchase) | `start_ship_purchase` | a new pilot's starting ship runs no `OnPurchase` ([`HookRules`](crate::HookRules)) | it runs once, right before the `chär`'s `OnStart`\* |
 //! | [`ShipChangePersistence`](RuleKey::ShipChangePersistence) | `ship_change_persistence` | `H` keeps an outfit flagged 0x0004 or 0x0020 ([`ShipChangeRules`](crate::ShipChangeRules)) | only one flagged 0x0020 |
 //! | [`ShipChangeMax`](RuleKey::ShipChangeMax) | `ship_change_max` | `E` and `H` hold every outfit owned, old and new, to its limit (ammunition cap, raised `Max`, gun and turret slots) after adding the new class's default items ([`ShipChangeRules`](crate::ShipChangeRules)) | nothing is held: every outfit is kept |
-//! | [`ShipChangeCargo`](RuleKey::ShipChangeCargo) | `ship_change_cargo` | `C`, `E` and `H` keep all the cargo, mission cargo too, even past the new hold ([`ShipChangeRules`](crate::ShipChangeRules)) | the goods are trimmed to the new hold, as a purchase trims them: the mission cargo aboard takes its room first and always stays\* |
+//! | [`ShipChangeCargo`](RuleKey::ShipChangeCargo) | `ship_change_cargo` | the cargo `C`, `E` and `H` leave past the new hold is trimmed as the set expression ends, as every set expression's reset trims: each commodity cut to trunc(held x holds/total) in single floats, against the fleet's holds with the trader escorts' `Holds`, the mission cargo counted and never cut, the `jünk` never cut (`_SystemInfoToShipStats` @0x1566a, `_EvalCurrentMissionBitSetString` @0x99a85, `_EvalMissionBitSetString` @0x99dea, `_ResetPlayerPrecalcedValues` @0xc7d8-0xc887; [`ShipChangeRules`](crate::ShipChangeRules)) | every ton is kept past the hold: no set expression's reset trims, and the cargo waits for a reset outside one (a take-off, a jump's arrival, a landing, a jettison, ...)\* |
 //! | [`ShipChangeReserves`](RuleKey::ShipChangeReserves) | `ship_change_reserves` | `C`, `E` and `H` keep a shield or armour above the new class's most until damage takes it ([`ShipChangeRules`](crate::ShipChangeRules)) | each is held to its new most\* |
 //! | [`ShipChangeBayAmmo`](RuleKey::ShipChangeBayAmmo) | `ship_change_bay_ammo` | `E` and `H` load a fighter bay's `AmmoLoad` onto the weapon its raw `AmmoType` names, so a bay of fighter `shïp` 128 to 255 loses its fighters ([`ShipChangeRules`](crate::ShipChangeRules)) | the bay's own fighters are loaded, as a purchase loads them\* |
 //! | [`ShipChangeDefaultWeapons`](RuleKey::ShipChangeDefaultWeapons) | `ship_change_default_weapons` | `E` and `H` add a default item that is a weapon or ammunition outfit to the outfits alone, so the fold pulls it back to the weapon and rounds arrays' count and it is lost unless the array has a surplus (`_EvalSetExp` @0x15609, `_ShipStatsToSystemInfo` @0xcaee called @0x15622; [`ShipChangeRules`](crate::ShipChangeRules)) | its first-mod weapons and rounds are added to the arrays too, so it is kept\* |
@@ -124,7 +124,7 @@
 //! | [`VisibilityRefresh`](RuleKey::VisibilityRefresh) | `visibility_refresh` | `Visibility` is evaluated at a landing (@0xa175f, @0xa1af2), a jump's arrival before its days (@0x6bf3f), a new pilot after its `OnStart`, and a load (see [`story`](crate::story)) | after every settled script as well\*\*\*\*\*\*\*\* |
 //! | [`CronZeroDurationHoldoff`](RuleKey::CronZeroDurationHoldoff) | `cron_zero_duration_holdoff` | a `Duration` 0 crön's pre-holdoff end runs `OnStart` and `OnEnd` and writes nothing more (`_CronEventHandler` @0x387a8-0x387c1), so the next day the running branch runs `OnEnd` again (@0x387d3-0x387e8) and ends as `cron_post_holdoff` says (see [`cron`](crate::cron)) | `OnEnd` once, then the `PostHoldoff`: **the default — a deliberate departure from the original**†††††††† |
 //! | [`CronPostHoldoff`](RuleKey::CronPostHoldoff) | `cron_post_holdoff` | a running crön's end, with `PostHoldoff` above 0, loads its `PreHoldoff` into the holdoff and leaves its days (@0x387f1-0x387f6 → 0x388c5): it re-runs, or with `PreHoldoff` 0 its `OnEnd` runs every day for good and its news stays (see [`cron`](crate::cron)) | `PostHoldoff` days with the days at -1, then inactive: **the default — a deliberate departure from the original**†††††††† |
-//! | [`BlessingRefresh`](RuleKey::BlessingRefresh) | `blessing_refresh` | the blessing table is taken at the original's refresh points (`_ResetPlayerPrecalcedValues` @0xc8be-0xc981): game entry, take-off and the gate exits, a jump's arrival, a mission cargo pickup, a jettison and the plunder dialog closing, so a `K` or `L` in space blesses or stops blessing only from the next one (see [`rank`](crate::rank)) | live, from the active ranks\* |
+//! | [`BlessingRefresh`](RuleKey::BlessingRefresh) | `blessing_refresh` | the blessing table is taken at each of the original's resets (`_ResetPlayerPrecalcedValues` @0xc8be-0xc981), the end of every set expression that is not empty among them, so a `K` or `L` blesses or stops blessing as its expression ends, not between its operators, and a crime's rank loss (`_SlapWithPenalty`, which reaches no reset) only at the next reset (see [`rank`](crate::rank)) | live, from the active ranks: within an expression, and from the crime on\* |
 //! | [`BlessingLanding`](RuleKey::BlessingLanding) | `blessing_landing` | `Flags` 0x0200 clears a governed stellar past both its `MinStatus` and its government's `Require` (`_HandlePlayerDockRequest` @0x67940-0x67a05; see [`landing`](crate::landing)) | past `MinStatus` only, so `Require` still refuses |
 //! | [`BlessingAlwaysAttacks`](RuleKey::BlessingAlwaysAttacks) | `blessing_always_attacks` | a `Flags` 0x0004 government's word turns its warships and interceptors on a player that a rank's `Flags` 0x0100 blesses with that government's peace, as `_WarshipAI` @0x8b7b0 and `_InterceptorAI` @0x8cb5c read no blessing (see [`ai::warship`](crate::ai::warship)) | the blessing holds the word back, as the Bible's ränk 0x0100 "will not automatically attack" reads |
 //! | [`ExploredByPlace`](RuleKey::ExploredByPlace) | `explored_by_place` | exploring a system explores its place's head (`_RecursiveAutoExplore` @0xd9b6-0xda10, the arrivals and the take-off), and each rebuild point explores every system at an explored head's place, hidden or not (`_HandleStellarSystemVisibility` @0x32b13-0x32b8f; see [`exploration`](crate::exploration)) | each system is explored on its own\* |
@@ -823,14 +823,22 @@ rule_keys! {
     /// "the player will keep all of his previous outfit items", nothing is
     /// clamped (see [`ShipChangeRules`](crate::ShipChangeRules)).
     ShipChangeMax => "ship_change_max",
-    /// What becomes of the cargo on a `C`, `E` or `H` change of ship: by
-    /// the engine, it is all kept, mission cargo too, even past the new
-    /// hold, as the change never calls `_DestroyPartialFleetCargo`
-    /// (`_EvalSetExp` @0x15493-0x156da); otherwise the goods are trimmed
-    /// to the new hold as the purchase's other reading trims them, the
-    /// mission cargo aboard taking its room first and always staying. The Bible is silent here, so the other reading
-    /// is the obvious alternative, not anything the Bible says (see
-    /// [`ShipChangeRules`](crate::ShipChangeRules)).
+    /// What becomes of the cargo a `C`, `E` or `H` change of ship leaves
+    /// past the new hold. By the engine, it is trimmed as the set
+    /// expression ends: the change never calls `_DestroyPartialFleetCargo`
+    /// (`_EvalSetExp` @0x15493-0x156da), but its `_SystemInfoToShipStats`
+    /// (@0x1566a) and the set-string wrapper's tail (@0x99a85, @0x99dea)
+    /// end in `_ResetPlayerPrecalcedValues`, whose trim (@0xc7d8-0xc887)
+    /// cuts each commodity to trunc(held x holds/total) in single floats,
+    /// against the fleet's holds with the trader escorts' `Holds`, the
+    /// mission cargo aboard counted and never cut, the `jünk` never cut.
+    /// By the other reading every ton is kept past the hold: no set
+    /// expression's reset trims, whatever the expression holds, and the
+    /// cargo waits for a reset outside one, a take-off, a jump's arrival,
+    /// a landing or a jettison among them. The Bible is silent here, so
+    /// the other reading is the obvious alternative, not anything the
+    /// Bible says (see [`ShipChangeRules`](crate::ShipChangeRules) and
+    /// the session's `precalced` module).
     ShipChangeCargo => "ship_change_cargo",
     /// What becomes of a shield or armour above the new class's most on a
     /// `C`, `E` or `H` change of ship: by the engine, it is kept, as the
@@ -1585,13 +1593,17 @@ rule_keys! {
     /// end: `PostHoldoff` days with the days at -1. The other reading is
     /// the default (see [`cron`](crate::cron)).
     CronPostHoldoff => "cron_post_holdoff",
-    /// When the ranks' blessing table is taken: by the engine, at the
-    /// original's refresh points (`_ResetPlayerPrecalcedValues`): game
-    /// entry, take-off and the gate exits, a jump's arrival, a mission
-    /// cargo pickup, a jettison and the plunder dialog closing, so a `K`
-    /// or `L` in space blesses, or stops blessing, only from the next one;
-    /// by the other reading, live, from the active ranks (see
-    /// [`rank`](crate::rank) and the session's `ranks` module).
+    /// When the ranks' blessing table is taken. By the engine, at each of
+    /// the original's resets (`_ResetPlayerPrecalcedValues`
+    /// @0xc8be-0xc981; the session's `precalced` module lists them), the
+    /// end of every set expression that is not empty among them
+    /// (@0x99a85, @0x99dea). So the two readings differ in two places: a
+    /// `K` or `L` blesses, or stops blessing, as its expression ends, not
+    /// between its operators; and a crime's rank loss
+    /// (`_SlapWithPenalty`'s pass, which reaches no reset) stops blessing
+    /// only at the next reset. By the other reading, live, from the active
+    /// ranks (see [`rank`](crate::rank) and the session's `ranks`
+    /// module).
     BlessingRefresh => "blessing_refresh",
     /// What a rank's `Flags` 0x0200 clears a governed stellar past: by the
     /// engine, both its `MinStatus` and its government's `Require`
