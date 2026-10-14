@@ -34,6 +34,23 @@
 //!   its own days by the rules, on top of `n`. The walker stays in flight,
 //!   and its next landing is a walker's landing. A mission whose deadline
 //!   lapses fails, in flight, as the missions' deadline check says.
+//! - **`wait for cron <cron>`** ([`Step::WaitForCron`]) passes days until
+//!   the crön has started: the pilot holds it past its pre-holdoff
+//!   ([`CronState::started`](crate::cron::CronState::started), which
+//!   reads either rule for a crön's end). One already started passes
+//!   nothing. Otherwise the walker takes off, when docked, then lets
+//!   single days go by, settling each, and checks after the take-off and
+//!   after each day. It gives up after [`CRON_WAIT_DAYS`] single days
+//!   ([`StoryWalker::with_cron_bound`]), reporting each check of the
+//!   crön's eligibility on the last day ([`Session::cron_refusals`]),
+//!   `Random` as drawing. A crön the data lacks, or one whose `Duration`
+//!   disables it, fails at once, as no day can start it. The walker stays
+//!   in flight, as after `pass`. A `Duration` 0 crön with no
+//!   `PostHoldoff` starts and ends inside one day's pass and leaves no
+//!   state, so the walker cannot see that it started, and its report
+//!   says no check refuses; no session event marks a crön's start. A
+//!   storyline that waits on such a crön waits on what its `OnStart`
+//!   sets, through a mission's `take`.
 //! - **`has rank <rank>`** ([`Step::HasRank`]) checks that the pilot holds
 //!   the rank. It passes no days, lands nowhere and draws nothing. Ranks
 //!   have no availability conditions of their own (scripts grant them),
@@ -60,18 +77,18 @@
 //! set. Its `Display` is the report a stock test prints.
 //!
 //! The walker skips flight: a mission's ship goals are met by `meet
-//! goal`, and crons and ranks get their own step kinds as their features
-//! land. A mission whose goals need ships, delivered without a `meet goal`,
-//! is reported [`Fault::NotCompleted`].
+//! goal`. A mission whose goals need ships, delivered without a `meet
+//! goal`, is reported [`Fault::NotCompleted`].
 
 use std::fmt;
 
 use crate::catalog::{
-    ListedStellar, MissionId, MissionRecord, PilotCatalog, RankId, StellarId, SystemId,
+    CronId, ListedStellar, MissionId, MissionRecord, PilotCatalog, RankId, StellarId, SystemId,
     TrafficCatalog,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::control::{Bit, Script, SetOp};
+use crate::cron::CronRefusal;
 use crate::date::GameDate;
 use crate::mission::{
     AcceptError, ActiveMission, PayEffect, Refusal, ShipGoal, Stop, Venue, pay_effect,
@@ -91,13 +108,16 @@ pub enum Step {
     PassDays(u32),
     /// Meet the active mission's ship goal.
     MeetGoal(MissionId),
+    /// Take off, when docked, then pass days one at a time until the
+    /// crön has started.
+    WaitForCron(CronId),
     /// Check that the pilot holds the rank.
     HasRank(RankId),
 }
 
 impl fmt::Display for Step {
     /// "take 504", "deliver 504", "meet goal 504", "pass 3 days", "pass
-    /// 1 day" or "has rank 145".
+    /// 1 day", "wait for cron 156" or "has rank 145".
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Self::Take(mission) => write!(f, "take {}", mission.0),
@@ -105,6 +125,7 @@ impl fmt::Display for Step {
             Self::MeetGoal(mission) => write!(f, "meet goal {}", mission.0),
             Self::PassDays(1) => write!(f, "pass 1 day"),
             Self::PassDays(days) => write!(f, "pass {days} days"),
+            Self::WaitForCron(cron) => write!(f, "wait for cron {}", cron.0),
             Self::HasRank(rank) => write!(f, "has rank {}", rank.0),
         }
     }
@@ -151,6 +172,22 @@ pub enum Done {
     /// docked, the take-off's own days, as the rules pass them.
     Passed {
         /// The days asked for.
+        days: u32,
+        /// Whether the ship took off first.
+        took_off: bool,
+        /// The date after.
+        date: GameDate,
+        /// The missions held before the step that failed, or are no longer
+        /// held, after it, in slot order.
+        failed: Vec<MissionId>,
+    },
+    /// The crön started: `days` single days after the take-off, when
+    /// the ship was docked, and its own days, as the rules pass them.
+    WaitedForCron {
+        /// The crön.
+        cron: CronId,
+        /// The single days passed after the take-off; 0 when the crön had
+        /// already started.
         days: u32,
         /// Whether the ship took off first.
         took_off: bool,
@@ -224,6 +261,19 @@ pub enum Fault {
     /// It has no ship goal `meet goal` meets: no ships, or no goal, or a
     /// goal code it does not read.
     NoShipGoal,
+    /// The crön had not started after `waited` single days: each check
+    /// of its eligibility on the last day, by name, as
+    /// [`Session::cron_refusals`] reports them (`Random` as
+    /// [`Verdict::Draws`]).
+    CronNotStarted {
+        /// The single days passed after the take-off.
+        waited: u32,
+        /// Each check that refused it or draws, by name, in the checks'
+        /// order.
+        refusals: Vec<(&'static str, Verdict<CronRefusal>)>,
+    },
+    /// The data has no such crön.
+    NoSuchCron,
     /// The pilot does not hold the rank.
     RankNotHeld,
 }
@@ -265,6 +315,7 @@ impl fmt::Display for WalkFailure {
                 format!("mission {}", mission.0)
             }
             Step::PassDays(_) => "the step".to_owned(),
+            Step::WaitForCron(cron) => format!("cron {}", cron.0),
             Step::HasRank(rank) => format!("rank {}", rank.0),
         };
         match &self.fault {
@@ -286,6 +337,24 @@ impl fmt::Display for WalkFailure {
             Fault::CannotLand(refusal) => write!(f, "{subject}: cannot land: {refusal}")?,
             Fault::Undeliverable => write!(f, "{subject} has no return stellar")?,
             Fault::NoShipGoal => write!(f, "{subject} has no ship goal to meet")?,
+            Fault::CronNotStarted { waited, refusals } => {
+                write!(f, "{subject} did not start within {waited} days:")?;
+                for (index, (name, verdict)) in refusals.iter().enumerate() {
+                    let sep = if index == 0 { "" } else { "," };
+                    match verdict {
+                        Verdict::Refuses(refusal) => write!(f, "{sep} {name} ({refusal:?})")?,
+                        Verdict::Draws => write!(f, "{sep} {name} (draws)")?,
+                    }
+                }
+                if !refusals
+                    .iter()
+                    .any(|(_, verdict)| matches!(verdict, Verdict::Refuses(_)))
+                {
+                    let sep = if refusals.is_empty() { "" } else { "," };
+                    write!(f, "{sep} no check refuses")?;
+                }
+            }
+            Fault::NoSuchCron => write!(f, "{subject} is not in the data")?,
             Fault::RankNotHeld => write!(f, "{subject} is not held")?,
         }
         for looked in &self.looked {
@@ -316,7 +385,13 @@ type Failed = (Fault, Vec<Looked>);
 pub struct StoryWalker<'c, C: PilotCatalog + TrafficCatalog + ?Sized> {
     catalog: &'c C,
     day_chance: Box<dyn Chance + 'c>,
+    cron_bound: u32,
 }
+
+/// How many single days `wait for cron` passes, by default, before it
+/// gives up: more than a year, so a yearly date window such as crön
+/// 156's 1 Sep to 30 Dec opens from any day.
+pub const CRON_WAIT_DAYS: u32 = 400;
 
 impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
     /// A walker over `catalog`, its days drawing on [`NeverFires`].
@@ -325,6 +400,17 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
         Self {
             catalog,
             day_chance: Box::new(NeverFires),
+            cron_bound: CRON_WAIT_DAYS,
+        }
+    }
+
+    /// This walker, its `wait for cron` giving up after `days` single
+    /// days rather than [`CRON_WAIT_DAYS`].
+    #[must_use]
+    pub fn with_cron_bound(self, days: u32) -> Self {
+        Self {
+            cron_bound: days,
+            ..self
         }
     }
 
@@ -353,6 +439,7 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
                 Step::Deliver(mission) => self.deliver(session, mission),
                 Step::PassDays(days) => Ok(self.pass(session, days)),
                 Step::MeetGoal(mission) => self.meet_goal(session, mission),
+                Step::WaitForCron(cron) => self.wait_for_cron(session, cron),
                 Step::HasRank(rank) => has_rank(session, rank),
             };
             match done {
@@ -574,30 +661,113 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
 
     /// `pass <days> days` (see the module docs).
     fn pass(&mut self, session: &mut Session, days: u32) -> Done {
-        let held: Vec<(u8, MissionId)> = session
-            .pilot()
-            .missions()
-            .iter()
-            .map(|(slot, active)| (slot, active.mission))
-            .collect();
-        let chance = &mut *self.day_chance;
-        let took_off = session.take_off(self.catalog, chance).is_some();
-        session.let_days_pass(days, chance);
-        let _ = session.settle_script(self.catalog, chance);
-        let failed = held
-            .into_iter()
-            .filter(|&(slot, mission)| {
-                still_held(session, slot, mission).is_none_or(|active| active.failed.is_some())
-            })
-            .map(|(_, mission)| mission)
-            .collect();
+        let held = held_missions(session);
+        let took_off = self.take_off(session);
+        self.let_days_pass(session, days);
         Done::Passed {
             days,
             took_off,
             date: session.date(),
-            failed,
+            failed: failed_since(session, held),
         }
     }
+
+    /// `wait for cron <cron>` (see the module docs).
+    fn wait_for_cron(&mut self, session: &mut Session, cron: CronId) -> Result<Done, Failed> {
+        let (Some(refusals), Some(record)) = (
+            session.cron_refusals(cron),
+            self.catalog
+                .crons()
+                .into_iter()
+                .find(|record| record.id == cron),
+        ) else {
+            return Err((Fault::NoSuchCron, Vec::new()));
+        };
+        let started = |session: &Session| {
+            session
+                .pilot()
+                .crons()
+                .get(&cron)
+                .is_some_and(|state| state.started(&record))
+        };
+        let disabled = refusals.contains(&("Duration", Verdict::Refuses(CronRefusal::Disabled)));
+        let held = held_missions(session);
+        let mut took_off = false;
+        let mut days = 0;
+        if !started(session) {
+            if disabled {
+                return Err((
+                    Fault::CronNotStarted {
+                        waited: 0,
+                        refusals,
+                    },
+                    Vec::new(),
+                ));
+            }
+            took_off = self.take_off(session);
+            self.settle_days(session);
+            while !started(session) {
+                if days == self.cron_bound {
+                    let refusals = session.cron_refusals(cron).unwrap_or_default();
+                    return Err((
+                        Fault::CronNotStarted {
+                            waited: days,
+                            refusals,
+                        },
+                        Vec::new(),
+                    ));
+                }
+                self.let_days_pass(session, 1);
+                days += 1;
+            }
+        }
+        Ok(Done::WaitedForCron {
+            cron,
+            days,
+            took_off,
+            date: session.date(),
+            failed: failed_since(session, held),
+        })
+    }
+
+    /// Takes off, when docked, on the day chance: whether it took off.
+    fn take_off(&mut self, session: &mut Session) -> bool {
+        session
+            .take_off(self.catalog, &mut *self.day_chance)
+            .is_some()
+    }
+
+    /// Lets `days` days go by on the day chance, and settles.
+    fn let_days_pass(&mut self, session: &mut Session, days: u32) {
+        session.let_days_pass(days, &mut *self.day_chance);
+        self.settle_days(session);
+    }
+
+    /// Settles what the days left, on the day chance.
+    fn settle_days(&mut self, session: &mut Session) {
+        let _ = session.settle_script(self.catalog, &mut *self.day_chance);
+    }
+}
+
+/// The missions held, by slot.
+fn held_missions(session: &Session) -> Vec<(u8, MissionId)> {
+    session
+        .pilot()
+        .missions()
+        .iter()
+        .map(|(slot, active)| (slot, active.mission))
+        .collect()
+}
+
+/// The missions of `held` that failed, or are no longer held, in slot
+/// order.
+fn failed_since(session: &Session, held: Vec<(u8, MissionId)>) -> Vec<MissionId> {
+    held.into_iter()
+        .filter(|&(slot, mission)| {
+            still_held(session, slot, mission).is_none_or(|active| active.failed.is_some())
+        })
+        .map(|(_, mission)| mission)
+        .collect()
 }
 
 /// `has rank <rank>` (see the module docs).

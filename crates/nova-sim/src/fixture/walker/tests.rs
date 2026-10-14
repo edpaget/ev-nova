@@ -1,9 +1,12 @@
 use super::*;
-use crate::catalog::RankId;
+use crate::catalog::{CronId, CronRecord, RankId};
 use crate::catalog::{LandingSite, MissionShip};
 use crate::control::Test;
+use crate::cron::CronRefusal;
 use crate::mission::AcceptRefusal;
-use crate::testkit::{FakePilotCatalog, catalog, land_now, mission, planet, rank, with_variants};
+use crate::testkit::{
+    FakePilotCatalog, catalog, cron, land_now, mission, planet, rank, with_variants,
+};
 
 const A: MissionId = MissionId(200);
 const B: MissionId = MissionId(201);
@@ -93,6 +96,10 @@ fn each_step_reads_as_its_script_line() {
     assert_eq!(Step::PassDays(1).to_string(), "pass 1 day");
     assert_eq!(Step::MeetGoal(MissionId(506)).to_string(), "meet goal 506");
     assert_eq!(Step::HasRank(RankId(145)).to_string(), "has rank 145");
+    assert_eq!(
+        Step::WaitForCron(CronId(156)).to_string(),
+        "wait for cron 156"
+    );
 }
 
 // The plain decisions.
@@ -1088,6 +1095,239 @@ fn a_chain_broken_on_purpose_names_the_mission_and_the_field_that_failed() {
     );
 }
 
+// wait for cron
+
+const C: CronId = CronId(128);
+
+/// Crön 128 running three days, its `OnStart` setting b10, as `shape`
+/// changes it.
+fn timer(shape: impl FnOnce(&mut CronRecord)) -> CronRecord {
+    let mut record = CronRecord {
+        duration: 3,
+        on_start: Script::parse("b10"),
+        ..cron(128)
+    };
+    shape(&mut record);
+    record
+}
+
+/// The testkit galaxy with `crons` and `missions`.
+fn timetable(crons: Vec<CronRecord>, missions: Vec<MissionRecord>) -> FakePilotCatalog {
+    FakePilotCatalog {
+        crons,
+        ..galaxy(missions)
+    }
+}
+
+#[test]
+fn waiting_for_a_cron_passes_days_through_its_pre_holdoff_until_it_starts() {
+    let catalog = timetable(vec![timer(|cron| cron.pre_holdoff = 2)], Vec::new());
+    let mut session = docked(&catalog);
+    let start = session.date();
+    let walked = StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::WaitForCron(C)])
+        .expect("walks");
+    assert_eq!(
+        walked.done,
+        [Done::WaitedForCron {
+            cron: C,
+            days: 2,
+            took_off: true,
+            date: after(start, 3),
+            failed: Vec::new(),
+        }],
+        "started on the take-off's day, held off two more"
+    );
+    assert!(session.pilot().control_bit(bit(10)), "its OnStart");
+    assert_eq!(session.landed(), None, "in flight");
+}
+
+#[test]
+fn waiting_for_a_cron_already_started_passes_no_days() {
+    let catalog = timetable(vec![timer(|_| {})], Vec::new());
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::PassDays(1), Step::WaitForCron(C)])
+        .expect("walks");
+    let date = session.date();
+    assert_eq!(
+        walked.done.last(),
+        Some(&Done::WaitedForCron {
+            cron: C,
+            days: 0,
+            took_off: false,
+            date,
+            failed: Vec::new(),
+        })
+    );
+}
+
+#[test]
+fn waiting_for_a_cron_from_flight_does_not_take_off() {
+    let catalog = timetable(vec![timer(|cron| cron.pre_holdoff = 1)], Vec::new());
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::PassDays(0), Step::WaitForCron(C)])
+        .expect("walks");
+    let Some(Done::WaitedForCron { days, took_off, .. }) = walked.done.last() else {
+        panic!("{walked:?}");
+    };
+    assert_eq!((*days, *took_off), (1, false));
+}
+
+#[test]
+fn waiting_for_a_cron_logs_the_missions_that_failed_meanwhile() {
+    let catalog = timetable(
+        vec![timer(|cron| cron.pre_holdoff = 4)],
+        vec![timed(200, "")],
+    );
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::Take(A), Step::WaitForCron(C)])
+        .expect("walks");
+    let Some(Done::WaitedForCron { failed, .. }) = walked.done.last() else {
+        panic!("{walked:?}");
+    };
+    assert_eq!(failed, &[A]);
+}
+
+#[test]
+fn a_cron_that_never_starts_is_reported_with_the_checks_that_refuse_it() {
+    let catalog = timetable(
+        vec![timer(|cron| cron.enable_on = Test::parse("b20"))],
+        Vec::new(),
+    );
+    let mut session = docked(&catalog);
+    let start = session.date();
+    let failure = StoryWalker::new(&catalog)
+        .with_cron_bound(5)
+        .walk(&mut session, &[Step::WaitForCron(C)])
+        .expect_err("never starts");
+    assert_eq!(
+        failure,
+        super::tests::failure(
+            1,
+            Step::WaitForCron(C),
+            Fault::CronNotStarted {
+                waited: 5,
+                refusals: vec![
+                    ("Random", Verdict::Draws),
+                    ("EnableOn", Verdict::Refuses(CronRefusal::EnableOn)),
+                ],
+            },
+            &[],
+        )
+    );
+    assert_eq!(
+        failure.to_string(),
+        "step 1 (wait for cron 128) failed: cron 128 did not start within 5 days: \
+         Random (draws), EnableOn (EnableOn)\n  bits set:"
+    );
+    assert_eq!(session.date(), after(start, 6), "the take-off's day and 5");
+}
+
+#[test]
+fn a_disabled_cron_fails_at_once() {
+    let catalog = timetable(vec![timer(|cron| cron.duration = -1)], Vec::new());
+    let mut session = docked(&catalog);
+    let start = session.date();
+    let failure = StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::WaitForCron(C)])
+        .expect_err("disabled");
+    assert_eq!(
+        failure.fault,
+        Fault::CronNotStarted {
+            waited: 0,
+            refusals: vec![
+                ("Duration", Verdict::Refuses(CronRefusal::Disabled)),
+                ("Random", Verdict::Draws),
+            ],
+        }
+    );
+    assert_eq!(session.date(), start);
+    assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
+}
+
+#[test]
+fn an_unknown_cron_fails_at_once() {
+    let catalog = timetable(vec![timer(|_| {})], Vec::new());
+    let mut session = docked(&catalog);
+    let failure = StoryWalker::new(&catalog)
+        .walk(&mut session, &[Step::WaitForCron(CronId(999))])
+        .expect_err("unknown");
+    assert_eq!(
+        failure,
+        super::tests::failure(1, Step::WaitForCron(CronId(999)), Fault::NoSuchCron, &[])
+    );
+    assert_eq!(session.landed(), Some(StellarId(128)), "still docked");
+}
+
+/// [`timetable`] with crön 128 and mission B, offered at 140 once b10 is
+/// set and completed at 128 for 500.
+fn unlocked_by_a_cron() -> FakePilotCatalog {
+    timetable(
+        vec![timer(|_| {})],
+        vec![MissionRecord {
+            avail_stel: 140,
+            avail_bits: Test::parse("b10"),
+            return_stel: 128,
+            pay_val: 500,
+            ..mission(201)
+        }],
+    )
+}
+
+#[test]
+fn a_mission_unlocked_by_a_cron_is_taken_and_delivered_from_flight() {
+    let catalog = unlocked_by_a_cron();
+    let mut session = docked(&catalog);
+    let mut story = StoryWalker::new(&catalog);
+    let first = story
+        .walk(&mut session, &[Step::WaitForCron(C)])
+        .expect("walks");
+    assert!(
+        matches!(first.done[..], [Done::WaitedForCron { took_off: true, .. }]),
+        "{first:?}"
+    );
+    assert_eq!(session.landed(), None, "in flight");
+    let cash = session.pilot().cash();
+    let walked = story
+        .walk(&mut session, &[Step::Take(B), Step::Deliver(B)])
+        .expect("walks");
+    assert_eq!(
+        walked.done,
+        [
+            Done::Took {
+                mission: B,
+                stellar: StellarId(140),
+                slot: 0,
+                others: Vec::new(),
+            },
+            Done::Delivered {
+                mission: B,
+                stellar: StellarId(128),
+                pay: 500,
+                others: Vec::new(),
+            },
+        ]
+    );
+    assert_eq!(session.pilot().cash(), cash + 500);
+}
+
+#[test]
+fn a_chain_waiting_on_a_cron_is_walked_through() {
+    let catalog = unlocked_by_a_cron();
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog)
+        .walk(
+            &mut session,
+            &[Step::WaitForCron(C), Step::Take(B), Step::Deliver(B)],
+        )
+        .expect("walks");
+    assert_eq!(walked.done.len(), 3);
+    assert_eq!(held(&session), []);
+}
+
 // has rank
 
 /// Mission A, offered at 128 and completed at 129 running `on_success`,
@@ -1212,11 +1452,6 @@ fn each_fault_is_reported_with_its_mission() {
             "mission 200 has no ship goal to meet",
         ),
         (
-            Step::HasRank(RankId(145)),
-            Fault::RankNotHeld,
-            "rank 145 is not held",
-        ),
-        (
             Step::PassDays(3),
             Fault::NotActive,
             "the step is not active",
@@ -1224,6 +1459,46 @@ fn each_fault_is_reported_with_its_mission() {
     ] {
         assert_eq!(
             report(at, fault),
+            format!("step 2 ({at}) failed: {line}\n  bits set: b3 b9")
+        );
+    }
+}
+
+#[test]
+fn each_cron_and_rank_fault_is_reported_with_its_cron_or_rank() {
+    for (at, fault, line) in [
+        (
+            Step::WaitForCron(C),
+            Fault::CronNotStarted {
+                waited: 400,
+                refusals: vec![
+                    ("Random", Verdict::Draws),
+                    ("date range", Verdict::Refuses(CronRefusal::Dates)),
+                ],
+            },
+            "cron 128 did not start within 400 days: Random (draws), date range (Dates)",
+        ),
+        (
+            Step::WaitForCron(C),
+            Fault::CronNotStarted {
+                waited: 3,
+                refusals: vec![("Random", Verdict::Draws)],
+            },
+            "cron 128 did not start within 3 days: Random (draws), no check refuses",
+        ),
+        (
+            Step::WaitForCron(CronId(999)),
+            Fault::NoSuchCron,
+            "cron 999 is not in the data",
+        ),
+        (
+            Step::HasRank(RankId(145)),
+            Fault::RankNotHeld,
+            "rank 145 is not held",
+        ),
+    ] {
+        assert_eq!(
+            failure(2, at, fault, &[3, 9]).to_string(),
             format!("step 2 ({at}) failed: {line}\n  bits set: b3 b9")
         );
     }
