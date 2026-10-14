@@ -42,7 +42,7 @@
 //! `_EnterGameFromMainScreen`'s `_PrepareAllSprites` lays each slot out
 //! as a tick does, so a session loaded later in the same run starts from
 //! the history the last one left
-//! ([`Session::with_layer_entries`](crate::Session::with_layer_entries)),
+//! ([`Session::with_slot_sprites`](crate::Session::with_slot_sprites)),
 //! which the `nova` app hands on.
 //!
 //! **Hidden ships.** For a ship in the player's system (@0x2b7d8-0x2b7ed),
@@ -64,7 +64,29 @@
 //! findings of
 //! rdm:phase/player-led-ships/phase-21-ships-overlap-in-layer-entry-order
 //! list every site with its address.
+//!
+//! **Cloned frames.** `_HandleMouse` tests the pointer against a slot's
+//! base sprite rect (+0x1a), which `_SWSetCurrentFrameIndex` (@0xa90b6)
+//! sizes to the current frame (frame +0x22..+0x29) and
+//! `_SWSetSpriteLocation` (@0xab640) only moves. The hidden branch's tail
+//! (@0x2cd17-0x2cd9d) centres that sprite on the ship, by its own size.
+//! Each frame `_HandleShipDisplay` clones a shown ship's type's master
+//! (`0x3b50a4[type]`) into its slot's base sprite
+//! (`_SWCloneFramesFromMaster` @0x2b824), which keeps the frame index
+//! when still in range (@0xac504-0xac514); every frame of one sheet is
+//! one size, so only the sheet matters. A hidden ship skips the clone, so
+//! its slot keeps the frames it last cloned: the type last shown there,
+//! or `shïp` 128's, which `_InitSprites` clones into every slot at launch
+//! (@0x1f17f-0x1f193). Like the layers, these outlive a pilot.
+//! [`SlotFrames`] keeps them by [`Slot`],
+//! [`Session::framed_by`](crate::Session::framed_by) answers which sheet
+//! a ship's hover box takes, and
+//! [`RuleKey::HiddenShipHoverBox`](crate::rulebook::RuleKey::HiddenShipHoverBox)
+//! chooses. The slot's other five sprites (+0x4..+0x14, cloned
+//! @0x2bc52 and @0x2ca74) are not boxed, so are not kept. Neither path
+//! plays a sound.
 
+use crate::catalog::ShipId;
 use crate::combat::ShipRef;
 use crate::combat::hull::Condition;
 
@@ -171,6 +193,59 @@ impl LayerEntries {
         ships.sort_by_key(|&(_, slot)| self.rank(slot));
         ships.into_iter().map(|(ship, _)| ship).collect()
     }
+}
+
+/// The ship type whose frames every slot's base sprite holds at launch:
+/// `_InitSprites` clones ship type index 0's master (`0x3b50a4[0]`),
+/// `shïp` 128, into each slot (@0x1f17f-0x1f193).
+pub const INIT_FRAMES: ShipId = ShipId(128);
+
+/// The ship type whose frames each slot's base sprite last cloned (see
+/// the module docs' "Cloned frames"): the sheet a hidden ship's hover
+/// box is sized by.
+///
+/// `_HandleShipDisplay` clones a slot's base sprite from its ship's type
+/// each frame it shows the ship (`_SWCloneFramesFromMaster` @0x2b824),
+/// and [`Session::lay_out_ships`](crate::Session) records that here.
+/// `_HandlePlayer`'s escape-pod path clones two more ship slots' base
+/// sprites, the derelict it leaves to the player's old type (@0x6f3f5)
+/// and the player's slot to the escape pod, `shïp` index 0x2ff
+/// (@0x6f768). The engine has no escape pod, so neither has a
+/// counterpart here.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SlotFrames {
+    /// The slots cloned since launch, each with the type it last cloned.
+    cloned: std::collections::BTreeMap<Slot, ShipId>,
+}
+
+impl SlotFrames {
+    /// Every slot holding [`INIT_FRAMES`], as `_InitSprites` leaves them.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Clones `ship`'s frames into `slot`'s base sprite, as
+    /// `_HandleShipDisplay` does for a shown ship (@0x2b824).
+    pub fn clone_frames(&mut self, slot: Slot, ship: ShipId) {
+        self.cloned.insert(slot, ship);
+    }
+
+    /// The ship type whose frames `slot` holds.
+    #[must_use]
+    pub fn of(&self, slot: Slot) -> ShipId {
+        self.cloned.get(&slot).copied().unwrap_or(INIT_FRAMES)
+    }
+}
+
+/// What the ship slots' sprites keep across pilots in one run: each
+/// slot's layer history and its last cloned frames (see the module docs).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SlotSprites {
+    /// Each slot's layer and when it entered it.
+    pub layers: LayerEntries,
+    /// Each slot's last cloned frames.
+    pub frames: SlotFrames,
 }
 
 /// Whether a ship in `condition` is disabled for its layer, as
@@ -300,6 +375,20 @@ mod tests {
         );
         assert_eq!(entries.rank(Slot::Berth(9)).0, ShipLayer::Led);
         assert!(entries.rank(Slot::Berth(9)) < entries.rank(Slot::Berth(3)));
+    }
+
+    #[test]
+    fn a_fresh_slot_holds_shïp_128s_frames_and_keeps_the_last_cloned() {
+        let mut frames = SlotFrames::new();
+        assert_eq!(frames.of(Slot::Berth(5)), ShipId(128));
+        assert_eq!(frames.of(Slot::Player), ShipId(128));
+        assert_eq!(SlotFrames::default(), frames);
+        frames.clone_frames(Slot::Berth(5), ShipId(200));
+        assert_eq!(frames.of(Slot::Berth(5)), ShipId(200));
+        assert_eq!(frames.of(Slot::Berth(6)), ShipId(128));
+        assert_eq!(frames.of(Slot::Player), ShipId(128));
+        frames.clone_frames(Slot::Player, ShipId(130));
+        assert_eq!(frames.of(Slot::Player), ShipId(130));
     }
 
     #[test]

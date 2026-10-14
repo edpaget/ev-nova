@@ -367,7 +367,7 @@ use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
     HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText, News,
     NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, StellarIff, TagNames, VenueOffer,
-    ship_layer::LayerEntries,
+    ship_layer::SlotSprites,
 };
 use nova_sim::{DrawnBox, DrawnShips};
 
@@ -1679,25 +1679,27 @@ impl<
         view
     }
 
-    /// The flight with its ship slots' draw layers starting from
-    /// `layers`, the history an earlier flight of the same run left
-    /// ([`Session::with_layer_entries`]).
+    /// The flight with its ship slots' draw layers and cloned frames
+    /// starting from `slot_sprites`, the history an earlier flight of the
+    /// same run left ([`Session::with_slot_sprites`]).
     #[must_use]
-    pub fn with_layer_entries(self, layers: LayerEntries) -> Self {
-        Self {
+    pub fn with_slot_sprites(self, slot_sprites: SlotSprites) -> Self {
+        let mut view = Self {
             session: self
                 .session
-                .map(|session| session.with_layer_entries(layers)),
+                .map(|session| session.with_slot_sprites(slot_sprites)),
             ..self
-        }
+        };
+        view.read_npc_sheets();
+        view
     }
 
-    /// The ship slots' draw-layer history as the flight leaves it
-    /// ([`Session::layer_entries`]), or `None` when its session never
-    /// started.
+    /// The ship slots' draw-layer and cloned-frame history as the flight
+    /// leaves it ([`Session::slot_sprites`]), or `None` when its session
+    /// never started.
     #[must_use]
-    pub fn layer_entries(&self) -> Option<&LayerEntries> {
-        self.session.as_ref().ok().map(Session::layer_entries)
+    pub fn slot_sprites(&self) -> Option<&SlotSprites> {
+        self.session.as_ref().ok().map(Session::slot_sprites)
     }
 
     /// The flight with `terms` giving the fee and wage of a hire
@@ -1910,7 +1912,9 @@ impl<
     }
 
     /// Reads the sheet of each ship type the traffic can spawn that has
-    /// not been read yet.
+    /// not been read yet, and of each type a ship here is boxed by
+    /// ([`Session::framed_types`]), such as the stale frames of a hidden
+    /// ship's slot.
     fn read_npc_sheets(&mut self) {
         let Ok(session) = &self.session else {
             return;
@@ -1922,6 +1926,11 @@ impl<
             self.cards
                 .entry(ship)
                 .or_insert_with(|| self.catalog.target_card(ship));
+        }
+        for ship in session.framed_types() {
+            self.npc_sheets
+                .entry(ship)
+                .or_insert_with(|| self.catalog.ship_sheet(ship));
         }
         for govt in session.npcs().iter().filter_map(|npc| npc.govt) {
             self.codes
@@ -4155,15 +4164,16 @@ impl<
 /// The ships where the flight draws them, for the hover test: the
 /// session's [`DrawnShips`] port. Every NPC is drawn, by its sheet or as
 /// its crossed box, so each has a box, even one its cloak hides from the
-/// player: [`Session::hover`] asks the cloak itself. A hidden ship
+/// player: [`Session::hover`] asks the cloak itself. Each box is the size
+/// of a frame of the sheet its slot's sprite holds
+/// ([`Session::framed_by`]): a shown ship's own type's. A hidden ship
 /// ([`Session::is_hidden`]: its type's `Cost` is -1) is boxed where it
-/// would be drawn, by its own type's sheet, as the original still
-/// positions its hidden sprite (`_HandleShipDisplay` @0x2cd17) and
-/// `_HandleMouse` skips only a slot with no sprite (@0x38171). The
-/// original's box is the size of the frames the slot last cloned
-/// (`_SWCloneFramesFromMaster` @0x2b824 is skipped for a hidden ship),
-/// often the previous ship's at that slot; the engine keeps no frames per
-/// slot.
+/// would be drawn, as the original still positions its hidden sprite
+/// (`_HandleShipDisplay` @0x2cd17) and `_HandleMouse` skips only a slot
+/// with no sprite (@0x38171), by the frames its slot last cloned, as
+/// `_SWCloneFramesFromMaster` (@0x2b824) is skipped for it: often the
+/// previous ship's at that slot ([`nova_sim::RuleKey::HiddenShipHoverBox`]
+/// chooses).
 struct ViewShips<'a, C> {
     /// The flight, which says where each ship is drawn.
     view: &'a FlightView<C>,
@@ -4175,14 +4185,20 @@ impl<C> DrawnShips for ViewShips<'_, C> {
     fn npc(&self, id: NpcId) -> Option<DrawnBox> {
         let npc = self.session.npcs().iter().find(|npc| npc.id == id)?;
         let (at, _) = self.view.shown_npc(npc);
-        let sheet = self.view.npc_sheets.get(&npc.ship);
+        let framed = self.session.framed_by(ShipRef::Npc(id))?;
+        let sheet = self.view.npc_sheets.get(&framed);
         Some(drawn_box(at, drawn_size(sheet)))
     }
 
     fn player(&self) -> Option<DrawnBox> {
-        let size = match &self.view.sheet {
-            Ok(sheet) => (sheet.frame_width, sheet.frame_height),
-            Err(_) => placeholder_size(),
+        let framed = self.session.framed_by(ShipRef::Player);
+        let size = if framed == Some(self.session.ship()) {
+            match &self.view.sheet {
+                Ok(sheet) => (sheet.frame_width, sheet.frame_height),
+                Err(_) => placeholder_size(),
+            }
+        } else {
+            drawn_size(framed.and_then(|ship| self.view.npc_sheets.get(&ship)))
         };
         Some(drawn_box(self.view.shown_position(), size))
     }
@@ -4945,6 +4961,12 @@ mod tests {
                     ..sheet()
                 }),
                 130 => Err("no shän 130".to_owned()),
+                131 => Ok(ShipSheet {
+                    image_id: 2002,
+                    frame_width: 100,
+                    frame_height: 100,
+                    ..sheet()
+                }),
                 other => panic!("asked for shïp {other}'s sheet"),
             }
         }
@@ -17275,22 +17297,113 @@ mod tests {
         );
     }
 
+    /// [`SlotSprites`] whose `slot` last cloned `shïp` 131's 100-pixel
+    /// frames, as a flight that showed one there leaves it.
+    fn cloned_131(slot: nova_sim::ship_layer::Slot) -> SlotSprites {
+        let mut sprites = SlotSprites::default();
+        sprites.frames.clone_frames(slot, ShipId(131));
+        sprites
+    }
+
+    /// Whether the pointer at `over` hovers a ship in `view`, after the
+    /// two ticks the cursor takes to animate.
+    fn hovers(view: &mut View, over: Point) -> bool {
+        view.input(&Input::PointerMoved(over));
+        ticks(view, 2);
+        cursor_sprites(&drawn(view))
+            .first()
+            .is_some_and(|&(frame, _)| frame == 1)
+    }
+
     #[test]
-    fn a_flight_hands_its_layer_history_to_its_session_and_back() {
-        let mut layers = nova_sim::ship_layer::LayerEntries::new();
-        layers.put(
+    fn a_hidden_ship_is_hovered_by_the_box_its_berth_last_drew() {
+        let engine = Rulebook::default;
+        let hover = |rules: Rulebook, off: f32| {
+            let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+            let session = view.session.as_mut().expect("flying");
+            nova_sim::fixture::hide(session, id);
+            let berth = session
+                .npcs()
+                .iter()
+                .find(|npc| npc.id == id)
+                .expect("there")
+                .berth;
+            let mut view = view
+                .with_rules(rules)
+                .with_slot_sprites(cloned_131(nova_sim::ship_layer::Slot::Berth(berth)));
+            let carried = sheets(&view).contains(&ShipId(131));
+            assert_eq!(
+                carried,
+                rules == engine(),
+                "read as the history is carried in"
+            );
+            let over = npc_on_screen(&view, id);
+            hovers(&mut view, Point::new(over.x, over.y + off))
+        };
+        assert!(hover(engine(), 40.0), "inside shïp 131's 100-pixel frame");
+        assert!(!hover(engine(), 60.0), "outside it");
+        let own = || {
+            Rulebook::default().with_override(
+                nova_sim::RuleKey::HiddenShipHoverBox,
+                nova_sim::RuleSource::Bible,
+            )
+        };
+        assert!(hover(own(), 30.0), "inside its own 40-pixel frame's margin");
+        assert!(!hover(own(), 40.0), "boxed by its own 40-pixel frame");
+    }
+
+    #[test]
+    fn a_hidden_player_is_hovered_by_the_box_its_slot_last_drew() {
+        let hover = |rules: Rulebook, off: f32| {
+            let catalog = FakeCatalog {
+                hulls: vec![nova_sim::HullRecord {
+                    cost: -1,
+                    ..hull_of(128, &[])
+                }],
+                ..trafficked(&[130], 1, 129, 3)
+            };
+            let (view, _) = flight_with_npc(catalog);
+            let mut view = view
+                .with_rules(rules)
+                .with_slot_sprites(cloned_131(nova_sim::ship_layer::Slot::Player));
+            assert!(view.session().expect("flying").is_hidden(ShipRef::Player));
+            view.input(&key(TARGET_KEY, true));
+            view.input(&key(TARGET_KEY, false));
+            assert!(view.session().expect("flying").target().is_some());
+            hovers(&mut view, Point::new(VIEW_CENTER.x, VIEW_CENTER.y + off))
+        };
+        let engine = Rulebook::default;
+        assert!(hover(engine(), 40.0), "inside shïp 131's 100-pixel frame");
+        assert!(!hover(engine(), 60.0));
+        let own = || {
+            Rulebook::default().with_override(
+                nova_sim::RuleKey::HiddenShipHoverBox,
+                nova_sim::RuleSource::Bible,
+            )
+        };
+        assert!(hover(own(), 30.0));
+        assert!(!hover(own(), 40.0), "boxed by its own sheet");
+    }
+
+    #[test]
+    fn a_flight_hands_its_slot_sprites_to_its_session_and_back() {
+        let mut sprites = SlotSprites::default();
+        sprites.layers.put(
             nova_sim::ship_layer::Slot::Berth(2),
             nova_sim::ship_layer::ShipLayer::Led,
         );
-        let view = flight().with_layer_entries(layers.clone());
-        assert_eq!(view.session().expect("flying").layer_entries(), &layers);
-        assert_eq!(view.layer_entries(), Some(&layers));
+        sprites
+            .frames
+            .clone_frames(nova_sim::ship_layer::Slot::Berth(2), ShipId(140));
+        let view = flight().with_slot_sprites(sprites.clone());
+        assert_eq!(view.session().expect("flying").slot_sprites(), &sprites);
+        assert_eq!(view.slot_sprites(), Some(&sprites));
         let failed = FlightView::new(FakeCatalog {
             character: Err(StartError::NoCharacter),
             ..catalog()
         })
-        .with_layer_entries(layers);
-        assert_eq!(failed.layer_entries(), None);
+        .with_slot_sprites(sprites);
+        assert_eq!(failed.slot_sprites(), None);
     }
 
     #[test]

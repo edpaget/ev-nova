@@ -18,7 +18,8 @@
 //!   whether the sprite is shown, so a hidden ship
 //!   ([`Session::is_hidden`](crate::Session::is_hidden)), whose sprite
 //!   `_HandleShipDisplay` still positions (@0x2cd17), is hovered where it
-//!   would be drawn.
+//!   would be drawn, in the box of the frames its slot last cloned
+//!   ([`Session::framed_by`](crate::Session::framed_by)).
 //!
 //! Unlike [`targetable`](crate::targeting::targetable) it has no check for
 //! a ship emerging from a gate. Its hit box is the sprite's rect (+0x1a),
