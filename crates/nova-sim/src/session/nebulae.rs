@@ -214,6 +214,18 @@ mod tests {
     }
 
     #[test]
+    fn a_load_refresh_writing_both_a_system_and_a_nebula_writes_each() {
+        let mut catalog = nebulous(vec![nebula(128, (0, 0, 100, 100), "b5", "")]);
+        catalog.visibility.push(SystemVisibility {
+            id: SystemId(132),
+            visibility: Test::parse("b50"),
+        });
+        let session = Session::start(&catalog).expect("starts");
+        assert!(!session.galaxy().visible(SystemId(132)), "hidden");
+        assert!(!active(&session, 128), "inactive");
+    }
+
+    #[test]
     fn a_landing_refresh_activates_a_nebula_its_bits_now_pass() {
         let catalog = nebulous(vec![nebula(128, (0, 0, 100, 100), "b5", "")]);
         let mut session = Session::start(&catalog).expect("starts");

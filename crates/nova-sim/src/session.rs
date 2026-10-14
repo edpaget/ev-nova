@@ -892,7 +892,11 @@ impl Session {
     /// the pilot's bits, the saved flags never trusted, quietly: the load's
     /// galaxy refresh, which moves a pilot whose system it hides as any
     /// refresh does (see the [`story`](crate::story) module's "Visibility
-    /// and governments").
+    /// and governments"), and writes every nebula's activity from its
+    /// `ActiveOn`. The explored nebulae are forgotten, but for those kept
+    /// in the once-fired record, and [`StoryEvent::Explored`] is raised
+    /// for every visible explored system, by ascending ID: the load's
+    /// sweep (see the `nebulae` module).
     ///
     /// A pilot last landed on a stellar of its system resumes docked there,
     /// silently, as the original resumes a pilot at its last planet, the
@@ -2162,7 +2166,8 @@ impl Session {
     /// nebulae first; [`StoryEvent::EnteredSystem`] follows the days.
     ///
     /// It refreshes the galaxy (`_PropagateMissionBitEffects` @0x6bf3f):
-    /// every system's `Visibility` evaluated before the days, so a bit
+    /// every system's `Visibility`, and every nebula's `ActiveOn`,
+    /// evaluated before the days, so a bit
     /// their scripts set shows only at the next refresh, and written once
     /// the hops and the systems explored are resolved by the flags as they
     /// stood, before the system is entered, telling
