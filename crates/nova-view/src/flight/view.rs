@@ -196,7 +196,9 @@
 //!   ([`HYPERSPACE_MODE_KEY`]), Hyperspace Mode, selects the course's next
 //!   hop, or no destination. Closing the course map cues the course's
 //!   next hop too. The original has no stellar cycle key: Tab is its
-//!   Target Select, cycling the ships.
+//!   Target Select, cycling the ships. During a jump none of these keys or
+//!   clicks does anything (@0x69ad4, @0x69d2e, @0x6a5ef), but Option-\`
+//!   still lets go of the ship target (@0x69a17-0x69a90).
 //! - `\` (a press, not its repeats), the original's Hyper Select, selects
 //!   the next system linked with this one and plots a one-jump course to
 //!   it, as [`Session::select_next_system`] says, so the nav area shows
@@ -204,9 +206,17 @@
 //! - J (a press) begins the pre-jump turn and slow-down towards the
 //!   system selected when the session allows a jump, and otherwise
 //!   says why in the original's words (`STR#` 2002), as a refused landing
-//!   does. Once J is accepted the keys are let go and ignored while the
-//!   session flies the ship round to the jump's bearing
-//!   ([`Session::preparing_jump`]). The stars streak when the session says
+//!   does. Once J is accepted the session flies the ship round to the
+//!   jump's bearing ([`Session::preparing_jump`]) without the steering
+//!   and thrust keys, and its fire keys fire nothing until arrival. While
+//!   a jump is under way, the stage braking for it included, only the keys
+//!   the original's `_HandlePlayer` does not gate on its jump state are
+//!   taken ([`FlightView::taken_during_jump`]): Tab, R, W, Option-\`, B,
+//!   Y, Command-K and the escort menu's keys. The rest, J included, are
+//!   ignored, P is refused, and a click in space selects nothing. The keys
+//!   held are still tracked through the jump, so a steering, thrust or fire
+//!   key still held at arrival acts on the first tick after it, as the
+//!   original reads the keys live. The stars streak when the session says
 //!   the jump has begun ([`Session::jumping`]), at once for a ship already
 //!   facing that way and slow enough. The jump plays its [`JumpEffect`]:
 //!   the session waits while the stars streak and the screen, HUD
@@ -214,9 +224,8 @@
 //!   then the ship arrives at full white, the new system is read and laid
 //!   out, and the message line says so in the original's words
 //!   ([`arrival_message`]). Flight resumes as the new system fades in
-//!   from white: the keys work again and the session flies, J included,
-//!   as under the original's asynchronous display fade. Only the streak
-//!   and the fade-out ignore the keys. A multi-jump plays one
+//!   from white: every key works again and the session flies, J included,
+//!   as under the original's asynchronous display fade. A multi-jump plays one
 //!   effect, toward the first system, and the scene loaded is the last
 //!   system it passes. With the Hyperspace Effects preference off
 //!   ([`FlightView::with_hyperspace_effects`],
@@ -230,7 +239,10 @@
 //!   turn, R the nearest threat, and Alt-R (Option-R) the nearest ship
 //!   ([`TargetPick`]). Shift-Tab targets back through the ships, and
 //!   Shift-Alt-Tab (Shift-Option-Tab) back through the escorts, as the
-//!   original's `_FindPrevShipInSystem` does.
+//!   original's `_FindPrevShipInSystem` does. Tab, R and W work during a
+//!   jump too, picking from the system being left until arrival lets go
+//!   of the target; Space and Control fire nothing then (@0x6aaf0,
+//!   @0x6ab75).
 //! - B (a press) boards the target when the session allows it
 //!   ([`Session::board`]), by the screen's [`BoardingRule`]
 //!   ([`FlightView::with_boarding_rule`]; [`NovaBoarding`] by default),
@@ -248,6 +260,9 @@
 //!   ([`grant_message`]) for [`GRANT_TICKS`]. A person of `Flags`
 //!   0x0200 whose mission is available offers it in place of the plunder
 //!   ([`Boarding::Offered`]), held for the router as a hail's offer is.
+//!   B works during a jump too, as `_HandlePlayerBoardAttempt` reads no
+//!   jump state (0x65000-0x66064): its checks run on the ship as it brakes,
+//!   or as it was when the jump began once the stars streak.
 //! - Y (a press) hails the target ([`Session::open_hail`]): a person
 //!   whose mission is available offers it in place of the comm dialog,
 //!   held for the router ([`FlightView::take_offer`]), which opens the
@@ -266,7 +281,10 @@
 //!   through [`FlightView::hang_up`]. Each step, the NPCs assisting the
 //!   player give their help ([`Session::tick_assistance`], by the screen's
 //!   [`DisableRule`]), and each says when it is done, as a message
-//!   ([`comm_message`]).
+//!   ([`comm_message`]). During a jump, its pre-jump stage included, Y is
+//!   taken and the session refuses the hail, silently, as
+//!   `_HandlePlayerCommunication` refuses while the jump state is set
+//!   (@0x61f87; its beep is player-death phase 16's).
 //! - P ([`PLAYER_INFO_KEY`], a press), outside the map, asks the router
 //!   for the player info screen over the paused flight
 //!   ([`FlightView::take_player_info_request`], with
@@ -306,9 +324,9 @@
 //!   orders reset, or not, on entering a system as the session's rule
 //!   set says ([`FlightView::with_rules`]). While a jump is under way,
 //!   the ship braking and turning for it or the stars streaking, the
-//!   escort menu's keys are the only ones taken, as the original runs its
-//!   escort block on every frame of a jump but the arrival
-//!   (`_HandlePlayer` @0x6dd00-0x6e452): a command then says what the
+//!   escort menu's keys are taken, among the few that are (see J above),
+//!   as the original runs its escort block on every frame of a jump but
+//!   the arrival (`_HandlePlayer` @0x6dd00-0x6e452): a command then says what the
 //!   escorts will do ("will hold position."), and the menu still times
 //!   out.
 //! - The player's fighters launch from its bays as its secondary weapon
@@ -589,7 +607,9 @@ pub const HAIL_KEY: Key = Key::Char('y');
 /// The jettison key: the original's default (`dumpCargo`, `_keyPrefs`
 /// +0x1e, keycode 0x28, `_loadKeys` @0xce33d-0xce360), which jettisons
 /// only with Command held (`_HandlePlayer` @0x6fd54-0x6fdaf): everything,
-/// or with Option (Alt) also held, all but the mission cargo.
+/// or with Option (Alt) also held, all but the mission cargo. It works
+/// during a jump too: `_JettisonCargo` (0x3dffd-0x3e3c4) reads no jump
+/// state.
 pub const JETTISON_KEY: Key = Key::Char('k');
 /// The escorts' attack key: the original's default (`Keys.nib`'s
 /// `escortCmdKey0`, "Attack Target").
@@ -2041,11 +2061,10 @@ impl<
         ScreenAction::None
     }
 
-    /// A key `press` during a jump, which flight ignores but for
-    /// [`PLAYER_INFO_KEY`] outside the map: refused with `_beepSnd[3]`
-    /// (@0x7039a-0x703bd).
-    fn refuse_player_info(&mut self, press: Option<Key>) -> ScreenAction {
-        if press == Some(PLAYER_INFO_KEY) && !self.map_open {
+    /// A press of [`PLAYER_INFO_KEY`] during a jump: outside the map,
+    /// refused with `_beepSnd[3]` (@0x7039a-0x703bd).
+    fn refuse_player_info(&mut self) -> ScreenAction {
+        if !self.map_open {
             self.ui_sounds.push(UiSound::PlayerInfoRefused);
         }
         ScreenAction::None
@@ -2252,14 +2271,16 @@ impl<
     /// [`NOTHING_OUT_HERE`] (`_HandlePlayer` @0x6b231-0x6b3d9; the
     /// tractor's #36 has no engine source). The original's second jump
     /// path clears them again (@0x6d601-0x6d7b1), once the pilot is past
-    /// the tutorial, which the arrival line replaces anyway.
+    /// the tutorial, which the arrival line replaces anyway. The keys
+    /// held stay held: the session flies the jump without them, and one
+    /// still held at arrival acts then, as the original reads the keys
+    /// live and keeps no held state.
     fn jump(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
         };
         match session.begin_jump() {
             Ok(_) => {
-                self.held.clear();
                 for text in [TOO_CLOSE, FAR_ENOUGH, NOTHING_OUT_HERE] {
                     self.clear_message(text);
                 }
@@ -3813,33 +3834,40 @@ impl<C> FlightView<C> {
         true
     }
 
-    /// An input while a jump is under way, the pre-jump stage included:
-    /// only the escort menu's keys are taken ([`FlightView::escort_key`]),
-    /// as the original's `_HandlePlayer` runs its escort block on every
-    /// frame of a jump but the arrival (@0x6dd00-0x6e452), and Option is
-    /// tracked because it reads it live for Option-C (@0x6e207). Every
-    /// other key is dropped.
-    fn jump_input(&mut self, input: &Input) {
-        match *input {
-            Input::Key {
-                key: Key::Alt,
-                pressed,
-                ..
-            } => {
-                if pressed {
-                    self.held.insert(Key::Alt);
-                } else {
-                    self.held.remove(&Key::Alt);
-                }
-            }
-            Input::Key {
-                key,
-                pressed: true,
-                repeat: false,
-            } => {
-                self.escort_key(key);
-            }
-            _ => {}
+    /// Whether a press of `key` is taken while a jump is under way, the
+    /// pre-jump stage included, with Option held (`option`) and the escort
+    /// menu open (`menu_open`) or not. `_HandlePlayer` runs its key
+    /// handling on every frame of a jump but the arrival (@0x6c625), and
+    /// these keys' blocks read no jump state (+0x50):
+    ///
+    /// - Target Select, Tab, with Shift and Option ([`TARGET_KEY`],
+    ///   @0x69f1c-0x69ffb), and Closest Target, R and Option-R
+    ///   ([`NEAREST_KEY`], @0x6a9b7-0x6aae7);
+    /// - Weapon Select, W and Option-W ([`SELECT_KEY`], @0x6ac12-0x6adbf);
+    /// - Option-\` ([`NAV_OFF_KEY`] with Option, @0x69a17-0x69a90), which
+    ///   lets go of the ship target;
+    /// - Board, B ([`BOARD_KEY`], @0x6a98b-0x6a9a8);
+    /// - Hail, Y ([`HAIL_KEY`], @0x703cc-0x70405), which the session then
+    ///   refuses, as `_HandlePlayerCommunication` does (@0x61f87);
+    /// - Jettison, Command-K and Command-Option-K ([`JETTISON_KEY`],
+    ///   @0x6fd54-0x6fdaf);
+    /// - the escort menu's keys: E, Return, F, D, V and C, and 1-5 while the
+    ///   menu is open (@0x6dd00-0x6e452).
+    ///
+    /// Every other key is ignored, as the original gates it on +0x50 ≤ 0:
+    /// \` without Option and H (@0x69ad4), \\ (@0x69be7), 1-4 with the
+    /// menu shut, F1-F4 and F5 (@0x69d2e), M (@0x6a7a2), L (@0x6a8df),
+    /// I (@0x70424), and J, which changes nothing during a jump
+    /// (@0x6b0da-0x6b10d). P is refused apart
+    /// ([`FlightView::refuse_player_info`]); the flight keys are tracked
+    /// as held whatever this says.
+    fn taken_during_jump(key: Key, option: bool, menu_open: bool) -> bool {
+        match key {
+            TARGET_KEY | NEAREST_KEY | SELECT_KEY | BOARD_KEY | HAIL_KEY | JETTISON_KEY
+            | MENU_KEY | MENU_CLOSE_KEY | ESCORT_ATTACK_KEY | ESCORT_DEFEND_KEY
+            | ESCORT_HOLD_KEY | ESCORT_RECALL_KEY => true,
+            NAV_OFF_KEY => option,
+            _ => menu_open && GROUP_KEYS.contains(&key),
         }
     }
 
@@ -4101,8 +4129,12 @@ impl<
 > Screen for FlightView<C>
 {
     /// Never quits: Escape is the router's. While a jump is under way,
-    /// the pre-jump stage included, only the escort menu's keys, and
-    /// Option, are taken (see the module docs).
+    /// the pre-jump stage included, P is refused, and a press goes on only
+    /// when [`FlightView::taken_during_jump`] takes it; a click in space
+    /// selects nothing then, as [`Session::select_stellar`] refuses during
+    /// a jump (@0x6a145, @0x6a5ef). The flight keys are still tracked as
+    /// held, so one held at arrival acts on the next tick, as the original
+    /// reads them live (see the module docs).
     fn input(&mut self, input: &Input) -> ScreenAction {
         let press = match *input {
             Input::Key {
@@ -4112,9 +4144,9 @@ impl<
             } => Some(key),
             _ => None,
         };
-        if self.jump.is_some() || self.preparing_jump() {
-            self.jump_input(input);
-            return self.refuse_player_info(press);
+        let jumping = self.jump.is_some() || self.preparing_jump();
+        if jumping && press == Some(PLAYER_INFO_KEY) {
+            return self.refuse_player_info();
         }
         if self.map_open {
             if press == Some(MAP_KEY) {
@@ -4132,6 +4164,13 @@ impl<
         {
             self.click_in_space(at);
         }
+        let press = if jumping {
+            let option = self.held.contains(&Key::Alt);
+            let menu_open = self.escort_menu.is_open();
+            press.filter(|&key| Self::taken_during_jump(key, option, menu_open))
+        } else {
+            press
+        };
         match press {
             Some(LAND_KEY) => self.land(),
             Some(BOARD_KEY) => {
@@ -8183,7 +8222,7 @@ mod tests {
         plot(&mut alongside, 131);
         fly_out(&mut alongside);
         alongside.input(&key(JUMP, true));
-        for k in [Key::Up, Key::Left, Key::Down, MAP, LAND, JUMP, Key::Tab] {
+        for k in [Key::Up, Key::Left, Key::Down, MAP, LAND, JUMP] {
             assert_eq!(view.input(&key(k, true)), ScreenAction::None);
         }
         assert!(!view.map_open());
@@ -8216,6 +8255,7 @@ mod tests {
         view.input(&key(JUMP, true));
         assert!(!view.map_open());
         assert_eq!(view.message(), None);
+        view.input(&key(Key::Left, false));
         view.tick(ms(2700));
         assert_eq!(view.jump_effect(), None);
         assert_eq!(view.take_landing(), None);
@@ -8241,6 +8281,7 @@ mod tests {
         ));
         for k in [Key::Up, Key::Left, MAP, LAND, JUMP] {
             assert_eq!(view.input(&key(k, true)), ScreenAction::None);
+            assert_eq!(view.input(&key(k, false)), ScreenAction::None);
         }
         assert!(!view.map_open());
         assert_eq!(view.message(), None);
@@ -8254,6 +8295,300 @@ mod tests {
             "neither thrusting nor turning"
         );
         assert_eq!(view.session().expect("flying").preparing_jump(), None);
+    }
+
+    /// Two of `build`'s flights, each with its course to Alpha Centauri
+    /// plotted and flown out: the first braking and turning for the jump
+    /// on J, the second 300 ms into the jump's streak. Boxed: two flights
+    /// are too large for the stack together.
+    fn through_a_jump(build: impl Fn() -> View) -> [Box<View>; 2] {
+        let mut braking = Box::new(build());
+        plot(&mut braking, 131);
+        fly_out(&mut braking);
+        braking.input(&key(JUMP, true));
+        assert!(braking.preparing_jump(), "braking");
+        let mut streaking = Box::new(build());
+        plot(&mut streaking, 131);
+        fly_out(&mut streaking);
+        jump_now(&mut streaking);
+        streaking.tick(ms(300));
+        assert!(streaking.jump_effect().is_some(), "streaking");
+        [braking, streaking]
+    }
+
+    /// Which stage of the jump `view` is in, for a failing assertion.
+    fn stage(view: &View) -> &'static str {
+        if view.preparing_jump() {
+            "braking"
+        } else {
+            "streaking"
+        }
+    }
+
+    #[test]
+    fn the_target_keys_are_taken_through_a_jump() {
+        for mut view in through_a_jump(|| fighting(armed(2, &[]), &two_npcs())) {
+            let stage = stage(&view);
+            assert_eq!(target_of(&view), None, "{stage}");
+            tap(&mut view, TARGET_KEY);
+            assert_eq!(target_of(&view), Some(NpcId(0)), "{stage}");
+            tap(&mut view, TARGET_KEY);
+            assert_eq!(target_of(&view), Some(NpcId(1)), "{stage}: steps on");
+            view.input(&key(Key::Shift, true));
+            tap(&mut view, TARGET_KEY);
+            view.input(&key(Key::Shift, false));
+            assert_eq!(target_of(&view), Some(NpcId(0)), "{stage}: Shift-Tab");
+            tap(&mut view, TARGET_KEY);
+            tap(&mut view, TARGET_KEY);
+            assert_eq!(target_of(&view), None, "{stage}: past the last");
+            let session = view.session().expect("flying");
+            let from = session.player().position;
+            let nearest = session
+                .npcs()
+                .iter()
+                .min_by(|a, b| {
+                    let a = (a.state.position - from).length();
+                    let b = (b.state.position - from).length();
+                    a.total_cmp(&b)
+                })
+                .map(|npc| npc.id);
+            alt_tap(&mut view, NEAREST_KEY);
+            assert_eq!(target_of(&view), nearest, "{stage}: Option-R");
+            assert!(nearest.is_some());
+        }
+    }
+
+    #[test]
+    fn option_backquote_clears_the_target_through_a_jump_and_nav_off_is_ignored() {
+        let targeted = || {
+            let mut view = fighting(armed(2, &[]), &two_npcs());
+            tap(&mut view, TARGET_KEY);
+            view
+        };
+        for mut view in through_a_jump(targeted) {
+            let stage = stage(&view);
+            let mode = nav_mode(&view);
+            let _ = view.take_sounds();
+            tap(&mut view, NAV_OFF_KEY);
+            assert_eq!(nav_mode(&view), mode, "{stage}: Nav Off ignored");
+            assert_eq!(target_of(&view), Some(NpcId(0)), "{stage}");
+            alt_tap(&mut view, NAV_OFF_KEY);
+            assert_eq!(target_of(&view), None, "{stage}: Option-`");
+            assert_eq!(nav_mode(&view), mode, "{stage}");
+            assert!(
+                view.take_sounds()
+                    .contains(&Sound::Sim(SimSound::TargetCleared)),
+                "{stage}"
+            );
+        }
+    }
+
+    #[test]
+    fn weapon_select_is_taken_through_a_jump() {
+        for mut view in through_a_jump(|| fighting(armed(0, &[BLASTER, ROCKET, MISSILE]), &[])) {
+            let stage = stage(&view);
+            assert_eq!(secondary_of(&view), None, "{stage}");
+            tap(&mut view, SELECT_KEY);
+            assert_eq!(secondary_of(&view), Some(ROCKET), "{stage}");
+            tap(&mut view, SELECT_KEY);
+            assert_eq!(secondary_of(&view), Some(MISSILE), "{stage}");
+            alt_tap(&mut view, SELECT_KEY);
+            assert_eq!(secondary_of(&view), Some(ROCKET), "{stage}: Option-W");
+        }
+    }
+
+    #[test]
+    fn board_is_taken_through_a_jump() {
+        for mut view in through_a_jump(|| beside(750, 750, 0, true)) {
+            let stage = stage(&view);
+            tap(&mut view, BOARD_KEY);
+            assert_eq!(view.take_boarding(), None, "{stage}");
+            assert_eq!(view.message(), Some(CANT_BOARD), "{stage}");
+        }
+    }
+
+    #[test]
+    fn hail_is_refused_silently_through_a_jump() {
+        for mut view in through_a_jump(|| hailable(true)) {
+            let stage = stage(&view);
+            tap(&mut view, HAIL_KEY);
+            assert_eq!(view.take_hail(), None, "{stage}");
+            assert_eq!(view.take_offer(), None, "{stage}");
+            assert_eq!(view.message(), None, "{stage}");
+        }
+    }
+
+    /// [`trading`]'s flight, its hold bought full of food and taken off.
+    fn laden() -> View {
+        let mut view = FlightView::new(trading());
+        land_now(&mut view);
+        view.settle_script();
+        assert!(view.trade(BUY_FOOD).is_ok());
+        view.take_off().expect("takes off");
+        assert!(cargo_aboard(&view) > 0);
+        view.message = None;
+        view
+    }
+
+    #[test]
+    fn command_k_jettisons_through_a_jump() {
+        for mut view in through_a_jump(laden) {
+            let stage = stage(&view);
+            command_tap(&mut view, JETTISON_KEY, false);
+            assert_eq!(cargo_aboard(&view), 0, "{stage}");
+            assert_eq!(view.message(), Some(CARGO_JETTISONED), "{stage}");
+        }
+    }
+
+    /// Whether [`FlightView::taken_during_jump`] takes `key` with Option
+    /// held or not and the escort menu open or shut, each of the four.
+    fn taken_with(key: Key) -> [bool; 4] {
+        [(false, false), (true, false), (false, true), (true, true)]
+            .map(|(option, menu_open)| View::taken_during_jump(key, option, menu_open))
+    }
+
+    #[test]
+    fn the_keys_a_jump_takes_are_the_originals_ungated_ones() {
+        let always = [
+            TARGET_KEY,
+            NEAREST_KEY,
+            SELECT_KEY,
+            BOARD_KEY,
+            HAIL_KEY,
+            JETTISON_KEY,
+            MENU_KEY,
+            MENU_CLOSE_KEY,
+            ESCORT_ATTACK_KEY,
+            ESCORT_DEFEND_KEY,
+            ESCORT_HOLD_KEY,
+            ESCORT_RECALL_KEY,
+        ];
+        for key in always {
+            assert_eq!(taken_with(key), [true; 4], "{key:?}");
+        }
+        assert_eq!(
+            taken_with(NAV_OFF_KEY),
+            [false, true, false, true],
+            "with Option"
+        );
+        for key in GROUP_KEYS {
+            assert_eq!(
+                taken_with(key),
+                [false, false, true, true],
+                "{key:?}: menu open"
+            );
+        }
+        let never = [
+            LAND_KEY,
+            MAP_KEY,
+            JUMP_KEY,
+            MISSION_INFO_KEY,
+            PLAYER_INFO_KEY,
+            HYPERSPACE_MODE_KEY,
+            HYPER_SELECT_KEY,
+            Key::Function(1),
+            Key::Function(4),
+            NEAREST_STELLAR_KEY,
+            Key::Up,
+            FIRE_KEY,
+        ];
+        for key in never {
+            assert_eq!(taken_with(key), [false; 4], "{key:?}");
+        }
+    }
+
+    #[test]
+    fn nav_and_screen_keys_are_ignored_through_a_jump() {
+        for mut view in through_a_jump(flight) {
+            let stage = stage(&view);
+            let braking = view.preparing_jump();
+            let mode = nav_mode(&view);
+            let course = view.session().expect("flying").course().to_vec();
+            for k in [
+                LAND,
+                MAP,
+                JUMP,
+                MISSION_INFO_KEY,
+                HYPERSPACE_MODE_KEY,
+                HYPER_SELECT_KEY,
+                NAV_OFF_KEY,
+                STELLAR_SLOT_KEYS[0][0],
+                STELLAR_SLOT_KEYS[0][1],
+                NEAREST_STELLAR_KEY,
+            ] {
+                tap(&mut view, k);
+            }
+            let earth = on_screen(&view, (0.0, -600.0));
+            click(&mut view, earth);
+            assert!(!view.map_open(), "{stage}");
+            assert_eq!(view.take_landing(), None, "{stage}");
+            assert!(view.take_mission_info_request().is_none(), "{stage}");
+            assert_eq!(nav_mode(&view), mode, "{stage}");
+            assert_eq!(nav_target(&view), None, "{stage}");
+            let session = view.session().expect("flying");
+            assert_eq!(session.course(), course, "{stage}");
+            assert_eq!(view.message(), None, "{stage}");
+            assert_eq!(view.preparing_jump(), braking, "{stage}");
+            assert_eq!(view.jump_effect().is_some(), !braking, "{stage}");
+        }
+    }
+
+    /// Ticks until the ship has arrived in another system, the jump's
+    /// fade-in yet to play.
+    fn tick_to_arrival(view: &mut View) {
+        let leaving = view.session().expect("flying").system();
+        for _ in 0..1000 {
+            if view.session().expect("flying").system() != leaving {
+                return;
+            }
+            view.tick(TICK);
+        }
+        panic!("never arrived: {:?}", player(view));
+    }
+
+    #[test]
+    fn a_flight_key_held_through_arrival_acts_at_once() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        view.tick(ms(300));
+        view.input(&key(Key::Up, true));
+        tick_to_arrival(&mut view);
+        let arrived = player(&view);
+        view.tick(TICK);
+        assert_eq!(player(&view), stepped(arrived, THRUST, 1), "thrusting");
+    }
+
+    #[test]
+    fn a_key_held_when_j_is_pressed_stays_held() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(Key::Up, true));
+        jump_now(&mut view);
+        tick_to_arrival(&mut view);
+        let arrived = player(&view);
+        view.tick(TICK);
+        assert_eq!(player(&view), stepped(arrived, THRUST, 1), "thrusting");
+    }
+
+    #[test]
+    fn fire_held_through_a_jump_fires_only_after_arrival() {
+        let mut view = fighting(armed(0, &[BLASTER]), &[]);
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.preparing_jump(), "braking");
+        view.input(&key(FIRE_KEY, true));
+        while view.jump_effect().is_none() {
+            view.tick(TICK);
+            assert_eq!(shots_of(&view, BLASTER), 0, "braking");
+        }
+        tick_to_arrival(&mut view);
+        assert_eq!(shots_of(&view, BLASTER), 0);
+        view.tick(TICK);
+        assert_eq!(shots_of(&view, BLASTER), 1, "fired on the first tick");
     }
 
     /// Jumps from Sol to Alpha Centauri, on a course on to Barnard, and
@@ -10521,17 +10856,23 @@ mod tests {
     }
 
     #[test]
-    fn the_combat_keys_do_nothing_while_a_jump_plays() {
+    fn the_fire_keys_pressed_and_let_go_during_a_jump_fire_nothing() {
         let mut view = fighting(armed(0, &[BLASTER, ROCKET, MISSILE]), &[]);
         tap(&mut view, SELECT_KEY);
         plot(&mut view, 131);
         fly_out(&mut view);
         view.input(&key(JUMP, true));
-        for k in [NEAREST_KEY, SELECT_KEY, FIRE_KEY] {
+        for k in [FIRE_KEY, SECONDARY_KEY] {
             view.input(&key(k, true));
         }
-        view.tick(ms(2000));
-        assert_eq!(view.jump_effect(), None);
+        while view.jump_effect().is_none() {
+            view.tick(TICK);
+            assert_eq!(view.session().expect("flying").shots(), [], "braking");
+        }
+        for k in [FIRE_KEY, SECONDARY_KEY] {
+            view.input(&key(k, false));
+        }
+        arrive_now(&mut view);
         ticks(&mut view, 2);
         assert_eq!(secondary_of(&view), Some(ROCKET));
         assert_eq!(view.session().expect("flying").shots(), []);
