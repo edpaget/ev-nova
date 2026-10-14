@@ -262,6 +262,10 @@
 //!   also refuses it for 15 frames after a take-off and while the ship
 //!   is dying, which the engine does not model
 //!   (crons-news-ranks-fidelity phase 27, player-death phase 4).
+//!   `_DoPlayerInfoDialog`'s own gate (@0x5a013-0x5a064) refuses nothing
+//!   more: its `_screenFaded` holds only while a jump fades out, and
+//!   nothing sets its `_fadePending` (only `_ResetPlayer` writes it, a 0,
+//!   @0x1d7c3).
 //! - I ([`MISSION_INFO_KEY`], a press), outside the map and a jump, asks
 //!   the router for the mission info screen over the paused flight
 //!   ([`FlightView::take_mission_info_request`]), letting go of the

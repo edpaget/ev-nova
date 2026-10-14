@@ -1248,6 +1248,7 @@ mod tests {
     #[test]
     fn it_opens_on_general_centred() {
         let screen = screen();
+        assert!(format!("{screen:?}").contains("TextMetrics"), "its Debug");
         assert_eq!(screen.tab(), Tab::General);
         assert!(!screen.closed());
         assert_eq!(screen.bounds(), Some(Bounds::at(ORIGIN, 413.0, 227.0)));
@@ -1535,6 +1536,17 @@ mod tests {
         let mut screen = screen();
         screen.input(&press(Key::Tab));
         let commands = drawn(&screen);
+        // The box: the content box inset 5 at the top, left and right and
+        // 10 at the bottom, (314, 315) to (709, 441), filled black.
+        assert!(
+            commands.contains(&DrawCommand::Line {
+                from: Point::new(314.0, 378.0),
+                to: Point::new(709.0, 378.0),
+                width: 126.0,
+                color: Color::BLACK,
+            }),
+            "{commands:?}"
+        );
         let lines: Vec<(String, Point, Color)> = commands
             .iter()
             .filter_map(|command| match command {

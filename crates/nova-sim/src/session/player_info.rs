@@ -3,18 +3,27 @@
 //! gathered from the pilot, the ship's stats, the records, the galaxy and
 //! the string lists.
 //!
+//! A stellar counts as active, and its tribute as paid, when its owner
+//! exists and is visible (`_HandleStellarSystemVisibility`
+//! @0x32cbe-0x32cdf, the tribute's test @0x53560). Here that is any
+//! stellar with a holder
+//! ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)): an
+//! owner is visible by definition, and the rescue's holder is the
+//! player's system, which the galaxy refresh always keeps visible (see
+//! [`story`](crate::story)), so the original's tests always hold. The
+//! player's system's own stellars all have one.
+//!
 //! The legal status scans the player's system's `NavDefs` as the
 //! catalog gives them, through the galaxy overlay; a `NavDefs` slot the
 //! catalog cannot read is skipped there, so it does not take up one of
 //! the first three or four places the original's scans count. The
 //! tribute counts each stellar some system lists, held as
 //! [`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder) gives
-//! it, when that system exists and is visible and the stellar is
-//! dominated ([`DOMINATED`]); the tribute itself is read from the holder's
-//! stellars in `catalog`.
+//! it, when the stellar is dominated ([`DOMINATED`]); the tribute itself
+//! is read from the holder's stellars in `catalog`.
 
 use super::{Session, overlaid_sites};
-use crate::catalog::{GovtId, LandingSite, PilotCatalog, StellarId, SystemId};
+use crate::catalog::{GovtId, LandingSite, PilotCatalog};
 use crate::landing::{StellarFlags, is_landable};
 use crate::market::{DOMINATED, Good};
 use crate::news::{CARGO_NAMES, MISC_STRINGS};
@@ -191,17 +200,6 @@ impl Session {
         )
     }
 
-    /// Whether system `holder` exists and is visible.
-    fn holder_shown(&self, holder: Option<SystemId>) -> bool {
-        holder.is_some_and(|system| self.galaxy.exists(system) && self.galaxy.visible(system))
-    }
-
-    /// Whether `stellar` is active: its holder exists and is visible, as
-    /// `_HandleStellarSystemVisibility` sets +0x44 (@0x32cbe-0x32cdf).
-    fn stellar_active(&self, stellar: StellarId) -> bool {
-        self.holder_shown(self.galaxy.holder(self.listers(stellar), self.pilot.system))
-    }
-
     /// The day's tribute (@0x5352c-0x53583): each stellar some system
     /// lists that is dominated and active, its tribute read from its
     /// holder's stellars in `catalog`.
@@ -210,11 +208,8 @@ impl Session {
             .iter()
             .filter(|listed| listed.flags2 & DOMINATED != 0)
             .filter_map(|listed| {
-                let holder = self.galaxy.holder(&listed.systems, self.pilot.system);
-                if !self.holder_shown(holder) {
-                    return None;
-                }
-                let sites = catalog.landing_sites(holder?);
+                let holder = self.galaxy.holder(&listed.systems, self.pilot.system)?;
+                let sites = catalog.landing_sites(holder);
                 let site = sites.iter().find(|site| site.id == listed.id)?;
                 Some(player_info::tribute_of(site))
             })
@@ -236,9 +231,13 @@ impl Session {
             return words.not_available.to_string();
         }
         let govt = self.galaxy.govt(system);
-        let counting = sites.iter().take(3).filter(|site| {
-            self.stellar_active(site.id) && !uninhabited(site) && is_landable(site) && !gate(site)
-        });
+        // Each of the player's system's stellars is active: the original
+        // asks (+0x44 @0xd5ba), but its holder is always visible (see the
+        // module docs).
+        let counting = sites
+            .iter()
+            .take(3)
+            .filter(|site| !uninhabited(site) && is_landable(site) && !gate(site));
         let index = player_info::legal_status_index(
             i64::from(self.system_record()),
             i64::from(self.govts.crime_tol(govt.or(Some(FIRST_GOVT)))),
@@ -259,6 +258,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+    use crate::catalog::SystemId;
     use crate::catalog::{
         CommCatalog, GovtRecord, JunkId, JunkRecord, MissionRecord, OutfitId, OutfitRecord, RankId,
         RankRecord, ShipId, ShipRecord,
@@ -350,7 +350,13 @@ mod tests {
             "a thousand a tech level"
         );
         let mut catalog = tributary();
-        catalog.sites[1] = (SystemId(131), vec![planet(140, 0.0, 0.0)]);
+        catalog.sites[1] = (
+            SystemId(131),
+            vec![LandingSite {
+                tech_level: 5,
+                ..planet(140, 0.0, 0.0)
+            }],
+        );
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(income(&session, &catalog), None, "not dominated");
     }
@@ -421,8 +427,13 @@ mod tests {
     fn a_hired_escort_costs_a_hundredth_of_its_class_and_a_captured_one_nothing() {
         let catalog = with_escort_class();
         let mut session = Session::start(&catalog).expect("starts");
+        assert!(!session.player_info(&catalog).fleet);
         session.pilot.escorts.push(escort(Some(0)));
         assert_eq!(income(&session, &catalog), Some(IncomeLine::Expenses(500)));
+        assert!(
+            session.player_info(&catalog).fleet,
+            "the trader escort's holds"
+        );
         session.pilot.escorts[0] = escort(None);
         assert_eq!(income(&session, &catalog), None);
         session.pilot.escorts[0] = Escort {

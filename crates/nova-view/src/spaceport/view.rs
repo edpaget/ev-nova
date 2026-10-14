@@ -3981,7 +3981,9 @@ mod tests {
         view.with_player_info(Ok(player_info_template()), Ok(text_template()))
     }
 
+    /// Presses P on `view`, which asked nothing before: whether it asks.
     fn asks_player_info(view: &mut SpaceportView) -> bool {
+        assert!(!view.take_player_info_request(), "nothing asked before");
         view.input(&key(PLAYER_INFO_KEY));
         view.take_player_info_request()
     }

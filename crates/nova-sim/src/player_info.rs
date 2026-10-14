@@ -485,16 +485,17 @@ const OUTFIT_IDS: std::ops::RangeInclusive<i16> = 128..=639;
 /// itself. Only IDs 128-639, the original's slots, are grouped.
 #[must_use]
 pub fn outfit_leaders(records: &[OutfitRecord]) -> BTreeMap<OutfitId, OutfitId> {
-    let loaded: Vec<&OutfitRecord> = records
+    let mut loaded: Vec<&OutfitRecord> = records
         .iter()
         .filter(|record| OUTFIT_IDS.contains(&record.id.0))
         .collect();
+    loaded.sort_by_key(|record| record.id);
     loaded
         .iter()
-        .map(|record| {
-            let leader = loaded
+        .enumerate()
+        .map(|(at, record)| {
+            let leader = loaded[..at]
                 .iter()
-                .filter(|other| other.id < record.id)
                 .find(|other| !record.lc_name.is_empty() && other.lc_name == record.lc_name)
                 .map_or(record.id, |other| other.id);
             (record.id, leader)
@@ -596,10 +597,13 @@ pub fn extras_text(
     let mut placed = 0;
     while let Some(w) = weight {
         let mut placed_now = 0;
-        let mut seen = 0;
+        // Whether any group, placed or not, came before in this pass.
+        let mut seen = false;
         let mut next = 0;
         for (record, count) in &mut left {
-            if *count <= 0 || record.lc_name.is_empty() || !honor_is(record, false) {
+            // The original also skips a leader with no `LCName`
+            // (@0x547d6), which none is: a leader's name is its group's.
+            if *count <= 0 || !honor_is(record, false) {
                 continue;
             }
             let dw = record.disp_weight;
@@ -618,10 +622,15 @@ pub fn extras_text(
                     text.push(' ');
                 }
                 *count = 0;
-            } else if w > dw && (dw > next || seen == 0) {
-                next = dw;
+            } else {
+                // The next weight is the highest below `w`, from its start
+                // of 0 unless this is the first group of the pass. The
+                // original also asks `w > dw` (@0x54a9e), which always
+                // holds here: every group left is at or below `w`, as the
+                // passes go down by the highest weight left.
+                next = if seen { next.max(dw) } else { dw };
             }
-            seen += 1;
+            seen = true;
         }
         weight = (placed_now > 0).then_some(next);
     }
@@ -729,12 +738,13 @@ pub fn daily_income(
     for cost in costs {
         expenses = (expenses as f64 + f64::from(cost) * 0.01).trunc() as i64;
     }
-    let mut income = tribute + salaries;
-    if income < 0 {
-        expenses -= income;
-        income = 0;
+    let income = tribute + salaries;
+    // Income below 0 moves to the expenses.
+    let moved = income.min(0);
+    DailyIncome {
+        income: income - moved,
+        expenses: expenses - moved,
     }
-    DailyIncome { income, expenses }
 }
 
 /// The daily income line, with its amount.
@@ -779,15 +789,9 @@ pub fn tribute_of(site: &LandingSite) -> i64 {
 /// ("N/A") with no capacity (see the module docs).
 #[must_use]
 pub fn reserve_shown(current: f32, capacity: f32) -> Option<i64> {
-    if capacity <= 0.0 {
-        None
-    } else if current < 0.0 {
-        Some(0)
-    } else if capacity >= current {
-        Some((current / capacity * 100.0) as i64)
-    } else {
-        Some(100)
-    }
+    // Below 0 is 0% and over the capacity 100%, as the original's
+    // branches have it; in between, truncated.
+    (capacity > 0.0).then(|| ((current / capacity * 100.0) as i64).clamp(0, 100))
 }
 
 /// How far the energy left reaches.
@@ -873,18 +877,18 @@ impl Domination {
     /// The domination of the counting stellars, each dominated or not.
     #[must_use]
     pub fn of(counting: impl IntoIterator<Item = bool>) -> Self {
-        let (mut dominated, mut free) = (0, 0);
+        let (mut dominated, mut free) = (false, false);
         for is_dominated in counting {
             if is_dominated {
-                dominated += 1;
+                dominated = true;
             } else {
-                free += 1;
+                free = true;
             }
         }
         match (dominated, free) {
-            (0, _) => Self::None,
-            (_, 0) => Self::All,
-            _ => Self::Some,
+            (false, _) => Self::None,
+            (true, false) => Self::All,
+            (true, true) => Self::Some,
         }
     }
 }
@@ -901,7 +905,9 @@ pub fn legal_status_index(
     dominated: Domination,
 ) -> Option<usize> {
     let (r, t) = (record, crime_tol);
-    let mut index = if r < 0 { 2 } else { 0 };
+    // 2 for a record below 0; a record of 0 or more is always given 1 or
+    // 10 below, so the original's start of 0 for it never shows.
+    let mut index = 2;
     for (at, times) in [
         (3, 1),
         (4, 4),
@@ -1287,8 +1293,8 @@ mod tests {
             named(129, "", "", 0),
             named(130, "pod", "pods", 0),
             named(131, "", "", 0),
-            named(132, "tank", "tanks", 0),
             named(133, "pod", "pods", 0),
+            named(132, "tank", "tanks", 0),
             named(127, "pod", "pods", 0),
             named(640, "pod", "pods", 0),
         ];
@@ -1302,6 +1308,9 @@ mod tests {
         assert_eq!(of(133), Some(128));
         assert_eq!(of(127), None, "below the slots");
         assert_eq!(of(640), None, "above the slots");
+        let unsorted =
+            outfit_leaders(&[named(130, "pod", "pods", 0), named(128, "pod", "pods", 0)]);
+        assert_eq!(unsorted.get(&OutfitId(130)), Some(&OutfitId(128)), "by ID");
     }
 
     #[test]
@@ -1409,6 +1418,52 @@ mod tests {
         assert_eq!(
             extras(&lower_first, &[(128, 1), (129, 1)]),
             "Current extras for your ship:\r\rA low and a lower.\r\r"
+        );
+    }
+
+    #[test]
+    fn the_next_weight_is_the_highest_below_among_the_groups_left() {
+        let records = [
+            named(128, "high", "highs", 9),
+            named(129, "low", "lows", 1),
+            named(130, "mid", "mids", 3),
+        ];
+        assert_eq!(
+            extras(&records, &[(128, 1), (129, 1), (130, 1)]),
+            "Current extras for your ship:\r\rA high, a mid, and a low.\r\r",
+            "after the placed high one, 3 over 1"
+        );
+    }
+
+    #[test]
+    fn a_group_placed_in_an_earlier_pass_does_not_count_as_coming_before() {
+        // Pass 1 places 128 alone; in pass 2 the negative 129 is the first
+        // group not yet placed, so the next weight starts at its -2.
+        let records = [
+            named(128, "high", "highs", 5),
+            named(129, "low", "lows", -2),
+            named(130, "mid", "mids", 1),
+        ];
+        assert_eq!(
+            extras(&records, &[(128, 1), (129, 1), (130, 1)]),
+            "Current extras for your ship:\r\rA high, a mid, and a low.\r\r"
+        );
+    }
+
+    #[test]
+    fn a_group_whose_leader_is_an_honor_is_left_out_of_the_extras() {
+        let records = [
+            honor(named(128, "badge", "badges", 0)),
+            named(129, "badge", "badges", 0),
+        ];
+        assert!(
+            extras_shown(&records, &owned(&[(129, 1)])),
+            "129 is no honor"
+        );
+        assert_eq!(
+            extras(&records, &[(129, 1)]),
+            "Current extras for your ship:\r\r.\r\r",
+            "its leader 128 is"
         );
     }
 
@@ -1604,6 +1659,7 @@ mod tests {
         assert_eq!(reserve_shown(50.0, 0.0), None);
         assert_eq!(reserve_shown(50.0, -1.0), None);
         assert_eq!(reserve_shown(-1.0, 200.0), Some(0));
+        assert_eq!(reserve_shown(-10.0, 200.0), Some(0));
         assert_eq!(reserve_shown(0.0, 200.0), Some(0));
         assert_eq!(reserve_shown(50.0, 200.0), Some(25));
         assert_eq!(reserve_shown(199.0, 200.0), Some(99));
