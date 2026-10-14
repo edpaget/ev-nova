@@ -253,10 +253,12 @@ impl Session {
         active: &ActiveMission,
         chance: &mut dyn Chance,
     ) -> SpecialShips {
+        let held =
+            |stop: Option<crate::mission::Stop>| stop.map(|stop| self.holder_of(stop.stellar));
         let facts = ShipFacts {
             player_system: self.pilot.system,
-            destination: active.destination,
-            return_to: active.return_to,
+            destination: held(active.destination),
+            return_to: held(active.return_to),
         };
         SpecialShips::at_accept(
             &record.ships,
@@ -1386,6 +1388,33 @@ pub(super) mod tests {
         catalog.missions[0].on_accept = crate::control::Script::parse("M131");
         let session = accepted(&catalog);
         assert_eq!(ships_of(&session).system, ShipSystem::At(SystemId(130)));
+    }
+
+    #[test]
+    fn mission_ships_of_minus_4_go_to_the_returns_holder_at_accept_rescued_included() {
+        // 128, lower, shadows the player's 130 at its place: 130 owns
+        // nothing, and holds its own 128 by the rescue.
+        let held_at = |syst| {
+            let mut catalog = ships_catalog(shipping(syst, 0));
+            catalog
+                .star_map
+                .push(crate::testkit::star(128, (0.0, 0.0), &[]));
+            let mission = &mut catalog.missions[0];
+            mission.avail_stel = 128;
+            mission.travel_stel = 140;
+            mission.return_stel = 128;
+            ships_of(&accepted(&catalog)).system
+        };
+        assert_eq!(
+            held_at(-4),
+            ShipSystem::At(SystemId(130)),
+            "the return's rescued holder (@0xa1031-0xa104d)"
+        );
+        assert_eq!(
+            held_at(-3),
+            ShipSystem::At(SystemId(131)),
+            "the destination's owner"
+        );
     }
 
     // Setup.
