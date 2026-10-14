@@ -48,8 +48,8 @@
 //! models the rescue, the active test and the shown set. The rest is left
 //! to others:
 //!
-//! - the course rewrite and cut (@0x32ab3-0x32b0f): crons-news-ranks
-//!   phase 15;
+//! - the course rewrite and cut (@0x32ab3-0x32b0f): the
+//!   [`course`](crate::course) module, at the session's rebuild points;
 //! - the explored level shared to the chain head (@0x32b0f-0x32b8f):
 //!   crons-news-ranks phase 14 models it, as one explored set, in the
 //!   session's rebuild points (the session's `explored` module);

@@ -54,7 +54,12 @@
 //! [`hops_per_jump`] gives, and enters only the last; the session's
 //! [`MultiJumpRule`] (the engine's unless [`Session::with_multi_jump`]
 //! says otherwise) decides whether the chain costs one jump's fuel and
-//! days or each hop's. In flight, fuel regenerates each tick at the rate the ship
+//! days or each hop's. An arrival that made no hop clears the course, or
+//! drops its first hop when that stands at the arrival, and each rebuild
+//! point rewrites a hidden hop to the system at its place and cuts the
+//! course at a hop with none, as
+//! [`RuleKey::RouteRewrite`] says (see the [`course`](crate::course)
+//! module). In flight, fuel regenerates each tick at the rate the ship
 //! and its outfits give.
 //!
 //! The land key's second press over a hypergate or wormhole, once
@@ -332,6 +337,7 @@
 mod aux_ships;
 mod cloaks;
 mod control;
+mod course;
 mod crons;
 mod edit;
 mod entry;
@@ -8085,16 +8091,25 @@ mod tests {
     #[test]
     fn a_course_replotted_during_the_jump_is_not_chained() {
         let catalog = chained(catalog(), 10);
-        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
-        begin_jump_now(&mut session).expect("jumps");
-        session.plot_course(SystemId(133)).expect("a route");
-        assert_eq!(session.course(), ids(&[133]));
-        assert_eq!(
-            session.arrive(&catalog, &mut NeverFires),
-            Some(SystemId(131))
-        );
-        assert_eq!(session.course(), ids(&[133]));
-        assert_eq!(session.reserves().fuel.now, 200.0);
+        for source in RuleSource::ALL {
+            let mut session = bound_for_134(&catalog, MultiJumpRule::default())
+                .with_rules(Rulebook::default().with_override(RuleKey::RouteRewrite, source));
+            begin_jump_now(&mut session).expect("jumps");
+            session.plot_course(SystemId(133)).expect("a route");
+            assert_eq!(session.course(), ids(&[133]));
+            assert_eq!(
+                session.arrive(&catalog, &mut NeverFires),
+                Some(SystemId(131))
+            );
+            // An arrival off the course clears it by the engine
+            // (@0x6c472-0x6c4c6).
+            let kept = match source {
+                RuleSource::Engine => ids(&[]),
+                RuleSource::Bible => ids(&[133]),
+            };
+            assert_eq!(session.course(), kept, "{source:?}");
+            assert_eq!(session.reserves().fuel.now, 200.0);
+        }
     }
 
     #[test]
@@ -18889,7 +18904,7 @@ mod tests {
 
     /// [`catalog`] with 134 at 131's place, (600, 0), listing 130 and 132
     /// and holding planet 141 at its centre: 131 heads the place.
-    fn alternates() -> FakePilotCatalog {
+    pub(super) fn alternates() -> FakePilotCatalog {
         let mut catalog = catalog();
         with_alternate(&mut catalog);
         catalog
@@ -18897,7 +18912,7 @@ mod tests {
 
     /// Adds [`alternates`]' 134 to `catalog`, and makes every system on
     /// its map [`hideable`].
-    fn with_alternate(catalog: &mut FakePilotCatalog) {
+    pub(super) fn with_alternate(catalog: &mut FakePilotCatalog) {
         catalog.star_map.push(star(134, (600.0, 0.0), &[130, 132]));
         catalog.systems.push(SystemId(134));
         catalog
@@ -18915,7 +18930,11 @@ mod tests {
 
     /// Shows each of `systems` of a [`hideable`] `catalog` again, as
     /// [`hide`] hides it.
-    fn unhide(session: &mut Session, catalog: &FakePilotCatalog, systems: &[i16]) -> bool {
+    pub(super) fn unhide(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        systems: &[i16],
+    ) -> bool {
         set_hiding(session, catalog, systems, false)
     }
 
@@ -19670,16 +19689,26 @@ mod tests {
     #[test]
     fn a_multi_jump_stops_before_a_hop_with_no_system_visible_at_its_place() {
         let catalog = chained_alternates(3);
-        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
-        hide(&mut session, &catalog, &[132]);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
-        session.drop_raised();
-        assert_eq!(
-            session.arrive(&catalog, &mut NeverFires),
-            Some(SystemId(131))
-        );
-        assert_eq!(session.course(), ids(&[132, 134]), "the rest kept");
-        assert_eq!(explored_raised(&session), ids(&[131]));
+        for source in RuleSource::ALL {
+            let mut session = bound_for_134(&catalog, MultiJumpRule::default())
+                .with_rules(Rulebook::default().with_override(RuleKey::RouteRewrite, source));
+            hide(&mut session, &catalog, &[132]);
+            assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+            session.drop_raised();
+            assert_eq!(
+                session.arrive(&catalog, &mut NeverFires),
+                Some(SystemId(131))
+            );
+            // The arrival is a rebuild point, whose rewrite cuts the course
+            // at 132, with no system visible at its place, by the engine
+            // (@0x6c203, @0x32aed-0x32b02).
+            let kept = match source {
+                RuleSource::Engine => ids(&[]),
+                RuleSource::Bible => ids(&[132, 134]),
+            };
+            assert_eq!(session.course(), kept, "{source:?}");
+            assert_eq!(explored_raised(&session), ids(&[131]));
+        }
     }
 
     #[test]

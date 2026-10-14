@@ -759,9 +759,12 @@
 //! owner decides this for every move of the player's system, the session's
 //! `set_player_system` (see the session's `entry` module): docked, the
 //! stellars shown are always those of the system whose stellar the ship is
-//! docked at. The
-//! course keeps its system IDs, each hop resolved by place when it is
-//! used, as `_CueNextHyperRouteDest` resolves it.
+//! docked at. Between
+//! rebuild points the course keeps its system IDs, each hop resolved by
+//! place when it is used, as `_CueNextHyperRouteDest` resolves it; each
+//! rebuild point rewrites it as
+//! [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says (see the
+//! [`course`](crate::course) module).
 //!
 //! The player is always in a visible system. Every arrival (a jump, a
 //! gate's exit, `M` and `N`, and the developer tools' relocation) resolves
@@ -1770,7 +1773,10 @@
 //!   spaceport goes on at that stellar, and the new system's ships and
 //!   stellars are set up only as the take-off sets the system up
 //!   (`_SetupShipsInSystem` @0x674c2, the stellars @0x674c7).
-//! - **The course** keeps system IDs. `_CueNextHyperRouteDest` resolves
+//! - **The course** keeps system IDs between rebuild points, and each
+//!   rebuild point rewrites it as
+//!   [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says (see
+//!   the [`course`](crate::course) module). `_CueNextHyperRouteDest` resolves
 //!   the next hop by place (`_FindActiveCoLocatedSystem` @0xe2fa) and
 //!   matches it against the current system's Con slots, each resolved the
 //!   same way (@0xe32f): a hidden hop with a visible system at its place

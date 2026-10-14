@@ -80,7 +80,14 @@
 //!   main screen, @0x1a354, @0x1a8ca, @0x1b003 and @0x457ee), which tells
 //!   nothing, the view reading the state as it builds.
 //!
-//! Each rebuild point first shares exploration by place, docked or not: by
+//! Each rebuild point first rewrites the course, docked or not: by the
+//! engine reading of
+//! [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite), each hidden
+//! hop becomes the system at its place and the course is cut at the first
+//! hop with none (@0x32ab3-0x32b0d; see the `course` module). That rewrite
+//! raises no event and tells nothing.
+//!
+//! It then shares exploration by place, docked or not: by
 //! the engine reading of
 //! [`RuleKey::ExploredByPlace`](crate::RuleKey::ExploredByPlace), every
 //! system at an explored head's place is explored, hidden or not
@@ -142,12 +149,15 @@ impl Session {
     }
 
     /// A rebuild point that tells nothing: first, docked or not, the
-    /// exploration shared by place (`Session::share_explored`, as
-    /// `_HandleStellarSystemVisibility` raises each system to its head's
-    /// level @0x32b13-0x32b8f before its stellars); then, in flight, the
+    /// course rewritten (`Session::rewrite_course`, as
+    /// `_HandleStellarSystemVisibility` rewrites it first @0x32ab3-0x32b0d)
+    /// and the exploration shared by place (`Session::share_explored`, as
+    /// it then raises each system to its head's level @0x32b13-0x32b8f
+    /// before its stellars); then, in flight, the
     /// stellars shown derived afresh (`Session::reshow`), then which of
     /// them are dead since it. Whether it changed the stellars.
     pub(super) fn rebuild_quietly(&mut self) -> bool {
+        self.rewrite_course();
         self.share_explored();
         let reshown = self.reshow();
         let galaxy = &self.galaxy;

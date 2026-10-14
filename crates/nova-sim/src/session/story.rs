@@ -553,10 +553,12 @@ impl Session {
 
     /// The course as it is flown: each hop the visible system that stands
     /// for it ([`OverlaidGalaxy::same_place`]), cut at the first hop with
-    /// none. The course saved ([`Session::course`]) keeps the systems
-    /// plotted, so a hop hidden and shown again is followed again, as the
-    /// original's `_CueNextHyperRouteDest` resolves each hop by place
-    /// (@0xe2fa).
+    /// none, as the original's `_CueNextHyperRouteDest` resolves each hop
+    /// by place (@0xe2fa). The course saved ([`Session::course`]) keeps
+    /// the systems plotted between rebuild points, so a hop hidden and
+    /// shown again before the next one is followed again; by
+    /// [`RuleKey::RouteRewrite`]'s other reading it keeps them for good
+    /// (see the session's `course` module).
     #[must_use]
     pub fn course_shown(&self) -> Vec<SystemId> {
         self.pilot

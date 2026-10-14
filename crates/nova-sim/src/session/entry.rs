@@ -221,8 +221,11 @@ pub(super) enum Reset {
 pub(super) enum CourseStep {
     /// It is kept.
     Keep,
-    /// Its first so many systems, the hops made, are taken off.
-    Drop(usize),
+    /// A jump's arrival: the hops made dropped, and an arrival off the
+    /// course cleared or its first hop dropped as
+    /// [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says (see
+    /// the `course` module).
+    Arrival { hops: usize },
     /// It is cleared.
     Clear,
 }
@@ -285,8 +288,10 @@ pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets 
 /// jump's fuel (@0x6c0b9-0x6c0f9) and resets the mission sound ID
 /// (@0x6c4ff), and forgets the stellar the offers were rolled at
 /// (@0x6bfce), drawing the roll table afresh before the system is set up
-/// (@0x6c040-0x6c066). It never clears the course, only drops the hops made; the
-/// jump's start already stopped the thrust, and every tick ends a gate's
+/// (@0x6c040-0x6c066). It drops the hops made, and an arrival that made
+/// none clears the course or drops its first hop as
+/// [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says
+/// (@0x6c472-0x6c4c6; see the `course` module); the jump's start already stopped the thrust, and every tick ends a gate's
 /// pending entry. Populating lets go of the strikes, the boarding, the
 /// hail and the target too. The caller arms the escort-strength timer
 /// before entering, ahead of the jump's days ([`Session::arrive`]).
@@ -308,7 +313,7 @@ fn jump(hops: usize) -> Resets {
             Reset::ArrivalMessage,
             Reset::Rebuild,
         ],
-        CourseStep::Drop(hops),
+        CourseStep::Arrival { hops },
         TrafficStep::Populate,
     )
 }
@@ -529,10 +534,7 @@ impl Session {
         }
         match resets.course {
             CourseStep::Keep => {}
-            CourseStep::Drop(hops) => {
-                let hops = hops.min(self.pilot.course.len());
-                self.pilot.course.drain(..hops);
-            }
+            CourseStep::Arrival { hops } => self.course_after_arrival(hops, system),
             CourseStep::Clear => self.pilot.course.clear(),
         }
         if resets.has(Reset::Touchdown) {
@@ -832,7 +834,7 @@ mod tests {
                         Reset::RedrawOffers,
                     ],
                 ),
-                CourseStep::Drop(hops),
+                CourseStep::Arrival { hops },
                 TrafficStep::Populate,
             );
             for f in [facts(true, false), facts(false, true)] {
