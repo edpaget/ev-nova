@@ -52,7 +52,8 @@ pub struct Stellar {
 
 /// Every stellar of `listed` that is active in `galaxy` with the player in
 /// `player`, by ascending ID, each in the system that holds it
-/// ([`OverlaidGalaxy::holder`]: its owner, the lowest-ID visible system
+/// ([`OverlaidGalaxy::active_holder`], the [`OverlaidGalaxy::holder`]
+/// while it is visible: its owner, the lowest-ID visible system
 /// that lists it and is not shadowed at its place, by
 /// `colocated_resolution`, else the player's system when that lists it),
 /// with the overlay's government and destroyed state, and whether every
@@ -81,9 +82,7 @@ pub fn stellars_of(
         .iter()
         .filter_map(|stellar| {
             let id = stellar.id;
-            let system = galaxy
-                .holder(&stellar.systems, player)
-                .filter(|&system| galaxy.visible(system))?;
+            let system = galaxy.active_holder(&stellar.systems, player)?;
             Some(Stellar {
                 id,
                 system,

@@ -656,6 +656,19 @@ impl OverlaidGalaxy {
             .or_else(|| listers.contains(&player).then_some(player))
     }
 
+    /// The [`holder`](Self::holder) of a stellar `listers` list, with the
+    /// player in `player`, while that holder is visible: the system the
+    /// stellar is active in, else none.
+    ///
+    /// `_HandleStellarSystemVisibility` sets a stellar active (+0x44) when
+    /// its owner's visible byte is set (@0x32cbe-0x32cdf), after its
+    /// rescue (@0x32c58-0x32cb3).
+    #[must_use]
+    pub fn active_holder(&self, listers: &[SystemId], player: SystemId) -> Option<SystemId> {
+        self.holder(listers, player)
+            .filter(|&holder| self.visible(holder))
+    }
+
     /// Where a stellar `listers` list is, with the player in `player`:
     /// its [`holder`](Self::holder) and what
     /// [`find_system_from_stellar`](Self::find_system_from_stellar) gives
@@ -680,16 +693,15 @@ impl OverlaidGalaxy {
     }
 
     /// Whether `system`, the player's, shows a stellar `listers` list: it
-    /// is visible and holds the stellar ([`holder`](Self::holder)).
+    /// is the stellar's [`active_holder`](Self::active_holder).
     ///
-    /// `_HandleStellarSystemVisibility` sets a stellar active (+0x44) when
-    /// its owner's visible byte is set (@0x32cbe-0x32cdf), and its sprite
-    /// pass shows each active stellar whose owner is the player's system
-    /// (@0x32cef-0x32d4c, @0x32ec1-0x33229). So a stellar another visible
-    /// system owns is never shown, though `system` lists it.
+    /// `_HandleStellarSystemVisibility`'s sprite pass shows each active
+    /// stellar whose owner is the player's system (@0x32cef-0x32d4c,
+    /// @0x32ec1-0x33229). So a stellar another visible system owns is
+    /// never shown, though `system` lists it.
     #[must_use]
     pub fn shows(&self, listers: &[SystemId], system: SystemId) -> bool {
-        self.visible(system) && self.holder(listers, system) == Some(system)
+        self.active_holder(listers, system) == Some(system)
     }
 
     /// The stellars of `listed` that `system`, the player's, shows
@@ -1352,6 +1364,32 @@ mod tests {
         assert_eq!(holder(&galaxy, &[2, 5], 5), Some(5), "3 shadows 5: rescued");
         assert_eq!(holder(&galaxy, &[2, 5], 4), None, "4 does not list it");
         assert_eq!(holder(&galaxy, &[], 4), None);
+    }
+
+    #[test]
+    fn the_active_holder_is_the_holder_while_it_is_visible() {
+        let galaxy = hiding(&[]);
+        let active = |listers: &[i16], player| {
+            galaxy
+                .active_holder(&ids(listers), SystemId(player))
+                .map(|id| id.0)
+        };
+        assert_eq!(active(&[2, 3], 3), Some(2), "the visible owner 2");
+        assert_eq!(active(&[3], 3), Some(3), "shadowed by 2: rescued into 3");
+        assert_eq!(active(&[3], 1), None, "no holder");
+        assert_eq!(active(&[], 1), None);
+
+        let galaxy = hiding(&[1]);
+        assert_eq!(
+            galaxy.holder(&ids(&[1]), SystemId(1)),
+            Some(SystemId(1)),
+            "rescued into the player's hidden 1"
+        );
+        assert_eq!(
+            galaxy.active_holder(&ids(&[1]), SystemId(1)),
+            None,
+            "a hidden holder is not active (@0x32cbe-0x32cdf)"
+        );
     }
 
     #[test]
