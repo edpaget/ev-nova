@@ -196,8 +196,12 @@
 //! [`RESALE_PERCENT`] of the price for any other; by the rulebook's other
 //! reading ([`RuleKey::OutfitRefund`](crate::RuleKey::OutfitRefund)),
 //! always [`RESALE_PERCENT`].
-//! Selling cargo space below the cargo held is allowed: the exchange then
-//! shows no space free until enough is sold.
+//! Selling cargo space below the cargo held is allowed: `_DoOutfitDialog`
+//! checks no cargo before a sale. By the engine reading of
+//! [`RuleKey::OutfitSaleCargo`](crate::RuleKey::OutfitSaleCargo) the
+//! sale's reset then trims the commodities to the holds left (see the
+//! session's `precalced` module); by the other, the cargo stays past the
+//! hold, the exchange showing no space free, until the next reset.
 //!
 //! **The info box's words** (`_OutfitDialogUpdate` @0x57dba-0x57e6f,
 //! `STR#` 2002 #219-#222) are worked out for each row on their own

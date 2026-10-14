@@ -51,7 +51,8 @@ impl Session {
     /// room shows why and leaves the destination unreached, so the next
     /// landing there tries again. Any other landing at the destination
     /// reaches it. Then the cargo is dropped off as [`drops_off`] says,
-    /// showing its `DumpCargoText`.
+    /// showing its `DumpCargoText` and, when it has one, resetting
+    /// ([`Session::reset_precalced`], @0x9eff9).
     pub(super) fn cargo_at_landing(&mut self, slot: u8, stellar: StellarId) {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
@@ -74,7 +75,13 @@ impl Session {
             .is_some_and(|active| drops_off(&record, active, at_destination, at_return));
         if drops && let Some(active) = self.slot_holding(slot, record.id) {
             active.aboard = false;
-            self.show_mission_text(MissionTextKind::DumpCargo, record.id, Some(slot));
+            // The reset after the `DumpCargoText`, run only when the
+            // mission has one (@0x9ef82-0x9eff9; see the `precalced`
+            // module). One whose text resource is missing has none here,
+            // where the original shows an empty dialog and resets.
+            if self.show_mission_text(MissionTextKind::DumpCargo, record.id, Some(slot)) {
+                self.reset_precalced();
+            }
         }
     }
 
@@ -759,6 +766,31 @@ mod tests {
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert!(aboard(&session, 0));
         assert!(blessed(&session), "the pickup's, shared with boarding");
+    }
+
+    #[test]
+    fn a_drop_off_showing_its_dump_text_resets() {
+        // `_MissionLandCargoCheck` resets only past its `DumpCargoText`
+        // (@0x9ef82-0x9eff9).
+        use crate::scan::Latches;
+        use crate::session::precalced::tests::convicted;
+        for (dump, resets) in [(Some(DUMP), true), (None, false)] {
+            let record = MissionRecord {
+                travel_stel: 128,
+                ..courier(140, 0, 0)
+            };
+            let catalog = cargo_catalog(vec![record], vec![texts(140, None, dump)]);
+            let mut session = accepted(&catalog);
+            assert!(aboard(&session, 0));
+            // 30 tons of goods in 20 holds, set up past the landing's reset.
+            session.pilot.cargo = std::iter::once((Good::Commodity(0), 30)).collect();
+            convicted(&mut session);
+            session.cargo_at_landing(0, StellarId(128));
+            assert!(!aboard(&session, 0), "{dump:?}: dropped off");
+            assert_eq!(session.scan_latches == Latches::ARMED, resets, "{dump:?}");
+            let food = if resets { 20 } else { 30 };
+            assert_eq!(session.pilot().held(Good::Commodity(0)), food, "{dump:?}");
+        }
     }
 
     #[test]

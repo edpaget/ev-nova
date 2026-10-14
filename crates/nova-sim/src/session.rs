@@ -836,6 +836,11 @@ pub struct Session {
     /// table is built from (see the `ranks` and `precalced` modules).
     /// Never saved, as the original's table lives in memory only.
     blessing_ranks: BTreeSet<RankId>,
+    /// Whether the resets leave the cargo past the holds untrimmed: set
+    /// through an outfit sale by the other reading of
+    /// [`RuleKey::OutfitSaleCargo`] (see the `precalced` module). Never
+    /// saved.
+    sale_keeps_cargo: bool,
     /// `_ScanPlayer`'s contraband latches, armed at each reset
     /// ([`Session::reset_precalced`], the session's stand-in for
     /// `_ResetPlayerPrecalcedValues`), and cleared by a conviction (see
@@ -1120,6 +1125,7 @@ impl Session {
             recent_rank: None,
             port_ranks: ranks::PortRanks::default(),
             blessing_ranks: BTreeSet::new(),
+            sale_keeps_cargo: false,
             scan_latches: crate::scan::Latches {
                 junk: false,
                 outfits: false,
@@ -2822,6 +2828,9 @@ impl Session {
         // The Red Alert's icon hidden, its threat kept (@0x66d84-0x66da0).
         self.red_alert.clear_icon();
         self.sounds.push(SimSound::Landed { stellar_sound });
+        // `_PlayerLandOnStellar`'s reset (@0x63211; see the `precalced`
+        // module), before the port opens.
+        self.reset_precalced();
         // `_DoPortDialog` takes the price multipliers before its mission
         // land check (@0x5fbeb) and its rebuild point (see the `ranks`
         // module).
@@ -3393,6 +3402,7 @@ impl Session {
                 }
             }
             Direction::Sell => {
+                self.sale_keeps_cargo = self.sell_keeps_cargo();
                 // The sale lets go of the secondary selected, before
                 // `OnSell` runs, as `SecondarySale` reads (see [`launches`]
                 // and [`carries`]).
@@ -3410,6 +3420,12 @@ impl Session {
         }
         self.stay.outfit_traded = true;
         self.refit(true, ReservePolicy::Hold);
+        // The order's reset: a buy's after its loop, a sale's after each
+        // pass (`_DoOutfitDialog` @0x5c305, @0x5cffb; see the `precalced`
+        // module). A buy loop of several passes resets after each here; no
+        // frame is drawn between them.
+        self.reset_precalced();
+        self.sale_keeps_cargo = false;
         Ok(())
     }
 
@@ -3597,6 +3613,10 @@ impl Session {
                 session.pilot.paint = None;
             }
         });
+        // The resets of the new class's stats and of the share's tail
+        // (`_DoShipyardDialog` @0x5ee99, @0x5ef9f; see the `precalced`
+        // module): their trims are the purchase rule's, already made.
+        self.reset_precalced_for(precalced::ResetCause::Purchase);
         self.ship_redraws.insert(ship);
         self.ship_hook(record.id, ShipHook::Purchase, chance);
         // No secondary is selected on the new ship (`_DoShipyardDialog`
@@ -10429,15 +10449,18 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn selling_space_below_the_cargo_held_is_allowed_and_none_is_free() {
-        let mut session = outfitted(&outfitting());
-        session.outfit(buy(CARGO), &mut NeverFires).expect("bought");
-        let food = order(&session, FOOD, Direction::Buy, Lot::Max);
-        assert_eq!(session.trade(food), Ok(30));
-        assert_eq!(session.outfit(sell(CARGO), &mut NeverFires), Ok(()));
-        let market = session.market().expect("an exchange");
-        assert_eq!((market.capacity, market.free), (20, 0));
-        assert_eq!(session.pilot().held(FOOD), 30);
+    fn selling_space_below_the_cargo_held_is_allowed_and_trims_it_by_the_engine() {
+        for (source, food) in [(RuleSource::Engine, 20), (RuleSource::Bible, 30)] {
+            let mut session = outfitted(&outfitting())
+                .with_rules(Rulebook::default().with_override(RuleKey::OutfitSaleCargo, source));
+            session.outfit(buy(CARGO), &mut NeverFires).expect("bought");
+            let bought = order(&session, FOOD, Direction::Buy, Lot::Max);
+            assert_eq!(session.trade(bought), Ok(30));
+            assert_eq!(session.outfit(sell(CARGO), &mut NeverFires), Ok(()));
+            let market = session.market().expect("an exchange");
+            assert_eq!((market.capacity, market.free), (20, 0), "{source:?}");
+            assert_eq!(session.pilot().held(FOOD), food, "{source:?}");
+        }
     }
 
     #[test]
@@ -11228,10 +11251,10 @@ pub(super) mod tests {
 
     #[test]
     fn buying_a_ship_counts_the_mission_cargo_aboard_and_never_leaves_it() {
-        // The new ship's 15 tons: by the engine 14 x 15/20, by the other
-        // reading the 9 tons the mission cargo leaves.
-        for (source, kept, left_behind) in [(RuleSource::Engine, 10, 4), (RuleSource::Bible, 9, 5)]
-        {
+        // The new ship's 15 tons: by the engine 14 x 15/20, 10, and then,
+        // as 16 tons are still past them, 10 x 15/16; by the other reading
+        // the 9 tons the mission cargo leaves.
+        for (source, kept, left_behind) in [(RuleSource::Engine, 9, 5), (RuleSource::Bible, 9, 5)] {
             let mut session = outfitted(&shipbuying())
                 .with_rules(Rulebook::default().with_override(RuleKey::PurchaseCargo, source));
             session.pilot.cargo = BTreeMap::from([(FOOD, 14)]);

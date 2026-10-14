@@ -22,6 +22,10 @@
 //! | `_JettisonCargo` @0x3e3b5, the jettison key's @0x6fdaf | [`Session::jettison_cargo`]; every good is gone by then, so its trim never cuts |
 //! | `_DoPlunderDialog` @0x94a0b | the plunder dialog closing |
 //! | `_DoMissionCargoPickup` @0x98316 | a pickup that fits, from a boarding or a landing, before the cargo is aboard |
+//! | `_MissionLandCargoCheck` @0x9eff9 | a drop-off that shows its `DumpCargoText`, the only one the original resets after (@0x9ef82) |
+//! | `_PlayerLandOnStellar`'s `_ShipStatsToSystemInfo` @0x63211 | a landing, before the port takes its prices |
+//! | `_DoOutfitDialog`'s `_SystemInfoToShipStats` @0x5c305, @0x5cffb | an outfit bought or sold ([`Session::outfit`]), after the refit, each pass |
+//! | `_DoShipyardDialog`'s `_SystemInfoToShipStats` @0x5ee99, `_DestroyPartialFleetCargo` @0x5ef9f | a ship bought ([`Session::buy_ship`]), once its cargo is settled; both trims are the purchase rule's ([`RuleKey::PurchaseCargo`]), so this reset trims nothing more |
 //! | `_EvalCurrentMissionBitSetString` @0x99a85, `_EvalMissionBitSetString` @0x99dea | the end of every set expression whose text is not empty, one of only spaces or one that did not parse included (`Session::run_ops`): a hook, a mission's script, a crön, an `OnExplore`, a story subscription's |
 //!
 //! *Ordering against the original.* The original runs a take-off's, a
@@ -31,10 +35,16 @@
 //! resets as it ends, in both, and no frame is drawn in between, so the
 //! settling runs no reset of its own: one there would trim again.
 //!
-//! **The trim's exception.** By the other reading of
+//! The trim measures the fleet's holds as `_TotalFleetHolds` does
+//! (@0xc24d), from the outfits owned at that moment, so an `OnSell`'s
+//! reset already sees the outfit sold gone.
+//!
+//! **The trim's exceptions.** By the other reading of
 //! [`RuleKey::ShipChangeCargo`], a set expression's reset does not trim,
 //! whatever the expression holds, so a `C`, `E` or `H` keeps every ton
-//! past the new hold until a reset outside a set expression.
+//! past the new hold until a reset outside a set expression. By the other
+//! reading of [`RuleKey::OutfitSaleCargo`], no reset through an outfit
+//! sale trims, its `OnSell`'s included.
 
 use super::Session;
 use crate::market;
@@ -47,6 +57,10 @@ pub(super) enum ResetCause {
     /// The end of a set expression that is not empty (@0x99a85,
     /// @0x99dea).
     SetExpr,
+    /// A ship purchase, whose trims are the purchase rule's
+    /// ([`shipyard::keep_cargo`](crate::shipyard::keep_cargo)): its reset
+    /// trims nothing more.
+    Purchase,
     /// Any other site.
     Other,
 }
@@ -84,20 +98,35 @@ impl Session {
         self.blessing_ranks.clone_from(&self.pilot.ranks);
     }
 
-    /// Whether the reset for `cause` trims the commodities.
+    /// Whether the reset for `cause` trims the commodities: never through
+    /// an outfit sale that keeps the cargo ([`Session::sell_keeps_cargo`]).
     fn trims(&self, cause: ResetCause) -> bool {
+        if self.sale_keeps_cargo {
+            return false;
+        }
         match cause {
             ResetCause::SetExpr => {
                 self.rules.source_for(RuleKey::ShipChangeCargo) == RuleSource::Engine
             }
+            ResetCause::Purchase => false,
             ResetCause::Other => true,
         }
     }
 
+    /// Whether the outfit sale about to run keeps the cargo past the holds
+    /// through its resets, `OnSell`'s included: by the other reading of
+    /// [`RuleKey::OutfitSaleCargo`].
+    pub(super) fn sell_keeps_cargo(&self) -> bool {
+        self.rules.source_for(RuleKey::OutfitSaleCargo) == RuleSource::Bible
+    }
+
     /// The reset's trim of the commodities (see
-    /// [`Session::reset_precalced`]).
+    /// [`Session::reset_precalced`]), against the fleet's holds as
+    /// `_TotalFleetHolds` works them out (@0xc24d): from the outfits owned
+    /// now, so an `OnSell`'s reset sees the outfit sold gone before the
+    /// sale's refit.
     fn trim_to_holds(&mut self) {
-        let holds = self.capacity();
+        let holds = market::fleet_holds(self.current_stats().capacity, self.escort_holds());
         let total = self.pilot.total_cargo();
         let before = self.pilot.cargo.clone();
         market::trim_commodities(&mut self.pilot.cargo, holds, total);
@@ -375,6 +404,94 @@ pub(super) mod tests {
         assert_ne!(untouched, trimmed);
         let _ = session.settle_script(&catalog, &mut NeverFires);
         assert_eq!(cargo(&session), trimmed, "a story subscription's script");
+    }
+
+    // The spaceport.
+
+    #[test]
+    fn a_landing_resets() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        let trimmed = overloaded(&mut session);
+        convicted(&mut session);
+        land_now(&mut session).expect("lands");
+        assert_eq!(cargo(&session), trimmed, "@0x63211");
+        assert_eq!(session.scan_latches, Latches::ARMED);
+    }
+
+    /// The outfitter's cargo pod, 10 tons.
+    const POD: crate::catalog::OutfitId = crate::catalog::OutfitId(301);
+
+    #[test]
+    fn an_outfit_bought_resets() {
+        use crate::session::tests::{buy, outfitted, outfitting};
+        let mut session = outfitted(&outfitting());
+        convicted(&mut session);
+        session
+            .outfit(buy(crate::catalog::OutfitId(300)), &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.scan_latches, Latches::ARMED, "@0x5c305");
+    }
+
+    #[test]
+    fn an_outfit_sale_below_the_cargo_trims_it_by_the_engine_and_keeps_it_by_the_other_reading() {
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        use crate::session::tests::{buy, outfitted, outfitting, sell};
+        let thirty: BTreeMap<Good, u32> =
+            [(Good::Commodity(0), 15), (Good::Commodity(1), 15)].into();
+        let twenty: BTreeMap<Good, u32> =
+            [(Good::Commodity(0), 10), (Good::Commodity(1), 10)].into();
+        for on_sell in ["", "b9"] {
+            let mut catalog = outfitting();
+            for record in &mut catalog.outfits {
+                if record.id == POD {
+                    record.on_sell = Script::parse(on_sell);
+                }
+            }
+            for source in RuleSource::ALL {
+                let mut session = outfitted(&catalog).with_rules(
+                    Rulebook::default().with_override(RuleKey::OutfitSaleCargo, source),
+                );
+                session.outfit(buy(POD), &mut NeverFires).expect("bought");
+                assert_eq!(session.capacity(), 30);
+                session.pilot.cargo = thirty.clone();
+                convicted(&mut session);
+                session.outfit(sell(POD), &mut NeverFires).expect("sold");
+                assert_eq!(session.capacity(), 20);
+                assert_eq!(session.scan_latches, Latches::ARMED, "@0x5cffb");
+                let why = format!("{source:?}, OnSell {on_sell:?}");
+                if source == RuleSource::Engine {
+                    assert_eq!(cargo(&session), twenty, "{why}: 20/30 of each");
+                } else {
+                    assert_eq!(cargo(&session), thirty, "{why}: kept past the hold");
+                    session
+                        .take_off(&catalog, &mut NeverFires)
+                        .expect("takes off");
+                    assert_eq!(cargo(&session), twenty, "{why}: the take-off trims");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_ship_bought_resets_once_its_cargo_is_settled_and_trims_no_third_time() {
+        use crate::session::tests::{NEW, outfitted, shipbuying};
+        let catalog = shipbuying();
+        let mut session = outfitted(&catalog);
+        session.pilot.cargo = [(Good::Commodity(0), 20)].into();
+        session.pilot.missions.put(0, carrying(140, 11));
+        convicted(&mut session);
+        session
+            .buy_ship(NEW, "Kestrel", &mut NeverFires)
+            .expect("bought");
+        assert_eq!(session.capacity(), 15);
+        assert_eq!(session.scan_latches, Latches::ARMED, "@0x5ee99, @0x5ef9f");
+        assert_eq!(
+            cargo(&session),
+            [(Good::Commodity(0), 6)].into(),
+            "20 x 15/31, then 9 x 15/20, the purchase's two trims; 17 tons are \
+             still past the holds, but no third"
+        );
     }
 
     #[test]

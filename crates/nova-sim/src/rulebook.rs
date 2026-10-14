@@ -71,7 +71,8 @@
 //! | [`LauncherSale`](RuleKey::LauncherSale) | `launcher_sale` | a launcher cannot be sold while the rounds held overfill the remaining launchers' `MaxAmmo`, and only when its weapon's `MaxAmmo` is above 0 (`_DoOutfitDialog` @0x5ca75-0x5cbe0; [`Session`](crate::Session)); in a counted sale, (n - 1) is as `counted_sale` says | a launcher cannot be sold while any of its ammunition is held§ |
 //! | [`RaisedMax`](RuleKey::RaisedMax) | `raised_max` | a `ModType` 27 outfit multiplies its target's `Max` by the outfits owned times their mods naming it, at least 1 (`_HasMaxOfItem` @0x45e9-0x46c3), and one of n cannot be sold while the target owned exceeds its raw `Max` x (n - 1) (`_DoOutfitDialog` @0x5c7be-0x5ca6f; [`Session`](crate::Session)); in a counted sale, (n - 1) is as `counted_sale` says | the multiplier is the items owned with such a mod, at least 1, and a sale is refused only while the target owned exceeds that maximum after it¶ |
 //! | [`EventPrice`](RuleKey::EventPrice) | `event_price` | an active event prices its commodity at `BasePrice` + `PriceDelta`, whatever the level, the highest ID winning, and lists a commodity not traded there (`_DoTradeDialog` @0x5dcf8-0x5dd58; [`Session`](crate::Session)) | the level price plus every event's `PriceDelta`\*\* |
-//! | [`PurchaseCargo`](RuleKey::PurchaseCargo) | `purchase_cargo` | a ship purchase keeps each commodity's share A/B (the new ship's cargo space over that plus the trader escorts' `Holds`, uncapped) and loses that share of each `jünk`, then trims the commodities to the fleet's holds, counting the mission cargo aboard but never cutting it (`_DestroyPartialFleetCargo` @0xcd32-0xcff6, `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c, `_TotalCargo` @0x4a0b called @0xc7ea; [`Session`](crate::Session)) | the mission cargo aboard takes the new ship's own cargo space first and always stays, and the goods that fit in the rest are kept, in order†† |
+//! | [`PurchaseCargo`](RuleKey::PurchaseCargo) | `purchase_cargo` | a ship purchase trims the commodities to the new fleet's holds, counting the mission cargo aboard but never cutting it, then keeps each commodity's share A/B (the new ship's cargo space over that plus the trader escorts' `Holds`, uncapped) and loses that share of each `jünk`, then trims again (`_SystemInfoToShipStats` @0x5ee99, `_DestroyPartialFleetCargo` @0xcd32-0xcff6, each ending in `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c; `_TotalCargo` @0x4a0b called @0xc7ea; [`Session`](crate::Session)) | the mission cargo aboard takes the new ship's own cargo space first and always stays, and the goods that fit in the rest are kept, in order†† |
+//! | [`OutfitSaleCargo`](RuleKey::OutfitSaleCargo) | `outfit_sale_cargo` | an outfit sale that leaves the fleet's holds below the cargo trims the commodities, as the sale's resets do (`_DoOutfitDialog` @0x5cff6, @0x5cffb; `_ResetPlayerPrecalcedValues` @0xc7d8-0xc887; [`Session`](crate::Session)) | no reset through the sale trims: the cargo stays past the hold until the next reset after it\* |
 //! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; [`Session`](crate::Session)) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
 //! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; [`Session`](crate::Session)) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
 //! | [`OutfitLimit`](RuleKey::OutfitLimit) | `outfit_limit` | a map (`ModType` 16) or clean-record (`ModType` 21) outfit is refused while the last outfit bought since the outfitter opened was of its kind; any other buy, or opening the outfitter again, lifts it (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, `_GrantOutfitItem` @0x44d67-0x44f8b, `_DoOutfitDialog` @0x5bb37-0x5bb44; [`Session`](crate::Session)) | no limit§§ |
@@ -157,7 +158,7 @@
 //! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
 //! `hud_cadence`, `alert_blink`, `blessing_refresh`, `explored_by_place`,
 //! `route_rewrite`, `scan_outfits_past_junk`, `gate_escorts`,
-//! `lost_cargo_share`, `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
+//! `lost_cargo_share`, `outfit_sale_cargo`, `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
 //! price), `hidden_ship_hover_box` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
@@ -997,22 +998,41 @@ rule_keys! {
     /// [`market`](crate::market)).
     EventPrice => "event_price",
     /// What cargo a ship purchase keeps. By the engine, as
-    /// `_DoShipyardDialog` calls `_DestroyPartialFleetCargo(0)`
-    /// (@0x5ef9f, @0xcd32-0xcff6) with the new ship in place: with A the
-    /// new ship's cargo space and B that plus the `Holds` of the trader
-    /// escorts, uncapped, each commodity becomes trunc(held x A/B) and
-    /// each `jünk` loses trunc(held x A/B), so without such escorts every
-    /// `jünk` goes; then, when the fleet's holds are below everything
-    /// held, the mission cargo aboard counted (`_TotalCargo` @0x4a0b,
-    /// called @0xc7ea), each commodity is cut by their ratio in single
-    /// floats, and the mission cargo is not cut
-    /// (`_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c). By the other
+    /// `_DoShipyardDialog` writes the new class's stats
+    /// (`_SystemInfoToShipStats` @0x5ee99) and then calls
+    /// `_DestroyPartialFleetCargo(0)` (@0x5ef9f, @0xcd32-0xcff6), each
+    /// ending in `_ResetPlayerPrecalcedValues`: first, when the new
+    /// fleet's holds are below everything held, the mission cargo aboard
+    /// counted (`_TotalCargo` @0x4a0b, called @0xc7ea), each commodity is
+    /// cut by their ratio in single floats, and the mission cargo is not
+    /// cut (@0xc7d8-0xc82c); then, with A the new ship's cargo space and B
+    /// that plus the `Holds` of the trader escorts, uncapped, each
+    /// commodity becomes trunc(held x A/B) and each `jünk` loses
+    /// trunc(held x A/B), so without such escorts every `jünk` goes; then
+    /// the trim again, which cuts once more whatever `jünk` or mission
+    /// cargo still holds the fleet past its holds. By the other
     /// reading, the mission cargo aboard takes the new ship's own cargo
     /// space first and always stays, and the goods that fit in the rest
     /// are kept, in order. The Bible says nothing of it, so the other
     /// reading is the phase's first wording of the rule, not anything the
     /// Bible says (see [`shipyard`](crate::shipyard)).
     PurchaseCargo => "purchase_cargo",
+    /// What an outfit sale that leaves the fleet's holds below the cargo
+    /// does to it. By the engine, the sale's resets trim the commodities
+    /// to the holds left: `_DoOutfitDialog` checks no cargo before a sale
+    /// (@0x5ce97-0x5cf37) and ends each in `_SystemInfoToShipStats`
+    /// (@0x5cffb, tail @0xcae9), after `OnSell`'s own reset (@0x5cff6,
+    /// tail @0x99dea), and `_ResetPlayerPrecalcedValues` cuts each
+    /// commodity to trunc(held x holds/total) in single floats, the
+    /// mission cargo counted and never cut, the `jünk` never cut
+    /// (@0xc7d8-0xc887). By the other reading no reset through the sale
+    /// trims, `OnSell`'s included, and the cargo stays past the hold until
+    /// the next reset after it (a take-off at the latest), the port's
+    /// earlier behaviour. The Bible says nothing of it, so the other
+    /// reading is the obvious alternative, not anything the Bible says
+    /// (see [`outfitter`](crate::outfitter) and the session's `precalced`
+    /// module).
+    OutfitSaleCargo => "outfit_sale_cargo",
     /// How a `jünk` of negative or zero price is traded. By the engine,
     /// `_DoTradeDialog` stores a `jünk`'s high price (@0x5dddb) and low
     /// price (@0x5de2f) in 16 bits with no floor, and every reader takes
@@ -2705,6 +2725,11 @@ mod tests {
             RuleKey::from_key("purchase_cargo"),
             Some(RuleKey::PurchaseCargo)
         );
+        assert_eq!(RuleKey::OutfitSaleCargo.key(), "outfit_sale_cargo");
+        assert_eq!(
+            RuleKey::from_key("outfit_sale_cargo"),
+            Some(RuleKey::OutfitSaleCargo)
+        );
         assert_eq!(RuleKey::EventPrice.key(), "event_price");
         assert_eq!(RuleKey::from_key("event_price"), Some(RuleKey::EventPrice));
         assert_eq!(RuleKey::RaisedMax.key(), "raised_max");
@@ -2841,6 +2866,7 @@ mod tests {
                 RuleKey::RaisedMax,
                 RuleKey::EventPrice,
                 RuleKey::PurchaseCargo,
+                RuleKey::OutfitSaleCargo,
                 RuleKey::JunkPrice,
                 RuleKey::JunkTrade,
                 RuleKey::OutfitLimit,

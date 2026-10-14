@@ -58,9 +58,10 @@
 //! built from the active ranks as the last reset took them, never saved,
 //! at each of the original's calls of `_ResetPlayerPrecalcedValues`
 //! (see the `precalced` module for every site): game entry, leaving a
-//! stellar, a jump's arrival, the end of every set expression that is
-//! not empty, a jettison, the plunder dialog closing and a mission cargo
-//! pickup. So a `K` or `L` blesses, or stops blessing, as its set
+//! stellar, a jump's arrival, a landing, the end of every set expression
+//! that is not empty, an outfit bought or sold, a ship bought, a
+//! jettison, the plunder dialog closing, and a mission cargo pickup or
+//! drop-off. So a `K` or `L` blesses, or stops blessing, as its set
 //! expression ends, and a crime's rank loss (`Session::lose_ranks_to`,
 //! `_SlapWithPenalty`'s pass, which reaches no reset) only at the next
 //! reset. By the other reading the table is built
