@@ -434,7 +434,7 @@ impl OverlaidGalaxy {
 
     /// `system`'s Con slots as the catalog reads them, unresolved, visible
     /// or not: they may repeat, name itself or a system that does not
-    /// exist, as `_DoNewPilot` reads them (@0x18f97). None for a system
+    /// exist, as `_DoNewPilot` reads them (@0x18f97). Empty for a system
     /// not in the catalog; the last of a repeated ID wins.
     #[must_use]
     pub fn con_slots(&self, system: SystemId) -> &[SystemId] {

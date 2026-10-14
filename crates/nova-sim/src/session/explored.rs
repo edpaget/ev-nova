@@ -215,6 +215,19 @@ mod tests {
     fn exploring_a_head_raises_nothing_more() {
         let catalog = shadowed(catalog());
         let mut session = flown(&catalog, RuleSource::Engine);
+        assert!(!explored(&session, 127));
+        let before: Vec<SystemId> = session.pilot().explored().collect();
+        session.explore_place(SystemId(127));
+        let after: Vec<SystemId> = session.pilot().explored().collect();
+        assert_eq!(after.len(), before.len() + 1);
+        assert!(explored(&session, 127));
+        assert!(!explored(&session, 131), "not its member");
+    }
+
+    #[test]
+    fn exploring_a_system_at_no_place_raises_only_itself() {
+        let catalog = shadowed(catalog());
+        let mut session = flown(&catalog, RuleSource::Engine);
         let before: Vec<SystemId> = session.pilot().explored().collect();
         session.explore_place(SystemId(133));
         let after: Vec<SystemId> = session.pilot().explored().collect();
