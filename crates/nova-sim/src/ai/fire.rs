@@ -348,6 +348,25 @@ fn pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
             (other.cloak_gear.untargetable(), other.cloak.is_cloaked())
         }),
     };
+    // The player never cloaks, so is always seen. An NPC is seen as
+    // `_ShipVisibleToShip(target, shooter)` says (@0x971c, called
+    // @0x7ff1e-0x7ff2c and @0x80b5f-0x80b70): the shooter escorts it
+    // (shooter +0x9a is the target's +0x86) and has a cloak, @0x9788-0x97a2.
+    let seen = match ship {
+        ShipRef::Player => true,
+        ShipRef::Npc(id) => around.npc(id).is_some_and(|other| {
+            crate::cloak::visible(
+                other.cloak,
+                other.state.position,
+                other.emerging(),
+                crate::cloak::Observer {
+                    at: npc.state.position,
+                    scanner: npc.cloak_gear.scanner.on_screen,
+                    cloaked_escort: npc.leader == Some(other.id) && npc.cloak_gear.device,
+                },
+            )
+        }),
+    };
     let (turn_rate, planet_type) = match ship {
         ShipRef::Player => around
             .player
@@ -366,6 +385,7 @@ fn pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
         shields_up,
         untargetable,
         cloaked,
+        seen,
         aimed_enough,
         turn_rate,
         planet_type,
@@ -394,6 +414,9 @@ struct Sight<'a> {
     untargetable: bool,
     /// Whether the target is cloaked.
     cloaked: bool,
+    /// Whether the shooter sees the target (`_ShipVisibleToShip`
+    /// @0x971c): a gun or turret holds fire at one it does not see.
+    seen: bool,
     /// Whether the damage aimed at the target suffices
     /// (`_SufficentTargetedDamage` @0x3fd22-0x3fd53).
     aimed_enough: bool,
@@ -463,6 +486,9 @@ impl Sight<'_> {
 
     /// The gun it fires, if any (see the module docs).
     fn gun(&self) -> Option<WeaponId> {
+        if !self.seen {
+            return None;
+        }
         let usable = |mount: &Mount| {
             self.ready(mount) && self.reaches(&mount.spec) && self.clear_of(&mount.spec)
         };
@@ -479,7 +505,7 @@ impl Sight<'_> {
 
     /// The turret it fires, if any (see the module docs).
     fn turret(&self) -> Option<WeaponId> {
-        if self.untargetable {
+        if self.untargetable || !self.seen {
             return None;
         }
         let bearing_off = angle_off(
@@ -727,6 +753,76 @@ mod tests {
         assert_eq!(fired_at_npc(&at_npc, 0.0, 100.0, untargetable), None);
         let gun = shooter(&[gun(128, 1, 1)], ATTACK);
         assert_eq!(fired_at_untargetable(&gun, 0.0, -100.0), id(128));
+    }
+
+    const SCANS_SCREEN: crate::cloak::Scanner = crate::cloak::Scanner {
+        on_screen: true,
+        ..crate::cloak::Scanner::NONE
+    };
+
+    /// A target fully cloaked.
+    fn cloaked(other: &mut Npc) {
+        other.cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+    }
+
+    /// Whether `npc`, carrying weapon 130 reaching 300 pixels, fires it at
+    /// a cloaked NPC only while it sees it (`_ShipVisibleToShip`
+    /// @0x971c): with a scanner on screen within [`SIGHT_RANGE`] on both
+    /// axes, or as its cloaked escort.
+    ///
+    /// [`SIGHT_RANGE`]: crate::cloak::SIGHT_RANGE
+    fn holds_fire_while_unseen(npc: &Npc) {
+        assert_eq!(fired_at_npc(npc, 0.0, -150.0, cloaked), None, "no scanner");
+        let scans = scanning(npc.clone(), SCANS_SCREEN);
+        assert_eq!(fired_at_npc(&scans, 0.0, -150.0, cloaked), id(130));
+        assert_eq!(
+            fired_at_npc(&scans, 0.0, -200.0, cloaked),
+            id(130),
+            "200 on the axis"
+        );
+        assert_eq!(fired_at_npc(&scans, 0.0, -250.0, cloaked), None, "250 off");
+        assert_eq!(fired_at_npc(npc, 0.0, -250.0, |_| {}), id(130), "uncloaked");
+        let mut escort = npc.clone();
+        escort.leader = Some(NpcId(2));
+        assert_eq!(
+            fired_at_npc(&escort, 0.0, -250.0, cloaked),
+            None,
+            "escorting it without a cloak"
+        );
+        escort.cloak_gear.device = true;
+        assert_eq!(
+            fired_at_npc(&escort, 0.0, -250.0, cloaked),
+            id(130),
+            "its cloaked escort"
+        );
+        let mut cloaked_stranger = npc.clone();
+        cloaked_stranger.cloak_gear.device = true;
+        assert_eq!(
+            fired_at_npc(&cloaked_stranger, 0.0, -250.0, cloaked),
+            None,
+            "a cloak without escorting it"
+        );
+    }
+
+    #[test]
+    fn a_turret_holds_fire_at_a_cloaked_ship_it_does_not_see_and_fires_once_it_sees_it() {
+        let turret = WeaponRecord {
+            count: 30,
+            ..guided(130, 4)
+        };
+        holds_fire_while_unseen(&shooter(&[turret], Goal::Flee(ShipRef::Player)));
+    }
+
+    #[test]
+    fn a_gun_holds_fire_at_a_cloaked_ship_it_does_not_see_and_fires_once_it_sees_it() {
+        let gun = WeaponRecord {
+            count: 30,
+            ..gun(130, 1, 1)
+        };
+        holds_fire_while_unseen(&shooter(&[gun], ATTACK));
     }
 
     #[test]
