@@ -333,7 +333,10 @@ fn pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
         ShipRef::Player => around.player.map(|player| player.reserves),
         ShipRef::Npc(id) => around.npc(id).map(|other| other.reserves),
     };
-    let shields_up = reserves.is_some_and(|reserves| reserves.shield.now > 0.0);
+    // At or above none, as `_AIFireTurret` (@0x80e12-0x80e27) and
+    // `_AIFireGun` (@0x801e5-0x801fb, 0.0 at 0xdd054) test it: a shield of
+    // exactly none still picks by energy.
+    let shields_up = reserves.is_some_and(|reserves| reserves.shield.now >= 0.0);
     let aimed_enough = reserves.is_some_and(|reserves| {
         let standing = reserves.shield.now + reserves.armor.now;
         f64::from(around.aimed_at(ship)) >= SUFFICIENT_DAMAGE * f64::from(standing)
@@ -964,7 +967,27 @@ mod tests {
     fn a_gun_does_the_most_energy_damage_to_shields_and_mass_to_armour() {
         let npc = shooter(&[gun(128, 10, 1), gun(129, 2, 8)], ATTACK);
         assert_eq!(fired(&npc, 0.0, -200.0, 50.0), id(128), "shields up");
-        assert_eq!(fired(&npc, 0.0, -200.0, 0.0), id(129), "shields down");
+        // Below none: a shield of exactly none still counts as up.
+        assert_eq!(fired(&npc, 0.0, -200.0, -1.0), id(129), "shields down");
+    }
+
+    #[test]
+    fn a_gun_and_a_turret_pick_by_energy_at_a_shield_of_none_and_by_mass_below_it() {
+        // `ucomiss` against 0, `jb` to the mass best (@0x80e12-0x80e27,
+        // @0x801e5-0x801fb).
+        let guns = shooter(&[gun(128, 10, 1), gun(129, 2, 8)], ATTACK);
+        assert_eq!(fired(&guns, 0.0, -200.0, 0.0), id(128));
+        assert_eq!(fired(&guns, 0.0, -200.0, -0.1), id(129));
+        let turret = |id: i16, energy: i16, mass: i16| WeaponRecord {
+            guidance: 4,
+            ..gun(id, energy, mass)
+        };
+        let turrets = shooter(
+            &[turret(130, 10, 1), turret(131, 2, 8)],
+            Goal::Flee(ShipRef::Player),
+        );
+        assert_eq!(fired(&turrets, 0.0, 200.0, 0.0), id(130));
+        assert_eq!(fired(&turrets, 0.0, 200.0, -0.1), id(131));
     }
 
     #[test]
@@ -972,7 +995,12 @@ mod tests {
         let npc = shooter(&[gun(128, -5, 0), gun(129, 0, 0), gun(130, 1, 1)], ATTACK);
         assert_eq!(fired(&npc, 0.0, -200.0, 50.0), id(128));
         let npc = shooter(&[gun(128, 1, 1), gun(129, 2, 0)], ATTACK);
-        assert_eq!(fired(&npc, 0.0, -200.0, 0.0), id(128), "mass 0 counts as 1");
+        // Below none, so by mass: a shield of exactly none counts as up.
+        assert_eq!(
+            fired(&npc, 0.0, -200.0, -1.0),
+            id(128),
+            "mass 0 counts as 1"
+        );
     }
 
     #[test]
