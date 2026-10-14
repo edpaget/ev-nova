@@ -17653,12 +17653,16 @@ pub(super) mod tests {
         );
     }
 
+    /// 50 tons of a commodity, 20 of `jünk` and 3 of mission cargo in 40
+    /// holds: the `jünk` and the mission cargo keep the fleet past its
+    /// holds through each of the three trims, so each one cuts and the
+    /// tons kept by the other reading pin how many run.
     #[test]
     fn use_as_my_ship_leaves_the_commodities_with_the_old_ship_unless_the_other_reading_keeps_them()
     {
         use crate::scan::Latches;
         use crate::session::precalced::tests::{JUNK, convicted};
-        for (source, kept) in [(RuleSource::Engine, None), (RuleSource::Bible, Some(33))] {
+        for (source, kept) in [(RuleSource::Engine, None), (RuleSource::Bible, Some(19))] {
             let catalog = kitted();
             let mut session = alongside(&catalog)
                 .with_rules(Rulebook::default().with_override(RuleKey::CaptureCargo, source));
@@ -17667,7 +17671,7 @@ pub(super) mod tests {
                 take(&mut session, Take::Capture, &[0, 1]).0,
                 Taken::Captured
             );
-            session.pilot.cargo = BTreeMap::from([(Good::Commodity(2), 50), (JUNK, 4)]);
+            session.pilot.cargo = BTreeMap::from([(Good::Commodity(2), 50), (JUNK, 20)]);
             session
                 .pilot
                 .missions
@@ -17678,16 +17682,17 @@ pub(super) mod tests {
                 Some(Assigned::MyShip)
             );
             assert_eq!(session.capacity(), 40, "the new 20 and the old ship's 20");
-            let mut want = BTreeMap::from([(JUNK, 4)]);
+            let mut want = BTreeMap::from([(JUNK, 20)]);
             if let Some(tons) = kept {
                 want.insert(Good::Commodity(2), tons);
             }
             assert_eq!(
                 session.pilot().cargo().collect::<BTreeMap<_, _>>(),
                 want,
-                "{source:?}: the jünk kept; by the other reading 50 x 40/57, 35, \
-                 then 35 x 40/42, as the resets trim with the old ship in the \
-                 fleet (@0x419fd, @0x41a3e; @0x94a0b finds them in)"
+                "{source:?}: the jünk kept; by the other reading 50 x 40/73, 27, \
+                 then 27 x 40/50, 21, then 21 x 40/44, 19, as the three resets \
+                 trim with the old ship in the fleet (@0x419fd, @0x41a3e, \
+                 @0x94a0b)"
             );
             assert_eq!(
                 session.pilot().missions().get(0).map(|m| m.cargo_tons),
