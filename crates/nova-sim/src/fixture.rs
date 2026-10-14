@@ -45,13 +45,14 @@ pub fn cloak(session: &mut Session, id: NpcId, to: Cloak) {
     }
 }
 
-/// A [`PilotStore`] in memory. Clones share the saves and the failure
-/// switches, so a test can seed the store before the app takes a clone,
-/// read back what was saved, or "restart" over another clone.
+/// A [`PilotStore`] in memory that records each write. Clones share the
+/// saves, the record and the failure switches, so a test can seed the
+/// store before the app takes a clone, read back what was saved and when,
+/// or "restart" over another clone.
 #[derive(Clone, Debug, Default)]
 pub struct MemoryPilots {
     saves: Rc<RefCell<BTreeMap<String, String>>>,
-    writes: Rc<Cell<usize>>,
+    written: Rc<RefCell<Vec<(String, String)>>>,
     fail_reads: Rc<Cell<bool>>,
     fail_writes: Rc<Cell<bool>>,
 }
@@ -86,7 +87,13 @@ impl MemoryPilots {
     /// How many writes have succeeded.
     #[must_use]
     pub fn writes(&self) -> usize {
-        self.writes.get()
+        self.written.borrow().len()
+    }
+
+    /// Each write that succeeded, in order: its key and its text.
+    #[must_use]
+    pub fn written(&self) -> Vec<(String, String)> {
+        self.written.borrow().clone()
     }
 
     /// Makes every read and list fail (`true`) or succeed again.
@@ -124,7 +131,9 @@ impl PilotStore for MemoryPilots {
             return Err(io::Error::other("the disk is full"));
         }
         self.put(key, text);
-        self.writes.set(self.writes.get() + 1);
+        self.written
+            .borrow_mut()
+            .push((key.to_owned(), text.to_owned()));
         Ok(())
     }
 
@@ -152,6 +161,26 @@ mod tests {
         other.put("c", "three");
         assert_eq!(store.text("c").as_deref(), Some("three"));
         assert_eq!(store.writes(), 2, "a put is not a write");
+    }
+
+    #[test]
+    fn it_logs_each_successful_write_across_clones() {
+        let store = MemoryPilots::new();
+        let other = store.clone();
+        store.write("a", "one").expect("writes");
+        other.write("b", "two").expect("writes");
+        store.write("a", "three").expect("writes");
+        store.put("c", "not a write");
+        store.fail_writes(true);
+        assert!(store.write("a", "lost").is_err());
+        assert_eq!(
+            other.written(),
+            [
+                ("a".to_owned(), "one".to_owned()),
+                ("b".to_owned(), "two".to_owned()),
+                ("a".to_owned(), "three".to_owned()),
+            ]
+        );
     }
 
     #[test]

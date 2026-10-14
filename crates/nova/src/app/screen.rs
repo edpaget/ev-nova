@@ -20,6 +20,21 @@
 //! menu ([`start_screen`] alone) opens on the ship browser, and Escape at
 //! the top quits.
 //!
+//! A pilot whose ship is breaking up or destroyed is never saved
+//! ([`FlightView::may_save`]): not on going back to the menu, not when the
+//! app quits, and not when a save comes due, which is dropped. The
+//! original saves only on creation, landing and pod rescue
+//! (`_SavePilotFile` @0x76876), so a dead pilot reopens as it was at its
+//! last landing. Once the player's ship has exploded, the scene runs on
+//! through the hold; when it expires, the router is at the seam where the
+//! sabotage dialogs (the `player-death` roadmap's phase 8) will show over
+//! the stopped flight, and with none it begins flight's fade to black on
+//! the same tick. When the fade is over the router drops flight, as
+//! Escape's put-away does, and returns to the main menu (or, without one,
+//! the side flight was entered from), which fades in from black over
+//! [`DEATH_FADE_FOR`], taking input under the fade, as the original's
+//! `_EnterGameFromMainScreen` (0x1a471) fades the main screen in.
+//!
 //! # The developer's sides
 //!
 //! The router keeps two sides alive, the ship browser and the
@@ -205,6 +220,7 @@ use nova_sim::{
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
+use nova_view::fade::{DEATH_FADE_FOR, ScreenFade};
 use nova_view::flight::{FlightMissionDialogs, FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
@@ -354,6 +370,9 @@ pub struct AppScreen {
     /// The mission texts and the mission info screen over flight, while
     /// one is open.
     missions: Option<FlightMissionDialogs>,
+    /// The fade back from black over the side shown after a death, while
+    /// it plays.
+    fade_in: Option<ScreenFade>,
 }
 
 /// The main menu, the metrics its screens' text is laid out by when there
@@ -431,6 +450,7 @@ impl AppScreen {
             haggle: None,
             offer: None,
             missions: None,
+            fade_in: None,
         }
     }
 
@@ -1039,10 +1059,7 @@ impl AppScreen {
                 } else if self.return_to == Side::MainMenu {
                     // The pilot is put away: saved, and flight dropped, so
                     // the developer's F flies a fresh, unnamed pilot.
-                    self.switch_to(Side::MainMenu);
-                    self.save_pilot();
-                    self.flight = None;
-                    self.spaceport = None;
+                    self.end_flight(Side::MainMenu);
                 } else {
                     self.switch_to(self.return_to);
                 }
@@ -1468,18 +1485,85 @@ impl AppScreen {
         }
     }
 
+    /// Puts the pilot away and shows `side`: saves it (unless it may not
+    /// be saved) and drops flight, the spaceport and any dialog open over
+    /// flight, so nothing is left to re-enter.
+    fn end_flight(&mut self, side: Side) {
+        self.switch_to(side);
+        self.save_pilot();
+        self.flight = None;
+        self.spaceport = None;
+        self.plunder = None;
+        self.assignment = None;
+        self.comm = None;
+        self.haggle = None;
+        self.offer = None;
+        self.missions = None;
+    }
+
+    /// The seam at the expiry of the hold after the player's death, before
+    /// the original's `gPause = 1` (0x68838): where phase 8
+    /// (`phase-8-sabotage-outfit-death-dialogs`) shows its sabotage dialogs
+    /// over the stopped flight, calling [`FlightView::begin_fade`] when the
+    /// last closes. With none, it begins the fade at once, on the same
+    /// tick.
+    fn at_hold_expiry(&mut self) {
+        if let Some(flight) = &mut self.flight {
+            flight.begin_fade();
+        }
+    }
+
+    /// Takes what flight's tick ended: at the hold's expiry, the seam
+    /// ([`AppScreen::at_hold_expiry`]); once the death's fade is over, the
+    /// return to the main menu (or the side flight was entered from), which
+    /// fades in from black.
+    fn after_flight_tick(&mut self) {
+        if self
+            .flight
+            .as_mut()
+            .is_some_and(FlightView::take_hold_expired)
+        {
+            self.at_hold_expiry();
+        }
+        if self.flight.as_ref().is_some_and(FlightView::game_over) {
+            let side = if self.menu.is_some() {
+                Side::MainMenu
+            } else {
+                self.return_to
+            };
+            self.end_flight(side);
+            self.fade_in = Some(ScreenFade::from_black(DEATH_FADE_FOR));
+        }
+    }
+
+    /// Moves the fade back from black on by `dt`, letting go of it once it
+    /// is over.
+    fn advance_fade_in(&mut self, dt: Duration) {
+        if let Some(fade) = &mut self.fade_in {
+            fade.advance(dt);
+            if fade.done() {
+                self.fade_in = None;
+            }
+        }
+    }
+
     /// Where pilots are kept, if anywhere.
     fn keeper(&self) -> Option<Rc<PilotKeeper<Box<dyn PilotStore>>>> {
         self.menu.as_ref().and_then(|menu| menu.pilots.clone())
     }
 
-    /// Saves the pilot flying, when it has a name and there is somewhere to
-    /// keep it; a failure becomes a warning. Pilots without a name, which
-    /// the developer's F flies, are never saved.
+    /// Saves the pilot flying, when it has a name, there is somewhere to
+    /// keep it and it may be saved ([`FlightView::may_save`]: not while its
+    /// ship breaks up or after it is destroyed); a failure becomes a
+    /// warning. Pilots without a name, which the developer's F flies, are
+    /// never saved.
     fn save_pilot(&mut self) {
         let (Some(flight), Some(keeper)) = (&self.flight, self.keeper()) else {
             return;
         };
+        if !flight.may_save() {
+            return;
+        }
         let Some(pilot) = flight.pilot() else {
             return;
         };
@@ -2102,13 +2186,18 @@ impl Screen for AppScreen {
     /// Only the side shown ticks; a hidden one is paused. While an overlay
     /// (the About dialog, the Preferences dialog, the New Pilot dialog or
     /// the saved pilots' list) is open, only it ticks: flight pauses under
-    /// the preferences, as in the original. What the set expressions
-    /// queued is settled, and a save that is due is made.
+    /// the preferences, as in the original. A fade back from black after a
+    /// death moves on. Then what flight's tick ended is taken: the seam at
+    /// the hold's expiry, and the return to the main menu once the death's
+    /// fade is over. What the set expressions queued is settled, and a
+    /// save that is due is made.
     fn tick(&mut self, dt: Duration) {
         match self.overlay_mut() {
             Some(overlay) => overlay.tick(dt),
             None => self.shown_mut().tick(dt),
         }
+        self.advance_fade_in(dt);
+        self.after_flight_tick();
         self.settle_script();
         self.save_if_due();
     }
@@ -2116,7 +2205,8 @@ impl Screen for AppScreen {
     /// The side shown, then the hint (not over flight, which has its own
     /// help line, or the spaceport), then the overlay open: the New Pilot
     /// dialog or the saved pilots' list, then the About dialog or the
-    /// Preferences dialog.
+    /// Preferences dialog; then the fade back from black after a death,
+    /// over everything.
     fn draw(&self, list: &mut DrawList) {
         self.shown().draw(list);
         let hint = match (self.side, self.dialogs.is_some()) {
@@ -2158,6 +2248,9 @@ impl Screen for AppScreen {
         }
         if let Some(dialog) = &self.preferences {
             dialog.draw(list);
+        }
+        if let Some(fade) = &self.fade_in {
+            fade.draw(list);
         }
     }
 
@@ -7357,5 +7450,346 @@ pub(super) mod tests {
             spaceport(&screen).offer_dialog().is_none(),
             "nothing on returning"
         );
+    }
+
+    // Death.
+
+    use nova_data::records::weapon::Weapon;
+
+    /// Every NPC idles and holds its trigger.
+    #[derive(Debug)]
+    struct Firing;
+
+    impl Behaviour for Firing {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            Goal::Idle
+        }
+
+        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> nova_sim::Trigger {
+            nova_sim::Trigger {
+                primary: true,
+                secondary: None,
+                only: None,
+                turrets_only: false,
+                bays: false,
+                point_defence: false,
+            }
+        }
+    }
+
+    /// Disables no ship: the player breaks up once its armour is gone.
+    #[derive(Debug)]
+    struct Never;
+
+    impl DisableRule for Never {
+        fn disabled(&self, _armor: Gauge, _hull: &HullSpec) -> bool {
+            false
+        }
+    }
+
+    /// The first `chär` flies ship 128 ("First": no shield, 10 armour, a
+    /// `DeathDelay` of 30, so it breaks up for 88 ticks) from system 128,
+    /// over the planet Alpha Prime (128) at (0, 0) with a bar. The
+    /// system's one `düde`, at 100 %, flies ship 129 ("Killer": 100
+    /// armour and no speed, so it stays where setup places it), carrying
+    /// one `wëap` 128: unguided, every 5 ticks, 20 pixels a tick for 30,
+    /// 1000 mass damage through shields, so one shot breaks the player up.
+    fn deadly_data() -> Rc<GameData> {
+        let put = |bytes: &mut [u8], at: usize, values: &[i16]| {
+            for (i, value) in values.iter().enumerate() {
+                bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
+            }
+        };
+        let ship = |armor, weapon| {
+            let mut bytes = vec![0; Ship::SIZE.expect("fixed")];
+            put(&mut bytes, 0x00, &[0, 0, 300, 300, 10, 300, 0, armor]);
+            put(&mut bytes, 0x12, &[weapon, -1, -1, -1]);
+            put(&mut bytes, 0x1A, &[1, 0, 0, 0]);
+            put(&mut bytes, 0x42, &[1, 10]);
+            put(&mut bytes, 0x4E, &[-1; 4]);
+            put(&mut bytes, 0x370, &[-1; 4]);
+            put(&mut bytes, 0x6CE, &[-1; 4]);
+            bytes
+        };
+        let mut player = ship(10, -1);
+        put(&mut player, 0x34, &[30]);
+        let mut killer = ship(100, 128);
+        put(&mut killer, 0x06, &[0]);
+        let mut weapon = vec![0; Weapon::SIZE.expect("fixed")];
+        put(&mut weapon, 0x00, &[5, 30, 1000, 0, -1, 2000, -1, 0, 0, -1]);
+        put(&mut weapon, 0x16, &[-1]);
+        put(&mut weapon, 0x1C, &[0x0020]);
+        let mut anim = vec![0; ShipAnim::SIZE.expect("fixed")];
+        put(&mut anim, 0x00, &[1000, 0, 1]);
+        put(&mut anim, 0x34, &[4]);
+        let sheet = (0..4)
+            .fold(RledBuilder::new(1, 1), |sheet, _| {
+                sheet.frame(|f| f.line().pixels(&[0x7C00]))
+            })
+            .build();
+        let mut character = vec![0; Character::SIZE.expect("fixed")];
+        put(&mut character, 0x04, &[128, 128, -1, -1, -1]);
+        put(&mut character, 0x0E, &[-1; 4]);
+        let mut system = system(0, &[128]);
+        put(&mut system, 0x44, &[128, -1, -1, -1, -1, -1, -1, -1]);
+        put(&mut system, 0x54, &[100]);
+        put(&mut system, 0x64, &[1]);
+        let mut dude = vec![0; Dude::SIZE.expect("fixed")];
+        put(&mut dude, 0x00, &[1, -1]);
+        put(&mut dude, 0x08, &[-1; 16]);
+        put(&mut dude, 0x08, &[129]);
+        put(&mut dude, 0x28, &[100]);
+        let mut spin = vec![0; Spin::SIZE.expect("fixed")];
+        spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
+        loaded(
+            &ForkBuilder::new()
+                .resource(Ship::TYPE, 128, Some(b"First"), &player)
+                .resource(Ship::TYPE, 129, Some(b"Killer"), &killer)
+                .resource(Weapon::TYPE, 128, Some(b"Blaster"), &weapon)
+                .resource(Character::TYPE, 128, Some(b"Pilot"), &character)
+                .resource(ShipAnim::TYPE, 128, None, &anim)
+                .resource(ShipAnim::TYPE, 129, None, &anim)
+                .resource(RLED, 1000, None, &sheet)
+                .resource(System::TYPE, 128, Some(b"Alpha"), &system)
+                .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &landable())
+                .resource(Spin::TYPE, 1000, None, &spin)
+                .resource(Dude::TYPE, 128, Some(b"Killers"), &dude),
+        )
+    }
+
+    /// Draws the last outcome of every roll but the traffic's placement:
+    /// its two 1500-wide draws place a ship at (0, -100), 100 pixels
+    /// above the player at the centre, and its heading draw faces it down
+    /// at the player. However many rolls landing and taking off make
+    /// first, the killer is placed there.
+    #[derive(Default)]
+    struct AboveThePlayer {
+        placed: usize,
+    }
+
+    impl Chance for AboveThePlayer {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            match n {
+                1500 => {
+                    self.placed += 1;
+                    if self.placed % 2 == 1 { 750 } else { 650 }
+                }
+                360 => 180,
+                _ => n - 1,
+            }
+        }
+    }
+
+    fn above_the_player() -> SharedChance {
+        let shared: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(AboveThePlayer::default()));
+        SharedChance::new(shared)
+    }
+
+    /// The router over [`deadly_data`] with the main menu over `store`,
+    /// dialogs, the killer placed above the player and firing, and no ship
+    /// disabled.
+    fn deadly_menu(store: &MemoryPilots) -> AppScreen {
+        with_dialogs(deadly_data())
+            .with_chance(above_the_player())
+            .with_behaviour(Rc::new(Firing))
+            .with_disable_rule(Rc::new(Never))
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics))
+    }
+
+    fn fate(screen: &AppScreen) -> nova_sim::PlayerFate {
+        flight(screen).session().expect("flying").player_fate()
+    }
+
+    /// Ticks `screen` one sim tick at a time until `done`, at most `limit`
+    /// ticks, and says how many it took.
+    fn tick_until(screen: &mut AppScreen, limit: u32, done: impl Fn(&AppScreen) -> bool) -> u32 {
+        for n in 1..=limit {
+            screen.tick(TICK);
+            if done(screen) {
+                return n;
+            }
+        }
+        panic!("not within {limit} ticks: {:?}", screen.showing())
+    }
+
+    /// Ticks `screen` until the player's ship breaks up.
+    fn until_breaking_up(screen: &mut AppScreen) {
+        tick_until(screen, 120, |screen| {
+            matches!(fate(screen), nova_sim::PlayerFate::BreakingUp { .. })
+        });
+    }
+
+    /// Ticks `screen` until the player's ship has exploded.
+    fn until_exploded(screen: &mut AppScreen) {
+        tick_until(screen, 240, |screen| {
+            fate(screen) == nova_sim::PlayerFate::Exploded
+        });
+    }
+
+    /// The alpha of the black covering the whole screen, if the last
+    /// thing `screen` draws is one.
+    #[allow(clippy::float_cmp)] // The screen's height, exactly as drawn.
+    fn black_over(screen: &AppScreen) -> Option<u8> {
+        match drawn(screen).iter().last() {
+            Some(DrawCommand::Line { width, color, .. })
+                if *width == 768.0 && (color.r, color.g, color.b) == (0, 0, 0) =>
+            {
+                Some(color.a)
+            }
+            _ => None,
+        }
+    }
+
+    /// A pilot, "Ada", created on [`deadly_menu`] over `store`, landed and
+    /// taken off again, before the killer is in the system.
+    fn landed_and_took_off(store: &MemoryPilots) -> AppScreen {
+        let mut screen = deadly_menu(store);
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight, "taken off");
+        screen
+    }
+
+    /// [`landed_and_took_off`], then the killer breaks its ship up.
+    fn landed_took_off_and_breaking_up(store: &MemoryPilots) -> AppScreen {
+        let mut screen = landed_and_took_off(store);
+        until_breaking_up(&mut screen);
+        screen
+    }
+
+    #[test]
+    fn a_pilot_that_landed_took_off_and_died_is_saved_by_the_landing_and_take_off_only() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_and_took_off(&store);
+        let took_off = pilot(&screen).clone();
+        until_exploded(&mut screen);
+        tick_until(&mut screen, 400, |screen| {
+            screen.showing() == Showing::MainMenu
+        });
+        let written = store.written();
+        assert_eq!(written.len(), 3, "creation, landing, take-off: {written:?}");
+        assert!(written.iter().all(|(key, _)| key == "Ada"));
+        let last = nova_sim::save::decode(&written[2].1).expect("a pilot");
+        assert_eq!(last, took_off, "the take-off's save is the last");
+        let mut screen = deadly_menu(&store);
+        choose(&mut screen, MenuChoice::OpenPilot);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(pilot(&screen), &last, "reopened as at the take-off");
+    }
+
+    #[test]
+    fn a_dead_pilot_holds_fades_and_returns_to_the_main_menu() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_took_off_and_breaking_up(&store);
+        until_exploded(&mut screen);
+        for tick in 1..=nova_sim::HOLD_TICKS {
+            screen.tick(TICK);
+            assert_eq!(screen.showing(), Showing::Flight, "dead tick {tick}");
+            assert_eq!(black_over(&screen), None, "dead tick {tick}");
+        }
+        screen.tick(TICK);
+        assert_eq!(
+            fate(&screen),
+            nova_sim::PlayerFate::Fading,
+            "on the expiry's tick, straight through the seam"
+        );
+        assert_eq!(screen.showing(), Showing::Flight, "no dialog");
+        screen.tick(Duration::from_millis(500));
+        assert_eq!(black_over(&screen), Some(128));
+        assert_eq!(screen.showing(), Showing::Flight);
+        screen.tick(Duration::from_millis(500));
+        assert_eq!(screen.showing(), Showing::MainMenu, "back to the menu");
+        assert_eq!(black_over(&screen), Some(255), "from black");
+        screen.tick(Duration::from_millis(500));
+        assert_eq!(black_over(&screen), Some(128), "fading in");
+        screen.tick(Duration::from_millis(500));
+        assert_eq!(black_over(&screen), None, "faded in");
+        assert_eq!(
+            choose(&mut screen, MenuChoice::NewPilot),
+            ScreenAction::None
+        );
+        assert_eq!(screen.showing(), Showing::NewPilot, "the menu takes input");
+    }
+
+    #[test]
+    fn the_main_menu_takes_input_under_its_fade_in() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_took_off_and_breaking_up(&store);
+        until_exploded(&mut screen);
+        tick_until(&mut screen, 400, |screen| {
+            screen.showing() == Showing::MainMenu
+        });
+        assert!(black_over(&screen).is_some());
+        assert_eq!(
+            choose(&mut screen, MenuChoice::NewPilot),
+            ScreenAction::None
+        );
+        assert_eq!(screen.showing(), Showing::NewPilot);
+    }
+
+    #[test]
+    fn after_the_return_no_flight_is_left_to_re_enter() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_took_off_and_breaking_up(&store);
+        until_exploded(&mut screen);
+        tick_until(&mut screen, 400, |screen| {
+            screen.showing() == Showing::MainMenu
+        });
+        assert!(screen.flight_view().is_none());
+        assert!(screen.spaceport_view().is_none());
+        screen.quit();
+        assert_eq!(store.writes(), 3, "nothing left to save");
+    }
+
+    #[test]
+    fn escape_during_the_breakup_writes_no_save_and_drops_flight() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_took_off_and_breaking_up(&store);
+        let writes = store.writes();
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        assert_eq!(store.writes(), writes, "no save");
+        assert!(screen.flight_view().is_none(), "flight dropped");
+        assert!(screen.spaceport_view().is_none());
+    }
+
+    #[test]
+    fn quitting_during_the_breakup_or_the_hold_writes_no_save() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_took_off_and_breaking_up(&store);
+        let writes = store.writes();
+        screen.quit();
+        assert_eq!(store.writes(), writes, "breaking up");
+        until_exploded(&mut screen);
+        screen.tick(TICK);
+        assert!(matches!(
+            fate(&screen),
+            nova_sim::PlayerFate::Holding { .. }
+        ));
+        screen.quit();
+        assert_eq!(store.writes(), writes, "holding");
+    }
+
+    #[test]
+    fn a_save_due_while_dying_is_not_written() {
+        use nova_view::devtools::{PilotDesk, PilotEdit};
+        let store = MemoryPilots::new();
+        let mut screen = landed_took_off_and_breaking_up(&store);
+        let writes = store.writes();
+        screen
+            .pilot_desk()
+            .expect("flying")
+            .edit(PilotEdit::Credits(5000))
+            .expect("edits in flight");
+        screen.tick(TICK);
+        assert_eq!(store.writes(), writes, "due, but not written");
+        screen.after_pilot_edit();
+        assert_eq!(store.writes(), writes, "nor after the edit");
     }
 }
