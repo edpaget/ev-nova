@@ -336,6 +336,7 @@ mod cloaks;
 mod control;
 mod crons;
 mod edit;
+mod eject;
 mod entry;
 mod escorts;
 mod events;
@@ -707,6 +708,9 @@ pub struct Session {
     /// (@0x68d95-0x68dcd). Never saved: the pilot may not be saved while
     /// it runs ([`crate::FateRow::saves`]).
     pod: Option<u32>,
+    /// Whether the player holds the eject chord, Command and the eject
+    /// key together (see the `eject` module); never saved.
+    eject_held: bool,
     /// The fire command the player holds.
     trigger: Trigger,
     /// The shots and beams in flight, and what the fight reports.
@@ -1119,6 +1123,7 @@ impl Session {
             player_end: None,
             hold_expiry_due: false,
             pod: None,
+            eject_held: false,
             trigger: Trigger::default(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),
@@ -1858,6 +1863,7 @@ impl Session {
         if self.landed.is_some() || self.jumping().is_some() {
             return;
         }
+        self.eject_before_fight(&mut &mut *chance);
         let was_destroyed = self.condition == Condition::Destroyed;
         let was_dying = matches!(self.condition, Condition::Dying { .. });
         self.take_scans(rules.law, &mut &mut *chance);
@@ -1901,6 +1907,7 @@ impl Session {
             chance,
         );
         self.take_shoves();
+        self.eject_on_breakup(&mut &mut *chance);
         self.player_exploded_this_tick = !was_destroyed && self.condition == Condition::Destroyed;
         if self.player_exploded_this_tick {
             self.player_end = Some(Ending::Holding {
@@ -13133,7 +13140,7 @@ pub(super) mod tests {
 
     /// Every NPC idles and holds its trigger.
     #[derive(Debug)]
-    struct Firing;
+    pub(super) struct Firing;
 
     impl Behaviour for Firing {
         fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
@@ -13281,7 +13288,7 @@ pub(super) mod tests {
         }
     }
 
-    const DISABLING: Rules = Rules {
+    pub(super) const DISABLING: Rules = Rules {
         disable: &Disabling,
         defence: &Allegiance,
         law: &NovaLaw {
@@ -15017,7 +15024,7 @@ pub(super) mod tests {
 
     /// An NPC one shot of whose disables, breaks up and destroys the
     /// player at once: no shield, armour gone.
-    fn deadly() -> FakePilotCatalog {
+    pub(super) fn deadly() -> FakePilotCatalog {
         let mut catalog = armed();
         catalog.weapons = vec![WeaponRecord {
             mass_dmg: 100,
@@ -15489,7 +15496,7 @@ pub(super) mod tests {
     }
 
     /// [`deadly`] with the player's ship of `DeathDelay` `death_delay`.
-    fn deadly_in(death_delay: i16) -> FakePilotCatalog {
+    pub(super) fn deadly_in(death_delay: i16) -> FakePilotCatalog {
         let mut catalog = deadly();
         for hull in &mut catalog.hulls {
             if hull.id == ShipId(128) {
@@ -15502,7 +15509,7 @@ pub(super) mod tests {
     /// The player's condition and the sounds of each fight tick from the
     /// one its armour goes on, under fire from `catalog`'s NPC, for up to
     /// `ticks` ticks; the traffic's own sounds are dropped.
-    fn from_the_breakup(
+    pub(super) fn from_the_breakup(
         session: &mut Session,
         catalog: &FakePilotCatalog,
         ticks: usize,

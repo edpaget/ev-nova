@@ -70,6 +70,12 @@ pub enum SimSound {
     /// [`PLAYER_EXPLOSION_HALTS`]; the `player-death` roadmap's phases 11
     /// and 14 raise it with 128 and 129.
     Halt(&'static [SoundId]),
+    /// The player ejected from its disabled or dying ship, into the escape
+    /// pod or an escape ship: `_escapePodSnd`, `snd ` 372 "Eject"
+    /// (`_LoadSounds` @0x1c240-0x1c252), played by `PlaySound` with no
+    /// test of whether it is playing (`_HandlePlayer` @0x6f920). A
+    /// [`SimSound::Halt`] of [`EJECT_HALTS`] follows it.
+    Ejected,
 }
 
 /// The sounds the player's eject halts, in order, after its

@@ -686,6 +686,11 @@ impl Arsenal {
         }
     }
 
+    /// Every weapon, by ascending ID: the original's `wëap` slot order.
+    pub fn weapons(&self) -> impl Iterator<Item = &WeaponSpec> {
+        self.weapons.values()
+    }
+
     /// The arsenal `catalog` gives.
     #[must_use]
     pub fn read(catalog: &(impl CombatCatalog + ?Sized)) -> Self {

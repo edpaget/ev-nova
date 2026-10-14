@@ -1,0 +1,963 @@
+//! The player's eject (`_HandlePlayer` 0x6f22c-0x6f96f; see
+//! [`escape`](crate::escape)).
+//!
+//! **When it fires.** Only while the player is disabled or dying
+//! (@0x6f22c), armed either by auto-eject or by the eject chord, Command +
+//! the eject key held together ([`Session::hold_eject`], @0x6f29e-0x6f2c1),
+//! which the session takes only while the player's fate takes
+//! [`PlayerCommand::Eject`]. Auto-eject is armed only while dying and with
+//! an auto-eject outfit ([`has_auto_eject`], @0x6f293), on the breakup's
+//! first tick whatever its countdown, and later once the countdown, after
+//! the tick's decrement, is at or below max(`DeathDelay` x 0.5, 30)
+//! ([`auto_eject_armed`]). Armed, it then needs an escape pod or an escape
+//! ship ([`has_escape_pod`], [`escape_ship_type`], @0x6f2d9), and a free
+//! ship slot for the hulk, as `_GenericRandomShipSpawn` gives one
+//! (@0x6f2f8-0x6f308, [`MAX_SHIPS_IN_SYSTEM`] counting the player): with
+//! none the eject is cancelled and the player goes on dying.
+//!
+//! **Ordering against the original.** `_HandlePlayer` takes the death
+//! timer down (@0x6d7e6), sounds the klaxon (@0x6f1e4) and runs the eject
+//! (@0x6f22c), all before `_HandleShipDisplay` (@0x43e29) sets a new
+//! breakup's timer or explodes a ship at the end of its countdown. The
+//! engine's fight does both the decrement and the display step, so the
+//! check runs twice in [`Session::tick_combat`]:
+//!
+//! - Before the fight, for a player who enters the tick disabled or dying
+//!   ([`Session::eject_before_fight`]). The threshold reads the countdown
+//!   less one, the original's timer after its decrement. A dying player
+//!   who ejects here first sounds the klaxon when that is above 1, as the
+//!   original does earlier in the same frame. The hulk takes the
+//!   countdown as it stands, so the fight carries it on a tick: it explodes
+//!   on the tick the player would have, even on the explosion tick itself.
+//! - After the fight, on the breakup's first tick
+//!   ([`Session::eject_on_breakup`]): the original's frame in which
+//!   `_HandlePlayer` sees the ship dying with its timer not yet set, so
+//!   auto-eject is armed whatever the threshold. The hulk is an NPC on its
+//!   own breakup's first tick, its countdown the old class's `DeathDelay`
+//!   (`_HandleShipDisplay` @0x444ad sets it for the NPC), and explodes
+//!   `DeathDelay` - 2 ticks later. A breakup that stalls
+//!   ([`Breakup::Stalls`](crate::combat::hull::Breakup::Stalls)) sets its
+//!   first tick again every tick, re-arming it as the original's timer at
+//!   or below 0 does.
+//!
+//! **The hand-off** (0x6f30e-0x6f40a). The hulk is an NPC of the old
+//! class, with the player's position, velocity, heading, shield and
+//! armour, no government (+0x88 = -1), boarded (+0xb9 = 1, so it can't be
+//! boarded), on no escort or mission duty. A disabled player's hulk is a
+//! disabled derelict; a dying one's breaks up and explodes. Its other
+//! fields the original zeroes (+0x5c, +0x60, +0xb0, +0xc8d6, +0xc8e0,
+//! +0xc8f4-+0xc8f8) are the ionisation, cloak-fade and display state
+//! `_HandleShipDisplay` and `_IonizeShip` keep; the engine's NPC models
+//! none of them, and the hulk is built new anyway. The player loses its
+//! target, its nav target and its secondary weapon (+0x70, +0x6c, +0x72,
+//! @0x6f40f-0x6f427), and the old class's `OnRetire` runs (@0x6f45c-0x6f49d).
+//!
+//! **The pod** (no escape ship, 0x6f642-0x6f677). The class becomes the
+//! [`ESCAPE_POD_SHIP`], its shield and armour that class's full raw
+//! values with no outfit bonus, its fuel untouched, and the pod countdown
+//! [`POD_TICKS`]. Every NPC that targets the player lets it go, with no
+//! threat test (@0x6f67d-0x6f6a9).
+//!
+//! **The threat walk** (0x6f6ab-0x6f747). Each NPC that threatens the
+//! player ([`Npc::threatens_player_among`]) and targets it is pointed at
+//! the hulk instead. In the pod, each other NPC the player leads is
+//! released (+0x9a = -1, @0x6f71d-0x6f732): a hired or captured escort
+//! and a launched fighter leave the fleet, and a mission escort the
+//! formation, each deciding afresh. A pilot's escort with no NPC in the
+//! system has no counterpart in the original, where every escort is a ship
+//! in a slot: it is dropped with the rest.
+//!
+//! The walk's second half, a threat whose +0x6c is 0 pointed at the hulk
+//! (@0x6f6ff-0x6f70d), is left out. For a ship +0x6c is the destination
+//! the AI flies to: a stellar for the landing states (`_WarshipAI`
+//! @0x8b90b), the leader or carrier for following and docking (states 10
+//! and 5: `_EscortAI` @0x83dac, `_AIMakeFighterReturn` @0x82e4e), the
+//! boarded ship for plundering (state 15, `_HighLevelAIHandler`
+//! @0x8f74c). `_IsThreatToPlayer` excludes all of those states
+//! (@0x7f536-0x7f56b), and the attack states a threat is in set +0x6c to
+//! -1 (`_AIMakeShipAttackPlayer` @0x89d47, `_AIFightThreatToPlayer`
+//! @0x81949), so a threat's +0x6c of 0 can only be a stellar index 0 left
+//! over from an earlier state. The engine's goal keeps one ship for a
+//! threat, its quarry, and no destination beside it, so there is nothing
+//! for the half to move.
+//!
+//! **The new ship** (0x6f74d-0x6f969). Every outfit without `Flags`
+//! 0x0004 is dropped (@0x6f7ae-0x6f7db), the class's stock weapons and
+//! their ammunition fitted (@0x6f7dd-0x6f8b5) and its default outfits
+//! added (@0x6f8c0-0x6f8fc), as a capture fits them. The original's
+//! weapon rebuild sets each stock load on its ammunition's slot, a later
+//! weapon of one ammunition replacing an earlier one's (@0x6f884,
+//! @0x6f88e), where the engine's fit takes the largest load of an
+//! ammunition; a fighter bay's load goes to its own fighters on both. The
+//! x velocity takes the y velocity's value (@0x6f782-0x6f788), so the
+//! hulk keeps the true velocity, and one push of the new class's top
+//! speed along the heading is added (`_Accel` @0x6f78e-0x6f7a9). A jump
+//! being warmed up is given up (+0x50 = 0, @0x6f962), the condition is
+//! intact again (the death timer -1.0, @0x6f969), the engine glow goes
+//! out, and [`SimSound::Ejected`] sounds, then a [`SimSound::Halt`] of
+//! [`EJECT_HALTS`] (@0x6f920-0x6f95a).
+//!
+//! Nothing is saved: the original saves no pilot at an eject, so the
+//! eject leaves whether a save is due as it found it, though the class
+//! change and `OnRetire` would make one due.
+//!
+//! The sprite clones (`_SWCloneFramesFromMaster` @0x6f3f5 for the hulk,
+//! @0x6f768 for the player) are left out here: they belong with the
+//! ship layers' last cloned frames, which this branch does not have yet
+//! (rdm:phase/player-death/phase-16-handle-player-left-out-gates).
+//! `_keyPressedThisFrame` (@0x6f2d3) and the status-redraw flags
+//! (@0x6f433-0x6f442) have no counterpart.
+
+use super::Session;
+use super::hooks::ShipHook;
+use super::ship_change::ClassChange;
+use crate::ai::Goal;
+use crate::board::MAX_SHIPS_IN_SYSTEM;
+use crate::catalog::{ShipId, ShipRecord};
+use crate::chance::Chance;
+use crate::combat::ShipRef;
+use crate::combat::armament::{Trigger, fit_stock, outfit_rounds};
+use crate::combat::hull::{Condition, ESCAPE_POD_SHIP};
+use crate::escape::{auto_eject_armed, escape_ship_type, has_auto_eject, has_escape_pod};
+use crate::outfitter::OutfitFlags;
+use crate::player_fate::{POD_TICKS, PlayerCommand};
+use crate::reserves::shield_points;
+use crate::ship_change::{OutfitCarry, carried_outfits};
+use crate::sound::{EJECT_HALTS, SimSound};
+use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
+use crate::traffic::table;
+
+impl Session {
+    /// Holds the eject chord, Command and the eject key down together, or
+    /// lets it go: what the next fight tick's eject check reads. The
+    /// session takes it only while the player's fate takes
+    /// [`PlayerCommand::Eject`].
+    pub fn hold_eject(&mut self, held: bool) {
+        self.eject_held = held;
+    }
+
+    /// The eject check before the fight, for a player who enters the tick
+    /// disabled or dying (see the module docs), drawing on `chance`.
+    pub(super) fn eject_before_fight(&mut self, chance: &mut dyn Chance) {
+        let (hulk, after) = match self.condition {
+            Condition::Disabled => (Condition::Disabled, None),
+            Condition::Dying { ticks_left, .. } => (
+                Condition::Dying {
+                    ticks_left,
+                    starting: false,
+                },
+                Some(ticks_left.saturating_sub(1)),
+            ),
+            Condition::Intact | Condition::Destroyed => return,
+        };
+        let auto = after.is_some_and(|after| auto_eject_armed(after, self.hull.death_delay));
+        let klaxon = after.is_some_and(|after| after > 1);
+        self.try_eject(auto, hulk, klaxon, chance);
+    }
+
+    /// The eject check after the fight, on the breakup's first tick (see
+    /// the module docs), drawing on `chance`.
+    pub(super) fn eject_on_breakup(&mut self, chance: &mut dyn Chance) {
+        if let Condition::Dying { starting: true, .. } = self.condition {
+            let hulk = Condition::Dying {
+                ticks_left: self.hull.death_delay,
+                starting: true,
+            };
+            self.try_eject(true, hulk, false, chance);
+        }
+    }
+
+    /// The escape ship the player can eject into now, if any
+    /// ([`escape_ship_type`]): its fighter bays' rounds are the fighters
+    /// aboard.
+    fn escape_ship(&self) -> Option<ShipId> {
+        let rounds = |weapon| outfit_rounds(&self.pilot.outfits, &self.ammo_outfits, weapon);
+        escape_ship_type(self.arsenal.weapons(), rounds, &self.ships)
+    }
+
+    /// Ejects, leaving a hulk in `hulk`, when it is armed (`auto`, while
+    /// auto-eject is, or the chord held) and the player can: an escape pod
+    /// or ship, a free ship slot and a record of the class it flies. A
+    /// `klaxon` sounds first. Whether it ejected.
+    fn try_eject(
+        &mut self,
+        auto: bool,
+        hulk: Condition,
+        klaxon: bool,
+        chance: &mut dyn Chance,
+    ) -> bool {
+        let armed = (auto && has_auto_eject(&self.pilot.outfits, &self.outfits))
+            || (self.eject_held && self.takes(PlayerCommand::Eject));
+        if !armed
+            || !(has_escape_pod(&self.pilot.outfits, &self.outfits) || self.escape_ship().is_some())
+            || self.npcs().len() + 1 >= MAX_SHIPS_IN_SYSTEM
+        {
+            return false;
+        }
+        let Some(old) = self.ship_record(self.pilot.ship).cloned() else {
+            return false;
+        };
+        if klaxon {
+            self.sounds.push(SimSound::Klaxon);
+        }
+        self.eject(&old, hulk, chance);
+        true
+    }
+
+    /// The eject itself, from a ship of class `old`, leaving a hulk in
+    /// `hulk` (see the module docs).
+    fn eject(&mut self, old: &ShipRecord, hulk: Condition, chance: &mut dyn Chance) {
+        let save_due = self.save_due;
+        let hulk = self.traffic.add_npc(self.hulk(old, hulk));
+        self.target = None;
+        self.nav_target = None;
+        self.secondary = None;
+        self.ship_hook(old.id, ShipHook::Retire, chance);
+        let class = ESCAPE_POD_SHIP;
+        let record = self.ship_record(class).cloned();
+        self.pod = Some(POD_TICKS);
+        self.drop_the_player();
+        self.walk_the_threats(hulk, true);
+        if let Some(record) = &record {
+            self.board_class(record);
+            let reserves = &mut self.pilot.reserves;
+            reserves.shield.now = shield_points(record.fields.shield) as f32;
+            reserves.armor.now = f32::from(record.fields.armor);
+        }
+        let velocity = &mut self.player.velocity;
+        velocity.x = velocity.y;
+        // Truncated to whole degrees (`cvttss2si` @0x6f7a0).
+        #[allow(clippy::cast_possible_truncation)]
+        let heading = self.player.heading as i32;
+        self.player.velocity =
+            self.player.velocity + crate::cargo_box::accel(heading, self.top_speed());
+        if matches!(self.jump, Some(super::Jump::PreJump { .. })) {
+            self.jump = None;
+        }
+        self.condition = Condition::Intact;
+        self.stop_thrust();
+        self.sounds.push(SimSound::Ejected);
+        self.sounds.push(SimSound::Halt(&EJECT_HALTS));
+        self.save_due = save_due;
+    }
+
+    /// The hulk the player leaves in `condition`, a ship of class `old`
+    /// (see the module docs).
+    fn hulk(&self, old: &ShipRecord, condition: Condition) -> Npc {
+        let kind = table::kind(old, &self.outfits, &self.arsenal);
+        let mut reserves = kind.stats.full();
+        reserves.shield = self.pilot.reserves.shield;
+        reserves.armor = self.pilot.reserves.armor;
+        Npc {
+            id: NpcId::default(),
+            berth: 0,
+            ship: old.id,
+            govt: None,
+            ai_type: AiType::from_raw(kind.inherent_ai),
+            leader: None,
+            class: kind.escort_class,
+            escort: None,
+            stats: kind.stats,
+            reserves,
+            state: self.player,
+            mode: Mode::Flying,
+            goal: Goal::Idle,
+            condition,
+            hull: kind.hull,
+            armament: kind.armament,
+            rounds: kind.rounds,
+            trigger: Trigger::default(),
+            target: None,
+            provoked: 0.0,
+            aggression: 0,
+            inspected: None,
+            booty: 0,
+            boarded: true,
+            info_types: 0,
+            spared: false,
+            assisting: 0,
+            carrier: None,
+            person: None,
+            mission: None,
+            aux: None,
+            cloak: crate::cloak::Cloak::default(),
+            cloak_gear: kind.cloak,
+            led_out: false,
+            self_repair: kind.self_repair,
+            former: None,
+        }
+    }
+
+    /// Every NPC that targets, fights or inspects the player lets it go
+    /// and decides again, as the pod's loop clears each +0x70 of 0
+    /// (@0x6f67d-0x6f6a9).
+    fn drop_the_player(&mut self) {
+        let player = ShipRef::Player;
+        for npc in self.traffic.npcs_mut() {
+            if npc.target == Some(player) {
+                npc.target = None;
+            }
+            if npc.goal.quarry() == Some(player) || npc.goal.inspecting() == Some(player) {
+                npc.goal = Goal::Idle;
+                npc.provoked = 0.0;
+            }
+        }
+    }
+
+    /// The threat walk (see the module docs): each threat to the player
+    /// that targets it targets the `hulk` instead; in the `pod`, every
+    /// other ship the player leads is released.
+    fn walk_the_threats(&mut self, hulk: NpcId, pod: bool) {
+        let to = ShipRef::Npc(hulk);
+        for index in 0..self.traffic.npcs().len() {
+            let npcs = self.traffic.npcs();
+            let npc = &npcs[index];
+            if npc.threatens_player_among(npcs) {
+                let npc = &mut self.traffic.npcs_mut()[index];
+                if npc.target == Some(ShipRef::Player) {
+                    npc.target = Some(to);
+                }
+                npc.goal = retargeted(npc.goal, to);
+            } else if pod && npc.escorts_player() {
+                let id = npc.id;
+                self.release_for_the_pod(id);
+            }
+        }
+        if pod {
+            self.drop_unplaced_escorts();
+        }
+    }
+
+    /// Every escort of the pilot's with no NPC in the system leaves the
+    /// fleet (see the module docs).
+    fn drop_unplaced_escorts(&mut self) {
+        let escorts = std::mem::take(&mut self.pilot.escorts);
+        let fleet = std::mem::take(&mut self.fleet);
+        let placed = fleet.into_iter().chain(std::iter::repeat(None));
+        for (escort, placed) in escorts.into_iter().zip(placed) {
+            if placed.is_some() {
+                self.pilot.escorts.push(escort);
+                self.fleet.push(placed);
+            }
+        }
+    }
+
+    /// NPC `id`, a ship the player leads, is released as the pod releases
+    /// it (+0x9a = -1): out of the fleet or the formation, with no
+    /// carrier, deciding afresh.
+    fn release_for_the_pod(&mut self, id: NpcId) {
+        self.unfleet(id);
+        let inherent = self
+            .npc(id)
+            .and_then(|npc| self.ship_record(npc.ship))
+            .map(|record| AiType::from_raw(record.inherent_ai));
+        if let Some(npc) = self.npc_mut(id) {
+            if let Some(mark) = &mut npc.mission
+                && mark.formation.take().is_some()
+                && let Some(ai_type) = inherent
+            {
+                npc.ai_type = ai_type;
+            }
+            npc.carrier = None;
+            npc.goal = Goal::Idle;
+        }
+        self.reform();
+    }
+
+    /// The player's ship becomes class `record`, its outfits as an eject
+    /// leaves them (see the module docs), holding its reserves to the new
+    /// most until the eject sets them.
+    fn board_class(&mut self, record: &ShipRecord) {
+        let defaults = crate::pilot::tally(record.defaults.iter().copied());
+        let mut outfits = carried_outfits(
+            &self.pilot.outfits,
+            OutfitCarry::Persistent {
+                mask: OutfitFlags::PERSISTENT,
+            },
+            &defaults,
+            None,
+            None,
+            &self.outfits,
+        );
+        let fits = self.arsenal.stock_fits(record.id, &self.outfits);
+        fit_stock(&mut outfits, &fits, &self.outfits);
+        let change = ClassChange {
+            outfits,
+            reserves: super::ReservePolicy::Hold,
+        };
+        self.become_class(record, change, |_| {});
+    }
+}
+
+/// `goal` with its quarry, when that is the player, `to`.
+fn retargeted(goal: Goal, to: ShipRef) -> Goal {
+    match goal {
+        Goal::Attack(ShipRef::Player) => Goal::Attack(to),
+        Goal::Snipe(ShipRef::Player) => Goal::Snipe(to),
+        Goal::Flee(ShipRef::Player) => Goal::Flee(to),
+        other => other,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod tests {
+    use super::*;
+    use crate::catalog::{OutfitId, StockWeapon, WeaponId};
+    use crate::chance::NeverFires;
+    use crate::combat::{CombatEvent, Rules};
+    use crate::control::{Bit, Script};
+    use crate::escape::{MOD_AUTO_EJECT, MOD_ESCAPE_POD};
+    use crate::escort::{EscortDuty, FormationSlot};
+    use crate::geometry::Vec2;
+    use crate::handling::ShipFields;
+    use crate::mission::ships::ShipBehav;
+    use crate::pilot::Escort;
+    use crate::player_fate::PlayerFate;
+    use crate::reserves::Reserves;
+    use crate::session::tests::{DISABLING, Firing, deadly_in, facing_an_npc};
+    use crate::stats::ShipStats;
+    use crate::testkit::{FAST, FakePilotCatalog, hull, npc, outfit, ship};
+    use crate::traffic::npc::MissionMark;
+
+    const POD: i16 = 188;
+    const AUTO: i16 = 187;
+    /// An outfit the eject carries over (`Flags` 0x0004).
+    const KEPT: i16 = 300;
+    /// An outfit the eject drops.
+    const DROPPED: i16 = 301;
+    /// The pod's default item.
+    const POD_ITEM: i16 = 302;
+
+    /// The pod's own shield and armour.
+    const POD_SHIELD: i16 = 30;
+    const POD_ARMOR: i16 = 40;
+
+    /// `deadly_in`'s catalog (the player of `DeathDelay` `death_delay`,
+    /// destroyed by one hit of its NPC's) with the escape pod and
+    /// auto-eject outfits, records of the player's class and of the pod
+    /// (30 shield, 40 armour, two of `POD_ITEM` aboard, a blaster
+    /// mounted), and an `OnRetire` on the player's class that sets bit 17.
+    fn ejecting(death_delay: i16) -> FakePilotCatalog {
+        let mut catalog = deadly_in(death_delay);
+        catalog.outfits.extend([
+            outfit(POD, &[(MOD_ESCAPE_POD, 0)]),
+            outfit(AUTO, &[(MOD_AUTO_EJECT, 0)]),
+            OutfitRecordFlags::persistent(KEPT),
+            outfit(DROPPED, &[]),
+            outfit(POD_ITEM, &[]),
+        ]);
+        let mut old = ship(128, FAST);
+        old.on_retire = Script::parse("b17");
+        let mut pod = ship(
+            ESCAPE_POD_SHIP.0,
+            ShipFields {
+                shield: POD_SHIELD,
+                armor: POD_ARMOR,
+                ..FAST
+            },
+        );
+        pod.defaults = vec![(OutfitId(POD_ITEM), 2)];
+        catalog.ship_records.extend([old, pod]);
+        catalog.hulls.push(crate::catalog::HullRecord {
+            weapons: vec![StockWeapon {
+                weapon: WeaponId(128),
+                count: 1,
+                ammo: 0,
+            }],
+            ..hull(ESCAPE_POD_SHIP.0)
+        });
+        catalog
+    }
+
+    /// Builds outfit records with flags.
+    struct OutfitRecordFlags;
+
+    impl OutfitRecordFlags {
+        fn persistent(id: i16) -> crate::catalog::OutfitRecord {
+            crate::catalog::OutfitRecord {
+                flags: OutfitFlags::PERSISTENT,
+                ..outfit(id, &[])
+            }
+        }
+    }
+
+    /// `catalog`'s session facing its NPC, owning one of each of `outfits`.
+    fn flying(catalog: &FakePilotCatalog, outfits: &[i16]) -> Session {
+        let mut session = facing_an_npc(catalog, 180);
+        for &id in outfits {
+            session.pilot.outfits.insert(OutfitId(id), 1);
+        }
+        session
+    }
+
+    /// One tick under fire from `catalog`'s NPC, the chord held or not:
+    /// the session's sounds from the fight.
+    fn tick(session: &mut Session, catalog: &FakePilotCatalog, chord: bool) -> Vec<SimSound> {
+        session.tick_traffic(catalog, &Firing, &mut NeverFires);
+        session.take_sounds();
+        session.hold_eject(chord);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        session.take_sounds()
+    }
+
+    /// Ticks under fire until the player's armour goes, giving that tick's
+    /// sounds.
+    fn to_the_breakup(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        chord: bool,
+    ) -> Vec<SimSound> {
+        for _ in 0..200 {
+            let sounds = tick(session, catalog, chord);
+            if session.pilot.ship != ShipId(128)
+                || !matches!(session.condition, Condition::Intact | Condition::Disabled)
+            {
+                return sounds;
+            }
+        }
+        panic!("the player's armour never went");
+    }
+
+    /// A fight tick with no traffic tick, the chord held or not: its
+    /// sounds and fight events.
+    fn fight(session: &mut Session, chord: bool) -> (Vec<SimSound>, Vec<CombatEvent>) {
+        session.take_sounds();
+        session.take_combat_events();
+        session.hold_eject(chord);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        (session.take_sounds(), session.take_combat_events())
+    }
+
+    const EJECTED: [SimSound; 2] = [SimSound::Ejected, SimSound::Halt(&EJECT_HALTS)];
+
+    fn in_the_pod(session: &Session) -> bool {
+        session.pilot.ship == ESCAPE_POD_SHIP && session.pod.is_some()
+    }
+
+    /// The NPC the eject left, the last added.
+    fn hulk(session: &Session) -> &Npc {
+        session.npcs().last().expect("a hulk")
+    }
+
+    /// Whether `events` destroy an NPC of the player's old class.
+    fn hulk_destroyed(events: &[CombatEvent]) -> bool {
+        events.iter().any(|event| {
+            matches!(
+                event,
+                CombatEvent::Destroyed {
+                    ship: ShipRef::Npc(_),
+                    ship_type: ShipId(128),
+                    ..
+                }
+            )
+        })
+    }
+
+    /// Fills the system up to `MAX_SHIPS_IN_SYSTEM` with the player,
+    /// each new NPC far out of the fight, giving the last added.
+    fn fill(session: &mut Session) -> NpcId {
+        let mut last = None;
+        while session.npcs().len() + 1 < MAX_SHIPS_IN_SYSTEM {
+            let mut far = npc(0, ShipStats::default());
+            far.state.position = Vec2::new(5000.0, 5000.0);
+            last = Some(session.traffic.add_npc(far));
+        }
+        last.expect("room to fill")
+    }
+
+    #[test]
+    fn a_dying_player_without_a_pod_or_escape_ship_never_ejects() {
+        let catalog = ejecting(2);
+        let mut session = flying(&catalog, &[AUTO]);
+        let mut sounds = to_the_breakup(&mut session, &catalog, true);
+        while session.condition != Condition::Destroyed {
+            sounds.extend(tick(&mut session, &catalog, true));
+        }
+        assert!(!sounds.contains(&SimSound::Ejected), "{sounds:?}");
+        assert_eq!(session.pilot.ship, ShipId(128));
+        assert_eq!(session.pod, None);
+        assert_eq!(session.npcs().len(), 1, "no hulk");
+    }
+
+    #[test]
+    fn a_pod_without_auto_eject_ejects_only_on_the_chord() {
+        let catalog = ejecting(40);
+        let mut session = flying(&catalog, &[POD]);
+        let sounds = to_the_breakup(&mut session, &catalog, false);
+        assert!(!sounds.contains(&SimSound::Ejected));
+        for _ in 0..100 {
+            tick(&mut session, &catalog, false);
+        }
+        assert_eq!(
+            session.condition,
+            Condition::Dying {
+                ticks_left: 20,
+                starting: false
+            },
+            "past the threshold, and no eject"
+        );
+        let sounds = tick(&mut session, &catalog, true);
+        assert!(in_the_pod(&session));
+        assert_eq!(sounds, [vec![SimSound::Klaxon], EJECTED.to_vec()].concat());
+    }
+
+    #[test]
+    fn with_both_outfits_the_player_ejects_on_its_first_dying_tick_and_its_hulk_explodes_98_ticks_later()
+     {
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        let sounds = to_the_breakup(&mut session, &catalog, false);
+        assert_eq!(sounds, EJECTED, "no klaxon");
+        assert!(in_the_pod(&session));
+        assert!(!matches!(session.condition, Condition::Dying { .. }));
+        assert_eq!(
+            session.player_fate(),
+            PlayerFate::Ejected {
+                ticks_left: POD_TICKS
+            }
+        );
+        assert_eq!(
+            hulk(&session).condition,
+            Condition::Dying {
+                ticks_left: 100,
+                starting: true
+            }
+        );
+        let mut ticks = 0;
+        loop {
+            ticks += 1;
+            let (_, events) = fight(&mut session, false);
+            if hulk_destroyed(&events) {
+                break;
+            }
+            assert!(ticks < 300, "the hulk never explodes");
+        }
+        assert_eq!(ticks, 98);
+        assert!(in_the_pod(&session), "the pod lives on");
+    }
+
+    #[test]
+    fn the_chord_held_on_the_first_dying_tick_ejects_before_any_breakup() {
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD]);
+        let sounds = to_the_breakup(&mut session, &catalog, true);
+        assert_eq!(sounds, EJECTED);
+        assert!(in_the_pod(&session));
+        assert_eq!(
+            hulk(&session).condition,
+            Condition::Dying {
+                ticks_left: 100,
+                starting: true
+            }
+        );
+    }
+
+    /// With both outfits and no free slot on the first dying tick, the
+    /// countdown of `death_delay` runs to `threshold` before the eject.
+    fn waits_for_the_threshold(death_delay: i16, threshold: u32) {
+        let catalog = ejecting(death_delay);
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        let extra = fill(&mut session);
+        let sounds = to_the_breakup(&mut session, &catalog, false);
+        assert!(!sounds.contains(&SimSound::Ejected), "no slot");
+        let three = u32::try_from(death_delay).expect("positive") * 3;
+        assert_eq!(
+            session.condition,
+            Condition::Dying {
+                ticks_left: three,
+                starting: true
+            },
+            "the breakup runs"
+        );
+        session.traffic.remove(extra);
+        let mut last = three;
+        loop {
+            let (sounds, _) = fight(&mut session, false);
+            if in_the_pod(&session) {
+                assert_eq!(
+                    sounds,
+                    [vec![SimSound::Klaxon], EJECTED.to_vec()].concat(),
+                    "{death_delay}"
+                );
+                break;
+            }
+            let Condition::Dying { ticks_left, .. } = session.condition else {
+                panic!("still dying: {:?}", session.condition);
+            };
+            assert!(ticks_left > threshold, "{death_delay}: {ticks_left}");
+            last = ticks_left;
+        }
+        assert_eq!(last, threshold + 1, "{death_delay}: not before");
+        assert_eq!(
+            hulk(&session).condition,
+            Condition::Dying {
+                ticks_left: threshold,
+                starting: false
+            },
+            "{death_delay}: the hulk carries on the player's countdown"
+        );
+    }
+
+    #[test]
+    fn a_first_tick_eject_with_no_free_slot_waits_for_the_threshold() {
+        waits_for_the_threshold(100, 50);
+        waits_for_the_threshold(40, 30);
+    }
+
+    #[test]
+    fn the_chord_on_the_explosion_tick_still_saves_the_player_and_the_hulk_explodes() {
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD]);
+        to_the_breakup(&mut session, &catalog, false);
+        session.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+        let (sounds, events) = fight(&mut session, true);
+        assert!(in_the_pod(&session));
+        assert_eq!(session.condition, Condition::Intact);
+        assert!(hulk_destroyed(&events), "{events:?}");
+        assert_eq!(sounds, [vec![SimSound::Klaxon], EJECTED.to_vec()].concat());
+    }
+
+    #[test]
+    fn a_disabled_player_ejects_on_the_chord_only_and_command_or_the_key_alone_does_nothing() {
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        session.condition = Condition::Disabled;
+        for _ in 0..50 {
+            session.hold_eject(false);
+            session.tick_combat(DISABLING, &mut NeverFires);
+        }
+        assert_eq!(session.condition, Condition::Disabled, "no auto-eject");
+        assert_eq!(session.pilot.ship, ShipId(128));
+        session.take_sounds();
+        session.hold_eject(true);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert!(in_the_pod(&session));
+        assert_eq!(session.take_sounds(), EJECTED, "no klaxon");
+    }
+
+    #[test]
+    fn with_no_free_slot_the_eject_is_cancelled_and_the_player_goes_on_dying() {
+        let catalog = ejecting(10);
+        let mut session = flying(&catalog, &[POD]);
+        fill(&mut session);
+        let mut sounds = to_the_breakup(&mut session, &catalog, true);
+        for _ in 0..10 {
+            sounds.extend(fight(&mut session, true).0);
+        }
+        assert!(!sounds.contains(&SimSound::Ejected));
+        assert_eq!(session.pilot.ship, ShipId(128));
+        assert_eq!(
+            session.condition,
+            Condition::Dying {
+                ticks_left: 20,
+                starting: false
+            }
+        );
+    }
+
+    #[test]
+    fn an_eject_hands_the_player_over_to_a_boarded_hulk() {
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD, KEPT, DROPPED]);
+        let target = session.npcs()[0].id;
+        session.target = Some(target);
+        session.nav_target = Some(crate::catalog::StellarId(128));
+        session.secondary = Some(WeaponId(128));
+        session.jump = Some(crate::session::Jump::PreJump {
+            to: crate::catalog::SystemId(131),
+            bearing: None,
+        });
+        let state = crate::flight::ShipState {
+            position: Vec2::new(10.0, 20.0),
+            velocity: Vec2::new(3.0, 4.0),
+            heading: 90.0,
+        };
+        session.player = state;
+        session.pilot.reserves.shield.now = 5.0;
+        session.pilot.reserves.armor.now = 7.0;
+        let fuel = session.pilot.reserves.fuel.now;
+        let (shield, armor) = (session.pilot.reserves.shield, session.pilot.reserves.armor);
+        session.condition = Condition::Disabled;
+        let (sounds, _) = fight(&mut session, true);
+        assert_eq!(sounds, EJECTED);
+        let hulk = hulk(&session).clone();
+        assert_eq!(hulk.ship, ShipId(128));
+        assert_eq!(hulk.state, state);
+        assert_eq!(hulk.condition, Condition::Disabled);
+        assert_eq!((hulk.reserves.shield, hulk.reserves.armor), (shield, armor));
+        assert!(hulk.boarded, "not to be boarded");
+        assert_eq!((hulk.govt, hulk.escort, hulk.mission), (None, None, None));
+        assert!(
+            session.control_bit(Bit::new(17).expect("a bit")),
+            "OnRetire"
+        );
+        assert_eq!(session.pilot.ship, ESCAPE_POD_SHIP);
+        assert_eq!(session.player.position, state.position);
+        assert_eq!(session.player.heading, 90.0);
+        let push = session.top_speed();
+        assert!(
+            (session.player.velocity - Vec2::new(4.0 + push, 4.0)).length() < 1e-4,
+            "x takes y, then a push east: {:?}",
+            session.player.velocity
+        );
+        assert_eq!(session.target, None);
+        assert_eq!(session.nav_target, None);
+        assert_eq!(session.secondary, None);
+        assert_eq!(session.jump, None, "the pre-jump given up");
+        assert_eq!(session.condition, Condition::Intact);
+        assert_eq!(session.pilot.reserves.fuel.now, fuel, "fuel untouched");
+        let owned: Vec<(i16, u16)> = session
+            .pilot
+            .outfits
+            .iter()
+            .map(|(id, &n)| (id.0, n))
+            .collect();
+        assert_eq!(
+            owned,
+            [(250, 1), (KEPT, 1), (POD_ITEM, 2)],
+            "the stock blaster, the persistent outfit and the pod's items"
+        );
+        let mounted: Vec<(WeaponId, u32)> = session
+            .armament
+            .mounts()
+            .iter()
+            .map(|mount| (mount.spec.id, mount.count))
+            .collect();
+        assert_eq!(mounted, [(WeaponId(128), 1)]);
+    }
+
+    #[test]
+    fn a_dying_players_hulk_explodes_and_a_disabled_ones_stays_a_derelict() {
+        let catalog = ejecting(10);
+        let mut session = flying(&catalog, &[POD, AUTO]);
+        to_the_breakup(&mut session, &catalog, false);
+        assert!(in_the_pod(&session));
+        let exploded = (0..20).any(|_| hulk_destroyed(&fight(&mut session, false).1));
+        assert!(exploded, "the dying player's hulk explodes");
+        let mut session = flying(&catalog, &[POD]);
+        session.condition = Condition::Disabled;
+        session.pilot.reserves.armor.now = 1.0;
+        fight(&mut session, true);
+        assert!(in_the_pod(&session));
+        let id = hulk(&session).id;
+        for _ in 0..200 {
+            let (_, events) = fight(&mut session, false);
+            assert!(!hulk_destroyed(&events));
+        }
+        let derelict = session.npc(id).expect("still here");
+        assert_eq!(derelict.condition, Condition::Disabled);
+    }
+
+    /// An NPC of `goal`, targeting `target`.
+    fn aimed(session: &mut Session, goal: Goal, target: Option<ShipRef>) -> NpcId {
+        session.traffic.add_npc(Npc {
+            goal,
+            target,
+            ..npc(0, ShipStats::default())
+        })
+    }
+
+    /// An escort hired into the fleet, as placed.
+    fn escort(session: &mut Session) -> NpcId {
+        let id = session.traffic.add_npc(Npc {
+            escort: Some(EscortDuty {
+                formation: FormationSlot::default(),
+                order: None,
+            }),
+            goal: Goal::Formation { guard: None },
+            ..npc(0, ShipStats::default())
+        });
+        session.pilot.escorts.push(hired());
+        session.fleet.push(Some(id));
+        id
+    }
+
+    fn hired() -> Escort {
+        Escort {
+            ship: ShipId(129),
+            reserves: Reserves::full(1.0, 1.0, 1.0),
+            order: None,
+            carried: false,
+            wage: None,
+            person: None,
+        }
+    }
+
+    #[test]
+    fn the_pod_branch_makes_ship_895_full_in_ejected_350_clears_targets_and_releases_non_threat_escorts()
+     {
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD]);
+        let attacker = aimed(
+            &mut session,
+            Goal::Attack(ShipRef::Player),
+            Some(ShipRef::Player),
+        );
+        let aiming = aimed(&mut session, Goal::Idle, Some(ShipRef::Player));
+        let hired = escort(&mut session);
+        let raider = aimed(
+            &mut session,
+            Goal::Attack(ShipRef::Npc(hired)),
+            Some(ShipRef::Npc(hired)),
+        );
+        let mission = session.traffic.add_npc(Npc {
+            mission: Some(MissionMark {
+                slot: 0,
+                behav: ShipBehav::EscortPlayer,
+                formation: Some(FormationSlot::default()),
+                order: None,
+            }),
+            ..npc(0, ShipStats::default())
+        });
+        // A pilot's escort not placed in the system.
+        session.pilot.escorts.push(super::tests::hired());
+        session.fleet.push(None);
+        let fuel = session.pilot.reserves.fuel.now;
+        session.condition = Condition::Disabled;
+        fight(&mut session, true);
+        assert_eq!(session.pilot.ship, ESCAPE_POD_SHIP);
+        assert_eq!(
+            session.player_fate(),
+            PlayerFate::Ejected {
+                ticks_left: POD_TICKS
+            }
+        );
+        let reserves = session.pilot.reserves;
+        assert_eq!(
+            (reserves.shield.now, reserves.armor.now, reserves.fuel.now),
+            (f32::from(POD_SHIELD), f32::from(POD_ARMOR), fuel),
+            "full, with no outfit bonus, fuel untouched"
+        );
+        let npc = |id| session.npc(id).expect("here").clone();
+        assert_eq!(
+            (npc(attacker).target, npc(attacker).goal),
+            (None, Goal::Idle)
+        );
+        assert_eq!(npc(aiming).target, None);
+        assert_eq!(
+            (npc(raider).target, npc(raider).goal),
+            (Some(ShipRef::Npc(hired)), Goal::Attack(ShipRef::Npc(hired))),
+            "a threat by a led ship keeps its quarry"
+        );
+        assert_eq!(npc(hired).escort, None, "released");
+        assert!(!npc(hired).escorts_player());
+        assert!(!npc(mission).escorts_player(), "out of the formation");
+        assert_eq!(session.pilot.escorts, [], "the unplaced escort dropped");
+        assert_eq!(session.fleet, []);
+    }
+
+    #[test]
+    fn an_eject_makes_no_save_due() {
+        let catalog = ejecting(100);
+        let mut session = flying(&catalog, &[POD]);
+        session.take_save_due();
+        session.condition = Condition::Disabled;
+        fight(&mut session, true);
+        assert!(in_the_pod(&session));
+        assert!(!session.take_save_due());
+    }
+}

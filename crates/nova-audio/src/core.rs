@@ -148,6 +148,7 @@ impl<A: Audio> AudioCore<A> {
                         });
                     }
                 }
+                Sound::Sim(SimSound::Ejected) => self.play(self.table.eject),
                 Sound::Sim(SimSound::Halt(sounds)) => {
                     for &sound in sounds {
                         self.audio.run(AudioCommand::Halt { sound });
@@ -576,6 +577,21 @@ mod tests {
         let mut core = AudioCore::with_table(audio, table);
         core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Klaxon)]);
         assert_eq!(drain(&log), [], "a table without one");
+    }
+
+    #[test]
+    fn the_eject_plays_snd_372() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::Ejected), Sound::Sim(SimSound::Ejected)],
+        );
+        assert_eq!(drain(&log), [play(372, 0.5), play(372, 0.5)], "every time");
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Ejected)]);
+        assert_eq!(drain(&log), [], "sound off");
     }
 
     #[test]
