@@ -744,6 +744,38 @@ mod tests {
     }
 
     #[test]
+    fn a_pickup_that_fits_trims_the_cargo_already_past_the_holds_before_it_is_aboard() {
+        // 30 tons of food in 20 holds, set up in code: the pickup's own
+        // checks keep a fresh pickup within the holds, so the mission's
+        // cargo is none here. Its reset comes before the cargo is aboard
+        // (@0x98316, then @0x9ee41): 30 x 20/30.
+        for pickup_mode in [2, 1] {
+            let catalog = cargo_catalog(
+                vec![MissionRecord {
+                    travel_stel: 128,
+                    return_stel: 129,
+                    ..courier(140, pickup_mode, 1)
+                }],
+                vec![],
+            );
+            let mut session = accepted(&catalog);
+            session.pilot.missions.get_mut(0).expect("held").cargo_tons = 0;
+            session.pilot.cargo = std::iter::once((Good::Commodity(0), 30)).collect();
+            if pickup_mode == 2 {
+                assert!(session.pick_up_boarded_cargo(0), "a boarding pickup");
+            } else {
+                session.cargo_at_landing(0, StellarId(128));
+            }
+            assert!(aboard(&session, 0), "{pickup_mode}");
+            assert_eq!(
+                session.pilot().held(Good::Commodity(0)),
+                20,
+                "{pickup_mode}"
+            );
+        }
+    }
+
+    #[test]
     fn a_landing_cargo_pickup_refreshes_the_blessing() {
         use crate::session::ranks::tests::{blessed, blessing_rank};
         let mut catalog = cargo_catalog(vec![round_trip(140, 1, 1)], vec![]);
