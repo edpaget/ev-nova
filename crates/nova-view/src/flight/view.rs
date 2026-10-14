@@ -10873,6 +10873,12 @@ mod tests {
         assert_eq!(black_over(&view), None);
         assert!(!view.game_over());
         assert!(matches!(fate_of(&view), PlayerFate::Holding { .. }));
+        while !view.take_hold_expired() {
+            view.tick(TICK);
+        }
+        view.tick(Duration::from_millis(1500));
+        assert_eq!(black_over(&view), None, "nor once the hold expires");
+        assert!(!view.game_over());
     }
 
     #[test]

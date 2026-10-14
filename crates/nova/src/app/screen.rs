@@ -7748,6 +7748,22 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn without_a_main_menu_a_dead_pilot_returns_to_the_side_flight_was_entered_from() {
+        let mut screen = with_dialogs(deadly_data())
+            .with_chance(above_the_player())
+            .with_behaviour(Rc::new(Firing))
+            .with_disable_rule(Rc::new(Never));
+        fly(&mut screen);
+        until_exploded(&mut screen);
+        tick_until(&mut screen, 400, |screen| {
+            screen.showing() != Showing::Flight
+        });
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+        assert!(screen.flight_view().is_none());
+        assert_eq!(black_over(&screen), Some(255), "from black");
+    }
+
+    #[test]
     fn escape_during_the_breakup_writes_no_save_and_drops_flight() {
         let store = MemoryPilots::new();
         let mut screen = landed_took_off_and_breaking_up(&store);

@@ -51,8 +51,8 @@ pub enum PlayerFate {
     /// this tick: the tick the fight raised its `CombatEvent::Destroyed`.
     Exploded,
     /// The hold after the explosion: the scene runs on without the ship.
-    /// It starts as the ship goes inactive (`_HandleShipDisplay` 0x68700)
-    /// and counts down in `_HandlePlayer`'s dead branch (0x6871e-0x68734)
+    /// It starts as the ship goes inactive, which `_HandlePlayer` tests
+    /// (0x68700), and counts down in its dead branch (0x6871e-0x68734)
     /// once a tick; `ticks_left` is the hold ticks still to run, from
     /// [`HOLD_TICKS`]. An expired hold still reads `ticks_left: 0`, until
     /// the fade begins: [`Ending::expired`] tells the two apart.
