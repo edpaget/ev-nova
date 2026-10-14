@@ -4135,6 +4135,8 @@ mod tests {
         disasters: Vec<DisasterRecord>,
         /// The outfits: none, by default.
         outfits: Vec<OutfitRecord>,
+        /// The `jünk`s: none, by default.
+        junk: Vec<JunkRecord>,
         /// The ship classes the shipyard reads: none, by default.
         ships: Vec<ShipRecord>,
         /// The ships whose sheets were asked for.
@@ -4258,6 +4260,7 @@ mod tests {
             commodities: CommodityStrings::default(),
             disasters: Vec::new(),
             outfits: Vec::new(),
+            junk: Vec::new(),
             ships: Vec::new(),
             sheets_asked: RefCell::default(),
             traffic: Vec::new(),
@@ -4417,7 +4420,7 @@ mod tests {
         }
 
         fn junk(&self) -> Vec<JunkRecord> {
-            Vec::new()
+            self.junk.clone()
         }
 
         fn disasters(&self) -> Vec<DisasterRecord> {
@@ -12851,7 +12854,7 @@ mod tests {
 
     /// A contraband notice names the scanner by its person's name when it
     /// is one (`_ScanPlayer` @0x7ebd1-0x7ec0c), else its ship class, and
-    /// the outfit by the session's record; it lasts 400 ticks.
+    /// the outfit or `jünk` by the session's record; it lasts 400 ticks.
     #[test]
     fn a_contraband_notice_reads_its_names_from_the_session() {
         let view = FlightView::new(FakeCatalog {
@@ -12859,6 +12862,19 @@ mod tests {
                 lc_name: "blaster".to_owned(),
                 lc_plural: "blasters".to_owned(),
                 ..multi_jumping().outfits[0].clone()
+            }],
+            junk: vec![JunkRecord {
+                id: nova_sim::JunkId(150),
+                name: "Bio-weapons".to_owned(),
+                abbrev: "Bio".to_owned(),
+                base_price: 1000,
+                sold_at: Vec::new(),
+                bought_at: Vec::new(),
+                buy_on: nova_sim::Test::default(),
+                sell_on: nova_sim::Test::default(),
+                flags: 0,
+                scan_mask: 0x0004,
+                lc_name: "bio-weapons".to_owned(),
             }],
             ..catalog()
         });
@@ -12884,18 +12900,22 @@ mod tests {
                 class, ship, true, "blaster", "blasters", 500
             ))
         );
-        let junk = SimMessage::IllegalJunk {
+        let junk = |id: i16| SimMessage::IllegalJunk {
             scanner: ShipId(128),
             person: Some("Ace".to_owned()),
-            junk: nova_sim::JunkId(150),
+            junk: nova_sim::JunkId(id),
             fine: 0,
         };
         assert_eq!(
-            sim_message_text(&junk, session),
+            sim_message_text(&junk(150), session),
+            Some(illegal_junk_message("Ace", ship, "bio-weapons", 0))
+        );
+        assert_eq!(
+            sim_message_text(&junk(151), session),
             Some(illegal_junk_message("Ace", ship, "", 0)),
             "no record, no name"
         );
-        assert_eq!(arrival_lead(&junk), None);
+        assert_eq!(arrival_lead(&junk(150)), None);
         assert_eq!(arrival_lead(&outfit(None)), None);
     }
 
