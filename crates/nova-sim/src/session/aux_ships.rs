@@ -50,6 +50,7 @@ use std::collections::BTreeSet;
 use super::Session;
 use crate::catalog::TrafficCatalog;
 use crate::chance::Chance;
+use crate::mission::Stop;
 use crate::mission::aux::{aux_dude, aux_system_allows};
 use crate::mission::ships::LOST_AT_GATE;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -82,9 +83,10 @@ impl Session {
         };
         let record = self.lifecycle_record(active.mission);
         let coming = active.aux.coming(&record.aux);
-        let stops = (active.destination, active.return_to);
+        let holder = |stop: Option<Stop>| stop.and_then(|stop| self.holder_of(stop.stellar));
+        let holders = (holder(active.destination), holder(active.return_to));
         let places = self.galaxy.map().places();
-        if coming <= 0 || !aux_system_allows(record.aux.syst, self.pilot.system, stops, places) {
+        if coming <= 0 || !aux_system_allows(record.aux.syst, self.pilot.system, holders, places) {
             return;
         }
         let Some(dude) = aux_dude(&record.aux) else {
@@ -354,6 +356,82 @@ mod tests {
         assert_eq!(aux_here(&session), 0, "not before the countdown runs out");
         tick(&mut session, &catalog);
         assert_eq!(aux_here(&session), 2, "at the return stop");
+    }
+
+    #[test]
+    fn aux_ships_of_minus_2_come_where_the_destination_is_held_now() {
+        let mut catalog = stopping(2, -2);
+        // 132 lists 140 as well as 131, which owns it at the offer.
+        catalog
+            .sites
+            .push((SystemId(132), vec![crate::testkit::planet(140, 0.0, 0.0)]));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        jump_to(&mut session, &catalog, 131);
+        jump_to(&mut session, &catalog, 132);
+        ticks(&mut session, &catalog, 300);
+        assert_eq!(aux_here(&session), 0, "131 holds 140");
+        assert_eq!(aux_of(&session).countdown, 0, "they would come now");
+        assert!(session.change_galaxy(&catalog, |overlay| {
+            overlay.set_visible(SystemId(131), Some(false));
+        }));
+        tick(&mut session, &catalog);
+        assert_eq!(
+            aux_here(&session),
+            2,
+            "132 owns 140 now, read live (@0x99322-0x99336)"
+        );
+    }
+
+    #[test]
+    fn aux_ships_of_minus_2_never_come_for_a_destination_no_system_holds() {
+        let catalog = stopping(2, -2);
+        let mut session = accepted(&catalog);
+        // As an offer resolved while the player's 130 held 140 would store it.
+        if let Some(destination) = session
+            .pilot
+            .missions
+            .get_mut(0)
+            .and_then(|active| active.destination.as_mut())
+        {
+            destination.system = Some(SystemId(130));
+        }
+        take_off(&mut session, &catalog);
+        assert!(session.change_galaxy(&catalog, |overlay| {
+            overlay.set_visible(SystemId(131), Some(false));
+        }));
+        assert_eq!(session.system(), SystemId(130));
+        ticks(&mut session, &catalog, 300);
+        assert_eq!(
+            aux_here(&session),
+            0,
+            "only the hidden 131 lists 140 and 130 does not: no owner, and no fallback (@0x99322-0x99336)"
+        );
+        assert_eq!(aux_of(&session).arrived, 0, "none came and went");
+    }
+
+    #[test]
+    fn aux_ships_of_minus_3_come_at_a_return_rescued_into_the_players_system() {
+        let mut catalog = stopping(2, -3);
+        // 128, lower, shadows the player's 130 at its place, so 130 owns
+        // nothing and holds its own 128 and 129 by the rescue.
+        catalog
+            .star_map
+            .push(crate::testkit::star(128, (0.0, 0.0), &[]));
+        let mut session = accepted(&catalog);
+        take_off(&mut session, &catalog);
+        assert_eq!(session.system(), SystemId(130));
+        assert_eq!(
+            session
+                .galaxy()
+                .holder(session.listers(StellarId(128)), SystemId(130)),
+            Some(SystemId(130)),
+            "rescued"
+        );
+        ticks(&mut session, &catalog, 139);
+        assert_eq!(aux_here(&session), 0, "not before the countdown runs out");
+        tick(&mut session, &catalog);
+        assert_eq!(aux_here(&session), 2, "at the return stop's holder");
     }
 
     #[test]

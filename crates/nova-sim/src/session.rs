@@ -2602,6 +2602,13 @@ impl Session {
         listers_of(&self.listed_stellars, stellar)
     }
 
+    /// The system that holds `stellar` now, with the player where they
+    /// are ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)):
+    /// the stellar's +0x14 as the aux and mission ship readers find it.
+    fn holder_of(&self, stellar: StellarId) -> Option<SystemId> {
+        self.galaxy.holder(self.listers(stellar), self.pilot.system)
+    }
+
     /// The links of `stellar` among `sites`; none when no system lists it.
     fn links_of(sites: &[GateSite], stellar: StellarId) -> [Option<StellarId>; 8] {
         sites

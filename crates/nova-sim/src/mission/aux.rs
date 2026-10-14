@@ -13,8 +13,6 @@ use crate::catalog::{AuxShip, DudeId, SystemId};
 use crate::chance::Chance;
 use crate::hyperspace::Places;
 
-use super::offer::Stop;
-
 /// `Flags`: the mission's auxiliary ships come again in full on every
 /// restart of their countdown (@0x99fc0, @0x634f8), and none that comes
 /// is taken off those left to come (@0x435f9).
@@ -129,12 +127,18 @@ impl AuxShips {
 }
 
 /// Whether the auxiliary ships of `AuxShipSyst` `code` may come into the
-/// player's system `player`, the mission going to `destination` and
-/// completed at `return_to`, over the map's `places`
-/// (`_ValidAuxShipSystem` @0x992b5-0x9959d):
+/// player's system `player`, `holders` being the systems that hold the
+/// mission's destination and return stellars now (`None` with no such
+/// stop or no holder), over the map's `places` (`_ValidAuxShipSystem`
+/// @0x992b5-0x9959d):
 ///
-/// - -1 and -6: any system (@0x992d9-0x992fa).
-/// - -2: the destination's system; -3: the return's. Never with none
+/// - -1 and -6: any system. The original allows only the system it is
+///   passed (@0x992d9-0x992fa), but its one caller, `_EnterMoreShips`,
+///   passes the player's (@0x434f0-0x4350d), so that always holds.
+/// - -2: when the destination's holder is the player's system; -3: the
+///   return's. The holder is the stellar's owner (+0x14) read live, the
+///   rescue's included, with no `_FindSystemFromStellar` fallback and no
+///   resolution by place, so a stellar no system holds never matches
 ///   (@0x99307-0x99336).
 /// - 128-2175: that system, or the visible system standing for it at its
 ///   place (`_FindActiveCoLocatedSystem`, @0x99338-0x99361).
@@ -146,14 +150,13 @@ impl AuxShips {
 pub fn aux_system_allows(
     code: i16,
     player: SystemId,
-    (destination, return_to): (Option<Stop>, Option<Stop>),
+    (destination, return_to): (Option<SystemId>, Option<SystemId>),
     places: &Places,
 ) -> bool {
-    let at = |stop: Option<Stop>| stop.and_then(|stop| stop.system) == Some(player);
     match code {
         -1 | -6 => true,
-        -2 => at(destination),
-        -3 => at(return_to),
+        -2 => destination == Some(player),
+        -3 => return_to == Some(player),
         128..=2175 => {
             let system = SystemId(code);
             system == player || places.stand_in(system) == Some(player)
@@ -165,7 +168,6 @@ pub fn aux_system_allows(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::StellarId;
     use crate::hyperspace::CoLocated;
     use crate::testkit::{Draws, star};
     use std::collections::BTreeSet;
@@ -321,13 +323,6 @@ mod tests {
         assert_eq!((ships.countdown, ships.arrived), (5, 3));
     }
 
-    fn stop(stellar: i16, system: Option<i16>) -> Stop {
-        Stop {
-            stellar: StellarId(stellar),
-            system: system.map(SystemId),
-        }
-    }
-
     /// 130 and 131 at one place, 131 hidden; 132 apart.
     fn places() -> Places {
         let systems = [
@@ -345,8 +340,8 @@ mod tests {
     #[test]
     fn the_aux_system_codes_stock_uses_allow_their_systems() {
         let places = places();
-        let stops = (Some(stop(200, Some(132))), Some(stop(201, Some(130))));
-        let allows = |code, player| aux_system_allows(code, SystemId(player), stops, &places);
+        let holders = (Some(SystemId(132)), Some(SystemId(130)));
+        let allows = |code, player| aux_system_allows(code, SystemId(player), holders, &places);
         for code in [-1, -6] {
             assert!(allows(code, 130) && allows(code, 132), "{code}: any");
         }
@@ -366,13 +361,21 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_stop_or_one_of_no_system_allows_none() {
+    fn a_missing_stop_or_one_no_system_holds_allows_none() {
         let places = places();
         let none = (None, None);
         assert!(!aux_system_allows(-2, SystemId(130), none, &places));
         assert!(!aux_system_allows(-3, SystemId(130), none, &places));
-        let nowhere = (Some(stop(200, None)), Some(stop(201, None)));
-        assert!(!aux_system_allows(-2, SystemId(130), nowhere, &places));
-        assert!(!aux_system_allows(-3, SystemId(130), nowhere, &places));
+    }
+
+    #[test]
+    fn a_holder_counts_as_it_is_not_by_place() {
+        let places = places();
+        let hidden = (Some(SystemId(131)), Some(SystemId(131)));
+        assert!(
+            !aux_system_allows(-2, SystemId(130), hidden, &places),
+            "130 stands for 131, but the owner is compared as it is"
+        );
+        assert!(!aux_system_allows(-3, SystemId(130), hidden, &places));
     }
 }
