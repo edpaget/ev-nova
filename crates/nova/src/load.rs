@@ -72,7 +72,11 @@ mod tests {
         assert_eq!(
             data_warnings(&data),
             [
-                format!("nova: skipped /data/Broken: {}", failed.error),
+                format!(
+                    "nova: skipped {}: {}",
+                    Path::new("/data").join("Broken").display(),
+                    failed.error
+                ),
                 "nova: mïsn 128 `on_accept`: unknown set operator `Z` at byte 3 in \"b1 Z2\""
                     .to_owned(),
             ]
