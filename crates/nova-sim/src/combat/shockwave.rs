@@ -16,16 +16,10 @@
 //!   falloff. It is taken as any hit that does not pass shields
 //!   ([`damage::apply`](super::damage::apply), `_DamageShip`'s plain
 //!   path @0x3ac00).
-//! - **It never destroys** (arg +0x28, @0x3ac3a-0x3ac64): armour above
-//!   none that the hit takes to none or below is left at
-//!   [`SPARED_ARMOR`].
-//! - **It never newly disables** (arg +0x2c, @0x3acc2-0x3ad4a): a ship not
-//!   disabled before the hit that is after it has its armour set to what a
-//!   self-repair leaves
-//!   ([`repaired_armor`](crate::self_repair::repaired_armor), the same
-//!   0.3333, 0.1 and 1.0). That clears the disabled line only while the
-//!   ship holds 33,333 armour or less: a non-`TOUGH` hull that holds more
-//!   is left disabled, and counts as newly disabled.
+//! - **It never destroys** (arg +0x28, @0x3ac3a-0x3ac64) **and never
+//!   newly disables** (arg +0x2c, @0x3acc2-0x3ad4a): it is a spared hit
+//!   ([`damage::apply_spared`], whose module docs give the floors), a
+//!   ship in any condition but intact counting as disabled before it.
 //! - **A dying ship** was disabled before and has no armour above none,
 //!   so it takes the hit with neither floor.
 //! - **The push** ([`shove`], @0x3aa6e-0x3ab7f): a ship whose jump is not
@@ -44,13 +38,13 @@
 //! sound of its own.
 
 use super::aim;
+pub use super::damage::SPARED_ARMOR;
 use super::damage::{self, Hit};
 use super::hull::{Condition, DisableRule, HullSpec};
 use crate::bay::launch_velocity;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
-use crate::reserves::{Gauge, Reserves};
-use crate::self_repair::repaired_armor;
+use crate::reserves::Reserves;
 
 /// The shockwave's damage per ton of the wreck (the double @0xdd598).
 pub const DAMAGE_PER_TON: f64 = 0.0375;
@@ -59,9 +53,6 @@ pub const DAMAGE_BASE: f64 = 25.0;
 /// The shockwave's impact: its push is this over the mass of the ship it
 /// reaches (0x2ee, pushed @0x2da61).
 pub const IMPACT: f32 = 750.0;
-/// The armour a shockwave leaves a ship it would destroy (0x3f800000
-/// @0x3ac64).
-pub const SPARED_ARMOR: f32 = 1.0;
 
 /// The damage the shockwave of a wreck of `hull` does to shields and to
 /// armour: `trunc(Mass x 0.0375 + 25)`, in doubles.
@@ -86,29 +77,12 @@ pub fn hit(
     rule: &dyn DisableRule,
     damage: f32,
 ) {
-    let whole = reserves.armor.now > 0.0;
-    let was_disabled = condition != Condition::Intact;
-    damage::apply(
-        reserves,
-        Hit {
-            mass: damage,
-            energy: damage,
-            passes_shields: false,
-        },
-    );
-    let armor = &mut reserves.armor;
-    if whole && armor.now <= 0.0 {
-        armor.now = SPARED_ARMOR;
-    }
-    if !was_disabled && disabled(*armor, hull, rule) {
-        armor.now = repaired_armor(armor.max, hull.tough);
-    }
-}
-
-/// Whether a ship of `hull` with `armor` is disabled, as `rule` says: never
-/// one that holds no armour.
-fn disabled(armor: Gauge, hull: &HullSpec, rule: &dyn DisableRule) -> bool {
-    armor.max > 0.0 && rule.disabled(armor, hull)
+    let hit = Hit {
+        mass: damage,
+        energy: damage,
+        passes_shields: false,
+    };
+    damage::apply_spared(reserves, hit, hull, rule, condition != Condition::Intact);
 }
 
 /// The velocity a shockwave centred on `centre` leaves a ship of `hull`
@@ -146,6 +120,7 @@ fn speed_limit(velocity: Vec2, top_speed: f32) -> Vec2 {
 mod tests {
     use super::*;
     use crate::combat::hull::NovaDisable;
+    use crate::reserves::Gauge;
 
     fn of_mass(mass: f32) -> HullSpec {
         HullSpec {
