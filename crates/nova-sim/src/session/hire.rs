@@ -64,7 +64,7 @@ use crate::landing::StellarFlags;
 use crate::pilot::Escort;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::table;
-use crate::wares::{self, Roll};
+use crate::wares::Roll;
 
 /// A port the session keeps, shared: equal to another when it is the
 /// same one.
@@ -178,14 +178,11 @@ impl Session {
         let bar = Bar {
             ships: &self.ships,
             site: &site,
-            contributed: wares::contributed(
-                self.fields.contribute,
-                &self.pilot.outfits,
-                &self.outfits,
-            ),
+            contributed: self.contributed(),
             cash: self.pilot.cash,
             room: self.pilot.escort_count() < MAX_ESCORTS,
             terms: &*self.hire_terms.0,
+            rank_mult: self.price_mults().second,
             control_bits: &*self.control_bits.0,
             pilot: &facts,
             rules: self.rules,
@@ -197,7 +194,7 @@ impl Session {
     }
 
     /// The stellar the ship is docked at, if it has a bar.
-    fn bar_site(&self) -> Option<LandingSite> {
+    pub(super) fn bar_site(&self) -> Option<LandingSite> {
         let stellar = self.landed?;
         self.sites
             .iter()
@@ -221,7 +218,10 @@ impl Session {
             .cloned()
             .ok_or(HireRefusal::NotListed)?;
         let site = self.bar_site().ok_or(HireRefusal::NoBar)?;
-        let fee = self.hire_terms.0.charge(&record, &site, self.pilot.cash);
+        let fee =
+            self.hire_terms
+                .0
+                .charge(&record, &site, self.price_mults().second, self.pilot.cash);
         let wage = self.hire_terms.0.wage(&record);
         let reserves = table::kind(&record, &self.outfits, &self.arsenal)
             .stats
@@ -343,11 +343,11 @@ mod tests {
     }
 
     impl HireTerms for FakeTerms {
-        fn fee(&self, _ship: &ShipRecord, _site: &LandingSite) -> i64 {
+        fn fee(&self, _ship: &ShipRecord, _site: &LandingSite, _mult: f32) -> i64 {
             self.fee
         }
 
-        fn charge(&self, _ship: &ShipRecord, _site: &LandingSite, _cash: i64) -> i64 {
+        fn charge(&self, _ship: &ShipRecord, _site: &LandingSite, _mult: f32, _cash: i64) -> i64 {
             self.charge
         }
 
@@ -382,7 +382,7 @@ mod tests {
                 id: ShipId(129),
                 name: "Ship 129".to_owned(),
                 short_name: "Ship\\n129".to_owned(),
-                fee: nova.fee(&record, &bar()),
+                fee: nova.fee(&record, &bar(), 1.0),
                 wage: nova.wage(&record),
                 specs: crate::shipyard::ShipSpecs {
                     fields: FAST,

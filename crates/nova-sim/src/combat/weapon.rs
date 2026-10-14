@@ -281,6 +281,31 @@ pub struct WeaponSpec {
     /// The ticks a shot of it flies before it can hit a stellar: its
     /// `ProxSafety`, none when that is below none.
     pub prox_safety: u32,
+    /// The weapon whose rounds the secondary weapon line counts for it,
+    /// if it counts any ([`line_count`]).
+    pub line_count: Option<WeaponId>,
+}
+
+/// The weapon whose rounds the status bar's secondary weapon line counts
+/// for `record`, as `_DrawStatusWeap` (@0x4c00a) picks it: none, and the
+/// line is the name alone, when its `AmmoType` is -1, its `Flags2` has
+/// [`HIDES_COUNT`], or its `AmmoType` is [`FUEL_AMMO`] or below
+/// (@0x4c180-0x4c19d); the weapon's own when its `AmmoType` is above 255
+/// read unsigned (so -999 to -2 too) or its `Guidance` is 99, a fighter
+/// bay's (@0x4c1e7-0x4c1f2); otherwise its ammunition's, `wëap`
+/// 128 + `AmmoType` (@0x4c1f4).
+#[must_use]
+pub fn line_count(record: &WeaponRecord) -> Option<WeaponId> {
+    let ammo = record.ammo_type;
+    if ammo == UNLIMITED_AMMO || record.flags2 & HIDES_COUNT != 0 || ammo <= FUEL_AMMO {
+        None
+    } else if ammo.cast_unsigned() > LAST_AMMO_TYPE.cast_unsigned()
+        || record.guidance == FIGHTER_BAY
+    {
+        Some(record.id)
+    } else {
+        Some(WeaponId(FIRST_AMMO_WEAPON + ammo))
+    }
 }
 
 /// `Flags`: fired by the second trigger.
@@ -321,6 +346,9 @@ pub const AI_WONT_USE: u16 = 0x0100;
 /// `Flags2`: it fires while its ship is cloaked, and no other weapon does
 /// (`_WeaponHasAmmo` @0xb9a2-0xba01).
 pub const FIRES_CLOAKED: u16 = 0x4000;
+/// `Flags2`: the secondary weapon's line shows no count of its rounds
+/// (`_DrawStatusWeap` @0x4c190).
+pub const HIDES_COUNT: u16 = 0x0040;
 /// `GuidedTurn` is in tenths of a degree.
 pub const GUIDED_TURN_PER_DEGREE: f32 = 10.0;
 
@@ -365,6 +393,7 @@ impl WeaponSpec {
             carried,
             max_ammo: count(record.max_ammo),
             prox_safety: count(record.prox_safety),
+            line_count: line_count(record),
         }
     }
 
@@ -875,5 +904,61 @@ mod tests {
         assert_eq!(bay(144, -1).max_ammo, 0);
         assert_eq!(bay(144, 0).max_ammo, 0);
         assert_eq!(bay(144, 2).max_ammo, 2);
+    }
+
+    /// The rounds the secondary weapon line counts for a weapon of
+    /// `ammo_type`, `flags2` and `guidance`, `wëap` 150.
+    fn counted(ammo_type: i16, flags2: u16, guidance: i16) -> Option<WeaponId> {
+        let record = WeaponRecord {
+            guidance,
+            ammo_type,
+            flags2,
+            ..weapon(150)
+        };
+        let count = line_count(&record);
+        assert_eq!(WeaponSpec::new(&record).line_count, count, "kept");
+        count
+    }
+
+    #[test]
+    fn an_unlimited_weapon_shows_no_count() {
+        assert_eq!(counted(-1, 0, -1), None);
+    }
+
+    #[test]
+    fn flags2_0x0040_hides_the_count() {
+        assert_eq!(counted(12, 0x0040, -1), None);
+        assert_eq!(counted(12, 0xffff, 1), None);
+        assert_eq!(counted(12, !0x0040, 1), Some(WeaponId(140)));
+        assert_eq!(HIDES_COUNT, 0x0040);
+    }
+
+    #[test]
+    fn an_ammo_type_of_minus_1000_or_below_shows_no_count() {
+        assert_eq!(counted(-1000, 0, -1), None);
+        assert_eq!(counted(-1001, 0, -1), None);
+        assert_eq!(counted(i16::MIN, 0, 99), None);
+    }
+
+    #[test]
+    fn an_ammo_type_of_0_to_255_counts_its_ammunition() {
+        assert_eq!(counted(0, 0, 1), Some(WeaponId(128)));
+        assert_eq!(counted(12, 0, 1), Some(WeaponId(140)));
+        assert_eq!(counted(255, 0, 1), Some(WeaponId(383)));
+    }
+
+    #[test]
+    fn an_ammo_type_above_255_unsigned_counts_the_weapons_own() {
+        assert_eq!(counted(256, 0, 1), Some(WeaponId(150)));
+        assert_eq!(counted(300, 0, -1), Some(WeaponId(150)));
+        assert_eq!(counted(-999, 0, -1), Some(WeaponId(150)));
+        assert_eq!(counted(-2, 0, -1), Some(WeaponId(150)));
+    }
+
+    #[test]
+    fn guidance_99_counts_the_weapons_own() {
+        assert_eq!(counted(12, 0, 99), Some(WeaponId(150)));
+        assert_eq!(counted(144, 0, 99), Some(WeaponId(150)), "a bay");
+        assert_eq!(counted(12, 0, 98), Some(WeaponId(140)));
     }
 }

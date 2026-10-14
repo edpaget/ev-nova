@@ -25,8 +25,9 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::flight::{heading_of, shortest_turn};
 use nova_sim::{ShipId, ShipState, SystemId, Vec2};
-use nova_view::flight::FlightView;
-use nova_view::flight::hud::NAV_NO_DESTINATION;
+use nova_view::flight::hud::NAV_OFF;
+use nova_view::flight::radar::radar_offset;
+use nova_view::flight::{FlightOverlays, FlightView};
 use nova_view::{Blend, Key, Point};
 
 /// A 1024x768 window at scale 1: window pixels are logical units.
@@ -99,13 +100,14 @@ const SHIELD: u32 = 0x0000_00FF;
 const ARMOR: u32 = 0x00FF_0000;
 const FUEL: u32 = 0x00FF_FF00;
 const RADAR: u32 = 0x0000_FF00;
+const DIM_RADAR: u32 = 0x0000_8000;
 
 /// Stock `ïntf` 128's areas and font, over background `PICT` 700.
 fn interface() -> Vec<u8> {
     let mut bytes = vec![0; Interface::SIZE.expect("fixed")];
     put_u32s(&mut bytes, 0x00, &[0x00FF_FFFF, 0x0080_8080]);
     put_i16s(&mut bytes, 0x08, &[8, 8, 184, 184]);
-    put_u32s(&mut bytes, 0x10, &[RADAR, 0x0000_8000]);
+    put_u32s(&mut bytes, 0x10, &[RADAR, DIM_RADAR]);
     put_i16s(&mut bytes, 0x18, &[199, 35, 206, 184]);
     put_u32s(&mut bytes, 0x20, &[SHIELD]);
     put_i16s(&mut bytes, 0x24, &[216, 35, 223, 184]);
@@ -113,6 +115,8 @@ fn interface() -> Vec<u8> {
     put_i16s(&mut bytes, 0x30, &[234, 35, 241, 184]);
     put_u32s(&mut bytes, 0x38, &[FUEL, 0x0080_8000]);
     put_i16s(&mut bytes, 0x40, &[254, 8, 286, 184]);
+    put_i16s(&mut bytes, 0x48, &[300, 8, 315, 184]);
+    put_i16s(&mut bytes, 0x50, &[330, 8, 442, 184]);
     bytes[0x60..0x66].copy_from_slice(b"Geneva");
     put_i16s(&mut bytes, 0xA0, &[12]);
     put_i16s(&mut bytes, 0xA4, &[700]);
@@ -249,10 +253,16 @@ impl Harness {
         Self::over(fps, data(with_character))
     }
 
-    /// The app on the ship browser over `data`, before any frame.
+    /// The app on the ship browser over `data`, before any frame, its
+    /// flights drawing the developer's title and help line, which these
+    /// tests read the frame's shape and the system shown by.
     fn over(fps: u64, data: Rc<GameData>) -> Self {
+        let screen = start_screen(Rc::clone(&data)).with_flight_overlays(FlightOverlays {
+            title: true,
+            help: true,
+        });
         Self {
-            app: App::new(&FakeWindow, Rc::clone(&data), start_screen(data)),
+            app: App::new(&FakeWindow, data, screen),
             gpu: RecordingGpu::new(),
             fps,
             frames: 0,
@@ -428,9 +438,11 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
 
     let first = harness.frame();
     // The stars; the two stellars, then their names; the ship; the title
-    // and help lines; then the HUD: the status bar's picture, two radar
-    // dots and three bars, then the nav area's "No Destination" (never the
-    // system's name), the date, and the target and secondary weapon lines.
+    // and help lines; then the HUD: the status bar's picture, the radar's
+    // two small ovals (4 pixels each) and the player's pixel, and three
+    // bars, then the nav area's "Nav System Off" (never the
+    // system's name), and the target and secondary weapon lines. This
+    // `ïntf` has no `CargoArea`, so neither the cargo lines nor the date.
     let shape = shape(&first);
     assert_eq!(shape[0].0, "solid");
     assert!(shape[0].1 > 0, "stars");
@@ -442,8 +454,8 @@ fn f_enters_flight_with_the_first_chärs_ship_in_its_first_system_that_exists() 
             ("sprites", 1),
             ("text", 2),
             ("sprites", 1),
-            ("solid", 5),
-            ("text", 4)
+            ("solid", 12),
+            ("text", 3)
         ]
     );
     let start = quads(&first);
@@ -492,14 +504,38 @@ fn submitted(raw: u32) -> [f32; 4] {
     [r, g, b, 255].map(|c| f32::from(c) / 255.0)
 }
 
-/// Where the radar shows a stellar at `stellar` to a ship drawn at
-/// `shown`: the stock radar's centre, (926, 96) on screen, plus a
-/// sixteenth of the offset.
-fn on_radar(shown: Point, stellar: Point) -> Point {
-    Point::new(
-        926.0 + (stellar.x - shown.x) / 16.0,
-        96.0 + (stellar.y - shown.y) / 16.0,
-    )
+/// The 1-pixel quads the radar frames a small stellar at `stellar` with,
+/// to a ship drawn at `shown`: a 2×2 oval about the stock radar's centre,
+/// (926, 96) on screen, plus a thirty-second of the offset.
+fn on_radar(shown: Point, stellar: Point) -> Vec<Rect> {
+    let x = radar_offset(stellar.x, shown.x, 926) as f32;
+    let y = radar_offset(stellar.y, shown.y, 96) as f32;
+    [(x - 1.0, y - 1.0), (x, y - 1.0), (x - 1.0, y), (x, y)]
+        .map(|(x, y)| pixel(x, y))
+        .to_vec()
+}
+
+/// The pixel at (`x`, `y`).
+fn pixel(x: f32, y: f32) -> Rect {
+    Rect {
+        x,
+        y,
+        w: 1.0,
+        h: 1.0,
+    }
+}
+
+/// The radar's ovals drawn: the first 8 HUD quads' rects, in the dim
+/// radar colour.
+#[allow(clippy::float_cmp)]
+fn ovals(solids: &[SolidQuad]) -> Vec<Rect> {
+    solids[..8]
+        .iter()
+        .map(|quad| {
+            assert_eq!(quad.color, submitted(DIM_RADAR));
+            span(quad)
+        })
+        .collect()
 }
 
 #[test]
@@ -520,15 +556,21 @@ fn the_hud_is_drawn_while_flying() {
         }
     );
 
-    // A radar dot for each stellar, then the full shield, armour and fuel
-    // bars at their ïntf areas, moved to the bar.
+    // A small oval for each stellar, dim, the player's pixel at the
+    // centre, bright, then the full shield, armour and fuel bars at their
+    // ïntf areas, moved to the bar.
     let solids = hud_solids(&first);
-    assert_eq!(solids.len(), 5, "{solids:?}");
-    for (dot, &stellar) in solids.iter().zip(&STELLARS) {
-        assert_eq!(dot.color, submitted(RADAR));
-        assert_eq!(centre(span(dot)), on_radar(Point::new(0.0, 0.0), stellar));
-    }
-    let bars: Vec<(Rect, [f32; 4])> = solids[2..].iter().map(|q| (span(q), q.color)).collect();
+    assert_eq!(solids.len(), 12, "{solids:?}");
+    let still = |stellar| on_radar(Point::new(0.0, 0.0), stellar);
+    assert_eq!(
+        ovals(&solids),
+        [still(STELLARS[0]), still(STELLARS[1])].concat()
+    );
+    assert_eq!(
+        (span(&solids[8]), solids[8].color),
+        (pixel(926.0, 96.0), submitted(RADAR))
+    );
+    let bars: Vec<(Rect, [f32; 4])> = solids[9..].iter().map(|q| (span(q), q.color)).collect();
     let bar = |top: f32| Rect {
         x: 865.0,
         y: top,
@@ -545,38 +587,39 @@ fn the_hud_is_drawn_while_flying() {
     );
 
     // The nav area comes last but for the target and secondary weapon
-    // lines, with nothing selected and no course: "No Destination", not
-    // the system's name; then the date, the `chär`'s unset start (1
-    // January of year 0) without affixes.
+    // lines, with nothing selected and no course: "Nav System Off", not
+    // the system's name. With no `CargoArea` there is no room for the
+    // date.
     let Some(Batch::Text(runs)) = first.batches.last() else {
         panic!("text last: {:?}", shape(&first))
     };
     let lines: Vec<&str> = runs.iter().map(|run| run.text.as_str()).collect();
-    assert_eq!(
-        lines,
-        [
-            NAV_NO_DESTINATION,
-            "January 1, 0",
-            "No Target",
-            "No Secondary Weapon"
-        ]
-    );
-    assert_eq!(runs[0].origin_px, (838.0, 254.0));
+    assert_eq!(lines, [NAV_OFF, "No Target", "No Secondary Weapon"]);
+    // "Nav System Off" on its baseline 22 below the nav area's top
+    // (254), its top 12 (the bar's font size) above that; at the area's
+    // left, as this harness measures no text.
+    assert_eq!(runs[0].origin_px, (838.0, 264.0));
     assert!(!lines.contains(&"Alpha"), "{lines:?}");
 
-    // Flying up moves the dots down the radar, with the ship as drawn.
+    // Flying up moves the ovals down the radar, with the ship as drawn
+    // when the radar last refreshed: within the last 8 ticks, 16 frames.
     harness.hold(&[Key::Up]);
-    let flown = harness.run(1.0);
-    let shown = harness.flight().shown_position();
-    assert!(shown.y < -40.0, "{shown:?}");
-    let moved = hud_solids(&flown);
-    for ((now, was), &stellar) in moved.iter().zip(&solids).zip(&STELLARS) {
-        let (now, was) = (centre(span(now)), centre(span(was)));
-        assert!(now.y > was.y, "{was:?} to {now:?}");
-        let expected = on_radar(shown, stellar);
-        assert!(distance(now, expected) < 1e-3, "{now:?}, not {expected:?}");
+    let mut shown = Vec::new();
+    let mut flown = harness.frame();
+    for _ in 1..60 {
+        shown.push(harness.flight().shown_position());
+        flown = harness.frame();
     }
-    assert_eq!(moved[2..], solids[2..], "the bars stay full");
+    shown.push(harness.flight().shown_position());
+    assert!(shown[59].y < -40.0, "{shown:?}");
+    let moved = hud_solids(&flown);
+    let now = ovals(&moved);
+    assert!(now[0].y > ovals(&solids)[0].y, "moved down");
+    let refreshed = shown[44..]
+        .iter()
+        .any(|&at| now == [on_radar(at, STELLARS[0]), on_radar(at, STELLARS[1])].concat());
+    assert!(refreshed, "{now:?} from none of {:?}", &shown[44..]);
+    assert_eq!(moved[8..], solids[8..], "the player's pixel and the bars");
 }
 
 #[test]

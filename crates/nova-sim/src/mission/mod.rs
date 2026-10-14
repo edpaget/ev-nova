@@ -297,28 +297,27 @@
 //!   key does. In flight the player is told "Mission failed." unless the
 //!   mission has `Flags` 0x0400, else "Cargo jettisoned." or "Non-mission
 //!   cargo jettisoned."; landed, nothing. `Flags` 0x0080 is never read,
-//!   as the Bible says. The jettison's sound (@0x3e31a-0x3e33d) is not
-//!   played.
-//! - **Scan** ([`scan`], `_ScanPlayer` @0x7e46e): an interceptor that has
-//!   looked the player over scans it, when its government has a
-//!   `SmugPenalty`, on a draw of `Rand(100)` no higher than 75. The first
-//!   slot whose typed cargo aboard shares a `ScanMask` bit with the
-//!   government's decides: with `Flags` 0x0020, and not failed already,
-//!   the mission fails at once; otherwise the player is caught smuggling
-//!   and fined the government's `ScanFine` (below none, that percent of
-//!   the cash in hundreds, at least 1), the cash floored at none. No
-//!   legal record changes. Only interceptors inspect here, where the
-//!   original's warships may scan too.
+//!   as the Bible says. In flight it also sounds `snd ` 154
+//!   (@0x3e31a-0x3e33d) and drops cargo boxes behind the player and its
+//!   trader escorts (see [`cargo_box`](crate::cargo_box)).
+//! - **Scan** ([`scan`], `_ScanPlayer` @0x7e46e): a warship or an
+//!   interceptor that has looked the player over scans it, when its
+//!   government has a `SmugPenalty`, within reach, on a draw of
+//!   `Rand(100)` no higher than 75 (see [`scan`](crate::scan) for the
+//!   gates and the jump-timing check). The first slot whose typed cargo
+//!   aboard shares a `ScanMask` bit with the government's decides: with
+//!   `Flags` 0x0020, and not failed already, the mission fails at once,
+//!   sounding `snd ` 151 unless it is hidden; otherwise the player is
+//!   caught smuggling and fined the government's `ScanFine` (below none,
+//!   that percent of the cash in hundreds, at least 1), the cash floored
+//!   at none, sounding `snd ` 154. Either way the scanner attacks the
+//!   player. No legal record changes. Only interceptors inspect here,
+//!   where the original's warships may scan too. The scan then goes on
+//!   to the player's illegal `jünk` and outfits (see
+//!   [`scan`](crate::scan)'s "Contraband").
 //!
-//! Not built here: the status bar's cargo display
-//! (rdm:phase/missions/phase-18-status-bar-cargo), the jettison's boxes
-//! (rdm:phase/missions/phase-19-jettison-boxes), mission cargo in the jünk
-//! step and the ship-change trim
-//! (rdm:phase/missions/phase-20-mission-cargo-in-junk-and-trim), the scan
-//! of illegal `jünk` and outfits and its jump-timing check
-//! (rdm:phase/missions/phase-21-illegal-cargo-scanning), the player info
-//! dialog's Jettison button, and the plunder of the player's cargo, which
-//! waits for NPC boarding.
+//! Not built here: the player info dialog's Jettison button, and the
+//! plunder of the player's cargo, which waits for NPC boarding.
 //!
 //! # Screens
 //!

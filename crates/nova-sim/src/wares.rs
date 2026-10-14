@@ -18,8 +18,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::catalog::{LandingSite, OutfitId, OutfitRecord, ShipId};
+use crate::catalog::{CronRecord, LandingSite, OutfitId, OutfitRecord, RankRecord, ShipId};
 use crate::chance::Chance;
+use crate::cron;
+use crate::pilot::Pilot;
+use crate::rank;
 
 /// The `BuyRandom` or `HireRandom` from which an item is always on offer:
 /// the original's loader clamps above it to it (`_LoadObjectData`).
@@ -219,14 +222,42 @@ pub fn ship_tech_allows(tech_level: i16, site: &LandingSite) -> bool {
     tech_level >= 0 && by_tech_level(tech_level, site)
 }
 
-/// The `Contribute` bits of a ship contributing `ship`, carrying `owned`:
-/// the ship's, and those of each outfit owned that has a record.
+/// Everything whose `Contribute` bits the player may hold
+/// (`_GetPlayerContributeBits` @0x76b2): the ship class flown, the
+/// `oütf`s, the `crön`s and the `ränk`s.
+#[derive(Clone, Copy, Debug)]
+pub struct Contributors<'a> {
+    /// The ship class's `Contribute` bits.
+    pub ship: u64,
+    /// Every `oütf`.
+    pub outfits: &'a [OutfitRecord],
+    /// Every `crön`.
+    pub crons: &'a [CronRecord],
+    /// Every `ränk`.
+    pub ranks: &'a [RankRecord],
+}
+
+/// The `Contribute` bits `pilot` holds, `by` the ship flown and the
+/// records: the ship's, those of each outfit owned that has a record, and
+/// those of each crön running outside its holdoffs that has a record
+/// ([`cron::contributes`](crate::cron::contributes)), and those of each
+/// active rank that has a record, whatever its government
+/// ([`rank::contributed`](crate::rank::contributed)).
 #[must_use]
-pub fn contributed(ship: u64, owned: &BTreeMap<OutfitId, u16>, records: &[OutfitRecord]) -> u64 {
-    owned
+pub fn contributed(by: &Contributors<'_>, pilot: &Pilot) -> u64 {
+    let outfits = pilot
+        .outfits
         .keys()
-        .filter_map(|id| records.iter().find(|record| record.id == *id))
-        .fold(ship, |bits, record| bits | record.contribute)
+        .filter_map(|id| by.outfits.iter().find(|record| record.id == *id))
+        .map(|record| record.contribute);
+    let crons = pilot
+        .crons
+        .iter()
+        .filter(|(_, state)| cron::contributes(**state))
+        .filter_map(|(id, _)| by.crons.iter().find(|record| record.id == *id))
+        .map(|record| record.contribute);
+    outfits.chain(crons).fold(by.ship, |bits, more| bits | more)
+        | rank::contributed(by.ranks, &pilot.ranks)
 }
 
 /// Whether `require` is met by the bits `contributed`: each of its bits is
@@ -293,8 +324,10 @@ pub fn in_display_order<T>(rows: &mut [T], key: impl Fn(&T) -> (i16, i16)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::{CronId, RankId, RankRecord};
     use crate::chance::NeverFires;
-    use crate::testkit::{Scripted, outfit, planet};
+    use crate::cron::CronState;
+    use crate::testkit::{Scripted, catalog, cron, outfit, planet, rank};
 
     #[test]
     fn a_ton_count_takes_the_singular_unit_at_exactly_one() {
@@ -481,15 +514,138 @@ mod tests {
                 ..outfit(129, &[])
             },
         ];
-        let owned: BTreeMap<OutfitId, u16> = [(OutfitId(128), 1), (OutfitId(999), 2)]
-            .into_iter()
+        let by = |ship| Contributors {
+            ship,
+            outfits: &records,
+            crons: &[],
+            ranks: &[],
+        };
+        let mut pilot = owning(&[(128, 1), (999, 2)]);
+        assert_eq!(contributed(&by(0x1), &pilot), 0x11);
+        pilot.outfits.clear();
+        assert_eq!(contributed(&by(0x1), &pilot), 0x1);
+        let both = owning(&[(128, 1), (129, 1)]);
+        assert_eq!(contributed(&by(0), &both), 0x0100_0000_0010);
+    }
+
+    /// What `pilot` holds with `crons` set to `states`, from a ship of no
+    /// bits, crön 128 contributing 0x4 and crön 129 0x8.
+    fn with_crons(states: &[(i16, i16, i16)]) -> u64 {
+        let crons = [
+            CronRecord {
+                contribute: 0x4,
+                ..cron(128)
+            },
+            CronRecord {
+                contribute: 0x8,
+                ..cron(129)
+            },
+        ];
+        let by = Contributors {
+            ship: 0,
+            outfits: &[],
+            crons: &crons,
+            ranks: &[],
+        };
+        let mut pilot = owning(&[]);
+        pilot.crons = states
+            .iter()
+            .map(|&(id, days, holdoff)| (CronId(id), CronState { days, holdoff }))
             .collect();
-        assert_eq!(contributed(0x1, &owned, &records), 0x11);
-        assert_eq!(contributed(0x1, &BTreeMap::new(), &records), 0x1);
-        let both: BTreeMap<OutfitId, u16> = [(OutfitId(128), 1), (OutfitId(129), 1)]
-            .into_iter()
-            .collect();
-        assert_eq!(contributed(0, &both, &records), 0x0100_0000_0010);
+        contributed(&by, &pilot)
+    }
+
+    #[test]
+    fn a_running_cron_contributes_its_bits() {
+        assert_eq!(with_crons(&[(128, 3, 0)]), 0x4);
+        assert_eq!(with_crons(&[(128, 0, -1)]), 0x4, "holdoff below 0");
+        assert_eq!(with_crons(&[(128, 3, 0), (129, 1, 0)]), 0xC);
+    }
+
+    #[test]
+    fn bits_given_twice_are_held_once() {
+        let outfits = [OutfitRecord {
+            contribute: 0x5,
+            ..outfit(128, &[])
+        }];
+        let crons = [CronRecord {
+            contribute: 0x6,
+            ..cron(128)
+        }];
+        let by = Contributors {
+            ship: 0x3,
+            outfits: &outfits,
+            crons: &crons,
+            ranks: &[],
+        };
+        let mut pilot = owning(&[(128, 1)]);
+        pilot.crons.insert(
+            CronId(128),
+            CronState {
+                days: 1,
+                holdoff: 0,
+            },
+        );
+        assert_eq!(contributed(&by, &pilot), 0x7);
+    }
+
+    #[test]
+    fn a_cron_holding_off_contributes_nothing() {
+        assert_eq!(with_crons(&[(128, 3, 2)]), 0, "in its pre-holdoff");
+        assert_eq!(with_crons(&[(128, 3, 1)]), 0, "a day of pre-holdoff");
+        assert_eq!(with_crons(&[(129, -1, 3)]), 0, "in its post-holdoff");
+        assert_eq!(with_crons(&[(128, 3, 2), (129, 1, 0)]), 0x8);
+    }
+
+    /// What `pilot` holds with ranks `active`, from a ship of no bits,
+    /// rank 200 of government 128 contributing 0x10 and rank 201,
+    /// unaffiliated, 0x21, a bit the ship gives too.
+    fn with_ranks(active: &[i16]) -> u64 {
+        let ranks = [
+            RankRecord {
+                contribute: 0x10,
+                affil_govt: Some(crate::catalog::GovtId(128)),
+                ..rank(200)
+            },
+            RankRecord {
+                contribute: 0x21,
+                ..rank(201)
+            },
+        ];
+        let by = Contributors {
+            ship: 0x1,
+            outfits: &[],
+            crons: &[],
+            ranks: &ranks,
+        };
+        let mut pilot = owning(&[]);
+        pilot.ranks = active.iter().copied().map(RankId).collect();
+        contributed(&by, &pilot)
+    }
+
+    #[test]
+    fn an_active_rank_contributes_its_bits_whatever_its_government() {
+        assert_eq!(with_ranks(&[200]), 0x11);
+        assert_eq!(with_ranks(&[201]), 0x21, "the ship's bit held once");
+        assert_eq!(with_ranks(&[200, 201]), 0x31);
+    }
+
+    #[test]
+    fn an_inactive_rank_or_one_with_no_record_contributes_nothing() {
+        assert_eq!(with_ranks(&[]), 0x1);
+        assert_eq!(with_ranks(&[250]), 0x1);
+    }
+
+    #[test]
+    fn a_cron_whose_record_is_gone_contributes_nothing() {
+        assert_eq!(with_crons(&[(300, 3, 0)]), 0);
+    }
+
+    /// A new pilot owning `owned`, each an outfit ID with its count.
+    fn owning(owned: &[(i16, u16)]) -> Pilot {
+        let mut pilot = Pilot::new(&catalog(), "").expect("starts");
+        pilot.outfits = owned.iter().map(|&(id, n)| (OutfitId(id), n)).collect();
+        pilot
     }
 
     #[test]

@@ -102,6 +102,16 @@ pub enum DrawCommand {
         /// The rectangle's height.
         height: f32,
     },
+    /// A picture repeated edge to edge from the screen's origin, (0, 0),
+    /// as QuickDraw's `FillCRect` tiles a pattern from the port's origin,
+    /// and drawn only inside `area`, untinted. An area with no drawable
+    /// size draws nothing.
+    TiledPicture {
+        /// The picture.
+        image: ImageKey,
+        /// Where it shows.
+        area: Bounds,
+    },
     /// A run of text.
     Text {
         /// The text.
@@ -224,6 +234,11 @@ impl DrawList {
             width,
             height,
         })
+    }
+
+    /// Appends a [`DrawCommand::TiledPicture`].
+    pub fn tiled_picture(&mut self, image: ImageKey, area: Bounds) -> &mut Self {
+        self.push(DrawCommand::TiledPicture { image, area })
     }
 
     /// Appends a [`DrawCommand::Text`] in [`Font::Geneva`].
@@ -569,6 +584,26 @@ mod tests {
                 top_left: at(-3.5, 20.0),
                 width: 188.25,
                 height: 223.5
+            }
+        );
+        assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn a_tiled_picture_keeps_its_area() {
+        let area = Bounds {
+            min: at(838.0, 8.0),
+            max: at(1014.0, 184.0),
+        };
+        let mut list = DrawList::new();
+        list.tiled_picture(ImageKey::pattern(130), area)
+            .picture(ImageKey::picture(1), at(0.0, 0.0));
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        assert_eq!(
+            *commands[0],
+            DrawCommand::TiledPicture {
+                image: ImageKey::pattern(130),
+                area
             }
         );
         assert_eq!(list.len(), 2);

@@ -11,7 +11,7 @@
 //! | `N` | @0x158d9-0x159ad | as `M`, but the position and velocity are never touched, and `_dontMovePlayerAfterLanding` (0x316951) is set |
 //! | both | @0x15807-0x1583e | every active ship whose parent is the player (+0x9a 0: its escorts and fighters out) takes the new system; the others keep the old one, and `_DoPlayGameWork` runs only the ships in the player's system, so they stay behind |
 //! | both, landed | | `_dockedPortMissions` is filled with -1, and that is all |
-//! | both, in flight | @0x158a4 | the shots, cargo boxes, explosions, smoke and asteroids are killed, the stellar sprites rebuilt, and `_MissionHandlePlayerEnteredNewSystem` runs |
+//! | both, in flight | @0x158a4 | the shots, cargo boxes (here the entry table's `Reset::Boxes`), explosions, smoke and asteroids are killed, the stellar sprites rebuilt, and `_MissionHandlePlayerEnteredNewSystem` runs |
 //! | `Q` | @0x15bee-0x15c6c | `_absquatulateStr` (0x1635a0) becomes one of `STR#` `xxx`'s strings, the raw ID, with no range check, drawn as `T` draws (`_GetRandomIndString`: `Rand(count) + 1`); only inside a mission's set expression (`_currentMissionIndexForSetParser` 0-15, set by `_EvalCurrentMissionBitSetString` @0x99a6b alone, and -1 after it @0x99a79) is it run through `_MungeBriefing(0, slot)` (@0x15c37-0x15c4b), so a hook's text, and `OnRefuse`'s, is shown as it is. A missing or empty list, or an empty pick, leaves it empty (strcpy over an earlier one) |
 //!
 //! Neither calls `_SetupShipsInSystem` or `_AutoSetExploration`, whose
@@ -264,8 +264,14 @@ impl Session {
     /// matches (see the [`story`](crate::story) module's "Dispatch").
     /// Once nothing is left, the ship goals of each mission accepted in
     /// flight are checked, and what that runs settles in turn (see the
-    /// `mission_ships` module). Whoever runs set expressions calls it
-    /// after each input and tick, before saving.
+    /// `mission_ships` module). Then, when a take-off, a gate exit or a
+    /// jump's arrival made it due, the blessing table is refreshed again
+    /// (see the `ranks` module). Last, by the other reading of
+    /// [`RuleKey::VisibilityRefresh`], when a set expression changed the
+    /// pilot since the last settling, the galaxy is refreshed (see the `story` module's
+    /// "Visibility and governments"); an idle settling evaluates nothing.
+    /// Whoever runs set expressions calls it after each input and tick,
+    /// before saving.
     pub fn settle_script(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog + ?Sized),
@@ -279,6 +285,12 @@ impl Session {
             self.settle_story(catalog, &mut &mut *chance, &mut settled);
             let due = std::mem::take(&mut self.goal_checks_due);
             if due.is_empty() {
+                self.settle_blessing();
+                if std::mem::take(&mut self.galaxy_stale)
+                    && self.rules.source_for(RuleKey::VisibilityRefresh) == RuleSource::Bible
+                {
+                    self.refresh_galaxy(catalog);
+                }
                 return settled;
             }
             for slot in due {

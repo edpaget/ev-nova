@@ -726,7 +726,7 @@ mod tests {
         session.take_combat_events();
         launch(&mut session);
         assert_eq!(session.pilot().owned(VIPERS), 1, "a fighter launched");
-        assert_eq!(session.secondary_rounds(), Some(1));
+        assert_eq!(session.secondary_line_count(), Some(1), "the bay's own");
         let fighters = fleet_npcs(&session);
         assert_eq!(fighters.len(), 1);
         let fighter = &fighters[0];
@@ -1037,6 +1037,24 @@ mod tests {
     }
 
     #[test]
+    fn the_target_panel_labels_a_launched_fighter_a_fighter_and_an_escort_an_escort() {
+        let catalog = carrying();
+        let mut session = fleet(&catalog, 2, vec![warship(None)]);
+        launch(&mut session);
+        let labels: Vec<_> = fleet_npcs(&session)
+            .iter()
+            .map(|npc| (npc.ship, session.target_tag(npc)))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                (WARSHIP, Some(crate::TargetTag::Escort)),
+                (VIPER, Some(crate::TargetTag::Fighter))
+            ]
+        );
+    }
+
+    #[test]
     fn a_fighter_out_flies_beside_the_player_as_its_carrier() {
         let catalog = carrying();
         let session = fleet(&catalog, 0, vec![warship(None), out()]);
@@ -1138,7 +1156,7 @@ mod tests {
             npc.state.position = npc.state.position + Vec2::new(300.0, 0.0);
         }
         session.take_save_due();
-        assert_eq!(session.secondary_rounds(), Some(0));
+        assert_eq!(session.secondary_line_count(), Some(0));
         session.command_escorts(EscortGroup::All, EscortCommand::Dock);
         let ticks = until_docked(&mut session, &catalog, 600);
         assert!(ticks.is_some(), "{:?}", fleet_npcs(&session));
@@ -1152,7 +1170,7 @@ mod tests {
             "the rest re-form"
         );
         assert_eq!(session.pilot().owned(VIPERS), 2, "aboard again");
-        assert_eq!(session.secondary_rounds(), Some(2));
+        assert_eq!(session.secondary_line_count(), Some(2));
         assert!(!session.take_save_due(), "as rounds are");
     }
 

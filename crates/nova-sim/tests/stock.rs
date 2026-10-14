@@ -45,8 +45,8 @@ use nova_sim::{
     Chance, Clearance, Direction, DisasterId, DisasterRecord, GameDate, GateKind, Gauge, Good,
     GovtId, JunkId, LandOutcome, LandPress, LandingRefusal, NeverFires, OutfitId, OutfitMod,
     OutfitOrder, OutfitRefusal, Pilot, PilotCatalog, RechargeRefusal, Service, Session, ShipFields,
-    ShipId, ShipState, ShipStats, StartDate, StellarId, StellarShown, StringPatch, SystemId,
-    TypeWidth, Vec2, check_landing, landing_reach, services,
+    ShipId, ShipState, ShipStats, Standing, StartDate, StellarId, StellarShown, StringPatch,
+    SystemId, TypeWidth, Vec2, check_landing, cleared, landing_reach, services,
 };
 
 /// A new pilot starts with the first `chär`'s ship, cash, location (its
@@ -210,7 +210,15 @@ fn stock_landing_sites_follow_their_flags_and_min_status() {
         check_landing(
             &parked,
             kania,
-            |_| session.pilot().system_record(session.system()),
+            |site| cleared(
+                site,
+                Standing {
+                    record: session.pilot().system_record(session.system()),
+                    meets_require: true,
+                    ..Standing::default()
+                },
+                RuleSource::Engine,
+            ),
             landing_reach(
                 kania,
                 StellarShown {
@@ -696,15 +704,7 @@ fn the_viper_bays_magazine_is_its_vipers() {
 /// A new stock pilot, docked at Viking (`spöb` 157 in Tichel, `sÿst`
 /// 129, a jump from Kania), through a save that says so.
 fn at_viking(data: &GameData) -> Session {
-    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
-    let mut save: serde_json::Value =
-        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
-    save["system"] = serde_json::json!(129);
-    save["stellar"] = serde_json::json!(157);
-    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
-    let session = Session::fly(data, docked).expect("flies");
-    assert_eq!(session.landed(), Some(StellarId(157)), "docked at Viking");
-    session
+    at_viking_holding(data, &[])
 }
 
 /// Viking (tech level 4, special tech 81, 16, 12 and 10) sells the
@@ -741,9 +741,10 @@ fn vikings_shipyard_sells_what_its_tech_levels_and_buy_random_allow() {
         assert!(shipyard.row(id).is_none(), "{id:?}");
     }
     assert_eq!(
-        shipyard.trade_in,
-        2500 + 2500,
-        "a quarter of the Shuttle and half its Light Blaster"
+        shipyard.trade_in, 4700,
+        "a quarter of the Shuttle and half its Light Blaster, 5000, through the \
+         flux twice at the Shuttle's tech 3 against Viking's 4: 3 % off to 4850, \
+         then to 4704, rounded down to 4700"
     );
     assert_eq!(shipyard.cash, 25_000);
     assert_eq!(shipyard.current, ShipId(128));
@@ -838,8 +839,10 @@ fn stock_ships_are_named_without_their_designer_notes() {
     assert!(noted.is_empty(), "{noted:?}");
 }
 
-/// Buying the Heavy Shuttle (17,500 credits) trades the Shuttle and its
-/// Light Blaster in for 5,000 and leaves 12,500 credits, 15 tons of cargo
+/// Buying the Heavy Shuttle (17,500 credits, tech 4 at Viking's tech 4,
+/// so no discount) trades the Shuttle and its Light Blaster in for 4,700
+/// (5,000 through the flux twice at the Shuttle's tech 3) and leaves
+/// 25,000 + 4,700 - 17,500 = 12,200 credits, 15 tons of cargo
 /// space and 12 free, the Heavy Shuttle's own Light Blaster (`oütf` 128,
 /// 3 tons) owned and its mass on top of its `FreeMass`.
 #[test]
@@ -852,9 +855,9 @@ fn a_heavy_shuttle_trades_in_the_shuttle() {
     let bought = session
         .buy_ship(ShipId(129), "Kestrel", &mut Fires)
         .expect("bought");
-    assert_eq!((bought.price, bought.trade_in), (17_500, 5000));
+    assert_eq!((bought.price, bought.trade_in), (17_500, 4700));
     assert_eq!(session.ship(), ShipId(129));
-    assert_eq!(session.pilot().cash(), 12_500);
+    assert_eq!(session.pilot().cash(), 12_200);
     assert_eq!(session.capacity(), 15);
     assert_eq!(session.outfitter(&mut Fires).map(|o| o.free_mass), Some(12));
     let fields = data.ship_fields(ShipId(129)).expect("decodes");
@@ -886,7 +889,8 @@ fn a_new_stock_pilot_owns_its_shuttles_light_blaster() {
 /// 125,000) and the Cloaking Organ (269, 1,000,000). A Striker from a
 /// version 13 save owns its stock weapons once flown, and trades in for
 /// a quarter of its 1,000,000 and half of its 1,855,000 in outfits,
-/// 1,177,500. With 29 Wraithii fired it trades in for exactly the
+/// 1,177,500, shown 1,177,000 after the shipyard flux's rounding to a
+/// thousand. With 29 Wraithii fired it trades in for exactly the
 /// original's logged 1,163,000 ("Striker (262) has a trade-in value of
 /// 1163000"), the figure its loader's check reaches by counting a
 /// Wraithii for each Wraith Cannon (`_LoadObjectData` @0x7aca2).
@@ -927,8 +931,10 @@ fn the_strikers_stock_weapons_are_its_outfits_and_it_trades_in_as_the_original_l
         ids(&[(151, 1), (152, 30), (154, 2), (245, 1), (269, 1)])
     );
     let shipyard = session.shipyard(&mut Fires).expect("a shipyard");
-    assert_eq!(shipyard.trade_in, 250_000 + 1_855_000 / 2);
-    assert_eq!(shipyard.trade_in, 1_177_500);
+    // 250,000 + 1,855,000 / 2 = 1,177,500, which the flux rounds down
+    // to a thousand (the Striker is tech 19, so no discount, and the
+    // second pass changes nothing).
+    assert_eq!(shipyard.trade_in, 1_177_000);
 
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(session.pilot())).expect("JSON");
@@ -2101,6 +2107,7 @@ fn every_stock_sub_munition_reports_its_unimplemented_flags_once_when_released()
             diagnostics.retain(|diagnostic| match diagnostic {
                 SimDiagnostic::UnimplementedWeaponFlag { weapon, .. }
                 | SimDiagnostic::UnimplementedGuidance { weapon, .. } => *weapon != parent.id,
+                SimDiagnostic::CronRunsCapped { .. } => true,
             });
             (parent.id.0, diagnostics)
         })
@@ -2979,8 +2986,8 @@ fn the_shuttles_fee_and_wage_are_nova_hires() {
     let earth = stellar_site(&data, 128);
     assert_eq!((viking.tech_level, earth.tech_level), (4, 7));
     let nova = NovaHire::default();
-    assert_eq!(nova.fee(shuttle, &viking), 970);
-    assert_eq!(nova.fee(shuttle, &earth), 1000);
+    assert_eq!(nova.fee(shuttle, &viking, 1.0), 970);
+    assert_eq!(nova.fee(shuttle, &earth, 1.0), 1000);
     assert_eq!(nova.wage(shuttle), 100);
     let heavy = ships
         .iter()
@@ -2994,6 +3001,94 @@ fn the_shuttles_fee_and_wage_are_nova_hires() {
         .expect("Viking has a bar");
     let row = list.row(ShipId(128)).expect("the Shuttle is for hire");
     assert_eq!((row.fee, row.wage), (970, 100));
+}
+
+/// A stock pilot docked at Viking holding `ranks`.
+fn at_viking_holding(data: &GameData, ranks: &[i16]) -> Session {
+    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
+    let mut save: serde_json::Value =
+        serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+    save["system"] = serde_json::json!(129);
+    save["stellar"] = serde_json::json!(157);
+    save["ranks"] = serde_json::json!(ranks);
+    let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+    let session = Session::fly(data, docked).expect("flies");
+    assert_eq!(session.landed(), Some(StellarId(157)), "docked at Viking");
+    session
+}
+
+/// The Viper's price, the Heavy Shuttle's, the trade-in and the
+/// Shuttle's hire fee at `session`'s Viking.
+fn viking_prices(session: &mut Session) -> (i64, i64, i64, i64) {
+    let shipyard = session.shipyard(&mut Always).expect("a shipyard");
+    let price = |id| shipyard.row(ShipId(id)).expect("for sale").price;
+    let fee = session
+        .escorts_for_hire(&mut Always)
+        .expect("Viking has a bar")
+        .row(ShipId(128))
+        .expect("the Shuttle is for hire")
+        .fee;
+    (price(167), price(129), shipyard.trade_in, fee)
+}
+
+/// `ränk` 128, the Federation Naval Rank of Commander, has a `PriceMod`
+/// of 85 and the Federation's government (128), Viking's. A pilot docked
+/// at Viking (tech level 4) holding it pays 85 % in the shipyard: the
+/// Viper (80,000, tech 4) 68,000; the Heavy Shuttle (17,500, tech 4)
+/// 14,875, rounded down to 14,800. The Shuttle (tech 3) trades in raw for
+/// 5000, through the flux twice: 3 % off to 4850, × 0.85 to 4122, rounded
+/// to 4120; then 3 % off to 3996, × 0.85 to 3396, rounded to 3390. The
+/// Shuttle's hire fee is a tenth of 10,000 less 3 % (9700), × 0.85 to
+/// 8245, rounded to 8240: 824. By the engine's `rank_price_scope` the
+/// outfitter's prices are unchanged.
+#[test]
+fn a_federation_commander_pays_85_percent_at_viking() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let commander = PilotCatalog::ranks(&data)
+        .into_iter()
+        .find(|rank| rank.id == nova_sim::RankId(128))
+        .expect("ränk 128");
+    assert_eq!(commander.name, "Federation Naval Rank of Commander");
+    assert_eq!(commander.price_mod, 85);
+    assert_eq!(commander.affil_govt, Some(nova_sim::GovtId(128)));
+    let viking = stellar_site(&data, 157);
+    assert_eq!(
+        (viking.govt, viking.tech_level),
+        (Some(nova_sim::GovtId(128)), 4)
+    );
+    let viper = PilotCatalog::ships(&data)
+        .into_iter()
+        .find(|ship| ship.id == ShipId(167))
+        .expect("the Viper");
+    assert_eq!(
+        (viper.cost, viper.tech_level, viper.buy_random),
+        (80_000, 4, 100)
+    );
+
+    let mut unranked = at_viking_holding(&data, &[]);
+    assert_eq!(viking_prices(&mut unranked), (80_000, 17_500, 4700, 970));
+    let mut ranked = at_viking_holding(&data, &[128]);
+    assert_eq!(viking_prices(&mut ranked), (68_000, 14_800, 3390, 824));
+
+    let outfit_prices = |session: &mut Session| {
+        session
+            .outfitter(&mut Always)
+            .expect("Viking has an outfitter")
+            .rows
+            .iter()
+            .map(|row| (row.id, row.price, row.buy_price))
+            .collect::<Vec<_>>()
+    };
+    let unranked_outfits = outfit_prices(&mut unranked);
+    assert!(!unranked_outfits.is_empty());
+    assert_eq!(
+        outfit_prices(&mut ranked),
+        unranked_outfits,
+        "the engine's scope"
+    );
 }
 
 /// The bar's and the hire dialog's descriptions and strings are where
@@ -3691,6 +3786,7 @@ fn the_bounty_hunters_hail_quote_names_him_and_the_pilot() {
         pilot: "Stock",
         ship_type: "Shuttle",
         ship_name: "Kestrel",
+        ranks: nova_sim::rank::RankNames::none(),
     };
     assert_eq!(
         expand_tags(line, &tags),
@@ -3721,19 +3817,16 @@ fn the_bounty_hunter_gone_for_good_never_appears_again() {
 
 /// A new stock pilot in Kania, at rest over HG-Kania (`spöb` 1404, at
 /// (-70, 250)): docked there through a save that says so, then taken off,
-/// which leaves the ship at the gate's centre. Its record with the
-/// Hypergate government (183), and in Kania (`sÿst` 128, governed by 128,
-/// whose record landing reads by the engine), is 32767, HG-Kania's
-/// `MinStatus`: the original never lets a record pass 32767 (task
-/// `landing-minstatus-32767-never`), which `check_landing` does not model
-/// yet.
+/// which leaves the ship at the gate's centre. It holds rank 147, "Have
+/// Access to Hypergate System", which blesses landing at the Hypergate
+/// government's (183) stellars: no record clears HG-Kania's `MinStatus`
+/// of 32767 (`_HandlePlayerDockRequest` @0x67915).
 fn over_hg_kania(data: &GameData) -> Session {
-    let mut pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
-    pilot.set_legal_record(GovtId(183), 32767);
-    pilot.set_system_record(SystemId(128), 32767);
+    let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::json!(1404);
+    save["ranks"] = serde_json::json!([147]);
     let parked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     let mut session = Session::fly(data, parked).expect("flies");
     assert_eq!(

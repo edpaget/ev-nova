@@ -48,13 +48,14 @@
 //! ([`FlightView::with_effects_chance`]), never on the simulation's. The
 //! beams live before the fight's step are passed along, so a looped
 //! weapon is heard once a beam. The fight is drawn over the stellars:
-//! beams that go under the ships, then the ships, then the shots (each
-//! smoothed as the ships are) and the other beams, then the explosions and
-//! debris, then the brackets round the target ([`weapons`],
-//! [`effects`](super::effects), [`target`]). The HUD shows the target
-//! panel and the secondary weapon's line, its text laid out by the
-//! screen's [`TextMetrics`] ([`FlightView::with_metrics`]). Landing and
-//! arriving clear the effects.
+//! the cargo boxes a jettison left ([`boxes`], smoothed as the shots
+//! are), beams that go under the ships, then the ships, then the shots
+//! (each smoothed as the ships are) and the other beams, then the
+//! explosions and debris, then the brackets round the target
+//! ([`weapons`], [`effects`](super::effects), [`target`]). The HUD shows
+//! the target panel and the secondary weapon's line, its text laid out
+//! by the screen's [`TextMetrics`] ([`FlightView::with_metrics`]).
+//! Landing and arriving clear the effects.
 //!
 //! Each day a jump takes rolls the planetary events on the screen's
 //! [`SharedChance`] ([`FlightView::with_chance`]); without one, nothing
@@ -79,10 +80,27 @@
 //! shown draws the ship there.
 //!
 //! The HUD is drawn over everything but a jump's fade: the status bar against the
-//! right edge, its radar showing the stellars around the ship as drawn,
-//! its bars the session's shield, armour and fuel, and its nav area the
-//! navigation target or else the course. Without a status bar it says
-//! why, and flight goes on.
+//! right edge, its radar showing the stellars and ships around the ship
+//! as drawn, its bars the session's shield, armour and fuel, and its nav
+//! area the navigation target or else the course. Without a status bar it
+//! says why, and flight goes on. By [`RuleKey::HudCadence`]'s engine
+//! reading the radar shows what it held at its last refresh, every 8
+//! ticks ([`HudCadence`]) or when the original's `_RedrawStatus` would
+//! redraw it (a new system, landing, take-off, or closing the map, the
+//! comm dialog or a mission dialog); by the other, every frame. The nav
+//! area likewise holds its text and colours between refreshes every 15
+//! ticks, and when `_RedrawStatus` would redraw it, but shows a change of
+//! selection at once. The target panel likewise holds what it showed
+//! between its redraws every 45 ticks, at the next radar refresh once the
+//! target's shield or ship type changes, and when `_RedrawStatus` would
+//! redraw it or the plunder dialog closes, but shows a change of target
+//! at once ([`retake_target`]). Its target blinks bright on the
+//! same 8 ticks either way, and it shows no stellars or ships while the
+//! ship is landed. The player's outfits give it IFF colours and a density
+//! scanner ([`Session::radar_gear`]); far from the system's centre an
+//! arrow points back to it; and each tick the interference in the system
+//! ([`Session::interference`]) may fill it with static, rolled on the
+//! effects' chance.
 //!
 //! Each [`Screen::tick`] runs the simulation's fixed-step clock: the
 //! frame's time becomes whole steps of 1/30 s, each flown with the keys
@@ -122,8 +140,9 @@
 //!   target it selects the nearest landable stellar and shows the reply
 //!   ([`clearance_message`]); with one it lands there. The router takes
 //!   the landing ([`FlightView::take_landing`]) and shows the spaceport.
-//!   The reply, or why a landing was refused, shows above the help line
-//!   in the original's words (`STR#` 2002), for [`MESSAGE_SHOWN_FOR`].
+//!   The reply, or why a landing was refused, shows on the message line
+//!   in the original's words (`STR#` 2002), for [`LANDING_TICKS`] or
+//!   [`landing_refusal_ticks`].
 //!   Over a hypergate or wormhole, the second L enters it instead
 //!   ([`nova_sim::gate`]): a hypergate opens the course map as the
 //!   hypergate map ([`MapMode::Hypergate`]), offering its linked
@@ -211,7 +230,7 @@
 //!   the old one, and the session tells the change of ship, so the new
 //!   ship's sprite sheet is read, once. Boarding a
 //!   person that grants outfits says what it retrieved
-//!   ([`grant_message`]) for [`GRANT_SHOWN_FOR`]. A person of `Flags`
+//!   ([`grant_message`]) for [`GRANT_TICKS`]. A person of `Flags`
 //!   0x0200 whose mission is available offers it in place of the plunder
 //!   ([`Boarding::Offered`]), held for the router as a hail's offer is.
 //! - Y (a press) hails the target ([`Session::open_hail`]): a person
@@ -280,7 +299,9 @@
 //!   ([`FlightView::with_rules`]).
 //! - Landed at a bar, the router asks the flight for the ships for hire
 //!   and hires them ([`FlightView::escorts_for_hire`],
-//!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance;
+//!   [`FlightView::hire`]), the day's rolls drawn on the flight's chance,
+//!   and has it draw the visit's news as the bar opens
+//!   ([`FlightView::open_bar`], [`FlightView::news`]);
 //!   the session's hire terms and control bits are set on the screen
 //!   ([`FlightView::with_hire_terms`], [`FlightView::with_control_bits`]),
 //!   and its disputed hiring rules come from its rule set
@@ -293,10 +314,30 @@
 //!   each step a person may
 //!   say its hail quote ([`Session::tick_quotes`], right after the
 //!   traffic's tick), shown in the message line for
-//!   [`HAIL_QUOTE_SHOWN_FOR`], the last one said winning.
+//!   [`HAIL_QUOTE_TICKS`], the last one said winning.
+//! - Return ([`MENU_CLOSE_KEY`], the original's `ackComm`) clears the
+//!   message line and closes the escort menu.
 //! - Escape belongs to the app's router, which closes the map or leaves
 //!   flight. The screen never quits.
+//!
+//! The message line is drawn as `_DisplayComm` (@0x90201) draws it: one
+//! slot, a new message replacing the old and its time, in the rect
+//! `_InitSprites` sets up ([`hud::message_box`]), wrapped, in the system
+//! font at 12 pt in white ([`hud::draw_message`]). It is drawn over the
+//! starfield and under everything else, as the original draws it on the
+//! sprite world's background. Each message stays for as many ticks of
+//! flight as its original caller asks ([`MESSAGE_TICKS`] and the
+//! constants after it, [`SimMessage::ticks`]). The dialogs drawn over
+//! flight (the comm, offer and plunder dialogs, the map) leave it as it
+//! is, and it shows again afterwards for the ticks it had left, as
+//! `_RedrawComm` (@0x903a0) redraws it. Starting a jump clears it only
+//! when it says [`TOO_CLOSE`] (`_HandlePlayer` @0x6b231-0x6b2a7), and
+//! opening the escort menu only when it says [`NO_ESCORTS`]
+//! (@0x6dedb-0x6df29). The system's title and the [`HELP`] line are the
+//! port's own, drawn only when turned on ([`FlightOverlays`],
+//! [`FlightView::with_overlays`]).
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
@@ -310,34 +351,39 @@ use nova_sim::order_loop::{OrderRun, Stopped};
 use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
 use nova_sim::traffic::npc::Mode;
 use nova_sim::{
-    AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
-    HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText,
-    NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, TagNames, VenueOffer,
+    ALERT_CICN, Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule,
+    Chance, ClassRow, Clearance, CombatCatalog, CommCatalog, CommNote, Condition, Controls,
+    DisableRule, EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal, Good, GovtId,
+    Haggle, HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome,
+    LandPress, LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable,
+    NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot,
+    PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey,
+    RuleSource, Rulebook, Rules, Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal,
+    ShipState, Shipyard, SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take,
+    Taken, TargetPick, TargetTag, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized,
+    flight::shortest_turn, glow_level, lights_level,
 };
 use nova_sim::{
-    Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule, Chance,
-    ClassRow, Clearance, CombatCatalog, CommCatalog, CommNote, Condition, Controls, DisableRule,
-    EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal, Good, GovtId, Haggle,
-    HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome, LandPress,
-    LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable, NovaLaw, Npc,
-    NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot, PilotCatalog,
-    PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey, Rulebook,
-    Rules, Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal, ShipState, Shipyard,
-    SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take, Taken, TargetPick,
-    TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized, flight::shortest_turn,
-    glow_level, lights_level,
+    AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
+    HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText, News,
+    NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, StellarIff, TagNames, VenueOffer,
 };
 
+use super::alert;
+use super::boxes::{self, BoxShown};
+use super::brackets;
+use super::cadence::{Drawn, HudCadence, retake_target};
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
 use super::effects::{Dying, Effects, Scene};
 use super::escorts::{
     EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, NUMBER_WORDS,
     Toggled, escort_command_message, fighters_abandoned_message,
 };
-use super::hud::{self, HudState, NavDisplay, STATUS_BAR_WIDTH, StatusBar};
+use super::hud::{self, HudState, NavDestination, NavDisplay, STATUS_BAR_WIDTH, StatusBar};
 use super::jump::{JumpEffect, JumpPhase};
+use super::radar::{self, RadarScene, RadarShip, RadarStellar};
 use super::sprite::rotation_frame;
-use super::target::{self, TargetShown};
+use super::target::{self, Tag, TargetPanel};
 use super::weapons::{self, BeamShown, ShotShown};
 use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
@@ -353,10 +399,10 @@ use crate::ui::PlunderShown;
 use crate::ui::comm::grouped;
 use crate::{
     Color, Diagnostic, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction,
-    Sound, UiSound,
+    Sound, SoundPrefs, UiSound,
 };
 
-/// The overlay: the system's title and the help line.
+/// The developer overlays: the system's title and the help line.
 const TITLE: Point = Point::new(16.0, 32.0);
 const TITLE_SIZE: f32 = 20.0;
 const HELP_AT: Point = Point::new(16.0, 744.0);
@@ -365,14 +411,102 @@ const OVERLAY_SIZE: f32 = 14.0;
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
 pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave";
-/// Where a message, such as why a landing was refused, goes: above the
-/// help line.
-pub const MESSAGE_AT: Point = Point::new(16.0, 720.0);
-/// How long a message stays on screen.
-pub const MESSAGE_SHOWN_FOR: Duration = Duration::from_secs(4);
-/// How long a person's hail quote stays on screen: 420 frames at 30 a
-/// second (0x1a4 @0x4464d).
-pub const HAIL_QUOTE_SHOWN_FOR: Duration = Duration::from_secs(14);
+/// The port's own overlays on the flight screen, which the original does
+/// not draw: developer settings, both off by default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FlightOverlays {
+    /// The system's name and `sÿst` ID at the top left.
+    pub title: bool,
+    /// The [`HELP`] line of keys at the bottom.
+    pub help: bool,
+}
+
+/// How many ticks each message stays on the message line: the frames its
+/// caller passes `_DisplayComm` (@0x90201), which counts them down once
+/// a frame in `_HandleComm` (@0x301b9). The original's callers and their
+/// times are recorded in rdm phase hud-fidelity/phase-6-message-line;
+/// those the engine does not raise yet are rdm phase
+/// hud-fidelity/phase-12-flight-messages-the-original-raises's. The
+/// session's own messages carry their time ([`SimMessage::ticks`]).
+///
+/// [`MESSAGE_TICKS`], 240, is the original's common time: "No
+/// response." (`_HandlePlayerCommunication` @0x626c8), "You have no
+/// active missions." (`_HandlePlayer` @0x705a8), the ships' comm notes
+/// (`_HighLevelAIHandler` @0x8f6a1, `_LowLevelAIHandler` @0x86ef4),
+/// the plunder dialog's lines (`_DoPlunderDialog` @0x936df-0x9498d) and
+/// the abandoned fighters on arrival (@0x6c46d). It is also the time of
+/// the messages the original does not have ([`TAKE_OFF_FIRST`],
+/// [`JUMP_DISABLED`], [`IN_HYPERSPACE`], [`LAND_DISABLED`], [`REPELLED`],
+/// [`NO_STELLARS`] on L) and of the defection notice, which the original
+/// shows in a dialog (`_DoEscortPayment` @0x40301).
+pub const MESSAGE_TICKS: u16 = 240;
+/// A person's hail quote: 420 (0x1a4, `_ShowPersonHailQuote` @0x4464d).
+pub const HAIL_QUOTE_TICKS: u16 = 420;
+/// A grant's message: 240 (0xf0, `_DoPlunderDialog` @0x9342c).
+pub const GRANT_TICKS: u16 = 240;
+/// A mission ship boarded on the assist path, refuelled, or its cargo
+/// retrieved: 250 (0xfa, `_HandlePlayerBoardAttempt` @0x65538, @0x656be).
+pub const BOARD_LINE_TICKS: u16 = 250;
+/// Why a boarding was refused: 360 (`_HandlePlayerBoardAttempt`
+/// @0x6604a).
+pub const BOARD_REFUSAL_TICKS: u16 = 360;
+/// An escort command, and "You don't have any escorts.": 250
+/// (`_IssueNewEscortCommand` @0x665b9, `_HandlePlayer` @0x6de5a).
+pub const ESCORT_TICKS: u16 = 250;
+/// A `Q` operator's message, in flight or at take-off: 500
+/// (`_PlayGame` @0x465a8, `_PlayerLandOnStellar` @0x635c4).
+pub const SCRIPT_MESSAGE_TICKS: u16 = 500;
+/// Clearance's reply, and a landing denied or not possible: 250
+/// (`_HandlePlayerDockRequest` @0x67c46, @0x67cbc, @0x67e67).
+pub const LANDING_TICKS: u16 = 250;
+/// A landing refused as too far or too fast: 360
+/// (`_HandlePlayerDockRequest` @0x6787f).
+pub const TOO_FAR_TICKS: u16 = 360;
+/// A hypergate jump cancelled, or a wormhole leading nowhere: 250
+/// (`_PlayerEnterHypergate` @0x6397e, `_PlayerEnterWormhole` @0x646a3).
+pub const GATE_REFUSAL_TICKS: u16 = 250;
+/// A jump refused as too close or with no destination: 360
+/// (`_HandlePlayer` @0x6b931, @0x6ba00).
+pub const JUMP_REFUSAL_TICKS: u16 = 360;
+/// The capture's old ship retained or lost: 360 (`_DoShipCapture`
+/// @0x41aa1).
+pub const OLD_SHIP_TICKS: u16 = 360;
+
+/// How long the message for `refusal` stays: [`JUMP_REFUSAL_TICKS`] too
+/// close or with no destination, 240 short of fuel (`_HandlePlayer`
+/// @0x6baac), and [`MESSAGE_TICKS`] for the engine's own refusals.
+#[must_use]
+pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
+    match refusal {
+        JumpRefusal::TooClose { .. } | JumpRefusal::NoDestination => JUMP_REFUSAL_TICKS,
+        JumpRefusal::NoFuel { .. } | JumpRefusal::Landed | JumpRefusal::Disabled => MESSAGE_TICKS,
+    }
+}
+
+/// How long the message for `refusal` stays: [`TOO_FAR_TICKS`] too far
+/// or too fast, [`LANDING_TICKS`] denied or not landable, and
+/// [`MESSAGE_TICKS`] for the engine's own refusals.
+#[must_use]
+pub fn landing_refusal_ticks(refusal: &LandingRefusal) -> u16 {
+    match refusal {
+        LandingRefusal::TooFar { .. } | LandingRefusal::TooFast { .. } => TOO_FAR_TICKS,
+        LandingRefusal::Denied { .. } | LandingRefusal::NotLandable { .. } => LANDING_TICKS,
+        LandingRefusal::Jumping | LandingRefusal::Disabled | LandingRefusal::NoStellars => {
+            MESSAGE_TICKS
+        }
+    }
+}
+
+/// How long the message for `assigned` stays: [`MESSAGE_TICKS`] for a
+/// capture made an escort (`_DoPlunderDialog` @0x9482a), and
+/// [`OLD_SHIP_TICKS`] for the old ship after "Use As My Ship".
+#[must_use]
+pub fn assigned_ticks(assigned: Assigned) -> u16 {
+    match assigned {
+        Assigned::Escort => MESSAGE_TICKS,
+        Assigned::MyShip | Assigned::Abandoned => OLD_SHIP_TICKS,
+    }
+}
 
 /// The keys flight holds: the original's defaults, Alt, which turns the
 /// weapon select key back, Shift, which turns the target select key back,
@@ -455,12 +589,31 @@ pub const FIGHTER_REPAIRED: &str = "Fighter repaired.";
 pub const MISSION_SCANNED: &str = "Your ship has been scanned - mission failed.";
 /// `STR#` 2002 #285: a mission's deadline ran out in flight and failed it.
 pub const TIME_LIMIT_EXCEEDED: &str = "Time limit exceeded - mission failed.";
-/// `STR#` 2002 #376-#379, a space between each: what follows the
-/// scanner's and the ship's names when a scan finds smuggling.
-pub const SMUGGLING_DETECTED: &str =
-    "your attempt to smuggle illegal cargo through this system has been detected";
+/// `STR#` 2002 #375, as the strings spell it: what comes before an
+/// illegal outfit a scan finds.
+pub const POSSESSION_OF: &str = "your posession of";
+/// `STR#` 2002 #376: what comes before the smuggled cargo.
+pub const ATTEMPT_TO_SMUGGLE: &str = "your attempt to smuggle";
+/// `STR#` 2002 #377: a mission's smuggled cargo, unnamed.
+pub const ILLEGAL_CARGO: &str = "illegal cargo";
+/// `STR#` 2002 #378: what follows the smuggled cargo.
+pub const THROUGH_THIS_SYSTEM: &str = "through this system";
+/// `STR#` 2002 #379: how a scan's notice ends, before its fine.
+pub const HAS_BEEN_DETECTED: &str = "has been detected";
 /// `STR#` 2002 #380: what comes before the fine.
 pub const FINED: &str = "You have been fined";
+
+/// `detected`, a scan's notice, with the fine after it as `_ScanPlayer`
+/// adds it: none for no fine, else " You have been fined `fine`
+/// credits." ("credit" for 1), the fine's thousands grouped
+/// (@0x7e934-0x7ea09).
+fn with_fine(detected: String, fine: i64) -> String {
+    if fine == 0 {
+        return detected;
+    }
+    let credits = if fine > 1 { "credits" } else { "credit" };
+    format!("{detected} {FINED} {} {credits}.", grouped(fine))
+}
 
 /// What the message line says when a scan finds smuggling, as
 /// `_ScanPlayer` builds it (@0x7e7ce-0x7ea9b): "`scanner`:  `ship`, ...
@@ -471,12 +624,50 @@ pub const FINED: &str = "You have been fined";
 /// by its ship class (@0x7e7ce-0x7e7ef; see [`SimMessage::Smuggling`]).
 #[must_use]
 pub fn smuggling_message(scanner: &str, ship: &str, fine: i64) -> String {
-    let detected = format!("{scanner}:  {ship}, {SMUGGLING_DETECTED}.");
-    if fine == 0 {
-        return detected;
-    }
-    let credits = if fine > 1 { "credits" } else { "credit" };
-    format!("{detected} {FINED} {} {credits}.", grouped(fine))
+    illegal_junk_message(scanner, ship, ILLEGAL_CARGO, fine)
+}
+
+/// What the message line says when a scan finds an illegal `jünk` named
+/// `lc_name`, as `_ScanPlayer` builds it (@0x7ec29-0x7ee3b):
+/// "`scanner`:  `ship`, your attempt to smuggle `lc_name` through this
+/// system has been detected.", and the fine as [`smuggling_message`]
+/// adds it. The scanner is named by its person's name when it is one,
+/// else by its ship class (see [`SimMessage::IllegalJunk`]).
+#[must_use]
+pub fn illegal_junk_message(scanner: &str, ship: &str, lc_name: &str, fine: i64) -> String {
+    with_fine(
+        format!(
+            "{scanner}:  {ship}, {ATTEMPT_TO_SMUGGLE} {lc_name} {THROUGH_THIS_SYSTEM} \
+             {HAS_BEEN_DETECTED}."
+        ),
+        fine,
+    )
+}
+
+/// What the message line says when a scan finds an illegal outfit, as
+/// `_ScanPlayer` builds it (@0x7f0dd-0x7f2d7): "`scanner`:  `ship`, your
+/// posession of", then for `one` owned [`ARTICLE_AN`] or [`ARTICLE_A`]
+/// by `lc_name`'s first letter ([`article`]) and `lc_name`, else
+/// `lc_plural` with no count, then "has been detected.", and the fine
+/// as [`smuggling_message`] adds it.
+#[must_use]
+pub fn illegal_outfit_message(
+    scanner: &str,
+    ship: &str,
+    one: bool,
+    lc_name: &str,
+    lc_plural: &str,
+    fine: i64,
+) -> String {
+    let named = if one {
+        format!("{} {lc_name}", article(lc_name))
+    } else {
+        lc_plural.to_owned()
+    };
+    with_fine(
+        format!("{scanner}:  {ship}, {POSSESSION_OF} {named} {HAS_BEEN_DETECTED}."),
+        fine,
+    )
 }
 
 /// What the message line says of `message`, a session's message other
@@ -508,8 +699,47 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
                 *fine,
             ));
         }
+        SimMessage::IllegalJunk {
+            scanner,
+            person,
+            junk,
+            fine,
+        } => {
+            return Some(illegal_junk_message(
+                scanner_name(person.as_deref(), *scanner, session),
+                session.pilot().ship_name().unwrap_or_default(),
+                session.junk_lc_name(*junk).unwrap_or_default(),
+                *fine,
+            ));
+        }
+        SimMessage::IllegalOutfit {
+            scanner,
+            person,
+            outfit,
+            one,
+            fine,
+        } => {
+            let (lc_name, lc_plural) = session.outfit_names(*outfit).unwrap_or_default();
+            return Some(illegal_outfit_message(
+                scanner_name(person.as_deref(), *scanner, session),
+                session.pilot().ship_name().unwrap_or_default(),
+                *one,
+                lc_name,
+                lc_plural,
+                *fine,
+            ));
+        }
     };
     Some(text.to_owned())
+}
+
+/// What a scan's contraband notice calls the scanner: its person's name
+/// when it is one, else its ship class's name (`_ScanPlayer`
+/// @0x7ebd1-0x7ec0c, @0x7f024-0x7f05f).
+fn scanner_name<'a>(person: Option<&'a str>, scanner: ShipId, session: &'a Session) -> &'a str {
+    person
+        .or_else(|| session.ship_name(scanner))
+        .unwrap_or_default()
 }
 
 /// `STR#` 2002 #53.
@@ -548,9 +778,6 @@ pub fn refuelled_message(ship: &str, player_ship: &str) -> String {
 /// `STR#` 2002 #107: the article before a cargo's name as a boarding
 /// picks it up.
 pub const THE: &str = "the";
-/// How long a boarding pickup's line stays on screen: 250 frames at 30 a
-/// second (0xfa @0x65538).
-pub const RETRIEVED_SHOWN_FOR: Duration = Duration::from_millis(250 * 1000 / 30);
 
 /// What the comm line says as a `PickupMode` 2 mission's cargo, its
 /// `STR#` 4001 name `cargo`, is picked up by boarding its special ship,
@@ -580,15 +807,6 @@ fn mission_board_message(line: MissionBoardLine, session: &Session) -> String {
                 .and_then(|cargo| session.cargo_name(cargo))
                 .unwrap_or_default(),
         ),
-    }
-}
-
-/// How long the comm line of `line` stays on screen: a pickup's for
-/// [`RETRIEVED_SHOWN_FOR`], the assist path's for [`MESSAGE_SHOWN_FOR`].
-fn mission_board_shown_for(line: MissionBoardLine) -> Duration {
-    match line {
-        MissionBoardLine::Retrieved { .. } => RETRIEVED_SHOWN_FOR,
-        MissionBoardLine::Boarded | MissionBoardLine::Refuelled { .. } => MESSAGE_SHOWN_FOR,
     }
 }
 
@@ -702,7 +920,9 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::DeadlineMissed
         | SimMessage::EscortRepaired
         | SimMessage::FighterRepaired
-        | SimMessage::Smuggling { .. } => None,
+        | SimMessage::Smuggling { .. }
+        | SimMessage::IllegalJunk { .. }
+        | SimMessage::IllegalOutfit { .. } => None,
     }
 }
 
@@ -973,9 +1193,18 @@ pub const ARTICLE_A: &str = "a";
 pub const ARTICLE_AN: &str = "an";
 /// `STR#` 2002 #108: a grant's message ends so.
 pub const FROM_THIS_SHIP: &str = "from this ship.";
-/// How long a grant's message stays on screen: 240 frames at 30 a
-/// second (0xf0 @0x9342c).
-pub const GRANT_SHOWN_FOR: Duration = Duration::from_secs(8);
+
+/// The article before one `lc_name`, as `_DoPlunderDialog` and
+/// `_ScanPlayer` pick it (@0x7f115-0x7f150): [`ARTICLE_AN`] when its first
+/// letter, lowercased, is a vowel, else [`ARTICLE_A`].
+#[must_use]
+pub fn article(lc_name: &str) -> &'static str {
+    let vowel = lc_name
+        .chars()
+        .next()
+        .is_some_and(|first| "aeiou".contains(first.to_ascii_lowercase()));
+    if vowel { ARTICLE_AN } else { ARTICLE_A }
+}
 
 /// What the player is told of a grant of `count` outfits named
 /// `lc_name`, or `lc_plural` for more than one, as `_DoPlunderDialog`
@@ -986,12 +1215,7 @@ pub const GRANT_SHOWN_FOR: Duration = Duration::from_secs(8);
 #[must_use]
 pub fn grant_message(count: u16, lc_name: &str, lc_plural: &str) -> String {
     let (number, name) = if count == 1 {
-        let vowel = lc_name
-            .chars()
-            .next()
-            .is_some_and(|first| "aeiou".contains(first.to_ascii_lowercase()));
-        let article = if vowel { ARTICLE_AN } else { ARTICLE_A };
-        (article.to_owned(), lc_name)
+        (article(lc_name).to_owned(), lc_name)
     } else {
         let words = usize::from(count)
             .checked_sub(1)
@@ -1043,6 +1267,15 @@ pub fn pay_notes_message(notes: &[PayNote]) -> Vec<String> {
     notes
         .iter()
         .map(|&PayNote::Defected(count)| defection_message(count).to_owned())
+        .collect()
+}
+
+/// What the player is told of each of `notes`, in order, each for
+/// [`MESSAGE_TICKS`].
+fn pay_said(notes: &[PayNote]) -> Vec<(String, u16)> {
+    pay_notes_message(notes)
+        .into_iter()
+        .map(|text| (text, MESSAGE_TICKS))
         .collect()
 }
 
@@ -1110,7 +1343,8 @@ pub struct FlightView<C> {
     scene: Option<SystemScene>,
     /// The player ship's sheet, or why it cannot be shown.
     sheet: Result<ShipSheet, String>,
-    /// The class `sheet` was read for; `None` when the session failed.
+    /// The class `sheet` and `status_bar` were read for; `None` when the
+    /// session failed.
     sheet_ship: Option<ShipId>,
     /// The HUD's status bar, or why it cannot be shown.
     status_bar: Result<StatusBar, String>,
@@ -1127,9 +1361,16 @@ pub struct FlightView<C> {
     held: HashSet<Key>,
     /// The stellar landed on, until the router takes it.
     pending_landing: Option<StellarId>,
-    /// The message shown, `elapsed` when it was shown, and how long it
-    /// stays.
-    message: Option<(String, Duration, Duration)>,
+    /// The message line's one slot (`_DisplayComm`'s 0x3b565c): a new
+    /// message replaces the old and its time. Its ticks count the
+    /// flight's, so they stop while the map is open and while the router
+    /// holds flight under a dialog, as `_HandleComm` (@0x301b9) counts
+    /// only in the flight loop. The original's `_HandlePlayerDockRequest`
+    /// counts one tick more just before landing (@0x66da5), which no
+    /// player sees.
+    message: Option<Message>,
+    /// The port's own overlays drawn.
+    overlays: FlightOverlays,
     /// Whether a boarding has opened that the router has not taken.
     pending_boarding: bool,
     /// The hail just answered, for the router.
@@ -1160,6 +1401,13 @@ pub struct FlightView<C> {
     /// Whether jumps play their white fades, as the Hyperspace Effects
     /// preference says.
     hyperspace_effects: bool,
+    /// The player's sound preferences, which say whether the Red Alert
+    /// blinks its icon ([`SoundPrefs::alert_quiet`]), as the session is
+    /// told.
+    sound_prefs: SoundPrefs,
+    /// `cïcn` 18000's width, which places the Red Alert icon, or `None`
+    /// when it cannot be read, and the icon is not drawn.
+    alert_width: Option<u32>,
     /// What each day's events and the traffic are rolled on.
     chance: SharedChance,
     /// What random running lights roll on.
@@ -1199,6 +1447,34 @@ pub struct FlightView<C> {
     ui_sounds: Vec<UiSound>,
     /// The escort menu's colours, read once.
     escort_colors: EscortMenuColors,
+    /// When the HUD refreshes, and the radar target's blink.
+    hud_cadence: HudCadence,
+    /// What the radar showed at its last refresh, which it shows until the
+    /// next under [`RuleKey::HudCadence`]'s engine reading; `None` before
+    /// the first.
+    radar_scene: Option<RadarScene>,
+    /// What the nav area showed at its last refresh, and the nav mode it
+    /// showed it for, which it shows until the next under
+    /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
+    nav_scene: Option<(NavMode, NavDisplay)>,
+    /// What the target panel showed at its last redraw, and what it drew
+    /// it for, which it shows until the next under
+    /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
+    target_scene: Option<(Option<Drawn>, Option<TargetPanel>)>,
+    /// The radar's static this tick, a `ppat` ID, rolled on the effects'
+    /// chance ([`radar::static_frame`]); `None` without.
+    radar_static: Option<i16>,
+}
+
+/// A message on the message line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Message {
+    /// What it says.
+    text: String,
+    /// The flight's tick it was said on.
+    said_at: u128,
+    /// How many ticks it stays.
+    ticks: u16,
 }
 
 /// What [`FlightView::catch_up`] redrew, from the session's events.
@@ -1296,7 +1572,7 @@ impl<
                 }),
                 catalog.ship_sheet(session.ship()),
                 Some(session.ship()),
-                hud::choose_status_bar(&catalog, session.government()),
+                hud::choose_status_bar(&catalog, session.interface_government()),
             ),
             Err(reason) => (None, Err(reason.clone()), None, Err(reason.clone())),
         };
@@ -1316,6 +1592,17 @@ impl<
             Err(_) => Looks::default(),
         };
         let escort_colors = catalog.escort_menu_colors();
+        let alert_width = catalog.icon_size(ALERT_CICN).map(|(width, _)| width);
+        let mut unread_looks: Vec<_> = looks
+            .problems()
+            .into_iter()
+            .map(Diagnostic::Unreadable)
+            .collect();
+        if session.is_ok() && alert_width.is_none() {
+            unread_looks.push(Diagnostic::Unreadable(format!(
+                "no cïcn {ALERT_CICN}: the Red Alert icon is not drawn"
+            )));
+        }
         Self {
             catalog,
             map,
@@ -1323,6 +1610,8 @@ impl<
             jump: None,
             fade_in: None,
             hyperspace_effects: true,
+            sound_prefs: SoundPrefs::default(),
+            alert_width,
             session,
             scene,
             sheet,
@@ -1335,6 +1624,7 @@ impl<
             held: HashSet::new(),
             pending_landing,
             message: None,
+            overlays: FlightOverlays::default(),
             pending_boarding: false,
             pending_hail: None,
             pending_mission_info: None,
@@ -1351,11 +1641,7 @@ impl<
             law: Rc::new(NovaLaw::default()),
             npc_sheets: BTreeMap::new(),
             npc_previous: BTreeMap::new(),
-            unread_looks: looks
-                .problems()
-                .into_iter()
-                .map(Diagnostic::Unreadable)
-                .collect(),
+            unread_looks,
             looks,
             cards: BTreeMap::new(),
             codes: BTreeMap::new(),
@@ -1365,6 +1651,11 @@ impl<
             escort_menu: EscortMenu::default(),
             ui_sounds: Vec::new(),
             escort_colors,
+            hud_cadence: HudCadence::default(),
+            radar_scene: None,
+            nav_scene: None,
+            target_scene: None,
+            radar_static: None,
         }
     }
 
@@ -1487,6 +1778,19 @@ impl<
         }
     }
 
+    /// The flight drawing the port's own `overlays`, the title and the
+    /// help line, which are off by default.
+    #[must_use]
+    pub fn with_overlays(self, overlays: FlightOverlays) -> Self {
+        Self { overlays, ..self }
+    }
+
+    /// The port's own overlays the flight draws.
+    #[must_use]
+    pub fn overlays(&self) -> FlightOverlays {
+        self.overlays
+    }
+
     /// The flight with the comm dialog listing `hail_options`.
     #[must_use]
     pub fn with_hail_options(self, hail_options: HailOptions) -> Self {
@@ -1508,13 +1812,12 @@ impl<
         match session.open_hail(&self.catalog, &self.hail_options, &mut self.chance) {
             Ok(Hailed::Comm(view)) => {
                 self.pending_hail = Some(view);
-                self.message = None;
                 self.held.clear();
             }
             Ok(Hailed::Offer(offer)) => self.hold_offer(offer),
             Err(refusal) => {
                 if let Some(text) = hail_refusal_message(refusal) {
-                    self.say(text);
+                    self.say_for(text, MESSAGE_TICKS);
                 }
             }
         }
@@ -1540,7 +1843,7 @@ impl<
     fn ask_mission_info(&mut self) {
         let info = self.mission_info();
         if info.rows.is_empty() {
-            self.say(NO_ACTIVE_MISSIONS);
+            self.say_for(NO_ACTIVE_MISSIONS, MESSAGE_TICKS);
         } else {
             self.pending_mission_info = Some(info);
             self.held.clear();
@@ -1629,6 +1932,31 @@ impl<
         self.hyperspace_effects
     }
 
+    /// The flight with the player's sound preferences `prefs`, which say
+    /// whether the Red Alert blinks its icon ([`SoundPrefs::alert_quiet`],
+    /// [`Session::set_sound_quiet`]).
+    #[must_use]
+    pub fn with_sound_prefs(mut self, prefs: SoundPrefs) -> Self {
+        self.set_sound_prefs(prefs);
+        self
+    }
+
+    /// Sets the player's sound preferences, as
+    /// [`FlightView::with_sound_prefs`] does.
+    pub fn set_sound_prefs(&mut self, prefs: SoundPrefs) {
+        self.sound_prefs = prefs;
+        if let Ok(session) = &mut self.session {
+            session.set_sound_quiet(prefs.alert_quiet());
+        }
+    }
+
+    /// Whether the player's sound is quiet enough for the Red Alert to
+    /// blink its icon, as the sound preferences last said.
+    #[must_use]
+    pub fn alert_quiet(&self) -> bool {
+        self.sound_prefs.alert_quiet()
+    }
+
     /// The catalog the screen reads.
     #[must_use]
     pub fn catalog(&self) -> &C {
@@ -1664,35 +1992,9 @@ impl<
         }
     }
 
-    /// What the HUD's nav area shows: the selected stellar, by its name in
-    /// `scene`; otherwise the next system on the course, by its name on the
-    /// map if the pilot has explored it; otherwise nothing.
-    fn nav_display(&self, scene: &SystemScene) -> NavDisplay {
-        let Ok(session) = &self.session else {
-            return NavDisplay::None;
-        };
-        if let Some(target) = session.nav_target() {
-            let name = scene.stellars().iter().find(|stellar| stellar.id == target);
-            return NavDisplay::Stellar(name.map(|s| s.name.clone()).unwrap_or_default());
-        }
-        session
-            .course_shown()
-            .first()
-            .map_or(NavDisplay::None, |&next| {
-                let name = session
-                    .pilot()
-                    .has_explored(next)
-                    .then(|| self.map.model().system(next))
-                    .flatten()
-                    .map(|system| system.entry.name.clone());
-                NavDisplay::Hyperspace {
-                    name,
-                    readiness: session.jump_readiness(),
-                }
-            })
-    }
-
-    /// Begins a jump, or shows why not.
+    /// Begins a jump, or shows why not. Starting it clears the message
+    /// line only when it says [`TOO_CLOSE`] (`_HandlePlayer`
+    /// @0x6b231-0x6b2a7, @0x6d601-0x6d67f).
     fn jump(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
@@ -1700,10 +2002,12 @@ impl<
         match session.begin_jump() {
             Ok(_) => {
                 self.held.clear();
-                self.message = None;
+                self.clear_message(TOO_CLOSE);
                 self.start_streak_if_jumping();
             }
-            Err(refusal) => self.show(jump_refusal_message(&refusal).to_owned()),
+            Err(refusal) => {
+                self.say_for(jump_refusal_message(&refusal), jump_refusal_ticks(&refusal));
+            }
         }
     }
 
@@ -1757,34 +2061,31 @@ impl<
         let date = session.date_text();
         let mut messages = std::mem::take(&mut self.pending_leads);
         messages.extend(session.take_messages());
-        let worded: Vec<String> = messages
+        let worded: Vec<(String, u16)> = messages
             .iter()
-            .filter_map(|message| sim_message_text(message, session))
+            .filter_map(|message| Some((sim_message_text(message, session)?, message.ticks())))
             .collect();
         self.message = None;
         let Some(scene) = &self.scene else {
             return;
         };
-        let mut said: Vec<String> = messages
+        let mut said: Vec<(String, u16)> = messages
             .iter()
-            .filter_map(arrival_lead)
+            .filter_map(|message| Some((arrival_lead(message)?, message.ticks())))
             .next_back()
-            .map(|lead| {
+            .map(|(lead, ticks)| {
                 let stellars = !scene.stellars().is_empty();
-                arrival_message_with(lead, scene.name(), &date, stellars)
+                let text = arrival_message_with(lead, scene.name(), &date, stellars);
+                (text, ticks)
             })
             .into_iter()
             .collect();
         said.extend(worded);
-        said.extend(
-            notes
-                .into_iter()
-                .map(|FighterNote::Abandoned(count)| fighters_abandoned_message(count)),
-        );
-        said.extend(pay_notes_message(&pay));
-        if !said.is_empty() {
-            self.show(said.join("  "));
-        }
+        said.extend(notes.into_iter().map(|FighterNote::Abandoned(count)| {
+            (fighters_abandoned_message(count), MESSAGE_TICKS)
+        }));
+        said.extend(pay_said(&pay));
+        self.say_all(&said);
     }
 
     /// Catches the screen up with what the session has told since this
@@ -1834,6 +2135,9 @@ impl<
         }
         if redrawn.galaxy || redrawn.system || redrawn.rebuilt {
             self.show_destroyed();
+        }
+        if redrawn.system {
+            self.redraw_status();
         }
         redrawn
     }
@@ -1919,8 +2223,15 @@ impl<
     /// tells a move while landed changed it, the traffic populated afresh
     /// drawn where it is with its ship types' sheets read, no message from
     /// before kept; gives what paying the escorts for the take-off has to
-    /// say.
-    fn took_off(&mut self) -> Vec<String> {
+    /// say, each with its ticks.
+    ///
+    /// The original keeps the slot and replaces it with its take-off
+    /// greeting (`_PlayerLandOnStellar` @0x63732), which the engine does
+    /// not raise yet (rdm phase
+    /// hud-fidelity/phase-12-flight-messages-the-original-raises); a
+    /// message from before the landing would be further from what the
+    /// player sees than none.
+    fn took_off(&mut self) -> Vec<(String, u16)> {
         let pay = self
             .session
             .as_mut()
@@ -1930,14 +2241,20 @@ impl<
         self.place_ship();
         self.read_npc_sheets();
         self.message = None;
-        pay_notes_message(&pay)
+        self.redraw_status();
+        pay_said(&pay)
     }
 
-    /// Shows `said`, joined by two spaces, when there is anything.
-    fn say_all(&mut self, said: &[String]) {
-        if !said.is_empty() {
-            self.say(said.join("  "));
-        }
+    /// Shows the texts of `said`, joined by two spaces, when there is
+    /// anything, for the ticks of the first: the others are appended to
+    /// it, as `_HandlePlayer` appends the abandoned fighters to the
+    /// arrival line (@0x6c3c4).
+    fn say_all(&mut self, said: &[(String, u16)]) {
+        let Some(&(_, ticks)) = said.first() else {
+            return;
+        };
+        let texts: Vec<&str> = said.iter().map(|(text, _)| text.as_str()).collect();
+        self.say_for(texts.join("  "), ticks);
     }
 
     /// Settles what the set expressions run since queued, as
@@ -1959,7 +2276,11 @@ impl<
         let session = self.session.as_mut().ok()?;
         let settled = session.settle_script(&self.catalog, &mut self.chance);
         let flying = session.landed().is_none();
-        let mut said: Vec<String> = settled.message.into_iter().collect();
+        let mut said: Vec<(String, u16)> = settled
+            .message
+            .into_iter()
+            .map(|text| (text, SCRIPT_MESSAGE_TICKS))
+            .collect();
         if settled.took_off.is_some() {
             said.extend(self.took_off());
         } else if self.catch_up().system && flying {
@@ -1968,11 +2289,9 @@ impl<
                 .as_mut()
                 .map(Session::take_fighter_notes)
                 .unwrap_or_default();
-            said.extend(
-                notes
-                    .into_iter()
-                    .map(|FighterNote::Abandoned(count)| fighters_abandoned_message(count)),
-            );
+            said.extend(notes.into_iter().map(|FighterNote::Abandoned(count)| {
+                (fighters_abandoned_message(count), MESSAGE_TICKS)
+            }));
         }
         self.say_all(&said);
         self.say_messages();
@@ -2015,12 +2334,13 @@ impl<
                         clearance_message(name.unwrap_or_default(), station, clearance)
                     }
                 };
-                self.show(text);
+                self.say_for(text, LANDING_TICKS);
             }
             Ok(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
                 self.pending_landing = Some(stellar);
                 self.message = None;
                 self.effects.clear();
+                self.redraw_status();
             }
             Ok(LandPress::AtGate {
                 kind: GateKind::Hypergate,
@@ -2048,7 +2368,7 @@ impl<
                     || refusal_message(&refusal).to_owned(),
                     gate_refusal_message,
                 );
-                self.show(text);
+                self.say_for(text, landing_refusal_ticks(&refusal));
             }
         }
     }
@@ -2058,8 +2378,10 @@ impl<
     /// nowhere. A hypergate without links says nothing.
     fn gate_refused(&mut self, refusal: Option<GateRefusal>) {
         match refusal {
-            Some(GateRefusal::Cancelled) => self.show(HYPERGATE_CANCELLED.to_owned()),
-            Some(GateRefusal::NoExit) => self.show(gate_refusal_message(GateKind::Wormhole)),
+            Some(GateRefusal::Cancelled) => self.say_for(HYPERGATE_CANCELLED, GATE_REFUSAL_TICKS),
+            Some(GateRefusal::NoExit) => {
+                self.say_for(gate_refusal_message(GateKind::Wormhole), GATE_REFUSAL_TICKS);
+            }
             Some(GateRefusal::NoLinks | GateRefusal::NotAtGate) | None => {}
         }
     }
@@ -2074,6 +2396,7 @@ impl<
         self.map.cancel_pointer();
         self.map.release_keys();
         self.map_open = false;
+        self.redraw_status();
         if self.map.mode() != MapMode::Hypergate {
             return;
         }
@@ -2118,27 +2441,281 @@ impl<
             self.alpha = 0.0;
         }
         self.catch_up();
-        self.say(assigned_message(assigned));
+        self.say_for(assigned_message(assigned), assigned_ticks(assigned));
         Some(assigned)
     }
 
-    /// Reads the player's sprite sheet afresh when the session flies a
-    /// class other than the one it was read for, so a ship bought,
-    /// captured or changed by a set expression is drawn; called only when
-    /// the session tells the ship changed ([`FlightView::catch_up`]), which
-    /// it may tell of the class it was. A sheet that cannot be read is
-    /// kept against its class too, so it is not tried again.
+    /// Reads the player's sprite sheet and status bar afresh when the
+    /// session flies a class other than the one they were read for, so a
+    /// ship bought, captured or changed by a set expression is drawn under
+    /// its own bar; called only when the session tells the ship changed
+    /// ([`FlightView::catch_up`]), which it may tell of the class it was.
+    /// A sheet that cannot be read is kept against its class too, so it is
+    /// not tried again. The bar is chosen again as `_LoadIntfResource`
+    /// does ([`hud::rechoose_status_bar`]); the original returns at once
+    /// for the bar already loaded, and asking only on a new class does the
+    /// same.
+    ///
+    /// The original loads the bar inside the purchase, capture or set
+    /// expression. Ours waits for the next `catch_up`, on the next frame or
+    /// in the view call that drove the change, which is still before any
+    /// frame is drawn, so the player never sees the old bar on the new
+    /// ship; a purchase while landed is chosen before flight is drawn
+    /// again.
     fn follow_ship(&mut self) {
         let Ok(session) = &self.session else { return };
         let ship = session.ship();
         if self.sheet_ship != Some(ship) {
             self.sheet = self.catalog.ship_sheet(ship);
+            self.status_bar = hud::rechoose_status_bar(
+                &self.catalog,
+                session.interface_government(),
+                self.status_bar.as_ref().ok(),
+            );
             self.sheet_ship = Some(ship);
         }
     }
 }
 
 impl<C> FlightView<C> {
+    /// What the radar shows now ([`RadarScene`]): the player's ship and
+    /// the other ships where they are drawn, the scene's stellars in nav
+    /// order with the shape and sprite width the radar reads, and blank
+    /// while the ship is landed (`_playerIsLanded`); each with its IFF
+    /// code, the player's IFF and density scanner, this tick's static
+    /// ([`FlightView::advance_hud`]), and whether a hyperspace route is
+    /// shown ([`route_shown`]).
+    fn radar_now(&self) -> RadarScene {
+        // Without a session flight shows only why, never the radar.
+        let Ok(session) = &self.session else {
+            return RadarScene::default();
+        };
+        let stellars = self.scene.as_ref().map_or_else(Vec::new, |scene| {
+            scene
+                .stellars()
+                .iter()
+                .map(|stellar| RadarStellar {
+                    position: stellar.position,
+                    square: stellar.radar_square,
+                    sprite_width: stellar.drawn().as_ref().ok().map(|sheet| sheet.frame_width),
+                    iff: session
+                        .stellar_iff(stellar.id)
+                        .unwrap_or(StellarIff::Unlandable),
+                })
+                .collect()
+        });
+        let gear = session.radar_gear();
+        RadarScene {
+            player: self.shown_position(),
+            stellars,
+            ships: radar_ships(session, &self.shown_npcs()),
+            blank: session.landed().is_some(),
+            iff: gear.iff,
+            density_scanner: gear.density_scanner,
+            static_pattern: self.radar_static,
+            route_shown: route_shown(session).is_some(),
+        }
+    }
+
+    /// Redraws the HUD at once, as the original's `_RedrawStatus`
+    /// (@0x4cac0) does: the radar's snapshot is taken afresh, but the
+    /// refresh timer and the target's blink are left as they are.
+    ///
+    /// The original calls it at flight start (`_PlayGame` @0x457d8, ours
+    /// the first frame, which shows the radar as it is), on landing and
+    /// take-off (`_PlayerLandOnStellar`), on arrival in a system
+    /// (`_HandlePlayer`; ours whenever a system is laid out), on closing
+    /// the map (`_DoSystemMap`), on entering a hypergate
+    /// (`_PlayerEnterHypergate`, ours as the map closes) and on closing
+    /// the comm dialog ([`FlightView::hang_up`]), the mission dialog
+    /// ([`FlightView::accept_mission`], [`FlightView::refuse_mission`]) and
+    /// the text dialog ([`FlightView::take_mission_texts`]). The shipyard
+    /// dialog is the spaceport's, while the radar is blank, and taking off
+    /// redraws it.
+    fn redraw_status(&mut self) {
+        self.radar_scene = Some(self.radar_now());
+        self.retake_nav();
+        self.retake_target();
+    }
+
+    /// What the target panel is drawn for now: the target, its ship type
+    /// and its shield; none without a target.
+    fn target_drawn(&self) -> Option<Drawn> {
+        let npc = self.session.as_ref().ok()?.target()?;
+        Some(Drawn {
+            npc: npc.id,
+            ship: npc.ship,
+            shield: npc.reserves.shield.now,
+        })
+    }
+
+    /// What the target panel shows of the target now (see
+    /// [`TargetPanel`]); none without a target.
+    fn target_now(&self) -> Option<TargetPanel> {
+        let session = self.session.as_ref().ok()?;
+        let npc = session.target()?;
+        let card = self.cards.get(&npc.ship);
+        let tag = session.target_tag(npc).and_then(|tag| match tag {
+            TargetTag::Code(govt) => self.codes.get(&govt).cloned().flatten().map(Tag::Code),
+            TargetTag::Escort => Some(Tag::Escort),
+            TargetTag::Fighter => Some(Tag::Fighter),
+        });
+        Some(TargetPanel {
+            name: session.npc_name(npc).unwrap_or_default().to_owned(),
+            subtitle: session
+                .npc_subtitle(npc)
+                .map(str::to_owned)
+                .or_else(|| card.map(|card| card.subtitle.clone()))
+                .unwrap_or_default(),
+            picture: card.and_then(|card| card.picture),
+            status: session.target_status(npc),
+            tag,
+        })
+    }
+
+    /// Takes the target panel's snapshot afresh.
+    fn retake_target(&mut self) {
+        self.target_scene = Some((self.target_drawn(), self.target_now()));
+    }
+
+    /// What the target panel shows this frame: by
+    /// [`RuleKey::HudCadence`]'s engine reading, the snapshot taken at its
+    /// last redraw while it is of the target the player has now; by the
+    /// other, before the first redraw, or once the target has changed,
+    /// the panel as it is now ([`FlightView::target_now`]).
+    fn target_shown(&self) -> Cow<'_, Option<TargetPanel>> {
+        match &self.target_scene {
+            Some((drawn, shown))
+                if self.hud_waits()
+                    && drawn.map(|drawn| drawn.npc) == self.target_drawn().map(|now| now.npc) =>
+            {
+                Cow::Borrowed(shown)
+            }
+            _ => Cow::Owned(self.target_now()),
+        }
+    }
+
+    /// Takes the nav area's snapshot afresh.
+    fn retake_nav(&mut self) {
+        let mode = self.session.as_ref().map_or(NavMode::Off, nav_mode);
+        self.nav_scene = Some((mode, self.nav_now()));
+    }
+
+    /// What the HUD's nav area shows now, for the [`nav_mode`] (see
+    /// [`NavDisplay`]): the selected stellar, by its name in the scene
+    /// ("No Destination" for one not in it); otherwise the next system on
+    /// the course, by its name on the map if the pilot has explored it,
+    /// with whether the ship can jump there; otherwise "Nav System Off".
+    fn nav_now(&self) -> NavDisplay {
+        let Ok(session) = &self.session else {
+            return NavDisplay::Off;
+        };
+        match nav_mode(session) {
+            NavMode::Off => NavDisplay::Off,
+            NavMode::Stellar(target) => NavDisplay::Stellar(
+                self.scene
+                    .as_ref()
+                    .and_then(|scene| scene.stellars().iter().find(|s| s.id == target))
+                    .map(|stellar| stellar.name.clone()),
+            ),
+            NavMode::Hyperspace(next) => NavDisplay::Hyperspace {
+                destination: next.map_or(NavDestination::None, |next| {
+                    session
+                        .pilot()
+                        .has_explored(next)
+                        .then(|| self.map.model().system(next))
+                        .flatten()
+                        .map_or(NavDestination::Unexplored, |system| {
+                            NavDestination::Named(system.entry.name.clone())
+                        })
+                }),
+                readiness: session.jump_readiness(),
+            },
+        }
+    }
+
+    /// Rolls this tick's radar static against the interference in the
+    /// player's system ([`radar::static_frame`], on the effects' chance,
+    /// never the simulation's), as `_HandleStatus` (@0x494d7) does every
+    /// frame; then moves the HUD's timer to the view's elapsed ticks, and
+    /// takes the radar's and the nav area's snapshots afresh when each
+    /// refreshes ([`HudCadence::advance`]). The nav area's is also taken
+    /// afresh whenever the nav mode has changed since it was taken, as
+    /// each of the original's selection changes marks the area for
+    /// redrawing at once (`_statusRedraw[0]`, e.g. @0x69b39, @0x69efa,
+    /// @0x6a919, @0xe34d, @0x1379b). This is settled before the frame is
+    /// drawn, and [`FlightView::nav_shown`] shows a changed mode at once
+    /// anyway, so no boundary is crossed. The target panel's is taken
+    /// afresh as [`retake_target`] says: on a change of target, on its
+    /// 45-tick redraw, and on a radar refresh once its shield or ship type
+    /// has changed. The crossing test may settle the 45-tick redraw a
+    /// frame after the original's exact `% 45` frame would, which the
+    /// player never sees.
+    ///
+    /// The original rolls the threshold in `_HandleStatus` and picks the
+    /// pattern as `_DrawStatusRadar` draws; ours rolls both here, once a
+    /// tick, which changes no decision the player can see.
+    fn advance_hud(&mut self) {
+        if let Ok(session) = &self.session {
+            self.radar_static =
+                radar::static_frame(session.interference(), &mut self.effects_chance);
+        }
+        let now = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
+        let refresh = self.hud_cadence.advance(now);
+        if refresh.radar {
+            self.radar_scene = Some(self.radar_now());
+        }
+        if refresh.nav || !self.nav_mode_shown() {
+            self.retake_nav();
+        }
+        let shown = self.target_scene.as_ref().and_then(|(drawn, _)| *drawn);
+        if self.target_scene.is_none()
+            || retake_target(shown.as_ref(), self.target_drawn().as_ref(), refresh)
+        {
+            self.retake_target();
+        }
+    }
+
+    /// Whether the nav area's snapshot was taken for the nav mode the
+    /// player is in now.
+    fn nav_mode_shown(&self) -> bool {
+        let mode = self.session.as_ref().map_or(NavMode::Off, nav_mode);
+        self.nav_scene
+            .as_ref()
+            .is_some_and(|(shown, _)| *shown == mode)
+    }
+
+    /// What the nav area shows this frame: by [`RuleKey::HudCadence`]'s
+    /// engine reading, the snapshot taken at its last refresh, text and
+    /// colours both; by the other, before the first refresh, or once the
+    /// nav mode has changed since, the nav area as it is now
+    /// ([`FlightView::nav_now`]).
+    fn nav_shown(&self) -> NavDisplay {
+        match &self.nav_scene {
+            Some((_, shown)) if self.hud_waits() && self.nav_mode_shown() => shown.clone(),
+            _ => self.nav_now(),
+        }
+    }
+
+    /// Whether the HUD's content waits for its refreshes: the engine's
+    /// reading of [`RuleKey::HudCadence`].
+    fn hud_waits(&self) -> bool {
+        self.session.as_ref().map_or(RuleSource::Engine, |session| {
+            session.rules().source_for(RuleKey::HudCadence)
+        }) == RuleSource::Engine
+    }
+
+    /// What the radar shows this frame: by [`RuleKey::HudCadence`]'s
+    /// engine reading, the snapshot taken at its last refresh; by the
+    /// other, or before the first refresh, the radar as it is now
+    /// ([`FlightView::radar_now`]).
+    fn radar_shown(&self) -> Cow<'_, RadarScene> {
+        match &self.radar_scene {
+            Some(shown) if self.hud_waits() => Cow::Borrowed(shown),
+            _ => Cow::Owned(self.radar_now()),
+        }
+    }
+
     /// Whether the course map is shown.
     #[must_use]
     pub fn map_open(&self) -> bool {
@@ -2165,21 +2742,37 @@ impl<C> FlightView<C> {
         self.pending_landing.take()
     }
 
-    /// The message on screen, if any.
+    /// The message on screen, if any: the slot's until its ticks have
+    /// passed.
     #[must_use]
     pub fn message(&self) -> Option<&str> {
-        let (text, shown_at, lasting) = self.message.as_ref()?;
-        (self.elapsed < *shown_at + *lasting).then_some(text.as_str())
+        let message = self.message.as_ref()?;
+        let shown = ticks(self.elapsed) - message.said_at;
+        (shown < u128::from(message.ticks)).then_some(message.text.as_str())
     }
 
-    /// Shows `text` as the message, from now, for [`MESSAGE_SHOWN_FOR`].
-    fn say(&mut self, text: impl Into<String>) {
-        self.say_for(text, MESSAGE_SHOWN_FOR);
+    /// Shows `text` as the message, from now, for `ticks` of flight,
+    /// replacing whatever was shown, as `_DisplayComm` does
+    /// (@0x9024b-0x90256).
+    fn say_for(&mut self, text: impl Into<String>, ticks: u16) {
+        self.message = Some(Message {
+            text: text.into(),
+            said_at: crate::time::ticks(self.elapsed),
+            ticks,
+        });
     }
 
-    /// Shows `text` as the message, from now, for `lasting`.
-    fn say_for(&mut self, text: impl Into<String>, lasting: Duration) {
-        self.message = Some((text.into(), self.elapsed, lasting));
+    /// Clears the message line when it holds `text`, as the original
+    /// clears one message by name (`_HandlePlayer` @0x6b231-0x6b2a7,
+    /// @0x6dedb-0x6df29).
+    fn clear_message(&mut self, text: &str) {
+        if self
+            .message
+            .as_ref()
+            .is_some_and(|message| message.text == text)
+        {
+            self.message = None;
+        }
     }
 
     /// Holds `offer`'s prompt for the router, letting go of the flight
@@ -2188,7 +2781,6 @@ impl<C> FlightView<C> {
     fn hold_offer(&mut self, offer: VenueOffer) {
         if let VenueOffer::Prompt(prompt) = offer {
             self.pending_offer = Some(prompt);
-            self.message = None;
             self.held.clear();
         }
     }
@@ -2204,35 +2796,37 @@ impl<C> FlightView<C> {
         match session.board(&*self.law, &*self.boarding_rule, &mut self.chance) {
             Ok(Boarding::Opened(_)) => {
                 self.pending_boarding = true;
-                self.message = None;
                 self.held.clear();
                 if let Some(granted) = session.take_grant() {
                     let (name, plural) = session.outfit_names(granted.outfit).unwrap_or_default();
                     let said = grant_message(granted.count, name, plural);
-                    self.say_for(said, GRANT_SHOWN_FOR);
+                    self.say_for(said, GRANT_TICKS);
                 }
             }
-            Ok(Boarding::Repelled) => self.say(REPELLED),
+            Ok(Boarding::Repelled) => self.say_for(REPELLED, MESSAGE_TICKS),
             Ok(Boarding::Offered(offer)) => self.hold_offer(offer),
             Ok(Boarding::MissionShip(line)) => {
                 if let Some(line) = line {
                     let said = mission_board_message(line, session);
-                    self.say_for(said, mission_board_shown_for(line));
+                    self.say_for(said, BOARD_LINE_TICKS);
                 }
             }
             Err(refusal) => {
                 if let Some(text) = board_refusal_message(refusal) {
-                    self.say(text);
+                    self.say_for(text, BOARD_REFUSAL_TICKS);
                 }
             }
         }
     }
 
-    /// Ends the hail under way, if any ([`Session::hang_up`]).
+    /// Ends the hail under way, if any ([`Session::hang_up`]), and
+    /// refreshes the HUD as the original's comm dialog does on closing
+    /// ([`FlightView::redraw_status`]).
     pub fn hang_up(&mut self) {
         if let Ok(session) = &mut self.session {
             session.hang_up();
         }
+        self.redraw_status();
     }
 
     /// What is on board the ship just boarded, named, once: the router
@@ -2271,7 +2865,9 @@ impl<C> FlightView<C> {
     }
 
     /// Presses `take` in the plunder dialog, through the session
-    /// ([`Session::plunder`]), and says what it did.
+    /// ([`Session::plunder`]), and says what it did. The target panel is
+    /// taken afresh, as `_HandlePlayer` redraws it once the dialog closes
+    /// (@0x6eb97, @0x6eda6).
     pub fn plunder(&mut self, take: Take) -> Taken {
         let Ok(session) = &mut self.session else {
             return Taken::Nothing;
@@ -2283,14 +2879,10 @@ impl<C> FlightView<C> {
             _ => (None, None),
         };
         if let Some(text) = plunder_message(taken, good, outfit) {
-            self.say(text);
+            self.say_for(text, MESSAGE_TICKS);
         }
+        self.retake_target();
         taken
-    }
-
-    /// Shows `text` from now, for [`MESSAGE_SHOWN_FOR`].
-    fn show(&mut self, text: String) {
-        self.say(text);
     }
 
     /// Shows the session's messages since they were last taken, each in
@@ -2303,12 +2895,12 @@ impl<C> FlightView<C> {
         let mut said = Vec::new();
         for message in session.take_messages() {
             match sim_message_text(&message, session) {
-                Some(text) => said.push(text),
+                Some(text) => said.push((text, message.ticks())),
                 None => self.pending_leads.push(message),
             }
         }
-        for text in said {
-            self.say(text);
+        for (text, ticks) in said {
+            self.say_for(text, ticks);
         }
     }
 
@@ -2436,6 +3028,29 @@ impl<C> FlightView<C> {
             .escorts_for_hire(&mut self.chance)
     }
 
+    /// Opens the bar of the stellar landed on as [`Session::open_bar`]
+    /// does, drawing the visit's news on the flight's chance; false for a
+    /// session that failed, or not landed at a bar.
+    pub fn open_bar(&mut self) -> bool {
+        self.session
+            .as_mut()
+            .is_ok_and(|session| session.open_bar(&mut self.chance))
+    }
+
+    /// The news of the bar visit under way, as [`Session::news`] gives
+    /// it; none for a session that failed.
+    #[must_use]
+    pub fn news(&self) -> Option<&News> {
+        self.session.as_ref().ok()?.news()
+    }
+
+    /// The picture the bar's news is drawn over, as
+    /// [`Session::news_picture`] gives it; none for a session that failed.
+    #[must_use]
+    pub fn news_picture(&self) -> Option<i16> {
+        self.session.as_ref().ok()?.news_picture()
+    }
+
     /// Hires a ship as [`Session::hire`] does, on the flight's chance; a
     /// session that failed has no bar.
     pub fn hire(&mut self, ship: ShipId) -> Result<Hired, HireRefusal> {
@@ -2460,31 +3075,37 @@ impl<C> FlightView<C> {
     }
 
     /// Accepts `mission` as [`Session::accept_mission`] does, on the
-    /// flight's chance: the slot it went into.
+    /// flight's chance: the slot it went into. The HUD is redrawn, as the
+    /// original's mission dialog does on closing
+    /// ([`FlightView::redraw_status`]).
     ///
     /// # Errors
     ///
     /// The [`AcceptError`] that applies; a session that failed offers
     /// nothing.
     pub fn accept_mission(&mut self, mission: MissionId) -> Result<u8, AcceptError> {
-        match &mut self.session {
+        let accepted = match &mut self.session {
             Ok(session) => session.accept_mission(mission, &mut self.chance),
             Err(_) => Err(AcceptError::NotOffered),
-        }
+        };
+        self.redraw_status();
+        accepted
     }
 
     /// Refuses `mission` as [`Session::refuse_mission`] does, on the
-    /// flight's chance.
+    /// flight's chance. The HUD is redrawn, as on accepting.
     ///
     /// # Errors
     ///
     /// [`NotOffered`] when it is not offered; a session that failed offers
     /// nothing.
     pub fn refuse_mission(&mut self, mission: MissionId) -> Result<(), NotOffered> {
-        match &mut self.session {
+        let refused = match &mut self.session {
             Ok(session) => session.refuse_mission(mission, &mut self.chance),
             Err(_) => Err(NotOffered),
-        }
+        };
+        self.redraw_status();
+        refused
     }
 
     /// The mission info screen's view, as [`Session::mission_info`] gives
@@ -2538,12 +3159,20 @@ impl<C> FlightView<C> {
 
     /// The mission texts to show since they were last taken, as
     /// [`Session::take_mission_texts`] gives them; none for a session that
-    /// failed.
+    /// failed. When there are any, the HUD is redrawn
+    /// ([`FlightView::redraw_status`]): the original's text dialog redraws
+    /// it on closing, and flight does not tick under the dialog, so
+    /// redrawing as the texts are taken shows the same.
     pub fn take_mission_texts(&mut self) -> Vec<MissionText> {
-        self.session
+        let texts = self
+            .session
             .as_mut()
             .map(Session::take_mission_texts)
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if !texts.is_empty() {
+            self.redraw_status();
+        }
+        texts
     }
 
     /// The shipyard of the stellar landed on, as [`Session::shipyard`]
@@ -2811,7 +3440,7 @@ impl<C> FlightView<C> {
         let group = GROUP_KEYS.iter().position(|&group| group == key);
         match key {
             MENU_KEY => self.toggle_escort_menu(),
-            MENU_CLOSE_KEY => self.escort_menu.close(),
+            MENU_CLOSE_KEY => self.acknowledge(),
             ESCORT_ATTACK_KEY => self.command_escorts(EscortCommand::Attack),
             ESCORT_DEFEND_KEY => self.command_escorts(EscortCommand::Defend),
             ESCORT_HOLD_KEY => self.command_escorts(EscortCommand::Hold),
@@ -2859,15 +3488,29 @@ impl<C> FlightView<C> {
     }
 
     /// E: opens or closes the escort menu, or says the player has no
-    /// escorts.
+    /// escorts. Opening it clears [`NO_ESCORTS`] from the message line,
+    /// and only that (`_HandlePlayer` @0x6dedb-0x6df29).
     fn toggle_escort_menu(&mut self) {
         let rows = self.escort_rows();
-        if self.escort_menu.toggle(self.elapsed, &rows) == Toggled::NoEscorts {
-            self.say(NO_ESCORTS);
-            self.ui_sounds.push(UiSound::NoEscorts);
-        } else {
-            self.ui_sounds.push(UiSound::EscortMenuToggled);
+        match self.escort_menu.toggle(self.elapsed, &rows) {
+            Toggled::NoEscorts => {
+                self.say_for(NO_ESCORTS, ESCORT_TICKS);
+                self.ui_sounds.push(UiSound::NoEscorts);
+            }
+            Toggled::Opened => {
+                self.clear_message(NO_ESCORTS);
+                self.ui_sounds.push(UiSound::EscortMenuToggled);
+            }
+            Toggled::Closed => self.ui_sounds.push(UiSound::EscortMenuToggled),
         }
+    }
+
+    /// Return (`ackComm`, `_keyPrefs` +0xc): clears the message line,
+    /// whatever it shows, and closes the escort menu (`_HandlePlayer`
+    /// @0x6dd00-0x6dd6a).
+    fn acknowledge(&mut self) {
+        self.message = None;
+        self.escort_menu.close();
     }
 
     /// Gives the escorts `command`, through the session, as the menu says
@@ -2878,7 +3521,7 @@ impl<C> FlightView<C> {
         };
         if let Some(commanded) = session.command_escorts(self.escort_menu.group(), command) {
             self.escort_menu.touch(self.elapsed);
-            self.say(escort_command_message(&commanded));
+            self.say_for(escort_command_message(&commanded), ESCORT_TICKS);
         }
     }
 
@@ -2932,6 +3575,28 @@ impl<C> FlightView<C> {
             .collect()
     }
 
+    /// The cargo boxes in space, each where it is drawn: `alpha` of the
+    /// way from where it was a step ago, as the shots are.
+    fn shown_boxes(&self, camera: &Camera) -> Vec<BoxShown> {
+        let Ok(session) = &self.session else {
+            return Vec::new();
+        };
+        let behind = 1.0 - self.alpha;
+        session
+            .cargo_boxes()
+            .iter()
+            .map(|cargo_box| BoxShown {
+                at: camera.world_to_screen(Point::new(
+                    cargo_box.velocity.x.mul_add(-behind, cargo_box.position.x),
+                    cargo_box.velocity.y.mul_add(-behind, cargo_box.position.y),
+                )),
+                frame: cargo_box.frame,
+                fade: cargo_box.fade(),
+                graphic: cargo_box.graphic,
+            })
+            .collect()
+    }
+
     /// The beams being fired, each moved with its firer as it is drawn.
     fn shown_beams(&self, camera: &Camera) -> Vec<BeamShown> {
         let Ok(session) = &self.session else {
@@ -2964,45 +3629,62 @@ impl<C> FlightView<C> {
         (shown.x - now.x, shown.y - now.y)
     }
 
-    /// Draws the brackets round the target, where it is drawn.
-    fn draw_brackets(&self, list: &mut DrawList, camera: &Camera) {
-        let Ok(session) = self.session.as_ref() else {
+    /// Draws the brackets round the nav target, then those round the
+    /// ship target, the session's ([`Session::nav_brackets`],
+    /// [`Session::target_brackets`]), each centred where its sprite is
+    /// drawn (see the `brackets` module). A stellar whose sheet can't be
+    /// read is bracketed as one with no sprite; a ship's as its crossed
+    /// box.
+    fn draw_brackets(&self, list: &mut DrawList, scene: &SystemScene, camera: &Camera) {
+        let Ok(session) = &self.session else {
             return;
         };
-        let Some(npc) = session.target() else {
-            return;
-        };
-        let (at, _) = self.shown_npc(npc);
-        let size = match self.npc_sheets.get(&npc.ship) {
-            Some(Ok(sheet)) => sheet.frame_width.max(sheet.frame_height) as f32,
-            _ => PLACEHOLDER_SIZE,
-        };
-        let standing = target::standing(npc, session.npcs());
-        target::draw_brackets(list, camera.world_to_screen(at), size, standing);
+        if let Some(nav) = session.nav_brackets()
+            && let Some(stellar) = scene.stellars().iter().find(|s| s.id == nav.stellar)
+        {
+            let sprite = stellar.drawn().as_ref().ok();
+            let sprite = sprite.map(|sheet| (sheet.frame_width, sheet.frame_height));
+            let at = camera.world_to_screen(stellar.position);
+            brackets::draw_nav(list, at, sprite, nav.expand, nav.dominated);
+        }
+        if let Some(target) = session.target_brackets()
+            && let Some(npc) = session.target()
+        {
+            let (at, _) = self.shown_npc(npc);
+            let sprite = match self.npc_sheets.get(&npc.ship) {
+                Some(Ok(sheet)) => (sheet.frame_width, sheet.frame_height),
+                _ => (PLACEHOLDER_SIZE as u32, PLACEHOLDER_SIZE as u32),
+            };
+            let at = camera.world_to_screen(at);
+            brackets::draw_ship(list, at, Some(sprite), target.expand, target.standing);
+        }
     }
 
-    /// Draws the status bar's target panel and secondary weapon line.
+    /// Draws the Red Alert icon the session shows, if any, over the
+    /// brackets on the interface layer (see the `alert` module).
+    fn draw_red_alert(&self, list: &mut DrawList) {
+        let icon = self.session.as_ref().ok().and_then(Session::red_alert_icon);
+        if let (Some(icon), Some(width)) = (icon, self.alert_width) {
+            alert::draw_red_alert(list, icon, width);
+        }
+    }
+
+    /// Draws the status bar's target panel ([`FlightView::target_shown`])
+    /// and secondary weapon line. The weapon line follows every frame: the
+    /// original redraws it (`_statusRedraw[3]`) on every event that
+    /// changes it, so drawing it each frame shows the same.
     fn draw_combat_hud(&self, list: &mut DrawList, bar: &StatusBar) {
         let Ok(session) = &self.session else {
             return;
         };
         let origin = hud::bar_origin(bar);
         let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
-        let unread = TargetCard::default();
-        let shown = session.target().map(|npc| TargetShown {
-            name: session.npc_name(npc).unwrap_or_default(),
-            subtitle: session.npc_subtitle(npc),
-            card: self.cards.get(&npc.ship).unwrap_or(&unread),
-            code: npc.govt.and_then(|govt| self.codes.get(&govt)?.as_deref()),
-            reserves: npc.reserves,
-            disabled: npc.condition == Condition::Disabled,
-        });
-        target::draw_target_panel(list, &bar.layout, origin, shown.as_ref(), metrics);
+        let shown = self.target_shown();
+        target::draw_target_panel(list, &bar.layout, origin, shown.as_ref().as_ref(), metrics);
         let line = session.secondary().map(|id| {
             let look = self.looks.weapon(id);
             let name = look.map_or_else(|| format!("wëap {}", id.0), |look| look.name.clone());
-            let flags2 = look.map_or(0, |look| look.flags2);
-            target::secondary_text(&name, session.secondary_rounds(), flags2)
+            target::secondary_text(&name, session.secondary_line_count())
         });
         target::draw_secondary(list, &bar.layout, origin, line.as_deref(), metrics);
     }
@@ -3038,6 +3720,13 @@ impl<C> FlightView<C> {
                     Color::ERROR,
                 );
             }
+        }
+    }
+
+    /// Draws the [`HELP`] line when its overlay is on.
+    fn draw_help(&self, list: &mut DrawList) {
+        if self.overlays.help {
+            list.text(HELP, HELP_AT, OVERLAY_SIZE, None, Color::DIM);
         }
     }
 }
@@ -3168,6 +3857,10 @@ impl<
     /// the map open too, as the original's display fade does. The escort
     /// menu times out on every step the map is shut, the streak's
     /// included.
+    ///
+    /// Then, unless the map is open, the HUD's timer moves on, refreshing
+    /// the radar when it is due ([`FlightView::advance_hud`]), still
+    /// before the frame is drawn.
     fn tick(&mut self, dt: Duration) {
         self.catch_up();
         if let Some(effect) = &mut self.fade_in {
@@ -3186,6 +3879,7 @@ impl<
                 self.fade_in = self.jump.take().filter(|effect| !effect.done());
             }
             self.update_escort_menu();
+            self.advance_hud();
             return;
         }
         self.elapsed += dt;
@@ -3233,10 +3927,10 @@ impl<
             }
         }
         for note in &notes {
-            self.say(comm_message(note));
+            self.say_for(comm_message(note), MESSAGE_TICKS);
         }
         for quote in quotes {
-            self.say_for(quote.text, HAIL_QUOTE_SHOWN_FOR);
+            self.say_for(quote.text, HAIL_QUOTE_TICKS);
         }
         self.say_messages();
         // The session may have populated its system afresh.
@@ -3244,6 +3938,7 @@ impl<
         self.update_escort_menu();
         self.alpha = alpha;
         self.start_streak_if_jumping();
+        self.advance_hud();
     }
 
     fn draw(&self, list: &mut DrawList) {
@@ -3261,7 +3956,7 @@ impl<
                 None,
                 Color::ERROR,
             );
-            list.text(HELP, HELP_AT, OVERLAY_SIZE, None, Color::DIM);
+            self.draw_help(list);
             return;
         };
         let camera = self.camera();
@@ -3271,45 +3966,50 @@ impl<
             }
             _ => starfield::draw(list, &camera),
         }
+        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+        if let Some(message) = self.message() {
+            hud::draw_message(list, message, metrics);
+        }
         scene::draw_stellars(list, scene, &camera, self.elapsed);
+        boxes::draw_boxes(list, &self.shown_boxes(&camera), &self.looks);
         let beams = self.shown_beams(&camera);
         weapons::draw_beams(list, &beams, &self.looks, true);
         self.draw_ships(list, &camera);
         weapons::draw_shots(list, &self.shown_shots(&camera), &self.looks);
         weapons::draw_beams(list, &beams, &self.looks, false);
         self.effects.draw(list, &camera, &self.looks);
-        self.draw_brackets(list, &camera);
-        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+        self.draw_brackets(list, scene, &camera);
+        self.draw_red_alert(list);
         self.escort_menu
             .draw(list, &self.escort_rows(), self.escort_colors, metrics);
-        list.text(
-            format!("{} (sÿst {})", scene.name(), scene.id().0),
-            TITLE,
-            TITLE_SIZE,
-            None,
-            Color::WHITE,
-        );
-        list.text(HELP, HELP_AT, OVERLAY_SIZE, None, Color::DIM);
-        if let Some(message) = self.message() {
-            list.text(message, MESSAGE_AT, OVERLAY_SIZE, None, Color::WHITE);
+        if self.overlays.title {
+            list.text(
+                format!("{} (sÿst {})", scene.name(), scene.id().0),
+                TITLE,
+                TITLE_SIZE,
+                None,
+                Color::WHITE,
+            );
         }
+        self.draw_help(list);
         match &self.status_bar {
             Ok(bar) => {
-                let stellars: Vec<Point> = scene.stellars().iter().map(|s| s.position).collect();
-                let ships = match &self.session {
-                    Ok(session) => radar_ships(session, &self.shown_npcs()),
-                    Err(_) => Vec::new(),
-                };
+                let radar = self.radar_shown();
                 let date = self.date_text();
+                let cargo = self.session.as_ref().ok().map(Session::status_cargo);
                 let state = HudState {
-                    position: self.shown_position(),
-                    stellars: &stellars,
-                    ships: &ships,
+                    radar: &radar,
+                    blink_on: self.hud_cadence.blink_on(),
                     reserves: self.reserves(),
-                    nav: self.nav_display(scene),
+                    nav: self.nav_shown(),
+                    cargo: cargo.as_ref(),
                     date: &date,
+                    disabled: self
+                        .session
+                        .as_ref()
+                        .is_ok_and(|session| session.player_condition() == Condition::Disabled),
                 };
-                hud::draw(list, bar, &state);
+                hud::draw(list, bar, &state, metrics);
                 self.draw_combat_hud(list, bar);
             }
             Err(reason) => hud::draw_unavailable(list, reason),
@@ -3415,15 +4115,70 @@ fn cloak_alpha(shown: CloakShown) -> Option<u8> {
     }
 }
 
-/// Where each of `shown` the radar shows is drawn: those
+/// Each of `shown` the radar shows, where it is drawn, whether it is the
+/// player's target, its IFF code and whether it is heavy: those
 /// [`Session::on_radar`] says, a cloaked ship only when its cloak shows
 /// there or the player scans for cloaked ships.
-fn radar_ships(session: &Session, shown: &[(&Npc, Point, f32)]) -> Vec<Point> {
+fn radar_ships(session: &Session, shown: &[(&Npc, Point, f32)]) -> Vec<RadarShip> {
+    let target = session.target().map(|npc| npc.id);
     shown
         .iter()
         .filter(|(npc, _, _)| session.on_radar(npc))
-        .map(|&(_, at, _)| at)
+        .map(|&(npc, at, _)| RadarShip {
+            position: at,
+            targeted: target == Some(npc.id),
+            iff: session.ship_iff(npc),
+            heavy: npc.hull.mass > HEAVY_MASS,
+        })
         .collect()
+}
+
+/// The class `Mass` a ship must be above to show as a square under a
+/// density scanner (`cmpw $0x63` @0x49bb8-0x49c2f).
+const HEAVY_MASS: f32 = 99.0;
+
+/// The player's nav mode, the original's player +0x6a, as the engine
+/// derives it: a selected stellar is mode 2, else a plotted course mode 3,
+/// else mode −1, the nav system off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NavMode {
+    /// Mode −1: nothing selected, no course.
+    Off,
+    /// Mode 2: the selected stellar.
+    Stellar(StellarId),
+    /// Mode 3: the next hop shown ([`route_shown`]), `None` when the first
+    /// hop has no visible system at its place.
+    Hyperspace(Option<SystemId>),
+}
+
+/// The player's [`NavMode`] in `session`.
+///
+/// A course whose first hop has no system shown at its place is mode 3
+/// with no destination ("No Destination", the original's +0x6c == −1).
+/// The original keeps the hop's stale link index there and names the
+/// hidden system; ours does not reveal a hidden system. Its other mode
+/// changes that the engine has no state for (Nav Off keeping the route,
+/// Hyper Select with nothing to cue) are rdm phase
+/// hud-fidelity/phase-11-track-nav-mode's.
+fn nav_mode(session: &Session) -> NavMode {
+    if let Some(target) = session.nav_target() {
+        NavMode::Stellar(target)
+    } else if session.course().is_empty() {
+        NavMode::Off
+    } else {
+        NavMode::Hyperspace(route_shown(session))
+    }
+}
+
+/// The next system on the hyperspace route the nav area shows, if it
+/// shows one: no stellar is selected and a course is shown (the
+/// original's nav mode 3). The nav area ([`FlightView::nav_now`]) and
+/// the radar's centre arrow ([`RadarScene::route_shown`]) both read it.
+fn route_shown(session: &Session) -> Option<SystemId> {
+    if session.nav_target().is_some() {
+        return None;
+    }
+    session.course_shown().first().copied()
 }
 
 /// The play area about the ship, in world units: the screen left of the
@@ -3460,12 +4215,15 @@ mod tests {
     use super::*;
     use crate::devtools::{PilotDesk, PilotEdit};
     use crate::draw::lights_tint;
+    use crate::flight::cadence::{NAV_PERIOD_TICKS, TARGET_PERIOD_TICKS};
     use crate::flight::catalog::{
         Blink, BoomLook, GovtId, LayerSheet, StatusBarLayout, TargetCard, WeaponLook,
     };
     use crate::flight::hud::{self, HudState, NavDisplay, StatusBar};
+    use crate::flight::radar::{self, IRect, RadarColor, RadarMark};
     use crate::galaxy::{Galaxy, MapMode, SystemEntry};
     use crate::sound::Sound;
+    use nova_sim::ShipIff;
 
     use crate::system::catalog::{
         AnimationData, StellarContents, StellarId, StellarSheet, SystemContents,
@@ -3488,10 +4246,23 @@ mod tests {
         sheet: Result<ShipSheet, String>,
         /// `ïntf` 128: stock-like, or why it cannot be read.
         bar: Result<StatusBarLayout, String>,
+        /// `cicn` 18000's size: 24 x 24, by default.
+        alert_icon: Option<(u32, u32)>,
+        /// Each `gövt`'s `Interface`: none, by default.
+        interfaces: Vec<(i16, i16)>,
+        /// The `ïntf`s past 128: none, by default.
+        other_bars: Vec<(i16, StatusBarLayout)>,
+        /// The `ïntf`s asked for.
+        bars_asked: RefCell<Vec<i16>>,
         /// System 130's landing sites: Earth and Moon, by default.
         sites: Vec<LandingSite>,
         /// System 130's `NavDefs` slots on the map: none, by default.
         sol_navs: Vec<Option<(u32, u16)>>,
+        /// System 130's `Interference`: none, by default.
+        sol_interference: i16,
+        /// The stellars Sol lists after Earth and the Moon: none, by
+        /// default.
+        sol_more: Vec<StellarContents>,
         systems_read: RefCell<Vec<SystemId>>,
         /// The commodities: none, by default.
         commodities: CommodityStrings,
@@ -3499,6 +4270,8 @@ mod tests {
         disasters: Vec<DisasterRecord>,
         /// The outfits: none, by default.
         outfits: Vec<OutfitRecord>,
+        /// The `jünk`s: none, by default.
+        junk: Vec<JunkRecord>,
         /// The ship classes the shipyard reads: none, by default.
         ships: Vec<ShipRecord>,
         /// The ships whose sheets were asked for.
@@ -3521,6 +4294,9 @@ mod tests {
         cards: Vec<(i16, TargetCard)>,
         /// The governments' target codes: none, by default.
         codes: Vec<(i16, String)>,
+        /// The jettisoned cargo box's sheet: `rlëD` 500 of 36 frames, by
+        /// default.
+        box_sheet: Result<EffectSheet, String>,
         /// The string lists: none, by default.
         strings: Vec<(i16, Vec<String>)>,
         /// The persons: none, by default.
@@ -3546,6 +4322,9 @@ mod tests {
         missions: Vec<nova_sim::catalog::MissionRecord>,
         /// What the mission screens show of each: none, by default.
         mission_texts: Vec<nova_sim::catalog::MissionTexts>,
+        /// Each system's `Visibility`: none, by default, so every system
+        /// is visible.
+        visibility: Vec<nova_sim::catalog::SystemVisibility>,
     }
 
     /// No strings unless a test sets them.
@@ -3604,6 +4383,10 @@ mod tests {
             fields: FIELDS,
             sheet: Ok(sheet()),
             bar: Ok(layout()),
+            alert_icon: Some((24, 24)),
+            interfaces: Vec::new(),
+            other_bars: Vec::new(),
+            bars_asked: RefCell::default(),
             sites: vec![
                 site(128, (0.0, -600.0), StellarFlags::CAN_LAND),
                 site(129, (300.0, -200.0), StellarFlags::CAN_LAND),
@@ -3612,6 +4395,7 @@ mod tests {
             commodities: CommodityStrings::default(),
             disasters: Vec::new(),
             outfits: Vec::new(),
+            junk: Vec::new(),
             ships: Vec::new(),
             sheets_asked: RefCell::default(),
             traffic: Vec::new(),
@@ -3623,6 +4407,10 @@ mod tests {
             booms: Vec::new(),
             cards: Vec::new(),
             codes: Vec::new(),
+            box_sheet: Ok(EffectSheet {
+                image_id: 500,
+                frames: NonZeroU16::new(36).expect("non-zero"),
+            }),
             strings: Vec::new(),
             persons: Vec::new(),
             defaults: Vec::new(),
@@ -3630,10 +4418,13 @@ mod tests {
             fan: false,
             reborn: false,
             sol_navs: Vec::new(),
+            sol_interference: 0,
+            sol_more: Vec::new(),
             gates: Vec::new(),
             lives: Vec::new(),
             missions: Vec::new(),
             mission_texts: Vec::new(),
+            visibility: Vec::new(),
         }
     }
 
@@ -3740,12 +4531,14 @@ mod tests {
                 links: links.iter().copied().map(SystemId).collect(),
                 govt: None,
                 stellars: Vec::new(),
+                interference: 0,
             };
             let onward: &[i16] = if self.onward { &[130, 132] } else { &[130] };
             let sol: &[i16] = if self.fan { &[131, 132] } else { &[131] };
             let mut systems = vec![
                 StarSystem {
                     stellars: self.sol_navs.clone(),
+                    interference: self.sol_interference,
                     ..star(130, (0.0, 0.0), sol)
                 },
                 star(131, (600.0, 0.0), onward),
@@ -3762,7 +4555,7 @@ mod tests {
         }
 
         fn junk(&self) -> Vec<JunkRecord> {
-            Vec::new()
+            self.junk.clone()
         }
 
         fn disasters(&self) -> Vec<DisasterRecord> {
@@ -3805,11 +4598,23 @@ mod tests {
             Vec::new()
         }
 
+        fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {
+            self.visibility.clone()
+        }
+
         fn place_names(&self) -> nova_sim::catalog::PlaceNames {
             nova_sim::catalog::PlaceNames::default()
         }
 
         fn stellar_marks(&self) -> Vec<nova_sim::catalog::StellarMark> {
+            Vec::new()
+        }
+
+        fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
+            Vec::new()
+        }
+
+        fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
             Vec::new()
         }
     }
@@ -3872,6 +4677,7 @@ mod tests {
                 frame0_bias: 0,
                 only_when_destroyed: false,
             },
+            radar_square: false,
         }
     }
 
@@ -3899,10 +4705,13 @@ mod tests {
             let (name, stellars) = match id.0 {
                 130 => (
                     "Sol",
-                    vec![
+                    [
                         dying(128, "Earth", (0, -600), 1),
                         stellar(129, "Moon", (300, -200), 4),
-                    ],
+                    ]
+                    .into_iter()
+                    .chain(self.sol_more.iter().cloned())
+                    .collect(),
                 ),
                 131 => ("Alpha Centauri", vec![dying(140, "Proxima", (0, 0), 1)]),
                 132 if self.onward => ("Barnard", Vec::new()),
@@ -4010,6 +4819,13 @@ mod tests {
                 .find(|(id, _)| *id == govt.0)
                 .map(|(_, code)| code.clone())
         }
+
+        fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
+            match graphic {
+                0 => self.box_sheet.clone(),
+                other => Err(format!("no spïn {}", 500 + other)),
+            }
+        }
     }
 
     /// The escort menu in its own colours, so tests can tell them.
@@ -4024,21 +4840,36 @@ mod tests {
         hilite: Color::from_rgb24(0x0065_4321),
     };
 
-    /// A new pilot has no government, so only `ïntf` 128 and its picture
-    /// are ever asked for.
+    /// `ïntf` 128 and the others listed; every government listed has an
+    /// `Interface`, and the others have no record. `PICT` 700 (128's
+    /// background), 705 and 128 are 194 x 767, and there are no others.
     impl StatusBars for FakeCatalog {
-        fn government_interface(&self, id: GovtId) -> Result<i16, String> {
-            panic!("asked for gövt {}", id.0)
+        fn government_interface(&self, id: GovtId) -> Result<Option<i16>, String> {
+            Ok(self
+                .interfaces
+                .iter()
+                .find(|(govt, _)| *govt == id.0)
+                .map(|&(_, interface)| interface))
         }
 
         fn status_bar(&self, id: i16) -> Result<StatusBarLayout, String> {
-            assert_eq!(id, 128);
-            self.bar.clone()
+            self.bars_asked.borrow_mut().push(id);
+            if id == 128 {
+                return self.bar.clone();
+            }
+            self.other_bars
+                .iter()
+                .find(|(bar, _)| *bar == id)
+                .map(|(_, layout)| layout.clone())
+                .ok_or_else(|| format!("no ïntf {id}"))
         }
 
         fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
-            assert_eq!(id, 700);
-            Some((194, 767))
+            [700, 705, 128].contains(&id).then_some((194, 767))
+        }
+
+        fn icon_size(&self, id: i16) -> Option<(u32, u32)> {
+            (id == ALERT_CICN).then_some(self.alert_icon).flatten()
         }
     }
 
@@ -4139,18 +4970,31 @@ mod tests {
         ticks(&mut view, 3);
         assert_eq!(
             drawn(&view).iter().cloned().collect::<Vec<_>>(),
-            [
-                DrawCommand::Text {
-                    text: "Cannot start flight: no chär to start from".to_owned(),
-                    font: Font::Geneva,
-                    origin: TITLE,
-                    size: TITLE_SIZE,
-                    wrap_width: None,
-                    color: Color::ERROR,
-                },
-                overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM),
-            ]
+            [DrawCommand::Text {
+                text: "Cannot start flight: no chär to start from".to_owned(),
+                font: Font::Geneva,
+                origin: TITLE,
+                size: TITLE_SIZE,
+                wrap_width: None,
+                color: Color::ERROR,
+            },]
         );
+    }
+
+    #[test]
+    fn the_unstarted_flight_shows_help_only_when_turned_on() {
+        let failed = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        };
+        let view = FlightView::new(failed).with_overlays(FlightOverlays {
+            title: false,
+            help: true,
+        });
+        let list = drawn(&view);
+        let help = overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM);
+        assert_eq!(list.iter().last(), Some(&help));
+        assert_eq!(list.iter().count(), 2, "the error line and the help");
     }
 
     // Flying.
@@ -4387,16 +5231,60 @@ mod tests {
             .collect()
     }
 
-    /// The radar dots drawn: the dots in the radar's colour.
-    fn dots_on_radar(list: &DrawList) -> Vec<Point> {
-        let radar = layout().bright_radar;
+    /// The radar's pixels drawn, in either radar colour, row by row as
+    /// drawn.
+    fn dots_on_radar(list: &DrawList) -> Vec<(i32, i32)> {
+        let layout = layout();
         list.iter()
             .filter_map(|command| match *command {
-                DrawCommand::Dot { center, color, .. } if color == radar => Some(center),
+                DrawCommand::Dot {
+                    center,
+                    size: 1.0,
+                    color,
+                } if color == layout.dim_radar || color == layout.bright_radar => {
+                    Some(((center.x - 0.5) as i32, (center.y - 0.5) as i32))
+                }
                 _ => None,
             })
             .collect()
     }
+
+    /// The stock radar, with the bar at (830, 0): centred on (926, 96).
+    const STOCK_RADAR: IRect = IRect::new(838, 8, 1014, 184);
+
+    /// What the radar shows this frame, as marks on the stock radar.
+    fn radar_marks(view: &View) -> Vec<RadarMark> {
+        radar::marks(
+            STOCK_RADAR,
+            &view.radar_shown(),
+            view.hud_cadence.blink_on(),
+        )
+    }
+
+    /// The ships' blips on the radar this frame: its pixels but the
+    /// player's, the last.
+    fn blips(view: &View) -> Vec<RadarMark> {
+        let mut marks: Vec<RadarMark> = radar_marks(view)
+            .into_iter()
+            .filter(|mark| matches!(mark, RadarMark::Pixel { .. }))
+            .collect();
+        marks.pop();
+        marks
+    }
+
+    /// The 2×2 oval a small stellar at radar pixel (`x`, `y`) draws.
+    fn small_oval(x: i32, y: i32) -> RadarMark {
+        RadarMark::Oval {
+            rect: IRect::around(x, y, 1),
+            color: RadarColor::Dim,
+        }
+    }
+
+    const PLAYER_PIXEL: RadarMark = RadarMark::Pixel {
+        x: 926,
+        y: 96,
+        color: RadarColor::Bright,
+    };
 
     fn texts(list: &DrawList) -> Vec<String> {
         list.iter()
@@ -4407,8 +5295,81 @@ mod tests {
             .collect()
     }
 
+    /// The port's title, and its help line, on.
+    const TITLED: FlightOverlays = FlightOverlays {
+        title: true,
+        help: true,
+    };
+
     #[test]
-    fn it_draws_the_stars_the_stellars_the_ship_the_overlay_then_the_hud() {
+    fn the_title_and_help_are_not_drawn_by_default() {
+        assert_eq!(
+            FlightOverlays::default(),
+            FlightOverlays {
+                title: false,
+                help: false
+            }
+        );
+        assert_eq!(flight().overlays(), FlightOverlays::default());
+        assert_eq!(flight().with_overlays(TITLED).overlays(), TITLED);
+        let texts = texts(&drawn(&flight()));
+        assert!(!texts.contains(&"Sol (sÿst 130)".to_owned()), "{texts:?}");
+        assert!(!texts.contains(&HELP.to_owned()), "{texts:?}");
+    }
+
+    /// The flight's draw list's commands up to the HUD's first, whose
+    /// status bar background is the first picture.
+    fn before_the_hud(list: &DrawList) -> Vec<DrawCommand> {
+        list.iter()
+            .take_while(|c| !matches!(c, DrawCommand::Picture { .. }))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn the_title_draws_when_turned_on() {
+        let titled = FlightOverlays {
+            title: true,
+            help: false,
+        };
+        let list = drawn(&flight().with_overlays(titled));
+        let before = before_the_hud(&list);
+        assert_eq!(
+            before.last(),
+            Some(&overlay("Sol (sÿst 130)", TITLE, TITLE_SIZE, Color::WHITE)),
+            "over the flight, under the HUD"
+        );
+        assert!(!texts(&list).contains(&HELP.to_owned()));
+    }
+
+    #[test]
+    fn the_help_line_draws_when_turned_on() {
+        let helped = FlightOverlays {
+            title: false,
+            help: true,
+        };
+        let list = drawn(&flight().with_overlays(helped));
+        let before = before_the_hud(&list);
+        assert_eq!(
+            before.last(),
+            Some(&overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM)),
+            "over the flight, under the HUD"
+        );
+        assert!(!texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
+        let both = drawn(&flight().with_overlays(TITLED));
+        let before = before_the_hud(&both);
+        assert_eq!(
+            before[before.len() - 2..],
+            [
+                overlay("Sol (sÿst 130)", TITLE, TITLE_SIZE, Color::WHITE),
+                overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM),
+            ],
+            "the title, then the help"
+        );
+    }
+
+    #[test]
+    fn it_draws_the_stars_the_stellars_the_ship_then_the_hud() {
         let view = flight();
         let list = drawn(&view);
         let mut expected = DrawList::new();
@@ -4420,19 +5381,36 @@ mod tests {
             Duration::ZERO,
         );
         expected.sprite(ImageKey::sprite(2000, 0), VIEW_CENTER, Color::WHITE);
-        expected.push(overlay("Sol (sÿst 130)", TITLE, TITLE_SIZE, Color::WHITE));
-        expected.push(overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM));
         hud::draw(
             &mut expected,
             view.status_bar().expect("a status bar"),
             &HudState {
-                position: at(0.0, 0.0),
-                stellars: &[at(0.0, -600.0), at(300.0, -200.0)],
-                ships: &[],
+                radar: &RadarScene {
+                    player: at(0.0, 0.0),
+                    stellars: vec![
+                        RadarStellar {
+                            position: at(0.0, -600.0),
+                            square: false,
+                            sprite_width: Some(20),
+                            iff: StellarIff::Unlandable,
+                        },
+                        RadarStellar {
+                            position: at(300.0, -200.0),
+                            square: false,
+                            sprite_width: Some(20),
+                            iff: StellarIff::Unlandable,
+                        },
+                    ],
+                    ..RadarScene::default()
+                },
+                blink_on: false,
                 reserves: ShipStats::new(FIELDS, &[]).full(),
-                nav: NavDisplay::None,
+                nav: NavDisplay::Off,
+                cargo: Some(&view.session().expect("flying").status_cargo()),
                 date: DATE,
+                disabled: false,
             },
+            None,
         );
         let bar = view.status_bar().expect("a status bar");
         let origin = hud::bar_origin(bar);
@@ -4524,7 +5502,7 @@ mod tests {
                 Color::ERROR
             ))
         );
-        assert!(texts(&list).contains(&"Sol (sÿst 130)".to_owned()));
+        assert!(matches!(list.iter().next(), Some(DrawCommand::Dot { .. })));
     }
 
     // The engine glow and running lights.
@@ -5015,8 +5993,9 @@ mod tests {
                 }),
             "{list:?}"
         );
-        // The shïp's shield 40, armour 60 and fuel 250: two whole jumps,
-        // then half of one.
+        // The shïp's shield 40, armour 60 and fuel 250: all of it in the
+        // full colour, then the half jump past the two whole ones (from
+        // 119.2 pixels) over it.
         let width = 149.0;
         let bar = |top: f32, from: f32, to: f32, color| DrawCommand::Line {
             from: at(865.0 + from, top + 3.5),
@@ -5030,42 +6009,242 @@ mod tests {
             [
                 bar(199.0, 0.0, width, layout.shield_color),
                 bar(216.0, 0.0, width, layout.armor_color),
-                bar(234.0, 0.0, width * 0.8, layout.fuel_full),
-                bar(234.0, width * 0.8, width, layout.fuel_partial),
+                bar(234.0, 0.0, width, layout.fuel_full),
+                bar(234.0, 119.0, width, layout.fuel_partial),
             ]
         );
-        let radar = layout.radar.offset(at(830.0, 0.0));
-        let on_radar = |stellar| hud::radar_point(radar, at(0.0, 0.0), stellar);
+        // Earth, 600 up, is 18.75 pixels up the radar, at 77.25; the Moon,
+        // (300, -200), at (935.375, 89.75): small ovals, dim, then the
+        // player, bright.
         assert_eq!(
             dots_on_radar(&list),
             [
-                on_radar(at(0.0, -600.0)).expect("in range"),
-                on_radar(at(300.0, -200.0)).expect("in range"),
+                (925, 76),
+                (926, 76),
+                (925, 77),
+                (926, 77),
+                (934, 88),
+                (935, 88),
+                (934, 89),
+                (935, 89),
+                (926, 96)
             ]
+        );
+        assert_eq!(
+            radar_marks(&view),
+            [small_oval(926, 77), small_oval(935, 89), PLAYER_PIXEL]
         );
         // No system name in the nav area (the dev title still names it).
         assert!(!texts(&list).contains(&"Sol".to_owned()), "{list:?}");
     }
 
     #[test]
-    fn the_radar_follows_the_ship_as_drawn() {
+    fn a_stellars_radar_shape_and_sprite_width_reach_the_radar() {
+        // `w` x `h` frames: the radar reads the width, never the height.
+        let sized = |id, at, (w, h): (u32, u32), square| StellarContents {
+            sprite: Ok(StellarSheet {
+                image_id: 1000 + id,
+                frames: NonZeroU16::MIN,
+                frame_width: w,
+                frame_height: h,
+            }),
+            radar_square: square,
+            ..stellar(id, "Extra", at, 1)
+        };
+        let view = FlightView::new(FakeCatalog {
+            sol_more: vec![
+                sized(150, (640, 0), (300, 300), true),
+                sized(151, (-640, 320), (120, 60), false),
+                sized(152, (0, 640), (250, 150), false),
+            ],
+            ..catalog()
+        });
+        let dim = RadarColor::Dim;
+        // A station is a 2×2 square whatever its size; past 89 pixels wide
+        // an oval grows 2 a side, past 199, 3.
+        assert_eq!(
+            radar_marks(&view),
+            [
+                small_oval(926, 77),
+                small_oval(935, 89),
+                RadarMark::Square {
+                    rect: IRect::around(946, 96, 1),
+                    color: dim,
+                },
+                RadarMark::Oval {
+                    rect: IRect::around(906, 106, 2),
+                    color: dim,
+                },
+                RadarMark::Oval {
+                    rect: IRect::around(926, 116, 3),
+                    color: dim,
+                },
+                PLAYER_PIXEL,
+            ]
+        );
+    }
+
+    /// The radar's player position: where it was when the radar last
+    /// refreshed, or now.
+    fn radar_player(view: &View) -> Point {
+        view.radar_shown().player
+    }
+
+    #[test]
+    fn by_the_engine_the_radar_holds_between_refreshes_eight_ticks_apart() {
         let mut view = flight();
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 1);
+        let refreshed = view.shown_position();
+        assert_eq!(radar_player(&view), refreshed, "refreshed on the first");
+        for tick in 2..=8 {
+            ticks(&mut view, 1);
+            assert_eq!(radar_player(&view), refreshed, "held on tick {tick}");
+        }
+        assert_ne!(view.shown_position(), refreshed, "the ship moved");
+        ticks(&mut view, 1);
+        assert_eq!(radar_player(&view), view.shown_position(), "the 9th");
+        assert_eq!(
+            radar_marks(&view)[0],
+            small_oval(
+                926,
+                radar::radar_offset(-600.0, view.shown_position().y, 96)
+            )
+        );
+    }
+
+    /// `view`'s flight with [`RuleKey::HudCadence`] read the Bible's way:
+    /// the HUD every frame.
+    fn every_frame(view: View) -> View {
+        view.with_rules(Rulebook::default().with_override(RuleKey::HudCadence, RuleSource::Bible))
+    }
+
+    #[test]
+    fn by_the_other_reading_the_radar_follows_the_ship_every_frame() {
+        let mut view = every_frame(flight());
         let before = dots_on_radar(&drawn(&view));
         view.input(&key(Key::Up, true));
-        view.tick(Duration::from_millis(1500));
+        for _ in 0..45 {
+            ticks(&mut view, 1);
+            assert_eq!(radar_player(&view), view.shown_position());
+        }
         view.tick(TICK / 2);
         let shown = view.shown_position();
         assert!(shown.y < -10.0, "{shown:?}");
+        assert_eq!(radar_player(&view), shown, "between ticks too");
         let after = dots_on_radar(&drawn(&view));
-        let radar = layout().radar.offset(at(830.0, 0.0));
+        let y = |world| radar::radar_offset(world, shown.y, 96);
         assert_eq!(
-            after,
+            radar_marks(&view),
             [
-                hud::radar_point(radar, shown, at(0.0, -600.0)).expect("in range"),
-                hud::radar_point(radar, shown, at(300.0, -200.0)).expect("in range"),
+                small_oval(926, y(-600.0)),
+                small_oval(935, y(-200.0)),
+                PLAYER_PIXEL
             ]
         );
-        assert!(after[0].y > before[0].y, "{before:?} {after:?}");
+        assert!(after[0].1 > before[0].1, "{before:?} {after:?}");
+    }
+
+    #[test]
+    fn while_landed_the_radar_shows_only_the_player_until_take_off() {
+        for every in [false, true] {
+            let view = flight_among(vec![site(129, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+            let mut view = if every { every_frame(view) } else { view };
+            ticks(&mut view, 3);
+            let flying = radar_marks(&view);
+            assert_eq!(flying.len(), 3, "the Sun, the Moon and the player");
+            land_now(&mut view);
+            assert!(view.session().expect("flying").landed().is_some());
+            assert!(view.radar_shown().blank, "at once, as _RedrawStatus");
+            assert_eq!(radar_marks(&view), [PLAYER_PIXEL]);
+            let list = drawn(&view);
+            assert_eq!(dots_on_radar(&list), [(926, 96)]);
+            view.take_off().expect("took off");
+            assert!(!view.radar_shown().blank, "at once on take-off");
+            assert_eq!(radar_marks(&view).len(), 3);
+        }
+    }
+
+    #[test]
+    fn a_new_system_shows_on_the_radar_at_once_leaving_the_timer_and_blink() {
+        let mut view = landed_view();
+        ticks(&mut view, 3);
+        let cadence = view.hud_cadence;
+        move_to(&mut view, 131, 140);
+        view.resync();
+        assert_eq!(view.hud_cadence, cadence, "neither timed nor flipped");
+        let shown = view.radar_shown();
+        assert_eq!(shown.player, view.shown_position());
+        let stellars: Vec<Point> = shown.stellars.iter().map(|s| s.position).collect();
+        let scene: Vec<Point> = view
+            .scene()
+            .expect("a scene")
+            .stellars()
+            .iter()
+            .map(|s| s.position)
+            .collect();
+        assert_eq!(stellars, scene, "Alpha Centauri's");
+    }
+
+    #[test]
+    fn an_arrival_shows_the_new_systems_stellars_at_once() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let leaving = view.session().expect("flying").system();
+        for _ in 0..1000 {
+            let cadence = view.hud_cadence;
+            view.tick(TICK);
+            if view.session().expect("flying").system() != leaving {
+                let now = u64::try_from(crate::time::ticks(view.elapsed)).expect("in range");
+                let mut probe = cadence;
+                assert!(!probe.advance(now).radar, "not a refresh tick");
+                assert_eq!(view.hud_cadence.blink_on(), cadence.blink_on());
+                break;
+            }
+        }
+        assert_ne!(view.session().expect("flying").system(), leaving);
+        let stellars: Vec<Point> = view
+            .radar_shown()
+            .stellars
+            .iter()
+            .map(|s| s.position)
+            .collect();
+        assert_eq!(stellars, [at(0.0, 0.0)], "Alpha Centauri's");
+        assert_eq!(view.radar_shown().player, view.shown_position());
+    }
+
+    #[test]
+    fn the_targets_blip_blinks_bright_every_eight_ticks_under_both_readings() {
+        for every in [false, true] {
+            let (_, chance) = scripted(&placed(850, 650, 90));
+            let view = FlightView::new(trafficked(&[130], 1, 129, 3))
+                .with_chance(chance)
+                .with_behaviour(Rc::new(Still));
+            let mut view = if every { every_frame(view) } else { view };
+            view.tick(TICK);
+            tap(&mut view, TARGET_KEY);
+            assert!(view.session().expect("flying").target().is_some());
+            ticks(&mut view, 7);
+            let mut seen = Vec::new();
+            for _ in 0..24 {
+                ticks(&mut view, 1);
+                let [RadarMark::Pixel { color, .. }] = blips(&view)[..] else {
+                    panic!("one blip: {:?}", blips(&view));
+                };
+                seen.push(color);
+            }
+            let mut expected = vec![RadarColor::Dim; 8];
+            expected.extend([RadarColor::Bright; 8]);
+            expected.extend([RadarColor::Dim; 8]);
+            assert_eq!(seen, expected, "every frame: {every}");
+            let list = drawn(&view);
+            let bright = list.iter().filter(|command| {
+                matches!(command, DrawCommand::Dot { color, .. } if *color == layout().bright_radar)
+            });
+            assert_eq!(bright.count(), 1, "the player alone, the target dim");
+        }
     }
 
     #[test]
@@ -5078,13 +6257,15 @@ mod tests {
             &mut expected,
             view.status_bar().expect("a status bar"),
             &HudState {
-                position: at(0.0, 0.0),
-                stellars: &[],
-                ships: &[],
+                radar: &RadarScene::default(),
+                blink_on: false,
                 reserves,
-                nav: NavDisplay::None,
+                nav: NavDisplay::Off,
+                cargo: None,
                 date: DATE,
+                disabled: false,
             },
+            None,
         );
         assert_eq!(lines(&drawn(&view)), lines(&expected));
     }
@@ -5107,6 +6288,67 @@ mod tests {
         assert_eq!(lines(&list), [], "no bars");
         assert_eq!(dots_on_radar(&list), [], "no radar");
         assert_eq!(sprites(&list).len(), 3, "stellars and ship");
+    }
+
+    /// `ïntf` 129: [`layout`] in another shield colour, over `PICT` 705.
+    fn bar_129() -> StatusBarLayout {
+        StatusBarLayout {
+            shield_color: Color::rgba(0, 255, 255, 255),
+            status_bkgnd: 705,
+            ..layout()
+        }
+    }
+
+    /// `catalog` where ship type `ship` (given a record if it has none)
+    /// belongs to gövt 150, whose `Interface` is `interface`, and with
+    /// `ïntf` 129 ([`bar_129`]).
+    fn governed(mut catalog: FakeCatalog, ship: i16, interface: i16) -> FakeCatalog {
+        if !catalog.ships.iter().any(|record| record.id == ShipId(ship)) {
+            let mut record = shipbuying().ships[0].clone();
+            record.id = ShipId(ship);
+            catalog.ships.push(record);
+        }
+        for record in &mut catalog.ships {
+            if record.id == ShipId(ship) {
+                record.inherent_govt = Some(GovtId(150));
+            }
+        }
+        catalog.interfaces = vec![(150, interface)];
+        catalog.other_bars = vec![(129, bar_129())];
+        catalog
+    }
+
+    #[test]
+    fn a_ship_type_whose_government_has_its_own_interface_shows_that_bar() {
+        let view = FlightView::new(governed(catalog(), 128, 129));
+        assert_eq!(
+            view.status_bar(),
+            Ok(&StatusBar {
+                layout: bar_129(),
+                background: Some(hud::Background {
+                    id: 705,
+                    width: 194.0,
+                    height: 767.0,
+                }),
+            })
+        );
+        let list = drawn(&view);
+        assert!(
+            list.iter().any(|c| *c
+                == DrawCommand::Picture {
+                    image: ImageKey::picture(705),
+                    top_left: at(830.0, 0.0),
+                }),
+            "{list:?}"
+        );
+        for interface in [127, 0, -1] {
+            let view = FlightView::new(governed(catalog(), 128, interface));
+            assert_eq!(
+                view.status_bar().map(|bar| &bar.layout),
+                Ok(&layout()),
+                "{interface}"
+            );
+        }
     }
 
     #[test]
@@ -5171,8 +6413,42 @@ mod tests {
     fn message(view: &View) -> Option<DrawCommand> {
         drawn(view)
             .iter()
-            .find(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == MESSAGE_AT))
+            .find(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == message_at()))
             .cloned()
+    }
+
+    /// Where the message's first line is drawn: the message box's
+    /// top-left.
+    fn message_at() -> Point {
+        hud::message_box(VIEW_SIZE).min
+    }
+
+    /// The message `text` as a flight without metrics draws it.
+    fn message_drawn(text: &str) -> DrawCommand {
+        DrawCommand::Text {
+            text: text.to_owned(),
+            font: hud::MESSAGE_FONT,
+            origin: at(25.0, 724.0),
+            size: 12.0,
+            wrap_width: Some(755.0),
+            color: Color::WHITE,
+        }
+    }
+
+    /// Asserts the message line says `text` now, for `n` ticks of flight
+    /// in all, and not after.
+    #[track_caller]
+    fn assert_lasts(view: &mut View, text: &str, n: u16) {
+        assert_eq!(view.message(), Some(text));
+        ticks(view, u32::from(n) - 1);
+        assert_eq!(
+            view.message(),
+            Some(text),
+            "still shown after {} ticks",
+            n - 1
+        );
+        ticks(view, 1);
+        assert_eq!(view.message(), None, "gone after {n} ticks");
     }
 
     /// L pressed twice: clearance, then landing.
@@ -5192,10 +6468,7 @@ mod tests {
         assert_eq!(nav_target(&view), Some(StellarId(129)));
         let cleared = "Moon traffic control reads you, you're cleared to land.";
         assert_eq!(view.message(), Some(cleared));
-        assert_eq!(
-            message(&view),
-            Some(overlay(cleared, MESSAGE_AT, OVERLAY_SIZE, Color::WHITE))
-        );
+        assert_eq!(message(&view), Some(message_drawn(cleared)));
         assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"], "the HUD shows it");
         assert_eq!(view.take_sounds(), [], "no sound for clearance");
 
@@ -5263,7 +6536,7 @@ mod tests {
         let uninhabited = StellarFlags::CAN_LAND | StellarFlags::UNINHABITED;
         let mut view = flight_among(vec![site(128, (0.0, 0.0), uninhabited)]);
         tap(&mut view, LAND);
-        assert_eq!(view.message(), Some("You are cleared to land."));
+        assert_lasts(&mut view, "You are cleared to land.", 250);
         let strict = LandingSite {
             min_status: 1,
             ..site(
@@ -5274,14 +6547,19 @@ mod tests {
         };
         let mut view = flight_among(vec![strict]);
         tap(&mut view, LAND);
-        assert_eq!(view.message(), Some("Docking request denied."));
         assert_eq!(nav_target(&view), Some(StellarId(129)), "selected anyway");
+        assert_lasts(&mut view, "Docking request denied.", 250);
         let mut view = flight();
         tap(&mut view, LAND);
         assert_eq!(
             view.message(),
             Some("Moon traffic control reads you, you're cleared to land."),
             "the nearer of Sol's two"
+        );
+        assert_lasts(
+            &mut view,
+            "Moon traffic control reads you, you're cleared to land.",
+            LANDING_TICKS,
         );
     }
 
@@ -5363,6 +6641,122 @@ mod tests {
             assert_eq!(view.message(), Some(expected));
             assert_eq!(nav_target(&view), Some(StellarId(140)), "kept: try again");
         }
+    }
+
+    #[test]
+    fn each_refusal_and_assignment_lasts_its_callers_ticks() {
+        let stellar = StellarId(128);
+        let landing = [
+            (LandingRefusal::Jumping, 240),
+            (LandingRefusal::Disabled, 240),
+            (LandingRefusal::NoStellars, 240),
+            (
+                LandingRefusal::TooFar {
+                    stellar,
+                    station: false,
+                },
+                360,
+            ),
+            (
+                LandingRefusal::TooFast {
+                    stellar,
+                    station: true,
+                    speed: 2.0,
+                },
+                360,
+            ),
+            (
+                LandingRefusal::Denied {
+                    stellar,
+                    station: false,
+                    min_status: 1,
+                },
+                250,
+            ),
+            (
+                LandingRefusal::NotLandable {
+                    stellar,
+                    station: false,
+                },
+                250,
+            ),
+        ];
+        for (refusal, ticks) in landing {
+            assert_eq!(landing_refusal_ticks(&refusal), ticks, "{refusal:?}");
+        }
+        let jump = [
+            (JumpRefusal::NoDestination, 360),
+            (JumpRefusal::TooClose { distance: 1.0 }, 360),
+            (JumpRefusal::NoFuel { fuel: 1.0 }, 240),
+            (JumpRefusal::Landed, 240),
+            (JumpRefusal::Disabled, 240),
+        ];
+        for (refusal, ticks) in jump {
+            assert_eq!(jump_refusal_ticks(&refusal), ticks, "{refusal:?}");
+        }
+        assert_eq!(assigned_ticks(Assigned::Escort), 240);
+        assert_eq!(assigned_ticks(Assigned::MyShip), 360);
+        assert_eq!(assigned_ticks(Assigned::Abandoned), 360);
+        assert_eq!(
+            [
+                MESSAGE_TICKS,
+                HAIL_QUOTE_TICKS,
+                GRANT_TICKS,
+                BOARD_LINE_TICKS,
+                BOARD_REFUSAL_TICKS,
+                ESCORT_TICKS,
+                SCRIPT_MESSAGE_TICKS,
+                LANDING_TICKS,
+                TOO_FAR_TICKS,
+                GATE_REFUSAL_TICKS,
+                JUMP_REFUSAL_TICKS,
+                OLD_SHIP_TICKS,
+            ],
+            [240, 420, 240, 250, 360, 250, 500, 250, 360, 250, 360, 360]
+        );
+    }
+
+    #[test]
+    fn a_new_message_replaces_the_old_and_its_time() {
+        let mut view = flight();
+        view.say_for("A", 420);
+        ticks(&mut view, 10);
+        view.say_for("B", 240);
+        assert_lasts(&mut view, "B", 240);
+    }
+
+    #[test]
+    fn a_message_waits_out_the_map() {
+        let mut view = flight();
+        view.say_for("A", 240);
+        ticks(&mut view, 40);
+        tap(&mut view, MAP_KEY);
+        assert!(view.map_open());
+        ticks(&mut view, 300);
+        tap(&mut view, MAP_KEY);
+        assert!(!view.map_open());
+        assert_lasts(&mut view, "A", 200);
+    }
+
+    #[test]
+    fn starting_a_jump_clears_only_too_close() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        tap(&mut view, JUMP);
+        assert_eq!(view.message(), Some(TOO_CLOSE));
+        fly_out(&mut view);
+        assert_eq!(view.message(), Some(TOO_CLOSE), "still shown");
+        tap(&mut view, JUMP);
+        assert!(view.preparing_jump(), "accepted");
+        assert_eq!(view.message(), None, "#42 cleared");
+
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.say_for(MISSION_FAILED, 240);
+        tap(&mut view, JUMP);
+        assert!(view.preparing_jump(), "accepted");
+        assert_eq!(view.message(), Some(MISSION_FAILED), "kept");
     }
 
     #[test]
@@ -5465,33 +6859,65 @@ mod tests {
     }
 
     #[test]
-    fn the_refusal_is_drawn_above_the_help_line_until_it_has_been_shown_long_enough() {
+    fn the_refusal_is_drawn_until_its_ticks_have_passed() {
         let mut view = flight();
         ticks(&mut view, 3);
         land_now(&mut view);
-        let shown = Some(overlay(
-            TOO_FAR_PLANET,
-            MESSAGE_AT,
-            OVERLAY_SIZE,
-            Color::WHITE,
-        ));
+        let shown = Some(message_drawn(TOO_FAR_PLANET));
         assert_eq!(message(&view), shown);
-        // After the help line.
-        let list = drawn(&view);
-        let commands: Vec<&DrawCommand> = list.iter().collect();
-        let help = commands
-            .iter()
-            .position(|c| **c == overlay(HELP, HELP_AT, OVERLAY_SIZE, Color::DIM))
-            .expect("the help line");
-        assert_eq!(Some(commands[help + 1]), shown.as_ref());
-        view.tick(Duration::from_millis(3999));
+        ticks(&mut view, 359);
         assert_eq!(message(&view), shown);
         assert_eq!(view.message(), Some(TOO_FAR_PLANET));
-        view.tick(Duration::from_millis(1));
+        ticks(&mut view, 1);
         assert_eq!(message(&view), None);
         assert_eq!(view.message(), None);
-        assert_eq!(MESSAGE_SHOWN_FOR, Duration::from_secs(4));
-        assert_eq!(MESSAGE_AT, at(16.0, 720.0));
+        assert_eq!(TOO_FAR_TICKS, 360);
+    }
+
+    #[test]
+    fn the_message_draws_over_the_starfield_and_under_the_ships() {
+        let mut view = flight();
+        land_now(&mut view);
+        let list = drawn(&view);
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        let mut stars = DrawList::new();
+        starfield::draw(&mut stars, &view.camera());
+        let stars: Vec<&DrawCommand> = stars.iter().collect();
+        assert!(!stars.is_empty());
+        assert_eq!(commands[..stars.len()], stars[..], "the starfield first");
+        assert_eq!(
+            commands[stars.len()],
+            &message_drawn(TOO_FAR_PLANET),
+            "then the message"
+        );
+        let sprite = commands
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Sprite { .. }))
+            .expect("the player's sprite");
+        assert!(stars.len() < sprite, "the ship over it");
+    }
+
+    #[test]
+    fn a_long_message_wraps_in_the_box_by_the_metrics() {
+        let mut view = flight().with_metrics(Rc::new(crate::text::fixture::MonoMetrics));
+        land_now(&mut view);
+        let text = vec!["abcd"; 60].join(" ");
+        view.say_for(text.clone(), MESSAGE_TICKS);
+        let mut expected = DrawList::new();
+        hud::draw_message(
+            &mut expected,
+            &text,
+            Some(&crate::text::fixture::MonoMetrics),
+        );
+        let list = drawn(&view);
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        let first = commands
+            .iter()
+            .position(|c| matches!(c, DrawCommand::Text { origin, .. } if *origin == message_at()))
+            .expect("the message");
+        let expected: Vec<&DrawCommand> = expected.iter().collect();
+        assert_eq!(expected.len(), 2);
+        assert_eq!(commands[first..first + 2], expected[..]);
     }
 
     #[test]
@@ -5500,11 +6926,15 @@ mod tests {
         land_now(&mut view);
         assert_eq!(view.message(), Some(TOO_FAR_PLANET));
         view.input(&key(LAND, true));
-        view.tick(Duration::from_secs(3));
+        ticks(&mut view, 300);
         view.input(&key(LAND, false));
         view.input(&key(LAND, true));
-        view.tick(Duration::from_secs(2));
-        assert_eq!(view.message(), Some(TOO_FAR_PLANET));
+        ticks(&mut view, 100);
+        assert_eq!(
+            view.message(),
+            Some(TOO_FAR_PLANET),
+            "360 ticks from the second"
+        );
     }
 
     #[test]
@@ -5541,7 +6971,7 @@ mod tests {
             ticks(&mut view, 1);
         }
         assert!(player(&view).position.y <= -6.0, "{:?}", player(&view));
-        assert!(view.elapsed < MESSAGE_SHOWN_FOR, "still on screen");
+        assert_eq!(view.message(), Some(TOO_FAR_PLANET), "still on screen");
         view.input(&key(LAND, true));
         assert_eq!(view.take_landing(), Some(StellarId(140)));
         assert_eq!(view.message(), None);
@@ -5766,19 +7196,12 @@ mod tests {
         let mut view = flight();
         view.input(&key(JUMP, true));
         assert_eq!(view.message(), Some(NO_DESTINATION));
-        assert_eq!(
-            message(&view),
-            Some(overlay(
-                NO_DESTINATION,
-                MESSAGE_AT,
-                OVERLAY_SIZE,
-                Color::WHITE
-            ))
-        );
+        assert_eq!(message(&view), Some(message_drawn(NO_DESTINATION)));
+        assert_lasts(&mut view, NO_DESTINATION, 360);
         plot(&mut view, 131);
         view.input(&key(JUMP, true));
-        assert_eq!(view.message(), Some(TOO_CLOSE));
         assert_eq!(view.jump_effect(), None);
+        assert_lasts(&mut view, TOO_CLOSE, 360);
 
         let mut dry = FlightView::new(FakeCatalog {
             fields: ShipFields { fuel: 50, ..FIELDS },
@@ -5787,8 +7210,8 @@ mod tests {
         plot(&mut dry, 131);
         fly_out(&mut dry);
         dry.input(&key(JUMP, true));
-        assert_eq!(dry.message(), Some(NO_FUEL));
         assert_eq!(dry.jump_effect(), None);
+        assert_lasts(&mut dry, NO_FUEL, 240);
     }
 
     #[test]
@@ -5877,7 +7300,7 @@ mod tests {
 
     #[test]
     fn a_jump_streaks_the_stars_then_fades_out_arrives_and_fades_in() {
-        let mut view = flight();
+        let mut view = flight().with_overlays(TITLED);
         plot(&mut view, 131);
         fly_out(&mut view);
         jump_now(&mut view);
@@ -5940,13 +7363,15 @@ mod tests {
             &mut hud,
             view.status_bar().expect("a status bar"),
             &HudState {
-                position: at(-1001.0, 0.0),
-                stellars: &[at(0.0, 0.0)],
-                ships: &[],
+                radar: &view.radar_shown(),
+                blink_on: view.hud_cadence.blink_on(),
                 reserves: reserves(&view),
-                nav: NavDisplay::None,
+                nav: NavDisplay::Off,
+                cargo: Some(&view.session().expect("flying").status_cargo()),
                 date: "June 24, 1177 NC",
+                disabled: false,
             },
+            None,
         );
         assert!(
             list.iter()
@@ -6084,6 +7509,7 @@ mod tests {
                 item_class: 0,
                 lc_name: "multi-jumping organ".to_owned(),
                 lc_plural: "multi-jumping organs".to_owned(),
+                scan_mask: 0,
                 on_purchase: nova_sim::Script::default(),
                 on_sell: nova_sim::Script::default(),
             }],
@@ -6095,7 +7521,7 @@ mod tests {
 
     #[test]
     fn a_multi_jump_plays_one_effect_and_loads_only_the_final_system() {
-        let mut view = FlightView::new(multi_jumping());
+        let mut view = FlightView::new(multi_jumping()).with_overlays(TITLED);
         plot(&mut view, 132);
         assert_eq!(
             view.session().expect("flying").course(),
@@ -6333,8 +7759,9 @@ mod tests {
     #[test]
     fn j_during_the_arrival_fade_in_begins_the_next_jump() {
         let mut view = fading_in_on_course_to_barnard();
+        let arrival = view.message().expect("the arrival message").to_owned();
         view.input(&key(JUMP, true));
-        assert_eq!(view.message(), None, "not refused");
+        assert_eq!(view.message(), Some(arrival.as_str()), "not refused");
         let session = view.session().expect("flying");
         assert!(
             session.preparing_jump() == Some(SystemId(132))
@@ -6441,17 +7868,13 @@ mod tests {
         let text = arrival_message(&name, &date, true);
         assert!(text.contains("Alpha Centauri"), "{text}");
         assert_eq!(view.message(), Some(text.as_str()));
-        assert_eq!(
-            message(&view),
-            Some(overlay(&text, MESSAGE_AT, OVERLAY_SIZE, Color::WHITE))
-        );
-        view.tick(MESSAGE_SHOWN_FOR);
-        assert_eq!(view.message(), None);
+        assert_eq!(message(&view), Some(message_drawn(&text)));
+        assert_lasts(&mut view, &text, 240);
         assert_eq!(message(&view), None);
     }
 
     #[test]
-    fn a_refusal_shown_before_the_jump_is_gone_after_it() {
+    fn a_refusal_shown_before_the_jump_is_replaced_by_the_arrival() {
         let mut view = flight();
         fly_out(&mut view);
         view.input(&key(JUMP, true));
@@ -6460,7 +7883,11 @@ mod tests {
         plot(&mut view, 131);
         assert_eq!(view.message(), Some(NO_DESTINATION), "still on screen");
         view.input(&key(JUMP, true));
-        assert_eq!(view.message(), None);
+        assert_eq!(
+            view.message(),
+            Some(NO_DESTINATION),
+            "starting the jump clears only #42"
+        );
         jump_now(&mut view);
         arrive_now(&mut view);
         let shown = view.message().expect("the arrival message");
@@ -6811,6 +8238,7 @@ mod tests {
                 item_class: 0,
                 lc_name: "fuel tank".to_owned(),
                 lc_plural: "fuel tanks".to_owned(),
+                scan_mask: 0,
                 on_purchase: nova_sim::Script::default(),
                 on_sell: nova_sim::Script::default(),
             }],
@@ -7703,13 +9131,19 @@ mod tests {
         view.tick(TICK);
         let session = view.session().expect("flying");
         let npc = session.npcs()[0].clone();
-        let blip = at(100.0, -100.0);
-        assert_eq!(radar_ships(session, &[(&npc, blip, 0.0)]), [blip]);
+        let blip = RadarShip {
+            position: at(100.0, -100.0),
+            targeted: false,
+            iff: ShipIff::Other,
+            heavy: false,
+        };
+        let at_blip = at(100.0, -100.0);
+        assert_eq!(radar_ships(session, &[(&npc, at_blip, 0.0)]), [blip]);
         let mut cloaked = npc.clone();
         cloaked.cloak = CLOAKED;
-        assert_eq!(radar_ships(session, &[(&cloaked, blip, 0.0)]), []);
+        assert_eq!(radar_ships(session, &[(&cloaked, at_blip, 0.0)]), []);
         cloaked.cloak_gear.on_radar = true;
-        assert_eq!(radar_ships(session, &[(&cloaked, blip, 0.0)]), [blip]);
+        assert_eq!(radar_ships(session, &[(&cloaked, at_blip, 0.0)]), [blip]);
     }
 
     #[test]
@@ -7739,20 +9173,23 @@ mod tests {
             .with_chance(chance)
             .with_behaviour(Rc::new(Still));
         view.tick(TICK);
-        let bar = view.status_bar().expect("a status bar");
-        let radar = bar.layout.radar.offset(hud::bar_origin(bar));
-        let blip = hud::radar_point(radar, at(0.0, 0.0), at(100.0, -100.0)).expect("in range");
+        // (100, -100) is 3.125 pixels each way: (929.125, 92.875).
+        let blip = RadarMark::Pixel {
+            x: 929,
+            y: 92,
+            color: RadarColor::Dim,
+        };
+        assert_eq!(blips(&view), [blip]);
         let list = drawn(&view);
-        let dim: Vec<Point> = list
-            .iter()
-            .filter_map(|command| match *command {
-                DrawCommand::Dot { center, color, .. } if color == layout().dim_radar => {
-                    Some(center)
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(dim, [blip]);
+        assert!(
+            list.iter().any(|command| *command
+                == DrawCommand::Dot {
+                    center: at(929.5, 92.5),
+                    size: 1.0,
+                    color: layout().dim_radar,
+                }),
+            "{list:?}"
+        );
     }
 
     /// The tints the NPC sprite (ship 129's sheet, 2001) is drawn with.
@@ -7763,15 +9200,6 @@ mod tests {
                 _ => None,
             })
             .collect()
-    }
-
-    /// The dim radar dots drawn: one for each NPC.
-    fn dim_dots(list: &DrawList) -> usize {
-        list.iter()
-            .filter(|command| {
-                matches!(command, DrawCommand::Dot { color, .. } if *color == layout().dim_radar)
-            })
-            .count()
     }
 
     #[test]
@@ -7796,7 +9224,7 @@ mod tests {
         assert_eq!(mode(&view), Mode::Emerging { ticks_left: 40 });
         let list = drawn(&view);
         assert_eq!(npc_tints(&list), [], "hidden");
-        assert_eq!(dim_dots(&list), 1, "on the radar all the same");
+        assert_eq!(blips(&view).len(), 1, "on the radar all the same");
         ticks(&mut view, 32);
         assert_eq!(mode(&view), Mode::Emerging { ticks_left: 8 });
         let list = drawn(&view);
@@ -7805,7 +9233,7 @@ mod tests {
             [Color::rgba(255, 255, 255, 128)],
             "half in"
         );
-        assert_eq!(dim_dots(&list), 1);
+        assert_eq!(blips(&view).len(), 1);
         ticks(&mut view, 8);
         assert_eq!(mode(&view), Mode::LeavingGate { tick: 0 });
         assert_eq!(npc_tints(&drawn(&view)), [Color::WHITE]);
@@ -8184,11 +9612,10 @@ mod tests {
 
     use nova_sim::{BoomId, Condition, WeaponId};
 
+    use crate::flight::brackets::{self, Standing};
     use crate::flight::catalog::EffectSheet;
     use crate::flight::effects::{DEBRIS_COLOR, Effects};
-    use crate::flight::target::{
-        self, BRACKETS, DISABLED_BRACKETS, HOSTILE_BRACKETS, NO_SECONDARY, NO_TARGET,
-    };
+    use crate::flight::target::{self, NO_SECONDARY, NO_TARGET};
     use crate::flight::weapons::{BEAM_UNDER_SHIPS, translucent};
     use crate::sound::CombatSound;
 
@@ -8287,6 +9714,7 @@ mod tests {
             item_class: 0,
             lc_name: format!("gun {id}"),
             lc_plural: format!("guns {id}"),
+            scan_mask: 0,
             on_purchase: nova_sim::Script::default(),
             on_sell: nova_sim::Script::default(),
         }
@@ -8456,12 +9884,11 @@ mod tests {
             "the threat, though farther"
         );
         let list = drawn(&view);
-        assert!(list.iter().any(line_in(HOSTILE_BRACKETS)), "{list:?}");
-        assert!(!list.iter().any(line_in(BRACKETS)));
+        assert_eq!(bracket_icons(&list), [10008, 10009, 10010, 10011], "red");
         alt_tap(&mut view, NEAREST_KEY);
         assert_eq!(target_of(&view), Some(NpcId(1)), "Alt-R: the nearer");
         let list = drawn(&view);
-        assert!(list.iter().any(line_in(BRACKETS)));
+        assert_eq!(bracket_icons(&list), [10012, 10013, 10014, 10015], "yellow");
     }
 
     /// How many of the shots in flight are of `weapon`.
@@ -8625,6 +10052,28 @@ mod tests {
         move |command| matches!(command, DrawCommand::Line { color: c, .. } if *c == color)
     }
 
+    /// Whether a command draws a `cïcn` in `ids`.
+    fn icon_in(ids: std::ops::RangeInclusive<i16>) -> impl Fn(&DrawCommand) -> bool {
+        move |command| {
+            matches!(
+                command,
+                DrawCommand::Picture { image, .. }
+                    if image.kind == crate::ImageKind::Icon && ids.contains(&image.id)
+            )
+        }
+    }
+
+    /// The bracket `cïcn`s drawn (10000-10023), in order.
+    fn bracket_icons(list: &DrawList) -> Vec<i16> {
+        list.iter()
+            .filter(|command| icon_in(10000..=10023)(command))
+            .map(|command| match command {
+                DrawCommand::Picture { image, .. } => image.id,
+                _ => unreachable!("a picture"),
+            })
+            .collect()
+    }
+
     /// The flight with an NPC 100 pixels above the player, the player
     /// firing its blaster (which explodes where it hits) and two beams, one
     /// drawn under the ships and one over them, at it.
@@ -8639,7 +10088,7 @@ mod tests {
 
     #[test]
     fn the_fight_is_drawn_between_the_stellars_and_the_hud_in_order() {
-        let view = firing_at_an_npc();
+        let view = firing_at_an_npc().with_overlays(TITLED);
         let list = drawn(&view);
         let stellar = first(&list, sprite_of(1128));
         let under = first(&list, line_in(Color::rgba(0, 0, 255, 255)));
@@ -8648,7 +10097,7 @@ mod tests {
         let shot = first(&list, sprite_of(3500));
         let over = first(&list, line_in(Color::rgba(0, 255, 0, 255)));
         let explosion = first(&list, sprite_of(400));
-        let brackets = first(&list, line_in(BRACKETS));
+        let brackets = first(&list, icon_in(10008..=10023));
         let title = first(
             &list,
             |c| matches!(c, DrawCommand::Text { origin, .. } if *origin == TITLE),
@@ -8983,36 +10432,35 @@ mod tests {
         let npc = &session.npcs()[0];
         let list = drawn(&view);
         let (shown, _) = view.shown_npc(npc);
-        let mut brackets = DrawList::new();
-        target::draw_brackets(
-            &mut brackets,
+        let Some(Ok(sheet)) = view.npc_sheets.get(&npc.ship) else {
+            panic!("a sheet");
+        };
+        let mut expected = DrawList::new();
+        brackets::draw_ship(
+            &mut expected,
             view.camera().world_to_screen(shown),
-            40.0,
-            target::Standing::Neutral,
+            Some((sheet.frame_width, sheet.frame_height)),
+            0.0,
+            Standing::Neutral,
         );
         let commands: Vec<_> = list.iter().cloned().collect();
-        let expected: Vec<_> = brackets.iter().cloned().collect();
+        let expected: Vec<_> = expected.iter().cloned().collect();
         assert!(
-            commands.windows(8).any(|run| run == expected),
+            commands.windows(4).any(|run| run == expected),
             "{commands:?}"
         );
         let bar = view.status_bar().expect("a status bar");
-        let card = TargetCard {
-            subtitle: "Light Transport".to_owned(),
-            picture: Some(3001),
-        };
         let mut panel = DrawList::new();
         target::draw_target_panel(
             &mut panel,
             &bar.layout,
             hud::bar_origin(bar),
-            Some(&target::TargetShown {
-                name: "Ship 129",
-                subtitle: None,
-                card: &card,
-                code: Some("Fed."),
-                reserves: npc.reserves,
-                disabled: false,
+            Some(&TargetPanel {
+                name: "Ship 129".to_owned(),
+                subtitle: "Light Transport".to_owned(),
+                picture: Some(3001),
+                status: nova_sim::TargetStatus::Shield(100),
+                tag: Some(Tag::Code("Fed.".to_owned())),
             }),
             None,
         );
@@ -9020,6 +10468,21 @@ mod tests {
         assert!(
             commands.windows(expected.len()).any(|run| run == expected),
             "{commands:?}"
+        );
+    }
+
+    #[test]
+    fn the_nav_brackets_draw_under_the_ship_brackets() {
+        let mut view = firing_at_an_npc();
+        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        let list = drawn(&view);
+        let nav = first(&list, icon_in(10000..=10007));
+        let ship = first(&list, icon_in(10008..=10023));
+        let npc = first(&list, sprite_of(2001));
+        assert!(npc < nav && nav + 4 == ship, "{npc} {nav} {ship}");
+        assert_eq!(
+            bracket_icons(&list),
+            [10000, 10001, 10002, 10003, 10012, 10013, 10014, 10015]
         );
     }
 
@@ -9033,9 +10496,223 @@ mod tests {
         let session = view.session().expect("flying");
         assert_eq!(session.npcs()[0].condition, Condition::Disabled);
         let list = drawn(&view);
-        assert!(list.iter().any(line_in(DISABLED_BRACKETS)));
-        assert!(!list.iter().any(line_in(BRACKETS)));
+        assert_eq!(bracket_icons(&list), [10020, 10021, 10022, 10023]);
         assert!(texts(&list).contains(&target::DISABLED.to_owned()));
+    }
+
+    /// The ship bracket `cïcn`s drawn (10008-10023), and where.
+    fn ship_bracket_corners(view: &View) -> Vec<(i16, Point)> {
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Picture { image, top_left } if icon_in(10008..=10023)(command) => {
+                    Some((image.id, *top_left))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Where `view` draws its target's sprite.
+    fn target_on_screen(view: &View) -> Point {
+        let session = view.session().expect("flying");
+        let npc = session.target().expect("a target");
+        view.camera().world_to_screen(view.shown_npc(npc).0)
+    }
+
+    #[test]
+    fn targeting_a_ship_on_screen_flies_its_brackets_in_then_settles_them() {
+        let mut view = fighting(armed(1, &[]), &placed(750, 650, 180));
+        assert_eq!(ship_bracket_corners(&view), []);
+        tap(&mut view, Key::Tab);
+        // Ship 129, 40 x 40: half 20; neutral, from 10012.
+        assert_eq!(
+            ship_bracket_corners(&view),
+            corners_at(10012, target_on_screen(&view), 20.0 + 196.0),
+            "a frame drawn before the next tick"
+        );
+        for expand in [196.0, 136.0, 76.0, 16.0, 0.0, 0.0] {
+            view.tick(TICK);
+            assert_eq!(
+                ship_bracket_corners(&view),
+                corners_at(10012, target_on_screen(&view), 20.0 + expand),
+                "{expand}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_target_whose_sheet_cannot_be_read_is_bracketed_round_its_crossed_box() {
+        let mut view = fighting(trafficked(&[130], 1, 130, 3), &placed(850, 650, 90));
+        tap(&mut view, Key::Tab);
+        ticks(&mut view, 5);
+        // Its 64 x 64 box: half 32.
+        assert_eq!(
+            ship_bracket_corners(&view),
+            corners_at(10012, target_on_screen(&view), PLACEHOLDER_SIZE / 2.0)
+        );
+    }
+
+    /// What the target panel's status line shows this frame, if there is
+    /// a target.
+    fn status_shown(view: &View) -> Option<nova_sim::TargetStatus> {
+        view.target_shown()
+            .as_ref()
+            .as_ref()
+            .map(|panel| panel.status)
+    }
+
+    /// What the target panel's status line would show of the target now.
+    fn status_now(view: &View) -> Option<nova_sim::TargetStatus> {
+        view.target_now().map(|panel| panel.status)
+    }
+
+    /// An unarmed flight targeting its one NPC, intact, its panel drawn
+    /// two ticks after a timed redraw.
+    fn targeting_after_a_redraw(view: View) -> View {
+        let mut view = view;
+        while now_tick(&view) % TARGET_PERIOD_TICKS != 1 {
+            view.tick(TICK);
+        }
+        tap(&mut view, Key::Tab);
+        view.tick(TICK);
+        assert_eq!(status_shown(&view), status_now(&view));
+        assert!(
+            matches!(status_shown(&view), Some(nova_sim::TargetStatus::Shield(_))),
+            "{:?}",
+            status_shown(&view)
+        );
+        view
+    }
+
+    #[test]
+    fn the_target_panel_holds_a_disabling_until_its_next_timed_redraw() {
+        let view = fighting(armed(1, &[]), &placed(750, 650, 180));
+        let view = targeting_after_a_redraw(view);
+        let held = status_shown(&view);
+        let mut view = view.with_disable_rule(Rc::new(Disabling));
+        view.tick(TICK);
+        assert_eq!(status_now(&view), Some(nova_sim::TargetStatus::Disabled));
+        while !now_tick(&view).is_multiple_of(TARGET_PERIOD_TICKS) {
+            assert_eq!(status_shown(&view), held, "tick {}", now_tick(&view));
+            assert!(!texts(&drawn(&view)).contains(&target::DISABLED.to_owned()));
+            view.tick(TICK);
+        }
+        assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
+        assert!(texts(&drawn(&view)).contains(&target::DISABLED.to_owned()));
+    }
+
+    #[test]
+    fn read_the_bibles_way_the_target_panel_follows_every_frame() {
+        let view = every_frame(fighting(armed(1, &[]), &placed(750, 650, 180)));
+        let view = targeting_after_a_redraw(view);
+        let mut view = view.with_disable_rule(Rc::new(Disabling));
+        view.tick(TICK);
+        assert_ne!(now_tick(&view) % TARGET_PERIOD_TICKS, 0);
+        assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
+    }
+
+    #[test]
+    fn redrawing_the_status_retakes_the_target_panel() {
+        let view = fighting(armed(1, &[]), &placed(750, 650, 180));
+        let view = targeting_after_a_redraw(view);
+        let mut view = view.with_disable_rule(Rc::new(Disabling));
+        view.tick(TICK);
+        assert_ne!(status_shown(&view), status_now(&view), "held");
+        view.redraw_status();
+        assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
+    }
+
+    #[test]
+    fn a_change_of_target_shows_at_once() {
+        let mut view = fighting(armed(2, &[]), &two_npcs());
+        tap(&mut view, Key::Tab);
+        view.tick(TICK);
+        let drawn_for = |view: &View| {
+            view.target_scene
+                .as_ref()
+                .and_then(|(drawn, _)| drawn.map(|drawn| drawn.npc))
+        };
+        assert_eq!(drawn_for(&view), Some(NpcId(0)));
+        tap(&mut view, Key::Tab);
+        assert_eq!(target_of(&view), Some(NpcId(1)));
+        assert_eq!(drawn_for(&view), Some(NpcId(0)), "not yet retaken");
+        assert_eq!(*view.target_shown(), view.target_now(), "shown at once");
+        view.tick(TICK);
+        assert_eq!(drawn_for(&view), Some(NpcId(1)), "retaken");
+        tap(&mut view, Key::Tab);
+        assert_eq!(target_of(&view), None);
+        assert_eq!(*view.target_shown(), None, "lost at once");
+        let list = texts(&drawn(&view));
+        assert!(list.contains(&NO_TARGET.to_owned()), "{list:?}");
+    }
+
+    #[test]
+    fn a_falling_shield_shows_at_the_radar_refreshes_only() {
+        let mut catalog = armed(1, &[BLASTER]);
+        catalog.weapons[0].energy_dmg = 1;
+        let mut view = fighting(catalog, &placed(750, 650, 180));
+        tap(&mut view, Key::Tab);
+        view.input(&key(FIRE_KEY, true));
+        let mut shown = status_shown(&view);
+        let mut changes = 0;
+        let mut held = 0;
+        for _ in 0..240 {
+            let (blink, before) = (view.hud_cadence.blink_on(), now_tick(&view));
+            view.tick(TICK);
+            let radar = view.hud_cadence.blink_on() != blink;
+            let timed = now_tick(&view) / TARGET_PERIOD_TICKS > before / TARGET_PERIOD_TICKS;
+            let now = status_shown(&view);
+            if now != shown {
+                changes += 1;
+                assert!(radar || timed, "tick {}: {now:?}", now_tick(&view));
+                assert_eq!(now, status_now(&view), "tick {}", now_tick(&view));
+            }
+            if now != status_now(&view) {
+                held += 1;
+            }
+            shown = now;
+            if target_of(&view).is_none() {
+                break;
+            }
+        }
+        view.input(&key(FIRE_KEY, false));
+        assert!(changes > 1, "the shield fell: {changes}");
+        assert!(held > 0, "and was held between refreshes");
+    }
+
+    #[test]
+    fn a_disabled_player_has_no_fuel_gauge() {
+        let mut catalog = armed(1, &[]);
+        catalog.hulls[1] = hull_of(129, &[BLASTER]);
+        let mut view = fighting(catalog, &placed(750, 650, 180))
+            .with_behaviour(Rc::new(Firing))
+            .with_disable_rule(Rc::new(Disabling));
+        let colors = |view: &View| -> Vec<Color> {
+            lines(&drawn(view))
+                .into_iter()
+                .filter_map(|command| match command {
+                    DrawCommand::Line { color, .. } => Some(color),
+                    _ => None,
+                })
+                .collect()
+        };
+        let layout = layout();
+        assert!(colors(&view).contains(&layout.fuel_full), "intact");
+        for _ in 0..40 {
+            if view.session().expect("flying").player_condition() == Condition::Disabled {
+                break;
+            }
+            view.tick(TICK);
+        }
+        assert_eq!(
+            view.session().expect("flying").player_condition(),
+            Condition::Disabled
+        );
+        let shown = colors(&view);
+        assert!(!shown.contains(&layout.fuel_full), "{shown:?}");
+        assert!(!shown.contains(&layout.fuel_partial), "{shown:?}");
+        assert!(shown.contains(&layout.armor_color), "{shown:?}");
     }
 
     /// Disables every ship.
@@ -9314,6 +10991,8 @@ mod tests {
                 comm_name: String::new(),
                 scan_mask: 0,
                 scan_fine: 0,
+                news_pic: -1,
+                require: 0,
             }],
             ..catalog
         }
@@ -9443,6 +11122,43 @@ mod tests {
         }
     }
 
+    /// Always repels boarders; never asked anything more.
+    #[derive(Debug)]
+    struct Repels;
+
+    impl BoardingRule for Repels {
+        fn repels(&self, _booty: u16) -> bool {
+            true
+        }
+
+        fn capture_odds(
+            &self,
+            _crew: &nova_sim::board::CaptureCrew,
+            _chance: &mut dyn Chance,
+        ) -> u8 {
+            unreachable!("repelled")
+        }
+
+        fn captures(&self, _odds: u8, _chance: &mut dyn Chance) -> bool {
+            unreachable!("repelled")
+        }
+
+        fn person_credits(&self, _credits: i32, _chance: &mut dyn Chance) -> i64 {
+            unreachable!("repelled")
+        }
+
+        fn grant(
+            &self,
+            _grant: &nova_sim::grant::PersonGrant,
+            _stock: &[nova_sim::grant::GrantStock],
+            _free_mass: i64,
+            _grant_max: nova_sim::RuleSource,
+            _chance: &mut dyn Chance,
+        ) -> Option<nova_sim::grant::Granted> {
+            unreachable!("repelled")
+        }
+    }
+
     /// [`trafficked`] with its ship 129 (of strength 5, a crew of 3 and a
     /// `Cost` of 150,000, and no speed, so it starts at rest) carrying
     /// money (`Booty` 0x0040), and the player's ship 128 a crew of 10.
@@ -9505,8 +11221,8 @@ mod tests {
     fn each_refused_boarding_says_why_in_the_originals_words() {
         let mut intact = beside(750, 750, 0, true);
         tap(&mut intact, BOARD_KEY);
-        assert_eq!(intact.message(), Some(CANT_BOARD));
         assert_eq!(intact.take_boarding(), None);
+        assert_lasts(&mut intact, CANT_BOARD, 360);
         let mut far = beside(800, 750, 0, false);
         tap(&mut far, BOARD_KEY);
         assert_eq!(far.message(), Some(NOT_CLOSE_ENOUGH));
@@ -9516,6 +11232,11 @@ mod tests {
         fast.input(&key(Key::Up, false));
         tap(&mut fast, BOARD_KEY);
         assert_eq!(fast.message(), Some(TOO_FAST_TO_BOARD));
+        let mut repelled = beside(750, 750, 0, false).with_boarding_rule(Rc::new(Repels));
+        tap(&mut repelled, BOARD_KEY);
+        assert_eq!(repelled.take_boarding(), None);
+        assert_lasts(&mut repelled, REPELLED, MESSAGE_TICKS);
+        assert_eq!(MESSAGE_TICKS, 240);
         assert_eq!(
             [CANT_BOARD, NOT_CLOSE_ENOUGH, TOO_FAST_TO_BOARD, REPELLED,],
             [
@@ -9541,6 +11262,17 @@ mod tests {
     }
 
     #[test]
+    fn boarding_keeps_the_message() {
+        let mut view = beside(750, 750, 0, false);
+        view.say_for(MISSION_FAILED, 240);
+        tap(&mut view, BOARD_KEY);
+        view.take_boarding().expect("boarded");
+        assert_eq!(view.message(), Some(MISSION_FAILED), "under the dialog");
+        assert_eq!(view.plunder(Take::Abort), Taken::Aborted);
+        assert_lasts(&mut view, MISSION_FAILED, 240);
+    }
+
+    #[test]
     fn plundering_goes_through_the_session_and_says_what_it_took() {
         let mut view = beside(750, 750, 0, false);
         tap(&mut view, BOARD_KEY);
@@ -9558,8 +11290,8 @@ mod tests {
             "You stole all the {} credits from this ship.",
             boarding.credits
         );
-        assert_eq!(view.message(), Some(said.as_str()));
         assert_eq!(view.boarding().map(|now| now.credits), Some(0));
+        assert_lasts(&mut view, &said, 240);
         assert_eq!(view.plunder(Take::Abort), Taken::Aborted);
         assert_eq!(view.boarding(), None);
     }
@@ -9656,8 +11388,13 @@ mod tests {
     /// [`beside`], boarded by [`Sure`] and captured, awaiting its
     /// assignment.
     fn captured() -> View {
+        captured_in(boardable())
+    }
+
+    /// [`captured`], from `catalog`, a [`boardable`] one.
+    fn captured_in(catalog: FakeCatalog) -> View {
         let (_, chance) = scripted(&placed(750, 750, 0));
-        let mut view = FlightView::new(boardable())
+        let mut view = FlightView::new(catalog)
             .with_chance(chance)
             .with_behaviour(Rc::new(Still))
             .with_disable_rule(Rc::new(DisablesTheStrong))
@@ -9673,6 +11410,27 @@ mod tests {
     }
 
     #[test]
+    fn the_target_panel_is_redrawn_once_the_plunder_dialog_closes() {
+        let mut view = beside(750, 750, 0, true);
+        view.tick(TICK);
+        while now_tick(&view) % TARGET_PERIOD_TICKS != 1 {
+            view.tick(TICK);
+        }
+        let mut view = view.with_disable_rule(Rc::new(DisablesTheStrong));
+        view.tick(TICK);
+        assert_eq!(status_now(&view), Some(nova_sim::TargetStatus::Disabled));
+        assert_ne!(status_shown(&view), status_now(&view), "held");
+        tap(&mut view, BOARD_KEY);
+        let boarding = view.take_boarding().expect("boarded").view;
+        assert_eq!(
+            view.plunder(Take::Credits),
+            Taken::Credits(boarding.credits)
+        );
+        assert_eq!(*view.target_shown(), view.target_now(), "redrawn at once");
+        assert_eq!(status_shown(&view), Some(nova_sim::TargetStatus::Disabled));
+    }
+
+    #[test]
     fn use_as_escort_says_so() {
         let mut view = captured();
         view.tick(TICK / 2);
@@ -9680,10 +11438,10 @@ mod tests {
         assert!(alpha > 0.0, "between steps");
         assert_eq!(view.assign(Assignment::Escort), Some(Assigned::Escort));
         assert_eq!(view.alpha(), alpha, "the old ship flies on");
-        assert_eq!(view.message(), Some(ASSIGNED_ESCORT));
         let pilot = view.pilot().expect("a pilot");
         assert_eq!(pilot.escorts().len(), 1);
         assert!(view.take_save_due());
+        assert_lasts(&mut view, ASSIGNED_ESCORT, 240);
     }
 
     #[test]
@@ -9715,6 +11473,7 @@ mod tests {
             "ship 129's sheet, and its lights"
         );
         assert_eq!(view.assign(Assignment::MyShip), None, "nothing awaits");
+        assert_lasts(&mut view, RETAINED_OLD_SHIP, 360);
     }
 
     #[test]
@@ -9774,6 +11533,7 @@ mod tests {
                 item_class: 0,
                 lc_name: "rocket".to_owned(),
                 lc_plural: "rockets".to_owned(),
+                scan_mask: 0,
                 on_purchase: nova_sim::Script::default(),
                 on_sell: nova_sim::Script::default(),
             },
@@ -9868,7 +11628,7 @@ mod tests {
         let mut view = hailable(false);
         tap(&mut view, HAIL_KEY);
         assert_eq!(view.take_hail(), None);
-        assert_eq!(view.message(), Some(NO_RESPONSE));
+        assert_lasts(&mut view, NO_RESPONSE, 240);
         assert_eq!(
             hail_refusal_message(HailRefusal::NoResponse),
             Some("No response.")
@@ -9885,6 +11645,17 @@ mod tests {
     }
 
     #[test]
+    fn a_hail_dialog_keeps_the_message() {
+        let mut view = hailable(true);
+        view.say_for(MISSION_FAILED, 240);
+        tap(&mut view, HAIL_KEY);
+        view.take_hail().expect("hailed");
+        assert_eq!(view.message(), Some(MISSION_FAILED), "under the dialog");
+        view.hang_up();
+        assert_lasts(&mut view, MISSION_FAILED, 240);
+    }
+
+    #[test]
     fn answers_haggles_and_hanging_up_go_through_the_session() {
         let mut view = hailable(true);
         tap(&mut view, HAIL_KEY);
@@ -9895,6 +11666,22 @@ mod tests {
         view.hang_up();
         assert_eq!(view.hailing(), None);
         assert_eq!(view.answer(0), None);
+    }
+
+    #[test]
+    fn hanging_up_a_hail_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
+        let mut view = hailable(true);
+        ticks(&mut view, 3);
+        tap(&mut view, HAIL_KEY);
+        view.take_hail().expect("hailed");
+        let stale = RadarScene::default();
+        assert_ne!(view.radar_now(), stale);
+        view.radar_scene = Some(stale);
+        let cadence = view.hud_cadence;
+        view.hang_up();
+        assert_eq!(view.hailing(), None);
+        assert_eq!(view.hud_cadence, cadence, "neither timed nor flipped");
+        assert_eq!(*view.radar_shown(), view.radar_now(), "as _RedrawStatus");
     }
 
     /// An option that asks a price, saying nothing.
@@ -9957,6 +11744,41 @@ mod tests {
             comm_message(&note(Help::Repair)),
             "Cruiser:  Repairs complete."
         );
+    }
+
+    /// An option the ship answers by flying over to refuel the player.
+    #[derive(Debug)]
+    struct Refuel;
+
+    impl nova_sim::HailOption for Refuel {
+        fn label(&self) -> String {
+            "Refuel".to_owned()
+        }
+
+        fn applies(&self, _hail: &nova_sim::Hail) -> bool {
+            true
+        }
+
+        fn press(&self, _hail: &nova_sim::Hail, _chance: &mut dyn Chance) -> nova_sim::Answer {
+            nova_sim::Answer {
+                deed: Some(nova_sim::Deed::Help(Help::Refuel)),
+                ..nova_sim::Answer::default()
+            }
+        }
+    }
+
+    #[test]
+    fn a_helpers_note_shows_for_the_common_time() {
+        let mut view = hailable(true).with_hail_options(HailOptions::empty().with(Rc::new(Refuel)));
+        tap(&mut view, HAIL_KEY);
+        view.take_hail().expect("hailed");
+        view.answer(0).expect("open");
+        view.hang_up();
+        assert_eq!(view.message(), None);
+        view.tick(TICK);
+        let note = view.message().expect("refuelled").to_owned();
+        assert!(note.ends_with(":  Energy transfer complete."), "{note}");
+        assert_lasts(&mut view, &note, MESSAGE_TICKS);
     }
 
     #[test]
@@ -10109,6 +11931,96 @@ mod tests {
         view
     }
 
+    #[test]
+    fn the_players_escort_is_bracketed_green() {
+        let mut view = escorted();
+        option(&mut view, TARGET_KEY);
+        assert_eq!(target_of(&view), Some(NpcId(1)));
+        assert_eq!(bracket_icons(&drawn(&view)), [10016, 10017, 10018, 10019]);
+    }
+
+    #[test]
+    fn the_players_fighter_is_bracketed_green() {
+        let mut view = fighters_out();
+        option(&mut view, TARGET_KEY);
+        assert_eq!(target_of(&view), Some(NpcId(1)));
+        assert_eq!(bracket_icons(&drawn(&view)), [10016, 10017, 10018, 10019]);
+    }
+
+    /// Where the target panel's label `label` is drawn, if it is: its
+    /// top-left.
+    fn label_drawn(view: &View, label: &str) -> Option<Point> {
+        drawn(view).iter().find_map(|command| match command {
+            DrawCommand::Text { text, origin, .. } if text == label => Some(*origin),
+            _ => None,
+        })
+    }
+
+    /// Where `view` sets a label `label` against the target panel's
+    /// bottom right, measured by `MonoMetrics`: 7 in from the right,
+    /// on the baseline 6 above the bottom.
+    fn label_place(view: &View, label: &str) -> Point {
+        let bar = view.status_bar().expect("a status bar");
+        let layout = &bar.layout;
+        let area = layout.targ.offset(hud::bar_origin(bar));
+        let width = crate::text::TextMetrics::width(
+            &crate::text::fixture::MonoMetrics,
+            layout.font,
+            layout.font_size,
+            label,
+        );
+        at(
+            area.max.x - 7.0 - width,
+            area.max.y - 6.0 - layout.font_size,
+        )
+    }
+
+    #[test]
+    fn the_target_panel_labels_the_players_escort_and_fighter_and_omits_a_missing_code() {
+        let mono = || Rc::new(crate::text::fixture::MonoMetrics);
+        let mut view = escorted().with_metrics(mono());
+        option(&mut view, TARGET_KEY);
+        assert_eq!(target_of(&view), Some(NpcId(1)));
+        assert_eq!(
+            label_drawn(&view, target::ESCORT),
+            Some(label_place(&view, target::ESCORT)),
+            "Escort"
+        );
+        let mut view = fighters_out().with_metrics(mono());
+        option(&mut view, TARGET_KEY);
+        assert_eq!(target_of(&view), Some(NpcId(1)));
+        assert_eq!(
+            label_drawn(&view, target::FIGHTER),
+            Some(label_place(&view, target::FIGHTER)),
+            "Fighter"
+        );
+        assert_eq!(label_drawn(&view, target::ESCORT), None);
+        // The traffic ship's government, 140, has the code "Fed.".
+        let mut view = fighting(armed(1, &[]), &placed(750, 650, 180)).with_metrics(mono());
+        tap(&mut view, TARGET_KEY);
+        assert_eq!(
+            label_drawn(&view, "Fed."),
+            Some(label_place(&view, "Fed.")),
+            "with a code"
+        );
+        let uncoded = FakeCatalog {
+            codes: Vec::new(),
+            ..armed(1, &[])
+        };
+        let mut view = fighting(uncoded, &placed(750, 650, 180)).with_metrics(mono());
+        tap(&mut view, TARGET_KEY);
+        assert!(target_of(&view).is_some());
+        let bottom = label_place(&view, "").y;
+        let at_bottom: Vec<String> = drawn(&view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, origin, .. } if origin.y == bottom => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(at_bottom, ["Shield: ", "100%"], "no code drawn");
+    }
+
     fn orders(view: &View) -> Vec<Option<EscortOrder>> {
         view.pilot()
             .expect("flying")
@@ -10221,8 +12133,11 @@ mod tests {
         tap(&mut view, ESCORT_RECALL_KEY);
         assert_eq!(view.message(), None, "already in formation");
         tap(&mut view, ESCORT_HOLD_KEY);
-        view.tick(MESSAGE_SHOWN_FOR);
-        assert_eq!(view.message(), None, "gone in time");
+        assert_lasts(
+            &mut view,
+            "New escort orders assigned:  All ships holding position.",
+            ESCORT_TICKS,
+        );
         tap(&mut view, ESCORT_HOLD_KEY);
         assert_eq!(view.message(), None, "held already");
     }
@@ -10251,6 +12166,39 @@ mod tests {
         tap(&mut view, Key::Char('1'));
         assert_eq!(nav_target(&view), Some(StellarId(128)), "shut: a stellar");
         assert_eq!(view.escort_menu().group(), EscortGroup::All);
+    }
+
+    #[test]
+    fn return_clears_the_message_and_closes_the_menu() {
+        let mut view = escorted();
+        view.say_for(MISSION_FAILED, 240);
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        assert_eq!(view.message(), Some(MISSION_FAILED), "kept by the menu");
+        tap(&mut view, MENU_CLOSE_KEY);
+        assert!(!view.escort_menu().is_open());
+        assert_eq!(view.message(), None, "acknowledged");
+        let mut view = flight();
+        view.say_for(MISSION_FAILED, 240);
+        tap(&mut view, MENU_CLOSE_KEY);
+        assert_eq!(view.message(), None, "with the menu shut too");
+    }
+
+    #[test]
+    fn opening_the_escort_menu_clears_no_escorts_only() {
+        let mut view = escorted();
+        view.say_for(NO_ESCORTS, ESCORT_TICKS);
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        assert_eq!(view.message(), None, "#51 cleared");
+        view.say_for(NO_ESCORTS, ESCORT_TICKS);
+        tap(&mut view, MENU_KEY);
+        assert!(!view.escort_menu().is_open());
+        assert_eq!(view.message(), Some(NO_ESCORTS), "closing does not clear");
+        view.say_for(MISSION_FAILED, 240);
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        assert_eq!(view.message(), Some(MISSION_FAILED), "kept");
     }
 
     #[test]
@@ -10439,6 +12387,7 @@ mod tests {
             Some("You don't have any escorts."),
             "no command"
         );
+        assert_lasts(&mut view, NO_ESCORTS, 250);
     }
 
     #[test]
@@ -10521,7 +12470,7 @@ mod tests {
 
     #[test]
     fn the_open_menu_is_drawn_over_the_flight_under_the_hud() {
-        let mut view = escorted();
+        let mut view = escorted().with_overlays(TITLED);
         let mut shut = DrawList::new();
         view.draw(&mut shut);
         tap(&mut view, MENU_KEY);
@@ -10626,6 +12575,43 @@ mod tests {
         });
         assert_eq!(broken.escorts_for_hire(), None);
         assert_eq!(broken.hire(ShipId(129)), Err(HireRefusal::NoBar));
+    }
+
+    #[test]
+    fn the_bars_news_is_drawn_through_the_session_on_the_flights_chance() {
+        let always = Rc::new(RefCell::new(Always::default()));
+        let shared: Rc<RefCell<dyn Chance>> = always.clone();
+        let strings = FakeCatalog {
+            strings: vec![
+                (8100, vec!["C1".to_owned(), "C2".to_owned()]),
+                (8101, vec!["G1".to_owned(), "G2".to_owned()]),
+            ],
+            ..catalog()
+        };
+        let mut view = FlightView::new(hiring())
+            .with_chance(SharedChance::new(shared))
+            .with_strings(Rc::new(strings));
+        assert!(!view.open_bar(), "in flight");
+        assert_eq!(view.news(), None);
+        assert_eq!(view.news_picture(), None, "in flight");
+        land_now(&mut view);
+        assert_eq!(view.news_picture(), Some(9000), "no NewsPic");
+        assert!(view.open_bar());
+        assert_eq!(
+            view.news(),
+            Some(&nova_sim::News {
+                commercial: "C2".to_owned(),
+                story: "G2".to_owned(),
+            }),
+            "each the last string, as the flight's chance rolls"
+        );
+        let mut broken = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..hiring()
+        });
+        assert!(!broken.open_bar());
+        assert_eq!(broken.news(), None);
+        assert_eq!(broken.news_picture(), None);
     }
 
     // The mission screens.
@@ -10734,6 +12720,36 @@ mod tests {
         );
         assert_eq!(broken.refuse_mission(MissionId(130)), Err(NotOffered));
         assert_eq!(broken.take_mission_texts(), []);
+    }
+
+    #[test]
+    fn closing_a_mission_dialog_or_showing_its_texts_redraws_the_hud() {
+        let mut errands = catalog();
+        errands.sites = vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        errands.missions = vec![errand(130)];
+        errands.mission_texts = vec![MissionTexts {
+            brief: Some("Go.".to_owned()),
+            ..MissionTexts::named(MissionId(130), "Run")
+        }];
+        let mut view = FlightView::new(errands);
+        let stale = RadarScene::default();
+        let fresh = view.radar_now();
+        assert_ne!(fresh, stale);
+        view.radar_scene = Some(stale.clone());
+        let _ = view.accept_mission(MissionId(130));
+        assert_eq!(view.radar_scene.as_ref(), Some(&fresh), "accepted");
+        view.radar_scene = Some(stale.clone());
+        let _ = view.refuse_mission(MissionId(130));
+        assert_eq!(view.radar_scene.as_ref(), Some(&fresh), "refused");
+        view.radar_scene = Some(stale.clone());
+        assert_eq!(view.take_mission_texts(), []);
+        assert_eq!(view.radar_scene.as_ref(), Some(&stale), "nothing shown");
+        land_now(&mut view);
+        view.settle_script();
+        assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
+        view.radar_scene = Some(stale.clone());
+        assert_eq!(view.take_mission_texts().len(), 1);
+        assert_eq!(view.radar_scene, Some(view.radar_now()), "the brief shown");
     }
 
     #[test]
@@ -10846,6 +12862,85 @@ mod tests {
         assert_eq!(CARGO_JETTISONED, "Cargo jettisoned.");
     }
 
+    /// The cargo boxes' sprites drawn, `rlëD` 500's, in the order drawn.
+    fn box_sprites(list: &DrawList) -> Vec<(ImageKey, Point)> {
+        sprites(list)
+            .into_iter()
+            .filter(|(image, _)| image.id == 500)
+            .collect()
+    }
+
+    #[test]
+    fn command_k_drops_cargo_boxes_drawn_under_the_ship_where_they_drift() {
+        let mut view = carrying(0, true);
+        // Turned off straight up, so the boxes drift on both axes.
+        view.input(&key(Key::Right, true));
+        ticks(&mut view, 10);
+        view.input(&key(Key::Right, false));
+        assert!(box_sprites(&drawn(&view)).is_empty());
+        let _ = view.take_sounds();
+        command_tap(&mut view, JETTISON_KEY, false);
+        let session = view.session().expect("flying");
+        let boxes = session.cargo_boxes().to_vec();
+        assert_eq!(boxes.len(), 2, "10 tons");
+        assert!(
+            boxes[0].velocity.x.abs() > 0.1 && boxes[0].velocity.y.abs() > 0.1,
+            "{boxes:?}"
+        );
+        // A quarter of the way from the last step to this one.
+        view.alpha = 0.25;
+        let camera = view.camera();
+        let behind = 0.75;
+        let expected: Vec<_> = boxes
+            .iter()
+            .map(|made| {
+                (
+                    ImageKey::sprite(500, made.frame),
+                    camera.world_to_screen(Point::new(
+                        made.velocity.x.mul_add(-behind, made.position.x),
+                        made.velocity.y.mul_add(-behind, made.position.y),
+                    )),
+                )
+            })
+            .collect();
+        let list = drawn(&view);
+        assert_eq!(box_sprites(&list), expected);
+        let all = sprites(&list);
+        let first_box = all.iter().position(|(image, _)| image.id == 500);
+        let ship = all.iter().position(|(image, _)| image.id == 2000);
+        assert!(first_box < ship, "under the ship: {all:?}");
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::CargoJettisoned)],
+            "snd 154"
+        );
+    }
+
+    #[test]
+    fn a_landing_clears_the_cargo_boxes() {
+        let mut view = carrying(0, true);
+        command_tap(&mut view, JETTISON_KEY, false);
+        assert_eq!(box_sprites(&drawn(&view)).len(), 2);
+        land_now(&mut view);
+        assert!(view.session().expect("flying").landed().is_some());
+        assert!(view.session().expect("flying").cargo_boxes().is_empty());
+        assert!(box_sprites(&drawn(&view)).is_empty());
+    }
+
+    #[test]
+    fn a_jump_clears_the_cargo_boxes() {
+        let mut view = carrying(0, true);
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        if let Ok(session) = &mut view.session {
+            session.jettison_cargo(true, &mut nova_sim::NeverFires);
+        }
+        assert_eq!(view.session().expect("flying").cargo_boxes().len(), 2);
+        arrive_now(&mut view);
+        assert!(box_sprites(&drawn(&view)).is_empty());
+    }
+
     #[test]
     fn k_alone_jettisons_nothing() {
         let mut view = carrying(0, false);
@@ -10945,11 +13040,7 @@ mod tests {
             retrieved_message("*Medical Supplies"),
             "You retrieved  Medical Supplies from this ship."
         );
-        assert_eq!(
-            RETRIEVED_SHOWN_FOR,
-            Duration::from_millis(250 * 1000 / 30),
-            "0xfa frames @0x65538"
-        );
+        assert_eq!(BOARD_LINE_TICKS, 250, "0xfa frames @0x65538");
     }
 
     #[test]
@@ -11041,6 +13132,8 @@ mod tests {
             comm_name: String::new(),
             scan_mask: 0x0004,
             scan_fine: fine,
+            news_pic: -1,
+            require: 0,
         }];
         catalog.missions = vec![MissionRecord {
             cargo_type: 0,
@@ -11088,7 +13181,7 @@ mod tests {
         }
         let pilot = view.pilot().expect("flying");
         assert_eq!(pilot.missions().iter().count(), 0, "failed at once");
-        assert_eq!(view.message(), Some(MISSION_SCANNED));
+        assert_lasts(&mut view, MISSION_SCANNED, 400);
         assert_eq!(
             MISSION_SCANNED,
             "Your ship has been scanned - mission failed."
@@ -11129,6 +13222,118 @@ mod tests {
             "Viper:  Kestrel, your attempt to smuggle illegal cargo through this system has \
              been detected. You have been fined 12,300 credits."
         );
+    }
+
+    #[test]
+    fn an_illegal_junk_notice_names_it_in_place_of_illegal_cargo() {
+        assert_eq!(
+            illegal_junk_message("Viper", "Kestrel", "bio-weapons", 0),
+            "Viper:  Kestrel, your attempt to smuggle bio-weapons through this system has \
+             been detected."
+        );
+        assert_eq!(
+            illegal_junk_message("Viper", "Kestrel", "bio-weapons", 1),
+            "Viper:  Kestrel, your attempt to smuggle bio-weapons through this system has \
+             been detected. You have been fined 1 credit."
+        );
+        assert_eq!(
+            illegal_junk_message("Viper", "Kestrel", "water", 4500),
+            "Viper:  Kestrel, your attempt to smuggle water through this system has been \
+             detected. You have been fined 4,500 credits."
+        );
+    }
+
+    #[test]
+    fn an_illegal_outfit_notice_names_one_with_its_article_and_more_in_the_plural() {
+        let notice = |one, lc_name, fine| {
+            illegal_outfit_message("Viper", "Kestrel", one, lc_name, "blasters", fine)
+        };
+        assert_eq!(
+            notice(true, "blaster", 0),
+            "Viper:  Kestrel, your posession of a blaster has been detected."
+        );
+        assert_eq!(
+            notice(true, "Ion cannon", 2),
+            "Viper:  Kestrel, your posession of an Ion cannon has been detected. You have \
+             been fined 2 credits.",
+            "the first letter lowercased"
+        );
+        for vowel in ["a", "e", "i", "o", "u"] {
+            assert!(notice(true, vowel, 0).contains(" an "), "{vowel}");
+        }
+        assert_eq!(
+            notice(false, "blaster", 1),
+            "Viper:  Kestrel, your posession of blasters has been detected. You have been \
+             fined 1 credit.",
+            "no count"
+        );
+    }
+
+    /// A contraband notice names the scanner by its person's name when it
+    /// is one (`_ScanPlayer` @0x7ebd1-0x7ec0c), else its ship class, and
+    /// the outfit or `jünk` by the session's record; it lasts 400 ticks.
+    #[test]
+    fn a_contraband_notice_reads_its_names_from_the_session() {
+        let view = FlightView::new(FakeCatalog {
+            outfits: vec![OutfitRecord {
+                lc_name: "blaster".to_owned(),
+                lc_plural: "blasters".to_owned(),
+                ..multi_jumping().outfits[0].clone()
+            }],
+            junk: vec![JunkRecord {
+                id: nova_sim::JunkId(150),
+                name: "Bio-weapons".to_owned(),
+                abbrev: "Bio".to_owned(),
+                base_price: 1000,
+                sold_at: Vec::new(),
+                bought_at: Vec::new(),
+                buy_on: nova_sim::Test::default(),
+                sell_on: nova_sim::Test::default(),
+                flags: 0,
+                scan_mask: 0x0004,
+                lc_name: "bio-weapons".to_owned(),
+            }],
+            ..catalog()
+        });
+        let session = view.session().expect("flying");
+        let ship = session.pilot().ship_name().unwrap_or_default();
+        let class = session.ship_name(ShipId(128)).unwrap_or_default();
+        let outfit = |person: Option<&str>| SimMessage::IllegalOutfit {
+            scanner: ShipId(128),
+            person: person.map(str::to_owned),
+            outfit: OutfitId(275),
+            one: true,
+            fine: 500,
+        };
+        assert_eq!(
+            sim_message_text(&outfit(Some("Ace")), session),
+            Some(illegal_outfit_message(
+                "Ace", ship, true, "blaster", "blasters", 500
+            ))
+        );
+        assert_eq!(
+            sim_message_text(&outfit(None), session),
+            Some(illegal_outfit_message(
+                class, ship, true, "blaster", "blasters", 500
+            ))
+        );
+        let junk = |id: i16| SimMessage::IllegalJunk {
+            scanner: ShipId(128),
+            person: Some("Ace".to_owned()),
+            junk: nova_sim::JunkId(id),
+            fine: 0,
+        };
+        assert_eq!(
+            sim_message_text(&junk(150), session),
+            Some(illegal_junk_message("Ace", ship, "bio-weapons", 0))
+        );
+        assert_eq!(
+            sim_message_text(&junk(151), session),
+            Some(illegal_junk_message("Ace", ship, "", 0)),
+            "no record, no name"
+        );
+        assert_eq!(arrival_lead(&junk(150)), None);
+        assert_eq!(arrival_lead(&outfit(None)), None);
     }
 
     /// The found mission's drawn ship name names the scanner when it has
@@ -11342,11 +13547,11 @@ mod tests {
     struct Sevens;
 
     impl HireTerms for Sevens {
-        fn fee(&self, _ship: &ShipRecord, _site: &LandingSite) -> i64 {
+        fn fee(&self, _ship: &ShipRecord, _site: &LandingSite, _mult: f32) -> i64 {
             7
         }
 
-        fn charge(&self, _ship: &ShipRecord, _site: &LandingSite, _cash: i64) -> i64 {
+        fn charge(&self, _ship: &ShipRecord, _site: &LandingSite, _mult: f32, _cash: i64) -> i64 {
             7
         }
 
@@ -11511,15 +13716,7 @@ mod tests {
         assert_eq!(view.message(), Some(said));
         assert_eq!(view.take_boarding(), None, "no plunder");
         assert_eq!(view.take_mission_texts(), [], "no dialog");
-        let at = view.elapsed;
-        while view.elapsed + TICK < at + RETRIEVED_SHOWN_FOR {
-            view.tick(TICK);
-        }
-        assert_eq!(view.message(), Some(said));
-        while view.elapsed < at + RETRIEVED_SHOWN_FOR {
-            view.tick(TICK);
-        }
-        assert_eq!(view.message(), None);
+        assert_lasts(&mut view, said, BOARD_LINE_TICKS);
     }
 
     /// The refused pickup's dialog (`_DoMissionCargoPickup` @0x982ff) is
@@ -11608,7 +13805,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hail_quote_shows_in_the_message_line_for_14_seconds() {
+    fn a_hail_quote_shows_in_the_message_line_for_420_ticks() {
         let (_, chance) = scripted(&ACE);
         let mut view = FlightView::new(peopled())
             .with_chance(chance)
@@ -11619,16 +13816,8 @@ mod tests {
             Some("Ace: Prepare to die, !"),
             "an unnamed pilot"
         );
-        let said = view.elapsed;
-        while view.elapsed + TICK < said + HAIL_QUOTE_SHOWN_FOR {
-            view.tick(TICK);
-        }
-        assert_eq!(view.message(), Some("Ace: Prepare to die, !"));
-        while view.elapsed < said + HAIL_QUOTE_SHOWN_FOR {
-            view.tick(TICK);
-        }
-        assert_eq!(view.message(), None);
-        assert_eq!(HAIL_QUOTE_SHOWN_FOR, Duration::from_secs(14));
+        assert_lasts(&mut view, "Ace: Prepare to die, !", 420);
+        assert_eq!(HAIL_QUOTE_TICKS, 420);
     }
 
     #[test]
@@ -11759,8 +13948,8 @@ mod tests {
         let mut view = told(flight());
         run_set(&mut view, "Q25048");
         assert_eq!(view.settle_script(), None);
-        assert_eq!(view.message(), Some("Off you go, <PSN>."));
         assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::ScriptMessage)]);
+        assert_lasts(&mut view, "Off you go, <PSN>.", SCRIPT_MESSAGE_TICKS);
     }
 
     #[test]
@@ -11772,8 +13961,8 @@ mod tests {
         assert_eq!(session.landed(), None);
         assert_eq!(view.scene().map(SystemScene::id), Some(SystemId(131)));
         assert_eq!(view.shown_position(), Point::new(0.0, 0.0));
-        assert_eq!(view.message(), Some("Off you go, <PSN>."));
         assert_eq!(view.settle_script(), None, "settled");
+        assert_lasts(&mut view, "Off you go, <PSN>.", 500);
     }
 
     #[test]
@@ -11783,7 +13972,7 @@ mod tests {
         run_set(&mut view, "Q25048");
         assert_eq!(view.settle_script(), Some(StellarId(128)));
         let said = format!("Off you go, <PSN>.  {DEFECTED_ONE}");
-        assert_eq!(view.message(), Some(said.as_str()));
+        assert_lasts(&mut view, &said, 500);
     }
 
     #[test]
@@ -11858,6 +14047,65 @@ mod tests {
             .expect("bought");
         view.tick(TICK);
         assert_eq!(sheets(&view), [ShipId(128), ShipId(129)], "a purchase");
+    }
+
+    /// The background of the status bar `view` shows.
+    fn bar_shown(view: &View) -> Option<i16> {
+        view.status_bar().ok().map(|bar| bar.layout.status_bkgnd)
+    }
+
+    fn bars_read(view: &View) -> Vec<i16> {
+        view.catalog().bars_asked.borrow().clone()
+    }
+
+    #[test]
+    fn the_status_bar_follows_the_ship_type_on_the_next_frame() {
+        let mut view = FlightView::new(governed(shipbuying(), 129, 129));
+        run_set(&mut view, "H129");
+        settle_session(&mut view);
+        assert_eq!(bar_shown(&view), Some(700), "not before the frame");
+        view.tick(TICK);
+        assert_eq!(bar_shown(&view), Some(705), "a set expression");
+        view.tick(TICK);
+        assert_eq!(bars_read(&view), [128, 129], "once");
+
+        let mut view = captured_in(governed(boardable(), 129, 129));
+        let session = view.session.as_mut().expect("flying");
+        assert_eq!(
+            session.assign(Assignment::MyShip, &mut NeverFires),
+            Some(Assigned::MyShip)
+        );
+        assert_eq!(bar_shown(&view), Some(700), "not before the frame");
+        view.tick(TICK);
+        assert_eq!(bar_shown(&view), Some(705), "a capture");
+
+        let mut view = FlightView::new(governed(shipbuying(), 129, 129));
+        land_now(&mut view);
+        let session = view.session.as_mut().expect("flying");
+        session
+            .buy_ship(ShipId(129), "Kestrel", &mut NeverFires)
+            .expect("bought");
+        view.tick(TICK);
+        assert_eq!(bar_shown(&view), Some(705), "a purchase");
+    }
+
+    #[test]
+    fn a_new_ship_types_missing_bar_keeps_the_layout_over_picture_128() {
+        let mut view = FlightView::new(governed(shipbuying(), 129, 131));
+        run_set(&mut view, "H129");
+        view.tick(TICK);
+        assert_eq!(bars_read(&view), [128, 131]);
+        assert_eq!(
+            view.status_bar(),
+            Ok(&StatusBar {
+                layout: layout(),
+                background: Some(hud::Background {
+                    id: 128,
+                    width: 194.0,
+                    height: 767.0,
+                }),
+            })
+        );
     }
 
     #[test]
@@ -11950,9 +14198,16 @@ mod tests {
 
     #[test]
     fn a_pilot_flown_with_a_galaxy_overlay_shows_it_on_the_course_map() {
-        let catalog = catalog();
-        let mut session = Session::start(&catalog).expect("starts");
-        session.change_galaxy(&catalog, hiding(132));
+        // 132 hidden by its `Visibility`, as the load evaluates it.
+        let catalog = FakeCatalog {
+            visibility: vec![nova_sim::catalog::SystemVisibility {
+                id: SystemId(132),
+                visibility: nova_sim::Test::parse("b50"),
+            }],
+            ..catalog()
+        };
+        let session = Session::start(&catalog).expect("starts");
+        assert!(!session.galaxy().visible(SystemId(132)));
         let view = FlightView::with_pilot(catalog, session.pilot().clone());
         assert!(!on_the_course_map(&view, 132));
         assert!(on_the_course_map(&view, 131));
@@ -12011,7 +14266,7 @@ mod tests {
             overlay.set_visible(SystemId(133), Some(false));
         });
         view.tick(TICK);
-        assert_eq!(nav(&view), [hud::NAV_NO_DESTINATION]);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_NO_DESTINATION]);
         let session = view.session().expect("flying");
         assert_eq!(session.course(), [SystemId(131)], "kept");
     }
@@ -12460,7 +14715,7 @@ mod tests {
             [RETRIEVED, ARTICLE_A, ARTICLE_AN, FROM_THIS_SHIP],
             ["You retrieved ", "a", "an", "from this ship."]
         );
-        assert_eq!(GRANT_SHOWN_FOR, Duration::from_secs(8));
+        assert_eq!(GRANT_TICKS, 240, "0xf0 @0x9342c");
     }
 
     /// Grants a person's `GrantCount` of the first outfit it may.
@@ -12531,6 +14786,8 @@ mod tests {
             comm_name: String::new(),
             scan_mask: 0,
             scan_fine: 0,
+            news_pic: -1,
+            require: 0,
         }];
         for record in &mut catalog.ships {
             record.crew = 3;
@@ -12555,6 +14812,7 @@ mod tests {
             item_class: 7,
             lc_name: "spare part".to_owned(),
             lc_plural: "spare parts".to_owned(),
+            scan_mask: 0,
             on_purchase: nova_sim::Script::default(),
             on_sell: nova_sim::Script::default(),
         }];
@@ -12577,20 +14835,12 @@ mod tests {
     }
 
     #[test]
-    fn boarding_a_granting_person_says_what_it_retrieved_for_8_seconds() {
+    fn boarding_a_granting_person_says_what_it_retrieved_for_240_ticks() {
         let mut view = boarded_ace(2, Rc::new(Grants));
         let said = "You retrieved two spare parts from this ship.";
         assert_eq!(view.message(), Some(said));
         assert_eq!(view.pilot().expect("a pilot").owned(OutfitId(200)), 2);
-        let at = view.elapsed;
-        while view.elapsed + TICK < at + GRANT_SHOWN_FOR {
-            view.tick(TICK);
-        }
-        assert_eq!(view.message(), Some(said));
-        while view.elapsed < at + GRANT_SHOWN_FOR {
-            view.tick(TICK);
-        }
-        assert_eq!(view.message(), None);
+        assert_lasts(&mut view, said, GRANT_TICKS);
         let view = boarded_ace(1, Rc::new(Grants));
         assert_eq!(
             view.message(),
@@ -12695,8 +14945,8 @@ mod tests {
     fn i_with_no_mission_says_you_have_no_active_missions() {
         let mut view = flight();
         tap(&mut view, MISSION_INFO_KEY);
-        assert_eq!(view.message(), Some(NO_ACTIVE_MISSIONS));
         assert_eq!(view.take_mission_info_request(), None);
+        assert_lasts(&mut view, NO_ACTIVE_MISSIONS, 240);
     }
 
     #[test]
@@ -12727,6 +14977,15 @@ mod tests {
         tap(&mut view, MISSION_INFO_KEY);
         assert_eq!(view.message(), None);
         assert_eq!(view.take_mission_info_request(), None);
+    }
+
+    #[test]
+    fn an_offer_keeps_the_message() {
+        let mut view = targeting_ace(offering(0, Some("Help?"), false));
+        view.say_for(MISSION_FAILED, 240);
+        tap(&mut view, HAIL_KEY);
+        view.take_offer().expect("offered");
+        assert_eq!(view.message(), Some(MISSION_FAILED), "under the dialog");
     }
 
     #[test]
@@ -12942,6 +15201,107 @@ mod tests {
         assert_eq!(NAV_OFF_KEY, Key::Char('`'));
     }
 
+    // The nav target's brackets.
+
+    /// The nav bracket `cïcn`s drawn (10000-10007), and where.
+    fn nav_icons(view: &View) -> Vec<(i16, Point)> {
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Picture { image, top_left } if icon_in(10000..=10007)(command) => {
+                    Some((image.id, *top_left))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The four corners from `cïcn` `first` round `centre`, half-size
+    /// `half`: top-left, top-right, bottom-right, bottom-left.
+    fn corners_at(first: i16, centre: Point, half: f32) -> Vec<(i16, Point)> {
+        let (near, far) = (-half - 16.0, half);
+        vec![
+            (first, at(centre.x + near, centre.y + near)),
+            (first + 1, at(centre.x + far, centre.y + near)),
+            (first + 2, at(centre.x + far, centre.y + far)),
+            (first + 3, at(centre.x + near, centre.y + far)),
+        ]
+    }
+
+    #[test]
+    fn selecting_a_stellar_draws_cicn_10000_to_10003_flying_in_then_settled() {
+        let mut view = flight();
+        assert_eq!(nav_icons(&view), []);
+        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        // Earth (128), 20 x 20: half 10.
+        let earth = on_screen(&view, (0.0, -600.0));
+        assert_eq!(
+            nav_icons(&view),
+            corners_at(10000, earth, 10.0 + 196.0),
+            "a frame drawn before the next tick"
+        );
+        for expand in [196.0, 136.0, 76.0, 16.0, 0.0, 0.0] {
+            view.tick(TICK);
+            let earth = on_screen(&view, (0.0, -600.0));
+            assert_eq!(
+                nav_icons(&view),
+                corners_at(10000, earth, 10.0 + expand),
+                "{expand}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_nav_brackets_without_a_nav_target_or_after_hyper_select() {
+        let mut view = flight();
+        tap(&mut view, STELLAR_SLOT_KEYS[1][0]);
+        assert_eq!(nav_icons(&view).len(), 4);
+        tap(&mut view, NAV_OFF_KEY);
+        assert_eq!(nav_icons(&view), [], "Nav Off");
+        view.tick(TICK);
+        assert_eq!(nav_icons(&view), []);
+        tap(&mut view, STELLAR_SLOT_KEYS[1][0]);
+        let moon = on_screen(&view, (300.0, -200.0));
+        assert_eq!(
+            nav_icons(&view),
+            corners_at(10000, moon, 10.0 + 196.0),
+            "flies in again"
+        );
+        tap(&mut view, HYPER_SELECT_KEY);
+        assert_eq!(view.session().expect("flying").nav_target(), None);
+        assert_eq!(nav_icons(&view), [], "Hyper Select");
+    }
+
+    #[test]
+    fn a_stellar_whose_sprite_cannot_be_read_is_bracketed_at_half_64() {
+        let unreadable = StellarContents {
+            sprite: Err("no rlëD".to_owned()),
+            ..stellar(131, "Broken", (100, 0), 1)
+        };
+        let mut sites = catalog().sites;
+        sites.push(site(131, (100.0, 0.0), StellarFlags::CAN_LAND));
+        let mut view = FlightView::new(FakeCatalog {
+            sites,
+            sol_more: vec![unreadable],
+            ..catalog()
+        });
+        tap(&mut view, STELLAR_SLOT_KEYS[2][0]);
+        ticks(&mut view, 5);
+        let broken = on_screen(&view, (100.0, 0.0));
+        assert_eq!(nav_icons(&view), corners_at(10000, broken, 64.0));
+    }
+
+    #[test]
+    fn an_always_dominated_stellar_is_bracketed_green() {
+        let mut sites = catalog().sites;
+        sites[0].flags2 = nova_sim::market::DOMINATED;
+        let mut view = flight_among(sites);
+        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        ticks(&mut view, 5);
+        let earth = on_screen(&view, (0.0, -600.0));
+        assert_eq!(nav_icons(&view), corners_at(10004, earth, 10.0));
+    }
+
     #[test]
     fn with_the_map_open_a_click_goes_to_the_map_not_the_stellars() {
         let mut view = a_and_b();
@@ -13009,14 +15369,46 @@ mod tests {
             .collect()
     }
 
-    /// The last line of the cargo area, (8, 458)-(184, 552) at (830, 0):
-    /// one line of Geneva 12 (1.2 x 12) above its bottom.
-    fn last_cargo_line() -> Point {
-        at(838.0, 552.0 - 1.2 * 12.0)
+    /// `text` from `x` right of the stock cargo area's left, (8, 458) at
+    /// (830, 0), on `baseline` below its top, in Geneva 12.
+    fn cargo_line(text: &str, x: f32, baseline: f32) -> (String, Point) {
+        (text.to_owned(), at(838.0 + x, 458.0 + baseline - 12.0))
     }
 
     #[test]
-    fn the_hud_shows_the_date_on_the_cargo_areas_last_line() {
+    fn the_hud_lists_the_goods_bought_the_free_space_and_the_cash() {
+        let labels = FakeCatalog {
+            strings: vec![(4003, vec!["Food:".to_owned(), "Ind:".to_owned()])],
+            ..catalog()
+        };
+        let mut view = FlightView::new(trading()).with_strings(Rc::new(labels));
+        assert_eq!(
+            cargo(&view),
+            [
+                cargo_line(hud::CARGO_FREE, 77.0, 12.0),
+                cargo_line("10", 110.0, 12.0),
+                cargo_line("Credits:", 77.0, 66.0),
+                cargo_line("1,000", 87.0, 82.0),
+            ],
+            "an empty 10-ton hold, and no room for the date"
+        );
+        land_now(&mut view);
+        assert_eq!(view.trade(BUY_FOOD), Ok(10));
+        assert_eq!(
+            cargo(&view),
+            [
+                cargo_line("Food:", 3.0, 12.0),
+                cargo_line("10", 41.0, 12.0),
+                cargo_line(hud::CARGO_FREE, 77.0, 12.0),
+                cargo_line("0", 110.0, 12.0),
+                cargo_line("Credits:", 77.0, 66.0),
+                cargo_line("250", 87.0, 82.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cargo_area_with_room_shows_the_date_on_its_last_line() {
         assert_eq!(
             layout().cargo,
             crate::geometry::Bounds {
@@ -13024,18 +15416,69 @@ mod tests {
                 max: at(184.0, 552.0),
             }
         );
-        let mut view = flight();
-        assert_eq!(cargo(&view), [(DATE.to_owned(), last_cargo_line())]);
+        let taller = FakeCatalog {
+            bar: Ok(StatusBarLayout {
+                cargo: crate::geometry::Bounds {
+                    min: at(8.0, 440.0),
+                    max: at(184.0, 552.0),
+                },
+                ..layout()
+            }),
+            ..catalog()
+        };
+        let mut view = FlightView::new(taller);
+        // One line of Geneva 12 (1.2 x 12) above the area's bottom.
+        let last_line = at(838.0, 552.0 - 1.2 * 12.0);
+        let date = |view: &View| {
+            cargo(view)
+                .into_iter()
+                .filter(|(text, _)| text.ends_with("NC"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(date(&view), [(DATE.to_owned(), last_line)]);
         jump_to_alpha(&mut view);
+        assert_eq!(date(&view), [("June 24, 1177 NC".to_owned(), last_line)]);
+    }
+
+    #[test]
+    fn with_nothing_selected_and_no_course_the_hud_says_nav_system_off() {
+        assert_eq!(nav(&flight()), [hud::NAV_OFF]);
+        assert_eq!(nav(&every_frame(flight())), [hud::NAV_OFF]);
+    }
+
+    #[test]
+    fn the_nav_area_is_centred_by_the_metrics_given() {
+        use crate::text::TextMetrics as _;
+        use crate::text::fixture::MonoMetrics;
+        let view = flight().with_metrics(Rc::new(MonoMetrics));
+        let origin = drawn(&view)
+            .iter()
+            .find_map(|c| match c {
+                DrawCommand::Text { text, origin, .. } if text == hud::NAV_OFF => Some(*origin),
+                _ => None,
+            })
+            .expect("Nav System Off");
+        let layout = layout();
+        let area = layout.nav.offset(at(830.0, 0.0));
+        let width = MonoMetrics.width(layout.font, layout.font_size, hud::NAV_OFF);
+        // The stock area's middle is 830 + (8 + 184) / 2 = 926.
+        assert_eq!(f32::midpoint(area.min.x, area.max.x), 926.0);
         assert_eq!(
-            cargo(&view),
-            [("June 24, 1177 NC".to_owned(), last_cargo_line())]
+            origin,
+            at(
+                926.0 - (width / 2.0).trunc(),
+                area.min.y + hud::NAV_OFF_BASELINE - layout.font_size
+            )
         );
     }
 
     #[test]
-    fn with_nothing_selected_and_no_course_the_hud_says_no_destination() {
-        assert_eq!(nav(&flight()), [hud::NAV_NO_DESTINATION]);
+    fn a_stellar_target_not_in_the_scene_is_stellar_navigation_over_no_destination() {
+        let mut view = flight();
+        tap(&mut view, LAND);
+        assert!(nav_target(&view).is_some());
+        view.scene = None;
+        assert_eq!(view.nav_now(), NavDisplay::Stellar(None));
     }
 
     #[test]
@@ -13051,14 +15494,15 @@ mod tests {
         plot(&mut view, 131);
         assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
         jump_to_alpha(&mut view);
-        assert_eq!(nav(&view), [hud::NAV_NO_DESTINATION], "arrived");
+        assert_eq!(nav(&view), [hud::NAV_OFF], "arrived");
         plot(&mut view, 130);
         assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Sol"]);
     }
 
     #[test]
     fn the_destination_is_dim_until_the_ship_is_out_far_enough_to_jump() {
-        let mut view = flight();
+        // Read the Bible's way, the nav area follows every frame.
+        let mut view = every_frame(flight());
         plot(&mut view, 131);
         let hyperspace = |value: Color| {
             vec![
@@ -13114,7 +15558,7 @@ mod tests {
 
     #[test]
     fn once_j_is_accepted_the_hyperspace_label_turns_bright_too() {
-        let mut view = flight();
+        let mut view = every_frame(flight());
         plot(&mut view, 131);
         fly_out(&mut view);
         tap(&mut view, JUMP);
@@ -13125,6 +15569,128 @@ mod tests {
                 (hud::NAV_UNEXPLORED.to_owned(), Color::WHITE),
             ]
         );
+    }
+
+    /// The engine tick `view` has reached.
+    fn now_tick(view: &View) -> u64 {
+        u64::try_from(crate::time::ticks(view.elapsed)).expect("in range")
+    }
+
+    #[test]
+    fn the_nav_area_holds_its_colours_until_its_next_refresh() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        assert_eq!(nav_value_color(&view), Color::DIM, "inside, at once");
+        view.input(&key(Key::Up, true));
+        let mut expected = Color::DIM;
+        let mut held = 0;
+        for _ in 0..2000 {
+            let before = now_tick(&view);
+            view.tick(TICK);
+            let now = now_tick(&view);
+            let out = player(&view).position.length() >= MIN_JUMP_DISTANCE;
+            if now / NAV_PERIOD_TICKS > before / NAV_PERIOD_TICKS {
+                expected = if out { Color::WHITE } else { Color::DIM };
+            }
+            assert_eq!(nav_value_color(&view), expected, "tick {now}");
+            if out && expected == Color::DIM {
+                held += 1;
+            }
+            if expected == Color::WHITE {
+                break;
+            }
+        }
+        view.release_keys();
+        assert_eq!(expected, Color::WHITE, "it got out");
+        assert!(
+            (1..u32::try_from(NAV_PERIOD_TICKS).expect("small")).contains(&held),
+            "held dim {held} ticks after the ship got clear"
+        );
+    }
+
+    #[test]
+    fn the_nav_area_holds_its_text_until_its_next_refresh() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        // Move to just past a refresh.
+        while now_tick(&view) % NAV_PERIOD_TICKS != 1 {
+            view.tick(TICK);
+        }
+        run_set(&mut view, "X131");
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+        for _ in 1..NAV_PERIOD_TICKS - 1 {
+            view.tick(TICK);
+            assert_eq!(
+                nav(&view),
+                [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED],
+                "tick {}",
+                now_tick(&view)
+            );
+        }
+        view.tick(TICK);
+        assert_eq!(now_tick(&view) % NAV_PERIOD_TICKS, 0);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Alpha Centauri"]);
+    }
+
+    #[test]
+    fn read_the_bibles_way_the_nav_area_follows_every_frame() {
+        let mut view = every_frame(flight());
+        plot(&mut view, 131);
+        while now_tick(&view) % NAV_PERIOD_TICKS != 1 {
+            view.tick(TICK);
+        }
+        run_set(&mut view, "X131");
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Alpha Centauri"]);
+    }
+
+    #[test]
+    fn a_selection_change_shows_at_once() {
+        let mut view = flight();
+        while now_tick(&view) % NAV_PERIOD_TICKS != 1 {
+            view.tick(TICK);
+        }
+        tap(&mut view, LAND);
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"], "drawn at once");
+        view.tick(TICK);
+        assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"], "and kept");
+        tap(&mut view, HYPER_SELECT);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+        view.tick(TICK);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+        assert_ne!(now_tick(&view) % NAV_PERIOD_TICKS, 0, "between refreshes");
+    }
+
+    #[test]
+    fn redrawing_the_status_retakes_the_nav_area() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        while now_tick(&view) % NAV_PERIOD_TICKS != 1 {
+            view.tick(TICK);
+        }
+        run_set(&mut view, "X131");
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+        view.redraw_status();
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, "Alpha Centauri"]);
+    }
+
+    #[test]
+    fn once_j_is_accepted_the_label_turns_bright_at_the_next_refresh() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        while now_tick(&view) % NAV_PERIOD_TICKS != 1 {
+            view.tick(TICK);
+        }
+        let label = |view: &View| nav_colored(view)[0].1;
+        assert_eq!(label(&view), Color::DIM);
+        tap(&mut view, JUMP);
+        assert_eq!(label(&view), Color::DIM, "held");
+        for _ in 1..NAV_PERIOD_TICKS - 1 {
+            view.tick(TICK);
+            assert_eq!(label(&view), Color::DIM, "tick {}", now_tick(&view));
+        }
+        view.tick(TICK);
+        assert_eq!(label(&view), Color::WHITE, "tick {}", now_tick(&view));
     }
 
     #[test]
@@ -13146,7 +15712,7 @@ mod tests {
         tap(&mut view, LAND);
         jump_to_alpha(&mut view);
         assert_eq!(nav_target(&view), None);
-        assert_eq!(nav(&view), [hud::NAV_NO_DESTINATION]);
+        assert_eq!(nav(&view), [hud::NAV_OFF]);
         tap(&mut view, LAND);
         assert_eq!(nav(&view), [hud::NAV_STELLAR, "Proxima"]);
     }
@@ -13355,6 +15921,11 @@ mod tests {
             Some("Hypergate is online. Begin initial approach."),
             "the second outcome"
         );
+        assert_lasts(
+            &mut view,
+            "Hypergate is online. Begin initial approach.",
+            250,
+        );
     }
 
     #[test]
@@ -13363,7 +15934,7 @@ mod tests {
         catalog.sites[0].min_status = 100;
         let mut view = FlightView::new(catalog);
         tap(&mut view, LAND);
-        assert_eq!(view.message(), Some(HYPERGATE_DENIED));
+        assert_lasts(&mut view, HYPERGATE_DENIED, 250);
     }
 
     #[test]
@@ -13375,11 +15946,12 @@ mod tests {
             }]);
             tap(&mut view, LAND);
             let refusal = gate_refusal_message(kind);
-            assert_eq!(view.message(), Some(refusal.as_str()), "{kind:?}");
+            assert_lasts(&mut view, &refusal, 250);
         }
         let mut planet = flight_among(vec![site(300, (0.0, 0.0), 0)]);
         tap(&mut planet, LAND);
         assert_eq!(planet.message(), Some(HOSTILE_PLANET), "not a gate");
+        assert_lasts(&mut planet, HOSTILE_PLANET, 250);
     }
 
     #[test]
@@ -13487,6 +16059,50 @@ mod tests {
         assert_eq!(view.course_map().mode(), MapMode::Course);
         tap(&mut view, MAP);
         assert_eq!(view.message(), Some(HYPERGATE_CANCELLED), "nothing new");
+        assert_lasts(&mut view, HYPERGATE_CANCELLED, GATE_REFUSAL_TICKS);
+    }
+
+    #[test]
+    fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
+        // The course map, closed by its key or as Escape does; then the
+        // hypergate map, cancelled and entered (`_PlayerEnterHypergate`).
+        for (catalog, pick, by_key) in [
+            (catalog(), false, true),
+            (catalog(), false, false),
+            (gated(), false, true),
+            (gated(), true, true),
+        ] {
+            let gate = !catalog.gates.is_empty();
+            let mut view = FlightView::new(catalog);
+            ticks(&mut view, 3);
+            if gate {
+                land_now(&mut view);
+                assert_eq!(view.course_map().mode(), MapMode::Hypergate);
+            } else {
+                tap(&mut view, MAP);
+            }
+            assert!(view.map_open());
+            if pick {
+                let alpha = on_map(&view, 131);
+                click(&mut view, alpha);
+            }
+            let stale = RadarScene::default();
+            assert_ne!(view.radar_now(), stale);
+            view.radar_scene = Some(stale);
+            let cadence = view.hud_cadence;
+            if by_key {
+                tap(&mut view, MAP);
+            } else {
+                view.close_map();
+            }
+            let case = format!("gate {gate}, pick {pick}, by key {by_key}");
+            assert!(!view.map_open(), "{case}");
+            assert_eq!(
+                view.hud_cadence, cadence,
+                "neither timed nor flipped: {case}"
+            );
+            assert_eq!(*view.radar_shown(), view.radar_now(), "{case}");
+        }
     }
 
     #[test]
@@ -13557,6 +16173,20 @@ mod tests {
             Some(JumpPhase::Flash(0.0)),
             "whatever the preference"
         );
+        let passed =
+            "Passing through a wormhole into the Alpha Centauri system on June 23, 1177 NC.";
+        assert_lasts(&mut plain, passed, 240);
+    }
+
+    #[test]
+    fn coming_out_of_a_hypergate_says_so_for_360_ticks() {
+        let mut view = FlightView::new(gated());
+        land_now(&mut view);
+        let alpha = on_map(&view, 131);
+        click(&mut view, alpha);
+        tap(&mut view, MAP);
+        let exited = "Exiting hypergate in the Alpha Centauri system on June 23, 1177 NC.";
+        assert_lasts(&mut view, exited, 360);
     }
 
     #[test]
@@ -13566,13 +16196,10 @@ mod tests {
         let mut view = FlightView::new(catalog);
         land_now(&mut view);
         assert_eq!(system_of(&view), SystemId(130));
-        assert_eq!(
-            view.message(),
-            Some(
-                "Your ship is unable to enter this wormhole - the radiation levels are too extreme."
-            )
-        );
         assert_eq!(view.jump_effect(), None);
+        let why =
+            "Your ship is unable to enter this wormhole - the radiation levels are too extreme.";
+        assert_lasts(&mut view, why, GATE_REFUSAL_TICKS);
     }
 
     /// The sprites of ship 129's sheet (`rlëD` 2001) drawn.
@@ -13580,15 +16207,6 @@ mod tests {
         sprites(list)
             .iter()
             .filter(|(image, _)| image.id == 2001)
-            .count()
-    }
-
-    /// The dim radar dots drawn: NPCs' blips.
-    fn dim_blips(list: &DrawList) -> usize {
-        list.iter()
-            .filter(|command| {
-                matches!(command, DrawCommand::Dot { color, .. } if *color == layout().dim_radar)
-            })
             .count()
     }
 
@@ -13614,6 +16232,8 @@ mod tests {
             comm_name: String::new(),
             scan_mask: 0,
             scan_fine: 0,
+            news_pic: -1,
+            require: 0,
         }];
         // One ship of düde 128 (ship 129) attacking the player and
         // following it (`ShipSyst` -6).
@@ -13648,7 +16268,11 @@ mod tests {
             ],
             "Proxima and the player, not the ship emerging"
         );
-        assert_eq!(dim_blips(&list), 1, "on radar while it emerges");
+        // Once the radar has refreshed, the ship is on it, still emerging.
+        ticks(&mut view, 8);
+        let session = view.session().expect("flying");
+        assert!(session.npcs().iter().any(Npc::emerging));
+        assert_eq!(blips(&view).len(), 1, "on radar while it emerges");
         while view
             .session()
             .expect("flying")
@@ -13887,5 +16511,440 @@ mod tests {
             _ => None,
         });
         assert_eq!(tint.map(|tint| tint.a), Some(135));
+    }
+
+    // The radar's IFF, density scanner, centre arrow and static.
+
+    /// IFF, a density scanner and anti-interference 30 as outfits 300-302.
+    fn radar_outfits() -> Vec<OutfitRecord> {
+        let outfit = |id: i16, mod_type: i16, mod_val: i16| {
+            let mut mods = [(0, 0); 4];
+            mods[1] = (mod_type, mod_val);
+            OutfitRecord {
+                id: OutfitId(id),
+                name: format!("Outfit {id}"),
+                short_name: String::new(),
+                disp_weight: 0,
+                mass: 0,
+                tech_level: 1,
+                max: 10,
+                flags: 0,
+                cost: 1,
+                mods,
+                contribute: 0,
+                require: 0,
+                require_govt: -1,
+                buy_random: 100,
+                availability: nova_sim::Test::default(),
+                on_purchase: nova_sim::Script::default(),
+                on_sell: nova_sim::Script::default(),
+                item_class: 0,
+                lc_name: String::new(),
+                lc_plural: String::new(),
+                scan_mask: 0,
+            }
+        };
+        vec![
+            outfit(300, nova_sim::iff::MOD_IFF, 0),
+            outfit(301, nova_sim::iff::MOD_DENSITY_SCANNER, 0),
+            outfit(302, nova_sim::iff::MOD_ANTI_INTERFERENCE, 30),
+        ]
+    }
+
+    /// `catalog`, its ship carrying `defaults` of [`radar_outfits`].
+    fn outfitted(catalog: FakeCatalog, defaults: &[(i16, u16)]) -> FakeCatalog {
+        FakeCatalog {
+            outfits: radar_outfits(),
+            defaults: defaults.iter().map(|&(id, n)| (OutfitId(id), n)).collect(),
+            ..catalog
+        }
+    }
+
+    #[test]
+    fn an_iff_outfit_turns_on_the_black_backdrop_and_the_cyan_player() {
+        let mut view = FlightView::new(outfitted(catalog(), &[(300, 1)]));
+        ticks(&mut view, 1);
+        assert!(view.radar_shown().iff);
+        let marks = radar_marks(&view);
+        assert_eq!(
+            marks[0],
+            RadarMark::Fill {
+                rect: STOCK_RADAR,
+                color: RadarColor::Black
+            }
+        );
+        assert!(marks.contains(&RadarMark::Pixel {
+            x: 926,
+            y: 96,
+            color: RadarColor::Cyan
+        }));
+        // Earth and the Moon, landable to a clean record: yellow.
+        let stellars: Vec<StellarIff> = view.radar_shown().stellars.iter().map(|s| s.iff).collect();
+        assert_eq!(stellars, [StellarIff::Cleared, StellarIff::Cleared]);
+        let list = drawn(&view);
+        let black = list.iter().any(|command| {
+            matches!(command, DrawCommand::Line { color, .. } if *color == Color::rgba(0, 0, 0, 255))
+        });
+        assert!(black, "the black fill is drawn");
+        for without in [outfitted(catalog(), &[]), outfitted(catalog(), &[(301, 1)])] {
+            let mut view = FlightView::new(without);
+            ticks(&mut view, 1);
+            assert!(!view.radar_shown().iff);
+            assert_eq!(radar_marks(&view).last(), Some(&PLAYER_PIXEL));
+            assert!(
+                !radar_marks(&view)
+                    .iter()
+                    .any(|m| matches!(m, RadarMark::Fill { .. }))
+            );
+        }
+    }
+
+    /// A trafficked flight with one idle NPC of ship 129, whose class
+    /// weighs `mass`, at (100, -100), radar pixel (929, 92); the player
+    /// carries `defaults`.
+    fn with_heavy_npc(mass: i16, defaults: &[(i16, u16)]) -> View {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let catalog = FakeCatalog {
+            hulls: vec![nova_sim::HullRecord {
+                mass,
+                ..hull_of(129, &[])
+            }],
+            ..outfitted(trafficked(&[130], 1, 129, 3), defaults)
+        };
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        view
+    }
+
+    #[test]
+    fn a_heavy_npc_shows_as_a_square_only_with_a_density_scanner() {
+        let square = RadarMark::Square {
+            rect: IRect::around(929, 92, 1),
+            color: RadarColor::Dim,
+        };
+        let dot = RadarMark::Pixel {
+            x: 929,
+            y: 92,
+            color: RadarColor::Dim,
+        };
+        // The ships' marks: squares and pixels but the player's, last.
+        let ships = |view: &View| {
+            let mut marks: Vec<RadarMark> = radar_marks(view)
+                .into_iter()
+                .filter(|mark| matches!(mark, RadarMark::Pixel { .. } | RadarMark::Square { .. }))
+                .collect();
+            assert_eq!(marks.pop(), Some(PLAYER_PIXEL));
+            marks
+        };
+        assert_eq!(ships(&with_heavy_npc(100, &[(301, 1)])), [square]);
+        assert_eq!(ships(&with_heavy_npc(100, &[])), [dot]);
+        assert_eq!(ships(&with_heavy_npc(99, &[(301, 1)])), [dot]);
+    }
+
+    #[test]
+    fn a_ships_iff_code_reaches_the_radar() {
+        let view = with_heavy_npc(0, &[(300, 1)]);
+        let ships = &view.radar_shown().ships;
+        assert_eq!(ships.len(), 1);
+        assert_eq!(ships[0].iff, ShipIff::Other);
+        assert!(!ships[0].heavy);
+        assert!(radar_marks(&view).contains(&RadarMark::Pixel {
+            x: 929,
+            y: 92,
+            color: RadarColor::Blue
+        }));
+    }
+
+    #[test]
+    fn a_plotted_course_hides_the_arrow_until_a_stellar_is_selected() {
+        let mut view = flight();
+        assert!(!view.radar_now().route_shown, "no course");
+        plot(&mut view, 131);
+        assert!(view.radar_now().route_shown);
+        assert!(view.radar_shown().route_shown, "redrawn as the map closes");
+        tap(&mut view, NEAREST_STELLAR_KEY);
+        assert!(view.session().expect("flying").nav_target().is_some());
+        assert!(!view.radar_now().route_shown, "a stellar selected");
+    }
+
+    /// Thrusts straight up until the ship is more than 2700 from the
+    /// centre, then lets go of Up.
+    fn fly_far(view: &mut View) {
+        view.input(&key(Key::Up, true));
+        for _ in 0..5000 {
+            if player(view).position.length() > 2700.0 {
+                break;
+            }
+            view.tick(TICK);
+        }
+        view.input(&key(Key::Up, false));
+        assert!(player(view).position.length() > 2700.0);
+    }
+
+    fn arrow_lines(view: &View) -> usize {
+        radar_marks(view)
+            .iter()
+            .filter(|mark| matches!(mark, RadarMark::Line { .. }))
+            .count()
+    }
+
+    #[test]
+    fn far_from_the_centre_the_arrow_blinks_with_the_target() {
+        let mut view = flight();
+        assert_eq!(arrow_lines(&view), 0, "near the centre");
+        fly_far(&mut view);
+        let mut shown = Vec::new();
+        for _ in 0..32 {
+            ticks(&mut view, 1);
+            shown.push((view.hud_cadence.blink_on(), arrow_lines(&view)));
+        }
+        for &(blink_on, lines) in &shown {
+            assert_eq!(lines, if blink_on { 3 } else { 0 }, "{shown:?}");
+        }
+        let flips = shown
+            .windows(2)
+            .filter(|pair| pair[0].0 != pair[1].0)
+            .count();
+        assert_eq!(flips, 4, "every 8 ticks: {shown:?}");
+    }
+
+    /// `catalog` with Sol's `Interference` at `level`, its effects rolled
+    /// on `draws`.
+    fn interfered(level: i16, draws: &[u32]) -> (Rc<RefCell<Script>>, View) {
+        let (script, chance) = scripted(draws);
+        let catalog = FakeCatalog {
+            sol_interference: level,
+            ..catalog()
+        };
+        (script, FlightView::new(catalog).with_effects_chance(chance))
+    }
+
+    #[test]
+    fn interference_shows_static_at_the_next_refresh() {
+        // The threshold roll 0 (1 ≤ 100), then pattern 3.
+        let (script, mut view) = interfered(100, &[0, 3]);
+        assert_eq!(view.radar_shown().static_pattern, None, "before a tick");
+        ticks(&mut view, 1);
+        assert_eq!(script.borrow().asked, [100, 10]);
+        assert_eq!(view.radar_shown().static_pattern, Some(131));
+        assert_eq!(
+            radar_marks(&view)[0],
+            RadarMark::Pattern {
+                rect: STOCK_RADAR,
+                id: 131
+            }
+        );
+        let list = drawn(&view);
+        assert!(list.iter().any(|command| *command
+            == DrawCommand::TiledPicture {
+                image: ImageKey::pattern(131),
+                area: STOCK_RADAR.to_bounds(),
+            }));
+    }
+
+    #[test]
+    fn without_interference_no_static_shows_and_nothing_is_rolled() {
+        let (script, mut view) = interfered(0, &[]);
+        for _ in 0..20 {
+            ticks(&mut view, 1);
+            assert_eq!(view.radar_shown().static_pattern, None);
+        }
+        assert!(script.borrow().asked.is_empty());
+    }
+
+    #[test]
+    fn anti_interference_lowers_the_level_static_is_rolled_against() {
+        // 100 less 30: a roll of 70 (71 > 70) shows none.
+        let (script, chance) = scripted(&[70]);
+        let catalog = FakeCatalog {
+            sol_interference: 100,
+            ..outfitted(catalog(), &[(302, 1)])
+        };
+        let mut view = FlightView::new(catalog).with_effects_chance(chance);
+        ticks(&mut view, 1);
+        assert_eq!(script.borrow().asked, [100]);
+        assert_eq!(view.radar_shown().static_pattern, None);
+    }
+
+    #[test]
+    fn the_hud_cadence_and_blink_advance_through_a_jumps_streak() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let streaking = |view: &View| {
+            matches!(
+                view.jump_effect().map(JumpEffect::phase),
+                Some(JumpPhase::Streak(_))
+            )
+        };
+        assert!(streaking(&view));
+        // Mark the snapshot, then tick through the streak: the radar is
+        // taken afresh, and the blink flips, every 8 ticks.
+        let marker = RadarScene {
+            player: at(-1.0, -1.0),
+            ..RadarScene::default()
+        };
+        let mut refreshes = Vec::new();
+        let mut tick = 0;
+        while streaking(&view) {
+            view.radar_scene = Some(marker.clone());
+            let blink = view.hud_cadence.blink_on();
+            view.tick(TICK);
+            tick += 1;
+            let retaken = view.radar_scene.as_ref() != Some(&marker);
+            assert_eq!(retaken, view.hud_cadence.blink_on() != blink, "tick {tick}");
+            if retaken {
+                refreshes.push(tick);
+            }
+        }
+        assert!(tick >= 24, "the streak lasts a second: {tick}");
+        assert!(refreshes.len() >= 3, "{refreshes:?}");
+        let gaps: Vec<u32> = refreshes.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        assert!(gaps.iter().all(|&gap| gap == 8), "{refreshes:?}");
+    }
+
+    // The Red Alert.
+
+    /// Quiet sound preferences: effects at level 1.
+    const QUIET: SoundPrefs = SoundPrefs {
+        sound: true,
+        music: true,
+        effects_level: 1,
+        music_level: 7,
+    };
+
+    /// Two NPCs, NPC 0 turning on the player at the first tick after the
+    /// flight's first (frame 0), sound `prefs`: the Red Alert's check at
+    /// frame 60 is the 60th tick from here.
+    fn threatened(prefs: SoundPrefs) -> View {
+        fighting(armed(2, &[]), &two_npcs())
+            .with_behaviour(Rc::new(Threatening))
+            .with_sound_prefs(prefs)
+    }
+
+    /// The Red Alert `cïcn`s drawn, and where.
+    fn icons_drawn(view: &View) -> Vec<(i16, Point)> {
+        drawn(view)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Picture { image, top_left } if icon_in(18000..=18001)(command) => {
+                    Some((image.id, *top_left))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_red_alert_draws_cicn_18000_then_18001_at_the_playfields_top_right() {
+        let mut view = threatened(QUIET);
+        for tick in 1..60 {
+            view.tick(TICK);
+            assert_eq!(icons_drawn(&view), [], "tick {tick}: before the check");
+        }
+        let corner = Point::new(1024.0 - 194.0 - 24.0, 0.0);
+        for tick in 0..160_usize {
+            view.tick(TICK);
+            let expected = match tick {
+                146.. => vec![],
+                1.. if ((tick - 1) / 5).is_multiple_of(2) => vec![(18001, corner)],
+                _ => vec![(18000, corner)],
+            };
+            assert_eq!(icons_drawn(&view), expected, "tick {tick} of the blink");
+        }
+    }
+
+    #[test]
+    fn no_alert_icon_is_drawn_for_a_loud_player() {
+        let mut view = threatened(SoundPrefs::default());
+        for tick in 0..300 {
+            view.tick(TICK);
+            assert_eq!(icons_drawn(&view), [], "tick {tick}");
+        }
+        assert!(!view.alert_quiet());
+    }
+
+    #[test]
+    fn the_sound_prefs_reach_the_session_when_set() {
+        let mut view = threatened(SoundPrefs::default());
+        view.set_sound_prefs(QUIET);
+        assert!(view.alert_quiet());
+        ticks(&mut view, 60);
+        assert_eq!(icons_drawn(&view).len(), 1);
+        view.set_sound_prefs(SoundPrefs {
+            sound: false,
+            ..SoundPrefs::default()
+        });
+        assert!(view.alert_quiet(), "sound off is quiet");
+        view.set_sound_prefs(SoundPrefs::default());
+        assert!(!view.alert_quiet());
+    }
+
+    #[test]
+    fn the_red_alert_sounds_once_through_the_view() {
+        let mut view = threatened(QUIET);
+        view.take_sounds();
+        let mut alerts = 0;
+        for _ in 0..300 {
+            view.tick(TICK);
+            alerts += view
+                .take_sounds()
+                .iter()
+                .filter(|&&sound| sound == Sound::Sim(SimSound::RedAlert))
+                .count();
+        }
+        assert_eq!(alerts, 1);
+    }
+
+    #[test]
+    fn the_alert_icon_is_drawn_over_the_brackets() {
+        let mut view = threatened(QUIET);
+        ticks(&mut view, 1);
+        tap(&mut view, NEAREST_KEY);
+        assert_eq!(target_of(&view), Some(NpcId(0)));
+        ticks(&mut view, 59);
+        let list = drawn(&view);
+        let commands: Vec<_> = list.iter().collect();
+        let icon = commands
+            .iter()
+            .position(|command| icon_in(18000..=18001)(command))
+            .expect("the icon is drawn");
+        assert!(
+            icon_in(10011..=10011)(commands[icon - 1]),
+            "the brackets' bottom-left corner just before it: {:?}",
+            commands[icon - 1]
+        );
+    }
+
+    #[test]
+    fn a_missing_alert_icon_draws_nothing_and_says_so_once() {
+        let catalog = FakeCatalog {
+            alert_icon: None,
+            ..armed(2, &[])
+        };
+        let (_, chance) = scripted(&two_npcs());
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Threatening))
+            .with_sound_prefs(QUIET);
+        let missing =
+            Diagnostic::Unreadable("no cïcn 18000: the Red Alert icon is not drawn".to_owned());
+        let told = |view: &mut View| {
+            let diagnostics = view.take_diagnostics();
+            diagnostics.iter().filter(|&d| *d == missing).count()
+        };
+        assert_eq!(told(&mut view), 1);
+        let mut blinked = false;
+        for _ in 0..200 {
+            view.tick(TICK);
+            blinked |= view.session().expect("flying").red_alert_icon().is_some();
+            assert_eq!(icons_drawn(&view), []);
+        }
+        assert!(blinked, "the session blinked it");
+        assert_eq!(told(&mut view), 0, "once");
+        assert_eq!(told(&mut flight()), 0, "the default catalog has it");
     }
 }

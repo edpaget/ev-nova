@@ -49,16 +49,37 @@
 //!    escort." for a mission escort, the original's AI type above 4
 //!    (@0x962ee-0x96304), which is busy whenever it keeps formation or
 //!    fights; else "I'm busy.".
-//! 4. While any NPC threatens the player, the original asks for battle
-//!    help; a placeholder here: "I'd rather not.".
+//! 4. While any NPC threatens the player (`_IsPlayerThreatened`
+//!    @0x96310):
+//!    - unless an NPC of a government that is an enemy of the ship's
+//!      threatens it ([`Hail::threatened_by_enemy`],
+//!      `_IsPlayerThreatenedByMyEnemy` @0x96328-0x9632f): "In your
+//!      dreams, pal.";
+//!    - with battle help (a rank's `Flags` 0x0400, @0x96335): "Okay,
+//!      I'm on my way.", whatever its AI type, for nothing. It attacks a
+//!      ship picked uniformly among every other ship that threatens the
+//!      player, enemy or not ([`Deed::Defend`],
+//!      `_AIFightEnemyThreatToPlayer` @0x82c80), and calls for
+//!      reinforcements (`_AICallForReinforcements(ship, 1)` @0x9636d);
+//!    - otherwise "I'd rather not.". The original's AI-type ladder here
+//!      (@0x9638e-0x96514: a warship or interceptor's paid help, a
+//!      brave trader's when independent, an escort's free help) is
+//!      deferred; "I'd rather not." is its own answer for a wimpy trader
+//!      (@0x96399).
 //! 5. A player who needs nothing: "You're not in any trouble.".
-//! 6. Free help ("Roadside Assistance"): "Okay, I'm on my way.", and it
-//!    helps at once. Otherwise it says its mood ("You're lucky - I'm in
-//!    a good mood today.", "I'm in a bad mood today, so it's going to
-//!    cost you." or "I'll help you out if you pay me.") and asks its
-//!    price: paid, "Okay, I'm on my way." and it helps; declined, "Ha ha
-//!    ha. What a comedian."; short, "Yeah, come back when you actually
-//!    have some money.".
+//! 6. A mission escort, the original's AI type above 4: "Sorry, I can't
+//!    do that." (group 25, @0x96564-0x9656c), before any price.
+//! 7. It says its mood ("You're lucky - I'm in a good mood today.", "I'm
+//!    in a bad mood today, so it's going to cost you." or "I'll help you
+//!    out if you pay me."). With free help ("Roadside Assistance", or a
+//!    rank's `Flags` 0x0800) it then says "Okay, I'm on my way." in the
+//!    same press ([`Answer::first`](super::Answer::first)) and helps at
+//!    once, for nothing (@0x965b4-0x965e3). Otherwise it asks its price:
+//!    paid, "Okay, I'm on my way." and it helps; declined, "Ha ha ha.
+//!    What a comedian."; short, "Yeah, come back when you actually have
+//!    some money.".
+//!
+//! Request Assistance plays no sound (@0x9625d-0x96665).
 //!
 //! **Release** (`STR#` 150 #32, key R, the escort dialog's), listed for
 //! the player's escort alone (`_DoCommDialog` @0x95721): it says "Goodbye,
@@ -100,9 +121,9 @@
 //! ([`HailOption::joins`]).
 
 use super::reply::{
-    self, BAD_MOOD, BUSY, COMEDIAN, GOOD_MOOD, HELP_FOR_PAY, HOW_DARE_YOU, IN_YOUR_DREAMS,
-    JUST_AN_ESCORT, NO_MONEY, NO_RESPONSE, NOT_IN_TROUBLE, ON_MY_WAY, PAY_ME_FIRST, PLEASURE,
-    RATHER_NOT, RELEASED, WASTING_TIME,
+    self, BAD_MOOD, BUSY, CANT_DO_THAT, COMEDIAN, GOOD_MOOD, HELP_FOR_PAY, HOW_DARE_YOU,
+    IN_YOUR_DREAMS, JUST_AN_ESCORT, NO_MONEY, NO_RESPONSE, NOT_IN_TROUBLE, ON_MY_WAY, PAY_ME_FIRST,
+    PLEASURE, RATHER_NOT, RELEASED, WASTING_TIME,
 };
 use super::{Answer, Ask, Attitude, Deed, Hail, HailOption, Mood, Reply};
 use crate::catalog::GovtId;
@@ -272,7 +293,7 @@ impl HailOption for RequestAssistance {
         hail.attitude != Attitude::Hostile && !hail.dispositions.untalkative && !hail.escort()
     }
 
-    fn press(&self, hail: &Hail, _chance: &mut dyn Chance) -> Answer {
+    fn press(&self, hail: &Hail, chance: &mut dyn Chance) -> Answer {
         let dispositions = hail.dispositions;
         if ignores_middle(hail, self.quiet_hails) {
             return Answer::default();
@@ -291,14 +312,19 @@ impl HailOption for RequestAssistance {
             return Answer::say(Reply::Comm(group));
         }
         if hail.player_threatened {
-            return Answer::say(Reply::Comm(RATHER_NOT));
+            return defend(hail, chance);
         }
         let Some(need) = hail.need else {
             return Answer::say(Reply::Comm(NOT_IN_TROUBLE));
         };
+        if hail.mission_escort() {
+            return Answer::say(Reply::Comm(CANT_DO_THAT));
+        }
         let help = Some(Deed::Help(need));
+        let price = Reply::Comm(mood_reply(hail.mood, HELP_FOR_PAY));
         if dispositions.free_help {
             return Answer {
+                first: Some(price),
                 deed: help,
                 ..Answer::say(Reply::Comm(ON_MY_WAY))
             };
@@ -309,8 +335,40 @@ impl HailOption for RequestAssistance {
                 declined: (Reply::Comm(COMEDIAN), None),
                 short: Reply::Comm(NO_MONEY),
             }),
-            ..Answer::say(Reply::Comm(mood_reply(hail.mood, HELP_FOR_PAY)))
+            ..Answer::say(price)
         }
+    }
+}
+
+/// Request Assistance while the player is threatened (`_DoCommDialog`
+/// @0x96310-0x96372; see the module docs' item 4): "In your dreams, pal."
+/// unless an enemy of the ship's threatens the player (@0x9632f); with
+/// battle help (@0x96335), "Okay, I'm on my way." and it fights a threat
+/// picked on `chance`; else "I'd rather not.", in place of the AI-type
+/// ladder (@0x9638e-0x96514) that is deferred.
+///
+/// `_AIFightEnemyThreatToPlayer` (@0x82c80-0x82dba) draws `Rand(63)+1`
+/// until a slot holds a threat (@0x82d24-0x82d99): a uniform pick among
+/// every ship that threatens the player, with no government test, here
+/// one draw below their count. An enemy threatening the player is among
+/// them, so the list is never empty here; were it, nothing is drawn and
+/// the ship only says it is on its way, as the original sets no target
+/// (@0x82daa).
+fn defend(hail: &Hail, chance: &mut dyn Chance) -> Answer {
+    if !hail.threatened_by_enemy {
+        return Answer::say(Reply::Comm(IN_YOUR_DREAMS));
+    }
+    if !hail.dispositions.battle_help {
+        return Answer::say(Reply::Comm(RATHER_NOT));
+    }
+    let threats: Vec<_> = hail.threats_to_player().map(|npc| npc.id).collect();
+    let count = u32::try_from(threats.len()).unwrap_or(u32::MAX);
+    let target = (count > 0)
+        .then(|| threats.get(chance.below(count) as usize).copied())
+        .flatten();
+    Answer {
+        deed: target.map(Deed::Defend),
+        ..Answer::say(Reply::Comm(ON_MY_WAY))
     }
 }
 
@@ -458,7 +516,7 @@ mod tests {
     use crate::ai::Goal;
     use crate::combat::ShipRef;
     use crate::mission::goals::ShipGoal;
-    use crate::traffic::npc::{AiType, Npc};
+    use crate::traffic::npc::{AiType, Npc, NpcId};
 
     /// A chance that a test never expects drawn on.
     struct NoDraws;
@@ -883,7 +941,7 @@ mod tests {
     }
 
     #[test]
-    fn while_the_player_is_threatened_it_would_rather_not() {
+    fn while_the_player_is_threatened_by_no_enemy_of_its_it_says_in_your_dreams() {
         let npc = ship();
         let hail = Hail {
             player_threatened: true,
@@ -891,8 +949,153 @@ mod tests {
         };
         assert_eq!(
             press(&RequestAssistance::default(), &hail),
+            says(IN_YOUR_DREAMS)
+        );
+    }
+
+    #[test]
+    fn while_an_enemy_threatens_the_player_it_would_rather_not_without_battle_help() {
+        let npc = ship();
+        let hail = Hail {
+            player_threatened: true,
+            threatened_by_enemy: true,
+            ..needy(&npc)
+        };
+        assert_eq!(
+            press(&RequestAssistance::default(), &hail),
             says(RATHER_NOT)
         );
+    }
+
+    /// NPC `id`, attacking the player when `threat`, else idle.
+    fn other(id: u32, threat: bool) -> Npc {
+        let mut npc = crate::testkit::npc(id, crate::stats::ShipStats::default());
+        if threat {
+            npc.goal = Goal::Attack(ShipRef::Player);
+        }
+        npc
+    }
+
+    /// A hail of `npc` among `npcs`, an enemy threatening the player, of
+    /// battle help, the player needing `need`.
+    fn helping<'a>(npc: &'a Npc, npcs: &'a [Npc], need: Option<Help>) -> Hail<'a> {
+        Hail {
+            player_threatened: true,
+            threatened_by_enemy: true,
+            npcs,
+            need,
+            dispositions: Dispositions {
+                battle_help: true,
+                ..Dispositions::default()
+            },
+            ..hail(npc)
+        }
+    }
+
+    /// How Request Assistance answers `hail`, drawing `draws`, and the
+    /// draws asked.
+    fn press_drawing(hail: &Hail, draws: &[u32]) -> (Answer, Vec<u32>) {
+        let mut chance = crate::testkit::Draws::of(draws);
+        let answer = RequestAssistance::default().press(hail, &mut chance);
+        (answer, chance.asked)
+    }
+
+    /// A mission escort, the original's AI type above 4.
+    fn mission_escort() -> Npc {
+        let mut npc = ship();
+        npc.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: ShipBehav::EscortPlayer,
+            formation: Some(crate::escort::FormationSlot::default()),
+            order: None,
+        });
+        npc
+    }
+
+    #[test]
+    fn with_battle_help_any_ai_type_fights_a_threat_at_once_for_nothing() {
+        let npcs = [other(2, true)];
+        let mut ships: Vec<Npc> = [
+            AiType::WimpyTrader,
+            AiType::BraveTrader,
+            AiType::Warship,
+            AiType::Interceptor,
+        ]
+        .into_iter()
+        .map(|ai_type| of(ai_type, Some(140), 0))
+        .collect();
+        ships.push(mission_escort());
+        for npc in &ships {
+            assert_eq!(npc.mission_escort(), npc.mission.is_some());
+            for need in [None, Some(Help::Refuel), Some(Help::Repair)] {
+                let (answer, asked) = press_drawing(&helping(npc, &npcs, need), &[0]);
+                assert_eq!(
+                    answer,
+                    Answer {
+                        first: None,
+                        reply: Some(Reply::Comm(ON_MY_WAY)),
+                        deed: Some(Deed::Defend(NpcId(2))),
+                        ask: None,
+                    },
+                    "{:?} {need:?}",
+                    npc.ai_type
+                );
+                assert_eq!(asked, [1]);
+            }
+        }
+    }
+
+    #[test]
+    fn battle_help_picks_its_target_uniformly_among_every_threat_enemy_or_not() {
+        let npc = ship();
+        let npcs = [npc.clone(), other(2, true), other(3, true), other(4, false)];
+        let hail = helping(&npcs[0], &npcs, None);
+        for (draw, picked) in [(0, NpcId(2)), (1, NpcId(3))] {
+            let (answer, asked) = press_drawing(&hail, &[draw]);
+            assert_eq!(answer.deed, Some(Deed::Defend(picked)), "{draw}");
+            assert_eq!(asked, [2]);
+        }
+    }
+
+    #[test]
+    fn battle_help_with_no_threat_to_pick_draws_nothing_and_does_nothing() {
+        let npc = ship();
+        let hail = helping(&npc, &[], None);
+        assert_eq!(press(&RequestAssistance::default(), &hail), says(ON_MY_WAY));
+    }
+
+    #[test]
+    fn battle_help_waits_behind_the_earlier_refusals() {
+        let npc = ship();
+        let npcs = [other(2, true)];
+        let request = RequestAssistance::default();
+        let unfriendly = Hail {
+            attitude: Attitude::Unfriendly,
+            ..helping(&npc, &npcs, None)
+        };
+        assert_eq!(press(&request, &unfriendly), says(IN_YOUR_DREAMS));
+        let busy = Hail {
+            busy: true,
+            ..helping(&npc, &npcs, None)
+        };
+        assert_eq!(press(&request, &busy), says(BUSY));
+        let escort = mission_escort();
+        let busy_escort = Hail {
+            busy: true,
+            ..helping(&escort, &npcs, None)
+        };
+        assert_eq!(press(&request, &busy_escort), says(JUST_AN_ESCORT));
+        let no_enemy = Hail {
+            threatened_by_enemy: false,
+            ..helping(&npc, &npcs, None)
+        };
+        assert_eq!(press(&request, &no_enemy), says(IN_YOUR_DREAMS));
+        let unthreatened = Hail {
+            player_threatened: false,
+            threatened_by_enemy: false,
+            ..helping(&npc, &npcs, None)
+        };
+        assert_eq!(press(&request, &unthreatened), says(NOT_IN_TROUBLE));
     }
 
     #[test]
@@ -931,6 +1134,7 @@ mod tests {
                 assert_eq!(
                     press(&RequestAssistance::default(), &hail),
                     Answer {
+                        first: None,
                         reply: Some(Reply::Comm(group)),
                         deed: None,
                         ask: Some(help_ask(need)),
@@ -942,23 +1146,57 @@ mod tests {
     }
 
     #[test]
-    fn free_help_is_on_its_way_at_once_with_no_price() {
+    fn free_help_shows_its_price_then_is_on_its_way_without_payment() {
         let npc = ship();
-        let hail = Hail {
-            dispositions: Dispositions {
-                free_help: true,
-                ..Dispositions::default()
-            },
-            need: Some(Help::Repair),
-            ..hail(&npc)
-        };
-        assert_eq!(
-            press(&RequestAssistance::default(), &hail),
-            Answer {
-                reply: Some(Reply::Comm(ON_MY_WAY)),
-                deed: Some(Deed::Help(Help::Repair)),
-                ask: None,
+        for (mood, group) in [(0.79, GOOD_MOOD), (1.0, HELP_FOR_PAY), (1.2, BAD_MOOD)] {
+            for need in [Help::Refuel, Help::Repair] {
+                let hail = Hail {
+                    dispositions: Dispositions {
+                        free_help: true,
+                        ..Dispositions::default()
+                    },
+                    mood,
+                    need: Some(need),
+                    ..hail(&npc)
+                };
+                assert_eq!(
+                    press(&RequestAssistance::default(), &hail),
+                    Answer {
+                        first: Some(Reply::Comm(group)),
+                        reply: Some(Reply::Comm(ON_MY_WAY)),
+                        deed: Some(Deed::Help(need)),
+                        ask: None,
+                    },
+                    "{mood} {need:?}"
+                );
             }
+        }
+    }
+
+    #[test]
+    fn a_mission_escort_will_not_refuel_or_repair() {
+        let npc = mission_escort();
+        for free_help in [false, true] {
+            for need in [Help::Refuel, Help::Repair] {
+                let hail = Hail {
+                    dispositions: Dispositions {
+                        free_help,
+                        ..Dispositions::default()
+                    },
+                    need: Some(need),
+                    ..hail(&npc)
+                };
+                assert_eq!(
+                    press(&RequestAssistance::default(), &hail),
+                    says(CANT_DO_THAT),
+                    "{free_help} {need:?}"
+                );
+            }
+        }
+        assert_eq!(
+            press(&RequestAssistance::default(), &hail(&npc)),
+            says(NOT_IN_TROUBLE),
+            "it needs nothing first"
         );
     }
 
@@ -1044,6 +1282,7 @@ mod tests {
             assert_eq!(
                 press(&BegForMercy::default(), &hail),
                 Answer {
+                    first: None,
                     reply: Some(Reply::Comm(group)),
                     deed: None,
                     ask: Some(ask),

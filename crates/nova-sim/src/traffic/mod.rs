@@ -266,7 +266,9 @@ impl Traffic {
     /// Enters a system as [`Traffic::enter_in`] does, with `missions`, the
     /// active missions' special ships set up there, first: as
     /// `_SetupShipsInSystem` sets them up before the system's own passes
-    /// (@0x42dc4-0x43194), none of which they use up.
+    /// (@0x42dc4-0x43194), none of which they use up. The scans not yet
+    /// taken are dropped: the original scans at once, so none outlives its
+    /// system.
     pub fn enter_with(
         &mut self,
         table: SpawnTable,
@@ -277,6 +279,7 @@ impl Traffic {
         self.table = table;
         self.npcs.clear();
         self.departed.clear();
+        self.scans.clear();
         self.add(missions, world.persons.grudges);
         let mut draw = PersonDraw::new(world.persons);
         let first_stellar = world.sites.first().map(|site| site.position);
@@ -311,11 +314,13 @@ impl Traffic {
     /// Goes on in another system whose traffic is drawn from `table`,
     /// taking along only the NPCs in `keep`, as they are: the others stay
     /// behind, and nothing of the new system's initial population comes,
-    /// only its arrivals over time. The NPCs' numbering goes on.
+    /// only its arrivals over time. The NPCs' numbering goes on. The
+    /// scans not yet taken are dropped, as entering a system drops them.
     pub fn retarget(&mut self, table: SpawnTable, keep: &BTreeSet<NpcId>) {
         self.table = table;
         self.npcs.retain(|npc| keep.contains(&npc.id));
         self.departed.clear();
+        self.scans.clear();
     }
 
     /// Advances the traffic one tick among `sites` alone, NPCs deciding
@@ -2076,6 +2081,31 @@ mod tests {
         alone.npcs[0].goal = Goal::Inspect(ShipRef::Player);
         alone.tick_in(&done, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(alone.take_scans(), [], "no player");
+    }
+
+    /// The scans wait for the session's combat tick; a system left first
+    /// takes them with it, as the original scans at once.
+    #[test]
+    fn entering_or_leaving_for_another_system_drops_the_scans_not_taken() {
+        let scanned = || {
+            let mut traffic = populated(1, 1);
+            traffic.npcs[0].goal = Goal::Inspect(ShipRef::Player);
+            let world = World {
+                player: Some(player_at(0.0, 0.0)),
+                ..World::new(&[])
+            };
+            let done = Fighting::deciding(Goal::Idle);
+            traffic.tick_in(&done, world, &[], &mut Draws::of(&[]));
+            traffic
+        };
+        let mut entered = scanned();
+        entered.enter(SpawnTable::default(), &mut Draws::of(&[]));
+        assert_eq!(entered.take_scans(), []);
+        let mut left = scanned();
+        let kept = left.npcs()[0].id;
+        left.retarget(SpawnTable::default(), &BTreeSet::from([kept]));
+        assert_eq!(left.take_scans(), [], "even the scanner kept");
+        assert_eq!(scanned().take_scans(), [NpcId(0)], "queued");
     }
 
     /// The player at (`x`, `y`), at rest.

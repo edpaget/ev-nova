@@ -87,6 +87,7 @@ use crate::flight::{ShipState, heading_of};
 use crate::gate::GateKind;
 use crate::geometry::Vec2;
 use crate::navigation::next_after;
+use crate::rulebook::RuleSource;
 
 /// How far from the system's centre, in pixels, a ship must be to jump
 /// unless its outfits say otherwise (the Bible: "Jump Distance 1000
@@ -179,16 +180,18 @@ pub enum HyperSelectRule {
 pub enum HyperlinkRule {
     /// The original engine's reading: a jump reaches only the systems the
     /// current system's own `sÿst` Con slots list, each one standing for
-    /// every system at its map position, so a link only the other system
-    /// lists is one-way. The jump destination is the current system's
+    /// the system that stands for its map position, by
+    /// [`RuleKey::ColocatedResolution`](crate::RuleKey::ColocatedResolution)
+    /// ([`CoLocated`]), so a link only the other system lists is one-way. The jump destination is the current system's
     /// own slot (`_HandlePlayer` @0x6bd20-0x6bd47); a map click sets it,
     /// and a shift-click extends the course, only to a system in the
     /// current (or last course) system's own slots (`_DoSystemMap`
     /// @0x13739-0x137b3, @0x13401-0x13466); and the next course hop is
     /// cued only from them (`_CueNextHyperRouteDest` @0xe2dc). Each slot
     /// is resolved to the active system at the target's position
-    /// (`_FindActiveCoLocatedSystem` @0x4be0): every visible system
-    /// there counts, a hidden one never (see [`StarMap::with_hidden`]).
+    /// (`_FindActiveCoLocatedSystem` @0x4be0): the lowest visible one
+    /// there by the original's resolution, every visible one by the
+    /// other, a hidden one never (see [`StarMap::with_hidden`]).
     #[default]
     Engine,
     /// Every link joins its two systems both ways, whichever of them
@@ -285,14 +288,17 @@ struct Node {
     links: BTreeSet<SystemId>,
     /// The systems its own `sÿst` lists, in Con order, each once.
     listed: Vec<SystemId>,
-    /// The systems one jump reaches by the engine: every system at the
-    /// position of one it lists, except itself, by ascending ID.
+    /// The systems one jump reaches by the engine: for each system it
+    /// lists, the one standing for its place, or every visible one there
+    /// ([`CoLocated`]), except itself, by ascending ID.
     jumps: BTreeSet<SystemId>,
     /// The same systems in the order its Con slots list them, each
-    /// position's systems by ascending ID, each once.
+    /// place's systems by ascending ID, each once.
     ordered_jumps: Vec<SystemId>,
     /// Each of its `NavDefs` slots' `Flags` and `Flags2`, raw.
     stellars: Vec<Option<(u32, u16)>>,
+    /// Its `Interference`, raw.
+    interference: i16,
 }
 
 impl Node {
@@ -305,19 +311,48 @@ impl Node {
     }
 }
 
+/// Which visible system stands for a place two visible systems share, as
+/// [`RuleKey::ColocatedResolution`](crate::RuleKey::ColocatedResolution)
+/// reads (see the [`story`](crate::story) module's "Visibility and
+/// governments"). A hidden system stands for the lowest-ID visible system
+/// at its place under both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CoLocated {
+    /// The original's reading: the lowest-ID visible system at a place
+    /// stands for every system there, a visible one too
+    /// (`_FindActiveCoLocatedSystem` @0x4c02-0x4c40), so a link reaches
+    /// only it, and a visible system it shadows claims no stellar
+    /// (`_PropagateMissionBitEffects` @0x996ed-0x997bd).
+    #[default]
+    Lowest,
+    /// The other reading, story-runtime phase 4's: a visible system stands
+    /// for itself, so a link reaches every visible system at its target's
+    /// place.
+    Itself,
+}
+
+impl From<RuleSource> for CoLocated {
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Lowest,
+            RuleSource::Bible => Self::Itself,
+        }
+    }
+}
+
 /// Where each system of a galaxy is on the map, which of them the galaxy
 /// overlay hides, and so which system stands for each: the one place the
 /// original's `_FindActiveCoLocatedSystem` (@0x4be0) is read. A place is an
 /// exact map position; where two systems share an ID, the last wins.
 ///
-/// A visible system stands for itself, and a hidden one for the lowest-ID
-/// visible system at its place (none when no system there is visible).
-/// The original gives the lowest-ID visible one there even for a visible
-/// system (@0x4c02-0x4c40); the engine keeps a visible system itself,
-/// which differs only where two systems at one place are both visible (see
-/// the [`story`](crate::story) module's "Galaxy overlay"). The head of a
-/// place is its lowest-ID system, visible or not, as `_LoadObjectData`
-/// builds the chain (@0x783d9-0x78517).
+/// A hidden system stands for the lowest-ID visible system at its place
+/// (none when no system there is visible). A visible one stands for the
+/// same system by the original's reading, which gives the lowest-ID
+/// visible one there even for a visible system (@0x4c02-0x4c40), and for
+/// itself by the other: the [`CoLocated`] resolution, which differs only
+/// where two systems at one place are both visible. The head of a place
+/// is its lowest-ID system, visible or not, as `_LoadObjectData` builds
+/// the chain (@0x783d9-0x78517).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Places {
     /// Each system's map position.
@@ -326,6 +361,8 @@ pub struct Places {
     by_place: BTreeMap<(u32, u32), Vec<SystemId>>,
     /// The systems hidden.
     hidden: BTreeSet<SystemId>,
+    /// Which visible system stands for a place two share.
+    colocated: CoLocated,
 }
 
 /// `position`'s exact coordinates: a place.
@@ -334,9 +371,10 @@ fn place(position: Vec2) -> (u32, u32) {
 }
 
 impl Places {
-    /// The places of `systems`, with those in `hidden` hidden.
+    /// The places of `systems`, with those in `hidden` hidden, a place two
+    /// visible systems share resolved as `colocated` says.
     #[must_use]
-    pub fn new(systems: &[StarSystem], hidden: &BTreeSet<SystemId>) -> Self {
+    pub fn new(systems: &[StarSystem], hidden: &BTreeSet<SystemId>, colocated: CoLocated) -> Self {
         let positions: BTreeMap<SystemId, Vec2> = systems
             .iter()
             .map(|system| (system.id, system.position))
@@ -349,6 +387,7 @@ impl Places {
             positions,
             by_place,
             hidden: hidden.clone(),
+            colocated,
         }
     }
 
@@ -387,12 +426,20 @@ impl Places {
             .copied()
     }
 
-    /// The visible system that stands for `system`: itself when it is
-    /// visible, else the lowest-ID visible system at its place, if any.
+    /// The visible system that stands for `system`: the lowest-ID visible
+    /// system at its place, if any, except that a visible system stands for
+    /// itself under [`CoLocated::Itself`]. A visible system at no place
+    /// (not among them) stands for itself.
     #[must_use]
     pub fn stand_in(&self, system: SystemId) -> Option<SystemId> {
         if self.visible(system) {
-            return Some(system);
+            return Some(
+                match self.colocated {
+                    CoLocated::Lowest => self.at(system).find(|&id| self.visible(id)),
+                    CoLocated::Itself => None,
+                }
+                .unwrap_or(system),
+            );
         }
         self.at(system).find(|&id| self.visible(id))
     }
@@ -416,28 +463,35 @@ pub struct StarMap {
 impl StarMap {
     /// The map of `systems`, without links to itself or to a system that
     /// is not among them: each link drawn both ways, and jumped along as
-    /// the [`HyperlinkRule`] says, the engine's reaching every system at
-    /// the position of one a system lists. Where two systems share an ID,
+    /// the [`HyperlinkRule`] says, a place two visible systems share
+    /// resolved to the lowest of them ([`CoLocated::Lowest`]). Where two systems share an ID,
     /// the last wins. This is the one place hyperlinks are normalised: the
     /// galaxy map draws [`StarMap::links`].
     #[must_use]
     pub fn new(systems: Vec<StarSystem>) -> Self {
-        Self::with_hidden(systems, &BTreeSet::new())
+        Self::with_hidden(systems, &BTreeSet::new(), CoLocated::Lowest)
     }
 
     /// The map of `systems` with those in `hidden` hidden, as the galaxy
     /// overlay hides them (see the [`story`](crate::story) module's
-    /// "Galaxy overlay"): only the visible systems are on it, and a link
-    /// to a hidden system reaches the visible systems at its map position
-    /// instead, or nothing when none there is visible, as the original's
-    /// `_FindActiveCoLocatedSystem` (@0x4be0) resolves every Con slot. Its
-    /// own [`StarMap::listed_links`], and the links drawn, name the
-    /// lowest-ID of them, the one the original resolves to; its jumps
-    /// reach every one, as [`HyperlinkRule::Engine`] reads a link. With
-    /// none hidden it is [`StarMap::new`].
+    /// "Galaxy overlay"), a place two visible systems share resolved as
+    /// `colocated` says: only the visible systems are on it, every one of
+    /// them, as `_DrawMap` draws every visible system. A link names a
+    /// place, as the original's `_FindActiveCoLocatedSystem` (@0x4be0)
+    /// resolves every Con slot: its own [`StarMap::listed_links`], and
+    /// the links drawn, name the system standing for its target
+    /// ([`Places::stand_in`]), nothing when none there is visible. Its
+    /// jumps, as [`HyperlinkRule::Engine`] reads a link, reach only that
+    /// system under [`CoLocated::Lowest`], and every visible system at
+    /// the place under [`CoLocated::Itself`]. With none hidden, by the
+    /// original's resolution, it is [`StarMap::new`].
     #[must_use]
-    pub fn with_hidden(systems: Vec<StarSystem>, hidden: &BTreeSet<SystemId>) -> Self {
-        let places = Places::new(&systems, hidden);
+    pub fn with_hidden(
+        systems: Vec<StarSystem>,
+        hidden: &BTreeSet<SystemId>,
+        colocated: CoLocated,
+    ) -> Self {
+        let places = Places::new(&systems, hidden, colocated);
         // A link's target: the system standing for it, of those in the
         // catalog.
         let resolve = |to: SystemId| places.contains(to).then(|| places.stand_in(to)).flatten();
@@ -463,17 +517,24 @@ impl StarMap {
                 jumps: BTreeSet::new(),
                 ordered_jumps: Vec::new(),
                 stellars: system.stellars,
+                interference: system.interference,
             };
             nodes.insert(from, node);
         }
-        // Every visible system at each listed system's place, as the
-        // engine reads a link.
+        // The systems each listed one reaches, as the engine reads a link:
+        // the one standing for its place, or every visible one there.
         let jumps: Vec<(SystemId, Vec<SystemId>)> = nodes
             .iter()
             .map(|(&from, node)| {
                 let mut reached = Vec::new();
                 for &to in &node.listed {
-                    for at in places.at(to).filter(|&at| places.visible(at)) {
+                    let there: Vec<SystemId> = match colocated {
+                        CoLocated::Lowest => vec![to],
+                        CoLocated::Itself => {
+                            places.at(to).filter(|&at| places.visible(at)).collect()
+                        }
+                    };
+                    for at in there {
                         if at != from && !reached.contains(&at) {
                             reached.push(at);
                         }
@@ -548,8 +609,10 @@ impl StarMap {
     }
 
     /// The systems one jump from `id` reaches under `rule`, by ascending
-    /// ID: by the engine's, every system at the position of one its own
-    /// `sÿst` lists, except itself; both ways, its [`StarMap::neighbours`].
+    /// ID: by the engine's, for each system its own `sÿst` lists, the
+    /// system standing for its place (or, by [`CoLocated::Itself`], every
+    /// visible system there), except itself; both ways, its
+    /// [`StarMap::neighbours`].
     /// Empty when it is not on the map.
     #[must_use]
     pub fn jumps(&self, id: SystemId, rule: HyperlinkRule) -> Vec<SystemId> {
@@ -561,8 +624,8 @@ impl StarMap {
 
     /// The systems one jump from `id` reaches under `rule`, in the order a
     /// walk along its links meets them: by the engine's, its own Con
-    /// slots in record order, each standing for the systems at its
-    /// position by ascending ID, each system once (as
+    /// slots in record order, each standing for the systems it reaches
+    /// at its place by ascending ID, each system once (as
     /// `_RecursiveAutoExplore` @0xda21-0xdaac follows Con1 to Con16);
     /// both ways, its [`StarMap::neighbours`]. Empty when it is not on the
     /// map.
@@ -589,6 +652,12 @@ impl StarMap {
     #[must_use]
     pub fn stellars(&self, id: SystemId) -> &[Option<(u32, u16)>] {
         self.nodes.get(&id).map_or(&[], |node| &node.stellars)
+    }
+
+    /// System `id`'s `Interference`, raw: 0 when it is not on the map.
+    #[must_use]
+    pub fn interference(&self, id: SystemId) -> i16 {
+        self.nodes.get(&id).map_or(0, |node| node.interference)
     }
 
     /// System `id`'s controlling government: `None` when it is
@@ -733,6 +802,7 @@ pub fn arrival(from: Vec2, to: Vec2, jump_distance: f32) -> ShipState {
 mod tests {
     use super::*;
     use crate::gate::{HYPERGATE, WORMHOLE};
+    use crate::rulebook::RuleSource;
     use crate::testkit::planet;
     use HyperlinkRule::{BothWays, Engine};
 
@@ -766,6 +836,7 @@ mod tests {
             links: links.iter().copied().map(SystemId).collect(),
             govt: None,
             stellars: Vec::new(),
+            interference: 0,
         }
     }
 
@@ -914,16 +985,31 @@ mod tests {
     /// [`replaced_systems`]' map with `hidden` hidden.
     fn replaced_hiding(hidden: &[i16]) -> StarMap {
         let hidden = hidden.iter().copied().map(SystemId).collect();
-        StarMap::with_hidden(replaced_systems(), &hidden)
+        StarMap::with_hidden(replaced_systems(), &hidden, CoLocated::Lowest)
     }
 
     #[test]
-    fn with_none_hidden_the_map_is_every_system() {
+    fn with_none_hidden_the_map_is_every_system_by_the_engines_resolution() {
         assert_eq!(
-            StarMap::with_hidden(replaced_systems(), &BTreeSet::new()),
+            StarMap::with_hidden(replaced_systems(), &BTreeSet::new(), CoLocated::Lowest),
             replaced()
         );
-        assert_eq!(StarMap::with_hidden(hub_systems(), &BTreeSet::new()), hub());
+        assert_eq!(
+            StarMap::with_hidden(hub_systems(), &BTreeSet::new(), CoLocated::Lowest),
+            hub()
+        );
+        assert_ne!(
+            StarMap::with_hidden(replaced_systems(), &BTreeSet::new(), CoLocated::Itself),
+            replaced(),
+            "2 and 3 share a place"
+        );
+    }
+
+    #[test]
+    fn the_lowest_visible_system_is_the_default_co_located_resolution() {
+        assert_eq!(CoLocated::default(), CoLocated::Lowest);
+        assert_eq!(CoLocated::from(RuleSource::Engine), CoLocated::Lowest);
+        assert_eq!(CoLocated::from(RuleSource::Bible), CoLocated::Itself);
     }
 
     #[test]
@@ -961,13 +1047,43 @@ mod tests {
     fn a_link_to_a_hidden_system_reaches_the_lowest_visible_one_for_hyper_select() {
         let mut systems = replaced_systems();
         systems.push(system_at(5, (50.0, 50.0), &[]));
-        let map = StarMap::with_hidden(systems, &BTreeSet::from([SystemId(2)]));
+        let hidden = BTreeSet::from([SystemId(2)]);
+        let map = StarMap::with_hidden(systems.clone(), &hidden, CoLocated::Itself);
         assert_eq!(map.listed_links(SystemId(1)), ids(&[3]));
         assert_eq!(jumps(&map, 1, Engine), ids(&[3, 5]), "every one there");
         assert_eq!(
             map.links(),
             vec![(SystemId(1), SystemId(3))],
             "drawn to the one Hyper Select offers"
+        );
+        let map = StarMap::with_hidden(systems, &hidden, CoLocated::Lowest);
+        assert_eq!(map.listed_links(SystemId(1)), ids(&[3]));
+        assert_eq!(jumps(&map, 1, Engine), ids(&[3]), "only the lowest");
+        assert_eq!(map.ordered_jumps(SystemId(1), Engine), ids(&[3]));
+        assert_eq!(map.links(), vec![(SystemId(1), SystemId(3))]);
+        assert_eq!(
+            map.systems().collect::<Vec<_>>(),
+            ids(&[1, 3, 4, 5]),
+            "5 is still on the map"
+        );
+    }
+
+    #[test]
+    fn a_link_to_a_place_of_two_visible_systems_reaches_the_lowest_by_the_engine() {
+        let mut systems = replaced_systems();
+        systems.push(system_at(5, (50.0, 50.0), &[]));
+        let none = BTreeSet::new();
+        let lowest = StarMap::with_hidden(systems.clone(), &none, CoLocated::Lowest);
+        let itself = StarMap::with_hidden(systems, &none, CoLocated::Itself);
+        assert_eq!(jumps(&lowest, 1, Engine), ids(&[2]));
+        assert_eq!(jumps(&itself, 1, Engine), ids(&[2, 3, 5]));
+        for map in [&lowest, &itself] {
+            assert_eq!(map.listed_links(SystemId(1)), ids(&[2]), "the lowest");
+        }
+        assert_eq!(
+            lowest.listed_links(SystemId(3)),
+            ids(&[1]),
+            "a shadowed system still lists its own links"
         );
     }
 
@@ -982,27 +1098,55 @@ mod tests {
     }
 
     /// [`replaced_systems`]' places, with 5 also at O's position and
-    /// `hidden` hidden.
+    /// `hidden` hidden, by the engine's resolution.
     fn places_hiding(hidden: &[i16]) -> Places {
+        places_resolving(hidden, CoLocated::Lowest)
+    }
+
+    /// [`replaced_systems`]' places, with 5 also at O's position and
+    /// `hidden` hidden, resolved as `colocated` says.
+    fn places_resolving(hidden: &[i16], colocated: CoLocated) -> Places {
         let mut systems = replaced_systems();
         systems.push(system_at(5, (50.0, 50.0), &[]));
         let hidden = hidden.iter().copied().map(SystemId).collect();
-        Places::new(&systems, &hidden)
+        Places::new(&systems, &hidden, colocated)
+    }
+
+    #[test]
+    fn by_the_engine_every_system_stands_for_the_lowest_visible_one_at_its_place() {
+        let places = places_hiding(&[2]);
+        let stand_in = |id| places.stand_in(SystemId(id)).map(|id| id.0);
+        assert_eq!(stand_in(3), Some(3), "the lowest visible there");
+        assert_eq!(stand_in(5), Some(3), "shadowed by 3, though visible");
+        assert_eq!(stand_in(2), Some(3), "hidden");
+        assert_eq!(stand_in(1), Some(1), "alone at its place");
+        assert_eq!(stand_in(99), Some(99), "nothing hides it");
+        assert!(places.visible(SystemId(5)), "still visible");
+        let places = places_hiding(&[]);
+        assert_eq!(places.stand_in(SystemId(5)), Some(SystemId(2)));
+        let places = places_hiding(&[2, 3]);
+        assert_eq!(places.stand_in(SystemId(2)), Some(SystemId(5)));
+        assert_eq!(places.stand_in(SystemId(5)), Some(SystemId(5)));
+        let places = places_hiding(&[2, 3, 5]);
+        assert_eq!(places.stand_in(SystemId(3)), None, "none visible there");
+        let places = places_hiding(&[4, 99]);
+        assert_eq!(places.stand_in(SystemId(4)), None, "alone at its place");
+        assert_eq!(places.stand_in(SystemId(99)), None, "hidden and nowhere");
     }
 
     #[test]
     fn a_visible_system_stands_for_itself_and_a_hidden_one_for_the_lowest_visible_there() {
-        let places = places_hiding(&[2]);
+        let places = places_resolving(&[2], CoLocated::Itself);
         let stand_in = |id| places.stand_in(SystemId(id)).map(|id| id.0);
         assert_eq!(stand_in(3), Some(3), "itself, visible");
         assert_eq!(stand_in(5), Some(5), "itself, though 3 is lower");
         assert_eq!(stand_in(2), Some(3), "the lowest visible there");
         assert_eq!(stand_in(99), Some(99), "nothing hides it");
-        let places = places_hiding(&[2, 3]);
+        let places = places_resolving(&[2, 3], CoLocated::Itself);
         assert_eq!(places.stand_in(SystemId(2)), Some(SystemId(5)));
-        let places = places_hiding(&[2, 3, 5]);
+        let places = places_resolving(&[2, 3, 5], CoLocated::Itself);
         assert_eq!(places.stand_in(SystemId(3)), None, "none visible there");
-        let places = places_hiding(&[4, 99]);
+        let places = places_resolving(&[4, 99], CoLocated::Itself);
         assert_eq!(places.stand_in(SystemId(4)), None, "alone at its place");
         assert_eq!(places.stand_in(SystemId(99)), None, "hidden and nowhere");
     }
@@ -1038,14 +1182,30 @@ mod tests {
         let mut systems = replaced_systems();
         systems.push(system_at(5, (50.0, 50.0), &[]));
         let hidden = BTreeSet::from([SystemId(2), SystemId(4)]);
-        let map = StarMap::with_hidden(systems.clone(), &hidden);
-        assert_eq!(*map.places(), Places::new(&systems, &hidden));
+        for colocated in [CoLocated::Lowest, CoLocated::Itself] {
+            let map = StarMap::with_hidden(systems.clone(), &hidden, colocated);
+            assert_eq!(*map.places(), Places::new(&systems, &hidden, colocated));
+        }
         assert_eq!(StarMap::default().places(), &Places::default());
     }
 
     #[test]
-    fn a_link_reaches_every_system_at_its_targets_position() {
+    fn by_the_engine_a_link_reaches_only_the_lowest_system_at_its_targets_position() {
         let map = replaced();
+        assert_eq!(jumps(&map, 1, Engine), ids(&[2]));
+        assert_eq!(route(&map, 1, 2, Engine), Ok(ids(&[2])));
+        assert_eq!(
+            route(&map, 1, 3, Engine),
+            Err(RouteError::Unreachable),
+            "3 is shadowed by 2"
+        );
+        assert_eq!(jumps(&map, 3, Engine), ids(&[1]), "it still jumps out");
+        assert_eq!(route(&map, 1, 3, BothWays), Ok(ids(&[3])));
+    }
+
+    #[test]
+    fn a_link_reaches_every_system_at_its_targets_position() {
+        let map = StarMap::with_hidden(replaced_systems(), &BTreeSet::new(), CoLocated::Itself);
         assert_eq!(route(&map, 1, 3, Engine), Ok(ids(&[3])));
         assert_eq!(route(&map, 3, 1, Engine), Ok(ids(&[1])));
         assert_eq!(route(&map, 1, 2, Engine), Ok(ids(&[2])));
@@ -1061,12 +1221,20 @@ mod tests {
 
     #[test]
     fn a_systems_link_to_its_own_position_reaches_the_others_there() {
-        let map = StarMap::new(vec![
+        let systems = vec![
             system_at(1, (0.0, 0.0), &[2]),
             system_at(2, (0.0, 0.0), &[]),
             system_at(3, (0.0, 0.0), &[]),
-        ]);
+        ];
+        let none = BTreeSet::new();
+        let map = StarMap::with_hidden(systems.clone(), &none, CoLocated::Itself);
         assert_eq!(jumps(&map, 1, Engine), ids(&[2, 3]));
+        let map = StarMap::new(systems);
+        assert_eq!(
+            jumps(&map, 1, Engine),
+            ids(&[]),
+            "by the engine, 2 is 1 itself"
+        );
     }
 
     #[test]
@@ -1277,6 +1445,7 @@ mod tests {
             links: Vec::new(),
             govt: None,
             stellars: Vec::new(),
+            interference: 0,
         }]);
         assert_eq!(map.position(SystemId(128)), Some(Vec2::new(-150.0, 75.0)));
         assert_eq!(map.position(SystemId(129)), None);
@@ -1301,17 +1470,24 @@ mod tests {
     fn the_ordered_jumps_follow_the_con_slots_by_the_engine_and_the_ids_both_ways() {
         // 128 lists 131, 129 and 130, and 129 shares its position with
         // 132; 133 lists 128, which does not list it.
-        let map = StarMap::new(vec![
+        let systems = vec![
             system(128, &[131, 129, 128, 131, 999, 130]),
             system_at(129, (5.0, 5.0), &[]),
             system(130, &[]),
             system(131, &[]),
             system_at(132, (5.0, 5.0), &[]),
             system(133, &[128]),
-        ]);
+        ];
+        let itself = StarMap::with_hidden(systems.clone(), &BTreeSet::new(), CoLocated::Itself);
+        assert_eq!(
+            itself.ordered_jumps(SystemId(128), HyperlinkRule::Engine),
+            ids(&[131, 129, 132, 130])
+        );
+        let map = StarMap::new(systems);
         assert_eq!(
             map.ordered_jumps(SystemId(128), HyperlinkRule::Engine),
-            ids(&[131, 129, 132, 130])
+            ids(&[131, 129, 130]),
+            "by the original's resolution, 129 alone for its place"
         );
         assert_eq!(
             map.ordered_jumps(SystemId(128), HyperlinkRule::BothWays),
@@ -1341,6 +1517,23 @@ mod tests {
         assert_eq!(map.stellars(SystemId(128)), flags.as_slice());
         assert_eq!(map.stellars(SystemId(129)), []);
         assert_eq!(map.stellars(SystemId(130)), [], "not on the map");
+    }
+
+    #[test]
+    fn a_systems_interference_is_its_records_and_0_off_the_map() {
+        let map = StarMap::new(vec![
+            StarSystem {
+                interference: 60,
+                ..system(128, &[])
+            },
+            StarSystem {
+                interference: -5,
+                ..system(129, &[])
+            },
+        ]);
+        assert_eq!(map.interference(SystemId(128)), 60);
+        assert_eq!(map.interference(SystemId(129)), -5);
+        assert_eq!(map.interference(SystemId(130)), 0, "not on the map");
     }
 
     // Jumping.

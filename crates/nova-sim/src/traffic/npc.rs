@@ -278,8 +278,11 @@ impl Npc {
         }
     }
 
-    /// Whether it escorts the player: a hired escort (its fighters too) or
-    /// a mission escort.
+    /// Whether it escorts the player: an escort hired or captured, a
+    /// fighter the player launched (both [`Npc::is_players`]), or a mission
+    /// escort. Not a fighter one of those launched, which an escort leads
+    /// with no [`EscortDuty`] of its own (the IFF radar counts it through
+    /// its leader: `iff::ship_iff`).
     #[must_use]
     pub fn escorts_player(&self) -> bool {
         self.escort.is_some() || self.mission_escort()
@@ -396,10 +399,14 @@ impl Npc {
     /// government test; inspecting is no threat.
     ///
     /// This is only part of `_IsThreatToPlayer` @0x7f501, which also counts
-    /// a ship attacking one the player leads; every caller on this roadmap
-    /// asks [`Npc::threatens_player_among`]. It is kept for roadmap
-    /// hud-fidelity's radar IFF and Red Alert, which build on it; that
-    /// roadmap's phase 14 moves them and retires it.
+    /// a ship attacking one the player leads; every caller roadmap
+    /// player-led-ships ported asks [`Npc::threatens_player_among`]. It is
+    /// kept for roadmap hud-fidelity's radar IFF
+    /// ([`iff::ship_iff`](crate::iff::ship_iff)) and Red Alert, which build
+    /// on it, and that roadmap's phase 14 moves them and retires it. The
+    /// hail's [`threatened_by_enemy`](crate::hail::Hail::threatened_by_enemy)
+    /// and [`threats_to_player`](crate::hail::Hail::threats_to_player)
+    /// read it too.
     #[must_use]
     pub fn threatens_player(&self) -> bool {
         self.threatens(ShipRef::Player)

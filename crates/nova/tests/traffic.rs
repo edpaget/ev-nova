@@ -22,8 +22,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova::app::{App, Control, Showing, WindowEvent, WindowPort, start_screen};
-use nova_data::graphics::fixture::{DirectBits, PictBuilder, RledBuilder};
-use nova_data::graphics::{PICT, RLED};
+use nova_data::graphics::fixture::{Cicn, Ctab, DirectBits, PictBuilder, RledBuilder};
+use nova_data::graphics::{CICN, PICT, RLED};
 use nova_data::records::character::Character;
 use nova_data::records::dude::Dude;
 use nova_data::records::interface::Interface;
@@ -181,6 +181,15 @@ fn status_picture() -> Vec<u8> {
         .build()
 }
 
+/// A black 8 x 8 `cicn`: the Red Alert icon's first frame.
+fn alert_icon() -> Vec<u8> {
+    let ctab = Ctab {
+        device: false,
+        entries: vec![(0, [0, 0, 0])],
+    };
+    Cicn::new(8, 8, 8, &ctab, &[0; 64], &[true; 64]).bytes()
+}
+
 /// An independent `sÿst` holding stellar 128, with `düde` 128 at 100 % and
 /// one ship on average.
 fn system() -> Vec<u8> {
@@ -248,7 +257,8 @@ fn data() -> Rc<GameData> {
             Some(b"Default status bar"),
             &interface(),
         )
-        .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture())
+        .resource(CICN, 18000, Some(b"Red Alert"), &alert_icon());
     let file = OneFile(fork.build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
@@ -551,15 +561,37 @@ fn entering_flight_shows_the_trader_with_its_sprite_and_a_radar_blip() {
     assert_eq!(trader.state.position, Vec2::new(100.0, -100.0));
     // The player is at the centre of the screen, (512, 384).
     assert_eq!(traders(&first), [centred(612.0, 284.0, 2.0, 2.0)]);
-    let blips: Vec<Point> = solids(&first)
+    // The planet's 2 x 2 oval on the radar; the trader joins it at the
+    // radar's next refresh, within 8 ticks (16 frames), a dim pixel where
+    // it is then: (100, -100) is 3.125 radar pixels each way from the
+    // player, at the radar's centre, (926, 96).
+    let planet = dim_pixels(&first);
+    assert_eq!(planet.len(), 4, "{planet:?}");
+    let mut frames = 0;
+    let blip = loop {
+        let shown = dim_pixels(&harness.frame());
+        frames += 1;
+        if shown.len() > 4 {
+            break shown[4];
+        }
+        assert!(frames < 16, "no blip after {frames} frames");
+    };
+    let at = harness.session().npcs()[0].state.position;
+    let expected = |world: f32, centre: f32| centre + (world / 32.0).trunc() + 0.5;
+    assert!(
+        (blip.x - expected(at.x, 926.0)).abs() <= 1.0
+            && (blip.y - expected(at.y, 96.0)).abs() <= 1.0,
+        "{blip:?} for {at:?}"
+    );
+}
+
+/// The centres of the 1-pixel quads drawn in the dim radar colour.
+fn dim_pixels(frame: &Frame) -> Vec<Point> {
+    solids(frame)
         .iter()
         .filter(|quad| quad.color == submitted(DIM_RADAR))
         .map(centre)
-        .collect();
-    assert_eq!(
-        blips,
-        [Point::new(926.0 + 100.0 / 16.0, 96.0 - 100.0 / 16.0)]
-    );
+        .collect()
 }
 
 #[test]
@@ -622,8 +654,9 @@ fn a_flights_diagnostics_are_written_out_once_as_lines() {
     assert_eq!(
         text,
         "nova: wëap 181: no spïn 3000\n\
+         nova: cargo box 0: no spïn 500\n\
          nova: wëap 181 Flags2 0x8000 not implemented\n",
-        "its shots' sheet missing from the fixture, as the flight opened; then the trader \
-         fired, again and again"
+        "its shots' and the cargo box's sheets missing from the fixture, as the flight \
+         opened; then the trader fired, again and again"
     );
 }

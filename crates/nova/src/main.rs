@@ -58,6 +58,12 @@
 //! listed in `nova_sim::rulebook`'s table. They are set by editing the
 //! file; a sound change in the Preferences dialog keeps them.
 //!
+//! The same file turns on the developer's flight overlays, which the
+//! original does not draw: `"developer"`, an object, with
+//! `"flight_title": true` for the system's name and ID at the top left of
+//! flight, and `"help_line": true` for the line of keys at its bottom.
+//! Both are off otherwise ([`nova::developer`]).
+//!
 //! When the game data loads, each data file that could not be loaded and
 //! each control-bit expression that does not parse is reported as a line
 //! on standard error, and the game runs without them.
@@ -76,6 +82,7 @@ use nova::app::start_screen;
 use nova::audio::{game_audio, music_warning};
 use nova::chance::SplitMix;
 use nova::config::{Os, pilots_dir, settings_path};
+use nova::developer::flight_overlays;
 use nova::fonts::game_fonts;
 use nova::load::data_warnings;
 use nova::platform::Runner;
@@ -128,6 +135,10 @@ fn main() -> ExitCode {
     for warning in warnings {
         eprintln!("{warning}");
     }
+    let (overlays, warnings) = flight_overlays(store.as_deref_mut());
+    for warning in warnings {
+        eprintln!("{warning}");
+    }
     let (keeper, settings, warning) = game_settings(store);
     warn(warning);
     // Dialog and menu text is laid out by the faces the window draws it in.
@@ -154,7 +165,8 @@ fn main() -> ExitCode {
         .with_prefs(settings.prefs())
         .with_pilots(pilots, Rc::clone(&metrics))
         .with_chance(SharedChance::new(chance))
-        .with_effects_chance(SharedChance::new(effects));
+        .with_effects_chance(SharedChance::new(effects))
+        .with_flight_overlays(overlays);
     // Every disputed rule as the settings' rulebook chooses.
     let mut screen = screen.with_rulebook(&rulebook);
     match open_interface(&dir) {

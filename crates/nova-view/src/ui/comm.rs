@@ -752,6 +752,7 @@ mod tests {
         HailView {
             npc: NpcId(3),
             ship: ShipId(129),
+            first: None,
             reply: "Channel open.".to_owned(),
             comm_name: "Cruiser".to_owned(),
             govt_name: Some("Federation".to_owned()),

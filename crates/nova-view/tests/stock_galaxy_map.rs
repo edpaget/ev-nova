@@ -27,6 +27,9 @@ fn systems(data: &GameData) -> BTreeMap<i16, System> {
         .collect()
 }
 
+/// How many stock links are drawn once each is resolved by place.
+const RESOLVED_PAIRS: usize = 1079;
+
 fn drawn(map: &GalaxyMap) -> DrawList {
     let mut list = DrawList::new();
     map.draw(&mut list);
@@ -98,7 +101,10 @@ fn the_stock_map_fits_at_75_percent_with_every_nebula_behind_the_systems() {
 }
 
 /// The hyperlinks, worked out here from the raw records, are each drawn
-/// once between their systems' dots.
+/// once between their systems' dots, each link to the system standing for
+/// its target's place: with every system read visible, the lowest-ID
+/// system there, as `_FindActiveCoLocatedSystem` resolves every Con slot
+/// (`colocated_resolution` engine).
 #[test]
 fn the_stock_map_draws_every_hyperlink_once() {
     let Some(data) = open() else {
@@ -128,6 +134,20 @@ fn the_stock_map_draws_every_hyperlink_once() {
         .map(|&(a, b)| (a.min(b), a.max(b)))
         .collect();
     assert_eq!(pairs.len(), 930);
+    // The lowest-ID system at each system's place.
+    let lowest = |id: i16| {
+        let at = (raw[&id].x_pos, raw[&id].y_pos);
+        raw.iter()
+            .find(|(_, system)| (system.x_pos, system.y_pos) == at)
+            .map_or(id, |(&lowest, _)| lowest)
+    };
+    let pairs: BTreeSet<(i16, i16)> = directed
+        .iter()
+        .map(|&(a, b)| (a, lowest(b)))
+        .filter(|&(a, b)| a != b)
+        .map(|(a, b)| (a.min(b), a.max(b)))
+        .collect();
+    assert_eq!(pairs.len(), RESOLVED_PAIRS);
     let model_pairs: BTreeSet<(i16, i16)> = map
         .model()
         .links()
@@ -157,7 +177,7 @@ fn the_stock_map_draws_every_hyperlink_once() {
         .collect();
     expected_lines.sort_unstable();
     drawn_lines.sort_unstable();
-    assert_eq!(drawn_lines.len(), 930);
+    assert_eq!(drawn_lines.len(), RESOLVED_PAIRS);
     assert_eq!(drawn_lines, expected_lines);
 }
 

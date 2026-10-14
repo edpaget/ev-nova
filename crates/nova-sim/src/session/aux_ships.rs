@@ -215,6 +215,7 @@ mod tests {
     use crate::gate::GateKind;
     use crate::mission::active::AUTO_ABORT;
     use crate::mission::aux::{AUX_EVERY_VISIT, AuxShips};
+    use crate::rulebook::Rulebook;
     use crate::session::gate_follow::tests::{exit_gate, gated};
     use crate::session::mission_ships::tests::{
         accepted, aux_catalog, aux_ships, jump_to, marked, settle, shipping, take_off, tick, ticks,
@@ -356,18 +357,33 @@ mod tests {
     }
 
     #[test]
-    fn aux_ships_of_a_hidden_system_come_in_at_the_visible_one_standing_for_it() {
+    fn by_the_engine_aux_ships_of_a_visible_system_shadowed_at_its_place_come_in_at_the_lowest() {
         let mut catalog = aux_only(2, 134, 0);
         catalog
             .star_map
             .push(crate::testkit::star(134, (0.0, 0.0), &[]));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
+        ticks(&mut session, &catalog, 139);
+        assert_eq!(aux_here(&session), 0, "not before the countdown runs out");
+        tick(&mut session, &catalog);
+        assert_eq!(aux_here(&session), 2, "130 stands for 134, though visible");
+    }
+
+    #[test]
+    fn aux_ships_of_a_hidden_system_come_in_at_the_visible_one_standing_for_it() {
+        let mut catalog = aux_only(2, 134, 0);
+        catalog
+            .star_map
+            .push(crate::testkit::star(134, (0.0, 0.0), &[]));
+        crate::testkit::hideable(&mut catalog);
+        let mut session = accepted(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::ColocatedResolution, RuleSource::Bible),
+        );
+        take_off(&mut session, &catalog);
         ticks(&mut session, &catalog, 140);
         assert_eq!(aux_here(&session), 0, "134 visible stands for itself");
-        assert!(session.change_galaxy(&catalog, |galaxy| {
-            galaxy.set_visible(SystemId(134), Some(false));
-        }));
+        assert!(crate::session::tests::hide(&mut session, &catalog, &[134]));
         assert_eq!(session.system(), SystemId(130));
         jump_to(&mut session, &catalog, 131);
         jump_to(&mut session, &catalog, 130);

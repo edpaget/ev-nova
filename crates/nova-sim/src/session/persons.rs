@@ -114,13 +114,14 @@ impl Session {
         }
     }
 
-    /// `npc`'s subtitle: a mission ship's drawn subtitle while it is
-    /// marked and that is not empty (@0x4b81b-0x4b880), else its
-    /// person's, unless it has none or it is empty.
+    /// `npc`'s subtitle, in place of its ship type's: while it is a
+    /// marked mission ship, the mission's drawn subtitle unless that is
+    /// empty, its person's never (@0x4b80f-0x4b86f); otherwise its
+    /// person's, unless it has none or it is empty (@0x4b880).
     #[must_use]
     pub fn npc_subtitle(&self, npc: &Npc) -> Option<&str> {
-        if let Some(subtitle) = self.mission_ship_text(npc.mission, |ships| &ships.subtitle) {
-            return Some(subtitle);
+        if npc.mission.is_some() {
+            return self.mission_ship_text(npc.mission, |ships| &ships.subtitle);
         }
         let person = self.traffic.person(npc.person?.id)?;
         Some(person.record.subtitle.as_str()).filter(|subtitle| !subtitle.is_empty())
@@ -203,6 +204,7 @@ impl Session {
                 pilot: &self.pilot.name,
                 ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
                 ship_name: self.pilot.ship_name().unwrap_or_default(),
+                ranks: self.rank_names(),
             };
             let text = expand_tags(&line, &tags);
             self.quotes.push(PersonQuote { npc: id, text });
@@ -969,6 +971,28 @@ mod tests {
             said,
             [format!("Nice Ship {}, the Kestrel.", session.ship().0)]
         );
+    }
+
+    #[test]
+    fn a_quote_names_the_players_rank_once_one_is_granted() {
+        let mut catalog = quoters([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
+        catalog.strings = vec![(7101, vec!["Halt, <PRK>! A <RRK>?".to_owned()])];
+        catalog.ranks = vec![crate::catalog::RankRecord {
+            name: "Commander".to_owned(),
+            conv_name: "Cmdr".to_owned(),
+            ..crate::testkit::rank(128)
+        }];
+        let pilot = Pilot::new(&catalog, "Stock").expect("a pilot");
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.populate(&catalog, &mut NeverFires);
+        session.run_set(
+            &crate::control::SetExpr::parse("K128").expect("parses"),
+            &mut crate::testkit::Scripted::default(),
+        );
+        session.traffic.npcs_mut()[1].person = None;
+        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        let (said, _) = quote_tick(&catalog, &mut session, &[77]);
+        assert_eq!(said, ["Halt, Cmdr! A Commander?"], "not captain");
     }
 
     #[test]

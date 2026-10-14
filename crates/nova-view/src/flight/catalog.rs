@@ -91,7 +91,9 @@ pub struct StatusBarLayout {
     pub weap: Bounds,
     /// `TargArea`: the target panel.
     pub targ: Bounds,
-    /// `CargoArea`: its last line shows the date.
+    /// `CargoArea`: the hold, free space, mission cargo and credits
+    /// (`_DrawStatusCargo`), and the date on its last line when there is
+    /// room.
     pub cargo: Bounds,
     /// `BrightText`.
     pub bright_text: Color,
@@ -123,18 +125,22 @@ pub struct StatusBarLayout {
 /// The status bars: which one each government shows and how each is laid
 /// out.
 pub trait StatusBars {
-    /// Govt `id`'s raw `Interface` field, or why it cannot be read.
-    fn government_interface(&self, id: GovtId) -> Result<i16, String>;
+    /// Govt `id`'s raw `Interface` field, `None` when there is no such
+    /// `gövt`, or why it does not decode.
+    fn government_interface(&self, id: GovtId) -> Result<Option<i16>, String>;
     /// `ïntf` `id`, or why it cannot be read.
     fn status_bar(&self, id: i16) -> Result<StatusBarLayout, String>;
     /// `PICT` `id`'s width and height in pixels, or `None` when it is
     /// missing or does not decode.
     fn picture_size(&self, id: i16) -> Option<(u32, u32)>;
+    /// `cicn` `id`'s width and height in pixels, or `None` when it is
+    /// missing or does not decode.
+    fn icon_size(&self, id: i16) -> Option<(u32, u32)>;
 }
 
 /// A borrowed catalog is a catalog.
 impl<T: StatusBars + ?Sized> StatusBars for &T {
-    fn government_interface(&self, id: GovtId) -> Result<i16, String> {
+    fn government_interface(&self, id: GovtId) -> Result<Option<i16>, String> {
         (**self).government_interface(id)
     }
 
@@ -144,12 +150,16 @@ impl<T: StatusBars + ?Sized> StatusBars for &T {
 
     fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
         (**self).picture_size(id)
+    }
+
+    fn icon_size(&self, id: i16) -> Option<(u32, u32)> {
+        (**self).icon_size(id)
     }
 }
 
 /// A shared catalog is a catalog.
 impl<T: StatusBars + ?Sized> StatusBars for Rc<T> {
-    fn government_interface(&self, id: GovtId) -> Result<i16, String> {
+    fn government_interface(&self, id: GovtId) -> Result<Option<i16>, String> {
         (**self).government_interface(id)
     }
 
@@ -159,6 +169,10 @@ impl<T: StatusBars + ?Sized> StatusBars for Rc<T> {
 
     fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
         (**self).picture_size(id)
+    }
+
+    fn icon_size(&self, id: i16) -> Option<(u32, u32)> {
+        (**self).icon_size(id)
     }
 }
 
@@ -238,6 +252,9 @@ pub trait CombatLooks {
     fn target_card(&self, ship: ShipId) -> TargetCard;
     /// Govt `govt`'s `TargetCode`, if it has one.
     fn target_code(&self, govt: GovtId) -> Option<String>;
+    /// The sheet of cargo box graphic `graphic`, `spïn` 500 + `graphic`,
+    /// or why it cannot be read.
+    fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -256,6 +273,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for &T {
 
     fn target_code(&self, govt: GovtId) -> Option<String> {
         (**self).target_code(govt)
+    }
+
+    fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
+        (**self).box_sheet(graphic)
     }
 }
 
@@ -276,6 +297,10 @@ impl<T: CombatLooks + ?Sized> CombatLooks for Rc<T> {
     fn target_code(&self, govt: GovtId) -> Option<String> {
         (**self).target_code(govt)
     }
+
+    fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
+        (**self).box_sheet(graphic)
+    }
 }
 
 /// The first explosion type, `bööm` 128.
@@ -283,13 +308,21 @@ pub const FIRST_BOOM: i16 = 128;
 /// The last explosion type, `bööm` 191: 64 in all.
 pub const LAST_BOOM: i16 = 191;
 
-/// The weapons' and explosions' looks, read once.
+/// The cargo box graphics read: only a jettisoned box's, 0. Graphics 1-4
+/// are only an asteroid's scoopable boxes'
+/// (rdm:phase/cargo-and-scanning/phase-5-scoopable-cargo-boxes).
+pub const BOX_GRAPHICS: [u16; 1] = [0];
+
+/// The weapons', explosions' and cargo boxes' looks, read once.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Looks {
     /// Each weapon's look, or why it cannot be read.
     pub weapons: BTreeMap<WeaponId, Result<WeaponLook, String>>,
     /// Each explosion type there is: its look, or why it cannot be read.
     pub booms: BTreeMap<BoomId, Result<BoomLook, String>>,
+    /// Each cargo box graphic a box can have: its sheet, or why it cannot
+    /// be read.
+    pub boxes: BTreeMap<u16, Result<EffectSheet, String>>,
 }
 
 impl Looks {
@@ -304,7 +337,17 @@ impl Looks {
             booms: (FIRST_BOOM..=LAST_BOOM)
                 .filter_map(|id| Some((BoomId(id), catalog.boom_look(BoomId(id))?)))
                 .collect(),
+            boxes: BOX_GRAPHICS
+                .into_iter()
+                .map(|graphic| (graphic, catalog.box_sheet(graphic)))
+                .collect(),
         }
+    }
+
+    /// Cargo box graphic `graphic`'s sheet, if it was read.
+    #[must_use]
+    pub fn box_sheet(&self, graphic: u16) -> Option<&EffectSheet> {
+        self.boxes.get(&graphic)?.as_ref().ok()
     }
 
     /// Weapon `id`'s look, if it was read.
@@ -321,8 +364,8 @@ impl Looks {
 
     /// What could not be read, a line each: a look that could not be read
     /// at all, as the catalog says, and a sheet that could not, after its
-    /// `wëap` or `bööm` ("wëap 140: no spïn 3005"); the weapons' by ID,
-    /// then the explosions'.
+    /// `wëap`, `bööm` or cargo box graphic ("wëap 140: no spïn 3005");
+    /// the weapons' by ID, then the explosions', then the boxes'.
     #[must_use]
     pub fn problems(&self) -> Vec<String> {
         let weapons = self.weapons.iter().filter_map(|(id, look)| match look {
@@ -339,7 +382,13 @@ impl Looks {
                 Ok(_) => None,
             },
         });
-        weapons.chain(booms).collect()
+        let boxes = self.boxes.iter().filter_map(|(graphic, sheet)| {
+            sheet
+                .as_ref()
+                .err()
+                .map(|reason| format!("cargo box {graphic}: {reason}"))
+        });
+        weapons.chain(booms).chain(boxes).collect()
     }
 }
 
@@ -380,8 +429,8 @@ mod tests {
     struct Bars;
 
     impl StatusBars for Bars {
-        fn government_interface(&self, id: GovtId) -> Result<i16, String> {
-            Ok(id.0)
+        fn government_interface(&self, id: GovtId) -> Result<Option<i16>, String> {
+            Ok(Some(id.0))
         }
 
         fn status_bar(&self, id: i16) -> Result<StatusBarLayout, String> {
@@ -413,21 +462,27 @@ mod tests {
         fn picture_size(&self, id: i16) -> Option<(u32, u32)> {
             Some((u32::try_from(id).ok()?, 1))
         }
+
+        fn icon_size(&self, id: i16) -> Option<(u32, u32)> {
+            Some((1, u32::try_from(id).ok()?))
+        }
     }
 
-    /// Everything `catalog` says about govt 130, `ïntf` 131 and `PICT` 194.
+    /// Everything `catalog` says about govt 130, `ïntf` 131, `PICT` 194
+    /// and `cicn` 18.
     fn bar(catalog: impl StatusBars) -> String {
         format!(
-            "{:?} {:?} {:?}",
+            "{:?} {:?} {:?} {:?}",
             catalog.government_interface(GovtId(130)),
             catalog.status_bar(131).map(|bar| bar.status_bkgnd),
             catalog.picture_size(194),
+            catalog.icon_size(18),
         )
     }
 
     #[test]
     fn borrowed_and_shared_status_bars_are_status_bars() {
-        let direct = "Ok(130) Ok(131) Some((194, 1))";
+        let direct = "Ok(Some(130)) Ok(131) Some((194, 1)) Some((1, 18))";
         assert_eq!(bar(Bars), direct);
         assert_eq!(bar(&Bars), direct);
         assert_eq!(bar(Rc::new(Bars)), direct);
@@ -467,19 +522,27 @@ mod tests {
         fn target_code(&self, govt: GovtId) -> Option<String> {
             Some(format!("g{}", govt.0))
         }
+
+        fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
+            Ok(EffectSheet {
+                image_id: 500 + graphic.cast_signed(),
+                frames: NonZeroU16::MIN,
+            })
+        }
     }
 
-    /// Everything `catalog` says about weapon 128, `bööm` 129, ship 130
-    /// and govt 131.
+    /// Everything `catalog` says about weapon 128, `bööm` 129, ship 130,
+    /// govt 131 and cargo box graphic 2.
     fn looks(catalog: impl CombatLooks) -> String {
         format!(
-            "{:?} {:?} {:?} {:?}",
+            "{:?} {:?} {:?} {:?} {:?}",
             catalog.weapon_look(WeaponId(128)).map(|look| look.name),
             catalog
                 .boom_look(BoomId(129))
                 .map(|look| look.map(|look| look.sheet.map(|sheet| sheet.image_id))),
             catalog.target_card(ShipId(130)).subtitle,
             catalog.target_code(GovtId(131)),
+            catalog.box_sheet(2).map(|sheet| sheet.image_id),
         )
     }
 
@@ -503,18 +566,33 @@ mod tests {
             }))
         );
         assert_eq!(looks.boom(BoomId(151)), None);
+        assert_eq!(
+            looks.box_sheet(0),
+            Some(&EffectSheet {
+                image_id: 500,
+                frames: NonZeroU16::MIN
+            }),
+            "a jettisoned box's"
+        );
+        assert_eq!(
+            looks.box_sheet(1),
+            None,
+            "only the jettisoned box's is read"
+        );
         assert_eq!(looks.problems(), Vec::<String>::new());
         let unread = Looks {
             weapons: BTreeMap::from([(WeaponId(1), Err("no".to_owned()))]),
             booms: BTreeMap::from([(BoomId(1), Err("no".to_owned()))]),
+            boxes: BTreeMap::from([(0, Err("no".to_owned()))]),
         };
         assert_eq!(unread.weapon(WeaponId(1)), None);
         assert_eq!(unread.boom(BoomId(1)), None);
+        assert_eq!(unread.box_sheet(0), None);
     }
 
     #[test]
     fn borrowed_and_shared_combat_looks_are_combat_looks() {
-        let direct = r#"Ok("w128") Some(Ok(Ok(129))) "s130" Some("g131")"#;
+        let direct = r#"Ok("w128") Some(Ok(Ok(129))) "s130" Some("g131") Ok(502)"#;
         assert_eq!(looks(Named), direct);
         assert_eq!(looks(&Named), direct);
         assert_eq!(looks(Rc::new(Named)), direct);
@@ -558,6 +636,10 @@ mod tests {
         fn target_code(&self, _govt: GovtId) -> Option<String> {
             None
         }
+
+        fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
+            Err(format!("no spïn {}", 500 + graphic))
+        }
     }
 
     #[test]
@@ -579,6 +661,7 @@ mod tests {
                 "no wëap 141",
                 "bööm 128: no spïn 400",
                 "bööm 129: too short",
+                "cargo box 0: no spïn 500",
             ]
         );
     }

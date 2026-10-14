@@ -682,12 +682,24 @@ impl PilotCatalog for Probed<'_> {
         self.data.listed_stellars()
     }
 
+    fn system_visibility(&self) -> Vec<cat::SystemVisibility> {
+        self.data.system_visibility()
+    }
+
     fn place_names(&self) -> cat::PlaceNames {
         self.data.place_names()
     }
 
     fn stellar_marks(&self) -> Vec<cat::StellarMark> {
         self.data.stellar_marks()
+    }
+
+    fn crons(&self) -> Vec<cat::CronRecord> {
+        self.data.crons()
+    }
+
+    fn ranks(&self) -> Vec<cat::RankRecord> {
+        self.data.ranks()
     }
 }
 

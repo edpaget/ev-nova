@@ -87,13 +87,13 @@ use crate::mission::{
     World, abort_checks, abort_penalty, accept_charge, accept_checks, auto_aborts_at_accept,
     cleaned, failure_records, fined, pay_effect, stellars_of, success_records,
 };
+use crate::news::CARGO_NAMES;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::rules::Verdict;
 use crate::story::{
     Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
 use crate::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames};
-use crate::wares;
 
 /// The offer roll's subscription: the offers', which run first on a
 /// landing, before the mission ships' goal checks and every mission
@@ -132,10 +132,6 @@ pub const DEADLINE_TOOK_OFF: u8 = 4;
 
 /// Every hook a slot can register, in order.
 const HOOKS: [u8; 5] = [ARRIVAL, FAILURE, SUCCESS, DEADLINE, DEADLINE_TOOK_OFF];
-
-/// The cargo names `<CT>` reads, lower case (`_lcCargoName`, from
-/// `_LoadStrings` @0x71ba4).
-const CARGO_NAMES: i16 = 4001;
 
 /// Slot `slot`'s subscription for `hook`.
 #[must_use]
@@ -1072,11 +1068,7 @@ impl Session {
             inherent_ai: ship.map_or(0, |ship| ship.inherent_ai),
             inherent_govt: ship.and_then(|ship| ship.inherent_govt),
             combat_govt: ship.and_then(|ship| ship.combat_govt),
-            contributed: wares::contributed(
-                self.fields.contribute,
-                &self.pilot.outfits,
-                &self.outfits,
-            ),
+            contributed: self.contributed(),
             fuel: self.pilot.reserves.fuel.now,
             free_cargo: self.mission_cargo_space(),
             cash: self.pilot.cash,
@@ -1122,6 +1114,7 @@ impl Session {
             ship_type: self.ship_name(self.pilot.ship).unwrap_or_default(),
             ship_name: self.pilot.ship_name().unwrap_or_default(),
             person: self.offering_person(),
+            ranks: self.rank_names(),
             mission: mission.map(|values| MissionTags {
                 values,
                 cash: self.pilot.cash,
@@ -1319,27 +1312,34 @@ mod tests {
     fn each_reading_of_the_mission_stellar_distance_reaches_the_world() {
         let mut catalog = offering();
         // 133 at 130's place, holding 160: distant only by the other
-        // reading.
+        // reading, and owned by 133 only while it stands for itself.
         catalog.star_map[3].position = Vec2::ZERO;
         catalog
             .sites
             .push((SystemId(133), vec![planet(160, 0.0, 0.0)]));
-        let rules = |distance| {
+        let rules = |distance, colocated| {
             Rulebook::default()
                 .with_override(RuleKey::MissionStellarDraw, RuleSource::Bible)
                 .with_override(RuleKey::MissionStellarDistance, distance)
+                .with_override(RuleKey::ColocatedResolution, colocated)
         };
-        for (distance, asked) in [(RuleSource::Engine, 1), (RuleSource::Bible, 2)] {
+        for (distance, colocated, asked) in [
+            (RuleSource::Engine, RuleSource::Bible, 1),
+            (RuleSource::Bible, RuleSource::Bible, 2),
+            (RuleSource::Engine, RuleSource::Engine, 1),
+            (RuleSource::Bible, RuleSource::Engine, 1),
+        ] {
             let mut session = Session::start(&catalog)
                 .expect("starts")
-                .with_rules(rules(distance));
+                .with_rules(rules(distance, colocated));
             assert_eq!(land_now(&mut session), Ok(StellarId(128)));
             let mut chance = Draws::arriving(&[0]);
             let _ = session.settle_script(&catalog, &mut chance);
             assert_eq!(
                 chance.asked,
                 table_then(&[asked]),
-                "{distance:?}: 150, and by the other reading 160 too"
+                "{distance:?}, {colocated:?}: 150, and by the other reading 160 \
+                 too while 133, shadowed by 130 by the engine, owns it"
             );
         }
     }
@@ -2020,6 +2020,97 @@ mod tests {
         }
     }
 
+    // The galaxy refreshes at a landing.
+
+    /// Whether 132 and 133 were visible each time a script ran an operator.
+    #[derive(Debug, Default)]
+    struct Shown(RefCell<Vec<(bool, bool)>>);
+
+    impl SetOpObserver for Shown {
+        fn saw(&self, _op: &SetOp, session: &Session) {
+            let galaxy = session.galaxy();
+            self.0
+                .borrow_mut()
+                .push((galaxy.visible(SystemId(132)), galaxy.visible(SystemId(133))));
+        }
+    }
+
+    /// [`lifecycle`] of `missions`, with 132 shown by b50 and 133 by b51.
+    fn gated(missions: Vec<MissionRecord>) -> FakePilotCatalog {
+        let mut catalog = lifecycle(missions);
+        catalog.visibility = [(132, "b50"), (133, "b51")]
+            .into_iter()
+            .map(|(system, test)| crate::catalog::SystemVisibility {
+                id: SystemId(system),
+                visibility: crate::control::Test::parse(test),
+            })
+            .collect();
+        catalog
+    }
+
+    /// A session of `catalog`, its operators seen by a [`Shown`], docked
+    /// at 128 with mission 140 accepted.
+    fn gated_session(catalog: &FakePilotCatalog) -> (Session, Rc<Shown>) {
+        let shown = Rc::new(Shown::default());
+        let mut session = Session::start(catalog)
+            .expect("starts")
+            .with_set_op_observer(shown.clone());
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, catalog);
+        accept(&mut session, 140);
+        (session, shown)
+    }
+
+    #[test]
+    fn a_landing_refreshes_the_galaxy_as_its_offers_roll_and_after_its_land_check() {
+        let catalog = gated(vec![MissionRecord {
+            on_success: Script::parse("b51 X130"),
+            ..travel(140, -1, 129)
+        }]);
+        let (mut session, shown) = gated_session(&catalog);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        settle(&mut session, &catalog);
+        run(&mut session, "b50");
+        settle(&mut session, &catalog);
+        assert!(!session.galaxy().visible(SystemId(132)), "not in flight");
+        land_on(&mut session, &catalog, 129);
+        assert_eq!(held(&session), [], "completed");
+        assert_eq!(
+            *shown.0.borrow(),
+            [(true, false)],
+            "refreshed as the offers rolled at 129, before the success hook"
+        );
+        assert!(
+            session.galaxy().visible(SystemId(133)),
+            "refreshed again after the land check"
+        );
+    }
+
+    #[test]
+    fn landing_again_where_the_offers_were_rolled_refreshes_only_after_the_land_check() {
+        let catalog = gated(vec![MissionRecord {
+            on_success: Script::parse("X130"),
+            ..back_to_128(140)
+        }]);
+        let (mut session, shown) = gated_session(&catalog);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        settle(&mut session, &catalog);
+        run(&mut session, "b50");
+        settle(&mut session, &catalog);
+        land_on(&mut session, &catalog, 128);
+        assert_eq!(held(&session), [], "completed");
+        assert_eq!(
+            *shown.0.borrow(),
+            [(false, false)],
+            "no roll at 128 again, so no refresh before the land check"
+        );
+        assert!(session.galaxy().visible(SystemId(132)), "after it");
+    }
+
     #[test]
     fn accepting_runs_on_accept_and_holds_the_offer_with_a_deadline_from_the_accept() {
         let catalog = lifecycle(vec![MissionRecord {
@@ -2543,7 +2634,8 @@ mod tests {
     }
 
     /// [`lifecycle`] with 130 and 131 the Federation's, 132 the pirates'
-    /// and 133 the Civvies'.
+    /// and 133 the Civvies', every system
+    /// [`hideable`](crate::testkit::hideable).
     fn governed_lifecycle(missions: Vec<MissionRecord>) -> FakePilotCatalog {
         let mut catalog = lifecycle(missions);
         for (system, govt) in catalog
@@ -2553,6 +2645,7 @@ mod tests {
         {
             system.govt = Some(govt);
         }
+        crate::testkit::hideable(&mut catalog);
         catalog
     }
 
@@ -2569,9 +2662,7 @@ mod tests {
         for (system, record) in (130..=133).zip(records) {
             session.pilot.set_system_record(SystemId(system), record);
         }
-        session.change_galaxy(catalog, |overlay| {
-            overlay.set_visible(SystemId(133), Some(false));
-        });
+        assert!(crate::session::tests::hide(session, catalog, &[133]));
     }
 
     #[test]
@@ -2591,6 +2682,7 @@ mod tests {
         settle(&mut session, &catalog);
         land_on(&mut session, &catalog, 129);
         assert_eq!(held(&session), []);
+        assert!(!session.galaxy().visible(SystemId(133)), "still hidden");
         assert_eq!(
             system_records(&session),
             [14, 2, 8, 12],

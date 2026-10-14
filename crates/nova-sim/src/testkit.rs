@@ -5,12 +5,13 @@ use std::cell::RefCell;
 
 use crate::ai::Goal;
 use crate::catalog::{
-    AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes,
-    DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord, HullRecord,
-    JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts,
-    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog, PlaceNames, ShipId,
-    ShipRecord, StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark, SystemId,
-    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
+    DateAffixes, DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord,
+    HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip,
+    MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog,
+    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem, StartDate, StartError,
+    StellarId, StellarLife, StellarMark, SystemId, SystemTraffic, SystemVisibility, TrafficCatalog,
+    WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -99,6 +100,59 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) place_name_reads: RefCell<usize>,
     /// What `stellar_marks` returns: none unless a test sets them.
     pub(crate) marks: Vec<StellarMark>,
+    /// Each system's `Visibility`: none, by default, which leaves every
+    /// system visible.
+    pub(crate) visibility: Vec<SystemVisibility>,
+    /// Every `crön`: none, by default.
+    pub(crate) crons: Vec<CronRecord>,
+    /// Every `ränk`: none, by default.
+    pub(crate) ranks: Vec<RankRecord>,
+}
+
+/// Cron `id`, open on every date, starting on any roll and asking
+/// nothing, running 0 days with no holdoffs, and with no scripts and no
+/// `Contribute`.
+pub(crate) fn cron(id: i16) -> CronRecord {
+    CronRecord {
+        id: CronId(id),
+        first_day: 0,
+        first_month: 0,
+        first_year: 0,
+        last_day: 0,
+        last_month: 0,
+        last_year: 0,
+        random: 100,
+        duration: 0,
+        pre_holdoff: 0,
+        post_holdoff: 0,
+        flags: 0,
+        enable_on: Test::default(),
+        on_start: Script::default(),
+        on_end: Script::default(),
+        contribute: 0,
+        require: 0,
+        news_govt: [-1; 4],
+        govt_news: [-1; 4],
+        ind_news: -1,
+    }
+}
+
+/// Rank `id`: unaffiliated, of `Weight` 0, paying nothing, with no cap,
+/// no `Contribute`, no flags, every name empty and a `PriceMod` of 100.
+pub(crate) fn rank(id: i16) -> RankRecord {
+    RankRecord {
+        id: RankId(id),
+        name: String::new(),
+        weight: 0,
+        affil_govt: None,
+        salary: 0,
+        salary_cap: 0,
+        contribute: 0,
+        flags: 0,
+        conv_name: String::new(),
+        short_name: String::new(),
+        price_mod: 100,
+    }
 }
 
 /// Stellar `id` of `Strength` 100 and `dead_time`, starting the game
@@ -250,6 +304,7 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
         item_class: 0,
         lc_name: format!("outfit {id}"),
         lc_plural: format!("outfits {id}"),
+        scan_mask: 0,
         on_purchase: crate::control::Script::default(),
         on_sell: crate::control::Script::default(),
     }
@@ -348,7 +403,7 @@ pub(crate) fn hull(id: i16) -> HullRecord {
 
 /// `gövt` `id`: no flags, no classes, allies or enemies, no tolerance
 /// for crime, no initial record, no penalties, and `MaxOdds` 100 (even odds), hailed as
-/// "Govt `id`", scanning for nothing and fining nothing.
+/// "Govt `id`", scanning for nothing, fining nothing and requiring nothing.
 pub(crate) fn govt(id: i16) -> GovtRecord {
     GovtRecord {
         id: GovtId(id),
@@ -364,6 +419,8 @@ pub(crate) fn govt(id: i16) -> GovtRecord {
         comm_name: format!("Govt {id}"),
         scan_mask: 0,
         scan_fine: 0,
+        news_pic: -1,
+        require: 0,
     }
 }
 
@@ -509,6 +566,9 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         place_names: PlaceNames::default(),
         place_name_reads: RefCell::default(),
         marks: Vec::new(),
+        visibility: Vec::new(),
+        crons: Vec::new(),
+        ranks: Vec::new(),
     }
 }
 
@@ -558,6 +618,31 @@ pub(crate) fn star(id: i16, (x, y): (f32, f32), links: &[i16]) -> StarSystem {
         links: links.iter().copied().map(SystemId).collect(),
         govt: None,
         stellars: Vec::new(),
+        interference: 0,
+    }
+}
+
+/// The control bit that hides `system` in a [`hideable`] catalog: 9000
+/// past its ID.
+pub(crate) fn hiding_bit(system: i16) -> crate::control::Bit {
+    u16::try_from(system)
+        .ok()
+        .and_then(|id| crate::control::Bit::new(9000 + id))
+        .expect("a system of a hideable catalog has a hiding bit")
+}
+
+/// Makes `catalog` hideable: each system on its map that has no
+/// `Visibility` yet is visible unless its [`hiding_bit`] is set. A test
+/// hides it by setting the bit and refreshing the galaxy, as play does, so
+/// every later refresh keeps it hidden.
+pub(crate) fn hideable(catalog: &mut FakePilotCatalog) {
+    for system in &catalog.star_map {
+        if !catalog.visibility.iter().any(|test| test.id == system.id) {
+            catalog.visibility.push(SystemVisibility {
+                id: system.id,
+                visibility: Test::parse(&format!("!b{}", hiding_bit(system.id.0).get())),
+            });
+        }
     }
 }
 
@@ -693,6 +778,10 @@ impl PilotCatalog for FakePilotCatalog {
         listed.into_values().collect()
     }
 
+    fn system_visibility(&self) -> Vec<SystemVisibility> {
+        self.visibility.clone()
+    }
+
     fn place_names(&self) -> PlaceNames {
         *self.place_name_reads.borrow_mut() += 1;
         self.place_names.clone()
@@ -700,6 +789,14 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn stellar_marks(&self) -> Vec<StellarMark> {
         self.marks.clone()
+    }
+
+    fn crons(&self) -> Vec<CronRecord> {
+        self.crons.clone()
+    }
+
+    fn ranks(&self) -> Vec<RankRecord> {
+        self.ranks.clone()
     }
 }
 

@@ -110,6 +110,10 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::JumpBegan) => self.play(self.table.jump),
                 Sound::Sim(SimSound::Arrived) => self.play(self.table.arrival),
                 Sound::Sim(SimSound::ScriptMessage) => self.play(self.table.script_message),
+                Sound::Sim(SimSound::RedAlert) => self.play(self.table.red_alert),
+                Sound::Sim(SimSound::CargoJettisoned) => self.play(self.table.jettison),
+                Sound::Sim(SimSound::ScanFailedMission) => self.play(self.table.scan_failed),
+                Sound::Sim(SimSound::Smuggling) => self.play(self.table.smuggling),
                 Sound::Sim(SimSound::Script {
                     sound,
                     exclusive: false,
@@ -133,6 +137,8 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
                 Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
                 Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
+                Sound::Ui(UiSound::NewsOpened) => self.play(self.table.news_open),
+                Sound::Ui(UiSound::NewsClosed) => self.play(self.table.news_close),
                 Sound::Combat(fight) => {
                     let gain = distance_gain(fight.offset);
                     let volume = self.settings.effects_volume.amplitude() * gain;
@@ -463,6 +469,95 @@ mod tests {
         drain(&log);
         core.update(None, &[Sound::Sim(SimSound::ScriptMessage)]);
         assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_scan_beeps_151_for_a_failed_mission_and_154_for_smuggling() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::ScanFailedMission),
+                Sound::Sim(SimSound::Smuggling),
+            ],
+        );
+        assert_eq!(drain(&log), [play(151, 0.5), play(154, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::ScanFailedMission),
+                Sound::Sim(SimSound::Smuggling),
+            ],
+        );
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_jettison_in_flight_beeps_154_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::CargoJettisoned)],
+        );
+        assert_eq!(drain(&log), [play(154, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::CargoJettisoned)],
+        );
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_red_alert_plays_370_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::RedAlert)],
+        );
+        assert_eq!(drain(&log), [play(370, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::RedAlert)],
+        );
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn the_news_dialog_beeps_as_it_opens_and_closes() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Ui(UiSound::NewsOpened),
+                Sound::Ui(UiSound::NewsClosed),
+            ],
+        );
+        assert_eq!(drain(&log), [play(151, 1.0), play(152, 1.0)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            news_open: Some(SoundId(300)),
+            news_close: Some(SoundId(301)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Ui(UiSound::NewsClosed),
+                Sound::Ui(UiSound::NewsOpened),
+            ],
+        );
+        assert_eq!(drain(&log), [play(301, 1.0), play(300, 1.0)], "the table's");
     }
 
     fn mission(id: i16, exclusive: bool) -> Sound {

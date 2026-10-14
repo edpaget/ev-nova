@@ -336,6 +336,7 @@ pub fn emerge(site: &GateSite, max_speed: f32, chance: &mut (impl Chance + ?Size
 mod tests {
     use super::*;
     use crate::geometry::Vec2;
+    use crate::hyperspace::CoLocated;
     use crate::testkit::{Scripted, star};
 
     /// The links in `ids`, in slots from the first, the rest unused.
@@ -453,6 +454,7 @@ mod tests {
                 star(541, (100.0, 100.0), &[]),
             ],
             &[SystemId(298), SystemId(483)].into(),
+            CoLocated::Lowest,
         );
         (sites, map)
     }

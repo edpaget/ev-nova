@@ -15,6 +15,20 @@ additional_cargo_test_args = ["--no-tests=pass"]
 additional_cargo_args = ["--all-features"]
 
 exclude_re = [
+    # `_SpawnBox` turns a box round with `(heading + 180) mod 360`, and
+    # `accel` takes every angle mod 360 (`rem_euclid`): `- 180` lands on
+    # the same heading as `+ 180`, so no push can tell them apart.
+    "cargo_box.rs:.*replace \\+ with - in reversed",
+    # `_TableArcTan`'s quadrant tests are strict (`x < 0`, `y < 0`). At
+    # x == 0 the entry is always 90 (the ratio is 0, then 90 − 0), and
+    # 180 − 90, 180 + 90 and −90 land on the same heading as 90 once taken
+    # 90 back and wrapped; at y == 0 it is 0, and 180 ± 0 and −0 are the
+    # same. So `<` and `<=` give the same heading at every zero.
+    "flight/radar.rs:.*replace < with <= in table_arctan",
+    # `OopsFacts` is a `Context` only because `Value::of` needs one; its
+    # one value, `news::oops_pool`, is plain and never asks the rule set,
+    # so a default rule set in its place cannot be observed.
+    "replace <impl Context for OopsFacts<'_>>::rulebook",
     # `Cloak::cloak` stops a fade going out by setting its direction to 0:
     # for a direction already 0, `< 0` and `<= 0` leave it the same.
     "replace < with <= in Cloak::cloak",
@@ -27,6 +41,13 @@ exclude_re = [
     # or unsellable (0x0008): two distinct bits, so `|` and `^` combine them
     # the same.
     "replace \\| with \\^ in trade_in",
+    # The system catalog draws a stellar as a radar square for `Flags2`
+    # hypergate (0x1000) or wormhole (0x2000): two distinct bits, so `|`
+    # and `^` combine them the same.
+    "system/data.rs:.*replace \\| with \\^ in contents",
+    # A crime of violence takes a rank of `Flags` 0x0040 or 0x0004: two
+    # distinct bits, so `|` and `^` combine them the same.
+    "replace \\| with \\^ in flags_taken",
     # Compiled only on non-macOS targets, so on the macOS development host a
     # mutated body is never built into the tests and cannot be observed. It
     # is a one-line `Ok(None)`.
@@ -156,4 +177,8 @@ exclude_re = [
     # making it the first: with `<=`, selecting the first row shown makes
     # it the first, which it is already.
     "replace < with <= in RowList::select",
+    # A shield or armour gauge past its capacity (`max < now`) fills all of
+    # its area: with `<=`, a gauge exactly full takes that branch too, and
+    # its `now / max` would be exactly 1.0 anyway.
+    "replace < with <= in shield_share",
 ]

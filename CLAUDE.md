@@ -35,6 +35,50 @@ When building a component:
 3. Wire real adapters together at the edge of the program (`main`, or a
    top-level constructor).
 
+## Porting the original's behaviour
+
+Work that reads `EV Nova.app` to match the original follows these rules, so a
+single investigation doesn't turn into a trail of follow-ups.
+
+### Port the whole function
+
+When a phase reads one of the original's functions, port all of it, not just
+the branch the phase's feature needs.
+
+- Build every branch the engine can model now.
+- Record each branch you leave out in the phase body, with its address and
+  the reason it was left out.
+- Put all the branches left out of one function into a single follow-up,
+  never one follow-up per branch.
+
+### Sounds come with the function
+
+A `PlaySound` or `_beepSnd` call is part of the function that makes it. Raise
+it as a `SimSound` event in the same phase, and record which `snd ` it plays.
+Add the `SimSound` variant even if the audio side can't play it yet. Don't
+leave the sound for a later phase.
+
+### Don't match the order of random draws
+
+The engine's randomness (`SplitMix64` in `crates/nova/src/chance.rs`) isn't the
+original's generator. Making the same draws in the same order can't reproduce
+the original's sequence, so it changes nothing the player can see. Don't plan,
+file or test for draw order. Match what a draw decides, such as its range,
+its condition and what it sets.
+
+### Ordering against the original
+
+The engine may settle work later in a tick than the original does: in
+reconciliation passes, in story subscriptions, or in after-frame hooks. It must
+settle before any boundary where the player can see or keep the state: a frame
+is drawn, a dialog opens, a landing or jump completes, or the pilot is saved.
+
+- An ordering difference that crosses one of those boundaries is a
+  divergence. Fix it or file it.
+- An ordering difference that doesn't cross one, such as a one-tick lag the
+  player never sees, isn't filed. Note it in the doc comment of the code that
+  defers.
+
 ## Testing with hand-written mocks
 
 - Test core logic through its ports. In each test module, write small mocks or

@@ -400,10 +400,12 @@ impl Session {
         self.become_class(&record, change, |_| {});
         if rules.cargo == RuleSource::Bible {
             // To the new ship's own hold, goods in order: the purchase
-            // rule's other reading, with no escorts' holds counted.
+            // rule's other reading, with no escorts' holds counted. The
+            // mission cargo aboard takes its room first and always stays.
             shipyard::keep_cargo(
                 &mut self.pilot.cargo,
                 self.stats.capacity,
+                self.pilot.missions.tons_aboard(),
                 &[],
                 RuleSource::Bible,
             );
@@ -436,16 +438,32 @@ impl Session {
     /// One of `STR#` `list`'s strings, from the session's string lists,
     /// picked evenly on `chance` as `_GetRandomIndString` (@0x72ef7) picks
     /// it: a roll of as many sides as the list holds. `None`, with no roll,
-    /// for a missing or empty list, and `None` for an empty pick.
-    pub(super) fn pick_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
+    /// for a missing or empty list; an empty string picked is given as
+    /// it is. The session's one port of that routine: the bar's news and
+    /// [`pick_string`](Self::pick_string) both draw through it.
+    pub(super) fn random_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
         let strings = self.strings.0.string_list(list);
         if strings.is_empty() {
             return None;
         }
         let sides = u16::try_from(strings.len()).unwrap_or(u16::MAX);
-        strings
-            .into_iter()
-            .nth(usize::from(chance.roll(sides)))
+        strings.into_iter().nth(usize::from(chance.roll(sides)))
+    }
+
+    /// String `index` (1-based) of `STR#` `list`, from the session's
+    /// string lists, if it has one: what the bar's news and the rank tags
+    /// read through.
+    pub(super) fn nth_string(&self, list: i16, index: usize) -> Option<String> {
+        let mut strings = self.strings.0.string_list(list);
+        let at = index.checked_sub(1)?;
+        (at < strings.len()).then(|| strings.swap_remove(at))
+    }
+
+    /// [`random_string`](Self::random_string), with an empty pick read as
+    /// none, as the `T` rename, the `Q` leave message, and the bar's commercial
+    /// and generic story read it.
+    pub(super) fn pick_string(&self, list: i16, chance: &mut dyn Chance) -> Option<String> {
+        self.random_string(list, chance)
             .filter(|pick| !pick.is_empty())
     }
 }
@@ -1619,6 +1637,54 @@ mod tests {
             [(Good::Commodity(0), 3), (Good::Commodity(2), 2)],
             "trimmed in Good order"
         );
+    }
+
+    #[test]
+    fn the_mission_cargo_aboard_takes_the_new_hold_first_when_trimmed_and_always_stays() {
+        let catalog = changing();
+        let loaded = |rules| {
+            let mut session = session(&catalog).with_rules(rules);
+            session.pilot.cargo = [(Good::Commodity(0), 2), (Good::Commodity(2), 9)]
+                .into_iter()
+                .collect();
+            session
+                .pilot
+                .missions
+                .put(0, crate::testkit::carrying(140, 3));
+            run(&mut session, "C130");
+            session
+        };
+        let mission_cargo = |session: &Session| {
+            let held = session.pilot.missions.get(0).expect("still held");
+            (held.cargo_tons, held.aboard)
+        };
+        let session = loaded(Rulebook::default());
+        assert_eq!(
+            session.pilot().cargo().collect::<Vec<_>>(),
+            [(Good::Commodity(0), 2), (Good::Commodity(2), 9)],
+            "by the engine every ton kept"
+        );
+        assert_eq!(mission_cargo(&session), (3, true));
+        let session =
+            loaded(Rulebook::default().with_override(RuleKey::ShipChangeCargo, RuleSource::Bible));
+        assert_eq!(
+            session.pilot().cargo().collect::<Vec<_>>(),
+            [(Good::Commodity(0), 2)],
+            "2 tons of the 5 left by the mission cargo"
+        );
+        assert_eq!(mission_cargo(&session), (3, true));
+        assert_eq!(session.pilot().total_cargo(), 5);
+        let mut session = self::session(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::ShipChangeCargo, RuleSource::Bible),
+        );
+        session.pilot.cargo = std::iter::once((Good::Commodity(0), 4)).collect();
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 7));
+        run(&mut session, "C130");
+        assert_eq!(session.pilot().cargo().count(), 0, "no room left");
+        assert_eq!(mission_cargo(&session), (7, true), "kept past the hold");
     }
 
     // The armour bump.

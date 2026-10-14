@@ -15,6 +15,8 @@
 //! - Moving too fast, or far from every stellar, the second L says so in
 //!   the original's words (`STR#` 2002 #72, #68) and the ship flies on.
 
+mod bracket_art;
+
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -39,7 +41,7 @@ use nova_rsrc::fixture::ForkBuilder;
 use nova_rsrc::{Fork, ForkReader};
 use nova_sim::{Session, ShipState, StellarId};
 use nova_view::flight::FlightView;
-use nova_view::flight::hud::{NAV_NO_DESTINATION, NAV_STELLAR};
+use nova_view::flight::hud::{NAV_OFF, NAV_STELLAR};
 use nova_view::spaceport::SpaceportView;
 use winit::event::ElementState;
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -197,10 +199,8 @@ fn data() -> Rc<GameData> {
             Some(b"Default status bar"),
             &interface(),
         )
-        .resource(PICT, 700, Some(b"Status Bar"), &status_picture())
-        .build()
-        .bytes;
-    let file = OneFile(fork);
+        .resource(PICT, 700, Some(b"Status Bar"), &status_picture());
+    let file = OneFile(bracket_art::with_bracket_art(fork).build().bytes);
     Rc::new(GameData::load(&file, &file, Path::new("/data"), None).expect("opens"))
 }
 
@@ -337,7 +337,7 @@ impl Harness {
 #[test]
 fn with_no_target_l_requests_clearance_at_the_nearest_and_a_second_l_lands_there() {
     let mut game = Harness::flying();
-    assert_eq!(game.nav(), [NAV_NO_DESTINATION]);
+    assert_eq!(game.nav(), [NAV_OFF]);
 
     game.press(KeyCode::KeyL);
     assert_eq!(game.showing(), Showing::Flight, "cleared, not landed");

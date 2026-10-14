@@ -21,8 +21,9 @@
 //!   session checks the player's mission cargo against the interceptor's
 //!   government (`_ScanPlayer` @0x7e46e; see the
 //!   [`mission`](crate::mission) module's "Cargo"), failing a mission
-//!   flagged 0x0020 or fining the smuggler. Scanning for illegal `jünk`
-//!   and outfits is rdm:phase/missions/phase-21-illegal-cargo-scanning.
+//!   flagged 0x0020 or fining the smuggler, then its illegal `jünk` and
+//!   outfits (see [`scan`](crate::scan)), convicting the smuggler; any
+//!   find sets the interceptor attacking the player.
 //! - With nothing to inspect it goes about its business
 //!   ([`idle`](super::idle)).
 

@@ -287,7 +287,8 @@ impl Session {
     /// `OnDestroy`, drawing on `chance`, and destroyed with that countdown
     /// again whatever the script did. The player, and no other ship, is
     /// convicted ten times of killing a ship of its government, as `law`
-    /// says.
+    /// says, and loses the ranks that killing reaches (see
+    /// [`rank`](crate::rank)'s **Crimes**).
     pub(super) fn shoot_down(
         &mut self,
         stellar: StellarId,
@@ -314,6 +315,10 @@ impl Session {
             for _ in 0..STELLAR_KILLINGS {
                 legal::convict(&mut self.pilot, &changes, self.galaxy.governed());
             }
+            // `_CheckShotProximities` slaps ten times (@0x374e9), but
+            // after the first pass no rank it takes is still active, so
+            // one pass takes the same ranks.
+            self.lose_ranks_to(Crime::Kill, site.govt);
         }
     }
 
@@ -595,12 +600,10 @@ mod tests {
         let mut session = quiet(&catalog);
         run(&mut session, "Y300");
         for id in [127, 2176] {
-            session
-                .apply_op(
-                    &SetOp::DestroyStellar(StellarId(id)),
-                    &mut Scripted::default(),
-                )
-                .expect("handled");
+            session.apply_op(
+                &SetOp::DestroyStellar(StellarId(id)),
+                &mut Scripted::default(),
+            );
         }
         assert!(session.galaxy().overlay().is_empty());
         assert_eq!(session.take_events(), []);
@@ -1282,6 +1285,57 @@ mod tests {
         assert_eq!(session.pilot().legal_record(GovtId(140)), 0);
     }
 
+    /// Rank 200 of government 141 (the overlay's), lost to any crime
+    /// against it, and 201 of 142, lost to any crime against that.
+    fn crime_ranks() -> Vec<crate::catalog::RankRecord> {
+        [(200, 141), (201, 142)]
+            .map(|(id, govt)| crate::catalog::RankRecord {
+                affil_govt: Some(GovtId(govt)),
+                flags: crate::rank::LOST_TO_CRIME,
+                ..crate::testkit::rank(id)
+            })
+            .into()
+    }
+
+    /// The session's active ranks.
+    fn ranks_held(session: &Session) -> Vec<i16> {
+        session.pilot().ranks().iter().map(|id| id.0).collect()
+    }
+
+    /// `catalog`'s [`overlaid`] session, given [`crime_ranks`] and
+    /// holding both.
+    fn ranked(mut catalog: FakePilotCatalog) -> Session {
+        catalog.ranks = crime_ranks();
+        let mut session = overlaid(&catalog);
+        session
+            .pilot
+            .ranks
+            .extend([crate::catalog::RankId(200), crate::catalog::RankId(201)]);
+        session
+    }
+
+    #[test]
+    fn the_player_shooting_a_stellar_down_loses_its_governments_ranks() {
+        let mut session = ranked(shooting([life(128, 2)]));
+        fire(&mut session, 2);
+        assert_eq!(ranks_held(&session), [200, 201], "not until it is down");
+        fire(&mut session, 1);
+        assert_eq!(ranks_held(&session), [201], "a killing of 141's");
+    }
+
+    #[test]
+    fn an_npc_shooting_a_stellar_down_takes_no_rank() {
+        let mut session = ranked(shooting([life(128, 2)]));
+        session.shoot_down(
+            StellarId(128),
+            ShipRef::Npc(NpcId(1)),
+            &NovaLaw::default(),
+            &mut NeverFires,
+        );
+        assert_eq!(destroyed(&session, 128), Some(left(2)));
+        assert_eq!(ranks_held(&session), [200, 201]);
+    }
+
     #[test]
     fn shooting_down_a_stellar_of_a_derelict_government_is_no_crime() {
         for (flags, crime) in [(DERELICT, false), (0, true)] {
@@ -1297,7 +1351,7 @@ mod tests {
                 },
                 govt(142),
             ];
-            let mut session = overlaid(&catalog);
+            let mut session = ranked(catalog);
             fire(&mut session, 3);
             assert_eq!(destroyed(&session, 128), Some(left(2)));
             assert_eq!(
@@ -1307,6 +1361,11 @@ mod tests {
                     .any(|(_, record)| record != 0),
                 crime,
                 "{flags:#x}"
+            );
+            assert_eq!(
+                ranks_held(&session).contains(&200),
+                !crime,
+                "{flags:#x}: @0x9bf2 returns before the ranks too"
             );
         }
     }

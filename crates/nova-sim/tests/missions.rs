@@ -125,6 +125,7 @@ impl PilotCatalog for Courier {
             links: vec![SystemId(link)],
             govt: None,
             stellars: Vec::new(),
+            interference: 0,
         };
         vec![star(130, 0.0, 131), star(131, 600.0, 130)]
     }
@@ -216,11 +217,23 @@ impl PilotCatalog for Courier {
             .collect()
     }
 
+    fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {
+        Vec::new()
+    }
+
     fn place_names(&self) -> nova_sim::catalog::PlaceNames {
         nova_sim::catalog::PlaceNames::default()
     }
 
     fn stellar_marks(&self) -> Vec<nova_sim::catalog::StellarMark> {
+        Vec::new()
+    }
+
+    fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
+        Vec::new()
+    }
+
+    fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
         Vec::new()
     }
 }

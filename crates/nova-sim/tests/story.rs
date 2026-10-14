@@ -119,6 +119,7 @@ impl PilotCatalog for Home {
             item_class: 0,
             lc_name: "gun".to_owned(),
             lc_plural: "guns".to_owned(),
+            scan_mask: 0,
             on_purchase: Script::default(),
             on_sell: Script::default(),
         }]
@@ -201,11 +202,23 @@ impl PilotCatalog for Home {
         Vec::new()
     }
 
+    fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {
+        Vec::new()
+    }
+
     fn place_names(&self) -> nova_sim::catalog::PlaceNames {
         nova_sim::catalog::PlaceNames::default()
     }
 
     fn stellar_marks(&self) -> Vec<nova_sim::catalog::StellarMark> {
+        Vec::new()
+    }
+
+    fn crons(&self) -> Vec<nova_sim::catalog::CronRecord> {
+        Vec::new()
+    }
+
+    fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
         Vec::new()
     }
 }

@@ -7,9 +7,11 @@ use std::fmt;
 
 use super::flags::{self, FlagField};
 use super::weapon::WeaponSpec;
-use crate::catalog::WeaponId;
+use crate::catalog::{CronId, WeaponId};
+use crate::cron::{CronHook, RUN_CAP};
 
-/// Something in the game data the simulation does not do yet.
+/// Something in the game data the simulation does not do yet, or that
+/// runs away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SimDiagnostic {
     /// A weapon fired with a flag bit the simulation ignores.
@@ -30,6 +32,15 @@ pub enum SimDiagnostic {
         /// Its `Guidance`.
         guidance: i16,
     },
+    /// A crön's iterative script stopped at [`RUN_CAP`] runs, its
+    /// conditions still holding (`_ActivateCron` @0x38655,
+    /// `_TerminateCron` @0x384e1).
+    CronRunsCapped {
+        /// The crön.
+        cron: CronId,
+        /// The script.
+        hook: CronHook,
+    },
 }
 
 impl fmt::Display for SimDiagnostic {
@@ -40,6 +51,9 @@ impl fmt::Display for SimDiagnostic {
             }
             Self::UnimplementedGuidance { weapon, guidance } => {
                 write!(f, "wëap {} Guidance {guidance} not implemented", weapon.0)
+            }
+            Self::CronRunsCapped { cron, hook } => {
+                write!(f, "crön {} {hook} stopped after {RUN_CAP} runs", cron.0)
             }
         }
     }
@@ -113,6 +127,22 @@ mod tests {
             .to_string(),
             "wëap 131 Guidance 1 not implemented"
         );
+        for (hook, line) in [
+            (CronHook::OnEnd, "crön 128 OnEnd stopped after 10001 runs"),
+            (
+                CronHook::OnStart,
+                "crön 128 OnStart stopped after 10001 runs",
+            ),
+        ] {
+            assert_eq!(
+                SimDiagnostic::CronRunsCapped {
+                    cron: CronId(128),
+                    hook
+                }
+                .to_string(),
+                line
+            );
+        }
     }
 
     #[test]

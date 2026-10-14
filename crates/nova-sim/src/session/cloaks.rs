@@ -33,6 +33,7 @@
 use super::Session;
 use crate::cloak::{self, Area, CloakShown, Observer, Scanner};
 use crate::combat::{ShipRef, Strike};
+use crate::geometry::Vec2;
 use crate::traffic::npc::Npc;
 
 impl Session {
@@ -103,10 +104,24 @@ impl Session {
     /// ship with no sprite counts as a point.
     #[must_use]
     pub fn on_screen(&self, npc: &Npc) -> bool {
-        let view = self.play_area.offset(self.player.position);
-        let width = npc.hull.sprite_size.unwrap_or(0.0);
-        let height = npc.hull.sprite_height.unwrap_or(0.0);
-        cloak::on_screen(view, npc.state.position, width, height)
+        self.npc_in_play_area(npc, cloak::on_screen)
+    }
+
+    /// `test` applied to the play area about the player and `npc`'s
+    /// sprite: where it is and its width and height, a ship with no
+    /// sprite a point. The tests take the size rather than the sprite's
+    /// rect, as [`cloak::on_screen`] insets the play area by it.
+    pub(super) fn npc_in_play_area(
+        &self,
+        npc: &Npc,
+        test: fn(Area, Vec2, f32, f32) -> bool,
+    ) -> bool {
+        test(
+            self.play_area.offset(self.player.position),
+            npc.state.position,
+            npc.hull.sprite_size.unwrap_or(0.0),
+            npc.hull.sprite_height.unwrap_or(0.0),
+        )
     }
 
     /// Says what the view shows of space, about the player's ship: the
