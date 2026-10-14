@@ -8118,6 +8118,7 @@ mod tests {
             size: None,
             height: None,
             strength: 0,
+            key_carried: None,
         };
         let (_, chance) = scripted(&placed(850, 650, 90));
         let catalog = FakeCatalog {
@@ -8255,6 +8256,7 @@ mod tests {
             size: None,
             height: None,
             strength: 0,
+            key_carried: None,
         }
     }
 
