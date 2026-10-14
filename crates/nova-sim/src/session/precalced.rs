@@ -552,6 +552,97 @@ pub(super) mod tests {
         );
     }
 
+    /// A counted buy of 3 pods, 20 tons to 50, with 30 + 30 commodities,
+    /// 4 tons of `jünk` and 3 of mission cargo aboard: the buy loop
+    /// resets once, after it (@0x5c305), so 30 x 50/67 = 22 of each. A
+    /// reset after each pass would give 30 x 30/67 = 13, then nothing
+    /// more to cut.
+    #[test]
+    fn a_counted_buy_resets_once_after_its_loop() {
+        use crate::session::tests::{buy, outfitted, outfitting};
+        let mut session = outfitted(&outfitting());
+        session.pilot.cargo = [
+            (Good::Commodity(0), 30),
+            (Good::Commodity(2), 30),
+            (JUNK, 4),
+        ]
+        .into();
+        session.pilot.missions.put(0, carrying(140, 3));
+        let run = session.outfit_order(buy(POD), 3, &mut NeverFires);
+        assert_eq!((run.run.done, run.run.stopped), (3, None));
+        assert_eq!(session.capacity(), 50);
+        assert_eq!(
+            cargo(&session),
+            [
+                (Good::Commodity(0), 22),
+                (Good::Commodity(2), 22),
+                (JUNK, 4)
+            ]
+            .into()
+        );
+    }
+
+    #[test]
+    fn a_cancelled_buy_whose_button_passes_still_resets() {
+        use crate::session::tests::{buy, outfitted, outfitting};
+        let mut session = outfitted(&outfitting());
+        let trimmed = overloaded(&mut session);
+        convicted(&mut session);
+        let run = session.outfit_order(buy(POD), 0, &mut NeverFires);
+        assert_eq!(run.run.done, 0);
+        assert_eq!(session.scan_latches, Latches::ARMED, "@0x5c305");
+        assert_eq!(cargo(&session), trimmed);
+    }
+
+    #[test]
+    fn a_buy_refused_at_its_button_resets_nothing() {
+        use crate::session::tests::{buy, outfitted, outfitting};
+        for count in [0, 1, 3] {
+            let mut session = outfitted(&outfitting());
+            session.pilot.cash = 0;
+            let _ = overloaded(&mut session);
+            let untouched = cargo(&session);
+            convicted(&mut session);
+            let run = session.outfit_order(buy(POD), count, &mut NeverFires);
+            assert_eq!(run.run.done, 0, "{count}");
+            assert_ne!(session.scan_latches, Latches::ARMED, "{count}");
+            assert_eq!(cargo(&session), untouched, "{count}");
+        }
+    }
+
+    #[test]
+    fn a_buy_loop_stopped_after_its_first_pass_resets_once() {
+        use crate::session::tests::{buy, outfitted, outfitting};
+        let mut session = outfitted(&outfitting());
+        let price = session
+            .outfitter(&mut NeverFires)
+            .and_then(|outfitter| outfitter.row(POD).map(|row| row.buy_price))
+            .expect("listed");
+        session.pilot.cash = price;
+        session.pilot.cargo = [
+            (Good::Commodity(0), 30),
+            (Good::Commodity(2), 30),
+            (JUNK, 4),
+        ]
+        .into();
+        session.pilot.missions.put(0, carrying(140, 3));
+        convicted(&mut session);
+        let run = session.outfit_order(buy(POD), 3, &mut NeverFires);
+        assert_eq!(run.run.done, 1);
+        assert!(run.run.stopped.is_some(), "the cash spent");
+        assert_eq!(session.scan_latches, Latches::ARMED);
+        assert_eq!(
+            cargo(&session),
+            [
+                (Good::Commodity(0), 13),
+                (Good::Commodity(2), 13),
+                (JUNK, 4)
+            ]
+            .into(),
+            "30 x 30/67, once"
+        );
+    }
+
     #[test]
     fn an_outfit_sale_below_the_cargo_trims_it_by_the_engine_and_keeps_it_by_the_other_reading() {
         use crate::rulebook::{RuleKey, RuleSource, Rulebook};

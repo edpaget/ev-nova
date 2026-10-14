@@ -3333,9 +3333,16 @@ impl Session {
     /// [`Reselection::Kept`]. The rebuilds this needs draw no roll the
     /// order would not have drawn.
     ///
-    /// A `count` of none runs no pass, draws no roll and changes nothing;
-    /// [`outfit_counted`](Self::outfit_counted) is the one that counts a
-    /// Cancel's outfit day.
+    /// A buy resets once after its loop (`_DoOutfitDialog` @0x5c305;
+    /// see the `precalced` module) whenever Buy passed its own check
+    /// ([`Outfitter::can`]): a loop stopped by a refusal after its first
+    /// pass and a Cancel's count of none included, a buy refused at the
+    /// button not. A sale resets after each pass (@0x5cffb).
+    ///
+    /// A `count` of none runs no pass and moves nothing; a buy of none
+    /// asks the outfitter whether Buy passes, drawing any roll not drawn
+    /// yet, for its reset; [`outfit_counted`](Self::outfit_counted) is the
+    /// one that counts a Cancel's outfit day.
     ///
     /// A sale need not lower a count owned: an `OnSell` can grant the
     /// outfit sold back and change the listing again (`^b7 G128`), so
@@ -3388,6 +3395,12 @@ impl Session {
                 let run = order_loop::run(count, |pass| {
                     self.outfit_pass(order, pass, chance, &mut alert, asked)
                 });
+                // The buy loop's reset, once after the loop (@0x5c305),
+                // whenever Buy passed its own check: a Cancel's count of
+                // none and a loop stopped by a refusal included.
+                if self.buy_button_passed(order, count, &run, chance, asked) {
+                    self.reset_precalced();
+                }
                 // The buy loop rebuilds the list once, after the loop
                 // (@0x5c314).
                 if let Some(listing) = listing {
@@ -3405,6 +3418,27 @@ impl Session {
             self.outfit_reselected = Some(FIRST_OUTFIT);
         }
         OutfitRun { run, alert, after }
+    }
+
+    /// Whether a buy order's button passed its own check
+    /// (`_CanBuyOutfitItem`, [`Outfitter::can`]), so the buy loop's reset
+    /// runs after it (@0x5c305): for a `count` of none, asked of the
+    /// outfitter now; otherwise unless `run` was refused at its first
+    /// pass, whose check is the button's.
+    fn buy_button_passed(
+        &mut self,
+        order: OutfitOrder,
+        count: u32,
+        run: &OrderRun<OutfitRefusal>,
+        chance: &mut dyn Chance,
+        asked: Option<OutfitId>,
+    ) -> bool {
+        if count == 0 {
+            return self
+                .outfitter_with(chance, asked)
+                .is_some_and(|outfitter| outfitter.can(order).is_ok());
+        }
+        run.stopped.as_ref().is_none_or(|stopped| stopped.pass > 0)
     }
 
     /// The listing before an order's first pass, when
@@ -3487,7 +3521,10 @@ impl Session {
     /// go, before `OnSell` runs (`_DoOutfitDialog` @0x5cf73-0x5cf8c,
     /// @0x5ce82, before @0x5cff6); by the other reading of
     /// [`RuleKey::SecondarySale`], a sale that leaves the ship not
-    /// carrying it does, at the same point.
+    /// carrying it does, at the same point. A sale resets after its pass
+    /// (@0x5cffb); a buy does not, as its reset moved to
+    /// [`outfit_order`](Self::outfit_order), once after the loop
+    /// (@0x5c305).
     fn outfit_pass(
         &mut self,
         order: OutfitOrder,
@@ -3545,11 +3582,12 @@ impl Session {
         }
         self.stay.outfit_traded = true;
         self.refit(true, ReservePolicy::Hold);
-        // The order's reset: a buy's after its loop, a sale's after each
-        // pass (`_DoOutfitDialog` @0x5c305, @0x5cffb; see the `precalced`
-        // module). A buy loop of several passes resets after each here; no
-        // frame is drawn between them.
-        self.reset_precalced();
+        // A sale's reset, after each pass (`_DoOutfitDialog` @0x5cffb; see
+        // the `precalced` module). A buy's runs once after its loop
+        // ([`outfit_order`](Self::outfit_order), @0x5c305).
+        if order.direction == Direction::Sell {
+            self.reset_precalced();
+        }
         self.sale_keeps_cargo = false;
         Ok(())
     }
