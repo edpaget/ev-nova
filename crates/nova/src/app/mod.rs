@@ -1417,6 +1417,22 @@ mod tests {
     }
 
     #[test]
+    fn a_key_given_to_a_screen_drawing_its_pointer_does_not_tell_it_where_the_pointer_is() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = app(&window);
+        handle(&mut app, &mut window, moved(100.0, 50.0));
+        redraw_plain(&mut app, &mut window);
+        app.screen.hides_pointer = true;
+        handle(&mut app, &mut window, key(Key::Up, true));
+        redraw_plain(&mut app, &mut window);
+        assert_eq!(
+            app.screen().inputs.last(),
+            Some(&Input::PointerMoved(Point::new(100.0, 50.0))),
+            "resynced after the key"
+        );
+    }
+
+    #[test]
     fn a_screen_that_does_not_draw_its_pointer_gets_no_resync() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
         let mut app = app(&window);
