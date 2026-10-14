@@ -72,7 +72,15 @@
 //!   a failed capture, a self-destruct, a capture into the fleet and an
 //!   assignment, but not a boarding the system's change or setup ends;
 //! - a mission cargo pickup that fits (`_DoMissionCargoPickup` @0x98316),
-//!   whether a boarding or a landing makes it.
+//!   whether a boarding or a landing makes it;
+//! - the player's eject, once the new class is boarded
+//!   (`_ShipStatsToSystemInfo` @0x6f8bb, which ends in a tail jump to the
+//!   reset @0xcce7 on every path; see the `eject` module);
+//! - the onboard bombs, after their outfit loop (`_HandlePlayer`
+//!   @0x69a05; see the `sabotage` module).
+//!
+//! The same refresh caches the sabotage flag and restarts its clock (see
+//! [`sabotage`](crate::sabotage)), so every refresh point above reaches it.
 //!
 //! *Ordering against the original.* The engine runs a take-off's, a gate
 //! exit's and an arrival's story subscriptions (the days', the
@@ -89,8 +97,7 @@
 //! `DumpCargoText`) need nothing of their own: while docked nothing reads
 //! the blessing, and the take-off refreshes before any reader. The
 //! pickup's refresh runs from a landing too, as boarding shares it. The
-//! onboard bomb's refresh (@0x69a05) is for whoever builds the bomb, and
-//! the debug keys' (@0x6dc6f, @0x6f08a) are left out with the keys. By
+//! debug keys' (@0x6dc6f, @0x6f08a) are left out with the keys. By
 //! the other reading the table is built from the active ranks as they
 //! are when it is asked.
 //!

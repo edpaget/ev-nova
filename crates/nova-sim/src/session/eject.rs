@@ -96,7 +96,17 @@
 //! weapon rebuild sets each stock load on its ammunition's slot, a later
 //! weapon of one ammunition replacing an earlier one's (@0x6f884,
 //! @0x6f88e), where the engine's fit takes the largest load of an
-//! ammunition; a fighter bay's load goes to its own fighters on both. By
+//! ammunition; a fighter bay's load goes to its own fighters on both.
+//! `_ShipStatsToSystemInfo` (@0x6f8bb) ends in a tail jump to
+//! `_ResetPlayerPrecalcedValues` (@0xcce7), so the eject refreshes the
+//! blessing table and the sabotage clock (see the `ranks` module's
+//! **Blessing**), after the outfits are dropped and the stock weapons
+//! fitted and before the default outfits are added (@0x6f8c0). The
+//! engine boards the class in one step, so it refreshes after the
+//! defaults too: an escape ship whose `shïp` defaults hold a sabotage
+//! outfit would arm it at the eject, where the original arms it at the
+//! next refresh. No stock class has one (no `shïp`'s defaults hold
+//! `oütf` 261, 348 or 374, the only sabotage outfits). By
 //! the engine's reading of [`RuleKey::EjectVelocity`], the x velocity
 //! takes the y velocity's value (@0x6f782-0x6f788), so the hulk keeps the
 //! true velocity; by the other, it is kept. Then one push of the new class's top
