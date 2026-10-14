@@ -195,6 +195,30 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_the_player_leads_moves_at_the_led_top_speed_on_the_second_pass() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        assert!(session.led_speed() > 1.0, "a pilot without Strict Play");
+        let escort = &mut session.traffic.npcs_mut()[0];
+        escort.mission = Some(crate::traffic::npc::MissionMark {
+            slot: 0,
+            behav: crate::mission::ships::ShipBehav::EscortPlayer,
+            formation: Some(crate::escort::FormationSlot::default()),
+            order: None,
+        });
+        escort.goal = crate::ai::Goal::Formation { guard: None };
+        escort.state.position = Vec2::new(0.0, -5000.0);
+        let own = escort.stats.handling.max_speed;
+        let fastest = (0..200)
+            .map(|_| {
+                again(&mut session, Controls::default());
+                session.npcs()[0].state.velocity.length()
+            })
+            .fold(0.0, f32::max);
+        assert!(fastest > own * 1.01, "{fastest} against its own {own}");
+    }
+
+    #[test]
     fn the_second_pass_brings_no_arrivals_and_draws_nothing() {
         let catalog = catalog();
         let mut session = session(&catalog);
