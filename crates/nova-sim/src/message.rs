@@ -82,6 +82,13 @@ pub enum SimMessage {
         /// The credits fined: none for no fine.
         fine: i64,
     },
+    /// The player ejected into an escape ship: "Escaping in" (`STR#` 2002
+    /// #52), a space, the ship's shipyard long name and a full stop
+    /// (`_HandlePlayer` @0x6f588-0x6f635).
+    EscapingIn {
+        /// The escape ship's class.
+        ship: ShipId,
+    },
 }
 
 impl SimMessage {
@@ -109,6 +116,8 @@ impl SimMessage {
     /// - [`EscortRepaired`](Self::EscortRepaired) and
     ///   [`FighterRepaired`](Self::FighterRepaired): 250 (`_HandleShip`
     ///   @0x33ba1).
+    /// - [`EscapingIn`](Self::EscapingIn): 512 (`_HandlePlayer`
+    ///   @0x6f62a).
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
@@ -125,6 +134,7 @@ impl SimMessage {
             | Self::CargoJettisoned
             | Self::NonMissionCargoJettisoned => 240,
             Self::EscortRepaired | Self::FighterRepaired => 250,
+            Self::EscapingIn { .. } => 512,
         }
     }
 }
@@ -153,6 +163,7 @@ mod tests {
             (smuggling, 400),
             (SimMessage::EscortRepaired, 250),
             (SimMessage::FighterRepaired, 250),
+            (SimMessage::EscapingIn { ship: ShipId(144) }, 512),
             (
                 SimMessage::IllegalJunk {
                     scanner: ShipId(128),

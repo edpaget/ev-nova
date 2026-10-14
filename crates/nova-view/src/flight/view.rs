@@ -604,6 +604,9 @@ pub const ESCORT_REPAIRED: &str = "Escort repaired.";
 /// `STR#` 2002 #128: a disabled former fighter did (`_HandleShip`
 /// @0x33b3b).
 pub const FIGHTER_REPAIRED: &str = "Fighter repaired.";
+/// `STR#` 2002 #52: the player ejected into an escape ship, whose long
+/// name follows (`_HandlePlayer` @0x6f595-0x6f5a8).
+pub const ESCAPING_IN: &str = "Escaping in";
 
 /// `STR#` 2002 #286: a scan found a mission's cargo and failed it.
 pub const MISSION_SCANNED: &str = "Your ship has been scanned - mission failed.";
@@ -705,6 +708,12 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
         SimMessage::DeadlineMissed => TIME_LIMIT_EXCEEDED,
         SimMessage::EscortRepaired => ESCORT_REPAIRED,
         SimMessage::FighterRepaired => FIGHTER_REPAIRED,
+        SimMessage::EscapingIn { ship } => {
+            // "Escaping in", a space, the long name and a full stop
+            // (@0x6f5ad-0x6f5f3).
+            let name = session.ship_long_name(*ship).unwrap_or_default();
+            return Some(format!("{ESCAPING_IN} {name}."));
+        }
         SimMessage::Smuggling {
             scanner,
             ship_name,
@@ -940,6 +949,7 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::DeadlineMissed
         | SimMessage::EscortRepaired
         | SimMessage::FighterRepaired
+        | SimMessage::EscapingIn { .. }
         | SimMessage::Smuggling { .. }
         | SimMessage::IllegalJunk { .. }
         | SimMessage::IllegalOutfit { .. } => None,
@@ -13766,6 +13776,26 @@ mod tests {
         for message in [SimMessage::EscortRepaired, SimMessage::FighterRepaired] {
             assert_eq!(arrival_lead(&message), None, "{message:?}");
         }
+    }
+
+    #[test]
+    fn the_escape_ship_says_escaping_in_its_long_name() {
+        assert_eq!(ESCAPING_IN, "Escaping in");
+        let mut catalog = shipbuying();
+        catalog.ships[0].long_name = "Federation Viper".to_owned();
+        let view = FlightView::new(catalog);
+        let session = view.session().expect("flying");
+        let escaping = |ship| SimMessage::EscapingIn { ship: ShipId(ship) };
+        assert_eq!(
+            sim_message_text(&escaping(129), session).as_deref(),
+            Some("Escaping in Federation Viper.")
+        );
+        assert_eq!(
+            sim_message_text(&escaping(999), session).as_deref(),
+            Some("Escaping in ."),
+            "a class with no record has no long name"
+        );
+        assert_eq!(arrival_lead(&escaping(129)), None);
     }
 
     #[test]

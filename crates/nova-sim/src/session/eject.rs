@@ -52,6 +52,14 @@
 //! target, its nav target and its secondary weapon (+0x70, +0x6c, +0x72,
 //! @0x6f40f-0x6f427), and the old class's `OnRetire` runs (@0x6f45c-0x6f49d).
 //!
+//! **The escape ship** (0x6f4b5-0x6f640), chosen after `OnRetire` has
+//! run. The class becomes it, its shield, armour and fuel each
+//! [`ESCAPE_FLOOR`] + a roll below [`ESCAPE_ROLL`] percent of the
+//! class's raw values (the shield in points, as `shïp` +0x5c holds it),
+//! with no outfit bonus, the pod countdown none (@0x6f563), and the comm
+//! line says [`SimMessage::EscapingIn`] before the threat walk. The player
+//! flies on.
+//!
 //! **The pod** (no escape ship, 0x6f642-0x6f677). The class becomes the
 //! [`ESCAPE_POD_SHIP`], its shield and armour that class's full raw
 //! values with no outfit bonus, its fuel untouched, and the pod countdown
@@ -88,9 +96,10 @@
 //! weapon rebuild sets each stock load on its ammunition's slot, a later
 //! weapon of one ammunition replacing an earlier one's (@0x6f884,
 //! @0x6f88e), where the engine's fit takes the largest load of an
-//! ammunition; a fighter bay's load goes to its own fighters on both. The
-//! x velocity takes the y velocity's value (@0x6f782-0x6f788), so the
-//! hulk keeps the true velocity, and one push of the new class's top
+//! ammunition; a fighter bay's load goes to its own fighters on both. By
+//! the engine's reading of [`RuleKey::EjectVelocity`], the x velocity
+//! takes the y velocity's value (@0x6f782-0x6f788), so the hulk keeps the
+//! true velocity; by the other, it is kept. Then one push of the new class's top
 //! speed along the heading is added (`_Accel` @0x6f78e-0x6f7a9). A jump
 //! being warmed up is given up (+0x50 = 0, @0x6f962), the condition is
 //! intact again (the death timer -1.0, @0x6f969), the engine glow goes
@@ -118,10 +127,14 @@ use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::armament::{Trigger, fit_stock, outfit_rounds};
 use crate::combat::hull::{Condition, ESCAPE_POD_SHIP};
-use crate::escape::{auto_eject_armed, escape_ship_type, has_auto_eject, has_escape_pod};
+use crate::escape::{
+    ESCAPE_FLOOR, ESCAPE_ROLL, auto_eject_armed, escape_ship_type, has_auto_eject, has_escape_pod,
+};
+use crate::message::SimMessage;
 use crate::outfitter::OutfitFlags;
 use crate::player_fate::{POD_TICKS, PlayerCommand};
 use crate::reserves::shield_points;
+use crate::rulebook::{RuleKey, RuleSource};
 use crate::ship_change::{OutfitCarry, carried_outfits};
 use crate::sound::{EJECT_HALTS, SimSound};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
@@ -213,19 +226,34 @@ impl Session {
         self.nav_target = None;
         self.secondary = None;
         self.ship_hook(old.id, ShipHook::Retire, chance);
-        let class = ESCAPE_POD_SHIP;
-        let record = self.ship_record(class).cloned();
-        self.pod = Some(POD_TICKS);
-        self.drop_the_player();
-        self.walk_the_threats(hulk, true);
+        let escape = self.escape_ship();
+        let record = self.ship_record(escape.unwrap_or(ESCAPE_POD_SHIP)).cloned();
+        if let Some(ship) = escape {
+            self.pod = None;
+            self.messages.push(SimMessage::EscapingIn { ship });
+        } else {
+            self.pod = Some(POD_TICKS);
+            self.drop_the_player();
+        }
+        self.walk_the_threats(hulk, escape.is_none());
         if let Some(record) = &record {
             self.board_class(record);
+            let fields = record.fields;
+            let shield = shield_points(fields.shield);
             let reserves = &mut self.pilot.reserves;
-            reserves.shield.now = shield_points(record.fields.shield) as f32;
-            reserves.armor.now = f32::from(record.fields.armor);
+            if escape.is_some() {
+                reserves.shield.now = escape_share(shield, chance);
+                reserves.armor.now = escape_share(i64::from(fields.armor), chance);
+                reserves.fuel.now = escape_share(i64::from(fields.fuel), chance);
+            } else {
+                reserves.shield.now = shield as f32;
+                reserves.armor.now = f32::from(fields.armor);
+            }
         }
-        let velocity = &mut self.player.velocity;
-        velocity.x = velocity.y;
+        if self.rules.source_for(RuleKey::EjectVelocity) == RuleSource::Engine {
+            let velocity = &mut self.player.velocity;
+            velocity.x = velocity.y;
+        }
         // Truncated to whole degrees (`cvttss2si` @0x6f7a0).
         #[allow(clippy::cast_possible_truncation)]
         let heading = self.player.heading as i32;
@@ -387,6 +415,20 @@ impl Session {
         };
         self.become_class(record, change, |_| {});
     }
+}
+
+/// An escape ship's share of its class's `value`: (`ESCAPE_FLOOR` + a roll
+/// below `ESCAPE_ROLL`) percent of it, on `chance` (@0x6f4d0-0x6f583:
+/// the integer product, times 0.01 at 0xdd098).
+fn escape_share(value: i64, chance: &mut dyn Chance) -> f32 {
+    let percent = ESCAPE_FLOOR + u32::from(chance.roll(ESCAPE_ROLL as u16));
+    // Shield, armour and fuel are 16-bit fields (a shield at most 5 x
+    // 32768), so the product and the share sit well within an `f32`.
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    let share = (value * i64::from(percent)) as f64 * 0.01;
+    #[allow(clippy::cast_possible_truncation)]
+    let share = share as f32;
+    share
 }
 
 /// `goal` with its quarry, when that is the player, `to`.
@@ -959,5 +1001,149 @@ mod tests {
         fight(&mut session, true);
         assert!(in_the_pod(&session));
         assert!(!session.take_save_due());
+    }
+
+    /// The escape ship's bay, its fighters' outfit and the fighter.
+    const BAY: i16 = 160;
+    const FIGHTERS: i16 = 310;
+    const VIPER: i16 = 144;
+
+    /// `ejecting(100)` with a fighter bay of `VIPER`s, an escape ship
+    /// (`Flags` 0x8000) of 100 shield, 200 armour and 300 fuel, long
+    /// named "Federation Viper".
+    fn escaping() -> FakePilotCatalog {
+        let mut catalog = ejecting(100);
+        catalog.weapons.push(crate::catalog::WeaponRecord {
+            guidance: crate::bay::FIGHTER_BAY,
+            ammo_type: VIPER,
+            ..crate::testkit::weapon(BAY)
+        });
+        catalog.outfits.push(outfit(
+            FIGHTERS,
+            &[(crate::combat::armament::MOD_AMMO, BAY)],
+        ));
+        let mut viper = ship(
+            VIPER,
+            ShipFields {
+                shield: 100,
+                armor: 200,
+                fuel: 300,
+                ..FAST
+            },
+        );
+        viper.flags = crate::escape::ESCAPE_SHIP_FLAG;
+        viper.long_name = "Federation Viper".to_owned();
+        catalog.ship_records.push(viper);
+        catalog
+    }
+
+    /// `escaping`'s session, disabled with two fighters aboard, ejected
+    /// on the chord drawing each roll on `rolls`: its sounds.
+    fn escaped(
+        catalog: &FakePilotCatalog,
+        rolls: &[u16],
+        prepare: impl FnOnce(&mut Session),
+    ) -> (Session, Vec<SimSound>) {
+        let mut session = flying(catalog, &[]);
+        session.pilot.outfits.insert(OutfitId(FIGHTERS), 2);
+        session.condition = Condition::Disabled;
+        prepare(&mut session);
+        session.take_sounds();
+        session.take_messages();
+        session.hold_eject(true);
+        session.tick_combat(
+            Rules::default(),
+            &mut crate::testkit::Scripted::rolling(rolls),
+        );
+        let sounds = session.take_sounds();
+        (session, sounds)
+    }
+
+    #[test]
+    fn an_escape_bay_makes_the_player_its_fighter_at_50_to_79_percent() {
+        let catalog = escaping();
+        for (roll, percent) in [(0, 50.0), (29, 79.0)] {
+            let (session, sounds) = escaped(&catalog, &[roll; 3], |_| {});
+            assert_eq!(sounds, EJECTED);
+            assert_eq!(session.pilot.ship, ShipId(VIPER));
+            let reserves = session.pilot.reserves;
+            assert_eq!(
+                (reserves.shield.now, reserves.armor.now, reserves.fuel.now),
+                (percent, percent * 2.0, percent * 3.0),
+                "roll {roll}"
+            );
+            assert_eq!(session.pod, None);
+            assert_eq!(hulk(&session).ship, ShipId(128));
+        }
+    }
+
+    #[test]
+    fn the_escape_ship_says_escaping_in_its_long_name() {
+        let catalog = escaping();
+        let (mut session, _) = escaped(&catalog, &[], |_| {});
+        assert_eq!(
+            session.take_messages(),
+            [crate::message::SimMessage::EscapingIn {
+                ship: ShipId(VIPER)
+            }]
+        );
+        assert_eq!(
+            session.ship_long_name(ShipId(VIPER)),
+            Some("Federation Viper")
+        );
+        assert_eq!(session.ship_long_name(ShipId(999)), None);
+    }
+
+    #[test]
+    fn escape_ship_threats_retarget_onto_the_hulk_and_led_ships_stay() {
+        let catalog = escaping();
+        let mut ids = None;
+        let (session, _) = escaped(&catalog, &[], |session| {
+            let attacker = aimed(
+                session,
+                Goal::Attack(ShipRef::Player),
+                Some(ShipRef::Player),
+            );
+            let hired = escort(session);
+            ids = Some((attacker, hired));
+        });
+        let (attacker, hired) = ids.expect("set up");
+        let hulk = ShipRef::Npc(hulk(&session).id);
+        let attacker = session.npc(attacker).expect("here");
+        assert_eq!(
+            (attacker.target, attacker.goal),
+            (Some(hulk), Goal::Attack(hulk))
+        );
+        assert!(session.npc(hired).expect("here").escorts_player(), "kept");
+        assert_eq!(session.fleet, [Some(hired)]);
+    }
+
+    #[test]
+    fn an_escape_ship_flies_on() {
+        let (session, _) = escaped(&escaping(), &[], |_| {});
+        assert_eq!(session.player_fate(), PlayerFate::Flying);
+    }
+
+    #[test]
+    fn the_eject_takes_the_y_velocity_as_x_by_the_engine_and_keeps_it_by_the_other_reading() {
+        let catalog = ejecting(100);
+        for (source, x) in [
+            (crate::rulebook::RuleSource::Engine, 4.0),
+            (crate::rulebook::RuleSource::Bible, 3.0),
+        ] {
+            let rules = crate::rulebook::Rulebook::default()
+                .with_override(crate::rulebook::RuleKey::EjectVelocity, source);
+            let mut session = flying(&catalog, &[POD]).with_rules(rules);
+            session.player.velocity = Vec2::new(3.0, 4.0);
+            session.player.heading = 90.0;
+            session.condition = Condition::Disabled;
+            fight(&mut session, true);
+            let push = session.top_speed();
+            assert!(
+                (session.player.velocity - Vec2::new(x + push, 4.0)).length() < 1e-4,
+                "{source:?}: {:?}",
+                session.player.velocity
+            );
+        }
     }
 }

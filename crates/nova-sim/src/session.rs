@@ -2318,6 +2318,14 @@ impl Session {
         ships
     }
 
+    /// Ship type `ship`'s shipyard long name, as its [`ShipRecord`] gives
+    /// it, if the session has its record.
+    #[must_use]
+    pub fn ship_long_name(&self, ship: ShipId) -> Option<&str> {
+        let record = self.ships.iter().find(|record| record.id == ship)?;
+        Some(&record.long_name)
+    }
+
     /// Ship type `ship`'s name, as its [`ShipRecord`] gives it, if the
     /// session has its record.
     #[must_use]
