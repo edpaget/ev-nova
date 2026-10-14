@@ -34,6 +34,10 @@
 //!   its own days by the rules, on top of `n`. The walker stays in flight,
 //!   and its next landing is a walker's landing. A mission whose deadline
 //!   lapses fails, in flight, as the missions' deadline check says.
+//! - **`has rank <rank>`** ([`Step::HasRank`]) checks that the pilot holds
+//!   the rank. It passes no days, lands nowhere and draws nothing. Ranks
+//!   have no availability conditions of their own (scripts grant them),
+//!   so a failure names only the rank.
 //!
 //! A landing runs every held mission's `Landed` hooks, and an accept its
 //! `OnAccept`, so a step can start, reach, complete, fail or abort a
@@ -63,7 +67,8 @@
 use std::fmt;
 
 use crate::catalog::{
-    ListedStellar, MissionId, MissionRecord, PilotCatalog, StellarId, SystemId, TrafficCatalog,
+    ListedStellar, MissionId, MissionRecord, PilotCatalog, RankId, StellarId, SystemId,
+    TrafficCatalog,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::control::{Bit, Script, SetOp};
@@ -86,11 +91,13 @@ pub enum Step {
     PassDays(u32),
     /// Meet the active mission's ship goal.
     MeetGoal(MissionId),
+    /// Check that the pilot holds the rank.
+    HasRank(RankId),
 }
 
 impl fmt::Display for Step {
-    /// "take 504", "deliver 504", "meet goal 504", "pass 3 days" or "pass
-    /// 1 day".
+    /// "take 504", "deliver 504", "meet goal 504", "pass 3 days", "pass
+    /// 1 day" or "has rank 145".
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Self::Take(mission) => write!(f, "take {}", mission.0),
@@ -98,6 +105,7 @@ impl fmt::Display for Step {
             Self::MeetGoal(mission) => write!(f, "meet goal {}", mission.0),
             Self::PassDays(1) => write!(f, "pass 1 day"),
             Self::PassDays(days) => write!(f, "pass {days} days"),
+            Self::HasRank(rank) => write!(f, "has rank {}", rank.0),
         }
     }
 }
@@ -151,6 +159,11 @@ pub enum Done {
         /// The missions held before the step that failed, or are no longer
         /// held, after it, in slot order.
         failed: Vec<MissionId>,
+    },
+    /// The pilot holds the rank.
+    HadRank {
+        /// The rank.
+        rank: RankId,
     },
 }
 
@@ -211,6 +224,8 @@ pub enum Fault {
     /// It has no ship goal `meet goal` meets: no ships, or no goal, or a
     /// goal code it does not read.
     NoShipGoal,
+    /// The pilot does not hold the rank.
+    RankNotHeld,
 }
 
 /// A stellar the walker landed at looking for a mission, and why the
@@ -250,6 +265,7 @@ impl fmt::Display for WalkFailure {
                 format!("mission {}", mission.0)
             }
             Step::PassDays(_) => "the step".to_owned(),
+            Step::HasRank(rank) => format!("rank {}", rank.0),
         };
         match &self.fault {
             Fault::NotOffered => write!(f, "{subject} is offered nowhere")?,
@@ -270,6 +286,7 @@ impl fmt::Display for WalkFailure {
             Fault::CannotLand(refusal) => write!(f, "{subject}: cannot land: {refusal}")?,
             Fault::Undeliverable => write!(f, "{subject} has no return stellar")?,
             Fault::NoShipGoal => write!(f, "{subject} has no ship goal to meet")?,
+            Fault::RankNotHeld => write!(f, "{subject} is not held")?,
         }
         for looked in &self.looked {
             write!(
@@ -336,6 +353,7 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
                 Step::Deliver(mission) => self.deliver(session, mission),
                 Step::PassDays(days) => Ok(self.pass(session, days)),
                 Step::MeetGoal(mission) => self.meet_goal(session, mission),
+                Step::HasRank(rank) => has_rank(session, rank),
             };
             match done {
                 Ok(done) => walked.done.push(done),
@@ -579,6 +597,15 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
             date: session.date(),
             failed,
         }
+    }
+}
+
+/// `has rank <rank>` (see the module docs).
+fn has_rank(session: &Session, rank: RankId) -> Result<Done, Failed> {
+    if session.pilot().ranks().contains(&rank) {
+        Ok(Done::HadRank { rank })
+    } else {
+        Err((Fault::RankNotHeld, Vec::new()))
     }
 }
 

@@ -1,8 +1,9 @@
 use super::*;
+use crate::catalog::RankId;
 use crate::catalog::{LandingSite, MissionShip};
 use crate::control::Test;
 use crate::mission::AcceptRefusal;
-use crate::testkit::{FakePilotCatalog, catalog, land_now, mission, planet, with_variants};
+use crate::testkit::{FakePilotCatalog, catalog, land_now, mission, planet, rank, with_variants};
 
 const A: MissionId = MissionId(200);
 const B: MissionId = MissionId(201);
@@ -91,6 +92,7 @@ fn each_step_reads_as_its_script_line() {
     assert_eq!(Step::PassDays(3).to_string(), "pass 3 days");
     assert_eq!(Step::PassDays(1).to_string(), "pass 1 day");
     assert_eq!(Step::MeetGoal(MissionId(506)).to_string(), "meet goal 506");
+    assert_eq!(Step::HasRank(RankId(145)).to_string(), "has rank 145");
 }
 
 // The plain decisions.
@@ -1086,6 +1088,64 @@ fn a_chain_broken_on_purpose_names_the_mission_and_the_field_that_failed() {
     );
 }
 
+// has rank
+
+/// Mission A, offered at 128 and completed at 129 running `on_success`,
+/// with rank 130 in the data.
+fn ranked(on_success: &str) -> FakePilotCatalog {
+    FakePilotCatalog {
+        ranks: vec![rank(130)],
+        ..galaxy(vec![errand(200, 128, 129, on_success)])
+    }
+}
+
+const RANKED: [Step; 3] = [Step::Take(A), Step::Deliver(A), Step::HasRank(RankId(130))];
+
+#[test]
+fn a_chain_granting_a_rank_ends_holding_it() {
+    let catalog = ranked("K130");
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog)
+        .walk(&mut session, &RANKED)
+        .expect("walks");
+    assert_eq!(
+        walked.done.last(),
+        Some(&Done::HadRank { rank: RankId(130) })
+    );
+}
+
+#[test]
+fn checking_a_rank_passes_no_days_and_stays_docked() {
+    let catalog = ranked("K130");
+    let mut session = docked(&catalog);
+    StoryWalker::new(&catalog)
+        .walk(&mut session, &RANKED[..2])
+        .expect("walks");
+    let date = session.date();
+    StoryWalker::new(&catalog)
+        .walk(&mut session, &RANKED[2..])
+        .expect("walks");
+    assert_eq!(session.date(), date);
+    assert_eq!(session.landed(), Some(StellarId(129)));
+}
+
+#[test]
+fn a_chain_that_does_not_grant_the_rank_names_it() {
+    let catalog = ranked("b10");
+    let mut session = docked(&catalog);
+    let failure = StoryWalker::new(&catalog)
+        .walk(&mut session, &RANKED)
+        .expect_err("broken");
+    assert_eq!(
+        failure,
+        super::tests::failure(3, Step::HasRank(RankId(130)), Fault::RankNotHeld, &[10])
+    );
+    assert_eq!(
+        failure.to_string(),
+        "step 3 (has rank 130) failed: rank 130 is not held\n  bits set: b10"
+    );
+}
+
 // The report.
 
 #[test]
@@ -1150,6 +1210,11 @@ fn each_fault_is_reported_with_its_mission() {
             Step::MeetGoal(A),
             Fault::NoShipGoal,
             "mission 200 has no ship goal to meet",
+        ),
+        (
+            Step::HasRank(RankId(145)),
+            Fault::RankNotHeld,
+            "rank 145 is not held",
         ),
         (
             Step::PassDays(3),
