@@ -17907,6 +17907,82 @@ mod tests {
         assert!(double_time_drawn(&hailed), "a hail");
     }
 
+    /// [`beside`] (intact) with the player holding 95 of fuel and NPC 0
+    /// refuelling it, hailed and hung up.
+    fn refuelling() -> View {
+        let catalog = boardable();
+        let pilot = Pilot::new(&catalog, "Low").expect("starts");
+        let mut save: serde_json::Value =
+            serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
+        save["reserves"]["fuel"]["now"] = serde_json::json!(95.0);
+        let pilot = nova_sim::save::decode(&save.to_string()).expect("a pilot");
+        let (_, chance) = scripted(&placed(750, 750, 0));
+        let mut view = FlightView::with_pilot(catalog, pilot)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still))
+            .with_hail_options(HailOptions::empty().with(Rc::new(Refuel)));
+        view.catalog.strings = vec![(3000, comm_strings())];
+        view.tick(TICK);
+        tap(&mut view, TARGET_KEY);
+        tap(&mut view, HAIL_KEY);
+        view.take_hail().expect("hailed");
+        view.answer(0).expect("open");
+        view.hang_up();
+        view
+    }
+
+    #[test]
+    fn double_times_second_pass_gives_no_help_and_tells_no_comm() {
+        for on in [false, true] {
+            let mut view = refuelling().with_double_time(on);
+            let mut ticks = 0;
+            while view.message().is_none() {
+                assert!(ticks < 20, "never refuelled: {on}");
+                view.tick(TICK);
+                ticks += 1;
+            }
+            // A tick of help on the advance pass alone: 95 to past 100,
+            // one at a time.
+            assert_eq!(ticks, 6, "{on}");
+            assert_eq!(reserves(&view).fuel.now, 101.0, "{on}");
+            let note = view.message().expect("refuelled").to_owned();
+            assert!(note.ends_with(":  Energy transfer complete."), "{note}");
+        }
+    }
+
+    #[test]
+    fn double_time_ages_the_effects_on_both_passes() {
+        let detonated = || {
+            let mut view = fighting(detonating(), &[]);
+            detonate(&mut view);
+            view
+        };
+        let mut twice = detonated();
+        ticks(&mut twice, 2);
+        let mut doubled = detonated().with_double_time(true);
+        doubled.tick(TICK);
+        assert_eq!(doubled.effects().explosions()[0].frame, 2.0);
+        assert_eq!(doubled.effects(), twice.effects());
+    }
+
+    #[test]
+    fn a_shot_detonating_on_the_second_pass_is_drawn_that_tick() {
+        let lasting_two = || {
+            let mut catalog = detonating();
+            catalog.weapons[0].count = 2;
+            fighting(catalog, &[])
+        };
+        let mut single = lasting_two();
+        single.input(&key(FIRE_KEY, true));
+        single.tick(TICK);
+        assert!(single.effects().explosions().is_empty(), "not yet");
+        let mut view = lasting_two().with_double_time(true);
+        view.input(&key(FIRE_KEY, true));
+        view.tick(TICK);
+        assert_eq!(view.effects().explosions().len(), 1);
+        first(&drawn(&view), sprite_of(400));
+    }
+
     #[test]
     fn caps_lock_is_no_flight_key() {
         let mut view = flight();
