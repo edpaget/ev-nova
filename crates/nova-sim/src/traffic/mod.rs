@@ -2094,6 +2094,55 @@ mod tests {
     }
 
     #[test]
+    fn a_lead_answering_a_hit_on_its_escort_keeps_its_wait() {
+        // `_DamageShip` cuts the wait of the ship hit only (`%edi`,
+        // @0x3be6e-0x3be7c), not of the lead that answers for its escort
+        // (@0x3bcfa-0x3bd79).
+        /// Has ship 0 answer a strike on ship 1, its escort, as a strike on
+        /// itself, and ship 1 answer its own.
+        #[derive(Debug)]
+        struct Guarding;
+        impl Behaviour for Guarding {
+            fn decide(&self, npc: &Npc, _: &Surroundings, _: &mut dyn Chance) -> Goal {
+                npc.goal
+            }
+            fn react(&self, npc: &Npc, strike: &Strike, _: &Surroundings) -> Reaction {
+                let answers = strike.ship == ShipRef::Npc(npc.id)
+                    || (npc.id == NpcId(0) && strike.ship == ShipRef::Npc(NpcId(1)));
+                Reaction {
+                    target: answers.then_some(strike.by),
+                    provoked: 0.0,
+                    goal: None,
+                }
+            }
+        }
+        let mut traffic = populated(2, 1);
+        traffic.npcs[1].leader = Some(NpcId(0));
+        traffic.npcs[0].mode = Mode::Coasting { ticks_left: 45 };
+        traffic.npcs[1].mode = Mode::Coasting { ticks_left: 45 };
+        traffic.tick_in(
+            &Guarding,
+            World::new(&[]),
+            &[struck(1, 5.0)],
+            &mut Draws::of(&[]),
+        );
+        let lead = &traffic.npcs()[0];
+        assert_eq!(lead.target, Some(ShipRef::Player), "the lead answers");
+        assert_eq!(
+            lead.mode,
+            Mode::Coasting { ticks_left: 44 },
+            "the lead's wait only drops by the tick"
+        );
+        let escort = &traffic.npcs()[1];
+        assert_eq!(escort.target, Some(ShipRef::Player));
+        assert_eq!(
+            escort.mode,
+            Mode::Coasting { ticks_left: 19 },
+            "the escort hit: 20, less this tick"
+        );
+    }
+
+    #[test]
     fn provocation_clears_on_an_idle_goal_or_when_disabled() {
         let mut traffic = populated(2, 1);
         for npc in traffic.npcs_mut() {
