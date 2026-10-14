@@ -273,6 +273,7 @@ pub mod market;
 pub mod message;
 pub mod mission;
 pub mod navigation;
+pub mod nebula;
 pub mod news;
 pub mod order_loop;
 pub mod outfit_effects;
@@ -315,11 +316,11 @@ pub use catalog::{
     BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
     DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
     FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite,
-    ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, OutfitId,
-    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
-    RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId,
-    WeaponRecord,
+    ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord,
+    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog,
+    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
+    StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog,
+    WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};

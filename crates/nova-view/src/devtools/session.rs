@@ -312,6 +312,10 @@ mod tests {
         fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
             Vec::new()
         }
+
+        fn nebulae(&self) -> Vec<nova_sim::catalog::NebulaRecord> {
+            Vec::new()
+        }
     }
 
     impl CombatCatalog for Catalog {

@@ -8,10 +8,10 @@ use crate::catalog::{
     AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
     DateAffixes, DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord,
     HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip,
-    MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog,
-    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StellarMark, SystemId, SystemTraffic, SystemVisibility, TrafficCatalog,
-    WeaponId, WeaponRecord,
+    MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId,
+    PersonRecord, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem,
+    StartDate, StartError, StellarId, StellarLife, StellarMark, SystemId, SystemTraffic,
+    SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -111,6 +111,8 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) crons: Vec<CronRecord>,
     /// Every `ränk`: none, by default.
     pub(crate) ranks: Vec<RankRecord>,
+    /// Every `nëbu`: none, by default.
+    pub(crate) nebulae: Vec<NebulaRecord>,
 }
 
 /// Cron `id`, open on every date, starting on any roll and asking
@@ -138,6 +140,25 @@ pub(crate) fn cron(id: i16) -> CronRecord {
         news_govt: [-1; 4],
         govt_news: [-1; 4],
         ind_news: -1,
+    }
+}
+
+/// Nebula `id` over `rect` (left, top, width, height), active by
+/// `active_on` and running `on_explore` as it is explored.
+pub(crate) fn nebula(
+    id: i16,
+    rect: (i16, i16, i16, i16),
+    active_on: &str,
+    on_explore: &str,
+) -> NebulaRecord {
+    NebulaRecord {
+        id: NebulaId(id),
+        left: rect.0,
+        top: rect.1,
+        width: rect.2,
+        height: rect.3,
+        active_on: Test::parse(active_on),
+        on_explore: Script::parse(on_explore),
     }
 }
 
@@ -568,6 +589,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         visibility: Vec::new(),
         crons: Vec::new(),
         ranks: Vec::new(),
+        nebulae: Vec::new(),
     }
 }
 
@@ -783,6 +805,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn ranks(&self) -> Vec<RankRecord> {
         self.ranks.clone()
+    }
+
+    fn nebulae(&self) -> Vec<NebulaRecord> {
+        self.nebulae.clone()
     }
 }
 

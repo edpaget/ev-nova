@@ -3774,6 +3774,10 @@ mod tests {
         fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
             Vec::new()
         }
+
+        fn nebulae(&self) -> Vec<nova_sim::catalog::NebulaRecord> {
+            Vec::new()
+        }
     }
 
     /// The weapons, ship types' combat fields and governments given.

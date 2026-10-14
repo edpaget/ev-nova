@@ -838,6 +838,27 @@ pub struct RankRecord {
     pub price_mod: i16,
 }
 
+/// A nebula, from its `nëbu` as `_LoadObjectData` keeps it
+/// (@0x7cf44-0x7d025): the fields the [`nebula`](crate::nebula) module
+/// reads, which decides what the values mean.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NebulaRecord {
+    /// The `nëbu`'s ID.
+    pub id: NebulaId,
+    /// Its `XPos`: the rectangle's left edge on the map.
+    pub left: i16,
+    /// Its `YPos`: the rectangle's top edge on the map.
+    pub top: i16,
+    /// Its `XSize`, raw.
+    pub width: i16,
+    /// Its `YSize`, raw.
+    pub height: i16,
+    /// Its `ActiveOn` control-bit test, parsed: blank holds.
+    pub active_on: Test,
+    /// Its `OnExplore`, run as an exploration first reaches it.
+    pub on_explore: Script,
+}
+
 /// What a mission's screens show of it, read from its `mïsn` and its
 /// `dësc`s (see the [`mission`](crate::mission) module's "Screens"): each
 /// text as written, its tags not yet filled, and `None` for an ID of -1
@@ -1280,6 +1301,8 @@ pub trait PilotCatalog {
     fn crons(&self) -> Vec<CronRecord>;
     /// Every `ränk` 128-255 that can be read, by ascending ID.
     fn ranks(&self) -> Vec<RankRecord>;
+    /// Every `nëbu` 128-159 that can be read, by ascending ID.
+    fn nebulae(&self) -> Vec<NebulaRecord>;
 }
 
 /// A borrowed catalog is a catalog.
@@ -1378,6 +1401,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn ranks(&self) -> Vec<RankRecord> {
         (**self).ranks()
+    }
+
+    fn nebulae(&self) -> Vec<NebulaRecord> {
+        (**self).nebulae()
     }
 }
 
@@ -1478,6 +1505,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn ranks(&self) -> Vec<RankRecord> {
         (**self).ranks()
+    }
+
+    fn nebulae(&self) -> Vec<NebulaRecord> {
+        (**self).nebulae()
     }
 }
 
@@ -1769,6 +1800,11 @@ mod tests {
                 ..crate::testkit::rank(140)
             }]
         }
+
+        /// Nebula 141, 300 wide.
+        fn nebulae(&self) -> Vec<NebulaRecord> {
+            vec![crate::testkit::nebula(141, (0, 0, 300, 10), "", "")]
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1804,6 +1840,7 @@ mod tests {
             format!("{:?}", catalog.crons()),
             format!("{:?}", catalog.ranks()),
             format!("{:?}", catalog.system_visibility()),
+            format!("{:?}", catalog.nebulae()),
         ]
     }
 
@@ -1853,6 +1890,8 @@ mod tests {
         assert!(direct[26].contains("salary: 200"), "{direct:?}");
         assert!(direct[27].contains("SystemId(130)"), "{direct:?}");
         assert!(direct[27].contains("Bit(5)"), "{direct:?}");
+        assert!(direct[28].contains("NebulaId(141)"), "{direct:?}");
+        assert!(direct[28].contains("width: 300"), "{direct:?}");
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

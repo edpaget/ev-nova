@@ -137,6 +137,10 @@ impl PilotCatalog for Pilot {
     fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
         Vec::new()
     }
+
+    fn nebulae(&self) -> Vec<nova_sim::catalog::NebulaRecord> {
+        Vec::new()
+    }
 }
 
 /// The script, by half-seconds: thrust for a second, turn right for half

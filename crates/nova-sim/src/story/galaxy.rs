@@ -11,7 +11,11 @@
 //! - A stellar's government is the overlay's when it has one, else its
 //!   record's ([`OverlaidGalaxy::site`]). A destroyed stellar holds its
 //!   regeneration [`Countdown`], saved.
-//! - A nebula is active unless the overlay says otherwise.
+//! - A nebula is active unless the overlay says otherwise; its activity
+//!   is written from its `ActiveOn` at each galaxy refresh
+//!   ([`GalaxyOverlay::set_inactive`], [`inactive_by`]). Whether it is
+//!   explored is kept beside it and never saved, and the map draws it
+//!   only while it is both ([`OverlaidGalaxy::nebula_shown`]).
 //! - A system's visibility is written from its `Visibility` at each
 //!   galaxy refresh ([`GalaxyOverlay::refresh_visibility`]), overwriting
 //!   every system's; `Some(true)` is the player's move's reveal alone.
@@ -73,7 +77,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{
-    GovtId, LandingSite, ListedStellar, NebulaId, StarSystem, StellarId, SystemId, SystemVisibility,
+    GovtId, LandingSite, ListedStellar, NebulaId, NebulaRecord, StarSystem, StellarId, SystemId,
+    SystemVisibility,
 };
 use crate::control::Gate;
 use crate::geometry::Vec2;
@@ -114,6 +119,19 @@ pub struct StellarOverride {
     pub destroyed: Option<Countdown>,
 }
 
+/// What the overlay changes of one nebula. The default changes nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NebulaOverride {
+    /// Whether it is active: `Some(false)` made inactive by the last
+    /// refresh of its `ActiveOn`, and `None` active, as it is with no
+    /// entry.
+    pub active: Option<bool>,
+    /// Whether an exploration has explored it (`_ExploreNebulaeFromSystem`
+    /// @0x515a). Never saved: a load forgets it, as `_ResetPlayer` clears
+    /// it (@0x1da86).
+    pub explored: bool,
+}
+
 /// What play has changed over the static galaxy: per system, per stellar
 /// and per nebula, each only where it changes something. The default is
 /// no change at all. Each setter says whether it changed anything, and an
@@ -123,7 +141,7 @@ pub struct StellarOverride {
 pub struct GalaxyOverlay {
     systems: BTreeMap<SystemId, SystemOverride>,
     stellars: BTreeMap<StellarId, StellarOverride>,
-    nebulae: BTreeMap<NebulaId, bool>,
+    nebulae: BTreeMap<NebulaId, NebulaOverride>,
 }
 
 /// Changes `map`'s entry for `key` as `change` says, dropping it when it
@@ -166,7 +184,15 @@ impl GalaxyOverlay {
     /// Whether `nebula` is active, if it says.
     #[must_use]
     pub fn nebula(&self, nebula: NebulaId) -> Option<bool> {
-        self.nebulae.get(&nebula).copied()
+        self.nebulae.get(&nebula).and_then(|change| change.active)
+    }
+
+    /// Whether `nebula` is explored.
+    #[must_use]
+    pub fn nebula_explored(&self, nebula: NebulaId) -> bool {
+        self.nebulae
+            .get(&nebula)
+            .is_some_and(|change| change.explored)
     }
 
     /// Every system it changes, by ascending ID.
@@ -179,9 +205,12 @@ impl GalaxyOverlay {
         self.stellars.iter().map(|(&id, &change)| (id, change))
     }
 
-    /// Every nebula it sets active or not, by ascending ID.
+    /// Every nebula it sets active or not, by ascending ID: not one it only
+    /// marks explored, as a save reads it.
     pub fn nebulae(&self) -> impl Iterator<Item = (NebulaId, bool)> + '_ {
-        self.nebulae.iter().map(|(&id, &active)| (id, active))
+        self.nebulae
+            .iter()
+            .filter_map(|(&id, change)| change.active.map(|active| (id, active)))
     }
 
     /// Sets whether `system` is visible (`None` leaves it as the catalog
@@ -250,12 +279,39 @@ impl GalaxyOverlay {
     /// Sets whether `nebula` is active (`None` leaves it active, as it is
     /// with no entry), and says whether that changed anything.
     pub fn set_nebula_active(&mut self, nebula: NebulaId, active: Option<bool>) -> bool {
-        let was = self.nebula(nebula);
-        match active {
-            Some(active) => self.nebulae.insert(nebula, active),
-            None => self.nebulae.remove(&nebula),
-        };
-        was != active
+        edit(&mut self.nebulae, nebula, |change| change.active = active)
+    }
+
+    /// Makes exactly the nebulae of `inactive` inactive and leaves every
+    /// other one active (`None`), and says whether that changed anything.
+    /// Whether each is explored is left as it was.
+    pub fn set_inactive(&mut self, inactive: &BTreeSet<NebulaId>) -> bool {
+        let held: Vec<NebulaId> = self.nebulae.keys().copied().collect();
+        let mut changed = false;
+        for nebula in held.into_iter().filter(|nebula| !inactive.contains(nebula)) {
+            changed |= self.set_nebula_active(nebula, None);
+        }
+        for &nebula in inactive {
+            changed |= self.set_nebula_active(nebula, Some(false));
+        }
+        changed
+    }
+
+    /// Sets whether `nebula` is explored, and says whether that changed
+    /// anything.
+    pub fn set_nebula_explored(&mut self, nebula: NebulaId, explored: bool) -> bool {
+        edit(&mut self.nebulae, nebula, |change| {
+            change.explored = explored;
+        })
+    }
+
+    /// Forgets which nebulae are explored, keeping their activity, as the
+    /// original's `_ResetPlayer` does before every load (@0x1da86).
+    pub fn forget_explored_nebulae(&mut self) {
+        let held: Vec<NebulaId> = self.nebulae.keys().copied().collect();
+        for nebula in held {
+            self.set_nebula_explored(nebula, false);
+        }
     }
 
     /// The systems it hides.
@@ -287,6 +343,20 @@ pub fn hidden_by(
                 .get(system)
                 .is_some_and(|test| !gate.allows(&test.visibility))
         })
+        .collect()
+}
+
+/// The nebulae of `nebulae` inactive for `gate` ([`nebula::active`]):
+/// made inactive by the galaxy refresh (`_PropagateMissionBitEffects`
+/// @0x998b4-0x998ef).
+///
+/// [`nebula::active`]: crate::nebula::active
+#[must_use]
+pub fn inactive_by(nebulae: &[NebulaRecord], gate: &Gate) -> BTreeSet<NebulaId> {
+    nebulae
+        .iter()
+        .filter(|record| !crate::nebula::active(record, gate))
+        .map(|record| record.id)
         .collect()
 }
 
@@ -475,6 +545,20 @@ impl OverlaidGalaxy {
     #[must_use]
     pub fn nebula_active(&self, nebula: NebulaId) -> bool {
         self.overlay.nebula(nebula).unwrap_or(true)
+    }
+
+    /// Whether `nebula` is explored.
+    #[must_use]
+    pub fn nebula_explored(&self, nebula: NebulaId) -> bool {
+        self.overlay.nebula_explored(nebula)
+    }
+
+    /// Whether the map draws `nebula`: it is active and explored, as
+    /// `_MapDialogUpdate` (@0xf951-0xf95f) and `_DoSystemMap`
+    /// (@0x123ee-0x123f8) draw one.
+    #[must_use]
+    pub fn nebula_shown(&self, nebula: NebulaId) -> bool {
+        self.nebula_active(nebula) && self.nebula_explored(nebula)
     }
 
     /// The visible system that stands for `system`: the lowest-ID visible
@@ -1418,6 +1502,95 @@ mod tests {
         assert!(overlay.set_hidden(&ids(&[1, 4]).into_iter().collect()));
         assert_eq!(overlay.hidden(), ids(&[1, 4]).into_iter().collect());
         assert!(!overlay.set_hidden(&ids(&[1, 4]).into_iter().collect()));
+    }
+
+    fn nebula_ids(list: &[i16]) -> BTreeSet<NebulaId> {
+        list.iter().copied().map(NebulaId).collect()
+    }
+
+    #[test]
+    fn set_inactive_writes_the_set_and_clears_every_other_activity() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_nebula_active(NebulaId(128), Some(false));
+        overlay.set_nebula_active(NebulaId(129), Some(true));
+        overlay.set_nebula_explored(NebulaId(129), true);
+        overlay.set_nebula_explored(NebulaId(131), true);
+        assert!(overlay.set_inactive(&nebula_ids(&[130, 131])));
+        assert_eq!(overlay.nebula(NebulaId(128)), None, "cleared");
+        assert_eq!(overlay.nebula(NebulaId(129)), None, "cleared");
+        assert_eq!(overlay.nebula(NebulaId(130)), Some(false));
+        assert_eq!(overlay.nebula(NebulaId(131)), Some(false));
+        assert!(overlay.nebula_explored(NebulaId(129)), "explored kept");
+        assert!(overlay.nebula_explored(NebulaId(131)), "explored kept");
+        assert!(!overlay.set_inactive(&nebula_ids(&[130, 131])), "again");
+        assert!(overlay.set_inactive(&nebula_ids(&[])));
+        assert_eq!(overlay.nebulae().count(), 0);
+        assert!(!overlay.is_empty(), "the explored flags are left");
+    }
+
+    #[test]
+    fn inactive_by_gives_the_zero_size_and_failing_nebulae() {
+        use crate::testkit::nebula;
+        let pilot = Bits([10].into_iter().collect());
+        let gate = Gate {
+            control_bits: &NovaBits,
+            pilot: &pilot,
+        };
+        let nebulae = [
+            nebula(128, (0, 0, 100, 100), "", ""),
+            nebula(129, (0, 0, 0, 100), "", ""),
+            nebula(130, (0, 0, 100, 100), "b11", ""),
+            nebula(131, (0, 0, 100, 100), "b10", ""),
+            nebula(132, (0, 0, 100, -1), "b10", ""),
+        ];
+        assert_eq!(inactive_by(&nebulae, &gate), nebula_ids(&[129, 130, 132]));
+        assert_eq!(inactive_by(&[], &gate), nebula_ids(&[]));
+    }
+
+    #[test]
+    fn a_nebulas_explored_flag_is_kept_apart_from_its_activity() {
+        let mut overlay = GalaxyOverlay::default();
+        let n = NebulaId(128);
+        assert!(!overlay.nebula_explored(n));
+        assert!(!overlay.set_nebula_explored(n, false), "already so");
+        assert!(overlay.set_nebula_explored(n, true));
+        assert!(!overlay.set_nebula_explored(n, true), "again");
+        assert!(overlay.nebula_explored(n));
+        assert_eq!(overlay.nebula(n), None, "its activity untouched");
+        assert_eq!(overlay.nebulae().count(), 0, "only explored: not listed");
+        assert!(!overlay.is_empty());
+        overlay.set_nebula_active(NebulaId(129), Some(false));
+        overlay.set_nebula_explored(NebulaId(129), true);
+        assert_eq!(
+            overlay.nebulae().collect::<Vec<_>>(),
+            [(NebulaId(129), false)]
+        );
+        overlay.forget_explored_nebulae();
+        assert!(!overlay.nebula_explored(n));
+        assert!(!overlay.nebula_explored(NebulaId(129)));
+        assert_eq!(overlay.nebula(NebulaId(129)), Some(false), "activity kept");
+        overlay.set_nebula_active(NebulaId(129), None);
+        assert!(overlay.is_empty(), "nothing left");
+        assert!(overlay.set_nebula_explored(n, true));
+        assert!(overlay.set_nebula_explored(n, false));
+        assert!(overlay.is_empty(), "dropped once it changes nothing");
+    }
+
+    #[test]
+    fn a_nebula_is_shown_only_active_and_explored() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_nebula_explored(NebulaId(128), true);
+        overlay.set_nebula_active(NebulaId(129), Some(false));
+        overlay.set_nebula_explored(NebulaId(129), true);
+        overlay.set_nebula_active(NebulaId(130), Some(false));
+        let galaxy = OverlaidGalaxy::new(systems(), overlay);
+        assert!(galaxy.nebula_explored(NebulaId(128)));
+        assert!(galaxy.nebula_shown(NebulaId(128)), "active and explored");
+        assert!(galaxy.nebula_explored(NebulaId(129)));
+        assert!(!galaxy.nebula_shown(NebulaId(129)), "inactive");
+        assert!(!galaxy.nebula_explored(NebulaId(130)));
+        assert!(!galaxy.nebula_shown(NebulaId(130)), "neither");
+        assert!(!galaxy.nebula_shown(NebulaId(131)), "unexplored");
     }
 
     /// [`systems`] with 2 hidden and 1 governed by 7.

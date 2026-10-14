@@ -222,6 +222,10 @@ impl PilotCatalog for Home {
     fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
         Vec::new()
     }
+
+    fn nebulae(&self) -> Vec<nova_sim::catalog::NebulaRecord> {
+        Vec::new()
+    }
 }
 
 /// No traffic anywhere.

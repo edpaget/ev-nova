@@ -15,6 +15,7 @@ use nova_data::records::fleet::Fleet;
 use nova_data::records::govt::Govt;
 use nova_data::records::junk::Junk;
 use nova_data::records::mission::Mission;
+use nova_data::records::nebula::Nebula;
 use nova_data::records::outfit::Outfit;
 use nova_data::records::person::Person;
 use nova_data::records::rank::Rank;
@@ -33,15 +34,16 @@ use crate::catalog::{
     AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
     DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
     FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar,
-    MissionId, MissionRecord, MissionShip, MissionTexts, OutfitId, OutfitRecord, Penalties,
-    PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId,
-    ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId, StellarLife, StellarMark,
-    StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId,
-    WeaponRecord, loaded_mod_val,
+    MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
+    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
+    RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
+    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
+    TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
+use crate::nebula;
 
 /// Reads the records afresh on every call; a session asks once, when it
 /// starts.
@@ -552,6 +554,26 @@ impl PilotCatalog for GameData {
                     news_govt: record.news_govt.map(|id| id.map_or(-1, |id| id.0)),
                     govt_news: record.govt_news_str.map(|id| id.map_or(-1, |id| id.0)),
                     ind_news: record.ind_news_str.map_or(-1, |id| id.0),
+                })
+            })
+            .collect()
+    }
+
+    /// Only IDs 128-159 have a slot (@0x7cf44-0x7d025; see the
+    /// [`nebula`](crate::nebula) module).
+    fn nebulae(&self) -> Vec<NebulaRecord> {
+        self.records::<Nebula>()
+            .filter(|(id, _)| (nebula::FIRST_NEBULA..=nebula::LAST_NEBULA).contains(id))
+            .filter_map(|(id, record)| {
+                let record = record.ok()?.record;
+                Some(NebulaRecord {
+                    id: NebulaId(id),
+                    left: record.x_pos,
+                    top: record.y_pos,
+                    width: record.x_size,
+                    height: record.y_size,
+                    active_on: self.test_expr(record.active_on.as_str()).into(),
+                    on_explore: self.set_expr(record.on_explore.as_str()).into(),
                 })
             })
             .collect()
@@ -3533,6 +3555,71 @@ mod tests {
         assert_eq!(record.ind_news, 0);
         let crons = store_named(&[(Cron::TYPE, 157, None, cron(b"\0", b"\0", b"\0"))]).crons();
         assert_eq!(crons[0].ind_news, -1, "an IndNews of -1 stays -1");
+    }
+
+    /// A `nëbu` over `rect` (left, top, width, height), active by
+    /// `active_on` and running `on_explore`, each NUL-terminated.
+    fn nebu(rect: [i16; 4], active_on: &[u8], on_explore: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![0; Nebula::SIZE.expect("fixed")];
+        put_i16s(&mut bytes, 0x00, &rect);
+        bytes[0x08..0x08 + active_on.len()].copy_from_slice(active_on);
+        bytes[0x107..0x107 + on_explore.len()].copy_from_slice(on_explore);
+        bytes
+    }
+
+    #[test]
+    fn nebulae_read_each_nebu_128_to_159_raw() {
+        let data = store_named(&[
+            (Nebula::TYPE, 160, None, nebu([1, 2, 3, 4], b"\0", b"\0")),
+            (
+                Nebula::TYPE,
+                159,
+                None,
+                nebu([-400, 120, 300, 200], b"b5\0", b"b6 !b7\0"),
+            ),
+            (Nebula::TYPE, 127, None, nebu([1, 2, 3, 4], b"\0", b"\0")),
+            (
+                Nebula::TYPE,
+                128,
+                None,
+                nebu([10, -20, 0, 40], b"\0", b"\0"),
+            ),
+        ]);
+        let nebulae = data.nebulae();
+        assert_eq!(
+            nebulae,
+            [
+                NebulaRecord {
+                    id: NebulaId(128),
+                    left: 10,
+                    top: -20,
+                    width: 0,
+                    height: 40,
+                    active_on: Test::default(),
+                    on_explore: Script::default(),
+                },
+                NebulaRecord {
+                    id: NebulaId(159),
+                    left: -400,
+                    top: 120,
+                    width: 300,
+                    height: 200,
+                    active_on: Test::parse("b5"),
+                    on_explore: Script::parse("b6 !b7"),
+                },
+            ],
+            "only 128-159, by ID"
+        );
+        assert_eq!(
+            nebulae[0].active_on.tree(),
+            Some(&crate::control::TestExpr::Always),
+            "a blank ActiveOn holds"
+        );
+        assert_eq!(store(&[]).nebulae(), []);
+        for (a, b) in data.nebulae().iter().zip(&data.nebulae()) {
+            assert!(shared(&a.active_on, &b.active_on), "parsed once");
+            assert!(shared_script(&a.on_explore, &b.on_explore), "parsed once");
+        }
     }
 
     /// A `ränk` of `Weight` -3 affiliated with `affil_govt`, `PriceMod`

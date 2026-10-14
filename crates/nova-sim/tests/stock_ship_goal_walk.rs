@@ -701,6 +701,10 @@ impl PilotCatalog for Probed<'_> {
     fn ranks(&self) -> Vec<cat::RankRecord> {
         self.data.ranks()
     }
+
+    fn nebulae(&self) -> Vec<cat::NebulaRecord> {
+        self.data.nebulae()
+    }
 }
 
 impl CombatCatalog for Probed<'_> {
