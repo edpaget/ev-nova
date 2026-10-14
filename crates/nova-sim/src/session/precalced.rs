@@ -4,7 +4,11 @@
 //!
 //! **What it does.** The parts the engine models, in the original's
 //! order: it re-arms `_ScanPlayer`'s contraband latches (@0xc3ef-0xc5a3,
-//! @0xc7b0; see [`scan::Latches`](crate::scan::Latches)), trims the
+//! @0xc7b0; see [`scan::Latches`](crate::scan::Latches)), sets the
+//! `jünk` latches the tribbles and perishables step reads from the `jünk`
+//! held (@0xc404, @0xc452, @0xc524-0xc570; see
+//! [`market::JunkLatches`]), at every reset, a set expression's and a
+//! ship purchase's included, trims the
 //! commodities to the fleet's holds (@0xc7d8-0xc887), and takes the
 //! active ranks the blessing table is built from (@0xc8be-0xc981; see
 //! the `ranks` module). The trim is not idempotent: it cuts only the
@@ -19,13 +23,21 @@
 //! | `_EnterGameFromMainScreen` @0x19ffb | [`Session::fly`], and [`Session::begin`] after the `chär`'s `OnStart` |
 //! | `_HandlePlayerDockRequest` @0x6709b | a take-off ([`Session::take_off`]) and a gate exit, before the setup |
 //! | `_HandlePlayer` @0x6c51f | a jump's arrival ([`Session::arrive`]), after the days, the enter-system hook and the setup |
-//! | `_JettisonCargo` @0x3e3b5, the jettison key's @0x6fdaf | [`Session::jettison_cargo`]; every good is gone by then, so its trim never cuts |
+//! | `_JettisonCargo` @0x3e3b5, the jettison key's @0x6fdaf | [`Session::jettison_cargo`]; every good is gone by then, so its trim never cuts, and both `jünk` latches clear |
 //! | `_DoPlunderDialog` @0x94a0b | the plunder dialog closing, an assignment's once the ship is assigned |
+//! | `_DoPlunderDialog` @0x931d9, @0x93226 | a person's grant as the dialog opens ([`Session::board`]): once an outfit is picked, whatever then fits, and again once it is granted |
+//! | `_DoPlunderDialog` @0x93cc9, @0x93dcb | an ammunition take ([`Session::plunder`]): as the button is pressed, and after each round taken |
+//! | `_DoShipCapture`'s `OnRetire` @0x41662 and `OnCapture` @0x416c9 | Use As My Ship's hooks' own resets, the old ship already in the fleet and the commodities [`RuleKey::CaptureCargo`] reads already swapped (@0x41188-0x4156f, @0x412e6-0x412fe) |
 //! | `_DoShipCapture`'s `_ShipStatsToSystemInfo` @0x419fd and `_SystemInfoToShipStats` @0x41a3e | Use As My Ship ([`Session::assign`]), after the swap of the commodities [`RuleKey::CaptureCargo`] reads, the old ship in the fleet |
 //! | `_DoMissionCargoPickup` @0x98316 | a pickup that fits, from a boarding or a landing, before the cargo is aboard |
 //! | `_MissionLandCargoCheck` @0x9eff9 | a drop-off that shows its `DumpCargoText`, the only one the original resets after (@0x9ef82) |
 //! | `_PlayerLandOnStellar`'s `_ShipStatsToSystemInfo` @0x63211 | a landing, before the port takes its prices |
-//! | `_DoOutfitDialog`'s `_SystemInfoToShipStats` @0x5c305, @0x5cffb | an outfit bought or sold ([`Session::outfit`]), after the refit, each pass |
+//! | `_DoPlayerInfoDialog`'s `_ShipStatsToSystemInfo` @0x5a06a | the player info opening ([`Session::open_player_info`]), in flight or landed, before the screen is built; not in a jump or while the ship breaks up |
+//! | `_DoOutfitDialog`'s `_ShipStatsToSystemInfo` @0x5bb57 | the outfitter opening ([`Session::open_outfitter`]), after the once-an-opening flags are cleared |
+//! | `_DoOutfitDialog`'s `_SystemInfoToShipStats` @0x5c305 | an outfit bought ([`Session::outfit_order`]): once after the buy loop, whenever Buy passed its own check, a Cancel's count of none included |
+//! | `_DoOutfitDialog`'s `_SystemInfoToShipStats` @0x5cffb | an outfit sold, after the refit, each pass |
+//! | `_DoOutfitDialog`'s `_SystemInfoToShipStats` @0x5db10 | the outfitter closing ([`Session::close_outfitter`]), however it closes (@0x5da33) |
+//! | `_DoBarDialog`'s `_ShipStatsToSystemInfo` @0x49235 | the hire screen closing ([`Session::close_hire`]), after a hire or none |
 //! | `_DoShipyardDialog`'s `_SystemInfoToShipStats` @0x5ee99, `_DestroyPartialFleetCargo` @0x5ef9f | a ship bought ([`Session::buy_ship`]), once its cargo is settled; both trims are the purchase rule's ([`RuleKey::PurchaseCargo`]), so this reset trims nothing more |
 //! | `_DestroyPartialFleetCargo`'s tail @0xcff6, from `_DamageShip` @0x3b013 and `_HandleShip` @0x350e6 | a trader escort lost, or a trader mission escort breaking up, once out of the fleet (`Session::lose_cargo_share`) |
 //! | the same, from `_DoEscortPayment` @0x40240 | a trader defecting on pay day, still in the fleet |
@@ -52,11 +64,11 @@
 //!
 //! **Left out.** The sites and parts of the reset left out are listed,
 //! each with its address and reason, in
-//! rdm:phase/cargo-and-scanning/phase-6-trim-wherever-reset-runs; those
-//! the engine can model now (the player info, outfitter, hire and
-//! plunder dialogs' own resets, the buy loop's single reset, the `jünk`
-//! flag latches, and Use As My Ship's hook resets) wait for
-//! rdm:phase/cargo-and-scanning/phase-8-reset-at-the-dialogs-and-the-junk-latches.
+//! rdm:phase/cargo-and-scanning/phase-6-trim-wherever-reset-runs and
+//! rdm:phase/cargo-and-scanning/phase-8-reset-at-the-dialogs-and-the-junk-latches:
+//! among them the player info dialog's guards on the screen's fades
+//! (`_screenFaded` @0x5a013, `_fadePending` @0x5a052-0x5a064), which are
+//! the screens' state, not the session's.
 
 use super::Session;
 use crate::market;
