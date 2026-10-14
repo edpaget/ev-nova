@@ -507,8 +507,10 @@ impl Combat {
         }
     }
 
-    /// Step 2: each ship's point defence fires at the missile it picks,
-    /// as `rule` says which are hostile with the relations in `govts`.
+    /// Step 2: each ship's point defence its trigger asks for
+    /// ([`Trigger::point_defence`](armament::Trigger::point_defence))
+    /// fires at the missile it picks, as `rule` says which are hostile
+    /// with the relations in `govts`.
     fn defend(
         &mut self,
         fighters: &mut [Fighter],
@@ -516,7 +518,10 @@ impl Combat {
         govts: &Governments,
         chance: &mut dyn Chance,
     ) {
-        for fighter in fighters.iter_mut() {
+        for fighter in fighters
+            .iter_mut()
+            .filter(|fighter| fighter.trigger.point_defence)
+        {
             let (state, hull) = (fighter.state, fighter.hull);
             let side = fighter.side();
             let shots = &self.shots;
@@ -1003,6 +1008,17 @@ mod tests {
         rounds: BTreeMap<WeaponId, u32>,
     }
 
+    /// A trigger holding no weapon, its point defence running, as a test
+    /// ship's always did before an NPC's ran only when its AI asks.
+    const QUIET: Trigger = Trigger {
+        primary: false,
+        secondary: None,
+        only: None,
+        turrets_only: false,
+        bays: false,
+        point_defence: true,
+    };
+
     impl Ship {
         /// NPC `id` at (`x`, `y`), at rest, facing right, unarmed, with
         /// 10 shield and 30 armour and a default hull.
@@ -1020,7 +1036,7 @@ mod tests {
                 hull: HullSpec::default(),
                 shield_regen: 0.0,
                 armor_regen: 0.0,
-                trigger: Trigger::default(),
+                trigger: QUIET,
                 reserves: Reserves::full(10.0, 30.0, 100.0),
                 condition: Condition::Intact,
                 held_disabled: false,
@@ -1040,6 +1056,7 @@ mod tests {
                     only: None,
                     turrets_only: false,
                     bays: false,
+                    point_defence: true,
                 },
                 ..self
             }
@@ -1839,7 +1856,7 @@ mod tests {
         for _ in 0..6 {
             tick(&mut combat, &mut ships, &NovaDisable);
             events.extend(combat.take_events());
-            ships[0].trigger = Trigger::default();
+            ships[0].trigger = QUIET;
         }
         let explosions: Vec<_> = events
             .iter()
@@ -1883,7 +1900,7 @@ mod tests {
         ];
         for _ in 0..6 {
             tick(&mut combat, &mut ships, &NovaDisable);
-            ships[0].trigger = Trigger::default();
+            ships[0].trigger = QUIET;
         }
         assert_eq!(ships[1].reserves.shield.now, 0.0, "hit directly");
         assert_eq!(
@@ -1916,7 +1933,7 @@ mod tests {
                 Ship::at(3, 30.0, 35.0),
             ];
             tick(&mut combat, &mut ships, &NovaDisable);
-            ships[0].trigger = Trigger::default();
+            ships[0].trigger = QUIET;
             for _ in 0..2 {
                 tick(&mut combat, &mut ships, &NovaDisable);
             }
@@ -2028,7 +2045,7 @@ mod tests {
             Ship::at(2, 0.0, 100.0),
         ];
         tick(&mut combat, &mut ships, &NovaDisable);
-        ships[0].trigger = Trigger::default();
+        ships[0].trigger = QUIET;
         ships[1].state.position = Vec2::new(100.0, 0.0);
         tick(&mut combat, &mut ships, &NovaDisable);
         let end = combat.beams()[0].end;
@@ -2070,7 +2087,7 @@ mod tests {
             ships[1].state.velocity = Vec2::new(3.0, 0.0);
             ships[1].state.position = ships[1].state.position + ships[1].state.velocity;
             tick(&mut combat, &mut ships, &NovaDisable);
-            ships[0].trigger = Trigger::default();
+            ships[0].trigger = QUIET;
             if ships[1].reserves.shield.now < 10.0 {
                 hit = true;
                 break;
@@ -2093,7 +2110,7 @@ mod tests {
         ];
         for _ in 0..10 {
             tick(&mut combat, &mut ships, &NovaDisable);
-            ships[0].trigger = Trigger::default();
+            ships[0].trigger = QUIET;
         }
         assert_eq!(combat.shots()[0].target, Some(B), "fired at B");
         ships[1].condition = Condition::Destroyed;
@@ -2147,7 +2164,7 @@ mod tests {
     /// it on the first tick.
     fn missile_attack(defence: WeaponRecord) -> [Ship; 2] {
         let mut defender = Ship::at(1, 0.0, 0.0).armed(defence).facing(0.0);
-        defender.trigger = Trigger::default();
+        defender.trigger = QUIET;
         [
             defender,
             Ship::at(2, 0.0, -200.0)
@@ -2158,6 +2175,40 @@ mod tests {
                 .facing(180.0)
                 .targeting(A),
         ]
+    }
+
+    #[test]
+    fn a_ship_whose_trigger_does_not_ask_runs_no_point_defence() {
+        let rule = Hostility {
+            hostile: true,
+            ..Hostility::default()
+        };
+        let rules = Rules {
+            defence: &rule,
+            ..Rules::default()
+        };
+        let defended = |point_defence: bool| {
+            let mut combat = Combat::default();
+            let mut ships = missile_attack(quad());
+            ships[0].trigger = Trigger {
+                point_defence,
+                ..Trigger::default()
+            };
+            tick_among(
+                &mut combat,
+                &mut ships,
+                &Arsenal::default(),
+                &Governments::default(),
+                rules,
+            );
+            combat
+                .take_events()
+                .iter()
+                .filter(|e| matches!(e, CombatEvent::Fired { ship: A, .. }))
+                .count()
+        };
+        assert_eq!(defended(false), 0, "not asked");
+        assert_eq!(defended(true), 1, "asked");
     }
 
     /// The durability of the one missile in flight, if any.
@@ -2189,7 +2240,7 @@ mod tests {
         let mut events = Vec::new();
         for _ in 0..30 {
             tick_among(&mut combat, &mut ships, &Arsenal::default(), &govts, rules);
-            ships[1].trigger = Trigger::default();
+            ships[1].trigger = QUIET;
             let new = combat.take_events();
             let defended = new
                 .iter()
@@ -2316,15 +2367,16 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            point_defence: true,
         };
         let mut defender = Ship::at(1, 0.0, 0.0).armed(quad()).facing(0.0);
-        defender.trigger = Trigger::default();
+        defender.trigger = QUIET;
         let mut ships = [defender, attacker];
         let mut combat = Combat::default();
         let mut events = Vec::new();
         for _ in 0..10 {
             tick(&mut combat, &mut ships, &NovaDisable);
-            ships[1].trigger = Trigger::default();
+            ships[1].trigger = QUIET;
             events.extend(combat.take_events());
         }
         let flying: Vec<i16> = combat
@@ -2357,10 +2409,11 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            point_defence: true,
         };
         for _ in 0..12 {
             tick(&mut combat, &mut ships, &NovaDisable);
-            ships[1].trigger = Trigger::default();
+            ships[1].trigger = QUIET;
         }
         assert_eq!(missile_durability(&combat), Some(4.0), "flown through");
         assert!(
@@ -2382,7 +2435,7 @@ mod tests {
         };
         for _ in 0..3 {
             tick_with(&mut combat, &mut ships, &Arsenal::default(), rules);
-            ships[1].trigger = Trigger::default();
+            ships[1].trigger = QUIET;
         }
         assert_eq!(combat.shots().len(), 1, "only the missile");
         assert_eq!(rule.asked.take().len(), 3, "asked each tick");
@@ -2421,8 +2474,8 @@ mod tests {
         let mut events = Vec::new();
         for _ in 0..8 {
             tick_with(&mut combat, &mut ships, &Arsenal::default(), rules);
-            ships[1].trigger = Trigger::default();
-            ships[2].trigger = Trigger::default();
+            ships[1].trigger = QUIET;
+            ships[2].trigger = QUIET;
             ships[2].state.position = Vec2::new(500.0, 0.0);
             events.extend(combat.take_events());
         }
@@ -2461,8 +2514,8 @@ mod tests {
                 &Arsenal::default(),
                 Rules::default(),
             );
-            ships[1].trigger = Trigger::default();
-            ships[2].trigger = Trigger::default();
+            ships[1].trigger = QUIET;
+            ships[2].trigger = QUIET;
             ships[2].state.position = Vec2::new(500.0, 0.0);
             for shot in &mut combat.shots {
                 if shot.firer == C {
@@ -2505,7 +2558,7 @@ mod tests {
                 &Arsenal::default(),
                 Rules::default(),
             );
-            ships[1].trigger = Trigger::default();
+            ships[1].trigger = QUIET;
             seen.push((missile_durability(&combat), combat.beams().len()));
             events.extend(combat.take_events());
         }

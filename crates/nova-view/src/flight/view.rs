@@ -8066,6 +8066,7 @@ mod tests {
                 only: None,
                 turrets_only: false,
                 bays: false,
+                point_defence: false,
             }
         }
     }
@@ -8720,6 +8721,7 @@ mod tests {
                 only: None,
                 turrets_only: false,
                 bays: false,
+                point_defence: false,
             }
         }
     }
@@ -9188,6 +9190,7 @@ mod tests {
                 only: None,
                 turrets_only: false,
                 bays: false,
+                point_defence: false,
             }
         }
 

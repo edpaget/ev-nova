@@ -1474,9 +1474,7 @@ impl Session {
         self.hold_trigger(Trigger {
             primary,
             secondary: self.secondary.filter(|_| secondary),
-            only: None,
-            turrets_only: false,
-            bays: false,
+            ..Trigger::default()
         });
     }
 
@@ -1564,7 +1562,7 @@ impl Session {
             hull: self.hull,
             shield_regen: self.stats.shield_regen,
             armor_regen: self.stats.armor_regen,
-            trigger: self.trigger,
+            trigger: player_trigger(self.trigger),
             target: self.target.map(ShipRef::Npc),
             reserves: &mut pilot.reserves,
             condition: &mut self.condition,
@@ -4270,6 +4268,17 @@ fn overlaid_sites(
         .into_iter()
         .map(|site| galaxy.site(site))
         .collect()
+}
+
+/// The trigger the player's ship fights with this tick: `held`, its point
+/// defence running every tick (`_HandlePlayer` @0x68c74; a disabled ship's
+/// fires nothing,
+/// [`Armament::fire_point_defence`](crate::combat::armament::Armament::fire_point_defence)).
+fn player_trigger(held: Trigger) -> Trigger {
+    Trigger {
+        point_defence: true,
+        ..held
+    }
 }
 
 /// `value` held to the range of an `i16`, as a boarding grant reads a
@@ -12324,6 +12333,7 @@ pub(super) mod tests {
         only: None,
         turrets_only: false,
         bays: false,
+        point_defence: false,
     };
 
     /// The fight's events about NPC 0, other than its firing.
@@ -15623,7 +15633,7 @@ pub(super) mod tests {
     }
 
     /// Every NPC of AI type 1 attacks NPC `at`, firing its missile; the
-    /// rest idle.
+    /// rest idle, their point defence running.
     #[derive(Debug)]
     struct Volley {
         at: ShipRef,
@@ -15645,7 +15655,10 @@ pub(super) mod tests {
                     ..Trigger::default()
                 }
             } else {
-                Trigger::default()
+                Trigger {
+                    point_defence: true,
+                    ..Trigger::default()
+                }
             }
         }
 

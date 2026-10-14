@@ -118,6 +118,8 @@ pub const MOD_AMMO: i16 = 3;
 
 /// The fire command a ship holds: the player's keys, or an NPC's
 /// [`Behaviour`](crate::ai::Behaviour).
+// Each flag is its own, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Trigger {
     /// The primary trigger: every weapon that is not a secondary.
@@ -134,6 +136,10 @@ pub struct Trigger {
     /// launches its fighters (see the module docs). The player's trigger
     /// never sets it.
     pub bays: bool,
+    /// This tick the ship's point defence runs: the player's every tick,
+    /// an NPC's when its AI asks for a turret (`_AIFireTurret` @0x80b0d).
+    /// [`Trigger::fires`] ignores it.
+    pub point_defence: bool,
 }
 
 impl Trigger {
@@ -1079,6 +1085,7 @@ mod tests {
         only: None,
         turrets_only: false,
         bays: false,
+        point_defence: false,
     };
 
     /// What `armament` has to fire with, and who fires it.
@@ -1417,6 +1424,7 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            point_defence: false,
         };
         assert_eq!(fired(&mut armament, second), [140]);
         let both = Trigger {
@@ -1425,6 +1433,7 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            point_defence: false,
         };
         assert_eq!(fired(&mut armament, both), [128, 138, 129]);
         let primary_as_secondary = Trigger {
@@ -1433,6 +1442,7 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            point_defence: false,
         };
         assert_eq!(
             fired(&mut armament, primary_as_secondary),
@@ -2982,6 +2992,7 @@ mod tests {
         only: None,
         turrets_only: false,
         bays: true,
+        point_defence: false,
     };
 
     fn launched(launches: &[Launch]) -> Vec<i16> {

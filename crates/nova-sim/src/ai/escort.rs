@@ -305,6 +305,7 @@ mod tests {
         only: None,
         turrets_only: true,
         bays: false,
+        point_defence: false,
     };
 
     #[test]

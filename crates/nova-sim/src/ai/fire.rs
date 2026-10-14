@@ -310,16 +310,46 @@ pub fn ammo_left(npc: &Npc) -> AmmoLeft {
 }
 
 /// The weapon `npc` fires now among `around`, if any (see the module
-/// docs), and its fighter bays while it attacks or snipes at a ship that
-/// is live there.
+/// docs), its fighter bays while it attacks or snipes at a ship that is
+/// live there, and its point defence while its manoeuvre reaches a turret
+/// ([`asks_turret`]).
+///
+/// A target with no state here (gone from the system) asks for no point
+/// defence, where the original's handler may still reach
+/// `_AIFireTurret` on the frame before its next think drops the target: a
+/// one-tick lag the player cannot see.
 #[must_use]
 pub fn trigger(npc: &Npc, around: &Surroundings) -> Trigger {
     let only = pick(npc, around);
     Trigger {
         only,
         bays: npc.goal.attacking().is_some_and(|ship| around.live(ship)),
+        point_defence: asks_turret(npc, around),
         ..Trigger::default()
     }
+}
+
+/// Whether `npc`'s fight reaches `_AIFireTurret` this tick, which runs its
+/// point defence before any check of the target (@0x80b0d): dogfighting
+/// (`_LowLevelAIHandler` substate 6, @0x85f17), sniping (0xe,
+/// @0x8730e-0x87324), fleeing (5, @0x85d5c-0x85d72), and approaching only
+/// while facing within [`GUN_FACING`] turns of the heading it wants (7,
+/// @0x868d3-0x868f6).
+fn asks_turret(npc: &Npc, around: &Surroundings) -> bool {
+    let Some(at) = npc.goal.quarry().and_then(|ship| around.state_of(ship)) else {
+        return false;
+    };
+    match manoeuvre(npc.goal, &npc.state, &at) {
+        None => false,
+        Some(Manoeuvre::Approach) => facing(npc, &at, GUN_FACING),
+        Some(_) => true,
+    }
+}
+
+/// Whether `npc` faces within `turns` of its turn rate of the heading it
+/// wants to fire at a ship at `at` ([`wanted_heading`]).
+fn facing(npc: &Npc, at: &ShipState, turns: f32) -> bool {
+    angle_off(npc.state.heading, wanted_heading(npc, at)) <= turns * npc.stats.handling.turn_rate
 }
 
 /// The weapon [`trigger`] picks, if any.
@@ -380,8 +410,7 @@ fn pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
     }
     .unwrap_or_default();
     let manoeuvre = manoeuvre(npc.goal, &npc.state, &at)?;
-    let off = angle_off(npc.state.heading, wanted_heading(npc, &at));
-    let facing = |turns: f32| off <= turns * npc.stats.handling.turn_rate;
+    let facing = |turns: f32| facing(npc, &at, turns);
     let sight = Sight {
         npc,
         at: &at,
@@ -676,13 +705,19 @@ mod tests {
     /// What `npc`, attacking NPC 2, fires at it as `target` makes it,
     /// (`x`, `y`) from [`SHOOTER`].
     fn fired_at_npc(npc: &Npc, x: f32, y: f32, target: impl Fn(&mut Npc)) -> Option<WeaponId> {
+        trigger_at_npc(npc, x, y, target).only
+    }
+
+    /// The trigger `npc`, attacking NPC 2, holds as `target` makes it,
+    /// (`x`, `y`) from [`SHOOTER`].
+    fn trigger_at_npc(npc: &Npc, x: f32, y: f32, target: impl Fn(&mut Npc)) -> Trigger {
         let mut npc = npc.clone();
         npc.goal = Goal::Attack(ShipRef::Npc(NpcId(2)));
         let mut other = crate::testkit::npc(2, ShipStats::new(FAST, &[]));
         other.state.position = SHOOTER + Vec2::new(x, y);
         target(&mut other);
         let npcs = [npc.clone(), other];
-        trigger(&npc, &Surroundings::new(&[], &npcs)).only
+        trigger(&npc, &Surroundings::new(&[], &npcs))
     }
 
     /// `npc` with a scanner of these bits among its ship type's items.
@@ -828,6 +863,76 @@ mod tests {
             ..gun(130, 1, 1)
         };
         holds_fire_while_unseen(&shooter(&[gun], ATTACK));
+    }
+
+    /// Whether `npc` asks for its point defence with the player (`x`,
+    /// `y`) from [`SHOOTER`], its shields up, as `player` makes it.
+    fn asks_at_player(npc: &Npc, x: f32, y: f32, player: impl Fn(&mut PlayerSide)) -> bool {
+        let npcs = [npc.clone()];
+        let mut side = player_at(SHOOTER.x + x, SHOOTER.y + y, 50.0);
+        player(&mut side);
+        let around = Surroundings {
+            player: Some(side),
+            ..Surroundings::new(&[], &npcs)
+        };
+        trigger(npc, &around).point_defence
+    }
+
+    #[test]
+    fn point_defence_is_asked_for_whenever_the_manoeuvre_reaches_a_turret() {
+        let plain = |_: &mut PlayerSide| {};
+        // Unarmed: point defence is asked for whatever it carries.
+        for goal in [
+            ATTACK,
+            Goal::Snipe(ShipRef::Player),
+            Goal::Flee(ShipRef::Player),
+        ] {
+            assert!(
+                asks_at_player(&shooter(&[], goal), 0.0, -100.0, plain),
+                "{goal:?}"
+            );
+        }
+        // Approaching (300 above), only while facing within three turns
+        // (3 degrees a tick) of the heading it wants (@0x868d3-0x868de).
+        let mut approaching = shooter(&[], ATTACK);
+        approaching.state.heading = 9.0;
+        assert!(asks_at_player(&approaching, 0.0, -300.0, plain));
+        approaching.state.heading = 9.1;
+        assert!(!asks_at_player(&approaching, 0.0, -300.0, plain));
+        approaching.state.heading = 350.9;
+        assert!(!asks_at_player(&approaching, 0.0, -300.0, plain));
+        assert!(
+            asks_at_player(&approaching, 0.0, -100.0, plain),
+            "dogfighting, any heading"
+        );
+        for goal in [
+            Goal::Idle,
+            Goal::Inspect(ShipRef::Player),
+            Goal::Formation { guard: None },
+        ] {
+            assert!(
+                !asks_at_player(&shooter(&[], goal), 0.0, -100.0, plain),
+                "{goal:?}"
+            );
+        }
+        let gone = shooter(&[], Goal::Attack(ShipRef::Npc(NpcId(9))));
+        assert!(
+            !asks_at_player(&gone, 0.0, -100.0, plain),
+            "no target state"
+        );
+        // Before the target checks (@0x80b0d): untargetable, unseen or not
+        // live.
+        let npc = shooter(&[guided(130, 4)], ATTACK);
+        let untargetable = |player: &mut PlayerSide| player.untargetable = true;
+        assert!(asks_at_player(&npc, 0.0, -100.0, untargetable));
+        assert!(trigger_at_npc(&npc, 0.0, -100.0, cloaked).point_defence);
+        let dying = |other: &mut Npc| other.condition = Condition::Dying { ticks_left: 3 };
+        assert!(trigger_at_npc(&npc, 0.0, -100.0, dying).point_defence);
+        let arriving = |other: &mut Npc| {
+            other.mode = crate::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
+        };
+        assert!(trigger_at_npc(&npc, 0.0, -100.0, arriving).point_defence);
+        assert_eq!(trigger_at_npc(&npc, 0.0, -100.0, arriving).only, None);
     }
 
     #[test]
