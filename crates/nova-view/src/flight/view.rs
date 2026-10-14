@@ -745,7 +745,8 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
         SimMessage::Sabotaged { outfit: None } => BOMB_EXPLODED_ONBOARD,
         SimMessage::Sabotaged {
             outfit: Some((outfit, one)),
-        } => {
+        }
+        | SimMessage::BombExploded { outfit, one } => {
             let (lc_name, lc_plural) = session.outfit_names(*outfit).unwrap_or_default();
             return Some(exploded_message(*one, lc_name, lc_plural));
         }
@@ -986,6 +987,7 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::FighterRepaired
         | SimMessage::EscapingIn { .. }
         | SimMessage::Sabotaged { .. }
+        | SimMessage::BombExploded { .. }
         | SimMessage::Smuggling { .. }
         | SimMessage::IllegalJunk { .. }
         | SimMessage::IllegalOutfit { .. } => None,
@@ -14037,6 +14039,30 @@ mod tests {
             Some("Your bombs have exploded!")
         );
         assert_eq!(arrival_lead(&sabotaged(true)), None);
+    }
+
+    #[test]
+    fn a_bomb_notice_names_the_outfit_with_no_empty_name_check() {
+        let view = with_a_bomb();
+        let session = view.session().expect("flying");
+        let exploded = |outfit, one| SimMessage::BombExploded {
+            outfit: OutfitId(outfit),
+            one,
+        };
+        assert_eq!(
+            sim_message_text(&exploded(275, true), session).as_deref(),
+            Some("Your bomb has exploded!")
+        );
+        assert_eq!(
+            sim_message_text(&exploded(275, false), session).as_deref(),
+            Some("Your bombs have exploded!")
+        );
+        assert_eq!(
+            sim_message_text(&exploded(999, true), session).as_deref(),
+            Some("Your  has exploded!"),
+            "an empty name is spelled out as it is"
+        );
+        assert_eq!(arrival_lead(&exploded(275, true)), None);
     }
 
     #[test]

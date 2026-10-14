@@ -28,6 +28,28 @@
 //! refreshes, so the flag stays set; the player dies, and a dying player
 //! counts nothing, so the outfit goes off once.
 //!
+//! **Bomb outfits** ([`Sabotage::Bomb`], @0x696a7-0x69a0a). For each
+//! owned bomb outfit in index order ([`bombs`]), the comm line names it
+//! for 400 ticks ([`SimMessage::BombExploded`], @0x698b0, with no test of
+//! its names); its `bööm`, when its first bomb slot names one, goes off
+//! at the player's position, of size 0, with its own sound
+//! (`_CreateExplosion` @0x698ef; the view plays a `bööm`'s sound for any
+//! [`CombatEvent::Exploded`](crate::combat::CombatEvent::Exploded)); every
+//! copy is removed (@0x698f7); and the player takes [`bomb_damage`] to
+//! its armour alone, a spared hit
+//! ([`apply_spared`](crate::combat::damage::apply_spared): `_DamageShip`
+//! @0x699b2 with +0x28, +0x2c and +0x30 set and no source), the player
+//! counted disabled before it as its armour then says (`_IsDisabled`
+//! @0x3a9ad), so a second bomb sees the first's damage. The damage is at
+//! least the armour capacity, so the bomb never kills: an intact player
+//! is left at what a self-repair leaves, a disabled one at 1. Then the
+//! blessing table is refreshed (@0x69a05), the sabotage clock with it:
+//! no bomb is left, so the flag clears and the next tick zeroes the
+//! count, and the bombs go off once. No ship stats are rebuilt, as
+//! `_ResetPlayerPrecalcedValues` rebuilds none: the stats and armament
+//! follow the outfits at the next refit. No save is due, as the original
+//! saves nothing here.
+//!
 //! *Ordering against the original.* The block runs after
 //! [`Session::tick`]'s steering in the same step, where the original runs
 //! it before the steering: a difference inside a frame, which crosses no
@@ -36,9 +58,10 @@
 use super::Session;
 use crate::chance::Chance;
 use crate::combat::Rules;
-use crate::combat::hull::Condition;
+use crate::combat::damage::{Hit, apply_spared};
+use crate::combat::hull::{Condition, DisableRule};
 use crate::message::SimMessage;
-use crate::sabotage::{Sabotage, kill_notice};
+use crate::sabotage::{Sabotage, bomb_damage, bombs, kill_notice};
 use crate::sound::{SimSound, WARP_UP_HALTS};
 
 impl Session {
@@ -57,7 +80,7 @@ impl Session {
 
     /// A tick of the sabotage clock, and what goes off with it, drawing on
     /// `chance` (see the module docs).
-    pub(super) fn sabotage_tick(&mut self, _rules: Rules, chance: &mut dyn Chance) {
+    pub(super) fn sabotage_tick(&mut self, rules: Rules, chance: &mut dyn Chance) {
         if self.pod.is_some() {
             return;
         }
@@ -71,8 +94,40 @@ impl Session {
         self.sounds.push(SimSound::OnboardExplosion);
         match flag {
             Sabotage::Kill => self.sabotage_kill(),
-            Sabotage::Bomb | Sabotage::None => {}
+            Sabotage::Bomb => self.sabotage_bombs(rules.disable, chance),
+            Sabotage::None => {}
         }
+    }
+
+    /// The bomb outfits go off (`_HandlePlayer` @0x696a7-0x69a0a; see the
+    /// module docs' **Bomb outfits**), `rule` saying when the player is
+    /// disabled, each bomb's damage drawn on `chance`.
+    fn sabotage_bombs(&mut self, rule: &dyn DisableRule, chance: &mut dyn Chance) {
+        for bomb in bombs(&self.pilot.outfits, &self.outfits) {
+            self.messages.push(SimMessage::BombExploded {
+                outfit: bomb.outfit,
+                one: bomb.one,
+            });
+            if let Some(explosion) = bomb.explosion {
+                self.combat.explode(self.player.position, explosion);
+            }
+            self.pilot.outfits.remove(&bomb.outfit);
+            let armor = self.pilot.reserves.armor;
+            let was_disabled = rule.disabled(armor, &self.hull);
+            let hit = Hit {
+                mass: bomb_damage(armor.max, chance),
+                energy: 0.0,
+                passes_shields: true,
+            };
+            apply_spared(
+                &mut self.pilot.reserves,
+                hit,
+                &self.hull,
+                rule,
+                was_disabled,
+            );
+        }
+        self.refresh_blessing();
     }
 
     /// A kill outfit goes off (`_HandlePlayer` @0x69384-0x696a2; see the
@@ -95,9 +150,13 @@ impl Session {
 pub(super) mod tests {
     use super::*;
     use crate::catalog::OutfitId;
-    use crate::catalog::{SoundId, SystemId};
+    use crate::catalog::{BoomId, ShipId, SoundId, SystemId};
+    use crate::combat::hull::{HullSpec, TOUGH};
+    use crate::combat::weapon::Explosion;
     use crate::combat::{CombatEvent, ShipRef};
+    use crate::geometry::Vec2;
     use crate::pilot::Pilot;
+    use crate::reserves::Gauge;
     use crate::sabotage::FUSE;
     use crate::sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL};
     use crate::session::tests::{armed, facing_an_npc};
@@ -384,5 +443,202 @@ pub(super) mod tests {
         }
         let sounds = fight(&mut session, &[]);
         assert!(!sounds.contains(&SimSound::OnboardExplosion), "{sounds:?}");
+    }
+
+    /// [`sabotaged`] with the player's ship of 300 armour, and of 100
+    /// shields, tough or not.
+    fn armoured(tough: bool) -> FakePilotCatalog {
+        let mut catalog = sabotaged();
+        for (id, fields) in &mut catalog.ships {
+            if *id == ShipId(128)
+                && let Ok(fields) = fields
+            {
+                fields.armor = 300;
+                fields.shield = 100;
+            }
+        }
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(128) && tough {
+                hull.flags |= TOUGH;
+            }
+        }
+        catalog
+    }
+
+    #[test]
+    fn a_bomb_outfit_goes_off_for_400_ticks_and_every_copy_is_gone() {
+        let catalog = armoured(false);
+        for (count, one) in [(1, true), (3, false)] {
+            let mut session = lit(&catalog, &[(BOMB, count)]);
+            let sounds = fight(&mut session, &[]);
+            assert_eq!(sounds.first(), Some(&SimSound::OnboardExplosion));
+            let messages = session.take_messages();
+            assert_eq!(
+                messages,
+                [SimMessage::BombExploded {
+                    outfit: OutfitId(BOMB),
+                    one
+                }]
+            );
+            assert_eq!(messages[0].ticks(), 400);
+            assert_eq!(session.pilot.outfits.get(&OutfitId(BOMB)), None);
+        }
+    }
+
+    #[test]
+    fn a_bomb_explodes_its_boom_at_the_players_position_only_for_mod_val_128_to_191() {
+        for (mod_val, boom) in [(127, None), (128, Some(128)), (191, Some(191)), (192, None)] {
+            let mut catalog = armoured(false);
+            catalog
+                .outfits
+                .push(outfit(263, &[(SABOTAGE_BOMB, mod_val)]));
+            let mut session = lit(&catalog, &[(263, 1)]);
+            session.player.position = Vec2::new(40.0, -25.0);
+            fight(&mut session, &[]);
+            let exploded: Vec<_> = session
+                .take_combat_events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    CombatEvent::Exploded { at, explosion } => Some((at, explosion)),
+                    _ => None,
+                })
+                .collect();
+            let expected: Vec<_> = boom
+                .map(|boom| {
+                    (
+                        session.player.position,
+                        Explosion {
+                            boom: BoomId(boom),
+                            extra: false,
+                        },
+                    )
+                })
+                .into_iter()
+                .collect();
+            assert_eq!(exploded, expected, "{mod_val}");
+        }
+    }
+
+    /// The shield and armour a bomb leaves a player of `catalog` with
+    /// `armor` armour before it, disabled or not, the damage drawn
+    /// `draw` above the capacity.
+    fn bombed(catalog: &FakePilotCatalog, armor: f32, disabled: bool, draw: u32) -> (f32, f32) {
+        let mut session = lit(catalog, &[(BOMB, 1)]);
+        session.pilot.reserves.armor.now = armor;
+        if disabled {
+            session.condition = Condition::Disabled;
+        }
+        let mut draws = Draws::of(&[draw]);
+        session.tick_combat(Rules::default(), &mut draws);
+        assert_eq!(draws.asked.first(), Some(&151), "Rand(300 x 0.5 + 1)");
+        let reserves = session.pilot.reserves;
+        (reserves.shield.now, reserves.armor.now)
+    }
+
+    #[test]
+    fn the_bomb_never_kills_a_300_armour_player_ends_at_100_99_with_shields_unchanged() {
+        let catalog = armoured(false);
+        for draw in [0, 150] {
+            let (shield, armor) = bombed(&catalog, 300.0, false, draw);
+            assert_eq!(shield, 100.0, "{draw}");
+            assert!((armor - 100.99).abs() < 1e-4, "300 x 0.3333 + 1: {armor}");
+        }
+    }
+
+    #[test]
+    fn a_bomb_on_a_tough_hull_leaves_31_armour() {
+        assert_eq!(bombed(&armoured(true), 300.0, false, 0), (100.0, 31.0));
+    }
+
+    #[test]
+    fn a_bomb_on_an_already_disabled_player_leaves_1_armour() {
+        assert_eq!(bombed(&armoured(false), 90.0, true, 0), (100.0, 1.0));
+    }
+
+    #[test]
+    fn two_bomb_outfits_each_post_their_notice_and_hit_in_index_order() {
+        let mut catalog = armoured(false);
+        catalog.outfits.push(outfit(263, &[(SABOTAGE_BOMB, 128)]));
+        let mut session = lit(&catalog, &[(263, 2), (BOMB, 1)]);
+        let mut draws = Draws::of(&[0, 0]);
+        session.tick_combat(Rules::default(), &mut draws);
+        assert_eq!(
+            session.take_messages(),
+            [
+                SimMessage::BombExploded {
+                    outfit: OutfitId(BOMB),
+                    one: true
+                },
+                SimMessage::BombExploded {
+                    outfit: OutfitId(263),
+                    one: false
+                },
+            ]
+        );
+        assert_eq!(&draws.asked[..2], [151, 151]);
+        // The first leaves 100.99, so the second finds the player intact
+        // again and floors it the same way, not at 1.
+        let armor = session.pilot.reserves.armor.now;
+        assert!((armor - 100.99).abs() < 1e-4, "{armor}");
+        assert_eq!(session.pilot.outfits.get(&OutfitId(263)), None);
+    }
+
+    #[test]
+    fn a_second_bomb_finds_the_player_as_the_first_left_it() {
+        /// Calls a ship disabled below 200 armour.
+        #[derive(Debug)]
+        struct Below200;
+
+        impl DisableRule for Below200 {
+            fn disabled(&self, armor: Gauge, _hull: &HullSpec) -> bool {
+                armor.now < 200.0
+            }
+        }
+
+        let mut catalog = armoured(false);
+        catalog.outfits.push(outfit(263, &[(SABOTAGE_BOMB, 0)]));
+        let mut session = lit(&catalog, &[(BOMB, 1), (263, 1)]);
+        let rules = Rules {
+            disable: &Below200,
+            ..Rules::default()
+        };
+        session.tick_combat(rules, &mut Draws::of(&[0, 0]));
+        // The first leaves 100.99, still disabled by this rule, so the
+        // second finds the player disabled and leaves it at 1.
+        assert_eq!(session.pilot.reserves.armor.now, 1.0);
+    }
+
+    #[test]
+    fn a_bomb_fires_once_its_refresh_clears_the_flag_and_the_next_tick_zeroes_the_counter() {
+        use crate::catalog::RankId;
+        use crate::session::ranks::tests::{blessed, blessing_rank};
+        let mut catalog = armoured(false);
+        catalog.ranks = vec![blessing_rank()];
+        let mut session = lit(&catalog, &[(BOMB, 1)]);
+        session.pilot.ranks.insert(RankId(200));
+        assert!(!blessed(&session));
+        session.scan_latches = crate::scan::Latches {
+            junk: false,
+            outfits: false,
+        };
+        let sounds = fight(&mut session, &[]);
+        assert_eq!(sounds.first(), Some(&SimSound::OnboardExplosion));
+        assert_eq!(session.sabotage.flag(), Sabotage::None, "@0x69a05");
+        assert!(session.sabotage.counter() > FUSE, "left as it was");
+        assert!(blessed(&session), "re-taken");
+        assert_eq!(session.scan_latches, crate::scan::Latches::ARMED);
+        let sounds = fight(&mut session, &[]);
+        assert!(!sounds.contains(&SimSound::OnboardExplosion), "{sounds:?}");
+        assert_eq!(session.sabotage.counter(), 0.0, "@0x69a0c");
+    }
+
+    #[test]
+    fn a_bomb_makes_no_save_due() {
+        let catalog = armoured(false);
+        let mut session = lit(&catalog, &[(BOMB, 1)]);
+        session.take_save_due();
+        fight(&mut session, &[]);
+        assert_eq!(session.pilot.outfits.get(&OutfitId(BOMB)), None, "gone off");
+        assert!(!session.take_save_due());
     }
 }

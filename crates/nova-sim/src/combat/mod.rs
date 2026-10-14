@@ -1072,8 +1072,10 @@ impl Combat {
     }
 
     /// Reports an explosion at `at` that is no weapon's: a stellar's as it
-    /// is destroyed. It is of size 0, as `_CreateExplosion(.., 0, 1)`
-    /// makes it, so no extra explosions scatter from it.
+    /// is destroyed, or a sabotage bomb's aboard the player's ship
+    /// (`_HandlePlayer` @0x698ef). It is of size 0, as
+    /// `_CreateExplosion(.., 0, 1)` makes it, so no extra explosions
+    /// scatter from it.
     pub(crate) fn explode(&mut self, at: Vec2, explosion: Explosion) {
         self.events.push(CombatEvent::Exploded { at, explosion });
     }
