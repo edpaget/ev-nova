@@ -392,6 +392,7 @@ mod tests {
                 slot: 0,
                 behav: crate::mission::ships::ShipBehav::EscortPlayer,
                 formation: Some(FormationSlot::default()),
+                order: None,
             }),
             ..ship()
         };

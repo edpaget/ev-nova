@@ -64,9 +64,14 @@
 //! ([`emerge`](crate::traffic::emerge)), on this module's
 //! [`exit_heading`].
 //!
+//! Every ship the player leads comes out of the exit gate after it,
+//! waiting `Rand(20) + 15` ticks and bursting at 15 (loop C,
+//! `_HandlePlayerDockRequest` @0x674ef-0x675c8), as
+//! [`RuleKey::GateEscorts`](crate::RuleKey::GateEscorts) says: see the
+//! session's `gate_escorts` module.
+//!
 //! Not modelled: the `dësc` QuickTime movie a gate may play
-//! (`_PlayQTMovieFromDesc`), AI ships entering gates, the player's escorts
-//! coming out of the exit gate after it (@0x674ef-0x675c8), the ship-spawn
+//! (`_PlayQTMovieFromDesc`), AI ships entering gates, the ship-spawn
 //! hooks on the shared arrival path (`_SpawnBountyHunter`), the `spöb`
 //! `Fee`, and the failure sound for a wormhole with no exit.
 

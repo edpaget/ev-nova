@@ -3,7 +3,9 @@
 //! values are in [`escort`](crate::escort).
 //!
 //! - **Hold Position**: it brakes to a stop where it is ([`Goal::Idle`]),
-//!   targets nothing and fires nothing; its point defence still works.
+//!   targets nothing and fires nothing; its point defence runs on each of
+//!   its decisions, as `_EscortAI`'s hold tail-calls `_AIFireTurret`
+//!   (@0x83e59-0x83e74, @0x83f4e).
 //! - **Defend**: it keeps its target while the target is intact and
 //!   within [`DEFEND_KEEP_SQ`] (distance squared) of the player;
 //!   otherwise it takes the best threat to the player within
@@ -19,7 +21,10 @@
 //!     its turrets alone at a guard: the one it guards still while that
 //!     ship is intact and some weapon it carries reaches it, else one
 //!     drawn at random among the ships threatening the player
-//!     (`_AIFightThreatToParent` @0x81de6), at any distance;
+//!     (`_AIFightThreatToParent` @0x81de6), at any distance. Its turrets
+//!     fire, and its point defence runs, only while the guard is within
+//!     the 164-pixel box on both axes (@0x8648e-0x864ad,
+//!     @0x86666-0x86689);
 //!   - by the Bible (`shïp` `InherentAI`: "What AI the ship uses when
 //!     it's escorting the player"), it flies as its AI type would: a
 //!     warship or interceptor attacks the best threat to the player at
@@ -27,19 +32,22 @@
 //!     none, and a trader keeps formation and fires nothing.
 //! - **Return to Hangar**: a carried fighter (one with a
 //!   [`Carrier`](crate::bay::Carrier)) drops its target and docks with
-//!   the player ([`Goal::Dock`], `_EscortAI` @0x83e79), firing nothing;
+//!   the player ([`Goal::Dock`], `_EscortAI` @0x83e79), firing nothing
+//!   and running no point defence;
 //!   any other escort, holding it from an edited save, acts as with no
 //!   standing command.
 //!
 //! A mission escort (a `ShipBehav` 1 mission ship in the player's
-//! formation, [`Npc::mission_escort`]) flies here too, with no standing
-//! order: the original runs it through `_EscortAI` as AI type 6, and
-//! only the player's commands set an order, which it never takes here.
+//! formation, [`Npc::mission_escort`]) flies here too, by the standing
+//! order on its mark ([`Npc::escort_order`]): the original runs it
+//! through `_EscortAI` as AI type 6, and the player's commands reach it
+//! by class (`_IssueNewEscortCommand` @0x6614a-0x66176).
 //!
 //! An escort answers threats to the player, not the hits it takes: it has
 //! no reaction. It never launches the fighters it carries
 //! ([`Trigger::bays`]).
 
+use crate::ai::fire::FireRules;
 use crate::ai::{Behaviour, Goal, Surroundings, fire};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -55,6 +63,8 @@ use crate::traffic::npc::{Mode, Npc, NpcId};
 pub struct EscortAi {
     /// What an escort with no standing command does.
     pub escort_ai: RuleSource,
+    /// The rulebook's entries its weapon pick follows.
+    pub fire: FireRules,
 }
 
 impl EscortAi {
@@ -79,7 +89,7 @@ impl EscortAi {
 
 impl Behaviour for EscortAi {
     fn decide(&self, npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
-        let order = npc.escort.and_then(|duty| duty.order);
+        let order = npc.escort_order();
         if order == Some(EscortOrder::Hold) {
             return Goal::Idle;
         }
@@ -123,13 +133,25 @@ impl Behaviour for EscortAi {
         match npc.goal {
             Goal::Attack(_) => Trigger {
                 bays: false,
-                ..fire::trigger(npc, around)
+                ..fire::trigger(npc, around, self.fire)
             },
-            Goal::Formation { guard: Some(_) } => Trigger {
+            // Keeping formation, `_LowLevelAIHandler` calls `_AIFireTurret`
+            // only while the guard (+0x70) is within the box on both axes
+            // (@0x8648e-0x864ad, @0x86666-0x86689).
+            Goal::Formation { guard: Some(guard) } if near(npc, around, guard) => Trigger {
                 primary: true,
                 turrets_only: true,
+                point_defence: true,
                 ..Trigger::default()
             },
+            // Holding Position: `_EscortAI` tail-calls `_AIFireTurret` with
+            // no target (@0x83e59-0x83e74, @0x83f4e), which runs its point
+            // defence and fires nothing.
+            Goal::Idle => Trigger {
+                point_defence: true,
+                ..Trigger::default()
+            },
+            // Return to Hangar calls no turret (@0x83e79-0x83ea3).
             _ => Trigger::default(),
         }
     }
@@ -147,6 +169,16 @@ impl Behaviour for EscortAi {
 /// keep fighting.
 fn intact(npc: &Npc) -> bool {
     npc.condition == Condition::Intact && npc.mode == Mode::Flying
+}
+
+/// Whether `guard` is within [`DOGFIGHT_BOX`](fire::DOGFIGHT_BOX) of
+/// `npc` on both axes among `around`: `trunc(d) + 164` unsigned at most
+/// 328.
+fn near(npc: &Npc, around: &Surroundings, guard: ShipRef) -> bool {
+    around.state_of(guard).is_some_and(|at| {
+        let off = at.position - npc.state.position;
+        off.x.abs() < fire::DOGFIGHT_BOX && off.y.abs() < fire::DOGFIGHT_BOX
+    })
 }
 
 /// An attack on `threat`, or formation with none.
@@ -270,9 +302,15 @@ mod tests {
 
     const ENGINE: EscortAi = EscortAi {
         escort_ai: RuleSource::Engine,
+        fire: FireRules {
+            quadrant_arc: RuleSource::Engine,
+        },
     };
     const BIBLE: EscortAi = EscortAi {
         escort_ai: RuleSource::Bible,
+        fire: FireRules {
+            quadrant_arc: RuleSource::Engine,
+        },
     };
 
     fn decide(npcs: &[Npc], player_at: (f32, f32), draws: &[u32]) -> (Goal, Vec<u32>) {
@@ -304,6 +342,7 @@ mod tests {
         only: None,
         turrets_only: true,
         bays: false,
+        point_defence: true,
     };
 
     #[test]
@@ -341,6 +380,7 @@ mod tests {
         let mut npc = escort(None);
         npc.escort = None;
         npc.mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
             slot: 0,
             behav: crate::mission::ships::ShipBehav::EscortPlayer,
             formation: Some(crate::escort::FormationSlot {
@@ -350,6 +390,29 @@ mod tests {
             }),
         });
         npc
+    }
+
+    /// [`mission_escort`] with standing order `order`.
+    fn ordered_mission_escort(order: EscortOrder) -> Npc {
+        let mut npc = mission_escort();
+        if let Some(mark) = &mut npc.mission {
+            mark.order = Some(order);
+        }
+        npc
+    }
+
+    #[test]
+    fn a_mission_escort_takes_the_order_the_player_gave_it() {
+        let npcs = [
+            ordered_mission_escort(EscortOrder::Hold),
+            pirate(2, 100.0, 0.0),
+        ];
+        assert_eq!(decide(&npcs, (0.0, 0.0), &[0]), (Goal::Idle, vec![]));
+        let npcs = [
+            ordered_mission_escort(EscortOrder::Attack),
+            pirate(2, 100.0, 0.0),
+        ];
+        assert_eq!(decide(&npcs, (0.0, 0.0), &[0]).0, Goal::Attack(n(2)));
     }
 
     #[test]
@@ -434,6 +497,41 @@ mod tests {
                 "{at:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_formation_escort_fires_turrets_and_defends_only_within_164_of_its_guard() {
+        // `trunc(d) + 164` unsigned at most 328 on both axes
+        // (@0x8648e-0x864ad, @0x86666-0x86689).
+        let guarding = having(
+            escort(None),
+            Goal::Formation { guard: Some(n(2)) },
+            Some(n(2)),
+        );
+        for (x, y) in [(164.9, 0.0), (-164.9, 0.0), (0.0, 164.9), (0.0, -164.9)] {
+            let npcs = [guarding.clone(), pirate(2, x, y)];
+            assert_eq!(command(ENGINE, &npcs), (TURRETS, Some(n(2))), "{x} {y}");
+        }
+        for (x, y) in [(165.0, 0.0), (-165.0, 0.0), (0.0, 165.0), (0.0, -165.0)] {
+            let npcs = [guarding.clone(), pirate(2, x, y)];
+            assert_eq!(
+                command(ENGINE, &npcs),
+                (Trigger::default(), Some(n(2))),
+                "{x} {y}"
+            );
+        }
+        assert_eq!(
+            command(ENGINE, std::slice::from_ref(&guarding)).0,
+            Trigger::default(),
+            "its guard gone"
+        );
+        // Measured from the escort, wherever it is.
+        let mut away = guarding.clone();
+        away.state.position = crate::geometry::Vec2::new(1000.0, 1000.0);
+        let npcs = [away.clone(), pirate(2, 1100.0, 900.0)];
+        assert_eq!(command(ENGINE, &npcs).0, TURRETS);
+        let npcs = [away, pirate(2, 100.0, 100.0)];
+        assert_eq!(command(ENGINE, &npcs).0, Trigger::default());
     }
 
     #[test]
@@ -540,7 +638,7 @@ mod tests {
             };
             let fires = Trigger {
                 bays: false,
-                ..fire::trigger(&npcs[0], &around)
+                ..fire::trigger(&npcs[0], &around, FireRules::default())
             };
             assert_eq!(
                 command(ENGINE, &npcs),
@@ -548,7 +646,7 @@ mod tests {
                 "{order:?}: launching no fighters"
             );
             assert_eq!(
-                fire::trigger(&npcs[0], &around).only,
+                fire::trigger(&npcs[0], &around, FireRules::default()).only,
                 Some(WeaponId(141)),
                 "the gun ahead"
             );
@@ -556,7 +654,9 @@ mod tests {
     }
 
     #[test]
-    fn holding_it_idles_targets_nothing_and_fires_nothing() {
+    fn holding_it_runs_its_point_defence_and_fires_nothing() {
+        // `_EscortAI`'s hold tail-calls `_AIFireTurret` with no target
+        // (@0x83e59-0x83e74, @0x83f4e): point defence, then nothing.
         let hold = Some(EscortOrder::Hold);
         let npcs = [
             having(escort(hold), Goal::Attack(n(2)), Some(n(2))),
@@ -566,7 +666,35 @@ mod tests {
         let holding = having(escort(hold), Goal::Idle, Some(n(2)));
         assert_eq!(
             command(ENGINE, &[holding, pirate(2, 10.0, 0.0)]),
-            (Trigger::default(), None)
+            (
+                Trigger {
+                    point_defence: true,
+                    ..Trigger::default()
+                },
+                None
+            )
+        );
+    }
+
+    #[test]
+    fn attacking_and_defending_escorts_ask_for_point_defence_as_their_fight_does() {
+        for order in [EscortOrder::Attack, EscortOrder::Defend] {
+            let fighting = having(escort(Some(order)), Goal::Attack(n(2)), Some(n(2)));
+            let close = [fighting.clone(), pirate(2, 0.0, -100.0)];
+            assert!(command(ENGINE, &close).0.point_defence, "{order:?}");
+            // Approaching 300 to the right, facing up: off by 90.
+            let far = [fighting, pirate(2, 300.0, 0.0)];
+            assert!(!command(ENGINE, &far).0.point_defence, "{order:?}");
+        }
+        // Return to Hangar calls no turret (@0x83e79-0x83ea3).
+        let docking = having(
+            fighter(Some(EscortOrder::Dock)),
+            Goal::Dock(ShipRef::Player),
+            None,
+        );
+        assert_eq!(
+            command(ENGINE, &[docking, pirate(2, 0.0, -100.0)]).0,
+            Trigger::default()
         );
     }
 

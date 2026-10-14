@@ -913,6 +913,7 @@ mod tests {
     fn a_busy_mission_escort_is_just_an_escort_unless_it_is_already_on_its_way() {
         let mut npc = ship();
         npc.mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
             slot: 0,
             behav: ShipBehav::EscortPlayer,
             formation: Some(crate::escort::FormationSlot::default()),
@@ -1006,6 +1007,7 @@ mod tests {
             slot: 0,
             behav: ShipBehav::EscortPlayer,
             formation: Some(crate::escort::FormationSlot::default()),
+            order: None,
         });
         npc
     }

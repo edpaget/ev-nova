@@ -125,6 +125,9 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // Either Alt (Option on a Mac), which makes a trade the most
         // possible, and flight's weapon select go back, while held.
         PhysicalKey::Code(KeyCode::AltLeft | KeyCode::AltRight) => Key::Alt,
+        // Either Shift, which turns flight's target select key back while
+        // held.
+        PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight) => Key::Shift,
         // Either Control: flight's secondary fire key.
         PhysicalKey::Code(KeyCode::ControlLeft | KeyCode::ControlRight) => Key::Control,
         // Either Command (Super, the Windows key, off a Mac): what flight's
@@ -217,6 +220,8 @@ mod tests {
             (KeyCode::AltRight, Key::Alt),
             (KeyCode::ControlLeft, Key::Control),
             (KeyCode::ControlRight, Key::Control),
+            (KeyCode::ShiftLeft, Key::Shift),
+            (KeyCode::ShiftRight, Key::Shift),
             (KeyCode::KeyR, Key::Char('r')),
             (KeyCode::KeyK, Key::Char('k')),
             (KeyCode::SuperLeft, Key::Command),

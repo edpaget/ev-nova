@@ -678,6 +678,7 @@ fn mission_dude_ship(
     let ship = specific_dude_ship(table, spawn.dude, preset, Fallback::AllShips, gate, chance)?;
     Some(NewShip {
         mission: Some(MissionMark {
+            order: None,
             slot: spawn.slot,
             behav: spawn.behav,
             formation: None,
@@ -3018,6 +3019,7 @@ mod tests {
                 info_types: 0x0001,
                 person: None,
                 mission: Some(MissionMark {
+                    order: None,
                     slot: 3,
                     behav: ShipBehav::AttackPlayer,
                     formation: None,
@@ -3561,6 +3563,7 @@ mod tests {
                 info_types: 0x0001,
                 person: None,
                 mission: Some(MissionMark {
+                    order: None,
                     slot: 3,
                     behav: ShipBehav::AttackPlayer,
                     formation: None,
@@ -3596,6 +3599,7 @@ mod tests {
         assert_eq!(
             ship.mission,
             Some(MissionMark {
+                order: None,
                 slot: 3,
                 behav: ShipBehav::EscortPlayer,
                 formation: None,

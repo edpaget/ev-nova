@@ -814,6 +814,7 @@ impl Behaviour for Attacking {
             only: None,
             turrets_only: false,
             bays: false,
+            point_defence: false,
         }
     }
 
@@ -2519,6 +2520,33 @@ fn a_captured_escort_stays_beside_the_player_and_follows_it_through_a_jump() {
 }
 
 #[test]
+fn an_escort_command_given_during_a_jump_says_what_the_escorts_will_do() {
+    let store = MemoryPilots::new();
+    let mut game = escorted(&store, &[], &[130], |screen| screen);
+    game.tap(Key::Char('m'));
+    let beta = game.on_map(129);
+    game.click(beta);
+    game.tap(Key::Char('m'));
+    game.fly_out();
+    game.tap(Key::Char('j'));
+    for _ in 0..600 {
+        if game.session().jumping().is_some() {
+            break;
+        }
+        game.frame();
+    }
+    assert!(game.session().jumping().is_some(), "in hyperspace");
+    game.tap(Key::Char('v'));
+    let shown = run_texts(&game.frame());
+    assert!(
+        shown
+            .iter()
+            .any(|text| text == "New escort orders assigned:  All ships will hold position."),
+        "{shown:?}"
+    );
+}
+
+#[test]
 fn f_sends_the_escorts_at_the_pirate_targeted() {
     let store = MemoryPilots::new();
     let mut game = escorted(&store, &[129], &[130], |screen| screen);
@@ -2829,7 +2857,7 @@ impl Behaviour for Raider {
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> nova_sim::Trigger {
-        nova_sim::ai::fire::trigger(npc, around)
+        nova_sim::ai::fire::trigger(npc, around, nova_sim::ai::fire::FireRules::default())
     }
 
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<nova_sim::ShipRef> {

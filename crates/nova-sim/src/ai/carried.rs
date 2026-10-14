@@ -16,6 +16,7 @@
 //! - It fires as any ship does at what it attacks ([`fire::trigger`]),
 //!   targets that ship, and reacts to no hit.
 
+use crate::ai::fire::FireRules;
 use crate::ai::{Behaviour, Goal, Surroundings, fire};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -24,7 +25,10 @@ use crate::traffic::npc::Npc;
 
 /// An NPC carrier's fighters' AI (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CarriedAi;
+pub struct CarriedAi {
+    /// The rulebook's entries its weapon pick follows.
+    pub fire: FireRules,
+}
 
 impl Behaviour for CarriedAi {
     fn decide(&self, npc: &Npc, around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
@@ -44,7 +48,7 @@ impl Behaviour for CarriedAi {
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
-        fire::trigger(npc, around)
+        fire::trigger(npc, around, self.fire)
     }
 
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
@@ -107,7 +111,7 @@ mod tests {
             ..Surroundings::new(&[], npcs)
         };
         let mut chance = Draws::of(&[]);
-        let goal = CarriedAi.decide(&npcs[1], &around, &mut chance);
+        let goal = CarriedAi::default().decide(&npcs[1], &around, &mut chance);
         assert_eq!(chance.asked, [0_u32; 0], "no draws");
         goal
     }
@@ -181,12 +185,21 @@ mod tests {
             player: Some(player(50.0, -100.0)),
             ..Surroundings::new(&[], &npcs)
         };
-        let fired = CarriedAi.trigger(&attacking, &around);
-        assert_eq!(fired, fire::trigger(&attacking, &around));
+        let fired = CarriedAi::default().trigger(&attacking, &around);
+        assert_eq!(
+            fired,
+            fire::trigger(&attacking, &around, FireRules::default())
+        );
         assert_eq!(fired.only, Some(WeaponId(141)), "the gun ahead");
-        assert_eq!(CarriedAi.target(&attacking, &around), Some(ShipRef::Player));
-        assert_eq!(CarriedAi.trigger(&docking, &around), Trigger::default());
-        assert_eq!(CarriedAi.target(&docking, &around), None);
+        assert_eq!(
+            CarriedAi::default().target(&attacking, &around),
+            Some(ShipRef::Player)
+        );
+        assert_eq!(
+            CarriedAi::default().trigger(&docking, &around),
+            Trigger::default()
+        );
+        assert_eq!(CarriedAi::default().target(&docking, &around), None);
         let strike = crate::combat::Strike {
             ship: n(2),
             by: ShipRef::Player,
@@ -194,7 +207,7 @@ mod tests {
             downed: None,
         };
         assert_eq!(
-            CarriedAi.react(&attacking, &strike, &around),
+            CarriedAi::default().react(&attacking, &strike, &around),
             crate::ai::Reaction::default()
         );
     }

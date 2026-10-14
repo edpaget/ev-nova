@@ -132,6 +132,11 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Ui(UiSound::ButtonDown) => self.play(self.table.button_down),
                 Sound::Ui(UiSound::ButtonUp) => self.play(self.table.button_up),
                 Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
+                Sound::Sim(SimSound::EscortsCommanded) => self.play(self.table.escorts_commanded),
+                Sound::Sim(SimSound::EscortRepaired) => self.play(self.table.escort_repaired),
+                Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
+                Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
+                Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
                 Sound::Ui(UiSound::NewsOpened) => self.play(self.table.news_open),
                 Sound::Ui(UiSound::NewsClosed) => self.play(self.table.news_close),
                 Sound::Combat(fight) => {
@@ -417,6 +422,39 @@ mod tests {
                 play(601, 1.0)
             ]
         );
+    }
+
+    #[test]
+    fn the_escort_menu_and_commands_beep_as_the_original_does() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Ui(UiSound::EscortMenuToggled),
+                Sound::Sim(SimSound::EscortsCommanded),
+                Sound::Ui(UiSound::EscortGroupSelected),
+                Sound::Ui(UiSound::NoEscorts),
+            ],
+        );
+        assert_eq!(
+            drain(&log),
+            [
+                play(150, 1.0),
+                play(151, 1.0),
+                play(152, 1.0),
+                play(153, 1.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_escort_repairing_itself_and_rejoining_beeps() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::EscortRepaired)],
+        );
+        assert_eq!(drain(&log), [play(154, 1.0)]);
     }
 
     #[test]

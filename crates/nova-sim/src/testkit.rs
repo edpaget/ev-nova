@@ -397,6 +397,7 @@ pub(crate) fn hull(id: i16) -> HullRecord {
         size: None,
         height: None,
         strength: 0,
+        key_carried: None,
     }
 }
 
@@ -461,6 +462,7 @@ pub(crate) fn person(id: i16, ship: i16) -> PersonRecord {
 pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
     Npc {
         id: NpcId(id),
+        berth: 0,
         ship: ShipId(128),
         govt: None,
         ai_type: AiType::WimpyTrader,
@@ -492,6 +494,9 @@ pub(crate) fn npc(id: u32, stats: ShipStats) -> Npc {
         aux: None,
         cloak: crate::cloak::Cloak::default(),
         cloak_gear: crate::cloak::CloakGear::default(),
+        led_out: false,
+        self_repair: false,
+        former: None,
     }
 }
 

@@ -30,6 +30,16 @@ pub struct SoundTable {
     pub alert: Option<SoundId>,
     /// Plays as a `Q` set operator's message is shown in flight.
     pub script_message: Option<SoundId>,
+    /// Plays as the escort menu opens or closes.
+    pub escort_menu: Option<SoundId>,
+    /// Plays as an escort command changes some escort's orders.
+    pub escorts_commanded: Option<SoundId>,
+    /// Plays as the escort menu selects a group.
+    pub escort_group: Option<SoundId>,
+    /// Plays as the player asks for the escort menu with no escorts.
+    pub no_escorts: Option<SoundId>,
+    /// Plays as a disabled former escort repairs itself and rejoins.
+    pub escort_repaired: Option<SoundId>,
     /// Plays as the player becomes threatened: the Red Alert.
     pub red_alert: Option<SoundId>,
     /// Plays as cargo is jettisoned in flight.
@@ -71,6 +81,20 @@ impl SoundTable {
     ///   from `snd ` 150 to 154 into `_beepSnd` (@0x1c174), which
     ///   `_PlayGame` plays as it shows a `Q`'s message in flight
     ///   (`_beepSnd[4]`, @0x4657a).
+    /// - `escort_menu`: 150, `_beepSnd[0]`, which `_HandlePlayer` plays as
+    ///   E opens the escort menu (@0x6de8c-0x6deb4) and closes it
+    ///   (@0x6e02b-0x6e04d).
+    /// - `escorts_commanded`: 151, `_beepSnd[1]`, which
+    ///   `_IssueNewEscortCommand` plays after "New escort orders assigned:"
+    ///   (@0x665be-0x665e1).
+    /// - `escort_group`: 152, `_beepSnd[2]`, as keys 1-5 select a group
+    ///   (`_HandlePlayer` @0x6e126-0x6e149).
+    /// - `no_escorts`: 153, `_beepSnd[3]`, with "You don't have any
+    ///   escorts." (`_HandlePlayer` @0x6de08-0x6de87).
+    /// - `escort_repaired`: 154, `_beepSnd[4]`, which `_HandleShip` plays
+    ///   after "Escort repaired." or "Fighter repaired." as a former
+    ///   escort rejoins (@0x33bc9-0x33bd4). The original plays it on
+    ///   channel 8, which is not modelled.
     /// - `red_alert`: 370, "Red Alert", which `_LoadSounds` loads into
     ///   `_redAlertSnd` (@0x1c218-0x1c22a) and `_HandlePlayer` plays
     ///   (@0x68cff). The original plays it at priority 5; the audio port
@@ -99,6 +123,11 @@ impl SoundTable {
         button_up: Some(SoundId(601)),
         alert: None,
         script_message: Some(SoundId(154)),
+        escort_menu: Some(SoundId(150)),
+        escorts_commanded: Some(SoundId(151)),
+        escort_group: Some(SoundId(152)),
+        no_escorts: Some(SoundId(153)),
+        escort_repaired: Some(SoundId(154)),
         red_alert: Some(SoundId(370)),
         jettison: Some(SoundId(154)),
         scan_failed: Some(SoundId(151)),
@@ -124,6 +153,11 @@ mod tests {
         assert_eq!(table.button_up, Some(SoundId(601)), "Menu button up");
         assert_eq!(table.alert, None, "the system's alert");
         assert_eq!(table.script_message, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.escort_menu, Some(SoundId(150)), "_beepSnd[0]");
+        assert_eq!(table.escorts_commanded, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.escort_group, Some(SoundId(152)), "_beepSnd[2]");
+        assert_eq!(table.no_escorts, Some(SoundId(153)), "_beepSnd[3]");
+        assert_eq!(table.escort_repaired, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.red_alert, Some(SoundId(370)), "Red Alert");
         assert_eq!(table.jettison, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.scan_failed, Some(SoundId(151)), "_beepSnd[1]");

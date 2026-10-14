@@ -213,8 +213,9 @@
 //!   while held. W (a press) selects the next secondary weapon, and with
 //!   Alt (Option) the one before. Tab (a press) targets the next ship in
 //!   turn, R the nearest threat, and Alt-R (Option-R) the nearest ship
-//!   ([`TargetPick`]). The original's Shift-Tab, back through the ships,
-//!   is not bound: there is no Shift key yet.
+//!   ([`TargetPick`]). Shift-Tab targets back through the ships, and
+//!   Shift-Alt-Tab (Shift-Option-Tab) back through the escorts, as the
+//!   original's `_FindPrevShipInSystem` does.
 //! - B (a press) boards the target when the session allows it
 //!   ([`Session::board`]), by the screen's [`BoardingRule`]
 //!   ([`FlightView::with_boarding_rule`]; [`NovaBoarding`] by default),
@@ -270,9 +271,16 @@
 //!   its group (rather than a stellar) and Return closes it. The menu is drawn over the flight,
 //!   under the HUD, in the colours the [`EscortMenuLooks`] port gives,
 //!   read when the screen is built. Option-Tab targets the next escort
-//!   ([`TargetPick::NextEscort`]), as for a hail. The escorts' standing
+//!   ([`TargetPick::NextEscort`]), and Shift-Option-Tab the one before
+//!   ([`TargetPick::PreviousEscort`]), as for a hail. The escorts' standing
 //!   orders reset, or not, on entering a system as the session's rule
-//!   set says ([`FlightView::with_rules`]).
+//!   set says ([`FlightView::with_rules`]). While a jump is under way,
+//!   the ship braking and turning for it or the stars streaking, the
+//!   escort menu's keys are the only ones taken, as the original runs its
+//!   escort block on every frame of a jump but the arrival
+//!   (`_HandlePlayer` @0x6dd00-0x6e452): a command then says what the
+//!   escorts will do ("will hold position."), and the menu still times
+//!   out.
 //! - The player's fighters launch from its bays as its secondary weapon
 //!   (W selects a bay, Ctrl launches), and the fighter types every bay in
 //!   the system launches have their sheets read with the traffic's. What
@@ -335,6 +343,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::cloak::{CloakShown, TRANSLUCENCY_STEPS};
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::offer_gap;
 use nova_sim::mission::screens::{NO_ACTIVE_MISSIONS, mac_ticks};
@@ -390,7 +399,7 @@ use crate::ui::PlunderShown;
 use crate::ui::comm::grouped;
 use crate::{
     Color, Diagnostic, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction,
-    Sound, SoundPrefs,
+    Sound, SoundPrefs, UiSound,
 };
 
 /// The developer overlays: the system's title and the help line.
@@ -500,8 +509,9 @@ pub fn assigned_ticks(assigned: Assigned) -> u16 {
 }
 
 /// The keys flight holds: the original's defaults, Alt, which turns the
-/// weapon select key back, and Command, which the jettison key needs.
-const FLIGHT_KEYS: [Key; 8] = [
+/// weapon select key back, Shift, which turns the target select key back,
+/// and Command, which the jettison key needs.
+const FLIGHT_KEYS: [Key; 9] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -509,6 +519,7 @@ const FLIGHT_KEYS: [Key; 8] = [
     FIRE_KEY,
     SECONDARY_KEY,
     Key::Alt,
+    Key::Shift,
     Key::Command,
 ];
 
@@ -567,6 +578,12 @@ pub const MISSION_FAILED: &str = "Mission failed.";
 pub const CARGO_JETTISONED: &str = "Cargo jettisoned.";
 /// `STR#` 2002 #290: all but the mission cargo was jettisoned.
 pub const NON_MISSION_CARGO_JETTISONED: &str = "Non-mission cargo jettisoned.";
+/// `STR#` 2002 #127: a disabled former escort repaired itself and
+/// rejoined the fleet (`_HandleShip` @0x33b5a).
+pub const ESCORT_REPAIRED: &str = "Escort repaired.";
+/// `STR#` 2002 #128: a disabled former fighter did (`_HandleShip`
+/// @0x33b3b).
+pub const FIGHTER_REPAIRED: &str = "Fighter repaired.";
 
 /// `STR#` 2002 #286: a scan found a mission's cargo and failed it.
 pub const MISSION_SCANNED: &str = "Your ship has been scanned - mission failed.";
@@ -666,6 +683,8 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
         SimMessage::NonMissionCargoJettisoned => NON_MISSION_CARGO_JETTISONED,
         SimMessage::MissionScanned => MISSION_SCANNED,
         SimMessage::DeadlineMissed => TIME_LIMIT_EXCEEDED,
+        SimMessage::EscortRepaired => ESCORT_REPAIRED,
+        SimMessage::FighterRepaired => FIGHTER_REPAIRED,
         SimMessage::Smuggling {
             scanner,
             ship_name,
@@ -899,6 +918,8 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::NonMissionCargoJettisoned
         | SimMessage::MissionScanned
         | SimMessage::DeadlineMissed
+        | SimMessage::EscortRepaired
+        | SimMessage::FighterRepaired
         | SimMessage::Smuggling { .. }
         | SimMessage::IllegalJunk { .. }
         | SimMessage::IllegalOutfit { .. } => None,
@@ -1422,6 +1443,8 @@ pub struct FlightView<C> {
     metrics: Option<Metrics>,
     /// The escort menu, shut or open.
     escort_menu: EscortMenu,
+    /// The escort menu's beeps not yet taken ([`Screen::take_sounds`]).
+    ui_sounds: Vec<UiSound>,
     /// The escort menu's colours, read once.
     escort_colors: EscortMenuColors,
     /// When the HUD refreshes, and the radar target's blink.
@@ -1626,6 +1649,7 @@ impl<
             effects_chance: SharedChance::default(),
             metrics: None,
             escort_menu: EscortMenu::default(),
+            ui_sounds: Vec::new(),
             escort_colors,
             hud_cadence: HudCadence::default(),
             radar_scene: None,
@@ -3237,29 +3261,55 @@ impl<C> FlightView<C> {
             .collect()
     }
 
-    /// Draws each NPC with its own ship's sprite, or a crossed box when its
-    /// sheet cannot be read, but for one the player cannot see for its
-    /// cloak ([`sprite_drawn`]). One waiting at the gate it comes out of
-    /// is hidden, then fades in over its last ticks there ([`npc_tint`]).
-    fn draw_npcs(&self, list: &mut DrawList, camera: &Camera) {
+    /// Draws the ships, bottom first, in their layers as
+    /// [`Session::draw_order`] gives them (see [`nova_sim::ship_layer`]):
+    /// the disabled, then the ships the player leads, then the rest, each
+    /// layer in the order the session's rules overlap them. Without a
+    /// session it draws the player alone.
+    /// The order and each cloak's level are read from the session as the
+    /// frame is drawn, so nothing waits past it.
+    fn draw_ships(&self, list: &mut DrawList, camera: &Camera) {
+        let player = camera.world_to_screen(self.shown_position());
         let Ok(session) = &self.session else {
+            self.draw_ship(list, player);
             return;
         };
-        for (npc, at, heading) in self.shown_npcs() {
-            if !sprite_drawn(session, npc) {
-                continue;
-            }
-            let Some(tint) = npc_tint(npc) else {
-                continue;
-            };
-            let at = camera.world_to_screen(at);
-            match self.npc_sheets.get(&npc.ship) {
-                Some(Ok(sheet)) => {
-                    let frame = rotation_frame(heading, sheet.rotations);
-                    list.sprite(ImageKey::sprite(sheet.image_id, frame), at, tint);
+        let npcs = self.shown_npcs();
+        for ship in session.draw_order() {
+            match ship {
+                ShipRef::Player => self.draw_ship(list, player),
+                ShipRef::Npc(id) => {
+                    if let Some(&(npc, at, heading)) = npcs.iter().find(|(npc, ..)| npc.id == id) {
+                        self.draw_npc(list, session, npc, camera.world_to_screen(at), heading);
+                    }
                 }
-                _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
             }
+        }
+    }
+
+    /// Draws `npc` at `at` facing `heading` with its own ship's sprite, or a
+    /// crossed box when its sheet cannot be read, at the alpha its cloak
+    /// leaves ([`cloak_alpha`]); not at all when its cloak hides it. One
+    /// waiting at the gate it comes out of is hidden, then fades in over
+    /// its last ticks there ([`npc_tint`]).
+    fn draw_npc(&self, list: &mut DrawList, session: &Session, npc: &Npc, at: Point, heading: f32) {
+        let Some(cloak) = cloak_alpha(session.cloak_shown(npc)) else {
+            return;
+        };
+        let Some(tint) = npc_tint(npc) else {
+            return;
+        };
+        let alpha = (u16::from(tint.a) * u16::from(cloak) + 127) / 255;
+        let tint = Color {
+            a: u8::try_from(alpha).unwrap_or(u8::MAX),
+            ..tint
+        };
+        match self.npc_sheets.get(&npc.ship) {
+            Some(Ok(sheet)) => {
+                let frame = rotation_frame(heading, sheet.rotations);
+                list.sprite(ImageKey::sprite(sheet.image_id, frame), at, tint);
+            }
+            _ => crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER),
         }
     }
 
@@ -3317,23 +3367,18 @@ impl<C> FlightView<C> {
         }
     }
 
-    /// A press of `key`, if it picks an escort group or works the stellar
-    /// navigation target. While the escort menu is open, 1-5 pick its
-    /// groups ([`GROUP_KEYS`]); otherwise 1-4, like F1-F4 always, select
-    /// the stellar in their slot ([`STELLAR_SLOT_KEYS`]). F5 selects the
-    /// nearest ([`NEAREST_STELLAR_KEY`]) and Nav Off clears it
-    /// ([`NAV_OFF_KEY`]).
+    /// A press of `key`, if it works the stellar navigation target. 1-4,
+    /// like F1-F4, select the stellar in their slot
+    /// ([`STELLAR_SLOT_KEYS`]); while the escort menu is open, 1-5 pick
+    /// its groups instead and never reach here ([`FlightView::escort_key`]).
+    /// F5 selects the nearest ([`NEAREST_STELLAR_KEY`]) and Nav Off
+    /// clears it ([`NAV_OFF_KEY`]).
     fn nav_key(&mut self, key: Key) {
-        let group = GROUP_KEYS.iter().position(|&group| group == key);
         let slot = STELLAR_SLOT_KEYS
             .iter()
             .position(|keys| keys.contains(&key));
-        match (group, slot) {
-            (Some(n), _) if self.escort_menu.is_open() => {
-                let rows = self.escort_rows();
-                self.escort_menu.select(n, self.elapsed, &rows);
-            }
-            (_, Some(slot)) => self.select_stellar(StellarPick::Slot(slot)),
+        match slot {
+            Some(slot) => self.select_stellar(StellarPick::Slot(slot)),
             _ if key == NEAREST_STELLAR_KEY => self.select_stellar(StellarPick::Nearest),
             _ if key == NAV_OFF_KEY => {
                 if let Ok(session) = &mut self.session {
@@ -3379,15 +3424,84 @@ impl<C> FlightView<C> {
         )
     }
 
+    /// Selects the escort menu's group `n` (keys 1-5), if the player has
+    /// an escort of it.
+    fn select_escort_group(&mut self, n: usize) {
+        let rows = self.escort_rows();
+        if self.escort_menu.select(n, self.elapsed, &rows) {
+            self.ui_sounds.push(UiSound::EscortGroupSelected);
+        }
+    }
+
+    /// A press of `key`, if it is one of the escort menu's: E, Return,
+    /// 1-5 while the menu is open, and F, D, V and C (Option-C Return to
+    /// Hangar). Whether it was one.
+    fn escort_key(&mut self, key: Key) -> bool {
+        let group = GROUP_KEYS.iter().position(|&group| group == key);
+        match key {
+            MENU_KEY => self.toggle_escort_menu(),
+            MENU_CLOSE_KEY => self.acknowledge(),
+            ESCORT_ATTACK_KEY => self.command_escorts(EscortCommand::Attack),
+            ESCORT_DEFEND_KEY => self.command_escorts(EscortCommand::Defend),
+            ESCORT_HOLD_KEY => self.command_escorts(EscortCommand::Hold),
+            ESCORT_RECALL_KEY => self.command_escorts(if self.held.contains(&Key::Alt) {
+                EscortCommand::Dock
+            } else {
+                EscortCommand::Recall
+            }),
+            _ => match group {
+                Some(n) if self.escort_menu.is_open() => self.select_escort_group(n),
+                _ => return false,
+            },
+        }
+        true
+    }
+
+    /// An input while a jump is under way, the pre-jump stage included:
+    /// only the escort menu's keys are taken ([`FlightView::escort_key`]),
+    /// as the original's `_HandlePlayer` runs its escort block on every
+    /// frame of a jump but the arrival (@0x6dd00-0x6e452), and Option is
+    /// tracked because it reads it live for Option-C (@0x6e207). Every
+    /// other key is dropped.
+    fn jump_input(&mut self, input: &Input) {
+        match *input {
+            Input::Key {
+                key: Key::Alt,
+                pressed,
+                ..
+            } => {
+                if pressed {
+                    self.held.insert(Key::Alt);
+                } else {
+                    self.held.remove(&Key::Alt);
+                }
+            }
+            Input::Key {
+                key,
+                pressed: true,
+                repeat: false,
+            } => {
+                self.escort_key(key);
+            }
+            _ => {}
+        }
+    }
+
     /// E: opens or closes the escort menu, or says the player has no
     /// escorts. Opening it clears [`NO_ESCORTS`] from the message line,
     /// and only that (`_HandlePlayer` @0x6dedb-0x6df29).
     fn toggle_escort_menu(&mut self) {
         let rows = self.escort_rows();
         match self.escort_menu.toggle(self.elapsed, &rows) {
-            Toggled::NoEscorts => self.say_for(NO_ESCORTS, ESCORT_TICKS),
-            Toggled::Opened => self.clear_message(NO_ESCORTS),
-            Toggled::Closed => {}
+            Toggled::NoEscorts => {
+                self.say_for(NO_ESCORTS, ESCORT_TICKS);
+                self.ui_sounds.push(UiSound::NoEscorts);
+            }
+            Toggled::Opened => {
+                self.clear_message(NO_ESCORTS);
+                self.ui_sounds.push(UiSound::EscortMenuToggled);
+            }
+            Toggled::Closed => self.ui_sounds.push(UiSound::EscortMenuToggled),
         }
     }
 
@@ -3409,6 +3523,15 @@ impl<C> FlightView<C> {
             self.escort_menu.touch(self.elapsed);
             self.say_for(escort_command_message(&commanded), ESCORT_TICKS);
         }
+    }
+
+    /// Closes the escort menu once it has timed out or the fleet is empty
+    /// ([`EscortMenu::update`]), every frame, the streak's included, as
+    /// the original checks it on every frame of a jump (@0x6df59).
+    fn update_escort_menu(&mut self) {
+        let rows = self.escort_rows();
+        let flying = self.session.as_ref().is_ok_and(Session::escorts_flying);
+        self.escort_menu.update(self.elapsed, &rows, flying);
     }
 
     /// The escort menu, shut or open.
@@ -3621,9 +3744,12 @@ impl<
         + EscortMenuLooks,
 > Screen for FlightView<C>
 {
-    /// Never quits: Escape is the router's.
+    /// Never quits: Escape is the router's. While a jump is under way,
+    /// the pre-jump stage included, only the escort menu's keys, and
+    /// Option, are taken (see the module docs).
     fn input(&mut self, input: &Input) -> ScreenAction {
         if self.jump.is_some() || self.preparing_jump() {
+            self.jump_input(input);
             return ScreenAction::None;
         }
         let press = match *input {
@@ -3680,21 +3806,18 @@ impl<
                 }
                 return ScreenAction::None;
             }
-            Some(TARGET_KEY) => self.select_target(if self.held.contains(&Key::Alt) {
-                TargetPick::NextEscort
-            } else {
-                TargetPick::Next
-            }),
-            Some(MENU_KEY) => self.toggle_escort_menu(),
-            Some(MENU_CLOSE_KEY) => self.acknowledge(),
-            Some(ESCORT_ATTACK_KEY) => self.command_escorts(EscortCommand::Attack),
-            Some(ESCORT_DEFEND_KEY) => self.command_escorts(EscortCommand::Defend),
-            Some(ESCORT_HOLD_KEY) => self.command_escorts(EscortCommand::Hold),
-            Some(ESCORT_RECALL_KEY) => self.command_escorts(if self.held.contains(&Key::Alt) {
-                EscortCommand::Dock
-            } else {
-                EscortCommand::Recall
-            }),
+            Some(TARGET_KEY) => self.select_target(
+                match (
+                    self.held.contains(&Key::Shift),
+                    self.held.contains(&Key::Alt),
+                ) {
+                    (false, false) => TargetPick::Next,
+                    (false, true) => TargetPick::NextEscort,
+                    (true, false) => TargetPick::Previous,
+                    (true, true) => TargetPick::PreviousEscort,
+                },
+            ),
+            Some(key) if self.escort_key(key) => {}
             Some(NEAREST_KEY) => self.select_target(if self.held.contains(&Key::Alt) {
                 TargetPick::Nearest
             } else {
@@ -3731,7 +3854,9 @@ impl<
     /// jump's effect moves, and the ship arrives when the effect says.
     /// From then on the session flies again while the rest of the effect,
     /// the fade-in or the white flash, plays over it; that plays on with
-    /// the map open too, as the original's display fade does.
+    /// the map open too, as the original's display fade does. The escort
+    /// menu times out on every step the map is shut, the streak's
+    /// included.
     ///
     /// Then, unless the map is open, the HUD's timer moves on, refreshing
     /// the radar when it is due ([`FlightView::advance_hud`]), still
@@ -3753,6 +3878,7 @@ impl<
                 self.arrive();
                 self.fade_in = self.jump.take().filter(|effect| !effect.done());
             }
+            self.update_escort_menu();
             self.advance_hud();
             return;
         }
@@ -3809,8 +3935,7 @@ impl<
         self.say_messages();
         // The session may have populated its system afresh.
         self.read_npc_sheets();
-        let rows = self.escort_rows();
-        self.escort_menu.update(self.elapsed, &rows);
+        self.update_escort_menu();
         self.alpha = alpha;
         self.start_streak_if_jumping();
         self.advance_hud();
@@ -3849,8 +3974,7 @@ impl<
         boxes::draw_boxes(list, &self.shown_boxes(&camera), &self.looks);
         let beams = self.shown_beams(&camera);
         weapons::draw_beams(list, &beams, &self.looks, true);
-        self.draw_npcs(list, &camera);
-        self.draw_ship(list, camera.world_to_screen(self.shown_position()));
+        self.draw_ships(list, &camera);
         weapons::draw_shots(list, &self.shown_shots(&camera), &self.looks);
         weapons::draw_beams(list, &beams, &self.looks, false);
         self.effects.draw(list, &camera, &self.looks);
@@ -3913,6 +4037,7 @@ impl<
             .as_mut()
             .map(|session| session.take_sounds().into_iter().map(Sound::Sim).collect())
             .unwrap_or_default();
+        sounds.extend(self.ui_sounds.drain(..).map(Sound::Ui));
         sounds.extend(self.effects.take_sounds().into_iter().map(Sound::Combat));
         sounds
     }
@@ -3971,13 +4096,23 @@ fn dying(
     me.into_iter().chain(npcs).collect()
 }
 
-/// Whether `npc`'s sprite may be drawn for its cloak: not while the
-/// player cannot see past it ([`Session::sees_past_cloak`]). A ship
-/// waiting at the gate it comes out of is hidden, then faded in, by its
-/// tint ([`npc_tint`]), as `_HandleShipDisplay` (@0x2c090-0x2c18e) fades
-/// it. The radar still shows it, as `_DrawStatusRadar` does not ask.
-fn sprite_drawn(session: &Session, npc: &Npc) -> bool {
-    session.sees_past_cloak(npc)
+/// The alpha a ship's sprite is drawn with for how its cloak shows it
+/// ([`Session::cloak_shown`]), or `None` when it is not drawn: full when
+/// opaque, and a translucency of n 64ths leaving (64 - n) 64ths of full
+/// alpha, rounded to nearest. A ship waiting at the gate it comes out of
+/// is hidden, then faded in, by its tint ([`npc_tint`]), as
+/// `_HandleShipDisplay` (@0x2c090-0x2c18e) fades it. The radar still shows
+/// a cloaked ship, as `_DrawStatusRadar` does not ask.
+fn cloak_alpha(shown: CloakShown) -> Option<u8> {
+    match shown {
+        CloakShown::Opaque => Some(u8::MAX),
+        CloakShown::Translucent(level) => {
+            let steps = u16::from(TRANSLUCENCY_STEPS);
+            let left = steps - u16::from(level.min(TRANSLUCENCY_STEPS));
+            u8::try_from((left * 255 + steps / 2) / steps).ok()
+        }
+        CloakShown::Hidden => None,
+    }
 }
 
 /// Each of `shown` the radar shows, where it is drawn, whether it is the
@@ -8943,17 +9078,22 @@ mod tests {
         view.tick(TICK);
         let session = view.session().expect("flying");
         let mut npc = session.npcs()[0].clone();
-        assert!(sprite_drawn(session, &npc), "flying");
+        let opaque = CloakShown::Opaque;
+        assert_eq!(session.cloak_shown(&npc), opaque, "flying");
         npc.mode = nova_sim::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
-        assert!(sprite_drawn(session, &npc), "jumping in");
+        assert_eq!(session.cloak_shown(&npc), opaque, "jumping in");
         npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
-        assert!(sprite_drawn(session, &npc), "fading in at its gate");
+        assert_eq!(session.cloak_shown(&npc), opaque, "fading in at its gate");
         npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 30 };
-        assert!(sprite_drawn(session, &npc));
+        assert_eq!(session.cloak_shown(&npc), opaque);
         assert_eq!(npc_tint(&npc), None, "hidden at its gate");
         npc.cloak = CLOAKED;
         npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
-        assert!(!sprite_drawn(session, &npc), "cloaked at its gate");
+        assert_eq!(
+            session.cloak_shown(&npc),
+            CloakShown::Hidden,
+            "cloaked at its gate"
+        );
     }
 
     /// A full cloak.
@@ -8972,10 +9112,14 @@ mod tests {
         let session = view.session().expect("flying");
         let mut npc = session.npcs()[0].clone();
         npc.cloak = CLOAKED;
-        assert!(!sprite_drawn(session, &npc), "cloaked");
+        assert_eq!(session.cloak_shown(&npc), CloakShown::Hidden, "cloaked");
         npc.cloak.direction = -1;
         npc.cloak.fade = 8.0;
-        assert!(sprite_drawn(session, &npc), "faded out enough to be seen");
+        assert_eq!(
+            session.cloak_shown(&npc),
+            CloakShown::Opaque,
+            "faded out enough to be seen"
+        );
     }
 
     #[test]
@@ -9350,6 +9494,7 @@ mod tests {
                 only: None,
                 turrets_only: false,
                 bays: false,
+                point_defence: false,
             }
         }
     }
@@ -9402,6 +9547,7 @@ mod tests {
             size: None,
             height: None,
             strength: 0,
+            key_carried: None,
         };
         let (_, chance) = scripted(&placed(850, 650, 90));
         let catalog = FakeCatalog {
@@ -9538,6 +9684,7 @@ mod tests {
             size: None,
             height: None,
             strength: 0,
+            key_carried: None,
         }
     }
 
@@ -10023,6 +10170,7 @@ mod tests {
                 only: None,
                 turrets_only: false,
                 bays: false,
+                point_defence: false,
             }
         }
     }
@@ -10719,6 +10867,7 @@ mod tests {
                 only: None,
                 turrets_only: false,
                 bays: false,
+                point_defence: false,
             }
         }
 
@@ -11923,6 +12072,61 @@ mod tests {
         );
     }
 
+    /// The interface sounds `view` holds, taken.
+    fn ui_sounds(view: &mut View) -> Vec<UiSound> {
+        view.take_sounds()
+            .into_iter()
+            .filter_map(|sound| match sound {
+                Sound::Ui(sound) => Some(sound),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_escort_menus_keys_beep_as_the_original_does() {
+        let mut view = escorted();
+        view.take_sounds();
+        tap(&mut view, MENU_KEY);
+        assert_eq!(ui_sounds(&mut view), [UiSound::EscortMenuToggled], "opened");
+        let rows = view.session().expect("flying").escort_menu();
+        let present = |n: usize| match EscortGroup::ALL[n] {
+            EscortGroup::All => true,
+            EscortGroup::Class(class) => rows.iter().any(|row| row.class == class && row.present),
+        };
+        let absent = (1..5).find(|&n| !present(n)).expect("an absent class");
+        let own = (1..5).find(|&n| present(n)).expect("the escort's class");
+        tap(&mut view, GROUP_KEYS[absent]);
+        assert_eq!(ui_sounds(&mut view), [], "an absent class is not selected");
+        tap(&mut view, GROUP_KEYS[own]);
+        assert_eq!(ui_sounds(&mut view), [UiSound::EscortGroupSelected]);
+        tap(&mut view, ESCORT_HOLD_KEY);
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::EscortsCommanded)],
+            "_beepSnd[1]"
+        );
+        tap(&mut view, MENU_KEY);
+        assert_eq!(ui_sounds(&mut view), [UiSound::EscortMenuToggled], "closed");
+        tap(&mut view, MENU_KEY);
+        view.take_sounds();
+        view.tick(super::super::escorts::MENU_TIMEOUT + TICK);
+        assert!(!view.escort_menu().is_open());
+        assert_eq!(ui_sounds(&mut view), [], "it fades silently");
+    }
+
+    #[test]
+    fn e_with_no_escorts_beeps_no_escorts() {
+        let catalog = boardable();
+        let pilot = Pilot::new(&catalog, "Alone").expect("starts");
+        let mut view = FlightView::with_pilot(catalog, pilot).with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        view.take_sounds();
+        tap(&mut view, MENU_KEY);
+        assert_eq!(view.message(), Some(NO_ESCORTS));
+        assert_eq!(ui_sounds(&mut view), [UiSound::NoEscorts]);
+    }
+
     #[test]
     fn a_command_that_changes_nothing_says_nothing() {
         let mut view = escorted();
@@ -12025,6 +12229,140 @@ mod tests {
         assert_eq!(MENU_CLOSE_KEY, Key::Enter);
     }
 
+    /// [`escorted`], its course to Alpha Centauri plotted and the ship
+    /// flown out far enough to jump.
+    fn escorted_out() -> View {
+        let mut view = escorted();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view
+    }
+
+    #[test]
+    fn escort_keys_are_taken_while_the_jump_plays() {
+        let mut view = escorted_out();
+        jump_now(&mut view);
+        view.tick(ms(300));
+        view.take_sounds();
+        tap(&mut view, ESCORT_HOLD_KEY);
+        assert_eq!(orders(&view), [Some(EscortOrder::Hold)]);
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  All ships will hold position.")
+        );
+        assert!(
+            view.take_sounds()
+                .contains(&Sound::Sim(SimSound::EscortsCommanded)),
+            "_beepSnd[1]"
+        );
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        assert_eq!(ui_sounds(&mut view), [UiSound::EscortMenuToggled]);
+        tap(&mut view, GROUP_KEYS[3]);
+        assert_eq!(
+            view.escort_menu().group(),
+            EscortGroup::Class(EscortClass::Warship)
+        );
+        assert_eq!(ui_sounds(&mut view), [UiSound::EscortGroupSelected]);
+        tap(&mut view, ESCORT_DEFEND_KEY);
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  Warships will defend.")
+        );
+        tap(&mut view, MENU_CLOSE_KEY);
+        assert!(!view.escort_menu().is_open(), "Return closes it");
+        assert!(view.jump_effect().is_some(), "the streak plays on");
+        arrive_now(&mut view);
+        assert_eq!(view.session().expect("flying").system(), SystemId(131));
+    }
+
+    #[test]
+    fn escort_keys_are_taken_while_the_ship_brakes_to_jump() {
+        let mut view = escorted_out();
+        view.input(&key(JUMP, true));
+        assert!(view.preparing_jump(), "braking");
+        tap(&mut view, ESCORT_DEFEND_KEY);
+        assert_eq!(orders(&view), [Some(EscortOrder::Defend)]);
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  All ships will defend.")
+        );
+    }
+
+    #[test]
+    fn option_c_during_the_jump_is_return_to_hangar() {
+        let mut view = escorted_out();
+        tap(&mut view, ESCORT_HOLD_KEY);
+        jump_now(&mut view);
+        view.input(&key(Key::Alt, true));
+        view.tick(ms(300));
+        tap(&mut view, ESCORT_RECALL_KEY);
+        view.input(&key(Key::Alt, false));
+        assert_eq!(orders(&view), [None], "Return to Hangar: no fighter");
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  All ships will return to formation.")
+        );
+        tap(&mut view, ESCORT_HOLD_KEY);
+        tap(&mut view, ESCORT_RECALL_KEY);
+        assert_eq!(orders(&view), [None]);
+        let mut fighters = fighters_out();
+        plot(&mut fighters, 131);
+        fly_out(&mut fighters);
+        jump_now(&mut fighters);
+        option(&mut fighters, ESCORT_RECALL_KEY);
+        assert_eq!(orders(&fighters), [Some(EscortOrder::Dock); 2]);
+        assert_eq!(
+            fighters.message(),
+            Some("New escort orders assigned:  All ships will return to hangar.")
+        );
+    }
+
+    #[test]
+    fn option_released_during_the_jump_lets_c_recall() {
+        let mut view = fighters_out();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        tap(&mut view, ESCORT_HOLD_KEY);
+        jump_now(&mut view);
+        view.input(&key(Key::Alt, true));
+        view.tick(ms(300));
+        view.input(&key(Key::Alt, false));
+        tap(&mut view, ESCORT_RECALL_KEY);
+        assert_eq!(orders(&view), [None; 2], "C alone: formation, not Dock");
+        assert_eq!(
+            view.message(),
+            Some("New escort orders assigned:  All ships will return to formation.")
+        );
+    }
+
+    #[test]
+    fn the_escort_menu_times_out_during_the_streak() {
+        // How long the ship brakes and turns, timed on a twin.
+        let mut twin = escorted_out();
+        let mut braking = Duration::ZERO;
+        twin.input(&key(JUMP, true));
+        while twin.jump_effect().is_none() {
+            twin.tick(TICK);
+            braking += TICK;
+        }
+        // Opened so that it times out half a second into hyperspace.
+        let mut view = escorted_out();
+        tap(&mut view, MENU_KEY);
+        let wait = super::super::escorts::MENU_TIMEOUT
+            .checked_sub(braking + ms(500))
+            .expect("the braking is shorter than the menu's timeout");
+        view.tick(wait);
+        jump_now(&mut view);
+        assert!(view.escort_menu().is_open(), "open as the streak begins");
+        let in_hyperspace = |view: &View| view.session().expect("flying").jumping().is_some();
+        while view.escort_menu().is_open() {
+            assert!(in_hyperspace(&view), "shut before the ship arrives");
+            view.tick(TICK);
+        }
+        assert!(in_hyperspace(&view), "shut within the streak");
+    }
+
     #[test]
     fn the_menu_closes_8_seconds_after_its_last_command() {
         let mut view = escorted();
@@ -12062,6 +12400,65 @@ mod tests {
             view.session().expect("flying").target().map(|npc| npc.id),
             Some(NpcId(1))
         );
+    }
+
+    #[test]
+    fn shift_tab_targets_back_through_the_ships_and_with_alt_back_through_the_escorts() {
+        let mut catalog = boardable();
+        for record in &mut catalog.ships {
+            if record.id == ShipId(130) {
+                record.escort_type = 2;
+                record.inherent_ai = 3;
+            }
+        }
+        catalog.traffic[0].1.avg_ships = 2;
+        let pilot = with_escorts(
+            &Pilot::new(&catalog, "Escorted").expect("starts"),
+            &[130, 130],
+        );
+        let mut draws = placed(750, 650, 0).to_vec();
+        draws.extend(placed(850, 650, 0));
+        let (_, chance) = scripted(&draws);
+        let mut view = FlightView::with_pilot(catalog, pilot)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        let last = |escorts: bool| {
+            session
+                .npcs()
+                .iter()
+                .filter(|npc| session.is_escort(npc.id) == escorts)
+                .max_by_key(|npc| npc.berth)
+                .map(|npc| npc.id)
+        };
+        let (ship, escort) = (last(false), last(true));
+        let escort_berth = session
+            .npcs()
+            .iter()
+            .find(|npc| Some(npc.id) == escort)
+            .map(|npc| npc.berth);
+        // Tab from the last escort: the first ship above its berth.
+        let after_escort = session
+            .npcs()
+            .iter()
+            .filter(|npc| !session.is_escort(npc.id) && Some(npc.berth) > escort_berth)
+            .min_by_key(|npc| npc.berth)
+            .map(|npc| npc.id);
+        assert!(after_escort.is_some(), "{:?}", session.npcs());
+        let ships = session.npcs().len();
+        assert!(ships >= 4, "two of each: {:?}", session.npcs());
+        let target = |view: &View| view.session().expect("flying").target().map(|npc| npc.id);
+        view.input(&key(Key::Shift, true));
+        tap(&mut view, TARGET_KEY);
+        assert_eq!(target(&view), ship);
+        view.input(&key(Key::Alt, true));
+        tap(&mut view, TARGET_KEY);
+        assert_eq!(target(&view), escort);
+        view.input(&key(Key::Shift, false));
+        view.input(&key(Key::Alt, false));
+        tap(&mut view, TARGET_KEY);
+        assert_eq!(target(&view), after_escort, "Tab alone walks forward again");
     }
 
     #[test]
@@ -12589,6 +12986,26 @@ mod tests {
                 fine: 0,
             },
         ] {
+            assert_eq!(arrival_lead(&message), None, "{message:?}");
+        }
+    }
+
+    #[test]
+    fn a_former_escort_rejoining_says_escort_or_fighter_repaired() {
+        assert_eq!(ESCORT_REPAIRED, "Escort repaired.");
+        assert_eq!(FIGHTER_REPAIRED, "Fighter repaired.");
+        let view = flight();
+        let session = view.session().expect("flying");
+        let text = |message| sim_message_text(&message, session);
+        assert_eq!(
+            text(SimMessage::EscortRepaired).as_deref(),
+            Some(ESCORT_REPAIRED)
+        );
+        assert_eq!(
+            text(SimMessage::FighterRepaired).as_deref(),
+            Some(FIGHTER_REPAIRED)
+        );
+        for message in [SimMessage::EscortRepaired, SimMessage::FighterRepaired] {
             assert_eq!(arrival_lead(&message), None, "{message:?}");
         }
     }
@@ -15866,6 +16283,234 @@ mod tests {
             view.tick(TICK);
         }
         assert_eq!(ship_129_sprites(&drawn(&view)), 1, "drawn once out");
+    }
+
+    #[test]
+    fn the_escort_menu_closes_once_its_only_mission_escort_is_disabled() {
+        let mut catalog = trafficked(&[130], 0, 129, 3);
+        // One ship of düde 128 escorting the player (`ShipBehav` 1).
+        catalog.missions = vec![MissionRecord {
+            ships: MissionShip {
+                count: 1,
+                syst: -1,
+                dude: Some(nova_sim::DudeId(128)),
+                behav: 1,
+                start: 0,
+                ..MissionShip::NONE
+            },
+            ..errand(140)
+        }];
+        let mut view = FlightView::new(catalog).with_behaviour(Rc::new(Still));
+        run_set(&mut view, "S140");
+        settle_session(&mut view);
+        view.tick(TICK);
+        let escort = view
+            .session()
+            .expect("flying")
+            .npcs()
+            .iter()
+            .find(|npc| npc.mission_escort())
+            .map(|npc| npc.id)
+            .expect("a mission escort");
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open(), "a mission escort opens it");
+        nova_sim::fixture::disable(view.session.as_mut().expect("flying"), escort);
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        assert!(
+            session.escort_menu().iter().any(|row| row.present),
+            "its row stays"
+        );
+        assert!(!view.escort_menu().is_open(), "no escort is flying");
+    }
+
+    /// The NPCs of [`escorted_on_a_mission`].
+    #[derive(Clone, Copy)]
+    struct Ships {
+        /// The traffic ship, ship 129.
+        traffic: NpcId,
+        /// The hired escort, ship 130, drawn as a crossed box.
+        hired: NpcId,
+        /// The mission escort, ship 129.
+        mission: NpcId,
+    }
+
+    /// [`escorted`]'s flight with mission 140's one ship of düde 128
+    /// (ship 129, whose sheet is 2001) escorting the player too, as
+    /// `ShipBehav` 1, set up with the system, and room for a traffic ship
+    /// beside it: in NPC order the mission escort, the traffic ship and
+    /// the hired escort.
+    fn escorted_on_a_mission() -> (View, Ships) {
+        let mut catalog = boardable();
+        for record in &mut catalog.ships {
+            if record.id == ShipId(130) {
+                record.escort_type = 2;
+                record.inherent_ai = 3;
+            }
+        }
+        // Room for a traffic ship beside the mission's.
+        for (_, traffic) in &mut catalog.traffic {
+            traffic.avg_ships = 2;
+        }
+        catalog.missions = vec![MissionRecord {
+            ships: MissionShip {
+                count: 1,
+                syst: -1,
+                dude: Some(nova_sim::DudeId(128)),
+                behav: 1,
+                start: 0,
+                ..MissionShip::NONE
+            },
+            ..errand(140)
+        }];
+        let pilot = with_escorts(&Pilot::new(&catalog, "Escorted").expect("starts"), &[130]);
+        let (_, chance) = scripted(&placed(750, 650, 0));
+        let mut view = FlightView::with_pilot(catalog, pilot)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        run_set(&mut view, "S140");
+        settle_session(&mut view);
+        view.tick(TICK);
+        let session = view.session().expect("flying");
+        let find = |is: fn(&Npc) -> bool| {
+            let found: Vec<NpcId> = session
+                .npcs()
+                .iter()
+                .filter(|npc| is(npc))
+                .map(|npc| npc.id)
+                .collect();
+            assert_eq!(found.len(), 1, "{:?}", session.npcs());
+            found[0]
+        };
+        let ships = Ships {
+            traffic: find(|npc| !npc.escorts_player()),
+            hired: find(|npc| npc.escort.is_some()),
+            mission: find(Npc::mission_escort),
+        };
+        assert_eq!(session.npcs().len(), 3);
+        let order: Vec<NpcId> = session.npcs().iter().map(|npc| npc.id).collect();
+        assert_eq!(
+            order,
+            [ships.mission, ships.traffic, ships.hired],
+            "the traffic ship between the escorts in NPC order"
+        );
+        (view, ships)
+    }
+
+    /// Where on screen `view` draws NPC `id`.
+    fn npc_on_screen(view: &View, id: NpcId) -> Point {
+        let session = view.session().expect("flying");
+        let npc = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == id)
+            .expect("in the system");
+        view.camera().world_to_screen(view.shown_npc(npc).0)
+    }
+
+    /// The index in `list` of the first sprite centred on `at`, or of a
+    /// crossed box's diagonal centred on it.
+    fn drawn_at(list: &DrawList, at: Point) -> usize {
+        let near = |p: Point| (p.x - at.x).abs() < 0.01 && (p.y - at.y).abs() < 0.01;
+        list.iter()
+            .position(|command| match *command {
+                DrawCommand::Sprite { center, .. } => near(center),
+                DrawCommand::Line { from, to, .. } => near(Point::new(
+                    f32::midpoint(from.x, to.x),
+                    f32::midpoint(from.y, to.y),
+                )),
+                _ => false,
+            })
+            .unwrap_or_else(|| panic!("nothing drawn at {at:?}"))
+    }
+
+    /// The index in `list` of the player's sprite (sheet 2000).
+    fn player_drawn(list: &DrawList) -> usize {
+        list.iter()
+            .position(
+                |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 2000),
+            )
+            .expect("the player drawn")
+    }
+
+    /// Where `view` draws its traffic ship, its hired escort, its mission
+    /// escort and the player, as indices into what it draws.
+    fn ship_indices(view: &View, ships: Ships) -> [usize; 4] {
+        let list = drawn(view);
+        let at = |id| drawn_at(&list, npc_on_screen(view, id));
+        let ats = [ships.traffic, ships.hired, ships.mission].map(|id| npc_on_screen(view, id));
+        assert!(
+            ats.iter().enumerate().all(|(i, a)| ats[i + 1..]
+                .iter()
+                .all(|b| (a.x - b.x).abs() > 1.0 || (a.y - b.y).abs() > 1.0)),
+            "each ship apart: {ats:?}"
+        );
+        [
+            at(ships.traffic),
+            at(ships.hired),
+            at(ships.mission),
+            player_drawn(&list),
+        ]
+    }
+
+    #[test]
+    fn a_hired_and_a_mission_escort_draw_in_the_escorts_layer() {
+        let (view, ships) = escorted_on_a_mission();
+        let session = view.session().expect("flying");
+        let berth = |id| {
+            let npc = session.npcs().iter().find(|npc| npc.id == id);
+            npc.expect("here").berth
+        };
+        assert!(berth(ships.hired) < berth(ships.mission));
+        let [traffic, hired, led, player] = ship_indices(&view, ships);
+        assert!(
+            hired < led,
+            "the escorts in the order they entered their layer, by berth: {hired} {led}"
+        );
+        assert!(led < traffic, "under the other ships: {led} {traffic}");
+        assert!(traffic < player, "the player on top: {traffic} {player}");
+    }
+
+    #[test]
+    fn a_disabled_ship_draws_under_the_escorts() {
+        let (mut view, ships) = escorted_on_a_mission();
+        let session = view.session.as_mut().expect("flying");
+        nova_sim::fixture::disable(session, ships.traffic);
+        let [traffic, hired, led, player] = ship_indices(&view, ships);
+        assert!(traffic < hired, "{traffic} {hired}");
+        assert!(hired < led && led < player, "{hired} {led} {player}");
+    }
+
+    #[test]
+    fn cloak_alpha_maps_each_shown_state_to_a_tint_alpha() {
+        assert_eq!(cloak_alpha(CloakShown::Opaque), Some(255));
+        assert_eq!(cloak_alpha(CloakShown::Translucent(0x1e)), Some(135));
+        assert_eq!(cloak_alpha(CloakShown::Translucent(0)), Some(255));
+        assert_eq!(
+            cloak_alpha(CloakShown::Translucent(0x20)),
+            Some(128),
+            "127.5, rounded to nearest"
+        );
+        assert_eq!(cloak_alpha(CloakShown::Hidden), None);
+    }
+
+    #[test]
+    fn a_fully_cloaked_escort_is_drawn_at_its_translucent_alpha() {
+        let (mut view, ships) = escorted_on_a_mission();
+        let session = view.session.as_mut().expect("flying");
+        nova_sim::fixture::cloak(session, ships.mission, CLOAKED);
+        let list = drawn(&view);
+        let at = npc_on_screen(&view, ships.mission);
+        let tint = list.iter().find_map(|command| match *command {
+            DrawCommand::Sprite {
+                image,
+                center,
+                tint,
+                ..
+            } if image.id == 2001 && center == at => Some(tint),
+            _ => None,
+        });
+        assert_eq!(tint.map(|tint| tint.a), Some(135));
     }
 
     // The radar's IFF, density scanner, centre arrow and static.

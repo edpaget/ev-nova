@@ -1386,6 +1386,7 @@ impl Combatant {
             reserves: &mut self.reserves,
             condition: &mut self.condition,
             held_disabled: false,
+            cloaked: false,
             armament: &mut self.armament,
             rounds: &mut self.rounds as &mut dyn Rounds,
         }
@@ -1431,6 +1432,7 @@ fn shooter(weapon: &WeaponSpec) -> Combatant {
             only: None,
             turrets_only: false,
             bays: false,
+            point_defence: false,
         },
         reserves: Reserves::full(0.0, 1_000_000.0, 1_000_000.0),
         condition: Condition::Intact,
@@ -1932,7 +1934,12 @@ fn every_stock_point_defence_turret_engages_an_ir_missile_in_range() {
         let id = spec.id.0;
         let range = engagement_range(&spec);
         let mut defender = shooter(&spec);
-        defender.trigger = Trigger::default();
+        // The player's point defence runs every tick (`_HandlePlayer`
+        // @0x68c74), whatever it holds.
+        defender.trigger = Trigger {
+            point_defence: true,
+            ..Trigger::default()
+        };
         let mut attacker = Combatant {
             id: QUARRY,
             target: Some(ShipRef::Player),
@@ -2038,13 +2045,13 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
         fight_with(&mut combat, &mut ships, &arsenal);
         diagnostics.extend(combat.take_diagnostics());
     }
-    let rows: [Row; 11] = [
+    // The Zephyr family's `Flags2` 0x4000 (183-185, 199) fires while
+    // cloaked, which `Armament::has_ammo` does, so it reports nothing.
+    let rows: [Row; 9] = [
         (&[134, 136], &[(Seeker, 0x2)]),
         (&[135, 160], &[(Seeker, 0x2), (Seeker, 0x8)]),
         (&[137], &[(Seeker, 0x1), (Seeker, 0x8)]),
-        (&[148, 182, 229], &[(Seeker, 0x1)]),
-        (&[184, 185, 199], &[(Seeker, 0x1), (Flags2, 0x4000)]),
-        (&[183], &[(Flags2, 0x4000)]),
+        (&[148, 182, 184, 185, 199, 229], &[(Seeker, 0x1)]),
         (&[142, 201], &[(Flags2, 0x1000), (Flags3, 0x10)]),
         (&[233], &[(Flags2, 0x1000)]),
         (&[234], &[(Seeker, 0x2), (Seeker, 0x8), (Flags2, 0x1000)]),
@@ -2065,8 +2072,8 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
             })
         })
         .collect();
-    assert_eq!(expected.len(), 32);
-    assert_eq!(diagnostics.len(), 32, "each once: {diagnostics:?}");
+    assert_eq!(expected.len(), 28);
+    assert_eq!(diagnostics.len(), 28, "each once: {diagnostics:?}");
     assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
 }
 
@@ -3875,10 +3882,7 @@ fn hg_kania_leads_to_hg_tichel() {
         player.heading
     );
     let speed = player.velocity.length();
-    assert!(
-        (speed - session.handling().max_speed / 2.0).abs() < 1e-4,
-        "{speed}"
-    );
+    assert!((speed - session.top_speed() / 2.0).abs() < 1e-4, "{speed}");
     assert_eq!(session.date_text(), "June 24, 1177 NC");
     assert_eq!(session.reserves().fuel, full);
     assert_eq!(full, Gauge::full(300.0));
@@ -3958,4 +3962,169 @@ fn stock_weapon_mod_vals_load_unchanged_inside_the_folded_weapons() {
         }
     }
     assert_eq!(counted, [83, 43, 0], "weapon, ammunition and clean mods");
+}
+
+#[test]
+fn stock_repair_droids_are_the_only_repair_system_and_no_ship_class_carries_them() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let outfits = data.outfits();
+    let repairing: Vec<OutfitId> = outfits
+        .iter()
+        .filter(|record| {
+            record
+                .mods
+                .iter()
+                .any(|&(kind, _)| kind == nova_sim::self_repair::MOD_REPAIR)
+        })
+        .map(|record| record.id)
+        .collect();
+    assert_eq!(repairing, [OutfitId(437)], "Repair Droids");
+    let ships = data.ships();
+    assert!(ships.len() > 200);
+    for ship in &ships {
+        let defaults: std::collections::BTreeMap<OutfitId, u16> =
+            ship.defaults.iter().copied().collect();
+        assert!(
+            !nova_sim::self_repair::has_gear(&defaults, &outfits),
+            "{:?} would repair itself",
+            ship.id
+        );
+    }
+    let droids = std::collections::BTreeMap::from([(OutfitId(437), 1)]);
+    assert!(nova_sim::self_repair::has_gear(&droids, &outfits));
+}
+
+// Which missile an NPC fires (`_AIFireMissile`), over the stock arsenal.
+
+/// What a stock NPC of class `ship`, armed as the traffic arms it, fires
+/// at the player 1000 pixels ahead flying stock class `target` at rest,
+/// its reserves too strong for any damage aimed to suffice. The NPC is a
+/// stock one of Fomalhaut's traffic made over into the class.
+fn stock_missile_at(data: &GameData, ship: ShipId, target: ShipId) -> Option<nova_sim::WeaponId> {
+    let mut session = destroyer_in_fomalhaut(data);
+    let mut chance = NeverFires;
+    session.tick_traffic(data, &NovaAi::default(), &mut chance);
+    let mut npc = session
+        .npcs()
+        .first()
+        .expect("Fomalhaut has traffic")
+        .clone();
+    let arsenal = Arsenal::read(data);
+    let outfits = data.outfits();
+    let mut defaults = std::collections::BTreeMap::new();
+    for (outfit, count) in data.default_outfits(ship) {
+        *defaults.entry(outfit).or_insert(0_u16) += count;
+    }
+    let (armament, rounds) = arsenal.npc(ship, &defaults, &outfits);
+    let fields = data.ship_fields(ship).expect("the shïp reads");
+    npc.ship = ship;
+    npc.stats = ShipStats::new(fields, &[]);
+    npc.reserves = npc.stats.full();
+    npc.hull = arsenal.hull(ship);
+    npc.armament = armament;
+    npc.rounds = rounds;
+    npc.cloak = nova_sim::cloak::Cloak::default();
+    npc.goal = Goal::Attack(ShipRef::Player);
+    npc.state = ShipState::default();
+    let quarry = data.ship_fields(target).expect("the target reads");
+    let strong = nova_sim::Reserves::full(1_000_000.0, 1_000_000.0, 100.0);
+    let player = nova_sim::ai::PlayerSide {
+        state: ShipState {
+            position: Vec2::new(0.0, -1000.0),
+            ..ShipState::default()
+        },
+        condition: Condition::Intact,
+        reserves: strong,
+        hull: arsenal.hull(target),
+        handling: ShipStats::new(quarry, &[]).handling,
+        rating: 0,
+        yardstick: 0,
+        untargetable: false,
+    };
+    let npcs = [npc.clone()];
+    let around = nova_sim::ai::Surroundings {
+        player: Some(player),
+        ..nova_sim::ai::Surroundings::new(&[], &npcs)
+    };
+    nova_sim::ai::fire::trigger(&npc, &around, nova_sim::ai::fire::FireRules::default()).only
+}
+
+/// The Manticore (`shïp` 146) carries the EMP Torpedo (`wëap` 160) in
+/// slot 2 and the IR Missile (134) in slot 3, both reaching 1350 pixels.
+/// At a slow Cargo Drone (130, `Maneuver` 20) it fires the IR Missile,
+/// the lower weapon ID, as the original's walk by weapon index does. At
+/// the Shuttle (128, `Maneuver` 40), turning 4 degrees a tick, the EMP
+/// Torpedo (`GuidedTurn` 20, 2 degrees) would be unsuitable, and the IR
+/// Missile still flies.
+#[test]
+fn a_stock_manticore_fires_its_ir_missile_before_its_emp_torpedo() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let manticore = ShipId(146);
+    let arsenal = Arsenal::read(&data);
+    let mounted: Vec<i16> = arsenal
+        .of_class(
+            manticore,
+            &std::collections::BTreeMap::new(),
+            &data.outfits(),
+        )
+        .mounts()
+        .iter()
+        .map(|mount| mount.spec.id.0)
+        .collect();
+    let emp = mounted.iter().position(|&id| id == 160).expect("the EMP");
+    let ir = mounted.iter().position(|&id| id == 134).expect("the IR");
+    assert!(emp < ir, "mounted EMP first: {mounted:?}");
+    let ir_missile = Some(nova_sim::WeaponId(134));
+    assert_eq!(stock_missile_at(&data, manticore, ShipId(130)), ir_missile);
+    assert_eq!(stock_missile_at(&data, manticore, ShipId(128)), ir_missile);
+}
+
+/// An NPC carrying the EMP Torpedo alone of its missiles never fires it
+/// at a stock ship of `Maneuver` 40 or more (a long gun may fire
+/// instead), and does at a slower one.
+#[test]
+fn a_stock_emp_torpedo_is_never_fired_at_an_agile_ship() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let arsenal = Arsenal::read(&data);
+    // The first stock class whose homing weapons are the EMP Torpedo alone.
+    let carrier = data
+        .ships()
+        .iter()
+        .map(|ship| ship.id)
+        .find(|&ship| {
+            let homing: Vec<i16> = arsenal
+                .of_class(ship, &std::collections::BTreeMap::new(), &data.outfits())
+                .mounts()
+                .iter()
+                .filter(|mount| mount.spec.guidance == Guidance::Homing)
+                .map(|mount| mount.spec.id.0)
+                .collect();
+            homing == [160]
+        })
+        .expect("a class carries the EMP Torpedo alone");
+    let agile: Vec<ShipId> = data
+        .ships()
+        .iter()
+        .filter(|ship| ship.fields.maneuver >= 40)
+        .map(|ship| ship.id)
+        .collect();
+    assert!(agile.len() > 100, "{}", agile.len());
+    let emp = Some(nova_sim::WeaponId(160));
+    for &target in &agile {
+        assert_ne!(stock_missile_at(&data, carrier, target), emp, "{target:?}");
+    }
+    assert_eq!(
+        stock_missile_at(&data, carrier, ShipId(130)),
+        emp,
+        "at the Cargo Drone"
+    );
 }

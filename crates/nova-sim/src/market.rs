@@ -552,6 +552,62 @@ pub fn fleet_holds(ship: u32, escorts: impl IntoIterator<Item = EscortHolds>) ->
     u32::try_from(tons).unwrap_or(MAX_FLEET_HOLDS)
 }
 
+/// The share of the fleet's cargo a lost escort takes
+/// (`_DestroyPartialFleetCargo` @0xcd32-0xcff6 for a ship other than the
+/// player's): its `Holds` (`lost`, a negative one's size, [`hold_tons`];
+/// its outfits never count) over the fleet's space, the player's ship's
+/// own `own` tons plus the `escorts` tons ([`escort_tons`]), and its own
+/// `Holds` too when `counted` (the other reading of
+/// [`RuleKey::LostCargoShare`]), at most 1, in doubles with no 32000 cap
+/// (@0xcf27-0xcf37).
+///
+/// With no holds the ship takes nothing: the original's 0/0 is NaN, which
+/// `minsd` passes and `cvttsd2si` turns into `INT_MIN`, so every good loses
+/// nothing. Holds against no other space take everything.
+#[must_use]
+pub fn lost_share(lost: i16, own: u32, escorts: i64, counted: bool) -> f64 {
+    let lost = f64::from(hold_tons(lost));
+    if lost == 0.0 {
+        return 0.0;
+    }
+    let mut fleet = f64::from(own) + escorts as f64;
+    if counted {
+        fleet += lost;
+    }
+    if fleet == 0.0 {
+        return 1.0;
+    }
+    (lost / fleet).min(1.0)
+}
+
+/// Takes `share` of every good in `cargo`, commodity or `jünk`: each loses
+/// the truncated part of what it holds (@0xcf3b-0xcfe4), and a good left
+/// at none is gone. `share` is in 0..=1 ([`lost_share`]).
+pub(crate) fn destroy_share(cargo: &mut BTreeMap<Good, u32>, share: f64) {
+    for tons in cargo.values_mut() {
+        // The share is in 0..=1, so the part is in 0..=held.
+        *tons -= (f64::from(*tons) * share) as u32;
+    }
+    cargo.retain(|_, tons| *tons > 0);
+}
+
+/// Cuts each commodity in `cargo` by `holds` over the `total` the fleet
+/// carries (`_TotalCargo`) when that is more
+/// (`_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c), in single floats; a
+/// `jünk` is not cut. A good cut to none is gone.
+pub(crate) fn trim_commodities(cargo: &mut BTreeMap<Good, u32>, holds: u32, total: i64) {
+    if i64::from(holds) >= total {
+        return;
+    }
+    let ratio = holds as f32 / total as f32;
+    for (good, tons) in cargo.iter_mut() {
+        if let Good::Commodity(_) = good {
+            *tons = (*tons as f32 * ratio) as u32;
+        }
+    }
+    cargo.retain(|_, tons| *tons > 0);
+}
+
 /// The standard commodities, every one of them, by number, from
 /// `strings`: a missing name is empty, and each base price is its string
 /// read by [`string_to_num`] (`_InitObjects` @0x1cedd-0x1cf43,
@@ -5889,5 +5945,92 @@ mod tests {
             (vec![(FOOD, 7), (BOTH, 2)], true),
             "the hold full"
         );
+    }
+
+    // A lost escort's share of the fleet's cargo.
+
+    const LOST_FOOD: Good = Good::Commodity(0);
+    const LOST_OPALS: Good = Good::Junk(JunkId(146));
+
+    #[test]
+    fn a_lost_ships_share_is_its_holds_over_the_fleets() {
+        assert!((lost_share(30, 60, 30, false) - 1.0 / 3.0).abs() < 1e-12);
+        assert!(
+            (lost_share(30, 60, 30, true) - 0.25).abs() < 1e-12,
+            "counted"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_lost_ships_share_is_at_most_all_the_cargo() {
+        assert_eq!(lost_share(100, 50, 0, false), 1.0);
+        assert!(
+            (lost_share(100, 50, 0, true) - 2.0 / 3.0).abs() < 1e-12,
+            "counted"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_lost_ship_with_no_holds_takes_nothing() {
+        assert_eq!(lost_share(0, 60, 30, false), 0.0);
+        assert_eq!(lost_share(0, 60, 30, true), 0.0);
+        assert_eq!(lost_share(0, 0, 0, false), 0.0, "0/0");
+        assert_eq!(lost_share(0, 0, 0, true), 0.0, "0/0, counted");
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_lost_ships_holds_against_no_other_space_take_everything() {
+        assert_eq!(lost_share(20, 0, 0, false), 1.0);
+        assert_eq!(lost_share(20, 0, 0, true), 1.0, "counted");
+    }
+
+    #[test]
+    fn a_lost_ships_negative_holds_count_as_their_size() {
+        assert!((lost_share(-30, 60, 30, false) - 1.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn destroying_a_share_takes_the_truncated_part_of_every_good() {
+        let mut cargo = BTreeMap::from([(LOST_FOOD, 9), (LOST_OPALS, 3)]);
+        destroy_share(&mut cargo, 0.5);
+        assert_eq!(cargo, BTreeMap::from([(LOST_FOOD, 5), (LOST_OPALS, 2)]));
+    }
+
+    #[test]
+    fn destroying_all_the_share_empties_the_hold() {
+        let mut cargo = BTreeMap::from([(LOST_FOOD, 9), (LOST_OPALS, 3)]);
+        destroy_share(&mut cargo, 1.0);
+        assert_eq!(cargo, BTreeMap::new());
+    }
+
+    #[test]
+    fn destroying_no_share_changes_nothing() {
+        let mut cargo = BTreeMap::from([(LOST_FOOD, 9), (LOST_OPALS, 3)]);
+        destroy_share(&mut cargo, 0.0);
+        assert_eq!(cargo, BTreeMap::from([(LOST_FOOD, 9), (LOST_OPALS, 3)]));
+    }
+
+    #[test]
+    fn trimming_cuts_each_commodity_by_the_holds_over_the_total() {
+        let mut cargo = BTreeMap::from([(LOST_FOOD, 5), (LOST_OPALS, 3)]);
+        trim_commodities(&mut cargo, 40, 55);
+        assert_eq!(cargo, BTreeMap::from([(LOST_FOOD, 3), (LOST_OPALS, 3)]));
+    }
+
+    #[test]
+    fn trimming_to_holds_that_fit_the_total_changes_nothing() {
+        let mut cargo = BTreeMap::from([(LOST_FOOD, 5), (LOST_OPALS, 3)]);
+        trim_commodities(&mut cargo, 55, 55);
+        assert_eq!(cargo, BTreeMap::from([(LOST_FOOD, 5), (LOST_OPALS, 3)]));
+    }
+
+    #[test]
+    fn a_commodity_trimmed_to_none_is_gone() {
+        let mut cargo = BTreeMap::from([(LOST_FOOD, 5), (LOST_OPALS, 3)]);
+        trim_commodities(&mut cargo, 1, 55);
+        assert_eq!(cargo, BTreeMap::from([(LOST_OPALS, 3)]));
     }
 }

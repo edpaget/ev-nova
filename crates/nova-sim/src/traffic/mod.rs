@@ -76,7 +76,7 @@ pub mod table;
 
 use crate::ai::interceptor::within_reach;
 use crate::ai::{Behaviour, Goal, PlayerSide, Reaction, Surroundings};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::catalog::{GovtId, LandingSite, PersonId, ShipId};
 use crate::chance::Chance;
@@ -90,7 +90,7 @@ use crate::geometry::Vec2;
 use crate::govt::Governments;
 use crate::mission::ships::ShipBehav;
 use crate::person::{PersonWorld, derelict_armor};
-use autopilot::Outcome;
+use autopilot::{Outcome, TopSpeeds};
 use npc::{AiType, Mode, Npc, NpcId, NpcPerson};
 use spawn::{Entry, JUMP_IN_TICKS, NewShip, PersonDraw, Stellars};
 use strength::StrengthTimer;
@@ -129,11 +129,19 @@ pub struct World<'a> {
     /// The tons the player's escorts that count toward the
     /// escort-strength timer carry ([`strength::escort_tons_in_system`]).
     pub escort_tons: i64,
+    /// The factor on the top speed of the player and of every ship it
+    /// leads: 1.5 for a pilot without Strict Play by the engine (see
+    /// [`top_speed`](crate::top_speed)).
+    pub led_speed: f32,
+    /// The damage the shots in flight aim at each ship
+    /// ([`Surroundings::targeted`]).
+    pub targeted: &'a BTreeMap<ShipRef, i32>,
 }
 
 impl<'a> World<'a> {
     /// `sites` alone: no player, no governments, no record, no person
-    /// gone or grudging ([`PersonWorld::NONE`]), and no escorts' tons.
+    /// gone or grudging ([`PersonWorld::NONE`]), no escorts' tons, no
+    /// factor on the led ships' top speed, and no damage aimed.
     #[must_use]
     pub fn new(sites: &'a [LandingSite]) -> Self {
         let bare = Surroundings::new(sites, &[]);
@@ -145,6 +153,8 @@ impl<'a> World<'a> {
             record: 0,
             persons: PersonWorld::NONE,
             escort_tons: 0,
+            led_speed: 1.0,
+            targeted: bare.targeted,
         }
     }
 
@@ -168,6 +178,7 @@ impl<'a> World<'a> {
             govts: self.govts,
             system_govt: self.system_govt,
             record: self.record,
+            targeted: self.targeted,
         }
     }
 }
@@ -181,6 +192,9 @@ pub struct Traffic {
     npcs: Vec<Npc>,
     /// The next NPC's number: never reused, even across systems.
     next_id: u32,
+    /// The berths held back for the player's escorts still to be placed
+    /// ([`Traffic::reserve`]), kept across systems.
+    reserved: BTreeSet<u32>,
     /// Ticks since the traffic began.
     ticks: u64,
     /// How many ticks apart decisions are.
@@ -214,6 +228,7 @@ impl Traffic {
             table: SpawnTable::default(),
             npcs: Vec::new(),
             next_id: 0,
+            reserved: BTreeSet::new(),
             ticks: 0,
             interval,
             departed: Vec::new(),
@@ -342,8 +357,8 @@ impl Traffic {
             chance,
         );
         self.add(arrivals, world.persons.grudges);
-        self.escort_strength(world, draw.world.gate(), chance);
-        self.react(behaviour, world, strikes);
+        self.escort_strength(&world, draw.world.gate(), chance);
+        self.react(behaviour, &world, strikes);
         for npc in &mut self.npcs {
             if npc.condition != Condition::Intact {
                 npc.provoked = 0.0;
@@ -391,10 +406,12 @@ impl Traffic {
             self.npcs.iter().map(|npc| (npc.id, npc.state)).collect();
         let player = world.player.map(|player| player.state);
         self.cloaks(player, &states);
+        let speeds = self.top_speeds(&world);
         let outcomes: Vec<Outcome> = self
             .npcs
             .iter_mut()
-            .map(|npc| {
+            .zip(speeds)
+            .map(|(npc, speeds)| {
                 let other = match npc.goal {
                     Goal::Follow(lead) => Some(ShipRef::Npc(lead)),
                     Goal::Assist(_) | Goal::Formation { .. } => Some(ShipRef::Player),
@@ -408,7 +425,7 @@ impl Traffic {
                         .find(|(other, _)| *other == id)
                         .map(|(_, state)| *state),
                 });
-                autopilot::fly(npc, world.sites, other.as_ref())
+                autopilot::fly(npc, world.sites, other.as_ref(), speeds)
             })
             .collect();
         self.departed = self
@@ -421,6 +438,40 @@ impl Traffic {
         let mut flying = outcomes.iter().map(|outcome| *outcome == Outcome::Flying);
         self.npcs.retain(|_| flying.next().unwrap_or(false));
         self.ticks += 1;
+    }
+
+    /// Each NPC's top speeds this tick, in ship-table order, as
+    /// `_ShipMaxSpeed` gives them
+    /// (see [`top_speed`](crate::top_speed)): its own
+    /// ([`Npc::top_speed`]), and its lead's. A ship the player leads has
+    /// the player's ([`PlayerSide::handling`] × [`World::led_speed`]);
+    /// a fleet escort its lead's; one whose lead is not in the system, as
+    /// `_AICheckParentExists` clears it (@0x8946b, @0x894b4), or with
+    /// none, no lead's.
+    fn top_speeds(&self, world: &World) -> Vec<TopSpeeds> {
+        let tops: Vec<(NpcId, f32)> = self
+            .npcs
+            .iter()
+            .map(|npc| (npc.id, npc.top_speed(world.led_speed)))
+            .collect();
+        let player_top = world
+            .player
+            .map(|player| player.handling.max_speed * world.led_speed);
+        tops.iter()
+            .zip(&self.npcs)
+            .map(|(&(_, own), npc)| {
+                let lead = if npc.escorts_player() {
+                    player_top
+                } else {
+                    npc.leader.and_then(|leader| {
+                        tops.iter()
+                            .find(|(other, _)| *other == leader)
+                            .map(|&(_, top)| top)
+                    })
+                };
+                TopSpeeds { own, lead }
+            })
+            .collect()
     }
 
     /// Each NPC's cloak a tick on (see [`cloak`]): a flying NPC thinks
@@ -459,7 +510,7 @@ impl Traffic {
     /// fleet `world`'s escorts' tons call for comes among its stellars,
     /// its lead an interceptor, its `AppearOn` asked by `gate`, rolled on
     /// `chance`.
-    fn escort_strength(&mut self, world: World, gate: Gate, chance: &mut (impl Chance + ?Sized)) {
+    fn escort_strength(&mut self, world: &World, gate: Gate, chance: &mut (impl Chance + ?Sized)) {
         if !self.strength_timer.tick() {
             return;
         }
@@ -481,7 +532,7 @@ impl Traffic {
 
     /// Each flying, intact NPC answers each of `strikes` in `world`, as
     /// `behaviour` says, all against the NPCs as they were before.
-    fn react(&mut self, behaviour: &(impl Behaviour + ?Sized), world: World, strikes: &[Strike]) {
+    fn react(&mut self, behaviour: &(impl Behaviour + ?Sized), world: &World, strikes: &[Strike]) {
         if strikes.is_empty() {
             return;
         }
@@ -523,24 +574,73 @@ impl Traffic {
         &mut self.npcs
     }
 
-    /// The NPCs that count toward the system's `AvgShips`: those not the
-    /// player's ([`Npc::is_players`]) nor its mission escorts
-    /// ([`Npc::escorts_player`]). `_EnterMoreShips` (@0x43b14-0x43b45)
-    /// counts the ships in the system whose parent (+0x9a) is not the
-    /// player, and rolls for an arrival only while that count is below
-    /// `AvgShips` (@0x43b5c); a mission escort's leader is the player
-    /// too (see the session's `mission_escorts` module).
+    /// The ships the player leads, in ship-table order (berth order,
+    /// [`Npc::berth`]; ships at one berth in the order they appeared): its hired and captured escorts, the fighters it
+    /// launched, and its mission escorts ([`Npc::escorts_player`]). In
+    /// the original each is a ship whose leader (+0x9a) is the player,
+    /// 0, hired or a mission's `ShipBehav` 1 escort alike. The original's
+    /// sites that ask this, and which of them narrow it to the hired
+    /// escorts or the fighters, are listed in the session's `player_led`
+    /// module.
+    pub fn player_led(&self) -> impl Iterator<Item = &Npc> + '_ {
+        let mut led: Vec<&Npc> = self
+            .npcs
+            .iter()
+            .filter(|npc| npc.escorts_player())
+            .collect();
+        led.sort_by_key(|npc| npc.berth);
+        led.into_iter()
+    }
+
+    /// The NPCs that count toward the system's `AvgShips`: those the
+    /// player does not lead ([`Traffic::player_led`]).
+    /// `_EnterMoreShips` (@0x43b14-0x43b45) counts the ships in the system
+    /// whose parent (+0x9a) is not the player, and rolls for an arrival
+    /// only while that count is below `AvgShips` (@0x43b5c).
     fn strangers(&self) -> usize {
-        self.npcs.iter().filter(|npc| !npc.escorts_player()).count()
+        self.npcs.len() - self.player_led().count()
     }
 
     /// Adds `npc` to the system, numbered as the next NPC, and gives its
     /// number.
     pub(crate) fn add_npc(&mut self, npc: Npc) -> NpcId {
+        let berth = self.next_berth();
+        self.add_npc_at(npc, berth)
+    }
+
+    /// Holds `berths` back from the first-free numbering until an NPC is
+    /// placed at each ([`Traffic::add_npc_at`]), replacing any held before.
+    pub(crate) fn reserve(&mut self, berths: BTreeSet<u32>) {
+        self.reserved = berths;
+    }
+
+    /// Adds `npc` to the system at berth `berth`, numbered as the next NPC,
+    /// and gives its number.
+    pub(crate) fn add_npc_at(&mut self, npc: Npc, berth: u32) -> NpcId {
+        self.reserved.remove(&berth);
         let id = NpcId(self.next_id);
         self.next_id += 1;
-        self.npcs.push(Npc { id, ..npc });
+        self.npcs.push(Npc { id, berth, ..npc });
         id
+    }
+
+    /// The first berth from 1 that no NPC in the system holds and none is
+    /// reserved for: the slot `_GenericRandomShipSpawn` (@0x3c8b1-0x3c90b)
+    /// gives a new ship.
+    fn next_berth(&self) -> u32 {
+        self.next_berth_skipping(&BTreeSet::new())
+    }
+
+    /// The first berth from 1 that no NPC in the system holds, none is
+    /// reserved for, and `skip` does not hold.
+    pub(crate) fn next_berth_skipping(&self, skip: &BTreeSet<u32>) -> u32 {
+        (1..=u32::MAX)
+            .find(|berth| {
+                !self.reserved.contains(berth)
+                    && !skip.contains(berth)
+                    && self.npcs.iter().all(|npc| npc.berth != *berth)
+            })
+            .unwrap_or(u32::MAX)
     }
 
     /// Takes NPC `id` out of the system, if it is there.
@@ -640,8 +740,10 @@ impl Traffic {
             let hunts = ship
                 .mission
                 .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer);
+            let berth = self.next_berth();
             self.npcs.push(Npc {
                 id,
+                berth,
                 ship: ship.ship,
                 govt: ship.govt,
                 ai_type: ship.ai_type,
@@ -689,6 +791,9 @@ impl Traffic {
                     Cloak::default()
                 },
                 cloak_gear: kind.cloak,
+                led_out: false,
+                self_repair: kind.self_repair,
+                former: None,
             });
         }
     }
@@ -801,6 +906,7 @@ mod tests {
                     rounds: BTreeMap::from([(WeaponId(138), 7)]),
                     appear_on: Test::default(),
                     cloak: CloakGear::default(),
+                    self_repair: false,
                 },
             )]),
             ..SpawnTable::default()
@@ -1190,6 +1296,7 @@ mod tests {
                 only: None,
                 turrets_only: false,
                 bays: false,
+                point_defence: false,
             },
             ..Recording::deciding(Goal::Idle)
         };
@@ -1332,6 +1439,7 @@ mod tests {
         traffic.enter(table(1), &mut Draws::of(&[0]));
         traffic.add_npc(Npc {
             mission: Some(npc::MissionMark {
+                order: None,
                 slot: 0,
                 behav: ShipBehav::EscortPlayer,
                 formation: Some(duty(2).formation),
@@ -1410,6 +1518,159 @@ mod tests {
         );
         traffic.remove(fighter);
         assert_eq!(tick_arrival(&mut traffic).first(), Some(&500), "rolled");
+    }
+
+    /// A mark of a `ShipBehav` 1 mission ship, joined to the player's
+    /// formation or not.
+    fn escorting(joined: bool) -> npc::MissionMark {
+        npc::MissionMark {
+            order: None,
+            slot: 0,
+            behav: ShipBehav::EscortPlayer,
+            formation: joined.then(|| duty(2).formation),
+        }
+    }
+
+    #[test]
+    fn the_player_leads_its_escorts_fighters_and_joined_mission_escorts_in_ship_table_order() {
+        let mut traffic = Traffic::new();
+        let ship = |id| crate::testkit::npc(id, ShipStats::default());
+        traffic.add_npc(ship(0));
+        let mission = traffic.add_npc(Npc {
+            mission: Some(escorting(true)),
+            ..ship(0)
+        });
+        traffic.add_npc(Npc {
+            mission: Some(escorting(false)),
+            ..ship(0)
+        });
+        let hired = traffic.add_npc(Npc {
+            escort: Some(duty(2)),
+            ..ship(0)
+        });
+        let carrier = traffic.add_npc(ship(0));
+        traffic.add_npc(Npc {
+            leader: Some(carrier),
+            carrier: Some(launched_from(ShipRef::Npc(carrier))),
+            ..ship(0)
+        });
+        let fighter = traffic.add_npc(Npc {
+            escort: Some(duty(3)),
+            carrier: Some(launched_from(ShipRef::Player)),
+            ..ship(0)
+        });
+        let led: Vec<NpcId> = traffic.player_led().map(|npc| npc.id).collect();
+        assert_eq!(led, [mission, hired, fighter]);
+        assert_eq!(traffic.strangers(), 4, "the rest");
+    }
+
+    /// The berths of the system's NPCs, in `Vec` order.
+    fn berths(traffic: &Traffic) -> Vec<u32> {
+        traffic.npcs().iter().map(|npc| npc.berth).collect()
+    }
+
+    #[test]
+    fn each_npc_takes_the_first_free_berth_from_1() {
+        let mut traffic = Traffic::new();
+        let ship = || crate::testkit::npc(0, ShipStats::default());
+        traffic.add_npc(ship());
+        let second = traffic.add_npc(ship());
+        traffic.add_npc(ship());
+        assert_eq!(berths(&traffic), [1, 2, 3]);
+        traffic.remove(second);
+        traffic.add_npc(ship());
+        traffic.add_npc(ship());
+        assert_eq!(berths(&traffic), [1, 3, 2, 4]);
+        traffic.remove(NpcId(0));
+        traffic.table = table(0);
+        traffic.bring_in(vec![mission_ship(-1, 0.0), mission_ship(-1, 1.0)]);
+        assert_eq!(berths(&traffic), [3, 2, 4, 1, 5], "brought in alike");
+    }
+
+    #[test]
+    fn a_systems_ships_take_berths_from_1_as_they_are_set_up() {
+        let mut traffic = Traffic::new();
+        traffic.add_npc(crate::testkit::npc(0, ShipStats::default()));
+        traffic.enter_with(
+            table(1),
+            World::new(&[]),
+            vec![mission_ship(-1, 5.0), mission_ship(-1, 6.0)],
+            &mut Draws::of(&placed(750, 750)),
+        );
+        assert_eq!(berths(&traffic), [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_reserved_berth_is_skipped_until_an_npc_is_placed_at_it() {
+        let mut traffic = Traffic::new();
+        let ship = || crate::testkit::npc(0, ShipStats::default());
+        traffic.reserve(BTreeSet::from([1, 3]));
+        traffic.add_npc(ship());
+        traffic.add_npc(ship());
+        assert_eq!(berths(&traffic), [2, 4]);
+        let placed_at = traffic.add_npc_at(ship(), 1);
+        assert_eq!(traffic.npcs()[2].id, placed_at);
+        assert_eq!(berths(&traffic), [2, 4, 1]);
+        traffic.add_npc(ship());
+        assert_eq!(
+            berths(&traffic),
+            [2, 4, 1, 5],
+            "1 is held, 3 still reserved"
+        );
+        traffic.reserve(BTreeSet::from([2]));
+        traffic.enter_with(
+            table(0),
+            World::new(&[]),
+            vec![mission_ship(-1, 0.0), mission_ship(-1, 1.0)],
+            &mut Draws::of(&[]),
+        );
+        assert_eq!(
+            berths(&traffic),
+            [1, 3],
+            "the reservation outlives the system"
+        );
+    }
+
+    #[test]
+    fn player_led_follows_berth_order() {
+        let mut traffic = Traffic::new();
+        let ship = |id| crate::testkit::npc(id, ShipStats::default());
+        traffic.reserve(BTreeSet::from([1]));
+        let hired = traffic.add_npc(Npc {
+            escort: Some(duty(2)),
+            ..ship(0)
+        });
+        let mission = traffic.add_npc_at(
+            Npc {
+                mission: Some(escorting(true)),
+                ..ship(0)
+            },
+            1,
+        );
+        let led: Vec<NpcId> = traffic.player_led().map(|npc| npc.id).collect();
+        assert_eq!(led, [mission, hired]);
+    }
+
+    #[test]
+    fn ships_led_at_one_berth_keep_the_order_they_appeared_in() {
+        let mut traffic = Traffic::new();
+        let ship = |id| crate::testkit::npc(id, ShipStats::default());
+        let first = traffic.add_npc_at(
+            Npc {
+                escort: Some(duty(2)),
+                ..ship(0)
+            },
+            7,
+        );
+        let second = traffic.add_npc_at(
+            Npc {
+                mission: Some(escorting(true)),
+                ..ship(0)
+            },
+            7,
+        );
+        let led: Vec<NpcId> = traffic.player_led().map(|npc| npc.id).collect();
+        assert_eq!(led, [first, second]);
     }
 
     #[test]
@@ -1596,6 +1857,7 @@ mod tests {
             handling: ShipStats::new(FAST, &[]).handling,
             rating: 0,
             yardstick: 0,
+            untargetable: false,
         };
         let world = World {
             player: Some(player),
@@ -1859,7 +2121,131 @@ mod tests {
             handling: ShipStats::new(FAST, &[]).handling,
             rating: 0,
             yardstick: 0,
+            untargetable: false,
         }
+    }
+
+    /// A ship of top speed `speed` (in pixels a tick), as quick to turn
+    /// and thrust as [`FAST`].
+    fn of_speed(id: u32, speed: f32) -> Npc {
+        let fields = crate::handling::ShipFields {
+            speed: (speed * 100.0) as i16,
+            ..FAST
+        };
+        crate::testkit::npc(id, ShipStats::new(fields, &[]))
+    }
+
+    /// `npc` bursting out of a gate along +x, from its first tick.
+    fn bursting(npc: Npc) -> Npc {
+        Npc {
+            mode: Mode::LeavingGate { tick: 0 },
+            state: ShipState {
+                heading: 90.0,
+                ..ShipState::default()
+            },
+            ..npc
+        }
+    }
+
+    /// Ticks `traffic` in `world` until NPC `id`'s burst ends, and gives
+    /// the speed it flies on at.
+    fn burst_speed(traffic: &mut Traffic, world: &World, id: NpcId) -> f32 {
+        for _ in 0..20 {
+            traffic.tick_in(&Keep, *world, &[], &mut Draws::of(&[]));
+            let npc = traffic
+                .npcs()
+                .iter()
+                .find(|npc| npc.id == id)
+                .expect("there");
+            if npc.mode == Mode::Flying {
+                return npc.state.velocity.length();
+            }
+        }
+        panic!("never ended")
+    }
+
+    #[test]
+    fn the_ships_the_player_leads_fly_at_the_led_speed_and_others_at_their_own() {
+        let mut traffic = Traffic::new();
+        let formation = Goal::Formation { guard: None };
+        let hired = traffic.add_npc(Npc {
+            escort: Some(duty(1)),
+            goal: formation,
+            ..of_speed(0, 3.0)
+        });
+        let mission = traffic.add_npc(Npc {
+            mission: Some(escorting(true)),
+            goal: formation,
+            ..of_speed(0, 3.0)
+        });
+        let unled = traffic.add_npc(Npc {
+            goal: Goal::Attack(ShipRef::Player),
+            ..of_speed(0, 3.0)
+        });
+        let world = World {
+            player: Some(player_at(5000.0, 0.0)),
+            led_speed: 1.5,
+            ..World::new(&[])
+        };
+        let mut fastest = BTreeMap::new();
+        for _ in 0..300 {
+            traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
+            for npc in traffic.npcs() {
+                let speed = npc.state.velocity.length();
+                let top = fastest.entry(npc.id).or_insert(0.0_f32);
+                *top = top.max(speed);
+            }
+        }
+        assert!((fastest[&hired] - 4.5).abs() < 1e-3, "{fastest:?}");
+        assert!((fastest[&mission] - 4.5).abs() < 1e-3, "{fastest:?}");
+        assert!(fastest[&unled] <= 3.0 + 1e-4, "{fastest:?}");
+        assert!(fastest[&unled] > 2.9, "it flew flat out: {fastest:?}");
+    }
+
+    #[test]
+    fn a_fleet_escort_ends_its_burst_at_its_slower_leads_top_speed() {
+        // Its own 6 would end the burst at 9 (30 - 3t, ending once the
+        // next tick's is at or below the cap); its lead's 3 ends it at 6.
+        let mut traffic = Traffic::new();
+        let lead = traffic.add_npc(of_speed(0, 3.0));
+        let escort = traffic.add_npc(bursting(Npc {
+            leader: Some(lead),
+            ..of_speed(0, 6.0)
+        }));
+        let speed = burst_speed(&mut traffic, &World::new(&[]), escort);
+        assert!((speed - 6.0).abs() < 1e-4, "{speed}");
+    }
+
+    #[test]
+    fn an_escort_whose_lead_is_gone_ends_its_burst_at_its_own_top_speed() {
+        let mut traffic = Traffic::new();
+        let escort = traffic.add_npc(bursting(Npc {
+            leader: Some(NpcId(99)),
+            ..of_speed(0, 6.0)
+        }));
+        let speed = burst_speed(&mut traffic, &World::new(&[]), escort);
+        assert!((speed - 9.0).abs() < 1e-4, "{speed}");
+    }
+
+    #[test]
+    fn a_led_ship_ends_its_burst_at_the_players_top_speed_times_the_led_speed() {
+        // The player's 4 x 1.5 = 6 ends the burst at 9; its own 10 x 1.5
+        // would end it at 18, its bare 10 at 12, and the player's bare 4
+        // at 6.
+        let mut traffic = Traffic::new();
+        let escort = traffic.add_npc(bursting(Npc {
+            escort: Some(duty(1)),
+            ..of_speed(0, 10.0)
+        }));
+        let mut player = player_at(0.0, 0.0);
+        player.handling.max_speed = 4.0;
+        let world = World {
+            player: Some(player),
+            led_speed: 1.5,
+            ..World::new(&[])
+        };
+        let speed = burst_speed(&mut traffic, &world, escort);
+        assert!((speed - 9.0).abs() < 1e-4, "{speed}");
     }
 
     #[test]
@@ -1986,15 +2372,15 @@ mod tests {
         table
     }
 
-    fn entered(world: World, draws: &[u32]) -> Traffic {
+    fn entered(world: &World, draws: &[u32]) -> Traffic {
         let mut traffic = Traffic::new();
-        traffic.enter_in(peopled(1), world, &mut Draws::of(draws));
+        traffic.enter_in(peopled(1), *world, &mut Draws::of(draws));
         traffic
     }
 
     #[test]
     fn a_person_entering_flies_as_its_record_and_its_fitted_ship_say() {
-        let traffic = entered(World::new(&[]), &[0, 382, 750, 750, 0]);
+        let traffic = entered(&World::new(&[]), &[0, 382, 750, 750, 0]);
         let npcs = traffic.npcs();
         assert_eq!(npcs.len(), 1);
         let npc = &npcs[0];
@@ -2038,7 +2424,7 @@ mod tests {
             },
             ..World::new(&[])
         };
-        let traffic = entered(world, &[0, 382, 750, 750, 0]);
+        let traffic = entered(&world, &[0, 382, 750, 750, 0]);
         assert!(traffic.npcs()[0].person.expect("a person").grudge);
     }
 
@@ -2052,7 +2438,7 @@ mod tests {
             },
             ..World::new(&[])
         };
-        assert_eq!(entered(world, &[0, 382]).npcs(), []);
+        assert_eq!(entered(&world, &[0, 382]).npcs(), []);
     }
 
     #[test]
@@ -2107,6 +2493,7 @@ mod tests {
             info_types: 1,
             person: None,
             mission: Some(npc::MissionMark {
+                order: None,
                 slot: 2,
                 behav: ShipBehav::from_code(behav),
                 formation: None,
@@ -2200,6 +2587,7 @@ mod tests {
         decloaks_when_hit: true,
         on_radar: true,
         flags2: 0x5282,
+        scanner: crate::cloak::Scanner::NONE,
     };
 
     /// [`table`] of `count` ships whose ship 200 carries `gear`.
@@ -2423,9 +2811,9 @@ mod tests {
 
     /// Ticks `traffic` `ticks` times in `world`, on draws of the last
     /// outcome.
-    fn ticked(traffic: &mut Traffic, world: World, ticks: u32) {
+    fn ticked(traffic: &mut Traffic, world: &World, ticks: u32) {
         for _ in 0..ticks {
-            traffic.tick_in(&Keep, world, &[], &mut Draws::of(&[]));
+            traffic.tick_in(&Keep, *world, &[], &mut Draws::of(&[]));
         }
     }
 
@@ -2451,9 +2839,9 @@ mod tests {
     fn escorts_above_49_tons_bring_fleet_382_on_the_tick_after_the_countdown() {
         for draw in [0, 7] {
             let mut traffic = armed(0, draw);
-            ticked(&mut traffic, escorted(60), 30 + draw);
+            ticked(&mut traffic, &escorted(60), 30 + draw);
             assert_eq!(traffic.npcs(), [], "armed at {}", 30 + draw);
-            ticked(&mut traffic, escorted(60), 1);
+            ticked(&mut traffic, &escorted(60), 1);
             assert_eq!(
                 ships_of(&traffic),
                 [(ShipId(200), Some(GovtId(131)), AiType::Interceptor)],
@@ -2472,7 +2860,7 @@ mod tests {
     #[test]
     fn escorts_above_199_tons_bring_fleet_383_its_escorts_their_own_ai() {
         let mut traffic = armed(0, 0);
-        ticked(&mut traffic, escorted(250), 31);
+        ticked(&mut traffic, &escorted(250), 31);
         assert_eq!(
             ships_of(&traffic),
             [
@@ -2486,16 +2874,16 @@ mod tests {
     #[test]
     fn escorts_of_49_tons_or_less_bring_nothing_then_or_later() {
         let mut traffic = armed(0, 0);
-        ticked(&mut traffic, escorted(49), 31);
-        ticked(&mut traffic, escorted(250), 200);
+        ticked(&mut traffic, &escorted(49), 31);
+        ticked(&mut traffic, &escorted(250), 200);
         assert_eq!(traffic.npcs(), [], "fired once, and disarmed");
     }
 
     #[test]
     fn the_timer_fires_once() {
         let mut traffic = armed(0, 0);
-        ticked(&mut traffic, escorted(60), 31);
-        ticked(&mut traffic, escorted(60), 200);
+        ticked(&mut traffic, &escorted(60), 31);
+        ticked(&mut traffic, &escorted(60), 200);
         assert_eq!(traffic.npcs().len(), 1);
     }
 
@@ -2504,7 +2892,7 @@ mod tests {
         // An empty system of AvgShips 1, so the arrival is rolled.
         let mut traffic = armed(0, 0);
         traffic.retarget(strong(1), &BTreeSet::new());
-        ticked(&mut traffic, escorted(60), 30);
+        ticked(&mut traffic, &escorted(60), 30);
         let mut chance = Draws::of(&[]);
         traffic.tick_in(&Keep, escorted(60), &[], &mut chance);
         assert_eq!(
@@ -2517,7 +2905,7 @@ mod tests {
         let mut traffic = armed(0, 0);
         traffic.retarget(strong(1), &BTreeSet::new());
         traffic.add_npc(crate::testkit::npc(0, ShipStats::new(FAST, &[])));
-        ticked(&mut traffic, escorted(60), 30);
+        ticked(&mut traffic, &escorted(60), 30);
         let mut chance = Draws::of(&[]);
         traffic.tick_in(&Keep, escorted(60), &[], &mut chance);
         assert_eq!(chance.asked, [360, 3]);
@@ -2545,9 +2933,9 @@ mod tests {
             },
             ..escorted(60)
         };
-        ticked(&mut traffic, refusing, 31);
+        ticked(&mut traffic, &refusing, 31);
         assert_eq!(traffic.npcs(), [], "refused when the timer fired");
-        ticked(&mut traffic, escorted(60), 200);
+        ticked(&mut traffic, &escorted(60), 200);
         assert_eq!(traffic.npcs(), [], "fired once, and disarmed");
     }
 
@@ -2559,7 +2947,7 @@ mod tests {
             ..World::new(&sites)
         };
         let mut traffic = armed(0, 0);
-        ticked(&mut traffic, world, 30);
+        ticked(&mut traffic, &world, 30);
         assert_eq!(traffic.npcs(), []);
         // The gate of the two stellars, then the lead's aggression.
         let mut chance = Draws::of(&[1, 0]);
@@ -2585,19 +2973,19 @@ mod tests {
     fn new_traffic_is_disarmed() {
         let mut traffic = Traffic::new();
         traffic.enter(strong(0), &mut Draws::of(&[]));
-        ticked(&mut traffic, escorted(250), 200);
+        ticked(&mut traffic, &escorted(250), 200);
         assert_eq!(traffic.npcs(), []);
     }
 
     #[test]
     fn entering_or_going_on_into_a_system_keeps_the_timer_counting() {
         let mut traffic = armed(0, 0);
-        ticked(&mut traffic, escorted(60), 10);
+        ticked(&mut traffic, &escorted(60), 10);
         traffic.enter(strong(0), &mut Draws::of(&[]));
-        ticked(&mut traffic, escorted(60), 20);
+        ticked(&mut traffic, &escorted(60), 20);
         traffic.retarget(strong(0), &BTreeSet::new());
         assert_eq!(traffic.npcs(), []);
-        ticked(&mut traffic, escorted(60), 1);
+        ticked(&mut traffic, &escorted(60), 1);
         assert_eq!(traffic.npcs().len(), 1, "on the 31st tick in all");
     }
 }

@@ -77,6 +77,10 @@
 //! - Version 23: adds the crons running or holding off, each its `crön`
 //!   ID, `days` and `holdoff`; none in an older save.
 //! - Version 24: adds the active ranks; none in an older save.
+//! - Version 25: adds whether the pilot plays Strict Play
+//!   (`strict_play`). Every older pilot was made with the new-pilot
+//!   dialog's Strict Play box greyed and clear, so the upgrade gives
+//!   `false`.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -96,7 +100,7 @@
 //! gone for good (`gone_persons`) and those holding a grudge (`grudges`)
 //! are each a list of `përs` IDs. The control bits (`bits`) are the
 //! numbers of the bits set, ascending, and the `gender` is `male` or
-//! `female`. The combat rating (`combat_rating`) is its number. The `paint` is `null` when unpainted, or its red, green and
+//! `female`. Strict Play (`strict_play`) is `true` or `false`. The combat rating (`combat_rating`) is its number. The `paint` is `null` when unpainted, or its red, green and
 //! blue, each 0 to 31 (`{"r": 31, "g": 0, "b": 4}`). The once-only story
 //! subscriptions fired (`story_fired`) are each its consumer
 //! (`offers`, `mission_ships`, `missions`, `crons`, `nebulae`, `plugins`
@@ -170,7 +174,7 @@ use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 24;
+pub const CURRENT: u64 = 25;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -869,6 +873,7 @@ struct Saved {
     grudges: Vec<i16>,
     bits: Vec<Bit>,
     gender: SavedGender,
+    strict_play: bool,
     /// `None` when unpainted.
     #[serde(deserialize_with = "Option::deserialize")]
     paint: Option<SavedPaint>,
@@ -996,6 +1001,7 @@ pub fn encode(pilot: &Pilot) -> String {
         grudges: pilot.grudges.iter().map(|person| person.0).collect(),
         bits: pilot.bits.iter().collect(),
         gender: pilot.gender.into(),
+        strict_play: pilot.strict_play,
         paint: pilot.paint.map(SavedPaint::from),
         story_fired: pilot
             .story_fired
@@ -1041,7 +1047,16 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     mission_ships,
     crons,
     ranks,
+    strict_play,
 ];
+
+/// Version 24 to 25: the pilot does not play Strict Play, as every older
+/// pilot was made with the box greyed and clear.
+fn strict_play(save: &mut Value) {
+    if let Some(object) = save.as_object_mut() {
+        object.insert("strict_play".to_owned(), Value::Bool(false));
+    }
+}
 
 /// Version 1 to 2: nothing explored, and no legal records.
 fn explored_and_legal(save: &mut Value) {
@@ -1326,6 +1341,7 @@ pub fn decode(text: &str) -> Result<Pilot, SaveError> {
         grudges: saved.grudges.into_iter().map(PersonId).collect(),
         bits: saved.bits.into_iter().collect(),
         gender: saved.gender.into(),
+        strict_play: saved.strict_play,
         paint: saved.paint.map(Rgb15::from),
         story_fired: saved
             .story_fired
@@ -1480,6 +1496,7 @@ mod tests {
             grudges: BTreeSet::from([PersonId(510)]),
             bits: [0, 512, 9999].into_iter().filter_map(Bit::new).collect(),
             gender: Gender::Female,
+            strict_play: false,
             paint: Some(Rgb15 { r: 31, g: 0, b: 4 }),
             story_fired: all_fired(),
             galaxy: overlaid(),
@@ -1634,7 +1651,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 24);
+        assert_eq!(CURRENT, 25);
         assert_eq!(
             value["galaxy"],
             serde_json::json!({
@@ -1717,7 +1734,8 @@ mod tests {
         assert_eq!(value["escorts"][2]["wage"], serde_json::Value::Null);
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
-        assert!(text.contains("\n  \"version\": 24"), "{text}");
+        assert_eq!(value["strict_play"], false);
+        assert!(text.contains("\n  \"version\": 25"), "{text}");
     }
 
     #[test]
@@ -2436,6 +2454,42 @@ mod tests {
             ..seasoned()
         };
         assert_eq!(decode(&encode(&pilot)), Ok(pilot));
+    }
+
+    #[test]
+    fn strict_play_either_way_survives_a_round_trip() {
+        for strict_play in [false, true] {
+            let pilot = seasoned().with_strict_play(strict_play);
+            assert_eq!(decode(&encode(&pilot)), Ok(pilot), "{strict_play}");
+        }
+    }
+
+    #[test]
+    fn a_version_24_save_loads_without_strict_play() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned().with_strict_play(true))).expect("JSON");
+        let object = value.as_object_mut().expect("an object");
+        object.insert("version".to_owned(), serde_json::Value::from(24));
+        object.remove("strict_play");
+        let pilot = decode(&value.to_string()).expect("loads");
+        assert!(!pilot.strict_play());
+        assert_eq!(pilot, seasoned());
+    }
+
+    #[test]
+    fn a_current_save_missing_strict_play_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&encode(&seasoned())).expect("JSON");
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("strict_play");
+        let text = value.to_string();
+        assert!(
+            unusable(&text).contains("strict_play"),
+            "{}",
+            unusable(&text)
+        );
     }
 
     #[test]
@@ -3604,12 +3658,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 24", "\"version\": 25");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 25 }));
+        let newer = encode(&seasoned()).replace("\"version\": 25", "\"version\": 26");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 26 }));
         assert_eq!(
-            SaveError::Newer { version: 25 }.to_string(),
+            SaveError::Newer { version: 26 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 25, and this version of Nova reads up to 24)."
+             (it is version 26, and this version of Nova reads up to 25)."
         );
     }
 

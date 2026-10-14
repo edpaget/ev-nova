@@ -5,7 +5,8 @@
 //! but two Person slots at 100 %: "Ace", `përs` 128, subtitle "Top Gun",
 //! of the Pirates, who always attack the player (`gövt` `Flags` 0x0004),
 //! saying "<OSN>: Prepare to die, <PN>!" (`STR#` 7101 #1) once, when it
-//! begins to attack (`Flags` 0x0090), with no escape pod, in the "Raider";
+//! begins to attack (`Flags` 0x0090), with no escape pod, in the "Raider"
+//! (armed with the blaster, as a warship with no weapon takes no target);
 //! and "Friend", `përs` 129, independent, with an escape pod (`Flags`
 //! 0x0002), whose comm quote is "Well met." (`STR#` 7100 #1), in the
 //! "Yacht") and a synthetic interface file holding the stock comm dialog,
@@ -303,7 +304,7 @@ fn game_data() -> Rc<GameData> {
             Ship::TYPE,
             129,
             Some(b"Raider"),
-            &ship(0, 10, &[], "Raider"),
+            &ship(0, 10, &[128], "Raider"),
         )
         .resource(Ship::TYPE, 130, Some(b"Yacht"), &ship(0, 10, &[], "Yacht"))
         .resource(Weapon::TYPE, 128, Some(b"Blaster"), &blaster())

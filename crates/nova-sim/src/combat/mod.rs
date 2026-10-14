@@ -108,7 +108,9 @@ pub mod stellar;
 pub mod submunition;
 pub mod weapon;
 
-use armament::{Armament, Arsenal, Launch, Rounds, Trigger};
+use std::collections::BTreeMap;
+
+use armament::{Armament, Arsenal, Launch, Rounds, Shooter, Trigger};
 use beam::{Aiming, Beam};
 use damage::{Blast, Hit};
 use defence::{INTERCEPT_RADIUS, PointDefenceRule, Side};
@@ -269,6 +271,9 @@ pub struct Fighter<'a> {
     /// module). It is kept disabled until its armour is gone, never
     /// newly disabled, and the [`DisableRule`] is not asked of it.
     pub held_disabled: bool,
+    /// Whether it is cloaked: it fires only its weapons that fire while
+    /// cloaked ([`Armament::has_ammo`]). The player never is.
+    pub cloaked: bool,
     /// Its weapons.
     pub armament: &'a mut Armament,
     /// Its rounds of ammunition.
@@ -301,6 +306,10 @@ impl Default for Rules<'static> {
         }
     }
 }
+
+/// The share of a shot's mass and energy damage that counts as aimed at
+/// its ship (0.5 @0xdd128, `_CalculateTargetedDamage`).
+pub const AIMED_DAMAGE_SHARE: f64 = 0.5;
 
 /// The shots and beams in flight, and what the fight has reported.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -388,10 +397,50 @@ impl Combat {
         id
     }
 
-    /// Puts `launch` in flight from `side`, at `from`: a fighter's
-    /// [`Sortie`] from a bay, a beam held on the missile `quarry`, on its
-    /// target, or ahead, or a shot of its government.
-    fn launch(&mut self, side: Side, from: &ShipState, launch: Launch, quarry: Option<ShotId>) {
+    /// The damage aimed at each ship by the shots in flight
+    /// (`_CalculateTargetedDamage` @0x3a153-0x3a232): for each shot not
+    /// lost and aimed at a ship ([`Shot::aimed_at`]), its mass and energy
+    /// damage times [`AIMED_DAMAGE_SHARE`], added to that ship's total
+    /// and truncated after each add. Beams are not shots and count for
+    /// nothing. The original keeps each total in 16 bits; here it is not
+    /// wrapped.
+    ///
+    /// The original builds the totals once a frame, before the AI runs
+    /// (`_DoPlayGameWork` @0x44223, before `_AIDispatch` @0x4429d); the
+    /// session builds them from the shots in flight as its traffic
+    /// decides, which is the same point in the frame.
+    #[must_use]
+    pub fn targeted_damage(&self) -> BTreeMap<ShipRef, i32> {
+        let mut aimed = BTreeMap::new();
+        for shot in self.shots.iter().filter(|shot| !shot.lost) {
+            let Some(ship) = shot.aimed_at else {
+                continue;
+            };
+            let damage = f64::from(shot.weapon.mass_damage) + f64::from(shot.weapon.energy_damage);
+            let total: &mut i32 = aimed.entry(ship).or_default();
+            // A sum of `i16` halves stays far within an `i32`.
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                *total = damage
+                    .mul_add(AIMED_DAMAGE_SHARE, f64::from(*total))
+                    .trunc() as i32;
+            }
+        }
+        aimed
+    }
+
+    /// Puts `launch` in flight from `side`, at `from`, its damage aimed at
+    /// `aimed_at`: a fighter's [`Sortie`] from a bay, a beam held on the
+    /// missile `quarry`, on its target, or ahead, or a shot of its
+    /// government.
+    fn launch(
+        &mut self,
+        side: Side,
+        from: &ShipState,
+        launch: Launch,
+        quarry: Option<ShotId>,
+        aimed_at: Option<ShipRef>,
+    ) {
         let Side { ship, fleet, govt } = side;
         self.events.push(CombatEvent::Fired {
             ship,
@@ -419,6 +468,7 @@ impl Combat {
             let shot = Shot {
                 id: self.next_id(),
                 target: launch.target,
+                aimed_at,
                 govt,
                 ..Shot::launch(launch.weapon, ship, fleet, from, launch.heading)
             };
@@ -439,6 +489,7 @@ impl Combat {
             let launches = fighter.armament.fire(
                 fighter.trigger,
                 *fighter.condition,
+                fighter.shooter(),
                 fighter.rounds,
                 &mut fighter.reserves.fuel,
                 chance,
@@ -446,13 +497,20 @@ impl Combat {
                 &mut |spec| aim::aim(spec, &state, &hull, target),
             );
             for launch in launches {
-                self.launch(fighter.side(), &state, launch, None);
+                // A front-quadrant turret firing ahead aims at nothing
+                // (@0x88bf0); every other shot at the ship's target.
+                let ahead =
+                    launch.weapon.guidance == Guidance::FrontTurret && launch.target.is_none();
+                let aimed_at = if ahead { None } else { fighter.target };
+                self.launch(fighter.side(), &state, launch, None, aimed_at);
             }
         }
     }
 
-    /// Step 2: each ship's point defence fires at the missile it picks,
-    /// as `rule` says which are hostile with the relations in `govts`.
+    /// Step 2: each ship's point defence its trigger asks for
+    /// ([`Trigger::point_defence`](armament::Trigger::point_defence))
+    /// fires at the missile it picks, as `rule` says which are hostile
+    /// with the relations in `govts`.
     fn defend(
         &mut self,
         fighters: &mut [Fighter],
@@ -460,12 +518,16 @@ impl Combat {
         govts: &Governments,
         chance: &mut dyn Chance,
     ) {
-        for fighter in fighters.iter_mut() {
+        for fighter in fighters
+            .iter_mut()
+            .filter(|fighter| fighter.trigger.point_defence)
+        {
             let (state, hull) = (fighter.state, fighter.hull);
             let side = fighter.side();
             let shots = &self.shots;
             let fired = fighter.armament.fire_point_defence(
                 *fighter.condition,
+                fighter.shooter(),
                 fighter.rounds,
                 &mut fighter.reserves.fuel,
                 chance,
@@ -476,7 +538,7 @@ impl Combat {
                 },
             );
             if let Some((launch, missile)) = fired {
-                self.launch(side, &state, launch, Some(missile));
+                self.launch(side, &state, launch, Some(missile), None);
             }
         }
     }
@@ -835,6 +897,16 @@ impl Combat {
 }
 
 impl Fighter<'_> {
+    /// The ship as `_WeaponHasAmmo` asks of it: an NPC or the player,
+    /// cloaked or not, and its class's `KeyCarried`.
+    fn shooter(&self) -> Shooter {
+        Shooter {
+            npc: matches!(self.ship, ShipRef::Npc(_)),
+            cloaked: self.cloaked,
+            key_carried: self.hull.key_carried,
+        }
+    }
+
     /// The ship's side: itself, its fleet and its government.
     fn side(&self) -> Side {
         Side {
@@ -931,9 +1003,21 @@ mod tests {
         reserves: Reserves,
         condition: Condition,
         held_disabled: bool,
+        cloaked: bool,
         armament: Armament,
         rounds: BTreeMap<WeaponId, u32>,
     }
+
+    /// A trigger holding no weapon, its point defence running, as a test
+    /// ship's always did before an NPC's ran only when its AI asks.
+    const QUIET: Trigger = Trigger {
+        primary: false,
+        secondary: None,
+        only: None,
+        turrets_only: false,
+        bays: false,
+        point_defence: true,
+    };
 
     impl Ship {
         /// NPC `id` at (`x`, `y`), at rest, facing right, unarmed, with
@@ -952,10 +1036,11 @@ mod tests {
                 hull: HullSpec::default(),
                 shield_regen: 0.0,
                 armor_regen: 0.0,
-                trigger: Trigger::default(),
+                trigger: QUIET,
                 reserves: Reserves::full(10.0, 30.0, 100.0),
                 condition: Condition::Intact,
                 held_disabled: false,
+                cloaked: false,
                 armament: Armament::default(),
                 rounds: BTreeMap::new(),
             }
@@ -971,6 +1056,7 @@ mod tests {
                     only: None,
                     turrets_only: false,
                     bays: false,
+                    point_defence: true,
                 },
                 ..self
             }
@@ -991,6 +1077,7 @@ mod tests {
                 reserves: &mut self.reserves,
                 condition: &mut self.condition,
                 held_disabled: self.held_disabled,
+                cloaked: self.cloaked,
                 armament: &mut self.armament,
                 rounds: &mut self.rounds,
             }
@@ -1080,6 +1167,216 @@ mod tests {
             .iter()
             .filter(|event| matches!(event, CombatEvent::Fired { ship: s, .. } if *s == ship))
             .count()
+    }
+
+    /// The shots in flight after `ship`, firing `record`, fires a tick
+    /// among `others`.
+    fn launched_by(ship: Ship, record: WeaponRecord, others: Vec<Ship>) -> Combat {
+        let mut combat = Combat::default();
+        let mut ships = vec![ship.armed(record)];
+        ships.extend(others);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        combat
+    }
+
+    #[test]
+    fn every_shot_a_ship_fires_is_aimed_at_its_target() {
+        let homing = WeaponRecord {
+            guidance: 1,
+            guided_turn: 70,
+            ..blaster()
+        };
+        for record in [blaster(), homing] {
+            let combat = launched_by(
+                Ship::at(1, 0.0, 0.0).targeting(B),
+                record,
+                vec![Ship::at(2, 0.0, -300.0)],
+            );
+            assert_eq!(combat.shots().len(), 1);
+            assert_eq!(combat.shots()[0].aimed_at, Some(B), "{:?}", record.guidance);
+        }
+        let combat = launched_by(Ship::at(1, 0.0, 0.0), blaster(), Vec::new());
+        assert_eq!(combat.shots()[0].aimed_at, None, "no target");
+        let gone = launched_by(Ship::at(1, 0.0, 0.0).targeting(C), blaster(), Vec::new());
+        assert_eq!(
+            gone.shots()[0].aimed_at,
+            Some(C),
+            "its target, there or not"
+        );
+    }
+
+    #[test]
+    fn a_front_turret_firing_ahead_is_aimed_at_nothing() {
+        let front = WeaponRecord {
+            guidance: 7,
+            ..blaster()
+        };
+        // Facing right: B ahead, C behind.
+        let ahead = launched_by(
+            Ship::at(1, 0.0, 0.0).targeting(B),
+            front,
+            vec![Ship::at(2, 300.0, 0.0)],
+        );
+        assert_eq!(ahead.shots()[0].aimed_at, Some(B));
+        let astern = launched_by(
+            Ship::at(1, 0.0, 0.0).targeting(C),
+            front,
+            vec![Ship::at(3, -300.0, 0.0)],
+        );
+        assert_eq!(astern.shots()[0].aimed_at, None, "fired straight ahead");
+    }
+
+    /// A shot of `record` by A, aimed at B.
+    fn aimed(record: WeaponRecord) -> Shot {
+        Shot {
+            aimed_at: Some(B),
+            ..Shot::launch(WeaponSpec::new(&record), A, A, &ShipState::default(), 0.0)
+        }
+    }
+
+    #[test]
+    fn the_damage_aimed_at_a_ship_is_half_its_shots_mass_and_energy_truncated_after_each() {
+        let five = WeaponRecord {
+            mass_dmg: 2,
+            energy_dmg: 3,
+            ..blaster()
+        };
+        let mut combat = Combat {
+            shots: vec![aimed(five), aimed(five), aimed(five)],
+            ..Combat::default()
+        };
+        assert_eq!(
+            combat.targeted_damage(),
+            BTreeMap::from([(B, 6)]),
+            "2.5 three times, truncated each time: not 7"
+        );
+        let missile = WeaponRecord {
+            guidance: 1,
+            mass_dmg: 30,
+            energy_dmg: 11,
+            ..blaster()
+        };
+        combat.shots = vec![
+            aimed(missile),
+            aimed(blaster()),
+            Shot {
+                aimed_at: Some(C),
+                ..aimed(five)
+            },
+            Shot {
+                aimed_at: None,
+                ..aimed(missile)
+            },
+            Shot {
+                lost: true,
+                ..aimed(missile)
+            },
+        ];
+        // 20.5 truncated to 20, then 20 + 7 = 27.
+        assert_eq!(combat.targeted_damage(), BTreeMap::from([(B, 27), (C, 2)]));
+        let negative = WeaponRecord {
+            mass_dmg: -3,
+            energy_dmg: 0,
+            ..blaster()
+        };
+        combat.shots = vec![aimed(negative), aimed(five)];
+        assert_eq!(
+            combat.targeted_damage(),
+            BTreeMap::from([(B, 1)]),
+            "-1.5 truncates to -1, then 1.5 to 1"
+        );
+        assert_eq!(Combat::default().targeted_damage(), BTreeMap::new());
+        assert_eq!(AIMED_DAMAGE_SHARE, 0.5);
+    }
+
+    #[test]
+    fn point_defence_is_aimed_at_no_ship() {
+        let quad = WeaponRecord {
+            guidance: 9,
+            ..blaster()
+        };
+        let mut combat = Combat::default();
+        let missile = WeaponRecord {
+            guidance: 1,
+            guided_turn: 70,
+            count: 100,
+            speed: 100,
+            ..weapon(134)
+        };
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(quad).targeting(B),
+            Ship::at(2, 150.0, 0.0).armed(missile).targeting(A),
+        ];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let defence: Vec<&Shot> = combat
+            .shots()
+            .iter()
+            .filter(|shot| shot.weapon.guidance == Guidance::PointDefence)
+            .collect();
+        assert_eq!(defence.len(), 1, "{:?}", combat.shots());
+        assert_eq!(defence[0].aimed_at, None);
+    }
+
+    /// How many shots `ship`, firing `record`, fires in a tick.
+    fn shots_of(ship: Ship, record: WeaponRecord) -> usize {
+        let mut combat = Combat::default();
+        let id = ship.id;
+        let mut ships = [ship.armed(record)];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        fired(&combat.take_events(), id)
+    }
+
+    #[test]
+    fn a_fighter_fires_as_weapon_has_ammo_says_of_its_ship() {
+        use crate::combat::weapon::{AI_WONT_USE, FIRES_CLOAKED, NEEDS_KEY_SHIP};
+        let wont = WeaponRecord {
+            flags2: AI_WONT_USE,
+            ..blaster()
+        };
+        assert_eq!(shots_of(Ship::at(1, 0.0, 0.0), wont), 0, "an NPC");
+        let player = Ship {
+            id: ShipRef::Player,
+            fleet: ShipRef::Player,
+            ..Ship::at(1, 0.0, 0.0)
+        };
+        assert_eq!(shots_of(player, wont), 1, "the player");
+        let cloaked = || Ship {
+            cloaked: true,
+            ..Ship::at(1, 0.0, 0.0)
+        };
+        assert_eq!(shots_of(cloaked(), blaster()), 0, "cloaked");
+        let fires_cloaked = WeaponRecord {
+            flags2: FIRES_CLOAKED,
+            ..blaster()
+        };
+        assert_eq!(shots_of(cloaked(), fires_cloaked), 1);
+        // A key ship needed, its class's `KeyCarried` read from the hull.
+        let keyed = WeaponRecord {
+            flags2: NEEDS_KEY_SHIP,
+            ..blaster()
+        };
+        let carrier = |key| {
+            let mut ship = Ship::at(1, 0.0, 0.0).armed(keyed);
+            ship.hull.key_carried = key;
+            ship.armament = Armament::new([
+                (WeaponSpec::new(&keyed), 1),
+                (
+                    WeaponSpec::new(&WeaponRecord {
+                        guidance: 99,
+                        ammo_type: 200,
+                        ..weapon(150)
+                    }),
+                    1,
+                ),
+            ]);
+            ship.rounds = BTreeMap::from([(WeaponId(150), 1)]);
+            let mut combat = Combat::default();
+            let mut ships = [ship];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            fired(&combat.take_events(), A)
+        };
+        assert_eq!(carrier(Some(ShipId(200))), 1);
+        assert_eq!(carrier(None), 0);
     }
 
     #[test]
@@ -1559,7 +1856,7 @@ mod tests {
         for _ in 0..6 {
             tick(&mut combat, &mut ships, &NovaDisable);
             events.extend(combat.take_events());
-            ships[0].trigger = Trigger::default();
+            ships[0].trigger = QUIET;
         }
         let explosions: Vec<_> = events
             .iter()
@@ -1603,7 +1900,7 @@ mod tests {
         ];
         for _ in 0..6 {
             tick(&mut combat, &mut ships, &NovaDisable);
-            ships[0].trigger = Trigger::default();
+            ships[0].trigger = QUIET;
         }
         assert_eq!(ships[1].reserves.shield.now, 0.0, "hit directly");
         assert_eq!(
@@ -1636,7 +1933,7 @@ mod tests {
                 Ship::at(3, 30.0, 35.0),
             ];
             tick(&mut combat, &mut ships, &NovaDisable);
-            ships[0].trigger = Trigger::default();
+            ships[0].trigger = QUIET;
             for _ in 0..2 {
                 tick(&mut combat, &mut ships, &NovaDisable);
             }
@@ -1748,7 +2045,7 @@ mod tests {
             Ship::at(2, 0.0, 100.0),
         ];
         tick(&mut combat, &mut ships, &NovaDisable);
-        ships[0].trigger = Trigger::default();
+        ships[0].trigger = QUIET;
         ships[1].state.position = Vec2::new(100.0, 0.0);
         tick(&mut combat, &mut ships, &NovaDisable);
         let end = combat.beams()[0].end;
@@ -1790,7 +2087,7 @@ mod tests {
             ships[1].state.velocity = Vec2::new(3.0, 0.0);
             ships[1].state.position = ships[1].state.position + ships[1].state.velocity;
             tick(&mut combat, &mut ships, &NovaDisable);
-            ships[0].trigger = Trigger::default();
+            ships[0].trigger = QUIET;
             if ships[1].reserves.shield.now < 10.0 {
                 hit = true;
                 break;
@@ -1813,7 +2110,7 @@ mod tests {
         ];
         for _ in 0..10 {
             tick(&mut combat, &mut ships, &NovaDisable);
-            ships[0].trigger = Trigger::default();
+            ships[0].trigger = QUIET;
         }
         assert_eq!(combat.shots()[0].target, Some(B), "fired at B");
         ships[1].condition = Condition::Destroyed;
@@ -1867,7 +2164,7 @@ mod tests {
     /// it on the first tick.
     fn missile_attack(defence: WeaponRecord) -> [Ship; 2] {
         let mut defender = Ship::at(1, 0.0, 0.0).armed(defence).facing(0.0);
-        defender.trigger = Trigger::default();
+        defender.trigger = QUIET;
         [
             defender,
             Ship::at(2, 0.0, -200.0)
@@ -1878,6 +2175,40 @@ mod tests {
                 .facing(180.0)
                 .targeting(A),
         ]
+    }
+
+    #[test]
+    fn a_ship_whose_trigger_does_not_ask_runs_no_point_defence() {
+        let rule = Hostility {
+            hostile: true,
+            ..Hostility::default()
+        };
+        let rules = Rules {
+            defence: &rule,
+            ..Rules::default()
+        };
+        let defended = |point_defence: bool| {
+            let mut combat = Combat::default();
+            let mut ships = missile_attack(quad());
+            ships[0].trigger = Trigger {
+                point_defence,
+                ..Trigger::default()
+            };
+            tick_among(
+                &mut combat,
+                &mut ships,
+                &Arsenal::default(),
+                &Governments::default(),
+                rules,
+            );
+            combat
+                .take_events()
+                .iter()
+                .filter(|e| matches!(e, CombatEvent::Fired { ship: A, .. }))
+                .count()
+        };
+        assert_eq!(defended(false), 0, "not asked");
+        assert_eq!(defended(true), 1, "asked");
     }
 
     /// The durability of the one missile in flight, if any.
@@ -1909,7 +2240,7 @@ mod tests {
         let mut events = Vec::new();
         for _ in 0..30 {
             tick_among(&mut combat, &mut ships, &Arsenal::default(), &govts, rules);
-            ships[1].trigger = Trigger::default();
+            ships[1].trigger = QUIET;
             let new = combat.take_events();
             let defended = new
                 .iter()
@@ -2036,15 +2367,16 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            point_defence: true,
         };
         let mut defender = Ship::at(1, 0.0, 0.0).armed(quad()).facing(0.0);
-        defender.trigger = Trigger::default();
+        defender.trigger = QUIET;
         let mut ships = [defender, attacker];
         let mut combat = Combat::default();
         let mut events = Vec::new();
         for _ in 0..10 {
             tick(&mut combat, &mut ships, &NovaDisable);
-            ships[1].trigger = Trigger::default();
+            ships[1].trigger = QUIET;
             events.extend(combat.take_events());
         }
         let flying: Vec<i16> = combat
@@ -2077,10 +2409,11 @@ mod tests {
             only: None,
             turrets_only: false,
             bays: false,
+            point_defence: true,
         };
         for _ in 0..12 {
             tick(&mut combat, &mut ships, &NovaDisable);
-            ships[1].trigger = Trigger::default();
+            ships[1].trigger = QUIET;
         }
         assert_eq!(missile_durability(&combat), Some(4.0), "flown through");
         assert!(
@@ -2102,7 +2435,7 @@ mod tests {
         };
         for _ in 0..3 {
             tick_with(&mut combat, &mut ships, &Arsenal::default(), rules);
-            ships[1].trigger = Trigger::default();
+            ships[1].trigger = QUIET;
         }
         assert_eq!(combat.shots().len(), 1, "only the missile");
         assert_eq!(rule.asked.take().len(), 3, "asked each tick");
@@ -2141,8 +2474,8 @@ mod tests {
         let mut events = Vec::new();
         for _ in 0..8 {
             tick_with(&mut combat, &mut ships, &Arsenal::default(), rules);
-            ships[1].trigger = Trigger::default();
-            ships[2].trigger = Trigger::default();
+            ships[1].trigger = QUIET;
+            ships[2].trigger = QUIET;
             ships[2].state.position = Vec2::new(500.0, 0.0);
             events.extend(combat.take_events());
         }
@@ -2181,8 +2514,8 @@ mod tests {
                 &Arsenal::default(),
                 Rules::default(),
             );
-            ships[1].trigger = Trigger::default();
-            ships[2].trigger = Trigger::default();
+            ships[1].trigger = QUIET;
+            ships[2].trigger = QUIET;
             ships[2].state.position = Vec2::new(500.0, 0.0);
             for shot in &mut combat.shots {
                 if shot.firer == C {
@@ -2225,7 +2558,7 @@ mod tests {
                 &Arsenal::default(),
                 Rules::default(),
             );
-            ships[1].trigger = Trigger::default();
+            ships[1].trigger = QUIET;
             seen.push((missile_durability(&combat), combat.beams().len()));
             events.extend(combat.take_events());
         }
@@ -2303,6 +2636,7 @@ mod tests {
             assert_eq!(sub.position, at);
             assert_eq!(sub.generation, 1);
             assert_eq!(sub.target, Some(C), "the shell's target");
+            assert_eq!(sub.aimed_at, Some(C), "aimed at its own target");
         }
         assert_eq!((subs[0].heading, subs[1].heading), (85.0, 95.0));
         assert_ne!(subs[0].id, subs[1].id);
@@ -2343,6 +2677,7 @@ mod tests {
         let subs = sub_shots(&combat);
         assert_eq!(subs.len(), 2, "{events:?}");
         assert_eq!(subs[0].target, Some(B));
+        assert_eq!(subs[0].aimed_at, Some(B));
         let at = subs[0].position;
         assert!(
             (at - Vec2::new(14.0, 0.0)).length() < 1e-3,

@@ -24,11 +24,20 @@
 //!   @0x2d7ef-0x2dee7), which scatters the `Explode2`'s extra explosions
 //!   when it has them; the Bible's huge explosion for a `DeathDelay` of 60
 //!   or more is not what the executable does.
+//! - Its `Flags` 0x0400 ([`PLANET_TYPE`]) makes it a planet-type ship: an
+//!   NPC's missile flies at it only from a planet-type weapon, and at any
+//!   other ship only from any other weapon (`_AIFireMissile`
+//!   @0x812b4-0x812fb, see [`fire`](crate::ai::fire)).
+//! - Its `KeyCarried` ([`HullSpec::key_carried`]) is the ship a weapon of
+//!   `Flags2` 0x0080 needs aboard (`_WeaponHasAmmo` @0xba07-0xba85, see
+//!   [`Armament::has_ammo`](super::armament::Armament::has_ammo)); none
+//!   below a `shïp` ID, as the original keeps -1 below 128 (@0x7a64b-0x7a67d).
 
 use std::fmt::Debug;
 
 use super::weapon::Explosion;
-use crate::catalog::HullRecord;
+use crate::bay::FIRST_SHIP;
+use crate::catalog::{HullRecord, ShipId};
 use crate::reserves::Gauge;
 
 /// The hit radius of a ship type without a `shän`, in pixels: a
@@ -57,6 +66,8 @@ pub const DISABLE_PERCENT: f64 = 33.333;
 pub const TOUGH_DISABLE_PERCENT: f64 = 10.0;
 /// The `shïp` `Flags` bits that blind its turrets, as a `wëap`'s do.
 pub const BLIND_SPOTS: u16 = 0x7000;
+/// The `shïp` `Flags` bit of a planet-type ship.
+pub const PLANET_TYPE: u16 = 0x0400;
 /// The mass, in tons, from which a ship's death explosion has a size.
 pub const DEATH_SIZE_MASS: f32 = 100.0;
 /// The death explosion's size per ton (the double @0xdd588).
@@ -65,6 +76,8 @@ pub const DEATH_SIZE_PER_TON: f32 = 0.075;
 pub const DEATH_SIZE_BASE: f32 = 50.0;
 
 /// A ship type's hull, in the simulation's units.
+// Each flag is one of the ship type's `Flags` bits, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HullSpec {
     /// How near, in pixels, a shot must pass its centre to hit it.
@@ -101,6 +114,11 @@ pub struct HullSpec {
     /// without a sprite. Whether it is on screen reads it with the width
     /// (see [`cloak::on_screen`](crate::cloak::on_screen)).
     pub sprite_height: Option<f32>,
+    /// Whether it is a planet-type ship, its `Flags` [`PLANET_TYPE`].
+    pub planet_type: bool,
+    /// The ship a weapon of `Flags2` 0x0080 needs aboard, its
+    /// `KeyCarried`; none below a `shïp` ID.
+    pub key_carried: Option<ShipId>,
 }
 
 impl Default for HullSpec {
@@ -121,6 +139,8 @@ impl Default for HullSpec {
             board_reach: DEFAULT_BOARD_REACH,
             sprite_size: None,
             sprite_height: None,
+            planet_type: false,
+            key_carried: None,
         }
     }
 }
@@ -146,6 +166,8 @@ impl HullSpec {
             board_reach,
             sprite_size: size,
             sprite_height: record.height.filter(|&height| height > 0).map(f32::from),
+            planet_type: record.flags & PLANET_TYPE != 0,
+            key_carried: record.key_carried.filter(|ship| ship.0 >= FIRST_SHIP),
         }
     }
 
@@ -219,7 +241,7 @@ impl DisableRule for NovaDisable {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::catalog::BoomId;
+    use crate::catalog::{BoomId, ShipId};
     use crate::testkit::hull;
 
     fn armor(now: f32, max: f32) -> Gauge {
@@ -385,6 +407,41 @@ mod tests {
         assert_eq!(HullSpec::new(&hull(128)).blind_spots, 0);
         assert_eq!(HullSpec::default().blind_spots, 0);
         assert_eq!(BLIND_SPOTS, 0x7000);
+    }
+
+    #[test]
+    fn a_hull_is_planet_type_with_its_flags_0x0400() {
+        let planet = HullSpec::new(&HullRecord {
+            flags: 0x0410,
+            ..hull(141)
+        });
+        assert!(planet.planet_type);
+        assert!(planet.tough, "the other bits still read");
+        let ordinary = HullSpec::new(&HullRecord {
+            flags: 0xfbff,
+            ..hull(141)
+        });
+        assert!(!ordinary.planet_type);
+        assert!(!HullSpec::default().planet_type);
+        assert_eq!(PLANET_TYPE, 0x0400);
+    }
+
+    #[test]
+    fn a_hulls_key_carried_ship_is_none_below_128() {
+        let carrier = |key| {
+            HullSpec::new(&HullRecord {
+                key_carried: key,
+                ..hull(141)
+            })
+            .key_carried
+        };
+        assert_eq!(carrier(Some(ShipId(128))), Some(ShipId(128)));
+        assert_eq!(carrier(Some(ShipId(300))), Some(ShipId(300)));
+        assert_eq!(carrier(Some(ShipId(127))), None);
+        assert_eq!(carrier(Some(ShipId(0))), None);
+        assert_eq!(carrier(Some(ShipId(-5))), None);
+        assert_eq!(carrier(None), None);
+        assert_eq!(HullSpec::default().key_carried, None);
     }
 
     #[test]

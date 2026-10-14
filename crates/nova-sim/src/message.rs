@@ -45,6 +45,12 @@ pub enum SimMessage {
         /// The credits fined: none for no fine.
         fine: i64,
     },
+    /// A disabled former escort repaired itself and rejoined the fleet
+    /// (`_HandleShip` @0x33b45-0x33bac, `STR#` 2002 #127).
+    EscortRepaired,
+    /// A disabled former fighter repaired itself and rejoined the fleet
+    /// (`_HandleShip` @0x33b32-0x33bac, `STR#` 2002 #128).
+    FighterRepaired,
     /// A scan found illegal `jünk`: the player is caught smuggling it
     /// (`_ScanPlayer` @0x7eba9-0x7eece; see [`scan`](crate::scan)).
     IllegalJunk {
@@ -100,6 +106,9 @@ impl SimMessage {
     ///   [`IllegalJunk`](Self::IllegalJunk) and
     ///   [`IllegalOutfit`](Self::IllegalOutfit): 400 (`_ScanPlayer`
     ///   @0x7e79d, @0x7ea96, @0x7eece, @0x7f38f).
+    /// - [`EscortRepaired`](Self::EscortRepaired) and
+    ///   [`FighterRepaired`](Self::FighterRepaired): 250 (`_HandleShip`
+    ///   @0x33ba1).
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
@@ -115,6 +124,7 @@ impl SimMessage {
             | Self::MissionShipLost
             | Self::CargoJettisoned
             | Self::NonMissionCargoJettisoned => 240,
+            Self::EscortRepaired | Self::FighterRepaired => 250,
         }
     }
 }
@@ -141,6 +151,8 @@ mod tests {
             (SimMessage::NonMissionCargoJettisoned, 240),
             (SimMessage::MissionScanned, 400),
             (smuggling, 400),
+            (SimMessage::EscortRepaired, 250),
+            (SimMessage::FighterRepaired, 250),
             (
                 SimMessage::IllegalJunk {
                     scanner: ShipId(128),

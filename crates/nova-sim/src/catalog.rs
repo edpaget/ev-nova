@@ -1069,6 +1069,9 @@ pub struct HullRecord {
     pub height: Option<i16>,
     /// Its `Strength`: how strong it counts in a fight.
     pub strength: i16,
+    /// Its `KeyCarried`: the ship a weapon of `Flags2` 0x0080 needs
+    /// aboard, raw; none for -1.
+    pub key_carried: Option<ShipId>,
 }
 
 /// A government's penalties for crimes against its ships, raw from its

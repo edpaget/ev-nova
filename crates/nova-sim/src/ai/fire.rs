@@ -16,19 +16,55 @@
 //! - **The heading it wants** ([`wanted_heading`]): the lead angle for its
 //!   first forward gun's speed, or the plain bearing with none.
 //! - **A gun** (guidance -1, 0 and 6; a homing weapon only while no other
-//!   gun has its ammunition, @0x80243): reloaded and affordable; in range, the distance at
-//!   most its range plus [`RANGE_MARGIN`] (a beam's range is its length);
-//!   a rocket with a `ProxRadius` only while the target is
-//!   [`PROX_CLEARANCE`] times it away on both axes. Of those, the most
-//!   `EnergyDmg` while the target's shields are up, else the most
+//!   gun of the target's planet-type has its ammunition, @0x7ffaa-0x8001c,
+//!   @0x80243): none at a target the shooter does not see
+//!   (`_ShipVisibleToShip` @0x7ff1e-0x7ff2c, [`cloak::visible`](crate::cloak::visible)); a
+//!   planet-type weapon (`Flags2` 0x0400) exactly when the target's ship
+//!   type is planet-type (`Flags` 0x0400, @0x7ffaa-0x7ffdf); reloaded and
+//!   affordable; in range, the distance at most its range plus
+//!   [`RANGE_MARGIN`] (a beam's range is its length); a rocket with a
+//!   `ProxRadius` only while the target is [`PROX_CLEARANCE`] times it
+//!   away on both axes. Of those, the most `EnergyDmg` while the target's
+//!   shield is at or above none (@0x801e5-0x801fb), else the most
 //!   `MassDmg`, a value of none or less counting as 1, a tie to the
 //!   earlier mount. Guidance 5 is never chosen.
-//! - **A turret** (3, 4, 7 and 8): reloaded, affordable, in range, not in
-//!   a blind spot, and 7 and 8 only with the target within [`FRONT_ARC`]
-//!   of the nose and of the tail. Chosen by the same shield rule.
-//! - **A missile** (1): the first homing weapon whose range squared is at
-//!   least [`MISSILE_RANGE`] of the distance squared, reloaded and
-//!   affordable.
+//! - **A turret** (3, 4, 7 and 8): none at a target whose ship type is
+//!   untargetable (`shïp` `Flags2` 0x0004,
+//!   [`UNTARGETABLE`](crate::cloak::UNTARGETABLE), `_AIFireTurret`
+//!   @0x80b51), whatever the shooter's scanner, nor at one the shooter
+//!   does not see (@0x80b5f-0x80b70); of the target's planet-type
+//!   (@0x80be6-0x80c23), reloaded, affordable, in range, not in a blind
+//!   spot, and 7 and 8 only with the target within [`FRONT_ARC`] of the
+//!   nose and of the tail, measured as the rulebook's
+//!   [`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)
+//!   entry says ([`FireRules`]; by the engine, unfolded across the seam,
+//!   @0x80c3d-0x80cf3). Chosen by the same shield rule (@0x80e12-0x80e27).
+//! - **Point defence** ([`Trigger::point_defence`]): asked for whenever
+//!   the manoeuvre reaches a turret, before any check of the target
+//!   (`_AIFireTurret` calls `_HandleShipPointDefense` @0x80b0d):
+//!   dogfighting, sniping, fleeing, and approaching while facing within
+//!   [`GUN_FACING`].
+//! - **A missile** (1, `_AIFireMissile` @0x8115d): none at a target whose
+//!   ship type is untargetable unless the shooter's ship type carries a
+//!   scanner with `ModVal` bit 0x0004 (@0x811a7-0x811cd,
+//!   [`CloakGear::scanner`](crate::cloak::CloakGear::scanner)), nor at a
+//!   cloaked target unless it carries one with bit 0x0008
+//!   (`_ShipCanTargetCloakedShips` @0x811e7-0x811fd); the player counts
+//!   its own ship type's bit ([`PlayerSide::untargetable`]) and never
+//!   cloaks. None either while the damage the shots in flight aim at the
+//!   target ([`Surroundings::targeted`],
+//!   [`Combat::targeted_damage`](crate::combat::Combat::targeted_damage))
+//!   is at least [`SUFFICIENT_DAMAGE`] times its shield and armour
+//!   (`_SufficentTargetedDamage` @0x81203-0x8121c, @0x3fd22-0x3fd53); a
+//!   gun may still fire. Then, of the homing weapons it carries, the one of lowest
+//!   weapon ID (the walk by weapon index, @0x81267-0x8133a) that suits
+//!   the target ([`suitable_missile`], @0x812ab), is a planet-type weapon
+//!   (`Flags2` 0x0400) exactly when the target's ship type is planet-type
+//!   (`Flags` 0x0400, @0x812b4-0x812fb), has its ammunition ([`has_ammo`],
+//!   @0x81307) and whose range squared is at least [`MISSILE_RANGE`] of
+//!   the distance squared (@0x81310-0x8132b), fired only if it has
+//!   reloaded (@0x81349-0x8135d): one reloading does not give way to a
+//!   later one.
 //! - **By manoeuvre**, a later pick overriding an earlier: approaching,
 //!   a gun, then a turret (each while facing within [`GUN_FACING`] times
 //!   the turn rate of the heading it wants), then a missile (within
@@ -39,18 +75,49 @@
 //! - **Destroying weapons** ([`destroys`]): a weapon that does mass damage,
 //!   is not `Flags2` 0x1000, is guided -1, 0, 3, 4, 6, 7 or 8, and has its
 //!   ammunition. A ship with none leaves a disabled target alone.
-//! - There is no friendly-fire check, as in the original. The difficulty
-//!   reload multiplier against the player, `_SufficentTargetedDamage` and
-//!   `_SuitableMissileType` are not modelled yet.
+//! - **Ammunition**: every weapon an NPC picks, and every destroying
+//!   weapon it counts, has its ammunition as `_WeaponHasAmmo` says
+//!   ([`has_ammo`]): an NPC never picks a weapon of `Flags2` 0x0100, a
+//!   cloaked one only a weapon of `Flags2` 0x4000, and a weapon of
+//!   `Flags2` 0x0080 needs its class's `KeyCarried` aboard.
+//! - There is no friendly-fire check, as in the original. Guns
+//!   (`_AIFireGun`) never read the untargetable bit.
+//!
+//! # Not modelled
+//!
+//! - The difficulty reload multiplier against the player.
+//! - The kept pick: `_AIFireGun` sets the fire flag whenever +0x72 holds
+//!   a weapon (@0x80213-0x8021d), a pick `_HandleShip` keeps after firing
+//!   a weapon of `Flags` 0x0002 (@0x34ff0-0x35018), and `_AIFireTurret`
+//!   leaves an earlier pick standing (@0x80e33-0x80e37); here
+//!   [`Trigger::only`] holds one tick's pick: rdm phase
+//!   player-led-ships/phase-34.
+//! - A full turret's (3 and 4) blind-spot angle, which `_AIFireTurret`
+//!   reads from a local only an earlier 7 or 8 slot sets (@0x80c29-0x80c37,
+//!   @0x80c5b), else uninitialised stack: here the bearing.
+//! - The whole-degree truncation in the arc test (@0x80c7f, @0x80c95).
+//! - An NPC's rounds kept on each launcher, as `_WeaponHasAmmo` reads
+//!   them (@0xbab4-0xbac2) and `_FireAIShipWeapon` spends them
+//!   (@0x88d5f): here they are kept by ammunition. rdm phase
+//!   player-led-ships/phase-33 takes it, with the hopeless chase's direct
+//!   slot test (@0x8103a-0x8104e).
+//! - `_ShipTurnRate`'s own factors, which [`suitable_missile`] reads
+//!   through the target's turn rate: rdm
+//!   system-traffic-fidelity/phase-17-npc-skill-and-speed-factors.
 
+#[cfg(doc)]
+use crate::ai::PlayerSide;
 use crate::ai::{Goal, Surroundings};
 use crate::catalog::WeaponId;
 use crate::combat::ShipRef;
 use crate::combat::aim::{FRONT_ARC, angle_off, bearing, blind, lead};
-use crate::combat::armament::{Mount, Trigger};
+#[cfg(doc)]
+use crate::combat::armament::Armament;
+use crate::combat::armament::{Mount, Shooter, Trigger};
 use crate::combat::projectile::Target;
-use crate::combat::weapon::{Guidance, WeaponSpec};
+use crate::combat::weapon::{AVOIDS_FAST_SHIPS, Ammo, Guidance, WeaponSpec};
 use crate::flight::ShipState;
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 
 /// How near, in pixels on either axis, an attacker dogfights rather than
@@ -72,6 +139,26 @@ pub const MISSILE_FACING: f32 = 4.0;
 pub const MISSILE_RANGE: f32 = 0.95;
 /// `Flags2`: a weapon that does not destroy.
 pub const NOT_DESTROYING: u16 = 0x1000;
+/// The whole degrees a tick a target must turn more than for a slow or
+/// flagged missile to be unsuitable for it (the immediate 3 @0x3512 and
+/// @0x3526).
+pub const FAST_TARGET_TURN: f32 = 3.0;
+/// The guided turn, in degrees a tick, at or below which a missile is
+/// unsuitable for a fast target (2.0 @0xdd074).
+pub const SLOW_MISSILE_TURN: f32 = 2.0;
+/// How many times its shield and armour the damage aimed at a target
+/// must be for it to suffice (1.05 @0xdd498, `_SufficentTargetedDamage`).
+pub const SUFFICIENT_DAMAGE: f64 = 1.05;
+
+/// The rulebook's entries an NPC's weapon pick follows, held by the
+/// behaviours that fire ([`NovaAi::from_rulebook`](crate::NovaAi::from_rulebook)
+/// reads them).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FireRules {
+    /// How a quadrant turret measures its arc
+    /// ([`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)).
+    pub quadrant_arc: RuleSource,
+}
 
 /// How an NPC flies its fight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,47 +252,205 @@ fn destroying(spec: &WeaponSpec) -> bool {
         )
 }
 
+/// Whether `npc` has the ammunition for `mount`, one of its own, as
+/// `_WeaponHasAmmo` says ([`Armament::has_ammo`]): an NPC, cloaked or
+/// not, of its class's `KeyCarried`, with its rounds and fuel.
+#[must_use]
+pub fn has_ammo(npc: &Npc, mount: &Mount) -> bool {
+    let shooter = Shooter {
+        npc: true,
+        cloaked: npc.cloak.is_cloaked(),
+        key_carried: npc.hull.key_carried,
+    };
+    npc.armament
+        .has_ammo(mount, &npc.rounds, npc.reserves.fuel, shooter)
+}
+
+/// Whether a missile of `spec` suits a target turning `target_turn_rate`
+/// degrees a tick (`_SuitableMissileType` @0x34e1-0x353a): not when the
+/// target turns more than [`FAST_TARGET_TURN`] whole degrees a tick and the
+/// missile either won't fire at fast ships
+/// ([`AVOIDS_FAST_SHIPS`](crate::combat::weapon::AVOIDS_FAST_SHIPS)) or
+/// turns [`SLOW_MISSILE_TURN`] or less.
+///
+/// The original asks `_ShipTurnRate` of the target, whose factors (the
+/// tractor's, the nag ship's, the floor and ionization) are rdm
+/// system-traffic-fidelity/phase-17-npc-skill-and-speed-factors's; here
+/// the target's [`Handling::turn_rate`](crate::handling::Handling) stands
+/// in for it.
+#[must_use]
+pub fn suitable_missile(spec: &WeaponSpec, target_turn_rate: f32) -> bool {
+    let fast = target_turn_rate.trunc() > FAST_TARGET_TURN;
+    let slow = spec.flags & AVOIDS_FAST_SHIPS != 0 || spec.turn <= SLOW_MISSILE_TURN;
+    !(fast && slow)
+}
+
 /// Whether `npc` holds a destroying weapon (see the module docs).
 #[must_use]
 pub fn destroys(npc: &Npc) -> bool {
     npc.armament
         .mounts()
         .iter()
-        .any(|mount| destroying(&mount.spec) && mount.affords(&npc.rounds, npc.reserves.fuel))
+        .any(|mount| destroying(&mount.spec) && has_ammo(npc, mount))
+}
+
+/// How much of its weapons a ship can still fire (`_AIShipIsOutOfAmmo`
+/// @0x7f71f, which returns 0, 1 or 2 for these in order).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AmmoLeft {
+    /// Every weapon it holds can fire, or some ammunition- or fuel-using
+    /// one still can.
+    Armed,
+    /// Every ammunition- or fuel-using weapon is out, but a weapon of
+    /// unlimited ammunition remains (the original's `AmmoType`
+    /// -1000..-1, @0x7f750-0x7f75f; here [`Ammo::Unlimited`] and
+    /// [`Ammo::Other`]).
+    OnlyUnlimited,
+    /// It holds no weapon, or every weapon it holds is out of rounds
+    /// (a fighter bay's rounds are its fighters) or of fuel (a shot
+    /// costing more than the fuel left, @0x7f797).
+    Dry,
+}
+
+/// How much of its weapons `npc` can still fire (see [`AmmoLeft`]).
+///
+/// Only [`AmmoLeft::Dry`] is read today, by
+/// [`select_target`](crate::ai::target::select_target); the escort's
+/// fallback that reads the others (`_EscortAI` @0x83bb5) stays with
+/// rdm:task/escorts-follow-up.
+#[must_use]
+pub fn ammo_left(npc: &Npc) -> AmmoLeft {
+    let mut unlimited = false;
+    let mut spending = false;
+    for mount in npc.armament.mounts() {
+        if matches!(mount.spec.ammo, Ammo::Unlimited | Ammo::Other(_)) {
+            unlimited = true;
+        } else if mount.affords(&npc.rounds, npc.reserves.fuel) {
+            return AmmoLeft::Armed;
+        } else {
+            spending = true;
+        }
+    }
+    match (spending, unlimited) {
+        (false, true) => AmmoLeft::Armed,
+        (true, true) => AmmoLeft::OnlyUnlimited,
+        (_, false) => AmmoLeft::Dry,
+    }
 }
 
 /// The weapon `npc` fires now among `around`, if any (see the module
-/// docs), and its fighter bays while it attacks or snipes at a ship that
-/// is live there.
+/// docs), its fighter bays while it attacks or snipes at a ship that is
+/// live there, and its point defence while its manoeuvre reaches a turret
+/// (see the module docs).
+///
+/// A target with no state here (gone from the system) asks for no point
+/// defence, where the original's handler may still reach
+/// `_AIFireTurret` on the frame before its next think drops the target: a
+/// one-tick lag the player cannot see.
 #[must_use]
-pub fn trigger(npc: &Npc, around: &Surroundings) -> Trigger {
-    let only = pick(npc, around);
+pub fn trigger(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
+    let only = pick(npc, around, rules);
     Trigger {
         only,
         bays: npc.goal.attacking().is_some_and(|ship| around.live(ship)),
+        point_defence: asks_turret(npc, around),
         ..Trigger::default()
     }
 }
 
-/// The weapon [`trigger`] picks, if any.
-fn pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
+/// Whether `npc`'s fight reaches `_AIFireTurret` this tick, which runs its
+/// point defence before any check of the target (@0x80b0d): dogfighting
+/// (`_LowLevelAIHandler` substate 6, @0x85f17), sniping (0xe,
+/// @0x8730e-0x87324), fleeing (5, @0x85d5c-0x85d72), and approaching only
+/// while facing within [`GUN_FACING`] turns of the heading it wants (7,
+/// @0x868d3-0x868f6).
+fn asks_turret(npc: &Npc, around: &Surroundings) -> bool {
+    let Some(at) = npc.goal.quarry().and_then(|ship| around.state_of(ship)) else {
+        return false;
+    };
+    match manoeuvre(npc.goal, &npc.state, &at) {
+        None => false,
+        Some(Manoeuvre::Approach) => facing(npc, &at, GUN_FACING),
+        Some(_) => true,
+    }
+}
+
+/// Whether `npc` faces within `turns` of its turn rate of the heading it
+/// wants to fire at a ship at `at` ([`wanted_heading`]).
+fn facing(npc: &Npc, at: &ShipState, turns: f32) -> bool {
+    angle_off(npc.state.heading, wanted_heading(npc, at)) <= turns * npc.stats.handling.turn_rate
+}
+
+/// The weapon [`trigger`] picks, if any, by `rules`.
+fn pick(npc: &Npc, around: &Surroundings, rules: FireRules) -> Option<WeaponId> {
     let ship = npc.goal.quarry()?;
     if !around.live(ship) {
         return None;
     }
     let at = around.state_of(ship)?;
-    let shields_up = match ship {
+    let reserves = match ship {
         ShipRef::Player => around.player.map(|player| player.reserves),
         ShipRef::Npc(id) => around.npc(id).map(|other| other.reserves),
+    };
+    // At or above none, as `_AIFireTurret` (@0x80e12-0x80e27) and
+    // `_AIFireGun` (@0x801e5-0x801fb, 0.0 at 0xdd054) test it: a shield of
+    // exactly none still picks by energy.
+    let shields_up = reserves.is_some_and(|reserves| reserves.shield.now >= 0.0);
+    let aimed_enough = reserves.is_some_and(|reserves| {
+        let standing = reserves.shield.now + reserves.armor.now;
+        f64::from(around.aimed_at(ship)) >= SUFFICIENT_DAMAGE * f64::from(standing)
+    });
+    // The player has no cloak.
+    let (untargetable, cloaked) = match ship {
+        ShipRef::Player => (
+            around.player.is_some_and(|player| player.untargetable),
+            false,
+        ),
+        ShipRef::Npc(id) => around.npc(id).map_or((false, false), |other| {
+            (other.cloak_gear.untargetable(), other.cloak.is_cloaked())
+        }),
+    };
+    // The player never cloaks, so is always seen. An NPC is seen as
+    // `_ShipVisibleToShip(target, shooter)` says (@0x971c, called
+    // @0x7ff1e-0x7ff2c and @0x80b5f-0x80b70): the shooter escorts it
+    // (shooter +0x9a is the target's +0x86) and has a cloak, @0x9788-0x97a2.
+    let seen = match ship {
+        ShipRef::Player => true,
+        ShipRef::Npc(id) => around.npc(id).is_some_and(|other| {
+            crate::cloak::visible(
+                other.cloak,
+                other.state.position,
+                other.emerging(),
+                crate::cloak::Observer {
+                    at: npc.state.position,
+                    scanner: npc.cloak_gear.scanner.on_screen,
+                    cloaked_escort: npc.leader == Some(other.id) && npc.cloak_gear.device,
+                },
+            )
+        }),
+    };
+    let (turn_rate, planet_type) = match ship {
+        ShipRef::Player => around
+            .player
+            .map(|player| (player.handling.turn_rate, player.hull.planet_type)),
+        ShipRef::Npc(id) => around
+            .npc(id)
+            .map(|other| (other.stats.handling.turn_rate, other.hull.planet_type)),
     }
-    .is_some_and(|reserves| reserves.shield.now > 0.0);
+    .unwrap_or_default();
     let manoeuvre = manoeuvre(npc.goal, &npc.state, &at)?;
-    let off = angle_off(npc.state.heading, wanted_heading(npc, &at));
-    let facing = |turns: f32| off <= turns * npc.stats.handling.turn_rate;
+    let facing = |turns: f32| facing(npc, &at, turns);
     let sight = Sight {
         npc,
         at: &at,
         shields_up,
+        untargetable,
+        cloaked,
+        seen,
+        aimed_enough,
+        turn_rate,
+        planet_type,
+        quadrant_arc: rules.quadrant_arc,
     };
     let gun = || facing(GUN_FACING).then(|| sight.gun()).flatten();
     let turret = || sight.turret();
@@ -221,10 +466,29 @@ fn pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
 }
 
 /// An NPC sizing up its target at `at`.
+// Each flag is its own, read on its own.
+#[allow(clippy::struct_excessive_bools)]
 struct Sight<'a> {
     npc: &'a Npc,
     at: &'a ShipState,
     shields_up: bool,
+    /// Whether the target's ship type is untargetable.
+    untargetable: bool,
+    /// Whether the target is cloaked.
+    cloaked: bool,
+    /// Whether the shooter sees the target (`_ShipVisibleToShip`
+    /// @0x971c): a gun or turret holds fire at one it does not see.
+    seen: bool,
+    /// Whether the damage aimed at the target suffices
+    /// (`_SufficentTargetedDamage` @0x3fd22-0x3fd53).
+    aimed_enough: bool,
+    /// The target's turn rate, in degrees a tick.
+    turn_rate: f32,
+    /// Whether the target's ship type is planet-type.
+    planet_type: bool,
+    /// How a quadrant turret measures its arc
+    /// ([`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)).
+    quadrant_arc: RuleSource,
 }
 
 impl Sight<'_> {
@@ -236,7 +500,7 @@ impl Sight<'_> {
 
     /// Whether `mount` is ready: reloaded and paid for.
     fn ready(&self, mount: &Mount) -> bool {
-        mount.reload <= 0.0 && mount.affords(&self.npc.rounds, self.npc.reserves.fuel)
+        mount.reload <= 0.0 && has_ammo(self.npc, mount)
     }
 
     /// Whether `spec` reaches the target: within its range and the margin.
@@ -287,50 +551,89 @@ impl Sight<'_> {
 
     /// The gun it fires, if any (see the module docs).
     fn gun(&self) -> Option<WeaponId> {
+        if !self.seen {
+            return None;
+        }
         let usable = |mount: &Mount| {
             self.ready(mount) && self.reaches(&mount.spec) && self.clear_of(&mount.spec)
         };
-        let armed = self.npc.armament.mounts().iter().any(|mount| {
-            forward(&mount.spec) && mount.affords(&self.npc.rounds, self.npc.reserves.fuel)
-        });
+        // The walk passes a slot of the other planet-type before it marks
+        // the ship armed (@0x7ffaa-0x8001c).
+        let suits = |spec: &WeaponSpec| spec.planet_type() == self.planet_type;
+        let armed =
+            self.npc.armament.mounts().iter().any(|mount| {
+                forward(&mount.spec) && suits(&mount.spec) && has_ammo(self.npc, mount)
+            });
         let gun =
             |spec: &WeaponSpec| forward(spec) || (!armed && spec.guidance == Guidance::Homing);
-        self.best(|mount| gun(&mount.spec) && usable(mount))
+        self.best(|mount| gun(&mount.spec) && suits(&mount.spec) && usable(mount))
     }
 
     /// The turret it fires, if any (see the module docs).
     fn turret(&self) -> Option<WeaponId> {
-        let bearing_off = angle_off(
-            self.npc.state.heading,
-            bearing(self.npc.state.position, self.at.position),
-        );
+        if self.untargetable || !self.seen {
+            return None;
+        }
+        let heading = self.npc.state.heading;
+        let bearing = bearing(self.npc.state.position, self.at.position);
+        // Blind spots take the folded angle, as `_TurretBlindSpot` folds
+        // (@0xb35a-0xb387).
+        let bearing_off = angle_off(heading, bearing);
         self.best(|mount| {
             let spec = &mount.spec;
             let in_arc = match spec.guidance {
                 Guidance::TurretBeam | Guidance::Turret => true,
-                Guidance::FrontTurret => bearing_off <= FRONT_ARC,
-                Guidance::RearTurret => bearing_off >= 180.0 - FRONT_ARC,
+                Guidance::FrontTurret => self.arc_off(heading, bearing) <= FRONT_ARC,
+                Guidance::RearTurret => {
+                    self.arc_off((heading + 180.0) % 360.0, bearing) <= FRONT_ARC
+                }
                 _ => false,
             };
             in_arc
+                && spec.planet_type() == self.planet_type
                 && !blind(spec.flags | self.npc.hull.blind_spots, bearing_off)
                 && self.ready(mount)
                 && self.reaches(spec)
         })
     }
 
+    /// How far `bearing` is off a quadrant turret's `reference`, as the
+    /// rulebook's [`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)
+    /// entry says: by the engine, made absolute and taken mod 360 with no
+    /// fold past 180 (`_AIFireTurret` @0x80c3d-0x80cf3); by the other
+    /// reading, folded.
+    fn arc_off(&self, reference: f32, bearing: f32) -> f32 {
+        match self.quadrant_arc {
+            RuleSource::Engine => (bearing - reference).abs() % 360.0,
+            RuleSource::Bible => angle_off(reference, bearing),
+        }
+    }
+
     /// The missile it fires, if any (see the module docs).
     fn missile(&self) -> Option<WeaponId> {
+        let scanner = self.npc.cloak_gear.scanner;
+        if (self.untargetable && !scanner.untargetable)
+            || (self.cloaked && !scanner.targets)
+            || self.aimed_enough
+        {
+            return None;
+        }
         let distance = self.distance_squared();
         self.npc
             .armament
             .mounts()
             .iter()
-            .find(|mount| {
-                let range = mount.spec.range();
-                mount.spec.guidance == Guidance::Homing && range * range >= MISSILE_RANGE * distance
+            .filter(|mount| {
+                let spec = &mount.spec;
+                let range = spec.range();
+                spec.guidance == Guidance::Homing
+                    && suitable_missile(spec, self.turn_rate)
+                    && spec.planet_type() == self.planet_type
+                    && has_ammo(self.npc, mount)
+                    && range * range >= MISSILE_RANGE * distance
             })
-            .filter(|mount| self.ready(mount))
+            .min_by_key(|mount| mount.spec.id)
+            .filter(|mount| mount.reload <= 0.0)
             .map(|mount| mount.spec.id)
     }
 }
@@ -345,6 +648,7 @@ mod tests {
     use crate::catalog::{WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::hull::{Condition, HullSpec};
+    use crate::combat::weapon::AVOIDS_FAST_SHIPS;
     use crate::geometry::Vec2;
     use crate::reserves::Reserves;
     use crate::stats::ShipStats;
@@ -415,6 +719,7 @@ mod tests {
             handling: ShipStats::new(FAST, &[]).handling,
             rating: 0,
             yardstick: 0,
+            untargetable: false,
         }
     }
 
@@ -428,7 +733,293 @@ mod tests {
             player: Some(player_at(SHOOTER.x + x, SHOOTER.y + y, shield)),
             ..Surroundings::new(&[], &npcs)
         };
-        trigger(npc, &around).only
+        trigger(npc, &around, FireRules::default()).only
+    }
+
+    /// What `npc` fires at the player (`x`, `y`) from [`SHOOTER`], its
+    /// shields up and its ship type untargetable.
+    fn fired_at_untargetable(npc: &Npc, x: f32, y: f32) -> Option<WeaponId> {
+        let npcs = [npc.clone()];
+        let around = Surroundings {
+            player: Some(PlayerSide {
+                untargetable: true,
+                ..player_at(SHOOTER.x + x, SHOOTER.y + y, 50.0)
+            }),
+            ..Surroundings::new(&[], &npcs)
+        };
+        trigger(npc, &around, FireRules::default()).only
+    }
+
+    /// What `npc`, attacking NPC 2, fires at it as `target` makes it,
+    /// (`x`, `y`) from [`SHOOTER`].
+    fn fired_at_npc(npc: &Npc, x: f32, y: f32, target: impl Fn(&mut Npc)) -> Option<WeaponId> {
+        trigger_at_npc(npc, x, y, target).only
+    }
+
+    /// The trigger `npc`, attacking NPC 2, holds as `target` makes it,
+    /// (`x`, `y`) from [`SHOOTER`].
+    fn trigger_at_npc(npc: &Npc, x: f32, y: f32, target: impl Fn(&mut Npc)) -> Trigger {
+        let mut npc = npc.clone();
+        npc.goal = Goal::Attack(ShipRef::Npc(NpcId(2)));
+        let mut other = crate::testkit::npc(2, ShipStats::new(FAST, &[]));
+        other.state.position = SHOOTER + Vec2::new(x, y);
+        target(&mut other);
+        let npcs = [npc.clone(), other];
+        trigger(&npc, &Surroundings::new(&[], &npcs), FireRules::default())
+    }
+
+    /// `npc` with a scanner of these bits among its ship type's items.
+    fn scanning(mut npc: Npc, scanner: crate::cloak::Scanner) -> Npc {
+        npc.cloak_gear.scanner = scanner;
+        npc
+    }
+
+    const SEES_UNTARGETABLE: crate::cloak::Scanner = crate::cloak::Scanner {
+        untargetable: true,
+        ..crate::cloak::Scanner::NONE
+    };
+
+    const SEES_CLOAKED: crate::cloak::Scanner = crate::cloak::Scanner {
+        targets: true,
+        ..crate::cloak::Scanner::NONE
+    };
+
+    #[test]
+    fn a_missile_flies_at_an_untargetable_player_only_with_the_shooters_scanner() {
+        // A short gun keeps the missile from being a gun.
+        let npc = shooter(&[short(128), missile(131)], ATTACK);
+        assert_eq!(fired(&npc, 0.0, -300.0, 50.0), id(131));
+        assert_eq!(fired_at_untargetable(&npc, 0.0, -300.0), None);
+        let cloak_only = scanning(npc.clone(), SEES_CLOAKED);
+        assert_eq!(fired_at_untargetable(&cloak_only, 0.0, -300.0), None);
+        let sees = scanning(npc, SEES_UNTARGETABLE);
+        assert_eq!(fired_at_untargetable(&sees, 0.0, -300.0), id(131));
+    }
+
+    #[test]
+    fn a_missile_flies_at_an_untargetable_npc_only_with_the_shooters_scanner() {
+        let npc = shooter(&[short(128), missile(131)], ATTACK);
+        let plain = |_: &mut Npc| {};
+        let untargetable = |other: &mut Npc| other.cloak_gear.flags2 = crate::cloak::UNTARGETABLE;
+        assert_eq!(fired_at_npc(&npc, 0.0, -300.0, plain), id(131));
+        assert_eq!(fired_at_npc(&npc, 0.0, -300.0, untargetable), None);
+        let sees = scanning(npc, SEES_UNTARGETABLE);
+        assert_eq!(fired_at_npc(&sees, 0.0, -300.0, untargetable), id(131));
+    }
+
+    #[test]
+    fn a_missile_flies_at_a_cloaked_npc_only_with_the_shooters_cloak_bit() {
+        let npc = shooter(&[short(128), missile(131)], ATTACK);
+        let cloaked = |other: &mut Npc| {
+            other.cloak = crate::cloak::Cloak {
+                fade: crate::cloak::FADE_FULL,
+                direction: 0,
+            };
+        };
+        assert_eq!(fired_at_npc(&npc, 0.0, -300.0, cloaked), None);
+        let untargetable_bit = scanning(npc.clone(), SEES_UNTARGETABLE);
+        assert_eq!(fired_at_npc(&untargetable_bit, 0.0, -300.0, cloaked), None);
+        let sees = scanning(npc, SEES_CLOAKED);
+        assert_eq!(fired_at_npc(&sees, 0.0, -300.0, cloaked), id(131));
+    }
+
+    #[test]
+    fn a_turret_never_fires_at_an_untargetable_ship_and_a_gun_still_does() {
+        let turret = shooter(&[guided(130, 4)], Goal::Flee(ShipRef::Player));
+        assert_eq!(fired(&turret, 0.0, 200.0, 50.0), id(130));
+        assert_eq!(fired_at_untargetable(&turret, 0.0, 200.0), None);
+        let sees = scanning(turret, SEES_UNTARGETABLE);
+        assert_eq!(
+            fired_at_untargetable(&sees, 0.0, 200.0),
+            None,
+            "whatever the scanner"
+        );
+        let mut at_npc = shooter(&[guided(130, 4)], ATTACK);
+        at_npc.state.heading = 180.0;
+        let untargetable = |other: &mut Npc| other.cloak_gear.flags2 = crate::cloak::UNTARGETABLE;
+        assert_eq!(fired_at_npc(&at_npc, 0.0, 100.0, |_| {}), id(130));
+        assert_eq!(fired_at_npc(&at_npc, 0.0, 100.0, untargetable), None);
+        let gun = shooter(&[gun(128, 1, 1)], ATTACK);
+        assert_eq!(fired_at_untargetable(&gun, 0.0, -100.0), id(128));
+    }
+
+    const SCANS_SCREEN: crate::cloak::Scanner = crate::cloak::Scanner {
+        on_screen: true,
+        ..crate::cloak::Scanner::NONE
+    };
+
+    /// A target fully cloaked.
+    fn cloaked(other: &mut Npc) {
+        other.cloak = crate::cloak::Cloak {
+            fade: crate::cloak::FADE_FULL,
+            direction: 0,
+        };
+    }
+
+    /// Whether `npc`, carrying weapon 130 reaching 300 pixels, fires it at
+    /// a cloaked NPC only while it sees it (`_ShipVisibleToShip`
+    /// @0x971c): with a scanner on screen within [`SIGHT_RANGE`] on both
+    /// axes, or as its cloaked escort.
+    ///
+    /// [`SIGHT_RANGE`]: crate::cloak::SIGHT_RANGE
+    fn holds_fire_while_unseen(npc: &Npc) {
+        assert_eq!(fired_at_npc(npc, 0.0, -150.0, cloaked), None, "no scanner");
+        let scans = scanning(npc.clone(), SCANS_SCREEN);
+        assert_eq!(fired_at_npc(&scans, 0.0, -150.0, cloaked), id(130));
+        assert_eq!(
+            fired_at_npc(&scans, 0.0, -200.0, cloaked),
+            id(130),
+            "200 on the axis"
+        );
+        assert_eq!(fired_at_npc(&scans, 0.0, -250.0, cloaked), None, "250 off");
+        assert_eq!(fired_at_npc(npc, 0.0, -250.0, |_| {}), id(130), "uncloaked");
+        let mut escort = npc.clone();
+        escort.leader = Some(NpcId(2));
+        assert_eq!(
+            fired_at_npc(&escort, 0.0, -250.0, cloaked),
+            None,
+            "escorting it without a cloak"
+        );
+        escort.cloak_gear.device = true;
+        assert_eq!(
+            fired_at_npc(&escort, 0.0, -250.0, cloaked),
+            id(130),
+            "its cloaked escort"
+        );
+        let mut cloaked_stranger = npc.clone();
+        cloaked_stranger.cloak_gear.device = true;
+        assert_eq!(
+            fired_at_npc(&cloaked_stranger, 0.0, -250.0, cloaked),
+            None,
+            "a cloak without escorting it"
+        );
+    }
+
+    #[test]
+    fn a_turret_holds_fire_at_a_cloaked_ship_it_does_not_see_and_fires_once_it_sees_it() {
+        let turret = WeaponRecord {
+            count: 30,
+            ..guided(130, 4)
+        };
+        holds_fire_while_unseen(&shooter(&[turret], Goal::Flee(ShipRef::Player)));
+    }
+
+    #[test]
+    fn a_gun_holds_fire_at_a_cloaked_ship_it_does_not_see_and_fires_once_it_sees_it() {
+        let gun = WeaponRecord {
+            count: 30,
+            ..gun(130, 1, 1)
+        };
+        holds_fire_while_unseen(&shooter(&[gun], ATTACK));
+    }
+
+    /// Whether `npc` asks for its point defence with the player (`x`,
+    /// `y`) from [`SHOOTER`], its shields up, as `player` makes it.
+    fn asks_at_player(npc: &Npc, x: f32, y: f32, player: impl Fn(&mut PlayerSide)) -> bool {
+        let npcs = [npc.clone()];
+        let mut side = player_at(SHOOTER.x + x, SHOOTER.y + y, 50.0);
+        player(&mut side);
+        let around = Surroundings {
+            player: Some(side),
+            ..Surroundings::new(&[], &npcs)
+        };
+        trigger(npc, &around, FireRules::default()).point_defence
+    }
+
+    #[test]
+    fn point_defence_is_asked_for_whenever_the_manoeuvre_reaches_a_turret() {
+        let plain = |_: &mut PlayerSide| {};
+        // Unarmed: point defence is asked for whatever it carries.
+        for goal in [
+            ATTACK,
+            Goal::Snipe(ShipRef::Player),
+            Goal::Flee(ShipRef::Player),
+        ] {
+            assert!(
+                asks_at_player(&shooter(&[], goal), 0.0, -100.0, plain),
+                "{goal:?}"
+            );
+        }
+        // Approaching (300 above), only while facing within three turns
+        // (3 degrees a tick) of the heading it wants (@0x868d3-0x868de).
+        let mut approaching = shooter(&[], ATTACK);
+        approaching.state.heading = 9.0;
+        assert!(asks_at_player(&approaching, 0.0, -300.0, plain));
+        approaching.state.heading = 9.1;
+        assert!(!asks_at_player(&approaching, 0.0, -300.0, plain));
+        approaching.state.heading = 350.9;
+        assert!(!asks_at_player(&approaching, 0.0, -300.0, plain));
+        assert!(
+            asks_at_player(&approaching, 0.0, -100.0, plain),
+            "dogfighting, any heading"
+        );
+        for goal in [
+            Goal::Idle,
+            Goal::Inspect(ShipRef::Player),
+            Goal::Formation { guard: None },
+        ] {
+            assert!(
+                !asks_at_player(&shooter(&[], goal), 0.0, -100.0, plain),
+                "{goal:?}"
+            );
+        }
+        let gone = shooter(&[], Goal::Attack(ShipRef::Npc(NpcId(9))));
+        assert!(
+            !asks_at_player(&gone, 0.0, -100.0, plain),
+            "no target state"
+        );
+        // Before the target checks (@0x80b0d): untargetable, unseen or not
+        // live.
+        let npc = shooter(&[guided(130, 4)], ATTACK);
+        let untargetable = |player: &mut PlayerSide| player.untargetable = true;
+        assert!(asks_at_player(&npc, 0.0, -100.0, untargetable));
+        assert!(trigger_at_npc(&npc, 0.0, -100.0, cloaked).point_defence);
+        let dying = |other: &mut Npc| other.condition = Condition::Dying { ticks_left: 3 };
+        assert!(trigger_at_npc(&npc, 0.0, -100.0, dying).point_defence);
+        let arriving = |other: &mut Npc| {
+            other.mode = crate::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
+        };
+        assert!(trigger_at_npc(&npc, 0.0, -100.0, arriving).point_defence);
+        assert_eq!(trigger_at_npc(&npc, 0.0, -100.0, arriving).only, None);
+    }
+
+    #[test]
+    fn a_missile_out_of_ammunition_gives_way_to_a_later_one_in_range() {
+        let empty = WeaponRecord {
+            ammo_type: 10,
+            ..missile(131)
+        };
+        let npc = shooter(&[short(128), empty, missile(132)], ATTACK);
+        assert_eq!(fired(&npc, 0.0, -300.0, 50.0), id(132));
+        let slow = WeaponRecord {
+            reload: 10,
+            ..missile(131)
+        };
+        let mut reloading = shooter(&[short(128), slow, missile(132)], ATTACK);
+        let mut fuel = reloading.reserves.fuel;
+        reloading.armament.fire(
+            Trigger {
+                only: Some(WeaponId(131)),
+                ..Trigger::default()
+            },
+            Condition::Intact,
+            crate::combat::armament::Shooter::PLAYER,
+            &mut BTreeMap::new(),
+            &mut fuel,
+            &mut crate::chance::NeverFires,
+            &mut crate::combat::report::Reports::default(),
+            &mut |_| {
+                Some(crate::combat::aim::Aim {
+                    heading: 0.0,
+                    target: None,
+                })
+            },
+        );
+        assert_eq!(
+            fired(&reloading, 0.0, -300.0, 50.0),
+            None,
+            "a reload does not give way"
+        );
     }
 
     #[allow(clippy::unnecessary_wraps)]
@@ -529,7 +1120,27 @@ mod tests {
     fn a_gun_does_the_most_energy_damage_to_shields_and_mass_to_armour() {
         let npc = shooter(&[gun(128, 10, 1), gun(129, 2, 8)], ATTACK);
         assert_eq!(fired(&npc, 0.0, -200.0, 50.0), id(128), "shields up");
-        assert_eq!(fired(&npc, 0.0, -200.0, 0.0), id(129), "shields down");
+        // Below none: a shield of exactly none still counts as up.
+        assert_eq!(fired(&npc, 0.0, -200.0, -1.0), id(129), "shields down");
+    }
+
+    #[test]
+    fn a_gun_and_a_turret_pick_by_energy_at_a_shield_of_none_and_by_mass_below_it() {
+        // `ucomiss` against 0, `jb` to the mass best (@0x80e12-0x80e27,
+        // @0x801e5-0x801fb).
+        let guns = shooter(&[gun(128, 10, 1), gun(129, 2, 8)], ATTACK);
+        assert_eq!(fired(&guns, 0.0, -200.0, 0.0), id(128));
+        assert_eq!(fired(&guns, 0.0, -200.0, -0.1), id(129));
+        let turret = |id: i16, energy: i16, mass: i16| WeaponRecord {
+            guidance: 4,
+            ..gun(id, energy, mass)
+        };
+        let turrets = shooter(
+            &[turret(130, 10, 1), turret(131, 2, 8)],
+            Goal::Flee(ShipRef::Player),
+        );
+        assert_eq!(fired(&turrets, 0.0, 200.0, 0.0), id(130));
+        assert_eq!(fired(&turrets, 0.0, 200.0, -0.1), id(131));
     }
 
     #[test]
@@ -537,7 +1148,12 @@ mod tests {
         let npc = shooter(&[gun(128, -5, 0), gun(129, 0, 0), gun(130, 1, 1)], ATTACK);
         assert_eq!(fired(&npc, 0.0, -200.0, 50.0), id(128));
         let npc = shooter(&[gun(128, 1, 1), gun(129, 2, 0)], ATTACK);
-        assert_eq!(fired(&npc, 0.0, -200.0, 0.0), id(128), "mass 0 counts as 1");
+        // Below none, so by mass: a shield of exactly none counts as up.
+        assert_eq!(
+            fired(&npc, 0.0, -200.0, -1.0),
+            id(128),
+            "mass 0 counts as 1"
+        );
     }
 
     #[test]
@@ -646,6 +1262,68 @@ mod tests {
         assert_eq!(fired(&npc, 0.0, 232.1, 50.0), None, "out of range");
     }
 
+    /// What `npc` fires at the player 150 away bearing `bearing` from
+    /// [`SHOOTER`], its shields up, by `rules`.
+    fn fired_bearing(npc: &Npc, bearing: f32, rules: FireRules) -> Option<WeaponId> {
+        let (sin, cos) = bearing.to_radians().sin_cos();
+        let npcs = [npc.clone()];
+        let around = Surroundings {
+            player: Some(player_at(
+                SHOOTER.x + 150.0 * sin,
+                SHOOTER.y - 150.0 * cos,
+                50.0,
+            )),
+            ..Surroundings::new(&[], &npcs)
+        };
+        trigger(npc, &around, rules).only
+    }
+
+    #[test]
+    fn a_quadrant_turret_across_the_seam_holds_fire_by_the_engine_and_fires_by_the_bible() {
+        use crate::rulebook::RuleSource;
+        let engine = FireRules {
+            quadrant_arc: RuleSource::Engine,
+        };
+        let bible = FireRules {
+            quadrant_arc: RuleSource::Bible,
+        };
+        assert_eq!(FireRules::default(), engine);
+        let turret = |guidance: i16, heading: f32| {
+            let mut npc = shooter(&[guided(130, guidance)], Goal::Flee(ShipRef::Player));
+            npc.state.heading = heading;
+            npc
+        };
+        // |10 - 350| = 340 unfolded, 20 folded.
+        let front = turret(7, 350.0);
+        assert_eq!(fired_bearing(&front, 10.0, engine), None);
+        assert_eq!(fired_bearing(&front, 10.0, bible), id(130));
+        // |350 - 10| = 340 unfolded, 20 folded.
+        let front_east = turret(7, 10.0);
+        assert_eq!(fired_bearing(&front_east, 350.0, engine), None);
+        assert_eq!(fired_bearing(&front_east, 350.0, bible), id(130));
+        // The rear's reference: (170 + 180) mod 360 = 350.
+        let rear = turret(8, 170.0);
+        assert_eq!(fired_bearing(&rear, 10.0, engine), None);
+        assert_eq!(fired_bearing(&rear, 10.0, bible), id(130));
+        assert_eq!(fired_bearing(&rear, 340.0, engine), id(130), "10 off");
+        // (270 + 180) mod 360 = 90: the reference wraps past 360.
+        let rear_west = turret(8, 270.0);
+        assert_eq!(fired_bearing(&rear_west, 100.0, engine), id(130));
+        assert_eq!(fired_bearing(&rear_west, 100.0, bible), id(130));
+        // Off the seam, both fire, up to 45 either side.
+        let east = turret(7, 90.0);
+        for rules in [engine, bible] {
+            assert_eq!(fired_bearing(&east, 100.0, rules), id(130));
+            assert_eq!(fired_bearing(&east, 134.9, rules), id(130));
+            assert_eq!(fired_bearing(&east, 45.1, rules), id(130));
+            assert_eq!(fired_bearing(&east, 135.1, rules), None);
+            assert_eq!(fired_bearing(&east, 44.9, rules), None);
+        }
+        // A full turret has no arc.
+        let full = turret(4, 350.0);
+        assert_eq!(fired_bearing(&full, 170.0, engine), id(130));
+    }
+
     /// A gun of `id` reaching 50 pixels.
     fn short(id: i16) -> WeaponRecord {
         WeaponRecord {
@@ -730,7 +1408,10 @@ mod tests {
         assert_eq!(fired(&npc, 0.0, -100.0, 50.0), None, "not there");
         let npcs = [npc.clone()];
         let around = Surroundings::new(&[], &npcs);
-        assert_eq!(trigger(&shooter(&all, ATTACK), &around), Trigger::default());
+        assert_eq!(
+            trigger(&shooter(&all, ATTACK), &around, FireRules::default()),
+            Trigger::default()
+        );
     }
 
     #[test]
@@ -759,6 +1440,7 @@ mod tests {
                 ..Trigger::default()
             },
             Condition::Intact,
+            crate::combat::armament::Shooter::PLAYER,
             &mut rounds,
             &mut fuel,
             &mut crate::chance::NeverFires,
@@ -817,7 +1499,7 @@ mod tests {
             player: Some(player_at(SHOOTER.x, SHOOTER.y - 100.0, 50.0)),
             ..Surroundings::new(&[], npcs)
         };
-        trigger(npc, &around).bays
+        trigger(npc, &around, FireRules::default()).bays
     }
 
     #[test]
@@ -858,5 +1540,409 @@ mod tests {
         let mut wreck = crate::testkit::npc(7, ShipStats::new(FAST, &[]));
         wreck.condition = Condition::Dying { ticks_left: 3 };
         assert!(!bays(&shooter(&all, Goal::Attack(at)), &[wreck]));
+    }
+
+    /// A launcher of `id` firing rounds of weapon `id + 10`.
+    fn launcher(id: i16) -> WeaponRecord {
+        WeaponRecord {
+            ammo_type: 10,
+            ..weapon(id)
+        }
+    }
+
+    /// A weapon of `id` spending `cost` fuel a shot.
+    fn fuel_weapon(id: i16, cost: f32) -> WeaponRecord {
+        #[allow(clippy::cast_possible_truncation)]
+        let raw = -1000 - (cost * 10.0) as i16;
+        WeaponRecord {
+            ammo_type: raw,
+            ..weapon(id)
+        }
+    }
+
+    #[test]
+    fn an_unarmed_ship_is_dry() {
+        assert_eq!(ammo_left(&shooter(&[], ATTACK)), AmmoLeft::Dry);
+    }
+
+    #[test]
+    fn a_gun_alone_is_armed() {
+        assert_eq!(ammo_left(&shooter(&[weapon(128)], ATTACK)), AmmoLeft::Armed);
+        let other = WeaponRecord {
+            ammo_type: -2,
+            ..weapon(128)
+        };
+        assert_eq!(ammo_left(&shooter(&[other], ATTACK)), AmmoLeft::Armed);
+    }
+
+    #[test]
+    fn a_launcher_is_dry_without_rounds_and_armed_with_them() {
+        let mut ship = shooter(&[launcher(128)], ATTACK);
+        assert_eq!(ammo_left(&ship), AmmoLeft::Dry);
+        ship.rounds = BTreeMap::from([(WeaponId(138), 1)]);
+        assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
+    }
+
+    #[test]
+    fn a_gun_beside_an_empty_launcher_is_only_unlimited() {
+        let ship = shooter(&[weapon(128), launcher(129)], ATTACK);
+        assert_eq!(ammo_left(&ship), AmmoLeft::OnlyUnlimited);
+        let ship = shooter(&[launcher(129), weapon(128)], ATTACK);
+        assert_eq!(ammo_left(&ship), AmmoLeft::OnlyUnlimited);
+    }
+
+    #[test]
+    fn one_launcher_with_rounds_arms_a_ship_whose_others_are_empty() {
+        let other = WeaponRecord {
+            ammo_type: 12,
+            ..weapon(130)
+        };
+        let mut ship = shooter(&[weapon(127), launcher(128), other], ATTACK);
+        ship.rounds = BTreeMap::from([(WeaponId(140), 1)]);
+        assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
+    }
+
+    #[test]
+    fn a_fuel_weapon_is_armed_while_fuel_covers_its_cost() {
+        let mut ship = shooter(&[fuel_weapon(128, 5.0)], ATTACK);
+        ship.reserves.fuel.now = 4.0;
+        assert_eq!(ammo_left(&ship), AmmoLeft::Dry);
+        ship.reserves.fuel.now = 5.0;
+        assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
+    }
+
+    /// `record` with `flags2`.
+    fn with_flags2(record: WeaponRecord, flags2: u16) -> WeaponRecord {
+        WeaponRecord { flags2, ..record }
+    }
+
+    /// A homing missile of `id` like [`missile`], turning `guided_turn`
+    /// tenths of a degree a tick, with `flags`.
+    fn turning_missile(id: i16, guided_turn: i16, flags: u16) -> WeaponRecord {
+        WeaponRecord {
+            flags,
+            guided_turn,
+            ..missile(id)
+        }
+    }
+
+    /// What `npc` fires at the player (`x`, `y`) from [`SHOOTER`], its
+    /// shields up, as `player` makes it.
+    fn fired_at_player(
+        npc: &Npc,
+        x: f32,
+        y: f32,
+        player: impl Fn(&mut PlayerSide),
+    ) -> Option<WeaponId> {
+        let npcs = [npc.clone()];
+        let mut side = player_at(SHOOTER.x + x, SHOOTER.y + y, 50.0);
+        player(&mut side);
+        let around = Surroundings {
+            player: Some(side),
+            ..Surroundings::new(&[], &npcs)
+        };
+        trigger(npc, &around, FireRules::default()).only
+    }
+
+    #[test]
+    fn a_missile_is_unsuitable_for_a_target_turning_over_3_if_it_turns_2_or_less_or_is_flagged() {
+        let spec = |guided_turn, flags| WeaponSpec::new(&turning_missile(131, guided_turn, flags));
+        let table = [
+            // (GuidedTurn, Flags, the target's turn, suitable)
+            (20, 0, 4.0, false),
+            (20, 0, 3.99, true),
+            (20, 0, 3.0, true),
+            (21, 0, 4.0, true),
+            (21, 0, 40.0, true),
+            (0, 0, 4.0, false),
+            (70, AVOIDS_FAST_SHIPS, 4.0, false),
+            (70, AVOIDS_FAST_SHIPS, 3.99, true),
+            (70, 0, 4.0, true),
+            (70, !AVOIDS_FAST_SHIPS, 4.0, true),
+        ];
+        for (guided_turn, flags, turn, suitable) in table {
+            assert_eq!(
+                suitable_missile(&spec(guided_turn, flags), turn),
+                suitable,
+                "{guided_turn} {flags:#x} at {turn}"
+            );
+        }
+        assert_eq!((FAST_TARGET_TURN, SLOW_MISSILE_TURN), (3.0, 2.0));
+        assert_eq!(AVOIDS_FAST_SHIPS, 0x0008);
+    }
+
+    #[test]
+    fn a_slow_or_flagged_missile_is_not_fired_at_an_agile_target() {
+        let turning = |rate: f32| move |player: &mut PlayerSide| player.handling.turn_rate = rate;
+        let emp = shooter(&[short(128), turning_missile(131, 20, 0)], ATTACK);
+        assert_eq!(fired_at_player(&emp, 0.0, -300.0, turning(4.0)), None);
+        assert_eq!(fired_at_player(&emp, 0.0, -300.0, turning(3.0)), id(131));
+        let flagged = shooter(
+            &[short(128), turning_missile(131, 70, AVOIDS_FAST_SHIPS)],
+            ATTACK,
+        );
+        assert_eq!(fired_at_player(&flagged, 0.0, -300.0, turning(4.0)), None);
+        assert_eq!(
+            fired_at_player(&flagged, 0.0, -300.0, turning(3.0)),
+            id(131)
+        );
+        let both = shooter(
+            &[
+                short(128),
+                turning_missile(131, 20, 0),
+                turning_missile(132, 70, 0),
+            ],
+            ATTACK,
+        );
+        assert_eq!(
+            fired_at_player(&both, 0.0, -300.0, turning(4.0)),
+            id(132),
+            "the suitable one"
+        );
+        let agile = |other: &mut Npc| other.stats.handling.turn_rate = 4.0;
+        assert_eq!(fired_at_npc(&emp, 0.0, -300.0, agile), None, "an NPC");
+        assert_eq!(fired_at_npc(&emp, 0.0, -300.0, |_| {}), id(131));
+    }
+
+    #[test]
+    fn a_planet_type_missile_flies_only_at_a_planet_type_ship_and_another_only_at_another() {
+        use crate::combat::weapon::PLANET_TYPE;
+        let planet = |player: &mut PlayerSide| player.hull.planet_type = true;
+        let ordinary = shooter(&[short(128), missile(131)], ATTACK);
+        assert_eq!(fired_at_player(&ordinary, 0.0, -300.0, |_| {}), id(131));
+        assert_eq!(fired_at_player(&ordinary, 0.0, -300.0, planet), None);
+        let planetary = shooter(
+            &[short(128), with_flags2(missile(131), PLANET_TYPE)],
+            ATTACK,
+        );
+        assert_eq!(fired_at_player(&planetary, 0.0, -300.0, planet), id(131));
+        assert_eq!(fired_at_player(&planetary, 0.0, -300.0, |_| {}), None);
+        let planet_npc = |other: &mut Npc| other.hull.planet_type = true;
+        assert_eq!(fired_at_npc(&planetary, 0.0, -300.0, planet_npc), id(131));
+        assert_eq!(fired_at_npc(&ordinary, 0.0, -300.0, planet_npc), None);
+    }
+
+    #[test]
+    fn a_turret_fires_a_planet_type_weapon_only_at_a_planet_type_ship() {
+        use crate::combat::weapon::PLANET_TYPE;
+        let planet = |player: &mut PlayerSide| player.hull.planet_type = true;
+        let planet_npc = |other: &mut Npc| other.hull.planet_type = true;
+        let flee = Goal::Flee(ShipRef::Player);
+        let ordinary = shooter(&[guided(130, 4)], flee);
+        assert_eq!(fired_at_player(&ordinary, 0.0, 200.0, |_| {}), id(130));
+        assert_eq!(fired_at_player(&ordinary, 0.0, 200.0, planet), None);
+        assert_eq!(fired_at_npc(&ordinary, 0.0, 100.0, planet_npc), None);
+        let planetary = shooter(&[with_flags2(guided(130, 4), PLANET_TYPE)], flee);
+        assert_eq!(fired_at_player(&planetary, 0.0, 200.0, planet), id(130));
+        assert_eq!(fired_at_player(&planetary, 0.0, 200.0, |_| {}), None);
+        assert_eq!(fired_at_npc(&planetary, 0.0, 100.0, planet_npc), id(130));
+        assert_eq!(fired_at_npc(&planetary, 0.0, 100.0, |_| {}), None);
+    }
+
+    #[test]
+    fn a_gun_fires_a_planet_type_weapon_only_at_a_planet_type_ship() {
+        use crate::combat::weapon::PLANET_TYPE;
+        let planet = |player: &mut PlayerSide| player.hull.planet_type = true;
+        let planet_npc = |other: &mut Npc| other.hull.planet_type = true;
+        let ordinary = shooter(&[gun(128, 1, 1)], ATTACK);
+        assert_eq!(fired_at_player(&ordinary, 0.0, -100.0, |_| {}), id(128));
+        assert_eq!(fired_at_player(&ordinary, 0.0, -100.0, planet), None);
+        assert_eq!(fired_at_npc(&ordinary, 0.0, -100.0, planet_npc), None);
+        let planetary = shooter(&[with_flags2(gun(128, 1, 1), PLANET_TYPE)], ATTACK);
+        assert_eq!(fired_at_player(&planetary, 0.0, -100.0, planet), id(128));
+        assert_eq!(fired_at_player(&planetary, 0.0, -100.0, |_| {}), None);
+        assert_eq!(fired_at_npc(&planetary, 0.0, -100.0, planet_npc), id(128));
+        assert_eq!(fired_at_npc(&planetary, 0.0, -100.0, |_| {}), None);
+    }
+
+    #[test]
+    fn a_homing_gun_is_chosen_when_the_only_armed_gun_is_of_the_other_planet_type() {
+        // Dogfighting 100 above, the gun pick alone (@0x7ffaa-0x8001c).
+        use crate::combat::weapon::PLANET_TYPE;
+        let npc = shooter(
+            &[missile(131), with_flags2(gun(128, 1, 1), PLANET_TYPE)],
+            ATTACK,
+        );
+        assert_eq!(fired(&npc, 0.0, -100.0, 50.0), id(131));
+        let planet = |player: &mut PlayerSide| player.hull.planet_type = true;
+        assert_eq!(
+            fired_at_player(&npc, 0.0, -100.0, planet),
+            id(128),
+            "armed against a planet-type ship"
+        );
+    }
+
+    /// What `npc` fires at the player 300 above it, its shields at 50 of
+    /// 100 and its armour full at 100, with `aimed` damage already aimed
+    /// at it and 9 at NPC 2.
+    fn fired_with_aimed(npc: &Npc, aimed: i32) -> Option<WeaponId> {
+        let npcs = [npc.clone()];
+        let targeted = BTreeMap::from([(ShipRef::Player, aimed), (ShipRef::Npc(NpcId(2)), 9)]);
+        let around = Surroundings {
+            player: Some(player_at(SHOOTER.x, SHOOTER.y - 300.0, 50.0)),
+            targeted: &targeted,
+            ..Surroundings::new(&[], &npcs)
+        };
+        trigger(npc, &around, FireRules::default()).only
+    }
+
+    #[test]
+    fn no_missile_flies_while_the_damage_aimed_at_the_target_suffices() {
+        // 1.05 x (50 + 100) = 157.5.
+        let npc = shooter(&[short(128), missile(131)], ATTACK);
+        assert_eq!(fired_with_aimed(&npc, 158), None);
+        assert_eq!(fired_with_aimed(&npc, 157), id(131));
+        assert_eq!(fired_with_aimed(&npc, 0), id(131));
+        assert_eq!(fired(&npc, 0.0, -300.0, 50.0), id(131), "none aimed");
+        let other = |target: &mut Npc| {
+            target.reserves = Reserves::full(4.0, 4.0, 100.0);
+        };
+        // 1.05 x 8 = 8.4: the 9 aimed at NPC 2 suffices.
+        let npcs = {
+            let mut shooter = npc.clone();
+            shooter.goal = Goal::Attack(ShipRef::Npc(NpcId(2)));
+            let mut target = crate::testkit::npc(2, ShipStats::new(FAST, &[]));
+            target.state.position = SHOOTER + Vec2::new(0.0, -300.0);
+            other(&mut target);
+            [shooter, target]
+        };
+        let targeted = BTreeMap::from([(ShipRef::Npc(NpcId(2)), 9)]);
+        let around = Surroundings {
+            targeted: &targeted,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(trigger(&npcs[0], &around, FireRules::default()).only, None);
+        let targeted = BTreeMap::from([(ShipRef::Npc(NpcId(2)), 8)]);
+        let around = Surroundings {
+            targeted: &targeted,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(
+            trigger(&npcs[0], &around, FireRules::default()).only,
+            id(131)
+        );
+        assert_eq!(SUFFICIENT_DAMAGE, 1.05);
+    }
+
+    #[test]
+    fn sufficient_aimed_damage_holds_the_missile_alone() {
+        let npc = shooter(&[gun(128, 1, 1)], ATTACK);
+        assert_eq!(fired_with_aimed(&npc, 1000), None, "out of the gun's reach");
+        let close = shooter(&[gun(128, 1, 1)], Goal::Snipe(ShipRef::Player));
+        let npcs = [close.clone()];
+        let targeted = BTreeMap::from([(ShipRef::Player, 1000)]);
+        let around = Surroundings {
+            player: Some(player_at(SHOOTER.x, SHOOTER.y - 100.0, 50.0)),
+            targeted: &targeted,
+            ..Surroundings::new(&[], &npcs)
+        };
+        assert_eq!(
+            trigger(&close, &around, FireRules::default()).only,
+            id(128),
+            "a gun still fires"
+        );
+    }
+
+    #[test]
+    fn the_missile_of_lowest_weapon_id_is_taken_and_its_reload_does_not_give_way() {
+        let npc = shooter(&[short(128), missile(132), missile(131)], ATTACK);
+        assert_eq!(fired(&npc, 0.0, -300.0, 50.0), id(131));
+        let slow = WeaponRecord {
+            reload: 10,
+            ..missile(131)
+        };
+        let mut reloading = shooter(&[short(128), missile(132), slow], ATTACK);
+        let mut fuel = reloading.reserves.fuel;
+        reloading.armament.fire(
+            Trigger {
+                only: Some(WeaponId(131)),
+                ..Trigger::default()
+            },
+            Condition::Intact,
+            crate::combat::armament::Shooter::PLAYER,
+            &mut BTreeMap::new(),
+            &mut fuel,
+            &mut crate::chance::NeverFires,
+            &mut crate::combat::report::Reports::default(),
+            &mut |_| {
+                Some(crate::combat::aim::Aim {
+                    heading: 0.0,
+                    target: None,
+                })
+            },
+        );
+        assert_eq!(fired(&reloading, 0.0, -300.0, 50.0), None);
+    }
+
+    #[test]
+    fn an_npc_never_picks_a_weapon_ai_ships_wont_use() {
+        use crate::combat::weapon::AI_WONT_USE;
+        let npc = shooter(&[with_flags2(gun(128, 1, 1), AI_WONT_USE)], ATTACK);
+        assert_eq!(fired(&npc, 0.0, -100.0, 50.0), None, "the gun");
+        let npc = shooter(
+            &[with_flags2(gun(128, 9, 9), AI_WONT_USE), gun(129, 1, 1)],
+            ATTACK,
+        );
+        assert_eq!(fired(&npc, 0.0, -100.0, 50.0), id(129), "the lesser gun");
+        let npc = shooter(
+            &[
+                short(128),
+                with_flags2(missile(131), AI_WONT_USE),
+                missile(132),
+            ],
+            ATTACK,
+        );
+        assert_eq!(fired(&npc, 0.0, -300.0, 50.0), id(132), "the missile");
+        let turret = shooter(
+            &[with_flags2(guided(130, 4), AI_WONT_USE)],
+            Goal::Flee(ShipRef::Player),
+        );
+        assert_eq!(fired(&turret, 0.0, 200.0, 50.0), None, "the turret");
+        assert!(!destroys(&shooter(
+            &[with_flags2(gun(128, 0, 1), AI_WONT_USE)],
+            ATTACK
+        )));
+    }
+
+    #[test]
+    fn a_cloaked_npc_picks_only_a_weapon_that_fires_cloaked() {
+        use crate::combat::weapon::FIRES_CLOAKED;
+        let cloak = |mut npc: Npc| {
+            npc.cloak = crate::cloak::Cloak {
+                fade: crate::cloak::FADE_FULL,
+                direction: 0,
+            };
+            npc
+        };
+        let npc = cloak(shooter(
+            &[gun(128, 9, 9), with_flags2(gun(129, 1, 1), FIRES_CLOAKED)],
+            ATTACK,
+        ));
+        assert_eq!(fired(&npc, 0.0, -100.0, 50.0), id(129));
+        let npc = cloak(shooter(&[short(128), missile(131)], ATTACK));
+        assert_eq!(
+            fired(&npc, 0.0, -300.0, 50.0),
+            None,
+            "nothing fires cloaked"
+        );
+        let npc = cloak(shooter(
+            &[short(128), with_flags2(missile(131), FIRES_CLOAKED)],
+            ATTACK,
+        ));
+        assert_eq!(fired(&npc, 0.0, -300.0, 50.0), id(131));
+        assert!(!destroys(&cloak(shooter(&[gun(128, 0, 1)], ATTACK))));
+    }
+
+    #[test]
+    fn a_fighter_bay_counts_its_fighters_as_rounds() {
+        let bay = WeaponRecord {
+            guidance: 99,
+            ammo_type: 128,
+            ..weapon(150)
+        };
+        let mut ship = shooter(&[bay], ATTACK);
+        assert_eq!(ammo_left(&ship), AmmoLeft::Dry);
+        ship.rounds = BTreeMap::from([(WeaponId(150), 1)]);
+        assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
     }
 }

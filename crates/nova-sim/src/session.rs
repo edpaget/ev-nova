@@ -340,6 +340,7 @@ mod entry;
 mod escorts;
 mod events;
 mod fighters;
+mod gate_escorts;
 mod gate_follow;
 mod hail;
 mod hire;
@@ -353,10 +354,12 @@ mod news;
 mod outfits;
 mod person_offers;
 mod persons;
+mod player_led;
 mod radar;
 mod ranks;
 mod red_alert;
 mod script_effects;
+mod self_repair;
 mod ship_change;
 mod status_cargo;
 mod stellars;
@@ -412,7 +415,6 @@ use crate::combat::weapon::Ammo;
 use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
-use crate::escort::{EscortDuty, FormationSlot};
 use crate::flight::{Controls, ShipState, step};
 use crate::fuel::regenerate;
 use crate::gate::{
@@ -463,8 +465,9 @@ use crate::story::day::Stay;
 use crate::story::rebuild::Rebuilt;
 use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent};
 use crate::targeting::{self, TargetPick};
+use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
-use crate::traffic::npc::{AiType, Npc, NpcId};
+use crate::traffic::npc::{Npc, NpcId};
 use crate::traffic::table::SpawnTable;
 use crate::traffic::{Traffic, World, strength};
 use crate::wares::DayRolls;
@@ -658,6 +661,14 @@ pub struct Session {
     /// ships as they are placed next: after a take-off, and when a pilot
     /// is flown.
     restock_persons: bool,
+    /// The last order the player gave each escort class, in
+    /// [`EscortClass::ALL`](crate::escort::EscortClass::ALL) order: the
+    /// original's one order per class (0x3b5394), which a ship joining
+    /// the class takes (see [`Session::class_order`]). Not saved, as the
+    /// hired escorts keep theirs on their records and mission escorts are
+    /// never saved; reset with their orders on entering a system by the
+    /// engine's [`RuleKey::EscortOrders`].
+    class_orders: [Option<crate::escort::EscortOrder>; 4],
     /// The fee and wage of a hire (see [`Session::with_hire_terms`]).
     hire_terms: hire::Shared<dyn HireTerms>,
     /// The control-bit test a ship's `Availability` for hire goes through
@@ -758,6 +769,10 @@ pub struct Session {
     /// How each disputed rule the session acts on reads (see
     /// [`Session::with_rules`]); never saved.
     rules: Rulebook,
+    /// Each ship slot's draw layer and when it entered it (see
+    /// [`Session::draw_order`]): kept from the session's start, across
+    /// every system entry and every ship leaving; never saved.
+    layers: crate::ship_layer::LayerEntries,
     /// The story runtime: the events raised and the ships watched (see the
     /// [`story`](crate::story) module); never saved.
     story: story::StoryRuntime,
@@ -1028,6 +1043,7 @@ impl Session {
             fighter_notes: Vec::new(),
             fleet: Vec::new(),
             restock_persons: false,
+            class_orders: [None; 4],
             hire_terms: hire::Shared(Rc::new(NovaHire::default())),
             control_bits: hire::Shared(Rc::new(NovaBits)),
             hire_rolls: DayRolls::default(),
@@ -1056,6 +1072,7 @@ impl Session {
             hold_position: false,
             touchdown: player.position,
             rules: Rulebook::default(),
+            layers: crate::ship_layer::LayerEntries::new(),
             story: story::StoryRuntime::default(),
             lives: catalog
                 .stellar_lives()
@@ -1268,7 +1285,10 @@ impl Session {
     /// pre-jump stage the controls are ignored: the ship flies the stage
     /// ([`pre_jump::fly`]) instead, and the jump begins on the tick it is
     /// ready. A landed ship, or one in hyperspace, does not move, glows not
-    /// at all, and gains no fuel. In flight, a mission sound a `P` holds
+    /// at all, and gains no fuel. As the jump begins and on every tick in
+    /// hyperspace, the ships the player leads let go of their targets
+    /// (`_MakeEscortsHyperWithParent` @0x3fdc0-0x3fdc2; see the `escorts`
+    /// module). In flight, a mission sound a `P` holds
     /// sounds (see the `script_effects` module). Any tick ends a gate's pending entry: the
     /// original's hypergate map is modal, so nothing ticks between the
     /// land key and the pick. A ship that is not intact ignores the
@@ -1320,16 +1340,20 @@ impl Session {
         match self.jump {
             None => {
                 self.thrust(controls.thrust);
-                step(&mut self.player, &self.stats.handling, controls);
+                let handling = self.flying_handling();
+                step(&mut self.player, &handling, controls);
             }
             Some(Jump::PreJump { to, bearing }) => {
-                let handling = &self.stats.handling;
+                let handling = self.flying_handling();
                 let thrust =
-                    pre_jump::fly(&mut self.player, handling, bearing, !self.stats.fast_jump);
+                    pre_jump::fly(&mut self.player, &handling, bearing, !self.stats.fast_jump);
                 self.thrust(thrust);
                 self.start_jump_if_ready(to, bearing);
             }
-            Some(Jump::Hyperspace(_)) => return,
+            Some(Jump::Hyperspace(_)) => {
+                self.let_go_of_led_targets();
+                return;
+            }
         }
         regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
     }
@@ -1395,13 +1419,15 @@ impl Session {
             ..World::new(&self.sites)
         };
         let last = self.last_npc();
+        let berths = self.fleet_berths();
+        self.traffic.reserve(berths.iter().copied().collect());
         self.traffic.enter_with(table, world, missions, chance);
         self.resolve_person_offers(last, &mut &mut *chance);
         self.traffic_due = false;
         self.story.watched.clear();
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
-        self.enter_escorts();
+        self.enter_escorts(&berths);
         if entering.is_none() {
             self.snap_mission_escorts();
         }
@@ -1484,6 +1510,7 @@ impl Session {
                     ammo_outfits: &self.ammo_outfits,
                     armament: &self.armament,
                 };
+                let targeted = self.combat.targeted_damage();
                 let world = World {
                     sites: &self.sites,
                     player: Some(self.player_side()),
@@ -1499,6 +1526,8 @@ impl Session {
                         fleet: &self.pilot.escorts,
                     },
                     escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
+                    led_speed: self.led_speed(),
+                    targeted: &targeted,
                 };
                 let strikes = std::mem::take(&mut self.strikes);
                 let last = self.last_npc();
@@ -1518,7 +1547,9 @@ impl Session {
     /// player, the governments, the system's government and the player's
     /// legal record with it (none in an independent system), and the
     /// persons' world: the session's rules and control bits, and the
-    /// pilot's persons gone and grudges.
+    /// pilot's persons gone and grudges. No damage is aimed in it: only
+    /// the traffic's tick fires, and it reads the fight's
+    /// ([`Session::tick_traffic`]).
     fn world(&self) -> World<'_> {
         let system_govt = self.galaxy.govt(self.pilot.system);
         World {
@@ -1536,6 +1567,8 @@ impl Session {
                 fleet: &self.pilot.escorts,
             },
             escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
+            led_speed: self.led_speed(),
+            targeted: &crate::ai::NO_AIMED_DAMAGE,
         }
     }
 
@@ -1549,6 +1582,9 @@ impl Session {
             handling: self.stats.handling,
             rating: self.pilot.combat_rating,
             yardstick: self.arsenal.strength(ShipId(128)),
+            untargetable: self
+                .ship_record(self.pilot.ship)
+                .is_some_and(|record| crate::cloak::untargetable(record.fields.flags2)),
         }
     }
 
@@ -1563,9 +1599,7 @@ impl Session {
         self.hold_trigger(Trigger {
             primary,
             secondary: self.secondary.filter(|_| secondary),
-            only: None,
-            turrets_only: false,
-            bays: false,
+            ..Trigger::default()
         });
     }
 
@@ -1659,11 +1693,12 @@ impl Session {
             hull: self.hull,
             shield_regen: self.stats.shield_regen,
             armor_regen: self.stats.armor_regen,
-            trigger: self.trigger,
+            trigger: player_trigger(self.trigger),
             target: self.target.map(ShipRef::Npc),
             reserves: &mut pilot.reserves,
             condition: &mut self.condition,
             held_disabled: false,
+            cloaked: false,
             armament: &mut self.armament,
             rounds: &mut rounds,
         }];
@@ -1682,6 +1717,7 @@ impl Session {
                 condition,
                 armament,
                 rounds,
+                cloak,
                 ..
             } = npc;
             fighters.push(Fighter {
@@ -1698,6 +1734,7 @@ impl Session {
                 reserves,
                 condition,
                 held_disabled,
+                cloaked: cloak.is_cloaked(),
                 armament,
                 rounds,
             });
@@ -1722,38 +1759,37 @@ impl Session {
         self.launch_fighters(&sorties);
         self.sync_fleet();
         self.lose_escorts();
+        self.lose_dying_mission_escorts();
+        self.self_repair(rules, &mut *chance);
         self.take_out_the_destroyed(&mut &mut *chance);
         self.orphan_fighters();
         self.clear_lost_target();
         self.strike_stellars(&stellars, rules.law, chance);
         self.see_stellars();
+        self.lay_out_ships();
     }
 
     /// Takes each NPC destroyed out of the system, raising
     /// [`Fate::Destroyed`] for it and counting it lost when it is a
     /// mission's special ship, drawing on `chance` (see the
-    /// `mission_ships` module), as it goes. The formation re-forms when a
-    /// mission escort was among them.
+    /// `mission_ships` module), as it goes. A mission escort among them
+    /// has already left the formation, and the rest re-formed, as it
+    /// started to break up ([`Session::lose_dying_mission_escorts`]).
     fn take_out_the_destroyed(&mut self, chance: &mut dyn Chance) {
-        let destroyed: Vec<(NpcId, bool)> = self
+        let destroyed: Vec<NpcId> = self
             .traffic
             .npcs()
             .iter()
             .filter(|npc| npc.condition == Condition::Destroyed)
-            .map(|npc| (npc.id, npc.mission_escort()))
+            .map(|npc| npc.id)
             .collect();
-        let mut reform = false;
-        for (id, mission_escort) in destroyed {
+        for id in destroyed {
             self.raise(StoryEvent::ShipFate {
                 ship: id,
                 fate: Fate::Destroyed,
             });
             self.count_lost_mission_ship(id, chance);
             self.lose_destroyed(id);
-            reform |= mission_escort;
-        }
-        if reform {
-            self.reform();
         }
     }
 
@@ -1865,7 +1901,8 @@ impl Session {
     /// destroyed, landed or jumped out, or the system was populated
     /// afresh) or no longer targetable (it is breaking up, or cloaked and
     /// the player cannot target cloaked ships), as the original does every
-    /// frame.
+    /// frame. A target of an untargetable type is kept: the original's
+    /// check (`_HandlePlayer` @0x686a4-0x686ee) never reads the bit.
     fn clear_lost_target(&mut self) {
         let cloaked_ok = self.scanner().targets;
         if self
@@ -1879,28 +1916,34 @@ impl Session {
     /// Picks the player's target as `pick` says (see
     /// [`targeting`](crate::targeting)), and gives it: the nearest NPC, or
     /// the nearest threat, the target unchanged when there is none; or the
-    /// next. While the ship is landed or jumping, nothing changes. A pick
-    /// that changes the target starts its brackets' fly-in
+    /// next or the previous. While the ship is landed or jumping, nothing
+    /// changes. A pick that changes the target starts its brackets' fly-in
     /// ([`Session::target_brackets`]).
     pub fn select_target(&mut self, pick: TargetPick) -> Option<NpcId> {
         let before = self.target;
         if self.landed.is_none() && self.jumping().is_none() {
-            let cloaked_ok = self.scanner().targets;
+            let scanner = self.scanner();
             let npcs = self.traffic.npcs();
             let from = self.player.position;
             match pick {
                 TargetPick::Nearest => {
-                    let nearest = targeting::nearest(npcs, from, cloaked_ok, |_| true);
+                    let nearest = targeting::nearest(npcs, from, scanner, |_| true);
                     self.target = nearest.or(self.target);
                 }
                 TargetPick::NearestThreat => {
-                    let threat = Npc::threatens_player;
-                    let nearest = targeting::nearest(npcs, from, cloaked_ok, threat);
+                    let threat = |npc: &Npc| npc.threatens_player_among(npcs);
+                    let nearest = targeting::nearest(npcs, from, scanner, threat);
                     self.target = nearest.or(self.target);
                 }
-                TargetPick::Next => self.target = targeting::next(npcs, self.target, cloaked_ok),
+                TargetPick::Next => self.target = targeting::next(npcs, self.target, scanner),
                 TargetPick::NextEscort => {
-                    self.target = targeting::next_escort(npcs, self.target);
+                    self.target = targeting::next_escort(npcs, self.target, scanner);
+                }
+                TargetPick::Previous => {
+                    self.target = targeting::previous(npcs, self.target, scanner);
+                }
+                TargetPick::PreviousEscort => {
+                    self.target = targeting::previous_escort(npcs, self.target, scanner);
                 }
             }
         }
@@ -2130,12 +2173,14 @@ impl Session {
     /// towards `bearing` and slow no more: the thrust stops and the glow
     /// goes out.
     fn start_jump_if_ready(&mut self, to: SystemId, bearing: Option<f32>) {
-        let handling = &self.stats.handling;
-        if pre_jump::stage(&self.player, handling, bearing, !self.stats.fast_jump) == PreJump::Ready
+        let handling = self.flying_handling();
+        if pre_jump::stage(&self.player, &handling, bearing, !self.stats.fast_jump)
+            == PreJump::Ready
         {
             self.jump = Some(Jump::Hyperspace(to));
             self.stop_thrust();
             self.sounds.push(SimSound::JumpBegan);
+            self.let_go_of_led_targets();
         }
     }
 
@@ -2621,7 +2666,9 @@ impl Session {
     /// @0x6706f). The special ships following the player are decided
     /// next, as [`RuleKey::GateFollow`] says (see the `gate_follow`
     /// module): those that follow come out of the exit gate after the
-    /// player, or where it arrived like a jump.
+    /// player, or where it arrived like a jump. Last, every ship the
+    /// player leads comes out of the exit gate after it, as
+    /// [`RuleKey::GateEscorts`] says (see the `gate_escorts` module).
     pub fn enter_wormhole(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
@@ -2643,7 +2690,8 @@ impl Session {
     /// [`Session::enter_wormhole`]. Before it enters, the exit decides
     /// what becomes of the special ships following the player
     /// ([`Session::exit_gate_slots`]); once it has, those that follow come
-    /// out of the gate after it ([`Session::emerge_followers`]).
+    /// out of the gate after it ([`Session::emerge_followers`]), and then
+    /// every ship the player leads ([`Session::lead_out_of_gate`]).
     fn come_out(
         &mut self,
         system: SystemId,
@@ -2653,7 +2701,7 @@ impl Session {
         chance: &mut (impl Chance + ?Sized),
     ) {
         let ship = match self.gate_arrival {
-            GateArrivalRule::Engine => emerge(exit, self.stats.handling.max_speed, chance),
+            GateArrivalRule::Engine => emerge(exit, self.top_speed(), chance),
             GateArrivalRule::LikeJump => {
                 let map = |id| self.galaxy.position(id).unwrap_or_default();
                 let placed = arrival(
@@ -2682,6 +2730,7 @@ impl Session {
         };
         self.enter_system(Entry::Gate, entered, catalog, catalog, chance);
         self.emerge_followers(exit.position, catalog, chance);
+        self.lead_out_of_gate(exit.position, chance);
     }
 
     /// Docks the ship at `stellar`, one of the system's, takes the ranks'
@@ -3616,10 +3665,38 @@ impl Session {
         self.pilot.ship
     }
 
-    /// How the player's ship flies.
+    /// How the player's ship flies, before `_ShipMaxSpeed`'s factor for a
+    /// pilot without Strict Play: the ship's own top speed, which the
+    /// outfitter and the shipyard show. The player flies at
+    /// [`Session::top_speed`].
     #[must_use]
     pub fn handling(&self) -> Handling {
         self.stats.handling
+    }
+
+    /// The player's top speed in flight, its `_ShipMaxSpeed`: the ship's
+    /// own ([`Session::handling`]) × the led speed, 1.5 for a pilot
+    /// without Strict Play by the engine (see
+    /// [`top_speed`]).
+    #[must_use]
+    pub fn top_speed(&self) -> f32 {
+        self.stats.handling.max_speed * self.led_speed()
+    }
+
+    /// The factor on the top speed of the player and of every ship it
+    /// leads (see [`top_speed::led_speed`]), read from the rules and the
+    /// pilot at each use, so nothing is deferred.
+    pub(crate) fn led_speed(&self) -> f32 {
+        top_speed::led_speed(&self.rules, self.pilot.strict_play())
+    }
+
+    /// How the player's ship flies in flight: its own handling, at
+    /// [`Session::top_speed`].
+    fn flying_handling(&self) -> Handling {
+        Handling {
+            max_speed: self.top_speed(),
+            ..self.stats.handling
+        }
     }
 
     /// The government whose `Interface` picks the status bar, as
@@ -3763,10 +3840,15 @@ impl Session {
 
     /// NPC `id` is marked boarded, raising [`Fate::Boarded`], and every
     /// other NPC after it lets it go and decides again
-    /// (`_AIShipBoardedByPlayer`).
+    /// (`_AIShipBoardedByPlayer`). A former escort forgets what it was
+    /// ([`Npc::former`]), as each of the original's ways of boarding one's
+    /// own former escort ends (`_HandlePlayerBoardAttempt` @0x65b2f,
+    /// @0x65be8, @0x65e62; that boarding repair is the boarding
+    /// follow-up's).
     fn mark_boarded(&mut self, id: NpcId) {
         if let Some(npc) = self.npc_mut(id) {
             npc.boarded = true;
+            npc.former = None;
         }
         self.raise(StoryEvent::ShipFate {
             ship: id,
@@ -4114,29 +4196,12 @@ impl Session {
     /// own escorts leave it, and so does the player's target; a save is
     /// due.
     fn fleet_up(&mut self, id: NpcId, person: Option<PersonId>) {
-        let inherent_ai = self
-            .npcs()
-            .iter()
-            .find(|npc| npc.id == id)
-            .and_then(|npc| self.ship_record(npc.ship))
-            .map(|record| record.inherent_ai);
         let Some(npc) = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id) else {
             return;
         };
-        npc.govt = None;
-        if let Some(inherent_ai) = inherent_ai {
-            npc.ai_type = AiType::from_raw(inherent_ai);
-        }
-        npc.leader = None;
-        npc.goal = Goal::Formation { guard: None };
-        npc.target = None;
         npc.trigger = Trigger::default();
         npc.provoked = 0.0;
-        npc.escort = Some(EscortDuty {
-            formation: FormationSlot::default(),
-            order: None,
-        });
-        let escort = Escort {
+        let record = Escort {
             ship: npc.ship,
             reserves: npc.reserves,
             order: None,
@@ -4153,11 +4218,7 @@ impl Session {
         if self.target == Some(id) {
             self.target = None;
         }
-        self.pilot.escorts.push(escort);
-        self.fleet.resize(self.pilot.escorts.len() - 1, None);
-        self.fleet.push(Some(id));
-        self.reform();
-        self.save_due = true;
+        self.enlist(id, record);
     }
 
     /// NPC `id` leaves the system: every other NPC after it lets it go,
@@ -4470,6 +4531,17 @@ fn overlaid_sites(
         .collect()
 }
 
+/// The trigger the player's ship fights with this tick: `held`, its point
+/// defence running every tick (`_HandlePlayer` @0x68c74; a disabled ship's
+/// fires nothing,
+/// [`Armament::fire_point_defence`](crate::combat::armament::Armament::fire_point_defence)).
+fn player_trigger(held: Trigger) -> Trigger {
+    Trigger {
+        point_defence: true,
+        ..held
+    }
+}
+
 /// `value` held to the range of an `i16`, as a boarding grant reads a
 /// raised `Max` (see [`GrantStock::max`]).
 fn clamp_i16(value: i64) -> i16 {
@@ -4536,13 +4608,14 @@ fn fill_in(
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::catalog::{CharacterStart, GateSite, LandingSite, SoundId, StellarId};
     use crate::catalog::{CommodityStrings, DisasterId, DisasterRecord, JunkId, JunkRecord};
     use crate::chance::NeverFires;
     use crate::clock::TICKS_PER_SECOND;
     use crate::control::{SetExpr, Test};
+    use crate::escort::{EscortDuty, FormationSlot};
     use crate::flight::Turn;
     use crate::fuel::FUEL_SCOOP;
     use crate::gate::{GateArrivalRule, GateKind, GateRefusal, HYPERGATE, WORMHOLE, WormholeRule};
@@ -4722,6 +4795,52 @@ mod tests {
             Session::start(&catalog),
             Err(StartError::Ship(ShipId(128), "no shïp 128".to_owned()))
         );
+    }
+
+    /// The player's speed after `ticks` of thrust from rest.
+    fn speed_after_thrust(session: &mut Session, ticks: usize) -> f32 {
+        for _ in 0..ticks {
+            session.tick(Controls {
+                thrust: true,
+                turn: Turn::None,
+                reverse: false,
+            });
+        }
+        session.player().velocity.length()
+    }
+
+    #[test]
+    fn a_pilot_without_strict_play_tops_out_half_as_fast_again() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        let own = session.handling().max_speed;
+        assert!(own > 0.0);
+        assert!((session.top_speed() - own * 1.5).abs() < 1e-4);
+        let speed = speed_after_thrust(&mut session, 300);
+        assert!((speed - own * 1.5).abs() < 1e-3, "{speed} vs {own}");
+    }
+
+    #[test]
+    fn a_strict_play_pilot_tops_out_at_its_ships_top_speed() {
+        let catalog = catalog();
+        let pilot = Pilot::new(&catalog, "Ada")
+            .expect("starts")
+            .with_strict_play(true);
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        let own = session.handling().max_speed;
+        assert_eq!(session.top_speed().to_bits(), own.to_bits());
+        let speed = speed_after_thrust(&mut session, 300);
+        assert!((speed - own).abs() < 1e-3, "{speed} vs {own}");
+    }
+
+    #[test]
+    fn the_other_non_strict_speed_reading_tops_out_at_the_ships_top_speed() {
+        let mut session = Session::start(&catalog()).expect("starts").with_rules(
+            Rulebook::default().with_override(RuleKey::NonStrictSpeed, RuleSource::Bible),
+        );
+        let own = session.handling().max_speed;
+        assert_eq!(session.top_speed().to_bits(), own.to_bits());
+        let speed = speed_after_thrust(&mut session, 300);
+        assert!((speed - own).abs() < 1e-3, "{speed} vs {own}");
     }
 
     #[test]
@@ -11428,12 +11547,16 @@ mod tests {
             .take_off(&catalog, &mut NeverFires)
             .expect("took off");
         let mut expected = *session.player();
+        let handling = Handling {
+            max_speed: 9.0 * top_speed::NON_STRICT_SPEED,
+            ..ShipStats::new(HEAVY, &[]).handling
+        };
         for _ in 0..200 {
             session.tick(THRUST);
-            step(&mut expected, &ShipStats::new(HEAVY, &[]).handling, THRUST);
+            step(&mut expected, &handling, THRUST);
         }
         assert_eq!(*session.player(), expected);
-        assert!((session.player().velocity.length() - 9.0).abs() < 1e-3);
+        assert!((session.player().velocity.length() - 13.5).abs() < 1e-3);
     }
 
     #[test]
@@ -12537,7 +12660,7 @@ mod tests {
     /// [`trafficked`] with the player (ship 128) and its traffic (ship
     /// 129, a trader: 30 shield, 45 armour) each carrying a blaster, held
     /// by outfit 250.
-    fn armed() -> FakePilotCatalog {
+    pub(super) fn armed() -> FakePilotCatalog {
         FakePilotCatalog {
             weapons: vec![blaster()],
             hulls: vec![armed_hull(128, 128), armed_hull(129, 128)],
@@ -12548,7 +12671,7 @@ mod tests {
 
     /// `catalog`'s session with its one NPC placed 100 pixels above the
     /// player (at the centre, facing up), facing `heading`, at rest.
-    fn facing_an_npc(catalog: &FakePilotCatalog, heading: u32) -> Session {
+    pub(super) fn facing_an_npc(catalog: &FakePilotCatalog, heading: u32) -> Session {
         let mut session = Session::start(catalog).expect("starts");
         session.populate(catalog, &mut Draws::of(&[6, 6, 0, 0, 750, 650, heading]));
         assert_eq!(session.npcs()[0].state.position, Vec2::new(0.0, -100.0));
@@ -12562,6 +12685,7 @@ mod tests {
         only: None,
         turrets_only: false,
         bays: false,
+        point_defence: false,
     };
 
     /// The fight's events about NPC 0, other than its firing.
@@ -12625,6 +12749,7 @@ mod tests {
         let mut session = facing_an_npc(&catalog, 180);
         let ship = &mut session.traffic.npcs_mut()[0];
         ship.mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
             slot: 0,
             behav: crate::mission::ships::ShipBehav::EscortPlayer,
             formation,
@@ -13196,6 +13321,7 @@ mod tests {
             Marked::Stale => 5,
         };
         session.traffic.npcs_mut()[0].mission = Some(crate::traffic::npc::MissionMark {
+            order: None,
             slot,
             behav: crate::mission::ships::ShipBehav::Own,
             formation: None,
@@ -13556,6 +13682,20 @@ mod tests {
     }
 
     #[test]
+    fn an_npc_sees_whether_the_players_ship_type_is_untargetable() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let flags2 = |session: &mut Session, flags2: u16| {
+            session.ships = vec![ship(session.pilot.ship.0, ShipFields { flags2, ..FAST })];
+            session.player_side().untargetable
+        };
+        assert!(!flags2(&mut session, 0x0003), "other bits");
+        assert!(flags2(&mut session, crate::cloak::UNTARGETABLE | 0x0001));
+        session.ships.clear();
+        assert!(!session.player_side().untargetable, "no record");
+    }
+
+    #[test]
     fn boarding_a_disabled_ship_leaves_the_rating() {
         let session = aboard(&boardable());
         assert_eq!(session.pilot().combat_rating(), 0);
@@ -13766,7 +13906,7 @@ mod tests {
 
     /// A full cloak: fading out from 32, it reads cloaked for 32 more
     /// ticks.
-    const CLOAKED: crate::cloak::Cloak = crate::cloak::Cloak {
+    pub(super) const CLOAKED: crate::cloak::Cloak = crate::cloak::Cloak {
         fade: crate::cloak::FADE_FULL,
         direction: 0,
     };
@@ -13778,11 +13918,12 @@ mod tests {
         decloaks_when_hit: false,
         on_radar: false,
         flags2: 0,
+        scanner: crate::cloak::Scanner::NONE,
     };
 
     /// [`armed`], with outfit 260, a cloak scanner of `ModVal` `scan`, the
     /// player owns.
-    fn scanning(scan: i16) -> FakePilotCatalog {
+    pub(super) fn scanning(scan: i16) -> FakePilotCatalog {
         let mut catalog = armed();
         catalog
             .outfits
@@ -13791,7 +13932,7 @@ mod tests {
     }
 
     /// `catalog`'s [`facing_an_npc`], the player owning outfit 260.
-    fn holding_260(catalog: &FakePilotCatalog) -> Session {
+    pub(super) fn holding_260(catalog: &FakePilotCatalog) -> Session {
         let mut session = facing_an_npc(catalog, 180);
         session.pilot.outfits.insert(OutfitId(260), 1);
         session
@@ -14013,6 +14154,50 @@ mod tests {
         assert_eq!(session.target, Some(NpcId(0)), "it can");
         session.target = None;
         assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
+    }
+
+    /// `session`'s NPC 0 made of an untargetable type, attacking the
+    /// player.
+    fn untargetable_attacker(session: &mut Session) {
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear.flags2 = crate::cloak::UNTARGETABLE;
+        npc.goal = Goal::Attack(ShipRef::Player);
+    }
+
+    #[test]
+    fn the_target_keys_pass_over_an_untargetable_ship_until_the_player_owns_the_scanner() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        untargetable_attacker(&mut session);
+        for pick in [
+            TargetPick::Nearest,
+            TargetPick::NearestThreat,
+            TargetPick::Next,
+        ] {
+            session.target = None;
+            assert_eq!(session.select_target(pick), None, "{pick:?}");
+        }
+        let scans = scanning(crate::cloak::SCAN_UNTARGETABLE);
+        let mut session = holding_260(&scans);
+        untargetable_attacker(&mut session);
+        for pick in [
+            TargetPick::Nearest,
+            TargetPick::NearestThreat,
+            TargetPick::Next,
+        ] {
+            session.target = None;
+            assert_eq!(session.select_target(pick), Some(NpcId(0)), "{pick:?}");
+        }
+    }
+
+    #[test]
+    fn a_held_target_of_an_untargetable_type_is_not_let_go() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.target = Some(NpcId(0));
+        untargetable_attacker(&mut session);
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(session.target, Some(NpcId(0)));
     }
 
     #[test]
@@ -14573,11 +14758,42 @@ mod tests {
     }
 
     #[test]
+    fn target_select_reaches_a_ship_that_filled_a_freed_berth_first() {
+        let catalog = trafficked(130, 2, 3);
+        let mut session = Session::start(&catalog).expect("starts");
+        let ship = || crate::testkit::npc(0, crate::stats::ShipStats::default());
+        for _ in 0..3 {
+            session.traffic.add_npc(ship());
+        }
+        session.traffic.remove(NpcId(0));
+        assert_eq!(session.traffic.add_npc(ship()), NpcId(3));
+        assert_eq!(session.npc(NpcId(3)).map(|npc| npc.berth), Some(1));
+        let walk = |session: &mut Session, pick| -> Vec<Option<NpcId>> {
+            session.target = None;
+            (0..4).map(|_| session.select_target(pick)).collect()
+        };
+        let up = [Some(NpcId(3)), Some(NpcId(1)), Some(NpcId(2)), None];
+        let down = [Some(NpcId(2)), Some(NpcId(1)), Some(NpcId(3)), None];
+        assert_eq!(walk(&mut session, TargetPick::Next), up);
+        assert_eq!(walk(&mut session, TargetPick::Previous), down);
+        for npc in session.traffic.npcs_mut() {
+            npc.escort = Some(EscortDuty {
+                formation: FormationSlot::default(),
+                order: None,
+            });
+        }
+        assert_eq!(walk(&mut session, TargetPick::Next), [None; 4]);
+        assert_eq!(walk(&mut session, TargetPick::NextEscort), up);
+        assert_eq!(walk(&mut session, TargetPick::PreviousEscort), down);
+    }
+
+    #[test]
     fn nothing_is_targeted_while_landed() {
         let catalog = trafficked(130, 2, 3);
         let mut session = two_npcs(&catalog);
         land_now(&mut session).expect("lands on planet 128");
         assert_eq!(session.select_target(TargetPick::Next), None);
+        assert_eq!(session.select_target(TargetPick::Previous), None);
         assert_eq!(session.select_target(TargetPick::Nearest), None);
         assert_eq!(target_id(&session), None);
     }
@@ -15405,6 +15621,123 @@ mod tests {
         }
     }
 
+    /// Every NPC attacks the player, firing as Nova's AI picks
+    /// ([`crate::ai::fire::trigger`]).
+    #[derive(Debug)]
+    struct Missileer;
+
+    impl Behaviour for Missileer {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            Goal::Attack(ShipRef::Player)
+        }
+
+        fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+            crate::ai::fire::trigger(npc, around, crate::ai::fire::FireRules::default())
+        }
+
+        fn target(&self, _npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            Some(ShipRef::Player)
+        }
+    }
+
+    #[test]
+    fn an_npc_holds_its_next_missile_while_the_one_in_flight_covers_its_target() {
+        // The player holds 30 shield and 45 armour: 1.05 x 75 = 78.75. A
+        // missile of 79 mass and 79 energy aims 79 at it, one of 78 aims
+        // 78. It flies 1 pixel a tick, so the first is still in flight.
+        // The NPC's short gun (52 pixels' reach) keeps the missile from
+        // being its gun.
+        let launches = |damage: i16| {
+            let missile = WeaponRecord {
+                speed: 100,
+                count: 400,
+                reload: 0,
+                mass_dmg: damage,
+                energy_dmg: damage,
+                ..homing_missile(134, 0)
+            };
+            let short = WeaponRecord {
+                id: WeaponId(135),
+                count: 1,
+                ..blaster()
+            };
+            let mut catalog = arming(blaster(), missile, 0);
+            catalog.weapons.push(short);
+            catalog.hulls[1].weapons.insert(
+                0,
+                StockWeapon {
+                    weapon: WeaponId(135),
+                    count: 1,
+                    ammo: 0,
+                },
+            );
+            let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+            let mut fired = 0;
+            for _ in 0..4 {
+                session.tick_traffic(&catalog, &Missileer, &mut NeverFires);
+                session.tick_combat(Rules::default(), &mut NeverFires);
+                fired += session
+                    .take_combat_events()
+                    .iter()
+                    .filter(|event| {
+                        matches!(event, CombatEvent::Fired { weapon, .. } if *weapon == WeaponId(134))
+                    })
+                    .count();
+            }
+            fired
+        };
+        assert_eq!(launches(79), 1, "the first suffices");
+        assert!(launches(78) > 1, "the first falls short");
+    }
+
+    /// Every NPC idles, targets the player and fires weapon 131 alone,
+    /// skipping Nova's AI pick.
+    #[derive(Debug)]
+    struct Picking;
+
+    impl Behaviour for Picking {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            Goal::Idle
+        }
+
+        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
+            Trigger {
+                only: Some(WeaponId(131)),
+                ..Trigger::default()
+            }
+        }
+
+        fn target(&self, _npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            Some(ShipRef::Player)
+        }
+    }
+
+    #[test]
+    fn a_cloaked_npc_fires_only_a_weapon_that_fires_cloaked() {
+        for (flags2, cloaked, fires) in [
+            (0, false, true),
+            (0, true, false),
+            (crate::combat::weapon::FIRES_CLOAKED, true, true),
+        ] {
+            let gun = WeaponRecord {
+                id: WeaponId(131),
+                flags2,
+                ..blaster()
+            };
+            let catalog = arming(blaster(), gun, 0);
+            let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+            session.tick_traffic(&catalog, &Picking, &mut NeverFires);
+            if cloaked {
+                session.traffic.npcs_mut()[0].cloak = CLOAKED;
+            }
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let fired = session.take_combat_events().iter().any(|event| {
+                matches!(event, CombatEvent::Fired { weapon, .. } if *weapon == WeaponId(131))
+            });
+            assert_eq!(fired, fires, "{flags2:#x} cloaked {cloaked}");
+        }
+    }
+
     #[test]
     fn the_players_point_defence_shoots_down_an_npcs_missile_with_no_target_of_its_own() {
         let quad = WeaponRecord {
@@ -15453,6 +15786,67 @@ mod tests {
                 .all(|shot| shot.weapon.id != WeaponId(134)),
             "the missile is gone"
         );
+    }
+
+    /// Every NPC takes `goal`, fires as Nova's AI picks
+    /// ([`crate::ai::fire::trigger`]) and targets what `goal` is about.
+    #[derive(Debug)]
+    struct Minding {
+        goal: Goal,
+    }
+
+    impl Behaviour for Minding {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            self.goal
+        }
+
+        fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+            crate::ai::fire::trigger(npc, around, crate::ai::fire::FireRules::default())
+        }
+
+        fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            npc.goal.quarry()
+        }
+    }
+
+    #[test]
+    fn an_npc_not_fighting_lets_a_players_missile_through_and_one_fighting_shoots_it_down() {
+        // The NPC's point defence runs only when its AI asks for a turret
+        // (`_AIFireTurret` @0x80b0d).
+        let quad = WeaponRecord {
+            id: WeaponId(133),
+            guidance: 9,
+            reload: 5,
+            count: 12,
+            speed: 2000,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            ..blaster()
+        };
+        let slow = WeaponRecord {
+            speed: 500,
+            count: 200,
+            ..homing_missile(134, 1000)
+        };
+        let catalog = arming(slow, quad, 0);
+        for (goal, downed) in [(Goal::Idle, false), (Goal::Attack(ShipRef::Player), true)] {
+            let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+            session.select_target(TargetPick::Nearest);
+            session.hold_fire(true, false);
+            let mut events = Vec::new();
+            for _ in 0..60 {
+                session.tick_traffic(&catalog, &Minding { goal }, &mut NeverFires);
+                session.tick_combat(Rules::default(), &mut NeverFires);
+                session.hold_fire(false, false);
+                events.extend(session.take_combat_events());
+            }
+            let shot_down = events
+                .iter()
+                .any(|event| matches!(event, CombatEvent::ShotDown { .. }));
+            assert_eq!(shot_down, downed, "{goal:?}: {events:?}");
+            let shield = session.npcs()[0].reserves.shield.now;
+            assert_eq!(shield < 30.0, !downed, "{goal:?}: {shield}");
+        }
     }
 
     // Fights, by Nova's AI.
@@ -15753,7 +16147,7 @@ mod tests {
     }
 
     /// Every NPC of AI type 1 attacks NPC `at`, firing its missile; the
-    /// rest idle.
+    /// rest idle, their point defence running.
     #[derive(Debug)]
     struct Volley {
         at: ShipRef,
@@ -15775,7 +16169,10 @@ mod tests {
                     ..Trigger::default()
                 }
             } else {
-                Trigger::default()
+                Trigger {
+                    point_defence: true,
+                    ..Trigger::default()
+                }
             }
         }
 
@@ -15823,6 +16220,65 @@ mod tests {
         };
         assert!(!shot_down(&mut session, &catalog, &at_police));
         assert!(session.npcs()[1].reserves.shield.now < 30.0, "it hit");
+    }
+
+    /// `catalog`'s session with a xenophobe's missile boat (NPC 0) 600
+    /// above the player facing down, and NPC 1, 300 above, made the
+    /// player's escort on standing order `order`; and Nova's AI with the
+    /// boat firing its missile at the escort.
+    fn missile_at_an_escort(
+        catalog: &FakePilotCatalog,
+        order: Option<crate::escort::EscortOrder>,
+    ) -> (Session, crate::ai::NovaAi) {
+        let mut session = Session::start(catalog).expect("starts");
+        session.populate(
+            catalog,
+            &mut placing(2, &[(0, 0, -600, 180), (1, 0, -300, 0)]),
+        );
+        stop_npcs(&mut session);
+        let escort = &mut session.traffic.npcs_mut()[1];
+        escort.govt = None;
+        escort.escort = Some(crate::escort::EscortDuty {
+            formation: crate::escort::FormationSlot {
+                slot: 2,
+                ships: 2,
+                spacing: 30.0,
+            },
+            order,
+        });
+        let ai = crate::ai::NovaAi::default().with(
+            crate::traffic::npc::AiType::WimpyTrader,
+            Rc::new(Volley {
+                at: ShipRef::Npc(NpcId(1)),
+            }),
+        );
+        (session, ai)
+    }
+
+    /// Whether point defence shot a missile down over 60 ticks of
+    /// `session` under `ai`.
+    fn shot_down_by(session: &mut Session, catalog: &FakePilotCatalog, ai: &dyn Behaviour) -> bool {
+        let mut downed = false;
+        for _ in 0..60 {
+            session.tick_traffic(catalog, ai, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            downed |= session
+                .take_combat_events()
+                .iter()
+                .any(|event| matches!(event, CombatEvent::ShotDown { .. }));
+        }
+        downed
+    }
+
+    #[test]
+    fn a_holding_escort_shoots_down_a_missile_fired_at_it() {
+        // The escort flies ship 135, which carries point defence alone.
+        let catalog = skirmish(&[(1, 142, 133), (4, 140, 135)], Some(140));
+        let (mut session, ai) =
+            missile_at_an_escort(&catalog, Some(crate::escort::EscortOrder::Hold));
+        assert!(session.npcs()[1].escorts_player());
+        assert!(shot_down_by(&mut session, &catalog, &ai));
+        assert_eq!(session.npcs()[1].goal, Goal::Idle, "holding");
     }
 
     // Boarding and capture.
@@ -16952,6 +17408,46 @@ mod tests {
         );
         let saved = crate::save::decode(&crate::save::encode(session.pilot())).expect("reads");
         assert_eq!(&saved, session.pilot());
+    }
+
+    /// A former escort's memory: the trader, hired at 30 a day.
+    fn former_trader() -> crate::self_repair::FormerEscort {
+        crate::self_repair::FormerEscort {
+            record: Escort {
+                wage: Some(30),
+                ..trader_escort()
+            },
+        }
+    }
+
+    #[test]
+    fn a_former_escort_boarded_forgets_what_it_was() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        session.traffic.npcs_mut()[0].former = Some(former_trader());
+        session.traffic.npcs_mut()[1].former = Some(former_trader());
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Ok(Boarding::Opened(ON_BOARD))
+        );
+        assert_eq!(session.npcs()[0].former, None);
+        assert_eq!(
+            session.npcs()[1].former,
+            Some(former_trader()),
+            "not boarded"
+        );
+    }
+
+    #[test]
+    fn a_former_escort_taken_into_the_fleet_forgets_what_it_was() {
+        let catalog = boardable();
+        let mut session = captured(&catalog);
+        session.traffic.npcs_mut()[0].former = Some(former_trader());
+        assert_eq!(
+            session.assign(Assignment::Escort, &mut Draws::of(&[])),
+            Some(Assigned::Escort)
+        );
+        assert_eq!(session.npcs()[0].former, None);
     }
 
     /// [`boardable`] with outfits: 400 persistent, 401 not, and 402 the
@@ -18267,7 +18763,7 @@ mod tests {
         let player = *session.player();
         assert_eq!(player.position, Vec2::new(100.0, 200.0));
         assert_eq!(player.heading, 90.0);
-        let half = session.handling().max_speed / 2.0;
+        let half = session.top_speed() / 2.0;
         assert!((player.velocity - Vec2::new(half, 0.0)).length() < 1e-4);
         assert!(session.pilot().has_explored(SystemId(131)));
         assert_eq!(session.pilot().stellar(), None);
@@ -18721,7 +19217,8 @@ mod tests {
     }
 
     /// Asserts `session` came out into a system of three düde ships,
-    /// the fight and the scene left behind and its escort on its slot.
+    /// the fight and the scene left behind and its escort coming out of
+    /// the exit gate after it.
     fn assert_came_out_afresh(session: &Session, case: &str) {
         assert_eq!(session.shots(), [], "{case}");
         session.assert_scene_left(case);
@@ -18732,12 +19229,13 @@ mod tests {
             .iter()
             .find(|npc| npc.id == fleet[0])
             .expect("the escort is in");
-        let duty = escort.escort.expect("an escort");
-        assert_eq!(
-            escort.state.position,
-            duty.formation.position(session.player()),
-            "on its slot: {case}"
+        assert!(escort.escort.is_some(), "an escort: {case}");
+        assert!(
+            escort.emerging() && escort.led_out,
+            "led out of the exit gate: {case}"
         );
+        assert_eq!(escort.state.velocity, Vec2::ZERO, "{case}");
+        assert_eq!(escort.state.heading, session.player().heading, "{case}");
         let dudes: Vec<&Npc> = session
             .npcs()
             .iter()

@@ -5,6 +5,7 @@
 //! beyond, or when the chase is hopeless; with the attacker gone it
 //! decides again.
 
+use crate::ai::fire::FireRules;
 use crate::ai::odds::hopeless_chase;
 use crate::ai::{Behaviour, Goal, Reaction, Surroundings, fire, idle, provoked_by, react};
 use crate::chance::Chance;
@@ -22,6 +23,8 @@ pub const STAND_AND_FIGHT: f32 = 1250.0;
 pub struct BraveTrader {
     /// Who comes to a ship's help ([`react::answer`]).
     pub piracy_police: RuleSource,
+    /// The rulebook's entries its weapon pick follows.
+    pub fire: FireRules,
 }
 
 impl Behaviour for BraveTrader {
@@ -41,7 +44,7 @@ impl Behaviour for BraveTrader {
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
-        fire::trigger(npc, around)
+        fire::trigger(npc, around, self.fire)
     }
 
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {

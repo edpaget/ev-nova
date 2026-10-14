@@ -120,21 +120,22 @@ pub enum Standing {
 }
 
 /// How `npc`, led by `leader` (the ship its [`leader`](Npc::leader)
-/// names, if it is in the system), stands for its brackets, in
-/// `_HandleWeapTargetSprites`'s order (@0x2ffac-0x30021): disabled
-/// (`_IsDisabled`, as [`iff::ship_iff`](crate::iff::ship_iff) reads it);
-/// else the player's escort or a ship one leads, the parent/grandparent
-/// rule of `_ColorCodeShip` (@0x4b46-0x4b8f); else a threat
-/// (`_IsThreatToPlayer`); else neutral. Unlike `_ColorCodeShip`, which
+/// names, if it is in the system), among `npcs`, stands for its
+/// brackets, in `_HandleWeapTargetSprites`'s order (@0x2ffac-0x30021):
+/// disabled (`_IsDisabled`, as [`iff::ship_iff`](crate::iff::ship_iff)
+/// reads it); else the player's escort or a ship one leads, the
+/// parent/grandparent rule of `_ColorCodeShip` (@0x4b46-0x4b8f); else a
+/// threat to the player or a ship the player leads (`_IsThreatToPlayer`
+/// @0x2ffe2, [`Npc::threatens_player_among`]); else neutral. Unlike `_ColorCodeShip`, which
 /// tests the threat first (@0x4b27), an escort attacking the player is
 /// still an escort here.
 #[must_use]
-pub fn standing(npc: &Npc, leader: Option<&Npc>) -> Standing {
+pub fn standing(npc: &Npc, leader: Option<&Npc>, npcs: &[Npc]) -> Standing {
     if matches!(npc.condition, Condition::Disabled | Condition::Dying { .. }) {
         Standing::Disabled
     } else if npc.escorts_player() || leader.is_some_and(Npc::escorts_player) {
         Standing::Escort
-    } else if npc.threatens_player() {
+    } else if npc.threatens_player_among(npcs) {
         Standing::Hostile
     } else {
         Standing::Neutral
@@ -257,33 +258,53 @@ mod tests {
         for condition in [Condition::Disabled, dying] {
             for ship in [hired(), attacking(hired()), attacking(idle.clone())] {
                 assert_eq!(
-                    standing(&in_condition(ship, condition), None),
+                    standing(&in_condition(ship, condition), None, &[]),
                     Standing::Disabled,
                     "{condition:?}"
                 );
             }
         }
-        assert_eq!(standing(&hired(), None), Standing::Escort);
+        assert_eq!(standing(&hired(), None, &[]), Standing::Escort);
         assert_eq!(
-            standing(&attacking(hired()), None),
+            standing(&attacking(hired()), None, &[]),
             Standing::Escort,
             "an escort before a threat, unlike the IFF"
         );
-        assert_eq!(standing(&fighter, Some(&hired())), Standing::Escort);
+        assert_eq!(standing(&fighter, Some(&hired()), &[]), Standing::Escort);
         assert_eq!(
-            standing(&attacking(fighter.clone()), Some(&hired())),
+            standing(&attacking(fighter.clone()), Some(&hired()), &[]),
             Standing::Escort,
             "an escort's fighter attacking the player"
         );
-        assert_eq!(standing(&attacking(idle.clone()), None), Standing::Hostile);
-        assert_eq!(standing(&idle, None), Standing::Neutral);
+        assert_eq!(
+            standing(&attacking(idle.clone()), None, &[]),
+            Standing::Hostile
+        );
+        assert_eq!(standing(&idle, None, &[]), Standing::Neutral);
         let led = npc(1, ShipStats::default());
         assert_eq!(
-            standing(&fighter, Some(&led)),
+            standing(&fighter, Some(&led), &[]),
             Standing::Neutral,
             "led by a ship that escorts no one"
         );
-        assert_eq!(standing(&attacking(fighter), Some(&led)), Standing::Hostile);
+        assert_eq!(
+            standing(&attacking(fighter), Some(&led), &[]),
+            Standing::Hostile
+        );
+        let attacking_hired = Npc {
+            goal: Goal::Attack(ShipRef::Npc(NpcId(1))),
+            ..idle.clone()
+        };
+        assert_eq!(
+            standing(&attacking_hired, None, &[hired()]),
+            Standing::Hostile,
+            "attacking a ship the player leads"
+        );
+        assert_eq!(
+            standing(&attacking_hired, None, &[npc(1, ShipStats::default())]),
+            Standing::Neutral,
+            "attacking a ship nobody leads"
+        );
     }
 
     /// The area from (0, 0) to (100, 50).
