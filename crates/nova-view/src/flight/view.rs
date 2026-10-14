@@ -343,6 +343,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
+use nova_sim::Drawn as ShipDrawn;
 use nova_sim::cloak::{CloakShown, TRANSLUCENCY_STEPS};
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::offer_gap;
@@ -3271,13 +3272,15 @@ impl<C> FlightView<C> {
     fn draw_ships(&self, list: &mut DrawList, camera: &Camera) {
         let player = camera.world_to_screen(self.shown_position());
         let Ok(session) = &self.session else {
-            self.draw_ship(list, player);
+            self.draw_ship(list, player, ShipDrawn::Full);
             return;
         };
         let npcs = self.shown_npcs();
         for ship in session.draw_order() {
             match ship {
-                ShipRef::Player => self.draw_ship(list, player),
+                ShipRef::Player => {
+                    self.draw_ship(list, player, session.player_fate().row().drawn);
+                }
                 ShipRef::Npc(id) => {
                     if let Some(&(npc, at, heading)) = npcs.iter().find(|(npc, ..)| npc.id == id) {
                         self.draw_npc(list, session, npc, camera.world_to_screen(at), heading);
@@ -3689,11 +3692,21 @@ impl<C> FlightView<C> {
         target::draw_secondary(list, &bar.layout, origin, line.as_deref(), metrics);
     }
 
-    fn draw_ship(&self, list: &mut DrawList, at: Point) {
+    /// Draws the player's ship at `at`, as much of it as `drawn` says
+    /// (see [`nova_sim::player_fate`]): its sprite, engine glow and
+    /// running lights, or, when its sheet cannot be read, a crossed box
+    /// and the reason. The box stands in for the sprite and a missing
+    /// sheet has no glow or lights, so only a ship drawn in full has one.
+    fn draw_ship(&self, list: &mut DrawList, at: Point, drawn: ShipDrawn) {
+        if drawn == ShipDrawn::Hidden {
+            return;
+        }
         match &self.sheet {
             Ok(sheet) => {
                 let frame = rotation_frame(self.shown_heading(), sheet.rotations);
-                list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
+                if drawn == ShipDrawn::Full {
+                    list.sprite(ImageKey::sprite(sheet.image_id, frame), at, Color::WHITE);
+                }
                 let tick = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
                 let base = self.session.as_ref().map_or(0, Session::engine_glow);
                 let glow = sheet
@@ -3706,6 +3719,7 @@ impl<C> FlightView<C> {
                     list.or_sprite(ImageKey::sprite(layer.image_id, layer_frame), at, tint);
                 }
             }
+            Err(_) if drawn != ShipDrawn::Full => {}
             Err(reason) => {
                 crossed_box(list, at, PLACEHOLDER_SIZE, PLACEHOLDER);
                 let below = Point::new(
@@ -9610,7 +9624,7 @@ mod tests {
 
     use std::num::NonZeroU16 as Frames;
 
-    use nova_sim::{BoomId, Condition, WeaponId};
+    use nova_sim::{BoomId, Condition, PlayerFate, WeaponId};
 
     use crate::flight::brackets::{self, Standing};
     use crate::flight::catalog::EffectSheet;
@@ -10305,6 +10319,139 @@ mod tests {
             view.effects().explosions()[0].at,
             Point::new(at.x + 19.0, at.y + 19.0)
         );
+    }
+
+    /// [`armed`] where the NPC, straight above the player and facing it,
+    /// fires a blaster that kills at a hit, and the player's ship breaks
+    /// up in `death_delay` ticks, then explodes as `bööm` 128 (`rlëD` 400).
+    fn killed_in(death_delay: i16) -> FakeCatalog {
+        let mut catalog = armed(1, &[]);
+        catalog.weapons[0].mass_dmg = 1000;
+        catalog.weapons[0].flags = 0x0020;
+        catalog.weapons[0].explod_type = -1;
+        catalog.hulls[0].death_delay = death_delay;
+        catalog.hulls[1] = hull_of(129, &[BLASTER]);
+        catalog
+    }
+
+    /// Steps `view` until the player's ship explodes, calling
+    /// `breaking_up` on each frame before that while it breaks up, and
+    /// returns with the view on the explosion's tick.
+    fn until_the_player_explodes(view: &mut View, breaking_up: impl Fn(&View)) {
+        let mut broke_up = false;
+        for _ in 0..60 {
+            view.tick(TICK);
+            match view.session().expect("flying").player_fate() {
+                PlayerFate::BreakingUp { .. } => {
+                    breaking_up(view);
+                    broke_up = true;
+                }
+                PlayerFate::Exploded { first_tick } => {
+                    assert!(first_tick, "seen on the tick it explodes");
+                    assert!(broke_up, "it broke up first");
+                    return;
+                }
+                PlayerFate::Flying | PlayerFate::Disabled => {}
+            }
+        }
+        panic!("the player's ship never exploded");
+    }
+
+    /// The player's layers drawn, by `rlëD`: its ship 2000, glow 2100
+    /// and lights 2200 (the NPC's are 2001, 2101 and 2201).
+    fn player_layers(view: &View) -> Vec<i16> {
+        ship_sprites(view)
+            .iter()
+            .map(|(image, _)| image.id)
+            .filter(|id| [2000, 2100, 2200].contains(id))
+            .collect()
+    }
+
+    #[test]
+    fn the_players_ship_is_drawn_whole_while_breaking_up_then_loses_its_sprite_then_vanishes() {
+        // A breakup of one tick, so the engine glow built up by the
+        // thrust held from the start has not faded by the explosion: a
+        // breaking-up ship takes no controls.
+        let mut catalog = killed_in(1);
+        catalog.sheet = blinking(Blink::STEADY).sheet;
+        let mut view = fighting(catalog, &placed(750, 650, 180));
+        // Thrusting with the NPC holding fire, so the glow builds up.
+        view.input(&key(Key::Up, true));
+        for _ in 0..10 {
+            view.tick(TICK);
+        }
+        let mut view = view.with_behaviour(Rc::new(Firing));
+        until_the_player_explodes(&mut view, |view| {
+            let ids = player_layers(view);
+            assert!(ids.contains(&2000), "the ship: {ids:?}");
+            assert!(ids.contains(&2200), "its lights: {ids:?}");
+        });
+        // At a base of 6 or more the flicker (`glow_level`'s roll of 6,
+        // less 4) cannot hide the glow.
+        let glow = view.session().expect("flying").engine_glow();
+        assert!(glow >= 6, "the glow is still lit as it explodes: {glow}");
+        assert_eq!(
+            player_layers(&view),
+            [2100, 2200],
+            "its glow and lights, but no ship, on the explosion's tick"
+        );
+        // The explosion, `bööm` 128's 3 frames, draws over its 3 ticks.
+        for after in 0..5 {
+            if after < 3 {
+                assert!(!view.effects().explosions().is_empty(), "tick {after}");
+                let list = drawn(&view);
+                assert!(
+                    list.iter().any(sprite_of(400)),
+                    "the explosion is drawn on tick {after}: {list:?}"
+                );
+            }
+            view.tick(TICK);
+            assert_eq!(
+                view.session().expect("flying").player_fate(),
+                PlayerFate::Exploded { first_tick: false }
+            );
+            assert_eq!(player_layers(&view), [0_i16; 0], "nothing of it after");
+        }
+    }
+
+    /// Whether `list` draws `run` as one unbroken run of commands.
+    fn draws_run(list: &DrawList, run: &DrawList) -> bool {
+        let commands: Vec<_> = list.iter().cloned().collect();
+        let expected: Vec<_> = run.iter().cloned().collect();
+        commands
+            .windows(expected.len())
+            .any(|window| window == expected)
+    }
+
+    fn sprite_unavailable(list: &DrawList) -> bool {
+        list.iter().any(
+            |c| matches!(c, DrawCommand::Text { text, .. } if text.starts_with("Sprite unavailable")),
+        )
+    }
+
+    #[test]
+    fn an_exploded_player_without_a_sheet_draws_no_placeholder() {
+        let mut catalog = killed_in(5);
+        catalog.sheet = Err("no shän 128 for shïp 128".to_owned());
+        let mut view = fighting(catalog, &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        let placeholder = |view: &View| {
+            let mut boxed = DrawList::new();
+            let at = view.camera().world_to_screen(view.shown_position());
+            crossed_box(&mut boxed, at, PLACEHOLDER_SIZE, PLACEHOLDER);
+            boxed
+        };
+        until_the_player_explodes(&mut view, |view| {
+            let list = drawn(view);
+            assert!(sprite_unavailable(&list), "while breaking up");
+            assert!(draws_run(&list, &placeholder(view)), "{list:?}");
+        });
+        // The explosion's tick, then the ones after.
+        for _ in 0..3 {
+            let list = drawn(&view);
+            assert!(!sprite_unavailable(&list), "{list:?}");
+            assert!(!draws_run(&list, &placeholder(&view)), "{list:?}");
+            view.tick(TICK);
+        }
     }
 
     #[test]

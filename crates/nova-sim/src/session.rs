@@ -449,6 +449,7 @@ use crate::outfitter::{
 };
 use crate::person::{NovaPersons, PersonRules, PersonWorld};
 use crate::pilot::{self, Escort, Pilot};
+use crate::player_fate::PlayerFate;
 use crate::pre_jump::{self, PreJump};
 use crate::rating;
 use crate::recharge::{self, RechargeRefusal};
@@ -620,6 +621,14 @@ pub struct Session {
     armament: Armament,
     /// How the player's ship is holding up.
     condition: Condition,
+    /// Whether the player's ship was destroyed on the latest
+    /// [`Session::tick_combat`], the tick the fight raised its
+    /// `CombatEvent::Destroyed`; read by [`Session::player_fate`]. It stays
+    /// set until the next `tick_combat`, so every interpolated view frame
+    /// drawn after that tick sees `first_tick: true`: the original hides
+    /// on its own frame boundary, so this crosses no boundary the player
+    /// can see.
+    player_exploded_this_tick: bool,
     /// The fire command the player holds.
     trigger: Trigger,
     /// The shots and beams in flight, and what the fight reports.
@@ -1028,6 +1037,7 @@ impl Session {
             hull: HullSpec::default(),
             armament: Armament::default(),
             condition: Condition::Intact,
+            player_exploded_this_tick: false,
             trigger: Trigger::default(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),
@@ -1667,9 +1677,11 @@ impl Session {
     /// down is destroyed and runs its `OnDestroy` (see the `stellars`
     /// module).
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
+        self.player_exploded_this_tick = false;
         if self.landed.is_some() || self.jumping().is_some() {
             return;
         }
+        let was_destroyed = self.condition == Condition::Destroyed;
         self.take_scans(rules.law, &mut &mut *chance);
         let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
         let held: Vec<bool> = self
@@ -1747,14 +1759,9 @@ impl Session {
             &mut stellars,
             chance,
         );
+        self.player_exploded_this_tick = !was_destroyed && self.condition == Condition::Destroyed;
         self.raise_disabled(&was, &mut &mut *chance);
-        let mut strikes = self.combat.take_strikes();
-        self.refill_invincible(&mut strikes);
-        self.hold_grudges(&strikes);
-        self.punish(&strikes, &was, rules.law);
-        self.credit_kills(&strikes, &was);
-        self.cloak_hits(&strikes);
-        self.strikes.extend(strikes);
+        self.answer_strikes(&was, rules.law);
         let sorties = self.combat.take_sorties();
         self.launch_fighters(&sorties);
         self.sync_fleet();
@@ -1767,6 +1774,20 @@ impl Session {
         self.strike_stellars(&stellars, rules.law, chance);
         self.see_stellars();
         self.lay_out_ships();
+    }
+
+    /// Answers the fight's strikes this tick, against what each NPC `was`
+    /// before it: refilling the invincible, holding persons' grudges,
+    /// convicting the player by `law`, crediting kills and letting each
+    /// hit NPC's cloak take its hit; then keeps them for the app.
+    fn answer_strikes(&mut self, was: &[NpcBefore], law: &dyn LegalCode) {
+        let mut strikes = self.combat.take_strikes();
+        self.refill_invincible(&mut strikes);
+        self.hold_grudges(&strikes);
+        self.punish(&strikes, was, law);
+        self.credit_kills(&strikes, was);
+        self.cloak_hits(&strikes);
+        self.strikes.extend(strikes);
     }
 
     /// Takes each NPC destroyed out of the system, raising
@@ -1968,6 +1989,13 @@ impl Session {
     #[must_use]
     pub fn player_condition(&self) -> Condition {
         self.condition
+    }
+
+    /// Where the player's ship is in its lifecycle: its condition, and
+    /// whether it exploded on the latest fight tick.
+    #[must_use]
+    pub fn player_fate(&self) -> PlayerFate {
+        PlayerFate::of(self.condition, self.player_exploded_this_tick)
     }
 
     /// The shots in flight.
@@ -14453,6 +14481,62 @@ pub(super) mod tests {
         assert_eq!(session.player().velocity, Vec2::ZERO);
         assert_eq!(session.land(), Err(LandingRefusal::Disabled));
         assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn the_players_fate_is_exploded_first_tick_only_on_the_tick_it_is_destroyed() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        let mut broke_up = false;
+        let mut exploded = false;
+        for _ in 0..40 {
+            session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let events = session.take_combat_events();
+            let destroyed = events.iter().any(|event| {
+                matches!(
+                    event,
+                    CombatEvent::Destroyed {
+                        ship: ShipRef::Player,
+                        ..
+                    }
+                )
+            });
+            if destroyed {
+                assert_eq!(
+                    session.player_fate(),
+                    PlayerFate::Exploded { first_tick: true }
+                );
+                exploded = true;
+                break;
+            }
+            if session.player_condition() != Condition::Intact {
+                assert!(
+                    matches!(session.player_fate(), PlayerFate::BreakingUp { .. }),
+                    "{:?}",
+                    session.player_fate()
+                );
+                broke_up = true;
+            }
+        }
+        assert!(
+            broke_up && exploded,
+            "broke up {broke_up}, exploded {exploded}"
+        );
+        for _ in 0..3 {
+            session.tick_traffic(&catalog, &Firing, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            assert_eq!(
+                session.player_fate(),
+                PlayerFate::Exploded { first_tick: false }
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_session_flies() {
+        let session = Session::start(&armed()).expect("starts");
+        assert_eq!(session.player_fate(), PlayerFate::Flying);
     }
 
     #[test]

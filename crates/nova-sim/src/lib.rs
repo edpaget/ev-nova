@@ -177,6 +177,9 @@
 //!   the fleet of [`Escort`]s, the control bits and the player's
 //!   [`Gender`] and its ship's paint and name, starting from the first
 //!   `chär`.
+//! - [`player_fate`]: the player's lifecycle, a [`PlayerFate`] read off
+//!   its [`Condition`], and each fate's [`FateRow`]: how much of the ship
+//!   is [`Drawn`].
 //! - [`pre_jump`]: what the ship does between the jump key and the jump:
 //!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
 //!   turns to the bearing of the next system.
@@ -302,6 +305,7 @@ pub mod outfit_effects;
 pub mod outfitter;
 pub mod person;
 pub mod pilot;
+pub mod player_fate;
 pub mod pre_jump;
 pub mod rank;
 pub mod rating;
@@ -406,6 +410,7 @@ pub use person::{
     PersonWorld, QuoteTags, expand_tags,
 };
 pub use pilot::{Escort, Gender, Pilot};
+pub use player_fate::{Drawn, FateRow, PlayerFate};
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
 pub use red_alert::{
     ALERT_CHECK_FRAMES, ALERT_CICN, ALERT_STEP_FRAMES, ALERT_STEPS, AlertIcon, RedAlert,
