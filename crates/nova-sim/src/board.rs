@@ -1629,7 +1629,11 @@ mod tests {
         assert_eq!(all(19), Some(3));
         assert_eq!(all(14), Some(2));
         assert_eq!(all(5), Some(1));
-        assert_eq!(all(4), None, "none fits: nothing is granted, nor said");
+        assert_eq!(
+            all(4),
+            Some(0),
+            "none fits: the pick at a count of none, which grants nothing, nor says it"
+        );
         assert_eq!(
             granted(rule, grant_of(100, 4), spare(0, 0, 999), -30, &[0, 50]).0,
             Some(4),
@@ -1642,7 +1646,7 @@ mod tests {
         );
         assert_eq!(
             granted(rule, grant_of(100, 4), spare(1, 0, 999), -30, &[0, 50]).0,
-            None
+            Some(0)
         );
     }
 

@@ -4105,7 +4105,9 @@ impl Session {
     /// What boarding `npc` grants as `rule` says, drawn on `chance`, added
     /// to the outfits the pilot owns and the ship refitted with them (see
     /// [`grant`](crate::grant)): none, and nothing drawn, for a ship no
-    /// person flies or a person of no grant.
+    /// person flies or a person of no grant. The session resets once an
+    /// outfit is picked (@0x931d9), and again once it is granted
+    /// (@0x93226); a pick of which none fits grants nothing.
     fn grant(
         &mut self,
         npc: &Npc,
@@ -4126,10 +4128,20 @@ impl Session {
             self.outfit_rules().grant_max,
             chance,
         )?;
+        // The dialog's reset once an outfit is picked, before its count
+        // is fitted to the free mass (`_DoPlunderDialog` @0x931d9; see the
+        // `precalced` module): it trims only the cargo, so the free mass
+        // the count was fitted to stands.
+        self.reset_precalced();
+        if granted.count == 0 {
+            return None;
+        }
         for _ in 0..granted.count {
             self.grant_outfit(granted.outfit);
         }
         self.refit(true, self.script_reserves());
+        // And again once it is granted (@0x93226).
+        self.reset_precalced();
         Some(granted)
     }
 
@@ -4283,6 +4295,9 @@ impl Session {
                 let Some((outfit, rounds)) = plunder.ammo.take() else {
                     return Taken::Nothing;
                 };
+                // The ammunition button's reset (`_DoPlunderDialog`
+                // @0x93cc9; see the `precalced` module).
+                self.reset_precalced();
                 let count = self.take_ammo(outfit, rounds);
                 (Taken::Ammo { outfit, count }, AMMO_GROWTH)
             }
@@ -4330,6 +4345,10 @@ impl Session {
     /// 0x0400 (`_AdjustedItemMass` is not called), against the free mass
     /// `_ShipFreeMass` gives again each round (@0x93d62), which does scale
     /// the rounds already taken.
+    ///
+    /// The session resets after each round taken (@0x93dcb; see the
+    /// `precalced` module), as the ammunition button does before the first
+    /// (@0x93cc9).
     fn take_ammo(&mut self, outfit: OutfitId, rounds: u32) -> u32 {
         let Some(record) = self
             .outfits
@@ -4353,6 +4372,8 @@ impl Session {
         {
             *self.pilot.outfits.entry(outfit).or_default() += 1;
             count += 1;
+            // The reset after each round (@0x93dcb).
+            self.reset_precalced();
         }
         self.refit(true, self.script_reserves());
         count
@@ -17420,6 +17441,28 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn an_ammunition_take_resets_as_it_is_pressed_and_after_each_round() {
+        let mut session = ammo_session(&ammo_aboard(1, 12));
+        session.pilot.outfits.insert(OutfitId(310), 9);
+        trimmed_by_each_reset(&mut session);
+        crate::session::precalced::tests::convicted(&mut session);
+        assert_eq!(
+            take(&mut session, Take::Ammo, &[]).0,
+            Taken::Ammo {
+                outfit: OutfitId(310),
+                count: 3
+            }
+        );
+        assert_eq!(
+            commodity_left(&session),
+            1,
+            "four trims: @0x93cc9, then @0x93dcb for each of the three rounds"
+        );
+        assert!(session.boarding().is_some(), "the dialog still open");
+        assert_eq!(session.scan_latches, crate::scan::Latches::ARMED);
+    }
+
+    #[test]
     fn taking_ammo_admits_each_round_by_its_raw_mass() {
         // Rounds of `Mass` 4 with Flags 0x0400 on a class of `Mass` 200:
         // 8 tons scaled, 4 raw. `_DoPlunderDialog` tests the raw `Mass`
@@ -18629,6 +18672,69 @@ pub(super) mod tests {
         assert!(asked.is_empty(), "{asked:?}");
         assert_eq!(session.pilot().owned(OutfitId(200)), 0);
         assert_eq!(session.take_grant(), None);
+    }
+
+    /// Loads `session` with 1000 tons of commodity 0 and 30 of `jünk`,
+    /// past its 20 tons of holds, for the plunder dialog's resets: each
+    /// trim cuts the commodity by 20 over everything held, to 19, 7, 3, 1
+    /// and then none (1000 x 20/1030, 19 x 20/49, 7 x 20/37, 3 x 20/33,
+    /// 1 x 20/31).
+    fn trimmed_by_each_reset(session: &mut Session) {
+        assert_eq!(session.capacity(), 20);
+        session.pilot.cargo = [
+            (Good::Commodity(0), 1000),
+            (crate::session::precalced::tests::JUNK, 30),
+        ]
+        .into();
+    }
+
+    /// The commodity left by [`trimmed_by_each_reset`]'s cargo.
+    fn commodity_left(session: &Session) -> u32 {
+        session.pilot().held(Good::Commodity(0))
+    }
+
+    #[test]
+    fn a_persons_grant_resets_before_and_after_it() {
+        let catalog = granting();
+        let mut session = alongside_ace(&catalog);
+        trimmed_by_each_reset(&mut session);
+        crate::session::precalced::tests::convicted(&mut session);
+        let (boarded, _) = board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS);
+        assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
+        assert_eq!(session.pilot().owned(OutfitId(200)), 2);
+        assert_eq!(
+            commodity_left(&session),
+            7,
+            "trimmed twice, as the dialog opens: @0x931d9 and @0x93226"
+        );
+        assert_eq!(session.scan_latches, crate::scan::Latches::ARMED);
+    }
+
+    #[test]
+    fn a_grant_picked_that_fits_none_resets_once_and_no_grant_resets_nothing() {
+        let mut catalog = granting();
+        booster(&mut catalog).mass = 1000;
+        let mut session = alongside_ace(&catalog);
+        trimmed_by_each_reset(&mut session);
+        let (boarded, _) = board_drawing(&mut session, NovaBoarding::default(), &ACE_DRAWS);
+        assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
+        assert_eq!(session.take_grant(), None, "nothing fits");
+        assert_eq!(commodity_left(&session), 19, "@0x931d9 alone");
+        for draws in [&[0, 17, 5, 40][..], &BOARD_DRAWS] {
+            let mut session = if draws.len() == 4 {
+                alongside_ace(&granting())
+            } else {
+                alongside(&granting())
+            };
+            trimmed_by_each_reset(&mut session);
+            let (boarded, _) = board_drawing(&mut session, NovaBoarding::default(), draws);
+            assert!(matches!(boarded, Ok(Boarding::Opened(_))), "{boarded:?}");
+            assert_eq!(
+                commodity_left(&session),
+                1000,
+                "no outfit picked: {draws:?}"
+            );
+        }
     }
 
     #[test]
