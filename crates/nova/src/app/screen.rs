@@ -7731,6 +7731,11 @@ pub(super) mod tests {
     /// says), flying with the killer above the player, until the player is
     /// in the escape pod.
     fn ejected(store: &MemoryPilots, desc: bool) -> AppScreen {
+        ejected_by(store, desc, create)
+    }
+
+    /// [`ejected`], the pilot made by `create`.
+    fn ejected_by(store: &MemoryPilots, desc: bool, create: fn(&mut AppScreen, &str)) -> AppScreen {
         let mut screen = with_dialogs(escape_pod_data(desc))
             .with_chance(above_the_player())
             .with_behaviour(Rc::new(Firing))
@@ -7775,6 +7780,31 @@ pub(super) mod tests {
         screen.input(&key(Key::Enter, true));
         assert_eq!(screen.showing(), Showing::Flight, "flying on");
         assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_strict_pilot_rescued_from_the_pod_is_saved_before_the_rescue_is_drawn() {
+        let store = MemoryPilots::new();
+        let mut screen = ejected_by(&store, true, create_strict);
+        let before = store.writes();
+        tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
+            screen.showing() == Showing::MissionText
+        });
+        assert_eq!(store.writes(), before + 1, "saved on the rescue's tick");
+        let saved = saved(&store, "Ada");
+        assert_eq!(saved.stellar(), Some(nova_sim::StellarId(128)));
+        assert_eq!(saved.system(), nova_sim::SystemId(128));
+    }
+
+    #[test]
+    fn a_pilot_rescued_from_the_pod_without_strict_play_is_not_saved() {
+        let store = MemoryPilots::new();
+        let mut screen = ejected_by(&store, true, create);
+        let before = store.writes();
+        tick_until(&mut screen, nova_sim::POD_TICKS + 1, |screen| {
+            screen.showing() == Showing::MissionText
+        });
+        assert_eq!(store.writes(), before, "no save on the rescue's tick");
     }
 
     /// Draws the last outcome of every roll but the traffic's placement:
