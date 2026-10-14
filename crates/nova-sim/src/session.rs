@@ -474,11 +474,7 @@ use crate::traffic::table::SpawnTable;
 use crate::traffic::{Traffic, World, strength};
 use crate::wares::DayRolls;
 
-/// The escape pod's ship class, `shïp` 895 "Escape Pod": the original's
-/// class index 0x2ff (the ID less 128), which `_EnterGameFromMainScreen`
-/// tests (@0x1a4c5) to spare a strict pilot who ejected in it. Only the
-/// pod branch of the player's eject sets it (@0x6f64a, phase 9).
-pub const ESCAPE_POD_SHIP: ShipId = ShipId(895);
+pub use crate::combat::hull::ESCAPE_POD_SHIP;
 
 /// What [`Session::tick_combat`] works out for a ship's [`Fighter`]
 /// beyond what the ship carries.

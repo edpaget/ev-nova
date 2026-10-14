@@ -131,7 +131,10 @@ use armament::{Armament, Arsenal, Launch, Rounds, Shooter, Trigger};
 use beam::{Aiming, Beam};
 use damage::{Blast, Hit};
 use defence::{INTERCEPT_RADIUS, PointDefenceRule, Side};
-use hull::{Breakup, Condition, DisableRule, EXPLOSION_BAND, HullSpec, PLAYER_BREAKUP_FACTOR};
+use hull::{
+    Breakup, Condition, DisableRule, EXPLOSION_BAND, HullSpec, PLAYER_BREAKUP_FACTOR, immune,
+    never_breaks_up,
+};
 use projectile::{Shot, ShotId, Target, contact};
 use report::{Reports, SimDiagnostic};
 use stellar::{StellarStrike, StellarTarget};
@@ -488,7 +491,10 @@ impl Combat {
                 };
                 let condition = *fighter.condition;
                 let before = taken(fighter.reserves);
-                shockwave::hit(fighter.reserves, condition, &fighter.hull, rule, damage);
+                let hurt = !immune(fighter.ship_type);
+                if hurt {
+                    shockwave::hit(fighter.reserves, condition, &fighter.hull, rule, damage);
+                }
                 let pushed = shockwave::shove(
                     &fighter.state,
                     at,
@@ -500,6 +506,9 @@ impl Combat {
                 if let Some(velocity) = pushed {
                     fighter.state.velocity = velocity;
                     self.shoves.push(Shove { ship, velocity });
+                }
+                if !hurt {
+                    continue;
                 }
                 let downed = if condition.hittable() {
                     self.update_condition(fighter, rule)
@@ -814,8 +823,14 @@ impl Combat {
             beam.age();
         }
         self.beams.retain(|beam| !beam.expired());
+        // A shot that hits the escape pod is spent on it all the same:
+        // `_HandleShipHit` turns away only a class above 0x2ff
+        // (@0x36a58), and `_DamageShip` then does nothing to it ([`immune`]).
         for (ship, by, hit) in hits {
-            if let Some(fighter) = fighters.iter_mut().find(|fighter| fighter.ship == ship) {
+            let fighter = fighters
+                .iter_mut()
+                .find(|fighter| fighter.ship == ship && !immune(fighter.ship_type));
+            if let Some(fighter) = fighter {
                 let before = taken(fighter.reserves);
                 damage::apply(fighter.reserves, hit);
                 self.strikes.push(Strike {
@@ -935,15 +950,22 @@ impl Combat {
     ///   set again, `starting` again, every tick under
     ///   [`Breakup::Stalls`], the original's reset (@0x2d80d-0x2d83d).
     ///
+    /// Class 0x2ff, the escape pod, skips the whole dying block
+    /// (`_HandleShipDisplay` @0x2d803, [`never_breaks_up`]): with its
+    /// armour gone its condition stays as it is, with no breakup, no
+    /// countdown and no explosion.
+    ///
     /// Left out: `_HandleShip` skips the NPC decrement while
     /// `_gameFrozen` is set (@0x35091-0x35099), and the engine has no
-    /// frozen game; class 0x2ff, the escape pod, skips the whole dying
-    /// block (@0x2d803), which is phase 9's (`player-death`).
+    /// frozen game.
     fn update_condition(
         &mut self,
         fighter: &mut Fighter,
         rule: &dyn DisableRule,
     ) -> Option<Downed> {
+        if never_breaks_up(fighter.ship_type) && armour_gone(fighter.reserves.armor) {
+            return None;
+        }
         let ship = fighter.ship;
         let at = fighter.state.position;
         let timer = if ship == ShipRef::Player {
@@ -1171,13 +1193,14 @@ mod tests {
     use crate::catalog::{BoomId, WeaponRecord};
     use crate::chance::NeverFires;
     use crate::combat::defence::Side;
-    use crate::combat::hull::NovaDisable;
+    use crate::combat::hull::{ESCAPE_POD_SHIP, NovaDisable};
     use crate::combat::weapon::WeaponSpec;
     use crate::testkit::weapon;
 
     /// A ship in a test fight, owning what a fighter borrows.
     struct Ship {
         id: ShipRef,
+        class: ShipId,
         fleet: ShipRef,
         govt: Option<GovtId>,
         target: Option<ShipRef>,
@@ -1215,6 +1238,7 @@ mod tests {
         fn at(id: u32, x: f32, y: f32) -> Self {
             Self {
                 id: ShipRef::Npc(NpcId(id)),
+                class: ShipId(128),
                 fleet: ShipRef::Npc(NpcId(id)),
                 govt: None,
                 target: None,
@@ -1258,7 +1282,7 @@ mod tests {
         fn fighter(&mut self) -> Fighter<'_> {
             Fighter {
                 ship: self.id,
-                ship_type: ShipId(128),
+                ship_type: self.class,
                 fleet: self.fleet,
                 govt: self.govt,
                 state: self.state,
@@ -3967,5 +3991,87 @@ mod tests {
                 explosion: boom
             }]
         );
+    }
+    /// `ship` as the escape pod, or a class after it.
+    fn pod(ship: Ship, class: ShipId) -> Ship {
+        Ship { class, ..ship }
+    }
+
+    #[test]
+    fn a_shot_beam_blast_or_shockwave_does_no_damage_to_the_escape_pod() {
+        let shell = WeaponRecord {
+            explod_type: 0,
+            blast_radius: 30,
+            ..blaster()
+        };
+        let after = ShipId(ESCAPE_POD_SHIP.0 + 1);
+        for (ship_type, immune) in [
+            (ESCAPE_POD_SHIP, true),
+            (after, true),
+            (ShipId(ESCAPE_POD_SHIP.0 - 1), false),
+        ] {
+            // A shot, then a blast beside it: A fires at B, C beside B.
+            for record in [blaster(), shell, laser()] {
+                let mut combat = Combat::default();
+                let mut ships = [
+                    Ship::at(1, 0.0, 0.0).armed(record),
+                    pod(Ship::at(2, 100.0, 0.0), ship_type),
+                    pod(Ship::at(3, 100.0, 25.0), ship_type),
+                ];
+                for _ in 0..12 {
+                    tick(&mut combat, &mut ships, &NovaDisable);
+                    if record.beam_length == 0 {
+                        ships[0].trigger = QUIET;
+                    }
+                }
+                let hurt = |ship: &Ship| left(ship) != (10.0, 30.0);
+                assert_eq!(hurt(&ships[1]), !immune, "{ship_type:?} {record:?}");
+                if record.blast_radius > 0 {
+                    assert_eq!(hurt(&ships[2]), !immune, "blasted, {ship_type:?}");
+                }
+                let struck = combat.take_strikes().iter().any(|strike| strike.ship != A);
+                assert_eq!(struck, !immune, "{ship_type:?} {record:?}");
+                if record.beam_length == 0 {
+                    assert_eq!(combat.shots(), [], "the shot is spent on it");
+                }
+            }
+            // A shockwave: the pod is still pushed.
+            let mut combat = Combat::default();
+            let mut pushed = pod(holding(1, 40.0, 0.0, 100.0, 300.0, 300.0), ship_type);
+            pushed.hull.mass = 200.0;
+            let mut ships = [wreck(WRECK, 200.0, 0.0, 0.0), pushed];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(
+                left(&ships[1]) == (100.0, 300.0),
+                immune,
+                "shockwave, {ship_type:?}"
+            );
+            assert_eq!(combat.take_strikes().is_empty(), immune);
+            assert_eq!(combat.take_shoves().len(), 1, "pushed all the same");
+        }
+    }
+
+    #[test]
+    fn an_escape_pod_at_zero_armour_neither_breaks_up_nor_explodes() {
+        for id in [ShipRef::Player, A] {
+            let mut combat = Combat::default();
+            let mut ship = pod(Ship::at(1, 0.0, 0.0), ESCAPE_POD_SHIP);
+            ship.id = id;
+            ship.fleet = id;
+            ship.reserves.armor.now = 0.0;
+            let mut ships = [ship];
+            for _ in 0..20 {
+                tick(&mut combat, &mut ships, &NovaDisable);
+            }
+            assert_eq!(ships[0].condition, Condition::Intact, "{id:?}");
+            assert_eq!(about(&combat.take_events(), id), [], "{id:?}");
+        }
+        // Not so the class before it.
+        let mut combat = Combat::default();
+        let mut ship = pod(Ship::at(1, 0.0, 0.0), ShipId(ESCAPE_POD_SHIP.0 - 1));
+        ship.reserves.armor.now = 0.0;
+        let mut ships = [ship];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_ne!(ships[0].condition, Condition::Intact);
     }
 }

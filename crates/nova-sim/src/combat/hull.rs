@@ -50,6 +50,31 @@ use crate::catalog::{HullRecord, ShipId};
 use crate::reserves::Gauge;
 use crate::rulebook::RuleSource;
 
+/// The escape pod's ship class, `shïp` 895 "Escape Pod": the original's
+/// class index 0x2ff (the ID less 128), which `_EnterGameFromMainScreen`
+/// tests (@0x1a4c5) to spare a strict pilot who ejected in it. Only the
+/// pod branch of the player's eject sets it (@0x6f64a). It never breaks
+/// up (`_HandleShipDisplay` @0x2d803), and it and every class after it
+/// are never damaged ([`immune`]).
+pub const ESCAPE_POD_SHIP: ShipId = ShipId(895);
+
+/// Whether ships of class `ship` take no damage: the [`ESCAPE_POD_SHIP`]
+/// and every class after it, as `_DamageShip`'s prologue returns at once
+/// for a class index above 0x2fe (`cmpw $0x2fe, 0x76` @0x3a87c-0x3a882),
+/// before any of its damage, convictions or kill credits.
+#[must_use]
+pub fn immune(ship: ShipId) -> bool {
+    ship >= ESCAPE_POD_SHIP
+}
+
+/// Whether ships of class `ship` never break up: the [`ESCAPE_POD_SHIP`]
+/// alone, as `_HandleShipDisplay` skips its dying block for class 0x2ff
+/// (@0x2d803).
+#[must_use]
+pub fn never_breaks_up(ship: ShipId) -> bool {
+    ship == ESCAPE_POD_SHIP
+}
+
 /// The hit radius of a ship type without a `shän`, in pixels: a
 /// placeholder.
 pub const DEFAULT_HIT_RADIUS: f32 = 16.0;
