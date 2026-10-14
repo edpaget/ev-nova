@@ -15994,6 +15994,45 @@ pub(super) mod tests {
         );
     }
 
+    #[test]
+    fn the_players_point_defence_still_fires_while_it_brakes_for_a_jump() {
+        let quad = WeaponRecord {
+            id: WeaponId(133),
+            guidance: 9,
+            reload: 5,
+            count: 12,
+            speed: 2000,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            ..blaster()
+        };
+        let slow = WeaponRecord {
+            speed: 500,
+            count: 200,
+            ..homing_missile(134, 1000)
+        };
+        let catalog = arming(quad, slow, 0);
+        let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+        session.jump = Some(Jump::PreJump {
+            to: SystemId(131),
+            bearing: None,
+        });
+        session.hold_fire(true, true);
+        let mut events = Vec::new();
+        for _ in 0..40 {
+            session.tick_traffic(&catalog, &Attacking, &mut NeverFires);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            events.extend(session.take_combat_events());
+        }
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)));
+        let downed = events
+            .iter()
+            .filter(|event| matches!(event, CombatEvent::ShotDown { .. }))
+            .count();
+        assert_eq!(downed, 1, "{events:?}");
+        assert_eq!(session.reserves().shield.now, 30.0, "untouched");
+    }
+
     /// Every NPC takes `goal`, fires as Nova's AI picks
     /// ([`crate::ai::fire::trigger`]) and targets what `goal` is about.
     #[derive(Debug)]
