@@ -34,7 +34,10 @@
 //! 4. when `AvailStel` is no stellar (128-2175), a `TravelStel` or
 //!    `ReturnStel` naming a stellar (128-2175) whose system is at the
 //!    player's system's place refuses (@0x9b1db-0x9b2c0), a rule the
-//!    Bible does not give;
+//!    Bible does not give. The system is the stellar's holder, else the
+//!    one `_FindSystemFromStellar` gives (@0x9b225, @0x9b294;
+//!    [`Whereabouts::system`](crate::story::Whereabouts::system)), and
+//!    a stellar no system lists passes;
 //! 5. `Flags` 0x0008 needs a jump's fuel, 100 (@0x9b2c6-0x9b2ec);
 //! 6. `AvailStel` (@0x9b307-0x9b4ab): -1 anywhere; 128-4999 that stellar;
 //!    5000-9998 a stellar of a system whose own `sÿst` lists system
@@ -661,11 +664,15 @@ fn not_going_here(facts: &AvailFacts) -> Result<(), Refusal> {
         return Ok(());
     }
     let visit = facts.visit;
+    // The holder, else `_FindSystemFromStellar` (@0x9b212-0x9b225,
+    // @0x9b281-0x9b294), at the player's system's place: the same
+    // `_FindFirstCoLocatedSystem` (@0x9b234-0x9b251, @0x9b2a3-0x9b2c0).
     let here = |code: i16| {
         names_stellar(code)
             && visit
                 .world
-                .system_of(StellarId(code))
+                .whereabouts(StellarId(code))
+                .system()
                 .is_some_and(|system| visit.world.map.places().together(system, visit.system))
     };
     pass(

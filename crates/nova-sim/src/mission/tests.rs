@@ -498,6 +498,50 @@ fn a_fixed_destination_or_return_at_the_players_place_refuses_unless_avail_stel_
     );
 }
 
+/// Mission 130 with `edit` made, on `galaxy`'s plain visit.
+fn plainly_on(galaxy: &Galaxy, edit: impl FnOnce(&mut MissionRecord)) -> Vec<Refusal> {
+    refusals(&galaxy.visit(), &with(edit))
+}
+
+#[test]
+fn a_fixed_stop_held_by_no_system_refuses_by_the_system_find_system_from_stellar_gives() {
+    // 134, hidden say, is at the player's 130's place and alone lists 2000.
+    let here = placing(2000, None, Some(134));
+    assert_eq!(
+        plainly_on(&here, |m| m.travel_stel = 2000),
+        [Refusal::GoesHere],
+        "@0x9b225"
+    );
+    assert_eq!(
+        plainly_on(&here, |m| m.return_stel = 2000),
+        [Refusal::GoesHere],
+        "@0x9b294"
+    );
+    let elsewhere = placing(2000, None, Some(131));
+    assert_eq!(plainly_on(&elsewhere, |m| m.travel_stel = 2000), []);
+    assert_eq!(plainly_on(&elsewhere, |m| m.return_stel = 2000), []);
+    let nowhere = placing(2000, None, None);
+    assert_eq!(
+        plainly_on(&nowhere, |m| m.travel_stel = 2000),
+        [],
+        "no system at all passes"
+    );
+}
+
+#[test]
+fn a_fixed_stop_rescued_into_the_players_system_refuses() {
+    let galaxy = placing(2000, Some(130), Some(131));
+    assert_eq!(
+        plainly_on(&galaxy, |m| m.travel_stel = 2000),
+        [Refusal::GoesHere],
+        "the holder wins over _FindSystemFromStellar's 131"
+    );
+    assert_eq!(
+        plainly_on(&galaxy, |m| m.return_stel = 2000),
+        [Refusal::GoesHere]
+    );
+}
+
 #[test]
 fn flags_0x0008_needs_a_jumps_fuel() {
     let fuelled = |fuel| {
