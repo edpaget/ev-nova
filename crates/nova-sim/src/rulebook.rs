@@ -126,6 +126,8 @@
 //! | [`CronPostHoldoff`](RuleKey::CronPostHoldoff) | `cron_post_holdoff` | a running crön's end, with `PostHoldoff` above 0, loads its `PreHoldoff` into the holdoff and leaves its days (@0x387f1-0x387f6 → 0x388c5): it re-runs, or with `PreHoldoff` 0 its `OnEnd` runs every day for good and its news stays (see [`cron`](crate::cron)) | `PostHoldoff` days with the days at -1, then inactive: **the default — a deliberate departure from the original**†††††††† |
 //! | [`BlessingRefresh`](RuleKey::BlessingRefresh) | `blessing_refresh` | the blessing table is taken at the original's refresh points (`_ResetPlayerPrecalcedValues` @0xc8be-0xc981): game entry, take-off and the gate exits, a jump's arrival, a mission cargo pickup, a jettison and the plunder dialog closing, so a `K` or `L` in space blesses or stops blessing only from the next one (see [`rank`](crate::rank)) | live, from the active ranks\* |
 //! | [`BlessingLanding`](RuleKey::BlessingLanding) | `blessing_landing` | `Flags` 0x0200 clears a governed stellar past both its `MinStatus` and its government's `Require` (`_HandlePlayerDockRequest` @0x67940-0x67a05; see [`landing`](crate::landing)) | past `MinStatus` only, so `Require` still refuses |
+//! | [`ScanOutfitsPastJunk`](RuleKey::ScanOutfitsPastJunk) | `scan_outfits_past_junk` | while the player carries any `jünk` with a `ScanMask`, a scan that finds no illegal `jünk` ends without scanning the outfits (`_ScanPlayer` @0x7eabd-0x7eefa; see [`scan`](crate::scan)) | the outfits are scanned when no illegal `jünk` is found\* |
+//! | [`OutfitScanFine`](RuleKey::OutfitScanFine) | `outfit_scan_fine` | only a `ScanFine` above 0 fines an illegal outfit, as it is; a negative one fines nothing (`_ScanPlayer` `jle` @0x7f222; see [`scan`](crate::scan)) | a negative `ScanFine` takes that percent of the cash in hundreds, at least 1, as for `jünk` and mission cargo (the Bible's `ScanFine`) |
 //!
 //! \* The Bible says nothing of `long_advice`, `escort_orders`,
 //! `fighter_launch`, `fighter_recall`, `hire_require`, `take_off_pay`,
@@ -140,7 +142,8 @@
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance`,
 //! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
-//! `hud_cadence`, `alert_blink`, `blessing_refresh` or `comm_quote`
+//! `hud_cadence`, `alert_blink`, `blessing_refresh`,
+//! `scan_outfits_past_junk` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
 //! agrees with the engine on `grant_count`: for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
@@ -1572,6 +1575,18 @@ rule_keys! {
     /// reading, the Bible's, its `MinStatus` only, so an unmet `Require`
     /// still refuses (see [`landing`](crate::landing)).
     BlessingLanding => "blessing_landing",
+    /// Whether a scan's set `jünk` latch shadows the outfits: by the
+    /// engine, a scan that finds no illegal `jünk` while the player
+    /// carries any `jünk` with a `ScanMask` ends there, outfits unscanned
+    /// (`_ScanPlayer` @0x7eefa); by the other reading, the outfits are
+    /// scanned then (see [`scan`](crate::scan)).
+    ScanOutfitsPastJunk => "scan_outfits_past_junk",
+    /// What a negative `ScanFine` fines an illegal outfit: by the engine,
+    /// nothing, as only a `ScanFine` above 0 fines an outfit (`jle`
+    /// @0x7f222); by the other reading, the Bible's, the percent of the
+    /// cash in hundreds, as for `jünk` and mission cargo (see
+    /// [`scan`](crate::scan)).
+    OutfitScanFine => "outfit_scan_fine",
 }
 
 impl RuleKey {
@@ -1787,7 +1802,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(29),
+            RuleKey::ALL.iter().rev().nth(31),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1827,7 +1842,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(28),
+            RuleKey::ALL.iter().rev().nth(30),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1849,7 +1864,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(27),
+            RuleKey::ALL.iter().rev().nth(29),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1874,7 +1889,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(26),
+            RuleKey::ALL.iter().rev().nth(28),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -1900,7 +1915,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(25),
+            RuleKey::ALL.iter().rev().nth(27),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -1920,7 +1935,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(24),
+            RuleKey::ALL.iter().rev().nth(26),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -1940,7 +1955,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(23),
+            RuleKey::ALL.iter().rev().nth(25),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -1960,7 +1975,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(20),
+            RuleKey::ALL.iter().rev().nth(22),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -1974,7 +1989,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(19),
+            RuleKey::ALL.iter().rev().nth(21),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -1987,7 +2002,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(18), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(20), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -1999,7 +2014,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(17),
+            RuleKey::ALL.iter().rev().nth(19),
             Some(&RuleKey::HudCadence)
         );
     }
@@ -2013,7 +2028,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(16),
+            RuleKey::ALL.iter().rev().nth(18),
             Some(&RuleKey::AlertBlink)
         );
     }
@@ -2026,7 +2041,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(22),
+            RuleKey::ALL.iter().rev().nth(24),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -2044,7 +2059,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(16),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -2061,7 +2076,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -2078,10 +2093,10 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(14),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(11), Some(&RuleKey::SalaryCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(13), Some(&RuleKey::SalaryCap));
     }
 
     #[test]
@@ -2096,7 +2111,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(12),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -2115,15 +2130,15 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(9),
+            RuleKey::ALL.iter().rev().nth(11),
             Some(&RuleKey::RankPriceScope)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(8),
+            RuleKey::ALL.iter().rev().nth(10),
             Some(&RuleKey::RankTradeIn)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(7),
+            RuleKey::ALL.iter().rev().nth(9),
             Some(&RuleKey::RankPriceTiming)
         );
     }
@@ -2140,7 +2155,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(6),
+            RuleKey::ALL.iter().rev().nth(8),
             Some(&RuleKey::RankCrimeReach)
         );
     }
@@ -2154,11 +2169,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(5),
+            RuleKey::ALL.iter().rev().nth(7),
             Some(&RuleKey::ColocatedResolution)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(4),
+            RuleKey::ALL.iter().rev().nth(6),
             Some(&RuleKey::VisibilityRefresh)
         );
     }
@@ -2179,11 +2194,11 @@ mod tests {
             );
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(3),
+            RuleKey::ALL.iter().rev().nth(5),
             Some(&RuleKey::CronZeroDurationHoldoff)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(2),
+            RuleKey::ALL.iter().rev().nth(4),
             Some(&RuleKey::CronPostHoldoff)
         );
     }
@@ -2197,10 +2212,28 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(1),
+            RuleKey::ALL.iter().rev().nth(3),
             Some(&RuleKey::BlessingRefresh)
         );
-        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::BlessingLanding));
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(2),
+            Some(&RuleKey::BlessingLanding)
+        );
+    }
+
+    #[test]
+    fn the_scan_rules_are_found_by_their_keys_and_read_the_engine() {
+        assert_eq!(RuleKey::ScanOutfitsPastJunk.key(), "scan_outfits_past_junk");
+        assert_eq!(RuleKey::OutfitScanFine.key(), "outfit_scan_fine");
+        for rule in [RuleKey::ScanOutfitsPastJunk, RuleKey::OutfitScanFine] {
+            assert_eq!(RuleKey::from_key(rule.key()), Some(rule));
+            assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
+        }
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(1),
+            Some(&RuleKey::ScanOutfitsPastJunk)
+        );
+        assert_eq!(RuleKey::ALL.last(), Some(&RuleKey::OutfitScanFine));
     }
 
     #[test]
@@ -2302,7 +2335,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(31),
+            RuleKey::ALL.iter().rev().nth(33),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -2467,7 +2500,9 @@ mod tests {
                 RuleKey::CronZeroDurationHoldoff,
                 RuleKey::CronPostHoldoff,
                 RuleKey::BlessingRefresh,
-                RuleKey::BlessingLanding
+                RuleKey::BlessingLanding,
+                RuleKey::ScanOutfitsPastJunk,
+                RuleKey::OutfitScanFine
             ]
         );
         assert_eq!(RuleKey::PersonJoin.key(), "person_join");

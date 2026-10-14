@@ -119,6 +119,7 @@ impl PilotCatalog for Home {
             item_class: 0,
             lc_name: "gun".to_owned(),
             lc_plural: "guns".to_owned(),
+            scan_mask: 0,
             on_purchase: Script::default(),
             on_sell: Script::default(),
         }]

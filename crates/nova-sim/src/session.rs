@@ -395,7 +395,7 @@ use crate::board::{
     Take, Taken, check_board,
 };
 use crate::catalog::{
-    CombatCatalog, CronRecord, DateAffixes, GateSite, GovtId, LandingSite, ListedStellar,
+    CombatCatalog, CronRecord, DateAffixes, GateSite, GovtId, JunkId, LandingSite, ListedStellar,
     MissionId, MissionRecord, MissionTexts, OutfitId, OutfitRecord, PersonId, PilotCatalog,
     PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError, StellarId, StellarLife,
     SystemId, SystemVisibility, TrafficCatalog, WeaponId,
@@ -806,6 +806,12 @@ pub struct Session {
     /// set by a take-off, a gate exit and a jump's arrival (see the
     /// `ranks` module).
     blessing_due: bool,
+    /// `_ScanPlayer`'s contraband latches, armed at each refresh of the
+    /// blessing table, the session's stand-in for
+    /// `_ResetPlayerPrecalcedValues`, and cleared by a conviction (see
+    /// [`scan::Latches`](crate::scan::Latches)). Never saved, as the
+    /// original's are globals.
+    scan_latches: crate::scan::Latches,
     /// What the screens show of each `mïsn`, read when the session
     /// starts (see the `mission_screens` module).
     mission_texts: BTreeMap<MissionId, MissionTexts>,
@@ -1067,6 +1073,10 @@ impl Session {
             port_ranks: ranks::PortRanks::default(),
             blessing_ranks: BTreeSet::new(),
             blessing_due: false,
+            scan_latches: crate::scan::Latches {
+                junk: false,
+                outfits: false,
+            },
             mission_texts: catalog
                 .mission_texts()
                 .into_iter()
@@ -1499,7 +1509,6 @@ impl Session {
                 self.dock_fighters();
                 self.orphan_fighters();
                 self.observe_watched();
-                self.take_scans(&mut &mut *chance);
             }
         }
         self.clear_lost_target();
@@ -1616,7 +1625,10 @@ impl Session {
     /// mission's ship not yet boarded fights held disabled
     /// ([`Session::mission_ship_held`]; see the `mission_ships` module).
     /// The player is convicted of disabling and destroying an NPC, but
-    /// not a mission's special ship (see `punish`). The stellars
+    /// not a mission's special ship (see `punish`). First, each NPC that
+    /// looked the player over in the traffic tick scans it, convicting by
+    /// `rules`' law (see the `mission_cargo` module): the return while
+    /// jumping holds every scan back once the warp has begun. The stellars
     /// shown that shots can hit take their damage, and each shot
     /// down is destroyed and runs its `OnDestroy` (see the `stellars`
     /// module).
@@ -1624,6 +1636,7 @@ impl Session {
         if self.landed.is_some() || self.jumping().is_some() {
             return;
         }
+        self.take_scans(rules.law, &mut &mut *chance);
         let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
         let held: Vec<bool> = self
             .traffic
@@ -1986,6 +1999,22 @@ impl Session {
     pub fn ship_name(&self, ship: ShipId) -> Option<&str> {
         let record = self.ships.iter().find(|record| record.id == ship)?;
         Some(&record.name)
+    }
+
+    /// `jünk` `id`'s `LCName`, raw, if the session has its record: what a
+    /// scan that finds it calls it.
+    #[must_use]
+    pub fn junk_lc_name(&self, id: JunkId) -> Option<&str> {
+        let record = self.goods.junk().iter().find(|record| record.id == id)?;
+        Some(&record.lc_name)
+    }
+
+    /// Outfit `id`'s `LCName` and `LCPlural`, raw, if the session has its
+    /// record: what a scan that finds it calls one, and more.
+    #[must_use]
+    pub fn outfit_lc_names(&self, id: OutfitId) -> Option<(&str, &str)> {
+        let record = self.outfits.iter().find(|record| record.id == id)?;
+        Some((&record.lc_name, &record.lc_plural))
     }
 
     /// Stops the thrust, if the ship was thrusting, and puts the engine
@@ -6862,6 +6891,8 @@ mod tests {
             buy_on: Test::default(),
             sell_on: Test::default(),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         };
         let catalog = edge_lander();
         let catalog = FakePilotCatalog {
@@ -6922,6 +6953,8 @@ mod tests {
             buy_on: Test::default(),
             sell_on: Test::default(),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         };
         let catalog = FakePilotCatalog {
             junk: vec![both],
@@ -6967,6 +7000,8 @@ mod tests {
             buy_on: Test::default(),
             sell_on: Test::default(),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         };
         let catalog = FakePilotCatalog {
             junk: vec![both],
@@ -7016,6 +7051,8 @@ mod tests {
             buy_on: Test::default(),
             sell_on: Test::default(),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         };
         let catalog = FakePilotCatalog {
             junk: vec![opals],
@@ -7062,6 +7099,8 @@ mod tests {
                 buy_on: Test::default(),
                 sell_on: Test::default(),
                 flags: 0,
+                scan_mask: 0,
+                lc_name: String::new(),
             }],
             ..exchange()
         };
@@ -7334,6 +7373,8 @@ mod tests {
                 buy_on: Test::default(),
                 sell_on: Test::default(),
                 flags: 0,
+                scan_mask: 0,
+                lc_name: String::new(),
             }],
             ..exchange()
         };
@@ -7405,6 +7446,8 @@ mod tests {
             buy_on: Test::default(),
             sell_on: Test::default(),
             flags,
+            scan_mask: 0,
+            lc_name: String::new(),
         };
         FakePilotCatalog {
             junk: vec![
@@ -7626,6 +7669,8 @@ mod tests {
             buy_on: Test::default(),
             sell_on: Test::parse("b7"),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         };
         let catalog = FakePilotCatalog {
             character: exchange().character,
@@ -16360,6 +16405,8 @@ mod tests {
             buy_on: Test::default(),
             sell_on: Test::default(),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         }];
         catalog.outfits.push(outfit(310, &[]));
         let session = Session::start(&catalog).expect("starts");

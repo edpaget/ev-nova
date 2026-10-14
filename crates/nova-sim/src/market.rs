@@ -701,6 +701,12 @@ impl Goods {
             .map(|junk| junk.abbrev.as_str())
     }
 
+    /// The `jünk` records, as the catalog gave them.
+    #[must_use]
+    pub fn junk(&self) -> &[JunkRecord] {
+        &self.junk
+    }
+
     /// `good`'s name, as the exchange names it, empty for a standard
     /// commodity with no name; none for a `jünk` with no record or a
     /// commodity numbered 6 or up, which is not traded.
@@ -2466,6 +2472,8 @@ mod tests {
             buy_on: Test::default(),
             sell_on: Test::default(),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         }
     }
 
@@ -3040,6 +3048,8 @@ mod tests {
             sell_on: Test::parse(sell_on),
             buy_on: Test::parse(buy_on),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         };
         Goods::new(&CommodityStrings::default(), vec![gold], Vec::new())
     }

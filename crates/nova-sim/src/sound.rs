@@ -32,6 +32,15 @@ pub enum SimSound {
     /// (`_JettisonCargo` @0x3e31a-0x3e33d), whether or not a mission
     /// failed with it (see [`cargo_box`](crate::cargo_box)).
     CargoJettisoned,
+    /// A scan found a mission's cargo and failed the mission, the player
+    /// told: `_beepSnd[1]`, `snd ` 151 (`_ScanPlayer` @0x7e721-0x7e740).
+    /// A hidden mission (`Flags` 0x0400) fails in silence.
+    ScanFailedMission,
+    /// A scan caught the player smuggling a mission's cargo, a `jünk` or
+    /// an outfit: `_beepSnd[4]`, `snd ` 154 (`_ScanPlayer`
+    /// @0x7ea3e-0x7ea5d, @0x7ee76-0x7ee95, @0x7f337-0x7f356), with no fine
+    /// too.
+    Smuggling,
     /// A `P` set operator's sound plays: `exclusive`ly, as the one mission
     /// sound, dropped while the last is still playing; or over whatever
     /// plays.

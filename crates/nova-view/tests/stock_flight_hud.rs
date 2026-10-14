@@ -235,6 +235,31 @@ fn a_grants_message_reads_its_stock_strings() {
     );
 }
 
+/// A scan's notices are built from `STR#` 2002 #375-#380, as the stock
+/// strings read ("posession" as they spell it).
+#[test]
+fn a_scans_notices_read_their_stock_strings() {
+    use nova_view::flight::view::{
+        ATTEMPT_TO_SMUGGLE, FINED, HAS_BEEN_DETECTED, ILLEGAL_CARGO, POSSESSION_OF,
+        THROUGH_THIS_SYSTEM,
+    };
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(
+        &strings[374..380],
+        [
+            POSSESSION_OF,
+            ATTEMPT_TO_SMUGGLE,
+            ILLEGAL_CARGO,
+            THROUGH_THIS_SYSTEM,
+            HAS_BEEN_DETECTED,
+            FINED
+        ]
+    );
+}
+
 /// The cargo area's labels are `STR#` 2002 #19-#21 and #33, its rows'
 /// `STR#` 4003, and a mission's cargo names `STR#` 4002, as the stock
 /// strings read; the default bar's `CargoArea` has no room for the date

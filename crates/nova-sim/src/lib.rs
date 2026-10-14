@@ -206,6 +206,9 @@
 //! - [`saves`]: the [`PilotStore`] port pilots are saved through, the key
 //!   each is saved under, and the [`PilotKeeper`] that saves, lists and
 //!   opens them.
+//! - [`scan`]: a warship's or an interceptor's scan of the player: whether
+//!   it goes on ([`scan::goes_on`]) and the illegal `jünk` or outfit it
+//!   finds after the mission cargo ([`scan::contraband`]).
 //! - [`session`]: a flight [`Session`], a pilot's ship flying
 //!   from its starting system, landing, jumping along a plotted course,
 //!   fighting, boarding and capturing ships, hailing them
@@ -303,6 +306,7 @@ pub mod rulebook;
 pub mod rules;
 pub mod save;
 pub mod saves;
+pub mod scan;
 pub mod session;
 pub mod ship_change;
 pub mod shipyard;

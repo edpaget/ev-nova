@@ -572,12 +572,31 @@ pub const NON_MISSION_CARGO_JETTISONED: &str = "Non-mission cargo jettisoned.";
 pub const MISSION_SCANNED: &str = "Your ship has been scanned - mission failed.";
 /// `STR#` 2002 #285: a mission's deadline ran out in flight and failed it.
 pub const TIME_LIMIT_EXCEEDED: &str = "Time limit exceeded - mission failed.";
-/// `STR#` 2002 #376-#379, a space between each: what follows the
-/// scanner's and the ship's names when a scan finds smuggling.
-pub const SMUGGLING_DETECTED: &str =
-    "your attempt to smuggle illegal cargo through this system has been detected";
+/// `STR#` 2002 #375, as the strings spell it: what comes before an
+/// illegal outfit a scan finds.
+pub const POSSESSION_OF: &str = "your posession of";
+/// `STR#` 2002 #376: what comes before the smuggled cargo.
+pub const ATTEMPT_TO_SMUGGLE: &str = "your attempt to smuggle";
+/// `STR#` 2002 #377: a mission's smuggled cargo, unnamed.
+pub const ILLEGAL_CARGO: &str = "illegal cargo";
+/// `STR#` 2002 #378: what follows the smuggled cargo.
+pub const THROUGH_THIS_SYSTEM: &str = "through this system";
+/// `STR#` 2002 #379: how a scan's notice ends, before its fine.
+pub const HAS_BEEN_DETECTED: &str = "has been detected";
 /// `STR#` 2002 #380: what comes before the fine.
 pub const FINED: &str = "You have been fined";
+
+/// `detected`, a scan's notice, with the fine after it as `_ScanPlayer`
+/// adds it: none for no fine, else " You have been fined `fine`
+/// credits." ("credit" for 1), the fine's thousands grouped
+/// (@0x7e934-0x7ea09).
+fn with_fine(detected: String, fine: i64) -> String {
+    if fine == 0 {
+        return detected;
+    }
+    let credits = if fine > 1 { "credits" } else { "credit" };
+    format!("{detected} {FINED} {} {credits}.", grouped(fine))
+}
 
 /// What the message line says when a scan finds smuggling, as
 /// `_ScanPlayer` builds it (@0x7e7ce-0x7ea9b): "`scanner`:  `ship`, ...
@@ -588,12 +607,50 @@ pub const FINED: &str = "You have been fined";
 /// by its ship class (@0x7e7ce-0x7e7ef; see [`SimMessage::Smuggling`]).
 #[must_use]
 pub fn smuggling_message(scanner: &str, ship: &str, fine: i64) -> String {
-    let detected = format!("{scanner}:  {ship}, {SMUGGLING_DETECTED}.");
-    if fine == 0 {
-        return detected;
-    }
-    let credits = if fine > 1 { "credits" } else { "credit" };
-    format!("{detected} {FINED} {} {credits}.", grouped(fine))
+    illegal_junk_message(scanner, ship, ILLEGAL_CARGO, fine)
+}
+
+/// What the message line says when a scan finds an illegal `jünk` named
+/// `lc_name`, as `_ScanPlayer` builds it (@0x7ec29-0x7ee3b):
+/// "`scanner`:  `ship`, your attempt to smuggle `lc_name` through this
+/// system has been detected.", and the fine as [`smuggling_message`]
+/// adds it. The scanner is named by its person's name when it is one,
+/// else by its ship class (see [`SimMessage::IllegalJunk`]).
+#[must_use]
+pub fn illegal_junk_message(scanner: &str, ship: &str, lc_name: &str, fine: i64) -> String {
+    with_fine(
+        format!(
+            "{scanner}:  {ship}, {ATTEMPT_TO_SMUGGLE} {lc_name} {THROUGH_THIS_SYSTEM} \
+             {HAS_BEEN_DETECTED}."
+        ),
+        fine,
+    )
+}
+
+/// What the message line says when a scan finds an illegal outfit, as
+/// `_ScanPlayer` builds it (@0x7f0dd-0x7f2d7): "`scanner`:  `ship`, your
+/// posession of", then for `one` owned [`ARTICLE_AN`] or [`ARTICLE_A`]
+/// by `lc_name`'s first letter ([`article`]) and `lc_name`, else
+/// `lc_plural` with no count, then "has been detected.", and the fine
+/// as [`smuggling_message`] adds it.
+#[must_use]
+pub fn illegal_outfit_message(
+    scanner: &str,
+    ship: &str,
+    one: bool,
+    lc_name: &str,
+    lc_plural: &str,
+    fine: i64,
+) -> String {
+    let named = if one {
+        format!("{} {lc_name}", article(lc_name))
+    } else {
+        lc_plural.to_owned()
+    };
+    with_fine(
+        format!("{scanner}:  {ship}, {POSSESSION_OF} {named} {HAS_BEEN_DETECTED}."),
+        fine,
+    )
 }
 
 /// What the message line says of `message`, a session's message other
@@ -623,8 +680,47 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
                 *fine,
             ));
         }
+        SimMessage::IllegalJunk {
+            scanner,
+            person,
+            junk,
+            fine,
+        } => {
+            return Some(illegal_junk_message(
+                scanner_name(person.as_deref(), *scanner, session),
+                session.pilot().ship_name().unwrap_or_default(),
+                session.junk_lc_name(*junk).unwrap_or_default(),
+                *fine,
+            ));
+        }
+        SimMessage::IllegalOutfit {
+            scanner,
+            person,
+            outfit,
+            one,
+            fine,
+        } => {
+            let (lc_name, lc_plural) = session.outfit_lc_names(*outfit).unwrap_or_default();
+            return Some(illegal_outfit_message(
+                scanner_name(person.as_deref(), *scanner, session),
+                session.pilot().ship_name().unwrap_or_default(),
+                *one,
+                lc_name,
+                lc_plural,
+                *fine,
+            ));
+        }
     };
     Some(text.to_owned())
+}
+
+/// What a scan's contraband notice calls the scanner: its person's name
+/// when it is one, else its ship class's name (`_ScanPlayer`
+/// @0x7ebd1-0x7ec0c, @0x7f024-0x7f05f).
+fn scanner_name<'a>(person: Option<&'a str>, scanner: ShipId, session: &'a Session) -> &'a str {
+    person
+        .or_else(|| session.ship_name(scanner))
+        .unwrap_or_default()
 }
 
 /// `STR#` 2002 #53.
@@ -803,7 +899,9 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::NonMissionCargoJettisoned
         | SimMessage::MissionScanned
         | SimMessage::DeadlineMissed
-        | SimMessage::Smuggling { .. } => None,
+        | SimMessage::Smuggling { .. }
+        | SimMessage::IllegalJunk { .. }
+        | SimMessage::IllegalOutfit { .. } => None,
     }
 }
 
@@ -1075,6 +1173,18 @@ pub const ARTICLE_AN: &str = "an";
 /// `STR#` 2002 #108: a grant's message ends so.
 pub const FROM_THIS_SHIP: &str = "from this ship.";
 
+/// The article before one `lc_name`, as `_DoPlunderDialog` and
+/// `_ScanPlayer` pick it (@0x7f115-0x7f150): [`ARTICLE_AN`] when its first
+/// letter, lowercased, is a vowel, else [`ARTICLE_A`].
+#[must_use]
+pub fn article(lc_name: &str) -> &'static str {
+    let vowel = lc_name
+        .chars()
+        .next()
+        .is_some_and(|first| "aeiou".contains(first.to_ascii_lowercase()));
+    if vowel { ARTICLE_AN } else { ARTICLE_A }
+}
+
 /// What the player is told of a grant of `count` outfits named
 /// `lc_name`, or `lc_plural` for more than one, as `_DoPlunderDialog`
 /// says it (@0x9322b-0x933ce): [`RETRIEVED`]; for one, [`ARTICLE_AN`]
@@ -1084,12 +1194,7 @@ pub const FROM_THIS_SHIP: &str = "from this ship.";
 #[must_use]
 pub fn grant_message(count: u16, lc_name: &str, lc_plural: &str) -> String {
     let (number, name) = if count == 1 {
-        let vowel = lc_name
-            .chars()
-            .next()
-            .is_some_and(|first| "aeiou".contains(first.to_ascii_lowercase()));
-        let article = if vowel { ARTICLE_AN } else { ARTICLE_A };
-        (article.to_owned(), lc_name)
+        (article(lc_name).to_owned(), lc_name)
     } else {
         let words = usize::from(count)
             .checked_sub(1)
@@ -7266,6 +7371,7 @@ mod tests {
                 item_class: 0,
                 lc_name: "multi-jumping organ".to_owned(),
                 lc_plural: "multi-jumping organs".to_owned(),
+                scan_mask: 0,
                 on_purchase: nova_sim::Script::default(),
                 on_sell: nova_sim::Script::default(),
             }],
@@ -7994,6 +8100,7 @@ mod tests {
                 item_class: 0,
                 lc_name: "fuel tank".to_owned(),
                 lc_plural: "fuel tanks".to_owned(),
+                scan_mask: 0,
                 on_purchase: nova_sim::Script::default(),
                 on_sell: nova_sim::Script::default(),
             }],
@@ -9457,6 +9564,7 @@ mod tests {
             item_class: 0,
             lc_name: format!("gun {id}"),
             lc_plural: format!("guns {id}"),
+            scan_mask: 0,
             on_purchase: nova_sim::Script::default(),
             on_sell: nova_sim::Script::default(),
         }
@@ -11273,6 +11381,7 @@ mod tests {
                 item_class: 0,
                 lc_name: "rocket".to_owned(),
                 lc_plural: "rockets".to_owned(),
+                scan_mask: 0,
                 on_purchase: nova_sim::Script::default(),
                 on_sell: nova_sim::Script::default(),
             },
@@ -12693,6 +12802,101 @@ mod tests {
             "Viper:  Kestrel, your attempt to smuggle illegal cargo through this system has \
              been detected. You have been fined 12,300 credits."
         );
+    }
+
+    #[test]
+    fn an_illegal_junk_notice_names_it_in_place_of_illegal_cargo() {
+        assert_eq!(
+            illegal_junk_message("Viper", "Kestrel", "bio-weapons", 0),
+            "Viper:  Kestrel, your attempt to smuggle bio-weapons through this system has \
+             been detected."
+        );
+        assert_eq!(
+            illegal_junk_message("Viper", "Kestrel", "bio-weapons", 1),
+            "Viper:  Kestrel, your attempt to smuggle bio-weapons through this system has \
+             been detected. You have been fined 1 credit."
+        );
+        assert_eq!(
+            illegal_junk_message("Viper", "Kestrel", "water", 4500),
+            "Viper:  Kestrel, your attempt to smuggle water through this system has been \
+             detected. You have been fined 4,500 credits."
+        );
+    }
+
+    #[test]
+    fn an_illegal_outfit_notice_names_one_with_its_article_and_more_in_the_plural() {
+        let notice = |one, lc_name, fine| {
+            illegal_outfit_message("Viper", "Kestrel", one, lc_name, "blasters", fine)
+        };
+        assert_eq!(
+            notice(true, "blaster", 0),
+            "Viper:  Kestrel, your posession of a blaster has been detected."
+        );
+        assert_eq!(
+            notice(true, "Ion cannon", 2),
+            "Viper:  Kestrel, your posession of an Ion cannon has been detected. You have \
+             been fined 2 credits.",
+            "the first letter lowercased"
+        );
+        for vowel in ["a", "e", "i", "o", "u"] {
+            assert!(notice(true, vowel, 0).contains(" an "), "{vowel}");
+        }
+        assert_eq!(
+            notice(false, "blaster", 1),
+            "Viper:  Kestrel, your posession of blasters has been detected. You have been \
+             fined 1 credit.",
+            "no count"
+        );
+    }
+
+    /// A contraband notice names the scanner by its person's name when it
+    /// is one (`_ScanPlayer` @0x7ebd1-0x7ec0c), else its ship class, and
+    /// the outfit by the session's record; it lasts 400 ticks.
+    #[test]
+    fn a_contraband_notice_reads_its_names_from_the_session() {
+        let view = FlightView::new(FakeCatalog {
+            outfits: vec![OutfitRecord {
+                lc_name: "blaster".to_owned(),
+                lc_plural: "blasters".to_owned(),
+                ..multi_jumping().outfits[0].clone()
+            }],
+            ..catalog()
+        });
+        let session = view.session().expect("flying");
+        let ship = session.pilot().ship_name().unwrap_or_default();
+        let class = session.ship_name(ShipId(128)).unwrap_or_default();
+        let outfit = |person: Option<&str>| SimMessage::IllegalOutfit {
+            scanner: ShipId(128),
+            person: person.map(str::to_owned),
+            outfit: OutfitId(275),
+            one: true,
+            fine: 500,
+        };
+        assert_eq!(
+            sim_message_text(&outfit(Some("Ace")), session),
+            Some(illegal_outfit_message(
+                "Ace", ship, true, "blaster", "blasters", 500
+            ))
+        );
+        assert_eq!(
+            sim_message_text(&outfit(None), session),
+            Some(illegal_outfit_message(
+                class, ship, true, "blaster", "blasters", 500
+            ))
+        );
+        let junk = SimMessage::IllegalJunk {
+            scanner: ShipId(128),
+            person: Some("Ace".to_owned()),
+            junk: nova_sim::JunkId(150),
+            fine: 0,
+        };
+        assert_eq!(
+            sim_message_text(&junk, session),
+            Some(illegal_junk_message("Ace", ship, "", 0)),
+            "no record, no name"
+        );
+        assert_eq!(arrival_lead(&junk), None);
+        assert_eq!(arrival_lead(&outfit(None)), None);
     }
 
     /// The found mission's drawn ship name names the scanner when it has
@@ -14171,6 +14375,7 @@ mod tests {
             item_class: 7,
             lc_name: "spare part".to_owned(),
             lc_plural: "spare parts".to_owned(),
+            scan_mask: 0,
             on_purchase: nova_sim::Script::default(),
             on_sell: nova_sim::Script::default(),
         }];
@@ -15671,6 +15876,7 @@ mod tests {
                 item_class: 0,
                 lc_name: String::new(),
                 lc_plural: String::new(),
+                scan_mask: 0,
             }
         };
         vec![

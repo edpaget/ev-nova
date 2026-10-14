@@ -304,6 +304,7 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
         item_class: 0,
         lc_name: format!("outfit {id}"),
         lc_plural: format!("outfits {id}"),
+        scan_mask: 0,
         on_purchase: crate::control::Script::default(),
         on_sell: crate::control::Script::default(),
     }

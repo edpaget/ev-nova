@@ -148,7 +148,9 @@
 //! - it has [`LOST_TO_VIOLENCE`] (0x0004), on crime type 1 or 3
 //!   (@0x9c89-0x9c97).
 //!
-//! The original's crime types map onto [`Crime`]: 1 (`_DamageShip`
+//! The original's crime types map onto [`Crime`]: 0 (contraband a scan
+//! finds, `_ScanPlayer` @0x7ebcc, @0x7f01f) is [`Crime::Smuggle`], so it
+//! takes 0x0040 alone; 1 (`_DamageShip`
 //! @0x3addf) is [`Crime::Disable`], 2 (`_HandlePlayerBoardAttempt`
 //! @0x6582b) [`Crime::Board`], 3 (`_DamageShip` @0x3ae34, and a stellar
 //! shot down, `_CheckShotProximities` @0x37518) [`Crime::Kill`]. No
@@ -164,10 +166,7 @@
 //! government, 0x0004 its own or its allies, and an unaffiliated rank
 //! none. Neither function plays a sound.
 //!
-//! Left out: type 0, contraband a scan finds (`_ScanPlayer` @0x7ebcc,
-//! @0x7f01f), until a scan convicts
-//! (rdm:phase/cargo-and-scanning/phase-4-illegal-cargo-scanning);
-//! Demand Tribute's type-3 slaps (`_DoPlanetCommDialog` @0x975d0,
+//! Left out: Demand Tribute's type-3 slaps (`_DoPlanetCommDialog` @0x975d0,
 //! @0x9773d, @0x9785f), with tribute (rdm:task/planet-domination); and
 //! the debug "destroy target" key (`_HandlePlayer` @0x6ecfe), which the
 //! engine does not model.
@@ -348,7 +347,7 @@ pub fn lose_to_crime(
 fn flags_taken(flags: u16, crime: Crime) -> u16 {
     match crime {
         Crime::Disable | Crime::Kill => flags & (LOST_TO_CRIME | LOST_TO_VIOLENCE),
-        Crime::Board => flags & LOST_TO_CRIME,
+        Crime::Board | Crime::Smuggle => flags & LOST_TO_CRIME,
         Crime::Shoot => 0,
     }
 }
@@ -1910,6 +1909,42 @@ mod tests {
                 ENGINE,
             );
             assert_eq!(state, State::default(), "{crime:?}");
+        }
+    }
+
+    /// Contraband a scan finds is type 0 (`_ScanPlayer` @0x7ebcc,
+    /// @0x7f01f): 0x0040 takes on any type (@0x9c81), 0x0004 only on
+    /// types 1 and 3 (@0x9c89-0x9c97).
+    #[test]
+    fn smuggling_takes_a_0x40_rank_and_leaves_a_0x04_one_by_either_reach() {
+        for reach in [ENGINE, RuleSource::Bible] {
+            assert!(
+                !kept(
+                    rank(130, Some(140), 0, LOST_TO_CRIME),
+                    Crime::Smuggle,
+                    Some(140),
+                    reach
+                ),
+                "{reach:?}"
+            );
+            assert!(
+                kept(
+                    rank(130, Some(140), 0, LOST_TO_VIOLENCE),
+                    Crime::Smuggle,
+                    Some(140),
+                    reach
+                ),
+                "{reach:?}"
+            );
+            assert!(
+                kept(
+                    rank(130, Some(143), 0, LOST_TO_CRIME),
+                    Crime::Smuggle,
+                    Some(143),
+                    reach
+                ),
+                "a derelict scanner: {reach:?}"
+            );
         }
     }
 

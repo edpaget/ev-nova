@@ -111,6 +111,8 @@ mod tests {
             buy_on: Test::default(),
             sell_on: Test::default(),
             flags: 0,
+            scan_mask: 0,
+            lc_name: String::new(),
         }];
         catalog
     }

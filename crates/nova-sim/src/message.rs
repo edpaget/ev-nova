@@ -1,7 +1,7 @@
 //! The messages a flight session raises, as events: what happened, not
 //! the words. The view decides what each one says on the message line.
 
-use crate::catalog::{ShipId, SystemId};
+use crate::catalog::{JunkId, OutfitId, ShipId, SystemId};
 
 /// Something a [`Session`](crate::Session) did that the player is told of.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +45,37 @@ pub enum SimMessage {
         /// The credits fined: none for no fine.
         fine: i64,
     },
+    /// A scan found illegal `jünk`: the player is caught smuggling it
+    /// (`_ScanPlayer` @0x7eba9-0x7eece; see [`scan`](crate::scan)).
+    IllegalJunk {
+        /// The scanner's ship class, which names it when it is no person
+        /// (ship +0x76 → `shïp` +0x6c, @0x7ebf7-0x7ec0c).
+        scanner: ShipId,
+        /// The scanner's person's name, which names it when it is one
+        /// (+0xc8d0 → `përs` +0x624, @0x7ebd1-0x7ebf5).
+        person: Option<String>,
+        /// The `jünk` found, named by its `LCName`.
+        junk: JunkId,
+        /// The credits fined: none for no fine.
+        fine: i64,
+    },
+    /// A scan found an illegal outfit: the player is caught with it
+    /// (`_ScanPlayer` @0x7effc-0x7f38f; see [`scan`](crate::scan)).
+    IllegalOutfit {
+        /// The scanner's ship class, which names it when it is no person
+        /// (@0x7f04a-0x7f05f).
+        scanner: ShipId,
+        /// The scanner's person's name, which names it when it is one
+        /// (@0x7f024-0x7f048).
+        person: Option<String>,
+        /// The outfit found, named by its `LCName` for one, else its
+        /// `LCPlural`.
+        outfit: OutfitId,
+        /// Whether the player owns exactly one (@0x7f103-0x7f113).
+        one: bool,
+        /// The credits fined: none for no fine.
+        fine: i64,
+    },
 }
 
 impl SimMessage {
@@ -64,14 +95,19 @@ impl SimMessage {
     ///   (`_HandleShipDisplay` @0x2dbab, `_DamageShip` @0x3af62).
     /// - [`DeadlineMissed`](Self::DeadlineMissed): 240
     ///   (`_MissionObjectivesCheck` @0x9ec53).
-    /// - [`MissionScanned`](Self::MissionScanned) and
-    ///   [`Smuggling`](Self::Smuggling): 400 (`_ScanPlayer` @0x7e79d,
-    ///   @0x7ea96).
+    /// - [`MissionScanned`](Self::MissionScanned),
+    ///   [`Smuggling`](Self::Smuggling),
+    ///   [`IllegalJunk`](Self::IllegalJunk) and
+    ///   [`IllegalOutfit`](Self::IllegalOutfit): 400 (`_ScanPlayer`
+    ///   @0x7e79d, @0x7ea96, @0x7eece, @0x7f38f).
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
             Self::ExitedHypergate(_) => 360,
-            Self::MissionScanned | Self::Smuggling { .. } => 400,
+            Self::MissionScanned
+            | Self::Smuggling { .. }
+            | Self::IllegalJunk { .. }
+            | Self::IllegalOutfit { .. } => 400,
             Self::Arrived(_)
             | Self::PassedWormhole(_)
             | Self::MissionFailed
@@ -105,6 +141,25 @@ mod tests {
             (SimMessage::NonMissionCargoJettisoned, 240),
             (SimMessage::MissionScanned, 400),
             (smuggling, 400),
+            (
+                SimMessage::IllegalJunk {
+                    scanner: ShipId(128),
+                    person: None,
+                    junk: JunkId(137),
+                    fine: 0,
+                },
+                400,
+            ),
+            (
+                SimMessage::IllegalOutfit {
+                    scanner: ShipId(128),
+                    person: None,
+                    outfit: OutfitId(320),
+                    one: true,
+                    fine: 0,
+                },
+                400,
+            ),
         ];
         for (message, ticks) in cases {
             assert_eq!(message.ticks(), ticks, "{message:?}");

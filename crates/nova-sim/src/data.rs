@@ -164,6 +164,7 @@ impl PilotCatalog for GameData {
                     item_class: record.item_class,
                     lc_name: record.lc_name.as_str().to_owned(),
                     lc_plural: record.lc_plural.as_str().to_owned(),
+                    scan_mask: record.scan_mask.bits(),
                 })
             })
             .collect()
@@ -269,6 +270,8 @@ impl PilotCatalog for GameData {
                     buy_on: self.test_expr(record.buy_on.as_str()).into(),
                     sell_on: self.test_expr(record.sell_on.as_str()).into(),
                     flags: record.flags.bits(),
+                    scan_mask: record.scan_mask.bits(),
+                    lc_name: record.lc_name.as_str().to_owned(),
                 })
             })
             .collect()
@@ -1655,6 +1658,7 @@ mod tests {
             item_class: 0,
             lc_name: "big gun".to_owned(),
             lc_plural: String::new(),
+            scan_mask: 0,
             on_purchase: Script::parse("b400"),
             on_sell: Script::parse("!b400"),
         };
@@ -1702,6 +1706,14 @@ mod tests {
         assert_eq!(record.item_class, 7);
         assert_eq!(record.lc_name, "spare part");
         assert_eq!(record.lc_plural, "spare parts");
+    }
+
+    #[test]
+    fn an_oütfs_scan_mask_is_read_raw() {
+        let mut bytes = outfit([(0, 0); 4]);
+        put_i16s(&mut bytes, 0x3EE, &[0x8004_u16.cast_signed()]);
+        let data = store(&[(Outfit::TYPE, 128, bytes)]);
+        assert_eq!(data.outfits()[0].scan_mask, 0x8004);
     }
 
     #[test]
@@ -2589,7 +2601,7 @@ mod tests {
         opals[0x66..0x69].copy_from_slice(b"Opl");
         opals[0xA6..0xA9].copy_from_slice(b"b43");
         opals[0x1A5..0x1A9].copy_from_slice(b"!b80");
-        put_i16s(&mut opals, 0x22, &[0x0003]);
+        put_i16s(&mut opals, 0x22, &[0x0003, 0x8004_u16.cast_signed()]);
         let data = store_named(&[
             (Junk::TYPE, 146, Some("Opals"), opals),
             (Junk::TYPE, 134, None, junk(&[160], &[], 300, "water")),
@@ -2613,6 +2625,8 @@ mod tests {
                     buy_on: Test::default(),
                     sell_on: Test::default(),
                     flags: 0,
+                    scan_mask: 0,
+                    lc_name: "water".to_owned(),
                 },
                 JunkRecord {
                     id: JunkId(146),
@@ -2624,6 +2638,8 @@ mod tests {
                     buy_on: Test::parse("b43"),
                     sell_on: Test::parse("!b80"),
                     flags: 0x0003,
+                    scan_mask: 0x8004,
+                    lc_name: "opals".to_owned(),
                 },
             ],
             "a resource without a name goes by its LCName; an undecodable one is skipped"

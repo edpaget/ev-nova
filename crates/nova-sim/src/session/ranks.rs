@@ -169,9 +169,12 @@ impl Session {
 
     /// Takes the active ranks the blessing table is built from, as
     /// `_ResetPlayerPrecalcedValues` builds it (see the module docs'
-    /// **Blessing**).
+    /// **Blessing**), and re-arms `_ScanPlayer`'s contraband latches, as
+    /// the same reset sets them (@0xc524-0xc5a3; see
+    /// [`scan::Latches`](crate::scan::Latches)).
     pub(super) fn refresh_blessing(&mut self) {
         self.blessing_ranks.clone_from(&self.pilot.ranks);
+        self.scan_latches = crate::scan::Latches::ARMED;
     }
 
     /// The refresh of a take-off, a gate exit or a jump's arrival: now,

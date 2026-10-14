@@ -301,6 +301,9 @@ pub struct OutfitRecord {
     pub lc_name: String,
     /// Its `LCPlural`, raw: its lower-case plural name.
     pub lc_plural: String,
+    /// Its `ScanMask`, raw: a scan finds it owned when this shares a bit
+    /// with the scanner's government's (see [`scan`](crate::scan)).
+    pub scan_mask: u16,
 }
 
 /// An `oütf` `ModVal` as the original's loader reads it, as an ID.
@@ -459,6 +462,11 @@ pub struct JunkRecord {
     /// Its `Flags`, raw: [`TRIBBLES`](crate::market::TRIBBLES) and
     /// [`PERISHABLE`](crate::market::PERISHABLE) are read.
     pub flags: u16,
+    /// Its `ScanMask`, raw: a scan finds it held when this shares a bit
+    /// with the scanner's government's (see [`scan`](crate::scan)).
+    pub scan_mask: u16,
+    /// Its `LCName`, raw: what a scan that finds it calls it.
+    pub lc_name: String,
 }
 
 /// An `öops` resource's ID: a planetary event.
@@ -1578,6 +1586,7 @@ mod tests {
                 item_class: 0,
                 lc_name: "scoop".to_owned(),
                 lc_plural: "scoops".to_owned(),
+                scan_mask: 0,
                 on_purchase: crate::control::Script::default(),
                 on_sell: crate::control::Script::default(),
             }]
@@ -1671,6 +1680,8 @@ mod tests {
                 buy_on: Test::default(),
                 sell_on: Test::default(),
                 flags: 0,
+                scan_mask: 0,
+                lc_name: String::new(),
             }]
         }
 
