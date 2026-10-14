@@ -43,6 +43,16 @@
 //! drawn until its last 16 ticks there, over which it fades in; it is on
 //! the radar all along, as the original's radar does not ask.
 //!
+//! In double time ([`FlightView::set_double_time`]), each step runs the
+//! session's second pass ([`Session::tick_again`]) after the advance
+//! pass's calls, and steps the effects and
+//! drains the fight's events after it as after the advance pass
+//! (`_HandleExplods` runs on both, @0x444e1). The second pass says no
+//! quotes, gives no help and tells no comm. The mode is the screen's own
+//! and outlives the hails, the map, the jumps and the sessions it flies;
+//! while it is on, `cïcn` 20000 is drawn at the top left over the Red
+//! Alert icon (see the `alert` module).
+//!
 //! Each step's fight events are drained into the [`Effects`]: its
 //! explosions, debris and sounds, rolled on their own [`SharedChance`]
 //! ([`FlightView::with_effects_chance`]), never on the simulation's. The
@@ -1569,6 +1579,10 @@ pub struct FlightView<C> {
     /// `cïcn` 18000's width, which places the Red Alert icon, or `None`
     /// when it cannot be read, and the icon is not drawn.
     alert_width: Option<u32>,
+    /// Whether double time is on, as the screen was last told; handed to
+    /// each session it flies before its steps. Never let go with the
+    /// flight keys.
+    double_time: bool,
     /// What each day's events and the traffic are rolled on.
     chance: SharedChance,
     /// What random running lights roll on.
@@ -1783,6 +1797,7 @@ impl<
             hyperspace_effects: true,
             sound_prefs: SoundPrefs::default(),
             alert_width,
+            double_time: false,
             session,
             scene,
             sheet,
@@ -2164,6 +2179,29 @@ impl<
         if let Ok(session) = &mut self.session {
             session.set_sound_quiet(prefs.alert_quiet());
         }
+    }
+
+    /// The flight with double time on or off, as `on` says (see the
+    /// module docs).
+    #[must_use]
+    pub fn with_double_time(mut self, on: bool) -> Self {
+        self.set_double_time(on);
+        self
+    }
+
+    /// Turns double time on or off, as `on` says, for the session flown
+    /// now and every one after it.
+    pub fn set_double_time(&mut self, on: bool) {
+        self.double_time = on;
+        if let Ok(session) = &mut self.session {
+            session.set_double_time_key(on);
+        }
+    }
+
+    /// Whether double time is on, as the screen was last told.
+    #[must_use]
+    pub fn double_time(&self) -> bool {
+        self.double_time
     }
 
     /// Whether the player's sound is quiet enough for the Red Alert to
@@ -4211,6 +4249,7 @@ impl<
         if let Ok(session) = &mut self.session {
             session.set_play_area(play_area());
             session.hold_fire(fire.0, fire.1);
+            session.set_double_time_key(self.double_time);
             for _ in 0..steps {
                 self.previous = *session.player();
                 self.npc_previous = session
@@ -4218,25 +4257,33 @@ impl<
                     .iter()
                     .map(|npc| (npc.id, npc.state))
                     .collect();
-                session.tick(controls);
-                session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
-                session.tick_quotes(&self.catalog, &mut self.chance);
-                quotes.extend(session.take_quotes());
-                session.tick_assistance(&*self.disable_rule);
-                notes.extend(session.take_comm());
                 let rules = Rules {
                     disable: &*self.disable_rule,
                     defence: &*self.defence_rule,
                     law: &*self.law,
                 };
-                session.tick_combat(rules, &mut self.chance);
-                let player = point(session.player().position);
-                let dying = dying(session, &self.sheet, &self.npc_sheets);
-                let chance = &mut self.effects_chance;
-                self.effects.step(&dying, player, &self.looks, chance);
-                let scene = Scene { player };
-                for event in session.take_combat_events() {
-                    self.effects.apply(&event, &scene, &self.looks, chance);
+                for again in [false, true] {
+                    if !again {
+                        session.tick(controls);
+                        session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
+                        session.tick_quotes(&self.catalog, &mut self.chance);
+                        quotes.extend(session.take_quotes());
+                        session.tick_assistance(&*self.disable_rule);
+                        notes.extend(session.take_comm());
+                        session.tick_combat(rules, &mut self.chance);
+                    } else if session.double_time() {
+                        session.tick_again(controls, rules, &mut self.chance);
+                    } else {
+                        break;
+                    }
+                    let player = point(session.player().position);
+                    let dying = dying(session, &self.sheet, &self.npc_sheets);
+                    let chance = &mut self.effects_chance;
+                    self.effects.step(&dying, player, &self.looks, chance);
+                    let scene = Scene { player };
+                    for event in session.take_combat_events() {
+                        self.effects.apply(&event, &scene, &self.looks, chance);
+                    }
                 }
                 if session.jumping().is_some() {
                     break;
@@ -4297,6 +4344,9 @@ impl<
         self.effects.draw(list, &camera, &self.looks);
         self.draw_brackets(list, scene, &camera);
         self.draw_red_alert(list);
+        if self.session.as_ref().is_ok_and(Session::double_time) {
+            alert::draw_double_time(list);
+        }
         self.escort_menu
             .draw(list, &self.escort_rows(), self.escort_colors, metrics);
         if self.overlays.title {
@@ -17766,5 +17816,104 @@ mod tests {
         assert!(blinked, "the session blinked it");
         assert_eq!(told(&mut view), 0, "once");
         assert_eq!(told(&mut flight()), 0, "the default catalog has it");
+    }
+
+    // Double time.
+
+    /// Whether `view` draws the double-time icon, `cïcn` 20000 at the top
+    /// left.
+    fn double_time_drawn(view: &View) -> bool {
+        drawn(view).iter().any(|command| {
+            *command
+                == DrawCommand::Picture {
+                    image: ImageKey::icon(20000),
+                    top_left: Point::new(0.0, 0.0),
+                }
+        })
+    }
+
+    #[test]
+    fn double_time_shows_its_icon_at_the_top_left_over_the_red_alert() {
+        let mut view = threatened(QUIET).with_double_time(true);
+        assert!(view.double_time());
+        ticks(&mut view, 60);
+        let list = drawn(&view);
+        let commands: Vec<_> = list.iter().collect();
+        let icon = commands
+            .iter()
+            .position(|command| icon_in(20000..=20000)(command))
+            .expect("the icon is drawn");
+        assert_eq!(
+            *commands[icon],
+            DrawCommand::Picture {
+                image: ImageKey::icon(20000),
+                top_left: Point::new(0.0, 0.0),
+            }
+        );
+        assert!(
+            icon_in(18000..=18001)(commands[icon - 1]),
+            "just after the Red Alert's: {:?}",
+            commands[icon - 1]
+        );
+        view.set_double_time(false);
+        assert!(!view.double_time());
+        assert!(!double_time_drawn(&view), "off at once");
+        view.tick(TICK);
+        assert!(!double_time_drawn(&view));
+        assert!(!double_time_drawn(&flight()), "off to begin with");
+    }
+
+    #[test]
+    fn double_time_runs_a_second_pass_each_tick() {
+        for (on, steps) in [(false, 3), (true, 6)] {
+            let mut view = flight().with_double_time(on);
+            view.input(&key(Key::Up, true));
+            ticks(&mut view, 3);
+            assert_eq!(player(&view), stepped(start(), THRUST, steps), "{on}");
+        }
+    }
+
+    #[test]
+    fn double_time_reaches_the_session_on_the_next_tick_and_when_set() {
+        let mut view = flight();
+        view.set_double_time(true);
+        assert!(view.session().expect("flying").double_time(), "when set");
+        view.session
+            .as_mut()
+            .expect("flying")
+            .set_double_time_key(false);
+        view.tick(TICK);
+        assert!(view.session().expect("flying").double_time(), "each tick");
+    }
+
+    #[test]
+    fn double_time_survives_the_events_that_let_go_of_the_flight_keys() {
+        let mut view = flight().with_double_time(true);
+        tap(&mut view, MAP);
+        tap(&mut view, MAP);
+        view.tick(TICK);
+        assert!(double_time_drawn(&view), "the map");
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        arrive_now(&mut view);
+        view.tick(TICK);
+        assert!(double_time_drawn(&view), "a jump");
+        assert_eq!(view.session().expect("flying").system(), SystemId(131));
+        let mut hailed = hailable(true).with_double_time(true);
+        tap(&mut hailed, HAIL_KEY);
+        assert!(hailed.take_hail().is_some());
+        hailed.tick(TICK);
+        assert!(double_time_drawn(&hailed), "a hail");
+    }
+
+    #[test]
+    fn caps_lock_is_no_flight_key() {
+        let mut view = flight();
+        view.input(&key(Key::CapsLock, true));
+        assert!(view.held.is_empty());
+        ticks(&mut view, 3);
+        assert_eq!(player(&view), start());
+        assert!(!view.double_time(), "the app toggles it, not flight");
     }
 }

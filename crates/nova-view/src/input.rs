@@ -33,6 +33,9 @@ pub enum Key {
     /// Command (the Windows or Super key off a Mac), either one, held as a
     /// modifier.
     Command,
+    /// Caps Lock, each press of which turns double time on or off. It is
+    /// no flight key: flight never holds it.
+    CapsLock,
     /// A key that types a character.
     Char(char),
     /// Function key F`n`: F1 is `Function(1)`.
