@@ -1193,7 +1193,7 @@ mod tests {
 
     #[test]
     fn landed_the_record_keeps_the_reserves_and_taking_off_restocks_them() {
-        let catalog = fleeted();
+        let catalog = crate::testkit::far_129_reachable(fleeted());
         let mut session = flying(&catalog, RuleSource::Engine);
         let warship = session.fleet[0].expect("placed");
         session.npc_mut(warship).expect("there").reserves.shield.now = 4.0;
@@ -2195,7 +2195,7 @@ mod tests {
 
     #[test]
     fn a_person_escort_is_restocked_full_to_its_fitted_ship_on_flying_and_taking_off() {
-        let catalog = with_ace();
+        let catalog = crate::testkit::far_129_reachable(with_ace());
         let mut session = flying_ace(&catalog);
         let fitted = Reserves {
             fuel: worn().fuel,

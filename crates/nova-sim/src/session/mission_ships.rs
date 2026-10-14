@@ -1542,7 +1542,7 @@ pub(super) mod tests {
 
     #[test]
     fn ships_starting_1_set_up_none_and_come_in_by_hyperspace_when_their_timer_runs_out() {
-        let catalog = ships_catalog(shipping(-1, 1));
+        let catalog = crate::testkit::far_129_reachable(ships_catalog(shipping(-1, 1)));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         assert!(marked(&session).is_empty(), "none at setup");

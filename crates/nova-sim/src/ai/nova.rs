@@ -60,6 +60,8 @@ impl NovaAi {
     /// or honours the bribe as its [`RuleKey::HunterBribe`] entry says,
     /// the warships' and interceptors' government's 0x0004 word reaches a
     /// blessed player as its [`RuleKey::BlessingAlwaysAttacks`] entry says,
+    /// the interceptors' patrol picks an uninhabited stellar as its
+    /// [`RuleKey::PatrolUninhabited`] entry says,
     /// and every one of them, the escorts and the carried fighters aim
     /// their quadrant turrets as its [`RuleKey::QuadrantTurretArc`] entry
     /// says.
@@ -91,6 +93,7 @@ impl NovaAi {
                 person_coward,
                 always_attacks,
                 fire,
+                patrol_uninhabited: rulebook.source_for(RuleKey::PatrolUninhabited),
             }),
             escorts: Rc::new(EscortAi {
                 escort_ai: rulebook.source_for(RuleKey::EscortAi),
@@ -882,5 +885,32 @@ mod tests {
                 "{ai_type:?}: the blessing holds the word back"
             );
         }
+    }
+
+    #[test]
+    fn nova_ai_reads_patrol_uninhabited_from_the_rulebook() {
+        use crate::ai::fixture::{POLICE, govts, ship};
+        use crate::catalog::{LandingSite, StellarId};
+        use crate::landing::StellarFlags;
+        let govts = govts(0, 0);
+        let sites = [
+            LandingSite {
+                flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+                ..crate::testkit::planet(129, 0.0, 0.0)
+            },
+            crate::testkit::planet(128, 0.0, 0.0),
+        ];
+        let npcs = [ship(1, POLICE, AiType::Interceptor, 0.0, 0.0)];
+        let seen = crate::ai::Surroundings {
+            govts: &govts,
+            ..crate::ai::Surroundings::new(&sites, &npcs)
+        };
+        let decide = |rulebook: &Rulebook| {
+            NovaAi::from_rulebook(rulebook).decide(&npcs[0], &seen, &mut Draws::of(&[0]))
+        };
+        assert_eq!(decide(&Rulebook::default()), Goal::Land(StellarId(129)));
+        let inhabited =
+            Rulebook::default().with_override(RuleKey::PatrolUninhabited, RuleSource::Bible);
+        assert_eq!(decide(&inhabited), Goal::Land(StellarId(128)));
     }
 }

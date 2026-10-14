@@ -837,7 +837,8 @@ mod tests {
     // The NPCs' destinations.
 
     /// [`wrecking`] with two ships of düde 128, fast ship 129, flying in
-    /// 130.
+    /// 130, its stellar 129 within the bound on a destination
+    /// ([`far_129_reachable`](crate::testkit::far_129_reachable)).
     fn trafficked() -> FakePilotCatalog {
         use crate::catalog::{DudeId, DudeRecord, GovtId, ShipId, SystemTraffic};
         let mut dude_types = [(-1, 0); 8];
@@ -862,7 +863,7 @@ mod tests {
                 },
             )],
             ship_records: vec![crate::testkit::ship(129, crate::testkit::FAST)],
-            ..wrecking()
+            ..crate::testkit::far_129_reachable(wrecking())
         }
     }
 

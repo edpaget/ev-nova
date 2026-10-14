@@ -93,9 +93,11 @@ pub(crate) fn blessing_of(govt: GovtId) -> Blessing {
     blessing
 }
 
-/// A landable planet, 128, far off.
+/// A landable planet, 128, far off: below and left of the centre, as
+/// the 999 bound on a destination (see
+/// [`destination`](crate::traffic::destination)) is an upper one only.
 pub(crate) fn sites() -> Vec<LandingSite> {
-    vec![planet(128, 3000.0, 3000.0)]
+    vec![planet(128, -3000.0, -3000.0)]
 }
 
 /// `npcs` among `sites`, with the player at (`x`, `y`), in a traders'

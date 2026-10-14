@@ -12354,7 +12354,8 @@ pub(super) mod tests {
     #[test]
     fn every_ai_type_lands_peacefully() {
         for ai_type in 1..=4 {
-            let how = Outcome::Landed(StellarId(129));
+            // 129, 2000 out, is beyond the 999 bound on a destination.
+            let how = Outcome::Landed(StellarId(128));
             let catalog = trafficked(130, 1, ai_type);
             let mut session = Session::start(&catalog).expect("starts");
             session.populate(&catalog, &mut NeverFires);
@@ -19534,7 +19535,7 @@ pub(super) mod tests {
     /// `flët` 382, led by ship 160, and 383, led by ship 161, which link
     /// to no system.
     fn strong() -> FakePilotCatalog {
-        let mut catalog = busy(catalog());
+        let mut catalog = busy(crate::testkit::far_129_reachable(catalog()));
         catalog.ship_records.extend([
             holds_record(150, 60, 1),
             holds_record(151, 250, 2),

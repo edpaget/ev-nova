@@ -603,6 +603,19 @@ pub(crate) fn catalog() -> FakePilotCatalog {
     }
 }
 
+/// `catalog` with system 130's planet 129 at (-2000, 0): as far out as
+/// at (2000, 0), but on the side the 999 bound on a destination does not
+/// reach (see [`destination`](crate::traffic::destination)), so an idle
+/// NPC drawing the last candidate heads for it, far from 128.
+pub(crate) fn far_129_reachable(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
+    for (_, sites) in &mut catalog.sites {
+        for site in sites.iter_mut().filter(|site| site.id == StellarId(129)) {
+            site.position = Vec2::new(-2000.0, 0.0);
+        }
+    }
+    catalog
+}
+
 /// `catalog` with variants in system 130 marked as `_StellarsAreIdentical`
 /// reads them: 150 at 128's place with its name "Home" (30,-40), 151 at
 /// 129's with its name "Varia" (2000,0), and two that miss 129 by one:

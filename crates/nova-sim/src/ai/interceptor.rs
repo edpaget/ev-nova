@@ -26,12 +26,16 @@
 //!   flagged 0x0020 or fining the smuggler, then its illegal `jünk` and
 //!   outfits (see [`scan`](crate::scan)), convicting the smuggler; any
 //!   find sets the interceptor attacking the player.
-//! - With nothing to inspect it goes about its business
-//!   ([`idle`](super::idle)).
+//! - With nothing to inspect it patrols: the idle block, but its
+//!   `_SelectRandomStellarDest` call is (ship, 0, 1) (@0x8d027-0x8d03a),
+//!   plain stellars only ([`idle_admitting`] with [`Admit::PlainOnly`]):
+//!   never a gate, and an uninhabited stellar as
+//!   [`RuleKey::PatrolUninhabited`](crate::RuleKey::PatrolUninhabited)
+//!   says.
 
 use crate::ai::fire::FireRules;
 use crate::ai::warship::{Retreat, hunt};
-use crate::ai::{Behaviour, Goal, Reaction, Surroundings, fire, idle, react};
+use crate::ai::{Admit, Behaviour, Goal, Reaction, Surroundings, fire, idle_admitting, react};
 use crate::chance::Chance;
 use crate::combat::armament::Trigger;
 use crate::combat::{ShipRef, Strike};
@@ -70,6 +74,9 @@ pub struct Interceptor {
     pub always_attacks: RuleSource,
     /// The rulebook's entries its weapon pick follows.
     pub fire: FireRules,
+    /// Whether its patrol can pick an uninhabited stellar
+    /// ([`RuleKey::PatrolUninhabited`](crate::RuleKey::PatrolUninhabited)).
+    pub patrol_uninhabited: RuleSource,
 }
 
 impl Behaviour for Interceptor {
@@ -87,7 +94,10 @@ impl Behaviour for Interceptor {
         {
             return Goal::Inspect(ship);
         }
-        inspect(npc, around, chance).unwrap_or_else(|| idle(npc, around, chance))
+        let patrol = Admit::PlainOnly {
+            uninhabited: self.patrol_uninhabited == RuleSource::Engine,
+        };
+        inspect(npc, around, chance).unwrap_or_else(|| idle_admitting(npc, around, chance, patrol))
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
@@ -303,6 +313,66 @@ mod tests {
         assert_eq!(
             Interceptor::default().decide(&npcs[0], &around, &mut Draws::of(&[0])),
             Goal::Land(StellarId(128))
+        );
+    }
+
+    /// A lone interceptor's idle pick among `sites`, by `patrol_uninhabited`,
+    /// drawing `draw`; and the draws asked.
+    fn patrols(
+        sites: &[crate::catalog::LandingSite],
+        patrol_uninhabited: RuleSource,
+        draw: u32,
+    ) -> (Goal, Vec<u32>) {
+        let govts = govts(0, 0);
+        let npcs = [police()];
+        let around = crate::ai::Surroundings {
+            govts: &govts,
+            ..crate::ai::Surroundings::new(sites, &npcs)
+        };
+        let interceptor = Interceptor {
+            patrol_uninhabited,
+            ..Interceptor::default()
+        };
+        let mut chance = Draws::of(&[draw]);
+        let goal = interceptor.decide(&npcs[0], &around, &mut chance);
+        (goal, chance.asked)
+    }
+
+    #[test]
+    fn its_patrol_never_picks_a_gate() {
+        let gate = crate::catalog::LandingSite {
+            flags2: crate::gate::HYPERGATE,
+            ..crate::testkit::planet(129, 0.0, 0.0)
+        };
+        let sites = [gate, crate::testkit::planet(128, 0.0, 0.0)];
+        for rule in RuleSource::ALL {
+            assert_eq!(
+                patrols(&sites, rule, 0),
+                (Goal::Land(StellarId(128)), vec![1]),
+                "{rule:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn its_patrol_picks_an_uninhabited_stellar_as_its_rule_says() {
+        let empty = crate::catalog::LandingSite {
+            flags: crate::landing::StellarFlags::CAN_LAND
+                | crate::landing::StellarFlags::UNINHABITED,
+            ..crate::testkit::planet(129, 0.0, 0.0)
+        };
+        let sites = [empty, crate::testkit::planet(128, 0.0, 0.0)];
+        assert_eq!(
+            Interceptor::default().patrol_uninhabited,
+            RuleSource::Engine
+        );
+        assert_eq!(
+            patrols(&sites, RuleSource::Engine, 0),
+            (Goal::Land(StellarId(129)), vec![2])
+        );
+        assert_eq!(
+            patrols(&sites, RuleSource::Bible, 0),
+            (Goal::Land(StellarId(128)), vec![1])
         );
     }
 

@@ -9,33 +9,16 @@
 //!   `_SelectRandomStellarDest(ship, Rand(3) == 0, 0)` and keeps the pick
 //!   only when it is a hypergate or wormhole (`Flags2` 0x1000 or 0x2000,
 //!   @0x7fe9); otherwise the ship jumps in from hyperspace.
-//! - **The candidates.** `_SelectRandomStellarDest` (@0x805de) walks the
-//!   system's stellars. One is *ok* when it is landable
-//!   (`_StellarIsLandable` @0xa989, [`is_landable`]: a destroyed one only
-//!   when only landable destroyed, `Flags` 0x80, an intact one only
-//!   without it), its `xPos`
-//!   and `yPos` are each at most 999 with no lower bound (@0x80781), and
-//!   it is not hostile: both the ship and the stellar have a government,
-//!   and they are enemies (@0x807e2-0x80816). One with `Flags` 0x20
-//!   (uninhabited) that is no gate is *uninhabited* (@0x807c8). Then,
-//!   by the ship's government's `Flags2` (@0x80625-0x8065d):
-//!   - with [`PREFERS_WORMHOLES`] and an ok wormhole, among the ok
-//!     wormholes (@0x80947);
-//!   - else with [`PREFERS_HYPERGATES`] and an ok hypergate, among the
-//!     ok hypergates (@0x80989);
-//!   - else among the ok stellars that are not uninhabited, leaving out
-//!     wormholes without [`PREFERS_WORMHOLES`] and hypergates with
-//!     [`AVOIDS_HYPERGATES`] (@0x809cb, @0x80a30).
-//!
-//!   Each is a `Rand(16)` rejection loop over the slots: a uniform pick
-//!   among the candidates, here one `below(candidates)` draw, in the
-//!   system's stellar order. An independent ship has no switch, so its
+//! - **The candidates** are `_SelectRandomStellarDest`'s
+//!   ([`destination::candidates`] with [`Admit::All`]): the ok, inhabited
+//!   stellars that are no enemy's, the government's `Flags2` choosing
+//!   among the gates. An independent ship has no switch, so its
 //!   candidates are the ok, inhabited planets and stations and the ok
-//!   hypergates; never a wormhole.
-//! - **The `Rand(3) == 0` argument changes nothing** and is not drawn.
-//!   It only chooses whether step 4 (@0x809cb) runs before step 5
-//!   (@0x80a30), and whenever step 4 runs its test and its candidates are
-//!   step 5's. The original consumes the draw; this does not.
+//!   hypergates; never a wormhole. The pick among them is one
+//!   `below(candidates)` draw, in the system's stellar order.
+//! - **The `Rand(3) == 0` argument changes nothing** and is not drawn
+//!   (see [`destination`]). The original consumes the draw; this does
+//!   not.
 //! - **No draw without a gate.** When no candidate is a gate, the pick can
 //!   only end in a jump-in, so no draw is asked: a system with no ok gate
 //!   draws exactly as before gates were modelled.
@@ -77,15 +60,13 @@
 //!   for `Rand(30) + 30` ticks (@0x34d5c-0x34d8b), as after a glide in
 //!   from hyperspace: [`Mode::Coasting`](crate::traffic::npc::Mode::Coasting).
 //!
-//! Not modelled: the
-//! stellar the ship remembers (+0x92); a hypergate animating while a ship
-//! comes out of it (`_HandleStellarSprites` @0x2e8bd).
+//! Not modelled: the stellar the ship remembers (+0x92).
 
 use crate::catalog::{GovtId, LandingSite};
 use crate::chance::Chance;
 use crate::gate::GateKind;
-use crate::govt::{AVOIDS_HYPERGATES, Governments, PREFERS_HYPERGATES, PREFERS_WORMHOLES};
-use crate::landing::{StellarFlags, is_landable};
+use crate::govt::Governments;
+use crate::traffic::destination::{self, Admit};
 
 /// How many ticks a ship coming out of a gate waits there, hidden and
 /// still (the timer's 60.0, @0x89518).
@@ -110,9 +91,6 @@ pub const LED_BURST_TICK: u32 = 5;
 /// How much slower each tick of leaving a gate is than the last (-3.0,
 /// @0x895c4).
 pub const EXIT_SLOWING: f32 = 3.0;
-/// How far a stellar may be from the centre, on each axis, to come out of
-/// (999, @0x80781-0x8078f): an upper bound only.
-pub const MAX_COORDINATE: f32 = 999.0;
 /// The opacity [`emerge_level`] counts in: 32nds.
 pub const FULL_LEVEL: u8 = 32;
 
@@ -125,7 +103,7 @@ pub fn emerge_stellar<'s>(
     govts: &Governments,
     chance: &mut (impl Chance + ?Sized),
 ) -> Option<&'s LandingSite> {
-    let candidates = candidates(govt, sites, govts);
+    let candidates = destination::candidates(govt, sites, govts, Admit::All);
     if !candidates
         .iter()
         .any(|site| GateKind::of(site.flags2).is_some())
@@ -137,51 +115,6 @@ pub fn emerge_stellar<'s>(
         .get(usize::try_from(draw).unwrap_or(usize::MAX))
         .copied()
         .filter(|site| GateKind::of(site.flags2).is_some())
-}
-
-/// The stellars among `sites` that `_SelectRandomStellarDest` picks among
-/// for a ship of `govt`, in order (see the module docs).
-fn candidates<'s>(
-    govt: Option<GovtId>,
-    sites: &'s [LandingSite],
-    govts: &Governments,
-) -> Vec<&'s LandingSite> {
-    let ok: Vec<&LandingSite> = sites
-        .iter()
-        .filter(|site| {
-            is_landable(site)
-                && site.position.x <= MAX_COORDINATE
-                && site.position.y <= MAX_COORDINATE
-                && !govts.npc_enemies(govt, site.govt)
-        })
-        .collect();
-    let of_kind = |kind| -> Vec<&'s LandingSite> {
-        ok.iter()
-            .copied()
-            .filter(|site| GateKind::of(site.flags2) == Some(kind))
-            .collect()
-    };
-    let wormholes = govts.flag2(govt, PREFERS_WORMHOLES);
-    if wormholes {
-        let found = of_kind(GateKind::Wormhole);
-        if !found.is_empty() {
-            return found;
-        }
-    }
-    if govts.flag2(govt, PREFERS_HYPERGATES) {
-        let found = of_kind(GateKind::Hypergate);
-        if !found.is_empty() {
-            return found;
-        }
-    }
-    let no_hypergates = govts.flag2(govt, AVOIDS_HYPERGATES);
-    ok.into_iter()
-        .filter(|site| match GateKind::of(site.flags2) {
-            None => site.flags & StellarFlags::UNINHABITED == 0,
-            Some(GateKind::Wormhole) => wormholes,
-            Some(GateKind::Hypergate) => !no_hypergates,
-        })
-        .collect()
 }
 
 /// How fast a ship leaving a gate moves on tick `tick` (from 0) of its
@@ -210,6 +143,8 @@ mod tests {
     use super::*;
     use crate::catalog::GovtRecord;
     use crate::gate::{HYPERGATE, WORMHOLE};
+    use crate::govt::{AVOIDS_HYPERGATES, PREFERS_HYPERGATES, PREFERS_WORMHOLES};
+    use crate::landing::StellarFlags;
     use crate::testkit::{Draws, govt, planet};
 
     #[test]

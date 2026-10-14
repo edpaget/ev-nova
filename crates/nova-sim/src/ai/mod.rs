@@ -53,7 +53,10 @@ use crate::hyperspace::JUMP_FUEL;
 use crate::landing::is_landable as landable;
 use crate::rank::{Blessed, Blessing};
 use crate::reserves::Reserves;
+use crate::traffic::destination;
 use crate::traffic::npc::{Npc, NpcId};
+
+pub use crate::traffic::destination::Admit;
 
 pub use brave::BraveTrader;
 pub use carried::CarriedAi;
@@ -334,21 +337,37 @@ impl Behaviour for Peaceful {
 }
 
 /// The idle block the four AI types share (e.g. `_WarshipAI` @0x8b06c in
-/// the `EV Nova` executable):
+/// the `EV Nova` executable), picking as their (ship, 0, 0) call does
+/// ([`idle_admitting`] with [`Admit::All`]).
+pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+    idle_admitting(npc, around, chance, Admit::All)
+}
+
+/// The idle block, its pick admitting `admit` (see
+/// [`destination`](crate::traffic::destination)):
 ///
 /// - An escort follows its lead while the lead is in the system; once it
 ///   is gone, the escort decides as below.
 /// - A goal it can still fly is kept: a stellar that is still there and
 ///   landable, or a jump it still has the fuel for.
-/// - Otherwise it lands on a landable stellar picked at random, one not
-///   of a government at war with its own (`_SelectRandomStellarDest`
-///   @0x805de, its enemy test @0x80807), or jumps out when there is none.
-///   The original sends a ship that has not visited a stellar of the
-///   system there, and one that has away; here a ship that lands leaves
-///   the system, so none has, and every ship, of any AI type, heads for a
-///   stellar (as `_HyperShipSpawn` makes every arrival do).
+/// - Otherwise it heads for a stellar picked at random among
+///   `_SelectRandomStellarDest`'s candidates (@0x805de): landable, within
+///   999 of the centre on each axis, not uninhabited unless a gate, not
+///   of a government at war with its own, the gates chosen by its
+///   government's `Flags2`; or it jumps out when there is none. The
+///   original sends a ship that has not visited a stellar of the system
+///   there, and one that has away; here a ship that lands leaves the
+///   system, so none has, and every ship, of any AI type, heads for a
+///   stellar (as `_HyperShipSpawn` makes every arrival do). The pick is
+///   one `below(candidates)` draw in the system's stellar order: what the
+///   original's `Rand(16)` loop decides, a uniform pick among them.
 /// - A ship that would jump without a jump's fuel stays idle.
-pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
+pub fn idle_admitting(
+    npc: &Npc,
+    around: &Surroundings,
+    chance: &mut dyn Chance,
+    admit: Admit,
+) -> Goal {
     if let Some(lead) = npc.leader
         && around.npc(lead).is_some()
     {
@@ -362,17 +381,13 @@ pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
     } else {
         Goal::Idle
     };
-    let welcoming: Vec<_> = around
-        .sites
-        .iter()
-        .filter(|site| landable(site) && !around.govts.enemies(npc.govt, site.govt))
-        .collect();
-    if welcoming.is_empty() {
+    let candidates = destination::candidates(npc.govt, around.sites, around.govts, admit);
+    if candidates.is_empty() {
         return leave;
     }
-    let len = u32::try_from(welcoming.len()).unwrap_or(u32::MAX);
+    let len = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
     let pick = chance.below(len) as usize;
-    welcoming
+    candidates
         .get(pick)
         .map_or(leave, |site| Goal::Land(site.id))
 }
@@ -532,6 +547,89 @@ mod tests {
         };
         let mut chance = Draws::of(&[]);
         assert_eq!(Peaceful.decide(&ship, &around, &mut chance), Goal::JumpOut);
+    }
+
+    #[test]
+    fn an_idle_pick_skips_a_far_an_uninhabited_and_an_enemys_stellar() {
+        let govts = Governments::new([
+            GovtRecord {
+                classes: [1, -1, -1, -1],
+                ..crate::testkit::govt(140)
+            },
+            GovtRecord {
+                enemies: [1, -1, -1, -1],
+                ..crate::testkit::govt(141)
+            },
+        ]);
+        let far = planet(128, 1000.0, 0.0);
+        let empty = LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+            ..planet(129, 0.0, 0.0)
+        };
+        let hostile = LandingSite {
+            govt: Some(GovtId(141)),
+            ..planet(130, 0.0, 0.0)
+        };
+        let sites = [far, empty, hostile, planet(131, -2000.0, 0.0)];
+        let mut ship = npc(1, AiType::WimpyTrader);
+        ship.govt = Some(GovtId(140));
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&sites, &[])
+        };
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&ship, &around, &mut chance),
+            Goal::Land(StellarId(131))
+        );
+        assert_eq!(chance.asked, [1], "only the ok one");
+    }
+
+    #[test]
+    fn an_independent_ships_idle_pick_counts_a_stellar_of_any_government() {
+        let govts = Governments::new([GovtRecord {
+            flags: crate::govt::XENOPHOBIC,
+            ..crate::testkit::govt(141)
+        }]);
+        let sites = [LandingSite {
+            govt: Some(GovtId(141)),
+            ..planet(128, 0.0, 0.0)
+        }];
+        let around = Surroundings {
+            govts: &govts,
+            ..Surroundings::new(&sites, &[])
+        };
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&npc(1, AiType::Warship), &around, &mut chance),
+            Goal::Land(StellarId(128)),
+            "a xenophobe's stellar is no enemy's to a ship of none"
+        );
+        assert_eq!(chance.asked, [1]);
+    }
+
+    #[test]
+    fn a_plain_only_pick_never_lands_on_a_gate() {
+        let gate = LandingSite {
+            flags2: crate::gate::HYPERGATE,
+            ..planet(129, 0.0, 0.0)
+        };
+        let sites = [gate, planet(128, 0.0, 0.0)];
+        let around = Surroundings::new(&sites, &[]);
+        let plain = Admit::PlainOnly { uninhabited: true };
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle_admitting(&npc(1, AiType::Interceptor), &around, &mut chance, plain),
+            Goal::Land(StellarId(128))
+        );
+        assert_eq!(chance.asked, [1]);
+        let mut chance = Draws::of(&[0]);
+        assert_eq!(
+            idle(&npc(1, AiType::Interceptor), &around, &mut chance),
+            Goal::Land(StellarId(129)),
+            "the idle blocks admit the gate"
+        );
+        assert_eq!(chance.asked, [2]);
     }
 
     #[test]

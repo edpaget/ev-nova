@@ -6,6 +6,8 @@
 //! - [`spawn`]: the rolls: the initial population, the arrivals over time,
 //!   the fleets and the persons (see [`person`](crate::person)), and
 //!   where each ship starts.
+//! - [`destination`]: the stellars an NPC picks a destination among,
+//!   for the idle pick and the emerge pick.
 //! - [`emerge`]: the hypergate or wormhole an arrival comes out of, and
 //!   how long it waits there.
 //! - [`strength`]: the escort-strength timer, and the fleet it brings
@@ -68,6 +70,7 @@
 //! [`DECISION_INTERVAL`]. Steering and physics run every tick.
 
 pub mod autopilot;
+pub mod destination;
 pub mod emerge;
 pub mod npc;
 pub mod spawn;

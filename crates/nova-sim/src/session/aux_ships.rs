@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn aux_ships_come_in_unmarked_by_hyperspace_once_their_countdown_runs_out() {
-        let catalog = aux_only(3, -1, 0);
+        let catalog = crate::testkit::far_129_reachable(aux_only(3, -1, 0));
         let mut session = accepted(&catalog);
         take_off(&mut session, &catalog);
         assert_eq!(
