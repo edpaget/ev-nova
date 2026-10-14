@@ -1418,11 +1418,8 @@ mod tests {
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(session.junk_lc_name(BIO_WEAPONS), Some("bio-weapons"));
         assert_eq!(session.junk_lc_name(JunkId(151)), None);
-        assert_eq!(
-            session.outfit_lc_names(BLASTER),
-            Some(("blaster", "blasters"))
-        );
-        assert_eq!(session.outfit_lc_names(OutfitId(151)), None);
+        assert_eq!(session.outfit_names(BLASTER), Some(("blaster", "blasters")));
+        assert_eq!(session.outfit_names(OutfitId(151)), None);
     }
 
     #[test]

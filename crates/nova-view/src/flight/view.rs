@@ -700,7 +700,7 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
             one,
             fine,
         } => {
-            let (lc_name, lc_plural) = session.outfit_lc_names(*outfit).unwrap_or_default();
+            let (lc_name, lc_plural) = session.outfit_names(*outfit).unwrap_or_default();
             return Some(illegal_outfit_message(
                 scanner_name(person.as_deref(), *scanner, session),
                 session.pilot().ship_name().unwrap_or_default(),

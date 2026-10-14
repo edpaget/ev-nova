@@ -2009,14 +2009,6 @@ impl Session {
         Some(&record.lc_name)
     }
 
-    /// Outfit `id`'s `LCName` and `LCPlural`, raw, if the session has its
-    /// record: what a scan that finds it calls one, and more.
-    #[must_use]
-    pub fn outfit_lc_names(&self, id: OutfitId) -> Option<(&str, &str)> {
-        let record = self.outfits.iter().find(|record| record.id == id)?;
-        Some((&record.lc_name, &record.lc_plural))
-    }
-
     /// Stops the thrust, if the ship was thrusting, and puts the engine
     /// glow out, even as it fades after the thrust, as the ship lands or
     /// jumps.
