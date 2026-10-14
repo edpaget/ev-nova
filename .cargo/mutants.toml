@@ -186,4 +186,8 @@ exclude_re = [
     # its area: with `<=`, a gauge exactly full takes that branch too, and
     # its `now / max` would be exactly 1.0 anyway.
     "replace < with <= in shield_share",
+    # A hypergate's held wait on its open frame is `Frame0Bias` x
+    # `AnimDelay` for a bias above 1: with `>=`, a bias of exactly 1 takes
+    # that branch too, and 1 x `AnimDelay` is `AnimDelay` anyway.
+    "gate_sprite.rs:.*replace > with >= in GateAnimation::threshold",
 ]
