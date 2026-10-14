@@ -2349,6 +2349,30 @@ mod tests {
     }
 
     #[test]
+    fn a_rebuild_point_that_shows_a_dead_stellar_afresh_tells_it_rebuilt() {
+        let catalog = twice_listed().living([life(200, -1)]);
+        let mut session = quiet(&catalog);
+        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        run(&mut session, "Y200");
+        crate::session::tests::hide(&mut session, &catalog, &[130]);
+        session.player.position = Vec2::ZERO;
+        session.player.velocity = Vec2::ZERO;
+        assert_eq!(land_now(&mut session), Ok(StellarId(140)));
+        session.take_events();
+        session
+            .take_off(&catalog, &mut Scripted::default())
+            .expect("takes off");
+        assert_eq!(shown(&session), [140, 200]);
+        assert!(session.dead_since_rebuild(StellarId(200)), "shown and dead");
+        assert!(
+            session
+                .take_events()
+                .contains(&SessionEvent::StellarsRebuilt),
+            "both the set and the dead changed"
+        );
+    }
+
+    #[test]
     fn a_galaxy_change_that_regoverns_a_shown_stellar_keeps_the_set_shown() {
         let catalog = twice_listed();
         let mut session = quiet(&catalog);
