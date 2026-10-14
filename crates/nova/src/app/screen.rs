@@ -5652,6 +5652,7 @@ pub(super) mod tests {
     use nova_sim::OutfitId;
     use nova_view::spaceport::outfitter::{
         BUY_ITEM as OUTFIT_BUY_ITEM, NEGATIVE_FREE_MASS, OUTFIT_DIALOG,
+        SELL_ITEM as OUTFIT_SELL_ITEM,
     };
 
     /// "Outfit", smaller: 400 x 300 at (0, 0), with Done (1), Sell (4),
@@ -8046,5 +8047,81 @@ pub(super) mod tests {
             "{texts:?}"
         );
         assert_eq!(drawn(&screen), drawn(spaceport(&screen)));
+    }
+
+    const IFF: OutfitId = OutfitId(132);
+
+    /// Clicks at `at` with the left button.
+    fn click_on(screen: &mut AppScreen, at: Point) {
+        for pressed in [true, false] {
+            screen.input(&Input::PointerButton {
+                button: MouseButton::Left,
+                pressed,
+                at,
+            });
+        }
+    }
+
+    /// Selects `outfit`'s cell in the outfitter open, then clicks its
+    /// item `item`.
+    fn click_for_outfit(screen: &mut AppScreen, outfit: OutfitId, item: usize) {
+        let open = spaceport(screen).open_outfitter().expect("outfitting");
+        let index = open
+            .outfitter()
+            .rows
+            .iter()
+            .position(|row| row.id == outfit)
+            .expect("listed");
+        let cell = open.cell_bounds(index).expect("a cell").center();
+        click_on(screen, cell);
+        let open = spaceport(screen).open_outfitter().expect("outfitting");
+        assert_eq!(open.selected_outfit(), Some(outfit));
+        let at = open
+            .dialog()
+            .and_then(|dialog| dialog.item_bounds(item))
+            .expect("the item")
+            .center();
+        click_on(screen, at);
+    }
+
+    /// Whether `list` paints the radar, (838, 8) to (1014, 184), black.
+    fn radar_black(list: &DrawList) -> bool {
+        list.iter().any(|command| {
+            matches!(*command, DrawCommand::Line { from, to, color, .. }
+                if color == Color::rgba(0, 0, 0, 255)
+                    && from.x >= 838.0 && to.x <= 1014.0
+                    && (8.0..184.0).contains(&from.y))
+        })
+    }
+
+    /// Whether `list` draws the player cyan at the radar's centre.
+    fn player_cyan(list: &DrawList) -> bool {
+        list.iter().any(|command| {
+            *command
+                == DrawCommand::Dot {
+                    center: Point::new(926.5, 96.5),
+                    size: 1.0,
+                    color: Color::rgba(0, 255, 255, 255),
+                }
+        })
+    }
+
+    #[test]
+    fn an_iff_bought_in_port_turns_the_bars_radar_black_at_once_and_one_sold_clears_it() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, barred_outfitting_data());
+        click_port_item(&mut screen, 8);
+        assert!(!radar_black(&drawn(&screen)), "without IFF");
+        click_for_outfit(&mut screen, IFF, OUTFIT_BUY_ITEM);
+        assert_eq!(pilot(&screen).owned(IFF), 1);
+        let list = drawn(&screen);
+        assert!(radar_black(&list), "bought");
+        assert!(player_cyan(&list), "bought");
+        click_for_outfit(&mut screen, IFF, OUTFIT_SELL_ITEM);
+        assert_eq!(pilot(&screen).owned(IFF), 0);
+        let list = drawn(&screen);
+        assert!(!radar_black(&list), "sold");
+        assert!(!player_cyan(&list), "sold");
+        assert!(spaceport(&screen).open_outfitter().is_some(), "still open");
     }
 }

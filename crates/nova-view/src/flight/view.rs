@@ -2873,9 +2873,19 @@ impl<C> FlightView<C> {
     /// the port's status bar:
     /// rdm:phase/hud-fidelity/phase-15-port-status-bar.
     fn redraw_status(&mut self) {
-        self.radar_scene = Some(self.radar_now());
+        self.retake_radar();
         self.retake_nav();
         self.retake_target();
+    }
+
+    /// Takes the radar's snapshot afresh, and nothing else: what the
+    /// original's outfitter redraws after each order. Its buy
+    /// (`_DrawStatus` @0x5c5a1) and sell (@0x5d328) mark only the cargo
+    /// area, which ours draws live, and `_DrawStatus` redraws the radar on
+    /// its 15-tick timer, nearly always run out in port. A refused order
+    /// changes no gear, so the radar redrawn is the same.
+    fn retake_radar(&mut self) {
+        self.radar_scene = Some(self.radar_now());
     }
 
     /// What the target panel is drawn for now: the target, its ship type
@@ -3011,7 +3021,7 @@ impl<C> FlightView<C> {
         let now = u64::try_from(ticks(self.elapsed)).unwrap_or(u64::MAX);
         let refresh = self.hud_cadence.advance(now);
         if refresh.radar {
-            self.radar_scene = Some(self.radar_now());
+            self.retake_radar();
         }
         if refresh.nav || !self.nav_mode_shown() {
             self.retake_nav();
@@ -3337,29 +3347,43 @@ impl<C> FlightView<C> {
 
     /// Buys or sells an outfit as [`Session::outfit`] does, it and its
     /// hook drawing on the flight's chance; a session that failed has no
-    /// outfitter.
+    /// outfitter. The radar is redrawn after it
+    /// ([`FlightView::retake_radar`]).
     pub fn outfit(&mut self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
-        match &mut self.session {
+        let done = match &mut self.session {
             Ok(session) => session.outfit(order, &mut self.chance),
             Err(_) => Err(OutfitRefusal::NoOutfitter),
-        }
+        };
+        self.retake_radar();
+        done
     }
 
     /// Buys or sells up to `count` of an outfit as
     /// [`Session::outfit_counted`] does, on the flight's chance, giving
     /// how many went through; a session that failed has no outfitter.
+    /// The radar is redrawn after it ([`FlightView::retake_radar`]).
     pub fn outfit_counted(&mut self, order: OutfitOrder, count: u32) -> Result<u32, OutfitRefusal> {
-        match &mut self.session {
+        let done = match &mut self.session {
             Ok(session) => session.outfit_counted(order, count, &mut self.chance),
             Err(_) => Err(OutfitRefusal::NoOutfitter),
-        }
+        };
+        self.retake_radar();
+        done
     }
 
     /// Buys or sells up to `count` of an outfit as
     /// [`Session::outfit_order`] does, on the flight's chance, giving the
     /// whole run and its alert; a session that failed has no outfitter,
-    /// refused at the first pass with no alert.
+    /// refused at the first pass with no alert. The radar is redrawn after
+    /// it ([`FlightView::retake_radar`]).
     pub fn outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
+        let run = self.run_outfit_order(order, count);
+        self.retake_radar();
+        run
+    }
+
+    /// [`FlightView::outfit_order`]'s run.
+    fn run_outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
         match &mut self.session {
             Ok(session) => session.outfit_order(order, count, &mut self.chance),
             Err(_) => OutfitRun {
@@ -17857,6 +17881,61 @@ mod tests {
                     .iter()
                     .any(|m| matches!(m, RadarMark::Fill { .. }))
             );
+        }
+    }
+
+    /// [`outfitting`] selling [`radar_outfits`] too, landed.
+    fn landed_radar_outfitter() -> View {
+        let mut catalog = outfitting();
+        catalog.outfits.extend(radar_outfits());
+        let mut view = FlightView::new(catalog);
+        land_now(&mut view);
+        view
+    }
+
+    /// Whether the radar shown has IFF's black fill.
+    fn radar_filled(view: &View) -> bool {
+        radar_marks(view).first()
+            == Some(&RadarMark::Fill {
+                rect: STOCK_RADAR,
+                color: RadarColor::Black,
+            })
+    }
+
+    #[test]
+    fn an_outfitter_order_redraws_the_radar_at_once_while_docked() {
+        type Place = fn(&mut View, OutfitOrder);
+        let order = |direction| OutfitOrder {
+            outfit: OutfitId(300),
+            direction,
+        };
+        let entries: [(&str, Place); 3] = [
+            ("outfit", |view, order| {
+                assert_eq!(view.outfit(order), Ok(()));
+            }),
+            ("counted", |view, order| {
+                assert_eq!(view.outfit_counted(order, 1), Ok(1));
+            }),
+            ("order", |view, order| {
+                assert_eq!(view.outfit_order(order, 1).run.done, 1);
+            }),
+        ];
+        for (name, place) in entries {
+            let mut view = landed_radar_outfitter();
+            assert!(view.hud_waits(), "the engine's reading");
+            assert!(!view.radar_shown().iff, "{name}: landing's");
+            place(&mut view, order(Direction::Buy));
+            assert!(view.radar_shown().iff, "{name}: bought");
+            assert!(radar_filled(&view), "{name}: bought");
+            assert!(radar_marks(&view).contains(&RadarMark::Pixel {
+                x: 926,
+                y: 96,
+                color: RadarColor::Cyan
+            }));
+            place(&mut view, order(Direction::Sell));
+            assert!(!view.radar_shown().iff, "{name}: sold");
+            assert!(!radar_filled(&view), "{name}: sold");
+            assert_eq!(radar_marks(&view).last(), Some(&PLAYER_PIXEL), "{name}");
         }
     }
 
