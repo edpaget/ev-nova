@@ -349,6 +349,7 @@ mod explored;
 mod fighters;
 mod gate_escorts;
 mod gate_follow;
+mod gate_sprites;
 mod hail;
 mod hire;
 mod hooks;
@@ -431,6 +432,7 @@ use crate::gate::{
     self, GateArrivalRule, GateKind, GateRefusal, WormholeRule, emerge, has_links, hypergate_exit,
     wormhole_exit,
 };
+use crate::gate_sprite::GateSprite;
 use crate::geometry::Vec2;
 use crate::glow::ramp_glow;
 use crate::govt::Governments;
@@ -571,6 +573,9 @@ pub struct Session {
     landed: Option<StellarId>,
     /// The stellar selected as the navigation target, one of `sites`.
     nav_target: Option<StellarId>,
+    /// The sprite of each hypergate shown, as it opens and closes (see
+    /// the `gate_sprites` module).
+    gate_sprites: BTreeMap<StellarId, GateSprite>,
     /// The galaxy every reader sees: the catalog's systems, read when the
     /// session starts, with the pilot's overlay (see the
     /// [`story`](crate::story) module's "Galaxy overlay").
@@ -1034,6 +1039,7 @@ impl Session {
             shown: system,
             landed,
             nav_target: None,
+            gate_sprites: BTreeMap::new(),
             galaxy,
             jump: None,
             multi_jump: MultiJumpRule::default(),
@@ -1525,7 +1531,9 @@ impl Session {
     /// the NPCs raises the first sighting of the ships watched
     /// ([`Session::watch_ship`]), and each mission ship that left the
     /// system raises [`Fate::Departed`] and is counted (see the
-    /// `mission_ships` module).
+    /// `mission_ships` module). Then, unless the ship is docked, each
+    /// hypergate shown steps its sprite (see the `gate_sprites` module),
+    /// while a jump plays too.
     pub fn tick_traffic(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -1574,6 +1582,9 @@ impl Session {
                 self.orphan_fighters();
                 self.observe_watched();
             }
+        }
+        if self.landed.is_none() {
+            self.step_gate_sprites(chance);
         }
         self.clear_lost_target();
     }

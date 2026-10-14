@@ -591,6 +591,7 @@ impl Session {
                 .filter(|site| held.contains(&site.id))
                 .copied()
                 .collect();
+            self.keep_gate_sprites();
         }
         if waiting_stale {
             let sites = self.read_sites(catalog, self.pilot.system);

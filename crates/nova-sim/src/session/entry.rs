@@ -639,6 +639,7 @@ impl Session {
         );
         self.listed = listed;
         self.shown = system;
+        self.keep_gate_sprites();
     }
 
     /// Derives the stellars shown afresh from those their system lists, in
