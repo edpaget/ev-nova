@@ -698,6 +698,31 @@ mod tests {
         assert_eq!(session.npcs().len(), 3);
     }
 
+    /// `_ResetPlayer` disarms the timer (@0x1d73f), and relocation's
+    /// `TrafficStep::Reset` builds a fresh traffic, which holds it
+    /// disarmed. No flight can show it, as every take-off arms it again,
+    /// so it is checked as state.
+    #[test]
+    fn a_relocation_disarms_an_armed_escort_strength_timer() {
+        let catalog = atlas();
+        let mut session = landed(&catalog);
+        session.arm_strength_timer(&mut NeverFires);
+        assert!(session.traffic.strength_armed(), "armed before the move");
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("moves");
+        assert!(!session.traffic.strength_armed(), "a move");
+        let mut session = landed(&catalog);
+        session
+            .take_off(&catalog, &mut NeverFires)
+            .expect("takes off");
+        assert!(session.traffic.strength_armed(), "armed by the take-off");
+        session
+            .land_at(&catalog, SystemId(131), StellarId(140))
+            .expect("lands");
+        assert!(!session.traffic.strength_armed(), "a landing from flight");
+    }
+
     #[test]
     fn a_moved_pilot_saved_flies_again_docked_at_the_new_stellar() {
         let catalog = atlas();

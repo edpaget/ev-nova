@@ -269,6 +269,12 @@ impl Traffic {
         self.strength_timer.arm(chance);
     }
 
+    /// Whether the escort-strength timer is armed.
+    #[cfg(test)]
+    pub(crate) fn strength_armed(&self) -> bool {
+        self.strength_timer.armed()
+    }
+
     /// Enters a system whose traffic is drawn from `table`: its NPCs are
     /// replaced with its initial population, rolled on `chance`, with no
     /// person gone or grudging (see [`Traffic::enter_in`]).
