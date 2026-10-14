@@ -18,11 +18,26 @@
 //! itself is still mounted is not asked. The player becomes that class,
 //! its shield, armour and fuel each [`ESCAPE_FLOOR`] + a roll below
 //! [`ESCAPE_ROLL`] percent of the class's own (0xdd098, @0x6f4d0-0x6f583).
+//!
+//! **Where the pod is taken** ([`escape_stellar`], `_EscapeStellarSearch`
+//! @0xd28f). A depth-first search from the system the player died in,
+//! which is marked visited first, so its own stellars are never tested.
+//! Each system searched (`_RecursiveEscapeStellarSearch` @0xd0fe) is
+//! marked visited, then works through its raw links (`Con1-Con16`, +0xa,
+//! not resolved by place) in order: first it tests the stellars of each
+//! link that is open ([`EscapeMap::open`]) and not yet visited, and returns
+//! the first that qualifies ([`EscapeMap::stellars`]); only then does it
+//! search each such link in turn (@0xd223-0xd27a). It finds nothing when
+//! no open system it reaches has a qualifying stellar.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::catalog::{OutfitId, OutfitRecord, ShipId, ShipRecord, WeaponId};
+use crate::catalog::{
+    LandingSite, OutfitId, OutfitRecord, ShipId, ShipRecord, StellarId, SystemId, WeaponId,
+};
 use crate::combat::weapon::WeaponSpec;
+use crate::exploration::GATES;
+use crate::landing::{StellarFlags, landable, open_by_record};
 use crate::outfitter::outfit_mods;
 
 /// The `ModType` of an escape pod (`cmpw $0xb` @0xb88e; stock `oütf` 188).
@@ -98,6 +113,71 @@ pub fn escape_ship_type<'a>(
 #[must_use]
 pub fn auto_eject_armed(after: u32, death_delay: u32) -> bool {
     u64::from(after) * 2 <= u64::from(death_delay) || after <= AUTO_EJECT_FLOOR
+}
+
+/// The galaxy as the escape search reads it: a port the session adapts.
+pub trait EscapeMap {
+    /// `system`'s raw links (`Con1-Con16`, +0xa), in slot order, repeats
+    /// and all; none for a system not in the galaxy.
+    fn raw_links(&self, system: SystemId) -> Vec<SystemId>;
+    /// Whether `system` is open to the search: in the galaxy, visible
+    /// (+0x1eb, @0xd159), known (+0x1ec, @0xd166) and explored (+0x90 > 0,
+    /// @0xd173).
+    fn open(&self, system: SystemId) -> bool;
+    /// `system`'s stellars in its nav slots (+0x2a), in order, each with
+    /// whether it qualifies: active (+0x44, @0xd1b2), landable
+    /// (`_StellarIsLandable` @0xd1bb), not a hypergate or wormhole
+    /// (`Flags2` & 0x3000, @0xd1cd), with a shipyard (`Flags` 0x08,
+    /// @0xd1d8), and open by the player's record in `system`
+    /// (@0xd1de-0xd1fc).
+    fn stellars(&self, system: SystemId) -> Vec<(StellarId, bool)>;
+}
+
+/// Whether `site`, overlaid, `active` (+0x44: its owning system visible),
+/// qualifies for the escape pod with the player's legal `record` in its
+/// system (see [`EscapeMap::stellars`]).
+#[must_use]
+pub fn qualifies(site: &LandingSite, active: bool, record: i16) -> bool {
+    active
+        && landable(site.flags, site.destroyed)
+        && site.flags2 & GATES == 0
+        && site.flags & StellarFlags::SHIPYARD != 0
+        && open_by_record(site.min_status, record)
+}
+
+/// Where the escape pod is taken from `from` (see the module docs): the
+/// first qualifying stellar the search finds, with the system it was
+/// found in; none when it finds none.
+pub fn escape_stellar(from: SystemId, map: &impl EscapeMap) -> Option<(StellarId, SystemId)> {
+    let mut visited = BTreeSet::from([from]);
+    search(from, map, &mut visited)
+}
+
+/// One `_RecursiveEscapeStellarSearch` from `system`.
+fn search(
+    system: SystemId,
+    map: &impl EscapeMap,
+    visited: &mut BTreeSet<SystemId>,
+) -> Option<(StellarId, SystemId)> {
+    visited.insert(system);
+    let links = map.raw_links(system);
+    for &link in &links {
+        if map.open(link) && !visited.contains(&link) {
+            let found = map.stellars(link).into_iter().find(|&(_, ok)| ok);
+            if let Some((stellar, _)) = found {
+                return Some((stellar, link));
+            }
+        }
+    }
+    for &link in &links {
+        if map.open(link)
+            && !visited.contains(&link)
+            && let Some(found) = search(link, map, visited)
+        {
+            return Some(found);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -212,5 +292,159 @@ mod tests {
         );
         assert_eq!((ESCAPE_FLOOR, ESCAPE_ROLL, AUTO_EJECT_FLOOR), (50, 30, 30));
         assert_eq!(RESCUE_DESC, 13999);
+    }
+
+    /// A system of a constructed galaxy: its links, whether it is open,
+    /// and its stellars with whether each qualifies.
+    type System = (Vec<i16>, bool, Vec<(i16, bool)>);
+
+    /// A constructed galaxy.
+    #[derive(Default)]
+    struct Map {
+        systems: BTreeMap<i16, System>,
+    }
+
+    impl Map {
+        fn with(mut self, id: i16, links: &[i16], open: bool, stellars: &[(i16, bool)]) -> Self {
+            self.systems
+                .insert(id, (links.to_vec(), open, stellars.to_vec()));
+            self
+        }
+    }
+
+    impl EscapeMap for Map {
+        fn raw_links(&self, system: SystemId) -> Vec<SystemId> {
+            self.systems
+                .get(&system.0)
+                .map(|(links, ..)| links.iter().map(|&id| SystemId(id)).collect())
+                .unwrap_or_default()
+        }
+
+        fn open(&self, system: SystemId) -> bool {
+            self.systems
+                .get(&system.0)
+                .is_some_and(|(_, open, _)| *open)
+        }
+
+        fn stellars(&self, system: SystemId) -> Vec<(StellarId, bool)> {
+            self.systems
+                .get(&system.0)
+                .map(|(.., stellars)| {
+                    stellars
+                        .iter()
+                        .map(|&(id, ok)| (StellarId(id), ok))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+    }
+
+    fn found(map: &Map, from: i16) -> Option<(i16, i16)> {
+        escape_stellar(SystemId(from), map).map(|(stellar, system)| (stellar.0, system.0))
+    }
+
+    #[test]
+    fn never_picks_a_stellar_in_the_start_system() {
+        let map = Map::default()
+            .with(128, &[129, 128], true, &[(200, true)])
+            .with(129, &[128], true, &[]);
+        assert_eq!(found(&map, 128), None);
+    }
+
+    #[test]
+    fn takes_the_first_qualifying_stellar_of_the_first_qualifying_neighbour_before_recursing() {
+        let map = Map::default()
+            .with(128, &[129, 130], true, &[])
+            .with(129, &[131], true, &[(201, false)])
+            .with(130, &[], true, &[(202, false), (203, true), (204, true)])
+            .with(131, &[], true, &[(205, true)]);
+        assert_eq!(
+            found(&map, 128),
+            Some((203, 130)),
+            "130 before 129's link 131"
+        );
+        let deeper = map.with(130, &[], true, &[]);
+        assert_eq!(found(&deeper, 128), Some((205, 131)), "then depth first");
+    }
+
+    #[test]
+    fn skips_a_system_that_is_not_visible_or_not_explored() {
+        let map = Map::default()
+            .with(128, &[129, 130], true, &[])
+            .with(129, &[131], false, &[(201, true)])
+            .with(130, &[], true, &[(202, true)])
+            .with(131, &[], true, &[(203, true)]);
+        assert_eq!(found(&map, 128), Some((202, 130)));
+        let closed = map.with(130, &[], false, &[(202, true)]);
+        assert_eq!(found(&closed, 128), None, "nor searched through");
+    }
+
+    #[test]
+    fn finds_nothing_and_returns_none() {
+        let map = Map::default()
+            .with(128, &[129], true, &[])
+            .with(129, &[128, 130], true, &[(201, false)])
+            .with(130, &[129], true, &[]);
+        assert_eq!(found(&map, 128), None);
+        assert_eq!(found(&Map::default(), 128), None, "no galaxy");
+    }
+
+    #[test]
+    fn follows_raw_links_including_repeats_and_ignores_missing_systems() {
+        let map = Map::default()
+            .with(128, &[999, 129, 129, 130], true, &[])
+            .with(129, &[131], true, &[])
+            .with(130, &[], true, &[(202, true)])
+            .with(131, &[], true, &[(203, true)]);
+        assert_eq!(
+            found(&map, 128),
+            Some((202, 130)),
+            "130 tested before recursing"
+        );
+        let looped = Map::default()
+            .with(128, &[129], true, &[])
+            .with(129, &[129, 128, 129, 130], true, &[])
+            .with(130, &[], true, &[(204, true)]);
+        assert_eq!(found(&looped, 128), Some((204, 130)));
+    }
+
+    #[test]
+    fn skips_an_inactive_unlandable_gate_wormhole_shipyardless_or_min_status_barred_stellar() {
+        use crate::catalog::LandingSite;
+        use crate::landing::{ANY_RECORD, NEVER_BY_RECORD, StellarFlags};
+        let yard = LandingSite {
+            flags: StellarFlags::CAN_LAND | StellarFlags::SHIPYARD,
+            ..crate::testkit::planet(128, 0.0, 0.0)
+        };
+        let record = 10;
+        assert!(qualifies(&yard, true, record), "the control");
+        assert!(!qualifies(&yard, false, record), "inactive");
+        let unlandable = LandingSite {
+            flags: StellarFlags::SHIPYARD,
+            ..yard
+        };
+        assert!(!qualifies(&unlandable, true, record), "unlandable");
+        let destroyed = LandingSite {
+            destroyed: true,
+            ..yard
+        };
+        assert!(!qualifies(&destroyed, true, record), "destroyed");
+        for gate in [0x1000, 0x2000] {
+            let gate = LandingSite {
+                flags2: gate,
+                ..yard
+            };
+            assert!(!qualifies(&gate, true, record), "{:#x}", gate.flags2);
+        }
+        let shipyardless = LandingSite {
+            flags: StellarFlags::CAN_LAND,
+            ..yard
+        };
+        assert!(!qualifies(&shipyardless, true, record), "no shipyard");
+        let barred = |min_status| LandingSite { min_status, ..yard };
+        assert!(qualifies(&barred(record), true, record), "at MinStatus");
+        assert!(!qualifies(&barred(record + 1), true, record), "below it");
+        assert!(!qualifies(&barred(NEVER_BY_RECORD), true, i16::MAX));
+        assert!(qualifies(&barred(ANY_RECORD), true, i16::MIN));
     }
 }

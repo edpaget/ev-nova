@@ -506,6 +506,16 @@ pub struct Standing {
     pub blessed: bool,
 }
 
+/// Whether a stellar of `MinStatus` `min_status` is open to a pilot of
+/// legal `record` by its record alone: the record is at least `MinStatus`
+/// or `MinStatus` is [`ANY_RECORD`], and never when `MinStatus` is
+/// [`NEVER_BY_RECORD`] (`_HandlePlayerDockRequest` @0x67903-0x67921, and
+/// the escape pod's search @0xd1de-0xd1fc).
+#[must_use]
+pub(crate) fn open_by_record(min_status: i16, record: i16) -> bool {
+    (record >= min_status || min_status == ANY_RECORD) && min_status != NEVER_BY_RECORD
+}
+
 /// Whether traffic control clears the pilot of `standing` to land at
 /// `site`, an inhabited stellar, as `_HandlePlayerDockRequest`'s
 /// clearance block decides (@0x67903-0x67a05), by `blessing`'s reading of
@@ -518,8 +528,7 @@ pub struct Standing {
 /// record of exactly 32767 or -32768, so they have no rule of their own.
 #[must_use]
 pub fn cleared(site: &LandingSite, standing: Standing, blessing: RuleSource) -> bool {
-    let by_record = (standing.record >= site.min_status || site.min_status == ANY_RECORD)
-        && site.min_status != NEVER_BY_RECORD;
+    let by_record = open_by_record(site.min_status, standing.record);
     let dominated = site.flags2 & crate::market::DOMINATED != 0;
     let governed = site.govt.is_some();
     let require_ok = !governed || standing.meets_require;
