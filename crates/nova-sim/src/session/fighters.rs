@@ -1546,9 +1546,8 @@ mod tests {
     fn gated_bays() -> FakePilotCatalog {
         use crate::catalog::{GateSite, LandingSite, StellarId, SystemId};
         use crate::gate::HYPERGATE;
-        let gate = |id, system, links: [Option<StellarId>; 8]| GateSite {
+        let gate = |id, links: [Option<StellarId>; 8]| GateSite {
             id: StellarId(id),
-            system: SystemId(system),
             position: Vec2::ZERO,
             flags2: HYPERGATE,
             links,
@@ -1563,7 +1562,8 @@ mod tests {
             flags2: HYPERGATE,
             ..crate::testkit::planet(300, 0.0, 0.0)
         }];
-        catalog.gates = vec![gate(300, 130, to), gate(310, 131, back)];
+        catalog.gates = vec![gate(300, to), gate(310, back)];
+        catalog.gate_listers = vec![(SystemId(131), StellarId(310))];
         catalog
     }
 

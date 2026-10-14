@@ -3425,6 +3425,9 @@ mod tests {
         fan: bool,
         /// Every stellar a gate may lead to: none, by default.
         gates: Vec<GateSite>,
+        /// The gates each system lists beyond its stellars: none, by
+        /// default.
+        gate_listers: Vec<(SystemId, StellarId)>,
         /// Whether Alpha Reborn (133) exists, at Alpha Centauri's place,
         /// with no links and Proxima Reborn (141) at its centre: not by
         /// default.
@@ -3524,6 +3527,7 @@ mod tests {
             reborn: false,
             sol_navs: Vec::new(),
             gates: Vec::new(),
+            gate_listers: Vec::new(),
             lives: Vec::new(),
             missions: Vec::new(),
             mission_texts: Vec::new(),
@@ -3695,8 +3699,27 @@ mod tests {
             self.mission_texts.clone()
         }
 
+        /// Every stellar of each system's [`landing_sites`], with every
+        /// system listing it, and the gates of `gate_listers`.
         fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
-            Vec::new()
+            let mut systems = vec![SystemId(130), SystemId(131)];
+            if self.onward {
+                systems.push(SystemId(132));
+            }
+            if self.reborn {
+                systems.push(SystemId(133));
+            }
+            let sites: Vec<(SystemId, Vec<LandingSite>)> = systems
+                .into_iter()
+                .map(|system| (system, self.landing_sites(system)))
+                .collect();
+            let mut listed = nova_sim::fixture::listed_stellars(
+                sites
+                    .iter()
+                    .map(|(system, sites)| (*system, sites.as_slice())),
+            );
+            nova_sim::fixture::list_also(&mut listed, self.gate_listers.iter().copied());
+            listed
         }
 
         fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {
@@ -12912,11 +12935,10 @@ mod tests {
     use crate::flight::jump::{ARRIVAL_FLASH_FOR, FADE_IN_FOR};
     use nova_sim::GateKind;
 
-    /// Stellar `id` in `system` at (`x`, `y`), with `flags2`, `links` and
+    /// Stellar `id` at (`x`, `y`), with `flags2`, `links` and
     /// `exit_angle`.
     fn gate_site(
         id: i16,
-        system: i16,
         (x, y): (f32, f32),
         flags2: u16,
         links: &[i16],
@@ -12928,7 +12950,6 @@ mod tests {
         }
         GateSite {
             id: StellarId(id),
-            system: SystemId(system),
             position: Vec2::new(x, y),
             flags2,
             links: slots,
@@ -12950,9 +12971,10 @@ mod tests {
                 )
             }],
             gates: vec![
-                gate_site(300, 130, (0.0, 0.0), 0x1200, &[310], 120),
-                gate_site(310, 131, (100.0, 200.0), 0x1000, &[300], 90),
+                gate_site(300, (0.0, 0.0), 0x1200, &[310], 120),
+                gate_site(310, (100.0, 200.0), 0x1000, &[300], 90),
             ],
+            gate_listers: vec![(SystemId(131), StellarId(310))],
             ..catalog()
         }
     }
@@ -12966,9 +12988,10 @@ mod tests {
                 ..site(400, (0.0, 0.0), StellarFlags::CAN_LAND)
             }],
             gates: vec![
-                gate_site(400, 130, (0.0, 0.0), 0x2200, &[], 120),
-                gate_site(410, 131, (-300.0, 40.0), 0x2000, &[], 0),
+                gate_site(400, (0.0, 0.0), 0x2200, &[], 120),
+                gate_site(410, (-300.0, 40.0), 0x2000, &[], 0),
             ],
+            gate_listers: vec![(SystemId(131), StellarId(410))],
             ..catalog()
         }
     }
@@ -13271,6 +13294,7 @@ mod tests {
         let mut catalog = FakeCatalog {
             sites: holed().sites,
             gates: holed().gates,
+            gate_listers: holed().gate_listers,
             ..trafficked(&[130, 131], 0, 129, 3)
         };
         catalog.dudes[0].1.govt = Some(GovtId(140));

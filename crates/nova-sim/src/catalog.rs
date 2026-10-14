@@ -151,10 +151,6 @@ pub struct LandingSite {
 pub struct GateSite {
     /// The `spöb`'s ID.
     pub id: StellarId,
-    /// The system it is in: the lowest-ID `sÿst` whose `NavDefs` list it,
-    /// as the original's `_FindSystemFromStellar` finds it when every
-    /// system is active.
-    pub system: SystemId,
     /// Its centre, `xPos` and `yPos`, in pixels from the system's centre.
     pub position: Vec2,
     /// Its `Flags2`, raw.
@@ -1248,8 +1244,10 @@ pub trait PilotCatalog {
     /// empty) when there is no `chär` or it does not decode.
     fn date_affixes(&self) -> DateAffixes;
     /// Every stellar some system that can be read lists, that can be read
-    /// itself, by ascending ID, with the system it is in: where a
-    /// hypergate or wormhole may lead.
+    /// itself, by ascending ID: where a hypergate or wormhole may lead. The
+    /// system each is in is resolved from the listed stellars
+    /// ([`PilotCatalog::listed_stellars`]), owner-first (see the
+    /// [`gate`](crate::gate) module).
     fn gate_sites(&self) -> Vec<GateSite>;
     /// Every `spöb` that can be read, by ascending ID, with what its
     /// destruction and regeneration read.
@@ -1617,13 +1615,12 @@ mod tests {
             }]
         }
 
-        /// Hypergate 1400 in system 130, linked to 1405.
+        /// Hypergate 1400, linked to 1405.
         fn gate_sites(&self) -> Vec<GateSite> {
             let mut links = [None; 8];
             links[0] = Some(StellarId(1405));
             vec![GateSite {
                 id: StellarId(1400),
-                system: SystemId(130),
                 position: Vec2::new(-70.0, 250.0),
                 flags2: 0x1200,
                 links,

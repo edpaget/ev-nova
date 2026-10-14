@@ -4,7 +4,7 @@
 //! string lists and its stellar sprites; and a `shän`'s blink fields as a
 //! [`Blink`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use nova_data::records::character::Character;
 use nova_data::records::cron::Cron;
@@ -283,24 +283,19 @@ impl PilotCatalog for GameData {
     }
 
     fn gate_sites(&self) -> Vec<GateSite> {
-        // Systems come by ascending ID, so the first to list a stellar is
-        // the lowest.
-        let mut listed: BTreeMap<StellarId, SystemId> = BTreeMap::new();
-        for (id, system) in self.records::<System>() {
+        let mut listed: BTreeSet<StellarId> = BTreeSet::new();
+        for (_, system) in self.records::<System>() {
             let Ok(system) = system else {
                 continue;
             };
-            for stellar in system.record.nav_def.into_iter().flatten() {
-                listed.entry(stellar).or_insert(SystemId(id));
-            }
+            listed.extend(system.record.nav_def.into_iter().flatten());
         }
         listed
             .into_iter()
-            .filter_map(|(id, system)| {
+            .filter_map(|id| {
                 let stellar = self.get::<Stellar>(id.0)?.ok()?.record;
                 Some(GateSite {
                     id,
-                    system,
                     position: Vec2::new(f32::from(stellar.x_pos), f32::from(stellar.y_pos)),
                     flags2: stellar.flags2.bits(),
                     links: stellar.hyper_link,
@@ -1772,7 +1767,7 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_sites_are_every_listed_stellar_by_id_in_the_lowest_system_listing_it() {
+    fn the_gate_sites_are_every_listed_stellar_by_id() {
         let data = store(&[
             (System::TYPE, 131, system_with(&[129, 128])),
             (System::TYPE, 130, system_with(&[129, 999])),
@@ -1794,7 +1789,6 @@ mod tests {
             [
                 GateSite {
                     id: StellarId(128),
-                    system: SystemId(131),
                     position: Vec2::new(5.0, 6.0),
                     flags2: 0,
                     // Its zeroed links, kept raw.
@@ -1803,7 +1797,6 @@ mod tests {
                 },
                 GateSite {
                     id: StellarId(129),
-                    system: SystemId(130),
                     position: Vec2::new(-70.0, 250.0),
                     flags2: 0x2000,
                     links: links(&[128, 0, 999]),

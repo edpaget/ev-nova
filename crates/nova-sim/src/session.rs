@@ -454,7 +454,7 @@ use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::story::day::Stay;
 use crate::story::rebuild::Rebuilt;
-use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent};
+use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent, listers_of};
 use crate::targeting::{self, TargetPick};
 use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{AiType, Npc, NpcId};
@@ -2443,6 +2443,12 @@ impl Session {
             .filter(|&stellar| self.gate_kind(stellar) == Some(kind))
     }
 
+    /// Every system listing `stellar`, by ascending ID ([`listers_of`]):
+    /// what its owner and the systems resolving it are derived from.
+    fn listers(&self, stellar: StellarId) -> &[SystemId] {
+        listers_of(&self.listed_stellars, stellar)
+    }
+
     /// The links of `stellar` among `sites`; none when no system lists it.
     fn links_of(sites: &[GateSite], stellar: StellarId) -> [Option<StellarId>; 8] {
         sites
@@ -2474,7 +2480,13 @@ impl Session {
         let sites = catalog.gate_sites();
         let links = Self::links_of(&sites, here);
         if has_links(&links) {
-            Ok(gate::hypergate_offers(&links, &sites, self.galaxy.map()))
+            let system_of = |id| self.galaxy.system_of(self.listers(id), self.pilot.system);
+            Ok(gate::hypergate_offers(
+                &links,
+                &sites,
+                system_of,
+                self.galaxy.map(),
+            ))
         } else {
             self.gate = None;
             self.nav_target = None;
@@ -2500,9 +2512,13 @@ impl Session {
             .ok_or(GateRefusal::NotAtGate)?;
         let sites = catalog.gate_sites();
         let links = Self::links_of(&sites, here);
+        let system_of = |id| self.galaxy.system_of(self.listers(id), self.pilot.system);
         let exit = if has_links(&links) {
-            to.and_then(|to| Some((to, *hypergate_exit(&links, &sites, to, self.galaxy.map())?)))
-                .ok_or(GateRefusal::Cancelled)
+            to.and_then(|to| {
+                let exit = hypergate_exit(&links, &sites, to, system_of, self.galaxy.map())?;
+                Some((to, *exit))
+            })
+            .ok_or(GateRefusal::Cancelled)
         } else {
             Err(GateRefusal::NoLinks)
         };
@@ -2558,9 +2574,12 @@ impl Session {
             .take_gate(GateKind::Wormhole)
             .ok_or(GateRefusal::NotAtGate)?;
         let sites = catalog.gate_sites();
-        let exit = *wormhole_exit(here, self.pilot.system, &sites, self.wormholes, chance)
+        let player = self.pilot.system;
+        let owner_of = |id| self.galaxy.holder(self.listers(id), player);
+        let exit = wormhole_exit(here, player, &sites, owner_of, self.wormholes, chance)
             .ok_or(GateRefusal::NoExit)?;
-        self.come_out(exit.system, &exit, GateKind::Wormhole, catalog, chance);
+        let (site, system) = (*exit.site, exit.system);
+        self.come_out(system, &site, GateKind::Wormhole, catalog, chance);
         let system = self.pilot.system;
         self.messages.push(SimMessage::PassedWormhole(system));
         Ok(system)
@@ -17943,11 +17962,10 @@ mod tests {
 
     // Hypergates and wormholes.
 
-    /// Stellar `id` at (`x`, `y`) in `system`, with `flags2`, its `links`
-    /// and its exit angle.
+    /// Stellar `id` at (`x`, `y`), with `flags2`, its `links` and its exit
+    /// angle.
     fn gate_site(
         id: i16,
-        system: i16,
         (x, y): (f32, f32),
         flags2: u16,
         links: &[i16],
@@ -17959,7 +17977,6 @@ mod tests {
         }
         GateSite {
             id: StellarId(id),
-            system: SystemId(system),
             position: Vec2::new(x, y),
             flags2,
             links: slots,
@@ -17985,9 +18002,13 @@ mod tests {
                 (SystemId(131), vec![planet(140, 0.0, 0.0)]),
             ],
             gates: vec![
-                gate_site(300, 130, (0.0, 0.0), 0x1200, &[310, 320, 999], 120),
-                gate_site(310, 131, (100.0, 200.0), HYPERGATE, &[300], 90),
-                gate_site(320, 132, (-50.0, 0.0), HYPERGATE, &[], -1),
+                gate_site(300, (0.0, 0.0), 0x1200, &[310, 320, 999], 120),
+                gate_site(310, (100.0, 200.0), HYPERGATE, &[300], 90),
+                gate_site(320, (-50.0, 0.0), HYPERGATE, &[], -1),
+            ],
+            gate_listers: vec![
+                (SystemId(131), StellarId(310)),
+                (SystemId(132), StellarId(320)),
             ],
             ..catalog()
         }
@@ -18142,7 +18163,7 @@ mod tests {
     #[test]
     fn a_hypergate_without_links_leads_nowhere() {
         let catalog = FakePilotCatalog {
-            gates: vec![gate_site(300, 130, (0.0, 0.0), HYPERGATE, &[0, -2], 0)],
+            gates: vec![gate_site(300, (0.0, 0.0), HYPERGATE, &[0, -2], 0)],
             ..gated()
         };
         let mut session = at_gate(&catalog);
@@ -18157,7 +18178,7 @@ mod tests {
     #[test]
     fn a_hypergate_whose_links_lead_nowhere_cancels() {
         let catalog = FakePilotCatalog {
-            gates: vec![gate_site(300, 130, (0.0, 0.0), HYPERGATE, &[999], 0)],
+            gates: vec![gate_site(300, (0.0, 0.0), HYPERGATE, &[999], 0)],
             ..gated()
         };
         let mut session = at_gate(&catalog);
@@ -18171,7 +18192,7 @@ mod tests {
     fn a_hypergate_with_links_offers_its_map_even_when_they_lead_nowhere() {
         for (links, offered) in [(&[310, 320][..], ids(&[131, 132])), (&[999][..], vec![])] {
             let mut catalog = gated();
-            catalog.gates[0] = gate_site(300, 130, (0.0, 0.0), HYPERGATE, links, 0);
+            catalog.gates[0] = gate_site(300, (0.0, 0.0), HYPERGATE, links, 0);
             let mut session = at_gate(&catalog);
             assert_eq!(
                 session.open_hypergate(&catalog),
@@ -18190,7 +18211,7 @@ mod tests {
     #[test]
     fn a_hypergate_without_links_refuses_to_offer_its_map_and_ends_the_entry() {
         let catalog = FakePilotCatalog {
-            gates: vec![gate_site(300, 130, (0.0, 0.0), HYPERGATE, &[0, -2], 0)],
+            gates: vec![gate_site(300, (0.0, 0.0), HYPERGATE, &[0, -2], 0)],
             ..gated()
         };
         let mut session = at_gate(&catalog);
@@ -18214,9 +18235,13 @@ mod tests {
                 (SystemId(131), vec![planet(140, 0.0, 0.0)]),
             ],
             gates: vec![
-                gate_site(400, 130, (0.0, 0.0), 0x2200, &[], 120),
-                gate_site(410, 131, (-300.0, 40.0), WORMHOLE, &[], 0),
-                gate_site(420, 132, (5.0, 5.0), WORMHOLE, &[410], 0),
+                gate_site(400, (0.0, 0.0), 0x2200, &[], 120),
+                gate_site(410, (-300.0, 40.0), WORMHOLE, &[], 0),
+                gate_site(420, (5.0, 5.0), WORMHOLE, &[410], 0),
+            ],
+            gate_listers: vec![
+                (SystemId(131), StellarId(410)),
+                (SystemId(132), StellarId(420)),
             ],
             ..catalog()
         }
@@ -18386,7 +18411,7 @@ mod tests {
     #[test]
     fn a_wormhole_with_nowhere_to_lead_refuses() {
         let catalog = FakePilotCatalog {
-            gates: vec![gate_site(400, 130, (0.0, 0.0), WORMHOLE, &[], 0)],
+            gates: vec![gate_site(400, (0.0, 0.0), WORMHOLE, &[], 0)],
             ..wormholes()
         };
         let mut session = at_wormhole(&catalog);
@@ -19626,6 +19651,13 @@ mod tests {
         hide(&mut session, &catalog, &[131]);
         assert_eq!(
             session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
+            Err(GateRefusal::Cancelled),
+            "hidden 131 is never what a link resolves to by place"
+        );
+        let mut session = at_gate(&catalog);
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(134)), &catalog, &mut NeverFires),
             Ok(SystemId(134))
         );
         assert_eq!(session.system(), SystemId(134));
@@ -19666,25 +19698,82 @@ mod tests {
     }
 
     #[test]
-    fn a_wormhole_into_a_hidden_system_comes_out_at_the_one_at_its_place() {
+    fn a_wormhole_listed_only_by_a_hidden_system_is_no_exit() {
         let mut catalog = wormholes();
         with_alternate(&mut catalog);
         let mut session = at_wormhole(&catalog);
         hide(&mut session, &catalog, &[131]);
         session.take_messages();
         assert_eq!(
-            session.enter_wormhole(&catalog, &mut Scripted::rolling(&[0])),
-            Ok(SystemId(134)),
-            "out of 410, listed by hidden 131"
+            session.enter_wormhole(&catalog, &mut NeverFires),
+            Err(GateRefusal::NoExit),
+            "410 has no owner, and 420 is linked (@0x6410e-0x64176)"
+        );
+        assert_eq!(session.system(), SystemId(130));
+        assert_eq!(session.take_messages(), []);
+    }
+
+    #[test]
+    fn a_hypergate_offers_a_links_owner_not_a_hidden_lower_lister() {
+        let mut catalog = gated();
+        with_alternate(&mut catalog);
+        catalog.gate_listers = vec![
+            (SystemId(131), StellarId(310)),
+            (SystemId(133), StellarId(310)),
+            (SystemId(132), StellarId(320)),
+        ];
+        let mut session = at_gate(&catalog);
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(
+            session.open_hypergate(&catalog),
+            Ok(ids(&[133, 132])),
+            "310's owner is 133, not 131 by 134"
         );
         assert_eq!(
-            session.take_messages(),
-            [SimMessage::PassedWormhole(SystemId(134))]
+            session.enter_hypergate(Some(SystemId(133)), &catalog, &mut NeverFires),
+            Ok(SystemId(133))
         );
-        assert_eq!(session.system(), SystemId(134));
-        assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
-        assert!(on_the_map(&session));
-        session.assert_docked_among_shown();
+        assert_eq!(session.player().position, Vec2::new(100.0, 200.0), "at 310");
+    }
+
+    #[test]
+    fn a_hypergate_link_with_no_owner_resolves_through_its_lowest_visible_lister_by_place() {
+        let mut catalog = gated();
+        with_alternate(&mut catalog);
+        catalog.gate_listers = vec![
+            (SystemId(134), StellarId(310)),
+            (SystemId(132), StellarId(320)),
+        ];
+        let mut session = at_gate(&catalog);
+        assert_eq!(
+            session.open_hypergate(&catalog),
+            Ok(ids(&[131, 132])),
+            "310 is listed only by 134, shadowed by 131: unowned, found in 134, offered as 131"
+        );
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
+            Ok(SystemId(131))
+        );
+        assert_eq!(session.player().position, Vec2::new(100.0, 200.0), "at 310");
+    }
+
+    #[test]
+    fn a_wormhole_comes_out_in_its_exits_owner() {
+        let mut catalog = wormholes();
+        with_alternate(&mut catalog);
+        catalog.gate_listers = vec![
+            (SystemId(131), StellarId(410)),
+            (SystemId(133), StellarId(410)),
+            (SystemId(132), StellarId(420)),
+        ];
+        let mut session = at_wormhole(&catalog);
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut Scripted::rolling(&[0])),
+            Ok(SystemId(133)),
+            "410's owner, not 134 standing for its lowest lister"
+        );
+        assert_eq!(session.player().position, Vec2::new(-300.0, 40.0));
     }
 
     #[test]

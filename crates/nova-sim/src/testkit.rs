@@ -83,6 +83,10 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) gates: Vec<GateSite>,
     /// How many times the gate sites were read.
     pub(crate) gate_reads: RefCell<usize>,
+    /// Each system's `NavDefs` entries beyond its landing sites: the
+    /// gates it lists that the ship never flies among, which the gate
+    /// rules resolve to it. None, by default.
+    pub(crate) gate_listers: Vec<(SystemId, StellarId)>,
     /// Every stellar's life: none, by default ([`FakePilotCatalog::living`]).
     pub(crate) lives: Vec<StellarLife>,
     /// How many times the stellars' lives were read.
@@ -552,6 +556,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         date_affix_reads: RefCell::default(),
         gates: Vec::new(),
         gate_reads: RefCell::default(),
+        gate_listers: Vec::new(),
         lives: Vec::new(),
         life_reads: RefCell::default(),
         fallback_frame: Some((100, 100)),
@@ -747,28 +752,16 @@ impl PilotCatalog for FakePilotCatalog {
     }
 
     /// Every stellar of [`FakePilotCatalog::sites`], with every system
-    /// listing it.
+    /// listing it ([`listed_stellars`](crate::fixture::listed_stellars)),
+    /// and the gates of [`FakePilotCatalog::gate_listers`].
     fn listed_stellars(&self) -> Vec<ListedStellar> {
-        let mut listed: std::collections::BTreeMap<StellarId, ListedStellar> =
-            std::collections::BTreeMap::new();
-        let mut sites = self.sites.clone();
-        sites.sort_by_key(|(system, _)| *system);
-        for (system, sites) in sites {
-            for site in sites {
-                listed
-                    .entry(site.id)
-                    .or_insert_with(|| ListedStellar {
-                        id: site.id,
-                        systems: Vec::new(),
-                        flags: site.flags,
-                        flags2: site.flags2,
-                        govt: site.govt,
-                    })
-                    .systems
-                    .push(system);
-            }
-        }
-        listed.into_values().collect()
+        let mut listed = crate::fixture::listed_stellars(
+            self.sites
+                .iter()
+                .map(|(system, sites)| (*system, sites.as_slice())),
+        );
+        crate::fixture::list_also(&mut listed, self.gate_listers.iter().copied());
+        listed
     }
 
     fn system_visibility(&self) -> Vec<SystemVisibility> {
