@@ -2015,7 +2015,7 @@ impl Session {
     /// [`targeting`](crate::targeting)), and gives it: the nearest NPC, or
     /// the nearest threat, the target unchanged when there is none; or the
     /// next or the previous. While the ship is landed, nothing changes.
-    /// A jump under way changes nothing: the original's Target Select and
+    /// A jump under way doesn't stop it: the original's Target Select and
     /// Closest Target blocks (`_HandlePlayer` @0x69f1c-0x69ffb,
     /// @0x6a9c4-0x6aae7) and the searches they call read no jump state,
     /// so the target keys pick from the system being left, the stage in

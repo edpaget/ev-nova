@@ -120,8 +120,9 @@ impl Session {
     /// # Errors
     ///
     /// The [`HailRefusal`] that applies, drawing nothing:
-    /// [`HailRefusal::NoTarget`] with no target, or while landed, jumping
-    /// or breaking up; [`HailRefusal::InHyperspace`] for a target still
+    /// [`HailRefusal::NoTarget`] with no target, or while landed, breaking
+    /// up, or while a jump is under way, the pre-jump stage included
+    /// (@0x61f87); [`HailRefusal::InHyperspace`] for a target still
     /// jumping in; and [`HailRefusal::NoResponse`] for a disabled or mute
     /// one.
     pub fn hail(
