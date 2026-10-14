@@ -31,10 +31,10 @@
 //! to the menu, on Escape's put-away and when the app quits, as
 //! `_EnterGameFromMainScreen` deletes it (@0x1a4ab-0x1a4e1); a failed
 //! delete is a warning. Once the player's ship has exploded, the scene runs on
-//! through the hold; when it expires, the router is at the seam where the
-//! sabotage dialogs (the `player-death` roadmap's phase 8) will show over
-//! the stopped flight, and with none it begins flight's fade to black on
-//! the same tick. When the fade is over the router drops flight, as
+//! through the hold; when it expires, the router shows the `dësc` of
+//! each of a sabotaged player's outfits over the stopped flight, one
+//! after another, and begins flight's fade to black as the last closes,
+//! or with none on the same tick. When the fade is over the router drops flight, as
 //! Escape's put-away does, and returns to the main menu (or, without one,
 //! the side flight was entered from), which fades in from black over
 //! [`DEATH_FADE_FOR`], taking input under the fade, as the original's
@@ -1114,13 +1114,15 @@ impl AppScreen {
     }
 
     /// Drops the mission dialogs over flight once nothing is open,
-    /// keeping their sounds.
+    /// keeping their sounds, and begins the death's fade if the hold
+    /// has expired ([`AppScreen::fade_once_dialogs_close`]).
     fn drop_closed_missions(&mut self) {
         if let Some(missions) = &mut self.missions
             && !missions.is_open()
         {
             self.sounds.extend(missions.take_sounds());
             self.missions = None;
+            self.fade_once_dialogs_close();
         }
     }
 
@@ -1509,13 +1511,50 @@ impl AppScreen {
     }
 
     /// The seam at the expiry of the hold after the player's death, before
-    /// the original's `gPause = 1` (0x68838): where phase 8
-    /// (`phase-8-sabotage-outfit-death-dialogs`) shows its sabotage dialogs
-    /// over the stopped flight, calling [`FlightView::begin_fade`] when the
-    /// last closes. With none, it begins the fade at once, on the same
-    /// tick.
+    /// the original's `gPause = 1` (0x68838): the `dësc` of each of a
+    /// sabotaged player's outfits shows over the stopped flight, one
+    /// after another (`_HandlePlayer` @0x68739-0x68832,
+    /// [`FlightView::sabotage_death_descs`]), and the fade
+    /// ([`FlightView::begin_fade`]) begins once the last closes
+    /// ([`AppScreen::fade_once_dialogs_close`]). With none to show, no
+    /// dialogs or no "Desc Dialog", it begins at once, on the same tick.
+    ///
+    /// A `dësc` that cannot be read (`_LoadDescription` @0x687c9) is
+    /// skipped with a warning; what the original does with a missing one
+    /// was not checked. Mission texts the death's tick queued share the
+    /// queue, after these, and the fade waits for them too.
+    ///
+    /// The dialogs open in the tick the hold expires, before its frame is
+    /// drawn, and the fade begins on the input that closes the last, so
+    /// no boundary the player sees lies between them and the original's
+    /// order.
     fn at_hold_expiry(&mut self) {
-        if let Some(flight) = &mut self.flight {
+        let Some(flight) = &self.flight else {
+            return;
+        };
+        let mut texts = Vec::new();
+        for id in flight.sabotage_death_descs() {
+            match self.data.description(id) {
+                Ok(text) => texts.push(text),
+                Err(reason) => self.warnings.push(format!(
+                    "nova: cannot show the sabotage dësc {id}: {reason}"
+                )),
+            }
+        }
+        if !texts.is_empty() {
+            self.show_over_flight(texts);
+        }
+        self.fade_once_dialogs_close();
+    }
+
+    /// Begins the death's fade once no dialog is open over flight: at
+    /// the hold's expiry with none to show, or as the last closes.
+    /// Before the hold has expired [`FlightView::begin_fade`] does
+    /// nothing, so a dialog closing in live flight leaves flight as it is.
+    fn fade_once_dialogs_close(&mut self) {
+        if self.missions.is_none()
+            && let Some(flight) = &mut self.flight
+        {
             flight.begin_fade();
         }
     }
@@ -1649,6 +1688,14 @@ impl AppScreen {
         else {
             return;
         };
+        self.show_over_flight(texts.into_iter().map(|text| text.text).collect());
+    }
+
+    /// Shows `texts` over flight in "Desc Dialog", one after another,
+    /// first cancelling flight's pointer gesture and letting go of its
+    /// keys (their releases will go to the texts), as any dialog over
+    /// flight does. Without dialogs they are dropped.
+    fn show_over_flight(&mut self, texts: Vec<String>) {
         if self.flight_missions().is_none() {
             return;
         }
@@ -1656,7 +1703,7 @@ impl AppScreen {
         below.cancel_pointer();
         below.release_keys();
         if let Some(missions) = &mut self.missions {
-            missions.show_texts(texts);
+            missions.show_descs(texts);
         }
         self.drop_closed_missions();
     }
@@ -7534,6 +7581,16 @@ pub(super) mod tests {
     /// one `wëap` 128: unguided, every 5 ticks, 20 pixels a tick for 30,
     /// 1000 mass damage through shields, so one shot breaks the player up.
     fn deadly_data() -> Rc<GameData> {
+        deadly_data_with(&[])
+    }
+
+    /// A sabotage outfit: its `oütf` ID, the `dësc` its `ModType` 47
+    /// slot names, and that `dësc`'s text, if it has one.
+    type Saboteur<'a> = (i16, i16, Option<&'a str>);
+
+    /// [`deadly_data`], the player's ship carrying one of each of
+    /// `saboteurs` as its default items.
+    fn deadly_data_with(saboteurs: &[Saboteur]) -> Rc<GameData> {
         let put = |bytes: &mut [u8], at: usize, values: &[i16]| {
             for (i, value) in values.iter().enumerate() {
                 bytes[at + 2 * i..at + 2 * i + 2].copy_from_slice(&value.to_be_bytes());
@@ -7552,6 +7609,10 @@ pub(super) mod tests {
         };
         let mut player = ship(10, -1);
         put(&mut player, 0x34, &[30]);
+        for (slot, &(outfit, _, _)) in saboteurs.iter().enumerate() {
+            put(&mut player, 0x4E + 2 * slot, &[outfit]);
+            put(&mut player, 0x56 + 2 * slot, &[1]);
+        }
         let mut killer = ship(100, 128);
         put(&mut killer, 0x06, &[0]);
         let mut weapon = vec![0; Weapon::SIZE.expect("fixed")];
@@ -7580,8 +7641,19 @@ pub(super) mod tests {
         put(&mut dude, 0x28, &[100]);
         let mut spin = vec![0; Spin::SIZE.expect("fixed")];
         spin[0..2].copy_from_slice(&1000_i16.to_be_bytes());
+        let fork = saboteurs
+            .iter()
+            .fold(ForkBuilder::new(), |fork, &(outfit, desc, text)| {
+                let mut record = vec![0; Outfit::SIZE.expect("fixed")];
+                put(&mut record, 0x06, &[nova_sim::SABOTAGE_KILL, desc, 1]);
+                let fork = fork.resource(Outfit::TYPE, outfit, Some(b"Bomb"), &record);
+                match text {
+                    Some(text) => fork.resource(Desc::TYPE, desc, None, &desc_of(text)),
+                    None => fork,
+                }
+            });
         loaded(
-            &ForkBuilder::new()
+            &fork
                 .resource(Ship::TYPE, 128, Some(b"First"), &player)
                 .resource(Ship::TYPE, 129, Some(b"Killer"), &killer)
                 .resource(Weapon::TYPE, 128, Some(b"Blaster"), &weapon)
@@ -7979,5 +8051,121 @@ pub(super) mod tests {
             ["nova: cannot delete the pilot Ada in memory (the disk is locked)"]
         );
         assert_eq!(store.keys(), ["Ada"], "still there");
+    }
+
+    // Sabotage.
+
+    /// The text of the mission text shown over flight, if any.
+    fn shown_text(screen: &AppScreen) -> Option<String> {
+        screen
+            .flight_mission_text()
+            .map(|text| text.lines().join(" "))
+    }
+
+    /// [`landed_and_took_off`] over [`deadly_data_with`] `saboteurs`.
+    fn sabotaged_and_took_off(store: &MemoryPilots, saboteurs: &[Saboteur]) -> AppScreen {
+        let mut screen = with_dialogs(deadly_data_with(saboteurs))
+            .with_chance(above_the_player())
+            .with_behaviour(Rc::new(Firing))
+            .with_disable_rule(Rc::new(Never))
+            .with_pilots(Some(keeper(store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight, "taken off");
+        screen
+    }
+
+    /// Two sabotage outfits, 128 and 129, naming `dësc`s 5000 and 5001.
+    const TWO_SABOTEURS: [Saboteur; 2] = [
+        (128, 5000, Some("Your ship was sabotaged.")),
+        (129, 5001, Some("Twice over.")),
+    ];
+
+    #[test]
+    fn a_sabotaged_pilot_sees_each_outfits_desc_after_the_hold_and_then_fades() {
+        let store = MemoryPilots::new();
+        let mut screen = sabotaged_and_took_off(&store, &TWO_SABOTEURS);
+        until_exploded(&mut screen);
+        for tick in 1..=nova_sim::HOLD_TICKS {
+            screen.tick(TICK);
+            assert_eq!(screen.showing(), Showing::Flight, "dead tick {tick}");
+        }
+        screen.tick(TICK);
+        assert_eq!(
+            screen.showing(),
+            Showing::MissionText,
+            "on the expiry's tick"
+        );
+        assert_eq!(
+            shown_text(&screen).as_deref(),
+            Some("Your ship was sabotaged.")
+        );
+        let held = nova_sim::PlayerFate::Holding { ticks_left: 0 };
+        assert_eq!(fate(&screen), held, "not fading under the dialog");
+        assert!(flight(&screen).session().expect("flying").hold_expired());
+        screen.tick(Duration::from_secs(2));
+        assert_eq!(fate(&screen), held, "nothing moves under the dialog");
+        assert_eq!(screen.showing(), Showing::MissionText);
+        assert_eq!(black_over(&screen), None);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(shown_text(&screen).as_deref(), Some("Twice over."));
+        assert_eq!(fate(&screen), held, "one dialog left");
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight, "the last closed");
+        assert_eq!(fate(&screen), nova_sim::PlayerFate::Fading);
+        screen.tick(Duration::from_millis(500));
+        assert_eq!(black_over(&screen), Some(128));
+        screen.tick(Duration::from_millis(500));
+        assert_eq!(screen.showing(), Showing::MainMenu, "back to the menu");
+        assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_sabotage_dialogs_let_go_of_flights_keys() {
+        let store = MemoryPilots::new();
+        let mut screen = sabotaged_and_took_off(&store, &TWO_SABOTEURS);
+        until_exploded(&mut screen);
+        for _ in 1..=nova_sim::HOLD_TICKS {
+            screen.tick(TICK);
+        }
+        screen.input(&key(Key::Up, true));
+        assert!(flight(&screen).holds_keys(), "held before the expiry");
+        screen.tick(TICK);
+        assert_eq!(screen.showing(), Showing::MissionText);
+        assert!(!flight(&screen).holds_keys(), "let go");
+    }
+
+    #[test]
+    fn a_sabotage_desc_that_cannot_be_read_is_skipped_with_a_warning() {
+        let store = MemoryPilots::new();
+        let mut screen = sabotaged_and_took_off(
+            &store,
+            &[(128, 5000, None), (129, 5001, Some("Twice over."))],
+        );
+        until_exploded(&mut screen);
+        tick_until(&mut screen, nova_sim::HOLD_TICKS + 1, |screen| {
+            screen.showing() != Showing::Flight
+        });
+        assert_eq!(shown_text(&screen).as_deref(), Some("Twice over."));
+        assert_eq!(
+            screen.take_warnings(),
+            ["nova: cannot show the sabotage dësc 5000: no dësc 5000"]
+        );
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(fate(&screen), nova_sim::PlayerFate::Fading);
+    }
+
+    #[test]
+    fn with_no_sabotage_desc_to_read_the_fade_begins_on_the_expirys_tick() {
+        let store = MemoryPilots::new();
+        let mut screen = sabotaged_and_took_off(&store, &[(128, 5000, None)]);
+        until_exploded(&mut screen);
+        for _ in 0..=nova_sim::HOLD_TICKS {
+            screen.tick(TICK);
+        }
+        assert_eq!(screen.showing(), Showing::Flight, "no dialog");
+        assert_eq!(fate(&screen), nova_sim::PlayerFate::Fading);
+        assert_eq!(screen.take_warnings().len(), 1);
     }
 }
