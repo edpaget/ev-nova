@@ -492,15 +492,16 @@ impl Sight<'_> {
         let usable = |mount: &Mount| {
             self.ready(mount) && self.reaches(&mount.spec) && self.clear_of(&mount.spec)
         };
-        let armed = self
-            .npc
-            .armament
-            .mounts()
-            .iter()
-            .any(|mount| forward(&mount.spec) && has_ammo(self.npc, mount));
+        // The walk passes a slot of the other planet-type before it marks
+        // the ship armed (@0x7ffaa-0x8001c).
+        let suits = |spec: &WeaponSpec| spec.planet_type() == self.planet_type;
+        let armed =
+            self.npc.armament.mounts().iter().any(|mount| {
+                forward(&mount.spec) && suits(&mount.spec) && has_ammo(self.npc, mount)
+            });
         let gun =
             |spec: &WeaponSpec| forward(spec) || (!armed && spec.guidance == Guidance::Homing);
-        self.best(|mount| gun(&mount.spec) && usable(mount))
+        self.best(|mount| gun(&mount.spec) && suits(&mount.spec) && usable(mount))
     }
 
     /// The turret it fires, if any (see the module docs).
@@ -521,6 +522,7 @@ impl Sight<'_> {
                 _ => false,
             };
             in_arc
+                && spec.planet_type() == self.planet_type
                 && !blind(spec.flags | self.npc.hull.blind_spots, bearing_off)
                 && self.ready(mount)
                 && self.reaches(spec)
@@ -1472,6 +1474,56 @@ mod tests {
         let planet_npc = |other: &mut Npc| other.hull.planet_type = true;
         assert_eq!(fired_at_npc(&planetary, 0.0, -300.0, planet_npc), id(131));
         assert_eq!(fired_at_npc(&ordinary, 0.0, -300.0, planet_npc), None);
+    }
+
+    #[test]
+    fn a_turret_fires_a_planet_type_weapon_only_at_a_planet_type_ship() {
+        use crate::combat::weapon::PLANET_TYPE;
+        let planet = |player: &mut PlayerSide| player.hull.planet_type = true;
+        let planet_npc = |other: &mut Npc| other.hull.planet_type = true;
+        let flee = Goal::Flee(ShipRef::Player);
+        let ordinary = shooter(&[guided(130, 4)], flee);
+        assert_eq!(fired_at_player(&ordinary, 0.0, 200.0, |_| {}), id(130));
+        assert_eq!(fired_at_player(&ordinary, 0.0, 200.0, planet), None);
+        assert_eq!(fired_at_npc(&ordinary, 0.0, 100.0, planet_npc), None);
+        let planetary = shooter(&[with_flags2(guided(130, 4), PLANET_TYPE)], flee);
+        assert_eq!(fired_at_player(&planetary, 0.0, 200.0, planet), id(130));
+        assert_eq!(fired_at_player(&planetary, 0.0, 200.0, |_| {}), None);
+        assert_eq!(fired_at_npc(&planetary, 0.0, 100.0, planet_npc), id(130));
+        assert_eq!(fired_at_npc(&planetary, 0.0, 100.0, |_| {}), None);
+    }
+
+    #[test]
+    fn a_gun_fires_a_planet_type_weapon_only_at_a_planet_type_ship() {
+        use crate::combat::weapon::PLANET_TYPE;
+        let planet = |player: &mut PlayerSide| player.hull.planet_type = true;
+        let planet_npc = |other: &mut Npc| other.hull.planet_type = true;
+        let ordinary = shooter(&[gun(128, 1, 1)], ATTACK);
+        assert_eq!(fired_at_player(&ordinary, 0.0, -100.0, |_| {}), id(128));
+        assert_eq!(fired_at_player(&ordinary, 0.0, -100.0, planet), None);
+        assert_eq!(fired_at_npc(&ordinary, 0.0, -100.0, planet_npc), None);
+        let planetary = shooter(&[with_flags2(gun(128, 1, 1), PLANET_TYPE)], ATTACK);
+        assert_eq!(fired_at_player(&planetary, 0.0, -100.0, planet), id(128));
+        assert_eq!(fired_at_player(&planetary, 0.0, -100.0, |_| {}), None);
+        assert_eq!(fired_at_npc(&planetary, 0.0, -100.0, planet_npc), id(128));
+        assert_eq!(fired_at_npc(&planetary, 0.0, -100.0, |_| {}), None);
+    }
+
+    #[test]
+    fn a_homing_gun_is_chosen_when_the_only_armed_gun_is_of_the_other_planet_type() {
+        // Dogfighting 100 above, the gun pick alone (@0x7ffaa-0x8001c).
+        use crate::combat::weapon::PLANET_TYPE;
+        let npc = shooter(
+            &[missile(131), with_flags2(gun(128, 1, 1), PLANET_TYPE)],
+            ATTACK,
+        );
+        assert_eq!(fired(&npc, 0.0, -100.0, 50.0), id(131));
+        let planet = |player: &mut PlayerSide| player.hull.planet_type = true;
+        assert_eq!(
+            fired_at_player(&npc, 0.0, -100.0, planet),
+            id(128),
+            "armed against a planet-type ship"
+        );
     }
 
     /// What `npc` fires at the player 300 above it, its shields at 50 of
