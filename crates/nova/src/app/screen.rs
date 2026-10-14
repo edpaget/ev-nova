@@ -2286,8 +2286,14 @@ impl Screen for AppScreen {
     /// The side shown, then the hint (not over flight, which has its own
     /// help line, or the spaceport), then the overlay open: the New Pilot
     /// dialog or the saved pilots' list, then the About dialog or the
-    /// Preferences dialog.
+    /// Preferences dialog. Under the spaceport, flight's status bar is
+    /// drawn at the right edge ([`FlightView::draw_status_bar`]), as the
+    /// original's port dialog leaves it beside the dialog and its shops
+    /// cover its left edge (`_DoPortDialog` @0x5fbca).
     fn draw(&self, list: &mut DrawList) {
+        if self.side == Side::Spaceport {
+            self.flight.as_ref().expect(ENTERED).draw_status_bar(list);
+        }
         self.shown().draw(list);
         let hint = match (self.side, self.dialogs.is_some()) {
             (Side::Ships | Side::Galaxy, true) => Some(HINT),
@@ -7848,5 +7854,197 @@ pub(super) mod tests {
             spaceport(&screen).offer_dialog().is_none(),
             "nothing on returning"
         );
+    }
+
+    // The status bar in port.
+
+    use nova_data::graphics::PICT;
+    use nova_data::graphics::fixture::{DirectBits, PictBuilder};
+    use nova_data::records::interface::Interface;
+
+    /// Writes `values` big-endian into `bytes` from `at`.
+    fn put_i16s(bytes: &mut [u8], at: usize, values: &[i16]) {
+        for (n, value) in values.iter().enumerate() {
+            bytes[at + 2 * n..at + 2 * n + 2].copy_from_slice(&value.to_be_bytes());
+        }
+    }
+
+    /// Writes `values` big-endian into `bytes` from `at`.
+    fn put_u32s(bytes: &mut [u8], at: usize, values: &[u32]) {
+        for (n, value) in values.iter().enumerate() {
+            bytes[at + 4 * n..at + 4 * n + 4].copy_from_slice(&value.to_be_bytes());
+        }
+    }
+
+    /// The fuel gauge's full colour in [`bar_interface`].
+    const BAR_FUEL: u32 = 0x00FF_FF00;
+
+    /// `ïntf` 128, as `tests/flight.rs` has it: the radar at (8, 8) to
+    /// (184, 184), green and dim green, the shield, armour and fuel
+    /// gauges 149 wide from x 35, over `PICT` 700.
+    fn bar_interface() -> Vec<u8> {
+        let mut bytes = vec![0; Interface::SIZE.expect("fixed")];
+        put_u32s(&mut bytes, 0x00, &[0x00FF_FFFF, 0x0080_8080]);
+        put_i16s(&mut bytes, 0x08, &[8, 8, 184, 184]);
+        put_u32s(&mut bytes, 0x10, &[0x0000_FF00, 0x0000_8000]);
+        put_i16s(&mut bytes, 0x18, &[199, 35, 206, 184]);
+        put_u32s(&mut bytes, 0x20, &[0x0000_00FF]);
+        put_i16s(&mut bytes, 0x24, &[216, 35, 223, 184]);
+        put_u32s(&mut bytes, 0x2C, &[0x00FF_0000]);
+        put_i16s(&mut bytes, 0x30, &[234, 35, 241, 184]);
+        put_u32s(&mut bytes, 0x38, &[BAR_FUEL, 0x0080_8000]);
+        put_i16s(&mut bytes, 0x40, &[254, 8, 286, 184]);
+        put_i16s(&mut bytes, 0x48, &[300, 8, 315, 184]);
+        put_i16s(&mut bytes, 0x50, &[330, 8, 442, 184]);
+        bytes[0x60..0x66].copy_from_slice(b"Geneva");
+        put_i16s(&mut bytes, 0xA0, &[12]);
+        put_i16s(&mut bytes, 0xA4, &[700]);
+        bytes
+    }
+
+    /// A grey 194 x 16 `PICT`: the status bar's background, cut short.
+    fn bar_picture() -> Vec<u8> {
+        let bounds = [0, 0, 16, 194];
+        PictBuilder::new(bounds)
+            .direct_bits(&DirectBits::rgb555(bounds, &[0x4210; 194 * 16]))
+            .end()
+            .build()
+    }
+
+    /// `fork` with the status bar: [`bar_interface`] over
+    /// [`bar_picture`].
+    fn barred(fork: ForkBuilder) -> ForkBuilder {
+        fork.resource(Interface::TYPE, 128, None, &bar_interface())
+            .resource(PICT, 700, None, &bar_picture())
+    }
+
+    /// [`outfitting_data`] with the status bar ([`barred`]), ship 128
+    /// carrying 300 fuel, and the outfitter also selling `oütf` 132, IFF
+    /// (`ModType` 14), and `oütf` 133, a fuel tank (`ModType` 12) of 100,
+    /// each 100 credits and weighing nothing.
+    fn barred_outfitting_data() -> Rc<GameData> {
+        let sold = |mod_type: i16, mod_val: i16| {
+            let mut outfit = booster_record(b"");
+            put_i16s(&mut outfit, 0x02, &[0]);
+            put_i16s(&mut outfit, 0x06, &[mod_type, mod_val]);
+            outfit[0x0E..0x12].copy_from_slice(&100_i32.to_be_bytes());
+            outfit
+        };
+        let fork = barred(game_data_fork(true, true, false, 100, b"", b"", None))
+            .resource(Outfit::TYPE, 132, Some(b"IFF"), &sold(14, 0))
+            .resource(Outfit::TYPE, 133, Some(b"Tank"), &sold(12, 100));
+        let mut built = fork.build();
+        let first = built.layout.data_entry(Ship::TYPE, 128) + 4;
+        built.put_u16(first + 0x0A, 300);
+        loaded_bytes(built.bytes)
+    }
+
+    /// The status bar's background in port: `PICT` 700 against the right
+    /// edge.
+    fn bar_background() -> DrawCommand {
+        DrawCommand::Picture {
+            image: nova_view::ImageKey::picture(700),
+            top_left: Point::new(830.0, 0.0),
+        }
+    }
+
+    /// What flight's status bar alone draws ([`FlightView::draw_status_bar`]).
+    fn bar_drawn(screen: &AppScreen) -> Vec<DrawCommand> {
+        let mut list = DrawList::new();
+        flight(screen).draw_status_bar(&mut list);
+        list.iter().cloned().collect()
+    }
+
+    /// The 1-pixel dots inside the radar, (838, 8) to (1014, 184), as
+    /// their pixels.
+    fn radar_dots(list: &DrawList) -> Vec<(f32, f32)> {
+        list.iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Dot {
+                    center, size: 1.0, ..
+                } if (838.0..1014.0).contains(&center.x) && (8.0..184.0).contains(&center.y) => {
+                    Some((center.x - 0.5, center.y - 0.5))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn in_port_the_status_bar_shows_beside_the_spaceport_with_a_blank_radar() {
+        let store = MemoryPilots::new();
+        let mut screen = AppScreen::new(barred_outfitting_data())
+            .with_dialogs(Rc::new(OutfitDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        assert!(
+            radar_dots(&drawn(&screen)).len() > 1,
+            "in flight the planet is on radar too"
+        );
+        land_twice(&mut screen);
+        assert_eq!(screen.showing(), Showing::Spaceport);
+        let list = drawn(&screen);
+        let bar = bar_drawn(&screen);
+        assert_eq!(bar.first(), Some(&bar_background()));
+        let mut port = drawn(spaceport(&screen))
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            port.first(),
+            Some(&DrawCommand::Picture {
+                image: nova_view::spaceport::layout::BACKGROUND,
+                top_left: spaceport(&screen).dialog().expect("laid out").bounds().min,
+            })
+        );
+        let mut under = bar.clone();
+        under.append(&mut port);
+        assert_eq!(list.iter().cloned().collect::<Vec<_>>(), under);
+        assert_eq!(radar_dots(&list), [(926.0, 96.0)], "the player alone");
+    }
+
+    #[test]
+    fn the_outfitter_draws_over_the_status_bar() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, barred_outfitting_data());
+        click_port_item(&mut screen, 8);
+        assert!(spaceport(&screen).open_outfitter().is_some());
+        let mut under = bar_drawn(&screen);
+        assert_eq!(under.first(), Some(&bar_background()));
+        under.extend(drawn(spaceport(&screen)).iter().cloned());
+        assert_eq!(drawn(&screen).iter().cloned().collect::<Vec<_>>(), under);
+    }
+
+    #[test]
+    fn the_status_bar_is_drawn_in_port_and_flight_only() {
+        let mut screen = AppScreen::new(barred_outfitting_data());
+        let background = bar_background();
+        fly(&mut screen);
+        assert!(drawn(&screen).iter().any(|c| *c == background), "flight");
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::ShipBrowser);
+        assert!(!drawn(&screen).iter().any(|c| *c == background), "ships");
+        screen.input(&key(Key::Tab, true));
+        assert_eq!(screen.showing(), Showing::GalaxyMap);
+        assert!(!drawn(&screen).iter().any(|c| *c == background), "galaxy");
+    }
+
+    #[test]
+    fn a_port_without_a_bar_draws_no_reason() {
+        let store = MemoryPilots::new();
+        let screen = landed_outfitter(&store);
+        assert!(flight(&screen).status_bar().is_err(), "no ïntf");
+        let texts: Vec<String> = drawn(&screen)
+            .iter()
+            .filter_map(|command| match command {
+                DrawCommand::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !texts.iter().any(|text| text.starts_with("Status bar")),
+            "{texts:?}"
+        );
+        assert_eq!(drawn(&screen), drawn(spaceport(&screen)));
     }
 }

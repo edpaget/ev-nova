@@ -4107,6 +4107,41 @@ impl<C> FlightView<C> {
         }
     }
 
+    /// Draws the HUD's status bar alone, as flight draws it: in port, the
+    /// spaceport draws over it, as the original's port dialog sits beside
+    /// the bar and its shops cover the bar's left edge (`_DoPortDialog`
+    /// @0x5fbca draws the radar blank, as ours does while landed).
+    /// Without a status bar it draws nothing: flight says why, and the
+    /// spaceport stays clean.
+    pub fn draw_status_bar(&self, list: &mut DrawList) {
+        if let Ok(bar) = &self.status_bar {
+            self.draw_bar(list, bar);
+        }
+    }
+
+    /// Draws `bar` showing the HUD: the radar, gauges and nav area as
+    /// shown ([`FlightView::radar_shown`], [`FlightView::reserves`],
+    /// [`FlightView::nav_shown`]), the cargo area, then the target panel
+    /// and the secondary weapon's line.
+    fn draw_bar(&self, list: &mut DrawList, bar: &StatusBar) {
+        let metrics = self.metrics.as_ref().map(|metrics| &*metrics.0);
+        let radar = self.radar_shown();
+        let cargo = self.session.as_ref().ok().map(Session::status_cargo);
+        let state = HudState {
+            radar: &radar,
+            blink_on: self.hud_cadence.blink_on(),
+            reserves: self.reserves(),
+            nav: self.nav_shown(),
+            cargo: cargo.as_ref(),
+            disabled: self
+                .session
+                .as_ref()
+                .is_ok_and(|session| session.player_condition() == Condition::Disabled),
+        };
+        hud::draw(list, bar, &state, metrics);
+        self.draw_combat_hud(list, bar);
+    }
+
     /// Draws the [`HELP`] line when its overlay is on.
     fn draw_help(&self, list: &mut DrawList) {
         if self.overlays.help {
@@ -4399,23 +4434,7 @@ impl<
         }
         self.draw_help(list);
         match &self.status_bar {
-            Ok(bar) => {
-                let radar = self.radar_shown();
-                let cargo = self.session.as_ref().ok().map(Session::status_cargo);
-                let state = HudState {
-                    radar: &radar,
-                    blink_on: self.hud_cadence.blink_on(),
-                    reserves: self.reserves(),
-                    nav: self.nav_shown(),
-                    cargo: cargo.as_ref(),
-                    disabled: self
-                        .session
-                        .as_ref()
-                        .is_ok_and(|session| session.player_condition() == Condition::Disabled),
-                };
-                hud::draw(list, bar, &state, metrics);
-                self.draw_combat_hud(list, bar);
-            }
+            Ok(bar) => self.draw_bar(list, bar),
             Err(reason) => hud::draw_unavailable(list, reason),
         }
         self.draw_fades(list);
@@ -6367,6 +6386,40 @@ mod tests {
                 }),
             })
         );
+    }
+
+    #[test]
+    fn the_status_bar_alone_is_flights_bar_and_nothing_else() {
+        let view = landed_view().with_overlays(TITLED);
+        let mut bar = DrawList::new();
+        view.draw_status_bar(&mut bar);
+        let background = DrawCommand::Picture {
+            image: ImageKey::picture(700),
+            top_left: at(830.0, 0.0),
+        };
+        assert_eq!(bar.iter().next(), Some(&background));
+        assert_eq!(dots_on_radar(&bar), [(926, 96)], "the blank radar");
+        assert_eq!(sprites(&bar), [], "no stellars or ship");
+        assert!(!texts(&bar).contains(&HELP.to_owned()), "no help line");
+        let flown = drawn(&view);
+        let from = flown
+            .iter()
+            .position(|command| *command == background)
+            .expect("flight draws the bar");
+        assert!(from > 0, "flight draws the stars first");
+        assert_eq!(
+            bar.iter().collect::<Vec<_>>(),
+            flown.iter().skip(from).collect::<Vec<_>>(),
+            "the bar as flight draws it"
+        );
+        let barless = FakeCatalog {
+            bar: Err("no ïntf 128".to_owned()),
+            ..catalog()
+        };
+        let view = FlightView::with_pilot(barless, docked_pilot("Ada"));
+        let mut bar = DrawList::new();
+        view.draw_status_bar(&mut bar);
+        assert_eq!(bar.len(), 0, "nothing, not even why");
     }
 
     #[test]
