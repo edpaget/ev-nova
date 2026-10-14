@@ -178,7 +178,9 @@
 //! its fuel, so a fight changes the pilot only in its shield, armour and
 //! fuel and the ammunition it owns. The fight stands still while the
 //! player is landed or jumping, and its shots and beams are gone once the
-//! player lands or arrives elsewhere. An NPC destroyed is taken out of the
+//! player lands or arrives elsewhere. While the player brakes and turns
+//! for a jump the fight goes on, but the player's held fire command fires
+//! only its point defence until arrival (@0x6aaf0, @0x6ab75). An NPC destroyed is taken out of the
 //! system. The player's ship, once it is not intact, ignores the controls
 //! and drifts, cannot land or jump, and once destroyed stays where it is.
 //!
