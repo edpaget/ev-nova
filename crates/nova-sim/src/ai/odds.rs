@@ -19,11 +19,22 @@
 //!   over its friends' (no less than 1), in raw strength. Its friends are
 //!   itself and every other intact ship allied with it; its enemies every
 //!   other intact ship, not allied, of a government at war with its own
-//!   or attacking it, and the player when the ship threatens the player
-//!   or a ship the player leads ([`Npc::threatens_player_among`]:
-//!   `_ExtendedIsThreatToShip` @0x81a9c asks `_IsThreatToPlayer` of the
-//!   ship when the other ship is the player; the blessing that excuses
-//!   the player, @0x81a89, is crons-news-ranks phase 12's).
+//!   or attacking it, and the player, while intact, when the ship
+//!   threatens the player or a ship the player leads
+//!   ([`Npc::threatens_player_among`]: `_ExtendedIsThreatToShip` @0x81a63
+//!   asks of the player only while it is active and not disabled,
+//!   @0x81a33-0x81a4a, and then asks `_IsThreatToPlayer` of the ship,
+//!   @0x81a9c; the blessing that excuses the player, @0x81a89, is
+//!   crons-news-ranks phase 12's).
+//!   The NPC loop (@0x84af9-0x84bfd) never asks `_ExtendedIsThreatToShip`:
+//!   an NPC is an enemy by its government or while it attacks or snipes
+//!   at the ship (AI state 4, @0x84bc3, which a warship's hopeless
+//!   chase keeps, setting only the sub-state, @0x8e614), so a ship
+//!   attacking one the ship leads is no enemy in the odds (that clause
+//!   reaches only [`select_target`](crate::ai::target::select_target)'s
+//!   threat step).
+//!   The original sums strengths in 16 bits (`cvttss2si` @0x84af1,
+//!   `addw` @0x84b7e, @0x84bee); here they are not truncated.
 //!   The player's strength is multiplied by its [`rating_factor`]: its
 //!   combat rating over 6400 times the raw `Strength` of `shïp` 128 (its
 //!   `yardstick`, @0x84a7e), in whole numbers (`idivl` @0x84a91), held
@@ -46,6 +57,7 @@
 use crate::ai::Surroundings;
 use crate::combat::ShipRef;
 use crate::combat::aim::{angle_off, bearing};
+use crate::combat::hull::Condition;
 use crate::combat::weapon::Guidance;
 use crate::flight::heading_of;
 use crate::reserves::Reserves;
@@ -126,14 +138,18 @@ pub fn odds_against(npc: &Npc, around: &Surroundings) -> f32 {
     let me = ShipRef::Npc(npc.id);
     let mut friends = npc.hull.strength;
     let mut enemies = match around.player {
-        Some(player) if npc.threatens_player_among(around.npcs) => {
+        Some(player)
+            if player.condition == Condition::Intact && npc.threatens_player_among(around.npcs) =>
+        {
             player.hull.strength * rating_factor(player.rating, player.yardstick)
         }
         _ => 0.0,
     };
-    for other in around.npcs.iter().filter(|other| {
-        other.id != npc.id && other.condition == crate::combat::hull::Condition::Intact
-    }) {
+    for other in around
+        .npcs
+        .iter()
+        .filter(|other| other.id != npc.id && other.condition == Condition::Intact)
+    {
         if around.govts.allies(npc.govt, other.govt) {
             friends += other.hull.strength;
         } else if around.govts.enemies(npc.govt, other.govt) || other.goal.attacking() == Some(me) {
@@ -469,6 +485,33 @@ mod tests {
             ..escort
         };
         assert_eq!(odds(&stranger), 0.0, "a ship nobody leads");
+    }
+
+    #[test]
+    fn a_disabled_or_breaking_up_player_is_no_enemy_in_the_odds() {
+        let govts = govts();
+        let mut hunting = ship(1, 140, 50.0);
+        hunting.goal = Goal::Attack(ShipRef::Player);
+        let npcs = [hunting];
+        let odds = |condition| {
+            let around = Surroundings {
+                govts: &govts,
+                player: Some(PlayerSide {
+                    condition,
+                    ..player(100.0)
+                }),
+                ..Surroundings::new(&[], &npcs)
+            };
+            odds_against(&npcs[0], &around)
+        };
+        assert_eq!(odds(Condition::Intact), 2.0);
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying { ticks_left: 1 },
+            Condition::Destroyed,
+        ] {
+            assert_eq!(odds(condition), 0.0, "{condition:?}");
+        }
     }
 
     /// A heavy chaser (100 tons) of top speed 6 at the centre, chasing the
