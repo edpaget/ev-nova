@@ -70,7 +70,9 @@
 //!   it, above its top speed, with no steering, thrust or fire, and its
 //!   trigger is released. Then it flies its goal, [`flight::step`]
 //!   bringing it down to its top speed. A ship with a lead flies at once.
-//!   One not intact while it waits drifts instead.
+//!   One not intact while it waits drifts instead. Hit while it waits,
+//!   it answers the hit as a flying ship does, and its wait is cut to
+//!   at most [`HIT_WAIT`] ticks.
 //! - Otherwise a ship that is not [`Condition::Intact`] (disabled,
 //!   breaking up or destroyed) drifts: it flies on with no controls, and
 //!   never lands or jumps.
@@ -115,6 +117,10 @@ pub const FLEE_CLOSE: f32 = 250.0;
 pub const POST_BURST_WAIT: u32 = 30;
 /// `Rand(30)`: the spread of that wait.
 pub const POST_BURST_SPREAD: u32 = 30;
+/// The most of that wait a ship hit while it holds its course has left,
+/// in ticks: `_DamageShip` cuts its AI wait (+0x4c) to 20.0 (const
+/// @0xdd668) when the victim answers the hit (@0x3be6e-0x3be7c).
+pub const HIT_WAIT: u32 = 20;
 
 /// What became of an NPC this tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -489,6 +495,16 @@ fn burst(
         }
     };
     true
+}
+
+/// Cuts the wait of `npc`, hit and answering it, to at most
+/// [`HIT_WAIT`] ticks: `_DamageShip` sets the victim's AI wait (+0x4c) to
+/// 20.0 when it is above that (@0x3be6e-0x3be7c), whoever the attacker.
+/// A ship not holding its course has no wait to cut.
+pub(crate) fn cut_wait(npc: &mut Npc) {
+    if let Mode::Coasting { ticks_left } = &mut npc.mode {
+        *ticks_left = (*ticks_left).min(HIT_WAIT);
+    }
 }
 
 /// One tick of `npc`'s wait after its burst, `ticks_left` of it left: it

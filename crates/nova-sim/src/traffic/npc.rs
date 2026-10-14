@@ -694,11 +694,16 @@ mod tests {
                 };
                 assert!(!downed.threatens_player(), "{goal:?} {condition:?}");
             }
-            let arriving = Npc {
-                mode: Mode::JumpingIn { tick: 0 },
-                ..npc.clone()
-            };
-            assert!(!arriving.threatens_player());
+            for mode in [
+                Mode::JumpingIn { tick: 0 },
+                Mode::Coasting { ticks_left: 30 },
+            ] {
+                let arriving = Npc {
+                    mode,
+                    ..npc.clone()
+                };
+                assert!(!arriving.threatens_player(), "{goal:?} {mode:?}");
+            }
         }
         for goal in [
             Goal::Inspect(ShipRef::Player),
@@ -761,6 +766,7 @@ mod tests {
         for mode in [
             Mode::JumpingIn { tick: 0 },
             Mode::Emerging { ticks_left: 2 },
+            Mode::Coasting { ticks_left: 30 },
         ] {
             let arriving = Npc {
                 mode,
@@ -872,6 +878,7 @@ mod tests {
             for mode in [
                 Mode::JumpingIn { tick: 0 },
                 Mode::Emerging { ticks_left: 2 },
+                Mode::Coasting { ticks_left: 30 },
             ] {
                 let arriving = Npc {
                     mode,

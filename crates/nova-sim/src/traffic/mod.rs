@@ -530,8 +530,12 @@ impl Traffic {
         self.add(fleet, world.persons.grudges);
     }
 
-    /// Each flying, intact NPC answers each of `strikes` in `world`, as
-    /// `behaviour` says, all against the NPCs as they were before.
+    /// Each arrived ([`Npc::arrived`]), intact NPC answers each of
+    /// `strikes` in `world`, as `behaviour` says, all against the NPCs as
+    /// they were before. One holding its course after its glide or burst
+    /// answers as a flying one does, and a hit on it that it answers
+    /// (taking a target) cuts its wait ([`autopilot::cut_wait`],
+    /// `_DamageShip` @0x3be6e-0x3be7c).
     fn react(&mut self, behaviour: &(impl Behaviour + ?Sized), world: &World, strikes: &[Strike]) {
         if strikes.is_empty() {
             return;
@@ -541,7 +545,7 @@ impl Traffic {
             .npcs
             .iter()
             .map(|npc| {
-                if npc.mode != Mode::Flying || npc.condition != Condition::Intact {
+                if !npc.arrived() || npc.condition != Condition::Intact {
                     return Vec::new();
                 }
                 strikes
@@ -551,9 +555,12 @@ impl Traffic {
             })
             .collect();
         for (npc, reactions) in self.npcs.iter_mut().zip(reactions) {
-            for reaction in reactions {
+            for (reaction, strike) in reactions.into_iter().zip(strikes) {
                 if let Some(target) = reaction.target {
                     npc.target = Some(target);
+                    if strike.ship == ShipRef::Npc(npc.id) {
+                        autopilot::cut_wait(npc);
+                    }
                 }
                 npc.provoked += reaction.provoked;
                 if let Some(goal) = reaction.goal {
@@ -1999,10 +2006,11 @@ mod tests {
     }
 
     #[test]
-    fn only_a_flying_intact_npc_answers_a_strike() {
-        let mut traffic = populated(3, 1);
+    fn only_an_arrived_intact_npc_answers_a_strike() {
+        let mut traffic = populated(4, 1);
         traffic.npcs[1].condition = Condition::Disabled;
         traffic.npcs[2].mode = Mode::JumpingIn { tick: 0 };
+        traffic.npcs[3].mode = Mode::Coasting { ticks_left: 30 };
         let fighting = Fighting::deciding(Goal::Idle);
         traffic.tick_in(
             &fighting,
@@ -2017,7 +2025,72 @@ mod tests {
             .filter(|line| line.starts_with("react"))
             .cloned()
             .collect();
-        assert_eq!(reacted, ["react 0 Npc(NpcId(0))"]);
+        assert_eq!(reacted, ["react 0 Npc(NpcId(0))", "react 3 Npc(NpcId(0))"]);
+    }
+
+    #[test]
+    fn a_ship_hit_while_holding_its_course_takes_its_attacker_and_waits_at_most_20_more_ticks() {
+        // `_DamageShip` sets the victim's target (+0x70, @0x3bcf6) and
+        // cuts its AI wait (+0x4c) to 20 (@0x3be6e-0x3be7c).
+        let mut traffic = populated(3, 1);
+        traffic.npcs[1].mode = Mode::Coasting { ticks_left: 45 };
+        traffic.npcs[2].mode = Mode::Coasting { ticks_left: 10 };
+        let around = World::new(&[]).around(traffic.npcs());
+        for coasting in &traffic.npcs()[1..] {
+            assert!(around.live(ShipRef::Npc(coasting.id)), "{:?}", coasting.id);
+            assert!(
+                crate::targeting::targetable(coasting, false),
+                "{:?}",
+                coasting.id
+            );
+        }
+        let fighting = Fighting::deciding(Goal::Idle);
+        traffic.tick_in(
+            &fighting,
+            World::new(&[]),
+            &[struck(1, 5.0), struck(2, 3.0)],
+            &mut Draws::of(&[]),
+        );
+        let hit = &traffic.npcs()[1];
+        assert_eq!(hit.target, Some(ShipRef::Player));
+        assert_eq!(hit.provoked, 5.0);
+        assert_eq!(
+            hit.mode,
+            Mode::Coasting { ticks_left: 19 },
+            "20, less this tick"
+        );
+        assert_eq!(
+            traffic.npcs()[2].mode,
+            Mode::Coasting { ticks_left: 9 },
+            "a shorter wait is kept"
+        );
+        let mut waited = 1;
+        while traffic.npcs()[1].mode != Mode::Flying {
+            traffic.tick_in(&fighting, World::new(&[]), &[], &mut Draws::of(&[]));
+            waited += 1;
+            assert!(waited < 100, "flies");
+        }
+        let decided: Vec<String> = fighting
+            .log
+            .borrow()
+            .iter()
+            .filter(|line| line.starts_with("decide 1"))
+            .cloned()
+            .collect();
+        assert_eq!(waited, 20);
+        assert!(
+            decided.is_empty(),
+            "no decision while it waits: {decided:?}"
+        );
+        traffic.tick_in(&fighting, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert!(
+            fighting
+                .log
+                .borrow()
+                .iter()
+                .any(|line| line.starts_with("decide 1 Some(Player) 5")),
+            "then it decides, its attacker its target"
+        );
     }
 
     #[test]
@@ -2769,14 +2842,19 @@ mod tests {
                 "no think, still: disabled {disabled}, fuel {fuel}"
             );
         }
-        let mut able = with_mission_ship(ZEPHYR, false, 0.0);
-        able.npcs[0].cloak = Cloak {
-            fade: FADE_FULL,
-            direction: 0,
-        };
-        able.npcs[0].mode = Mode::JumpingIn { tick: 0 };
-        able.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
-        assert_eq!(able.npcs()[0].cloak.direction, 0, "jumping in, no think");
+        for mode in [
+            Mode::JumpingIn { tick: 0 },
+            Mode::Coasting { ticks_left: 30 },
+        ] {
+            let mut able = with_mission_ship(ZEPHYR, false, 0.0);
+            able.npcs[0].cloak = Cloak {
+                fade: FADE_FULL,
+                direction: 0,
+            };
+            able.npcs[0].mode = mode;
+            able.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
+            assert_eq!(able.npcs()[0].cloak.direction, 0, "{mode:?}, no think");
+        }
     }
 
     // The escort-strength timer.
