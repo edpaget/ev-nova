@@ -19765,6 +19765,30 @@ mod tests {
     }
 
     #[test]
+    fn a_hypergate_offers_a_links_owner_not_a_shadowed_lower_lister() {
+        let mut catalog = gated();
+        with_alternate(&mut catalog);
+        catalog.star_map.push(star(135, (-600.0, 600.0), &[]));
+        catalog.gate_listers = vec![
+            (SystemId(134), StellarId(310)),
+            (SystemId(135), StellarId(310)),
+            (SystemId(132), StellarId(320)),
+        ];
+        let mut session = at_gate(&catalog);
+        assert_eq!(
+            session.open_hypergate(&catalog),
+            Ok(ids(&[135, 132])),
+            "310's owner is 135, not 134, visible but shadowed by 131"
+        );
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(135)), &catalog, &mut NeverFires),
+            Ok(SystemId(135))
+        );
+        assert_eq!(session.system(), SystemId(135));
+        assert_eq!(session.player().position, Vec2::new(100.0, 200.0), "at 310");
+    }
+
+    #[test]
     fn a_hypergate_link_with_no_owner_resolves_through_its_lowest_visible_lister_by_place() {
         let mut catalog = gated();
         with_alternate(&mut catalog);

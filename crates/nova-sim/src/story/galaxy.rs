@@ -1182,6 +1182,23 @@ mod tests {
         assert_eq!(system_of(&[2, 5], 4), Some(5), "the lowest visible lister");
         assert_eq!(system_of(&[2], 4), Some(2), "the lowest lister");
         assert_eq!(system_of(&[], 4), None);
+
+        let galaxy = hiding(&[]);
+        let system_of = |listers: &[i16], player| {
+            galaxy
+                .system_of(&ids(listers), SystemId(player))
+                .map(|id| id.0)
+        };
+        assert_eq!(
+            system_of(&[3, 4], 1),
+            Some(4),
+            "the owner, not 3, visible but shadowed by 2, as _FindSystemFromStellar takes"
+        );
+        assert_eq!(
+            system_of(&[3, 5], 5),
+            Some(5),
+            "both shadowed by 2: rescued into 5, not the lowest visible lister 3"
+        );
     }
 
     #[test]
