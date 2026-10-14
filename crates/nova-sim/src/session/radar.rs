@@ -209,6 +209,21 @@ mod tests {
     }
 
     #[test]
+    fn a_ship_attacking_the_players_escort_is_a_threat() {
+        // `_IsThreatToPlayer`'s led clause (@0x7f572-0x7f590), read over
+        // the system's ships.
+        let mut session = session(&radar_catalog());
+        let escort = session.traffic.add_npc(hired(1));
+        let stranger = session.traffic.add_npc(npc(2, ShipStats::default()));
+        let hunting = |target| Npc {
+            goal: crate::ai::Goal::Attack(crate::ShipRef::Npc(target)),
+            ..npc(3, ShipStats::default())
+        };
+        assert_eq!(session.ship_iff(&hunting(escort)), ShipIff::Threat);
+        assert_eq!(session.ship_iff(&hunting(stranger)), ShipIff::Other);
+    }
+
+    #[test]
     fn a_fighter_of_another_ship_is_other() {
         let mut session = session(&radar_catalog());
         let fighter = fighter_of(&mut session, npc(1, ShipStats::default()));
