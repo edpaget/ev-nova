@@ -58,15 +58,18 @@ fn a_new_pilot_walks_united_shippings_chain_to_its_end() {
     let mut session = docked_new_pilot(&data);
     let mut walker = StoryWalker::new(&data);
     let intro = walker
-        .walk(&mut session, &[Step::Take(INTRO), Step::Deliver(INTRO)])
+        .walk(
+            &mut session,
+            &[
+                Step::Take(INTRO),
+                Step::Deliver(INTRO),
+                Step::HasRank(RankId(145)),
+            ],
+        )
         .unwrap_or_else(|failure| panic!("{failure}"));
     assert!(
         session.pilot().control_bit(Bit::new(9).expect("a bit")),
         "504 sets b9"
-    );
-    assert!(
-        session.pilot().ranks().contains(&RankId(145)),
-        "and grants rank 145"
     );
     let delivery = walker
         .walk(
@@ -75,7 +78,7 @@ fn a_new_pilot_walks_united_shippings_chain_to_its_end() {
         )
         .unwrap_or_else(|failure| panic!("{failure}"));
     let (Some(Done::Delivered { stellar: back, .. }), Some(Done::Took { stellar: took, .. })) =
-        (intro.done.last(), delivery.done.first())
+        (intro.done.get(1), delivery.done.first())
     else {
         panic!("{intro:?} {delivery:?}");
     };
