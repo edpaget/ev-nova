@@ -12200,6 +12200,47 @@ mod tests {
     }
 
     #[test]
+    fn each_key_asks_the_session_for_its_command() {
+        let mut view = fighters_out();
+        let commands = [
+            (LAND_KEY, PlayerCommand::Land),
+            (BOARD_KEY, PlayerCommand::Board),
+            (HAIL_KEY, PlayerCommand::Hail),
+            (MAP_KEY, PlayerCommand::Map),
+            (JUMP_KEY, PlayerCommand::Jump),
+            (JETTISON_KEY, PlayerCommand::Jettison),
+            (MISSION_INFO_KEY, PlayerCommand::MissionInfo),
+            (HYPER_SELECT_KEY, PlayerCommand::SelectSystem),
+            (TARGET_KEY, PlayerCommand::Target),
+            (NEAREST_KEY, PlayerCommand::Target),
+            (MENU_KEY, PlayerCommand::Escort),
+            (MENU_CLOSE_KEY, PlayerCommand::Escort),
+            (ESCORT_ATTACK_KEY, PlayerCommand::Escort),
+            (ESCORT_DEFEND_KEY, PlayerCommand::Escort),
+            (ESCORT_HOLD_KEY, PlayerCommand::Escort),
+            (ESCORT_RECALL_KEY, PlayerCommand::Escort),
+            (SELECT_KEY, PlayerCommand::SelectWeapon),
+            (NEAREST_STELLAR_KEY, PlayerCommand::Nav),
+            (NAV_OFF_KEY, PlayerCommand::Nav),
+            (Key::Function(1), PlayerCommand::Nav),
+        ];
+        for (k, command) in commands {
+            assert_eq!(view.command_of(k), Some(command), "{k:?}");
+        }
+        for k in [FIRE_KEY, Key::Up, Key::Char('z'), Key::Other] {
+            assert_eq!(view.command_of(k), None, "{k:?}");
+        }
+        assert!(!view.escort_menu().is_open());
+        assert_eq!(view.command_of(Key::Char('1')), Some(PlayerCommand::Nav));
+        assert_eq!(view.command_of(GROUP_KEYS[4]), None, "5 is no stellar slot");
+        tap(&mut view, MENU_KEY);
+        assert!(view.escort_menu().is_open());
+        assert_eq!(view.command_of(Key::Char('1')), Some(PlayerCommand::Escort));
+        assert_eq!(view.command_of(GROUP_KEYS[4]), Some(PlayerCommand::Escort));
+        assert_eq!(view.command_of(Key::Char('z')), None);
+    }
+
+    #[test]
     fn option_c_sends_the_fighters_home_and_c_alone_back_to_formation() {
         let mut view = fighters_out();
         option(&mut view, ESCORT_RECALL_KEY);
