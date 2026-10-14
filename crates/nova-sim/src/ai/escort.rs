@@ -56,7 +56,7 @@ use crate::combat::hull::Condition;
 use crate::escort::{DEFEND_KEEP_SQ, DEFEND_RADIUS, EscortOrder, best_threat, threats};
 use crate::flight::ShipState;
 use crate::rulebook::RuleSource;
-use crate::traffic::npc::{Mode, Npc, NpcId};
+use crate::traffic::npc::{Npc, NpcId};
 
 /// The player's escorts' AI (see the module docs).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -165,10 +165,11 @@ impl Behaviour for EscortAi {
     }
 }
 
-/// Whether `npc` is intact and flying in the system: one an escort may
-/// keep fighting.
+/// Whether `npc` is intact and flying in the system, or holding its
+/// course after its glide or burst ([`Npc::arrived`]), where it is seen
+/// and fought: one an escort may keep fighting.
 fn intact(npc: &Npc) -> bool {
-    npc.condition == Condition::Intact && npc.mode == Mode::Flying
+    npc.condition == Condition::Intact && npc.arrived()
 }
 
 /// Whether `guard` is within [`DOGFIGHT_BOX`](fire::DOGFIGHT_BOX) of
@@ -221,7 +222,7 @@ mod tests {
     use crate::combat::weapon::WeaponSpec;
     use crate::escort::{EscortClass, EscortDuty};
     use crate::testkit::{Draws, weapon};
-    use crate::traffic::npc::AiType;
+    use crate::traffic::npc::{AiType, Mode};
 
     /// A turret reaching 300 pixels (332 with the margin), and a gun.
     fn armed() -> Armament {
@@ -574,6 +575,28 @@ mod tests {
         assert_eq!(
             decide(&npcs, (0.0, 0.0), &[]).0,
             Goal::Formation { guard: None }
+        );
+    }
+
+    #[test]
+    fn an_escort_keeps_a_target_holding_its_course_after_its_burst() {
+        let coasting = |npc: Npc| Npc {
+            mode: Mode::Coasting { ticks_left: 30 },
+            ..npc
+        };
+        let defend = Some(EscortOrder::Defend);
+        let fighting = having(escort(defend), Goal::Attack(n(2)), Some(n(2)));
+        let npcs = [fighting, coasting(bystander(2, 0.0, 100.0))];
+        assert_eq!(decide(&npcs, (0.0, 0.0), &[]).0, Goal::Attack(n(2)));
+        let guarding = having(
+            escort(None),
+            Goal::Formation { guard: Some(n(2)) },
+            Some(n(2)),
+        );
+        let npcs = [guarding, coasting(pirate(2, 10.0, 0.0))];
+        assert_eq!(
+            decide(&npcs, (0.0, 0.0), &[]),
+            (Goal::Formation { guard: Some(n(2)) }, vec![])
         );
     }
 

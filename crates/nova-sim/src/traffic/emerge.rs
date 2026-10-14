@@ -73,8 +73,11 @@
 //! The radar and the shots do not read the emerging state: an emerging
 //! ship shows on the radar at its gate and can be hit.
 //!
-//! Not modelled: the `Rand(30) + 30` pause a leaderless ship takes after
-//! its burst (@0x34d5c-0x34d8b); the
+//! - **Holding its course.** A ship with no lead then holds its course
+//!   for `Rand(30) + 30` ticks (@0x34d5c-0x34d8b), as after a glide in
+//!   from hyperspace: [`Mode::Coasting`](crate::traffic::npc::Mode::Coasting).
+//!
+//! Not modelled: the
 //! stellar the ship remembers (+0x92); a hypergate animating while a ship
 //! comes out of it (`_HandleStellarSprites` @0x2e8bd).
 

@@ -425,7 +425,7 @@ impl Traffic {
                         .find(|(other, _)| *other == id)
                         .map(|(_, state)| *state),
                 });
-                autopilot::fly(npc, world.sites, other.as_ref(), speeds)
+                autopilot::fly(npc, world.sites, other.as_ref(), speeds, &mut *chance)
             })
             .collect();
         self.departed = self
@@ -1131,7 +1131,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ship_jumping_in_never_decides_and_glides_until_it_is_in() {
+    fn a_ship_jumping_in_never_decides_while_it_glides_and_holds_its_course() {
         let mut traffic = populated(1, 1);
         traffic.table.avg_ships = 2;
         let behaviour = Recording::deciding(Goal::Idle);
@@ -1140,11 +1140,16 @@ mod tests {
         traffic.tick(&behaviour, &[], &mut Draws::of(&[0, 6, 6, 0, 0, 0]));
         assert_eq!(traffic.npcs().len(), 2);
         assert_eq!(behaviour.take(), [NpcId(0)], "the newcomer is jumping in");
-        while matches!(traffic.npcs()[1].mode, Mode::JumpingIn { .. }) {
+        let mut coasted = 0;
+        while traffic.npcs()[1].mode != Mode::Flying {
             traffic.tick(&behaviour, &[], &mut Draws::of(&[2]));
             assert_eq!(behaviour.take(), [NpcId(0)]);
+            if let Mode::Coasting { .. } = traffic.npcs()[1].mode {
+                coasted += 1;
+            }
         }
-        assert_eq!(traffic.npcs()[1].mode, Mode::Flying);
+        // With no lead it waits 30 + Rand(30), the draw 2.
+        assert_eq!(coasted, 32);
         traffic.tick(&behaviour, &[], &mut Draws::of(&[2]));
         assert_eq!(behaviour.take(), [NpcId(0), NpcId(1)]);
     }
@@ -1160,10 +1165,12 @@ mod tests {
             assert_eq!(behaviour.take(), [NpcId(0)], "tick {ticks}");
             assert_eq!(traffic.npcs()[1].goal, Goal::Idle);
             ticks += 1;
-            assert!(ticks < 20, "out");
+            assert!(ticks < 100, "out");
         }
-        // Two ticks waiting; top speed 6: 30 down to 9 is 8 ticks.
-        assert_eq!(ticks, 10);
+        // Two ticks waiting; top speed 6: 30 down to 9 is 8 ticks; then,
+        // with no lead, 30 + Rand(30) holding its course, the draw its
+        // last, 29.
+        assert_eq!(ticks, 2 + 8 + 59);
         traffic.tick(&behaviour, &[], &mut Draws::of(&[]));
         assert_eq!(behaviour.take(), [NpcId(0), NpcId(1)]);
     }
@@ -1182,7 +1189,7 @@ mod tests {
     }
 
     #[test]
-    fn an_arrival_among_a_hypergate_comes_out_of_it_and_flies_once_out() {
+    fn an_arrival_among_a_hypergate_comes_out_of_it_and_holds_its_course_once_out() {
         let mut traffic = populated(1, 1);
         traffic.table.avg_ships = 2;
         let sites = gated();
@@ -1202,7 +1209,11 @@ mod tests {
             traffic.tick(&Keep, &sites, &mut Draws::of(&[2]));
         }
         let out = &traffic.npcs()[1];
-        assert_eq!(out.mode, Mode::Flying, "top speed 6: 30 down to 9");
+        assert_eq!(
+            out.mode,
+            Mode::Coasting { ticks_left: 32 },
+            "top speed 6: 30 down to 9, then with no lead 30 + Rand(30), the draw 2"
+        );
         assert!((out.state.position - Vec2::new(456.0, -400.0)).length() < 1e-3);
     }
 
@@ -2152,7 +2163,7 @@ mod tests {
                 .iter()
                 .find(|npc| npc.id == id)
                 .expect("there");
-            if npc.mode == Mode::Flying {
+            if !matches!(npc.mode, Mode::LeavingGate { .. }) {
                 return npc.state.velocity.length();
             }
         }
@@ -2310,7 +2321,15 @@ mod tests {
         traffic.tick(&ai, &sites, &mut Draws::of(&[0, 6, 6, 0, 0, 0, 2]));
         assert_eq!(traffic.npcs()[0].ai_type, AiType::Warship);
         let mut nearest = f32::INFINITY;
-        for _ in 0..=spawn::JUMP_IN_TICKS {
+        // It glides in, holds its course with no lead, then flies a few
+        // ticks.
+        let mut ticks = 0;
+        while traffic.npcs()[0].mode != Mode::Flying {
+            traffic.tick(&ai, &sites, &mut Draws::of(&[]));
+            ticks += 1;
+            assert!(ticks < 200, "in");
+        }
+        for _ in 0..10 {
             traffic.tick(&ai, &sites, &mut Draws::of(&[]));
         }
         let after_glide = traffic.npcs()[0].clone();

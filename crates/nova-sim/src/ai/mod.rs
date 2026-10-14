@@ -53,7 +53,7 @@ use crate::hyperspace::JUMP_FUEL;
 use crate::landing::is_landable as landable;
 use crate::rank::{Blessed, Blessing};
 use crate::reserves::Reserves;
-use crate::traffic::npc::{Mode, Npc, NpcId};
+use crate::traffic::npc::{Npc, NpcId};
 
 pub use brave::BraveTrader;
 pub use carried::CarriedAi;
@@ -273,12 +273,14 @@ impl<'a> Surroundings<'a> {
     /// Whether `ship` is here to be fought: in the system, intact or
     /// disabled, and not still jumping in or coming out of a gate (seen by
     /// no ship while it waits there, `_ShipVisibleToShip` @0x972d, and
-    /// unfought while it bursts out, as during the glide).
+    /// unfought while it bursts out, as during the glide). A ship holding
+    /// its course after its glide or burst ([`Mode::Coasting`](crate::traffic::npc::Mode::Coasting)) is here:
+    /// its goal is 0, which `_ShipVisibleToShip` sees ([`Npc::arrived`]).
     #[must_use]
     pub fn live(&self, ship: ShipRef) -> bool {
         let jumping_in = match ship {
             ShipRef::Player => false,
-            ShipRef::Npc(id) => self.npc(id).is_some_and(|npc| npc.mode != Mode::Flying),
+            ShipRef::Npc(id) => self.npc(id).is_some_and(|npc| !npc.arrived()),
         };
         !jumping_in && self.condition_of(ship).is_some_and(Condition::hittable)
     }
@@ -404,7 +406,7 @@ mod tests {
     use crate::landing::StellarFlags;
     use crate::stats::ShipStats;
     use crate::testkit::{Draws, FAST, planet};
-    use crate::traffic::npc::AiType;
+    use crate::traffic::npc::{AiType, Mode};
 
     fn npc(id: u32, ai_type: AiType) -> Npc {
         Npc {
@@ -721,10 +723,20 @@ mod tests {
         disabled.state.position = crate::geometry::Vec2::new(5.0, 6.0);
         let mut emerging = npc(5, AiType::Warship);
         emerging.mode = Mode::Emerging { ticks_left: 3 };
-        let npcs = [npc(1, AiType::Warship), jumping, dying, disabled, emerging];
+        let mut coasting = npc(6, AiType::Warship);
+        coasting.mode = Mode::Coasting { ticks_left: 30 };
+        let npcs = [
+            npc(1, AiType::Warship),
+            jumping,
+            dying,
+            disabled,
+            emerging,
+            coasting,
+        ];
         let mut around = Surroundings::new(&[], &npcs);
         let n = |id| ShipRef::Npc(NpcId(id));
         assert!(around.live(n(1)));
+        assert!(around.live(n(6)), "holding its course after its burst");
         assert!(!around.live(n(2)), "jumping in");
         assert!(!around.live(n(5)), "emerging from a gate: seen by no one");
         assert!(!around.live(n(3)), "dying");

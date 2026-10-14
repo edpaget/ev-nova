@@ -90,6 +90,17 @@ pub enum Mode {
         /// The tick of the burst.
         tick: u32,
     },
+    /// Holding its course after its glide in or its burst out of a gate,
+    /// for this many more ticks: a ship with no lead
+    /// (`_HandleShip` @0x34d5c-0x34d8b, its AI wait +0x4c). It moves on at
+    /// the velocity the glide or burst left it, with no steering, thrust,
+    /// slowing, fire or decisions, but is seen, targeted and fought as a
+    /// flying ship is: its goal is 0, not 21, so `_ShipVisibleToShip`
+    /// (@0x972d) sees it and it is drawn. See [`Npc::arrived`].
+    Coasting {
+        /// The ticks of the wait left.
+        ticks_left: u32,
+    },
     /// Flying under its own controls.
     Flying,
 }
@@ -466,6 +477,16 @@ impl Npc {
     #[must_use]
     pub fn emerging(&self) -> bool {
         matches!(self.mode, Mode::Emerging { .. })
+    }
+
+    /// Whether it is done coming into the system, there to be fought and
+    /// hailed: [`Mode::Flying`], or holding its course after its glide or
+    /// burst ([`Mode::Coasting`]), which the original's +0x4c wait marks
+    /// and its hyperspace state (+0x50, zeroed by `_AIMakeShipStopJumping`
+    /// @0x82e77) and goal 21 do not.
+    #[must_use]
+    pub fn arrived(&self) -> bool {
+        matches!(self.mode, Mode::Flying | Mode::Coasting { .. })
     }
 }
 

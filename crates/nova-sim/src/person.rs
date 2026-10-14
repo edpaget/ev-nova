@@ -103,7 +103,7 @@ use crate::rank::RankNames;
 use crate::reserves::Reserves;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::text_tags::{self, NoNames, TagContext};
-use crate::traffic::npc::{Mode, Npc, NpcPerson};
+use crate::traffic::npc::{Npc, NpcPerson};
 use crate::traffic::table::ShipKind;
 
 /// `Flags`: it holds a grudge once the player hits it.
@@ -282,7 +282,10 @@ pub enum Eligible {
 /// ([`Npc::threatens_player_among`]; `_IsThreatToPlayer` asked @0x33d38).
 #[must_use]
 pub fn quote_eligible(npc: &Npc, person: &NpcPerson, view: &QuoteView, npcs: &[Npc]) -> Eligible {
-    let flying = npc.mode == Mode::Flying
+    // A ship holding its course after its glide may speak: the quote's
+    // tests (@0x33bea-0x33f21) read its hyperspace state and goal, not
+    // its wait (+0x4c), and run before `_HandleShip` holds it (@0x34a54).
+    let flying = npc.arrived()
         && !matches!(
             npc.condition,
             Condition::Dying { .. } | Condition::Destroyed
@@ -1531,6 +1534,16 @@ mod tests {
             ..intact.clone()
         };
         assert_eq!(eligible(&arriving, quoting(0), VIEW), Eligible::No);
+        let coasting = Npc {
+            mode: Mode::Coasting { ticks_left: 30 },
+            ..intact.clone()
+        };
+        assert_eq!(
+            eligible(&coasting, quoting(0), VIEW),
+            eligible(&intact, quoting(0), VIEW),
+            "holding its course after its glide, it may speak"
+        );
+        assert_ne!(eligible(&coasting, quoting(0), VIEW), Eligible::No);
         for condition in [Condition::Dying { ticks_left: 2 }, Condition::Destroyed] {
             let dying = npc_of(condition, IDLE);
             assert_eq!(

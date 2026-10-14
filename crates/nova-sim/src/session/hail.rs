@@ -183,7 +183,12 @@ impl Session {
             return Err(HailRefusal::NoTarget);
         }
         let npc = self.target().ok_or(HailRefusal::NoTarget)?;
-        if npc.mode != Mode::Flying {
+        // `_HandlePlayerCommunication` refuses a target whose hyperspace
+        // state (+0x50) is above 0 (@0x62089-0x6209c, @0x6264e-0x62676).
+        // `_AIMakeShipStopJumping` zeroes it before a leaderless ship's
+        // wait (+0x4c), which the hail does not read, so a ship holding
+        // its course after its glide ([`Mode::Coasting`]) answers.
+        if !npc.arrived() {
             return Err(HailRefusal::InHyperspace);
         }
         let mute = self.dispositions(npc).mute;
@@ -500,6 +505,11 @@ impl Session {
             let Goal::Assist(help) = npc.goal else {
                 continue;
             };
+            // Not while it jumps in or comes out of a gate, nor while it
+            // holds its course after (`Mode::Coasting`): the help is given
+            // in `_HighLevelAIHandler`, which returns at once while the
+            // wait +0x4c runs, refuel (goal 9) and repair (0xf) included
+            // (@0x8d4b4-0x8d4d2).
             if npc.condition != Condition::Intact || npc.mode != Mode::Flying {
                 continue;
             }
@@ -885,6 +895,15 @@ mod tests {
         let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
         assert_eq!(hailed, Err(HailRefusal::InHyperspace));
         assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn a_target_holding_its_course_after_its_glide_answers_a_hail() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        npc(&mut session).mode = Mode::Coasting { ticks_left: 30 };
+        let (hailed, _) = hail_with(&mut session, &catalog, &opening(0));
+        assert!(hailed.is_ok(), "{hailed:?}");
     }
 
     // The reply.
@@ -1571,6 +1590,19 @@ mod tests {
         npc(&mut moving).state.velocity = Vec2::new(0.0, 0.35);
         moving.tick_assistance(&NovaDisable);
         assert_eq!(moving.reserves().fuel.now, 40.0, "not slow enough");
+    }
+
+    #[test]
+    fn a_ship_holding_its_course_after_its_glide_gives_no_help_until_it_flies() {
+        let catalog = hailable();
+        let mut session = helped(&catalog, Help::Refuel, 120.0);
+        session.pilot.reserves.fuel.now = 40.0;
+        npc(&mut session).mode = Mode::Coasting { ticks_left: 3 };
+        session.tick_assistance(&NovaDisable);
+        assert_eq!(session.reserves().fuel.now, 40.0);
+        npc(&mut session).mode = Mode::Flying;
+        session.tick_assistance(&NovaDisable);
+        assert_eq!(session.reserves().fuel.now, 41.0);
     }
 
     #[test]
