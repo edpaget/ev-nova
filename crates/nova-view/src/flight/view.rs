@@ -367,6 +367,7 @@ use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
     HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText, News,
     NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, StellarIff, TagNames, VenueOffer,
+    ship_layer::LayerEntries,
 };
 use nova_sim::{DrawnBox, DrawnShips};
 
@@ -1676,6 +1677,27 @@ impl<
         };
         view.show_destroyed();
         view
+    }
+
+    /// The flight with its ship slots' draw layers starting from
+    /// `layers`, the history an earlier flight of the same run left
+    /// ([`Session::with_layer_entries`]).
+    #[must_use]
+    pub fn with_layer_entries(self, layers: LayerEntries) -> Self {
+        Self {
+            session: self
+                .session
+                .map(|session| session.with_layer_entries(layers)),
+            ..self
+        }
+    }
+
+    /// The ship slots' draw-layer history as the flight leaves it
+    /// ([`Session::layer_entries`]), or `None` when its session never
+    /// started.
+    #[must_use]
+    pub fn layer_entries(&self) -> Option<&LayerEntries> {
+        self.session.as_ref().ok().map(Session::layer_entries)
     }
 
     /// The flight with `terms` giving the fee and wage of a hire
@@ -4122,7 +4144,15 @@ impl<
 /// The ships where the flight draws them, for the hover test: the
 /// session's [`DrawnShips`] port. Every NPC is drawn, by its sheet or as
 /// its crossed box, so each has a box, even one its cloak hides from the
-/// player: [`Session::hover`] asks the cloak itself.
+/// player: [`Session::hover`] asks the cloak itself. A hidden ship
+/// ([`Session::is_hidden`]: its type's `Cost` is -1) is boxed where it
+/// would be drawn, by its own type's sheet, as the original still
+/// positions its hidden sprite (`_HandleShipDisplay` @0x2cd17) and
+/// `_HandleMouse` skips only a slot with no sprite (@0x38171). The
+/// original's box is the size of the frames the slot last cloned
+/// (`_SWCloneFramesFromMaster` @0x2b824 is skipped for a hidden ship),
+/// often the previous ship's at that slot; the engine keeps no frames per
+/// slot.
 struct ViewShips<'a, C> {
     /// The flight, which says where each ship is drawn.
     view: &'a FlightView<C>,
@@ -9676,6 +9706,7 @@ mod tests {
             height: None,
             strength: 0,
             key_carried: None,
+            cost: 0,
         };
         let (_, chance) = scripted(&placed(850, 650, 90));
         let catalog = FakeCatalog {
@@ -9813,6 +9844,7 @@ mod tests {
             height: None,
             strength: 0,
             key_carried: None,
+            cost: 0,
         }
     }
 
@@ -17203,6 +17235,51 @@ mod tests {
         view.input(&key(TARGET_KEY, false));
         assert!(view.session().expect("flying").target().is_some());
         assert_eq!(frame(&mut view), [(1, VIEW_CENTER)], "a target");
+    }
+
+    #[test]
+    fn an_npc_of_a_cost_minus_one_type_is_not_drawn_but_is_still_hovered() {
+        let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        let over = npc_on_screen(&view, id);
+        let near = |list: &DrawList| {
+            list.iter().any(|command| match *command {
+                DrawCommand::Sprite { center, image, .. } => {
+                    image.id != 651
+                        && (center.x - over.x).abs() < 0.01
+                        && (center.y - over.y).abs() < 0.01
+                }
+                _ => false,
+            })
+        };
+        assert!(near(&drawn(&view)), "drawn while shown");
+        nova_sim::fixture::hide(view.session.as_mut().expect("flying"), id);
+        assert!(view.session().expect("flying").is_hidden(ShipRef::Npc(id)));
+        assert!(!near(&drawn(&view)), "not drawn hidden");
+        view.input(&Input::PointerMoved(over));
+        ticks(&mut view, 2);
+        assert_eq!(
+            cursor_sprites(&drawn(&view)),
+            [(1, over)],
+            "animates over where it would be drawn"
+        );
+    }
+
+    #[test]
+    fn a_flight_hands_its_layer_history_to_its_session_and_back() {
+        let mut layers = nova_sim::ship_layer::LayerEntries::new();
+        layers.put(
+            nova_sim::ship_layer::Slot::Berth(2),
+            nova_sim::ship_layer::ShipLayer::Led,
+        );
+        let view = flight().with_layer_entries(layers.clone());
+        assert_eq!(view.session().expect("flying").layer_entries(), &layers);
+        assert_eq!(view.layer_entries(), Some(&layers));
+        let failed = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        })
+        .with_layer_entries(layers);
+        assert_eq!(failed.layer_entries(), None);
     }
 
     #[test]

@@ -834,6 +834,7 @@ impl CombatCatalog for GameData {
                     height,
                     strength: record.strength,
                     key_carried: record.key_carried,
+                    cost: record.cost,
                 })
             })
             .collect()
@@ -2922,6 +2923,7 @@ mod tests {
         put_i16s(&mut bytes, 0x6D6, &[0, 3, 0, 0]);
         put_i16s(&mut bytes, 0x6DE, &[0, 20, 0, 0]);
         put_i16s(&mut bytes, 0x36E, &[140]);
+        bytes[0x30..0x34].copy_from_slice(&(-1_i32).to_be_bytes());
         bytes
     }
 
@@ -2971,6 +2973,7 @@ mod tests {
             height,
             strength: 325,
             key_carried: Some(ShipId(140)),
+            cost: -1,
         };
         assert_eq!(
             data.hulls(),

@@ -35,13 +35,29 @@
 //! a new ship in the slot, so a slot keeps its place until it changes
 //! layer: an escort the player releases, or a ship repaired, is drawn
 //! over the player until history moves it. [`LayerEntries`] keeps that
-//! history by [`Slot`] for the session's life (the original keeps it
-//! across pilots in one run:
-//! rdm:phase/player-led-ships/phase-29-layer-history-across-pilots), and
+//! history by [`Slot`], and
 //! [`Session::draw_order`](crate::Session::draw_order) draws each layer
-//! in it. A ship whose type has no sprite, which the original hides and
-//! never moves (@0x2b7f3), is laid out here as any other:
-//! rdm:phase/player-led-ships/phase-30-unsprited-ship-hidden. By
+//! in it. The history outlives a pilot, as the original's sprites do:
+//! `_ResetPlayer` and `_LoadPilotData` call no sprite routine, and
+//! `_EnterGameFromMainScreen`'s `_PrepareAllSprites` lays each slot out
+//! as a tick does, so a session loaded later in the same run starts from
+//! the history the last one left
+//! ([`Session::with_layer_entries`](crate::Session::with_layer_entries)),
+//! which the `nova` app hands on.
+//!
+//! **Hidden ships.** For a ship in the player's system (@0x2b7d8-0x2b7ed),
+//! the player's too, `_HandleShipDisplay` asks whether its type's `Cost`
+//! (the ship-type record's +0x58, filled from the `shïp`'s `Cost`
+//! @0x7a16a-0x7a173) is -1 (@0x2b7f3). If so it jumps to @0x2cc6b, which
+//! hides the base sprite and each of the other five it had shown
+//! (@0x2cc6b-0x2cd10), and joins the common tail (@0x2cd17), skipping
+//! the showing, frame and paint work and the whole layer block
+//! (@0x2b7fd-0x2cc69). So such a ship is not drawn and its slot keeps
+//! its place in whatever layer it last stood in
+//! ([`HullSpec::hidden`](crate::combat::hull::HullSpec::hidden),
+//! [`Session::is_hidden`](crate::Session::is_hidden);
+//! [`RuleKey::HiddenShips`](crate::rulebook::RuleKey::HiddenShips)
+//! chooses). By
 //! [`RuleKey::ShipOverlap`](crate::rulebook::RuleKey::ShipOverlap)'s
 //! other reading, [`in_draw_order`] keeps each layer in the order it is
 //! given, the session's NPC order with the player on top. The step-1

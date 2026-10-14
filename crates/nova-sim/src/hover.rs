@@ -13,8 +13,12 @@
 //!   (@0x3810b-0x38130);
 //! - of an untargetable type (`shïp` `Flags2` 0x4, +0x9ea) unless the
 //!   player can target those (@0x3814f-0x3816f);
-//! - without a sprite (+0x00 null, @0x38171): one the view does not draw,
-//!   [`DrawnShips`] giving `None`.
+//! - without a sprite (+0x00 null, @0x38171), which the engine never has:
+//!   [`DrawnShips`] giving `None`. It tests the sprite pointer, not
+//!   whether the sprite is shown, so a hidden ship
+//!   ([`Session::is_hidden`](crate::Session::is_hidden)), whose sprite
+//!   `_HandleShipDisplay` still positions (@0x2cd17), is hovered where it
+//!   would be drawn.
 //!
 //! Unlike [`targetable`](crate::targeting::targetable) it has no check for
 //! a ship emerging from a gate. Its hit box is the sprite's rect (+0x1a),
@@ -53,8 +57,9 @@ pub struct DrawnBox {
 
 /// Where the view draws the ships: the port the hover test reads.
 pub trait DrawnShips {
-    /// The box NPC `id` is drawn in, or `None` when it has no sprite (the
-    /// original's null sprite slot, @0x38171).
+    /// The box NPC `id` is drawn in, or would be when it is hidden, or
+    /// `None` when it has no sprite slot (the original's null sprite,
+    /// @0x38171), which the engine never has.
     fn npc(&self, id: NpcId) -> Option<DrawnBox>;
     /// The box the player's ship is drawn in, or `None` when it has none.
     fn player(&self) -> Option<DrawnBox>;
