@@ -41,6 +41,10 @@
 //! developer's viewer, which enters systems; play plots courses on the map
 //! opened from flight, which has no "Enter system" button.
 //!
+//! Caps Lock, pressed anywhere, turns double time on or off for flight
+//! (see [`FlightView::set_double_time`]); the router keeps it across
+//! screens and pilots, and saves nothing of it.
+//!
 //! L in flight requests clearance at a stellar, and a second L, over it,
 //! lands and shows its spaceport ([`SpaceportView`]), laid out by the
 //! interface file's "Spaceport" dialog when the router has dialogs;
@@ -363,6 +367,10 @@ pub struct AppScreen {
     player_info: Option<PlayerInfoScreen>,
     /// Whether Command is held, for Command+comma.
     command_held: bool,
+    /// Whether double time is on: Caps Lock's presses toggle it, on any
+    /// side, and every flight is told. Never saved, as the original's
+    /// `_doubleTime` is not.
+    double_time: bool,
 }
 
 /// The main menu, the metrics its screens' text is laid out by when there
@@ -442,6 +450,7 @@ impl AppScreen {
             missions: None,
             player_info: None,
             command_held: false,
+            double_time: false,
         }
     }
 
@@ -659,7 +668,8 @@ impl AppScreen {
             .with_person_rules(Rc::clone(&self.person_rules))
             .with_strings(Rc::clone(&self.data) as Rc<dyn CommCatalog>)
             .with_hyperspace_effects(self.prefs.hyperspace_effects)
-            .with_sound_prefs(self.prefs.sound);
+            .with_sound_prefs(self.prefs.sound)
+            .with_double_time(self.double_time);
         match self.metrics() {
             Some(metrics) => flight.with_metrics(metrics),
             None => flight,
@@ -971,6 +981,30 @@ impl AppScreen {
                 self.preferences = Some(dialog);
             }
             Err(reason) => eprintln!("nova: cannot show the preferences: {reason}"),
+        }
+    }
+
+    /// Turns double time on or off on a Caps Lock press, not on its
+    /// repeats nor its release, and tells flight, if built; a flight
+    /// built later starts with it ([`FlightView::with_double_time`]).
+    ///
+    /// The original follows Caps Lock's lock state (`_PlayGame` @0x463c3);
+    /// ours toggles on each press the platform reports, so it drifts from
+    /// the lock when Caps Lock is pressed while the window is not focused,
+    /// or is already on at launch. On macOS winit 0.30 reports no Caps
+    /// Lock key at all, so there double time never comes on
+    /// (rdm:phase/hud-fidelity/phase-21-double-time-follows-the-caps-lock-state).
+    fn double_time_key(&mut self, input: &Input) {
+        if let Input::Key {
+            key: Key::CapsLock,
+            pressed: true,
+            repeat: false,
+        } = *input
+        {
+            self.double_time = !self.double_time;
+            if let Some(flight) = &mut self.flight {
+                flight.set_double_time(self.double_time);
+            }
         }
     }
 
@@ -2217,12 +2251,18 @@ impl Screen for AppScreen {
     /// and the galaxy map, Escape goes back to the menu instead of
     /// quitting.
     ///
+    /// Before anything else sees it, a Caps Lock press, on any side and
+    /// under any overlay, turns double time on or off for flight, built or
+    /// to be built ([`AppScreen::double_time_key`]); it then goes on as
+    /// any other key does.
+    ///
     /// After every input, what the set expressions it ran queued is
     /// settled ([`FlightView::settle_script`]), and then a pilot with a
     /// name is saved when flight says a save is due: on landing, on taking
     /// off, after a change in the spaceport ([`AppScreen::transact`]) and
     /// after a move by set operator.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        self.double_time_key(input);
         let action = self.route(input);
         self.settle_script();
         self.save_if_due();
@@ -4949,6 +4989,47 @@ pub(super) mod tests {
             on,
             "a new pilot's flight"
         );
+    }
+
+    fn flight_double_time(screen: &AppScreen) -> bool {
+        screen.flight_view().expect("flying").double_time()
+    }
+
+    #[test]
+    fn caps_lock_presses_toggle_double_time_and_releases_and_repeats_do_not() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        assert!(!flight_double_time(&screen), "off to begin with");
+        screen.input(&key(Key::CapsLock, true));
+        assert!(flight_double_time(&screen), "on");
+        screen.input(&held(Key::CapsLock));
+        screen.input(&key(Key::CapsLock, false));
+        assert!(flight_double_time(&screen), "a repeat and a release");
+        screen.input(&key(Key::CapsLock, true));
+        assert!(!flight_double_time(&screen), "off");
+    }
+
+    #[test]
+    fn a_toggle_under_an_overlay_reaches_the_flight_beneath() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        open_prefs(&mut screen);
+        screen.input(&key(Key::CapsLock, true));
+        assert!(flight_double_time(&screen));
+    }
+
+    #[test]
+    fn a_toggle_made_on_another_screen_reaches_a_flight_built_later() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        screen.input(&key(Key::CapsLock, true));
+        create(&mut screen, "Ada");
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert!(flight_double_time(&screen), "a new pilot's flight");
+        let mut screen = with_dialogs(data());
+        screen.input(&key(Key::CapsLock, true));
+        fly(&mut screen);
+        assert!(flight_double_time(&screen), "the developer's flight");
     }
 
     #[test]
