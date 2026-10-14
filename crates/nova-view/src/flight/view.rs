@@ -79,7 +79,16 @@
 //! relocation, is laid out; and a move to another stellar of the system
 //! shown draws the ship there.
 //!
-//! The HUD is drawn over everything but a jump's fade: the status bar against the
+//! Once the player's ship has exploded, the scene runs on without it
+//! through the session's hold ([`nova_sim::HOLD_TICKS`]). On the step the
+//! hold expires flight stops stepping, whatever the frame's length, and
+//! the expiry is held for the router ([`FlightView::take_hold_expired`]),
+//! which begins the fade when it is ready ([`FlightView::begin_fade`]):
+//! the scene, frozen, fades to black over [`DEATH_FADE_FOR`], HUD
+//! included, as the original's synchronous `_FadeScreenOut` does, and then
+//! the game is over ([`FlightView::game_over`]).
+//!
+//! The HUD is drawn over everything but a jump's fade and the death's: the status bar against the
 //! right edge, its radar showing the stellars and ships around the ship
 //! as drawn, its bars the session's shield, armour and fuel, and its nav
 //! area the navigation target or else the course. Without a status bar it
@@ -352,7 +361,6 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nova_sim::Drawn as ShipDrawn;
-use nova_sim::PlayerCommand;
 use nova_sim::cloak::{CloakShown, TRANSLUCENCY_STEPS};
 use nova_sim::hire::{DEFECTED_ONE, DEFECTED_SOME};
 use nova_sim::mission::offer_gap;
@@ -378,6 +386,7 @@ use nova_sim::{
     HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText, News,
     NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, StellarIff, TagNames, VenueOffer,
 };
+use nova_sim::{PlayerCommand, PlayerFate};
 
 use super::alert;
 use super::boxes::{self, BoxShown};
@@ -397,6 +406,7 @@ use super::target::{self, Tag, TargetPanel};
 use super::weapons::{self, BeamShown, ShotShown};
 use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
+use crate::fade::{DEATH_FADE_FOR, ScreenFade};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMode};
 use crate::spaceport::bar::MISSION_INFO_KEY;
 use crate::system::camera::{Camera, VIEW_SIZE};
@@ -1408,6 +1418,9 @@ pub struct FlightView<C> {
     /// The rest of an arrival's effect, once the ship has arrived: the
     /// fade-in from white, or the white flash. Flight goes on under it.
     fade_in: Option<JumpEffect>,
+    /// The fade to black after the player's death, once begun
+    /// ([`FlightView::begin_fade`]).
+    death_fade: Option<ScreenFade>,
     /// Whether jumps play their white fades, as the Hyperspace Effects
     /// preference says.
     hyperspace_effects: bool,
@@ -1619,6 +1632,7 @@ impl<
             map_open: false,
             jump: None,
             fade_in: None,
+            death_fade: None,
             hyperspace_effects: true,
             sound_prefs: SoundPrefs::default(),
             alert_width,
@@ -1974,10 +1988,69 @@ impl<
     }
 
     /// Covers the screen in the arrival's fade-in, then in the jump's
-    /// fade-out, as far as each shows.
+    /// fade-out, then in the death's fade to black, as far as each shows.
     fn draw_fades(&self, list: &mut DrawList) {
         for effect in [&self.fade_in, &self.jump].into_iter().flatten() {
             effect.draw_fade(list);
+        }
+        if let Some(fade) = &self.death_fade {
+            fade.draw(list);
+        }
+    }
+
+    /// Whether the hold after the player's explosion has run out
+    /// ([`Session::hold_expired`]): flight steps no more.
+    fn hold_expired(&self) -> bool {
+        self.session.as_ref().is_ok_and(Session::hold_expired)
+    }
+
+    /// Whether the hold after the player's explosion ran out since this
+    /// was last asked, as [`Session::take_hold_expired`] says: the seam
+    /// where the router may show its dialogs over the stopped flight
+    /// before it begins the fade. True once.
+    pub fn take_hold_expired(&mut self) -> bool {
+        self.session.as_mut().is_ok_and(Session::take_hold_expired)
+    }
+
+    /// Begins the fade to black after the hold has expired, over
+    /// [`DEATH_FADE_FOR`]; nothing before then ([`Session::begin_fade`]).
+    pub fn begin_fade(&mut self) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        session.begin_fade();
+        if session.player_fate() == PlayerFate::Fading && self.death_fade.is_none() {
+            self.death_fade = Some(ScreenFade::to_black(DEATH_FADE_FOR));
+        }
+    }
+
+    /// Whether the death's fade is over and play has ended: the router
+    /// returns to the main screen.
+    #[must_use]
+    pub fn game_over(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_ok_and(|session| session.player_fate() == PlayerFate::GameOver)
+    }
+
+    /// Whether the pilot may be saved now, as [`Session::may_save`] says:
+    /// not while the player is dying or dead, nor without a session.
+    #[must_use]
+    pub fn may_save(&self) -> bool {
+        self.session.as_ref().is_ok_and(Session::may_save)
+    }
+
+    /// Moves the death's fade on by `dt`, and ends play once it is over;
+    /// nothing else moves.
+    fn advance_death_fade(&mut self, dt: Duration) {
+        let Some(fade) = &mut self.death_fade else {
+            return;
+        };
+        fade.advance(dt);
+        if fade.done()
+            && let Ok(session) = &mut self.session
+        {
+            session.end_play();
         }
     }
 
@@ -3939,6 +4012,10 @@ impl<
         if self.map_open {
             return;
         }
+        if self.hold_expired() {
+            self.advance_death_fade(dt);
+            return;
+        }
         if let Some(effect) = &mut self.jump {
             self.elapsed += dt;
             if effect.advance(dt) {
@@ -3988,7 +4065,7 @@ impl<
                 for event in session.take_combat_events() {
                     self.effects.apply(&event, &scene, &self.looks, chance);
                 }
-                if session.jumping().is_some() {
+                if session.jumping().is_some() || session.hold_expired() {
                     break;
                 }
             }
@@ -10664,6 +10741,156 @@ mod tests {
         assert!(view.take_hail().is_none());
         assert!(view.take_boarding().is_none());
         assert_eq!(view.pilot().cloned(), pilot);
+    }
+
+    /// A flight under fire from [`killed_in`]`(1)`'s NPC, stepped to the
+    /// player's explosion's tick.
+    fn at_the_explosion() -> View {
+        let mut view =
+            fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        until_the_player_explodes(&mut view, |_| {});
+        view
+    }
+
+    /// The shots in flight in `view`'s session.
+    fn shots_in(view: &View) -> Vec<nova_sim::combat::projectile::Shot> {
+        view.session().expect("flying").shots().to_vec()
+    }
+
+    /// The alpha of the black covering the whole screen, if the last
+    /// thing `view` draws is one.
+    fn black_over(view: &View) -> Option<u8> {
+        match drawn(view).iter().last() {
+            Some(DrawCommand::Line { width, color, .. })
+                if *width == VIEW_SIZE.1 && (color.r, color.g, color.b) == (0, 0, 0) =>
+            {
+                Some(color.a)
+            }
+            _ => None,
+        }
+    }
+
+    /// [`at_the_explosion`], stepped one tick at a time through the hold
+    /// to its expiry, which the view reports.
+    fn held_to_expiry() -> View {
+        let mut view = at_the_explosion();
+        for _ in 0..=nova_sim::HOLD_TICKS {
+            view.tick(TICK);
+        }
+        assert!(view.take_hold_expired());
+        view
+    }
+
+    #[test]
+    fn after_the_explosion_the_scene_runs_on_without_the_ship_until_the_hold_expires() {
+        let mut view = at_the_explosion();
+        let mut shots_moved = 0;
+        for tick in 1..=nova_sim::HOLD_TICKS {
+            let before = shots_in(&view);
+            view.tick(TICK);
+            assert_eq!(player_layers(&view), [0_i16; 0], "dead tick {tick}");
+            assert!(
+                ship_sprites(&view)
+                    .iter()
+                    .any(|(image, _)| image.id == 2001),
+                "the NPC is drawn on dead tick {tick}"
+            );
+            assert!(!view.take_hold_expired(), "dead tick {tick}");
+            if shots_in(&view) != before {
+                shots_moved += 1;
+            }
+        }
+        assert_eq!(shots_moved, nova_sim::HOLD_TICKS, "the fight runs on");
+        assert_eq!(
+            fate_of(&view),
+            PlayerFate::Holding { ticks_left: 0 },
+            "no ticks left, but not expired"
+        );
+        assert!(!view.game_over());
+        let before = shots_in(&view);
+        view.tick(TICK);
+        assert_ne!(shots_in(&view), before, "the 243rd step runs");
+        assert!(view.take_hold_expired(), "and the hold expires on it");
+        assert!(!view.take_hold_expired(), "once");
+    }
+
+    #[test]
+    fn a_long_frame_stops_stepping_on_the_hold_expirys_step() {
+        let stepped = held_to_expiry();
+        let mut view = at_the_explosion();
+        for _ in 0..nova_sim::HOLD_TICKS - 2 {
+            view.tick(TICK);
+        }
+        view.tick(TICK * 8);
+        assert!(view.take_hold_expired());
+        assert_eq!(shots_in(&view), shots_in(&stepped), "no step after it");
+        assert_eq!(
+            view.session().expect("flying").npcs(),
+            stepped.session().expect("flying").npcs()
+        );
+    }
+
+    #[test]
+    fn at_hold_expiry_flight_stops_and_nothing_fades_until_the_fade_begins() {
+        let mut view = held_to_expiry();
+        let shots = shots_in(&view);
+        for _ in 0..30 {
+            view.tick(TICK);
+            assert_eq!(shots_in(&view), shots, "nothing moves");
+            assert_eq!(black_over(&view), None, "nothing fades");
+            assert_eq!(fate_of(&view), PlayerFate::Holding { ticks_left: 0 });
+            assert!(!view.game_over());
+        }
+        view.begin_fade();
+        assert_eq!(fate_of(&view), PlayerFate::Fading);
+    }
+
+    #[test]
+    fn the_death_fade_goes_to_black_over_a_second_then_the_game_is_over() {
+        let mut view = held_to_expiry();
+        view.begin_fade();
+        let shots = shots_in(&view);
+        view.tick(Duration::from_millis(500));
+        assert_eq!(black_over(&view), Some(128), "half way, over the HUD");
+        assert!(!view.game_over());
+        assert_eq!(shots_in(&view), shots, "the scene is frozen under it");
+        view.tick(Duration::from_millis(499));
+        assert!(!view.game_over());
+        assert_eq!(fate_of(&view), PlayerFate::Fading);
+        view.tick(Duration::from_millis(1));
+        assert_eq!(black_over(&view), Some(255));
+        assert!(view.game_over());
+        assert_eq!(fate_of(&view), PlayerFate::GameOver);
+        assert_eq!(shots_in(&view), shots);
+    }
+
+    #[test]
+    fn beginning_the_fade_before_the_hold_expires_does_nothing() {
+        let mut view = at_the_explosion();
+        view.tick(TICK);
+        view.begin_fade();
+        view.tick(Duration::from_millis(1500));
+        assert_eq!(black_over(&view), None);
+        assert!(!view.game_over());
+        assert!(matches!(fate_of(&view), PlayerFate::Holding { .. }));
+    }
+
+    #[test]
+    fn only_a_living_pilot_may_be_saved() {
+        let flying = fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        assert!(flying.may_save());
+        assert!(!at_the_explosion().may_save());
+        let mut failed = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..killed_in(1)
+        });
+        assert!(failed.session().is_err());
+        assert!(!failed.may_save(), "no session, no pilot to save");
+        assert!(!failed.take_hold_expired());
+        assert!(!failed.game_over());
+        failed.begin_fade();
+        failed.tick(Duration::from_secs(2));
+        assert!(!failed.game_over());
     }
 
     /// Whether `list` draws `run` as one unbroken run of commands.
