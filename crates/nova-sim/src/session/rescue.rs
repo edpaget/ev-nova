@@ -423,6 +423,47 @@ mod tests {
     }
 
     #[test]
+    fn the_search_map_holds_a_stellar_whose_owner_is_hidden_inactive() {
+        let mut catalog = galaxy();
+        hideable(&mut catalog);
+        let mut session = explored(&catalog, &[131, 133]);
+        session.pilot.bits_mut().set(hiding_bit(131));
+        session.refresh_galaxy(&catalog);
+        assert!(!session.galaxy().visible(SystemId(131)), "hidden");
+        let map = session.search_map(&catalog);
+        assert_eq!(
+            map.stellars(SystemId(131)),
+            [(StellarId(140), false), (StellarId(141), false)],
+            "the shipyard's owner is hidden"
+        );
+        assert_eq!(map.stellars(SystemId(133)), [(StellarId(160), true)]);
+    }
+
+    #[test]
+    fn the_pod_passes_over_a_stellar_no_system_owns() {
+        let mut catalog = galaxy();
+        catalog.star_map[0].links = [134, 133].map(SystemId).to_vec();
+        catalog.star_map.push(star(134, (-600.0, 0.0), &[]));
+        catalog.systems.push(SystemId(134));
+        catalog.sites.push((SystemId(134), vec![yard(170)]));
+        let session = explored(&catalog, &[133, 134]);
+        assert!(session.search_map(&catalog).open(SystemId(134)));
+        assert_eq!(
+            session.stellar_owner(StellarId(170)),
+            None,
+            "133 stands for 134's place"
+        );
+        assert_eq!(
+            session.search_map(&catalog).stellars(SystemId(134)),
+            [(StellarId(170), false)]
+        );
+        assert_eq!(
+            session.escape_destination(SystemId(130), &catalog),
+            SystemId(133)
+        );
+    }
+
+    #[test]
     fn the_pod_goes_to_the_found_stellars_system_or_128() {
         let catalog = galaxy();
         let session = explored(&catalog, &[131, 132, 133]);
