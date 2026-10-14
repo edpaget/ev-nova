@@ -148,6 +148,29 @@ pub struct LandingSite {
     /// Its `Tribute`, raw: what it pays a day while dominated, as
     /// [`tribute_of`](crate::player_info::tribute_of) reads it.
     pub tribute: i16,
+    /// Its animation fields and frame counts, which a hypergate's sprite
+    /// reads ([`gate_sprite`](crate::gate_sprite)).
+    pub animation: SiteAnimation,
+}
+
+/// A stellar's animation fields, raw from its `spöb`, and the frame counts
+/// of its sheets, as the original's sprite tick reads them
+/// (`_LoadObjectData` @0x7761b-0x77631, `_LoadMasterStellarSprite`
+/// @0x1ed8c-0x1ed97).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SiteAnimation {
+    /// Its `AnimDelay`, raw.
+    pub delay: i16,
+    /// Its `Frame0Bias`, raw.
+    pub frame0_bias: i16,
+    /// Its `CustPicID`, raw: a hypergate's open frame, when it is one.
+    pub open_frame: i16,
+    /// Its `Type`'s `spïn` frame count, `xTiles` × `yTiles`: 0 when that
+    /// does not read or is not above 0, and at most 65535.
+    pub type_frames: u16,
+    /// Its `DeadType`'s, likewise, when [`dead_graphic`](LandingSite::dead_graphic)
+    /// is `Some`; 0 otherwise.
+    pub dead_frames: u16,
 }
 
 /// A stellar a hypergate or wormhole may lead to, raw from its `spöb`: the
@@ -1672,6 +1695,7 @@ mod tests {
                 type_counts_frames: true,
                 exit_angle: -1,
                 tribute: 0,
+                animation: crate::catalog::SiteAnimation::default(),
             }]
         }
 

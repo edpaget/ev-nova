@@ -36,9 +36,9 @@ use crate::catalog::{
     FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkRecord, LandingSite, ListedStellar,
     MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord, OutfitId,
     OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
-    RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, StellarMark, StockWeapon, StringPatch, SystemId, SystemTraffic, SystemVisibility,
-    TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
+    RankId, RankRecord, ShipId, ShipRecord, SiteAnimation, SoundId, StarSystem, StartDate,
+    StartError, StellarId, StellarLife, StellarMark, StockWeapon, StringPatch, SystemId,
+    SystemTraffic, SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord, loaded_mod_val,
 };
 use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
@@ -218,6 +218,14 @@ impl PilotCatalog for GameData {
                     type_counts_frames: counts_frames(self, stellar.graphic_type),
                     exit_angle: stellar.cust_snd_id,
                     tribute: stellar.tribute,
+                    animation: SiteAnimation {
+                        delay: stellar.anim_delay,
+                        frame0_bias: stellar.frame0_bias,
+                        open_frame: stellar.cust_pic_id,
+                        type_frames: frame_count(self, stellar.graphic_type),
+                        dead_frames: dead_frame_size
+                            .map_or(0, |_| frame_count(self, stellar.dead_type)),
+                    },
                 })
             })
             .collect()
@@ -626,9 +634,21 @@ const LAST_RANK: i16 = 255;
 /// original's `_LoadMasterStellarSprite` multiplies them
 /// (@0x1ed8c-0x1ed97).
 fn counts_frames(data: &GameData, graphic: i16) -> bool {
-    stellar_spin_id(graphic)
-        .and_then(|spin| data.get::<Spin>(spin)?.ok())
-        .is_some_and(|spin| i32::from(spin.record.x_tiles) * i32::from(spin.record.y_tiles) > 0)
+    tiles(data, graphic).is_some_and(|tiles| tiles > 0)
+}
+
+/// Graphic type `graphic`'s frame count in `data`, its `spïn`'s `xTiles` ×
+/// `yTiles` as [`counts_frames`] reckons it: 0 when it does not read or is
+/// not above 0, and at most `u16::MAX`.
+fn frame_count(data: &GameData, graphic: i16) -> u16 {
+    tiles(data, graphic).map_or(0, |tiles| u16::try_from(tiles.max(0)).unwrap_or(u16::MAX))
+}
+
+/// Graphic type `graphic`'s `spïn`'s `xTiles` × `yTiles` in 32 bits, when
+/// it reads.
+fn tiles(data: &GameData, graphic: i16) -> Option<i32> {
+    let spin = data.get::<Spin>(stellar_spin_id(graphic)?)?.ok()?;
+    Some(i32::from(spin.record.x_tiles) * i32::from(spin.record.y_tiles))
 }
 
 /// Reads the records afresh on every call; a session asks each time it
@@ -2031,6 +2051,11 @@ mod tests {
                     type_counts_frames: true,
                     exit_angle: 0,
                     tribute: 0,
+                    animation: SiteAnimation {
+                        type_frames: 1,
+                        dead_frames: 1,
+                        ..SiteAnimation::default()
+                    },
                 },
                 LandingSite {
                     id: StellarId(128),
@@ -2050,6 +2075,10 @@ mod tests {
                     type_counts_frames: false,
                     exit_angle: 0,
                     tribute: 250,
+                    animation: SiteAnimation {
+                        dead_frames: 1,
+                        ..SiteAnimation::default()
+                    },
                 },
             ]
         );
@@ -2159,6 +2188,63 @@ mod tests {
             (Stellar::TYPE, 128, stellar(0, 0, 0, 1, 0)),
         ]);
         assert!(!no_spin.landing_sites(SystemId(130))[0].type_counts_frames);
+    }
+
+    #[test]
+    fn a_landing_site_reads_its_animation_fields_and_its_sheets_frame_counts() {
+        let mut gate = dead_as(stellar(0, 0, 3, 1, 0), 6);
+        put_i16s(&mut gate, 0x18, &[17]);
+        put_i16s(&mut gate, 0x22, &[-1, 4]);
+        let tiles = |image, x: i16, y: i16| {
+            let mut bytes = spin(image);
+            put_i16s(&mut bytes, 0x08, &[x, y]);
+            bytes
+        };
+        let data = store(&[
+            (System::TYPE, 130, system_with(&[128, 129, 130])),
+            (Stellar::TYPE, 128, gate),
+            // A DeadType sheet that is not there counts no frames.
+            (Stellar::TYPE, 129, dead_as(stellar(0, 0, 4, 1, 0), 5)),
+            // Tiles that multiply to 0 or less, or past a u16.
+            (Stellar::TYPE, 130, dead_as(stellar(0, 0, 7, 1, 0), 8)),
+            (Spin::TYPE, 1003, tiles(1003, 6, 7)),
+            (RLED, 1003, sheet(12, 30)),
+            (Spin::TYPE, 1004, tiles(1004, 2, 3)),
+            (RLED, 1004, sheet(12, 30)),
+            (Spin::TYPE, 1005, tiles(1005, 1, 9)),
+            (Spin::TYPE, 1006, tiles(1006, 4, 2)),
+            (RLED, 1006, sheet(50, 20)),
+            (Spin::TYPE, 1007, tiles(1007, -2, 3)),
+            (RLED, 1007, sheet(12, 30)),
+            (Spin::TYPE, 1008, tiles(1008, 300, 300)),
+            (RLED, 1008, sheet(12, 30)),
+        ]);
+        let animations: Vec<SiteAnimation> = data
+            .landing_sites(SystemId(130))
+            .iter()
+            .map(|site| site.animation)
+            .collect();
+        assert_eq!(
+            animations,
+            [
+                SiteAnimation {
+                    delay: -1,
+                    frame0_bias: 4,
+                    open_frame: 17,
+                    type_frames: 42,
+                    dead_frames: 8,
+                },
+                SiteAnimation {
+                    type_frames: 6,
+                    ..SiteAnimation::default()
+                },
+                SiteAnimation {
+                    type_frames: 0,
+                    dead_frames: u16::MAX,
+                    ..SiteAnimation::default()
+                },
+            ]
+        );
     }
 
     #[test]

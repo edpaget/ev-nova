@@ -66,7 +66,7 @@
 //!   stellar drawing does; `_HandleSpriteMurkiness` (@0x2eea4) is left
 //!   out for every sprite.
 
-use crate::catalog::StellarId;
+use crate::catalog::{LandingSite, SiteAnimation, StellarId};
 use crate::chance::Chance;
 use crate::traffic::npc::Npc;
 
@@ -95,6 +95,31 @@ pub struct GateAnimation {
 }
 
 impl GateAnimation {
+    /// `site`'s, counting its `DeadType` sheet's frames while it is
+    /// destroyed with one that reads, and its `Type` sheet's otherwise, as
+    /// the stellar's sprite slot holds one or the other.
+    #[must_use]
+    pub fn of(site: &LandingSite) -> Self {
+        let SiteAnimation {
+            delay,
+            frame0_bias,
+            open_frame,
+            type_frames,
+            dead_frames,
+        } = site.animation;
+        Self {
+            delay,
+            frame0_bias,
+            open_pic: open_frame,
+            flags2: site.flags2,
+            frames: if site.destroyed && site.dead_graphic.is_some() {
+                dead_frames
+            } else {
+                type_frames
+            },
+        }
+    }
+
     /// The open frame `o`: its `CustPicID`, or frames / 2 when that is 0
     /// or less or at least frames - 1 (@0x2e83c-0x2e864).
     #[must_use]
@@ -324,6 +349,43 @@ mod tests {
         }
         assert_eq!(gate(42, 0).open_frame(), 21);
         assert_eq!(gate(7, 0).open_frame(), 3);
+    }
+
+    #[test]
+    fn a_sites_gate_animation_counts_its_dead_sheet_while_destroyed_with_one() {
+        let site = LandingSite {
+            flags2: crate::gate::HYPERGATE | RANDOM | ONLY_WHEN_DESTROYED,
+            dead_graphic: Some(6),
+            animation: SiteAnimation {
+                delay: 3,
+                frame0_bias: 2,
+                open_frame: 9,
+                type_frames: 42,
+                dead_frames: 8,
+            },
+            ..crate::testkit::planet(128, 0.0, 0.0)
+        };
+        let anim = GateAnimation {
+            delay: 3,
+            frame0_bias: 2,
+            open_pic: 9,
+            flags2: crate::gate::HYPERGATE | RANDOM | ONLY_WHEN_DESTROYED,
+            frames: 42,
+        };
+        assert_eq!(GateAnimation::of(&site), anim);
+        let dead = LandingSite {
+            destroyed: true,
+            ..site
+        };
+        assert_eq!(
+            GateAnimation::of(&dead),
+            GateAnimation { frames: 8, ..anim }
+        );
+        let no_dead_sheet = LandingSite {
+            dead_graphic: None,
+            ..dead
+        };
+        assert_eq!(GateAnimation::of(&no_dead_sheet), anim);
     }
 
     #[test]
