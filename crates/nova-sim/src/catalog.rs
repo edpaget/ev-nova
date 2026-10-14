@@ -1096,6 +1096,9 @@ pub struct HullRecord {
     /// Its `KeyCarried`: the ship a weapon of `Flags2` 0x0080 needs
     /// aboard, raw; none for -1.
     pub key_carried: Option<ShipId>,
+    /// Its `Cost`, raw: -1 hides a ship of the type (see
+    /// [`HullSpec::hidden`](crate::combat::hull::HullSpec::hidden)).
+    pub cost: i32,
 }
 
 /// A government's penalties for crimes against its ships, raw from its

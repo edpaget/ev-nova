@@ -37,6 +37,7 @@ pub fn translate(event: &WinitEvent, window: &impl WindowPort) -> Option<WindowE
         WinitEvent::CursorMoved { position, .. } => WindowEvent::PointerMoved {
             px: (position.x, position.y),
         },
+        WinitEvent::CursorLeft { .. } => WindowEvent::PointerLeft,
         WinitEvent::MouseInput { state, button, .. } => WindowEvent::PointerButton {
             button: map_button(*button),
             pressed: state.is_pressed(),
@@ -480,6 +481,10 @@ mod tests {
             translate(&moved, &Window),
             Some(WindowEvent::PointerMoved { px: (12.5, 40.0) })
         );
+        let left = WinitEvent::CursorLeft {
+            device_id: DeviceId::dummy(),
+        };
+        assert_eq!(translate(&left, &Window), Some(WindowEvent::PointerLeft));
         let pressed = WinitEvent::MouseInput {
             device_id: DeviceId::dummy(),
             state: ElementState::Pressed,

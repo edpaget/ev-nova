@@ -91,7 +91,7 @@ pub fn stellar_under(
 
 /// Half the width and half the height of the click box around a drawn
 /// frame of `frame_size`.
-fn half_box(frame_size: Option<(u32, u32)>) -> (f32, f32) {
+pub(crate) fn half_box(frame_size: Option<(u32, u32)>) -> (f32, f32) {
     match frame_size {
         None => (UNKNOWN_STELLAR_RADIUS, UNKNOWN_STELLAR_RADIUS),
         Some((width, height)) => {

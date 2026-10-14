@@ -4,7 +4,8 @@
 //! mission chain from a script of [`Step`]s (see the `walker` module); and
 //! [`bits_allowing`], the control bits that make a test hold, for setting
 //! a pilot up directly; [`disable`], for disabling a ship directly;
-//! [`cloak`], for setting a ship's cloak directly; and
+//! [`cloak`], for setting a ship's cloak directly; [`hide`], for
+//! making a ship's type one whose `Cost` is -1; and
 //! [`listed_stellars`], a fake catalog's listed stellars derived from its
 //! landing sites.
 
@@ -45,6 +46,15 @@ pub fn disable(session: &mut Session, id: NpcId) {
 pub fn cloak(session: &mut Session, id: NpcId, to: Cloak) {
     if let Some(npc) = session.npc_mut(id) {
         npc.cloak = to;
+    }
+}
+
+/// Makes NPC `id`'s type in `session` one whose `Cost` is -1, if it is
+/// in the system: for a test that needs a hidden ship
+/// ([`Session::is_hidden`]).
+pub fn hide(session: &mut Session, id: NpcId) {
+    if let Some(npc) = session.npc_mut(id) {
+        npc.hull.hidden = true;
     }
 }
 

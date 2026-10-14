@@ -9,6 +9,9 @@
 //! the saved pilots and flies the one chosen, from the spaceport of the
 //! stellar it last landed on when it is docked. Quit quits. Escape in
 //! flight goes back to the menu, saving the pilot and putting it away.
+//! Each flight put away leaves its ship slots' draw-layer history, which
+//! every later flight of the run starts from, as the original's sprite
+//! layers outlive a pilot ([`nova_sim::ship_layer`]).
 //!
 //! A pilot with a name is saved through the [`PilotKeeper`] on landing,
 //! on taking off, after each change made in the spaceport
@@ -197,6 +200,7 @@ use std::time::Duration;
 
 use nova_data::GameData;
 use nova_sim::board::MAX_ESCORTS;
+use nova_sim::ship_layer::SlotSprites;
 use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
     HailView, HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
@@ -295,6 +299,11 @@ pub struct AppScreen {
     galaxy: Navigator<Rc<GameData>>,
     /// Flight, once entered, reading the same game data.
     flight: Option<FlightView<Rc<GameData>>>,
+    /// The ship slots' draw-layer and cloned-frame history the last
+    /// flight put away left, which each new flight starts from: the
+    /// original's sprites outlive a pilot, `_InitSprites` running once at
+    /// launch (see [`nova_sim::ship_layer`]).
+    slot_sprites: SlotSprites,
     /// What dialogs are built from, once given.
     dialogs: Option<Dialogs>,
     /// The About dialog, while it is open.
@@ -410,6 +419,7 @@ impl AppScreen {
             ships: ShipBrowser::new(Rc::clone(&data)),
             data,
             flight: None,
+            slot_sprites: SlotSprites::default(),
             dialogs: None,
             about: None,
             spaceport: None,
@@ -653,6 +663,7 @@ impl AppScreen {
             .with_boarding_rule(Rc::clone(&self.boarding_rule))
             .with_hail_options(self.hail_options.clone())
             .with_rules(self.rules)
+            .with_slot_sprites(self.slot_sprites.clone())
             .with_overlays(self.flight_overlays)
             .with_hire_terms(Rc::clone(&self.hire_terms))
             .with_control_bits(Rc::clone(&self.control_bits))
@@ -1064,7 +1075,7 @@ impl AppScreen {
                     // the developer's F flies a fresh, unnamed pilot.
                     self.switch_to(Side::MainMenu);
                     self.save_pilot();
-                    self.flight = None;
+                    self.put_away_flight();
                     self.spaceport = None;
                 } else {
                     self.switch_to(self.return_to);
@@ -1539,6 +1550,7 @@ impl AppScreen {
     /// spaceport.
     fn start_flight(&mut self, pilot: Pilot) {
         self.spaceport = None;
+        self.put_away_flight();
         let mut flight = self.flight(|data| FlightView::with_pilot(data, pilot));
         let landing = flight.take_landing();
         self.flight = Some(flight);
@@ -1546,6 +1558,19 @@ impl AppScreen {
         self.switch_to(Side::Flight);
         if let Some(stellar) = landing {
             self.show_spaceport(stellar);
+        }
+    }
+
+    /// Drops the flight, if any, keeping its ship slots' draw-layer and
+    /// cloned-frame history for the next flight in this run.
+    fn put_away_flight(&mut self) {
+        if let Some(slot_sprites) = self
+            .flight
+            .take()
+            .as_ref()
+            .and_then(FlightView::slot_sprites)
+        {
+            self.slot_sprites = slot_sprites.clone();
         }
     }
 
@@ -2357,6 +2382,12 @@ impl Screen for AppScreen {
         Some(self.showing())
     }
 
+    /// Flight's ([`FlightView`]'s cursor), while it shows with nothing
+    /// over it.
+    fn hides_pointer(&self) -> bool {
+        self.showing() == Showing::Flight && self.shown().hides_pointer()
+    }
+
     /// Saves the pilot flying, in flight or in the spaceport, when it has
     /// a name.
     fn quit(&mut self) {
@@ -2666,6 +2697,7 @@ pub(super) mod tests {
             .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &stellar)
             .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &landable())
             .resource(Spin::TYPE, 1000, None, &spin)
+            .resource(Spin::TYPE, 650, None, &spin)
             .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
     }
 
@@ -3297,6 +3329,18 @@ pub(super) mod tests {
         screen.input(&key(Key::Escape, true));
         screen.input(&key(Key::Char('f'), true));
         assert_eq!(ship(&screen), flown, "the same flight");
+    }
+
+    #[test]
+    fn only_flight_with_nothing_over_it_hides_the_system_pointer() {
+        let mut screen = with_dialogs(data());
+        assert!(!screen.hides_pointer(), "the ship browser");
+        fly(&mut screen);
+        assert!(screen.hides_pointer(), "flight");
+        open_prefs(&mut screen);
+        assert!(!screen.hides_pointer(), "the preferences over it");
+        screen.input(&key(Key::Escape, true));
+        assert!(screen.hides_pointer(), "flight again");
     }
 
     #[test]
@@ -4797,6 +4841,72 @@ pub(super) mod tests {
             Showing::GalaxyMap,
             "back to the map first"
         );
+    }
+
+    /// Slot history with berth 1 in the escorts' layer and holding
+    /// `shïp` 140's frames, as a flight that led a ship of that type there
+    /// leaves it.
+    fn led_berth_1() -> SlotSprites {
+        let mut sprites = SlotSprites::default();
+        sprites.layers.put(
+            nova_sim::ship_layer::Slot::Berth(1),
+            nova_sim::ship_layer::ShipLayer::Led,
+        );
+        sprites
+            .frames
+            .clone_frames(nova_sim::ship_layer::Slot::Berth(1), nova_sim::ShipId(140));
+        sprites
+    }
+
+    /// Gives the flight shown `sprites` as its history, as its ticks would.
+    fn lay_out(screen: &mut AppScreen, sprites: SlotSprites) {
+        screen.flight = screen
+            .flight
+            .take()
+            .map(|flight| flight.with_slot_sprites(sprites));
+    }
+
+    #[test]
+    fn a_pilot_loaded_after_another_starts_from_the_layers_it_left() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        assert_eq!(
+            AppScreen::new(data()).slot_sprites,
+            SlotSprites::default(),
+            "a run starts from the launch order"
+        );
+        create(&mut screen, "Ada");
+        lay_out(&mut screen, led_berth_1());
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        assert!(screen.flight_view().is_none(), "put away");
+        create(&mut screen, "Bea");
+        assert_eq!(pilot(&screen).name(), "Bea");
+        assert_eq!(flight(&screen).slot_sprites(), Some(&led_berth_1()));
+    }
+
+    #[test]
+    fn a_pilot_replaced_while_flying_hands_on_its_layers() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        lay_out(&mut screen, led_berth_1());
+        let bea = nova_sim::Pilot::new(screen.data.as_ref(), "Bea").expect("a pilot");
+        screen.start_flight(bea);
+        assert_eq!(flight(&screen).slot_sprites(), Some(&led_berth_1()));
+    }
+
+    #[test]
+    fn the_developers_flight_after_a_pilot_starts_from_the_layers_it_left() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        lay_out(&mut screen, led_berth_1());
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Tab, true));
+        screen.input(&key(Key::Char('f'), true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        assert_eq!(flight(&screen).slot_sprites(), Some(&led_berth_1()));
     }
 
     #[test]

@@ -289,6 +289,7 @@ pub mod grant;
 pub mod hail;
 pub mod handling;
 pub mod hire;
+pub mod hover;
 pub mod hyperspace;
 pub mod iff;
 pub mod landing;
@@ -382,6 +383,7 @@ pub use hail::{
 };
 pub use handling::{Handling, ShipFields};
 pub use hire::{HireList, HireRefusal, HireRow, HireTerms, Hired, NovaHire, PayNote, price_flux};
+pub use hover::{DrawnBox, DrawnShips, Hover, hover_gate};
 pub use hyperspace::{
     CoLocated, HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, JumpZoneRule,
     MultiJumpRule, Places, RouteError, StarMap, check_jump, hops_per_jump, jump_zone,

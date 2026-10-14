@@ -473,6 +473,7 @@ mod tests {
                 ),
             ]),
             boxes: BTreeMap::new(),
+            cursor: None,
         }
     }
 

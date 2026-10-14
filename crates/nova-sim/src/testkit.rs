@@ -424,6 +424,7 @@ pub(crate) fn hull(id: i16) -> HullRecord {
         height: None,
         strength: 0,
         key_carried: None,
+        cost: 0,
     }
 }
 

@@ -352,6 +352,7 @@ mod gate_follow;
 mod hail;
 mod hire;
 mod hooks;
+mod hover;
 mod mission_cargo;
 mod mission_escorts;
 mod mission_screens;
@@ -784,9 +785,10 @@ pub struct Session {
     /// [`Session::with_rules`]); never saved.
     rules: Rulebook,
     /// Each ship slot's draw layer and when it entered it (see
-    /// [`Session::draw_order`]): kept from the session's start, across
+    /// [`Session::draw_order`]), and the frames it last cloned (see
+    /// [`Session::framed_by`]): kept from the session's start, across
     /// every system entry and every ship leaving; never saved.
-    layers: crate::ship_layer::LayerEntries,
+    slot_sprites: crate::ship_layer::SlotSprites,
     /// The story runtime: the events raised and the ships watched (see the
     /// [`story`](crate::story) module); never saved.
     story: story::StoryRuntime,
@@ -1102,7 +1104,7 @@ impl Session {
             hold_position: false,
             touchdown: player.position,
             rules: Rulebook::default(),
-            layers: crate::ship_layer::LayerEntries::new(),
+            slot_sprites: crate::ship_layer::SlotSprites::default(),
             story: story::StoryRuntime::default(),
             lives: catalog
                 .stellar_lives()
