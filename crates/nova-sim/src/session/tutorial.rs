@@ -151,7 +151,7 @@ mod tests {
         let catalog = catalog();
         let mut session = new_pilot(&catalog);
         tick(&mut session);
-        session.player.position = Vec2::new(0.0, 1500.0);
+        session.player.position = Vec2::new(1500.0, 0.0);
         session.frame = 60;
         assert_eq!(
             tick(&mut session),
