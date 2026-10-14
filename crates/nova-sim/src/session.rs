@@ -1872,7 +1872,9 @@ impl Session {
     /// ship's final explosion, the player's too, sends out a shockwave
     /// ([`shockwave`](crate::combat::shockwave)) that sets the velocity of
     /// each ship it pushes; the player's is not pushed while its jump is
-    /// under way, the pre-jump stage included.
+    /// under way, the pre-jump stage included. Before anything else the
+    /// sabotage clock ticks, and what it sets off goes off (see the
+    /// `sabotage` module).
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         self.player_exploded_this_tick = false;
         if self.landed.is_some() || self.jumping().is_some() {

@@ -147,7 +147,7 @@ impl Session {
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
-pub(super) mod tests {
+mod tests {
     use super::*;
     use crate::catalog::OutfitId;
     use crate::catalog::{BoomId, ShipId, SoundId, SystemId};
@@ -163,11 +163,11 @@ pub(super) mod tests {
     use crate::testkit::{Draws, FakePilotCatalog, fly_out, land_now, outfit};
 
     /// A kill outfit and a bomb outfit.
-    pub(in crate::session) const KILL: i16 = 261;
-    pub(in crate::session) const BOMB: i16 = 262;
+    const KILL: i16 = 261;
+    const BOMB: i16 = 262;
 
     /// `armed`'s catalog with [`KILL`] and [`BOMB`].
-    pub(in crate::session) fn sabotaged() -> FakePilotCatalog {
+    fn sabotaged() -> FakePilotCatalog {
         let mut catalog = armed();
         catalog.outfits.extend([
             outfit(KILL, &[(SABOTAGE_KILL, 4100)]),
@@ -177,7 +177,7 @@ pub(super) mod tests {
     }
 
     /// `catalog`'s new pilot owning `outfits`, each `(id, count)`, flown.
-    pub(in crate::session) fn flown(catalog: &FakePilotCatalog, outfits: &[(i16, u16)]) -> Session {
+    fn flown(catalog: &FakePilotCatalog, outfits: &[(i16, u16)]) -> Session {
         let mut pilot = Pilot::new(catalog, "Ada").expect("starts");
         pilot
             .outfits
@@ -186,7 +186,7 @@ pub(super) mod tests {
     }
 
     /// A fight tick drawing `draws`: its sounds.
-    pub(in crate::session) fn fight(session: &mut Session, draws: &[u32]) -> Vec<SimSound> {
+    fn fight(session: &mut Session, draws: &[u32]) -> Vec<SimSound> {
         session.take_sounds();
         session.tick_combat(Rules::default(), &mut Draws::of(draws));
         session.take_sounds()
@@ -328,7 +328,7 @@ pub(super) mod tests {
 
     /// `catalog`'s pilot owning `outfits`, flown, its clock seeded and
     /// at the fuse: the next fight tick sets it off.
-    pub(in crate::session) fn lit(catalog: &FakePilotCatalog, outfits: &[(i16, u16)]) -> Session {
+    fn lit(catalog: &FakePilotCatalog, outfits: &[(i16, u16)]) -> Session {
         let mut session = flown(catalog, outfits);
         fight(&mut session, &[0]);
         session.sabotage.set_counter(FUSE);
