@@ -420,6 +420,43 @@ mod tests {
     }
 
     #[test]
+    fn the_search_map_passes_over_a_shipyard_the_story_destroyed() {
+        let catalog = galaxy().living([crate::testkit::life(141, 5)]);
+        let mut session = explored(&catalog, &[131, 132, 133]);
+        session.run_set(
+            &crate::control::SetExpr::parse("Y141").expect("parses"),
+            &mut Scripted::default(),
+        );
+        assert!(session.galaxy().destroyed(StellarId(141)), "destroyed");
+        let map = session.search_map(&catalog);
+        assert_eq!(
+            map.stellars(SystemId(131)),
+            [(StellarId(140), false), (StellarId(141), false)],
+            "the overlay's destruction"
+        );
+        assert_eq!(
+            session.escape_destination(SystemId(130), &catalog),
+            SystemId(133),
+            "on to the next linked system's shipyard"
+        );
+    }
+
+    #[test]
+    fn the_search_map_closes_a_hidden_system() {
+        let mut catalog = galaxy();
+        hideable(&mut catalog);
+        let mut session = explored(&catalog, &[131, 133]);
+        session.pilot.bits_mut().set(hiding_bit(133));
+        session.refresh_galaxy(&catalog);
+        assert!(
+            session.galaxy().exists(SystemId(133)),
+            "still in the galaxy"
+        );
+        assert!(!session.search_map(&catalog).open(SystemId(133)), "hidden");
+        assert!(session.search_map(&catalog).open(SystemId(131)));
+    }
+
+    #[test]
     fn the_pod_passes_over_a_stellar_no_system_owns() {
         let mut catalog = galaxy();
         catalog.star_map[0].links = [134, 133].map(SystemId).to_vec();
