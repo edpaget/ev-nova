@@ -634,6 +634,39 @@ pub(crate) fn with_variants(mut catalog: FakePilotCatalog) -> FakePilotCatalog {
     catalog
 }
 
+/// `catalog` with a system 134 at 131's map place, (600, 0), listing a
+/// stellar 141 at the centre, as 131 lists 140: 131 shows while b50 is
+/// clear, 134 once it is set. With `marked`, 140 and 141 are marked with
+/// one place and name, so b50 swaps a stellar for its variant (Tri'niphu
+/// 212 for 657 after b1502, in miniature); without, they differ by name.
+pub(crate) fn swapped(mut catalog: FakePilotCatalog, marked: bool) -> FakePilotCatalog {
+    catalog.systems.push(SystemId(134));
+    catalog.star_map.push(star(134, (600.0, 0.0), &[]));
+    catalog
+        .sites
+        .push((SystemId(134), vec![planet(141, 0.0, 0.0)]));
+    let mark = |id, name: &str| StellarMark {
+        id: StellarId(id),
+        place: (0, 0),
+        name: name.to_owned(),
+    };
+    let other = if marked { "Tre'ar Zalom" } else { "Elsewhere" };
+    catalog
+        .marks
+        .extend([mark(140, "Tre'ar Zalom"), mark(141, other)]);
+    catalog.visibility.extend([
+        SystemVisibility {
+            id: SystemId(131),
+            visibility: Test::parse("!b50"),
+        },
+        SystemVisibility {
+            id: SystemId(134),
+            visibility: Test::parse("b50"),
+        },
+    ]);
+    catalog
+}
+
 pub(crate) const START: StartDate = StartDate {
     day: 23,
     month: 6,

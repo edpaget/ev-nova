@@ -82,6 +82,12 @@ pub(super) struct Refresh {
 }
 
 impl Refresh {
+    /// Whether it hides `system`: whether the system's `Visibility` fails.
+    #[cfg(any(test, feature = "fixture"))]
+    pub(super) fn hides(&self, system: SystemId) -> bool {
+        self.hidden.contains(&system)
+    }
+
     /// Writes it on `overlay`: every system's visibility and every
     /// nebula's activity. Whether that changed anything.
     pub(super) fn write(&self, overlay: &mut GalaxyOverlay) -> bool {

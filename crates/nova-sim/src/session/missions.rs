@@ -91,9 +91,21 @@ use crate::news::CARGO_NAMES;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::rules::Verdict;
 use crate::story::{
-    Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
+    Consumer, EventFilter, StoryEvent, StoryEventKind, Subscription, SubscriptionId, listers_of,
 };
 use crate::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames};
+
+/// Why a mission's stop has no landing a player can reach
+/// ([`Session::stop_landing`]).
+#[cfg(any(test, feature = "fixture"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StopRefusal {
+    /// No system lists the stellar.
+    NoSystem,
+    /// Every system listing it is hidden, and no stellar identical to
+    /// it is visible.
+    Hidden,
+}
 
 /// The offer roll's subscription: the offers', which run first on a
 /// landing, before the mission ships' goal checks and every mission
@@ -228,6 +240,52 @@ impl Session {
     pub(crate) fn docked_at_mission_stop(&self, stop: Stop) -> bool {
         self.landed
             .is_some_and(|docked| self.docked_at_stop(Some(stop), docked))
+    }
+
+    /// Where a mission's `stop` is landed at, as a player can reach it:
+    /// the system and the stellar. A system is visible as the next
+    /// landing's galaxy refresh leaves it (`Session::refresh_now`),
+    /// from the control bits now: a bit set since the last landing shows
+    /// or hides it already, as any landing would. A visible stellar (one
+    /// that a system in the galaxy and visible lists) is landed at in its stored
+    /// system when that is a visible lister, else in its first visible
+    /// lister. A hidden one is landed at through its first variant
+    /// ([`StellarMarks::variants`], by
+    /// [`RuleKey::MissionStellarIdentity`]) that is visible, in that
+    /// variant's first visible lister, as `_StellarsAreIdentical`
+    /// matches them. A visible lister shadowed by another at its place
+    /// (`CoLocatedResolution`) counts as visible. Built only for the
+    /// storyline walker (`fixture`), its one caller.
+    ///
+    /// # Errors
+    ///
+    /// [`StopRefusal::NoSystem`] when no system lists the stellar;
+    /// [`StopRefusal::Hidden`] when every lister is hidden and no
+    /// variant is visible.
+    #[cfg(any(test, feature = "fixture"))]
+    pub(crate) fn stop_landing(&self, stop: Stop) -> Result<(SystemId, StellarId), StopRefusal> {
+        let refresh = self.refresh_now();
+        let visible_listers = |stellar: StellarId| {
+            listers_of(&self.listed_stellars, stellar)
+                .iter()
+                .copied()
+                .filter(|&system| self.galaxy.exists(system) && !refresh.hides(system))
+        };
+        if listers_of(&self.listed_stellars, stop.stellar).is_empty() {
+            return Err(StopRefusal::NoSystem);
+        }
+        if let Some(first) = visible_listers(stop.stellar).next() {
+            let system = stop
+                .system
+                .filter(|&stored| visible_listers(stop.stellar).any(|system| system == stored))
+                .unwrap_or(first);
+            return Ok((system, stop.stellar));
+        }
+        let source = self.rules.source_for(RuleKey::MissionStellarIdentity);
+        self.stellar_marks
+            .variants(stop.stellar, source)
+            .find_map(|variant| Some((visible_listers(variant).next()?, variant)))
+            .ok_or(StopRefusal::Hidden)
     }
 
     /// Registers the offer roll ([`ROLL`]) and the re-offer
@@ -1199,7 +1257,7 @@ mod tests {
     use crate::mission::{ROLLED, Stop};
     use crate::pilot::Pilot;
     use crate::testkit::{
-        Draws, FakePilotCatalog, catalog, jump, land_now, mission, planet, with_variants,
+        Draws, FakePilotCatalog, catalog, jump, land_now, mission, planet, swapped, with_variants,
     };
 
     /// [`catalog`] with stellar 150 in system 132, two jumps from 130, 131
@@ -4089,5 +4147,121 @@ mod tests {
         );
         session.pilot.reserves.fuel.now = 99.0;
         assert!(!session.ship_mission_available(MissionId(130)), "fuel");
+    }
+
+    // Where a stop is landed at.
+
+    fn stop(stellar: i16, system: Option<i16>) -> Stop {
+        Stop {
+            stellar: StellarId(stellar),
+            system: system.map(SystemId),
+        }
+    }
+
+    fn landing(system: i16, stellar: i16) -> (SystemId, StellarId) {
+        (SystemId(system), StellarId(stellar))
+    }
+
+    /// A session of `catalog` landed on 128, with b50 set, its galaxy
+    /// refreshed.
+    fn swapped_session(catalog: &FakePilotCatalog) -> Session {
+        let mut session = landed(catalog, &mut NeverFires);
+        run(&mut session, "b50");
+        session.refresh_galaxy_quietly(catalog);
+        session
+    }
+
+    #[test]
+    fn a_visible_stop_is_landed_at_in_its_stored_system() {
+        let mut galaxy = swapped(catalog(), true);
+        galaxy.sites[0].1.push(planet(141, 0.0, 3000.0));
+        let session = landed(&galaxy, &mut NeverFires);
+        assert_eq!(
+            session.stop_landing(stop(140, Some(131))),
+            Ok(landing(131, 140))
+        );
+        assert_eq!(session.stop_landing(stop(140, None)), Ok(landing(131, 140)));
+        assert_eq!(
+            session.stop_landing(stop(141, Some(130))),
+            Ok(landing(130, 141)),
+            "visible though 134, which also lists it, is not"
+        );
+    }
+
+    #[test]
+    fn a_stop_stored_in_a_hidden_system_is_landed_at_in_the_first_visible_lister() {
+        let mut galaxy = swapped(catalog(), true);
+        galaxy.sites[0].1.push(planet(141, 0.0, 3000.0));
+        galaxy.sites.swap(0, 2);
+        let session = landed(&galaxy, &mut NeverFires);
+        assert_eq!(
+            session.stop_landing(stop(141, Some(134))),
+            Ok(landing(130, 141))
+        );
+        assert_eq!(session.stop_landing(stop(141, None)), Ok(landing(130, 141)));
+    }
+
+    #[test]
+    fn a_hidden_stop_is_landed_at_its_visible_variant() {
+        let galaxy = swapped(catalog(), true);
+        let session = swapped_session(&galaxy);
+        assert!(!session.galaxy().visible(SystemId(131)));
+        assert_eq!(
+            session.stop_landing(stop(140, Some(131))),
+            Ok(landing(134, 141))
+        );
+        assert_eq!(
+            session.stop_landing(stop(141, Some(134))),
+            Ok(landing(134, 141))
+        );
+    }
+
+    #[test]
+    fn a_bit_set_since_the_last_landing_shows_and_hides_already() {
+        let galaxy = swapped(catalog(), true);
+        let mut session = landed(&galaxy, &mut NeverFires);
+        run(&mut session, "b50");
+        assert!(session.galaxy().visible(SystemId(131)), "not yet refreshed");
+        assert_eq!(
+            session.stop_landing(stop(140, Some(131))),
+            Ok(landing(134, 141))
+        );
+    }
+
+    #[test]
+    fn a_hidden_stop_with_no_visible_variant_or_no_lister_is_refused() {
+        let galaxy = swapped(catalog(), false);
+        let session = swapped_session(&galaxy);
+        assert_eq!(
+            session.stop_landing(stop(140, Some(131))),
+            Err(StopRefusal::Hidden)
+        );
+        assert_eq!(
+            session.stop_landing(stop(150, None)),
+            Err(StopRefusal::NoSystem)
+        );
+        let mut marked = swapped(catalog(), true);
+        marked.visibility[1].visibility = Test::parse("b50 & b51");
+        let session = swapped_session(&marked);
+        assert_eq!(
+            session.stop_landing(stop(140, Some(131))),
+            Err(StopRefusal::Hidden),
+            "its one variant, 141, hidden too"
+        );
+    }
+
+    #[test]
+    fn by_the_bible_a_hidden_stop_has_no_variant() {
+        let galaxy = swapped(catalog(), true);
+        let mut session = landed(&galaxy, &mut NeverFires);
+        session = session.with_rules(
+            Rulebook::default().with_override(RuleKey::MissionStellarIdentity, RuleSource::Bible),
+        );
+        run(&mut session, "b50");
+        session.refresh_galaxy_quietly(&galaxy);
+        assert_eq!(
+            session.stop_landing(stop(140, Some(131))),
+            Err(StopRefusal::Hidden)
+        );
     }
 }

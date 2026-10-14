@@ -386,6 +386,8 @@ pub use mission_screens::{
     ComputerRefusal, ComputerRow, InfoRow, MissionComputer, MissionInfo, MissionText,
     MissionTextKind,
 };
+#[cfg(any(test, feature = "fixture"))]
+pub(crate) use missions::StopRefusal;
 pub use missions::{AbortError, NotOffered};
 pub use person_offers::Hailed;
 pub use persons::PersonQuote;
