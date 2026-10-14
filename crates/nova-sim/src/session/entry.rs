@@ -896,6 +896,37 @@ mod tests {
     }
 
     #[test]
+    fn a_rescue_clears_the_course_lets_go_of_the_scene_a_jump_and_a_held_sound_and_populates() {
+        let scene: Vec<Reset> = SCENE
+            .into_iter()
+            .filter(|&reset| reset != Reset::Rebuild)
+            .collect();
+        let expected = Resets::of(
+            &with(
+                &scene,
+                &[
+                    Reset::Stellar,
+                    Reset::Explore,
+                    Reset::HeldSound,
+                    Reset::Jump,
+                    Reset::Thrust,
+                    Reset::GateEntry,
+                    Reset::RedrawOffers,
+                ],
+            ),
+            CourseStep::Clear,
+            TrafficStep::Populate,
+        );
+        for f in [facts(true, false), facts(false, true)] {
+            assert_eq!(
+                resets(Entry::Rescue, &Rulebook::default(), f),
+                expected,
+                "{f:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_landed_move_changes_where_the_pilot_is_and_defers_the_stellars() {
         let landed = Entry::ScriptMove { landed: true };
         assert_eq!(
@@ -963,15 +994,20 @@ mod tests {
                 Entry::Jump { hops: 1 },
                 Entry::Gate,
                 Entry::Relocate,
+                Entry::Rescue,
                 Entry::ScriptMove { landed: true },
                 Entry::ScriptMove { landed: false },
             ]
             .map(|how| resets(how, &rules, facts(true, false)))
         };
         let (engine, bible) = (rows(RuleSource::Engine), rows(RuleSource::Bible));
-        assert_eq!(engine[..3], bible[..3], "a jump, a gate and a relocation");
-        assert_ne!(engine[3], bible[3], "a landed move");
-        assert_ne!(engine[4], bible[4], "a move in flight");
+        assert_eq!(
+            engine[..4],
+            bible[..4],
+            "a jump, a gate, a relocation and a rescue"
+        );
+        assert_ne!(engine[4], bible[4], "a landed move");
+        assert_ne!(engine[5], bible[5], "a move in flight");
         let every_other = RuleKey::ALL
             .into_iter()
             .filter(|&key| key != RuleKey::MoveArrival)
@@ -1016,6 +1052,7 @@ mod tests {
                 (Entry::Gate, Some(SystemChanged)),
                 (Entry::ScriptMove { landed: false }, Some(SystemChanged)),
                 (Entry::ScriptMove { landed: true }, None),
+                (Entry::Rescue, Some(SystemChanged)),
             ] {
                 assert_eq!(scene_event(how, changed), event, "{how:?} {changed}");
             }

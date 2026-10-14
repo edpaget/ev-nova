@@ -802,6 +802,49 @@ mod tests {
     }
 
     #[test]
+    fn the_rescue_clears_what_reset_player_clears_and_explores_the_fallback() {
+        use crate::catalog::{RankId, SoundId};
+        use crate::scan::Latches;
+        use crate::traffic::npc::NpcId;
+        let catalog = rescuing();
+        let mut session = explored(&catalog, &[]);
+        session.pod = Some(0);
+        session.rescue_due = true;
+        session.pilot.course = vec![SystemId(131), SystemId(132)];
+        session.pilot.paint = Some(crate::Rgb15 { r: 1, g: 2, b: 3 });
+        session.secondary = Some(WeaponId(128));
+        session.jumped_from = Some(SystemId(133));
+        session.red_alert.check(true, false, true);
+        session.red_alert.step(0);
+        assert!(session.red_alert_icon().is_some(), "the alert is up");
+        session.recent_rank = Some(RankId(140));
+        session.queued.sound = Some(SoundId(200));
+        session.target = Some(NpcId(5));
+        session.nav_target = Some(StellarId(128));
+        session.pilot.ranks.insert(RankId(141));
+        session.blessing_ranks.clear();
+        session.scan_latches = Latches {
+            junk: false,
+            outfits: false,
+        };
+        assert!(!session.pilot.has_explored(RESCUE_FALLBACK), "unexplored");
+        assert!(session.rescue_if_due(&catalog, &mut NeverFires));
+        assert_eq!(session.system(), RESCUE_FALLBACK);
+        assert!(session.pilot.has_explored(RESCUE_FALLBACK), "explored");
+        assert_eq!(session.pilot.course(), []);
+        assert_eq!(session.pilot.paint, None);
+        assert_eq!(session.secondary, None);
+        assert_eq!(session.jumped_from, None);
+        assert_eq!(session.red_alert, RedAlert::default(), "threat and icon");
+        assert_eq!(session.recent_rank, None);
+        assert_eq!(session.queued.sound, None);
+        assert_eq!(session.target, None);
+        assert_eq!(session.nav_target, None);
+        assert_eq!(session.blessing_ranks, session.pilot.ranks, "taken again");
+        assert_eq!(session.scan_latches, Latches::ARMED);
+    }
+
+    #[test]
     fn the_rescue_raises_no_entered_system_hook() {
         let catalog = rescuing();
         let mut session = due(&catalog);
