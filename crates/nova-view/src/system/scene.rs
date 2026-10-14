@@ -3,6 +3,7 @@
 //! and [`draw_stellars`], which draws them through a camera for every
 //! screen that shows a system.
 
+use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 use std::time::Duration;
 
@@ -137,11 +138,35 @@ impl SystemScene {
     /// of [`RuleKey::DeadTypeFallback`](nova_sim::RuleKey::DeadTypeFallback):
     /// the sheet is broken either way.
     pub fn load(catalog: &impl SystemCatalog, id: SystemId) -> Self {
+        Self::loaded(catalog, id, |_| true)
+    }
+
+    /// System `id`, read from `catalog` once, with only the stellars of
+    /// `shown`, in navigation order: the stellars the flight's session
+    /// shows (`Session::stellars_shown`), as the original draws only the
+    /// stellars the player's system holds. Its problems are as
+    /// [`SystemScene::load`] gives them, for the stellars kept alone.
+    pub fn load_shown(
+        catalog: &impl SystemCatalog,
+        id: SystemId,
+        shown: &BTreeSet<StellarId>,
+    ) -> Self {
+        Self::loaded(catalog, id, |stellar| shown.contains(&stellar))
+    }
+
+    /// System `id`, read from `catalog` once, with the stellars `keep`
+    /// keeps (see [`SystemScene::load`]).
+    fn loaded(
+        catalog: &impl SystemCatalog,
+        id: SystemId,
+        keep: impl Fn(StellarId) -> bool,
+    ) -> Self {
         let contents = catalog.system(id);
         let type_zero = contents.type_zero_sprite;
         let stellars: Vec<SceneStellar> = contents
             .stellars
             .into_iter()
+            .filter(|stellar| keep(stellar.id))
             .map(|stellar| SceneStellar::new(stellar, type_zero.clone()))
             .collect();
         let mut problems = contents.problems;
@@ -606,6 +631,39 @@ mod tests {
             dead.animation = Animation::new(frames(3), DEAD_ANIMATED, true);
             dead
         });
+    }
+
+    #[test]
+    fn a_scene_loaded_for_a_shown_set_keeps_only_those_stellars_in_navigation_order() {
+        let mut catalog = dying();
+        catalog.systems[0].problems = vec!["sÿst 134: no spöb 160".to_owned()];
+        catalog.systems[0].type_zero_sprite = Err("no spïn 1000".to_owned());
+        let shown = [StellarId(153), StellarId(150)].into();
+        let scene = SystemScene::load_shown(&catalog, SystemId(134), &shown);
+        let ids: Vec<i16> = scene
+            .stellars()
+            .iter()
+            .map(|stellar| stellar.id.0)
+            .collect();
+        assert_eq!(ids, [150, 153]);
+        assert_eq!(
+            scene.problems(),
+            [
+                "sÿst 134: no spöb 160",
+                "spïn 1000 (graphic type 0): no spïn 1000"
+            ],
+            "152's DeadType left out with it"
+        );
+        let shown = [StellarId(150)].into();
+        let scene = SystemScene::load_shown(&catalog, SystemId(134), &shown);
+        assert_eq!(
+            scene.problems(),
+            ["sÿst 134: no spöb 160"],
+            "150 has its DeadType, so none falls back"
+        );
+        let scene = SystemScene::load_shown(&catalog, SystemId(134), &BTreeSet::new());
+        assert_eq!(scene.stellars(), []);
+        assert_eq!(scene.id(), SystemId(134));
     }
 
     #[test]

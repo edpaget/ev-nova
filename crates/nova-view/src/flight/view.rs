@@ -292,7 +292,7 @@
 //!   flight. The screen never quits.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -1193,8 +1193,9 @@ struct Redrawn {
     stellar: bool,
     /// The galaxy overlay changed: the course map was rebuilt.
     galaxy: bool,
-    /// A rebuild point changed which stellars shown are dead since it:
-    /// the stellars were drawn again.
+    /// A rebuild point changed which stellars are shown, or which shown
+    /// are dead since it: the stellars were drawn again, and read again
+    /// when they are others.
     rebuilt: bool,
 }
 
@@ -1212,6 +1213,14 @@ fn show_destroyed(scene: &mut SystemScene, session: &Session) {
         },
         session.rules().source_for(RuleKey::DeadTypeFallback),
     );
+}
+
+/// The system `session`'s player is in, read from `catalog`, with only the
+/// stellars the session shows ([`Session::stellars_shown`]), in navigation
+/// order.
+fn shown_scene(catalog: &impl SystemCatalog, session: &Session) -> SystemScene {
+    let shown: BTreeSet<StellarId> = session.stellars_shown().collect();
+    SystemScene::load_shown(catalog, session.system(), &shown)
 }
 
 /// Text metrics, shared.
@@ -1269,7 +1278,7 @@ impl<
         let (scene, sheet, sheet_ship, status_bar) = match &session {
             Ok(session) => (
                 Some({
-                    let mut scene = SystemScene::load(&catalog, session.system());
+                    let mut scene = shown_scene(&catalog, session);
                     show_destroyed(&mut scene, session);
                     scene
                 }),
@@ -1773,6 +1782,8 @@ impl<
     /// ([`FlightView::follow_ship`]); a system entered afresh is laid out
     /// ([`FlightView::lay_out`]); otherwise a move to another stellar of
     /// the system shown draws the ship there ([`FlightView::place_ship`]);
+    /// a rebuild point that changed which stellars are shown, with no
+    /// system entered, reads the scene again with them ([`shown_scene`]);
     /// and a change to the galaxy draws the session's galaxy on the course
     /// map ([`GalaxyMap::show_galaxy`]) with the course as it is flown.
     ///
@@ -1802,6 +1813,15 @@ impl<
                 .show_course(session.system(), &session.course_shown());
         }
         let system = session.system();
+        let reshown = redrawn.rebuilt
+            && !redrawn.system
+            && self.scene.as_ref().is_some_and(|scene| {
+                !scene
+                    .stellars()
+                    .iter()
+                    .map(|stellar| stellar.id)
+                    .eq(session.stellars_shown())
+            });
         if redrawn.ship {
             self.follow_ship();
         }
@@ -1809,6 +1829,9 @@ impl<
             self.lay_out(system);
         } else if redrawn.stellar {
             self.place_ship();
+        }
+        if reshown && let Ok(session) = &self.session {
+            self.scene = Some(shown_scene(&self.catalog, session));
         }
         if redrawn.galaxy || redrawn.system || redrawn.rebuilt {
             self.show_destroyed();
@@ -1824,14 +1847,15 @@ impl<
         }
     }
 
-    /// Lays out `system`, the session's: its scene, read from the catalog,
-    /// the course map's course and explored systems, and the ship drawn
+    /// Lays out `system`, the session's: its scene, read from the catalog
+    /// with the stellars the session shows ([`shown_scene`]), the course
+    /// map's course and explored systems, and the ship drawn
     /// from where it is, the last system's NPCs and effects let go.
     fn lay_out(&mut self, system: SystemId) {
         let Ok(session) = &self.session else {
             return;
         };
-        self.scene = Some(SystemScene::load(&self.catalog, system));
+        self.scene = Some(shown_scene(&self.catalog, session));
         self.map.show_course(system, &session.course_shown());
         self.map.show_explored(session.pilot().explored());
         self.previous = *session.player();
@@ -11614,6 +11638,61 @@ mod tests {
         assert_eq!(systems_read(&view), [SystemId(131)], "one layout");
         assert_eq!(view.course_map().current(), Some(SystemId(131)));
         assert_eq!(view.shown_position(), Point::new(0.0, 0.0), "at Proxima");
+    }
+
+    // The stellars shown.
+
+    /// The IDs of the stellars `view`'s scene draws.
+    fn scene_ids(view: &View) -> Vec<StellarId> {
+        view.scene()
+            .expect("laid out")
+            .stellars()
+            .iter()
+            .map(|stellar| stellar.id)
+            .collect()
+    }
+
+    /// The stellars `view`'s session shows.
+    fn shown_ids(view: &View) -> Vec<StellarId> {
+        view.session().expect("flying").stellars_shown().collect()
+    }
+
+    /// [`catalog`] with Sol listing Proxima (140) too: Sol, the lower and
+    /// visible, owns it, though Alpha Centauri lists it.
+    fn proxima_in_sol() -> FakeCatalog {
+        let mut catalog = catalog();
+        catalog
+            .sites
+            .push(site(140, (0.0, 0.0), StellarFlags::CAN_LAND));
+        catalog
+    }
+
+    #[test]
+    fn the_flight_scene_shows_only_the_sessions_stellars() {
+        let view = FlightView::new(FakeCatalog {
+            character: Ok(CharacterStart {
+                ship: Some(ShipId(128)),
+                systems: [Some(SystemId(131)), None, None, None],
+                ..CharacterStart::default()
+            }),
+            ..proxima_in_sol()
+        });
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(shown_ids(&view), [], "Proxima is Sol's");
+        assert_eq!(scene_ids(&view), [], "Alpha Centauri lists it, unshown");
+    }
+
+    #[test]
+    fn a_rebuild_that_changes_the_stellars_shown_lays_out_the_scene_again() {
+        let mut view = FlightView::with_pilot(proxima_in_sol(), docked_pilot("Ada"));
+        view.take_landing();
+        move_to(&mut view, 131, 140);
+        view.tick(TICK);
+        assert_eq!(shown_ids(&view), [StellarId(140)], "docked at it");
+        assert_eq!(scene_ids(&view), [StellarId(140)]);
+        assert_eq!(view.take_off(), Some(StellarId(140)));
+        assert_eq!(shown_ids(&view), [], "in flight, Sol's again");
+        assert_eq!(scene_ids(&view), shown_ids(&view));
     }
 
     // The galaxy overlay.
