@@ -276,9 +276,9 @@ impl Session {
     /// The pilot info's ranks line and the salaries' share of the daily
     /// income (see [`rank::pilot_info`]), against the pilot's cash and the
     /// session's `salary_cap` rule, joined with `STR#` 2002 #392 (nothing
-    /// when the lists lack it, as `_StrcatIndCString` appends nothing).
-    /// No Ranks-section item follows the ranks until the player info
-    /// screen lists them (crons-news-ranks phase 17).
+    /// when the lists lack it, as `_StrcatIndCString` appends nothing),
+    /// the player info's special outfits following the ranks
+    /// ([`player_info::special_groups`](crate::player_info::special_groups)).
     #[must_use]
     pub fn pilot_info_ranks(&self) -> PilotInfoRanks {
         let and = self
@@ -290,7 +290,7 @@ impl Session {
             self.pilot.cash,
             self.rules.source_for(RuleKey::SalaryCap),
             &and,
-            0,
+            crate::player_info::special_groups(&self.outfits, &self.pilot.outfits).len(),
         )
     }
 

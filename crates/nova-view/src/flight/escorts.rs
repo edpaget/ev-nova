@@ -315,9 +315,7 @@ pub fn escort_command_message(commanded: &Commanded) -> String {
 
 /// `STR#` 137 #29-#38 of `Nova-DF.rsrc`: the numbers one to ten in
 /// words, which `_StrcatOrdinalNumber` @0x8ab4 writes counts in.
-pub const NUMBER_WORDS: [&str; 10] = [
-    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-];
+pub use nova_sim::player_info::NUMBER_WORDS;
 
 /// What the flight says of `count` fighters abandoned as the player
 /// jumped (`_HandlePlayer` @0x6c3c4-0x6c42b): in brackets, the count in

@@ -298,6 +298,7 @@ pub mod outfit_effects;
 pub mod outfitter;
 pub mod person;
 pub mod pilot;
+pub mod player_info;
 pub mod pre_jump;
 pub mod rank;
 pub mod rating;
@@ -399,6 +400,7 @@ pub use person::{
     PersonWorld, QuoteTags, expand_tags,
 };
 pub use pilot::{Escort, Gender, Pilot};
+pub use player_info::PlayerInfo;
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
 pub use red_alert::{
     ALERT_CHECK_FRAMES, ALERT_CICN, ALERT_STEP_FRAMES, ALERT_STEPS, AlertIcon, RedAlert,

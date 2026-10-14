@@ -145,6 +145,9 @@ pub struct LandingSite {
     /// NPC comes out of it on when it is a hypergate or wormhole and the
     /// value is 0 to 359 ([`exit_heading`](crate::gate::exit_heading)).
     pub exit_angle: i16,
+    /// Its `Tribute`, raw: what it pays a day while dominated, as
+    /// [`tribute_of`](crate::player_info::tribute_of) reads it.
+    pub tribute: i16,
 }
 
 /// A stellar a hypergate or wormhole may lead to, raw from its `spöb`: the
@@ -1662,6 +1665,7 @@ mod tests {
                 dead_frame_size: Some((60, 60)),
                 type_counts_frames: true,
                 exit_angle: -1,
+                tribute: 0,
             }]
         }
 

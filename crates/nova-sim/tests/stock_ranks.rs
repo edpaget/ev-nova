@@ -71,6 +71,28 @@ fn a_stock_rank_granted_by_its_mission_shows_in_the_pilot_info_and_pays() {
     );
 }
 
+#[test]
+fn a_stock_rank_granted_by_a_set_expression_shows_on_the_player_infos_honors() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = Rc::new(GameData::open(&dir, None).expect("the stock data opens"));
+    let mut session = Session::start(&*data)
+        .expect("the stock first chär starts")
+        .with_strings(data.clone());
+    let info = session.player_info(&*data);
+    assert_eq!(info.honors, None, "a new pilot has none");
+    assert_eq!(
+        info.legal_status, "No Record",
+        "no record: STR# 134 #2 (_legalStatusStrings[1])"
+    );
+    session.run_set(&SetExpr::parse("K128").expect("parses"), &mut NeverFires);
+    assert_eq!(
+        session.player_info(&*data).honors.as_deref(),
+        Some("Your ranks and honors:\r\rFederation Naval Rank of Commander\r")
+    );
+}
+
 /// Whether a crime against a ship of `victim` takes rank `id` held alone,
 /// by the engine.
 fn takes(data: &GameData, id: i16, crime: Crime, victim: Option<GovtId>) -> bool {

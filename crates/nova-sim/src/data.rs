@@ -217,6 +217,7 @@ impl PilotCatalog for GameData {
                     dead_frame_size,
                     type_counts_frames: counts_frames(self, stellar.graphic_type),
                     exit_angle: stellar.cust_snd_id,
+                    tribute: stellar.tribute,
                 })
             })
             .collect()
@@ -1786,6 +1787,12 @@ mod tests {
             .build()
     }
 
+    /// `bytes`, a `spöb`, with this `Tribute`.
+    fn paying(mut bytes: Vec<u8>, tribute: i16) -> Vec<u8> {
+        put_i16s(&mut bytes, 0x0A, &[tribute]);
+        bytes
+    }
+
     /// `bytes`, a `spöb`, with this `Flags2`.
     fn flagged2(mut bytes: Vec<u8>, flags2: u16) -> Vec<u8> {
         bytes[0x20..0x22].copy_from_slice(&flags2.to_be_bytes());
@@ -1987,7 +1994,11 @@ mod tests {
     fn a_systems_landing_sites_are_its_readable_stellars_in_nav_order() {
         let data = store(&[
             (System::TYPE, 130, system_with(&[129, 999, 128, 131])),
-            (Stellar::TYPE, 128, stellar(-300, 450, 7, 0x0000_0013, 25)),
+            (
+                Stellar::TYPE,
+                128,
+                paying(stellar(-300, 450, 7, 0x0000_0013, 25), 250),
+            ),
             (
                 Stellar::TYPE,
                 129,
@@ -2017,6 +2028,7 @@ mod tests {
                     dead_frame_size: Some((12, 30)),
                     type_counts_frames: true,
                     exit_angle: 0,
+                    tribute: 0,
                 },
                 LandingSite {
                     id: StellarId(128),
@@ -2035,6 +2047,7 @@ mod tests {
                     dead_frame_size: Some((12, 30)),
                     type_counts_frames: false,
                     exit_angle: 0,
+                    tribute: 250,
                 },
             ]
         );

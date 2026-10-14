@@ -361,6 +361,7 @@ mod news;
 mod outfits;
 mod person_offers;
 mod persons;
+mod player_info;
 mod radar;
 mod ranks;
 mod red_alert;

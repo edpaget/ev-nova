@@ -388,6 +388,9 @@ impl OutfitFlags {
     /// For sale, it takes higher-numbered outfits of equal `DispWeight`
     /// off sale.
     pub const HIDE_HIGHER: u16 = 0x1000;
+    /// Listed among the ranks on the player info's Honors tab, not among
+    /// its Extras: see [`player_info`](crate::player_info).
+    pub const HONOR: u16 = 0x2000;
     /// Not shown unless its `Availability` holds, or the player owns one.
     pub const HIDE_UNLESS_AVAILABLE: u16 = 0x4000;
 }
