@@ -277,14 +277,10 @@ impl Session {
     /// Names the rescued ship `shïp` 128's name, a space and four digits
     /// each 1 to 9, drawn on `chance`.
     fn rename_for_rescue(&mut self, chance: &mut dyn Chance) {
-        let Some(name) = self.ship_name(RESCUE_SHIP).map(str::to_owned) else {
+        let Some(name) = self.ship_name(RESCUE_SHIP) else {
             return;
         };
-        let mut renamed = format!("{name} ");
-        for _ in 0..4 {
-            renamed.push_str(&(chance.roll(9) + 1).to_string());
-        }
-        self.pilot.ship_name = Some(renamed);
+        self.pilot.ship_name = Some(crate::shipyard::numbered_name(name, 4, chance));
     }
 
     /// Every system's record, hidden ones included, and the record with
