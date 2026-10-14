@@ -1015,6 +1015,34 @@ pub(super) mod tests {
         assert!(!blessed(&session));
     }
 
+    /// Whether the player as the session's NPCs see it carries government
+    /// 140's blessing.
+    fn npcs_see_blessed(session: &Session) -> bool {
+        session
+            .player_side()
+            .blessing
+            .blesses(Some(GovtId(140)), Blessed::Landing)
+    }
+
+    #[test]
+    fn the_player_side_carries_the_blessing_the_last_refresh_took() {
+        let catalog = blessing_catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        run(&mut session, "K200");
+        assert!(!npcs_see_blessed(&session), "taken at the last refresh");
+        session.refresh_blessing();
+        assert!(npcs_see_blessed(&session));
+    }
+
+    #[test]
+    fn the_player_side_carries_the_live_blessing_by_the_other_reading() {
+        let mut session = Session::start(&blessing_catalog())
+            .expect("starts")
+            .with_rules(live());
+        run(&mut session, "K200");
+        assert!(npcs_see_blessed(&session));
+    }
+
     #[test]
     fn the_blessing_reads_the_sessions_rank_govt_reach() {
         let mut catalog = blessing_catalog();

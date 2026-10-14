@@ -51,6 +51,7 @@ use crate::govt::Governments;
 use crate::handling::Handling;
 use crate::hyperspace::JUMP_FUEL;
 use crate::landing::is_landable as landable;
+use crate::rank::{Blessed, Blessing};
 use crate::reserves::Reserves;
 use crate::traffic::npc::{Mode, Npc, NpcId};
 
@@ -169,6 +170,10 @@ pub struct PlayerSide {
     /// flies at it only with the scanner bit, and its turrets never (see
     /// [`fire`]).
     pub untargetable: bool,
+    /// The governments that bless the player, as the session's last
+    /// refresh took them ([`Session::blessing`](crate::Session::blessing)):
+    /// [`Surroundings::blessed`] reads it.
+    pub blessing: Blessing,
 }
 
 /// No governments at all.
@@ -213,6 +218,17 @@ impl<'a> Surroundings<'a> {
             record: 0,
             targeted: &NO_AIMED_DAMAGE,
         }
+    }
+
+    /// Whether `govt` blesses the player with peace, rank `Flags` 0x0100
+    /// (`_PlayerBlessedByGovt(govt, 0)`, see [`rank`](crate::rank)): never
+    /// for an independent, and never with no player in the system. Its
+    /// readers are the AI's: liking in hails, the odds, whom a warship
+    /// targets, the government's word and the Good Samaritan.
+    #[must_use]
+    pub fn blessed(&self, govt: Option<GovtId>) -> bool {
+        self.player
+            .is_some_and(|player| player.blessing.blesses(govt, Blessed::Peace))
     }
 
     /// The damage the shots in flight aim at `ship`; none when none is.
@@ -735,6 +751,7 @@ mod tests {
             rating: 0,
             yardstick: 0,
             untargetable: false,
+            blessing: Blessing::NONE,
         };
         around.player = Some(player);
         assert!(around.live(P));
@@ -749,5 +766,20 @@ mod tests {
         assert_eq!(around.system_govt, None);
         assert_eq!(around.record, 0);
         assert_eq!(*around.govts, Governments::default());
+    }
+
+    #[test]
+    fn a_government_blesses_only_through_a_player_in_the_system() {
+        let blessed = GovtId(140);
+        let mut around = Surroundings::new(&[], &[]);
+        around.player = Some(PlayerSide {
+            blessing: fixture::blessing_of(blessed),
+            ..fixture::player(0.0, 0.0)
+        });
+        assert!(around.blessed(Some(blessed)));
+        assert!(!around.blessed(Some(GovtId(141))), "unblessed");
+        assert!(!around.blessed(None), "an independent never blesses");
+        around.player = None;
+        assert!(!around.blessed(Some(blessed)), "no player in the system");
     }
 }

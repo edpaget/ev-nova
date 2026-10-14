@@ -586,7 +586,7 @@ impl Blessing {
     }
 
     /// Makes `govt` bless `which`; nothing for an ID outside 128-383.
-    fn bless(&mut self, govt: GovtId, which: Blessed) {
+    pub(crate) fn bless(&mut self, govt: GovtId, which: Blessed) {
         if let Some(slot) = blessed_slot(govt) {
             let set = match which {
                 Blessed::Peace => &mut self.peace,

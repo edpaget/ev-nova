@@ -9,6 +9,7 @@ use crate::combat::weapon::WeaponSpec;
 use crate::flight::ShipState;
 use crate::geometry::Vec2;
 use crate::govt::Governments;
+use crate::rank::{Blessed, Blessing};
 use crate::reserves::Reserves;
 use crate::stats::ShipStats;
 use crate::testkit::{FAST, govt, planet, weapon};
@@ -81,7 +82,15 @@ pub(crate) fn player(x: f32, y: f32) -> PlayerSide {
         rating: 0,
         yardstick: 0,
         untargetable: false,
+        blessing: Blessing::NONE,
     }
+}
+
+/// A blessing where `govt` alone blesses the player with peace.
+pub(crate) fn blessing_of(govt: GovtId) -> Blessing {
+    let mut blessing = Blessing::NONE;
+    blessing.bless(govt, Blessed::Peace);
+    blessing
 }
 
 /// A landable planet, 128, far off.

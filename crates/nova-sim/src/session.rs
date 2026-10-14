@@ -1618,6 +1618,7 @@ impl Session {
             untargetable: self
                 .ship_record(self.pilot.ship)
                 .is_some_and(|record| crate::cloak::untargetable(record.fields.flags2)),
+            blessing: self.blessing(),
         }
     }
 
