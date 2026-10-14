@@ -69,8 +69,12 @@ exclude_re = [
     # (`EguiLayer`) and the app's routing (`App::overlay_wants`).
     "DevTools::(new|on_window_event|run_frame|layer_mut)",
     # The window port over a real winit window: one-line reads of its size
-    # and scale factor and a redraw request, observable only with a window.
-    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw)",
+    # and scale factor, a redraw request and showing or hiding the system
+    # pointer, observable only with a window.
+    "impl WindowPort for WinitWindow>::(size_px|scale_factor|request_redraw|set_pointer_visible)",
+    # The port's default for a window with no pointer of its own does
+    # nothing already.
+    "replace WindowPort::set_pointer_visible with \\(\\)",
     # winit's `KeyEvent` and `ScaleFactorChanged` have private fields, so
     # tests cannot build these events. Each arm only delegates (to the
     # tested `key_event`, or reads the window port).

@@ -3287,7 +3287,8 @@ impl<C> FlightView<C> {
 
     /// What `input` tells the cursor: a pointer move or button press shows
     /// it where the pointer is, and the pointer leaving the window hides
-    /// it; a key pressed in flight (not on the map) fades it.
+    /// it; a key pressed fades it at the next flight step (none runs while
+    /// the map is open, and the M that opened it has faded it already).
     fn cursor_input(&mut self, input: &Input) {
         match *input {
             Input::PointerMoved(at)
@@ -3297,7 +3298,7 @@ impl<C> FlightView<C> {
                 self.cursor.pointer(at);
             }
             Input::PointerLeft => self.cursor.left(),
-            Input::Key { pressed: true, .. } if !self.map_open => self.cursor.key(),
+            Input::Key { pressed: true, .. } => self.cursor.key(),
             _ => {}
         }
     }
@@ -17179,6 +17180,21 @@ mod tests {
             [1],
             "animates over the ship it does not draw"
         );
+    }
+
+    #[test]
+    fn the_players_own_ship_is_hovered_only_while_it_holds_a_target() {
+        let (mut view, _) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        let frame = |view: &mut View| {
+            view.input(&Input::PointerMoved(VIEW_CENTER));
+            ticks(view, 2);
+            cursor_sprites(&drawn(view))
+        };
+        assert_eq!(frame(&mut view), [(0, VIEW_CENTER)], "no target");
+        view.input(&key(TARGET_KEY, true));
+        view.input(&key(TARGET_KEY, false));
+        assert!(view.session().expect("flying").target().is_some());
+        assert_eq!(frame(&mut view), [(1, VIEW_CENTER)], "a target");
     }
 
     #[test]
