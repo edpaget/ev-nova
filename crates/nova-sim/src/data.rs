@@ -701,6 +701,7 @@ impl TrafficCatalog for GameData {
                     govt: fleet.govt,
                     link_syst: fleet.link_syst,
                     appear_on: self.test_expr(fleet.appear_on.as_str()).into(),
+                    quote: fleet.quote.map(|id| id.0).filter(|&quote| quote > 0),
                 })
             })
             .collect()
@@ -3344,6 +3345,7 @@ mod tests {
                     govt: Some(GovtId(129)),
                     link_syst: -1,
                     appear_on: Test::default(),
+                    quote: None,
                 },
                 FleetRecord {
                     id: FleetId(130),
@@ -3356,6 +3358,7 @@ mod tests {
                     govt: None,
                     link_syst: 10_000,
                     appear_on: Test::parse("b42"),
+                    quote: None,
                 },
             ],
             "by ID, the undecodable one skipped and the unused escort slots left out"
@@ -3368,6 +3371,21 @@ mod tests {
                 a.id
             );
         }
+    }
+
+    #[test]
+    fn a_fleets_quote_above_0_is_carried() {
+        let quoting = |quote: i16| {
+            let mut bytes = fleet(140, &[], 129, -1);
+            put_i16s(&mut bytes, 0x11E, &[quote]);
+            store(&[(Fleet::TYPE, 128, bytes)])
+                .fleets()
+                .first()
+                .and_then(|record| record.quote)
+        };
+        assert_eq!(quoting(7600), Some(7600));
+        assert_eq!(quoting(0), None);
+        assert_eq!(quoting(-1), None);
     }
 
     /// A `përs` linked to `link_syst`, of `govt`, AI type 3, `Aggress` 2

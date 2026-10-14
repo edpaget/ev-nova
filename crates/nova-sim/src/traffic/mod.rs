@@ -38,7 +38,9 @@
 //!    when it fires, the fleet the [`World`]'s escorts' tons call for
 //!    comes, whatever `AvgShips` says, its lead an interceptor. The
 //!    timer is armed by its session ([`Traffic::arm_strength_timer`]),
-//!    and entering or going on into a system keeps it;
+//!    and entering or going on into a system keeps it. Each announced
+//!    fleet that comes with a `Quote` queues it for its session to show
+//!    ([`Traffic::take_quotes`], see [`quote`]);
 //! 2. each flying, intact NPC answers the fight's strikes since the last
 //!    tick ([`Behaviour::react`]): the ship it targets, its provocation,
 //!    and any goal it takes at once;
@@ -79,6 +81,7 @@ pub mod destination;
 pub mod emerge;
 pub mod gate_entry;
 pub mod npc;
+pub mod quote;
 pub mod spawn;
 pub mod strength;
 pub mod table;
@@ -223,6 +226,9 @@ pub struct Traffic {
     /// The NPCs that have looked the player over since the scans were
     /// last taken, in order.
     scans: Vec<NpcId>,
+    /// The `STR#`s of the arrival quotes of the fleets added since the
+    /// quotes were last taken, in order ([`NewShip::quote`]).
+    quotes: Vec<i16>,
     /// The escort-strength timer, kept across systems.
     strength_timer: StrengthTimer,
 }
@@ -252,6 +258,7 @@ impl Traffic {
             interval,
             departed: Vec::new(),
             scans: Vec::new(),
+            quotes: Vec::new(),
             strength_timer: StrengthTimer::default(),
         }
     }
@@ -299,6 +306,7 @@ impl Traffic {
         self.npcs.clear();
         self.departed.clear();
         self.scans.clear();
+        self.quotes.clear();
         self.add(missions, world.persons.grudges);
         let mut draw = PersonDraw::new(world.persons);
         let first_stellar = world.sites.first().map(|site| site.position);
@@ -340,6 +348,7 @@ impl Traffic {
         self.npcs.retain(|npc| keep.contains(&npc.id));
         self.departed.clear();
         self.scans.clear();
+        self.quotes.clear();
     }
 
     /// Advances the traffic one tick among `sites` alone, NPCs deciding
@@ -598,7 +607,10 @@ impl Traffic {
             id,
             gate,
             world.stellars(),
-            Some(AiType::Interceptor),
+            spawn::FleetCall {
+                lead_ai: Some(AiType::Interceptor),
+                announced: true,
+            },
             chance,
             &mut fleet,
         );
@@ -771,6 +783,14 @@ impl Traffic {
         std::mem::take(&mut self.scans)
     }
 
+    /// The `STR#`s of the arrival quotes of the fleets added since this
+    /// was last called, in order: each announced fleet's whose `flët` has
+    /// a `Quote` (see [`quote`]). Taking them empties the list; entering
+    /// or leaving for another system drops those not taken.
+    pub fn take_quotes(&mut self) -> Vec<i16> {
+        std::mem::take(&mut self.quotes)
+    }
+
     /// The ship types the system's traffic can spawn, by ascending ID.
     #[must_use]
     pub fn ship_types(&self) -> Vec<ShipId> {
@@ -823,6 +843,7 @@ impl Traffic {
                 .mission
                 .is_some_and(|mark| mark.behav == ShipBehav::AttackPlayer);
             let berth = self.next_berth();
+            self.quotes.extend(ship.quote);
             self.npcs.push(Npc {
                 id,
                 berth,
@@ -1127,6 +1148,7 @@ mod tests {
                 govt: None,
                 link_syst: -1,
                 appear_on: Test::default(),
+                quote: None,
             },
         );
         // An NPC numbered first, so the fleet's lead is NPC 1.
@@ -1164,6 +1186,7 @@ mod tests {
                 govt: None,
                 link_syst: -1,
                 appear_on: Test::default(),
+                quote: None,
             },
         );
         let mut traffic = populated(1, 1);
@@ -1323,6 +1346,7 @@ mod tests {
                 govt: None,
                 link_syst: -1,
                 appear_on: Test::default(),
+                quote: None,
             },
         );
         let sites = gated();
@@ -2860,6 +2884,7 @@ mod tests {
             derelict: false,
             cloaked: false,
             aux: None,
+            quote: None,
         }
     }
 
@@ -3150,6 +3175,7 @@ mod tests {
                     govt: Some(GovtId(131)),
                     link_syst: -1,
                     appear_on: Test::default(),
+                    quote: None,
                 },
             );
         }
@@ -3329,6 +3355,60 @@ mod tests {
         );
         assert_eq!(lead.state.position, Vec2::new(300.0, -400.0));
         assert_eq!(lead.state.heading, 90.0);
+    }
+
+    #[test]
+    fn the_quotes_of_the_fleets_added_are_taken_once() {
+        let mut quoting = strong(0);
+        quoting
+            .fleets
+            .get_mut(&FleetId(382))
+            .expect("fleet 382")
+            .quote = Some(7600);
+        let mut traffic = Traffic::new();
+        traffic.enter(quoting, &mut Draws::of(&[]));
+        traffic.arm_strength_timer(&mut Draws::of(&[0]));
+        ticked(&mut traffic, &escorted(60), 30);
+        assert!(traffic.take_quotes().is_empty(), "not yet come");
+        ticked(&mut traffic, &escorted(60), 1);
+        assert_eq!(traffic.npcs().len(), 1);
+        assert_eq!(traffic.take_quotes(), [7600], "announced");
+        assert!(traffic.take_quotes().is_empty(), "taken");
+    }
+
+    #[test]
+    fn a_quoted_ship_that_cannot_come_adds_no_quote() {
+        let quoted = |ship| NewShip {
+            ship: ShipId(ship),
+            quote: Some(7600),
+            ..mission_ship(0, 0.0)
+        };
+        let mut traffic = Traffic::new();
+        traffic.enter(table(0), &mut Draws::of(&[]));
+        traffic.bring_in(vec![quoted(999)]);
+        assert!(traffic.take_quotes().is_empty(), "ship 999 has no record");
+        traffic.bring_in(vec![quoted(200)]);
+        assert_eq!(traffic.take_quotes(), [7600]);
+    }
+
+    #[test]
+    fn entering_or_leaving_for_another_system_drops_the_quotes_not_taken() {
+        let quoted = || {
+            let mut traffic = Traffic::new();
+            traffic.enter(table(0), &mut Draws::of(&[]));
+            traffic.bring_in(vec![NewShip {
+                quote: Some(7600),
+                ..mission_ship(0, 0.0)
+            }]);
+            traffic
+        };
+        let mut entered = quoted();
+        entered.enter(table(0), &mut Draws::of(&[]));
+        assert!(entered.take_quotes().is_empty());
+        let mut left = quoted();
+        left.retarget(table(0), &BTreeSet::new());
+        assert!(left.take_quotes().is_empty());
+        assert_eq!(quoted().take_quotes(), [7600], "queued");
     }
 
     #[test]

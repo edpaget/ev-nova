@@ -136,6 +136,7 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
                 Sound::Sim(SimSound::EscortsCommanded) => self.play(self.table.escorts_commanded),
                 Sound::Sim(SimSound::EscortRepaired) => self.play(self.table.escort_repaired),
+                Sound::Sim(SimSound::FleetArrivalQuote) => self.play(self.table.fleet_quote),
                 Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
                 Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
                 Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
@@ -460,6 +461,16 @@ mod tests {
         core.update(
             Some(Showing::ShipBrowser),
             &[Sound::Sim(SimSound::EscortRepaired)],
+        );
+        assert_eq!(drain(&log), [play(154, 1.0)]);
+    }
+
+    #[test]
+    fn an_announced_fleets_arrival_quote_beeps() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::FleetArrivalQuote)],
         );
         assert_eq!(drain(&log), [play(154, 1.0)]);
     }

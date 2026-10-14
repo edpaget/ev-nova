@@ -82,6 +82,11 @@ pub enum SimMessage {
         /// The credits fined: none for no fine.
         fine: i64,
     },
+    /// An announced fleet arrived, showing this line of its `flët`'s
+    /// `Quote`, its '#'s filled with digits, empty when the list has none
+    /// (`_HyperSpawnFleet` @0x42607-0x426f4; see
+    /// [`quote`](crate::traffic::quote)).
+    FleetArrivalQuote(String),
 }
 
 impl SimMessage {
@@ -91,6 +96,8 @@ impl SimMessage {
     /// - [`Arrived`](Self::Arrived): 240 (`_HandlePlayer` @0x6c46d).
     /// - [`ExitedHypergate`](Self::ExitedHypergate): 360
     ///   (`_PlayerEnterHypergate` @0x63f1d).
+    /// - [`FleetArrivalQuote`](Self::FleetArrivalQuote): 360
+    ///   (`_HyperSpawnFleet` @0x426e9).
     /// - [`PassedWormhole`](Self::PassedWormhole): 240
     ///   (`_PlayerEnterWormhole` @0x645be).
     /// - [`MissionFailed`](Self::MissionFailed),
@@ -112,7 +119,7 @@ impl SimMessage {
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
-            Self::ExitedHypergate(_) => 360,
+            Self::ExitedHypergate(_) | Self::FleetArrivalQuote(_) => 360,
             Self::MissionScanned
             | Self::Smuggling { .. }
             | Self::IllegalJunk { .. }
@@ -143,6 +150,7 @@ mod tests {
         let cases = [
             (SimMessage::Arrived(SystemId(128)), 240),
             (SimMessage::ExitedHypergate(SystemId(128)), 360),
+            (SimMessage::FleetArrivalQuote("Hail 1".to_owned()), 360),
             (SimMessage::PassedWormhole(SystemId(128)), 240),
             (SimMessage::MissionFailed, 240),
             (SimMessage::DeadlineMissed, 240),

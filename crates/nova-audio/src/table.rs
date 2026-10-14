@@ -54,6 +54,8 @@ pub struct SoundTable {
     pub news_close: Option<SoundId>,
     /// Plays as the player info is refused in flight.
     pub player_info_refused: Option<SoundId>,
+    /// Plays as an announced fleet arrives with its arrival quote.
+    pub fleet_quote: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -118,6 +120,9 @@ impl SoundTable {
     /// - `player_info_refused`: 153, "Beep4", `_beepSnd[3]`, which
     ///   `_HandlePlayer` plays as it refuses the player info key during a
     ///   jump (`PlaySound` @0x7039a-0x703bd).
+    /// - `fleet_quote`: 154, `_beepSnd[4]`, which `_HyperSpawnFleet` plays
+    ///   as an announced fleet with a `Quote` arrives, even when its line
+    ///   is empty (@0x42698-0x426bb).
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -140,6 +145,7 @@ impl SoundTable {
         news_open: Some(SoundId(151)),
         news_close: Some(SoundId(152)),
         player_info_refused: Some(SoundId(153)),
+        fleet_quote: Some(SoundId(154)),
     };
 }
 
@@ -171,5 +177,6 @@ mod tests {
         assert_eq!(table.news_open, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.news_close, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.player_info_refused, Some(SoundId(153)), "_beepSnd[3]");
+        assert_eq!(table.fleet_quote, Some(SoundId(154)), "_beepSnd[4]");
     }
 }

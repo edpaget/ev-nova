@@ -705,6 +705,7 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
         SimMessage::DeadlineMissed => TIME_LIMIT_EXCEEDED,
         SimMessage::EscortRepaired => ESCORT_REPAIRED,
         SimMessage::FighterRepaired => FIGHTER_REPAIRED,
+        SimMessage::FleetArrivalQuote(text) => return Some(text.clone()),
         SimMessage::Smuggling {
             scanner,
             ship_name,
@@ -940,6 +941,7 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::DeadlineMissed
         | SimMessage::EscortRepaired
         | SimMessage::FighterRepaired
+        | SimMessage::FleetArrivalQuote(_)
         | SimMessage::Smuggling { .. }
         | SimMessage::IllegalJunk { .. }
         | SimMessage::IllegalOutfit { .. } => None,
@@ -13587,6 +13589,15 @@ mod tests {
             Some(MISSION_FAILED)
         );
         assert_eq!(arrival_lead(&SimMessage::MissionShipLost), None);
+    }
+
+    #[test]
+    fn a_fleets_arrival_quote_says_its_line() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        let quote = SimMessage::FleetArrivalQuote("Hail 9".to_owned());
+        assert_eq!(sim_message_text(&quote, session).as_deref(), Some("Hail 9"));
+        assert_eq!(arrival_lead(&quote), None);
     }
 
     #[test]

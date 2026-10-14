@@ -585,6 +585,10 @@ pub struct FleetRecord {
     pub link_syst: i16,
     /// Its `AppearOn` control-bit test, parsed.
     pub appear_on: Test,
+    /// Its `Quote`: the `STR#` an announced arrival of it shows a line
+    /// of, when above 0 (+0x1e > 0, `_HyperSpawnFleet` @0x42621-0x42629;
+    /// see [`quote`](crate::traffic::quote)).
+    pub quote: Option<i16>,
 }
 
 /// One of a person's weapon slots that names a weapon, raw from its
@@ -2000,6 +2004,7 @@ mod tests {
                 govt: None,
                 link_syst: -1,
                 appear_on: Test::default(),
+                quote: None,
             }]
         }
 

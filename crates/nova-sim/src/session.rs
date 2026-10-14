@@ -409,10 +409,10 @@ use crate::board::{
     Take, Taken, check_board,
 };
 use crate::catalog::{
-    CombatCatalog, CronRecord, DateAffixes, GateSite, GovtId, JunkId, LandingSite, ListedStellar,
-    MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord, PersonId,
-    PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError, StellarId,
-    StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
+    CombatCatalog, CommCatalog, CronRecord, DateAffixes, GateSite, GovtId, JunkId, LandingSite,
+    ListedStellar, MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord,
+    PersonId, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError,
+    StellarId, StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -1536,7 +1536,7 @@ impl Session {
     /// while a jump plays too.
     pub fn tick_traffic(
         &mut self,
-        catalog: &(impl TrafficCatalog + ?Sized),
+        catalog: &(impl TrafficCatalog + CommCatalog + ?Sized),
         behaviour: &(impl Behaviour + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
@@ -1578,6 +1578,7 @@ impl Session {
                 let last = self.last_npc();
                 let marks = self.mission_marks();
                 self.traffic.tick_in(behaviour, world, &strikes, chance);
+                self.announce_fleets(catalog, chance);
                 self.mission_ships_left(&marks);
                 self.resolve_person_offers(last, &mut &mut *chance);
                 self.dock_fighters();
@@ -1589,6 +1590,24 @@ impl Session {
             self.step_gate_sprites(chance);
         }
         self.clear_lost_target();
+    }
+
+    /// Shows the arrival quote of each announced fleet the traffic brought
+    /// in, a line of its `STR#` read from `catalog` and drawn on `chance`
+    /// ([`arrival_quote`](crate::traffic::quote::arrival_quote)), and
+    /// beeps for it (`_HyperSpawnFleet` @0x42607-0x426f4). An empty line
+    /// is shown and beeped for too, as the original's is. Both settle on
+    /// the tick the fleet comes, before the frame is drawn.
+    fn announce_fleets(
+        &mut self,
+        catalog: &(impl CommCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        for list in self.traffic.take_quotes() {
+            let text = crate::traffic::quote::arrival_quote(&catalog.string_list(list), chance);
+            self.messages.push(SimMessage::FleetArrivalQuote(text));
+            self.sounds.push(SimSound::FleetArrivalQuote);
+        }
     }
 
     /// What the traffic flies among in flight: the system's stellars, the
@@ -12566,6 +12585,7 @@ pub(super) mod tests {
             govt: Some(GovtId(150)),
             link_syst,
             appear_on: Test::default(),
+            quote: None,
         }
     }
 
@@ -19602,6 +19622,7 @@ pub(super) mod tests {
             govt: None,
             link_syst: 0,
             appear_on: Test::default(),
+            quote: None,
         };
         catalog.fleets = vec![fleet(382, 160), fleet(383, 161)];
         catalog
@@ -19683,6 +19704,73 @@ pub(super) mod tests {
             session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
         }
         assert_eq!(flying_as(&session, 161), []);
+    }
+
+    /// [`strong`] with `flët` 382 quoting `STR#` 7600 on its arrival, if
+    /// `quote`: "Hail #".
+    fn quoting(quote: Option<i16>) -> FakePilotCatalog {
+        let mut catalog = strong();
+        catalog.fleets[0].quote = quote;
+        catalog.strings = vec![(7600, vec!["Hail #".to_owned()])];
+        catalog
+    }
+
+    /// The quote messages and sounds the 60th tick after an escorted
+    /// take-off raises, `fleet` 382 coming on it.
+    fn quoted_on_the_60th_tick(catalog: &FakePilotCatalog) -> (Vec<SimMessage>, Vec<SimSound>) {
+        let mut session = escorted_take_off(catalog, &[150]);
+        for _ in 0..59 {
+            session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        }
+        session.take_messages();
+        session.take_sounds();
+        session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
+        assert_eq!(flying_as(&session, 160), [AiType::Interceptor]);
+        (session.take_messages(), session.take_sounds())
+    }
+
+    #[test]
+    fn an_announced_fleet_with_a_quote_shows_a_line_of_it_and_beeps() {
+        let (messages, sounds) = quoted_on_the_60th_tick(&quoting(Some(7600)));
+        assert_eq!(
+            messages,
+            [SimMessage::FleetArrivalQuote("Hail 9".to_owned())],
+            "the last outcome of Rand(9) + 1"
+        );
+        assert_eq!(sounds, [SimSound::FleetArrivalQuote]);
+    }
+
+    #[test]
+    fn an_announced_fleet_without_a_quote_shows_nothing() {
+        let (messages, sounds) = quoted_on_the_60th_tick(&quoting(None));
+        assert_eq!(messages, []);
+        assert_eq!(sounds, []);
+    }
+
+    #[test]
+    fn a_quote_list_with_no_strings_still_shows_an_empty_line_and_beeps() {
+        let catalog = quoting(Some(7601));
+        let (messages, sounds) = quoted_on_the_60th_tick(&catalog);
+        assert_eq!(messages, [SimMessage::FleetArrivalQuote(String::new())]);
+        assert_eq!(sounds, [SimSound::FleetArrivalQuote]);
+    }
+
+    #[test]
+    fn a_setup_fleet_with_a_quote_arrives_silently() {
+        let mut catalog = fleeted();
+        catalog.fleets[0].quote = Some(7600);
+        catalog.strings = vec![(7600, vec!["Hail #".to_owned()])];
+        let mut session = Session::start(&catalog).expect("starts");
+        session.populate(&catalog, &mut linked_fleet_draws(2));
+        assert_eq!(fleet_of(&session), a_fleet_led_by(0));
+        session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+        assert!(
+            !session
+                .take_messages()
+                .iter()
+                .any(|message| matches!(message, SimMessage::FleetArrivalQuote(_)))
+        );
+        assert!(!session.take_sounds().contains(&SimSound::FleetArrivalQuote));
     }
 
     // The galaxy overlay.

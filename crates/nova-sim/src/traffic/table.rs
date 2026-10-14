@@ -790,6 +790,7 @@ mod tests {
                 govt: Some(GovtId(131)),
                 link_syst,
                 appear_on: Test::default(),
+                quote: None,
             };
             vec![
                 fleet(140, 201, 202, 131),
@@ -1274,6 +1275,7 @@ mod tests {
                 govt: Some(GovtId(131)),
                 link_syst: 131,
                 appear_on: Test::default(),
+                quote: None,
             };
             let escort = EscortRecord {
                 ship: ShipId(206),
