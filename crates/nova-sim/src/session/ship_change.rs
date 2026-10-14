@@ -1681,20 +1681,27 @@ mod tests {
     #[test]
     fn by_the_other_reading_the_cargo_past_the_hold_waits_for_a_reset_outside_a_set_expression() {
         let catalog = changing();
-        let mut session = session(&catalog).with_rules(
-            Rulebook::default().with_override(RuleKey::ShipChangeCargo, RuleSource::Bible),
-        );
-        session.pilot.cargo = twelve_tons();
-        run(&mut session, "C130");
-        assert_eq!(cargo(&session), twelve_tons(), "every ton kept");
-        run(&mut session, "b1");
-        assert_eq!(cargo(&session), twelve_tons(), "no set expression trims");
-        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
-        assert_eq!(
-            cargo(&session),
-            [(Good::Commodity(0), 1), (Good::Commodity(2), 3)].into(),
-            "the arrival's reset trims (@0x6c51f)"
-        );
+        for op in ["C130", "E130", "H130"] {
+            let mut session = session(&catalog).with_rules(
+                Rulebook::default().with_override(RuleKey::ShipChangeCargo, RuleSource::Bible),
+            );
+            session.pilot.cargo = twelve_tons();
+            run(&mut session, op);
+            assert_eq!(session.capacity(), 5, "{op}");
+            assert_eq!(cargo(&session), twelve_tons(), "{op}: every ton kept");
+            run(&mut session, "b1");
+            assert_eq!(
+                cargo(&session),
+                twelve_tons(),
+                "{op}: no set expression trims"
+            );
+            crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+            assert_eq!(
+                cargo(&session),
+                [(Good::Commodity(0), 1), (Good::Commodity(2), 3)].into(),
+                "{op}: the arrival's reset trims (@0x6c51f)"
+            );
+        }
     }
 
     // The armour bump.

@@ -717,6 +717,19 @@ mod tests {
     }
 
     #[test]
+    fn a_dying_trader_mission_escort_trims_the_cargo_past_the_holds_after_its_share() {
+        let mut session = laden(1, RuleSource::Engine);
+        assert_eq!(session.capacity(), 20);
+        session.pilot.cargo = BTreeMap::from([(FOOD, 40), (OPALS, 6)]);
+        break_up(&mut session);
+        assert_eq!(
+            session.pilot.cargo,
+            BTreeMap::from([(FOOD, 17), (OPALS, 3)]),
+            "half of each taken, then 20 x 20/23 of the food (@0x350e6, @0xcff6)"
+        );
+    }
+
+    #[test]
     fn a_mission_escort_of_inherent_ai_2_dying_destroys_its_share_of_the_cargo() {
         let mut session = laden(2, RuleSource::Engine);
         break_up(&mut session);

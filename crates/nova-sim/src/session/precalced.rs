@@ -446,6 +446,33 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn an_outfit_bought_trims_the_cargo_past_the_holds_against_the_holds_it_brings() {
+        use crate::session::tests::{buy, outfitted, outfitting};
+        let mut session = outfitted(&outfitting());
+        assert_eq!(session.capacity(), 20);
+        session.pilot.cargo = [
+            (Good::Commodity(0), 30),
+            (Good::Commodity(2), 30),
+            (JUNK, 4),
+        ]
+        .into_iter()
+        .collect();
+        session.pilot.missions.put(0, carrying(140, 3));
+        session.outfit(buy(POD), &mut NeverFires).expect("bought");
+        assert_eq!(session.capacity(), 30);
+        assert_eq!(
+            cargo(&session),
+            [
+                (Good::Commodity(0), 13),
+                (Good::Commodity(2), 13),
+                (JUNK, 4)
+            ]
+            .into(),
+            "30 x 30/67 after the pod is aboard, not 30 x 20/67 (@0x5c305)"
+        );
+    }
+
+    #[test]
     fn an_outfit_sale_below_the_cargo_trims_it_by_the_engine_and_keeps_it_by_the_other_reading() {
         use crate::rulebook::{RuleKey, RuleSource, Rulebook};
         use crate::session::tests::{buy, outfitted, outfitting, sell};
