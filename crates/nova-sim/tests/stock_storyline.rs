@@ -1,9 +1,14 @@
-//! The storyline walker over the stock data: a new pilot walks United
-//! Shipping's chain, `mïsn` 504 "United Shipping Intro" then 505 "Un.
-//! Shipping Delivery", from its first take to its last delivery. Skips,
-//! passing, when `NOVA_DATA` is unset.
+//! The storyline walker over the stock data, two walks from a new pilot.
+//! Each skips, passing, when `NOVA_DATA` is unset.
 //!
-//! Why this chain:
+//! - United Shipping's chain, `mïsn` 504 "United Shipping Intro" then 505
+//!   "Un. Shipping Delivery", from its first take to its last delivery.
+//! - The Federation string, Fed1 to Fed43 (`mïsn` 428 to 474), the goal
+//!   the engine builds toward. It is `#[ignore]`d until it passes; run
+//!   with `--run-ignored all`, it stops at its first engine gap and prints
+//!   the walker's report.
+//!
+//! Why United Shipping's chain:
 //! - a new pilot can take 504: its `AvailBits` holds with no bit set, and
 //!   its `AvailStel` (10000) takes any Federation stellar;
 //! - 504's `OnSuccess`, `b9 K145`, sets b9, the bit 505's `AvailBits`
@@ -84,4 +89,187 @@ fn a_new_pilot_walks_united_shippings_chain_to_its_end() {
     };
     assert_eq!(took, back, "505 offered where 504 was completed");
     assert_eq!(session.pilot().missions().missions(), [], "no mission held");
+}
+
+/// The Federation string in play order, Fed1 (428) to Fed43 "LAST" (474).
+///
+/// The order follows the bit chain: Fed N's `OnSuccess` sets the bit Fed
+/// N+1's `AvailBits` needs, b50 (set by 428) up to b89 (set by 474). The
+/// names, which end `;FedN`, only confirm it. Where the string branches,
+/// this is the path a new pilot with no other storyline's bits takes:
+/// - Fed13 is 443 "from Fed": 440 needs the bounty-hunter bits (`b8 |
+///   b500`) and 611 the Rebel bit b126;
+/// - Fed17 is 447 "from Fed": 448 needs `b8 | b500` and leads into the
+///   forced branch (575-596);
+/// - Fed18-20 are left out: 449 needs `b8 | b500`, and 450 and 451 are
+///   an optional mission-computer loop (b123 on, then off), while 452
+///   (Fed21) needs only b66;
+/// - the repeatable runs 442 and 445 (Fed14a/15a) and the side missions
+///   597 (Gli-tech7), 851 and 852 (the Action Man runs) are left out;
+/// - Fed30 is 461 (registered), not 824 (the unregistered cutoff);
+/// - Fed42 is 473, not 613, which needs b1000 from the Gli-tech side
+///   mission.
+///
+/// Fed25 (456), Fed26 (457) and Fed38 (469) set b6666, which the next
+/// mission refuses; crön 221 clears it. Fed12's `OnSuccess`, Fed35's and
+/// Fed37's `OnAccept` and Fed43's `OnSuccess` grant ranks 128, 150, 129
+/// and 149, each checked after the step that grants it. Fed38 (goal 4,
+/// observe) and Fed42 (goal 0, destroy) have ship goals; Fed7 (434) and
+/// Fed24 (455) name goal 1 but `ShipCount` -1, so no ships, and are
+/// scripted as a plain take and delivery.
+const FEDERATION: &[Step] = &[
+    // Fed1 Federation Resupply
+    Step::Take(MissionId(428)),
+    Step::Deliver(MissionId(428)),
+    // Fed2 Federation Resupply
+    Step::Take(MissionId(429)),
+    Step::Deliver(MissionId(429)),
+    // Fed3 Federation Resupply
+    Step::Take(MissionId(430)),
+    Step::Deliver(MissionId(430)),
+    // Fed4 Federation Resupply
+    Step::Take(MissionId(431)),
+    Step::Deliver(MissionId(431)),
+    // Fed5 Federation Resupply
+    Step::Take(MissionId(432)),
+    Step::Deliver(MissionId(432)),
+    // Fed6 Federation Resupply
+    Step::Take(MissionId(433)),
+    Step::Deliver(MissionId(433)),
+    // Fed7 Bring in Terrorist
+    Step::Take(MissionId(434)),
+    Step::Deliver(MissionId(434)),
+    // Fed8 Bring in Spy
+    Step::Take(MissionId(435)),
+    Step::Deliver(MissionId(435)),
+    // Fed9 Bring in Dissident
+    Step::Take(MissionId(436)),
+    Step::Deliver(MissionId(436)),
+    // Fed10 Bring in Political Dissident
+    Step::Take(MissionId(437)),
+    Step::Deliver(MissionId(437)),
+    // Fed11 Bring in Political Dissident (Rebel link)
+    Step::Take(MissionId(438)),
+    Step::Deliver(MissionId(438)),
+    // Fed12 Bring in Fed Councilor
+    Step::Take(MissionId(439)),
+    Step::Deliver(MissionId(439)),
+    Step::HasRank(RankId(128)),
+    // Fed13 Infiltrate the Rebels (from Fed)
+    Step::Take(MissionId(443)),
+    Step::Deliver(MissionId(443)),
+    // Fed14 Rebel Food Drop
+    Step::Take(MissionId(441)),
+    Step::Deliver(MissionId(441)),
+    // Fed15 Rebel Equipment Drop
+    Step::Take(MissionId(444)),
+    Step::Deliver(MissionId(444)),
+    // Fed16 Rescue Agent
+    Step::Take(MissionId(446)),
+    Step::Deliver(MissionId(446)),
+    // Fed17 Receive Instructions from Krane (from Fed)
+    Step::Take(MissionId(447)),
+    Step::Deliver(MissionId(447)),
+    // Fed21 Rebel Insertion
+    Step::Take(MissionId(452)),
+    Step::Deliver(MissionId(452)),
+    // Fed22 Scout Moash Space
+    Step::Take(MissionId(453)),
+    Step::Deliver(MissionId(453)),
+    // Fed23 Distract Moash House
+    Step::Take(MissionId(454)),
+    Step::Deliver(MissionId(454)),
+    // Fed24 Talk to Moash Elders
+    Step::Take(MissionId(455)),
+    Step::Deliver(MissionId(455)),
+    // Fed25 Return With Response
+    Step::Take(MissionId(456)),
+    Step::Deliver(MissionId(456)),
+    // Crön 221 clears b6666: `EnableOn b6666`, `PreHoldoff` 1, `Duration`
+    // 0, `OnEnd !b6666`. Taking off passes a day (`StayDays`, the
+    // engine's by default), whose crön pass starts its 1-day pre-holdoff;
+    // the next day's pass ends the holdoff, runs `OnStart`, and, as its
+    // `Duration` is 0, `OnEnd` too (`CronZeroDurationHoldoff`, the
+    // intended end by default), leaving it inactive. So one day on top of
+    // the take-off's. `WaitForCron` cannot see it: it leaves no state.
+    Step::PassDays(1),
+    // Fed26 Deliver Instructions
+    Step::Take(MissionId(457)),
+    Step::Deliver(MissionId(457)),
+    Step::PassDays(1), // b6666, as after Fed25
+    // Fed27 Deliver Further Instructions
+    Step::Take(MissionId(458)),
+    Step::Deliver(MissionId(458)),
+    // Fed28 Re-Infiltrate Rebels
+    Step::Take(MissionId(459)),
+    Step::Deliver(MissionId(459)),
+    // Fed29 Carry Rebel Message
+    Step::Take(MissionId(460)),
+    Step::Deliver(MissionId(460)),
+    // Fed30 Carry Reply
+    Step::Take(MissionId(461)),
+    Step::Deliver(MissionId(461)),
+    // Fed31 Organize Meeting
+    Step::Take(MissionId(462)),
+    Step::Deliver(MissionId(462)),
+    // Fed32 Lead Attack on Rebels
+    Step::Take(MissionId(463)),
+    Step::Deliver(MissionId(463)),
+    // Fed33 Deliver Final Instructions
+    Step::Take(MissionId(464)),
+    Step::Deliver(MissionId(464)),
+    // Fed34 Chat With Federation President
+    Step::Take(MissionId(465)),
+    Step::Deliver(MissionId(465)),
+    // Fed35 Polaris Diplomatic Mission
+    Step::Take(MissionId(466)),
+    Step::HasRank(RankId(150)),
+    Step::Deliver(MissionId(466)),
+    // Fed36 Return With Polaris Proposal
+    Step::Take(MissionId(467)),
+    Step::Deliver(MissionId(467)),
+    // Fed37 Scout Polaris Space
+    Step::Take(MissionId(468)),
+    Step::HasRank(RankId(129)),
+    Step::Deliver(MissionId(468)),
+    // Fed38 Scout Polaris Space
+    Step::Take(MissionId(469)),
+    Step::MeetGoal(MissionId(469)),
+    Step::Deliver(MissionId(469)),
+    Step::PassDays(1), // b6666, as after Fed25
+    // Fed39 Fetch Polaris Leader
+    Step::Take(MissionId(470)),
+    Step::Deliver(MissionId(470)),
+    // Fed40 Meet Auroran Forces
+    Step::Take(MissionId(471)),
+    Step::Deliver(MissionId(471)),
+    // Fed41 Lead Auroran Forces
+    Step::Take(MissionId(472)),
+    Step::Deliver(MissionId(472)),
+    // Fed42 Destroy Polaris Raven
+    Step::Take(MissionId(473)),
+    Step::MeetGoal(MissionId(473)),
+    Step::Deliver(MissionId(473)),
+    // Fed43 Take Krane to Earth (LAST)
+    Step::Take(MissionId(474)),
+    Step::Deliver(MissionId(474)),
+    Step::HasRank(RankId(149)),
+];
+
+/// A new pilot walks [`FEDERATION`] to its last delivery, b89, and rank
+/// 149. The stock data has one chär, 128 ".Trader", whose `OnStart` is
+/// empty, so the pilot [`docked_new_pilot`] builds is the one a new game
+/// starts with.
+#[test]
+#[ignore = "walks the Federation string to its first engine gap; rdm phase \
+            missions-and-storylines/phase-3-federation-walk lists the findings"]
+fn a_new_pilot_walks_the_federation_string_to_its_end() {
+    let Some(dir) = common::nova_data() else {
+        return;
+    };
+    let data = GameData::open(&dir, None).expect("the stock data opens");
+    let mut session = docked_new_pilot(&data);
+    StoryWalker::new(&data)
+        .walk(&mut session, FEDERATION)
+        .unwrap_or_else(|failure| panic!("{failure}"));
 }
