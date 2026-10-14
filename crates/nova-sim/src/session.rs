@@ -15227,6 +15227,54 @@ pub(super) mod tests {
         assert!(launches(78) > 1, "the first falls short");
     }
 
+    /// Every NPC idles, targets the player and fires weapon 131 alone,
+    /// skipping Nova's AI pick.
+    #[derive(Debug)]
+    struct Picking;
+
+    impl Behaviour for Picking {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            Goal::Idle
+        }
+
+        fn trigger(&self, _npc: &Npc, _around: &Surroundings) -> Trigger {
+            Trigger {
+                only: Some(WeaponId(131)),
+                ..Trigger::default()
+            }
+        }
+
+        fn target(&self, _npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            Some(ShipRef::Player)
+        }
+    }
+
+    #[test]
+    fn a_cloaked_npc_fires_only_a_weapon_that_fires_cloaked() {
+        for (flags2, cloaked, fires) in [
+            (0, false, true),
+            (0, true, false),
+            (crate::combat::weapon::FIRES_CLOAKED, true, true),
+        ] {
+            let gun = WeaponRecord {
+                id: WeaponId(131),
+                flags2,
+                ..blaster()
+            };
+            let catalog = arming(blaster(), gun, 0);
+            let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+            session.tick_traffic(&catalog, &Picking, &mut NeverFires);
+            if cloaked {
+                session.traffic.npcs_mut()[0].cloak = CLOAKED;
+            }
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let fired = session.take_combat_events().iter().any(|event| {
+                matches!(event, CombatEvent::Fired { weapon, .. } if *weapon == WeaponId(131))
+            });
+            assert_eq!(fired, fires, "{flags2:#x} cloaked {cloaked}");
+        }
+    }
+
     #[test]
     fn the_players_point_defence_shoots_down_an_npcs_missile_with_no_target_of_its_own() {
         let quad = WeaponRecord {
