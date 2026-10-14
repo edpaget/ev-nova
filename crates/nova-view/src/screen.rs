@@ -59,6 +59,8 @@ pub enum Showing {
     MissionText,
     /// The mission info screen, over flight, which it pauses.
     MissionInfo,
+    /// The player info screen, over flight, which it pauses.
+    PlayerInfo,
 }
 
 /// Something in the game data a screen cannot use, for the app to write

@@ -148,6 +148,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role, outline};
+use crate::ui::player_info::is_player_info_press;
 use crate::ui::text_input::{TextInputDialog, TextInputOutcome};
 
 /// The "Shipyard" dialog's `DLOG` (and `DITL`) ID.
@@ -916,6 +917,8 @@ pub struct ShipyardScreen {
     declined: Option<ShipId>,
     /// The mission offers, once given.
     offering: Option<VenueOffers>,
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
+    player_info: bool,
     closed: bool,
     sounds: Vec<Sound>,
 }
@@ -987,6 +990,7 @@ impl ShipyardScreen {
             order: None,
             declined: None,
             offering: None,
+            player_info: false,
             closed: false,
             sounds: Vec::new(),
         };
@@ -1005,6 +1009,18 @@ impl ShipyardScreen {
             offering: Some(VenueOffers::asking(template)),
             ..self
         }
+    }
+
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) has asked for the player info screen
+    /// since this was last asked, in the shipyard, its Info panel or its
+    /// offer (`_ShipyardFilter` @0x6091a, `_ShipDescFilter` @0x51132),
+    /// never at the name prompt, which takes P as a letter.
+    pub fn take_player_info_request(&mut self) -> bool {
+        let offer = self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_player_info_request);
+        std::mem::take(&mut self.player_info) || offer
     }
 
     /// Whether the shipyard has asked for an offer since this was last
@@ -1366,6 +1382,10 @@ impl Screen for ShipyardScreen {
                     TextInputOutcome::Cancel => self.declined = Some(ship),
                 }
             }
+            return ScreenAction::None;
+        }
+        if is_player_info_press(input) {
+            self.player_info = true;
             return ScreenAction::None;
         }
         if self.panel.is_some() {
@@ -3131,6 +3151,26 @@ mod tests {
         assert!(screen.info_panel().is_some(), "I opens it");
         screen.input(&key(INFO_KEY, true, true));
         assert!(screen.info_panel().is_some());
+    }
+
+    #[test]
+    fn p_asks_for_the_player_info_from_the_shipyard_and_its_panel_not_its_prompt() {
+        let p = crate::ui::player_info::PLAYER_INFO_KEY;
+        let mut screen = screen();
+        assert!(!screen.take_player_info_request());
+        screen.input(&key(p, true, true));
+        assert!(!screen.take_player_info_request(), "not a repeat");
+        press(&mut screen, p);
+        assert!(screen.take_player_info_request());
+        assert!(!screen.take_player_info_request(), "once");
+        press(&mut screen, INFO_KEY);
+        press(&mut screen, p);
+        assert!(screen.take_player_info_request(), "the Info panel");
+        assert!(screen.info_panel().is_some(), "which stays open");
+        let mut screen = naming_by_key();
+        press(&mut screen, p);
+        assert!(!screen.take_player_info_request(), "the prompt takes it");
+        assert!(screen.naming().is_some());
     }
 
     #[test]

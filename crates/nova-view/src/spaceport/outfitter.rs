@@ -569,6 +569,15 @@ impl OutfitterScreen {
         }
     }
 
+    /// Whether its offer has asked for the player info screen since this
+    /// was last asked: the outfitter itself ignores
+    /// [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY), as `_OutfitFilter` never reads it.
+    pub fn take_player_info_request(&mut self) -> bool {
+        self.offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_player_info_request)
+    }
+
     /// Whether the outfitter has asked for an offer since this was last
     /// asked: whoever holds the session answers with
     /// [`OutfitterScreen::open_offer`], or, with none, rearms it

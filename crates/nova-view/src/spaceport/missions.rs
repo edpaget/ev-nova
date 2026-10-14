@@ -61,6 +61,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DONE_LABEL};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::player_info::is_player_info_press;
 use crate::ui::row_list::RowList;
 
 /// The mission computer's `DLOG` (and `DITL`) ID.
@@ -139,6 +140,8 @@ pub struct MissionComputerScreen {
     /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
     /// since this was last taken.
     info_requested: bool,
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
+    player_info_requested: bool,
     closed: bool,
     sounds: Vec<Sound>,
 }
@@ -192,6 +195,7 @@ impl MissionComputerScreen {
             },
             accepted: None,
             info_requested: false,
+            player_info_requested: false,
             closed: false,
             sounds: Vec::new(),
         };
@@ -239,6 +243,13 @@ impl MissionComputerScreen {
     /// @0xa3e37-0xa3ec1).
     pub fn take_info_request(&mut self) -> bool {
         std::mem::take(&mut self.info_requested)
+    }
+
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
+    /// has asked for the player info screen since this was last asked
+    /// (`_MissionFilter` @0x9f82c, `_DoMissionDialog` @0xa3ffc).
+    pub fn take_player_info_request(&mut self) -> bool {
+        std::mem::take(&mut self.player_info_requested)
     }
 
     /// Shows `computer` in place of the one shown, keeping the selected
@@ -320,6 +331,10 @@ impl Screen for MissionComputerScreen {
             })
         {
             self.info_requested = true;
+            return ScreenAction::None;
+        }
+        if is_player_info_press(input) {
+            self.player_info_requested = true;
             return ScreenAction::None;
         }
         let Ok(laid) = &mut self.laid else {

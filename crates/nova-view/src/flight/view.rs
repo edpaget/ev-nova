@@ -251,6 +251,17 @@
 //!   player give their help ([`Session::tick_assistance`], by the screen's
 //!   [`DisableRule`]), and each says when it is done, as a message
 //!   ([`comm_message`]).
+//! - P ([`PLAYER_INFO_KEY`], a press), outside the map, asks the router
+//!   for the player info screen over the paused flight
+//!   ([`FlightView::take_player_info_request`], with
+//!   [`FlightView::player_info`]), letting go of the flight keys, as
+//!   `_HandlePlayer` does (@0x702bf-0x703c9). During a jump, its pre-jump
+//!   stage included, it is refused with `_beepSnd[3]`
+//!   ([`UiSound::PlayerInfoRefused`], @0x7039a-0x703bd). Its Jettison
+//!   jettisons everything ([`FlightView::jettison_all`]). The original
+//!   also refuses it for 15 frames after a take-off and while the ship
+//!   is dying, which the engine does not model
+//!   (crons-news-ranks-fidelity phase 27, player-death phase 4).
 //! - I ([`MISSION_INFO_KEY`], a press), outside the map and a jump, asks
 //!   the router for the mission info screen over the paused flight
 //!   ([`FlightView::take_mission_info_request`]), letting go of the
@@ -357,7 +368,8 @@ use nova_sim::{
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
     HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText, News,
-    NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, StellarIff, TagNames, VenueOffer,
+    NotOffered, OfferPrompt, PayNote, PersonRules, PlayerInfo, SessionEvent, StellarIff, TagNames,
+    VenueOffer,
 };
 
 use super::alert;
@@ -379,6 +391,7 @@ use super::weapons::{self, BeamShown, ShotShown};
 use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMode};
+use crate::sound::UiSound;
 use crate::spaceport::bar::MISSION_INFO_KEY;
 use crate::system::camera::{Camera, VIEW_SIZE};
 use crate::system::catalog::SystemCatalog;
@@ -388,6 +401,7 @@ use crate::text::TextMetrics;
 use crate::time::ticks;
 use crate::ui::PlunderShown;
 use crate::ui::comm::grouped;
+use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{
     Color, Diagnostic, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction,
     Sound, SoundPrefs,
@@ -401,7 +415,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave";
+pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   Cmd-,: preferences   Esc: leave";
 /// The port's own overlays on the flight screen, which the original does
 /// not draw: developer settings, both off by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1313,6 +1327,7 @@ impl Chance for SharedChance {
 
 /// The player's ship in flight, reading the game data from `C`.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)] // each is one fact the screen keeps
 pub struct FlightView<C> {
     /// What the screen reads: when it is built, and on each arrival.
     catalog: C,
@@ -1357,6 +1372,11 @@ pub struct FlightView<C> {
     /// The mission info [`MISSION_INFO_KEY`] asked the screen be opened
     /// on, for the router.
     pending_mission_info: Option<MissionInfo>,
+    /// Whether [`PLAYER_INFO_KEY`] asked for the player info screen, for
+    /// the router.
+    pending_player_info: bool,
+    /// The interface's sounds since they were last taken.
+    ui_sounds: Vec<Sound>,
     /// The mission a person hailed or boarded just offered, for the
     /// router.
     pending_offer: Option<OfferPrompt>,
@@ -1614,6 +1634,8 @@ impl<
             pending_boarding: false,
             pending_hail: None,
             pending_mission_info: None,
+            pending_player_info: false,
+            ui_sounds: Vec::new(),
             pending_offer: None,
             pending_leads: Vec::new(),
             hail_options: HailOptions::default(),
@@ -1812,6 +1834,50 @@ impl<
     /// dialog.
     pub fn take_hail(&mut self) -> Option<HailView> {
         self.pending_hail.take()
+    }
+
+    /// Whether [`PLAYER_INFO_KEY`] asked for the player info screen since
+    /// this was last taken, once: the router opens it on
+    /// [`FlightView::player_info`] over the paused flight.
+    pub fn take_player_info_request(&mut self) -> bool {
+        std::mem::take(&mut self.pending_player_info)
+    }
+
+    /// What the player info screen shows, as [`Session::player_info`]
+    /// gives it from the screen's catalog; `None` for a session that
+    /// failed.
+    #[must_use]
+    pub fn player_info(&self) -> Option<PlayerInfo> {
+        let session = self.session.as_ref().ok()?;
+        Some(session.player_info(&self.catalog))
+    }
+
+    /// Presses [`PLAYER_INFO_KEY`] outside a jump: asks the router for the
+    /// player info screen, letting go of the flight keys
+    /// (`_HandlePlayer` @0x702bf-0x703c9).
+    fn ask_player_info(&mut self) -> ScreenAction {
+        self.pending_player_info = true;
+        self.held.clear();
+        ScreenAction::None
+    }
+
+    /// A key `press` during a jump, which flight ignores but for
+    /// [`PLAYER_INFO_KEY`] outside the map: refused with `_beepSnd[3]`
+    /// (@0x7039a-0x703bd).
+    fn refuse_player_info(&mut self, press: Option<Key>) -> ScreenAction {
+        if press == Some(PLAYER_INFO_KEY) && !self.map_open {
+            self.ui_sounds.push(Sound::Ui(UiSound::PlayerInfoRefused));
+        }
+        ScreenAction::None
+    }
+
+    /// Jettisons everything, mission cargo included, as the player info's
+    /// Jettison does (`_JettisonCargo(1)` @0x5a66d), saying what went.
+    pub fn jettison_all(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.jettison_cargo(true, &mut self.chance);
+        }
+        self.say_messages();
     }
 
     /// The mission info [`MISSION_INFO_KEY`] asked for the mission info
@@ -3656,9 +3722,6 @@ impl<
 {
     /// Never quits: Escape is the router's.
     fn input(&mut self, input: &Input) -> ScreenAction {
-        if self.jump.is_some() || self.preparing_jump() {
-            return ScreenAction::None;
-        }
         let press = match *input {
             Input::Key {
                 key,
@@ -3667,6 +3730,9 @@ impl<
             } => Some(key),
             _ => None,
         };
+        if self.jump.is_some() || self.preparing_jump() {
+            return self.refuse_player_info(press);
+        }
         if self.map_open {
             if press == Some(MAP_KEY) {
                 self.close_map();
@@ -3707,6 +3773,7 @@ impl<
             }
             Some(JETTISON_KEY) => self.jettison(),
             Some(MISSION_INFO_KEY) => self.ask_mission_info(),
+            Some(PLAYER_INFO_KEY) => return self.ask_player_info(),
             Some(HYPER_SELECT_KEY) => {
                 if let Ok(session) = &mut self.session {
                     session.select_next_system();
@@ -3939,7 +4006,8 @@ impl<
     }
 
     /// The session's sounds (thrust, landing, taking off and jumping),
-    /// then the fight's. The course map has no buttons that sound.
+    /// then the fight's, then the interface's (the player info refused).
+    /// The course map has no buttons that sound.
     fn take_sounds(&mut self) -> Vec<Sound> {
         let mut sounds: Vec<Sound> = self
             .session
@@ -3947,6 +4015,7 @@ impl<
             .map(|session| session.take_sounds().into_iter().map(Sound::Sim).collect())
             .unwrap_or_default();
         sounds.extend(self.effects.take_sounds().into_iter().map(Sound::Combat));
+        sounds.append(&mut self.ui_sounds);
         sounds
     }
 
@@ -5354,7 +5423,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave"
+            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   Cmd-,: preferences   Esc: leave"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -12549,6 +12618,15 @@ mod tests {
     }
 
     #[test]
+    fn jettison_all_empties_the_hold_and_says_so() {
+        let mut view = carrying(0x0400, false);
+        assert!(cargo_aboard(&view) > 0);
+        view.jettison_all();
+        assert_eq!(cargo_aboard(&view), 0);
+        assert_eq!(view.message(), Some(CARGO_JETTISONED));
+    }
+
+    #[test]
     fn a_hidden_missions_cargo_jettisoned_says_the_cargo_went() {
         let mut view = carrying(0x0400, false);
         command_tap(&mut view, JETTISON_KEY, false);
@@ -14697,6 +14775,78 @@ mod tests {
             Vec2::ZERO,
             "the flight keys let go"
         );
+    }
+
+    #[test]
+    fn p_asks_for_the_player_info_once_letting_go_of_the_flight_keys() {
+        let mut view = flight();
+        assert!(!view.take_player_info_request());
+        view.input(&key(Key::Up, true));
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(view.take_player_info_request());
+        assert!(!view.take_player_info_request(), "once");
+        view.input(&Input::Key {
+            key: PLAYER_INFO_KEY,
+            pressed: true,
+            repeat: true,
+        });
+        assert!(!view.take_player_info_request(), "not a repeat");
+        view.tick(TICK);
+        assert_eq!(
+            view.session().expect("flying").player().velocity,
+            Vec2::ZERO,
+            "the flight keys let go"
+        );
+        assert_eq!(
+            view.player_info().map(|info| info.credits),
+            Some(view.pilot().expect("flying").cash())
+        );
+        assert!(view.take_sounds().is_empty(), "silent");
+    }
+
+    #[test]
+    fn p_during_a_jump_beeps_and_asks_nothing() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.session().expect("flying").preparing_jump().is_some());
+        let _ = view.take_sounds();
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(!view.take_player_info_request());
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Ui(UiSound::PlayerInfoRefused)],
+            "turning to jump"
+        );
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let _ = view.take_sounds();
+        view.input(&Input::Key {
+            key: PLAYER_INFO_KEY,
+            pressed: true,
+            repeat: true,
+        });
+        assert!(view.take_sounds().is_empty(), "not a repeat");
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(!view.take_player_info_request());
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Ui(UiSound::PlayerInfoRefused)],
+            "streaking"
+        );
+    }
+
+    #[test]
+    fn p_with_the_map_open_does_nothing() {
+        let mut view = flight();
+        tap(&mut view, MAP_KEY);
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(!view.take_player_info_request());
+        assert!(view.map_open());
+        assert!(HELP.contains("P: player info"), "{HELP}");
     }
 
     #[test]

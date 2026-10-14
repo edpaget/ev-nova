@@ -75,7 +75,8 @@ impl<A: Audio> AudioCore<A> {
             self.scene = Some(scene);
         }
         // The Preferences dialog, the boarding dialogs, the comm dialogs,
-        // a person's offer dialog and the mission dialogs pause flight
+        // a person's offer dialog, the mission dialogs and the player info
+        // screen pause flight
         // below them, and flight lets go of its keys, so the thrust is
         // forgotten as for leaving it.
         let pauses = matches!(
@@ -89,6 +90,7 @@ impl<A: Audio> AudioCore<A> {
                     | Showing::Offer
                     | Showing::MissionText
                     | Showing::MissionInfo
+                    | Showing::PlayerInfo
             )
         );
         if self.scene != Some(Showing::Flight) || pauses {
@@ -311,6 +313,7 @@ fn is_overlay(showing: Showing) -> bool {
             | Showing::Offer
             | Showing::MissionText
             | Showing::MissionInfo
+            | Showing::PlayerInfo
     )
 }
 
@@ -336,7 +339,8 @@ fn has_music(scene: Showing) -> bool {
         | Showing::Haggle
         | Showing::Offer
         | Showing::MissionText
-        | Showing::MissionInfo => false,
+        | Showing::MissionInfo
+        | Showing::PlayerInfo => false,
     }
 }
 
@@ -993,6 +997,7 @@ mod tests {
             Showing::Offer,
             Showing::MissionText,
             Showing::MissionInfo,
+            Showing::PlayerInfo,
         ] {
             let (mut core, log) = engine();
             core.update(Some(Showing::Flight), &[THRUST]);

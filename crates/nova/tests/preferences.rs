@@ -250,6 +250,19 @@ impl Harness {
         }
     }
 
+    /// Presses Command+comma through winit's translation, as the player
+    /// opens the Preferences in flight, where P is the player info.
+    fn command_comma(&mut self) {
+        let super_key = PhysicalKey::Code(KeyCode::SuperLeft);
+        self.send(platform::key_event(super_key, ElementState::Pressed, false));
+        self.press_physical(KeyCode::Comma);
+        self.send(platform::key_event(
+            super_key,
+            ElementState::Released,
+            false,
+        ));
+    }
+
     /// Presses L twice, as the player lands: the first requests clearance,
     /// the second lands.
     fn land(&mut self) {
@@ -323,7 +336,7 @@ fn solids(frame: &Frame) -> usize {
 }
 
 #[test]
-fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
+fn command_comma_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
     let store = seeded();
     let mut harness = Harness::new(&store);
     harness.press_physical(KeyCode::KeyF);
@@ -337,7 +350,7 @@ fn p_opens_the_preferences_and_their_changes_play_and_survive_a_restart() {
         "the seeded music volume"
     );
 
-    harness.press_physical(KeyCode::KeyP);
+    harness.command_comma();
     assert_eq!(harness.showing(), Showing::Preferences);
     let open = harness.frame();
     let shown = texts(&open);
@@ -429,7 +442,7 @@ fn a_failed_save_is_a_warning_and_the_change_still_plays() {
     let mut harness = Harness::new(&store);
     harness.press(Key::Char('f'));
     harness.played();
-    harness.press(Key::Char('p'));
+    harness.command_comma();
     store.fail_writes(true);
     let music = harness.dialog().music().rect().center();
     harness.click(music);
@@ -468,7 +481,7 @@ fn the_preferences_pause_flight_and_stop_the_engine_until_a_fresh_thrust() {
     harness.fly();
     assert_eq!(harness.played(), [engine], "thrusting");
 
-    harness.press(Key::Char('p'));
+    harness.command_comma();
     assert_eq!(harness.showing(), Showing::Preferences);
     harness.fly();
     assert_eq!(

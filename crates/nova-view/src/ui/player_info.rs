@@ -116,6 +116,19 @@ pub const PLAYER_INFO_KEY: Key = Key::Char('p');
 /// The key that, held, makes Tab go back (`shiftKey`, 0x0200).
 pub const BACKWARDS_KEY: Key = Key::Shift;
 
+/// Whether `input` presses [`PLAYER_INFO_KEY`], not as a repeat: what
+/// asks for the player info screen where the original's filters read the
+/// key.
+#[must_use]
+pub fn is_player_info_press(input: &Input) -> bool {
+    *input
+        == Input::Key {
+            key: PLAYER_INFO_KEY,
+            pressed: true,
+            repeat: false,
+        }
+}
+
 /// The tabs' labels, `STR#` 150 #36-#39.
 pub const TAB_LABELS: [&str; 4] = ["General", "Cargo", "Extras", "Honors"];
 /// Jettison's label, `STR#` 150 #61.

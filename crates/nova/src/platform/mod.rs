@@ -113,9 +113,13 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // Hyper Select, by position: `\` on a US-layout keyboard; the
         // original's default.
         PhysicalKey::Code(KeyCode::Backslash) => Key::Char('\\'),
-        // The Preferences dialog's key, by position: P on a US-layout
+        // The player info key in flight and the spaceport, and the
+        // Preferences dialog's elsewhere, by position: P on a US-layout
         // keyboard.
         PhysicalKey::Code(KeyCode::KeyP) => Key::Char('p'),
+        // Command+comma opens the Preferences, by position: the comma on a
+        // US-layout keyboard.
+        PhysicalKey::Code(KeyCode::Comma) => Key::Char(','),
         // The Trade Center's buy key, by position: B on a US-layout
         // keyboard. Its sell key is S, above.
         PhysicalKey::Code(KeyCode::KeyB) => Key::Char('b'),
@@ -250,10 +254,12 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 29] = [
+    const GAME_CHARACTER_KEYS: [Key; 31] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
+        nova_view::ui::player_info::PLAYER_INFO_KEY,
+        crate::app::screen::PREFERENCES_KEY,
         nova_view::flight::view::LAND_KEY,
         nova_view::flight::view::MAP_KEY,
         nova_view::flight::view::JUMP_KEY,
@@ -307,6 +313,7 @@ mod tests {
             '-' => KeyCode::Minus,
             '`' => KeyCode::Backquote,
             '\\' => KeyCode::Backslash,
+            ',' => KeyCode::Comma,
             other => panic!("no physical key listed for {other:?}"),
         }
     }
