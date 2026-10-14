@@ -144,10 +144,10 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags2, 0x0020, Any, Implemented),
     // Ammo hidden on the status display.
     (Flags2, 0x0040, Any, Presentation),
-    // Needs a KeyCarried ship aboard.
-    (Flags2, 0x0080, Any, Unimplemented),
-    // AI ships won't use it.
-    (Flags2, 0x0100, Any, Unimplemented),
+    // Needs a KeyCarried ship aboard (`Armament::has_ammo`).
+    (Flags2, 0x0080, Any, Implemented),
+    // AI ships won't use it (`Armament::has_ammo`).
+    (Flags2, 0x0100, Any, Implemented),
     // Uses the ship's weapon sprite.
     (Flags2, 0x0200, Any, Presentation),
     // Planet-type weapon. Its shots hit destroyable stellars (`stellar`);
@@ -161,8 +161,8 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags2, 0x1000, Any, Unimplemented),
     // Beam drawn under ships.
     (Flags2, 0x2000, Beam, Presentation),
-    // Fires while cloaked.
-    (Flags2, 0x4000, Any, Unimplemented),
+    // Fires while cloaked, and nothing else does (`Armament::has_ammo`).
+    (Flags2, 0x4000, Any, Implemented),
     // x10 mass damage to asteroids.
     (Flags2, 0x8000, Any, Unimplemented),
     // Ammo only at the end of a burst.
@@ -257,14 +257,14 @@ mod tests {
         (Flags2, 0x0010, [Implemented; 4]),
         (Flags2, 0x0020, [Implemented; 4]),
         (Flags2, 0x0040, [Presentation; 4]),
-        (Flags2, 0x0080, [Unimplemented; 4]),
-        (Flags2, 0x0100, [Unimplemented; 4]),
+        (Flags2, 0x0080, [Implemented; 4]),
+        (Flags2, 0x0100, [Implemented; 4]),
         (Flags2, 0x0200, [Presentation; 4]),
         (Flags2, 0x0400, [Unimplemented; 4]),
         (Flags2, 0x0800, [Presentation; 4]),
         (Flags2, 0x1000, [Unimplemented; 4]),
         (Flags2, 0x2000, [NA, Presentation, NA, NA]),
-        (Flags2, 0x4000, [Unimplemented; 4]),
+        (Flags2, 0x4000, [Implemented; 4]),
         (Flags2, 0x8000, [Unimplemented; 4]),
         (Flags3, 0x0001, [Implemented; 4]),
         (Flags3, 0x0002, [Presentation; 4]),
@@ -394,7 +394,6 @@ mod tests {
             unimplemented(&spec(-1, 0x0048, 0x1080, 0x0024)),
             [
                 (Flags, 0x0040),
-                (Flags2, 0x0080),
                 (Flags2, 0x1000),
                 (Flags3, 0x0004),
                 (Flags3, 0x0020),
@@ -448,7 +447,7 @@ mod tests {
         // sub-munitions seek the nearest; it fires while cloaked.
         assert_eq!(
             unimplemented(&guided(1, 0x0182, 0x0001, 0x4010, 0x0002)),
-            [(Seeker, 0x0001), (Flags2, 0x4000)]
+            [(Seeker, 0x0001)]
         );
         // A rear-blind Fusion Pulse Turret that disables.
         assert_eq!(

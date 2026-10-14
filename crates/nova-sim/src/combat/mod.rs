@@ -108,7 +108,7 @@ pub mod stellar;
 pub mod submunition;
 pub mod weapon;
 
-use armament::{Armament, Arsenal, Launch, Rounds, Trigger};
+use armament::{Armament, Arsenal, Launch, Rounds, Shooter, Trigger};
 use beam::{Aiming, Beam};
 use damage::{Blast, Hit};
 use defence::{INTERCEPT_RADIUS, PointDefenceRule, Side};
@@ -269,6 +269,9 @@ pub struct Fighter<'a> {
     /// module). It is kept disabled until its armour is gone, never
     /// newly disabled, and the [`DisableRule`] is not asked of it.
     pub held_disabled: bool,
+    /// Whether it is cloaked: it fires only its weapons that fire while
+    /// cloaked ([`Armament::has_ammo`]). The player never is.
+    pub cloaked: bool,
     /// Its weapons.
     pub armament: &'a mut Armament,
     /// Its rounds of ammunition.
@@ -439,6 +442,7 @@ impl Combat {
             let launches = fighter.armament.fire(
                 fighter.trigger,
                 *fighter.condition,
+                fighter.shooter(),
                 fighter.rounds,
                 &mut fighter.reserves.fuel,
                 chance,
@@ -466,6 +470,7 @@ impl Combat {
             let shots = &self.shots;
             let fired = fighter.armament.fire_point_defence(
                 *fighter.condition,
+                fighter.shooter(),
                 fighter.rounds,
                 &mut fighter.reserves.fuel,
                 chance,
@@ -835,6 +840,16 @@ impl Combat {
 }
 
 impl Fighter<'_> {
+    /// The ship as `_WeaponHasAmmo` asks of it: an NPC or the player,
+    /// cloaked or not, and its class's `KeyCarried`.
+    fn shooter(&self) -> Shooter {
+        Shooter {
+            npc: matches!(self.ship, ShipRef::Npc(_)),
+            cloaked: self.cloaked,
+            key_carried: self.hull.key_carried,
+        }
+    }
+
     /// The ship's side: itself, its fleet and its government.
     fn side(&self) -> Side {
         Side {
@@ -931,6 +946,7 @@ mod tests {
         reserves: Reserves,
         condition: Condition,
         held_disabled: bool,
+        cloaked: bool,
         armament: Armament,
         rounds: BTreeMap<WeaponId, u32>,
     }
@@ -956,6 +972,7 @@ mod tests {
                 reserves: Reserves::full(10.0, 30.0, 100.0),
                 condition: Condition::Intact,
                 held_disabled: false,
+                cloaked: false,
                 armament: Armament::default(),
                 rounds: BTreeMap::new(),
             }
@@ -991,6 +1008,7 @@ mod tests {
                 reserves: &mut self.reserves,
                 condition: &mut self.condition,
                 held_disabled: self.held_disabled,
+                cloaked: self.cloaked,
                 armament: &mut self.armament,
                 rounds: &mut self.rounds,
             }
@@ -1080,6 +1098,68 @@ mod tests {
             .iter()
             .filter(|event| matches!(event, CombatEvent::Fired { ship: s, .. } if *s == ship))
             .count()
+    }
+
+    /// How many shots `ship`, firing `record`, fires in a tick.
+    fn shots_of(ship: Ship, record: WeaponRecord) -> usize {
+        let mut combat = Combat::default();
+        let id = ship.id;
+        let mut ships = [ship.armed(record)];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        fired(&combat.take_events(), id)
+    }
+
+    #[test]
+    fn a_fighter_fires_as_weapon_has_ammo_says_of_its_ship() {
+        use crate::combat::weapon::{AI_WONT_USE, FIRES_CLOAKED, NEEDS_KEY_SHIP};
+        let wont = WeaponRecord {
+            flags2: AI_WONT_USE,
+            ..blaster()
+        };
+        assert_eq!(shots_of(Ship::at(1, 0.0, 0.0), wont), 0, "an NPC");
+        let player = Ship {
+            id: ShipRef::Player,
+            fleet: ShipRef::Player,
+            ..Ship::at(1, 0.0, 0.0)
+        };
+        assert_eq!(shots_of(player, wont), 1, "the player");
+        let cloaked = || Ship {
+            cloaked: true,
+            ..Ship::at(1, 0.0, 0.0)
+        };
+        assert_eq!(shots_of(cloaked(), blaster()), 0, "cloaked");
+        let fires_cloaked = WeaponRecord {
+            flags2: FIRES_CLOAKED,
+            ..blaster()
+        };
+        assert_eq!(shots_of(cloaked(), fires_cloaked), 1);
+        // A key ship needed, its class's `KeyCarried` read from the hull.
+        let keyed = WeaponRecord {
+            flags2: NEEDS_KEY_SHIP,
+            ..blaster()
+        };
+        let carrier = |key| {
+            let mut ship = Ship::at(1, 0.0, 0.0).armed(keyed);
+            ship.hull.key_carried = key;
+            ship.armament = Armament::new([
+                (WeaponSpec::new(&keyed), 1),
+                (
+                    WeaponSpec::new(&WeaponRecord {
+                        guidance: 99,
+                        ammo_type: 200,
+                        ..weapon(150)
+                    }),
+                    1,
+                ),
+            ]);
+            ship.rounds = BTreeMap::from([(WeaponId(150), 1)]);
+            let mut combat = Combat::default();
+            let mut ships = [ship];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            fired(&combat.take_events(), A)
+        };
+        assert_eq!(carrier(Some(ShipId(200))), 1);
+        assert_eq!(carrier(None), 0);
     }
 
     #[test]

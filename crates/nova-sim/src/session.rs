@@ -1564,6 +1564,7 @@ impl Session {
             reserves: &mut pilot.reserves,
             condition: &mut self.condition,
             held_disabled: false,
+            cloaked: false,
             armament: &mut self.armament,
             rounds: &mut rounds,
         }];
@@ -1582,6 +1583,7 @@ impl Session {
                 condition,
                 armament,
                 rounds,
+                cloak,
                 ..
             } = npc;
             fighters.push(Fighter {
@@ -1598,6 +1600,7 @@ impl Session {
                 reserves,
                 condition,
                 held_disabled,
+                cloaked: cloak.is_cloaked(),
                 armament,
                 rounds,
             });

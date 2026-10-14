@@ -78,7 +78,7 @@ use crate::combat::ShipRef;
 use crate::combat::aim::{FRONT_ARC, angle_off, bearing, blind, lead};
 #[cfg(doc)]
 use crate::combat::armament::Armament;
-use crate::combat::armament::{Mount, Trigger};
+use crate::combat::armament::{Mount, Shooter, Trigger};
 use crate::combat::projectile::Target;
 use crate::combat::weapon::{Ammo, Guidance, WeaponSpec};
 use crate::flight::ShipState;
@@ -196,13 +196,27 @@ fn destroying(spec: &WeaponSpec) -> bool {
         )
 }
 
+/// Whether `npc` has the ammunition for `mount`, one of its own, as
+/// `_WeaponHasAmmo` says ([`Armament::has_ammo`]): an NPC, cloaked or
+/// not, of its class's `KeyCarried`, with its rounds and fuel.
+#[must_use]
+pub fn has_ammo(npc: &Npc, mount: &Mount) -> bool {
+    let shooter = Shooter {
+        npc: true,
+        cloaked: npc.cloak.is_cloaked(),
+        key_carried: npc.hull.key_carried,
+    };
+    npc.armament
+        .has_ammo(mount, &npc.rounds, npc.reserves.fuel, shooter)
+}
+
 /// Whether `npc` holds a destroying weapon (see the module docs).
 #[must_use]
 pub fn destroys(npc: &Npc) -> bool {
     npc.armament
         .mounts()
         .iter()
-        .any(|mount| destroying(&mount.spec) && mount.affords(&npc.rounds, npc.reserves.fuel))
+        .any(|mount| destroying(&mount.spec) && has_ammo(npc, mount))
 }
 
 /// How much of its weapons a ship can still fire (`_AIShipIsOutOfAmmo`
@@ -329,7 +343,7 @@ impl Sight<'_> {
 
     /// Whether `mount` is ready: reloaded and paid for.
     fn ready(&self, mount: &Mount) -> bool {
-        mount.reload <= 0.0 && mount.affords(&self.npc.rounds, self.npc.reserves.fuel)
+        mount.reload <= 0.0 && has_ammo(self.npc, mount)
     }
 
     /// Whether `spec` reaches the target: within its range and the margin.
@@ -383,9 +397,12 @@ impl Sight<'_> {
         let usable = |mount: &Mount| {
             self.ready(mount) && self.reaches(&mount.spec) && self.clear_of(&mount.spec)
         };
-        let armed = self.npc.armament.mounts().iter().any(|mount| {
-            forward(&mount.spec) && mount.affords(&self.npc.rounds, self.npc.reserves.fuel)
-        });
+        let armed = self
+            .npc
+            .armament
+            .mounts()
+            .iter()
+            .any(|mount| forward(&mount.spec) && has_ammo(self.npc, mount));
         let gun =
             |spec: &WeaponSpec| forward(spec) || (!armed && spec.guidance == Guidance::Homing);
         self.best(|mount| gun(&mount.spec) && usable(mount))
@@ -422,7 +439,6 @@ impl Sight<'_> {
             return None;
         }
         let distance = self.distance_squared();
-        let (rounds, fuel) = (&self.npc.rounds, self.npc.reserves.fuel);
         self.npc
             .armament
             .mounts()
@@ -430,7 +446,7 @@ impl Sight<'_> {
             .find(|mount| {
                 let range = mount.spec.range();
                 mount.spec.guidance == Guidance::Homing
-                    && mount.affords(rounds, fuel)
+                    && has_ammo(self.npc, mount)
                     && range * range >= MISSILE_RANGE * distance
             })
             .filter(|mount| mount.reload <= 0.0)
@@ -656,6 +672,7 @@ mod tests {
                 ..Trigger::default()
             },
             Condition::Intact,
+            crate::combat::armament::Shooter::PLAYER,
             &mut BTreeMap::new(),
             &mut fuel,
             &mut crate::chance::NeverFires,
@@ -1002,6 +1019,7 @@ mod tests {
                 ..Trigger::default()
             },
             Condition::Intact,
+            crate::combat::armament::Shooter::PLAYER,
             &mut rounds,
             &mut fuel,
             &mut crate::chance::NeverFires,
@@ -1170,6 +1188,70 @@ mod tests {
         assert_eq!(ammo_left(&ship), AmmoLeft::Dry);
         ship.reserves.fuel.now = 5.0;
         assert_eq!(ammo_left(&ship), AmmoLeft::Armed);
+    }
+
+    /// `record` with `flags2`.
+    fn with_flags2(record: WeaponRecord, flags2: u16) -> WeaponRecord {
+        WeaponRecord { flags2, ..record }
+    }
+
+    #[test]
+    fn an_npc_never_picks_a_weapon_ai_ships_wont_use() {
+        use crate::combat::weapon::AI_WONT_USE;
+        let npc = shooter(&[with_flags2(gun(128, 1, 1), AI_WONT_USE)], ATTACK);
+        assert_eq!(fired(&npc, 0.0, -100.0, 50.0), None, "the gun");
+        let npc = shooter(
+            &[with_flags2(gun(128, 9, 9), AI_WONT_USE), gun(129, 1, 1)],
+            ATTACK,
+        );
+        assert_eq!(fired(&npc, 0.0, -100.0, 50.0), id(129), "the lesser gun");
+        let npc = shooter(
+            &[
+                short(128),
+                with_flags2(missile(131), AI_WONT_USE),
+                missile(132),
+            ],
+            ATTACK,
+        );
+        assert_eq!(fired(&npc, 0.0, -300.0, 50.0), id(132), "the missile");
+        let turret = shooter(
+            &[with_flags2(guided(130, 4), AI_WONT_USE)],
+            Goal::Flee(ShipRef::Player),
+        );
+        assert_eq!(fired(&turret, 0.0, 200.0, 50.0), None, "the turret");
+        assert!(!destroys(&shooter(
+            &[with_flags2(gun(128, 0, 1), AI_WONT_USE)],
+            ATTACK
+        )));
+    }
+
+    #[test]
+    fn a_cloaked_npc_picks_only_a_weapon_that_fires_cloaked() {
+        use crate::combat::weapon::FIRES_CLOAKED;
+        let cloak = |mut npc: Npc| {
+            npc.cloak = crate::cloak::Cloak {
+                fade: crate::cloak::FADE_FULL,
+                direction: 0,
+            };
+            npc
+        };
+        let npc = cloak(shooter(
+            &[gun(128, 9, 9), with_flags2(gun(129, 1, 1), FIRES_CLOAKED)],
+            ATTACK,
+        ));
+        assert_eq!(fired(&npc, 0.0, -100.0, 50.0), id(129));
+        let npc = cloak(shooter(&[short(128), missile(131)], ATTACK));
+        assert_eq!(
+            fired(&npc, 0.0, -300.0, 50.0),
+            None,
+            "nothing fires cloaked"
+        );
+        let npc = cloak(shooter(
+            &[short(128), with_flags2(missile(131), FIRES_CLOAKED)],
+            ATTACK,
+        ));
+        assert_eq!(fired(&npc, 0.0, -300.0, 50.0), id(131));
+        assert!(!destroys(&cloak(shooter(&[gun(128, 0, 1)], ATTACK))));
     }
 
     #[test]

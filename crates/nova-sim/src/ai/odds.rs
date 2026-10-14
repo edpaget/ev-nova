@@ -55,6 +55,7 @@
 //!   short way round.
 
 use crate::ai::Surroundings;
+use crate::ai::fire::has_ammo;
 use crate::combat::ShipRef;
 use crate::combat::aim::{angle_off, bearing};
 use crate::combat::hull::Condition;
@@ -194,7 +195,7 @@ pub fn hopeless_chase(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool
     let in_reach = npc.armament.mounts().iter().any(|mount| {
         let range = mount.spec.range();
         mount.spec.guidance == Guidance::Homing
-            && mount.affords(&npc.rounds, npc.reserves.fuel)
+            && has_ammo(npc, mount)
             && range * range >= MISSILE_REACH * distance
     });
     let speed = npc.stats.handling.max_speed;
@@ -629,6 +630,20 @@ mod tests {
         chaser.rounds.clear();
         assert!(hopeless(&chaser, target), "no rounds");
         assert_eq!(MISSILE_REACH, 0.8);
+    }
+
+    #[test]
+    fn a_missile_ai_ships_wont_use_is_out_of_reach() {
+        let (mut chaser, mut target) = chase(1.0);
+        let (armament, rounds) = missile();
+        chaser.armament = armament;
+        chaser.rounds = rounds;
+        target.state.position = Vec2::new(0.0, -100.0);
+        assert!(!hopeless(&chaser, target));
+        let mut wont = chaser.armament.mounts()[0].spec;
+        wont.flags2 = crate::combat::weapon::AI_WONT_USE;
+        chaser.armament = Armament::new([(wont, 1)]);
+        assert!(hopeless(&chaser, target));
     }
 
     #[test]

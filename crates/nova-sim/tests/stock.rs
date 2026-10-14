@@ -1380,6 +1380,7 @@ impl Combatant {
             reserves: &mut self.reserves,
             condition: &mut self.condition,
             held_disabled: false,
+            cloaked: false,
             armament: &mut self.armament,
             rounds: &mut self.rounds as &mut dyn Rounds,
         }
@@ -2032,13 +2033,13 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
         fight_with(&mut combat, &mut ships, &arsenal);
         diagnostics.extend(combat.take_diagnostics());
     }
-    let rows: [Row; 11] = [
+    // The Zephyr family's `Flags2` 0x4000 (183-185, 199) fires while
+    // cloaked, which `Armament::has_ammo` does, so it reports nothing.
+    let rows: [Row; 9] = [
         (&[134, 136], &[(Seeker, 0x2)]),
         (&[135, 160], &[(Seeker, 0x2), (Seeker, 0x8)]),
         (&[137], &[(Seeker, 0x1), (Seeker, 0x8)]),
-        (&[148, 182, 229], &[(Seeker, 0x1)]),
-        (&[184, 185, 199], &[(Seeker, 0x1), (Flags2, 0x4000)]),
-        (&[183], &[(Flags2, 0x4000)]),
+        (&[148, 182, 184, 185, 199, 229], &[(Seeker, 0x1)]),
         (&[142, 201], &[(Flags2, 0x1000), (Flags3, 0x10)]),
         (&[233], &[(Flags2, 0x1000)]),
         (&[234], &[(Seeker, 0x2), (Seeker, 0x8), (Flags2, 0x1000)]),
@@ -2059,8 +2060,8 @@ fn every_stock_guided_weapon_and_turret_reports_its_unimplemented_flags_once() {
             })
         })
         .collect();
-    assert_eq!(expected.len(), 32);
-    assert_eq!(diagnostics.len(), 32, "each once: {diagnostics:?}");
+    assert_eq!(expected.len(), 28);
+    assert_eq!(diagnostics.len(), 28, "each once: {diagnostics:?}");
     assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>(), expected);
 }
 
