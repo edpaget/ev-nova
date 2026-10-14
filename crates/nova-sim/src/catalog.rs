@@ -17,6 +17,7 @@ use crate::combat::weapon::Explosion;
 use crate::control::{Script, Test};
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
+use crate::warp::SoundLength;
 
 /// A new pilot's start, from the first `chär`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -371,6 +372,9 @@ pub struct ShipRecord {
     /// Its `OnRetire` set expression, parsed: run when the player trades
     /// one in or leaves it for a captured ship.
     pub on_retire: Script,
+    /// Its `Flags`, raw: its jump-speed bits give its warp factor
+    /// ([`warp_factor`](crate::warp::warp_factor)).
+    pub flags: u16,
     /// Its `Flags3`.
     pub flags3: u16,
     /// Its `DispWeight`: higher shows nearer the top.
@@ -1326,6 +1330,13 @@ pub trait PilotCatalog {
     fn ranks(&self) -> Vec<RankRecord>;
     /// Every `nëbu` 128-159 that can be read, by ascending ID.
     fn nebulae(&self) -> Vec<NebulaRecord>;
+    /// The length of the warp-up sound, `snd ` 128, which the warp's
+    /// clock reads its duration from
+    /// ([`sound_duration`](crate::warp::sound_duration)); none when there
+    /// is none or it cannot be read, as by default.
+    fn warp_sound(&self) -> Option<SoundLength> {
+        None
+    }
 }
 
 /// A borrowed catalog is a catalog.
@@ -1428,6 +1439,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for &T {
 
     fn nebulae(&self) -> Vec<NebulaRecord> {
         (**self).nebulae()
+    }
+
+    fn warp_sound(&self) -> Option<SoundLength> {
+        (**self).warp_sound()
     }
 }
 
@@ -1532,6 +1547,10 @@ impl<T: PilotCatalog + ?Sized> PilotCatalog for Rc<T> {
 
     fn nebulae(&self) -> Vec<NebulaRecord> {
         (**self).nebulae()
+    }
+
+    fn warp_sound(&self) -> Option<SoundLength> {
+        (**self).warp_sound()
     }
 }
 
@@ -1834,6 +1853,14 @@ mod tests {
         fn nebulae(&self) -> Vec<NebulaRecord> {
             vec![crate::testkit::nebula(141, (0, 0, 300, 10), "", "")]
         }
+
+        /// A second at 22050 Hz.
+        fn warp_sound(&self) -> Option<SoundLength> {
+            Some(SoundLength {
+                frames: 22_050,
+                rate: 22_050,
+            })
+        }
     }
 
     /// Everything `catalog` says about ships 128 and 129 and their
@@ -1870,6 +1897,7 @@ mod tests {
             format!("{:?}", catalog.ranks()),
             format!("{:?}", catalog.system_visibility()),
             format!("{:?}", catalog.nebulae()),
+            format!("{:?}", catalog.warp_sound()),
         ]
     }
 
@@ -1921,6 +1949,10 @@ mod tests {
         assert!(direct[27].contains("Bit(5)"), "{direct:?}");
         assert!(direct[28].contains("NebulaId(141)"), "{direct:?}");
         assert!(direct[28].contains("width: 300"), "{direct:?}");
+        assert_eq!(
+            direct[29], "Some(SoundLength { frames: 22050, rate: 22050 })",
+            "forwarded, not a default"
+        );
         assert_eq!(reads(&One), direct);
         assert_eq!(reads(Rc::new(One)), direct);
     }

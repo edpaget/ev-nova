@@ -27,6 +27,7 @@ use crate::session::LandPress;
 use crate::session::Session;
 use crate::stats::ShipStats;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
+use crate::warp::SoundLength;
 
 /// A canned first `chär`, ships and systems; records the ships asked
 /// for.
@@ -113,6 +114,9 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) ranks: Vec<RankRecord>,
     /// Every `nëbu`: none, by default.
     pub(crate) nebulae: Vec<NebulaRecord>,
+    /// The warp-up sound's length: none, by default, so the warp's clock
+    /// takes 350 Mac ticks.
+    pub(crate) warp_sound: Option<SoundLength>,
 }
 
 /// Cron `id`, open on every date, starting on any roll and asking
@@ -338,7 +342,7 @@ pub(crate) fn outfit(id: i16, mods: &[(i16, i16)]) -> OutfitRecord {
 
 /// `shïp` `id` with `fields`: 10,000 credits, tech level 1, for sale
 /// every day (`BuyRandom` 100), never for hire (`HireRandom` 0),
-/// requiring nothing, with no default items, no `Flags3` and no inherent
+/// requiring nothing, with no default items, no `Flags` or `Flags3` and no inherent
 /// government, hailed as "ship `id`", a wimpy trader whose escort class
 /// is worked out (`EscortType` -1).
 pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
@@ -356,6 +360,7 @@ pub(crate) fn ship(id: i16, fields: ShipFields) -> ShipRecord {
         require: 0,
         availability: Test::default(),
         appear_on: Test::default(),
+        flags: 0,
         flags3: 0,
         disp_weight: 0,
         max_gun: 2,
@@ -598,6 +603,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         crons: Vec::new(),
         ranks: Vec::new(),
         nebulae: Vec::new(),
+        warp_sound: None,
     }
 }
 
@@ -851,6 +857,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn nebulae(&self) -> Vec<NebulaRecord> {
         self.nebulae.clone()
+    }
+
+    fn warp_sound(&self) -> Option<SoundLength> {
+        self.warp_sound
     }
 }
 

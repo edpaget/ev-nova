@@ -27,7 +27,9 @@ use nova_data::records::string::StrResource;
 use nova_data::records::string_list::StrList;
 use nova_data::records::system::System;
 use nova_data::records::weapon::Weapon;
+use nova_data::sound::decode_snd;
 use nova_data::{GameData, Record, stellar_spin_id};
+use nova_rsrc::ResType;
 
 use crate::blink::Blink;
 use crate::catalog::{
@@ -44,6 +46,13 @@ use crate::combat::weapon::Explosion;
 use crate::geometry::Vec2;
 use crate::handling::ShipFields;
 use crate::nebula;
+use crate::warp::SoundLength;
+
+/// The `snd ` resource type.
+const SND: ResType = ResType::new(*b"snd ");
+/// The warp-up sound, `snd ` 128, whose length the warp's clock reads
+/// (`_LoadSounds` @0x1c0b5-0x1c12d).
+const WARP_UP_SOUND: i16 = 128;
 
 /// Reads the records afresh on every call; a session asks once, when it
 /// starts.
@@ -116,6 +125,7 @@ impl PilotCatalog for GameData {
                     on_purchase: self.set_expr(record.on_purchase.as_str()).into(),
                     on_capture: self.set_expr(record.on_capture.as_str()).into(),
                     on_retire: self.set_expr(record.on_retire.as_str()).into(),
+                    flags: record.flags.bits(),
                     flags3: record.flags3.bits(),
                     disp_weight: record.disp_weight,
                     max_gun: record.max_gun,
@@ -583,6 +593,15 @@ impl PilotCatalog for GameData {
                 })
             })
             .collect()
+    }
+
+    fn warp_sound(&self) -> Option<SoundLength> {
+        let snd = self.resource(SND, WARP_UP_SOUND)?;
+        let pcm = decode_snd(snd.resource.data()).ok()?;
+        Some(SoundLength {
+            frames: u32::try_from(pcm.frames()).unwrap_or(u32::MAX),
+            rate: pcm.sample_rate().fixed() >> 16,
+        })
     }
 
     /// Only IDs 128-255 have a slot (@0x7da37); `AffilGovt` up to 127
@@ -1462,6 +1481,7 @@ mod tests {
         bytes[0x62E..0x63D].copy_from_slice(b"A Heavy Shuttle");
         bytes[0x726..0x728].copy_from_slice(&0x4100_u16.to_be_bytes());
         put_i16s(&mut bytes, 0x48, &[1129]);
+        bytes[0x4A..0x4C].copy_from_slice(&0x8002_u16.to_be_bytes());
         bytes[0x60E..0x61D].copy_from_slice(b"heavy shuttle\0\0");
         put_i16s(&mut bytes, 0x732, &[2]);
         bytes[0x26A..0x26E].copy_from_slice(b"b300");
@@ -1500,6 +1520,7 @@ mod tests {
             require: 0x0000_0002_0000_0001,
             availability: Test::parse("b422"),
             appear_on: Test::parse("!b17"),
+            flags: 0x8002,
             flags3: 0x4100,
             disp_weight: 25,
             max_gun: 4,
@@ -1734,6 +1755,55 @@ mod tests {
         put_i16s(&mut bytes, 0x3EE, &[0x8004_u16.cast_signed()]);
         let data = store(&[(Outfit::TYPE, 128, bytes)]);
         assert_eq!(data.outfits()[0].scan_mask, 0x8004);
+    }
+
+    /// `snd ` 128 of `samples` 8-bit mono samples at 22254.54 Hz.
+    fn warp_up(samples: usize) -> (ResType, i16, Vec<u8>) {
+        use nova_data::sound::fixture::{Header, SndBuilder, SndFormat};
+        let snd = SndBuilder::new(
+            SndFormat::One,
+            Header::Standard {
+                rate: 0x56EE_8BA3,
+                loop_points: (0, 0),
+                base_note: 60,
+                samples: vec![0x80; samples],
+            },
+        );
+        (ResType::new(*b"snd "), 128, snd.bytes())
+    }
+
+    #[test]
+    fn the_warp_sound_is_snd_128s_frames_and_the_whole_part_of_its_rate() {
+        let data = store(&[warp_up(44_508)]);
+        assert_eq!(
+            data.warp_sound(),
+            Some(SoundLength {
+                frames: 44_508,
+                rate: 22_254
+            })
+        );
+        assert_eq!(
+            crate::warp::sound_duration(data.warp_sound()),
+            120,
+            "two seconds at 22254 Hz, where 22255 would give 119"
+        );
+    }
+
+    #[test]
+    fn without_a_readable_snd_128_there_is_no_warp_sound() {
+        assert_eq!(store(&[]).warp_sound(), None);
+        let (ty, _, bytes) = warp_up(44_508);
+        assert_eq!(
+            store(&[(ty, 129, bytes.clone())]).warp_sound(),
+            None,
+            "129 is not it"
+        );
+        let broken = bytes[..bytes.len() - 10].to_vec();
+        assert_eq!(
+            store(&[(ty, 128, broken)]).warp_sound(),
+            None,
+            "undecodable"
+        );
     }
 
     #[test]
