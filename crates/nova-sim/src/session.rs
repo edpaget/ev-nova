@@ -708,6 +708,9 @@ pub struct Session {
     /// (@0x68d95-0x68dcd). Never saved: the pilot may not be saved while
     /// it runs ([`crate::FateRow::saves`]).
     pod: Option<u32>,
+    /// Whether the pod countdown has run out and the rescue is due (see
+    /// the `rescue` module); never saved.
+    rescue_due: bool,
     /// Whether the player holds the eject chord, Command and the eject
     /// key together (see the `eject` module); never saved.
     eject_held: bool,
@@ -1123,6 +1126,7 @@ impl Session {
             player_end: None,
             hold_expiry_due: false,
             pod: None,
+            rescue_due: false,
             eject_held: false,
             trigger: Trigger::default(),
             combat: Combat::default(),
@@ -1402,7 +1406,9 @@ impl Session {
     /// cargo aboard leave, unless the player is destroyed. It then
     /// runs the Red Alert on that frame (see the `red_alert` module) and
     /// flies the target brackets in (see the `brackets` module). A
-    /// landed tick moves none of them.
+    /// landed tick moves none of them. While the escape pod's countdown
+    /// runs, the pod flies itself in place of the controls, the jump and
+    /// the fuel (see the `eject` module's `pod_tick`).
     pub fn tick(&mut self, controls: Controls) {
         self.gate = None;
         if self.landed.is_some() {
@@ -1424,6 +1430,10 @@ impl Session {
         self.red_alert_tick(frame);
         self.brackets_tick();
         self.boxes_tick();
+        if self.pod.is_some() {
+            self.pod_tick();
+            return;
+        }
         let controls = match self.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
@@ -1884,7 +1894,11 @@ impl Session {
             hull: self.hull,
             shield_regen: self.stats.shield_regen,
             armor_regen: self.stats.armor_regen,
-            trigger: player_trigger(self.trigger),
+            trigger: if self.pod.is_some() {
+                Trigger::default()
+            } else {
+                player_trigger(self.trigger)
+            },
             target: self.target.map(ShipRef::Npc),
             reserves: &mut pilot.reserves,
             condition: &mut self.condition,

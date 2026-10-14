@@ -121,6 +121,7 @@ use super::Session;
 use super::hooks::ShipHook;
 use super::ship_change::ClassChange;
 use crate::ai::Goal;
+use crate::bay::launch_velocity;
 use crate::board::MAX_SHIPS_IN_SYSTEM;
 use crate::catalog::{ShipId, ShipRecord};
 use crate::chance::Chance;
@@ -267,6 +268,36 @@ impl Session {
         self.sounds.push(SimSound::Ejected);
         self.sounds.push(SimSound::Halt(&EJECT_HALTS));
         self.save_due = save_due;
+    }
+
+    /// The escape pod's flight, a tick of it (`_HandlePlayer`
+    /// @0x68d1d-0x68ddd): it thrusts along its heading at its full accel,
+    /// gaining along each axis only while short of its top speed's share
+    /// there (`_AdjustedAccel` @0x68d8d, [`launch_velocity`]: so a
+    /// velocity above the top speed, as the eject's push may leave, is not
+    /// cut back), moves by its velocity, and counts the pod down a tick.
+    /// It never turns and its glow stays out: the thrust key's handler,
+    /// like every other, comes after the pod's frames return (@0x68ddd),
+    /// and so does the fuel's regeneration. On the tick the countdown
+    /// reaches 0 the rescue is due, as the original runs it on that frame
+    /// (see the `rescue` module). The eject's own tick sets the countdown
+    /// and takes none off, the pod block coming before the eject.
+    pub(super) fn pod_tick(&mut self) {
+        let Some(left) = self.pod else {
+            return;
+        };
+        let handling = self.flying_handling();
+        // Whole degrees (`cvttss2si` @0x68d84).
+        let heading = self.player.heading.trunc();
+        let state = &mut self.player;
+        state.velocity =
+            launch_velocity(state.velocity, heading, handling.accel, handling.max_speed);
+        state.position = state.position + state.velocity;
+        let left = left.saturating_sub(1);
+        self.pod = Some(left);
+        if left == 0 {
+            self.rescue_due = true;
+        }
     }
 
     /// The hulk the player leaves in `condition`, a ship of class `old`
@@ -1145,5 +1176,85 @@ mod tests {
                 session.player.velocity
             );
         }
+    }
+
+    /// `ejecting(100)`'s session ejected into the pod, disabled, heading
+    /// `heading` at rest.
+    fn in_a_pod(catalog: &FakePilotCatalog, heading: f32) -> Session {
+        let mut session = flying(catalog, &[POD]);
+        session.player.heading = heading;
+        session.player.velocity = Vec2::ZERO;
+        session.condition = Condition::Disabled;
+        session.pilot.reserves.armor.now = 1.0;
+        fight(&mut session, true);
+        assert!(in_the_pod(&session));
+        session.player.velocity = Vec2::ZERO;
+        session.take_sounds();
+        session.take_combat_events();
+        session
+    }
+
+    #[test]
+    fn the_pod_thrusts_along_its_heading_and_ignores_controls_and_fire() {
+        let catalog = ejecting(100);
+        let mut session = in_a_pod(&catalog, 90.0);
+        let handling = session.flying_handling();
+        assert!(handling.accel > 0.0 && handling.max_speed > handling.accel);
+        let controls = crate::flight::Controls {
+            thrust: false,
+            turn: crate::flight::Turn::Left,
+            reverse: true,
+        };
+        let at = session.player.position;
+        session.tick(controls);
+        assert_eq!(session.player.heading, 90.0, "no turning");
+        assert!(
+            (session.player.velocity - Vec2::new(handling.accel, 0.0)).length() < 1e-6,
+            "{:?}",
+            session.player.velocity
+        );
+        assert_eq!(session.player.position, at + session.player.velocity);
+        let mut events = Vec::new();
+        for _ in 0..60 {
+            session.hold_fire(true, true);
+            session.tick(controls);
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            events.extend(session.take_combat_events());
+        }
+        let speed = session.player.velocity;
+        assert!(
+            (speed.x - handling.max_speed).abs() <= handling.accel && speed.y.abs() < 1e-3,
+            "thrusting up to its top speed: {speed:?}"
+        );
+        let fired = events.iter().any(|event| {
+            matches!(
+                event,
+                CombatEvent::Fired {
+                    ship: ShipRef::Player,
+                    ..
+                }
+            )
+        });
+        assert!(!fired, "the pod fires nothing");
+        assert_eq!(session.engine_glow, 0, "no glow");
+        assert!(
+            !session.take_sounds().contains(&SimSound::ThrustStarted),
+            "no thrust sound"
+        );
+    }
+
+    #[test]
+    fn the_pod_counts_down_from_350_and_the_rescue_is_due_on_the_350th_tick() {
+        let catalog = ejecting(100);
+        let mut session = in_a_pod(&catalog, 0.0);
+        for tick in 1..POD_TICKS {
+            session.tick(crate::flight::Controls::default());
+            assert_eq!(session.pod, Some(POD_TICKS - tick));
+            assert!(!session.rescue_due, "tick {tick}");
+        }
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.pod, Some(0));
+        assert!(session.rescue_due);
+        assert_eq!(session.player_fate(), PlayerFate::Ejected { ticks_left: 0 });
     }
 }
