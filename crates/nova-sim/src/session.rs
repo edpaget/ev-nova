@@ -409,10 +409,10 @@ use crate::board::{
     Take, Taken, check_board,
 };
 use crate::catalog::{
-    CombatCatalog, CommCatalog, CronRecord, DateAffixes, GateSite, GovtId, JunkId, LandingSite,
-    ListedStellar, MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord,
-    PersonId, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError,
-    StellarId, StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
+    CombatCatalog, CronRecord, DateAffixes, GateSite, GovtId, JunkId, LandingSite, ListedStellar,
+    MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord, PersonId,
+    PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError, StellarId,
+    StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -1536,7 +1536,7 @@ impl Session {
     /// while a jump plays too.
     pub fn tick_traffic(
         &mut self,
-        catalog: &(impl TrafficCatalog + CommCatalog + ?Sized),
+        catalog: &(impl TrafficCatalog + ?Sized),
         behaviour: &(impl Behaviour + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
@@ -1578,7 +1578,7 @@ impl Session {
                 let last = self.last_npc();
                 let marks = self.mission_marks();
                 self.traffic.tick_in(behaviour, world, &strikes, chance);
-                self.announce_fleets(catalog, chance);
+                self.announce_fleets(chance);
                 self.mission_ships_left(&marks);
                 self.resolve_person_offers(last, &mut &mut *chance);
                 self.dock_fighters();
@@ -1593,18 +1593,20 @@ impl Session {
     }
 
     /// Shows the arrival quote of each announced fleet the traffic brought
-    /// in, a line of its `STR#` read from `catalog` and drawn on `chance`
-    /// ([`arrival_quote`](crate::traffic::quote::arrival_quote)), and
-    /// beeps for it (`_HyperSpawnFleet` @0x42607-0x426f4). An empty line
-    /// is shown and beeped for too, as the original's is. Both settle on
-    /// the tick the fleet comes, before the frame is drawn.
-    fn announce_fleets(
-        &mut self,
-        catalog: &(impl CommCatalog + ?Sized),
-        chance: &mut (impl Chance + ?Sized),
-    ) {
+    /// in, and beeps for it (`_HyperSpawnFleet` @0x42607-0x426f4): a line
+    /// of its `STR#` picked from the session's string lists
+    /// ([`random_string`](Self::random_string), `_GetRandomIndString`
+    /// @0x42642), its '#'s filled with digits
+    /// ([`fill_digits`](crate::traffic::quote::fill_digits)), both drawn on
+    /// `chance`. A missing or empty list gives an empty line, which is
+    /// shown and beeped for too, as the original's is. Both settle on the
+    /// tick the fleet comes, before the frame is drawn.
+    fn announce_fleets(&mut self, chance: &mut (impl Chance + ?Sized)) {
         for list in self.traffic.take_quotes() {
-            let text = crate::traffic::quote::arrival_quote(&catalog.string_list(list), chance);
+            let line = self
+                .random_string(list, &mut &mut *chance)
+                .unwrap_or_default();
+            let text = crate::traffic::quote::fill_digits(&line, chance);
             self.messages.push(SimMessage::FleetArrivalQuote(text));
             self.sounds.push(SimSound::FleetArrivalQuote);
         }
@@ -12569,7 +12571,7 @@ pub(super) mod tests {
 
     // Fleets.
 
-    use crate::catalog::{EscortRecord, FleetId, FleetRecord};
+    use crate::catalog::{CommCatalog, EscortRecord, FleetId, FleetRecord};
 
     /// `flët` `id`, linked by `link_syst`: a ship 129 lead and 1-3 ship
     /// 130 escorts, for govt 150.
@@ -19733,19 +19735,33 @@ pub(super) mod tests {
         assert_eq!(flying_as(&session, 161), []);
     }
 
-    /// [`strong`] with `flët` 382 quoting `STR#` 7600 on its arrival, if
-    /// `quote`: "Hail #".
+    /// The session's string lists for the arrival quotes: `STR#` 7600,
+    /// "Hail #", and no other.
+    struct QuoteLists;
+
+    impl CommCatalog for QuoteLists {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            if id == 7600 {
+                vec!["Hail #".to_owned()]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    /// [`strong`] with `flët` 382 quoting `STR#` `quote` on its arrival,
+    /// if any.
     fn quoting(quote: Option<i16>) -> FakePilotCatalog {
         let mut catalog = strong();
         catalog.fleets[0].quote = quote;
-        catalog.strings = vec![(7600, vec!["Hail #".to_owned()])];
         catalog
     }
 
     /// The quote messages and sounds the 60th tick after an escorted
-    /// take-off raises, `fleet` 382 coming on it.
+    /// take-off raises, `fleet` 382 coming on it, the session reading its
+    /// strings from [`QuoteLists`].
     fn quoted_on_the_60th_tick(catalog: &FakePilotCatalog) -> (Vec<SimMessage>, Vec<SimSound>) {
-        let mut session = escorted_take_off(catalog, &[150]);
+        let mut session = escorted_take_off(catalog, &[150]).with_strings(Rc::new(QuoteLists));
         for _ in 0..59 {
             session.tick_traffic(catalog, &Peaceful, &mut NeverFires);
         }
@@ -19786,8 +19802,9 @@ pub(super) mod tests {
     fn a_setup_fleet_with_a_quote_arrives_silently() {
         let mut catalog = fleeted();
         catalog.fleets[0].quote = Some(7600);
-        catalog.strings = vec![(7600, vec!["Hail #".to_owned()])];
-        let mut session = Session::start(&catalog).expect("starts");
+        let mut session = Session::start(&catalog)
+            .expect("starts")
+            .with_strings(Rc::new(QuoteLists));
         session.populate(&catalog, &mut linked_fleet_draws(2));
         assert_eq!(fleet_of(&session), a_fleet_led_by(0));
         session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
