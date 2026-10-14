@@ -258,6 +258,8 @@
 //! - [`wares`]: the rules the outfitter and the shipyard share: tech
 //!   levels, `Require` and `Contribute`, the hiding flags, the hide-higher
 //!   sweep and the rows' order.
+//! - [`warp`]: the player's warp clock: the warp factor, the warp sound's
+//!   duration, and when the warp's lead-in ends and scans are held.
 
 pub mod ai;
 pub mod bay;
@@ -334,6 +336,7 @@ pub mod text_tags;
 pub mod top_speed;
 pub mod traffic;
 pub mod wares;
+pub mod warp;
 
 pub use ai::{
     Behaviour, BraveTrader, CarriedAi, EscortAi, Goal, Interceptor, NovaAi, Peaceful, PlayerSide,
