@@ -3259,9 +3259,39 @@ impl Session {
 
     /// The outfitter dialog opens: the once-an-opening flags are cleared,
     /// as `_DoOutfitDialog` does on entry (@0x5bb37-0x5bb44), so a map or
-    /// clean-record outfit can be bought again (see [`outfitter`]).
+    /// clean-record outfit can be bought again (see [`outfitter`]), and
+    /// the session resets (@0x5bb57; see the `precalced` module), before
+    /// the outfitter's list is built.
     pub fn open_outfitter(&mut self) {
         self.open_outfit_visit();
+        self.reset_precalced();
+    }
+
+    /// The outfitter dialog closes, by Done, or once an order leaves
+    /// nothing listed (@0x5c40c, @0x5d128), every way out joining one tail
+    /// (@0x5da33): the session resets (`_SystemInfoToShipStats` @0x5db10;
+    /// see the `precalced` module) and forgets the venue offers were last
+    /// entered at (`_ResetMissionOfferVenue` @0x5dbd1), so entering one
+    /// again forgets the offers whose accept was refused (see the
+    /// `mission_screens` module).
+    ///
+    /// The tail's other parts are modelled elsewhere: its clamp of the
+    /// fuel, shield and armour to their most (@0x5da40-0x5dad9) is each
+    /// order's refit, and its taking away of the outfits flagged 0x0010
+    /// (@0x5dadd-0x5db0e) is the purchase's, at once (see the `outfits`
+    /// module).
+    pub fn close_outfitter(&mut self) {
+        self.reset_precalced();
+        self.offer_venue = None;
+    }
+
+    /// The bar's hire screen closes, after a hire or none, or the bar says
+    /// nothing is for hire: `_DoBarDialog` resets as `_DoShipyardDialog` in
+    /// hire mode returns (@0x49235; see the `precalced` module). A hire
+    /// ([`Session::hire`]) resets nothing of its own, so a hire's reset
+    /// is this one, after it.
+    pub fn close_hire(&mut self) {
+        self.reset_precalced();
     }
 
     /// Opens a new outfitter visit: clears the once-an-opening flags and

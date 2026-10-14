@@ -515,6 +515,44 @@ pub(super) mod tests {
     const POD: crate::catalog::OutfitId = crate::catalog::OutfitId(301);
 
     #[test]
+    fn the_outfitter_resets_as_it_opens_and_as_it_closes() {
+        use crate::session::tests::{outfitted, outfitting};
+        let mut session = outfitted(&outfitting());
+        let trimmed = overloaded(&mut session);
+        convicted(&mut session);
+        session.open_outfitter();
+        assert_eq!(session.scan_latches, Latches::ARMED, "@0x5bb57");
+        assert_eq!(cargo(&session), trimmed);
+        let trimmed = overloaded(&mut session);
+        convicted(&mut session);
+        session.close_outfitter();
+        assert_eq!(session.scan_latches, Latches::ARMED, "@0x5db10");
+        assert_eq!(cargo(&session), trimmed);
+    }
+
+    /// The outfitter's close forgets the venue offers were last entered
+    /// at (`_ResetMissionOfferVenue` @0x5dbd1), so entering the outfitter
+    /// again forgets the offers whose accept was refused.
+    #[test]
+    fn the_outfitter_closing_forgets_the_offer_venue() {
+        use crate::catalog::MissionId;
+        use crate::mission::screens::OUTFITTER;
+        use crate::session::tests::{outfitted, outfitting};
+        let mut session = outfitted(&outfitting());
+        session.enter_offer_venue(OUTFITTER);
+        session.suppress_offer(MissionId(200));
+        session.enter_offer_venue(OUTFITTER);
+        assert!(
+            session.suppressed.contains(&MissionId(200)),
+            "the same venue"
+        );
+        session.close_outfitter();
+        assert_eq!(session.offer_venue, None);
+        session.enter_offer_venue(OUTFITTER);
+        assert!(session.suppressed.is_empty());
+    }
+
+    #[test]
     fn an_outfit_bought_resets() {
         use crate::session::tests::{buy, outfitted, outfitting};
         let mut session = outfitted(&outfitting());

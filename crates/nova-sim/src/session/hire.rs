@@ -813,6 +813,30 @@ mod tests {
         assert_eq!(session.pilot().escorts()[0].wage, Some(3));
     }
 
+    /// `_DoBarDialog` resets as the hire screen closes (@0x49235), after
+    /// a hire or none; the hire itself (`_DoShipyardDialog` in hire mode,
+    /// @0x5f14a-0x5f221) resets nothing of its own.
+    #[test]
+    fn the_hire_screen_closing_resets_and_a_hire_alone_does_not() {
+        use crate::scan::Latches;
+        use crate::session::precalced::tests::{convicted, overloaded};
+        let catalog = barred(vec![hireable(129, 100)]);
+        let mut session = landed(&catalog, 25_000);
+        convicted(&mut session);
+        session.hire(ShipId(129), &mut NeverFires).expect("hires");
+        assert_ne!(session.scan_latches, Latches::ARMED, "the hire alone");
+        let trimmed = overloaded(&mut session);
+        session.close_hire();
+        assert_eq!(session.scan_latches, Latches::ARMED, "@0x49235");
+        assert_eq!(
+            session
+                .pilot()
+                .cargo()
+                .collect::<std::collections::BTreeMap<_, _>>(),
+            trimmed
+        );
+    }
+
     #[test]
     fn hiring_a_class_draws_its_roll_again() {
         let catalog = barred(vec![hireable(129, 50), hireable(130, 50)]);

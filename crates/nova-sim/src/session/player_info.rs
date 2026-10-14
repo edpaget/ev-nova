@@ -24,6 +24,7 @@
 
 use super::{Session, overlaid_sites};
 use crate::catalog::{GovtId, LandingSite, PilotCatalog};
+use crate::combat::hull::Condition;
 use crate::landing::{StellarFlags, is_landable};
 use crate::market::{DOMINATED, Good};
 use crate::news::{CARGO_NAMES, MISC_STRINGS};
@@ -54,9 +55,29 @@ fn gate(site: &LandingSite) -> bool {
 }
 
 impl Session {
+    /// The player info dialog opens (`_DoPlayerInfoDialog`): unless the
+    /// ship is in a jump, the pre-jump included (its jump state +0x50 set,
+    /// @0x5a02a-0x5a03e), or breaking up (its death countdown +0x3c above
+    /// none, @0x5a044-0x5a04c), when nothing opens and nothing changes,
+    /// the session resets (@0x5a06a; see the `precalced` module), then
+    /// gives what the screen shows ([`Session::player_info`]), so the
+    /// screen shows the cargo trimmed. The dialog's other guards, the
+    /// screen faded out (`_screenFaded`, @0x5a013) and a fade pending
+    /// (`_fadePending`, @0x5a052-0x5a064), are the screens' state, which
+    /// the session does not hold.
+    pub fn open_player_info(&mut self, catalog: &impl PilotCatalog) -> Option<PlayerInfo> {
+        if self.jump.is_some() || matches!(self.condition, Condition::Dying { .. }) {
+            return None;
+        }
+        self.reset_precalced();
+        Some(self.player_info(catalog))
+    }
+
     /// What the player info screen shows (see
     /// [`player_info`](crate::player_info)), the stellars the legal
-    /// status and the tribute read taken from `catalog`.
+    /// status and the tribute read taken from `catalog`. Reading it
+    /// changes nothing: an opening of the dialog is
+    /// [`Session::open_player_info`].
     #[must_use]
     pub fn player_info(&self, catalog: &impl PilotCatalog) -> PlayerInfo {
         let words = self.player_info_words();
@@ -864,5 +885,87 @@ mod tests {
     fn a_missing_legal_status_string_reads_empty() {
         let session = Session::start(&governed()).expect("starts");
         assert_eq!(legal(&session, &governed()), "");
+    }
+
+    // The dialog's opening reset (@0x5a06a).
+
+    #[test]
+    fn opening_the_player_info_resets_before_it_is_drawn() {
+        use crate::session::precalced::tests::{convicted, overloaded};
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        let trimmed = overloaded(&mut session);
+        convicted(&mut session);
+        let shown = session.open_player_info(&catalog).expect("opens");
+        assert_eq!(session.scan_latches, crate::scan::Latches::ARMED);
+        assert_eq!(
+            session
+                .pilot()
+                .cargo()
+                .collect::<std::collections::BTreeMap<_, _>>(),
+            trimmed
+        );
+        assert_eq!(
+            shown,
+            session.player_info(&catalog),
+            "drawn with the cargo trimmed"
+        );
+    }
+
+    #[test]
+    fn reading_the_player_info_again_changes_nothing() {
+        use crate::session::precalced::tests::{convicted, overloaded};
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        let _ = overloaded(&mut session);
+        convicted(&mut session);
+        let before = session.clone();
+        let _ = session.player_info(&catalog);
+        assert_eq!(session.pilot(), before.pilot());
+        assert_ne!(session.scan_latches, crate::scan::Latches::ARMED);
+    }
+
+    #[test]
+    fn the_player_info_opens_neither_in_a_jump_nor_while_the_ship_breaks_up() {
+        use crate::catalog::SystemId;
+        use crate::combat::hull::Condition;
+        use crate::session::precalced::tests::{convicted, overloaded};
+        let catalog = catalog();
+        let jumping = |session: &mut Session| {
+            session.jump = Some(super::super::Jump::PreJump {
+                to: SystemId(131),
+                bearing: None,
+                warp: None,
+            });
+        };
+        let hyperspace = |session: &mut Session| {
+            session.jump = Some(super::super::Jump::Hyperspace {
+                to: SystemId(131),
+                warp: 0,
+            });
+        };
+        let dying = |session: &mut Session| {
+            session.condition = Condition::Dying { ticks_left: 3 };
+        };
+        for (why, refuse) in [
+            (
+                "the pre-jump, +0x50 set (@0x5a034)",
+                &jumping as &dyn Fn(&mut Session),
+            ),
+            ("hyperspace (@0x5a034)", &hyperspace),
+            ("breaking up, +0x3c above none (@0x5a044)", &dying),
+        ] {
+            let mut session = Session::start(&catalog).expect("starts");
+            let _ = overloaded(&mut session);
+            let untouched = session.pilot().clone();
+            convicted(&mut session);
+            refuse(&mut session);
+            assert_eq!(session.open_player_info(&catalog), None, "{why}");
+            assert_eq!(session.pilot(), &untouched, "{why}");
+            assert_ne!(session.scan_latches, crate::scan::Latches::ARMED, "{why}");
+        }
+        let mut disabled = Session::start(&catalog).expect("starts");
+        disabled.condition = Condition::Disabled;
+        assert!(disabled.open_player_info(&catalog).is_some(), "disabled");
     }
 }
