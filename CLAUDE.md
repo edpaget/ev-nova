@@ -90,6 +90,20 @@ is drawn, a dialog opens, a landing or jump completes, or the pilot is saved.
   assume.
 - Cover wiring with a small number of integration tests under `tests/`.
 
+## Test behaviour, never text
+
+Don't write tests that scan source files or built binaries for particular
+strings, such as a test that greps `src/` for a call, or reads the `nova`
+binary to check that a crate's name is absent. They break on changes that
+don't matter: two unrelated string literals once spelled `made` + `guidance`
+side by side in a binary and failed an "egui is not linked" test. And what
+they show is weak.
+
+- Test what the code does, through its ports.
+- Check dependency rules (which crates a build may pull in) with
+  `cargo-deny`'s `bans` in `deny.toml` (`mise run deny`), which reads Cargo's
+  resolved graph.
+
 ## Hermetic tests
 
 Every test runs anywhere with only `cargo`, in any order, in parallel, and
@@ -110,8 +124,20 @@ Write all checks and verifiers as Rust tests (unit tests, integration tests
 under `tests/`, or doctests) so `cargo` runs them.
 
 - Run tests with `mise run test` (nextest plus doctests).
-- Run the full gate with `mise run ci` (fmt, clippy with `-D warnings`, tests).
-  The pre-commit hook runs the same gate.
+- In the TDD loop, run `cargo nextest run -p <crate>`, the same form the
+  pre-commit hook uses, so its build stays warm. Don't switch between `-p` and
+  `--workspace` in the loop: each switch rebuilds.
+- Run the full gate with `mise run ci` (fmt, clippy with `-D warnings`, tests,
+  doctests and the dev-tools legs). Run it once before moving an item to
+  needs-review; `rdm:land` runs it again before landing. `hk check` runs it
+  too.
+- The pre-commit hook is lighter: `cargo fmt --check`, then clippy and nextest
+  with `-p <crate>` for each crate with staged changes (and the workspace lint
+  and tests when `Cargo.toml`, `Cargo.lock`, `mise.toml`, `clippy.toml`,
+  `.config/nextest.toml` or `.cargo/` change). It skips dependent crates,
+  doctests and the dev-tools legs, which the full gate covers.
+- Don't run `mise run ci` just before a commit: the hook checks the commit
+  anyway, so the gate would run twice.
 - Keep `mise` tasks as one-line `cargo` invocations. When a check needs logic,
   write it in Rust.
 
@@ -157,9 +183,17 @@ behind, which cause false compile errors and test failures until you run
 Use `cargo-mutants` to check that tests actually catch broken code. Let the
 tool generate and run the mutants rather than editing source by hand.
 
-- After finishing a piece of work, run mutants on the files you changed:
-  `mise run mutants -- --file <path>` (repeat `--file` for each file), or
-  `mise run mutants -- --in-diff <(git diff main)` for everything on the branch.
+- After finishing a piece of work, run mutants once over everything on the
+  branch: `mise run mutants -- --in-diff <(git diff main)`. Prefer this to
+  repeated `--file` runs; rerun with `--file <path>` only to confirm the
+  fixes for missed mutants.
+- Add `--baseline=skip` when the gate has just passed: the baseline only
+  rechecks that the unmutated tests pass.
+- Start the run with `run_in_background` and wait for its completion
+  notification. Don't poll it with `sleep` or `until` loops.
+- Run one mutants session at a time across all worktrees. They share the
+  machine's cores, and two at once slow both. `mise.toml` sets
+  `CARGO_MUTANTS_JOBS=2`; pass `-j` to change it for one run.
 - For each `MISSED` mutant, write a test that fails against that mutant, then
   rerun to confirm it is `caught`.
 - For a mutant that genuinely can't change observable behaviour, add a pattern

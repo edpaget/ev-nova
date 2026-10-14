@@ -206,7 +206,7 @@ pub struct Npc {
     pub mission: Option<MissionMark>,
     /// The slot of the mission whose auxiliary ship it is (the original's
     /// ship +0x8a): ordinary traffic, given back to its slot as the
-    /// system's ships are dropped (see the [`mission::aux`](crate::mission::aux)
+    /// system's ships are dropped (see the [`mission::aux_ships`](crate::mission::aux_ships)
     /// module); none for any other ship.
     pub aux: Option<u8>,
     /// Its cloak: how far it has faded, and which way (see

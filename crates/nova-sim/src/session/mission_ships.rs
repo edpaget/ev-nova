@@ -1162,7 +1162,7 @@ pub(super) mod tests {
     use crate::gate::GateKind;
     use crate::message::SimMessage;
     use crate::mission::FailedBy;
-    use crate::mission::aux::AuxShips;
+    use crate::mission::aux_ships::AuxShips;
     use crate::session::mission_screens::MissionTextKind;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, jump, land_now, mission, ship};
     use crate::traffic::npc::{Mode, Npc};

@@ -370,7 +370,7 @@
 //! raw IDs.
 
 pub mod active;
-pub mod aux;
+pub mod aux_ships;
 pub mod cargo;
 pub mod goals;
 pub mod identity;

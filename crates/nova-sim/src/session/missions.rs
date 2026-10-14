@@ -79,7 +79,7 @@ use crate::chance::{Chance, NeverFires};
 use crate::control::{Script, Test};
 use crate::message::SimMessage;
 use crate::mission::active::{AUTO_ABORT_FUEL, AUTO_ABORT_FUEL_TAKEN, AUTO_ABORT_PAYS};
-use crate::mission::aux::AuxShips;
+use crate::mission::aux_ships::AuxShips;
 use crate::mission::screens::HIDDEN;
 use crate::mission::{
     self, AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,

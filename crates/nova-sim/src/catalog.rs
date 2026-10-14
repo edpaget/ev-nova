@@ -752,7 +752,7 @@ pub struct MissionRecord {
 
 /// A mission's auxiliary ships, raw from its `mïsn`: ordinary traffic of
 /// its `AuxShipDude` that comes into the systems its `AuxShipSyst` allows
-/// on a countdown (see the [`mission::aux`](crate::mission::aux) module).
+/// on a countdown (see the [`mission::aux_ships`](crate::mission::aux_ships) module).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuxShip {
     /// Its `AuxShipCount`.

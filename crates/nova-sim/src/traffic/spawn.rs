@@ -163,7 +163,7 @@
 //! # Auxiliary ships
 //!
 //! A mission's auxiliary ships (`AuxShipCount` of its `AuxShipDude`, see
-//! [`mission::aux`](crate::mission::aux)) are ordinary traffic: each
+//! [`mission::aux_ships`](crate::mission::aux_ships)) are ordinary traffic: each
 //! comes through `_SpecificDudeSpawn` (@0x3d0eb, [`arriving_aux_ships`]),
 //! not `_MissionDudeSpawn`, with no mission mark, so it counts toward no
 //! goal and gets none of a special ship's handling. It carries only its
