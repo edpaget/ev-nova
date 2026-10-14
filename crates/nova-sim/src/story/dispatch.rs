@@ -113,6 +113,10 @@ impl From<RuleSource> for Reentry {
 pub(crate) trait Stage {
     /// The ids of the subscriptions `event` runs, in order.
     fn matching(&self, event: &StoryEvent) -> Vec<SubscriptionId>;
+    /// Whether the consumer of `id` lets it run on `event` now: its own
+    /// predicate, beyond a control-bit guard, asked just before the
+    /// subscription runs.
+    fn admits(&self, id: SubscriptionId, event: &StoryEvent) -> bool;
     /// The subscription registered under `id`, if it still is.
     fn subscription(&self, id: SubscriptionId) -> Option<Subscription>;
     /// Whether the once-only subscription `id` has fired.
@@ -152,21 +156,27 @@ pub(crate) fn settle(stage: &mut dyn Stage, reentry: Reentry) -> u32 {
 }
 
 /// Dispatches `event` on `stage`: each subscription of the snapshot still
-/// registered, not fired once already and whose guard holds now, marked
-/// fired first when once-only, then its effect, then its script, the
-/// events they raise nested as `reentry` says. An event with no
-/// subscription costs `budget` nothing; one the budget refuses is dropped.
+/// registered, not fired once already, whose guard holds now and whose
+/// consumer admits it ([`Stage::admits`]), marked fired first when
+/// once-only, then its effect, then its script, the events they raise
+/// nested as `reentry` says. The event spends `budget` as its first
+/// subscription runs, so one whose subscriptions all hold back costs
+/// nothing, as one with none does; one the budget refuses is dropped,
+/// none of its subscriptions run.
 fn dispatch(stage: &mut dyn Stage, event: &StoryEvent, reentry: Reentry, budget: &mut Budget) {
-    let ids = stage.matching(event);
-    if ids.is_empty() || !budget.spend() {
-        return;
-    }
-    for id in ids {
+    let mut spent = false;
+    for id in stage.matching(event) {
         let Some(sub) = stage.subscription(id) else {
             continue;
         };
-        if (sub.once && stage.fired(id)) || !stage.holds(&sub.guard) {
+        if (sub.once && stage.fired(id)) || !stage.holds(&sub.guard) || !stage.admits(id, event) {
             continue;
+        }
+        if !spent {
+            if !budget.spend() {
+                return;
+            }
+            spent = true;
         }
         if sub.once {
             stage.mark_fired(id);
@@ -346,6 +356,10 @@ mod tests {
         /// The guards asked, with the answer: asked through a shared
         /// reference.
         asked: RefCell<Vec<String>>,
+        /// The subscriptions their consumer refuses.
+        refused: BTreeSet<SubscriptionId>,
+        /// The consumer predicates asked, with the answer.
+        admitted: RefCell<Vec<String>>,
     }
 
     impl Stage for Play {
@@ -364,6 +378,16 @@ mod tests {
         fn mark_fired(&mut self, id: SubscriptionId) {
             self.log.push(format!("fired {}", id.record));
             self.fired.insert(id);
+        }
+
+        fn admits(&self, id: SubscriptionId, event: &StoryEvent) -> bool {
+            let admits = !self.refused.contains(&id);
+            self.admitted.borrow_mut().push(format!(
+                "{} on {:?}? {admits}",
+                id.record,
+                event.kind()
+            ));
+            admits
         }
 
         fn holds(&self, guard: &Test) -> bool {
@@ -544,6 +568,67 @@ mod tests {
         play.settle(Reentry::Nested, &[E1]);
         assert_eq!(play.log, played(&["fired 1", "effect 1", "b1"]));
         assert_eq!(play.asked.take(), ["b9? true"]);
+    }
+
+    #[test]
+    fn a_subscription_its_consumer_refuses_runs_nothing_and_a_once_stays_unfired() {
+        let any = EventFilter::Any(StoryEventKind::Landed);
+        let mut play = Play::default();
+        play.once(1, any, "b1").sub(2, any, "", "b2");
+        play.refused.insert(id(1, 0));
+        play.settle(Reentry::Nested, &[E1]);
+        assert_eq!(play.log, played(&["effect 2", "b2"]));
+        assert!(!play.fired(id(1, 0)), "left unfired");
+        assert_eq!(
+            play.admitted.take(),
+            ["1 on Landed? false", "2 on Landed? true"]
+        );
+        play.log.clear();
+        play.refused.clear();
+        play.settle(Reentry::Nested, &[E1]);
+        assert_eq!(
+            play.log,
+            played(&["fired 1", "effect 1", "b1", "effect 2", "b2"])
+        );
+    }
+
+    #[test]
+    fn a_consumer_is_asked_once_the_guard_holds_just_before_its_subscription_runs() {
+        let any = EventFilter::Any(StoryEventKind::Landed);
+        let mut play = Play::default();
+        play.sub(1, any, "", "b9")
+            .sub(2, any, "b8", "b2")
+            .sub(3, any, "b9", "b3");
+        play.refused.insert(id(3, 0));
+        play.settle(Reentry::Nested, &[E1]);
+        assert_eq!(
+            play.admitted.take(),
+            ["1 on Landed? true", "3 on Landed? false"],
+            "2's guard fails, so its consumer is not asked"
+        );
+        assert_eq!(play.asked.take(), ["b8? false", "b9? true"]);
+        assert_eq!(play.log, played(&["effect 1", "b9"]));
+    }
+
+    #[test]
+    fn an_event_whose_subscriptions_all_hold_back_costs_no_budget() {
+        let explored = |system| StoryEvent::Explored {
+            system: SystemId(system),
+        };
+        for reentry in [Reentry::Nested, Reentry::Queued] {
+            let mut play = Play::default();
+            play.sub(1, EventFilter::Explored(SystemId(131)), "b9", "b1")
+                .sub(2, EventFilter::Explored(SystemId(132)), "", "b2")
+                .once(3, EventFilter::Explored(SystemId(133)), "b3")
+                .sub(4, EventFilter::Explored(SystemId(134)), "", "b4");
+            play.refused.insert(id(2, 0));
+            play.fired.insert(id(3, 0));
+            for system in [131, 132, 133] {
+                play.raised.extend([explored(system); 40]);
+            }
+            assert_eq!(play.settle(reentry, &[explored(134)]), 0, "{reentry:?}");
+            assert_eq!(play.log, played(&["effect 4", "b4"]), "{reentry:?}");
+        }
     }
 
     #[test]

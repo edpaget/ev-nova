@@ -86,6 +86,10 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
         self.session.story.registry.get(id).cloned()
     }
 
+    fn admits(&self, _id: SubscriptionId, _event: &StoryEvent) -> bool {
+        true
+    }
+
     fn fired(&self, id: SubscriptionId) -> bool {
         self.session.pilot.story_fired.contains(&id)
     }

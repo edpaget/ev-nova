@@ -476,8 +476,10 @@
 //! nothing. For each id in turn, just before it runs, the dispatcher
 //! skips it when it is no longer registered (a subscription removed by an
 //! earlier one in the same dispatch), when it is once-only and has fired,
-//! or when its guard does not hold now (an earlier script can open or
-//! close it). Otherwise a once-only subscription is marked fired first,
+//! when its guard does not hold now (an earlier script can open or close
+//! it), or when its consumer's own predicate refuses it (`Stage::admits`:
+//! a nebula's rectangle and explored flag, which no control-bit test can
+//! express; crons-news-ranks phase 16). Otherwise a once-only subscription is marked fired first,
 //! so an event raised again inside its own run cannot run it twice; then
 //! its consumer's effect runs, then its script. One registered during the
 //! dispatch waits for the next event.
@@ -569,8 +571,11 @@
 //!
 //! Under either reading at most 64 events are dispatched from one
 //! settling, nested runs included, a guard against scripts that raise
-//! each other for ever. Only an event some subscription matches counts.
-//! The rest are dropped, and the settling tells how many as one
+//! each other for ever. Only an event that runs a subscription counts: it
+//! spends the budget as its first subscription runs, so an event whose
+//! subscriptions all hold back costs nothing, and a load's sweep that
+//! raises `Explored` for every explored system cannot drop events
+//! (crons-news-ranks phase 16). The rest are dropped, and the settling tells how many as one
 //! [`ScriptNote::EventsDropped`](crate::ScriptNote::EventsDropped). The
 //! next settling starts a fresh count.
 //!
