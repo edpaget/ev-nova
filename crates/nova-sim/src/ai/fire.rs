@@ -978,7 +978,7 @@ mod tests {
         let dying = |other: &mut Npc| other.condition = Condition::Dying { ticks_left: 3 };
         assert!(trigger_at_npc(&npc, 0.0, -100.0, dying).point_defence);
         let arriving = |other: &mut Npc| {
-            other.mode = crate::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
+            other.mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
         };
         assert!(trigger_at_npc(&npc, 0.0, -100.0, arriving).point_defence);
         assert_eq!(trigger_at_npc(&npc, 0.0, -100.0, arriving).only, None);
@@ -1536,7 +1536,7 @@ mod tests {
         let at = ShipRef::Npc(NpcId(7));
         assert!(!bays(&shooter(&all, Goal::Attack(at)), &[]), "gone");
         let mut arriving = crate::testkit::npc(7, ShipStats::new(FAST, &[]));
-        arriving.mode = crate::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
+        arriving.mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
         assert!(!bays(&shooter(&all, Goal::Attack(at)), &[arriving]));
         let mut wreck = crate::testkit::npc(7, ShipStats::new(FAST, &[]));
         wreck.condition = Condition::Dying { ticks_left: 3 };

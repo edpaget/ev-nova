@@ -335,7 +335,7 @@ mod tests {
         emerging.mode = crate::traffic::npc::Mode::Emerging { ticks_left: 9 };
         assert!(!targetable(&emerging, false));
         let mut arriving = intact(1, 10.0, 0.0);
-        arriving.mode = crate::traffic::npc::Mode::JumpingIn { ticks_left: 9 };
+        arriving.mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
         assert!(targetable(&arriving, false), "a ship jumping in still is");
         let npcs = [emerging, intact(2, 300.0, 0.0)];
         assert_eq!(nearest_(&npcs, Vec2::ZERO, |_| true), Some(NpcId(2)));

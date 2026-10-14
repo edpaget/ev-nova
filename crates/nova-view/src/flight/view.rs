@@ -9431,7 +9431,7 @@ mod tests {
         let mut npc = session.npcs()[0].clone();
         let opaque = CloakShown::Opaque;
         assert_eq!(session.cloak_shown(&npc), opaque, "flying");
-        npc.mode = nova_sim::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
+        npc.mode = nova_sim::traffic::npc::Mode::JumpingIn { tick: 0 };
         assert_eq!(session.cloak_shown(&npc), opaque, "jumping in");
         npc.mode = nova_sim::traffic::npc::Mode::Emerging { ticks_left: 3 };
         assert_eq!(session.cloak_shown(&npc), opaque, "fading in at its gate");

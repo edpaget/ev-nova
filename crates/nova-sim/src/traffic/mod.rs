@@ -92,7 +92,7 @@ use crate::mission::ships::ShipBehav;
 use crate::person::{PersonWorld, derelict_armor};
 use autopilot::{Outcome, TopSpeeds};
 use npc::{AiType, Mode, Npc, NpcId, NpcPerson};
-use spawn::{Entry, JUMP_IN_TICKS, NewShip, PersonDraw, Stellars};
+use spawn::{Entry, NewShip, PersonDraw, Stellars};
 use strength::StrengthTimer;
 use table::{SpawnPerson, SpawnTable};
 
@@ -755,9 +755,7 @@ impl Traffic {
                 state: ship.state,
                 mode: match ship.entry {
                     Entry::Placed => Mode::Flying,
-                    Entry::JumpingIn => Mode::JumpingIn {
-                        ticks_left: JUMP_IN_TICKS,
-                    },
+                    Entry::JumpingIn => Mode::JumpingIn { tick: 0 },
                     Entry::Emerging { ticks_left } => Mode::Emerging { ticks_left },
                 },
                 goal: if hunts {
@@ -1057,12 +1055,7 @@ mod tests {
         );
         assert_eq!(npcs[0].ai_type, AiType::Warship, "its InherentAI");
         for npc in npcs {
-            assert_eq!(
-                npc.mode,
-                Mode::JumpingIn {
-                    ticks_left: JUMP_IN_TICKS
-                }
-            );
+            assert_eq!(npc.mode, Mode::JumpingIn { tick: 0 });
         }
     }
 
@@ -1147,7 +1140,7 @@ mod tests {
         traffic.tick(&behaviour, &[], &mut Draws::of(&[0, 6, 6, 0, 0, 0]));
         assert_eq!(traffic.npcs().len(), 2);
         assert_eq!(behaviour.take(), [NpcId(0)], "the newcomer is jumping in");
-        for _ in 1..JUMP_IN_TICKS {
+        while matches!(traffic.npcs()[1].mode, Mode::JumpingIn { .. }) {
             traffic.tick(&behaviour, &[], &mut Draws::of(&[2]));
             assert_eq!(behaviour.take(), [NpcId(0)]);
         }
@@ -1998,7 +1991,7 @@ mod tests {
     fn only_a_flying_intact_npc_answers_a_strike() {
         let mut traffic = populated(3, 1);
         traffic.npcs[1].condition = Condition::Disabled;
-        traffic.npcs[2].mode = Mode::JumpingIn { ticks_left: 9 };
+        traffic.npcs[2].mode = Mode::JumpingIn { tick: 0 };
         let fighting = Fighting::deciding(Goal::Idle);
         traffic.tick_in(
             &fighting,
@@ -2317,7 +2310,7 @@ mod tests {
         traffic.tick(&ai, &sites, &mut Draws::of(&[0, 6, 6, 0, 0, 0, 2]));
         assert_eq!(traffic.npcs()[0].ai_type, AiType::Warship);
         let mut nearest = f32::INFINITY;
-        for _ in 0..=JUMP_IN_TICKS {
+        for _ in 0..=spawn::JUMP_IN_TICKS {
             traffic.tick(&ai, &sites, &mut Draws::of(&[]));
         }
         let after_glide = traffic.npcs()[0].clone();
@@ -2745,7 +2738,7 @@ mod tests {
                 fade: FADE_FULL,
                 direction: 0,
             };
-            npc.mode = Mode::JumpingIn { ticks_left: 9 };
+            npc.mode = Mode::JumpingIn { tick: 0 };
             npc.reserves.fuel.now = fuel;
             if disabled {
                 npc.condition = Condition::Disabled;
@@ -2762,7 +2755,7 @@ mod tests {
             fade: FADE_FULL,
             direction: 0,
         };
-        able.npcs[0].mode = Mode::JumpingIn { ticks_left: 9 };
+        able.npcs[0].mode = Mode::JumpingIn { tick: 0 };
         able.tick_in(&Keep, World::new(&[]), &[], &mut Draws::of(&[]));
         assert_eq!(able.npcs()[0].cloak.direction, 0, "jumping in, no think");
     }
@@ -2851,9 +2844,7 @@ mod tests {
             );
             assert_eq!(
                 traffic.npcs()[0].mode,
-                Mode::JumpingIn {
-                    ticks_left: JUMP_IN_TICKS - 1
-                },
+                Mode::JumpingIn { tick: 1 },
                 "by hyperspace, gliding from the tick it came"
             );
         }

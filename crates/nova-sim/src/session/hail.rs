@@ -881,7 +881,7 @@ mod tests {
     fn a_target_still_jumping_in_cannot_be_hailed() {
         let catalog = hailable();
         let mut session = targeting(&catalog);
-        npc(&mut session).mode = Mode::JumpingIn { ticks_left: 4 };
+        npc(&mut session).mode = Mode::JumpingIn { tick: 0 };
         let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
         assert_eq!(hailed, Err(HailRefusal::InHyperspace));
         assert!(asked.is_empty());

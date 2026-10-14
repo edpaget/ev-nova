@@ -1527,7 +1527,7 @@ mod tests {
         };
         assert_eq!(eligible(&intact, quoting(0), jumping), Eligible::No);
         let arriving = Npc {
-            mode: Mode::JumpingIn { ticks_left: 3 },
+            mode: Mode::JumpingIn { tick: 0 },
             ..intact.clone()
         };
         assert_eq!(eligible(&arriving, quoting(0), VIEW), Eligible::No);

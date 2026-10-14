@@ -66,11 +66,12 @@ impl AiType {
 /// wormhole (see [`emerge`](crate::traffic::emerge)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
-    /// Gliding in from hyperspace, for this many more ticks: no steering
+    /// Gliding in from hyperspace, on this tick of the glide (from 0), at
+    /// [`glide_speed`](crate::traffic::spawn::glide_speed): no steering
     /// and no decisions.
     JumpingIn {
-        /// The ticks of the glide left.
-        ticks_left: u32,
+        /// The tick of the glide.
+        tick: u32,
     },
     /// Waiting at the centre of the gate it comes out of, for this many
     /// more ticks: hidden, still, seen by no ship, and no decisions. An
@@ -673,7 +674,7 @@ mod tests {
                 assert!(!downed.threatens_player(), "{goal:?} {condition:?}");
             }
             let arriving = Npc {
-                mode: Mode::JumpingIn { ticks_left: 2 },
+                mode: Mode::JumpingIn { tick: 0 },
                 ..npc.clone()
             };
             assert!(!arriving.threatens_player());
@@ -737,7 +738,7 @@ mod tests {
             assert!(!downed.threatens_player_or_led(led), "{condition:?}");
         }
         for mode in [
-            Mode::JumpingIn { ticks_left: 2 },
+            Mode::JumpingIn { tick: 0 },
             Mode::Emerging { ticks_left: 2 },
         ] {
             let arriving = Npc {
@@ -848,7 +849,7 @@ mod tests {
                 assert!(!downed.threatens_npc_among(asker, &npcs), "{condition:?}");
             }
             for mode in [
-                Mode::JumpingIn { ticks_left: 2 },
+                Mode::JumpingIn { tick: 0 },
                 Mode::Emerging { ticks_left: 2 },
             ] {
                 let arriving = Npc {
@@ -893,7 +894,7 @@ mod tests {
         let mut npc = crate::testkit::npc(1, ShipStats::default());
         npc.goal = Goal::Attack(ShipRef::Player);
         assert!(!npc.emerging());
-        npc.mode = Mode::JumpingIn { ticks_left: 2 };
+        npc.mode = Mode::JumpingIn { tick: 0 };
         assert!(!npc.emerging());
         npc.mode = Mode::Emerging { ticks_left: 2 };
         assert!(npc.emerging());

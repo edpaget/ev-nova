@@ -42,9 +42,10 @@
 //! - [`Goal::Idle`], or a goal it cannot fly (a stellar, lead, player or
 //!   carrier that is not there): it brakes to a stop.
 //! - While it jumps in ([`Mode::JumpingIn`]) it glides towards the centre,
-//!   [`glide_speed`] a tick, with no steering, for
-//!   [`JUMP_IN_TICKS`](crate::traffic::spawn::JUMP_IN_TICKS); then it flies
-//!   on at its top speed. A disabled ship glides on too: `_AIDispatch`
+//!   [`glide_speed`] a tick, with no steering, and flies on at that speed
+//!   once the next tick's would be at or below its cap
+//!   ([`TopSpeeds::burst_cap`]), as it does bursting out of a gate (see
+//!   below). A disabled ship glides on too: `_AIDispatch`
 //!   cancels a disabled ship's jump out but lets its jump in run
 //!   (@0x8fccb-0x8fd08), so a rescue mission's ship held disabled as it
 //!   comes in ends its glide in the system.
@@ -81,7 +82,7 @@ use crate::hyperspace::JUMP_FUEL;
 use crate::landing::{LANDING_SPEED, landing_radius};
 use crate::traffic::emerge::{LED_BURST_TICK, exit_speed};
 use crate::traffic::npc::{Mode, Npc};
-use crate::traffic::spawn::{JUMP_IN_TICKS, glide_speed};
+use crate::traffic::spawn::glide_speed;
 
 /// How far from its lead, in pixels, an escort keeps.
 pub const FOLLOW_DISTANCE: f32 = 100.0;
@@ -366,27 +367,21 @@ fn attack(npc: &Npc, target: &ShipState, handling: &Handling) -> Controls {
     }
 }
 
-/// One tick of `npc`'s glide in from hyperspace, `ticks_left` of it left:
-/// along its heading at the glide's speed, and on at its top speed
-/// `top_speed` once the glide is over.
+/// Tick `tick` of `npc`'s glide in from hyperspace: along its heading at
+/// [`glide_speed`], flying on at that speed once the next tick's would be
+/// at or below `cap` ([`TopSpeeds::burst_cap`]).
 ///
-/// `top_speed` is the ship's own `_ShipMaxSpeed`, raised for a ship the
-/// player leads ([`TopSpeeds::own`]), as in the original: `_HandleShip`
-/// runs the glide (+0x34 set to -50.0 and +0x30 to -1.165 by low mode 10,
-/// @0x88114-0x88136) through the same negative-speed path as the burst out
-/// of a gate, and ends it against `_ShipMaxSpeed` (@0x34c68-0x34cee).
-fn glide(npc: &mut Npc, ticks_left: u32, top_speed: f32) {
-    let inward = flight::facing(npc.state.heading);
-    let tick = JUMP_IN_TICKS.saturating_sub(ticks_left);
-    npc.state.velocity = inward * glide_speed(tick);
-    npc.state.position = npc.state.position + npc.state.velocity;
-    let left = ticks_left.saturating_sub(1);
-    npc.mode = if left == 0 {
-        npc.state.velocity = inward * top_speed;
-        Mode::Flying
-    } else {
-        Mode::JumpingIn { ticks_left: left }
-    };
+/// `_HandleShip` runs the glide (+0x34 set to -50.0 and +0x30 to -1.165 by
+/// low mode 10, @0x88114-0x88136) through the same negative-speed path as
+/// the burst out of a gate (@0x34bc0-0x34d32): it ends against the same
+/// cap, the lower of its own and its lead's top speed (@0x34c68-0x34d0d),
+/// once the next speed would reach it (@0x34d10-0x34d2a), and leaves the
+/// velocity at the last speed, which lies within 1.165 above the cap.
+fn glide(npc: &mut Npc, tick: u32, cap: f32) {
+    burst(npc, glide_speed(tick), glide_speed(tick + 1) <= cap);
+    if let Mode::JumpingIn { tick: now } = &mut npc.mode {
+        *now = tick + 1;
+    }
 }
 
 /// Flies `npc` one tick when it has no say in its flight: waiting at a
@@ -396,8 +391,8 @@ fn glide(npc: &mut Npc, ticks_left: u32, top_speed: f32) {
 fn unsteered(npc: &mut Npc, handling: &Handling, burst_cap: f32) -> bool {
     match (npc.mode, npc.condition == Condition::Intact) {
         (Mode::Emerging { ticks_left }, _) => wait_at_gate(npc, ticks_left),
-        (Mode::JumpingIn { ticks_left }, false) if npc.condition == Condition::Disabled => {
-            glide(npc, ticks_left, handling.max_speed);
+        (Mode::JumpingIn { tick }, false) if npc.condition == Condition::Disabled => {
+            glide(npc, tick, burst_cap);
         }
         (mode, false) => {
             if let Mode::LeavingGate { .. } = mode {
@@ -405,7 +400,7 @@ fn unsteered(npc: &mut Npc, handling: &Handling, burst_cap: f32) -> bool {
             }
             flight::step(&mut npc.state, handling, Controls::default());
         }
-        (Mode::JumpingIn { ticks_left }, true) => glide(npc, ticks_left, handling.max_speed),
+        (Mode::JumpingIn { tick }, true) => glide(npc, tick, burst_cap),
         (Mode::LeavingGate { tick }, true) => leave_gate(npc, tick, burst_cap),
         (Mode::Flying, true) => return false,
     }
@@ -430,13 +425,21 @@ fn wait_at_gate(npc: &mut Npc, ticks_left: u32) {
 /// [`exit_speed`], flying on at that speed once the next tick's would be
 /// at or below `cap` ([`TopSpeeds::burst_cap`]).
 fn leave_gate(npc: &mut Npc, tick: u32, cap: f32) {
-    npc.state.velocity = flight::facing(npc.state.heading) * exit_speed(tick);
+    burst(npc, exit_speed(tick), exit_speed(tick + 1) <= cap);
+    if let Mode::LeavingGate { tick: now } = &mut npc.mode {
+        *now = tick + 1;
+    }
+}
+
+/// One tick of a glide or burst: `npc` moves along its heading at
+/// `speed`, and flies on at that speed once `over`; otherwise its mode is
+/// left for the caller to step on.
+fn burst(npc: &mut Npc, speed: f32, over: bool) {
+    npc.state.velocity = flight::facing(npc.state.heading) * speed;
     npc.state.position = npc.state.position + npc.state.velocity;
-    npc.mode = if exit_speed(tick + 1) <= cap {
-        Mode::Flying
-    } else {
-        Mode::LeavingGate { tick: tick + 1 }
-    };
+    if over {
+        npc.mode = Mode::Flying;
+    }
 }
 
 /// Whether a ship at `state` can land on `site`: over it, and slow enough.
@@ -905,10 +908,10 @@ mod tests {
         for condition in [Condition::Dying { ticks_left: 4 }, Condition::Destroyed] {
             let mut jumper = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
             jumper.condition = condition;
-            jumper.mode = Mode::JumpingIn { ticks_left: 3 };
+            jumper.mode = Mode::JumpingIn { tick: 3 };
             assert_eq!(fly(&mut jumper, &[], None), Outcome::Flying);
             assert_eq!(jumper.state, at(1.0, -2002.0, 1.0, -2.0, 90.0), "drifting");
-            assert_eq!(jumper.mode, Mode::JumpingIn { ticks_left: 3 }, "no glide");
+            assert_eq!(jumper.mode, Mode::JumpingIn { tick: 3 }, "no glide");
         }
     }
 
@@ -1117,36 +1120,113 @@ mod tests {
         assert_eq!(wreck.mode, Mode::Emerging { ticks_left: 1 });
     }
 
+    /// A ship of `fields` jumping in, at (0, -2000) heading 180°, on the
+    /// glide's first tick.
+    fn jumping_in(fields: ShipFields) -> Npc {
+        let mut ship = npc(fields, Goal::Idle, at(0.0, -2000.0, 0.0, 0.0, 180.0));
+        ship.mode = Mode::JumpingIn { tick: 0 };
+        ship
+    }
+
+    /// The last tick of `ship`'s glide in, flown at `speeds`, and its
+    /// speed after it.
+    fn glide_ends(ship: &mut Npc, speeds: TopSpeeds) -> (u32, f32) {
+        for _ in 0..50 {
+            let Mode::JumpingIn { tick } = ship.mode else {
+                panic!("not gliding: {:?}", ship.mode);
+            };
+            super::fly(ship, &[], None, speeds);
+            if !matches!(ship.mode, Mode::JumpingIn { .. }) {
+                return (tick, ship.state.velocity.length());
+            }
+            assert_eq!(ship.mode, Mode::JumpingIn { tick: tick + 1 });
+        }
+        panic!("never ended")
+    }
+
+    #[test]
+    fn an_arriving_ship_ends_its_glide_on_the_first_tick_its_next_speed_reaches_the_cap_keeping_its_last_speed()
+     {
+        // 50 - 1.165 x 38 = 5.73 is at or below 6; 50 - 1.165 x 37 = 6.895
+        // is not.
+        let speeds = TopSpeeds {
+            own: 6.0,
+            lead: Some(9.0),
+        };
+        let mut ship = jumping_in(AVERAGE);
+        let (last, speed) = glide_ends(&mut ship, speeds);
+        assert_eq!(last, 37);
+        assert_eq!(ship.mode, Mode::Flying);
+        assert!((speed - glide_speed(37)).abs() < 1e-4, "{speed}");
+        assert!((speed - 6.895).abs() < 1e-3, "not snapped to 6: {speed}");
+        let along = flight::facing(180.0) * glide_speed(37);
+        assert!((ship.state.velocity - along).length() < 1e-4);
+    }
+
+    #[test]
+    fn a_jumping_in_escort_whose_lead_is_slower_ends_its_glide_at_its_leads_top_speed() {
+        // A cap of 9 would end it on tick 35 (50 - 1.165 x 36 = 8.06); the
+        // lead's 3 ends it on tick 40 (50 - 1.165 x 41 = 2.235).
+        let speeds = TopSpeeds {
+            own: 9.0,
+            lead: Some(3.0),
+        };
+        let mut ship = jumping_in(AVERAGE);
+        let (last, speed) = glide_ends(&mut ship, speeds);
+        assert_eq!(last, 40);
+        assert!((speed - glide_speed(40)).abs() < 1e-4, "{speed}");
+        assert!((speed - 3.4).abs() < 1e-3, "{speed}");
+    }
+
+    #[test]
+    fn a_ship_whose_cap_is_the_glides_second_speed_glides_one_tick_at_50() {
+        for cap in [glide_speed(1), 100.0] {
+            let speeds = TopSpeeds {
+                own: cap,
+                lead: Some(cap + 1.0),
+            };
+            let mut ship = jumping_in(AVERAGE);
+            assert_eq!(glide_ends(&mut ship, speeds), (0, 50.0), "{cap}");
+            assert!((ship.state.position - Vec2::new(0.0, -1950.0)).length() < 1e-3);
+        }
+    }
+
     #[test]
     fn a_disabled_ship_jumping_in_glides_in_as_an_intact_one_does() {
-        let start = at(0.0, -2000.0, 0.0, 0.0, 180.0);
-        let mut intact = npc(FAST, Goal::JumpOut, start);
-        intact.mode = Mode::JumpingIn { ticks_left: 2 };
+        let speeds = TopSpeeds {
+            own: 6.0,
+            lead: Some(9.0),
+        };
+        let mut intact = jumping_in(AVERAGE);
         let mut disabled = intact.clone();
         disabled.condition = Condition::Disabled;
-        for _ in 0..2 {
-            assert_eq!(fly(&mut disabled, &[], None), Outcome::Flying);
-            fly(&mut intact, &[], None);
+        while intact.mode != Mode::Flying {
+            assert_eq!(
+                super::fly(&mut disabled, &[], None, speeds),
+                Outcome::Flying
+            );
+            super::fly(&mut intact, &[], None, speeds);
             assert_eq!(disabled.state, intact.state);
             assert_eq!(disabled.mode, intact.mode);
         }
-        assert_eq!(disabled.mode, Mode::Flying);
         assert_eq!(disabled.condition, Condition::Disabled);
     }
 
     #[test]
-    fn a_glide_in_ends_at_the_raised_top_speed_intact_or_disabled() {
-        let raised = TopSpeeds {
+    fn a_glide_in_ends_at_the_burst_cap_keeping_its_speed_intact_or_disabled() {
+        // A lead's 3 caps it below its raised 4.5: 50 - 1.165 x 41 = 2.235
+        // is the first at or below 3, so it keeps tick 40's 3.4.
+        let speeds = TopSpeeds {
             own: 4.5,
-            lead: None,
+            lead: Some(3.0),
         };
         for condition in [Condition::Intact, Condition::Disabled] {
-            let mut ship = npc(AVERAGE, Goal::Idle, at(0.0, -2000.0, 0.0, 0.0, 180.0));
+            let mut ship = jumping_in(AVERAGE);
             ship.condition = condition;
-            ship.mode = Mode::JumpingIn { ticks_left: 1 };
-            super::fly(&mut ship, &[], None, raised);
+            ship.mode = Mode::JumpingIn { tick: 40 };
+            super::fly(&mut ship, &[], None, speeds);
             assert_eq!(ship.mode, Mode::Flying, "{condition:?}");
-            let along = flight::facing(180.0) * 4.5;
+            let along = flight::facing(180.0) * glide_speed(40);
             assert!(
                 (ship.state.velocity - along).length() < 1e-4,
                 "{condition:?}: {:?}",
@@ -1187,26 +1267,32 @@ mod tests {
     }
 
     #[test]
-    fn a_jump_in_glides_43_ticks_to_about_1000_out_without_steering() {
+    fn a_jump_in_glides_from_about_2098_out_without_steering_until_its_cap() {
         let start = hyperspace_entry(&mut crate::testkit::Draws::of(&[60]));
+        assert!((start.position.length() - jump_in_distance()).abs() < 1e-2);
         let mut ship = npc(FAST, Goal::Land(StellarId(140)), start);
-        ship.mode = Mode::JumpingIn { ticks_left: 43 };
+        ship.mode = Mode::JumpingIn { tick: 0 };
+        let speeds = TopSpeeds {
+            own: 6.0,
+            lead: Some(9.0),
+        };
         let sites = [planet(140, 0.0, 0.0)];
         let mut last = start.position.length();
-        for tick in 0..43 {
-            assert!(matches!(ship.mode, Mode::JumpingIn { .. }), "{tick}");
-            assert_eq!(fly(&mut ship, &sites, None), Outcome::Flying);
+        for tick in 0..=37 {
+            assert_eq!(ship.mode, Mode::JumpingIn { tick });
+            assert_eq!(super::fly(&mut ship, &sites, None, speeds), Outcome::Flying);
             let now = ship.state.position.length();
             assert!((last - now - glide_speed(tick)).abs() < 1e-2, "{tick}");
             assert_eq!(ship.state.heading, start.heading, "no steering");
             last = now;
         }
         assert_eq!(ship.mode, Mode::Flying);
-        assert!((last - 1000.0).abs() < 0.1, "{last}");
+        // Five ticks short of the 43 that would bring it 1000 out.
+        let short: f32 = (38..43).map(glide_speed).sum();
+        assert!((last - (1000.0 + short)).abs() < 0.1, "{last}");
         let inward = start.position * (-1.0 / jump_in_distance());
-        let top = ship.stats.handling.max_speed;
         assert!(
-            (ship.state.velocity - inward * top).length() < 1e-3,
+            (ship.state.velocity - inward * glide_speed(37)).length() < 1e-3,
             "{:?}",
             ship.state
         );

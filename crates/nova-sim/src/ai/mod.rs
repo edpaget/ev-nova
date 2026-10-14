@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn surroundings_find_each_ship_and_the_player() {
         let mut jumping = npc(2, AiType::Warship);
-        jumping.mode = Mode::JumpingIn { ticks_left: 3 };
+        jumping.mode = Mode::JumpingIn { tick: 0 };
         jumping.govt = Some(GovtId(140));
         let mut dying = npc(3, AiType::Warship);
         dying.condition = Condition::Dying { ticks_left: 3 };

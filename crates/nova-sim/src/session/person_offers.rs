@@ -580,7 +580,7 @@ mod tests {
             (Err(HailRefusal::NoTarget), vec![])
         );
         let mut session = targeting_ace(&catalog);
-        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::JumpingIn { ticks_left: 3 };
+        session.traffic.npcs_mut()[0].mode = crate::traffic::npc::Mode::JumpingIn { tick: 0 };
         assert_eq!(
             hail(&mut session, &catalog),
             (Err(HailRefusal::InHyperspace), vec![])

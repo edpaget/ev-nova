@@ -249,13 +249,17 @@ pub const STATIONARY_DISTANCE: f32 = 100.0;
 pub const ESCORT_SPREAD: u32 = 300;
 /// `Rand(360)`: a heading, or an angle round the centre.
 pub const DEGREES: u32 = 360;
-/// How many ticks a ship glides in from hyperspace (`0x2b`).
+/// How many ticks of the glide a ship arriving by hyperspace is placed
+/// back from [`JUMP_IN_END`] (`0x2b`, `_HyperShipSpawn`): where it starts,
+/// not how long it glides, which its cap decides
+/// ([`TopSpeeds::burst_cap`](crate::traffic::autopilot::TopSpeeds::burst_cap)).
 pub const JUMP_IN_TICKS: u32 = 43;
 /// Its speed on the glide's first tick, in pixels a tick.
 pub const JUMP_IN_SPEED: f32 = 50.0;
 /// How much slower each tick of the glide is than the last.
 pub const JUMP_IN_SLOWING: f32 = 1.165;
-/// How far from the centre the glide ends.
+/// How far from the centre a glide of [`JUMP_IN_TICKS`] would end, the
+/// distance a ship's start is reckoned from.
 pub const JUMP_IN_END: f32 = 1000.0;
 /// `Rand(3)`: the draw a ship's aggression is made from.
 pub const AGGRESSION_DRAW: u32 = 3;

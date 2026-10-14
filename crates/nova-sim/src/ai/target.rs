@@ -922,7 +922,7 @@ mod tests {
         assert_eq!(chosen(0, &disabled, None, 0, NEAR), None);
         let mut arriving = disabled.clone();
         arriving[1].condition = Condition::Intact;
-        arriving[1].mode = Mode::JumpingIn { ticks_left: 3 };
+        arriving[1].mode = Mode::JumpingIn { tick: 0 };
         assert_eq!(chosen(0, &arriving, None, 0, NEAR), None);
         let mut gone_foe = arriving.clone();
         gone_foe[1].mode = Mode::Flying;
@@ -1040,7 +1040,7 @@ mod tests {
         let mut dying = ship(2, ENEMY, 100.0, 0.0);
         dying.condition = Condition::Dying { ticks_left: 3 };
         let mut arriving = ship(3, ENEMY, 150.0, 0.0);
-        arriving.mode = Mode::JumpingIn { ticks_left: 3 };
+        arriving.mode = Mode::JumpingIn { tick: 0 };
         let mut emerging = ship(5, ENEMY, 120.0, 0.0);
         emerging.mode = Mode::Emerging { ticks_left: 3 };
         let npcs = [me(), dying, arriving, emerging, ship(4, RIVAL, 900.0, 0.0)];
