@@ -2864,7 +2864,7 @@ impl Behaviour for Raider {
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> nova_sim::Trigger {
-        nova_sim::ai::fire::trigger(npc, around)
+        nova_sim::ai::fire::trigger(npc, around, nova_sim::ai::fire::FireRules::default())
     }
 
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<nova_sim::ShipRef> {

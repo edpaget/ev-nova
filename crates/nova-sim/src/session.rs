@@ -15179,7 +15179,7 @@ pub(super) mod tests {
         }
 
         fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
-            crate::ai::fire::trigger(npc, around)
+            crate::ai::fire::trigger(npc, around, crate::ai::fire::FireRules::default())
         }
 
         fn target(&self, _npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
@@ -15348,7 +15348,7 @@ pub(super) mod tests {
         }
 
         fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
-            crate::ai::fire::trigger(npc, around)
+            crate::ai::fire::trigger(npc, around, crate::ai::fire::FireRules::default())
         }
 
         fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {

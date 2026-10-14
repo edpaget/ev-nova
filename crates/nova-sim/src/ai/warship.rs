@@ -60,6 +60,7 @@
 
 use std::borrow::Cow;
 
+use crate::ai::fire::FireRules;
 use crate::ai::odds::{hopeless_chase, odds_against};
 use crate::ai::target::{dropped, select_target};
 use crate::ai::{Behaviour, Goal, Reaction, Surroundings, fire, idle, react};
@@ -222,6 +223,8 @@ pub struct Warship {
     pub piracy_police: RuleSource,
     /// Which persons retreat at their `Coward`.
     pub person_coward: RuleSource,
+    /// The rulebook's entries its weapon pick follows.
+    pub fire: FireRules,
 }
 
 /// A warship's retreat: when outnumbered or its shields run low, both by
@@ -242,7 +245,7 @@ impl Behaviour for Warship {
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
-        fire::trigger(npc, around)
+        fire::trigger(npc, around, self.fire)
     }
 
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {

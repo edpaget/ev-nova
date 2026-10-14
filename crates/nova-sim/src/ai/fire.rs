@@ -99,6 +99,7 @@ use crate::combat::armament::{Mount, Shooter, Trigger};
 use crate::combat::projectile::Target;
 use crate::combat::weapon::{AVOIDS_FAST_SHIPS, Ammo, Guidance, WeaponSpec};
 use crate::flight::ShipState;
+use crate::rulebook::RuleSource;
 use crate::traffic::npc::Npc;
 
 /// How near, in pixels on either axis, an attacker dogfights rather than
@@ -130,6 +131,16 @@ pub const SLOW_MISSILE_TURN: f32 = 2.0;
 /// How many times its shield and armour the damage aimed at a target
 /// must be for it to suffice (1.05 @0xdd498, `_SufficentTargetedDamage`).
 pub const SUFFICIENT_DAMAGE: f64 = 1.05;
+
+/// The rulebook's entries an NPC's weapon pick follows, held by the
+/// behaviours that fire ([`NovaAi::from_rulebook`](crate::NovaAi::from_rulebook)
+/// reads them).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FireRules {
+    /// How a quadrant turret measures its arc
+    /// ([`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)).
+    pub quadrant_arc: RuleSource,
+}
 
 /// How an NPC flies its fight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -319,8 +330,8 @@ pub fn ammo_left(npc: &Npc) -> AmmoLeft {
 /// `_AIFireTurret` on the frame before its next think drops the target: a
 /// one-tick lag the player cannot see.
 #[must_use]
-pub fn trigger(npc: &Npc, around: &Surroundings) -> Trigger {
-    let only = pick(npc, around);
+pub fn trigger(npc: &Npc, around: &Surroundings, rules: FireRules) -> Trigger {
+    let only = pick(npc, around, rules);
     Trigger {
         only,
         bays: npc.goal.attacking().is_some_and(|ship| around.live(ship)),
@@ -352,8 +363,8 @@ fn facing(npc: &Npc, at: &ShipState, turns: f32) -> bool {
     angle_off(npc.state.heading, wanted_heading(npc, at)) <= turns * npc.stats.handling.turn_rate
 }
 
-/// The weapon [`trigger`] picks, if any.
-fn pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
+/// The weapon [`trigger`] picks, if any, by `rules`.
+fn pick(npc: &Npc, around: &Surroundings, rules: FireRules) -> Option<WeaponId> {
     let ship = npc.goal.quarry()?;
     if !around.live(ship) {
         return None;
@@ -421,6 +432,7 @@ fn pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
         aimed_enough,
         turn_rate,
         planet_type,
+        quadrant_arc: rules.quadrant_arc,
     };
     let gun = || facing(GUN_FACING).then(|| sight.gun()).flatten();
     let turret = || sight.turret();
@@ -456,6 +468,9 @@ struct Sight<'a> {
     turn_rate: f32,
     /// Whether the target's ship type is planet-type.
     planet_type: bool,
+    /// How a quadrant turret measures its arc
+    /// ([`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)).
+    quadrant_arc: RuleSource,
 }
 
 impl Sight<'_> {
@@ -541,16 +556,19 @@ impl Sight<'_> {
         if self.untargetable || !self.seen {
             return None;
         }
-        let bearing_off = angle_off(
-            self.npc.state.heading,
-            bearing(self.npc.state.position, self.at.position),
-        );
+        let heading = self.npc.state.heading;
+        let bearing = bearing(self.npc.state.position, self.at.position);
+        // Blind spots take the folded angle, as `_TurretBlindSpot` folds
+        // (@0xb35a-0xb387).
+        let bearing_off = angle_off(heading, bearing);
         self.best(|mount| {
             let spec = &mount.spec;
             let in_arc = match spec.guidance {
                 Guidance::TurretBeam | Guidance::Turret => true,
-                Guidance::FrontTurret => bearing_off <= FRONT_ARC,
-                Guidance::RearTurret => bearing_off >= 180.0 - FRONT_ARC,
+                Guidance::FrontTurret => self.arc_off(heading, bearing) <= FRONT_ARC,
+                Guidance::RearTurret => {
+                    self.arc_off((heading + 180.0) % 360.0, bearing) <= FRONT_ARC
+                }
                 _ => false,
             };
             in_arc
@@ -559,6 +577,18 @@ impl Sight<'_> {
                 && self.ready(mount)
                 && self.reaches(spec)
         })
+    }
+
+    /// How far `bearing` is off a quadrant turret's `reference`, as the
+    /// rulebook's [`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)
+    /// entry says: by the engine, made absolute and taken mod 360 with no
+    /// fold past 180 (`_AIFireTurret` @0x80c3d-0x80cf3); by the other
+    /// reading, folded.
+    fn arc_off(&self, reference: f32, bearing: f32) -> f32 {
+        match self.quadrant_arc {
+            RuleSource::Engine => (bearing - reference).abs() % 360.0,
+            RuleSource::Bible => angle_off(reference, bearing),
+        }
     }
 
     /// The missile it fires, if any (see the module docs).
@@ -685,7 +715,7 @@ mod tests {
             player: Some(player_at(SHOOTER.x + x, SHOOTER.y + y, shield)),
             ..Surroundings::new(&[], &npcs)
         };
-        trigger(npc, &around).only
+        trigger(npc, &around, FireRules::default()).only
     }
 
     /// What `npc` fires at the player (`x`, `y`) from [`SHOOTER`], its
@@ -699,7 +729,7 @@ mod tests {
             }),
             ..Surroundings::new(&[], &npcs)
         };
-        trigger(npc, &around).only
+        trigger(npc, &around, FireRules::default()).only
     }
 
     /// What `npc`, attacking NPC 2, fires at it as `target` makes it,
@@ -717,7 +747,7 @@ mod tests {
         other.state.position = SHOOTER + Vec2::new(x, y);
         target(&mut other);
         let npcs = [npc.clone(), other];
-        trigger(&npc, &Surroundings::new(&[], &npcs))
+        trigger(&npc, &Surroundings::new(&[], &npcs), FireRules::default())
     }
 
     /// `npc` with a scanner of these bits among its ship type's items.
@@ -875,7 +905,7 @@ mod tests {
             player: Some(side),
             ..Surroundings::new(&[], &npcs)
         };
-        trigger(npc, &around).point_defence
+        trigger(npc, &around, FireRules::default()).point_defence
     }
 
     #[test]
@@ -1214,6 +1244,64 @@ mod tests {
         assert_eq!(fired(&npc, 0.0, 232.1, 50.0), None, "out of range");
     }
 
+    /// What `npc` fires at the player 150 away bearing `bearing` from
+    /// [`SHOOTER`], its shields up, by `rules`.
+    fn fired_bearing(npc: &Npc, bearing: f32, rules: FireRules) -> Option<WeaponId> {
+        let (sin, cos) = bearing.to_radians().sin_cos();
+        let npcs = [npc.clone()];
+        let around = Surroundings {
+            player: Some(player_at(
+                SHOOTER.x + 150.0 * sin,
+                SHOOTER.y - 150.0 * cos,
+                50.0,
+            )),
+            ..Surroundings::new(&[], &npcs)
+        };
+        trigger(npc, &around, rules).only
+    }
+
+    #[test]
+    fn a_quadrant_turret_across_the_seam_holds_fire_by_the_engine_and_fires_by_the_bible() {
+        use crate::rulebook::RuleSource;
+        let engine = FireRules {
+            quadrant_arc: RuleSource::Engine,
+        };
+        let bible = FireRules {
+            quadrant_arc: RuleSource::Bible,
+        };
+        assert_eq!(FireRules::default(), engine);
+        let turret = |guidance: i16, heading: f32| {
+            let mut npc = shooter(&[guided(130, guidance)], Goal::Flee(ShipRef::Player));
+            npc.state.heading = heading;
+            npc
+        };
+        // |10 - 350| = 340 unfolded, 20 folded.
+        let front = turret(7, 350.0);
+        assert_eq!(fired_bearing(&front, 10.0, engine), None);
+        assert_eq!(fired_bearing(&front, 10.0, bible), id(130));
+        // |350 - 10| = 340 unfolded, 20 folded.
+        let front_east = turret(7, 10.0);
+        assert_eq!(fired_bearing(&front_east, 350.0, engine), None);
+        assert_eq!(fired_bearing(&front_east, 350.0, bible), id(130));
+        // The rear's reference: (170 + 180) mod 360 = 350.
+        let rear = turret(8, 170.0);
+        assert_eq!(fired_bearing(&rear, 10.0, engine), None);
+        assert_eq!(fired_bearing(&rear, 10.0, bible), id(130));
+        assert_eq!(fired_bearing(&rear, 340.0, engine), id(130), "10 off");
+        // Off the seam, both fire, up to 45 either side.
+        let east = turret(7, 90.0);
+        for rules in [engine, bible] {
+            assert_eq!(fired_bearing(&east, 100.0, rules), id(130));
+            assert_eq!(fired_bearing(&east, 134.9, rules), id(130));
+            assert_eq!(fired_bearing(&east, 45.1, rules), id(130));
+            assert_eq!(fired_bearing(&east, 135.1, rules), None);
+            assert_eq!(fired_bearing(&east, 44.9, rules), None);
+        }
+        // A full turret has no arc.
+        let full = turret(4, 350.0);
+        assert_eq!(fired_bearing(&full, 170.0, engine), id(130));
+    }
+
     /// A gun of `id` reaching 50 pixels.
     fn short(id: i16) -> WeaponRecord {
         WeaponRecord {
@@ -1298,7 +1386,10 @@ mod tests {
         assert_eq!(fired(&npc, 0.0, -100.0, 50.0), None, "not there");
         let npcs = [npc.clone()];
         let around = Surroundings::new(&[], &npcs);
-        assert_eq!(trigger(&shooter(&all, ATTACK), &around), Trigger::default());
+        assert_eq!(
+            trigger(&shooter(&all, ATTACK), &around, FireRules::default()),
+            Trigger::default()
+        );
     }
 
     #[test]
@@ -1386,7 +1477,7 @@ mod tests {
             player: Some(player_at(SHOOTER.x, SHOOTER.y - 100.0, 50.0)),
             ..Surroundings::new(&[], npcs)
         };
-        trigger(npc, &around).bays
+        trigger(npc, &around, FireRules::default()).bays
     }
 
     #[test]
@@ -1528,7 +1619,7 @@ mod tests {
             player: Some(side),
             ..Surroundings::new(&[], &npcs)
         };
-        trigger(npc, &around).only
+        trigger(npc, &around, FireRules::default()).only
     }
 
     #[test]
@@ -1670,7 +1761,7 @@ mod tests {
             targeted: &targeted,
             ..Surroundings::new(&[], &npcs)
         };
-        trigger(npc, &around).only
+        trigger(npc, &around, FireRules::default()).only
     }
 
     #[test]
@@ -1698,13 +1789,16 @@ mod tests {
             targeted: &targeted,
             ..Surroundings::new(&[], &npcs)
         };
-        assert_eq!(trigger(&npcs[0], &around).only, None);
+        assert_eq!(trigger(&npcs[0], &around, FireRules::default()).only, None);
         let targeted = BTreeMap::from([(ShipRef::Npc(NpcId(2)), 8)]);
         let around = Surroundings {
             targeted: &targeted,
             ..Surroundings::new(&[], &npcs)
         };
-        assert_eq!(trigger(&npcs[0], &around).only, id(131));
+        assert_eq!(
+            trigger(&npcs[0], &around, FireRules::default()).only,
+            id(131)
+        );
         assert_eq!(SUFFICIENT_DAMAGE, 1.05);
     }
 
@@ -1720,7 +1814,11 @@ mod tests {
             targeted: &targeted,
             ..Surroundings::new(&[], &npcs)
         };
-        assert_eq!(trigger(&close, &around).only, id(128), "a gun still fires");
+        assert_eq!(
+            trigger(&close, &around, FireRules::default()).only,
+            id(128),
+            "a gun still fires"
+        );
     }
 
     #[test]

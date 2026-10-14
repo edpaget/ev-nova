@@ -26,6 +26,7 @@
 //! - With nothing to inspect it goes about its business
 //!   ([`idle`](super::idle)).
 
+use crate::ai::fire::FireRules;
 use crate::ai::warship::{Retreat, hunt};
 use crate::ai::{Behaviour, Goal, Reaction, Surroundings, fire, idle, react};
 use crate::chance::Chance;
@@ -61,6 +62,8 @@ pub struct Interceptor {
     pub piracy_police: RuleSource,
     /// Which persons retreat at their `Coward`.
     pub person_coward: RuleSource,
+    /// The rulebook's entries its weapon pick follows.
+    pub fire: FireRules,
 }
 
 impl Behaviour for Interceptor {
@@ -82,7 +85,7 @@ impl Behaviour for Interceptor {
     }
 
     fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
-        fire::trigger(npc, around)
+        fire::trigger(npc, around, self.fire)
     }
 
     fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {

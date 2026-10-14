@@ -41,6 +41,7 @@
 //! no reaction. It never launches the fighters it carries
 //! ([`Trigger::bays`]).
 
+use crate::ai::fire::FireRules;
 use crate::ai::{Behaviour, Goal, Surroundings, fire};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
@@ -56,6 +57,8 @@ use crate::traffic::npc::{Mode, Npc, NpcId};
 pub struct EscortAi {
     /// What an escort with no standing command does.
     pub escort_ai: RuleSource,
+    /// The rulebook's entries its weapon pick follows.
+    pub fire: FireRules,
 }
 
 impl EscortAi {
@@ -124,7 +127,7 @@ impl Behaviour for EscortAi {
         match npc.goal {
             Goal::Attack(_) => Trigger {
                 bays: false,
-                ..fire::trigger(npc, around)
+                ..fire::trigger(npc, around, self.fire)
             },
             // Keeping formation, `_LowLevelAIHandler` calls `_AIFireTurret`
             // only while the guard (+0x70) is within the box on both axes
@@ -293,9 +296,15 @@ mod tests {
 
     const ENGINE: EscortAi = EscortAi {
         escort_ai: RuleSource::Engine,
+        fire: FireRules {
+            quadrant_arc: RuleSource::Engine,
+        },
     };
     const BIBLE: EscortAi = EscortAi {
         escort_ai: RuleSource::Bible,
+        fire: FireRules {
+            quadrant_arc: RuleSource::Engine,
+        },
     };
 
     fn decide(npcs: &[Npc], player_at: (f32, f32), draws: &[u32]) -> (Goal, Vec<u32>) {
@@ -616,7 +625,7 @@ mod tests {
             };
             let fires = Trigger {
                 bays: false,
-                ..fire::trigger(&npcs[0], &around)
+                ..fire::trigger(&npcs[0], &around, FireRules::default())
             };
             assert_eq!(
                 command(ENGINE, &npcs),
@@ -624,7 +633,7 @@ mod tests {
                 "{order:?}: launching no fighters"
             );
             assert_eq!(
-                fire::trigger(&npcs[0], &around).only,
+                fire::trigger(&npcs[0], &around, FireRules::default()).only,
                 Some(WeaponId(141)),
                 "the gun ahead"
             );

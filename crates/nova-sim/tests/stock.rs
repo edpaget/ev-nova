@@ -3951,7 +3951,7 @@ fn stock_missile_at(data: &GameData, ship: ShipId, target: ShipId) -> Option<nov
         player: Some(player),
         ..nova_sim::ai::Surroundings::new(&[], &npcs)
     };
-    nova_sim::ai::fire::trigger(&npc, &around).only
+    nova_sim::ai::fire::trigger(&npc, &around, nova_sim::ai::fire::FireRules::default()).only
 }
 
 /// The Manticore (`shïp` 146) carries the EMP Torpedo (`wëap` 160) in

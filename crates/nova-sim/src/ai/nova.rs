@@ -18,6 +18,7 @@
 
 use std::rc::Rc;
 
+use crate::ai::fire::FireRules;
 use crate::ai::{
     Behaviour, BraveTrader, CarriedAi, EscortAi, Goal, Interceptor, Reaction, Surroundings,
     Warship, WimpyTrader,
@@ -55,27 +56,42 @@ impl NovaAi {
     /// [`RuleKey::PiracyPolice`] entry says, the warship and interceptor
     /// persons run at their `Coward` as its [`RuleKey::PersonCoward`]
     /// entry says, the escorts fly as its [`RuleKey::EscortAi`] entry
-    /// says, and a paid-off `ShipBehav` 0 hunter attacks the player again
-    /// or honours the bribe as its [`RuleKey::HunterBribe`] entry says.
+    /// says, a paid-off `ShipBehav` 0 hunter attacks the player again
+    /// or honours the bribe as its [`RuleKey::HunterBribe`] entry says,
+    /// and every one of them, the escorts and the carried fighters aim
+    /// their quadrant turrets as its [`RuleKey::QuadrantTurretArc`] entry
+    /// says.
     #[must_use]
     pub fn from_rulebook(rulebook: &Rulebook) -> Self {
         let piracy_police = rulebook.source_for(RuleKey::PiracyPolice);
         let person_coward = rulebook.source_for(RuleKey::PersonCoward);
+        let fire = FireRules {
+            quadrant_arc: rulebook.source_for(RuleKey::QuadrantTurretArc),
+        };
         Self {
-            wimpy: Rc::new(WimpyTrader { piracy_police }),
-            brave: Rc::new(BraveTrader { piracy_police }),
+            wimpy: Rc::new(WimpyTrader {
+                piracy_police,
+                fire,
+            }),
+            brave: Rc::new(BraveTrader {
+                piracy_police,
+                fire,
+            }),
             warship: Rc::new(Warship {
                 piracy_police,
                 person_coward,
+                fire,
             }),
             interceptor: Rc::new(Interceptor {
                 piracy_police,
                 person_coward,
+                fire,
             }),
             escorts: Rc::new(EscortAi {
                 escort_ai: rulebook.source_for(RuleKey::EscortAi),
+                fire,
             }),
-            carried: Rc::new(CarriedAi),
+            carried: Rc::new(CarriedAi { fire }),
             hunter_bribe: rulebook.source_for(RuleKey::HunterBribe),
         }
     }
@@ -462,6 +478,71 @@ mod tests {
             decide(&NovaAi::from_rulebook(&bible)),
             Goal::Attack(ShipRef::Npc(NpcId(2)))
         );
+    }
+
+    /// What `npc`, carrying a front quadrant turret and heading 350,
+    /// fires by `ai` at the player 100 away bearing 10: across the seam.
+    fn fired_across_the_seam(ai: &NovaAi, mut npc: Npc) -> Option<WeaponId> {
+        npc.armament = crate::combat::armament::Armament::new([(
+            crate::combat::weapon::WeaponSpec::new(&crate::catalog::WeaponRecord {
+                guidance: 7,
+                speed: 1000,
+                count: 20,
+                ..crate::testkit::weapon(130)
+            }),
+            1,
+        )]);
+        npc.state.heading = 350.0;
+        npc.goal = Goal::Attack(ShipRef::Player);
+        let (sin, cos) = 10f32.to_radians().sin_cos();
+        let at = npc.state.position + crate::geometry::Vec2::new(100.0 * sin, -100.0 * cos);
+        let npcs = [npc];
+        let around = Surroundings {
+            player: Some(crate::ai::fixture::player(at.x, at.y)),
+            ..Surroundings::new(&[], &npcs)
+        };
+        ai.trigger(&npcs[0], &around).only
+    }
+
+    #[test]
+    fn nova_ai_aims_quadrant_turrets_as_its_rulebook_says() {
+        let carried = Npc {
+            carrier: Some(crate::bay::Carrier {
+                ship: ShipRef::Npc(NpcId(9)),
+                window: 100.0,
+                reach: 40.0,
+            }),
+            ..of(1, AiType::Warship)
+        };
+        let ships: Vec<Npc> = TYPES
+            .into_iter()
+            .map(|ai_type| of(1, ai_type))
+            .chain([escorting(of(1, AiType::Warship)), carried])
+            .collect();
+        let engine = NovaAi::from_rulebook(&Rulebook::default());
+        let bible = NovaAi::from_rulebook(
+            &Rulebook::default().with_override(RuleKey::QuadrantTurretArc, RuleSource::Bible),
+        );
+        for npc in ships {
+            let kind = format!("{:?} {:?}", npc.ai_type, npc.escort.is_some());
+            assert_eq!(fired_across_the_seam(&engine, npc.clone()), None, "{kind}");
+            assert_eq!(
+                fired_across_the_seam(&NovaAi::default(), npc.clone()),
+                None,
+                "{kind}"
+            );
+            assert_eq!(
+                fired_across_the_seam(&bible, npc),
+                Some(WeaponId(130)),
+                "{kind}"
+            );
+        }
+        for source in RuleSource::ALL {
+            let rulebook = Rulebook::default().with_override(RuleKey::QuadrantTurretArc, source);
+            let ai = format!("{:?}", NovaAi::from_rulebook(&rulebook));
+            let expected = format!("quadrant_arc: {source:?}");
+            assert_eq!(ai.matches(&expected).count(), 6, "all six: {ai}");
+        }
     }
 
     /// How each of a police warship and a police interceptor answers the
