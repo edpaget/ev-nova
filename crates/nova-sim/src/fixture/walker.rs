@@ -4,17 +4,21 @@
 //!
 //! - **`take <mission>`** ([`Step::Take`]) accepts the mission where it is
 //!   offered. Offered at the stellar docked at, it is accepted there.
-//!   Otherwise the walker lands ([`Session::land_at`]) at every stellar the
-//!   catalog lists, each at the first system listing it, by ascending ID,
-//!   the stellar docked at last, so that landing elsewhere first rolls its
-//!   offers afresh; it stops at the first that offers the mission, and a
-//!   stellar it cannot land at is skipped. It reads why each stellar does
+//!   Otherwise the walker lands ([`Session::land_at`]) at every visible
+//!   stellar the catalog lists, each at its first visible lister, by
+//!   ascending ID, the stellar docked at last, so that landing elsewhere
+//!   first rolls its offers afresh; it stops at the first that offers the
+//!   mission, and a stellar it cannot land at is skipped. A hidden
+//!   stellar is never landed at: its visible variant is scanned in its
+//!   own turn. It reads why each stellar does
 //!   not offer it ([`Session::offer_refusals`]), never deriving `AvailStel`
 //!   itself.
 //! - **`deliver <mission>`** ([`Step::Deliver`]) lands at the active
 //!   mission's destination, when it is not reached and is not its return
-//!   (where a `PickupMode` 1 cargo is picked up), then at its return (a
-//!   stop of no system at the first system listing its stellar), and
+//!   (where a `PickupMode` 1 cargo is picked up), then at its return,
+//!   each where a player can land: a hidden stop at its visible variant
+//!   of the same place and name, as `_StellarsAreIdentical` matches
+//!   them ([`Fault::StopHidden`] when there is none), and
 //!   checks that the mission completed, unfailed, paid what its `PayVal`
 //!   pays ([`expected_pay`]) and set the bits its `OnSuccess` sets
 //!   ([`expected_bits`]). The pay of another mission completed at the
@@ -94,7 +98,7 @@ use crate::mission::{
     AcceptError, ActiveMission, PayEffect, Refusal, ShipGoal, Stop, Venue, pay_effect,
 };
 use crate::rules::Verdict;
-use crate::session::{RelocateRefusal, Session};
+use crate::session::{RelocateRefusal, Session, StopRefusal};
 
 /// One step of a walker's script.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -256,6 +260,13 @@ pub enum Fault {
     BitsNotSet(Vec<Bit>),
     /// A landing was refused.
     CannotLand(RelocateRefusal),
+    /// The stop's stellar is hidden, and no visible stellar is
+    /// identical to it (`_StellarsAreIdentical`), so a player cannot
+    /// land there.
+    StopHidden {
+        /// The stop's stellar.
+        stellar: StellarId,
+    },
     /// It has no return stellar, so no landing completes it.
     Undeliverable,
     /// It has no ship goal `meet goal` meets: no ships, or no goal, or a
@@ -335,6 +346,12 @@ impl fmt::Display for WalkFailure {
                 }
             }
             Fault::CannotLand(refusal) => write!(f, "{subject}: cannot land: {refusal}")?,
+            Fault::StopHidden { stellar } => write!(
+                f,
+                "{subject}: stop stellar {} is hidden, and no visible stellar shares its place \
+                 and name",
+                stellar.0
+            )?,
             Fault::Undeliverable => write!(f, "{subject} has no return stellar")?,
             Fault::NoShipGoal => write!(f, "{subject} has no ship goal to meet")?,
             Fault::CronNotStarted { waited, refusals } => {
@@ -489,6 +506,18 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
                 stellar,
                 system: Some(system),
             };
+            // A hidden stellar is never landed at; its visible variant is
+            // scanned in its own turn, so its offers are rolled once.
+            let Ok((system, landing)) = session.stop_landing(stop) else {
+                continue;
+            };
+            if landing != stellar {
+                continue;
+            }
+            let stop = Stop {
+                stellar,
+                system: Some(system),
+            };
             let (landed, _) = watched(session, mission, &mut others, |session| {
                 self.land(session, stop)
             });
@@ -588,7 +617,7 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
         }
         Ok(Done::Delivered {
             mission,
-            stellar: back.stellar,
+            stellar: session.landed().unwrap_or(back.stellar),
             pay: got,
             others,
         })
@@ -635,26 +664,25 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
         Ok(Done::MetGoal { mission, others })
     }
 
-    /// Lands at `stop` and settles, in the system the offer stored for it
-    /// ([`Stop::system`]). That can be a hidden or shadowed system that
-    /// lists the stellar (`_FindSystemFromStellar`'s, when no system held
-    /// it as the stops were resolved), which the landing resolves by
-    /// place. A stop has no system only when no system lists its stellar;
-    /// it is landed at in the first system the catalog lists it in, as
-    /// `take` lands.
+    /// Lands at `stop` where a player can, as the session resolves it
+    /// (`Session::stop_landing`): a visible stellar in its stored system,
+    /// when that is visible, else in its first visible lister; a hidden
+    /// one at its visible variant of the same place and name. Then
+    /// settles. No lister is [`Fault::CannotLand`] for want of a system;
+    /// hidden with no visible variant, [`Fault::StopHidden`].
     fn land(&self, session: &mut Session, stop: Stop) -> Result<(), Failed> {
-        let system = stop.system.or_else(|| {
-            self.catalog
-                .listed_stellars()
-                .into_iter()
-                .find(|listed| listed.id == stop.stellar)
-                .and_then(|listed| listed.systems.first().copied())
-        });
-        let landed = match system {
-            Some(system) => session.land_at(self.catalog, system, stop.stellar),
-            None => Err(RelocateRefusal::NoSystem),
-        };
-        landed.map_err(|refusal| (Fault::CannotLand(refusal), Vec::new()))?;
+        let (system, stellar) = session.stop_landing(stop).map_err(|refusal| {
+            let fault = match refusal {
+                StopRefusal::NoSystem => Fault::CannotLand(RelocateRefusal::NoSystem),
+                StopRefusal::Hidden => Fault::StopHidden {
+                    stellar: stop.stellar,
+                },
+            };
+            (fault, Vec::new())
+        })?;
+        session
+            .land_at(self.catalog, system, stellar)
+            .map_err(|refusal| (Fault::CannotLand(refusal), Vec::new()))?;
         self.settle(session);
         Ok(())
     }

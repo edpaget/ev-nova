@@ -5,7 +5,7 @@ use crate::control::Test;
 use crate::cron::CronRefusal;
 use crate::mission::AcceptRefusal;
 use crate::testkit::{
-    FakePilotCatalog, catalog, cron, land_now, mission, planet, rank, with_variants,
+    FakePilotCatalog, catalog, cron, land_now, mission, planet, rank, swapped, with_variants,
 };
 
 const A: MissionId = MissionId(200);
@@ -884,6 +884,197 @@ fn a_return_in_no_system_is_reported() {
             Fault::CannotLand(RelocateRefusal::NoSystem),
             &[]
         ))
+    );
+}
+
+// A stop's visible variant
+
+const M: MissionId = MissionId(202);
+
+/// A at 128 back to 140 (b60), B at 128 back to 129 swapping 131's 140
+/// for 134's 141 (b50), and, with `marked`, 140 and 141 one place and
+/// name.
+fn swap_chain(marked: bool, more: Vec<MissionRecord>) -> FakePilotCatalog {
+    let mut missions = vec![errand(200, 128, 140, "b60"), errand(201, 128, 129, "b50")];
+    missions.extend(more);
+    swapped(galaxy(missions), marked)
+}
+
+#[test]
+fn a_chain_across_a_swap_goes_to_the_visible_variant() {
+    let catalog = swap_chain(true, vec![errand(202, 141, 128, "b61")]);
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog)
+        .walk(
+            &mut session,
+            &[
+                Step::Take(A),
+                Step::Take(B),
+                Step::Deliver(B),
+                Step::Deliver(A),
+                Step::Take(M),
+                Step::Deliver(M),
+            ],
+        )
+        .expect("walks");
+    assert!(
+        matches!(
+            walked.done[3],
+            Done::Delivered {
+                mission: A,
+                stellar: StellarId(141),
+                ..
+            }
+        ),
+        "{walked:?}"
+    );
+    assert!(
+        matches!(
+            walked.done[4],
+            Done::Took {
+                mission: M,
+                stellar: StellarId(141),
+                ..
+            }
+        ),
+        "{walked:?}"
+    );
+    assert!(session.control_bit(bit(60)) && session.control_bit(bit(61)));
+    assert_eq!(held(&session), []);
+}
+
+#[test]
+fn a_delivery_lands_in_the_variants_system() {
+    let catalog = swap_chain(true, Vec::new());
+    let mut session = docked(&catalog);
+    StoryWalker::new(&catalog)
+        .walk(
+            &mut session,
+            &[
+                Step::Take(A),
+                Step::Take(B),
+                Step::Deliver(B),
+                Step::Deliver(A),
+            ],
+        )
+        .expect("walks");
+    assert_eq!(session.landed(), Some(StellarId(141)));
+    assert_eq!(session.system(), SystemId(134));
+}
+
+#[test]
+fn a_hidden_destination_is_reached_at_its_visible_variant() {
+    let catalog = swap_chain(
+        true,
+        vec![MissionRecord {
+            travel_stel: 140,
+            ..errand(202, 128, 128, "b62")
+        }],
+    );
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog).walk(
+        &mut session,
+        &[
+            Step::Take(M),
+            Step::Take(B),
+            Step::Deliver(B),
+            Step::Deliver(M),
+        ],
+    );
+    assert!(walked.is_ok(), "{walked:?}");
+    assert!(session.control_bit(bit(62)), "completed");
+}
+
+#[test]
+fn a_take_never_lands_at_a_hidden_stellar() {
+    let catalog = swap_chain(true, vec![errand(202, 140, 128, "")]);
+    let mut session = docked(&catalog);
+    let Err(failure) = StoryWalker::new(&catalog).walk(
+        &mut session,
+        &[Step::Take(B), Step::Deliver(B), Step::Take(M)],
+    ) else {
+        panic!("140 is hidden");
+    };
+    assert_eq!((failure.step, failure.fault), (3, Fault::NotOffered));
+    assert!(
+        failure
+            .looked
+            .iter()
+            .all(|looked| looked.stellar != StellarId(140) && looked.system != SystemId(131)),
+        "{:?}",
+        failure.looked
+    );
+    assert!(!failure.looked.is_empty());
+}
+
+#[test]
+fn a_hidden_stop_with_no_visible_variant_is_reported_hidden() {
+    let catalog = swap_chain(false, Vec::new());
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog).walk(
+        &mut session,
+        &[
+            Step::Take(A),
+            Step::Take(B),
+            Step::Deliver(B),
+            Step::Deliver(A),
+        ],
+    );
+    assert_eq!(
+        walked,
+        Err(failure(
+            4,
+            Step::Deliver(A),
+            Fault::StopHidden {
+                stellar: StellarId(140)
+            },
+            &[50]
+        ))
+    );
+    assert_eq!(session.landed(), Some(StellarId(129)), "still docked");
+    assert_eq!(held(&session), [A]);
+}
+
+#[test]
+fn by_the_bible_a_hidden_stop_is_reported_hidden() {
+    let catalog = swap_chain(true, Vec::new());
+    let mut session =
+        docked(&catalog).with_rules(crate::rulebook::Rulebook::default().with_override(
+            crate::rulebook::RuleKey::MissionStellarIdentity,
+            crate::rulebook::RuleSource::Bible,
+        ));
+    let walked = StoryWalker::new(&catalog).walk(
+        &mut session,
+        &[
+            Step::Take(A),
+            Step::Take(B),
+            Step::Deliver(B),
+            Step::Deliver(A),
+        ],
+    );
+    assert_eq!(
+        walked.map_err(|failure| failure.fault),
+        Err(Fault::StopHidden {
+            stellar: StellarId(140)
+        })
+    );
+}
+
+#[test]
+fn a_hidden_stop_reads_as_hidden() {
+    let report = failure(
+        4,
+        Step::Deliver(A),
+        Fault::StopHidden {
+            stellar: StellarId(140),
+        },
+        &[50],
+    )
+    .to_string();
+    assert_eq!(
+        report,
+        "step 4 (deliver 200) failed: mission 200: stop stellar 140 is hidden, \
+         and no visible stellar shares its place and name\n  bits set: b50"
     );
 }
 
