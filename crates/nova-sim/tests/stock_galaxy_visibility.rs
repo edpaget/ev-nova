@@ -2,7 +2,8 @@
 //! parses, a pair of alternate systems swaps as the bit that selects them
 //! is set, and Aldebaran's two versions, both visible between Polaris
 //! missions 183 and 887, resolve to 141 by default (`colocated_resolution`
-//! engine). Skips, passing, when `NOVA_DATA` is unset.
+//! engine), and wormhole 466 shows only in Spica, which owns it. Skips,
+//! passing, when `NOVA_DATA` is unset.
 
 mod common;
 
@@ -10,9 +11,10 @@ use std::collections::BTreeSet;
 
 use nova_data::GameData;
 use nova_sim::control::{Bit, Gate, NovaBits, PilotFacts};
+use nova_sim::gate::{WormholeRule, wormhole_exit};
 use nova_sim::pilot::Gender;
-use nova_sim::story::{GalaxyOverlay, HiddenMove, OverlaidGalaxy};
-use nova_sim::{CoLocated, HyperlinkRule, OutfitId, PilotCatalog, StellarId, SystemId};
+use nova_sim::story::{GalaxyOverlay, HiddenMove, OverlaidGalaxy, listers_of};
+use nova_sim::{CoLocated, HyperlinkRule, NeverFires, OutfitId, PilotCatalog, StellarId, SystemId};
 
 /// A pilot with only these bits set, as a control-bit test reads it.
 #[derive(Debug)]
@@ -171,4 +173,59 @@ fn by_the_other_reading_both_versions_of_aldebaran_stand_for_themselves() {
     for stellar in [430, 433] {
         assert_eq!(owner(&data, &both, stellar), Some(532), "spöb {stellar}");
     }
+}
+
+/// Wormhole 466 is listed by Spica (144) and K-005 (436). K-005 is visible
+/// on a fresh pilot (its `Visibility` is `!b330`), but Spica, visible in
+/// every state (a blank `Visibility`) and the lower ID, owns it, so the
+/// original shows it in Spica alone (`_HandleStellarSystemVisibility`).
+#[test]
+fn wormhole_466_shows_in_spica_and_not_in_k005() {
+    let Some(data) = open() else {
+        return;
+    };
+    let galaxy = refreshed(&data, &[], CoLocated::Lowest);
+    let listed = data.listed_stellars();
+    assert_eq!(
+        listers_of(&listed, StellarId(466)),
+        [SystemId(144), SystemId(436)]
+    );
+    assert!(galaxy.visible(SystemId(436)));
+    assert_eq!(owner(&data, &galaxy, 466), Some(144));
+    assert!(
+        galaxy
+            .shown(&listed, SystemId(144))
+            .contains(&StellarId(466))
+    );
+    assert!(
+        !galaxy
+            .shown(&listed, SystemId(436))
+            .contains(&StellarId(466))
+    );
+}
+
+/// Spica's wormhole leads somewhere: another active wormhole owned by
+/// another system than Spica, unlinked, as `_PlayerEnterWormhole` takes
+/// its candidates by owner.
+#[test]
+fn the_spica_wormhole_has_exits() {
+    let Some(data) = open() else {
+        return;
+    };
+    let galaxy = refreshed(&data, &[], CoLocated::Lowest);
+    let listed = data.listed_stellars();
+    let sites = data.gate_sites();
+    let spica = SystemId(144);
+    let exit = wormhole_exit(
+        StellarId(466),
+        spica,
+        &sites,
+        |id| galaxy.holder(listers_of(&listed, id), spica),
+        WormholeRule::UnlinkedOnly,
+        &mut NeverFires,
+    )
+    .expect("an exit");
+    assert_ne!(exit.system, spica);
+    assert!(galaxy.visible(exit.system));
+    assert!(galaxy.shown(&listed, exit.system).contains(&exit.site.id));
 }
