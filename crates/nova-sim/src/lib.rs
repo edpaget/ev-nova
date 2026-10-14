@@ -421,9 +421,9 @@ pub use rulebook::{RuleKey, RuleSource, Rulebook};
 pub use save::SaveError;
 pub use saves::{PilotKeeper, PilotStore, pilot_key};
 pub use session::{
-    AbortError, AcceptError, ComputerRefusal, ComputerRow, Hailed, HookRules, InfoRow, LandPress,
-    MissionComputer, MissionInfo, MissionText, MissionTextKind, NotOffered, OfferPrompt,
-    PersonQuote, RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled,
+    AbortError, AcceptError, ComputerRefusal, ComputerRow, ESCAPE_POD_SHIP, Hailed, HookRules,
+    InfoRow, LandPress, MissionComputer, MissionInfo, MissionText, MissionTextKind, NotOffered,
+    OfferPrompt, PersonQuote, RelocateRefusal, ScriptEffectRules, Session, SessionEvent, Settled,
     ShipChangeRules, StellarPick, VenueOffer,
 };
 pub use ship_layer::ShipLayer;

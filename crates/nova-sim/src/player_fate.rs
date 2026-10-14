@@ -19,7 +19,8 @@
 //! - [`FateRow::drag`] (a disabled hull's 0.995 slowdown): phase 3.
 //! - [`FateRow::input`] ([`Takes`], which [`PlayerCommand`]s a state
 //!   accepts): phase 4.
-//! - [`FateRow::saves`] (whether the pilot may be saved): phase 6.
+//! - [`FateRow::saves`] (whether the pilot may be saved, and so whether
+//!   the player is dying for phase 7's strict-play delete): phase 6.
 //!
 //! Condition changes stay where they are, in the fight's
 //! `update_condition`; a fate is only read off them, so it adds no
@@ -149,8 +150,9 @@ pub struct FateRow {
     /// armour at 0 or below) reads it. The original's saves can't come
     /// while dying (`_SavePilotFile` @0x76876 is called only on creation,
     /// landing and pod rescue), and nothing saves after the death, so no
-    /// route here saves a dying or dead pilot either. Phase 7's strict-play
-    /// delete reads the same answer.
+    /// route here saves a dying or dead pilot either. The strict-play
+    /// delete (`Session::deletes_pilot_on_ending_play`, phase 7) reads the
+    /// same answer as `_IsDying`: a pilot that may not be saved is dying.
     pub saves: bool,
 }
 

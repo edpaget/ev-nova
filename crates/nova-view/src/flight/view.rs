@@ -2040,6 +2040,16 @@ impl<
         self.session.as_ref().is_ok_and(Session::may_save)
     }
 
+    /// Whether ending play now deletes the pilot, as
+    /// [`Session::deletes_pilot_on_ending_play`] says: a strict-play pilot
+    /// dying outside the escape pod. Never without a session.
+    #[must_use]
+    pub fn deletes_pilot_on_ending_play(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_ok_and(Session::deletes_pilot_on_ending_play)
+    }
+
     /// Moves the death's fade on by `dt`, and ends play once it is over;
     /// nothing else moves.
     fn advance_death_fade(&mut self, dt: Duration) {
@@ -10897,6 +10907,37 @@ mod tests {
         failed.begin_fade();
         failed.tick(Duration::from_secs(2));
         assert!(!failed.game_over());
+    }
+
+    #[test]
+    fn only_a_strict_pilot_ending_play_dying_is_deleted() {
+        let strict = |catalog: FakeCatalog| {
+            let pilot = Pilot::new(&catalog, "Ada")
+                .expect("starts")
+                .with_strict_play(true);
+            let (_, chance) = scripted(&placed(750, 650, 180));
+            let mut view = FlightView::with_pilot(catalog, pilot)
+                .with_chance(chance)
+                .with_behaviour(Rc::new(Firing));
+            view.tick(TICK);
+            view
+        };
+        let mut view = strict(killed_in(1));
+        assert!(!view.deletes_pilot_on_ending_play(), "flying");
+        until_the_player_explodes(&mut view, |_| {});
+        assert!(view.deletes_pilot_on_ending_play(), "exploded");
+        assert!(
+            !at_the_explosion().deletes_pilot_on_ending_play(),
+            "not a strict pilot"
+        );
+        let failed = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..killed_in(1)
+        });
+        assert!(
+            !failed.deletes_pilot_on_ending_play(),
+            "no session, no pilot to delete"
+        );
     }
 
     /// Whether `list` draws `run` as one unbroken run of commands.

@@ -473,6 +473,12 @@ use crate::traffic::table::SpawnTable;
 use crate::traffic::{Traffic, World, strength};
 use crate::wares::DayRolls;
 
+/// The escape pod's ship class, `shïp` 895 "Escape Pod": the original's
+/// class index 0x2ff (the ID less 128), which `_EnterGameFromMainScreen`
+/// tests (@0x1a4c5) to spare a strict pilot who ejected in it. Only the
+/// pod branch of the player's eject sets it (@0x6f64a, phase 9).
+pub const ESCAPE_POD_SHIP: ShipId = ShipId(895);
+
 /// What [`Session::tick_combat`] works out for a ship's [`Fighter`]
 /// beyond what the ship carries.
 #[derive(Clone, Copy, Debug)]
@@ -1510,6 +1516,19 @@ impl Session {
     #[must_use]
     pub fn may_save(&self) -> bool {
         self.player_fate().row().saves
+    }
+
+    /// Whether ending play now deletes the pilot: `_EnterGameFromMainScreen`'s
+    /// gate after `_PlayGame` returns (@0x1a4ab-0x1a4e1). A strict-play
+    /// pilot whose player is dying (`_IsDying` @0x253d, which the fate
+    /// table's [`crate::FateRow::saves`] already answers) and is not in
+    /// the [`ESCAPE_POD_SHIP`] has its pilot file deleted
+    /// (`_DeletePilotFile` @0x1a4d9). The original also writes a crash log
+    /// line there (`_crashlog` @0x1a4cd), a debugging aid the engine has no
+    /// use for, so it is left out. The gate makes no sound.
+    #[must_use]
+    pub fn deletes_pilot_on_ending_play(&self) -> bool {
+        self.pilot.strict_play() && !self.may_save() && self.pilot.ship != ESCAPE_POD_SHIP
     }
 
     /// Sounds the thrust starting or stopping as `thrust` says, and ramps
@@ -15266,6 +15285,105 @@ pub(super) mod tests {
             session.player_end = Some(ending);
             assert!(!session.may_save(), "{ending:?}");
         }
+    }
+
+    #[test]
+    fn only_a_strict_pilot_ending_play_dying_outside_the_pod_is_deleted() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        let breaking_up = |starting| Condition::Dying {
+            ticks_left: 9,
+            starting,
+        };
+        // Each fate, set up directly, and whether the player is dying in
+        // it (`_IsDying`).
+        let fates = [
+            (Condition::Intact, false, None, PlayerFate::Flying, false),
+            (
+                Condition::Disabled,
+                false,
+                None,
+                PlayerFate::Disabled,
+                false,
+            ),
+            (
+                breaking_up(true),
+                false,
+                None,
+                PlayerFate::BreakingUp {
+                    ticks_left: 9,
+                    starting: true,
+                },
+                true,
+            ),
+            (
+                breaking_up(false),
+                false,
+                None,
+                PlayerFate::BreakingUp {
+                    ticks_left: 9,
+                    starting: false,
+                },
+                true,
+            ),
+            (Condition::Destroyed, true, None, PlayerFate::Exploded, true),
+            (
+                Condition::Destroyed,
+                false,
+                Some(Ending::Holding { ticks_left: 9 }),
+                PlayerFate::Holding { ticks_left: 9 },
+                true,
+            ),
+            (
+                Condition::Destroyed,
+                false,
+                Some(Ending::Expired),
+                PlayerFate::Holding { ticks_left: 0 },
+                true,
+            ),
+            (
+                Condition::Destroyed,
+                false,
+                Some(Ending::Fading),
+                PlayerFate::Fading,
+                true,
+            ),
+            (
+                Condition::Destroyed,
+                false,
+                Some(Ending::GameOver),
+                PlayerFate::GameOver,
+                true,
+            ),
+        ];
+        // The escape ship keeps a real class (`_EscapeShipType` @0x6f4bb);
+        // only the pod is spared.
+        for (condition, exploded, ending, fate, dying) in fates {
+            for strict in [false, true] {
+                for (ship, pod) in [
+                    (ShipId(128), false),
+                    (ShipId(144), false),
+                    (ESCAPE_POD_SHIP, true),
+                ] {
+                    session.condition = condition;
+                    session.player_exploded_this_tick = exploded;
+                    session.player_end = ending;
+                    session.pilot.strict_play = strict;
+                    session.pilot.ship = ship;
+                    assert_eq!(session.player_fate(), fate);
+                    assert_eq!(
+                        session.deletes_pilot_on_ending_play(),
+                        strict && dying && !pod,
+                        "{fate:?} strict {strict} {ship:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_escape_pod_is_ship_895() {
+        assert_eq!(ESCAPE_POD_SHIP, ShipId(895));
     }
 
     #[test]
