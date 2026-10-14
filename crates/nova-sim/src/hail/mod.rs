@@ -369,8 +369,10 @@ impl Answer {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HailRefusal {
     /// There is no ship to hail: no ship target, or the player is landed,
-    /// jumping or breaking up. Nothing is said. (With no ship target the
-    /// original hails the navigation planet; that is not done here.)
+    /// breaking up, or braking for or making a jump (@0x61f87). Nothing is
+    /// said. (With no ship target the original hails the navigation
+    /// planet; that is not done here. Its beep on the jump's refusal,
+    /// `snd ` 153, is player-death phase 16's.)
     NoTarget,
     /// "No response." (`STR#` 2002 #53): the target is disabled, or mute
     /// (see [`Dispositions`]).

@@ -171,7 +171,10 @@ impl Session {
 
     /// The player's target, when it answers a hail, drawing nothing:
     /// otherwise [`HailRefusal::NoTarget`] with no target, or while landed,
-    /// jumping or breaking up; [`HailRefusal::InHyperspace`] for a target
+    /// breaking up, or a jump is under way, the pre-jump stage included
+    /// (`_HandlePlayerCommunication` refuses while the jump state +0x50 > 0,
+    /// @0x61f87, which spans the brake; its `snd ` 153 beep, @0x626cf-0x626f2,
+    /// is not raised here); [`HailRefusal::InHyperspace`] for a target
     /// still jumping in; and [`HailRefusal::NoResponse`] for a disabled or
     /// mute one, an escort answering whatever its government says.
     pub(super) fn answering(&self) -> Result<&Npc, HailRefusal> {
@@ -179,7 +182,7 @@ impl Session {
             self.condition,
             Condition::Dying { .. } | Condition::Destroyed
         );
-        if self.landed.is_some() || self.jumping().is_some() || !flying {
+        if self.landed.is_some() || self.jump.is_some() || !flying {
             return Err(HailRefusal::NoTarget);
         }
         let npc = self.target().ok_or(HailRefusal::NoTarget)?;
@@ -814,18 +817,23 @@ mod tests {
     #[test]
     fn with_no_target_or_while_landed_jumping_or_dying_nothing_is_hailed() {
         let catalog = hailable();
-        // Boxed: five sessions are too large for the stack together.
+        // Boxed: six sessions are too large for the stack together.
         let mut untargeted = Box::new(targeting(&catalog));
         untargeted.target = None;
         let mut landed = Box::new(targeting(&catalog));
         landed.landed = Some(StellarId(128));
         let mut jumping = Box::new(targeting(&catalog));
         jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
+        let mut braking = Box::new(targeting(&catalog));
+        braking.jump = Some(crate::session::Jump::PreJump {
+            to: SystemId(131),
+            bearing: None,
+        });
         let mut dying = Box::new(targeting(&catalog));
         dying.condition = Condition::Dying { ticks_left: 3 };
         let mut destroyed = Box::new(targeting(&catalog));
         destroyed.condition = Condition::Destroyed;
-        for mut session in [untargeted, landed, jumping, dying, destroyed] {
+        for mut session in [untargeted, landed, jumping, braking, dying, destroyed] {
             let (hailed, asked) = hail_with(&mut session, &catalog, &opening(0));
             assert_eq!(hailed, Err(HailRefusal::NoTarget));
             assert!(asked.is_empty(), "{asked:?}");

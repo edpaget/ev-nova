@@ -1732,7 +1732,10 @@ impl Session {
     /// at its target, by `rules`, drawing each shot's inaccuracy and
     /// spread on `chance` (see [`Combat::tick`]); each NPC destroyed is taken out of
     /// the system, and the target is let go once it is breaking up or
-    /// gone. While the ship is landed or jumping, it stands still.
+    /// gone. While the ship is landed or jumping, it stands still. While
+    /// it brakes and turns for a jump ([`Session::preparing_jump`]) the
+    /// fight goes on, but the player's held trigger fires nothing but its
+    /// point defence (see `player_trigger`, @0x6aaf0 and @0x6ab75).
     ///
     /// Each NPC intact before the tick and no longer raises
     /// [`Fate::Disabled`], and each destroyed raises [`Fate::Destroyed`]
@@ -1785,7 +1788,7 @@ impl Session {
             hull: self.hull,
             shield_regen: self.stats.shield_regen,
             armor_regen: self.stats.armor_regen,
-            trigger: player_trigger(self.trigger),
+            trigger: player_trigger(self.trigger, self.jump.is_some()),
             target: self.target.map(ShipRef::Npc),
             reserves: &mut pilot.reserves,
             condition: &mut self.condition,
@@ -2009,12 +2012,17 @@ impl Session {
     /// Picks the player's target as `pick` says (see
     /// [`targeting`](crate::targeting)), and gives it: the nearest NPC, or
     /// the nearest threat, the target unchanged when there is none; or the
-    /// next or the previous. While the ship is landed or jumping, nothing
-    /// changes. A pick that changes the target starts its brackets' fly-in
+    /// next or the previous. While the ship is landed, nothing changes.
+    /// A jump under way changes nothing: the original's Target Select and
+    /// Closest Target blocks (`_HandlePlayer` @0x69f1c-0x69ffb,
+    /// @0x6a9c4-0x6aae7) and the searches they call read no jump state,
+    /// so the target keys pick from the system being left, the stage in
+    /// hyperspace included, until arrival clears the target. A pick that
+    /// changes the target starts its brackets' fly-in
     /// ([`Session::target_brackets`]).
     pub fn select_target(&mut self, pick: TargetPick) -> Option<NpcId> {
         let before = self.target;
-        if self.landed.is_none() && self.jumping().is_none() {
+        if self.landed.is_none() {
             let scanner = self.scanner();
             let npcs = self.traffic.npcs();
             let from = self.player.position;
@@ -3848,7 +3856,7 @@ impl Session {
         self.ship_record(ship).map_or(0, |record| record.crew)
     }
 
-    /// Boards the player's target, if it is not landed or jumping and the
+    /// Boards the player's target, if it is not landed and the
     /// [`board`](crate::board) checks allow it, and gives what is on
     /// board: the player matches the target's velocity, `law` convicts it
     /// of the [`Crime::Board`] against the target's government and the
@@ -3878,7 +3886,12 @@ impl Session {
     /// # Errors
     ///
     /// The [`BoardRefusal`] that applies, and nothing changes;
-    /// [`BoardRefusal::NoTarget`] while landed or jumping. A `PickupMode`
+    /// [`BoardRefusal::NoTarget`] while landed. A jump under way refuses
+    /// nothing up front: `_HandlePlayerBoardAttempt` (0x65000-0x66064)
+    /// reads no jump state, so the checks run on the ship as it brakes, or
+    /// in the hyperspace stage on the session as it was when the jump
+    /// began (the original's ship sits braking in the old system then,
+    /// its velocity × 0.98 a frame, @0x6bb32-0x6bb59). A `PickupMode`
     /// 2 mission's special ship whose cargo has no room is
     /// [`BoardRefusal::CantBoard`], and the pickup's refusal is queued
     /// as a mission text, as `_DoMissionCargoPickup` shows its dialog
@@ -3890,7 +3903,7 @@ impl Session {
         rule: &dyn BoardingRule,
         chance: &mut dyn Chance,
     ) -> Result<Boarding, BoardRefusal> {
-        if self.landed.is_some() || self.jumping().is_some() {
+        if self.landed.is_some() {
             return Err(BoardRefusal::NoTarget);
         }
         let target = self.target().map(|npc| BoardTarget {
@@ -4659,7 +4672,18 @@ fn overlaid_sites(
 /// defence running every tick (`_HandlePlayer` @0x68c74; a disabled ship's
 /// fires nothing,
 /// [`Armament::fire_point_defence`](crate::combat::armament::Armament::fire_point_defence)).
-fn player_trigger(held: Trigger) -> Trigger {
+/// While a jump is under way (`jumping`), the pre-jump stage included,
+/// only the point defence fires: the fire keys' blocks run only while the
+/// jump state +0x50 ≤ 0 (@0x6aaf0 primary, @0x6ab75 secondary). The held
+/// trigger itself is kept, so a fire key held through arrival fires on the
+/// first tick after it.
+fn player_trigger(held: Trigger, jumping: bool) -> Trigger {
+    if jumping {
+        return Trigger {
+            point_defence: true,
+            ..Trigger::default()
+        };
+    }
     Trigger {
         point_defence: true,
         ..held
@@ -14956,7 +14980,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_target_is_kept_through_a_jump_and_cleared_on_arrival() {
+    fn the_target_keys_pick_during_a_jump_and_arrival_clears_the_target() {
         let mut catalog = trafficked(130, 2, 3);
         catalog.traffic.push((SystemId(131), catalog.traffic[0].1));
         let mut session = two_npcs(&catalog);
@@ -14964,11 +14988,11 @@ pub(super) mod tests {
         session.plot_course(SystemId(131)).expect("a route");
         fly_out(&mut session);
         begin_jump_now(&mut session).expect("jumps");
-        assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(0)));
-        assert_eq!(session.select_target(TargetPick::Nearest), Some(NpcId(0)));
+        assert_eq!(target_id(&session), Some(NpcId(0)));
+        assert_eq!(session.select_target(TargetPick::Next), Some(NpcId(1)));
         session.tick_traffic(&catalog, &Idling, &mut NeverFires);
         session.tick_combat(Rules::default(), &mut NeverFires);
-        assert_eq!(target_id(&session), Some(NpcId(0)), "kept while jumping");
+        assert_eq!(target_id(&session), Some(NpcId(1)), "kept while jumping");
         session.arrive(&catalog, &mut NeverFires).expect("arrives");
         assert!(!session.npcs().is_empty());
         assert_eq!(target_id(&session), None, "cleared on arrival");
@@ -15720,6 +15744,29 @@ pub(super) mod tests {
         session.hold_fire(true, false);
         session.tick_combat(Rules::default(), &mut NeverFires);
         assert_eq!(session.shots(), [], "no target, no fire");
+    }
+
+    #[test]
+    fn the_fire_keys_fire_nothing_while_a_jump_is_under_way() {
+        let catalog = armed();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        session.hold_fire(true, false);
+        session.begin_jump().expect("accepted");
+        assert_eq!(session.preparing_jump(), Some(SystemId(131)), "braking");
+        for _ in 0..5 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+        }
+        assert_eq!(session.shots(), [], "nothing fired while braking");
+        begin_jump_now(&mut session).expect("jumps");
+        session.arrive(&catalog, &mut NeverFires).expect("arrives");
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(
+            session.shots().len(),
+            1,
+            "the held trigger fires on arrival"
+        );
     }
 
     /// A homing missile: 10 pixels a tick for 60 ticks, turning 7 degrees
@@ -16629,19 +16676,31 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn nothing_is_boarded_while_landed_or_jumping() {
+    fn nothing_is_boarded_while_landed() {
+        let catalog = boardable();
+        let mut session = alongside(&catalog);
+        session.landed = Some(StellarId(128));
+        assert_eq!(
+            board_by(&mut session, &NovaLaw::default()),
+            Err(BoardRefusal::NoTarget)
+        );
+    }
+
+    #[test]
+    fn a_board_during_a_jump_runs_its_checks() {
         let catalog = boardable();
         let mut session = alongside(&catalog);
         session.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
         assert_eq!(
             board_by(&mut session, &NovaLaw::default()),
-            Err(BoardRefusal::NoTarget)
+            Ok(Boarding::Opened(ON_BOARD))
         );
-        session.jump = None;
-        session.landed = Some(StellarId(128));
+        let mut session = alongside(&catalog);
+        session.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
+        session.traffic.npcs_mut()[0].state.position = Vec2::new(0.0, 500.0);
         assert_eq!(
             board_by(&mut session, &NovaLaw::default()),
-            Err(BoardRefusal::NoTarget)
+            Err(BoardRefusal::TooFar)
         );
     }
 
