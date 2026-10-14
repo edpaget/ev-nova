@@ -74,6 +74,7 @@
 //! | [`PurchaseCargo`](RuleKey::PurchaseCargo) | `purchase_cargo` | a ship purchase trims the commodities to the new fleet's holds, counting the mission cargo aboard but never cutting it, then keeps each commodity's share A/B (the new ship's cargo space over that plus the trader escorts' `Holds`, uncapped) and loses that share of each `jünk`, then trims again (`_SystemInfoToShipStats` @0x5ee99, `_DestroyPartialFleetCargo` @0xcd32-0xcff6, each ending in `_ResetPlayerPrecalcedValues` @0xc7d8-0xc82c; `_TotalCargo` @0x4a0b called @0xc7ea; [`Session`](crate::Session)) | the mission cargo aboard takes the new ship's own cargo space first and always stays, and the goods that fit in the rest are kept, in order†† |
 //! | [`OutfitSaleCargo`](RuleKey::OutfitSaleCargo) | `outfit_sale_cargo` | an outfit sale that leaves the fleet's holds below the cargo trims the commodities, as the sale's resets do (`_DoOutfitDialog` @0x5cff6, @0x5cffb; `_ResetPlayerPrecalcedValues` @0xc7d8-0xc887; [`Session`](crate::Session)) | no reset through the sale trims: the cargo stays past the hold until the next reset after it\* |
 //! | [`ReleaseCargoShare`](RuleKey::ReleaseCargoShare) | `release_cargo_share` | an escort released by hail takes its share of the fleet's cargo whatever its ship type, as the release tests no `InherentAI` (`_DoCommDialog` @0x96864, `_DoEscortDialog` @0x9549d, @0x9561d; [`Session`](crate::Session)) | only a trader takes a share, as for every other escort lost\* |
+//! | [`CaptureCargo`](RuleKey::CaptureCargo) | `capture_cargo` | Use As My Ship leaves the commodities with the old ship, the player taking the captured ship's, which carries none (`_DoShipCapture` @0x412e6-0x412fe, @0x41762-0x41779; [`Session`](crate::Session)) | the player keeps every commodity; either way the reset (@0x41a3e) trims them to the new fleet's holds\* |
 //! | [`JunkPrice`](RuleKey::JunkPrice) | `junk_price` | a `jünk` price is signed, with no floor: a negative one is listed, bought at 0 tons and sold at a loss that can leave the cash below 0, and a row priced 0 is not listed (`_DoTradeDialog` @0x5dddb, @0x5de2f, @0x5e27d, @0x5e543-0x5e546; `_TradeDialogUpdate` @0x4d2a2-0x4d2ac; [`Session`](crate::Session)) | a `jünk` price is never below 0, and a row priced 0 is listed and bought free, limited by space‡‡ |
 //! | [`JunkTrade`](RuleKey::JunkTrade) | `junk_trade` | every listed `jünk` row is bought and sold at its own price, the order naming the row (`_CanBuyGoods` @0xccec, `_CanSellGoods` @0x4a94, `_DrawTradeButtons` @0x2938f/0x2939d, `_TrackTradeButtons` @0x2960d/0x2963e; [`Session`](crate::Session)) | the `SoldAt` row is bought only and the `BoughtAt` row sold only, as the Bible's "`SoldAt` … where the commodity is sold" and "`BoughtAt` … where the commodity is purchased" say |
 //! | [`OutfitLimit`](RuleKey::OutfitLimit) | `outfit_limit` | a map (`ModType` 16) or clean-record (`ModType` 21) outfit is refused while the last outfit bought since the outfitter opened was of its kind; any other buy, or opening the outfitter again, lifts it (`_CanBuyOutfitItem` @0x4e8bc-0x4e9c5, `_GrantOutfitItem` @0x44d67-0x44f8b, `_DoOutfitDialog` @0x5bb37-0x5bb44; [`Session`](crate::Session)) | no limit§§ |
@@ -159,7 +160,7 @@
 //! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
 //! `hud_cadence`, `alert_blink`, `blessing_refresh`, `explored_by_place`,
 //! `route_rewrite`, `scan_outfits_past_junk`, `gate_escorts`,
-//! `lost_cargo_share`, `outfit_sale_cargo`, `release_cargo_share`,
+//! `lost_cargo_share`, `outfit_sale_cargo`, `release_cargo_share`, `capture_cargo`,
 //! `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
 //! price), `hidden_ship_hover_box` or `comm_quote`
@@ -1048,6 +1049,23 @@ rule_keys! {
     /// of it, so the other reading is the obvious alternative, not
     /// anything the Bible says (see the session's `escorts` module).
     ReleaseCargoShare => "release_cargo_share",
+    /// What becomes of the commodities on Use As My Ship. By the engine,
+    /// they stay with the old ship as it joins the fleet:
+    /// `_DoShipCapture` copies them into the old ship's slot
+    /// (@0x412e6-0x412fe) and sets the player's from the captured ship's
+    /// (@0x41762-0x41779), and the engine's ships carry no cargo, so the
+    /// player keeps none. The `jünk` and the mission cargo, which are the
+    /// player's alone, stay. By the other reading the player keeps every
+    /// commodity. Either way the reset of its `_SystemInfoToShipStats`
+    /// (@0x41a3e) then trims the commodities to the new fleet's holds,
+    /// the old ship's among them when it is a trader. The capture's
+    /// `_DestroyPartialFleetCargo` (@0x41438) is in a branch only a second
+    /// argument other than 0 reaches, and its one caller
+    /// (`_DoPlunderDialog` @0x94515) passes 0, so no share is cut. The
+    /// Bible says nothing of it, so the other reading is the obvious
+    /// alternative, not anything the Bible says (see
+    /// [`Session::assign`](crate::Session::assign)).
+    CaptureCargo => "capture_cargo",
     /// How a `jünk` of negative or zero price is traded. By the engine,
     /// `_DoTradeDialog` stores a `jünk`'s high price (@0x5dddb) and low
     /// price (@0x5de2f) in 16 bits with no floor, and every reader takes
@@ -2750,6 +2768,11 @@ mod tests {
             RuleKey::from_key("release_cargo_share"),
             Some(RuleKey::ReleaseCargoShare)
         );
+        assert_eq!(RuleKey::CaptureCargo.key(), "capture_cargo");
+        assert_eq!(
+            RuleKey::from_key("capture_cargo"),
+            Some(RuleKey::CaptureCargo)
+        );
         assert_eq!(RuleKey::EventPrice.key(), "event_price");
         assert_eq!(RuleKey::from_key("event_price"), Some(RuleKey::EventPrice));
         assert_eq!(RuleKey::RaisedMax.key(), "raised_max");
@@ -2888,6 +2911,7 @@ mod tests {
                 RuleKey::PurchaseCargo,
                 RuleKey::OutfitSaleCargo,
                 RuleKey::ReleaseCargoShare,
+                RuleKey::CaptureCargo,
                 RuleKey::JunkPrice,
                 RuleKey::JunkTrade,
                 RuleKey::OutfitLimit,

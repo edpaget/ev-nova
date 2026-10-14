@@ -81,8 +81,10 @@
 //! [`ESCORT_ARMOR_SHARE`] of its most; or, "Use As My Ship", the player
 //! takes it over, while a ship slot is free in the system
 //! ([`MAX_SHIPS_IN_SYSTEM`]) for the old ship, which joins the fleet with
-//! its class's stock loadout, full; with no slot free the whole swap is
-//! dropped. A player of no crew captures straight into the fleet. The
+//! its class's stock loadout, full, and by the engine reading of
+//! [`RuleKey::CaptureCargo`] the player's commodities with it; with no
+//! slot free the whole swap is dropped. A player of no crew captures
+//! straight into the fleet. The
 //! captured class's `OnCapture` runs before it joins the fleet, and on
 //! "Use As My Ship" the old class's `OnRetire` runs first; no hook runs
 //! when the swap is dropped (see the session's `hooks`).

@@ -4327,22 +4327,31 @@ impl Session {
     /// swap (see the `hooks` module). The change of class is applied by
     /// [`Session::become_class`], with the reserves held. "Use As My
     /// Ship" leaves no secondary selected (`_DoShipCapture` @0x4173e);
-    /// "Use As Escort" leaves it as it is.
+    /// "Use As Escort" leaves it as it is. By the engine reading of
+    /// [`RuleKey::CaptureCargo`], "Use As My Ship" leaves the commodities
+    /// with the old ship, the `jünk` and the mission cargo staying with the
+    /// player; by the other, the player keeps them. The session then resets
+    /// twice with the old ship in the fleet (@0x419fd, @0x41a3e) and once
+    /// more as the plunder dialog closes (@0x94a0b), each trim cutting the
+    /// commodities to the new fleet's holds while they are past them;
+    /// every other assignment resets once, as the dialog closes (see the
+    /// `precalced` module).
     pub fn assign(&mut self, choice: Assignment, chance: &mut dyn Chance) -> Option<Assigned> {
         let aboard = self.aboard.filter(|aboard| aboard.captured)?;
-        self.close_plunder();
-        let npc = self
-            .npcs()
-            .iter()
-            .find(|npc| npc.id == aboard.npc)
-            .cloned()?;
+        self.aboard = None;
+        let Some(npc) = self.npcs().iter().find(|npc| npc.id == aboard.npc).cloned() else {
+            self.close_plunder();
+            return None;
+        };
         if choice == Assignment::Escort {
             self.ship_hook(npc.ship, ShipHook::Capture, chance);
             self.join_fleet(npc.id);
+            self.close_plunder();
             return Some(Assigned::Escort);
         }
         let record = self.ship_record(npc.ship).cloned();
         let Some(record) = record.filter(|_| self.npcs().len() + 1 < MAX_SHIPS_IN_SYSTEM) else {
+            self.close_plunder();
             return Some(Assigned::Abandoned);
         };
         let hooks_first = self.hook_rules().capture_hook_order == RuleSource::Engine;
@@ -4393,6 +4402,14 @@ impl Session {
         // No secondary is selected on the captured ship (`_DoShipCapture`
         // @0x4173e).
         self.secondary = None;
+        // The commodities stay with the old ship, the player taking the
+        // captured ship's, which the engine's ships carry none of
+        // (@0x412e6-0x412fe, @0x41762-0x41779), as `capture_cargo` reads.
+        if self.rules.source_for(RuleKey::CaptureCargo) == RuleSource::Engine {
+            self.pilot
+                .cargo
+                .retain(|good, _| !matches!(good, Good::Commodity(_)));
+        }
         self.player = npc.state;
         for other in self.traffic.npcs_mut() {
             if other.leader == Some(npc.id) {
@@ -4409,6 +4426,13 @@ impl Session {
         if let Some(id) = placed {
             self.snap(id);
         }
+        // `_DoShipCapture`'s two resets (`_ShipStatsToSystemInfo` @0x419fd,
+        // `_SystemInfoToShipStats` @0x41a3e), the old ship in the fleet,
+        // then the plunder dialog's close (@0x94a0b): each trims again
+        // while `jünk` or mission cargo keep the fleet past its holds.
+        self.reset_precalced();
+        self.reset_precalced();
+        self.close_plunder();
         Some(Assigned::MyShip)
     }
 
@@ -17630,6 +17654,50 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn use_as_my_ship_leaves_the_commodities_with_the_old_ship_unless_the_other_reading_keeps_them()
+    {
+        use crate::scan::Latches;
+        use crate::session::precalced::tests::{JUNK, convicted};
+        for (source, kept) in [(RuleSource::Engine, None), (RuleSource::Bible, Some(33))] {
+            let catalog = kitted();
+            let mut session = alongside(&catalog)
+                .with_rules(Rulebook::default().with_override(RuleKey::CaptureCargo, source));
+            board_by(&mut session, &NovaLaw::default()).expect("boards");
+            assert_eq!(
+                take(&mut session, Take::Capture, &[0, 1]).0,
+                Taken::Captured
+            );
+            session.pilot.cargo = BTreeMap::from([(Good::Commodity(2), 50), (JUNK, 4)]);
+            session
+                .pilot
+                .missions
+                .put(0, crate::testkit::carrying(140, 3));
+            convicted(&mut session);
+            assert_eq!(
+                session.assign(Assignment::MyShip, &mut Draws::of(&[0])),
+                Some(Assigned::MyShip)
+            );
+            assert_eq!(session.capacity(), 40, "the new 20 and the old ship's 20");
+            let mut want = BTreeMap::from([(JUNK, 4)]);
+            if let Some(tons) = kept {
+                want.insert(Good::Commodity(2), tons);
+            }
+            assert_eq!(
+                session.pilot().cargo().collect::<BTreeMap<_, _>>(),
+                want,
+                "{source:?}: the jünk kept; by the other reading 50 x 40/57, 35, \
+                 then 35 x 40/42, as the resets trim with the old ship in the \
+                 fleet (@0x419fd, @0x41a3e; @0x94a0b finds them in)"
+            );
+            assert_eq!(
+                session.pilot().missions().get(0).map(|m| m.cargo_tons),
+                Some(3)
+            );
+            assert_eq!(session.scan_latches, Latches::ARMED, "{source:?}");
+        }
+    }
+
+    #[test]
     fn use_as_my_ship_swaps_the_player_into_the_captured_ship_and_keeps_the_old_one() {
         let catalog = kitted();
         let mut session = alongside(&catalog);
@@ -17688,7 +17756,12 @@ pub(super) mod tests {
             [(OutfitId(400), 1), (OutfitId(402), 1)],
             "the persistent kept, the rest gone, the new ship's default items fitted"
         );
-        assert_eq!(session.pilot().cargo().collect::<Vec<_>>(), held);
+        assert!(!held.is_empty());
+        assert_eq!(
+            session.pilot().cargo().collect::<Vec<_>>(),
+            [],
+            "the commodities stay with the old ship (@0x41762-0x41779)"
+        );
         assert_eq!(session.pilot().cash(), 777);
         assert_eq!(session.stats(), ShipStats::new(FAST, &[]));
         assert_eq!(session.hull(), session.arsenal.hull(ShipId(129)));

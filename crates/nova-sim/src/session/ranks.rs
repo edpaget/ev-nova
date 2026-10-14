@@ -59,7 +59,8 @@
 //! at each of the original's calls of `_ResetPlayerPrecalcedValues`
 //! (see the `precalced` module for every site): game entry, leaving a
 //! stellar, a jump's arrival, a landing, the end of every set expression
-//! that is not empty, an outfit bought or sold, a ship bought, a
+//! that is not empty, an outfit bought or sold, a ship bought or taken
+//! as the player's, a
 //! jettison, the plunder dialog closing, a mission cargo pickup or
 //! drop-off, and an escort's share of the cargo destroyed. So a `K` or
 //! `L` blesses, or stops blessing, as its set

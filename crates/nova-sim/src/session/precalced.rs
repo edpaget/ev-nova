@@ -20,7 +20,8 @@
 //! | `_HandlePlayerDockRequest` @0x6709b | a take-off ([`Session::take_off`]) and a gate exit, before the setup |
 //! | `_HandlePlayer` @0x6c51f | a jump's arrival ([`Session::arrive`]), after the days, the enter-system hook and the setup |
 //! | `_JettisonCargo` @0x3e3b5, the jettison key's @0x6fdaf | [`Session::jettison_cargo`]; every good is gone by then, so its trim never cuts |
-//! | `_DoPlunderDialog` @0x94a0b | the plunder dialog closing |
+//! | `_DoPlunderDialog` @0x94a0b | the plunder dialog closing, an assignment's once the ship is assigned |
+//! | `_DoShipCapture`'s `_ShipStatsToSystemInfo` @0x419fd and `_SystemInfoToShipStats` @0x41a3e | Use As My Ship ([`Session::assign`]), after the swap of the commodities [`RuleKey::CaptureCargo`] reads, the old ship in the fleet |
 //! | `_DoMissionCargoPickup` @0x98316 | a pickup that fits, from a boarding or a landing, before the cargo is aboard |
 //! | `_MissionLandCargoCheck` @0x9eff9 | a drop-off that shows its `DumpCargoText`, the only one the original resets after (@0x9ef82) |
 //! | `_PlayerLandOnStellar`'s `_ShipStatsToSystemInfo` @0x63211 | a landing, before the port takes its prices |
