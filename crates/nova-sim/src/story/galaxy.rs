@@ -1452,6 +1452,16 @@ mod tests {
             "an owner alone at its place"
         );
 
+        let galaxy = hiding(&[2]);
+        let places = galaxy.map().places();
+        let rescued = whereabouts(&galaxy, &[2, 5], 5);
+        assert_eq!(rescued, at(Some(5), Some(5)), "3 shadows 5: rescued");
+        assert_eq!(
+            rescued.travel(places),
+            Some(SystemId(3)),
+            "the visible 3 stands in for 5, not the hidden chain head 2"
+        );
+
         let galaxy = hiding(&[2, 3, 4, 5]);
         let places = galaxy.map().places();
         let hidden = whereabouts(&galaxy, &[4, 5], 5);
@@ -1478,6 +1488,14 @@ mod tests {
             whereabouts(&galaxy, &[3], 1).named(places),
             Some(SystemId(3)),
             "no holder: 3, shadowed by 2, as it is"
+        );
+
+        let galaxy = hiding(&[2]);
+        let places = galaxy.map().places();
+        assert_eq!(
+            whereabouts(&galaxy, &[2, 5], 5).named(places),
+            Some(SystemId(3)),
+            "the visible 3 stands in for the rescued 5, not the hidden chain head 2"
         );
 
         let galaxy = hiding(&[2, 3, 4, 5]);
