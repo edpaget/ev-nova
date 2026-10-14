@@ -25,7 +25,12 @@
 //! app quits, and not when a save comes due, which is dropped. The
 //! original saves only on creation, landing and pod rescue
 //! (`_SavePilotFile` @0x76876), so a dead pilot reopens as it was at its
-//! last landing. Once the player's ship has exploded, the scene runs on
+//! last landing. A Strict Play pilot whose ship is breaking up or
+//! destroyed, outside the escape pod, is deleted instead as play ends
+//! ([`FlightView::deletes_pilot_on_ending_play`]): on the death's return
+//! to the menu, on Escape's put-away and when the app quits, as
+//! `_EnterGameFromMainScreen` deletes it (@0x1a4ab-0x1a4e1); a failed
+//! delete is a warning. Once the player's ship has exploded, the scene runs on
 //! through the hold; when it expires, the router is at the seam where the
 //! sabotage dialogs (the `player-death` roadmap's phase 8) will show over
 //! the stopped flight, and with none it begins flight's fade to black on
@@ -1486,11 +1491,13 @@ impl AppScreen {
     }
 
     /// Puts the pilot away and shows `side`: saves it (unless it may not
-    /// be saved) and drops flight, the spaceport and any dialog open over
-    /// flight, so nothing is left to re-enter.
+    /// be saved), or deletes a strict pilot dying
+    /// ([`AppScreen::put_away_pilot`]), before anything can show the menu
+    /// or list the pilots, and drops flight, the spaceport and any dialog
+    /// open over flight, so nothing is left to re-enter.
     fn end_flight(&mut self, side: Side) {
+        self.put_away_pilot();
         self.switch_to(side);
-        self.save_pilot();
         self.flight = None;
         self.spaceport = None;
         self.plunder = None;
@@ -1550,6 +1557,30 @@ impl AppScreen {
     /// Where pilots are kept, if anywhere.
     fn keeper(&self) -> Option<Rc<PilotKeeper<Box<dyn PilotStore>>>> {
         self.menu.as_ref().and_then(|menu| menu.pilots.clone())
+    }
+
+    /// Puts the pilot flying away as play ends: deletes it, when there
+    /// is somewhere it is kept and it is a strict pilot dying outside the
+    /// escape pod ([`FlightView::deletes_pilot_on_ending_play`]), as
+    /// `_EnterGameFromMainScreen` does once `_PlayGame` returns
+    /// (@0x1a4ab-0x1a4e1), and otherwise saves it
+    /// ([`AppScreen::save_pilot`]). A failed delete becomes a warning.
+    /// Nothing writes the pilot back afterwards: a dying pilot may not be
+    /// saved.
+    fn put_away_pilot(&mut self) {
+        let (Some(flight), Some(keeper)) = (&self.flight, self.keeper()) else {
+            return;
+        };
+        if !flight.deletes_pilot_on_ending_play() {
+            self.save_pilot();
+            return;
+        }
+        let Some(pilot) = flight.pilot() else {
+            return;
+        };
+        if let Err(warning) = keeper.delete(pilot.name()) {
+            self.warnings.push(warning);
+        }
     }
 
     /// Saves the pilot flying, when it has a name, there is somewhere to
@@ -2316,10 +2347,11 @@ impl Screen for AppScreen {
         Some(self.showing())
     }
 
-    /// Saves the pilot flying, in flight or in the spaceport, when it has
-    /// a name.
+    /// Puts the pilot flying away, in flight or in the spaceport, when it
+    /// has a name: saves it, or deletes a strict pilot dying
+    /// ([`AppScreen::put_away_pilot`]).
     fn quit(&mut self) {
-        self.save_pilot();
+        self.put_away_pilot();
     }
 
     /// The warnings since they were last taken: saves that failed, pilots
@@ -4583,11 +4615,11 @@ pub(super) mod tests {
         assert_eq!(pilot(&screen).gender(), nova_sim::Gender::Male);
     }
 
-    #[test]
-    fn a_new_pilot_made_with_strict_play_ticked_plays_strict() {
-        let store = MemoryPilots::new();
-        let mut screen = menu_with_dialogs(&store);
-        choose(&mut screen, MenuChoice::NewPilot);
+    /// Creates a pilot named `name` from the main menu with Strict Play
+    /// ticked: New Pilot, a click on the Strict Play box, the name,
+    /// Return. The router needs the interface file's dialogs.
+    fn create_strict(screen: &mut AppScreen, name: &str) {
+        choose(screen, MenuChoice::NewPilot);
         let at = screen
             .new_pilot()
             .expect("open")
@@ -4602,8 +4634,15 @@ pub(super) mod tests {
                 at,
             });
         }
-        type_text(&mut screen, "Ada");
+        type_text(screen, name);
         screen.input(&key(Key::Enter, true));
+    }
+
+    #[test]
+    fn a_new_pilot_made_with_strict_play_ticked_plays_strict() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        create_strict(&mut screen, "Ada");
         assert_eq!(screen.showing(), Showing::Flight);
         assert!(pilot(&screen).strict_play());
         assert!(saved(&store, "Ada").strict_play());
@@ -7647,6 +7686,16 @@ pub(super) mod tests {
     /// A pilot, "Ada", created on [`deadly_menu`] over `store`, landed and
     /// taken off again, before the killer is in the system.
     fn landed_and_took_off(store: &MemoryPilots) -> AppScreen {
+        landed_and_took_off_by(store, create)
+    }
+
+    /// [`landed_and_took_off`] with a Strict Play pilot.
+    fn strict_landed_and_took_off(store: &MemoryPilots) -> AppScreen {
+        landed_and_took_off_by(store, create_strict)
+    }
+
+    /// [`landed_and_took_off`], the pilot made by `create`.
+    fn landed_and_took_off_by(store: &MemoryPilots, create: fn(&mut AppScreen, &str)) -> AppScreen {
         let mut screen = deadly_menu(store);
         create(&mut screen, "Ada");
         land_twice(&mut screen);
@@ -7677,6 +7726,8 @@ pub(super) mod tests {
         assert!(written.iter().all(|(key, _)| key == "Ada"));
         let last = nova_sim::save::decode(&written[2].1).expect("a pilot");
         assert_eq!(last, took_off, "the take-off's save is the last");
+        assert_eq!(store.deleted(), Vec::<String>::new(), "not strict: kept");
+        assert_eq!(store.keys(), ["Ada"]);
         let mut screen = deadly_menu(&store);
         choose(&mut screen, MenuChoice::OpenPilot);
         screen.input(&key(Key::Enter, true));
@@ -7807,5 +7858,126 @@ pub(super) mod tests {
         assert_eq!(store.writes(), writes, "due, but not written");
         screen.after_pilot_edit();
         assert_eq!(store.writes(), writes, "nor after the edit");
+    }
+
+    /// The strict pilot's death, ticked from the explosion to the main
+    /// menu.
+    fn until_the_main_menu(screen: &mut AppScreen) {
+        tick_until(screen, 400, |screen| screen.showing() == Showing::MainMenu);
+    }
+
+    #[test]
+    fn a_strict_pilot_destroyed_is_deleted_before_the_main_menu_shows() {
+        let store = MemoryPilots::new();
+        let mut screen = strict_landed_and_took_off(&store);
+        assert!(pilot(&screen).strict_play());
+        let writes = store.writes();
+        until_exploded(&mut screen);
+        tick_until(&mut screen, 400, |screen| {
+            let shown = screen.showing() == Showing::MainMenu;
+            assert_eq!(
+                store.deleted().is_empty(),
+                !shown,
+                "deleted as the menu shows, not before"
+            );
+            shown
+        });
+        assert_eq!(store.deleted(), ["Ada"]);
+        assert_eq!(store.keys(), Vec::<String>::new());
+        assert_eq!(store.writes(), writes, "nothing written after the take-off");
+        choose(&mut screen, MenuChoice::OpenPilot);
+        assert_eq!(
+            screen.pilot_list().expect("open").keys(),
+            Vec::<String>::new()
+        );
+        assert_eq!(screen.take_warnings(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn escape_while_a_strict_pilot_breaks_up_deletes_it() {
+        let store = MemoryPilots::new();
+        let mut screen = strict_landed_and_took_off(&store);
+        until_breaking_up(&mut screen);
+        let writes = store.writes();
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        assert_eq!(store.deleted(), ["Ada"]);
+        assert_eq!(store.keys(), Vec::<String>::new());
+        screen.quit();
+        assert_eq!(store.writes(), writes, "nothing written");
+        assert_eq!(store.keys(), Vec::<String>::new(), "nor written back");
+    }
+
+    #[test]
+    fn quitting_while_a_strict_pilot_breaks_up_or_holds_deletes_it() {
+        let store = MemoryPilots::new();
+        let mut screen = strict_landed_and_took_off(&store);
+        until_breaking_up(&mut screen);
+        let writes = store.writes();
+        screen.quit();
+        assert_eq!(store.deleted(), ["Ada"], "breaking up");
+        assert_eq!(store.keys(), Vec::<String>::new());
+        assert_eq!(store.writes(), writes);
+
+        let store = MemoryPilots::new();
+        let mut screen = strict_landed_and_took_off(&store);
+        let writes = store.writes();
+        until_exploded(&mut screen);
+        screen.tick(TICK);
+        assert!(matches!(
+            fate(&screen),
+            nova_sim::PlayerFate::Holding { .. }
+        ));
+        screen.quit();
+        assert_eq!(store.deleted(), ["Ada"], "holding");
+        assert_eq!(store.keys(), Vec::<String>::new());
+        assert_eq!(store.writes(), writes);
+    }
+
+    #[test]
+    fn a_save_due_while_a_strict_pilot_dies_writes_nothing_after_the_delete() {
+        use nova_view::devtools::{PilotDesk, PilotEdit};
+        let store = MemoryPilots::new();
+        let mut screen = strict_landed_and_took_off(&store);
+        until_breaking_up(&mut screen);
+        let writes = store.writes();
+        screen
+            .pilot_desk()
+            .expect("flying")
+            .edit(PilotEdit::Credits(5000))
+            .expect("edits in flight");
+        screen.tick(TICK);
+        screen.after_pilot_edit();
+        until_exploded(&mut screen);
+        until_the_main_menu(&mut screen);
+        assert_eq!(store.deleted(), ["Ada"]);
+        assert_eq!(store.writes(), writes, "nothing written");
+        assert_eq!(store.keys(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_strict_pilot_put_away_flying_is_saved_not_deleted() {
+        let store = MemoryPilots::new();
+        let mut screen = strict_landed_and_took_off(&store);
+        let writes = store.writes();
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::MainMenu);
+        assert_eq!(store.writes(), writes + 1, "saved");
+        assert_eq!(store.deleted(), Vec::<String>::new());
+        assert!(saved(&store, "Ada").strict_play());
+    }
+
+    #[test]
+    fn a_failed_delete_becomes_a_warning() {
+        let store = MemoryPilots::new();
+        let mut screen = strict_landed_and_took_off(&store);
+        store.fail_deletes(true);
+        until_exploded(&mut screen);
+        until_the_main_menu(&mut screen);
+        assert_eq!(
+            screen.take_warnings(),
+            ["nova: cannot delete the pilot Ada in memory (the disk is locked)"]
+        );
+        assert_eq!(store.keys(), ["Ada"], "still there");
     }
 }
