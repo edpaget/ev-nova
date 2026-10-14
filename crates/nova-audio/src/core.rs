@@ -134,6 +134,9 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
                 Sound::Ui(UiSound::NewsOpened) => self.play(self.table.news_open),
                 Sound::Ui(UiSound::NewsClosed) => self.play(self.table.news_close),
+                Sound::Ui(UiSound::PlayerInfoRefused) => {
+                    self.play(self.table.player_info_refused);
+                }
                 Sound::Combat(fight) => {
                     let gain = distance_gain(fight.offset);
                     let volume = self.settings.effects_volume.amplitude() * gain;
@@ -520,6 +523,28 @@ mod tests {
             ],
         );
         assert_eq!(drain(&log), [play(301, 1.0), play(300, 1.0)], "the table's");
+    }
+
+    #[test]
+    fn the_player_info_refused_beeps_beep4() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Ui(UiSound::PlayerInfoRefused)],
+        );
+        assert_eq!(drain(&log), [play(153, 1.0)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            player_info_refused: Some(SoundId(302)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Ui(UiSound::PlayerInfoRefused)],
+        );
+        assert_eq!(drain(&log), [play(302, 1.0)], "the table's");
     }
 
     fn mission(id: i16, exclusive: bool) -> Sound {

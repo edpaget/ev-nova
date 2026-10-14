@@ -2,7 +2,8 @@
 //! The audio side decides which `snd ` each one plays, if any.
 //!
 //! - [`UiSound`]: the interface's own, a button pressed and released,
-//!   the alert as something is refused, and the news dialog's beeps.
+//!   the alert as something is refused, the news dialog's beeps, and the
+//!   beep of the player info refused.
 //! - [`SimSound`]: the flight session's, re-exported from `nova_sim`.
 //! - [`CombatSound`]: a fight's, a `snd ` heard from where it happened.
 //! - [`Sound`]: any of them, as a screen reports it through
@@ -30,6 +31,9 @@ pub enum UiSound {
     /// The bar's news dialog closed: `_DoNewsDialog` plays `_beepSnd[2]`
     /// as it closes (@0x4814e).
     NewsClosed,
+    /// The player info key was refused in flight, during a jump:
+    /// `_HandlePlayer` plays `_beepSnd[3]` (`PlaySound` @0x7039a-0x703bd).
+    PlayerInfoRefused,
 }
 
 /// A sound a fight makes: a weapon firing or an explosion, heard from

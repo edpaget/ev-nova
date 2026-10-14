@@ -42,6 +42,8 @@ pub struct SoundTable {
     pub news_open: Option<SoundId>,
     /// Plays as the bar's news dialog closes.
     pub news_close: Option<SoundId>,
+    /// Plays as the player info is refused in flight.
+    pub player_info_refused: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -89,6 +91,9 @@ impl SoundTable {
     ///   it opens (`PlaySound` @0x47f36).
     /// - `news_close`: 152, `_beepSnd[2]`, which `_DoNewsDialog` plays as
     ///   it closes (@0x4814e).
+    /// - `player_info_refused`: 153, "Beep4", `_beepSnd[3]`, which
+    ///   `_HandlePlayer` plays as it refuses the player info key during a
+    ///   jump (`PlaySound` @0x7039a-0x703bd).
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -105,6 +110,7 @@ impl SoundTable {
         smuggling: Some(SoundId(154)),
         news_open: Some(SoundId(151)),
         news_close: Some(SoundId(152)),
+        player_info_refused: Some(SoundId(153)),
     };
 }
 
@@ -130,5 +136,6 @@ mod tests {
         assert_eq!(table.smuggling, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.news_open, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.news_close, Some(SoundId(152)), "_beepSnd[2]");
+        assert_eq!(table.player_info_refused, Some(SoundId(153)), "_beepSnd[3]");
     }
 }

@@ -33,6 +33,8 @@
 //! - [`volume`]: a volume level with arrows that step it.
 //! - [`prefs`]: the Preferences dialog ([`PrefsDialog`], "new prefs
 //!   dialog"): sound and music on or off, and their volumes.
+//! - [`player_info`]: the player info screen ([`PlayerInfoScreen`]):
+//!   the pilot, the ship, its cargo, extras, ranks and honors.
 //! - [`plunder`]: the plunder dialog ([`PlunderDialog`]), taking what is
 //!   on board a ship boarded, and the captured-ship assignment dialog
 //!   ([`AssignmentDialog`]).
@@ -51,6 +53,7 @@ pub mod desc;
 pub mod dialog;
 pub mod edit_dialog;
 pub mod new_pilot;
+pub mod player_info;
 pub mod plunder;
 pub mod prefs;
 pub mod quantity;
@@ -71,6 +74,7 @@ pub use dialog::{
 };
 pub use edit_dialog::{Confirm, EditDialog, EditItems};
 pub use new_pilot::{NewPilotDialog, NewPilotOutcome};
+pub use player_info::{PlayerInfoButton, PlayerInfoScreen, Tab};
 pub use plunder::{AssignmentDialog, PlunderDialog, PlunderShown};
 pub use prefs::PrefsDialog;
 pub use quantity::QuantityDialog;

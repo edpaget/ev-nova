@@ -130,6 +130,9 @@ pub fn map_key(key: PhysicalKey) -> Key {
         // Either Command (Super, the Windows key, off a Mac): what flight's
         // jettison key needs held.
         PhysicalKey::Code(KeyCode::SuperLeft | KeyCode::SuperRight) => Key::Command,
+        // Either Shift: the player info's Tab goes to the previous tab
+        // while it is held.
+        PhysicalKey::Code(KeyCode::ShiftLeft | KeyCode::ShiftRight) => Key::Shift,
         // Flight's jettison key, by position: K on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyK) => Key::Char('k'),
         // The developer tools' toggle, by position: the key under Escape on
@@ -321,7 +324,7 @@ mod tests {
     /// Every key other than a character's that a screen reacts to, where
     /// the screen names it with a constant, and the physical key that
     /// sends it.
-    const GAME_NAMED_KEYS: [(Key, KeyCode); 14] = [
+    const GAME_NAMED_KEYS: [(Key, KeyCode); 16] = [
         (nova_view::ui::text_field::DELETE_KEY, KeyCode::Backspace),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltLeft),
         (nova_view::spaceport::trade::MAX_LOT_KEY, KeyCode::AltRight),
@@ -351,6 +354,15 @@ mod tests {
         // Flight's jettison key's modifier.
         (Key::Command, KeyCode::SuperLeft),
         (Key::Command, KeyCode::SuperRight),
+        // The player info's Tab goes back with Shift held.
+        (
+            nova_view::ui::player_info::BACKWARDS_KEY,
+            KeyCode::ShiftLeft,
+        ),
+        (
+            nova_view::ui::player_info::BACKWARDS_KEY,
+            KeyCode::ShiftRight,
+        ),
     ];
 
     #[test]
