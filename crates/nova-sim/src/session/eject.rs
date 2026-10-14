@@ -1284,4 +1284,24 @@ mod tests {
         assert!(session.pilot.reserves.armor.now > 0.0);
         assert_eq!(session.player_fate(), PlayerFate::Flying);
     }
+
+    #[test]
+    fn the_klaxon_sounds_first_only_while_the_countdown_after_its_decrement_is_above_1() {
+        let catalog = ejecting(100);
+        for (ticks_left, klaxon) in [(3, true), (2, false)] {
+            let mut session = flying(&catalog, &[POD]);
+            to_the_breakup(&mut session, &catalog, false);
+            session.condition = Condition::Dying {
+                ticks_left,
+                starting: false,
+            };
+            let (sounds, _) = fight(&mut session, true);
+            assert!(in_the_pod(&session));
+            assert_eq!(
+                sounds.first() == Some(&SimSound::Klaxon),
+                klaxon,
+                "{ticks_left}: {sounds:?}"
+            );
+        }
+    }
 }

@@ -12784,6 +12784,7 @@ mod tests {
             (MAP_KEY, PlayerCommand::Map),
             (JUMP_KEY, PlayerCommand::Jump),
             (JETTISON_KEY, PlayerCommand::Jettison),
+            (EJECT_KEY, PlayerCommand::Eject),
             (MISSION_INFO_KEY, PlayerCommand::MissionInfo),
             (HYPER_SELECT_KEY, PlayerCommand::SelectSystem),
             (TARGET_KEY, PlayerCommand::Target),

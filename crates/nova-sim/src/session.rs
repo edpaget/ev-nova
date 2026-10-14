@@ -173,6 +173,10 @@
 //! player lands or arrives elsewhere. An NPC destroyed is taken out of the
 //! system. The player's ship, once it is not intact, ignores the controls
 //! and drifts, slowing a little each tick, cannot land or jump, and once destroyed stays where it is.
+//! Disabled or dying, it may eject into an escape pod or an escape ship,
+//! leaving a hulk behind (see the `eject` module); the pod flies itself
+//! until its countdown ends and the player is rescued (see the `rescue`
+//! module).
 //!
 //! The player's crimes change its legal records as the fight's
 //! [`LegalCode`] says: disabling an NPC, and breaking one up (which is
