@@ -45,8 +45,8 @@ pub fn cloak(session: &mut Session, id: NpcId, to: Cloak) {
     }
 }
 
-/// A [`PilotStore`] in memory that records each write. Clones share the
-/// saves, the record and the failure switches, so a test can seed the
+/// A [`PilotStore`] in memory that records each write and delete. Clones
+/// share the saves, the records and the failure switches, so a test can seed the
 /// store before the app takes a clone, read back what was saved and when,
 /// or "restart" over another clone.
 #[derive(Clone, Debug, Default)]
@@ -55,6 +55,8 @@ pub struct MemoryPilots {
     written: Rc<RefCell<Vec<(String, String)>>>,
     fail_reads: Rc<Cell<bool>>,
     fail_writes: Rc<Cell<bool>>,
+    deleted: Rc<RefCell<Vec<String>>>,
+    fail_deletes: Rc<Cell<bool>>,
 }
 
 impl MemoryPilots {
@@ -107,6 +109,19 @@ impl MemoryPilots {
         self.fail_writes.set(fail);
     }
 
+    /// Each key a delete succeeded on, in order, whether or not anything
+    /// was saved under it.
+    #[must_use]
+    pub fn deleted(&self) -> Vec<String> {
+        self.deleted.borrow().clone()
+    }
+
+    /// Makes every delete fail (`true`), keeping what was saved, or
+    /// succeed again.
+    pub fn fail_deletes(&self, fail: bool) {
+        self.fail_deletes.set(fail);
+    }
+
     fn check_reads(&self) -> io::Result<()> {
         if self.fail_reads.get() {
             return Err(io::Error::other("the disk is unreadable"));
@@ -134,6 +149,15 @@ impl PilotStore for MemoryPilots {
         self.written
             .borrow_mut()
             .push((key.to_owned(), text.to_owned()));
+        Ok(())
+    }
+
+    fn delete(&self, key: &str) -> io::Result<()> {
+        if self.fail_deletes.get() {
+            return Err(io::Error::other("the disk is locked"));
+        }
+        self.saves.borrow_mut().remove(key);
+        self.deleted.borrow_mut().push(key.to_owned());
         Ok(())
     }
 
@@ -181,6 +205,29 @@ mod tests {
                 ("a".to_owned(), "three".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn a_delete_removes_the_text_and_is_recorded() {
+        let store = MemoryPilots::new();
+        let other = store.clone();
+        store.put("a", "one");
+        store.put("b", "two");
+        store.delete("a").expect("deletes");
+        other.delete("c").expect("an absent key deletes");
+        assert_eq!(store.keys(), ["b"]);
+        assert_eq!(store.text("a"), None);
+        assert_eq!(other.deleted(), ["a", "c"]);
+        assert_eq!(store.writes(), 0, "a delete is not a write");
+        store.fail_deletes(true);
+        assert!(store.delete("b").is_err());
+        assert_eq!(
+            (store.keys(), store.deleted().len()),
+            (vec!["b".to_owned()], 2)
+        );
+        store.fail_deletes(false);
+        store.delete("b").expect("deletes again");
+        assert_eq!(store.keys(), Vec::<String>::new());
     }
 
     #[test]

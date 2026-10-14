@@ -5,8 +5,8 @@
 //!   key.
 //! - [`pilot_key`]: the key a pilot is saved under, from its name.
 //! - [`PilotKeeper`]: the rules. It saves a pilot in the
-//!   [`save`](crate::save) schema under its key, lists the pilots saved
-//!   and opens one, and reports each problem as a message naming where
+//!   [`save`](crate::save) schema under its key, lists the pilots saved,
+//!   opens one and deletes one, and reports each problem as a message naming where
 //!   the pilots are.
 
 use std::io;
@@ -38,6 +38,14 @@ pub trait PilotStore {
     /// When it cannot be saved.
     fn write(&self, key: &str, text: &str) -> io::Result<()>;
 
+    /// Removes what is saved under `key`. Nothing saved there is `Ok`, as
+    /// `_DeletePilotFile` checks `_DoesPilotExist` first (@0x72e7b).
+    ///
+    /// # Errors
+    ///
+    /// When what is saved there cannot be removed.
+    fn delete(&self, key: &str) -> io::Result<()>;
+
     /// Where the pilots are saved, for the player to find them: a
     /// directory's path, say.
     fn location(&self) -> String;
@@ -55,6 +63,10 @@ impl PilotStore for Box<dyn PilotStore> {
 
     fn write(&self, key: &str, text: &str) -> io::Result<()> {
         (**self).write(key, text)
+    }
+
+    fn delete(&self, key: &str) -> io::Result<()> {
+        (**self).delete(key)
     }
 
     fn location(&self) -> String {
@@ -165,6 +177,26 @@ impl<S: PilotStore> PilotKeeper<S> {
             format!(
                 "nova: cannot save the pilot {} in {} ({error})",
                 pilot.name(),
+                self.store.location()
+            )
+        })
+    }
+
+    /// Deletes the pilot named `name`: what is saved under its key. A name
+    /// without a key deletes nothing, since no pilot is saved under it, and
+    /// a pilot never saved is deleted already.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the pilot and where the pilots are, when its save
+    /// cannot be removed.
+    pub fn delete(&self, name: &str) -> Result<(), String> {
+        let Some(key) = pilot_key(name) else {
+            return Ok(());
+        };
+        self.store.delete(&key).map_err(|error| {
+            format!(
+                "nova: cannot delete the pilot {name} in {} ({error})",
                 self.store.location()
             )
         })
@@ -366,6 +398,65 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_pilot_removes_it_from_the_list() {
+        let store = MemoryPilots::new();
+        let keeper = keeper(&store);
+        for name in ["Ada", "Bea"] {
+            keeper
+                .save(&Pilot::new(&catalog(), name).expect("starts"))
+                .expect("saves");
+        }
+        assert_eq!(keeper.delete("Ada"), Ok(()));
+        assert_eq!(keeper.list(), Ok(vec!["Bea".to_owned()]));
+        assert!(keeper.open("Ada").is_err());
+        assert_eq!(store.deleted(), ["Ada"]);
+    }
+
+    #[test]
+    fn a_pilot_is_deleted_under_its_key() {
+        let store = MemoryPilots::new();
+        let keeper = keeper(&store);
+        keeper
+            .save(&Pilot::new(&catalog(), " Ada/B ").expect("starts"))
+            .expect("saves");
+        assert_eq!(keeper.delete(" Ada/B "), Ok(()));
+        assert_eq!(store.keys(), Vec::<String>::new());
+        assert_eq!(store.deleted(), ["Ada_B"]);
+    }
+
+    #[test]
+    fn deleting_a_pilot_never_saved_is_ok() {
+        let store = MemoryPilots::new();
+        assert_eq!(keeper(&store).delete("Ada"), Ok(()));
+        assert_eq!(store.keys(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn deleting_an_unnamed_pilot_is_ok_and_touches_nothing() {
+        let store = MemoryPilots::new();
+        store.put("_", "kept");
+        assert_eq!(keeper(&store).delete(" "), Ok(()));
+        assert_eq!(keeper(&store).delete(".."), Ok(()));
+        assert_eq!(store.keys(), ["_"]);
+        assert_eq!(store.deleted(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_failed_delete_names_the_pilot_and_where() {
+        let store = MemoryPilots::new();
+        let keeper = keeper(&store);
+        keeper
+            .save(&Pilot::new(&catalog(), "Ada").expect("starts"))
+            .expect("saves");
+        store.fail_deletes(true);
+        assert_eq!(
+            keeper.delete("Ada"),
+            Err("nova: cannot delete the pilot Ada in memory (the disk is locked)".to_owned())
+        );
+        assert_eq!(store.keys(), ["Ada"]);
+    }
+
+    #[test]
     fn a_boxed_store_is_a_store() {
         let store = MemoryPilots::new();
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
@@ -379,5 +470,7 @@ mod tests {
         );
         assert_eq!(keeper.store().location(), "memory");
         assert_eq!(store.writes(), 1);
+        assert_eq!(keeper.delete("Ada"), Ok(()));
+        assert_eq!(store.deleted(), ["Ada"]);
     }
 }
