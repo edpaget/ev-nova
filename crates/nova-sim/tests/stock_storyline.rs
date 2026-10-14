@@ -1,12 +1,15 @@
-//! The storyline walker over the stock data, two walks from a new pilot.
-//! Each skips, passing, when `NOVA_DATA` is unset.
+//! The storyline walker over the stock data, two walks. Each skips,
+//! passing, when `NOVA_DATA` is unset.
 //!
 //! - United Shipping's chain, `mïsn` 504 "United Shipping Intro" then 505
-//!   "Un. Shipping Delivery", from its first take to its last delivery.
+//!   "Un. Shipping Delivery", from a new pilot's first take to its last
+//!   delivery.
 //! - The Federation string, Fed1 to Fed43 (`mïsn` 428 to 474), the goal
-//!   the engine builds toward. It is `#[ignore]`d until it passes; run
-//!   with `--run-ignored all`, it stops at its first engine gap and prints
-//!   the walker's report.
+//!   the engine builds toward. It starts from a pilot who already meets
+//!   the string's combat rating, legal record and cargo needs: rating
+//!   comes only from kills in flight, which the walker skips, and flying
+//!   every fight is not the walk's job. On an engine gap it stops and
+//!   prints the walker's report.
 //!
 //! Why United Shipping's chain:
 //! - a new pilot can take 504: its `AvailBits` holds with no bit set, and
@@ -30,11 +33,68 @@ mod common;
 
 use nova_data::GameData;
 use nova_sim::fixture::{Done, Step, StoryWalker};
-use nova_sim::{Bit, MissionId, NeverFires, Pilot, PilotCatalog, RankId, Session, is_landable};
+use nova_sim::{
+    Bit, GovtId, MissionId, NeverFires, Pilot, PilotCatalog, RankId, Session, ShipId, is_landable,
+};
 
 /// A new stock pilot docked at the first landable stellar of its system,
 /// through a save that says so, flown and settled with every roll 1.
 fn docked_new_pilot(data: &GameData) -> Session {
+    docked_pilot(data, |_| {})
+}
+
+/// The Federation's government, whose stellars offer Fed1 (428's
+/// `AvailStel` 10000).
+const FEDERATION_GOVT: GovtId = GovtId(128);
+
+/// The Terrapin, `shïp` 136: 125 tons of cargo, priced 150000, tech
+/// level 4, `BuyRandom` 90 and an empty `Require`, so a player can buy
+/// it. The starting Shuttle (128) holds 10.
+const TERRAPIN: ShipId = ShipId(136);
+
+/// The most cargo any Federation mission carries: Fed1-6 each carry 20
+/// tons (`CargoQty` 20, with `Flags2` bit 1 asking for room); later
+/// missions carry 15 or fewer.
+const FEDERATION_CARGO: u32 = 20;
+
+/// A new stock pilot, as [`docked_new_pilot`] builds it, but already
+/// qualified for every mission in [`FEDERATION`], through the save.
+fn docked_qualified_pilot(data: &GameData) -> Session {
+    let session = docked_pilot(data, |save| {
+        // The highest `AvailRating` in the string: 428 = 150, 457 = 50,
+        // 458-461 = 100, 462-463 = 150, 464-474 = 200. `avail_rating`
+        // passes when the rating is at least that, with no upper bound.
+        save["combat_rating"] = serde_json::json!(200);
+        // 428's `AvailRecord` is 2, the most Fed1 needs, and no more on
+        // purpose: the chain should raise the record for 435-438 itself.
+        save["legal"] = serde_json::json!([{ "govt": FEDERATION_GOVT.0, "record": 2 }]);
+        // `null` derives every system's record from `legal` on `fly`
+        // (`legal::systems_from_govts`), so each Federation system holds
+        // 2, the record `avail_record` reads under the default rules.
+        save["system_legal"] = serde_json::Value::Null;
+        save["ship"] = serde_json::json!(TERRAPIN.0);
+        // The Terrapin's own default items and stock weapons, read on
+        // `fly`, not the Shuttle's.
+        save["outfits"] = serde_json::Value::Null;
+        save["stock_weapons_fitted"] = serde_json::json!(false);
+        // `fly` refits to the Terrapin's stats and holds each reserve to
+        // its maximum, so these fill it.
+        let full = serde_json::json!({ "now": f32::MAX, "max": f32::MAX });
+        save["reserves"] = serde_json::json!({ "shield": full, "armor": full, "fuel": full });
+    });
+    let pilot = session.pilot();
+    assert_eq!(pilot.combat_rating(), 200, "rating");
+    assert_eq!(pilot.legal_record(FEDERATION_GOVT), 2, "Federation record");
+    assert_eq!(pilot.system_record(session.system()), 2, "record here");
+    assert_eq!(session.ship(), TERRAPIN, "ship");
+    assert!(session.stats().capacity >= FEDERATION_CARGO, "hold space");
+    assert!(session.reserves().fuel.now >= session.stats().fuel, "fuel");
+    session
+}
+
+/// A new stock pilot, its save changed by `edit`, docked at the first
+/// landable stellar of its system, flown and settled with every roll 1.
+fn docked_pilot(data: &GameData, edit: impl FnOnce(&mut serde_json::Value)) -> Session {
     let pilot = Pilot::new(data, "Stock").expect("the stock first chär starts");
     let site = data
         .landing_sites(pilot.system())
@@ -44,6 +104,7 @@ fn docked_new_pilot(data: &GameData) -> Session {
     let mut save: serde_json::Value =
         serde_json::from_str(&nova_sim::save::encode(&pilot)).expect("JSON");
     save["stellar"] = serde_json::json!(site.id.0);
+    edit(&mut save);
     let docked = nova_sim::save::decode(&save.to_string()).expect("a pilot");
     let mut session = Session::fly(data, docked).expect("flies");
     assert_eq!(session.landed(), Some(site.id), "docked");
@@ -256,19 +317,18 @@ const FEDERATION: &[Step] = &[
     Step::HasRank(RankId(149)),
 ];
 
-/// A new pilot walks [`FEDERATION`] to its last delivery, b89, and rank
-/// 149. The stock data has one chär, 128 ".Trader", whose `OnStart` is
-/// empty, so the pilot [`docked_new_pilot`] builds is the one a new game
-/// starts with.
+/// A qualified pilot walks [`FEDERATION`] to its last delivery, b89,
+/// and rank 149. The stock data has one chär, 128 ".Trader", whose
+/// `OnStart` is empty, so [`docked_qualified_pilot`] starts from the
+/// pilot a new game starts with, given the rating, record and ship the
+/// string needs.
 #[test]
-#[ignore = "walks the Federation string to its first engine gap; rdm phase \
-            missions-and-storylines/phase-3-federation-walk lists the findings"]
-fn a_new_pilot_walks_the_federation_string_to_its_end() {
+fn a_qualified_pilot_walks_the_federation_string_to_its_end() {
     let Some(dir) = common::nova_data() else {
         return;
     };
     let data = GameData::open(&dir, None).expect("the stock data opens");
-    let mut session = docked_new_pilot(&data);
+    let mut session = docked_qualified_pilot(&data);
     StoryWalker::new(&data)
         .walk(&mut session, FEDERATION)
         .unwrap_or_else(|failure| panic!("{failure}"));
