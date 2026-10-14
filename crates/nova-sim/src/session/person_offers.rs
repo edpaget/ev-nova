@@ -420,6 +420,85 @@ mod tests {
         );
     }
 
+    /// A [`Chance`] answering 0 to every question but the person draw
+    /// after the first arrival roll, which picks Bee (`përs` 601): the
+    /// setup's person rolls pick nobody, and the arrival roll brings Bee
+    /// in by `_HyperShipSpawn`.
+    #[derive(Debug, Default)]
+    struct BeeArrives {
+        rolled: bool,
+    }
+
+    impl Chance for BeeArrives {
+        fn fires(&mut self, _percent: u8) -> bool {
+            false
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            if n == crate::traffic::spawn::ARRIVAL_ODDS {
+                self.rolled = true;
+            }
+            if self.rolled && n == crate::person::PERSON_DRAW {
+                601 - u32::from(crate::person::FIRST_PERSON.unsigned_abs())
+            } else {
+                0
+            }
+        }
+    }
+
+    #[test]
+    fn a_person_arriving_on_the_gate_exits_pass_has_its_offer_resolved() {
+        // 131, the hypergate's exit, holds one ship on average of düde
+        // 128, whose setup brings nobody; the exit's pass (@0x672f2)
+        // brings Bee.
+        let base = linked(0);
+        let mut catalog = crate::session::tests::gated();
+        catalog.traffic = vec![(
+            SystemId(131),
+            SystemTraffic {
+                dude_types: [
+                    (128, 100),
+                    (-1, 0),
+                    (-1, 0),
+                    (-1, 0),
+                    (-1, 0),
+                    (-1, 0),
+                    (-1, 0),
+                    (-1, 0),
+                ],
+                avg_ships: 1,
+                persons: Default::default(),
+            },
+        )];
+        catalog.dudes = vec![(
+            crate::catalog::DudeId(128),
+            crate::catalog::DudeRecord {
+                ai_type: 1,
+                govt: None,
+                ships: vec![(crate::catalog::ShipId(129), 1)],
+                booty: 0,
+                info_types: 0,
+            },
+        )];
+        catalog.persons = base.persons;
+        catalog.ship_records.extend(base.ship_records);
+        catalog.missions = base.missions;
+        let mut session = crate::session::tests::at_gate(&catalog);
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut BeeArrives::default())
+            .expect("enters");
+        let names: Vec<Option<i16>> = session
+            .npcs()
+            .iter()
+            .map(|npc| npc.person.map(|person| person.id.0))
+            .collect();
+        assert_eq!(names, [Some(601)], "Bee comes on the pass");
+        assert!(
+            session.ship_offer(MissionId(130)).is_some(),
+            "resolved before the first frame"
+        );
+    }
+
     #[test]
     fn a_person_whose_mission_has_no_record_resolves_nothing() {
         let mut catalog = linked(0);

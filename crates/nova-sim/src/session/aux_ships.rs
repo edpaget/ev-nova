@@ -10,7 +10,9 @@
 //! the auxiliary part first ([`Session::aux_arrivals`]), then the special
 //! ships' part, then the countdown counts down one
 //! ([`AuxShips::tick`]), wherever the player is. On the gate exit's
-//! arrivals frame, whose enter-system hook is still to run, every slot's
+//! arrivals frame ([`Session::gate_exit_pass`], under the engine's
+//! reading of [`RuleKey::GateFollow`](crate::rulebook::RuleKey::GateFollow)),
+//! whose enter-system hook is still to run, every slot's
 //! auxiliary part is left to the hook, which restarts each countdown:
 //! the original's hook comes first, so its countdown, just restarted,
 //! brings none (its one tick there is lost here, the restart coming

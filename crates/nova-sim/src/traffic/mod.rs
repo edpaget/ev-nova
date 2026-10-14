@@ -31,8 +31,9 @@
 //! tick ([`Traffic::tick_in`]) in its [`World`] (the stellars, the player,
 //! the governments and the player's legal record there), in order:
 //!
-//! 1. the arrivals pass ([`Traffic::enter_more_ships`]): the arrival
-//!    roll, while fewer NPCs than `AvgShips` that are not the
+//! 1. the arrivals pass ([`Traffic::enter_more_ships`], which a gate
+//!    exit's session also runs once on its own before the first frame):
+//!    the arrival roll, while fewer NPCs than `AvgShips` that are not the
 //!    player's ([`Npc::is_players`]) nor its mission escorts are in the
 //!    system, each arrival coming out of one of the world's stellars
 //!    ([`emerge`]) or by hyperspace, then the escort-strength timer's tick ([`strength`]):

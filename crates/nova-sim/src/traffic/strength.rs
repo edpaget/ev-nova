@@ -17,7 +17,10 @@
 //!   arrival roll and `_SpawnNagShip` (the shareware nag, out of scope),
 //!   reads it (@0x43d1a-0x43dd7): at 0 it disarms it and fires, and
 //!   otherwise counts it down. Armed at n, it fires on the (n + 1)-th tick
-//!   after, whatever the system's `AvgShips`, and once only: only the
+//!   after, whatever the system's `AvgShips`. A hypergate or wormhole
+//!   exit runs one more pass before its first frame (@0x672f2,
+//!   [`Traffic::enter_more_ships`](crate::traffic::Traffic::enter_more_ships)),
+//!   so armed there at n it fires on the n-th tick after. It fires once only: only the
 //!   16-bit wrap after about 65535 ticks could fire it again, and word
 //!   widths are not copied ([`StrengthTimer`]).
 //!

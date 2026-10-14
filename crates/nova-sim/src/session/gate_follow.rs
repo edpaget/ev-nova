@@ -5,7 +5,9 @@
 //!
 //! The original's gate path (`_HandlePlayerDockRequest` @0x67159-0x674a5)
 //! runs the enter-system hook, then loop A over the slots, then the
-//! system's setup, then one `_EnterMoreShips` frame, then loop B. Loop A
+//! system's setup, then one `_EnterMoreShips` frame
+//! ([`Session::gate_exit_pass`]), then loop B
+//! ([`Session::emerge_followers`]). Loop A
 //! overwrites the hook's restart of a -6 slot, so here the hook leaves a
 //! -6 slot alone on a gate's exit (see the `mission_ships` module), and
 //! the exit's setup takes a -6 slot of escorts at once. The follow rolls
@@ -84,14 +86,42 @@ impl Session {
         }
     }
 
-    /// The player just out of `gate` at `exit`, the system entered: under
-    /// the engine's reading of [`RuleKey::GateFollow`], one frame of the
-    /// appear timers (`_EnterMoreShips` @0x672f2,
-    /// [`Session::mission_ship_arrivals`]) brings the followers in, their
+    /// The gate exit's one `_EnterMoreShips` pass (@0x672f2), after the
+    /// system is entered and before the followers come out
+    /// ([`Session::emerge_followers`]), all before the first frame, drawn
+    /// on `chance`. Under the engine's reading of [`RuleKey::GateFollow`]
+    /// only, its mission-slot loop: one frame of the appear timers
+    /// ([`Session::mission_ship_arrivals`]) brings the followers in, their
     /// `düde`s read from `catalog`, leaving to the enter-system hook the
-    /// slots it is about to restart. Then each ship of a slot following
-    /// the player, attacking it, its timer just stopped (loop B, @0x67346-0x67487) comes out after the player, in
-    /// order: at rest at `exit`, or where the player arrived under
+    /// slots it is about to restart; by the other reading the exit leaves
+    /// the slots as a jump does, and a hyperspace arrival has no extra
+    /// pass. Under either, its traffic part
+    /// ([`Traffic::enter_more_ships`](crate::traffic::Traffic::enter_more_ships)):
+    /// the arrival roll and the escort-strength timer's tick, so a timer
+    /// armed at the exit fires on the n-th tick after it. Each announced
+    /// fleet it brings shows its quote at once, as `_HyperSpawnFleet`
+    /// does (@0x42607-0x426f4), and each person it brings has its offer
+    /// resolved, as after every spawn (see the `person_offers` module).
+    pub(super) fn gate_exit_pass(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) {
+        if self.rules.source_for(RuleKey::GateFollow) == RuleSource::Engine {
+            self.mission_ship_arrivals(catalog, Some(Entrance::Gate), chance);
+        }
+        let last = self.last_npc();
+        self.step_traffic(|traffic, world| traffic.enter_more_ships(world, chance));
+        self.announce_fleets(chance);
+        self.resolve_person_offers(last, &mut &mut *chance);
+    }
+
+    /// The player just out of `gate` at `exit`, the system entered and its
+    /// exit pass run ([`Session::gate_exit_pass`]): under the engine's
+    /// reading of [`RuleKey::GateFollow`], each ship of a slot following
+    /// the player, attacking it, its timer just stopped (loop B,
+    /// @0x67346-0x67487) comes out after the player, in order: at rest at
+    /// `exit`, or where the player arrived under
     /// [`GateArrivalRule::LikeJump`], with the player's heading, waiting
     /// at the gate for `Rand(50) + 100` ticks, drawn on `chance`, then
     /// bursting out of it as any ship coming out of a gate does (see the
@@ -103,13 +133,11 @@ impl Session {
         &mut self,
         gate: StellarId,
         exit: Vec2,
-        catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
     ) {
         if self.rules.source_for(RuleKey::GateFollow) != RuleSource::Engine {
             return;
         }
-        self.mission_ship_arrivals(catalog, Some(Entrance::Gate), chance);
         let followers: Vec<u8> = self
             .pilot
             .missions
@@ -631,5 +659,26 @@ pub(super) mod tests {
             "the exit's frame does not bring in ships the hook restarts"
         );
         assert_eq!(timer(&session), (199, 0), "restarted");
+    }
+
+    #[test]
+    fn the_gate_exit_runs_a_slots_appear_timer_once_by_the_engine_and_not_by_the_other_reading() {
+        // Ships of 131 starting 0: neither loop A, which only takes -6
+        // slots, nor the hook, which only restarts `ShipStart` 1, touches
+        // the timer, left at 5 when the player last left 131. The exit's
+        // one `_EnterMoreShips` frame (@0x672f2) counts it down by the
+        // engine; by the other reading the exit leaves it as a jump does.
+        for (source, expected) in [(RuleSource::Engine, 4), (RuleSource::Bible, 5)] {
+            let catalog = gated(shipping(131, 0), 0);
+            let mut session = accepted(&catalog).with_rules(reading(source));
+            take_off(&mut session, &catalog);
+            if let Some(active) = session.pilot.missions.get_mut(0) {
+                active.ships.appear = 5;
+                active.ships.arrived = 0;
+            }
+            exit_gate(&mut session, &catalog, GateKind::Hypergate, &mut NeverFires);
+            assert_eq!(timer(&session), (expected, 0), "{source:?}");
+            assert!(marked(&session).is_empty(), "{source:?}: still to come");
+        }
     }
 }

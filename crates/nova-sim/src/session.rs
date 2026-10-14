@@ -1533,7 +1533,8 @@ impl Session {
     /// system raises [`Fate::Departed`] and is counted (see the
     /// `mission_ships` module). Then, unless the ship is docked, each
     /// hypergate shown steps its sprite (see the `gate_sprites` module),
-    /// while a jump plays too.
+    /// while a jump plays too. The traffic ticks in the same [`World`] the
+    /// gate exit's arrivals pass steps it in (`Session::step_traffic`).
     pub fn tick_traffic(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -1547,37 +1548,12 @@ impl Session {
                 self.mission_ship_arrivals(catalog, None, chance);
                 self.unmark_inactive_mission_ships();
                 self.join_mission_escorts();
-                let system_govt = self.galaxy.govt(self.pilot.system);
-                let facts = control::Facts {
-                    pilot: &self.pilot,
-                    ammo_outfits: &self.ammo_outfits,
-                    armament: &self.armament,
-                };
-                let targeted = self.combat.targeted_damage();
-                let type_widths = self.gate_type_widths();
-                let world = World {
-                    sites: &self.sites,
-                    player: Some(self.player_side()),
-                    govts: &self.govts,
-                    system_govt,
-                    record: self.system_record(),
-                    persons: PersonWorld {
-                        rules: &*self.person_rules.0,
-                        gone: &self.pilot.gone_persons,
-                        grudges: &self.pilot.grudges,
-                        control_bits: &*self.control_bits.0,
-                        pilot: &facts,
-                        fleet: &self.pilot.escorts,
-                    },
-                    escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
-                    led_speed: self.led_speed(),
-                    targeted: &targeted,
-                    type_widths: &type_widths,
-                };
                 let strikes = std::mem::take(&mut self.strikes);
                 let last = self.last_npc();
                 let marks = self.mission_marks();
-                self.traffic.tick_in(behaviour, world, &strikes, chance);
+                self.step_traffic(|traffic, world| {
+                    traffic.tick_in(behaviour, world, &strikes, chance);
+                });
                 self.announce_fleets(chance);
                 self.mission_ships_left(&marks);
                 self.resolve_person_offers(last, &mut &mut *chance);
@@ -1590,6 +1566,44 @@ impl Session {
             self.step_gate_sprites(chance);
         }
         self.clear_lost_target();
+    }
+
+    /// Runs `f` on the traffic in the [`World`] it flies among in flight:
+    /// the system's stellars, the player, the governments, the system's
+    /// government and the player's legal record with it, the persons'
+    /// world, the escorts' tons, the led ships' speed factor, the damage
+    /// the fight's shots aim and the gates' widths. Both the tick
+    /// ([`Session::tick_traffic`]) and the gate exit's arrivals pass
+    /// ([`Session::gate_exit_pass`]) step the traffic in it.
+    fn step_traffic(&mut self, f: impl FnOnce(&mut Traffic, World<'_>)) {
+        let system_govt = self.galaxy.govt(self.pilot.system);
+        let facts = control::Facts {
+            pilot: &self.pilot,
+            ammo_outfits: &self.ammo_outfits,
+            armament: &self.armament,
+        };
+        let targeted = self.combat.targeted_damage();
+        let type_widths = self.gate_type_widths();
+        let world = World {
+            sites: &self.sites,
+            player: Some(self.player_side()),
+            govts: &self.govts,
+            system_govt,
+            record: self.system_record(),
+            persons: PersonWorld {
+                rules: &*self.person_rules.0,
+                gone: &self.pilot.gone_persons,
+                grudges: &self.pilot.grudges,
+                control_bits: &*self.control_bits.0,
+                pilot: &facts,
+                fleet: &self.pilot.escorts,
+            },
+            escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
+            led_speed: self.led_speed(),
+            targeted: &targeted,
+            type_widths: &type_widths,
+        };
+        f(&mut self.traffic, world);
     }
 
     /// Shows the arrival quote of each announced fleet the traffic brought
@@ -2766,8 +2780,13 @@ impl Session {
     /// path in the original (`_HandlePlayerDockRequest` @0x66f40,
     /// @0x6706f). The special ships following the player are decided
     /// next, as [`RuleKey::GateFollow`] says (see the `gate_follow`
-    /// module): those that follow come out of the exit gate after the
-    /// player, or where it arrived like a jump. Last, every ship the
+    /// module). Once the system is entered, the exit runs one more
+    /// `_EnterMoreShips` pass before the first frame
+    /// (`Session::gate_exit_pass`, @0x672f2): an arrival may come on
+    /// it, and the escort-strength timer counts down once, so it fires on
+    /// the n-th tick after the exit, not the (n + 1)-th as after a
+    /// take-off. Then the special ships that follow come out of the exit
+    /// gate after the player, or where it arrived like a jump. Last, every ship the
     /// player leads comes out of the exit gate after it, as
     /// [`RuleKey::GateEscorts`] says (see the `gate_escorts` module).
     pub fn enter_wormhole(
@@ -2793,9 +2812,12 @@ impl Session {
     /// Brings the ship out of `exit`, a gate of `kind`, in `system`: see
     /// [`Session::enter_wormhole`]. Before it enters, the exit decides
     /// what becomes of the special ships following the player
-    /// ([`Session::exit_gate_slots`]); once it has, those that follow come
+    /// ([`Session::exit_gate_slots`]); once it has, the exit's arrivals
+    /// pass runs ([`Session::gate_exit_pass`]), those that follow come
     /// out of the gate after it ([`Session::emerge_followers`]), and then
-    /// every ship the player leads ([`Session::lead_out_of_gate`]).
+    /// every ship the player leads ([`Session::lead_out_of_gate`]), in the
+    /// original's order (@0x67159, @0x672e0, @0x672f2, @0x67346,
+    /// @0x674ef).
     fn come_out(
         &mut self,
         system: SystemId,
@@ -2833,7 +2855,8 @@ impl Session {
             },
         };
         self.enter_system(Entry::Gate, entered, catalog, catalog, chance);
-        self.emerge_followers(exit.id, exit.position, catalog, chance);
+        self.gate_exit_pass(catalog, chance);
+        self.emerge_followers(exit.id, exit.position, chance);
         self.lead_out_of_gate(exit.id, exit.position, chance);
     }
 
@@ -19699,6 +19722,45 @@ pub(super) mod tests {
         assert_eq!(flying_as(&session, 161), []);
     }
 
+    /// [`strong`] laid out as [`gated`]: the ship starts over hypergate
+    /// 300 in 130, linked to 310 in 131.
+    fn strong_gated() -> FakePilotCatalog {
+        let gated = gated();
+        FakePilotCatalog {
+            sites: gated.sites,
+            gates: gated.gates,
+            gate_listers: gated.gate_listers,
+            ..strong()
+        }
+    }
+
+    #[test]
+    fn escorts_above_49_tons_bring_fleet_382_on_the_59th_tick_after_a_gate_exit() {
+        // The gate exit's own `_EnterMoreShips` pass (@0x672f2) counts the
+        // timer, armed to 59, once before the first frame, under either
+        // reading of the gate's followers.
+        let catalog = strong_gated();
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = at_gate(&catalog)
+                .with_rules(Rulebook::default().with_override(RuleKey::GateFollow, source));
+            session.pilot.escorts = vec![fleet_escort(150)];
+            session
+                .enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires)
+                .expect("enters");
+            assert_eq!(flying_as(&session, 150).len(), 1, "{source:?}: led out");
+            for _ in 0..58 {
+                session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            }
+            assert_eq!(flying_as(&session, 160), [], "{source:?}");
+            session.tick_traffic(&catalog, &Peaceful, &mut NeverFires);
+            assert_eq!(
+                flying_as(&session, 160),
+                [AiType::Interceptor],
+                "{source:?}"
+            );
+        }
+    }
+
     #[test]
     fn escorts_above_199_tons_bring_fleet_383() {
         let catalog = strong();
@@ -19821,6 +19883,79 @@ pub(super) mod tests {
                 .any(|message| matches!(message, SimMessage::FleetArrivalQuote(_)))
         );
         assert!(!session.take_sounds().contains(&SimSound::FleetArrivalQuote));
+    }
+
+    /// A [`Chance`] answering 1 to the first `Rand(500)`, the arrival
+    /// roll's fleet, and as [`NeverFires`] does to every other question.
+    #[derive(Debug, Default)]
+    pub(super) struct FleetArrival {
+        rolled: bool,
+    }
+
+    impl Chance for FleetArrival {
+        fn fires(&mut self, percent: u8) -> bool {
+            NeverFires.fires(percent)
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            if n == crate::traffic::spawn::ARRIVAL_ODDS && !self.rolled {
+                self.rolled = true;
+                return 1;
+            }
+            NeverFires.below(n)
+        }
+
+        fn roll(&mut self, sides: u16) -> u16 {
+            NeverFires.roll(sides)
+        }
+    }
+
+    /// [`gated`] with traffic in 131, of three ships on average, whose
+    /// `DudeTypes` name only [`fleet`] 132, of no `LinkSyst`, at 100 %,
+    /// quoting `STR#` 7600 on its arrival: its setup brings no ship.
+    fn quoting_gated() -> FakePilotCatalog {
+        let mut catalog = trafficked(131, 3, 3);
+        catalog.traffic[0].1.dude_types[0] = (-132, 100);
+        catalog.fleets = vec![FleetRecord {
+            quote: Some(7600),
+            ..fleet(132, 0)
+        }];
+        catalog.ship_records.push(ship(130, FAST));
+        let gated = gated();
+        FakePilotCatalog {
+            sites: gated.sites,
+            gates: gated.gates,
+            gate_listers: gated.gate_listers,
+            ..catalog
+        }
+    }
+
+    #[test]
+    fn a_fleet_arriving_on_the_gate_exits_pass_comes_with_its_quote_at_once() {
+        // The setup draws no `Rand(500)`: the first is the exit pass's
+        // arrival roll (@0x672f2), whose fleet `_HyperSpawnFleet` announces
+        // at once (@0x42607-0x426f4).
+        let catalog = quoting_gated();
+        let mut session = at_gate(&catalog).with_strings(Rc::new(QuoteLists));
+        session.take_messages();
+        session.take_sounds();
+        session
+            .enter_hypergate(Some(SystemId(131)), &catalog, &mut FleetArrival::default())
+            .expect("enters");
+        assert!(
+            session
+                .npcs()
+                .iter()
+                .any(|npc| npc.ship == ShipId(129) && npc.govt == Some(GovtId(150))),
+            "the fleet's lead is in: {:?}",
+            fleet_of(&session)
+        );
+        assert!(
+            session
+                .take_messages()
+                .contains(&SimMessage::FleetArrivalQuote("Hail 9".to_owned()))
+        );
+        assert!(session.take_sounds().contains(&SimSound::FleetArrivalQuote));
     }
 
     // The galaxy overlay.
