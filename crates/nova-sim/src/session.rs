@@ -17702,6 +17702,82 @@ pub(super) mod tests {
         }
     }
 
+    /// [`captured`] with `commodity` tons of commodity 2, `junk` of
+    /// `jünk` and 3 of mission cargo aboard, assigned Use As Escort with
+    /// the trader's `OnCapture` blank. Gives the cargo after.
+    fn escorted_with(commodity: u32, junk: u32) -> BTreeMap<Good, u32> {
+        use crate::session::precalced::tests::JUNK;
+        let catalog = boardable();
+        let mut session = captured(&catalog);
+        session.pilot.cargo = BTreeMap::from([(Good::Commodity(2), commodity), (JUNK, junk)]);
+        session
+            .pilot
+            .missions
+            .put(0, crate::testkit::carrying(140, 3));
+        assert_eq!(session.capacity(), 20, "the player's 20 alone");
+        assert_eq!(
+            session.assign(Assignment::Escort, &mut Draws::of(&[])),
+            Some(Assigned::Escort)
+        );
+        assert_eq!(
+            session.capacity(),
+            40,
+            "the player's 20 and the trader's 20"
+        );
+        session.pilot().cargo().collect()
+    }
+
+    /// `_DoPlunderDialog` runs a blank `OnCapture` (@0x9460e) and takes
+    /// the trader into the fleet (@0x947a5) before the close resets
+    /// (@0x94a0b), so the trim measures the trader's holds too: 38 tons
+    /// in 40 holds is not cut, where 20 holds would cut 25 to 13.
+    #[test]
+    fn use_as_escort_trims_with_the_captured_ship_in_the_fleet() {
+        use crate::session::precalced::tests::JUNK;
+        assert_eq!(
+            escorted_with(25, 10),
+            BTreeMap::from([(Good::Commodity(2), 25), (JUNK, 10)]),
+            "25 + 10 + 3 within the fleet's 40: untouched"
+        );
+    }
+
+    /// Past even the fleet's 40 holds, Use As Escort's one reset cuts to
+    /// them: 50 x 40/73, 27, where the player's 20 would leave 13.
+    #[test]
+    fn use_as_escort_past_the_new_fleets_holds_trims_to_them() {
+        use crate::session::precalced::tests::JUNK;
+        assert_eq!(
+            escorted_with(50, 20),
+            BTreeMap::from([(Good::Commodity(2), 27), (JUNK, 20)]),
+            "50 x 40/73 once, the jünk kept"
+        );
+    }
+
+    /// Use As My Ship with no ship slot free loses the prize, and the
+    /// plunder dialog's close (@0x94a0b) still resets: the commodities
+    /// past the player's 20 holds are cut, 50 x 20/73, 13, and a
+    /// conviction's latches re-armed.
+    #[test]
+    fn an_abandoned_capture_still_trims_as_the_plunder_dialog_closes() {
+        use crate::scan::Latches;
+        use crate::session::precalced::tests::{JUNK, convicted};
+        let mut full = crowded(62);
+        full.pilot.cargo = BTreeMap::from([(Good::Commodity(2), 50), (JUNK, 20)]);
+        full.pilot.missions.put(0, crate::testkit::carrying(140, 3));
+        convicted(&mut full);
+        assert_eq!(
+            full.assign(Assignment::MyShip, &mut Draws::of(&[])),
+            Some(Assigned::Abandoned)
+        );
+        assert_eq!(full.capacity(), 20);
+        assert_eq!(
+            full.pilot().cargo().collect::<BTreeMap<_, _>>(),
+            BTreeMap::from([(Good::Commodity(2), 13), (JUNK, 20)]),
+            "50 x 20/73, the jünk kept"
+        );
+        assert_eq!(full.scan_latches, Latches::ARMED);
+    }
+
     #[test]
     fn use_as_my_ship_swaps_the_player_into_the_captured_ship_and_keeps_the_old_one() {
         let catalog = kitted();
