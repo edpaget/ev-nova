@@ -11,8 +11,8 @@
 //! Arriving in Beta clears the course; a course back to Alpha, explored,
 //! shows its name.
 //!
-//! The date, at the foot of the cargo area, reads "June 23, 1177 NC" and
-//! moves on a day with each jump.
+//! The date reads "June 23, 1177 NC" and moves on a day with each jump;
+//! the cargo area lists the hold.
 
 use std::io;
 use std::path::Path;
@@ -445,12 +445,12 @@ fn date(game: &Harness) -> String {
 }
 
 #[test]
-fn the_date_moves_on_a_day_with_each_jump_and_the_stock_cargo_area_lists_the_hold_not_it() {
+fn the_date_moves_on_a_day_with_each_jump_and_the_cargo_area_lists_the_hold() {
     let mut game = Harness::flying();
     assert_eq!(
         game.cargo_area(),
         ["Free:", "0", "Credits:", "0"],
-        "no room for the date under the cargo lines"
+        "the empty hold and the cash"
     );
     assert_eq!(date(&game), "June 23, 1177 NC");
 

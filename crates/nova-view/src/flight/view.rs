@@ -3426,15 +3426,6 @@ impl<C> FlightView<C> {
         Some(rotation_frame(self.shown_heading(), sheet.rotations))
     }
 
-    /// Today's date as the HUD shows it, or none for a session that never
-    /// started.
-    fn date_text(&self) -> String {
-        self.session
-            .as_ref()
-            .map(Session::date_text)
-            .unwrap_or_default()
-    }
-
     /// The ship's shield, armour and fuel, or none for a session that
     /// never started.
     fn reserves(&self) -> Reserves {
@@ -4096,7 +4087,6 @@ impl<
         match &self.status_bar {
             Ok(bar) => {
                 let radar = self.radar_shown();
-                let date = self.date_text();
                 let cargo = self.session.as_ref().ok().map(Session::status_cargo);
                 let state = HudState {
                     radar: &radar,
@@ -4104,7 +4094,6 @@ impl<
                     reserves: self.reserves(),
                     nav: self.nav_shown(),
                     cargo: cargo.as_ref(),
-                    date: &date,
                     disabled: self
                         .session
                         .as_ref()
@@ -5537,7 +5526,6 @@ mod tests {
                 reserves: ShipStats::new(FIELDS, &[]).full(),
                 nav: NavDisplay::Off,
                 cargo: Some(&view.session().expect("flying").status_cargo()),
-                date: DATE,
                 disabled: false,
             },
             None,
@@ -6402,7 +6390,6 @@ mod tests {
                 reserves,
                 nav: NavDisplay::Off,
                 cargo: None,
-                date: DATE,
                 disabled: false,
             },
             None,
@@ -7508,7 +7495,6 @@ mod tests {
                 reserves: reserves(&view),
                 nav: NavDisplay::Off,
                 cargo: Some(&view.session().expect("flying").status_cargo()),
-                date: "June 24, 1177 NC",
                 disabled: false,
             },
             None,
@@ -8704,11 +8690,9 @@ mod tests {
             .with_chance(SharedChance::new(shared));
         view.take_landing();
         let landed = view.session().expect("docked").date();
-        let shown = view.date_text();
         view.take_off().expect("took off");
         assert_eq!(always.borrow().asked, [35], "the take-off's day");
         assert_eq!(view.session().expect("flying").date(), landed.next_day());
-        assert_ne!(view.date_text(), shown, "the HUD's date moves on");
     }
 
     #[test]
@@ -15687,7 +15671,7 @@ mod tests {
                 cargo_line("Credits:", 77.0, 66.0),
                 cargo_line("1,000", 87.0, 82.0),
             ],
-            "an empty 10-ton hold, and no room for the date"
+            "an empty 10-ton hold"
         );
         land_now(&mut view);
         assert_eq!(view.trade(BUY_FOOD), Ok(10));
@@ -15705,7 +15689,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cargo_area_with_room_shows_the_date_on_its_last_line() {
+    fn a_cargo_area_with_room_below_the_credits_draws_no_date() {
         assert_eq!(
             layout().cargo,
             crate::geometry::Bounds {
@@ -15724,17 +15708,24 @@ mod tests {
             ..catalog()
         };
         let mut view = FlightView::new(taller);
-        // One line of Geneva 12 (1.2 x 12) above the area's bottom.
-        let last_line = at(838.0, 552.0 - 1.2 * 12.0);
-        let date = |view: &View| {
-            cargo(view)
-                .into_iter()
-                .filter(|(text, _)| text.ends_with("NC"))
-                .collect::<Vec<_>>()
+        let no_date = |view: &View| {
+            let date = view.session().expect("flying").date_text();
+            let dates: Vec<_> = drawn(view)
+                .iter()
+                .filter(
+                    |command| matches!(command, DrawCommand::Text { text, .. } if *text == date),
+                )
+                .cloned()
+                .collect();
+            assert_eq!(dates, [], "no date drawn for {date}");
+            assert!(
+                cargo(view).iter().any(|(text, _)| text == "Credits:"),
+                "the cargo lines are still drawn"
+            );
         };
-        assert_eq!(date(&view), [(DATE.to_owned(), last_line)]);
+        no_date(&view);
         jump_to_alpha(&mut view);
-        assert_eq!(date(&view), [("June 24, 1177 NC".to_owned(), last_line)]);
+        no_date(&view);
     }
 
     #[test]

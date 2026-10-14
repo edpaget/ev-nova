@@ -262,12 +262,11 @@ fn a_scans_notices_read_their_stock_strings() {
 
 /// The cargo area's labels are `STR#` 2002 #19-#21 and #33, its rows'
 /// `STR#` 4003, and a mission's cargo names `STR#` 4002, as the stock
-/// strings read; the default bar's `CargoArea` has no room for the date
-/// under the cargo lines.
+/// strings read, in the default bar's `CargoArea`.
 #[test]
 fn the_cargo_area_reads_its_stock_strings_and_area() {
     use nova_view::flight::hud::{
-        CARGO_CREDITS, CARGO_FREE, CARGO_MULTIPLE, CARGO_SPECIAL, credits_label, date_line,
+        CARGO_CREDITS, CARGO_FREE, CARGO_MULTIPLE, CARGO_SPECIAL, credits_label,
     };
     let Some(data) = open() else {
         return;
@@ -297,7 +296,6 @@ fn the_cargo_area_reads_its_stock_strings_and_area() {
     let view = FlightView::new(&data);
     let bar = view.status_bar().expect("the stock status bar reads");
     assert_eq!(bar.layout.cargo, rect(8.0, 458.0, 184.0, 552.0));
-    assert_eq!(date_line(bar.layout.cargo, bar.layout.font_size), None);
 }
 
 #[test]

@@ -92,8 +92,7 @@ pub struct StatusBarLayout {
     /// `TargArea`: the target panel.
     pub targ: Bounds,
     /// `CargoArea`: the hold, free space, mission cargo and credits
-    /// (`_DrawStatusCargo`), and the date on its last line when there is
-    /// room.
+    /// (`_DrawStatusCargo`).
     pub cargo: Bounds,
     /// `BrightText`.
     pub bright_text: Color,
