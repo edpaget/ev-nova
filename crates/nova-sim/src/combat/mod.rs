@@ -108,6 +108,8 @@ pub mod stellar;
 pub mod submunition;
 pub mod weapon;
 
+use std::collections::BTreeMap;
+
 use armament::{Armament, Arsenal, Launch, Rounds, Shooter, Trigger};
 use beam::{Aiming, Beam};
 use damage::{Blast, Hit};
@@ -305,6 +307,10 @@ impl Default for Rules<'static> {
     }
 }
 
+/// The share of a shot's mass and energy damage that counts as aimed at
+/// its ship (0.5 @0xdd128, `_CalculateTargetedDamage`).
+pub const AIMED_DAMAGE_SHARE: f64 = 0.5;
+
 /// The shots and beams in flight, and what the fight has reported.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Combat {
@@ -391,10 +397,50 @@ impl Combat {
         id
     }
 
-    /// Puts `launch` in flight from `side`, at `from`: a fighter's
-    /// [`Sortie`] from a bay, a beam held on the missile `quarry`, on its
-    /// target, or ahead, or a shot of its government.
-    fn launch(&mut self, side: Side, from: &ShipState, launch: Launch, quarry: Option<ShotId>) {
+    /// The damage aimed at each ship by the shots in flight
+    /// (`_CalculateTargetedDamage` @0x3a153-0x3a232): for each shot not
+    /// lost and aimed at a ship ([`Shot::aimed_at`]), its mass and energy
+    /// damage times [`AIMED_DAMAGE_SHARE`], added to that ship's total
+    /// and truncated after each add. Beams are not shots and count for
+    /// nothing. The original keeps each total in 16 bits; here it is not
+    /// wrapped.
+    ///
+    /// The original builds the totals once a frame, before the AI runs
+    /// (`_DoPlayGameWork` @0x44223, before `_AIDispatch` @0x4429d); the
+    /// session builds them from the shots in flight as its traffic
+    /// decides, which is the same point in the frame.
+    #[must_use]
+    pub fn targeted_damage(&self) -> BTreeMap<ShipRef, i32> {
+        let mut aimed = BTreeMap::new();
+        for shot in self.shots.iter().filter(|shot| !shot.lost) {
+            let Some(ship) = shot.aimed_at else {
+                continue;
+            };
+            let damage = f64::from(shot.weapon.mass_damage) + f64::from(shot.weapon.energy_damage);
+            let total: &mut i32 = aimed.entry(ship).or_default();
+            // A sum of `i16` halves stays far within an `i32`.
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                *total = damage
+                    .mul_add(AIMED_DAMAGE_SHARE, f64::from(*total))
+                    .trunc() as i32;
+            }
+        }
+        aimed
+    }
+
+    /// Puts `launch` in flight from `side`, at `from`, its damage aimed at
+    /// `aimed_at`: a fighter's [`Sortie`] from a bay, a beam held on the
+    /// missile `quarry`, on its target, or ahead, or a shot of its
+    /// government.
+    fn launch(
+        &mut self,
+        side: Side,
+        from: &ShipState,
+        launch: Launch,
+        quarry: Option<ShotId>,
+        aimed_at: Option<ShipRef>,
+    ) {
         let Side { ship, fleet, govt } = side;
         self.events.push(CombatEvent::Fired {
             ship,
@@ -422,6 +468,7 @@ impl Combat {
             let shot = Shot {
                 id: self.next_id(),
                 target: launch.target,
+                aimed_at,
                 govt,
                 ..Shot::launch(launch.weapon, ship, fleet, from, launch.heading)
             };
@@ -450,7 +497,12 @@ impl Combat {
                 &mut |spec| aim::aim(spec, &state, &hull, target),
             );
             for launch in launches {
-                self.launch(fighter.side(), &state, launch, None);
+                // A front-quadrant turret firing ahead aims at nothing
+                // (@0x88bf0); every other shot at the ship's target.
+                let ahead =
+                    launch.weapon.guidance == Guidance::FrontTurret && launch.target.is_none();
+                let aimed_at = if ahead { None } else { fighter.target };
+                self.launch(fighter.side(), &state, launch, None, aimed_at);
             }
         }
     }
@@ -481,7 +533,7 @@ impl Combat {
                 },
             );
             if let Some((launch, missile)) = fired {
-                self.launch(side, &state, launch, Some(missile));
+                self.launch(side, &state, launch, Some(missile), None);
             }
         }
     }
@@ -1098,6 +1150,154 @@ mod tests {
             .iter()
             .filter(|event| matches!(event, CombatEvent::Fired { ship: s, .. } if *s == ship))
             .count()
+    }
+
+    /// The shots in flight after `ship`, firing `record`, fires a tick
+    /// among `others`.
+    fn launched_by(ship: Ship, record: WeaponRecord, others: Vec<Ship>) -> Combat {
+        let mut combat = Combat::default();
+        let mut ships = vec![ship.armed(record)];
+        ships.extend(others);
+        tick(&mut combat, &mut ships, &NovaDisable);
+        combat
+    }
+
+    #[test]
+    fn every_shot_a_ship_fires_is_aimed_at_its_target() {
+        let homing = WeaponRecord {
+            guidance: 1,
+            guided_turn: 70,
+            ..blaster()
+        };
+        for record in [blaster(), homing] {
+            let combat = launched_by(
+                Ship::at(1, 0.0, 0.0).targeting(B),
+                record,
+                vec![Ship::at(2, 0.0, -300.0)],
+            );
+            assert_eq!(combat.shots().len(), 1);
+            assert_eq!(combat.shots()[0].aimed_at, Some(B), "{:?}", record.guidance);
+        }
+        let combat = launched_by(Ship::at(1, 0.0, 0.0), blaster(), Vec::new());
+        assert_eq!(combat.shots()[0].aimed_at, None, "no target");
+        let gone = launched_by(Ship::at(1, 0.0, 0.0).targeting(C), blaster(), Vec::new());
+        assert_eq!(
+            gone.shots()[0].aimed_at,
+            Some(C),
+            "its target, there or not"
+        );
+    }
+
+    #[test]
+    fn a_front_turret_firing_ahead_is_aimed_at_nothing() {
+        let front = WeaponRecord {
+            guidance: 7,
+            ..blaster()
+        };
+        // Facing right: B ahead, C behind.
+        let ahead = launched_by(
+            Ship::at(1, 0.0, 0.0).targeting(B),
+            front,
+            vec![Ship::at(2, 300.0, 0.0)],
+        );
+        assert_eq!(ahead.shots()[0].aimed_at, Some(B));
+        let astern = launched_by(
+            Ship::at(1, 0.0, 0.0).targeting(C),
+            front,
+            vec![Ship::at(3, -300.0, 0.0)],
+        );
+        assert_eq!(astern.shots()[0].aimed_at, None, "fired straight ahead");
+    }
+
+    /// A shot of `record` by A, aimed at B.
+    fn aimed(record: WeaponRecord) -> Shot {
+        Shot {
+            aimed_at: Some(B),
+            ..Shot::launch(WeaponSpec::new(&record), A, A, &ShipState::default(), 0.0)
+        }
+    }
+
+    #[test]
+    fn the_damage_aimed_at_a_ship_is_half_its_shots_mass_and_energy_truncated_after_each() {
+        let five = WeaponRecord {
+            mass_dmg: 2,
+            energy_dmg: 3,
+            ..blaster()
+        };
+        let mut combat = Combat {
+            shots: vec![aimed(five), aimed(five), aimed(five)],
+            ..Combat::default()
+        };
+        assert_eq!(
+            combat.targeted_damage(),
+            BTreeMap::from([(B, 6)]),
+            "2.5 three times, truncated each time: not 7"
+        );
+        let missile = WeaponRecord {
+            guidance: 1,
+            mass_dmg: 30,
+            energy_dmg: 11,
+            ..blaster()
+        };
+        combat.shots = vec![
+            aimed(missile),
+            aimed(blaster()),
+            Shot {
+                aimed_at: Some(C),
+                ..aimed(five)
+            },
+            Shot {
+                aimed_at: None,
+                ..aimed(missile)
+            },
+            Shot {
+                lost: true,
+                ..aimed(missile)
+            },
+        ];
+        // 20.5 truncated to 20, then 20 + 7 = 27.
+        assert_eq!(combat.targeted_damage(), BTreeMap::from([(B, 27), (C, 2)]));
+        let negative = WeaponRecord {
+            mass_dmg: -3,
+            energy_dmg: 0,
+            ..blaster()
+        };
+        combat.shots = vec![aimed(negative), aimed(five)];
+        assert_eq!(
+            combat.targeted_damage(),
+            BTreeMap::from([(B, 1)]),
+            "-1.5 truncates to -1, then 1.5 to 1"
+        );
+        assert_eq!(Combat::default().targeted_damage(), BTreeMap::new());
+        assert_eq!(AIMED_DAMAGE_SHARE, 0.5);
+    }
+
+    #[test]
+    fn point_defence_is_aimed_at_no_ship() {
+        let quad = WeaponRecord {
+            guidance: 9,
+            ..blaster()
+        };
+        let mut combat = Combat::default();
+        let missile = WeaponRecord {
+            guidance: 1,
+            guided_turn: 70,
+            count: 100,
+            speed: 100,
+            ..weapon(134)
+        };
+        let mut ships = [
+            Ship::at(1, 0.0, 0.0).armed(quad).targeting(B),
+            Ship::at(2, 150.0, 0.0).armed(missile).targeting(A),
+        ];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let defence: Vec<&Shot> = combat
+            .shots()
+            .iter()
+            .filter(|shot| shot.weapon.guidance == Guidance::PointDefence)
+            .collect();
+        assert_eq!(defence.len(), 1, "{:?}", combat.shots());
+        assert_eq!(defence[0].aimed_at, None);
     }
 
     /// How many shots `ship`, firing `record`, fires in a tick.
@@ -2383,6 +2583,7 @@ mod tests {
             assert_eq!(sub.position, at);
             assert_eq!(sub.generation, 1);
             assert_eq!(sub.target, Some(C), "the shell's target");
+            assert_eq!(sub.aimed_at, Some(C), "aimed at its own target");
         }
         assert_eq!((subs[0].heading, subs[1].heading), (85.0, 95.0));
         assert_ne!(subs[0].id, subs[1].id);
@@ -2423,6 +2624,7 @@ mod tests {
         let subs = sub_shots(&combat);
         assert_eq!(subs.len(), 2, "{events:?}");
         assert_eq!(subs[0].target, Some(B));
+        assert_eq!(subs[0].aimed_at, Some(B));
         let at = subs[0].position;
         assert!(
             (at - Vec2::new(14.0, 0.0)).length() < 1e-3,

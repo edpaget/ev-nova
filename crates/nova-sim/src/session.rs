@@ -1384,6 +1384,7 @@ impl Session {
                     ammo_outfits: &self.ammo_outfits,
                     armament: &self.armament,
                 };
+                let targeted = self.combat.targeted_damage();
                 let world = World {
                     sites: &self.sites,
                     player: Some(self.player_side()),
@@ -1400,6 +1401,7 @@ impl Session {
                     },
                     escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
                     led_speed: self.led_speed(),
+                    targeted: &targeted,
                 };
                 let strikes = std::mem::take(&mut self.strikes);
                 let last = self.last_npc();
@@ -1420,7 +1422,9 @@ impl Session {
     /// player, the governments, the system's government and the player's
     /// legal record with it (none in an independent system), and the
     /// persons' world: the session's rules and control bits, and the
-    /// pilot's persons gone and grudges.
+    /// pilot's persons gone and grudges. No damage is aimed in it: only
+    /// the traffic's tick fires, and it reads the fight's
+    /// ([`Session::tick_traffic`]).
     fn world(&self) -> World<'_> {
         let system_govt = self.galaxy.govt(self.pilot.system);
         World {
@@ -1439,6 +1443,7 @@ impl Session {
             },
             escort_tons: strength::escort_tons_in_system(self.traffic.npcs(), &self.ships),
             led_speed: self.led_speed(),
+            targeted: &crate::ai::NO_AIMED_DAMAGE,
         }
     }
 
@@ -15151,6 +15156,75 @@ pub(super) mod tests {
         fn target(&self, _npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
             Some(ShipRef::Player)
         }
+    }
+
+    /// Every NPC attacks the player, firing as Nova's AI picks
+    /// ([`crate::ai::fire::trigger`]).
+    #[derive(Debug)]
+    struct Missileer;
+
+    impl Behaviour for Missileer {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            Goal::Attack(ShipRef::Player)
+        }
+
+        fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+            crate::ai::fire::trigger(npc, around)
+        }
+
+        fn target(&self, _npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            Some(ShipRef::Player)
+        }
+    }
+
+    #[test]
+    fn an_npc_holds_its_next_missile_while_the_one_in_flight_covers_its_target() {
+        // The player holds 30 shield and 45 armour: 1.05 x 75 = 78.75. A
+        // missile of 79 mass and 79 energy aims 79 at it, one of 78 aims
+        // 78. It flies 1 pixel a tick, so the first is still in flight.
+        // The NPC's short gun (52 pixels' reach) keeps the missile from
+        // being its gun.
+        let launches = |damage: i16| {
+            let missile = WeaponRecord {
+                speed: 100,
+                count: 400,
+                reload: 0,
+                mass_dmg: damage,
+                energy_dmg: damage,
+                ..homing_missile(134, 0)
+            };
+            let short = WeaponRecord {
+                id: WeaponId(135),
+                count: 1,
+                ..blaster()
+            };
+            let mut catalog = arming(blaster(), missile, 0);
+            catalog.weapons.push(short);
+            catalog.hulls[1].weapons.insert(
+                0,
+                StockWeapon {
+                    weapon: WeaponId(135),
+                    count: 1,
+                    ammo: 0,
+                },
+            );
+            let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+            let mut fired = 0;
+            for _ in 0..4 {
+                session.tick_traffic(&catalog, &Missileer, &mut NeverFires);
+                session.tick_combat(Rules::default(), &mut NeverFires);
+                fired += session
+                    .take_combat_events()
+                    .iter()
+                    .filter(|event| {
+                        matches!(event, CombatEvent::Fired { weapon, .. } if *weapon == WeaponId(134))
+                    })
+                    .count();
+            }
+            fired
+        };
+        assert_eq!(launches(79), 1, "the first suffices");
+        assert!(launches(78) > 1, "the first falls short");
     }
 
     #[test]

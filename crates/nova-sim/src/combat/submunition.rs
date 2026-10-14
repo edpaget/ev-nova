@@ -93,6 +93,7 @@ pub fn release(
             };
             Shot {
                 target,
+                aimed_at: target,
                 generation: unaimed.generation,
                 govt: parent.govt,
                 ..Shot::launch(
