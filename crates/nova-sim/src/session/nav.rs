@@ -662,6 +662,25 @@ mod tests {
         assert_eq!(session.nav_mode(), NavMode::Stellar(None));
     }
 
+    #[test]
+    fn a_wormhole_with_no_exit_lets_go_of_the_selection_and_keeps_the_mode() {
+        let mut catalog = wormholes();
+        catalog.gates.retain(|site| site.id == StellarId(400));
+        for (before, after) in [
+            (stellar(400), NavMode::Stellar(None)),
+            (hyperspace(131), NavMode::Hyperspace(None)),
+        ] {
+            let mut session = at_wormhole(&catalog);
+            session.nav = before;
+            assert_eq!(session.nav_mode(), before, "a selection to let go of");
+            assert_eq!(
+                session.enter_wormhole(&catalog, &mut NeverFires),
+                Err(GateRefusal::NoExit)
+            );
+            assert_eq!(session.nav_mode(), after, "{before:?}");
+        }
+    }
+
     /// Runs `M131` and settles it.
     fn move_to_131(session: &mut Session, catalog: &FakePilotCatalog) {
         session.run_set(&SetExpr::parse("M131").expect("parses"), &mut NeverFires);
