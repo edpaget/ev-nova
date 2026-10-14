@@ -49,6 +49,14 @@
 //! past the new hold until a reset outside a set expression. By the other
 //! reading of [`RuleKey::OutfitSaleCargo`], no reset through an outfit
 //! sale trims, its `OnSell`'s included.
+//!
+//! **Left out.** The sites and parts of the reset left out are listed,
+//! each with its address and reason, in
+//! rdm:phase/cargo-and-scanning/phase-6-trim-wherever-reset-runs; those
+//! the engine can model now (the player info, outfitter, hire and
+//! plunder dialogs' own resets, the buy loop's single reset, the `jünk`
+//! flag latches, and Use As My Ship's hook resets) wait for
+//! rdm:phase/cargo-and-scanning/phase-8-reset-at-the-dialogs-and-the-junk-latches.
 
 use super::Session;
 use crate::market;
