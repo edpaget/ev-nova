@@ -308,7 +308,10 @@ mod tests {
         let enemy = ship(5, 142, 1000.0);
         let neutral = ship(6, 143, 1000.0);
         let mut dying = ship(7, 140, 1000.0);
-        dying.condition = Condition::Dying { ticks_left: 3 };
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         let mut disabled = ship(8, 141, 5.0);
         disabled.condition = Condition::Disabled;
         disabled.reserves.shield.now = 0.0;
@@ -510,7 +513,10 @@ mod tests {
         assert_eq!(odds(Condition::Intact), 2.0);
         for condition in [
             Condition::Disabled,
-            Condition::Dying { ticks_left: 1 },
+            Condition::Dying {
+                ticks_left: 1,
+                starting: false,
+            },
             Condition::Destroyed,
         ] {
             assert_eq!(odds(condition), 0.0, "{condition:?}");

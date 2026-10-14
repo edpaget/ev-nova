@@ -874,7 +874,10 @@ mod tests {
         let sites = [planet(140, 0.0, 0.0)];
         for condition in [
             Condition::Disabled,
-            Condition::Dying { ticks_left: 4 },
+            Condition::Dying {
+                ticks_left: 4,
+                starting: false,
+            },
             Condition::Destroyed,
         ] {
             let mut lander = npc(
@@ -902,7 +905,13 @@ mod tests {
 
     #[test]
     fn a_ship_breaking_up_or_destroyed_jumping_in_drifts_with_no_glide() {
-        for condition in [Condition::Dying { ticks_left: 4 }, Condition::Destroyed] {
+        for condition in [
+            Condition::Dying {
+                ticks_left: 4,
+                starting: false,
+            },
+            Condition::Destroyed,
+        ] {
             let mut jumper = npc(AVERAGE, Goal::JumpOut, at(0.0, -2000.0, 1.0, -2.0, 90.0));
             jumper.condition = condition;
             jumper.mode = Mode::JumpingIn { ticks_left: 3 };

@@ -1628,7 +1628,10 @@ mod tests {
     fn nothing_fires_unless_the_ship_is_intact() {
         for condition in [
             Condition::Disabled,
-            Condition::Dying { ticks_left: 5 },
+            Condition::Dying {
+                ticks_left: 5,
+                starting: false,
+            },
             Condition::Destroyed,
         ] {
             let mut armament = mounted(blaster(128, 0), 1);
@@ -1892,7 +1895,13 @@ mod tests {
     fn point_defence_fires_only_on_an_intact_ship_and_only_point_defence() {
         let mut armament = mounted(defence(133, 9, 5, 0), 1);
         let mut supplies = Supplies::none();
-        for condition in [Condition::Disabled, Condition::Dying { ticks_left: 3 }] {
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+        ] {
             let fired = armament.fire_point_defence(
                 condition,
                 supplies.shooter,

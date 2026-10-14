@@ -663,7 +663,10 @@ mod tests {
             assert!(!npc.threatens(other), "{goal:?}");
             for condition in [
                 Condition::Disabled,
-                Condition::Dying { ticks_left: 1 },
+                Condition::Dying {
+                    ticks_left: 1,
+                    starting: false,
+                },
                 Condition::Destroyed,
             ] {
                 let downed = Npc {
@@ -727,7 +730,10 @@ mod tests {
         let hunter = with(Goal::Attack(escort));
         for condition in [
             Condition::Disabled,
-            Condition::Dying { ticks_left: 1 },
+            Condition::Dying {
+                ticks_left: 1,
+                starting: false,
+            },
             Condition::Destroyed,
         ] {
             let downed = Npc {
@@ -786,7 +792,10 @@ mod tests {
             );
             for condition in [
                 Condition::Disabled,
-                Condition::Dying { ticks_left: 1 },
+                Condition::Dying {
+                    ticks_left: 1,
+                    starting: false,
+                },
                 Condition::Destroyed,
             ] {
                 let downed = Npc {
@@ -838,7 +847,10 @@ mod tests {
             );
             for condition in [
                 Condition::Disabled,
-                Condition::Dying { ticks_left: 1 },
+                Condition::Dying {
+                    ticks_left: 1,
+                    starting: false,
+                },
                 Condition::Destroyed,
             ] {
                 let downed = Npc {

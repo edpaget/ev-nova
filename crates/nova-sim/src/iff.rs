@@ -364,7 +364,13 @@ mod tests {
 
     #[test]
     fn a_disabled_or_breaking_up_ship_is_disabled_even_attacking() {
-        for condition in [Condition::Disabled, Condition::Dying { ticks_left: 3 }] {
+        for condition in [
+            Condition::Disabled,
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+        ] {
             let npc = Npc {
                 condition,
                 ..attacking(hired())

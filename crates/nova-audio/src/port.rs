@@ -53,6 +53,16 @@ pub enum AudioCommand {
         /// How loud.
         volume: Volume,
     },
+    /// Plays `sound` once, at `volume`, unless the last `PlayUnlessPlaying`
+    /// of the same `snd ` is still playing (`_ST_IsSoundPlaying`), when
+    /// nothing happens: the klaxon, repeated while the player's ship
+    /// breaks up.
+    PlayUnlessPlaying {
+        /// The `snd `.
+        sound: SoundId,
+        /// How loud.
+        volume: Volume,
+    },
     /// Starts the one looping effect, the engine: `sound`, over and over,
     /// at `volume`.
     StartLoop {

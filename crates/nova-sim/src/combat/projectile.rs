@@ -597,7 +597,13 @@ mod tests {
                 .map(|(ship, _)| ship)
         };
         assert_eq!(hit(Condition::Disabled), Some(ShipRef::Npc(NpcId(2))));
-        assert_eq!(hit(Condition::Dying { ticks_left: 3 }), None);
+        assert_eq!(
+            hit(Condition::Dying {
+                ticks_left: 3,
+                starting: false
+            }),
+            None
+        );
         assert_eq!(hit(Condition::Destroyed), None);
     }
 
@@ -759,7 +765,15 @@ mod tests {
     fn a_homing_shot_whose_target_is_gone_or_breaking_up_is_lost() {
         for gone in [
             vec![],
-            vec![target(2, 0.0, 1000.0, Condition::Dying { ticks_left: 9 })],
+            vec![target(
+                2,
+                0.0,
+                1000.0,
+                Condition::Dying {
+                    ticks_left: 9,
+                    starting: false,
+                },
+            )],
             vec![target(2, 0.0, 1000.0, Condition::Destroyed)],
         ] {
             let mut shot = homing(missile(0), Some(TARGET));

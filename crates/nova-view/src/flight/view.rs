@@ -4085,11 +4085,15 @@ fn dying(
         _ => PLACEHOLDER_SIZE,
     };
     let breaking = |condition, at: Vec2, sprite_width, explosion| match condition {
-        Condition::Dying { ticks_left } => Some(Dying {
+        Condition::Dying {
+            ticks_left,
+            starting,
+        } => Some(Dying {
             at: point(at),
             sprite_width,
             explosion,
             ticks_left,
+            starting,
         }),
         _ => None,
     };
@@ -10265,7 +10269,7 @@ mod tests {
             view.tick(TICK);
             let session = view.session().expect("flying");
             if let Some(npc) = session.npcs().first()
-                && let Condition::Dying { ticks_left } = npc.condition
+                && let Condition::Dying { ticks_left, .. } = npc.condition
                 && ticks_left < 19
                 && !view.effects().explosions().is_empty()
             {
@@ -10287,7 +10291,8 @@ mod tests {
     fn the_players_ship_breaking_up_goes_off_about_where_it_is() {
         // The NPC, straight above the player and facing it, fires a
         // blaster that kills at a hit; the player's ship, 80 pixels wide
-        // (the NPC's 40), takes 30 ticks to break up.
+        // (the NPC's 40), of DeathDelay 30, breaks up for 88 ticks: three
+        // times it, less 2.
         let mut catalog = armed(1, &[]);
         catalog.sheet = Ok(ShipSheet {
             frame_width: 80,
@@ -10301,10 +10306,10 @@ mod tests {
         catalog.hulls[1] = hull_of(129, &[BLASTER]);
         let mut view = fighting(catalog, &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
         let mut breaking = None;
-        for _ in 0..40 {
+        for _ in 0..120 {
             view.tick(TICK);
             let session = view.session().expect("flying");
-            if let Condition::Dying { ticks_left } = session.player_condition()
+            if let Condition::Dying { ticks_left, .. } = session.player_condition()
                 && ticks_left < 19
                 && !view.effects().explosions().is_empty()
             {
@@ -10412,6 +10417,40 @@ mod tests {
             );
             assert_eq!(player_layers(&view), [0_i16; 0], "nothing of it after");
         }
+    }
+
+    #[test]
+    fn the_klaxon_sounds_ahead_of_the_players_explosion() {
+        // DeathDelay 2: a timer of 6, so 3 ticks of klaxon, then the
+        // explosion's.
+        let mut view =
+            fighting(killed_in(2), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        let klaxon = Sound::Sim(SimSound::Klaxon);
+        let mut breaking_up = Vec::new();
+        for _ in 0..60 {
+            view.tick(TICK);
+            let sounds = view.take_sounds();
+            match view.session().expect("flying").player_fate() {
+                PlayerFate::BreakingUp { .. } => {
+                    breaking_up.push(sounds.iter().filter(|&&sound| sound == klaxon).count());
+                }
+                PlayerFate::Exploded { .. } => {
+                    assert_eq!(breaking_up, [0, 1, 1, 1], "none as it starts");
+                    let first_combat = sounds
+                        .iter()
+                        .position(|sound| matches!(sound, Sound::Combat(_)));
+                    let klaxons: Vec<usize> = (0..sounds.len())
+                        .filter(|&at| sounds[at] == klaxon)
+                        .collect();
+                    assert!(first_combat.is_some(), "the explosion sounds: {sounds:?}");
+                    assert_eq!(klaxons.len(), 1, "{sounds:?}");
+                    assert!(klaxons[0] < first_combat.unwrap_or(0), "{sounds:?}");
+                    return;
+                }
+                PlayerFate::Flying | PlayerFate::Disabled => {}
+            }
+        }
+        panic!("the player's ship never exploded");
     }
 
     /// Whether `list` draws `run` as one unbroken run of commands.

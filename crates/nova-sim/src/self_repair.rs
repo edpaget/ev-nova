@@ -203,7 +203,10 @@ mod tests {
         assert!(can_self_repair(0, Condition::Disabled, 0.01, true));
         assert!(!can_self_repair(
             0,
-            Condition::Dying { ticks_left: 3 },
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false
+            },
             5.0,
             true
         ));

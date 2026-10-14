@@ -699,7 +699,10 @@ mod tests {
         jumping.mode = Mode::JumpingIn { ticks_left: 3 };
         jumping.govt = Some(GovtId(140));
         let mut dying = npc(3, AiType::Warship);
-        dying.condition = Condition::Dying { ticks_left: 3 };
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         let mut disabled = npc(4, AiType::Warship);
         disabled.condition = Condition::Disabled;
         disabled.state.position = crate::geometry::Vec2::new(5.0, 6.0);
@@ -742,7 +745,10 @@ mod tests {
         assert_eq!(around.state_of(P), Some(player.state));
         assert_eq!(around.condition_of(P), Some(Condition::Intact));
         around.player = Some(PlayerSide {
-            condition: Condition::Dying { ticks_left: 1 },
+            condition: Condition::Dying {
+                ticks_left: 1,
+                starting: false,
+            },
             ..player
         });
         assert!(!around.live(P));

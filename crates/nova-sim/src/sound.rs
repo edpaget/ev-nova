@@ -56,4 +56,12 @@ pub enum SimSound {
     /// A disabled former escort or fighter repaired itself and rejoined
     /// the fleet (`_HandleShip` @0x33bb1-0x33bd4, `_beepSnd[4]`).
     EscortRepaired,
+    /// The player's ship is breaking up: `_klaxxonSnd`, `snd ` 371
+    /// (`_LoadSounds` @0x1c22c-0x1c23e). `_HandlePlayer` plays it
+    /// (@0x6f1e4-0x6f227) while the death timer is above 1.0 and it is
+    /// not already playing (`_ST_IsSoundPlaying` @0x6f200), so it repeats
+    /// through the breakup; the audio side does that check. Its priority,
+    /// 15, is not modelled. Phase 6 (`player-death`) halts it at the
+    /// final explosion.
+    Klaxon,
 }

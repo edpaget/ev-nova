@@ -26,7 +26,9 @@ use crate::table::SoundTable;
 ///   volume, while the sound setting is on. A landing plays the table's
 ///   landing sound, then the stellar's own. A `P` set operator's sound
 ///   plays its own `snd ` the same way, on the one mission channel when
-///   it is exclusive ([`AudioCommand::PlayExclusive`]).
+///   it is exclusive ([`AudioCommand::PlayExclusive`]). The klaxon plays
+///   unless it is still playing ([`AudioCommand::PlayUnlessPlaying`]),
+///   which the port decides.
 /// - Each of a fight's sounds plays its own `snd ` once, at the effects
 ///   volume times its [`distance_gain`], while the sound setting is on.
 /// - The engine loops while the sound setting is on, the ship thrusts in
@@ -134,6 +136,16 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
                 Sound::Sim(SimSound::EscortsCommanded) => self.play(self.table.escorts_commanded),
                 Sound::Sim(SimSound::EscortRepaired) => self.play(self.table.escort_repaired),
+                Sound::Sim(SimSound::Klaxon) => {
+                    if let Some(sound) = self.table.klaxon
+                        && self.settings.sound
+                    {
+                        self.audio.run(AudioCommand::PlayUnlessPlaying {
+                            sound,
+                            volume: self.settings.effects_volume,
+                        });
+                    }
+                }
                 Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
                 Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
                 Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
@@ -529,6 +541,34 @@ mod tests {
             &[Sound::Sim(SimSound::RedAlert)],
         );
         assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn the_klaxon_plays_371_unless_still_playing_at_the_effects_volume() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::Klaxon), Sound::Sim(SimSound::Klaxon)],
+        );
+        let klaxon = AudioCommand::PlayUnlessPlaying {
+            sound: SoundId(371),
+            volume: Volume::new(0.5),
+        };
+        assert_eq!(drain(&log), [klaxon, klaxon], "the adapter decides");
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Klaxon)]);
+        assert_eq!(drain(&log), [], "sound off");
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            klaxon: None,
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Klaxon)]);
+        assert_eq!(drain(&log), [], "a table without one");
     }
 
     #[test]

@@ -408,7 +408,7 @@ use crate::combat::armament::{
     Armament, Arsenal, OutfitRounds, Trigger, fit_stock, next_secondary, outfit_rounds,
 };
 use crate::combat::beam::Beam;
-use crate::combat::hull::{Condition, DisableRule, HullSpec};
+use crate::combat::hull::{Breakup, Condition, DisableRule, HullSpec};
 use crate::combat::projectile::Shot;
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::weapon::Ammo;
@@ -1175,6 +1175,8 @@ impl Session {
         self.galaxy.set_colocated(CoLocated::from(
             rules.source_for(RuleKey::ColocatedResolution),
         ));
+        self.combat
+            .set_breakup(Breakup::from(rules.source_for(RuleKey::BreakupStall)));
         self.rules = rules;
         self
     }
@@ -1675,13 +1677,15 @@ impl Session {
     /// jumping holds every scan back once the warp has begun. The stellars
     /// shown that shots can hit take their damage, and each shot
     /// down is destroyed and runs its `OnDestroy` (see the `stellars`
-    /// module).
+    /// module). While the player's ship breaks up, the klaxon sounds
+    /// first among the tick's sounds (see `sound_the_klaxon`).
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         self.player_exploded_this_tick = false;
         if self.landed.is_some() || self.jumping().is_some() {
             return;
         }
         let was_destroyed = self.condition == Condition::Destroyed;
+        let was_dying = matches!(self.condition, Condition::Dying { .. });
         self.take_scans(rules.law, &mut &mut *chance);
         let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
         let held: Vec<bool> = self
@@ -1760,6 +1764,7 @@ impl Session {
             chance,
         );
         self.player_exploded_this_tick = !was_destroyed && self.condition == Condition::Destroyed;
+        self.sound_the_klaxon(was_dying);
         self.raise_disabled(&was, &mut &mut *chance);
         self.answer_strikes(&was, rules.law);
         let sorties = self.combat.take_sorties();
@@ -1774,6 +1779,37 @@ impl Session {
         self.strike_stellars(&stellars, rules.law, chance);
         self.see_stellars();
         self.lay_out_ships();
+    }
+
+    /// Raises [`SimSound::Klaxon`] while the player's ship breaks up, as
+    /// `_HandlePlayer` plays `_klaxxonSnd` (@0x6f1e4-0x6f227) while the
+    /// death timer, after its decrement, is above 1.0: on every tick of
+    /// the countdown but the one it is set on (`starting`), and on the
+    /// explosion tick of a ship that `was_dying` before it, whose timer
+    /// came down to 2.0. The original's `> 1.0` test always holds for a
+    /// countdown that is not starting: a timer at
+    /// [`EXPLOSION_BAND`](crate::combat::hull::EXPLOSION_BAND) or below
+    /// explodes, so one still counting down is at 3 or more. No klaxon
+    /// sounds on the breakup tick, nor on a stalled breakup's ticks, each
+    /// of which sets the timer again.
+    ///
+    /// It comes straight after the fight, ahead of every other sound of
+    /// the tick, so that on the explosion tick the halt phase 6 raises
+    /// with the explosion comes after it and wins, as `_HandlePlayer`
+    /// (@0x43e19) runs before `_HandleShipDisplay` (@0x43e29). The view
+    /// puts the session's sounds before the fight's, so the explosion's
+    /// booms come after it too.
+    fn sound_the_klaxon(&mut self, was_dying: bool) {
+        let counting_down = matches!(
+            self.condition,
+            Condition::Dying {
+                starting: false,
+                ..
+            }
+        );
+        if counting_down || (self.player_exploded_this_tick && was_dying) {
+            self.sounds.push(SimSound::Klaxon);
+        }
     }
 
     /// Answers the fight's strikes this tick, against what each NPC `was`
@@ -12669,8 +12705,9 @@ pub(super) mod tests {
         }
     }
 
-    /// Ship `id` armed with one of `weapon`, 30 pixels across, breaking
-    /// up for 2 ticks before `bööm` 133 destroys it.
+    /// Ship `id` armed with one of `weapon`, 30 pixels across, of
+    /// `DeathDelay` 2: an NPC breaks up for a tick before `bööm` 133
+    /// destroys it, the player for 4.
     fn armed_hull(id: i16, weapon: i16) -> HullRecord {
         HullRecord {
             weapons: vec![StockWeapon {
@@ -13230,8 +13267,13 @@ pub(super) mod tests {
             [
                 (Some(Condition::Intact), [0, 0, 0, 0]),
                 (Some(Condition::Disabled), [-3, -3, 4, 10]),
-                (Some(Condition::Dying { ticks_left: 1 }), [-10, -10, 9, 20]),
-                (Some(Condition::Dying { ticks_left: 0 }), [-10, -10, 9, 20]),
+                (
+                    Some(Condition::Dying {
+                        ticks_left: 2,
+                        starting: true
+                    }),
+                    [-10, -10, 9, 20]
+                ),
                 (None, [-10, -10, 9, 20]),
             ],
             "hits that leave it intact change nothing; by the engine's law, the neutral gains"
@@ -13661,8 +13703,13 @@ pub(super) mod tests {
             [
                 (Some(Condition::Intact), 0),
                 (Some(Condition::Disabled), 0),
-                (Some(Condition::Dying { ticks_left: 1 }), 10),
-                (Some(Condition::Dying { ticks_left: 0 }), 10),
+                (
+                    Some(Condition::Dying {
+                        ticks_left: 2,
+                        starting: true
+                    }),
+                    10
+                ),
                 (None, 10),
             ],
             "disabling credits nothing, the break-up 50 / 5, its destruction nothing"
@@ -13883,8 +13930,13 @@ pub(super) mod tests {
             [
                 (Some(Condition::Intact), 0),
                 (Some(Condition::Disabled), 1),
-                (Some(Condition::Dying { ticks_left: 1 }), 1),
-                (Some(Condition::Dying { ticks_left: 0 }), 1),
+                (
+                    Some(Condition::Dying {
+                        ticks_left: 2,
+                        starting: true
+                    }),
+                    1
+                ),
                 (None, 2),
             ]
         );
@@ -14537,6 +14589,137 @@ pub(super) mod tests {
     fn a_new_session_flies() {
         let session = Session::start(&armed()).expect("starts");
         assert_eq!(session.player_fate(), PlayerFate::Flying);
+    }
+
+    /// [`deadly`] with the player's ship of `DeathDelay` `death_delay`.
+    fn deadly_in(death_delay: i16) -> FakePilotCatalog {
+        let mut catalog = deadly();
+        for hull in &mut catalog.hulls {
+            if hull.id == ShipId(128) {
+                hull.death_delay = death_delay;
+            }
+        }
+        catalog
+    }
+
+    /// The player's condition and the sounds of each fight tick from the
+    /// one its armour goes on, under fire from `catalog`'s NPC, for up to
+    /// `ticks` ticks; the traffic's own sounds are dropped.
+    fn from_the_breakup(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        ticks: usize,
+    ) -> Vec<(Condition, Vec<SimSound>)> {
+        let mut seen = Vec::new();
+        for _ in 0..200 {
+            session.tick_traffic(catalog, &Firing, &mut NeverFires);
+            session.take_sounds();
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            let sounds = session.take_sounds();
+            let condition = session.player_condition();
+            if !seen.is_empty() || !matches!(condition, Condition::Intact | Condition::Disabled) {
+                seen.push((condition, sounds));
+            }
+            if seen.len() == ticks {
+                break;
+            }
+        }
+        seen
+    }
+
+    #[test]
+    fn the_player_breaking_up_raises_the_klaxon_from_the_tick_after_to_the_explosion() {
+        // DeathDelay 2: a timer of 6, exploding 4 ticks after the breakup.
+        let catalog = deadly_in(2);
+        let mut session = facing_an_npc(&catalog, 180);
+        let seen = from_the_breakup(&mut session, &catalog, 7);
+        let klaxon = || vec![SimSound::Klaxon];
+        let dying = |ticks_left| Condition::Dying {
+            ticks_left,
+            starting: false,
+        };
+        assert_eq!(
+            seen[..4],
+            [
+                (
+                    Condition::Dying {
+                        ticks_left: 6,
+                        starting: true
+                    },
+                    vec![]
+                ),
+                (dying(5), klaxon()),
+                (dying(4), klaxon()),
+                (dying(3), klaxon()),
+            ],
+            "none on the breakup tick, then one each tick"
+        );
+        let (exploded, sounds) = &seen[4];
+        assert_eq!(*exploded, Condition::Destroyed);
+        assert_eq!(
+            sounds.first(),
+            Some(&SimSound::Klaxon),
+            "first on the explosion's tick"
+        );
+        assert_eq!(
+            seen[5..],
+            [
+                (Condition::Destroyed, vec![]),
+                (Condition::Destroyed, vec![])
+            ],
+            "none after"
+        );
+    }
+
+    #[test]
+    fn an_npc_breaking_up_raises_no_klaxon() {
+        let mut catalog = armed();
+        for hull in &mut catalog.hulls {
+            hull.death_delay = 10;
+        }
+        let mut session = facing_an_npc(&catalog, 180);
+        session.hold_trigger(FIRE);
+        let mut sounds = Vec::new();
+        let mut broke_up = false;
+        for _ in 0..80 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            sounds.extend(session.take_sounds());
+            broke_up |= session
+                .npcs()
+                .first()
+                .is_some_and(|npc| matches!(npc.condition, Condition::Dying { .. }));
+        }
+        assert!(broke_up);
+        assert_eq!(session.npcs(), [], "destroyed");
+        assert_eq!(session.player_condition(), Condition::Intact);
+        assert!(!sounds.contains(&SimSound::Klaxon), "{sounds:?}");
+    }
+
+    #[test]
+    fn a_session_given_the_originals_breakup_rule_never_explodes_a_player_without_a_death_delay() {
+        let catalog = deadly_in(0);
+        let by_default = facing_an_npc(&catalog, 180);
+        let mut session = by_default.clone();
+        assert_eq!(
+            from_the_breakup(&mut session, &catalog, 1),
+            [(Condition::Destroyed, vec![])],
+            "by default, destroyed as it breaks up"
+        );
+        let mut session = by_default.with_rules(
+            crate::rulebook::Rulebook::default()
+                .with_override(RuleKey::BreakupStall, RuleSource::Engine),
+        );
+        let seen = from_the_breakup(&mut session, &catalog, 100);
+        assert_eq!(seen.len(), 100);
+        assert!(
+            seen.iter().all(|(condition, sounds)| *condition
+                == Condition::Dying {
+                    ticks_left: 0,
+                    starting: true
+                }
+                && sounds.is_empty()),
+            "{seen:?}"
+        );
     }
 
     #[test]

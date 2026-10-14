@@ -52,6 +52,9 @@ pub struct SoundTable {
     pub news_open: Option<SoundId>,
     /// Plays as the bar's news dialog closes.
     pub news_close: Option<SoundId>,
+    /// Plays, unless it is still playing, while the player's ship breaks
+    /// up.
+    pub klaxon: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -113,6 +116,11 @@ impl SoundTable {
     ///   it opens (`PlaySound` @0x47f36).
     /// - `news_close`: 152, `_beepSnd[2]`, which `_DoNewsDialog` plays as
     ///   it closes (@0x4814e).
+    /// - `klaxon`: 371, which `_LoadSounds` loads into `_klaxxonSnd`
+    ///   (@0x1c22c-0x1c23e) and `_HandlePlayer` plays while the player's
+    ///   death timer is above 1.0 and it is not already playing
+    ///   (@0x6f1e4-0x6f227, `_ST_IsSoundPlaying` @0x6f200). The original
+    ///   plays it at priority 15, not modelled.
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -134,6 +142,7 @@ impl SoundTable {
         smuggling: Some(SoundId(154)),
         news_open: Some(SoundId(151)),
         news_close: Some(SoundId(152)),
+        klaxon: Some(SoundId(371)),
     };
 }
 
@@ -164,5 +173,6 @@ mod tests {
         assert_eq!(table.smuggling, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.news_open, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.news_close, Some(SoundId(152)), "_beepSnd[2]");
+        assert_eq!(table.klaxon, Some(SoundId(371)), "_klaxxonSnd");
     }
 }

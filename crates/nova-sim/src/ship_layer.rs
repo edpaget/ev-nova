@@ -290,7 +290,10 @@ mod tests {
     fn only_an_intact_ship_is_not_disabled() {
         assert!(!disabled(Condition::Intact));
         assert!(disabled(Condition::Disabled));
-        assert!(disabled(Condition::Dying { ticks_left: 1 }));
+        assert!(disabled(Condition::Dying {
+            ticks_left: 1,
+            starting: false
+        }));
         assert!(disabled(Condition::Destroyed));
     }
 }

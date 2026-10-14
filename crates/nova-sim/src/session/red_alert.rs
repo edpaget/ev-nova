@@ -236,7 +236,10 @@ mod tests {
     #[test]
     fn a_dying_player_hears_no_alert_and_the_threat_is_spent() {
         let mut session = threatened(&catalog());
-        session.condition = Condition::Dying { ticks_left: 500 };
+        session.condition = Condition::Dying {
+            ticks_left: 500,
+            starting: false,
+        };
         assert_eq!(alerts_over(&mut session, 60), 0);
         assert_eq!(session.red_alert_icon(), None);
         session.condition = Condition::Intact;

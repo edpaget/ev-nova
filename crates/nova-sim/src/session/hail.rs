@@ -822,7 +822,10 @@ mod tests {
         let mut jumping = Box::new(targeting(&catalog));
         jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
         let mut dying = Box::new(targeting(&catalog));
-        dying.condition = Condition::Dying { ticks_left: 3 };
+        dying.condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
         let mut destroyed = Box::new(targeting(&catalog));
         destroyed.condition = Condition::Destroyed;
         for mut session in [untargeted, landed, jumping, dying, destroyed] {

@@ -20,7 +20,9 @@
 //!
 //! Condition changes stay where they are, in the fight's
 //! `update_condition`; a fate is only read off them, so it adds no
-//! second transition path.
+//! second transition path. [`PlayerFate::BreakingUp`]'s timer is the
+//! original's countdown there (phase 2): 3 x the `DeathDelay` for the
+//! player, set on the breakup's first tick.
 
 use crate::combat::hull::Condition;
 
@@ -33,8 +35,12 @@ pub enum PlayerFate {
     Disabled,
     /// Its armour is gone and it is breaking up ([`Condition::Dying`]).
     BreakingUp {
-        /// The ticks before it explodes.
+        /// The original's death timer: 3 x its `DeathDelay` as the
+        /// breakup starts, exploding once it is down to 2.
         ticks_left: u32,
+        /// Whether the timer was set on this tick, the original's "dying,
+        /// timer not yet set" frame; phase 9's eject reads it.
+        starting: bool,
     },
     /// It has made its final explosion ([`Condition::Destroyed`]).
     Exploded {
@@ -75,7 +81,13 @@ impl PlayerFate {
         match condition {
             Condition::Intact => Self::Flying,
             Condition::Disabled => Self::Disabled,
-            Condition::Dying { ticks_left } => Self::BreakingUp { ticks_left },
+            Condition::Dying {
+                ticks_left,
+                starting,
+            } => Self::BreakingUp {
+                ticks_left,
+                starting,
+            },
             Condition::Destroyed => Self::Exploded {
                 first_tick: exploded_this_tick,
             },
@@ -114,10 +126,21 @@ mod tests {
                 PlayerFate::of(Condition::Disabled, exploded),
                 PlayerFate::Disabled
             );
-            assert_eq!(
-                PlayerFate::of(Condition::Dying { ticks_left: 7 }, exploded),
-                PlayerFate::BreakingUp { ticks_left: 7 }
-            );
+            for starting in [false, true] {
+                assert_eq!(
+                    PlayerFate::of(
+                        Condition::Dying {
+                            ticks_left: 7,
+                            starting
+                        },
+                        exploded
+                    ),
+                    PlayerFate::BreakingUp {
+                        ticks_left: 7,
+                        starting
+                    }
+                );
+            }
         }
         assert_eq!(
             PlayerFate::of(Condition::Destroyed, true),
@@ -134,8 +157,14 @@ mod tests {
         for fate in [
             PlayerFate::Flying,
             PlayerFate::Disabled,
-            PlayerFate::BreakingUp { ticks_left: 3 },
-            PlayerFate::BreakingUp { ticks_left: 0 },
+            PlayerFate::BreakingUp {
+                ticks_left: 3,
+                starting: false,
+            },
+            PlayerFate::BreakingUp {
+                ticks_left: 15,
+                starting: true,
+            },
         ] {
             assert_eq!(fate.row().drawn, Drawn::Full, "{fate:?}");
         }

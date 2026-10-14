@@ -17,8 +17,11 @@
 //! - Its `Flags` 0x1000, 0x2000 and 0x4000 ([`BLIND_SPOTS`]) blind its
 //!   turrets in front, to the sides and to the rear, as a weapon's own do
 //!   (`_TurretBlindSpot`, which reads them from the `shïp`).
-//! - Once its armour is gone it breaks up for its `DeathDelay` ticks
-//!   (its `Explode1` going off), then is destroyed (its `Explode2`). A
+//! - Once its armour is gone it breaks up (its `Explode1` going off),
+//!   counting down a timer of its `DeathDelay`, three times it for the
+//!   player ([`PLAYER_BREAKUP_FACTOR`]), to [`EXPLOSION_BAND`], then is
+//!   destroyed (its `Explode2`); see [`Breakup`] for a timer that never
+//!   rises above 0. A
 //!   ship of [`DEATH_SIZE_MASS`] tons or more dies in an explosion sized
 //!   by its mass ([`HullSpec::death_size`], `_HandleShipDisplay`
 //!   @0x2d7ef-0x2dee7), which scatters the `Explode2`'s extra explosions
@@ -39,6 +42,7 @@ use super::weapon::Explosion;
 use crate::bay::FIRST_SHIP;
 use crate::catalog::{HullRecord, ShipId};
 use crate::reserves::Gauge;
+use crate::rulebook::RuleSource;
 
 /// The hit radius of a ship type without a `shän`, in pixels: a
 /// placeholder.
@@ -195,10 +199,24 @@ pub enum Condition {
     /// Disabled: it drifts, and cannot fire, land or jump. Further damage
     /// can still destroy it.
     Disabled,
-    /// Its armour is gone, and it breaks up, for this many more ticks.
+    /// Its armour is gone, and it breaks up, counting down the original's
+    /// death timer (field 0x3c) to its final explosion (see
+    /// [`Combat`](super::Combat)'s step 9).
     Dying {
-        /// The ticks before it is destroyed.
+        /// The death timer: its `DeathDelay`, times
+        /// [`PLAYER_BREAKUP_FACTOR`] for the player, as set on the
+        /// breakup's first tick, less a tick for each tick since. The ship
+        /// explodes on the tick it comes down to [`EXPLOSION_BAND`] or
+        /// below.
         ticks_left: u32,
+        /// Whether the timer was set on this tick: the original's "dying,
+        /// timer not yet set" frame, on which `_HandleShipDisplay` sets it
+        /// (@0x2d834-0x2d850) and does nothing else. False from the next
+        /// tick on; under [`Breakup::Stalls`], true again on every tick
+        /// the timer is set again. Phase 9's eject reads it, as
+        /// `_HandlePlayer` (@0x6f248-0x6f286) runs before
+        /// `_HandleShipDisplay` sets the timer.
+        starting: bool,
     },
     /// Destroyed.
     Destroyed,
@@ -209,6 +227,42 @@ impl Condition {
     #[must_use]
     pub fn hittable(self) -> bool {
         matches!(self, Self::Intact | Self::Disabled)
+    }
+}
+
+/// What the player's `DeathDelay` is multiplied by as its breakup starts
+/// (the 3.0 @0xdd664, applied @0x2d848 when +0x86 is 0, the player).
+pub const PLAYER_BREAKUP_FACTOR: u32 = 3;
+/// The death timer at or below which a breaking-up ship makes its final
+/// explosion (the 2.0 @0xdd074, tested @0x2d85a).
+pub const EXPLOSION_BAND: u32 = 2;
+
+/// What becomes of a breakup whose death timer never rises above 0 by
+/// the time `_HandleShipDisplay` checks it: a `DeathDelay` of 0 or less
+/// for any ship, or of 1 for an NPC, whose timer `_HandleShip` takes back
+/// to 0 before the check. No stock ship has one (the lowest stock
+/// `DeathDelay` is 3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Breakup {
+    /// The ship explodes: on its breakup tick with no `DeathDelay`, on the
+    /// tick after with 1. The default, and the other reading.
+    #[default]
+    Explodes,
+    /// The original's: `_HandleShipDisplay` sets a timer that is not above
+    /// 0 again every frame (@0x2d80d-0x2d83d), and the decrements skip one
+    /// that is not (@0x6d7eb, @0x35088), so the ship breaks up for good.
+    /// For the player, the game never ends.
+    Stalls,
+}
+
+impl From<RuleSource> for Breakup {
+    /// The engine's reading [`Breakup::Stalls`]; the other
+    /// [`Breakup::Explodes`].
+    fn from(source: RuleSource) -> Self {
+        match source {
+            RuleSource::Engine => Self::Stalls,
+            RuleSource::Bible => Self::Explodes,
+        }
     }
 }
 
@@ -494,8 +548,24 @@ mod tests {
     fn intact_and_disabled_ships_can_be_hit_and_dying_or_destroyed_ones_cannot() {
         assert!(Condition::Intact.hittable());
         assert!(Condition::Disabled.hittable());
-        assert!(!Condition::Dying { ticks_left: 3 }.hittable());
+        for starting in [false, true] {
+            assert!(
+                !Condition::Dying {
+                    ticks_left: 3,
+                    starting
+                }
+                .hittable()
+            );
+        }
         assert!(!Condition::Destroyed.hittable());
         assert_eq!(Condition::default(), Condition::Intact);
+    }
+
+    #[test]
+    fn the_engine_reading_stalls_and_the_other_explodes() {
+        assert_eq!(Breakup::from(RuleSource::Engine), Breakup::Stalls);
+        assert_eq!(Breakup::from(RuleSource::Bible), Breakup::Explodes);
+        assert_eq!(Breakup::default(), Breakup::Explodes);
+        assert_eq!((PLAYER_BREAKUP_FACTOR, EXPLOSION_BAND), (3, 2));
     }
 }

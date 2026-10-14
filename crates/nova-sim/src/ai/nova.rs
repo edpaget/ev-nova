@@ -735,7 +735,13 @@ mod tests {
             Goal::Attack(mark.ship())
         );
         assert_eq!(ai.target(&npcs[0], &disabled), Some(mark.ship()));
-        let dying = with_player(&npcs, Condition::Dying { ticks_left: 3 });
+        let dying = with_player(
+            &npcs,
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+        );
         assert_eq!(
             ai.decide(&npcs[0], &dying, &mut Draws::of(&[])),
             Goal::Attack(mark.ship()),
@@ -765,7 +771,13 @@ mod tests {
             Goal::Attack(ShipRef::Player),
             "with destroying weapons it goes on"
         );
-        let dying = with_player(&armed, Condition::Dying { ticks_left: 3 });
+        let dying = with_player(
+            &armed,
+            Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
+        );
         assert_eq!(
             ai.decide(&armed[0], &dying, &mut Draws::of(&[])),
             Goal::Attack(ShipRef::Player),

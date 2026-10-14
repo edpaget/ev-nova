@@ -1353,7 +1353,10 @@ mod tests {
         assert_eq!(traffic.npcs().len(), 2);
         assert_eq!(traffic.npcs()[0].state.position, Vec2::new(1.0, 0.0));
         assert_eq!(traffic.npcs()[1].goal, Goal::JumpOut);
-        traffic.npcs_mut()[0].condition = Condition::Dying { ticks_left: 2 };
+        traffic.npcs_mut()[0].condition = Condition::Dying {
+            ticks_left: 2,
+            starting: false,
+        };
         traffic.tick(&behaviour, &sites, &mut Draws::of(&[]));
         assert_eq!(behaviour.take(), []);
     }

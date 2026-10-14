@@ -311,7 +311,10 @@ mod tests {
         let mut beam = turreted();
         assert!(!beam.follow(&at(0.0, 0.0, 90.0), &[target(3, 0.0, -50.0)], &[]));
         let dying = Target {
-            condition: Condition::Dying { ticks_left: 3 },
+            condition: Condition::Dying {
+                ticks_left: 3,
+                starting: false,
+            },
             ..target(2, 0.0, -50.0)
         };
         assert!(!turreted().follow(&at(0.0, 0.0, 90.0), &[dying], &[]));
@@ -396,7 +399,10 @@ mod tests {
             ..target(2, 20.0, 0.0)
         };
         let dying = Target {
-            condition: Condition::Dying { ticks_left: 1 },
+            condition: Condition::Dying {
+                ticks_left: 1,
+                starting: false,
+            },
             ..target(3, 30.0, 0.0)
         };
         assert_eq!(beam.hit(&[firer, mate, dying]), None);
