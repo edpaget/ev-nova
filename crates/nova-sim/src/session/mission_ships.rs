@@ -2530,6 +2530,24 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_ship_jumping_out_on_double_times_second_pass_raises_its_departure() {
+        let catalog = goal_catalog(CHASE_OFF, 0);
+        let mut session = in_flight(&catalog);
+        let id = session.npcs()[0].id;
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.goal = Goal::JumpOut;
+        npc.state.position = Vec2::new(0.0, -100_000.0);
+        session.tick_again(
+            crate::flight::Controls::default(),
+            crate::Rules::default(),
+            &mut NeverFires,
+        );
+        assert!(session.npcs().iter().all(|npc| npc.id != id), "gone");
+        assert!(departed(&session, id));
+        assert_eq!(chased_and_left(&session), (1, 1));
+    }
+
+    #[test]
     fn a_ship_of_no_mission_jumping_out_raises_nothing() {
         let catalog = goal_catalog(CHASE_OFF, 0);
         let mut session = in_flight(&catalog);

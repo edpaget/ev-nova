@@ -104,7 +104,9 @@ impl Session {
     /// ([`Traffic::move_in`](crate::traffic::Traffic::move_in)) among the
     /// system's stellars and the player, at the speed the player leads
     /// them at, which is all their motion reads; each mission ship that
-    /// left raises its fate, fighters dock, and a target gone is let go.
+    /// left raises its fate, and fighters dock. The fight that follows
+    /// lets go of a target gone and orphans the fighters of a carrier
+    /// gone, as it does after any departure, before anything is drawn.
     /// Nothing moves before the system is populated.
     fn move_traffic_again(&mut self) {
         if self.traffic_due {
@@ -119,8 +121,6 @@ impl Session {
         self.traffic.move_in(world);
         self.mission_ships_left(&marks);
         self.dock_fighters();
-        self.orphan_fighters();
-        self.clear_lost_target();
     }
 }
 

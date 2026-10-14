@@ -1175,6 +1175,28 @@ mod tests {
     }
 
     #[test]
+    fn a_fighter_docking_on_double_times_second_pass_is_aboard_again() {
+        let catalog = carrying();
+        let mut session = fleet(&catalog, 0, vec![out()]);
+        let id = session.fleet[0].expect("placed");
+        session.npc_mut(id).expect("out").state.position = Vec2::new(300.0, 0.0);
+        session.command_escorts(EscortGroup::All, EscortCommand::Dock);
+        session.tick_traffic(&catalog, &NovaAi::default(), &mut NeverFires);
+        assert!(matches!(session.npcs()[0].goal, Goal::Dock(_)), "decided");
+        let docked = (1..=600).find(|_| {
+            session.tick_again(
+                Controls::default(),
+                crate::Rules::default(),
+                &mut NeverFires,
+            );
+            session.pilot().escorts().is_empty()
+        });
+        assert!(docked.is_some(), "{:?}", fleet_npcs(&session));
+        assert_eq!(session.npcs(), []);
+        assert_eq!(session.pilot().owned(VIPERS), 1, "aboard again");
+    }
+
+    #[test]
     fn another_command_keeps_a_returning_fighter_out() {
         let catalog = carrying();
         let mut session = fleet(&catalog, 0, vec![out()]);
