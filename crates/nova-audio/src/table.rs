@@ -57,6 +57,8 @@ pub struct SoundTable {
     pub klaxon: Option<SoundId>,
     /// Plays as the player ejects.
     pub eject: Option<SoundId>,
+    /// Plays as a sabotage outfit goes off aboard the player's ship.
+    pub onboard_explosion: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -128,6 +130,12 @@ impl SoundTable {
     ///   player ejects, with no test of whether it is still playing
     ///   (`PlaySound` @0x6f920). The original plays it at priority 50, not
     ///   modelled.
+    /// - `onboard_explosion`: 300, the first of the explosions
+    ///   `_LoadSounds`' loop from 0x1c200 loads from `snd ` 300 to 363 into
+    ///   `_explodSnd`, which `_HandlePlayer` plays as a sabotage outfit goes
+    ///   off (`_explodSnd[0]`, `PlaySound` @0x69375), with no test of
+    ///   whether it is still playing. The original plays it at priority
+    ///   100, not modelled.
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -151,6 +159,7 @@ impl SoundTable {
         news_close: Some(SoundId(152)),
         klaxon: Some(SoundId(371)),
         eject: Some(SoundId(372)),
+        onboard_explosion: Some(SoundId(300)),
     };
 }
 
@@ -183,5 +192,6 @@ mod tests {
         assert_eq!(table.news_close, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.klaxon, Some(SoundId(371)), "_klaxxonSnd");
         assert_eq!(table.eject, Some(SoundId(372)), "_escapePodSnd");
+        assert_eq!(table.onboard_explosion, Some(SoundId(300)), "_explodSnd[0]");
     }
 }

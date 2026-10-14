@@ -931,6 +931,10 @@ pub struct Session {
     /// [`scan::Latches`](crate::scan::Latches)). Never saved, as the
     /// original's are globals.
     scan_latches: crate::scan::Latches,
+    /// The sabotage clock, `_sabotageCounter` with the cached
+    /// `_playerSabotaged`, refreshed with the blessing table (see the
+    /// `sabotage` module). Never saved, as the original's are globals.
+    sabotage: crate::sabotage::SabotageClock,
     /// What the screens show of each `mïsn`, read when the session
     /// starts (see the `mission_screens` module).
     mission_texts: BTreeMap<MissionId, MissionTexts>,
@@ -1205,6 +1209,7 @@ impl Session {
                 junk: false,
                 outfits: false,
             },
+            sabotage: crate::sabotage::SabotageClock::default(),
             mission_texts: catalog
                 .mission_texts()
                 .into_iter()
@@ -1873,6 +1878,7 @@ impl Session {
         if self.landed.is_some() || self.jumping().is_some() {
             return;
         }
+        self.sabotage_tick(rules, &mut &mut *chance);
         self.eject_before_fight(&mut &mut *chance);
         let was_destroyed = self.condition == Condition::Destroyed;
         let was_dying = matches!(self.condition, Condition::Dying { .. });

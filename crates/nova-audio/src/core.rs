@@ -149,6 +149,9 @@ impl<A: Audio> AudioCore<A> {
                     }
                 }
                 Sound::Sim(SimSound::Ejected) => self.play(self.table.eject),
+                Sound::Sim(SimSound::OnboardExplosion) => {
+                    self.play(self.table.onboard_explosion);
+                }
                 Sound::Sim(SimSound::Halt(sounds)) => {
                     for &sound in sounds {
                         self.audio.run(AudioCommand::Halt { sound });
@@ -591,6 +594,27 @@ mod tests {
         core.set_sound(false);
         drain(&log);
         core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Ejected)]);
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_sabotage_outfit_going_off_plays_snd_300() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::OnboardExplosion),
+                Sound::Sim(SimSound::OnboardExplosion),
+            ],
+        );
+        assert_eq!(drain(&log), [play(300, 0.5), play(300, 0.5)], "every time");
+        core.set_sound(false);
+        drain(&log);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::OnboardExplosion)],
+        );
         assert_eq!(drain(&log), [], "sound off");
     }
 

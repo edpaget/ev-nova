@@ -76,6 +76,11 @@ pub enum SimSound {
     /// test of whether it is playing (`_HandlePlayer` @0x6f920). A
     /// [`SimSound::Halt`] of [`EJECT_HALTS`] follows it.
     Ejected,
+    /// A sabotage outfit went off aboard the player's ship: `_explodSnd[0]`,
+    /// `snd ` 300 (`_LoadSounds`' loop from 0x1c200 loads `snd ` 300-363),
+    /// played by `PlaySound` with no test of whether it is playing
+    /// (`_HandlePlayer` @0x69375). Its priority, 100, is not modelled.
+    OnboardExplosion,
 }
 
 /// The sounds the player's eject halts, in order, after its

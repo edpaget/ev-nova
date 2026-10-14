@@ -116,17 +116,21 @@ pub fn sabotage_flag(owned: &BTreeMap<OutfitId, u16>, records: &[OutfitRecord]) 
 /// The `dësc` IDs a dying sabotaged player sees, in order
 /// (`_HandlePlayer` @0x68739-0x68832).
 ///
-/// Nothing unless [`sabotage_flag`] is set (the gate @0x6873e). The gate
-/// can't change the list, since any outfit that adds to it sets the
-/// flag, but it is kept as the original has it. Then, for each outfit in
+/// Nothing unless `flag`, the flag the last refresh cached, is set (the
+/// gate @0x6873e reads `_playerSabotaged`). So an outfit gained since
+/// the last refresh adds nothing. Then, for each outfit in
 /// index order (@0x68828, whatever `records`' order) that `owned` holds
 /// at least once (@0x6875a), the `ModVal` of its first
 /// [`SABOTAGE_KILL`] slot with a `ModVal` above 0 (@0x68772, @0x6877d):
 /// that slot's `dësc`, not the outfit's own (@0x687b7). An outfit adds
 /// one at most, whatever its count (@0x68807). The loop plays no sound.
 #[must_use]
-pub fn death_descs(owned: &BTreeMap<OutfitId, u16>, records: &[OutfitRecord]) -> Vec<i16> {
-    if sabotage_flag(owned, records) == Sabotage::None {
+pub fn death_descs(
+    flag: Sabotage,
+    owned: &BTreeMap<OutfitId, u16>,
+    records: &[OutfitRecord],
+) -> Vec<i16> {
+    if flag == Sabotage::None {
         return Vec::new();
     }
     in_index_order(owned, records)
@@ -385,17 +389,33 @@ mod tests {
         );
     }
 
+    /// The `dësc`s of `owned`, the flag cached from it.
+    fn descs(owned: &BTreeMap<OutfitId, u16>, records: &[OutfitRecord]) -> Vec<i16> {
+        death_descs(sabotage_flag(owned, records), owned, records)
+    }
+
+    #[test]
+    fn death_descs_are_empty_while_the_cached_flag_is_clear() {
+        let records = [outfit(128, &[(SABOTAGE_KILL, 5000)])];
+        let owned = owning(&[(128, 1)]);
+        assert_eq!(
+            death_descs(Sabotage::None, &owned, &records),
+            Vec::<i16>::new()
+        );
+        assert_eq!(death_descs(Sabotage::Bomb, &owned, &records), [5000]);
+    }
+
     #[test]
     fn death_descs_are_the_slots_mod_val_not_the_outfits_own_desc() {
         // An outfit's own `dësc` is 3000 + its index (128 here).
         let records = [outfit(128, &[(SABOTAGE_KILL, 5000)])];
-        assert_eq!(death_descs(&owning(&[(128, 1)]), &records), [5000]);
+        assert_eq!(descs(&owning(&[(128, 1)]), &records), [5000]);
     }
 
     #[test]
     fn death_descs_list_an_outfit_once_whatever_its_count() {
         let records = [outfit(128, &[(SABOTAGE_KILL, 5000)])];
-        assert_eq!(death_descs(&owning(&[(128, 3)]), &records), [5000]);
+        assert_eq!(descs(&owning(&[(128, 3)]), &records), [5000]);
     }
 
     #[test]
@@ -408,7 +428,7 @@ mod tests {
                 (SABOTAGE_KILL, 700),
             ],
         )];
-        assert_eq!(death_descs(&owning(&[(128, 1)]), &records), [700]);
+        assert_eq!(descs(&owning(&[(128, 1)]), &records), [700]);
     }
 
     #[test]
@@ -421,7 +441,7 @@ mod tests {
                 (SABOTAGE_KILL, 701),
             ],
         )];
-        assert_eq!(death_descs(&owning(&[(128, 1)]), &records), [700]);
+        assert_eq!(descs(&owning(&[(128, 1)]), &records), [700]);
     }
 
     #[test]
@@ -432,7 +452,7 @@ mod tests {
             outfit(129, &[(SABOTAGE_KILL, 729)]),
         ];
         let owned = owning(&[(130, 1), (128, 1)]);
-        assert_eq!(death_descs(&owned, &records), [728, 730]);
+        assert_eq!(descs(&owned, &records), [728, 730]);
     }
 
     #[test]
@@ -441,14 +461,8 @@ mod tests {
             outfit(128, &[(SABOTAGE_BOMB, 728)]),
             outfit(129, &[(2, 729)]),
         ];
-        assert_eq!(
-            death_descs(&owning(&[(128, 1)]), &records),
-            Vec::<i16>::new()
-        );
-        assert_eq!(
-            death_descs(&owning(&[(129, 1)]), &records),
-            Vec::<i16>::new()
-        );
+        assert_eq!(descs(&owning(&[(128, 1)]), &records), Vec::<i16>::new());
+        assert_eq!(descs(&owning(&[(129, 1)]), &records), Vec::<i16>::new());
     }
 
     /// A clock refreshed with one of `records`' outfits owned once.

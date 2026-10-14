@@ -242,6 +242,7 @@ impl Session {
         if let Some(record) = &record {
             let defaults = crate::pilot::tally(record.defaults.iter().copied());
             self.board_class(record, &defaults);
+            self.refresh_blessing();
             let fields = record.fields;
             let shield = shield_points(fields.shield);
             let reserves = &mut self.pilot.reserves;
@@ -1127,6 +1128,40 @@ mod tests {
             );
             assert_eq!(session.pod, None);
             assert_eq!(hulk(&session).ship, ShipId(128));
+        }
+    }
+
+    #[test]
+    fn an_escape_ship_eject_rederives_the_flag_from_the_outfits_it_keeps() {
+        use crate::sabotage::{SABOTAGE_KILL, Sabotage};
+        use crate::testkit::Draws;
+        const KILLER: i16 = 303;
+        const KEPT_KILLER: i16 = 304;
+        let mut catalog = escaping();
+        catalog.outfits.extend([
+            outfit(KILLER, &[(SABOTAGE_KILL, 0)]),
+            crate::catalog::OutfitRecord {
+                flags: OutfitFlags::PERSISTENT,
+                ..outfit(KEPT_KILLER, &[(SABOTAGE_KILL, 0)])
+            },
+        ]);
+        for (id, kept) in [(KILLER, false), (KEPT_KILLER, true)] {
+            let (mut session, _) = escaped(&catalog, &[0; 3], |session| {
+                session.pilot.outfits.insert(OutfitId(id), 1);
+                session.refresh_blessing();
+            });
+            assert_eq!(session.pilot.ship, ShipId(VIPER), "{id}");
+            // Seeded 99 on the eject's tick, and counted while disabled.
+            if kept {
+                assert_eq!(session.sabotage.flag(), Sabotage::Kill);
+                assert_eq!(session.sabotage.counter(), 0.0, "zeroed, reseeding");
+            } else {
+                assert_eq!(session.sabotage.flag(), Sabotage::None, "@0x6f8bb");
+                assert_eq!(session.sabotage.counter(), 100.0, "left as it was");
+            }
+            session.tick_combat(Rules::default(), &mut Draws::of(&[7]));
+            let counter = if kept { 8.0 } else { 0.0 };
+            assert_eq!(session.sabotage.counter(), counter, "{id}");
         }
     }
 
