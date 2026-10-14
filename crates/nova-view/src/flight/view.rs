@@ -530,8 +530,9 @@ pub fn assigned_ticks(assigned: Assigned) -> u16 {
 
 /// The keys flight holds: the original's defaults, Alt, which turns the
 /// weapon select key back, Shift, which turns the target select key back,
-/// and Command, which the jettison key needs.
-const FLIGHT_KEYS: [Key; 9] = [
+/// Command, which the jettison and eject keys need, and the eject key,
+/// which works only held with Command.
+const FLIGHT_KEYS: [Key; 10] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -541,6 +542,7 @@ const FLIGHT_KEYS: [Key; 9] = [
     Key::Alt,
     Key::Shift,
     Key::Command,
+    EJECT_KEY,
 ];
 
 /// The primary fire key: the original's default (`fireKey0`, `_loadKeys`
@@ -578,6 +580,10 @@ pub const HAIL_KEY: Key = Key::Char('y');
 /// only with Command held (`_HandlePlayer` @0x6fd54-0x6fdaf): everything,
 /// or with Option (Alt) also held, all but the mission cargo.
 pub const JETTISON_KEY: Key = Key::Char('k');
+/// The eject key: the original's default for key-preference slot 0x22
+/// (`ejectKey`), keycode 0x07, X, which ejects only held together with
+/// Command (`_HandlePlayer` @0x6f29e-0x6f2c1; see the session's eject).
+pub const EJECT_KEY: Key = Key::Char('x');
 /// The escorts' attack key: the original's default (`Keys.nib`'s
 /// `escortCmdKey0`, "Attack Target").
 pub const ESCORT_ATTACK_KEY: Key = Key::Char('f');
@@ -3506,6 +3512,7 @@ impl<C> FlightView<C> {
             MAP_KEY => PlayerCommand::Map,
             JUMP_KEY => PlayerCommand::Jump,
             JETTISON_KEY => PlayerCommand::Jettison,
+            EJECT_KEY => PlayerCommand::Eject,
             MISSION_INFO_KEY => PlayerCommand::MissionInfo,
             HYPER_SELECT_KEY => PlayerCommand::SelectSystem,
             TARGET_KEY | NEAREST_KEY => PlayerCommand::Target,
@@ -4068,11 +4075,15 @@ impl<
             self.held.contains(&FIRE_KEY),
             self.held.contains(&SECONDARY_KEY),
         );
+        let eject = self.takes(PlayerCommand::Eject)
+            && self.held.contains(&Key::Command)
+            && self.held.contains(&EJECT_KEY);
         let mut notes = Vec::new();
         let mut quotes = Vec::new();
         if let Ok(session) = &mut self.session {
             session.set_play_area(play_area());
             session.hold_fire(fire.0, fire.1);
+            session.hold_eject(eject);
             for _ in 0..steps {
                 self.previous = *session.player();
                 self.npc_previous = session
@@ -10525,6 +10536,123 @@ mod tests {
         catalog.hulls[0].death_delay = death_delay;
         catalog.hulls[1] = hull_of(129, &[BLASTER]);
         catalog
+    }
+
+    /// [`killed_in`] (the player's `DeathDelay` `death_delay`) where the
+    /// player starts with each of `outfits` (188, `ModType` 11, the escape
+    /// pod; 187, `ModType` 20, auto-eject), with records of its ship and
+    /// of the pod.
+    fn ejecting_in(death_delay: i16, outfits: &[i16]) -> FakeCatalog {
+        let mut catalog = killed_in(death_delay);
+        let fitted = |id, mod_type| OutfitRecord {
+            mods: [(mod_type, 0), (0, 0), (0, 0), (0, 0)],
+            ..holding(id, WeaponId(128))
+        };
+        catalog.outfits.extend([fitted(188, 11), fitted(187, 20)]);
+        catalog.defaults = outfits.iter().map(|&id| (OutfitId(id), 1)).collect();
+        catalog.ships.extend([ship_class(128), ship_class(895)]);
+        catalog
+    }
+
+    /// `shïp` `id`'s record, of [`FIELDS`].
+    fn ship_class(id: i16) -> ShipRecord {
+        ShipRecord {
+            id: ShipId(id),
+            name: format!("Ship {id}"),
+            short_name: format!("Ship {id}"),
+            long_name: String::new(),
+            fields: FIELDS,
+            defaults: Vec::new(),
+            cost: 900,
+            tech_level: 1,
+            buy_random: 100,
+            hire_random: 0,
+            require: 0,
+            availability: nova_sim::Test::default(),
+            appear_on: nova_sim::Test::default(),
+            flags: 0,
+            flags3: 0,
+            disp_weight: 0,
+            max_gun: 0,
+            max_tur: 0,
+            length: 0,
+            crew: 0,
+            inherent_ai: 1,
+            comm_name: String::new(),
+            inherent_govt: None,
+            combat_govt: None,
+            escort_type: -1,
+            on_capture: nova_sim::Script::default(),
+            on_purchase: nova_sim::Script::default(),
+            on_retire: nova_sim::Script::default(),
+        }
+    }
+
+    /// `catalog`'s view under its NPC's fire, holding each of `keys`.
+    fn ejecting_view(catalog: FakeCatalog, keys: &[Key]) -> View {
+        let mut view = fighting(catalog, &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        for &held in keys {
+            view.input(&key(held, true));
+        }
+        view
+    }
+
+    /// Ticks `view` until the player is in the escape pod, or for 60
+    /// ticks: whether it got there, and whether it was seen breaking up.
+    fn until_ejected(view: &mut View) -> (bool, bool) {
+        let mut broke_up = false;
+        for _ in 0..60 {
+            view.tick(TICK);
+            match view.session().expect("flying").player_fate() {
+                PlayerFate::Ejected { .. } => return (true, broke_up),
+                PlayerFate::BreakingUp { .. } => broke_up = true,
+                _ => {}
+            }
+        }
+        (false, broke_up)
+    }
+
+    #[test]
+    fn command_and_x_together_hold_the_eject() {
+        assert_eq!(EJECT_KEY, Key::Char('x'));
+        let mut view = ejecting_view(ejecting_in(100, &[188]), &[Key::Command, EJECT_KEY]);
+        assert_eq!(
+            until_ejected(&mut view),
+            (true, false),
+            "before any breakup"
+        );
+    }
+
+    #[test]
+    fn command_alone_or_x_alone_does_not() {
+        for keys in [Key::Command, EJECT_KEY] {
+            let keys = [keys];
+            let mut view = ejecting_view(ejecting_in(100, &[188]), &keys);
+            assert_eq!(until_ejected(&mut view), (false, true), "{keys:?}");
+        }
+    }
+
+    #[test]
+    fn an_ejected_player_takes_no_key() {
+        let mut view = ejecting_view(ejecting_in(100, &[188, 187]), &[]);
+        assert!(until_ejected(&mut view).0);
+        view.input(&key(MAP_KEY, true));
+        assert!(!view.map_open, "no map");
+        view.input(&key(MAP_KEY, false));
+        view.input(&key(LAND_KEY, true));
+        let session = view.session().expect("flying");
+        assert_eq!(session.nav_target(), None, "no landing request");
+        assert!(!session.takes(PlayerCommand::Land));
+    }
+
+    #[test]
+    fn a_first_tick_eject_rolls_no_puff_for_the_player() {
+        let mut view = ejecting_view(ejecting_in(100, &[188, 187]), &[]);
+        assert_eq!(until_ejected(&mut view), (true, false));
+        let session = view.session().expect("flying");
+        let breaking = super::dying(session, &view.sheet, &view.npc_sheets);
+        assert_eq!(breaking.len(), 1, "the hulk alone");
+        assert_eq!((breaking[0].ticks_left, breaking[0].starting), (100, true));
     }
 
     /// Steps `view` until the player's ship explodes, calling
