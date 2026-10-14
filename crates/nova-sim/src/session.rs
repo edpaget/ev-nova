@@ -19828,6 +19828,90 @@ mod tests {
         assert_eq!(session.player().position, Vec2::new(-300.0, 40.0));
     }
 
+    /// [`wormholes`] over [`alternates`]' 134, with the ship starting in
+    /// 131 rather than 130, over wormhole 400 of links `links`, and
+    /// wormhole 430 at (70, -90) listed by 131 alone; 410 is 130's.
+    fn rescued_wormholes(links: &[i16]) -> FakePilotCatalog {
+        let mut catalog = FakePilotCatalog {
+            character: starting([Some(131), None, None, None]).character,
+            ..wormholes()
+        };
+        with_alternate(&mut catalog);
+        catalog.sites = vec![
+            (SystemId(130), vec![planet(128, 30.0, -40.0)]),
+            (SystemId(131), vec![gate_landing(400, 0x2200)]),
+        ];
+        catalog.gates[0] = gate_site(400, (0.0, 0.0), 0x2200, links, 120);
+        catalog
+            .gates
+            .push(gate_site(430, (70.0, -90.0), WORMHOLE, &[], 0));
+        catalog.gate_listers = vec![
+            (SystemId(130), StellarId(410)),
+            (SystemId(132), StellarId(420)),
+            (SystemId(131), StellarId(430)),
+        ];
+        catalog
+    }
+
+    /// `catalog`'s session with 131 and 134 hidden, so the refresh moves
+    /// the player into 131 made visible, the chain head at their place,
+    /// which owns nothing (@0x998f1-0x99a36): 430 is held only by the
+    /// rescue ([`OverlaidGalaxy::holder`]). Then L pressed twice over the
+    /// wormhole.
+    fn at_rescued_wormhole(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        hide(&mut session, catalog, &[131, 134]);
+        assert_eq!(session.system(), SystemId(131));
+        let listers = [SystemId(131)];
+        assert_eq!(session.galaxy().owner(&listers), None, "made visible");
+        assert_eq!(
+            session.galaxy().holder(&listers, SystemId(131)),
+            Some(SystemId(131)),
+            "rescued"
+        );
+        session.land().expect("clearance");
+        assert_eq!(
+            session.land(),
+            Ok(LandPress::AtGate {
+                stellar: StellarId(400),
+                kind: GateKind::Wormhole,
+            })
+        );
+        session
+    }
+
+    #[test]
+    fn a_wormhole_linked_to_one_only_the_players_ownerless_system_lists_comes_out_there() {
+        let catalog = rescued_wormholes(&[430]);
+        let mut session = at_rescued_wormhole(&catalog);
+        let mut chance = Scripted::rolling(&[0]);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut chance),
+            Ok(SystemId(131)),
+            "430 has no owner: the rescue holds it in the player's 131"
+        );
+        assert_eq!(chance.sides_asked, [1]);
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.player().position, Vec2::new(70.0, -90.0), "at 430");
+    }
+
+    #[test]
+    fn an_unlinked_wormhole_held_only_by_the_rescue_is_no_candidate() {
+        let catalog = rescued_wormholes(&[]);
+        let mut session = at_rescued_wormhole(&catalog);
+        let mut chance = Scripted::rolling(&[0]);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut chance),
+            Ok(SystemId(130))
+        );
+        assert_eq!(
+            chance.sides_asked,
+            [2],
+            "410 in 130 and 420 in 132: 430, held by the player's 131, is dropped (@0x6410e-0x64176)"
+        );
+        assert_eq!(session.player().position, Vec2::new(-300.0, 40.0), "at 410");
+    }
+
     #[test]
     fn m_into_a_hidden_system_arrives_at_the_one_at_its_place_and_reads_its_stellars() {
         let catalog = alternates();
