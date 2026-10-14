@@ -10631,9 +10631,19 @@ mod tests {
         assert_eq!(nav_target(&view), nav);
     }
 
+    /// Home (`Key::Other` on this platform) has no binding, so it does
+    /// nothing in every state, including the dead one the original reads it
+    /// in (0x6884c, `_ResetPlayer(1)`, left out). This pins the unbound key,
+    /// not the dead-state lockout, which `an_exploded_player_takes_no_command`
+    /// and `a_click_picks_no_stellar_once_the_player_has_exploded` cover.
     #[test]
-    fn home_does_nothing_once_the_player_has_exploded() {
-        // The platform has no Home key: it arrives as `Key::Other`.
+    fn home_is_unbound_whether_flying_or_exploded() {
+        let mut flying =
+            fighting(killed_in(1), &placed(750, 650, 180)).with_behaviour(Rc::new(Firing));
+        assert!(matches!(fate_of(&flying), PlayerFate::Flying));
+        assert_eq!(flying.input(&key(Key::Other, true)), ScreenAction::None);
+        assert_eq!(flying.input(&key(Key::Other, false)), ScreenAction::None);
+
         let mut view = exploded();
         let pilot = view.pilot().cloned();
         assert_eq!(view.input(&key(Key::Other, true)), ScreenAction::None);
