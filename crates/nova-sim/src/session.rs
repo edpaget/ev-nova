@@ -15335,6 +15335,67 @@ pub(super) mod tests {
         );
     }
 
+    /// Every NPC takes `goal`, fires as Nova's AI picks
+    /// ([`crate::ai::fire::trigger`]) and targets what `goal` is about.
+    #[derive(Debug)]
+    struct Minding {
+        goal: Goal,
+    }
+
+    impl Behaviour for Minding {
+        fn decide(&self, _npc: &Npc, _around: &Surroundings, _chance: &mut dyn Chance) -> Goal {
+            self.goal
+        }
+
+        fn trigger(&self, npc: &Npc, around: &Surroundings) -> Trigger {
+            crate::ai::fire::trigger(npc, around)
+        }
+
+        fn target(&self, npc: &Npc, _around: &Surroundings) -> Option<ShipRef> {
+            npc.goal.quarry()
+        }
+    }
+
+    #[test]
+    fn an_npc_not_fighting_lets_a_players_missile_through_and_one_fighting_shoots_it_down() {
+        // The NPC's point defence runs only when its AI asks for a turret
+        // (`_AIFireTurret` @0x80b0d).
+        let quad = WeaponRecord {
+            id: WeaponId(133),
+            guidance: 9,
+            reload: 5,
+            count: 12,
+            speed: 2000,
+            mass_dmg: 1,
+            energy_dmg: 4,
+            ..blaster()
+        };
+        let slow = WeaponRecord {
+            speed: 500,
+            count: 200,
+            ..homing_missile(134, 1000)
+        };
+        let catalog = arming(slow, quad, 0);
+        for (goal, downed) in [(Goal::Idle, false), (Goal::Attack(ShipRef::Player), true)] {
+            let mut session = with_an_npc_at(&catalog, 750, 550, 180);
+            session.select_target(TargetPick::Nearest);
+            session.hold_fire(true, false);
+            let mut events = Vec::new();
+            for _ in 0..60 {
+                session.tick_traffic(&catalog, &Minding { goal }, &mut NeverFires);
+                session.tick_combat(Rules::default(), &mut NeverFires);
+                session.hold_fire(false, false);
+                events.extend(session.take_combat_events());
+            }
+            let shot_down = events
+                .iter()
+                .any(|event| matches!(event, CombatEvent::ShotDown { .. }));
+            assert_eq!(shot_down, downed, "{goal:?}: {events:?}");
+            let shield = session.npcs()[0].reserves.shield.now;
+            assert_eq!(shield < 30.0, !downed, "{goal:?}: {shield}");
+        }
+    }
+
     // Fights, by Nova's AI.
 
     /// Traders (140, class 1: disabling costs 3), police allied with them

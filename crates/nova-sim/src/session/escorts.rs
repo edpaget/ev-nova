@@ -2031,7 +2031,9 @@ mod tests {
         let catalog = fleeted();
         let mut session = flying(&catalog, RuleSource::Engine);
         session.command_escorts(EscortGroup::All, EscortCommand::Recall);
-        let raider = pirate(&mut session, 0.0, -200.0, Goal::Attack(ShipRef::Player));
+        // Within the 164-pixel box of the escort's slot, where its turret
+        // fires (@0x86666-0x86689).
+        let raider = pirate(&mut session, 0.0, -120.0, Goal::Attack(ShipRef::Player));
         let ai = sitting_ai();
         fight(&mut session, &catalog, &ai);
         let warship = escort_npcs(&session)[0];

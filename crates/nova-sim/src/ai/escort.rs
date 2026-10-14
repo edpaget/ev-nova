@@ -126,9 +126,13 @@ impl Behaviour for EscortAi {
                 bays: false,
                 ..fire::trigger(npc, around)
             },
-            Goal::Formation { guard: Some(_) } => Trigger {
+            // Keeping formation, `_LowLevelAIHandler` calls `_AIFireTurret`
+            // only while the guard (+0x70) is within the box on both axes
+            // (@0x8648e-0x864ad, @0x86666-0x86689).
+            Goal::Formation { guard: Some(guard) } if near(npc, around, guard) => Trigger {
                 primary: true,
                 turrets_only: true,
+                point_defence: true,
                 ..Trigger::default()
             },
             // Holding Position: `_EscortAI` tail-calls `_AIFireTurret` with
@@ -156,6 +160,16 @@ impl Behaviour for EscortAi {
 /// keep fighting.
 fn intact(npc: &Npc) -> bool {
     npc.condition == Condition::Intact && npc.mode == Mode::Flying
+}
+
+/// Whether `guard` is within [`DOGFIGHT_BOX`](fire::DOGFIGHT_BOX) of
+/// `npc` on both axes among `around`: `trunc(d) + 164` unsigned at most
+/// 328.
+fn near(npc: &Npc, around: &Surroundings, guard: ShipRef) -> bool {
+    around.state_of(guard).is_some_and(|at| {
+        let off = at.position - npc.state.position;
+        off.x.abs() < fire::DOGFIGHT_BOX && off.y.abs() < fire::DOGFIGHT_BOX
+    })
 }
 
 /// An attack on `threat`, or formation with none.
@@ -313,7 +327,7 @@ mod tests {
         only: None,
         turrets_only: true,
         bays: false,
-        point_defence: false,
+        point_defence: true,
     };
 
     #[test]
@@ -468,6 +482,34 @@ mod tests {
                 "{at:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_formation_escort_fires_turrets_and_defends_only_within_164_of_its_guard() {
+        // `trunc(d) + 164` unsigned at most 328 on both axes
+        // (@0x8648e-0x864ad, @0x86666-0x86689).
+        let guarding = having(
+            escort(None),
+            Goal::Formation { guard: Some(n(2)) },
+            Some(n(2)),
+        );
+        for (x, y) in [(164.9, 0.0), (-164.9, 0.0), (0.0, 164.9), (0.0, -164.9)] {
+            let npcs = [guarding.clone(), pirate(2, x, y)];
+            assert_eq!(command(ENGINE, &npcs), (TURRETS, Some(n(2))), "{x} {y}");
+        }
+        for (x, y) in [(165.0, 0.0), (-165.0, 0.0), (0.0, 165.0), (0.0, -165.0)] {
+            let npcs = [guarding.clone(), pirate(2, x, y)];
+            assert_eq!(
+                command(ENGINE, &npcs),
+                (Trigger::default(), Some(n(2))),
+                "{x} {y}"
+            );
+        }
+        assert_eq!(
+            command(ENGINE, &[guarding]).0,
+            Trigger::default(),
+            "its guard gone"
+        );
     }
 
     #[test]
