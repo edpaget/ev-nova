@@ -110,6 +110,9 @@ pub fn map_key(key: PhysicalKey) -> Key {
         PhysicalKey::Code(KeyCode::KeyM) => Key::Char('m'),
         // The jump key, by position: J on a US-layout keyboard.
         PhysicalKey::Code(KeyCode::KeyJ) => Key::Char('j'),
+        // Flight's Hyperspace Mode key and the bar's hire key, by position:
+        // H on a US-layout keyboard.
+        PhysicalKey::Code(KeyCode::KeyH) => Key::Char('h'),
         // Hyper Select, by position: `\` on a US-layout keyboard; the
         // original's default.
         PhysicalKey::Code(KeyCode::Backslash) => Key::Char('\\'),
@@ -218,6 +221,7 @@ mod tests {
             (KeyCode::KeyL, Key::Char('l')),
             (KeyCode::KeyM, Key::Char('m')),
             (KeyCode::KeyJ, Key::Char('j')),
+            (KeyCode::KeyH, Key::Char('h')),
             (KeyCode::KeyP, Key::Char('p')),
             (KeyCode::KeyB, Key::Char('b')),
             (KeyCode::AltLeft, Key::Alt),
@@ -256,7 +260,7 @@ mod tests {
     /// screens match on where they name one. A screen test that sends one of
     /// these directly never crosses `map_key`, so this is what keeps each
     /// one reachable from a real keyboard.
-    const GAME_CHARACTER_KEYS: [Key; 31] = [
+    const GAME_CHARACTER_KEYS: [Key; 32] = [
         Key::Char('f'),
         Key::Char('i'),
         Key::Char('p'),
@@ -268,6 +272,7 @@ mod tests {
         nova_view::flight::view::SELECT_KEY,
         nova_view::flight::view::NEAREST_KEY,
         nova_view::flight::view::HYPER_SELECT_KEY,
+        nova_view::flight::view::HYPERSPACE_MODE_KEY,
         nova_view::flight::view::NAV_OFF_KEY,
         nova_view::flight::view::JETTISON_KEY,
         nova_view::flight::view::STELLAR_SLOT_KEYS[0][0],
@@ -297,6 +302,7 @@ mod tests {
             'b' => KeyCode::KeyB,
             'd' => KeyCode::KeyD,
             'f' => KeyCode::KeyF,
+            'h' => KeyCode::KeyH,
             'i' => KeyCode::KeyI,
             'j' => KeyCode::KeyJ,
             'k' => KeyCode::KeyK,

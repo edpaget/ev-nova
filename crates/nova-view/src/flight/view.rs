@@ -82,7 +82,7 @@
 //! The HUD is drawn over everything but a jump's fade: the status bar against the
 //! right edge, its radar showing the stellars and ships around the ship
 //! as drawn, its bars the session's shield, armour and fuel, and its nav
-//! area the navigation target or else the course. Without a status bar it
+//! area the session's nav mode and selection. Without a status bar it
 //! says why, and flight goes on. By [`RuleKey::HudCadence`]'s engine
 //! reading the radar shows what it held at its last refresh, every 8
 //! ticks ([`HudCadence`]) or when the original's `_RedrawStatus` would
@@ -171,23 +171,28 @@
 //!   on the frame after each change to it; and the course as it is flown
 //!   ([`Session::course_shown`]), each hop the visible system standing
 //!   for it.
-//! - The HUD's nav area shows the navigation target, or else the next
-//!   system on the course (see [`hud`](super::hud)). As in the original
+//! - The HUD's nav area shows the session's nav mode and its selection
+//!   ([`Session::nav_mode`]): the nav system off, a stellar, or a system
+//!   (see [`hud`](super::hud)). As in the original
 //!   (`_HandlePlayer` @0x68390; see [`navigation`](nova_sim::navigation)),
 //!   1-4 and F1-F4 ([`STELLAR_SLOT_KEYS`], presses) select the stellar in
 //!   that slot of the system's nav defaults, 1-4 only while the escort
 //!   menu is shut; F5 ([`NEAREST_STELLAR_KEY`]) the nearest landable one,
 //!   as L does with none; a left click in space the stellar under it
 //!   (not in the status panel, the right [`STATUS_BAR_WIDTH`] of the
-//!   screen, where the radar takes no clicks); and backquote, Nav Off
-//!   ([`NAV_OFF_KEY`]), clears it. The original has no stellar cycle key:
-//!   Tab is its Target Select, cycling the ships.
-//! - `\` (a press, not its repeats), the original's Hyper Select, plots
-//!   a one-jump course to the next system linked with this one, as
-//!   [`Session::select_next_system`] says, and clears the navigation
-//!   target, so the nav area shows that system and J jumps there.
-//! - J (a press) begins the pre-jump turn and slow-down towards the next
-//!   system on the course when the session allows a jump, and otherwise
+//!   screen, where the radar takes no clicks). Backquote, Nav Off
+//!   ([`NAV_OFF_KEY`]), turns the nav system off, keeping the course; with
+//!   Option held it lets go of the ship target instead. H
+//!   ([`HYPERSPACE_MODE_KEY`]), Hyperspace Mode, selects the course's next
+//!   hop, or no destination. Closing the course map cues the course's
+//!   next hop too. The original has no stellar cycle key: Tab is its
+//!   Target Select, cycling the ships.
+//! - `\` (a press, not its repeats), the original's Hyper Select, selects
+//!   the next system linked with this one and plots a one-jump course to
+//!   it, as [`Session::select_next_system`] says, so the nav area shows
+//!   that system and J jumps there.
+//! - J (a press) begins the pre-jump turn and slow-down towards the
+//!   system selected when the session allows a jump, and otherwise
 //!   says why in the original's words (`STR#` 2002), as a refused landing
 //!   does. Once J is accepted the keys are let go and ignored while the
 //!   session flies the ship round to the jump's bearing
@@ -370,13 +375,13 @@ use nova_sim::{
     Chance, ClassRow, Clearance, CombatCatalog, CommCatalog, CommNote, Condition, Controls,
     DisableRule, EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal, Good, GovtId,
     Haggle, HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome,
-    LandPress, LandingRefusal, LegalCode, Market, NeverFires, NovaAi, NovaBoarding, NovaDisable,
-    NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot,
-    PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey,
-    RuleSource, Rulebook, Rules, Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal,
-    ShipState, Shipyard, SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take,
-    Taken, TargetPick, TargetTag, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized,
-    flight::shortest_turn, glow_level, lights_level,
+    LandPress, LandingRefusal, LegalCode, Market, NavMode, NeverFires, NovaAi, NovaBoarding,
+    NovaDisable, NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun,
+    Outfitter, Pilot, PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal, Reselection,
+    Reserves, RuleKey, RuleSource, Rulebook, Rules, Session, ShipId, ShipNaming, ShipPurchase,
+    ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError, StellarId, StellarPick,
+    Steps, SystemId, Take, Taken, TargetPick, TargetTag, TradeRefusal, TrafficCatalog, Turn, Vec2,
+    flight::normalized, flight::shortest_turn, glow_level, lights_level,
 };
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
@@ -856,11 +861,12 @@ pub const STELLAR_SLOT_KEYS: [[Key; 2]; 4] = [
 /// stellar its land key would with nothing selected. Its Cmd-5 twin has
 /// no key here.
 pub const NEAREST_STELLAR_KEY: Key = Key::Function(5);
-/// The Nav Off key, which clears the navigation target: the original's
-/// default, backquote (`_loadKeys` @0xcd5f8 `navOff` 0x32, handled in
-/// `_HandlePlayer` @0x69a17-0x69b63), the only key that clears it. While
-/// the dev overlay is built in, backquote toggles the overlay instead and
-/// never reaches flight.
+/// The Nav Off key, which turns the nav system off, the course kept: the
+/// original's default, backquote (`_loadKeys` @0xcd5f8 `navOff` 0x32,
+/// handled in `_HandlePlayer` @0x69a94-0x69b63). With Option held it
+/// lets go of the ship target instead ([`Session::clear_target`],
+/// @0x69a17-0x69a90). While the dev overlay is built in, backquote
+/// toggles the overlay instead and never reaches flight.
 pub const NAV_OFF_KEY: Key = Key::Char('`');
 
 /// The Hyper Select key, which cycles the hyperspace destination through
@@ -868,6 +874,13 @@ pub const NAV_OFF_KEY: Key = Key::Char('`');
 /// (`Keys.nib`'s `hyperSel`, "Hyper Select:", default keycode 0x2a in
 /// `_loadKeys`). H is the original's separate Hyperspace Mode key.
 pub const HYPER_SELECT_KEY: Key = Key::Char('\\');
+
+/// The Hyperspace Mode key, which puts the nav system in hyperspace mode
+/// and selects the course's next hop ([`Session::hyperspace_mode`]): the
+/// original's default, H (`_loadKeys` @0xcd5f8 `hyperMode`, keycode
+/// 0x04, handled in `_HandlePlayer` @0x69b76-0x69b89). The floating map
+/// it shows while held is not drawn.
+pub const HYPERSPACE_MODE_KEY: Key = Key::Char('h');
 
 /// `STR#` 2002 #29.
 pub const NO_DESTINATION: &str =
@@ -2491,15 +2504,21 @@ impl<
     /// system picked on it: the ship comes out there, and the new system
     /// fades in from white ([`JumpEffect::emerging`], or flashes white
     /// with the Hyperspace Effects preference off); with no pick, the jump
-    /// is cancelled ([`HYPERGATE_CANCELLED`]).
+    /// is cancelled ([`HYPERGATE_CANCELLED`]). Closing the course map cues
+    /// the course's next hop ([`Session::cue_course`]), as the original's
+    /// map does unless it is the hypergate's (`_DoSystemMap` @0x13c16).
     pub fn close_map(&mut self) {
         self.map.cancel_pointer();
         self.map.release_keys();
         self.map_open = false;
-        self.redraw_status();
         if self.map.mode() != MapMode::Hypergate {
+            if let Ok(session) = &mut self.session {
+                session.cue_course();
+            }
+            self.redraw_status();
             return;
         }
+        self.redraw_status();
         let choice = self.map.take_gate_choice();
         let Ok(session) = &mut self.session else {
             return;
@@ -2583,8 +2602,8 @@ impl<C> FlightView<C> {
     /// order with the shape and sprite width the radar reads, and blank
     /// while the ship is landed (`_playerIsLanded`); each with its IFF
     /// code, the player's IFF and density scanner, this tick's static
-    /// ([`FlightView::advance_hud`]), and whether a hyperspace route is
-    /// shown ([`route_shown`]).
+    /// ([`FlightView::advance_hud`]), and whether the nav mode is
+    /// hyperspace ([`Session::nav_mode`]).
     fn radar_now(&self) -> RadarScene {
         // Without a session flight shows only why, never the radar.
         let Ok(session) = &self.session else {
@@ -2613,7 +2632,7 @@ impl<C> FlightView<C> {
             iff: gear.iff,
             density_scanner: gear.density_scanner,
             static_pattern: self.radar_static,
-            route_shown: route_shown(session).is_some(),
+            hyperspace_mode: matches!(session.nav_mode(), NavMode::Hyperspace(_)),
         }
     }
 
@@ -2704,27 +2723,35 @@ impl<C> FlightView<C> {
 
     /// Takes the nav area's snapshot afresh.
     fn retake_nav(&mut self) {
-        let mode = self.session.as_ref().map_or(NavMode::Off, nav_mode);
-        self.nav_scene = Some((mode, self.nav_now()));
+        self.nav_scene = Some((self.nav_mode(), self.nav_now()));
     }
 
-    /// What the HUD's nav area shows now, for the [`nav_mode`] (see
-    /// [`NavDisplay`]): the selected stellar, by its name in the scene
-    /// ("No Destination" for one not in it); otherwise the next system on
-    /// the course, by its name on the map if the pilot has explored it,
-    /// with whether the ship can jump there; otherwise "Nav System Off".
+    /// The player's nav mode ([`Session::nav_mode`]); off without a
+    /// session.
+    fn nav_mode(&self) -> NavMode {
+        self.session
+            .as_ref()
+            .map_or(NavMode::Off, Session::nav_mode)
+    }
+
+    /// What the HUD's nav area shows now, for the session's nav mode (see
+    /// [`NavDisplay`]): in mode 2 the stellar selected, by its name in the
+    /// scene ("No Destination" for none, or one not in the scene); in
+    /// mode 3 the system selected, by its name on the map if the pilot has
+    /// explored it ("No Destination" for none), with whether the ship can
+    /// jump there; with the nav system off, "Nav System Off".
     fn nav_now(&self) -> NavDisplay {
         let Ok(session) = &self.session else {
             return NavDisplay::Off;
         };
-        match nav_mode(session) {
+        match session.nav_mode() {
             NavMode::Off => NavDisplay::Off,
-            NavMode::Stellar(target) => NavDisplay::Stellar(
+            NavMode::Stellar(target) => NavDisplay::Stellar(target.and_then(|target| {
                 self.scene
                     .as_ref()
                     .and_then(|scene| scene.stellars().iter().find(|s| s.id == target))
-                    .map(|stellar| stellar.name.clone()),
-            ),
+                    .map(|stellar| stellar.name.clone())
+            })),
             NavMode::Hyperspace(next) => NavDisplay::Hyperspace {
                 destination: next.map_or(NavDestination::None, |next| {
                     session
@@ -2786,7 +2813,7 @@ impl<C> FlightView<C> {
     /// Whether the nav area's snapshot was taken for the nav mode the
     /// player is in now.
     fn nav_mode_shown(&self) -> bool {
-        let mode = self.session.as_ref().map_or(NavMode::Off, nav_mode);
+        let mode = self.nav_mode();
         self.nav_scene
             .as_ref()
             .is_some_and(|(shown, _)| *shown == mode)
@@ -3475,8 +3502,9 @@ impl<C> FlightView<C> {
     /// like F1-F4, select the stellar in their slot
     /// ([`STELLAR_SLOT_KEYS`]); while the escort menu is open, 1-5 pick
     /// its groups instead and never reach here ([`FlightView::escort_key`]).
-    /// F5 selects the nearest ([`NEAREST_STELLAR_KEY`]) and Nav Off
-    /// clears it ([`NAV_OFF_KEY`]).
+    /// F5 selects the nearest ([`NEAREST_STELLAR_KEY`]); Nav Off turns the
+    /// nav system off, or with Option held lets go of the ship target
+    /// ([`NAV_OFF_KEY`]).
     fn nav_key(&mut self, key: Key) {
         let slot = STELLAR_SLOT_KEYS
             .iter()
@@ -3485,11 +3513,29 @@ impl<C> FlightView<C> {
             Some(slot) => self.select_stellar(StellarPick::Slot(slot)),
             _ if key == NEAREST_STELLAR_KEY => self.select_stellar(StellarPick::Nearest),
             _ if key == NAV_OFF_KEY => {
+                let option = self.held.contains(&Key::Alt);
                 if let Ok(session) = &mut self.session {
-                    session.nav_off();
+                    if option {
+                        session.clear_target();
+                    } else {
+                        session.nav_off();
+                    }
                 }
             }
             _ => {}
+        }
+    }
+
+    /// A press of Hyper Select ([`HYPER_SELECT_KEY`]) or Hyperspace Mode
+    /// ([`HYPERSPACE_MODE_KEY`]).
+    fn hyperspace_key(&mut self, key: Key) {
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        if key == HYPER_SELECT_KEY {
+            session.select_next_system();
+        } else {
+            session.hyperspace_mode();
         }
     }
 
@@ -3905,10 +3951,8 @@ impl<
             Some(JETTISON_KEY) => self.jettison(),
             Some(MISSION_INFO_KEY) => self.ask_mission_info(),
             Some(PLAYER_INFO_KEY) => return self.ask_player_info(),
-            Some(HYPER_SELECT_KEY) => {
-                if let Ok(session) = &mut self.session {
-                    session.select_next_system();
-                }
+            Some(key @ (HYPER_SELECT_KEY | HYPERSPACE_MODE_KEY)) => {
+                self.hyperspace_key(key);
                 return ScreenAction::None;
             }
             Some(TARGET_KEY) => self.select_target(
@@ -4240,50 +4284,6 @@ fn radar_ships(session: &Session, shown: &[(&Npc, Point, f32)]) -> Vec<RadarShip
 /// The class `Mass` a ship must be above to show as a square under a
 /// density scanner (`cmpw $0x63` @0x49bb8-0x49c2f).
 const HEAVY_MASS: f32 = 99.0;
-
-/// The player's nav mode, the original's player +0x6a, as the engine
-/// derives it: a selected stellar is mode 2, else a plotted course mode 3,
-/// else mode −1, the nav system off.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NavMode {
-    /// Mode −1: nothing selected, no course.
-    Off,
-    /// Mode 2: the selected stellar.
-    Stellar(StellarId),
-    /// Mode 3: the next hop shown ([`route_shown`]), `None` when the first
-    /// hop has no visible system at its place.
-    Hyperspace(Option<SystemId>),
-}
-
-/// The player's [`NavMode`] in `session`.
-///
-/// A course whose first hop has no system shown at its place is mode 3
-/// with no destination ("No Destination", the original's +0x6c == −1).
-/// The original keeps the hop's stale link index there and names the
-/// hidden system; ours does not reveal a hidden system. Its other mode
-/// changes that the engine has no state for (Nav Off keeping the route,
-/// Hyper Select with nothing to cue) are rdm phase
-/// hud-fidelity/phase-11-track-nav-mode's.
-fn nav_mode(session: &Session) -> NavMode {
-    if let Some(target) = session.nav_target() {
-        NavMode::Stellar(target)
-    } else if session.course().is_empty() {
-        NavMode::Off
-    } else {
-        NavMode::Hyperspace(route_shown(session))
-    }
-}
-
-/// The next system on the hyperspace route the nav area shows, if it
-/// shows one: no stellar is selected and a course is shown (the
-/// original's nav mode 3). The nav area ([`FlightView::nav_now`]) and
-/// the radar's centre arrow ([`RadarScene::route_shown`]) both read it.
-fn route_shown(session: &Session) -> Option<SystemId> {
-    if session.nav_target().is_some() {
-        return None;
-    }
-    session.course_shown().first().copied()
-}
 
 /// The play area about the ship, in world units: the screen left of the
 /// status bar, the ship drawn at the screen's centre. The session reads it to
@@ -14469,7 +14469,10 @@ mod tests {
         session.plot_course(SystemId(131)).expect("a route");
         let explore = nova_sim::SetExpr::parse("X133").expect("parses");
         session.run_set(&explore, &mut NeverFires);
-        FlightView::with_pilot(catalog, session.pilot().clone())
+        let mut view = FlightView::with_pilot(catalog, session.pilot().clone());
+        // A pilot flies with the nav system off: H cues the course.
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        view
     }
 
     #[test]
@@ -15493,6 +15496,111 @@ mod tests {
         assert_eq!(view.take_landing(), None, "selects, not lands");
         assert_eq!(nav_target(&view), Some(StellarId(128)));
         assert_eq!(NAV_OFF_KEY, Key::Char('`'));
+    }
+
+    fn nav_mode(view: &View) -> NavMode {
+        view.session().expect("flying").nav_mode()
+    }
+
+    #[test]
+    fn nav_off_with_a_course_draws_nav_system_off_keeps_the_course_and_refuses_j() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+        view.take_sounds();
+        tap(&mut view, NAV_OFF_KEY);
+        assert_eq!(nav(&view), [hud::NAV_OFF]);
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::NavSelected)]);
+        assert!(!view.radar_now().hyperspace_mode);
+        assert_eq!(course(&view), [SystemId(131)], "kept");
+        fly_out(&mut view);
+        tap(&mut view, JUMP);
+        assert!(!view.preparing_jump(), "refused");
+        assert_eq!(view.message(), Some(NO_DESTINATION));
+    }
+
+    #[test]
+    fn far_from_the_centre_nav_off_with_a_course_lets_the_arrow_show() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_far(&mut view);
+        let most_lines = |view: &mut View| {
+            (0..32)
+                .map(|_| {
+                    ticks(view, 1);
+                    arrow_lines(view)
+                })
+                .max()
+        };
+        assert_eq!(most_lines(&mut view), Some(0), "mode 3 hides it");
+        tap(&mut view, NAV_OFF_KEY);
+        assert_eq!(most_lines(&mut view), Some(3), "mode -1 shows it");
+    }
+
+    #[test]
+    fn hyperspace_mode_with_no_course_draws_hyperspace_over_no_destination() {
+        let mut view = flight();
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_NO_DESTINATION]);
+        assert!(view.radar_now().hyperspace_mode, "the arrow hidden");
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::NavSelected)]);
+        assert_eq!(HYPERSPACE_MODE_KEY, Key::Char('h'));
+    }
+
+    #[test]
+    fn hyper_select_with_no_links_in_mode_3_draws_hyperspace_over_no_destination() {
+        let mut view = FlightView::new(FakeCatalog {
+            onward: true,
+            ..catalog()
+        });
+        run_set(&mut view, "M132");
+        view.settle_script();
+        assert_eq!(system_of(&view), SystemId(132), "Barnard lists no links");
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        view.take_sounds();
+        tap(&mut view, HYPER_SELECT_KEY);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(None));
+        assert_eq!(view.take_sounds(), [], "in silence");
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_NO_DESTINATION]);
+    }
+
+    #[test]
+    fn closing_the_course_map_cues_the_courses_first_hop() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        tap(&mut view, NAV_OFF_KEY);
+        assert_eq!(nav_mode(&view), NavMode::Off);
+        tap(&mut view, MAP);
+        tap(&mut view, MAP);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(131))));
+        assert_eq!(nav(&view), [hud::NAV_HYPERSPACE, hud::NAV_UNEXPLORED]);
+    }
+
+    #[test]
+    fn closing_the_hypergate_map_turns_the_nav_off_and_cues_nothing() {
+        let mut view = FlightView::new(gated());
+        plot(&mut view, 131);
+        land_now(&mut view);
+        tap(&mut view, MAP);
+        assert_eq!(view.message(), Some(HYPERGATE_CANCELLED));
+        assert_eq!(course(&view), [SystemId(131)], "the course kept");
+        assert_eq!(nav_mode(&view), NavMode::Off);
+    }
+
+    #[test]
+    fn alt_backquote_lets_go_of_the_ship_target_and_leaves_the_nav_mode() {
+        let mut view = fighting(armed(2, &[]), &two_npcs());
+        tap(&mut view, LAND);
+        tap(&mut view, Key::Tab);
+        assert_eq!(target_of(&view), Some(NpcId(0)));
+        view.take_sounds();
+        alt_tap(&mut view, NAV_OFF_KEY);
+        assert_eq!(target_of(&view), None);
+        assert!(nav_target(&view).is_some(), "the nav system stays on");
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TargetCleared)]);
+        alt_tap(&mut view, NAV_OFF_KEY);
+        assert_eq!(view.take_sounds(), [], "no target: silent");
     }
 
     // The nav target's brackets.
@@ -16969,13 +17077,16 @@ mod tests {
     #[test]
     fn a_plotted_course_hides_the_arrow_until_a_stellar_is_selected() {
         let mut view = flight();
-        assert!(!view.radar_now().route_shown, "no course");
+        assert!(!view.radar_now().hyperspace_mode, "no course");
         plot(&mut view, 131);
-        assert!(view.radar_now().route_shown);
-        assert!(view.radar_shown().route_shown, "redrawn as the map closes");
+        assert!(view.radar_now().hyperspace_mode);
+        assert!(
+            view.radar_shown().hyperspace_mode,
+            "redrawn as the map closes"
+        );
         tap(&mut view, NEAREST_STELLAR_KEY);
         assert!(view.session().expect("flying").nav_target().is_some());
-        assert!(!view.radar_now().route_shown, "a stellar selected");
+        assert!(!view.radar_now().hyperspace_mode, "a stellar selected");
     }
 
     /// Thrusts straight up until the ship is more than 2700 from the

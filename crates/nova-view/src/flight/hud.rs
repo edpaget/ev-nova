@@ -266,14 +266,14 @@ pub fn credits_label(word: &str) -> String {
 /// them, so they would show the bare background.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum NavDisplay {
-    /// Mode −1, nothing selected and no course: "Nav System Off"
+    /// Mode −1, the nav system off, whatever the course: "Nav System Off"
     /// (@0x4a044-0x4a097).
     #[default]
     Off,
     /// Mode 2, a stellar selected (@0x4a09e-0x4a18c): its name, or `None`
     /// for "No Destination".
     Stellar(Option<String>),
-    /// Mode 3, a jump plotted (@0x4a198-0x4a3cb): the next system, and
+    /// Mode 3, hyperspace (@0x4a198-0x4a3cb): the system selected, and
     /// whether the ship can jump there, which picks the colours.
     Hyperspace {
         /// What the value line shows.
@@ -1181,7 +1181,7 @@ mod tests {
         iff: false,
         density_scanner: false,
         static_pattern: None,
-        route_shown: false,
+        hyperspace_mode: false,
     };
 
     fn state(reserves: Reserves) -> HudState<'static> {
