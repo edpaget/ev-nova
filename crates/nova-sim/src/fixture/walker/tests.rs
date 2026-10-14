@@ -986,6 +986,28 @@ fn a_hidden_destination_is_reached_at_its_visible_variant() {
 }
 
 #[test]
+fn a_take_lands_in_the_second_lister_when_the_first_is_hidden() {
+    let mut catalog = swap_chain(false, vec![errand(202, 142, 128, "")]);
+    for (system, sites) in &mut catalog.sites {
+        if [SystemId(131), SystemId(134)].contains(system) {
+            sites.push(planet(142, 0.0, 3000.0));
+        }
+    }
+    let mut session = docked(&catalog);
+    let walked = StoryWalker::new(&catalog).walk(
+        &mut session,
+        &[Step::Take(B), Step::Deliver(B), Step::Take(M)],
+    );
+    assert!(walked.is_ok(), "{walked:?}");
+    assert_eq!(session.landed(), Some(StellarId(142)));
+    assert_eq!(
+        session.system(),
+        SystemId(134),
+        "131, the first lister, is hidden"
+    );
+}
+
+#[test]
 fn a_take_never_lands_at_a_hidden_stellar() {
     let catalog = swap_chain(true, vec![errand(202, 140, 128, "")]);
     let mut session = docked(&catalog);

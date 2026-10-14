@@ -4192,13 +4192,40 @@ mod tests {
     fn a_stop_stored_in_a_hidden_system_is_landed_at_in_the_first_visible_lister() {
         let mut galaxy = swapped(catalog(), true);
         galaxy.sites[0].1.push(planet(141, 0.0, 3000.0));
-        galaxy.sites.swap(0, 2);
         let session = landed(&galaxy, &mut NeverFires);
         assert_eq!(
             session.stop_landing(stop(141, Some(134))),
             Ok(landing(130, 141))
         );
         assert_eq!(session.stop_landing(stop(141, None)), Ok(landing(130, 141)));
+    }
+
+    #[test]
+    fn a_stop_stored_in_its_second_visible_lister_is_landed_at_there() {
+        let mut galaxy = catalog();
+        galaxy.sites[0].1.push(planet(142, 0.0, 3000.0));
+        galaxy.sites[1].1.push(planet(142, 0.0, 3000.0));
+        let session = landed(&galaxy, &mut NeverFires);
+        assert_eq!(
+            session.stop_landing(stop(142, Some(131))),
+            Ok(landing(131, 142)),
+            "not 130, the first lister"
+        );
+        assert_eq!(session.stop_landing(stop(142, None)), Ok(landing(130, 142)));
+    }
+
+    #[test]
+    fn a_stop_whose_first_lister_is_hidden_is_landed_at_in_the_second() {
+        let mut galaxy = swapped(catalog(), false);
+        galaxy.sites[1].1.push(planet(142, 0.0, 3000.0));
+        galaxy.sites[2].1.push(planet(142, 0.0, 3000.0));
+        let session = swapped_session(&galaxy);
+        assert!(!session.galaxy().visible(SystemId(131)));
+        assert_eq!(session.stop_landing(stop(142, None)), Ok(landing(134, 142)));
+        assert_eq!(
+            session.stop_landing(stop(142, Some(131))),
+            Ok(landing(134, 142))
+        );
     }
 
     #[test]
