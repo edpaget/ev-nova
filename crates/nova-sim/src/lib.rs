@@ -248,6 +248,7 @@ pub mod cloak;
 pub mod clock;
 pub mod combat;
 pub mod control;
+pub mod course;
 pub mod cron;
 pub mod data;
 pub mod date;
