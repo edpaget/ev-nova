@@ -39,7 +39,7 @@ jobs:
       # and deadlocks on the outer install's lock.
       - uses: cargo-bins/cargo-binstall@main
       # Only what `mise run ci` needs.
-      - run: mise install rust cargo:cargo-nextest
+      - run: mise install rust cargo:cargo-nextest cargo:cargo-deny
         shell: bash
       # Save even when tests fail, so a red leg still moves the cache to the
       # current Cargo.lock. Save only from main: caches saved under a PR's
@@ -101,8 +101,7 @@ jobs:
           key: ${{ matrix.target }}
       # Default features only: never --features dev-tools or --all-features,
       # so egui stays out of published builds. The release build must stay on
-      # the same default feature set that
-      # crates/nova/tests/default_build_links_no_egui.rs checks in `ci`.
+      # the same default feature set that `mise run deny` checks in `ci`.
       - name: Build
         shell: bash
         run: |

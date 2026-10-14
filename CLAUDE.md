@@ -90,6 +90,20 @@ is drawn, a dialog opens, a landing or jump completes, or the pilot is saved.
   assume.
 - Cover wiring with a small number of integration tests under `tests/`.
 
+## Test behaviour, never text
+
+Don't write tests that scan source files or built binaries for particular
+strings, such as a test that greps `src/` for a call, or reads the `nova`
+binary to check that a crate's name is absent. They break on changes that
+don't matter: two unrelated string literals once spelled `made` + `guidance`
+side by side in a binary and failed an "egui is not linked" test. And what
+they show is weak.
+
+- Test what the code does, through its ports.
+- Check dependency rules (which crates a build may pull in) with
+  `cargo-deny`'s `bans` in `deny.toml` (`mise run deny`), which reads Cargo's
+  resolved graph.
+
 ## Hermetic tests
 
 Every test runs anywhere with only `cargo`, in any order, in parallel, and

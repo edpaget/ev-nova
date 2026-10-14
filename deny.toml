@@ -1,0 +1,17 @@
+# cargo-deny's `bans` check (`mise run deny`) over the dependency graph that
+# the default features resolve: what a release build links, read from Cargo's
+# resolver rather than from any binary.
+[graph]
+all-features = false
+no-default-features = false
+
+[bans]
+# Only the crates denied below matter here; duplicate versions are fine.
+multiple-versions = "allow"
+deny = [
+    # The developer tools overlay is opt-in (nova's `dev-tools` feature):
+    # egui must never be in the default build.
+    { crate = "egui", reason = "only nova's dev-tools feature may pull in egui" },
+    { crate = "egui-wgpu", reason = "only nova's dev-tools feature may pull in egui" },
+    { crate = "egui-winit", reason = "only nova's dev-tools feature may pull in egui" },
+]
