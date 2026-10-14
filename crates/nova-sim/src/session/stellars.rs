@@ -2405,6 +2405,26 @@ mod tests {
     }
 
     #[test]
+    fn a_load_shows_the_stellars_its_galaxy_refresh_gives() {
+        let catalog = twice_listed();
+        let mut session = quiet(&catalog);
+        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        let hiding_130 = crate::testkit::hiding_bit(130).get();
+        run(&mut session, &format!("b{hiding_130}"));
+        assert!(session.galaxy().visible(SystemId(130)), "no refresh yet");
+        let session = Session::fly(&catalog, session.pilot().clone()).expect("flies");
+        assert!(
+            !session.galaxy().visible(SystemId(130)),
+            "the load's refresh"
+        );
+        assert_eq!(
+            shown(&session),
+            [140, 200],
+            "the load's rebuild follows its refresh (@0x751ca, @0x751cf)"
+        );
+    }
+
+    #[test]
     fn stellars_shown_gives_the_sites_ids_in_navigation_order() {
         let mut catalog = twice_listed();
         catalog.sites[0].1.reverse();

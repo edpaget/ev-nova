@@ -410,8 +410,10 @@ impl Session {
     /// never trusted, telling nothing and making no save due, as the
     /// load's rebuild tells nothing and the original's load saves nothing.
     /// A player whose system is now hidden moves as the original moves it
-    /// ([`leave_hidden`]), docked or not, and the stellars are rebuilt
-    /// quietly.
+    /// ([`leave_hidden`]), docked or not. When the refresh changed
+    /// anything, the stellars are rebuilt quietly after it, as the load's
+    /// rebuild follows its refresh (@0x751ca, @0x751cf): in flight, the
+    /// stellars shown are those the refreshed galaxy gives.
     pub(super) fn refresh_galaxy_quietly(&mut self, catalog: &(impl PilotCatalog + ?Sized)) {
         let hidden = self.hidden_now();
         if !self.pilot.galaxy.set_hidden(&hidden) {
@@ -422,8 +424,8 @@ impl Session {
             let system = self.pilot.system;
             let sites = self.read_sites(catalog, system);
             self.set_player_system(system, sites, Dock::AsItWas);
-            self.rebuild_quietly();
         }
+        self.rebuild_quietly();
     }
 
     /// What any change to the overlay from `before` does once written, the
