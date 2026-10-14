@@ -45,7 +45,8 @@
 //! - `_FindSystemFromStellar` (0x7ec1-0x7f64) gives the lowest visible
 //!   lister, shadowed or not, else the lowest lister
 //!   ([`OverlaidGalaxy::find_system_from_stellar`]); the owner-first
-//!   readers take the holder, else that ([`OverlaidGalaxy::system_of`]).
+//!   readers take the holder, else that ([`OverlaidGalaxy::system_of`]),
+//!   or resolve the holder by place first ([`Whereabouts`]).
 //!   A reader finds a stellar's listers with [`listers_of`].
 //!
 //! Of `_HandleStellarSystemVisibility` (0x32aa5-0x33331), this module
@@ -82,7 +83,7 @@ use crate::catalog::{
 };
 use crate::control::Gate;
 use crate::geometry::Vec2;
-use crate::hyperspace::{CoLocated, StarMap};
+use crate::hyperspace::{CoLocated, Places, StarMap};
 
 /// What the overlay changes of one system. The default changes nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -655,17 +656,27 @@ impl OverlaidGalaxy {
             .or_else(|| listers.contains(&player).then_some(player))
     }
 
+    /// Where a stellar `listers` list is, with the player in `player`:
+    /// its [`holder`](Self::holder) and what
+    /// [`find_system_from_stellar`](Self::find_system_from_stellar) gives
+    /// it, for the owner-first readers to take as they each do
+    /// ([`Whereabouts`]).
+    #[must_use]
+    pub fn whereabouts(&self, listers: &[SystemId], player: SystemId) -> Whereabouts {
+        Whereabouts {
+            holder: self.holder(listers, player),
+            found: self.find_system_from_stellar(listers),
+        }
+    }
+
     /// The system a stellar `listers` list is in, with the player in
     /// `player`, as the original's owner-first readers resolve it: its
-    /// [`holder`](Self::holder), else
-    /// [`find_system_from_stellar`](Self::find_system_from_stellar). The
-    /// hypergate's readers resolve a link so (`_DrawMap` @0xf1f8-0xf21a,
-    /// `_DoSystemMap` @0x12ff2-0x13011, `_PlayerEnterHypergate`
-    /// @0x638cd-0x638ff), each then by place.
+    /// [`Whereabouts::system`]. The hypergate's readers resolve a link so
+    /// (`_DrawMap` @0xf1f8-0xf21a, `_DoSystemMap` @0x12ff2-0x13011,
+    /// `_PlayerEnterHypergate` @0x638cd-0x638ff), each then by place.
     #[must_use]
     pub fn system_of(&self, listers: &[SystemId], player: SystemId) -> Option<SystemId> {
-        self.holder(listers, player)
-            .or_else(|| self.find_system_from_stellar(listers))
+        self.whereabouts(listers, player).system()
     }
 
     /// Whether `system`, the player's, shows a stellar `listers` list: it
@@ -699,6 +710,65 @@ impl OverlaidGalaxy {
     #[must_use]
     pub fn hidden_move(&self, system: SystemId) -> Option<HiddenMove> {
         (!self.visible(system)).then(|| self.arrival(system))
+    }
+}
+
+/// Where a stellar is, as the original's owner-first readers find it:
+/// the system that holds it as the reader runs
+/// ([`OverlaidGalaxy::holder`], the stellar's +0x14 word, the rescue's
+/// included) and the one `_FindSystemFromStellar` (0x7ec1-0x7f64) gives
+/// it ([`OverlaidGalaxy::find_system_from_stellar`]). Each reader takes
+/// them its own way: [`system`](Self::system), [`travel`](Self::travel)
+/// or [`named`](Self::named). The default is a stellar no system lists.
+///
+/// Two of the readings resolve the holder by place, through the
+/// original's two chain walks: `_FindActiveCoLocatedSystem` (0x4be0), the
+/// first visible system at a system's place ([`Places::stand_in`]), and
+/// `_FindFirstCoLocatedSystem` (0x4baa), its chain head
+/// ([`Places::head`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Whereabouts {
+    /// The system that holds it: its owner, else the player's system when
+    /// that lists it.
+    pub holder: Option<SystemId>,
+    /// The system `_FindSystemFromStellar` gives it: the lowest visible
+    /// lister, else the lowest lister.
+    pub found: Option<SystemId>,
+}
+
+impl Whereabouts {
+    /// The holder as it is, else the system `_FindSystemFromStellar`
+    /// gives, unresolved by place: what `_RandomizeOneMission` stores as
+    /// a return system (@0xa1653-0xa1669) and `_IsMissionAvailable`
+    /// compares (@0x9b212-0x9b225, @0x9b281-0x9b294).
+    #[must_use]
+    pub fn system(self) -> Option<SystemId> {
+        self.holder.or(self.found)
+    }
+
+    /// The holder's stand-in (`_FindActiveCoLocatedSystem`, 0x4be0), else
+    /// the system `_FindSystemFromStellar` gives: what
+    /// `_RandomizeOneMission` stores as a travel system (@0xa15a8-0xa15ca).
+    /// A hidden holder with no visible system at its place falls to the
+    /// latter, as a stellar with no holder does.
+    #[must_use]
+    pub fn travel(self, places: &Places) -> Option<SystemId> {
+        self.holder
+            .and_then(|holder| places.stand_in(holder))
+            .or(self.found)
+    }
+
+    /// The system `_MungeBriefing` names for `<DSY>` (@0x9c8de-0x9c937) and
+    /// `<RSY>` (@0x9c9f9-0x9ca5c): with a holder, its stand-in
+    /// (`_FindActiveCoLocatedSystem`, 0x4be0), else its chain head
+    /// (`_FindFirstCoLocatedSystem`, 0x4baa); with none, the system
+    /// `_FindSystemFromStellar` gives, unresolved by place.
+    #[must_use]
+    pub fn named(self, places: &Places) -> Option<SystemId> {
+        match self.holder {
+            Some(holder) => places.stand_in(holder).or_else(|| places.head(holder)),
+            None => self.found,
+        }
     }
 }
 
@@ -1314,6 +1384,115 @@ mod tests {
             Some(5),
             "both shadowed by 2: rescued into 5, not the lowest visible lister 3"
         );
+    }
+
+    /// Where `galaxy` puts a stellar listed by `listers`, with the player
+    /// in `player`.
+    fn whereabouts(galaxy: &OverlaidGalaxy, listers: &[i16], player: i16) -> Whereabouts {
+        galaxy.whereabouts(&ids(listers), SystemId(player))
+    }
+
+    /// `holder` and `found` as a [`Whereabouts`].
+    fn at(holder: Option<i16>, found: Option<i16>) -> Whereabouts {
+        Whereabouts {
+            holder: holder.map(SystemId),
+            found: found.map(SystemId),
+        }
+    }
+
+    #[test]
+    fn whereabouts_hold_the_rescued_holder_and_what_find_system_from_stellar_gives() {
+        let galaxy = hiding(&[2]);
+        assert_eq!(
+            whereabouts(&galaxy, &[1, 4], 4),
+            at(Some(1), Some(1)),
+            "an owner"
+        );
+        assert_eq!(
+            whereabouts(&galaxy, &[2, 5], 5),
+            at(Some(5), Some(5)),
+            "3 shadows 5: rescued into the player's 5"
+        );
+        assert_eq!(
+            whereabouts(&galaxy, &[2, 5], 4),
+            at(None, Some(5)),
+            "not rescued: the lowest visible lister, shadowed though it is"
+        );
+        assert_eq!(
+            whereabouts(&galaxy, &[2], 4),
+            at(None, Some(2)),
+            "no visible lister: the lowest lister"
+        );
+        assert_eq!(whereabouts(&galaxy, &[], 4), at(None, None), "no lister");
+        assert_eq!(Whereabouts::default(), at(None, None));
+    }
+
+    #[test]
+    fn the_whereabouts_system_is_the_holder_else_what_find_system_from_stellar_gives() {
+        assert_eq!(at(Some(5), Some(3)).system(), Some(SystemId(5)));
+        assert_eq!(at(None, Some(3)).system(), Some(SystemId(3)));
+        assert_eq!(at(None, None).system(), None);
+    }
+
+    #[test]
+    fn the_travel_system_is_the_holders_stand_in_else_find_system_from_stellar() {
+        let galaxy = hiding(&[]);
+        let places = galaxy.map().places();
+        let rescued = whereabouts(&galaxy, &[3, 5], 5);
+        assert_eq!(rescued, at(Some(5), Some(3)), "2 shadows 3 and 5");
+        assert_eq!(
+            rescued.travel(places),
+            Some(SystemId(2)),
+            "the lower visible 2 stands in for the rescued 5"
+        );
+        assert_eq!(rescued.system(), Some(SystemId(5)), "the holder as it is");
+        assert_eq!(
+            whereabouts(&galaxy, &[4], 1).travel(places),
+            Some(SystemId(4)),
+            "an owner alone at its place"
+        );
+
+        let galaxy = hiding(&[2, 3, 4, 5]);
+        let places = galaxy.map().places();
+        let hidden = whereabouts(&galaxy, &[4, 5], 5);
+        assert_eq!(hidden, at(Some(5), Some(4)), "rescued into the hidden 5");
+        assert_eq!(
+            hidden.travel(places),
+            Some(SystemId(4)),
+            "nothing visible at 5's place: find_system_from_stellar's 4"
+        );
+        assert_eq!(whereabouts(&galaxy, &[], 5).travel(places), None, "nowhere");
+    }
+
+    #[test]
+    fn the_named_system_is_the_holders_stand_in_else_its_chain_head_else_find_system_from_stellar()
+    {
+        let galaxy = hiding(&[]);
+        let places = galaxy.map().places();
+        assert_eq!(
+            whereabouts(&galaxy, &[3, 5], 5).named(places),
+            Some(SystemId(2)),
+            "the rescued 5's stand-in"
+        );
+        assert_eq!(
+            whereabouts(&galaxy, &[3], 1).named(places),
+            Some(SystemId(3)),
+            "no holder: 3, shadowed by 2, as it is"
+        );
+
+        let galaxy = hiding(&[2, 3, 4, 5]);
+        let places = galaxy.map().places();
+        assert_eq!(
+            whereabouts(&galaxy, &[4, 5], 5).named(places),
+            Some(SystemId(2)),
+            "nothing visible at the rescued 5's place: its chain head 2, not 4"
+        );
+        assert_eq!(
+            whereabouts(&galaxy, &[4], 5).named(places),
+            Some(SystemId(4)),
+            "no holder: the hidden 4 as it is"
+        );
+        assert_eq!(whereabouts(&galaxy, &[], 5).named(places), None);
     }
 
     #[test]

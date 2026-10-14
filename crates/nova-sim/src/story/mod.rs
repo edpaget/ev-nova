@@ -1864,7 +1864,7 @@ pub(crate) mod wreck;
 pub use dispatch::DuplicateSubscription;
 pub use galaxy::{
     Countdown, GalaxyOverlay, HiddenMove, NebulaOverride, OverlaidGalaxy, StellarOverride,
-    SystemOverride, listers_of,
+    SystemOverride, Whereabouts, listers_of,
 };
 
 use crate::catalog::{StellarId, SystemId};
