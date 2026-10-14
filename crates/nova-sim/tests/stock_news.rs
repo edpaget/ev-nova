@@ -22,7 +22,9 @@ use std::rc::Rc;
 
 use nova_data::GameData;
 use nova_data::records::cron::Cron;
+use nova_sim::catalog::ListedStellar;
 use nova_sim::news::{self, CARGO_NAMES, COMMERCIALS, GENERIC_NEWS, StoryWords};
+use nova_sim::story::listers_of;
 use nova_sim::{
     Bit, Chance, CommCatalog, CronId, DisasterId, GameDate, GovtId, PilotCatalog, PlaceNames,
     RuleKey, RuleSource, Rulebook, Session, StellarId, SystemId, TagNames,
@@ -148,6 +150,8 @@ fn a_running_stock_crons_news_shows_at_an_allied_governments_spaceport() {
 struct StockNames {
     places: PlaceNames,
     cargo: Vec<String>,
+    /// Every listed stellar, for the system a tag names each in.
+    listed: Vec<ListedStellar>,
 }
 
 impl TagNames for StockNames {
@@ -157,6 +161,12 @@ impl TagNames for StockNames {
 
     fn system_name(&self, system: SystemId) -> Option<String> {
         self.places.systems.get(&system).cloned()
+    }
+
+    /// The lowest system listing it: `_FindSystemFromStellar`'s answer
+    /// with no system visible, enough for a tag to fill.
+    fn stellar_system(&self, stellar: StellarId) -> Option<SystemId> {
+        listers_of(&self.listed, stellar).first().copied()
     }
 
     fn cargo_name(&self, cargo: u8) -> Option<String> {
@@ -179,6 +189,7 @@ fn the_food_surplus_makes_the_news_at_port_kane() {
     let names = StockNames {
         places: data.place_names(),
         cargo: data.string_list(CARGO_NAMES),
+        listed: data.listed_stellars(),
     };
     assert_eq!(
         news::oops_story(

@@ -110,7 +110,9 @@
 //! `sÿst` ID, whether it is `visible` and its `govt`; `stellars`, each its
 //! `spöb` ID, its `govt` and, while it is `destroyed`, its regeneration
 //! countdown (`{"days_left": 3}`), else `null`; and `nebulae`, each its
-//! `nëbu` ID and whether it is `active`. A `visible` or `govt` of `null`
+//! `nëbu` ID and whether it is `active`; whether a nebula is explored
+//! is never saved, as the original's load forgets it (`_ResetPlayer`
+//! @0x1da86; see the [`nebula`](crate::nebula) module). A `visible` or `govt` of `null`
 //! changes nothing; a `govt` override is `{"govt": id}`, or `{"govt":
 //! null}` for independent (`{"system": 131, "visible": false, "govt":
 //! {"govt": 128}}`). A system's `visible` is written as the overlay holds
@@ -166,7 +168,7 @@ use crate::cron::CronState;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::{ActiveEvent, Good};
-use crate::mission::aux::AuxShips;
+use crate::mission::aux_ships::AuxShips;
 use crate::mission::{ActiveMission, ActiveMissions, FailedBy, ShipSystem, SpecialShips, Stop};
 use crate::outfit_effects::Rgb15;
 use crate::pilot::{Escort, Gender, Pilot};
@@ -3435,6 +3437,32 @@ mod tests {
             };
             assert_eq!(decode(&encode(&pilot)), Ok(pilot));
         }
+    }
+
+    #[test]
+    fn a_nebulas_explored_flag_is_never_saved() {
+        let mut overlay = GalaxyOverlay::default();
+        overlay.set_nebula_explored(NebulaId(128), true);
+        overlay.set_nebula_active(NebulaId(129), Some(false));
+        overlay.set_nebula_explored(NebulaId(129), true);
+        let pilot = Pilot {
+            galaxy: overlay,
+            ..seasoned()
+        };
+        let text = encode(&pilot);
+        let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+        assert_eq!(
+            value["galaxy"]["nebulae"],
+            serde_json::json!([{"nebula": 129, "active": false}]),
+            "no explored key, and 128, only explored, not listed"
+        );
+        let decoded = decode(&text).expect("decodes").galaxy;
+        assert_eq!(decoded.nebula(NebulaId(129)), Some(false));
+        assert!(!decoded.nebula_explored(NebulaId(128)));
+        assert!(!decoded.nebula_explored(NebulaId(129)));
+        let mut expected = GalaxyOverlay::default();
+        expected.set_nebula_active(NebulaId(129), Some(false));
+        assert_eq!(decoded, expected, "nothing explored");
     }
 
     #[test]

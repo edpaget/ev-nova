@@ -271,6 +271,7 @@ pub mod cloak;
 pub mod clock;
 pub mod combat;
 pub mod control;
+pub mod course;
 pub mod cron;
 pub mod data;
 pub mod date;
@@ -297,12 +298,14 @@ pub mod market;
 pub mod message;
 pub mod mission;
 pub mod navigation;
+pub mod nebula;
 pub mod news;
 pub mod order_loop;
 pub mod outfit_effects;
 pub mod outfitter;
 pub mod person;
 pub mod pilot;
+pub mod player_info;
 pub mod pre_jump;
 pub mod rank;
 pub mod rating;
@@ -346,11 +349,11 @@ pub use catalog::{
     BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
     DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
     FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite,
-    ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, OutfitId,
-    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
-    RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
-    StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId,
-    WeaponRecord,
+    ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, NebulaRecord,
+    OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog,
+    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError,
+    StellarId, StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog,
+    WeaponId, WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
@@ -408,6 +411,7 @@ pub use person::{
     PersonWorld, QuoteTags, expand_tags,
 };
 pub use pilot::{Escort, Gender, Pilot};
+pub use player_info::PlayerInfo;
 pub use recharge::{FUEL_PRICE_PER_UNIT, RechargeRefusal, sells_fuel};
 pub use red_alert::{
     ALERT_CHECK_FRAMES, ALERT_CICN, ALERT_STEP_FRAMES, ALERT_STEPS, AlertIcon, RedAlert,

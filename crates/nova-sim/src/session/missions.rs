@@ -79,13 +79,13 @@ use crate::chance::{Chance, NeverFires};
 use crate::control::{Script, Test};
 use crate::message::SimMessage;
 use crate::mission::active::{AUTO_ABORT_FUEL, AUTO_ABORT_FUEL_TAKEN, AUTO_ABORT_PAYS};
-use crate::mission::aux::AuxShips;
+use crate::mission::aux_ships::AuxShips;
 use crate::mission::screens::HIDDEN;
 use crate::mission::{
     self, AbortFacts, AbortRefusal, AcceptError, AcceptFacts, AcceptRefusal, ActiveMission,
     AvailFacts, FailedBy, Offer, PayEffect, Player, Refusal, Room, SLOTS, Stop, Venue, Visit,
     World, abort_checks, abort_penalty, accept_charge, accept_checks, auto_aborts_at_accept,
-    cleaned, failure_records, fined, pay_effect, stellars_of, success_records,
+    cleaned, failure_records, fined, pay_effect, placements, stellars_of, success_records,
 };
 use crate::news::CARGO_NAMES;
 use crate::rulebook::{RuleKey, RuleSource};
@@ -999,9 +999,12 @@ impl Session {
 
     /// `f` of the galaxy a mission's stellars are chosen from.
     pub(super) fn in_world<T>(&self, f: impl FnOnce(&World) -> T) -> T {
-        let stellars = stellars_of(&self.galaxy, &self.listed_stellars);
+        let player = self.pilot.system;
+        let stellars = stellars_of(&self.galaxy, &self.listed_stellars, player);
+        let placed = placements(&self.galaxy, &self.listed_stellars, player);
         f(&World {
             stellars: &stellars,
+            placed: &placed,
             map: self.galaxy.map(),
             govts: &self.govts,
             draw: self.rules.source_for(RuleKey::MissionStellarDraw),
@@ -1169,6 +1172,12 @@ impl TagNames for Session {
 
     fn system_name(&self, system: SystemId) -> Option<String> {
         self.place_names.systems.get(&system).cloned()
+    }
+
+    fn stellar_system(&self, stellar: StellarId) -> Option<SystemId> {
+        self.galaxy
+            .whereabouts(self.listers(stellar), self.pilot.system)
+            .named(self.galaxy.map().places())
     }
 
     fn cargo_name(&self, cargo: u8) -> Option<String> {
@@ -3731,6 +3740,45 @@ mod tests {
             *catalog.place_name_reads.borrow(),
             1,
             "read once, at the start"
+        );
+    }
+
+    #[test]
+    fn a_missions_dsy_follows_its_stellars_holder_after_the_galaxy_changes() {
+        let mut catalog = briefed();
+        // 140 is listed by 132 as well as 131.
+        catalog
+            .sites
+            .iter_mut()
+            .find(|(system, _)| *system == SystemId(132))
+            .expect("132's stellars")
+            .1
+            .push(planet(140, 0.0, 0.0));
+        let mut session = stocks(&catalog);
+        let slot = accept(&mut session, 131);
+        assert_eq!(
+            session.mission_text(slot, "<DST> in <DSY>"),
+            "Mars in Alpha"
+        );
+        assert!(session.change_galaxy(&catalog, |overlay| {
+            overlay.set_visible(SystemId(131), Some(false));
+        }));
+        assert_eq!(
+            session
+                .pilot()
+                .missions()
+                .get(slot)
+                .and_then(|active| active.destination),
+            Some(Stop {
+                stellar: StellarId(140),
+                system: Some(SystemId(131)),
+            }),
+            "stored as offered"
+        );
+        assert_eq!(
+            session.mission_text(slot, "<DST> in <DSY>"),
+            "Mars in Vega",
+            "132 owns 140 now (@0x9c8de)"
         );
     }
 

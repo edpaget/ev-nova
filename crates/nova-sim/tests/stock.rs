@@ -4043,6 +4043,7 @@ fn stock_missile_at(data: &GameData, ship: ShipId, target: ShipId) -> Option<nov
         rating: 0,
         yardstick: 0,
         untargetable: false,
+        blessing: nova_sim::rank::Blessing::NONE,
     };
     let npcs = [npc.clone()];
     let around = nova_sim::ai::Surroundings {

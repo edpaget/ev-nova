@@ -42,7 +42,10 @@
 //! through the bar ([`BarScreen::take_offer_choice`]), and the bar asks
 //! again once rearmed. Nothing is asked while the hire screen, the news
 //! or an offer is open. [`MISSION_INFO_KEY`] asks for the mission info screen
-//! ([`BarScreen::take_info_request`]).
+//! ([`BarScreen::take_info_request`]), and [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) for the
+//! player info screen, from the bar or its hire screen
+//! ([`BarScreen::take_player_info_request`], `_BarFilter` @0x47aaa,
+//! `_ShipyardFilter` @0x6091a), not from the news.
 //!
 //! Leave, Return, Enter and Escape leave the bar. Without its dialog, the
 //! bar says why, and Return or Escape still leaves.
@@ -72,6 +75,7 @@ use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+use crate::ui::player_info::is_player_info_press;
 
 /// The bar dialog's `DLOG` (and `DITL`) ID.
 pub const BAR_DIALOG: i16 = 1013;
@@ -169,11 +173,14 @@ struct Laid {
 
 /// What the bar has asked whoever holds the session for.
 #[derive(Clone, Copy, Debug, Default)]
+#[allow(clippy::struct_excessive_bools)] // each is one request, taken on its own
 struct Asks {
     /// The ships for hire: Hire Escort was pressed.
     hire: bool,
     /// The mission info screen: [`MISSION_INFO_KEY`] was pressed.
     info: bool,
+    /// The player info screen: [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) was pressed.
+    player_info: bool,
     /// The visit's news: Holovid was pressed.
     news: bool,
 }
@@ -399,6 +406,16 @@ impl BarScreen {
         std::mem::take(&mut self.asks.info)
     }
 
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) has asked for the player info screen
+    /// since this was last asked, in the bar, its hire screen or its offer.
+    pub fn take_player_info_request(&mut self) -> bool {
+        let offer = self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_player_info_request);
+        std::mem::take(&mut self.asks.player_info) || offer
+    }
+
     /// Opens the hire screen over the bar on `list`; with nothing for
     /// hire, the bar says so instead.
     pub fn open_hire(&mut self, list: HireList) {
@@ -480,6 +497,10 @@ impl Screen for BarScreen {
         if let Some(offering) = &mut self.offering
             && offering.input(input, &mut self.sounds)
         {
+            return ScreenAction::None;
+        }
+        if is_player_info_press(input) && (self.hire.is_some() || self.laid.is_ok()) {
+            self.asks.player_info = true;
             return ScreenAction::None;
         }
         if let Some(hire) = &mut self.hire {

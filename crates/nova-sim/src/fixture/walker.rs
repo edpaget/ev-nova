@@ -530,11 +530,13 @@ impl<'c, C: PilotCatalog + TrafficCatalog + ?Sized> StoryWalker<'c, C> {
         Ok(Done::MetGoal { mission, others })
     }
 
-    /// Lands at `stop` and settles. A stop with no system, its stellar
-    /// owned by none when the mission's stops were resolved (a system its
-    /// scripts show only at the next galaxy refresh), is landed at in the
-    /// first system listing it, as `take` lands, and the landing resolves
-    /// that system by place.
+    /// Lands at `stop` and settles, in the system the offer stored for it
+    /// ([`Stop::system`]). That can be a hidden or shadowed system that
+    /// lists the stellar (`_FindSystemFromStellar`'s, when no system held
+    /// it as the stops were resolved), which the landing resolves by
+    /// place. A stop has no system only when no system lists its stellar;
+    /// it is landed at in the first system the catalog lists it in, as
+    /// `take` lands.
     fn land(&self, session: &mut Session, stop: Stop) -> Result<(), Failed> {
         let system = stop.system.or_else(|| {
             self.catalog

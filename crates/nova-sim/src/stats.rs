@@ -116,26 +116,53 @@ pub struct ShipStats {
     pub multi_jump: u32,
 }
 
+/// `ModVal` x count summed over every one of `outfits` of `ModType`
+/// `mod_type`, wide.
+fn mod_total(outfits: &[OutfitMod], mod_type: i16) -> i64 {
+    outfits
+        .iter()
+        .filter(|outfit| outfit.mod_type == mod_type)
+        .map(|outfit| i64::from(outfit.mod_val) * i64::from(outfit.count))
+        .sum()
+}
+
+/// A ship's `Speed`, `Accel` and `Maneuver`, its outfits' included, not
+/// yet floored: what its [`Handling`] is worked out from, and what the
+/// player info's stat rows show
+/// ([`player_info`](crate::player_info)).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HandlingTotals {
+    /// `Speed` plus the [`MORE_SPEED`] outfits.
+    pub speed: i64,
+    /// `Accel` plus the [`MORE_ACCEL`] outfits.
+    pub accel: i64,
+    /// `Maneuver` plus a tenth of the [`TURN_CHANGE`] outfits
+    /// ([`TURN_MOD_PER_MANEUVER`]).
+    pub maneuver: f32,
+}
+
+impl HandlingTotals {
+    /// The totals of a ship with `fields`, carrying `outfits`.
+    #[must_use]
+    pub fn new(fields: ShipFields, outfits: &[OutfitMod]) -> Self {
+        Self {
+            speed: i64::from(fields.speed) + mod_total(outfits, MORE_SPEED),
+            accel: i64::from(fields.accel) + mod_total(outfits, MORE_ACCEL),
+            maneuver: f32::from(fields.maneuver)
+                + mod_total(outfits, TURN_CHANGE) as f32 / TURN_MOD_PER_MANEUVER,
+        }
+    }
+}
+
 impl ShipStats {
     /// The stats of a ship with `fields`, carrying `outfits`.
     #[must_use]
     pub fn new(fields: ShipFields, outfits: &[OutfitMod]) -> Self {
-        let total = |mod_type: i16| -> i64 {
-            outfits
-                .iter()
-                .filter(|outfit| outfit.mod_type == mod_type)
-                .map(|outfit| i64::from(outfit.mod_val) * i64::from(outfit.count))
-                .sum()
-        };
-        let maneuver =
-            f32::from(fields.maneuver) + total(TURN_CHANGE) as f32 / TURN_MOD_PER_MANEUVER;
+        let total = |mod_type: i16| mod_total(outfits, mod_type);
+        let totals = HandlingTotals::new(fields, outfits);
         let positive = |total: i64| total.max(0) as f32;
         Self {
-            handling: Handling::from_totals(
-                i64::from(fields.speed) + total(MORE_SPEED),
-                i64::from(fields.accel) + total(MORE_ACCEL),
-                maneuver,
-            ),
+            handling: Handling::from_totals(totals.speed, totals.accel, totals.maneuver),
             shield: positive(shield_points(fields.shield) + total(MORE_SHIELD)),
             armor: positive(i64::from(fields.armor.max(0)) + total(MORE_ARMOR)),
             fuel: positive(i64::from(fields.fuel.max(0)) + total(MORE_FUEL)),

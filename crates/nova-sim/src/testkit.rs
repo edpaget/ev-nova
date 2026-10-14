@@ -8,10 +8,10 @@ use crate::catalog::{
     AuxShip, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
     DateAffixes, DisasterRecord, DudeId, DudeRecord, FleetRecord, GateSite, GovtId, GovtRecord,
     HullRecord, JunkRecord, LandingSite, ListedStellar, MissionId, MissionRecord, MissionShip,
-    MissionTexts, OutfitId, OutfitRecord, Penalties, PersonId, PersonRecord, PilotCatalog,
-    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem, StartDate, StartError,
-    StellarId, StellarLife, StellarMark, SystemId, SystemTraffic, SystemVisibility, TrafficCatalog,
-    WeaponId, WeaponRecord,
+    MissionTexts, NebulaId, NebulaRecord, OutfitId, OutfitRecord, Penalties, PersonId,
+    PersonRecord, PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StarSystem,
+    StartDate, StartError, StellarId, StellarLife, StellarMark, SystemId, SystemTraffic,
+    SystemVisibility, TrafficCatalog, WeaponId, WeaponRecord,
 };
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Armament, Trigger};
@@ -83,6 +83,10 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) gates: Vec<GateSite>,
     /// How many times the gate sites were read.
     pub(crate) gate_reads: RefCell<usize>,
+    /// Each system's `NavDefs` entries beyond its landing sites: the
+    /// gates it lists that the ship never flies among, which the gate
+    /// rules resolve to it. None, by default.
+    pub(crate) gate_listers: Vec<(SystemId, StellarId)>,
     /// Every stellar's life: none, by default ([`FakePilotCatalog::living`]).
     pub(crate) lives: Vec<StellarLife>,
     /// How many times the stellars' lives were read.
@@ -107,6 +111,8 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) crons: Vec<CronRecord>,
     /// Every `ränk`: none, by default.
     pub(crate) ranks: Vec<RankRecord>,
+    /// Every `nëbu`: none, by default.
+    pub(crate) nebulae: Vec<NebulaRecord>,
 }
 
 /// Cron `id`, open on every date, starting on any roll and asking
@@ -134,6 +140,25 @@ pub(crate) fn cron(id: i16) -> CronRecord {
         news_govt: [-1; 4],
         govt_news: [-1; 4],
         ind_news: -1,
+    }
+}
+
+/// Nebula `id` over `rect` (left, top, width, height), active by
+/// `active_on` and running `on_explore` as it is explored.
+pub(crate) fn nebula(
+    id: i16,
+    rect: (i16, i16, i16, i16),
+    active_on: &str,
+    on_explore: &str,
+) -> NebulaRecord {
+    NebulaRecord {
+        id: NebulaId(id),
+        left: rect.0,
+        top: rect.1,
+        width: rect.2,
+        height: rect.3,
+        active_on: Test::parse(active_on),
+        on_explore: Script::parse(on_explore),
     }
 }
 
@@ -252,7 +277,7 @@ pub(crate) fn carrying(id: i16, tons: i64) -> crate::mission::ActiveMission {
         aboard: true,
         failed: None,
         ships: crate::mission::SpecialShips::default(),
-        aux: crate::mission::aux::AuxShips::default(),
+        aux: crate::mission::aux_ships::AuxShips::default(),
     }
 }
 
@@ -275,6 +300,7 @@ pub(crate) fn planet(id: i16, x: f32, y: f32) -> LandingSite {
         dead_frame_size: None,
         type_counts_frames: true,
         exit_angle: -1,
+        tribute: 0,
     }
 }
 
@@ -559,6 +585,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         date_affix_reads: RefCell::default(),
         gates: Vec::new(),
         gate_reads: RefCell::default(),
+        gate_listers: Vec::new(),
         lives: Vec::new(),
         life_reads: RefCell::default(),
         fallback_frame: Some((100, 100)),
@@ -570,6 +597,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         visibility: Vec::new(),
         crons: Vec::new(),
         ranks: Vec::new(),
+        nebulae: Vec::new(),
     }
 }
 
@@ -755,28 +783,16 @@ impl PilotCatalog for FakePilotCatalog {
     }
 
     /// Every stellar of [`FakePilotCatalog::sites`], with every system
-    /// listing it.
+    /// listing it ([`listed_stellars`](crate::fixture::listed_stellars)),
+    /// and the gates of [`FakePilotCatalog::gate_listers`].
     fn listed_stellars(&self) -> Vec<ListedStellar> {
-        let mut listed: std::collections::BTreeMap<StellarId, ListedStellar> =
-            std::collections::BTreeMap::new();
-        let mut sites = self.sites.clone();
-        sites.sort_by_key(|(system, _)| *system);
-        for (system, sites) in sites {
-            for site in sites {
-                listed
-                    .entry(site.id)
-                    .or_insert_with(|| ListedStellar {
-                        id: site.id,
-                        systems: Vec::new(),
-                        flags: site.flags,
-                        flags2: site.flags2,
-                        govt: site.govt,
-                    })
-                    .systems
-                    .push(system);
-            }
-        }
-        listed.into_values().collect()
+        let mut listed = crate::fixture::listed_stellars(
+            self.sites
+                .iter()
+                .map(|(system, sites)| (*system, sites.as_slice())),
+        );
+        crate::fixture::list_also(&mut listed, self.gate_listers.iter().copied());
+        listed
     }
 
     fn system_visibility(&self) -> Vec<SystemVisibility> {
@@ -798,6 +814,10 @@ impl PilotCatalog for FakePilotCatalog {
 
     fn ranks(&self) -> Vec<RankRecord> {
         self.ranks.clone()
+    }
+
+    fn nebulae(&self) -> Vec<NebulaRecord> {
+        self.nebulae.clone()
     }
 }
 

@@ -54,7 +54,12 @@
 //! [`hops_per_jump`] gives, and enters only the last; the session's
 //! [`MultiJumpRule`] (the engine's unless [`Session::with_multi_jump`]
 //! says otherwise) decides whether the chain costs one jump's fuel and
-//! days or each hop's. In flight, fuel regenerates each tick at the rate the ship
+//! days or each hop's. An arrival that made no hop clears the course, or
+//! drops its first hop when that stands at the arrival, and each rebuild
+//! point rewrites a hidden hop to the system at its place and cuts the
+//! course at a hop with none, as
+//! [`RuleKey::RouteRewrite`] says (see the [`course`](crate::course)
+//! module). In flight, fuel regenerates each tick at the rate the ship
 //! and its outfits give.
 //!
 //! The land key's second press over a hypergate or wormhole, once
@@ -334,11 +339,13 @@ mod brackets;
 mod cargo_boxes;
 mod cloaks;
 mod control;
+mod course;
 mod crons;
 mod edit;
 mod entry;
 mod escorts;
 mod events;
+mod explored;
 mod fighters;
 mod gate_escorts;
 mod gate_follow;
@@ -351,10 +358,12 @@ mod mission_escorts;
 mod mission_screens;
 mod mission_ships;
 mod missions;
+mod nebulae;
 mod news;
 mod outfits;
 mod person_offers;
 mod persons;
+mod player_info;
 mod player_led;
 mod radar;
 mod ranks;
@@ -400,9 +409,9 @@ use crate::board::{
 };
 use crate::catalog::{
     CombatCatalog, CronRecord, DateAffixes, GateSite, GovtId, JunkId, LandingSite, ListedStellar,
-    MissionId, MissionRecord, MissionTexts, OutfitId, OutfitRecord, PersonId, PilotCatalog,
-    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError, StellarId, StellarLife,
-    SystemId, SystemVisibility, TrafficCatalog, WeaponId,
+    MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord, PersonId,
+    PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError, StellarId,
+    StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -442,6 +451,7 @@ use crate::market::{
 use crate::message::SimMessage;
 use crate::mission::{Offers, StellarMarks};
 use crate::navigation::stellar_under;
+use crate::nebula;
 use crate::news::News;
 use crate::order_loop::{self, Onward, OrderRun, Pass};
 use crate::outfitter::{
@@ -464,7 +474,7 @@ use crate::sound::SimSound;
 use crate::stats::ShipStats;
 use crate::story::day::Stay;
 use crate::story::rebuild::Rebuilt;
-use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent};
+use crate::story::{Entrance, Fate, OverlaidGalaxy, StoryEvent, listers_of};
 use crate::targeting::{self, TargetPick};
 use crate::top_speed;
 use crate::traffic::autopilot::Outcome;
@@ -547,9 +557,13 @@ pub struct Session {
     /// How the ship performs, with the outfits it carries.
     stats: ShipStats,
     player: ShipState,
-    /// The stellars shown: `shown`'s, read when the session starts and
-    /// whenever [`Session::set_player_system`] says.
+    /// The stellars shown: those of `listed` that `shown` holds, and the
+    /// one docked at, derived whenever [`Session::set_player_system`] says
+    /// and at the flight rebuild points (see the `entry` module).
     sites: Vec<LandingSite>,
+    /// Every stellar `shown` lists, in `NavDefs` order, through the
+    /// galaxy overlay: what `sites` are derived from.
+    listed: Vec<LandingSite>,
     /// The system whose stellars `sites` are: the player's, except while
     /// the ship is docked at a stellar of another system.
     shown: SystemId,
@@ -757,7 +771,7 @@ pub struct Session {
     /// What the set expressions left for later: for
     /// [`Session::settle_script`], and the next flight tick; never saved.
     queued: script_effects::Queued,
-    /// The stellars of the player's system, waiting for the take-off
+    /// Every stellar the player's system lists, waiting for the take-off
     /// while the ship is docked at a stellar of another system, `shown`
     /// (see [`Session::set_player_system`]).
     next_sites: Option<Vec<LandingSite>>,
@@ -838,6 +852,10 @@ pub struct Session {
     /// Every system's `Visibility`, read when the session starts: what the
     /// galaxy refresh evaluates (see the `story` module).
     visibility: Rc<[SystemVisibility]>,
+    /// Every `nëbu` 128-159, read when the session starts: their
+    /// `ActiveOn`, which the galaxy refresh evaluates, and their
+    /// `OnExplore` (see the `nebulae` module).
+    nebulae: Rc<[NebulaRecord]>,
     /// Whether a set expression has changed the pilot since the last
     /// settling: by the other reading of [`RuleKey::VisibilityRefresh`]
     /// the settling refreshes the galaxy then.
@@ -920,7 +938,11 @@ impl Session {
     /// the pilot's bits, the saved flags never trusted, quietly: the load's
     /// galaxy refresh, which moves a pilot whose system it hides as any
     /// refresh does (see the [`story`](crate::story) module's "Visibility
-    /// and governments").
+    /// and governments"), and writes every nebula's activity from its
+    /// `ActiveOn`. The explored nebulae are forgotten, but for those kept
+    /// in the once-fired record, and [`StoryEvent::Explored`] is raised
+    /// for every visible explored system, by ascending ID: the load's
+    /// sweep (see the `nebulae` module).
     ///
     /// A pilot last landed on a stellar of its system resumes docked there,
     /// silently, as the original resumes a pilot at its last planet, the
@@ -947,6 +969,13 @@ impl Session {
             .map_err(|reason| StartError::Ship(ship, reason))?;
         if !catalog.system_exists(pilot.system) {
             return Err(StartError::NoSystem(pilot.system));
+        }
+        // The explored nebulae are never saved: a load forgets them, as
+        // `_ResetPlayer` does (@0x1da86), but for those the once-a-pilot
+        // reading kept fired (see the `nebulae` module).
+        pilot.galaxy.forget_explored_nebulae();
+        for kept in nebula::kept(&pilot.story_fired) {
+            pilot.galaxy.set_nebula_explored(kept, true);
         }
         let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone());
         // A load is one of the original's refresh points: a pilot in a
@@ -1001,6 +1030,7 @@ impl Session {
             stats: ShipStats::default(),
             player,
             sites: Vec::new(),
+            listed: Vec::new(),
             shown: system,
             landed,
             nav_target: None,
@@ -1103,6 +1133,7 @@ impl Session {
                 .collect(),
             listed_stellars: catalog.listed_stellars(),
             visibility: catalog.system_visibility().into(),
+            nebulae: catalog.nebulae().into(),
             galaxy_stale: false,
             place_names: catalog.place_names(),
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
@@ -1120,6 +1151,7 @@ impl Session {
             pilot,
         };
         session.register_offer_roll();
+        session.register_nebulae();
         session.register_slots();
         session.set_player_system(system, here, dock);
         // A load and the main screen are rebuild points (@0x751cf,
@@ -1133,9 +1165,10 @@ impl Session {
         // with the facts complete; a new pilot's is `_DoNewPilot`'s, before
         // its `OnStart` (@0x1925e).
         session.refresh_galaxy_quietly(catalog);
-        // A new pilot's and a load's nebulae (@0x19118, @0x765bc).
-        let system = session.pilot.system;
-        session.raise(StoryEvent::Explored { system });
+        // A load's sweep of the visible explored systems' nebulae
+        // (@0x765a2-0x765ce); a new pilot's (@0x19118), which by the
+        // engine `Session::begin` withdraws (see the `nebulae` module).
+        session.sweep_explored();
         // A load forgets the stellar the offers were rolled at (@0x75ef5)
         // and opens the spaceport, so a pilot resumed docked has them
         // rolled afresh (see the `missions` module), and its prices taken
@@ -1587,6 +1620,7 @@ impl Session {
             untargetable: self
                 .ship_record(self.pilot.ship)
                 .is_some_and(|record| crate::cloak::untargetable(record.fields.flags2)),
+            blessing: self.blessing(),
         }
     }
 
@@ -2242,7 +2276,8 @@ impl Session {
     /// nebulae first; [`StoryEvent::EnteredSystem`] follows the days.
     ///
     /// It refreshes the galaxy (`_PropagateMissionBitEffects` @0x6bf3f):
-    /// every system's `Visibility` evaluated before the days, so a bit
+    /// every system's `Visibility`, and every nebula's `ActiveOn`,
+    /// evaluated before the days, so a bit
     /// their scripts set shows only at the next refresh, and written once
     /// the hops and the systems explored are resolved by the flags as they
     /// stood, before the system is entered, telling
@@ -2264,7 +2299,7 @@ impl Session {
         // The galaxy refresh evaluated before the days, so a bit their
         // scripts set waits for the next refresh (@0x6bf3f, days
         // @0x6c144).
-        let hidden = self.hidden_now();
+        let refresh = self.refresh_now();
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.arm_strength_timer(chance);
@@ -2322,7 +2357,7 @@ impl Session {
         // arrival by the same rule as any move out of a hidden system.
         if self
             .write_galaxy(|overlay| {
-                overlay.set_hidden(&hidden);
+                refresh.write(overlay);
             })
             .is_some()
         {
@@ -2563,6 +2598,19 @@ impl Session {
             .filter(|&stellar| self.gate_kind(stellar) == Some(kind))
     }
 
+    /// Every system listing `stellar`, by ascending ID ([`listers_of`]):
+    /// what its owner and the systems resolving it are derived from.
+    fn listers(&self, stellar: StellarId) -> &[SystemId] {
+        listers_of(&self.listed_stellars, stellar)
+    }
+
+    /// The system that holds `stellar` now, with the player where they
+    /// are ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)):
+    /// the stellar's +0x14 as the aux and mission ship readers find it.
+    fn holder_of(&self, stellar: StellarId) -> Option<SystemId> {
+        self.galaxy.holder(self.listers(stellar), self.pilot.system)
+    }
+
     /// The links of `stellar` among `sites`; none when no system lists it.
     fn links_of(sites: &[GateSite], stellar: StellarId) -> [Option<StellarId>; 8] {
         sites
@@ -2594,7 +2642,13 @@ impl Session {
         let sites = catalog.gate_sites();
         let links = Self::links_of(&sites, here);
         if has_links(&links) {
-            Ok(gate::hypergate_offers(&links, &sites, self.galaxy.map()))
+            let system_of = |id| self.galaxy.system_of(self.listers(id), self.pilot.system);
+            Ok(gate::hypergate_offers(
+                &links,
+                &sites,
+                system_of,
+                self.galaxy.map(),
+            ))
         } else {
             self.gate = None;
             self.nav_target = None;
@@ -2620,9 +2674,13 @@ impl Session {
             .ok_or(GateRefusal::NotAtGate)?;
         let sites = catalog.gate_sites();
         let links = Self::links_of(&sites, here);
+        let system_of = |id| self.galaxy.system_of(self.listers(id), self.pilot.system);
         let exit = if has_links(&links) {
-            to.and_then(|to| Some((to, *hypergate_exit(&links, &sites, to, self.galaxy.map())?)))
-                .ok_or(GateRefusal::Cancelled)
+            to.and_then(|to| {
+                let exit = hypergate_exit(&links, &sites, to, system_of, self.galaxy.map())?;
+                Some((to, *exit))
+            })
+            .ok_or(GateRefusal::Cancelled)
         } else {
             Err(GateRefusal::NoLinks)
         };
@@ -2680,9 +2738,12 @@ impl Session {
             .take_gate(GateKind::Wormhole)
             .ok_or(GateRefusal::NotAtGate)?;
         let sites = catalog.gate_sites();
-        let exit = *wormhole_exit(here, self.pilot.system, &sites, self.wormholes, chance)
+        let player = self.pilot.system;
+        let owner_of = |id| self.galaxy.holder(self.listers(id), player);
+        let exit = wormhole_exit(here, player, &sites, owner_of, self.wormholes, chance)
             .ok_or(GateRefusal::NoExit)?;
-        self.come_out(exit.system, &exit, GateKind::Wormhole, catalog, chance);
+        let (site, system) = (*exit.site, exit.system);
+        self.come_out(system, &site, GateKind::Wormhole, catalog, chance);
         let system = self.pilot.system;
         self.messages.push(SimMessage::PassedWormhole(system));
         Ok(system)
@@ -2854,7 +2915,9 @@ impl Session {
         if std::mem::take(&mut self.hold_position) {
             self.player.position = self.touchdown;
         }
-        self.pilot.explore(self.pilot.system);
+        // With its place's head, by the engine (`_PlayerLandOnStellar`
+        // @0x63457-0x634a7; see the `explored` module).
+        self.explore_place(self.pilot.system);
         self.raise(StoryEvent::Explored {
             system: self.pilot.system,
         });
@@ -4517,6 +4580,29 @@ fn docking(
         }
     }
     (None, Dock::AsItWas)
+}
+
+/// The stellars of `listed`, every one `system` lists, that it shows:
+/// each it holds ([`OverlaidGalaxy::shows`]), and `docked`, the stellar
+/// the ship is docked at, whatever holds it, in `listed`'s order.
+///
+/// The original's spaceport never asks whether its stellar is shown, so
+/// the engine keeps the stellar docked at among the stellars shown, where
+/// its readers find it (the ranks' port, the missions' visit, the dock).
+fn shown_sites(
+    galaxy: &OverlaidGalaxy,
+    listed_stellars: &[ListedStellar],
+    system: SystemId,
+    listed: &[LandingSite],
+    docked: Option<StellarId>,
+) -> Vec<LandingSite> {
+    listed
+        .iter()
+        .filter(|site| {
+            docked == Some(site.id) || galaxy.shows(listers_of(listed_stellars, site.id), system)
+        })
+        .copied()
+        .collect()
 }
 
 /// `system`'s stellars, read from `catalog`, each passed through
@@ -8304,16 +8390,25 @@ pub(super) mod tests {
     #[test]
     fn a_course_replotted_during_the_jump_is_not_chained() {
         let catalog = chained(catalog(), 10);
-        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
-        begin_jump_now(&mut session).expect("jumps");
-        session.plot_course(SystemId(133)).expect("a route");
-        assert_eq!(session.course(), ids(&[133]));
-        assert_eq!(
-            session.arrive(&catalog, &mut NeverFires),
-            Some(SystemId(131))
-        );
-        assert_eq!(session.course(), ids(&[133]));
-        assert_eq!(session.reserves().fuel.now, 200.0);
+        for source in RuleSource::ALL {
+            let mut session = bound_for_134(&catalog, MultiJumpRule::default())
+                .with_rules(Rulebook::default().with_override(RuleKey::RouteRewrite, source));
+            begin_jump_now(&mut session).expect("jumps");
+            session.plot_course(SystemId(133)).expect("a route");
+            assert_eq!(session.course(), ids(&[133]));
+            assert_eq!(
+                session.arrive(&catalog, &mut NeverFires),
+                Some(SystemId(131))
+            );
+            // An arrival off the course clears it by the engine
+            // (@0x6c472-0x6c4c6).
+            let kept = match source {
+                RuleSource::Engine => ids(&[]),
+                RuleSource::Bible => ids(&[133]),
+            };
+            assert_eq!(session.course(), kept, "{source:?}");
+            assert_eq!(session.reserves().fuel.now, 200.0);
+        }
     }
 
     #[test]
@@ -18632,11 +18727,10 @@ pub(super) mod tests {
 
     // Hypergates and wormholes.
 
-    /// Stellar `id` at (`x`, `y`) in `system`, with `flags2`, its `links`
-    /// and its exit angle.
+    /// Stellar `id` at (`x`, `y`), with `flags2`, its `links` and its exit
+    /// angle.
     fn gate_site(
         id: i16,
-        system: i16,
         (x, y): (f32, f32),
         flags2: u16,
         links: &[i16],
@@ -18648,7 +18742,6 @@ pub(super) mod tests {
         }
         GateSite {
             id: StellarId(id),
-            system: SystemId(system),
             position: Vec2::new(x, y),
             flags2,
             links: slots,
@@ -18674,9 +18767,13 @@ pub(super) mod tests {
                 (SystemId(131), vec![planet(140, 0.0, 0.0)]),
             ],
             gates: vec![
-                gate_site(300, 130, (0.0, 0.0), 0x1200, &[310, 320, 999], 120),
-                gate_site(310, 131, (100.0, 200.0), HYPERGATE, &[300], 90),
-                gate_site(320, 132, (-50.0, 0.0), HYPERGATE, &[], -1),
+                gate_site(300, (0.0, 0.0), 0x1200, &[310, 320, 999], 120),
+                gate_site(310, (100.0, 200.0), HYPERGATE, &[300], 90),
+                gate_site(320, (-50.0, 0.0), HYPERGATE, &[], -1),
+            ],
+            gate_listers: vec![
+                (SystemId(131), StellarId(310)),
+                (SystemId(132), StellarId(320)),
             ],
             ..catalog()
         }
@@ -18831,7 +18928,7 @@ pub(super) mod tests {
     #[test]
     fn a_hypergate_without_links_leads_nowhere() {
         let catalog = FakePilotCatalog {
-            gates: vec![gate_site(300, 130, (0.0, 0.0), HYPERGATE, &[0, -2], 0)],
+            gates: vec![gate_site(300, (0.0, 0.0), HYPERGATE, &[0, -2], 0)],
             ..gated()
         };
         let mut session = at_gate(&catalog);
@@ -18846,7 +18943,7 @@ pub(super) mod tests {
     #[test]
     fn a_hypergate_whose_links_lead_nowhere_cancels() {
         let catalog = FakePilotCatalog {
-            gates: vec![gate_site(300, 130, (0.0, 0.0), HYPERGATE, &[999], 0)],
+            gates: vec![gate_site(300, (0.0, 0.0), HYPERGATE, &[999], 0)],
             ..gated()
         };
         let mut session = at_gate(&catalog);
@@ -18860,7 +18957,7 @@ pub(super) mod tests {
     fn a_hypergate_with_links_offers_its_map_even_when_they_lead_nowhere() {
         for (links, offered) in [(&[310, 320][..], ids(&[131, 132])), (&[999][..], vec![])] {
             let mut catalog = gated();
-            catalog.gates[0] = gate_site(300, 130, (0.0, 0.0), HYPERGATE, links, 0);
+            catalog.gates[0] = gate_site(300, (0.0, 0.0), HYPERGATE, links, 0);
             let mut session = at_gate(&catalog);
             assert_eq!(
                 session.open_hypergate(&catalog),
@@ -18879,7 +18976,7 @@ pub(super) mod tests {
     #[test]
     fn a_hypergate_without_links_refuses_to_offer_its_map_and_ends_the_entry() {
         let catalog = FakePilotCatalog {
-            gates: vec![gate_site(300, 130, (0.0, 0.0), HYPERGATE, &[0, -2], 0)],
+            gates: vec![gate_site(300, (0.0, 0.0), HYPERGATE, &[0, -2], 0)],
             ..gated()
         };
         let mut session = at_gate(&catalog);
@@ -18903,9 +19000,13 @@ pub(super) mod tests {
                 (SystemId(131), vec![planet(140, 0.0, 0.0)]),
             ],
             gates: vec![
-                gate_site(400, 130, (0.0, 0.0), 0x2200, &[], 120),
-                gate_site(410, 131, (-300.0, 40.0), WORMHOLE, &[], 0),
-                gate_site(420, 132, (5.0, 5.0), WORMHOLE, &[410], 0),
+                gate_site(400, (0.0, 0.0), 0x2200, &[], 120),
+                gate_site(410, (-300.0, 40.0), WORMHOLE, &[], 0),
+                gate_site(420, (5.0, 5.0), WORMHOLE, &[410], 0),
+            ],
+            gate_listers: vec![
+                (SystemId(131), StellarId(410)),
+                (SystemId(132), StellarId(420)),
             ],
             ..catalog()
         }
@@ -19075,7 +19176,7 @@ pub(super) mod tests {
     #[test]
     fn a_wormhole_with_nowhere_to_lead_refuses() {
         let catalog = FakePilotCatalog {
-            gates: vec![gate_site(400, 130, (0.0, 0.0), WORMHOLE, &[], 0)],
+            gates: vec![gate_site(400, (0.0, 0.0), WORMHOLE, &[], 0)],
             ..wormholes()
         };
         let mut session = at_wormhole(&catalog);
@@ -19524,7 +19625,7 @@ pub(super) mod tests {
 
     /// [`catalog`] with 134 at 131's place, (600, 0), listing 130 and 132
     /// and holding planet 141 at its centre: 131 heads the place.
-    fn alternates() -> FakePilotCatalog {
+    pub(super) fn alternates() -> FakePilotCatalog {
         let mut catalog = catalog();
         with_alternate(&mut catalog);
         catalog
@@ -19532,7 +19633,7 @@ pub(super) mod tests {
 
     /// Adds [`alternates`]' 134 to `catalog`, and makes every system on
     /// its map [`hideable`].
-    fn with_alternate(catalog: &mut FakePilotCatalog) {
+    pub(super) fn with_alternate(catalog: &mut FakePilotCatalog) {
         catalog.star_map.push(star(134, (600.0, 0.0), &[130, 132]));
         catalog.systems.push(SystemId(134));
         catalog
@@ -19550,7 +19651,11 @@ pub(super) mod tests {
 
     /// Shows each of `systems` of a [`hideable`] `catalog` again, as
     /// [`hide`] hides it.
-    fn unhide(session: &mut Session, catalog: &FakePilotCatalog, systems: &[i16]) -> bool {
+    pub(super) fn unhide(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        systems: &[i16],
+    ) -> bool {
         set_hiding(session, catalog, systems, false)
     }
 
@@ -20024,6 +20129,11 @@ pub(super) mod tests {
             session.pilot().escorts().to_vec(),
             session.date(),
         );
+        // The load's rebuild shared 131's exploration with 134, its place's
+        // other system, by the engine (see the `explored` module); forgotten
+        // here, so the move is seen to explore nothing.
+        assert!(session.pilot.explored.remove(&SystemId(134)));
+        let explored: Vec<SystemId> = session.pilot().explored().collect();
         session.take_events();
         session.drop_raised();
         session.take_messages();
@@ -20037,7 +20147,7 @@ pub(super) mod tests {
         assert_eq!(session.pilot().escorts(), escorts);
         assert_eq!(session.date(), date, "no day");
         assert!(
-            !session.pilot().has_explored(SystemId(134)),
+            session.pilot().explored().eq(explored.iter().copied()),
             "explores nothing"
         );
         assert_eq!(session.sites, [planet(140, 0.0, 0.0)], "its spaceport's");
@@ -20252,9 +20362,12 @@ pub(super) mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(explored, [SystemId(134)]);
+        assert_eq!(explored, [SystemId(134)], "no event for the head");
         assert!(session.pilot().has_explored(SystemId(134)));
-        assert!(!session.pilot().has_explored(SystemId(131)));
+        assert!(
+            session.pilot().has_explored(SystemId(131)),
+            "131, its place's head, by the engine (see the `explored` module)"
+        );
     }
 
     /// The `Explored` events raised and not yet settled.
@@ -20297,16 +20410,26 @@ pub(super) mod tests {
     #[test]
     fn a_multi_jump_stops_before_a_hop_with_no_system_visible_at_its_place() {
         let catalog = chained_alternates(3);
-        let mut session = bound_for_134(&catalog, MultiJumpRule::default());
-        hide(&mut session, &catalog, &[132]);
-        assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
-        session.drop_raised();
-        assert_eq!(
-            session.arrive(&catalog, &mut NeverFires),
-            Some(SystemId(131))
-        );
-        assert_eq!(session.course(), ids(&[132, 134]), "the rest kept");
-        assert_eq!(explored_raised(&session), ids(&[131]));
+        for source in RuleSource::ALL {
+            let mut session = bound_for_134(&catalog, MultiJumpRule::default())
+                .with_rules(Rulebook::default().with_override(RuleKey::RouteRewrite, source));
+            hide(&mut session, &catalog, &[132]);
+            assert_eq!(begin_jump_now(&mut session), Ok(SystemId(131)));
+            session.drop_raised();
+            assert_eq!(
+                session.arrive(&catalog, &mut NeverFires),
+                Some(SystemId(131))
+            );
+            // The arrival is a rebuild point, whose rewrite cuts the course
+            // at 132, with no system visible at its place, by the engine
+            // (@0x6c203, @0x32aed-0x32b02).
+            let kept = match source {
+                RuleSource::Engine => ids(&[]),
+                RuleSource::Bible => ids(&[132, 134]),
+            };
+            assert_eq!(session.course(), kept, "{source:?}");
+            assert_eq!(explored_raised(&session), ids(&[131]));
+        }
     }
 
     #[test]
@@ -20317,6 +20440,13 @@ pub(super) mod tests {
         hide(&mut session, &catalog, &[131]);
         assert_eq!(
             session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
+            Err(GateRefusal::Cancelled),
+            "hidden 131 is never what a link resolves to by place"
+        );
+        let mut session = at_gate(&catalog);
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(134)), &catalog, &mut NeverFires),
             Ok(SystemId(134))
         );
         assert_eq!(session.system(), SystemId(134));
@@ -20357,25 +20487,190 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_wormhole_into_a_hidden_system_comes_out_at_the_one_at_its_place() {
+    fn a_wormhole_listed_only_by_a_hidden_system_is_no_exit() {
         let mut catalog = wormholes();
         with_alternate(&mut catalog);
         let mut session = at_wormhole(&catalog);
         hide(&mut session, &catalog, &[131]);
         session.take_messages();
         assert_eq!(
-            session.enter_wormhole(&catalog, &mut Scripted::rolling(&[0])),
-            Ok(SystemId(134)),
-            "out of 410, listed by hidden 131"
+            session.enter_wormhole(&catalog, &mut NeverFires),
+            Err(GateRefusal::NoExit),
+            "410 has no owner, and 420 is linked (@0x6410e-0x64176)"
+        );
+        assert_eq!(session.system(), SystemId(130));
+        assert_eq!(session.take_messages(), []);
+    }
+
+    #[test]
+    fn a_hypergate_offers_a_links_owner_not_a_hidden_lower_lister() {
+        let mut catalog = gated();
+        with_alternate(&mut catalog);
+        catalog.gate_listers = vec![
+            (SystemId(131), StellarId(310)),
+            (SystemId(133), StellarId(310)),
+            (SystemId(132), StellarId(320)),
+        ];
+        let mut session = at_gate(&catalog);
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(
+            session.open_hypergate(&catalog),
+            Ok(ids(&[133, 132])),
+            "310's owner is 133, not 131 by 134"
         );
         assert_eq!(
-            session.take_messages(),
-            [SimMessage::PassedWormhole(SystemId(134))]
+            session.enter_hypergate(Some(SystemId(133)), &catalog, &mut NeverFires),
+            Ok(SystemId(133))
         );
-        assert_eq!(session.system(), SystemId(134));
-        assert_eq!(session.sites, [planet(141, 0.0, 0.0)]);
-        assert!(on_the_map(&session));
-        session.assert_docked_among_shown();
+        assert_eq!(session.player().position, Vec2::new(100.0, 200.0), "at 310");
+    }
+
+    #[test]
+    fn a_hypergate_offers_a_links_owner_not_a_shadowed_lower_lister() {
+        let mut catalog = gated();
+        with_alternate(&mut catalog);
+        catalog.star_map.push(star(135, (-600.0, 600.0), &[]));
+        catalog.gate_listers = vec![
+            (SystemId(134), StellarId(310)),
+            (SystemId(135), StellarId(310)),
+            (SystemId(132), StellarId(320)),
+        ];
+        let mut session = at_gate(&catalog);
+        assert_eq!(
+            session.open_hypergate(&catalog),
+            Ok(ids(&[135, 132])),
+            "310's owner is 135, not 134, visible but shadowed by 131"
+        );
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(135)), &catalog, &mut NeverFires),
+            Ok(SystemId(135))
+        );
+        assert_eq!(session.system(), SystemId(135));
+        assert_eq!(session.player().position, Vec2::new(100.0, 200.0), "at 310");
+    }
+
+    #[test]
+    fn a_hypergate_link_with_no_owner_resolves_through_its_lowest_visible_lister_by_place() {
+        let mut catalog = gated();
+        with_alternate(&mut catalog);
+        catalog.gate_listers = vec![
+            (SystemId(134), StellarId(310)),
+            (SystemId(132), StellarId(320)),
+        ];
+        let mut session = at_gate(&catalog);
+        assert_eq!(
+            session.open_hypergate(&catalog),
+            Ok(ids(&[131, 132])),
+            "310 is listed only by 134, shadowed by 131: unowned, found in 134, offered as 131"
+        );
+        assert_eq!(
+            session.enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires),
+            Ok(SystemId(131))
+        );
+        assert_eq!(session.player().position, Vec2::new(100.0, 200.0), "at 310");
+    }
+
+    #[test]
+    fn a_wormhole_comes_out_in_its_exits_owner() {
+        let mut catalog = wormholes();
+        with_alternate(&mut catalog);
+        catalog.gate_listers = vec![
+            (SystemId(131), StellarId(410)),
+            (SystemId(133), StellarId(410)),
+            (SystemId(132), StellarId(420)),
+        ];
+        let mut session = at_wormhole(&catalog);
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut Scripted::rolling(&[0])),
+            Ok(SystemId(133)),
+            "410's owner, not 134 standing for its lowest lister"
+        );
+        assert_eq!(session.player().position, Vec2::new(-300.0, 40.0));
+    }
+
+    /// [`wormholes`] over [`alternates`]' 134, with the ship starting in
+    /// 131 rather than 130, over wormhole 400 of links `links`, and
+    /// wormhole 430 at (70, -90) listed by 131 alone; 410 is 130's.
+    fn rescued_wormholes(links: &[i16]) -> FakePilotCatalog {
+        let mut catalog = FakePilotCatalog {
+            character: starting([Some(131), None, None, None]).character,
+            ..wormholes()
+        };
+        with_alternate(&mut catalog);
+        catalog.sites = vec![
+            (SystemId(130), vec![planet(128, 30.0, -40.0)]),
+            (SystemId(131), vec![gate_landing(400, 0x2200)]),
+        ];
+        catalog.gates[0] = gate_site(400, (0.0, 0.0), 0x2200, links, 120);
+        catalog
+            .gates
+            .push(gate_site(430, (70.0, -90.0), WORMHOLE, &[], 0));
+        catalog.gate_listers = vec![
+            (SystemId(130), StellarId(410)),
+            (SystemId(132), StellarId(420)),
+            (SystemId(131), StellarId(430)),
+        ];
+        catalog
+    }
+
+    /// `catalog`'s session with 131 and 134 hidden, so the refresh moves
+    /// the player into 131 made visible, the chain head at their place,
+    /// which owns nothing (@0x998f1-0x99a36): 430 is held only by the
+    /// rescue ([`OverlaidGalaxy::holder`]). Then L pressed twice over the
+    /// wormhole.
+    fn at_rescued_wormhole(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        hide(&mut session, catalog, &[131, 134]);
+        assert_eq!(session.system(), SystemId(131));
+        let listers = [SystemId(131)];
+        assert_eq!(session.galaxy().owner(&listers), None, "made visible");
+        assert_eq!(
+            session.galaxy().holder(&listers, SystemId(131)),
+            Some(SystemId(131)),
+            "rescued"
+        );
+        session.land().expect("clearance");
+        assert_eq!(
+            session.land(),
+            Ok(LandPress::AtGate {
+                stellar: StellarId(400),
+                kind: GateKind::Wormhole,
+            })
+        );
+        session
+    }
+
+    #[test]
+    fn a_wormhole_linked_to_one_only_the_players_ownerless_system_lists_comes_out_there() {
+        let catalog = rescued_wormholes(&[430]);
+        let mut session = at_rescued_wormhole(&catalog);
+        let mut chance = Scripted::rolling(&[0]);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut chance),
+            Ok(SystemId(131)),
+            "430 has no owner: the rescue holds it in the player's 131"
+        );
+        assert_eq!(chance.sides_asked, [1]);
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.player().position, Vec2::new(70.0, -90.0), "at 430");
+    }
+
+    #[test]
+    fn an_unlinked_wormhole_held_only_by_the_rescue_is_no_candidate() {
+        let catalog = rescued_wormholes(&[]);
+        let mut session = at_rescued_wormhole(&catalog);
+        let mut chance = Scripted::rolling(&[0]);
+        assert_eq!(
+            session.enter_wormhole(&catalog, &mut chance),
+            Ok(SystemId(130))
+        );
+        assert_eq!(
+            chance.sides_asked,
+            [2],
+            "410 in 130 and 420 in 132: 430, held by the player's 131, is dropped (@0x6410e-0x64176)"
+        );
+        assert_eq!(session.player().position, Vec2::new(-300.0, 40.0), "at 410");
     }
 
     #[test]

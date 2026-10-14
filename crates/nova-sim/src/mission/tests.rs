@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 
 use super::*;
 use crate::catalog::{GovtRecord, MissionRecord};
@@ -10,6 +10,7 @@ use crate::landing::StellarFlags;
 use crate::market::DOMINATED;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::rules::Verdict;
+use crate::story::Whereabouts;
 use crate::testkit::{Draws, Scripted, govt, mission, planet, star};
 
 const FED: GovtId = GovtId(128);
@@ -50,6 +51,23 @@ fn at(system: i16, id: i16, govt: Option<GovtId>) -> Stellar {
     }
 }
 
+/// Each of `stellars` placed as it is held: its system both holds it and
+/// is what `_FindSystemFromStellar` gives it.
+fn held_where_they_are(stellars: &[Stellar]) -> Vec<Placed> {
+    let mut placed: Vec<Placed> = stellars
+        .iter()
+        .map(|stellar| Placed {
+            id: stellar.id,
+            at: Whereabouts {
+                holder: Some(stellar.system),
+                found: Some(stellar.system),
+            },
+        })
+        .collect();
+    placed.sort_by_key(|placed| placed.id);
+    placed
+}
+
 /// The landing site of stellar `id`, the Federation's.
 fn docked_at(id: i16) -> LandingSite {
     LandingSite {
@@ -64,6 +82,9 @@ fn docked_at(id: i16) -> LandingSite {
 /// 151 (the Civvies') and 152 (uninhabited) are in 132; 160 is in 134.
 struct Galaxy {
     stellars: Vec<Stellar>,
+    /// Where every listed stellar is: set by a test, else each of
+    /// `stellars` held by its system and found there, at the first visit.
+    placed: OnceCell<Vec<Placed>>,
     map: StarMap,
     govts: Governments,
     rules: Rulebook,
@@ -83,6 +104,7 @@ impl Galaxy {
                 uninhabited,
                 at(134, 160, None),
             ],
+            placed: OnceCell::new(),
             map: StarMap::new(vec![
                 star(130, (0.0, 0.0), &[131, 135]),
                 star(131, (100.0, 0.0), &[]),
@@ -117,6 +139,9 @@ impl Galaxy {
             system: SystemId(130),
             world: World {
                 stellars: &self.stellars,
+                placed: self
+                    .placed
+                    .get_or_init(|| held_where_they_are(&self.stellars)),
                 map: &self.map,
                 govts: &self.govts,
                 draw: self.rules.source_for(RuleKey::MissionStellarDraw),
@@ -470,6 +495,50 @@ fn a_fixed_destination_or_return_at_the_players_place_refuses_unless_avail_stel_
             m.avail_stel = 127;
         }),
         [Refusal::GoesHere, Refusal::AvailStel]
+    );
+}
+
+/// Mission 130 with `edit` made, on `galaxy`'s plain visit.
+fn plainly_on(galaxy: &Galaxy, edit: impl FnOnce(&mut MissionRecord)) -> Vec<Refusal> {
+    refusals(&galaxy.visit(), &with(edit))
+}
+
+#[test]
+fn a_fixed_stop_held_by_no_system_refuses_by_the_system_find_system_from_stellar_gives() {
+    // 134, hidden say, is at the player's 130's place and alone lists 2000.
+    let here = placing(2000, None, Some(134));
+    assert_eq!(
+        plainly_on(&here, |m| m.travel_stel = 2000),
+        [Refusal::GoesHere],
+        "@0x9b225"
+    );
+    assert_eq!(
+        plainly_on(&here, |m| m.return_stel = 2000),
+        [Refusal::GoesHere],
+        "@0x9b294"
+    );
+    let elsewhere = placing(2000, None, Some(131));
+    assert_eq!(plainly_on(&elsewhere, |m| m.travel_stel = 2000), []);
+    assert_eq!(plainly_on(&elsewhere, |m| m.return_stel = 2000), []);
+    let nowhere = placing(2000, None, None);
+    assert_eq!(
+        plainly_on(&nowhere, |m| m.travel_stel = 2000),
+        [],
+        "no system at all passes"
+    );
+}
+
+#[test]
+fn a_fixed_stop_rescued_into_the_players_system_refuses() {
+    let galaxy = placing(2000, Some(130), Some(131));
+    assert_eq!(
+        plainly_on(&galaxy, |m| m.travel_stel = 2000),
+        [Refusal::GoesHere],
+        "the holder wins over _FindSystemFromStellar's 131"
+    );
+    assert_eq!(
+        plainly_on(&galaxy, |m| m.return_stel = 2000),
+        [Refusal::GoesHere]
     );
 }
 
@@ -1178,6 +1247,84 @@ fn a_fixed_stellar_in_no_visible_system_has_no_system() {
         })
     );
     assert_eq!(offer.venue, Venue::Outside);
+}
+
+/// [`Galaxy::new`] with stellar `id` placed `holder` and `found` alone.
+fn placing(id: i16, holder: Option<i16>, found: Option<i16>) -> Galaxy {
+    let galaxy = Galaxy::new();
+    galaxy
+        .placed
+        .set(vec![Placed {
+            id: StellarId(id),
+            at: Whereabouts {
+                holder: holder.map(SystemId),
+                found: found.map(SystemId),
+            },
+        }])
+        .expect("not placed yet");
+    galaxy
+}
+
+/// The stops `galaxy`'s visit resolves for mission 130 with `TravelStel`
+/// `travel` and `ReturnStel` `back`.
+fn stops(galaxy: &Galaxy, travel: i16, back: i16) -> (Option<Stop>, Option<Stop>) {
+    let offer = resolve(
+        &with(|m| {
+            m.travel_stel = travel;
+            m.return_stel = back;
+        }),
+        Venue::Computer,
+        Some(StellarId(128)),
+        &galaxy.visit().world,
+        today(),
+        &mut Draws::default(),
+    );
+    (offer.destination, offer.return_to)
+}
+
+/// Stellar `id` in `system`.
+fn stop(id: i16, system: Option<i16>) -> Stop {
+    Stop {
+        stellar: StellarId(id),
+        system: system.map(SystemId),
+    }
+}
+
+#[test]
+fn a_destination_is_in_its_holders_stand_in_and_a_return_in_its_holder_as_it_is() {
+    // 160 is rescued into 134, which 130 shadows at its place.
+    let galaxy = placing(160, Some(134), Some(134));
+    assert_eq!(
+        stops(&galaxy, 160, 160),
+        (Some(stop(160, Some(130))), Some(stop(160, Some(134)))),
+        "travel: _FindActiveCoLocatedSystem (@0xa15a8-0xa15b5); return: the owner as it is (@0xa1653-0xa1658)"
+    );
+}
+
+#[test]
+fn a_stop_no_system_holds_is_in_the_system_find_system_from_stellar_gives() {
+    let galaxy = placing(2000, None, Some(131));
+    assert_eq!(
+        stops(&galaxy, 2000, 2000),
+        (Some(stop(2000, Some(131))), Some(stop(2000, Some(131)))),
+        "@0xa15be-0xa15ca, @0xa1661-0xa1669"
+    );
+    let galaxy = placing(2000, Some(134), Some(131));
+    assert_eq!(
+        stops(&galaxy, 2000, 2000),
+        (Some(stop(2000, Some(130))), Some(stop(2000, Some(134)))),
+        "a holder wins over it"
+    );
+}
+
+#[test]
+fn with_return_stel_minus_1_the_return_system_is_resolved_afresh() {
+    let galaxy = placing(160, Some(134), Some(134));
+    assert_eq!(
+        stops(&galaxy, 160, -1),
+        (Some(stop(160, Some(130))), Some(stop(160, Some(134)))),
+        "the destination's stellar (@0xa15f0-0xa15ff), its system worked out again (@0xa1632-0xa1669)"
+    );
 }
 
 #[test]

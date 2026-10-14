@@ -720,6 +720,7 @@ mod tests {
             rating: 0,
             yardstick: 0,
             untargetable: false,
+            blessing: crate::rank::Blessing::NONE,
         }
     }
 

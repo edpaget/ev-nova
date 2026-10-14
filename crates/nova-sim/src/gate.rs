@@ -16,19 +16,20 @@
 //!   (@0x637bf) returns at once, silently, when the gate has no links
 //!   (`_StellarNumHyperLinks` = 0, [`has_links`]). Otherwise it opens the
 //!   galaxy map offering the systems of the linked gates
-//!   ([`hypergate_destinations`]), and once it closes takes the first
-//!   link, in slot order, whose system is the one picked
-//!   ([`hypergate_exit`], @0x6389d-0x63999). No pick, or one no link
-//!   leads to, cancels the jump.
+//!   ([`hypergate_offers`]), and once it closes takes the first link, in
+//!   slot order, whose system is the one picked ([`hypergate_exit`],
+//!   @0x6389d-0x63999). No pick, or one no link leads to, cancels the
+//!   jump.
 //! - **A wormhole picks at random** ([`wormhole_exit`]).
 //!   `_PlayerEnterWormhole` (@0x64005): with links, a uniform pick among
-//!   the slots whose stellar is in a system (`Rand(8)` until one is,
-//!   @0x640a3-0x640f6), none failing. Without, among every other wormhole
-//!   in another system (`Rand(2048)` until one is, @0x641b8-0x641eb),
-//!   failing when none of them is itself unlinked (@0x640fb-0x64186). A
-//!   pick that has links does not roll again: the ship comes out of the
-//!   wormhole it entered (@0x641f8 to @0x64236-0x64245), the engine's
-//!   [`WormholeRule`]. The Bible says the ship "will end up at another
+//!   the slots whose stellar has an owner (`Rand(8)` until one has,
+//!   @0x640a3-0x640f0), none failing (@0x64048-0x6409d, @0x6461c).
+//!   Without, among every other active wormhole whose owner is another
+//!   system than the player's (`Rand(2048)` until one is,
+//!   @0x6410e-0x64176, @0x641b8-0x6421c), failing when none of them is
+//!   itself unlinked. A pick that has links does not roll again: the ship
+//!   comes out of the wormhole it entered, in the player's system
+//!   (@0x641f8 to @0x64236-0x64245), the engine's [`WormholeRule`]. The Bible says the ship "will end up at another
 //!   random wormhole which also has no defined hyper links", which
 //!   [`WormholeRule::UnlinkedOnly`] reads.
 //! - **Arrival** ([`emerge`]), identical in both: the ship is placed at the
@@ -42,17 +43,27 @@
 //!   reading, an ordinary jump's arrival and days, is
 //!   [`GateArrivalRule::LikeJump`].
 //!
-//! A stellar's system is the lowest-ID system that lists it, and a link
-//! to a stellar no system lists leads nowhere: the original's
-//! `_FindSystemFromStellar` with every system active. Under the galaxy
-//! overlay a hypergate offers, and leads to, the visible system standing
-//! for that system ([`hypergate_offers`]): the original resolves each link
-//! through `_FindActiveCoLocatedSystem` both to draw it (@0xf20f) and to
-//! take it (@0x638ed), and a link with no system visible at its place is
-//! neither drawn nor taken. The exit is then entered as every arrival is
-//! (see the [`story`](crate::story) module's "Galaxy overlay"). Choosing
-//! among several systems listing the same gate by visibility waits for the
-//! port to give every lister.
+//! **Where a gate is.** The gate rules take the system a stellar is in
+//! from the session, resolved from every system listing it:
+//!
+//! - A hypergate's link resolves owner-first: its owner when it has one,
+//!   the player's system holding one it lists that no system owns, else
+//!   `_FindSystemFromStellar`
+//!   ([`OverlaidGalaxy::system_of`](crate::story::OverlaidGalaxy::system_of)),
+//!   then the visible system standing for it (`_FindActiveCoLocatedSystem`,
+//!   -1 for -1, @0x4be8). `_DrawMap` (@0xf1f8-0xf21a), `_DoSystemMap`
+//!   (@0x12ff2-0x13011) and `_PlayerEnterHypergate` (@0x638cd-0x638ff)
+//!   each resolve so: a link with no system visible at its place is
+//!   neither drawn nor taken, and the exit is the first link resolving to
+//!   the system picked (+0x6c). Only `_MapFilter` (@0x13d87-0x13d98), the
+//!   keypad's cycling of the hypergate's destinations, which the engine
+//!   lacks, calls `_FindSystemFromStellar` directly.
+//! - A wormhole reads the owner alone, never `_FindSystemFromStellar`
+//!   ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)),
+//!   and the ship comes out in the exit's owner (@0x642a7).
+//!
+//! The exit is then entered as every arrival is (see the
+//! [`story`](crate::story) module's "Galaxy overlay").
 //!
 //! A mission's special ships following the player (`ShipSyst` -6) come
 //! out of the exit gate after it, or are lost, as the `gövt` `Flags2`
@@ -193,34 +204,25 @@ fn exits<'a>(links: &[Option<StellarId>; 8], sites: &'a [GateSite]) -> Vec<&'a G
         .collect()
 }
 
-/// The systems a hypergate with `links` offers on the map: each linked
-/// gate's system, in slot order, each once.
-#[must_use]
-pub fn hypergate_destinations(links: &[Option<StellarId>; 8], sites: &[GateSite]) -> Vec<SystemId> {
-    let mut systems = Vec::new();
-    for exit in exits(links, sites) {
-        if !systems.contains(&exit.system) {
-            systems.push(exit.system);
-        }
-    }
-    systems
-}
-
 /// The systems a hypergate with `links` offers on the overlaid `map`: each
-/// of [`hypergate_destinations`] as the visible system standing for it
+/// linked gate's system, as `system_of` resolves it owner-first
+/// ([`OverlaidGalaxy::system_of`](crate::story::OverlaidGalaxy::system_of)),
+/// then as the visible system standing for it
 /// ([`Places::stand_in`](crate::hyperspace::Places::stand_in)), in slot
-/// order, each once, and none for a destination with no system visible at
-/// its place, as `_DrawMap` resolves each link and skips -1
-/// (@0xf206-0xf21a).
+/// order, each once. A link to a stellar no system lists, one that
+/// resolves to no system, and one with no system visible at its place
+/// offer nothing, as `_DrawMap` resolves each link and skips -1
+/// (@0xf1f8-0xf21a).
 #[must_use]
 pub fn hypergate_offers(
     links: &[Option<StellarId>; 8],
     sites: &[GateSite],
+    system_of: impl Fn(StellarId) -> Option<SystemId>,
     map: &StarMap,
 ) -> Vec<SystemId> {
     let mut offers = Vec::new();
-    for system in hypergate_destinations(links, sites) {
-        if let Some(offer) = map.places().stand_in(system)
+    for exit in exits(links, sites) {
+        if let Some(offer) = system_of(exit.id).and_then(|system| map.places().stand_in(system))
             && !offers.contains(&offer)
         {
             offers.push(offer);
@@ -230,65 +232,90 @@ pub fn hypergate_offers(
 }
 
 /// The gate a hypergate with `links` leads to when the player picks
-/// `chosen`: the first link, in slot order, whose gate's system has a
-/// visible system standing for it on the overlaid `map` and is `chosen`
-/// or at its place, as `_PlayerEnterHypergate` resolves each link through
-/// `_FindActiveCoLocatedSystem` (@0x638e4-0x638ff). `None` when no link
-/// leads there.
+/// `chosen`: the first link, in slot order, whose gate's system, as
+/// `system_of` resolves it owner-first, has `chosen` standing for it on
+/// the overlaid `map`, as `_PlayerEnterHypergate` compares each link's
+/// `_FindActiveCoLocatedSystem` with the system picked
+/// (@0x638cd-0x638ff). `None` when no link leads there.
 #[must_use]
 pub fn hypergate_exit<'a>(
     links: &[Option<StellarId>; 8],
     sites: &'a [GateSite],
     chosen: SystemId,
+    system_of: impl Fn(StellarId) -> Option<SystemId>,
     map: &StarMap,
 ) -> Option<&'a GateSite> {
-    let places = map.places();
     exits(links, sites).into_iter().find(|exit| {
-        places.stand_in(exit.system).is_some()
-            && (exit.system == chosen || places.together(exit.system, chosen))
+        system_of(exit.id).and_then(|system| map.places().stand_in(system)) == Some(chosen)
     })
 }
 
-/// The wormhole a ship entering wormhole `here`, in `current_system`,
-/// comes out of, rolled on `chance`; `None` when it leads nowhere (see the
-/// module docs).
+/// Where a ship comes out of a wormhole ([`wormhole_exit`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WormholeExit<'a> {
+    /// The wormhole it comes out of.
+    pub site: &'a GateSite,
+    /// The system it comes out in.
+    pub system: SystemId,
+}
+
+/// The wormhole a ship entering wormhole `here`, with the player in
+/// `player_system`, comes out of, and the system it comes out in, rolled
+/// on `chance`; `None` when it leads nowhere (see the module docs).
+/// `owner_of` gives a stellar's owner, the player's system holding one it
+/// lists that no system owns
+/// ([`OverlaidGalaxy::holder`](crate::story::OverlaidGalaxy::holder)):
+/// `_PlayerEnterWormhole` reads only the owner (@0x64005-0x642a7).
 ///
 /// With links, `chance` rolls over the slots whose stellar some system
-/// lists, in slot order, repeats counting. Without, the candidates are
-/// every other wormhole among `sites`, by ascending ID, in a system other
-/// than `current_system`, and there is no exit unless one of them is
-/// unlinked: by [`WormholeRule::Engine`] `chance` rolls over all of them,
-/// and a linked pick gives `here`; by [`WormholeRule::UnlinkedOnly`] over
-/// the unlinked ones only.
+/// lists and has an owner, in slot order, repeats counting, and the ship
+/// comes out in that owner (@0x640a3-0x640f0, @0x642a7); none such means
+/// no exit (@0x64048-0x6409d, @0x6461c). Without, the candidates are
+/// every other wormhole among `sites`, by ascending ID, with an owner that
+/// is not `player_system` (@0x6410e-0x64176), and there is no exit unless
+/// one of them is unlinked: by [`WormholeRule::Engine`] `chance` rolls
+/// over all of them, and a linked pick gives `here` in `player_system`
+/// (@0x64236-0x64245); by [`WormholeRule::UnlinkedOnly`] over the
+/// unlinked ones only.
 pub fn wormhole_exit<'a>(
     here: StellarId,
-    current_system: SystemId,
+    player_system: SystemId,
     sites: &'a [GateSite],
+    owner_of: impl Fn(StellarId) -> Option<SystemId>,
     rule: WormholeRule,
     chance: &mut (impl Chance + ?Sized),
-) -> Option<&'a GateSite> {
+) -> Option<WormholeExit<'a>> {
     let entered = site(sites, here)?;
+    let out = |site: &'a GateSite| owner_of(site.id).map(|system| WormholeExit { site, system });
     if has_links(&entered.links) {
-        return pick(&exits(&entered.links, sites), chance).copied();
+        let owned: Vec<WormholeExit<'a>> = exits(&entered.links, sites)
+            .into_iter()
+            .filter_map(out)
+            .collect();
+        return pick(&owned, chance).copied();
     }
-    let candidates: Vec<&GateSite> = sites
+    let candidates: Vec<WormholeExit<'a>> = sites
         .iter()
         .filter(|site| site.id != here && site.flags2 & WORMHOLE != 0)
-        .filter(|site| site.system != current_system)
+        .filter_map(out)
+        .filter(|exit| exit.system != player_system)
         .collect();
-    let unlinked: Vec<&GateSite> = candidates
+    let unlinked: Vec<WormholeExit<'a>> = candidates
         .iter()
         .copied()
-        .filter(|site| !has_links(&site.links))
+        .filter(|exit| !has_links(&exit.site.links))
         .collect();
     if unlinked.is_empty() {
         return None;
     }
     match rule {
         WormholeRule::Engine => {
-            let picked = pick(&candidates, chance)?;
-            Some(if has_links(&picked.links) {
-                entered
+            let picked = *pick(&candidates, chance)?;
+            Some(if has_links(&picked.site.links) {
+                WormholeExit {
+                    site: entered,
+                    system: player_system,
+                }
             } else {
                 picked
             })
@@ -334,6 +361,8 @@ pub fn emerge(site: &GateSite, max_speed: f32, chance: &mut (impl Chance + ?Size
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::geometry::Vec2;
     use crate::hyperspace::CoLocated;
@@ -348,12 +377,11 @@ mod tests {
         slots
     }
 
-    /// Stellar `id` in `system` at (`id`, 0), with `flags2` and links to
-    /// `linked`, heading ships out on 90°.
-    fn gate_site(id: i16, system: i16, flags2: u16, linked: &[i16]) -> GateSite {
+    /// Stellar `id` at (`id`, 0), with `flags2` and links to `linked`,
+    /// heading ships out on 90°.
+    fn gate_site(id: i16, flags2: u16, linked: &[i16]) -> GateSite {
         GateSite {
             id: StellarId(id),
-            system: SystemId(system),
             position: Vec2::new(f32::from(id), 0.0),
             flags2,
             links: links(linked),
@@ -361,8 +389,15 @@ mod tests {
         }
     }
 
-    fn wormhole(id: i16, system: i16, linked: &[i16]) -> GateSite {
-        gate_site(id, system, WORMHOLE, linked)
+    fn wormhole(id: i16, linked: &[i16]) -> GateSite {
+        gate_site(id, WORMHOLE, linked)
+    }
+
+    /// A resolver giving each stellar of `systems` its system, and any
+    /// other none.
+    fn resolver(systems: &[(i16, i16)]) -> impl Fn(StellarId) -> Option<SystemId> + use<> {
+        let systems: BTreeMap<i16, i16> = systems.iter().copied().collect();
+        move |id| systems.get(&id.0).map(|&system| SystemId(system))
     }
 
     #[test]
@@ -395,57 +430,42 @@ mod tests {
     #[test]
     fn a_hypergate_offers_its_linked_gates_systems_in_slot_order_once_each() {
         let sites = [
-            gate_site(1400, 128, HYPERGATE, &[]),
-            gate_site(1405, 129, HYPERGATE, &[]),
-            gate_site(1413, 298, HYPERGATE, &[]),
-            gate_site(1414, 298, HYPERGATE, &[]),
+            gate_site(1400, HYPERGATE, &[]),
+            gate_site(1405, HYPERGATE, &[]),
+            gate_site(1413, HYPERGATE, &[]),
+            gate_site(1414, HYPERGATE, &[]),
         ];
+        let system_of = resolver(&[(1400, 128), (1405, 129), (1413, 298), (1414, 298)]);
+        let map = StarMap::new(vec![
+            star(128, (0.0, 0.0), &[]),
+            star(129, (10.0, 0.0), &[]),
+            star(298, (20.0, 0.0), &[]),
+        ]);
         let mut slots = links(&[1413, 999, 1405]);
         slots[4] = Some(StellarId(1414));
         slots[6] = Some(StellarId(1405));
         assert_eq!(
-            hypergate_destinations(&slots, &sites),
+            hypergate_offers(&slots, &sites, &system_of, &map),
             [SystemId(298), SystemId(129)],
             "an unlisted stellar skipped, and each system once"
         );
-        assert_eq!(hypergate_destinations(&[None; 8], &sites), []);
-    }
-
-    #[test]
-    fn a_hypergate_leads_to_the_first_linked_gate_in_the_system_picked() {
-        let sites = [
-            gate_site(1405, 129, HYPERGATE, &[]),
-            gate_site(1413, 298, HYPERGATE, &[]),
-            gate_site(1414, 298, HYPERGATE, &[]),
-            gate_site(1418, 483, HYPERGATE, &[]),
-        ];
-        // 541 shares Dani's (298's) position; 483 sits apart.
-        let map = StarMap::new(vec![
-            star(129, (0.0, 0.0), &[]),
-            star(298, (100.0, 100.0), &[]),
-            star(483, (100.0, 0.0), &[]),
-            star(541, (100.0, 100.0), &[]),
-            star(600, (200.0, 0.0), &[]),
-        ]);
-        let slots = links(&[1405, 1414, 1413, 1418]);
-        let exit = |chosen| hypergate_exit(&slots, &sites, SystemId(chosen), &map).map(|s| s.id.0);
-        assert_eq!(exit(129), Some(1405));
-        assert_eq!(exit(298), Some(1414), "the first slot there wins");
-        assert_eq!(exit(541), Some(1414), "a system at its position");
-        assert_eq!(exit(483), Some(1418));
-        assert_eq!(exit(600), None, "no link leads there");
-        assert_eq!(exit(999), None, "not on the map");
+        assert_eq!(hypergate_offers(&[None; 8], &sites, &system_of, &map), []);
     }
 
     /// 1405 in 129, 1413 in 298 and 1414 in 541, which share a place, and
     /// 1418 in 483, alone; 298 and 483 hidden.
-    fn hidden_listers() -> ([GateSite; 4], StarMap) {
+    fn hidden_listers() -> (
+        [GateSite; 4],
+        impl Fn(StellarId) -> Option<SystemId>,
+        StarMap,
+    ) {
         let sites = [
-            gate_site(1405, 129, HYPERGATE, &[]),
-            gate_site(1413, 298, HYPERGATE, &[]),
-            gate_site(1414, 541, HYPERGATE, &[]),
-            gate_site(1418, 483, HYPERGATE, &[]),
+            gate_site(1405, HYPERGATE, &[]),
+            gate_site(1413, HYPERGATE, &[]),
+            gate_site(1414, HYPERGATE, &[]),
+            gate_site(1418, HYPERGATE, &[]),
         ];
+        let system_of = resolver(&[(1405, 129), (1413, 298), (1414, 541), (1418, 483)]);
         let map = StarMap::with_hidden(
             vec![
                 star(129, (0.0, 0.0), &[]),
@@ -456,83 +476,191 @@ mod tests {
             &[SystemId(298), SystemId(483)].into(),
             CoLocated::Lowest,
         );
-        (sites, map)
+        (sites, system_of, map)
     }
 
     #[test]
-    fn a_hypergate_offers_the_visible_system_standing_for_each_linked_gates() {
-        let (sites, map) = hidden_listers();
-        let offers = |ids: &[i16]| hypergate_offers(&links(ids), &sites, &map);
+    fn hypergate_offers_resolve_each_link_through_the_resolver_then_by_place() {
+        let (sites, system_of, map) = hidden_listers();
+        let offers = |ids: &[i16]| hypergate_offers(&links(ids), &sites, &system_of, &map);
         assert_eq!(
             offers(&[1413, 1405, 1418, 1414]),
             [SystemId(541), SystemId(129)],
             "298 by 541, once; 483 by none (@0xf20f-0xf21a)"
         );
         assert_eq!(offers(&[]), []);
-        let every = StarMap::new(vec![star(298, (100.0, 100.0), &[])]);
+        let shadowed = resolver(&[(1414, 541)]);
+        let every = StarMap::new(vec![
+            star(298, (100.0, 100.0), &[]),
+            star(541, (100.0, 100.0), &[]),
+        ]);
         assert_eq!(
-            hypergate_offers(&links(&[1413, 1405]), &sites, &every),
-            [SystemId(298), SystemId(129)],
-            "with none hidden, its destinations"
+            hypergate_offers(&links(&[1414, 1405]), &sites, &shadowed, &every),
+            [SystemId(298)],
+            "541 shadowed by 298 offers 298; 1405 resolves to none"
         );
     }
 
     #[test]
+    fn hypergate_exit_takes_the_first_link_whose_resolved_place_is_the_pick() {
+        let sites = [
+            gate_site(1405, HYPERGATE, &[]),
+            gate_site(1413, HYPERGATE, &[]),
+            gate_site(1414, HYPERGATE, &[]),
+            gate_site(1418, HYPERGATE, &[]),
+        ];
+        let system_of = resolver(&[(1405, 129), (1413, 298), (1414, 541), (1418, 483)]);
+        // 541 shares Dani's (298's) position; 483 sits apart.
+        let map = StarMap::new(vec![
+            star(129, (0.0, 0.0), &[]),
+            star(298, (100.0, 100.0), &[]),
+            star(483, (100.0, 0.0), &[]),
+            star(541, (100.0, 100.0), &[]),
+            star(600, (200.0, 0.0), &[]),
+        ]);
+        let slots = links(&[1405, 1414, 1413, 1418]);
+        let exit = |chosen| {
+            hypergate_exit(&slots, &sites, SystemId(chosen), &system_of, &map).map(|s| s.id.0)
+        };
+        assert_eq!(exit(129), Some(1405));
+        assert_eq!(
+            exit(298),
+            Some(1414),
+            "the first slot whose place is 298: 541 shadowed by it"
+        );
+        assert_eq!(exit(541), None, "shadowed, never what a link resolves to");
+        assert_eq!(exit(483), Some(1418));
+        assert_eq!(exit(600), None, "no link leads there");
+        assert_eq!(exit(999), None, "not on the map");
+    }
+
+    #[test]
     fn a_hypergate_leads_through_a_hidden_listers_gate_to_the_system_at_its_place() {
-        let (sites, map) = hidden_listers();
+        let (sites, system_of, map) = hidden_listers();
         let slots = links(&[1413, 1418, 1405]);
-        let exit = |chosen| hypergate_exit(&slots, &sites, SystemId(chosen), &map).map(|s| s.id.0);
+        let exit = |chosen| {
+            hypergate_exit(&slots, &sites, SystemId(chosen), &system_of, &map).map(|s| s.id.0)
+        };
         assert_eq!(exit(541), Some(1413), "standing for 298 (@0x638ed)");
-        assert_eq!(exit(298), Some(1413), "298 itself");
+        assert_eq!(exit(298), None, "hidden, never the pick's compare");
         assert_eq!(exit(483), None, "no system visible at its place");
         assert_eq!(exit(129), Some(1405));
     }
 
     #[test]
     fn a_gate_off_the_map_matches_only_its_own_system() {
-        let sites = [gate_site(1405, 700, HYPERGATE, &[])];
+        let sites = [gate_site(1405, HYPERGATE, &[])];
         let map = StarMap::new(vec![star(129, (0.0, 0.0), &[])]);
         let slots = links(&[1405]);
+        let off_the_map = resolver(&[(1405, 700)]);
+        let exit = |chosen, system_of: &dyn Fn(StellarId) -> Option<SystemId>| {
+            hypergate_exit(&slots, &sites, SystemId(chosen), system_of, &map).map(|s| s.id.0)
+        };
+        assert_eq!(exit(700, &off_the_map), Some(1405));
+        assert_eq!(exit(701, &off_the_map), None);
         assert_eq!(
-            hypergate_exit(&slots, &sites, SystemId(700), &map).map(|s| s.id.0),
-            Some(1405)
+            hypergate_offers(&slots, &sites, &off_the_map, &map),
+            [SystemId(700)]
         );
-        assert_eq!(hypergate_exit(&slots, &sites, SystemId(701), &map), None);
+        let unresolved = resolver(&[]);
+        assert_eq!(exit(129, &unresolved), None, "a link to no system");
+        assert_eq!(hypergate_offers(&slots, &sites, &unresolved, &map), []);
+    }
+
+    /// The exit's stellar and system.
+    fn exit_of(exit: Option<WormholeExit<'_>>) -> Option<(i16, i16)> {
+        exit.map(|exit| (exit.site.id.0, exit.system.0))
     }
 
     #[test]
     fn a_linked_wormhole_rolls_over_its_usable_slots() {
         let sites = [
-            wormhole(500, 130, &[510, 999, 520, 510]),
-            wormhole(510, 131, &[]),
-            wormhole(520, 132, &[]),
+            wormhole(500, &[510, 999, 520, 510]),
+            wormhole(510, &[]),
+            wormhole(520, &[]),
         ];
-        for (roll, expected) in [(0, 510), (1, 520), (2, 510)] {
+        let owner_of = resolver(&[(500, 130), (510, 131), (520, 132)]);
+        for (roll, expected) in [(0, (510, 131)), (1, (520, 132)), (2, (510, 131))] {
             let mut chance = Scripted::rolling(&[roll]);
             let exit = wormhole_exit(
                 StellarId(500),
                 SystemId(130),
                 &sites,
+                &owner_of,
                 WormholeRule::Engine,
                 &mut chance,
             );
-            assert_eq!(exit.map(|s| s.id.0), Some(expected), "{roll}");
+            assert_eq!(exit_of(exit), Some(expected), "{roll}");
             assert_eq!(chance.sides_asked, [3], "repeats count");
         }
     }
 
     #[test]
-    fn a_linked_wormhole_whose_links_lead_nowhere_has_no_exit() {
-        let sites = [wormhole(500, 130, &[999]), wormhole(510, 131, &[])];
+    fn wormhole_links_lead_only_to_linked_stellars_with_an_owner() {
+        let sites = [
+            wormhole(500, &[510, 520]),
+            wormhole(510, &[]),
+            wormhole(520, &[]),
+        ];
+        let owner_of = resolver(&[(500, 130), (520, 132)]);
+        let mut chance = Scripted::rolling(&[0]);
+        let exit = wormhole_exit(
+            StellarId(500),
+            SystemId(130),
+            &sites,
+            &owner_of,
+            WormholeRule::Engine,
+            &mut chance,
+        );
+        assert_eq!(exit_of(exit), Some((520, 132)), "510 has no owner");
+        assert_eq!(chance.sides_asked, [1]);
+        let unowned = resolver(&[(500, 130)]);
         let mut chance = Scripted::default();
         let exit = wormhole_exit(
             StellarId(500),
             SystemId(130),
             &sites,
+            &unowned,
             WormholeRule::Engine,
             &mut chance,
         );
-        assert_eq!(exit, None);
+        assert_eq!(exit_of(exit), None, "no linked owner at all");
+        assert!(chance.sides_asked.is_empty(), "nothing rolled");
+    }
+
+    #[test]
+    fn a_wormhole_comes_out_in_its_exits_owner() {
+        let sites = [wormhole(500, &[510]), wormhole(510, &[])];
+        let owner_of = resolver(&[(510, 140)]);
+        let exit = wormhole_exit(
+            StellarId(500),
+            SystemId(130),
+            &sites,
+            &owner_of,
+            WormholeRule::Engine,
+            &mut Scripted::rolling(&[0]),
+        );
+        assert_eq!(
+            exit_of(exit),
+            Some((510, 140)),
+            "the owner, as the roll found it"
+        );
+    }
+
+    #[test]
+    fn a_linked_wormhole_whose_links_lead_nowhere_has_no_exit() {
+        let sites = [wormhole(500, &[999]), wormhole(510, &[])];
+        let owner_of = resolver(&[(500, 130), (510, 131), (999, 132)]);
+        let mut chance = Scripted::default();
+        let exit = wormhole_exit(
+            StellarId(500),
+            SystemId(130),
+            &sites,
+            &owner_of,
+            WormholeRule::Engine,
+            &mut chance,
+        );
+        assert_eq!(exit_of(exit), None, "999 is no listed stellar");
         assert!(chance.sides_asked.is_empty(), "nothing rolled");
     }
 
@@ -541,60 +669,124 @@ mod tests {
     /// 530, linked one 520 between them, and a planet 540.
     fn unlinked_network() -> Vec<GateSite> {
         vec![
-            wormhole(500, 130, &[]),
-            wormhole(505, 130, &[]),
-            gate_site(506, 130, HYPERGATE, &[]),
-            wormhole(510, 131, &[]),
-            wormhole(520, 132, &[510]),
-            wormhole(530, 133, &[]),
-            gate_site(540, 134, 0, &[]),
+            wormhole(500, &[]),
+            wormhole(505, &[]),
+            gate_site(506, HYPERGATE, &[]),
+            wormhole(510, &[]),
+            wormhole(520, &[510]),
+            wormhole(530, &[]),
+            gate_site(540, 0, &[]),
         ]
     }
 
-    fn unlinked_exit(sites: &[GateSite], rule: WormholeRule, roll: u16) -> (Option<i16>, Vec<u16>) {
+    /// [`unlinked_network`]'s owners.
+    fn network_owners() -> impl Fn(StellarId) -> Option<SystemId> {
+        resolver(&[
+            (500, 130),
+            (505, 130),
+            (506, 130),
+            (510, 131),
+            (520, 132),
+            (530, 133),
+            (540, 134),
+        ])
+    }
+
+    fn unlinked_exit(
+        sites: &[GateSite],
+        owner_of: &dyn Fn(StellarId) -> Option<SystemId>,
+        rule: WormholeRule,
+        roll: u16,
+    ) -> (Option<(i16, i16)>, Vec<u16>) {
         let mut chance = Scripted::rolling(&[roll]);
-        let exit = wormhole_exit(StellarId(500), SystemId(130), sites, rule, &mut chance);
-        (exit.map(|site| site.id.0), chance.sides_asked)
+        let exit = wormhole_exit(
+            StellarId(500),
+            SystemId(130),
+            sites,
+            owner_of,
+            rule,
+            &mut chance,
+        );
+        (exit_of(exit), chance.sides_asked)
     }
 
     #[test]
     fn by_the_engine_an_unlinked_wormhole_rolls_over_every_wormhole_elsewhere() {
-        let sites = unlinked_network();
-        let engine = |roll| unlinked_exit(&sites, WormholeRule::Engine, roll);
-        assert_eq!(engine(0), (Some(510), vec![3]));
-        assert_eq!(engine(2), (Some(530), vec![3]));
-        assert_eq!(
-            engine(1),
-            (Some(500), vec![3]),
-            "a linked pick leaves the ship where it entered"
+        let (sites, owners) = (unlinked_network(), network_owners());
+        let engine = |roll| unlinked_exit(&sites, &owners, WormholeRule::Engine, roll);
+        assert_eq!(engine(0), (Some((510, 131)), vec![3]));
+        assert_eq!(engine(2), (Some((530, 133)), vec![3]));
+    }
+
+    #[test]
+    fn by_the_engine_a_linked_unlinked_pick_stays_at_the_entered_wormhole_in_the_players_system() {
+        let (sites, owners) = (unlinked_network(), network_owners());
+        let mut chance = Scripted::rolling(&[2]);
+        let exit = wormhole_exit(
+            StellarId(500),
+            SystemId(150),
+            &sites,
+            &owners,
+            WormholeRule::Engine,
+            &mut chance,
         );
+        assert_eq!(
+            exit_of(exit),
+            Some((500, 150)),
+            "520 is linked: the ship stays where it entered, in the player's system"
+        );
+        assert_eq!(chance.sides_asked, [4], "505, 510, 520 and 530, by ID");
     }
 
     #[test]
     fn by_the_bible_an_unlinked_wormhole_rolls_over_the_unlinked_ones_only() {
+        let (sites, owners) = (unlinked_network(), network_owners());
+        let bible = |roll| unlinked_exit(&sites, &owners, WormholeRule::UnlinkedOnly, roll);
+        assert_eq!(bible(0), (Some((510, 131)), vec![2]));
+        assert_eq!(bible(1), (Some((530, 133)), vec![2]));
+    }
+
+    #[test]
+    fn unlinked_wormhole_candidates_need_an_owner_other_than_the_players_system() {
         let sites = unlinked_network();
-        let bible = |roll| unlinked_exit(&sites, WormholeRule::UnlinkedOnly, roll);
-        assert_eq!(bible(0), (Some(510), vec![2]));
-        assert_eq!(bible(1), (Some(530), vec![2]));
+        let owners = resolver(&[(500, 130), (510, 130), (520, 132), (530, 140)]);
+        let engine = |roll| unlinked_exit(&sites, &owners, WormholeRule::Engine, roll);
+        assert_eq!(
+            engine(1),
+            (Some((530, 140)), vec![2]),
+            "510 is the player's system's; 505 has no owner"
+        );
+        assert_eq!(engine(0), (Some((500, 130)), vec![2]), "520, linked");
+        let none_elsewhere = resolver(&[(500, 130), (510, 130), (530, 130)]);
+        assert_eq!(
+            unlinked_exit(&sites, &none_elsewhere, WormholeRule::Engine, 0),
+            (None, vec![])
+        );
     }
 
     #[test]
     fn an_unlinked_wormhole_with_only_linked_ones_elsewhere_has_no_exit() {
         let sites = [
-            wormhole(500, 130, &[]),
-            wormhole(505, 130, &[]),
-            wormhole(520, 132, &[500]),
+            wormhole(500, &[]),
+            wormhole(505, &[]),
+            wormhole(520, &[500]),
         ];
+        let owners = resolver(&[(500, 130), (505, 130), (520, 132)]);
         for rule in [WormholeRule::Engine, WormholeRule::UnlinkedOnly] {
-            assert_eq!(unlinked_exit(&sites, rule, 0), (None, vec![]), "{rule:?}");
+            assert_eq!(
+                unlinked_exit(&sites, &owners, rule, 0),
+                (None, vec![]),
+                "{rule:?}"
+            );
         }
     }
 
     #[test]
     fn a_wormhole_no_system_lists_has_no_exit() {
-        let sites = [wormhole(510, 131, &[])];
+        let sites = [wormhole(510, &[])];
+        let owners = resolver(&[(510, 131)]);
         assert_eq!(
-            unlinked_exit(&sites, WormholeRule::Engine, 0),
+            unlinked_exit(&sites, &owners, WormholeRule::Engine, 0),
             (None, vec![])
         );
     }
@@ -603,7 +795,7 @@ mod tests {
         let site = GateSite {
             position: Vec2::new(-400.0, -500.0),
             exit_angle,
-            ..gate_site(1405, 129, HYPERGATE, &[])
+            ..gate_site(1405, HYPERGATE, &[])
         };
         let mut chance = Scripted::rolling(rolls);
         (emerge(&site, 6.0, &mut chance), chance.sides_asked)

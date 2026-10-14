@@ -70,6 +70,19 @@
 //! everything ([`SpaceportView::show_mission_texts`]), each taking every
 //! input until Done closes it.
 //!
+//! [`PLAYER_INFO_KEY`] (a press) asks for the player info screen
+//! ([`SpaceportView::take_player_info_request`]) from the spaceport
+//! (`_PortFilter` @0x4f18f), the bar and its hire screen, the trade
+//! center, the shipyard and its Info panel (never its name prompt), the
+//! mission computer, and every offer; the outfitter, the news, the
+//! mission info screen and the mission texts ignore it. Whoever flies the
+//! ship answers ([`SpaceportView::open_player_info`]), opening a
+//! [`PlayerInfoScreen`] laid out by the dialogs the spaceport was given
+//! ([`SpaceportView::with_player_info`]) over whatever is open, which
+//! pauses beneath it. Its jettison is taken through the spaceport
+//! ([`SpaceportView::take_player_info_jettison`]); once it closes, the
+//! screen beneath lets go of its keys.
+//!
 //! Where the stellar sells fuel, Recharge (item 4) asks for a refill,
 //! taken through the spaceport ([`SpaceportView::take_recharge`]). A
 //! refusal ([`SpaceportView::refuse_recharge`]) shows in the description
@@ -86,8 +99,8 @@ use std::time::Duration;
 use nova_sim::mission::screens::{BAR, OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENTER};
 use nova_sim::{
     ComputerRefusal, HireList, Market, MissionComputer, MissionId, MissionInfo, MissionText, News,
-    OfferPrompt, Order, OutfitOrder, Outfitter, RechargeRefusal, Reselection, SaleAlert, Service,
-    ShipId, ShipNaming, Shipyard, sells_fuel, services,
+    OfferPrompt, Order, OutfitOrder, Outfitter, PlayerInfo, RechargeRefusal, Reselection,
+    SaleAlert, Service, ShipId, ShipNaming, Shipyard, sells_fuel, services,
 };
 
 use super::bar::MISSION_INFO_KEY;
@@ -116,6 +129,9 @@ use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, DescDialog};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
+#[cfg(doc)]
+use crate::ui::player_info::PLAYER_INFO_KEY;
+use crate::ui::player_info::{PlayerInfoScreen, is_player_info_press};
 
 /// Where the reason the spaceport cannot be shown goes, its size and
 /// colour.
@@ -302,6 +318,7 @@ struct Missioning {
 
 /// The spaceport of the stellar landed on.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)] // each is one request, taken on its own
 pub struct SpaceportView {
     stellar: StellarId,
     /// The spaceport, or why it cannot be shown.
@@ -326,6 +343,19 @@ pub struct SpaceportView {
     missioning: Option<Missioning>,
     /// The mission info screen, over whatever else is open.
     info: Option<MissionInfoScreen>,
+    /// The player info screen's dialog and its Yes/No dialog, once given.
+    #[allow(clippy::type_complexity)] // Two templates.
+    player_info_dialogs: Option<(
+        Result<DialogTemplate, String>,
+        Result<DialogTemplate, String>,
+    )>,
+    /// Whether [`PLAYER_INFO_KEY`] asked for the player info screen in the
+    /// spaceport itself.
+    player_info_requested: bool,
+    /// The player info screen, over everything else.
+    player_info: Option<PlayerInfoScreen>,
+    /// Whether its Jettison was confirmed since this was last taken.
+    player_info_jettison: bool,
     /// The mission texts to show, the first shown over everything.
     texts: VecDeque<DescDialog>,
     left: bool,
@@ -409,6 +439,10 @@ impl SpaceportView {
             barkeeping: None,
             missioning: None,
             info: None,
+            player_info_dialogs: None,
+            player_info_requested: false,
+            player_info: None,
+            player_info_jettison: false,
             texts: VecDeque::new(),
             left: false,
             recharge: false,
@@ -961,6 +995,70 @@ impl SpaceportView {
         }
     }
 
+    /// The spaceport with the player info screen's dialog, `template`
+    /// (`DLOG` 1017), and its Yes/No dialog, `confirm` (`DLOG` 3002), or
+    /// why there are none.
+    #[must_use]
+    pub fn with_player_info(
+        self,
+        template: Result<DialogTemplate, String>,
+        confirm: Result<DialogTemplate, String>,
+    ) -> Self {
+        Self {
+            player_info_dialogs: Some((template, confirm)),
+            ..self
+        }
+    }
+
+    /// Whether [`PLAYER_INFO_KEY`] has asked for the player info screen
+    /// since this was last asked, wherever it is read (see the module
+    /// docs): whoever flies the ship answers with
+    /// [`SpaceportView::open_player_info`].
+    pub fn take_player_info_request(&mut self) -> bool {
+        let own = std::mem::take(&mut self.player_info_requested);
+        let landing = self
+            .missioning
+            .as_mut()
+            .is_some_and(|missioning| missioning.landing.take_player_info_request());
+        let open = match &mut self.open {
+            Some(Open::Bar(screen)) => screen.take_player_info_request(),
+            Some(Open::Trade(screen)) => screen.take_player_info_request(),
+            Some(Open::Shipyard(screen)) => screen.take_player_info_request(),
+            Some(Open::Outfitter(screen)) => screen.take_player_info_request(),
+            Some(Open::Computer(screen)) => screen.take_player_info_request(),
+            Some(Open::Service(_)) | None => false,
+        };
+        own || landing || open
+    }
+
+    /// Opens the player info screen on `info` over whatever is open, laid
+    /// out by the dialogs given ([`SpaceportView::with_player_info`]); it
+    /// says why not without them. Without the spaceport's own dialog,
+    /// nothing opens.
+    pub fn open_player_info(&mut self, info: PlayerInfo) {
+        let Ok(port) = &self.port else {
+            return;
+        };
+        let (template, confirm) = self.player_info_dialogs.clone().unwrap_or_else(|| {
+            let none = || Err("the player info dialog was not given".to_owned());
+            (none(), none())
+        });
+        let layout = template.map(|template| (template, Rc::clone(&port.metrics.0)));
+        self.player_info = Some(PlayerInfoScreen::new(layout, confirm, info, port.style));
+    }
+
+    /// The player info screen open, if it is.
+    #[must_use]
+    pub fn player_info(&self) -> Option<&PlayerInfoScreen> {
+        self.player_info.as_ref()
+    }
+
+    /// Whether the player info screen's Jettison was confirmed since this
+    /// was last taken, once: whoever flies the ship jettisons everything.
+    pub fn take_player_info_jettison(&mut self) -> bool {
+        std::mem::take(&mut self.player_info_jettison)
+    }
+
     /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
     /// since this was last asked, in the spaceport, the bar or the mission
     /// computer: whoever flies the ship answers with
@@ -1203,6 +1301,15 @@ impl Screen for SpaceportView {
     /// An open service takes every input until it closes. Otherwise every
     /// input goes to the dialog. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
+        if let Some(screen) = &mut self.player_info {
+            screen.input(input);
+            self.player_info_jettison |= screen.take_jettison();
+            if screen.closed() {
+                self.player_info = None;
+                self.release_keys();
+            }
+            return ScreenAction::None;
+        }
         if let Some(text) = self.texts.front_mut() {
             text.input(input);
             self.sounds.extend(text.take_sounds());
@@ -1245,6 +1352,10 @@ impl Screen for SpaceportView {
             missioning.info_requested = true;
             return ScreenAction::None;
         }
+        if is_player_info_press(input) && self.port.is_ok() {
+            self.player_info_requested = true;
+            return ScreenAction::None;
+        }
         let event = match &mut self.port {
             Ok(port) => {
                 let event = port.dialog.input(input);
@@ -1270,14 +1381,16 @@ impl Screen for SpaceportView {
     fn tick(&mut self, dt: Duration) {
         if self.texts.is_empty()
             && self.info.is_none()
+            && self.player_info.is_none()
             && let Some(open) = &mut self.open
         {
             open.screen_mut().tick(dt);
         }
     }
 
-    /// What is open, the spaceport's offer, the mission info screen, then
-    /// the mission text shown over them.
+    /// What is open, the spaceport's offer, the mission info screen, the
+    /// mission text shown over them, then the player info screen over
+    /// everything.
     fn draw(&self, list: &mut DrawList) {
         self.draw_below(list);
         if let Some(missioning) = &self.missioning {
@@ -1289,9 +1402,16 @@ impl Screen for SpaceportView {
         if let Some(text) = self.texts.front() {
             text.draw(list);
         }
+        if let Some(screen) = &self.player_info {
+            screen.draw(list);
+        }
     }
 
     fn cancel_pointer(&mut self) {
+        if let Some(screen) = &mut self.player_info {
+            screen.cancel_pointer();
+            return;
+        }
         if let Some(text) = self.texts.front_mut() {
             text.cancel_pointer();
             return;
@@ -1314,9 +1434,12 @@ impl Screen for SpaceportView {
         }
     }
 
-    /// Lets go of the keys the screen open holds.
+    /// Lets go of the keys the player info screen holds, or else the
+    /// screen open.
     fn release_keys(&mut self) {
-        if let Some(open) = &mut self.open {
+        if let Some(screen) = &mut self.player_info {
+            screen.release_keys();
+        } else if let Some(open) = &mut self.open {
             open.screen_mut().release_keys();
         }
     }
@@ -3796,6 +3919,216 @@ mod tests {
         view.input(&key(Key::Escape));
         assert!(view.mission_info().is_none(), "Escape closed it");
         assert!(view.mission_computer().is_some(), "and nothing below");
+    }
+
+    // Player info.
+
+    use crate::ui::player_info::{
+        PLAYER_INFO_KEY, PlayerInfoButton, PlayerInfoScreen as InfoScreen, Tab,
+    };
+    use nova_sim::PlayerInfo;
+
+    /// The player info screen's shape: stock `DLOG` 1017's items, fixed
+    /// at (0, 0).
+    fn player_info_template() -> Template {
+        let item = |x, y, w, h| ItemTemplate {
+            bounds: rect(x, y, w, h),
+            enabled: true,
+            kind: ItemSpec::User,
+        };
+        Template {
+            bounds: rect(0.0, 0.0, 413.0, 227.0),
+            placement: Placement::Fixed,
+            items: vec![
+                item(293.0, 195.0, 99.0, 25.0),
+                item(7.0, 8.0, 99.0, 25.0),
+                item(107.0, 8.0, 99.0, 25.0),
+                item(207.0, 8.0, 99.0, 25.0),
+                item(307.0, 8.0, 99.0, 25.0),
+                item(4.0, 40.0, 405.0, 141.0),
+                item(60.0, 195.0, 150.0, 25.0),
+            ],
+        }
+    }
+
+    fn pilot_info() -> PlayerInfo {
+        PlayerInfo {
+            pilot_name: "Ada".to_owned(),
+            date: String::new(),
+            system: String::new(),
+            legal_status: String::new(),
+            ship_name: String::new(),
+            ship_class: String::new(),
+            turn_rate: 0,
+            accel: 0,
+            max_speed: 0,
+            credits: 0,
+            shield: None,
+            armor: None,
+            energy: None,
+            income: None,
+            fleet: false,
+            cargo: Some("Five tons of food.".to_owned()),
+            extras: None,
+            honors: None,
+            jettisonable: true,
+            words: nova_sim::player_info::Words::STOCK,
+        }
+    }
+
+    /// `view` with the player info screen's dialogs given, its Yes/No
+    /// dialog the text's shape.
+    fn informed(view: SpaceportView) -> SpaceportView {
+        view.with_player_info(Ok(player_info_template()), Ok(text_template()))
+    }
+
+    /// Presses P on `view`, which asked nothing before: whether it asks.
+    fn asks_player_info(view: &mut SpaceportView) -> bool {
+        assert!(!view.take_player_info_request(), "nothing asked before");
+        view.input(&key(PLAYER_INFO_KEY));
+        view.take_player_info_request()
+    }
+
+    #[test]
+    fn p_asks_for_the_player_info_from_the_port_and_every_dialog_that_reads_it() {
+        let mut view = earth();
+        view.input(&Input::Key {
+            key: PLAYER_INFO_KEY,
+            pressed: true,
+            repeat: true,
+        });
+        assert!(!view.take_player_info_request(), "not a repeat");
+        assert!(asks_player_info(&mut view), "the spaceport");
+        assert!(!view.take_player_info_request(), "once");
+        let mut view = drinking_with_offers();
+        click_item(&mut view, 10);
+        assert!(asks_player_info(&mut view), "the bar");
+        view.open_hire(hirelings(1, true));
+        assert!(view.open_bar().and_then(BarScreen::hire_screen).is_some());
+        assert!(asks_player_info(&mut view), "the hire screen");
+        let mut view = trading(Ok(trade_template()));
+        click_item(&mut view, 7);
+        assert!(asks_player_info(&mut view), "the trade center");
+        let mut view = shipbuying(Ok(shipyard_template()));
+        click_item(&mut view, 9);
+        assert!(asks_player_info(&mut view), "the shipyard");
+        view.open_ship_naming(&naming());
+        assert!(!asks_player_info(&mut view), "its name prompt");
+        let mut view = missioned();
+        click_item(&mut view, 11);
+        view.open_mission_computer(Ok(offers()));
+        assert!(asks_player_info(&mut view), "the mission computer");
+        let mut view = missioned();
+        view.open_offer(offered());
+        assert!(asks_player_info(&mut view), "the spaceport's offer");
+        assert!(view.offer_dialog().is_some(), "which stays open");
+        let mut view = outfitting(Ok(outfit_template()));
+        click_item(&mut view, 8);
+        assert!(view.open_outfitter().is_some());
+        assert!(!asks_player_info(&mut view), "not the outfitter");
+    }
+
+    #[test]
+    fn p_asks_from_an_offer_over_each_venue() {
+        for venue in [BAR, TRADE_CENTER, OUTFITTER, SHIPYARD] {
+            let mut view = venues();
+            assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+            let item = match venue {
+                BAR => 10,
+                TRADE_CENTER => 7,
+                OUTFITTER => 8,
+                _ => 9,
+            };
+            click_item(&mut view, item);
+            view.tick(FIRST_OFFER_DELAY);
+            assert_eq!(view.take_offer_request(), Some(venue));
+            view.open_offer(offered());
+            assert!(view.offer_dialog().is_some(), "{venue}");
+            assert!(asks_player_info(&mut view), "{venue}");
+            assert!(view.offer_dialog().is_some(), "{venue}: still open");
+        }
+    }
+
+    #[test]
+    fn the_player_info_opens_over_whatever_is_open_and_closes_back_to_it() {
+        let mut view = informed(missioned());
+        click_item(&mut view, 11);
+        view.open_mission_computer(Ok(offers()));
+        view.open_player_info(pilot_info());
+        let screen = view.player_info().expect("open");
+        assert_eq!(screen.problem(), None, "laid out by the template given");
+        assert_eq!(screen.info(), &pilot_info());
+        let commands = drawn(&view);
+        let mut over = DrawList::new();
+        screen.draw(&mut over);
+        let over: Vec<_> = over.iter().cloned().collect();
+        assert_eq!(
+            commands[commands.len() - over.len()..],
+            over[..],
+            "drawn last"
+        );
+        view.input(&key(Key::Tab));
+        assert_eq!(view.player_info().map(InfoScreen::tab), Some(Tab::Cargo));
+        assert!(!view.take_player_info_request(), "it takes the input first");
+        view.input(&key(Key::Escape));
+        assert!(view.player_info().is_none(), "Escape closed it");
+        assert!(view.mission_computer().is_some(), "and nothing below");
+        view.input(&key(PLAYER_INFO_KEY));
+        assert!(view.take_player_info_request(), "asked again");
+    }
+
+    #[test]
+    fn without_its_dialogs_the_player_info_says_why() {
+        let mut view = missioned();
+        view.open_player_info(pilot_info());
+        assert_eq!(
+            view.player_info().and_then(InfoScreen::problem),
+            Some("the player info dialog was not given")
+        );
+        let mut broken = informed(view_of(&FakePort {
+            port: Err("no stellar".to_owned()),
+            ..catalog()
+        }));
+        broken.open_player_info(pilot_info());
+        assert!(broken.player_info().is_none(), "no spaceport, no screen");
+    }
+
+    #[test]
+    fn its_jettison_is_taken_through_the_spaceport_once() {
+        let mut view = informed(missioned());
+        view.open_player_info(pilot_info());
+        let at = |view: &SpaceportView, button| {
+            view.player_info()
+                .and_then(|screen| screen.button_bounds(button))
+                .expect("laid out")
+                .center()
+        };
+        let cargo = at(&view, PlayerInfoButton::Tab(Tab::Cargo));
+        click(&mut view, cargo);
+        let jettison = at(&view, PlayerInfoButton::Jettison);
+        click(&mut view, jettison);
+        assert!(
+            view.player_info().is_some_and(InfoScreen::confirm_open),
+            "asked"
+        );
+        assert!(!view.take_player_info_jettison());
+        view.input(&key(Key::Enter));
+        assert!(view.player_info().is_none(), "closed");
+        assert!(view.take_player_info_jettison());
+        assert!(!view.take_player_info_jettison(), "once");
+    }
+
+    #[test]
+    fn the_screen_below_waits_while_it_is_open() {
+        let mut view = informed(drinking_with_offers());
+        assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+        click_item(&mut view, 10);
+        view.open_player_info(pilot_info());
+        view.tick(Duration::from_secs(10));
+        assert_eq!(view.take_offer_request(), None, "the bar's wait held");
+        view.input(&key(Key::Escape));
+        view.tick(FIRST_OFFER_DELAY);
+        assert_eq!(view.take_offer_request(), Some(BAR));
     }
 
     #[test]

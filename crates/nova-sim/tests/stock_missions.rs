@@ -14,10 +14,11 @@ use nova_data::GameData;
 use nova_data::records::desc::Desc;
 use nova_data::records::mission::Mission;
 use nova_sim::catalog::MissionRecord;
-use nova_sim::catalog::PlaceNames;
+use nova_sim::catalog::{ListedStellar, PlaceNames};
 use nova_sim::control::SetOp;
 use nova_sim::mission::screens::SPACEPORT;
 use nova_sim::mission::{Offer, Stop, Venue, VenueOffer};
+use nova_sim::story::listers_of;
 use nova_sim::text_tags::{self, MissionTags, MissionValues, TagContext, TagNames};
 use nova_sim::{
     Bit, CommCatalog, DateAffixes, GameDate, GovtId, MissionId, NeverFires, Pilot, PilotCatalog,
@@ -104,6 +105,8 @@ fn a_new_stock_pilot_is_offered_the_tutorial_at_the_spaceport() {
 struct StockNames {
     places: PlaceNames,
     cargo: Vec<String>,
+    /// Every listed stellar, for the system a tag names each in.
+    listed: Vec<ListedStellar>,
 }
 
 impl TagNames for StockNames {
@@ -113,6 +116,12 @@ impl TagNames for StockNames {
 
     fn system_name(&self, system: SystemId) -> Option<String> {
         self.places.systems.get(&system).cloned()
+    }
+
+    /// The lowest system listing it: `_FindSystemFromStellar`'s answer
+    /// with no system visible, enough for a tag to fill.
+    fn stellar_system(&self, stellar: StellarId) -> Option<SystemId> {
+        listers_of(&self.listed, stellar).first().copied()
     }
 
     fn cargo_name(&self, cargo: u8) -> Option<String> {
@@ -135,6 +144,7 @@ fn every_stock_missions_texts_fill_every_tag_but_the_ranks() {
     let names = StockNames {
         places: data.place_names(),
         cargo: CommCatalog::string_list(&data, 4001),
+        listed: data.listed_stellars(),
     };
     let listed = data.listed_stellars();
     let stop = |at: usize| Stop {

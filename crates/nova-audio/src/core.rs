@@ -75,7 +75,8 @@ impl<A: Audio> AudioCore<A> {
             self.scene = Some(scene);
         }
         // The Preferences dialog, the boarding dialogs, the comm dialogs,
-        // a person's offer dialog and the mission dialogs pause flight
+        // a person's offer dialog, the mission dialogs and the player info
+        // screen pause flight
         // below them, and flight lets go of its keys, so the thrust is
         // forgotten as for leaving it.
         let pauses = matches!(
@@ -89,6 +90,7 @@ impl<A: Audio> AudioCore<A> {
                     | Showing::Offer
                     | Showing::MissionText
                     | Showing::MissionInfo
+                    | Showing::PlayerInfo
             )
         );
         if self.scene != Some(Showing::Flight) || pauses {
@@ -139,6 +141,9 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
                 Sound::Ui(UiSound::NewsOpened) => self.play(self.table.news_open),
                 Sound::Ui(UiSound::NewsClosed) => self.play(self.table.news_close),
+                Sound::Ui(UiSound::PlayerInfoRefused) => {
+                    self.play(self.table.player_info_refused);
+                }
                 Sound::Combat(fight) => {
                     let gain = distance_gain(fight.offset);
                     let volume = self.settings.effects_volume.amplitude() * gain;
@@ -313,6 +318,7 @@ fn is_overlay(showing: Showing) -> bool {
             | Showing::Offer
             | Showing::MissionText
             | Showing::MissionInfo
+            | Showing::PlayerInfo
     )
 }
 
@@ -338,7 +344,8 @@ fn has_music(scene: Showing) -> bool {
         | Showing::Haggle
         | Showing::Offer
         | Showing::MissionText
-        | Showing::MissionInfo => false,
+        | Showing::MissionInfo
+        | Showing::PlayerInfo => false,
     }
 }
 
@@ -558,6 +565,28 @@ mod tests {
             ],
         );
         assert_eq!(drain(&log), [play(301, 1.0), play(300, 1.0)], "the table's");
+    }
+
+    #[test]
+    fn the_player_info_refused_beeps_beep4() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Ui(UiSound::PlayerInfoRefused)],
+        );
+        assert_eq!(drain(&log), [play(153, 1.0)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            player_info_refused: Some(SoundId(302)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Ui(UiSound::PlayerInfoRefused)],
+        );
+        assert_eq!(drain(&log), [play(302, 1.0)], "the table's");
     }
 
     fn mission(id: i16, exclusive: bool) -> Sound {
@@ -1006,6 +1035,7 @@ mod tests {
             Showing::Offer,
             Showing::MissionText,
             Showing::MissionInfo,
+            Showing::PlayerInfo,
         ] {
             let (mut core, log) = engine();
             core.update(Some(Showing::Flight), &[THRUST]);

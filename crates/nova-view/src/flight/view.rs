@@ -167,7 +167,7 @@
 //!   it. The map shows the systems the pilot has explored, and the rest
 //!   unexplored. It draws the session's galaxy ([`Session::galaxy`]):
 //!   the catalog's geometry with only the visible systems, links and
-//!   active nebulae, each system coloured by its government there, rebuilt
+//!   nebulae active and explored, each system coloured by its government there, rebuilt
 //!   on the frame after each change to it; and the course as it is flown
 //!   ([`Session::course_shown`]), each hop the visible system standing
 //!   for it.
@@ -252,6 +252,21 @@
 //!   player give their help ([`Session::tick_assistance`], by the screen's
 //!   [`DisableRule`]), and each says when it is done, as a message
 //!   ([`comm_message`]).
+//! - P ([`PLAYER_INFO_KEY`], a press), outside the map, asks the router
+//!   for the player info screen over the paused flight
+//!   ([`FlightView::take_player_info_request`], with
+//!   [`FlightView::player_info`]), letting go of the flight keys, as
+//!   `_HandlePlayer` does (@0x702bf-0x703c9). During a jump, its pre-jump
+//!   stage included, it is refused with `_beepSnd[3]`
+//!   ([`UiSound::PlayerInfoRefused`], @0x7039a-0x703bd). Its Jettison
+//!   jettisons everything ([`FlightView::jettison_all`]). The original
+//!   also refuses it for 15 frames after a take-off and while the ship
+//!   is dying, which the engine does not model
+//!   (crons-news-ranks-fidelity phase 27, player-death phase 4).
+//!   `_DoPlayerInfoDialog`'s own gate (@0x5a013-0x5a064) refuses nothing
+//!   more: its `_screenFaded` holds only while a jump fades out, and
+//!   nothing sets its `_fadePending` (only `_ResetPlayer` writes it, a 0,
+//!   @0x1d7c3).
 //! - I ([`MISSION_INFO_KEY`], a press), outside the map and a jump, asks
 //!   the router for the mission info screen over the paused flight
 //!   ([`FlightView::take_mission_info_request`]), letting go of the
@@ -339,7 +354,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -366,8 +381,8 @@ use nova_sim::{
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
     HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText, News,
-    NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, StellarIff, TagNames, VenueOffer,
-    ship_layer::SlotSprites,
+    NotOffered, OfferPrompt, PayNote, PersonRules, PlayerInfo, SessionEvent, StellarIff, TagNames,
+    VenueOffer, ship_layer::SlotSprites,
 };
 use nova_sim::{DrawnBox, DrawnShips};
 
@@ -400,6 +415,7 @@ use crate::text::TextMetrics;
 use crate::time::ticks;
 use crate::ui::PlunderShown;
 use crate::ui::comm::grouped;
+use crate::ui::player_info::PLAYER_INFO_KEY;
 use crate::{
     Color, Diagnostic, DrawList, ImageKey, Input, Key, MouseButton, Point, Screen, ScreenAction,
     Sound, SoundPrefs, UiSound,
@@ -413,7 +429,7 @@ const OVERLAY_SIZE: f32 = 14.0;
 /// How far below the ship's placeholder the reason goes.
 const MESSAGE_GAP: f32 = 22.0;
 /// The help line.
-pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave";
+pub const HELP: &str = "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   Cmd-,: preferences   Esc: leave";
 /// The port's own overlays on the flight screen, which the original does
 /// not draw: developer settings, both off by default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1337,6 +1353,7 @@ impl Chance for SharedChance {
 
 /// The player's ship in flight, reading the game data from `C`.
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)] // each is one fact the screen keeps
 pub struct FlightView<C> {
     /// What the screen reads: when it is built, and on each arrival.
     catalog: C,
@@ -1381,6 +1398,9 @@ pub struct FlightView<C> {
     /// The mission info [`MISSION_INFO_KEY`] asked the screen be opened
     /// on, for the router.
     pending_mission_info: Option<MissionInfo>,
+    /// Whether [`PLAYER_INFO_KEY`] asked for the player info screen, for
+    /// the router.
+    pending_player_info: bool,
     /// The mission a person hailed or boarded just offered, for the
     /// router.
     pending_offer: Option<OfferPrompt>,
@@ -1446,7 +1466,8 @@ pub struct FlightView<C> {
     metrics: Option<Metrics>,
     /// The escort menu, shut or open.
     escort_menu: EscortMenu,
-    /// The escort menu's beeps not yet taken ([`Screen::take_sounds`]).
+    /// The interface's beeps not yet taken ([`Screen::take_sounds`]): the
+    /// escort menu's, and the player info key refused during a jump.
     ui_sounds: Vec<UiSound>,
     /// The escort menu's colours, read once.
     escort_colors: EscortMenuColors,
@@ -1495,8 +1516,9 @@ struct Redrawn {
     stellar: bool,
     /// The galaxy overlay changed: the course map was rebuilt.
     galaxy: bool,
-    /// A rebuild point changed which stellars shown are dead since it:
-    /// the stellars were drawn again.
+    /// A rebuild point changed which stellars are shown, or which shown
+    /// are dead since it: the stellars were drawn again, and read again
+    /// when they are others.
     rebuilt: bool,
 }
 
@@ -1514,6 +1536,14 @@ fn show_destroyed(scene: &mut SystemScene, session: &Session) {
         },
         session.rules().source_for(RuleKey::DeadTypeFallback),
     );
+}
+
+/// The system `session`'s player is in, read from `catalog`, with only the
+/// stellars the session shows ([`Session::stellars_shown`]), in navigation
+/// order.
+fn shown_scene(catalog: &impl SystemCatalog, session: &Session) -> SystemScene {
+    let shown: BTreeSet<StellarId> = session.stellars_shown().collect();
+    SystemScene::load_shown(catalog, session.system(), &shown)
 }
 
 /// Text metrics, shared.
@@ -1571,7 +1601,7 @@ impl<
         let (scene, sheet, sheet_ship, status_bar) = match &session {
             Ok(session) => (
                 Some({
-                    let mut scene = SystemScene::load(&catalog, session.system());
+                    let mut scene = shown_scene(&catalog, session);
                     show_destroyed(&mut scene, session);
                     scene
                 }),
@@ -1633,6 +1663,7 @@ impl<
             pending_boarding: false,
             pending_hail: None,
             pending_mission_info: None,
+            pending_player_info: false,
             pending_offer: None,
             pending_leads: Vec::new(),
             hail_options: HailOptions::default(),
@@ -1856,6 +1887,50 @@ impl<
     /// dialog.
     pub fn take_hail(&mut self) -> Option<HailView> {
         self.pending_hail.take()
+    }
+
+    /// Whether [`PLAYER_INFO_KEY`] asked for the player info screen since
+    /// this was last taken, once: the router opens it on
+    /// [`FlightView::player_info`] over the paused flight.
+    pub fn take_player_info_request(&mut self) -> bool {
+        std::mem::take(&mut self.pending_player_info)
+    }
+
+    /// What the player info screen shows, as [`Session::player_info`]
+    /// gives it from the screen's catalog; `None` for a session that
+    /// failed.
+    #[must_use]
+    pub fn player_info(&self) -> Option<PlayerInfo> {
+        let session = self.session.as_ref().ok()?;
+        Some(session.player_info(&self.catalog))
+    }
+
+    /// Presses [`PLAYER_INFO_KEY`] outside a jump: asks the router for the
+    /// player info screen, letting go of the flight keys
+    /// (`_HandlePlayer` @0x702bf-0x703c9).
+    fn ask_player_info(&mut self) -> ScreenAction {
+        self.pending_player_info = true;
+        self.held.clear();
+        ScreenAction::None
+    }
+
+    /// A key `press` during a jump, which flight ignores but for
+    /// [`PLAYER_INFO_KEY`] outside the map: refused with `_beepSnd[3]`
+    /// (@0x7039a-0x703bd).
+    fn refuse_player_info(&mut self, press: Option<Key>) -> ScreenAction {
+        if press == Some(PLAYER_INFO_KEY) && !self.map_open {
+            self.ui_sounds.push(UiSound::PlayerInfoRefused);
+        }
+        ScreenAction::None
+    }
+
+    /// Jettisons everything, mission cargo included, as the player info's
+    /// Jettison does (`_JettisonCargo(1)` @0x5a66d), saying what went.
+    pub fn jettison_all(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.jettison_cargo(true, &mut self.chance);
+        }
+        self.say_messages();
     }
 
     /// The mission info [`MISSION_INFO_KEY`] asked for the mission info
@@ -2132,6 +2207,8 @@ impl<
     /// ([`FlightView::follow_ship`]); a system entered afresh is laid out
     /// ([`FlightView::lay_out`]); otherwise a move to another stellar of
     /// the system shown draws the ship there ([`FlightView::place_ship`]);
+    /// a rebuild point that changed which stellars are shown, with no
+    /// system entered, reads the scene again with them ([`shown_scene`]);
     /// and a change to the galaxy draws the session's galaxy on the course
     /// map ([`GalaxyMap::show_galaxy`]) with the course as it is flown.
     ///
@@ -2160,7 +2237,25 @@ impl<
             self.map
                 .show_course(session.system(), &session.course_shown());
         }
+        // The explored set changes with no event: a rebuild point's share
+        // by place, `X` and a map grant between system changes.
+        if self
+            .map
+            .explored()
+            .is_none_or(|shown| !shown.iter().copied().eq(session.pilot().explored()))
+        {
+            self.map.show_explored(session.pilot().explored());
+        }
         let system = session.system();
+        let reshown = redrawn.rebuilt
+            && !redrawn.system
+            && self.scene.as_ref().is_some_and(|scene| {
+                !scene
+                    .stellars()
+                    .iter()
+                    .map(|stellar| stellar.id)
+                    .eq(session.stellars_shown())
+            });
         if redrawn.ship {
             self.follow_ship();
         }
@@ -2168,6 +2263,9 @@ impl<
             self.lay_out(system);
         } else if redrawn.stellar {
             self.place_ship();
+        }
+        if reshown && let Ok(session) = &self.session {
+            self.scene = Some(shown_scene(&self.catalog, session));
         }
         if redrawn.galaxy || redrawn.system || redrawn.rebuilt {
             self.show_destroyed();
@@ -2186,14 +2284,15 @@ impl<
         }
     }
 
-    /// Lays out `system`, the session's: its scene, read from the catalog,
-    /// the course map's course and explored systems, and the ship drawn
+    /// Lays out `system`, the session's: its scene, read from the catalog
+    /// with the stellars the session shows ([`shown_scene`]), the course
+    /// map's course and explored systems, and the ship drawn
     /// from where it is, the last system's NPCs and effects let go.
     fn lay_out(&mut self, system: SystemId) {
         let Ok(session) = &self.session else {
             return;
         };
-        self.scene = Some(SystemScene::load(&self.catalog, system));
+        self.scene = Some(shown_scene(&self.catalog, session));
         self.map.show_course(system, &session.course_shown());
         self.map.show_explored(session.pilot().explored());
         self.previous = *session.player();
@@ -3840,10 +3939,6 @@ impl<
     /// Option, are taken (see the module docs).
     fn input(&mut self, input: &Input) -> ScreenAction {
         self.cursor_input(input);
-        if self.jump.is_some() || self.preparing_jump() {
-            self.jump_input(input);
-            return ScreenAction::None;
-        }
         let press = match *input {
             Input::Key {
                 key,
@@ -3852,6 +3947,10 @@ impl<
             } => Some(key),
             _ => None,
         };
+        if self.jump.is_some() || self.preparing_jump() {
+            self.jump_input(input);
+            return self.refuse_player_info(press);
+        }
         if self.map_open {
             if press == Some(MAP_KEY) {
                 self.close_map();
@@ -3892,6 +3991,7 @@ impl<
             }
             Some(JETTISON_KEY) => self.jettison(),
             Some(MISSION_INFO_KEY) => self.ask_mission_info(),
+            Some(PLAYER_INFO_KEY) => return self.ask_player_info(),
             Some(HYPER_SELECT_KEY) => {
                 if let Ok(session) = &mut self.session {
                     session.select_next_system();
@@ -4129,7 +4229,8 @@ impl<
     }
 
     /// The session's sounds (thrust, landing, taking off and jumping),
-    /// then the fight's. The course map has no buttons that sound.
+    /// then the fight's, then the interface's (the player info refused).
+    /// The course map has no buttons that sound.
     fn take_sounds(&mut self) -> Vec<Sound> {
         let mut sounds: Vec<Sound> = self
             .session
@@ -4488,6 +4589,9 @@ mod tests {
         fan: bool,
         /// Every stellar a gate may lead to: none, by default.
         gates: Vec<GateSite>,
+        /// The gates each system lists beyond its stellars: none, by
+        /// default.
+        gate_listers: Vec<(SystemId, StellarId)>,
         /// Whether Alpha Reborn (133) exists, at Alpha Centauri's place,
         /// with no links and Proxima Reborn (141) at its centre: not by
         /// default.
@@ -4602,6 +4706,7 @@ mod tests {
             sol_interference: 0,
             sol_more: Vec::new(),
             gates: Vec::new(),
+            gate_listers: Vec::new(),
             lives: Vec::new(),
             missions: Vec::new(),
             mission_texts: Vec::new(),
@@ -4628,6 +4733,7 @@ mod tests {
             dead_frame_size: None,
             type_counts_frames: true,
             exit_angle: -1,
+            tribute: 0,
         }
     }
 
@@ -4775,8 +4881,27 @@ mod tests {
             self.mission_texts.clone()
         }
 
+        /// Every stellar of each system's [`landing_sites`], with every
+        /// system listing it, and the gates of `gate_listers`.
         fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
-            Vec::new()
+            let mut systems = vec![SystemId(130), SystemId(131)];
+            if self.onward {
+                systems.push(SystemId(132));
+            }
+            if self.reborn {
+                systems.push(SystemId(133));
+            }
+            let sites: Vec<(SystemId, Vec<LandingSite>)> = systems
+                .into_iter()
+                .map(|system| (system, self.landing_sites(system)))
+                .collect();
+            let mut listed = nova_sim::fixture::listed_stellars(
+                sites
+                    .iter()
+                    .map(|(system, sites)| (*system, sites.as_slice())),
+            );
+            nova_sim::fixture::list_also(&mut listed, self.gate_listers.iter().copied());
+            listed
         }
 
         fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {
@@ -4796,6 +4921,10 @@ mod tests {
         }
 
         fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
+            Vec::new()
+        }
+
+        fn nebulae(&self) -> Vec<nova_sim::catalog::NebulaRecord> {
             Vec::new()
         }
     }
@@ -5619,7 +5748,7 @@ mod tests {
         );
         assert_eq!(
             HELP,
-            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: preferences   Esc: leave"
+            "Arrows: fly   Space: fire   Ctrl: secondary   W: weapon   Tab: next target   R: nearest   B: board   Y: hail   Cmd-K: jettison   F/D/V/C: escorts   Alt-C: dock   E: escort menu   L: land   M: map   J: jump   \\: next system   P: player info   Cmd-,: preferences   Esc: leave"
         );
         assert_eq!((TITLE, HELP_AT), (at(16.0, 32.0), at(16.0, 744.0)));
     }
@@ -6242,7 +6371,14 @@ mod tests {
             radar_square: square,
             ..stellar(id, "Extra", at, 1)
         };
+        let mut sites = catalog().sites;
+        sites.extend([
+            site(150, (640.0, 0.0), StellarFlags::STATION),
+            site(151, (-640.0, 320.0), 0),
+            site(152, (0.0, 640.0), 0),
+        ]);
         let view = FlightView::new(FakeCatalog {
+            sites,
             sol_more: vec![
                 sized(150, (640, 0), (300, 300), true),
                 sized(151, (-640, 320), (120, 60), false),
@@ -6339,7 +6475,10 @@ mod tests {
     #[test]
     fn while_landed_the_radar_shows_only_the_player_until_take_off() {
         for every in [false, true] {
-            let view = flight_among(vec![site(129, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+            let view = flight_among(vec![
+                site(128, (0.0, -600.0), StellarFlags::CAN_LAND),
+                site(129, (6.0, -8.0), StellarFlags::CAN_LAND),
+            ]);
             let mut view = if every { every_frame(view) } else { view };
             ticks(&mut view, 3);
             let flying = radar_marks(&view);
@@ -8328,6 +8467,27 @@ mod tests {
         arrive_now(&mut view);
         assert_eq!(view.session().expect("flying").system(), SystemId(131));
         assert_eq!(explored(&view), Some(vec![SystemId(130), SystemId(131)]));
+    }
+
+    #[test]
+    fn the_course_map_shows_systems_explored_between_frames() {
+        let centred = FakeCatalog {
+            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            ..catalog()
+        };
+        let mut view = FlightView::new(centred);
+        land_now(&mut view);
+        assert!(view.transact(|pilot| {
+            pilot.explore(SystemId(131));
+        }));
+        let shown = |view: &View| view.course_map().explored().cloned();
+        assert_eq!(shown(&view), Some([SystemId(130)].into()), "not yet");
+        view.tick(TICK);
+        assert_eq!(
+            shown(&view),
+            Some([SystemId(130), SystemId(131)].into()),
+            "the next frame"
+        );
     }
 
     // The exchange and the day's chances.
@@ -13047,6 +13207,15 @@ mod tests {
     }
 
     #[test]
+    fn jettison_all_empties_the_hold_and_says_so() {
+        let mut view = carrying(0x0400, false);
+        assert!(cargo_aboard(&view) > 0);
+        view.jettison_all();
+        assert_eq!(cargo_aboard(&view), 0);
+        assert_eq!(view.message(), Some(CARGO_JETTISONED));
+    }
+
+    #[test]
     fn a_hidden_missions_cargo_jettisoned_says_the_cargo_went() {
         let mut view = carrying(0x0400, false);
         command_tap(&mut view, JETTISON_KEY, false);
@@ -14369,6 +14538,61 @@ mod tests {
         assert_eq!(view.shown_position(), Point::new(0.0, 0.0), "at Proxima");
     }
 
+    // The stellars shown.
+
+    /// The IDs of the stellars `view`'s scene draws.
+    fn scene_ids(view: &View) -> Vec<StellarId> {
+        view.scene()
+            .expect("laid out")
+            .stellars()
+            .iter()
+            .map(|stellar| stellar.id)
+            .collect()
+    }
+
+    /// The stellars `view`'s session shows.
+    fn shown_ids(view: &View) -> Vec<StellarId> {
+        view.session().expect("flying").stellars_shown().collect()
+    }
+
+    /// [`catalog`] with Sol listing Proxima (140) too: Sol, the lower and
+    /// visible, owns it, though Alpha Centauri lists it.
+    fn proxima_in_sol() -> FakeCatalog {
+        let mut catalog = catalog();
+        catalog
+            .sites
+            .push(site(140, (0.0, 0.0), StellarFlags::CAN_LAND));
+        catalog
+    }
+
+    #[test]
+    fn the_flight_scene_shows_only_the_sessions_stellars() {
+        let view = FlightView::new(FakeCatalog {
+            character: Ok(CharacterStart {
+                ship: Some(ShipId(128)),
+                systems: [Some(SystemId(131)), None, None, None],
+                ..CharacterStart::default()
+            }),
+            ..proxima_in_sol()
+        });
+        assert_eq!(system_of(&view), SystemId(131));
+        assert_eq!(shown_ids(&view), [], "Proxima is Sol's");
+        assert_eq!(scene_ids(&view), [], "Alpha Centauri lists it, unshown");
+    }
+
+    #[test]
+    fn a_rebuild_that_changes_the_stellars_shown_lays_out_the_scene_again() {
+        let mut view = FlightView::with_pilot(proxima_in_sol(), docked_pilot("Ada"));
+        view.take_landing();
+        move_to(&mut view, 131, 140);
+        view.tick(TICK);
+        assert_eq!(shown_ids(&view), [StellarId(140)], "docked at it");
+        assert_eq!(scene_ids(&view), [StellarId(140)]);
+        assert_eq!(view.take_off(), Some(StellarId(140)));
+        assert_eq!(shown_ids(&view), [], "in flight, Sol's again");
+        assert_eq!(scene_ids(&view), shown_ids(&view));
+    }
+
     // The galaxy overlay.
 
     /// Changes `view`'s galaxy by itself, not through the view.
@@ -15160,6 +15384,78 @@ mod tests {
             Vec2::ZERO,
             "the flight keys let go"
         );
+    }
+
+    #[test]
+    fn p_asks_for_the_player_info_once_letting_go_of_the_flight_keys() {
+        let mut view = flight();
+        assert!(!view.take_player_info_request());
+        view.input(&key(Key::Up, true));
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(view.take_player_info_request());
+        assert!(!view.take_player_info_request(), "once");
+        view.input(&Input::Key {
+            key: PLAYER_INFO_KEY,
+            pressed: true,
+            repeat: true,
+        });
+        assert!(!view.take_player_info_request(), "not a repeat");
+        view.tick(TICK);
+        assert_eq!(
+            view.session().expect("flying").player().velocity,
+            Vec2::ZERO,
+            "the flight keys let go"
+        );
+        assert_eq!(
+            view.player_info().map(|info| info.credits),
+            Some(view.pilot().expect("flying").cash())
+        );
+        assert!(view.take_sounds().is_empty(), "silent");
+    }
+
+    #[test]
+    fn p_during_a_jump_beeps_and_asks_nothing() {
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.session().expect("flying").preparing_jump().is_some());
+        let _ = view.take_sounds();
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(!view.take_player_info_request());
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Ui(UiSound::PlayerInfoRefused)],
+            "turning to jump"
+        );
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        jump_now(&mut view);
+        let _ = view.take_sounds();
+        view.input(&Input::Key {
+            key: PLAYER_INFO_KEY,
+            pressed: true,
+            repeat: true,
+        });
+        assert!(view.take_sounds().is_empty(), "not a repeat");
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(!view.take_player_info_request());
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Ui(UiSound::PlayerInfoRefused)],
+            "streaking"
+        );
+    }
+
+    #[test]
+    fn p_with_the_map_open_does_nothing() {
+        let mut view = flight();
+        tap(&mut view, MAP_KEY);
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(!view.take_player_info_request());
+        assert!(view.map_open());
+        assert!(HELP.contains("P: player info"), "{HELP}");
     }
 
     #[test]
@@ -15997,11 +16293,10 @@ mod tests {
     use crate::flight::jump::{ARRIVAL_FLASH_FOR, FADE_IN_FOR};
     use nova_sim::GateKind;
 
-    /// Stellar `id` in `system` at (`x`, `y`), with `flags2`, `links` and
+    /// Stellar `id` at (`x`, `y`), with `flags2`, `links` and
     /// `exit_angle`.
     fn gate_site(
         id: i16,
-        system: i16,
         (x, y): (f32, f32),
         flags2: u16,
         links: &[i16],
@@ -16013,7 +16308,6 @@ mod tests {
         }
         GateSite {
             id: StellarId(id),
-            system: SystemId(system),
             position: Vec2::new(x, y),
             flags2,
             links: slots,
@@ -16035,9 +16329,10 @@ mod tests {
                 )
             }],
             gates: vec![
-                gate_site(300, 130, (0.0, 0.0), 0x1200, &[310], 120),
-                gate_site(310, 131, (100.0, 200.0), 0x1000, &[300], 90),
+                gate_site(300, (0.0, 0.0), 0x1200, &[310], 120),
+                gate_site(310, (100.0, 200.0), 0x1000, &[300], 90),
             ],
+            gate_listers: vec![(SystemId(131), StellarId(310))],
             ..catalog()
         }
     }
@@ -16051,9 +16346,10 @@ mod tests {
                 ..site(400, (0.0, 0.0), StellarFlags::CAN_LAND)
             }],
             gates: vec![
-                gate_site(400, 130, (0.0, 0.0), 0x2200, &[], 120),
-                gate_site(410, 131, (-300.0, 40.0), 0x2000, &[], 0),
+                gate_site(400, (0.0, 0.0), 0x2200, &[], 120),
+                gate_site(410, (-300.0, 40.0), 0x2000, &[], 0),
             ],
+            gate_listers: vec![(SystemId(131), StellarId(410))],
             ..catalog()
         }
     }
@@ -16259,11 +16555,18 @@ mod tests {
     fn closing_the_map_redraws_the_radar_at_once_leaving_the_timer_and_blink() {
         // The course map, closed by its key or as Escape does; then the
         // hypergate map, cancelled and entered (`_PlayerEnterHypergate`).
+        // The gate's Sol lists Earth and the Moon too, so its radar holds
+        // them.
+        let gated_sol = || {
+            let mut gated = gated();
+            gated.sites.extend(catalog().sites);
+            gated
+        };
         for (catalog, pick, by_key) in [
             (catalog(), false, true),
             (catalog(), false, false),
-            (gated(), false, true),
-            (gated(), true, true),
+            (gated_sol(), false, true),
+            (gated_sol(), true, true),
         ] {
             let gate = !catalog.gates.is_empty();
             let mut view = FlightView::new(catalog);
@@ -16408,6 +16711,7 @@ mod tests {
         let mut catalog = FakeCatalog {
             sites: holed().sites,
             gates: holed().gates,
+            gate_listers: holed().gate_listers,
             ..trafficked(&[130, 131], 0, 129, 3)
         };
         catalog.dudes[0].1.govt = Some(GovtId(140));

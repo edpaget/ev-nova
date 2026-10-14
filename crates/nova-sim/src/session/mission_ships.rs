@@ -253,10 +253,12 @@ impl Session {
         active: &ActiveMission,
         chance: &mut dyn Chance,
     ) -> SpecialShips {
+        let held =
+            |stop: Option<crate::mission::Stop>| stop.map(|stop| self.holder_of(stop.stellar));
         let facts = ShipFacts {
             player_system: self.pilot.system,
-            destination: active.destination,
-            return_to: active.return_to,
+            destination: held(active.destination),
+            return_to: held(active.return_to),
         };
         SpecialShips::at_accept(
             &record.ships,
@@ -1160,7 +1162,7 @@ pub(super) mod tests {
     use crate::gate::GateKind;
     use crate::message::SimMessage;
     use crate::mission::FailedBy;
-    use crate::mission::aux::AuxShips;
+    use crate::mission::aux_ships::AuxShips;
     use crate::session::mission_screens::MissionTextKind;
     use crate::testkit::{FAST, FakePilotCatalog, catalog, jump, land_now, mission, ship};
     use crate::traffic::npc::{Mode, Npc};
@@ -1386,6 +1388,87 @@ pub(super) mod tests {
         catalog.missions[0].on_accept = crate::control::Script::parse("M131");
         let session = accepted(&catalog);
         assert_eq!(ships_of(&session).system, ShipSystem::At(SystemId(130)));
+    }
+
+    #[test]
+    fn mission_ships_of_minus_4_go_to_the_returns_holder_at_accept_rescued_included() {
+        // 128, lower, shadows the player's 130 at its place: 130 owns
+        // nothing, and holds its own 128 by the rescue.
+        let held_at = |syst| {
+            let mut catalog = ships_catalog(shipping(syst, 0));
+            catalog
+                .star_map
+                .push(crate::testkit::star(128, (0.0, 0.0), &[]));
+            let mission = &mut catalog.missions[0];
+            mission.avail_stel = 128;
+            mission.travel_stel = 140;
+            mission.return_stel = 128;
+            ships_of(&accepted(&catalog)).system
+        };
+        assert_eq!(
+            held_at(-4),
+            ShipSystem::At(SystemId(130)),
+            "the return's rescued holder (@0xa1031-0xa104d)"
+        );
+        assert_eq!(
+            held_at(-3),
+            ShipSystem::At(SystemId(131)),
+            "the destination's owner"
+        );
+    }
+
+    /// [`accepted`], with 131 hidden between the offer and the accept.
+    fn accepted_with_131_hidden(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog)
+            .expect("starts")
+            .with_strings(Rc::new(Names));
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        settle(&mut session, catalog);
+        assert!(session.change_galaxy(catalog, |overlay| {
+            overlay.set_visible(SystemId(131), Some(false));
+        }));
+        assert_eq!(
+            session.accept_mission(MissionId(140), &mut NeverFires),
+            Ok(0)
+        );
+        settle(&mut session, catalog);
+        session
+    }
+
+    #[test]
+    fn mission_ships_of_minus_4_go_nowhere_for_a_return_no_system_holds_at_accept() {
+        let mut catalog = ships_catalog(shipping(-4, 0));
+        catalog.missions[0].return_stel = 140;
+        let session = accepted_with_131_hidden(&catalog);
+        let stored = session.pilot().missions().get(0).expect("held").return_to;
+        assert_eq!(
+            stored.and_then(|stop| stop.system),
+            Some(SystemId(131)),
+            "the offer stored 131, which held 140 then"
+        );
+        assert_eq!(
+            ships_of(&session).system,
+            ShipSystem::Nowhere,
+            "only the hidden 131 lists 140, and the player's 130 does not: no holder (@0xa1031-0xa104d)"
+        );
+    }
+
+    #[test]
+    fn mission_ships_of_minus_3_go_nowhere_for_a_destination_no_system_holds_and_no_return() {
+        let mut catalog = ships_catalog(shipping(-3, 0));
+        catalog.missions[0].travel_stel = 140;
+        let session = accepted_with_131_hidden(&catalog);
+        let stored = session.pilot().missions().get(0).expect("held").destination;
+        assert_eq!(
+            stored.and_then(|stop| stop.system),
+            Some(SystemId(131)),
+            "the offer stored 131, which held 140 then"
+        );
+        assert_eq!(
+            ships_of(&session).system,
+            ShipSystem::Nowhere,
+            "140 has no holder now, and no return to fall back on"
+        );
     }
 
     // Setup.

@@ -17,11 +17,20 @@
 //!   government is derelict or ignored when attacked (`Flags` 0x0020); or
 //!   W is neither allied with the victim nor nosy (`Flags` 0x0002). For
 //!   an independent W, only the derelict, 0x0020 and xenophobe tests
-//!   apply; for an independent victim, only a nosy W answers. There is
-//!   no limit on range. The original calls the same `_DoGoodSamaritan`
+//!   apply; for an independent victim, only a nosy W answers. A W whose
+//!   government blesses the player with peace (rank `Flags` 0x0100,
+//!   [`Surroundings::blessed`]: `_PlayerBlessedByGovt(W's govt, 0)`
+//!   @0x829bf) never answers, under either reading of `rank_govt_reach`
+//!   and `blessing_refresh`; but the original reads the blessing only for
+//!   a governed victim (an independent one jumps past it, @0x82919 to
+//!   0x82aa0), so a nosy blessing W still answers an attack on an
+//!   independent. (The attacker is always the player here: both callers
+//!   pass it, so the original's clause for a ship the player leads,
+//!   @0x829a0-0x829b2, never arises.) There is no limit on range. The original calls the same `_DoGoodSamaritan`
 //!   when the player boards a ship, after the crime
 //!   (`_HandlePlayerBoardAttempt`), so the session queues a strike of no
-//!   damage for a boarding ([`Session::board`](crate::Session::board)).
+//!   damage for a boarding ([`Session::board`](crate::Session::board)),
+//!   which the blessing holds back alike.
 //!   The Bible's "piracy police" are the interceptors alone: "acts as
 //!   'piracy police' by attacking any ship that fires on or attempts to
 //!   board another, non-enemy ship" (`düde` AI type 4). Which applies is
@@ -139,6 +148,9 @@ fn good_samaritan(npc: &Npc, victim: ShipRef, around: &Surroundings) -> bool {
     let nosy = govts.flag(own, NOSY);
     if theirs.is_none() {
         return nosy;
+    }
+    if around.blessed(own) {
+        return false;
     }
     if govts.flag(theirs, DERELICT) || govts.flag(theirs, IGNORED_WHEN_ATTACKED) {
         return false;
@@ -560,6 +572,81 @@ mod tests {
             samaritan(&relations(0, NOSY), None, AiType::Warship, None),
             Reaction::default(),
             "an independent is not nosy"
+        );
+    }
+
+    // The blessing.
+
+    /// [`samaritan`] for a warship W, the player blessed by `blessing`,
+    /// its strike of `damage`.
+    fn samaritan_blessed(
+        govts: &Governments,
+        w: Option<GovtId>,
+        victim: Option<GovtId>,
+        blessing: crate::rank::Blessing,
+        damage: f32,
+    ) -> Reaction {
+        let npcs = [
+            ship(1, victim, AiType::WimpyTrader, 0.0),
+            ship(2, w, AiType::Warship, 3000.0),
+        ];
+        let around = Surroundings {
+            govts,
+            player: Some(crate::ai::PlayerSide {
+                blessing,
+                ..crate::ai::fixture::player(0.0, -100.0)
+            }),
+            ..Surroundings::new(&[], &npcs)
+        };
+        let hit = Strike {
+            damage,
+            ..strike(n(1), ShipRef::Player)
+        };
+        answer(&npcs[1], &hit, &around, RuleSource::Engine)
+    }
+
+    #[test]
+    fn a_blessing_government_is_no_good_samaritan() {
+        let govts = relations(0, 0);
+        let blessed = crate::ai::fixture::blessing_of(POLICE);
+        let unblessed = crate::rank::Blessing::NONE;
+        for (damage, case) in [(12.0, "a shot"), (0.0, "a boarding")] {
+            assert_eq!(
+                samaritan_blessed(&govts, Some(POLICE), Some(TRADERS), unblessed, damage),
+                ANSWERS,
+                "{case}: unblessed"
+            );
+            assert_eq!(
+                samaritan_blessed(&govts, Some(POLICE), Some(TRADERS), blessed, damage),
+                Reaction::default(),
+                "{case}"
+            );
+            assert_eq!(
+                samaritan_blessed(
+                    &govts,
+                    Some(POLICE),
+                    Some(TRADERS),
+                    crate::ai::fixture::blessing_of(TRADERS),
+                    damage
+                ),
+                ANSWERS,
+                "{case}: the victim's blessing is not W's"
+            );
+        }
+    }
+
+    #[test]
+    fn a_nosy_blessing_warship_still_answers_an_attack_on_an_independent() {
+        let govts = relations(0, NOSY);
+        let blessed = crate::ai::fixture::blessing_of(NEUTRAL);
+        assert_eq!(
+            samaritan_blessed(&govts, Some(NEUTRAL), None, blessed, 12.0),
+            ANSWERS
+        );
+        assert_eq!(
+            samaritan_blessed(&govts, Some(NEUTRAL), Some(TRADERS), blessed, 12.0),
+            Reaction::default(),
+            "a governed victim"
         );
     }
 }

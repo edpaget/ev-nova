@@ -13,7 +13,6 @@ use crate::govt::{
 use crate::hyperspace::{Places, StarMap};
 
 use super::goals::ShipGoal;
-use super::offer::Stop;
 use super::select::GovtCode;
 
 /// Where an active mission's special ships are: its `ShipSyst` as
@@ -362,15 +361,18 @@ impl SpecialShips {
 }
 
 /// What a `ShipSyst` code is resolved from at accept: the player's
-/// system then, and the mission's stops as its offer drew them.
+/// system then, and the systems holding the mission's stops' stellars
+/// then.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShipFacts {
     /// The player's system as the mission is accepted.
     pub player_system: SystemId,
-    /// Where it goes.
-    pub destination: Option<Stop>,
-    /// Where it is completed.
-    pub return_to: Option<Stop>,
+    /// Where it goes: `None` with no destination, else the system that
+    /// holds its stellar now, `Some(None)` when none does.
+    pub destination: Option<Option<SystemId>>,
+    /// Where it is completed: `None` with no return, else the system that
+    /// holds its stellar now, `Some(None)` when none does.
+    pub return_to: Option<Option<SystemId>>,
 }
 
 /// The systems a random `ShipSyst` code draws from, beside the tests
@@ -423,8 +425,14 @@ const FOLLOWS_PLAYER: i16 = -6;
 /// `govts`, drawing on `chance`:
 ///
 /// - -1: the player's system.
-/// - -3: the destination's system, or with no destination the return's;
-///   -4: the return's. Nowhere when there is none.
+/// - -3: the system that holds the destination's stellar, or with no
+///   destination the return's; -4: the return's. Each is the stellar's
+///   owner (+0x14) read live at accept, the rescue's included, with no
+///   `_FindSystemFromStellar` fallback: nowhere when no system holds it,
+///   and with a destination that no system holds, -3 never falls to the
+///   return (@0xa0fb3-0xa105f). The original also writes a crashlog line
+///   for -3 and -4 with no stellar (@0xa0fec-0xa1010, @0xa1066-0xa106d),
+///   left out as it changes no state.
 /// - -6: wherever the player is.
 /// - 128-9998: that system.
 /// - -2 and 9999-31999: one visible system not at the player's place
@@ -446,14 +454,12 @@ pub fn select_ship_system(
     govts: &Governments,
     chance: &mut dyn Chance,
 ) -> ShipSystem {
-    let system_of = |stop: Option<Stop>| stop.and_then(|stop| stop.system);
+    let at =
+        |held: Option<Option<SystemId>>| held.flatten().map_or(ShipSystem::Nowhere, ShipSystem::At);
     let kind = match code {
         -1 | 32_000.. => return ShipSystem::At(facts.player_system),
-        -3 => {
-            let stop = facts.destination.or(facts.return_to);
-            return system_of(stop).map_or(ShipSystem::Nowhere, ShipSystem::At);
-        }
-        -4 => return system_of(facts.return_to).map_or(ShipSystem::Nowhere, ShipSystem::At),
+        -3 => return at(facts.destination.or(facts.return_to)),
+        -4 => return at(facts.return_to),
         FOLLOWS_PLAYER => return ShipSystem::FollowsPlayer,
         -5 => return drawn(map.listed_links(facts.player_system), chance),
         128..=9998 => return ShipSystem::At(SystemId(code)),
@@ -490,7 +496,7 @@ fn drawn(systems: &[SystemId], chance: &mut dyn Chance) -> ShipSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{GovtRecord, StarSystem, StellarId};
+    use crate::catalog::{GovtRecord, StarSystem};
     use crate::hyperspace::CoLocated;
     use crate::testkit::{Draws, govt};
 
@@ -584,18 +590,11 @@ mod tests {
         )
     }
 
-    fn stop(stellar: i16, system: Option<i16>) -> Stop {
-        Stop {
-            stellar: StellarId(stellar),
-            system: system.map(SystemId),
-        }
-    }
-
     fn facts() -> ShipFacts {
         ShipFacts {
             player_system: SystemId(130),
-            destination: Some(stop(150, Some(132))),
-            return_to: Some(stop(151, Some(134))),
+            destination: Some(Some(SystemId(132))),
+            return_to: Some(Some(SystemId(134))),
         }
     }
 
@@ -641,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn minus_3_takes_the_return_with_no_destination_and_both_are_nowhere_without_a_system() {
+    fn minus_3_takes_the_return_with_no_destination_and_both_are_nowhere_without_a_holder() {
         let returning = ShipFacts {
             destination: None,
             ..facts()
@@ -654,13 +653,31 @@ mod tests {
         };
         assert_eq!(resolved_with(-3, &nowhere, &[]).0, ShipSystem::Nowhere);
         assert_eq!(resolved_with(-4, &nowhere, &[]).0, ShipSystem::Nowhere);
-        let hidden = ShipFacts {
-            destination: Some(stop(150, None)),
-            return_to: Some(stop(151, None)),
+        let unheld = ShipFacts {
+            destination: Some(None),
+            return_to: Some(None),
             ..facts()
         };
-        assert_eq!(resolved_with(-3, &hidden, &[]).0, ShipSystem::Nowhere);
-        assert_eq!(resolved_with(-4, &hidden, &[]).0, ShipSystem::Nowhere);
+        assert_eq!(resolved_with(-3, &unheld, &[]).0, ShipSystem::Nowhere);
+        assert_eq!(
+            resolved_with(-4, &unheld, &[]).0,
+            ShipSystem::Nowhere,
+            "an owner of -1 is nowhere, with no _FindSystemFromStellar fallback (@0xa1031-0xa105f)"
+        );
+    }
+
+    #[test]
+    fn minus_3_is_nowhere_when_its_destination_has_no_holder_though_a_return_has_one() {
+        let facts = ShipFacts {
+            destination: Some(None),
+            ..facts()
+        };
+        assert_eq!(
+            resolved_with(-3, &facts, &[]).0,
+            ShipSystem::Nowhere,
+            "a travel stellar is there, so the return is never read (@0xa0fc8-0xa0fd0)"
+        );
+        assert_eq!(resolved_with(-4, &facts, &[]).0, at(134));
     }
 
     #[test]

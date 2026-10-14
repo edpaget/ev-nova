@@ -230,6 +230,7 @@ use nova_view::text::TextMetrics;
 use nova_view::ui::comm::{COMM_DIALOG, HAGGLE_DIALOG};
 use nova_view::ui::desc::DESC_DIALOG;
 use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome};
+use nova_view::ui::player_info::{PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG};
 use nova_view::ui::plunder::{ASSIGNMENT_DIALOG, PLUNDER_DIALOG};
 use nova_view::ui::prefs::PREFS_DIALOG;
 use nova_view::ui::quantity::QUANTITY_DIALOG;
@@ -254,6 +255,10 @@ pub const MENU_HINT_WITHOUT_DIALOGS: &str = "Tab: ships / galaxy map";
 pub const HINT_AT: Point = Point::new(16.0, 8.0);
 pub const HINT_SIZE: f32 = 14.0;
 pub const HINT_COLOR: Color = Color::DIM;
+
+/// The key that, with Command held, opens the Preferences on every side:
+/// the Mac's Command+comma.
+pub const PREFERENCES_KEY: Key = Key::Char(',');
 
 /// The About text's `dësc`.
 pub const ABOUT_TEXT: i16 = 32767;
@@ -363,6 +368,10 @@ pub struct AppScreen {
     /// The mission texts and the mission info screen over flight, while
     /// one is open.
     missions: Option<FlightMissionDialogs>,
+    /// The player info screen over flight, while it is open.
+    player_info: Option<PlayerInfoScreen>,
+    /// Whether Command is held, for Command+comma.
+    command_held: bool,
 }
 
 /// The main menu, the metrics its screens' text is laid out by when there
@@ -441,6 +450,8 @@ impl AppScreen {
             haggle: None,
             offer: None,
             missions: None,
+            player_info: None,
+            command_held: false,
         }
     }
 
@@ -600,6 +611,12 @@ impl AppScreen {
     #[must_use]
     pub fn offer(&self) -> Option<&OfferDialog> {
         self.offer.as_ref()
+    }
+
+    /// The player info screen open over flight, if it is.
+    #[must_use]
+    pub fn flight_player_info(&self) -> Option<&PlayerInfoScreen> {
+        self.player_info.as_ref()
     }
 
     /// The mission text shown over flight, if any.
@@ -799,6 +816,9 @@ impl AppScreen {
         if self.preferences.is_some() {
             return Showing::Preferences;
         }
+        if self.player_info.is_some() {
+            return Showing::PlayerInfo;
+        }
         if self.haggle.is_some() {
             return Showing::Haggle;
         }
@@ -995,6 +1015,9 @@ impl AppScreen {
         if let Some(dialog) = &mut self.preferences {
             return Some(dialog);
         }
+        if let Some(screen) = &mut self.player_info {
+            return Some(screen);
+        }
         if let Some(dialog) = &mut self.haggle {
             return Some(dialog);
         }
@@ -1074,6 +1097,13 @@ impl AppScreen {
         if let Some(prompt) = self.flight.as_mut().and_then(FlightView::take_offer) {
             self.open_offer(prompt);
         }
+        if self
+            .flight
+            .as_mut()
+            .is_some_and(FlightView::take_player_info_request)
+        {
+            self.open_flight_player_info();
+        }
         if let Some(info) = self
             .flight
             .as_mut()
@@ -1131,6 +1161,51 @@ impl AppScreen {
         ScreenAction::None
     }
 
+    /// Opens the player info screen over flight, which pauses, and over
+    /// any offer dialog open there, on flight's player info: laid out by
+    /// the interface file's `DLOG` 1017 and its Yes/No dialog, 3002, or
+    /// saying why not. The screen below lets go of its keys. With no
+    /// dialogs, nothing opens, as the mission info does not.
+    fn open_flight_player_info(&mut self) {
+        let Some(dialogs) = &self.dialogs else {
+            return;
+        };
+        let Some(info) = self.flight.as_ref().and_then(FlightView::player_info) else {
+            return;
+        };
+        let layout = dialogs
+            .resources
+            .dialog_template(PLAYER_INFO_DIALOG)
+            .map(|template| (template, Rc::clone(&dialogs.metrics)));
+        let confirm = dialogs.resources.dialog_template(YES_NO_DIALOG);
+        self.cancel_pointer();
+        self.release_keys();
+        self.player_info = Some(PlayerInfoScreen::new(
+            layout,
+            confirm,
+            info,
+            self.data.button_style(),
+        ));
+    }
+
+    /// The player info screen's input over flight: a confirmed Jettison
+    /// jettisons everything through flight. Once it closes, the screen
+    /// below lets go of its keys.
+    fn player_info_input(&mut self, input: &Input) -> ScreenAction {
+        let screen = self.player_info.as_mut().expect("open");
+        screen.input(input);
+        let jettison = screen.take_jettison();
+        let closed = screen.closed();
+        if jettison && let Some(flight) = &mut self.flight {
+            flight.jettison_all();
+        }
+        if closed {
+            self.player_info = None;
+            self.release_keys();
+        }
+        ScreenAction::None
+    }
+
     /// Opens the offer dialog on `prompt`, a person's mission offered on
     /// its hail or boarding, over flight, which pauses: the interface
     /// file's, or, without it or the metrics to lay it out, the dialog's
@@ -1152,6 +1227,10 @@ impl AppScreen {
     fn offer_input(&mut self, input: &Input) -> ScreenAction {
         let dialog = self.offer.as_mut().expect("open");
         dialog.input(input);
+        if dialog.take_player_info_request() {
+            self.open_flight_player_info();
+            return ScreenAction::None;
+        }
         let Some(choice) = dialog.take_choice() else {
             return ScreenAction::None;
         };
@@ -1460,6 +1539,8 @@ impl AppScreen {
                     template_of(DESC_DIALOG),
                 );
         }
+        spaceport =
+            spaceport.with_player_info(template_of(PLAYER_INFO_DIALOG), template_of(YES_NO_DIALOG));
         self.spaceport = Some(spaceport);
         self.switch_to(Side::Spaceport);
     }
@@ -1890,7 +1971,27 @@ impl AppScreen {
             return ScreenAction::None;
         }
         self.serve_offers();
+        self.serve_player_info();
         ScreenAction::None
+    }
+
+    /// The spaceport's player info screen: asked for, it opens on
+    /// flight's player info; its Jettison drops everything through
+    /// flight, which changes the exchange, so the shops are handed back,
+    /// and the session makes a save due.
+    fn serve_player_info(&mut self) {
+        let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
+            return;
+        };
+        if spaceport.take_player_info_request()
+            && let Some(info) = flight.player_info()
+        {
+            spaceport.open_player_info(info);
+        }
+        if spaceport.take_player_info_jettison() {
+            flight.jettison_all();
+            refresh_spaceport(spaceport, flight);
+        }
     }
 
     /// The venues' mission offers (`_OfferMissionFromPort` @0xa369e): a
@@ -1929,13 +2030,51 @@ impl AppScreen {
         }
     }
 
+    /// Whether `input` is a Preferences key, which the router takes, with
+    /// dialogs to open them by: Command+comma on every side, as the
+    /// original's app menu opens them (`_PrefAEVTHandler` @0x56181), and
+    /// P on the main menu, the ship browser and the galaxy viewer, away
+    /// from flight and the spaceport, where P is the player info key. A
+    /// press opens them; its repeats and release do nothing.
+    fn preferences_key(&mut self, input: &Input) -> bool {
+        let Input::Key {
+            key,
+            pressed,
+            repeat,
+        } = *input
+        else {
+            return false;
+        };
+        let away = matches!(self.side, Side::MainMenu | Side::Ships | Side::Galaxy);
+        let taken =
+            (key == PREFERENCES_KEY && self.command_held) || (key == Key::Char('p') && away);
+        if !taken || self.dialogs.is_none() {
+            return false;
+        }
+        if pressed && !repeat {
+            self.open_preferences();
+        }
+        true
+    }
+
     /// Routes one input, as [`Screen::input`] describes.
     fn route(&mut self, input: &Input) -> ScreenAction {
+        if let Input::Key {
+            key: Key::Command,
+            pressed,
+            ..
+        } = *input
+        {
+            self.command_held = pressed;
+        }
         if self.about.is_some() {
             return self.about_input(input);
         }
         if self.preferences.is_some() {
             return self.preferences_input(input);
+        }
+        if self.player_info.is_some() {
+            return self.player_info_input(input);
         }
         if self.haggle.is_some() {
             return self.haggle_input(input);
@@ -1970,16 +2109,7 @@ impl AppScreen {
         {
             return self.spaceport_input(input);
         }
-        if let Input::Key {
-            key: Key::Char('p'),
-            pressed,
-            repeat,
-        } = *input
-            && self.dialogs.is_some()
-        {
-            if pressed && !repeat {
-                self.open_preferences();
-            }
+        if self.preferences_key(input) {
             return ScreenAction::None;
         }
         match self.side {
@@ -2172,6 +2302,9 @@ impl Screen for AppScreen {
         if let Some(dialog) = &self.offer {
             dialog.draw(list);
         }
+        if let Some(screen) = &self.player_info {
+            screen.draw(list);
+        }
         if let Some(dialogs) = &self.missions {
             dialogs.draw(list);
         }
@@ -2194,6 +2327,7 @@ impl Screen for AppScreen {
     }
 
     fn release_keys(&mut self) {
+        self.command_held = false;
         match self.overlay_mut() {
             Some(overlay) => overlay.release_keys(),
             None => self.shown_mut().release_keys(),
@@ -3371,6 +3505,12 @@ pub(super) mod tests {
             if id == NEW_PILOT_DIALOG {
                 return Ok(new_pilot_template());
             }
+            if id == PLAYER_INFO_DIALOG {
+                return Ok(player_info_template());
+            }
+            if id == YES_NO_DIALOG {
+                return Ok(yes_no_template());
+            }
             if id != DESC_DIALOG {
                 return Err(format!("no DLOG {id}"));
             }
@@ -3383,6 +3523,51 @@ pub(super) mod tests {
                     item(10.0, 10.0, 100.0, 36.0, ItemSpec::User),
                 ],
             })
+        }
+    }
+
+    /// "Player Info" (1017), as stock lays it out: 413 x 227, centred,
+    /// with Done (1), the tabs (2-5), the content box (6) and Jettison
+    /// (7).
+    fn player_info_template() -> DialogTemplate {
+        let item = |x, y, w, h| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind: ItemSpec::User,
+        };
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 413.0, 227.0),
+            placement: Placement::Center,
+            items: vec![
+                item(293.0, 195.0, 99.0, 25.0),
+                item(7.0, 8.0, 99.0, 25.0),
+                item(107.0, 8.0, 99.0, 25.0),
+                item(207.0, 8.0, 99.0, 25.0),
+                item(307.0, 8.0, 99.0, 25.0),
+                item(4.0, 40.0, 405.0, 141.0),
+                item(60.0, 195.0, 150.0, 25.0),
+            ],
+        }
+    }
+
+    /// `YesNo` (3002), as stock lays it out: 355 x 109, centred, with OK
+    /// (1), the question (3) and Cancel (5).
+    fn yes_no_template() -> DialogTemplate {
+        let item = |x, y, w, h, kind| ItemTemplate {
+            bounds: Bounds::at(Point::new(x, y), w, h),
+            enabled: true,
+            kind,
+        };
+        DialogTemplate {
+            bounds: Bounds::at(Point::new(0.0, 0.0), 355.0, 109.0),
+            placement: Placement::Center,
+            items: vec![
+                item(263.0, 75.0, 70.0, 20.0, ItemSpec::Button("OK".into())),
+                item(277.0, 131.0, 68.0, 30.0, ItemSpec::Picture(129)),
+                item(52.0, 5.0, 295.0, 50.0, ItemSpec::StaticText(String::new())),
+                item(7.0, 5.0, 32.0, 32.0, ItemSpec::Picture(130)),
+                item(181.0, 75.0, 70.0, 20.0, ItemSpec::Button("Cancel".into())),
+            ],
         }
     }
 
@@ -3985,8 +4170,29 @@ pub(super) mod tests {
 
     const PREFS: Key = Key::Char('p');
 
+    /// Presses Command+comma, letting go of Command once it is done.
+    fn command_comma(screen: &mut AppScreen) {
+        screen.input(&key(Key::Command, true));
+        assert_eq!(
+            screen.input(&key(PREFERENCES_KEY, true)),
+            ScreenAction::None
+        );
+        screen.input(&key(PREFERENCES_KEY, false));
+        screen.input(&key(Key::Command, false));
+    }
+
+    /// Opens the Preferences as the player does on the side shown: P on
+    /// the menu, the ship browser and the galaxy viewer, Command+comma in
+    /// flight and the spaceport.
     fn open_prefs(screen: &mut AppScreen) {
-        assert_eq!(screen.input(&key(PREFS, true)), ScreenAction::None);
+        if matches!(
+            screen.showing(),
+            Showing::Flight | Showing::FlightMap | Showing::Spaceport
+        ) {
+            command_comma(screen);
+        } else {
+            assert_eq!(screen.input(&key(PREFS, true)), ScreenAction::None);
+        }
         assert_eq!(screen.showing(), Showing::Preferences);
         assert_eq!(screen.now_showing(), Some(Showing::Preferences));
     }
@@ -4021,34 +4227,65 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn p_opens_the_preferences_over_ships_galaxy_flight_its_map_and_the_spaceport() {
+    fn p_opens_the_preferences_over_ships_and_galaxy() {
         let mut screen = with_dialogs(data());
         assert!(screen.preferences().is_none());
-        open_prefs(&mut screen);
+        screen.input(&key(PREFS, true));
+        assert_eq!(screen.showing(), Showing::Preferences);
         screen.input(&key(Key::Escape, true));
         assert_eq!(screen.showing(), Showing::ShipBrowser);
 
         screen.input(&key(Key::Tab, true));
-        open_prefs(&mut screen);
+        screen.input(&key(PREFS, true));
+        assert_eq!(screen.showing(), Showing::Preferences);
         screen.input(&key(Key::Escape, true));
         assert_eq!(screen.showing(), Showing::GalaxyMap);
+    }
+
+    #[test]
+    fn command_comma_opens_the_preferences_on_every_side() {
+        let mut screen = with_dialogs(data());
+        command_comma(&mut screen);
+        assert_eq!(screen.showing(), Showing::Preferences, "the ship browser");
+        screen.input(&key(Key::Escape, true));
 
         fly(&mut screen);
-        open_prefs(&mut screen);
+        command_comma(&mut screen);
+        assert_eq!(screen.showing(), Showing::Preferences, "flight");
         screen.input(&key(Key::Escape, true));
         assert_eq!(screen.showing(), Showing::Flight, "Escape only closes it");
 
         screen.input(&key(MAP, true));
-        open_prefs(&mut screen);
+        command_comma(&mut screen);
+        assert_eq!(screen.showing(), Showing::Preferences, "over the map");
         screen.input(&key(Key::Enter, true));
         assert_eq!(screen.showing(), Showing::FlightMap);
         screen.input(&key(Key::Escape, true));
 
         land_twice(&mut screen);
         assert_eq!(screen.showing(), Showing::Spaceport);
-        open_prefs(&mut screen);
+        command_comma(&mut screen);
+        assert_eq!(screen.showing(), Showing::Preferences, "the spaceport");
         screen.input(&key(Key::Escape, true));
         assert_eq!(screen.showing(), Showing::Spaceport, "still landed");
+    }
+
+    #[test]
+    fn a_comma_without_command_or_after_it_is_let_go_opens_nothing() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        screen.input(&key(PREFERENCES_KEY, true));
+        assert_eq!(screen.showing(), Showing::Flight, "no Command");
+        screen.input(&key(Key::Command, true));
+        screen.input(&held(PREFERENCES_KEY));
+        assert_eq!(screen.showing(), Showing::Flight, "a repeat");
+        screen.input(&key(Key::Command, false));
+        screen.input(&key(PREFERENCES_KEY, true));
+        assert_eq!(screen.showing(), Showing::Flight, "Command let go");
+        screen.input(&key(Key::Command, true));
+        screen.release_keys();
+        screen.input(&key(PREFERENCES_KEY, true));
+        assert_eq!(screen.showing(), Showing::Flight, "the window lost focus");
     }
 
     #[test]
@@ -4183,6 +4420,10 @@ pub(super) mod tests {
     #[test]
     fn a_p_repeat_or_release_opens_nothing_and_reaches_nothing() {
         let mut screen = with_dialogs(data());
+        for input in [held(PREFS), key(PREFS, false)] {
+            assert_eq!(screen.input(&input), ScreenAction::None);
+            assert_eq!(screen.showing(), Showing::ShipBrowser, "{input:?}");
+        }
         fly(&mut screen);
         for input in [held(PREFS), key(PREFS, false)] {
             assert_eq!(screen.input(&input), ScreenAction::None);
@@ -4202,9 +4443,15 @@ pub(super) mod tests {
         assert_eq!(screen.showing(), Showing::ShipBrowser);
         assert_eq!(drawn(&screen), before);
         fly(&mut screen);
-        screen.input(&key(PREFS, true));
+        command_comma(&mut screen);
         assert_eq!(screen.showing(), Showing::Flight);
         assert!(screen.preferences().is_none());
+        screen.input(&key(PREFS, true));
+        assert_eq!(screen.showing(), Showing::Flight, "P is the player info");
+        assert!(
+            screen.flight_player_info().is_none(),
+            "no dialogs to show it"
+        );
     }
 
     #[test]
@@ -4343,9 +4590,133 @@ pub(super) mod tests {
         assert!(screen.preferences().is_none(), "closed");
     }
 
+    // The player info screen.
+
+    use nova_view::ui::player_info::{PLAYER_INFO_KEY, PlayerInfoButton, Tab};
+
+    /// Clicks `button` on the player info screen open over flight, or
+    /// else over the spaceport.
+    fn click_player_info(screen: &mut AppScreen, button: PlayerInfoButton) {
+        let open = screen
+            .flight_player_info()
+            .or_else(|| screen.spaceport_view()?.player_info())
+            .expect("the player info is open");
+        let at = open.button_bounds(button).expect("laid out").center();
+        click_at(screen, at);
+    }
+
     #[test]
-    fn the_flight_help_offers_p() {
-        assert!(nova_view::flight::view::HELP.contains("P: preferences"));
+    fn p_in_flight_opens_the_player_info_over_the_paused_flight() {
+        let mut screen = with_dialogs(data());
+        fly(&mut screen);
+        screen.input(&key(Key::Up, true));
+        screen.tick(TICK);
+        let moving = ship(&screen);
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        assert_eq!(screen.showing(), Showing::PlayerInfo);
+        assert_eq!(screen.now_showing(), Some(Showing::PlayerInfo));
+        let open = screen.flight_player_info().expect("open");
+        assert_eq!(open.problem(), None, "laid out by DLOG 1017");
+        assert_eq!(open.info().credits, pilot(&screen).cash());
+        let list = drawn(&screen);
+        let over = drawn(open);
+        let commands: Vec<&DrawCommand> = list.iter().collect();
+        assert_eq!(
+            commands[commands.len() - over.iter().count()..],
+            over.iter().collect::<Vec<_>>()[..],
+            "drawn over flight"
+        );
+        screen.tick(TICK * 5);
+        assert_eq!(ship(&screen), moving, "paused");
+        screen.input(&key(PLAYER_INFO_KEY, false));
+        screen.input(&key(Key::Up, false));
+        screen.input(&key(Key::Tab, true));
+        assert_eq!(
+            screen.flight_player_info().map(PlayerInfoScreen::tab),
+            Some(Tab::Cargo),
+            "it takes the input"
+        );
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight, "Escape closes it alone");
+        let coasting = ship(&screen);
+        screen.tick(TICK * 5);
+        assert_eq!(ship(&screen).velocity, coasting.velocity, "no thrust");
+    }
+
+    #[test]
+    fn p_opens_the_player_info_over_the_spaceport_and_its_dialogs() {
+        let store = MemoryPilots::new();
+        let check = |screen: &mut AppScreen, what: &str| {
+            screen.input(&key(PLAYER_INFO_KEY, true));
+            let open = spaceport(screen).player_info().expect(what);
+            assert_eq!(open.problem(), None, "{what}");
+            assert_eq!(screen.showing(), Showing::Spaceport, "{what}");
+            screen.input(&key(Key::Escape, true));
+            assert!(spaceport(screen).player_info().is_none(), "{what}");
+        };
+        let mut screen = landed_trader(&store);
+        check(&mut screen, "the spaceport");
+        click_port_item(&mut screen, 7);
+        check(&mut screen, "the trade center");
+        assert!(spaceport(&screen).open_trade().is_some(), "still trading");
+        let mut screen = landed_shipyard(&MemoryPilots::new());
+        click_port_item(&mut screen, 9);
+        check(&mut screen, "the shipyard");
+        screen.input(&key(Key::Char('i'), true));
+        assert!(
+            spaceport(&screen)
+                .open_shipyard()
+                .and_then(ShipyardScreen::info_panel)
+                .is_some()
+        );
+        check(&mut screen, "its Info panel");
+        assert!(
+            spaceport(&screen)
+                .open_shipyard()
+                .and_then(ShipyardScreen::info_panel)
+                .is_some(),
+            "back to the panel"
+        );
+        let mut screen = landed_at_venues(&MemoryPilots::new(), venue_data(SPACEPORT));
+        assert!(spaceport(&screen).offer_dialog().is_some());
+        check(&mut screen, "the spaceport's offer");
+        assert!(spaceport(&screen).offer_dialog().is_some(), "still offered");
+    }
+
+    #[test]
+    fn confirming_jettison_empties_the_hold_and_closes_it_landed_or_flying() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_trader(&store);
+        click_port_item(&mut screen, 7);
+        screen.input(&key(Key::Char('b'), true));
+        assert_eq!(pilot(&screen).held(FOOD), 10);
+        let writes = store.writes();
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        click_player_info(&mut screen, PlayerInfoButton::Tab(Tab::Cargo));
+        click_player_info(&mut screen, PlayerInfoButton::Jettison);
+        screen.input(&key(Key::Enter, true));
+        assert!(spaceport(&screen).player_info().is_none(), "closed");
+        assert_eq!(pilot(&screen).held(FOOD), 0, "jettisoned");
+        let open = spaceport(&screen).open_trade().expect("trading");
+        assert_eq!(open.market().row(FOOD).map(|row| row.held), Some(0));
+        assert_eq!(store.writes(), writes + 1, "saved");
+        screen.input(&key(Key::Char('b'), true));
+        screen.input(&key(Key::Escape, true));
+        screen.input(&key(Key::Escape, true));
+        assert_eq!(screen.showing(), Showing::Flight, "taken off");
+        assert_eq!(pilot(&screen).held(FOOD), 3, "the cash left buys 3");
+        screen.input(&key(PLAYER_INFO_KEY, true));
+        click_player_info(&mut screen, PlayerInfoButton::Tab(Tab::Cargo));
+        click_player_info(&mut screen, PlayerInfoButton::Jettison);
+        screen.input(&key(Key::Enter, true));
+        assert!(screen.flight_player_info().is_none(), "closed");
+        assert_eq!(pilot(&screen).held(FOOD), 0, "jettisoned in flight");
+    }
+
+    #[test]
+    fn the_flight_help_offers_p_and_command_comma() {
+        assert!(nova_view::flight::view::HELP.contains("P: player info"));
+        assert!(nova_view::flight::view::HELP.contains("Cmd-,: preferences"));
     }
 
     // The main menu and pilots.
@@ -5975,11 +6346,15 @@ pub(super) mod tests {
         assert_eq!(screen.showing(), Showing::Spaceport);
         let prompt = name_prompt(&screen).expect("the name prompt");
         assert_eq!(prompt.field().text(), "pif");
-        // Once it is closed, P opens Preferences again.
+        // Once it is closed, P opens the player info.
         click_cancel(&mut screen);
         assert!(name_prompt(&screen).is_none(), "declined");
         screen.input(&key(Key::Char('p'), true));
-        assert!(screen.preferences().is_some(), "P is Preferences again");
+        assert!(screen.preferences().is_none());
+        assert!(
+            spaceport(&screen).player_info().is_some(),
+            "P is the player info"
+        );
     }
 
     #[test]

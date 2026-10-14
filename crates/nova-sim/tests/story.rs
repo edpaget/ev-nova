@@ -151,6 +151,7 @@ impl PilotCatalog for Home {
             dead_frame_size: None,
             type_counts_frames: true,
             exit_angle: -1,
+            tribute: 0,
         }]
     }
 
@@ -198,8 +199,10 @@ impl PilotCatalog for Home {
         Vec::new()
     }
 
+    /// System 130's stellars, as it lists them.
     fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
-        Vec::new()
+        let sites = self.landing_sites(SystemId(130));
+        nova_sim::fixture::listed_stellars([(SystemId(130), sites.as_slice())])
     }
 
     fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {
@@ -219,6 +222,10 @@ impl PilotCatalog for Home {
     }
 
     fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
+        Vec::new()
+    }
+
+    fn nebulae(&self) -> Vec<nova_sim::catalog::NebulaRecord> {
         Vec::new()
     }
 }

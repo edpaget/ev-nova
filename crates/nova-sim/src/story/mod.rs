@@ -368,16 +368,46 @@
 //!
 //! ## Nebulae
 //!
-//! `_ExploreNebulaeFromSystem` (@0x508f) runs the `OnExplore` (@0x519e)
-//! of every active nebula not yet explored whose rectangle, inset by 8,
-//! holds the system, and marks it explored, so each runs once. It runs
+//! `_ExploreNebulaeFromSystem` (@0x508f) marks explored (@0x515a), then
+//! runs the `OnExplore` (@0x519e) of, every active nebula not yet
+//! explored whose rectangle, inset by 8, holds the system (`PtInRect`,
+//! half-open), so each runs once until the flag is forgotten. It runs
 //! for every system an exploration reaches (`_RecursiveAutoExplore`
-//! @0xd98a: an arrival, a take-off, a map granted), for the systems a
-//! jump passes and arrives at (@0x6bddb, @0x6be12), at the take-off
-//! (@0x634da), and for a new pilot and a load (@0x19118, @0x765bc). `X`
+//! @0xd98a: an arrival after its days, a take-off, a map granted), for
+//! the systems a jump passes and arrives at before its refresh and its
+//! days (@0x6bddb, @0x6be12), and at the take-off (@0x634da). `X`
 //! explores no nebula: it writes the explored level itself (@0x15c71),
 //! and `_EvalSetExp` (0x150fc up to `_EvalTestExp`) calls none of these.
-//! A `G` of a map does, through `_GrantOutfitItem` (@0x15444).
+//! A `G` of a map does, through `_GrantOutfitItem` (@0x15444). A gate's
+//! or wormhole's exit explores none (`_PlayerEnterHypergate` 0x637bf,
+//! `_PlayerEnterWormhole` 0x64005 and `_HandlePlayerDockRequest` call
+//! neither `_ExploreNebulaeFromSystem` nor `_AutoSetExploration`).
+//!
+//! A new pilot explores none: `_ResetGameData` clears every nebula's
+//! active and explored bytes (@0x18de5, @0x1df44-0x1df4b), and
+//! `_DoNewPilot` explores its start system (@0x19118) before its first
+//! refresh (@0x1925e), while every nebula is inactive; `_MainScreenChoice`
+//! skips its sweep after a new pilot (@0x1a7d2). The explored flag is
+//! never saved: `_ResetPlayer` clears it (@0x1da86) before every load,
+//! and after the load's refresh `_OpenLastPilotFile` (@0x765a2-0x765ce)
+//! and `_MainScreenChoice` (@0x1a8d4-0x1a906) explore every visible
+//! explored system by ascending index, so `OnExplore` runs again after
+//! every load. `_DoMainScreen` (@0x1afcf-0x1affe) is no sweep: it
+//! explores only the player's system and clears no flag. Activity
+//! (`ActiveOn`, both sizes above 0) is written at each refresh
+//! (@0x998b4-0x998ef) and read only by the exploration and the maps,
+//! which draw a nebula active and explored. See the
+//! [`nebula`](crate::nebula) module.
+//!
+//! Built by crons-news-ranks phase 16: each nebula is a
+//! [`Consumer::Nebulae`] subscription on every `Explored`, its rectangle
+//! and explored flag asked as its consumer's predicate (see "Dispatch");
+//! its activity is written at every refresh point beside visibility; a
+//! load forgets the explored flags and sweeps the visible explored
+//! systems; and the Rulebook keys
+//! [`nebula_explore_once`](crate::RuleKey::NebulaExploreOnce) and
+//! [`nebula_new_pilot`](crate::RuleKey::NebulaNewPilot) offer the other
+//! readings (see the session's `nebulae` module).
 //!
 //! ## Text
 //!
@@ -404,7 +434,7 @@
 //! | [`Landed`](StoryEvent::Landed) | `Session::dock`, as [`Session::land`](crate::Session::land) docks; [`Session::fly`](crate::Session::fly), for a pilot resumed docked, after its `Explored` | the spaceport opening |
 //! | [`TookOff`](StoryEvent::TookOff) | [`Session::take_off`](crate::Session::take_off), after its day | `_PlayerLandOnStellar` after the spaceport |
 //! | [`DayPassed`](StoryEvent::DayPassed) | the daily step, as its last participant | `_IncrementGameTime` |
-//! | [`Explored`](StoryEvent::Explored) | exploring a system: a jump's arrival, for each system it passes and the one it arrives at; every other way in whose row explores; a take-off; a map granted, for each system it reaches; [`Session::fly`](crate::Session::fly), for its system. `X` raises none | `_ExploreNebulaeFromSystem` |
+//! | [`Explored`](StoryEvent::Explored) | exploring a system: a jump's arrival, for each system it passes and the one it arrives at; every other way in whose row explores but a gate's or wormhole's exit; a take-off; a map granted, for each system it reaches; [`Session::fly`](crate::Session::fly), for each visible explored system (a new pilot's withdrawn by [`Session::begin`](crate::Session::begin) under the engine's [`nebula_new_pilot`](crate::RuleKey::NebulaNewPilot)). `X` raises none | `_ExploreNebulaeFromSystem` |
 //! | [`ShipFate`](StoryEvent::ShipFate) | combat's destruction and disabling (a ship broken up while intact is disabled too); the session's boarding, repelled or not, a mission ship's included (a `PickupMode` 2 pickup's too; a refused pickup raises none); the system's setup and the appear timer's arrivals, for each mission ship they bring in ([`Fate::Arrived`]); the traffic's tick, for each mission ship that leaves the system ([`Fate::Departed`]); and the traffic's flight tick for a watched ship first seen ([`Session::watch_ship`](crate::Session::watch_ship)) | the goal counts and the per-frame poll |
 //!
 //! A consumer that wants only some entrances reads the [`Entrance`] in
@@ -416,10 +446,13 @@
 //! original explores those nebulae before the days (@0x6bddb, @0x6be12;
 //! see "Checked for phase 3"). Every other way in raises its `DayPassed`
 //! events, if any, `EnteredSystem`, then `Explored` when its row
-//! explores. Each exploration raises `Explored`, the system explored
-//! already or not. Flying a pilot, a new one or a load, raises its
-//! system's `Explored`, as the original explores its nebulae there
-//! (`_DoNewPilot` @0x19118, `_OpenLastPilotFile` @0x765bc), then, for a
+//! explores, but a gate's or wormhole's exit, which explores no nebula.
+//! Each exploration raises `Explored`, the system explored
+//! already or not. Flying a pilot, a new one or a load, raises the
+//! `Explored` of every visible explored system, by ascending ID, as the
+//! original's load sweeps their nebulae (`_OpenLastPilotFile`
+//! @0x765a2-0x765ce; a new pilot has explored only its own,
+//! `_DoNewPilot` @0x19118), then, for a
 //! pilot resumed docked, its stellar's `Landed`: a load forgets the
 //! stellar the offers were rolled at (@0x75ef5) and opens the spaceport,
 //! whose land check runs (@0x5fbeb), so the offers are rolled afresh and
@@ -476,8 +509,10 @@
 //! nothing. For each id in turn, just before it runs, the dispatcher
 //! skips it when it is no longer registered (a subscription removed by an
 //! earlier one in the same dispatch), when it is once-only and has fired,
-//! or when its guard does not hold now (an earlier script can open or
-//! close it). Otherwise a once-only subscription is marked fired first,
+//! when its guard does not hold now (an earlier script can open or close
+//! it), or when its consumer's own predicate refuses it (`Stage::admits`:
+//! a nebula's rectangle and explored flag, which no control-bit test can
+//! express; crons-news-ranks phase 16). Otherwise a once-only subscription is marked fired first,
 //! so an event raised again inside its own run cannot run it twice; then
 //! its consumer's effect runs, then its script. One registered during the
 //! dispatch waits for the next event.
@@ -569,8 +604,11 @@
 //!
 //! Under either reading at most 64 events are dispatched from one
 //! settling, nested runs included, a guard against scripts that raise
-//! each other for ever. Only an event some subscription matches counts.
-//! The rest are dropped, and the settling tells how many as one
+//! each other for ever. Only an event that runs a subscription counts: it
+//! spends the budget as its first subscription runs, so an event whose
+//! subscriptions all hold back costs nothing, and a load's sweep that
+//! raises `Explored` for every explored system cannot drop events
+//! (crons-news-ranks phase 16). The rest are dropped, and the settling tells how many as one
 //! [`ScriptNote::EventsDropped`](crate::ScriptNote::EventsDropped). The
 //! next settling starts a fresh count.
 //!
@@ -665,15 +703,34 @@
 //! - per stellar: whether the player dominates it, whether it is
 //!   destroyed or regenerated, and the system it belongs to: its owner as
 //!   derived from visibility ([`OverlaidGalaxy::owner`]), never stored;
-//! - per nebula: whether it is active (`nëbu` `ActiveOn`), so that the
-//!   map reads nebulae as it reads systems.
+//! - per nebula: whether it is active (`nëbu` `ActiveOn`), and whether it
+//!   is explored, never saved; the map draws a nebula only while it is
+//!   active and explored ([`OverlaidGalaxy::nebula_shown`]), as
+//!   `_MapDialogUpdate` does.
+//!
+//! A system shows the stellars it holds, not every stellar its `NavDefs`
+//! list: those it owns, and, for the player's system, any it lists that
+//! no system owns, the rescue `_HandleStellarSystemVisibility` writes
+//! (@0x32c58-0x32cb3) and that lasts until the next refresh
+//! ([`OverlaidGalaxy::holder`], [`OverlaidGalaxy::shown`]). The session
+//! derives the stellars shown at the original's rebuild points, and the
+//! flight view draws only those. A reader that turns a stellar into a
+//! system goes owner-first, as the original's do: the holder, else
+//! `_FindSystemFromStellar`, the lowest visible lister, shadowed or not,
+//! else the lowest lister ([`OverlaidGalaxy::system_of`],
+//! [`OverlaidGalaxy::find_system_from_stellar`]); the hypergate's links
+//! read so, and a wormhole reads the holder alone (see the
+//! [`gate`](crate::gate) module). The galaxy map's stellar list stays the
+//! selected system's `NavDefs`, as `_MapDialogUpdate` lists them
+//! (@0x10373-0x104fd).
 //!
 //! Readers see these facts only through the overlay: hyperspace links and
 //! navigation, traffic, landing, legal records, AI targeting, exploration,
 //! and every `StarMap::govt` call. The galaxy map keeps its static
 //! geometry (positions, nebula rectangles) from nova-view's
-//! `GalaxyCatalog`, and reads visibility, government, links and nebula
-//! activity through a session accessor over the overlaid galaxy.
+//! `GalaxyCatalog`, and reads visibility, government, links and which
+//! nebulae are shown (active and explored) through a session accessor
+//! over the overlaid galaxy.
 //!
 //! An override written directly (`Y`, `U`, domination) applies at once.
 //! Visibility and nebula activity are evaluated from the bits at the
@@ -743,9 +800,12 @@
 //! owner decides this for every move of the player's system, the session's
 //! `set_player_system` (see the session's `entry` module): docked, the
 //! stellars shown are always those of the system whose stellar the ship is
-//! docked at. The
-//! course keeps its system IDs, each hop resolved by place when it is
-//! used, as `_CueNextHyperRouteDest` resolves it.
+//! docked at. Between
+//! rebuild points the course keeps its system IDs, each hop resolved by
+//! place when it is used, as `_CueNextHyperRouteDest` resolves it; each
+//! rebuild point rewrites it as
+//! [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says (see the
+//! [`course`](crate::course) module).
 //!
 //! The player is always in a visible system. Every arrival (a jump, a
 //! gate's exit, `M` and `N`, and the developer tools' relocation) resolves
@@ -1685,10 +1745,10 @@
 //!   nebulae explored.
 //! - The gate's exit (`_PlayerEnterHypergate` @0x637bf,
 //!   `_PlayerEnterWormhole` @0x64005) calls neither `_AutoSetExploration`
-//!   nor `_ExploreNebulaeFromSystem`: the original's gate explores
-//!   nothing, where the engine's gate row in the session's `entry` table
-//!   explores the system. That divergence is the engine's, kept for now
-//!   (rdm task gate-exit-explores).
+//!   nor `_ExploreNebulaeFromSystem`: the original's gate explores no
+//!   nebula, and writes the explored level itself (@0x63a04-0x63a49). The
+//!   engine's gate row explores the system, and since crons-news-ranks
+//!   phase 16 raises no `Explored`.
 //! - A ship broken up while intact counts as disabled: `_DamageShip`
 //!   notes whether the ship was disabled before the hit (`_IsDisabled`
 //!   @0x3a9ad), and after it counts a mission ship disabled when
@@ -1756,7 +1816,10 @@
 //!   spaceport goes on at that stellar, and the new system's ships and
 //!   stellars are set up only as the take-off sets the system up
 //!   (`_SetupShipsInSystem` @0x674c2, the stellars @0x674c7).
-//! - **The course** keeps system IDs. `_CueNextHyperRouteDest` resolves
+//! - **The course** keeps system IDs between rebuild points, and each
+//!   rebuild point rewrites it as
+//!   [`RuleKey::RouteRewrite`](crate::RuleKey::RouteRewrite) says (see
+//!   the [`course`](crate::course) module). `_CueNextHyperRouteDest` resolves
 //!   the next hop by place (`_FindActiveCoLocatedSystem` @0xe2fa) and
 //!   matches it against the current system's Con slots, each resolved the
 //!   same way (@0xe32f): a hidden hop with a visible system at its place
@@ -1800,7 +1863,8 @@ pub(crate) mod wreck;
 
 pub use dispatch::DuplicateSubscription;
 pub use galaxy::{
-    Countdown, GalaxyOverlay, HiddenMove, OverlaidGalaxy, StellarOverride, SystemOverride,
+    Countdown, GalaxyOverlay, HiddenMove, NebulaOverride, OverlaidGalaxy, StellarOverride,
+    SystemOverride, Whereabouts, listers_of,
 };
 
 use crate::catalog::{StellarId, SystemId};

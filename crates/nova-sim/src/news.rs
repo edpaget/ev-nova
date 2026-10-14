@@ -924,6 +924,10 @@ mod tests {
             None
         }
 
+        fn stellar_system(&self, _stellar: StellarId) -> Option<SystemId> {
+            None
+        }
+
         fn cargo_name(&self, cargo: u8) -> Option<String> {
             match cargo {
                 0 => Some("food".to_owned()),

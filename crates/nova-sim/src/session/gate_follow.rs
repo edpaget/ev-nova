@@ -183,16 +183,15 @@ pub(super) mod tests {
         }
     }
 
-    /// Stellar `id` of `system` at `at` with `flags2`, linked to `links`,
-    /// heading ships out on `exit_angle`.
-    fn gate_site(id: i16, system: i16, at: Vec2, flags2: u16, links: &[i16]) -> GateSite {
+    /// Stellar `id` at `at` with `flags2`, linked to `links`, heading
+    /// ships out on 90°.
+    fn gate_site(id: i16, at: Vec2, flags2: u16, links: &[i16]) -> GateSite {
         let mut slots = [None; 8];
         for (slot, &link) in slots.iter_mut().zip(links) {
             *slot = Some(StellarId(link));
         }
         GateSite {
             id: StellarId(id),
-            system: SystemId(system),
             position: at,
             flags2,
             links: slots,
@@ -222,10 +221,14 @@ pub(super) mod tests {
             sites.extend([hypergate, wormhole]);
         }
         catalog.gates = vec![
-            gate_site(300, 130, HYPERGATE_AT, HYPERGATE, &[310]),
-            gate_site(310, 131, Vec2::new(100.0, 200.0), HYPERGATE, &[300]),
-            gate_site(400, 130, WORMHOLE_AT, WORMHOLE, &[]),
-            gate_site(410, 131, Vec2::new(-300.0, 40.0), WORMHOLE, &[]),
+            gate_site(300, HYPERGATE_AT, HYPERGATE, &[310]),
+            gate_site(310, Vec2::new(100.0, 200.0), HYPERGATE, &[300]),
+            gate_site(400, WORMHOLE_AT, WORMHOLE, &[]),
+            gate_site(410, Vec2::new(-300.0, 40.0), WORMHOLE, &[]),
+        ];
+        catalog.gate_listers = vec![
+            (SystemId(131), StellarId(310)),
+            (SystemId(131), StellarId(410)),
         ];
         catalog
     }

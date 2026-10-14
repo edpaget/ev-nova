@@ -276,9 +276,9 @@ impl Session {
     /// The pilot info's ranks line and the salaries' share of the daily
     /// income (see [`rank::pilot_info`]), against the pilot's cash and the
     /// session's `salary_cap` rule, joined with `STR#` 2002 #392 (nothing
-    /// when the lists lack it, as `_StrcatIndCString` appends nothing).
-    /// No Ranks-section item follows the ranks until the player info
-    /// screen lists them (crons-news-ranks phase 17).
+    /// when the lists lack it, as `_StrcatIndCString` appends nothing),
+    /// the player info's special outfits following the ranks
+    /// ([`player_info::special_groups`](crate::player_info::special_groups)).
     #[must_use]
     pub fn pilot_info_ranks(&self) -> PilotInfoRanks {
         let and = self
@@ -290,7 +290,7 @@ impl Session {
             self.pilot.cash,
             self.rules.source_for(RuleKey::SalaryCap),
             &and,
-            0,
+            crate::player_info::special_groups(&self.outfits, &self.pilot.outfits).len(),
         )
     }
 
@@ -935,6 +935,7 @@ pub(super) mod tests {
             assert_eq!(prices(&mut session), ONE_RANK, "{timing:?}");
             // Government 130 is no ally of the rank's government 128.
             session.sites[0].govt = Some(crate::catalog::GovtId(130));
+            session.listed[0].govt = Some(crate::catalog::GovtId(130));
             assert_eq!(prices(&mut session), while_landed, "{timing:?}");
             land_again(&mut session, &catalog);
             assert_eq!(prices(&mut session), UNRANKED, "{timing:?}");
@@ -1012,6 +1013,34 @@ pub(super) mod tests {
         assert!(blessed(&session));
         session.jettison_cargo(true, &mut NeverFires);
         assert!(!blessed(&session));
+    }
+
+    /// Whether the player as the session's NPCs see it carries government
+    /// 140's blessing.
+    fn npcs_see_blessed(session: &Session) -> bool {
+        session
+            .player_side()
+            .blessing
+            .blesses(Some(GovtId(140)), Blessed::Landing)
+    }
+
+    #[test]
+    fn the_player_side_carries_the_blessing_the_last_refresh_took() {
+        let catalog = blessing_catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        run(&mut session, "K200");
+        assert!(!npcs_see_blessed(&session), "taken at the last refresh");
+        session.refresh_blessing();
+        assert!(npcs_see_blessed(&session));
+    }
+
+    #[test]
+    fn the_player_side_carries_the_live_blessing_by_the_other_reading() {
+        let mut session = Session::start(&blessing_catalog())
+            .expect("starts")
+            .with_rules(live());
+        run(&mut session, "K200");
+        assert!(npcs_see_blessed(&session));
     }
 
     #[test]

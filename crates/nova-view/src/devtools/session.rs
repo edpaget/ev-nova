@@ -180,6 +180,7 @@ mod tests {
             dead_frame_size: None,
             type_counts_frames: true,
             exit_angle: -1,
+            tribute: 0,
         }
     }
 
@@ -283,8 +284,14 @@ mod tests {
             Vec::new()
         }
 
+        /// Sol's and Alpha Centauri's stellars, as each lists them.
         fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
-            Vec::new()
+            let sites = [SystemId(130), SystemId(131)].map(|id| (id, self.landing_sites(id)));
+            nova_sim::fixture::listed_stellars(
+                sites
+                    .iter()
+                    .map(|(system, sites)| (*system, sites.as_slice())),
+            )
         }
 
         fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {
@@ -304,6 +311,10 @@ mod tests {
         }
 
         fn ranks(&self) -> Vec<nova_sim::catalog::RankRecord> {
+            Vec::new()
+        }
+
+        fn nebulae(&self) -> Vec<nova_sim::catalog::NebulaRecord> {
             Vec::new()
         }
     }

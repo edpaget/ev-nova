@@ -106,7 +106,7 @@
 //! | [`LegalRecords`](RuleKey::LegalRecords) | `legal_records` | one record a system (`_playerRecord`), read in the player's system (`_HandlePlayerDockRequest` @0x67903, `_IsMissionAvailable` @0x9b59d, `_DoTradeDialog` @0x5dc17; see [`legal`](crate::legal)) | one record a government, read through the system's (landing: the stellar's) government |
 //! | [`LeftRespawn`](RuleKey::LeftRespawn) | `left_respawn` | only a chase-off goal's ship (`ShipGoal` 6) that leaves the system lowers its mission's ships left, so a ship of another goal comes back at the next setup (`_LowLevelAIHandler` @0x85983-0x859aa; see [`mission::goals`](crate::mission::goals)) | any departed mission ship not of `ShipSyst` -6 lowers its ships left, and is not brought back\* |
 //! | [`LandedLeaves`](RuleKey::LandedLeaves) | `landed_leaves` | a mission ship that lands does not leave the system, as the original's waits at the stellar (`_HighLevelAIHandler` @0x8dadc-0x8db5a), so the engine taking it out counts nothing and it comes back at the next setup (see [`story`](crate::story)) | it leaves the system, counted as one that jumped out\* |
-//! | [`AuxGate`](RuleKey::AuxGate) | `aux_gate` | at a hypergate or wormhole exit, the auxiliary ships of a mission of `AuxShipSyst` -1 come no more until their countdown next restarts (`_HandlePlayerDockRequest` @0x6729b-0x672ac; see [`mission::aux`](crate::mission::aux)) | the exit restarts them as a jump does: "-1: any system" |
+//! | [`AuxGate`](RuleKey::AuxGate) | `aux_gate` | at a hypergate or wormhole exit, the auxiliary ships of a mission of `AuxShipSyst` -1 come no more until their countdown next restarts (`_HandlePlayerDockRequest` @0x6729b-0x672ac; see [`mission::aux_ships`](crate::mission::aux_ships)) | the exit restarts them as a jump does: "-1: any system" |
 //! | [`HudCadence`](RuleKey::HudCadence) | `hud_cadence` | the HUD's content refreshes on the original's timing: the radar every 15 Mac ticks, 8 engine ticks (`_DrawStatus` @0x4c85d, @0x4c911-0x4c94f), the nav area every 15 engine ticks (`TickCount() % 30`, @0x4c899-0x4c8b6) or at once on a selection change, and the target panel every 45 engine ticks (`TickCount() % 45`, @0x4c8b9-0x4c8eb), at the next radar refresh once its shield or ship type changes (@0x4c963-0x4c994), or at once on a change of target; see `nova_view::flight::cadence` | it follows every frame\* |
 //! | [`GateFollow`](RuleKey::GateFollow) | `gate_follow` | at a hypergate or wormhole exit, the ships of a mission following the player (`ShipSyst` -6) escort it at once, follow it out of the exit gate on their government's `Flags2` or odds when they attack it, and are otherwise lost until a `ShipStart` 1 timer restarts (`_HandlePlayerDockRequest` @0x6716a-0x67487; see [`mission::ships`](crate::mission::ships)) | the exit leaves them as a jump does, and its setup sets them up again\* |
 //! | [`AlertBlink`](RuleKey::AlertBlink) | `alert_blink` | a Red Alert blinks its icon only while the player's sound is quiet, off or at effects level 1 or less (the original's `Volume` preference ≤ 1); louder, the alert is the sound alone (`_HandlePlayer` @0x68d04-0x68d15; see [`red_alert`](crate::red_alert)) | the icon blinks with every alert\* |
@@ -126,6 +126,11 @@
 //! | [`CronPostHoldoff`](RuleKey::CronPostHoldoff) | `cron_post_holdoff` | a running crön's end, with `PostHoldoff` above 0, loads its `PreHoldoff` into the holdoff and leaves its days (@0x387f1-0x387f6 → 0x388c5): it re-runs, or with `PreHoldoff` 0 its `OnEnd` runs every day for good and its news stays (see [`cron`](crate::cron)) | `PostHoldoff` days with the days at -1, then inactive: **the default — a deliberate departure from the original**†††††††† |
 //! | [`BlessingRefresh`](RuleKey::BlessingRefresh) | `blessing_refresh` | the blessing table is taken at the original's refresh points (`_ResetPlayerPrecalcedValues` @0xc8be-0xc981): game entry, take-off and the gate exits, a jump's arrival, a mission cargo pickup, a jettison and the plunder dialog closing, so a `K` or `L` in space blesses or stops blessing only from the next one (see [`rank`](crate::rank)) | live, from the active ranks\* |
 //! | [`BlessingLanding`](RuleKey::BlessingLanding) | `blessing_landing` | `Flags` 0x0200 clears a governed stellar past both its `MinStatus` and its government's `Require` (`_HandlePlayerDockRequest` @0x67940-0x67a05; see [`landing`](crate::landing)) | past `MinStatus` only, so `Require` still refuses |
+//! | [`BlessingAlwaysAttacks`](RuleKey::BlessingAlwaysAttacks) | `blessing_always_attacks` | a `Flags` 0x0004 government's word turns its warships and interceptors on a player that a rank's `Flags` 0x0100 blesses with that government's peace, as `_WarshipAI` @0x8b7b0 and `_InterceptorAI` @0x8cb5c read no blessing (see [`ai::warship`](crate::ai::warship)) | the blessing holds the word back, as the Bible's ränk 0x0100 "will not automatically attack" reads |
+//! | [`ExploredByPlace`](RuleKey::ExploredByPlace) | `explored_by_place` | exploring a system explores its place's head (`_RecursiveAutoExplore` @0xd9b6-0xda10, the arrivals and the take-off), and each rebuild point explores every system at an explored head's place, hidden or not (`_HandleStellarSystemVisibility` @0x32b13-0x32b8f; see [`exploration`](crate::exploration)) | each system is explored on its own\* |
+//! | [`RouteRewrite`](RuleKey::RouteRewrite) | `route_rewrite` | each rebuild point rewrites every hidden hop of the course to the system at its place and cuts the course at the first hop with none (`_HandleStellarSystemVisibility` @0x32ab3-0x32b0d), and an arrival that made no hop clears the course when its next hop stands elsewhere, or drops that hop when it stands at the arrival (@0x6c472-0x6c4c6; see [`course`](crate::course)) | hops resolved only when used, and an arrival drops only the hops made\* |
+//! | [`NebulaExploreOnce`](RuleKey::NebulaExploreOnce) | `nebula_explore_once` | whether a nebula is explored is never saved, so a load's sweep over the visible explored systems runs its `OnExplore` again (`_ResetPlayer` @0x1da86, `_OpenLastPilotFile` @0x765a2-0x765ce; see [`nebula`](crate::nebula)) | `OnExplore` runs once a pilot, through the once-fired record\* |
+//! | [`NebulaNewPilot`](RuleKey::NebulaNewPilot) | `nebula_new_pilot` | a new pilot explores no nebula until its first exploration, a take-off, a jump or a map (`_DoNewPilot` @0x18de5, @0x1df4b, @0x19118, before its first refresh @0x1925e; see [`nebula`](crate::nebula)) | the start system's nebulae are explored as the game begins††††††††† |
 //! | [`ScanOutfitsPastJunk`](RuleKey::ScanOutfitsPastJunk) | `scan_outfits_past_junk` | while the player carries any `jünk` with a `ScanMask`, a scan that finds no illegal `jünk` ends without scanning the outfits (`_ScanPlayer` @0x7eabd-0x7eefa; see [`scan`](crate::scan)) | the outfits are scanned when no illegal `jünk` is found\* |
 //! | [`OutfitScanFine`](RuleKey::OutfitScanFine) | `outfit_scan_fine` | only a `ScanFine` above 0 fines an illegal outfit, as it is; a negative one fines nothing (`_ScanPlayer` `jle` @0x7f222; see [`scan`](crate::scan)) | a negative `ScanFine` takes that percent of the cash in hundreds, at least 1, as for `jünk` and mission cargo (the Bible's `ScanFine`) |
 //! | [`GateEscorts`](RuleKey::GateEscorts) | `gate_escorts` | at a hypergate or wormhole exit, every ship the player leads comes out of the exit gate after it, with its heading, waiting `Rand(20) + 15` ticks and bursting out at 15 (`_HandlePlayerDockRequest` @0x674ef-0x675c8, `_AIMakeShipEmergeFromHyperGate` @0x895aa-0x895bd) | each is snapped onto its slot beside the player\* |
@@ -150,13 +155,15 @@
 //! `start_active_mission`, `pay_millions`, `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance`,
 //! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
-//! `hud_cadence`, `alert_blink`, `blessing_refresh`,
-//! `scan_outfits_past_junk`, `gate_escorts`, `lost_cargo_share`,
-//! `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
+//! `hud_cadence`, `alert_blink`, `blessing_refresh`, `explored_by_place`,
+//! `route_rewrite`, `scan_outfits_past_junk`, `gate_escorts`,
+//! `lost_cargo_share`, `non_strict_speed`, `hunter_bribe`, `ship_overlap`,
 //! `quadrant_turret_arc`, `hidden_ships` (it gives `Cost` only as the
 //! price), `hidden_ship_hover_box` or `comm_quote`
 //! (only that the quote is "displayed in the communications dialog"), and
-//! agrees with the engine on `grant_count`: for them, the reading other
+//! agrees with the engine on `grant_count` and `nebula_explore_once`
+//! ("the explored state of the nebulae isn't saved from game to game ...
+//! this expression may get evaluated multiple times"): for them, the reading other
 //! than the engine's (`"bible"` in the settings) is the intended
 //! behaviour, not the engine's bug or quirk, and not anything the Bible
 //! says.
@@ -371,6 +378,11 @@
 //! Bible gives `PostHoldoff` as the days after the end before the crön
 //! can fire again, and says nothing of the rest; the other reading is
 //! the intended end the cron pass builds (see [`cron`](crate::cron)).
+//!
+//! ††††††††† The Bible says a nebula's explored state is "recalculated
+//! every time based on the systems the player has explored", which covers
+//! a new pilot's start system: the other reading of `nebula_new_pilot`
+//! takes that wording (see [`nebula`](crate::nebula)).
 //!
 //! # Adding a rule
 //!
@@ -1455,7 +1467,7 @@ rule_keys! {
     /// so they come no more until the next restart (a jump, an `M` or
     /// `N` in flight, or a take-off). By the other reading, the Bible's
     /// "-1: any system": the exit restarts them as a jump does (see
-    /// [`mission::aux`](crate::mission::aux)).
+    /// [`mission::aux_ships`](crate::mission::aux_ships)).
     AuxGate => "aux_gate",
     /// When the flight HUD's content refreshes. By the engine, on the
     /// original's timing, which `_DrawStatus` (@0x4c85d) keeps in 60 Hz
@@ -1587,6 +1599,47 @@ rule_keys! {
     /// reading, the Bible's, its `MinStatus` only, so an unmet `Require`
     /// still refuses (see [`landing`](crate::landing)).
     BlessingLanding => "blessing_landing",
+    /// Whether a government's word to attack the player (`gövt` `Flags`
+    /// 0x0004) reaches a player its ships are blessed to spare (rank
+    /// `Flags` 0x0100): by the engine, it does, as `_WarshipAI` @0x8b7b0
+    /// and `_InterceptorAI` @0x8cb5c read no blessing; by the other
+    /// reading, the Bible's ("will not automatically attack"), the
+    /// blessing holds the word back (see [`ai::warship`](crate::ai::warship)).
+    BlessingAlwaysAttacks => "blessing_always_attacks",
+    /// Whether exploration is shared across a place: by the engine,
+    /// exploring a system explores its place's head too
+    /// (`_RecursiveAutoExplore` @0xd9b6-0xda10), and each rebuild point
+    /// explores every system at an explored head's place, hidden or not
+    /// (`_HandleStellarSystemVisibility` @0x32b13-0x32b8f); by the other
+    /// reading, each system is explored on its own (see
+    /// [`exploration`](crate::exploration)).
+    ExploredByPlace => "explored_by_place",
+    /// Whether the player's course is rewritten at the rebuild points: by
+    /// the engine, each rebuild point rewrites every hidden hop to the
+    /// system at its place and cuts the course at the first hop with
+    /// none, for good (`_HandleStellarSystemVisibility` @0x32ab3-0x32b0d),
+    /// and an arrival that made no hop clears the course when its next
+    /// hop stands elsewhere, or drops that hop when it stands at the
+    /// arrival (@0x6c472-0x6c4c6); by the other reading, hops are resolved
+    /// only when used, and an arrival drops only the hops made (see
+    /// [`course`](crate::course)).
+    RouteRewrite => "route_rewrite",
+    /// How often a nebula's `OnExplore` runs: by the engine, whether a
+    /// nebula is explored is never saved, so after every load the sweep
+    /// over the visible explored systems explores it, and runs its
+    /// `OnExplore`, again (`_ResetPlayer` @0x1da86, `_OpenLastPilotFile`
+    /// @0x765a2-0x765ce); by the other reading, once a pilot, kept in the
+    /// once-fired record. The Bible agrees with the engine ("this
+    /// expression may get evaluated multiple times"), so the other reading
+    /// is the port's choice (see [`nebula`](crate::nebula)).
+    NebulaExploreOnce => "nebula_explore_once",
+    /// Whether a new pilot's start system explores its nebulae: by the
+    /// engine, not until the pilot's first exploration (a take-off, a jump
+    /// or a map), as `_DoNewPilot` explores its start system while every
+    /// nebula is inactive (@0x18de5, @0x1df4b, @0x19118, before its first
+    /// refresh @0x1925e); by the other reading, as the game begins (see
+    /// [`nebula`](crate::nebula)).
+    NebulaNewPilot => "nebula_new_pilot",
     /// Whether a scan's set `jünk` latch shadows the outfits: by the
     /// engine, a scan that finds no illegal `jünk` while the player
     /// carries any `jünk` with a `ScanMask` ends there, outfits unscanned
@@ -1907,7 +1960,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(39),
+            RuleKey::ALL.iter().rev().nth(44),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -1947,7 +2000,7 @@ mod tests {
             Some(RuleKey::PayMillions)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(38),
+            RuleKey::ALL.iter().rev().nth(43),
             Some(&RuleKey::PayMillions)
         );
     }
@@ -1969,7 +2022,7 @@ mod tests {
             Some(RuleKey::MissionOrder)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(37),
+            RuleKey::ALL.iter().rev().nth(42),
             Some(&RuleKey::MissionOrder)
         );
     }
@@ -1994,7 +2047,7 @@ mod tests {
             Some(RuleKey::PersonMissionStellar)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(36),
+            RuleKey::ALL.iter().rev().nth(41),
             Some(&RuleKey::PersonMissionStellar)
         );
         assert_eq!(
@@ -2020,7 +2073,7 @@ mod tests {
             Some(RuleKey::MissionStellarDraw)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(35),
+            RuleKey::ALL.iter().rev().nth(40),
             Some(&RuleKey::MissionStellarDraw)
         );
         assert_eq!(
@@ -2040,7 +2093,7 @@ mod tests {
             Some(RuleKey::MissionStellarDistance)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(34),
+            RuleKey::ALL.iter().rev().nth(39),
             Some(&RuleKey::MissionStellarDistance)
         );
         assert_eq!(
@@ -2060,7 +2113,7 @@ mod tests {
             Some(RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(33),
+            RuleKey::ALL.iter().rev().nth(38),
             Some(&RuleKey::MissionStellarIdentity)
         );
         assert_eq!(
@@ -2080,7 +2133,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(30),
+            RuleKey::ALL.iter().rev().nth(35),
             Some(&RuleKey::LandedLeaves)
         );
     }
@@ -2094,7 +2147,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(29),
+            RuleKey::ALL.iter().rev().nth(34),
             Some(&RuleKey::GateFollow)
         );
     }
@@ -2240,7 +2293,7 @@ mod tests {
             Rulebook::default().source_for(RuleKey::AuxGate),
             RuleSource::Engine
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(28), Some(&RuleKey::AuxGate));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(33), Some(&RuleKey::AuxGate));
     }
 
     #[test]
@@ -2252,7 +2305,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(27),
+            RuleKey::ALL.iter().rev().nth(32),
             Some(&RuleKey::HudCadence)
         );
     }
@@ -2266,7 +2319,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(26),
+            RuleKey::ALL.iter().rev().nth(31),
             Some(&RuleKey::AlertBlink)
         );
     }
@@ -2279,7 +2332,7 @@ mod tests {
             Some(RuleKey::LegalRecords)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(32),
+            RuleKey::ALL.iter().rev().nth(37),
             Some(&RuleKey::LegalRecords)
         );
         assert_eq!(
@@ -2297,7 +2350,7 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(24),
+            RuleKey::ALL.iter().rev().nth(29),
             Some(&RuleKey::CronDateCompare)
         );
     }
@@ -2314,7 +2367,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(23),
+            RuleKey::ALL.iter().rev().nth(28),
             Some(&RuleKey::NewsGovtMatch)
         );
     }
@@ -2331,10 +2384,10 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(22),
+            RuleKey::ALL.iter().rev().nth(27),
             Some(&RuleKey::RankUnaffiliatedGroup)
         );
-        assert_eq!(RuleKey::ALL.iter().rev().nth(21), Some(&RuleKey::SalaryCap));
+        assert_eq!(RuleKey::ALL.iter().rev().nth(26), Some(&RuleKey::SalaryCap));
     }
 
     #[test]
@@ -2349,7 +2402,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(20),
+            RuleKey::ALL.iter().rev().nth(25),
             Some(&RuleKey::RankGovtReach)
         );
     }
@@ -2368,15 +2421,15 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(19),
+            RuleKey::ALL.iter().rev().nth(24),
             Some(&RuleKey::RankPriceScope)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(18),
+            RuleKey::ALL.iter().rev().nth(23),
             Some(&RuleKey::RankTradeIn)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(17),
+            RuleKey::ALL.iter().rev().nth(22),
             Some(&RuleKey::RankPriceTiming)
         );
     }
@@ -2393,7 +2446,7 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(16),
+            RuleKey::ALL.iter().rev().nth(21),
             Some(&RuleKey::RankCrimeReach)
         );
     }
@@ -2407,11 +2460,11 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(15),
+            RuleKey::ALL.iter().rev().nth(20),
             Some(&RuleKey::ColocatedResolution)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(14),
+            RuleKey::ALL.iter().rev().nth(19),
             Some(&RuleKey::VisibilityRefresh)
         );
     }
@@ -2432,11 +2485,11 @@ mod tests {
             );
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(13),
+            RuleKey::ALL.iter().rev().nth(18),
             Some(&RuleKey::CronZeroDurationHoldoff)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(12),
+            RuleKey::ALL.iter().rev().nth(17),
             Some(&RuleKey::CronPostHoldoff)
         );
     }
@@ -2450,12 +2503,100 @@ mod tests {
             assert_eq!(Rulebook::default().source_for(rule), RuleSource::Engine);
         }
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(11),
+            RuleKey::ALL.iter().rev().nth(16),
             Some(&RuleKey::BlessingRefresh)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(10),
+            RuleKey::ALL.iter().rev().nth(15),
             Some(&RuleKey::BlessingLanding)
+        );
+    }
+
+    #[test]
+    fn the_blessing_always_attacks_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(
+            RuleKey::BlessingAlwaysAttacks.key(),
+            "blessing_always_attacks"
+        );
+        assert_eq!(
+            RuleKey::from_key("blessing_always_attacks"),
+            Some(RuleKey::BlessingAlwaysAttacks)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::BlessingAlwaysAttacks),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(14),
+            Some(&RuleKey::BlessingAlwaysAttacks)
+        );
+    }
+
+    #[test]
+    fn the_explored_by_place_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::ExploredByPlace.key(), "explored_by_place");
+        assert_eq!(
+            RuleKey::from_key("explored_by_place"),
+            Some(RuleKey::ExploredByPlace)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::ExploredByPlace),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(13),
+            Some(&RuleKey::ExploredByPlace)
+        );
+    }
+
+    #[test]
+    fn the_route_rewrite_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::RouteRewrite.key(), "route_rewrite");
+        assert_eq!(
+            RuleKey::from_key("route_rewrite"),
+            Some(RuleKey::RouteRewrite)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::RouteRewrite),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(12),
+            Some(&RuleKey::RouteRewrite)
+        );
+    }
+
+    #[test]
+    fn the_nebula_explore_once_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::NebulaExploreOnce.key(), "nebula_explore_once");
+        assert_eq!(
+            RuleKey::from_key("nebula_explore_once"),
+            Some(RuleKey::NebulaExploreOnce)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::NebulaExploreOnce),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(11),
+            Some(&RuleKey::NebulaExploreOnce)
+        );
+    }
+
+    #[test]
+    fn the_nebula_new_pilot_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::NebulaNewPilot.key(), "nebula_new_pilot");
+        assert_eq!(
+            RuleKey::from_key("nebula_new_pilot"),
+            Some(RuleKey::NebulaNewPilot)
+        );
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::NebulaNewPilot),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(10),
+            Some(&RuleKey::NebulaNewPilot)
         );
     }
 
@@ -2576,7 +2717,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(41),
+            RuleKey::ALL.iter().rev().nth(46),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -2742,6 +2883,11 @@ mod tests {
                 RuleKey::CronPostHoldoff,
                 RuleKey::BlessingRefresh,
                 RuleKey::BlessingLanding,
+                RuleKey::BlessingAlwaysAttacks,
+                RuleKey::ExploredByPlace,
+                RuleKey::RouteRewrite,
+                RuleKey::NebulaExploreOnce,
+                RuleKey::NebulaNewPilot,
                 RuleKey::ScanOutfitsPastJunk,
                 RuleKey::OutfitScanFine,
                 RuleKey::GateEscorts,
