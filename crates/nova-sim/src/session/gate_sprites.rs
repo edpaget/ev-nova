@@ -16,7 +16,10 @@ use super::Session;
 use crate::catalog::{LandingSite, StellarId};
 use crate::chance::Chance;
 use crate::gate::HYPERGATE;
-use crate::gate_sprite::{GateAnimation, held_open};
+use crate::gate_sprite::{GateAnimation, approach_reach, held_open};
+
+/// The width `_GetSpriteXSize` gives a sprite with no frame (@0x2701).
+const NO_SPRITE_WIDTH: u32 = 32;
 
 impl Session {
     /// The frame hypergate `gate` draws, or `None` for a stellar shown
@@ -65,15 +68,30 @@ impl Session {
     }
 
     /// One tick of every hypergate shown, held open by the NPCs as they
-    /// are now ([`held_open`]), its random picks drawn on `chance`.
+    /// are now ([`held_open`]), its random picks drawn on `chance`. A ship
+    /// heading in holds it within [`approach_reach`] of the width of the
+    /// frame its slot draws ([`NO_SPRITE_WIDTH`] with none), grown by
+    /// whether it was open before this step.
     pub(super) fn step_gate_sprites(&mut self, chance: &mut (impl Chance + ?Sized)) {
         self.keep_gate_sprites();
         for site in self.sites.iter().filter(|site| is_hypergate(site)) {
-            let held = held_open(site.id, self.traffic.npcs());
+            let width = self.slot_sprite_width(site);
+            let anim = GateAnimation::of(site);
             if let Some(sprite) = self.gate_sprites.get_mut(&site.id) {
-                sprite.step(&GateAnimation::of(site), site.destroyed, held, chance);
+                let reach = approach_reach(width, sprite.is_open(&anim));
+                let held = held_open(site, reach, self.traffic.npcs());
+                sprite.step(&anim, site.destroyed, held, chance);
             }
         }
+    }
+
+    /// The width `_GetSpriteXSize` gives `site`'s sprite slot: its drawn
+    /// frame's, or [`NO_SPRITE_WIDTH`] when the slot shows none
+    /// (@0x26d4-0x2701).
+    fn slot_sprite_width(&self, site: &LandingSite) -> u32 {
+        self.drawn_frame_size(site)
+            .filter(|_| self.rebuilt.shows_frame(site.id))
+            .map_or(NO_SPRITE_WIDTH, |(width, _)| width)
     }
 }
 
@@ -147,6 +165,109 @@ mod tests {
             emerges_from: Some(StellarId(300)),
             ..crate::testkit::npc(0, fields)
         });
+    }
+
+    /// Adds a ship of `fields` at (`x`, 0), at rest facing the gate,
+    /// bound to enter hypergate 300.
+    fn heading_in(session: &mut Session, fields: crate::handling::ShipFields, x: f32) {
+        session.traffic.add_npc(Npc {
+            state: ShipState {
+                position: Vec2::new(x, 0.0),
+                velocity: Vec2::ZERO,
+                heading: 90.0,
+            },
+            goal: crate::ai::Goal::EnterGate(StellarId(300)),
+            ..crate::testkit::npc(0, crate::stats::ShipStats::new(fields, &[]))
+        });
+    }
+
+    #[test]
+    fn a_gate_opens_as_a_ship_heads_in_to_enter_it_and_closes_once_it_is_gone() {
+        let catalog = gated();
+        let mut session = flying(&catalog);
+        heading_in(&mut session, FAST, -200.0);
+        let mut opened_on_the_way = false;
+        let mut open_while_entering = true;
+        let mut left = None;
+        let mut frames = Vec::new();
+        for tick in 0..400 {
+            self::tick(&mut session, &catalog);
+            let frame = session.gate_frame(StellarId(300)).expect("a gate");
+            frames.push(frame);
+            match session.npcs().first() {
+                Some(npc) if npc.entering_gate() => open_while_entering &= frame > 0,
+                Some(npc) => {
+                    let off = (npc.state.position - GATE_AT).x.abs();
+                    if off >= 200.0 {
+                        assert_eq!(frame, 0, "{tick}: {off} out, beyond 2w");
+                    } else if frame > 0 {
+                        opened_on_the_way = true;
+                    }
+                }
+                None => {
+                    left.get_or_insert(tick);
+                }
+            }
+        }
+        assert!(opened_on_the_way, "{frames:?}");
+        assert!(open_while_entering, "{frames:?}");
+        let left = left.expect("it left");
+        assert_eq!(frames.last(), Some(&0), "closed once it is gone");
+        assert!(frames[left..].contains(&0));
+    }
+
+    #[test]
+    fn a_ship_heading_in_holds_an_open_gate_a_tenth_farther_out() {
+        let catalog = gated();
+        // Still, 210 out: beyond 2w (200), within 220.
+        let still = crate::handling::ShipFields { speed: 0, ..FAST };
+        let frames = |open_first: bool| {
+            let mut session = flying(&catalog);
+            heading_in(&mut session, still, GATE_AT.x + 210.0);
+            if open_first {
+                let site = *session.gate_site(StellarId(300)).expect("a gate");
+                let sprite = session.gate_sprites.get_mut(&StellarId(300)).expect("kept");
+                for _ in 0..3 {
+                    sprite.step(&GateAnimation::of(&site), false, true, &mut NeverFires);
+                }
+                assert!(session.gate_open(StellarId(300)));
+            }
+            (0..10)
+                .map(|_| {
+                    tick(&mut session, &catalog);
+                    session.gate_frame(StellarId(300)).expect("a gate")
+                })
+                .collect::<Vec<u16>>()
+        };
+        assert_eq!(frames(false), [0; 10], "closed: 210 is beyond 200");
+        assert!(
+            frames(true).iter().all(|&frame| frame >= 3),
+            "held in its loop"
+        );
+    }
+
+    #[test]
+    fn a_gate_slot_showing_no_frame_is_held_open_within_twice_32() {
+        let catalog = gated();
+        let still = crate::handling::ShipFields { speed: 0, ..FAST };
+        let opens = |out: f32, empty_slot: bool| {
+            let mut session = flying(&catalog);
+            if empty_slot {
+                // A rebuild point that could read no frame for the gate.
+                let mut unreadable = session.sites.clone();
+                for site in &mut unreadable {
+                    site.frame_size = None;
+                }
+                session.rebuilt.rebuild(&unreadable, |_| false, false);
+            }
+            heading_in(&mut session, still, GATE_AT.x + out);
+            tick(&mut session, &catalog);
+            session.gate_frame(StellarId(300)) > Some(0)
+        };
+        assert!(opens(150.0, false), "a 100-wide frame: within 200");
+        assert!(!opens(150.0, true), "no frame: beyond 64");
+        assert!(opens(63.0, true), "no frame: within 64");
+        assert!(!opens(64.0, true));
     }
 
     #[test]

@@ -15,7 +15,15 @@
 //!   or less or at least frames - 1. Frames 0 to `o` - 1 are the opening,
 //!   `o` to frames - 1 the open loop.
 //! - **Held open** ([`held_open`], @0x2e867-0x2e9b0): by an NPC coming out
-//!   of it ([`Npc::holds_gate_open`]).
+//!   of it ([`Npc::holds_gate_open`]), or by one heading in to enter it
+//!   (@0x2e8dd-0x2e9a2, [`Npc::approaches_gate`]): an NPC, active and not
+//!   `_IsDisabled` (@0x2e884-0x2e8aa), whose goal is 1 or 0x14 with its
+//!   travel stellar this one (`_AIShipIsShipGoingToStellar` @0x895d6),
+//!   strictly inside a box of half-width 2 × `_GetSpriteXSize` of the
+//!   gate's slot sprite on each axis (its drawn frame's width, or 32
+//!   with no frame, @0x26d4-0x2701), grown to trunc(× 1.1) once the gate
+//!   is open, its frame as it stood before this tick's step
+//!   ([`approach_reach`], @0x2e906-0x2e92e). It has no mode test.
 //! - **While held** (@0x2e9f8-0x2ebf1) it steps once its timer reaches
 //!   `AnimDelay`, or `Frame0Bias` × `AnimDelay` on frame `o` when the bias
 //!   is above 1, the timer then starting again. Below `o` it opens a frame.
@@ -52,13 +60,6 @@
 //!   The engine has neither: L at a gate enters it at once. Its clause
 //!   joins [`held_open`] with the request counter
 //!   (`phase/hud-fidelity/phase-19-clearance-request-and-dock-approach`).
-//! - **Approaching to enter** (@0x2e8dd-0x2e9a2): an NPC whose goal is 1
-//!   or 0x14 with its travel stellar this one (`_AIShipIsShipGoingToStellar`
-//!   @0x895d6), strictly inside a box of half-width 2 × the gate sprite's
-//!   X size on each axis, grown ×1.1 once the gate is open
-//!   ([`GateSprite::is_open`]). NPCs do not head into gates yet:
-//!   `phase/system-traffic-fidelity/phase-8-idle-destination-picker-rules`
-//!   adds the clause.
 //! - **The sequential branch** (@0x2ec4b-0x2ee05), every other stellar's:
 //!   the view's stellar animation.
 //! - **Sprite-slot plumbing** (@0x2e713-0x2e7e5, @0x2ee35-0x2ef1a):
@@ -66,7 +67,7 @@
 //!   stellar drawing does; `_HandleSpriteMurkiness` (@0x2eea4) is left
 //!   out for every sprite.
 
-use crate::catalog::{LandingSite, SiteAnimation, StellarId};
+use crate::catalog::{LandingSite, SiteAnimation};
 use crate::chance::Chance;
 use crate::traffic::npc::Npc;
 
@@ -296,16 +297,46 @@ impl GateSprite {
 
 /// Whether `gate` is held open this tick: by any of `npcs` coming out of
 /// it ([`Npc::holds_gate_open`]; `_HandleStellarSprites`
-/// @0x2e884-0x2e8d7). The original tests the player's trigger first and
-/// each ship's approach beside its emerge; see the module docs.
+/// @0x2e884-0x2e8d7), or heading in to land on or enter it strictly
+/// inside `reach` of it on both axes ([`Npc::approaches_gate`],
+/// @0x2e8dd-0x2e9a2; see [`approach_reach`]). The original tests the
+/// player's trigger first; see the module docs.
 #[must_use]
-pub fn held_open(gate: StellarId, npcs: &[Npc]) -> bool {
-    npcs.iter().any(|npc| npc.holds_gate_open(gate))
+pub fn held_open(gate: &LandingSite, reach: f32, npcs: &[Npc]) -> bool {
+    npcs.iter().any(|npc| {
+        npc.holds_gate_open(gate.id) || npc.approaches_gate(gate.id, gate.position, reach)
+    })
 }
 
+/// How near a ship heading in must be to hold a gate open, on each axis,
+/// strictly: twice the width of the sprite the gate's slot draws, grown
+/// to trunc(× 1.1) once the gate is `open` (`_HandleStellarSprites`
+/// @0x2e906-0x2e92e, the double at 0xdd1b0), the gate's frame as it stood
+/// before this tick's step.
+#[must_use]
+pub fn approach_reach(sprite_width: u32, open: bool) -> f32 {
+    let reach = 2.0 * f64::from(sprite_width);
+    let reach = if open {
+        (reach * APPROACH_GROWTH).trunc()
+    } else {
+        reach
+    };
+    // A sprite's width, doubled and grown a tenth: well inside f32's
+    // exact integers.
+    #[allow(clippy::cast_possible_truncation)]
+    let reach = reach as f32;
+    reach
+}
+
+/// How much farther a ship heading in holds an open gate open: 1.1 (the
+/// double at 0xdd1b0).
+pub const APPROACH_GROWTH: f64 = 1.1;
+
 #[cfg(test)]
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::catalog::StellarId;
     use crate::chance::NeverFires;
     use crate::testkit::Draws;
 
@@ -636,6 +667,14 @@ mod tests {
         assert_eq!(run(&mut sprite, &two, 1, true, &mut NeverFires), [1]);
     }
 
+    /// Hypergate `id` at (100, -50).
+    fn gate_site(id: i16) -> LandingSite {
+        LandingSite {
+            flags2: crate::gate::HYPERGATE,
+            ..crate::testkit::planet(id, 100.0, -50.0)
+        }
+    }
+
     #[test]
     fn a_gate_is_held_open_by_any_ship_coming_out_of_it() {
         use crate::stats::ShipStats;
@@ -647,10 +686,57 @@ mod tests {
             emerges_from: Some(gate_id),
             ..crate::testkit::npc(2, ShipStats::default())
         };
-        assert!(!held_open(gate_id, &[]));
-        assert!(!held_open(gate_id, std::slice::from_ref(&flying)));
-        assert!(held_open(gate_id, &[flying.clone(), emerging.clone()]));
-        assert!(!held_open(StellarId(131), &[flying, emerging]));
+        let (gate, other) = (gate_site(130), gate_site(131));
+        assert!(!held_open(&gate, 0.0, &[]));
+        assert!(!held_open(&gate, 0.0, std::slice::from_ref(&flying)));
+        assert!(held_open(&gate, 0.0, &[flying.clone(), emerging.clone()]));
+        assert!(!held_open(&other, 0.0, &[flying, emerging]));
+    }
+
+    #[test]
+    fn a_gate_is_held_open_by_a_ship_heading_in_strictly_inside_its_reach() {
+        use crate::ai::Goal;
+        use crate::combat::hull::Condition;
+        use crate::geometry::Vec2;
+        use crate::stats::ShipStats;
+        let gate = gate_site(130);
+        let at = |goal, x: f32, y: f32| Npc {
+            goal,
+            state: crate::flight::ShipState {
+                position: Vec2::new(gate.position.x + x, gate.position.y + y),
+                ..crate::flight::ShipState::default()
+            },
+            ..crate::testkit::npc(1, ShipStats::default())
+        };
+        let held = |npc: Npc| held_open(&gate, 200.0, &[npc]);
+        for goal in [Goal::Land(gate.id), Goal::EnterGate(gate.id)] {
+            assert!(held(at(goal, 199.9, -199.9)), "{goal:?}");
+            assert!(held(at(goal, -199.9, 199.9)), "{goal:?}");
+            assert!(!held(at(goal, 200.0, 0.0)), "{goal:?}: not at 2w");
+            assert!(!held(at(goal, -200.0, 0.0)), "{goal:?}");
+            assert!(!held(at(goal, 0.0, 200.0)), "{goal:?}");
+            assert!(!held(at(goal, 0.0, -200.0)), "{goal:?}");
+            let disabled = Npc {
+                condition: Condition::Disabled,
+                ..at(goal, 0.0, 0.0)
+            };
+            assert!(!held(disabled), "{goal:?}: disabled");
+        }
+        assert!(
+            !held(at(Goal::EnterGate(StellarId(131)), 0.0, 0.0)),
+            "another gate"
+        );
+        assert!(!held(at(Goal::Idle, 0.0, 0.0)), "another goal");
+        assert!(!held(at(Goal::JumpOut, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn the_approach_reach_is_twice_the_sprite_width_grown_a_tenth_once_open() {
+        assert_eq!(approach_reach(100, false), 200.0);
+        assert_eq!(approach_reach(100, true), 220.0);
+        assert_eq!(approach_reach(33, true), 72.0, "72.6");
+        assert_eq!(approach_reach(5, true), 11.0);
+        assert_eq!(approach_reach(32, false), 64.0);
     }
 
     #[test]

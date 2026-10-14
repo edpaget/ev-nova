@@ -12,6 +12,7 @@ use crate::combat::armament::{Armament, Trigger};
 use crate::combat::hull::{Condition, HullSpec};
 use crate::escort::{EscortClass, EscortDuty, EscortOrder, FormationSlot};
 use crate::flight::ShipState;
+use crate::geometry::Vec2;
 use crate::mission::ships::ShipBehav;
 use crate::reserves::Reserves;
 use crate::self_repair::FormerEscort;
@@ -517,6 +518,18 @@ impl Npc {
     #[must_use]
     pub fn entering_gate(&self) -> bool {
         matches!(self.mode, Mode::EnteringGate { .. })
+    }
+
+    /// Whether it heads in to `gate`, at `at`, strictly inside `reach` of
+    /// it on both axes, holding its sprite open (`_HandleStellarSprites`
+    /// @0x2e8dd-0x2e9a2): intact (`_IsDisabled` @0x2e8a3), bound to land
+    /// on it or enter it (`_AIShipIsShipGoingToStellar` @0x895d6, goal 1
+    /// or 0x14 with its travel stellar the gate), whatever its mode.
+    #[must_use]
+    pub fn approaches_gate(&self, gate: StellarId, at: Vec2, reach: f32) -> bool {
+        let bound = matches!(self.goal, Goal::Land(to) | Goal::EnterGate(to) if to == gate);
+        let off = self.state.position - at;
+        bound && self.condition == Condition::Intact && off.x.abs() < reach && off.y.abs() < reach
     }
 
     /// Whether it is done coming into the system, there to be fought and
