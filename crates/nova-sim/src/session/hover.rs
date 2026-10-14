@@ -3,6 +3,7 @@
 //! stellar.
 
 use super::Session;
+use crate::combat::hull::Condition;
 use crate::geometry::Vec2;
 use crate::hover::{DrawnShips, Hover, ship_under};
 use crate::navigation::stellar_under;
@@ -11,7 +12,9 @@ impl Session {
     /// What the pointer at `at`, in system coordinates, is over among the
     /// things the player can target, the ships boxed as `drawn` draws them
     /// (`_HandleMouse` @0x380e3-0x3828d): a ship ([`ship_under`], the
-    /// player's own only while it has a target), or else, unless a jump is
+    /// player's own only while it has a target and, past the `_IsDying`
+    /// skip @0x380f7 that comes before the slot-0 target rule
+    /// @0x381c3-0x381d5, is intact or disabled), or else, unless a jump is
     /// under way, the pre-jump stage included (the player's +0x50 > 0,
     /// @0x381f2), the stellar a click there would pick ([`stellar_under`]).
     #[must_use]
@@ -19,7 +22,8 @@ impl Session {
         ship_under(
             self.npcs(),
             self.scanner(),
-            self.target.is_some(),
+            self.target.is_some()
+                && matches!(self.condition, Condition::Intact | Condition::Disabled),
             at,
             drawn,
         )
@@ -106,5 +110,19 @@ mod tests {
         assert_eq!(session.hover(far, &AllAt(far)), None);
         session.target = Some(NpcId(99));
         assert_eq!(session.hover(far, &AllAt(far)), Some(Hover::Player));
+    }
+
+    #[test]
+    fn a_dying_or_destroyed_players_ship_is_not_hovered_though_it_holds_a_target() {
+        let catalog = catalog();
+        let mut session = Session::start(&catalog).expect("starts");
+        let far = Vec2::new(-5000.0, 0.0);
+        session.target = Some(NpcId(99));
+        session.condition = Condition::Disabled;
+        assert_eq!(session.hover(far, &AllAt(far)), Some(Hover::Player));
+        session.condition = Condition::Dying { ticks_left: 3 };
+        assert_eq!(session.hover(far, &AllAt(far)), None, "dying");
+        session.condition = Condition::Destroyed;
+        assert_eq!(session.hover(far, &AllAt(far)), None, "destroyed");
     }
 }
