@@ -2012,6 +2012,21 @@ impl<
         self.session.as_mut().is_ok_and(Session::take_hold_expired)
     }
 
+    /// Whether any flight key is held down.
+    #[must_use]
+    pub fn holds_keys(&self) -> bool {
+        !self.held.is_empty()
+    }
+
+    /// The `dësc` IDs a sabotaged player sees as it dies
+    /// ([`Session::sabotage_death_descs`]); none without a session.
+    #[must_use]
+    pub fn sabotage_death_descs(&self) -> Vec<i16> {
+        self.session
+            .as_ref()
+            .map_or_else(|_| Vec::new(), Session::sabotage_death_descs)
+    }
+
     /// Begins the fade to black after the hold has expired, over
     /// [`DEATH_FADE_FOR`]; nothing before then ([`Session::begin_fade`]).
     pub fn begin_fade(&mut self) {
@@ -10078,6 +10093,19 @@ mod tests {
         ticks(&mut view, 1);
         assert_eq!(shots_of(&view, ROCKET), 2, "let go");
         assert_eq!((FIRE_KEY, SECONDARY_KEY), (Key::Space, Key::Control));
+    }
+
+    #[test]
+    fn the_flight_keys_are_held_until_let_go_or_released() {
+        let mut view = flight();
+        assert!(!view.holds_keys());
+        view.input(&key(Key::Up, true));
+        assert!(view.holds_keys());
+        view.input(&key(Key::Up, false));
+        assert!(!view.holds_keys(), "let go");
+        view.input(&key(Key::Up, true));
+        view.release_keys();
+        assert!(!view.holds_keys(), "released");
     }
 
     #[test]
