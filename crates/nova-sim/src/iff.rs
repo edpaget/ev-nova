@@ -22,10 +22,16 @@
 //!   Ours sums in `i32`: the original's 16-bit `imulw`/`addw` wraps are
 //!   not replicated.
 //! - The original caches all three (`_playerHasIFF`,
-//!   `_playerHasDensityScanner`, `_playerAntiInterference`) and refreshes
-//!   them only where `_ResetPlayerPrecalcedValues` (@0xc357) runs, never
-//!   from the outfitter. Ours reads the outfits afresh every time; the
-//!   refresh points are rdm:phase/hud-fidelity/phase-10-radar-outfit-cache-refresh.
+//!   `_playerHasDensityScanner`, `_playerAntiInterference`) lazily:
+//!   `_ResetPlayerPrecalcedValues` stores a sentinel (@0xc3b6-0xc3d9), and
+//!   the getters recount the outfits on their next call (@0x436c,
+//!   @0x42e4, @0x5f3e). Every change to the player's outfits resets them
+//!   before the next read. The outfitter does so through
+//!   `_SystemInfoToShipStats` (buy @0x5c305, sell @0x5cffb, which
+//!   tail-jumps to the reset @0xcae9) and then redraws the bar
+//!   (`_DrawStatus` @0x5c5a1, @0x5d328); set expressions do so through
+//!   the wrappers @0x99a85 and @0x99dea. So reading the outfits afresh
+//!   each time, as ours does, matches.
 //!
 //! # Ships ([`ship_iff`], `_ColorCodeShip` @0x4ae8)
 //!

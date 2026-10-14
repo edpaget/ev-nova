@@ -12,11 +12,11 @@ impl Session {
     /// What the player's outfits give the radar: IFF, a density scanner
     /// and anti-interference ([`RadarGear::of`]).
     ///
-    /// It is read afresh at every call. The original caches it and
-    /// refreshes it only where `_ResetPlayerPrecalcedValues` (@0xc357)
-    /// runs, never from the outfitter, so an outfit bought there shows on
-    /// its radar only from the next refresh point:
-    /// rdm:phase/hud-fidelity/phase-10-radar-outfit-cache-refresh.
+    /// It is read afresh at every call. The original caches it lazily,
+    /// and every change to the outfits (the outfitter included, through
+    /// `_SystemInfoToShipStats` @0x5c305 / @0x5cffb) resets the cache
+    /// through `_ResetPlayerPrecalcedValues` (@0xc357) before the next
+    /// read, so the two match.
     #[must_use]
     pub fn radar_gear(&self) -> RadarGear {
         RadarGear::of(&self.pilot.outfits, &self.outfits)

@@ -2629,9 +2629,16 @@ impl<C> FlightView<C> {
     /// (`_PlayerEnterHypergate`, ours as the map closes) and on closing
     /// the comm dialog ([`FlightView::hang_up`]), the mission dialog
     /// ([`FlightView::accept_mission`], [`FlightView::refuse_mission`]) and
-    /// the text dialog ([`FlightView::take_mission_texts`]). The shipyard
-    /// dialog is the spaceport's, while the radar is blank, and taking off
-    /// redraws it.
+    /// the text dialog ([`FlightView::take_mission_texts`]), which ours
+    /// also runs in port. The original also redraws the bar after each
+    /// outfitter order (`_DrawStatus` @0x5c5a1 buy, @0x5d328 sell) and as
+    /// the shipyard closes (`_RedrawStatus` @0x5f87c, @0x5f8c5). Ours
+    /// doesn't retake the snapshot after an outfitter order or a ship
+    /// purchase while docked, but it draws no status bar in port, and
+    /// take-off retakes it before any flight frame, so per CLAUDE.md's
+    /// ordering rule this is noted, not fixed. Those retakes belong with
+    /// the port's status bar:
+    /// rdm:phase/hud-fidelity/phase-15-port-status-bar.
     fn redraw_status(&mut self) {
         self.radar_scene = Some(self.radar_now());
         self.retake_nav();
@@ -2809,6 +2816,12 @@ impl<C> FlightView<C> {
     /// engine reading, the snapshot taken at its last refresh; by the
     /// other, or before the first refresh, the radar as it is now
     /// ([`FlightView::radar_now`]).
+    ///
+    /// While docked the snapshot isn't retaken after an outfitter order
+    /// or a ship purchase, which the original retakes as the outfitter
+    /// and shipyard change the ship ([`FlightView::redraw_status`]). No
+    /// status bar is drawn in port, and take-off retakes it before the
+    /// bar can be seen.
     fn radar_shown(&self) -> Cow<'_, RadarScene> {
         match &self.radar_scene {
             Some(shown) if self.hud_waits() => Cow::Borrowed(shown),
