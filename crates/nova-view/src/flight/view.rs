@@ -10070,10 +10070,11 @@ mod tests {
     #[test]
     fn landing_redraws_the_held_gauges() {
         let mut view = FlightView::new(outfitting());
-        view.redraw_status();
+        view.reserves_scene = Some(Reserves::default());
         desk_reserve(&mut view, nova_sim::Reserve::Fuel, 100.0);
         land_now(&mut view);
-        assert_eq!(view.reserves_shown().fuel.now, 100.0, "landing's");
+        assert_eq!(view.reserves_shown(), view.reserves(), "landing's");
+        assert_eq!(view.reserves_shown().fuel.now, 100.0);
     }
 
     #[test]
