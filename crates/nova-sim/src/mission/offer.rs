@@ -74,20 +74,35 @@ impl RollTable {
 pub struct Stop {
     /// The stellar.
     pub stellar: StellarId,
-    /// The system that owns it: the lowest-ID visible system that lists it
-    /// and is not shadowed at its place
-    /// ([`OverlaidGalaxy::owner`](crate::story::OverlaidGalaxy::owner)),
-    /// `None` when none does (a fixed stellar of a hidden or shadowed
-    /// system, or none at all).
+    /// The system `_RandomizeOneMission` stores beside it (the offer
+    /// slot's +0x2 for the destination, +0xa for the return): for a
+    /// destination its holder's stand-in, else the system
+    /// `_FindSystemFromStellar` gives ([`Whereabouts::travel`](crate::story::Whereabouts::travel)); for a
+    /// return its holder as it is, else that
+    /// ([`Whereabouts::system`](crate::story::Whereabouts::system)). `None` only when no system lists the
+    /// stellar.
+    ///
+    /// The text tags, the aux ships and the mission ships don't read it:
+    /// they resolve the stellar live, as the original does.
     pub system: Option<SystemId>,
 }
 
 impl Stop {
-    /// `stellar`, in the system `world` gives it.
-    fn of(stellar: StellarId, world: &World) -> Self {
+    /// `stellar` as a destination, in its travel system in `world`
+    /// (@0xa15a8-0xa15ca).
+    fn travel(stellar: StellarId, world: &World) -> Self {
         Self {
             stellar,
-            system: world.system_of(stellar),
+            system: world.whereabouts(stellar).travel(world.map.places()),
+        }
+    }
+
+    /// `stellar` as a return, in its system in `world`, worked out afresh
+    /// even when it is the destination's (@0xa1632-0xa1669).
+    fn returning(stellar: StellarId, world: &World) -> Self {
+        Self {
+            stellar,
+            system: world.whereabouts(stellar).system(),
         }
     }
 }
@@ -173,8 +188,8 @@ pub fn resolve(
     Offer {
         mission: mission.id,
         venue,
-        destination: destination.map(|stellar| Stop::of(stellar, world)),
-        return_to: return_to.map(|stellar| Stop::of(stellar, world)),
+        destination: destination.map(|stellar| Stop::travel(stellar, world)),
+        return_to: return_to.map(|stellar| Stop::returning(stellar, world)),
         cargo_type,
         cargo_tons,
         pay: i64::from(mission.pay_val),

@@ -1205,6 +1205,84 @@ fn a_fixed_stellar_in_no_visible_system_has_no_system() {
     assert_eq!(offer.venue, Venue::Outside);
 }
 
+/// [`Galaxy::new`] with stellar `id` placed `holder` and `found` alone.
+fn placing(id: i16, holder: Option<i16>, found: Option<i16>) -> Galaxy {
+    let galaxy = Galaxy::new();
+    galaxy
+        .placed
+        .set(vec![Placed {
+            id: StellarId(id),
+            at: Whereabouts {
+                holder: holder.map(SystemId),
+                found: found.map(SystemId),
+            },
+        }])
+        .expect("not placed yet");
+    galaxy
+}
+
+/// The stops `galaxy`'s visit resolves for mission 130 with `TravelStel`
+/// `travel` and `ReturnStel` `back`.
+fn stops(galaxy: &Galaxy, travel: i16, back: i16) -> (Option<Stop>, Option<Stop>) {
+    let offer = resolve(
+        &with(|m| {
+            m.travel_stel = travel;
+            m.return_stel = back;
+        }),
+        Venue::Computer,
+        Some(StellarId(128)),
+        &galaxy.visit().world,
+        today(),
+        &mut Draws::default(),
+    );
+    (offer.destination, offer.return_to)
+}
+
+/// Stellar `id` in `system`.
+fn stop(id: i16, system: Option<i16>) -> Stop {
+    Stop {
+        stellar: StellarId(id),
+        system: system.map(SystemId),
+    }
+}
+
+#[test]
+fn a_destination_is_in_its_holders_stand_in_and_a_return_in_its_holder_as_it_is() {
+    // 160 is rescued into 134, which 130 shadows at its place.
+    let galaxy = placing(160, Some(134), Some(134));
+    assert_eq!(
+        stops(&galaxy, 160, 160),
+        (Some(stop(160, Some(130))), Some(stop(160, Some(134)))),
+        "travel: _FindActiveCoLocatedSystem (@0xa15a8-0xa15b5); return: the owner as it is (@0xa1653-0xa1658)"
+    );
+}
+
+#[test]
+fn a_stop_no_system_holds_is_in_the_system_find_system_from_stellar_gives() {
+    let galaxy = placing(2000, None, Some(131));
+    assert_eq!(
+        stops(&galaxy, 2000, 2000),
+        (Some(stop(2000, Some(131))), Some(stop(2000, Some(131)))),
+        "@0xa15be-0xa15ca, @0xa1661-0xa1669"
+    );
+    let galaxy = placing(2000, Some(134), Some(131));
+    assert_eq!(
+        stops(&galaxy, 2000, 2000),
+        (Some(stop(2000, Some(130))), Some(stop(2000, Some(134)))),
+        "a holder wins over it"
+    );
+}
+
+#[test]
+fn with_return_stel_minus_1_the_return_system_is_resolved_afresh() {
+    let galaxy = placing(160, Some(134), Some(134));
+    assert_eq!(
+        stops(&galaxy, 160, -1),
+        (Some(stop(160, Some(130))), Some(stop(160, Some(134)))),
+        "the destination's stellar (@0xa15f0-0xa15ff), its system worked out again (@0xa1632-0xa1669)"
+    );
+}
+
 #[test]
 fn the_cargo_type_is_kept_from_0_to_999_drawn_at_1000_and_else_none() {
     let galaxy = Galaxy::new();
