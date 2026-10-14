@@ -449,7 +449,7 @@ use crate::outfitter::{
 };
 use crate::person::{NovaPersons, PersonRules, PersonWorld};
 use crate::pilot::{self, Escort, Pilot};
-use crate::player_fate::{PlayerCommand, PlayerFate};
+use crate::player_fate::{Ending, HOLD_TICKS, PlayerCommand, PlayerFate};
 use crate::pre_jump::{self, PreJump};
 use crate::rating;
 use crate::recharge::{self, RechargeRefusal};
@@ -687,6 +687,16 @@ pub struct Session {
     /// on its own frame boundary, so this crosses no boundary the player
     /// can see.
     player_exploded_this_tick: bool,
+    /// How far the game's end has got since the player's ship exploded:
+    /// set to the hold's start on the explosion tick, counted down by
+    /// [`Session::tick`]'s dead branch, then moved on by
+    /// [`Session::begin_fade`] and [`Session::end_play`]. Read only while
+    /// the ship is destroyed, and never saved: the session is dropped
+    /// when play ends.
+    player_end: Option<Ending>,
+    /// Whether the hold ran out on a tick since
+    /// [`Session::take_hold_expired`] was last asked.
+    hold_expiry_due: bool,
     /// The fire command the player holds.
     trigger: Trigger,
     /// The shots and beams in flight, and what the fight reports.
@@ -1096,6 +1106,8 @@ impl Session {
             armament: Armament::default(),
             condition: Condition::Intact,
             player_exploded_this_tick: false,
+            player_end: None,
+            hold_expiry_due: false,
             trigger: Trigger::default(),
             combat: Combat::default(),
             boxes: crate::cargo_box::CargoBoxes::default(),
@@ -1364,7 +1376,9 @@ impl Session {
     /// land key and the pick. A ship that is not intact ignores the
     /// controls and drifts, slowing by [`crate::flight::DISABLED_DRAG`] a
     /// tick before it moves, giving up a jump it was turning and braking
-    /// for, and a destroyed one stays where it is.
+    /// for, and a destroyed one stays where it is, letting go of its
+    /// targets and counting the hold after its explosion down (see
+    /// `dead_tick`).
     ///
     /// Each tick in flight, a jump's included, moves the frame counter on,
     /// and on a due frame ([`market::junk_step_due`]) steps the held
@@ -1405,6 +1419,7 @@ impl Session {
             Condition::Destroyed => {
                 self.stop_thrust();
                 self.player.velocity = Vec2::ZERO;
+                self.dead_tick();
                 return;
             }
         };
@@ -1430,6 +1445,71 @@ impl Session {
             }
         }
         regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
+    }
+
+    /// `_HandlePlayer`'s dead branch (0x6870d-0x6888c), on each tick of a
+    /// destroyed player: it lets go of the player's ship target and nav
+    /// target (+0x70 @0x68712, +0x6c @0x68718), and counts the hold down a
+    /// tick (`subss` @0x68727). On the tick after the last, the hold
+    /// expires (`jbe` @0x68725): once, which
+    /// [`Session::take_hold_expired`] reports. The rest of that tick still
+    /// runs, as the original finishes the frame it sets `gPause` in.
+    fn dead_tick(&mut self) {
+        self.target = None;
+        self.nav_target = None;
+        let ending = self.player_end.get_or_insert(Ending::Holding {
+            ticks_left: HOLD_TICKS,
+        });
+        match ending {
+            Ending::Holding { ticks_left: 0 } => {
+                *ending = Ending::Expired;
+                self.hold_expiry_due = true;
+            }
+            Ending::Holding { ticks_left } => *ticks_left -= 1,
+            Ending::Expired | Ending::Fading | Ending::GameOver => {}
+        }
+    }
+
+    /// Whether the hold after the player's explosion has run out, now or
+    /// on an earlier tick: true from the expiry's tick on, through the fade
+    /// and game over. Asking leaves it as it is; the flight view stops
+    /// stepping on it.
+    #[must_use]
+    pub fn hold_expired(&self) -> bool {
+        self.condition == Condition::Destroyed && self.player_end.is_some_and(Ending::expired)
+    }
+
+    /// Whether the hold ran out since this was last asked: the seam at the
+    /// countdown's expiry, before the original's `gPause = 1` (0x68838),
+    /// where the sabotage dialogs (phase 8) show over the flight scene.
+    /// True once.
+    pub fn take_hold_expired(&mut self) -> bool {
+        std::mem::take(&mut self.hold_expiry_due)
+    }
+
+    /// Begins the fade to black after an expired hold: `_PlayGame`'s exit
+    /// (0x465eb) and `_FadeScreenOut` (0x465f7). Nothing happens at any
+    /// other stage.
+    pub fn begin_fade(&mut self) {
+        if self.condition == Condition::Destroyed && self.player_end == Some(Ending::Expired) {
+            self.player_end = Some(Ending::Fading);
+        }
+    }
+
+    /// Ends play once the fade is over, for the main screen to return
+    /// (0x4664a, `_EnterGameFromMainScreen` 0x1a471). Nothing happens at
+    /// any other stage.
+    pub fn end_play(&mut self) {
+        if self.condition == Condition::Destroyed && self.player_end == Some(Ending::Fading) {
+            self.player_end = Some(Ending::GameOver);
+        }
+    }
+
+    /// Whether the pilot may be saved now: only while the player is not
+    /// dying or dead ([`crate::FateRow::saves`]).
+    #[must_use]
+    pub fn may_save(&self) -> bool {
+        self.player_fate().row().saves
     }
 
     /// Sounds the thrust starting or stopping as `thrust` says, and ramps
@@ -1794,6 +1874,11 @@ impl Session {
         );
         self.take_shoves();
         self.player_exploded_this_tick = !was_destroyed && self.condition == Condition::Destroyed;
+        if self.player_exploded_this_tick {
+            self.player_end = Some(Ending::Holding {
+                ticks_left: HOLD_TICKS,
+            });
+        }
         self.sound_the_klaxon(was_dying);
         self.raise_disabled(&was, &mut &mut *chance);
         self.answer_strikes(&was, rules.law);
@@ -2106,11 +2191,16 @@ impl Session {
         self.condition
     }
 
-    /// Where the player's ship is in its lifecycle: its condition, and
-    /// whether it exploded on the latest fight tick.
+    /// Where the player's ship is in its lifecycle: its condition, whether
+    /// it exploded on the latest fight tick, and how far the game's end has
+    /// got since.
     #[must_use]
     pub fn player_fate(&self) -> PlayerFate {
-        PlayerFate::of(self.condition, self.player_exploded_this_tick, None)
+        PlayerFate::of(
+            self.condition,
+            self.player_exploded_this_tick,
+            self.player_end,
+        )
     }
 
     /// Whether the session takes the player's `command` now: its
@@ -14978,6 +15068,195 @@ pub(super) mod tests {
                 "{:?}",
                 session.player_fate()
             );
+        }
+    }
+
+    /// One whole tick of `session`, as the flight view steps it: flight,
+    /// then the traffic under `catalog`'s firing NPC, then the fight.
+    fn full_tick(session: &mut Session, catalog: &FakePilotCatalog) {
+        session.tick(Controls::default());
+        session.tick_traffic(catalog, &Firing, &mut NeverFires);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+    }
+
+    /// Steps `session` under fire from `catalog`'s NPC until the player's
+    /// ship explodes, and returns with it on the explosion's tick.
+    fn until_exploded(session: &mut Session, catalog: &FakePilotCatalog) {
+        for _ in 0..60 {
+            full_tick(session, catalog);
+            if session.player_fate() == PlayerFate::Exploded {
+                return;
+            }
+        }
+        panic!("the player's ship never exploded");
+    }
+
+    #[test]
+    fn the_hold_runs_242_ticks_after_the_explosion_and_expires_on_the_243rd() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        until_exploded(&mut session, &catalog);
+        assert!(!session.hold_expired());
+        for tick in 1..=HOLD_TICKS {
+            full_tick(&mut session, &catalog);
+            assert_eq!(
+                session.player_fate(),
+                PlayerFate::Holding {
+                    ticks_left: HOLD_TICKS - tick
+                },
+                "dead tick {tick}"
+            );
+            assert!(!session.hold_expired(), "dead tick {tick}");
+            assert!(!session.take_hold_expired(), "dead tick {tick}");
+        }
+        full_tick(&mut session, &catalog);
+        assert_eq!(session.player_fate(), PlayerFate::Holding { ticks_left: 0 });
+        assert!(session.hold_expired(), "on the 243rd dead tick");
+        assert!(session.take_hold_expired());
+        assert!(!session.take_hold_expired(), "taken once");
+        assert!(session.hold_expired(), "taking it leaves the stage alone");
+        full_tick(&mut session, &catalog);
+        assert!(!session.take_hold_expired(), "it expires once");
+        assert!(session.hold_expired());
+    }
+
+    #[test]
+    fn every_dead_tick_lets_go_of_the_players_target_and_nav_target() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.condition = Condition::Destroyed;
+        for ticks_left in [5, 1, 0] {
+            session.player_end = Some(Ending::Holding { ticks_left });
+            session.target = Some(NpcId(0));
+            session.nav_target = Some(StellarId(128));
+            session.tick(Controls::default());
+            assert_eq!(session.target, None, "{ticks_left} left");
+            assert_eq!(session.nav_target(), None, "{ticks_left} left");
+        }
+        assert!(session.hold_expired(), "the last was the expiry's tick");
+        session.target = Some(NpcId(0));
+        session.nav_target = Some(StellarId(128));
+        session.tick(Controls::default());
+        assert_eq!(
+            (session.target, session.nav_target()),
+            (None, None),
+            "and after it"
+        );
+    }
+
+    #[test]
+    fn a_destroyed_player_with_no_ending_recorded_starts_the_hold() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.condition = Condition::Destroyed;
+        session.tick(Controls::default());
+        assert_eq!(
+            session.player_fate(),
+            PlayerFate::Holding {
+                ticks_left: HOLD_TICKS - 1
+            }
+        );
+    }
+
+    #[test]
+    fn the_scene_runs_on_during_the_hold() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        until_exploded(&mut session, &catalog);
+        session.take_combat_events();
+        session.npc_mut(NpcId(0)).expect("the NPC").state.velocity = Vec2::new(1.0, 0.0);
+        let before = session.npcs()[0].state.position;
+        let mut fired = false;
+        for _ in 0..40 {
+            full_tick(&mut session, &catalog);
+            assert!(matches!(session.player_fate(), PlayerFate::Holding { .. }));
+            fired |= session.take_combat_events().iter().any(|event| {
+                matches!(
+                    event,
+                    CombatEvent::Fired {
+                        ship: ShipRef::Npc(NpcId(0)),
+                        ..
+                    }
+                )
+            });
+        }
+        assert_ne!(session.npcs()[0].state.position, before, "the NPC moves");
+        assert!(fired, "the NPC fires");
+    }
+
+    /// A session whose player has exploded and whose hold has run out.
+    fn expired_hold() -> Session {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.condition = Condition::Destroyed;
+        session.player_end = Some(Ending::Holding { ticks_left: 0 });
+        session.tick(Controls::default());
+        assert!(session.hold_expired());
+        session
+    }
+
+    #[test]
+    fn begin_fade_moves_only_an_expired_hold_to_fading() {
+        let catalog = deadly();
+        let mut flying = facing_an_npc(&catalog, 180);
+        flying.begin_fade();
+        assert_eq!(flying.player_fate(), PlayerFate::Flying);
+        let mut holding = facing_an_npc(&catalog, 180);
+        holding.condition = Condition::Destroyed;
+        holding.player_end = Some(Ending::Holding { ticks_left: 3 });
+        holding.begin_fade();
+        assert_eq!(holding.player_fate(), PlayerFate::Holding { ticks_left: 3 });
+        let mut session = expired_hold();
+        session.begin_fade();
+        assert_eq!(session.player_fate(), PlayerFate::Fading);
+        session.tick(Controls::default());
+        assert_eq!(session.player_fate(), PlayerFate::Fading, "ticks keep it");
+        session.end_play();
+        session.begin_fade();
+        assert_eq!(session.player_fate(), PlayerFate::GameOver, "not back");
+    }
+
+    #[test]
+    fn end_play_moves_fading_to_game_over() {
+        let mut session = expired_hold();
+        session.end_play();
+        assert_eq!(
+            session.player_fate(),
+            PlayerFate::Holding { ticks_left: 0 },
+            "not before the fade"
+        );
+        session.begin_fade();
+        session.end_play();
+        assert_eq!(session.player_fate(), PlayerFate::GameOver);
+        assert!(session.hold_expired());
+        session.tick(Controls::default());
+        assert_eq!(session.player_fate(), PlayerFate::GameOver);
+    }
+
+    #[test]
+    fn a_dying_or_dead_player_may_not_be_saved() {
+        let catalog = deadly();
+        let mut session = facing_an_npc(&catalog, 180);
+        assert!(session.may_save(), "flying");
+        session.condition = Condition::Disabled;
+        assert!(session.may_save(), "disabled");
+        session.condition = Condition::Dying {
+            ticks_left: 9,
+            starting: false,
+        };
+        assert!(!session.may_save(), "breaking up");
+        session.condition = Condition::Destroyed;
+        session.player_exploded_this_tick = true;
+        assert!(!session.may_save(), "exploded");
+        session.player_exploded_this_tick = false;
+        for ending in [
+            Ending::Holding { ticks_left: 9 },
+            Ending::Expired,
+            Ending::Fading,
+            Ending::GameOver,
+        ] {
+            session.player_end = Some(ending);
+            assert!(!session.may_save(), "{ending:?}");
         }
     }
 
