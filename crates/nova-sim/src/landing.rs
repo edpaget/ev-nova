@@ -420,6 +420,17 @@ pub fn nearest_landable(position: Vec2, sites: &[LandingSite]) -> Option<Stellar
     nearest_landable_site(position, sites).map(|site| site.id)
 }
 
+/// The stellar [`nearest_landable`] names, and whether it is a station
+/// (`spöb` `Flags` 0x10), as the tutorial's land hint words it
+/// (`_HandlePlayer` @0x709e8-0x70a31; see [`tutorial`](crate::tutorial)).
+#[must_use]
+pub fn nearest_landable_station(
+    position: Vec2,
+    sites: &[LandingSite],
+) -> Option<(StellarId, bool)> {
+    nearest_landable_site(position, sites).map(|site| (site.id, is_station(site)))
+}
+
 /// The site [`nearest_landable`] names: the one the land key selects when
 /// there is no target.
 fn nearest_landable_site(position: Vec2, sites: &[LandingSite]) -> Option<&LandingSite> {
@@ -893,6 +904,16 @@ mod tests {
             nearest_landable(Vec2::new(450.0, 0.0), &sites),
             Some(StellarId(128))
         );
+        assert_eq!(
+            nearest_landable_station(Vec2::ZERO, &sites),
+            Some((StellarId(131), true)),
+            "the station is said to be one"
+        );
+        assert_eq!(
+            nearest_landable_station(Vec2::new(450.0, 0.0), &sites),
+            Some((StellarId(128), false))
+        );
+        assert_eq!(nearest_landable_station(Vec2::ZERO, &[]), None);
     }
 
     #[test]

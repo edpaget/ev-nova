@@ -378,6 +378,7 @@ mod status_cargo;
 mod stellars;
 mod story;
 mod target_panel;
+mod tutorial;
 
 pub use hooks::HookRules;
 pub use ship_change::ShipChangeRules;
@@ -744,6 +745,11 @@ pub struct Session {
     /// The Red Alert's state (see the `red_alert` module); not saved, as
     /// the original's pilot file does not keep it.
     red_alert: RedAlert,
+    /// How far through the first-flight tutorial the pilot is (see the
+    /// [`tutorial`](crate::tutorial) module): seasoned at every flight
+    /// start, a new pilot from [`Session::begin`]; not saved, as the
+    /// original's `_newbieFlag` is not.
+    tutorial: crate::tutorial::Tutorial,
     /// How far out the nav target's brackets are (see the `brackets`
     /// module); not saved, as the original's pilot file does not keep it.
     nav_fly_in: crate::brackets::FlyIn,
@@ -1091,6 +1097,8 @@ impl Session {
             ship_redraws: BTreeSet::new(),
             frame: 0,
             red_alert: RedAlert::default(),
+            // `_ResetPlayer` @0x1d7cf, at every flight start.
+            tutorial: crate::tutorial::Tutorial::SEASONED,
             nav_fly_in: crate::brackets::FlyIn::default(),
             target_fly_in: crate::brackets::FlyIn::default(),
             sound_quiet: false,
@@ -1338,7 +1346,8 @@ impl Session {
     /// tribbles and perishables in the space the goods and the mission
     /// cargo aboard leave, unless the player is destroyed. It then
     /// runs the Red Alert on that frame (see the `red_alert` module) and
-    /// flies the target brackets in (see the `brackets` module). A
+    /// the tutorial's hint block (see the `tutorial` module), and flies
+    /// the target brackets in (see the `brackets` module). A
     /// landed tick moves none of them.
     pub fn tick(&mut self, controls: Controls) {
         self.gate = None;
@@ -1359,6 +1368,7 @@ impl Session {
             );
         }
         self.red_alert_tick(frame);
+        self.tutorial_tick(frame);
         self.brackets_tick();
         self.boxes_tick();
         let controls = match self.condition {
@@ -2156,6 +2166,11 @@ impl Session {
     /// still jumps. Until it arrives, ticks in hyperspace move nothing.
     /// Only this first hop of a multi-jump turns and slows: the rest are
     /// made in hyperspace, on arrival.
+    ///
+    /// A refusal [`check_jump`] gives that the player is told of
+    /// ([`Session::jump_refusal_told`]) beeps [`SimSound::Refused`]
+    /// (`_HandlePlayer` @0x6b89f, @0x6b9cc, @0x6ba72); the engine's own
+    /// refusals, landed or disabled, do not.
     pub fn begin_jump(&mut self) -> Result<SystemId, JumpRefusal> {
         if self.landed.is_some() {
             return Err(JumpRefusal::Landed);
@@ -2166,7 +2181,11 @@ impl Session {
         if let Some(Jump::PreJump { to, .. }) = self.jump {
             return Ok(to);
         }
-        let next = self.check_next_jump()?;
+        let next = self.check_next_jump().inspect_err(|refusal| {
+            if self.jump_refusal_told(refusal) {
+                self.sounds.push(SimSound::Refused);
+            }
+        })?;
         let map = |id| self.galaxy.map().position(id);
         let bearing = map(self.pilot.system)
             .zip(map(next))
@@ -2211,14 +2230,16 @@ impl Session {
     }
 
     /// Begins the jump to `to`, if the ship is ready to turn no further
-    /// towards `bearing` and slow no more: the thrust stops and the glow
-    /// goes out.
+    /// towards `bearing` and slow no more: the thrust stops, the glow
+    /// goes out, and the pilot is past the tutorial.
     fn start_jump_if_ready(&mut self, to: SystemId, bearing: Option<f32>) {
         let handling = self.flying_handling();
         if pre_jump::stage(&self.player, &handling, bearing, !self.stats.fast_jump)
             == PreJump::Ready
         {
             self.jump = Some(Jump::Hyperspace(to));
+            // The pilot is past the tutorial (`_HandlePlayer` @0x6b603).
+            self.tutorial.jumped();
             self.stop_thrust();
             self.sounds.push(SimSound::JumpBegan);
             self.let_go_of_led_targets();
@@ -2825,7 +2846,37 @@ impl Session {
     /// restarted on `chance` (@0x634df-0x6353c; see the `aux_ships`
     /// module), then the escort-strength timer is armed on it (see
     /// [`strength`], @0x6706f), and the population rolls on it last.
+    ///
+    /// Then the pilot is greeted ([`SimMessage::TookOff`]), past the
+    /// tutorial, the lead rolled on `chance`; a newbie is not, and moves
+    /// on to the hyperspace hint (see the [`tutorial`](crate::tutorial)
+    /// module). A `Q`'s take-off with a message greets no one
+    /// (`Session::settle_script`).
     pub fn take_off(
+        &mut self,
+        catalog: &(impl TrafficCatalog + ?Sized),
+        chance: &mut (impl Chance + ?Sized),
+    ) -> Option<StellarId> {
+        let stellar = self.lift_off(catalog, chance)?;
+        self.greet(stellar, chance);
+        Some(stellar)
+    }
+
+    /// The take-off's greeting, with no `Q` message shown in its place
+    /// (`_PlayerLandOnStellar` @0x635e8-0x63745): past the tutorial,
+    /// [`SimMessage::TookOff`] from `stellar`, its lead `Rand(5)` rolled on
+    /// `chance` (@0x63604), with no sound; a newbie's flag becomes −1
+    /// instead (see the [`tutorial`](crate::tutorial) module).
+    pub(super) fn greet(&mut self, stellar: StellarId, chance: &mut (impl Chance + ?Sized)) {
+        if self.tutorial.take_off() {
+            let lead = chance.roll(5);
+            self.messages.push(SimMessage::TookOff { stellar, lead });
+        }
+    }
+
+    /// [`Session::take_off`] but for its greeting: whoever calls it greets,
+    /// or not.
+    pub(super) fn lift_off(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
@@ -19458,6 +19509,8 @@ pub(super) mod tests {
             vec![Draw::Fires(35); 7],
             vec![SEED],
             population_draws(&catalog, 130),
+            // The greeting's lead, after (see the `tutorial` module).
+            vec![Draw::Roll(5)],
         ]
         .concat();
         assert_eq!(chance.0, expected);

@@ -351,7 +351,8 @@
 //! flight (the comm, offer and plunder dialogs, the map) leave it as it
 //! is, and it shows again afterwards for the ticks it had left, as
 //! `_RedrawComm` (@0x903a0) redraws it. Starting a jump clears it only
-//! when it says [`TOO_CLOSE`] (`_HandlePlayer` @0x6b231-0x6b2a7), and
+//! when it says [`TOO_CLOSE`], [`FAR_ENOUGH`] or [`NOTHING_OUT_HERE`]
+//! (`_HandlePlayer` @0x6b231-0x6b3d9), and
 //! opening the escort menu only when it says [`NO_ESCORTS`]
 //! (@0x6dedb-0x6df29). The system's title and the [`HELP`] line are the
 //! port's own, drawn only when turned on ([`FlightOverlays`],
@@ -387,7 +388,7 @@ use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
     HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText, News,
     NotOffered, OfferPrompt, PayNote, PersonRules, PlayerInfo, SessionEvent, StellarIff, TagNames,
-    VenueOffer,
+    TutorialHint, VenueOffer,
 };
 
 use super::alert;
@@ -694,12 +695,26 @@ pub fn illegal_outfit_message(
 
 /// What the message line says of `message`, a session's message other
 /// than an arrival's, the names read from `session`: none for an
-/// arrival's, which [`arrival_lead`] leads the arrival message with.
+/// arrival's, which [`arrival_lead`] leads the arrival message with, and
+/// for the take-off greeting and the land hint, which [`message_text`]
+/// words with the stellar's name.
 fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
     let text = match message {
-        SimMessage::Arrived(_) | SimMessage::ExitedHypergate(_) | SimMessage::PassedWormhole(_) => {
+        SimMessage::Arrived(_)
+        | SimMessage::ExitedHypergate(_)
+        | SimMessage::PassedWormhole(_)
+        | SimMessage::TookOff { .. }
+        | SimMessage::Tutorial(TutorialHint::Land { .. }) => {
             return None;
         }
+        SimMessage::Tutorial(TutorialHint::Hyperspace) => {
+            return Some(hyperspace_hint(
+                &key_label(MAP_KEY).unwrap_or_default(),
+                &key_label(JUMP_KEY).unwrap_or_default(),
+            ));
+        }
+        SimMessage::Tutorial(TutorialHint::FarEnough) => FAR_ENOUGH,
+        SimMessage::Tutorial(TutorialHint::NothingOutHere) => NOTHING_OUT_HERE,
         SimMessage::MissionFailed | SimMessage::MissionShipLost => MISSION_FAILED,
         SimMessage::CargoJettisoned => CARGO_JETTISONED,
         SimMessage::NonMissionCargoJettisoned => NON_MISSION_CARGO_JETTISONED,
@@ -897,6 +912,116 @@ pub const TAKE_OFF_FIRST: &str = "Can't initiate hyperspace jump - take off firs
 /// `STR#` 2002 #42.
 pub const JUMP_DISABLED: &str = "Can't initiate hyperspace jump - your ship is disabled.";
 
+/// `STR#` 2002 #22: the land hint's lead for a station.
+pub const TUTORIAL_DOCK: &str = "Welcome to Nova - it would be a good idea to start by docking at";
+/// `STR#` 2002 #23: the land hint's lead for a planet.
+pub const TUTORIAL_LAND: &str = "Welcome to Nova - it would be a good idea to start by landing on";
+/// `STR#` 2002 #24: after the stellar's name in the land hint.
+pub const TUTORIAL_LOOK_AROUND: &str = "and having a look around. Hit '";
+/// `STR#` 2002 #25: after the land key's name.
+pub const TUTORIAL_REQUEST: &str = "' to request landing clearance, then hit it again to land.";
+/// `STR#` 2002 #26: the hyperspace hint's lead.
+pub const TUTORIAL_HYPERSPACE: &str = "Now you should probably hyperspace to another system. Hit '";
+/// `STR#` 2002 #27: after the map key's name.
+pub const TUTORIAL_MAP: &str =
+    "' to access the map, select a nearby system, then move outward and hit '";
+/// `STR#` 2002 #28: after the jump key's name.
+pub const TUTORIAL_JUMP: &str = "' to begin your jump.";
+/// `STR#` 2002 #30.
+pub const FAR_ENOUGH: &str =
+    "You're well beyond safe hyperspace range - you can initiate hyperjump at any time.";
+/// `STR#` 2002 #31.
+pub const NOTHING_OUT_HERE: &str = "There's nothing to find out here - if you want to get to another system, you'll have to access the map, set a hyperdrive destination, and start your jump.";
+/// `STR#` 2002 #55-#59: the take-off greeting's leads, one rolled
+/// `Rand(5)` (`_PlayerLandOnStellar` @0x63604).
+pub const TAKE_OFF_LEADS: [&str; 5] = [
+    "Launching from",
+    "Blasting off from",
+    "Taking off from",
+    "Leaving",
+    "Departing",
+];
+/// `STR#` 2002 #60: between the stellar and the date in the greeting.
+pub const TAKE_OFF_ON: &str = "on";
+
+/// How a tutorial hint names `key`, as the original names its keys from
+/// `STR#` 129 (`_HandlePlayer` @0x70b01-0x70b1b, @0x70c3d-0x70cb2): a
+/// letter key uppercased, "L". The hints name only [`LAND_KEY`],
+/// [`MAP_KEY`] and [`JUMP_KEY`], all letters; the other keys are named
+/// once keys can be rebound, so for now they have no name.
+#[must_use]
+pub fn key_label(key: Key) -> Option<String> {
+    match key {
+        Key::Char(letter) => Some(letter.to_uppercase().collect()),
+        _ => None,
+    }
+}
+
+/// What the message line says as the ship takes off past the tutorial
+/// from the stellar named `stellar` on `date`, led by
+/// [`TAKE_OFF_LEADS`]`[lead]`, as `_PlayerLandOnStellar` builds it
+/// (@0x635f7-0x63732): "Taking off from Earth on 23 June 1177."
+#[must_use]
+pub fn take_off_greeting(lead: u16, stellar: &str, date: &str) -> String {
+    let lead = TAKE_OFF_LEADS[usize::from(lead) % TAKE_OFF_LEADS.len()];
+    format!("{lead} {stellar} {TAKE_OFF_ON} {date}.")
+}
+
+/// The tutorial's land hint for the stellar named `stellar`, a `station`
+/// or not, naming the land key `key`, as `_HandlePlayer` builds it
+/// (@0x70a31-0x70b9a): [`TUTORIAL_DOCK`] or [`TUTORIAL_LAND`], the name,
+/// [`TUTORIAL_LOOK_AROUND`], the key and [`TUTORIAL_REQUEST`].
+#[must_use]
+pub fn land_hint(station: bool, stellar: &str, key: &str) -> String {
+    let lead = if station {
+        TUTORIAL_DOCK
+    } else {
+        TUTORIAL_LAND
+    };
+    format!("{lead} {stellar} {TUTORIAL_LOOK_AROUND}{key}{TUTORIAL_REQUEST}")
+}
+
+/// The tutorial's hyperspace hint, naming the map key `map` and the jump
+/// key `jump`, as `_HandlePlayer` builds it (@0x70c3d-0x70d33).
+#[must_use]
+pub fn hyperspace_hint(map: &str, jump: &str) -> String {
+    format!("{TUTORIAL_HYPERSPACE}{map}{TUTORIAL_MAP}{jump}{TUTORIAL_JUMP}")
+}
+
+/// Texts to say, each with its ticks.
+type Said = Vec<(String, u16)>;
+
+/// The name of stellar `id` in `scene`, if it shows it: empty otherwise.
+fn stellar_name(scene: Option<&SystemScene>, id: StellarId) -> &str {
+    scene
+        .and_then(|scene| scene.stellars().iter().find(|named| named.id == id))
+        .map_or("", |named| named.name.as_str())
+}
+
+/// What the message line says of `message`, the names read from
+/// `session` and the stellars' from `scene`: as [`sim_message_text`]
+/// says, and the take-off greeting and the land hint, which name a
+/// stellar. None only for an arrival's.
+fn message_text(
+    message: &SimMessage,
+    session: &Session,
+    scene: Option<&SystemScene>,
+) -> Option<String> {
+    match message {
+        SimMessage::TookOff { stellar, lead } => Some(take_off_greeting(
+            *lead,
+            stellar_name(scene, *stellar),
+            &session.date_text(),
+        )),
+        SimMessage::Tutorial(TutorialHint::Land { stellar, station }) => Some(land_hint(
+            *station,
+            stellar_name(scene, *stellar),
+            &key_label(LAND_KEY).unwrap_or_default(),
+        )),
+        _ => sim_message_text(message, session),
+    }
+}
+
 /// `STR#` 2002 #44. The original picks #43, #44 or #45 ("Entering the",
 /// "Jumping into the", "Arriving in the") at random; this port always
 /// says #44, matching none of its random rolls.
@@ -952,7 +1077,9 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::FighterRepaired
         | SimMessage::Smuggling { .. }
         | SimMessage::IllegalJunk { .. }
-        | SimMessage::IllegalOutfit { .. } => None,
+        | SimMessage::IllegalOutfit { .. }
+        | SimMessage::TookOff { .. }
+        | SimMessage::Tutorial(_) => None,
     }
 }
 
@@ -2081,9 +2208,13 @@ impl<
         }
     }
 
-    /// Begins a jump, or shows why not. Starting it clears the message
-    /// line only when it says [`TOO_CLOSE`] (`_HandlePlayer`
-    /// @0x6b231-0x6b2a7, @0x6d601-0x6d67f).
+    /// Begins a jump, or shows why not when the player is told
+    /// ([`Session::jump_refusal_told`]). Starting it clears the message
+    /// line only when it says [`TOO_CLOSE`], [`FAR_ENOUGH`] or
+    /// [`NOTHING_OUT_HERE`] (`_HandlePlayer` @0x6b231-0x6b3d9; the
+    /// tractor's #36 has no engine source). The original's second jump
+    /// path clears them again (@0x6d601-0x6d7b1), once the pilot is past
+    /// the tutorial, which the arrival line replaces anyway.
     fn jump(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
@@ -2091,11 +2222,15 @@ impl<
         match session.begin_jump() {
             Ok(_) => {
                 self.held.clear();
-                self.clear_message(TOO_CLOSE);
+                for text in [TOO_CLOSE, FAR_ENOUGH, NOTHING_OUT_HERE] {
+                    self.clear_message(text);
+                }
                 self.start_streak_if_jumping();
             }
             Err(refusal) => {
-                self.say_for(jump_refusal_message(&refusal), jump_refusal_ticks(&refusal));
+                if session.jump_refusal_told(&refusal) {
+                    self.say_for(jump_refusal_message(&refusal), jump_refusal_ticks(&refusal));
+                }
             }
         }
     }
@@ -2150,9 +2285,10 @@ impl<
         let date = session.date_text();
         let mut messages = std::mem::take(&mut self.pending_leads);
         messages.extend(session.take_messages());
+        let scene = self.scene.as_ref();
         let worded: Vec<(String, u16)> = messages
             .iter()
-            .filter_map(|message| Some((sim_message_text(message, session)?, message.ticks())))
+            .filter_map(|message| Some((message_text(message, session, scene)?, message.ticks())))
             .collect();
         self.message = None;
         let Some(scene) = &self.scene else {
@@ -2317,7 +2453,8 @@ impl<
     /// the stellar, not on its way from where it was, in the system a move
     /// made while landed went to, laid out afresh as the session tells
     /// ([`SessionEvent`]); it shows no message
-    /// from before the landing, but says how many hired escorts defected
+    /// from before the landing, but greets the pilot past the tutorial
+    /// ([`take_off_greeting`]), followed by how many hired escorts defected
     /// for want of the take-off's pay ([`defection_message`]); the
     /// session has populated the system's traffic afresh
     /// ([`Session::take_off`]), so no frame draws the ships from before
@@ -2326,8 +2463,8 @@ impl<
     pub fn take_off(&mut self) -> Option<StellarId> {
         let session = self.session.as_mut().ok()?;
         let stellar = session.take_off(&self.catalog, &mut self.chance)?;
-        let said = self.took_off();
-        self.say_all(&said);
+        let (line, rest) = self.took_off();
+        self.say_after(&line, rest);
         Some(stellar)
     }
 
@@ -2335,27 +2472,42 @@ impl<
     /// drawn where it is, in the system laid out afresh if the session
     /// tells a move while landed changed it, the traffic populated afresh
     /// drawn where it is with its ship types' sheets read, no message from
-    /// before kept; gives what paying the escorts for the take-off has to
-    /// say, each with its ticks.
+    /// before kept. Gives the line to say, each part with its ticks: the
+    /// take-off greeting past the tutorial ([`SimMessage::TookOff`]), if
+    /// any, then what paying the escorts for the take-off has to say; and
+    /// the session's other messages, each said after the line and
+    /// replacing it, as they come in later frames in the original.
     ///
-    /// The original keeps the slot and replaces it with its take-off
-    /// greeting (`_PlayerLandOnStellar` @0x63732), which the engine does
-    /// not raise yet (rdm phase
-    /// hud-fidelity/phase-12-flight-messages-the-original-raises); a
-    /// message from before the landing would be further from what the
-    /// player sees than none.
-    fn took_off(&mut self) -> Vec<(String, u16)> {
-        let pay = self
+    /// The original keeps the slot and replaces it with its greeting
+    /// (`_PlayerLandOnStellar` @0x63732), which a newbie, or a `Q`'s
+    /// message, goes without; a message from before the landing would be
+    /// further from what the player sees than none.
+    fn took_off(&mut self) -> (Said, Said) {
+        let (pay, messages) = self
             .session
             .as_mut()
-            .map(Session::take_pay_notes)
+            .map(|session| (session.take_pay_notes(), session.take_messages()))
             .unwrap_or_default();
         self.catch_up();
         self.place_ship();
         self.read_npc_sheets();
         self.message = None;
         self.redraw_status();
-        pay_said(&pay)
+        let (greeting, rest): (Vec<_>, Vec<_>) = messages
+            .into_iter()
+            .partition(|message| matches!(message, SimMessage::TookOff { .. }));
+        let mut line = self.word(greeting);
+        line.extend(pay_said(&pay));
+        (line, self.word(rest))
+    }
+
+    /// Says `line` as [`FlightView::say_all`] does, then each of `rest` in
+    /// turn, replacing it.
+    fn say_after(&mut self, line: &[(String, u16)], rest: Vec<(String, u16)>) {
+        self.say_all(line);
+        for (text, ticks) in rest {
+            self.say_for(text, ticks);
+        }
     }
 
     /// Shows the texts of `said`, joined by two spaces, when there is
@@ -2394,8 +2546,11 @@ impl<
             .into_iter()
             .map(|text| (text, SCRIPT_MESSAGE_TICKS))
             .collect();
+        let mut rest = Vec::new();
         if settled.took_off.is_some() {
-            said.extend(self.took_off());
+            let (line, after) = self.took_off();
+            said.extend(line);
+            rest = after;
         } else if self.catch_up().system && flying {
             let notes = self
                 .session
@@ -2406,7 +2561,7 @@ impl<
                 (fighters_abandoned_message(count), MESSAGE_TICKS)
             }));
         }
-        self.say_all(&said);
+        self.say_after(&said, rest);
         self.say_messages();
         settled.took_off
     }
@@ -3029,19 +3184,32 @@ impl<C> FlightView<C> {
     /// turn, in the original's words; an arrival's waits for its arrival
     /// to be caught up with ([`FlightView::arrived`]).
     fn say_messages(&mut self) {
-        let Ok(session) = &mut self.session else {
-            return;
+        let messages = self
+            .session
+            .as_mut()
+            .map(Session::take_messages)
+            .unwrap_or_default();
+        for (text, ticks) in self.word(messages) {
+            self.say_for(text, ticks);
+        }
+    }
+
+    /// The words of each of `messages`, in order, with its ticks, the
+    /// stellars named from the scene; an arrival's has none here, and
+    /// waits for its arrival to be caught up with
+    /// ([`FlightView::arrived`]), which leads with it.
+    fn word(&mut self, messages: Vec<SimMessage>) -> Vec<(String, u16)> {
+        let Ok(session) = &self.session else {
+            return Vec::new();
         };
         let mut said = Vec::new();
-        for message in session.take_messages() {
-            match sim_message_text(&message, session) {
+        for message in messages {
+            match message_text(&message, session, self.scene.as_ref()) {
                 Some(text) => said.push((text, message.ticks())),
                 None => self.pending_leads.push(message),
             }
         }
-        for (text, ticks) in said {
-            self.say_for(text, ticks);
-        }
+        said
     }
 
     /// Presses the jettison key: with Command held, jettisons the cargo,
@@ -7117,7 +7285,8 @@ mod tests {
         assert_eq!(view.message(), None);
         assert_eq!(message(&view), None);
         assert_eq!(view.take_off(), Some(StellarId(140)));
-        assert_eq!(view.message(), None, "not back after take-off");
+        let greeting = view.message().expect("the greeting");
+        assert!(greeting.starts_with(TAKE_OFF_LEADS[0]), "{greeting}");
     }
 
     #[test]
@@ -7331,27 +7500,193 @@ mod tests {
         assert_eq!(view.session().expect("flying").course(), []);
     }
 
+    const REFUSED: Sound = Sound::Sim(SimSound::Refused);
+
     #[test]
     fn j_says_why_a_jump_is_refused_in_the_originals_words() {
         let mut view = flight();
+        view.take_sounds();
         view.input(&key(JUMP, true));
-        assert_eq!(view.message(), Some(NO_DESTINATION));
-        assert_eq!(message(&view), Some(message_drawn(NO_DESTINATION)));
-        assert_lasts(&mut view, NO_DESTINATION, 360);
+        assert_eq!(view.message(), None, "a seasoned pilot, nothing selected");
+        assert_eq!(view.take_sounds(), [], "and no beep");
         plot(&mut view, 131);
+        view.take_sounds();
         view.input(&key(JUMP, true));
         assert_eq!(view.jump_effect(), None);
+        assert_eq!(view.take_sounds(), [REFUSED]);
+        assert_eq!(message(&view), Some(message_drawn(TOO_CLOSE)));
         assert_lasts(&mut view, TOO_CLOSE, 360);
 
-        let mut dry = FlightView::new(FakeCatalog {
-            fields: ShipFields { fuel: 50, ..FIELDS },
-            ..catalog()
-        });
+        let mut dry = dry();
         plot(&mut dry, 131);
         fly_out(&mut dry);
+        dry.take_sounds();
         dry.input(&key(JUMP, true));
         assert_eq!(dry.jump_effect(), None);
+        assert_eq!(dry.take_sounds(), [REFUSED]);
         assert_lasts(&mut dry, NO_FUEL, 240);
+    }
+
+    /// A flight whose ship holds 50 fuel, short of a jump's.
+    fn dry() -> View {
+        FlightView::new(FakeCatalog {
+            fields: ShipFields { fuel: 50, ..FIELDS },
+            ..catalog()
+        })
+    }
+
+    /// `view` begun as a new pilot's, ticked once past the land hint, its
+    /// message and sounds let go.
+    fn new_pilot(mut view: View) -> View {
+        view.begin();
+        ticks(&mut view, 1);
+        view.message = None;
+        view.take_sounds();
+        view
+    }
+
+    #[test]
+    fn a_new_pilots_j_with_nothing_selected_says_no_destination_for_360() {
+        let mut view = new_pilot(flight());
+        view.input(&key(JUMP, true));
+        assert_eq!(view.take_sounds(), [REFUSED]);
+        assert_eq!(message(&view), Some(message_drawn(NO_DESTINATION)));
+        assert_lasts(&mut view, NO_DESTINATION, 360);
+    }
+
+    #[test]
+    fn a_new_pilot_with_a_hyperspace_selection_is_never_told_no_destination() {
+        let mut view = new_pilot(flight());
+        plot(&mut view, 131);
+        view.take_sounds();
+        view.input(&key(JUMP, true));
+        assert_eq!(view.message(), Some(TOO_CLOSE), "the zone's refusal");
+        assert_eq!(view.take_sounds(), [REFUSED]);
+    }
+
+    #[test]
+    fn a_new_pilot_short_of_fuel_is_not_told() {
+        let mut view = new_pilot(dry());
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.message = None;
+        view.take_sounds();
+        view.input(&key(JUMP, true));
+        assert_eq!(view.jump_effect(), None);
+        assert_eq!(view.message(), None);
+        assert_eq!(view.take_sounds(), []);
+    }
+
+    #[test]
+    fn a_new_pilot_short_of_fuel_is_told_by_the_other_reading() {
+        let rules =
+            Rulebook::default().with_override(RuleKey::NewbieFuelRefusal, RuleSource::Bible);
+        let mut view = new_pilot(dry().with_rules(rules));
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.take_sounds();
+        view.input(&key(JUMP, true));
+        assert_eq!(view.take_sounds(), [REFUSED]);
+        assert_eq!(view.message(), Some(NO_FUEL));
+        assert_eq!(view.message.as_ref().map(|said| said.ticks), Some(240));
+    }
+
+    /// The land hint as the fixture words it, for the Moon, the nearest
+    /// stellar to the centre.
+    const MOON_HINT: &str = "Welcome to Nova - it would be a good idea to start by landing on Moon and having a look around. Hit 'L' to request landing clearance, then hit it again to land.";
+
+    #[test]
+    fn the_land_hint_names_the_stellar_and_l() {
+        let mut view = flight();
+        view.begin();
+        view.take_sounds();
+        ticks(&mut view, 1);
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TutorialHint)]);
+        assert_eq!(message(&view), Some(message_drawn(MOON_HINT)));
+        assert_lasts(&mut view, MOON_HINT, 512);
+    }
+
+    #[test]
+    fn the_land_hint_words_a_station_as_docking() {
+        assert_eq!(
+            land_hint(true, "Earth Station", "L"),
+            "Welcome to Nova - it would be a good idea to start by docking at Earth Station and having a look around. Hit 'L' to request landing clearance, then hit it again to land."
+        );
+        assert_eq!(land_hint(false, "Moon", "L"), MOON_HINT);
+    }
+
+    #[test]
+    fn the_hyperspace_hint_names_m_and_j() {
+        let hint = "Now you should probably hyperspace to another system. Hit 'M' to access the map, select a nearby system, then move outward and hit 'J' to begin your jump.";
+        assert_eq!(hyperspace_hint("M", "J"), hint);
+        let mut view = new_pilot(flight_among(vec![site(
+            128,
+            (0.0, 0.0),
+            StellarFlags::CAN_LAND,
+        )]));
+        land_now(&mut view);
+        assert_eq!(view.take_landing(), Some(StellarId(128)));
+        view.take_off().expect("takes off");
+        view.take_sounds();
+        // The take-off's frame is -14: the hint comes at 0.
+        ticks(&mut view, 14);
+        assert_eq!(view.message(), None);
+        ticks(&mut view, 1);
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TutorialHint)]);
+        assert_lasts(&mut view, hint, 512);
+    }
+
+    #[test]
+    fn far_enough_and_nothing_out_here_last_512() {
+        let mut view = new_pilot(flight());
+        fly_far(&mut view);
+        // The ship drifts on outward: #30 shows on the first sixtieth
+        // frame past 1,414 px, until #31 replaces it past 3,162 px.
+        let distance = |view: &View| player(view).position.length();
+        let mut far = None;
+        for tick in 0..2000 {
+            ticks(&mut view, 1);
+            match (view.message(), far) {
+                (Some(FAR_ENOUGH), None) => far = Some((tick, distance(&view))),
+                (Some(FAR_ENOUGH), Some(_)) => {}
+                (Some(NOTHING_OUT_HERE), Some((since, at))) => {
+                    assert!(at > 1414.3, "{at}");
+                    assert!(distance(&view) > 3162.3, "{}", distance(&view));
+                    assert!(tick - since < 512, "#30 shown throughout");
+                    assert_lasts(&mut view, NOTHING_OUT_HERE, 512);
+                    return;
+                }
+                (shown, _) => panic!("{shown:?} at tick {tick}"),
+            }
+        }
+        panic!("#31 never came: {:?}", player(&view));
+    }
+
+    #[test]
+    fn starting_a_jump_clears_the_far_enough_hint() {
+        for text in [FAR_ENOUGH, NOTHING_OUT_HERE, TOO_CLOSE] {
+            let mut view = flight();
+            plot(&mut view, 131);
+            fly_out(&mut view);
+            view.say_for(text, 512);
+            view.input(&key(JUMP, true));
+            assert!(view.preparing_jump() || view.jump_effect().is_some());
+            assert_eq!(view.message(), None, "{text}");
+        }
+        let mut view = flight();
+        plot(&mut view, 131);
+        fly_out(&mut view);
+        view.say_for(NO_FUEL, 240);
+        view.input(&key(JUMP, true));
+        assert_eq!(view.message(), Some(NO_FUEL), "any other stays");
+    }
+
+    #[test]
+    fn the_hints_name_letter_keys_as_str_129_does() {
+        assert_eq!(key_label(LAND_KEY).as_deref(), Some("L"));
+        assert_eq!(key_label(MAP_KEY).as_deref(), Some("M"));
+        assert_eq!(key_label(JUMP_KEY).as_deref(), Some("J"));
+        assert_eq!(key_label(Key::Function(5)), None, "not yet named");
     }
 
     #[test]
@@ -8014,7 +8349,7 @@ mod tests {
 
     #[test]
     fn a_refusal_shown_before_the_jump_is_replaced_by_the_arrival() {
-        let mut view = flight();
+        let mut view = new_pilot(flight());
         fly_out(&mut view);
         view.input(&key(JUMP, true));
         view.input(&key(JUMP, false));
@@ -12962,6 +13297,8 @@ mod tests {
         }
         view.take_off().expect("takes off");
         view.settle_script();
+        // Past the take-off greeting.
+        view.message = None;
         view
     }
 
@@ -13668,12 +14005,17 @@ mod tests {
         let mut view = paying(50, true);
         assert_eq!(view.take_landing(), Some(StellarId(128)));
         assert_eq!(view.take_off(), Some(StellarId(128)));
-        assert_eq!(view.message(), Some(DEFECTED_ONE));
+        let said = format!("Launching from Earth on June 24, 1177 NC.  {DEFECTED_ONE}");
+        assert_eq!(view.message(), Some(said.as_str()), "after the greeting");
         assert_eq!(view.pilot().expect("flying").escorts(), []);
         let mut kept = paying(50, true)
             .with_rules(Rulebook::default().with_override(RuleKey::TakeOffPay, RuleSource::Bible));
         kept.take_off().expect("took off");
-        assert_eq!(kept.message(), None);
+        assert_eq!(
+            kept.message(),
+            Some("Launching from Earth on June 24, 1177 NC."),
+            "the greeting alone"
+        );
         assert_eq!(kept.pilot().expect("flying").escorts().len(), 1);
     }
 
@@ -14140,6 +14482,64 @@ mod tests {
         assert_eq!(view.settle_script(), Some(StellarId(128)));
         let said = format!("Off you go, <PSN>.  {DEFECTED_ONE}");
         assert_lasts(&mut view, &said, 500);
+    }
+
+    /// The greeting from Earth on the day after the fixture's start, its
+    /// lead the first, as the flight's chance rolls.
+    const EARTH_GREETING: &str = "Launching from Earth on June 24, 1177 NC.";
+
+    #[test]
+    fn take_off_says_the_greeting_for_240() {
+        let mut view = landed_view();
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(message(&view), Some(message_drawn(EARTH_GREETING)));
+        assert_lasts(&mut view, EARTH_GREETING, 240);
+        assert_eq!(
+            take_off_greeting(2, "Earth", "June 24, 1177 NC"),
+            "Taking off from Earth on June 24, 1177 NC."
+        );
+        let leads: Vec<String> = (0..5)
+            .map(|lead| take_off_greeting(lead, "X", "D"))
+            .collect();
+        assert_eq!(
+            leads,
+            [
+                "Launching from X on D.",
+                "Blasting off from X on D.",
+                "Taking off from X on D.",
+                "Leaving X on D.",
+                "Departing X on D."
+            ]
+        );
+    }
+
+    #[test]
+    fn the_greeting_leads_the_pay_notes() {
+        let mut view = paying(50, true);
+        assert_eq!(view.take_landing(), Some(StellarId(128)));
+        view.take_off().expect("takes off");
+        let said = format!("{EARTH_GREETING}  {DEFECTED_ONE}");
+        assert_lasts(&mut view, &said, 240);
+    }
+
+    #[test]
+    fn a_q_message_takes_the_greetings_place() {
+        let mut view = told(landed_view());
+        run_set(&mut view, "Q25048");
+        assert_eq!(view.settle_script(), Some(StellarId(128)));
+        assert_eq!(view.message(), Some("Off you go, <PSN>."));
+        let rules = Rulebook::default().with_override(RuleKey::BlankLeave, RuleSource::Bible);
+        let mut view = told(landed_view()).with_rules(rules);
+        run_set(&mut view, "Q25049");
+        assert_eq!(view.settle_script(), Some(StellarId(128)));
+        assert_eq!(view.message(), Some(EARTH_GREETING), "an empty one greets");
+    }
+
+    #[test]
+    fn a_new_pilots_take_off_says_nothing() {
+        let mut view = new_pilot(landed_view());
+        assert_eq!(view.take_off(), Some(StellarId(128)));
+        assert_eq!(view.message(), None);
     }
 
     #[test]
@@ -15516,7 +15916,7 @@ mod tests {
         fly_out(&mut view);
         tap(&mut view, JUMP);
         assert!(!view.preparing_jump(), "refused");
-        assert_eq!(view.message(), Some(NO_DESTINATION));
+        assert_eq!(view.message(), None, "a seasoned pilot is not told");
     }
 
     #[test]

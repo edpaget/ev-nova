@@ -139,6 +139,8 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::NavSelected) => self.play(self.table.nav_selected),
                 Sound::Sim(SimSound::HyperSelected) => self.play(self.table.hyper_selected),
                 Sound::Sim(SimSound::TargetCleared) => self.play(self.table.target_cleared),
+                Sound::Sim(SimSound::TutorialHint) => self.play(self.table.tutorial_hint),
+                Sound::Sim(SimSound::Refused) => self.play(self.table.refused),
                 Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
                 Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
                 Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
@@ -472,6 +474,30 @@ mod tests {
             drain(&log),
             [play(150, 1.0), play(152, 1.0), play(150, 1.0)]
         );
+    }
+
+    #[test]
+    fn a_tutorial_hint_beeps_154_and_a_told_refusal_153() {
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::TutorialHint),
+                Sound::Sim(SimSound::Refused),
+            ],
+        );
+        assert_eq!(drain(&log), [play(154, 0.5), play(153, 0.5)]);
+        core.set_sound(false);
+        drain(&log);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Sim(SimSound::TutorialHint),
+                Sound::Sim(SimSound::Refused),
+            ],
+        );
+        assert_eq!(drain(&log), [], "sound off");
     }
 
     #[test]

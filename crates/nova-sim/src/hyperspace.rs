@@ -743,7 +743,9 @@ pub fn jump_zone(sites: &[LandingSite], jump_distance: f32, rule: JumpZoneRule) 
 /// Whether `player`, holding `fuel`, can jump to `next`, the next system
 /// on its route, when it must be `min_distance` from the centre to jump
 /// (exactly that far is far enough): `next`, or the first refusal that
-/// applies.
+/// applies, in the original's order: the selection (@0x6b11e-0x6b131),
+/// then the fuel (@0x6b14b-0x6b157), then the no-jump zone
+/// (@0x6b15d-0x6b22b).
 pub fn check_jump(
     player: &ShipState,
     fuel: f32,
@@ -751,12 +753,12 @@ pub fn check_jump(
     min_distance: f32,
 ) -> Result<SystemId, JumpRefusal> {
     let next = next.ok_or(JumpRefusal::NoDestination)?;
+    if fuel < JUMP_FUEL {
+        return Err(JumpRefusal::NoFuel { fuel });
+    }
     let distance = player.position.length();
     if distance < min_distance {
         return Err(JumpRefusal::TooClose { distance });
-    }
-    if fuel < JUMP_FUEL {
-        return Err(JumpRefusal::NoFuel { fuel });
     }
     Ok(next)
 }
@@ -1607,10 +1609,19 @@ mod tests {
             check_ship(ship(0.0, -999.9, 300.0), NEXT),
             Err(JumpRefusal::TooClose { distance: 999.9 })
         );
+    }
+
+    #[test]
+    fn fuel_is_checked_before_the_no_jump_zone() {
         assert_eq!(
             check_ship(ship(300.0, 400.0, 0.0), NEXT),
+            Err(JumpRefusal::NoFuel { fuel: 0.0 }),
+            "too close as well"
+        );
+        assert_eq!(
+            check_ship(ship(300.0, 400.0, 100.0), NEXT),
             Err(JumpRefusal::TooClose { distance: 500.0 }),
-            "before the fuel"
+            "with the fuel"
         );
     }
 

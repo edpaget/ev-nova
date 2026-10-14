@@ -1,7 +1,8 @@
 //! The messages a flight session raises, as events: what happened, not
 //! the words. The view decides what each one says on the message line.
 
-use crate::catalog::{JunkId, OutfitId, ShipId, SystemId};
+use crate::catalog::{JunkId, OutfitId, ShipId, StellarId, SystemId};
+use crate::tutorial::TutorialHint;
 
 /// Something a [`Session`](crate::Session) did that the player is told of.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,6 +83,20 @@ pub enum SimMessage {
         /// The credits fined: none for no fine.
         fine: i64,
     },
+    /// The ship took off past the tutorial with no `Q` message: the
+    /// take-off greeting, "{lead} {the stellar} on {the date}."
+    /// (`_PlayerLandOnStellar` @0x635f7-0x63732; see
+    /// [`tutorial`](crate::tutorial)).
+    TookOff {
+        /// The stellar taken off from.
+        stellar: StellarId,
+        /// Which lead, 0-4: `STR#` 2002 #(55 + `lead`), rolled
+        /// `Rand(5)` (@0x63604).
+        lead: u16,
+    },
+    /// A first-flight tutorial hint (`_HandlePlayer` @0x7093d-0x70ea2; see
+    /// [`tutorial`](crate::tutorial)).
+    Tutorial(TutorialHint),
 }
 
 impl SimMessage {
@@ -109,6 +124,10 @@ impl SimMessage {
     /// - [`EscortRepaired`](Self::EscortRepaired) and
     ///   [`FighterRepaired`](Self::FighterRepaired): 250 (`_HandleShip`
     ///   @0x33ba1).
+    /// - [`TookOff`](Self::TookOff): 240 (`_PlayerLandOnStellar`
+    ///   @0x63727).
+    /// - [`Tutorial`](Self::Tutorial): 512 (0x200, `_HandlePlayer`
+    ///   @0x70b8f, @0x70d28, @0x70ddf, @0x70e8d).
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
@@ -123,8 +142,10 @@ impl SimMessage {
             | Self::DeadlineMissed
             | Self::MissionShipLost
             | Self::CargoJettisoned
-            | Self::NonMissionCargoJettisoned => 240,
+            | Self::NonMissionCargoJettisoned
+            | Self::TookOff { .. } => 240,
             Self::EscortRepaired | Self::FighterRepaired => 250,
+            Self::Tutorial(_) => 512,
         }
     }
 }
@@ -153,6 +174,15 @@ mod tests {
             (smuggling, 400),
             (SimMessage::EscortRepaired, 250),
             (SimMessage::FighterRepaired, 250),
+            (
+                SimMessage::TookOff {
+                    stellar: StellarId(128),
+                    lead: 2,
+                },
+                240,
+            ),
+            (SimMessage::Tutorial(TutorialHint::Hyperspace), 512),
+            (SimMessage::Tutorial(TutorialHint::FarEnough), 512),
             (
                 SimMessage::IllegalJunk {
                     scanner: ShipId(128),

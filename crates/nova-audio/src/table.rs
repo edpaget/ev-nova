@@ -61,6 +61,10 @@ pub struct SoundTable {
     pub hyper_selected: Option<SoundId>,
     /// Plays as Option-backquote lets go of the ship target.
     pub target_cleared: Option<SoundId>,
+    /// Plays as a first-flight tutorial hint is shown.
+    pub tutorial_hint: Option<SoundId>,
+    /// Plays as a key's action is refused and the player told why.
+    pub refused: Option<SoundId>,
 }
 
 impl SoundTable {
@@ -133,6 +137,12 @@ impl SoundTable {
     ///   through the system's links (@0x69c89).
     /// - `target_cleared`: 150, `_beepSnd[0]`, as Option-backquote lets go
     ///   of the ship target (@0x69a7d).
+    /// - `tutorial_hint`: 154, `_beepSnd[4]`, as `_HandlePlayer` shows a
+    ///   first-flight tutorial hint (@0x70a1c, @0x70c12, @0x70dab,
+    ///   @0x70e59).
+    /// - `refused`: 153, `_beepSnd[3]`, the shared refusal beep, as the
+    ///   jump key's refusals are told (`_HandlePlayer` @0x6b89f, @0x6b9cc,
+    ///   @0x6ba72).
     pub const ORIGINAL: Self = Self {
         engine: None,
         landing: Some(SoundId(151)),
@@ -158,6 +168,8 @@ impl SoundTable {
         nav_selected: Some(SoundId(150)),
         hyper_selected: Some(SoundId(152)),
         target_cleared: Some(SoundId(150)),
+        tutorial_hint: Some(SoundId(154)),
+        refused: Some(SoundId(153)),
     };
 }
 
@@ -192,5 +204,7 @@ mod tests {
         assert_eq!(table.nav_selected, Some(SoundId(150)), "_beepSnd[0]");
         assert_eq!(table.hyper_selected, Some(SoundId(152)), "_beepSnd[2]");
         assert_eq!(table.target_cleared, Some(SoundId(150)), "_beepSnd[0]");
+        assert_eq!(table.tutorial_hint, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.refused, Some(SoundId(153)), "_beepSnd[3]");
     }
 }

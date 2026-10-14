@@ -817,6 +817,9 @@ impl Session {
         }
         if resets.has(Reset::ArrivalMessage) {
             self.messages.push(SimMessage::Arrived(system));
+            // The hyperspace arrival leaves the pilot past the tutorial
+            // (`_HandlePlayer` @0x6c002; see the `tutorial` module).
+            self.tutorial.jumped();
         }
         if let Some(event) = event {
             self.emit(event);

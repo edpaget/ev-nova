@@ -123,7 +123,8 @@ impl Session {
         self.ship_hook(captured, ShipHook::Capture, chance);
     }
 
-    /// Begins a new pilot's game: by the engine's reading of
+    /// Begins a new pilot's game: starts the first-flight tutorial (see
+    /// the [`tutorial`](crate::tutorial) module); by the engine's reading of
     /// [`RuleKey::NebulaNewPilot`](crate::RuleKey::NebulaNewPilot),
     /// withdraws the `Explored` events [`Session::fly`] raised, so the
     /// start system's nebulae wait for the first exploration (see the
@@ -142,6 +143,9 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut dyn Chance,
     ) {
+        // A new pilot starts the first-flight tutorial (`_DoNewPilot`
+        // @0x19254; see the `tutorial` module).
+        self.tutorial = crate::tutorial::Tutorial::NEW_PILOT;
         // `_DoNewPilot` explores its start system's nebulae while every
         // one is inactive (@0x19118; see the `nebulae` module).
         self.withdraw_new_pilot_explored();

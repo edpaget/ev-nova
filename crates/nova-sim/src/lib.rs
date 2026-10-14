@@ -255,6 +255,9 @@
 //! - [`traffic`]: NPC [`Traffic`]: the ships spawned from a system's
 //!   `düde`s and fleets on arrival and over time, each [`Npc`] flown by an
 //!   autopilot with the player's flight physics and stats.
+//! - [`tutorial`]: the new pilot's first-flight [`Tutorial`]: its hints
+//!   ([`TutorialHint`]), the take-off greeting and the newbie-only "No
+//!   destination".
 //! - [`wares`]: the rules the outfitter and the shipyard share: tech
 //!   levels, `Require` and `Contribute`, the hiding flags, the hide-higher
 //!   sweep and the rows' order.
@@ -332,6 +335,7 @@ mod testkit;
 pub mod text_tags;
 pub mod top_speed;
 pub mod traffic;
+pub mod tutorial;
 pub mod wares;
 
 pub use ai::{
@@ -392,7 +396,7 @@ pub use landing::{
     Clearance, LandOutcome, LandingReach, LandingRefusal, NO_FRAME_REACH, OUT_OF_RANGE_FRAME_WIDTH,
     REACH_PER_WIDTH, Service, Standing, StellarShown, TypeWidth, UNLOADED_TYPE_WIDTH,
     check_landing, cleared, is_landable, land_or_select, landing_radius, landing_reach,
-    nearest_landable, services,
+    nearest_landable, nearest_landable_station, services,
 };
 pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
@@ -438,4 +442,5 @@ pub use targeting::TargetPick;
 pub use text_tags::{MissionTags, MissionValues, NoNames, TagContext, TagNames};
 pub use traffic::npc::{AiType, Npc, NpcId, NpcPerson};
 pub use traffic::{Traffic, World};
+pub use tutorial::{Tutorial, TutorialHint};
 pub use wares::{ShownTons, TonUnit};

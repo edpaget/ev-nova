@@ -68,4 +68,15 @@ pub enum SimSound {
     /// Option-backquote let go of the ship target (`_HandlePlayer`
     /// @0x69a7d): `_beepSnd[0]`, `snd ` 150. With no target it is silent.
     TargetCleared,
+    /// A first-flight tutorial hint was shown: `_beepSnd[4]`, `snd ` 154
+    /// (`_HandlePlayer` @0x70a1c, @0x70c12, @0x70dab, @0x70e59; see
+    /// [`tutorial`](crate::tutorial)).
+    TutorialHint,
+    /// A key's action was refused and the player told why: `_beepSnd[3]`,
+    /// `snd ` 153, the original's shared refusal beep. The jump key's
+    /// refusals raise it (`_HandlePlayer` @0x6b89f, @0x6b9cc, @0x6ba72;
+    /// see [`Session::jump_refusal_told`](crate::Session::jump_refusal_told)),
+    /// and rdm:phase/player-death/phase-16-handle-player-left-out-gates
+    /// reuses it for its own refusals.
+    Refused,
 }

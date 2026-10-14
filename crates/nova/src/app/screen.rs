@@ -4811,6 +4811,41 @@ pub(super) mod tests {
         assert_eq!(screen.take_warnings(), Vec::<String>::new());
     }
 
+    /// One flight tick's time.
+    const FLIGHT_TICK: Duration = Duration::from_nanos(1_000_000_000 / 30);
+
+    #[test]
+    fn a_new_pilot_is_shown_the_land_hint() {
+        use nova_view::flight::view::{TUTORIAL_DOCK, TUTORIAL_LAND};
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        assert_eq!(flight(&screen).message(), None, "before the first tick");
+        screen.tick(FLIGHT_TICK);
+        let shown = flight(&screen).message().expect("the land hint");
+        assert!(
+            shown.starts_with(TUTORIAL_LAND) || shown.starts_with(TUTORIAL_DOCK),
+            "{shown}"
+        );
+        assert!(shown.contains("Hit 'L'"), "{shown}");
+    }
+
+    #[test]
+    fn an_opened_pilot_is_never_shown_the_tutorial() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        create(&mut screen, "Ada");
+        assert_eq!(screen.quit_and_reopen(&store), Showing::MainMenu);
+        let mut screen = menu(&store);
+        choose(&mut screen, MenuChoice::OpenPilot);
+        screen.input(&key(Key::Enter, true));
+        assert_eq!(screen.showing(), Showing::Flight);
+        for _ in 0..120 {
+            screen.tick(FLIGHT_TICK);
+            assert_eq!(flight(&screen).message(), None);
+        }
+    }
+
     #[test]
     fn a_new_pilot_runs_the_chärs_on_start_once_and_is_saved_with_what_it_did() {
         let store = MemoryPilots::new();

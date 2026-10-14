@@ -3138,7 +3138,19 @@ mod tests {
             .take_off(&catalog, &mut NeverFires)
             .expect("takes off");
         settle(&mut session, &catalog);
-        assert_eq!(session.take_messages(), [SimMessage::DeadlineMissed]);
+        assert_eq!(
+            session.take_messages(),
+            [took_off(), SimMessage::DeadlineMissed],
+            "after the greeting"
+        );
+    }
+
+    /// The take-off greeting from planet 128, its lead rolled 0.
+    fn took_off() -> SimMessage {
+        SimMessage::TookOff {
+            stellar: StellarId(128),
+            lead: 0,
+        }
     }
 
     #[test]
@@ -3157,7 +3169,7 @@ mod tests {
             .expect("takes off");
         settle(&mut session, &catalog);
         assert_eq!(held(&session), [], "failed all the same");
-        assert_eq!(session.take_messages(), []);
+        assert_eq!(session.take_messages(), [took_off()], "the greeting alone");
     }
 
     #[test]

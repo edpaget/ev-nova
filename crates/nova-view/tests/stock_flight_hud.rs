@@ -353,3 +353,33 @@ fn stock_stations_and_gates_are_squares_on_the_radar_and_the_rest_ovals() {
         "{stations} {gates} {ovals}"
     );
 }
+
+/// The tutorial's hints are `STR#` 2002 #22-#28, #30 and #31, and the
+/// take-off greeting's words #55-#60, as the stock strings read.
+#[test]
+fn the_tutorial_and_the_greeting_read_their_stock_strings() {
+    use nova_view::flight::view::{
+        FAR_ENOUGH, NOTHING_OUT_HERE, TAKE_OFF_LEADS, TAKE_OFF_ON, TUTORIAL_DOCK,
+        TUTORIAL_HYPERSPACE, TUTORIAL_JUMP, TUTORIAL_LAND, TUTORIAL_LOOK_AROUND, TUTORIAL_MAP,
+        TUTORIAL_REQUEST,
+    };
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(
+        &strings[21..28],
+        [
+            TUTORIAL_DOCK,
+            TUTORIAL_LAND,
+            TUTORIAL_LOOK_AROUND,
+            TUTORIAL_REQUEST,
+            TUTORIAL_HYPERSPACE,
+            TUTORIAL_MAP,
+            TUTORIAL_JUMP
+        ]
+    );
+    assert_eq!(&strings[29..31], [FAR_ENOUGH, NOTHING_OUT_HERE]);
+    assert_eq!(&strings[54..59], TAKE_OFF_LEADS);
+    assert_eq!(strings[59], TAKE_OFF_ON);
+}

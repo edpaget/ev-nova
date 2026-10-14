@@ -321,7 +321,9 @@ impl Session {
     }
 
     /// Applies a `Q`'s leave, if one is pending, noting it on `settled`:
-    /// whether one was.
+    /// whether one was. Landed, the ship takes off as
+    /// [`Session::take_off`] does, greeted only when there is no message
+    /// to show in its place.
     pub(super) fn settle_leave(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -333,7 +335,15 @@ impl Session {
         };
         settled.message = Some(text).filter(|text| !text.is_empty());
         if self.landed.is_some() {
-            settled.took_off = self.take_off(catalog, chance);
+            settled.took_off = self.lift_off(catalog, chance);
+            // The `Q` message shows in place of the greeting, and leaves
+            // the tutorial as it was (`_PlayerLandOnStellar`
+            // @0x63593-0x635e3). An empty one greets, but only by
+            // [`ScriptEffectRules::blank_leave`]'s other reading: by the
+            // engine a blank `Q` never leaves.
+            if let (Some(stellar), None) = (settled.took_off, &settled.message) {
+                self.greet(stellar, chance);
+            }
         } else if settled.message.is_some() {
             self.sounds.push(SimSound::ScriptMessage);
         }
@@ -443,6 +453,7 @@ mod tests {
     use crate::gate::HYPERGATE;
     use crate::handling::ShipFields;
     use crate::hyperspace::JumpRefusal;
+    use crate::message::SimMessage;
     use crate::pilot::{Escort, Pilot};
     use crate::reserves::Reserves;
     use crate::save;
@@ -452,6 +463,7 @@ mod tests {
         ship, star, weapon,
     };
     use crate::traffic::npc::NpcId;
+    use crate::tutorial::Tutorial;
 
     /// A system of `avg` ships of düde 128, ship 129, for govt 140.
     fn traffic(system: i16, avg: i16) -> (SystemId, SystemTraffic) {
@@ -1425,6 +1437,48 @@ mod tests {
         run_rolling(&mut session, "Q25048", &[1]);
         let settled = settle(&mut session, &catalog);
         assert_eq!(settled.message.as_deref(), Some("Leave now."), "as usual");
+    }
+
+    #[test]
+    fn a_q_take_off_with_a_message_neither_greets_nor_moves_the_tutorial() {
+        let catalog = moving();
+        for tutorial in [Tutorial::SEASONED, Tutorial::NEW_PILOT] {
+            let mut session = told(landed(&catalog));
+            session.tutorial = tutorial;
+            run_rolling(&mut session, "Q25048", &[0]);
+            let settled = settle(&mut session, &catalog);
+            assert_eq!(settled.took_off, Some(StellarId(128)));
+            assert_eq!(session.take_messages(), [], "{tutorial:?}");
+            assert_eq!(session.tutorial(), tutorial);
+        }
+    }
+
+    /// By the engine a blank `Q` never takes off (see
+    /// [`by_the_engine_a_blank_q_does_nothing_and_cancels_an_earlier_one`]),
+    /// so only by [`RuleKey::BlankLeave`]'s other reading does a `Q`'s
+    /// take-off with no message reach the greeting.
+    #[test]
+    fn a_q_take_off_with_an_empty_message_greets() {
+        let catalog = moving();
+        let rules = Rulebook::default().with_override(RuleKey::BlankLeave, RuleSource::Bible);
+        let mut session = told(landed(&catalog)).with_rules(rules);
+        run_rolling(&mut session, "Q25049", &[]);
+        let settled = settle(&mut session, &catalog);
+        assert_eq!(settled.took_off, Some(StellarId(128)));
+        assert_eq!(settled.message, None);
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::TookOff {
+                stellar: StellarId(128),
+                lead: 0
+            }]
+        );
+        let mut session = told(landed(&catalog)).with_rules(rules);
+        session.tutorial = Tutorial::NEW_PILOT;
+        run_rolling(&mut session, "Q25049", &[]);
+        let _ = settle(&mut session, &catalog);
+        assert_eq!(session.take_messages(), [], "a newbie is not greeted");
+        assert_eq!(session.tutorial().flag(), -1);
     }
 
     #[test]
