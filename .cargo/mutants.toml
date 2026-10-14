@@ -1,3 +1,6 @@
+# Build mutants with the `mutants` profile (Cargo.toml): the test profile
+# without debug info, which makes each mutant's build and link cheaper.
+profile = "mutants"
 # Run each mutant's tests with nextest, like `mise run test`.
 test_tool = "nextest"
 # Crates with no tests yet must not fail the unmutated baseline run.

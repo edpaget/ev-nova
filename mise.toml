@@ -10,6 +10,9 @@ pkl = "0.32.1"
 [env]
 RDM_ROOT = "{{env.HOME | default(value=env.USERPROFILE | default(value=''))}}/Projects/rdm-atlas-repo"
 RDM_PROJECT = "ev-nova"
+# Build and test two mutants at once. A flag passed after `--` (`-j`) still
+# wins.
+CARGO_MUTANTS_JOBS = "2"
 
 [tasks.fmt]
 description = "Check formatting"
@@ -55,5 +58,5 @@ description = "Mutation testing (cargo-mutants); pass extra flags after --, e.g.
 run = "cargo mutants --workspace"
 
 [tasks.ci]
-description = "Everything CI would run; the pre-commit hook runs this"
+description = "Everything CI would run; `hk check` runs this, and it gates review and landing"
 depends = ["fmt", "lint", "lint-lib", "deny", "test", "lint-dev-tools", "test-dev-tools"]
