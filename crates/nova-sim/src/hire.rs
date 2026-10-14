@@ -72,9 +72,11 @@
 //! ([`price_flux`]): none for a `Cost` of 0 or less; a low-tech discount
 //! of [`TECH_DISCOUNT`] % a tech level when both tech levels are
 //! [`LOW_TECH`] or less, the ship's below the stellar's, and the price
-//! above 99; a multiplier, 1.0 here (the `ränk` price modifiers it takes
-//! from the player's ranks, `_DoPortDialog` @0x5f970, come with ranks),
-//! applied in single precision; then rounded down, above 100000 to a
+//! above 99; a multiplier, the ranks' `_priceFluxMult[1]` (see
+//! [`rank`](crate::rank)'s **Prices**), applied in single precision, the
+//! price taken to a single float, multiplied and cut down to whole credits
+//! (`cvtsi2ss`, `mulss`, `cvttss2si` @0x4e743-0x4e74c); then rounded down,
+//! above 100000 to a
 //! thousand, above 10000 to a hundred and above 100 to ten, and never
 //! below 1.
 //!
@@ -174,13 +176,15 @@ pub const DEFECTED_SOME: &str = "Due to lack of pay, some of your escorts have d
 /// What hiring a ship class costs: the fee shown and checked, what a hire
 /// takes from the cash, and the daily wage. Nova's is [`NovaHire`].
 pub trait HireTerms: Debug {
-    /// The fee for hiring a ship of `ship`'s class at `site`, shown and
+    /// The fee for hiring a ship of `ship`'s class at `site` under the
+    /// ranks' price multiplier `mult` (`_priceFluxMult[1]`), shown and
     /// checked against the cash.
-    fn fee(&self, ship: &ShipRecord, site: &LandingSite) -> i64;
+    fn fee(&self, ship: &ShipRecord, site: &LandingSite, mult: f32) -> i64;
 
-    /// What hiring a ship of `ship`'s class at `site` takes from `cash`,
-    /// which is at least [`HireTerms::fee`].
-    fn charge(&self, ship: &ShipRecord, site: &LandingSite, cash: i64) -> i64;
+    /// What hiring a ship of `ship`'s class at `site` under the ranks'
+    /// price multiplier `mult` takes from `cash`, which is at least
+    /// [`HireTerms::fee`].
+    fn charge(&self, ship: &ShipRecord, site: &LandingSite, mult: f32, cash: i64) -> i64;
 
     /// The daily wage of an escort of `ship`'s class.
     fn wage(&self, ship: &ShipRecord) -> i64;
@@ -204,24 +208,25 @@ impl NovaHire {
         }
     }
 
-    /// The hire price of `ship`'s class at `site`.
-    fn price(ship: &ShipRecord, site: &LandingSite) -> i64 {
-        price_flux(ship.cost, ship.tech_level, site.tech_level)
+    /// The hire price of `ship`'s class at `site` under `mult`.
+    fn price(ship: &ShipRecord, site: &LandingSite, mult: f32) -> i64 {
+        price_flux(ship.cost, mult, ship.tech_level, site.tech_level)
     }
 }
 
 impl HireTerms for NovaHire {
-    fn fee(&self, ship: &ShipRecord, site: &LandingSite) -> i64 {
-        (HIRE_FEE_SHARE * Self::price(ship, site) as f64) as i64
+    fn fee(&self, ship: &ShipRecord, site: &LandingSite, mult: f32) -> i64 {
+        (HIRE_FEE_SHARE * Self::price(ship, site, mult) as f64) as i64
     }
 
-    fn charge(&self, ship: &ShipRecord, site: &LandingSite, cash: i64) -> i64 {
+    fn charge(&self, ship: &ShipRecord, site: &LandingSite, mult: f32, cash: i64) -> i64 {
         match self.hire_fee {
             RuleSource::Engine => {
-                let left = (cash as f64 + Self::price(ship, site) as f64 * -HIRE_FEE_SHARE) as i64;
+                let left =
+                    (cash as f64 + Self::price(ship, site, mult) as f64 * -HIRE_FEE_SHARE) as i64;
                 cash - left
             }
-            RuleSource::Bible => self.fee(ship, site),
+            RuleSource::Bible => self.fee(ship, site, mult),
         }
     }
 
@@ -230,12 +235,18 @@ impl HireTerms for NovaHire {
     }
 }
 
-/// A ship's hire price from its `Cost` (`price`), its `TechLevel`
-/// (`ship_tech`) and the stellar's (`stellar_tech`): the original's
-/// `_ApplyPriceAndTechnologyFlux` with a multiplier of 1.0 (see the module
-/// docs).
+/// A shipyard price from `price`, the ranks' multiplier `mult`, a ship's
+/// `TechLevel` (`ship_tech`) and the stellar's (`stellar_tech`): the
+/// original's `_ApplyPriceAndTechnologyFlux(price, mult, techA, techB)`
+/// @0x4e6cd-0x4e7c3, ported whole (see the module docs). The shipyard's
+/// ship price and trade-in and the bar's hire price all go through it.
+///
+/// One branch is left out: a product beyond `i32` makes the original's
+/// `cvttss2si` give 0x80000000, which its `cmovle` then turns into 1
+/// (@0x4e74c, @0x4e7ab-0x4e7b2). The engine keeps the wider value, as the
+/// port never copies the original's integer widths.
 #[must_use]
-pub fn price_flux(price: i32, ship_tech: i16, stellar_tech: i16) -> i64 {
+pub fn price_flux(price: i32, mult: f32, ship_tech: i16, stellar_tech: i16) -> i64 {
     if price <= 0 {
         return 0;
     }
@@ -248,9 +259,9 @@ pub fn price_flux(price: i32, ship_tech: i16, stellar_tech: i16) -> i64 {
             100 - i32::from(TECH_DISCOUNT) * (i32::from(stellar_tech) - i32::from(ship_tech));
         price = (price as f64 * (f64::from(percent) * 0.01)) as i64;
     }
-    // The multiplier, 1.0 until ranks exist, is applied in single
-    // precision, as the original does: the price goes through an f32.
-    let price = price as f32 as i64;
+    // The multiplier is applied in single precision, as the original
+    // does: the price goes through an f32 (@0x4e743-0x4e74c).
+    let price = (price as f32 * mult) as i64;
     let step = if price > 100_000 {
         1000
     } else if price > 10_000 {
@@ -355,6 +366,8 @@ pub(crate) struct Bar<'a> {
     pub(crate) room: bool,
     /// The fee and wage.
     pub(crate) terms: &'a dyn HireTerms,
+    /// The ranks' price multiplier the fee reads, `_priceFluxMult[1]`.
+    pub(crate) rank_mult: f32,
     /// The control-bit test.
     pub(crate) control_bits: &'a dyn ControlBits,
     /// What the control-bit test reads about the player.
@@ -417,7 +430,7 @@ impl Bar<'_> {
                 ship.flags3 & ShipFlags3::HIDE_HIGHER != 0,
                 true,
             );
-            let fee = self.terms.fee(ship, self.site);
+            let fee = self.terms.fee(ship, self.site, self.rank_mult);
             let gated =
                 self.rules.source_for(RuleKey::HireRequire) == RuleSource::Bible && !required;
             let hire = if !available || gated {
@@ -479,62 +492,98 @@ mod tests {
 
     #[test]
     fn the_low_tech_discount_takes_3_percent_a_tech_level_below_a_low_tech_stellar() {
-        assert_eq!(price_flux(10_000, 3, 4), 9700);
-        assert_eq!(price_flux(10_000, 3, 7), 10_000, "a stellar above 5");
-        assert_eq!(price_flux(10_000, 3, 3), 10_000, "no lower");
-        assert_eq!(price_flux(10_000, 4, 3), 10_000, "the ship higher");
-        assert_eq!(price_flux(10_000, 6, 5), 10_000, "the ship above 5");
-        assert_eq!(price_flux(17_500, 4, 5), 16_900);
-        assert_eq!(price_flux(99, 1, 5), 99, "a price of 99 or less");
-        assert_eq!(price_flux(100, 1, 5), 88, "100 is above 99");
-        assert_eq!(price_flux(200, 1, 5), 170);
-        assert_eq!(price_flux(10_000, 5, 5), 10_000);
-        assert_eq!(price_flux(10_000, 0, 5), 8500, "tech 0");
+        assert_eq!(price_flux(10_000, 1.0, 3, 4), 9700);
+        assert_eq!(price_flux(10_000, 1.0, 3, 7), 10_000, "a stellar above 5");
+        assert_eq!(price_flux(10_000, 1.0, 3, 3), 10_000, "no lower");
+        assert_eq!(price_flux(10_000, 1.0, 4, 3), 10_000, "the ship higher");
+        assert_eq!(price_flux(10_000, 1.0, 6, 5), 10_000, "the ship above 5");
+        assert_eq!(price_flux(17_500, 1.0, 4, 5), 16_900);
+        assert_eq!(price_flux(99, 1.0, 1, 5), 99, "a price of 99 or less");
+        assert_eq!(price_flux(100, 1.0, 1, 5), 88, "100 is above 99");
+        assert_eq!(price_flux(200, 1.0, 1, 5), 170);
+        assert_eq!(price_flux(10_000, 1.0, 5, 5), 10_000);
+        assert_eq!(price_flux(10_000, 1.0, 0, 5), 8500, "tech 0");
     }
 
     #[test]
     fn the_price_is_rounded_down_by_its_size() {
-        assert_eq!(price_flux(100, 1, 7), 100);
-        assert_eq!(price_flux(101, 1, 7), 100, "above 100 to ten");
-        assert_eq!(price_flux(105, 1, 7), 100);
-        assert_eq!(price_flux(109, 1, 7), 100);
-        assert_eq!(price_flux(10_000, 1, 7), 10_000);
-        assert_eq!(price_flux(10_001, 1, 7), 10_000, "above 10000 to a hundred");
-        assert_eq!(price_flux(10_099, 1, 7), 10_000);
-        assert_eq!(price_flux(10_109, 1, 7), 10_100);
-        assert_eq!(price_flux(100_000, 1, 7), 100_000);
+        assert_eq!(price_flux(100, 1.0, 1, 7), 100);
+        assert_eq!(price_flux(101, 1.0, 1, 7), 100, "above 100 to ten");
+        assert_eq!(price_flux(105, 1.0, 1, 7), 100);
+        assert_eq!(price_flux(109, 1.0, 1, 7), 100);
+        assert_eq!(price_flux(10_000, 1.0, 1, 7), 10_000);
         assert_eq!(
-            price_flux(100_099, 1, 7),
+            price_flux(10_001, 1.0, 1, 7),
+            10_000,
+            "above 10000 to a hundred"
+        );
+        assert_eq!(price_flux(10_099, 1.0, 1, 7), 10_000);
+        assert_eq!(price_flux(10_109, 1.0, 1, 7), 10_100);
+        assert_eq!(price_flux(100_000, 1.0, 1, 7), 100_000);
+        assert_eq!(
+            price_flux(100_099, 1.0, 1, 7),
             100_000,
             "above 100000 to a thousand"
         );
-        assert_eq!(price_flux(123_456, 1, 7), 123_000);
-        assert_eq!(price_flux(14, 1, 7), 14);
+        assert_eq!(price_flux(123_456, 1.0, 1, 7), 123_000);
+        assert_eq!(price_flux(14, 1.0, 1, 7), 14);
     }
 
     #[test]
     fn no_cost_is_no_price_and_any_other_is_at_least_1() {
-        assert_eq!(price_flux(0, 1, 7), 0);
-        assert_eq!(price_flux(-5, 1, 7), 0);
-        assert_eq!(price_flux(1, 1, 7), 1);
-        assert_eq!(price_flux(1, 1, 5), 1);
+        assert_eq!(price_flux(0, 1.0, 1, 7), 0);
+        assert_eq!(price_flux(-5, 1.0, 1, 7), 0);
+        assert_eq!(price_flux(1, 1.0, 1, 7), 1);
+        assert_eq!(price_flux(1, 1.0, 1, 5), 1);
+    }
+
+    #[test]
+    fn the_multiplier_applies_after_the_discount_and_before_the_rounding() {
+        assert_eq!(price_flux(80_000, 0.85, 4, 4), 68_000);
+        assert_eq!(price_flux(17_500, 0.85, 4, 4), 14_800, "14,875");
+        assert_eq!(price_flux(10_000, 0.85, 3, 4), 8240, "9700 first");
+        assert_eq!(price_flux(10_000, 1.5, 1, 7), 15_000);
+        assert_eq!(price_flux(1, 0.5, 1, 7), 1, "never below 1");
+    }
+
+    #[test]
+    fn the_multiplier_is_applied_in_single_precision() {
+        assert_eq!(price_flux(10_000, 0.9, 1, 7), 9000, "8999.99 in double");
+        assert_eq!(price_flux(10_000, 0.9, 3, 4), 8730, "8729.99 in double");
+    }
+
+    #[test]
+    fn the_fee_reads_the_rank_multiplier() {
+        let nova = NovaHire::default();
+        assert_eq!(nova.fee(&costing(10_000, 3), &site(4), 0.85), 824);
+        assert_eq!(
+            nova.charge(&costing(10_000, 3), &site(4), 0.85, 25_000),
+            824
+        );
+        let bible = NovaHire {
+            hire_fee: RuleSource::Bible,
+        };
+        assert_eq!(
+            bible.charge(&costing(10_000, 3), &site(4), 0.85, 25_000),
+            824
+        );
     }
 
     #[test]
     fn the_price_goes_through_single_precision() {
-        assert_eq!(price_flux(16_777_217, 1, 7), 16_777_000);
-        assert_eq!(price_flux(i32::MAX, 1, 7), 2_147_483_000);
+        assert_eq!(price_flux(16_777_217, 1.0, 1, 7), 16_777_000);
+        assert_eq!(price_flux(i32::MAX, 1.0, 1, 7), 2_147_483_000);
     }
 
     #[test]
     fn the_fee_is_a_tenth_of_the_hire_price() {
         let nova = NovaHire::default();
-        assert_eq!(nova.fee(&costing(10_000, 3), &site(4)), 970);
-        assert_eq!(nova.fee(&costing(10_000, 3), &site(7)), 1000);
-        assert_eq!(nova.fee(&costing(17_500, 4), &site(5)), 1690);
-        assert_eq!(nova.fee(&costing(14, 1), &site(7)), 1, "cut down");
-        assert_eq!(nova.fee(&costing(0, 1), &site(7)), 0);
-        assert_eq!(nova.fee(&costing(-5, 1), &site(7)), 0);
+        assert_eq!(nova.fee(&costing(10_000, 3), &site(4), 1.0), 970);
+        assert_eq!(nova.fee(&costing(10_000, 3), &site(7), 1.0), 1000);
+        assert_eq!(nova.fee(&costing(17_500, 4), &site(5), 1.0), 1690);
+        assert_eq!(nova.fee(&costing(14, 1), &site(7), 1.0), 1, "cut down");
+        assert_eq!(nova.fee(&costing(0, 1), &site(7), 1.0), 0);
+        assert_eq!(nova.fee(&costing(-5, 1), &site(7), 1.0), 0);
     }
 
     #[test]
@@ -554,16 +603,16 @@ mod tests {
             hire_fee: RuleSource::Engine,
         };
         let at = site(7);
-        assert_eq!(nova.fee(&costing(14, 1), &at), 1);
-        assert_eq!(nova.charge(&costing(14, 1), &at, 10), 2, "8 left");
+        assert_eq!(nova.fee(&costing(14, 1), &at, 1.0), 1);
+        assert_eq!(nova.charge(&costing(14, 1), &at, 1.0, 10), 2, "8 left");
         assert_eq!(
-            nova.charge(&costing(14, 1), &at, 1),
+            nova.charge(&costing(14, 1), &at, 1.0, 1),
             1,
             "none left, never below"
         );
-        assert_eq!(nova.charge(&costing(20, 1), &at, 1000), 2);
-        assert_eq!(nova.charge(&costing(10_000, 1), &at, 25_000), 1000);
-        assert_eq!(nova.charge(&costing(10_000, 3), &site(4), 25_000), 970);
+        assert_eq!(nova.charge(&costing(20, 1), &at, 1.0, 1000), 2);
+        assert_eq!(nova.charge(&costing(10_000, 1), &at, 1.0, 25_000), 1000);
+        assert_eq!(nova.charge(&costing(10_000, 3), &site(4), 1.0, 25_000), 970);
     }
 
     #[test]
@@ -572,9 +621,9 @@ mod tests {
             hire_fee: RuleSource::Bible,
         };
         let at = site(7);
-        assert_eq!(nova.charge(&costing(14, 1), &at, 10), 1);
-        assert_eq!(nova.charge(&costing(10_000, 1), &at, 25_000), 1000);
-        assert_eq!(nova.charge(&costing(10_000, 3), &site(4), 25_000), 970);
+        assert_eq!(nova.charge(&costing(14, 1), &at, 1.0, 10), 1);
+        assert_eq!(nova.charge(&costing(10_000, 1), &at, 1.0, 25_000), 1000);
+        assert_eq!(nova.charge(&costing(10_000, 3), &site(4), 1.0, 25_000), 970);
     }
 
     #[test]
@@ -667,6 +716,7 @@ mod tests {
             cash: 0,
             room: true,
             terms: &NovaHire::default(),
+            rank_mult: 1.0,
             control_bits: Gate::FRESH.control_bits,
             pilot: Gate::FRESH.pilot,
             rules: Rulebook::default(),
@@ -707,6 +757,7 @@ mod tests {
                 cash: 0,
                 room: true,
                 terms: &NovaHire::default(),
+                rank_mult: 1.0,
                 control_bits: Gate::FRESH.control_bits,
                 pilot: Gate::FRESH.pilot,
                 rules,

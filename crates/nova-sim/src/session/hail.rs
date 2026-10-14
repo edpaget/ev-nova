@@ -51,6 +51,12 @@
 //!   ([`Session::take_comm`]) and decides again; a repair for a player no
 //!   longer disabled ends at once, silently. The traffic lets an
 //!   assisting ship decide again once anything provokes it.
+//! - **Defend** (battle help, `_AIFightEnemyThreatToPlayer` @0x82c80):
+//!   it attacks the threat to the player picked
+//!   ([`Goal::Attack`], its target set, @0x82d9b-0x82d9f), and calls for
+//!   reinforcements, forced past their strength test
+//!   (`_AICallForReinforcements(ship, 1)` @0x9636d). Reinforcements
+//!   aren't built, so the call is an empty hook until they are.
 
 use super::Session;
 use crate::ai::Goal;
@@ -69,6 +75,7 @@ use crate::hyperspace::JUMP_FUEL;
 use crate::mission::goals::ShipGoal;
 use crate::mission::ships::ShipBehav;
 use crate::person::{COMM_QUOTES, offers_to_join};
+use crate::rank;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 
@@ -78,6 +85,8 @@ use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 pub(super) struct Talk {
     npc: NpcId,
     conversation: Conversation,
+    /// What it said just before `reply` in the last press, if anything.
+    first: Option<Reply>,
     reply: Reply,
     ask: Option<Ask>,
     /// Whether the escort hailed is to be released once the channel
@@ -94,6 +103,7 @@ impl Talk {
         Self {
             npc,
             conversation: Conversation::open(0, false, 0, &mut crate::chance::NeverFires),
+            first: None,
             reply: Reply::Comm(1),
             ask: None,
             release: false,
@@ -151,6 +161,7 @@ impl Session {
         self.talk = Some(Talk {
             npc: npc.id,
             conversation,
+            first: None,
             reply: opening,
             ask: None,
             release: false,
@@ -212,16 +223,24 @@ impl Session {
         })
     }
 
-    /// What `npc`'s government and ship type make of hails.
+    /// What `npc`'s government and ship type make of hails, the pilot's
+    /// ranks reaching it by the session's `rank_govt_reach` rule.
     fn dispositions(&self, npc: &Npc) -> Dispositions {
         let inherent = self
             .ship_record(npc.ship)
             .and_then(|record| record.inherent_govt);
-        Dispositions::of(npc, inherent, &self.govts)
+        let favour = rank::favour(
+            &self.ranks,
+            &self.pilot.ranks,
+            npc.govt,
+            &self.govts,
+            self.rules.source_for(RuleKey::RankGovtReach),
+        );
+        Dispositions::of(npc, inherent, &self.govts, favour)
     }
 
     /// The hail of `npc` in conversation `talk`, as the options see it.
-    pub(super) fn hail_of<'a>(&self, npc: &'a Npc, talk: &Conversation) -> Hail<'a> {
+    pub(super) fn hail_of<'a>(&'a self, npc: &'a Npc, talk: &Conversation) -> Hail<'a> {
         let need = assist::need(self.condition, self.pilot.reserves.fuel);
         let around = self.world();
         let around = around.around(self.npcs());
@@ -278,14 +297,18 @@ impl Session {
                 key: option.key(),
             })
             .collect();
-        Some(HailView {
-            npc: npc.id,
-            ship: npc.ship,
-            reply: talk.reply.say(
+        let say = |reply: Reply| {
+            reply.say(
                 talk.conversation.variant,
                 catalog,
                 self.pilot.ship_name().unwrap_or_default(),
-            ),
+            )
+        };
+        Some(HailView {
+            npc: npc.id,
+            ship: npc.ship,
+            first: talk.first.map(say),
+            reply: say(talk.reply),
             comm_name: self
                 .ship_record(npc.ship)
                 .map(|record| record.comm_name.clone())
@@ -325,6 +348,7 @@ impl Session {
             let hail = self.hail_of(npc, &talk.conversation);
             options.listed(&hail).get(pick)?.press(&hail, chance)
         };
+        talk.first = answer.first;
         if let Some(said) = answer.reply {
             talk.reply = said;
         }
@@ -365,6 +389,7 @@ impl Session {
         if settled != Settled::Lowered {
             talk.ask = None;
         }
+        talk.first = None;
         talk.reply = said;
         self.talk = Some(talk);
         if let Some(deed) = deed {
@@ -409,6 +434,11 @@ impl Session {
                 npc.target = Some(ShipRef::Player);
             }
             Deed::Release | Deed::Join => {}
+            Deed::Defend(threat) => {
+                npc.goal = Goal::Attack(ShipRef::Npc(threat));
+                npc.target = Some(ShipRef::Npc(threat));
+                self.call_for_reinforcements(id);
+            }
             Deed::Help(help) => {
                 npc.goal = Goal::Assist(help);
                 npc.target = Some(ShipRef::Player);
@@ -418,6 +448,30 @@ impl Session {
             }
         }
     }
+
+    /// NPC `id` calls for reinforcements, forced past its strength test:
+    /// `_AICallForReinforcements(ship, 1)`, which battle help makes
+    /// (`_DoCommDialog` @0x9636d). Reinforcements aren't built (the daily
+    /// step's countdown in `story/day.rs` is an empty slot, "once
+    /// reinforcements are built"), so this is empty until then. The gates
+    /// the call will need (`_AICallForReinforcements` @0x7f5a1):
+    ///
+    /// - the ship has a government (@0x7f5b7);
+    /// - its system has a reinforcement fleet (`+0xbe`, @0x7f5da);
+    /// - the system's timer `+0xc8` is at most 0 (@0x7f5eb) and its
+    ///   countdown `+0xc4` is at most 0 (@0x7f5ff);
+    /// - the ship's `c914` is above 0 (@0x7f60d);
+    /// - the fleet's government is allied with the ship's (@0x7f63d);
+    /// - `c914 > 0.5 * govt+0x60`, or the force this call passes
+    ///   (@0x7f699-0x7f6b0);
+    /// - then `+0x82` of either government, or a global flag, sets the
+    ///   countdown to 1 (@0x7f6b2-0x7f6ef); otherwise it sets `+0xc8` from
+    ///   `+0xc0` (@0x7f6fc-0x7f70c).
+    #[expect(
+        clippy::unused_self,
+        reason = "an empty hook until reinforcements are built"
+    )]
+    fn call_for_reinforcements(&self, _id: NpcId) {}
 
     /// Gives a tick of the help each NPC assisting the player gives (see
     /// [`assist`](crate::hail::assist)), a repair raising the armour until
@@ -540,7 +594,7 @@ mod tests {
     use super::*;
     use crate::ai::NovaAi;
     use crate::catalog::{DudeId, DudeRecord, GovtId, GovtRecord, ShipId, SystemTraffic};
-    use crate::catalog::{StellarId, SystemId};
+    use crate::catalog::{RankId, RankRecord, StellarId, SystemId};
     use crate::combat::Strike;
     use crate::combat::hull::{HullSpec, NovaDisable};
     use crate::geometry::Vec2;
@@ -1202,6 +1256,145 @@ mod tests {
         let view = haggle(&mut session, &catalog, Haggle::LowerPrice);
         assert_eq!(view.reply, "Ha ha ha. What a comedian.");
         assert_eq!(session.npcs()[0].goal, Goal::Idle);
+    }
+
+    /// `hailable`, its government 129 allied with the Federation, with
+    /// rank 128 of 129 carrying `flags`, active on the pilot of a session
+    /// as `targeting` makes it.
+    fn ranked(flags: u16) -> (FakePilotCatalog, Session) {
+        let mut catalog = hailable();
+        catalog.govts[1].allies = [1, -1, -1, -1];
+        catalog.ranks = vec![RankRecord {
+            affil_govt: Some(OTHER),
+            flags,
+            ..crate::testkit::rank(128)
+        }];
+        let mut session = targeting(&catalog);
+        session.pilot.ranks.insert(RankId(128));
+        (catalog, session)
+    }
+
+    #[test]
+    fn a_rank_allied_with_the_ships_government_gives_it_free_help_by_the_engine_only() {
+        let (catalog, mut session) = ranked(crate::rank::HELPS_FREE);
+        session.pilot.reserves.fuel.now = 40.0;
+        hail(&mut session, &catalog);
+        let view = press(&mut session, &catalog, 1, 99);
+        assert_eq!(view.reply, "Okay, I'm on my way.");
+        assert_eq!(view.asking, None);
+        assert_eq!(session.pilot().cash, 100_000);
+        assert_eq!(session.npcs()[0].goal, Goal::Assist(Help::Refuel));
+        let (catalog, mut session) = ranked(crate::rank::HELPS_FREE);
+        session.rules =
+            Rulebook::default().with_override(RuleKey::RankGovtReach, RuleSource::Bible);
+        session.pilot.reserves.fuel.now = 40.0;
+        hail(&mut session, &catalog);
+        let view = press(&mut session, &catalog, 1, 99);
+        assert_eq!(view.reply, "I'll help you out if you pay me.");
+        assert_eq!(view.asking, Some(3000));
+        assert_eq!(session.npcs()[0].goal, Goal::Idle);
+    }
+
+    #[test]
+    fn battle_help_sets_the_ship_attacking_the_threat_and_takes_no_cash() {
+        let mut catalog = hailable();
+        catalog.ranks = vec![RankRecord {
+            affil_govt: Some(FED),
+            flags: crate::rank::HELPS_IN_BATTLE,
+            ..crate::testkit::rank(128)
+        }];
+        let mut session = targeting(&catalog);
+        session.pilot.ranks.insert(RankId(128));
+        let pirate = Npc {
+            govt: Some(PIRATES),
+            goal: Goal::Attack(ShipRef::Player),
+            ..session.npcs()[0].clone()
+        };
+        let pirate = session.traffic.add_npc(pirate);
+        hail(&mut session, &catalog);
+        let view = press(&mut session, &catalog, 1, 0);
+        assert_eq!(view.reply, "Okay, I'm on my way.");
+        assert_eq!(view.asking, None);
+        assert_eq!(session.pilot().cash, 100_000);
+        let helper = &session.npcs()[0];
+        assert_eq!(helper.goal, Goal::Attack(ShipRef::Npc(pirate)));
+        assert_eq!(helper.target, Some(ShipRef::Npc(pirate)));
+        let view = press(&mut session, &catalog, 1, 0);
+        assert_eq!(view.reply, "I'm busy.");
+    }
+
+    #[test]
+    fn free_help_says_its_price_first_then_is_on_its_way_and_takes_no_cash() {
+        let mut catalog = hailable();
+        catalog.govts[0].flags2 = crate::hail::FREE_HELP;
+        let mut session = targeting(&catalog);
+        session.pilot.reserves.fuel.now = 40.0;
+        let view = hail(&mut session, &catalog);
+        assert_eq!(view.first, None);
+        let view = press(&mut session, &catalog, 1, 99);
+        assert_eq!(
+            view.first.as_deref(),
+            Some("I'll help you out if you pay me.")
+        );
+        assert_eq!(view.reply, "Okay, I'm on my way.");
+        assert_eq!(view.asking, None);
+        assert_eq!(session.pilot().cash, 100_000);
+        assert_eq!(session.npcs()[0].goal, Goal::Assist(Help::Refuel));
+        let view = press(&mut session, &catalog, 0, 99);
+        assert_eq!(view.first, None, "Greetings says one line");
+        assert_eq!(
+            session
+                .hailing(&catalog, &HailOptions::default())
+                .and_then(|view| view.first),
+            None
+        );
+    }
+
+    /// An option that says "Nice to meet you." before asking a price
+    /// with "What is it you want?".
+    #[derive(Debug)]
+    struct Haggler;
+
+    impl HailOption for Haggler {
+        fn label(&self) -> String {
+            "Haggle".to_owned()
+        }
+
+        fn applies(&self, _hail: &Hail) -> bool {
+            true
+        }
+
+        fn press(&self, _hail: &Hail, _chance: &mut dyn Chance) -> Answer {
+            Answer {
+                first: Some(Reply::Comm(reply::NICE_TO_MEET_YOU)),
+                ask: Some(Ask {
+                    paid: (Reply::Comm(reply::ON_MY_WAY), None),
+                    declined: (Reply::Comm(reply::COMEDIAN), None),
+                    short: Reply::Comm(reply::NO_MONEY),
+                }),
+                ..Answer::say(Reply::Comm(reply::WHAT_IS_IT))
+            }
+        }
+    }
+
+    #[test]
+    fn a_haggle_clears_the_line_said_first() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        let options = HailOptions::empty().with(Rc::new(Haggler));
+        session
+            .hail(&catalog, &options, &mut Draws::of(&opening(0)))
+            .expect("answered");
+        let view = session
+            .answer(0, &catalog, &options, &mut Draws::of(&[99]))
+            .expect("open");
+        assert_eq!(view.first.as_deref(), Some("Nice to meet you."));
+        assert_eq!(view.reply, "What is it you want?");
+        let view = session
+            .haggle(Haggle::LowerPrice, &catalog, &options)
+            .expect("open");
+        assert_eq!(view.reply, "Ha ha ha. What a comedian.");
+        assert_eq!(view.first, None);
     }
 
     #[test]

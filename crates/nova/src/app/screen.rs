@@ -213,6 +213,7 @@ use nova_view::spaceport::SpaceportView;
 use nova_view::spaceport::bar::BAR_DIALOG;
 use nova_view::spaceport::layout::SPACEPORT_DIALOG;
 use nova_view::spaceport::missions::{COMPUTER_DIALOG, INFO_DIALOG, MissionInfoScreen};
+use nova_view::spaceport::news::NEWS_DIALOG;
 use nova_view::spaceport::offer::{OFFER_DIALOG, OfferChoice, OfferDialog};
 use nova_view::spaceport::outfitter::OUTFIT_DIALOG;
 use nova_view::spaceport::shipyard::{
@@ -1435,6 +1436,7 @@ impl AppScreen {
             spaceport = spaceport
                 .with_bar(
                     template_of(BAR_DIALOG),
+                    template_of(NEWS_DIALOG),
                     template_of(SHIPYARD_DIALOG),
                     info_templates(),
                     art,
@@ -1728,7 +1730,8 @@ impl AppScreen {
     }
 
     /// The spaceport's input, all of it: the outfitter opening tells the
-    /// flight and shows its outfitter afresh; an order on its exchange trades,
+    /// flight and shows its outfitter afresh; the bar opening has the
+    /// flight draw the visit's news, which the bar's News then shows; an order on its exchange trades,
     /// and one in its outfitter buys or sells, and the exchange and the
     /// outfitter as they then are go back to it. A ship asked for in its
     /// shipyard opens the prompt for its name, when it can be bought; the
@@ -1768,6 +1771,17 @@ impl AppScreen {
             let flight = self.flight.as_mut().expect(ENTERED);
             let _ = flight.abort_mission(slot);
             spaceport.set_mission_info(flight.mission_info());
+        }
+        // The bar draws the visit's news as it opens, before News can
+        // show it; News shows what was drawn.
+        if spaceport.take_bar_opened() {
+            self.flight.as_mut().expect(ENTERED).open_bar();
+        }
+        if spaceport.take_news_request() {
+            let flight = self.flight.as_ref().expect(ENTERED);
+            if let (Some(news), Some(picture)) = (flight.news(), flight.news_picture()) {
+                spaceport.open_news(news, picture);
+            }
         }
         if spaceport.take_hire_request()
             && let Some(list) = self.flight.as_mut().expect(ENTERED).escorts_for_hire()

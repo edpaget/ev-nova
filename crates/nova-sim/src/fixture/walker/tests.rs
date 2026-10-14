@@ -843,6 +843,27 @@ fn a_return_that_cannot_be_landed_on_is_reported() {
 }
 
 #[test]
+fn a_return_in_a_system_hidden_when_it_was_offered_is_landed_at_in_the_first_listing_it() {
+    // 131 shows only once b50 is set, which the mission's accept sets: its
+    // return, 140, had no system when it was offered.
+    let mut catalog = galaxy(vec![MissionRecord {
+        on_accept: Script::parse("b50"),
+        ..errand(200, 128, 140, "b60")
+    }]);
+    catalog.visibility = vec![crate::catalog::SystemVisibility {
+        id: SystemId(131),
+        visibility: crate::control::Test::parse("b50"),
+    }];
+    let mut session = docked(&catalog);
+    assert!(!session.galaxy().visible(SystemId(131)));
+    let walked = StoryWalker::new(&catalog).walk(&mut session, &[Step::Take(A), Step::Deliver(A)]);
+    assert!(walked.is_ok(), "{walked:?}");
+    assert_eq!(session.landed(), Some(StellarId(140)));
+    assert_eq!(session.system(), SystemId(131));
+    assert!(session.control_bit(bit(60)), "completed");
+}
+
+#[test]
 fn a_return_in_no_system_is_reported() {
     let catalog = galaxy(vec![errand(200, 128, 150, "")]);
     let mut session = docked(&catalog);

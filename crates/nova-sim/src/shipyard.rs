@@ -83,12 +83,31 @@
 //!
 //! # Price and trade-in
 //!
-//! A ship's price is its `Cost`, never below none. The player's ship trades
-//! in for [`TRADE_IN_PERCENT`] of its class's `Cost`, plus half of each
+//! Both go through the original's price flux, `_ApplyPriceAndTechnologyFlux`
+//! @0x4e6cd ([`price_flux`]), with the ranks' multipliers `_priceFluxMult`
+//! (see [`rank`](crate::rank)'s **Prices**): no price for a value of 0 or
+//! less; a low-tech discount of 3 % a tech level when both tech levels are
+//! 5 or less, the ship's below the stellar's, and the value above 99; the
+//! multiplier, in single precision; then rounded down, above 100000 to a
+//! thousand, above 10000 to a hundred and above 100 to ten, and never
+//! below 1.
+//!
+//! A ship's price is its `Cost` through the flux with `_priceFluxMult[1]`,
+//! its `TechLevel` against the stellar's (`_CalcShipCanBuy` @0x4f751,
+//! `_ShipyardDialogUpdate` @0x59387, `_DoShipyardDialog` @0x5ed4f). The
+//! player's ship is valued at [`TRADE_IN_PERCENT`] of its class's `Cost`,
+//! plus half of each
 //! outfit line it carries (count × price), except a persistent one, which
 //! the player keeps, the total never below none ([`trade_in`]). By the
 //! engine an outfit that cannot be sold counts too; by the Bible it does
-//! not ([`RuleKey::TradeInOutfits`](crate::RuleKey::TradeInOutfits)). The
+//! not ([`RuleKey::TradeInOutfits`](crate::RuleKey::TradeInOutfits)). That
+//! value then goes through the flux with the flown class's `TechLevel`
+//! (not the class being bought): by the engine twice, `_priceFluxMult[0]`
+//! then `[1]` (@0x4f769-0x4f7d3, @0x59433-0x5949a, @0x5ec13-0x5ec96), so
+//! the ranks' factor is squared and the discount and rounding apply twice;
+//! by the other reading of
+//! [`RuleKey::RankTradeIn`](crate::RuleKey::RankTradeIn), once with
+//! `[1]`. A class flown with no record is taken at tech level 0. The
 //! final price is the price less
 //! the trade-in, and may be negative: the player is then paid. A buy is
 //! refused when the ship is the class flown, when it cannot be bought
@@ -164,7 +183,9 @@
 //! (`required`, `available`, `day_roll` on
 //! [`RuleKey::BuyRandom`](crate::RuleKey::BuyRandom), `price`) and over
 //! the ship flown (`trade_in_value` on
-//! [`RuleKey::TradeInOutfits`](crate::RuleKey::TradeInOutfits)), and
+//! [`RuleKey::TradeInOutfits`](crate::RuleKey::TradeInOutfits), then
+//! `trade_in_flux` on [`RuleKey::RankTradeIn`](crate::RuleKey::RankTradeIn)),
+//! and
 //! settles in each row's [`ShipFacts`] whether the class can be bought
 //! here at all. [`Shipyard::can`] answers from the checks list `can_buy`:
 //! "flown", "for sale", then "cash". A purchase is worked out as a value
@@ -222,31 +243,33 @@
 //! its 1,000,000, plus 50 % of its stock weapons and default items'
 //! 1,825,000, plus 500 for one of its 30 Wraithii, as the check counts the
 //! ammunition by `WeapCount` rather than `AmmoLoad` (@0x7aca2). The trade-in
-//! the player sees for a Striker owning its 30 rounds is 1,177,500, and
-//! exactly 1,163,000 once 29 have been fired. The forums add that the
+//! the player sees for a Striker owning its 30 rounds is 1,177,500, shown
+//! 1,177,000 after the flux's rounding, and exactly 1,163,000 once 29 have
+//! been fired. The forums add that the
 //! trade-in leaves persistent outfits out, and that a trade-in worth more
 //! than the new ship pays the difference.
 //!
 //! Not modelled yet: the gun and turret limits (`MaxGun`, `MaxTur`);
 //! `OnPurchase` and `OnRetire`; `MovieFile`; and escorts' `UpgradeTo`.
-//! Nor does the shipyard price a ship through the original's tech-level
-//! flux, as hiring in the bar does with its own price rule
-//! ([`hire`](crate::hire)).
 
 use std::collections::BTreeMap;
 
 use crate::bay::FIGHTER_BAY;
 use crate::catalog::WeaponId;
-use crate::catalog::{LandingSite, OutfitId, OutfitRecord, ShipId, ShipRecord};
+use crate::catalog::{
+    CronRecord, LandingSite, OutfitId, OutfitRecord, RankRecord, ShipId, ShipRecord,
+};
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::{Arsenal, MOD_AMMO, MOD_WEAPON, StockFit, fit_stock, fitted};
 use crate::combat::weapon::Guidance;
 use crate::control::Gate;
 use crate::handling::ShipFields;
+use crate::hire::price_flux;
 use crate::landing::StellarFlags;
 use crate::market::{EscortHolds, Good, escort_tons, fleet_holds};
 use crate::outfitter::{OutfitFlags, free_mass, outfit_mods, resale, unit_mass, unit_price};
 use crate::pilot::{Pilot, merged, tally};
+use crate::rank::PriceMults;
 use crate::reserves::{Reserves, shield_points};
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::rules::{Check, Checks, Context, Value};
@@ -753,12 +776,6 @@ pub(crate) fn buy_roll(buy_random: i16, source: RuleSource) -> Roll {
     }
 }
 
-/// `ship`'s price: its `Cost`, never below none.
-#[must_use]
-pub fn ship_price(ship: &ShipRecord) -> i64 {
-    i64::from(ship.cost).max(0)
-}
-
 /// What a ship of class `cost` and `mass` carrying `owned` trades in for,
 /// as `_PlayerShipTradeInPrice` (@0xb079-0xb144) values it.
 ///
@@ -962,12 +979,18 @@ pub(crate) struct Yard<'a> {
     pub(crate) ships: &'a [ShipRecord],
     /// Every `oütf`.
     pub(crate) outfits: &'a [OutfitRecord],
+    /// Every `crön`, whose running ones contribute bits.
+    pub(crate) crons: &'a [CronRecord],
+    /// Every `ränk`, whose active ones contribute bits.
+    pub(crate) ranks: &'a [RankRecord],
     /// Every ship class's stock weapons, which the Info's Space reads.
     pub(crate) arsenal: &'a Arsenal,
     /// The ship flown's fields.
     pub(crate) fields: ShipFields,
     /// The stellar landed on.
     pub(crate) site: &'a LandingSite,
+    /// The ranks' price multipliers, `_priceFluxMult`.
+    pub(crate) mults: PriceMults,
     /// How each disputed rule reads ([`Rulebook::source_for`]).
     pub(crate) rules: Rulebook,
     /// The control-bit test of a ship's `Availability`.
@@ -1000,8 +1023,14 @@ impl Yard<'_> {
         if self.site.flags & StellarFlags::SHIPYARD == 0 {
             return None;
         }
-        let contributed = wares::contributed(self.fields.contribute, &pilot.outfits, self.outfits);
-        let trade_in = trade_in_value().of(&Flown { yard: self, pilot });
+        let by = wares::Contributors {
+            ship: self.fields.contribute,
+            outfits: self.outfits,
+            crons: self.crons,
+            ranks: self.ranks,
+        };
+        let contributed = wares::contributed(&by, pilot);
+        let trade_in = trade_in_flux().of(&Flown { yard: self, pilot });
         let mut sorted: Vec<&ShipRecord> = self.ships.iter().collect();
         sorted.sort_by_key(|ship| ship.id);
         let mut sweep = HideHigher::default();
@@ -1161,19 +1190,26 @@ fn bible_day_roll(offer: &ShipOffer) -> Roll {
     buy_roll(offer.ship.buy_random, RuleSource::Bible)
 }
 
-/// A class's price ([`ship_price`]).
+/// A class's price: its `Cost` through [`price_flux`] with
+/// `_priceFluxMult[1]`, its `TechLevel` and the stellar's.
 fn price<'a>() -> Value<ShipOffer<'a>, i64> {
     Value::plain(
         "price",
-        "`shïp` `Cost` (`_CalcShipCanBuy` @0x4f74b-0x4f751), without its \
-         `_ApplyPriceAndTechnologyFlux`, which is not modelled",
-        cost_price,
+        "`_ApplyPriceAndTechnologyFlux` @0x4e6cd of the `shïp` `Cost` with \
+         `_priceFluxMult[1]` (`_CalcShipCanBuy` @0x4f751, `_ShipyardDialogUpdate` @0x59387, \
+         `_DoShipyardDialog` @0x5ed4f)",
+        fluxed_price,
     )
 }
 
-/// The class's `Cost`, never below none.
-fn cost_price(offer: &ShipOffer) -> i64 {
-    ship_price(offer.ship)
+/// The class's `Cost` through the flux.
+fn fluxed_price(offer: &ShipOffer) -> i64 {
+    price_flux(
+        offer.ship.cost,
+        offer.yard.mults.second,
+        offer.ship.tech_level,
+        offer.yard.site.tech_level,
+    )
 }
 
 /// What the ship flown trades in for, as
@@ -1202,11 +1238,7 @@ fn bible_trade_in(flown: &Flown) -> i64 {
 /// What the ship flown trades in for, read as `source` says.
 fn flown_trade_in(flown: &Flown, source: RuleSource) -> i64 {
     let yard = flown.yard;
-    let cost = yard
-        .ships
-        .iter()
-        .find(|ship| ship.id == flown.pilot.ship)
-        .map_or(0, |ship| ship.cost);
+    let cost = flown.record().map_or(0, |ship| ship.cost);
     trade_in(
         cost,
         yard.fields.mass,
@@ -1215,6 +1247,59 @@ fn flown_trade_in(flown: &Flown, source: RuleSource) -> i64 {
         source,
         &yard.rules,
     )
+}
+
+/// What the ship flown trades in for through the flux, as
+/// [`RuleKey::RankTradeIn`] says: by the engine,
+/// [`price_flux`] with `_priceFluxMult[0]` and then again with `[1]`
+/// (`_CalcShipCanBuy` @0x4f769-0x4f7d3, `_ShipyardDialogUpdate`
+/// @0x59433-0x5949a, `_DoShipyardDialog` @0x5ec13-0x5ec96); by the other
+/// reading, once with `[1]`. Each pass reads the flown class's
+/// `TechLevel` (player +0x76 → `shïp` +0xa) against the stellar's.
+fn trade_in_flux<'a>() -> Value<Flown<'a>, i64> {
+    Value::disputed(
+        "trade-in flux",
+        "`_ApplyPriceAndTechnologyFlux` @0x4e6cd of `_PlayerShipTradeInPrice`, with \
+         `_priceFluxMult[0]` then `[1]` (`_CalcShipCanBuy` @0x4f769-0x4f7d3, \
+         `_ShipyardDialogUpdate` @0x59433-0x5949a, `_DoShipyardDialog` @0x5ec13-0x5ec96)",
+        RuleKey::RankTradeIn,
+        engine_trade_in_flux,
+        bible_trade_in_flux,
+    )
+}
+
+/// The engine's trade-in flux: twice, `[0]` then `[1]`.
+fn engine_trade_in_flux(flown: &Flown) -> i64 {
+    let once = flown.flux(trade_in_value().of(flown), flown.yard.mults.first);
+    flown.flux(once, flown.yard.mults.second)
+}
+
+/// The other reading's trade-in flux: once, with `[1]`.
+fn bible_trade_in_flux(flown: &Flown) -> i64 {
+    flown.flux(trade_in_value().of(flown), flown.yard.mults.second)
+}
+
+impl Flown<'_> {
+    /// The class flown's record, if it has one.
+    fn record(&self) -> Option<&ShipRecord> {
+        self.yard
+            .ships
+            .iter()
+            .find(|ship| ship.id == self.pilot.ship)
+    }
+
+    /// `value` through [`price_flux`] under `mult`, with the flown class's
+    /// tech level (0 with no record) against the stellar's. A trade-in is
+    /// never below none; one beyond `i32` is taken at its most.
+    fn flux(&self, value: i64, mult: f32) -> i64 {
+        let tech = self.record().map_or(0, |ship| ship.tech_level);
+        price_flux(
+            i32::try_from(value).unwrap_or(i32::MAX),
+            mult,
+            tech,
+            self.yard.site.tech_level,
+        )
+    }
 }
 
 /// The name prompt's opening words, `STR#` 2002 #120.
@@ -1701,9 +1786,20 @@ mod tests {
     use crate::rules::Descriptor;
     use crate::stats::{MORE_FUEL, MORE_SHIELD};
     use crate::testkit::{
-        AllowAll, FAST, RefuseBits, Scripted, catalog, hull, outfit, planet, ship, weapon,
+        AllowAll, FAST, RefuseBits, Scripted, catalog, hull, outfit, planet, weapon,
     };
     use crate::wares::TonUnit;
+
+    /// Ship `id` of `fields`, as [`testkit::ship`](crate::testkit::ship)
+    /// gives it but of tech level 4, the [`port`]'s, so the flux takes no
+    /// low-tech discount from its prices: only the tests of the flux set
+    /// another.
+    fn ship(id: i16, fields: ShipFields) -> ShipRecord {
+        ShipRecord {
+            tech_level: 4,
+            ..crate::testkit::ship(id, fields)
+        }
+    }
 
     /// A shipyard of tech level 4 with special tech 6 and 55.
     fn port() -> LandingSite {
@@ -1750,9 +1846,12 @@ mod tests {
         Yard {
             ships,
             outfits,
+            crons: &[],
+            ranks: &[],
             arsenal: &NO_STOCK,
             fields: FAST,
             site,
+            mults: PriceMults::NONE,
             rules: Rulebook::default(),
             gate: Gate::FRESH,
         }
@@ -2431,19 +2530,187 @@ mod tests {
 
     // Price and trade-in.
 
+    /// Ship `id` of `cost` and tech level `tech_level`.
+    fn costing(id: i16, cost: i32, tech_level: i16) -> ShipRecord {
+        ShipRecord {
+            cost,
+            tech_level,
+            ..ship(id, FAST)
+        }
+    }
+
+    /// The shipyard of `ships` at [`port`] (tech 4) for [`pilot`] in
+    /// class 128, under `mults` and `rules`.
+    fn priced(ships: &[ShipRecord], mults: PriceMults, rules: Rulebook) -> Shipyard {
+        let site = port();
+        Yard {
+            mults,
+            rules,
+            ..yard(ships, &[], &site)
+        }
+        .shipyard(&pilot(), &mut DayRolls::default(), &mut NeverFires)
+        .expect("a shipyard")
+    }
+
+    /// Both price multipliers at `mult`.
+    fn ranked(mult: f32) -> PriceMults {
+        PriceMults {
+            first: mult,
+            second: mult,
+        }
+    }
+
+    /// The default rule set with `rank_trade_in` read by `source`.
+    fn trading_in(source: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::RankTradeIn, source)
+    }
+
     #[test]
-    fn the_price_is_the_cost_never_below_none() {
-        assert_eq!(ship_price(&cheap(129)), 1000);
-        let free = ShipRecord {
-            cost: -5,
-            ..cheap(129)
+    fn a_ships_price_takes_the_low_tech_discount_and_rounding() {
+        let ships = [
+            costing(129, 10_000, 3),
+            costing(130, 10_050, 4),
+            costing(131, 0, 1),
+            costing(132, -5, 1),
+            costing(133, i32::MAX, 4),
+        ];
+        let shipyard = priced(&ships, PriceMults::NONE, Rulebook::default());
+        let prices: Vec<i64> = [129, 130, 131, 132, 133]
+            .into_iter()
+            .map(|id| row(&shipyard, id).price)
+            .collect();
+        assert_eq!(
+            prices,
+            [9700, 10_000, 0, 0, 2_147_483_000],
+            "3 % off a tech level below 4; rounded down to a hundred; no cost no price"
+        );
+    }
+
+    #[test]
+    fn the_trade_in_goes_through_the_flux_twice() {
+        // The flown class's hull of 20,000 trades in raw for 5000.
+        let traded = |tech, source| {
+            priced(
+                &[costing(128, 20_000, tech)],
+                PriceMults::NONE,
+                trading_in(source),
+            )
+            .trade_in
         };
-        assert_eq!(ship_price(&free), 0);
-        let dear = ShipRecord {
+        assert_eq!(traded(3, RuleSource::Engine), 4700, "5000, 4850, 4704");
+        assert_eq!(traded(4, RuleSource::Engine), 5000, "no discount");
+        assert_eq!(traded(3, RuleSource::Bible), 4850, "once");
+        assert_eq!(
+            priced(&[cheap(129)], PriceMults::NONE, Rulebook::default()).trade_in,
+            0,
+            "a class flown with no record trades in for nothing"
+        );
+    }
+
+    #[test]
+    fn a_trade_in_beyond_i32_is_fluxed_at_its_most_under_both_readings() {
+        // Three outfits at i32::MAX, half each, push the raw trade-in far
+        // past i32::MAX. The clamp takes i32::MAX, which goes through an
+        // f32 to 2,147,483,648 and rounds down to a thousand; the second
+        // pass keeps 2,147,483,000 (f32 2,147,483,008, down to a thousand).
+        let records = [OutfitRecord {
             cost: i32::MAX,
-            ..cheap(129)
+            ..outfit(128, &[])
+        }];
+        let site = port();
+        let pilot = owning(&[(128, 3)]);
+        let traded = |source| {
+            Yard {
+                rules: trading_in(source),
+                ..yard(&[costing(128, 20_000, 4)], &records, &site)
+            }
+            .shipyard(&pilot, &mut DayRolls::default(), &mut NeverFires)
+            .expect("a shipyard")
+            .trade_in
         };
-        assert_eq!(ship_price(&dear), i64::from(i32::MAX));
+        assert_eq!(traded(RuleSource::Engine), 2_147_483_000, "twice");
+        assert_eq!(traded(RuleSource::Bible), 2_147_483_000, "once");
+    }
+
+    #[test]
+    fn the_trade_in_reads_the_flown_classs_tech_not_the_bought_ones() {
+        let ships = [costing(128, 20_000, 3), costing(129, 10_000, 4)];
+        let shipyard = priced(&ships, PriceMults::NONE, Rulebook::default());
+        assert_eq!(shipyard.trade_in, 4700);
+        assert_eq!(row(&shipyard, 129).price, 10_000);
+    }
+
+    #[test]
+    fn the_final_price_and_the_cash_check_read_the_fluxed_values() {
+        // Trade-in 4700 against a price of 10,000: 5300 (unfluxed, 5000).
+        let ships = [costing(128, 20_000, 3), costing(129, 10_000, 4)];
+        let site = port();
+        let open_with_cash = |cash| {
+            let mut pilot = pilot();
+            pilot.cash = cash;
+            yard(&ships, &[], &site)
+                .shipyard(&pilot, &mut DayRolls::default(), &mut NeverFires)
+                .expect("a shipyard")
+        };
+        let shipyard = open_with_cash(5300);
+        assert_eq!(shipyard.final_price(row(&shipyard, 129)), 5300);
+        assert_eq!(shipyard.final_price_clamped(row(&shipyard, 129)), 5300);
+        assert_eq!(shipyard.can(ShipId(129)), Ok(()));
+        assert_eq!(
+            open_with_cash(5299).can(ShipId(129)),
+            Err(ShipRefusal::CannotAfford)
+        );
+    }
+
+    #[test]
+    fn a_ships_price_takes_the_ranks_second_multiplier() {
+        let ships = [costing(129, 10_000, 4)];
+        let price = |mults| row(&priced(&ships, mults, Rulebook::default()), 129).price;
+        assert_eq!(price(ranked(0.9)), 9000);
+        assert_eq!(price(ranked(0.81)), 8100);
+        assert_eq!(
+            price(PriceMults {
+                first: 0.5,
+                second: 0.9
+            }),
+            9000,
+            "not the first"
+        );
+    }
+
+    #[test]
+    fn by_the_engine_the_trade_in_takes_the_ranks_factor_twice() {
+        // The flown class's hull of 40,000 trades in raw for 10,000.
+        let ships = [costing(128, 40_000, 4)];
+        let traded = |mults, source| priced(&ships, mults, trading_in(source)).trade_in;
+        let engine = RuleSource::Engine;
+        assert_eq!(traded(ranked(0.9), engine), 8100, "9000, then 8100");
+        assert_eq!(traded(ranked(0.81), engine), 6560, "8100, then 6561");
+        assert_eq!(
+            traded(
+                PriceMults {
+                    first: 0.5,
+                    second: 0.9
+                },
+                engine
+            ),
+            4500,
+            "[0] then [1]"
+        );
+        let bible = RuleSource::Bible;
+        assert_eq!(traded(ranked(0.9), bible), 9000);
+        assert_eq!(traded(ranked(0.81), bible), 8100);
+        assert_eq!(
+            traded(
+                PriceMults {
+                    first: 0.5,
+                    second: 0.9
+                },
+                bible
+            ),
+            9000,
+            "[1] alone"
+        );
     }
 
     #[test]
@@ -2658,7 +2925,11 @@ mod tests {
         let shipyard = open_with(&ships, &upgrades(), &pilot);
         assert_eq!(shipyard.trade_in, 2500 + 1000 + 200);
         let unknown = open_with(&[cheap(130)], &upgrades(), &pilot);
-        assert_eq!(unknown.trade_in, 1200, "a hull with no record has no cost");
+        assert_eq!(
+            unknown.trade_in, 920,
+            "a hull with no record has no cost and tech 0: 1200 less 12 % twice, \
+             1056 to 1050, then 924 to 920"
+        );
     }
 
     #[test]
@@ -2973,6 +3244,7 @@ mod tests {
             trade_in_value().about().reads(),
             Some(RuleKey::TradeInOutfits)
         );
+        assert_eq!(trade_in_flux().about().reads(), Some(RuleKey::RankTradeIn));
         assert_eq!(cargo_kept().about().reads(), Some(RuleKey::PurchaseCargo));
         assert_eq!(carried().about().reads(), Some(RuleKey::PurchaseCarry));
         for plain in [
@@ -3057,6 +3329,7 @@ mod tests {
             day_roll().about().reproduces(),
             price().about().reproduces(),
             trade_in_value().about().reproduces(),
+            trade_in_flux().about().reproduces(),
         ];
         assert_eq!(
             cited,
@@ -3067,9 +3340,14 @@ mod tests {
                  `_SetupPortAvailableShipTypes` @0xbd33-0xbd5b",
                 "`_SetupPortAvailableShipTypes` @0xbc88-0xbc9d; `_LoadObjectData` \
                  @0x7a340-0x7a34a",
-                "`shïp` `Cost` (`_CalcShipCanBuy` @0x4f74b-0x4f751), without its \
-                 `_ApplyPriceAndTechnologyFlux`, which is not modelled",
+                "`_ApplyPriceAndTechnologyFlux` @0x4e6cd of the `shïp` `Cost` with \
+                 `_priceFluxMult[1]` (`_CalcShipCanBuy` @0x4f751, `_ShipyardDialogUpdate` \
+                 @0x59387, `_DoShipyardDialog` @0x5ed4f)",
                 "`_PlayerShipTradeInPrice` @0xb079-0xb144, the persistent byte @0xb0da-0xb0e1",
+                "`_ApplyPriceAndTechnologyFlux` @0x4e6cd of `_PlayerShipTradeInPrice`, with \
+                 `_priceFluxMult[0]` then `[1]` (`_CalcShipCanBuy` @0x4f769-0x4f7d3, \
+                 `_ShipyardDialogUpdate` @0x59433-0x5949a, `_DoShipyardDialog` \
+                 @0x5ec13-0x5ec96)",
             ]
         );
     }
@@ -3085,6 +3363,7 @@ mod tests {
             *day_roll().about(),
             *price().about(),
             *trade_in_value().about(),
+            *trade_in_flux().about(),
             *carried().about(),
             *cash_after().about(),
             *cargo_kept().about(),

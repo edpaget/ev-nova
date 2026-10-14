@@ -17,16 +17,15 @@
 //!   with no new landing; and 505's 20-day deadline is never at risk, as
 //!   no day passes.
 //!
-//! `K145` grants a rank, an operator that stays unhandled until
-//! crons-news-ranks; the walk does not need it. It is the only two-mission
-//! bit-linked chain without ships a new pilot reaches at the mission
-//! computer and the bar; the other venues come later.
+//! `K145` grants a rank, which the walk does not need. It is the only
+//! two-mission bit-linked chain without ships a new pilot reaches at the
+//! mission computer and the bar; the other venues come later.
 
 mod common;
 
 use nova_data::GameData;
 use nova_sim::fixture::{Done, Step, StoryWalker};
-use nova_sim::{Bit, MissionId, NeverFires, Pilot, PilotCatalog, Session, is_landable};
+use nova_sim::{Bit, MissionId, NeverFires, Pilot, PilotCatalog, RankId, Session, is_landable};
 
 /// A new stock pilot docked at the first landable stellar of its system,
 /// through a save that says so, flown and settled with every roll 1.
@@ -64,6 +63,10 @@ fn a_new_pilot_walks_united_shippings_chain_to_its_end() {
     assert!(
         session.pilot().control_bit(Bit::new(9).expect("a bit")),
         "504 sets b9"
+    );
+    assert!(
+        session.pilot().ranks().contains(&RankId(145)),
+        "and grants rank 145"
     );
     let delivery = walker
         .walk(

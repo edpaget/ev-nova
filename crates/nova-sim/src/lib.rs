@@ -30,7 +30,8 @@
 //! - [`catalog`]: the [`PilotCatalog`] port, what a flight session starts
 //!   from: the first `chär`, its ship's fields and default items, the
 //!   `oütf`s and `shïp`s, which systems exist, the star map, and the commodities,
-//!   `jünk` and `öops` the exchange trades and is moved by; the
+//!   `jünk` and `öops` the exchange trades and is moved by, the
+//!   `crön`s the day's cron pass runs and the `ränk`s the pilot can hold; the
 //!   [`TrafficCatalog`] port, the `sÿst` traffic, `düde`s and `flët`s NPC
 //!   traffic is spawned from; the [`CombatCatalog`] port, the `wëap`s,
 //!   each `shïp`'s combat fields and the `gövt`s ships fight by; and the
@@ -47,6 +48,11 @@
 //!   ([`control::execute`]), its operators beyond the bit writes handed to
 //!   the caller's dispatch (the session's: `Session::apply_op`, one match
 //!   over the set operators).
+//! - [`cron`]: the `crön`s the day's second participant runs: whether an
+//!   inactive one starts ([`cron::eligibility`], with its disputed
+//!   `Random` and date range), the daily pass over their holdoffs and
+//!   durations, each one's [`CronState`](cron::CronState), and whose
+//!   `Contribute` bits count ([`cron::contributes`]).
 //! - [`combat`]: ships fighting: firing their [`Armament`] on a
 //!   [`Trigger`] at their target, shots and beams flying and hitting,
 //!   homing missiles steering, turrets aiming in their arcs, point defence
@@ -106,15 +112,17 @@
 //!   rate in pixels and ticks, and the [`ShipFields`] its stats start from.
 //! - [`hire`]: hiring escorts in the bar: which ships are for hire today
 //!   ([`HireList`], [`HireRow`], [`HireRefusal`]), the [`HireTerms`] port
-//!   with Nova's [`NovaHire`] fee and daily wage ([`price_flux`]), the
-//!   [`ControlBits`] port a ship's `Availability` goes through, what a
+//!   with Nova's [`NovaHire`] fee and daily wage, [`price_flux`] (the
+//!   original's price flux under the ranks' multiplier, which the
+//!   shipyard shares), the [`ControlBits`] port a ship's `Availability` goes through, what a
 //!   hire did
 //!   ([`Hired`]), and the escorts who defect unpaid ([`PayNote`]).
 //! - [`hyperspace`]: the [`StarMap`] of hyperlinks and the routes along
 //!   it, whether the ship can jump ([`check_jump`]), and where it arrives.
 //! - [`landing`]: what the land key does, [`land_or_select`]: request
 //!   clearance, then land (or, over a hypergate or wormhole, enter it);
-//!   whether the ship can land, [`check_landing`],
+//!   whether traffic control clears the pilot, [`cleared`]; whether the ship
+//!   can land, [`check_landing`],
 //!   each [`LandingRefusal`] in the order it applies; and the
 //!   [`Service`]s a stellar's flags offer.
 //! - [`legal`]: the player's legal record, kept with each government and
@@ -138,6 +146,11 @@
 //! - [`navigation`]: how the player selects the stellar navigation
 //!   target: by its `NavDef` slot, the nearest, or a click
 //!   ([`stellar_under`]), as the original does.
+//! - [`news`]: the bar's news, a commercial line and a story ([`News`]),
+//!   and which running `crön`s have a story for the stellar docked at
+//!   ([`news::candidates`], with the disputed [`news::news_govt_match`]),
+//!   and the `öops` price story ([`news::oops_story`]), drawn by the
+//!   session as the bar opens.
 //! - [`order_loop`]: an order of a count run one pass at a time: each
 //!   pass handed its [`order_loop::Pass`], the buy loop
 //!   ([`order_loop::run`]) stopping at the first refusal and the sell
@@ -163,6 +176,8 @@
 //! - [`pre_jump`]: what the ship does between the jump key and the jump:
 //!   it brakes until it is [`slow_enough`](pre_jump::slow_enough), then
 //!   turns to the bearing of the next system.
+//! - [`rank`]: the ranks, as `_ActivateRank` and `_DeactivateRank` change
+//!   them, their salaries, `Contribute` bits and names in the text tags.
 //! - [`rating`]: the player's combat rating: what a kill adds
 //!   ([`rating::credit`]) and which kills count ([`rating::counts`]).
 //! - [`recharge`]: recharging in the spaceport: which stellars sell
@@ -222,8 +237,8 @@
 //!   or the next of the player's escorts.
 //! - [`text_tags`]: the one substitution path for the text tags, as the
 //!   original's `_MungeBriefing`: a [`TagContext`] of the pilot, the
-//!   person and the mission's resolved [`MissionValues`], its names read
-//!   through the [`TagNames`] port ([`text_tags::expand`]).
+//!   person, the ranks and the mission's resolved [`MissionValues`], its
+//!   names read through the [`TagNames`] port ([`text_tags::expand`]).
 //! - [`traffic`]: NPC [`Traffic`]: the ships spawned from a system's
 //!   `düde`s and fleets on arrival and over time, each [`Npc`] flown by an
 //!   autopilot with the player's flight physics and stats.
@@ -242,6 +257,7 @@ pub mod cloak;
 pub mod clock;
 pub mod combat;
 pub mod control;
+pub mod cron;
 pub mod data;
 pub mod date;
 pub mod escort;
@@ -266,12 +282,14 @@ pub mod market;
 pub mod message;
 pub mod mission;
 pub mod navigation;
+pub mod news;
 pub mod order_loop;
 pub mod outfit_effects;
 pub mod outfitter;
 pub mod person;
 pub mod pilot;
 pub mod pre_jump;
+pub mod rank;
 pub mod rating;
 pub mod recharge;
 pub mod red_alert;
@@ -305,13 +323,14 @@ pub use board::{
     Plunder, PlunderView, Take, Taken,
 };
 pub use catalog::{
-    BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, DateAffixes, DisasterId,
-    DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId, FleetRecord, GateSite, GovtId,
-    GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite, ListedStellar, MissionId,
-    MissionRecord, MissionShip, MissionTexts, NebulaId, OutfitId, OutfitRecord, Penalties,
-    PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames, ShipId, ShipRecord, SoundId,
-    StarSystem, StartDate, StartError, StellarId, StellarLife, StockWeapon, StringPatch, SystemId,
-    SystemTraffic, TrafficCatalog, WeaponId, WeaponRecord,
+    BoomId, CharacterStart, CombatCatalog, CommCatalog, CommodityStrings, CronId, CronRecord,
+    DateAffixes, DisasterId, DisasterRecord, DudeId, DudeRecord, EscortRecord, FleetId,
+    FleetRecord, GateSite, GovtId, GovtRecord, HullRecord, JunkId, JunkRecord, LandingSite,
+    ListedStellar, MissionId, MissionRecord, MissionShip, MissionTexts, NebulaId, OutfitId,
+    OutfitRecord, Penalties, PersonId, PersonRecord, PersonWeapon, PilotCatalog, PlaceNames,
+    RankId, RankRecord, ShipId, ShipRecord, SoundId, StarSystem, StartDate, StartError, StellarId,
+    StellarLife, StockWeapon, StringPatch, SystemId, SystemTraffic, TrafficCatalog, WeaponId,
+    WeaponRecord,
 };
 pub use chance::{Chance, NeverFires};
 pub use clock::{FixedStep, MAX_STEPS, Steps, TICK, TICKS_PER_SECOND};
@@ -342,19 +361,22 @@ pub use hail::{
 pub use handling::{Handling, ShipFields};
 pub use hire::{HireList, HireRefusal, HireRow, HireTerms, Hired, NovaHire, PayNote, price_flux};
 pub use hyperspace::{
-    HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, JumpZoneRule, MultiJumpRule,
-    Places, RouteError, StarMap, check_jump, hops_per_jump, jump_zone, next_hyper_destination,
+    CoLocated, HyperSelectRule, HyperlinkRule, JumpReadiness, JumpRefusal, JumpZoneRule,
+    MultiJumpRule, Places, RouteError, StarMap, check_jump, hops_per_jump, jump_zone,
+    next_hyper_destination,
 };
-pub use iff::{RadarGear, ShipIff, Standing, StellarIff};
+pub use iff::{RadarGear, ShipIff, StellarIff};
 pub use landing::{
     Clearance, LandOutcome, LandingReach, LandingRefusal, NO_FRAME_REACH, OUT_OF_RANGE_FRAME_WIDTH,
-    REACH_PER_WIDTH, Service, StellarShown, TypeWidth, UNLOADED_TYPE_WIDTH, check_landing,
-    is_landable, land_or_select, landing_radius, landing_reach, nearest_landable, services,
+    REACH_PER_WIDTH, Service, Standing, StellarShown, TypeWidth, UNLOADED_TYPE_WIDTH,
+    check_landing, cleared, is_landable, land_or_select, landing_radius, landing_reach,
+    nearest_landable, services,
 };
 pub use legal::{Crime, LegalCode, NovaLaw};
 pub use market::{Direction, Good, Lot, Market, MarketRow, Order, TradeRefusal};
 pub use message::SimMessage;
 pub use navigation::{next_after, stellar_under};
+pub use news::News;
 pub use outfit_effects::{OutfitRules, Rgb15};
 pub use outfitter::{
     Armed, Launcher, LcNames, OpeningLimit, OutfitFacts, OutfitOrder, OutfitRefusal, OutfitRow,

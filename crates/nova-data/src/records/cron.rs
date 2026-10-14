@@ -40,7 +40,10 @@ pub struct Cron {
     /// Bible `PostHoldoff` (offset 0x12, i16): days before deactivating.
     pub post_holdoff: i16,
     /// Bible `IndNewsStr` (offset 0x14, i16): `STR#` ID of independent news,
-    /// or -1 for none.
+    /// or -1 for none. Stock data uses 0 for none as well, which decodes
+    /// as `Some(StrListId(0))`; the engine reads an ID of 0 or below as
+    /// none as it loads the cron (@0x7d88a-0x7d919), and nova-sim's
+    /// `news` module applies that reading.
     #[br(map = id::<StrListId>)]
     pub ind_news_str: Option<StrListId>,
     /// Bible `Flags` (offset 0x16, u16).
@@ -62,11 +65,16 @@ pub struct Cron {
     /// Bible `Require` pair (offset 0x31E, u64).
     pub require: Flags64,
     /// Bible `NewsGovt1-4` (offset 0x326, 4 x i16): `gövt` IDs with local
-    /// news; -1 if unused.
+    /// news; -1 if unused. Stock data uses 0 for unused as well, which
+    /// decodes as `Some(GovtId(0))`; the engine reads an ID of 127 or
+    /// below as unused as it loads the cron (@0x7d8dd-0x7d90e), and
+    /// nova-sim's `news` module applies that reading.
     #[br(map = ids::<GovtId, 4>)]
     pub news_govt: [Option<GovtId>; 4],
     /// Bible `GovtNewsStr1-4` (offset 0x32E, 4 x i16): `STR#` IDs of each
-    /// government's news; -1 if unused.
+    /// government's news; -1 if unused. Stock data uses 0 for unused as
+    /// well, which decodes as `Some(StrListId(0))`; nova-sim's `news`
+    /// module applies the engine's load reading.
     #[br(map = ids::<StrListId, 4>)]
     pub govt_news_str: [Option<StrListId>; 4],
 }

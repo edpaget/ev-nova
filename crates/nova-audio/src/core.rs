@@ -129,6 +129,8 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Ui(UiSound::ButtonDown) => self.play(self.table.button_down),
                 Sound::Ui(UiSound::ButtonUp) => self.play(self.table.button_up),
                 Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
+                Sound::Ui(UiSound::NewsOpened) => self.play(self.table.news_open),
+                Sound::Ui(UiSound::NewsClosed) => self.play(self.table.news_close),
                 Sound::Combat(fight) => {
                     let gain = distance_gain(fight.offset);
                     let volume = self.settings.effects_volume.amplitude() * gain;
@@ -444,6 +446,35 @@ mod tests {
             &[Sound::Sim(SimSound::RedAlert)],
         );
         assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn the_news_dialog_beeps_as_it_opens_and_closes() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Ui(UiSound::NewsOpened),
+                Sound::Ui(UiSound::NewsClosed),
+            ],
+        );
+        assert_eq!(drain(&log), [play(151, 1.0), play(152, 1.0)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            news_open: Some(SoundId(300)),
+            news_close: Some(SoundId(301)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Ui(UiSound::NewsClosed),
+                Sound::Ui(UiSound::NewsOpened),
+            ],
+        );
+        assert_eq!(drain(&log), [play(301, 1.0), play(300, 1.0)], "the table's");
     }
 
     fn mission(id: i16, exclusive: bool) -> Sound {

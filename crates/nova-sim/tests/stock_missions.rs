@@ -151,6 +151,7 @@ fn every_stock_missions_texts_fill_every_tag_but_the_ranks() {
         ship_type: "Shuttle",
         ship_name: "Kestrel",
         person: Some("Bounty Hunter"),
+        ranks: nova_sim::rank::RankNames::none(),
         mission: Some(MissionTags {
             values: MissionValues {
                 destination: Some(stop(0)),

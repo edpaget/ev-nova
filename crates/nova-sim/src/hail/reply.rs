@@ -98,8 +98,10 @@ pub const WASTING_TIME: u8 = 13;
 pub const NOT_IN_TROUBLE: u8 = 14;
 /// Group 16: "I'm busy.".
 pub const BUSY: u8 = 16;
-/// Group 17: "I'd rather not.": help while the player is under attack (a
-/// placeholder for the battle help a follow-up adds).
+/// Group 17: "I'd rather not.": help while an enemy of the ship's
+/// threatens the player and it has no battle help. It stands in for the
+/// original's AI-type ladder there (@0x9638e-0x96514), which is deferred,
+/// and is the original's own answer for a wimpy trader (@0x96399).
 pub const RATHER_NOT: u8 = 17;
 /// Group 18: "You'll have to pay me first.": a bribe's price, in a
 /// neutral mood.
@@ -130,6 +132,10 @@ pub const ESCORT_OPENING: u8 = 4;
 /// mission escort that is busy (the original's AI type above 4,
 /// @0x96304).
 pub const JUST_AN_ESCORT: u8 = 22;
+/// Group 25: "Sorry, I can't do that.": Request Assistance's refuel or
+/// repair asked of a ship of AI type above 4, a mission escort here,
+/// before any price (`_DoCommDialog` @0x96564-0x9656c, @0x9663a).
+pub const CANT_DO_THAT: u8 = 25;
 /// Group 38: "Goodbye, captain.": an escort released.
 pub const RELEASED: u8 = 38;
 
@@ -618,11 +624,13 @@ mod tests {
                 ESCORT_OPENING,
                 JUST_AN_ESCORT,
                 RELEASED,
+                CANT_DO_THAT,
             ],
             [
-                0, 1, 2, 9, 12, 13, 14, 16, 17, 18, 19, 20, 23, 24, 28, 29, 30, 31, 4, 22, 38
+                0, 1, 2, 9, 12, 13, 14, 16, 17, 18, 19, 20, 23, 24, 28, 29, 30, 31, 4, 22, 38, 25
             ]
         );
+        assert_eq!(Reply::locate(CANT_DO_THAT, 0), (3000, 126));
         assert_eq!(Reply::locate(ESCORT_OPENING, 0), (3000, 21));
         assert_eq!(Reply::locate(RELEASED, 0), (3001, 1));
         assert_eq!(Reply::locate(RELEASED, 4), (3001, 5));

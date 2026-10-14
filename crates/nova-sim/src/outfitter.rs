@@ -119,7 +119,15 @@
 //!
 //! An outfit's price is its `Cost`, or with [`OutfitFlags::PRICE_BY_MASS`]
 //! max(`Cost`, `Cost` × the ship's `Mass`), and 0 for a `Cost` of 0 or
-//! less, as [`RuleKey::MassPrice`] reads it (see [`unit_price`]). Its
+//! less, as [`RuleKey::MassPrice`] reads it (see [`unit_price`]). The
+//! original's outfitter never reads the ranks' `_priceFluxMult`, so by the
+//! engine's reading of [`RuleKey::RankPriceScope`] buying one costs that
+//! price; by the other, the Bible's "items and ships", it costs the price
+//! scaled by `_priceFluxMult[1]` alone ([`rank::scaled`](crate::rank::scaled),
+//! [`OutfitRow::buy_price`]), which the cash check, the quantity dialog's
+//! count, the buy itself and the info box's "Item Price:" read. The
+//! resale, the trade-in's outfit lines and every half refund keep the
+//! price. Its
 //! mass is its `Mass`, or with [`OutfitFlags::MASS_BY_MASS`] and a
 //! positive `Mass`, max(`Mass`, the ship's `Mass` times it over 100,
 //! truncated), as [`RuleKey::ScaledMass`] reads it (see [`unit_mass`]).
@@ -182,8 +190,8 @@
 //! `ModType` 27 item raises, while it
 //! holds more than that leaves (below), or it is a launcher whose
 //! ammunition must be sold first (below). A sale removes one and pays
-//! its refund ([`Outfitter::refund`], [`refund`]): by the engine, the
-//! full price for an outfit bought since the outfitter opened (its count
+//! its refund ([`Outfitter::refund`], [`refund`]): by the engine, what
+//! was paid for an outfit bought since the outfitter opened (its count
 //! owned above the [visit's](OutfitVisit) count owned on entry), and
 //! [`RESALE_PERCENT`] of the price for any other; by the rulebook's other
 //! reading ([`RuleKey::OutfitRefund`](crate::RuleKey::OutfitRefund)),
@@ -334,7 +342,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::catalog::{GovtId, LandingSite, OutfitId, OutfitRecord, WeaponId};
+use crate::catalog::{
+    CronRecord, GovtId, LandingSite, OutfitId, OutfitRecord, RankRecord, WeaponId,
+};
 use crate::chance::{Chance, NeverFires};
 use crate::combat::armament::MOD_AMMO;
 use crate::control::Gate;
@@ -577,8 +587,14 @@ pub struct OutfitRow {
     pub name: String,
     /// Its `ShortName`, raw.
     pub short_name: String,
-    /// Its price here, for one.
+    /// Its price here, for one: what its resale, the trade-in and a
+    /// refund at half read.
     pub price: i64,
+    /// What buying one costs: [`price`](Self::price), scaled by the ranks'
+    /// factor by the other reading of
+    /// [`RuleKey::RankPriceScope`](crate::RuleKey::RankPriceScope)
+    /// ([`rank::scaled`](crate::rank::scaled)).
+    pub buy_price: i64,
     /// Its mass, for one, in tons.
     pub mass: i64,
     /// How many the player owns.
@@ -921,8 +937,8 @@ impl Outfitter {
         let most = match direction {
             Direction::Buy => {
                 self.can(OutfitOrder { outfit, direction }).ok()?;
-                let mut most = if row.price > 0 {
-                    (self.cash / row.price).min(COUNT_CAP)
+                let mut most = if row.buy_price > 0 {
+                    (self.cash / row.buy_price).min(COUNT_CAP)
                 } else {
                     COUNT_CAP
                 };
@@ -1470,7 +1486,7 @@ fn never_limited(_: &RowOutfit) -> Result<(), OutfitRefusal> {
 /// The player can pay the price.
 fn cash_for_the_price(asked: &RowOutfit) -> Result<(), OutfitRefusal> {
     holds(
-        asked.row.price <= asked.outfitter.cash,
+        asked.row.buy_price <= asked.outfitter.cash,
         OutfitRefusal::CannotAfford,
     )
 }
@@ -1666,11 +1682,12 @@ fn refund_value<'a>() -> Value<RowOutfit<'a>, i64> {
     )
 }
 
-/// The engine's refund: the full price when the count owned is above the
-/// visit's count on entry, otherwise half.
+/// The engine's refund: what was paid when the count owned is above the
+/// visit's count on entry, otherwise half the price.
 fn full_since_the_visit_opened(asked: &RowOutfit) -> i64 {
     refund(
         asked.row.price,
+        asked.row.buy_price,
         asked.row.owned,
         asked.outfitter.visit.opened_with(asked.row.id),
         RuleSource::Engine,
@@ -2015,22 +2032,24 @@ pub fn resale(price: i64) -> i64 {
     price.saturating_mul(RESALE_PERCENT) / 100
 }
 
-/// What selling one outfit priced at `price` refunds, the player owning
-/// `owned` of it before the sale and having owned `opened_with` when the
-/// outfitter opened, as `source` says
+/// What selling one outfit priced at `price`, bought here for `paid`,
+/// refunds, the player owning `owned` of it before the sale and having
+/// owned `opened_with` when the outfitter opened, as `source` says
 /// ([`RuleKey::OutfitRefund`](crate::RuleKey::OutfitRefund)).
 ///
 /// By the engine ([`RuleSource::Engine`]), `_DoOutfitDialog` compares the
 /// count owned before the sale with its copy of the counts taken on
 /// opening (@0x5ceee-0x5cefa): one bought since, the count above the copy,
-/// refunds the full price; any other refunds [`resale`], the price times
+/// refunds in full what was paid, `paid` (the price, unless the other
+/// reading of [`RuleKey::RankPriceScope`](crate::RuleKey::RankPriceScope)
+/// scaled it); any other refunds [`resale`], the price times
 /// 0.5 (the double at @0xdd128) truncated toward zero (@0x5cefc-0x5cf08).
 /// By the other reading, the port's earlier behaviour, every sale refunds
 /// [`resale`].
 #[must_use]
-pub fn refund(price: i64, owned: u16, opened_with: u16, source: RuleSource) -> i64 {
+pub fn refund(price: i64, paid: i64, owned: u16, opened_with: u16, source: RuleSource) -> i64 {
     if source == RuleSource::Engine && owned > opened_with {
-        price
+        paid
     } else {
         resale(price)
     }
@@ -2350,6 +2369,10 @@ pub const LIST_SLOTS: u32 = 512;
 pub(crate) struct Shop<'a> {
     /// Every `oütf`.
     pub(crate) records: &'a [OutfitRecord],
+    /// Every `crön`, whose running ones contribute bits.
+    pub(crate) crons: &'a [CronRecord],
+    /// Every `ränk`, whose active ones contribute bits.
+    pub(crate) ranks: &'a [RankRecord],
     /// The ship's fields.
     pub(crate) fields: ShipFields,
     /// The ship's standard equipment: its default items, and its stock
@@ -2380,6 +2403,9 @@ pub(crate) struct Shop<'a> {
     pub(crate) visit: &'a OutfitVisit,
     /// The control-bit test of an outfit's `Availability`.
     pub(crate) gate: Gate<'a>,
+    /// The ranks' factor the buy price takes: 1.0 by the engine's reading
+    /// of [`RuleKey::RankPriceScope`], `_priceFluxMult[1]` by the other.
+    pub(crate) price_mult: f32,
     /// How each disputed rule reads ([`Rulebook::source_for`]).
     pub(crate) rules: Rulebook,
 }
@@ -2417,7 +2443,13 @@ impl Shop<'_> {
         if self.site.flags & StellarFlags::OUTFITTER == 0 {
             return None;
         }
-        let contributed = wares::contributed(self.fields.contribute, &pilot.outfits, self.records);
+        let by = wares::Contributors {
+            ship: self.fields.contribute,
+            outfits: self.records,
+            crons: self.crons,
+            ranks: self.ranks,
+        };
+        let contributed = wares::contributed(&by, pilot);
         let free = free_mass(
             self.fields,
             self.standard,
@@ -2486,6 +2518,7 @@ impl Shop<'_> {
                 name: record.name.clone(),
                 short_name: record.short_name.clone(),
                 price,
+                buy_price: crate::rank::scaled(price, self.price_mult),
                 mass,
                 owned,
                 max: record.max,
@@ -2831,6 +2864,8 @@ mod tests {
     fn shop<'a>(records: &'a [OutfitRecord], site: &'a LandingSite) -> Shop<'a> {
         Shop {
             records,
+            crons: &[],
+            ranks: &[],
             fields: FAST,
             free_cargo: ROOMY_CARGO,
             standard: &NO_STANDARD,
@@ -2840,6 +2875,7 @@ mod tests {
             hardpoints: ROOMY,
             launchers: &NO_LAUNCHERS,
             visit: &NO_VISIT,
+            price_mult: 1.0,
             rules: Rulebook::default(),
             gate: Gate::FRESH,
         }
@@ -4071,6 +4107,7 @@ mod tests {
                 name: "Battery Pack".to_owned(),
                 short_name: "Battery\\nPack".to_owned(),
                 price: 1000,
+                buy_price: 1000,
                 mass: 1,
                 owned: 2,
                 max: 7,
@@ -4753,6 +4790,8 @@ mod tests {
         let open_with = |fighter_room: &BTreeMap<OutfitId, u32>, pilot: &Pilot| {
             Shop {
                 records: std::slice::from_ref(&fighters),
+                crons: &[],
+                ranks: &[],
                 fields: FAST,
                 free_cargo: ROOMY_CARGO,
                 standard: &NO_STANDARD,
@@ -4762,6 +4801,7 @@ mod tests {
                 hardpoints: ROOMY,
                 launchers: &NO_LAUNCHERS,
                 visit: &NO_VISIT,
+                price_mult: 1.0,
                 rules: Rulebook::default(),
                 gate: Gate::FRESH,
             }
@@ -4873,6 +4913,8 @@ mod tests {
         }];
         Shop {
             records: &records,
+            crons: &[],
+            ranks: &[],
             fields: ShipFields { holds, ..FAST },
             free_cargo,
             standard: &NO_STANDARD,
@@ -4882,6 +4924,7 @@ mod tests {
             hardpoints: ROOMY,
             launchers: &NO_LAUNCHERS,
             visit: &NO_VISIT,
+            price_mult: 1.0,
             rules: Rulebook::default(),
             gate: Gate::FRESH,
         }
@@ -6620,20 +6663,84 @@ mod tests {
 
     #[test]
     fn an_outfit_bought_since_the_opening_refunds_in_full() {
-        assert_eq!(refund(15_001, 3, 2, RuleSource::Engine), 15_001);
-        assert_eq!(refund(15_001, 1, 0, RuleSource::Engine), 15_001);
+        assert_eq!(refund(15_001, 15_001, 3, 2, RuleSource::Engine), 15_001);
+        assert_eq!(refund(15_001, 15_001, 1, 0, RuleSource::Engine), 15_001);
     }
 
     #[test]
     fn an_outfit_owned_at_the_opening_refunds_half() {
-        assert_eq!(refund(15_001, 2, 2, RuleSource::Engine), 7_500);
-        assert_eq!(refund(15_001, 1, 2, RuleSource::Engine), 7_500);
+        assert_eq!(refund(15_001, 15_001, 2, 2, RuleSource::Engine), 7_500);
+        assert_eq!(refund(15_001, 15_001, 1, 2, RuleSource::Engine), 7_500);
     }
 
     #[test]
     fn the_bible_reading_always_refunds_half() {
-        assert_eq!(refund(15_001, 3, 2, RuleSource::Bible), 7_500);
-        assert_eq!(refund(15_001, 2, 2, RuleSource::Bible), 7_500);
+        assert_eq!(refund(15_001, 15_001, 3, 2, RuleSource::Bible), 7_500);
+        assert_eq!(refund(15_001, 15_001, 2, 2, RuleSource::Bible), 7_500);
+    }
+
+    /// The outfitter of one outfit 128 of `Cost` 1500 at [`port`] for a
+    /// pilot of `cash`, its buy price scaled by `price_mult`.
+    fn ranked_outfitter(price_mult: f32, cash: i64) -> Outfitter {
+        let records = [OutfitRecord {
+            cost: 1500,
+            ..outfit(128, &[])
+        }];
+        let site = port();
+        let mut pilot = pilot();
+        pilot.cash = cash;
+        Shop {
+            price_mult,
+            ..shop(&records, &site)
+        }
+        .outfitter(&pilot, &mut DayRolls::default(), &mut NeverFires)
+        .expect("an outfitter")
+    }
+
+    #[test]
+    fn by_the_engine_ranks_leave_an_outfits_price_alone() {
+        let outfitter = ranked_outfitter(1.0, 10_000);
+        let row = row(&outfitter, 128);
+        assert_eq!((row.price, row.buy_price), (1500, 1500));
+    }
+
+    #[test]
+    fn by_the_other_reading_the_buy_price_takes_the_rank_factor() {
+        let outfitter = ranked_outfitter(0.85, 1275);
+        let row = row(&outfitter, 128);
+        assert_eq!((row.price, row.buy_price), (1500, 1275), "the base kept");
+        assert_eq!(outfitter.can(buy_of(128)), Ok(()), "exactly the price");
+        assert_eq!(
+            ranked_outfitter(0.85, 1274).can(buy_of(128)),
+            Err(OutfitRefusal::CannotAfford)
+        );
+        assert_eq!(
+            ranked_outfitter(0.85, 3 * 1275).count_max(OutfitId(128), Direction::Buy),
+            Some(3),
+            "the cash over the buy price"
+        );
+    }
+
+    #[test]
+    fn a_refund_in_full_returns_what_was_paid_and_half_the_base_price_otherwise() {
+        let refunds = |opened_with, source| {
+            Outfitter {
+                rows: vec![OutfitRow {
+                    buy_price: 1275,
+                    ..counted(1500, 3, ROOM, ROOM)
+                }],
+                visit: OutfitVisit {
+                    opened_with: BTreeMap::from([(OutfitId(128), opened_with)]),
+                    ..OutfitVisit::default()
+                },
+                rules: Rulebook::default().with_override(RuleKey::OutfitRefund, source),
+                ..Outfitter::default()
+            }
+            .refund(OutfitId(128))
+        };
+        assert_eq!(refunds(2, RuleSource::Engine), Some(1275), "bought here");
+        assert_eq!(refunds(3, RuleSource::Engine), Some(750));
+        assert_eq!(refunds(2, RuleSource::Bible), Some(750));
     }
 
     #[test]
@@ -7046,6 +7153,7 @@ mod tests {
             name: String::new(),
             short_name: String::new(),
             price,
+            buy_price: price,
             mass: 0,
             owned,
             max,

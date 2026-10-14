@@ -1369,6 +1369,19 @@ fn a_roll_draws_the_table_then_resolves_the_computers_offers_then_the_others() {
 }
 
 #[test]
+fn a_roll_is_due_at_any_stellar_but_the_one_last_rolled_at() {
+    let galaxy = Galaxy::new();
+    let visit = galaxy.visit();
+    let mut offers = Offers::default();
+    assert!(offers.due_at(StellarId(128)), "never rolled");
+    offers.roll(&catalog(), &visit, &mut NeverFires);
+    assert!(!offers.due_at(StellarId(128)), "rolled there last");
+    assert!(offers.due_at(StellarId(129)));
+    offers.forget();
+    assert!(offers.due_at(StellarId(128)), "forgotten");
+}
+
+#[test]
 fn the_same_stellar_again_draws_nothing_and_keeps_the_offers() {
     let galaxy = Galaxy::new();
     let visit = galaxy.visit();

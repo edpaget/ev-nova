@@ -867,14 +867,16 @@ fn buy_the_heavy_shuttle(game: &mut Harness, store: &MemoryPilots) {
     assert_eq!(game.pilot().cash(), 10_000);
     assert_eq!(store.writes(), writes + 1, "nothing more to save");
     // The Heavy Shuttle, now flown and still selected, shows no price
-    // lines; the Shuttle shows the new trade-in.
+    // lines; the Shuttle shows the new trade-in: the Heavy Shuttle's
+    // quarter and its tank's half, 5375, rounded down to ten by the
+    // shipyard's flux.
     let shown = texts(&game.frame());
     assert!(!shown.contains(&"Trade-In:".to_owned()), "{shown:?}");
     let cell = game.shipyard().cell_bounds(0).expect("a cell").center();
     game.click(cell);
     let shown = texts(&game.frame());
     assert!(
-        shown.contains(&"Trade-In:".to_owned()) && shown.contains(&"5,375 cr".to_owned()),
+        shown.contains(&"Trade-In:".to_owned()) && shown.contains(&"5,370 cr".to_owned()),
         "the Heavy Shuttle's quarter and its tank's half: {shown:?}"
     );
 }

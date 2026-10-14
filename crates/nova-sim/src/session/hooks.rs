@@ -39,7 +39,7 @@
 //! calls `_EvalMissionBitSetString`; see the `ship_change` module).
 
 use super::Session;
-use crate::catalog::{PilotCatalog, ShipId};
+use crate::catalog::{PilotCatalog, ShipId, TrafficCatalog};
 use crate::chance::Chance;
 use crate::control::Script;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
@@ -126,11 +126,16 @@ impl Session {
     /// Begins a new pilot's game: destroys the stellars that start the
     /// game destroyed (see the `stellars` module), then runs the first
     /// `chär`'s `OnStart` once, drawing on `chance` (see the module docs),
-    /// and nothing when the `chär` cannot be read, and last rebuilds the
-    /// stellars shown (see the `stellars` module). For a pilot just
-    /// created and flown, before its first save; never for one opened from
-    /// a save.
-    pub fn begin(&mut self, catalog: &impl PilotCatalog, chance: &mut dyn Chance) {
+    /// and nothing when the `chär` cannot be read, then refreshes the
+    /// galaxy, so the systems its bits show are visible (`_PlayGame`
+    /// @0x457e9; see the `story` module), and last rebuilds the stellars
+    /// shown (see the `stellars` module). For a pilot just created and
+    /// flown, before its first save; never for one opened from a save.
+    pub fn begin(
+        &mut self,
+        catalog: &(impl PilotCatalog + TrafficCatalog),
+        chance: &mut dyn Chance,
+    ) {
         self.destroy_from_the_start();
         if let Ok(start) = catalog.first_character() {
             if self.hook_rules().start_ship_purchase == RuleSource::Bible {
@@ -138,6 +143,12 @@ impl Session {
             }
             self.run_script(&start.on_start, chance);
         }
+        // `_PlayGame`'s refresh, before its rebuild (@0x457e9, @0x457ee):
+        // `_DoNewPilot`'s, before the `OnStart`, was the flight's.
+        self.refresh_galaxy(catalog);
+        // Game entry's refresh of the blessing comes after `_DoNewPilot`'s
+        // `OnStart` (@0x1925e, @0x19ffb; see the `ranks` module).
+        self.refresh_blessing();
         // `_DoNewPilot`'s rebuild point, after its `OnStart` (@0x1937f).
         self.rebuild_stellars();
     }
@@ -153,7 +164,7 @@ mod tests {
     use super::*;
     use crate::board::{Assigned, Assignment, Take, Taken};
     use crate::catalog::{CharacterStart, OutfitId, OutfitRecord, StartError};
-    use crate::control::{Bit, ScriptNote, SetOp, SetOpKind};
+    use crate::control::{Bit, SetOp};
     use crate::outfit_effects::Rgb15;
     use crate::outfitter::{FIRST_OUTFIT, OutfitFlags, OutfitRefusal, Reselection};
     use crate::pilot::Pilot;
@@ -222,11 +233,14 @@ mod tests {
         let mut session = Session::start(&catalog()).expect("starts");
         session.run_script(&Script::parse("b7 K200"), &mut Scripted::default());
         assert!(session.control_bit(bit(7)));
-        assert!(session.take_save_due());
-        assert_eq!(
-            session.take_script_notes(),
-            [ScriptNote::Unhandled(SetOpKind::ActivateRank)]
+        assert!(
+            session
+                .pilot()
+                .ranks()
+                .contains(&crate::catalog::RankId(200))
         );
+        assert!(session.take_save_due());
+        assert_eq!(session.take_script_notes(), []);
     }
 
     #[test]

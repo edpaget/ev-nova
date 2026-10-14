@@ -42,7 +42,7 @@ impl Session {
             .sites
             .iter()
             .find(|site| site.id == stellar)
-            .is_some_and(|site| Self::standing(site).dominated);
+            .is_some_and(|site| Self::iff_standing(site).dominated);
         Some(NavBrackets {
             stellar,
             expand: self.nav_fly_in.expand(),
