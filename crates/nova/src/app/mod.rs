@@ -79,6 +79,11 @@ pub trait WindowPort {
     fn scale_factor(&self) -> f64;
     /// Asks for another [`WindowEvent::Redraw`].
     fn request_redraw(&mut self);
+    /// Shows or hides the system's pointer while it is over the window.
+    /// Does nothing by default, for a window with no pointer of its own.
+    fn set_pointer_visible(&mut self, visible: bool) {
+        let _ = visible;
+    }
 }
 
 /// A window event, in the core's terms.
@@ -109,6 +114,8 @@ pub enum WindowEvent {
         /// Where, in physical pixels from the window's top-left.
         px: (f64, f64),
     },
+    /// The pointer left the window.
+    PointerLeft,
     /// A mouse button went down or up at the last pointer position.
     PointerButton {
         /// The button.
@@ -159,6 +166,9 @@ pub struct App<S, C = AppScreen> {
     screen: C,
     last_redraw: Duration,
     pointer: Option<(f64, f64)>,
+    /// Whether the system's pointer is hidden over the window, as the app
+    /// last told the window.
+    pointer_hidden: bool,
     failures: Vec<(ImageKey, ImageError)>,
     overlay: Option<DevOverlay>,
     audio: Option<AudioCore<Box<dyn Audio>>>,
@@ -176,6 +186,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             screen,
             last_redraw: Duration::ZERO,
             pointer: None,
+            pointer_hidden: false,
             failures: Vec::new(),
             overlay: None,
             audio: None,
@@ -389,6 +400,13 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                     None => Control::Continue,
                 })
             }
+            WindowEvent::PointerLeft => {
+                self.pointer = None;
+                if self.pointer_routing() == Routing::Overlay {
+                    return overlay;
+                }
+                game(self.route(Input::PointerLeft))
+            }
             WindowEvent::PointerButton { button, pressed } => {
                 if self.pointer_routing() == Routing::Overlay {
                     return overlay;
@@ -417,6 +435,7 @@ impl<S: ImageSource, C: Screen> App<S, C> {
                 self.screen.draw(&mut list);
                 let report = self.renderer.render(&list, &self.viewport, gpu);
                 self.failures.extend(report.new_failures);
+                self.show_pointer(window);
                 window.request_redraw();
                 game(Control::Continue)
             }
@@ -435,6 +454,19 @@ impl<S: ImageSource, C: Screen> App<S, C> {
             self.screen.release_keys();
         }
         routing
+    }
+
+    /// Hides the system's pointer over the window while the screen draws
+    /// its own ([`Screen::hides_pointer`]) and the developer overlay is
+    /// not showing, and shows it otherwise, telling `window` only when
+    /// that changes.
+    fn show_pointer(&mut self, window: &mut impl WindowPort) {
+        let overlay = self.overlay.as_ref().is_some_and(DevOverlay::visible);
+        let hide = self.screen.hides_pointer() && !overlay;
+        if hide != self.pointer_hidden {
+            window.set_pointer_visible(!hide);
+            self.pointer_hidden = hide;
+        }
     }
 
     fn pointer_routing(&self) -> Routing {
@@ -517,11 +549,13 @@ mod tests {
 
     use super::*;
 
-    /// A window of settable size that counts redraw requests.
+    /// A window of settable size that counts redraw requests and records
+    /// each time the pointer is shown or hidden.
     struct FakeWindow {
         size_px: (u32, u32),
         scale_factor: f64,
         redraws: usize,
+        pointer_shown: Vec<bool>,
     }
 
     impl FakeWindow {
@@ -530,6 +564,7 @@ mod tests {
                 size_px,
                 scale_factor,
                 redraws: 0,
+                pointer_shown: Vec::new(),
             }
         }
     }
@@ -545,6 +580,10 @@ mod tests {
 
         fn request_redraw(&mut self) {
             self.redraws += 1;
+        }
+
+        fn set_pointer_visible(&mut self, visible: bool) {
+            self.pointer_shown.push(visible);
         }
     }
 
@@ -570,6 +609,7 @@ mod tests {
         quits: usize,
         warnings: Vec<String>,
         diagnostics: Vec<Diagnostic>,
+        hides_pointer: bool,
     }
 
     impl Screen for RecordingScreen {
@@ -608,6 +648,10 @@ mod tests {
 
         fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
             std::mem::take(&mut self.diagnostics)
+        }
+
+        fn hides_pointer(&self) -> bool {
+            self.hides_pointer
         }
     }
 
@@ -959,6 +1003,31 @@ mod tests {
     }
 
     #[test]
+    fn the_pointer_leaving_the_window_reaches_the_screen_and_forgets_where_it_was() {
+        let mut window = FakeWindow::new((2560, 1536), 2.0);
+        let mut app = app(&window);
+        let moved = WindowEvent::PointerMoved { px: (456.0, 100.0) };
+        let click = WindowEvent::PointerButton {
+            button: MouseButton::Left,
+            pressed: true,
+        };
+        handle(&mut app, &mut window, moved);
+        assert_eq!(
+            handle(&mut app, &mut window, WindowEvent::PointerLeft),
+            Control::Continue
+        );
+        handle(&mut app, &mut window, click);
+        assert_eq!(
+            app.screen().inputs,
+            [
+                Input::PointerMoved(Point::new(100.0, 50.0)),
+                Input::PointerLeft
+            ],
+            "a click with no pointer is dropped"
+        );
+    }
+
+    #[test]
     fn pointer_events_in_the_bars_are_dropped() {
         let mut window = FakeWindow::new((2560, 1536), 2.0);
         let mut app = app(&window);
@@ -1105,6 +1174,41 @@ mod tests {
         assert_eq!((app.screen().cancels, app.screen().releases), (1, 1));
     }
 
+    fn redraw(app: &mut TestApp, window: &mut FakeWindow) {
+        let elapsed = Duration::from_millis(16);
+        routed(app, window, WindowEvent::Redraw { elapsed });
+    }
+
+    #[test]
+    fn a_frame_hides_the_system_pointer_while_the_screen_draws_its_own_telling_only_changes() {
+        let mut window = FakeWindow::new((1024, 768), 1.0);
+        let mut app = overlay_app(&window);
+        redraw(&mut app, &mut window);
+        assert_eq!(
+            window.pointer_shown,
+            Vec::<bool>::new(),
+            "shown from the start"
+        );
+        app.screen.hides_pointer = true;
+        handle(&mut app, &mut window, key(Key::Up, true));
+        assert_eq!(
+            window.pointer_shown,
+            Vec::<bool>::new(),
+            "not until the frame"
+        );
+        redraw(&mut app, &mut window);
+        redraw(&mut app, &mut window);
+        assert_eq!(window.pointer_shown, [false], "once");
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        redraw(&mut app, &mut window);
+        assert_eq!(window.pointer_shown, [false, true], "over the overlay");
+        routed(&mut app, &mut window, key(BACKQUOTE, true));
+        redraw(&mut app, &mut window);
+        app.screen.hides_pointer = false;
+        redraw(&mut app, &mut window);
+        assert_eq!(window.pointer_shown, [false, true, false, true]);
+    }
+
     #[test]
     fn the_toggle_keys_repeat_and_release_touch_nothing() {
         let mut window = FakeWindow::new((1024, 768), 1.0);
@@ -1202,6 +1306,10 @@ mod tests {
                 handled(Control::Continue, Routing::Overlay)
             );
         }
+        assert_eq!(
+            routed(&mut app, &mut window, WindowEvent::PointerLeft),
+            handled(Control::Continue, Routing::Overlay)
+        );
         assert_eq!(app.screen().inputs, []);
     }
 

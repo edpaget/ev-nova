@@ -2223,6 +2223,12 @@ impl Screen for AppScreen {
         Some(self.showing())
     }
 
+    /// Flight's ([`FlightView`]'s cursor), while it shows with nothing
+    /// over it.
+    fn hides_pointer(&self) -> bool {
+        self.showing() == Showing::Flight && self.shown().hides_pointer()
+    }
+
     /// Saves the pilot flying, in flight or in the spaceport, when it has
     /// a name.
     fn quit(&mut self) {
@@ -2532,6 +2538,7 @@ pub(super) mod tests {
             .resource(Stellar::TYPE, 128, Some(b"Alpha Prime"), &stellar)
             .resource(Stellar::TYPE, 129, Some(b"Beta Prime"), &landable())
             .resource(Spin::TYPE, 1000, None, &spin)
+            .resource(Spin::TYPE, 650, None, &spin)
             .resource(Desc::TYPE, ABOUT_TEXT, None, &about_text())
     }
 
@@ -3163,6 +3170,18 @@ pub(super) mod tests {
         screen.input(&key(Key::Escape, true));
         screen.input(&key(Key::Char('f'), true));
         assert_eq!(ship(&screen), flown, "the same flight");
+    }
+
+    #[test]
+    fn only_flight_with_nothing_over_it_hides_the_system_pointer() {
+        let mut screen = with_dialogs(data());
+        assert!(!screen.hides_pointer(), "the ship browser");
+        fly(&mut screen);
+        assert!(screen.hides_pointer(), "flight");
+        open_prefs(&mut screen);
+        assert!(!screen.hides_pointer(), "the preferences over it");
+        screen.input(&key(Key::Escape, true));
+        assert!(screen.hides_pointer(), "flight again");
     }
 
     #[test]

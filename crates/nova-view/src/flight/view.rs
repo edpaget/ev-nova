@@ -368,12 +368,14 @@ use nova_sim::{
     HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText, News,
     NotOffered, OfferPrompt, PayNote, PersonRules, SessionEvent, StellarIff, TagNames, VenueOffer,
 };
+use nova_sim::{DrawnBox, DrawnShips};
 
 use super::alert;
 use super::boxes::{self, BoxShown};
 use super::brackets;
 use super::cadence::{Drawn, HudCadence, retake_target};
 use super::catalog::{CombatLooks, Looks, ShipSheet, ShipSprites, StatusBars, TargetCard};
+use super::cursor::HoverCursor;
 use super::effects::{Dying, Effects, Scene};
 use super::escorts::{
     EscortMenu, EscortMenuColors, EscortMenuLooks, GROUP_KEYS, MENU_KEY, NO_ESCORTS, NUMBER_WORDS,
@@ -1464,6 +1466,8 @@ pub struct FlightView<C> {
     /// The radar's static this tick, a `ppat` ID, rolled on the effects'
     /// chance ([`radar::static_frame`]); `None` without.
     radar_static: Option<i16>,
+    /// The mouse cursor sprite (see the `cursor` module).
+    cursor: HoverCursor,
 }
 
 /// A message on the message line.
@@ -1656,6 +1660,7 @@ impl<
             nav_scene: None,
             target_scene: None,
             radar_static: None,
+            cursor: HoverCursor::default(),
         }
     }
 
@@ -3261,6 +3266,57 @@ impl<C> FlightView<C> {
             .collect()
     }
 
+    /// Runs the cursor's `steps` flight steps (see the `cursor` module),
+    /// hovering as the pointer is over something targetable now
+    /// ([`FlightView::hovering`]), once the session's steps have run and
+    /// the ships are where the frame draws them. A key pressed since the
+    /// last step, or a flight key held, fades it. While the jump's streak
+    /// and fade-out hold flight no step runs, and the cursor holds, which
+    /// no player sees under the streak.
+    fn step_cursor(&mut self, steps: u32) {
+        if steps == 0 {
+            return;
+        }
+        let frames = self.looks.cursor_sheet().map(|sheet| sheet.frames);
+        let hovering = self.hovering();
+        let held = !self.held.is_empty();
+        for _ in 0..steps {
+            self.cursor.step(hovering, frames, held);
+        }
+    }
+
+    /// What `input` tells the cursor: a pointer move or button press shows
+    /// it where the pointer is, and the pointer leaving the window hides
+    /// it; a key pressed in flight (not on the map) fades it.
+    fn cursor_input(&mut self, input: &Input) {
+        match *input {
+            Input::PointerMoved(at)
+            | Input::PointerButton {
+                pressed: true, at, ..
+            } => {
+                self.cursor.pointer(at);
+            }
+            Input::PointerLeft => self.cursor.left(),
+            Input::Key { pressed: true, .. } if !self.map_open => self.cursor.key(),
+            _ => {}
+        }
+    }
+
+    /// Whether the pointer, while the cursor shows, is over something the
+    /// player can target ([`Session::hover`]), the ships boxed where they
+    /// are drawn ([`ViewShips`]).
+    fn hovering(&self) -> bool {
+        let (Ok(session), Some(at)) = (&self.session, self.cursor.shown_at()) else {
+            return false;
+        };
+        let world = self.camera().screen_to_world(at);
+        let ships = ViewShips {
+            view: self,
+            session,
+        };
+        session.hover(Vec2::new(world.x, world.y), &ships).is_some()
+    }
+
     /// Draws the ships, bottom first, in their layers as
     /// [`Session::draw_order`] gives them (see [`nova_sim::ship_layer`]):
     /// the disabled, then the ships the player leads, then the rest, each
@@ -3651,10 +3707,7 @@ impl<C> FlightView<C> {
             && let Some(npc) = session.target()
         {
             let (at, _) = self.shown_npc(npc);
-            let sprite = match self.npc_sheets.get(&npc.ship) {
-                Some(Ok(sheet)) => (sheet.frame_width, sheet.frame_height),
-                _ => (PLACEHOLDER_SIZE as u32, PLACEHOLDER_SIZE as u32),
-            };
+            let sprite = drawn_size(self.npc_sheets.get(&npc.ship));
             let at = camera.world_to_screen(at);
             brackets::draw_ship(list, at, Some(sprite), target.expand, target.standing);
         }
@@ -3748,6 +3801,7 @@ impl<
     /// the pre-jump stage included, only the escort menu's keys, and
     /// Option, are taken (see the module docs).
     fn input(&mut self, input: &Input) -> ScreenAction {
+        self.cursor_input(input);
         if self.jump.is_some() || self.preparing_jump() {
             self.jump_input(input);
             return ScreenAction::None;
@@ -3937,6 +3991,7 @@ impl<
         self.read_npc_sheets();
         self.update_escort_menu();
         self.alpha = alpha;
+        self.step_cursor(steps);
         self.start_streak_if_jumping();
         self.advance_hud();
     }
@@ -4014,6 +4069,7 @@ impl<
             }
             Err(reason) => hud::draw_unavailable(list, reason),
         }
+        self.cursor.draw(list, &self.looks);
         self.draw_fades(list);
     }
 
@@ -4042,6 +4098,14 @@ impl<
         sounds
     }
 
+    /// Flight hides the system's pointer over the window for its cursor
+    /// sprite (`_HandleMouse` @0x38007-0x38017 hides it inside the
+    /// window), unless the map is open, the flight never started or the
+    /// cursor's sheet could not be read.
+    fn hides_pointer(&self) -> bool {
+        !self.map_open && self.session.is_ok() && self.looks.cursor_sheet().is_some()
+    }
+
     /// What could not be read of the looks, then the session's
     /// diagnostics, each once.
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
@@ -4052,6 +4116,59 @@ impl<
         }
         diagnostics
     }
+}
+
+/// The ships where the flight draws them, for the hover test: the
+/// session's [`DrawnShips`] port. Every NPC is drawn, by its sheet or as
+/// its crossed box, so each has a box, even one its cloak hides from the
+/// player: [`Session::hover`] asks the cloak itself.
+struct ViewShips<'a, C> {
+    /// The flight, which says where each ship is drawn.
+    view: &'a FlightView<C>,
+    /// The flight's session.
+    session: &'a Session,
+}
+
+impl<C> DrawnShips for ViewShips<'_, C> {
+    fn npc(&self, id: NpcId) -> Option<DrawnBox> {
+        let npc = self.session.npcs().iter().find(|npc| npc.id == id)?;
+        let (at, _) = self.view.shown_npc(npc);
+        let sheet = self.view.npc_sheets.get(&npc.ship);
+        Some(drawn_box(at, drawn_size(sheet)))
+    }
+
+    fn player(&self) -> Option<DrawnBox> {
+        let size = match &self.view.sheet {
+            Ok(sheet) => (sheet.frame_width, sheet.frame_height),
+            Err(_) => placeholder_size(),
+        };
+        Some(drawn_box(self.view.shown_position(), size))
+    }
+}
+
+/// A ship's box drawn at `at` (in system coordinates) of `size`.
+fn drawn_box(at: Point, (width, height): (u32, u32)) -> DrawnBox {
+    DrawnBox {
+        centre: Vec2::new(at.x, at.y),
+        width,
+        height,
+    }
+}
+
+/// The frame size of an NPC drawn by `sheet`, the one read for its ship
+/// type if any: its crossed box's when the sheet could not be read.
+fn drawn_size(sheet: Option<&Result<ShipSheet, String>>) -> (u32, u32) {
+    match sheet {
+        Some(Ok(sheet)) => (sheet.frame_width, sheet.frame_height),
+        _ => placeholder_size(),
+    }
+}
+
+/// The crossed box's size, as a frame's.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn placeholder_size() -> (u32, u32) {
+    let side = PLACEHOLDER_SIZE as u32;
+    (side, side)
 }
 
 /// The simulation's `v` as a view point.
@@ -4297,6 +4414,8 @@ mod tests {
         /// The jettisoned cargo box's sheet: `rlëD` 500 of 36 frames, by
         /// default.
         box_sheet: Result<EffectSheet, String>,
+        /// The mouse cursor's sheet: `rlëD` 651 of 8 frames, by default.
+        cursor_sheet: Result<EffectSheet, String>,
         /// The string lists: none, by default.
         strings: Vec<(i16, Vec<String>)>,
         /// The persons: none, by default.
@@ -4410,6 +4529,10 @@ mod tests {
             box_sheet: Ok(EffectSheet {
                 image_id: 500,
                 frames: NonZeroU16::new(36).expect("non-zero"),
+            }),
+            cursor_sheet: Ok(EffectSheet {
+                image_id: 651,
+                frames: NonZeroU16::new(8).expect("non-zero"),
             }),
             strings: Vec::new(),
             persons: Vec::new(),
@@ -4825,6 +4948,10 @@ mod tests {
                 0 => self.box_sheet.clone(),
                 other => Err(format!("no spïn {}", 500 + other)),
             }
+        }
+
+        fn cursor_sheet(&self) -> Result<EffectSheet, String> {
+            self.cursor_sheet.clone()
         }
     }
 
@@ -16946,5 +17073,164 @@ mod tests {
         assert!(blinked, "the session blinked it");
         assert_eq!(told(&mut view), 0, "once");
         assert_eq!(told(&mut flight()), 0, "the default catalog has it");
+    }
+
+    // The hover cursor (`_HandleMouse`).
+
+    /// The cursor sprites in `list`: frame and centre.
+    fn cursor_sprites(list: &DrawList) -> Vec<(u16, Point)> {
+        sprites(list)
+            .into_iter()
+            .filter(|(image, _)| image.id == 651)
+            .map(|(image, at)| (image.frame, at))
+            .collect()
+    }
+
+    /// A flight with one still NPC, drawn after a tick, and its id.
+    fn flight_with_npc(catalog: FakeCatalog) -> (View, NpcId) {
+        let (_, chance) = scripted(&placed(850, 650, 90));
+        let mut view = FlightView::new(catalog)
+            .with_chance(chance)
+            .with_behaviour(Rc::new(Still));
+        view.tick(TICK);
+        let id = npc_ids(&view)[0];
+        (view, id)
+    }
+
+    /// A point on screen over nothing at all.
+    const NOWHERE: Point = Point::new(40.0, 400.0);
+
+    #[test]
+    fn the_cursor_animates_over_an_npc_and_rests_off_it() {
+        let (mut view, id) = flight_with_npc(trafficked(&[130], 1, 129, 3));
+        let over = npc_on_screen(&view, id);
+        view.input(&Input::PointerMoved(over));
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, over)]);
+        ticks(&mut view, 2);
+        assert_eq!(cursor_sprites(&drawn(&view)), [(1, over)]);
+        view.input(&Input::PointerMoved(NOWHERE));
+        ticks(&mut view, 1);
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
+        ticks(&mut view, 4);
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)], "rests");
+    }
+
+    #[test]
+    fn a_button_press_shows_the_cursor_where_it_is() {
+        let mut view = flight();
+        assert_eq!(cursor_sprites(&drawn(&view)), [], "no pointer yet");
+        view.input(&Input::PointerButton {
+            button: MouseButton::Right,
+            pressed: true,
+            at: NOWHERE,
+        });
+        assert_eq!(cursor_sprites(&drawn(&view)), [(0, NOWHERE)]);
+    }
+
+    #[test]
+    fn the_cursor_draws_over_the_hud_and_under_the_jump_fade() {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        let list = drawn(&view);
+        let cursor = list
+            .iter()
+            .position(
+                |command| matches!(command, DrawCommand::Sprite { image, .. } if image.id == 651),
+            )
+            .expect("drawn");
+        assert!(cursor > hud_at(&list), "over the HUD");
+        assert_eq!(cursor, list.len() - 1, "last, with no fade");
+    }
+
+    #[test]
+    fn a_cloaked_npc_is_hovered_only_with_a_scanner_that_targets_cloaked_ships() {
+        let cloaking = |scanned: bool| {
+            let mut scanner = radar_outfits();
+            let mut mods = [(0, 0); 4];
+            mods[1] = (nova_sim::cloak::MOD_SCANNER, nova_sim::cloak::SCAN_TARGET);
+            scanner[0].mods = mods;
+            let catalog = FakeCatalog {
+                outfits: scanner,
+                defaults: if scanned {
+                    vec![(OutfitId(300), 1)]
+                } else {
+                    Vec::new()
+                },
+                ..trafficked(&[130], 1, 129, 3)
+            };
+            let (mut view, id) = flight_with_npc(catalog);
+            let session = view.session.as_mut().expect("flying");
+            nova_sim::fixture::cloak(session, id, CLOAKED);
+            let session = view.session().expect("flying");
+            assert!(!session.scanner().on_screen, "cannot see it");
+            assert_eq!(session.scanner().targets, scanned);
+            let over = npc_on_screen(&view, id);
+            view.input(&Input::PointerMoved(over));
+            ticks(&mut view, 2);
+            let frames: Vec<u16> = cursor_sprites(&drawn(&view))
+                .into_iter()
+                .map(|(frame, _)| frame)
+                .collect();
+            frames
+        };
+        assert_eq!(cloaking(false), [0], "rests");
+        assert_eq!(
+            cloaking(true),
+            [1],
+            "animates over the ship it does not draw"
+        );
+    }
+
+    #[test]
+    fn the_cursor_is_hidden_once_the_pointer_leaves_the_window() {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        view.input(&Input::PointerLeft);
+        assert_eq!(cursor_sprites(&drawn(&view)), []);
+    }
+
+    #[test]
+    fn a_key_pressed_in_flight_fades_the_cursor_at_the_next_step() {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        view.input(&key(Key::Char('z'), true));
+        ticks(&mut view, 1);
+        let tint = |view: &View| {
+            drawn(view).iter().find_map(|command| match *command {
+                DrawCommand::Sprite { image, tint, .. } if image.id == 651 => Some(tint.a),
+                _ => None,
+            })
+        };
+        assert_eq!(tint(&view), Some(247), "31 of 32");
+        view.input(&key(Key::Up, true));
+        ticks(&mut view, 2);
+        assert_eq!(tint(&view), Some(231), "held: 29 of 32");
+    }
+
+    #[test]
+    fn the_cursor_is_not_drawn_while_the_map_is_open() {
+        let mut view = flight();
+        view.input(&Input::PointerMoved(NOWHERE));
+        view.input(&key(MAP_KEY, true));
+        assert!(view.map_open());
+        assert_eq!(cursor_sprites(&drawn(&view)), []);
+    }
+
+    #[test]
+    fn flight_hides_the_system_pointer_unless_the_map_is_open_or_it_has_no_cursor() {
+        let mut view = flight();
+        assert!(view.hides_pointer());
+        view.input(&key(MAP_KEY, true));
+        assert!(!view.hides_pointer(), "the map");
+        let no_cursor = FakeCatalog {
+            cursor_sheet: Err("no spïn 650".to_owned()),
+            ..catalog()
+        };
+        assert!(!FlightView::new(no_cursor).hides_pointer());
+        let failed = FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        };
+        assert!(!FlightView::new(failed).hides_pointer());
     }
 }

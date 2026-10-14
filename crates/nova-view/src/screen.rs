@@ -139,6 +139,12 @@ pub trait Screen {
     fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
         Vec::new()
     }
+    /// Whether the system's pointer is hidden over the window, the screen
+    /// drawing its own in its place (flight's cursor sprite). `false` by
+    /// default.
+    fn hides_pointer(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -215,6 +221,12 @@ mod tests {
         assert_eq!(screen.take_sounds(), []);
         assert_eq!(screen.take_prefs(), None);
         assert_eq!(screen.now_showing(), None);
+    }
+
+    #[test]
+    fn a_screen_leaves_the_system_pointer_shown_by_default() {
+        let screen: &dyn Screen = &Counter::default();
+        assert!(!screen.hides_pointer());
     }
 
     #[test]
