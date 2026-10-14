@@ -2319,8 +2319,14 @@ impl Session {
     /// [`SessionEvent::GalaxyChanged`] when it changed anything.
     ///
     /// Its first draw on `chance` arms the escort-strength timer (see
-    /// [`strength`]), before the days, the roll
-    /// table and the population, as the original does (@0x6c013).
+    /// [`strength`]). The original's order is `Rand(0x800)` (@0x6bfdd),
+    /// the escort-strength timer (@0x6c013), the roll table
+    /// (@0x6c040-0x6c066), the days (@0x6c144), then the setup
+    /// (@0x6c1f9). Ours lets the days go by (`take_jump_cost`) before
+    /// `enter_system` redraws the offers (`Offers::redraw`). That is
+    /// harmless: the fill reads nothing the days change, and the days
+    /// don't read the table. Only the order of the draws differs, and the
+    /// engine doesn't match that.
     pub fn arrive(
         &mut self,
         catalog: &(impl PilotCatalog + TrafficCatalog),
