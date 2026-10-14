@@ -497,7 +497,8 @@ impl Session {
         true
     }
 
-    /// Stamps the stellars shown and those waiting for the take-off afresh
+    /// Stamps the stellars shown, those their system lists, and those
+    /// waiting for the take-off afresh
     /// through the galaxy ([`OverlaidGalaxy::site`]): only whether each is
     /// destroyed can have changed, which the overlay alone gives, so
     /// nothing is read again. Which stellars are shown is
@@ -507,6 +508,7 @@ impl Session {
         for site in self
             .sites
             .iter_mut()
+            .chain(&mut self.listed)
             .chain(self.next_sites.iter_mut().flatten())
         {
             *site = galaxy.site(*site);
@@ -515,9 +517,10 @@ impl Session {
 
     /// Reads the stellars again from `catalog` where the galaxy's change
     /// from `before` gave one of them another government, or destroyed or
-    /// regenerated it: those shown, and those waiting for the take-off.
-    /// Which stellars are shown is [`Session::set_player_system`]'s alone;
-    /// this only refreshes them.
+    /// regenerated it: those the system shown lists, and those waiting for
+    /// the take-off. Which stellars are shown is
+    /// [`Session::set_player_system`]'s and the rebuild points' alone: the
+    /// same are shown, read again.
     fn refresh_sites(&mut self, catalog: &(impl PilotCatalog + ?Sized), before: &GalaxyOverlay) {
         let now = &self.pilot.galaxy;
         let changed = |sites: &[LandingSite]| {
@@ -526,10 +529,17 @@ impl Session {
                 was.govt != is.govt || was.destroyed.is_some() != is.destroyed.is_some()
             })
         };
-        let shown_stale = changed(&self.sites);
+        let shown_stale = changed(&self.listed);
         let waiting_stale = self.next_sites.as_deref().is_some_and(changed);
         if shown_stale {
-            self.sites = self.read_sites(catalog, self.shown);
+            self.listed = self.read_sites(catalog, self.shown);
+            let held: Vec<StellarId> = self.stellars_shown().collect();
+            self.sites = self
+                .listed
+                .iter()
+                .filter(|site| held.contains(&site.id))
+                .copied()
+                .collect();
         }
         if waiting_stale {
             let sites = self.read_sites(catalog, self.pilot.system);

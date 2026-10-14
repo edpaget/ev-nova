@@ -283,8 +283,14 @@ mod tests {
             Vec::new()
         }
 
+        /// Sol's and Alpha Centauri's stellars, as each lists them.
         fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
-            Vec::new()
+            let sites = [SystemId(130), SystemId(131)].map(|id| (id, self.landing_sites(id)));
+            nova_sim::fixture::listed_stellars(
+                sites
+                    .iter()
+                    .map(|(system, sites)| (*system, sites.as_slice())),
+            )
         }
 
         fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {

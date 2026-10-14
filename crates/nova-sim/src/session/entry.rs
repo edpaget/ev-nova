@@ -34,6 +34,17 @@
 //! another, and for a pilot flown docked at a stellar of a hidden system at
 //! its place. A mover says only where the ship is docked ([`Dock`]).
 //!
+//! Which of a system's stellars are shown is the galaxy's: those it holds
+//! by ownership or by the rescue ([`OverlaidGalaxy::shows`]), as
+//! `_HandleStellarSystemVisibility` shows only the active stellars the
+//! player's system owns, so a stellar another visible system owns is not
+//! shown though the system lists it. The stellar the ship is docked at
+//! is always among those shown. The session keeps every stellar the
+//! system lists, and derives the stellars shown from them as the system
+//! changes and at each flight rebuild point ([`Session::reshow`]); a
+//! galaxy change between rebuild points reads the stellars shown again
+//! but never changes which are shown.
+//!
 //! The last step announces the arrival, and tells a view what to redraw
 //! ([`scene_event`], see the `events` module): measured against the
 //! system whose stellars are shown, which after a landed move is still
@@ -565,38 +576,81 @@ impl Session {
         }
     }
 
-    /// Makes `system` the player's system and `sites` its stellars: the one
-    /// owner of which stellars the session shows (see the module docs).
-    /// In flight, or docked at a stellar of `system` itself, `sites` are
-    /// shown at once and nothing waits for the take-off. Docked at a
-    /// stellar of another system (where the ship was, or `dock`'s system),
-    /// that system's stellars stay shown, or `dock`'s become so, and
-    /// `sites` wait for the take-off. Whether the system whose stellars are
-    /// shown changed.
+    /// Makes `system` the player's system and `listed` every stellar it
+    /// lists: the one owner of which stellars the session shows (see the
+    /// module docs). In flight, or docked at a stellar of `system` itself,
+    /// those of `listed` it shows are shown at once and nothing waits for
+    /// the take-off. Docked at a stellar of another system (where the ship
+    /// was, or `dock`'s system), that system's stellars stay shown, or
+    /// `dock`'s become so, and `listed` waits for the take-off. Either
+    /// way the stellars shown are those their system holds, and the one
+    /// docked at ([`shown_sites`](super::shown_sites)). Whether the system
+    /// whose stellars are shown changed.
     pub(super) fn set_player_system(
         &mut self,
         system: SystemId,
-        sites: Vec<LandingSite>,
+        listed: Vec<LandingSite>,
         dock: Dock,
     ) -> bool {
         let before = self.shown;
         self.pilot.system = system;
-        let (docked_in, docked_sites) = match dock {
+        let (docked_in, docked_listed) = match dock {
             Dock::AsItWas => (self.shown, None),
-            Dock::At(at, at_sites) => (at, Some(at_sites)),
+            Dock::At(at, at_listed) => (at, Some(at_listed)),
         };
         if self.landed.is_none() || docked_in == system {
-            self.sites = sites;
-            self.shown = system;
+            self.show(system, listed);
             self.next_sites = None;
         } else {
-            if let Some(docked_sites) = docked_sites {
-                self.sites = docked_sites;
+            if let Some(docked_listed) = docked_listed {
+                self.show(docked_in, docked_listed);
             }
             self.shown = docked_in;
-            self.next_sites = Some(sites);
+            self.next_sites = Some(listed);
         }
         self.shown != before
+    }
+
+    /// Shows the stellars of `listed`, every one `system` lists, that it
+    /// shows ([`shown_sites`](super::shown_sites)).
+    fn show(&mut self, system: SystemId, listed: Vec<LandingSite>) {
+        self.sites = super::shown_sites(
+            &self.galaxy,
+            &self.listed_stellars,
+            system,
+            &listed,
+            self.landed,
+        );
+        self.listed = listed;
+        self.shown = system;
+    }
+
+    /// Derives the stellars shown afresh from those their system lists, in
+    /// flight only, and says whether that changed which are shown: a
+    /// flight rebuild point's part (see the `stellars` module), as
+    /// `_HandleStellarSystemVisibility` sets which stellars are active
+    /// and owned by the player's system at each rebuild point.
+    ///
+    /// Docked, nothing is derived: the landing's rebuild (@0x5fbf0) would
+    /// change only the sprites the flight shows, and the take-off's
+    /// (@0x674c7) derives them again before the first frame, so the
+    /// difference crosses no boundary the player sees. Every flight
+    /// rebuild point lets go of the navigation target first, so it never
+    /// names a stellar no longer shown.
+    pub(super) fn reshow(&mut self) -> bool {
+        if self.landed.is_some() {
+            return false;
+        }
+        let listed = std::mem::take(&mut self.listed);
+        let before: Vec<StellarId> = self.stellars_shown().collect();
+        self.show(self.shown, listed);
+        !self.stellars_shown().eq(before)
+    }
+
+    /// The stellars shown, in navigation order (their system's `NavDefs`
+    /// order): what the flight view draws.
+    pub fn stellars_shown(&self) -> impl Iterator<Item = StellarId> + '_ {
+        self.sites.iter().map(|site| site.id)
     }
 
     /// Checks the invariant [`Session::set_player_system`] keeps: docked,

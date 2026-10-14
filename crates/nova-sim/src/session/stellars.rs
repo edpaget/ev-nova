@@ -80,6 +80,11 @@
 //!   main screen, @0x1a354, @0x1a8ca, @0x1b003 and @0x457ee), which tells
 //!   nothing, the view reading the state as it builds.
 //!
+//! In flight, each rebuild point first derives which stellars are shown
+//! afresh, as `_HandleStellarSystemVisibility` sets them active and owned
+//! (see the `entry` module), and tells `StellarsRebuilt` when that
+//! changed them too. Docked, it derives nothing: the take-off's point does.
+//!
 //! A landed `M` or `N`, `Y`, `U`, the daily step, the shots and the galaxy
 //! overlay's changes are not rebuild points. The original's escape-pod
 //! rescue rebuilds too (@0x69135): the engine has none, and whoever builds
@@ -117,25 +122,29 @@ impl Session {
         self.rebuilt.dead(stellar)
     }
 
-    /// A rebuild point (see the module docs): the stellars shown that are
-    /// destroyed now are the ones dead since it, telling
+    /// A rebuild point (see the module docs): in flight the stellars shown
+    /// are derived afresh, and those destroyed now are the ones dead since
+    /// it, telling
     /// [`SessionEvent::StellarsRebuilt`](super::SessionEvent::StellarsRebuilt)
-    /// when that changed them.
+    /// when that changed either.
     pub(super) fn rebuild_stellars(&mut self) {
         if self.rebuild_quietly() {
             self.emit(super::SessionEvent::StellarsRebuilt);
         }
     }
 
-    /// A rebuild point that tells nothing: whether it changed which
-    /// stellars shown are dead since the last one.
+    /// A rebuild point that tells nothing: in flight, the stellars shown
+    /// derived afresh (`Session::reshow`), then which of them are dead
+    /// since it. Whether it changed either.
     pub(super) fn rebuild_quietly(&mut self) -> bool {
+        let reshown = self.reshow();
         let galaxy = &self.galaxy;
-        self.rebuilt.rebuild(
+        let rebuilt = self.rebuilt.rebuild(
             &self.sites,
             |id| galaxy.destroyed(id),
             self.fallback_frame.is_some(),
-        )
+        );
+        reshown | rebuilt
     }
 
     /// The frame size of the sheet drawn for `site`, one of the stellars
@@ -2248,5 +2257,158 @@ mod tests {
         assert_eq!(click(&mut session, 31.0, 0.0), Some(StellarId(128)));
         assert_eq!(click(&mut session, 34.0, 0.0), None);
         assert_eq!(click(&mut session, 90.0, 0.0), None);
+    }
+
+    // The stellars shown.
+
+    /// [`catalog`] with stellar 200 at (500, 500) listed by both 130 and
+    /// 131, at different places, and every system hideable.
+    fn twice_listed() -> FakePilotCatalog {
+        let mut catalog = catalog();
+        for (_, sites) in &mut catalog.sites {
+            sites.push(crate::testkit::planet(200, 500.0, 500.0));
+        }
+        crate::testkit::hideable(&mut catalog);
+        catalog
+    }
+
+    /// The stellars `session` shows.
+    fn shown(session: &Session) -> Vec<i16> {
+        session.stellars_shown().map(|id| id.0).collect()
+    }
+
+    #[test]
+    fn a_system_shows_only_the_stellars_it_holds() {
+        let catalog = twice_listed();
+        let mut session = quiet(&catalog);
+        assert_eq!(shown(&session), [128, 129, 200], "130 owns 200");
+        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        assert_eq!(shown(&session), [140], "200 is 130's, though 131 lists it");
+        session.assert_docked_among_shown();
+    }
+
+    #[test]
+    fn the_players_system_shows_a_stellar_no_one_owns() {
+        let mut catalog = catalog();
+        catalog
+            .star_map
+            .push(crate::testkit::star(134, (600.0, 0.0), &[]));
+        catalog.systems.push(SystemId(134));
+        catalog
+            .sites
+            .push((SystemId(134), vec![crate::testkit::planet(141, 0.0, 0.0)]));
+        crate::testkit::hideable(&mut catalog);
+        let mut pilot = crate::pilot::Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.system = SystemId(134);
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.system(), SystemId(134), "shadowed by 131, it stays");
+        assert_eq!(session.galaxy().owner(&[SystemId(134)]), None);
+        assert_eq!(shown(&session), [141], "rescued: 134 holds it");
+        let mut session = quiet(&catalog);
+        crate::session::tests::hide(&mut session, &catalog, &[131, 134]);
+        settle(&mut session, &catalog, "M131");
+        assert_eq!(session.system(), SystemId(131), "the chain head, shown");
+        assert_eq!(session.galaxy().owner(&[SystemId(131)]), None);
+        assert_eq!(shown(&session), [140], "rescued: 131 holds it");
+    }
+
+    #[test]
+    fn which_stellars_are_shown_changes_only_at_a_rebuild_point() {
+        let catalog = twice_listed();
+        let mut session = quiet(&catalog);
+        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        crate::session::tests::hide(&mut session, &catalog, &[130]);
+        assert_eq!(
+            shown(&session),
+            [140],
+            "a galaxy change is no rebuild point"
+        );
+        session.player.position = Vec2::ZERO;
+        session.player.velocity = Vec2::ZERO;
+        assert_eq!(land_now(&mut session), Ok(StellarId(140)));
+        assert_eq!(
+            shown(&session),
+            [140],
+            "docked, the landing shows nothing afresh"
+        );
+        session.take_events();
+        session
+            .take_off(&catalog, &mut Scripted::default())
+            .expect("takes off");
+        assert_eq!(shown(&session), [140, 200], "131 holds 200 now");
+        assert!(
+            session
+                .take_events()
+                .contains(&SessionEvent::StellarsRebuilt)
+        );
+        assert_eq!(
+            session.nav_target(),
+            None,
+            "a flight rebuild point never keeps a navigation target"
+        );
+    }
+
+    #[test]
+    fn a_galaxy_change_that_regoverns_a_shown_stellar_keeps_the_set_shown() {
+        let catalog = twice_listed();
+        let mut session = quiet(&catalog);
+        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_visible(SystemId(130), Some(false));
+            overlay.set_stellar_govt(StellarId(140), Some(Some(GovtId(150))));
+        });
+        assert_eq!(shown(&session), [140], "read again, not shown afresh");
+        assert_eq!(session.sites[0].govt, Some(GovtId(150)));
+    }
+
+    #[test]
+    fn a_galaxy_change_reads_again_a_stellar_listed_but_not_shown() {
+        let catalog = twice_listed();
+        let mut session = quiet(&catalog);
+        crate::testkit::jump(&mut session, &catalog, 131).expect("arrives");
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_stellar_govt(StellarId(200), Some(Some(GovtId(150))));
+        });
+        crate::session::tests::hide(&mut session, &catalog, &[130]);
+        session.player.position = Vec2::ZERO;
+        session.player.velocity = Vec2::ZERO;
+        assert_eq!(land_now(&mut session), Ok(StellarId(140)));
+        session
+            .take_off(&catalog, &mut Scripted::default())
+            .expect("takes off");
+        let site = session
+            .sites
+            .iter()
+            .find(|site| site.id == StellarId(200))
+            .expect("shown");
+        assert_eq!(site.govt, Some(GovtId(150)));
+    }
+
+    #[test]
+    fn docked_the_stellar_docked_at_stays_shown() {
+        let catalog = twice_listed();
+        let mut pilot = crate::pilot::Pilot::new(&catalog, "Ada").expect("starts");
+        pilot.system = SystemId(131);
+        pilot.stellar = Some(StellarId(200));
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.landed(), Some(StellarId(200)));
+        assert_eq!(shown(&session), [140, 200], "130's, but docked at");
+        session.assert_docked_among_shown();
+        session.change_galaxy(&catalog, |overlay| {
+            overlay.set_stellar_govt(StellarId(200), Some(None));
+        });
+        session.assert_docked_among_shown();
+        session
+            .take_off(&catalog, &mut Scripted::default())
+            .expect("takes off");
+        assert_eq!(shown(&session), [140], "in flight, what 131 holds");
+    }
+
+    #[test]
+    fn stellars_shown_gives_the_sites_ids_in_navigation_order() {
+        let mut catalog = twice_listed();
+        catalog.sites[0].1.reverse();
+        let session = quiet(&catalog);
+        assert_eq!(shown(&session), [200, 129, 128]);
     }
 }

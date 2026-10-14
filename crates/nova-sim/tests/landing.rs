@@ -137,8 +137,10 @@ impl PilotCatalog for Pilot {
         Vec::new()
     }
 
+    /// System 130's stellars, as it lists them.
     fn listed_stellars(&self) -> Vec<nova_sim::catalog::ListedStellar> {
-        Vec::new()
+        let sites = self.landing_sites(SystemId(130));
+        nova_sim::fixture::listed_stellars([(SystemId(130), sites.as_slice())])
     }
 
     fn system_visibility(&self) -> Vec<nova_sim::catalog::SystemVisibility> {

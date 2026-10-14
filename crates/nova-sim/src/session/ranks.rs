@@ -932,6 +932,7 @@ pub(super) mod tests {
             assert_eq!(prices(&mut session), ONE_RANK, "{timing:?}");
             // Government 130 is no ally of the rank's government 128.
             session.sites[0].govt = Some(crate::catalog::GovtId(130));
+            session.listed[0].govt = Some(crate::catalog::GovtId(130));
             assert_eq!(prices(&mut session), while_landed, "{timing:?}");
             land_again(&mut session, &catalog);
             assert_eq!(prices(&mut session), UNRANKED, "{timing:?}");

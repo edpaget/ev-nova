@@ -536,9 +536,13 @@ pub struct Session {
     /// How the ship performs, with the outfits it carries.
     stats: ShipStats,
     player: ShipState,
-    /// The stellars shown: `shown`'s, read when the session starts and
-    /// whenever [`Session::set_player_system`] says.
+    /// The stellars shown: those of `listed` that `shown` holds, and the
+    /// one docked at, derived whenever [`Session::set_player_system`] says
+    /// and at the flight rebuild points (see the `entry` module).
     sites: Vec<LandingSite>,
+    /// Every stellar `shown` lists, in `NavDefs` order, through the
+    /// galaxy overlay: what `sites` are derived from.
+    listed: Vec<LandingSite>,
     /// The system whose stellars `sites` are: the player's, except while
     /// the ship is docked at a stellar of another system.
     shown: SystemId,
@@ -723,7 +727,7 @@ pub struct Session {
     /// What the set expressions left for later: for
     /// [`Session::settle_script`], and the next flight tick; never saved.
     queued: script_effects::Queued,
-    /// The stellars of the player's system, waiting for the take-off
+    /// Every stellar the player's system lists, waiting for the take-off
     /// while the ship is docked at a stellar of another system, `shown`
     /// (see [`Session::set_player_system`]).
     next_sites: Option<Vec<LandingSite>>,
@@ -956,6 +960,7 @@ impl Session {
             stats: ShipStats::default(),
             player,
             sites: Vec::new(),
+            listed: Vec::new(),
             shown: system,
             landed,
             nav_target: None,
@@ -4383,6 +4388,29 @@ fn docking(
         }
     }
     (None, Dock::AsItWas)
+}
+
+/// The stellars of `listed`, every one `system` lists, that it shows:
+/// each it holds ([`OverlaidGalaxy::shows`]), and `docked`, the stellar
+/// the ship is docked at, whatever holds it, in `listed`'s order.
+///
+/// The original's spaceport never asks whether its stellar is shown, so
+/// the engine keeps the stellar docked at among the stellars shown, where
+/// its readers find it (the ranks' port, the missions' visit, the dock).
+fn shown_sites(
+    galaxy: &OverlaidGalaxy,
+    listed_stellars: &[ListedStellar],
+    system: SystemId,
+    listed: &[LandingSite],
+    docked: Option<StellarId>,
+) -> Vec<LandingSite> {
+    listed
+        .iter()
+        .filter(|site| {
+            docked == Some(site.id) || galaxy.shows(listers_of(listed_stellars, site.id), system)
+        })
+        .copied()
+        .collect()
 }
 
 /// `system`'s stellars, read from `catalog`, each passed through
