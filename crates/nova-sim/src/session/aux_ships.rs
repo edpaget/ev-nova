@@ -1,5 +1,5 @@
 //! The session's side of auxiliary ships (see the
-//! [`mission::aux`](crate::mission::aux) module and the
+//! [`mission::aux_ships`](crate::mission::aux_ships) module and the
 //! [`traffic::spawn`](crate::traffic::spawn) module's "Auxiliary
 //! ships"): their countdown and the ships it brings in, its restarts,
 //! the gate exit that loses them, and the survivors given back as the
@@ -41,16 +41,16 @@
 //! again. A ship that jumped out or landed is gone already, and gives
 //! nothing back.
 //!
-//! [`AuxShips::tick`]: crate::mission::aux::AuxShips::tick
-//! [`AuxShips::restart`]: crate::mission::aux::AuxShips::restart
-//! [`AuxShips::give_back`]: crate::mission::aux::AuxShips::give_back
+//! [`AuxShips::tick`]: crate::mission::aux_ships::AuxShips::tick
+//! [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
+//! [`AuxShips::give_back`]: crate::mission::aux_ships::AuxShips::give_back
 
 use std::collections::BTreeSet;
 
 use super::Session;
 use crate::catalog::TrafficCatalog;
 use crate::chance::Chance;
-use crate::mission::aux::{aux_dude, aux_system_allows};
+use crate::mission::aux_ships::{aux_dude, aux_system_allows};
 use crate::mission::ships::LOST_AT_GATE;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::Entrance;
@@ -69,8 +69,8 @@ impl Session {
     /// counted ([`AuxShips::came`]); then a mission of `Flags` 0x0001
     /// auto-aborts. No save is due.
     ///
-    /// [`AuxShips::coming`]: crate::mission::aux::AuxShips::coming
-    /// [`AuxShips::came`]: crate::mission::aux::AuxShips::came
+    /// [`AuxShips::coming`]: crate::mission::aux_ships::AuxShips::coming
+    /// [`AuxShips::came`]: crate::mission::aux_ships::AuxShips::came
     pub(super) fn aux_arrivals(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
@@ -117,7 +117,7 @@ impl Session {
     /// `slot`, while the slot holds it ([`AuxShips::tick`],
     /// @0x43ae8-0x43af8). No save is due.
     ///
-    /// [`AuxShips::tick`]: crate::mission::aux::AuxShips::tick
+    /// [`AuxShips::tick`]: crate::mission::aux_ships::AuxShips::tick
     pub(super) fn tick_aux(&mut self, slot: u8, mission: crate::catalog::MissionId) {
         if let Some(active) = self
             .pilot
@@ -133,7 +133,7 @@ impl Session {
     /// any, by the enter-system hook or the take-off
     /// ([`AuxShips::restart`]), drawing on `chance`.
     ///
-    /// [`AuxShips::restart`]: crate::mission::aux::AuxShips::restart
+    /// [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
     pub(super) fn restart_aux(&mut self, slot: u8, chance: &mut dyn Chance) {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
@@ -214,7 +214,7 @@ mod tests {
     use crate::control::SetExpr;
     use crate::gate::GateKind;
     use crate::mission::active::AUTO_ABORT;
-    use crate::mission::aux::{AUX_EVERY_VISIT, AuxShips};
+    use crate::mission::aux_ships::{AUX_EVERY_VISIT, AuxShips};
     use crate::rulebook::Rulebook;
     use crate::session::gate_follow::tests::{exit_gate, gated};
     use crate::session::mission_ships::tests::{

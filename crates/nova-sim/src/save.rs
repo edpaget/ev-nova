@@ -166,7 +166,7 @@ use crate::cron::CronState;
 use crate::date::GameDate;
 use crate::escort::EscortOrder;
 use crate::market::{ActiveEvent, Good};
-use crate::mission::aux::AuxShips;
+use crate::mission::aux_ships::AuxShips;
 use crate::mission::{ActiveMission, ActiveMissions, FailedBy, ShipSystem, SpecialShips, Stop};
 use crate::outfit_effects::Rgb15;
 use crate::pilot::{Escort, Gender, Pilot};

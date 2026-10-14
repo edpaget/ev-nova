@@ -252,7 +252,7 @@ pub(crate) fn carrying(id: i16, tons: i64) -> crate::mission::ActiveMission {
         aboard: true,
         failed: None,
         ships: crate::mission::SpecialShips::default(),
-        aux: crate::mission::aux::AuxShips::default(),
+        aux: crate::mission::aux_ships::AuxShips::default(),
     }
 }
 
