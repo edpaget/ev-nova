@@ -102,8 +102,8 @@ const TABLE: [(FlagField, u16, Scope, Status); 44] = [
     (Flags, 0x0002, Any, Implemented),
     // Cycling graphic starts on its first frame.
     (Flags, 0x0004, Any, Presentation),
-    // Guided: won't fire at fast ships.
-    (Flags, 0x0008, Guided, Unimplemented),
+    // Guided: won't fire at fast ships (`ai::fire::suitable_missile`).
+    (Flags, 0x0008, Guided, Implemented),
     // Looped sound.
     (Flags, 0x0010, Any, Presentation),
     // Passes through shields.
@@ -230,7 +230,7 @@ mod tests {
         (Flags, 0x0001, [Presentation; 4]),
         (Flags, 0x0002, [Implemented; 4]),
         (Flags, 0x0004, [Presentation; 4]),
-        (Flags, 0x0008, [NA, NA, Unimplemented, NA]),
+        (Flags, 0x0008, [NA, NA, Implemented, NA]),
         (Flags, 0x0010, [Presentation; 4]),
         (Flags, 0x0020, [Implemented; 4]),
         (Flags, 0x0040, [Unimplemented; 4]),

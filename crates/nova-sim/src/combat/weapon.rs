@@ -309,6 +309,10 @@ pub const NO_SUBS_ON_EXPIRY: u16 = 0x0020;
 /// `Flags2`: a planet-type weapon, whose shots can hit a destroyable
 /// stellar (see [`combat`](super)'s "Stellars").
 pub const PLANET_TYPE: u16 = 0x0400;
+/// `Flags`: a guided weapon that won't fire at fast ships: an NPC holds it
+/// at a target turning more than 3 degrees a tick (`_SuitableMissileType`
+/// @0x3507-0x3516, see [`fire`](crate::ai::fire)).
+pub const AVOIDS_FAST_SHIPS: u16 = 0x0008;
 /// `Flags2`: it needs its ship's `KeyCarried` aboard, a fighter bay of
 /// that ship holding rounds (`_WeaponHasAmmo` @0xba07-0xba85).
 pub const NEEDS_KEY_SHIP: u16 = 0x0080;

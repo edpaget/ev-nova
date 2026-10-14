@@ -55,7 +55,7 @@
 //!   short way round.
 
 use crate::ai::Surroundings;
-use crate::ai::fire::has_ammo;
+use crate::ai::fire::{has_ammo, suitable_missile};
 use crate::combat::ShipRef;
 use crate::combat::aim::{angle_off, bearing};
 use crate::combat::hull::Condition;
@@ -164,18 +164,19 @@ pub fn odds_against(npc: &Npc, around: &Surroundings) -> f32 {
 /// module docs).
 #[must_use]
 pub fn hopeless_chase(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool {
-    let (quarry, top_speed) = match target {
+    let (quarry, handling) = match target {
         ShipRef::Player => match around.player {
-            Some(player) => (player.state, player.handling.max_speed),
+            Some(player) => (player.state, player.handling),
             None => return false,
         },
         ShipRef::Npc(id) => match around.npc(id) {
             Some(other) if matches!(other.goal, crate::ai::Goal::Flee(_)) => {
-                (other.state, other.stats.handling.max_speed)
+                (other.state, other.stats.handling)
             }
             _ => return false,
         },
     };
+    let top_speed = handling.max_speed;
     if npc.hull.mass <= HEAVY {
         return false;
     }
@@ -195,6 +196,7 @@ pub fn hopeless_chase(npc: &Npc, target: ShipRef, around: &Surroundings) -> bool
     let in_reach = npc.armament.mounts().iter().any(|mount| {
         let range = mount.spec.range();
         mount.spec.guidance == Guidance::Homing
+            && suitable_missile(&mount.spec, handling.turn_rate)
             && has_ammo(npc, mount)
             && range * range >= MISSILE_REACH * distance
     });
@@ -630,6 +632,23 @@ mod tests {
         chaser.rounds.clear();
         assert!(hopeless(&chaser, target), "no rounds");
         assert_eq!(MISSILE_REACH, 0.8);
+    }
+
+    #[test]
+    fn a_missile_unsuitable_for_an_agile_target_is_out_of_reach() {
+        let (mut chaser, mut target) = chase(1.0);
+        let (armament, rounds) = missile();
+        chaser.armament = armament;
+        chaser.rounds = rounds;
+        target.state.position = Vec2::new(0.0, -100.0);
+        target.handling.turn_rate = 3.99;
+        assert!(!hopeless(&chaser, target), "slow enough");
+        target.handling.turn_rate = 4.0;
+        assert!(hopeless(&chaser, target), "its 0 turn is too slow");
+        let mut agile = chaser.armament.mounts()[0].spec;
+        agile.turn = 2.1;
+        chaser.armament = Armament::new([(agile, 1)]);
+        assert!(!hopeless(&chaser, target), "it turns enough");
     }
 
     #[test]

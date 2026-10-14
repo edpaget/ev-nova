@@ -36,10 +36,15 @@
 //!   cloaked target unless it carries one with bit 0x0008
 //!   (`_ShipCanTargetCloakedShips` @0x811e7-0x811fd); the player counts
 //!   its own ship type's bit ([`PlayerSide::untargetable`]) and never
-//!   cloaks. Then the first homing weapon that has its ammunition and
-//!   whose range squared is at least [`MISSILE_RANGE`] of the distance
-//!   squared (@0x8126b-0x8132b), fired only if it has reloaded
-//!   (@0x81349-0x8135d): one reloading does not give way to a later one.
+//!   cloaks. Then, of the homing weapons it carries, the one of lowest
+//!   weapon ID (the walk by weapon index, @0x81267-0x8133a) that suits
+//!   the target ([`suitable_missile`], @0x812ab), is a planet-type weapon
+//!   (`Flags2` 0x0400) exactly when the target's ship type is planet-type
+//!   (`Flags` 0x0400, @0x812b4-0x812fb), has its ammunition ([`has_ammo`],
+//!   @0x81307) and whose range squared is at least [`MISSILE_RANGE`] of
+//!   the distance squared (@0x81310-0x8132b), fired only if it has
+//!   reloaded (@0x81349-0x8135d): one reloading does not give way to a
+//!   later one.
 //! - **By manoeuvre**, a later pick overriding an earlier: approaching,
 //!   a gun, then a turret (each while facing within [`GUN_FACING`] times
 //!   the turn rate of the heading it wants), then a missile (within
@@ -56,12 +61,13 @@
 //! # Not modelled
 //!
 //! The difficulty reload multiplier against the player. In
-//! `_AIFireMissile`: `_SufficentTargetedDamage` (@0x81215), the
-//! weapon's `_SuitableMissileType` (@0x812ab), the match of the weapon's
-//! flag 0x0400 (wëap +0x22) against the target's ship type's `Flags`
-//! 0x0400 (@0x812b4-0x812fb), the rest of `_WeaponHasAmmo` beyond
-//! ammunition and fuel (@0x81307), and its walk in weapon-table order
-//! rather than mount order. In `_AIFireTurret`'s preamble,
+//! `_AIFireMissile`: `_SufficentTargetedDamage` (@0x81215). An NPC's
+//! rounds kept on each launcher, as `_WeaponHasAmmo` reads them
+//! (@0xbab4-0xbac2): here they are kept by ammunition (rdm phase
+//! player-led-ships/phase-33). `_ShipTurnRate`'s own factors, which
+//! [`suitable_missile`] reads through the target's turn rate (rdm
+//! system-traffic-fidelity/phase-17-npc-skill-and-speed-factors). In
+//! `_AIFireTurret`'s preamble,
 //! `_ShipVisibleToShip` (@0x80b69), which keeps a turret off a target its
 //! shooter does not see, and the call of `_HandleShipPointDefense`
 //! (@0x80b0d) from there rather than every tick (point defence itself is
@@ -69,6 +75,11 @@
 //! @0x80afa, fires nothing in [`Armament::fire`]). rdm phases
 //! player-led-ships/phase-23-ai-fire-missile-rest and
 //! player-led-ships/phase-24-ai-fire-turret-sight take them.
+//!
+//! Every weapon an NPC picks, and every destroying weapon it counts, has
+//! its ammunition as `_WeaponHasAmmo` says ([`has_ammo`]): an NPC never
+//! picks a weapon of `Flags2` 0x0100, and a cloaked one only a weapon of
+//! `Flags2` 0x4000.
 
 #[cfg(doc)]
 use crate::ai::PlayerSide;
@@ -80,7 +91,7 @@ use crate::combat::aim::{FRONT_ARC, angle_off, bearing, blind, lead};
 use crate::combat::armament::Armament;
 use crate::combat::armament::{Mount, Shooter, Trigger};
 use crate::combat::projectile::Target;
-use crate::combat::weapon::{Ammo, Guidance, WeaponSpec};
+use crate::combat::weapon::{AVOIDS_FAST_SHIPS, Ammo, Guidance, WeaponSpec};
 use crate::flight::ShipState;
 use crate::traffic::npc::Npc;
 
@@ -103,6 +114,13 @@ pub const MISSILE_FACING: f32 = 4.0;
 pub const MISSILE_RANGE: f32 = 0.95;
 /// `Flags2`: a weapon that does not destroy.
 pub const NOT_DESTROYING: u16 = 0x1000;
+/// The whole degrees a tick a target must turn more than for a slow or
+/// flagged missile to be unsuitable for it (the immediate 3 @0x3512 and
+/// @0x3526).
+pub const FAST_TARGET_TURN: f32 = 3.0;
+/// The guided turn, in degrees a tick, at or below which a missile is
+/// unsuitable for a fast target (2.0 @0xdd074).
+pub const SLOW_MISSILE_TURN: f32 = 2.0;
 
 /// How an NPC flies its fight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,6 +228,25 @@ pub fn has_ammo(npc: &Npc, mount: &Mount) -> bool {
         .has_ammo(mount, &npc.rounds, npc.reserves.fuel, shooter)
 }
 
+/// Whether a missile of `spec` suits a target turning `target_turn_rate`
+/// degrees a tick (`_SuitableMissileType` @0x34e1-0x353a): not when the
+/// target turns more than [`FAST_TARGET_TURN`] whole degrees a tick and the
+/// missile either won't fire at fast ships
+/// ([`AVOIDS_FAST_SHIPS`](crate::combat::weapon::AVOIDS_FAST_SHIPS)) or
+/// turns [`SLOW_MISSILE_TURN`] or less.
+///
+/// The original asks `_ShipTurnRate` of the target, whose factors (the
+/// tractor's, the nag ship's, the floor and ionization) are rdm
+/// system-traffic-fidelity/phase-17-npc-skill-and-speed-factors's; here
+/// the target's [`Handling::turn_rate`](crate::handling::Handling) stands
+/// in for it.
+#[must_use]
+pub fn suitable_missile(spec: &WeaponSpec, target_turn_rate: f32) -> bool {
+    let fast = target_turn_rate.trunc() > FAST_TARGET_TURN;
+    let slow = spec.flags & AVOIDS_FAST_SHIPS != 0 || spec.turn <= SLOW_MISSILE_TURN;
+    !(fast && slow)
+}
+
 /// Whether `npc` holds a destroying weapon (see the module docs).
 #[must_use]
 pub fn destroys(npc: &Npc) -> bool {
@@ -298,6 +335,15 @@ fn pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
             (other.cloak_gear.untargetable(), other.cloak.is_cloaked())
         }),
     };
+    let (turn_rate, planet_type) = match ship {
+        ShipRef::Player => around
+            .player
+            .map(|player| (player.handling.turn_rate, player.hull.planet_type)),
+        ShipRef::Npc(id) => around
+            .npc(id)
+            .map(|other| (other.stats.handling.turn_rate, other.hull.planet_type)),
+    }
+    .unwrap_or_default();
     let manoeuvre = manoeuvre(npc.goal, &npc.state, &at)?;
     let off = angle_off(npc.state.heading, wanted_heading(npc, &at));
     let facing = |turns: f32| off <= turns * npc.stats.handling.turn_rate;
@@ -307,6 +353,8 @@ fn pick(npc: &Npc, around: &Surroundings) -> Option<WeaponId> {
         shields_up,
         untargetable,
         cloaked,
+        turn_rate,
+        planet_type,
     };
     let gun = || facing(GUN_FACING).then(|| sight.gun()).flatten();
     let turret = || sight.turret();
@@ -332,6 +380,10 @@ struct Sight<'a> {
     untargetable: bool,
     /// Whether the target is cloaked.
     cloaked: bool,
+    /// The target's turn rate, in degrees a tick.
+    turn_rate: f32,
+    /// Whether the target's ship type is planet-type.
+    planet_type: bool,
 }
 
 impl Sight<'_> {
@@ -443,12 +495,16 @@ impl Sight<'_> {
             .armament
             .mounts()
             .iter()
-            .find(|mount| {
-                let range = mount.spec.range();
-                mount.spec.guidance == Guidance::Homing
+            .filter(|mount| {
+                let spec = &mount.spec;
+                let range = spec.range();
+                spec.guidance == Guidance::Homing
+                    && suitable_missile(spec, self.turn_rate)
+                    && spec.planet_type() == self.planet_type
                     && has_ammo(self.npc, mount)
                     && range * range >= MISSILE_RANGE * distance
             })
+            .min_by_key(|mount| mount.spec.id)
             .filter(|mount| mount.reload <= 0.0)
             .map(|mount| mount.spec.id)
     }
@@ -464,6 +520,7 @@ mod tests {
     use crate::catalog::{WeaponId, WeaponRecord};
     use crate::combat::armament::Armament;
     use crate::combat::hull::{Condition, HullSpec};
+    use crate::combat::weapon::AVOIDS_FAST_SHIPS;
     use crate::geometry::Vec2;
     use crate::reserves::Reserves;
     use crate::stats::ShipStats;
@@ -1193,6 +1250,143 @@ mod tests {
     /// `record` with `flags2`.
     fn with_flags2(record: WeaponRecord, flags2: u16) -> WeaponRecord {
         WeaponRecord { flags2, ..record }
+    }
+
+    /// A homing missile of `id` like [`missile`], turning `guided_turn`
+    /// tenths of a degree a tick, with `flags`.
+    fn turning_missile(id: i16, guided_turn: i16, flags: u16) -> WeaponRecord {
+        WeaponRecord {
+            flags,
+            guided_turn,
+            ..missile(id)
+        }
+    }
+
+    /// What `npc` fires at the player (`x`, `y`) from [`SHOOTER`], its
+    /// shields up, as `player` makes it.
+    fn fired_at_player(
+        npc: &Npc,
+        x: f32,
+        y: f32,
+        player: impl Fn(&mut PlayerSide),
+    ) -> Option<WeaponId> {
+        let npcs = [npc.clone()];
+        let mut side = player_at(SHOOTER.x + x, SHOOTER.y + y, 50.0);
+        player(&mut side);
+        let around = Surroundings {
+            player: Some(side),
+            ..Surroundings::new(&[], &npcs)
+        };
+        trigger(npc, &around).only
+    }
+
+    #[test]
+    fn a_missile_is_unsuitable_for_a_target_turning_over_3_if_it_turns_2_or_less_or_is_flagged() {
+        let spec = |guided_turn, flags| WeaponSpec::new(&turning_missile(131, guided_turn, flags));
+        let table = [
+            // (GuidedTurn, Flags, the target's turn, suitable)
+            (20, 0, 4.0, false),
+            (20, 0, 3.99, true),
+            (20, 0, 3.0, true),
+            (21, 0, 4.0, true),
+            (21, 0, 40.0, true),
+            (0, 0, 4.0, false),
+            (70, AVOIDS_FAST_SHIPS, 4.0, false),
+            (70, AVOIDS_FAST_SHIPS, 3.99, true),
+            (70, 0, 4.0, true),
+            (70, !AVOIDS_FAST_SHIPS, 4.0, true),
+        ];
+        for (guided_turn, flags, turn, suitable) in table {
+            assert_eq!(
+                suitable_missile(&spec(guided_turn, flags), turn),
+                suitable,
+                "{guided_turn} {flags:#x} at {turn}"
+            );
+        }
+        assert_eq!((FAST_TARGET_TURN, SLOW_MISSILE_TURN), (3.0, 2.0));
+        assert_eq!(AVOIDS_FAST_SHIPS, 0x0008);
+    }
+
+    #[test]
+    fn a_slow_or_flagged_missile_is_not_fired_at_an_agile_target() {
+        let turning = |rate: f32| move |player: &mut PlayerSide| player.handling.turn_rate = rate;
+        let emp = shooter(&[short(128), turning_missile(131, 20, 0)], ATTACK);
+        assert_eq!(fired_at_player(&emp, 0.0, -300.0, turning(4.0)), None);
+        assert_eq!(fired_at_player(&emp, 0.0, -300.0, turning(3.0)), id(131));
+        let flagged = shooter(
+            &[short(128), turning_missile(131, 70, AVOIDS_FAST_SHIPS)],
+            ATTACK,
+        );
+        assert_eq!(fired_at_player(&flagged, 0.0, -300.0, turning(4.0)), None);
+        assert_eq!(
+            fired_at_player(&flagged, 0.0, -300.0, turning(3.0)),
+            id(131)
+        );
+        let both = shooter(
+            &[
+                short(128),
+                turning_missile(131, 20, 0),
+                turning_missile(132, 70, 0),
+            ],
+            ATTACK,
+        );
+        assert_eq!(
+            fired_at_player(&both, 0.0, -300.0, turning(4.0)),
+            id(132),
+            "the suitable one"
+        );
+        let agile = |other: &mut Npc| other.stats.handling.turn_rate = 4.0;
+        assert_eq!(fired_at_npc(&emp, 0.0, -300.0, agile), None, "an NPC");
+        assert_eq!(fired_at_npc(&emp, 0.0, -300.0, |_| {}), id(131));
+    }
+
+    #[test]
+    fn a_planet_type_missile_flies_only_at_a_planet_type_ship_and_another_only_at_another() {
+        use crate::combat::weapon::PLANET_TYPE;
+        let planet = |player: &mut PlayerSide| player.hull.planet_type = true;
+        let ordinary = shooter(&[short(128), missile(131)], ATTACK);
+        assert_eq!(fired_at_player(&ordinary, 0.0, -300.0, |_| {}), id(131));
+        assert_eq!(fired_at_player(&ordinary, 0.0, -300.0, planet), None);
+        let planetary = shooter(
+            &[short(128), with_flags2(missile(131), PLANET_TYPE)],
+            ATTACK,
+        );
+        assert_eq!(fired_at_player(&planetary, 0.0, -300.0, planet), id(131));
+        assert_eq!(fired_at_player(&planetary, 0.0, -300.0, |_| {}), None);
+        let planet_npc = |other: &mut Npc| other.hull.planet_type = true;
+        assert_eq!(fired_at_npc(&planetary, 0.0, -300.0, planet_npc), id(131));
+        assert_eq!(fired_at_npc(&ordinary, 0.0, -300.0, planet_npc), None);
+    }
+
+    #[test]
+    fn the_missile_of_lowest_weapon_id_is_taken_and_its_reload_does_not_give_way() {
+        let npc = shooter(&[short(128), missile(132), missile(131)], ATTACK);
+        assert_eq!(fired(&npc, 0.0, -300.0, 50.0), id(131));
+        let slow = WeaponRecord {
+            reload: 10,
+            ..missile(131)
+        };
+        let mut reloading = shooter(&[short(128), missile(132), slow], ATTACK);
+        let mut fuel = reloading.reserves.fuel;
+        reloading.armament.fire(
+            Trigger {
+                only: Some(WeaponId(131)),
+                ..Trigger::default()
+            },
+            Condition::Intact,
+            crate::combat::armament::Shooter::PLAYER,
+            &mut BTreeMap::new(),
+            &mut fuel,
+            &mut crate::chance::NeverFires,
+            &mut crate::combat::report::Reports::default(),
+            &mut |_| {
+                Some(crate::combat::aim::Aim {
+                    heading: 0.0,
+                    target: None,
+                })
+            },
+        );
+        assert_eq!(fired(&reloading, 0.0, -300.0, 50.0), None);
     }
 
     #[test]
