@@ -31,7 +31,8 @@
 //! tick ([`Traffic::tick_in`]) in its [`World`] (the stellars, the player,
 //! the governments and the player's legal record there), in order:
 //!
-//! 1. the arrival roll, while fewer NPCs than `AvgShips` that are not the
+//! 1. the arrivals pass ([`Traffic::enter_more_ships`]): the arrival
+//!    roll, while fewer NPCs than `AvgShips` that are not the
 //!    player's ([`Npc::is_players`]) nor its mission escorts are in the
 //!    system, each arrival coming out of one of the world's stellars
 //!    ([`emerge`]) or by hyperspace, then the escort-strength timer's tick ([`strength`]):
@@ -379,19 +380,7 @@ impl Traffic {
         strikes: &[Strike],
         chance: &mut (impl Chance + ?Sized),
     ) {
-        let mut draw = PersonDraw {
-            world: world.persons,
-            here: self.person_names(),
-        };
-        let arrivals = spawn::arrivals(
-            &self.table,
-            self.strangers(),
-            &mut draw,
-            world.stellars(),
-            chance,
-        );
-        self.add(arrivals, world.persons.grudges);
-        self.escort_strength(&world, draw.world.gate(), chance);
+        self.enter_more_ships(world, chance);
         self.react(behaviour, &world, strikes);
         for npc in &mut self.npcs {
             if npc.condition != Condition::Intact {
@@ -453,6 +442,38 @@ impl Traffic {
         let mut flying = outcomes.iter().map(|outcome| *outcome == Outcome::Flying);
         self.npcs.retain(|_| flying.next().unwrap_or(false));
         self.ticks += 1;
+    }
+
+    /// The traffic's part of one `_EnterMoreShips` pass in `world`,
+    /// rolling on `chance`: the arrival roll while the system is below
+    /// its `AvgShips` (@0x43b14-0x43c01), then the escort-strength
+    /// timer's tick (@0x43d1a-0x43dd7), as step 1 of the module docs
+    /// says. No NPC reacts, decides or moves, none departs, and no tick
+    /// is counted. The original runs the pass once a frame
+    /// (`_DoPlayGameWork` @0x44237), here first in each
+    /// [`Traffic::tick_in`], and once more on a hypergate or wormhole
+    /// exit, before the first frame (`_HandlePlayerDockRequest`
+    /// @0x672f2), which its session runs.
+    ///
+    /// Two steps of the pass are left out: the stellar defence respawn
+    /// between them (@0x43c45-0x43d10, `_SpawnStellarDefenseShip`
+    /// @0x43c11), as no stellar holds defence ships here, and
+    /// `_SpawnNagShip` (@0x43d15), the shareware nag. The pass's
+    /// mission-slot loop (@0x434a2-0x43b0e) is its session's.
+    pub fn enter_more_ships(&mut self, world: World, chance: &mut (impl Chance + ?Sized)) {
+        let mut draw = PersonDraw {
+            world: world.persons,
+            here: self.person_names(),
+        };
+        let arrivals = spawn::arrivals(
+            &self.table,
+            self.strangers(),
+            &mut draw,
+            world.stellars(),
+            chance,
+        );
+        self.add(arrivals, world.persons.grudges);
+        self.escort_strength(&world, draw.world.gate(), chance);
     }
 
     /// Flies every NPC a tick in `world` ([`autopilot::fly`]), each towards
@@ -3463,5 +3484,57 @@ mod tests {
         assert_eq!(traffic.npcs(), []);
         ticked(&mut traffic, &escorted(60), 1);
         assert_eq!(traffic.npcs().len(), 1, "on the 31st tick in all");
+    }
+
+    // The arrivals pass.
+
+    #[test]
+    fn the_arrivals_pass_brings_its_arrival_then_the_strength_fleet() {
+        // An empty system of AvgShips 1, so the arrival is rolled; the
+        // timer at 0.
+        let mut traffic = armed(0, 0);
+        traffic.retarget(strong(1), &BTreeSet::new());
+        ticked(&mut traffic, &escorted(60), 30);
+        assert_eq!(traffic.npcs(), []);
+        let mut chance = Draws::of(&[0, 6, 6, 0, 0, 90]);
+        traffic.enter_more_ships(escorted(60), &mut chance);
+        assert_eq!(
+            ships_of(&traffic),
+            [
+                (ShipId(200), Some(GovtId(130)), AiType::WimpyTrader),
+                (ShipId(200), Some(GovtId(131)), AiType::Interceptor),
+            ],
+            "the arrival of düde 128, then fleet 382's lead"
+        );
+    }
+
+    #[test]
+    fn the_arrivals_pass_moves_no_npc_and_counts_no_tick() {
+        // At its AvgShips: no arrival.
+        let mut traffic = populated(1, 2);
+        traffic.npcs[0].state.velocity = Vec2::new(3.0, -1.0);
+        let before = traffic.npcs()[0].clone();
+        traffic.enter_more_ships(World::new(&[]), &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs(), [before], "not moved");
+        assert_eq!(traffic.departed(), []);
+        // NPC 0 decides on tick 0 of every 2: still due after the pass.
+        let behaviour = Recording::deciding(Goal::Idle);
+        traffic.tick_in(&behaviour, World::new(&[]), &[], &mut Draws::of(&[]));
+        assert_eq!(behaviour.take(), [NpcId(0)], "no tick counted");
+    }
+
+    #[test]
+    fn the_arrivals_pass_counts_the_strength_timer_down_as_a_tick_does() {
+        // Armed at 30, then 29 ticks: at 1.
+        let mut traffic = armed(0, 0);
+        ticked(&mut traffic, &escorted(60), 29);
+        traffic.enter_more_ships(escorted(60), &mut Draws::of(&[]));
+        assert_eq!(traffic.npcs(), [], "at 0");
+        ticked(&mut traffic, &escorted(60), 1);
+        assert_eq!(
+            ships_of(&traffic),
+            [(ShipId(200), Some(GovtId(131)), AiType::Interceptor)],
+            "fired on the tick after the pass"
+        );
     }
 }
