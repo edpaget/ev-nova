@@ -15,6 +15,19 @@
 //! nothing; a disabled one counts. When the clock goes off,
 //! [`SimSound::OnboardExplosion`] sounds (@0x69375).
 //!
+//! **A kill outfit** ([`Sabotage::Kill`], @0x69384-0x696a2) sets the
+//! player's armour, shield and jump timer to -1.0 (@0x693a0-0x693a6): the
+//! fight that follows on the same tick finds the armour gone and starts
+//! the ordinary breakup, and a pre-jump is given up. The jump's
+//! hyperspace stage can't be cancelled, as the engine never ticks the
+//! clock through it (see the `sabotage` module's left-out list). It then
+//! halts the warp-up sounds ([`WARP_UP_HALTS`], @0x695ea, @0x6960d), and
+//! the comm line names the first owned kill outfit with a name for its
+//! count ([`kill_notice`]), or none, for 360 ticks
+//! ([`SimMessage::Sabotaged`], @0x6969d). Nothing is removed and nothing
+//! refreshes, so the flag stays set; the player dies, and a dying player
+//! counts nothing, so the outfit goes off once.
+//!
 //! *Ordering against the original.* The block runs after
 //! [`Session::tick`]'s steering in the same step, where the original runs
 //! it before the steering: a difference inside a frame, which crosses no
@@ -24,8 +37,9 @@ use super::Session;
 use crate::chance::Chance;
 use crate::combat::Rules;
 use crate::combat::hull::Condition;
-use crate::sabotage::Sabotage;
-use crate::sound::SimSound;
+use crate::message::SimMessage;
+use crate::sabotage::{Sabotage, kill_notice};
+use crate::sound::{SimSound, WARP_UP_HALTS};
 
 impl Session {
     /// The `dësc` IDs the player sees as it dies, from the outfits it
@@ -56,8 +70,23 @@ impl Session {
         };
         self.sounds.push(SimSound::OnboardExplosion);
         match flag {
-            Sabotage::Kill | Sabotage::Bomb | Sabotage::None => {}
+            Sabotage::Kill => self.sabotage_kill(),
+            Sabotage::Bomb | Sabotage::None => {}
         }
+    }
+
+    /// A kill outfit goes off (`_HandlePlayer` @0x69384-0x696a2; see the
+    /// module docs' **A kill outfit**).
+    fn sabotage_kill(&mut self) {
+        let reserves = &mut self.pilot.reserves;
+        reserves.armor.now = -1.0;
+        reserves.shield.now = -1.0;
+        if matches!(self.jump, Some(super::Jump::PreJump { .. })) {
+            self.jump = None;
+        }
+        let outfit = kill_notice(&self.pilot.outfits, &self.outfits);
+        self.sounds.push(SimSound::Halt(&WARP_UP_HALTS));
+        self.messages.push(SimMessage::Sabotaged { outfit });
     }
 }
 
@@ -66,10 +95,13 @@ impl Session {
 pub(super) mod tests {
     use super::*;
     use crate::catalog::OutfitId;
+    use crate::catalog::{SoundId, SystemId};
+    use crate::combat::{CombatEvent, ShipRef};
     use crate::pilot::Pilot;
+    use crate::sabotage::FUSE;
     use crate::sabotage::{SABOTAGE_BOMB, SABOTAGE_KILL};
     use crate::session::tests::{armed, facing_an_npc};
-    use crate::testkit::{Draws, FakePilotCatalog, land_now, outfit};
+    use crate::testkit::{Draws, FakePilotCatalog, fly_out, land_now, outfit};
 
     /// A kill outfit and a bomb outfit.
     pub(in crate::session) const KILL: i16 = 261;
@@ -233,5 +265,124 @@ pub(super) mod tests {
             let sounds = fight(&mut session, &[]);
             assert_eq!(sounds.first(), Some(&SimSound::OnboardExplosion), "{id}");
         }
+    }
+
+    /// `catalog`'s pilot owning `outfits`, flown, its clock seeded and
+    /// at the fuse: the next fight tick sets it off.
+    pub(in crate::session) fn lit(catalog: &FakePilotCatalog, outfits: &[(i16, u16)]) -> Session {
+        let mut session = flown(catalog, outfits);
+        fight(&mut session, &[0]);
+        session.sabotage.set_counter(FUSE);
+        session.take_messages();
+        session.take_combat_events();
+        session
+    }
+
+    #[test]
+    fn a_kill_outfit_breaks_the_player_up_on_the_firing_tick() {
+        let catalog = sabotaged();
+        let mut session = lit(&catalog, &[(KILL, 1)]);
+        let sounds = fight(&mut session, &[]);
+        assert!(
+            matches!(session.condition, Condition::Dying { starting: true, .. }),
+            "{:?}",
+            session.condition
+        );
+        let reserves = session.pilot.reserves;
+        assert_eq!((reserves.shield.now, reserves.armor.now), (-1.0, -1.0));
+        assert!(session.take_combat_events().iter().any(|event| matches!(
+            event,
+            CombatEvent::BreakingUp {
+                ship: ShipRef::Player,
+                ..
+            }
+        )));
+        assert!(!sounds.contains(&SimSound::Klaxon), "{sounds:?}");
+    }
+
+    #[test]
+    fn a_kill_outfit_cancels_a_pre_jump() {
+        let catalog = sabotaged();
+        let mut session = lit(&catalog, &[(KILL, 1)]);
+        session.plot_course(SystemId(131)).expect("a route");
+        fly_out(&mut session);
+        session.begin_jump().expect("jumps");
+        assert!(matches!(
+            session.jump,
+            Some(super::super::Jump::PreJump { .. })
+        ));
+        fight(&mut session, &[]);
+        assert_eq!(session.jump, None);
+    }
+
+    #[test]
+    fn a_kill_outfit_raises_snd_300_then_halts_128_and_129_only() {
+        let catalog = sabotaged();
+        let mut session = lit(&catalog, &[(KILL, 1)]);
+        assert_eq!(
+            fight(&mut session, &[]),
+            [
+                SimSound::OnboardExplosion,
+                SimSound::Halt(&[SoundId(128), SoundId(129)])
+            ]
+        );
+    }
+
+    #[test]
+    fn a_kill_outfit_names_the_first_owned_kill_outfit_for_360_ticks() {
+        let mut catalog = sabotaged();
+        catalog.outfits.push(outfit(260, &[(SABOTAGE_KILL, 0)]));
+        for (count, one) in [(1, true), (2, false)] {
+            let mut session = lit(&catalog, &[(KILL, 1), (260, count)]);
+            fight(&mut session, &[]);
+            let messages = session.take_messages();
+            assert_eq!(
+                messages,
+                [SimMessage::Sabotaged {
+                    outfit: Some((OutfitId(260), one))
+                }]
+            );
+            assert_eq!(messages[0].ticks(), 360);
+        }
+    }
+
+    #[test]
+    fn a_kill_outfit_with_no_named_outfit_says_a_bomb_has_exploded() {
+        let mut catalog = sabotaged();
+        for record in &mut catalog.outfits {
+            record.lc_name.clear();
+        }
+        let mut session = lit(&catalog, &[(KILL, 1)]);
+        fight(&mut session, &[]);
+        assert_eq!(
+            session.take_messages(),
+            [SimMessage::Sabotaged { outfit: None }]
+        );
+    }
+
+    #[test]
+    fn a_kill_outfit_stays_owned_and_the_flag_stays_set() {
+        let catalog = sabotaged();
+        let mut session = lit(&catalog, &[(KILL, 1)]);
+        fight(&mut session, &[]);
+        assert_eq!(session.pilot.outfits.get(&OutfitId(KILL)), Some(&1));
+        assert_eq!(session.sabotage.flag(), Sabotage::Kill);
+        assert_eq!(session.sabotage.counter(), 301.0);
+    }
+
+    #[test]
+    fn a_kill_outfit_fires_once() {
+        let catalog = sabotaged();
+        let mut session = lit(&catalog, &[(KILL, 1)]);
+        fight(&mut session, &[]);
+        let mut ticks = 0;
+        while session.condition != Condition::Destroyed {
+            let sounds = fight(&mut session, &[]);
+            assert!(!sounds.contains(&SimSound::OnboardExplosion), "{sounds:?}");
+            ticks += 1;
+            assert!(ticks < 1000, "never destroyed");
+        }
+        let sounds = fight(&mut session, &[]);
+        assert!(!sounds.contains(&SimSound::OnboardExplosion), "{sounds:?}");
     }
 }

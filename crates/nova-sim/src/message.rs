@@ -89,6 +89,16 @@ pub enum SimMessage {
         /// The escape ship's class.
         ship: ShipId,
     },
+    /// A sabotage kill outfit went off aboard the player's ship
+    /// (`_HandlePlayer` @0x693c8-0x6969d): "Your" (`STR#` 2002 #39), the
+    /// outfit's `LCName` and "has exploded!" (#40) for one, its
+    /// `LCPlural` and "have exploded!" (#41) for more; "A bomb has
+    /// exploded onboard your ship!" (#38) with no outfit named.
+    Sabotaged {
+        /// The outfit named, and whether the player owns exactly one
+        /// (see [`kill_notice`](crate::sabotage::kill_notice)).
+        outfit: Option<(OutfitId, bool)>,
+    },
 }
 
 impl SimMessage {
@@ -118,10 +128,11 @@ impl SimMessage {
     ///   @0x33ba1).
     /// - [`EscapingIn`](Self::EscapingIn): 512 (`_HandlePlayer`
     ///   @0x6f62a).
+    /// - [`Sabotaged`](Self::Sabotaged): 360 (`_HandlePlayer` @0x6969d).
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
-            Self::ExitedHypergate(_) => 360,
+            Self::ExitedHypergate(_) | Self::Sabotaged { .. } => 360,
             Self::MissionScanned
             | Self::Smuggling { .. }
             | Self::IllegalJunk { .. }
@@ -164,6 +175,13 @@ mod tests {
             (SimMessage::EscortRepaired, 250),
             (SimMessage::FighterRepaired, 250),
             (SimMessage::EscapingIn { ship: ShipId(144) }, 512),
+            (SimMessage::Sabotaged { outfit: None }, 360),
+            (
+                SimMessage::Sabotaged {
+                    outfit: Some((OutfitId(261), false)),
+                },
+                360,
+            ),
             (
                 SimMessage::IllegalJunk {
                     scanner: ShipId(128),

@@ -104,7 +104,7 @@
 //! being warmed up is given up (+0x50 = 0, @0x6f962), the condition is
 //! intact again (the death timer -1.0, @0x6f969), the engine glow goes
 //! out, and [`SimSound::Ejected`] sounds, then a [`SimSound::Halt`] of
-//! [`EJECT_HALTS`] (@0x6f920-0x6f95a).
+//! [`WARP_UP_HALTS`] (@0x6f920-0x6f95a).
 //!
 //! Nothing is saved: the original saves no pilot at an eject, so the
 //! eject leaves whether a save is due as it found it, though the class
@@ -139,7 +139,7 @@ use crate::player_fate::{POD_TICKS, PlayerCommand};
 use crate::reserves::shield_points;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::ship_change::{OutfitCarry, carried_outfits};
-use crate::sound::{EJECT_HALTS, SimSound};
+use crate::sound::{SimSound, WARP_UP_HALTS};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 use crate::traffic::table;
 
@@ -270,7 +270,7 @@ impl Session {
         self.condition = Condition::Intact;
         self.stop_thrust();
         self.sounds.push(SimSound::Ejected);
-        self.sounds.push(SimSound::Halt(&EJECT_HALTS));
+        self.sounds.push(SimSound::Halt(&WARP_UP_HALTS));
         self.save_due = save_due;
     }
 
@@ -608,7 +608,7 @@ mod tests {
         (session.take_sounds(), session.take_combat_events())
     }
 
-    const EJECTED: [SimSound; 2] = [SimSound::Ejected, SimSound::Halt(&EJECT_HALTS)];
+    const EJECTED: [SimSound; 2] = [SimSound::Ejected, SimSound::Halt(&WARP_UP_HALTS)];
 
     fn in_the_pod(session: &Session) -> bool {
         session.pilot.ship == ESCAPE_POD_SHIP && session.pod.is_some()
@@ -1129,6 +1129,29 @@ mod tests {
             assert_eq!(session.pod, None);
             assert_eq!(hulk(&session).ship, ShipId(128));
         }
+    }
+
+    #[test]
+    fn a_kill_outfit_with_auto_eject_ejects_on_the_firing_tick() {
+        use crate::sabotage::{FUSE, SABOTAGE_KILL};
+        const KILLER: i16 = 303;
+        let mut catalog = ejecting(100);
+        catalog.outfits.push(outfit(KILLER, &[(SABOTAGE_KILL, 0)]));
+        let mut session = flying(&catalog, &[POD, AUTO, KILLER]);
+        session.refresh_blessing();
+        fight(&mut session, false);
+        session.sabotage.set_counter(FUSE);
+        let (sounds, _) = fight(&mut session, false);
+        assert!(in_the_pod(&session), "{:?}", session.condition);
+        assert_eq!(
+            sounds,
+            [
+                SimSound::OnboardExplosion,
+                SimSound::Halt(&WARP_UP_HALTS),
+                SimSound::Ejected,
+                SimSound::Halt(&WARP_UP_HALTS),
+            ]
+        );
     }
 
     #[test]

@@ -67,14 +67,15 @@ pub enum SimSound {
     /// Each named `snd ` is halted if it is playing, as the original asks
     /// `ST_IsSoundPlaying` and then calls `ST_HaltSound`: every instance
     /// of it, on any channel. The player's final explosion raises it with
-    /// [`PLAYER_EXPLOSION_HALTS`]; the `player-death` roadmap's phases 11
-    /// and 14 raise it with 128 and 129.
+    /// [`PLAYER_EXPLOSION_HALTS`]; the eject and a sabotage kill outfit
+    /// going off with [`WARP_UP_HALTS`], 128 and 129, as the `player-death`
+    /// roadmap's phase 14 will.
     Halt(&'static [SoundId]),
     /// The player ejected from its disabled or dying ship, into the escape
     /// pod or an escape ship: `_escapePodSnd`, `snd ` 372 "Eject"
     /// (`_LoadSounds` @0x1c240-0x1c252), played by `PlaySound` with no
     /// test of whether it is playing (`_HandlePlayer` @0x6f920). A
-    /// [`SimSound::Halt`] of [`EJECT_HALTS`] follows it.
+    /// [`SimSound::Halt`] of [`WARP_UP_HALTS`] follows it.
     Ejected,
     /// A sabotage outfit went off aboard the player's ship: `_explodSnd[0]`,
     /// `snd ` 300 (`_LoadSounds`' loop from 0x1c200 loads `snd ` 300-363),
@@ -83,10 +84,11 @@ pub enum SimSound {
     OnboardExplosion,
 }
 
-/// The sounds the player's eject halts, in order, after its
-/// [`SimSound::Ejected`]: the warp-up sounds `_warpUpSnd[0]` and `[1]`,
-/// `snd ` 128 and 129 (`_HandlePlayer` @0x6f925-0x6f95a).
-pub const EJECT_HALTS: [SoundId; 2] = [SoundId(128), SoundId(129)];
+/// The warp-up sounds `_warpUpSnd[0]` and `[1]`, `snd ` 128 and 129
+/// (loaded @0x1c12f-0x1c14f), in the order the player's eject halts them
+/// after its [`SimSound::Ejected`] (`_HandlePlayer` @0x6f925-0x6f95a), and
+/// a sabotage kill outfit halts them as it goes off (@0x695ea, @0x6960d).
+pub const WARP_UP_HALTS: [SoundId; 2] = [SoundId(128), SoundId(129)];
 
 /// The sounds the player's final explosion halts, in order:
 /// `_HandleShipDisplay`, for the player only (`cmpw $0x0,0x86(%edi)`

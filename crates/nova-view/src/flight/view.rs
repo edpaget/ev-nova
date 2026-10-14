@@ -613,6 +613,28 @@ pub const FIGHTER_REPAIRED: &str = "Fighter repaired.";
 /// `STR#` 2002 #52: the player ejected into an escape ship, whose long
 /// name follows (`_HandlePlayer` @0x6f595-0x6f5a8).
 pub const ESCAPING_IN: &str = "Escaping in";
+/// `STR#` 2002 #38: a sabotage kill outfit went off with none named
+/// (`_HandlePlayer` @0x69645-0x6965e).
+pub const BOMB_EXPLODED_ONBOARD: &str = "A bomb has exploded onboard your ship!";
+/// `STR#` 2002 #39: what comes before a sabotage outfit that went off.
+pub const YOUR: &str = "Your";
+/// `STR#` 2002 #40: what follows one sabotage outfit that went off.
+pub const HAS_EXPLODED: &str = "has exploded!";
+/// `STR#` 2002 #41: what follows several.
+pub const HAVE_EXPLODED: &str = "have exploded!";
+
+/// What the message line says as sabotage outfits go off, as
+/// `_HandlePlayer` builds it (@0x6940b-0x69578, @0x69701-0x69871): "Your",
+/// a space, `lc_name` and "has exploded!" for `one`, else `lc_plural`
+/// and "have exploded!".
+#[must_use]
+pub fn exploded_message(one: bool, lc_name: &str, lc_plural: &str) -> String {
+    if one {
+        format!("{YOUR} {lc_name} {HAS_EXPLODED}")
+    } else {
+        format!("{YOUR} {lc_plural} {HAVE_EXPLODED}")
+    }
+}
 
 /// `STR#` 2002 #286: a scan found a mission's cargo and failed it.
 pub const MISSION_SCANNED: &str = "Your ship has been scanned - mission failed.";
@@ -719,6 +741,13 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
             // (@0x6f5ad-0x6f5f3).
             let name = session.ship_long_name(*ship).unwrap_or_default();
             return Some(format!("{ESCAPING_IN} {name}."));
+        }
+        SimMessage::Sabotaged { outfit: None } => BOMB_EXPLODED_ONBOARD,
+        SimMessage::Sabotaged {
+            outfit: Some((outfit, one)),
+        } => {
+            let (lc_name, lc_plural) = session.outfit_names(*outfit).unwrap_or_default();
+            return Some(exploded_message(*one, lc_name, lc_plural));
         }
         SimMessage::Smuggling {
             scanner,
@@ -956,6 +985,7 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::EscortRepaired
         | SimMessage::FighterRepaired
         | SimMessage::EscapingIn { .. }
+        | SimMessage::Sabotaged { .. }
         | SimMessage::Smuggling { .. }
         | SimMessage::IllegalJunk { .. }
         | SimMessage::IllegalOutfit { .. } => None,
@@ -13973,6 +14003,55 @@ mod tests {
         for message in [SimMessage::EscortRepaired, SimMessage::FighterRepaired] {
             assert_eq!(arrival_lead(&message), None, "{message:?}");
         }
+    }
+
+    /// A flight whose one outfit is called "bomb", "bombs".
+    fn with_a_bomb() -> FlightView<FakeCatalog> {
+        FlightView::new(FakeCatalog {
+            outfits: vec![OutfitRecord {
+                lc_name: "bomb".to_owned(),
+                lc_plural: "bombs".to_owned(),
+                ..multi_jumping().outfits[0].clone()
+            }],
+            ..catalog()
+        })
+    }
+
+    #[test]
+    fn a_sabotage_notice_names_the_outfit_for_its_count() {
+        assert_eq!(
+            (YOUR, HAS_EXPLODED, HAVE_EXPLODED),
+            ("Your", "has exploded!", "have exploded!")
+        );
+        let view = with_a_bomb();
+        let session = view.session().expect("flying");
+        let sabotaged = |one| SimMessage::Sabotaged {
+            outfit: Some((OutfitId(275), one)),
+        };
+        assert_eq!(
+            sim_message_text(&sabotaged(true), session).as_deref(),
+            Some("Your bomb has exploded!")
+        );
+        assert_eq!(
+            sim_message_text(&sabotaged(false), session).as_deref(),
+            Some("Your bombs have exploded!")
+        );
+        assert_eq!(arrival_lead(&sabotaged(true)), None);
+    }
+
+    #[test]
+    fn a_sabotage_notice_without_an_outfit_says_a_bomb_exploded() {
+        let view = flight();
+        let session = view.session().expect("flying");
+        let message = SimMessage::Sabotaged { outfit: None };
+        assert_eq!(
+            sim_message_text(&message, session).as_deref(),
+            Some("A bomb has exploded onboard your ship!")
+        );
+        assert_eq!(
+            BOMB_EXPLODED_ONBOARD,
+            "A bomb has exploded onboard your ship!"
+        );
     }
 
     #[test]
