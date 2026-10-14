@@ -61,7 +61,21 @@ pub enum SimSound {
     /// (@0x6f1e4-0x6f227) while the death timer is above 1.0 and it is
     /// not already playing (`_ST_IsSoundPlaying` @0x6f200), so it repeats
     /// through the breakup; the audio side does that check. Its priority,
-    /// 15, is not modelled. Phase 6 (`player-death`) halts it at the
-    /// final explosion.
+    /// 15, is not modelled. The player's final explosion halts it
+    /// ([`PLAYER_EXPLOSION_HALTS`]).
     Klaxon,
+    /// Each named `snd ` is halted if it is playing, as the original asks
+    /// `ST_IsSoundPlaying` and then calls `ST_HaltSound`: every instance
+    /// of it, on any channel. The player's final explosion raises it with
+    /// [`PLAYER_EXPLOSION_HALTS`]; the `player-death` roadmap's phases 11
+    /// and 14 raise it with 128 and 129.
+    Halt(&'static [SoundId]),
 }
+
+/// The sounds the player's final explosion halts, in order:
+/// `_HandleShipDisplay`, for the player only (`cmpw $0x0,0x86(%edi)`
+/// @0x2d86d), halts the klaxon `_klaxxonSnd`, `snd ` 371 (@0x2d891), the
+/// warp-up sounds `warpUpSnd[0]` and `warpUpSnd[1]`, 128 (@0x2d8b0) and
+/// 129 (@0x2d8cb), and the warp-out `warpOutSnd`, 130 (@0x2d8ea).
+pub const PLAYER_EXPLOSION_HALTS: [SoundId; 4] =
+    [SoundId(371), SoundId(128), SoundId(129), SoundId(130)];

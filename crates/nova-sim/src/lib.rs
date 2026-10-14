@@ -431,7 +431,7 @@ pub use shipyard::{
     Rating, ShipFacts, ShipNaming, ShipPurchase, ShipRefusal, ShipRow, ShipSpecs, Shipyard,
     StockLine,
 };
-pub use sound::SimSound;
+pub use sound::{PLAYER_EXPLOSION_HALTS, SimSound};
 pub use stats::ShipStats;
 pub use status_cargo::{CargoFacts, CommodityRow, MissionCargo, Special, StatusCargo};
 pub use target_panel::{StatusFacts, TagFacts, TargetStatus, TargetTag};

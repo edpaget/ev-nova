@@ -29,6 +29,8 @@ use crate::table::SoundTable;
 ///   it is exclusive ([`AudioCommand::PlayExclusive`]). The klaxon plays
 ///   unless it is still playing ([`AudioCommand::PlayUnlessPlaying`]),
 ///   which the port decides.
+/// - A halt halts each `snd ` it names, in order ([`AudioCommand::Halt`]),
+///   whatever the sound setting: halting what is not playing is harmless.
 /// - Each of a fight's sounds plays its own `snd ` once, at the effects
 ///   volume times its [`distance_gain`], while the sound setting is on.
 /// - The engine loops while the sound setting is on, the ship thrusts in
@@ -144,6 +146,11 @@ impl<A: Audio> AudioCore<A> {
                             sound,
                             volume: self.settings.effects_volume,
                         });
+                    }
+                }
+                Sound::Sim(SimSound::Halt(sounds)) => {
+                    for &sound in sounds {
+                        self.audio.run(AudioCommand::Halt { sound });
                     }
                 }
                 Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
@@ -569,6 +576,28 @@ mod tests {
         let mut core = AudioCore::with_table(audio, table);
         core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Klaxon)]);
         assert_eq!(drain(&log), [], "a table without one");
+    }
+
+    #[test]
+    fn a_halt_halts_each_named_sound_in_order() {
+        const HALTS: [SoundId; 4] = [SoundId(371), SoundId(128), SoundId(129), SoundId(130)];
+        let halts: Vec<AudioCommand> = HALTS
+            .iter()
+            .map(|&sound| AudioCommand::Halt { sound })
+            .collect();
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::Halt(&HALTS))],
+        );
+        assert_eq!(drain(&log), halts);
+        core.set_sound(false);
+        drain(&log);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[Sound::Sim(SimSound::Halt(&HALTS))],
+        );
+        assert_eq!(drain(&log), halts, "sound off halts too");
     }
 
     #[test]

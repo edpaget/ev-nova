@@ -10476,7 +10476,7 @@ mod tests {
     }
 
     #[test]
-    fn the_klaxon_sounds_ahead_of_the_players_explosion() {
+    fn the_explosion_tick_sounds_the_klaxon_then_halts_it_before_the_explosion() {
         // DeathDelay 2: a timer of 6, so 3 ticks of klaxon, then the
         // explosion's.
         let mut view =
@@ -10500,7 +10500,11 @@ mod tests {
                         .collect();
                     assert!(first_combat.is_some(), "the explosion sounds: {sounds:?}");
                     assert_eq!(klaxons.len(), 1, "{sounds:?}");
-                    assert!(klaxons[0] < first_combat.unwrap_or(0), "{sounds:?}");
+                    let halt = Sound::Sim(SimSound::Halt(&nova_sim::PLAYER_EXPLOSION_HALTS));
+                    let halts: Vec<usize> =
+                        (0..sounds.len()).filter(|&at| sounds[at] == halt).collect();
+                    assert_eq!(halts, [klaxons[0] + 1], "halted next: {sounds:?}");
+                    assert!(halts[0] < first_combat.unwrap_or(0), "{sounds:?}");
                     return;
                 }
                 PlayerFate::Flying | PlayerFate::Disabled => {}

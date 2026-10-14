@@ -1820,7 +1820,10 @@ impl Session {
     /// shown that shots can hit take their damage, and each shot
     /// down is destroyed and runs its `OnDestroy` (see the `stellars`
     /// module). While the player's ship breaks up, the klaxon sounds
-    /// first among the tick's sounds (see `sound_the_klaxon`). A heavy
+    /// first among the tick's sounds (see `sound_the_klaxon`), and on the
+    /// player's explosion tick a [`SimSound::Halt`] of the klaxon and the
+    /// warp sounds follows it
+    /// ([`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS)). A heavy
     /// ship's final explosion, the player's too, sends out a shockwave
     /// ([`shockwave`](crate::combat::shockwave)) that sets the velocity of
     /// each ship it pushes; the player's is not pushed while its jump is
@@ -1880,6 +1883,10 @@ impl Session {
             });
         }
         self.sound_the_klaxon(was_dying);
+        if self.player_exploded_this_tick {
+            self.sounds
+                .push(SimSound::Halt(&crate::sound::PLAYER_EXPLOSION_HALTS));
+        }
         self.raise_disabled(&was, &mut &mut *chance);
         self.answer_strikes(&was, rules.law);
         let sorties = self.combat.take_sorties();
@@ -1909,11 +1916,12 @@ impl Session {
     /// of which sets the timer again.
     ///
     /// It comes straight after the fight, ahead of every other sound of
-    /// the tick, so that on the explosion tick the halt phase 6 raises
-    /// with the explosion comes after it and wins, as `_HandlePlayer`
-    /// (@0x43e19) runs before `_HandleShipDisplay` (@0x43e29). The view
-    /// puts the session's sounds before the fight's, so the explosion's
-    /// booms come after it too.
+    /// the tick, so that on the explosion tick the
+    /// [`SimSound::Halt`] of [`PLAYER_EXPLOSION_HALTS`](crate::sound::PLAYER_EXPLOSION_HALTS)
+    /// that [`Session::tick_combat`] raises next comes after it and wins,
+    /// as `_HandlePlayer` (@0x43e19) runs before `_HandleShipDisplay`
+    /// (@0x43e29). The view puts the session's sounds before the fight's,
+    /// so the explosion's booms come after it too.
     fn sound_the_klaxon(&mut self, was_dying: bool) {
         let counting_down = matches!(
             self.condition,
@@ -15261,6 +15269,60 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_players_explosion_halts_the_klaxon_and_warp_sounds_after_the_klaxon() {
+        // DeathDelay 2: a timer of 6, exploding 4 ticks after the breakup.
+        let catalog = deadly_in(2);
+        let mut session = facing_an_npc(&catalog, 180);
+        let seen = from_the_breakup(&mut session, &catalog, 9);
+        let halt = SimSound::Halt(&crate::sound::PLAYER_EXPLOSION_HALTS);
+        let explosion = seen
+            .iter()
+            .position(|(condition, _)| *condition == Condition::Destroyed)
+            .expect("it explodes");
+        assert_eq!(
+            seen[explosion].1,
+            [SimSound::Klaxon, halt],
+            "the halt follows the klaxon, once"
+        );
+        for (tick, (_, sounds)) in seen.iter().enumerate() {
+            if tick != explosion {
+                assert!(!sounds.contains(&halt), "tick {tick}: {sounds:?}");
+            }
+        }
+        assert!(seen.len() > explosion + 3, "the hold is watched too");
+    }
+
+    #[test]
+    fn the_player_explosions_halts_name_the_klaxon_and_the_warp_sounds() {
+        assert_eq!(
+            crate::sound::PLAYER_EXPLOSION_HALTS,
+            [SoundId(371), SoundId(128), SoundId(129), SoundId(130)]
+        );
+    }
+
+    #[test]
+    fn an_npcs_explosion_raises_no_halt() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session.hold_trigger(FIRE);
+        let mut sounds = Vec::new();
+        for _ in 0..200 {
+            session.tick_combat(Rules::default(), &mut NeverFires);
+            sounds.extend(session.take_sounds());
+            if session.npcs().is_empty() {
+                break;
+            }
+        }
+        assert_eq!(session.npcs(), [], "the NPC is destroyed");
+        assert!(
+            !sounds
+                .iter()
+                .any(|sound| matches!(sound, SimSound::Halt(_))),
+            "{sounds:?}"
+        );
+    }
+
+    #[test]
     fn the_session_takes_the_commands_of_the_players_fate() {
         let catalog = deadly_in(2);
         let mut session = facing_an_npc(&catalog, 180);
@@ -15396,8 +15458,11 @@ pub(super) mod tests {
         let mut session = by_default.clone();
         assert_eq!(
             from_the_breakup(&mut session, &catalog, 1),
-            [(Condition::Destroyed, vec![])],
-            "by default, destroyed as it breaks up"
+            [(
+                Condition::Destroyed,
+                vec![SimSound::Halt(&crate::sound::PLAYER_EXPLOSION_HALTS)]
+            )],
+            "by default, destroyed as it breaks up, halting its sounds"
         );
         let mut session = by_default.with_rules(
             crate::rulebook::Rulebook::default()

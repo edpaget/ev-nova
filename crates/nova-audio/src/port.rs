@@ -86,6 +86,14 @@ pub enum AudioCommand {
     StopMusic,
     /// Stops every effect playing, the looping one included: sound is off.
     StopEffects,
+    /// Stops every instance of `sound` playing, on any channel (the
+    /// one-shot effects, the mission channel, and `PlayUnlessPlaying`'s),
+    /// as the original's `ST_HaltSound`; nothing happens when none is. The
+    /// engine loop and the music are not effects it halts.
+    Halt {
+        /// The `snd `.
+        sound: SoundId,
+    },
 }
 
 /// Plays what the core asks for.
