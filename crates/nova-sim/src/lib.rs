@@ -90,6 +90,8 @@
 //! - [`gate`]: hypergates and wormholes: which a stellar is
 //!   ([`GateKind`]), where each leads, and how a ship comes out of one,
 //!   under the [`GateArrivalRule`] and [`WormholeRule`].
+//! - [`gate_sprite`]: which frame a hypergate's sprite shows, opening
+//!   while a ship comes out of it and closing once none does.
 //! - [`geometry`]: the simulation's own [`Vec2`], in pixels with y
 //!   growing down.
 //! - [`govt`]: the [`Governments`] and their relations: allies, enemies,
@@ -282,6 +284,7 @@ pub mod fixture;
 pub mod flight;
 pub mod fuel;
 pub mod gate;
+pub mod gate_sprite;
 pub mod geometry;
 pub mod glow;
 pub mod govt;
