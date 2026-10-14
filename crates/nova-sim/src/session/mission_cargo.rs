@@ -1939,6 +1939,91 @@ mod tests {
         convicted(&mut session);
     }
 
+    // The lead-in's end by the warp's d and w, read through the catalog:
+    // the warp-up's `snd ` 128 and the player's own `shïp` `Flags`.
+
+    /// Shows, through the session's tick, that the warp of a session of
+    /// `catalog` (see [`contraband_catalog`]) leaves its lead-in after
+    /// engine tick `last`: a scan taken stepping onto `last` convicts, and
+    /// one taken stepping past it is held.
+    fn lead_in_ends_after(catalog: &FakePilotCatalog, last: u32) {
+        let mut session = smuggler(catalog, 1, 0, 1200);
+        bound_east(&mut session, 90.0);
+        session.begin_jump().expect("jumps");
+        let _ = session.take_sounds();
+        step_to(&mut session, catalog, last - 1);
+        scanned_in_a_step(&mut session, catalog);
+        assert_eq!(session.warp_clock(), Some(last));
+        assert!(session.in_warp_lead_in(), "tick {last} is in the lead-in");
+        convicted(&mut session);
+
+        let mut session = smuggler(catalog, 1, 0, 1200);
+        bound_east(&mut session, 90.0);
+        session.begin_jump().expect("jumps");
+        let _ = session.take_sounds();
+        step_to(&mut session, catalog, last);
+        assert!(session.in_warp_lead_in());
+        scanned_in_a_step(&mut session, catalog);
+        assert_eq!(session.warp_clock(), Some(last + 1));
+        assert!(session.jumping().is_some(), "still jumping");
+        assert!(!session.in_warp_lead_in(), "tick {} is past it", last + 1);
+        held_back(&mut session);
+    }
+
+    #[test]
+    fn the_warp_up_sounds_length_moves_the_end_of_the_lead_in() {
+        // The stock warp-up runs d = 364 Mac ticks, so the lead-in lasts
+        // while t ≤ 0.35 × 364 / 1.69 = 75.38: one engine tick more than
+        // with no sound.
+        let warp_up = crate::warp::SoundLength {
+            frames: 134_016,
+            rate: 22_050,
+        };
+        let d = crate::warp::sound_duration(Some(warp_up));
+        assert_eq!(d, 364);
+        let w = crate::warp::warp_factor(0);
+        let mac = crate::warp::mac_ticks;
+        assert!(!crate::warp::held(Some(mac(37)), w, d, false));
+        assert!(crate::warp::held(Some(mac(38)), w, d, false));
+        assert!(crate::warp::held(Some(mac(37)), w, 350, false), "moved");
+
+        let mut catalog = contraband_catalog(500);
+        catalog.warp_sound = Some(warp_up);
+        lead_in_ends_after(&catalog, LAST_LEAD_IN_TICK + 1);
+    }
+
+    /// [`contraband_catalog`] with `shïp` records for the player's ship
+    /// (128), with `Flags` `player`, and the interceptor's (129), with
+    /// `Flags` `interceptor`.
+    fn flagged(player: u16, interceptor: u16) -> FakePilotCatalog {
+        let mut catalog = contraband_catalog(500);
+        catalog.ship_records = [(128, player), (129, interceptor)]
+            .map(|(id, flags)| crate::catalog::ShipRecord {
+                flags,
+                ..crate::testkit::ship(id, crate::testkit::FAST)
+            })
+            .to_vec();
+        catalog
+    }
+
+    #[test]
+    fn the_players_jump_speed_flag_moves_the_end_of_the_lead_in() {
+        // `Flags` 0x0004 gives w = 2.08, so the lead-in lasts while
+        // t ≤ 0.35 × 350 / 2.08² = 28.31 Mac ticks: through engine tick
+        // 14. The interceptor's 0x0001 (w = 0.91) plays no part.
+        let d = crate::warp::NO_SOUND_DURATION;
+        let w = crate::warp::warp_factor(0x0004);
+        let mac = crate::warp::mac_ticks;
+        assert!(!crate::warp::held(Some(mac(14)), w, d, false));
+        assert!(crate::warp::held(Some(mac(15)), w, d, false));
+        lead_in_ends_after(&flagged(0x0004, 0x0001), 14);
+    }
+
+    #[test]
+    fn another_ships_jump_speed_flag_leaves_the_lead_in_alone() {
+        lead_in_ends_after(&flagged(0, 0x0004), LAST_LEAD_IN_TICK);
+    }
+
     // The mission branch's sounds and attack.
 
     #[test]
