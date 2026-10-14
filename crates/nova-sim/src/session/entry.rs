@@ -571,8 +571,11 @@ impl Session {
         }
         self.announce(how, &resets, system, scene_event(how, scene_changed));
         // A jump's arrival raised its `Explored` before its days, at the
-        // original's first nebula exploration (@0x6be12).
-        if resets.has(Reset::Explore) && !matches!(how, Entry::Jump { .. }) {
+        // original's first nebula exploration (@0x6be12); a gate's or
+        // wormhole's exit explores no nebula (`_PlayerEnterHypergate`
+        // 0x637bf, `_PlayerEnterWormhole` 0x64005; see the `nebulae`
+        // module).
+        if resets.has(Reset::Explore) && !matches!(how, Entry::Jump { .. } | Entry::Gate) {
             self.raise(StoryEvent::Explored { system });
         }
         if resets.has(Reset::Rebuild) {

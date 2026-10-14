@@ -354,6 +354,7 @@ mod mission_escorts;
 mod mission_screens;
 mod mission_ships;
 mod missions;
+mod nebulae;
 mod news;
 mod outfits;
 mod person_offers;
@@ -397,9 +398,9 @@ use crate::board::{
 };
 use crate::catalog::{
     CombatCatalog, CronRecord, DateAffixes, GateSite, GovtId, LandingSite, ListedStellar,
-    MissionId, MissionRecord, MissionTexts, OutfitId, OutfitRecord, PersonId, PilotCatalog,
-    PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError, StellarId, StellarLife,
-    SystemId, SystemVisibility, TrafficCatalog, WeaponId,
+    MissionId, MissionRecord, MissionTexts, NebulaRecord, OutfitId, OutfitRecord, PersonId,
+    PilotCatalog, PlaceNames, RankId, RankRecord, ShipId, ShipRecord, StartError, StellarId,
+    StellarLife, SystemId, SystemVisibility, TrafficCatalog, WeaponId,
 };
 use crate::chance::Chance;
 use crate::combat::armament::{
@@ -440,6 +441,7 @@ use crate::market::{
 use crate::message::SimMessage;
 use crate::mission::{Offers, StellarMarks};
 use crate::navigation::stellar_under;
+use crate::nebula;
 use crate::news::News;
 use crate::order_loop::{self, Onward, OrderRun, Pass};
 use crate::outfitter::{
@@ -804,6 +806,10 @@ pub struct Session {
     /// Every system's `Visibility`, read when the session starts: what the
     /// galaxy refresh evaluates (see the `story` module).
     visibility: Rc<[SystemVisibility]>,
+    /// Every `nëbu` 128-159, read when the session starts: their
+    /// `ActiveOn`, which the galaxy refresh evaluates, and their
+    /// `OnExplore` (see the `nebulae` module).
+    nebulae: Rc<[NebulaRecord]>,
     /// Whether a set expression has changed the pilot since the last
     /// settling: by the other reading of [`RuleKey::VisibilityRefresh`]
     /// the settling refreshes the galaxy then.
@@ -913,6 +919,13 @@ impl Session {
             .map_err(|reason| StartError::Ship(ship, reason))?;
         if !catalog.system_exists(pilot.system) {
             return Err(StartError::NoSystem(pilot.system));
+        }
+        // The explored nebulae are never saved: a load forgets them, as
+        // `_ResetPlayer` does (@0x1da86), but for those the once-a-pilot
+        // reading kept fired (see the `nebulae` module).
+        pilot.galaxy.forget_explored_nebulae();
+        for kept in nebula::kept(&pilot.story_fired) {
+            pilot.galaxy.set_nebula_explored(kept, true);
         }
         let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone());
         // A load is one of the original's refresh points: a pilot in a
@@ -1059,6 +1072,7 @@ impl Session {
                 .collect(),
             listed_stellars: catalog.listed_stellars(),
             visibility: catalog.system_visibility().into(),
+            nebulae: catalog.nebulae().into(),
             galaxy_stale: false,
             place_names: catalog.place_names(),
             stellar_marks: StellarMarks::new(catalog.stellar_marks()),
@@ -1076,6 +1090,7 @@ impl Session {
             pilot,
         };
         session.register_offer_roll();
+        session.register_nebulae();
         session.register_slots();
         session.set_player_system(system, here, dock);
         // A load and the main screen are rebuild points (@0x751cf,
@@ -1089,9 +1104,10 @@ impl Session {
         // with the facts complete; a new pilot's is `_DoNewPilot`'s, before
         // its `OnStart` (@0x1925e).
         session.refresh_galaxy_quietly(catalog);
-        // A new pilot's and a load's nebulae (@0x19118, @0x765bc).
-        let system = session.pilot.system;
-        session.raise(StoryEvent::Explored { system });
+        // A load's sweep of the visible explored systems' nebulae
+        // (@0x765a2-0x765ce); a new pilot's (@0x19118), which by the
+        // engine `Session::begin` withdraws (see the `nebulae` module).
+        session.sweep_explored();
         // A load forgets the stellar the offers were rolled at (@0x75ef5)
         // and opens the spaceport, so a pilot resumed docked has them
         // rolled afresh (see the `missions` module), and its prices taken
@@ -2168,7 +2184,7 @@ impl Session {
         // The galaxy refresh evaluated before the days, so a bit their
         // scripts set waits for the next refresh (@0x6bf3f, days
         // @0x6c144).
-        let hidden = self.hidden_now();
+        let refresh = self.refresh_now();
         // The escort-strength timer armed before the roll table, the days
         // and the setup (@0x6c013).
         self.arm_strength_timer(chance);
@@ -2224,7 +2240,7 @@ impl Session {
         // arrival by the same rule as any move out of a hidden system.
         if self
             .write_galaxy(|overlay| {
-                overlay.set_hidden(&hidden);
+                refresh.write(overlay);
             })
             .is_some()
         {

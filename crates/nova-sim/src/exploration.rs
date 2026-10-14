@@ -56,8 +56,10 @@
 //! its own, and a new pilot explores each visible neighbour itself. The
 //! session applies these at its sites (its `explored` module).
 //!
-//! Not modelled here: the original's walk also explores the nebulae near
-//! each system (`_ExploreNebulaeFromSystem`, crons-news-ranks phase 16).
+//! The original's walk also explores the nebulae near each system
+//! (`_ExploreNebulaeFromSystem`, not its head's): the session raises
+//! `Explored` for each system reached, and its `nebulae` module explores
+//! them (see the [`nebula`](crate::nebula) module).
 //! The known flag (+0x1ec) and the explored levels 1 and 2 kept apart are
 //! deferred to the fidelity roadmap (crons-news-ranks-fidelity phases 20
 //! and 21): the pilot's one set of explored systems does not tell `X`'s

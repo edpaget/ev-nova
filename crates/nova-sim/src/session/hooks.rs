@@ -123,7 +123,11 @@ impl Session {
         self.ship_hook(captured, ShipHook::Capture, chance);
     }
 
-    /// Begins a new pilot's game: explores the start system's visible
+    /// Begins a new pilot's game: by the engine's reading of
+    /// [`RuleKey::NebulaNewPilot`](crate::RuleKey::NebulaNewPilot),
+    /// withdraws the `Explored` events [`Session::fly`] raised, so the
+    /// start system's nebulae wait for the first exploration (see the
+    /// `nebulae` module); explores the start system's visible
     /// neighbours, or by the engine their heads (see the `explored`
     /// module), destroys the stellars that start the
     /// game destroyed (see the `stellars` module), then runs the first
@@ -138,6 +142,9 @@ impl Session {
         catalog: &(impl PilotCatalog + TrafficCatalog),
         chance: &mut dyn Chance,
     ) {
+        // `_DoNewPilot` explores its start system's nebulae while every
+        // one is inactive (@0x19118; see the `nebulae` module).
+        self.withdraw_new_pilot_explored();
         // `_DoNewPilot` explores the start system's neighbours
         // (@0x18f97-0x1902e) before its destroyed stellars (@0x192d6) and
         // its `OnStart` (see the `explored` module).

@@ -14,7 +14,9 @@ use super::entry::Dock;
 use super::missions;
 use super::script_effects::Settled;
 use super::{ScriptNote, Session, SessionEvent};
-use crate::catalog::{GovtId, LandingSite, PilotCatalog, StellarId, SystemId, TrafficCatalog};
+use crate::catalog::{
+    GovtId, LandingSite, NebulaId, PilotCatalog, StellarId, SystemId, TrafficCatalog,
+};
 use crate::chance::Chance;
 use crate::control::{Script, Test};
 use crate::market;
@@ -22,10 +24,10 @@ use crate::pilot::Pilot;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::story::day::{self, Day, Participant};
 use crate::story::dispatch::{self, DuplicateSubscription, Reentry, Registry, Stage};
-use crate::story::galaxy::hidden_by;
+use crate::story::galaxy::{hidden_by, inactive_by};
 use crate::story::{
-    Consumer, Countdown, Fate, GalaxyOverlay, HiddenMove, OverlaidGalaxy, StoryEvent, Subscription,
-    SubscriptionId,
+    Consumer, Countdown, Fate, GalaxyOverlay, HiddenMove, OverlaidGalaxy, StoryEvent,
+    StoryEventKind, Subscription, SubscriptionId,
 };
 use crate::traffic::npc::NpcId;
 use crate::{hire, outfitter, shipyard, wares};
@@ -68,6 +70,27 @@ pub(super) struct StoryRuntime {
     pub(super) watched: BTreeSet<NpcId>,
 }
 
+/// What a galaxy refresh writes (`_PropagateMissionBitEffects`): the
+/// systems hidden by their `Visibility` and the nebulae inactive by their
+/// size and `ActiveOn`, evaluated together from the bits as they stand.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Refresh {
+    /// The catalog systems whose `Visibility` fails ([`hidden_by`]).
+    hidden: BTreeSet<SystemId>,
+    /// The nebulae inactive ([`inactive_by`]).
+    inactive: BTreeSet<NebulaId>,
+}
+
+impl Refresh {
+    /// Writes it on `overlay`: every system's visibility and every
+    /// nebula's activity. Whether that changed anything.
+    pub(super) fn write(&self, overlay: &mut GalaxyOverlay) -> bool {
+        let hidden = overlay.set_hidden(&self.hidden);
+        let inactive = overlay.set_inactive(&self.inactive);
+        hidden | inactive
+    }
+}
+
 /// The session settling, with the catalog and the chance it settles with
 /// and what it has settled: the story dispatcher's [`Stage`].
 struct SessionStage<'a, C: ?Sized> {
@@ -86,8 +109,18 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
         self.session.story.registry.get(id).cloned()
     }
 
-    fn admits(&self, _id: SubscriptionId, _event: &StoryEvent) -> bool {
-        true
+    /// Every consumer admits its subscriptions but the nebulae, whose
+    /// rectangle and explored flag decide (see the `nebulae` module).
+    fn admits(&self, id: SubscriptionId, event: &StoryEvent) -> bool {
+        match id.consumer {
+            Consumer::Nebulae => self.session.nebula_admits(NebulaId(id.record), event),
+            Consumer::Offers
+            | Consumer::MissionShips
+            | Consumer::Missions
+            | Consumer::Crons
+            | Consumer::Plugins
+            | Consumer::Fixture => true,
+        }
     }
 
     fn fired(&self, id: SubscriptionId) -> bool {
@@ -135,9 +168,12 @@ impl<C: PilotCatalog + TrafficCatalog + ?Sized> Stage for SessionStage<'_, C> {
                 self.session
                     .mission_ships_effect(id, event, &mut *self.chance);
             }
+            // A nebula explored, before its `OnExplore` (@0x515a; see the
+            // `nebulae` module).
+            Consumer::Nebulae => self.session.explore_nebula(NebulaId(id.record)),
             // Each other consumer's arm is filled by its own phase: the
-            // crons', nebulae's and plug-ins'. A fixture has none.
-            Consumer::Crons | Consumer::Nebulae | Consumer::Plugins | Consumer::Fixture => {}
+            // crons' and plug-ins'. A fixture has none.
+            Consumer::Crons | Consumer::Plugins | Consumer::Fixture => {}
         }
     }
 
@@ -280,6 +316,12 @@ impl Session {
         self.story.registry.matching(event)
     }
 
+    /// Lets go of the events of `kind` raised and not yet settled, keeping
+    /// every other in order.
+    pub(super) fn withdraw_raised(&mut self, kind: StoryEventKind) {
+        self.story.raised.retain(|event| event.kind() != kind);
+    }
+
     /// Lets go of the events raised, undispatched: a test's clean slate.
     #[cfg(test)]
     pub(super) fn drop_raised(&mut self) {
@@ -380,19 +422,22 @@ impl Session {
         true
     }
 
-    /// The systems the galaxy refresh hides now: each catalog system whose
-    /// `Visibility` fails for the pilot ([`hidden_by`]).
-    pub(super) fn hidden_now(&self) -> BTreeSet<SystemId> {
-        hidden_by(
-            self.galaxy.catalog_systems(),
-            &self.visibility,
-            &self.gate(),
-        )
+    /// What the galaxy refresh writes now: each catalog system whose
+    /// `Visibility` fails for the pilot hidden ([`hidden_by`]), and each
+    /// nebula of no size or whose `ActiveOn` fails inactive
+    /// ([`inactive_by`]).
+    pub(super) fn refresh_now(&self) -> Refresh {
+        let gate = self.gate();
+        Refresh {
+            hidden: hidden_by(self.galaxy.catalog_systems(), &self.visibility, &gate),
+            inactive: inactive_by(&self.nebulae, &gate),
+        }
     }
 
     /// The galaxy refresh at a landing or a new pilot's start
     /// (`_PropagateMissionBitEffects` @0x99676): every system's visibility
-    /// written from its `Visibility` through the one writer, then, when
+    /// written from its `Visibility`, and every nebula's activity from its
+    /// `ActiveOn`, through the one writer, then, when
     /// that changed anything, what any change does
     /// ([`Session::change_galaxy`]): the player moved out of a system now
     /// hidden, the traffic retargeted, [`SessionEvent::GalaxyChanged`]
@@ -403,14 +448,15 @@ impl Session {
     where
         C: PilotCatalog + TrafficCatalog + ?Sized,
     {
-        let hidden = self.hidden_now();
+        let refresh = self.refresh_now();
         self.change_galaxy(catalog, |overlay| {
-            overlay.set_hidden(&hidden);
+            refresh.write(overlay);
         })
     }
 
     /// A load's galaxy refresh (`_LoadPilotData` @0x751ca, @0x7531f): every
-    /// system's visibility written from its `Visibility`, the saved flags
+    /// system's visibility written from its `Visibility`, and every
+    /// nebula's activity from its `ActiveOn`, the saved flags
     /// never trusted, telling nothing and making no save due, as the
     /// load's rebuild tells nothing and the original's load saves nothing.
     /// A player whose system is now hidden moves as the original moves it
@@ -419,8 +465,7 @@ impl Session {
     /// rebuild follows its refresh (@0x751ca, @0x751cf): in flight, the
     /// stellars shown are those the refreshed galaxy gives.
     pub(super) fn refresh_galaxy_quietly(&mut self, catalog: &(impl PilotCatalog + ?Sized)) {
-        let hidden = self.hidden_now();
-        if !self.pilot.galaxy.set_hidden(&hidden) {
+        if !self.refresh_now().write(&mut self.pilot.galaxy) {
             return;
         }
         self.galaxy.set_overlay(self.pilot.galaxy.clone());
@@ -1080,7 +1125,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_pilot_and_a_load_each_raise_their_systems_explored_once() {
+    fn a_new_pilot_raises_its_systems_explored_and_a_load_each_visible_explored_systems() {
         let catalog = testkit::catalog();
         let session = Session::start(&catalog).expect("starts");
         assert_eq!(session.story_raised(), [EXPLORED_130], "a new pilot");
@@ -1088,7 +1133,11 @@ mod tests {
         pilot.system = SystemId(131);
         let saved = crate::save::decode(&crate::save::encode(&pilot)).expect("loads");
         let flown = Session::fly(&catalog, saved).expect("flies");
-        assert_eq!(flown.story_raised(), [explored(131)], "a load");
+        assert_eq!(
+            flown.story_raised(),
+            [explored(130), explored(131)],
+            "a load: 130 explored before, 131 as it is flown"
+        );
     }
 
     #[test]
@@ -1105,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    fn a_gate_raises_entered_system_then_explored_its_days_first_like_a_jump() {
+    fn a_gate_raises_entered_system_and_no_explored_its_days_first_like_a_jump() {
         use crate::gate::GateArrivalRule;
         use crate::session::tests::{at_gate, gated};
         let catalog = gated();
@@ -1115,7 +1164,7 @@ mod tests {
             .expect("enters");
         assert_eq!(
             session.story_raised(),
-            [entered(131, Entrance::Gate), explored(131)],
+            [entered(131, Entrance::Gate)],
             "by the engine"
         );
 
@@ -1125,7 +1174,7 @@ mod tests {
             .enter_hypergate(Some(SystemId(131)), &catalog, &mut NeverFires)
             .expect("enters");
         let mut expected = days_after(left, 1);
-        expected.extend([entered(131, Entrance::Gate), explored(131)]);
+        expected.push(entered(131, Entrance::Gate));
         assert_eq!(session.story_raised(), expected, "like a jump");
     }
 

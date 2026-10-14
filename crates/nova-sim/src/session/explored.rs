@@ -18,7 +18,9 @@
 //! Only the system itself raises
 //! [`StoryEvent::Explored`](crate::story::StoryEvent::Explored): the
 //! original's
-//! `_ExploreNebulaeFromSystem` runs on it alone.
+//! `_ExploreNebulaeFromSystem` runs on it alone. A hypergate's or
+//! wormhole's exit raises none: the original's exits write the explored
+//! level directly and explore no nebula (see the `nebulae` module).
 //!
 //! **A raise that does not include the head.** `X` raises only its system
 //! (`_EvalSetExp` @0x15c71-0x15ca1; `Session::explore_system`).
