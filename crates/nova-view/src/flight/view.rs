@@ -1812,6 +1812,15 @@ impl<
             self.map
                 .show_course(session.system(), &session.course_shown());
         }
+        // The explored set changes with no event: a rebuild point's share
+        // by place, `X` and a map grant between system changes.
+        if self
+            .map
+            .explored()
+            .is_none_or(|shown| !shown.iter().copied().eq(session.pilot().explored()))
+        {
+            self.map.show_explored(session.pilot().explored());
+        }
         let system = session.system();
         let reshown = redrawn.rebuilt
             && !redrawn.system
@@ -6663,6 +6672,27 @@ mod tests {
         arrive_now(&mut view);
         assert_eq!(view.session().expect("flying").system(), SystemId(131));
         assert_eq!(explored(&view), Some(vec![SystemId(130), SystemId(131)]));
+    }
+
+    #[test]
+    fn the_course_map_shows_systems_explored_between_frames() {
+        let centred = FakeCatalog {
+            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            ..catalog()
+        };
+        let mut view = FlightView::new(centred);
+        land_now(&mut view);
+        assert!(view.transact(|pilot| {
+            pilot.explore(SystemId(131));
+        }));
+        let shown = |view: &View| view.course_map().explored().cloned();
+        assert_eq!(shown(&view), Some([SystemId(130)].into()), "not yet");
+        view.tick(TICK);
+        assert_eq!(
+            shown(&view),
+            Some([SystemId(130), SystemId(131)].into()),
+            "the next frame"
+        );
     }
 
     // The exchange and the day's chances.
