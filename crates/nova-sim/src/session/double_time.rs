@@ -287,4 +287,44 @@ mod tests {
         again(&mut jumping, THRUST);
         assert_eq!(*jumping.player(), player);
     }
+
+    #[test]
+    fn a_jump_that_begins_on_the_second_pass_stops_it_there() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        session
+            .plot_course(crate::catalog::SystemId(131))
+            .expect("a route");
+        fly_out(&mut session);
+        session.begin_jump().expect("jumps");
+        session.traffic.npcs_mut()[0].state.velocity = Vec2::new(2.0, 0.0);
+        session.hold_trigger(Trigger {
+            primary: true,
+            ..Trigger::default()
+        });
+        session.target = Some(NpcId(0));
+        // Brakes and turns on the advance pass until the next pass is
+        // ready to jump.
+        for steps in 0.. {
+            assert!(steps < 1000, "never ready: {:?}", session.player());
+            assert_eq!(
+                session.preparing_jump(),
+                Some(crate::catalog::SystemId(131))
+            );
+            let mut probe = session.clone();
+            again(&mut probe, Controls::default());
+            if probe.jumping().is_some() {
+                break;
+            }
+            session.tick(Controls::default());
+        }
+        session.take_combat_events();
+        let npc = session.npcs()[0].state;
+        let strikes = session.strikes.clone();
+        again(&mut session, Controls::default());
+        assert_eq!(session.jumping(), Some(crate::catalog::SystemId(131)));
+        assert_eq!(session.npcs()[0].state, npc, "the traffic stood still");
+        assert_eq!(session.take_combat_events(), [], "no fight");
+        assert_eq!(session.strikes, strikes);
+    }
 }
