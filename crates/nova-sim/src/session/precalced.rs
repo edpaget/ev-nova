@@ -104,6 +104,7 @@ impl Session {
     /// leaves the cargo past the holds untrimmed (see the module docs).
     pub(super) fn reset_precalced_for(&mut self, cause: ResetCause) {
         self.scan_latches = Latches::ARMED;
+        self.junk_latches = market::JunkLatches::of(&self.goods, &self.pilot.cargo);
         if self.trims(cause) {
             self.trim_to_holds();
         }
@@ -155,7 +156,7 @@ pub(super) mod tests {
     use crate::catalog::{JunkId, RankId};
     use crate::chance::NeverFires;
     use crate::control::{Script, SetExpr};
-    use crate::market::Good;
+    use crate::market::{Good, JunkLatches};
     use crate::scan::Latches;
     use crate::session::Session;
     use crate::session::ranks::tests::{blessed, blessing_rank};
@@ -267,6 +268,85 @@ pub(super) mod tests {
         session.reset_precalced();
         assert_eq!(session.scan_latches, Latches::ARMED);
         assert!(blessed(&session));
+    }
+
+    /// [`catalog`] with `jünk` 150 ([`JUNK`]) tribbles, 151 perishable
+    /// and 152 both.
+    fn flagged_junk() -> FakePilotCatalog {
+        use crate::catalog::JunkRecord;
+        use crate::market::{PERISHABLE, TRIBBLES};
+        let junk = |id, flags| JunkRecord {
+            id: JunkId(id),
+            name: format!("Junk {id}"),
+            abbrev: String::new(),
+            base_price: 10,
+            sold_at: Vec::new(),
+            bought_at: Vec::new(),
+            buy_on: crate::control::Test::default(),
+            sell_on: crate::control::Test::default(),
+            flags,
+            scan_mask: 0,
+            lc_name: String::new(),
+        };
+        FakePilotCatalog {
+            junk: vec![
+                junk(150, TRIBBLES),
+                junk(151, PERISHABLE),
+                junk(152, TRIBBLES | PERISHABLE),
+            ],
+            ..catalog()
+        }
+    }
+
+    fn latches(tribbles: bool, perishable: bool) -> JunkLatches {
+        JunkLatches {
+            tribbles,
+            perishable,
+        }
+    }
+
+    #[test]
+    fn every_reset_sets_the_junk_latches_from_the_junk_held() {
+        use super::ResetCause;
+        let rotting = Good::Junk(JunkId(151));
+        let both = Good::Junk(JunkId(152));
+        for cause in [ResetCause::Other, ResetCause::SetExpr, ResetCause::Purchase] {
+            let mut session = Session::start(&flagged_junk()).expect("starts");
+            assert_eq!(
+                session.junk_latches,
+                latches(false, false),
+                "clear at the start"
+            );
+            session.pilot.cargo = [(JUNK, 1), (rotting, 1), (both, 1)].into();
+            session.reset_precalced_for(cause);
+            assert_eq!(session.junk_latches, latches(true, true), "{cause:?}");
+            session.pilot.cargo = [(both, 3)].into();
+            session.reset_precalced_for(cause);
+            assert_eq!(
+                session.junk_latches,
+                latches(true, false),
+                "{cause:?}: a good of both flags alone sets only the tribbles latch"
+            );
+            session.pilot.cargo = [(rotting, 2), (Good::Commodity(0), 4)].into();
+            session.reset_precalced_for(cause);
+            assert_eq!(session.junk_latches, latches(false, true), "{cause:?}");
+        }
+    }
+
+    #[test]
+    fn jettisoning_resets_once_the_cargo_is_gone() {
+        let mut session = Session::start(&flagged_junk()).expect("starts");
+        session.pilot.cargo = [(JUNK, 2), (Good::Junk(JunkId(151)), 3)].into();
+        session.reset_precalced();
+        assert_eq!(session.junk_latches, latches(true, true));
+        convicted(&mut session);
+        session.jettison_cargo(true, &mut NeverFires);
+        assert_eq!(session.scan_latches, Latches::ARMED, "@0x3e3b5");
+        assert_eq!(
+            session.junk_latches,
+            latches(false, false),
+            "the reset ran after every good was gone"
+        );
     }
 
     // The sites the session already reset at, now trimming.
@@ -510,6 +590,42 @@ pub(super) mod tests {
                 }
             }
         }
+    }
+
+    /// The `OnSell` reset measures the holds live (`_TotalFleetHolds`
+    /// @0xc24d): with the pod sold, 20 tons, not the 30 the stats still
+    /// hold before the sale's refit. With 15 + 15 commodities and 5 tons
+    /// of `jünk`, `OnSell`'s trim gives 15 x 20/35 = 8 of each, and the
+    /// sale's own 8 x 20/21 = 7; read stale, 15 x 30/35 = 12, then
+    /// 12 x 20/29 = 8.
+    #[test]
+    fn an_on_sell_reset_trims_against_the_holds_left_once_the_outfit_is_sold() {
+        use crate::rulebook::{RuleKey, RuleSource, Rulebook};
+        use crate::session::tests::{buy, outfitted, outfitting, sell};
+        let mut catalog = outfitting();
+        for record in &mut catalog.outfits {
+            if record.id == POD {
+                record.on_sell = Script::parse("b9");
+            }
+        }
+        let mut session = outfitted(&catalog).with_rules(
+            Rulebook::default().with_override(RuleKey::OutfitSaleCargo, RuleSource::Engine),
+        );
+        session.outfit(buy(POD), &mut NeverFires).expect("bought");
+        assert_eq!(session.capacity(), 30);
+        session.pilot.cargo = [
+            (Good::Commodity(0), 15),
+            (Good::Commodity(1), 15),
+            (JUNK, 5),
+        ]
+        .into();
+        session.outfit(sell(POD), &mut NeverFires).expect("sold");
+        assert_eq!(session.capacity(), 20);
+        assert_eq!(
+            cargo(&session),
+            [(Good::Commodity(0), 7), (Good::Commodity(1), 7), (JUNK, 5)].into(),
+            "8 if OnSell's trim read the 30 tons the stats held"
+        );
     }
 
     #[test]

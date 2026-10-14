@@ -868,6 +868,11 @@ pub struct Session {
     /// [`scan::Latches`](crate::scan::Latches)). Never saved, as the
     /// original's are globals.
     scan_latches: crate::scan::Latches,
+    /// The `jünk` latches the tribbles and perishables step reads, set
+    /// only at each reset ([`Session::reset_precalced`]; see
+    /// [`market::JunkLatches`]). Both clear until the first. Never saved,
+    /// as the original's are globals.
+    junk_latches: market::JunkLatches,
     /// What the screens show of each `mïsn`, read when the session
     /// starts (see the `mission_screens` module).
     mission_texts: BTreeMap<MissionId, MissionTexts>,
@@ -1152,6 +1157,7 @@ impl Session {
                 junk: false,
                 outfits: false,
             },
+            junk_latches: market::JunkLatches::default(),
             mission_texts: catalog
                 .mission_texts()
                 .into_iter()
@@ -1382,6 +1388,7 @@ impl Session {
                 capacity,
                 self.pilot.missions.tons_aboard(),
                 self.rules.source_for(RuleKey::JunkFlags),
+                self.junk_latches,
             );
         }
         self.red_alert_tick(frame);
@@ -7895,9 +7902,10 @@ pub(super) mod tests {
     const FURBALLS: Good = Good::Junk(JunkId(128));
     const FRUIT: Good = Good::Junk(JunkId(129));
     const MORE_FURBALLS: Good = Good::Junk(JunkId(130));
+    const ROTTING_FURBALLS: Good = Good::Junk(JunkId(131));
 
     /// [`exchange`], its planet 128 selling `jünk` 128 and 130, tribbles,
-    /// and 129, perishable, at 8 a ton.
+    /// 129, perishable, and 131, both, at 8 a ton.
     fn breeding() -> FakePilotCatalog {
         let sold = |id, flags| JunkRecord {
             id: JunkId(id),
@@ -7917,6 +7925,7 @@ pub(super) mod tests {
                 sold(128, market::TRIBBLES),
                 sold(129, market::PERISHABLE),
                 sold(130, market::TRIBBLES),
+                sold(131, market::TRIBBLES | market::PERISHABLE),
             ],
             ..exchange()
         }
@@ -7991,6 +8000,36 @@ pub(super) mod tests {
             "four 250 ticks apart, then the next 25 ticks later"
         );
         assert_eq!(furballs_and_fruit(&session), (8, 4));
+    }
+
+    #[test]
+    fn a_both_flags_good_decays_after_the_perishable_only_good_is_gone_until_the_next_reset() {
+        let mut session = taken_off_with(&[(FRUIT, 1), (ROTTING_FURBALLS, 5)]);
+        let held = |session: &Session| {
+            (
+                session.pilot().held(FRUIT),
+                session.pilot().held(ROTTING_FURBALLS),
+            )
+        };
+        assert_eq!(steps_in(&mut session, 15), [15]);
+        assert_eq!(
+            held(&session),
+            (0, 5),
+            "the fruit gone; 5 grown to 6, decayed to 5"
+        );
+        assert_eq!(steps_in(&mut session, 250), Vec::<u32>::new());
+        assert_eq!(
+            held(&session),
+            (0, 5),
+            "the take-off's perishable latch still holds (@0x708c3): 6 if read live"
+        );
+        session.run_script(&crate::control::Script::parse("b1"), &mut NeverFires);
+        assert_eq!(steps_in(&mut session, 250), [250]);
+        assert_eq!(
+            held(&session),
+            (0, 6),
+            "a reset with no perishable-only good aboard"
+        );
     }
 
     #[test]
