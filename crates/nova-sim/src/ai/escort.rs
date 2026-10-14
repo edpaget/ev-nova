@@ -3,7 +3,9 @@
 //! values are in [`escort`](crate::escort).
 //!
 //! - **Hold Position**: it brakes to a stop where it is ([`Goal::Idle`]),
-//!   targets nothing and fires nothing; its point defence still works.
+//!   targets nothing and fires nothing; its point defence runs on each of
+//!   its decisions, as `_EscortAI`'s hold tail-calls `_AIFireTurret`
+//!   (@0x83e59-0x83e74, @0x83f4e).
 //! - **Defend**: it keeps its target while the target is intact and
 //!   within [`DEFEND_KEEP_SQ`] (distance squared) of the player;
 //!   otherwise it takes the best threat to the player within
@@ -19,7 +21,10 @@
 //!     its turrets alone at a guard: the one it guards still while that
 //!     ship is intact and some weapon it carries reaches it, else one
 //!     drawn at random among the ships threatening the player
-//!     (`_AIFightThreatToParent` @0x81de6), at any distance;
+//!     (`_AIFightThreatToParent` @0x81de6), at any distance. Its turrets
+//!     fire, and its point defence runs, only while the guard is within
+//!     the 164-pixel box on both axes (@0x8648e-0x864ad,
+//!     @0x86666-0x86689);
 //!   - by the Bible (`shïp` `InherentAI`: "What AI the ship uses when
 //!     it's escorting the player"), it flies as its AI type would: a
 //!     warship or interceptor attacks the best threat to the player at
@@ -27,7 +32,8 @@
 //!     none, and a trader keeps formation and fires nothing.
 //! - **Return to Hangar**: a carried fighter (one with a
 //!   [`Carrier`](crate::bay::Carrier)) drops its target and docks with
-//!   the player ([`Goal::Dock`], `_EscortAI` @0x83e79), firing nothing;
+//!   the player ([`Goal::Dock`], `_EscortAI` @0x83e79), firing nothing
+//!   and running no point defence;
 //!   any other escort, holding it from an edited save, acts as with no
 //!   standing command.
 //!

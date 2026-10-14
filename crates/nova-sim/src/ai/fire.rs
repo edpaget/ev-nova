@@ -16,19 +16,34 @@
 //! - **The heading it wants** ([`wanted_heading`]): the lead angle for its
 //!   first forward gun's speed, or the plain bearing with none.
 //! - **A gun** (guidance -1, 0 and 6; a homing weapon only while no other
-//!   gun has its ammunition, @0x80243): reloaded and affordable; in range, the distance at
-//!   most its range plus [`RANGE_MARGIN`] (a beam's range is its length);
-//!   a rocket with a `ProxRadius` only while the target is
-//!   [`PROX_CLEARANCE`] times it away on both axes. Of those, the most
-//!   `EnergyDmg` while the target's shields are up, else the most
+//!   gun of the target's planet-type has its ammunition, @0x7ffaa-0x8001c,
+//!   @0x80243): none at a target the shooter does not see
+//!   (`_ShipVisibleToShip` @0x7ff1e-0x7ff2c, [`cloak::visible`](crate::cloak::visible)); a
+//!   planet-type weapon (`Flags2` 0x0400) exactly when the target's ship
+//!   type is planet-type (`Flags` 0x0400, @0x7ffaa-0x7ffdf); reloaded and
+//!   affordable; in range, the distance at most its range plus
+//!   [`RANGE_MARGIN`] (a beam's range is its length); a rocket with a
+//!   `ProxRadius` only while the target is [`PROX_CLEARANCE`] times it
+//!   away on both axes. Of those, the most `EnergyDmg` while the target's
+//!   shield is at or above none (@0x801e5-0x801fb), else the most
 //!   `MassDmg`, a value of none or less counting as 1, a tie to the
 //!   earlier mount. Guidance 5 is never chosen.
-//! - **A turret** (3, 4, 7 and 8): reloaded, affordable, in range, not in
-//!   a blind spot, and 7 and 8 only with the target within [`FRONT_ARC`]
-//!   of the nose and of the tail. Chosen by the same shield rule. None
-//!   at a target whose ship type is untargetable (`shïp` `Flags2` 0x0004,
+//! - **A turret** (3, 4, 7 and 8): none at a target whose ship type is
+//!   untargetable (`shïp` `Flags2` 0x0004,
 //!   [`UNTARGETABLE`](crate::cloak::UNTARGETABLE), `_AIFireTurret`
-//!   @0x80b51), whatever the shooter's scanner.
+//!   @0x80b51), whatever the shooter's scanner, nor at one the shooter
+//!   does not see (@0x80b5f-0x80b70); of the target's planet-type
+//!   (@0x80be6-0x80c23), reloaded, affordable, in range, not in a blind
+//!   spot, and 7 and 8 only with the target within [`FRONT_ARC`] of the
+//!   nose and of the tail, measured as the rulebook's
+//!   [`RuleKey::QuadrantTurretArc`](crate::RuleKey::QuadrantTurretArc)
+//!   entry says ([`FireRules`]; by the engine, unfolded across the seam,
+//!   @0x80c3d-0x80cf3). Chosen by the same shield rule (@0x80e12-0x80e27).
+//! - **Point defence** ([`Trigger::point_defence`]): asked for whenever
+//!   the manoeuvre reaches a turret, before any check of the target
+//!   (`_AIFireTurret` calls `_HandleShipPointDefense` @0x80b0d):
+//!   dogfighting, sniping, fleeing, and approaching while facing within
+//!   [`GUN_FACING`].
 //! - **A missile** (1, `_AIFireMissile` @0x8115d): none at a target whose
 //!   ship type is untargetable unless the shooter's ship type carries a
 //!   scanner with `ModVal` bit 0x0004 (@0x811a7-0x811cd,
@@ -71,13 +86,16 @@
 //! # Not modelled
 //!
 //! - The difficulty reload multiplier against the player.
-//! - In `_AIFireTurret`'s preamble, `_ShipVisibleToShip` (@0x80b69),
-//!   which keeps a turret off a target its shooter does not see, and the
-//!   call of `_HandleShipPointDefense` (@0x80b0d) from there rather than
-//!   every tick (point defence itself is
-//!   [`defence`](crate::combat::defence); a disabled shooter, `_IsDisabled`
-//!   @0x80afa, fires nothing in [`Armament::fire`]): rdm phase
-//!   player-led-ships/phase-24-ai-fire-turret-sight.
+//! - The kept pick: `_AIFireGun` sets the fire flag whenever +0x72 holds
+//!   a weapon (@0x80213-0x8021d), a pick `_HandleShip` keeps after firing
+//!   a weapon of `Flags` 0x0002 (@0x34ff0-0x35018), and `_AIFireTurret`
+//!   leaves an earlier pick standing (@0x80e33-0x80e37); here
+//!   [`Trigger::only`] holds one tick's pick: rdm phase
+//!   player-led-ships/phase-34.
+//! - A full turret's (3 and 4) blind-spot angle, which `_AIFireTurret`
+//!   reads from a local only an earlier 7 or 8 slot sets (@0x80c29-0x80c37,
+//!   @0x80c5b), else uninitialised stack: here the bearing.
+//! - The whole-degree truncation in the arc test (@0x80c7f, @0x80c95).
 //! - An NPC's rounds kept on each launcher, as `_WeaponHasAmmo` reads
 //!   them (@0xbab4-0xbac2) and `_FireAIShipWeapon` spends them
 //!   (@0x88d5f): here they are kept by ammunition. rdm phase
@@ -323,7 +341,7 @@ pub fn ammo_left(npc: &Npc) -> AmmoLeft {
 /// The weapon `npc` fires now among `around`, if any (see the module
 /// docs), its fighter bays while it attacks or snipes at a ship that is
 /// live there, and its point defence while its manoeuvre reaches a turret
-/// ([`asks_turret`]).
+/// (see the module docs).
 ///
 /// A target with no state here (gone from the system) asks for no point
 /// defence, where the original's handler may still reach

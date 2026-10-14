@@ -5,9 +5,13 @@
 //! `_PointDefenseCollisionHandler` and `_HandleBeams` in the `EV Nova`
 //! executable):
 //!
-//! - Every tick, each intact ship fires its first ready point-defence
-//!   weapon it can pay for, by weapon ID, at the nearest candidate missile
-//!   ([`choose`]), and nothing when there is none.
+//! - Each tick its trigger asks
+//!   ([`Trigger::point_defence`](super::armament::Trigger::point_defence)):
+//!   the player's every tick while intact, an NPC's when its AI asks for a
+//!   turret (`_AIFireTurret` @0x80b0d), each intact ship fires its first
+//!   ready point-defence weapon it can pay for, by weapon ID, at the
+//!   nearest candidate missile ([`choose`]), and nothing when there is
+//!   none.
 //! - A candidate is a live homing shot that has not lost its target, that
 //!   point defence can target (no `Flags` 0x0080), that is fired at this
 //!   ship or at its fleet's lead (an escort defends its lead), that is
