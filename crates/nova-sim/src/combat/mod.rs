@@ -87,13 +87,22 @@
 //!    never rises above 0 goes as the fight's [`Breakup`](hull::Breakup)
 //!    says (see `update_condition`, `_HandleShipDisplay`
 //!    @0x2d80d-0x2d85a).
+//!
+//!    9b. Each ship destroyed this tick that is heavy enough sends out a
+//!    shockwave ([`shockwave`]): every ship within its explosion's size,
+//!    breaking up or not, takes its damage, never destroyed or newly
+//!    disabled by it, and is pushed away from the wreck. The session takes
+//!    each push as a [`Shove`] ([`Combat::take_shoves`]) and sets the
+//!    ship's velocity. Each intact or disabled ship hit then settles its
+//!    condition as in step 8.
 //! 10. Shields regenerate on an intact or disabled ship, armour only on an
 //!     intact one, each up to what it holds.
 //!
-//! Each hit on a ship (a shot's, a beam's, a blast's) is kept as a
-//! [`Strike`] by the ship whose it was, with the shield and armour it
-//! took; the last on a ship disabled or breaking up that tick says so
-//! ([`Downed`]). The session takes them ([`Combat::take_strikes`]) for
+//! Each hit on a ship (a shot's, a beam's, a blast's, a shockwave's) is
+//! kept as a [`Strike`] by the ship whose it was, with the shield and
+//! armour it took; the last on a ship disabled or breaking up that tick
+//! says so ([`Downed`]), and a shockwave's provokes nothing
+//! ([`Strike::provokes`]). The session takes them ([`Combat::take_strikes`]) for
 //! the player's crimes and the NPCs' answers.
 //!
 //! Each step is reported as a [`CombatEvent`] for the view to show, and
@@ -219,13 +228,20 @@ pub enum Downed {
 pub struct Strike {
     /// The ship hit.
     pub ship: ShipRef,
-    /// The ship whose shot, beam or blast it was.
+    /// The ship whose shot, beam, blast or shockwave it was, or that
+    /// boarded it.
     pub by: ShipRef,
     /// The shield and armour it took.
     pub damage: f32,
     /// How it left the ship, for the last hit on a ship whose condition
     /// changed that tick; none otherwise.
     pub downed: Option<Downed>,
+    /// Whether it was an attack of `by`'s, which the ship hit may answer:
+    /// the original's `_DamageShip` arg +0x20. A shot, beam, blast or
+    /// boarding is; a death shockwave is not ([`shockwave`]), so it raises
+    /// no grudge, uncloaks no ship and provokes no AI (the block @0x3b44d
+    /// skips), though the player is still convicted of what it does.
+    pub provokes: bool,
 }
 
 /// A fighter launched from a bay this tick, for the session to put in
@@ -245,6 +261,16 @@ pub struct Sortie {
     pub heading: f32,
     /// The carrier's target, if any.
     pub target: Option<ShipRef>,
+}
+
+/// A ship a shockwave pushed this tick, for the session to set its
+/// velocity (see [`shockwave::shove`]): a [`Fighter`]'s state is a copy.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shove {
+    /// The ship pushed.
+    pub ship: ShipRef,
+    /// Its velocity after the push.
+    pub velocity: Vec2,
 }
 
 /// One ship in a fight, for a tick: what it is, where, what it holds and
@@ -282,6 +308,18 @@ pub struct Fighter<'a> {
     /// Whether it is cloaked: it fires only its weapons that fire while
     /// cloaked ([`Armament::has_ammo`]). The player never is.
     pub cloaked: bool,
+    /// Its class's top speed, in pixels a tick: its `shïp` `Speed` alone,
+    /// none of its outfits' (the original's class +0x40), which a
+    /// shockwave pushes it against ([`shockwave::shove`]).
+    pub class_speed: f32,
+    /// Its top speed, in pixels a tick, outfits and lead included (the
+    /// original's `_ShipMaxSpeed`): a shockwave's push is clamped to it
+    /// on each axis.
+    pub top_speed: f32,
+    /// Whether its jump is under way, the pre-jump stage included (the
+    /// original's +0x50 above 0): no shockwave pushes it. An NPC's jump
+    /// out has no stage in the simulation, so only the player's is.
+    pub jumping: bool,
     /// Its weapons.
     pub armament: &'a mut Armament,
     /// Its rounds of ammunition.
@@ -328,6 +366,10 @@ pub struct Combat {
     strikes: Vec<Strike>,
     stellar_strikes: Vec<StellarStrike>,
     sorties: Vec<Sortie>,
+    shoves: Vec<Shove>,
+    /// The ships destroyed this tick, in order, whose shockwaves are yet
+    /// to go off (step 9b).
+    wrecks: Vec<ShipRef>,
     reports: Reports,
     /// The next shot's number.
     next_shot: u32,
@@ -395,8 +437,83 @@ impl Combat {
                 last.downed = Some(downed);
             }
         }
+        self.shock(fighters, rules.disable);
         for fighter in fighters.iter_mut() {
             regenerate(fighter);
+        }
+    }
+
+    /// Step 9b: the shockwave of each ship destroyed this tick, in the
+    /// order they were destroyed ([`shockwave`]). It reaches every ship
+    /// not destroyed, breaking up or not, within the wreck's
+    /// [`HullSpec::death_size`] on each axis, the wreck spared; each takes
+    /// [`shockwave::hit`] as a [`Strike`] by the wreck that provokes
+    /// nothing, and is pushed as [`shockwave::shove`] says, reported as a
+    /// [`Shove`]. Then each intact or disabled ship hit settles its
+    /// condition as step 8 does, its strike marked when it is newly
+    /// disabled; a breaking-up one is not counted down again.
+    ///
+    /// The original runs the shockwave inside `_HandleShipDisplay` as each
+    /// ship's final explosion goes off (0x2d8ef-0x2da9c), so a ship later
+    /// in the table has already had its own condition and movement that
+    /// frame; here it comes after every ship's condition update, and its
+    /// push takes effect on the next movement. The difference stays within
+    /// the tick and crosses no boundary the player sees.
+    fn shock(&mut self, fighters: &mut [Fighter], rule: &dyn DisableRule) {
+        for wreck in std::mem::take(&mut self.wrecks) {
+            let Some((at, hull)) = fighters
+                .iter()
+                .find(|fighter| fighter.ship == wreck)
+                .map(|fighter| (fighter.state.position, fighter.hull))
+            else {
+                continue;
+            };
+            let blast = Blast {
+                at,
+                radius: hull.death_size(),
+                direct: None,
+                firer: wreck,
+                spares_player: true,
+            };
+            let reached = blast.reaches(
+                fighters
+                    .iter()
+                    .filter(|fighter| *fighter.condition != Condition::Destroyed)
+                    .map(|fighter| (fighter.ship, fighter.state.position)),
+            );
+            let damage = shockwave::damage(&hull);
+            for ship in reached {
+                let Some(fighter) = fighters.iter_mut().find(|fighter| fighter.ship == ship) else {
+                    continue;
+                };
+                let condition = *fighter.condition;
+                let before = taken(fighter.reserves);
+                shockwave::hit(fighter.reserves, condition, &fighter.hull, rule, damage);
+                let pushed = shockwave::shove(
+                    &fighter.state,
+                    at,
+                    &fighter.hull,
+                    fighter.jumping,
+                    fighter.class_speed,
+                    fighter.top_speed,
+                );
+                if let Some(velocity) = pushed {
+                    fighter.state.velocity = velocity;
+                    self.shoves.push(Shove { ship, velocity });
+                }
+                let downed = if condition.hittable() {
+                    self.update_condition(fighter, rule)
+                } else {
+                    None
+                };
+                self.strikes.push(Strike {
+                    ship,
+                    by: wreck,
+                    damage: before - taken(fighter.reserves),
+                    downed,
+                    provokes: false,
+                });
+            }
         }
     }
 
@@ -706,6 +823,7 @@ impl Combat {
                     by,
                     damage: before - taken(fighter.reserves),
                     downed: None,
+                    provokes: true,
                 });
             }
         }
@@ -890,6 +1008,7 @@ impl Combat {
     /// Destroys `fighter`, raising its [`CombatEvent::Destroyed`].
     fn destroy(&mut self, fighter: &mut Fighter) {
         *fighter.condition = Condition::Destroyed;
+        self.wrecks.push(fighter.ship);
         self.events.push(CombatEvent::Destroyed {
             ship: fighter.ship,
             ship_type: fighter.ship_type,
@@ -941,6 +1060,13 @@ impl Combat {
     /// them empties the list.
     pub fn take_sorties(&mut self) -> Vec<Sortie> {
         std::mem::take(&mut self.sorties)
+    }
+
+    /// The ships shockwaves pushed since they were last taken, in order,
+    /// each with its velocity after the push; taking them empties the
+    /// list.
+    pub fn take_shoves(&mut self) -> Vec<Shove> {
+        std::mem::take(&mut self.shoves)
     }
 
     /// The diagnostics made since they were last taken, each once a
@@ -1064,6 +1190,9 @@ mod tests {
         condition: Condition,
         held_disabled: bool,
         cloaked: bool,
+        class_speed: f32,
+        top_speed: f32,
+        jumping: bool,
         armament: Armament,
         rounds: BTreeMap<WeaponId, u32>,
     }
@@ -1081,7 +1210,8 @@ mod tests {
 
     impl Ship {
         /// NPC `id` at (`x`, `y`), at rest, facing right, unarmed, with
-        /// 10 shield and 30 armour and a default hull.
+        /// 10 shield and 30 armour, a default hull and a class and top
+        /// speed of 10.
         fn at(id: u32, x: f32, y: f32) -> Self {
             Self {
                 id: ShipRef::Npc(NpcId(id)),
@@ -1101,6 +1231,9 @@ mod tests {
                 condition: Condition::Intact,
                 held_disabled: false,
                 cloaked: false,
+                class_speed: 10.0,
+                top_speed: 10.0,
+                jumping: false,
                 armament: Armament::default(),
                 rounds: BTreeMap::new(),
             }
@@ -1138,6 +1271,9 @@ mod tests {
                 condition: &mut self.condition,
                 held_disabled: self.held_disabled,
                 cloaked: self.cloaked,
+                class_speed: self.class_speed,
+                top_speed: self.top_speed,
+                jumping: self.jumping,
                 armament: &mut self.armament,
                 rounds: &mut self.rounds,
             }
@@ -1769,6 +1905,224 @@ mod tests {
                 Some(CombatEvent::Destroyed { size, .. }) if *size == 80.0
             ),
             "{events:?}"
+        );
+    }
+
+    /// A ship of `mass` tons at (`x`, `y`) whose armour is gone, with no
+    /// death delay, so it breaks up and explodes on the next tick: `id`,
+    /// an NPC or the player.
+    fn wreck(id: ShipRef, mass: f32, x: f32, y: f32) -> Ship {
+        let mut ship = Ship::at(9, x, y);
+        ship.id = id;
+        ship.fleet = id;
+        ship.reserves.armor.now = 0.0;
+        ship.hull.mass = mass;
+        ship
+    }
+
+    /// NPC `id` at (`x`, `y`), at rest, with `shield` shields and `armor`
+    /// of `armor_max` armour.
+    fn holding(id: u32, x: f32, y: f32, shield: f32, armor: f32, armor_max: f32) -> Ship {
+        let mut ship = Ship::at(id, x, y);
+        ship.reserves = Reserves::full(shield, armor_max, 100.0);
+        ship.reserves.armor.now = armor;
+        ship
+    }
+
+    /// The shields and armour `ship` holds now.
+    fn left(ship: &Ship) -> (f32, f32) {
+        (ship.reserves.shield.now, ship.reserves.armor.now)
+    }
+
+    const WRECK: ShipRef = ShipRef::Npc(NpcId(9));
+
+    #[test]
+    fn a_heavy_ships_final_explosion_hits_a_ship_65_pixels_off_and_not_66() {
+        let mut combat = Combat::default();
+        let mut ships = [
+            wreck(WRECK, 200.0, 0.0, 0.0),
+            holding(1, 65.0, -65.0, 100.0, 300.0, 300.0),
+            holding(2, 66.0, 0.0, 100.0, 300.0, 300.0),
+            holding(3, -30.0, 66.0, 100.0, 300.0, 300.0),
+        ];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(ships[0].condition, Condition::Destroyed);
+        assert_eq!(left(&ships[1]), (68.0, 300.0));
+        assert_eq!(left(&ships[2]), (100.0, 300.0), "66 off on x");
+        assert_eq!(left(&ships[3]), (100.0, 300.0), "66 off on y");
+        let strikes = combat.take_strikes();
+        assert_eq!(
+            strikes,
+            [Strike {
+                ship: A,
+                by: WRECK,
+                damage: 32.0,
+                downed: None,
+                provokes: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_planet_type_or_light_ship_explodes_without_a_shockwave() {
+        let mut planet = wreck(WRECK, 400.0, 0.0, 0.0);
+        planet.hull.planet_type = true;
+        for wrecked in [planet, wreck(WRECK, 99.0, 0.0, 0.0)] {
+            let mut combat = Combat::default();
+            let mut ships = [wrecked, holding(1, 10.0, 0.0, 100.0, 300.0, 300.0)];
+            tick(&mut combat, &mut ships, &NovaDisable);
+            assert_eq!(ships[0].condition, Condition::Destroyed);
+            assert_eq!(left(&ships[1]), (100.0, 300.0));
+            assert_eq!(combat.take_strikes(), []);
+            assert_eq!(combat.take_shoves(), []);
+            let events = combat.take_events();
+            assert!(
+                events.iter().any(
+                    |event| matches!(event, CombatEvent::Destroyed { size, .. } if *size == 0.0)
+                ),
+                "{events:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_players_final_explosion_hits_npcs_and_not_itself() {
+        let mut combat = Combat::default();
+        let mut npc = holding(1, 40.0, 0.0, 100.0, 300.0, 300.0);
+        npc.hull.mass = 200.0;
+        let mut ships = [wreck(ShipRef::Player, 200.0, 0.0, 0.0), npc];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(ships[0].condition, Condition::Destroyed);
+        assert_eq!(left(&ships[1]), (68.0, 300.0));
+        let strikes = combat.take_strikes();
+        assert_eq!(strikes.len(), 1, "{strikes:?}");
+        assert_eq!((strikes[0].ship, strikes[0].by), (A, ShipRef::Player));
+        let shoves = combat.take_shoves();
+        assert_eq!(shoves.len(), 1, "{shoves:?}");
+        assert_eq!(shoves[0].ship, A);
+    }
+
+    #[test]
+    fn an_npcs_final_explosion_hits_the_player() {
+        let mut combat = Combat::default();
+        let mut player = holding(1, 0.0, 40.0, 100.0, 300.0, 300.0);
+        player.id = ShipRef::Player;
+        player.fleet = ShipRef::Player;
+        player.hull.mass = 200.0;
+        let mut ships = [wreck(WRECK, 200.0, 0.0, 0.0), player];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(left(&ships[1]), (68.0, 300.0));
+        let strikes = combat.take_strikes();
+        assert_eq!(strikes.len(), 1, "{strikes:?}");
+        assert_eq!((strikes[0].ship, strikes[0].by), (ShipRef::Player, WRECK));
+        let shoves = combat.take_shoves();
+        assert_eq!(shoves.len(), 1, "{shoves:?}");
+        assert_eq!(shoves[0].ship, ShipRef::Player);
+        assert!(
+            (shoves[0].velocity - Vec2::new(0.0, 3.75)).length() < 1e-4,
+            "away from the wreck: {shoves:?}"
+        );
+    }
+
+    #[test]
+    fn a_shockwave_strikes_by_the_wreck_and_says_when_it_disabled() {
+        let mut combat = Combat::default();
+        let mut ships = [
+            wreck(WRECK, 200.0, 0.0, 0.0),
+            holding(1, 20.0, 0.0, 0.0, 300.0, 300.0),
+            holding(2, -20.0, 0.0, 0.0, 13_350.0, 40_000.0),
+        ];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(left(&ships[1]), (0.0, 268.0));
+        assert_eq!(ships[1].condition, Condition::Intact);
+        assert_eq!(left(&ships[2]), (0.0, 13_333.0), "floored, still disabled");
+        assert_eq!(ships[2].condition, Condition::Disabled);
+        assert_eq!(
+            combat.take_strikes(),
+            [
+                Strike {
+                    ship: A,
+                    by: WRECK,
+                    damage: 32.0,
+                    downed: None,
+                    provokes: false,
+                },
+                Strike {
+                    ship: B,
+                    by: WRECK,
+                    damage: 17.0,
+                    downed: Some(Downed::Disabled),
+                    provokes: false,
+                },
+            ]
+        );
+        let events = combat.take_events();
+        let disabled: Vec<_> = events
+            .iter()
+            .filter(|event| matches!(event, CombatEvent::Disabled { .. }))
+            .collect();
+        assert_eq!(disabled, [&CombatEvent::Disabled { ship: B }]);
+    }
+
+    #[test]
+    fn a_shockwave_shoves_a_breaking_up_ship_too_and_counts_it_down_once() {
+        let mut combat = Combat::default();
+        let mut dying = holding(1, 40.0, 0.0, 0.0, -1.0, 300.0);
+        dying.hull.mass = 200.0;
+        dying.condition = Condition::Dying {
+            ticks_left: 9,
+            starting: false,
+        };
+        let mut ships = [wreck(WRECK, 200.0, 0.0, 0.0), dying];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(left(&ships[1]), (0.0, -33.0));
+        assert_eq!(
+            ships[1].condition,
+            Condition::Dying {
+                ticks_left: 8,
+                starting: false
+            }
+        );
+        let shoves = combat.take_shoves();
+        assert_eq!(shoves.len(), 1, "{shoves:?}");
+        assert_eq!(shoves[0].ship, A);
+        assert!(
+            (shoves[0].velocity - Vec2::new(3.75, 0.0)).length() < 1e-4,
+            "{shoves:?}"
+        );
+        let strikes = combat.take_strikes();
+        assert_eq!(strikes.len(), 1, "{strikes:?}");
+        assert_eq!((strikes[0].damage, strikes[0].downed), (32.0, None));
+    }
+
+    #[test]
+    fn a_ship_whose_jump_is_under_way_is_hit_but_not_shoved() {
+        let mut combat = Combat::default();
+        let mut jumping = holding(1, 40.0, 0.0, 100.0, 300.0, 300.0);
+        jumping.hull.mass = 200.0;
+        jumping.jumping = true;
+        let mut ships = [wreck(WRECK, 200.0, 0.0, 0.0), jumping];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        assert_eq!(left(&ships[1]), (68.0, 300.0));
+        assert_eq!(combat.take_shoves(), []);
+    }
+
+    #[test]
+    fn a_shove_is_capped_at_the_ships_class_speed_and_clamped_to_its_top_speed() {
+        let mut combat = Combat::default();
+        let mut slow = holding(1, 40.0, 0.0, 100.0, 300.0, 300.0);
+        slow.hull.mass = 100.0;
+        slow.state.velocity = Vec2::new(-9.0, 7.0);
+        slow.class_speed = 4.0;
+        slow.top_speed = 6.0;
+        let mut ships = [wreck(WRECK, 200.0, 0.0, 0.0), slow];
+        tick(&mut combat, &mut ships, &NovaDisable);
+        let shoves = combat.take_shoves();
+        assert_eq!(shoves.len(), 1, "{shoves:?}");
+        // -9 + 7.5 is -1.5, short of the class speed; 7 is clamped to 6.
+        assert!(
+            (shoves[0].velocity - Vec2::new(-1.5, 6.0)).length() < 1e-4,
+            "{shoves:?}"
         );
     }
 
@@ -3042,7 +3396,8 @@ mod tests {
                 ship: B,
                 by: A,
                 damage: 14.0,
-                downed: None
+                downed: None,
+                provokes: true,
             }],
             "10 off the shield, then 4 off the armour"
         );
@@ -3054,7 +3409,8 @@ mod tests {
                 ship: B,
                 by: A,
                 damage: 5.0,
-                downed: None
+                downed: None,
+                provokes: true,
             }],
             "the shield down to its floor, a tenth below none, then 4 off the armour"
         );
@@ -3076,6 +3432,7 @@ mod tests {
             by: A,
             damage: 5.0,
             downed: None,
+            provokes: true,
         }];
         assert_eq!(struck, [hit.clone(), hit.clone(), hit, vec![], vec![]]);
     }
@@ -3106,6 +3463,7 @@ mod tests {
             by: A,
             damage: 14.0,
             downed: None,
+            provokes: true,
         };
         assert_eq!(strikes, [of(B), of(C)], "the hit, then the blast");
     }
@@ -3136,7 +3494,8 @@ mod tests {
                 ship: B,
                 by: A,
                 damage: 3.0,
-                downed: None
+                downed: None,
+                provokes: true,
             }]
         );
     }
@@ -3213,13 +3572,15 @@ mod tests {
                     ship: B,
                     by: A,
                     damage: 5.0,
-                    downed: None
+                    downed: None,
+                    provokes: true,
                 },
                 Strike {
                     ship: B,
                     by: C,
                     damage: 4.0,
-                    downed: Some(Downed::Disabled)
+                    downed: Some(Downed::Disabled),
+                    provokes: true,
                 }
             ],
             "12 armour less 8 is below a third of 30"

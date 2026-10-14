@@ -527,6 +527,7 @@ mod tests {
             by: P,
             damage: 1.0,
             downed: None,
+            provokes: true,
         };
         let victim = ship(9, TRADERS, AiType::WimpyTrader, 900.0, 0.0);
         let npcs = [ship(1, POLICE, AiType::Warship, 0.0, 0.0), victim];

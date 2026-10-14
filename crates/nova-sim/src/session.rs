@@ -412,7 +412,7 @@ use crate::combat::hull::{Breakup, Condition, DisableRule, HullSpec};
 use crate::combat::projectile::Shot;
 use crate::combat::report::{Reports, SimDiagnostic};
 use crate::combat::weapon::Ammo;
-use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Strike};
+use crate::combat::{Combat, CombatEvent, Downed, Fighter, Rules, ShipRef, Shove, Strike};
 use crate::control::{ControlBits, NovaBits, ScriptNote};
 use crate::date::{self, GameDate};
 use crate::flight::{Controls, ShipState, step};
@@ -472,6 +472,64 @@ use crate::traffic::npc::{Npc, NpcId};
 use crate::traffic::table::SpawnTable;
 use crate::traffic::{Traffic, World, strength};
 use crate::wares::DayRolls;
+
+/// What [`Session::tick_combat`] works out for a ship's [`Fighter`]
+/// beyond what the ship carries.
+#[derive(Clone, Copy, Debug)]
+struct FightTerms {
+    /// Whether it is held disabled.
+    held_disabled: bool,
+    /// Its class's top speed, its `Speed` alone.
+    class_speed: f32,
+    /// Its top speed.
+    top_speed: f32,
+}
+
+impl FightTerms {
+    /// `npc` in the fight, on these terms. Its jump is never under way:
+    /// an NPC's jump out has no stage here, as it leaves on the tick it
+    /// reaches its jump distance.
+    fn fighter(self, npc: &mut Npc) -> Fighter<'_> {
+        let fleet = npc.fleet();
+        let Npc {
+            id,
+            ship,
+            govt,
+            stats,
+            state,
+            hull,
+            trigger,
+            target,
+            reserves,
+            condition,
+            armament,
+            rounds,
+            cloak,
+            ..
+        } = npc;
+        Fighter {
+            ship: ShipRef::Npc(*id),
+            ship_type: *ship,
+            fleet,
+            govt: *govt,
+            state: *state,
+            hull: *hull,
+            shield_regen: stats.shield_regen,
+            armor_regen: stats.armor_regen,
+            trigger: *trigger,
+            target: *target,
+            reserves,
+            condition,
+            held_disabled: self.held_disabled,
+            cloaked: cloak.is_cloaked(),
+            class_speed: self.class_speed,
+            top_speed: self.top_speed,
+            jumping: false,
+            armament,
+            rounds,
+        }
+    }
+}
 
 /// A jump, from J being accepted until the ship arrives.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1682,7 +1740,11 @@ impl Session {
     /// shown that shots can hit take their damage, and each shot
     /// down is destroyed and runs its `OnDestroy` (see the `stellars`
     /// module). While the player's ship breaks up, the klaxon sounds
-    /// first among the tick's sounds (see `sound_the_klaxon`).
+    /// first among the tick's sounds (see `sound_the_klaxon`). A heavy
+    /// ship's final explosion, the player's too, sends out a shockwave
+    /// ([`shockwave`](crate::combat::shockwave)) that sets the velocity of
+    /// each ship it pushes; the player's is not pushed while its jump is
+    /// under way, the pre-jump stage included.
     pub fn tick_combat(&mut self, rules: Rules, chance: &mut (impl Chance + ?Sized)) {
         self.player_exploded_this_tick = false;
         if self.landed.is_some() || self.jumping().is_some() {
@@ -1692,12 +1754,7 @@ impl Session {
         let was_dying = matches!(self.condition, Condition::Dying { .. });
         self.take_scans(rules.law, &mut &mut *chance);
         let was: Vec<NpcBefore> = self.traffic.npcs().iter().map(NpcBefore::of).collect();
-        let held: Vec<bool> = self
-            .traffic
-            .npcs()
-            .iter()
-            .map(|npc| self.mission_ship_held(npc))
-            .collect();
+        let (player_terms, terms) = self.fight_terms();
         let mut stellars = self.stellar_targets();
         let pilot = &mut self.pilot;
         let mut rounds = OutfitRounds {
@@ -1719,46 +1776,14 @@ impl Session {
             condition: &mut self.condition,
             held_disabled: false,
             cloaked: false,
+            class_speed: player_terms.class_speed,
+            top_speed: player_terms.top_speed,
+            jumping: self.jump.is_some(),
             armament: &mut self.armament,
             rounds: &mut rounds,
         }];
-        for (npc, held_disabled) in self.traffic.npcs_mut().iter_mut().zip(held) {
-            let fleet = npc.fleet();
-            let Npc {
-                id,
-                ship,
-                govt,
-                stats,
-                state,
-                hull,
-                trigger,
-                target,
-                reserves,
-                condition,
-                armament,
-                rounds,
-                cloak,
-                ..
-            } = npc;
-            fighters.push(Fighter {
-                ship: ShipRef::Npc(*id),
-                ship_type: *ship,
-                fleet,
-                govt: *govt,
-                state: *state,
-                hull: *hull,
-                shield_regen: stats.shield_regen,
-                armor_regen: stats.armor_regen,
-                trigger: *trigger,
-                target: *target,
-                reserves,
-                condition,
-                held_disabled,
-                cloaked: cloak.is_cloaked(),
-                armament,
-                rounds,
-            });
-        }
+        let npcs = self.traffic.npcs_mut().iter_mut().zip(terms);
+        fighters.extend(npcs.map(|(npc, terms)| terms.fighter(npc)));
         self.combat.tick(
             &mut fighters,
             &self.arsenal,
@@ -1767,6 +1792,7 @@ impl Session {
             &mut stellars,
             chance,
         );
+        self.take_shoves();
         self.player_exploded_this_tick = !was_destroyed && self.condition == Condition::Destroyed;
         self.sound_the_klaxon(was_dying);
         self.raise_disabled(&was, &mut &mut *chance);
@@ -1814,6 +1840,55 @@ impl Session {
         if counting_down || (self.player_exploded_this_tick && was_dying) {
             self.sounds.push(SimSound::Klaxon);
         }
+    }
+
+    /// What the fight needs of the player's ship and of each NPC, in
+    /// order, that the ship does not carry: whether it is held disabled
+    /// ([`Session::mission_ship_held`]; the player never is), and its
+    /// class and top speeds, which a shockwave pushes it against.
+    fn fight_terms(&self) -> (FightTerms, Vec<FightTerms>) {
+        let player = FightTerms {
+            held_disabled: false,
+            class_speed: self.class_speed(self.pilot.ship),
+            top_speed: self.top_speed(),
+        };
+        let led_speed = self.led_speed();
+        let npcs = self
+            .traffic
+            .npcs()
+            .iter()
+            .map(|npc| FightTerms {
+                held_disabled: self.mission_ship_held(npc),
+                class_speed: self.class_speed(npc.ship),
+                top_speed: npc.top_speed(led_speed),
+            })
+            .collect();
+        (player, npcs)
+    }
+
+    /// Sets the velocity of each ship the fight's shockwaves pushed this
+    /// tick ([`Combat::take_shoves`]), which takes effect on its next
+    /// movement.
+    fn take_shoves(&mut self) {
+        for Shove { ship, velocity } in self.combat.take_shoves() {
+            match ship {
+                ShipRef::Player => self.player.velocity = velocity,
+                ShipRef::Npc(id) => {
+                    let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
+                    if let Some(npc) = npc {
+                        npc.state.velocity = velocity;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ship class `ship`'s top speed, its `Speed` alone
+    /// ([`ShipFields::class_speed`](crate::handling::ShipFields::class_speed));
+    /// none without a record.
+    fn class_speed(&self, ship: ShipId) -> f32 {
+        self.ship_record(ship)
+            .map_or(0.0, |record| record.fields.class_speed())
     }
 
     /// Answers the fight's strikes this tick, against what each NPC `was`
@@ -3893,6 +3968,7 @@ impl Session {
             by: ShipRef::Player,
             damage: 0.0,
             downed: None,
+            provokes: true,
         });
         if let Some(offering) = self.person_offering(&npc, person_offers::OfferedBy::Boarding) {
             return Ok(Boarding::Offered(self.offer_from_ship(offering, chance)));
@@ -4483,6 +4559,7 @@ impl Session {
             by: ShipRef::Player,
             damage: 1.0,
             downed: None,
+            provokes: true,
         }];
         self.target = Some(npc);
         self.aboard = Some(Aboard {
@@ -13816,6 +13893,7 @@ pub(super) mod tests {
             by,
             damage: 9.0,
             downed: Some(Downed::BreakingUp),
+            provokes: true,
         };
         session.credit_kills(&[broken_up_by(ShipRef::Npc(NpcId(1)))], &was);
         let by_the_police = session.pilot().combat_rating();
@@ -13863,6 +13941,7 @@ pub(super) mod tests {
                 by: ShipRef::Npc(fighter),
                 damage: 9.0,
                 downed: Some(Downed::BreakingUp),
+                provokes: true,
             }],
             &was,
         );
@@ -13889,6 +13968,7 @@ pub(super) mod tests {
             by: ShipRef::Player,
             damage: 9.0,
             downed,
+            provokes: true,
         };
         session.credit_kills(
             &[
@@ -14353,6 +14433,220 @@ pub(super) mod tests {
             }
         }
         assert_eq!(session.npcs()[0].cloak.direction, -1);
+    }
+
+    #[test]
+    fn a_shockwave_neither_cloaks_nor_uncloaks_the_ship_it_hits() {
+        let catalog = armed();
+        let mut session = facing_an_npc(&catalog, 180);
+        let shockwave = Strike {
+            ship: ShipRef::Npc(NpcId(0)),
+            by: ShipRef::Player,
+            damage: 32.0,
+            downed: None,
+            provokes: false,
+        };
+        session.traffic.npcs_mut()[0].cloak_gear = crate::cloak::CloakGear {
+            flags2: crate::cloak::CLOAK_WHEN_HIT,
+            ..CAN_CLOAK
+        };
+        session.cloak_hits(&[shockwave]);
+        assert_eq!(session.npcs()[0].cloak, crate::cloak::Cloak::default());
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.cloak_gear = crate::cloak::CloakGear {
+            decloaks_when_hit: true,
+            ..CAN_CLOAK
+        };
+        npc.cloak = CLOAKED;
+        session.cloak_hits(&[shockwave]);
+        assert_eq!(session.npcs()[0].cloak, CLOAKED);
+    }
+
+    // The death shockwave.
+
+    /// [`lawful`], with the player's ship 128 a fast one.
+    fn shockwave_catalog() -> FakePilotCatalog {
+        let mut catalog = lawful();
+        catalog.ship_records.push(crate::testkit::ship(128, FAST));
+        catalog
+    }
+
+    /// `catalog`'s session with the player at rest at the centre and
+    /// NPC 0 at rest 40 pixels above it, both of `Mass` 200 and
+    /// regenerating nothing.
+    fn beside_a_heavy_npc(catalog: &FakePilotCatalog) -> Session {
+        let mut session = facing_an_npc(catalog, 180);
+        session.player.position = Vec2::ZERO;
+        session.player.velocity = Vec2::ZERO;
+        session.hull.mass = 200.0;
+        session.stats.shield_regen = 0.0;
+        session.stats.armor_regen = 0.0;
+        let npc = &mut session.traffic.npcs_mut()[0];
+        npc.state.position = Vec2::new(0.0, -40.0);
+        npc.hull.mass = 200.0;
+        npc.hull.tough = false;
+        npc.stats.shield_regen = 0.0;
+        npc.stats.armor_regen = 0.0;
+        session
+    }
+
+    /// Breaks up a ship of `reserves` and `condition` to the last tick
+    /// before its final explosion, which the next fight tick sets off.
+    fn on_its_last_tick(reserves: &mut Reserves, condition: &mut Condition) {
+        reserves.armor.now = -1.0;
+        *condition = Condition::Dying {
+            ticks_left: 3,
+            starting: false,
+        };
+    }
+
+    /// Shields down and `armor` of `armor_max` armour.
+    fn bare(reserves: &mut Reserves, armor: f32, armor_max: f32) {
+        reserves.shield = crate::reserves::Gauge { now: 0.0, max: 0.0 };
+        reserves.armor = crate::reserves::Gauge {
+            now: armor,
+            max: armor_max,
+        };
+    }
+
+    fn near(a: Vec2, b: Vec2) -> bool {
+        (a - b).length() < 1e-4
+    }
+
+    #[test]
+    fn the_players_heavy_hull_exploding_damages_and_pushes_npcs_but_not_itself() {
+        let catalog = shockwave_catalog();
+        let mut session = beside_a_heavy_npc(&catalog);
+        session.traffic.npcs_mut()[0].reserves = Reserves::full(100.0, 300.0, 100.0);
+        on_its_last_tick(&mut session.pilot.reserves, &mut session.condition);
+        let player = session.pilot.reserves;
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.player_condition(), Condition::Destroyed);
+        let npc = &session.npcs()[0];
+        assert_eq!(
+            (npc.reserves.shield.now, npc.reserves.armor.now),
+            (68.0, 300.0)
+        );
+        assert!(
+            near(npc.state.velocity, Vec2::new(0.0, -3.75)),
+            "{:?}",
+            npc.state.velocity
+        );
+        assert_eq!(
+            session.pilot.reserves, player,
+            "its own shockwave spares it"
+        );
+        assert_eq!(session.player().velocity, Vec2::ZERO);
+    }
+
+    #[test]
+    fn an_exploding_heavy_npc_damages_and_pushes_the_player() {
+        let catalog = shockwave_catalog();
+        let mut session = beside_a_heavy_npc(&catalog);
+        session.pilot.reserves.shield = crate::reserves::Gauge::full(100.0);
+        session.pilot.reserves.armor = crate::reserves::Gauge::full(300.0);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        on_its_last_tick(&mut npc.reserves, &mut npc.condition);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.npcs(), [], "the wreck is taken out");
+        let reserves = session.pilot.reserves;
+        assert_eq!((reserves.shield.now, reserves.armor.now), (68.0, 300.0));
+        assert!(
+            near(session.player().velocity, Vec2::new(0.0, 3.75)),
+            "{:?}",
+            session.player().velocity
+        );
+    }
+
+    #[test]
+    fn a_player_braking_for_its_jump_is_hit_by_a_shockwave_but_not_pushed() {
+        let catalog = shockwave_catalog();
+        let mut session = beside_a_heavy_npc(&catalog);
+        session.pilot.reserves.shield = crate::reserves::Gauge::full(100.0);
+        session.jump = Some(Jump::PreJump {
+            to: SystemId(131),
+            bearing: None,
+        });
+        let npc = &mut session.traffic.npcs_mut()[0];
+        on_its_last_tick(&mut npc.reserves, &mut npc.condition);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(session.pilot.reserves.shield.now, 68.0, "hit");
+        assert_eq!(session.player().velocity, Vec2::ZERO, "not pushed");
+    }
+
+    #[test]
+    fn the_players_shockwave_on_a_300_armour_ship_convicts_of_nothing_and_credits_no_kill() {
+        let catalog = shockwave_catalog();
+        for (armor, before, after) in [
+            (110.0, Condition::Intact, 100.99),
+            (20.0, Condition::Disabled, 1.0),
+        ] {
+            let mut session = beside_a_heavy_npc(&catalog);
+            let npc = &mut session.traffic.npcs_mut()[0];
+            bare(&mut npc.reserves, armor, 300.0);
+            npc.condition = before;
+            on_its_last_tick(&mut session.pilot.reserves, &mut session.condition);
+            let rating = session.pilot.combat_rating;
+            let witness = Witness::default();
+            let rules = Rules {
+                law: &witness,
+                ..Rules::default()
+            };
+            session.tick_combat(rules, &mut NeverFires);
+            let npc = &session.npcs()[0];
+            assert!(
+                (npc.reserves.armor.now - after).abs() < 1e-4,
+                "{armor}: {:?}",
+                npc.reserves
+            );
+            assert_eq!(npc.condition, before, "{armor}");
+            assert_eq!(witness.seen.take(), [], "{armor}");
+            assert_eq!(session.pilot.combat_rating, rating, "{armor}");
+        }
+    }
+
+    #[test]
+    fn the_players_shockwave_disabling_a_40000_armour_ship_convicts_once() {
+        let catalog = shockwave_catalog();
+        let mut session = beside_a_heavy_npc(&catalog);
+        bare(
+            &mut session.traffic.npcs_mut()[0].reserves,
+            13_350.0,
+            40_000.0,
+        );
+        on_its_last_tick(&mut session.pilot.reserves, &mut session.condition);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        let npc = &session.npcs()[0];
+        assert_eq!(npc.reserves.armor.now, 13_333.0, "floored, still disabled");
+        assert_eq!(npc.condition, Condition::Disabled);
+        assert_eq!(
+            records(&session),
+            [-3, -3, 4, 10],
+            "convicted of disabling it"
+        );
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert_eq!(records(&session), [-3, -3, 4, 10], "once");
+    }
+
+    #[test]
+    fn an_npcs_shockwave_convicts_the_player_of_nothing() {
+        let catalog = shockwave_catalog();
+        let mut session = beside_a_heavy_npc(&catalog);
+        let mut victim = session.npcs()[0].clone();
+        victim.state.position = Vec2::new(30.0, -40.0);
+        bare(&mut victim.reserves, 13_350.0, 40_000.0);
+        let victim = session.traffic.add_npc(victim);
+        let npc = &mut session.traffic.npcs_mut()[0];
+        on_its_last_tick(&mut npc.reserves, &mut npc.condition);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        let victim = session
+            .npcs()
+            .iter()
+            .find(|npc| npc.id == victim)
+            .expect("still here");
+        assert_eq!(victim.condition, Condition::Disabled);
+        assert_eq!(victim.reserves.armor.now, 13_333.0);
+        assert_eq!(records(&session), [0, 0, 0, 0]);
     }
 
     #[test]
@@ -16890,6 +17184,7 @@ pub(super) mod tests {
                 by: ShipRef::Player,
                 damage: 0.0,
                 downed: None,
+                provokes: true,
             }]
         );
         session.tick_traffic(&catalog, &crate::ai::NovaAi::default(), &mut NeverFires);

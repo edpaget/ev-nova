@@ -530,9 +530,12 @@ impl Traffic {
         self.add(fleet, world.persons.grudges);
     }
 
-    /// Each flying, intact NPC answers each of `strikes` in `world`, as
-    /// `behaviour` says, all against the NPCs as they were before.
+    /// Each flying, intact NPC answers each of `strikes` in `world` that
+    /// provokes ([`Strike::provokes`]: not a death shockwave, which skips
+    /// `_DamageShip`'s reaction block @0x3b44d), as `behaviour` says, all
+    /// against the NPCs as they were before.
     fn react(&mut self, behaviour: &(impl Behaviour + ?Sized), world: &World, strikes: &[Strike]) {
+        let strikes: Vec<&Strike> = strikes.iter().filter(|strike| strike.provokes).collect();
         if strikes.is_empty() {
             return;
         }
@@ -1774,6 +1777,7 @@ mod tests {
             by: ShipRef::Player,
             damage,
             downed: None,
+            provokes: true,
         }
     }
 
@@ -1800,6 +1804,34 @@ mod tests {
         );
         assert_eq!(traffic.npcs()[1].target, Some(ShipRef::Player));
         assert_eq!(traffic.npcs()[1].provoked, 4.0, "kept while it fights");
+    }
+
+    #[test]
+    fn a_strike_that_provokes_nothing_is_answered_by_no_one() {
+        let mut traffic = populated(2, 1);
+        let fighting = Fighting::deciding(Goal::Idle);
+        let shockwave = Strike {
+            provokes: false,
+            ..struck(1, 4.0)
+        };
+        traffic.tick_in(
+            &fighting,
+            World::new(&[]),
+            &[shockwave, struck(0, 2.0)],
+            &mut Draws::of(&[]),
+        );
+        let reacted: Vec<String> = fighting
+            .log
+            .borrow()
+            .iter()
+            .filter(|line| line.starts_with("react"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            reacted,
+            ["react 0 Npc(NpcId(0))", "react 1 Npc(NpcId(0))"],
+            "only the attack is answered"
+        );
     }
 
     #[test]
