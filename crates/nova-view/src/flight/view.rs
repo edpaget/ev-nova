@@ -2122,6 +2122,67 @@ impl<
         }
     }
 
+    /// Runs up to `steps` of the session's steps, each only while
+    /// `go_on` holds of the session before it: the ship's tick under the
+    /// keys held, the traffic's, the quotes', the assistance's and the
+    /// fight's, then the effects. Then says the comm notes, quotes and
+    /// messages they raised, and reads the sheets of a system the session
+    /// populated afresh. Flight and the warp's lead-in under the streak
+    /// both step this way.
+    fn run_steps(&mut self, steps: u32, go_on: fn(&Session) -> bool) {
+        let controls = self.controls();
+        let fire = (
+            self.held.contains(&FIRE_KEY),
+            self.held.contains(&SECONDARY_KEY),
+        );
+        let mut notes = Vec::new();
+        let mut quotes = Vec::new();
+        if let Ok(session) = &mut self.session {
+            session.set_play_area(play_area());
+            session.hold_fire(fire.0, fire.1);
+            for _ in 0..steps {
+                if !go_on(session) {
+                    break;
+                }
+                self.previous = *session.player();
+                self.npc_previous = session
+                    .npcs()
+                    .iter()
+                    .map(|npc| (npc.id, npc.state))
+                    .collect();
+                session.tick(controls);
+                session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
+                session.tick_quotes(&self.catalog, &mut self.chance);
+                quotes.extend(session.take_quotes());
+                session.tick_assistance(&*self.disable_rule);
+                notes.extend(session.take_comm());
+                let rules = Rules {
+                    disable: &*self.disable_rule,
+                    defence: &*self.defence_rule,
+                    law: &*self.law,
+                };
+                session.tick_combat(rules, &mut self.chance);
+                let player = point(session.player().position);
+                let dying = dying(session, &self.sheet, &self.npc_sheets);
+                let chance = &mut self.effects_chance;
+                self.effects.step(&dying, player, &self.looks, chance);
+                let scene = Scene { player };
+                for event in session.take_combat_events() {
+                    self.effects.apply(&event, &scene, &self.looks, chance);
+                }
+            }
+        }
+        for note in &notes {
+            self.say_for(comm_message(note), MESSAGE_TICKS);
+        }
+        for quote in quotes {
+            self.say_for(quote.text, HAIL_QUOTE_TICKS);
+        }
+        self.say_messages();
+        // The session may have populated its system afresh.
+        self.read_npc_sheets();
+    }
+
     /// Starts the jump's streak, from the current system towards the next,
     /// once the session says the jump has begun, unless it is playing
     /// already.
@@ -4038,17 +4099,20 @@ impl<
 
     /// First catches the screen up with what the session has told since
     /// (see the module docs), map open or not. Then runs the simulation's
-    /// steps for `dt` with the keys held, and advances the stellars'
-    /// animations. While the map is open nothing moves. During
-    /// the pre-jump stage the session flies on, and the streak starts on
-    /// the step the session begins the jump, which is the last step run.
-    /// While the stars streak and the old system fades out only the
-    /// jump's effect moves, and the ship arrives when the effect says.
-    /// From then on the session flies again while the rest of the effect,
-    /// the fade-in or the white flash, plays over it; that plays on with
-    /// the map open too, as the original's display fade does. The escort
-    /// menu times out on every step the map is shut, the streak's
-    /// included.
+    /// steps for `dt` with the keys held ([`FlightView::run_steps`]), and
+    /// advances the stellars' animations. While the map is open nothing
+    /// moves. During the pre-jump stage the session flies on, and the
+    /// streak starts on the step the session begins the jump, which is the
+    /// last step run. While the stars streak and the old system fades out
+    /// the jump's effect moves, and the session runs its steps only while
+    /// its warp is in its lead-in ([`Session::in_warp_lead_in`]): the
+    /// ship stays where it is, but the traffic flies on and the scans are
+    /// taken, as the original still scans a warping player then. The ship
+    /// arrives when the effect says, after the last step. From then on
+    /// the session flies again while the rest of the effect, the fade-in
+    /// or the white flash, plays over it; that plays on with the map open
+    /// too, as the original's display fade does. The escort menu times out
+    /// on every step the map is shut, the streak's included.
     ///
     /// Then, unless the map is open, the HUD's timer moves on, refreshing
     /// the radar when it is due ([`FlightView::advance_hud`]), still
@@ -4064,9 +4128,17 @@ impl<
         if self.map_open {
             return;
         }
-        if let Some(effect) = &mut self.jump {
-            self.elapsed += dt;
-            if effect.advance(dt) {
+        self.elapsed += dt;
+        if self.jump.is_some() {
+            let leading_in = self.session.as_ref().is_ok_and(Session::in_warp_lead_in);
+            if leading_in {
+                let Steps { steps, alpha } = self.clock.advance(dt);
+                self.run_steps(steps, Session::in_warp_lead_in);
+                self.alpha = alpha;
+            }
+            if let Some(effect) = &mut self.jump
+                && effect.advance(dt)
+            {
                 self.arrive();
                 self.fade_in = self.jump.take().filter(|effect| !effect.done());
             }
@@ -4074,59 +4146,8 @@ impl<
             self.advance_hud();
             return;
         }
-        self.elapsed += dt;
         let Steps { steps, alpha } = self.clock.advance(dt);
-        let controls = self.controls();
-        let fire = (
-            self.held.contains(&FIRE_KEY),
-            self.held.contains(&SECONDARY_KEY),
-        );
-        let mut notes = Vec::new();
-        let mut quotes = Vec::new();
-        if let Ok(session) = &mut self.session {
-            session.set_play_area(play_area());
-            session.hold_fire(fire.0, fire.1);
-            for _ in 0..steps {
-                self.previous = *session.player();
-                self.npc_previous = session
-                    .npcs()
-                    .iter()
-                    .map(|npc| (npc.id, npc.state))
-                    .collect();
-                session.tick(controls);
-                session.tick_traffic(&self.catalog, &*self.behaviour, &mut self.chance);
-                session.tick_quotes(&self.catalog, &mut self.chance);
-                quotes.extend(session.take_quotes());
-                session.tick_assistance(&*self.disable_rule);
-                notes.extend(session.take_comm());
-                let rules = Rules {
-                    disable: &*self.disable_rule,
-                    defence: &*self.defence_rule,
-                    law: &*self.law,
-                };
-                session.tick_combat(rules, &mut self.chance);
-                let player = point(session.player().position);
-                let dying = dying(session, &self.sheet, &self.npc_sheets);
-                let chance = &mut self.effects_chance;
-                self.effects.step(&dying, player, &self.looks, chance);
-                let scene = Scene { player };
-                for event in session.take_combat_events() {
-                    self.effects.apply(&event, &scene, &self.looks, chance);
-                }
-                if session.jumping().is_some() {
-                    break;
-                }
-            }
-        }
-        for note in &notes {
-            self.say_for(comm_message(note), MESSAGE_TICKS);
-        }
-        for quote in quotes {
-            self.say_for(quote.text, HAIL_QUOTE_TICKS);
-        }
-        self.say_messages();
-        // The session may have populated its system afresh.
-        self.read_npc_sheets();
+        self.run_steps(steps, |session| session.jumping().is_none());
         self.update_escort_menu();
         self.alpha = alpha;
         self.step_cursor(steps);
@@ -9676,6 +9697,68 @@ mod tests {
         );
     }
 
+    /// Turns east at rest, then drifts out slowly that way until far
+    /// enough to jump: facing Alpha Centauri and slow enough, J streaks at
+    /// once.
+    fn ready_to_jump(view: &mut View) {
+        view.input(&key(Key::Right, true));
+        ticks(view, 30);
+        view.input(&key(Key::Right, false));
+        view.input(&key(Key::Up, true));
+        ticks(view, 10);
+        view.input(&key(Key::Up, false));
+        for _ in 0..2000 {
+            if player(view).position.length() >= MIN_JUMP_DISTANCE {
+                break;
+            }
+            view.tick(TICK);
+        }
+        assert_eq!(player(view).heading, 90.0);
+    }
+
+    #[test]
+    fn the_traffic_flies_under_the_streak_through_the_warps_lead_in_then_stands_still() {
+        // The traffic follows the ship out, then makes for planet 128 at
+        // the centre as the ship jumps.
+        let catalog = FakeCatalog {
+            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            ..trafficked(&[130], 2, 129, 1)
+        };
+        let jumped = Rc::new(std::cell::Cell::new(false));
+        let landing = Goal::Land(StellarId(128));
+        let mut view = FlightView::new(catalog)
+            .with_behaviour(Rc::new(InspectingUntil(Rc::clone(&jumped), landing)));
+        plot(&mut view, 131);
+        ready_to_jump(&mut view);
+        jumped.set(true);
+        view.input(&key(JUMP, true));
+        assert!(view.jump_effect().is_some(), "streaking on J");
+        let leaving = player(&view);
+        let start = npc_states(&view);
+        assert_eq!(start.len(), 2);
+        // The lead-in lasts 36 ticks (`nova_sim::warp`): 1.2 s.
+        view.tick(ms(500));
+        let session = view.session().expect("flying");
+        assert!(session.in_warp_lead_in());
+        assert_ne!(
+            npc_states(&view),
+            start,
+            "the traffic flies on under the streak"
+        );
+        assert_eq!(player(&view), leaving, "the ship stays where it is");
+        view.tick(ms(800));
+        let session = view.session().expect("flying");
+        assert!(!session.in_warp_lead_in(), "past the lead-in");
+        assert_eq!(session.system(), SystemId(130), "not yet arrived");
+        let past = npc_states(&view);
+        view.tick(ms(150));
+        assert_eq!(npc_states(&view), past, "the traffic stands still");
+        assert_eq!(view.session().expect("flying").system(), SystemId(130));
+        // The arrival keeps the effect's time: past 1.5 s.
+        view.tick(ms(100));
+        assert_eq!(view.session().expect("flying").system(), SystemId(131));
+    }
+
     #[test]
     fn npcs_stand_still_while_the_map_is_open_or_the_ship_is_landed() {
         let catalog = FakeCatalog {
@@ -13535,6 +13618,50 @@ mod tests {
         FlightView::with_pilot(catalog, pilot)
             .with_chance(chance)
             .with_behaviour(Rc::new(Inspector::default()))
+    }
+
+    /// Inspects the player until its flag is set; then it has looked the
+    /// player over, and goes on to its goal.
+    #[derive(Debug)]
+    struct InspectingUntil(Rc<std::cell::Cell<bool>>, Goal);
+
+    impl Behaviour for InspectingUntil {
+        fn decide(
+            &self,
+            _npc: &nova_sim::Npc,
+            _around: &nova_sim::Surroundings,
+            _chance: &mut dyn Chance,
+        ) -> Goal {
+            if self.0.get() {
+                self.1
+            } else {
+                Goal::Inspect(ShipRef::Player)
+            }
+        }
+    }
+
+    #[test]
+    fn a_scan_in_the_warps_lead_in_is_said_under_the_streak() {
+        let done = Rc::new(std::cell::Cell::new(false));
+        let mut view = smuggling(0, 500)
+            .with_behaviour(Rc::new(InspectingUntil(Rc::clone(&done), Goal::Idle)));
+        plot(&mut view, 131);
+        ready_to_jump(&mut view);
+        view.input(&key(JUMP, true));
+        assert!(view.jump_effect().is_some(), "streaking on J");
+        assert_eq!(view.pilot().expect("flying").cash(), 1200, "not yet");
+        done.set(true);
+        view.tick(TICK);
+        assert_eq!(view.pilot().expect("flying").cash(), 700, "convicted");
+        assert_eq!(
+            view.message(),
+            Some(
+                "Ship 129:  Kestrel, your attempt to smuggle illegal cargo through this \
+                 system has been detected. You have been fined 500 credits."
+            ),
+            "said under the streak"
+        );
+        assert!(view.jump_effect().is_some());
     }
 
     #[test]
