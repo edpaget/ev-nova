@@ -970,13 +970,17 @@ mod tests {
             Goal::Attack(ShipRef::Player),
             Some(ShipRef::Player),
         );
+        session.npc_mut(attacker).expect("here").provoked = 5.0;
         let aiming = aimed(&mut session, Goal::Idle, Some(ShipRef::Player));
+        let inspector = aimed(&mut session, Goal::Inspect(ShipRef::Player), None);
+        session.npc_mut(inspector).expect("here").provoked = 3.0;
         let hired = escort(&mut session);
         let raider = aimed(
             &mut session,
             Goal::Attack(ShipRef::Npc(hired)),
             Some(ShipRef::Npc(hired)),
         );
+        session.npc_mut(raider).expect("here").provoked = 2.0;
         let mission = session.traffic.add_npc(Npc {
             mission: Some(MissionMark {
                 slot: 0,
@@ -1007,13 +1011,26 @@ mod tests {
         );
         let npc = |id| session.npc(id).expect("here").clone();
         assert_eq!(
-            (npc(attacker).target, npc(attacker).goal),
-            (None, Goal::Idle)
+            (
+                npc(attacker).target,
+                npc(attacker).goal,
+                npc(attacker).provoked
+            ),
+            (None, Goal::Idle, 0.0)
         );
         assert_eq!(npc(aiming).target, None);
         assert_eq!(
-            (npc(raider).target, npc(raider).goal),
-            (Some(ShipRef::Npc(hired)), Goal::Attack(ShipRef::Npc(hired))),
+            (npc(inspector).goal, npc(inspector).provoked),
+            (Goal::Idle, 0.0),
+            "the inspection given up"
+        );
+        assert_eq!(
+            (npc(raider).target, npc(raider).goal, npc(raider).provoked),
+            (
+                Some(ShipRef::Npc(hired)),
+                Goal::Attack(ShipRef::Npc(hired)),
+                2.0
+            ),
             "a threat by a led ship keeps its quarry"
         );
         assert_eq!(npc(hired).escort, None, "released");
@@ -1135,15 +1152,25 @@ mod tests {
                 Goal::Attack(ShipRef::Player),
                 Some(ShipRef::Player),
             );
+            let sniper = aimed(session, Goal::Snipe(ShipRef::Player), Some(ShipRef::Player));
+            let fleeing = aimed(session, Goal::Flee(ShipRef::Player), None);
             let hired = escort(session);
-            ids = Some((attacker, hired));
+            ids = Some((attacker, sniper, fleeing, hired));
         });
-        let (attacker, hired) = ids.expect("set up");
+        let (attacker, sniper, fleeing, hired) = ids.expect("set up");
         let hulk = ShipRef::Npc(hulk(&session).id);
-        let attacker = session.npc(attacker).expect("here");
+        let npc = |id| session.npc(id).expect("here");
         assert_eq!(
-            (attacker.target, attacker.goal),
+            (npc(attacker).target, npc(attacker).goal),
             (Some(hulk), Goal::Attack(hulk))
+        );
+        assert_eq!(
+            (npc(sniper).target, npc(sniper).goal),
+            (Some(hulk), Goal::Snipe(hulk))
+        );
+        assert_eq!(
+            (npc(fleeing).target, npc(fleeing).goal),
+            (None, Goal::Flee(hulk))
         );
         assert!(session.npc(hired).expect("here").escorts_player(), "kept");
         assert_eq!(session.fleet, [Some(hired)]);
