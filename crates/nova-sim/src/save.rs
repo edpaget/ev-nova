@@ -81,6 +81,10 @@
 //!   (`strict_play`). Every older pilot was made with the new-pilot
 //!   dialog's Strict Play box greyed and clear, so the upgrade gives
 //!   `false`.
+//! - Version 26: adds the one ship type each active mission's special
+//!   ships fly under `Flags` 0x0800 (`uniform_type` in its `ships`). An
+//!   older save kept none, so the upgrade gives `null`, and such a
+//!   mission draws its type at its ships' next spawn.
 //!
 //! IDs are saved as their raw numbers, the ship's name (`ship_name`) as
 //! its text, or `null` for a ship not yet named, the date as its year, month and
@@ -134,8 +138,10 @@
 //! and its special `ships`: their `system` (`{"at":
 //! 130}`, `"follows_player"`, or `null` for nowhere), how many are `left`
 //! and have `arrived`, their `appear` timer (-1 when it does not run),
-//! their drawn `name` and `subtitle`, and how many have been
-//! `destroyed`, `boarded`, `disabled` and `chased_off`. A slot past 15
+//! their drawn `name` and `subtitle`, how many have been
+//! `destroyed`, `boarded`, `disabled` and `chased_off`, and the one ship
+//! type they fly (`uniform_type`, a `shïp` ID, or `null` for a type drawn
+//! for each). A slot past 15
 //! is unusable.
 //!
 //! The crons (`crons`) are those running or holding off, by ascending
@@ -176,7 +182,7 @@ use crate::reserves::{Gauge, Reserves};
 use crate::story::{Consumer, Countdown, GalaxyOverlay, SubscriptionId};
 
 /// The version [`encode`] writes, and the newest [`decode`] reads.
-pub const CURRENT: u64 = 25;
+pub const CURRENT: u64 = 26;
 
 /// Why a save cannot be read. Each message is ready to display.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -669,6 +675,8 @@ struct SavedShips {
     boarded: i16,
     disabled: i16,
     chased_off: i16,
+    #[serde(deserialize_with = "Option::deserialize")]
+    uniform_type: Option<i16>,
 }
 
 impl From<&SpecialShips> for SavedShips {
@@ -688,6 +696,7 @@ impl From<&SpecialShips> for SavedShips {
             boarded: ships.boarded,
             disabled: ships.disabled,
             chased_off: ships.chased_off,
+            uniform_type: ships.uniform_type.map(|ship| ship.0),
         }
     }
 }
@@ -709,7 +718,7 @@ impl From<SavedShips> for SpecialShips {
             boarded: saved.boarded,
             disabled: saved.disabled,
             chased_off: saved.chased_off,
-            uniform_type: None,
+            uniform_type: saved.uniform_type.map(ShipId),
         }
     }
 }
@@ -1051,7 +1060,22 @@ const UPGRADES: [fn(&mut Value); (CURRENT - 1) as usize] = [
     crons,
     ranks,
     strict_play,
+    uniform_types,
 ];
+
+/// Version 25 to 26: no active mission's ships keep a type, so a
+/// mission of `Flags` 0x0800 draws it at its ships' next spawn.
+fn uniform_types(save: &mut Value) {
+    let Some(entries) = save.get_mut("missions").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for ships in entries
+        .iter_mut()
+        .filter_map(|entry| entry.get_mut("ships")?.as_object_mut())
+    {
+        ships.insert("uniform_type".to_owned(), Value::Null);
+    }
+}
 
 /// Version 24 to 25: the pilot does not play Strict Play, as every older
 /// pilot was made with the box greyed and clear.
@@ -1545,7 +1569,7 @@ mod tests {
                     boarded: 1,
                     disabled: 4,
                     chased_off: 5,
-                    uniform_type: None,
+                    uniform_type: Some(ShipId(137)),
                 },
                 aux: AuxShips {
                     countdown: 33,
@@ -1655,7 +1679,7 @@ mod tests {
         let text = encode(&seasoned());
         let value: serde_json::Value = serde_json::from_str(&text).expect("JSON");
         assert_eq!(value["version"], CURRENT);
-        assert_eq!(CURRENT, 25);
+        assert_eq!(CURRENT, 26);
         assert_eq!(
             value["galaxy"],
             serde_json::json!({
@@ -1739,7 +1763,7 @@ mod tests {
         assert_eq!(value["escorts"][3]["ship"], 128);
         assert_eq!(value["escorts"][3]["wage"], 100);
         assert_eq!(value["strict_play"], false);
-        assert!(text.contains("\n  \"version\": 25"), "{text}");
+        assert!(text.contains("\n  \"version\": 26"), "{text}");
     }
 
     #[test]
@@ -2471,13 +2495,13 @@ mod tests {
     #[test]
     fn a_version_24_save_loads_without_strict_play() {
         let mut value: serde_json::Value =
-            serde_json::from_str(&encode(&seasoned().with_strict_play(true))).expect("JSON");
+            serde_json::from_str(&at_version_25(&seasoned().with_strict_play(true))).expect("JSON");
         let object = value.as_object_mut().expect("an object");
         object.insert("version".to_owned(), serde_json::Value::from(24));
         object.remove("strict_play");
         let pilot = decode(&value.to_string()).expect("loads");
         assert!(!pilot.strict_play());
-        assert_eq!(pilot, seasoned());
+        assert_eq!(pilot, without_uniform_types(seasoned()));
     }
 
     #[test]
@@ -3249,7 +3273,8 @@ mod tests {
                         "destroyed": 2,
                         "boarded": 1,
                         "disabled": 4,
-                        "chased_off": 5
+                        "chased_off": 5,
+                        "uniform_type": 137
                     },
                     "aux": {"countdown": 33, "arrived": 1, "left": -2}
                 },
@@ -3277,7 +3302,8 @@ mod tests {
                         "destroyed": 0,
                         "boarded": 0,
                         "disabled": 0,
-                        "chased_off": 0
+                        "chased_off": 0,
+                        "uniform_type": null
                     },
                     "aux": {"countdown": 0, "arrived": 0, "left": 0}
                 }
@@ -3366,6 +3392,70 @@ mod tests {
                 arrived: 1,
                 left: -2,
             })
+        );
+    }
+
+    #[test]
+    fn a_mission_ships_uniform_type_survives_a_save_and_load() {
+        let pilot = seasoned();
+        let back = decode(&encode(&pilot)).expect("loads");
+        let uniform = |slot| {
+            back.missions()
+                .get(slot)
+                .map(|active| active.ships.uniform_type)
+        };
+        assert_eq!(uniform(2), Some(Some(ShipId(137))));
+        assert_eq!(uniform(9), Some(None));
+    }
+
+    /// `pilot` saved at version 25: no mission's ships keep a type.
+    fn at_version_25(pilot: &Pilot) -> String {
+        let mut value: serde_json::Value = serde_json::from_str(&encode(pilot)).expect("JSON");
+        value["version"] = serde_json::Value::from(25);
+        for mission in value["missions"].as_array_mut().expect("a list") {
+            mission["ships"]
+                .as_object_mut()
+                .expect("an object")
+                .remove("uniform_type");
+        }
+        value.to_string()
+    }
+
+    #[test]
+    fn a_version_25_save_loads_with_no_uniform_type() {
+        let pilot = decode(&at_version_25(&seasoned())).expect("loads");
+        assert_eq!(
+            pilot
+                .missions()
+                .get(2)
+                .map(|active| active.ships.uniform_type),
+            Some(None),
+            "drawn at its next spawn"
+        );
+        assert_eq!(pilot, without_uniform_types(seasoned()));
+    }
+
+    /// `pilot` with no mission's ships keeping a type, as a save from
+    /// before version 26 loads it.
+    fn without_uniform_types(mut pilot: Pilot) -> Pilot {
+        for slot in 0..16 {
+            if let Some(active) = pilot.missions.get_mut(slot) {
+                active.ships.uniform_type = None;
+            }
+        }
+        pilot
+    }
+
+    #[test]
+    fn a_current_save_missing_uniform_type_is_unusable() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&at_version_25(&seasoned())).expect("JSON");
+        value["version"] = serde_json::Value::from(CURRENT);
+        let text = value.to_string();
+        assert!(
+            unusable(&text).contains("uniform_type"),
+            "{}",
+            unusable(&text)
         );
     }
 
@@ -3688,12 +3778,12 @@ mod tests {
 
     #[test]
     fn a_save_from_a_newer_version_is_refused() {
-        let newer = encode(&seasoned()).replace("\"version\": 25", "\"version\": 26");
-        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 26 }));
+        let newer = encode(&seasoned()).replace("\"version\": 26", "\"version\": 27");
+        assert_eq!(decode(&newer), Err(SaveError::Newer { version: 27 }));
         assert_eq!(
-            SaveError::Newer { version: 26 }.to_string(),
+            SaveError::Newer { version: 27 }.to_string(),
             "This pilot file was created with a different version of Nova, and can't be used \
-             (it is version 26, and this version of Nova reads up to 25)."
+             (it is version 27, and this version of Nova reads up to 26)."
         );
     }
 
