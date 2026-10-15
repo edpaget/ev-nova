@@ -3969,10 +3969,17 @@ impl Session {
     /// pass and a Cancel's count of none included, a buy refused at the
     /// button not. A sale resets after each pass (@0x5cffb).
     ///
-    /// A `count` of none runs no pass and moves nothing; a buy of none
-    /// asks the outfitter whether Buy passes, drawing any roll not drawn
-    /// yet, for its reset; [`outfit_counted`](Self::outfit_counted) is the
-    /// one that counts a Cancel's outfit day.
+    /// The run's `button_passed` says whether the order's button passed
+    /// its own check ([`Outfitter::can`]), so the dialog falls through
+    /// its loop to the reset and the draw (@0x5c2fc-0x5c2ff): for a sale,
+    /// or an order of none, asked of the outfitter before the loop; for a
+    /// buy that runs a pass, unless its first pass, whose check is the
+    /// button's, was refused.
+    ///
+    /// A `count` of none runs no pass and moves nothing; it asks the
+    /// outfitter whether its button passes, drawing any roll not drawn
+    /// yet; [`outfit_counted`](Self::outfit_counted) is the one that
+    /// counts a Cancel's outfit day.
     ///
     /// A sale need not lower a count owned: an `OnSell` can grant the
     /// outfit sold back and change the listing again (`^b7 G128`), so
@@ -4000,8 +4007,15 @@ impl Session {
             self.outfit_reselected = None;
         }
         let asked = self.outfit_reselected;
+        // The button's own check comes before the loop (@0x5c087-0x5c0a2
+        // for Buy, @0x5c5d5-0x5c5dd for Sell). A buy's first pass checks
+        // the same, so a buy that runs a pass reads it off the run
+        // instead ([`button_passed`](Self::button_passed)).
+        let checked = (count == 0 || order.direction == Direction::Sell)
+            .then(|| self.outfit_button_passes(order, chance));
         let mut alert = None;
         let mut relisting = Relisting::default();
+        let mut button_passed = false;
         let run = match order.direction {
             Direction::Sell
                 if self.rules.source_for(RuleKey::RelistedSale) == RuleSource::Engine =>
@@ -4028,7 +4042,8 @@ impl Session {
                 // The buy loop's reset, once after the loop (@0x5c305),
                 // whenever Buy passed its own check: a Cancel's count of
                 // none and a loop stopped by a refusal included.
-                if self.buy_button_passed(order, count, &run, chance) {
+                button_passed = Self::button_passed(checked, &run);
+                if button_passed {
                     self.reset_precalced();
                 }
                 // The buy loop rebuilds the list once, after the loop
@@ -4047,26 +4062,24 @@ impl Session {
         if after != Reselection::Kept {
             self.outfit_reselected = Some(FIRST_OUTFIT);
         }
-        OutfitRun { run, alert, after }
+        if order.direction == Direction::Sell {
+            button_passed = Self::button_passed(checked, &run);
+        }
+        OutfitRun {
+            run,
+            alert,
+            after,
+            button_passed,
+        }
     }
 
-    /// Whether a buy order's button passed its own check
-    /// (`_CanBuyOutfitItem`, [`Outfitter::can`]), so the buy loop's reset
-    /// runs after it (@0x5c305): for a `count` of none, asked of the
-    /// outfitter now ([`outfit_button_passes`](Self::outfit_button_passes));
-    /// otherwise unless `run` was refused at its first pass, whose check
-    /// is the button's.
-    fn buy_button_passed(
-        &mut self,
-        order: OutfitOrder,
-        count: u32,
-        run: &OrderRun<OutfitRefusal>,
-        chance: &mut dyn Chance,
-    ) -> bool {
-        if count == 0 {
-            return self.outfit_button_passes(order, chance);
-        }
-        run.stopped.as_ref().is_none_or(|stopped| stopped.pass > 0)
+    /// Whether an order's button passed its own check ([`Outfitter::can`]):
+    /// `checked`, when it was asked of the outfitter before the loop (a
+    /// sale, or an order of none); otherwise, for a buy that ran a pass,
+    /// unless `run` was refused at its first pass, whose check
+    /// (`_CanBuyOutfitItem`) is the button's.
+    fn button_passed(checked: Option<bool>, run: &OrderRun<OutfitRefusal>) -> bool {
+        checked.unwrap_or_else(|| run.stopped.as_ref().is_none_or(|stopped| stopped.pass > 0))
     }
 
     /// Whether `order`'s Buy or Sell button passes its own check now
@@ -4267,14 +4280,24 @@ impl Session {
         count: u32,
         chance: &mut dyn Chance,
     ) -> Result<u32, OutfitRefusal> {
-        if count == 0
-            && self
-                .outfitter(chance)
-                .is_some_and(|outfitter| outfitter.can(order).is_ok())
-        {
+        self.outfit_counted_run(order, count, chance).run.counted()
+    }
+
+    /// [`outfit_counted`](Self::outfit_counted)'s whole run, as
+    /// [`outfit_order`](Self::outfit_order) gives it: a Cancel's count of
+    /// none whose button passed its own check
+    /// ([`OutfitRun::button_passed`]) counts the outfit day too.
+    pub fn outfit_counted_run(
+        &mut self,
+        order: OutfitOrder,
+        count: u32,
+        chance: &mut dyn Chance,
+    ) -> OutfitRun {
+        let run = self.outfit_order(order, count, chance);
+        if count == 0 && run.button_passed {
             self.stay.outfit_traded = true;
         }
-        self.outfit_run(order, count, chance).counted()
+        run
     }
 
     /// The shipyard of the stellar the ship is docked at, if it has landed
@@ -10317,7 +10340,8 @@ pub(super) mod tests {
                     stopped: None
                 },
                 alert: None,
-                after: Reselection::Reset(FIRST_OUTFIT)
+                after: Reselection::Reset(FIRST_OUTFIT),
+                button_passed: true
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -10388,7 +10412,8 @@ pub(super) mod tests {
                     stopped: None
                 },
                 alert: None,
-                after: Reselection::Reset(FIRST_OUTFIT)
+                after: Reselection::Reset(FIRST_OUTFIT),
+                button_passed: true
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -10436,7 +10461,8 @@ pub(super) mod tests {
                     })
                 },
                 alert: None,
-                after: Reselection::Reset(FIRST_OUTFIT)
+                after: Reselection::Reset(FIRST_OUTFIT),
+                button_passed: true
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -10586,7 +10612,8 @@ pub(super) mod tests {
                     stopped: None
                 },
                 alert: None,
-                after: Reselection::Reset(FIRST_OUTFIT)
+                after: Reselection::Reset(FIRST_OUTFIT),
+                button_passed: true
             }
         );
         assert_eq!(session.pilot().owned(CONTRABAND), 0);
@@ -10617,7 +10644,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_sale_of_none_draws_no_roll_and_changes_nothing_by_either_reading() {
+    fn a_sale_of_none_draws_only_its_buttons_rolls_and_changes_nothing_else_by_either_reading() {
         // A booster of `BuyRandom` 50, not owned and not rolled yet.
         let mut catalog = relisting_catalog();
         catalog.outfits.push(OutfitRecord {
@@ -10630,7 +10657,11 @@ pub(super) mod tests {
                 relisted_by(source),
                 &[(BLASTER, 3), (CONTRABAND, 2)],
             );
-            let before = session.clone();
+            // The button's own check draws the rolls the outfitter
+            // needs, and nothing past it does.
+            let mut checked = session.clone();
+            let mut button = Scripted::default();
+            assert!(checked.outfit_button_passes(sell(CONTRABAND), &mut button));
             let mut chance = Scripted::default();
             let order = session.outfit_order(sell(CONTRABAND), 0, &mut chance);
             assert_eq!(
@@ -10641,12 +10672,13 @@ pub(super) mod tests {
                 },
                 "{source:?}"
             );
+            assert!(order.button_passed, "{source:?}");
             assert_eq!(
                 (chance.asked, chance.sides_asked),
-                (vec![], vec![]),
+                (button.asked, button.sides_asked),
                 "{source:?}"
             );
-            assert!(session == before, "{source:?}: unchanged");
+            assert!(session == checked, "{source:?}: unchanged past the check");
         }
     }
 
@@ -11485,6 +11517,7 @@ pub(super) mod tests {
                 },
                 alert: None,
                 after: Reselection::Kept,
+                button_passed: true,
             }
         );
         assert_eq!(session.pilot().owned(SPEED), 10);
@@ -11493,6 +11526,91 @@ pub(super) mod tests {
             counted.outfit_counted(buy(SPEED), 12, &mut NeverFires),
             Ok(10)
         );
+    }
+
+    #[test]
+    fn an_order_reports_whether_its_button_passed_its_own_check() {
+        let mut broke = outfitted(&outfitting());
+        broke.pilot.cash = 0;
+        let bible = || {
+            over_the_mass_limit_by(
+                Rulebook::default().with_override(RuleKey::SaleRefusal, RuleSource::Bible),
+            )
+        };
+        let cases = vec![
+            ("buy through", outfitted(&outfitting()), buy(SPEED), 2, true),
+            (
+                "buy stopped part way",
+                outfitted(&outfitting()),
+                buy(SPEED),
+                12,
+                true,
+            ),
+            (
+                "buy cancelled",
+                outfitted(&outfitting()),
+                buy(SPEED),
+                0,
+                true,
+            ),
+            (
+                "buy refused at the button",
+                broke.clone(),
+                buy(SPEED),
+                1,
+                false,
+            ),
+            ("buy cancelled, refused", broke, buy(SPEED), 0, false),
+            (
+                "buy unlisted",
+                outfitted(&outfitting()),
+                buy(OutfitId(999)),
+                0,
+                false,
+            ),
+            (
+                "sell none owned",
+                outfitted(&outfitting()),
+                sell(SPEED),
+                1,
+                false,
+            ),
+            (
+                "sell cancelled, none owned",
+                outfitted(&outfitting()),
+                sell(SPEED),
+                0,
+                false,
+            ),
+            (
+                "sell refused in the loop",
+                over_the_mass_limit(RuleSource::Engine),
+                sell(POD),
+                1,
+                true,
+            ),
+            ("sell refused on the button", bible(), sell(POD), 1, false),
+        ];
+        for (name, mut session, order, count, passed) in cases {
+            let run = session.outfit_order(order, count, &mut NeverFires);
+            assert_eq!(run.button_passed, passed, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_cancel_on_the_relistings_unlisted_outfit_128_counts_its_day() {
+        let mut session = landed_owning(
+            &unlisted_blaster_catalog(),
+            Rulebook::default(),
+            &[(BLASTER, 2), (CONTRABAND, 1)],
+        );
+        session.outfit_order(sell(CONTRABAND), 1, &mut NeverFires);
+        session.stay.outfit_traded = false;
+        assert_eq!(
+            session.outfit_counted(sell(BLASTER), 0, &mut NeverFires),
+            Ok(0)
+        );
+        assert!(session.stay.outfit_traded);
     }
 
     #[test]

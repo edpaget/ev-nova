@@ -3585,13 +3585,7 @@ impl<
     /// outfitter. The bar is redrawn after it
     /// (`FlightView::after_outfit_order`).
     pub fn outfit(&mut self, order: OutfitOrder) -> Result<(), OutfitRefusal> {
-        let before = self.interface_now();
-        let done = match &mut self.session {
-            Ok(session) => session.outfit(order, &mut self.chance),
-            Err(_) => Err(OutfitRefusal::NoOutfitter),
-        };
-        self.after_outfit_order(before.as_ref(), done.is_ok());
-        done
+        self.outfit_counted(order, 1).map(|_| ())
     }
 
     /// Buys or sells up to `count` of an outfit as
@@ -3600,12 +3594,12 @@ impl<
     /// The bar is redrawn after it (`FlightView::after_outfit_order`).
     pub fn outfit_counted(&mut self, order: OutfitOrder, count: u32) -> Result<u32, OutfitRefusal> {
         let before = self.interface_now();
-        let done = match &mut self.session {
-            Ok(session) => session.outfit_counted(order, count, &mut self.chance),
-            Err(_) => Err(OutfitRefusal::NoOutfitter),
+        let run = match &mut self.session {
+            Ok(session) => session.outfit_counted_run(order, count, &mut self.chance),
+            Err(_) => no_outfitter(),
         };
-        self.after_outfit_order(before.as_ref(), done.is_ok());
-        done
+        self.after_outfit_order(before.as_ref(), run.button_passed);
+        run.run.counted()
     }
 
     /// Buys or sells up to `count` of an outfit as
@@ -3615,51 +3609,18 @@ impl<
     /// it (`FlightView::after_outfit_order`).
     pub fn outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
         let before = self.interface_now();
-        // An order of none runs no pass, so its button's own check is
-        // asked of the outfitter as the dialog's Cancel left it.
-        let cancel_passed = count == 0 && self.outfit_button_passes(order);
-        let run = self.run_outfit_order(order, count);
-        let passed = if count == 0 {
-            cancel_passed
-        } else {
-            run.run.done > 0
-        };
-        self.after_outfit_order(before.as_ref(), passed);
-        run
-    }
-
-    /// Whether `order`'s button passes its own check
-    /// ([`Session::outfit_button_passes`]), on the flight's chance; a
-    /// session that failed has no outfitter.
-    fn outfit_button_passes(&mut self, order: OutfitOrder) -> bool {
-        self.session
-            .as_mut()
-            .is_ok_and(|session| session.outfit_button_passes(order, &mut self.chance))
-    }
-
-    /// [`FlightView::outfit_order`]'s run.
-    fn run_outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
-        match &mut self.session {
+        let run = match &mut self.session {
             Ok(session) => session.outfit_order(order, count, &mut self.chance),
-            Err(_) => OutfitRun {
-                run: OrderRun {
-                    done: 0,
-                    stopped: Some(Stopped {
-                        pass: 0,
-                        refusal: OutfitRefusal::NoOutfitter,
-                    }),
-                },
-                alert: None,
-                after: Reselection::Kept,
-            },
-        }
+            Err(_) => no_outfitter(),
+        };
+        self.after_outfit_order(before.as_ref(), run.button_passed);
+        run
     }
 
     /// Redraws the bar after an outfitter order, given the `ïntf` the
     /// ship flew under before it ([`FlightView::interface_now`]) and
-    /// whether it passed its button's own check (`passed`): any of it
-    /// went through, or a count of none, a Cancel's, whose button's check
-    /// passed ([`Session::outfit_button_passes`]).
+    /// whether it passed its button's own check (`passed`, the run's
+    /// [`OutfitRun::button_passed`]).
     ///
     /// The order's `OnPurchase` (`_EvalMissionBitSetString` @0x5c2cb) or
     /// `OnSell` (@0x5cff6) runs inside it. When its `C`, `E` or `H`
@@ -6124,6 +6085,24 @@ fn play_area() -> nova_sim::cloak::Area {
         top: top_left.y,
         right: bottom_right.x,
         bottom: bottom_right.y,
+    }
+}
+
+/// The run of an outfitter order a session that failed gives: no
+/// outfitter, refused at the first pass with no alert, its button
+/// failing.
+fn no_outfitter() -> OutfitRun {
+    OutfitRun {
+        run: OrderRun {
+            done: 0,
+            stopped: Some(Stopped {
+                pass: 0,
+                refusal: OutfitRefusal::NoOutfitter,
+            }),
+        },
+        alert: None,
+        after: Reselection::Kept,
+        button_passed: false,
     }
 }
 
@@ -11589,6 +11568,7 @@ mod tests {
             },
             alert: None,
             after: Reselection::Kept,
+            button_passed: false,
         };
         let mut view = FlightView::new(catalog);
         assert_eq!(
@@ -11610,6 +11590,7 @@ mod tests {
                 },
                 alert: None,
                 after: Reselection::Kept,
+                button_passed: true,
             }
         );
         assert_eq!(view.pilot().map(Pilot::cash), Some(0));
@@ -12388,7 +12369,7 @@ mod tests {
             }),
             ("a shop closing", FlightView::shop_closed),
         ];
-        let refused: [(&str, Step); 7] = [
+        let refused: [(&str, Step); 8] = [
             ("a refused trade", |view| {
                 let order = Order {
                     row: 99,
@@ -12411,6 +12392,12 @@ mod tests {
             ("a Cancel whose Buy fails its check", |view| {
                 assert_eq!(view.outfit_order(UNKNOWN_OUTFIT, 0).run.done, 0);
             }),
+            (
+                "a counted order's Cancel whose Buy fails its check",
+                |view| {
+                    assert_eq!(view.outfit_counted(UNKNOWN_OUTFIT, 0), Ok(0));
+                },
+            ),
             ("a Cancel whose Sell fails its check", |view| {
                 let sell = OutfitOrder {
                     direction: Direction::Sell,
