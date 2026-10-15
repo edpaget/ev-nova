@@ -98,6 +98,14 @@ pub enum Goal {
     /// Fly back to this ship, its carrier, and dock in its fighter bay
     /// (see [`bay`](crate::bay)). It fights nothing: its quarry is none.
     Dock(ShipRef),
+    /// Hold where it is: the original's goal 10 with no leader, which a
+    /// ship swapped in for a person by a `ShipGoal` 3 mission gets
+    /// (`_AIMakeEscortFlyInForm` @0x89bbd-0x89bcd) and which no goal
+    /// block of `_HighLevelAIHandler` flies without a leader
+    /// (@0x8ed18-0x8ed31). It coasts with no thrust and no fire, and
+    /// keeps the hold until provoked or its type's think lifts it (see
+    /// [`idle`]). It fights nothing: its quarry is none.
+    Hold,
 }
 
 impl Goal {
@@ -345,6 +353,12 @@ impl Behaviour for Peaceful {
 ///   system there, and one that has away; here a ship that lands leaves
 ///   the system, so none has, and every ship, of any AI type, heads for a
 ///   stellar (as `_HyperShipSpawn` makes every arrival do).
+/// - A held ship ([`Goal::Hold`], the original's goal 10 with no
+///   leader) keeps its hold and picks nothing: every type's destination
+///   pick needs goal 0 (`_WimpyTraderAI` @0x8b06c, `_BraveTraderAI`
+///   @0x8b4d6), and `_AICheckParentExists` (@0x8926a-0x89281) never
+///   clears the goal of a ship with no leader. Only provocation, or a
+///   hunter's government's word, lifts it.
 /// - A ship that would jump without a jump's fuel stays idle.
 pub fn idle(npc: &Npc, around: &Surroundings, chance: &mut dyn Chance) -> Goal {
     if let Some(lead) = npc.leader
@@ -384,7 +398,7 @@ pub fn provoked_by(npc: &Npc, around: &Surroundings) -> Option<ShipRef> {
 }
 
 /// Whether `npc` can still fly its goal among `around`: a stellar still
-/// there and landable, or a jump it has the fuel for. Idling, following
+/// there and landable, a jump it has the fuel for, or a hold. Idling, following
 /// once the lead is gone, fighting and inspecting are no goals to keep.
 fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
     match npc.goal {
@@ -393,6 +407,7 @@ fn can_still_fly(npc: &Npc, around: &Surroundings) -> bool {
             .iter()
             .any(|site| site.id == stellar && landable(site)),
         Goal::JumpOut => npc.reserves.fuel.now >= JUMP_FUEL,
+        Goal::Hold => true,
         _ => false,
     }
 }
@@ -626,6 +641,27 @@ mod tests {
         leaving.goal = Goal::JumpOut;
         assert_eq!(decide(&leaving, &sites(), &[], &mut chance), Goal::JumpOut);
         assert!(chance.asked.is_empty());
+    }
+
+    #[test]
+    fn a_held_ship_of_every_ai_type_keeps_its_hold_drawing_nothing() {
+        let deciders: [(AiType, &dyn Behaviour); 5] = [
+            (AiType::WimpyTrader, &Peaceful),
+            (AiType::WimpyTrader, &WimpyTrader::default()),
+            (AiType::BraveTrader, &BraveTrader::default()),
+            (AiType::Warship, &Warship::default()),
+            (AiType::Interceptor, &Interceptor::default()),
+        ];
+        let sites = sites();
+        for (ai_type, decider) in deciders {
+            let mut held = npc(1, ai_type);
+            held.goal = Goal::Hold;
+            let npcs = [held.clone()];
+            let mut chance = Draws::of(&[]);
+            let goal = decider.decide(&held, &Surroundings::new(&sites, &npcs), &mut chance);
+            assert_eq!(goal, Goal::Hold, "{decider:?}");
+            assert!(chance.asked.is_empty(), "{decider:?} drew");
+        }
     }
 
     #[test]
