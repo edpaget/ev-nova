@@ -47,6 +47,15 @@
 //! ([`BarScreen::take_player_info_request`], `_BarFilter` @0x47aaa,
 //! `_ShipyardFilter` @0x6091a), not from the news.
 //!
+//! The map key ([`MAP_KEY`], a press, never a repeat) asks for the course
+//! map ([`BarScreen::take_map_request`]), as `_BarFilter`'s first key
+//! check answers item 8 (@0x47a6e-0x47a9b). It is no button, and it asks
+//! only while the bar is laid out and neither the news, the hire screen
+//! nor an offer has the input, as each of those has its own filter.
+//! Whoever holds the session opens flight's course map over the
+//! spaceport, and puts back the nav the bar opened with as it closes
+//! (`_DoBarDialog` @0x492a3-0x4930b).
+//!
 //! Leave, Return, Enter and Escape leave the bar. Without its dialog, the
 //! bar says why, and Return or Escape still leaves.
 
@@ -66,6 +75,7 @@ use super::shipyard::{InfoTemplates, ShipyardCatalog};
 use super::view::{PROBLEM_AT, PROBLEM_SIZE};
 use crate::color::Color;
 use crate::draw::DrawList;
+use crate::flight::view::MAP_KEY;
 use crate::font::Font;
 use crate::image::ImageKey;
 use crate::input::{Input, Key};
@@ -183,6 +193,8 @@ struct Asks {
     player_info: bool,
     /// The visit's news: Holovid was pressed.
     news: bool,
+    /// The course map: [`MAP_KEY`] was pressed.
+    map: bool,
 }
 
 /// The bar of the stellar landed on.
@@ -403,6 +415,13 @@ impl BarScreen {
         std::mem::take(&mut self.asks.hire)
     }
 
+    /// Whether [`MAP_KEY`] has asked for the course map since this was
+    /// last asked (`_BarFilter`'s item 8): whoever holds the session opens
+    /// it over the spaceport.
+    pub fn take_map_request(&mut self) -> bool {
+        std::mem::take(&mut self.asks.map)
+    }
+
     /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
     /// since this was last asked.
     pub fn take_info_request(&mut self) -> bool {
@@ -538,6 +557,16 @@ impl Screen for BarScreen {
             }
             return ScreenAction::None;
         };
+        if *input
+            == (Input::Key {
+                key: MAP_KEY,
+                pressed: true,
+                repeat: false,
+            })
+        {
+            self.asks.map = true;
+            return ScreenAction::None;
+        }
         if let Input::Key {
             key,
             pressed: true,
@@ -1475,5 +1504,54 @@ mod tests {
         assert!(!screen.take_hire_request());
         assert_eq!(MISSION_INFO_KEY, Key::Char('i'));
         assert!(!HIRE_KEYS.contains(&MISSION_INFO_KEY));
+    }
+
+    #[test]
+    fn the_map_key_asks_for_the_map_on_a_press_only() {
+        let mut screen = bar();
+        assert!(!screen.take_map_request());
+        screen.input(&key(MAP_KEY, true));
+        assert!(!screen.take_map_request(), "a repeat");
+        screen.input(&Input::Key {
+            key: MAP_KEY,
+            pressed: false,
+            repeat: false,
+        });
+        assert!(!screen.take_map_request(), "a release");
+        screen.input(&key(MAP_KEY, false));
+        assert!(screen.take_map_request());
+        assert!(!screen.take_map_request(), "once");
+        assert!(!screen.take_hire_request());
+        assert!(!screen.take_news_request());
+        assert!(!screen.closed());
+
+        let mut screen = newsy();
+        screen.open_news(&news(), 9000);
+        screen.input(&key(MAP_KEY, false));
+        assert!(!screen.take_map_request(), "the news open");
+
+        let mut screen = bar();
+        screen.open_hire(list(2));
+        screen.input(&key(MAP_KEY, false));
+        assert!(!screen.take_map_request(), "the hire screen open");
+
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        screen.input(&key(MAP_KEY, false));
+        assert!(!screen.take_map_request(), "an offer open");
+
+        let art = Rc::new(FakeArt {
+            asked: RefCell::default(),
+            pictures: BTreeSet::new(),
+        });
+        let mut screen = BarScreen::new(
+            Err("no DLOG 1013".to_owned()),
+            StellarId(157),
+            hiring(&art),
+            ButtonStyle::STOCK,
+            true,
+        );
+        screen.input(&key(MAP_KEY, false));
+        assert!(!screen.take_map_request(), "without the bar's dialog");
     }
 }

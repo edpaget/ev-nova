@@ -952,6 +952,16 @@ impl SpaceportView {
         }
     }
 
+    /// Whether the bar's map key has asked for the course map since this
+    /// was last asked ([`BarScreen::take_map_request`]): whoever flies the
+    /// ship opens it over the spaceport.
+    pub fn take_map_request(&mut self) -> bool {
+        match &mut self.open {
+            Some(Open::Bar(screen)) => screen.take_map_request(),
+            _ => false,
+        }
+    }
+
     /// Whether the bar's Hire Escort has asked for the ships for hire
     /// since this was last asked: whoever flies the ship answers with
     /// [`SpaceportView::open_hire`].
@@ -3694,6 +3704,19 @@ mod tests {
         let bar = view.open_bar().expect("in the bar");
         assert!(bar.hire_screen().is_none());
         assert_eq!(bar.message(), Some(NONE_FOR_HIRE));
+    }
+
+    #[test]
+    fn the_bars_map_key_asks_through_the_spaceport() {
+        use crate::flight::view::MAP_KEY;
+        let mut view = drinking(true);
+        view.input(&key(MAP_KEY));
+        assert!(!view.take_map_request(), "no bar open");
+        click_item(&mut view, 10);
+        view.input(&key(MAP_KEY));
+        assert!(view.take_map_request());
+        assert!(!view.take_map_request(), "once");
+        assert!(view.open_bar().is_some(), "still in the bar");
     }
 
     #[test]
