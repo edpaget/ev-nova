@@ -18,6 +18,8 @@
 //!   [`DialogTemplate`].
 //! - [`desc`]: the "Desc Dialog" ([`DescDialog`]), a long description in
 //!   a scrolling box with a Done button.
+//! - [`note`]: the note alert ([`NoteDialog`], `DLOG` 3000): a line of
+//!   text and an OK button.
 //! - [`text_field`]: a one-line [`TextField`] that typed characters fill
 //!   and Backspace empties.
 //! - [`edit_dialog`]: the edit-field modal shell ([`EditDialog`]) the
@@ -53,6 +55,7 @@ pub mod desc;
 pub mod dialog;
 pub mod edit_dialog;
 pub mod new_pilot;
+pub mod note;
 pub mod player_info;
 pub mod plunder;
 pub mod prefs;
@@ -74,6 +77,7 @@ pub use dialog::{
 };
 pub use edit_dialog::{Confirm, EditDialog, EditItems};
 pub use new_pilot::{NewPilotDialog, NewPilotOutcome};
+pub use note::NoteDialog;
 pub use player_info::{PlayerInfoButton, PlayerInfoScreen, Tab};
 pub use plunder::{AssignmentDialog, PlunderDialog, PlunderShown};
 pub use prefs::PrefsDialog;

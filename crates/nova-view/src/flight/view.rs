@@ -1661,6 +1661,14 @@ impl<
         Self::flying(catalog, session)
     }
 
+    /// `pilot`'s flight as [`FlightView::with_pilot`] builds it, its load's
+    /// fallbacks reading `rules` ([`Session::load`]): for a pilot opened
+    /// from a save, whose repair [`FlightView::load_repaired`] reports.
+    pub fn loaded(catalog: C, pilot: Pilot, rules: Rulebook) -> Self {
+        let session = Session::load(&catalog, pilot, &rules);
+        Self::flying(catalog, session)
+    }
+
     /// Begins a new pilot's game as [`Session::begin`] does, on the
     /// flight's chance, and shows on the course map any system it
     /// explored: for a pilot just created, before its first save. A
@@ -3336,6 +3344,14 @@ impl<C> FlightView<C> {
     /// The flight, or why it could not start.
     pub fn session(&self) -> Result<&Session, &str> {
         self.session.as_ref().map_err(String::as_str)
+    }
+
+    /// Whether the pilot's load had to fall back for data the save
+    /// references and the catalog lacks ([`Session::load_repaired`]):
+    /// false for a session that failed.
+    #[must_use]
+    pub fn load_repaired(&self) -> bool {
+        self.session.as_ref().is_ok_and(Session::load_repaired)
     }
 
     /// The pilot flying, if the flight started.
@@ -8763,6 +8779,46 @@ mod tests {
         let session = view.session().expect("flies");
         assert_eq!(session.system(), SystemId(130));
         assert!(session.load_repaired());
+    }
+
+    /// [`docked_pilot`] Ada with her stellar rewritten to 999, which no
+    /// system lists.
+    fn unlisted_pilot() -> Pilot {
+        let text = nova_sim::save::encode(&docked_pilot("Ada"))
+            .replace("\"stellar\": 128", "\"stellar\": 999");
+        let pilot = nova_sim::save::decode(&text).expect("a pilot");
+        assert_eq!(pilot.stellar(), Some(StellarId(999)));
+        pilot
+    }
+
+    #[test]
+    fn a_loaded_flight_reports_a_repaired_load() {
+        let view = FlightView::loaded(catalog(), unlisted_pilot(), Rulebook::default());
+        assert!(view.load_repaired());
+        assert_eq!(view.pilot().and_then(Pilot::stellar), None);
+        let docked = FlightView::loaded(catalog(), docked_pilot("Ada"), Rulebook::default());
+        assert!(!docked.load_repaired());
+        assert!(!FlightView::with_pilot(catalog(), docked_pilot("Ada")).load_repaired());
+        let failed = FlightView::new(FakeCatalog {
+            character: Err(StartError::NoCharacter),
+            ..catalog()
+        });
+        assert!(!failed.load_repaired(), "a failed session repaired nothing");
+    }
+
+    #[test]
+    fn a_loaded_flight_reads_the_rules_it_is_given() {
+        let mut pilot = unlisted_pilot();
+        pilot.explore(SystemId(131));
+        let text = nova_sim::save::encode(&pilot).replace("\"system\": 130", "\"system\": 131");
+        let moved = nova_sim::save::decode(&text).expect("a pilot");
+        let kept = FlightView::loaded(catalog(), moved.clone(), Rulebook::default());
+        assert_eq!(kept.session().map(Session::system), Ok(SystemId(131)));
+        let engine =
+            Rulebook::default().with_override(RuleKey::UnlistedStellar, RuleSource::Engine);
+        let lowest = FlightView::loaded(catalog(), moved, engine);
+        assert_eq!(lowest.session().map(Session::system), Ok(SystemId(130)));
+        assert!(lowest.load_repaired());
     }
 
     #[test]
