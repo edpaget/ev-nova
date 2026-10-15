@@ -489,7 +489,7 @@ impl Session {
         if let Some(active) = self.slot_holding(slot, record.id) {
             active.ships.ship_done = true;
         }
-        self.show_mission_text(MissionTextKind::ShipDone, record.id, Some(slot));
+        self.show_mission_text(MissionTextKind::ShipDone, record.id, Some(slot), chance);
         if ShipGoal::from_code(record.ships.goal) != ShipGoal::None {
             self.run_mission_script(slot, &record.on_ship_done, chance);
         }

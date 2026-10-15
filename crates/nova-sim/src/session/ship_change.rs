@@ -320,9 +320,12 @@ impl Session {
     }
 
     /// This session with `T` reading its names from `strings`' string
-    /// lists (see the module docs): none by default.
+    /// lists (see the module docs): none by default. The texts it fills
+    /// are `l33t` when `strings` says the data turns that on
+    /// ([`CommCatalog::leet_mode`]; see [`text_tags`](crate::text_tags)).
     #[must_use]
     pub fn with_strings(mut self, strings: Rc<dyn CommCatalog>) -> Self {
+        self.leet = strings.leet_mode();
         self.strings = Strings(strings);
         self
     }

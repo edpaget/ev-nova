@@ -522,7 +522,7 @@ pub(super) mod tests {
             "skipper skipper skipper"
         );
         let mut session = session;
-        let loaded = session.take_in(TextSource::Desc, "<PRK128>!");
+        let loaded = session.take_in(TextSource::Desc, "<PRK128>!", &mut NeverFires);
         assert_eq!(
             session.plain_text(&loaded),
             "skipper!",

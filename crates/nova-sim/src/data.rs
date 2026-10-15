@@ -913,10 +913,19 @@ impl CombatCatalog for GameData {
     }
 }
 
+/// The `l33t` resource type, whose presence alone turns on `_leetMode`.
+const LEET: ResType = ResType::new(*b"l33t");
+
 /// Reads the string list afresh on every call.
 impl CommCatalog for GameData {
     fn string_list(&self, id: i16) -> Vec<String> {
         strings(self, id)
+    }
+
+    /// Whether any `l33t` resource exists, whatever it holds
+    /// (`CountResources('l33t') > 0`, @0x7e28c-0x7e2a2).
+    fn leet_mode(&self) -> bool {
+        !self.ids(LEET).is_empty()
     }
 }
 
@@ -2455,6 +2464,20 @@ mod tests {
             bytes.extend(string.as_bytes());
         }
         bytes
+    }
+
+    #[test]
+    fn any_l33t_resource_turns_the_leet_mode_on() {
+        assert!(!store(&[]).leet_mode());
+        assert!(
+            !store(&[(StrList::TYPE, 4001, str_list(&["food"]))]).leet_mode(),
+            "nothing else does"
+        );
+        let empty = store(&[(LEET, 128, Vec::new())]);
+        assert!(empty.leet_mode(), "even empty");
+        assert!(CommCatalog::leet_mode(&&empty), "through a borrow");
+        let shared: std::rc::Rc<dyn CommCatalog> = std::rc::Rc::new(store(&[(LEET, 200, vec![1])]));
+        assert!(shared.leet_mode(), "through the shared catalog");
     }
 
     #[test]

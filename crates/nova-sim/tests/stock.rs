@@ -3791,6 +3791,7 @@ fn the_bounty_hunters_hail_quote_names_him_and_the_pilot() {
         ship_name: "Kestrel",
         ranks: nova_sim::rank::RankNames::none(),
         rank_govts: nova_sim::text_tags::RankTagGovts::NONE,
+        leet: false,
         rules: nova_sim::text_tags::TagRules::default(),
     };
     assert_eq!(

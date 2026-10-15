@@ -163,7 +163,7 @@ impl Session {
     }
 
     /// Queues `mission`'s `kind` text to show, when it has one, taken in
-    /// as a `dësc` ([`TextSource::Desc`]) and filled for `slot`
+    /// as a `dësc` ([`TextSource::Desc`], drawing on `chance`) and filled for `slot`
     /// ([`Session::mission_text`]), or with no mission
     /// ([`Session::plain_text`]): whether it had one.
     pub(super) fn show_mission_text(
@@ -171,6 +171,7 @@ impl Session {
         kind: MissionTextKind,
         mission: MissionId,
         slot: Option<u8>,
+        chance: &mut dyn Chance,
     ) -> bool {
         let Some(raw) = self
             .mission_texts
@@ -180,7 +181,7 @@ impl Session {
         else {
             return false;
         };
-        let raw = self.take_in(TextSource::Desc, &raw);
+        let raw = self.take_in(TextSource::Desc, &raw, chance);
         let text = match slot {
             Some(slot) => self.mission_text(slot, &raw),
             None => self.plain_text(&raw),
@@ -291,15 +292,20 @@ impl Session {
     /// text loaded as a `dësc` and filled for its offer, as
     /// `_MissionFilter` loads a selected row's (@0x9f9bd-0x9f9eb), and
     /// then its name filled, as `_MissionDialogUpdate` munges the
-    /// selected name after (@0x9f40c). `None` when it is not offered.
-    pub fn show_computer_row(&mut self, mission: MissionId) -> Option<ComputerRow> {
+    /// selected name after (@0x9f40c), drawing on `chance`. `None` when
+    /// it is not offered.
+    pub fn show_computer_row(
+        &mut self,
+        mission: MissionId,
+        chance: &mut dyn Chance,
+    ) -> Option<ComputerRow> {
         self.offer_of(mission)?;
         let texts = self.mission_texts(mission);
         let name = texts.map_or("", |texts| texts.name.as_str()).to_owned();
         let raw = texts
             .and_then(|texts| texts.offer.clone())
             .unwrap_or_default();
-        let raw = self.take_in(TextSource::Desc, &raw);
+        let raw = self.take_in(TextSource::Desc, &raw, chance);
         Some(ComputerRow {
             mission,
             text: self.offer_text(mission, &raw)?,
@@ -309,15 +315,15 @@ impl Session {
 
     /// Shows the mission info screen's row of `slot`, selected: its
     /// `QuickBrief` loaded as a `dësc` and filled for the slot, as
-    /// `_MissionInfoFilter` loads a selected row's (@0x9d89f-0x9d8bc).
-    /// `None` for a free slot.
-    pub fn show_info_row(&mut self, slot: u8) -> Option<String> {
+    /// `_MissionInfoFilter` loads a selected row's (@0x9d89f-0x9d8bc),
+    /// drawing on `chance`. `None` for a free slot.
+    pub fn show_info_row(&mut self, slot: u8, chance: &mut dyn Chance) -> Option<String> {
         let active = self.pilot.missions.get(slot)?;
         let raw = self
             .mission_texts(active.mission)
             .and_then(|texts| texts.quick_brief.clone())
             .unwrap_or_default();
-        let raw = self.take_in(TextSource::Desc, &raw);
+        let raw = self.take_in(TextSource::Desc, &raw, chance);
         Some(self.mission_text(slot, &raw))
     }
 
@@ -386,7 +392,7 @@ impl Session {
             can_refuse,
         );
         let raw = raw.to_owned();
-        let raw = self.take_in(TextSource::Desc, &raw);
+        let raw = self.take_in(TextSource::Desc, &raw, chance);
         VenueOffer::Prompt(OfferPrompt {
             mission,
             text: self.offer_text(mission, &raw).unwrap_or_default(),
@@ -447,7 +453,7 @@ mod tests {
     use crate::mission::{AcceptError, ActiveMission, OfferLabels, SLOTS};
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::AbortError;
-    use crate::testkit::{FakePilotCatalog, catalog, land_now, mission};
+    use crate::testkit::{Draws, FakePilotCatalog, catalog, land_now, mission};
 
     /// Stellars 128 Earth, 129 Luna and 140 Mars; systems 130 Sol and 131
     /// Alpha.
@@ -533,7 +539,11 @@ mod tests {
             vec![texts(130, "Run <PRK128>", Some("Go, <PRK128>."))],
             Rulebook::default(),
         );
-        let _ = session.take_in(TextSource::Desc, "Earlier: <PRK128> <SRK129>.");
+        let _ = session.take_in(
+            TextSource::Desc,
+            "Earlier: <PRK128> <SRK129>.",
+            &mut NeverFires,
+        );
         let computer = session.mission_computer().expect("opens");
         assert_eq!(
             (
@@ -549,7 +559,9 @@ mod tests {
             "Ad",
             "the computer's view changes nothing"
         );
-        let shown = session.show_computer_row(MissionId(130)).expect("offered");
+        let shown = session
+            .show_computer_row(MissionId(130), &mut NeverFires)
+            .expect("offered");
         assert_eq!(
             (shown.name.as_str(), shown.text.as_str()),
             ("Run captain", "Go, captain."),
@@ -566,7 +578,7 @@ mod tests {
             "opened again, the names read what the last load left"
         );
         assert_eq!(
-            session.show_computer_row(MissionId(131)),
+            session.show_computer_row(MissionId(131), &mut NeverFires),
             None,
             "not offered"
         );
@@ -580,7 +592,11 @@ mod tests {
             vec![texts(130, "Run <PRK128>", Some("Go, <PRK128>."))],
             rules,
         );
-        let _ = session.take_in(TextSource::Desc, "Earlier: <PRK128> <SRK129>.");
+        let _ = session.take_in(
+            TextSource::Desc,
+            "Earlier: <PRK128> <SRK129>.",
+            &mut NeverFires,
+        );
         let computer = session.mission_computer().expect("opens");
         assert_eq!(
             (
@@ -601,7 +617,11 @@ mod tests {
             }],
             Rulebook::default(),
         );
-        let _ = session.take_in(TextSource::Quote, "Earlier: <SRK129> said.");
+        let _ = session.take_in(
+            TextSource::Quote,
+            "Earlier: <SRK129> said.",
+            &mut NeverFires,
+        );
         session
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
@@ -625,19 +645,105 @@ mod tests {
         let slot = session
             .accept_mission(MissionId(130), &mut NeverFires)
             .expect("accepted");
-        let _ = session.take_in(TextSource::Desc, "Earlier: <PRK128> <SRK129>.");
+        let _ = session.take_in(
+            TextSource::Desc,
+            "Earlier: <PRK128> <SRK129>.",
+            &mut NeverFires,
+        );
         let info = session.mission_info();
         assert_eq!(
             (info.rows[0].name.as_str(), info.rows[0].text.as_str()),
             ("Run Ad", "To captain.")
         );
-        assert_eq!(session.show_info_row(slot).as_deref(), Some("To captain."));
+        assert_eq!(
+            session.show_info_row(slot, &mut NeverFires).as_deref(),
+            Some("To captain.")
+        );
         assert_eq!(
             session.plain_text("<PRK128>"),
             "captain",
             "left by the load"
         );
-        assert_eq!(session.show_info_row(15), None, "a free slot");
+        assert_eq!(
+            session.show_info_row(15, &mut NeverFires),
+            None,
+            "a free slot"
+        );
+    }
+
+    /// String lists of none, from data holding a `l33t` resource.
+    struct Leet;
+
+    impl crate::catalog::CommCatalog for Leet {
+        fn string_list(&self, _id: i16) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn leet_mode(&self) -> bool {
+            true
+        }
+    }
+
+    /// [`docked`] in `catalog`, its strings [`Leet`]'s.
+    fn leet(catalog: &FakePilotCatalog) -> Session {
+        docked(catalog).with_strings(std::rc::Rc::new(Leet))
+    }
+
+    /// Mission 130 to Mars, "Ride" offering "You go to <DST> alone."
+    fn leet_catalog() -> FakePilotCatalog {
+        screens(
+            vec![to_mars(130)],
+            vec![texts(130, "Ride", Some("You go to <DST> alone."))],
+        )
+    }
+
+    #[test]
+    fn without_leet_mode_texts_are_unchanged() {
+        let catalog = leet_catalog();
+        let mut session = docked(&catalog);
+        let mut chance = Draws::of(&[]);
+        let shown = session
+            .show_computer_row(MissionId(130), &mut chance)
+            .expect("offered");
+        assert_eq!(shown.text, "You go to Mars alone.");
+        assert_eq!(chance.asked, Vec::<u32>::new(), "nothing drawn");
+    }
+
+    #[test]
+    fn with_leet_mode_a_shown_text_draws_its_letters_then_is_munged() {
+        let catalog = leet_catalog();
+        let mut session = leet(&catalog);
+        // "You go to <DST> alone.": o (go) kept, o (to) replaced, a and o
+        // (alone) replaced, e kept; Y's "ou" turns to j00 with no draw.
+        // The munge then turns the e to 3 and the l to 7.
+        let mut chance = Draws::of(&[2, 0, 1, 0, 2]);
+        let shown = session
+            .show_computer_row(MissionId(130), &mut chance)
+            .expect("offered");
+        assert_eq!(chance.asked, [3; 5]);
+        assert_eq!(
+            shown.text, "j00 go t0 Mars 470n3.",
+            "letters drawn on the dësc (@0x7194f), then the filled text \
+             munged (@0x9d5aa): the stellar's name too"
+        );
+        assert_eq!(shown.name, "R1d3", "a name is munged, never drawn on");
+    }
+
+    #[test]
+    fn with_leet_mode_a_query_gives_the_same_text_each_time() {
+        let catalog = leet_catalog();
+        let session = leet(&catalog);
+        let first = session.mission_computer().expect("opens");
+        assert_eq!(first, session.mission_computer().expect("opens"));
+        assert_eq!(
+            first.rows[0].text, "j00 go to Mars a7on3.",
+            "munged only, nothing drawn"
+        );
+        assert_eq!(
+            session.offer_text(MissionId(130), "Hello"),
+            session.offer_text(MissionId(130), "Hello")
+        );
+        assert_eq!(session.plain_text("Hello").as_str(), "H377o");
     }
 
     fn ids(computer: &MissionComputer) -> Vec<i16> {

@@ -505,7 +505,7 @@ impl Session {
         self.offer_of(mission).ok_or(NotOffered)?;
         let record = self.lifecycle_record(mission);
         // `RefuseText`, filled with no mission (index -1, @0xa2ec9).
-        self.show_mission_text(MissionTextKind::Refuse, mission, None);
+        self.show_mission_text(MissionTextKind::Refuse, mission, None, chance);
         self.in_offer_dialog(|session| session.run_script(&record.on_refuse, chance));
         self.offers.drop_offer(mission);
         self.end_ship_offer(false);
@@ -602,8 +602,8 @@ impl Session {
         self.pilot.cash = accept_charge(offer.pay, self.pilot.cash);
         // `BriefText`, filled for the slot after `OnAccept` and the charge
         // (@0xa1e0b-0xa1f13, @0xa1e56).
-        self.show_mission_text(MissionTextKind::Brief, record.id, Some(slot));
-        self.load_at_accept(slot, record);
+        self.show_mission_text(MissionTextKind::Brief, record.id, Some(slot), chance);
+        self.load_at_accept(slot, record, chance);
         let in_dialog = self.offer_dialog_open
             || self.rules.source_for(RuleKey::StartOutsideDialog) == RuleSource::Bible;
         let docked = self.landed;
@@ -854,7 +854,9 @@ impl Session {
             (GOALS | RECHECK, StoryEvent::Landed { .. }) => {
                 self.check_ship_goals(slot, false, chance);
             }
-            (ARRIVAL, StoryEvent::Landed { stellar }) => self.cargo_at_landing(slot, stellar),
+            (ARRIVAL, StoryEvent::Landed { stellar }) => {
+                self.cargo_at_landing(slot, stellar, chance);
+            }
             (RETURN, StoryEvent::Landed { stellar }) => {
                 self.mission_return_at(slot, stellar, chance);
             }
@@ -892,7 +894,7 @@ impl Session {
         self.end_mission(slot, &record, false, chance);
         // `FailText` (@0xa0358-0xa03cd), filled after the slot is freed
         // (@0xa0398), so its mission tags read "[Error]".
-        self.show_mission_text(MissionTextKind::Fail, record.id, Some(slot));
+        self.show_mission_text(MissionTextKind::Fail, record.id, Some(slot), chance);
         self.forget_offers();
     }
 
@@ -950,7 +952,7 @@ impl Session {
         let record = self.lifecycle_record(mission);
         // `CompText` (@0xa0417-0xa048c), filled before the slot is freed
         // (@0xa0457).
-        self.show_mission_text(MissionTextKind::Comp, mission, Some(slot));
+        self.show_mission_text(MissionTextKind::Comp, mission, Some(slot), chance);
         let Some(done) = self.free_slot(slot) else {
             return;
         };
@@ -1300,23 +1302,34 @@ impl Session {
                 slot,
             }),
             rank_govts,
+            leet: self.leet,
             rules: TagRules::from_rulebook(&self.rules),
         }
     }
 
     /// Takes in `raw`, a text from `source`, as the original does before
     /// it fills it: the remembered rank governments become those `source`
-    /// leaves ([`TextSource::govts`]). What it gives back is the text to
-    /// fill.
+    /// leaves ([`TextSource::govts`]), and in the `l33t` mode a `dësc`'s
+    /// letters are drawn on `chance` ([`load_leet`](text_tags::load_leet)).
+    /// What it gives back is the text to fill.
     ///
     /// The `&self` texts below ([`Session::offer_text`],
     /// [`Session::mission_text`], [`Session::plain_text`]) read the
     /// remembered governments and change nothing; only the paths that
     /// show a text take it in, so the governments settle as each text is
     /// shown, as the original's `_LoadDescription` does.
-    pub(super) fn take_in(&mut self, source: TextSource, raw: &str) -> String {
+    pub(super) fn take_in(
+        &mut self,
+        source: TextSource,
+        raw: &str,
+        chance: &mut dyn Chance,
+    ) -> String {
         self.rank_govts = source.govts(self.rank_govts, raw);
-        raw.to_owned()
+        if self.leet && source == TextSource::Desc {
+            text_tags::load_leet(raw, chance)
+        } else {
+            raw.to_owned()
+        }
     }
 
     /// `text` filled for `mission`'s offer, its crossed rank tags reading

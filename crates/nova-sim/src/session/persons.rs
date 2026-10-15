@@ -198,7 +198,7 @@ impl Session {
                 .and_then(|at| lines.get(at))
                 .cloned()
                 .unwrap_or_default();
-            let line = self.take_in(TextSource::Quote, &line);
+            let line = self.take_in(TextSource::Quote, &line, chance);
             let tags = QuoteTags {
                 person: self
                     .traffic
@@ -209,6 +209,7 @@ impl Session {
                 ship_name: self.pilot.ship_name().unwrap_or_default(),
                 ranks: self.rank_names(),
                 rank_govts: self.rank_govts,
+                leet: self.leet,
                 rules: TagRules::from_rulebook(&self.rules),
             };
             let text = expand_tags(&line, &tags);
@@ -1049,7 +1050,7 @@ mod tests {
     #[test]
     fn by_the_engine_a_quote_parses_its_rank_governments_onto_those_remembered() {
         let (catalog, mut session) = ranked_quote("<PRK128>, I said!", Rulebook::default());
-        let _ = session.take_in(TextSource::Desc, "Earlier: <SRK129>.");
+        let _ = session.take_in(TextSource::Desc, "Earlier: <SRK129>.", &mut NeverFires);
         let (said, _) = quote_tick(&catalog, &mut session, &[77]);
         assert_eq!(
             said,
@@ -1067,7 +1068,7 @@ mod tests {
     fn by_the_bible_a_quotes_rank_nnn_tag_reads_its_own_government() {
         let rules = Rulebook::default().with_override(RuleKey::CrossedRankTags, RuleSource::Bible);
         let (catalog, mut session) = ranked_quote("<PRK128>, I said!", rules);
-        let _ = session.take_in(TextSource::Desc, "Earlier: <SRK129>.");
+        let _ = session.take_in(TextSource::Desc, "Earlier: <SRK129>.", &mut NeverFires);
         let (said, _) = quote_tick(&catalog, &mut session, &[77]);
         assert_eq!(said, ["Cdr, I said!"]);
     }

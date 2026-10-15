@@ -179,6 +179,7 @@ fn every_stock_missions_texts_fill_every_tag_but_the_ranks() {
             slot: None,
         }),
         rank_govts: nova_sim::text_tags::RankTagGovts::NONE,
+        leet: false,
         rules: TagRules::default(),
     };
     let mut texts = 0;

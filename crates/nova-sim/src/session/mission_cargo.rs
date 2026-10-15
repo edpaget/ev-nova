@@ -32,7 +32,12 @@ impl Session {
     /// @0xa1f28-0xa1fbf): with `PickupMode` 0 it is aboard, whatever its
     /// type, and its `LoadCargText` is shown, filled for the slot.
     /// Nothing when the slot no longer holds the mission.
-    pub(super) fn load_at_accept(&mut self, slot: u8, record: &MissionRecord) {
+    pub(super) fn load_at_accept(
+        &mut self,
+        slot: u8,
+        record: &MissionRecord,
+        chance: &mut dyn Chance,
+    ) {
         if !loads_at_accept(record) {
             return;
         }
@@ -40,7 +45,7 @@ impl Session {
             return;
         };
         active.aboard = true;
-        self.show_mission_text(MissionTextKind::LoadCargo, record.id, Some(slot));
+        self.show_mission_text(MissionTextKind::LoadCargo, record.id, Some(slot), chance);
     }
 
     /// The cargo check of the mission in `slot` as the player lands on
@@ -53,7 +58,12 @@ impl Session {
     /// reaches it. Then the cargo is dropped off as [`drops_off`] says,
     /// showing its `DumpCargoText` and, when it has one, resetting
     /// ([`Session::reset_precalced`], @0x9eff9).
-    pub(super) fn cargo_at_landing(&mut self, slot: u8, stellar: StellarId) {
+    pub(super) fn cargo_at_landing(
+        &mut self,
+        slot: u8,
+        stellar: StellarId,
+        chance: &mut dyn Chance,
+    ) {
         let Some(active) = self.pilot.missions.get(slot) else {
             return;
         };
@@ -61,7 +71,7 @@ impl Session {
         let at_destination = self.docked_at_stop(active.destination, stellar);
         let at_return = self.docked_at_stop(active.return_to, stellar);
         if at_destination {
-            let reached = !picks_up_at_destination(&record, active) || self.pick_up(slot);
+            let reached = !picks_up_at_destination(&record, active) || self.pick_up(slot, chance);
             if let Some(active) = self.slot_holding(slot, record.id)
                 && reached
             {
@@ -79,7 +89,7 @@ impl Session {
             // mission has one (@0x9ef82-0x9eff9; see the `precalced`
             // module). One whose text resource is missing has none here,
             // where the original shows an empty dialog and resets.
-            if self.show_mission_text(MissionTextKind::DumpCargo, record.id, Some(slot)) {
+            if self.show_mission_text(MissionTextKind::DumpCargo, record.id, Some(slot), chance) {
                 self.reset_precalced();
             }
         }
@@ -109,7 +119,7 @@ impl Session {
 
     /// Picks up the cargo of the mission in `slot` at its destination:
     /// whether it is aboard now, its `LoadCargText` shown.
-    fn pick_up(&mut self, slot: u8) -> bool {
+    fn pick_up(&mut self, slot: u8, chance: &mut dyn Chance) -> bool {
         let Some(mission) = self.pilot.missions.get(slot).map(|active| active.mission) else {
             return false;
         };
@@ -119,7 +129,7 @@ impl Session {
         if let Some(active) = self.slot_holding(slot, mission) {
             active.aboard = true;
         }
-        self.show_mission_text(MissionTextKind::LoadCargo, mission, Some(slot));
+        self.show_mission_text(MissionTextKind::LoadCargo, mission, Some(slot), chance);
         true
     }
 
@@ -800,7 +810,7 @@ mod tests {
             if pickup_mode == 2 {
                 assert!(session.pick_up_boarded_cargo(0), "a boarding pickup");
             } else {
-                session.cargo_at_landing(0, StellarId(128));
+                session.cargo_at_landing(0, StellarId(128), &mut NeverFires);
             }
             assert!(aboard(&session, 0), "{pickup_mode}");
             assert_eq!(
@@ -853,7 +863,7 @@ mod tests {
             // 30 tons of goods in 20 holds, set up past the landing's reset.
             session.pilot.cargo = std::iter::once((Good::Commodity(0), 30)).collect();
             convicted(&mut session);
-            session.cargo_at_landing(0, StellarId(128));
+            session.cargo_at_landing(0, StellarId(128), &mut NeverFires);
             assert!(!aboard(&session, 0), "{dump:?}: dropped off");
             assert_eq!(session.scan_latches == Latches::ARMED, resets, "{dump:?}");
             let food = if resets { 20 } else { 30 };

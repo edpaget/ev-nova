@@ -1214,6 +1214,13 @@ pub trait CommCatalog {
     /// Every string of `STR#` `id`, in order; none when it is missing or
     /// cannot be read.
     fn string_list(&self, id: i16) -> Vec<String>;
+
+    /// Whether the data holds any `l33t` resource, which turns on the
+    /// original's `_leetMode` (`_LoadObjectData` @0x7e28c-0x7e2a2; see
+    /// [`text_tags`](crate::text_tags)). None by default.
+    fn leet_mode(&self) -> bool {
+        false
+    }
 }
 
 /// A borrowed catalog is a catalog.
@@ -1221,12 +1228,20 @@ impl<T: CommCatalog + ?Sized> CommCatalog for &T {
     fn string_list(&self, id: i16) -> Vec<String> {
         (**self).string_list(id)
     }
+
+    fn leet_mode(&self) -> bool {
+        (**self).leet_mode()
+    }
 }
 
 /// A shared catalog is a catalog.
 impl<T: CommCatalog + ?Sized> CommCatalog for Rc<T> {
     fn string_list(&self, id: i16) -> Vec<String> {
         (**self).string_list(id)
+    }
+
+    fn leet_mode(&self) -> bool {
+        (**self).leet_mode()
     }
 }
 

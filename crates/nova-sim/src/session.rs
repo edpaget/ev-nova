@@ -1046,6 +1046,9 @@ pub struct Session {
     /// the crossed rank tags read them; never saved, as the original
     /// saves none of it.
     rank_govts: RankTagGovts,
+    /// Whether the data turns on the `l33t` mode (`_leetMode`; see
+    /// [`Session::with_strings`]); never saved.
+    leet: bool,
     /// The outside offers whose accept was refused, passed over until
     /// another venue is entered (see the `mission_screens` module); never
     /// saved, as the original saves none of it.
@@ -1384,6 +1387,7 @@ impl Session {
             ending: BTreeSet::new(),
             shown_texts: Vec::new(),
             rank_govts: RankTagGovts::NONE,
+            leet: false,
             suppressed: BTreeSet::new(),
             offer_venue: None,
             ship_offers: person_offers::ShipOffers::new(),

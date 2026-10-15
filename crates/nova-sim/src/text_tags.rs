@@ -71,11 +71,18 @@
 //!   by the engine the slot's byte offset, as the original's register
 //!   leaves it ([`MissionTags::other_pay`]).
 //!
-//! The original's quirks not reproduced here (a stale `<OSN>`, the `l33t`
-//! mode and `'STR '` 9100+ cargo name patches) are
+//! - With the data's `l33t` mode on ([`TagContext::leet`]), the filled
+//!   text is [`munge_leet`]ed last, as `_MungeBriefing` does
+//!   (@0x9d5aa-0x9d667); a `dësc` the session shows has its letters drawn
+//!   first ([`load_leet`], `_LoadDescription` @0x7194f-0x71a5c), which
+//!   can break a tag (`<PAY>` to `<P4Y>`) that is then left as written.
+//!
+//! The original's quirks not reproduced here (a stale `<OSN>` and
+//! `'STR '` 9100+ cargo name patches) are
 //! rdm:phase/missions-fidelity/phase-2-text-substitution-quirks.
 
 use crate::catalog::{DateAffixes, GovtId, StellarId, SystemId};
+use crate::chance::Chance;
 use crate::date::{GameDate, long_date_text};
 use crate::mission::{ActiveMission, Offer, Stop};
 use crate::rank::RankNames;
@@ -370,6 +377,51 @@ impl RankTagGovts {
     }
 }
 
+/// `text` with `_MungeBriefing`'s `l33t` replacements made, after every
+/// tag (@0x9d5aa-0x9d667, strings 0xdb20f-0xdb232): `you` and `You` to
+/// `j00`, `ck` to `x0r`, then `i` and `I` to `1`, `e` and `E` to `3`, `l`
+/// and `L` to `7`, each in that order, every occurrence.
+#[must_use]
+pub fn munge_leet(text: &str) -> String {
+    const LEET: [(&str, &str); 9] = [
+        ("you", "j00"),
+        ("You", "j00"),
+        ("ck", "x0r"),
+        ("i", "1"),
+        ("I", "1"),
+        ("e", "3"),
+        ("E", "3"),
+        ("l", "7"),
+        ("L", "7"),
+    ];
+    LEET.iter()
+        .fold(text.to_owned(), |text, (from, to)| text.replace(from, to))
+}
+
+/// `text` with `_LoadDescription`'s `l33t` letters drawn on `chance`, as
+/// a `dësc` is loaded before its tags are filled (@0x7194f-0x71a5c): each
+/// character in turn, an `a` or `A` becomes `4`, an `e` or `E` `3`, an
+/// `i` or `I` `1` and an `o` or `O` `0`, each on a draw of
+/// `_Rand(3)` landing on 0 or 1, 2 in 3; then a `y` or `Y` followed by a
+/// lower-case `ou`, more than 4 characters from the end, becomes `j00`.
+/// Only what each draw decides, and its odds, are the original's, not
+/// the order of the draws (`chance` is not the original's generator).
+pub fn load_leet(text: &str, chance: &mut dyn Chance) -> String {
+    let mut chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    for at in 0..len {
+        for (letter, digit) in [('a', '4'), ('e', '3'), ('i', '1'), ('o', '0')] {
+            if chars[at].eq_ignore_ascii_case(&letter) && chance.below(3) < 2 {
+                chars[at] = digit;
+            }
+        }
+        if at + 4 < len && matches!(chars[at], 'y' | 'Y') && chars[at + 1..at + 3] == ['o', 'u'] {
+            chars[at..at + 3].copy_from_slice(&['j', '0', '0']);
+        }
+    }
+    chars.into_iter().collect()
+}
+
 /// What a text's tags read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TagContext<'a> {
@@ -391,6 +443,10 @@ pub struct TagContext<'a> {
     /// engine reading): those the text's source leaves (see the
     /// [`story`](crate::story) module's "Text substitution").
     pub rank_govts: RankTagGovts,
+    /// Whether the data holds a `l33t` resource (`_leetMode`,
+    /// `_LoadObjectData` @0x7e28c-0x7e2a2): the filled text is then
+    /// [`munge_leet`]ed.
+    pub leet: bool,
     /// The disputed rules the tags follow.
     pub rules: TagRules,
 }
@@ -559,12 +615,17 @@ pub fn expand(text: &str, context: &TagContext, names: &(impl TagNames + ?Sized)
         RuleSource::Engine => ranks.short_of(govt),
         RuleSource::Bible => ranks.conversation_of(govt),
     };
-    match context.rules.crossed_rank_tags {
+    let filled = match context.rules.crossed_rank_tags {
         RuleSource::Engine => fill_crossed(&filled, context.rank_govts, ranks, prk_name),
         RuleSource::Bible => {
             let filled = fill_ranked(&filled, "<PRK", prk_name);
             fill_ranked(&filled, "<SRK", |govt| ranks.short_of(govt))
         }
+    };
+    if context.leet {
+        munge_leet(&filled)
+    } else {
+        filled
     }
 }
 
@@ -752,6 +813,7 @@ mod tests {
                 slot: None,
             }),
             rank_govts: RankTagGovts::NONE,
+            leet: false,
             rules: TagRules::default(),
         }
     }
@@ -1451,6 +1513,75 @@ mod tests {
             ),
             "<DST> <DSY> <RST> <RSY> <CT> <CQ> <SN> <DL> <PAY> Stock captain"
         );
+    }
+
+    // `l33t`.
+
+    #[test]
+    fn munge_leet_replaces_in_the_originals_order() {
+        assert_eq!(munge_leet("You lick"), "j00 71x0r");
+        assert_eq!(munge_leet("yours"), "j00rs", "you before i");
+        assert_eq!(munge_leet("Elite"), "371t3");
+        assert_eq!(munge_leet("LAST pick"), "7AST p1x0r");
+        assert_eq!(munge_leet("1337"), "1337");
+    }
+
+    #[test]
+    fn with_leet_mode_the_filled_text_is_munged_last() {
+        let mut tags = TagContext {
+            pilot: "Ellie",
+            ..context(Some(values()))
+        };
+        assert_eq!(expand("Hi <PN>, <DST>", &tags, &names()), "Hi Ellie, Mars");
+        tags.leet = true;
+        assert_eq!(
+            expand("Hi <PN>, <DST>", &tags, &names()),
+            "H1 37713, Mars",
+            "the pilot's name filled in is munged too (@0x9d5aa-0x9d667)"
+        );
+    }
+
+    #[test]
+    fn load_leet_replaces_a_letter_on_2_draws_in_3() {
+        let mut chance = crate::testkit::Draws::of(&[0, 2, 1, 2, 1, 0, 2, 2]);
+        assert_eq!(
+            load_leet("aeioAEIO", &mut chance),
+            "4e1o43IO",
+            "_Rand(3) of 0 or 1 replaces (@0x7198a-0x71993)"
+        );
+        assert_eq!(chance.asked, [3; 8], "one draw a vowel");
+    }
+
+    #[test]
+    fn load_leet_draws_nothing_for_other_letters() {
+        let mut chance = crate::testkit::Draws::of(&[]);
+        assert_eq!(load_leet("thrysm ", &mut chance), "thrysm ");
+        assert_eq!(chance.asked, Vec::<u32>::new());
+    }
+
+    #[test]
+    fn load_leet_turns_you_into_j00() {
+        let mut chance = crate::testkit::Draws::of(&[]);
+        assert_eq!(load_leet("Your hymn", &mut chance), "j00r hymn");
+        assert_eq!(load_leet("you!!", &mut chance), "j00!!");
+        assert_eq!(
+            chance.asked,
+            Vec::<u32>::new(),
+            "the o of you is not drawn for"
+        );
+        assert_eq!(
+            load_leet("YOU!!", &mut chance),
+            "YOU!!",
+            "only a lower-case ou (@0x71a35-0x71a3e)"
+        );
+    }
+
+    #[test]
+    fn load_leet_leaves_a_you_too_near_the_end() {
+        let mut chance = crate::testkit::Draws::of(&[]);
+        assert_eq!(load_leet("you!", &mut chance), "you!", "i < strlen - 4");
+        assert_eq!(load_leet("Thank you", &mut chance), "Thank you");
+        assert_eq!(chance.asked, [3, 3, 3], "its o drawn for, kept");
     }
 
     #[test]

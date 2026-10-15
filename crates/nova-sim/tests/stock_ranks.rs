@@ -110,6 +110,7 @@ fn stock_desc_5066_names_the_ambassador_by_short_name_and_by_the_bible_by_conv_n
             },
             mission: None,
             rank_govts: RankTagGovts::NONE.parsed(&text),
+            leet: false,
             rules: TagRules::from_rulebook(&rules),
         };
         text_tags::expand(&text, &context, &NoNames)

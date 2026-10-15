@@ -230,6 +230,8 @@ pub struct QuoteTags<'a> {
     /// The rank governments the quote's crossed rank tags read: those
     /// its parse leaves (see [`RankTagGovts`]).
     pub rank_govts: RankTagGovts,
+    /// Whether the `l33t` mode is on.
+    pub leet: bool,
     /// The disputed rules the tags follow.
     pub rules: TagRules,
 }
@@ -249,6 +251,7 @@ pub fn expand_tags(text: &str, tags: &QuoteTags) -> String {
         ranks: tags.ranks.clone(),
         mission: None,
         rank_govts: tags.rank_govts,
+        leet: tags.leet,
         rules: tags.rules,
     };
     text_tags::expand(text, &context, &NoNames)
@@ -1308,6 +1311,7 @@ mod tests {
             ship_name: "Kestrel",
             ranks: RankNames::none(),
             rank_govts: RankTagGovts::NONE,
+            leet: false,
             rules: TagRules::default(),
         };
         assert_eq!(
@@ -1333,6 +1337,7 @@ mod tests {
             ship_name: "Kestrel",
             ranks: RankNames::none(),
             rank_govts: RankTagGovts::NONE,
+            leet: false,
             rules: TagRules::default(),
         };
         assert_eq!(
@@ -1376,6 +1381,7 @@ mod tests {
                 fallback: "captain".into(),
             },
             rank_govts: RankTagGovts::NONE.parsed(text),
+            leet: false,
             rules: TagRules::default(),
         };
         assert_eq!(
