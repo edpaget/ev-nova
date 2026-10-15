@@ -1246,6 +1246,83 @@ mod tests {
         assert_eq!(session.plain_text("<OSN>"), "Earlier", "linked, not 0x0400");
     }
 
+    /// [`quoters`] with Ace of `Flags` 0x0400 linked to mission 130,
+    /// flown, the hailed ship named "Earlier": a quote tick checks Ace's
+    /// mission unless one of the filter's gates is shut.
+    fn linked_quoting() -> (FakePilotCatalog, Session) {
+        let mut catalog = quoters([crate::person::QUOTE_IF_MISSION, 0]);
+        catalog.persons[0].link_mission = Some(130);
+        let pilot = Pilot::new(&catalog, "Stock").expect("a pilot");
+        let mut session = Session::fly(&catalog, pilot).expect("flies");
+        session.populate(&catalog, &mut NeverFires);
+        named_earlier(&mut session);
+        (catalog, session)
+    }
+
+    /// `<OSN>` after a quote tick in which nobody says a quote.
+    fn osn_after_tick(catalog: &FakePilotCatalog, session: &mut Session) -> String {
+        let (said, _) = quote_tick(catalog, session, &[1, 1]);
+        assert_eq!(said, Vec::<String>::new());
+        session.plain_text("<OSN>")
+    }
+
+    #[test]
+    fn by_the_engine_the_0x0400_mission_check_skips_a_person_with_no_hail_quote() {
+        let (catalog, mut session) = linked_quoting();
+        let ace = session.traffic.npcs_mut()[0].person.as_mut().expect("Ace");
+        ace.hail_quote = -1;
+        assert_eq!(
+            osn_after_tick(&catalog, &mut session),
+            "Earlier",
+            "hail quote -1: no check"
+        );
+        let ace = session.traffic.npcs_mut()[0].person.as_mut().expect("Ace");
+        ace.hail_quote = 1;
+        assert_eq!(osn_after_tick(&catalog, &mut session), "[Error]");
+    }
+
+    #[test]
+    fn by_the_engine_the_0x0400_mission_check_is_skipped_while_the_player_jumps() {
+        let (catalog, mut session) = linked_quoting();
+        session.jump = Some(super::super::Jump::Hyperspace {
+            to: SystemId(131),
+            warp: 0,
+        });
+        assert_eq!(
+            osn_after_tick(&catalog, &mut session),
+            "Earlier",
+            "the player jumping: no check"
+        );
+        session.jump = None;
+        assert_eq!(osn_after_tick(&catalog, &mut session), "[Error]");
+    }
+
+    #[test]
+    fn by_the_engine_the_0x0400_mission_check_skips_a_ship_not_flying() {
+        let (catalog, mut session) = linked_quoting();
+        session.traffic.npcs_mut()[0].mode = Mode::JumpingIn { ticks_left: 3 };
+        assert_eq!(
+            osn_after_tick(&catalog, &mut session),
+            "Earlier",
+            "gliding in: no check"
+        );
+        session.traffic.npcs_mut()[0].mode = Mode::Flying;
+        assert_eq!(osn_after_tick(&catalog, &mut session), "[Error]");
+    }
+
+    #[test]
+    fn by_the_engine_the_0x0400_mission_check_skips_a_destroyed_ship() {
+        let (catalog, mut session) = linked_quoting();
+        session.traffic.npcs_mut()[0].condition = Condition::Destroyed;
+        assert_eq!(
+            osn_after_tick(&catalog, &mut session),
+            "Earlier",
+            "destroyed: no check"
+        );
+        session.traffic.npcs_mut()[0].condition = Condition::Intact;
+        assert_eq!(osn_after_tick(&catalog, &mut session), "[Error]");
+    }
+
     #[test]
     fn by_the_other_reading_quotes_leave_osn_as_it_was() {
         let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
