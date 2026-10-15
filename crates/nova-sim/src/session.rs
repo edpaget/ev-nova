@@ -517,6 +517,7 @@ use crate::traffic::autopilot::Outcome;
 use crate::traffic::npc::{Npc, NpcId};
 use crate::traffic::table::{SpawnDude, SpawnTable};
 use crate::traffic::{CAPTURE_RESERVE, SPAWN_RESERVE, Traffic, World, strength};
+use crate::trig::intercept_angle;
 use crate::wares::DayRolls;
 use crate::warp;
 
@@ -895,10 +896,16 @@ pub struct Session {
     /// The frame counter's value the last advance pass ran on, which the
     /// second pass runs on too (see the `double_time` module).
     pass_frame: i16,
-    /// Whether double time is on, as the key last said (see the
+    /// Whether double time is on, as the switch last said (see the
     /// `double_time` module); not saved, as the original's `_doubleTime`
     /// is a global, not a pilot field.
     double_time: bool,
+    /// Whether the double-time key is on, as its caller last said.
+    double_time_key: bool,
+    /// The player's desired heading, in whole degrees, the original's
+    /// +0x68, which the double-time switch reads (see the `double_time`
+    /// module); not saved, as a pilot's start zeroes it (@0x1c315).
+    aim: i16,
     /// The dock request the land key made, if any: the original's
     /// `_dockTarget` and `_dockPermission` (see the `clearance` module);
     /// not saved, as a flight start sets both to −1.
@@ -1364,6 +1371,8 @@ impl Session {
             frame: 0,
             pass_frame: 0,
             double_time: false,
+            double_time_key: false,
+            aim: 0,
             dock: None,
             land_key: false,
             takeoff_grace: 0,
@@ -1665,8 +1674,9 @@ impl Session {
             return;
         }
         // The warp-ups play in real time, a frame's worth on each advance
-        // pass.
+        // pass, and the switch reads them.
         self.warp_ups.step();
+        self.latch_double_time();
         self.takeoff_grace_tick();
         self.sound_script();
         let frame = self.frame;
@@ -1741,6 +1751,9 @@ impl Session {
         };
         match self.jump {
             None => {
+                if controls.reverse {
+                    self.aim_in_reverse();
+                }
                 self.thrust(controls.thrust);
                 let handling = self.flying_handling();
                 if self.player_fate().row().drag {
@@ -1750,6 +1763,13 @@ impl Session {
             }
             Some(Jump::PreJump { to, bearing, warp }) => {
                 let handling = self.flying_handling();
+                let slow_down = !self.stats.fast_jump;
+                if pre_jump::stage(&self.player, &handling, bearing, slow_down) == PreJump::Brake {
+                    // `_CalcInterceptAngle(v × 100, 0)` (@0x6b761).
+                    self.aim = intercept_angle(self.player.velocity * AIM_SCALE, Vec2::ZERO);
+                } else {
+                    self.aim_at_jump(to);
+                }
                 let thrust =
                     pre_jump::fly(&mut self.player, &handling, bearing, !self.stats.fast_jump);
                 self.thrust(thrust);
@@ -1761,6 +1781,7 @@ impl Session {
                 self.stage_jump(to, bearing, warp);
             }
             Some(Jump::Hyperspace { to, warp }) => {
+                self.aim_at_jump(to);
                 self.jump = Some(Jump::Hyperspace {
                     to,
                     warp: warp.saturating_add(1),
@@ -1770,6 +1791,29 @@ impl Session {
             }
         }
         regenerate(&mut self.pilot.reserves.fuel, self.stats.fuel_regen);
+    }
+
+    /// Aims the player at the map bearing of `to`, the jump's next system,
+    /// from the current one, as the warp stage's turn does
+    /// (`_CalcInterceptAngle` @0x6b0cf; see the `double_time` module):
+    /// left alone when either is off the map.
+    fn aim_at_jump(&mut self, to: SystemId) {
+        let map = |id| self.galaxy.map().position(id);
+        if let Some((from, to)) = map(self.pilot.system).zip(map(to)) {
+            self.aim = intercept_angle(from, to);
+        }
+    }
+
+    /// Aims the player against its velocity, as the reverse key does
+    /// out of a jump, unless it moves slower than [`REVERSE_AIM_SPEED`] on
+    /// both axes (@0x6c7d8-0x6c88e; see the `double_time` module).
+    fn aim_in_reverse(&mut self) {
+        let velocity = self.player.velocity;
+        let fast = |speed: f32| f64::from(speed.abs()) >= REVERSE_AIM_SPEED;
+        if fast(velocity.x) || fast(velocity.y) {
+            let toward = intercept_angle(Vec2::ZERO, velocity * AIM_SCALE);
+            self.aim = (toward + 180) % 360;
+        }
     }
 
     /// `_HandlePlayer`'s dead branch (0x6870d-0x6888c), on each tick of a
@@ -5557,6 +5601,15 @@ impl Session {
         assert_eq!(self.talk, None, "the hail: {case}");
     }
 }
+
+/// What the player's velocity is scaled by before the brake and the
+/// reverse key aim against it (100.0, f32 @0xdd060; see the
+/// `double_time` module).
+const AIM_SCALE: f32 = 100.0;
+
+/// The speed, on either axis, from which the reverse key aims against the
+/// velocity (0.05, f64 @0xdd990, @0x6c7f4 and @0x6c81a).
+const REVERSE_AIM_SPEED: f64 = 0.05;
 
 /// The most restarts a counted sale makes before the port ends it (see
 /// [`Session::outfit_order`]): the list's [`LIST_SLOTS`]. Without an
