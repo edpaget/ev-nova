@@ -81,7 +81,18 @@
 //!   Either way it is out of its gate ([`Npc::emerges_from`] cleared), as
 //!   `_AIMakeShipStopJumping` sets its travel stellar (+0x6c) to -1
 //!   (@0x82e9f); while it waits and bursts it holds the gate's sprite
-//!   open ([`gate_sprite`](crate::gate_sprite)).
+//!   open ([`gate_sprite`](crate::gate_sprite)). Hit while it waits and
+//!   answering the hit, its wait is cut to at most [`HIT_WAIT`] ticks; its
+//!   trigger, which may hold its point defence through the wait, is
+//!   released as it bursts out.
+//! - Held at its gate ([`Mode::HeldAtGate`]), the player having hit it
+//!   there, it holds still where it waited, at rest, whatever its
+//!   condition and goal, its wait counting down, then flies its goal from
+//!   rest, with no burst and no wait after it. The original bursts it out
+//!   on the +0x34 the emerge left, steered by its attack's thrust word
+//!   +0x30 (`_HandleShip` @0x34a7b-0x34d32, `_LowLevelAIHandler`
+//!   @0x851f1), which [`Controls`] does not carry; that burst is not
+//!   modelled.
 //! - A ship with no lead, its glide or burst over, holds its course
 //!   ([`Mode::Coasting`]) for [`POST_BURST_WAIT`] +
 //!   `Rand(`[`POST_BURST_SPREAD`]`)` ticks (`_HandleShip`
@@ -500,6 +511,7 @@ fn unsteered(
             return Some(enter_gate(npc, gate, ticks_left));
         }
         (Mode::Emerging { ticks_left }, _) => wait_at_gate(npc, ticks_left),
+        (Mode::HeldAtGate { ticks_left }, _) => hold_at_gate(npc, ticks_left),
         (Mode::JumpingIn { tick }, false) if npc.condition == Condition::Disabled => {
             glide(npc, tick, speeds, chance);
         }
@@ -536,16 +548,36 @@ fn enter_gate(npc: &mut Npc, gate: StellarId, ticks_left: u32) -> Outcome {
 }
 
 /// One tick of `npc`'s wait at the gate it comes out of, `ticks_left` of
-/// it left: still, and bursting out once it is over.
+/// it left: still, and bursting out once it is over, its trigger (the
+/// point defence it may hold while it waits) released, as the burst's
+/// sub-goal 0xa makes no `_AIEscortFireUnprovoked` call (@0x8f3d9).
 fn wait_at_gate(npc: &mut Npc, ticks_left: u32) {
     npc.state.velocity = Vec2::ZERO;
     let left = ticks_left.saturating_sub(1);
     npc.mode = if left == 0 {
+        npc.trigger = Trigger::default();
         Mode::LeavingGate {
             tick: if npc.led_out { LED_BURST_TICK } else { 0 },
         }
     } else {
         Mode::Emerging { ticks_left: left }
+    };
+}
+
+/// One tick of `npc` held at its gate ([`Mode::HeldAtGate`]),
+/// `ticks_left` of its wait left: still, whatever its condition and goal,
+/// as `_HandleShip` counts +0x4c down for every ship (@0x3501f-0x35048)
+/// and skips its steering, thrust and fire while it runs
+/// (@0x34a54-0x34a72); and flying its goal from rest once the wait is
+/// out, with no burst and no wait after it (the goal-4 burst is not
+/// modelled; see the module docs).
+fn hold_at_gate(npc: &mut Npc, ticks_left: u32) {
+    npc.state.velocity = Vec2::ZERO;
+    let left = ticks_left.saturating_sub(1);
+    npc.mode = if left == 0 {
+        Mode::Flying
+    } else {
+        Mode::HeldAtGate { ticks_left: left }
     };
 }
 
@@ -595,9 +627,12 @@ fn burst(
 /// Cuts the wait of `npc`, hit and answering it, to at most
 /// [`HIT_WAIT`] ticks: `_DamageShip` sets the victim's AI wait (+0x4c) to
 /// 20.0 when it is above that (@0x3be6e-0x3be7c), whoever the attacker.
-/// A ship not holding its course has no wait to cut.
+/// Only a ship waiting in its gate ([`Mode::Emerging`]) or holding its
+/// course after its glide or burst ([`Mode::Coasting`]) has a wait to
+/// cut: a glide or burst has none (+0x4c = -1, @0x8dd83), and a ship held
+/// at its gate was cut as it was held.
 pub(crate) fn cut_wait(npc: &mut Npc) {
-    if let Mode::Coasting { ticks_left } = &mut npc.mode {
+    if let Mode::Coasting { ticks_left } | Mode::Emerging { ticks_left } = &mut npc.mode {
         *ticks_left = (*ticks_left).min(HIT_WAIT);
     }
 }
@@ -1321,6 +1356,82 @@ mod tests {
         fly(&mut wreck, &[], None);
         assert_eq!(wreck.state, at(100.0, 200.0, 0.0, 0.0, 45.0), "held too");
         assert_eq!(wreck.mode, Mode::Emerging { ticks_left: 1 });
+    }
+
+    #[test]
+    fn a_hit_cuts_a_gate_wait_to_20_and_leaves_any_other_mode_alone() {
+        let cut = |mode| {
+            let mut ship = npc(AVERAGE, Goal::Idle, at(0.0, 0.0, 0.0, 0.0, 0.0));
+            ship.mode = mode;
+            cut_wait(&mut ship);
+            ship.mode
+        };
+        assert_eq!(
+            cut(Mode::Emerging { ticks_left: 60 }),
+            Mode::Emerging { ticks_left: 20 }
+        );
+        assert_eq!(
+            cut(Mode::Emerging { ticks_left: 10 }),
+            Mode::Emerging { ticks_left: 10 }
+        );
+        assert_eq!(
+            cut(Mode::Coasting { ticks_left: 45 }),
+            Mode::Coasting { ticks_left: 20 }
+        );
+        for mode in [
+            Mode::HeldAtGate { ticks_left: 30 },
+            Mode::JumpingIn { tick: 2 },
+            Mode::LeavingGate { tick: 2 },
+            Mode::Flying,
+        ] {
+            assert_eq!(cut(mode), mode);
+        }
+    }
+
+    #[test]
+    fn a_ship_held_at_its_gate_holds_still_whatever_its_goal_then_flies_from_rest() {
+        // `_HandleShip` skips its steering, thrust and fire while +0x4c
+        // runs (@0x34a54-0x34a72), and `_HighLevelAIHandler` returns
+        // (@0x8d4b9-0x8d4d2); goal 4 never becomes goal 8 (@0x8dd61).
+        let player = at(600.0, 200.0, 0.0, 0.0, 0.0);
+        for condition in [Condition::Intact, Condition::Disabled] {
+            let mut ship = npc(
+                FAST,
+                Goal::Attack(ShipRef::Player),
+                at(100.0, 200.0, 3.0, -4.0, 45.0),
+            );
+            ship.condition = condition;
+            ship.mode = Mode::HeldAtGate { ticks_left: 3 };
+            for left in [2, 1] {
+                assert_eq!(fly(&mut ship, &[], Some(&player)), Outcome::Flying);
+                assert_eq!(ship.state, at(100.0, 200.0, 0.0, 0.0, 45.0), "{left}");
+                assert_eq!(ship.mode, Mode::HeldAtGate { ticks_left: left });
+            }
+            fly(&mut ship, &[], Some(&player));
+            assert_eq!(ship.state, at(100.0, 200.0, 0.0, 0.0, 45.0));
+            assert_eq!(ship.mode, Mode::Flying, "{condition:?}: no burst, no wait");
+        }
+        let mut ship = npc(
+            FAST,
+            Goal::Attack(ShipRef::Player),
+            at(100.0, 200.0, 0.0, 0.0, 45.0),
+        );
+        ship.mode = Mode::HeldAtGate { ticks_left: 1 };
+        fly(&mut ship, &[], Some(&player));
+        fly(&mut ship, &[], Some(&player));
+        assert_ne!(ship.state.heading, 45.0, "turns on the player");
+    }
+
+    #[test]
+    fn a_ship_whose_gate_wait_ends_lets_go_of_its_trigger_as_it_bursts_out() {
+        let mut ship = emerging(AVERAGE, 1);
+        ship.trigger = Trigger {
+            point_defence: true,
+            ..Trigger::default()
+        };
+        fly(&mut ship, &[], None);
+        assert_eq!(ship.mode, Mode::LeavingGate { tick: 0 });
+        assert_eq!(ship.trigger, Trigger::default());
     }
 
     /// A ship of `fields` jumping in, at (0, -2000) heading 180°, on the

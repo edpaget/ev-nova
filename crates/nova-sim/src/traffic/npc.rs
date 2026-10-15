@@ -83,8 +83,34 @@ pub enum Mode {
     /// (`_AIMakeShipEmergeFromHyperGate`, goal 21; see the session's
     /// `gate_follow` module) both wait so, untargetable and not drawn,
     /// with no target and no trigger held ([`Npc::emerge_from_gate`]):
-    /// it fires nothing here or in its burst.
+    /// it fires nothing here or in its burst, but for the point defence of
+    /// an escort or fighter given a target (see the traffic's tick).
+    ///
+    /// It answers a hit as a flying ship does: its hyperspace state +0x50,
+    /// which `_DamageShip` reads to skip a reaction (@0x3b4b0-0x3b4c2),
+    /// is -1.0 here (@0x89555), never above 0. It takes the attacker as
+    /// its target and the damage as provocation, and its wait is cut to
+    /// 20 (@0x3be6e-0x3be7c); it stays here, hidden, and keeps both
+    /// through its burst. A hit by the player holds it here instead
+    /// ([`Mode::HeldAtGate`]).
     Emerging {
+        /// The ticks of the wait left.
+        ticks_left: u32,
+    },
+    /// Held where it waited in its gate, for this many more ticks, once
+    /// the player's hit (or a Good Samaritan's answer to the player) made
+    /// it attack the player there: `_AIMakeShipAttackPlayer` (@0x89d3e)
+    /// sets goal 4 whatever the goal, so it is no longer goal 0x15 and
+    /// `_ShipVisibleToShip` (@0x972d) sees it, it is targeted and drawn
+    /// unfaded, it lets go of the gate's sprite (@0x2e8bd-0x2e8d7), and
+    /// `_HighLevelAIHandler` never bursts it out (@0x8dd61). Its wait
+    /// +0x4c still runs: `_HandleShip` skips its steering, thrust and fire
+    /// (@0x34a54-0x34a72), so it holds still, and once the wait is out it
+    /// flies its goal from rest ([`Npc::hold_at_gate`]). Its decisions are
+    /// due through the hold, as goal 0x15 no longer skips the per-type AIs
+    /// (@0x8ff18-0x8ff20 → @0x8ff26-0x90016), but it fires only the point
+    /// defence of a waiting escort or fighter (see the traffic's tick).
+    HeldAtGate {
         /// The ticks of the wait left.
         ticks_left: u32,
     },
@@ -546,6 +572,19 @@ impl Npc {
             && self.condition == Condition::Intact
     }
 
+    /// Holds it where it waits in its gate, attacking the player
+    /// ([`Mode::HeldAtGate`], its wait kept): `_AIMakeShipAttackPlayer`
+    /// sets goal 4, target the player and travel stellar +0x6c = -1
+    /// (@0x89d3e-0x89d4d), keeping sub-goal 0. A ship not waiting in a
+    /// gate is left as it is.
+    pub fn hold_at_gate(&mut self) {
+        if let Mode::Emerging { ticks_left } = self.mode {
+            self.mode = Mode::HeldAtGate { ticks_left };
+            self.emerges_from = None;
+            self.goal = Goal::Attack(ShipRef::Player);
+        }
+    }
+
     /// Whether it is entering a gate to leave ([`Mode::EnteringGate`]):
     /// `_AIShipIsEnteringHypergate` (@0x89502), which tests the sub-goal
     /// 0x17 alone.
@@ -566,18 +605,23 @@ impl Npc {
         bound && self.condition == Condition::Intact && off.x.abs() < reach && off.y.abs() < reach
     }
 
-    /// Whether it is done coming into the system, there to be fought and
-    /// hailed: [`Mode::Flying`], holding its course after its glide or
-    /// burst ([`Mode::Coasting`]), which the original's +0x4c wait marks
-    /// and its hyperspace state (+0x50, zeroed by `_AIMakeShipStopJumping`
-    /// @0x82e77) and goal 21 do not, or entering a gate
+    /// Whether it is done coming into the system, there to be seen,
+    /// fought and hailed: [`Mode::Flying`], holding its course after its
+    /// glide or burst ([`Mode::Coasting`]), which the original's +0x4c
+    /// wait marks and goal 21 does not, held at its gate attacking the
+    /// player ([`Mode::HeldAtGate`], goal 4), or entering a gate
     /// ([`Mode::EnteringGate`]): `_ShipVisibleToShip` tests goal 0x15
-    /// alone, and state 20 zeroes +0x50 (@0x8db8f).
+    /// alone (@0x972d). A ship gliding in, waiting in its gate or
+    /// bursting out of it is not, though it answers hits all the same
+    /// (see [`Mode::Emerging`]).
     #[must_use]
     pub fn arrived(&self) -> bool {
         matches!(
             self.mode,
-            Mode::Flying | Mode::Coasting { .. } | Mode::EnteringGate { .. }
+            Mode::Flying
+                | Mode::Coasting { .. }
+                | Mode::HeldAtGate { .. }
+                | Mode::EnteringGate { .. }
         )
     }
 }
@@ -1144,6 +1188,51 @@ mod tests {
         assert_eq!(npc.trigger, Trigger::default());
         assert_eq!(npc.state, state, "the caller places it");
         assert!(npc.led_out, "the caller decides it");
+    }
+
+    #[test]
+    fn a_ship_held_at_its_gate_is_arrived_and_seen_but_no_longer_emerging_or_holding_it_open() {
+        // `_AIMakeShipAttackPlayer` takes it out of goal 0x15 (@0x89d3e),
+        // which `_ShipVisibleToShip` (@0x972d) and the gate sprite
+        // (@0x2e8bd-0x2e8d7) test, but its wait +0x4c still runs, which
+        // `_IsThreatToPlayer` tests (@0x7f518).
+        let gate = StellarId(128);
+        let held = Npc {
+            mode: Mode::HeldAtGate { ticks_left: 12 },
+            goal: Goal::Attack(ShipRef::Player),
+            emerges_from: Some(gate),
+            ..crate::testkit::npc(1, ShipStats::default())
+        };
+        assert!(held.arrived());
+        assert!(!held.emerging());
+        assert!(!held.holds_gate_open(gate));
+        assert!(!held.threatens_player_or_led(|_| true));
+        assert!(!held.threatens_player());
+    }
+
+    #[test]
+    fn a_ship_held_at_its_gate_keeps_its_wait_leaves_its_gate_and_attacks_the_player() {
+        let mut npc = Npc {
+            mode: Mode::Emerging { ticks_left: 17 },
+            emerges_from: Some(StellarId(310)),
+            target: Some(ShipRef::Player),
+            provoked: 4.0,
+            ..crate::testkit::npc(1, ShipStats::default())
+        };
+        npc.hold_at_gate();
+        assert_eq!(npc.mode, Mode::HeldAtGate { ticks_left: 17 });
+        assert_eq!(npc.emerges_from, None, "+0x6c = -1 (@0x89d47)");
+        assert_eq!(npc.goal, Goal::Attack(ShipRef::Player));
+        assert_eq!(npc.target, Some(ShipRef::Player));
+        assert_eq!(npc.provoked, 4.0);
+        let mut flying = Npc {
+            mode: Mode::LeavingGate { tick: 3 },
+            emerges_from: Some(StellarId(310)),
+            ..crate::testkit::npc(2, ShipStats::default())
+        };
+        let before = flying.clone();
+        flying.hold_at_gate();
+        assert_eq!(flying, before, "only a ship waiting in its gate is held");
     }
 
     #[test]
