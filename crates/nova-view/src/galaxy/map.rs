@@ -2266,6 +2266,51 @@ mod tests {
         assert_eq!(map.take_gate_choice(), None);
     }
 
+    /// The panel's stack line.
+    fn stack_line(map: &GalaxyMap) -> String {
+        texts(&drawn(map))
+            .into_iter()
+            .find(|text| text.contains("systems here"))
+            .expect("a stack line")
+    }
+
+    #[test]
+    fn a_click_again_on_the_hypergate_map_moves_on_through_offered_systems_there() {
+        let mut map = course_map();
+        map.show_course(SystemId(129), &[]);
+        map.offer_gates(ids(&[128, 131]));
+        click_on(&mut map, 128);
+        assert_eq!(map.selected(), Some(SystemId(128)), "the first there");
+        assert!(
+            stack_line(&map).ends_with(": click again for the next"),
+            "{}",
+            stack_line(&map)
+        );
+        click_on(&mut map, 128);
+        assert_eq!(
+            map.selected(),
+            Some(SystemId(131)),
+            "a click again moves on"
+        );
+        assert_eq!(map.take_gate_choice(), Some(SystemId(131)));
+    }
+
+    #[test]
+    fn a_course_map_click_before_the_gates_are_offered_is_not_clicked_again() {
+        // A course-map click on 128 leaves it selected by a click; offering
+        // the gates lets go of it, so the first click on the hypergate map
+        // starts from the first system at the place, not the one after 128.
+        let mut map = course_map();
+        map.show_course(SystemId(129), &[]);
+        click_on(&mut map, 128);
+        assert_eq!(map.selected(), Some(SystemId(128)));
+        map.offer_gates(ids(&[128, 131]));
+        click_on(&mut map, 128);
+        assert_eq!(map.selected(), Some(SystemId(128)), "the first there");
+        click_on(&mut map, 128);
+        assert_eq!(map.selected(), Some(SystemId(131)));
+    }
+
     // The hypergate map.
 
     /// The course map in Alpha (128), offering Beta (129) and Gamma (130)
