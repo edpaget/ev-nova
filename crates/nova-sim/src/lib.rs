@@ -356,6 +356,7 @@ mod testkit;
 pub mod text_tags;
 pub mod top_speed;
 pub mod traffic;
+pub mod trig;
 pub mod tutorial;
 pub mod wares;
 pub mod warp;
