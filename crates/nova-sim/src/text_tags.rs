@@ -17,7 +17,7 @@
 //! |---|---|
 //! | `<DST>`, `<DSY>` | the destination stellar's name and its system's; each `"[Error]"` takes `<RST>`'s or `<RSY>`'s on its own (@0x9c53a-0x9c5fc, @0x9caa4-0x9cb66) |
 //! | `<RST>`, `<RSY>` | the return stellar's name and its system's |
-//! | `<CT>` | for a cargo type of 0-255, `STR#` 4001's string type + 1, a leading `*` dropped (@0x9c65f-0x9c6bf) |
+//! | `<CT>` | for a cargo type of 0-255, `STR#` 4001's string type + 1, as a plug-in's `'STR '` 9100 + type patches it ([`strings`](crate::strings)), a leading `*` dropped (@0x9c65f-0x9c6bf) |
 //! | `<CQ>` | the tons in plain digits, with a cargo type of 0-255 (@0x9c6c1-0x9c710) |
 //! | `<SN>` | a slot's ship name (+0x70, @0x9ccf1); an offer has none |
 //! | `<DL>` | the deadline, written long ([`long_date_text`]); one of today is `"[Error]"` (@0x9c715-0x9c78e) |
@@ -77,8 +77,7 @@
 //!   first ([`load_leet`], `_LoadDescription` @0x7194f-0x71a5c), which
 //!   can break a tag (`<PAY>` to `<P4Y>`) that is then left as written.
 //!
-//! The original's quirks not reproduced here (a stale `<OSN>` and
-//! `'STR '` 9100+ cargo name patches) are
+//! The original's quirk not reproduced here, a stale `<OSN>`, is
 //! rdm:phase/missions-fidelity/phase-2-text-substitution-quirks.
 
 use crate::catalog::{DateAffixes, GovtId, StellarId, SystemId};
@@ -166,7 +165,8 @@ pub trait TagNames {
     /// when no system lists it.
     fn stellar_system(&self, stellar: StellarId) -> Option<SystemId>;
     /// Cargo type `cargo`'s name, raw: `STR#` 4001's string `cargo` + 1
-    /// (`_lcCargoName`, 0x1b8de0), `None` past the list's end.
+    /// as `_LoadStrings` patches it (`_lcCargoName`, 0x1b8de0; see
+    /// [`strings`](crate::strings)), `None` past the list's end.
     fn cargo_name(&self, cargo: u8) -> Option<String>;
 }
 

@@ -20,10 +20,12 @@
 //! plunder (see the `person_offers` module).
 //!
 //! **Hail quotes.** Each tick in flight ([`Session::tick_quotes`]) a
-//! person may say its hail quote (`STR#` 7101 #`HailQuote`, its tags
-//! read), on the trigger its `Flags` give: when it begins to attack the
-//! player, now and then, and so on (see [`person`](crate::person)); the
-//! flight shows each in its message line ([`Session::take_quotes`]).
+//! person may say its hail quote (a plug-in's `'STR '` 4999 +
+//! `HailQuote`, else `STR#` 7101 #`HailQuote`, its tags read), on the
+//! trigger its `Flags` give: when it begins to attack the player, now and
+//! then, and so on (see [`person`](crate::person)); the flight shows each
+//! in its message line ([`Session::take_quotes`]), with a beep
+//! ([`SimSound::HailQuote`]).
 //! A person escorting the player says none, nor does one gone for good
 //! (@0x33c62), as one whose mission was accepted with `Flags` 0x0100
 //! is. One of `Flags` 0x0400 says it only while its `LinkMission` is
@@ -49,7 +51,7 @@ use std::rc::Rc;
 
 use super::missions::TextSource;
 use super::{Session, hire};
-use crate::catalog::{CommCatalog, MissionId, PersonId};
+use crate::catalog::{CommCatalog, MissionId, PersonId, StringPatch};
 use crate::chance::Chance;
 use crate::combat::hull::Condition;
 use crate::combat::{ShipRef, Strike};
@@ -58,8 +60,33 @@ use crate::person::{
     ESCAPE_POD, Eligible, GRUDGE, HAIL_QUOTES, PersonRules, QUOTE_GAP_TICKS, QUOTE_ODDS,
     QUOTE_SHOWN_TICKS, QuoteTags, QuoteView, expand_tags, quote_eligible,
 };
+use crate::sound::SimSound;
 use crate::text_tags::TagRules;
 use crate::traffic::npc::{Npc, NpcId};
+
+/// Hail quote `n`'s line (`_ShowPersonHailQuote` @0x445b2-0x445e6): a
+/// plug-in's `'STR '` 4999 + n when `catalog` has one, whatever it holds
+/// (one with no bytes, or unreadable, says nothing), else `lines`' #n,
+/// `STR#` 7101's (empty past its end).
+fn quote_line(catalog: &(impl CommCatalog + ?Sized), lines: &[String], n: i16) -> String {
+    let patch = n
+        .checked_add(QUOTE_PATCHES)
+        .map_or(StringPatch::Absent, |id| catalog.plugin_string(id));
+    match patch {
+        StringPatch::Text(text) => text,
+        StringPatch::Empty | StringPatch::Unreadable => String::new(),
+        StringPatch::Absent => usize::try_from(n - 1)
+            .ok()
+            .and_then(|at| lines.get(at))
+            .cloned()
+            .unwrap_or_default(),
+    }
+}
+
+/// What a hail quote's `'STR '` patch adds to its number: quote n is
+/// `'STR '` 4999 + n (0x1387 @0x445b8; the Bible's "Hail quotes
+/// 5000-5511").
+const QUOTE_PATCHES: i16 = 4999;
 
 /// A person's hail quote said, for the flight's message line.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -193,11 +220,7 @@ impl Session {
             person.quoted_at = Some(ticks);
             self.quote_clock.quiet_until = ticks + QUOTE_SHOWN_TICKS;
             let (person, hail_quote) = (person.id, person.hail_quote);
-            let line = usize::try_from(hail_quote - 1)
-                .ok()
-                .and_then(|at| lines.get(at))
-                .cloned()
-                .unwrap_or_default();
+            let line = quote_line(catalog, &lines, hail_quote);
             let line = self.take_in(TextSource::Quote, &line, chance);
             let tags = QuoteTags {
                 person: self
@@ -214,6 +237,7 @@ impl Session {
             };
             let text = expand_tags(&line, &tags);
             self.quotes.push(PersonQuote { npc: id, text });
+            self.sounds.push(SimSound::HailQuote);
         }
         self.quote_clock.ticks += 1;
     }
@@ -1071,6 +1095,51 @@ mod tests {
         let _ = session.take_in(TextSource::Desc, "Earlier: <SRK129>.", &mut NeverFires);
         let (said, _) = quote_tick(&catalog, &mut session, &[77]);
         assert_eq!(said, ["Cdr, I said!"]);
+    }
+
+    #[test]
+    fn a_quote_reads_its_str_patch_before_str_7101() {
+        use crate::catalog::StringPatch;
+        let mut catalog = quoters([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
+        catalog.strings = vec![(7101, vec!["Stock line.".to_owned(); 3])];
+        let said_with = |catalog: &FakePilotCatalog| {
+            let pilot = Pilot::new(catalog, "Stock").expect("a pilot");
+            let mut session = Session::fly(catalog, pilot).expect("flies");
+            session.populate(catalog, &mut NeverFires);
+            session.traffic.npcs_mut()[1].person = None;
+            session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+            quote_tick(catalog, &mut session, &[77]).0
+        };
+        let quote = catalog.persons[0].hail_quote;
+        let patch = 4999 + quote;
+        assert_eq!(said_with(&catalog), ["Stock line."]);
+        catalog.str_patches = vec![(patch, StringPatch::Text("<PN>, patched.".to_owned()))];
+        assert_eq!(
+            said_with(&catalog),
+            ["Stock, patched."],
+            "'STR ' 4999 + n (@0x445b2-0x445e6), its tags filled"
+        );
+        catalog.str_patches = vec![(patch, StringPatch::Empty)];
+        assert_eq!(said_with(&catalog), [""], "found, so STR# 7101 is not read");
+        catalog.str_patches = vec![(patch + 1, StringPatch::Text("Not mine.".to_owned()))];
+        assert_eq!(said_with(&catalog), ["Stock line."]);
+    }
+
+    #[test]
+    fn each_quote_said_beeps_154() {
+        let (catalog, mut session) = quoting([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
+        session.traffic.npcs_mut()[1].person = None;
+        let _ = session.take_sounds();
+        assert_eq!(quote_tick(&catalog, &mut session, &[0]), (vec![], vec![]));
+        assert_eq!(session.take_sounds(), [], "none said");
+        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        let (said, _) = quote_tick(&catalog, &mut session, &[77]);
+        assert_eq!(said.len(), 1);
+        assert_eq!(
+            session.take_sounds(),
+            [crate::sound::SimSound::HailQuote],
+            "_ShowPersonHailQuote's _beepSnd[4] (@0x445a2-0x445ad)"
+        );
     }
 
     #[test]

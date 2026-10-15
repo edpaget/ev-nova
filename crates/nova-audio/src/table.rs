@@ -44,6 +44,8 @@ pub struct SoundTable {
     pub red_alert: Option<SoundId>,
     /// Plays as cargo is jettisoned in flight.
     pub jettison: Option<SoundId>,
+    /// Plays as a person says its hail quote.
+    pub hail_quote: Option<SoundId>,
     /// Plays as a scan fails a mission whose cargo it found.
     pub scan_failed: Option<SoundId>,
     /// Plays as a scan catches the player smuggling.
@@ -114,6 +116,9 @@ impl SoundTable {
     /// - `jettison`: 154, `_beepSnd[4]` again, which `_JettisonCargo`
     ///   plays when anything went in flight (@0x3e31a-0x3e33d), at
     ///   priority 1, not modelled either.
+    /// - `hail_quote`: 154, `_beepSnd[4]`, which `_ShowPersonHailQuote`
+    ///   plays as a person says its quote (@0x445a2-0x445ad), at priority
+    ///   1, not modelled.
     /// - `scan_failed`: 151, `_beepSnd[1]`, which `_ScanPlayer` plays as
     ///   it fails a mission it found that is not hidden (@0x7e721-0x7e740),
     ///   at priority 1.
@@ -167,6 +172,7 @@ impl SoundTable {
         escort_repaired: Some(SoundId(154)),
         red_alert: Some(SoundId(370)),
         jettison: Some(SoundId(154)),
+        hail_quote: Some(SoundId(154)),
         scan_failed: Some(SoundId(151)),
         smuggling: Some(SoundId(154)),
         news_open: Some(SoundId(151)),
@@ -202,6 +208,7 @@ mod tests {
         assert_eq!(table.escort_repaired, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.red_alert, Some(SoundId(370)), "Red Alert");
         assert_eq!(table.jettison, Some(SoundId(154)), "_beepSnd[4]");
+        assert_eq!(table.hail_quote, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.scan_failed, Some(SoundId(151)), "_beepSnd[1]");
         assert_eq!(table.smuggling, Some(SoundId(154)), "_beepSnd[4]");
         assert_eq!(table.news_open, Some(SoundId(151)), "_beepSnd[1]");

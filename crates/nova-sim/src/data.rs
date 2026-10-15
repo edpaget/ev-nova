@@ -927,6 +927,10 @@ impl CommCatalog for GameData {
     fn leet_mode(&self) -> bool {
         !self.ids(LEET).is_empty()
     }
+
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        string_patch(self, id)
+    }
 }
 
 /// The most a `shïp`'s `InherentGovt` adds to a `gövt` ID to say it
@@ -1058,26 +1062,28 @@ const BASE_PRICES: i16 = 4004;
 /// 9300 + n patches commodity n's base price.
 const PRICE_PATCHES: i16 = 9300;
 
-/// `data`'s six `'STR '` patches from `first` up, raw. A zero-byte one is
-/// [`StringPatch::Empty`]; any other that cannot be read is
-/// [`StringPatch::Unreadable`]. Bytes past a readable string are ignored,
-/// as the original reads only as many as its length byte says.
+/// `data`'s six `'STR '` patches from `first` up, raw ([`string_patch`]).
 fn patches(data: &GameData, first: i16) -> [StringPatch; 6] {
-    std::array::from_fn(|n| {
-        let id = first + i16::try_from(n).expect("one of six");
-        match data.get::<StrResource>(id) {
-            None => StringPatch::Absent,
-            Some(Ok(entry)) => StringPatch::Text(entry.record.text.as_str().to_owned()),
-            Some(Err(_)) => {
-                let bytes = data.resource(StrResource::TYPE, id);
-                if bytes.is_some_and(|bytes| bytes.resource.data().is_empty()) {
-                    StringPatch::Empty
-                } else {
-                    StringPatch::Unreadable
-                }
+    std::array::from_fn(|n| string_patch(data, first + i16::try_from(n).expect("one of six")))
+}
+
+/// `data`'s `'STR '` `id`, raw. A zero-byte one is [`StringPatch::Empty`];
+/// any other that cannot be read is [`StringPatch::Unreadable`]. Bytes
+/// past a readable string are ignored, as the original reads only as many
+/// as its length byte says.
+fn string_patch(data: &GameData, id: i16) -> StringPatch {
+    match data.get::<StrResource>(id) {
+        None => StringPatch::Absent,
+        Some(Ok(entry)) => StringPatch::Text(entry.record.text.as_str().to_owned()),
+        Some(Err(_)) => {
+            let bytes = data.resource(StrResource::TYPE, id);
+            if bytes.is_some_and(|bytes| bytes.resource.data().is_empty()) {
+                StringPatch::Empty
+            } else {
+                StringPatch::Unreadable
             }
         }
-    })
+    }
 }
 
 /// Every string of `data`'s `STR#` `id`; none when it is missing or
@@ -2464,6 +2470,28 @@ mod tests {
             bytes.extend(string.as_bytes());
         }
         bytes
+    }
+
+    #[test]
+    fn a_plugin_string_is_its_str_resource_raw() {
+        let data = store(&[
+            (StrResource::TYPE, 9100, str_resource("grain")),
+            (StrResource::TYPE, 9101, Vec::new()),
+            (StrResource::TYPE, 9102, b"\x05ab".to_vec()),
+            (StrResource::TYPE, 4999, b"\x02Hixyz".to_vec()),
+        ]);
+        assert_eq!(data.plugin_string(9100), StringPatch::Text("grain".into()));
+        assert_eq!(data.plugin_string(9101), StringPatch::Empty);
+        assert_eq!(data.plugin_string(9102), StringPatch::Unreadable);
+        assert_eq!(data.plugin_string(4999), StringPatch::Text("Hi".into()));
+        assert_eq!(data.plugin_string(9103), StringPatch::Absent);
+        assert_eq!(
+            CommCatalog::plugin_string(&&data, 9100),
+            StringPatch::Text("grain".into()),
+            "through a borrow"
+        );
+        let shared: std::rc::Rc<dyn CommCatalog> = std::rc::Rc::new(data);
+        assert_eq!(shared.plugin_string(9101), StringPatch::Empty, "shared");
     }
 
     #[test]

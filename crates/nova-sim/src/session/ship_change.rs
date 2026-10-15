@@ -171,6 +171,7 @@ use crate::outfitter::{Hardpoints, OutfitFlags};
 use crate::pilot;
 use crate::rulebook::{RuleKey, RuleSource, Rulebook};
 use crate::ship_change::{Fold, Limits, OutfitCarry, SET_OP_PERSISTENT, carried_outfits};
+use crate::strings::PatchedStrings;
 
 /// What the armour gains a step while the ship is disabled after a
 /// change (the constant @0xdd068).
@@ -320,13 +321,15 @@ impl Session {
     }
 
     /// This session with `T` reading its names from `strings`' string
-    /// lists (see the module docs): none by default. The texts it fills
-    /// are `l33t` when `strings` says the data turns that on
-    /// ([`CommCatalog::leet_mode`]; see [`text_tags`](crate::text_tags)).
+    /// lists (see the module docs): none by default. The lists a plug-in's
+    /// `'STR '` patches are built once, patched, as `_LoadStrings` builds
+    /// them ([`PatchedStrings`]). The texts it fills are `l33t` when
+    /// `strings` says the data turns that on ([`CommCatalog::leet_mode`];
+    /// see [`text_tags`](crate::text_tags)).
     #[must_use]
     pub fn with_strings(mut self, strings: Rc<dyn CommCatalog>) -> Self {
         self.leet = strings.leet_mode();
-        self.strings = Strings(strings);
+        self.strings = Strings(Rc::new(PatchedStrings::new(strings)));
         self
     }
 
@@ -1957,7 +1960,11 @@ mod tests {
         let mut session = named(strings.clone());
         assert_eq!(rename(&mut session, "T25040", &[0]), [2]);
         assert_eq!(session.pilot().ship_name(), Some("Kestrel II Kestrel"));
-        assert_eq!(*strings.asked.borrow(), [25040], "the given lists are read");
+        assert_eq!(
+            *strings.asked.borrow(),
+            [4001, 4002, 4003, 25040],
+            "the given lists are read: the patched ones once as they are given"
+        );
         assert!(session.take_save_due());
         let mut session = named(lists());
         assert_eq!(rename(&mut session, "T25040", &[1]), [2]);

@@ -1221,6 +1221,13 @@ pub trait CommCatalog {
     fn leet_mode(&self) -> bool {
         false
     }
+
+    /// A plug-in's `'STR '` `id`, which patches one string of a `STR#`
+    /// (`_LoadPluginString` @0x71a8e; see [`strings`](crate::strings)):
+    /// [`StringPatch::Absent`] by default.
+    fn plugin_string(&self, _id: i16) -> StringPatch {
+        StringPatch::Absent
+    }
 }
 
 /// A borrowed catalog is a catalog.
@@ -1232,6 +1239,10 @@ impl<T: CommCatalog + ?Sized> CommCatalog for &T {
     fn leet_mode(&self) -> bool {
         (**self).leet_mode()
     }
+
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        (**self).plugin_string(id)
+    }
 }
 
 /// A shared catalog is a catalog.
@@ -1242,6 +1253,10 @@ impl<T: CommCatalog + ?Sized> CommCatalog for Rc<T> {
 
     fn leet_mode(&self) -> bool {
         (**self).leet_mode()
+    }
+
+    fn plugin_string(&self, id: i16) -> StringPatch {
+        (**self).plugin_string(id)
     }
 }
 

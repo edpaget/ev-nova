@@ -337,6 +337,7 @@ pub mod sound;
 pub mod stats;
 pub mod status_cargo;
 pub mod story;
+pub mod strings;
 pub mod target_panel;
 pub mod targeting;
 #[cfg(test)]

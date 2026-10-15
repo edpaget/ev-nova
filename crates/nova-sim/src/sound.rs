@@ -58,6 +58,9 @@ pub enum SimSound {
     /// A disabled former escort or fighter repaired itself and rejoined
     /// the fleet (`_HandleShip` @0x33bb1-0x33bd4, `_beepSnd[4]`).
     EscortRepaired,
+    /// A person said its hail quote: `_beepSnd[4]`, `snd ` 154, at
+    /// priority 1, not modelled (`_ShowPersonHailQuote` @0x445a2-0x445ad).
+    HailQuote,
     /// The player's ship is breaking up: `_klaxxonSnd`, `snd ` 371
     /// (`_LoadSounds` @0x1c22c-0x1c23e). `_HandlePlayer` plays it
     /// (@0x6f1e4-0x6f227) while the death timer is above 1.0 and it is

@@ -76,6 +76,8 @@ pub(crate) struct FakePilotCatalog {
     pub(crate) govts: Vec<GovtRecord>,
     /// Each `STR#`; any other is missing.
     pub(crate) strings: Vec<(i16, Vec<String>)>,
+    /// Each `'STR '`; any other is absent.
+    pub(crate) str_patches: Vec<(i16, crate::catalog::StringPatch)>,
     /// The first `chär`'s date prefix and suffix.
     pub(crate) date_affixes: DateAffixes,
     /// How many times the date affixes were read.
@@ -583,6 +585,7 @@ pub(crate) fn catalog() -> FakePilotCatalog {
         hulls: Vec::new(),
         govts: Vec::new(),
         strings: Vec::new(),
+        str_patches: Vec::new(),
         date_affixes: DateAffixes {
             prefix: String::new(),
             suffix: " NC".to_owned(),
@@ -919,6 +922,15 @@ impl CommCatalog for FakePilotCatalog {
             .iter()
             .find(|(list, _)| *list == id)
             .map_or_else(Vec::new, |(_, strings)| strings.clone())
+    }
+
+    fn plugin_string(&self, id: i16) -> crate::catalog::StringPatch {
+        self.str_patches
+            .iter()
+            .find(|(patched, _)| *patched == id)
+            .map_or(crate::catalog::StringPatch::Absent, |(_, patch)| {
+                patch.clone()
+            })
     }
 }
 

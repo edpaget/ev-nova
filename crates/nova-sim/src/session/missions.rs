@@ -4304,6 +4304,36 @@ mod tests {
         );
     }
 
+    /// [`Told`]'s strings, with `'STR '` 9102 patching cargo type 2's name.
+    #[derive(Debug)]
+    struct Patched;
+
+    impl CommCatalog for Patched {
+        fn string_list(&self, id: i16) -> Vec<String> {
+            Told.string_list(id)
+        }
+
+        fn plugin_string(&self, id: i16) -> crate::catalog::StringPatch {
+            match id {
+                9102 => crate::catalog::StringPatch::Text("*gems".to_owned()),
+                _ => crate::catalog::StringPatch::Absent,
+            }
+        }
+    }
+
+    #[test]
+    fn ct_reads_a_cargo_name_a_str_9100_patch_gives_its_star_dropped() {
+        let catalog = briefed();
+        let session = stocks(&catalog).with_strings(Rc::new(Patched));
+        assert_eq!(
+            session
+                .offer_text(MissionId(130), "<CQ> tons of <CT>")
+                .as_deref(),
+            Some("12 tons of gems"),
+            "_lcCargoName #3 from 'STR ' 9102 (@0x71ba4-0x71bf1)"
+        );
+    }
+
     #[test]
     fn a_fining_pays_amount_is_its_percent_of_the_cash() {
         let mut catalog = briefed();
