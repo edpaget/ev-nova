@@ -515,7 +515,13 @@
 //! express; crons-news-ranks phase 16). Otherwise a once-only subscription is marked fired first,
 //! so an event raised again inside its own run cannot run it twice; then
 //! its consumer's effect runs, then its script. One registered during the
-//! dispatch waits for the next event.
+//! dispatch waits for the next event, except on a `Landed` event, which
+//! walks live: after each id it asks for the matching ids again and takes
+//! the first that sorts after the last one considered, so one registered
+//! mid-landing runs in this landing when it sorts after the cursor. This
+//! mirrors `_MissionLandCheck` reading each slot's active flag as it
+//! reaches the slot (@0xa19f7-0xa1aec): a mission an `S` puts in a later
+//! slot is checked in full at this landing.
 //!
 //! **Order.** [`dispatch_order`] runs an event's subscriptions by id:
 //! consumer, then record, then hook. The consumers' order is
