@@ -62,7 +62,7 @@
 //! [`AsteroidType::radius`]: crate::asteroid::AsteroidType::radius
 
 use super::damage::Blast;
-use super::projectile::{Shot, contact};
+use super::projectile::{Shot, nearest_contact};
 use super::shockwave::speed_limit;
 use super::weapon::{HitParticles, WeaponSpec};
 use super::{ParticleBurst, ShipRef};
@@ -140,18 +140,15 @@ pub fn touched(shot: &Shot, was: Vec2, targets: &[AsteroidTarget]) -> Option<(us
     if shot.weapon.ignores_asteroids() {
         return None;
     }
-    targets
-        .iter()
-        .enumerate()
-        .filter(|(_, target)| !broken(target.strength))
-        .filter_map(|(index, target)| {
-            Some((
-                contact(was, shot.position, target.position, target.radius)?,
-                index,
-            ))
-        })
-        .min_by(|(a, _), (b, _)| a.total_cmp(b))
-        .map(|(t, index)| (index, was + (shot.position - was) * t))
+    nearest_contact(
+        was,
+        shot.position,
+        targets
+            .iter()
+            .enumerate()
+            .filter(|(_, target)| !broken(target.strength))
+            .map(|(index, target)| (index, target.position, target.radius)),
+    )
 }
 
 /// The asteroid among `targets`, by its index, that sets `shot`'s armed

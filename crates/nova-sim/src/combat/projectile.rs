@@ -95,6 +95,22 @@ pub fn contact(from: Vec2, to: Vec2, centre: Vec2, radius: f32) -> Option<f32> {
     (0.0..=1.0).contains(&t).then_some(t)
 }
 
+/// Which of `circles`, each an item with its centre and reach, the segment
+/// from `from` to `to` meets first, and where: the one of least
+/// [`contact`], the earlier of a tie; `from` itself for one it starts
+/// within.
+pub(super) fn nearest_contact<T>(
+    from: Vec2,
+    to: Vec2,
+    circles: impl IntoIterator<Item = (T, Vec2, f32)>,
+) -> Option<(T, Vec2)> {
+    circles
+        .into_iter()
+        .filter_map(|(item, centre, reach)| Some((contact(from, to, centre, reach)?, item)))
+        .min_by(|(a, _), (b, _)| a.total_cmp(b))
+        .map(|(t, item)| (item, from + (to - from) * t))
+}
+
 /// A shot's number in its fight, never reused.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ShotId(pub u32);
@@ -256,18 +272,7 @@ impl Shot {
     /// `was`, if any, and where it met it.
     #[must_use]
     pub fn hit(&self, was: Vec2, targets: &[Target]) -> Option<(ShipRef, Vec2)> {
-        targets
-            .iter()
-            .filter(|target| self.can_hit(target))
-            .filter_map(|target| {
-                let reach = target.radius + self.weapon.prox_radius;
-                Some((
-                    contact(was, self.position, target.position, reach)?,
-                    target.ship,
-                ))
-            })
-            .min_by(|(a, _), (b, _)| a.total_cmp(b))
-            .map(|(t, ship)| (ship, was + (self.position - was) * t))
+        self.met(was, targets, self.weapon.prox_radius)
     }
 
     /// The first of `targets` it can hit that it touched on its way here
@@ -276,17 +281,20 @@ impl Shot {
     /// rather than the fuse.
     #[must_use]
     pub fn touches(&self, was: Vec2, targets: &[Target]) -> Option<(ShipRef, Vec2)> {
-        targets
-            .iter()
-            .filter(|target| self.can_hit(target))
-            .filter_map(|target| {
-                Some((
-                    contact(was, self.position, target.position, target.radius)?,
-                    target.ship,
-                ))
-            })
-            .min_by(|(a, _), (b, _)| a.total_cmp(b))
-            .map(|(t, ship)| (ship, was + (self.position - was) * t))
+        self.met(was, targets, 0.0)
+    }
+
+    /// The first of `targets` it can hit that it met on its way here from
+    /// `was`, within the ship's hit radius plus `beyond`, and where.
+    fn met(&self, was: Vec2, targets: &[Target], beyond: f32) -> Option<(ShipRef, Vec2)> {
+        nearest_contact(
+            was,
+            self.position,
+            targets
+                .iter()
+                .filter(|target| self.can_hit(target))
+                .map(|target| (target.ship, target.position, target.radius + beyond)),
+        )
     }
 
     /// Its blast where it is, hitting `direct` (or nothing, as it
@@ -945,6 +953,32 @@ mod tests {
             at((10.0, -20.0), (10.0, 20.0), 5.0),
             Some(0.375),
             "across it"
+        );
+    }
+
+    #[test]
+    fn the_nearest_contact_is_the_first_met_and_a_tie_goes_to_the_earlier() {
+        let (was, now) = (Vec2::ZERO, Vec2::new(40.0, 0.0));
+        let circle = |name, x, r| (name, Vec2::new(x, 0.0), r);
+        assert_eq!(
+            nearest_contact(was, now, [circle('b', 30.0, 5.0), circle('a', 20.0, 5.0)]),
+            Some(('a', Vec2::new(15.0, 0.0))),
+            "the nearest along the way, whatever the order"
+        );
+        assert_eq!(
+            nearest_contact(was, now, [circle('b', 20.0, 5.0), circle('a', 20.0, 5.0)]),
+            Some(('b', Vec2::new(15.0, 0.0))),
+            "a tie goes to the earlier"
+        );
+        assert_eq!(
+            nearest_contact(was, now, [circle('b', 30.0, 5.0), circle('a', 2.0, 5.0)]),
+            Some(('a', was)),
+            "one it starts within, met where it was"
+        );
+        assert_eq!(
+            nearest_contact(was, now, [circle('a', 60.0, 5.0)]),
+            None,
+            "none on its way"
         );
     }
 }
