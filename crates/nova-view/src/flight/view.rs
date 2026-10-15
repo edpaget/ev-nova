@@ -126,7 +126,7 @@
 //! advance there, so by the engine's reading the bar shows what the
 //! port's redraws last took: landing and a docked start take everything,
 //! as do the mission dialogs and texts and a shop closing
-//! ([`FlightView::shop_closed`]); an outfitter order takes the radar
+//! ([`FlightView::refresh_status`]); an outfitter order takes the radar
 //! alone; a ship purchase the radar, nav and target, and the gauges too
 //! under another `ïntf`; and a recharge the fuel gauge alone. The shield,
 //! armour and fuel gauges, live in flight, hold while docked between
@@ -3550,7 +3550,7 @@ impl<
     /// than the old (`hud::interface_for`), as `_LoadIntfResource`'s
     /// whole-bar `_RedrawStatus` (@0x739bd) runs only for an ID other
     /// than the one loaded (`_currentIntf`, @0x73663-0x73672); otherwise
-    /// they wait for the shipyard to close ([`FlightView::shop_closed`]).
+    /// they wait for the shipyard to close ([`FlightView::refresh_status`]).
     /// A refused purchase redraws nothing.
     pub fn buy_ship(&mut self, ship: ShipId, name: &str) -> Result<ShipPurchase, ShipRefusal> {
         let before = self.interface_now();
@@ -3755,7 +3755,7 @@ impl<C> FlightView<C> {
     /// @0x5e642, the shipyard @0x5f8d4, after its `_RedrawStatus` @0x5f87c
     /// and @0x5f8c5). The gauges an order left held show the order then.
     /// [`FlightView::close_port_dialog`] runs it before the nav's restore.
-    pub fn shop_closed(&mut self) {
+    pub fn refresh_status(&mut self) {
         self.redraw_status();
     }
 
@@ -3772,7 +3772,7 @@ impl<C> FlightView<C> {
     }
 
     /// `dialog` closes, as `_DoPortDialog` closes each: a shop's close
-    /// redraws the whole bar first ([`FlightView::shop_closed`],
+    /// redraws the whole bar first ([`FlightView::refresh_status`],
     /// `_RefreshSAT`), then the nav saved as it opened is restored
     /// ([`Session::restore_port_nav`]; the outfitter @0x5dbb8-0x5dbc5,
     /// the exchange @0x5e64d-0x5e65d, the shipyard @0x5f8e8-0x5f8f5, the
@@ -3796,7 +3796,7 @@ impl<C> FlightView<C> {
     ///   only when it goes through, or any nav redraw.
     pub fn close_port_dialog(&mut self, dialog: PortDialog) {
         if dialog != PortDialog::MissionComputer {
-            self.shop_closed();
+            self.refresh_status();
         }
         if let Ok(session) = &mut self.session {
             session.restore_port_nav();
@@ -3842,7 +3842,7 @@ impl<C> FlightView<C> {
     /// purchase and everything on one under another `ïntf`
     /// ([`FlightView::buy_ship`]), the fuel gauge on a recharge
     /// ([`FlightView::recharge`]), and everything as a shop closes
-    /// ([`FlightView::shop_closed`]).
+    /// ([`FlightView::refresh_status`]).
     fn redraw_status(&mut self) {
         self.retake_radar();
         self.retake_nav();
@@ -12254,7 +12254,7 @@ mod tests {
     fn by_the_engine_a_landed_ms_stellar_shows_at_the_ports_next_nav_redraw() {
         type Step = fn(&mut View);
         let redraws: [(&str, Step); 4] = [
-            ("a shop closing", FlightView::shop_closed),
+            ("a shop closing", FlightView::refresh_status),
             ("a mission text", |view| {
                 run_set(view, "S131");
                 assert_eq!(port_nav(view), naming("Earth"), "queued, not shown");
@@ -12302,7 +12302,12 @@ mod tests {
     /// [`docked_at_earth`] by the engine's reading, with `dialog` opened,
     /// a landed `M131` run and settled inside it, and `dialog` closed.
     fn m_inside(dialog: PortDialog) -> View {
-        let mut view = docked_at_earth(port(), RuleSource::Engine);
+        m_inside_of(port(), dialog)
+    }
+
+    /// [`m_inside`] over `catalog`.
+    fn m_inside_of(catalog: FakeCatalog, dialog: PortDialog) -> View {
+        let mut view = docked_at_earth(catalog, RuleSource::Engine);
         view.open_port_dialog();
         run_set(&mut view, "M131");
         view.settle_script();
@@ -12367,7 +12372,7 @@ mod tests {
             ("a ship purchase", |view| {
                 view.buy_ship(ShipId(129), "Kestrel").expect("bought");
             }),
-            ("a shop closing", FlightView::shop_closed),
+            ("a shop closing", FlightView::refresh_status),
         ];
         let refused: [(&str, Step); 8] = [
             ("a refused trade", |view| {
@@ -12417,6 +12422,55 @@ mod tests {
     }
 
     #[test]
+    fn a_redraw_clears_the_shipyards_nav_mark() {
+        type Step = fn(&mut View);
+        let redraws: [(&str, Step); 2] = [
+            ("a whole-bar redraw", FlightView::refresh_status),
+            ("a ship purchase", |view| {
+                view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+                let mut desk = view.pilot_desk().expect("flying");
+                desk.edit(PilotEdit::Credits(100_000)).expect("set");
+            }),
+        ];
+        let draws: [(&str, Step); 3] = [
+            ("a trade", |view| {
+                assert!(view.trade(BUY_FOOD).is_ok());
+            }),
+            ("a recharge", |view| {
+                desk_reserve(view, nova_sim::Reserve::Fuel, 100.0);
+                assert!(view.recharge().is_ok());
+            }),
+            ("an outfitter order", |view| {
+                assert_eq!(view.outfit(BUY_PLAIN_TANK), Ok(()));
+            }),
+        ];
+        // Ship 129 holds food too, and the desk refills the credits the
+        // purchase spent, so each draw after it goes through.
+        let catalog = || {
+            let mut catalog = port();
+            catalog.ships[0].fields.holds = 10;
+            catalog
+        };
+        for (redrawn, redraw) in &redraws {
+            for (drawn, draw) in &draws {
+                let mut view = m_inside_of(catalog(), PortDialog::Shipyard);
+                assert_eq!(port_nav(&view), naming("Proxima"), "the close's");
+                redraw(&mut view);
+                assert_eq!(port_nav(&view), naming("Earth"), "{redrawn}");
+                run_set(&mut view, "M131");
+                view.settle_script();
+                assert_eq!(port_nav(&view), naming("Earth"), "{redrawn}: held");
+                draw(&mut view);
+                assert_eq!(
+                    port_nav(&view),
+                    naming("Earth"),
+                    "{redrawn}, then {drawn}: the mark was cleared"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn the_mission_computers_close_redraws_the_nav_area() {
         let mut view = docked_at_earth(port(), RuleSource::Engine);
         run_set(&mut view, "M131");
@@ -12437,7 +12491,7 @@ mod tests {
         run_set(&mut view, "N131");
         view.settle_script();
         assert_eq!(port_nav(&view), naming("Earth"), "held");
-        view.shop_closed();
+        view.refresh_status();
         assert_eq!(port_nav(&view), naming(hud::NAV_NO_DESTINATION));
     }
 
@@ -12466,7 +12520,7 @@ mod tests {
         );
         assert_eq!(view.take_mission_texts().len(), 1);
         assert_eq!(port_nav(&view), naming("Earth"), "as the text noted it");
-        view.shop_closed();
+        view.refresh_status();
         assert_eq!(port_nav(&view), naming("Proxima"));
     }
 
@@ -12548,7 +12602,7 @@ mod tests {
         let mut view = docked_at_earth(catalog, RuleSource::Engine);
         assert_eq!(view.accept_mission(MissionId(130)), Ok(0));
         run_set(&mut view, "M132");
-        view.shop_closed();
+        view.refresh_status();
         assert_eq!(port_nav(&view), naming(hud::NAV_NO_DESTINATION));
         assert_eq!(
             view.take_mission_texts().len(),
@@ -12586,7 +12640,7 @@ mod tests {
         assert_eq!(view.reserves().fuel.max, 350.0, "the tank");
         assert_eq!(view.reserves_shown(), held, "landing's");
         assert_eq!(fuel_drawn(&view), landed, "drawn held");
-        view.shop_closed();
+        view.refresh_status();
         assert_eq!(view.reserves_shown(), view.reserves(), "the shop closed");
         assert_ne!(fuel_drawn(&view), landed);
     }
@@ -12609,7 +12663,7 @@ mod tests {
         let mut view = FlightView::new(outfitting());
         land_now(&mut view);
         desk_reserve(&mut view, Reserve::Fuel, 100.0);
-        view.shop_closed();
+        view.refresh_status();
         assert_eq!(view.reserves_shown().fuel.now, 100.0, "held at 100");
         desk_reserve(&mut view, Reserve::Shield, 10.0);
         assert_eq!(view.reserves_shown().shield.now, 40.0, "held full");
@@ -12635,7 +12689,7 @@ mod tests {
         view.buy_ship(ShipId(129), "Kestrel").expect("bought");
         assert_eq!(view.reserves().fuel.max, 350.0, "its tank");
         assert_eq!(view.reserves_shown().fuel.max, 250.0, "the old ship's");
-        view.shop_closed();
+        view.refresh_status();
         assert_eq!(view.reserves_shown().fuel.max, 350.0, "the shipyard closed");
     }
 
