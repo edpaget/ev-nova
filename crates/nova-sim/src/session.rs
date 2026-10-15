@@ -20148,12 +20148,18 @@ pub(super) mod tests {
             "none for the crew, 10 for the strength"
         );
         session.traffic.npcs_mut()[1].leader = Some(NpcId(0));
+        session.traffic.npcs_mut()[0].pick = Some(WeaponId(131));
         assert_eq!(
             take(&mut session, Take::Capture, &[10, 1]).0,
             Taken::Escorted
         );
         assert_eq!(session.pilot().escorts(), [trader_escort()]);
         assert_joined_in_place(&session);
+        assert_eq!(
+            session.npcs()[0].pick,
+            None,
+            "_DoShipCapture clears the kept pick (@0x41207)"
+        );
         assert_eq!(session.npcs()[1].leader, None, "its own escort let go");
         assert_eq!(session.target(), None);
         assert_eq!(session.boarding(), None);
