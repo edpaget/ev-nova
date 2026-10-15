@@ -196,7 +196,9 @@ impl Session {
     /// the mode, so Off stays off. Nothing is written for a system that
     /// doesn't exist, as the move skips it too, nor in flight, where the
     /// move's settling lets go of the selection (the `entry` module's
-    /// table).
+    /// table). The original lets go of it in flight at the operator too
+    /// (@0x157e3, @0x158fd); ours' settling comes later in the same input
+    /// or tick, before any frame is drawn, so the player never sees it.
     pub(super) fn select_for_landed_move(&mut self, system: SystemId, first: bool) {
         if self.landed.is_none() || !self.galaxy.exists(system) {
             return;
