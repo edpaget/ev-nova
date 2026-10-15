@@ -285,9 +285,13 @@ fn docked_at_128(courier: &Courier) -> Session {
     session
 }
 
-/// Presses L until it lands, the first press selecting a stellar.
+/// Presses L until it lands, the first press requesting a stellar and a
+/// tick between presses for the dock approach.
 fn land(session: &mut Session) -> StellarId {
-    for _ in 0..2 {
+    for press in 0..3 {
+        if press > 0 {
+            session.tick(nova_sim::Controls::default());
+        }
         if let Ok(LandPress::Outcome(LandOutcome::Landed(stellar))) = session.land() {
             return stellar;
         }

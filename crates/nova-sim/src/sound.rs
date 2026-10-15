@@ -87,4 +87,11 @@ pub enum SimSound {
     /// and rdm:phase/player-death/phase-16-handle-player-left-out-gates
     /// reuses it for its own refusals.
     Refused,
+    /// Traffic control answered the player: `_beepSnd[1]`, `snd ` 151.
+    /// The land key's request with its line (`_HandlePlayerDockRequest`
+    /// @0x67a69) and its denial (@0x67ec6), and the dock approach's
+    /// greeting (`_HandlePlayerDockApproach` @0x649a9) raise it; a request
+    /// within reach and "No response." are silent (see
+    /// [`clearance`](crate::clearance)).
+    TrafficControl,
 }

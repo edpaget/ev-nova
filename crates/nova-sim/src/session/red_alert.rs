@@ -446,9 +446,11 @@ mod tests {
         session
     }
 
-    /// Presses L twice, giving the gate entry it awaits.
+    /// Presses L, runs the dock approach and presses L again, giving the
+    /// gate entry it awaits.
     fn press_land_twice(session: &mut Session) {
         session.land().expect("clearance");
+        session.dock_approach();
         assert!(matches!(
             session.land(),
             Ok(crate::session::LandPress::AtGate { .. })

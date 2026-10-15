@@ -559,6 +559,19 @@ impl Harness {
         frame
     }
 
+    /// Sends four redraws, at least a tick of flight, for the dock
+    /// approach to clear a request. The nav brackets' corners (`cicn`
+    /// 10000-10003), which the press's selection draws, may be missing
+    /// from the fixture, so the frames' image failures are not checked.
+    fn approach(&mut self) {
+        for _ in 0..4 {
+            self.frames += 1;
+            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
+            self.send(WindowEvent::Redraw { elapsed });
+        }
+        let _ = self.app.take_failures();
+    }
+
     /// Sends `seconds` of redraws and returns the last frame.
     fn run(&mut self, seconds: u64) -> Frame {
         let mut last = None;
@@ -1339,6 +1352,7 @@ impl Harness {
         let mut harness = Self::flying_over(gate_data(), SharedChance::default());
         harness.frame();
         harness.press(Key::Char('l'));
+        harness.approach();
         harness.press(Key::Char('l'));
         assert_eq!(harness.showing(), Showing::FlightMap);
         assert_eq!(harness.flight().course_map().mode(), MapMode::Hypergate);

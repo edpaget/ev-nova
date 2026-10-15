@@ -377,6 +377,7 @@ mod tests {
         let mut session = session();
         while session.landed().is_none() {
             session.land().expect("lands");
+            session.tick(nova_sim::Controls::default());
         }
         session.take_save_due();
         session

@@ -235,6 +235,56 @@ fn a_grants_message_reads_its_stock_strings() {
     );
 }
 
+/// The dock request's line, its denials and the dock approach's greeting
+/// are built from `STR#` 2002 #53 and #74-#101, as the stock strings read.
+#[test]
+fn the_dock_requests_and_the_approachs_words_read_their_stock_strings() {
+    use nova_view::flight::view::{
+        BEGIN_APPROACH, CLEARED_FOR_HYPERGATE, CLEARED_TO_DOCK, CLEARED_TO_DOCK_LEAD,
+        CLEARED_TO_LAND, CLEARED_TO_LAND_LEAD, COMMENCE_FINAL_APPROACH, DOCKING_DENIED,
+        DOCKING_REQUEST_RECEIVED, DOCKMASTER_READS_YOU, HYPERGATE_DENIED, HYPERGATE_ENERGIZED,
+        HYPERGATE_ONLINE, LANDING_DENIED, LANDING_REQUEST_RECEIVED, NO_RESPONSE,
+        TRAFFIC_CONTROL_READS_YOU, WELCOME_TO, YOU_ARE_CLEARED_FOR_HYPERGATE,
+        YOU_ARE_CLEARED_TO_DOCK, YOU_ARE_CLEARED_TO_LAND, YOURE_CLEARED_FOR_HYPERGATE,
+    };
+    let Some(data) = open() else {
+        return;
+    };
+    let strings = nova_sim::CommCatalog::string_list(&data, 2002);
+    assert_eq!(strings[52], NO_RESPONSE);
+    assert_eq!(
+        &strings[73..83],
+        [
+            HYPERGATE_ENERGIZED,
+            HYPERGATE_ONLINE,
+            DOCKMASTER_READS_YOU,
+            DOCKING_REQUEST_RECEIVED,
+            TRAFFIC_CONTROL_READS_YOU,
+            LANDING_REQUEST_RECEIVED,
+            BEGIN_APPROACH,
+            HYPERGATE_DENIED,
+            DOCKING_DENIED,
+            LANDING_DENIED,
+        ]
+    );
+    assert_eq!(
+        &strings[90..101],
+        [
+            CLEARED_FOR_HYPERGATE,
+            YOURE_CLEARED_FOR_HYPERGATE,
+            YOU_ARE_CLEARED_FOR_HYPERGATE,
+            CLEARED_TO_DOCK_LEAD,
+            CLEARED_TO_DOCK,
+            YOU_ARE_CLEARED_TO_DOCK,
+            CLEARED_TO_LAND_LEAD,
+            CLEARED_TO_LAND,
+            YOU_ARE_CLEARED_TO_LAND,
+            COMMENCE_FINAL_APPROACH,
+            WELCOME_TO,
+        ]
+    );
+}
+
 /// A scan's notices are built from `STR#` 2002 #375-#380, as the stock
 /// strings read ("posession" as they spell it).
 #[test]

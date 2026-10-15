@@ -272,6 +272,7 @@ fn a_registered_subscription_runs_its_script_as_the_landing_settles() {
     session.register_story(on_landing).expect("registers");
     let bit = Bit::new(42).expect("a bit");
     session.land().expect("selects");
+    session.tick(nova_sim::Controls::default());
     assert_eq!(
         session.land(),
         Ok(LandPress::Outcome(LandOutcome::Landed(StellarId(128))))

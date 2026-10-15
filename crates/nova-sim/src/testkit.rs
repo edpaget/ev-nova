@@ -927,19 +927,32 @@ pub(crate) fn fly_out(session: &mut Session) {
     panic!("never got out: {:?}", session.player());
 }
 
-/// Presses L until it lands or is refused: a first press that selects a
-/// stellar is followed by a second. Gives the stellar landed on, or the
-/// refusal.
+/// Presses L until it lands or is refused, the dock approach alone run
+/// between presses (not a whole tick, whose motion, fuel and timers the
+/// tests calling this do not expect): a press that requests is followed
+/// by the approach and another press, up to three. The dock request's
+/// own messages and sounds raised on the way (its line, "No response.",
+/// the greeting and traffic control's sound) are forgotten, as the
+/// `clearance` module's tests pin them. Gives the stellar landed on, or
+/// the refusal.
 pub(crate) fn land_now(session: &mut Session) -> Result<StellarId, LandingRefusal> {
-    for _ in 0..2 {
-        if let LandPress::Outcome(LandOutcome::Landed(stellar)) = session.land()? {
-            return Ok(stellar);
+    let before = session.chatter_marks();
+    let landed = (|| {
+        for press in 0..3 {
+            if press > 0 {
+                session.dock_approach();
+            }
+            if let LandPress::Outcome(LandOutcome::Landed(stellar)) = session.land()? {
+                return Ok(stellar);
+            }
         }
-    }
-    panic!(
-        "L selected twice and never landed: {:?}",
-        session.nav_target()
-    );
+        panic!(
+            "L requested three times and never landed: {:?}",
+            session.nav_target()
+        );
+    })();
+    session.forget_dock_chatter(before);
+    landed
 }
 
 /// Plots a course to `to`, flies out and jumps, and arrives, no chance

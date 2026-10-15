@@ -185,6 +185,8 @@ pub(super) enum Reset {
     Strikes,
     /// The player's target is let go.
     Target,
+    /// The dock request is dropped (see the `clearance` module).
+    DockRequest,
     /// The boarding under way ends.
     Boarding,
     /// The hail under way ends.
@@ -326,8 +328,9 @@ pub(super) fn resets(how: Entry, rules: &Rulebook, facts: EntryFacts) -> Resets 
 /// (@0x6be25-0x6be2b) and the course's next hop cued after its step
 /// (@0x6c4cd), so mode 3 comes back while hops remain. The arrival
 /// message is the system's buoy in place of the arrival line when it has
-/// one (@0x6c25b-0x6c27a; see the `buoys` module). Populating lets go of the strikes, the boarding, the
-/// hail and the target too. The caller arms the escort-strength timer
+/// one (@0x6c25b-0x6c27a; see the `buoys` module). The dock request is
+/// dropped (@0x6bfb5-0x6bfc4; see the `clearance` module). Populating
+/// lets go of the strikes, the boarding, the hail and the target too. The caller arms the escort-strength timer
 /// before entering, ahead of the jump's days ([`Session::arrive`]).
 fn jump(hops: usize) -> Resets {
     Resets::of(
@@ -336,6 +339,7 @@ fn jump(hops: usize) -> Resets {
             Reset::Stellar,
             Reset::Explore,
             Reset::HeldSound,
+            Reset::DockRequest,
             Reset::Combat,
             Reset::Boxes,
             Reset::Strikes,
@@ -777,6 +781,9 @@ impl Session {
         if resets.has(Reset::Target) {
             self.target = None;
         }
+        if resets.has(Reset::DockRequest) {
+            self.dock = None;
+        }
         if resets.has(Reset::Boarding) {
             self.aboard = None;
         }
@@ -909,6 +916,7 @@ mod tests {
                         Reset::Stellar,
                         Reset::Explore,
                         Reset::HeldSound,
+                        Reset::DockRequest,
                         Reset::FightersOut,
                         Reset::ArrivalSound,
                         Reset::ArrivalMessage,

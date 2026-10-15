@@ -1,15 +1,15 @@
 //! Landing through a flight session, headless: the land key's first press
-//! requesting clearance and its second landing, each reason a landing is
-//! refused, and a landing and take-off, with the session flown by its
-//! controls alone.
+//! requesting clearance, the dock approach on the tick after, and the
+//! second press landing, each reason a landing is refused, and a landing
+//! and take-off, with the session flown by its controls alone.
 
 use nova_sim::landing::StellarFlags;
 use nova_sim::{
-    CharacterStart, Clearance, CombatCatalog, CommodityStrings, Controls, DateAffixes,
-    DisasterRecord, DudeId, DudeRecord, FleetRecord, GovtRecord, HullRecord, JunkRecord,
-    LandOutcome, LandPress, LandingRefusal, LandingSite, NeverFires, OutfitId, OutfitRecord,
-    PersonRecord, PilotCatalog, Session, ShipFields, ShipId, StarSystem, StartDate, StartError,
-    StellarId, SystemId, SystemTraffic, TrafficCatalog, Vec2, WeaponRecord,
+    CharacterStart, CombatCatalog, CommodityStrings, Controls, DateAffixes, DisasterRecord, DudeId,
+    DudeRecord, FleetRecord, GovtRecord, HullRecord, JunkRecord, LandOutcome, LandPress,
+    LandingRefusal, LandingSite, NeverFires, OutfitId, OutfitRecord, PersonRecord, PilotCatalog,
+    Session, ShipFields, ShipId, StarSystem, StartDate, StartError, StellarId, SystemId,
+    SystemTraffic, TrafficCatalog, Vec2, WeaponRecord,
 };
 
 /// One `chär` flying an average ship that turns 6° a tick from system
@@ -211,21 +211,21 @@ fn a_system_without_stellars_refuses() {
     assert_eq!(session(Vec::new()).land(), Err(LandingRefusal::NoStellars));
 }
 
-fn selected(station: bool, clearance: Clearance) -> LandPress {
-    LandOutcome::Selected {
+fn requested(station: bool) -> LandPress {
+    LandOutcome::Requested {
         stellar: StellarId(128),
         station,
-        clearance,
     }
     .into()
 }
 
 #[test]
-fn the_first_l_requests_clearance_and_the_second_lands() {
+fn the_first_l_requests_clearance_and_the_second_lands_after_a_tick() {
     let mut session = session(vec![at_centre(StellarFlags::CAN_LAND, 0)]);
-    assert_eq!(session.land(), Ok(selected(false, Clearance::Granted)));
+    assert_eq!(session.land(), Ok(requested(false)));
     assert_eq!(session.nav_target(), Some(StellarId(128)));
     assert_eq!(session.landed(), None);
+    session.tick(Controls::default());
     assert_eq!(
         session.land(),
         Ok(LandOutcome::Landed(StellarId(128)).into())
@@ -241,7 +241,8 @@ fn a_ship_over_no_stellar_is_too_far() {
         ..at_centre(STATION, 0)
     };
     let mut session = session(vec![far]);
-    assert_eq!(session.land(), Ok(selected(true, Clearance::Granted)));
+    assert_eq!(session.land(), Ok(requested(true)));
+    session.tick(Controls::default());
     let too_far = Err(LandingRefusal::TooFar {
         stellar: StellarId(128),
         station: true,
@@ -267,15 +268,14 @@ fn a_stellar_that_cannot_be_landed_on_refuses() {
 #[test]
 fn a_new_pilot_is_denied_where_a_record_is_needed() {
     let mut session = session(vec![at_centre(StellarFlags::CAN_LAND, 32767)]);
-    assert_eq!(session.land(), Ok(selected(false, Clearance::Denied)));
-    assert_eq!(
-        session.land(),
-        Err(LandingRefusal::Denied {
-            stellar: StellarId(128),
-            station: false,
-            min_status: 32767,
-        })
-    );
+    let denied = Err(LandingRefusal::Denied {
+        stellar: StellarId(128),
+        station: false,
+        min_status: 32767,
+    });
+    assert_eq!(session.land(), denied);
+    session.tick(Controls::default());
+    assert_eq!(session.land(), denied, "asked again");
 }
 
 #[test]
@@ -288,7 +288,8 @@ fn a_ship_flying_past_is_too_fast_and_lands_once_it_brakes() {
     for _ in 0..15 {
         session.tick(thrust);
     }
-    assert_eq!(session.land(), Ok(selected(false, Clearance::Granted)));
+    assert_eq!(session.land(), Ok(requested(false)));
+    session.tick(thrust);
     let Err(LandingRefusal::TooFast {
         stellar,
         station,

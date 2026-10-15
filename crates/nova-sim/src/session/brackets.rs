@@ -213,7 +213,7 @@ mod tests {
         let mut session = session(&three_stellars());
         assert!(matches!(
             session.land(),
-            Ok(LandPress::Outcome(LandOutcome::Selected { .. }))
+            Ok(LandPress::Outcome(LandOutcome::Requested { .. }))
         ));
         assert_eq!(nav_expand(&session), 196.0);
         assert_eq!(nav_over(&mut session, 5), FLIGHT);

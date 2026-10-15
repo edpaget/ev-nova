@@ -999,6 +999,8 @@ mod tests {
         let mut session = quiet(Session::start(&catalog).expect("starts"));
         session.land().expect("selects");
         assert_eq!(session.story_raised(), [], "the first L only selects");
+        session.tick(crate::flight::Controls::default());
+        assert_eq!(session.story_raised(), [], "nor the approach");
         session.land().expect("lands");
         assert_eq!(session.story_raised(), [LANDED_128]);
     }

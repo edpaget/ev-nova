@@ -1758,10 +1758,12 @@ mod tests {
         catalog
     }
 
-    /// Presses L twice over the hypergate and comes out of it in 131.
+    /// Presses L over the hypergate, runs the dock approach, presses L
+    /// again and comes out of it in 131.
     fn through_the_gate(session: &mut Session, catalog: &FakePilotCatalog) {
         use crate::catalog::SystemId;
         session.land().expect("selects the gate");
+        session.dock_approach();
         assert!(matches!(
             session.land(),
             Ok(crate::session::LandPress::AtGate { .. })

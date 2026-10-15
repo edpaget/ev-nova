@@ -472,14 +472,29 @@ impl Game {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
+    /// Sends four redraws, at least a tick of flight, for the dock
+    /// approach to clear a request. The nav brackets' corners (`cicn`
+    /// 10000-10003), which the press's selection draws, may be missing
+    /// from the fixture, so the frames' image failures are not checked.
+    fn approach(&mut self) {
+        for _ in 0..4 {
+            self.frames += 1;
+            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
+            self.send(WindowEvent::Redraw { elapsed });
+        }
+        let _ = self.app.take_failures();
+    }
+
     fn showing(&self) -> Showing {
         self.app.screen().showing()
     }
 
-    /// Lands at the pad: L requests clearance, a second L lands.
+    /// Lands at the pad: L requests clearance, a few frames let the dock
+    /// approach clear it, and a second L lands.
     fn land(&mut self) {
         self.frame();
         self.tap(Key::Char('l'));
+        self.approach();
         self.tap(Key::Char('l'));
         assert_eq!(self.showing(), Showing::Spaceport);
     }

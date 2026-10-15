@@ -159,13 +159,22 @@
 //!   and its release lets it go. Left and Right together cancel, and
 //!   either overrides Down.
 //! - L, once a press (its repeats do nothing), requests clearance, then
-//!   lands, as [`landing`](nova_sim::landing) says: with no navigation
-//!   target it selects the nearest landable stellar and shows the reply
-//!   ([`clearance_message`]); with one it lands there. The router takes
-//!   the landing ([`FlightView::take_landing`]) and shows the spaceport.
-//!   The reply, or why a landing was refused, shows on the message line
-//!   in the original's words (`STR#` 2002), for [`LANDING_TICKS`] or
-//!   [`landing_refusal_ticks`].
+//!   lands, as [`landing`](nova_sim::landing) says, in two presses: with
+//!   no navigation target it selects the nearest landable stellar, and
+//!   the press requests the stellar selected. Away from it traffic
+//!   control answers with the request's line ([`request_line`]); within
+//!   249 pixels it says nothing. On the ticks after, the dock approach
+//!   greets the pilot ([`approach_greeting`]) as its own message, and a
+//!   second L lands. While L is held the approach waits
+//!   ([`Session::set_land_key`]), as the original's does. An uninhabited
+//!   stellar answers every press "No response." ([`NO_RESPONSE`]) and
+//!   lands in that press when it can; a refusal in the same press
+//!   replaces it on the message line. The router takes the landing
+//!   ([`FlightView::take_landing`]) and shows the spaceport. The line,
+//!   the greeting and "No response." show for 250 ticks
+//!   ([`SimMessage::ticks`]), and why a landing was refused for
+//!   [`landing_refusal_ticks`], in the original's words (`STR#` 2002).
+//!   The words' picks roll on the flight's chance.
 //!   Over a hypergate or wormhole, the second L enters it instead
 //!   ([`nova_sim::gate`]): a hypergate opens the course map as the
 //!   hypergate map ([`MapMode::Hypergate`]), offering its linked
@@ -175,11 +184,10 @@
 //!   out, the message line says so ([`arrival_message_with`]), and the
 //!   screen fades in from white out of a hypergate
 //!   ([`JumpEffect::emerging`]) or flashes white out of a wormhole
-//!   ([`JumpEffect::flash`]). Clearance at a hypergate, and why a gate
-//!   cannot be entered, are in the gate's own words
-//!   ([`hypergate_clearance_message`], [`gate_refusal_message`]); the
-//!   hypergate's two clearance replies are picked by a roll on the
-//!   flight's chance.
+//!   ([`JumpEffect::flash`]). The request's line, the greeting and the
+//!   denial at a hypergate, and why a gate cannot be entered, are in the
+//!   gate's own words ([`request_line`], [`approach_greeting`],
+//!   [`HYPERGATE_DENIED`], [`gate_refusal_message`]).
 //! - M (a press, not its repeats) opens the course map, a [`GalaxyMap`]
 //!   in [`MapMode::Course`](crate::galaxy::MapMode::Course), and lets go
 //!   of the flight keys. While it is open flight is paused, as in the
@@ -420,16 +428,16 @@ use nova_sim::traffic::emerge::{FULL_LEVEL, emerge_level};
 use nova_sim::traffic::npc::Mode;
 use nova_sim::{
     ALERT_CICN, Allegiance, Assigned, Assignment, Behaviour, BoardRefusal, Boarding, BoardingRule,
-    Chance, ClassRow, Clearance, CombatCatalog, CommCatalog, CommNote, Condition, Controls,
-    DisableRule, EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal, Good, GovtId,
-    Haggle, HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome,
-    LandPress, LandingRefusal, LegalCode, Market, NavMode, NeverFires, NovaAi, NovaBoarding,
-    NovaDisable, NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun,
-    Outfitter, Pilot, PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal, Reselection,
-    Reserves, RuleKey, RuleSource, Rulebook, Rules, Session, ShipId, ShipNaming, ShipPurchase,
-    ShipRef, ShipRefusal, ShipState, Shipyard, SimMessage, StartError, StellarId, StellarPick,
-    Steps, SystemId, Take, Taken, TargetPick, TargetTag, TradeRefusal, TrafficCatalog, Turn, Vec2,
-    flight::normalized, flight::shortest_turn, glow_level, lights_level,
+    Chance, ClassRow, CombatCatalog, CommCatalog, CommNote, Condition, Controls, DisableRule,
+    DockKind, EscortCommand, FighterNote, FixedStep, GateKind, GateRefusal, Good, GovtId, Haggle,
+    HailOptions, HailRefusal, HailView, HashedRolls, Help, JumpRefusal, LandOutcome, LandPress,
+    LandingRefusal, LegalCode, Market, NavMode, NeverFires, NovaAi, NovaBoarding, NovaDisable,
+    NovaLaw, Npc, NpcId, Order, OutfitId, OutfitOrder, OutfitRefusal, OutfitRun, Outfitter, Pilot,
+    PilotCatalog, PlunderView, PointDefenceRule, RechargeRefusal, Reselection, Reserves, RuleKey,
+    RuleSource, Rulebook, Rules, Session, ShipId, ShipNaming, ShipPurchase, ShipRef, ShipRefusal,
+    ShipState, Shipyard, SimMessage, StartError, StellarId, StellarPick, Steps, SystemId, Take,
+    Taken, TargetPick, TargetTag, TradeRefusal, TrafficCatalog, Turn, Vec2, flight::normalized,
+    flight::shortest_turn, glow_level, lights_level,
 };
 use nova_sim::{
     AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
@@ -526,8 +534,8 @@ pub const ESCORT_TICKS: u16 = 250;
 /// A `Q` operator's message, in flight or at take-off: 500
 /// (`_PlayGame` @0x465a8, `_PlayerLandOnStellar` @0x635c4).
 pub const SCRIPT_MESSAGE_TICKS: u16 = 500;
-/// Clearance's reply, and a landing denied or not possible: 250
-/// (`_HandlePlayerDockRequest` @0x67c46, @0x67cbc, @0x67e67).
+/// A landing denied or not possible: 250 (`_HandlePlayerDockRequest`
+/// @0x67ef3, @0x67e67).
 pub const LANDING_TICKS: u16 = 250;
 /// A landing refused as too far or too fast: 360
 /// (`_HandlePlayerDockRequest` @0x6787f).
@@ -580,8 +588,9 @@ pub fn assigned_ticks(assigned: Assigned) -> u16 {
 
 /// The keys flight holds: the original's defaults, Alt, which turns the
 /// weapon select key back, Shift, which turns the target select key back,
-/// and Command, which the jettison key needs.
-const FLIGHT_KEYS: [Key; 9] = [
+/// Command, which the jettison key needs, and the land key, which holds
+/// the dock approach back while it is down.
+const FLIGHT_KEYS: [Key; 10] = [
     Key::Up,
     Key::Left,
     Key::Right,
@@ -591,6 +600,7 @@ const FLIGHT_KEYS: [Key; 9] = [
     Key::Alt,
     Key::Shift,
     Key::Command,
+    LAND_KEY,
 ];
 
 /// The primary fire key: the original's default (`fireKey0`, `_loadKeys`
@@ -752,8 +762,9 @@ pub fn illegal_outfit_message(
 /// What the message line says of `message`, a session's message other
 /// than an arrival's, the names read from `session`: none for an
 /// arrival's, which [`arrival_lead`] leads the arrival message with, and
-/// for the take-off greeting and the land hint, which [`message_text`]
-/// words with the stellar's name.
+/// for the take-off greeting, the land hint, the dock request's line and
+/// the dock approach's greeting, which [`message_text`] words with the
+/// stellar's name.
 fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
     let text = match message {
         SimMessage::Arrived(_)
@@ -761,9 +772,12 @@ fn sim_message_text(message: &SimMessage, session: &Session) -> Option<String> {
         | SimMessage::ExitedHypergate(_)
         | SimMessage::PassedWormhole(_)
         | SimMessage::TookOff { .. }
+        | SimMessage::DockRequested { .. }
+        | SimMessage::DockCleared { .. }
         | SimMessage::Tutorial(TutorialHint::Land { .. }) => {
             return None;
         }
+        SimMessage::NoResponse => NO_RESPONSE,
         SimMessage::Tutorial(TutorialHint::Hyperspace) => {
             return Some(hyperspace_hint(
                 &key_label(MAP_KEY).unwrap_or_default(),
@@ -1062,14 +1076,30 @@ fn stellar_name(scene: Option<&SystemScene>, id: StellarId) -> &str {
 
 /// What the message line says of `message`, the names read from
 /// `session` and the stellars' from `scene`: as [`sim_message_text`]
-/// says, and the take-off greeting and the land hint, which name a
-/// stellar. None only for an arrival's.
+/// says, and the take-off greeting, the land hint, the dock request's
+/// line and the dock approach's greeting, which name a stellar, the
+/// line's and the greeting's picks rolled on `chance`. None only for an
+/// arrival's.
 fn message_text(
     message: &SimMessage,
     session: &Session,
     scene: Option<&SystemScene>,
+    chance: &mut dyn Chance,
 ) -> Option<String> {
+    let ship = || session.pilot().ship_name().unwrap_or_default();
     match message {
+        SimMessage::DockRequested { stellar, kind } => Some(request_line(
+            *kind,
+            stellar_name(scene, *stellar),
+            ship(),
+            RequestPicks::roll(*kind, chance),
+        )),
+        SimMessage::DockCleared { stellar, kind } => Some(approach_greeting(
+            *kind,
+            stellar_name(scene, *stellar),
+            ship(),
+            GreetingPicks::roll(*kind, chance),
+        )),
         SimMessage::TookOff { stellar, lead } => Some(take_off_greeting(
             *lead,
             stellar_name(scene, *stellar),
@@ -1147,6 +1177,9 @@ fn arrival_lead(message: &SimMessage) -> Option<&'static str> {
         | SimMessage::IllegalOutfit { .. }
         | SimMessage::Buoy(_)
         | SimMessage::TookOff { .. }
+        | SimMessage::DockRequested { .. }
+        | SimMessage::NoResponse
+        | SimMessage::DockCleared { .. }
         | SimMessage::Tutorial(_) => None,
     }
 }
@@ -1169,22 +1202,6 @@ pub const UNABLE_TO: &str = "Your ship is unable to";
 pub const HYPERGATE_OFFLINE: &str = "enter this hypergate - it is offline.";
 /// `STR#` 2002 #86.
 pub const WORMHOLE_TOO_HOT: &str = "enter this wormhole - the radiation levels are too extreme.";
-
-/// What the player is told when L requests clearance at a hypergate and is
-/// cleared: [`HYPERGATE_ENERGIZED`] when `energized`, otherwise
-/// [`HYPERGATE_ONLINE`] (the original rolls `Rand(2)`, @0x67a8b-0x67aa5),
-/// then ". " and [`BEGIN_APPROACH`] (@0x67b78-0x67c05). The original adds
-/// the pilot's name after the first half on another roll; that is left
-/// out.
-#[must_use]
-pub fn hypergate_clearance_message(energized: bool) -> String {
-    let first = if energized {
-        HYPERGATE_ENERGIZED
-    } else {
-        HYPERGATE_ONLINE
-    };
-    format!("{first}. {BEGIN_APPROACH}")
-}
 
 /// Why the ship cannot enter a gate of `kind`, as the original says it
 /// (@0x67cda-0x67d3c): [`UNABLE_TO`] then [`HYPERGATE_OFFLINE`] or
@@ -1227,50 +1244,161 @@ pub const LAND_DISABLED: &str = "Unable to land - your ship is disabled.";
 
 /// `STR#` 2002 #76.
 pub const DOCKMASTER_READS_YOU: &str = "dockmaster reads you";
+/// `STR#` 2002 #77.
+pub const DOCKING_REQUEST_RECEIVED: &str = "Docking request received";
 /// `STR#` 2002 #78.
 pub const TRAFFIC_CONTROL_READS_YOU: &str = "traffic control reads you";
+/// `STR#` 2002 #79.
+pub const LANDING_REQUEST_RECEIVED: &str = "Landing request received";
+/// `STR#` 2002 #91.
+pub const CLEARED_FOR_HYPERGATE: &str = "Cleared for hypergate entry";
+/// `STR#` 2002 #92, its trailing space the stock string's own.
+pub const YOURE_CLEARED_FOR_HYPERGATE: &str = "you're cleared for hypergate entry. ";
+/// `STR#` 2002 #93, its trailing space the stock string's own.
+pub const YOU_ARE_CLEARED_FOR_HYPERGATE: &str = "You are cleared for hypergate entry. ";
+/// `STR#` 2002 #94.
+pub const CLEARED_TO_DOCK_LEAD: &str = "Cleared to dock";
 /// `STR#` 2002 #95.
 pub const CLEARED_TO_DOCK: &str = "you're cleared to dock.";
 /// `STR#` 2002 #96.
 pub const YOU_ARE_CLEARED_TO_DOCK: &str = "You are cleared to dock.";
+/// `STR#` 2002 #97.
+pub const CLEARED_TO_LAND_LEAD: &str = "Cleared to land";
 /// `STR#` 2002 #98.
 pub const CLEARED_TO_LAND: &str = "you're cleared to land.";
 /// `STR#` 2002 #99.
 pub const YOU_ARE_CLEARED_TO_LAND: &str = "You are cleared to land.";
+/// `STR#` 2002 #100.
+pub const COMMENCE_FINAL_APPROACH: &str = "Commence final approach.";
+/// `STR#` 2002 #101.
+pub const WELCOME_TO: &str = "Welcome to";
 
-/// What the player is told when L requests clearance at the stellar
-/// `name`, a station or a planet, and `clearance` is the reply. Only the
-/// pieces are the original's (`STR#` 2002); how they are joined is a
-/// reconstruction:
-///
-/// - granted: "{name} traffic control reads you, you're cleared to land."
-///   (#78, #98), or at a station "{name} dockmaster reads you, you're
-///   cleared to dock." (#76, #95);
-/// - uninhabited, with no traffic control to answer: "You are cleared to
-///   land." (#99) or "You are cleared to dock." (#96);
-/// - denied: "Landing request denied." (#83) or "Docking request denied."
-///   (#82).
+/// The picks that word the dock request's line ([`request_line`]): the
+/// rolls the original makes for it (`_HandlePlayerDockRequest`
+/// @0x67a8b-0x67bda).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RequestPicks {
+    /// The opening's roll: `Rand(2)` at a hypergate, 0 for
+    /// [`HYPERGATE_ENERGIZED`] (#74) and otherwise [`HYPERGATE_ONLINE`]
+    /// (#75); `Rand(3)` elsewhere, 0 for the stellar's name and "…
+    /// reads you" (#76, #78) and otherwise "… request received" (#77,
+    /// #79).
+    pub opening: u16,
+    /// `Rand(2)`: 0 adds ", " and the ship's name.
+    pub named: u16,
+}
+
+impl RequestPicks {
+    /// The picks for a stellar of `kind`, rolled on `chance`.
+    pub fn roll(kind: DockKind, chance: &mut (impl Chance + ?Sized)) -> Self {
+        let sides = if kind == DockKind::Hypergate { 2 } else { 3 };
+        let opening = chance.roll(sides);
+        Self {
+            opening,
+            named: chance.roll(2),
+        }
+    }
+}
+
+/// The picks that word the dock approach's greeting
+/// ([`approach_greeting`]): the rolls the original makes for it
+/// (`_HandlePlayerDockApproach` @0x649de, @0x64ac1, @0x64bbf, @0x64cc6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GreetingPicks {
+    /// `Rand(3)`, which of the three "cleared" forms.
+    pub opening: u16,
+    /// `Rand(2)`: 0 for [`COMMENCE_FINAL_APPROACH`], otherwise
+    /// [`WELCOME_TO`] and the stellar's name. A hypergate's greeting rolls
+    /// none and has no second sentence.
+    pub welcome: u16,
+}
+
+impl GreetingPicks {
+    /// The picks for a stellar of `kind`, rolled on `chance`.
+    pub fn roll(kind: DockKind, chance: &mut (impl Chance + ?Sized)) -> Self {
+        let opening = chance.roll(3);
+        let welcome = if kind == DockKind::Hypergate {
+            0
+        } else {
+            chance.roll(2)
+        };
+        Self { opening, welcome }
+    }
+}
+
+/// The dock request's line at the stellar named `stellar`, of `kind`, for
+/// the ship named `ship`, as `_HandlePlayerDockRequest` builds it
+/// (@0x67a8b-0x67c05): the opening by `picks`, then ", " and the ship's
+/// name when `picks.named` is 0, then ". " and [`BEGIN_APPROACH`]. For
+/// example "Earth traffic control reads you, Kestrel. Begin initial
+/// approach."
 #[must_use]
-pub fn clearance_message(name: &str, station: bool, clearance: Clearance) -> String {
-    let (reads_you, cleared, you_are_cleared, denied) = if station {
-        (
-            DOCKMASTER_READS_YOU,
+pub fn request_line(kind: DockKind, stellar: &str, ship: &str, picks: RequestPicks) -> String {
+    let opening = match kind {
+        DockKind::Hypergate if picks.opening == 0 => HYPERGATE_ENERGIZED.to_owned(),
+        DockKind::Hypergate => HYPERGATE_ONLINE.to_owned(),
+        DockKind::Station if picks.opening == 0 => format!("{stellar} {DOCKMASTER_READS_YOU}"),
+        DockKind::Station => DOCKING_REQUEST_RECEIVED.to_owned(),
+        DockKind::Planet if picks.opening == 0 => format!("{stellar} {TRAFFIC_CONTROL_READS_YOU}"),
+        DockKind::Planet => LANDING_REQUEST_RECEIVED.to_owned(),
+    };
+    let named = if picks.named == 0 {
+        format!(", {ship}")
+    } else {
+        String::new()
+    };
+    format!("{opening}{named}. {BEGIN_APPROACH}")
+}
+
+/// The dock approach's greeting at the stellar named `stellar`, of `kind`,
+/// for the ship named `ship`, as `_HandlePlayerDockApproach` builds it
+/// (@0x649cd-0x64d6c), trailing spaces included. By `picks.opening`: 0
+/// gives #91/#94/#97, ", ", the ship's name and ". "; 1 the ship's name,
+/// ", " and #92/#95/#98; 2 #93/#96/#99. A station's or a planet's then
+/// gets " " (@0x64cb9); a hypergate's #92/#93 end in their own space, and
+/// its greeting ends there (@0x64a59, @0x64e4d). Otherwise `picks.welcome` 0 adds
+/// [`COMMENCE_FINAL_APPROACH`], and any other [`WELCOME_TO`], " ", the
+/// stellar's name and ". ". For example "Kestrel, you're cleared to land.
+/// Welcome to Earth. ". The fee line that may follow is
+/// rdm:task/landing-fee's.
+#[must_use]
+pub fn approach_greeting(
+    kind: DockKind,
+    stellar: &str,
+    ship: &str,
+    picks: GreetingPicks,
+) -> String {
+    let (lead, cleared, you_are, space) = match kind {
+        DockKind::Hypergate => (
+            CLEARED_FOR_HYPERGATE,
+            YOURE_CLEARED_FOR_HYPERGATE,
+            YOU_ARE_CLEARED_FOR_HYPERGATE,
+            "",
+        ),
+        DockKind::Station => (
+            CLEARED_TO_DOCK_LEAD,
             CLEARED_TO_DOCK,
             YOU_ARE_CLEARED_TO_DOCK,
-            DOCKING_DENIED,
-        )
-    } else {
-        (
-            TRAFFIC_CONTROL_READS_YOU,
+            " ",
+        ),
+        DockKind::Planet => (
+            CLEARED_TO_LAND_LEAD,
             CLEARED_TO_LAND,
             YOU_ARE_CLEARED_TO_LAND,
-            LANDING_DENIED,
-        )
+            " ",
+        ),
     };
-    match clearance {
-        Clearance::Granted => format!("{name} {reads_you}, {cleared}"),
-        Clearance::NoTrafficControl => you_are_cleared.to_owned(),
-        Clearance::Denied => denied.to_owned(),
+    let opening = match picks.opening {
+        0 => format!("{lead}, {ship}. "),
+        1 => format!("{ship}, {cleared}{space}"),
+        _ => format!("{you_are}{space}"),
+    };
+    if kind == DockKind::Hypergate {
+        opening
+    } else if picks.welcome == 0 {
+        format!("{opening}{COMMENCE_FINAL_APPROACH}")
+    } else {
+        format!("{opening}{WELCOME_TO} {stellar}. ")
     }
 }
 
@@ -2418,9 +2546,15 @@ impl<
         let mut messages = std::mem::take(&mut self.pending_leads);
         messages.extend(session.take_messages());
         let scene = self.scene.as_ref();
+        let chance = &mut self.chance;
         let worded: Vec<(String, u16)> = messages
             .iter()
-            .filter_map(|message| Some((message_text(message, session, scene)?, message.ticks())))
+            .filter_map(|message| {
+                Some((
+                    message_text(message, session, scene, chance)?,
+                    message.ticks(),
+                ))
+            })
             .collect();
         self.message = None;
         let Some(scene) = &self.scene else {
@@ -2710,36 +2844,22 @@ impl<
         self.fade_in = Some(effect);
     }
 
-    /// Presses the land key: requests clearance and shows the reply,
-    /// lands, enters a gate, or shows why not. Over a cleared hypergate
-    /// the course map opens offering its links, and over a wormhole the
-    /// ship passes through at once.
+    /// Presses the land key: requests clearance, lands, enters a gate, or
+    /// shows why not. What the press said (the request's line, or "No
+    /// response.") shows first, so a refusal in the same press replaces
+    /// it. Over a cleared hypergate the course map opens offering its
+    /// links, and over a wormhole the ship passes through at once.
     fn land(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
         };
-        match session.land() {
-            Ok(LandPress::Outcome(LandOutcome::Selected {
-                stellar,
-                station,
-                clearance,
-            })) => {
-                let hypergate = session.gate_kind(stellar) == Some(GateKind::Hypergate);
-                let text = match clearance {
-                    Clearance::Granted if hypergate => {
-                        hypergate_clearance_message(self.chance.roll(2) == 0)
-                    }
-                    Clearance::Denied if hypergate => HYPERGATE_DENIED.to_owned(),
-                    _ => {
-                        let name = self.scene.as_ref().and_then(|scene| {
-                            let named = scene.stellars().iter().find(|named| named.id == stellar);
-                            named.map(|named| named.name.as_str())
-                        });
-                        clearance_message(name.unwrap_or_default(), station, clearance)
-                    }
-                };
-                self.say_for(text, LANDING_TICKS);
-            }
+        let pressed = session.land();
+        self.say_messages();
+        let Ok(session) = &mut self.session else {
+            return;
+        };
+        match pressed {
+            Ok(LandPress::Outcome(LandOutcome::Requested { .. })) => {}
             Ok(LandPress::Outcome(LandOutcome::Landed(stellar))) => {
                 self.pending_landing = Some(stellar);
                 self.message = None;
@@ -2764,14 +2884,18 @@ impl<
                 Err(refusal) => self.gate_refused(Some(refusal)),
             },
             Err(refusal) => {
-                let gate = match refusal {
-                    LandingRefusal::NotLandable { stellar, .. } => session.gate_kind(stellar),
+                let text = match refusal {
+                    LandingRefusal::NotLandable { stellar, .. } => {
+                        session.gate_kind(stellar).map(gate_refusal_message)
+                    }
+                    LandingRefusal::Denied { stellar, .. }
+                        if session.gate_kind(stellar) == Some(GateKind::Hypergate) =>
+                    {
+                        Some(HYPERGATE_DENIED.to_owned())
+                    }
                     _ => None,
-                };
-                let text = gate.map_or_else(
-                    || refusal_message(&refusal).to_owned(),
-                    gate_refusal_message,
-                );
+                }
+                .unwrap_or_else(|| refusal_message(&refusal).to_owned());
                 self.say_for(text, landing_refusal_ticks(&refusal));
             }
         }
@@ -3388,7 +3512,7 @@ impl<C> FlightView<C> {
         };
         let mut said = Vec::new();
         for message in messages {
-            match message_text(&message, session, self.scene.as_ref()) {
+            match message_text(&message, session, self.scene.as_ref(), &mut self.chance) {
                 Some(text) => said.push((text, message.ticks())),
                 None => self.pending_leads.push(message),
             }
@@ -4491,6 +4615,7 @@ impl<
             session.set_play_area(play_area());
             session.hold_fire(fire.0, fire.1);
             session.set_double_time_key(self.double_time);
+            session.set_land_key(self.held.contains(&LAND_KEY));
             for _ in 0..steps {
                 self.previous = *session.player();
                 self.npc_previous = session
@@ -7084,10 +7209,22 @@ mod tests {
         assert_eq!(view.message(), None, "gone after {n} ticks");
     }
 
-    /// L pressed twice: clearance, then landing.
+    /// L pressed, a tick for the dock approach, and L pressed again:
+    /// clearance, then landing.
     fn land_now(view: &mut View) {
         tap(view, LAND);
+        ticks(view, 1);
         tap(view, LAND);
+    }
+
+    /// The name of the ship `view` flies, as traffic control says it.
+    fn ship_name(view: &View) -> String {
+        view.session()
+            .expect("flying")
+            .pilot()
+            .ship_name()
+            .unwrap_or_default()
+            .to_owned()
     }
 
     #[test]
@@ -7096,16 +7233,22 @@ mod tests {
         let mut view = flight_among(vec![site(129, (6.0, -8.0), StellarFlags::CAN_LAND)]);
         assert_eq!(view.take_landing(), None);
         assert_eq!(view.input(&key(LAND, true)), ScreenAction::None);
-        assert_eq!(view.take_landing(), None, "cleared, not landed");
+        assert_eq!(view.take_landing(), None, "requested, not landed");
         assert_eq!(view.session().expect("flying").landed(), None);
         assert_eq!(nav_target(&view), Some(StellarId(129)));
-        let cleared = "Moon traffic control reads you, you're cleared to land.";
-        assert_eq!(view.message(), Some(cleared));
-        assert_eq!(message(&view), Some(message_drawn(cleared)));
+        assert_eq!(view.message(), None, "requested over it: silent");
         assert_eq!(nav(&view), [hud::NAV_STELLAR, "Moon"], "the HUD shows it");
-        assert_eq!(view.take_sounds(), [], "no sound for clearance");
+        assert_eq!(view.take_sounds(), [], "no sound for a silent request");
+        assert_eq!(view.input(&key(LAND, true)), ScreenAction::None);
+        assert_eq!(view.take_landing(), None, "no approach yet");
 
         view.input(&key(LAND, false));
+        ticks(&mut view, 1);
+        let ship = ship_name(&view);
+        let cleared = format!("Cleared to land, {ship}. Commence final approach.");
+        assert_eq!(view.message(), Some(cleared.as_str()));
+        assert_eq!(message(&view), Some(message_drawn(&cleared)));
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::TrafficControl)]);
         assert_eq!(view.input(&key(LAND, true)), ScreenAction::None);
         assert_eq!(
             view.session().expect("flying").landed(),
@@ -7119,57 +7262,330 @@ mod tests {
     }
 
     #[test]
-    fn every_clearance_has_its_message() {
-        use Clearance::{Denied, Granted, NoTrafficControl};
-        let cases = [
+    fn every_pick_of_the_request_line_reads_as_the_original() {
+        let line = |kind, opening, named| {
+            request_line(kind, "Earth", "Kestrel", RequestPicks { opening, named })
+        };
+        for (kind, opening, named, text) in [
             (
-                false,
-                Granted,
-                "Earth traffic control reads you, you're cleared to land.",
+                DockKind::Planet,
+                0,
+                0,
+                "Earth traffic control reads you, Kestrel. Begin initial approach.",
             ),
             (
-                true,
-                Granted,
-                "Earth dockmaster reads you, you're cleared to dock.",
+                DockKind::Planet,
+                0,
+                1,
+                "Earth traffic control reads you. Begin initial approach.",
             ),
-            (false, NoTrafficControl, "You are cleared to land."),
-            (true, NoTrafficControl, "You are cleared to dock."),
-            (false, Denied, "Landing request denied."),
-            (true, Denied, "Docking request denied."),
-        ];
-        for (station, clearance, text) in cases {
+            (
+                DockKind::Planet,
+                1,
+                0,
+                "Landing request received, Kestrel. Begin initial approach.",
+            ),
+            (
+                DockKind::Planet,
+                2,
+                1,
+                "Landing request received. Begin initial approach.",
+            ),
+            (
+                DockKind::Station,
+                0,
+                0,
+                "Earth dockmaster reads you, Kestrel. Begin initial approach.",
+            ),
+            (
+                DockKind::Station,
+                1,
+                1,
+                "Docking request received. Begin initial approach.",
+            ),
+            (
+                DockKind::Station,
+                2,
+                0,
+                "Docking request received, Kestrel. Begin initial approach.",
+            ),
+            (
+                DockKind::Hypergate,
+                0,
+                0,
+                "Hypergate is energized, Kestrel. Begin initial approach.",
+            ),
+            (
+                DockKind::Hypergate,
+                1,
+                0,
+                "Hypergate is online, Kestrel. Begin initial approach.",
+            ),
+            (
+                DockKind::Hypergate,
+                1,
+                1,
+                "Hypergate is online. Begin initial approach.",
+            ),
+        ] {
             assert_eq!(
-                clearance_message("Earth", station, clearance),
+                line(kind, opening, named),
                 text,
-                "{station} {clearance:?}"
+                "{kind:?} {opening} {named}"
             );
         }
+    }
+
+    #[test]
+    fn every_pick_of_the_greeting_reads_as_the_original() {
+        let greeting = |kind, opening, welcome| {
+            approach_greeting(kind, "Earth", "Kestrel", GreetingPicks { opening, welcome })
+        };
+        for (kind, opening, welcome, text) in [
+            (
+                DockKind::Planet,
+                0,
+                0,
+                "Cleared to land, Kestrel. Commence final approach.",
+            ),
+            (
+                DockKind::Planet,
+                1,
+                1,
+                "Kestrel, you're cleared to land. Welcome to Earth. ",
+            ),
+            (
+                DockKind::Planet,
+                2,
+                0,
+                "You are cleared to land. Commence final approach.",
+            ),
+            (
+                DockKind::Planet,
+                0,
+                1,
+                "Cleared to land, Kestrel. Welcome to Earth. ",
+            ),
+            (
+                DockKind::Station,
+                0,
+                0,
+                "Cleared to dock, Kestrel. Commence final approach.",
+            ),
+            (
+                DockKind::Station,
+                1,
+                0,
+                "Kestrel, you're cleared to dock. Commence final approach.",
+            ),
+            (
+                DockKind::Station,
+                2,
+                1,
+                "You are cleared to dock. Welcome to Earth. ",
+            ),
+            (
+                DockKind::Hypergate,
+                0,
+                0,
+                "Cleared for hypergate entry, Kestrel. ",
+            ),
+            (
+                DockKind::Hypergate,
+                1,
+                1,
+                "Kestrel, you're cleared for hypergate entry. ",
+            ),
+            (
+                DockKind::Hypergate,
+                2,
+                1,
+                "You are cleared for hypergate entry. ",
+            ),
+        ] {
+            assert_eq!(
+                greeting(kind, opening, welcome),
+                text,
+                "{kind:?} {opening} {welcome}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_picks_roll_their_ranges_and_decide_only_their_words() {
+        // A planet: Rand(3), then Rand(2); 0 names the stellar, and 0
+        // adds the ship.
+        for (draws, opening, named) in [([0, 0], 0, 0), ([2, 1], 2, 1), ([1, 0], 1, 0)] {
+            let (script, mut chance) = scripted(&draws);
+            let picks = RequestPicks::roll(DockKind::Planet, &mut chance);
+            assert_eq!(picks, RequestPicks { opening, named });
+            assert_eq!(script.borrow().asked, [3, 2]);
+        }
+        let (script, mut chance) = scripted(&[1, 1]);
+        assert_eq!(
+            RequestPicks::roll(DockKind::Hypergate, &mut chance),
+            RequestPicks {
+                opening: 1,
+                named: 1
+            }
+        );
+        assert_eq!(script.borrow().asked, [2, 2], "a hypergate's Rand(2)");
+        let (script, mut chance) = scripted(&[2, 1]);
+        assert_eq!(
+            GreetingPicks::roll(DockKind::Station, &mut chance),
+            GreetingPicks {
+                opening: 2,
+                welcome: 1
+            }
+        );
+        assert_eq!(script.borrow().asked, [3, 2]);
+        let (script, mut chance) = scripted(&[1]);
+        assert_eq!(
+            GreetingPicks::roll(DockKind::Hypergate, &mut chance).opening,
+            1
+        );
+        assert_eq!(script.borrow().asked, [3], "no second sentence");
+        // Only 0 names, only 0 adds the ship, and anything but 0 welcomes.
+        let line = |opening, named| {
+            request_line(
+                DockKind::Planet,
+                "Earth",
+                "Kestrel",
+                RequestPicks { opening, named },
+            )
+        };
+        assert!(line(0, 1).starts_with("Earth "));
+        assert!(!line(1, 1).contains("Earth"));
+        assert!(!line(2, 1).contains("Earth"));
+        assert!(line(1, 0).contains(", Kestrel"));
+        assert!(!line(1, 1).contains("Kestrel"));
+        let greeting = |welcome| {
+            approach_greeting(
+                DockKind::Planet,
+                "Earth",
+                "Kestrel",
+                GreetingPicks {
+                    opening: 2,
+                    welcome,
+                },
+            )
+        };
+        assert!(greeting(0).ends_with(COMMENCE_FINAL_APPROACH));
+        assert!(greeting(1).ends_with("Welcome to Earth. "));
+        assert!(greeting(2).ends_with("Welcome to Earth. "));
+    }
+
+    #[test]
+    fn the_words_are_the_strings_the_original_reads() {
         assert_eq!(
             [
-                TRAFFIC_CONTROL_READS_YOU,
                 DOCKMASTER_READS_YOU,
-                CLEARED_TO_LAND,
+                DOCKING_REQUEST_RECEIVED,
+                TRAFFIC_CONTROL_READS_YOU,
+                LANDING_REQUEST_RECEIVED,
+                BEGIN_APPROACH,
+                CLEARED_FOR_HYPERGATE,
+                YOURE_CLEARED_FOR_HYPERGATE,
+                YOU_ARE_CLEARED_FOR_HYPERGATE,
+                CLEARED_TO_DOCK_LEAD,
                 CLEARED_TO_DOCK,
-                YOU_ARE_CLEARED_TO_LAND,
                 YOU_ARE_CLEARED_TO_DOCK,
+                CLEARED_TO_LAND_LEAD,
+                CLEARED_TO_LAND,
+                YOU_ARE_CLEARED_TO_LAND,
+                COMMENCE_FINAL_APPROACH,
+                WELCOME_TO,
             ],
             [
-                "traffic control reads you",
                 "dockmaster reads you",
-                "you're cleared to land.",
+                "Docking request received",
+                "traffic control reads you",
+                "Landing request received",
+                "Begin initial approach.",
+                "Cleared for hypergate entry",
+                "you're cleared for hypergate entry. ",
+                "You are cleared for hypergate entry. ",
+                "Cleared to dock",
                 "you're cleared to dock.",
-                "You are cleared to land.",
                 "You are cleared to dock.",
+                "Cleared to land",
+                "you're cleared to land.",
+                "You are cleared to land.",
+                "Commence final approach.",
+                "Welcome to",
             ]
         );
     }
 
     #[test]
-    fn the_clearance_names_the_stellar_selected_and_says_how_it_answered() {
+    fn the_selecting_l_shows_the_requests_line_then_a_tick_near_shows_the_greeting() {
+        // The Moon (129) at (300, −200), the nearer of Sol's two.
+        let mut view = flight();
+        let ship = ship_name(&view);
+        tap(&mut view, LAND);
+        assert_eq!(nav_target(&view), Some(StellarId(129)));
+        let line = format!("Moon traffic control reads you, {ship}. Begin initial approach.");
+        assert_eq!(view.message(), Some(line.as_str()));
+        assert_lasts(&mut view, &line, 250);
+        // Flown within 249 pixels, the approach greets on that tick, as a
+        // message of its own.
+        let mut view = flight_among(vec![site(129, (0.0, -300.0), StellarFlags::CAN_LAND)]);
+        tap(&mut view, LAND);
+        let line = format!("Moon traffic control reads you, {ship}. Begin initial approach.");
+        assert_eq!(view.message(), Some(line.as_str()));
+        view.input(&key(Key::Up, true));
+        let greeting = format!("Cleared to land, {ship}. Commence final approach.");
+        let mut far = true;
+        for _ in 0..200 {
+            let before = view.session().expect("flying").player().position;
+            ticks(&mut view, 1);
+            if view.message() == Some(greeting.as_str()) {
+                let at = view.session().expect("flying").player().position;
+                assert!((at.y + 300.0).trunc().abs() <= 249.0, "{at:?}");
+                assert!((before.y + 300.0).trunc().abs() > 249.0, "{before:?}");
+                far = false;
+                break;
+            }
+            assert_eq!(
+                view.message(),
+                Some(line.as_str()),
+                "{before:?} {greeting:?}"
+            );
+        }
+        assert!(!far, "never greeted");
+        view.input(&key(Key::Up, false));
+        assert_lasts(&mut view, &greeting, 250);
+    }
+
+    #[test]
+    fn holding_l_holds_the_greeting_back_until_it_is_let_go() {
+        let mut view = flight_among(vec![site(129, (6.0, -8.0), StellarFlags::CAN_LAND)]);
+        view.input(&key(LAND, true));
+        assert_eq!(view.message(), None, "requested over it: silent");
+        ticks(&mut view, 5);
+        assert_eq!(view.message(), None, "held");
+        view.input(&key(LAND, false));
+        ticks(&mut view, 1);
+        let ship = ship_name(&view);
+        assert_eq!(
+            view.message(),
+            Some(format!("Cleared to land, {ship}. Commence final approach.").as_str())
+        );
+    }
+
+    #[test]
+    fn an_uninhabited_stellar_out_of_reach_says_too_far_over_no_response() {
         let uninhabited = StellarFlags::CAN_LAND | StellarFlags::UNINHABITED;
+        let mut view = flight_among(vec![site(128, (0.0, -900.0), uninhabited)]);
+        tap(&mut view, LAND);
+        assert_lasts(&mut view, TOO_FAR_PLANET, TOO_FAR_TICKS);
         let mut view = flight_among(vec![site(128, (0.0, 0.0), uninhabited)]);
         tap(&mut view, LAND);
-        assert_lasts(&mut view, "You are cleared to land.", 250);
+        assert_eq!(view.take_landing(), Some(StellarId(128)), "one press");
+    }
+
+    #[test]
+    fn a_denial_says_so_and_selects_anyway() {
         let strict = LandingSite {
             min_status: 1,
             ..site(
@@ -7182,18 +7598,6 @@ mod tests {
         tap(&mut view, LAND);
         assert_eq!(nav_target(&view), Some(StellarId(129)), "selected anyway");
         assert_lasts(&mut view, "Docking request denied.", 250);
-        let mut view = flight();
-        tap(&mut view, LAND);
-        assert_eq!(
-            view.message(),
-            Some("Moon traffic control reads you, you're cleared to land."),
-            "the nearer of Sol's two"
-        );
-        assert_lasts(
-            &mut view,
-            "Moon traffic control reads you, you're cleared to land.",
-            LANDING_TICKS,
-        );
     }
 
     #[test]
@@ -7634,7 +8038,13 @@ mod tests {
         }]);
         assert_eq!(view.take_sounds(), []);
         tap(&mut view, LAND);
-        assert_eq!(view.take_sounds(), [], "clearance is silent");
+        assert_eq!(view.take_sounds(), [], "a request over it is silent");
+        ticks(&mut view, 1);
+        assert_eq!(
+            view.take_sounds(),
+            [Sound::Sim(SimSound::TrafficControl)],
+            "the greeting"
+        );
         tap(&mut view, LAND);
         assert_eq!(
             view.take_sounds(),
@@ -10750,9 +11160,15 @@ mod tests {
 
     /// [`trafficked`] with one ship 129 of AI 3 in 130, over planet 128
     /// at the centre.
+    /// [`trafficked`] with the ship over an uninhabited 128, which it
+    /// lands on in one press, with no tick to bring the traffic in.
     fn trafficked_over_128() -> FakeCatalog {
         FakeCatalog {
-            sites: vec![site(128, (0.0, 0.0), StellarFlags::CAN_LAND)],
+            sites: vec![site(
+                128,
+                (0.0, 0.0),
+                StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+            )],
             ..trafficked(&[130], 1, 129, 3)
         }
     }
@@ -10776,7 +11192,7 @@ mod tests {
         view.tick(TICK);
         let before = npc_states(&view)[0].position;
         assert_eq!(before, Vec2::new(100.0, -100.0));
-        land_now(&mut view);
+        tap(&mut view, LAND);
         view.take_off().expect("took off");
         let after = npc_states(&view)[0].position;
         assert_eq!(after, Vec2::new(-100.0, 100.0));
@@ -10802,7 +11218,7 @@ mod tests {
         let mut view = FlightView::new(trafficked_over_128())
             .with_chance(chance)
             .with_behaviour(Rc::new(Still));
-        land_now(&mut view);
+        tap(&mut view, LAND);
         assert!(view.take_landing().is_some(), "landed before any traffic");
         view.take_off().expect("took off");
         let after = npc_states(&view)[0].position;
@@ -10841,8 +11257,9 @@ mod tests {
     #[test]
     fn the_fight_asks_the_disable_rule_given_each_step_in_flight() {
         let rule = Rc::new(Counting::default());
-        let mut view = flight_among(vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)])
-            .with_disable_rule(rule.clone());
+        let uninhabited = StellarFlags::CAN_LAND | StellarFlags::UNINHABITED;
+        let mut view =
+            flight_among(vec![site(140, (0.0, 0.0), uninhabited)]).with_disable_rule(rule.clone());
         view.tick(TICK);
         assert_eq!(rule.asked.get(), 1, "the player, the only ship");
         ticks(&mut view, 2);
@@ -10851,8 +11268,8 @@ mod tests {
         ticks(&mut view, 2);
         assert_eq!(rule.asked.get(), 3, "not while the map is open");
         view.input(&key(MAP_KEY, true));
-        land_now(&mut view);
-        assert!(view.take_landing().is_some());
+        tap(&mut view, LAND);
+        assert!(view.take_landing().is_some(), "one press, uninhabited");
         ticks(&mut view, 2);
         assert_eq!(rule.asked.get(), 3, "not while landed");
     }
@@ -12323,7 +12740,11 @@ mod tests {
     /// missile it fires once, 5 pixels a tick.
     fn defending() -> FakeCatalog {
         let mut catalog = armed(1, &[QUAD]);
-        catalog.sites = vec![site(140, (0.0, 0.0), StellarFlags::CAN_LAND)];
+        catalog.sites = vec![site(
+            140,
+            (0.0, 0.0),
+            StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+        )];
         catalog.weapons.push(nova_sim::WeaponRecord {
             reload: 5,
             count: 12,
@@ -12366,8 +12787,8 @@ mod tests {
         ticks(&mut view, 2);
         assert_eq!(rule.asked.get(), 3, "not while the map is open");
         view.input(&key(MAP_KEY, true));
-        land_now(&mut view);
-        assert!(view.take_landing().is_some());
+        tap(&mut view, LAND);
+        assert!(view.take_landing().is_some(), "one press, uninhabited");
         ticks(&mut view, 2);
         assert_eq!(rule.asked.get(), 3, "not while landed");
     }
@@ -16803,7 +17224,7 @@ mod tests {
             assert_eq!(nav_target(&view), Some(StellarId(128)), "{slot_key:?}");
             tap(&mut view, slot_key);
             assert_eq!(nav_target(&view), Some(StellarId(129)), "{slot_key:?}");
-            tap(&mut view, LAND);
+            land_now(&mut view);
             assert_eq!(view.take_landing(), Some(StellarId(129)), "{slot_key:?}");
         }
     }
@@ -16850,7 +17271,7 @@ mod tests {
         let b = on_screen(&view, (40.0, 0.0));
         click(&mut view, b);
         assert_eq!(nav_target(&view), Some(StellarId(129)));
-        tap(&mut view, LAND);
+        land_now(&mut view);
         assert_eq!(view.take_landing(), Some(StellarId(129)));
     }
 
@@ -17761,14 +18182,6 @@ mod tests {
             arrival_message("Sol", DATE, true)
         );
         assert_eq!(
-            hypergate_clearance_message(true),
-            "Hypergate is energized. Begin initial approach."
-        );
-        assert_eq!(
-            hypergate_clearance_message(false),
-            "Hypergate is online. Begin initial approach."
-        );
-        assert_eq!(
             gate_refusal_message(GateKind::Hypergate),
             "Your ship is unable to enter this hypergate - it is offline."
         );
@@ -17781,27 +18194,19 @@ mod tests {
     }
 
     #[test]
-    fn hypergate_clearance_is_energized_or_online_by_a_roll() {
+    fn a_hypergates_greeting_is_one_of_its_own_by_a_roll() {
         let mut view = FlightView::new(gated());
         tap(&mut view, LAND);
-        assert_eq!(
-            view.message(),
-            Some("Hypergate is energized. Begin initial approach."),
-            "the first outcome"
-        );
+        assert_eq!(view.message(), None, "requested over it: silent");
+        ticks(&mut view, 1);
+        let ship = ship_name(&view);
+        let first = format!("Cleared for hypergate entry, {ship}. ");
+        assert_eq!(view.message(), Some(first.as_str()), "the first outcome");
         let last: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Always::default()));
         let mut view = FlightView::new(gated()).with_chance(SharedChance::new(last));
         tap(&mut view, LAND);
-        assert_eq!(
-            view.message(),
-            Some("Hypergate is online. Begin initial approach."),
-            "the second outcome"
-        );
-        assert_lasts(
-            &mut view,
-            "Hypergate is online. Begin initial approach.",
-            250,
-        );
+        ticks(&mut view, 1);
+        assert_lasts(&mut view, "You are cleared for hypergate entry. ", 250);
     }
 
     #[test]
@@ -18009,6 +18414,7 @@ mod tests {
         catalog.gates[0].links = [None; 8];
         let mut view = FlightView::new(catalog);
         tap(&mut view, LAND);
+        ticks(&mut view, 1);
         let cleared = view.message().map(str::to_owned);
         tap(&mut view, LAND);
         assert!(!view.map_open());

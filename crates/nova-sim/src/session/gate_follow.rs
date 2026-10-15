@@ -260,6 +260,7 @@ pub(super) mod tests {
         session.player.velocity = Vec2::ZERO;
         session.nav = crate::navigation::NavMode::Off;
         session.land().expect("selects");
+        session.dock_approach();
         assert!(matches!(session.land(), Ok(LandPress::AtGate { kind: at, .. }) if at == kind));
         let out = match kind {
             GateKind::Hypergate => session.enter_hypergate(Some(SystemId(131)), catalog, chance),
@@ -403,6 +404,7 @@ pub(super) mod tests {
         session.player.velocity = Vec2::ZERO;
         session.nav = crate::navigation::NavMode::Off;
         session.land().expect("selects");
+        session.dock_approach();
         session.land().expect("at the gate");
         let out = match kind {
             GateKind::Hypergate => session.enter_hypergate(Some(SystemId(131)), catalog, chance),

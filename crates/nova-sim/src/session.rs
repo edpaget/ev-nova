@@ -344,6 +344,7 @@ mod aux_ships;
 mod brackets;
 mod buoys;
 mod cargo_boxes;
+mod clearance;
 mod cloaks;
 mod control;
 mod course;
@@ -525,7 +526,7 @@ pub enum StellarPick {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LandPress {
     /// What the [`landing`](crate::landing) rules gave: a stellar
-    /// selected, or one landed on and docked at.
+    /// requested, or one landed on and docked at.
     Outcome(LandOutcome),
     /// The ship is cleared and over a hypergate or wormhole, and the
     /// entry awaits [`Session::enter_hypergate`] or
@@ -755,6 +756,14 @@ pub struct Session {
     /// `double_time` module); not saved, as the original's `_doubleTime`
     /// is a global, not a pilot field.
     double_time: bool,
+    /// The dock request the land key made, if any: the original's
+    /// `_dockTarget` and `_dockPermission` (see the `clearance` module);
+    /// not saved, as a flight start sets both to −1.
+    dock: Option<crate::clearance::DockRequest>,
+    /// Whether the land key is held, as the view last said: the
+    /// original's `_dockTryFlag`, which holds the dock approach back (see
+    /// the `clearance` module).
+    land_key: bool,
     /// The Red Alert's state (see the `red_alert` module); not saved, as
     /// the original's pilot file does not keep it.
     red_alert: RedAlert,
@@ -1111,6 +1120,8 @@ impl Session {
             frame: 0,
             pass_frame: 0,
             double_time: false,
+            dock: None,
+            land_key: false,
             red_alert: RedAlert::default(),
             // `_ResetPlayer` @0x1d7cf, at every flight start.
             tutorial: crate::tutorial::Tutorial::SEASONED,
@@ -1360,9 +1371,10 @@ impl Session {
     /// and on a due frame ([`market::junk_step_due`]) steps the held
     /// tribbles and perishables in the space the goods and the mission
     /// cargo aboard leave, unless the player is destroyed. It then
-    /// runs the Red Alert on that frame (see the `red_alert` module) and
-    /// the tutorial's hint block (see the `tutorial` module), and flies
-    /// the target brackets in (see the `brackets` module). A
+    /// runs the Red Alert on that frame (see the `red_alert` module), the
+    /// tutorial's hint block (see the `tutorial` module) and the dock
+    /// approach (see the `clearance` module), and flies the target
+    /// brackets in (see the `brackets` module). A
     /// landed tick moves none of them.
     ///
     /// This is the player's part of the advance pass; double time's
@@ -1408,6 +1420,16 @@ impl Session {
         self.tutorial_tick(frame);
         self.brackets_tick();
         self.boxes_tick();
+        self.move_player(controls);
+        // After the ship moves, as `_HandlePlayer` runs the approach
+        // (@0x6a965) after it moves the ship (@0x6864d); see the
+        // `clearance` module.
+        self.dock_approach();
+    }
+
+    /// The ship's motion in [`Session::fly_player`]: by its condition and
+    /// the jump under way, under `controls`, then the fuel's regeneration.
+    fn move_player(&mut self, controls: Controls) {
         let controls = match self.condition {
             Condition::Intact => controls,
             Condition::Disabled | Condition::Dying { .. } => {
@@ -2547,21 +2569,32 @@ impl Session {
     }
 
     /// Presses the land key, unless a jump is under way, its pre-jump stage
-    /// included: as the
-    /// [`landing`](crate::landing) rules say, with the stellar selected
-    /// and traffic control's clearance
+    /// included: as the [`landing`](crate::landing) rules say
+    /// ([`land_or_select`]), with the stellar selected, the dock request
+    /// (see the `clearance` module) and traffic control's clearance
     /// ([`landing::cleared`](crate::landing::cleared)) of the pilot's
     /// standing: its legal record, the `Require` its ranks meet, its
-    /// missions' stellars and the blessing table (see the `ranks` module),
-    /// read as the session's `blessing_landing` rule says. With no stellar
-    /// selected in nav mode 2, a press selects one there, in silence,
-    /// starting its brackets' fly-in (@0x6a8ed-0x6a932), and lands on
-    /// nothing. A press that lands docks the ship at the stellar's centre,
-    /// at rest, its heading and reserves unchanged, the selection kept, as
-    /// the original's landing writes neither word; the take-off lets go
-    /// of it, so that once it takes off L requests clearance again.
-    /// Otherwise the ship flies on, its selection kept, and the refusal
-    /// says why.
+    /// missions' stellars, the blessing table (see the `ranks` module),
+    /// read as the session's `blessing_landing` rule says, and a request
+    /// already granted.
+    ///
+    /// Landing takes two presses, as the original's does: a press at a
+    /// stellar not yet requested requests it ([`LandOutcome::Requested`]),
+    /// saying the request's line ([`SimMessage::DockRequested`], with
+    /// [`SimSound::TrafficControl`]) away from it, or nothing within 249
+    /// pixels; a denial ([`LandingRefusal::Denied`]) sounds traffic
+    /// control and drops the request. The dock approach then clears the
+    /// request on the ticks that follow ([`SimMessage::DockCleared`]), and
+    /// a later press lands. An uninhabited stellar answers every press
+    /// [`SimMessage::NoResponse`] and lands in that press when it can.
+    /// With no stellar selected in nav mode 2, a press selects one there,
+    /// in silence, starting its brackets' fly-in (@0x6a8ed-0x6a932), and
+    /// requests it in the same press. A press that lands docks the ship
+    /// at the stellar's centre, at rest, its heading and reserves
+    /// unchanged, the selection kept, as the original's landing writes
+    /// neither word; the take-off lets go of it, so that once it takes
+    /// off L requests clearance again. Otherwise the ship flies on, its
+    /// selection kept, and the refusal says why.
     ///
     /// A press that would land on a hypergate or wormhole
     /// ([`GateKind::of`] its `Flags2`) enters it instead: it does not dock
@@ -2577,25 +2610,21 @@ impl Session {
         }
         let blessing = self.blessing();
         let reading = self.rules.source_for(RuleKey::BlessingLanding);
-        let outcome = land_or_select(
+        let press = land_or_select(
             self.nav_target(),
+            self.dock,
             &self.player,
             &self.sites,
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
             |site| self.landing_reach(site),
-        )?;
-        match outcome {
-            LandOutcome::Selected { stellar, .. } => {
-                self.nav = NavMode::Stellar(Some(stellar));
-                self.nav_fly_in.start();
+        );
+        let outcome = self.apply_press(press)?;
+        if let LandOutcome::Landed(stellar) = outcome {
+            if let Some(kind) = self.gate_kind(stellar) {
+                self.gate = Some(stellar);
+                return Ok(LandPress::AtGate { stellar, kind });
             }
-            LandOutcome::Landed(stellar) => {
-                if let Some(kind) = self.gate_kind(stellar) {
-                    self.gate = Some(stellar);
-                    return Ok(LandPress::AtGate { stellar, kind });
-                }
-                self.dock(stellar);
-            }
+            self.dock(stellar);
         }
         Ok(outcome.into())
     }
@@ -2988,8 +3017,10 @@ impl Session {
         self.raise(StoryEvent::TookOff { stellar });
         // The dock request's rebuild point (@0x674c7, @0x67653).
         self.rebuild_stellars();
-        // Its tail: the nav selection let go, the mode kept, then the
-        // course cued (@0x674d2-0x674d8; see the `nav` module).
+        // Its tail: the dock request dropped (@0x6374a-0x63759; see the
+        // `clearance` module), the nav selection let go, the mode kept,
+        // then the course cued (@0x674d2-0x674d8; see the `nav` module).
+        self.dock = None;
         self.deselect();
         self.cue_course();
         Some(stellar)
@@ -3084,7 +3115,9 @@ impl Session {
             meets_require: self.contributed() & require == require,
             mission_stellar,
             blessed: blessing.blesses(site.govt, crate::rank::Blessed::Landing),
-            granted: false,
+            granted: self
+                .dock
+                .is_some_and(|request| request.permission >= crate::clearance::CLEARED),
         }
     }
 
@@ -4785,7 +4818,7 @@ pub(super) mod tests {
         MIN_JUMP_DISTANCE, RouteError, StarMap,
     };
     use crate::landing::StellarFlags;
-    use crate::landing::{Clearance, LandOutcome, LandingRefusal};
+    use crate::landing::{LandOutcome, LandingRefusal};
     use crate::market::{Direction, Good, Lot, Order, TradeRefusal};
     use crate::pre_jump::slow_enough;
     use crate::reserves::{Gauge, Reserves};
@@ -5129,15 +5162,20 @@ pub(super) mod tests {
         for _ in 0..20 {
             session.tick(THRUST);
         }
+        assert!(matches!(
+            session.land(),
+            Ok(LandPress::Outcome(LandOutcome::Requested { .. }))
+        ));
+        session.dock_approach();
         let flying = *session.player();
-        let refusal = land_now(&mut session);
+        let refusal = session.land().map(|_| StellarId(0));
         assert_eq!(session.nav_target(), Some(StellarId(128)), "kept");
         assert_eq!(
             refusal,
             crate::landing::check_landing(
                 &flying,
                 &planet(128, 30.0, -40.0),
-                |_| true,
+                crate::clearance::CLEARED,
                 crate::landing::LandingReach::Box(175.0)
             )
             .map(|_| StellarId(128))
@@ -5162,10 +5200,9 @@ pub(super) mod tests {
         let before = *session.player();
         assert_eq!(
             session.land(),
-            Ok(LandOutcome::Selected {
+            Ok(LandOutcome::Requested {
                 stellar: StellarId(128),
                 station: false,
-                clearance: Clearance::Granted,
             }
             .into())
         );
@@ -5179,12 +5216,23 @@ pub(super) mod tests {
         assert_eq!(*session.player(), before);
         assert!(!session.take_save_due());
         assert_eq!(session.take_sounds(), []);
+        assert_eq!(session.take_messages(), [], "within 249 px: silent");
     }
 
     #[test]
-    fn the_second_l_lands_on_the_target_and_keeps_it_selected() {
+    fn l_after_the_approach_lands_on_the_target_and_keeps_it_selected() {
         let mut session = Session::start(&catalog()).expect("starts");
-        session.land().expect("selects");
+        session.land().expect("requests");
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::TooFar {
+                stellar: StellarId(128),
+                station: false,
+            }),
+            "no approach yet"
+        );
+        session.tick(Controls::default());
+        session.take_sounds();
         assert_eq!(
             session.land(),
             Ok(LandOutcome::Landed(StellarId(128)).into())
@@ -5206,13 +5254,13 @@ pub(super) mod tests {
         session.take_off(&NoTraffic, &mut NeverFires);
         assert!(matches!(
             session.land(),
-            Ok(LandPress::Outcome(LandOutcome::Selected { .. }))
+            Ok(LandPress::Outcome(LandOutcome::Requested { .. }))
         ));
         assert_eq!(session.landed(), None);
     }
 
     #[test]
-    fn l_with_a_target_picked_by_its_slot_lands_on_it_at_once() {
+    fn l_with_a_target_picked_by_its_slot_requests_it_and_lands_after_the_approach() {
         let mut session = Session::start(&catalog()).expect("starts");
         assert_eq!(
             session.select_stellar(StellarPick::Slot(0)),
@@ -5220,14 +5268,33 @@ pub(super) mod tests {
         );
         assert_eq!(
             session.land(),
+            Ok(LandOutcome::Requested {
+                stellar: StellarId(128),
+                station: false,
+            }
+            .into())
+        );
+        session.dock_approach();
+        assert_eq!(
+            session.land(),
             Ok(LandOutcome::Landed(StellarId(128)).into())
         );
-        // Planet 129 is far away: L refuses and keeps it.
+        // Planet 129 is far away: L requests it, then refuses as too far
+        // and keeps it.
         session.take_off(&NoTraffic, &mut NeverFires);
         assert_eq!(
             session.select_stellar(StellarPick::Slot(1)),
             Some(StellarId(129))
         );
+        assert_eq!(
+            session.land(),
+            Ok(LandOutcome::Requested {
+                stellar: StellarId(129),
+                station: false,
+            }
+            .into())
+        );
+        session.dock_approach();
         assert_eq!(
             session.land(),
             Err(LandingRefusal::TooFar {
@@ -5245,22 +5312,18 @@ pub(super) mod tests {
         let mut session = Session::fly(&catalog, on_record(&catalog)).expect("flies");
         assert_eq!(
             session.land(),
-            Ok(LandOutcome::Selected {
+            Err(LandingRefusal::Denied {
                 stellar: StellarId(128),
                 station: false,
-                clearance: Clearance::Denied,
-            }
-            .into())
+                min_status: 10,
+            })
         );
         assert_eq!(session.nav_target(), Some(StellarId(128)), "still selected");
         let catalog = governed([None, None], Some(LAWFUL));
         let mut session = Session::fly(&catalog, on_record(&catalog)).expect("flies");
         assert!(matches!(
             session.land(),
-            Ok(LandPress::Outcome(LandOutcome::Selected {
-                clearance: Clearance::Granted,
-                ..
-            }))
+            Ok(LandPress::Outcome(LandOutcome::Requested { .. }))
         ));
     }
 
@@ -6501,6 +6564,7 @@ pub(super) mod tests {
         assert!(!session.thrusting(), "coasting");
         session.tick(THRUST);
         session.land().expect("selects");
+        session.dock_approach();
         assert!(matches!(
             session.land(),
             Ok(LandPress::Outcome(LandOutcome::Landed(_)))
@@ -18639,7 +18703,7 @@ pub(super) mod tests {
         assert_eq!(session.nav_target(), Some(StellarId(131)));
 
         let mut session = Session::start(&catalog).expect("starts");
-        let LandPress::Outcome(LandOutcome::Selected { stellar, .. }) =
+        let LandPress::Outcome(LandOutcome::Requested { stellar, .. }) =
             session.land().expect("selects")
         else {
             panic!("L selects");
@@ -18702,10 +18766,7 @@ pub(super) mod tests {
             Some(StellarId(128))
         );
         // The ship starts over 128, at rest.
-        assert_eq!(
-            session.land(),
-            Ok(LandOutcome::Landed(StellarId(128)).into())
-        );
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
     }
 
     #[test]
@@ -18997,14 +19058,17 @@ pub(super) mod tests {
         }
     }
 
-    /// [`gated`]'s session, with L pressed twice over the hypergate: the
-    /// entry awaits the player's pick.
+    /// [`gated`]'s session, with L pressed over the hypergate, the dock
+    /// approach run and L pressed again: the entry awaits the player's
+    /// pick.
     pub(super) fn at_gate(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
+        let marks = session.chatter_marks();
         assert!(matches!(
             session.land(),
-            Ok(LandPress::Outcome(LandOutcome::Selected { .. }))
+            Ok(LandPress::Outcome(LandOutcome::Requested { .. }))
         ));
+        session.dock_approach();
         assert_eq!(
             session.land(),
             Ok(LandPress::AtGate {
@@ -19012,6 +19076,7 @@ pub(super) mod tests {
                 kind: GateKind::Hypergate,
             })
         );
+        session.forget_dock_chatter(marks);
         session
     }
 
@@ -19230,10 +19295,13 @@ pub(super) mod tests {
         }
     }
 
-    /// `catalog`'s session with L pressed twice over the wormhole.
+    /// `catalog`'s session with L pressed over the wormhole, the dock
+    /// approach run, and L pressed again.
     pub(super) fn at_wormhole(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
+        let marks = session.chatter_marks();
         session.land().expect("clearance");
+        session.dock_approach();
         assert_eq!(
             session.land(),
             Ok(LandPress::AtGate {
@@ -19241,6 +19309,7 @@ pub(super) mod tests {
                 kind: GateKind::Wormhole,
             })
         );
+        session.forget_dock_chatter(marks);
         session
     }
 
@@ -20837,10 +20906,11 @@ pub(super) mod tests {
     /// `catalog`'s session with 131 and 134 hidden, so the refresh moves
     /// the player into 131 made visible, the chain head at their place,
     /// which owns nothing (@0x998f1-0x99a36): 430 is held only by the
-    /// rescue ([`OverlaidGalaxy::holder`]). Then L pressed twice over the
-    /// wormhole.
+    /// rescue ([`OverlaidGalaxy::holder`]). Then L pressed over the
+    /// wormhole, the dock approach run, and L pressed again.
     fn at_rescued_wormhole(catalog: &FakePilotCatalog) -> Session {
         let mut session = Session::start(catalog).expect("starts");
+        let marks = session.chatter_marks();
         hide(&mut session, catalog, &[131, 134]);
         assert_eq!(session.system(), SystemId(131));
         let listers = [SystemId(131)];
@@ -20851,6 +20921,7 @@ pub(super) mod tests {
             "rescued"
         );
         session.land().expect("clearance");
+        session.dock_approach();
         assert_eq!(
             session.land(),
             Ok(LandPress::AtGate {
@@ -20858,6 +20929,7 @@ pub(super) mod tests {
                 kind: GateKind::Wormhole,
             })
         );
+        session.forget_dock_chatter(marks);
         session
     }
 

@@ -3926,12 +3926,14 @@ pub(super) mod tests {
 
     const LAND: Key = Key::Char('l');
 
-    /// Presses L twice in flight: the first requests clearance, the
-    /// second lands.
+    /// Presses L twice in flight: the first requests clearance, a tick
+    /// lets the dock approach clear it, and the second lands.
     fn land_twice(screen: &mut AppScreen) {
-        for pressed in [true, false, true] {
+        for pressed in [true, false] {
             assert_eq!(screen.input(&key(LAND, pressed)), ScreenAction::None);
         }
+        screen.tick(Duration::from_millis(50));
+        assert_eq!(screen.input(&key(LAND, true)), ScreenAction::None);
     }
 
     /// Enters flight and lands with two L presses.
@@ -4149,9 +4151,13 @@ pub(super) mod tests {
         land(&mut screen);
         assert_eq!(
             screen.take_sounds(),
-            [Sound::Sim(SimSound::Landed {
-                stellar_sound: None
-            })]
+            [
+                Sound::Sim(SimSound::TrafficControl),
+                Sound::Sim(SimSound::Landed {
+                    stellar_sound: None
+                })
+            ],
+            "the greeting, then the landing"
         );
         let leave = spaceport(&screen)
             .dialog()

@@ -88,8 +88,13 @@
 //! (@0x68712-0x68718, @0x6f41b-0x6f421). The landed `M` / `N`'s +0x6c, the
 //! stellar docked at (@0x156f2-0x15709), shows nowhere while docked and
 //! the take-off lets go of it. Mode 4, the hypergate map's, is never
-//! drawn. `_dockTarget` / `_dockPermission`, which Nav Off and H reset,
-//! have no counterpart: the landing clearance keeps no state here.
+//! drawn.
+//!
+//! **The dock request** (`_dockTarget` / `_dockPermission`, see the
+//! `clearance` module) is dropped by Nav Off, by a stellar key or a click
+//! that changes the selection or the mode, and on every frame in mode 3;
+//! the land key's own selection keeps it, and so does a script's `M` or
+//! `N`.
 
 use super::Session;
 use crate::StellarPick;
@@ -170,7 +175,8 @@ impl Session {
     }
 
     /// Presses Nav Off (backquote): the nav system off, the course kept,
-    /// with [`SimSound::NavSelected`] on every press. During a jump
+    /// the dock request dropped (@0x69b2f-0x69b3c), with
+    /// [`SimSound::NavSelected`] on every press. During a jump
     /// (pre-jump stage too) nothing changes and it says so.
     pub fn nav_off(&mut self) -> bool {
         if self.jump.is_some() {
@@ -178,6 +184,7 @@ impl Session {
         }
         self.sounds.push(SimSound::NavSelected);
         self.nav = NavMode::Off;
+        self.dock = None;
         true
     }
 
@@ -218,8 +225,9 @@ impl Session {
     ///
     /// A key that finds a stellar raises [`SimSound::NavSelected`], even
     /// for the one selected. Selecting changes the mode to 2 and starts
-    /// the brackets' fly-in ([`Session::nav_brackets`]) only when it is
-    /// not the stellar selected in mode 2 already (@0x69ec4-0x69ed6). A
+    /// the brackets' fly-in ([`Session::nav_brackets`]), and drops the dock
+    /// request (@0x69efd-0x69f12, @0x6a6e7-0x6a6fc), only when it is not
+    /// the stellar selected in mode 2 already (@0x69ec4-0x69ed6). A
     /// click on that stellar does nothing at all, and makes no sound
     /// (@0x6a68f-0x6a69d).
     pub fn select_stellar(&mut self, pick: StellarPick) -> Option<StellarId> {
@@ -241,6 +249,7 @@ impl Session {
         if !selected {
             self.nav_fly_in.start();
             self.nav = NavMode::Stellar(Some(picked));
+            self.dock = None;
         }
         Some(picked)
     }
@@ -565,7 +574,7 @@ mod tests {
             session.nav = before;
             assert!(matches!(
                 session.land(),
-                Ok(LandPress::Outcome(LandOutcome::Selected { .. }))
+                Ok(LandPress::Outcome(LandOutcome::Requested { .. }))
             ));
             assert_eq!(session.nav_mode(), stellar(128), "{before:?}");
             assert!(

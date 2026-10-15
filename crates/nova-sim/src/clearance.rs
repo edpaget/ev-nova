@@ -1,6 +1,6 @@
 //! The dock request and the dock approach: the original's `_dockTarget`
 //! and `_dockPermission` ([`DockRequest`]), which the land key sets
-//! (`_HandlePlayerDockRequest`, see [`land_or_select`]) and the approach
+//! (`_HandlePlayerDockRequest`, see [`land_or_select`](crate::land_or_select)) and the approach
 //! counts on every flight frame (`_HandlePlayerDockApproach`
 //! @0x647a6-0x64fff, [`approach`]). All addresses are in `EV Nova.app`'s
 //! `EV Nova` (i386).

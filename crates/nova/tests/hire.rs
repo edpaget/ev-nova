@@ -564,6 +564,19 @@ impl Game {
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
 
+    /// Sends four redraws, at least a tick of flight, for the dock
+    /// approach to clear a request. The nav brackets' corners (`cicn`
+    /// 10000-10003), which the press's selection draws, may be missing
+    /// from the fixture, so the frames' image failures are not checked.
+    fn approach(&mut self) {
+        for _ in 0..4 {
+            self.frames += 1;
+            let elapsed = Duration::from_nanos(self.frames * 1_000_000_000 / 60);
+            self.send(WindowEvent::Redraw { elapsed });
+        }
+        let _ = self.app.take_failures();
+    }
+
     fn showing(&self) -> Showing {
         self.app.screen().showing()
     }
@@ -780,6 +793,7 @@ fn a_pilot_hires_an_escort_in_the_bar_and_it_follows_and_shows_its_pay_after_a_r
     game.frame();
     // L requests clearance, a second L lands.
     game.tap(Key::Char('l'));
+    game.approach();
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport);
 
@@ -834,6 +848,7 @@ fn a_pilot_hires_an_escort_in_the_bar_and_it_follows_and_shows_its_pay_after_a_r
     // Landed again it is saved; a new app opens it still hired, and its
     // hail shows its pay. L requests clearance, a second L lands.
     game.tap(Key::Char('l'));
+    game.approach();
     game.tap(Key::Char('l'));
     assert_eq!(game.showing(), Showing::Spaceport);
     assert_eq!(saved(&store).escorts()[0].wage, Some(100));

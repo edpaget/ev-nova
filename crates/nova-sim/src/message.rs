@@ -2,6 +2,7 @@
 //! the words. The view decides what each one says on the message line.
 
 use crate::catalog::{JunkId, OutfitId, ShipId, StellarId, SystemId};
+use crate::clearance::DockKind;
 use crate::tutorial::TutorialHint;
 
 /// Something a [`Session`](crate::Session) did that the player is told of.
@@ -114,6 +115,28 @@ pub enum SimMessage {
     /// A first-flight tutorial hint (`_HandlePlayer` @0x7093d-0x70ea2; see
     /// [`tutorial`](crate::tutorial)).
     Tutorial(TutorialHint),
+    /// The land key requested docking away from the stellar, and traffic
+    /// control cleared it: the request's line, "… Begin initial
+    /// approach." (`_HandlePlayerDockRequest` @0x67a41-0x67c46; see
+    /// [`clearance`](crate::clearance)).
+    DockRequested {
+        /// The stellar.
+        stellar: StellarId,
+        /// How the line words it.
+        kind: DockKind,
+    },
+    /// The land key found the stellar uninhabited: "No response.", `STR#`
+    /// 2002 #53 (`_HandlePlayerDockRequest` @0x66b51-0x66bcd).
+    NoResponse,
+    /// The dock approach cleared the pilot: its greeting, "… cleared to
+    /// land." (`_HandlePlayerDockApproach` @0x64975-0x64e8e; see
+    /// [`clearance`](crate::clearance)).
+    DockCleared {
+        /// The stellar.
+        stellar: StellarId,
+        /// How the greeting words it.
+        kind: DockKind,
+    },
 }
 
 impl SimMessage {
@@ -150,6 +173,11 @@ impl SimMessage {
     ///   @0x63727).
     /// - [`Tutorial`](Self::Tutorial): 512 (0x200, `_HandlePlayer`
     ///   @0x70b8f, @0x70d28, @0x70ddf, @0x70e8d).
+    /// - [`DockRequested`](Self::DockRequested) and
+    ///   [`NoResponse`](Self::NoResponse): 250 (`_HandlePlayerDockRequest`
+    ///   @0x67c46, @0x66bcd).
+    /// - [`DockCleared`](Self::DockCleared): 250
+    ///   (`_HandlePlayerDockApproach` @0x64e8e).
     #[must_use]
     pub fn ticks(&self) -> u16 {
         match self {
@@ -169,7 +197,11 @@ impl SimMessage {
             | Self::CargoJettisoned
             | Self::NonMissionCargoJettisoned
             | Self::TookOff { .. } => 240,
-            Self::EscortRepaired | Self::FighterRepaired => 250,
+            Self::EscortRepaired
+            | Self::FighterRepaired
+            | Self::DockRequested { .. }
+            | Self::NoResponse
+            | Self::DockCleared { .. } => 250,
             Self::Buoy(_) => 480,
             Self::Tutorial(_) => 512,
         }
@@ -213,6 +245,21 @@ mod tests {
             ),
             (SimMessage::Tutorial(TutorialHint::Hyperspace), 512),
             (SimMessage::Tutorial(TutorialHint::FarEnough), 512),
+            (
+                SimMessage::DockRequested {
+                    stellar: StellarId(128),
+                    kind: DockKind::Planet,
+                },
+                250,
+            ),
+            (SimMessage::NoResponse, 250),
+            (
+                SimMessage::DockCleared {
+                    stellar: StellarId(128),
+                    kind: DockKind::Hypergate,
+                },
+                250,
+            ),
             (
                 SimMessage::IllegalJunk {
                     scanner: ShipId(128),

@@ -145,6 +145,7 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Sim(SimSound::DownedMissionFailed) => {
                     self.play(self.table.downed_mission_failed);
                 }
+                Sound::Sim(SimSound::TrafficControl) => self.play(self.table.traffic_control),
                 Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
                 Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
                 Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
@@ -662,6 +663,28 @@ mod tests {
         core.set_sound(false);
         drain(&log);
         core.update(Some(Showing::ShipBrowser), &DOWNED);
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn traffic_control_beeps_its_table_entry() {
+        const ANSWERED: [Sound; 1] = [Sound::Sim(SimSound::TrafficControl)];
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::ShipBrowser), &ANSWERED);
+        assert_eq!(drain(&log), [play(151, 0.5)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            traffic_control: Some(SoundId(303)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(Some(Showing::ShipBrowser), &ANSWERED);
+        assert_eq!(drain(&log), [play(303, 1.0)], "the table's");
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::ShipBrowser), &ANSWERED);
         assert_eq!(drain(&log), [], "sound off");
     }
 

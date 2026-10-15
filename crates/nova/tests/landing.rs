@@ -374,9 +374,10 @@ impl Harness {
     }
 
     /// Presses L twice, as the player lands: the first requests clearance,
-    /// the second lands.
+    /// a few frames let the dock approach clear it, and the second lands.
     fn land(&mut self) {
         self.press_physical(KeyCode::KeyL);
+        self.approach();
         self.press_physical(KeyCode::KeyL);
     }
 
@@ -427,6 +428,19 @@ impl Harness {
         assert_eq!(self.app.take_failures(), []);
         (*self.gpu.submits().last().expect("a frame")).clone()
     }
+
+    /// Sends four redraws, at least a tick of flight, for the dock
+    /// approach to clear a request. The nav brackets' corners (`cicn`
+    /// 10000-10003), which the press's selection draws, may be missing
+    /// from the fixture, so the frames' image failures are not checked.
+    fn approach(&mut self) {
+        for _ in 0..4 {
+            self.frames += 1;
+            let elapsed = Duration::from_millis(16 * self.frames);
+            self.send(WindowEvent::Redraw { elapsed });
+        }
+        let _ = self.app.take_failures();
+    }
 }
 
 fn texts(frame: &Frame) -> Vec<String> {
@@ -468,8 +482,9 @@ fn l_over_the_planet_shows_its_spaceport_with_only_its_services() {
     assert_eq!(
         harness.showing(),
         Showing::Flight,
-        "cleared, not yet landed"
+        "requested, not yet landed"
     );
+    harness.approach();
     harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Spaceport);
     let frame = harness.frame();
@@ -650,11 +665,14 @@ fn landing_and_leaving_play_their_sounds_and_the_music_follows_the_screen() {
     );
     harness.frame();
 
-    // Requesting clearance is silent.
+    // Requesting clearance over the planet is silent; the approach's
+    // greeting sounds traffic control's beep.
     harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Flight);
     assert_eq!(drain(&log), []);
-    // The clearance beep, then the planet's own sound; the music plays on.
+    harness.approach();
+    assert_eq!(drain(&log), [play(151)], "traffic control");
+    // The landing beep, then the planet's own sound; the music plays on.
     harness.press_physical(KeyCode::KeyL);
     assert_eq!(harness.showing(), Showing::Spaceport);
     assert_eq!(drain(&log), [play(151), play(LANDING_SOUND)]);
