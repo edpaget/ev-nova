@@ -398,8 +398,8 @@ pub use crate::mission::{AcceptError, OfferPrompt, VenueOffer};
 pub use edit::RelocateRefusal;
 pub use events::SessionEvent;
 pub use mission_screens::{
-    ComputerRefusal, ComputerRow, InfoRow, MissionComputer, MissionInfo, MissionText,
-    MissionTextKind,
+    ComputerRefusal, ComputerRow, InfoRow, MissionComputer, MissionInfo, MissionInfoPress,
+    MissionText, MissionTextKind,
 };
 #[cfg(any(test, feature = "fixture"))]
 pub(crate) use missions::StopRefusal;

@@ -31,6 +31,8 @@ use crate::mission::screens::{HIDDEN, NO_MISSIONS_HERE, SPACEPORT, UNREFUSABLE};
 use crate::mission::{
     AcceptRefusal, AvailFacts, Offer, OfferPrompt, Venue, VenueOffer, availability, offer_labels,
 };
+use crate::player_fate::PlayerCommand;
+use crate::sound::SimSound;
 
 /// One offer the mission computer lists.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -171,7 +173,58 @@ pub struct MissionInfo {
     pub today: String,
 }
 
+/// What a press of the in-flight mission info key does
+/// ([`Session::press_mission_info`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MissionInfoPress {
+    /// Refused, in silence: nothing opens and nothing is said.
+    Refused,
+    /// Taken, with no mission to show: the refusal beep has sounded, and
+    /// the view says "You have no active missions." (`STR#` 2002 #354).
+    NoActiveMissions,
+    /// Taken: the mission info screen opens on this.
+    Opens(MissionInfo),
+}
+
 impl Session {
+    /// The mission info key, `missionInfoKey` (slot 0x50), is pressed in
+    /// flight (`_HandlePlayer` @0x70405-0x705b4). It is refused, in
+    /// silence (each refusal only clears the key's latch, @0x705af):
+    ///
+    /// 1. during a jump, the pre-jump included: +0x50 above 0
+    ///    (@0x70424-0x70428);
+    /// 2. while the pod countdown +0xc908 is above 0 (@0x7042e-0x70436),
+    ///    which can't be reached, as the pod's frames return (@0x68ddd)
+    ///    before any key handler: the
+    ///    [`PlayerFate::Ejected`](crate::PlayerFate::Ejected) row refuses
+    ///    it;
+    /// 3. while `_IsDying` (-0x2ca, @0x70439-0x70445) and
+    /// 4. while the death countdown +0x3c is above 0 (@0x7044b-0x7044f):
+    ///    both the [`PlayerFate::BreakingUp`](crate::PlayerFate::BreakingUp)
+    ///    row;
+    /// 5. for [`TAKEOFF_GRACE_TICKS`](crate::TAKEOFF_GRACE_TICKS) after a
+    ///    take-off or a gate's exit, `_frameCounter` below 0 (`js`
+    ///    @0x7045e; see the `takeoff_grace` module).
+    ///
+    /// An exploded player's key is refused too: the dead branch
+    /// (0x6870d-0x6888c) runs no key handler. A disabled ship is taken
+    /// (none of the tests reads `_IsDisabled`). Taken, it counts the
+    /// active missions the screen shows (@0x7047d-0x704ba, those without
+    /// `Flags` 0x0400): with one, the screen opens
+    /// ([`Session::mission_info`]); with none, it beeps `_beepSnd[3]`
+    /// ([`SimSound::Refused`], `PlaySound` @0x70557) before #354.
+    pub fn press_mission_info(&mut self) -> MissionInfoPress {
+        if self.jump.is_some() || !self.takes(PlayerCommand::MissionInfo) {
+            return MissionInfoPress::Refused;
+        }
+        let info = self.mission_info();
+        if info.rows.is_empty() {
+            self.sounds.push(SimSound::Refused);
+            return MissionInfoPress::NoActiveMissions;
+        }
+        MissionInfoPress::Opens(info)
+    }
+
     /// What the screens show of mission `id`, as the session read it as
     /// it started: `None` for a `mïsn` it has no texts of.
     #[must_use]
@@ -506,6 +559,7 @@ mod tests {
     use crate::catalog::{
         DateAffixes, MissionRecord, PlaceNames, StellarId, SystemId, TextGraphics,
     };
+    use crate::combat::hull::Condition;
     use crate::control::{Bit, Script, SetExpr, Test};
     use crate::geometry::Vec2;
     use crate::mission::AbortRefusal;
@@ -513,6 +567,7 @@ mod tests {
     use crate::mission::{AcceptError, ActiveMission, OfferLabels, SLOTS};
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::session::AbortError;
+    use crate::sound::SimSound;
     use crate::testkit::{Draws, FakePilotCatalog, catalog, land_now, mission};
 
     /// Stellars 128 Earth, 129 Luna and 140 Mars; systems 130 Sol and 131
@@ -2259,5 +2314,136 @@ mod tests {
             AcceptRefusal::SlotsFull.message()
         );
         assert_eq!(ComputerRefusal::NoneAvailable.message(), NO_MISSIONS_HERE);
+    }
+
+    // The flight key, `_HandlePlayer` @0x70405-0x705b4.
+
+    /// A session of [`screens`] landed on 128 with mission 130 to Mars
+    /// accepted, and one with `flags` 0x0400 too when `hidden`, its
+    /// sounds taken.
+    fn with_missions(shown: bool, hidden: bool) -> Session {
+        let catalog = screens(
+            vec![
+                to_mars(130),
+                MissionRecord {
+                    flags: HIDDEN,
+                    ..to_mars(131)
+                },
+            ],
+            vec![
+                MissionTexts::named(MissionId(130), "Run"),
+                MissionTexts::named(MissionId(131), "Hidden"),
+            ],
+        );
+        let mut session = docked(&catalog);
+        for (id, take) in [(130, shown), (131, hidden)] {
+            if take {
+                session
+                    .accept_mission(MissionId(id), &mut NeverFires)
+                    .expect("accepted");
+            }
+        }
+        let _ = session.take_sounds();
+        session
+    }
+
+    #[test]
+    fn the_mission_info_key_with_no_shown_mission_beeps_and_opens_nothing() {
+        for (why, hidden) in [("none", false), ("only a 0x0400 one", true)] {
+            let mut session = with_missions(false, hidden);
+            assert_eq!(
+                session.press_mission_info(),
+                MissionInfoPress::NoActiveMissions,
+                "{why}"
+            );
+            assert_eq!(
+                session.take_sounds(),
+                [SimSound::Refused],
+                "{why} (@0x70557)"
+            );
+        }
+    }
+
+    #[test]
+    fn the_mission_info_key_with_a_shown_mission_opens_the_screen_in_silence() {
+        let mut session = with_missions(true, true);
+        let info = session.mission_info();
+        assert_eq!(info.rows.len(), 1);
+        assert_eq!(session.press_mission_info(), MissionInfoPress::Opens(info));
+        assert_eq!(session.take_sounds(), []);
+    }
+
+    #[test]
+    fn the_mission_info_key_is_refused_in_silence_in_a_jump_the_pod_a_breakup_or_the_grace() {
+        type Refusal = (&'static str, fn(&mut Session));
+        let refusals: [Refusal; 7] = [
+            ("the pre-jump, +0x50 > 0 (@0x70424)", |session| {
+                session.jump = Some(super::super::Jump::PreJump {
+                    to: SystemId(131),
+                    bearing: None,
+                    warp: None,
+                });
+            }),
+            ("hyperspace, +0x50 > 0 (@0x70424)", |session| {
+                session.jump = Some(super::super::Jump::Hyperspace {
+                    to: SystemId(131),
+                    warp: 0,
+                });
+            }),
+            ("the pod, +0xc908 > 0 (@0x7042e)", |session| {
+                session.pod = Some(10);
+            }),
+            (
+                "breaking up, -0x2ca and +0x3c (@0x70439, @0x7044b)",
+                |session| {
+                    session.condition = Condition::Dying {
+                        ticks_left: 3,
+                        starting: false,
+                    };
+                },
+            ),
+            ("exploded, the dead branch (@0x6870d)", |session| {
+                session.condition = Condition::Destroyed;
+                session.player_exploded_this_tick = true;
+            }),
+            ("holding after the explosion", |session| {
+                session.condition = Condition::Destroyed;
+            }),
+            (
+                "the take-off grace, _frameCounter < 0 (@0x7045e)",
+                |session| {
+                    session.start_takeoff_grace();
+                },
+            ),
+        ];
+        for (why, refuse) in refusals {
+            for shown in [false, true] {
+                let mut session = with_missions(shown, false);
+                refuse(&mut session);
+                let before = session.clone();
+                assert_eq!(
+                    session.press_mission_info(),
+                    MissionInfoPress::Refused,
+                    "{why}, shown {shown}"
+                );
+                assert_eq!(session.take_sounds(), [], "{why}, shown {shown}");
+                assert_eq!(session.pilot(), before.pilot(), "{why}, shown {shown}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_disabled_ship_takes_the_mission_info_key() {
+        let mut session = with_missions(true, false);
+        session.condition = Condition::Disabled;
+        let info = session.mission_info();
+        assert_eq!(session.press_mission_info(), MissionInfoPress::Opens(info));
+        let mut none = with_missions(false, false);
+        none.condition = Condition::Disabled;
+        assert_eq!(
+            none.press_mission_info(),
+            MissionInfoPress::NoActiveMissions
+        );
+        assert_eq!(none.take_sounds(), [SimSound::Refused]);
     }
 }

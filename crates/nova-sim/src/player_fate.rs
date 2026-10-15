@@ -202,7 +202,9 @@ pub enum PlayerCommand {
     Land,
     /// A hyperspace jump: `jumpKey` (slot 0x1c).
     Jump,
-    /// The mission info dialog: `missionInfoKey` (slot 0x50).
+    /// The mission info dialog: `missionInfoKey` (slot 0x50). The session
+    /// decides a press of it
+    /// ([`Session::press_mission_info`](crate::Session::press_mission_info)).
     MissionInfo,
     /// Hailing the target: `hailKey` (slot 0x8).
     Hail,

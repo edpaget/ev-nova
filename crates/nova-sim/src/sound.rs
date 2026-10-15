@@ -106,6 +106,10 @@ pub enum SimSound {
     /// The player info key's refusals raise it (`_HandlePlayer`
     /// @0x7039a-0x703bd, priority 5, not modelled; see
     /// [`Session::press_player_info`](crate::Session::press_player_info)),
+    /// as does the mission info key with no mission to show, before its
+    /// "You have no active missions." (`PlaySound` @0x70557, priority 1,
+    /// not modelled; see
+    /// [`Session::press_mission_info`](crate::Session::press_mission_info)),
     /// and every other refusal that beeps reuses it rather than adding a
     /// variant of its own.
     Refused,
