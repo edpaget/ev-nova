@@ -1177,6 +1177,45 @@ mod tests {
         );
     }
 
+    /// String lists of none, from data holding a `l33t` resource.
+    struct Leet;
+
+    impl crate::catalog::CommCatalog for Leet {
+        fn string_list(&self, _id: i16) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn leet_mode(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn with_leet_mode_a_quote_is_munged_but_draws_no_letters() {
+        let mut catalog = quoters([QUOTE_ON_ATTACK, QUOTE_ON_ATTACK]);
+        catalog.strings = vec![(7101, vec!["Hello <PN>, you are alone.".to_owned()])];
+        let pilot = Pilot::new(&catalog, "Stock").expect("a pilot");
+        let mut session = Session::fly(&catalog, pilot)
+            .expect("flies")
+            .with_strings(Rc::new(Leet));
+        session.populate(&catalog, &mut NeverFires);
+        session.traffic.npcs_mut()[1].person = None;
+        session.traffic.npcs_mut()[0].goal = crate::ai::Goal::Attack(ShipRef::Player);
+        // The draws after the quote's own land on 0, which would turn each
+        // a to 4 and o to 0 were the letters drawn.
+        let (said, asked) = quote_tick(&catalog, &mut session, &[77, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            said,
+            ["H377o Stox0r, j00 ar3 a7on3."],
+            "munged after its tags (@0x44605 → @0x9d5aa), its a's and o's kept"
+        );
+        assert_eq!(
+            asked,
+            [140],
+            "only parsed (@0x445ee), never loaded: no letter draws (@0x7194f)"
+        );
+    }
+
     /// A hailed ship named for `<OSN>` that is not among the NPCs: "Earlier".
     fn named_earlier(session: &mut Session) {
         session.offering_ship = Some(super::super::person_offers::OfferingShip {
