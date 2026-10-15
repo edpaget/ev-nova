@@ -337,6 +337,9 @@ impl Session {
     /// leaves them, drawing nothing (`_IsMissionAvailable(i, 1)`,
     /// @0xa36da-0xa3742). One that cannot be refused, with no offer text,
     /// is accepted at once. `None` with nothing to offer, or in flight.
+    /// Answering the offer shifts the outside list from where it was
+    /// found ([`RuleKey::OfferShift`](crate::RuleKey::OfferShift)), so an
+    /// accept from the dialog drops the next outside offer too.
     pub fn next_offer(&mut self, loc: i16, chance: &mut dyn Chance) -> Option<VenueOffer> {
         self.enter_offer_venue(loc);
         let candidates: Vec<Offer> = self
@@ -389,9 +392,8 @@ impl Session {
     /// governments) and filled for the offer, and its labels; or, for one
     /// that cannot be refused with no offer text, its accept at once
     /// (@0xa22ec-0xa231c), made before the dialog is, so with no offer
-    /// dialog open
-    /// ([`Session::accept_offered`]), and its offer then dropped when it
-    /// succeeds, as `_OfferMissionFromPort` drops it (@0xa3765-0xa37a1).
+    /// dialog open ([`Session::accept_offered`], which then shifts the
+    /// outside list as `_OfferMissionFromPort` does, @0xa377d-0xa37a1).
     pub(super) fn offer_dialog(
         &mut self,
         mission: MissionId,
@@ -403,15 +405,11 @@ impl Session {
         let texts = self.mission_texts(mission);
         let raw = texts.and_then(|texts| texts.offer.as_deref());
         if !can_refuse && raw.is_none_or(str::is_empty) {
+            // The accept at once returns 1 once it succeeds (@0xa2311,
+            // @0xa368e), so `_OfferMissionFromPort` shifts the list
+            // (@0xa377d-0xa37a1), which `accept_offered` does
+            // (`Session::drop_offered`).
             let accepted = self.accept_offered(mission, chance);
-            if accepted.is_ok() {
-                // `_OfferMissionFromPort` drops the offer whenever
-                // `_OfferOneMission` returns other than -1 (@0xa3765-0xa37a1),
-                // and the accept at once returns 1 once it succeeds
-                // (@0xa2311, @0xa368e), though `_DoMissionAccept` refilters
-                // nothing with the dialog closed (@0xa200b).
-                self.offers.drop_offer(mission);
-            }
             return VenueOffer::Accepted { mission, accepted };
         }
         let labels = offer_labels(
@@ -1470,6 +1468,245 @@ mod tests {
             "the caller drops the accepted offer (@0xa3765-0xa37a1); the \
              others stay unfiltered"
         );
+    }
+
+    /// The outside offers, in the order they show.
+    fn outside(session: &Session) -> Vec<i16> {
+        session
+            .mission_offers(Venue::Outside)
+            .iter()
+            .map(|offer| offer.mission.0)
+            .collect()
+    }
+
+    /// The rulebook with `offer_shift` read by `source`.
+    fn shifting(source: RuleSource) -> Rulebook {
+        Rulebook::default().with_override(RuleKey::OfferShift, source)
+    }
+
+    #[test]
+    fn an_accept_from_the_offer_dialog_drops_the_next_outside_offer() {
+        let catalog = screens(
+            vec![at_the_bar(141), at_the_bar(142), at_the_bar(143)],
+            Vec::new(),
+        );
+        for (source, left, next) in [
+            (RuleSource::Engine, vec![143], 143),
+            (RuleSource::Bible, vec![142, 143], 142),
+        ] {
+            let mut session = docked(&catalog).with_rules(shifting(source));
+            assert_eq!(
+                prompted(session.next_offer(BAR, &mut NeverFires)),
+                MissionId(141)
+            );
+            session
+                .accept_mission(MissionId(141), &mut NeverFires)
+                .expect("accepted");
+            assert_eq!(outside(&session), left, "{source:?}");
+            assert_eq!(
+                prompted(session.next_offer(BAR, &mut NeverFires)),
+                MissionId(next),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_dropped_offer_is_the_next_listed_whatever_its_venue() {
+        let catalog = screens(
+            vec![at_the_bar(141), at_venue(142, SHIPYARD), at_the_bar(143)],
+            Vec::new(),
+        );
+        let mut session = docked(&catalog);
+        assert_eq!(
+            prompted(session.next_offer(BAR, &mut NeverFires)),
+            MissionId(141)
+        );
+        session
+            .accept_mission(MissionId(141), &mut NeverFires)
+            .expect("accepted");
+        assert_eq!(session.next_offer(SHIPYARD, &mut NeverFires), None);
+        assert_eq!(
+            prompted(session.next_offer(BAR, &mut NeverFires)),
+            MissionId(143)
+        );
+
+        let mut session = docked(&catalog).with_rules(shifting(RuleSource::Bible));
+        assert_eq!(
+            prompted(session.next_offer(BAR, &mut NeverFires)),
+            MissionId(141)
+        );
+        session
+            .accept_mission(MissionId(141), &mut NeverFires)
+            .expect("accepted");
+        assert_eq!(
+            prompted(session.next_offer(SHIPYARD, &mut NeverFires)),
+            MissionId(142)
+        );
+    }
+
+    #[test]
+    fn the_drop_reads_the_list_the_accepts_refilter_left() {
+        let catalog = screens(
+            vec![
+                MissionRecord {
+                    on_accept: Script::parse("b5"),
+                    ..at_the_bar(141)
+                },
+                MissionRecord {
+                    avail_bits: Test::parse("!b5"),
+                    ..at_the_bar(142)
+                },
+                at_the_bar(143),
+                at_the_bar(144),
+            ],
+            Vec::new(),
+        );
+        for (source, left) in [
+            (RuleSource::Engine, vec![144]),
+            (RuleSource::Bible, vec![143, 144]),
+        ] {
+            let mut session = docked(&catalog).with_rules(shifting(source));
+            assert_eq!(
+                prompted(session.next_offer(BAR, &mut NeverFires)),
+                MissionId(141)
+            );
+            session
+                .accept_mission(MissionId(141), &mut NeverFires)
+                .expect("accepted");
+            assert_eq!(
+                outside(&session),
+                left,
+                "{source:?}: the refilter drops 142, so the shift drops 143"
+            );
+        }
+    }
+
+    #[test]
+    fn accepting_the_last_listed_offer_drops_no_other() {
+        let catalog = screens(vec![at_venue(141, SHIPYARD), at_the_bar(142)], Vec::new());
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = docked(&catalog).with_rules(shifting(source));
+            assert_eq!(
+                prompted(session.next_offer(BAR, &mut NeverFires)),
+                MissionId(142)
+            );
+            session
+                .accept_mission(MissionId(142), &mut NeverFires)
+                .expect("accepted");
+            assert_eq!(outside(&session), [141], "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_refusal_whose_on_refuse_refilters_leaves_the_refused_offer_listed() {
+        let catalog = screens(
+            vec![
+                at_venue(141, SHIPYARD),
+                MissionRecord {
+                    on_refuse: Script::parse("S141"),
+                    ..at_the_bar(142)
+                },
+                at_the_bar(143),
+            ],
+            Vec::new(),
+        );
+        for (source, left, next) in [
+            (RuleSource::Engine, vec![142], 142),
+            (RuleSource::Bible, vec![143], 143),
+        ] {
+            let mut session = docked(&catalog).with_rules(shifting(source));
+            assert_eq!(
+                prompted(session.next_offer(BAR, &mut NeverFires)),
+                MissionId(142)
+            );
+            session
+                .refuse_mission(MissionId(142), &mut NeverFires)
+                .expect("refused");
+            assert_eq!(
+                session.pilot().missions().missions(),
+                [MissionId(141)],
+                "{source:?}"
+            );
+            assert_eq!(outside(&session), left, "{source:?}");
+            assert_eq!(
+                prompted(session.next_offer(BAR, &mut NeverFires)),
+                MissionId(next),
+                "{source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_accept_at_once_drops_its_own_offer_unless_it_refilters() {
+        let catalog = screens(
+            vec![unrefusable_at(141, BAR), at_the_bar(142), at_the_bar(143)],
+            vec![offering(141, "", "", "")],
+        );
+        let rules =
+            |dialog, shift| shifting(shift).with_override(RuleKey::StartOutsideDialog, dialog);
+        for (dialog, shift, left) in [
+            (RuleSource::Engine, RuleSource::Engine, vec![142, 143]),
+            (RuleSource::Engine, RuleSource::Bible, vec![142, 143]),
+            (RuleSource::Bible, RuleSource::Bible, vec![142, 143]),
+            // The keys compose literally: the accept drops its own offer
+            // as if from the dialog, and the shift then drops the next.
+            (RuleSource::Bible, RuleSource::Engine, vec![143]),
+        ] {
+            let mut session = docked(&catalog).with_rules(rules(dialog, shift));
+            assert_eq!(
+                session.next_offer(BAR, &mut NeverFires),
+                Some(VenueOffer::Accepted {
+                    mission: MissionId(141),
+                    accepted: Ok(0),
+                })
+            );
+            assert_eq!(outside(&session), left, "{dialog:?} {shift:?}");
+        }
+    }
+
+    #[test]
+    fn an_outside_accept_refused_for_full_slots_shows_nothing_and_drops_nothing() {
+        let catalog = screens(
+            vec![at_the_bar(141), at_the_bar(142), at_the_bar(143)],
+            vec![offering(141, "Come along.", "", "")],
+        );
+        for source in [RuleSource::Engine, RuleSource::Bible] {
+            let mut session = docked(&catalog).with_rules(shifting(source));
+            fill_slots(&mut session);
+            let _ = session.take_sounds();
+            assert_eq!(
+                prompted(session.next_offer(BAR, &mut NeverFires)),
+                MissionId(141),
+                "offered with every slot taken"
+            );
+            assert_eq!(
+                session.accept_mission(MissionId(141), &mut NeverFires),
+                Err(AcceptError::Refused(AcceptRefusal::SlotsFull))
+            );
+            assert_eq!(session.take_mission_texts(), [], "{source:?}");
+            assert_eq!(session.take_sounds(), [], "{source:?}");
+            assert_eq!(outside(&session), [141, 142, 143], "{source:?}");
+            assert_eq!(
+                prompted(session.next_offer(BAR, &mut NeverFires)),
+                MissionId(142),
+                "{source:?}: 141 suppressed"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mission_computer_accept_leaves_the_outside_offers_whole() {
+        let catalog = screens(
+            vec![to_mars(140), at_the_bar(141), at_the_bar(142)],
+            Vec::new(),
+        );
+        let mut session = docked(&catalog);
+        session
+            .accept_mission(MissionId(140), &mut NeverFires)
+            .expect("accepted");
+        assert!(session.mission_offers(Venue::Computer).is_empty());
+        assert_eq!(outside(&session), [141, 142]);
     }
 
     #[test]

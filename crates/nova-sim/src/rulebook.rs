@@ -102,7 +102,8 @@
 //! | [`SecondarySale`](RuleKey::SecondarySale) | `secondary_sale` | the outfitter's sale lets go of the secondary selected when the sold outfit's own count falls to 0 and one of its `ModType` 1 slots names it, even with another outfit still mounting it (`_DoOutfitDialog` @0x5cf73-0x5cf8c, @0x5ce82; [`Session`](crate::Session)) | the sale lets it go when it leaves the ship not carrying it\* |
 //! | [`RepeatMissionFailure`](RuleKey::RepeatMissionFailure) | `repeat_mission_failure` | an unabortable mission failed by its deadline stays active and failed, and at its return landing runs `OnFailure` a second time and applies the failure records (`_QuickMissionFailure` @0x99d1b-0x99dab, `_MissionLandCheck` @0xa1a92, `_DoMissionFailure` @0xa0285; see [`mission`](crate::mission)) | its return landing frees it without running `OnFailure` again, the failure records still applied once; a mission failed by `F` runs `OnFailure` once at its return either way\* |
 //! | [`StartActiveMission`](RuleKey::StartActiveMission) | `start_active_mission` | `S` accepts a mission active already into another slot (`_EvalSetExp` @0x153b9-0x15418; see [`mission`](crate::mission)) | `S` leaves an active mission and the slots as they are\* |
-//! | [`StartOutsideDialog`](RuleKey::StartOutsideDialog) | `start_outside_dialog` | an accept with no offer dialog open (an `S` outside `OnAccept` and `OnRefuse`, or an unrefusable offer with no text) leaves a destination that is the stellar docked at, or in flight the stellar target, unreached, and drops and refilters no offers but, for the unrefusable offer, its own, which its caller drops (`_DoMissionAccept` @0xa1fde, @0xa200b; `_OfferMissionFromPort` @0xa3765-0xa37a1; see [`mission`](crate::mission)) | every accept acts as if made from the offer dialog\* |
+//! | [`StartOutsideDialog`](RuleKey::StartOutsideDialog) | `start_outside_dialog` | an accept with no offer dialog open (an `S` outside `OnAccept` and `OnRefuse`, or an unrefusable offer with no text) leaves a destination that is the stellar docked at, or in flight the stellar target, unreached, and drops and refilters no offers; the unrefusable offer's caller then shifts the list as [`offer_shift`](RuleKey::OfferShift) reads it, which, the list left as it is, drops that offer itself under either reading of that key (`_DoMissionAccept` @0xa1fde, @0xa200b; `_OfferMissionFromPort` @0xa377d-0xa37a1; see [`mission`](crate::mission)) | every accept acts as if made from the offer dialog, so the unrefusable offer's accept drops and refilters the offers, and the engine's `offer_shift` then drops the next listed offer as well\* |
+//! | [`OfferShift`](RuleKey::OfferShift) | `offer_shift` | once an outside offer is answered, by an accept from the dialog, a refusal or the accept at once, unless the accept fails, the outside list loses the entry at the index the offer was found at, in the list as the answer left it: a dialog accept, whose own offer is dropped already, drops the next listed offer whatever its venue; a refusal whose `OnRefuse` refilters can leave the refused offer listed; the accept at once drops its own offer, or the next one too when `start_outside_dialog` reads otherwise (`_OfferMissionFromPort` @0xa377d-0xa37a1; see [`mission`](crate::mission)) | each answer drops only the answered offer, so the next offer is offered next\* |
 //! | [`PayMillions`](RuleKey::PayMillions) | `pay_millions` | a mission text's `<PAY>` of a million or more reads in millions to two places, truncated, "1.23M" (`_StrcatCommaNumber` @0x8990-0x8aa3; see [`text_tags`](crate::text_tags)) | it reads in full with its commas, "1,234,567"\* |
 //! | [`MissionOrder`](RuleKey::MissionOrder) | `mission_order` | offers of `DispWeight` 0 or more keep index order, the rest after by descending weight (`_RandomizeMissionData` @0xa1842-0xa197d; see [`mission`](crate::mission)) | all by descending `DispWeight`, ties in index order |
 //! | [`PersonMissionStellar`](RuleKey::PersonMissionStellar) | `person_mission_stellar` | a person's mission is resolved at its spawn from the player's navigation target, or from no stellar with none, and an accept in flight reaches a destination that is the navigation target (`_RandomizeOneMission` @0xa151f-0xa1526, `_DoMissionAccept` @0xa1fc5-0xa1ff8; see [`mission`](crate::mission)) | it is resolved from the first stellar the player's system lists, and an accept in flight reaches no destination\* |
@@ -174,7 +175,8 @@
 //! `move_keep_flag`, `script_sound`, `ship_info_rounding`,
 //! `stale_secondary`,
 //! `secondary_sale`, `landing_distance`, `repeat_mission_failure`,
-//! `start_active_mission`, `start_outside_dialog`, `pay_millions`,
+//! `start_active_mission`, `start_outside_dialog`, `offer_shift`,
+//! `pay_millions`,
 //! `person_mission_stellar`,
 //! `mission_stellar_draw`, `mission_stellar_distance`,
 //! `derelict_setup_speed`, `left_respawn`, `landed_leaves`, `gate_follow`,
@@ -1469,14 +1471,54 @@ rule_keys! {
     /// leaves that destination unreached and every offer listed. A
     /// mission with no destination is reached either way (@0xa1fe7). The
     /// unrefusable offer with no text that the offer dialog accepts at
-    /// once (@0xa230a) is outside it as well, though its caller drops its
-    /// own offer once it is accepted (`_OfferMissionFromPort`
-    /// @0xa3765-0xa37a1) and only the others stay. By the other reading, every
-    /// accept acts as if made from the dialog. The Bible's "start mission
-    /// xxx" says nothing of it, so the other reading is the intended
-    /// behaviour, not anything the Bible says (see the
-    /// [`mission`](crate::mission) module's "Active missions").
+    /// once (@0xa230a) is outside it as well. Its caller then shifts the
+    /// outside list as [`RuleKey::OfferShift`] reads it
+    /// (`_OfferMissionFromPort` @0xa377d-0xa37a1), which, the list
+    /// unchanged by the accept, drops that offer itself and keeps the
+    /// others. By the other reading, every accept acts as if made from the
+    /// dialog.
+    ///
+    /// The two keys compose literally: the shift acts on whatever list the
+    /// accept left. So with this key's other reading and `offer_shift`'s
+    /// engine reading, the accept at once drops its own offer and refilters
+    /// the others, and the shift then drops the next listed offer too, as
+    /// a dialog accept does. With `offer_shift`'s other reading, it drops
+    /// only its own offer either way. The Bible's "start mission xxx" says
+    /// nothing of it, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see the [`mission`](crate::mission)
+    /// module's "Active missions").
     StartOutsideDialog => "start_outside_dialog",
+    /// What answering an outside offer drops from the outside list (the
+    /// offers of the bar, the spaceport, the trade center, the shipyard
+    /// and the outfitter, in one list in the order they show). By the
+    /// engine, as `_OfferMissionFromPort` does once `_OfferOneMission`
+    /// returns anything but -1 (@0xa3765-0xa37a1): the list shifts down
+    /// one from the index the offer was found at (@0xa36f5), in the list
+    /// as the answer left it, and the mission is not looked up again. So:
+    ///
+    /// - an accept from the offer dialog, which dropped its own offer and
+    ///   refiltered the rest already (`_DoMissionAccept` @0xa200b-0xa2136),
+    ///   also drops the next offer still listed, whatever its venue, or
+    ///   nothing when it was the last;
+    /// - a refusal drops the refused offer, unless an `S` in its
+    ///   `OnRefuse` refiltered the list and moved it down, when it drops
+    ///   the offer now at that index and the refused one stays listed;
+    /// - the unrefusable offer's accept at once (@0xa230a), which by
+    ///   [`RuleKey::StartOutsideDialog`]'s engine reading leaves the list
+    ///   as it is, drops its own offer. The keys compose literally: with
+    ///   `start_outside_dialog`'s other reading the accept drops its own
+    ///   offer and refilters the rest, and the shift then drops the next
+    ///   listed offer too, as a dialog accept does.
+    ///
+    /// A failed accept (-1: every slot taken, or no room for the cargo)
+    /// suppresses the offer and drops nothing (@0xa3765-0xa377b). By the
+    /// other reading, each answer drops only the answered offer's own
+    /// entry, so the next offer is offered next. The mission computer has
+    /// no shift (`_DoMissionDialog` @0xa3bb4) either way. The Bible says
+    /// nothing of it, so the other reading is the intended behaviour, not
+    /// anything the Bible says (see the [`mission`](crate::mission)
+    /// module's offers).
+    OfferShift => "offer_shift",
     /// How a mission text's `<PAY>` writes an amount of a million or
     /// more. By the engine, in millions to two places, truncated, as
     /// `_StrcatCommaNumber` (@0x8990-0x8aa3) writes it: "1.23M". By the
@@ -2273,7 +2315,7 @@ mod tests {
             Some(RuleKey::StartActiveMission)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(61),
+            RuleKey::ALL.iter().rev().nth(62),
             Some(&RuleKey::StartActiveMission)
         );
     }
@@ -2290,8 +2332,22 @@ mod tests {
             RuleSource::Engine
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(60),
+            RuleKey::ALL.iter().rev().nth(61),
             Some(&RuleKey::StartOutsideDialog)
+        );
+    }
+
+    #[test]
+    fn the_offer_shift_rule_is_found_by_its_key_and_reads_the_engine() {
+        assert_eq!(RuleKey::OfferShift.key(), "offer_shift");
+        assert_eq!(RuleKey::from_key("offer_shift"), Some(RuleKey::OfferShift));
+        assert_eq!(
+            Rulebook::default().source_for(RuleKey::OfferShift),
+            RuleSource::Engine
+        );
+        assert_eq!(
+            RuleKey::ALL.iter().rev().nth(60),
+            Some(&RuleKey::OfferShift)
         );
     }
 
@@ -3352,7 +3408,7 @@ mod tests {
             Some(RuleKey::ShipInfoRounding)
         );
         assert_eq!(
-            RuleKey::ALL.iter().rev().nth(63),
+            RuleKey::ALL.iter().rev().nth(64),
             Some(&RuleKey::SecondarySale)
         );
     }
@@ -3494,6 +3550,7 @@ mod tests {
                 RuleKey::RepeatMissionFailure,
                 RuleKey::StartActiveMission,
                 RuleKey::StartOutsideDialog,
+                RuleKey::OfferShift,
                 RuleKey::PayMillions,
                 RuleKey::MissionOrder,
                 RuleKey::PersonMissionStellar,

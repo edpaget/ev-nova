@@ -294,9 +294,33 @@ impl Offers {
         self.outside.retain(|offer| available(offer));
     }
 
-    /// Drops the offer of `mission`, at either venue, as an accept or a
-    /// refusal does (`_OfferMissionFromPort` @0xa3765-0xa37a1): whether
-    /// there was one.
+    /// Where `mission`'s offer is listed at `venue`, in the order shown:
+    /// the index `_OfferMissionFromPort` finds it at (-0x2a(%ebp),
+    /// @0xa36f5). `None` when it is not listed there.
+    #[must_use]
+    pub fn position(&self, venue: Venue, mission: MissionId) -> Option<usize> {
+        self.at(venue)
+            .iter()
+            .position(|offer| offer.mission == mission)
+    }
+
+    /// Drops the entry at `index` of `venue`'s offers, whatever mission it
+    /// holds, as `_OfferMissionFromPort` shifts the outside list down from
+    /// the index it found its offer at (@0xa377d-0xa37a1), and returns the
+    /// mission it dropped. Past the end it drops nothing, as the original
+    /// then shifts only free (-1) entries.
+    pub fn drop_at(&mut self, venue: Venue, index: usize) -> Option<MissionId> {
+        let list = match venue {
+            Venue::Computer => &mut self.computer,
+            Venue::Outside => &mut self.outside,
+            Venue::Ship => return None,
+        };
+        (index < list.len()).then(|| list.remove(index).mission)
+    }
+
+    /// Drops the offer of `mission`, at either venue, as an accept with
+    /// the offer dialog open does (`_DoMissionAccept` @0xa2018-0xa2136):
+    /// whether there was one.
     pub fn drop_offer(&mut self, mission: MissionId) -> bool {
         let before = self.computer.len() + self.outside.len();
         self.computer.retain(|offer| offer.mission != mission);

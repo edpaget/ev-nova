@@ -1707,6 +1707,46 @@ fn an_offer_dropped_leaves_the_others_and_the_stellar() {
     assert_eq!(offers.rolled_at(), Some(StellarId(128)));
 }
 
+/// The courier at the mission computer, and 131, 134 and 135 at the bar.
+fn three_at_the_bar() -> Vec<MissionRecord> {
+    let bar = |id| MissionRecord {
+        avail_loc: 1,
+        ..mission(id)
+    };
+    vec![courier(), bar(131), bar(134), bar(135)]
+}
+
+#[test]
+fn drop_at_removes_the_entry_at_the_index_and_nothing_past_the_end() {
+    let galaxy = Galaxy::new();
+    let visit = galaxy.visit();
+    let mut offers = Offers::default();
+    offers.roll(&three_at_the_bar(), &visit, &mut NeverFires);
+    assert_eq!(ids(offers.at(Venue::Outside)), [131, 134, 135]);
+    assert_eq!(offers.drop_at(Venue::Outside, 1), Some(MissionId(134)));
+    assert_eq!(ids(offers.at(Venue::Outside)), [131, 135]);
+    assert_eq!(offers.drop_at(Venue::Outside, 2), None, "past the end");
+    assert_eq!(ids(offers.at(Venue::Outside)), [131, 135]);
+    assert_eq!(offers.drop_at(Venue::Ship, 0), None, "never listed");
+    assert_eq!(offers.drop_at(Venue::Computer, 0), Some(MissionId(130)));
+    assert!(offers.at(Venue::Computer).is_empty());
+    assert_eq!(ids(offers.at(Venue::Outside)), [131, 135]);
+}
+
+#[test]
+fn position_finds_an_offer_at_its_venue_only() {
+    let galaxy = Galaxy::new();
+    let visit = galaxy.visit();
+    let mut offers = Offers::default();
+    offers.roll(&three_at_the_bar(), &visit, &mut NeverFires);
+    assert_eq!(offers.position(Venue::Outside, MissionId(134)), Some(1));
+    assert_eq!(offers.position(Venue::Outside, MissionId(131)), Some(0));
+    assert_eq!(offers.position(Venue::Computer, MissionId(134)), None);
+    assert_eq!(offers.position(Venue::Computer, MissionId(130)), Some(0));
+    assert_eq!(offers.position(Venue::Outside, MissionId(130)), None);
+    assert_eq!(offers.position(Venue::Ship, MissionId(131)), None);
+}
+
 #[test]
 fn a_refilter_keeps_only_the_offers_still_available_resolving_nothing() {
     let galaxy = Galaxy::new();

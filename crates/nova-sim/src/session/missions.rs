@@ -453,7 +453,9 @@ impl Session {
     /// [`AcceptError::Refused`] when a check refuses, and then nothing
     /// runs but an outside offer's suppression (see
     /// [`Session::next_offer`]) and, for want of room for its cargo, the
-    /// refusal queued to show ([`MissionTextKind::NoRoom`]).
+    /// refusal queued to show ([`MissionTextKind::NoRoom`]). Every slot
+    /// taken shows nothing and plays nothing (`_DoMissionAccept`
+    /// @0xa1b32-0xa1b42).
     pub fn accept_mission(
         &mut self,
         mission: MissionId,
@@ -466,6 +468,9 @@ impl Session {
     /// offer dialog as it is: the offer dialog's accept at once, of an
     /// offer that cannot be refused and has no text, comes before the
     /// dialog is made (`_OfferOneMission` @0xa230a, before @0xa237f).
+    /// An outside offer accepted is then shifted out of the list as
+    /// `_OfferMissionFromPort` shifts it ([`Session::drop_offered`]); one
+    /// refused is suppressed and nothing is dropped (@0xa3765-0xa377b).
     pub(super) fn accept_offered(
         &mut self,
         mission: MissionId,
@@ -476,14 +481,19 @@ impl Session {
             .mission_record(mission)
             .cloned()
             .ok_or(AcceptError::NotOffered)?;
+        let at = self.outside_position(&offer);
         let accepted = match self.refuse_accept(&offer, chance) {
             Ok(()) => self
                 .start_mission(&record, &offer, chance)
                 .ok_or(AcceptRefusal::SlotsFull),
             Err(refusal) => Err(refusal),
         };
-        if accepted.is_err() && offer.venue == Venue::Outside {
-            self.suppress_offer(mission);
+        if offer.venue == Venue::Outside {
+            if accepted.is_ok() {
+                self.drop_offered(mission, at);
+            } else {
+                self.suppress_offer(mission);
+            }
         }
         self.end_ship_offer(accepted.is_ok());
         accepted.map_err(AcceptError::Refused)
@@ -491,8 +501,11 @@ impl Session {
 
     /// Refuses `mission`, offered on the visit under way, drawing on
     /// `chance`: its `OnRefuse` runs with the offer dialog open
-    /// (`_OfferOneMission` @0xa2f41), then its offer is dropped (`_OfferMissionFromPort` @0xa3765-0xa37a1).
-    /// Nothing is forgotten. An offer from a ship is answered (see the
+    /// (`_OfferOneMission` @0xa2f41), then an outside offer is shifted out
+    /// of the list as `_OfferMissionFromPort` shifts it
+    /// (@0xa377d-0xa37a1, as [`RuleKey::OfferShift`] reads it), so an
+    /// `OnRefuse` that refilters can leave it listed, and a mission
+    /// computer's offer is dropped. Nothing is forgotten. An offer from a ship is answered (see the
     /// `person_offers` module).
     ///
     /// # Errors
@@ -504,14 +517,47 @@ impl Session {
         mission: MissionId,
         chance: &mut dyn Chance,
     ) -> Result<(), NotOffered> {
-        self.offer_of(mission).ok_or(NotOffered)?;
+        let offer = self.offer_of(mission).ok_or(NotOffered)?;
+        let at = self.outside_position(&offer);
         let record = self.lifecycle_record(mission);
         // `RefuseText`, filled with no mission (index -1, @0xa2ec9).
         self.show_mission_text(MissionTextKind::Refuse, mission, None, chance);
         self.in_offer_dialog(|session| session.run_script(&record.on_refuse, chance));
-        self.offers.drop_offer(mission);
+        if offer.venue == Venue::Outside {
+            self.drop_offered(mission, at);
+        } else {
+            self.offers.drop_offer(mission);
+        }
         self.end_ship_offer(false);
         Ok(())
+    }
+
+    /// Where `offer` is listed among the outside offers, when it is one:
+    /// the index `_OfferMissionFromPort` found it at (-0x2a(%ebp),
+    /// @0xa36f5), taken before the answer changes the list.
+    fn outside_position(&self, offer: &Offer) -> Option<usize> {
+        (offer.venue == Venue::Outside)
+            .then(|| self.offers.position(Venue::Outside, offer.mission))
+            .flatten()
+    }
+
+    /// Drops what answering the outside offer of `mission`, found at `at`,
+    /// drops, as [`RuleKey::OfferShift`] reads it: by the engine, the
+    /// entry now at `at`, in the list as the answer left it
+    /// (`_OfferMissionFromPort` @0xa377d-0xa37a1), so after an accept that
+    /// refiltered the list the next offer listed; by the other reading,
+    /// `mission`'s own offer.
+    ///
+    /// It runs in the call that answers the offer, after the answer's
+    /// scripts and before the venue is rearmed or a frame is drawn, as the
+    /// original shifts once `_OfferOneMission` returns, so no boundary the
+    /// player sees comes between the two.
+    fn drop_offered(&mut self, mission: MissionId, at: Option<usize>) {
+        if self.rules.source_for(RuleKey::OfferShift) == RuleSource::Bible {
+            self.offers.drop_offer(mission);
+        } else if let Some(at) = at {
+            self.offers.drop_at(Venue::Outside, at);
+        }
     }
 
     /// Runs `f` with the offer dialog open, as `_OfferOneMission` and

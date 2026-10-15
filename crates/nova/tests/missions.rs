@@ -1020,12 +1020,10 @@ fn the_bar_offers_its_missions_one_after_another_and_a_refusal_runs_on_refuse() 
     for text in ["Ada, join us.", "I'm in", "No"] {
         assert!(shown.contains(&text.to_owned()), "{text}: {shown:?}");
     }
-    // Return accepts it, and its BriefText shows.
-    game.tap(Key::Enter);
+    // N refuses it; it has no RefuseText. An accept would drop the
+    // second offer too (`offer_shift`), so this one is refused.
+    game.tap(Key::Char('n'));
     assert!(game.offer().is_none());
-    assert_eq!(game.active(), [(0, MissionId(130))]);
-    assert_eq!(game.shown_text().as_deref(), Some("Welcome aboard."));
-    game.tap(Key::Enter);
     assert_eq!(game.shown_text(), None);
 
     // After the gap, the second; N refuses it, its RefuseText shows and
@@ -1038,13 +1036,36 @@ fn the_bar_offers_its_missions_one_after_another_and_a_refusal_runs_on_refuse() 
     game.tap(Key::Char('n'));
     assert!(game.offer().is_none());
     assert_eq!(game.shown_text().as_deref(), Some("Suit yourself."));
-    assert_eq!(game.active(), [(0, MissionId(130))], "refused");
+    assert_eq!(game.active(), [], "refused");
     let bit = nova_sim::control::Bit::new(7).expect("in range");
     assert!(game.session().control_bit(bit));
     assert!(saved(&store).control_bit(bit), "saved");
     game.tap(Key::Enter);
 
     // Nothing more is offered.
+    assert_eq!(game.await_offer(), None);
+    assert!(game.spaceport().open_bar().is_some(), "still in the bar");
+}
+
+#[test]
+fn accepting_the_bar_job_drops_the_second_offer_with_it() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_pilot(&store, &ada());
+    game.frame();
+    game.land();
+    game.click_port(BAR);
+
+    // Return accepts the bar job, and its BriefText shows.
+    assert_eq!(game.await_offer(), Some(MissionId(130)));
+    game.tap(Key::Enter);
+    assert!(game.offer().is_none());
+    assert_eq!(game.active(), [(0, MissionId(130))]);
+    assert_eq!(game.shown_text().as_deref(), Some("Welcome aboard."));
+    game.tap(Key::Enter);
+    assert_eq!(game.shown_text(), None);
+
+    // The list shifts from where the bar job was found, so the second
+    // offer goes with it (`_OfferMissionFromPort` @0xa377d-0xa37a1).
     assert_eq!(game.await_offer(), None);
     assert!(game.spaceport().open_bar().is_some(), "still in the bar");
 }

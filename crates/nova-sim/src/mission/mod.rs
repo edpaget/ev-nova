@@ -249,13 +249,22 @@
 //!   and refilters as that accept does. An `S` anywhere else, and the
 //!   offer dialog's accept at once of an offer that cannot be refused and
 //!   has no text (@0xa230a), leave a destination with one unreached and
-//!   the other offers as they are (the accept at once's own offer is
-//!   dropped by its caller, `_OfferMissionFromPort` @0xa3765-0xa37a1),
-//!   unless the Rulebook key
+//!   the offers as they are, unless the Rulebook key
 //!   [`start_outside_dialog`](crate::RuleKey::StartOutsideDialog) reads
-//!   otherwise. `A` ends every slot holding the mission, running
-//!   `OnAbort`, whatever its `CanAbort`. `F` marks each failed, running
-//!   nothing.
+//!   otherwise. Once an outside offer is answered, by an accept, a
+//!   refusal or the accept at once, unless the accept fails,
+//!   `_OfferMissionFromPort` shifts the outside list down from the index
+//!   it found the offer at, in the list as the answer left it
+//!   (@0xa377d-0xa37a1). So an accept from the dialog, its own offer
+//!   dropped already, drops the next outside offer listed too; a refusal
+//!   whose `OnRefuse` refilters can leave the refused offer listed; and
+//!   the accept at once drops its own offer, or with
+//!   `start_outside_dialog`'s other reading, which refilters, the next
+//!   one too. The Rulebook key
+//!   [`offer_shift`](crate::RuleKey::OfferShift) reads otherwise: each
+//!   answer drops only its own offer. `A` ends every slot holding the
+//!   mission, running `OnAbort`, whatever its `CanAbort`. `F` marks each
+//!   failed, running nothing.
 //!
 //! A pay (`_ApplyMissionPay` @0x98326) above 0 is cash; -10000 to -39999
 //! clean the negative records of a government, its allies or those
