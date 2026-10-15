@@ -5645,6 +5645,35 @@ pub(super) mod tests {
         assert!(!screen.take_quit(), "once");
     }
 
+    #[test]
+    fn an_escape_typed_during_a_keyed_click_quits_once_it_is_replayed() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        // E is refused with no pilot: the replay reaches the menu.
+        screen.input(&Input::Text('e'));
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert!(!screen.take_quit(), "held for the click");
+        screen.keyed_click_ended();
+        assert!(screen.take_quit(), "the replayed Escape quit");
+        assert!(!screen.take_quit(), "once");
+    }
+
+    #[test]
+    fn input_while_a_replayed_quit_is_untaken_does_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = menu(&store);
+        // E is refused with no pilot: the replay reaches the menu.
+        screen.input(&Input::Text('e'));
+        screen.input(&key(Key::Escape, true));
+        screen.keyed_click_ended();
+        ui_sounds(&mut screen);
+        assert_eq!(screen.input(&key(Key::Escape, false)), ScreenAction::None);
+        assert_eq!(screen.input(&key(Key::Escape, true)), ScreenAction::None);
+        assert_eq!(screen.input(&Input::Text('q')), ScreenAction::None);
+        assert_eq!(ui_sounds(&mut screen), [], "nothing clicked");
+        assert!(screen.take_quit());
+    }
+
     /// The interface sounds `screen` reports.
     fn ui_sounds(screen: &mut AppScreen) -> Vec<UiSound> {
         screen
