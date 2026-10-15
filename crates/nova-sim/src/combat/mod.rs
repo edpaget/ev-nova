@@ -662,7 +662,8 @@ impl Combat {
 
     /// The damage aimed at each ship by the shots in flight
     /// (`_CalculateTargetedDamage` @0x3a153-0x3a232): for each shot not
-    /// lost and aimed at a ship ([`Shot::aimed_at`]), its mass and energy
+    /// jammed ([`Jam::Clear`]) and aimed at a ship ([`Shot::aimed_at`]),
+    /// its mass and energy
     /// damage times [`AIMED_DAMAGE_SHARE`], added to that ship's total
     /// and truncated after each add. Beams are not shots and count for
     /// nothing. The original keeps each total in 16 bits; here it is not
@@ -1410,7 +1411,10 @@ fn holds_armour(armor: Gauge) -> bool {
 ///
 /// The original locks in `_HandleShot`, after the move and before the
 /// next frame's collision passes test that move; here it lands first
-/// among the tick's hits, which is the same order.
+/// among the tick's hits, which is the same order. The original's target
+/// sets +0x70 then, and its AI reads it the next frame; here the session
+/// answers the strike at its next traffic tick, a tick's lag with no
+/// frame drawn between.
 fn lock(shot: &Shot, sides: &Sides) -> Option<Landed> {
     let players = shot.firer == ShipRef::Player && matches!(shot.source, Source::Ship(_));
     if shot.weapon.guidance != Guidance::Homing

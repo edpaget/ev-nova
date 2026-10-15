@@ -12,7 +12,7 @@
 //!   ready point-defence weapon it can pay for, by weapon ID, at the
 //!   nearest candidate missile ([`choose`]), and nothing when there is
 //!   none.
-//! - A candidate is a live homing shot that has not lost its target, that
+//! - A candidate is a live homing shot that is not jammed (lost), that
 //!   point defence can target (no `Flags` 0x0080), that is fired at this
 //!   ship or at its fleet's lead (an escort defends its lead), that is
 //!   within the weapon's [`engagement_range`] and not in a blind spot (see
@@ -115,7 +115,7 @@ pub fn engagement_range(spec: &WeaponSpec) -> f32 {
 
 /// Whether point defence on `defender`, whether a mount choosing a
 /// missile or a shot passing one, can engage `missile` at all: a homing
-/// shot that has not lost its target, that point defence can target (no
+/// shot not jammed ([`Jam::Clear`]), that point defence can target (no
 /// `Flags` 0x0080), and whose firer `rule` calls hostile, with the
 /// relations in `govts`. A lost missile is neither chosen nor met.
 #[must_use]

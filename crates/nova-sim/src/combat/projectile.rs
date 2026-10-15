@@ -302,7 +302,10 @@ impl Shot {
     /// 998, and aimed at nothing from then on. A jammed shot keeps its
     /// ship. Point defence (guidance 9) is aimed at no ship every tick
     /// and is never lost. A ship breaking up is still active, so a shot
-    /// at it is not lost.
+    /// at it is not lost. A ship destroyed during a tick's resolution
+    /// makes its shots lost as they next move, the next tick: the
+    /// original's slot is cleared in `_HandleShipDisplay`, after
+    /// `_HandleShot` has run that frame.
     fn lose_a_gone_ship(&mut self, targets: &[Target]) {
         if self.weapon.guidance == Guidance::PointDefence {
             self.aimed_at = None;
