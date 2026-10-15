@@ -72,6 +72,12 @@ pub struct SoundTable {
     pub ship_downed: Option<SoundId>,
     /// Plays as the player's ship being downed fails a mission.
     pub downed_mission_failed: Option<SoundId>,
+    /// Plays as a mission's special ship lost fails a mission that isn't
+    /// hidden.
+    pub mission_ship_lost: Option<SoundId>,
+    /// Plays with the comm line said as a mission's special ship is
+    /// boarded.
+    pub mission_ship_boarded: Option<SoundId>,
     /// Plays as traffic control answers the player: the dock request's
     /// line and its denial, and the dock approach's greeting.
     pub traffic_control: Option<SoundId>,
@@ -184,6 +190,14 @@ impl SoundTable {
     /// - `downed_mission_failed`: 151, `_beepSnd[1]`, which `_DamageShip`
     ///   plays as either fails the player's first `Flags2` 0x0004 mission
     ///   (@0x3b04e, @0x3b2f1).
+    /// - `mission_ship_lost`: 151, `_beepSnd[1]`, which
+    ///   `_HandleShipDisplay` plays as a mission's special ship destroyed
+    ///   (@0x2db5a) and `_DamageShip` as one disabled (@0x3af11) fails a
+    ///   mission that isn't hidden.
+    /// - `mission_ship_boarded`: 154, `_beepSnd[4]`, which
+    ///   `_HandlePlayerBoardAttempt` plays with the comm line of a mission
+    ///   ship boarded on the pickup path (@0x6556b) and the assist path
+    ///   (@0x656ee).
     /// - `traffic_control`: 151, `_beepSnd[1]`, which
     ///   `_HandlePlayerDockRequest` plays with the request's line
     ///   (@0x67a69) and its denial (@0x67ec6), and
@@ -255,6 +269,8 @@ impl SoundTable {
         tutorial_hint: Some(SoundId(154)),
         ship_downed: Some(SoundId(151)),
         downed_mission_failed: Some(SoundId(151)),
+        mission_ship_lost: Some(SoundId(151)),
+        mission_ship_boarded: Some(SoundId(154)),
         traffic_control: Some(SoundId(151)),
         klaxon: Some(SoundId(371)),
         eject: Some(SoundId(372)),
@@ -315,6 +331,12 @@ mod tests {
             "_beepSnd[1]"
         );
         assert_eq!(table.traffic_control, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(table.mission_ship_lost, Some(SoundId(151)), "_beepSnd[1]");
+        assert_eq!(
+            table.mission_ship_boarded,
+            Some(SoundId(154)),
+            "_beepSnd[4]"
+        );
         assert_eq!(table.klaxon, Some(SoundId(371)), "_klaxxonSnd");
         assert_eq!(table.eject, Some(SoundId(372)), "_escapePodSnd");
         assert_eq!(table.onboard_explosion, Some(SoundId(300)), "_explodSnd[0]");

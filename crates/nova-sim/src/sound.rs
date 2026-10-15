@@ -85,6 +85,17 @@ pub enum SimSound {
     /// 0x0004 mission: `_beepSnd[1]`, `snd ` 151 (`_DamageShip`
     /// @0x3b04e, @0x3b2f1), hidden or not.
     DownedMissionFailed,
+    /// A mission's special ship lost (destroyed or disabled) failed a
+    /// mission that isn't hidden, with
+    /// [`SimMessage::MissionShipLost`](crate::SimMessage::MissionShipLost):
+    /// `_beepSnd[1]`, `snd ` 151 (`_HandleShipDisplay` @0x2db31-0x2db5a,
+    /// `_DamageShip` @0x3aee8-0x3af11).
+    MissionShipLost,
+    /// The comm line said as a mission's special ship is boarded, on the
+    /// pickup path or the assist path: `_beepSnd[4]`, `snd ` 154
+    /// (`_HandlePlayerBoardAttempt` @0x65548-0x6556b, @0x656cb-0x656ee).
+    /// A board off the assist path says nothing and is silent.
+    MissionShipBoarded,
     /// A nav key was taken: Nav Off and Hyperspace Mode on every press
     /// (`_HandlePlayer` @0x69b19), a stellar key that found a stellar,
     /// even the one selected (@0x69ebc), and a click on a stellar not

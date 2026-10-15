@@ -116,78 +116,87 @@ impl<A: Audio> AudioCore<A> {
         }
         self.reconcile();
         for &sound in sounds {
-            match sound {
-                // Thrust counts only in flight, where the ship flies.
-                Sound::Sim(SimSound::ThrustStarted) => {
-                    self.thrusting = self.scene == Some(Showing::Flight);
-                }
-                Sound::Sim(SimSound::ThrustStopped) => self.thrusting = false,
-                Sound::Sim(SimSound::Landed { stellar_sound }) => {
-                    self.play(self.table.landing);
-                    self.play(stellar_sound);
-                }
-                Sound::Sim(SimSound::TookOff) => self.play(self.table.take_off),
-                Sound::Sim(SimSound::JumpBegan) => self.play(self.table.jump),
-                Sound::Sim(SimSound::Arrived) => self.play(self.table.arrival),
-                Sound::Sim(SimSound::ScriptMessage) => self.play(self.table.script_message),
-                Sound::Sim(SimSound::RedAlert) => self.play(self.table.red_alert),
-                Sound::Sim(SimSound::CargoJettisoned) => self.play(self.table.jettison),
-                Sound::Sim(SimSound::ScanFailedMission) => self.play(self.table.scan_failed),
-                Sound::Sim(SimSound::Smuggling) => self.play(self.table.smuggling),
-                Sound::Sim(SimSound::Script {
-                    sound,
-                    exclusive: false,
-                }) => self.play(Some(sound)),
-                Sound::Sim(SimSound::Script {
-                    sound,
-                    exclusive: true,
-                }) => {
-                    if self.settings.sound {
-                        self.audio.run(AudioCommand::PlayExclusive {
-                            sound,
-                            volume: self.settings.effects_volume,
-                        });
-                    }
-                }
-                Sound::Ui(UiSound::ButtonDown) => self.play(self.table.button_down),
-                Sound::Ui(UiSound::ButtonUp) => self.play(self.table.button_up),
-                Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
-                Sound::Sim(SimSound::EscortsCommanded) => self.play(self.table.escorts_commanded),
-                Sound::Sim(SimSound::EscortRepaired) => self.play(self.table.escort_repaired),
-                Sound::Sim(SimSound::FleetArrivalQuote) => self.play(self.table.fleet_quote),
-                Sound::Sim(SimSound::HailOffer) => self.play(self.table.hail_offer),
-                Sound::Sim(SimSound::HailQuote) => self.play(self.table.hail_quote),
-                Sound::Sim(SimSound::NavSelected) => self.play(self.table.nav_selected),
-                Sound::Sim(SimSound::HyperSelected) => self.play(self.table.hyper_selected),
-                Sound::Sim(SimSound::TargetCleared) => self.play(self.table.target_cleared),
-                Sound::Sim(SimSound::TutorialHint) => self.play(self.table.tutorial_hint),
-                Sound::Sim(SimSound::ShipDowned) => self.play(self.table.ship_downed),
-                Sound::Sim(SimSound::DownedMissionFailed) => {
-                    self.play(self.table.downed_mission_failed);
-                }
-                Sound::Sim(SimSound::TrafficControl) => self.play(self.table.traffic_control),
-                Sound::Sim(SimSound::Klaxon) => self.sound_klaxon(),
-                Sound::Sim(SimSound::Ejected) => self.play(self.table.eject),
-                Sound::Sim(SimSound::OnboardExplosion) => {
-                    self.play(self.table.onboard_explosion);
-                }
-                Sound::Sim(SimSound::JumpCollapsed) => self.play(self.table.jump_collapsed),
-                Sound::Sim(SimSound::Refused) => self.play(self.table.refused),
-                Sound::Sim(SimSound::Halt(sounds)) => self.halt(sounds),
-                Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
-                Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
-                Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
-                Sound::Ui(UiSound::NewsOpened) => self.play(self.table.news_open),
-                Sound::Ui(UiSound::NewsClosed) => self.play(self.table.news_close),
-                Sound::Ui(UiSound::MapOpened) => self.play(self.table.map_open),
-                Sound::Ui(UiSound::MapClosed) => self.play(self.table.map_close),
-                Sound::Combat(fight) => {
-                    let gain = distance_gain(fight.offset);
-                    let volume = self.settings.effects_volume.amplitude() * gain;
-                    self.play_at(Some(fight.sound), Volume::new(volume));
+            self.take(sound);
+            self.reconcile();
+        }
+    }
+
+    /// Takes in one of a frame's `sounds`.
+    fn take(&mut self, sound: Sound) {
+        match sound {
+            // Thrust counts only in flight, where the ship flies.
+            Sound::Sim(SimSound::ThrustStarted) => {
+                self.thrusting = self.scene == Some(Showing::Flight);
+            }
+            Sound::Sim(SimSound::ThrustStopped) => self.thrusting = false,
+            Sound::Sim(SimSound::Landed { stellar_sound }) => {
+                self.play(self.table.landing);
+                self.play(stellar_sound);
+            }
+            Sound::Sim(SimSound::TookOff) => self.play(self.table.take_off),
+            Sound::Sim(SimSound::JumpBegan) => self.play(self.table.jump),
+            Sound::Sim(SimSound::Arrived) => self.play(self.table.arrival),
+            Sound::Sim(SimSound::ScriptMessage) => self.play(self.table.script_message),
+            Sound::Sim(SimSound::RedAlert) => self.play(self.table.red_alert),
+            Sound::Sim(SimSound::CargoJettisoned) => self.play(self.table.jettison),
+            Sound::Sim(SimSound::ScanFailedMission) => self.play(self.table.scan_failed),
+            Sound::Sim(SimSound::Smuggling) => self.play(self.table.smuggling),
+            Sound::Sim(SimSound::Script {
+                sound,
+                exclusive: false,
+            }) => self.play(Some(sound)),
+            Sound::Sim(SimSound::Script {
+                sound,
+                exclusive: true,
+            }) => {
+                if self.settings.sound {
+                    self.audio.run(AudioCommand::PlayExclusive {
+                        sound,
+                        volume: self.settings.effects_volume,
+                    });
                 }
             }
-            self.reconcile();
+            Sound::Ui(UiSound::ButtonDown) => self.play(self.table.button_down),
+            Sound::Ui(UiSound::ButtonUp) => self.play(self.table.button_up),
+            Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
+            Sound::Sim(SimSound::EscortsCommanded) => self.play(self.table.escorts_commanded),
+            Sound::Sim(SimSound::EscortRepaired) => self.play(self.table.escort_repaired),
+            Sound::Sim(SimSound::FleetArrivalQuote) => self.play(self.table.fleet_quote),
+            Sound::Sim(SimSound::HailOffer) => self.play(self.table.hail_offer),
+            Sound::Sim(SimSound::HailQuote) => self.play(self.table.hail_quote),
+            Sound::Sim(SimSound::NavSelected) => self.play(self.table.nav_selected),
+            Sound::Sim(SimSound::HyperSelected) => self.play(self.table.hyper_selected),
+            Sound::Sim(SimSound::TargetCleared) => self.play(self.table.target_cleared),
+            Sound::Sim(SimSound::TutorialHint) => self.play(self.table.tutorial_hint),
+            Sound::Sim(SimSound::ShipDowned) => self.play(self.table.ship_downed),
+            Sound::Sim(SimSound::DownedMissionFailed) => {
+                self.play(self.table.downed_mission_failed);
+            }
+            Sound::Sim(SimSound::MissionShipLost) => self.play(self.table.mission_ship_lost),
+            Sound::Sim(SimSound::MissionShipBoarded) => {
+                self.play(self.table.mission_ship_boarded);
+            }
+            Sound::Sim(SimSound::TrafficControl) => self.play(self.table.traffic_control),
+            Sound::Sim(SimSound::Klaxon) => self.sound_klaxon(),
+            Sound::Sim(SimSound::Ejected) => self.play(self.table.eject),
+            Sound::Sim(SimSound::OnboardExplosion) => {
+                self.play(self.table.onboard_explosion);
+            }
+            Sound::Sim(SimSound::JumpCollapsed) => self.play(self.table.jump_collapsed),
+            Sound::Sim(SimSound::Refused) => self.play(self.table.refused),
+            Sound::Sim(SimSound::Halt(sounds)) => self.halt(sounds),
+            Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
+            Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
+            Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
+            Sound::Ui(UiSound::NewsOpened) => self.play(self.table.news_open),
+            Sound::Ui(UiSound::NewsClosed) => self.play(self.table.news_close),
+            Sound::Ui(UiSound::MapOpened) => self.play(self.table.map_open),
+            Sound::Ui(UiSound::MapClosed) => self.play(self.table.map_close),
+            Sound::Combat(fight) => {
+                let gain = distance_gain(fight.offset);
+                let volume = self.settings.effects_volume.amplitude() * gain;
+                self.play_at(Some(fight.sound), Volume::new(volume));
+            }
         }
     }
 
@@ -933,6 +942,32 @@ mod tests {
         core.set_sound(false);
         drain(&log);
         core.update(Some(Showing::ShipBrowser), &DOWNED);
+        assert_eq!(drain(&log), [], "sound off");
+    }
+
+    #[test]
+    fn a_mission_ship_lost_and_one_boarded_each_beep_their_table_entry() {
+        const MISSION_SHIPS: [Sound; 2] = [
+            Sound::Sim(SimSound::MissionShipLost),
+            Sound::Sim(SimSound::MissionShipBoarded),
+        ];
+        let (mut core, log) = original();
+        core.set_effects_volume(Volume::new(0.5));
+        core.update(Some(Showing::ShipBrowser), &MISSION_SHIPS);
+        assert_eq!(drain(&log), [play(151, 0.5), play(154, 0.5)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            mission_ship_lost: Some(SoundId(301)),
+            mission_ship_boarded: Some(SoundId(302)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(Some(Showing::ShipBrowser), &MISSION_SHIPS);
+        assert_eq!(drain(&log), [play(301, 1.0), play(302, 1.0)], "the table's");
+        core.set_sound(false);
+        drain(&log);
+        core.update(Some(Showing::ShipBrowser), &MISSION_SHIPS);
         assert_eq!(drain(&log), [], "sound off");
     }
 

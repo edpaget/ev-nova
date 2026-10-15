@@ -196,6 +196,7 @@ use crate::mission::{
 };
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::session::mission_screens::MissionTextKind;
+use crate::sound::SimSound;
 use crate::story::{
     Consumer, Entrance, EventFilter, Fate, StoryEvent, StoryEventKind, Subscription, SubscriptionId,
 };
@@ -1095,7 +1096,11 @@ impl Session {
     /// ([`assists`]), on which its slot counts it boarded and the comm
     /// line is said. Off both paths, a board counts only by the other
     /// reading of [`RuleKey::PlainBoardCounts`] ([`plain_board_counts`]),
-    /// with no comm line. Then it is marked boarded (@0x65f43), with no
+    /// with no comm line. Each comm line said, on the pickup path and the
+    /// assist path, beeps [`SimSound::MissionShipBoarded`] (`_beepSnd[4]`
+    /// @0x6556b, @0x656ee); the refused pickup raises none here (its
+    /// `_beepSnd[3]` @0x65ffe is the board refusal's). Then it is marked
+    /// boarded (@0x65f43), with no
     /// `BoardPenalty`, person's offer or plunder. A ship of a failed
     /// mission is boarded for plunder, but still with no `BoardPenalty`
     /// (the slap @0x6582b passes its mark; see [`Session::board`]):
@@ -1121,6 +1126,7 @@ impl Session {
                     active.ships.boarded = active.ships.boarded.saturating_add(1);
                 }
                 self.mark_boarded(npc.id);
+                self.sounds.push(SimSound::MissionShipBoarded);
                 return Some(Ok(Boarding::MissionShip(Some(
                     MissionBoardLine::Retrieved { cargo },
                 ))));
@@ -1140,6 +1146,9 @@ impl Session {
             }
         }
         self.mark_boarded(npc.id);
+        if line.is_some() {
+            self.sounds.push(SimSound::MissionShipBoarded);
+        }
         Some(Ok(Boarding::MissionShip(line)))
     }
 
@@ -1356,6 +1365,7 @@ impl Session {
         if fails {
             if record.flags & HIDDEN == 0 {
                 self.messages.push(SimMessage::MissionShipLost);
+                self.sounds.push(SimSound::MissionShipLost);
             }
             self.quick_failure(mark.slot, &record, chance);
         }
@@ -2656,18 +2666,38 @@ pub(super) mod tests {
             .and_then(|active| active.failed)
     }
 
+    /// How many [`SimSound::MissionShipLost`] beeps are pending, taken.
+    fn lost_beeps(session: &mut Session) -> usize {
+        session
+            .take_sounds()
+            .iter()
+            .filter(|sound| **sound == crate::SimSound::MissionShipLost)
+            .count()
+    }
+
+    /// How many [`SimSound::MissionShipBoarded`] beeps are pending, taken.
+    fn boarded_beeps(session: &mut Session) -> usize {
+        session
+            .take_sounds()
+            .iter()
+            .filter(|sound| **sound == crate::SimSound::MissionShipBoarded)
+            .count()
+    }
+
     #[test]
     fn the_first_ship_destroyed_fails_an_escort_disable_or_unboarded_rescue_at_once() {
         for goal in [1, 3, 5] {
             let catalog = goal_catalog(goal, 0);
             let mut session = in_flight(&catalog);
             let _ = session.take_messages();
+            let _ = session.take_sounds();
             destroy(&mut session, 0);
             assert_eq!(
                 session.take_messages(),
                 [SimMessage::MissionShipLost],
                 "{goal}"
             );
+            assert_eq!(lost_beeps(&mut session), 1, "{goal}: _beepSnd[1]");
             // An escort goal's take-off check, after the setup, met it
             // with its ships here: OnShipDone (b6) ran.
             let ran: &[u16] = if goal == 3 { &[5, 6] } else { &[5] };
@@ -2691,8 +2721,10 @@ pub(super) mod tests {
         assert_eq!(failed(&session), Some(FailedBy::Quick));
         assert_eq!(bits(&session), [5, 6]);
         assert_eq!(session.take_messages(), [SimMessage::MissionShipLost]);
+        assert_eq!(lost_beeps(&mut session), 1);
         destroy(&mut session, 0);
         assert_eq!(session.take_messages(), [], "fails once");
+        assert_eq!(lost_beeps(&mut session), 0, "beeps once");
         assert_eq!(bits(&session), [5, 6], "OnFailure ran once");
         let ships = ships_of(&session);
         assert_eq!((ships.destroyed, ships.left), (2, 0), "both counted");
@@ -2732,6 +2764,7 @@ pub(super) mod tests {
         destroy(&mut session, 0);
         disable(&mut session, 0);
         assert_eq!(session.take_messages(), []);
+        assert_eq!(lost_beeps(&mut session), 0);
         assert_eq!(failed(&session), None);
         assert_eq!(
             bits(&session),
@@ -2754,6 +2787,7 @@ pub(super) mod tests {
         let _ = session.take_messages();
         destroy(&mut session, 0);
         assert_eq!(session.take_messages(), []);
+        assert_eq!(lost_beeps(&mut session), 0);
         assert_eq!(failed(&session), None);
         assert_eq!(bits(&session), [] as [u16; 0]);
         assert!(session.pilot().missions().get(0).is_some(), "still held");
@@ -2768,6 +2802,7 @@ pub(super) mod tests {
             let _ = session.take_messages();
             destroy(&mut session, 0);
             assert_eq!(session.take_messages(), [], "{can_abort}: no message");
+            assert_eq!(lost_beeps(&mut session), 0, "{can_abort}: no beep");
             assert_eq!(bits(&session), [5], "{can_abort}: OnFailure ran");
             if can_abort == 0 {
                 assert_eq!(failed(&session), Some(FailedBy::Quick), "held, failed");
@@ -2782,8 +2817,10 @@ pub(super) mod tests {
         let catalog = goal_catalog(3, 0);
         let mut session = in_flight(&catalog);
         let _ = session.take_messages();
+        let _ = session.take_sounds();
         disable(&mut session, 1);
         assert_eq!(session.take_messages(), [SimMessage::MissionShipLost]);
+        assert_eq!(lost_beeps(&mut session), 1, "_beepSnd[1]");
         assert_eq!(bits(&session), [5, 6], "OnShipDone at the take-off's check");
         assert!(session.pilot().missions().get(0).is_none());
     }
@@ -4396,6 +4433,7 @@ pub(super) mod tests {
         let catalog = rescuing(5, 1, 0x0001);
         let mut session = in_flight_with(&catalog, 1);
         let _ = shown(&mut session);
+        let _ = session.take_sounds();
         let (boarding, crimes) = board_first(&mut session);
         assert_eq!(
             boarding,
@@ -4403,6 +4441,7 @@ pub(super) mod tests {
                 MissionBoardLine::Boarded
             )))
         );
+        assert_eq!(boarded_beeps(&mut session), 1, "_beepSnd[4]");
         assert_eq!(crimes, [], "no BoardPenalty");
         assert_eq!(session.boarding(), None, "no plunder");
         assert!(session.npcs()[0].boarded);
@@ -4424,6 +4463,7 @@ pub(super) mod tests {
         let catalog = rescuing(5, 1, 0x0409);
         let mut session = in_flight_with(&catalog, 1);
         let fuel = session.reserves().fuel.now;
+        let _ = session.take_sounds();
         let (boarding, _) = board_first(&mut session);
         assert_eq!(
             boarding,
@@ -4431,6 +4471,7 @@ pub(super) mod tests {
                 MissionBoardLine::Refuelled { ship: ShipId(200) }
             )))
         );
+        assert_eq!(boarded_beeps(&mut session), 1, "_beepSnd[4]");
         settle(&mut session, &catalog);
         assert!(session.pilot().missions().get(0).is_none(), "auto-aborted");
         assert!((session.reserves().fuel.now - (fuel - 100.0)).abs() < f32::EPSILON);
@@ -4462,7 +4503,9 @@ pub(super) mod tests {
             catalog.missions[0].pickup_mode = pickup;
             let mut session =
                 in_flight_with(&catalog, count).with_rules(plain_board(crate::RuleSource::Engine));
+            let _ = session.take_sounds();
             let (boarding, crimes) = board_first(&mut session);
+            assert_eq!(boarded_beeps(&mut session), 0, "{goal}: nothing said");
             assert_eq!(
                 boarding,
                 Ok(crate::board::Boarding::MissionShip(None)),
@@ -4489,7 +4532,9 @@ pub(super) mod tests {
             let mut session =
                 in_flight_with(&catalog, count).with_rules(plain_board(crate::RuleSource::Bible));
             let _ = shown(&mut session);
+            let _ = session.take_sounds();
             let (boarding, crimes) = board_first(&mut session);
+            assert_eq!(boarded_beeps(&mut session), 0, "{goal}: nothing said");
             assert_eq!(
                 boarding,
                 Ok(crate::board::Boarding::MissionShip(None)),
@@ -4550,7 +4595,9 @@ pub(super) mod tests {
             let mut session = in_flight_with(&catalog, 1);
             let _ = shown(&mut session);
             assert!(!cargo_aboard(&session), "{goal}");
+            let _ = session.take_sounds();
             let (boarding, crimes) = board_at(&mut session, 0, DRIFT);
+            assert_eq!(boarded_beeps(&mut session), 1, "{goal}: _beepSnd[4]");
             assert_eq!(
                 boarding,
                 Ok(crate::board::Boarding::MissionShip(Some(
@@ -4623,8 +4670,14 @@ pub(super) mod tests {
         if let Some(active) = session.pilot.missions.get_mut(0) {
             active.cargo_tons = 100_000;
         }
+        let _ = session.take_sounds();
         let (boarding, crimes) = board_at(&mut session, 0, DRIFT);
         assert_eq!(boarding, Err(crate::board::BoardRefusal::CantBoard));
+        assert_eq!(
+            boarded_beeps(&mut session),
+            0,
+            "the refusal's snd 153 is the board refusal's, not this line's"
+        );
         assert_eq!(crimes, []);
         assert!(session.strikes.is_empty(), "no help called");
         assert_eq!(session.boarding(), None);
