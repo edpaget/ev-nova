@@ -145,10 +145,25 @@ impl Session {
             .collect()
     }
 
+    /// The auxiliary-ship mark ([`Npc::aux`]) of each of the fleet's
+    /// escorts, by its index: its NPC's in the system, if any. As
+    /// `_DeleteAllComputerShips(0)` keeps the player's ships whole
+    /// (@0x3bf7e-0x3bfb6), a captured aux ship keeps its mark across a
+    /// setup.
+    pub(super) fn fleet_aux_marks(&self) -> Vec<Option<u8>> {
+        (0..self.pilot.escorts.len())
+            .map(|index| {
+                let id = self.fleet.get(index).copied().flatten()?;
+                self.npc(id)?.aux
+            })
+            .collect()
+    }
+
     /// The escorts enter the system (see the module docs): by the
     /// engine their standing orders are reset, and each is placed on its
-    /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`]).
-    pub(super) fn enter_escorts(&mut self, berths: &[u32]) {
+    /// slot, escort `i` at berth `berths[i]` ([`Session::fleet_berths`])
+    /// with the aux mark `marks[i]` ([`Session::fleet_aux_marks`]).
+    pub(super) fn enter_escorts(&mut self, berths: &[u32], marks: &[Option<u8>]) {
         if self.rules.source_for(RuleKey::EscortOrders) == RuleSource::Engine {
             for escort in &mut self.pilot.escorts {
                 escort.order = None;
@@ -161,7 +176,13 @@ impl Session {
             self.class_orders = [None; 4];
         }
         self.fleet = (0..self.pilot.escorts.len())
-            .map(|index| self.place_escort_at(index, berths.get(index).copied()))
+            .map(|index| {
+                let id = self.place_escort_at(index, berths.get(index).copied())?;
+                if let Some(npc) = self.npc_mut(id) {
+                    npc.aux = marks.get(index).copied().flatten();
+                }
+                Some(id)
+            })
             .collect();
         self.traffic.reserve(BTreeSet::new());
         self.restock_persons = false;

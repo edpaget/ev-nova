@@ -41,7 +41,10 @@
 //! left to come ([`AuxShips::give_back`]), so without `Flags` 0x0010 the
 //! next visit brings those still alive, and those destroyed never come
 //! again. A ship that jumped out or landed is gone already, and gives
-//! nothing back.
+//! nothing back. Nor does one the drop keeps: at a setup the fleet's
+//! escorts (`_DeleteAllComputerShips(0)` @0x3bf7e-0x3bfb6), so a
+//! captured aux ship keeps its mark and gives one back only at the
+//! first setup after its release.
 //!
 //! [`AuxShips::tick`]: crate::mission::aux_ships::AuxShips::tick
 //! [`AuxShips::restart`]: crate::mission::aux_ships::AuxShips::restart
@@ -183,8 +186,10 @@ impl Session {
     }
 
     /// The system's ships dropped but those in `kept`: each other
-    /// auxiliary ship of an active slot gives one back to it
-    /// (`_DeleteAllComputerShips` @0x3bfce-0x3c028).
+    /// auxiliary ship of an active slot gives one back to it, capped at
+    /// the slot's count (`_DeleteAllComputerShips` @0x3bfe8-0x3c024). A
+    /// kept ship, one `_DeleteAllComputerShips(0)` skips whole
+    /// (@0x3bf7e-0x3bfb6), gives nothing back.
     pub(super) fn give_back_aux_ships(&mut self, kept: &BTreeSet<NpcId>) {
         let slots: Vec<u8> = self
             .npcs()
@@ -672,7 +677,7 @@ mod tests {
 
     /// Under the original only a ship with leader 0 is carried
     /// (`_EvalSetExp` @0x15807-0x1583e): an aux ship only once captured,
-    /// `_DoShipCapture` @0x41419 setting its leader 0, the capture
+    /// `_HandlePlayerBoardAttempt` @0x65bbf setting its leader 0, the capture
     /// keeping `npc.aux`. By the other reading of
     /// [`RuleKey::MoveLeftBehind`], the rest are given back at the move.
     #[test]
@@ -686,6 +691,50 @@ mod tests {
         assert_eq!(session.system(), SystemId(131));
         assert_eq!(aux_here(&session), 1, "the captured one comes");
         assert_eq!(aux_of(&session).left, 2, "the one the player leads kept");
+    }
+
+    // Kept across a setup.
+
+    /// `_DeleteAllComputerShips(0)` skips a ship of AI type above 4 that
+    /// the player leads, defending no stellar, of no mission slot and
+    /// not disabled (@0x3bf7e-0x3bfb6): a captured aux ship gives
+    /// nothing back.
+    #[test]
+    fn a_setup_gives_back_no_aux_ship_for_an_escort_it_keeps() {
+        let catalog = aux_only(3, -1, 0);
+        let mut session = accepted(&catalog);
+        let ids = three_in(&mut session, &catalog);
+        session.fleet_up(ids[0], None);
+        land_and_take_off(&mut session, &catalog);
+        assert_eq!(aux_of(&session).left, 2, "the escort kept");
+    }
+
+    /// The board capture never writes +0x8a (@0x65bb1-0x65c76), and a
+    /// kept ship keeps every field.
+    #[test]
+    fn an_escort_kept_across_a_setup_keeps_its_aux_mark() {
+        let catalog = aux_only(3, -1, 0);
+        let mut session = accepted(&catalog);
+        let ids = three_in(&mut session, &catalog);
+        session.fleet_up(ids[0], None);
+        land_and_take_off(&mut session, &catalog);
+        let escort = session.fleet[0].expect("placed");
+        assert_eq!(session.npc(escort).expect("in").aux, Some(0));
+    }
+
+    /// Released, it is no longer kept, so the next setup gives it back
+    /// (@0x3bfe8-0x3c024).
+    #[test]
+    fn an_escort_released_after_a_setup_gives_its_aux_ship_back_at_the_next() {
+        let catalog = aux_only(3, -1, 0);
+        let mut session = accepted(&catalog);
+        let ids = three_in(&mut session, &catalog);
+        session.fleet_up(ids[0], None);
+        land_and_take_off(&mut session, &catalog);
+        let escort = session.fleet[0].expect("placed");
+        session.release(escort);
+        land_and_take_off(&mut session, &catalog);
+        assert_eq!(aux_of(&session).left, 3, "the released one given back");
     }
 
     #[test]

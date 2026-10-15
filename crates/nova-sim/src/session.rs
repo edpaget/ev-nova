@@ -1433,13 +1433,23 @@ impl Session {
     /// `mission_ships` module). Once the ships are in, each mission of
     /// `Flags` 0x0001 whose slot the setup took auto-aborts, in slot
     /// order.
+    ///
+    /// The ships dropped give their aux ships back, but the fleet's
+    /// escorts: `_DeleteAllComputerShips(0)` keeps each ship of AI type
+    /// above 4 that the player leads, defending no stellar, of no
+    /// mission slot and not disabled, whole (@0x3bf7e-0x3bfb6). A
+    /// disabled escort has left the fleet already, and mission escorts
+    /// and fighters carry no aux mark, so the fleet is exactly the kept
+    /// ships with one; each keeps its mark into the new system.
     fn populate_as(
         &mut self,
         catalog: &(impl TrafficCatalog + ?Sized),
         chance: &mut (impl Chance + ?Sized),
         entering: Option<Entrance>,
     ) {
-        self.give_back_aux_ships(&BTreeSet::new());
+        let kept: BTreeSet<NpcId> = self.fleet.iter().copied().flatten().collect();
+        let marks = self.fleet_aux_marks();
+        self.give_back_aux_ships(&kept);
         let table = self.spawn_table(catalog);
         let (missions, set_up) = self.setup_mission_ships(&table, entering, chance);
         let facts = control::Facts {
@@ -1469,7 +1479,7 @@ impl Session {
         self.story.watched.clear();
         self.mission_ships_came(last);
         self.abort_set_up(&set_up, &mut &mut *chance);
-        self.enter_escorts(&berths);
+        self.enter_escorts(&berths, &marks);
         if entering.is_none() {
             self.snap_mission_escorts();
         }
