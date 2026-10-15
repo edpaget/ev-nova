@@ -2239,14 +2239,10 @@ impl AppScreen {
         spaceport.input(input);
         open_bar_map(spaceport, self.flight.as_mut().expect(ENTERED));
         // A new opening clears what lasts one, and the outfitter it opened
-        // on was the cached one: it shows the flight's afresh.
-        if spaceport.take_outfitter_opened() {
-            let flight = self.flight.as_mut().expect(ENTERED);
-            flight.open_outfitter();
-            if let Some(outfitter) = flight.outfitter() {
-                spaceport.set_outfitter(outfitter);
-            }
-        }
+        // on was the cached one: it shows the flight's afresh, or, listing
+        // nothing, says so and never opens, the port's `_DrawStatus` after
+        // it still drawing a marked nav.
+        open_outfitter(spaceport, self.flight.as_mut().expect(ENTERED));
         let trade = spaceport.take_trade();
         let outfit = spaceport.take_outfit();
         let ship = spaceport.take_ship();
@@ -2573,6 +2569,26 @@ impl AppScreen {
             return ScreenAction::None;
         }
         self.shown_mut().input(input)
+    }
+}
+
+/// Shows `spaceport`'s outfitter as `flight` has it, once it has opened
+/// ([`SpaceportView::take_outfitter_opened`]): `flight` clears what lasts
+/// one opening first. Listing nothing, the outfitter says so and never
+/// opens ([`SpaceportView::set_opened_outfitter`]), and the port's
+/// `_DrawStatus` after it still draws a marked nav
+/// ([`FlightView::empty_outfitter_returned`]), before any port dialog's
+/// opening is told.
+fn open_outfitter(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if !spaceport.take_outfitter_opened() {
+        return;
+    }
+    flight.open_outfitter();
+    if let Some(outfitter) = flight.outfitter() {
+        spaceport.set_opened_outfitter(outfitter);
+    }
+    if spaceport.take_empty_outfitter() {
+        flight.empty_outfitter_returned();
     }
 }
 
@@ -6546,6 +6562,45 @@ pub(super) mod tests {
 
     const BOOSTER: OutfitId = OutfitId(128);
 
+    /// [`data`] with the status bar ([`barred`]), its planet an
+    /// outfitter selling nothing, as no `oütf` exists.
+    fn empty_outfitter_data() -> Rc<GameData> {
+        let mut built = barred(game_data_fork(false, false, false, 100, b"", b"", None)).build();
+        let stellar = built.layout.data_entry(Stellar::TYPE, 128) + 4;
+        built.bytes[stellar + 0x09] |= 0x04;
+        loaded_bytes(built.bytes)
+    }
+
+    #[test]
+    fn an_empty_outfitter_shows_its_text_and_restores_nothing() {
+        let store = MemoryPilots::new();
+        let mut screen = landed_outfitter_over(&store, empty_outfitter_data());
+        assert!(
+            spaceport(&screen)
+                .offered()
+                .contains(&nova_sim::Service::Outfitter)
+        );
+        let bar = bar_drawn(&screen);
+        click_port_item(&mut screen, 8);
+        assert!(
+            spaceport(&screen).open_outfitter().is_none(),
+            "never opened"
+        );
+        assert_eq!(
+            spaceport(&screen)
+                .mission_text()
+                .map(|text| text.lines().join(" ")),
+            Some(nova_view::spaceport::outfitter::NO_ITEMS.to_owned())
+        );
+        assert_eq!(bar_drawn(&screen), bar, "the status bar as it was");
+        screen.input(&key(Key::Enter, true));
+        assert!(
+            spaceport(&screen).mission_text().is_none(),
+            "the text closed"
+        );
+        assert_eq!(screen.showing(), Showing::Spaceport);
+    }
+
     #[test]
     fn the_outfitter_opens_the_stellars_outfitter() {
         let store = MemoryPilots::new();
@@ -7650,7 +7705,10 @@ pub(super) mod tests {
         assert_eq!(rolls.borrow().asked, 2, "drawn again");
         screen.input(&key(Key::Escape, true));
         click_port_item(&mut screen, 9);
-        assert!(!lists_second(&screen), "the new roll missed");
+        assert!(
+            spaceport(&screen).open_shipyard().is_none(),
+            "the new roll missed: nothing listed, it never opens"
+        );
     }
 
     #[test]
