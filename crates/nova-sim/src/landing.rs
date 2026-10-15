@@ -175,9 +175,11 @@ pub enum LandingRefusal {
     /// [`Session`](crate::Session) gives this before [`check_landing`] is
     /// asked.
     Jumping,
-    /// The ship is disabled, breaking up or destroyed. The
-    /// [`Session`](crate::Session) gives this before [`check_landing`] is
-    /// asked.
+    /// The ship is disabled, breaking up or destroyed: refused silently,
+    /// the dock request's bare epilogue 0x67eef, after the landability
+    /// check (and the fee and cloak, not modelled) for a disabled ship,
+    /// and before anything for a breaking-up or destroyed one (see
+    /// [`Session::land`](crate::Session::land)).
     Disabled,
     /// The system has no stellars.
     NoStellars,

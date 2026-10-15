@@ -147,8 +147,9 @@ pub struct FateRow {
     ///
     /// - Flying and disabled: every one. The session refuses on its own
     ///   what the original refuses a disabled ship (`JumpRefusal::Disabled`,
-    ///   `LandingRefusal::Disabled`), so the view keeps sending them and
-    ///   the refusals still show.
+    ///   and `LandingRefusal::Disabled` once the land key has selected and
+    ///   checked landability), so the view keeps sending them and those
+    ///   refusals still show.
     /// - Breaking up: all but the map, land and mission info, which
     ///   `_HandlePlayer` gates on the breakup timer +0x3c > 0 (0x6a7b3,
     ///   0x6a8cb, 0x7044b), all three silently. Hail, board and jump stay

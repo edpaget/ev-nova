@@ -3098,13 +3098,31 @@ impl Session {
     /// and makes no sound, and gives [`LandPress::AtGate`]. The entry
     /// then awaits [`Session::enter_hypergate`] or
     /// [`Session::enter_wormhole`], until the next tick.
+    ///
+    /// A disabled ship's press goes as far as `_HandlePlayerDockRequest`
+    /// does for it and no further: with no target it selects one, starting
+    /// its fly-in, as the land key does before the dock request
+    /// (@0x6a8fb-0x6a932); a target that can't be landed on, or none, is
+    /// refused as an intact ship's is (@0x66977-0x669aa). Then the dock
+    /// request's `_IsDisabled` test (@0x66af7) goes to its bare epilogue
+    /// (0x67eef): [`LandingRefusal::Disabled`], said nothing of, before
+    /// the range and speed checks (@0x67838) and the clearance
+    /// (@0x67903-0x67a05), so the selection gives no clearance reply, and
+    /// the ship neither docks nor enters a gate. A breaking-up or
+    /// destroyed ship's press is refused the same way before it selects
+    /// anything, as the land key's breakup-timer gate refuses it
+    /// (@0x6a8cb).
     pub fn land(&mut self) -> Result<LandPress, LandingRefusal> {
         if self.jump.is_some() {
             return Err(LandingRefusal::Jumping);
         }
-        if self.condition != Condition::Intact {
-            return Err(LandingRefusal::Disabled);
-        }
+        let disabled = match self.condition {
+            Condition::Intact => false,
+            Condition::Disabled => true,
+            Condition::Dying { .. } | Condition::Destroyed => {
+                return Err(LandingRefusal::Disabled);
+            }
+        };
         let blessing = self.blessing();
         let reading = self.rules.source_for(RuleKey::BlessingLanding);
         let outcome = land_or_select(
@@ -3113,7 +3131,21 @@ impl Session {
             &self.sites,
             |site| crate::landing::cleared(site, self.standing(site, &blessing), reading),
             |site| self.landing_reach(site),
-        )?;
+        );
+        if disabled {
+            return match outcome {
+                Ok(LandOutcome::Selected { stellar, .. }) => {
+                    self.nav_target = Some(stellar);
+                    self.nav_fly_in.start();
+                    Err(LandingRefusal::Disabled)
+                }
+                Err(
+                    refusal @ (LandingRefusal::NotLandable { .. } | LandingRefusal::NoStellars),
+                ) => Err(refusal),
+                Ok(LandOutcome::Landed(_)) | Err(_) => Err(LandingRefusal::Disabled),
+            };
+        }
+        let outcome = outcome?;
         match outcome {
             LandOutcome::Selected { stellar, .. } => {
                 self.nav_target = Some(stellar);
@@ -16055,6 +16087,99 @@ pub(super) mod tests {
         assert_eq!(session.begin_jump(), Err(JumpRefusal::Disabled));
         assert_eq!(session.jumping(), None);
         assert_eq!(session.take_sounds(), [], "a refusal emits nothing");
+    }
+
+    // A disabled player's land key (`_HandlePlayerDockRequest`'s silent
+    // refusal at 0x66af7).
+
+    /// [`catalog`]'s session with the player disabled, its sounds and
+    /// save taken.
+    fn disabled(catalog: &FakePilotCatalog) -> Session {
+        let mut session = Session::start(catalog).expect("starts");
+        session.condition = Condition::Disabled;
+        let _ = session.take_sounds();
+        session.take_save_due();
+        session
+    }
+
+    #[test]
+    fn a_disabled_players_l_with_no_target_selects_the_nearest_stellar_and_says_nothing() {
+        let mut session = disabled(&catalog());
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(session.nav_target(), Some(StellarId(128)), "@0x6a901");
+        assert_eq!(session.landed(), None);
+    }
+
+    #[test]
+    fn a_disabled_players_l_over_its_cleared_target_neither_lands_nor_says_why() {
+        let mut session = disabled(&catalog());
+        session.select_stellar(StellarPick::Slot(0));
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(session.landed(), None);
+        assert_eq!(session.nav_target(), Some(StellarId(128)), "kept");
+        assert_eq!(session.take_sounds(), [], "no landing sound");
+        assert!(!session.take_save_due());
+    }
+
+    #[test]
+    fn a_disabled_players_l_too_far_or_denied_says_nothing_either() {
+        let mut session = disabled(&catalog());
+        session.select_stellar(StellarPick::Slot(1));
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::Disabled),
+            "too far: the range test comes after (@0x67838)"
+        );
+        assert_eq!(session.nav_target(), Some(StellarId(129)), "kept");
+        let catalog = governed([Some(WANTED), Some(LAWFUL)], None);
+        let mut session = Session::fly(&catalog, on_record(&catalog)).expect("flies");
+        session.condition = Condition::Disabled;
+        session.select_stellar(StellarPick::Slot(0));
+        assert_eq!(
+            session.land(),
+            Err(LandingRefusal::Disabled),
+            "denied: the clearance comes after (@0x67903)"
+        );
+    }
+
+    #[test]
+    fn a_disabled_players_l_on_an_unlandable_target_says_why_as_an_intact_one_does() {
+        let mut catalog = catalog();
+        catalog.sites[0].1[0].flags = 0;
+        let mut session = disabled(&catalog);
+        session.select_stellar(StellarPick::Slot(0));
+        let refusal = Err(LandingRefusal::NotLandable {
+            stellar: StellarId(128),
+            station: false,
+        });
+        assert_eq!(session.land(), refusal, "@0x66977");
+        session.condition = Condition::Intact;
+        assert_eq!(session.land(), refusal, "the same refusal");
+    }
+
+    #[test]
+    fn a_disabled_players_l_over_a_hypergate_does_not_enter_it() {
+        let catalog = gated();
+        let mut session = disabled(&catalog);
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(session.nav_target(), Some(StellarId(300)));
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(
+            session.open_hypergate(&catalog),
+            Err(GateRefusal::NotAtGate),
+            "no entry"
+        );
+    }
+
+    #[test]
+    fn a_breaking_up_players_l_selects_nothing() {
+        let mut session = disabled(&catalog());
+        session.condition = Condition::Dying {
+            ticks_left: 9,
+            starting: false,
+        };
+        assert_eq!(session.land(), Err(LandingRefusal::Disabled));
+        assert_eq!(session.nav_target(), None, "the breakup gate @0x6a8cb");
     }
 
     /// An NPC one shot of whose disables, breaks up and destroys the

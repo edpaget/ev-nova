@@ -477,8 +477,8 @@ pub struct FlightOverlays {
 /// the plunder dialog's lines (`_DoPlunderDialog` @0x936df-0x9498d) and
 /// the abandoned fighters on arrival (@0x6c46d). It is also the time of
 /// the messages the original does not have ([`TAKE_OFF_FIRST`],
-/// [`JUMP_DISABLED`], [`IN_HYPERSPACE`], [`LAND_DISABLED`], [`REPELLED`],
-/// [`NO_STELLARS`] on L) and of the defection notice, which the original
+/// [`JUMP_DISABLED`], [`IN_HYPERSPACE`], [`REPELLED`], [`NO_STELLARS`] on
+/// L) and of the defection notice, which the original
 /// shows in a dialog (`_DoEscortPayment` @0x40301).
 pub const MESSAGE_TICKS: u16 = 240;
 /// A person's hail quote: 420 (0x1a4, `_ShowPersonHailQuote` @0x4464d).
@@ -526,7 +526,9 @@ pub fn jump_refusal_ticks(refusal: &JumpRefusal) -> u16 {
 
 /// How long the message for `refusal` stays: [`TOO_FAR_TICKS`] too far
 /// or too fast, [`LANDING_TICKS`] denied or not landable, and
-/// [`MESSAGE_TICKS`] for the engine's own refusals.
+/// [`MESSAGE_TICKS`] for the engine's own refusals. A disabled ship's
+/// refusal shows no message ([`refusal_message`]), so its time is never
+/// used.
 #[must_use]
 pub fn landing_refusal_ticks(refusal: &LandingRefusal) -> u16 {
     match refusal {
@@ -1090,9 +1092,6 @@ pub const HOSTILE_PLANET: &str = "The planet's environment is too hostile.";
 /// `STR#` 2002 #54 ("Unable to send hail - target ship is entering
 /// hyperspace.").
 pub const IN_HYPERSPACE: &str = "Unable to land - your ship is in hyperspace.";
-/// Not the original's, whose disabled ship takes no keys: worded as
-/// [`IN_HYPERSPACE`] is.
-pub const LAND_DISABLED: &str = "Unable to land - your ship is disabled.";
 
 /// `STR#` 2002 #76.
 pub const DOCKMASTER_READS_YOU: &str = "dockmaster reads you";
@@ -1144,15 +1143,17 @@ pub fn clearance_message(name: &str, station: bool, clearance: Clearance) -> Str
 }
 
 /// What the player is told when `refusal` stops a landing: the original's
-/// words for it, for a station or a planet.
+/// words for it, for a station or a planet; nothing for a disabled ship,
+/// which `_HandlePlayerDockRequest` refuses silently (`_IsDisabled`
+/// @0x66af7, the bare epilogue 0x67eef).
 #[must_use]
-pub fn refusal_message(refusal: &LandingRefusal) -> &'static str {
+pub fn refusal_message(refusal: &LandingRefusal) -> Option<&'static str> {
     let pick = |station: bool, at_station, on_planet| {
         if station { at_station } else { on_planet }
     };
-    match *refusal {
+    let text = match *refusal {
         LandingRefusal::Jumping => IN_HYPERSPACE,
-        LandingRefusal::Disabled => LAND_DISABLED,
+        LandingRefusal::Disabled => return None,
         LandingRefusal::NoStellars => NO_STELLARS,
         LandingRefusal::TooFar { station, .. } => pick(station, TOO_FAR_STATION, TOO_FAR_PLANET),
         LandingRefusal::NotLandable { station, .. } => {
@@ -1160,7 +1161,8 @@ pub fn refusal_message(refusal: &LandingRefusal) -> &'static str {
         }
         LandingRefusal::Denied { station, .. } => pick(station, DOCKING_DENIED, LANDING_DENIED),
         LandingRefusal::TooFast { station, .. } => pick(station, TOO_FAST_STATION, TOO_FAST_PLANET),
-    }
+    };
+    Some(text)
 }
 
 /// Where a ship is drawn `alpha` of the way from `from` to `to`.
@@ -2798,11 +2800,13 @@ impl<
                     LandingRefusal::NotLandable { stellar, .. } => session.gate_kind(stellar),
                     _ => None,
                 };
-                let text = gate.map_or_else(
-                    || refusal_message(&refusal).to_owned(),
-                    gate_refusal_message,
-                );
-                self.say_for(text, landing_refusal_ticks(&refusal));
+                let text = match gate {
+                    Some(kind) => Some(gate_refusal_message(kind)),
+                    None => refusal_message(&refusal).map(str::to_owned),
+                };
+                if let Some(text) = text {
+                    self.say_for(text, landing_refusal_ticks(&refusal));
+                }
             }
         }
     }
@@ -7354,7 +7358,6 @@ mod tests {
         let stellar = StellarId(128);
         let landing = [
             (LandingRefusal::Jumping, 240),
-            (LandingRefusal::Disabled, 240),
             (LandingRefusal::NoStellars, 240),
             (
                 LandingRefusal::TooFar {
@@ -7470,7 +7473,6 @@ mod tests {
         let stellar = StellarId(128);
         let cases = [
             (LandingRefusal::Jumping, IN_HYPERSPACE),
-            (LandingRefusal::Disabled, LAND_DISABLED),
             (LandingRefusal::NoStellars, NO_STELLARS),
             (
                 LandingRefusal::TooFar {
@@ -7534,8 +7536,13 @@ mod tests {
             ),
         ];
         for (refusal, text) in cases {
-            assert_eq!(refusal_message(&refusal), text, "{refusal:?}");
+            assert_eq!(refusal_message(&refusal), Some(text), "{refusal:?}");
         }
+        assert_eq!(
+            refusal_message(&LandingRefusal::Disabled),
+            None,
+            "silent (@0x66af7, 0x67eef)"
+        );
         assert_eq!(
             [
                 NO_STELLARS,
@@ -7979,11 +7986,8 @@ mod tests {
         assert_eq!(jump_refusal_message(&JumpRefusal::Landed), TAKE_OFF_FIRST);
         assert_eq!(jump_refusal_message(&JumpRefusal::Disabled), JUMP_DISABLED);
         assert_eq!(
-            [LAND_DISABLED, JUMP_DISABLED],
-            [
-                "Unable to land - your ship is disabled.",
-                "Can't initiate hyperspace jump - your ship is disabled."
-            ]
+            JUMP_DISABLED,
+            "Can't initiate hyperspace jump - your ship is disabled."
         );
         assert_eq!(
             [NO_DESTINATION, TOO_CLOSE, NO_FUEL, TAKE_OFF_FIRST],
@@ -11563,7 +11567,6 @@ mod tests {
         assert!(view.take_mission_info_request().is_none());
         assert_eq!(view.take_landing(), None);
         assert_ne!(view.message(), Some(NO_ACTIVE_MISSIONS));
-        assert_ne!(view.message(), Some(LAND_DISABLED));
         assert_eq!(nav_target(&view), nav);
     }
 
@@ -11605,7 +11608,6 @@ mod tests {
         assert!(view.take_mission_info_request().is_none());
         assert_eq!(view.take_landing(), None);
         assert_ne!(view.message(), Some(NO_ACTIVE_MISSIONS));
-        assert_ne!(view.message(), Some(LAND_DISABLED));
         assert_ne!(view.message(), Some(NO_ESCORTS));
     }
 
@@ -16905,6 +16907,20 @@ mod tests {
         tap(&mut view, PLAYER_INFO_KEY);
         assert!(view.take_player_info_request());
         assert_eq!(view.take_sounds(), []);
+    }
+
+    #[test]
+    fn l_while_disabled_selects_a_stellar_and_then_says_nothing_and_does_not_land() {
+        let mut view = disabled_player();
+        assert_eq!(nav_target(&view), None);
+        tap(&mut view, LAND_KEY);
+        let selected = nav_target(&view);
+        assert!(selected.is_some(), "the nearest selected (@0x6a901)");
+        assert_eq!(view.message(), None, "no clearance reply");
+        tap(&mut view, LAND_KEY);
+        assert_eq!(view.take_landing(), None);
+        assert_eq!(view.message(), None, "refused silently (@0x66af7)");
+        assert_eq!(nav_target(&view), selected, "kept");
     }
 
     /// A flight under fire from an NPC whose every hit disables, stepped
