@@ -111,6 +111,11 @@ pub trait Audio {
     /// Music stopped, faded out, never started or that cannot be played
     /// has not.
     fn music_ended(&self) -> bool;
+
+    /// Whether an instance of `sound` started by [`AudioCommand::Play`] is
+    /// still playing: the original's `ST_IsSoundPlaying`. A sound that
+    /// cannot be played never is.
+    fn playing(&self, sound: SoundId) -> bool;
 }
 
 /// A boxed port is a port.
@@ -121,6 +126,10 @@ impl Audio for Box<dyn Audio> {
 
     fn music_ended(&self) -> bool {
         (**self).music_ended()
+    }
+
+    fn playing(&self, sound: SoundId) -> bool {
+        (**self).playing(sound)
     }
 }
 
@@ -165,5 +174,16 @@ mod tests {
         assert!(!boxed.music_ended());
         ender.end_music();
         assert!(boxed.music_ended());
+    }
+
+    #[test]
+    fn a_boxed_port_tells_whether_a_sound_is_playing() {
+        let recording = RecordingAudio::new();
+        let player = recording.clone();
+        let boxed: Box<dyn Audio> = Box::new(recording);
+        assert!(!boxed.playing(SoundId(600)));
+        player.set_playing(SoundId(600), true);
+        assert!(boxed.playing(SoundId(600)));
+        assert!(!boxed.playing(SoundId(601)));
     }
 }

@@ -453,6 +453,14 @@ impl<B: Backend> Audio for KiraAudio<B> {
                 .as_ref()
                 .is_some_and(|track| track.state() == PlaybackState::Stopped)
     }
+
+    /// Whether one of the one-shot effects started of `sound` has not
+    /// stopped.
+    fn playing(&self, sound: SoundId) -> bool {
+        self.effects
+            .iter()
+            .any(|(handle, _, id)| *id == sound && handle.state() != PlaybackState::Stopped)
+    }
 }
 
 #[cfg(test)]
@@ -752,6 +760,37 @@ mod tests {
         assert_eq!(audio.effect_states(), [PlaybackState::Stopped], "over");
         run(&mut audio, play(1, 1.0));
         assert_eq!(audio.effect_states().len(), 1, "the finished one let go");
+    }
+
+    #[test]
+    fn a_played_sound_is_playing_until_it_is_over() {
+        let (mut audio, _) = adapter(None);
+        assert!(!audio.playing(SoundId(1)), "never played");
+        run(&mut audio, play(1, 1.0));
+        assert!(audio.playing(SoundId(1)));
+        assert!(!audio.playing(SoundId(3)), "another snd");
+
+        let short = FakeBank {
+            sounds: vec![(SoundId(1), mono(vec![0x80; 2]))],
+            ..FakeBank::default()
+        };
+        let mut audio = KiraAudio::with_manager(audio.manager, short, None);
+        run(&mut audio, play(1, 1.0));
+        assert!(!audio.playing(SoundId(1)), "over");
+        // Started, before the backend has played any of it.
+        audio.run(play(1, 1.0));
+        assert!(audio.playing(SoundId(1)), "again");
+    }
+
+    #[test]
+    fn only_a_sound_played_as_an_effect_counts_as_playing() {
+        let (mut audio, _) = adapter(None);
+        run(&mut audio, exclusive(1));
+        run(&mut audio, unless_playing(1));
+        run(&mut audio, start_loop(1, 1.0));
+        assert!(!audio.playing(SoundId(1)));
+        run(&mut audio, play(3, 1.0));
+        assert!(!audio.playing(SoundId(3)), "a missing snd never plays");
     }
 
     #[test]
