@@ -63,6 +63,7 @@ use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
+use crate::spaceport::bar::is_mission_info_press;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::dialog::{Dialog, DialogEvent, DialogTemplate, Role};
@@ -170,6 +171,9 @@ pub struct TradeScreen {
     offering: Option<VenueOffers>,
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
     player_info: bool,
+    /// Whether [`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY)
+    /// asked for the mission info screen.
+    info_requested: bool,
     /// The order asked for, until it is taken.
     order: Option<Order>,
     closed: bool,
@@ -214,6 +218,7 @@ impl TradeScreen {
             quantity: QuantityAsk::new(quantity.ok(), style),
             offering: None,
             player_info: false,
+            info_requested: false,
             order: None,
             closed: false,
             style,
@@ -244,6 +249,17 @@ impl TradeScreen {
             .as_mut()
             .is_some_and(VenueOffers::take_player_info_request);
         std::mem::take(&mut self.player_info) || offer
+    }
+
+    /// Whether [`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY)
+    /// has asked for the mission info screen since this was last asked,
+    /// here or in its offer.
+    pub fn take_info_request(&mut self) -> bool {
+        let offer = self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_info_request);
+        std::mem::take(&mut self.info_requested) || offer
     }
 
     /// Whether the trade center has asked for an offer since this was last
@@ -473,6 +489,10 @@ impl Screen for TradeScreen {
         };
         if is_player_info_press(input) {
             self.player_info = true;
+            return ScreenAction::None;
+        }
+        if is_mission_info_press(input) {
+            self.info_requested = true;
             return ScreenAction::None;
         }
         match *input {
@@ -1826,5 +1846,39 @@ mod tests {
             screen.take_offer_request(),
             "the wait goes on once it closes"
         );
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_for_the_mission_info_screen() {
+        let i = crate::spaceport::bar::MISSION_INFO_KEY;
+        let mut screen = screen();
+        assert!(!screen.take_info_request());
+        screen.input(&key(i, true, true));
+        assert!(!screen.take_info_request(), "not a repeat");
+        press(&mut screen, i);
+        assert!(screen.take_info_request());
+        assert!(!screen.take_info_request(), "once");
+        assert!(!screen.closed());
+        alt_click(&mut screen, BUY_ITEM);
+        press(&mut screen, i);
+        assert!(!screen.take_info_request(), "the quantity dialog takes it");
+        assert!(screen.quantity().is_some());
+        let mut broken = TradeScreen::new(
+            Err("no DLOG 1001".to_owned()),
+            Ok(quantity()),
+            market(),
+            ButtonStyle::STOCK,
+        );
+        press(&mut broken, i);
+        assert!(!broken.take_info_request(), "no dialog");
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_its_offer_which_stays_open() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        press(&mut screen, crate::spaceport::bar::MISSION_INFO_KEY);
+        assert!(screen.take_info_request());
+        assert!(screen.offer_dialog().is_some());
     }
 }

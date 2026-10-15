@@ -57,7 +57,7 @@
 //! again. Without the "Text Input" dialog, the prompt is laid out by
 //! [`TextInputDialog::fallback`].
 //!
-//! Info, clicked or with I, opens the "Shipyard Info" panel (`DLOG`/`DITL`
+//! Info, clicked or with Space ([`INFO_KEY`]), opens the "Shipyard Info" panel (`DLOG`/`DITL`
 //! 1005 over `PICT` 8506) over the shipyard: the ship's name in item 3,
 //! and in item 5 what `_ShipDescDialogUpdate` draws (@0x4fb4a-0x50f17),
 //! each text placed by its baseline ([`spec_lines`]). Two columns of a
@@ -144,6 +144,7 @@ use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
+use crate::spaceport::bar::is_mission_info_press;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::{DescriptionGraphics, DescriptionSource};
@@ -211,8 +212,12 @@ pub use crate::ui::desc::LAST_UNSHOWN_GRAPHIC;
 
 /// Buys the selected ship, as Buy Ship does: the original's default.
 pub const BUY_KEY: Key = Key::Char('b');
-/// Opens the info panel, as Info does.
-pub const INFO_KEY: Key = Key::Char('i');
+/// Opens the info panel, as Info does: Space, which `_ShipyardFilter`
+/// maps to item 10 (@0x60526-0x60537). Nothing in it reads I, which asks
+/// for the mission info screen
+/// ([`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY), pref
+/// +0x50 @0x60947-0x6096d).
+pub const INFO_KEY: Key = Key::Space;
 
 /// The first ship's `PICT`; ship n's is n - 128 after it.
 pub const FIRST_SHIP_PICTURE: i16 = 5000;
@@ -890,6 +895,17 @@ pub(super) fn open_panel(
     ))
 }
 
+/// The info screens the shipyard has asked for, until taken.
+#[derive(Clone, Copy, Debug, Default)]
+struct InfoAsks {
+    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY)
+    /// asked for the player info screen.
+    player_info: bool,
+    /// Whether [`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY)
+    /// asked for the mission info screen.
+    mission_info: bool,
+}
+
 /// The Shipyard of the stellar landed on.
 #[derive(Clone, Debug)]
 pub struct ShipyardScreen {
@@ -918,8 +934,8 @@ pub struct ShipyardScreen {
     declined: Option<ShipId>,
     /// The mission offers, once given.
     offering: Option<VenueOffers>,
-    /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
-    player_info: bool,
+    /// The info screens asked for, until taken.
+    asks: InfoAsks,
     closed: bool,
     sounds: Vec<Sound>,
 }
@@ -991,7 +1007,7 @@ impl ShipyardScreen {
             order: None,
             declined: None,
             offering: None,
-            player_info: false,
+            asks: InfoAsks::default(),
             closed: false,
             sounds: Vec::new(),
         };
@@ -1021,7 +1037,18 @@ impl ShipyardScreen {
             .offering
             .as_mut()
             .is_some_and(VenueOffers::take_player_info_request);
-        std::mem::take(&mut self.player_info) || offer
+        std::mem::take(&mut self.asks.player_info) || offer
+    }
+
+    /// Whether [`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY)
+    /// has asked for the mission info screen since this was last asked,
+    /// here or in its offer.
+    pub fn take_info_request(&mut self) -> bool {
+        let offer = self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_info_request);
+        std::mem::take(&mut self.asks.mission_info) || offer
     }
 
     /// Whether the shipyard has asked for an offer since this was last
@@ -1386,7 +1413,11 @@ impl Screen for ShipyardScreen {
             return ScreenAction::None;
         }
         if is_player_info_press(input) {
-            self.player_info = true;
+            self.asks.player_info = true;
+            return ScreenAction::None;
+        }
+        if is_mission_info_press(input) {
+            self.asks.mission_info = true;
             return ScreenAction::None;
         }
         if self.panel.is_some() {
@@ -1879,7 +1910,7 @@ mod tests {
             (PANEL_DONE_ITEM, PANEL_TITLE_ITEM, PANEL_TEXT_ITEM),
             (1, 3, 5)
         );
-        assert_eq!((BUY_KEY, INFO_KEY), (Key::Char('b'), Key::Char('i')));
+        assert_eq!((BUY_KEY, INFO_KEY), (Key::Char('b'), Key::Space));
         assert_eq!(FIRST_SHIP_PICTURE, 5000);
         assert_eq!(
             [BUY_SHIP_LABEL, INFO_LABEL, PRICE_LABEL, TRADE_IN_LABEL],
@@ -3149,7 +3180,7 @@ mod tests {
             ]
         );
         press(&mut screen, INFO_KEY);
-        assert!(screen.info_panel().is_some(), "I opens it");
+        assert!(screen.info_panel().is_some(), "Space opens it");
         screen.input(&key(INFO_KEY, true, true));
         assert!(screen.info_panel().is_some());
     }
@@ -3873,5 +3904,37 @@ mod tests {
             screen.take_offer_request(),
             "the wait goes on once it closes"
         );
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_the_shipyard_and_its_panel_not_its_prompt() {
+        let i = crate::spaceport::bar::MISSION_INFO_KEY;
+        let mut screen = screen();
+        assert!(!screen.take_info_request());
+        screen.input(&key(i, true, true));
+        assert!(!screen.take_info_request(), "not a repeat");
+        press(&mut screen, i);
+        assert!(screen.take_info_request());
+        assert!(!screen.take_info_request(), "once");
+        assert!(screen.info_panel().is_none(), "I no longer opens the panel");
+        assert!(!screen.closed());
+        press(&mut screen, INFO_KEY);
+        assert!(screen.info_panel().is_some(), "Space does");
+        press(&mut screen, i);
+        assert!(screen.take_info_request(), "the Info panel");
+        assert!(screen.info_panel().is_some(), "which stays open");
+        let mut screen = naming_by_key();
+        press(&mut screen, i);
+        assert!(!screen.take_info_request(), "the prompt takes it");
+        assert!(screen.naming().is_some());
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_its_offer_which_stays_open() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        press(&mut screen, crate::spaceport::bar::MISSION_INFO_KEY);
+        assert!(screen.take_info_request());
+        assert!(screen.offer_dialog().is_some());
     }
 }

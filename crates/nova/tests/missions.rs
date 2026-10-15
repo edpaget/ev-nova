@@ -217,6 +217,13 @@ fn system() -> Vec<u8> {
     bytes
 }
 
+/// [`pad`] with a commodity exchange too (`Flags` 0x43).
+fn trading_pad() -> Vec<u8> {
+    let mut bytes = pad();
+    bytes[0x06..0x0A].copy_from_slice(&0x43_u32.to_be_bytes());
+    bytes
+}
+
 /// The Pad: a `spöb` at the centre that can be landed on, with a bar
 /// (`Flags` 0x41), drawn from `spïn` 1004.
 fn pad() -> Vec<u8> {
@@ -364,9 +371,21 @@ fn game_data_built(
 /// showing `graphic`.
 fn game_data_pictured(
     run: &[u8],
+    bar_job: (Vec<u8>, &str),
+    run_offer: &str,
+    graphic: i16,
+    more: impl FnOnce(ForkBuilder) -> ForkBuilder,
+) -> Rc<GameData> {
+    game_data_landing(run, bar_job, run_offer, graphic, &pad(), more)
+}
+
+/// [`game_data_pictured`] with the Pad's `spöb` `pad`.
+fn game_data_landing(
+    run: &[u8],
     (bar_job, bar_job_offer): (Vec<u8>, &str),
     run_offer: &str,
     graphic: i16,
+    pad: &[u8],
     more: impl FnOnce(ForkBuilder) -> ForkBuilder,
 ) -> Rc<GameData> {
     let mut fork = ForkBuilder::new()
@@ -375,7 +394,7 @@ fn game_data_pictured(
         .resource(ShipAnim::TYPE, 128, None, &ship_anim(2000))
         .resource(RLED, 2000, None, &sheet(36, 1))
         .resource(System::TYPE, 128, Some(b"Alpha"), &system())
-        .resource(Stellar::TYPE, 128, Some(b"Pad"), &pad())
+        .resource(Stellar::TYPE, 128, Some(b"Pad"), pad)
         .resource(Spin::TYPE, 1004, None, &spin(1000))
         .resource(RLED, 1000, None, &sheet(1, 40))
         .resource(Mission::TYPE, 128, Some(b"Run to <DST>;courier"), run)
@@ -585,7 +604,7 @@ fn picture_dialogs() -> [[(ResType, i16, Vec<u8>); 2]; 2] {
     [picture_offer, picture_text]
 }
 
-/// The interface file: stock "Spaceport" (`DLOG` 1000), the mission
+/// The interface file: stock "Spaceport" (`DLOG` 1000), "Trade" (1001), the mission
 /// computer (1006), the mission info screen (1012), "Bar" (1013), the
 /// offer dialog (1016) and "Desc Dialog" (3003), each with its items as
 /// stock has them.
@@ -611,7 +630,31 @@ fn interface() -> InterfaceData {
             ((605, 548, 32, 32), false),
         ],
     );
-    let fork = std::iter::once(spaceport)
+    let trade = dialog(
+        1001,
+        (426, 252),
+        &[
+            ((272, 221, 99, 25), true),
+            ((129, 299, 68, 30), false),
+            ((38, 9, 352, 17), false),
+            ((38, 25, 352, 13), true),
+            ((38, 37, 352, 13), true),
+            ((38, 49, 352, 13), true),
+            ((38, 61, 352, 13), true),
+            ((38, 73, 352, 13), true),
+            ((38, 85, 352, 14), true),
+            ((38, 98, 352, 14), true),
+            ((38, 111, 352, 14), true),
+            ((38, 124, 352, 60), false),
+            ((60, 221, 99, 25), true),
+            ((166, 221, 99, 25), true),
+            ((41, 190, 346, 24), false),
+            ((212, 304, 68, 30), false),
+            ((178, 339, 68, 30), false),
+        ],
+    );
+    let fork = [spaceport, trade]
+        .into_iter()
         .chain(mission_dialogs())
         .chain(picture_dialogs())
         .flatten()
@@ -1295,6 +1338,47 @@ fn the_spaceports_mission_infos_selected_quick_brief_is_loaded_through_flight() 
         .lines()
         .concat();
     assert_eq!(shown, "4".repeat(24), "loaded, its letters drawn");
+}
+
+#[test]
+fn the_trade_centers_i_opens_mission_info_over_it_and_loads_the_quick_brief_through_flight() {
+    // A l33t resource turns the leet mode on, and the chance replaces
+    // every letter drawn: only a loaded text draws.
+    let mut run = mission(128, 200, 201);
+    put_i16s(&mut run, 0x36, &[205]);
+    let data = game_data_landing(
+        &run,
+        bar_job(),
+        "Take this to <DST>.",
+        -1,
+        &trading_pad(),
+        |fork| {
+            fork.resource(ResType::new(*b"l33t"), 128, None, &[])
+                .resource(Desc::TYPE, 205, None, &desc(&"a".repeat(24)))
+        },
+    );
+    let store = MemoryPilots::new();
+    let pilot = holding(&ada(), &[(0, 128, None, None)]);
+    let mut game = Game::with_chance(&store, &pilot, data, Rc::new(RefCell::new(Leetest)));
+    game.frame();
+    game.land();
+    game.click_port(7);
+    assert!(game.spaceport().open_trade().is_some(), "trading");
+    game.tap(Key::Char('i'));
+    let info = game.spaceport().mission_info().expect("open over it");
+    let shown = info
+        .dialog()
+        .and_then(|dialog| dialog.text(INFO_TEXT_ITEM))
+        .expect("the text item")
+        .lines()
+        .concat();
+    assert_eq!(shown, "4".repeat(24), "loaded, its letters drawn");
+    game.tap(Key::Enter);
+    assert!(
+        game.spaceport().mission_info().is_none(),
+        "Return closed it"
+    );
+    assert!(game.spaceport().open_trade().is_some(), "still trading");
 }
 
 #[test]

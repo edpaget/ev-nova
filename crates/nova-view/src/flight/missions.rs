@@ -117,7 +117,9 @@ impl FlightMissionDialogs {
             .info_template
             .clone()
             .map(|template| (template, Rc::clone(&self.metrics)));
-        self.info = Some(MissionInfoScreen::new(layout, info, self.style));
+        let mut screen = MissionInfoScreen::new(layout, info, self.style);
+        self.sounds.extend(screen.take_sounds());
+        self.info = Some(screen);
     }
 
     /// After an abort, the mission info screen shows `info`, closing once
@@ -125,6 +127,7 @@ impl FlightMissionDialogs {
     pub fn set_info(&mut self, info: MissionInfo) {
         if let Some(screen) = &mut self.info {
             screen.set_info(info);
+            self.sounds.extend(screen.take_sounds());
             if screen.closed() {
                 self.info = None;
             }
@@ -418,6 +421,7 @@ mod tests {
         assert!(!dialogs.is_open());
         dialogs.open_info(info());
         assert!(dialogs.is_open());
+        dialogs.take_sounds();
         let abort = dialogs
             .info()
             .and_then(MissionInfoScreen::dialog)
@@ -436,6 +440,21 @@ mod tests {
         dialogs.set_info(none());
         assert!(dialogs.info().is_none());
         assert!(!dialogs.is_open());
+    }
+
+    #[test]
+    fn the_info_screen_beeps_as_it_opens_and_as_its_last_abort_closes_it() {
+        let mut dialogs = dialogs();
+        dialogs.open_info(info());
+        assert_eq!(
+            dialogs.take_sounds(),
+            [Sound::Ui(UiSound::MissionInfoOpened)]
+        );
+        dialogs.set_info(none());
+        assert_eq!(
+            dialogs.take_sounds(),
+            [Sound::Ui(UiSound::MissionInfoClosed)]
+        );
     }
 
     #[test]

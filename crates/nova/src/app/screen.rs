@@ -5069,7 +5069,7 @@ pub(super) mod tests {
         let mut screen = landed_shipyard(&MemoryPilots::new());
         click_port_item(&mut screen, 9);
         check(&mut screen, "the shipyard");
-        screen.input(&key(Key::Char('i'), true));
+        screen.input(&key(nova_view::spaceport::shipyard::INFO_KEY, true));
         assert!(
             spaceport(&screen)
                 .open_shipyard()

@@ -130,11 +130,26 @@ pub const HIRE_KEYS: [Key; 2] = [Key::Char('h'), Key::Char('e')];
 pub const NEWS_KEYS: [Key; 2] = [Key::Char('n'), Key::Char('w')];
 
 /// The key that asks for the mission info screen from the bar, the
-/// spaceport, the mission computer and flight. The original reads it
-/// from the player's key settings (`_keyPrefs` +0x50), whose default is
-/// not in `Nova-DF.rsrc`; I is free on every spaceport screen and in
-/// flight.
+/// spaceport, the mission computer, the trade center, the outfitter, the
+/// shipyard and its Info panel, an offer, and flight. The original reads
+/// it from the player's key settings (`_keyPrefs` +0x50), whose default
+/// is not in `Nova-DF.rsrc`; I is free on every spaceport screen (the
+/// shipyard's Info is Space, as `_ShipyardFilter` reads it @0x60526) and
+/// in flight.
 pub const MISSION_INFO_KEY: Key = Key::Char('i');
+
+/// Whether `input` is a fresh press of [`MISSION_INFO_KEY`], which asks
+/// for the mission info screen where the original's filters read
+/// `_keyPrefs` +0x50.
+#[must_use]
+pub fn is_mission_info_press(input: &Input) -> bool {
+    *input
+        == Input::Key {
+            key: MISSION_INFO_KEY,
+            pressed: true,
+            repeat: false,
+        }
+}
 
 /// How long after the bar opens it first asks for an offer: 15 of the
 /// Mac's ticks (`_DoBarDialog` @0x48f51-0x48f5f).
@@ -442,9 +457,13 @@ impl BarScreen {
     }
 
     /// Whether [`MISSION_INFO_KEY`] has asked for the mission info screen
-    /// since this was last asked.
+    /// since this was last asked, in the bar or its offer.
     pub fn take_info_request(&mut self) -> bool {
-        std::mem::take(&mut self.asks.info)
+        let offer = self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_info_request);
+        std::mem::take(&mut self.asks.info) || offer
     }
 
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) has asked for the player info screen
@@ -556,6 +575,13 @@ impl Screen for BarScreen {
             self.asks.player_info = true;
             return ScreenAction::None;
         }
+        // The hire screen is the shipyard dialog in hire mode, whose
+        // filters read the key too (`_ShipyardFilter` @0x60947,
+        // `_ShipDescFilter` @0x51164).
+        if self.hire.is_some() && is_mission_info_press(input) {
+            self.asks.info = true;
+            return ScreenAction::None;
+        }
         if let Some(hire) = &mut self.hire {
             hire.input(input);
             self.sounds.extend(hire.take_sounds());
@@ -596,13 +622,7 @@ impl Screen for BarScreen {
             self.asks.news = true;
             return ScreenAction::None;
         }
-        if *input
-            == (Input::Key {
-                key: MISSION_INFO_KEY,
-                pressed: true,
-                repeat: false,
-            })
-        {
+        if is_mission_info_press(input) {
             self.asks.info = true;
             return ScreenAction::None;
         }
@@ -1034,6 +1054,15 @@ mod tests {
         click_item(&mut screen, HIRE_ITEM);
         assert_eq!(screen.message(), None);
         assert_eq!(lines(&screen), "dësc 10029.");
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_the_hire_screen_which_stays_open() {
+        let mut screen = bar();
+        screen.open_hire(list(2));
+        screen.input(&key(MISSION_INFO_KEY, false));
+        assert!(screen.take_info_request());
+        assert!(screen.hire_screen().is_some(), "still open");
     }
 
     #[test]

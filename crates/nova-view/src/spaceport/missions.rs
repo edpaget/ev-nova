@@ -501,7 +501,7 @@ impl MissionInfoScreen {
             abort: None,
             text_request: None,
             closed: false,
-            sounds: Vec::new(),
+            sounds: vec![Sound::Ui(crate::sound::UiSound::MissionInfoOpened)],
         };
         screen.set_info(info);
         screen
@@ -549,7 +549,7 @@ impl MissionInfoScreen {
         let kept = self.selected_row().map(|row| row.slot);
         self.info = info;
         if self.info.rows.is_empty() {
-            self.closed = true;
+            self.close();
         }
         let Ok(laid) = &mut self.laid else {
             return;
@@ -614,11 +614,21 @@ impl MissionInfoScreen {
         }
     }
 
+    /// Closes it, beeping `_beepSnd[2]` as `_DoMissionInfoDialog` does as
+    /// it closes (`PlaySound` @0x9e791), once.
+    fn close(&mut self) {
+        if !self.closed {
+            self.closed = true;
+            self.sounds
+                .push(Sound::Ui(crate::sound::UiSound::MissionInfoClosed));
+        }
+    }
+
     /// Activates dialog item `item`: Done closes, and Abort asks for the
     /// selected slot. Anything else does nothing.
     fn activate(&mut self, item: usize) {
         match item {
-            INFO_DONE_ITEM => self.closed = true,
+            INFO_DONE_ITEM => self.close(),
             ABORT_ITEM => self.abort = self.selected_row().map(|row| row.slot),
             _ => {}
         }
@@ -636,7 +646,7 @@ impl Screen for MissionInfoScreen {
                 repeat: false,
             } = *input
             {
-                self.closed = true;
+                self.close();
             }
             return ScreenAction::None;
         };
@@ -1295,8 +1305,40 @@ mod tests {
     }
 
     #[test]
+    fn mission_info_beeps_as_it_opens_and_as_it_closes() {
+        const OPENED: Sound = Sound::Ui(crate::sound::UiSound::MissionInfoOpened);
+        const CLOSED: Sound = Sound::Ui(crate::sound::UiSound::MissionInfoClosed);
+        let mut screen = info_screen();
+        assert_eq!(screen.take_sounds(), [OPENED]);
+        click_info(&mut screen, INFO_DONE_ITEM);
+        assert_eq!(screen.take_sounds(), [DOWN, UP, CLOSED]);
+        for close in [Key::Enter, Key::Escape] {
+            let mut screen = info_screen();
+            screen.take_sounds();
+            screen.input(&key(close));
+            assert_eq!(screen.take_sounds(), [CLOSED], "{close:?}");
+            screen.input(&key(close));
+            assert_eq!(screen.take_sounds(), [], "{close:?} once closed");
+        }
+        let mut screen = info_screen();
+        screen.take_sounds();
+        screen.set_info(info());
+        assert_eq!(screen.take_sounds(), [], "still listing");
+        screen.set_info(MissionInfo {
+            rows: Vec::new(),
+            ..info()
+        });
+        assert_eq!(screen.take_sounds(), [CLOSED], "emptied");
+        let mut broken =
+            MissionInfoScreen::new(Err("no DLOG 1012".to_owned()), info(), ButtonStyle::STOCK);
+        broken.input(&key(Key::Escape));
+        assert_eq!(broken.take_sounds(), [OPENED, CLOSED], "without its dialog");
+    }
+
+    #[test]
     fn mission_infos_buttons_sound_and_a_click_abandoned_does_nothing() {
         let mut screen = info_screen();
+        screen.take_sounds();
         let at = screen
             .dialog()
             .and_then(|dialog| dialog.item_bounds(ABORT_ITEM))

@@ -131,9 +131,10 @@ impl SoundTable {
     ///   (@0x7ea3e-0x7ea5d, @0x7ee76-0x7ee95, @0x7f337-0x7f356), at
     ///   priority 1.
     /// - `news_open`: 151, `_beepSnd[1]`, which `_DoNewsDialog` plays as
-    ///   it opens (`PlaySound` @0x47f36).
+    ///   it opens (`PlaySound` @0x47f36), as `_DoMissionInfoDialog` does
+    ///   (@0x9e1d5).
     /// - `news_close`: 152, `_beepSnd[2]`, which `_DoNewsDialog` plays as
-    ///   it closes (@0x4814e).
+    ///   it closes (@0x4814e), as `_DoMissionInfoDialog` does (@0x9e791).
     /// - `klaxon`: 371, which `_LoadSounds` loads into `_klaxxonSnd`
     ///   (@0x1c22c-0x1c23e) and `_HandlePlayer` plays while the player's
     ///   death timer is above 1.0 and it is not already playing

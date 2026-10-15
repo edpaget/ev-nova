@@ -32,7 +32,14 @@
 //! ([`OfferDialog::take_choice`]), and the dialog is then answered. P
 //! ([`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY), a press) asks for the player info screen
 //! ([`OfferDialog::take_player_info_request`], @0xa3215), before the
-//! labels' letters are read; the dialog stays open under it.
+//! labels' letters are read; the dialog stays open under it. I
+//! ([`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY), a
+//! press) asks for the mission info screen
+//! ([`OfferDialog::take_info_request`], @0x98e0c-0x98e2a, opened by
+//! `_OfferOneMission` @0xa3344), also before the letters; the dialog
+//! stays open under it. The original then reloads the offer's text
+//! (`_LoadDescription` @0xa335c), which redraws what the info screen
+//! covered and changes nothing shown.
 //!
 //! A venue that offers missions (the bar, the spaceport, the trade
 //! center, the shipyard and the outfitter) holds its offers in a
@@ -52,6 +59,7 @@ use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
+use crate::spaceport::bar::is_mission_info_press;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::desc::{BODY_COLOR, BODY_SIZE, shown_graphic};
@@ -139,6 +147,9 @@ pub struct OfferDialog {
     answered: bool,
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
     player_info: bool,
+    /// Whether [`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY)
+    /// asked for the mission info screen.
+    info_requested: bool,
     /// The picture variant's graphic, drawn in item 8 over
     /// [`PICTURE_FRAME`]; none for the plain dialog over [`FRAME`].
     picture: Option<i16>,
@@ -208,6 +219,7 @@ impl OfferDialog {
             choice: None,
             answered: false,
             player_info: false,
+            info_requested: false,
             picture,
             sounds: Vec::new(),
         }
@@ -217,6 +229,12 @@ impl OfferDialog {
     /// this was last taken, once.
     pub fn take_player_info_request(&mut self) -> bool {
         std::mem::take(&mut self.player_info)
+    }
+
+    /// Whether [`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY)
+    /// asked for the mission info screen since this was last taken, once.
+    pub fn take_info_request(&mut self) -> bool {
+        std::mem::take(&mut self.info_requested)
     }
 
     /// The dialog, if it could be laid out.
@@ -287,6 +305,10 @@ impl Screen for OfferDialog {
         }
         if is_player_info_press(input) {
             self.player_info = true;
+            return ScreenAction::None;
+        }
+        if is_mission_info_press(input) {
+            self.info_requested = true;
             return ScreenAction::None;
         }
         if let Input::Key {
@@ -437,6 +459,14 @@ impl VenueOffers {
         self.dialog
             .as_mut()
             .is_some_and(OfferDialog::take_player_info_request)
+    }
+
+    /// Whether the offer dialog open asked for the mission info screen
+    /// since this was last taken, once.
+    pub(crate) fn take_info_request(&mut self) -> bool {
+        self.dialog
+            .as_mut()
+            .is_some_and(OfferDialog::take_info_request)
     }
 
     /// The offer answered since this was last taken, and the choice made,
@@ -1170,5 +1200,29 @@ mod tests {
             offers.dialog().and_then(OfferDialog::problem),
             Some("no DLOG 1020")
         );
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_for_mission_info_before_the_labels_letters() {
+        let i = crate::spaceport::bar::MISSION_INFO_KEY;
+        let mut dialog = offer();
+        assert!(!dialog.take_info_request());
+        dialog.input(&Input::Key {
+            key: i,
+            pressed: true,
+            repeat: true,
+        });
+        assert!(!dialog.take_info_request(), "not a repeat");
+        dialog.input(&key(i));
+        assert!(dialog.take_info_request());
+        assert!(!dialog.take_info_request(), "once");
+        assert_eq!(dialog.take_choice(), None, "not I'm in's letter");
+        let mut offers = VenueOffers::asking(plain_only(Ok(template())));
+        assert!(!offers.take_info_request(), "nothing open");
+        opened(&mut offers);
+        offers.input(&key(i), &mut Vec::new());
+        assert!(offers.take_info_request());
+        assert!(!offers.take_info_request(), "once");
+        assert!(offers.dialog().is_some(), "still open");
     }
 }

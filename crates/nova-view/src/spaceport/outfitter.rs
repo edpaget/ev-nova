@@ -160,6 +160,7 @@ use crate::image::ImageKey;
 use crate::input::{Input, Key};
 use crate::screen::{Screen, ScreenAction};
 use crate::sound::Sound;
+use crate::spaceport::bar::is_mission_info_press;
 use crate::text::TextMetrics;
 use crate::ui::button::{ButtonSkin, ButtonStyle};
 use crate::ui::catalog::DescriptionSource;
@@ -480,6 +481,9 @@ pub struct OutfitterScreen {
     offering: Option<VenueOffers>,
     style: ButtonStyle,
     closed: bool,
+    /// Whether [`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY)
+    /// asked for the mission info screen.
+    info_requested: bool,
     /// Whether a cell is highlighted, and with none, the outfit Buy and
     /// Sell answer for.
     highlight: Highlight,
@@ -548,6 +552,7 @@ impl OutfitterScreen {
             offering: None,
             style,
             closed: false,
+            info_requested: false,
             highlight: Highlight::Cell,
             leaving: false,
             sounds: Vec::new(),
@@ -576,6 +581,17 @@ impl OutfitterScreen {
         self.offering
             .as_mut()
             .is_some_and(VenueOffers::take_player_info_request)
+    }
+
+    /// Whether [`MISSION_INFO_KEY`](crate::spaceport::bar::MISSION_INFO_KEY)
+    /// has asked for the mission info screen since this was last asked,
+    /// here or in its offer.
+    pub fn take_info_request(&mut self) -> bool {
+        let offer = self
+            .offering
+            .as_mut()
+            .is_some_and(VenueOffers::take_info_request);
+        std::mem::take(&mut self.info_requested) || offer
     }
 
     /// Whether the outfitter has asked for an offer since this was last
@@ -1080,6 +1096,10 @@ impl Screen for OutfitterScreen {
             {
                 self.closed = true;
             }
+            return ScreenAction::None;
+        }
+        if is_mission_info_press(input) {
+            self.info_requested = true;
             return ScreenAction::None;
         }
         let pressed =
@@ -4229,5 +4249,45 @@ mod tests {
         screen.release_keys();
         screen.input(&button(false));
         assert!(screen.alert_dialog().is_some(), "Done was not clicked");
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_for_the_mission_info_screen() {
+        let i = crate::spaceport::bar::MISSION_INFO_KEY;
+        let mut screen = counting_screen();
+        assert!(!screen.take_info_request());
+        screen.input(&key(i, true, true));
+        assert!(!screen.take_info_request(), "not a repeat");
+        press(&mut screen, i);
+        assert!(screen.take_info_request());
+        assert!(!screen.take_info_request(), "once");
+        assert!(!screen.closed());
+        alt_click(&mut screen, BUY_ITEM);
+        press(&mut screen, i);
+        assert!(!screen.take_info_request(), "the quantity dialog takes it");
+        assert!(screen.quantity().is_some());
+        let mut screen = alerting(RAISED);
+        press(&mut screen, i);
+        assert!(!screen.take_info_request(), "the alert takes it");
+        assert!(screen.alert_dialog().is_some());
+        let mut broken = OutfitterScreen::new(
+            Err("no DLOG 1002".to_owned()),
+            Ok(quantity()),
+            Ok(desc_template()),
+            outfitter(),
+            art() as Rc<dyn OutfitterCatalog>,
+            ButtonStyle::STOCK,
+        );
+        press(&mut broken, i);
+        assert!(!broken.take_info_request(), "no dialog");
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_its_offer_which_stays_open() {
+        let mut screen = offering();
+        screen.open_offer(prompt());
+        press(&mut screen, crate::spaceport::bar::MISSION_INFO_KEY);
+        assert!(screen.take_info_request());
+        assert!(screen.offer_dialog().is_some());
     }
 }

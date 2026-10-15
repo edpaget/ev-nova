@@ -61,8 +61,9 @@
 //! shipyard ask as they open and again once rearmed, the bar a quarter
 //! second after it opens and again once rearmed; the spaceport ticks the
 //! screen open for their timers.
-//! [`MISSION_INFO_KEY`], in the spaceport, the bar or the mission
-//! computer, asks for the mission info screen
+//! [`MISSION_INFO_KEY`], in the spaceport, the bar, the mission
+//! computer, the trade center, the outfitter, the shipyard (and its Info
+//! panel) or an offer over any of them, asks for the mission info screen
 //! ([`SpaceportView::take_mission_info_request`]), which opens over
 //! whatever is open ([`SpaceportView::open_mission_info`]); its abort is
 //! taken through the spaceport ([`SpaceportView::take_mission_abort`]).
@@ -1135,12 +1136,19 @@ impl SpaceportView {
             .missioning
             .as_mut()
             .is_some_and(|missioning| std::mem::take(&mut missioning.info_requested));
+        let landing = self
+            .missioning
+            .as_mut()
+            .is_some_and(|missioning| missioning.landing.take_info_request());
         let open = match &mut self.open {
             Some(Open::Bar(screen)) => screen.take_info_request(),
             Some(Open::Computer(screen)) => screen.take_info_request(),
-            _ => false,
+            Some(Open::Trade(screen)) => screen.take_info_request(),
+            Some(Open::Outfitter(screen)) => screen.take_info_request(),
+            Some(Open::Shipyard(screen)) => screen.take_info_request(),
+            Some(Open::Service(_)) | None => false,
         };
-        own || open
+        own || landing || open
     }
 
     /// Opens the mission info screen on `info` over whatever is open; with
@@ -1157,7 +1165,9 @@ impl SpaceportView {
             .info
             .clone()
             .map(|template| (template, Rc::clone(&port.metrics.0)));
-        self.info = Some(MissionInfoScreen::new(layout, info, port.style));
+        let mut screen = MissionInfoScreen::new(layout, info, port.style);
+        self.sounds.extend(screen.take_sounds());
+        self.info = Some(screen);
     }
 
     /// The mission info screen open, if it is.
@@ -1177,6 +1187,7 @@ impl SpaceportView {
     pub fn set_mission_info(&mut self, info: MissionInfo) {
         if let Some(screen) = &mut self.info {
             screen.set_info(info);
+            self.sounds.extend(screen.take_sounds());
             if screen.closed() {
                 self.info = None;
             }
@@ -4122,6 +4133,87 @@ mod tests {
         let mut view = earth();
         view.input(&key(MISSION_INFO_KEY));
         assert!(!view.take_mission_info_request(), "no mission screens");
+    }
+
+    /// [`venues`], landed on and the venue at `item` opened, the
+    /// spaceport's offer taken.
+    fn shopping_at(item: usize) -> SpaceportView {
+        let mut view = venues();
+        assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+        click_item(&mut view, item);
+        view
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_each_shop_and_opens_over_it() {
+        for (shop, item) in [(TRADE_CENTER, 7), (OUTFITTER, 8), (SHIPYARD, 9)] {
+            let open = |view: &SpaceportView| match shop {
+                TRADE_CENTER => view.open_trade().is_some(),
+                OUTFITTER => view.open_outfitter().is_some(),
+                _ => view.open_shipyard().is_some(),
+            };
+            let mut view = shopping_at(item);
+            assert!(open(&view), "{shop}");
+            view.input(&key(MISSION_INFO_KEY));
+            assert!(view.take_mission_info_request(), "{shop}");
+            assert!(!view.take_mission_info_request(), "{shop}: once");
+            view.open_mission_info(actives(0));
+            assert!(view.mission_info().is_none(), "{shop}: nothing to show");
+            view.take_sounds();
+            view.open_mission_info(actives(2));
+            assert!(view.mission_info().is_some(), "{shop}");
+            assert_eq!(
+                view.take_sounds(),
+                [Sound::Ui(UiSound::MissionInfoOpened)],
+                "{shop}"
+            );
+            assert!(open(&view), "{shop}: still open under it");
+            view.input(&key(Key::Escape));
+            assert!(view.mission_info().is_none(), "{shop}: Escape closed it");
+            assert_eq!(
+                view.take_sounds(),
+                [Sound::Ui(UiSound::MissionInfoClosed)],
+                "{shop}"
+            );
+            assert!(open(&view), "{shop}: and the shop is back");
+            view.input(&key(MISSION_INFO_KEY));
+            assert!(view.take_mission_info_request(), "{shop}: takes keys again");
+        }
+    }
+
+    #[test]
+    fn the_mission_info_key_asks_from_an_offer_over_each_venue() {
+        for venue in [SPACEPORT, BAR, TRADE_CENTER, OUTFITTER, SHIPYARD] {
+            let mut view = venues();
+            assert_eq!(view.take_offer_request(), Some(SPACEPORT));
+            if venue != SPACEPORT {
+                let item = match venue {
+                    BAR => 10,
+                    TRADE_CENTER => 7,
+                    OUTFITTER => 8,
+                    _ => 9,
+                };
+                click_item(&mut view, item);
+                view.tick(FIRST_OFFER_DELAY);
+                assert_eq!(view.take_offer_request(), Some(venue));
+            }
+            view.open_offer(offered());
+            view.input(&key(MISSION_INFO_KEY));
+            assert!(view.take_mission_info_request(), "{venue}");
+            assert!(!view.take_mission_info_request(), "{venue}: once");
+            assert!(view.offer_dialog().is_some(), "{venue}: still open");
+        }
+    }
+
+    #[test]
+    fn closing_the_mission_info_by_its_last_abort_beeps() {
+        let mut view = missioned();
+        view.open_mission_info(actives(1));
+        view.take_sounds();
+        view.set_mission_info(actives(1));
+        assert_eq!(view.take_sounds(), [], "still listing");
+        view.set_mission_info(actives(0));
+        assert_eq!(view.take_sounds(), [Sound::Ui(UiSound::MissionInfoClosed)]);
     }
 
     #[test]

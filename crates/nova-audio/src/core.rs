@@ -142,9 +142,6 @@ impl<A: Audio> AudioCore<A> {
                         });
                     }
                 }
-                Sound::Ui(UiSound::ButtonDown) => self.play(self.table.button_down),
-                Sound::Ui(UiSound::ButtonUp) => self.play(self.table.button_up),
-                Sound::Ui(UiSound::Alert) => self.play(self.table.alert),
                 Sound::Sim(SimSound::EscortsCommanded) => self.play(self.table.escorts_commanded),
                 Sound::Sim(SimSound::EscortRepaired) => self.play(self.table.escort_repaired),
                 Sound::Sim(SimSound::Klaxon) => {
@@ -168,11 +165,7 @@ impl<A: Audio> AudioCore<A> {
                         self.audio.run(AudioCommand::Halt { sound });
                     }
                 }
-                Sound::Ui(UiSound::EscortMenuToggled) => self.play(self.table.escort_menu),
-                Sound::Ui(UiSound::EscortGroupSelected) => self.play(self.table.escort_group),
-                Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
-                Sound::Ui(UiSound::NewsOpened) => self.play(self.table.news_open),
-                Sound::Ui(UiSound::NewsClosed) => self.play(self.table.news_close),
+                Sound::Ui(ui) => self.play(self.ui_sound(ui)),
                 Sound::Combat(fight) => {
                     let gain = distance_gain(fight.offset);
                     let volume = self.settings.effects_volume.amplitude() * gain;
@@ -180,6 +173,20 @@ impl<A: Audio> AudioCore<A> {
                 }
             }
             self.reconcile();
+        }
+    }
+
+    /// The table's sound for the interface sound `ui`.
+    fn ui_sound(&self, ui: UiSound) -> Option<SoundId> {
+        match ui {
+            UiSound::ButtonDown => self.table.button_down,
+            UiSound::ButtonUp => self.table.button_up,
+            UiSound::Alert => self.table.alert,
+            UiSound::EscortMenuToggled => self.table.escort_menu,
+            UiSound::EscortGroupSelected => self.table.escort_group,
+            UiSound::NoEscorts => self.table.no_escorts,
+            UiSound::NewsOpened | UiSound::MissionInfoOpened => self.table.news_open,
+            UiSound::NewsClosed | UiSound::MissionInfoClosed => self.table.news_close,
         }
     }
 
@@ -754,6 +761,35 @@ mod tests {
             &[
                 Sound::Ui(UiSound::NewsClosed),
                 Sound::Ui(UiSound::NewsOpened),
+            ],
+        );
+        assert_eq!(drain(&log), [play(301, 1.0), play(300, 1.0)], "the table's");
+    }
+
+    #[test]
+    fn the_mission_info_screen_beeps_as_it_opens_and_closes() {
+        let (mut core, log) = original();
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Ui(UiSound::MissionInfoOpened),
+                Sound::Ui(UiSound::MissionInfoClosed),
+            ],
+        );
+        assert_eq!(drain(&log), [play(151, 1.0), play(152, 1.0)]);
+        let audio = RecordingAudio::new();
+        let log = audio.log();
+        let table = SoundTable {
+            news_open: Some(SoundId(300)),
+            news_close: Some(SoundId(301)),
+            ..SoundTable::ORIGINAL
+        };
+        let mut core = AudioCore::with_table(audio, table);
+        core.update(
+            Some(Showing::ShipBrowser),
+            &[
+                Sound::Ui(UiSound::MissionInfoClosed),
+                Sound::Ui(UiSound::MissionInfoOpened),
             ],
         );
         assert_eq!(drain(&log), [play(301, 1.0), play(300, 1.0)], "the table's");

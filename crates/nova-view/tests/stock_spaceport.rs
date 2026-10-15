@@ -304,7 +304,7 @@ fn the_shuttles_info_is_the_picture_panel(screen: &mut nova_view::spaceport::Shi
         PANEL_GRAPHIC_ITEM, PANEL_WEAPONS_ITEM, PICTURE_INFO_BACKGROUND,
     };
     screen.input(&nova_view::Input::Key {
-        key: nova_view::Key::Char('i'),
+        key: nova_view::spaceport::shipyard::INFO_KEY,
         pressed: true,
         repeat: false,
     });

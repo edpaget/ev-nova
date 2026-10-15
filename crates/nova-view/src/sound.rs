@@ -37,6 +37,12 @@ pub enum UiSound {
     /// The bar's news dialog closed: `_DoNewsDialog` plays `_beepSnd[2]`
     /// as it closes (@0x4814e).
     NewsClosed,
+    /// The mission info screen opened: `_DoMissionInfoDialog` plays
+    /// `_beepSnd[1]` as it opens (`PlaySound` @0x9e1d5).
+    MissionInfoOpened,
+    /// The mission info screen closed: `_DoMissionInfoDialog` plays
+    /// `_beepSnd[2]` as it closes (@0x9e791).
+    MissionInfoClosed,
 }
 
 /// A sound a fight makes: a weapon firing or an explosion, heard from
