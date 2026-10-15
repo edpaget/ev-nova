@@ -166,7 +166,9 @@ impl AuxShips {
 ///   (@0x99545-0x99589).
 /// - Any other code: never.
 ///
-/// The player's system's government is the map's, overlaid.
+/// The player's system's government is the map's, overlaid, read with no
+/// visibility test ([`StarMap::catalog_govt`]), as the original reads it
+/// at +0x8 of a hidden system too.
 #[must_use]
 pub fn aux_system_allows(
     code: i16,
@@ -187,7 +189,7 @@ pub fn aux_system_allows(
             let system = SystemId(code - 4872);
             system == player || map.con_slots(system).contains(&player)
         }
-        _ => GovtCode::of(code).is_some_and(|of| govt_allows(of, map.govt(player), govts)),
+        _ => GovtCode::of(code).is_some_and(|of| govt_allows(of, map.catalog_govt(player), govts)),
     }
 }
 
@@ -493,6 +495,13 @@ mod tests {
         assert!(allows(5012, 133), "140's Con lists 133");
         assert!(!allows(5871, 130), "999: not held, no links");
         assert!(!allows(9998, 130));
+    }
+
+    #[test]
+    fn government_codes_read_a_hidden_player_system_s_government() {
+        assert!(allows(10_000, 131), "hidden 131 is the Federation's");
+        assert!(!allows(9999, 131), "not an independent");
+        assert!(!allows(20_000, 131));
     }
 
     #[test]

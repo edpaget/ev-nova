@@ -459,6 +459,8 @@ pub struct StarMap {
     /// Every system's raw Con slots, hidden systems' included, in record
     /// order, repeats and links to itself kept.
     con: BTreeMap<SystemId, Vec<SystemId>>,
+    /// Every system's controlling government, hidden systems' included.
+    catalog_govts: BTreeMap<SystemId, Option<GovtId>>,
     /// Where every system it was built from is, and which stands for each.
     places: Places,
 }
@@ -508,9 +510,11 @@ impl StarMap {
         let mut links = Vec::new();
         let mut nodes = BTreeMap::new();
         let mut con = BTreeMap::new();
+        let mut catalog_govts = BTreeMap::new();
         for system in systems {
             let from = system.id;
             con.insert(from, system.links.clone());
+            catalog_govts.insert(from, system.govt);
             if !places.visible(from) {
                 continue;
             }
@@ -568,7 +572,12 @@ impl StarMap {
                 }
             }
         }
-        Self { nodes, con, places }
+        Self {
+            nodes,
+            con,
+            catalog_govts,
+            places,
+        }
     }
 
     /// System `id`'s raw Con slots, as its `sÿst` lists them: in record
@@ -698,6 +707,14 @@ impl StarMap {
     #[must_use]
     pub fn govt(&self, id: SystemId) -> Option<GovtId> {
         self.nodes.get(&id).and_then(|node| node.govt)
+    }
+
+    /// System `id`'s controlling government with no visibility test, a
+    /// hidden system's included: `None` when it is independent or not
+    /// among the systems the map was built from.
+    #[must_use]
+    pub fn catalog_govt(&self, id: SystemId) -> Option<GovtId> {
+        self.catalog_govts.get(&id).copied().flatten()
     }
 
     /// The fewest jumps from `from` to `to` under `rule`: each system
