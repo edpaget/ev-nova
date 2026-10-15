@@ -3930,6 +3930,21 @@ mod tests {
     }
 
     #[test]
+    fn the_mission_info_key_asks_nothing_without_the_dialog() {
+        let art = art();
+        let mut screen = ShipyardScreen::new(
+            Err("no DLOG 1004".to_owned()),
+            info_templates(),
+            Ok(text_input_template()),
+            shipyard(),
+            Rc::clone(&art) as Rc<dyn ShipyardCatalog>,
+            ButtonStyle::STOCK,
+        );
+        press(&mut screen, crate::ui::mission_info::MISSION_INFO_KEY);
+        assert!(!screen.take_info_request());
+    }
+
+    #[test]
     fn the_mission_info_key_asks_from_its_offer_which_stays_open() {
         let mut screen = offering();
         screen.open_offer(prompt());
