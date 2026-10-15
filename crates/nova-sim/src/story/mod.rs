@@ -152,7 +152,12 @@
 //!    success (`_DoMissionSuccess` @0xa1ace); then the goals again
 //!    (@0xa1ada). After the last slot it refreshes the galaxy (@0xa1af2)
 //!    and, if any mission succeeded, re-offers (@0xa1b04): availability
-//!    and resolution again, the table kept.
+//!    and resolution again, the table kept. Here each of those four steps
+//!    is the slot's own `Landed` subscription, `{Missions, slot, 0..=3}`,
+//!    and the landing walks them live (see "One dispatch"), so a mission
+//!    an `S` puts in a later slot is checked in full at this landing, one
+//!    put in the slot just freed gets only the trailing check, and one put
+//!    in a lower slot waits for the take-off, as the original's loop does.
 //! 4. The news is chosen as the bar opens: `_DoBarDialog` (0x48ef5)
 //!    calls `_RandomizeNewsDialog` (0x48238) as it opens (@0x48f15). It
 //!    has no trigger point of its own (see [`news`](crate::news)).
@@ -269,14 +274,16 @@
 //!
 //! Here the poll is the [`Consumer::MissionShips`] subscriptions each slot
 //! registers (see the session's `mission_ships` module): a check on every
-//! `ShipFate`, on `Landed` before the missions' landing hooks, on
+//! `ShipFate`, on
 //! `TookOff` (the first flight frame after a landing or a docked accept,
 //! held until the take-off's setup has run, as the original sets the
 //! system up first, @0x674c2), and in flight on `EnteredSystem`; an accept in flight is checked once
 //! its settling is done. The ships' arrivals raise
 //! [`Fate::Arrived`], their first sighting [`Fate::Observed`] and their
 //! leaving [`Fate::Departed`], so an escort's presence, an observation
-//! and a chase-off are checked as they change.
+//! and a chase-off are checked as they change. A landing's two checks
+//! are the slot's own [`Consumer::Missions`] hooks, before its cargo and
+//! after its return (see "One landing").
 //!
 //! Mission cargo jettisoned (`_JettisonCargo` @0x3e18c), found by a scan
 //! (`_ScanPlayer` @0x7e7ac) or plundered by an NPC
@@ -528,20 +535,14 @@
 //! [`Consumer`]'s, the same for every event, because only one event has
 //! several stock consumers in the original: a landing, which rolls the
 //! offers before the spaceport opens (@0x66d62), then checks each
-//! mission's ship goals before its cargo, failure and success
-//! (@0xa1a0c-0xa1ace). So [`Consumer::Offers`], whose one subscription is
-//! the roll, `{Offers, 0, 0}`, comes first, then
-//! [`Consumer::MissionShips`], whose landing hook per slot,
-//! `{MissionShips, slot, 1}`, checks the goals, then
+//! mission in turn (@0xa1a0c-0xa1ada). So [`Consumer::Offers`], whose one
+//! subscription is the roll, `{Offers, 0, 0}`, comes first, then
 //! [`Consumer::Missions`]. Missions go by slot, as the original's land
-//! check (@0xa19f7), and a mission's landing hooks go cargo, failure,
-//! success; the re-offer, `{Missions, 16, 0}`, comes after every slot.
+//! check (@0xa19f7), and a slot's landing hooks go goals, cargo, return
+//! (failure, else the escort goal, then success) and the goals again;
+//! the re-offer, `{Missions, 16, 0}`, comes after every slot.
 //! Plug-ins run after every stock consumer: an engine decision with no
-//! Rulebook key, since the original has no plug-ins. One difference stays: the original checks
-//! goals and then cargo, failure and success slot by slot, and here every
-//! slot's goals come first. Goal checks read only their own mission's
-//! counts, so the two differ only when a success script changes another
-//! mission's ships.
+//! Rulebook key, since the original has no plug-ins.
 //!
 //! **Re-entrancy.** The Rulebook key
 //! [`story_reentry`](crate::RuleKey::StoryReentry) has two readings. Its
@@ -1655,20 +1656,22 @@
 //!   [`refuse_mission`](crate::Session::refuse_mission) runs `OnRefuse`
 //!   and drops the offer; [`abort_mission`](crate::Session::abort_mission)
 //!   runs the abort checks (`CanAbort`), then `OnAbort`;
-//! - `Landed`: each slot's three landing subscriptions,
-//!   `{Missions, slot, 0..=2}`, after the offer roll and the mission
-//!   ships' goal checks, in `_MissionLandCheck`'s order: by slot, the arrival
+//! - `Landed`: each slot's four landing subscriptions,
+//!   `{Missions, slot, 0..=3}`, after the offer roll, in
+//!   `_MissionLandCheck`'s order: by slot, the goal check, the arrival
 //!   (`_MissionLandCargoCheck`: the cargo picked up and dropped off, and
-//!   the destination reached), failure, success. A failure runs `OnFailure` and applies the failure
+//!   the destination reached), the return (failure, else an escort goal
+//!   with none of its ships destroyed met, then success), and the goal
+//!   check again. A failure runs `OnFailure` and applies the failure
 //!   records; a success frees the slot, runs `OnSuccess`, passes its
 //!   `DatePostInc` days through the daily step, applies the legal records
 //!   and pays. The re-offer, `{Missions, 16, 0}`, runs after every slot
 //!   and offers the missions again, the table kept, when one succeeded;
 //! - the daily step: the days left count down (the third participant);
-//!   a timed slot's `DayPassed` subscription, `{Missions, slot, 3}`, fails
+//!   a timed slot's `DayPassed` subscription, `{Missions, slot, 4}`, fails
 //!   a mission whose days left reached 0, running `OnFailure`, once the
 //!   ship is not docked, as the original's per-frame check skips the open
-//!   spaceport. Its `TookOff` subscription, `{Missions, slot, 4}`,
+//!   spaceport. Its `TookOff` subscription, `{Missions, slot, 5}`,
 //!   catches a deadline that ran out docked when the take-off passes no
 //!   day. An unabortable mission stays active and failed until its
 //!   return, where [`repeat_mission_failure`](crate::RuleKey::RepeatMissionFailure)
@@ -2034,8 +2037,7 @@ impl EventFilter {
 
 /// Who registered a subscription, in the order consumers run on one
 /// event: the offers first, as a landing rolls them before the land
-/// check; mission ships before missions, as the land check checks the
-/// goals before the missions; and every stock consumer before the
+/// check; and every stock consumer before the
 /// plug-ins (see the module docs' "Dispatch").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Consumer {
@@ -2215,42 +2217,17 @@ mod tests {
     }
 
     #[test]
-    fn a_landing_rolls_the_offers_before_it_checks_the_ship_goals() {
+    fn a_landing_rolls_the_offers_before_it_checks_the_missions() {
         let landed = EventFilter::Any(StoryEventKind::Landed);
         let subs = [
-            on(Consumer::MissionShips, i16::MIN, 0, landed),
+            on(Consumer::Missions, i16::MIN, 0, landed),
             on(Consumer::Offers, i16::MAX, 9, landed),
         ];
         assert_eq!(
             ids(&dispatch_order(&subs, &LANDED)),
             [
                 id(Consumer::Offers, i16::MAX, 9),
-                id(Consumer::MissionShips, i16::MIN, 0)
-            ]
-        );
-    }
-
-    #[test]
-    fn a_landing_checks_mission_ships_goals_before_the_missions() {
-        let subs = [
-            on(
-                Consumer::Missions,
-                0,
-                0,
-                EventFilter::Any(StoryEventKind::Landed),
-            ),
-            on(
-                Consumer::MissionShips,
-                15,
-                0,
-                EventFilter::Any(StoryEventKind::Landed),
-            ),
-        ];
-        assert_eq!(
-            ids(&dispatch_order(&subs, &LANDED)),
-            [
-                id(Consumer::MissionShips, 15, 0),
-                id(Consumer::Missions, 0, 0)
+                id(Consumer::Missions, i16::MIN, 0)
             ]
         );
     }

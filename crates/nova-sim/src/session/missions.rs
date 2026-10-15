@@ -36,9 +36,10 @@
 //! missions"). [`Session::accept_mission`], [`Session::refuse_mission`]
 //! and [`Session::abort_mission`] are the player's; `S`, `A` and `F` are
 //! `apply_op`'s arms. Each slot filled registers its hooks, `{Missions,
-//! slot, hook}`: [`ARRIVAL`] (the cargo check, in the `mission_cargo`
-//! module), [`FAILURE`] and [`SUCCESS`] on every
-//! landing, and, for a mission with a deadline, [`DEADLINE`] on every day
+//! slot, hook}`: on every landing, in `_MissionLandCheck`'s order,
+//! [`GOALS`] (the leading goal check), [`ARRIVAL`] (the cargo check, in
+//! the `mission_cargo` module), [`RETURN`] (failure, else the escort
+//! goal, then success) and [`RECHECK`] (the trailing goal check); and, for a mission with a deadline, [`DEADLINE`] on every day
 //! and [`DEADLINE_TOOK_OFF`] on every take-off, each with a blank guard
 //! and no script; their effects come through the dispatcher's consumer
 //! match. [`REOFFER`], registered with [`ROLL`], re-offers after the last
@@ -125,25 +126,29 @@ pub const REOFFER: SubscriptionId = SubscriptionId {
     hook: 0,
 };
 
+/// A slot's leading goal check on `Landed` (`_MissionLandCheck`
+/// @0xa1a0c; see the `mission_ships` module).
+pub const GOALS: u8 = 0;
 /// A slot's landing hook that picks its cargo up and drops it off and
 /// marks its destination reached: the cargo check's place in
 /// `_MissionLandCheck` (`_MissionLandCargoCheck` @0x9edc5, from
 /// @0xa1a1b; see the `mission_cargo` module).
-pub const ARRIVAL: u8 = 0;
-/// A slot's landing hook that fails a failed mission at its return
-/// (@0xa1a92).
-pub const FAILURE: u8 = 1;
-/// A slot's landing hook that completes a mission at its return
-/// (@0xa1ace).
-pub const SUCCESS: u8 = 2;
+pub const ARRIVAL: u8 = 1;
+/// A slot's landing hook at its mission's return (@0xa1a37-0xa1ace):
+/// the destination marked reached, then a failed mission failed, else
+/// the escort goal settled, then the mission completed.
+pub const RETURN: u8 = 2;
+/// A slot's trailing goal check on `Landed` (@0xa1ada), on whatever
+/// mission the slot holds by then.
+pub const RECHECK: u8 = 3;
 /// A timed slot's daily deadline check, on `DayPassed`.
-pub const DEADLINE: u8 = 3;
+pub const DEADLINE: u8 = 4;
 /// A timed slot's deadline check on `TookOff`, for a deadline that ran
 /// out while docked with no day passing as the ship leaves.
-pub const DEADLINE_TOOK_OFF: u8 = 4;
+pub const DEADLINE_TOOK_OFF: u8 = 5;
 
 /// Every hook a slot can register, in order.
-const HOOKS: [u8; 5] = [ARRIVAL, FAILURE, SUCCESS, DEADLINE, DEADLINE_TOOK_OFF];
+const HOOKS: [u8; 6] = [GOALS, ARRIVAL, RETURN, RECHECK, DEADLINE, DEADLINE_TOOK_OFF];
 
 /// Slot `slot`'s subscription for `hook`.
 #[must_use]
@@ -318,9 +323,10 @@ impl Session {
             return;
         };
         let mut hooks = vec![
+            (GOALS, StoryEventKind::Landed),
             (ARRIVAL, StoryEventKind::Landed),
-            (FAILURE, StoryEventKind::Landed),
-            (SUCCESS, StoryEventKind::Landed),
+            (RETURN, StoryEventKind::Landed),
+            (RECHECK, StoryEventKind::Landed),
         ];
         if active.days_left.is_some() {
             hooks.push((DEADLINE, StoryEventKind::DayPassed));
@@ -756,12 +762,12 @@ impl Session {
             return;
         };
         match (id.hook, *event) {
-            (ARRIVAL, StoryEvent::Landed { stellar }) => self.cargo_at_landing(slot, stellar),
-            (FAILURE, StoryEvent::Landed { stellar }) => {
-                self.mission_failure_at(slot, stellar, chance);
+            (GOALS | RECHECK, StoryEvent::Landed { .. }) => {
+                self.check_ship_goals(slot, false, chance);
             }
-            (SUCCESS, StoryEvent::Landed { stellar }) => {
-                self.mission_success_at(slot, stellar, chance);
+            (ARRIVAL, StoryEvent::Landed { stellar }) => self.cargo_at_landing(slot, stellar),
+            (RETURN, StoryEvent::Landed { stellar }) => {
+                self.mission_return_at(slot, stellar, chance);
             }
             (DEADLINE, StoryEvent::DayPassed { .. })
             | (DEADLINE_TOOK_OFF, StoryEvent::TookOff { .. }) => {
@@ -771,21 +777,15 @@ impl Session {
         }
     }
 
-    /// Landing on `stellar`, the return of the failed mission in `slot`,
-    /// fails it (`_DoMissionFailure` @0xa0285), drawing on `chance`: its
+    /// The failed mission in `slot`, `failed` as it was, fails at its
+    /// return (`_DoMissionFailure` @0xa0285), drawing on `chance`: its
     /// `OnFailure`, the record with `CompGovt` less half `CompReward`,
     /// then the slot freed and the offers' stellar forgotten, no
     /// `OnAbort` run. A mission failed by its deadline ran `OnFailure`
     /// already: by [`RuleKey::RepeatMissionFailure`]'s engine reading it
     /// runs again; by the other, not.
-    fn mission_failure_at(&mut self, slot: u8, stellar: StellarId, chance: &mut dyn Chance) {
+    fn mission_failure_at(&mut self, slot: u8, failed: FailedBy, chance: &mut dyn Chance) {
         let Some(active) = self.pilot.missions.get(slot) else {
-            return;
-        };
-        let Some(failed) = active
-            .failed
-            .filter(|_| self.docked_at_stop(active.return_to, stellar))
-        else {
             return;
         };
         let record = self.lifecycle_record(active.mission);
@@ -807,15 +807,17 @@ impl Session {
         self.forget_offers();
     }
 
-    /// Landing on `stellar`, the return of the mission in `slot`,
-    /// completes it once its destination is reached and its goals are
-    /// met, and it has not failed (`_MissionLandCheck` @0xa1a4e-0xa1ace,
-    /// `_DoMissionSuccess` @0xa03fc), drawing on `chance`: the slot freed,
-    /// then its `OnSuccess`, its `DatePostInc` days, the legal records
+    /// Landing on `stellar`, the return of the mission in `slot`
+    /// (`_MissionLandCheck` @0xa1a37-0xa1ace), drawing on `chance`: its
+    /// destination marked reached when it is the return, or there is
+    /// none; then a failed mission fails ([`Session::mission_failure_at`],
+    /// @0xa1a92); else an escort goal with none of its ships destroyed
+    /// is met (@0xa1a99-0xa1ab1); then, reached and its goals met, it
+    /// completes (`_DoMissionSuccess` @0xa03fc): the slot freed, then its
+    /// `OnSuccess`, its `DatePostInc` days, the legal records
     /// ([`success_records`]), its pay, the offers' stellar forgotten, and
-    /// a re-offer due. Its destination is reached here when it is the
-    /// return, or there is none.
-    fn mission_success_at(&mut self, slot: u8, stellar: StellarId, chance: &mut dyn Chance) {
+    /// a re-offer due.
+    fn mission_return_at(&mut self, slot: u8, stellar: StellarId, chance: &mut dyn Chance) {
         if !self.docked_at_stop(
             self.pilot
                 .missions
@@ -838,7 +840,11 @@ impl Session {
             active.reached = true;
             self.save_due = true;
         }
-        if !active.reached || !active.goals_met || active.failed.is_some() {
+        if let Some(failed) = active.failed {
+            self.mission_failure_at(slot, failed, chance);
+            return;
+        }
+        if !active.reached || !active.goals_met {
             return;
         }
         let mission = active.mission;
@@ -3655,6 +3661,25 @@ mod tests {
     }
 
     #[test]
+    fn a_landing_checks_each_slots_goals_cargo_return_and_recheck_before_the_next_slot() {
+        let catalog = lifecycle(vec![to_129(140), to_129(141)]);
+        let (mut session, _) = watched(&catalog, Rulebook::default());
+        accept(&mut session, 140);
+        accept(&mut session, 141);
+        let mut expected = vec![ROLL];
+        for slot in 0..2 {
+            expected.extend([GOALS, ARRIVAL, RETURN, RECHECK].map(|hook| slot_hook(slot, hook)));
+        }
+        expected.push(REOFFER);
+        assert_eq!(
+            session.story_matching(&crate::story::StoryEvent::Landed {
+                stellar: StellarId(128)
+            }),
+            expected
+        );
+    }
+
+    #[test]
     fn a_timed_slot_registers_its_deadline_checks_and_an_untimed_one_none() {
         let catalog = lifecycle(vec![
             MissionRecord {
@@ -3667,7 +3692,7 @@ mod tests {
         accept(&mut session, 140);
         accept(&mut session, 141);
         for (slot, timed) in [(0, true), (1, false)] {
-            for hook in [ARRIVAL, FAILURE, SUCCESS] {
+            for hook in [GOALS, ARRIVAL, RETURN, RECHECK] {
                 assert!(
                     session.unregister_story(slot_hook(slot, hook)),
                     "{slot} {hook}"
@@ -3686,7 +3711,7 @@ mod tests {
             "registered as the session starts"
         );
         assert!(REOFFER > slot_hook(15, DEADLINE_TOOK_OFF));
-        assert!(ROLL < slot_hook(0, ARRIVAL));
+        assert!(ROLL < slot_hook(0, GOALS));
     }
 
     // The text tags.

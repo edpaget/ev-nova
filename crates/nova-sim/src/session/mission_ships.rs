@@ -13,9 +13,11 @@
 //!
 //! **The hooks** are no loop of their own: each slot filled registers
 //! [`ship_hook`]s, `{MissionShips, slot, hook}`, with a blank guard and
-//! no script: [`ENTERED`] on every `EnteredSystem`, [`LANDED`] on every
-//! `Landed`, [`SHIP_FATE`] on every `ShipFate` and [`TOOK_OFF`] on every
-//! `TookOff`. The enter-system hook's effect reads the event's
+//! no script: [`ENTERED`] on every `EnteredSystem`, [`SHIP_FATE`] on
+//! every `ShipFate` and [`TOOK_OFF`] on every `TookOff`. A landing's goal
+//! checks are the slot's `{Missions, slot, hook}` hooks
+//! [`GOALS`](super::missions::GOALS) and
+//! [`RECHECK`](super::missions::RECHECK), in `_MissionLandCheck`'s order. The enter-system hook's effect reads the event's
 //! [`Entrance`]. It restarts the timer on a jump's arrival, a gate's or
 //! wormhole's exit and an `M` or `N` in flight, never on a landed move
 //! nor a relocation (`_MissionHandlePlayerEnteredNewSystem`
@@ -42,9 +44,8 @@
 //! **The goals** are checked by every hook but in docked entries, the
 //! enter-system hook after its restart, as the original's per-frame poll
 //! and its land check check them (`_MissionObjectivesCheck` @0x9e79e; see
-//! [`check_goals`]): the landing's before the missions' landing hooks, as
-//! [`Consumer::MissionShips`] sorts before [`Consumer::Missions`], and
-//! after the offer roll; the take-off's as the first flight frame after
+//! [`check_goals`]): the landing's per slot, before its cargo and again
+//! after its return, after the offer roll; the take-off's as the first flight frame after
 //! a docked accept or a landing; every `ShipFate`'s, a sighting of one of
 //! the slot's own ships counting as seen. An accept in flight queues its
 //! slot's check for the end of [`Session::settle_script`]'s settling, so
@@ -212,9 +213,6 @@ enum Loss {
 /// A slot's enter-system hook, on `EnteredSystem`: the appear timer's
 /// restart, then in flight its goal check.
 pub const ENTERED: u8 = 0;
-/// A slot's goal check on `Landed`, before the missions' landing hooks
-/// (`_MissionLandCheck` @0xa1a0c).
-pub const LANDED: u8 = 1;
 /// A slot's goal check on every `ShipFate`.
 pub const SHIP_FATE: u8 = 2;
 /// A slot's goal check on `TookOff`: the first flight frame after a
@@ -222,9 +220,8 @@ pub const SHIP_FATE: u8 = 2;
 pub const TOOK_OFF: u8 = 3;
 
 /// Every hook a slot registers, each on its event, in order.
-const HOOKS: [(u8, StoryEventKind); 4] = [
+const HOOKS: [(u8, StoryEventKind); 3] = [
     (ENTERED, StoryEventKind::EnteredSystem),
-    (LANDED, StoryEventKind::Landed),
     (SHIP_FATE, StoryEventKind::ShipFate),
     (TOOK_OFF, StoryEventKind::TookOff),
 ];
@@ -376,7 +373,7 @@ impl Session {
                     self.check_ship_goals(slot, false, chance);
                 }
             }
-            (LANDED, StoryEvent::Landed { .. }) | (TOOK_OFF, StoryEvent::TookOff { .. }) => {
+            (TOOK_OFF, StoryEvent::TookOff { .. }) => {
                 self.check_ship_goals(slot, false, chance);
             }
             (SHIP_FATE, StoryEvent::ShipFate { ship, fate }) => {
@@ -2846,7 +2843,7 @@ pub(super) mod tests {
     fn a_slot_filled_registers_its_goal_hooks_and_freeing_it_unregisters_them() {
         let catalog = ships_catalog(shipping(-1, 0));
         let mut session = accepted(&catalog);
-        let hooks = [ENTERED, LANDED, SHIP_FATE, TOOK_OFF];
+        let hooks = [ENTERED, SHIP_FATE, TOOK_OFF];
         for hook in hooks {
             let id = ship_hook(0, hook);
             assert!(session.unregister_story(id), "{hook}");
@@ -2866,7 +2863,6 @@ pub(super) mod tests {
     fn kind_of(hook: u8) -> StoryEventKind {
         match hook {
             ENTERED => StoryEventKind::EnteredSystem,
-            LANDED => StoryEventKind::Landed,
             SHIP_FATE => StoryEventKind::ShipFate,
             _ => StoryEventKind::TookOff,
         }
@@ -3493,26 +3489,6 @@ pub(super) mod tests {
     }
 
     // A landing's order.
-
-    #[test]
-    fn a_landing_rolls_the_offers_then_checks_the_goals_then_runs_the_missions_hooks() {
-        use crate::session::missions::{ARRIVAL, FAILURE, REOFFER, ROLL, SUCCESS, slot_hook};
-        let catalog = ships_catalog(shipping(-1, 0));
-        let session = accepted(&catalog);
-        assert_eq!(
-            session.story_matching(&StoryEvent::Landed {
-                stellar: StellarId(128)
-            }),
-            [
-                ROLL,
-                ship_hook(0, LANDED),
-                slot_hook(0, ARRIVAL),
-                slot_hook(0, FAILURE),
-                slot_hook(0, SUCCESS),
-                REOFFER,
-            ]
-        );
-    }
 
     #[test]
     fn a_goal_the_landing_check_meets_completes_its_mission_at_that_landing() {
