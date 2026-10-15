@@ -205,8 +205,9 @@ impl Session {
     /// name and text filled for its offer, and today's medium date. The
     /// names read the remembered rank governments, as the original's list
     /// munges them before any text is loaded (@0xa0947); each text reads
-    /// its own, as if loaded, changing nothing: the screen loads the
-    /// selected one ([`Session::show_computer_row`]).
+    /// its own, as if loaded ([`Session::desc_govts`]: a missing one the
+    /// remembered), changing nothing: the screen loads the selected one
+    /// ([`Session::show_computer_row`]).
     ///
     /// # Errors
     ///
@@ -228,15 +229,13 @@ impl Session {
             .map(|offer| {
                 let texts = self.mission_texts(offer.mission);
                 let name = texts.map_or("", |texts| texts.name.as_str());
-                let text = texts
-                    .and_then(|texts| texts.offer.as_deref())
-                    .unwrap_or_default();
-                let loaded = TextSource::Desc.govts(self.rank_govts, text);
+                let text = texts.and_then(|texts| texts.offer.as_deref());
+                let loaded = self.desc_govts(text);
                 ComputerRow {
                     mission: offer.mission,
                     name: self.offer_text(offer.mission, name).unwrap_or_default(),
                     text: self
-                        .offer_text_reading(offer.mission, text, loaded)
+                        .offer_text_reading(offer.mission, text.unwrap_or_default(), loaded)
                         .unwrap_or_default(),
                 }
             })
@@ -254,8 +253,9 @@ impl Session {
     /// slot whose `mïsn` is gone reads with no text, and abortable. The
     /// names read the remembered rank governments, as the original's list
     /// munges them before any text is loaded (@0x9e108); each text reads
-    /// its own, as if loaded, changing nothing: the screen loads the
-    /// selected one ([`Session::show_info_row`]).
+    /// its own, as if loaded ([`Session::desc_govts`]: a missing one the
+    /// remembered), changing nothing: the screen loads the selected one
+    /// ([`Session::show_info_row`]).
     #[must_use]
     pub fn mission_info(&self) -> MissionInfo {
         let rows = self
@@ -269,15 +269,13 @@ impl Session {
                 }
                 let texts = self.mission_texts(active.mission);
                 let name = texts.map_or("", |texts| texts.name.as_str());
-                let text = texts
-                    .and_then(|texts| texts.quick_brief.as_deref())
-                    .unwrap_or_default();
-                let loaded = TextSource::Desc.govts(self.rank_govts, text);
+                let text = texts.and_then(|texts| texts.quick_brief.as_deref());
+                let loaded = self.desc_govts(text);
                 Some(InfoRow {
                     slot,
                     name: self.mission_text(slot, name),
                     failed: active.failed.is_some(),
-                    text: self.mission_text_reading(slot, text, loaded),
+                    text: self.mission_text_reading(slot, text.unwrap_or_default(), loaded),
                     abortable: record.can_abort != 0,
                 })
             })
@@ -289,7 +287,8 @@ impl Session {
     }
 
     /// Shows the mission computer's row of `mission`, selected: its offer
-    /// text loaded as a `dësc` and filled for its offer, as
+    /// text loaded as a `dësc` ([`Session::load_desc`]: a missing one
+    /// empty, keeping the governments) and filled for its offer, as
     /// `_MissionFilter` loads a selected row's (@0x9f9bd-0x9f9eb), and
     /// then its name filled, as `_MissionDialogUpdate` munges the
     /// selected name after (@0x9f40c), drawing on `chance`. `None` when
@@ -302,10 +301,8 @@ impl Session {
         self.offer_of(mission)?;
         let texts = self.mission_texts(mission);
         let name = texts.map_or("", |texts| texts.name.as_str()).to_owned();
-        let raw = texts
-            .and_then(|texts| texts.offer.clone())
-            .unwrap_or_default();
-        let raw = self.take_in(TextSource::Desc, &raw, chance);
+        let raw = texts.and_then(|texts| texts.offer.clone());
+        let raw = self.load_desc(raw.as_deref(), chance);
         Some(ComputerRow {
             mission,
             text: self.offer_text(mission, &raw)?,
@@ -314,16 +311,16 @@ impl Session {
     }
 
     /// Shows the mission info screen's row of `slot`, selected: its
-    /// `QuickBrief` loaded as a `dësc` and filled for the slot, as
+    /// `QuickBrief` loaded as a `dësc` ([`Session::load_desc`]: a missing
+    /// one empty, keeping the governments) and filled for the slot, as
     /// `_MissionInfoFilter` loads a selected row's (@0x9d89f-0x9d8bc),
     /// drawing on `chance`. `None` for a free slot.
     pub fn show_info_row(&mut self, slot: u8, chance: &mut dyn Chance) -> Option<String> {
         let active = self.pilot.missions.get(slot)?;
         let raw = self
             .mission_texts(active.mission)
-            .and_then(|texts| texts.quick_brief.clone())
-            .unwrap_or_default();
-        let raw = self.take_in(TextSource::Desc, &raw, chance);
+            .and_then(|texts| texts.quick_brief.clone());
+        let raw = self.load_desc(raw.as_deref(), chance);
         Some(self.mission_text(slot, &raw))
     }
 
@@ -387,10 +384,12 @@ impl Session {
     }
 
     /// The offer dialog for `mission`, offered now (`_OfferOneMission`
-    /// @0xa21ac), drawing on `chance`: its offer text filled for the
-    /// offer, and its labels; or, for one that cannot be refused with no
-    /// offer text, its accept at once (@0xa22ec-0xa231c), made before the
-    /// dialog is, so with no offer dialog open
+    /// @0xa21ac), drawing on `chance`: its offer text loaded
+    /// ([`Session::load_desc`]: a missing one empty, keeping the
+    /// governments) and filled for the offer, and its labels; or, for one
+    /// that cannot be refused with no offer text, its accept at once
+    /// (@0xa22ec-0xa231c), made before the dialog is, so with no offer
+    /// dialog open
     /// ([`Session::accept_offered`]), and its offer then dropped when it
     /// succeeds, as `_OfferMissionFromPort` drops it (@0xa3765-0xa37a1).
     pub(super) fn offer_dialog(
@@ -402,10 +401,8 @@ impl Session {
             .mission_record(mission)
             .is_some_and(|record| record.flags & UNREFUSABLE == 0);
         let texts = self.mission_texts(mission);
-        let raw = texts
-            .and_then(|texts| texts.offer.as_deref())
-            .unwrap_or_default();
-        if !can_refuse && raw.is_empty() {
+        let raw = texts.and_then(|texts| texts.offer.as_deref());
+        if !can_refuse && raw.is_none_or(str::is_empty) {
             let accepted = self.accept_offered(mission, chance);
             if accepted.is_ok() {
                 // `_OfferMissionFromPort` drops the offer whenever
@@ -422,8 +419,8 @@ impl Session {
             texts.map_or("", |texts| texts.refuse_button.as_str()),
             can_refuse,
         );
-        let raw = raw.to_owned();
-        let raw = self.take_in(TextSource::Desc, &raw, chance);
+        let raw = raw.map(str::to_owned);
+        let raw = self.load_desc(raw.as_deref(), chance);
         VenueOffer::Prompt(OfferPrompt {
             mission,
             text: self.offer_text(mission, &raw).unwrap_or_default(),
@@ -700,6 +697,81 @@ mod tests {
             session.show_info_row(15, &mut NeverFires),
             None,
             "a free slot"
+        );
+    }
+
+    #[test]
+    fn a_selected_info_row_with_no_quick_brief_keeps_the_governments_left() {
+        let mut session = ranked(
+            vec![to_mars(130)],
+            vec![MissionTexts::named(MissionId(130), "Run")],
+            Rulebook::default(),
+        );
+        let slot = session
+            .accept_mission(MissionId(130), &mut NeverFires)
+            .expect("accepted");
+        let _ = session.take_in(
+            TextSource::Desc,
+            "Earlier: <PRK128> <SRK129>.",
+            &mut NeverFires,
+        );
+        assert_eq!(session.mission_info().rows[0].text, "");
+        assert_eq!(
+            session.show_info_row(slot, &mut NeverFires).as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            session.plain_text("<PRK128>"),
+            "Ad",
+            "a missing dësc only empties the text (@0x71825, @0x71a5e-0x71a81): \
+             no reset (@0x71926-0x71930), no parse (@0x71936)"
+        );
+    }
+
+    #[test]
+    fn a_selected_computer_row_with_no_offer_text_keeps_the_governments_left() {
+        let mut session = ranked(
+            vec![to_mars(130)],
+            vec![texts(130, "Run", None)],
+            Rulebook::default(),
+        );
+        let _ = session.take_in(
+            TextSource::Desc,
+            "Earlier: <PRK128> <SRK129>.",
+            &mut NeverFires,
+        );
+        assert_eq!(session.mission_computer().expect("opens").rows[0].text, "");
+        let shown = session
+            .show_computer_row(MissionId(130), &mut NeverFires)
+            .expect("offered");
+        assert_eq!(shown.text, "");
+        assert_eq!(
+            session.plain_text("<PRK128>"),
+            "Ad",
+            "a missing dësc is not loaded (@0x71825)"
+        );
+    }
+
+    #[test]
+    fn an_offer_with_no_offer_text_keeps_the_governments_left() {
+        let mut session = ranked(
+            vec![at_the_bar(130)],
+            vec![texts(130, "Run", None)],
+            Rulebook::default(),
+        );
+        let _ = session.take_in(
+            TextSource::Desc,
+            "Earlier: <PRK128> <SRK129>.",
+            &mut NeverFires,
+        );
+        let Some(VenueOffer::Prompt(prompt)) = session.next_offer(BAR, &mut NeverFires) else {
+            panic!("not a prompt");
+        };
+        assert_eq!(prompt.text, "");
+        assert_eq!(
+            session.plain_text("<PRK128>"),
+            "Ad",
+            "a missing dësc is not loaded (@0x71825)"
         );
     }
 

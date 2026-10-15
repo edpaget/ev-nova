@@ -1393,6 +1393,26 @@ impl Session {
         }
     }
 
+    /// Loads `raw`, a `dësc` that may be missing, as `_LoadDescription`
+    /// (@0x717fe) loads one: taken in when there is one
+    /// ([`Session::take_in`]), and otherwise empty, changing nothing. A
+    /// missing one fails its `GetResource` (@0x71825) and only empties the
+    /// text (@0x71a5e-0x71a81), never reaching the reset
+    /// (@0x71926-0x71930), the parse (@0x71936) or the `l33t` letters, so
+    /// the governments the last text left are kept.
+    pub(super) fn load_desc(&mut self, raw: Option<&str>, chance: &mut dyn Chance) -> String {
+        raw.map(|raw| self.take_in(TextSource::Desc, raw, chance))
+            .unwrap_or_default()
+    }
+
+    /// The governments loading `raw`, a `dësc` that may be missing, would
+    /// leave, as [`Session::load_desc`] leaves them, changing nothing.
+    pub(super) fn desc_govts(&self, raw: Option<&str>) -> RankTagGovts {
+        raw.map_or(self.rank_govts, |raw| {
+            TextSource::Desc.govts(self.rank_govts, raw)
+        })
+    }
+
     /// `text` filled for `mission`'s offer, its crossed rank tags reading
     /// `rank_govts`: none when it is not offered, or in flight.
     pub(super) fn offer_text_reading(
