@@ -34,6 +34,7 @@ use crate::player_info::{
 };
 use crate::rulebook::RuleKey;
 use crate::shipyard;
+use crate::sound::SimSound;
 use crate::stats::HandlingTotals;
 
 /// Government slot 0, whose `CrimeTol` an independent system's legal
@@ -55,6 +56,31 @@ fn gate(site: &LandingSite) -> bool {
 }
 
 impl Session {
+    /// The player info key, `playerInfoKey` (slot 0x32), is pressed: true
+    /// when it is taken and the dialog may open
+    /// ([`Session::open_player_info`]), false when it is refused with the
+    /// shared refusal beep, [`SimSound::Refused`] (`PlaySound` @0x703bd,
+    /// from 0x7039a). `_HandlePlayer` (0x702bf-0x703c9) refuses it, after
+    /// its latch, in this order:
+    ///
+    /// - during a jump, the pre-jump included: +0x50 above 0 (@0x702f7);
+    /// - while the pod countdown +0xc908 is above 0 (@0x70301), which
+    ///   can't be reached: the pod's frames return (@0x68ddd) before any
+    ///   key handler, so a key in the pod is silent, as the
+    ///   [`PlayerFate::Ejected`](crate::PlayerFate::Ejected) row refuses it;
+    /// - while the ship breaks up (-0x2ca, @0x7031d).
+    ///
+    /// A disabled ship is taken. In the dead branch (0x6870d-0x6888c) no
+    /// key handler runs, so an exploded player's key is silent too: its
+    /// fate's row refuses the press before it gets here.
+    pub fn press_player_info(&mut self) -> bool {
+        if self.jump.is_some() || matches!(self.condition, Condition::Dying { .. }) {
+            self.sounds.push(SimSound::Refused);
+            return false;
+        }
+        true
+    }
+
     /// The player info dialog opens (`_DoPlayerInfoDialog`): unless the
     /// ship is in a jump, the pre-jump included (its jump state +0x50 set,
     /// @0x5a02a-0x5a03e), or breaking up (its death countdown +0x3c above
@@ -970,5 +996,57 @@ mod tests {
         let mut disabled = Session::start(&catalog).expect("starts");
         disabled.condition = Condition::Disabled;
         assert!(disabled.open_player_info(&catalog).is_some(), "disabled");
+    }
+
+    // The key's own gates (`_HandlePlayer` @0x702bf-0x703c9).
+
+    #[test]
+    fn the_player_info_key_is_refused_with_the_beep_in_a_jump_or_while_the_ship_breaks_up() {
+        use crate::combat::hull::Condition;
+        type Refusal = (&'static str, fn(&mut Session));
+        let catalog = catalog();
+        let refusals: [Refusal; 3] = [
+            ("the pre-jump, +0x50 > 0 (@0x702f7)", |session| {
+                session.jump = Some(super::super::Jump::PreJump {
+                    to: SystemId(131),
+                    bearing: None,
+                    warp: None,
+                });
+            }),
+            ("hyperspace, +0x50 > 0 (@0x702f7)", |session| {
+                session.jump = Some(super::super::Jump::Hyperspace {
+                    to: SystemId(131),
+                    warp: 0,
+                });
+            }),
+            ("breaking up (@0x7031d)", |session| {
+                session.condition = Condition::Dying {
+                    ticks_left: 3,
+                    starting: false,
+                };
+            }),
+        ];
+        for (why, refuse) in refusals {
+            let mut session = Session::start(&catalog).expect("starts");
+            refuse(&mut session);
+            let _ = session.take_sounds();
+            let before = session.clone();
+            assert!(!session.press_player_info(), "{why}");
+            assert_eq!(session.take_sounds(), [SimSound::Refused], "{why}");
+            assert_eq!(session.pilot(), before.pilot(), "{why}");
+        }
+    }
+
+    #[test]
+    fn the_player_info_key_is_taken_in_silence_while_flying_or_disabled() {
+        use crate::combat::hull::Condition;
+        let catalog = catalog();
+        for condition in [Condition::Intact, Condition::Disabled] {
+            let mut session = Session::start(&catalog).expect("starts");
+            session.condition = condition;
+            let _ = session.take_sounds();
+            assert!(session.press_player_info(), "{condition:?}");
+            assert_eq!(session.take_sounds(), [], "{condition:?}");
+        }
     }
 }

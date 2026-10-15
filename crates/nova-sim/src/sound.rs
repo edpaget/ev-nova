@@ -88,6 +88,14 @@ pub enum SimSound {
     /// `snd ` 151 (`_PlaySound` @0x68aaf), after a [`SimSound::Halt`] of
     /// [`WARP_UP_HALTS`]. Its priority, 50, is not modelled.
     JumpCollapsed,
+    /// A key's action was refused: `_beepSnd[3]`, `snd ` 153, the
+    /// original's shared refusal beep, whether or not a message says why.
+    /// The player info key's refusals raise it (`_HandlePlayer`
+    /// @0x7039a-0x703bd, priority 5, not modelled; see
+    /// [`Session::press_player_info`](crate::Session::press_player_info)),
+    /// and every other refusal that beeps reuses it rather than adding a
+    /// variant of its own.
+    Refused,
 }
 
 /// The warp-up sounds `_warpUpSnd[0]` and `[1]`, `snd ` 128 and 129

@@ -266,12 +266,12 @@
 //!   ([`FlightView::take_player_info_request`], with
 //!   [`FlightView::player_info`]), letting go of the flight keys, as
 //!   `_HandlePlayer` does (@0x702bf-0x703c9). During a jump, its pre-jump
-//!   stage included, it is refused with `_beepSnd[3]`
-//!   ([`UiSound::PlayerInfoRefused`], @0x7039a-0x703bd). Its Jettison
-//!   jettisons everything ([`FlightView::jettison_all`]). The original
-//!   also refuses it for 15 frames after a take-off and while the ship
-//!   is dying, which the engine does not model
-//!   (crons-news-ranks-fidelity phase 27, player-death phase 4).
+//!   stage included, and while the ship breaks up, the session refuses it
+//!   with the shared refusal beep ([`Session::press_player_info`],
+//!   [`SimSound::Refused`](nova_sim::SimSound::Refused), @0x7039a-0x703bd);
+//!   once the ship has exploded, and in the escape pod, it does nothing
+//!   and says nothing, as no key handler runs there. Its Jettison
+//!   jettisons everything ([`FlightView::jettison_all`]).
 //!   `_DoPlayerInfoDialog`'s own gate (@0x5a013-0x5a064) refuses nothing
 //!   more: its `_screenFaded` holds only while a jump fades out, and
 //!   nothing sets its `_fadePending` (only `_ResetPlayer` writes it, a 0,
@@ -2011,21 +2011,36 @@ impl<
         session.open_player_info(&self.catalog)
     }
 
-    /// Presses [`PLAYER_INFO_KEY`] outside a jump: asks the router for the
-    /// player info screen, letting go of the flight keys
-    /// (`_HandlePlayer` @0x702bf-0x703c9).
+    /// Presses [`PLAYER_INFO_KEY`] outside a jump, its [`PlayerCommand`]
+    /// taken: when the session takes the press too
+    /// ([`Session::press_player_info`]), asks the router for the player
+    /// info screen, letting go of the flight keys (`_HandlePlayer`
+    /// @0x702bf-0x703c9); when it refuses, with its beep, nothing more.
     fn ask_player_info(&mut self) -> ScreenAction {
-        self.pending_player_info = true;
-        self.held.clear();
+        if self.press_player_info() {
+            self.pending_player_info = true;
+            self.held.clear();
+        }
         ScreenAction::None
     }
 
+    /// Whether the session takes a press of [`PLAYER_INFO_KEY`]
+    /// ([`Session::press_player_info`], which beeps a refusal); a failed
+    /// session takes it, and the router opens nothing for it.
+    fn press_player_info(&mut self) -> bool {
+        match &mut self.session {
+            Ok(session) => session.press_player_info(),
+            Err(_) => true,
+        }
+    }
+
     /// A key `press` during a jump, which flight ignores but for
-    /// [`PLAYER_INFO_KEY`] outside the map: refused with `_beepSnd[3]`
-    /// (@0x7039a-0x703bd).
+    /// [`PLAYER_INFO_KEY`] outside the map, which the session refuses with
+    /// its beep ([`Session::press_player_info`], @0x702f7, @0x7039a-0x703bd).
     fn refuse_player_info(&mut self, press: Option<Key>) -> ScreenAction {
-        if press == Some(PLAYER_INFO_KEY) && !self.map_open {
-            self.ui_sounds.push(UiSound::PlayerInfoRefused);
+        if press == Some(PLAYER_INFO_KEY) && !self.map_open && self.takes(PlayerCommand::PlayerInfo)
+        {
+            let _ = self.press_player_info();
         }
         ScreenAction::None
     }
@@ -3902,6 +3917,7 @@ impl<C> FlightView<C> {
             JETTISON_KEY => PlayerCommand::Jettison,
             EJECT_KEY => PlayerCommand::Eject,
             MISSION_INFO_KEY => PlayerCommand::MissionInfo,
+            PLAYER_INFO_KEY => PlayerCommand::PlayerInfo,
             HYPER_SELECT_KEY => PlayerCommand::SelectSystem,
             TARGET_KEY | NEAREST_KEY => PlayerCommand::Target,
             MENU_KEY | MENU_CLOSE_KEY | ESCORT_ATTACK_KEY | ESCORT_DEFEND_KEY | ESCORT_HOLD_KEY
@@ -4302,13 +4318,16 @@ impl<
 {
     /// Never quits: Escape is the router's. While a jump is under way,
     /// the pre-jump stage included, only the escort menu's keys, and
-    /// Option, are taken (see the module docs). Otherwise each key's
+    /// Option, are taken, and P is refused with its beep (see the module
+    /// docs). Otherwise each key's
     /// [`PlayerCommand`] is asked of the session ([`Session::takes`]) and
     /// a refused one does nothing, saying nothing: while the player's ship
     /// breaks up the map, landing and mission info (`_HandlePlayer`'s
     /// breakup-timer gates at 0x6a7b3, 0x6a8cb and 0x7044b), and once it
     /// has exploded every command (the dead branch, 0x6870d-0x6888c). The
-    /// held flight keys are still tracked; the session ignores them.
+    /// session refuses some taken commands itself, P while the ship
+    /// breaks up with its beep among them. The held flight keys are still
+    /// tracked; the session ignores them.
     fn input(&mut self, input: &Input) -> ScreenAction {
         self.cursor_input(input);
         let press = match *input {
@@ -16797,7 +16816,7 @@ mod tests {
         assert!(!view.take_player_info_request());
         assert_eq!(
             view.take_sounds(),
-            [Sound::Ui(UiSound::PlayerInfoRefused)],
+            [Sound::Sim(SimSound::Refused)],
             "turning to jump"
         );
         let mut view = flight();
@@ -16815,9 +16834,58 @@ mod tests {
         assert!(!view.take_player_info_request());
         assert_eq!(
             view.take_sounds(),
-            [Sound::Ui(UiSound::PlayerInfoRefused)],
+            [Sound::Sim(SimSound::Refused)],
             "streaking"
         );
+    }
+
+    #[test]
+    fn p_while_the_player_breaks_up_beeps_and_asks_nothing() {
+        let mut view = breaking_up();
+        let _ = view.take_sounds();
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(!view.take_player_info_request());
+        assert_eq!(view.take_sounds(), [Sound::Sim(SimSound::Refused)]);
+    }
+
+    #[test]
+    fn p_once_the_player_has_exploded_or_ejected_does_nothing_and_says_nothing() {
+        let mut holding = exploded();
+        assert!(matches!(fate_of(&holding), PlayerFate::Holding { .. }));
+        let mut pod = ejecting_view(ejecting_in(100, &[188, 187]), &[]);
+        assert!(until_ejected(&mut pod).0);
+        for (why, view) in [("holding", &mut holding), ("in the pod", &mut pod)] {
+            let _ = view.take_sounds();
+            tap(view, PLAYER_INFO_KEY);
+            assert!(!view.take_player_info_request(), "{why}");
+            assert_eq!(view.take_sounds(), [], "{why}");
+        }
+    }
+
+    #[test]
+    fn p_while_disabled_asks_for_the_player_info_in_silence() {
+        let mut view = disabled_player();
+        let _ = view.take_sounds();
+        tap(&mut view, PLAYER_INFO_KEY);
+        assert!(view.take_player_info_request());
+        assert_eq!(view.take_sounds(), []);
+    }
+
+    /// A flight under fire from an NPC whose every hit disables, stepped
+    /// until the player's ship is disabled.
+    fn disabled_player() -> View {
+        let mut catalog = armed(1, &[]);
+        catalog.hulls[1] = hull_of(129, &[BLASTER]);
+        let mut view = fighting(catalog, &placed(750, 650, 180))
+            .with_behaviour(Rc::new(Firing))
+            .with_disable_rule(Rc::new(Disabling));
+        for _ in 0..40 {
+            if fate_of(&view) == PlayerFate::Disabled {
+                return view;
+            }
+            view.tick(TICK);
+        }
+        panic!("the player's ship was never disabled");
     }
 
     #[test]

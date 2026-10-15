@@ -184,11 +184,15 @@ pub struct FateRow {
 /// A command the flight view sends the session for one of the player's
 /// keys (or a click), named after its keymap slot in the original.
 ///
-/// Player info (slot 0x32), pause (slot 0x2e), cloak (slot 0x52) and
-/// self-destruct (slot 0x24) have no variant: each joins when its key is
-/// built. The eject (slot 0x22) has one. Their refusals while breaking up are recorded in the
-/// `player-death` roadmap's phase 4: pause at 0x45ef0, player info at
-/// 0x7031d, cloak at 0x705d6.
+/// Pause (slot 0x2e), cloak (slot 0x52) and self-destruct (slot 0x24)
+/// have no variant: each joins when its key is built, by the phase that
+/// owns it (rdm:task/cloaking-device for the cloak,
+/// rdm:phase/ship-handling-fidelity/phase-13-player-self-destruct for the
+/// self-destruct). The breaking-up row refuses pause (0x45ef0) and the
+/// cloak (0x705d6, silently), and takes the self-destruct: only its start
+/// is gated on dying (0x6fdf0), which the session refuses, and a
+/// countdown already running goes on (0x6fedf, 0x7019d). The eject (slot
+/// 0x22) and the player info (slot 0x32) have theirs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerCommand {
     /// The galaxy map: `mapKey` (slot 0x12).
@@ -222,11 +226,20 @@ pub enum PlayerCommand {
     /// session refuses it silently unless the ship is disabled or dying
     /// (@0x6f22c).
     Eject,
+    /// The player info dialog: `playerInfoKey` (slot 0x32, read at
+    /// 0x702cb). Flying, disabled and breaking-up players take it, and the
+    /// session refuses it, with the shared refusal beep, during a jump and
+    /// while the ship breaks up
+    /// ([`Session::press_player_info`](crate::Session::press_player_info)),
+    /// as `_HandlePlayer` does (@0x702f7, @0x7031d). The dead branch and
+    /// the pod's frames reach no key handler, so the other rows refuse it
+    /// in silence.
+    PlayerInfo,
 }
 
 impl PlayerCommand {
     /// Every command, for tests that go over them all.
-    pub const ALL: [PlayerCommand; 13] = [
+    pub const ALL: [PlayerCommand; 14] = [
         Self::Map,
         Self::Land,
         Self::Jump,
@@ -240,6 +253,7 @@ impl PlayerCommand {
         Self::SelectWeapon,
         Self::Escort,
         Self::Eject,
+        Self::PlayerInfo,
     ];
 }
 
@@ -648,6 +662,28 @@ mod tests {
             .chain(AFTER_THE_EXPLOSION)
         {
             assert!(!fate.row().input.takes(PlayerCommand::Eject), "{fate:?}");
+        }
+    }
+
+    #[test]
+    fn only_flying_disabled_and_breaking_up_players_take_the_player_info_key() {
+        for fate in [PlayerFate::Flying, PlayerFate::Disabled]
+            .into_iter()
+            .chain(BREAKING_UP)
+        {
+            assert!(
+                fate.row().input.takes(PlayerCommand::PlayerInfo),
+                "{fate:?}"
+            );
+        }
+        for fate in [PlayerFate::Exploded, PlayerFate::Ejected { ticks_left: 9 }]
+            .into_iter()
+            .chain(AFTER_THE_EXPLOSION)
+        {
+            assert!(
+                !fate.row().input.takes(PlayerCommand::PlayerInfo),
+                "{fate:?}"
+            );
         }
     }
 

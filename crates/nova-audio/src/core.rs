@@ -155,6 +155,7 @@ impl<A: Audio> AudioCore<A> {
                     self.play(self.table.onboard_explosion);
                 }
                 Sound::Sim(SimSound::JumpCollapsed) => self.play(self.table.jump_collapsed),
+                Sound::Sim(SimSound::Refused) => self.play(self.table.refused),
                 Sound::Sim(SimSound::Halt(sounds)) => {
                     for &sound in sounds {
                         self.audio.run(AudioCommand::Halt { sound });
@@ -165,9 +166,6 @@ impl<A: Audio> AudioCore<A> {
                 Sound::Ui(UiSound::NoEscorts) => self.play(self.table.no_escorts),
                 Sound::Ui(UiSound::NewsOpened) => self.play(self.table.news_open),
                 Sound::Ui(UiSound::NewsClosed) => self.play(self.table.news_close),
-                Sound::Ui(UiSound::PlayerInfoRefused) => {
-                    self.play(self.table.player_info_refused);
-                }
                 Sound::Combat(fight) => {
                     let gain = distance_gain(fight.offset);
                     let volume = self.settings.effects_volume.amplitude() * gain;
@@ -713,24 +711,18 @@ mod tests {
     }
 
     #[test]
-    fn the_player_info_refused_beeps_beep4() {
+    fn a_refusal_beeps_beep4() {
         let (mut core, log) = original();
-        core.update(
-            Some(Showing::ShipBrowser),
-            &[Sound::Ui(UiSound::PlayerInfoRefused)],
-        );
+        core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Refused)]);
         assert_eq!(drain(&log), [play(153, 1.0)]);
         let audio = RecordingAudio::new();
         let log = audio.log();
         let table = SoundTable {
-            player_info_refused: Some(SoundId(302)),
+            refused: Some(SoundId(302)),
             ..SoundTable::ORIGINAL
         };
         let mut core = AudioCore::with_table(audio, table);
-        core.update(
-            Some(Showing::ShipBrowser),
-            &[Sound::Ui(UiSound::PlayerInfoRefused)],
-        );
+        core.update(Some(Showing::ShipBrowser), &[Sound::Sim(SimSound::Refused)]);
         assert_eq!(drain(&log), [play(302, 1.0)], "the table's");
     }
 
