@@ -44,7 +44,7 @@ use std::time::Duration;
 use nova_sim::mission::screens::{
     ABORT_LABEL, ACCEPT_LABEL, ACTIVE_MISSIONS, AVAILABLE_HERE, FAILED_MARK,
 };
-use nova_sim::{InfoRow, MissionComputer, MissionId, MissionInfo};
+use nova_sim::{ComputerRow, InfoRow, MissionComputer, MissionId, MissionInfo};
 
 use super::bar::MISSION_INFO_KEY;
 use super::layout::LEAVE_LABEL;
@@ -142,6 +142,9 @@ pub struct MissionComputerScreen {
     info_requested: bool,
     /// Whether [`PLAYER_INFO_KEY`](crate::ui::player_info::PLAYER_INFO_KEY) asked for the player info screen.
     player_info_requested: bool,
+    /// The offer shown selected whose text is to be loaded, until it is
+    /// taken.
+    text_request: Option<MissionId>,
     closed: bool,
     sounds: Vec<Sound>,
 }
@@ -196,6 +199,7 @@ impl MissionComputerScreen {
             accepted: None,
             info_requested: false,
             player_info_requested: false,
+            text_request: None,
             closed: false,
             sounds: Vec::new(),
         };
@@ -283,7 +287,8 @@ impl MissionComputerScreen {
         self.computer.rows.get(index).map(|row| row.mission)
     }
 
-    /// Shows the selected offer's name and text, or none.
+    /// Shows the selected offer's name and text, or none, and asks for
+    /// its text to be loaded ([`MissionComputerScreen::take_text_request`]).
     fn show_selected(&mut self) {
         let Ok(laid) = &mut self.laid else {
             return;
@@ -296,6 +301,27 @@ impl MissionComputerScreen {
             .set_text(NAME_ITEM, row.map_or("", |row| row.name.as_str()));
         laid.dialog
             .set_text(TEXT_ITEM, row.map_or("", |row| row.text.as_str()));
+        self.text_request = row.map(|row| row.mission);
+    }
+
+    /// The offer shown selected since this was last taken, once, whose
+    /// text is to be loaded as the original's selection loads it
+    /// (`_MissionFilter` @0x9f9bd): whoever flies the ship answers with
+    /// [`MissionComputerScreen::show_row`].
+    pub fn take_text_request(&mut self) -> Option<MissionId> {
+        self.text_request.take()
+    }
+
+    /// Shows `row`, its name and text loaded, while its offer is the one
+    /// selected; otherwise nothing changes.
+    pub fn show_row(&mut self, row: &ComputerRow) {
+        if self.selected_mission() != Some(row.mission) {
+            return;
+        }
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_text(NAME_ITEM, &row.name);
+            laid.dialog.set_text(TEXT_ITEM, &row.text);
+        }
     }
 
     /// Activates dialog item `item`: Accept asks for the selected mission
@@ -424,6 +450,9 @@ pub struct MissionInfoScreen {
     info: MissionInfo,
     /// The slot Abort asked for, until it is taken.
     abort: Option<u8>,
+    /// The slot shown selected whose text is to be loaded, until it is
+    /// taken.
+    text_request: Option<u8>,
     closed: bool,
     sounds: Vec<Sound>,
 }
@@ -470,6 +499,7 @@ impl MissionInfoScreen {
                 today: String::new(),
             },
             abort: None,
+            text_request: None,
             closed: false,
             sounds: Vec::new(),
         };
@@ -562,6 +592,26 @@ impl MissionInfoScreen {
             .set_text(INFO_TEXT_ITEM, row.map_or("", |row| row.text.as_str()));
         laid.dialog
             .set_greyed(ABORT_ITEM, !row.is_some_and(|row| row.abortable));
+        self.text_request = row.map(|row| row.slot);
+    }
+
+    /// The slot shown selected since this was last taken, once, whose
+    /// `QuickBrief` is to be loaded as the original's selection loads it
+    /// (`_MissionInfoFilter` @0x9d89f): whoever flies the ship answers
+    /// with [`MissionInfoScreen::show_text`].
+    pub fn take_text_request(&mut self) -> Option<u8> {
+        self.text_request.take()
+    }
+
+    /// Shows `text`, slot `slot`'s loaded, while that slot is the one
+    /// selected; otherwise nothing changes.
+    pub fn show_text(&mut self, slot: u8, text: &str) {
+        if self.selected_row().map(|row| row.slot) != Some(slot) {
+            return;
+        }
+        if let Ok(laid) = &mut self.laid {
+            laid.dialog.set_text(INFO_TEXT_ITEM, text);
+        }
     }
 
     /// Activates dialog item `item`: Done closes, and Abort asks for the
@@ -840,6 +890,37 @@ mod tests {
         click_at(&mut screen, first);
         assert_eq!(item_text(&screen, NAME_ITEM), "Run to Mars");
         assert!(!screen.closed());
+    }
+
+    #[test]
+    fn each_offer_shown_selected_asks_once_for_its_text_to_be_loaded() {
+        let mut screen = screen();
+        assert_eq!(
+            screen.take_text_request(),
+            Some(MissionId(130)),
+            "the first, as it opens (_DoMissionDialog @0xa3a96)"
+        );
+        assert_eq!(screen.take_text_request(), None, "once");
+        screen.input(&key(Key::Down));
+        assert_eq!(screen.take_text_request(), Some(MissionId(131)));
+        screen.input(&key(Key::Escape));
+        assert_eq!(screen.take_text_request(), None, "no new selection");
+    }
+
+    #[test]
+    fn a_loaded_row_shows_its_name_and_text_while_it_is_selected() {
+        let mut screen = screen();
+        let _ = screen.take_text_request();
+        screen.show_row(&row(131, "Walk loaded", "Not now."));
+        assert_eq!(
+            item_text(&screen, TEXT_ITEM),
+            "Take this to Mars.",
+            "131 is not selected"
+        );
+        screen.show_row(&row(130, "Run, loaded", "Loaded text."));
+        assert_eq!(item_text(&screen, NAME_ITEM), "Run, loaded");
+        assert_eq!(item_text(&screen, TEXT_ITEM), "Loaded text.");
+        assert_eq!(screen.take_text_request(), None, "showing asks nothing");
     }
 
     #[test]
@@ -1138,6 +1219,22 @@ mod tests {
         assert_eq!(screen.take_abort(), Some(0));
         assert_eq!(screen.take_abort(), None, "once");
         assert!(!screen.closed());
+    }
+
+    #[test]
+    fn each_mission_shown_selected_asks_once_for_its_text_to_be_loaded() {
+        let mut screen = info_screen();
+        let first = screen.info().rows[0].slot;
+        assert_eq!(screen.take_text_request(), Some(first), "as it opens");
+        assert_eq!(screen.take_text_request(), None, "once");
+        screen.show_text(first, "Loaded brief.");
+        assert_eq!(info_text(&screen, INFO_TEXT_ITEM), "Loaded brief.");
+        screen.show_text(first + 1, "Another's.");
+        assert_eq!(
+            info_text(&screen, INFO_TEXT_ITEM),
+            "Loaded brief.",
+            "not selected"
+        );
     }
 
     #[test]

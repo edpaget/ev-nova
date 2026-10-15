@@ -399,10 +399,10 @@ use nova_sim::{
     flight::shortest_turn, glow_level, lights_level,
 };
 use nova_sim::{
-    AbortError, AcceptError, ComputerRefusal, ControlBits, Hailed, HireList, HireRefusal,
-    HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo, MissionText, News,
-    NotOffered, OfferPrompt, PayNote, PersonRules, PlayerInfo, SessionEvent, StellarIff, TagNames,
-    VenueOffer, ship_layer::SlotSprites,
+    AbortError, AcceptError, ComputerRefusal, ComputerRow, ControlBits, Hailed, HireList,
+    HireRefusal, HireTerms, Hired, MissionBoardLine, MissionComputer, MissionId, MissionInfo,
+    MissionText, News, NotOffered, OfferPrompt, PayNote, PersonRules, PlayerInfo, SessionEvent,
+    StellarIff, TagNames, VenueOffer, ship_layer::SlotSprites,
 };
 use nova_sim::{DrawnBox, DrawnShips};
 use nova_sim::{PlayerCommand, PlayerFate};
@@ -3539,6 +3539,40 @@ impl<C> FlightView<C> {
         match &self.session {
             Ok(session) => session.mission_computer(),
             Err(_) => Err(ComputerRefusal::NoneAvailable),
+        }
+    }
+
+    /// Opens the mission computer of the stellar landed on, as
+    /// [`Session::open_mission_computer`] does; a session that failed has
+    /// nothing available.
+    ///
+    /// # Errors
+    ///
+    /// The [`ComputerRefusal`] that applies.
+    pub fn open_mission_computer(&mut self) -> Result<MissionComputer, ComputerRefusal> {
+        match &mut self.session {
+            Ok(session) => session.open_mission_computer(),
+            Err(_) => Err(ComputerRefusal::NoneAvailable),
+        }
+    }
+
+    /// The mission computer's row of `mission`, selected and its text
+    /// loaded, as [`Session::show_computer_row`] gives it on the flight's
+    /// chance; none for a session that failed.
+    pub fn show_computer_row(&mut self, mission: MissionId) -> Option<ComputerRow> {
+        match &mut self.session {
+            Ok(session) => session.show_computer_row(mission, &mut self.chance),
+            Err(_) => None,
+        }
+    }
+
+    /// The mission info's text of `slot`, selected and loaded, as
+    /// [`Session::show_info_row`] gives it on the flight's chance; none
+    /// for a session that failed.
+    pub fn show_info_row(&mut self, slot: u8) -> Option<String> {
+        match &mut self.session {
+            Ok(session) => session.show_info_row(slot, &mut self.chance),
+            Err(_) => None,
         }
     }
 

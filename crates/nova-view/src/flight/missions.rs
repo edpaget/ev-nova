@@ -130,6 +130,22 @@ impl FlightMissionDialogs {
         self.info.as_mut()?.take_abort()
     }
 
+    /// The slot the mission info screen has shown selected since this
+    /// was last taken, once, whose `QuickBrief` is to be loaded: whoever
+    /// flies the ship answers with
+    /// [`FlightMissionDialogs::show_info_text`].
+    pub fn take_info_text_request(&mut self) -> Option<u8> {
+        self.info.as_mut()?.take_text_request()
+    }
+
+    /// Shows `text`, slot `slot`'s loaded, in the mission info screen
+    /// while that slot is selected.
+    pub fn show_info_text(&mut self, slot: u8, text: &str) {
+        if let Some(screen) = &mut self.info {
+            screen.show_text(slot, text);
+        }
+    }
+
     /// The mission text shown, if any.
     #[must_use]
     pub fn text(&self) -> Option<&DescDialog> {

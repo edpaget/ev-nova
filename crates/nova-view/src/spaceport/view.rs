@@ -98,9 +98,9 @@ use std::time::Duration;
 
 use nova_sim::mission::screens::{BAR, OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENTER};
 use nova_sim::{
-    ComputerRefusal, HireList, Market, MissionComputer, MissionId, MissionInfo, MissionText, News,
-    OfferPrompt, Order, OutfitOrder, Outfitter, PlayerInfo, RechargeRefusal, Reselection,
-    SaleAlert, Service, ShipId, ShipNaming, Shipyard, sells_fuel, services,
+    ComputerRefusal, ComputerRow, HireList, Market, MissionComputer, MissionId, MissionInfo,
+    MissionText, News, OfferPrompt, Order, OutfitOrder, Outfitter, PlayerInfo, RechargeRefusal,
+    Reselection, SaleAlert, Service, ShipId, ShipNaming, Shipyard, sells_fuel, services,
 };
 
 use super::bar::MISSION_INFO_KEY;
@@ -991,6 +991,39 @@ impl SpaceportView {
         match &self.open {
             Some(Open::Computer(screen)) => Some(screen),
             _ => None,
+        }
+    }
+
+    /// The offer the mission computer open has shown selected since this
+    /// was last taken, once, whose text is to be loaded: whoever flies the
+    /// ship answers with [`SpaceportView::show_computer_row`].
+    pub fn take_computer_text_request(&mut self) -> Option<MissionId> {
+        match &mut self.open {
+            Some(Open::Computer(screen)) => screen.take_text_request(),
+            _ => None,
+        }
+    }
+
+    /// Shows `row`, loaded, in the mission computer open while its offer
+    /// is selected.
+    pub fn show_computer_row(&mut self, row: &ComputerRow) {
+        if let Some(Open::Computer(screen)) = &mut self.open {
+            screen.show_row(row);
+        }
+    }
+
+    /// The slot the mission info screen open has shown selected since
+    /// this was last taken, once, whose `QuickBrief` is to be loaded:
+    /// whoever flies the ship answers with [`SpaceportView::show_info_text`].
+    pub fn take_info_text_request(&mut self) -> Option<u8> {
+        self.info.as_mut()?.take_text_request()
+    }
+
+    /// Shows `text`, slot `slot`'s loaded, in the mission info screen
+    /// open while that slot is selected.
+    pub fn show_info_text(&mut self, slot: u8, text: &str) {
+        if let Some(screen) = &mut self.info {
+            screen.show_text(slot, text);
         }
     }
 

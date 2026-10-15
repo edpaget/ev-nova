@@ -92,6 +92,7 @@ use nova_view::geometry::Point;
 use nova_view::menu::MenuChoice;
 use nova_view::spaceport::missions::{
     ABORT_ITEM, ACCEPT_ITEM, MissionComputerScreen, MissionInfoScreen,
+    TEXT_ITEM as COMPUTER_TEXT_ITEM,
 };
 use nova_view::spaceport::{OfferDialog, SpaceportView};
 use nova_view::text::fixture::MonoMetrics;
@@ -334,7 +335,18 @@ fn game_data_with(bar_job: (Vec<u8>, &str)) -> Rc<GameData> {
 
 /// [`game_data`] with this run, mission 128, and this bar job, mission
 /// 130, and its offer text.
-fn game_data_from(run: &[u8], (bar_job, bar_job_offer): (Vec<u8>, &str)) -> Rc<GameData> {
+fn game_data_from(run: &[u8], bar_job: (Vec<u8>, &str)) -> Rc<GameData> {
+    game_data_built(run, bar_job, "Take this to <DST>.", |fork| fork)
+}
+
+/// [`game_data_from`] with the run's offer text `run_offer`, and `more`
+/// resources added.
+fn game_data_built(
+    run: &[u8],
+    (bar_job, bar_job_offer): (Vec<u8>, &str),
+    run_offer: &str,
+    more: impl FnOnce(ForkBuilder) -> ForkBuilder,
+) -> Rc<GameData> {
     let mut fork = ForkBuilder::new()
         .resource(Character::TYPE, 128, Some(b"Pilot"), &character())
         .resource(Ship::TYPE, 128, Some(b"Boarder"), &ship())
@@ -364,7 +376,7 @@ fn game_data_from(run: &[u8], (bar_job, bar_job_offer): (Vec<u8>, &str)) -> Rc<G
         .resource(Desc::TYPE, 202, None, &desc("Welcome aboard."))
         .resource(Desc::TYPE, 203, None, &desc("Suit yourself."))
         .resource(Desc::TYPE, 10_000, None, &desc("Smoke and quiet talk."))
-        .resource(Desc::TYPE, 4000, None, &desc("Take this to <DST>."))
+        .resource(Desc::TYPE, 4000, None, &desc(run_offer))
         .resource(Desc::TYPE, 200, None, &desc("Off you go to <DST>."))
         .resource(Desc::TYPE, 201, None, &desc("Thanks from <DST>."))
         .resource(
@@ -374,6 +386,7 @@ fn game_data_from(run: &[u8], (bar_job, bar_job_offer): (Vec<u8>, &str)) -> Rc<G
             &status_bar(),
         )
         .resource(PICT, 700, Some(b"Status Bar"), &pict(194, 16, [66, 66, 66]));
+    fork = more(fork);
     for id in [
         8500, 8501, 8503, 8505, 8517, 8521, 8522, 8523, 8524, 8525, 8526, 10_004,
     ] {
@@ -556,6 +569,20 @@ impl Chance for Nothing {
     }
 }
 
+/// [`Nothing`], but every draw of 3 outcomes is the first: every `l33t`
+/// letter is replaced.
+struct Leetest;
+
+impl Chance for Leetest {
+    fn fires(&mut self, _percent: u8) -> bool {
+        false
+    }
+
+    fn below(&mut self, n: u32) -> u32 {
+        if n == 3 { 0 } else { n - 1 }
+    }
+}
+
 struct Game {
     app: App<Rc<GameData>>,
     gpu: RecordingGpu,
@@ -571,11 +598,20 @@ impl Game {
 
     /// [`Game::with_pilot`] over `data`.
     fn with_data(store: &MemoryPilots, pilot: &Pilot, data: Rc<GameData>) -> Self {
+        Self::with_chance(store, pilot, data, Rc::new(RefCell::new(Nothing)))
+    }
+
+    /// [`Game::with_data`] drawing on `chance`.
+    fn with_chance(
+        store: &MemoryPilots,
+        pilot: &Pilot,
+        data: Rc<GameData>,
+        chance: Rc<RefCell<dyn Chance>>,
+    ) -> Self {
         PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>)
             .save(pilot)
             .expect("saved");
         let keeper = PilotKeeper::new(Box::new(store.clone()) as Box<dyn PilotStore>);
-        let chance: Rc<RefCell<dyn Chance>> = Rc::new(RefCell::new(Nothing));
         let screen: AppScreen = start_screen(Rc::clone(&data))
             .with_pilots(Some(keeper), Rc::new(MonoMetrics))
             .with_dialogs(Rc::new(interface()), Rc::new(MonoMetrics))
@@ -866,6 +902,35 @@ const MISSION_BBS: usize = 11;
 
 /// The Bar's item.
 const BAR: usize = 10;
+
+#[test]
+fn the_mission_computers_selected_text_is_loaded_through_flight() {
+    // A l33t resource turns the leet mode on: only a loaded text draws
+    // its letters, on flight's chance, which here replaces every one.
+    let offer = "a".repeat(24);
+    let data = game_data_built(&timed(mission(128, 200, 201)), bar_job(), &offer, |fork| {
+        fork.resource(ResType::new(*b"l33t"), 128, None, &[])
+    });
+    let store = MemoryPilots::new();
+    let pilot = Pilot::new(data.as_ref(), "Ada").expect("a pilot");
+    let mut game = Game::with_chance(&store, &pilot, data, Rc::new(RefCell::new(Leetest)));
+    game.frame();
+    game.land();
+    game.click_port(MISSION_BBS);
+    let computer = game.spaceport().mission_computer().expect("open");
+    assert_eq!(
+        computer.computer().rows[0].text,
+        "a".repeat(24),
+        "the computer's view draws nothing"
+    );
+    let shown = computer
+        .dialog()
+        .and_then(|dialog| dialog.text(COMPUTER_TEXT_ITEM))
+        .expect("the text item")
+        .lines()
+        .concat();
+    assert_eq!(shown, "4".repeat(24), "loaded, its letters drawn");
+}
 
 #[test]
 fn the_mission_computer_lists_offers_accepts_them_and_their_texts_show() {

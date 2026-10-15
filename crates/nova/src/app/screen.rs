@@ -1162,6 +1162,7 @@ impl AppScreen {
             && let Some(missions) = self.flight_missions()
         {
             missions.open_info(info);
+            self.load_flight_info_text();
         }
         self.drop_closed_missions();
         ScreenAction::None
@@ -1210,6 +1211,7 @@ impl AppScreen {
                 missions.set_info(info);
             }
         }
+        self.load_flight_info_text();
         self.drop_closed_missions();
         ScreenAction::None
     }
@@ -2148,14 +2150,6 @@ impl AppScreen {
         let recharge = spaceport.take_recharge();
         let hire = spaceport.take_hire();
         let accepted = spaceport.take_mission_accept();
-        if spaceport.take_mission_computer_request() {
-            let computer = self.flight.as_ref().expect(ENTERED).mission_computer();
-            spaceport.open_mission_computer(computer);
-        }
-        if spaceport.take_mission_info_request() {
-            let info = self.flight.as_ref().expect(ENTERED).mission_info();
-            spaceport.open_mission_info(info);
-        }
         // An abort frees the slot, and the info goes back, closing once
         // nothing is left; a refusal (greyed) changes nothing.
         if let Some(slot) = spaceport.take_mission_abort() {
@@ -2232,7 +2226,7 @@ impl AppScreen {
             if let Some(mission) = accepted {
                 let _ = flight.accept_mission(mission);
                 spaceport.show_mission_texts(flight.take_mission_texts());
-                spaceport.set_mission_computer(flight.mission_computer());
+                spaceport.set_mission_computer(flight.open_mission_computer());
             }
             // A refused refill says why in the spaceport.
             if recharge {
@@ -2247,6 +2241,7 @@ impl AppScreen {
             refresh_spaceport(spaceport, flight);
         }
         self.serve_closings();
+        self.serve_mission_screens();
         let spaceport = self.spaceport.as_mut().expect(LANDED);
         if spaceport.left() {
             self.close_spaceport();
@@ -2256,6 +2251,47 @@ impl AppScreen {
         self.serve_offers();
         self.serve_player_info();
         ScreenAction::None
+    }
+
+    /// The spaceport's mission computer and mission info screen, opened
+    /// as they are asked for, and the texts they have shown selected,
+    /// loaded through flight as the original loads a selected row's
+    /// (`_MissionFilter` @0x9f9bd, `_MissionInfoFilter` @0x9d89f) and
+    /// shown while still selected.
+    fn serve_mission_screens(&mut self) {
+        let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
+            return;
+        };
+        if spaceport.take_mission_computer_request() {
+            spaceport.open_mission_computer(flight.open_mission_computer());
+        }
+        if spaceport.take_mission_info_request() {
+            spaceport.open_mission_info(flight.mission_info());
+        }
+        if let Some(mission) = spaceport.take_computer_text_request()
+            && let Some(row) = flight.show_computer_row(mission)
+        {
+            spaceport.show_computer_row(&row);
+        }
+        if let Some(slot) = spaceport.take_info_text_request()
+            && let Some(text) = flight.show_info_row(slot)
+        {
+            spaceport.show_info_text(slot, &text);
+        }
+    }
+
+    /// The mission info screen over flight's selected text, loaded
+    /// through flight as [`AppScreen::serve_mission_screens`] loads the
+    /// spaceport's.
+    fn load_flight_info_text(&mut self) {
+        let (Some(missions), Some(flight)) = (&mut self.missions, &mut self.flight) else {
+            return;
+        };
+        if let Some(slot) = missions.take_info_text_request()
+            && let Some(text) = flight.show_info_row(slot)
+        {
+            missions.show_info_text(slot, &text);
+        }
     }
 
     /// The outfitter and the hire screen closing, however they closed this
