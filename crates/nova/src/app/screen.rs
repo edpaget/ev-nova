@@ -6971,6 +6971,15 @@ pub(super) mod tests {
         let beta = map
             .view()
             .world_to_screen(map.model().system(SystemId(129)).expect("Beta").position());
+        let left = |pressed| Input::PointerButton {
+            button: MouseButton::Left,
+            pressed,
+            at: beta,
+        };
+        screen.input(&left(true));
+        screen.cancel_pointer();
+        screen.input(&left(false));
+        assert_eq!(nav(&screen), landed, "the map's click abandoned");
         for pressed in [true, false] {
             screen.input(&Input::PointerButton {
                 button: MouseButton::Left,

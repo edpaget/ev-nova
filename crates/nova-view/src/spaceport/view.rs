@@ -4885,6 +4885,8 @@ mod tests {
         view.open_hire(hirelings(2, true));
         assert_eq!(view.take_port_dialog_opened(), Some(PortDialog::Hire));
         assert_eq!(view.take_port_dialog_opened(), None, "once");
+        view.open_hire(hirelings(2, true));
+        assert_eq!(view.take_port_dialog_opened(), None, "already open");
         view.input(&key(Key::Down));
         assert_eq!(view.take_port_dialog_closed(), None, "still open");
         view.input(&key(Key::Escape));
