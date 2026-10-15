@@ -19,10 +19,13 @@
 //!   @0x8203-0x8224), which `_LoadSounds` works out from `snd ` 128
 //!   (@0x1c0b5-0x1c12d; [`sound_duration`]).
 //!
-//! `_ScanPlayer` (@0x7e562-0x7e633) and the player's own acceleration away
-//! (`_HandlePlayer` @0x6d1c1-0x6d296) both read v = t·w / (d·0.01) − 35/w:
-//! the scan is held once v > 0 ([`held`]), which is where the player
-//! starts to move off. Until then the warp is in its lead-in.
+//! `_ScanPlayer` (@0x7e562-0x7e633), the player's own acceleration away
+//! (`_HandlePlayer` @0x6d1c1-0x6d296) and a disabled player's jump
+//! collapse (`_HandlePlayer` @0x688f2-0x6895e) all read the lead-in speed
+//! v = t·w / (d·0.01) − 35/w ([`lead_in_speed`]): the scan is held once
+//! v > 0 ([`held`]), which is where the player starts to move off. Until
+//! then the warp is in its lead-in. The collapse gives the player v when
+//! it is above 0.
 //!
 //! Left out: `_WarpSoundDuration`'s second value, `snd ` 129's duration,
 //! read in double-speed mode (@0x8210-0x8219), which the engine does not
@@ -114,20 +117,26 @@ pub fn sound_duration(sound: Option<SoundLength>) -> u32 {
 /// whether the player is disabled.
 ///
 /// The check applies only to a player in the warp stage (+0x50 > 0) that
-/// is not disabled (`_IsDisabled`). It works v = f32(f64(f32(t) × w) /
-/// (f64(d) × 0.01)), then, when w ≠ 0, v = f32(f64(v) + (−35.0 / f64(w))),
-/// in the original's widths, and holds the scan when v > 0.0. With w = 0
-/// the −35/w term is skipped, so v is 0 or NaN and nothing is held. A d
-/// of 0 gives ±∞ or NaN, as in the original.
+/// is not disabled (`_IsDisabled`), and holds the scan when the
+/// [`lead_in_speed`] is above 0.0.
+#[must_use]
+pub fn held(since: Option<u32>, factor: f32, duration: u32, disabled: bool) -> bool {
+    since.is_some_and(|t| !disabled && lead_in_speed(t, factor, duration) > 0.0)
+}
+
+/// The warp's lead-in speed v after `since` Mac ticks of the warp clock,
+/// for a ship class's warp `factor` (w) and the warp sound's `duration`
+/// (d), which `_ScanPlayer` (@0x7e562-0x7e633), the player's acceleration
+/// away (`_HandlePlayer` @0x6d1c1-0x6d296) and the disabled player's jump
+/// collapse (`_HandlePlayer` @0x688f2-0x6895e) all work out.
+///
+/// It is v = f32(f64(f32(t) × w) / (f64(d) × 0.01)), then, when w ≠ 0,
+/// v = f32(f64(v) + (−35.0 / f64(w))), in the original's widths. With
+/// w = 0 the −35/w term is skipped, so v is 0 or NaN. A d of 0 gives ±∞
+/// or NaN, as in the original.
 #[must_use]
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-pub fn held(since: Option<u32>, factor: f32, duration: u32, disabled: bool) -> bool {
-    let Some(since) = since else {
-        return false;
-    };
-    if disabled {
-        return false;
-    }
+pub fn lead_in_speed(since: u32, factor: f32, duration: u32) -> f32 {
     // The original makes t exact in f32 by its halves (@0x7e598-0x7e5ba):
     // each half is exact, and their sum rounds once, as this does.
     let t = since as f32;
@@ -135,7 +144,7 @@ pub fn held(since: Option<u32>, factor: f32, duration: u32, disabled: bool) -> b
     if factor != 0.0 {
         v = (f64::from(v) + LEAD_IN / f64::from(factor)) as f32;
     }
-    v > 0.0
+    v
 }
 
 #[cfg(test)]
@@ -235,6 +244,37 @@ mod tests {
             rate: 22_050,
         };
         assert_eq!(sound_duration(Some(wide)), 2721, "past an i16's 16 bits");
+    }
+
+    // The lead-in speed.
+
+    #[test]
+    fn the_lead_in_speed_is_tw_over_d_hundredths_less_35_over_w() {
+        let w = warp_factor(0);
+        assert!(lead_in_speed(72, w, 350) <= 0.0);
+        assert!(lead_in_speed(74, w, 350) > 0.0);
+        // 2 × 1.3 / 0.09 − 35 / 1.3, in the original's widths.
+        #[allow(clippy::cast_possible_truncation)]
+        let expected = {
+            let v = (f64::from(2.0_f32 * w) / (9.0 * 0.01)) as f32;
+            (f64::from(v) - 35.0 / f64::from(w)) as f32
+        };
+        assert_eq!(lead_in_speed(2, w, 9).to_bits(), expected.to_bits());
+        assert!((lead_in_speed(2, w, 9) - 1.9658).abs() < 1e-3);
+        // A factor of 0 skips the −35/w term.
+        assert_eq!(lead_in_speed(1000, 0.0, 350), 0.0);
+        assert!(lead_in_speed(1000, 0.0, 0).is_nan(), "0 / 0");
+        // A duration of 0 gives +∞ once time has passed, NaN before.
+        assert_eq!(lead_in_speed(2, w, 0), f32::INFINITY);
+        assert!(lead_in_speed(0, w, 0).is_nan());
+        assert!(lead_in_speed(1000, f32::NAN, 350).is_nan());
+        // The factor moves the zero crossing: 147.9 and 28.3.
+        let slow = warp_factor(0x0001);
+        assert!(lead_in_speed(146, slow, 350) <= 0.0);
+        assert!(lead_in_speed(148, slow, 350) > 0.0);
+        let fast = warp_factor(0x0004);
+        assert!(lead_in_speed(28, fast, 350) <= 0.0);
+        assert!(lead_in_speed(30, fast, 350) > 0.0);
     }
 
     // The hold.
