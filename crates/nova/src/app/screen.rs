@@ -1963,7 +1963,8 @@ impl AppScreen {
     /// and X `dësc` 32766 (@0x1ac7e). The X text shows as it is: the
     /// original runs it through `_MungeBriefing` first, which needs a
     /// pilot the menu has not got, so that is left out. With Command held
-    /// they go to the original's menus and do nothing here.
+    /// they, and the menu's typed N, O and Q, go to the original's menus
+    /// and do nothing here.
     fn menu_input(&mut self, input: &Input) -> ScreenAction {
         if let Input::Key {
             key: key @ Key::Char('a' | 'x'),
@@ -1992,6 +1993,12 @@ impl AppScreen {
             if pressed && !repeat {
                 self.switch_to(Side::Ships);
             }
+            return ScreenAction::None;
+        }
+        // A Command key goes to the original's menus (`MenuKey`, offered
+        // first by `_DoMainScreen` @0x1b259-0x1b2bb), never to
+        // `_MainScreenKey`, so it neither clicks nor chooses.
+        if matches!(input, Input::Text(_)) && self.command_held {
             return ScreenAction::None;
         }
         let menu = self.menu.as_mut().expect(MENU);
@@ -5359,6 +5366,22 @@ pub(super) mod tests {
         screen.input(&key(Key::Char('x'), false));
         screen.input(&key(Key::Enter, true));
         assert_eq!(screen.showing(), Showing::MainMenu);
+    }
+
+    #[test]
+    fn command_n_o_and_q_on_the_main_menu_neither_click_nor_choose() {
+        let store = MemoryPilots::new();
+        let mut screen = menu_with_dialogs(&store);
+        ui_sounds(&mut screen);
+        screen.input(&key(Key::Command, true));
+        for typed in ['n', 'o', 'q', 'N'] {
+            assert_eq!(screen.input(&Input::Text(typed)), ScreenAction::None);
+            assert_eq!(screen.showing(), Showing::MainMenu, "Command {typed}");
+            assert_eq!(ui_sounds(&mut screen), [], "Command {typed}");
+        }
+        screen.input(&key(Key::Command, false));
+        screen.input(&Input::Text('n'));
+        assert_eq!(screen.showing(), Showing::NewPilot, "without Command");
     }
 
     #[test]
