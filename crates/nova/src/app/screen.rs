@@ -240,7 +240,7 @@ use nova_sim::{
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
 use nova_view::fade::{DEATH_FADE_FOR, ScreenFade};
-use nova_view::flight::{FlightMissionDialogs, FlightOverlays, FlightView, SharedChance};
+use nova_view::flight::{FlightOverlays, FlightView, SharedChance};
 use nova_view::galaxy::GalaxyMap;
 use nova_view::menu::{MainMenu, MenuChoice, PilotList, PilotListOutcome};
 use nova_view::ships::ShipBrowser;
@@ -263,6 +263,7 @@ use nova_view::text::TextMetrics;
 use nova_view::ui::catalog::DescriptionGraphics;
 use nova_view::ui::comm::{COMM_DIALOG, HAGGLE_DIALOG};
 use nova_view::ui::desc::{DESC_DIALOG, DescTemplates, PICTURE_DESC_DIALOG};
+use nova_view::ui::mission_dialogs::MissionDialogs;
 use nova_view::ui::new_pilot::{NAME_TAKEN, NEW_PILOT_DIALOG, NewPilotDialog, NewPilotOutcome};
 use nova_view::ui::note::{LOAD_FALLBACK_NOTE, NOTE_DIALOG, NoteDialog};
 use nova_view::ui::player_info::{PLAYER_INFO_DIALOG, PlayerInfoScreen, YES_NO_DIALOG};
@@ -405,7 +406,7 @@ pub struct AppScreen {
     offer: Option<OfferDialog>,
     /// The mission texts and the mission info screen over flight, while
     /// one is open.
-    missions: Option<FlightMissionDialogs>,
+    missions: Option<MissionDialogs>,
     /// The fade back from black over the side shown after a death, while
     /// it plays.
     fade_in: Option<ScreenFade>,
@@ -1179,10 +1180,10 @@ impl AppScreen {
     /// The mission dialogs over flight, built from the interface file's
     /// "Desc Dialog" and mission info screen the first time they are
     /// needed; none without dialogs.
-    fn flight_missions(&mut self) -> Option<&mut FlightMissionDialogs> {
+    fn flight_missions(&mut self) -> Option<&mut MissionDialogs> {
         if self.missions.is_none() {
             let dialogs = self.dialogs.as_ref()?;
-            self.missions = Some(FlightMissionDialogs::new(
+            self.missions = Some(MissionDialogs::new(
                 DescTemplates {
                     plain: dialogs.resources.dialog_template(DESC_DIALOG),
                     picture: dialogs.resources.dialog_template(PICTURE_DESC_DIALOG),

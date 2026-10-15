@@ -1,12 +1,15 @@
-//! The mission dialogs over flight: the mission texts the session queues
-//! in flight, each in "Desc Dialog" as `_ShowTextDialog` (@0x5a752)
-//! shows it, and the mission info screen that I opens in flight
-//! (`_HandlePlayer` @0x704bc-0x704e3). Flight pauses under them; the
-//! router routes to them and answers the info screen's Abort.
+//! The mission dialogs, over the spaceport or over flight: the mission
+//! texts the session queues, each in "Desc Dialog" as `_ShowTextDialog`
+//! (@0x5a752) shows it, and, under them, the mission info screen that I
+//! opens (in flight, `_HandlePlayer` @0x704bc-0x704e3). Whatever holds
+//! them (the spaceport, or the router over flight) passes its input,
+//! drawing and pointer through, and answers the info screen's Abort and
+//! the text it asks for.
 //!
-//! The same queue shows the `dësc`s a sabotaged player sees as it dies
-//! (`_HandlePlayer` @0x68739-0x68832) and the rescue's, with no mission
-//! behind them ([`FlightMissionDialogs::show_descs`]).
+//! In flight the same queue shows the `dësc`s a sabotaged player sees as
+//! it dies (`_HandlePlayer` @0x68739-0x68832) and the rescue's, with no
+//! mission behind them ([`MissionDialogs::show_descs`]); in the
+//! spaceport, a refused mission computer's reason.
 //!
 //! Each shows in the variant its `dësc`'s `Graphic` picks
 //! ([`DescTemplates::open`]): above 127, `DLOG` 3004 with the graphic, as
@@ -30,10 +33,10 @@ use crate::ui::button::ButtonStyle;
 use crate::ui::desc::{DescDialog, DescTemplates};
 use crate::ui::dialog::DialogTemplate;
 
-/// The mission texts shown over flight, one after another, and the
-/// mission info screen, under them.
+/// The mission texts shown one after another, and the mission info
+/// screen, under them.
 #[derive(Clone)]
-pub struct FlightMissionDialogs {
+pub struct MissionDialogs {
     /// "Desc Dialog"'s templates, both variants, or why each is missing.
     text: DescTemplates,
     /// The mission info screen's template, or why there is none.
@@ -48,16 +51,16 @@ pub struct FlightMissionDialogs {
     sounds: Vec<Sound>,
 }
 
-impl std::fmt::Debug for FlightMissionDialogs {
+impl std::fmt::Debug for MissionDialogs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FlightMissionDialogs")
+        f.debug_struct("MissionDialogs")
             .field("texts", &self.texts)
             .field("info", &self.info)
             .finish_non_exhaustive()
     }
 }
 
-impl FlightMissionDialogs {
+impl MissionDialogs {
     /// The dialogs laid out from `text` ("Desc Dialog", `DLOG` 3003, and
     /// its picture variant, 3004) and `info` (the mission info screen,
     /// `DLOG` 1012), or why each cannot be, their text measured by
@@ -143,7 +146,7 @@ impl FlightMissionDialogs {
     /// The slot the mission info screen has shown selected since this
     /// was last taken, once, whose `QuickBrief` is to be loaded: whoever
     /// flies the ship answers with
-    /// [`FlightMissionDialogs::show_info_text`].
+    /// [`MissionDialogs::show_info_text`].
     pub fn take_info_text_request(&mut self) -> Option<u8> {
         self.info.as_mut()?.take_text_request()
     }
@@ -175,7 +178,7 @@ impl FlightMissionDialogs {
     }
 }
 
-impl Screen for FlightMissionDialogs {
+impl Screen for MissionDialogs {
     /// The text shown takes every input until Done closes it; otherwise
     /// the mission info screen does. It never quits.
     fn input(&mut self, input: &Input) -> ScreenAction {
@@ -300,8 +303,8 @@ mod tests {
         }
     }
 
-    fn dialogs() -> FlightMissionDialogs {
-        FlightMissionDialogs::new(
+    fn dialogs() -> MissionDialogs {
+        MissionDialogs::new(
             texts(Ok(text_template())),
             Ok(info_template()),
             Rc::new(MonoMetrics),
@@ -347,7 +350,7 @@ mod tests {
         }
     }
 
-    fn click(dialogs: &mut FlightMissionDialogs, at: Point) {
+    fn click(dialogs: &mut MissionDialogs, at: Point) {
         for pressed in [true, false] {
             dialogs.input(&Input::PointerButton {
                 button: MouseButton::Left,
@@ -357,11 +360,11 @@ mod tests {
         }
     }
 
-    fn shown(dialogs: &FlightMissionDialogs) -> Option<String> {
+    fn shown(dialogs: &MissionDialogs) -> Option<String> {
         dialogs.text().map(|text| text.lines().join(" "))
     }
 
-    fn drawn(dialogs: &FlightMissionDialogs) -> Vec<String> {
+    fn drawn(dialogs: &MissionDialogs) -> Vec<String> {
         let mut list = DrawList::new();
         dialogs.draw(&mut list);
         list.iter()
@@ -487,7 +490,7 @@ mod tests {
 
     #[test]
     fn without_its_template_the_info_screen_says_why_and_closes_on_return() {
-        let mut dialogs = FlightMissionDialogs::new(
+        let mut dialogs = MissionDialogs::new(
             texts(Ok(text_template())),
             Err("no DLOG 1012".to_owned()),
             Rc::new(MonoMetrics),
@@ -568,7 +571,7 @@ mod tests {
         dialogs.show_texts(vec![brief(128, "Shown.")]);
         let debugged = format!("{dialogs:?}");
         assert!(
-            debugged.starts_with("FlightMissionDialogs { texts: ["),
+            debugged.starts_with("MissionDialogs { texts: ["),
             "{debugged}"
         );
         assert!(debugged.contains("info: None"), "{debugged}");
@@ -576,7 +579,7 @@ mod tests {
 
     #[test]
     fn without_a_text_template_texts_are_dropped() {
-        let mut dialogs = FlightMissionDialogs::new(
+        let mut dialogs = MissionDialogs::new(
             texts(Err("no DLOG 3003".to_owned())),
             Ok(info_template()),
             Rc::new(MonoMetrics),
@@ -587,7 +590,7 @@ mod tests {
         assert!(!dialogs.is_open());
     }
 
-    fn widths(dialogs: &mut FlightMissionDialogs) -> Vec<(f32, Option<i16>)> {
+    fn widths(dialogs: &mut MissionDialogs) -> Vec<(f32, Option<i16>)> {
         let mut shown = Vec::new();
         while let Some(text) = dialogs.text() {
             shown.push((text.dialog().bounds().width(), text.picture()));
@@ -597,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn a_mission_text_with_a_graphic_shows_in_3004_over_flight() {
+    fn a_mission_text_with_a_graphic_shows_in_3004() {
         let mut dialogs = dialogs();
         dialogs.show_texts(vec![
             MissionText {
@@ -610,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn a_desc_with_a_graphic_shows_in_3004_over_flight() {
+    fn a_desc_with_a_graphic_shows_in_3004() {
         let mut dialogs = dialogs();
         dialogs.show_descs(vec![
             ("Sabotaged.".to_owned(), Some(200)),
