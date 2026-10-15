@@ -2182,10 +2182,7 @@ impl AppScreen {
         let recharge = spaceport.take_recharge();
         let hire = spaceport.take_hire();
         let accepted = spaceport.take_mission_accept();
-        if spaceport.take_mission_computer_request() {
-            let computer = self.flight.as_ref().expect(ENTERED).mission_computer();
-            spaceport.open_mission_computer(computer);
-        }
+        open_port_dialogs(spaceport, self.flight.as_mut().expect(ENTERED));
         if spaceport.take_mission_info_request() {
             let info = self.flight.as_ref().expect(ENTERED).mission_info();
             spaceport.open_mission_info(info);
@@ -2298,8 +2295,9 @@ impl AppScreen {
     /// after its hire, on Cancel, or a bar with nothing for hire), each
     /// read once its order or hire went through: flight is told
     /// ([`FlightView::close_outfitter`], [`FlightView::close_hire`]), whose
-    /// reset can trim the cargo, and the shops are handed back. Then a shop
-    /// that closed redraws the status bar (`redraw_after_shop`).
+    /// reset can trim the cargo, and the shops are handed back. Then a port
+    /// dialog that closed redraws what its close draws and restores the
+    /// nav saved as it opened (`close_port_dialogs`).
     fn serve_closings(&mut self) {
         let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
             return;
@@ -2315,7 +2313,7 @@ impl AppScreen {
         if outfitter || hire {
             refresh_spaceport(spaceport, flight);
         }
-        redraw_after_shop(spaceport, flight);
+        close_port_dialogs(spaceport, flight);
     }
 
     /// The spaceport's player info screen: asked for, it opens on what
@@ -2506,13 +2504,27 @@ impl AppScreen {
     }
 }
 
-/// Redraws `flight`'s status bar when an exchange, outfitter or shipyard
-/// of `spaceport` has closed ([`FlightView::shop_closed`]), as each of the
-/// original's shops ends in `_RefreshSAT`: after the input's last order,
-/// and before any frame is drawn.
-fn redraw_after_shop(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
-    if spaceport.take_shop_closed() {
-        flight.shop_closed();
+/// Answers `spaceport`'s Mission BBS with `flight`'s mission computer, then
+/// tells `flight` of the port dialog that has opened
+/// ([`FlightView::open_port_dialog`]), which saves the nav before any
+/// order or offer run inside it.
+fn open_port_dialogs(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if spaceport.take_mission_computer_request() {
+        spaceport.open_mission_computer(flight.mission_computer());
+    }
+    if spaceport.take_port_dialog_opened().is_some() {
+        flight.open_port_dialog();
+    }
+}
+
+/// Tells `flight` of the port dialog of `spaceport` that has closed
+/// ([`FlightView::close_port_dialog`]): a shop's `_RefreshSAT`, then the
+/// nav's restore, as each of the original's dialogs closes; after the
+/// input's last order, and before any frame is drawn. A mission computer
+/// that closed under mission texts is told once they have closed.
+fn close_port_dialogs(spaceport: &mut SpaceportView, flight: &mut FlightView<Rc<GameData>>) {
+    if let Some(dialog) = spaceport.take_port_dialog_closed() {
+        flight.close_port_dialog(dialog);
     }
 }
 

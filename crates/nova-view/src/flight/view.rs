@@ -138,8 +138,13 @@
 //! mission text's redraw shows the nav as the text noted it when it was
 //! queued, unless ours has redrawn since ([`FlightView::take_mission_texts`]),
 //! and the mission dialogs' and a ship purchase's redraws come after the
-//! script run with them, as the original's do. By the other reading,
-//! everything follows every frame.
+//! script run with them, as the original's do. The outfitter, exchange,
+//! shipyard and mission computer save the nav as they open and restore it
+//! as they close ([`FlightView::close_port_dialog`]), so a landed `M` or
+//! `N` run inside one is undone: shown at once after the outfitter, the
+//! exchange and the computer, whose close redraws the nav; after the
+//! shipyard, the close's redraw stays until the port's next draw. By the
+//! other reading, everything follows every frame.
 //!
 //! Each [`Screen::tick`] runs the simulation's fixed-step clock: the
 //! frame's time becomes whole steps of 1/30 s, each flown with the keys
@@ -521,6 +526,7 @@ use crate::devtools::SessionDesk;
 use crate::draw::{crossed_box, lights_tint};
 use crate::fade::{DEATH_FADE_FOR, ScreenFade};
 use crate::galaxy::{GalaxyCatalog, GalaxyMap, MapMarks, MapMode};
+use crate::spaceport::PortDialog;
 use crate::spaceport::bar::MISSION_INFO_KEY;
 use crate::system::camera::{Camera, VIEW_SIZE};
 use crate::system::catalog::SystemCatalog;
@@ -2040,6 +2046,10 @@ pub struct FlightView<C> {
     /// showed it for, which it shows until the next under
     /// [`RuleKey::HudCadence`]'s engine reading; `None` before the first.
     nav_scene: Option<(NavMode, NavDisplay)>,
+    /// Whether the nav area is marked to redraw at the port's next
+    /// `_DrawStatus`, as the shipyard's restore leaves it
+    /// (`_statusRedraw[0]` @0x5f8fe; see [`FlightView::close_port_dialog`]).
+    nav_marked: bool,
     /// How many mission texts the session had queued when the nav area
     /// was last taken ([`Session::texts_queued`]): a text queued since is
     /// newer than that redraw ([`FlightView::take_mission_texts`]).
@@ -2296,6 +2306,7 @@ impl<
             hud_cadence: HudCadence::default(),
             radar_scene: None,
             nav_scene: None,
+            nav_marked: false,
             nav_texts: 0,
             target_scene: None,
             reserves_scene: None,
@@ -3579,7 +3590,7 @@ impl<
             Ok(session) => session.outfit(order, &mut self.chance),
             Err(_) => Err(OutfitRefusal::NoOutfitter),
         };
-        self.after_outfit_order(before.as_ref());
+        self.after_outfit_order(before.as_ref(), done.is_ok());
         done
     }
 
@@ -3593,7 +3604,7 @@ impl<
             Ok(session) => session.outfit_counted(order, count, &mut self.chance),
             Err(_) => Err(OutfitRefusal::NoOutfitter),
         };
-        self.after_outfit_order(before.as_ref());
+        self.after_outfit_order(before.as_ref(), done.is_ok_and(|done| done > 0));
         done
     }
 
@@ -3605,7 +3616,7 @@ impl<
     pub fn outfit_order(&mut self, order: OutfitOrder, count: u32) -> OutfitRun {
         let before = self.interface_now();
         let run = self.run_outfit_order(order, count);
-        self.after_outfit_order(before.as_ref());
+        self.after_outfit_order(before.as_ref(), run.run.done > 0);
         run
     }
 
@@ -3628,7 +3639,8 @@ impl<
     }
 
     /// Redraws the bar after an outfitter order, given the `ïntf` the
-    /// ship flew under before it ([`FlightView::interface_now`]).
+    /// ship flew under before it ([`FlightView::interface_now`]) and
+    /// whether any of it went through (`done`).
     ///
     /// The order's `OnPurchase` (`_EvalMissionBitSetString` @0x5c2cb) or
     /// `OnSell` (@0x5cff6) runs inside it. When its `C`, `E` or `H`
@@ -3645,9 +3657,21 @@ impl<
     /// script (@0x156c7 → @0x739bd, then @0x156f2-0x15705) is not in that
     /// redraw, where ours shows it: filed as
     /// rdm:phase/hud-fidelity/phase-36-landed-m-n-left-out-branches-and-ordering.
-    fn after_outfit_order(&mut self, before: Option<&Result<i16, String>>) {
+    ///
+    /// The buy's and the sell's own `_DrawStatus` (@0x5c5a1, @0x5d328)
+    /// draw the nav too when the shipyard's restore marked it
+    /// ([`FlightView::close_port_dialog`]), but only for an order that
+    /// went through: a buy `_CanBuyOutfitItem` refuses (@0x5c087,
+    /// @0x5c09f-0x5c0a2) jumps past the buy's draw to @0x5c5ca, and a
+    /// sell with nothing to sell (the flag at 0xded1c, @0x5c5d5-0x5c5dd)
+    /// past the sell's to @0x5d351. A run stopped after its first pass
+    /// still reaches them.
+    fn after_outfit_order(&mut self, before: Option<&Result<i16, String>>, done: bool) {
         if self.interface_now().as_ref() == before {
             self.retake_radar();
+            if done {
+                self.draw_marked_nav();
+            }
         } else {
             self.redraw_status();
         }
@@ -3748,8 +3772,67 @@ impl<C> FlightView<C> {
     /// shops ends in `_RefreshSAT` (the outfitter @0x5dba4, the exchange
     /// @0x5e642, the shipyard @0x5f8d4, after its `_RedrawStatus` @0x5f87c
     /// and @0x5f8c5). The gauges an order left held show the order then.
+    /// [`FlightView::close_port_dialog`] runs it before the nav's restore.
     pub fn shop_closed(&mut self) {
         self.redraw_status();
+    }
+
+    /// A port dialog (the outfitter, exchange, shipyard or mission
+    /// computer) opens: the nav is saved ([`Session::save_port_nav`]), as
+    /// each of the original's saves +0x6a and +0x6c as it opens (the
+    /// outfitter @0x5bafc-0x5bb12, the exchange @0x5dbed-0x5dc08, the
+    /// shipyard @0x5e70f-0x5e71e, the computer @0x5ffc0-0x5ffd0). A
+    /// session that failed has no nav to save.
+    pub fn open_port_dialog(&mut self) {
+        if let Ok(session) = &mut self.session {
+            session.save_port_nav();
+        }
+    }
+
+    /// `dialog` closes, as `_DoPortDialog` closes each: a shop's close
+    /// redraws the whole bar first ([`FlightView::shop_closed`],
+    /// `_RefreshSAT`), then the nav saved as it opened is restored
+    /// ([`Session::restore_port_nav`]; the outfitter @0x5dbb8-0x5dbc5,
+    /// the exchange @0x5e64d-0x5e65d, the shipyard @0x5f8e8-0x5f8f5, the
+    /// computer @0x60084-0x60096), undoing a landed `M` or `N` run inside
+    /// it. When the restored nav shows:
+    ///
+    /// - The outfitter and the exchange: at once, as `_DoPortDialog` runs
+    ///   `_DrawStatus` right after each returns (@0x5ff04-0x5ff10,
+    ///   @0x5fe99-0x5fea5 → @0x5ff10).
+    /// - The mission computer: at once, as its close draws nav and cargo
+    ///   itself (@0x6009a-0x600a6), even when the restore changed nothing.
+    ///   Its refusal's whole-bar `_RefreshSAT` (@0xa395b) is a text
+    ///   dialog's closing, left to
+    ///   rdm:phase/hud-fidelity/phase-35-port-status-bar-redraws-at-the-other-dialogs.
+    /// - The shipyard: the bar keeps what its close drew, before the
+    ///   restore, as no `_DrawStatus` follows it in the port
+    ///   (@0x5ff85-0x5ffa3 marks only `_statusRedraw[2]`). Its restore
+    ///   marks nav (`_statusRedraw[0]` @0x5f8fe), drawn at the port's next
+    ///   `_DrawStatus` ours models: a trade (@0x5e33a, @0x5e59e), a
+    ///   recharge (@0x5fe05), an outfitter order (@0x5c5a1, @0x5d328), each
+    ///   only when it goes through, or any nav redraw.
+    pub fn close_port_dialog(&mut self, dialog: PortDialog) {
+        if dialog != PortDialog::MissionComputer {
+            self.shop_closed();
+        }
+        if let Ok(session) = &mut self.session {
+            session.restore_port_nav();
+        }
+        if dialog == PortDialog::Shipyard {
+            self.nav_marked = true;
+        } else {
+            self.retake_nav();
+        }
+    }
+
+    /// The port's `_DrawStatus` with nothing else redrawing nav: the nav
+    /// area is redrawn when the shipyard's restore marked it
+    /// ([`FlightView::close_port_dialog`]).
+    fn draw_marked_nav(&mut self) {
+        if self.nav_marked {
+            self.retake_nav();
+        }
     }
 
     /// Redraws the HUD at once, as the original's `_RedrawStatus`
@@ -3864,6 +3947,7 @@ impl<C> FlightView<C> {
     /// Takes the nav area's snapshot afresh, noting how many mission texts
     /// the session had queued then.
     fn retake_nav(&mut self) {
+        self.nav_marked = false;
         self.nav_scene = Some((self.nav_mode(), self.nav_now()));
         self.nav_texts = self.session.as_ref().map_or(0, Session::texts_queued);
     }
@@ -3982,19 +4066,21 @@ impl<C> FlightView<C> {
     /// nav redraws ours models retake the snapshot
     /// ([`FlightView::redraw_status`]: landing, a docked start, a shop
     /// closing, an accept or refusal, mission texts, and an outfitter order
-    /// that changes the `ïntf`; and a ship purchase,
-    /// [`FlightView::buy_ship`]). A landed `M` or `N`'s write
-    /// (`_EvalSetExp` @0x156f2-0x15705, @0x158fd) shows from the next of
-    /// them, as the original's port bar shows it only at its next nav
-    /// redraw. A trade, a recharge, an outfitter order that keeps the
-    /// `ïntf` and a refused purchase leave it held. The original's port
+    /// that changes the `ïntf`; a ship purchase, [`FlightView::buy_ship`];
+    /// and a port dialog's close, [`FlightView::close_port_dialog`]). A
+    /// landed `M` or `N`'s write (`_EvalSetExp` @0x156f2-0x15705,
+    /// @0x158fd) shows from the next of them, as the original's port bar
+    /// shows it only at its next nav redraw; one run inside a port dialog
+    /// is undone as it closes. A trade, a recharge, an outfitter order
+    /// that keeps the `ïntf` and a refused purchase leave it held, unless
+    /// the shipyard's restore marked the nav, which a trade, recharge or
+    /// outfitter order that goes through then draws. The original's port
     /// `_DrawStatus` also draws nav when it lands on `TickCount() % 30 ==
     /// 0` (@0x4c88a-0x4c8b6), recorded and not built (see the `cadence`
     /// module); and its other whole-bar redraws in port (the bar, News,
     /// the player and mission info, Preferences, the ship description,
-    /// the shops' text dialogs, the mission computer's close) are
-    /// rdm:phase/hud-fidelity/phase-35-port-status-bar-redraws-at-the-other-dialogs
-    /// and rdm:phase/hud-fidelity/phase-34-nav-save-and-restore-around-the-port-dialogs.
+    /// the shops' text dialogs) are
+    /// rdm:phase/hud-fidelity/phase-35-port-status-bar-redraws-at-the-other-dialogs.
     /// Until then a write held in port shows at the next redraw ours
     /// models, or the take-off lets go of it.
     fn nav_shown(&self) -> NavDisplay {
@@ -4300,12 +4386,16 @@ impl<C> FlightView<C> {
     }
 
     /// Trades as [`Session::trade`] does; a session that failed has no
-    /// exchange.
+    /// exchange. A trade that goes through runs the exchange's
+    /// `_DrawStatus` (@0x5e33a, @0x5e59e), which draws the nav when the
+    /// shipyard's restore marked it ([`FlightView::close_port_dialog`]).
     pub fn trade(&mut self, order: Order) -> Result<u32, TradeRefusal> {
-        match &mut self.session {
-            Ok(session) => session.trade(order),
-            Err(_) => Err(TradeRefusal::NoMarket),
-        }
+        let traded = match &mut self.session {
+            Ok(session) => session.trade(order)?,
+            Err(_) => return Err(TradeRefusal::NoMarket),
+        };
+        self.draw_marked_nav();
+        Ok(traded)
     }
 
     /// The outfitter of the stellar landed on, as [`Session::outfitter`]
@@ -4343,12 +4433,15 @@ impl<C> FlightView<C> {
     /// sells no fuel. A recharge redraws the fuel gauge alone, as the
     /// original's marks only fuel and cargo (`_statusRedraw[4]` @0x5fdf6)
     /// before its `_DrawStatus` (@0x5fe05); the shield and armour stay as
-    /// they were drawn.
+    /// they were drawn. The nav is drawn too when the shipyard's restore
+    /// marked it ([`FlightView::close_port_dialog`]). A refused recharge
+    /// draws nothing.
     pub fn recharge(&mut self) -> Result<i64, RechargeRefusal> {
         let paid = match &mut self.session {
             Ok(session) => session.recharge()?,
             Err(_) => return Err(RechargeRefusal::NoFuel),
         };
+        self.draw_marked_nav();
         let fuel = self.reserves().fuel;
         if let Some(held) = &mut self.reserves_scene {
             held.fuel = fuel;
@@ -12089,6 +12182,12 @@ mod tests {
         direction: Direction::Buy,
     };
 
+    /// An outfit no outfitter sells, so its order is refused.
+    const UNKNOWN_OUTFIT: OutfitOrder = OutfitOrder {
+        outfit: OutfitId(999),
+        direction: Direction::Buy,
+    };
+
     /// [`shipbuying`]'s Earth, a trade center too selling food, the ship
     /// holding 10 tons; ship 130 under gövt 150, whose `Interface` is 129
     /// ([`governed`]); the fuel tank's `OnPurchase` an `H130`, and outfit
@@ -12196,6 +12295,110 @@ mod tests {
                 assert_eq!(port_nav(&view), naming(shown), "{what}");
             }
         }
+    }
+
+    /// [`docked_at_earth`] by the engine's reading, with `dialog` opened,
+    /// a landed `M131` run and settled inside it, and `dialog` closed.
+    fn m_inside(dialog: PortDialog) -> View {
+        let mut view = docked_at_earth(port(), RuleSource::Engine);
+        view.open_port_dialog();
+        run_set(&mut view, "M131");
+        view.settle_script();
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(140)))),
+            "{dialog:?}: written"
+        );
+        view.close_port_dialog(dialog);
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Stellar(Some(StellarId(128)))),
+            "{dialog:?}: restored"
+        );
+        view
+    }
+
+    #[test]
+    fn a_landed_m_in_the_outfitter_exchange_or_computer_is_undone_and_shown_at_once() {
+        for dialog in [
+            PortDialog::Outfitter,
+            PortDialog::Exchange,
+            PortDialog::MissionComputer,
+        ] {
+            let view = m_inside(dialog);
+            assert_eq!(port_nav(&view), naming("Earth"), "{dialog:?}");
+        }
+    }
+
+    #[test]
+    fn a_landed_m_in_the_shipyard_is_undone_but_its_close_shows_it_until_the_next_draw_status() {
+        type Step = fn(&mut View);
+        let draws: [(&str, Step); 7] = [
+            ("a trade", |view| {
+                assert_eq!(view.trade(BUY_FOOD), Ok(10));
+            }),
+            ("a recharge", |view| {
+                desk_reserve(view, nova_sim::Reserve::Fuel, 100.0);
+                assert!(view.recharge().is_ok());
+            }),
+            ("an outfitter order", |view| {
+                assert_eq!(view.outfit(BUY_PLAIN_TANK), Ok(()));
+            }),
+            ("a counted outfitter order", |view| {
+                assert_eq!(view.outfit_counted(BUY_PLAIN_TANK, 1), Ok(1));
+            }),
+            ("an outfitter run", |view| {
+                assert_eq!(view.outfit_order(BUY_PLAIN_TANK, 1).run.done, 1);
+            }),
+            ("a ship purchase", |view| {
+                view.buy_ship(ShipId(129), "Kestrel").expect("bought");
+            }),
+            ("a shop closing", FlightView::shop_closed),
+        ];
+        let refused: [(&str, Step); 5] = [
+            ("a refused trade", |view| {
+                let order = Order {
+                    row: 99,
+                    ..BUY_FOOD
+                };
+                assert!(view.trade(order).is_err());
+            }),
+            ("a refused recharge", |view| {
+                assert_eq!(view.recharge(), Err(RechargeRefusal::Full));
+            }),
+            ("a refused outfitter order", |view| {
+                assert!(view.outfit(UNKNOWN_OUTFIT).is_err());
+            }),
+            ("a refused counted outfitter order", |view| {
+                assert!(view.outfit_counted(UNKNOWN_OUTFIT, 1).is_err());
+            }),
+            ("a refused outfitter run", |view| {
+                assert_eq!(view.outfit_order(UNKNOWN_OUTFIT, 1).run.done, 0);
+            }),
+        ];
+        for (steps, shown) in [(&draws[..], "Earth"), (&refused[..], "Proxima")] {
+            for (what, step) in steps {
+                let mut view = m_inside(PortDialog::Shipyard);
+                assert_eq!(port_nav(&view), naming("Proxima"), "{what}: the close's");
+                step(&mut view);
+                assert_eq!(port_nav(&view), naming(shown), "{what}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_mission_computers_close_redraws_the_nav_area() {
+        let mut view = docked_at_earth(port(), RuleSource::Engine);
+        run_set(&mut view, "M131");
+        view.settle_script();
+        assert_eq!(port_nav(&view), naming("Earth"), "held");
+        view.open_port_dialog();
+        view.close_port_dialog(PortDialog::MissionComputer);
+        assert_eq!(
+            port_nav(&view),
+            naming("Proxima"),
+            "redrawn, though the restore changed nothing"
+        );
     }
 
     #[test]

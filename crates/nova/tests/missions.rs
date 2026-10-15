@@ -23,6 +23,10 @@
 //! Dock) with no `Q`: under its `CompText` the port's status bar names
 //! the Pad, landed on, and once the Trade Center has opened and closed
 //! it names the Dock.
+//! Closing the mission computer afterwards redraws the nav too: the
+//! Dock. A run whose `OnAccept` moves the player instead: under its
+//! `BriefText` the bar names the Dock, and the computer's close restores
+//! the nav it opened with, naming the Pad.
 //!
 //! The bar: a quarter second after the bar opens, the offer dialog shows
 //! the bar job's text, filled, and "I'm in". Return accepts it, and its
@@ -1016,10 +1020,23 @@ fn moving_run_data() -> Rc<GameData> {
     let mut run = timed(mission(128, 200, 201));
     let on_success = b"M129\0";
     run[0x359..0x359 + on_success.len()].copy_from_slice(on_success);
-    let fork = ForkBuilder::new()
+    game_data_around(&run, bar_job(), &flagged_pad(0x43), beta())
+}
+
+/// Beta (129), listing the Dock (129) alone.
+fn beta() -> ForkBuilder {
+    ForkBuilder::new()
         .resource(System::TYPE, 129, Some(b"Beta"), &listing(129))
-        .resource(Stellar::TYPE, 129, Some(b"Dock"), &pad());
-    game_data_around(&run, bar_job(), &flagged_pad(0x43), fork)
+        .resource(Stellar::TYPE, 129, Some(b"Dock"), &pad())
+}
+
+/// [`game_data`] where the run's `OnAccept` moves the player to Beta
+/// (`M129`), Beta listing the Dock (129) alone.
+fn moving_accept_data() -> Rc<GameData> {
+    let mut run = timed(mission(128, 200, 201));
+    let on_accept = b"M129\0";
+    run[0x15B..0x15B + on_accept.len()].copy_from_slice(on_accept);
+    game_data_around(&run, bar_job(), &pad(), beta())
 }
 
 /// The texts of flight's status bar as the spaceport draws it beside
@@ -1075,6 +1092,76 @@ fn a_comp_text_shows_the_stellar_landed_on_and_a_shop_closing_on_successs_move()
     assert!(game.spaceport().open_trade().is_some(), "trading");
     game.tap(Key::Escape);
     assert!(game.spaceport().open_trade().is_none(), "closed");
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Dock".to_owned()), "{bar:?}");
+    assert!(texts(&game.frame()).contains(&"Dock".to_owned()));
+}
+
+#[test]
+fn a_landed_m_in_on_accept_is_undone_as_the_mission_computer_closes() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_data(&store, &ada(), moving_accept_data());
+    game.frame();
+    game.land();
+    game.click_port(MISSION_BBS);
+    game.accept();
+
+    // Under the BriefText the accept's redraw names the Dock.
+    assert_eq!(game.shown_text().as_deref(), Some("Off you go to Pad."));
+    assert_eq!(
+        game.session().nav_mode(),
+        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(129)))
+    );
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Dock".to_owned()), "{bar:?}");
+
+    // The computer's close restores the Pad and draws it.
+    game.tap(Key::Enter);
+    if game.spaceport().mission_computer().is_some() {
+        game.tap(Key::Escape);
+    }
+    assert!(game.spaceport().mission_computer().is_none(), "closed");
+    assert_eq!(game.showing(), Showing::Spaceport);
+    assert_eq!(
+        game.session().nav_mode(),
+        nova_sim::NavMode::Stellar(Some(nova_sim::StellarId(128)))
+    );
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Pad".to_owned()), "{bar:?}");
+    let shown = texts(&game.frame());
+    assert!(shown.contains(&"Pad".to_owned()), "{shown:?}");
+    assert!(!shown.contains(&"Dock".to_owned()), "{shown:?}");
+}
+
+#[test]
+fn the_mission_computers_close_redraws_the_port_bars_nav() {
+    let store = MemoryPilots::new();
+    let mut game = Game::with_data(&store, &ada(), moving_run_data());
+    game.frame();
+    game.land();
+    game.click_port(MISSION_BBS);
+    game.accept();
+    game.tap(Key::Enter);
+    for _ in 0..3 {
+        if game.showing() == Showing::Spaceport {
+            game.tap(Key::Escape);
+        }
+    }
+    game.land();
+    game.tap(Key::Escape);
+    assert_eq!(game.shown_text(), None, "the CompText closed");
+    let bar = port_bar_texts(&game);
+    assert!(bar.contains(&"Pad".to_owned()), "held: {bar:?}");
+
+    // Mission BBS, then its close, which redraws the nav: the Dock.
+    game.click_port(MISSION_BBS);
+    if game.spaceport().mission_computer().is_some() {
+        game.tap(Key::Escape);
+    } else {
+        game.tap(Key::Enter);
+    }
+    assert!(game.spaceport().mission_computer().is_none());
+    assert_eq!(game.shown_text(), None);
     let bar = port_bar_texts(&game);
     assert!(bar.contains(&"Dock".to_owned()), "{bar:?}");
     assert!(texts(&game.frame()).contains(&"Dock".to_owned()));

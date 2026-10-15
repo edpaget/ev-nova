@@ -194,6 +194,22 @@ impl std::fmt::Debug for MetricsHandle {
     }
 }
 
+/// One of the port dialogs that save the player's nav as they open and
+/// restore it as they close (`_DoPortDialog`; see
+/// [`SpaceportView::take_port_dialog_opened`] and
+/// [`SpaceportView::take_port_dialog_closed`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PortDialog {
+    /// The outfitter.
+    Outfitter,
+    /// The exchange.
+    Exchange,
+    /// The shipyard.
+    Shipyard,
+    /// The mission computer.
+    MissionComputer,
+}
+
 /// A screen open over the spaceport.
 #[derive(Clone, Debug)]
 enum Open {
@@ -223,14 +239,16 @@ impl Open {
         }
     }
 
-    /// Whether it is one of the shops that redraw the status bar as they
-    /// close (`_RefreshSAT`): the exchange (@0x5e642), the outfitter
-    /// (@0x5dba4) or the shipyard (@0x5f8d4).
-    fn is_shop(&self) -> bool {
-        matches!(
-            self,
-            Self::Trade(_) | Self::Outfitter(_) | Self::Shipyard(_)
-        )
+    /// The port dialog it is, if it is one: the bar and a placeholder are
+    /// not.
+    fn port_dialog(&self) -> Option<PortDialog> {
+        match self {
+            Self::Trade(_) => Some(PortDialog::Exchange),
+            Self::Outfitter(_) => Some(PortDialog::Outfitter),
+            Self::Shipyard(_) => Some(PortDialog::Shipyard),
+            Self::Computer(_) => Some(PortDialog::MissionComputer),
+            Self::Service(_) | Self::Bar(_) => None,
+        }
     }
 
     fn closed(&self) -> bool {
@@ -373,8 +391,10 @@ pub struct SpaceportView {
     recharge: bool,
     /// Whether the outfitter has opened since this was last taken.
     outfitter_opened: bool,
-    /// Whether a shop has closed since this was last taken.
-    shop_closed: bool,
+    /// The port dialog opened since this was last taken.
+    port_dialog_opened: Option<PortDialog>,
+    /// The port dialog closed since this was last taken.
+    port_dialog_closed: Option<PortDialog>,
     /// Whether the outfitter has closed since this was last taken.
     outfitter_closed: bool,
     /// The sounds made since they were last taken, kept here so a service
@@ -461,19 +481,44 @@ impl SpaceportView {
             left: false,
             recharge: false,
             outfitter_opened: false,
-            shop_closed: false,
+            port_dialog_opened: None,
+            port_dialog_closed: None,
             outfitter_closed: false,
             sounds: Vec::new(),
         }
     }
 
-    /// Whether the exchange, the outfitter or the shipyard has closed
-    /// since this was last asked, once each time one closes: whoever flies
-    /// the ship redraws the status bar, as each of the original's shops
-    /// ends in `_RefreshSAT` (the outfitter @0x5dba4, the exchange
-    /// @0x5e642, the shipyard @0x5f8d4).
-    pub fn take_shop_closed(&mut self) -> bool {
-        std::mem::take(&mut self.shop_closed)
+    /// The port dialog that has opened since this was last asked, once
+    /// each time one opens: the exchange, the outfitter or the shipyard
+    /// as its button opens it, and the mission computer as it is answered
+    /// ([`SpaceportView::open_mission_computer`]), refused too, as the
+    /// original saves before every `_DoMissionDialog` (@0x5ffc0). Whoever
+    /// flies the ship saves the nav, as each of the original's dialogs
+    /// saves +0x6a and +0x6c (the outfitter @0x5bafc-0x5bb12, the
+    /// exchange @0x5dbed-0x5dc08, the shipyard @0x5e70f-0x5e71e, the
+    /// computer @0x5ffc0-0x5ffd0).
+    pub fn take_port_dialog_opened(&mut self) -> Option<PortDialog> {
+        self.port_dialog_opened.take()
+    }
+
+    /// The port dialog that has closed since this was last asked, once
+    /// each time one closes: whoever flies the ship redraws what its close
+    /// draws and restores the nav saved as it opened. The exchange,
+    /// outfitter and shipyard end in `_RefreshSAT` (the outfitter
+    /// @0x5dba4, the exchange @0x5e642, the shipyard @0x5f8d4), then
+    /// restore (@0x5dbb8, @0x5e64d, @0x5f8e8); the computer restores
+    /// after its loop (@0x60084-0x60096). While mission texts are queued
+    /// it says nothing and keeps the close: the original's dialogs close
+    /// only after their modal texts, an accept's `BriefText` before the
+    /// re-entry finds nothing (`_DoMissionAccept` inside
+    /// `_DoMissionDialog`) and the refusal's text before the restore
+    /// (`_ShowTextDialog` @0xa3956).
+    pub fn take_port_dialog_closed(&mut self) -> Option<PortDialog> {
+        if self.texts.is_empty() {
+            self.port_dialog_closed.take()
+        } else {
+            None
+        }
     }
 
     /// Whether Recharge has been clicked since this was last asked:
@@ -629,15 +674,15 @@ impl SpaceportView {
         std::mem::take(&mut self.outfitter_closed)
     }
 
-    /// Closes the screen open, noting a shop's close
-    /// ([`SpaceportView::take_shop_closed`]) and the outfitter's
+    /// Closes the screen open, noting a port dialog's close
+    /// ([`SpaceportView::take_port_dialog_closed`]) and the outfitter's
     /// ([`SpaceportView::take_outfitter_closed`]).
     fn close_open(&mut self) {
         if matches!(self.open, Some(Open::Outfitter(_))) {
             self.outfitter_closed = true;
         }
-        if self.open.take().is_some_and(|open| open.is_shop()) {
-            self.shop_closed = true;
+        if let Some(dialog) = self.open.take().and_then(|open| open.port_dialog()) {
+            self.port_dialog_closed = Some(dialog);
         }
     }
 
@@ -995,7 +1040,9 @@ impl SpaceportView {
         let computer = match computer {
             Ok(computer) => computer,
             Err(refusal) => {
+                self.port_dialog_opened = Some(PortDialog::MissionComputer);
                 self.show_text(&refusal.message());
+                self.port_dialog_closed = Some(PortDialog::MissionComputer);
                 return;
             }
         };
@@ -1009,6 +1056,7 @@ impl SpaceportView {
         self.open = Some(Open::Computer(Box::new(MissionComputerScreen::new(
             layout, computer, port.style,
         ))));
+        self.port_dialog_opened = Some(PortDialog::MissionComputer);
     }
 
     /// The mission computer open, if it is.
@@ -1038,7 +1086,7 @@ impl SpaceportView {
         };
         match computer {
             Ok(computer) => screen.set_computer(computer),
-            Err(_) => self.open = None,
+            Err(_) => self.close_open(),
         }
     }
 
@@ -1350,6 +1398,7 @@ impl SpaceportView {
                 _ => Open::Service(ServiceScreen::new(service, port.style, metrics)),
             },
         );
+        self.port_dialog_opened = self.open.as_ref().and_then(Open::port_dialog);
     }
 }
 
@@ -2819,54 +2868,116 @@ mod tests {
     }
 
     #[test]
-    fn a_shop_closing_is_told_once() {
+    fn a_port_dialog_closing_is_told_once() {
         // The outfitter, by Done, then by an order leaving nothing listed.
         let mut view = outfitting(Ok(outfit_template()));
-        assert!(!view.take_shop_closed(), "nothing open");
+        assert_eq!(view.take_port_dialog_closed(), None, "nothing open");
         click_item(&mut view, 8);
-        assert!(!view.take_shop_closed(), "opening");
+        assert_eq!(view.take_port_dialog_closed(), None, "opening");
         view.outfit_ordered(Reselection::Kept);
-        assert!(!view.take_shop_closed(), "still open");
+        assert_eq!(view.take_port_dialog_closed(), None, "still open");
         let done = outfit_item(&view, 1);
         click(&mut view, done);
         assert!(view.open_outfitter().is_none(), "Done");
-        assert!(view.take_shop_closed(), "the outfitter closed");
-        assert!(!view.take_shop_closed(), "once");
+        assert_eq!(
+            view.take_port_dialog_closed(),
+            Some(PortDialog::Outfitter),
+            "the outfitter closed"
+        );
+        assert_eq!(view.take_port_dialog_closed(), None, "once");
         click_item(&mut view, 8);
         view.outfit_ordered(Reselection::Leave);
         assert!(view.open_outfitter().is_none());
-        assert!(view.take_shop_closed(), "closed by its order");
-        assert!(!view.take_shop_closed(), "once");
+        assert_eq!(
+            view.take_port_dialog_closed(),
+            Some(PortDialog::Outfitter),
+            "closed by its order"
+        );
+        assert_eq!(view.take_port_dialog_closed(), None, "once");
         // The shipyard and the exchange.
         let mut view = shipbuying(Ok(shipyard_template()));
         click_item(&mut view, 9);
         view.input(&key(Key::Down));
-        assert!(!view.take_shop_closed(), "still open");
+        assert_eq!(view.take_port_dialog_closed(), None, "still open");
         view.input(&key(Key::Escape));
         assert!(view.open_shipyard().is_none());
-        assert!(view.take_shop_closed(), "the shipyard closed");
+        assert_eq!(
+            view.take_port_dialog_closed(),
+            Some(PortDialog::Shipyard),
+            "the shipyard closed"
+        );
         let mut view = trading(Ok(trade_template()));
         click_item(&mut view, 7);
         view.input(&key(Key::Escape));
         assert!(view.open_trade().is_none());
-        assert!(view.take_shop_closed(), "the exchange closed");
-        // The bar, the mission computer and a placeholder are no shops.
+        assert_eq!(
+            view.take_port_dialog_closed(),
+            Some(PortDialog::Exchange),
+            "the exchange closed"
+        );
+        // The mission computer is one; the bar and a placeholder are not.
         let mut view = drinking(true);
         click_item(&mut view, 10);
         view.input(&key(Key::Escape));
         assert!(view.open_bar().is_none());
-        assert!(!view.take_shop_closed(), "the bar");
+        assert_eq!(view.take_port_dialog_closed(), None, "the bar");
         let mut view = missioned();
         click_item(&mut view, 11);
         view.open_mission_computer(Ok(offers()));
         view.input(&key(Key::Escape));
         assert!(view.mission_computer().is_none());
-        assert!(!view.take_shop_closed(), "the mission computer");
+        assert_eq!(
+            view.take_port_dialog_closed(),
+            Some(PortDialog::MissionComputer),
+            "the mission computer"
+        );
         let mut view = earth();
         click_item(&mut view, 7);
         view.input(&key(Key::Escape));
         assert!(view.open_service().is_none());
-        assert!(!view.take_shop_closed(), "a placeholder");
+        assert_eq!(view.take_port_dialog_closed(), None, "a placeholder");
+    }
+
+    #[test]
+    fn each_port_dialog_tells_its_opening_once() {
+        type Shop = fn() -> SpaceportView;
+        let shops: [(Shop, usize, PortDialog); 3] = [
+            (
+                || outfitting(Ok(outfit_template())),
+                8,
+                PortDialog::Outfitter,
+            ),
+            (
+                || shipbuying(Ok(shipyard_template())),
+                9,
+                PortDialog::Shipyard,
+            ),
+            (|| trading(Ok(trade_template())), 7, PortDialog::Exchange),
+        ];
+        for (shop, item, dialog) in shops {
+            let mut view = shop();
+            assert_eq!(view.take_port_dialog_opened(), None, "nothing open");
+            click_item(&mut view, item);
+            assert_eq!(view.take_port_dialog_opened(), Some(dialog));
+            assert_eq!(view.take_port_dialog_opened(), None, "once");
+            view.input(&key(Key::Escape));
+            assert_eq!(view.take_port_dialog_opened(), None, "closing");
+        }
+        let mut view = missioned();
+        click_item(&mut view, 11);
+        assert_eq!(view.take_port_dialog_opened(), None, "only asked for");
+        view.open_mission_computer(Ok(offers()));
+        assert_eq!(
+            view.take_port_dialog_opened(),
+            Some(PortDialog::MissionComputer)
+        );
+        assert_eq!(view.take_port_dialog_opened(), None, "once");
+        let mut view = drinking(true);
+        click_item(&mut view, 10);
+        assert_eq!(view.take_port_dialog_opened(), None, "the bar");
+        let mut view = earth();
+        click_item(&mut view, 7);
+        assert_eq!(view.take_port_dialog_opened(), None, "a placeholder");
     }
 
     #[test]
@@ -3606,6 +3717,51 @@ mod tests {
         view.set_mission_computer(Err(ComputerRefusal::NoneAvailable));
         assert!(view.mission_computer().is_none(), "closed");
         assert_eq!(shown_text(&view), None, "silently");
+    }
+
+    #[test]
+    fn the_mission_computer_closing_waits_for_the_texts_queued() {
+        let mut view = missioned();
+        click_item(&mut view, 11);
+        view.open_mission_computer(Ok(offers()));
+        view.show_mission_texts(vec![MissionText {
+            kind: MissionTextKind::Brief,
+            mission: MissionId(130),
+            text: "Go.".to_owned(),
+        }]);
+        view.set_mission_computer(Err(ComputerRefusal::NoneAvailable));
+        assert!(view.mission_computer().is_none(), "closed");
+        assert_eq!(
+            view.take_port_dialog_closed(),
+            None,
+            "told once its text closes"
+        );
+        done(&mut view);
+        assert_eq!(shown_text(&view), None);
+        assert_eq!(
+            view.take_port_dialog_closed(),
+            Some(PortDialog::MissionComputer)
+        );
+        assert_eq!(view.take_port_dialog_closed(), None, "once");
+    }
+
+    #[test]
+    fn a_refused_mission_computer_opens_and_closes_once_its_refusal_closes() {
+        let mut view = missioned();
+        click_item(&mut view, 11);
+        view.open_mission_computer(Err(ComputerRefusal::NoneAvailable));
+        assert_eq!(
+            view.take_port_dialog_opened(),
+            Some(PortDialog::MissionComputer),
+            "opened at once"
+        );
+        assert_eq!(view.take_port_dialog_closed(), None, "its text shows");
+        done(&mut view);
+        assert_eq!(
+            view.take_port_dialog_closed(),
+            Some(PortDialog::MissionComputer)
+        );
+        assert_eq!(view.take_port_dialog_closed(), None, "once");
     }
 
     #[test]
