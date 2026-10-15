@@ -135,8 +135,11 @@
 //! Of the port dialogs' save and restore: the original's mode 3 +0x6c is
 //! a link slot of the current system, where ours keeps the system, and
 //! mode 3 docked has no original, so its restore is not modelled apart;
-//! and each dialog's Map button (`_DoSystemMap`, with its own save and
-//! restore), as ours has no map in port.
+//! each dialog's Map button (`_DoSystemMap`, with its own save and
+//! restore), as ours has no map in port; and the flag at
+//! @0x5ffb2-0x5ffba that gates the mission computer's branch, before its
+//! save (@0x5ffc0-0x5ffd0), as ours opens the computer only where the
+//! port offers Mission BBS.
 //!
 //! **The dock request** (`_dockTarget` / `_dockPermission`, see the
 //! `clearance` module) is dropped by Nav Off and Hyperspace Mode, by a stellar key or a click
