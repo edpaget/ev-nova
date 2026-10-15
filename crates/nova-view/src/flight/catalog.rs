@@ -330,10 +330,11 @@ pub const FIRST_BOOM: i16 = 128;
 /// The last explosion type, `bööm` 191: 64 in all.
 pub const LAST_BOOM: i16 = 191;
 
-/// The cargo box graphics read: only a jettisoned box's, 0. Graphics 1-4
-/// are only an asteroid's scoopable boxes'
-/// (rdm:phase/cargo-and-scanning/phase-5-scoopable-cargo-boxes).
-pub const BOX_GRAPHICS: [u16; 1] = [0];
+/// The cargo box graphics read: a jettisoned box's, 0, and graphics 1-4,
+/// the scoopable boxes a destroyed asteroid drops
+/// (rdm:phase/asteroids/phase-2-shoot-and-break-asteroids), scooped up in
+/// rdm:phase/asteroids/phase-4-scoopable-boxes.
+pub const BOX_GRAPHICS: [u16; 5] = [0, 1, 2, 3, 4];
 
 /// The weapons', explosions', cargo boxes' and asteroids' looks, read
 /// once.
@@ -640,11 +641,16 @@ mod tests {
             }),
             "a jettisoned box's"
         );
+        let boxes: Vec<_> = looks.boxes.keys().copied().collect();
+        assert_eq!(boxes, [0, 1, 2, 3, 4], "and the asteroids' 1-4");
         assert_eq!(
-            looks.box_sheet(1),
-            None,
-            "only the jettisoned box's is read"
+            looks.box_sheet(4),
+            Some(&EffectSheet {
+                image_id: 504,
+                frames: NonZeroU16::MIN
+            })
         );
+        assert_eq!(looks.box_sheet(5), None);
         assert_eq!(
             looks.cursor_sheet(),
             Some(&EffectSheet {
@@ -759,6 +765,10 @@ mod tests {
                 "bööm 128: no spïn 400",
                 "bööm 129: too short",
                 "cargo box 0: no spïn 500",
+                "cargo box 1: no spïn 501",
+                "cargo box 2: no spïn 502",
+                "cargo box 3: no spïn 503",
+                "cargo box 4: no spïn 504",
                 "cursor: no spïn 650",
             ]
         );

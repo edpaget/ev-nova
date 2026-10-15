@@ -6350,9 +6350,15 @@ mod tests {
                 .map(|(_, code)| code.clone())
         }
 
+        /// Graphic 0's sheet as set; graphics 1-4, an asteroid's boxes',
+        /// `rlëD` 501-504 of 36 frames.
         fn box_sheet(&self, graphic: u16) -> Result<EffectSheet, String> {
             match graphic {
                 0 => self.box_sheet.clone(),
+                1..=4 => Ok(EffectSheet {
+                    image_id: 500 + graphic.cast_signed(),
+                    frames: NonZeroU16::new(36).expect("non-zero"),
+                }),
                 other => Err(format!("no spïn {}", 500 + other)),
             }
         }

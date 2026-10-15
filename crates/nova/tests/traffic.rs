@@ -650,9 +650,13 @@ fn a_flights_diagnostics_are_written_out_once_as_lines() {
         text,
         "nova: wëap 181: no spïn 3000\n\
          nova: cargo box 0: no spïn 500\n\
+         nova: cargo box 1: no spïn 501\n\
+         nova: cargo box 2: no spïn 502\n\
+         nova: cargo box 3: no spïn 503\n\
+         nova: cargo box 4: no spïn 504\n\
          nova: cursor: no spïn 650\n\
          nova: wëap 181 Flags2 0x1000 not implemented\n",
-        "its shots', the cargo box's and the cursor's sheets missing from the fixture, as the flight \
+        "its shots', the cargo boxes' and the cursor's sheets missing from the fixture, as the flight \
          opened; then the trader fired, again and again"
     );
 }
