@@ -321,6 +321,10 @@ mod tests {
         let mut session = under_fire(&catalog, 10.6, Condition::Intact);
         hit(&mut session, &catalog, 10.0);
         assert_eq!(armor(&session), 9.0, "9.6");
+        let mut session = under_fire(&catalog, 15.6, Condition::Intact);
+        assert_eq!(hit(&mut session, &catalog, 10.0), (vec![], vec![]));
+        assert_eq!(session.condition, Condition::Intact);
+        assert!((armor(&session) - 14.6).abs() < 1e-4, "hit, not disabled");
         let mut session = under_fire(&catalog, 9.6, Condition::Disabled);
         hit(&mut session, &catalog, 10.0);
         assert!((armor(&session) - 8.6).abs() < 1e-4, "disabled before");
