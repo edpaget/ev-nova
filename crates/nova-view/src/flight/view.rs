@@ -233,7 +233,10 @@
 //!   ([`grant_message`]) for [`GRANT_TICKS`]. A person of `Flags`
 //!   0x0200 whose mission is available offers it in place of the plunder
 //!   ([`Boarding::Offered`]), held for the router as a hail's offer is.
-//! - Y (a press) hails the target ([`Session::open_hail`]): a person
+//! - Y (a press) hails the target ([`Session::hail_key`]), and with no
+//!   ship target, or Alt (Option) held, the navigation stellar: one that
+//!   answers opens nothing yet, where the original opens its comm dialog
+//!   (`_DoPlanetCommDialog`), and any other says "No response.". A person
 //!   whose mission is available offers it in place of the comm dialog,
 //!   held for the router ([`FlightView::take_offer`]), which opens the
 //!   offer dialog over the paused flight and answers it through
@@ -1876,21 +1879,26 @@ impl<
         }
     }
 
-    /// Hails the target ([`Session::open_hail`]), or says why not: a hail
-    /// answered is held for the router ([`FlightView::take_hail`]), and a
-    /// mission offered in its place too ([`FlightView::take_offer`]),
-    /// each letting go of the flight keys; one accepted at once shows
-    /// nothing.
+    /// Hails the target ([`Session::hail_key`]), Option held as Alt is,
+    /// or says why not: a hail answered is held for the router
+    /// ([`FlightView::take_hail`]), and a mission offered in its place
+    /// too ([`FlightView::take_offer`]), each letting go of the flight
+    /// keys; one accepted at once shows nothing, and so does a navigation
+    /// stellar that answers, as its comm dialog is not built.
     fn hail(&mut self) {
         let Ok(session) = &mut self.session else {
             return;
         };
-        match session.open_hail(&self.catalog, &self.hail_options, &mut self.chance) {
+        let option = self.held.contains(&Key::Alt);
+        match session.hail_key(&self.catalog, &self.hail_options, option, &mut self.chance) {
             Ok(Hailed::Comm(view)) => {
                 self.pending_hail = Some(view);
                 self.held.clear();
             }
             Ok(Hailed::Offer(offer)) => self.hold_offer(offer),
+            // The planet comm dialog (`_DoPlanetCommDialog`) is not built
+            // yet: rdm:task/planet-domination opens it here.
+            Ok(Hailed::Stellar(_)) => {}
             Err(refusal) => {
                 if let Some(text) = hail_refusal_message(refusal) {
                     self.say_for(text, MESSAGE_TICKS);
@@ -12176,6 +12184,44 @@ mod tests {
             [Sound::Sim(SimSound::HailRefused)],
             "no target"
         );
+    }
+
+    #[test]
+    fn y_with_a_stellar_selected_and_no_ship_target_opens_nothing_and_says_nothing() {
+        let mut view = flight();
+        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        assert_eq!(nav_target(&view), Some(StellarId(128)));
+        view.take_sounds();
+        tap(&mut view, HAIL_KEY);
+        assert_eq!(view.take_hail(), None);
+        assert_eq!(view.take_offer(), None);
+        assert_eq!(view.message(), None, "the planet comm dialog is not built");
+        assert_eq!(view.take_sounds(), [], "an answer beeps nothing");
+    }
+
+    #[test]
+    fn y_with_an_uninhabited_stellar_selected_says_no_response() {
+        let mut view = flight_among(vec![site(
+            128,
+            (0.0, -600.0),
+            StellarFlags::CAN_LAND | StellarFlags::UNINHABITED,
+        )]);
+        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        tap(&mut view, HAIL_KEY);
+        assert_eq!(view.take_hail(), None);
+        assert_lasts(&mut view, NO_RESPONSE, 240);
+    }
+
+    #[test]
+    fn alt_y_hails_the_selected_stellar_over_the_ship_target() {
+        let mut view = hailable(true);
+        tap(&mut view, STELLAR_SLOT_KEYS[0][0]);
+        assert_eq!(nav_target(&view), Some(StellarId(128)));
+        alt_tap(&mut view, HAIL_KEY);
+        assert_eq!(view.take_hail(), None, "no comm dialog for the ship");
+        assert_eq!(view.message(), None);
+        tap(&mut view, HAIL_KEY);
+        assert!(view.take_hail().is_some(), "Y alone hails the ship");
     }
 
     #[test]

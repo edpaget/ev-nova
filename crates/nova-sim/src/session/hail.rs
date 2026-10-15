@@ -1,10 +1,17 @@
 //! Hailing ships in flight: the session's side of [`hail`](crate::hail).
 //!
-//! The comm key hails the target through [`Session::open_hail`]: a person
-//! whose `LinkMission` is available offers it in place of the comm
-//! dialog, and no conversation opens (see the `person_offers` module).
-//! Any other target, or a person who may join under
-//! [`RuleKey::PersonJoin`]'s other reading, opens the comm dialog.
+//! The comm key hails through [`Session::hail_key`] (or
+//! [`Session::open_hail`], Option not held). With no ship target, or
+//! with Option held, it hails the navigation stellar: one that answers
+//! ([`landing::answers_hail`]) gives
+//! [`Hailed::Stellar`](super::Hailed::Stellar), where the original opens
+//! its comm dialog (`_DoPlanetCommDialog` @0x6204b, not built), and any
+//! other says "No response."; with none there is nothing to hail. Else
+//! it hails the ship target: a person whose `LinkMission` is available
+//! offers it in place of the comm dialog, and no conversation opens (see
+//! the `person_offers` module). Any other target, or a person who may
+//! join under [`RuleKey::PersonJoin`]'s other reading, opens the comm
+//! dialog.
 //!
 //! The player hails its target ([`Session::hail`]); the conversation
 //! stays open until the player hangs up ([`Session::hang_up`]), lands, or
@@ -61,7 +68,7 @@
 use super::Session;
 use crate::ai::Goal;
 use crate::board::MAX_ESCORTS;
-use crate::catalog::{CommCatalog, MissionId};
+use crate::catalog::{CommCatalog, MissionId, StellarId};
 use crate::chance::Chance;
 use crate::combat::ShipRef;
 use crate::combat::armament::Trigger;
@@ -72,6 +79,7 @@ use crate::hail::{
     attitude, reply,
 };
 use crate::hyperspace::JUMP_FUEL;
+use crate::landing;
 use crate::mission::goals::ShipGoal;
 use crate::mission::ships::ShipBehav;
 use crate::person::{COMM_QUOTES, offers_to_join};
@@ -79,6 +87,15 @@ use crate::rank;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::sound::SimSound;
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
+
+/// What the comm key hails ([`Session::hail_target`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HailTarget {
+    /// The ship target.
+    Ship(NpcId),
+    /// The navigation stellar.
+    Stellar(StellarId),
+}
 
 /// A hail under way: the NPC hailed, the conversation, what it last
 /// said, and the price it asks while the player haggles.
@@ -121,8 +138,10 @@ impl Session {
     /// # Errors
     ///
     /// The [`HailRefusal`] that applies, drawing nothing:
-    /// [`HailRefusal::NoTarget`] with no target, or while landed, jumping
-    /// or breaking up; [`HailRefusal::InHyperspace`] for a target still
+    /// [`HailRefusal::NoTarget`] with no ship target (the comm key hails
+    /// the navigation stellar then, [`Session::hail_key`]), or while
+    /// landed, jumping or breaking up; [`HailRefusal::InHyperspace`] for a
+    /// target still
     /// jumping in, unless it is disabled; and [`HailRefusal::NoResponse`]
     /// for a disabled or mute one, a mute one still jumping in being in
     /// hyperspace (@0x62089-0x6209c, @0x62610-0x62676). Each beeps
@@ -134,7 +153,7 @@ impl Session {
         chance: &mut dyn Chance,
     ) -> Result<HailView, HailRefusal> {
         self.talk = None;
-        self.beep_unanswered()?;
+        self.beep_unanswered(self.answering().map(|npc| npc.id))?;
         let npc = self.answering()?;
         let dispositions = self.dispositions(npc);
         let escort = npc.escort.is_some();
@@ -173,30 +192,48 @@ impl Session {
         self.hailing(catalog, options).ok_or(HailRefusal::NoTarget)
     }
 
-    /// [`Session::answering`]'s refusal, if any, beeping
-    /// [`SimSound::HailRefused`] once with it, as every refusal of
-    /// `_HandlePlayerCommunication` plays `_beepSnd[3]` (@0x626cf,
-    /// @0x6206c, @0x6261c, @0x6264e).
-    pub(super) fn beep_unanswered(&mut self) -> Result<(), HailRefusal> {
-        let refused = self.answering().err();
-        match refused {
-            Some(refusal) => {
-                self.sounds.push(SimSound::HailRefused);
-                Err(refusal)
-            }
-            None => Ok(()),
+    /// `answered`, beeping [`SimSound::HailRefused`] once with its
+    /// refusal, if any, as every refusal of `_HandlePlayerCommunication`
+    /// plays `_beepSnd[3]` (@0x626cf, @0x6206c, @0x6261c, @0x6264e).
+    pub(super) fn beep_unanswered<T>(
+        &mut self,
+        answered: Result<T, HailRefusal>,
+    ) -> Result<T, HailRefusal> {
+        if answered.is_err() {
+            self.sounds.push(SimSound::HailRefused);
         }
+        answered
     }
 
-    /// The player's target, when it answers a hail, drawing nothing:
-    /// otherwise [`HailRefusal::NoTarget`] with no target, or while landed,
-    /// jumping or breaking up; [`HailRefusal::InHyperspace`] for a target
-    /// still jumping in, unless it is disabled; and
-    /// [`HailRefusal::NoResponse`] for a disabled one, jumping in or not,
-    /// or a mute one that has arrived, an escort answering whatever its
-    /// government says but not in an escape pod ([`ESCAPE_POD_SHIP`],
-    /// class 0x2ff, mute whoever leads it, @0x62145).
-    pub(super) fn answering(&self) -> Result<&Npc, HailRefusal> {
+    /// What the comm key hails, Option held as `option` says, drawing
+    /// nothing, in `_HandlePlayerCommunication`'s order (@0x61f48-0x6209c):
+    /// [`HailRefusal::NoTarget`] while landed, jumping or breaking up;
+    /// then, with no ship target or Option held (`_QuickKeyCheck(0x3a)`
+    /// @0x61f91-0x61fa6), the navigation stellar
+    /// ([`Session::nav_target`]) when it is shown in the system (its
+    /// active byte, +0x44 @0x62009) and [answers](landing::answers_hail),
+    /// else [`HailRefusal::NoResponse`] (@0x6261c), and
+    /// [`HailRefusal::NoTarget`] with none (@0x6206c); else the ship
+    /// target as [`Session::answering`] says.
+    pub(super) fn hail_target(&self, option: bool) -> Result<HailTarget, HailRefusal> {
+        self.player_hails()?;
+        if self.target().is_some() && !option {
+            return self.answering().map(|npc| HailTarget::Ship(npc.id));
+        }
+        let stellar = self.nav_target.ok_or(HailRefusal::NoTarget)?;
+        self.sites
+            .iter()
+            .find(|site| site.id == stellar)
+            .filter(|site| landing::answers_hail(site))
+            .map(|_| HailTarget::Stellar(stellar))
+            .ok_or(HailRefusal::NoResponse)
+    }
+
+    /// Whether the player may hail at all: [`HailRefusal::NoTarget`]
+    /// while landed, jumping (+0x50 @0x61f87) or breaking up (`_IsDying`
+    /// @0x61f75). The original refuses a cloaked player first
+    /// (`_ShipIsCloaked` @0x61f65); the player has no cloak yet.
+    fn player_hails(&self) -> Result<(), HailRefusal> {
         let flying = !matches!(
             self.condition,
             Condition::Dying { .. } | Condition::Destroyed
@@ -204,6 +241,19 @@ impl Session {
         if self.landed.is_some() || self.jumping().is_some() || !flying {
             return Err(HailRefusal::NoTarget);
         }
+        Ok(())
+    }
+
+    /// The player's ship target, when it answers a hail, drawing nothing:
+    /// otherwise [`HailRefusal::NoTarget`] with no ship target, or while
+    /// landed, jumping or breaking up; [`HailRefusal::InHyperspace`] for a
+    /// target still jumping in, unless it is disabled; and
+    /// [`HailRefusal::NoResponse`] for a disabled one, jumping in or not,
+    /// or a mute one that has arrived, an escort answering whatever its
+    /// government says but not in an escape pod ([`ESCAPE_POD_SHIP`],
+    /// class 0x2ff, mute whoever leads it, @0x62145).
+    pub(super) fn answering(&self) -> Result<&Npc, HailRefusal> {
+        self.player_hails()?;
         let npc = self.target().ok_or(HailRefusal::NoTarget)?;
         // `_HandlePlayerCommunication` refuses a target whose hyperspace
         // state (+0x50) is above 0 (@0x62089-0x6209c) before it reads the
@@ -656,6 +706,7 @@ mod tests {
     use crate::govt::XENOPHOBIC;
     use crate::hail::{Answer, BRIBABLE_WARSHIPS, HailOption, MUTE, UNTALKATIVE};
     use crate::handling::ShipFields;
+    use crate::landing::StellarFlags;
     use crate::reserves::Gauge;
     use crate::rulebook::{RuleKey, RuleSource, Rulebook};
     use crate::testkit::{Draws, FAST, FakePilotCatalog, govt, land_now, ship};
@@ -1012,6 +1063,142 @@ mod tests {
             &HailOptions::default(),
             &mut Draws::of(&opening(0)),
         )
+    }
+
+    // Hailing the navigation stellar (@0x61f91-0x6206c).
+
+    /// Presses the comm key, Option held as `option` says, its
+    /// conversation in variant 0: what it opened, the draws asked and
+    /// the sounds made.
+    fn key_with(
+        session: &mut Session,
+        catalog: &FakePilotCatalog,
+        option: bool,
+    ) -> (
+        Result<super::super::Hailed, HailRefusal>,
+        Vec<u32>,
+        Vec<crate::SimSound>,
+    ) {
+        session.take_sounds();
+        let mut chance = Draws::of(&opening(0));
+        let hailed = session.hail_key(catalog, &HailOptions::default(), option, &mut chance);
+        (hailed, chance.asked, session.take_sounds())
+    }
+
+    /// `catalog`'s session with nothing targeted but planet 128, which
+    /// the system shows, its navigation target, its `Flags` `flags` and
+    /// `Flags2` `flags2`.
+    fn at_stellar(catalog: &FakePilotCatalog, flags: u32, flags2: u16) -> Session {
+        let mut session = targeting(catalog);
+        session.target = None;
+        session.nav_target = Some(StellarId(128));
+        let site = session
+            .sites
+            .iter_mut()
+            .find(|site| site.id == StellarId(128))
+            .expect("shown");
+        site.flags = flags;
+        site.flags2 = flags2;
+        session
+    }
+
+    #[test]
+    fn with_no_ship_target_a_dockable_inhabited_nav_stellar_answers_silently() {
+        let catalog = hailable();
+        let mut session = at_stellar(&catalog, StellarFlags::CAN_LAND, 0);
+        session.talk = Some(Talk::opened(NpcId(0)));
+        let (hailed, asked, sounds) = key_with(&mut session, &catalog, false);
+        assert_eq!(
+            hailed,
+            Ok(super::super::Hailed::Stellar(StellarId(128))),
+            "_DoPlanetCommDialog's seam (@0x6204b)"
+        );
+        assert!(asked.is_empty(), "{asked:?}");
+        assert_eq!(sounds, [], "the dialog path plays nothing");
+        assert!(
+            session.hailing(&catalog, &HailOptions::default()).is_none(),
+            "the hail under way ends, and none opens"
+        );
+    }
+
+    #[test]
+    fn with_no_ship_target_a_nav_stellar_that_cannot_answer_gives_no_response() {
+        use crate::gate::{HYPERGATE, WORMHOLE};
+        let catalog = hailable();
+        let land = StellarFlags::CAN_LAND;
+        let mut hidden = Box::new(at_stellar(&catalog, land, 0));
+        hidden.sites.retain(|site| site.id != StellarId(128));
+        for (mut session, why) in [
+            (
+                Box::new(at_stellar(&catalog, land | StellarFlags::UNINHABITED, 0)),
+                "uninhabited",
+            ),
+            (Box::new(at_stellar(&catalog, 0, 0)), "not landable"),
+            (
+                Box::new(at_stellar(&catalog, land, HYPERGATE)),
+                "a hypergate",
+            ),
+            (Box::new(at_stellar(&catalog, land, WORMHOLE)), "a wormhole"),
+            (hidden, "not active (+0x44 @0x62009)"),
+        ] {
+            let (hailed, asked, sounds) = key_with(&mut session, &catalog, false);
+            assert_eq!(hailed, Err(HailRefusal::NoResponse), "{why}: @0x6261c");
+            assert!(asked.is_empty(), "{why}: {asked:?}");
+            assert_eq!(sounds, [crate::SimSound::HailRefused], "{why}");
+        }
+    }
+
+    #[test]
+    fn with_no_ship_target_and_no_nav_stellar_there_is_nothing_to_hail() {
+        let catalog = hailable();
+        let mut session = at_stellar(&catalog, StellarFlags::CAN_LAND, 0);
+        session.nav_target = None;
+        let (hailed, asked, sounds) = key_with(&mut session, &catalog, false);
+        assert_eq!(hailed, Err(HailRefusal::NoTarget), "@0x6206c");
+        assert!(asked.is_empty(), "{asked:?}");
+        assert_eq!(sounds, [crate::SimSound::HailRefused]);
+    }
+
+    #[test]
+    fn option_held_hails_the_nav_stellar_over_the_ship_target() {
+        let catalog = hailable();
+        let mut session = at_stellar(&catalog, StellarFlags::CAN_LAND, 0);
+        session.target = Some(NpcId(0));
+        let (hailed, asked, sounds) = key_with(&mut session, &catalog, true);
+        assert_eq!(hailed, Ok(super::super::Hailed::Stellar(StellarId(128))));
+        assert!(asked.is_empty(), "the ship is not hailed: {asked:?}");
+        assert_eq!(sounds, []);
+        assert!(session.hailing(&catalog, &HailOptions::default()).is_none());
+    }
+
+    #[test]
+    fn option_held_with_no_nav_stellar_has_nothing_to_hail_whatever_the_ship_target() {
+        let catalog = hailable();
+        let mut session = targeting(&catalog);
+        let (hailed, asked, sounds) = key_with(&mut session, &catalog, true);
+        assert_eq!(hailed, Err(HailRefusal::NoTarget), "@0x6206c");
+        assert!(asked.is_empty(), "{asked:?}");
+        assert_eq!(sounds, [crate::SimSound::HailRefused]);
+    }
+
+    #[test]
+    fn option_held_while_landed_jumping_or_dying_hails_nothing() {
+        let catalog = hailable();
+        let mut landed = Box::new(at_stellar(&catalog, StellarFlags::CAN_LAND, 0));
+        landed.landed = Some(StellarId(128));
+        let mut jumping = Box::new(at_stellar(&catalog, StellarFlags::CAN_LAND, 0));
+        jumping.jump = Some(crate::session::Jump::Hyperspace(SystemId(131)));
+        let mut dying = Box::new(at_stellar(&catalog, StellarFlags::CAN_LAND, 0));
+        dying.condition = Condition::Dying { ticks_left: 3 };
+        for mut session in [landed, jumping, dying] {
+            session.target = Some(NpcId(0));
+            for option in [false, true] {
+                let (hailed, asked, sounds) = key_with(&mut session, &catalog, option);
+                assert_eq!(hailed, Err(HailRefusal::NoTarget), "option {option}");
+                assert!(asked.is_empty(), "{asked:?}");
+                assert_eq!(sounds, [crate::SimSound::HailRefused]);
+            }
+        }
     }
 
     #[test]
@@ -2295,7 +2482,7 @@ mod tests {
                 .map(|button| button.label)
                 .collect(),
             Ok(super::super::Hailed::Offer(_)) => vec!["the offer".to_owned()],
-            Err(refusal) => panic!("{refusal:?}"),
+            hailed => panic!("{hailed:?}"),
         }
     }
 

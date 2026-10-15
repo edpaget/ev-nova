@@ -368,9 +368,9 @@ impl Answer {
 /// Why a hail went unanswered (`_HandlePlayerCommunication` @0x61f48).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HailRefusal {
-    /// There is no ship to hail: no ship target, or the player is landed,
-    /// jumping or breaking up. Nothing is said. (With no ship target the
-    /// original hails the navigation planet; that is not done here.)
+    /// There is nothing to hail: no ship target and no navigation
+    /// stellar, or Option held and no navigation stellar (@0x6206c), or
+    /// the player is landed, jumping or breaking up. Nothing is said.
     NoTarget,
     /// "No response." (`STR#` 2002 #53): the target is disabled, even
     /// while still jumping in (@0x62610-0x62644), or mute (see

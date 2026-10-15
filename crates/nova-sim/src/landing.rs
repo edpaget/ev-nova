@@ -415,6 +415,18 @@ pub fn is_dockable(site: &LandingSite) -> bool {
     GateKind::of(site.flags2).is_none() && is_landable(site)
 }
 
+/// Whether `site`, the player's navigation target, answers a hail with
+/// its comm dialog: it is [dockable](is_dockable) and not
+/// [uninhabited](StellarFlags::UNINHABITED), as
+/// `_HandlePlayerCommunication` reads it (`_StellarIsLandable` @0x61fda,
+/// `Flags` 0x20 @0x61fe5, `Flags2` 0x3000 @0x61fff-0x62006). Its active
+/// byte (+0x44 @0x62009) is the session's to test: a stellar shown in the
+/// player's system.
+#[must_use]
+pub fn answers_hail(site: &LandingSite) -> bool {
+    is_dockable(site) && !has(site, StellarFlags::UNINHABITED)
+}
+
 /// Whether a pilot may be docked at `site` whatever its destroyed state:
 /// it has the can-land flag and is no hypergate or wormhole. Being
 /// destroyed, or landable only once destroyed, does not count: a landed
@@ -879,6 +891,39 @@ mod tests {
         );
         assert!(!is_dockable(&gate(HYPERGATE)), "a hypergate");
         assert!(!is_dockable(&gate(WORMHOLE)), "a wormhole");
+    }
+
+    #[test]
+    fn a_hail_is_answered_by_a_dockable_inhabited_stellar_alone() {
+        use crate::gate::{HYPERGATE, WORMHOLE};
+        let gate = |flags2| LandingSite {
+            flags2,
+            ..with_flags(StellarFlags::CAN_LAND)
+        };
+        assert!(answers_hail(&with_flags(StellarFlags::CAN_LAND)));
+        assert!(!answers_hail(&with_flags(0)), "not landable");
+        assert!(
+            !answers_hail(&LandingSite {
+                destroyed: true,
+                ..with_flags(StellarFlags::CAN_LAND)
+            }),
+            "destroyed"
+        );
+        assert!(
+            answers_hail(&LandingSite {
+                destroyed: true,
+                ..with_flags(StellarFlags::CAN_LAND | StellarFlags::ONLY_WHEN_DESTROYED)
+            }),
+            "landable only once destroyed, and destroyed"
+        );
+        assert!(
+            !answers_hail(&with_flags(
+                StellarFlags::CAN_LAND | StellarFlags::UNINHABITED
+            )),
+            "uninhabited"
+        );
+        assert!(!answers_hail(&gate(HYPERGATE)), "a hypergate");
+        assert!(!answers_hail(&gate(WORMHOLE)), "a wormhole");
     }
 
     #[test]

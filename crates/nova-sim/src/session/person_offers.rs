@@ -24,11 +24,16 @@
 //! left of, after `OnAccept`, whatever the goal, the person is swapped
 //! for that ship as the settling begins (see the `mission_ships`
 //! module). Only the hail swaps: a boarding never does.
+//!
+//! **The hail** ([`Session::hail_key`]) offers only when it hails a ship:
+//! with no ship target, or with Option held, the comm key hails the
+//! navigation stellar instead ([`Hailed::Stellar`]), and no person is
+//! asked.
 
 use std::collections::BTreeMap;
 
 use super::Session;
-use super::hail::make_leave;
+use super::hail::{HailTarget, make_leave};
 use crate::catalog::{CommCatalog, MissionId, PersonId, StellarId};
 use crate::chance::{Chance, NeverFires};
 use crate::hail::{Conversation, HailOptions, HailRefusal, HailView};
@@ -74,6 +79,11 @@ pub enum Hailed {
     /// (`_OfferOneMission` @0x62293): the offer dialog, or the mission
     /// accepted at once.
     Offer(VenueOffer),
+    /// The navigation stellar, which answers: the original opens its comm
+    /// dialog here (`_DoPlanetCommDialog` @0x6204b). The engine has no
+    /// planet comm dialog yet (rdm:task/planet-domination), so this is
+    /// the seam where it opens. No sound plays.
+    Stellar(StellarId),
 }
 
 impl Session {
@@ -139,30 +149,58 @@ impl Session {
         self.ship_offers.get(&mission)
     }
 
-    /// Hails the player's target as the original's comm key does
-    /// (`_HandlePlayerCommunication` @0x61f48; see the module docs): a
-    /// person whose mission is offered on its hail offers it, drawing on
-    /// `chance`, in place of the comm dialog, and no conversation opens;
-    /// any other target opens the comm dialog ([`Session::hail`]), with
-    /// `options` listed and the replies read from `catalog`. A person who
-    /// may join opens the comm dialog when `options` list a way to join
-    /// for it ([`HailOptions::lists_join`]). Any hail under way ends. An
-    /// offer beeps [`SimSound::HailOffer`](crate::SimSound::HailOffer)
-    /// (@0x62232-0x6223d).
+    /// Hails as the original's comm key does, Option not held: see
+    /// [`Session::hail_key`].
     ///
     /// # Errors
     ///
-    /// [`Session::hail`]'s refusals, first, drawing nothing and beeping
-    /// once.
+    /// As [`Session::hail_key`].
     pub fn open_hail(
         &mut self,
         catalog: &(impl CommCatalog + ?Sized),
         options: &HailOptions,
         chance: &mut dyn Chance,
     ) -> Result<Hailed, HailRefusal> {
+        self.hail_key(catalog, options, false, chance)
+    }
+
+    /// Hails as the original's comm key does, with Option held as
+    /// `option` says (`_HandlePlayerCommunication` @0x61f48; see the
+    /// module docs). With no ship target, or with Option held, it hails
+    /// the navigation stellar ([`Hailed::Stellar`]) when that answers
+    /// ([`landing::answers_hail`](crate::landing::answers_hail)),
+    /// drawing nothing and making no sound. Otherwise it hails the ship
+    /// target: a person whose mission is offered on its hail offers it,
+    /// drawing on `chance`, in place of the comm dialog, and no
+    /// conversation opens; any other target opens the comm dialog
+    /// ([`Session::hail`]), with `options` listed and the replies read
+    /// from `catalog`. A person who may join opens the comm dialog when
+    /// `options` list a way to join for it ([`HailOptions::lists_join`]).
+    /// Any hail under way ends. An offer beeps
+    /// [`SimSound::HailOffer`](crate::SimSound::HailOffer)
+    /// (@0x62232-0x6223d).
+    ///
+    /// # Errors
+    ///
+    /// The [`HailRefusal`] that applies, first, drawing nothing and
+    /// beeping [`SimSound::HailRefused`](crate::SimSound::HailRefused)
+    /// once: [`HailRefusal::NoTarget`] while landed, jumping or breaking
+    /// up, or with no navigation stellar on the stellar path;
+    /// [`HailRefusal::NoResponse`] for a navigation stellar that does not
+    /// answer, or one not shown; and [`Session::hail`]'s refusals of the
+    /// ship target.
+    pub fn hail_key(
+        &mut self,
+        catalog: &(impl CommCatalog + ?Sized),
+        options: &HailOptions,
+        option: bool,
+        chance: &mut dyn Chance,
+    ) -> Result<Hailed, HailRefusal> {
         self.talk = None;
         // Beeps here once: once answering, it answers in `hail` too.
-        self.beep_unanswered()?;
+        if let HailTarget::Stellar(stellar) = self.beep_unanswered(self.hail_target(option))? {
+            return Ok(Hailed::Stellar(stellar));
+        }
         let npc = self.answering()?;
         let offered = self
             .person_offering(npc, OfferedBy::Hail)
