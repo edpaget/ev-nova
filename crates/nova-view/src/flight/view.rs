@@ -21916,7 +21916,7 @@ mod tests {
     // The floating map.
 
     use crate::flight::floating;
-    use crate::galaxy::map::{CURRENT, DOT_SIZE, HYPER_SELECTED, LINK};
+    use crate::galaxy::map::{CURRENT, DOT_SIZE, HYPER_SELECTED, LINK, ROUTE, ROUTE_WIDTH};
     use nova_sim::mission::screens::mac_ticks;
 
     /// The floating map's frame's centre, where Sol is drawn.
@@ -22422,6 +22422,45 @@ mod tests {
         assert_eq!(
             selected,
             [(at(693.0, 278.0), at(814.0, 278.0))],
+            "from the edge of Sol's mark to the frame's"
+        );
+        assert!(
+            !list.iter().any(|command| matches!(command,
+                DrawCommand::Line { color, .. } if *color == LINK)),
+            "the link under it is left out"
+        );
+    }
+
+    #[test]
+    fn the_floating_map_draws_the_sessions_course_as_it_is_now() {
+        let mut view = flight();
+        view.session
+            .as_mut()
+            .expect("flying")
+            .plot_course(SystemId(131))
+            .expect("a route");
+        assert_eq!(
+            view.course_map().route(),
+            [],
+            "the course map never shown it"
+        );
+        tap(&mut view, HYPERSPACE_MODE_KEY);
+        let list = drawn(&view);
+        let route: Vec<(Point, Point, f32)> = list
+            .iter()
+            .filter_map(|command| match *command {
+                DrawCommand::Line {
+                    from,
+                    to,
+                    width,
+                    color,
+                } if color == ROUTE => Some((from, to, width)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            route,
+            [(at(693.0, 278.0), at(814.0, 278.0), ROUTE_WIDTH)],
             "from the edge of Sol's mark to the frame's"
         );
         assert!(
