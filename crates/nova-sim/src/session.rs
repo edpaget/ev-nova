@@ -2566,7 +2566,7 @@ impl Session {
 
     /// Sets the player's condition directly, for
     /// [`fixture::set_player_condition`](crate::fixture::set_player_condition).
-    #[cfg(feature = "fixture")]
+    #[cfg(any(test, feature = "fixture"))]
     pub(crate) fn set_player_condition(&mut self, to: Condition) {
         self.condition = to;
     }

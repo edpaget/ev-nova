@@ -253,7 +253,16 @@ impl PilotStore for MemoryPilots {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::planet;
+    use crate::testkit::{catalog, planet};
+
+    #[test]
+    fn setting_the_players_condition_downs_and_repairs_it() {
+        let mut session = Session::start(&catalog()).expect("starts");
+        set_player_condition(&mut session, Condition::Disabled);
+        assert_eq!(session.player_condition(), Condition::Disabled);
+        set_player_condition(&mut session, Condition::Intact);
+        assert_eq!(session.player_condition(), Condition::Intact);
+    }
 
     #[test]
     fn the_listed_stellars_are_every_site_by_id_with_every_system_listing_it() {
