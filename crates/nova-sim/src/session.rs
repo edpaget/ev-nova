@@ -1028,7 +1028,11 @@ impl Session {
     /// refresh does (see the [`story`](crate::story) module's "Visibility
     /// and governments").
     ///
-    /// A pilot last landed on a stellar of its system resumes docked there,
+    /// A pilot last landed on a stellar that some system lists resumes in
+    /// the system that stellar decides (`resume_system`), not the one it
+    /// was saved in, as `_LoadPilotData` sets the system from the stellar
+    /// alone (@0x7525b-0x75316); one whose stellar no system lists keeps
+    /// its saved system. It resumes docked at that stellar,
     /// silently, as the original resumes a pilot at its last planet, the
     /// spaceport opening with its ranks' price multipliers (see the
     /// `ranks` module); so
@@ -1041,7 +1045,8 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// When the ship cannot be read, or the system no longer exists.
+    /// When the ship cannot be read, or the system the pilot resumes in
+    /// (its stellar's, else its saved one) no longer exists.
     #[allow(clippy::too_many_lines)] // one line for each of the session's fields
     pub fn fly(
         catalog: &(impl PilotCatalog + CombatCatalog),
@@ -1051,10 +1056,21 @@ impl Session {
         let fields = catalog
             .ship_fields(ship)
             .map_err(|reason| StartError::Ship(ship, reason))?;
+        // Built first, from the star map and the saved overlay alone: the
+        // resume reads the saved visibility, as `leave_hidden` does, both
+        // standing in for the load's first refresh (@0x751ca, @0x751cf).
+        let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone());
+        let listed = catalog.listed_stellars();
+        if let Some(system) = pilot
+            .stellar
+            .and_then(|stellar| listed.iter().find(|listed| listed.id == stellar))
+            .and_then(|listed| resume_system(&galaxy, &listed.systems))
+        {
+            pilot.system = system;
+        }
         if !catalog.system_exists(pilot.system) {
             return Err(StartError::NoSystem(pilot.system));
         }
-        let mut galaxy = OverlaidGalaxy::new(catalog.star_map(), pilot.galaxy.clone());
         // A load is one of the original's refresh points: a pilot in a
         // hidden system flies from the one standing for it, silently.
         story::leave_hidden(&mut pilot, &mut galaxy);
@@ -1215,7 +1231,7 @@ impl Session {
                 .into_iter()
                 .map(|texts| (texts.id, texts))
                 .collect(),
-            listed_stellars: catalog.listed_stellars(),
+            listed_stellars: listed,
             visibility: catalog.system_visibility().into(),
             galaxy_stale: false,
             place_names: catalog.place_names(),
@@ -4797,6 +4813,38 @@ fn listed(outfitter: Option<&Outfitter>) -> Vec<OutfitId> {
     })
 }
 
+/// The system a pilot resumes in from the stellar it last landed on,
+/// which `listers` list (its
+/// [`ListedStellar::systems`](crate::catalog::ListedStellar::systems), by
+/// ascending ID), as `_LoadPilotData` sets the player's system from the
+/// stellar's +0x14 alone (@0x7525b-0x75316); `None` when no system lists
+/// it. The first that applies:
+///
+/// 1. Its owner ([`OverlaidGalaxy::owner`]), as `_PropagateMissionBitEffects`
+///    gives it at the load's first refresh (@0x751ca, @0x99684-0x997bd).
+/// 2. System 128 when it lists the stellar, hidden or shadowed: the first
+///    refresh's `_HandleStellarSystemVisibility` gives an unowned stellar
+///    the player's system's ID when that system lists it, before any
+///    visibility test (@0x32c58-0x32ca1), and `_ResetPlayer` has just set
+///    that system to 128 (@0x1d485). A 128 the catalog lacks lists
+///    nothing, so it needs no existence test.
+/// 3. The lowest visible lister, shadowed or not, and
+/// 4. the lowest of any kind, even hidden: `_FindSystemFromStellar`'s two
+///    passes (@0x7edc-0x7f56).
+fn resume_system(galaxy: &OverlaidGalaxy, listers: &[SystemId]) -> Option<SystemId> {
+    const RESET_SYSTEM: SystemId = SystemId(128);
+    galaxy
+        .owner(listers)
+        .or_else(|| listers.contains(&RESET_SYSTEM).then_some(RESET_SYSTEM))
+        .or_else(|| {
+            listers
+                .iter()
+                .copied()
+                .find(|&system| galaxy.exists(system) && galaxy.visible(system))
+        })
+        .or_else(|| listers.first().copied())
+}
+
 /// Where `pilot`, flown among its system's stellars `here`, resumes
 /// docked: the stellar it last landed on, if it is among them; else, if
 /// it is another system's at the same place, one the overlay hid and moved
@@ -6604,14 +6652,174 @@ pub(super) mod tests {
     #[test]
     fn flying_a_pilot_in_a_system_that_no_longer_exists_is_an_error() {
         let pilot = landed_pilot(&catalog());
+        // 130 is gone with its stellars, so no system lists 128 either.
         let gone = FakePilotCatalog {
             systems: vec![SystemId(131)],
+            sites: vec![(SystemId(131), vec![planet(140, 0.0, 0.0)])],
             ..catalog()
         };
         assert_eq!(
             Session::fly(&gone, pilot),
             Err(StartError::NoSystem(SystemId(130)))
         );
+    }
+
+    /// [`catalog`] with 131's planet 140 at (50, 60), off its centre.
+    fn off_centre() -> FakePilotCatalog {
+        FakePilotCatalog {
+            sites: vec![
+                (
+                    SystemId(130),
+                    vec![planet(128, 30.0, -40.0), planet(129, 2000.0, 0.0)],
+                ),
+                (SystemId(131), vec![planet(140, 50.0, 60.0)]),
+            ],
+            ..catalog()
+        }
+    }
+
+    #[test]
+    fn flying_a_pilot_whose_stellar_another_system_owns_resumes_docked_there() {
+        let catalog = off_centre();
+        let mut pilot = landed_pilot(&catalog);
+        pilot.stellar = Some(StellarId(140));
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.pilot().system(), SystemId(131));
+        assert_eq!(session.system(), SystemId(131));
+        assert_eq!(session.landed(), Some(StellarId(140)));
+        assert_eq!(session.player().position, Vec2::new(50.0, 60.0));
+        session.assert_docked_among_shown();
+    }
+
+    #[test]
+    fn flying_a_pilot_whose_system_is_gone_resumes_in_its_stellars_owner() {
+        let mut catalog = off_centre();
+        let mut pilot = landed_pilot(&catalog);
+        pilot.stellar = Some(StellarId(140));
+        catalog.systems = vec![SystemId(131)];
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.pilot().system(), SystemId(131));
+        assert_eq!(session.landed(), Some(StellarId(140)));
+        assert_eq!(session.player().position, Vec2::new(50.0, 60.0));
+        session.assert_docked_among_shown();
+    }
+
+    #[test]
+    fn a_stellar_its_saved_system_lists_but_another_owns_resumes_at_the_owner() {
+        // 130 lists 140 too, at its own place, lower than 131.
+        let catalog = FakePilotCatalog {
+            sites: vec![
+                (
+                    SystemId(130),
+                    vec![planet(128, 30.0, -40.0), planet(140, 70.0, 80.0)],
+                ),
+                (SystemId(131), vec![planet(140, 50.0, 60.0)]),
+            ],
+            ..catalog()
+        };
+        let mut pilot = landed_pilot(&catalog);
+        pilot.system = SystemId(131);
+        pilot.stellar = Some(StellarId(140));
+        let session = Session::fly(&catalog, pilot).expect("flies");
+        assert_eq!(session.pilot().system(), SystemId(130));
+        assert_eq!(session.landed(), Some(StellarId(140)));
+        assert_eq!(session.player().position, Vec2::new(70.0, 80.0));
+        session.assert_docked_among_shown();
+    }
+
+    /// `systems`, each `(id, place)`, with every system the overlay
+    /// hides in `hidden`.
+    fn galaxy_of(systems: &[(i16, (f32, f32))], hidden: &[i16]) -> OverlaidGalaxy {
+        let mut overlay = crate::story::GalaxyOverlay::default();
+        for &system in hidden {
+            overlay.set_visible(SystemId(system), Some(false));
+        }
+        OverlaidGalaxy::new(
+            systems
+                .iter()
+                .map(|&(id, place)| star(id, place, &[]))
+                .collect(),
+            overlay,
+        )
+    }
+
+    fn systems(ids: &[i16]) -> Vec<SystemId> {
+        ids.iter().copied().map(SystemId).collect()
+    }
+
+    #[test]
+    fn resume_system_takes_the_owner_first() {
+        let both = galaxy_of(&[(128, (0.0, 0.0)), (200, (100.0, 0.0))], &[]);
+        assert_eq!(
+            resume_system(&both, &systems(&[128, 200])),
+            Some(SystemId(128))
+        );
+        let hidden_128 = galaxy_of(&[(128, (0.0, 0.0)), (129, (50.0, 0.0))], &[128]);
+        assert_eq!(
+            resume_system(&hidden_128, &systems(&[128, 129])),
+            Some(SystemId(129)),
+            "the owner over a 128 that doesn't own it"
+        );
+        let shadowed_128 = galaxy_of(
+            &[(127, (0.0, 0.0)), (128, (0.0, 0.0)), (129, (50.0, 0.0))],
+            &[],
+        );
+        assert_eq!(
+            resume_system(&shadowed_128, &systems(&[128, 129])),
+            Some(SystemId(129))
+        );
+    }
+
+    #[test]
+    fn resume_system_takes_128_for_an_unowned_stellar_hidden_or_shadowed() {
+        // 200 is visible but shadowed by 199 at its place: no owner.
+        let hidden_128 = galaxy_of(
+            &[(128, (0.0, 0.0)), (199, (100.0, 0.0)), (200, (100.0, 0.0))],
+            &[128],
+        );
+        assert_eq!(
+            resume_system(&hidden_128, &systems(&[128, 200])),
+            Some(SystemId(128))
+        );
+        let shadowed_128 = galaxy_of(&[(127, (0.0, 0.0)), (128, (0.0, 0.0))], &[]);
+        assert_eq!(
+            resume_system(&shadowed_128, &systems(&[128])),
+            Some(SystemId(128))
+        );
+    }
+
+    #[test]
+    fn resume_system_takes_the_lowest_visible_lister_next() {
+        let galaxy = galaxy_of(
+            &[(150, (0.0, 0.0)), (200, (100.0, 0.0)), (201, (100.0, 0.0))],
+            &[150],
+        );
+        assert_eq!(
+            resume_system(&galaxy, &systems(&[150, 201])),
+            Some(SystemId(201)),
+            "the shadowed 201 over the lower hidden 150"
+        );
+        let gone = galaxy_of(&[(200, (100.0, 0.0)), (201, (100.0, 0.0))], &[]);
+        assert_eq!(
+            resume_system(&gone, &systems(&[150, 201])),
+            Some(SystemId(201)),
+            "a lister not in the galaxy is not visible"
+        );
+    }
+
+    #[test]
+    fn resume_system_takes_the_lowest_lister_of_any_kind_last() {
+        let galaxy = galaxy_of(&[(150, (0.0, 0.0)), (160, (100.0, 0.0))], &[150, 160]);
+        assert_eq!(
+            resume_system(&galaxy, &systems(&[150, 160])),
+            Some(SystemId(150))
+        );
+    }
+
+    #[test]
+    fn resume_system_has_none_without_listers() {
+        let galaxy = galaxy_of(&[(128, (0.0, 0.0))], &[]);
+        assert_eq!(resume_system(&galaxy, &[]), None);
     }
 
     #[test]
