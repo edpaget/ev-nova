@@ -2002,6 +2002,10 @@ pub struct FlightView<C> {
     map: GalaxyMap,
     /// Whether the course map is shown.
     map_open: bool,
+    /// Whether the map shown is the bar's ([`FlightView::open_bar_map`]),
+    /// whose close puts back the nav the bar opened with; cleared as the
+    /// map closes ([`FlightView::close_map`]).
+    bar_map: bool,
     /// The jump's effect, while it holds flight: the streak and the
     /// fade-out, until the ship arrives.
     jump: Option<JumpEffect>,
@@ -2288,6 +2292,7 @@ impl<
             catalog,
             map,
             map_open: false,
+            bar_map: false,
             jump: None,
             fade_in: None,
             death_fade: None,
@@ -2903,6 +2908,7 @@ impl<
     /// [`FlightView::close_map`]'s in port.
     pub fn open_bar_map(&mut self) {
         self.open_map();
+        self.bar_map = true;
     }
 
     /// The input to the map opened in port ([`FlightView::open_bar_map`]):
@@ -3639,15 +3645,17 @@ impl<
     /// the course's next hop ([`Session::cue_course`]), as the original's
     /// map does unless it is the hypergate's (`_DoSystemMap` @0x13c16).
     ///
-    /// Docked, the course map is the bar's ([`FlightView::open_bar_map`]),
-    /// and its close is `_DoSystemMap`'s in port then the bar's: the whole
-    /// bar is redrawn first (`_RefreshSAT` @0x13bc9), showing the nav as
-    /// the map left it; the course is not cued (@0x13be2-0x13c0a skips
-    /// `_CueNextHyperRouteDest` in port); then the nav the bar opened with
-    /// is put back ([`Session::restore_bar_nav`], `_DoBarDialog`
-    /// @0x492b7-0x492d3) with no redraw, as `_UpdateAllPortDialogs`
-    /// (@0x492d7) draws no status. The nav area shows the map's selection
-    /// until the port's next nav redraw, such as the bar's close.
+    /// Docked, its close is `_DoSystemMap`'s in port: the whole bar is
+    /// redrawn (`_RefreshSAT` @0x13bc9), showing the nav as the map left
+    /// it, and the course is not cued (@0x13be2-0x13c0a skips
+    /// `_CueNextHyperRouteDest` in port). When the bar opened it
+    /// ([`FlightView::open_bar_map`]), the bar's close of it follows: the
+    /// nav the bar opened with is put back ([`Session::restore_bar_nav`],
+    /// `_DoBarDialog` @0x492b7-0x492d3) with no redraw, as
+    /// `_UpdateAllPortDialogs` (@0x492d7) draws no status. The nav area
+    /// shows the map's selection until the port's next nav redraw, such
+    /// as the bar's close. A map opened in port any other way puts back
+    /// nothing of the bar's.
     ///
     /// `_DoSystemMap`'s own put-back of +0x6c in port (@0x13bee-0x13c06)
     /// is left out: under the bar, the bar's restore overwrites it before
@@ -3658,12 +3666,13 @@ impl<
         self.map.cancel_pointer();
         self.map.release_keys();
         self.map_open = false;
+        let bar_map = std::mem::take(&mut self.bar_map);
         if self.map.mode() != MapMode::Hypergate {
             if let Ok(session) = &mut self.session
                 && session.landed().is_some()
             {
                 self.redraw_status();
-                if let Ok(session) = &mut self.session {
+                if bar_map && let Ok(session) = &mut self.session {
                     session.restore_bar_nav();
                 }
                 return;
@@ -12706,6 +12715,33 @@ mod tests {
         );
         view.refresh_status();
         assert_eq!(port_nav(&view), naming("Earth"), "the bar's close");
+    }
+
+    /// Only the bar's own map puts back the bar's nav: a map opened in
+    /// port some other way (as from the other port screens will be)
+    /// leaves the nav its click cued, with the bar's save still held,
+    /// even after the bar's own map has opened and closed.
+    #[test]
+    fn a_map_in_port_the_bar_did_not_open_leaves_the_bars_nav_saved() {
+        let mut view = in_the_bar(None);
+        view.open_bar_map();
+        view.port_map_input(&key(MAP, true));
+        assert!(!view.map_open(), "the bar's map closed");
+        view.open_map();
+        port_click(&mut view, 131);
+        view.port_map_input(&key(MAP, true));
+        assert!(!view.map_open());
+        assert_eq!(port_nav(&view), cueing_alpha(), "the map's selection drawn");
+        assert_eq!(
+            view.session().map(Session::nav_mode),
+            Ok(NavMode::Hyperspace(Some(SystemId(131)))),
+            "the bar's nav not put back"
+        );
+        assert_eq!(
+            view.session().map(|session| session.course().to_vec()),
+            Ok(vec![SystemId(131)]),
+            "the course kept"
+        );
     }
 
     #[test]

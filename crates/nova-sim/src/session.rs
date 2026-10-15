@@ -684,7 +684,9 @@ pub struct Session {
     /// ([`Session::save_port_nav`], [`Session::restore_port_nav`]).
     port_nav: Option<NavMode>,
     /// The nav saved as the bar opened, put back after each map opened
-    /// from it ([`Session::open_bar`], [`Session::restore_bar_nav`]).
+    /// from it ([`Session::open_bar`], [`Session::restore_bar_nav`]),
+    /// forgotten with the news at landing and take-off, so no later
+    /// stay can put back a nav saved in an earlier one.
     bar_nav: Option<NavMode>,
     /// The galaxy every reader sees: the catalog's systems, read when the
     /// session starts, with the pilot's overlay (see the
@@ -3509,6 +3511,7 @@ impl Session {
         self.landed = Some(stellar);
         self.pilot.stellar = Some(stellar);
         self.bar_news = None;
+        self.bar_nav = None;
         self.combat.clear();
         // `_HandlePlayerDockRequest` sets `_killBoxes` (@0x66f40).
         self.clear_boxes();
@@ -3635,6 +3638,7 @@ impl Session {
         self.takeoff_nav = Some(self.nav_mode());
         let stay = std::mem::take(&mut self.stay);
         self.bar_news = None;
+        self.bar_nav = None;
         let stay_days = self.rules.source_for(RuleKey::StayDays) == RuleSource::Engine;
         if stay_days {
             self.pass_days(stay.escort_days(), chance);

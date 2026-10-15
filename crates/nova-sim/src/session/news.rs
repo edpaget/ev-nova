@@ -746,6 +746,26 @@ mod tests {
     }
 
     #[test]
+    fn taking_off_or_landing_again_forgets_the_bars_nav() {
+        let catalog = barred(Some(130), vec![]);
+        let mut session = landed(&catalog, lists());
+        assert!(session.open_bar(&mut NeverFires));
+        session.take_off(&NoTraffic, &mut NeverFires);
+        assert_eq!(session.bar_nav, None, "took off");
+        assert_eq!(land_now(&mut session), Ok(StellarId(128)));
+        assert!(session.open_bar(&mut NeverFires));
+        session
+            .land_at(&catalog, SystemId(130), StellarId(128))
+            .expect("lands");
+        assert_eq!(session.bar_nav, None, "landed again");
+        assert!(session.open_bar(&mut NeverFires));
+        session
+            .relocate(&catalog, SystemId(131), StellarId(140))
+            .expect("moves");
+        assert_eq!(session.bar_nav, None, "moved");
+    }
+
+    #[test]
     fn without_a_bar_opened_the_bars_restore_changes_nothing() {
         use crate::navigation::NavMode;
         let catalog = barred(Some(130), Vec::new());
