@@ -124,15 +124,24 @@
 //! eject leaves whether a save is due as it found it, though the class
 //! change, `OnRetire` and the reset's trim would make one due.
 //!
-//! The sprite clones (`_SWCloneFramesFromMaster` @0x6f3f5 for the hulk,
-//! @0x6f768 for the player) are left out here: they belong with the
-//! ship layers' last cloned frames, which this branch does not have yet
-//! (rdm:phase/player-death/phase-16-handle-player-left-out-gates).
+//! **The sprite clones.** `_SWCloneFramesFromMaster` clones the old
+//! class's frames into the hulk's slot once it is added (@0x6f3f5), and
+//! the new class's, the pod's or the escape ship's, into the player's
+//! slot once the class changes (@0x6f768): the
+//! [`SlotFrames`](crate::ship_layer::SlotFrames) a hidden ship's hover
+//! box is sized by (see [`Session::framed_by`]). A shown class's slot
+//! clones the same frames again as the tick lays the ships out; a hidden
+//! one (`Cost` -1) keeps these. The frame index each clone sets (frame
+//! 0) is not modelled, as `SlotFrames` keeps only the sheet. No stock
+//! class is hidden: stock `shïp` 895, the pod, costs 0, and no stock
+//! `shïp` costs -1, so a stock player sees no difference.
+//!
 //! `_keyPressedThisFrame` (@0x6f2d3) and the status-redraw flags
 //! (@0x6f433-0x6f442) have no counterpart.
 
 use super::Session;
 use super::hooks::ShipHook;
+use super::player_led::slot_of;
 use super::ship_change::ClassChange;
 use crate::ai::Goal;
 use crate::bay::launch_velocity;
@@ -153,6 +162,7 @@ use crate::player_fate::{POD_TICKS, PlayerCommand};
 use crate::reserves::shield_points;
 use crate::rulebook::{RuleKey, RuleSource};
 use crate::ship_change::{OutfitCarry, carried_outfits};
+use crate::ship_layer::Slot;
 use crate::sound::{SimSound, WARP_UP_HALTS};
 use crate::traffic::npc::{AiType, Mode, Npc, NpcId};
 use crate::traffic::table;
@@ -240,6 +250,9 @@ impl Session {
         self.collapse_jump();
         let save_due = self.save_due;
         let hulk = self.traffic.add_npc(self.hulk(old, hulk));
+        if let Some(slot) = self.npc(hulk).map(slot_of) {
+            self.slot_sprites.frames.clone_frames(slot, old.id);
+        }
         self.target = None;
         self.nav_target = None;
         self.secondary = None;
@@ -257,6 +270,9 @@ impl Session {
         if let Some(record) = &record {
             let defaults = crate::pilot::tally(record.defaults.iter().copied());
             self.board_class(record, &defaults);
+            self.slot_sprites
+                .frames
+                .clone_frames(Slot::Player, record.id);
             self.reset_precalced();
             let fields = record.fields;
             let shield = shield_points(fields.shield);
@@ -1483,5 +1499,86 @@ mod tests {
                 "{ticks_left}: {sounds:?}"
             );
         }
+    }
+
+    // The eject's sprite clones (`_SWCloneFramesFromMaster` @0x6f3f5,
+    // @0x6f768).
+
+    /// `catalog` with each of the `hidden` classes' hulls costing -1, so
+    /// that the ship is hidden ([`HullSpec::hidden`](crate::HullSpec)).
+    fn hiding(mut catalog: FakePilotCatalog, hidden: &[i16]) -> FakePilotCatalog {
+        for &id in hidden {
+            match catalog.hulls.iter_mut().find(|hull| hull.id == ShipId(id)) {
+                Some(hull) => hull.cost = -1,
+                None => catalog.hulls.push(crate::catalog::HullRecord {
+                    cost: -1,
+                    ..hull(id)
+                }),
+            }
+        }
+        catalog
+    }
+
+    /// `catalog`'s session, disabled, ejected on the chord with an escape
+    /// pod aboard; `prepare` runs first.
+    fn podded(catalog: &FakePilotCatalog, prepare: impl FnOnce(&mut Session)) -> Session {
+        let mut session = flying(catalog, &[POD]);
+        session.condition = Condition::Disabled;
+        prepare(&mut session);
+        session.hold_eject(true);
+        session.tick_combat(Rules::default(), &mut NeverFires);
+        assert!(in_the_pod(&session));
+        session
+    }
+
+    #[test]
+    fn the_players_slot_holds_the_pods_frames_even_when_the_pod_is_hidden() {
+        use crate::ship_layer::Slot;
+        let catalog = hiding(ejecting(100), &[ESCAPE_POD_SHIP.0]);
+        let session = podded(&catalog, |_| {});
+        assert!(session.is_hidden(ShipRef::Player));
+        assert_eq!(
+            session.slot_sprites().frames.of(Slot::Player),
+            ESCAPE_POD_SHIP,
+            "@0x6f768"
+        );
+        assert_eq!(session.framed_by(ShipRef::Player), Some(ESCAPE_POD_SHIP));
+    }
+
+    #[test]
+    fn the_hulks_slot_holds_the_old_class_even_when_it_is_hidden() {
+        use crate::ship_layer::{INIT_FRAMES, Slot};
+        const OLD: i16 = 170;
+        assert_ne!(ShipId(OLD), INIT_FRAMES);
+        let mut catalog = hiding(ejecting(100), &[OLD]);
+        catalog.ship_records.push(ship(OLD, FAST));
+        let session = podded(&catalog, |session| {
+            session.pilot.ship = ShipId(OLD);
+            session.hull = session.arsenal.hull(ShipId(OLD));
+        });
+        let hulk = hulk(&session);
+        assert_eq!(hulk.ship, ShipId(OLD));
+        assert!(session.is_hidden(ShipRef::Npc(hulk.id)));
+        assert_eq!(
+            session.slot_sprites().frames.of(Slot::Berth(hulk.berth)),
+            ShipId(OLD),
+            "@0x6f3f5"
+        );
+        assert_eq!(session.framed_by(ShipRef::Npc(hulk.id)), Some(ShipId(OLD)));
+    }
+
+    #[test]
+    fn the_players_slot_holds_the_escape_ships_frames_even_when_it_is_hidden() {
+        use crate::ship_layer::Slot;
+        let catalog = hiding(escaping(), &[VIPER]);
+        let (session, _) = escaped(&catalog, &[0; 3], |_| {});
+        assert_eq!(session.pilot.ship, ShipId(VIPER));
+        assert!(session.is_hidden(ShipRef::Player));
+        assert_eq!(
+            session.slot_sprites().frames.of(Slot::Player),
+            ShipId(VIPER),
+            "@0x6f768"
+        );
+        assert_eq!(session.framed_by(ShipRef::Player), Some(ShipId(VIPER)));
     }
 }

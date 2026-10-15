@@ -280,7 +280,7 @@ impl Session {
 }
 
 /// An NPC's sprite slot: its berth.
-fn slot_of(npc: &Npc) -> Slot {
+pub(super) fn slot_of(npc: &Npc) -> Slot {
     Slot::Berth(npc.berth)
 }
 
