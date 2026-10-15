@@ -242,8 +242,14 @@ const HELLO: &str = "Message Buoy: hello.";
 
 /// [`data`], with Beta's `Message` 1 and `STR#` 1000 holding [`HELLO`].
 fn buoyed_data() -> Rc<GameData> {
-    let mut beta = system(100, &[130], 129);
-    put_i16s(&mut beta, 0x68, &[1]);
+    buoyed_beta(1, 129)
+}
+
+/// [`data`], with Beta's `Message` `message`, its one stellar `stellar`
+/// (-1 for none), and `STR#` 1000 holding [`HELLO`].
+fn buoyed_beta(message: i16, stellar: i16) -> Rc<GameData> {
+    let mut beta = system(100, &[130], stellar);
+    put_i16s(&mut beta, 0x68, &[message]);
     let mut list = 1u16.to_be_bytes().to_vec();
     list.push(u8::try_from(HELLO.len()).expect("short"));
     list.extend(HELLO.as_bytes());
@@ -813,6 +819,20 @@ fn a_jump_into_a_system_with_a_message_buoy_shows_the_buoy_in_place_of_the_arriv
         plain.flight().message(),
         Some("Jumping into the Beta system on June 24, 1177."),
         "no buoy at -1"
+    );
+}
+
+#[test]
+fn a_buoy_into_a_system_with_no_stellars_replaces_the_no_stellars_suffix_too() {
+    let mut harness = Harness::flying_over(buoyed_beta(1, -1), SharedChance::default());
+    harness.jump_to_beta();
+    assert_eq!(harness.flight().message(), Some(HELLO), "the buoy alone");
+    let mut plain = Harness::flying_over(buoyed_beta(-1, -1), SharedChance::default());
+    plain.jump_to_beta();
+    assert_eq!(
+        plain.flight().message(),
+        Some("Jumping into the Beta system on June 24, 1177. No stellar objects present."),
+        "no buoy at -1: the suffix shows"
     );
 }
 
