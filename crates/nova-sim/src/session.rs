@@ -4563,7 +4563,7 @@ impl Session {
             return Ok(Boarding::Offered(self.offer_from_ship(offering, chance)));
         }
         self.mark_boarded(npc.id);
-        if rule.repels(npc.booty) {
+        if rule.repels(npc.booty.unwrap_or(0)) {
             return Ok(Boarding::Repelled);
         }
         let mut plunder = Plunder::roll(&self.prize(&npc), rule, chance);
@@ -4672,7 +4672,7 @@ impl Session {
                 .any(|mount| mount.spec.ammo == Ammo::Rounds(ammo) && (!bay || mount.spec.is_bay()))
         };
         Prize {
-            booty: npc.booty,
+            booty: npc.booty.unwrap_or(0),
             cost: record.map_or(0, |record| record.cost),
             holds: fields.holds,
             fuel: fields.fuel,
@@ -20484,7 +20484,7 @@ pub(super) mod tests {
     fn alongside_ace(catalog: &FakePilotCatalog) -> Session {
         let mut session = alongside(catalog);
         let trader = &mut session.traffic.npcs_mut()[0];
-        trader.booty = 0;
+        trader.booty = Some(0);
         trader.person = Some(flown_by(600));
         session
     }

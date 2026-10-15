@@ -242,13 +242,15 @@ impl Session {
     }
 
     /// NPC `id`, captured, no longer flies as its person, who is gone for
-    /// good, escape pod or not (`_DoShipCapture` @0x41180).
+    /// good, escape pod or not (`_DoShipCapture` @0x41180), and has no
+    /// `düde` (+0x78 = -1, @0x411aa).
     pub(super) fn lose_captured(&mut self, id: NpcId) {
         let npc = self.traffic.npcs_mut().iter_mut().find(|npc| npc.id == id);
         // A capture also unmarks a mission's special ship, its ships left
         // kept (`_DoShipCapture` @0x413c2).
         let person = npc.and_then(|npc| {
             npc.mission = None;
+            npc.booty = None;
             npc.person.take()
         });
         if let Some(person) = person {
@@ -647,6 +649,20 @@ mod tests {
                 "no person flies for the player: {choice:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_captured_ship_loses_its_dude() {
+        use crate::board::Assignment;
+        let catalog = duel(0, 0);
+        let mut session = captured(&catalog);
+        session.traffic.npcs_mut()[0].booty = Some(0x0141);
+        assert!(
+            session
+                .assign(Assignment::Escort, &mut NeverFires)
+                .is_some()
+        );
+        assert_eq!(session.npcs()[0].booty, None, "+0x78 = -1 (@0x411aa)");
     }
 
     #[test]

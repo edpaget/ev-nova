@@ -182,9 +182,13 @@ pub struct Npc {
     pub aggression: u8,
     /// The ship it last inspected, if any.
     pub inspected: Option<ShipRef>,
-    /// Its `düde`'s `Booty` flags, what boarding it yields; none for a
-    /// fleet's ship.
-    pub booty: u16,
+    /// Its `düde`'s `Booty` flags, what boarding it yields, and whose
+    /// 0x0100 bit the hit rules read ([`sides`](crate::combat::sides));
+    /// `None` when it has no `düde` (the original's +0x78 is -1): a
+    /// fleet's ship, a person's, a hired escort, a fighter, or a captured
+    /// ship, which loses its `düde` (`_DoShipCapture` @0x411aa). Boarding
+    /// reads `None` as `Booty` 0.
+    pub booty: Option<u16>,
     /// Whether the player has boarded it: it cannot be boarded again.
     pub boarded: bool,
     /// Its `düde`'s `InfoTypes` flags, what it says when hailed (see

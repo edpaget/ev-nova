@@ -362,7 +362,7 @@ impl Session {
             provoked: 0.0,
             aggression: 0,
             inspected: None,
-            booty: 0,
+            booty: None,
             boarded: true,
             info_types: 0,
             spared: false,

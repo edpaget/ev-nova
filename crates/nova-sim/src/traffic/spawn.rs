@@ -334,9 +334,12 @@ pub struct NewShip {
     pub entry: Entry,
     /// How aggressive it is: 0, 2 or 3.
     pub aggression: u8,
-    /// Its `düde`'s `Booty` flags; none for a fleet's ship, which has no
-    /// `düde`.
-    pub booty: u16,
+    /// Its `düde`'s `Booty` flags; `None` when it has no `düde`: a
+    /// fleet's ship (`_HyperSpawnFleet` @0x42227) or a person's
+    /// (`_SpawnPerson` @0x40d17), where a `düde` ship (`_RandomShipSpawn`
+    /// @0x3c1d7), a mission's (`_MissionDudeSpawn` @0x3ce6e) and an
+    /// auxiliary one (`_SpecificDudeSpawn` @0x3d16d) carry their `düde`'s.
+    pub booty: Option<u16>,
     /// Its `düde`'s `InfoTypes` flags, what it says when hailed; none for
     /// a fleet's ship.
     pub info_types: u16,
@@ -440,7 +443,7 @@ impl<'a> PersonDraw<'a> {
             state,
             entry: Entry::Placed,
             aggression: aggression_of(record.aggress),
-            booty: 0,
+            booty: None,
             info_types: 0,
             person: Some(id),
             mission: None,
@@ -506,7 +509,7 @@ pub fn initial(
                 state,
                 entry: Entry::Placed,
                 aggression: aggression(chance),
-                booty: dude.booty,
+                booty: Some(dude.booty),
                 info_types: dude.info_types,
                 person: None,
                 mission: None,
@@ -645,7 +648,7 @@ fn hyper_ship(
             state,
             entry,
             aggression: aggression(chance),
-            booty: dude.booty,
+            booty: Some(dude.booty),
             info_types: dude.info_types,
             person: None,
             mission: None,
@@ -786,7 +789,7 @@ fn specific_dude_ship(
         },
         entry: Entry::Placed,
         aggression,
-        booty: dude.booty,
+        booty: Some(dude.booty),
         info_types: dude.info_types,
         person: None,
         mission: None,
@@ -1072,7 +1075,7 @@ pub fn fleet(
         state,
         entry,
         aggression: aggression(chance),
-        booty: 0,
+        booty: None,
         info_types: 0,
         person: None,
         mission: None,
@@ -1112,7 +1115,7 @@ pub fn fleet(
                 state: placed,
                 entry: escort_entry,
                 aggression: aggression(chance),
-                booty: 0,
+                booty: None,
                 info_types: 0,
                 person: None,
                 mission: None,
@@ -1520,7 +1523,7 @@ mod tests {
                 },
                 entry: Entry::Placed,
                 aggression: 0,
-                booty: 0x0041,
+                booty: Some(0x0041),
                 info_types: 0x4005,
                 person: None,
                 mission: None,
@@ -1618,7 +1621,7 @@ mod tests {
             Stellars::NONE,
             &mut Draws::of(&ship_201),
         );
-        assert_eq!(ships[0].booty, 0x0041);
+        assert_eq!(ships[0].booty, Some(0x0041));
         let arrived = arrivals(
             &table(),
             1,
@@ -1626,11 +1629,28 @@ mod tests {
             Stellars::NONE,
             &mut Draws::of(&[0, 6, 6, 0, 99, 90]),
         );
-        assert_eq!(arrived[0].booty, 0x0041, "a düde ship jumping in too");
+        assert_eq!(arrived[0].booty, Some(0x0041), "a düde ship jumping in too");
     }
 
     #[test]
-    fn a_fleet_ship_has_no_booty() {
+    fn a_dude_ship_of_booty_0_still_has_a_dude() {
+        let mut table = one_pass();
+        if let Some(dude) = table.dude_records.get_mut(&DudeId(128)) {
+            dude.booty = 0;
+        }
+        let ship_201 = [6, 6, 0, 99, 0, 0, 0];
+        let ships = initial(
+            &table,
+            &mut nobody(),
+            None,
+            Stellars::NONE,
+            &mut Draws::of(&ship_201),
+        );
+        assert_eq!(ships[0].booty, Some(0), "told from a fleet's ship");
+    }
+
+    #[test]
+    fn a_fleet_ship_has_no_dude() {
         let ships = arrivals(
             &table(),
             0,
@@ -1639,7 +1659,7 @@ mod tests {
             &mut Draws::of(&[1, 29, 0, 0, 0, 2]),
         );
         assert_eq!(ships.len(), 4);
-        assert!(ships.iter().all(|ship| ship.booty == 0), "{ships:?}");
+        assert!(ships.iter().all(|ship| ship.booty.is_none()), "{ships:?}");
     }
 
     #[test]
@@ -2651,7 +2671,7 @@ mod tests {
                 },
                 entry: Entry::Placed,
                 aggression: 4,
-                booty: 0,
+                booty: None,
                 info_types: 0,
                 person: Some(PersonId(510)),
                 mission: None,
@@ -3076,7 +3096,7 @@ mod tests {
                 },
                 entry: Entry::Placed,
                 aggression: 2,
-                booty: 0x0002,
+                booty: Some(0x0002),
                 info_types: 0x0001,
                 person: None,
                 mission: Some(MissionMark {
@@ -3597,7 +3617,7 @@ mod tests {
             assert_eq!(ship.aux, Some(4));
             assert_eq!(
                 (ship.govt, ship.ai_type, ship.booty, ship.info_types),
-                (Some(GovtId(131)), AiType::Interceptor, 0x0002, 0x0001),
+                (Some(GovtId(131)), AiType::Interceptor, Some(0x0002), 0x0001),
                 "the düde's"
             );
             assert!(!ship.derelict);
@@ -3707,7 +3727,7 @@ mod tests {
                 state: PERSON_AT,
                 entry: Entry::Placed,
                 aggression: 2,
-                booty: 0x0002,
+                booty: Some(0x0002),
                 info_types: 0x0001,
                 person: None,
                 mission: Some(MissionMark {
