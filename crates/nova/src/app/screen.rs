@@ -235,7 +235,7 @@ use nova_sim::{
     Allegiance, Behaviour, BoardingRule, CommCatalog, ControlBits, DisableRule, HailOptions,
     HailView, HireTerms, LegalCode, NovaAi, NovaBits, NovaBoarding, NovaDisable, NovaHire, NovaLaw,
     NovaPersons, OfferPrompt, PersonRules, Pilot, PilotKeeper, PilotStore, PointDefenceRule,
-    Rulebook, Session, Take, Taken, VenueOffer, pilot_key,
+    RuleKey, Rulebook, Session, Take, Taken, VenueOffer, pilot_key,
 };
 pub use nova_view::Showing;
 use nova_view::devtools::SessionDesk;
@@ -1614,8 +1614,9 @@ impl AppScreen {
                     },
                 );
         }
-        spaceport =
-            spaceport.with_player_info(template_of(PLAYER_INFO_DIALOG), template_of(YES_NO_DIALOG));
+        spaceport = spaceport
+            .with_player_info(template_of(PLAYER_INFO_DIALOG), template_of(YES_NO_DIALOG))
+            .with_offer_clock(self.rules.source_for(RuleKey::OfferClock));
         self.spaceport = Some(spaceport);
         self.switch_to(Side::Spaceport);
     }
@@ -2378,6 +2379,9 @@ impl AppScreen {
         let (Some(spaceport), Some(flight)) = (&mut self.spaceport, &mut self.flight) else {
             return;
         };
+        if spaceport.take_offer_restart() {
+            spaceport.rearm_offers(flight.offer_gap());
+        }
         if let Some(venue) = spaceport.take_offer_request() {
             match flight.next_offer(venue) {
                 Some(VenueOffer::Prompt(prompt)) => spaceport.open_offer(prompt),
@@ -8560,7 +8564,7 @@ pub(super) mod tests {
     // Mission offers at every venue.
 
     use nova_sim::MissionId;
-    use nova_sim::mission::screens::{OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENTER};
+    use nova_sim::mission::screens::{BAR, OUTFITTER, SHIPYARD, SPACEPORT, TRADE_CENTER};
     use nova_view::spaceport::{OutfitterScreen, ShipyardScreen};
 
     /// A `dësc` of `text`.
@@ -8746,6 +8750,103 @@ pub(super) mod tests {
             .expect("still outfitting");
         assert!(open.offer_dialog().is_none());
         assert_eq!(open.outfitter().cash, 900, "the cash shown changes");
+    }
+
+    /// The trade center's offer at a stellar offering missions 130-132
+    /// there, with the offer timer on `clock`: 130 refused, 131 left open
+    /// 5 s and refused, and a moment after: the offer open then.
+    fn offer_a_moment_after_a_long_offer(clock: RuleSource) -> Option<MissionId> {
+        let store = MemoryPilots::new();
+        let rulebook = Rulebook::default().with_override(RuleKey::OfferClock, clock);
+        let mut screen = AppScreen::new(venue_data_of(TRADE_CENTER, &[130, 131, 132]))
+            .with_rulebook(&rulebook)
+            .with_dialogs(Rc::new(VenueDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        click_port_item(&mut screen, 7);
+        let offered = |screen: &AppScreen| {
+            offered_mission(
+                spaceport(screen)
+                    .open_trade()
+                    .and_then(TradeScreen::offer_dialog),
+            )
+        };
+        assert_eq!(offered(&screen), Some(MissionId(130)));
+        screen.input(&key(Key::Char('n'), true));
+        screen.tick(Duration::from_secs(2));
+        screen.tick(Duration::from_secs(2));
+        assert_eq!(offered(&screen), Some(MissionId(131)), "{clock:?}");
+        screen.tick(Duration::from_secs(5));
+        screen.input(&key(Key::Char('n'), true));
+        screen.tick(Duration::from_millis(1));
+        screen.tick(Duration::from_millis(1));
+        offered(&screen)
+    }
+
+    #[test]
+    fn the_routers_offer_clock_reaches_the_venues() {
+        assert_eq!(
+            offer_a_moment_after_a_long_offer(RuleSource::Engine),
+            Some(MissionId(132)),
+            "the gap ran from the ask"
+        );
+        assert_eq!(
+            offer_a_moment_after_a_long_offer(RuleSource::Bible),
+            None,
+            "the gap runs from the answer"
+        );
+    }
+
+    #[test]
+    fn the_bar_offers_again_after_its_hire_screen_restarts_its_wait() {
+        let store = MemoryPilots::new();
+        let fork = [130, 131].into_iter().fold(
+            game_data_fork(true, true, false, 100, b"", b"", None),
+            |fork, id: i16| {
+                fork.resource(Mission::TYPE, id, Some(b"Bar job"), &venue_mission(BAR))
+                    .resource(
+                        Desc::TYPE,
+                        id + 3872,
+                        Some(b"Offer"),
+                        &desc_of(&format!("Job {id}.")),
+                    )
+            },
+        );
+        let mut built = fork.build();
+        // The first ship is for hire, as in `past_the_holds_data`.
+        let first = built.layout.data_entry(Ship::TYPE, 128) + 4;
+        built.put_u16(first + 0x38A, 100);
+        let mut screen = AppScreen::new(loaded_bytes(built.bytes))
+            .with_dialogs(Rc::new(PastTheHoldsDialogs), Rc::new(MonoMetrics))
+            .with_pilots(Some(keeper(&store)), Rc::new(MonoMetrics));
+        create(&mut screen, "Ada");
+        land_twice(&mut screen);
+        click_port_item(&mut screen, 10);
+        let offered = |screen: &AppScreen| {
+            offered_mission(
+                spaceport(screen)
+                    .open_bar()
+                    .and_then(BarScreen::offer_dialog),
+            )
+        };
+        screen.tick(Duration::from_millis(300));
+        screen.tick(Duration::from_millis(300));
+        assert_eq!(offered(&screen), Some(MissionId(130)));
+        screen.input(&key(Key::Char('n'), true));
+        screen.input(&key(Key::Char('h'), true));
+        assert!(
+            spaceport(&screen)
+                .open_bar()
+                .and_then(BarScreen::hire_screen)
+                .is_some(),
+            "for hire"
+        );
+        screen.tick(Duration::from_millis(1));
+        screen.input(&key(Key::Escape, true));
+        screen.tick(Duration::from_secs(2));
+        screen.tick(Duration::from_secs(2));
+        assert_eq!(offered(&screen), Some(MissionId(131)), "rearmed");
     }
 
     #[test]
