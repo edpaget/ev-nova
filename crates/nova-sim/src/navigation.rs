@@ -79,6 +79,17 @@ impl NavMode {
             _ => None,
         }
     }
+
+    /// The system selected in mode 3, the one the galaxy map draws its
+    /// selected link to (`_DrawMap` @0xebd8-0xed31): `None` in any other
+    /// mode.
+    #[must_use]
+    pub fn hyperspace(self) -> Option<SystemId> {
+        match self {
+            Self::Hyperspace(system) => system,
+            _ => None,
+        }
+    }
 }
 
 /// How far a click may land outside a small sprite and still hit it, in
@@ -193,6 +204,22 @@ mod tests {
             NavMode::Hyperspace(None),
         ] {
             assert_eq!(mode.stellar(), None, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn only_mode_3_with_a_system_names_a_hyperspace_selection() {
+        assert_eq!(
+            NavMode::Hyperspace(Some(SystemId(131))).hyperspace(),
+            Some(SystemId(131))
+        );
+        for mode in [
+            NavMode::Off,
+            NavMode::Stellar(Some(StellarId(128))),
+            NavMode::Stellar(None),
+            NavMode::Hyperspace(None),
+        ] {
+            assert_eq!(mode.hyperspace(), None, "{mode:?}");
         }
     }
 

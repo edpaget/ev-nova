@@ -213,9 +213,10 @@
 //!   clicks does anything (@0x69ad4, @0x69d2e, @0x6a5ef), but Option-\`
 //!   still lets go of the ship target (@0x69a17-0x69a90).
 //! - `\` (a press, not its repeats), the original's Hyper Select, selects
-//!   the next system linked with this one and plots a one-jump course to
-//!   it, as [`Session::select_next_system`] says, so the nav area shows
-//!   that system and J jumps there.
+//!   the next system linked with this one, as
+//!   [`Session::select_next_system`] says, so the nav area shows that
+//!   system and J jumps there. By the engine's reading the course is
+//!   kept, and the course map draws the selection as its own link.
 //! - J (a press) begins the pre-jump turn and slow-down towards the
 //!   system selected when the session allows a jump, and otherwise
 //!   says why in the original's words (`STR#` 2002), as a refused landing
@@ -927,8 +928,9 @@ pub const NEAREST_STELLAR_KEY: Key = Key::Function(5);
 /// toggles the overlay instead and never reaches flight.
 pub const NAV_OFF_KEY: Key = Key::Char('`');
 
-/// The Hyper Select key, which cycles the hyperspace destination through
-/// the systems the current one links to: the original's default, `\`
+/// The Hyper Select key, which cycles the hyperspace selection through
+/// the systems the current one links to, keeping the course by the
+/// engine's reading: the original's default, `\`
 /// (`Keys.nib`'s `hyperSel`, "Hyper Select:", default keycode 0x2a in
 /// `_loadKeys`). H is the original's separate Hyperspace Mode key.
 pub const HYPER_SELECT_KEY: Key = Key::Char('\\');
@@ -17306,15 +17308,30 @@ mod tests {
         view.session().expect("flying").course().to_vec()
     }
 
+    /// The system selected in nav mode 3.
+    fn hyper_selected(view: &View) -> Option<SystemId> {
+        nav_mode(view).hyperspace()
+    }
+
     #[test]
-    fn the_hyper_select_key_plots_the_next_listed_system() {
+    fn the_hyper_select_key_selects_the_next_listed_system() {
         let mut view = fanned();
         assert_eq!(HYPER_SELECT_KEY, HYPER_SELECT);
         for expected in [131, 132, 131] {
             assert_eq!(view.input(&key(HYPER_SELECT, true)), ScreenAction::None);
             view.input(&key(HYPER_SELECT, false));
-            assert_eq!(course(&view), [SystemId(expected)]);
+            assert_eq!(hyper_selected(&view), Some(SystemId(expected)));
+            assert_eq!(course(&view), [], "no course plotted");
         }
+    }
+
+    #[test]
+    fn hyper_select_in_flight_keeps_the_course() {
+        let mut view = fanned();
+        plot(&mut view, 131);
+        tap(&mut view, HYPER_SELECT);
+        assert_eq!(course(&view), [SystemId(131)]);
+        assert_eq!(nav_mode(&view), NavMode::Hyperspace(Some(SystemId(132))));
     }
 
     #[test]
@@ -17332,11 +17349,11 @@ mod tests {
         let mut view = fanned();
         view.input(&held(HYPER_SELECT));
         view.input(&key(HYPER_SELECT, false));
-        assert_eq!(course(&view), []);
+        assert_eq!(hyper_selected(&view), None);
         tap(&mut view, HYPER_SELECT);
         view.input(&held(HYPER_SELECT));
         view.input(&key(HYPER_SELECT, false));
-        assert_eq!(course(&view), [SystemId(131)]);
+        assert_eq!(hyper_selected(&view), Some(SystemId(131)));
     }
 
     #[test]
@@ -17347,10 +17364,10 @@ mod tests {
         view.input(&key(JUMP, true));
         assert!(view.preparing_jump(), "braking and turning");
         tap(&mut view, HYPER_SELECT);
-        assert_eq!(course(&view), [SystemId(131)]);
+        assert_eq!(hyper_selected(&view), Some(SystemId(131)));
         jump_now(&mut view);
         tap(&mut view, HYPER_SELECT);
-        assert_eq!(course(&view), [SystemId(131)]);
+        assert_eq!(hyper_selected(&view), Some(SystemId(131)));
     }
 
     #[test]

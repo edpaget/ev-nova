@@ -163,15 +163,18 @@ pub enum HyperSelectRule {
     /// mode 3 (@0x69cab-0x69cce), or from the first slot in any other mode,
     /// whose selection it lets go of first (@0x69c98). The course does not
     /// count: only the cue (`_CueNextHyperRouteDest` @0xe2dc) selects its
-    /// first hop.
+    /// first hop. Each press keeps the course and moves only the
+    /// selection (@0x69c8e-0x69cd2).
     #[default]
     Engine,
     /// The phase text's reading: every system the ship can jump to under
     /// the session's [`HyperlinkRule`], by ascending ID
     /// ([`StarMap::jumps`]), starting after the course only when it is a
-    /// single jump, and from the first otherwise. Like the course plotted
-    /// to it, it never offers a jump the hyperlinks forbid: by the
-    /// engine's, none backwards along a one-way link.
+    /// single jump, and from the first otherwise. Each press plots a
+    /// one-jump course to the system it selects, the course the next
+    /// press starts after. Like that course, it never offers a jump the
+    /// hyperlinks forbid: by the engine's, none backwards along a one-way
+    /// link.
     OneJumpCourse,
 }
 

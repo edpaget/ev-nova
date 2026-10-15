@@ -16,7 +16,10 @@
 //! A hyperspace selection is resolved by place whenever it is read, as
 //! the original resolves its link slot through
 //! `_FindActiveCoLocatedSystem` (@0x4be0); one with no visible system at
-//! its place reads as none, so a hidden system is never named.
+//! its place reads as none, so a hidden system is never named. The
+//! galaxy map draws the system selected in mode 3 as a link from the
+//! current system (`_DrawMap` @0xebd8-0xed31), and selects it as it
+//! opens ([`Session::map_preselection`], `_DoSystemMap` @0x124ac-0x124ff).
 //!
 //! **Setters** (mode / selection):
 //!
@@ -40,7 +43,10 @@
 //!   (@0x69c89), and mode 3 with the next link selected, cycling from the
 //!   one selected in mode 3 and from the first in any other (@0x69c98,
 //!   @0x69ca5-0x69cce). With none, the selection let go, the mode kept,
-//!   in silence (@0x69cd4).
+//!   in silence (@0x69cd4). The course is kept either way, as the press
+//!   writes nothing else (@0x69c8e-0x69cd2); the
+//!   [`HyperSelectRule::OneJumpCourse`] reading plots a one-jump course
+//!   to the system selected instead.
 //! - The stellar keys 1-4, F1-F4 and F5 ([`Session::select_stellar`],
 //!   @0x69e1f-0x69f17): the beep whenever they find a stellar, even the
 //!   one selected (@0x69ebc); then, unless it is selected in mode 2
@@ -77,11 +83,8 @@
 //! **Left out.** The floating map that shows while H or `\` is held, its
 //! clicks (@0x6a1d5-0x6a1e4, @0x6a719-0x6a762) and its preselect
 //! (`_ShowFloatingMap` @0x11488); the map dialog's Tab / `\` cycling
-//! (`_MapFilter` @0x13f0f-0x13fac); the map drawing the selected link, its
-//! info panel and its preselect (@0xea79, @0xebdf, @0x10b70, @0x124ac),
-//! and with it Hyper Select keeping the course and moving the selection
-//! alone (@0x69c8e-0x69cd2), where ours leaves a one-jump course to it;
-//! and the destroyed player's and the ship swap's per-frame clears
+//! (`_MapFilter` @0x13f0f-0x13fac); the map panel's titles by the mode
+//! (`_MapDialogUpdate` @0x10b68-0x10c76); and the destroyed player's and the ship swap's per-frame clears
 //! (@0x68712-0x68718, @0x6f41b-0x6f421). The landed `M` / `N`'s +0x6c, the
 //! stellar docked at (@0x156f2-0x15709), shows nowhere while docked and
 //! the take-off lets go of it. Mode 4, the hypergate map's, is never
@@ -91,7 +94,7 @@
 use super::Session;
 use crate::StellarPick;
 use crate::catalog::{StellarId, SystemId};
-use crate::hyperspace::next_hyper_destination;
+use crate::hyperspace::{HyperSelectRule, next_hyper_destination};
 use crate::landing::nearest_landable;
 use crate::navigation::{NavMode, stellar_under};
 use crate::sound::SimSound;
@@ -107,6 +110,21 @@ impl Session {
                 NavMode::Hyperspace(selected.and_then(|system| self.galaxy.same_place(system)))
             }
             mode => mode,
+        }
+    }
+
+    /// The system the galaxy map selects as it opens, as `_DoSystemMap`
+    /// does (@0x124ac-0x124ff): with a system selected in mode 3, that
+    /// system resolved by place, or `None` when no visible system stands
+    /// there (`_FindActiveCoLocatedSystem` gives −1, @0x124e6); otherwise
+    /// the current system (@0x124f6-0x124ff). The original's on-planet
+    /// branch (@0x124bd) gives the current system too, and ours' map
+    /// opens only in flight.
+    #[must_use]
+    pub fn map_preselection(&self) -> Option<SystemId> {
+        match self.nav {
+            NavMode::Hyperspace(Some(_)) => self.nav_mode().hyperspace(),
+            _ => Some(self.pilot.system),
         }
     }
 
@@ -231,23 +249,25 @@ impl Session {
     /// the next system the session's [`HyperSelectRule`](crate::HyperSelectRule)
     /// cycles to ([`next_hyper_destination`]), from the one selected in
     /// mode 3 and from the start in any other, with
-    /// [`SimSound::HyperSelected`], plots a one-jump course to it and
-    /// gives it. With no system to offer it lets go of the selection,
-    /// keeps the mode and makes no sound (@0x69cd4), and gives `None`.
-    /// `None`, and nothing changes, during a jump (pre-jump stage too).
+    /// [`SimSound::HyperSelected`], and gives it. With no system to offer
+    /// it lets go of the selection, keeps the mode and makes no sound
+    /// (@0x69cd4), and gives `None`. `None`, and nothing changes, during a
+    /// jump (pre-jump stage too).
     ///
-    /// The original keeps the plotted route and only moves its selection,
-    /// so cycling back to the route's first hop there keeps the whole
-    /// route; ours' map draws only the course, so a press here leaves a
-    /// one-jump course.
+    /// By the engine's reading the course is kept: the press moves only
+    /// the selection, as `_HandlePlayer` @0x69c8e-0x69cd2 writes nothing
+    /// but +0x6a and +0x6c, and the galaxy map draws the selection as its
+    /// own link. J then jumps to the system selected, and an arrival off
+    /// the course clears it, or drops its first hop when it is there
+    /// (`course::after_arrival`). By
+    /// [`HyperSelectRule::OneJumpCourse`](crate::HyperSelectRule::OneJumpCourse)
+    /// the press plots a one-jump course to the system selected, the
+    /// course that reading's cycle starts from.
     pub fn select_next_system(&mut self) -> Option<SystemId> {
         if self.jump.is_some() {
             return None;
         }
-        let selected = match self.nav_mode() {
-            NavMode::Hyperspace(selected) => selected,
-            _ => None,
-        };
+        let selected = self.nav_mode().hyperspace();
         let Some(next) = next_hyper_destination(
             self.galaxy.map(),
             self.pilot.system,
@@ -260,7 +280,9 @@ impl Session {
             return None;
         };
         self.sounds.push(SimSound::HyperSelected);
-        self.pilot.course = vec![next];
+        if self.hyper_select == HyperSelectRule::OneJumpCourse {
+            self.pilot.course = vec![next];
+        }
         self.nav = NavMode::Hyperspace(Some(next));
         Some(next)
     }
@@ -415,7 +437,7 @@ mod tests {
         for expected in [134, 131, 135, 134] {
             assert_eq!(session.select_next_system(), Some(SystemId(expected)));
             assert_eq!(session.nav_mode(), hyperspace(expected));
-            assert_eq!(session.course(), ids(&[expected]));
+            assert_eq!(session.course(), [], "no course plotted");
             assert_eq!(session.take_sounds(), [SimSound::HyperSelected]);
         }
     }
@@ -800,5 +822,47 @@ mod tests {
         assert!(!session.clear_target(), "no target");
         assert_eq!(session.take_sounds(), []);
         assert_eq!(session.nav_mode(), stellar(128));
+    }
+
+    // The galaxy map's preselect.
+
+    #[test]
+    fn the_map_preselects_the_current_system_unless_a_system_is_selected_in_mode_3() {
+        let mut session = Session::start(&hub()).expect("starts");
+        assert_eq!(session.nav_mode(), NavMode::Off);
+        assert_eq!(session.map_preselection(), Some(SystemId(130)), "off");
+        let picked = session.select_stellar(StellarPick::Slot(0));
+        assert_eq!(session.nav_mode(), NavMode::Stellar(picked));
+        assert!(picked.is_some());
+        assert_eq!(session.map_preselection(), Some(SystemId(130)), "a stellar");
+        assert!(session.hyperspace_mode());
+        assert_eq!(session.nav_mode(), NavMode::Hyperspace(None));
+        assert_eq!(
+            session.map_preselection(),
+            Some(SystemId(130)),
+            "mode 3 with nothing selected"
+        );
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(session.map_preselection(), Some(SystemId(131)), "the cue");
+    }
+
+    #[test]
+    fn the_map_preselects_a_hidden_selection_by_place_or_nothing() {
+        let catalog = alternates();
+        let mut session = Session::start(&catalog).expect("starts");
+        session.plot_course(SystemId(132)).expect("a route");
+        assert_eq!(session.map_preselection(), Some(SystemId(131)));
+        hide(&mut session, &catalog, &[131]);
+        assert_eq!(
+            session.map_preselection(),
+            Some(SystemId(134)),
+            "134 stands at its place"
+        );
+        hide(&mut session, &catalog, &[134]);
+        assert_eq!(
+            session.map_preselection(),
+            None,
+            "nothing stands there: no selection, not the current system"
+        );
     }
 }
